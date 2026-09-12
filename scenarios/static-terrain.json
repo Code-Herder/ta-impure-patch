@@ -1,0 +1,25 @@
+{
+  "format": "ta-scenario/1",
+  "description": "A frame that does not move: one immobile tower per side parked in opposite corners, camera on empty ground in the middle of the map. Two consecutive glshots are pixel-identical, which is what makes it the oracle for any A/B whose subject is the terrain, the features or the zoom — nothing animates, so every differing pixel is the change under test. Built 2026-09-09 for the 4K zoom-out budget fix.",
+  "seed": 20260909,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Town & Country",
+    "clear_existing": true,
+    "switches": {"noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1}
+    ]
+  },
+
+  "units": [
+    { "id": "ours",   "type": "ARMLLT", "owner": 0, "pos": [600, 600],
+      "facing": 0, "stance": "hold" },
+    { "id": "theirs", "type": "CORLLT", "owner": 1, "pos": [8000, 8000],
+      "facing": 0, "stance": "hold" }
+  ],
+
+  "camera": { "at": [4300, 4300] }
+}

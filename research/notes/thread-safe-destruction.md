@@ -192,9 +192,16 @@ behaviour those caches had before it existed.
 
 **It must not be bumped in the pre hook, and this is a trap rather than a preference.** The render
 thread is not stopped by `pass_begin` — `render_ogl.c` ignores its return — it is stopped by
-`tagpu_overlay.c`'s `teardown_active()` gate at line 586, and `tagpu_native_frame` is thirteen
-lines further on, past `log_units` (file I/O) and the scaffold. A pass that cleared that gate
-before the flag was set runs on while the pre hook waits for it, so a generation bumped there is
+`tagpu_overlay.c`'s `teardown_active()` gate, and `tagpu_native_frame` is thirteen
+lines further on, past `log_units` (file I/O) and the scaffold. **Since G13t (2026-09-11) that gate
+replays the flag as `pass_begin` latched it rather than re-reading `s_teardown`**, so the boundary
+is `pass_begin` and not the gate: the two used to be able to disagree, and a pass that answered
+"teardown" at `pass_begin` — publishing `s_completed = s_started`, i.e. declaring itself finished —
+and "no teardown" at the gate ran on into `tagpu_native_frame` holding pointers while the fence
+said the reader was idle. That was a use-after-free for anything stamped against those counters,
+found on the G13t landing against `tagpu_fogwide`'s grid buffers and applying to this module's own
+queue identically. A pass that had already begun when the flag was set still latches 0 and runs its
+engine reads to completion while the pre hook waits for it, so a generation bumped there is
 observed by a frame that then drops the caches **and refills them from templates the cascade has
 not freed yet** — stamping the new generation onto stale entries, which are then never dropped
 again. The first draft of this landing did exactly that; the landing review caught it.

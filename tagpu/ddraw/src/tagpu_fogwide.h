@@ -1,0 +1,141 @@
+#ifndef TAGPU_FOGWIDE_H
+#define TAGPU_FOGWIDE_H
+
+/* tagpu_fogwide — a fog-of-war grid that spans the ZOOMED-OUT view.
+
+   THE PROBLEM. Every native pass samples the engine's own screen fog grid
+   (`*(main+0x1421F)`, terrain-depth.md §5.2): a view-anchored lattice of 32-px
+   cells whose two bytes are 4-bit corner masks. That grid is allocated ONCE per
+   map load, from the engine's viewport size — `0x483BB8`:
+
+       cols = viewW/32 + (viewW % 32 ? 3 : 2)      rows likewise from viewH
+
+   — and `0x4843C0` rebuilds it anchored at the eye, so it covers the 1x
+   viewport and about two cells more. At zoom < 1 the native passes draw a world
+   rect `vw/z` across; everything outside the engine's grid is off the lattice,
+   the shaders' `taFog` clamps to the border cell, and the outer ring gets a
+   SMEAR of the last row and column instead of fog. That is the bug: at zoom-out
+   the grey LOS band stops partway across the screen.
+
+   Neither half of the engine's grid can be moved. Its dimensions come from a
+   map-load allocation, and its origin is recomputed from `main+0x1431F/0x14323`
+   inside the builder itself — lying to it about the eye would have to be undone
+   before the render thread reads the same field, which is a race with the whole
+   world's position on the wrong side of it.
+
+   SO WE BUILD OUR OWN, over whatever window we choose, by replicating
+   `0x4843C0` exactly (see fogw_build): the same per-map-cell test of the LOCAL
+   player's LOS counter and the MAPPED bitmap, the same four-corner OR into the
+   surrounding grid entries, the same four map-border completions. It is the
+   same lattice — origin `32·col0 + 16` — so nothing downstream changes but the
+   numbers in `uFogOrg`/`uFogDim`.
+
+   WHERE IT RUNS. On the GAME thread, from `tagpu_terrown.c`'s `terr_fogtick`,
+   which is the engine's own fog-overlay call site and already calls the engine's
+   builder there. That is the lifetime argument for reading the LOS and MAPPED
+   maps at all: at this call site the engine's builder reads exactly the same two
+   allocations, so a pointer we could not read is one the engine could not read
+   either. Every index into them is bounded by the maps' own dimensions, as the
+   engine's own loop bounds it.
+
+   WHAT IT COVERS. The window is sized for the WIDEST view the zoom levers can
+   produce — `tagpu_zoom_min()`, not the current level — plus a margin. The
+   level the game thread can see is the one the render thread published on the
+   previous frame, so sizing for the current level would leave the ring bare for
+   a frame whenever the zoom eased outward; sizing for the whole range means no
+   step of any lever can outrun the grid.
+
+   HANDING IT OVER. Three buffers and three pointers — build, published, held —
+   swapped under a critical section and never copied. Each pointer belongs to
+   exactly one party at a time and a swap only ever exchanges two of them, so
+   the game thread cannot write the buffer the render thread is reading. The
+   render thread keeps its held buffer for the whole frame, which is what the
+   CPU-side gates (`tagpu_fog_at`) need.
+
+   HOW BIG. Sized from the window the screen asks for, not from a constant — see
+   THE BUFFER SET in tagpu_fogwide.c for why the size is taken at the worst eye
+   residue and why the three grow together. The set is grown, never shrunk, and
+   the old set is freed only once tagpu_reclaim's fence says the render thread
+   has finished every frame that could still be holding one of its blocks: the
+   held pointer outlives the critical section by a whole frame, so the size of a
+   buffer is a lifetime question and not an allocation one. */
+
+/* The sanity bound tagpu_native.c applies to the ENGINE's own grid descriptor —
+   three numbers read out of engine memory, where the question is "has this
+   struct been corrupted", not "how big may a grid be". It stays fixed and
+   generous: the engine builds one cell per 32 px of ITS viewport plus two, so
+   this is a viewport 32,000 px wide and cannot be reached by a screen.
+   tagpu_fogwide_dimcap() is never below it. */
+#define FOGW_ENGINE_DIMCAP 1024
+
+/* DllMain only. Creates the critical section the hand-over uses, before either
+   thread that touches it exists — the module is inert until this has run. */
+void tagpu_fogwide_init(void);
+
+/* Game thread, from the fog-overlay call site, once per engine frame. `ta` is
+   the TAdynmem base; `rebuilt` is 1 when the engine's own grid was rebuilt on
+   this tick (its is-current flag had been cleared), which is also our cue that
+   the LOS state moved under us. It rebuilds only when `rebuilt` is set or the
+   window itself moved — but `rebuilt` is cleared by every LOS stamp as well as
+   every scroll, so in a live game that is the SIM TICK rate whenever anything
+   is moving, ~30/s at gamespeed 10 (see the tick's own comment for the number).
+
+   TWO DIFFERENT RATES, and the pair reads as a contradiction if they are not
+   kept apart. This function is called on the DRAW path, not the sim tick:
+   `0x4848E0`'s sole call site is `0x469D8E` inside the per-frame world draw
+   (VERIFIED by objdump against the pristine exe, 2026-09-11 — exactly one
+   `call 0x4848e0` in the image). That path turns over at the `DrawGameScreen`
+   rate, MEASURED at 443/s at 1920x1080 and ~900/s at 1024x768 against a
+   presenter holding 60, and it keeps running with the sim PAUSED. What runs at
+   the sim rate is the REBUILD, because `rebuilt` is cleared by LOS stamps and
+   nothing stamps while the sim is stopped.
+
+   The consequence for the retire ring: `fogw_drain` is at the top of this
+   function, so retired blocks still come back while the game is paused. They
+   stop coming back only when this function stops being called at all — terrain
+   ownership disarmed, or the shell — and that is a strand, not a fault.
+
+   AT EVERY ZOOM, since G13s. It does not ask what the level is: the level is
+   the render thread's to publish, and that thread is the one that decides,
+   mid-frame, to draw the first zoomed-out frame of a gesture — so a producer
+   gated on it is a producer that is always one tick late exactly when it
+   matters. Which grid a FRAME uses is the consumer's decision, below. */
+void tagpu_fogwide_tick(char* ta, int rebuilt);
+
+/* Render thread, once per frame, before the fog texture upload. Hands back the
+   grid to sample — the buffer stays valid until the next call on this thread —
+   or 0 when there is none to use: the module is off (`tagpu_fogwide.off`), it
+   never initialised, nothing has been published, or the game thread has stopped
+   ticking (terrain ownership disarmed, the menus). The caller then uses the
+   engine's own grid exactly as before.
+
+   THE ZOOM IS NOT ONE OF THOSE REASONS and this must not be asked at zoom >= 1:
+   the engine's own grid spans a 1:1 frame with at least a pixel to spare on
+   every side, so the caller gates on the level it is actually drawing with and
+   only asks below 1. Every refusal it does get is counted (`bare=` on the
+   module's heartbeat) and must read 0 — the two deliberate refusals above are
+   not counted. */
+int tagpu_fogwide_get(const unsigned short** buf,
+                      int* cols, int* rows, int* orgX, int* orgY);
+
+/* Either thread. The largest `cols`/`rows` any producer in this fork can
+   legitimately hand out, for a consumer that has to bound a descriptor before
+   indexing with it — `tagpu_fog_at` (tagpu_fx.c) is the one that does.
+
+   IT IS NOT A LIMIT ON FOG and nothing should treat it as one. It is the
+   memory-safety bound on a stride: `grid[cy * cols + cx]` computes an index
+   from numbers that were read out of engine memory a frame and several call
+   layers earlier, and a plausible pointer with a corrupt `cols` still lands
+   past the end of the allocation. Tripping it means the descriptor and the
+   buffer have come apart, not that the screen is large.
+
+   A HIGH-WATER MARK over the sets this process has allocated, so it only ever
+   relaxes — a grid built at the old, larger size and still in flight can never
+   be refused by a cap that has since come down. It starts at
+   FOGW_ENGINE_DIMCAP and rises with the window. It exists so that the producer
+   and the gate cannot disagree: before it, the producer's cap was 1024 and the
+   gate's a separately typed 512, and a screen between 4057 and 8153 px wide got
+   a grid that was built and then refused. */
+int tagpu_fogwide_dimcap(void);
+
+#endif

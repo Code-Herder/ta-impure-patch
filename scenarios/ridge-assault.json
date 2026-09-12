@@ -1,0 +1,47 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Promo fixture: heavy armour trading ground on Two Continents — ARM Bulls, Zeus and Fidos against CORE Reapers, Goliaths and Can, with two Big Berthas behind the ARM line and three heavy lasers anchoring the CORE one. Deliberately a smaller count than big-battle and at a wider unit spacing: the point of this tile is that the units are individually legible, which is what makes a 40-wide grid of clips look like different fights rather than the same smear repeated. Camera pinned between the two lines; resolution 1024x768 to match the montage stage 1:1.",
+  "seed": 20260914,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "unit_limit": 500,
+    "clear_existing": false,
+    "los": "permanent",
+    "mapping": true,
+    "switches": {"shootall": true, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0, "metal": 10000, "energy": 10000},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1, "metal": 10000, "energy": 10000},
+      {"slot": 2, "controller": "off"}
+    ]
+  },
+
+  "units": [
+    { "id": "bertha_n", "type": "ARMBRTHA", "owner": 0, "pos": [1900, 1740], "facing": 90 },
+    { "id": "bertha_s", "type": "ARMBRTHA", "owner": 0, "pos": [1900, 1860], "facing": 90 },
+    { "id": "hlt_n",    "type": "CORHLT",   "owner": 1, "pos": [4100, 1700], "facing": 270 },
+    { "id": "hlt_c",    "type": "CORHLT",   "owner": 1, "pos": [4100, 1800], "facing": 270 },
+    { "id": "hlt_s",    "type": "CORHLT",   "owner": 1, "pos": [4100, 1900], "facing": 270 }
+  ],
+
+  "groups": [
+    { "id": "arm_heavy", "owner": 0, "at": [2200, 1800],
+      "pattern": {"kind": "grid", "cols": 9, "spacing": 60, "jitter": 8},
+      "composition": [{"type": "ARMBULL", "count": 24}, {"type": "ARMZEUS", "count": 30},
+                      {"type": "ARMFIDO", "count": 24}],
+      "facing": 90,
+      "orders": [{"cmd": "attack", "to": [3800, 1800]}] },
+
+    { "id": "core_heavy", "owner": 1, "at": [3800, 1800],
+      "pattern": {"kind": "grid", "cols": 9, "spacing": 60, "jitter": 8},
+      "composition": [{"type": "CORREAP", "count": 24}, {"type": "CORGOL", "count": 18},
+                      {"type": "CORCAN", "count": 24}],
+      "facing": 270,
+      "orders": [{"cmd": "attack", "to": [2200, 1800]}] }
+  ],
+
+  "camera": { "at": [3000, 1800], "pin": true }
+}

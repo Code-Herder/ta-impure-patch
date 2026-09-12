@@ -1,0 +1,25 @@
+{
+  "format": "ta-scenario/1",
+  "description": "smooth-motion.md gates 3 and 4: one ARMCOM walking a PATROL under a pinned camera, with the order carried by the scenario so the run is reproducible tick for tick. It has to be a patrol and not a list of moves: ORDERS_NewMainOrder2Unit (0x43AFC0) replaces the main order rather than queueing it, and it drops an order whose target is within +/-16 wu of the standing one (the tolerance test at 0x43B006), so a six-leg move list collapses to its last leg -- which, being the start point, is a no-op and the unit never takes a step. One patrol walks the leg and turns round, forever. The gate-C fixture (walk-gatec) leaves the orders to the shell, which lands them on whatever tick the wire delivers them on and puts two runs several ticks out of phase -- fine for a flicker detector, useless for diffing a COB trace. Keepalive: a slot owning nothing is a defeat, so CORE holds one unit far outside the camera band; shootall off so it never fights.",
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Two Continents",
+    "res": "1920x1080",
+    "clear_existing": true,
+    "switches": {"shootall": false, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1}
+    ]
+  },
+
+  "units": [
+    { "id": "walker", "type": "ARMCOM", "owner": 0, "pos": [2700, 1240], "facing": 180,
+      "orders": [{"cmd": "patrol", "to": [2700, 1620]}] },
+
+    { "id": "keepalive", "type": "CORCOM", "owner": 1, "pos": [4200, 2200], "facing": 0 }
+  ],
+
+  "camera": { "at": [1818, 850], "pin": true }
+}

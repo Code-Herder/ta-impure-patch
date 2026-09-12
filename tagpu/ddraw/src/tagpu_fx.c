@@ -58,6 +58,7 @@
 #include "tagpu_gaf.h"
 #include "tagpu_restoreglsl.h"
 #include "tagpu_classicpp.h"
+#include "tagpu_fogwide.h"
 
 #define TA_MAINPP     0x00511DE8u
 #define TAPROG_PP     0x0051FBD0u
@@ -603,21 +604,50 @@ static void fog_alarm(const char* why, const unsigned short* grid, int cols,
     }
 }
 
-int tagpu_fog_at(const unsigned short* grid, int cols, int rows,
+int tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
                  int orgX, int orgY, int wx, int wzp)
 {
     if (!grid || cols <= 0 || rows <= 0) return 0;
-    /* the same bounds tagpu_native.c validates the pointer with when it reads it
-       out of the engine struct — if it no longer holds, the buffer moved */
-    if ((size_t)grid <= 0x600000u || (size_t)grid >= 0x7FFF0000u) {
-        fog_alarm("grid pointer is not in engine address space",
+    /* A plausible userland pointer, and nothing narrower: since tagpu_fogwide
+       the grid is the ENGINE's buffer at zoom >= 1 and OUR OWN heap allocation
+       at zoom < 1, and the process heap of a 0x400000 image can sit below the
+       0x600000 this used to demand. Nothing is given up — both faults this
+       guard has actually caught were a base of -9 and one of -318. */
+    if ((size_t)grid <= 0x10000u || (size_t)grid >= 0x7FFF0000u) {
+        fog_alarm("grid pointer is not a plausible allocation",
                   grid, cols, rows, orgX, orgY, wx, wzp);
         return 0;
     }
-    /* and the dims: the producer refuses anything over 256 a side, so a larger
-       one here means cols/rows and the buffer have come apart */
-    if (cols > 256 || rows > 256) {
-        fog_alarm("grid dims exceed the 256 the producer accepts",
+    /* and the dims, against the bound the PRODUCER publishes rather than a
+       number typed here. This used to be a literal 512, chosen when it covered
+       both producers and then left behind by both: the wide grid's own cap went
+       to 1024 and the viewport bound to 16384, so a screen between 4057 and
+       8153 px wide got a grid tagpu_fogwide built and this test refused — and a
+       refusal here is `0`, which every caller reads as "nothing is hidden",
+       so the whole screen's units, wrecks and effects drew through the black.
+       tagpu_fogwide_dimcap() is a high-water mark, so it can only ever be too
+       generous, which for a corruption guard is the right direction to err. */
+    {
+        int cap = tagpu_fogwide_dimcap();
+        if (cols > cap || rows > cap) {
+            fog_alarm("grid dims exceed the cap the producers publish",
+                      grid, cols, rows, orgX, orgY, wx, wzp);
+            return 0;
+        }
+    }
+    /* AND THE CELL COUNT, which is the bound that actually matters. The largest
+       index this function can form is cols*rows - 1, so the exposure is
+       cols*rows*2 bytes past `grid` — and a per-DIMENSION cap has to be
+       generous enough for the largest grid EITHER producer could legitimately
+       hand over, which at 1920x1080 is 1024x1024 against a buffer of 245x148.
+       That is a 2 MB window in front of a 72 KB allocation, and it is four
+       times wider than the literal 512 this replaced. `cells` closes it: the
+       caller knows what the buffer it is passing actually holds — the engine's
+       own validated `cells` field for its grid, cols*rows for ours — so the
+       bound becomes exact for both instead of shared and loose. A caller that
+       does not know passes 0, which refuses. */
+    if (cells <= 0 || (long)cols * rows > (long)cells) {
+        fog_alarm("grid dims exceed the cells the buffer holds",
                   grid, cols, rows, orgX, orgY, wx, wzp);
         return 0;
     }
@@ -628,7 +658,19 @@ int tagpu_fog_at(const unsigned short* grid, int cols, int rows,
        reports no fog and leaves the caller's own viewport cull to decide —
        clamping to the border cell instead would cull anything whose anchor
        sits past the edge over dark ground, popping sprites in as you scroll.
-       The shaders clamp, which is exact: an on-screen fragment is in range. */
+
+       THE SHADERS NO LONGER CLAMP THE SAME WAY, and this comment used to say
+       theirs "is exact". Since G13s taFog clamps to `uFogDim - 1.0`, one whole
+       cell short, because the last column of any grid never has its right
+       corners written and interpolating toward them reads as NO FOG. The band
+       `gx in [cols-1, cols)` here has that same hazard and is left alone
+       deliberately: with the WIDE grid it is at least 320 px outside the view
+       (FOGW_MARGIN plus the window's two spare columns) against a gather that
+       reaches 256, so nothing can be sampled there; with the ENGINE's grid at
+       zoom >= 1 an anchor 1..32 px past the viewport edge does land in it, and
+       both answers available there — the interpolation's and the off-grid
+       `return 0` a tighter bound would give — are the same "no fog", so
+       tightening it would change nothing but the argument. */
     if (gx < 0.0f || gy < 0.0f ||
         gx >= (float)cols || gy >= (float)rows) return 0;
     int cx = (int)gx, cy = (int)gy;
@@ -648,7 +690,7 @@ int tagpu_fog_at(const unsigned short* grid, int cols, int rows,
 int tagpu_fx_tile_visible(const TAGPU_FXVIEW* v, int wx, int wzp)
 {
     if (!(v->fogMode & 1) || !v->fogGrid) return 1;
-    return tagpu_fog_at(v->fogGrid, v->fogCols, v->fogRows,
+    return tagpu_fog_at(v->fogGrid, v->fogCols, v->fogRows, v->fogCells,
                         v->fogOrgX, v->fogOrgY, wx, wzp) == 0;
 }
 

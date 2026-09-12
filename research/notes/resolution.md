@@ -394,7 +394,7 @@ Two consequences for anything that wants a larger HUD: the panel can be
 magnified about its top-left corner with no slicing, and the scale has a hard
 ceiling of **`s ≤ H / 480`** — which is exactly 1.0 at 640×480 and lands on
 20 % of the width for any 4:3 surface, 1997's own figure. See
-[GUI renderer](gui-renderer.html) §20.
+[GUI renderer](gui-renderer.html) §22.
 
 ### 3.4b A 3840×2160 engine surface runs [MEASURED 2026-09-11]
 

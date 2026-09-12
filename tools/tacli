@@ -361,7 +361,29 @@ class Instance:
             except FileNotFoundError:
                 return None
             ids += [w for w in found if w not in ids]
-        best = None
+        # Rank the candidates by how much evidence there is that this window is
+        # ours, and take the best -- do not let the first one found stand in.
+        #
+        # A window whose pid cannot be read is NOT evidence of anything, and the
+        # old "first candidate wins" let one become the answer. That is how a
+        # shoot came to grab the window of the instance stopped seconds earlier:
+        # a lingering, title-matching, pid-less window at TA's 640x480 SHELL size
+        # outranked nothing and so won. ffmpeg then refused the capture outright
+        # ("capture area 1024x768 ... outside the screen size 640x480"), or, when
+        # the leftover was the right size, grabbed it until it was destroyed
+        # mid-take and the demuxer failed with BadMatch. Ranking is used rather
+        # than skipping, because some wine windows carry no _NET_WM_PID at all
+        # and refusing those outright would find no window on such a setup.
+        #
+        # Ownership outranks size. The weights are 4 for "the pid is ours" and 2
+        # for "the client is the size we asked for", so a pid-verified window at
+        # any size beats a pid-less leftover at exactly the right size -- during
+        # the launch poll our own window is still the 640x480 shell while a
+        # leftover can be a perfect 1024x768, and the first cut of this (size 2,
+        # pid 1) would have moved the leftover. Among our own windows size breaks
+        # the tie; with no readable pid anywhere, size alone decides as before.
+        gw, gh = self.meta().get("res", list(DEFAULT_RES))
+        ranked = []
         for wid in ids:
             env = {**os.environ, "DISPLAY": display}
             geom = subprocess.run(["xdotool", "getwindowgeometry", "--shell", wid],
@@ -371,15 +393,16 @@ class Instance:
                 continue
             wpid = subprocess.run(["xdotool", "getwindowpid", wid],
                                   capture_output=True, text=True, env=env).stdout.strip()
-            if pid and wpid.isdigit() and int(wpid) != pid:
-                continue
+            mine = wpid.isdigit() and pid and int(wpid) == pid
+            if pid and wpid.isdigit() and not mine:
+                continue            # demonstrably another process's window
             w, h = int(vals.get("WIDTH", 0)), int(vals.get("HEIGHT", 0))
             rec = (int(wid), int(vals.get("X", 0)), int(vals.get("Y", 0)), w, h)
-            gw, gh = self.meta().get("res", list(DEFAULT_RES))
-            if (w, h) == (gw, gh):
-                return rec          # exact client match wins
-            best = best or rec
-        return best
+            score = (4 if mine else 0) + (2 if (w, h) == (gw, gh) else 0)
+            ranked.append((score, rec))
+        if not ranked:
+            return None
+        return max(ranked, key=lambda r: r[0])[1]
 
 
 # --------------------------------------------------------------------------- create
@@ -395,7 +418,14 @@ def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=T
         low = name.lower()
         if name in PRIVATE_FILES or low.startswith("tagpu") or low.startswith("cnc-ddraw-"):
             continue
-        if name in ("Screenshots", "_triggers_off") or low.endswith(".log"):
+        # ErrorLog.txt is TA's crash report. It matches no other rule here — not
+        # private, not tagpu*, and .txt rather than .log — so it used to be
+        # symlinked through whenever the template happened to carry one, which
+        # is how 17 instances built on or before 2026-09-03 came to share a
+        # single file. TA writes it next to the EXE, and the exe is symlinked
+        # into each gamedir, so leaving it out of the mirror is all it takes to
+        # make it per-instance by construction.
+        if name in ("Screenshots", "_triggers_off", "ErrorLog.txt") or low.endswith(".log"):
             continue
         if name == "music" and not sound:
             continue   # Steam MP3 soundtrack: audiere cannot play what is absent
@@ -540,8 +570,14 @@ def write_totala_ini(inst: Instance, sound: bool, unit_limit=None):
     Both settings we write live in `[Preferences]`, so the file is composed from
     what is asked for rather than branched on sound alone: with sound on and no
     limit wanted there is nothing to say and the file goes away. `UnitLimit` is
-    read at 0x491653 and clamped by the engine itself to [20, 1500], which is why
-    it is not a registry key and cannot be raised in a running game.
+    read at 0x491653 and clamped by the engine itself to **[20, 500]**, which is
+    why it is not a registry key and cannot be raised in a running game.
+
+    The bound is 500, not 1500 (which this said until 2026-09-10, and the scenario
+    schema accepted): `0x491658 cmp eax, 0x1f4 / jle` writes 0x1f4 straight into
+    `MaxUnitNumberPerPlayer` for anything larger, so asking for 1500 reports 1500
+    and gets 500. A scenario with 600 units on a player then failed in the fork,
+    after the game had launched, rather than at validate time. [BINARY-VERIFIED]
     """
     path = inst.gamedir / "totala.ini"
     prefs = [] if sound else [("NoDirectSound", 1), ("UseWindowsSound", 0)]
@@ -1120,9 +1156,21 @@ def _launch(args) -> dict:
     if args.mapping is not None:
         reg_add(inst, GAME_REG, "SkirmishMapping", "REG_DWORD", str(args.mapping))
 
-    for stale in ("tagpu.log", "tagpu_gl.ppm"):
+    # ErrorLog.txt rides with these, and it matters more than it looks: TA opens
+    # it OPEN_ALWAYS and APPENDS, and crash_report() takes the FIRST match in the
+    # file, so without this a report from an earlier run — or from another
+    # instance sharing the file — is what `tacli crash` prints, with no timestamp
+    # to give it away. Measured 2026-09-09: a 20-minute-old fault was read as five
+    # consecutive fresh crashes, and cob1's file holds 17 reports whose fields
+    # `tacli crash` stitches into one line from four different faults.
+    for stale in ("tagpu.log", "tagpu_gl.ppm", "ErrorLog.txt"):
         p = inst.gamedir / stale
-        if p.exists():
+        # a legacy instance carries this as a symlink into the TEMPLATE gamedir;
+        # unlink rather than rotate, or the next fault re-creates the shared
+        # target through the dangling link and re-shares it across all of them
+        if p.is_symlink():
+            p.unlink()
+        elif p.exists():
             p.rename(inst.gamedir / f"{stale}.prev")
     # A trigger the previous run never consumed fires the moment this one reaches
     # a game — measured 2026-09-01, when a leftover scenario spawned itself into a
@@ -1581,8 +1629,21 @@ def crash_mtime(inst: "Instance") -> float:
 
 def crash_report(inst: "Instance", since: float):
     """A one-line summary of a crash newer than `since` belonging to THIS
-    instance, or None. The file can be shared between instances (the gamedir
-    symlinks it), so the exe path inside it is what attributes the crash."""
+    instance, or None. The exe path inside the report is what attributes it.
+
+    The file is PER-INSTANCE: TA writes it beside the exe, and the exe is
+    symlinked into each gamedir. (Instances built on or before 2026-09-03 carry
+    a dangling symlink to a shared target, from when mirror_gamedir copied it
+    through; _launch's rotation unlinks that.) Corrected 2026-09-10 -- this
+    said the file "can be shared between instances", which is true only of
+    those legacy instances.
+
+    TWO THINGS THIS DOES NOT DO, and both have misled a session: it parses no
+    TIMESTAMP -- freshness is the caller's `since` against the file's mtime,
+    and nothing in the returned string says how old the report is -- and TA
+    APPENDS, so `re.search` below returns the FIRST report in the file. Since
+    _launch rotates the file to .prev, that is normally this run's only report;
+    a run that faults twice still reports the first."""
     path = inst.gamedir / "ErrorLog.txt"
     try:
         if path.stat().st_mtime <= since:
@@ -2917,6 +2978,12 @@ SCN_SWITCHES = {"drop": 0x1, "cheats": 0x2, "selboxes": 0x4, "invulnfeatures": 0
                 "radar": 0x200, "shootall": 0x400}
 SCN_SWITCH_DEFAULTS = {"shootall": True}    # the universal player convention
 
+# SKIRMISH's two map toggles, by the names the screen uses. They are part of the
+# situation -- a scenario shot for a film wants the whole map in full colour, one
+# written to measure scouting wants the fog -- so they belong in the file rather
+# than in whatever flags the last person happened to type.
+SCN_LOS = {"permanent": 0, "true": 1, "circular": 2}
+
 SCN_SIDES = {"arm": 0, "core": 1}           # --player's side numbering
 SCN_CONTROLLERS = {"off": 0, "human": 1, "ai": 2}
 
@@ -2925,6 +2992,8 @@ SCN_HANDLE_RX = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,31}")
 SCN_WORLD_MAX = 65535       # world coordinates are the integer half of a 16.16 dword
 SCN_MAX_ENTITIES = 5000     # a ceiling the fork enforces again on its side
 SCN_STOCK_LIMIT = 250       # TA's own per-player unit cap before UnitLimit is raised
+SCN_MAX_LIMIT = 500         # and the ceiling it can be raised TO: 0x491658 clamps
+                            # UnitLimit to 0x1f4 before storing MaxUnitNumberPerPlayer
 
 
 class _ScnRandom:
@@ -3165,13 +3234,14 @@ def _scn_entity_body(node, where, default=None):
 def _scn_setup(doc, label):
     """Everything `load` needs before the game exists. `apply` ignores it."""
     setup = {"map": None, "res": None, "unit_limit": None, "clear_existing": True,
+             "los": None, "mapping": None,
              "switches": dict(SCN_SWITCH_DEFAULTS), "players": []}
     node = doc.get("setup")
     if node is None:
         return setup
     w = f"{label}: setup"
     _scn_keys(node, w, optional=("map", "res", "unit_limit", "clear_existing",
-                                 "switches", "players"))
+                                 "switches", "players", "los", "mapping"))
     setup["map"] = _scn_str(node, "map", w, raw=True)
     res = _scn_str(node, "res", w, raw=True)
     if res is not None:
@@ -3179,9 +3249,14 @@ def _scn_setup(doc, label):
         if not m:
             die(f"{w}.res: {res!r} must look like 1024x768")
         setup["res"] = [int(m.group(1)), int(m.group(2))]
-    # TA reads UnitLimit from totala.ini and clamps it to [20, 1500] itself.
-    setup["unit_limit"] = _scn_int(node, "unit_limit", w, 20, 1500)
+    # TA reads UnitLimit from totala.ini and clamps it to [20, 500] itself, so a
+    # larger number here would be accepted, reported, and then silently ignored.
+    setup["unit_limit"] = _scn_int(node, "unit_limit", w, 20, SCN_MAX_LIMIT)
     setup["clear_existing"] = _scn_bool(node, "clear_existing", w, True)
+    # Both default to None = "leave the screen as it is", which is what `load`
+    # did before they existed; `mapping` then falls back to SCN_MAPPING_DEFAULT.
+    setup["los"] = _scn_str(node, "los", w, choices=SCN_LOS)
+    setup["mapping"] = _scn_bool(node, "mapping", w)
 
     switches = node.get("switches")
     if switches is not None:
@@ -4165,8 +4240,14 @@ def cmd_scenario_load(args):
     res = tuple(args.res) if args.res else (tuple(setup["res"]) if setup["res"] else None)
     wanted_map = args.map or setup["map"]
     limit = args.unit_limit if args.unit_limit is not None else setup["unit_limit"]
-    mapping = SCN_MAPPING_DEFAULT if args.mapping is None else args.mapping
+    # the flag wins over the file, the file over the default
+    mapping = args.mapping
+    if mapping is None:
+        mapping = (SCN_MAPPING_DEFAULT if setup["mapping"] is None
+                   else int(setup["mapping"]))
     los = args.los
+    if los is None and setup["los"] is not None:
+        los = SCN_LOS[setup["los"]]
     launched = _launch(argparse.Namespace(
         name=args.name, json=True, force=False, res=res, map=wanted_map,
         maxfps=args.maxfps,
@@ -4370,7 +4451,7 @@ def build_parser():
                    help="stock window title, no label (also sticky; --title auto undoes it)")
     l.add_argument("--map", help="skirmish map name, e.g. 'Two Continents'")
     l.add_argument("--unit-limit", dest="unit_limit", type=int,
-                   help="per-player unit cap in totala.ini (TA clamps it to 20-1500)")
+                   help="per-player unit cap in totala.ini (TA clamps it to 20-500)")
     l.add_argument("--player", action="append",
                    help="N:controller[:side[:color[:metal[:energy]]]] (controller "
                         "0=off 1=human 2=AI, side 0=ARM 1=CORE; an empty field is "

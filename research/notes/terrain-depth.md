@@ -399,6 +399,17 @@ per-fragment source-map sampling is ~16 px out of register (§6 item 4).
 the frame at 25 s apart with the camera parked; the ~17 invalidation sites mean
 it rebuilds whenever anything moves. Reading it every frame is correct.
 
+**Its size is a MAP-LOAD decision, and `cells` is the allocation** [BINARY-VERIFIED
+2026-09-09, `0x483BB8..0x483CA6` inside `LoadMap`]. `cols = viewW/32 + (viewW % 32 ? 3 : 2)`,
+`rows` likewise from `viewH`, then `cells = (cols*rows + 7) & ~7` and `buf = malloc(cells*2)`.
+Two things follow. First, **a reader must not assert `cells == cols*rows`** — it holds at
+1024×768 (30×24 = 720) and fails at 1920×1080 (58×34 = 1972 against 1976), and in our stack that
+refusal cleared `fogMode` and turned the whole fog rule off at 1080p until 2026-09-09 (§8).
+Second, the grid spans the **1× viewport** and about two cells more, permanently — it cannot be
+made to cover a zoomed-out view, which is why `tagpu_fogwide.c` builds its own. Full read of the
+builder's every load, and of the four border completions, is in
+[engine map](exe-reverse-engineering.html) §"The screen fog grid".
+
 **A caution about the source maps.** With the grid and MAPPED read *in the same
 frame*, at the same cells, using the stride this section documents, they
 disagree: on Two Continents MAPPED reported explored for cols 80..98 of row 20
@@ -563,7 +574,16 @@ full-viewport layer inverts it.**
 
 Armed by `tagpu_terr.on` (tokens `log`, `passive`, `over`, `key=N`). It rides the
 native pass's frame like the feature pass, walks the same grid §2 walks, and emits
-one quad per visible cell. Three things fall out of §2 exactly as predicted:
+one quad per visible cell. **The quad is an INSTANCE since 2026-09-09**: one static
+six-corner buffer, and per cell four shorts — its column and row in the gather's
+grid, its tile's column and row in the atlas — that the vertex shader turns back
+into the position, UV and world coordinate the per-vertex stream used to carry.
+Every term is an integer far below 2²⁴, so the floats are the same floats, bit for
+bit (verified: 0 differing pixels at 1× against the pre-change build). The reason
+is size: at 144 bytes a cell a 3840×2160 view at the 0.25× zoom floor needs 17.9 MB
+of staging and as much uploaded every frame; at 8 bytes it needs 972 KB, which is
+what let the fixed 32768-cell budget become a reservation made from the live
+viewport (`tagpu_terr_clamp_span`). Three things fall out of §2 exactly as predicted:
 
 - **Terrain is the frame's far plane**, so it draws at depth key `0.10` — under the
   flat-feature band (`0.40`) and under particle layers 0..2 (`0.30`), i.e. under
@@ -956,6 +976,157 @@ One known deviation from suppressing `0x4848E0`: the engine used to shade-remap 
 were ever drawn on out-of-LOS ground, which the engine does not do.
 
 ---
+
+## 8. Fog at zoom — the grid the engine cannot give us [LIVE-VERIFIED 2026-09-09]
+
+The four native passes sample the engine's grid, and §5.2 says why that grid can only ever span
+the 1× viewport: its dimensions are fixed at map load and its origin is recomputed from the eye
+inside the builder. At zoom < 1 the passes draw a world rect `vw/z` across, so everything outside
+the grid falls off the lattice, `taFog`'s `clamp` reads the border cell, and the outer ring gets a
+**smear of the last row and column** — horizontal and vertical grey bands with lit, un-fogged
+ground between them, and, in the black band's case, unexplored map drawn in full colour.
+
+**It is not cosmetic.** The CPU-side gates take the same sample: `tagpu_native.c`'s anchor test and
+`tagpu_fx_tile_visible` both call `tagpu_fog_at`, so a smear that reads "no fog" draws enemy units
+and buildings the player has never seen. Measured on `feat-forest` at 0.35× — an enemy CORE Solar
+Collector on ground with no LOS, drawn in full colour on the frame's right edge, gone with the fix.
+
+**`tagpu_fogwide.c` builds its own grid** over a window sized for `tagpu_zoom_min()` — the widest
+view the levers can reach, not the level in force, because the level the game thread can read is a
+frame old and one ease step of a wheel flick is wider than the slack. It replicates `0x4843C0`
+exactly (engine map §"The screen fog grid"), on the **game thread**, from `terr_fogtick` — the fog
+overlay's own call site, where the LOS and MAPPED allocations are the engine's own to read — and
+hands the result to the render thread by swapping one of three buffers under a critical section,
+so the two never touch the same one. The render thread uses it in place of the engine's grid,
+same lattice and same bytes, and falls back to the engine's whenever the game thread is not
+building (the off lever, terrain ownership disarmed, the menus) — or whenever the frame it is
+drawing is 1:1, which since G13s is the CONSUMER's decision and no longer the producer's
+(§8a).
+
+**The oracle is exact**: with `tagpu_fogwide_check.on` the module rebuilds over the *engine's* own
+window each 120th tick and compares byte for byte — **0 differing of 720 cells (30×24, 1024×768,
+357 non-zero) and of 1972 (58×34, 1920×1080, 1555 non-zero)**.
+
+Two departures from the engine, both deliberate and both documented in the source:
+
+1. **The border completions use the derived straddling index**, not the engine's literal
+   `0`/`rows−2`/`0`/`cols−2` (engine map, the table). They coincide in every window the engine can
+   produce, which is why the oracle still reads 0; they do not in a window that reaches many cells
+   past the map.
+2. **`fogw_edge_fill` replicates the edge entry outward** over the entries that lie wholly off the
+   map. The engine never meets that case — its grid stops one cell past — but ours can carry forty
+   all-zero rows over open water, and an all-zero entry means "no fog": a sprite whose *projected*
+   position (`y − alt/2`) lands past the shoreline while its anchor is on the map drew in full
+   colour above a fogged map. It is applied after `fogw_build` and is not part of what the oracle
+   compares.
+
+**Cost**, from the module's own heartbeat (`fogwide:` per 300 ticks): a 245×148 window — 36,260
+cells, 1920×1080 at 0.25× — rebuilds in **86–98 µs** on the game thread with one game on the
+box, **109–246 µs with six of them running** and 150–220 µs with two or three, so it is a cost
+that scales with contention rather than a fixed figure; quote the load with the number. It is
+paid only on ticks where the engine's grid was invalidated or the window moved.
+
+**The heartbeat is emitted per five seconds of WALL TIME and carries the rate** (G13s). It used to
+be one line per 300 ticks — but a tick here is a `DrawGameScreen` call, and the game loop turns
+that over 330 times a second on `crowd-static` and 3200–4900 on a sparse skirmish while both
+present 58–60 fps (engine map, §"The engine's rates"), so a block of 300 was anywhere from a tenth
+of a second to a second and `rebuilds=n/300` was a ratio that read like a rate. *(An earlier note
+here said it "reads 300/300 while the camera is moving". It does not, and never did.)*
+
+**And the rebuild rate is the SIM TICK rate, not the camera's.** `changed` is
+`rebuilt || the window moved || …`, and `rebuilt` is the engine's is-current bit, which §5.2
+records as cleared by every LOS stamp touching the local player's maps as well as by every scroll
+— "the grid rebuilds nearly every frame something moves". MEASURED 2026-09-10 at 1920×1080 on
+`200v200`, 400 units fighting, **camera still, zoom 1.0: 760 rebuilds in 25.0 s = 30.4/s** at
+145 µs mean, so **~4.4 ms of game-thread time per second**, doubling at `gamespeed` 20. It is
+bounded by the tick rate rather than by the unit count, and since G13s it is paid at every zoom.
+
+`tagpu_fogwide.off` in the gamedir disables it live — polled on the **game** thread, at the top of
+the tick, because the producer is the one that must obey it (polling it in the consumer left the
+game thread rebuilding a 36k-cell grid nobody read on any frame the pass never reached the fog
+block). `tagpu_fogwide_check.on` arms the oracle.
+
+### 8a. The frame that outran its own grid — G13s [MEASURED 2026-09-10]
+
+Reported from play: at the map's bottom-left corner, zoom out quickly and the fog fails for a
+moment on the outer edge of the view. Reproduced on Town & Country with the camera **scrolled**
+(never written — a written eye leaves the engine's own grid stale and its picture is then a lie),
+recorded losslessly at 60 fps and scanned for green-dominant pixels, which separates lit grass
+from the grey band: **6 frames of 1801 unmapped over seven wheel gestures, 7 of 1561 mapped +
+true LOS over six**, each a single frame, each 0.08–0.22 s after the gesture, each showing lit
+ground along the bottom and right of the fogged area at exactly the engine grid's own extent.
+
+Two faults, and only both together made it visible.
+
+1. **The producer was gated on the live zoom level.** `tagpu_fogwide_tick` withdrew the published
+   grid whenever `tagpu_zoom_level() >= 1.0f`. That level is published by the RENDER thread —
+   which is also the thread that decides, mid-frame, to draw the first zoomed-out frame of a
+   gesture, and on that frame the pass asked for a grid the game thread had had no tick to build.
+   A producer that cannot see the future must not be gated on it: it now builds **every tick**,
+   and the consumer picks per frame off the level it is actually drawing with. The instrument is
+   the heartbeat's new **`bare=`** counter — render-thread frames that asked and were refused, so
+   frames drawn zoomed over the engine's 1× grid: `bare=1 rebuilds=1/300` per gesture before (the
+   old per-300-tick line), **0
+   throughout** after. It must read 0.
+2. **The fallback failed OPEN.** The last column of any grid never has its right corners written
+   (engine map, §"The builder `0x4843C0`"), so `taFog`'s clamp to `uFogDim − 0.001` landed every
+   sample past the grid on corners nobody wrote: coverage 0, i.e. **no fog at all** rather than
+   the smear the ring is supposed to degrade to. `uFogDim − 1.0` lands it at `f = 0` in the last
+   *complete* entry instead, replicating the edge outward exactly as `fogw_edge_fill` does off the
+   map. It cannot move a fragment inside a grid, and that is the bound rather than a margin: the
+   viewport's right and bottom edges are inside the engine grid's last column and row for **every
+   viewport size the allocation accepts and every eye** — worst case 1 px, at a 64-px viewport
+   with `eye % 32 == 15`, and 16 px for the negative eyes the widened camera range produces
+   (enumerated over `0x483BB8`'s and `0x4843C0`'s own arithmetic; engine map, §"The screen fog
+   grid") — while the wide grid keeps the view a whole `FOGW_MARGIN` inside.
+
+**After:** 0 failure frames of 1800 unmapped (max 32 green px in any frame) and 0 of 1561 mapped
+(max **0**), `bare=0` on every heartbeat, and the replication oracle still `differ=0` over
+1972 of 1972 cells at 1920×1080.
+
+**Parity**, on `crowd-static` with every pass armed, sim running, zoom 1.0 / 0.5 / 0.25: the
+**outer 64-px ring of the world viewport — the only region the clamp can reach — differs by 0
+pixels** in every pair, cross-build and same-build alike. The interior differs by 456–9049 px in
+the same-build floors as much as across builds, all of it inside the unit block and all of it
+animation phase; that fixture is static in position, not in pose, so it cannot be paired more
+tightly than its own floor. *(A first attempt at this measured nothing at all: `scenario load`
+writes `tagpu_defaults.off`, so the instance had every pass opt-in and none armed and both builds
+were drawing the stock engine's picture. Read the `opt:` line before believing a parity number.)*
+
+**What it costs, stated plainly**, because the landing bought the fix with it: ~4.4 ms of
+game-thread time a second whenever anything is moving (above), and the three buffers, allocated on
+the first in-game tick now rather than on the first zoom-out. The alternative on the table was a
+frame drawn without a grid, which is what the report was about.
+
+*(The heap half of that figure was **6 MB in every session** until 2026-09-10 — three fixed
+1024×1024 squares — and is now sized from the screen: **212 KB at 1920×1080, 84 KB at 1024×768**.
+The same change retired the second constant, `tagpu_fog_at`'s separately typed 512, which had gone
+stale against it and would have refused the very grid the producer built past a 4057-px-wide
+screen. Why the size is taken at the worst eye residue, why the set grows whole rather than per
+slot, and why the old set goes back through `tagpu_reclaim`'s fence rather than being freed on the
+spot: [sizing the wide fog grid](fog-grid-sizing.html).)*
+
+**And since 2026-09-10 a SECOND thing can ask for that rebuild.** `terr_fogtick`'s condition is
+`!(LosType & 8) || tagpu_zoom_fog_pending()`: the engine's own lazy test, OR-ed with a request
+from `tagpu_zoom` saying it has stepped the eye for a cursor-anchored zoom. It is a request and
+not a write, and that is the whole point — `0x484904` sets the bit with an **unlocked**
+`or word`, so a clear issued from the render thread can be swallowed and a swallowed clear is a
+silently stale, view-anchored fog grid. Asking here costs nothing and cannot be lost: this is
+the only code that decides, and it is already on the thread that owns the word. The handshake
+is two monotonic counters with one writer each — the render thread bumps a sequence when it
+moves the eye, this function samples it BEFORE the rebuild and stores it after, so a step that
+lands mid-rebuild is answered by the next tick rather than swallowed. While the two disagree
+the frame takes the wide grid, so a game thread that stops ticking fails safe. **Cursor
+anchoring is gated on `g_terrown_skip`** for exactly this reason: with the engine owning its
+own fog draw there is no one to ask, so the eye is not stepped at all.
+
+**The CPU twin was NOT brought along.** `tagpu_fog_at` (`tagpu_fx.c`) still bounds on
+`gx >= cols`, so the band `[cols−1, cols)` interpolates the same unwritten corners the shader now
+avoids. It is unreachable through the wide grid — that band is ≥ 320 px outside the view
+(`FOGW_MARGIN` plus the window's two spare columns) against a gather that reaches 256 — and
+through the engine's grid at zoom ≥ 1 it is reachable for an anchor 1–32 px past the viewport
+edge, where both available answers are the same "no fog" and tightening the bound would change
+only the argument. Recorded rather than changed.
 
 ## Appendix — address & offset tables
 

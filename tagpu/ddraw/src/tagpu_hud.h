@@ -2,8 +2,8 @@
 #define TAGPU_HUD_H
 /* tagpu_hud.h — HUD scale: the in-game HUD magnified inside the player's own
    Screen Size, over a world the engine goes on drawing exactly as it always
-   did. Design: research/notes/gui-renderer.md §20; the geometry it rests on is
-   research/notes/resolution.md §3.4a; §20.5 is why the first build of this was
+   did. Design: research/notes/gui-renderer.md §22; the geometry it rests on is
+   research/notes/resolution.md §3.4a; §22.5 is why the first build of this was
    withdrawn and what replaced it.
 
    TA's HUD is a hard 128 logical px side panel and two 32 px bars — immediates

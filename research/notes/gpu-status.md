@@ -134,7 +134,7 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | `0x46A610` | feature draw leaf (`ret 0x10`) | `featown` (`featown.on`) | prologue detour, 5 stolen |
 | `0x483FA0` | terrain tile blit (`ret 4`) | `terrown` (`terrown.on`) | `leaf_call` — the skip path key-fills the viewport |
 | `0x4848E0` | fog overlay (`ret 4`) | `terrown` | `leaf_call` — the skip path replicates only the lazy grid rebuild |
-| `0x4843C0` | screen fog-grid rebuild | `terrown` | *called by us*, not patched |
+| `0x4843C0` | screen fog-grid rebuild | `terrown` | *called by us*, not patched — and **replicated in C** by `tagpu_fogwide.c`, which builds the same masks over a window the whole zoom range fits in, **every tick since G13s** so that the first zoomed-out frame of a gesture cannot outrun it (terrain-depth §8, §8a) |
 
 > **`0x4B7F90` is not an effects function** — it is the engine's generic GAF-frame blit, and the
 > mouse cursor goes through it too (`0x4C2870` → `0x4C297E`). It is detoured on **`g_fxown_in`**,
@@ -345,6 +345,238 @@ Centre-anchored: no eye motion at all, so `vpwide`, the minimap rect and `Scroll
 with no further plumbing. Pointer-anchored zoom is the open follow-up and is a camera move —
 `tagpu_input.c`'s eye hold, not a transient bias (§3.1).
 
+### 2.3a-bis The arm state is published in one store, never transiently zero  [2026-09-10]
+
+The arm block inside **`tagpu_native_frame()`** (there is no `tagpu_native_armed()`; the other
+passes have one, this one does not) re-reads its lever every 30 frames. It used to do that by setting
+`s_armed = 0`, performing a **file read**, and setting it back — and `tagpu_native_owns_unit()`
+opens `if (s_armed != 1) return 0;` and is called **from the game thread** by `tagpu_markown.c`'s
+`mark_selbox`. So twice a second, for the length of that read, every selected unit read as "not
+ours" and the engine drew its own selection rects into the key-filled viewport, where the GUI
+mirror published the boxes and painted them cyan over the world (`gui-renderer.md` §20).
+
+It is now computed into locals and published in **one store**, and `s_armed` is **`volatile`**
+(as `s_selComplete` already was) so that store cannot be hoisted above the state it publishes.
+That closes the periodic window — the one the shipped configuration hits twice a second.
+
+**Residual, stated rather than papered over:** `s_type` is written only when it has actually
+changed, and the pass is disarmed across that write, which **narrows** a window rather than
+removing one — nothing waits for the game thread to observe the disarm. It is reachable only
+while a human is editing the arm file. Closing it properly wants the type published by index into
+a double buffer, which is its own piece of work.
+
+**And one predicate carries the whole ownership decision [2026-09-10].**
+`tagpu_native_owns_unit` now also refuses a unit whose **ModelId will not resolve**, because that
+decision has four consumers that must agree: the gather skips what it refuses, `tagpu_overlay.c`
+leaves the engine's composite unwiped, `tagpu_mark.c` leaves the bar on the engine's anchor, and
+`tagpu_markown.c` leaves the engine's own selection rect alone. Wrong in one direction a unit is
+drawn twice; wrong in the other it is invisible, or keeps its sprite and silently loses its
+selection box for ever — which is what a landing review caught here, against a claim that a unit
+with no model was "owed nothing" (`ui-markers.md` §1 carries the correction and the disassembly).
+
+**The general rule this is an instance of:** anything the game thread reads to decide whether we
+own a draw must never have a "not yet" state that the render thread publishes on its way to an
+answer. A poll that tears is a poll that hands the engine back the frame.
+
+### 2.3e Zoom to the cursor (`tagpu_zoom.c`, no arm file)
+
+The wheel holds the world point under the **pointer** still, instead of the one at the centre
+of the screen. No engine patch and no lever: the transform is a similarity about the viewport
+centre and nothing in it is free, so the one variable that can hold a point is the engine's
+eye. With `W(s) = eye + vw/2 + (s − c)/z`, holding `W(a)` across a change in `z` is
+
+    d = (a − c) · (1/z_prev − 1/z_now)
+
+added to the eye, where `a` is the point the notch was aimed at. Applied on the render thread
+inside `tagpu_zoom_read_lever()`, which is the call the pass makes before it reads the eye, so
+the zoom and the eye it is drawn with change together.
+
+**Fields we write:** `main+0x1431F`/`+0x14323` (the eye) and `main+0x14327`/`+0x1432B` (its
+scroll target) — always together, because the two disagreeing is what the per-frame stepper
+reads as a camera move in flight and would rebuild the fog grid every frame for as long as it
+lasted (G13g) — `main+0x142CB`, the minimap's view box, recomputed through the engine's own
+`0x466B70` because `0x41C3C0` is the only place it is otherwise filled, and, on a frame that
+actually steps the eye, the three **camera-follow** slots zeroed (below). **No engine flag bit is
+written at all**, and both omissions are deliberate: see the two new rows in
+[exe reverse engineering](exe-reverse-engineering.html) on `main+0x14281` bit 3 and
+`main+0x142F1` bit 1.
+
+**A frame that wants to step the eye asks the GAME THREAD to release the camera follow**
+[G13u, 2026-09-10]. Following a unit, the stepper `0x41CA10` recomputes the scroll target from it
+*every* frame and clamps it inline, so the anchor's delta was eased straight back out and the zoom
+read as pinned to the unit. The engine answers the same problem in its own edge and hotkey scroll
+by releasing the follow — the scroll poll's eye-writing tail clears `main+0x1434B`, `+0x142F3` and
+`+0x142F7` at `0x41D091`…`0x41D0AA`, the body of `0x41C390`, and `0x41D035` skips that tail on a
+frame where the eye did not change.
+
+**Those three stores are ours to make only on the game thread, and that is the whole safety
+argument** — the same handshake as the fog request above, for the same reason plus one more.
+`main` is **randomly misaligned at every launch** (`0x41D920` pads it by
+`(GetTickCount() % 1000) * 7`; see [exe reverse engineering](exe-reverse-engineering.html)), so
+`main+0x142F7` is 4-aligned in only 25 % of launches and straddles a cache line in 4.7 % of them.
+A cross-thread store of zero would therefore be torn in about one launch in twenty — into a slot
+the stepper **dereferences** at `0x41CA58`/`0x41CA95`. The eye and the scroll target are misaligned
+in exactly the same way and are written from the render thread anyway, because a torn *coordinate*
+is bounded by `clamp_pair()`; a torn *pointer* is a wild read.
+
+So: `anchor_step()` publishes a level — `s_dropFollow`, "a gesture is trying to move the camera
+right now" — and `tagpu_zoom_follow_tick()` does the stores from `terr_fogtick`, gated on the same
+`tagpu_terrown_owns_fog()` that anchoring itself is gated on, so the request always has a consumer.
+Three consequences, all deliberate:
+
+* **The residual is kept WHOLE while it waits.** A frame that finds a follow set returns without
+  spending `s_residX`/`s_residY`, so the gesture's total displacement is still exactly
+  `(a − c)(1/z_start − 1/z_end)` across the wait rather than losing the frames it spanned.
+* **A level, not an edge**, because the engine's own writers are guard-then-store with the compare
+  well before the store — 43–46 bytes for the countdown writers, 8 for the two that write the
+  object slot (`0x49AE84`→`0x49AE8C`, `0x49C7F3`→`0x49C7FB`): a follow re-established in that
+  window would survive a one-shot request, and is taken away again on the next tick.
+* **The game thread CONSUMES the request and the render thread re-arms it** every frame it still
+  wants the camera. That bounds the one thing a level cannot bound by itself, a producer that
+  *stops*: `terrown` keeps skipping for up to 90 frames after the native pass goes quiet, and a
+  frozen level would spend those frames deleting every follow the player established. Consumed, a
+  dead producer costs exactly one release.
+* **A game thread that stops DRAWING never releases, and the anchor then never steps the eye** —
+  the camera keeps following, which is the old behaviour and the fail-safe direction. **Pausing the
+  sim is not that**: `0x4848E0`'s sole call site `0x469D8E` is inside the per-frame world draw, so
+  a paused game still services the request.
+* **The banked debt dies with the claim.** A gesture that ends without ever getting the camera
+  voids its residual (`drop_claim()`), and so does every exit that gives the claim up. Without that
+  the bank survives the gesture — nothing else spends it, since every later frame returns at
+  `zNow == s_zStep` — and the next notch anywhere on the map discharges it in one frame as a silent
+  camera jump. It is also what kept the centre-aimed control honest: `nx` tests the *accumulated*
+  residual, not this frame's contribution, so a banked value would make a centred wheel step and
+  release. [All four found by the landing review, 2026-09-10.]
+
+**Also in the fields we write, by consequence:** releasing the follow zeroes `CameraToUnit`, which
+is `+0` of the camera block `0x469BFC` hands the order-marker driver — so from that frame an
+**unselected** followed unit's order lines stop being drawn (`tagpu_order.c` reads it as `camU`; a
+*selected* unit takes the same mask on the next branch and is unaffected, so the Ctrl+C case loses
+its lines only while nothing is selected). Same thread, no tear, and it is the state the engine
+reaches after its own edge scroll; noted because marker-parity captures depend on it. It applies
+under the partial arm set too (`vpwide.on` + `terrown.on` without `zoom.on`), which is a
+configuration the module otherwise declines to drive.
+
+**Measured 2026-09-10** on the landing binary, same skirmish, commander followed with Ctrl+C, four
+notches aimed at `(900, 600)` against a viewport centre of `(576, 384)` — same gesture and
+direction on two builds differing only in whether the request is published, from a start eye within
+2 px (the followed commander drifts between runs):
+
+| build | gesture | eye | follow after |
+| --- | --- | --- | --- |
+| request removed | −4, z 1.0 → 0.683, from `(5127, 7609)` | `(5125, 7609)`, Δ `(−2, 0)` — cancelled | still set |
+| as landed | −4, z 1.0 → 0.683, from `(5127, 7611)` | `(4977, 7511)`, Δ `(−150, −100)` | released |
+| as landed | +4, z 0.683 → 1.0, from `(5127, 7609)` | `(5277, 7709)`, Δ `(+150, +100)` | released |
+
+Both landed rows are the predicted `(a − c)(1/z_prev − 1/z_now)` = `(±150.4, ±100.3)` to the pixel,
+so the game-thread wait costs no accuracy. The control — the same gesture aimed at the viewport
+centre — moves the eye by nothing, leaves the follow **intact** and logs no release.
+
+**The leak regression** [2026-09-10, after the review]: three gestures in a row, each re-following
+with Ctrl+C first, gave Δ `(−150, −100)`, `(−150, −100)`, `(−151, −100)` against a true
+`(−150.37, −100.25)` each. Totals: **X 451 against 451.1, Y 300 against 300.7**. Both sit inside
+the ±1 world px that a carry entering and leaving the run can move a three-gesture total by, so
+this is the carry working, not a bank — a leaked bank would have shown as a jump of hundreds, not
+a pixel. *(Quoting X alone as a telescoping proof would be cherry-picking: Y is the looser of the
+two and is the one to check.)* A centre-aimed wheel taken immediately afterwards, with that carry
+standing, left the eye at `(5113, 7624)` unchanged and the follow set.
+
+**Three properties the tests lean on.** The delta is exactly 0 with the pointer at the viewport
+centre, so that case is the previous behaviour — which is the A/B control, and why this needs no
+lever. *Precisely*, since G13u ties the follow release to the eye actually stepping: `nx` tests the
+ACCUMULATED residual, not this frame's contribution, so the control holds while the carry standing
+from an earlier gesture is under half a world pixel — which `drop_claim()` now guarantees, because
+the only residual that survives a gesture is the sub-pixel remainder of a frame that did move the
+eye. The one case left is a carry of exactly ±0.5, where `iround`'s half-away-from-zero gives ±1:
+a centred wheel would then step one world pixel and take the follow with it. Not reproduced, and
+not special-cased — changing the rounding would break the in-then-out oracle's exactness. The steps **telescope**, so total displacement is
+`(a − c)(1/z_start − 1/z_end)` whatever the frame timing, giving an exact oracle on the eye.
+And in-then-out with a still pointer returns the eye exactly.
+
+**Four gates, each a positive condition.** The wheel only — `tagpu_zoom.txt` keeps the
+centre-anchored behaviour, so every zoom fixture stays reproducible. `tagpu_eye.txt` wins, and
+says so once a second. A zoomed world must be on screen. And `tagpu_terrown` must own the fog
+draw, which is the safety argument rather than tidiness: only there is the grid's rebuild
+decision ours to make on the game thread.
+
+**MEASURED 2026-09-10**, 1920×1080, `crowd-static` on Two Continents, viewport `128,32
+1792×1016` so `c = (1024,540)`:
+
+| case | anchor | notches | predicted Δeye | measured |
+|---|---|---|---|---|
+| control | (1024,540) | +6 | (0, 0) | **(0, 0)** |
+| upper-left | (400,300) | +6 | (−272, −105) | **(−272, −105)** |
+| lower-right | (1700,900) | +6 | (294, 157) | **(294, 157)** |
+| zoom out | (400,300) | −6 | (481, 185) | **(481, 185)** |
+| at the map corner, eye already (0,0) | (140,44) | +8 | (−472, −265) | **(−472, −265)** — the eye going negative, i.e. §2.3c's widened range composing with the anchor |
+
+Exact on every axis. In-then-out returned `(1728,702) → (1456,597) → (1728,702)`. At a map
+edge the range refuses what it must and the residual is dropped rather than banked: parked at
+`(0,0)`, six notches out anchored at the bottom-right held eye **and** target at `(0,0)` for
+four seconds with no churn.
+
+**The functional oracle is the engine's own hover state**, `main+0x2CBA` (the unit under the
+pointer). Pointer parked on an ARMPW drawn at `(664,186)`, +6 notches: **still unit 17 under
+the cursor** anchored, and unit **68** under it centre-anchored. That is the feature, read out
+of the engine rather than off a screenshot.
+
+**Fog:** `bare=0` on every `fogwide` heartbeat of the run and the replication oracle
+`differ=0` (1972 of 1972 cells). A frame-by-frame scan of a lossless 60 fps capture at the
+units, on G13s's green-dominance criterion, put the worst single-frame excursion of the
+anchored run at **33 396 px against the eye-fixed control's 45 431** — the control cannot have
+an eye-induced artifact at all, so the excursions are the ease changing how much world is on
+screen, and anchoring adds nothing above that floor. The criterion was checked live before
+being trusted: 196 210 green-dominant px at the units against **0** in the fogged corner.
+
+**What the landing review found, and what it settled** (two Opus reviewers, `high`,
+2026-09-10). Three real defects, all fixed on the branch: the eye was stepped *before*
+`zoom_eye_range()` was consulted, so a frame with no sane engine state left it unclamped **and**
+skipped the invalidation; `anchor_step()` used the widened camera range without the
+`g_eyeInstalled` guard the public accessor applies, so `vpwide.on` + `terrown.on` without
+`zoom.on` — a reachable arm set, since `tagpu_opt.c`'s `needs` steers a default and not a
+requirement — could push the eye past a range nothing would walk it home from; and
+`tagpu_zoom_fog_pending()` could latch, because `tagpu_terr.c` drops the skip later in the same
+frame than `read_lever()` runs, leaving a bump nobody would ever ack. It now asks
+`tagpu_terrown_owns_fog()` first: no consumer, no request.
+
+Two claims the review disproved, corrected above and in
+[exe reverse engineering](exe-reverse-engineering.html): the lowest level a single ease step can
+cross 1.0 from is **0.5 exactly**, not 0.489, and the engine grid's slack collapses to the bare
+32 px at 1×, not to zero. `tagpu_fogwide.c`'s coverage derivation was true but its proof was
+not — it holds only under the one-ease-step bound, which the comment now states.
+
+**And one it raised that measurement refutes.** We do not set the minimap's dirty bit, and at
+`k = 1` the sharp minimap layer returns early (`tagpu_gui_surf.c:1451`), so the engine draws the
+view box gated on that bit — the box should lag. It does not: measured 2026-09-10 across an
+anchored gesture, **51 px of the 106×126 minimap change**, bounding box screen x 26..42 y 7..16,
+exactly the union of the old box (26,7,42,16) and the new one (32,11,42,16) — erased at the old
+position, drawn at the new. Something else sets the bit during a gesture; which path, we did not
+establish, so this is a measured behaviour and not an explained one.
+
+**Named gaps.** The eye is an integer in world px, so the anchor can sit up to `z/2` screen px
+from the pointer while a gesture is in flight — 0.5 px at 1×, 4 px at 8×; holding it exactly
+would need an off-centre scale centre, which vpwide's addressable rect, fogwide's window and
+the ring test all assume away. Two sites that clamp the scroll target inline against
+`[0, map − W]` — `0x41C4C0` and `0x41C7F7` — do not go through our clamp, so on those paths a
+target we stepped can be recomputed without the delta and the stepper eases the eye back;
+neither is a standing state, so the zoom composes with the next camera move. *[CORRECTED
+2026-09-10: this listed the per-frame camera FOLLOW `0x41CAF7` as a third such site and
+concluded "the camera owns itself while it is following something". It does not — a follow is
+recomputed **every** frame, so it did not merely stop the delta `d` short of a map edge, it
+cancelled the whole gesture's camera move (measured: the eye moved (0, −2) where the anchor
+asked for (−150, −100)). `release_follow()` releases the follow instead, which is the engine's
+own rule for a manual camera move.]*
+`eye[0] += nx` is a read-modify-write on an unaligned field (`main+0x1431F` is an odd offset)
+racing the game thread's own stepper, and the landing accepts it: every value that escapes goes
+through `clamp_pair()` so nothing can address memory the engine does not own, but a lost update
+**discards** a camera move rather than delaying it — a minimap click landing inside the window is
+simply gone — and this change raises the write rate from "only when a clamp fires" to every frame
+of every gesture. A camera hold that is *moving* (a scripted pan through `tagpu_eye.txt`) now
+bumps the fog sequence every frame, so such a pan draws on the wide grid throughout even at 1×;
+the replication oracle reads `differ=0`, so the picture is the same, but the fog texture is
+re-uploaded on each switch. And `s_eyeHold` is polled every 15 frames, so the hold gate is up to
+a quarter-second late in both directions.
+
 ### 2.3b The addressable viewport at zoom < 1 (`tagpu_vpwide.c`, `vpwide.on`)
 
 **On by default since 2026-09-08 through the play defaults (§2.8); opt-in before that.** Nothing
@@ -353,9 +585,46 @@ the zoom on and no `tagpu_vpwide.off` — the true rect verified, *and* a zoomed
 
 | VA | What it is | Mechanism |
 |---|---|---|
-| `0x468D85` / `0x46964F` / `0x469F95` | `call 0x4C6B10` — the three sites in `DrawGameScreen` that copy the viewport rect into the offscreen surface's clip rect (`+0x1C..+0x28`) | call-site redirect; **clamped to the surface**, because `0x4C6B10` is a bare four-dword store with no clamping and a wide rect would license an engine drawer to write outside its allocation |
+| `0x468D85` / `0x46964F` / `0x469F95` | `call 0x4C6B10` — the three sites in `DrawGameScreen` that copy the viewport rect into the offscreen surface's clip rect (`+0x1C..+0x28`) | call-site redirect; **clamped to the surface AND to the TRUE viewport rect** (2026-09-09, below), because `0x4C6B10` is a bare four-dword store with no clamping: the surface clamp keeps a wide rect from licensing a write outside the allocation, the viewport clamp keeps one from licensing a write outside the rect our key fill erases |
 | `0x499221` | `call 0x498DA0` — the mouse → world / map cell / hovered feature conversion, and the ONE reader that uses L and T as the screen→world **origin** (`world = eye + clamp(pos, L, R) − L`) | call-site redirect; redone with the TRUE origin and the WIDE clamp, a straight pass-through whenever the rect is not ours |
 | `0x4B5E5F` / `0x4B5EC0` / `0x4B5F0C` | the three arms of TA's own window procedure's `0x200..0x206` jump table, each unpacking the mouse `lParam` with `AND 0xffff` + `SHR 0x10` | **byte patch** → `MOVSX ECX,CX` + `SAR EAX,0x10`. `LOWORD`/`HIWORD` is zero-extending, so a client x of −20 arrived as 65516 and the event was lost; this is Microsoft's own `GET_X_LPARAM`, and for any position a real mouse can report it is bit-for-bit identical |
+
+**The clip guard needs BOTH bounds, and the second one is the picture's [MEASURED 2026-09-09].**
+Clamping the widened rect to the surface allocation is a memory-safety bound and nothing more: it
+still leaves the side panel and the top and bottom strips inside the clip, and **nothing ever
+repaints those**. Our key fill covers the true viewport only — that is why every pass takes its
+rect from `tagpu_vpwide_true_rect()` and not from the field — and the engine repaints the panel
+only on damage it knows about, which a stray world draw is not. So one frame in which an engine
+drawer runs with the wide rect leaves marks outside the viewport **for the rest of the session**,
+and they accumulate.
+
+That is not hypothetical: it is the bug a 500 v 500 fight with the whole army selected produces at
+zoom < 1 (`scenarios/500v500.json`, the fixture written for it). The drawer that reaches them is
+the engine's own selection rect `0x46A530`, which `markown` hands the WHOLE set back to whenever
+the native pass came up one box short (`ui-markers.md` §1) — and `0x467A50` projects each one at
+the **unzoomed** position, which at 0.42× is up to 1.4 screens from where the unit is drawn. Two
+independent runs of the fixture: **5768 stray green pixels on the panel before, 31 after** (the 31
+is the minimap's own view rect), with five hand-back frames in the "after" run and the engine
+surface under the buttons reading 100 % palette index 0.
+
+**The clamp is NOT gated on the surface probe [2026-09-10].** It only ever narrows, so it needs
+to know nothing about the allocation — and riding it on `IsBadReadPtr` succeeding would make the
+bound conditional on a probe, which is precisely what CLAUDE.md refuses as a safety argument. A
+landing review caught it there: one call with an unreadable `self` would have re-licensed the
+permanent side-panel marks. The allocation clamp above it still rides the probe, because that one
+genuinely needs the surface's width and height.
+
+**Two residuals, named:** `mark.on=nocursor`'s capture window (window B) takes
+`tagpu_vpwide_addressable()` and then intersects with the ctx clip, so the narrower clip costs
+that **debug lever** the ring markers it exists to show — the shipped configuration never opens
+it (G13p). And `0x46A530` indexes `MODEL_PTRS[ModelId]` with no zero test while slot 0 is never
+written by the load loop, so an engine box drawn for a ModelId-0 unit bounds itself on
+uninitialised memory. That is stock TA's own behaviour, not something this stack introduced, and
+restoring it is the correct half of the `owns_unit` fix — but it is worth knowing it is there.
+
+Clamping to the true rect is exactly the bound **stock** TA sets at these three sites — unwidened,
+the rect they are handed IS the true one — so it can never clip anything the engine would otherwise
+have drawn on screen, and at zoom ≥ 1 or with the widening disarmed it is the identity.
 
 The rect it writes is `main+0x37E27..0x37E33` (L, T, R, B) only — **never W/H at `+0x37E37`/`+0x37E3B`**,
 because the eye clamp `0x41C3C0` derives `maxEye = map − W` from them and a negative `maxEye`
@@ -401,14 +670,15 @@ engine's camera** — the minimap's view box, the minimap click jump, the mouse 
 the HotUnits cull and our own passes needed nothing new.
 
 **What is not covered, and the scroll target is where the line falls.** `main+0x14327`/`+0x1432B`
-is where the camera is *heading*, and the per-frame stepper `0x41CA30` eases the eye toward it.
+is where the camera is *heading*, and the per-frame stepper `0x41CA10` eases the eye toward it.
 Paths that set the eye and copy it into the target afterwards (`0x41C574`, `0x41CDB0`, the
 scroll `0x41D037`) reach the widened range through the detour. Three sites instead compute the
 target and clamp it **inline** against `[0, map − W]`, never calling `0x41C3C0` for it —
 `0x41C4C0` (smooth `SetCamera`), `0x41C7F7` (smooth centre-on) and `0x41CAF7` (the per-frame
 camera **follow**, which recomputes the target from the tracked unit every frame). The stepper
 walks the eye to that target and our wider clamp leaves it there, so **those paths still stop
-`d` short of a map edge**. Nothing fights and nothing churns — the eye arrives at a target
+`d` short of a map edge**. (The follow is still one of the three *for the range*; what changed
+is that the cursor anchor now releases it rather than competing with it — §2.3e.) Nothing fights and nothing churns — the eye arrives at a target
 inside our range and both stop — it is simply the old behaviour where the detour does not sit.
 Closing it means widening three inline clamps in the middle of the camera module.
 
@@ -895,6 +1165,7 @@ line per change, rate-limited to one a second so a campaign fade cannot flood it
 | `0x469A05` / `0x469BA8` | the two `DrawUnit` return sites | `tracer` |
 | `0x4969D2` | the sim tick site (5 stolen) | `scenario` — applies a situation on the game thread |
 | `0x4B08C0` `0x4B0DA0` `0x4B19D0` `0x4B1A99` + the `E8` at `0x4B15E0` | the COB engine's thread allocator (5 stolen, wrapped: the original runs through the stolen prologue, then the start is latched), the thread runner's entry (5), the `RETURN` handler mid-function (5), the `signal` kill mid-function (6), and the `rand` handler's call into the sim RNG `0x4B6C30` (call-site redirect that calls it itself) | `cobtrace` (`tagpu_cobtrace.on`, its contents a unit-type filter) — the COB script-call oracle for tacob: S/R/X/K/D lines to `tagpu_cobtrace.log`, stamped with the sim tick `main+0x38A47`; reads only, game thread only; all five or none. `tagpu_posedump.on`'s header line now carries `tick=` and `idx=` so the two logs join, and since 2026-09-08 `body=` (the cached triple the compose folds) and `live=` (`unit+0x68/+0x66/+0x64`) beside it, both in axis order — [exe-reverse-engineering](exe-reverse-engineering.html) §"The COB engine", [tacob-design](tacob-design.html) §"The trace contract" |
+| — | `tagpu_posecrc.on`: one line per unit per SIM TICK carrying `in=` a CRC32 of every byte `posed_pose` reads and `out=` a CRC32 of every byte it writes, plus `raced=`. **The only oracle that watches the matrices the unit pass hands the GPU** — `posedump` dumps the *engine's* fields and `tacob pose-check` diffs tacob's reconstruction of them. It is joined on the INPUT, never on the tick, so two runs need no tick-for-tick determinism: `posed_pose` is a pure function of its input, so a shared `in` must carry the same `out`. The input is hashed on **both sides** of the pose loop and the sample is dropped and counted when the game thread moved a field under it (§2.9's residual, measured at 0–0.33%) — [smooth motion](smooth-motion.html) §7e | `tagpu_native.c`, no engine address |
 | — | `tagpu_shadowdump.on`: the Classic++ shadow map written once as a 16-bit PGM, `tagpu_shadow.pgm` (near = small), with its matrix on the `shadow: dumped` log line — the lab's `debug=shadow` for the game; how a caster's silhouette in light space is checked instead of guessed (G14i) | `tagpu_shadow.c`, no engine address |
 | `0x485F50` `0x4864B0` `0x422DD0` `0x4224B0` `0x481550` `0x423C50` `0x43F0E0` `0x43AFC0` | `CreateUnit`, `KillUnit`, `FeatureName2ID`, `LoadFeature`, `GetGridPosPLOT`, `SpawnFeatureOnMap`, `ScriptAction_Type2Index`, `NewMainOrder2Unit` | `scenario` — *called by us*, never patched. **`NewMainOrder2Unit` takes 16.16 in `{x, altitude, depth}`**, the same convention as `CreateUnit`; we passed whole units in `{x, depth, altitude}` until 2026-09-04 and every ordered unit walked to the map origin — [exe-reverse-engineering](exe-reverse-engineering.html) §"The order module" |
 
@@ -914,7 +1185,7 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `main+0x14357` / `+0x1435B` | unit array begin/end, stride `0x118` |
 | `main+0x1435F` / `+0x14367` | HotUnits ids / count (culled to whatever the viewport rect says — the unzoomed one, or the widened one under `vpwide`) |
 | `main+0x1431F` / `+0x14323` | eyeX / eyeY. **WRITTEN**, and only ever *clamped*: our replacement of the engine's own clamp widens its range to what the zoom shows (§2.3c), and `apply_eye_range()` re-applies the same bounds once a frame so a zoom-out cannot leave the eye past them. Sim-neutral for the same reason `ScrollSpeed` is |
-| `main+0x14327` / `+0x1432B` | `MapXScrollingTo` — where the camera is heading; the stepper `0x41CA30` eases the eye toward it. **WRITTEN by `apply_eye_range()` only**, clamped to the same range as the eye and for the same frame, because a disagreement between the two costs the fog grid its is-current flag every frame (§2.3c). The replacement clamp deliberately does **not** touch it — three of its callers are inside the stepper, and writing the target there would stop the camera ever arriving |
+| `main+0x14327` / `+0x1432B` | `MapXScrollingTo` — where the camera is heading; the stepper `0x41CA10` eases the eye toward it. **WRITTEN by `apply_eye_range()` only**, clamped to the same range as the eye and for the same frame, because a disagreement between the two costs the fog grid its is-current flag every frame (§2.3c). The replacement clamp deliberately does **not** touch it — three of its callers are inside the stepper, and writing the target there would stop the camera ever arriving |
 | `main+0x142CB` | the minimap's view RECT. Engine-drawn and engine-filled — `0x41C3C0` is the only place it is computed — so `apply_eye_range()` recomputes it through the same wrapper on the frames it corrects the eye. The one **render-thread** write of it; a game thread drawing the minimap in that instant sees a one-frame torn box, the same standing as the published view |
 | `main+0x37E27..0x37E3B` | viewport rect: L, T, R, B, then W, H. **L/T/R/B are WRITTEN while `vpwide` is live** (§2.3b); every pass that means the true 1× rect must call `tagpu_vpwide_true_rect()` rather than read the field |
 | `main+0x2C76` / `+0x2C7A` | mouse position, two dwords (`+0x2C78` is the high half of x, not the y) — the x and y of the 6-dword record the dispatch fills. **WRITTEN by `vpw_mouse_world()` while the zoom transform is live** (§2.3d): the engine is polled with the true pointer now, so the unzoomed `u` is put back here, where `GetUnitAtMouse 0x48CD80` and the routing test at `0x469DE1` read it. Untouched at zoom 1, on the screen-space UI, and for a record that came off the event ring. **Local, but NOT inert:** all three fillers (`0x4999C4`, `0x4999E7`, `0x4999F9`) and our write sit inside one game-thread tick, before the first reader, so nothing races — but the readers include the order dispatchers `0x419BE0`/`0x41A490`, so a wrong value here becomes a wrong **replicated order**, not just a wrong highlight. That is why the ring test above has to be exact |
@@ -934,7 +1205,10 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | **`Object3do+0x08`** | **the pose-dirty flag, and the interlock the unit pass reads it as.** Read only, on the render thread, on either side of every piece's posed-vertex copy: the engine rewrites `prim+0x22` in place and in two stages, and this field is 1 for exactly that window ([engine map](exe-reverse-engineering.html) "The repose"). Non-zero on either side means the buffer may be mid-rewrite and the pass emits the piece from the pose fields instead (§2.9) |
 | `Object3do+0x18/+0x1A/+0x1C` | the CACHED body turn — `unit+0x64` (about Z), `unit+0x66` (the heading, about Y), `unit+0x68` (about X), copied at `0x45AC7C` when any axis moves ≥ 8. Read only, and read in preference to the live `unit+0x64..` on the reconstruction path, because this copy is the one the compose baked into the vertices. **`[MEASURED 2026-09-08]` "In preference" is not a nicety: on a bomber the cached triple read `(0, 16128, 3)` against a live `(0, 44767, 65508)` — 157° of heading apart — and the drawn geometry followed the CACHED one.** On a tank the two were identical; which of them moves is not established. Anything folding `unit+0x64..` instead draws the unit at the wrong attitude, which is what `pose_dump` and `tacob pose-check` did until 2026-09-08 and `hires_pose` until 2026-09-09 |
 | the **level generation** (`tagpu_reclaim_level_gen()`) | not an engine field — our own counter, bumped on the game thread inside the teardown `0x491B60` and read on the render thread. It is how a cache keyed on a **model template** pointer (`s_aabb`, `s_sbox`, `s_pmap`) learns the level ended: the template tree is shared by every unit of a type and is NOT freed through `FreeObjectState`, so the deferral covers units and not it. Before 2026-09-08 nothing dropped those three at all — a second level reusing an address served the first level's answer, silently, for the life of the process ([thread-safe destruction](thread-safe-destruction.html) §6a) |
+| the **pose history** (`tagpu_lerp.c`, `tagpu_lerp.on`) | not an engine field — our own arena, 3.4 MB of `P_POS`/`P_TURN` snapshots keyed by `(Object3do, nparts, level generation)`. **It READS `pr+P_POS` and `pr+P_TURN` and writes NOTHING back**, which is the whole safety argument: the sim reads those fields (`get PIECE_XZ`, and `QueryPrimary`/`AimFromPrimary` hand the engine weapon muzzle origins out of them) and TA has no runtime desync detection, so a framerate-dependent per-machine blend written there would diverge two machines silently. Verified by running it: the walker's COB trace is byte-identical with the lever on and off ([smooth motion](smooth-motion.html) §7g) |
 | `node+0x24` | the model's REST vertices, `count × 12` bytes of 16.16. Read only. Shared by every unit of a type and never written after load, which is what makes the reconstruction in §2.9 safe to build from while the engine is rewriting the posed copy |
+| `main+0x1421F` | the screen fog grid `{u16* buf; cols; rows; cells}`. Read only, per frame on the render thread. **Its last column and last row are short their outer corners** — the map cell that would supply them is past the builder's loop — so a sampler that clamps a world point into that cell reads *no fog*, not the border cell; `taFog` clamps to `uFogDim − 1.0`, one whole cell short, and the grid's own overshoot of the viewport — at least 1 px on every side for every viewport size the allocation accepts and every eye, 16 px for a negative one — is what makes that a no-op at 1× (terrain-depth §8a). **`cells` is the ALLOCATION**, `(cols*rows + 7) & ~7` — asserting `cells == cols*rows` accepted 1024×768 and refused 1920×1080, where the refusal cleared `fogMode` and there was no fog at all until 2026-09-09 ([terrain & depth](terrain-depth.html) §5.2). **The dimensions are one cell per 32 px of the 1× viewport plus two**, whatever the zoom: MEASURED by `tacli peek` through this descriptor, **118 × 68** for the 3712 × 2096 viewport of a 3840×2160 screen (`cells` 8024, exactly the product) and **78 × 45** for the 2432 × 1376 of a 2560×1440 one (`cells` 3512 against a product of 3510 — the round-up, and the case that refused). The `cols`/`rows` sanity bound in `tagpu_native.c` is 1024, not 256: at that rate 256 is a viewport 8128 px wide, which made the bound a screen limit standing in front of the real test |
+| `main+0x2A43`, `main+0x1B63 + id*0x14B + 0x7C`, `main+0x14273`, `main+0x14233`/`+0x14237` | the LOCAL player id, that player's LOS counter block `{u8* buf; w; h}`, the MAPPED bitmap (u16 per tile, one bit per player, row stride `PLOT_C` **bytes**) and the PLOT dimensions. Read only, **on the GAME THREAD** from `tagpu_fogwide.c` at the fog overlay's own call site — which is the lifetime argument for reading them at all: the engine's builder reads the same two allocations there. Every index is bounded by the dimensions read alongside them |
 | `main+0x37F06` bit0 | `damagebars` registry option |
 | `main+0x37F06` bit2 / bit3 | the graphics options `Shadow` / `TShadow` (the blit tests `al,4` at `0x45928E`, [shadows & cloak](shadows-cloak.html) §2). Read only, per frame. The Classic silhouette needs both, the slant only bit2 — and **since G14i bit2 also gates the Classic++ shadow map** (with `shadows=1` in the cfg), so the player's in-game Shadows toggle keeps its meaning under the switch; bit3 is ignored there |
 | `main+0x37F2F` bit2 | `SelBoxes` |
@@ -1565,9 +1839,29 @@ because the panel is right-aligned and a `.GUI` written at attach cannot know th
 `gi+0xCCA`, the repaint flag. And the loaded GAF frame's colour plane (`+0x10 PtrFrameBits`),
 repainted in place with the composed ground. **Nothing sim-side, and nothing that replicates.**
 
+**Seven rows since 2026-09-09**, the seventh being the FPS readout (§2.14). Two things about it
+are unlike the other six, and `read_state()` and the click handler have to agree on both or the
+row would read one way and behave the other:
+
+- **It never makes Renderer read `Custom`.** Every other row below Renderer changes what the game
+  *looks like*, and `Custom` is the honest answer for those; this one draws a diagnostic over the
+  finished frame and changes no pixel the game rendered. So the click handler skips the
+  `STYLE_CUSTOM` assignment for it and `read_state`'s `custom` test leaves it out.
+- **It is never greyed.** Like supersampling, it is orthogonal to the Classic/Classic++ lane, so it
+  is not one of the switch's dependants — grey it with the lane and a player on Classic could not
+  turn it on.
+
+`PANEL_H` went 212 → 240 for the seventh row: `ROW_Y0 34 + ROW_PITCH 28 × 6 = 202` and `ROW_H` is
+20, so the last row ends at 222 and 240 leaves the 18 px the six-row panel left below 194. One
+define carries it — the GAF frame header, the ground, the ramp, the border and the corner bolts
+are all sized from it — and the panel is **composed at runtime** from the player's install rather
+than shipped, so no art is regenerated. `tools/guipanel.py` still says 304×212: it is the lab's
+copy of this layout, not its source.
+
 **Files.** `impure-patch.ufo` every launch; `tagpu_classicpp.cfg` rewritten preserving every
 key the screen does not own (`sun`, `amb`, `penumbra`, `shadowlen`, …); `tagpu_ss.off`
-created and deleted; and **both** `tagpu_classicpp.on` and `.off` — the pair, because
+created and deleted; `tagpu_fps.on` created and deleted (§2.14); and **both**
+`tagpu_classicpp.on` and `.off` — the pair, because
 `tagpu_opt.c`'s precedence is an `.on` wins and an `.off` only defeats a *default*-on, so
 driving one of them applies nothing on an instance that carries `tagpu_defaults.off` or a
 hand-armed `.on` (§2.8). Write access to the gamedir is not new — the DLL
@@ -1585,12 +1879,103 @@ panel hangs over the world, so clicking a row costs one frame of the panel being
 The row's own state survives it (the model is ours; the levers are read only on the player's
 open), but the rebuild is visible if you look for it.
 
-### 2.13 HUD scale (`tagpu_hud.c`, **off unless armed**, `tagpu_hud.on`) — Phase F G18f
+### 2.13 Sub-tick pose interpolation (`tagpu_lerp.c`, OFF by default, `tagpu_lerp.on`) — 2026-09-09
+
+The design, the invariants and the gate results are [smooth motion](smooth-motion.html); this is
+the hook-map entry. **No engine address, no patch, no engine write.**
+
+`posed_pose` composes each piece's 4×3 from exactly `pr+P_POS` (i32[3] 16.16) and `pr+P_TURN`
+(u16[3] TAang). With the lever armed, those two reads are served from a blend of the unit's last
+two **sim-tick** snapshots instead of the live fields, so the model animates at render rate rather
+than snapping at the tick. It is only this small because G16 turned the pose back into per-piece
+*fields*; before it, the pose arrived already baked into vertices.
+
+- **Read-only.** The history arena is ours (§2.5). Nothing is written back to `PrimitiveStruct` —
+  the sim reads those fields and TA has no runtime desync detection, so a per-machine
+  framerate-dependent blend written there would diverge two peers silently.
+- **The degradation is a refusal, not a weight.** No history, a stale pair, a model over 48 pieces,
+  a full table, or a weight that has reached 1.0 — every one returns 0 and the caller reads the
+  live fields with its own untouched code. Not "blend at weight 1.0": `a + (b - a) * 1.0f` is not
+  `b` in floating point, and the parity claim would have been false.
+- **The tick period is measured, not assumed.** `main+0x38A47` advances `3 × GameSpeed` a second
+  and a skirmish starts at `GameSpeed` **20**, i.e. 60 ticks a second — [engine
+  map](exe-reverse-engineering.html) §"The simulation clock". The module learns the period from the
+  observed interval divided by the tick gap, so it is right at any speed and follows a live change
+  (`p=33.2ms` at GameSpeed 10 against a predicted 33.3). **On pause it degrades by the same
+  refusal**: no new tick arrives, the weight passes 1.0, and every unit draws from the live fields.
+- **Not smoothed, deliberately**: `pose_accum_body` — the path `hires_pose` and `tagpu_posedump.on`
+  take — is untouched, so replacement meshes still step and the sim oracle still reports the
+  engine's own fields. The unit's world position and `O3_BTURN` are out of scope, which means the
+  pose runs a sample behind a position that is not delayed.
+- **Cost**: the first cut's `double` blend measured `+0.560 ms a frame at 240 posed units` — 2.33 µs
+  a unit, 3.4 % of a 60 fps budget, on the paired `crowd-static` fixture
+  ([smooth motion](smooth-motion.html) §7f). **The shipped blend is 16.16 fixed point and that
+  number no longer describes it**: the loop now carries no x87 at all, where the float form carried
+  13 instructions including 4 `fldcw` (§7i, established from the compiler). Its frame cost is
+  **not re-measured** — an interleaved live A/B put every off/on pair below 0.560 ms but spread
+  0.068–0.461 ms under load from three other instances, which is not a number. §7i says how to
+  close it.
+- **The bound on the weight is clamped, not argued.** `w16` is forced into `[0, 65535]` because the
+  turn multiply has only 32767 of headroom (`t` reaches +32768; `32768 × 65535` is 2 147 450 880
+  against `INT_MAX` 2 147 483 647). The `[0,1)` refusal above already implies it today; the clamp is
+  what keeps a later change to that refusal from becoming silent signed overflow.
+- **Known residual, open**: the `(o3, nparts, gen)` key does not separate two units of the **same
+  type** landing on the same reused `Object3do`, so a freshly built unit drawn within `LERP_MAXGAP`
+  of a dead one's last sample can blend one frame from the dead unit's stance. Cosmetic and bounded
+  — every index stays inside the same 48-piece block — but not closed; closing it wants a stable
+  per-unit identity (`unit+0xA8`) rather than the allocation address. Found by the landing review.
+- `lerp=<blended>/<snapped> p=<ms> u=<weight>` rides the `native:` line, and **nothing at all** is
+  printed when the lever is off.
+
+### 2.14 The frame-rate readout (`tagpu_fps.c`, OFF by default, `tagpu_fps.on`) — 2026-09-09
+
+A row on the render-options screen (Off|On) and the module that draws it. **No engine address, no
+patch, no engine read at all** — it counts our own presents and draws over the finished frame.
+
+| site | what we do there | thread |
+|---|---|---|
+| `tagpu_overlay_draw`, after `tagpu_gui_present` | `tagpu_fps_present()` — the readout, drawn **above** the UI layer so the side panel and dialogs cannot hide it | render |
+| `tagpu_overlay_draw`, the context-change branch | `tagpu_fps_glreset()` alongside the other modules' | render |
+| `tagpu_menu.c` `write_levers()` | create or delete `tagpu_fps.on` — the deferred write, off the game thread, exactly as `tagpu_ss.off` is written | render |
+
+**Files.** `tagpu_fps.on`, positive sense (present = on), polled every 30 frames on the render
+thread. The row and the file are one setting, so either can drive it.
+
+**Why not the one that already exists.** cnc-ddraw's own `dbg_draw_frame_info_start` sits behind
+`tagpu_fpsosd.on`, but it is compiled only under `_DEBUG` and GDI-draws into the engine's 8bpp
+surface, where it beats against the engine's redraw of that area and flickers — its own comment
+says so. A `_DEBUG` build would also move the very numbers a frame-rate readout exists to report.
+
+**The atlas is a cache, and that decides the design.** `tagpu_text_place` keys on the WHOLE STRING
+and packs it onto a shelf that is never freed until the font changes, in a **fixed** 512×256 atlas
+(`tagpu_text.c`). A readout that placed `"FPS 101"`, then `"FPS 102"`, would burn one permanent
+entry per distinct number, exhaust the table within seconds and then start dropping — and it shares
+that atlas with `tagpu_mark`'s group digits and the `ShowRanges` labels, so it would starve those
+too. This places **eleven fixed strings** — `"FPS"` and `"0"`..`"9"` — and emits one quad per
+character. Eleven entries, once, for the life of the font.
+
+**Screen space, not world space.** The marker pass's text is world-anchored: its quads carry
+`(wx, wz)` for the fog lookup and take the zoom transform, so a readout drawn through it would
+fade into fog and scale with the camera. This has its own two-triangle program in game-frame
+pixels and nothing else.
+
+**Threads.** Render thread only. It reads the font the game thread published (`tagpu_text_snapshot`
+at hook 8) through `tagpu_text_frame`'s per-frame latch, exactly as the marker gather does.
+
+**Verified in the game 2026-09-09** on `crowd-static` at 1024×768: `fps: armed …` in the log and
+the readout drawn and legible. *Two things to know before reading a capture of it.* It is drawn at
+`(6, 6)` in game-frame pixels, which in a normal layout is **over the minimap** — deliberate for a
+diagnostic that is off by default, but it means a `glshot` of that corner shows the minimap's own
+grey/yellow view rectangle behind the digits, which reads convincingly as a corrupted glyph until
+you take the pair with the readout off. And the glyph advance is `w + 1`, so it renders as
+`FPS175` with no gap after the label.
+
+### 2.15 HUD scale (`tagpu_hud.c`, **off unless armed**, `tagpu_hud.on`) — Phase F G18f
 
 The in-game HUD magnified inside the player's own Screen Size, over a world the engine goes on
 drawing exactly as it always did — so Screen Size and HUD size are two dials rather than two
 names for one number. Design and every decision behind it: [GUI renderer](gui-renderer.html)
-§20, and **§20.5 for why the first build was withdrawn the same day**; the geometry it rests
+§22, and **§22.5 for why the first build was withdrawn the same day**; the geometry it rests
 on: [resolution](resolution.html) §3.4a; the engine reading: [engine
 map](exe-reverse-engineering.html) *The viewport rect at game entry* and *The world→screen
 projection is NOT derived from the viewport rect*.
@@ -1634,7 +2019,7 @@ pair for the reason §2.8 gives.
 rendered and then covered — about 20 % of the fill at `s = 4.5`. And the first world column the
 player can see is `eye + (128s − 128)` rather than `eye`, so **if** the engine's eye clamp
 bottoms out at 0 the map's top-left `((s−1)·128, (s−1)·32)` world px cannot be scrolled into
-view; that consequence is derived and not measured (§20.5), and moving the clamp is the piece
+view; that consequence is derived and not measured (§22.5), and moving the clamp is the piece
 of work that would close it.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
@@ -1717,6 +2102,48 @@ means reimplementing selection, box-select, build placement and every cursor mod
 
 ### 3.2 Smaller, known, and cheap to close
 
+- **Nothing in this repository has ever been measured on a Windows GL driver, and the first run
+  on one found two bugs — 2026-09-10.** `renderer=openglcore` fell back to GDI on a real ICD
+  because `glGetIntegerv` was fetched through `wglGetProcAddress`, which returns NULL for the
+  OpenGL 1.1 entry points on Windows but not under Wine; and the GL UI layer painted its stale
+  twin over the entire intro movie, because the Smacker writes the primary surface directly and
+  the publisher never sees it. Both are fixed ([GL UI renderer](gui-renderer.html) §21) — the
+  point that survives is the **gap in the harness**: `tacli` runs every instance in a wine
+  prefix and skips the intro movies, so neither code path had an oracle at all. The Windows VM
+  kit (`_local/vm/`) exists for exactly this and is still waiting on an ISO; until it runs, any
+  claim about Windows behaviour in these notes is untested.
+
+- **The feature atlas filled at 48 % occupancy and then rebuilt itself every frame — closed
+  2026-09-10 by sorting, not by growing.** `[MEASURED 2026-09-10]` at 3840×2160 / 0.25× on Town
+  & Country the pass reported `atlas=204 DROPPED(atlas-fail=455)`, a different 3.7 % of the
+  feature quads missing each frame, and the atlas latched `full` at **48 %** of its 2048 square.
+  The shelf packer is fed in map order, so a 320-tall tree opened a shelf that a row of 12-tall
+  rocks then sat in: 197 of the map's 229 feature frames placed, 86 % of the page consumed, 52 %
+  of that air. `tagpu_feat_gather` then reset the atlas whole on the next frame, restoring the
+  same order into the same geometry — **37,140 resets in one 4K session**, each re-decoding ~200
+  frames from RLE, re-uploading them to build a byte-identical layout, and clearing the
+  Classic++ restore queue (`tagpu_rglsl_job_clear`, which clears the twin), so the feature twin
+  could never converge while zoomed out. `tagpu_gaf.c`'s `atlas_repack` now re-lays the entries
+  **tallest cell first** — the reset was always the one moment the packer had perfect
+  information, and `atlas_reset` never cleared `ents` — and *reserves* the rects rather than
+  filling them, because we keep no decoded pixels and GL 3.3 core has no `glCopyImageSubData`;
+  each frame re-decodes into its new rect on its next `atlas_get`. Re-measured on the same
+  scenario, resolution and zoom: **`atlas=234`, no `DROPPED` line at all, 0 resets, 1 repack**
+  (`205 frames re-laid tallest-first, 50% of the 2048 square, generation 4`), every other field
+  on the pass's line unchanged. Confirmed visually at 4K on the reference setup's real GL.
+  `repackWall` latches when a repack cannot place everything still being asked for, and the atlas
+  then *holds* its layout, naming a second page as the only thing left that adds room — nothing
+  has reached it (42 % of the page is still untouched after the repack, and of the four atlases
+  only this one has ever filled). **The landing review caught that the first version made that
+  wall terminal**: `full` stays latched behind it and the only thing that cleared it was
+  `tagpu_gaf_atlas_lost`, reached solely from `tagpu_native_glreset` on a display-mode change, so
+  a session that walled on one map would have drawn no features at all on the next. Two
+  independent fixes: `tagpu_feat_gather` keeps the `FeatureMap` pointer (`main+0x14287`) and the
+  map's 16-px dimensions and calls the new `tagpu_gaf_atlas_forget` when any moves (the identity
+  test `tagpu_terr.c` makes on its `TILE_SET`), and a repack now re-lays only entries something
+  has asked for since the last one — so a map change the pointer test missed still cannot
+  accumulate. See [features](features.html) §5 and [the GAF sprite atlas](atlas-packing.html) for
+  the branch, the multipage cost, and the residual it leaves.
 - **A crash in the Classic++ shadow pass, fixed 2026-09-09 — and the fix is a BOUND, not a
   probe.** `[MEASURED 2026-09-08]` a 400-unit game under the play defaults faulted at
   `fild [ebx+0x10]` inside `tagpu_native.c`'s `aabb_walk`, `EBX = 0x3D1E4B1E`, seven levels into
@@ -1784,7 +2211,12 @@ means reimplementing selection, box-select, build placement and every cursor mod
 | **The structure-shadow flip is installed at attach and never undone**, like every code patch. Remove `tagpu_native.on` live under `owndraw all` and buildings lose their shadows along with their bodies (that state already draws no unit at all — *ta-drive*, "a stale owndraw.on is worse than none"); re-creating the file brings both back within 30 frames. With `writeback` armed beside `owndraw all` the engine's COMPLETED branch blits a real silhouette for a structure — teal under `terrown`, a silhouette instead of the slant without it | `tagpu_owndraw.c` | nothing for play; an A/B that needs the engine's cached shadow launches without `owndraw all` |
 | **Classic++ restored art is not exactly linear in the Gamma factor.** The restorer expands the indexed atlas through the palette the screen is shown with (§2.3f), so at a factor other than 1.0 the model sees brighter art than it was trained on. MEASURED 2026-09-09, Two Continents at factor 1.5 against `min(255, the factor-1.0 frame × 1.5)`: 88 % of the viewport differs, but by **more than 6 levels on 0.68 % of it**, max 19. The Classic (indexed) path is exact at every factor; this is the Classic++ lane only | `tagpu_pal.c`, §2.3f | restoring in the unscaled domain and applying the factor where each twin is *sampled* — five shaders in place of one palette, and it would also retire the repaint |
 | **A Gamma change mid-game costs a full Classic++ re-restore** — 2.5 s of sliced GPU work per atlas that has one, the terrain's being the large one. Bounded (one repaint in flight per atlas) and progressive (no blanking), but it is real work for a slider the player is dragging | `tagpu_gaf.c` / `tagpu_terr.c`, §2.3f | nothing planned; the same "sample-time factor" change above would remove the need entirely |
-| Extreme zoom-out clamps the terrain span to `MAXCELL` and leaves an honest black margin | `tagpu_terr_clamp_span()` | nothing — a **clamp** was chosen over a bail on purpose; a bail hands the draw back and flashes, which is the one behaviour that looks like a bug |
+| ~~**`tagpu_fog_at`'s dimension bound is 512 and the producer's cap is 1024**~~ **CLOSED 2026-09-10.** The gate now bounds against `tagpu_fogwide_dimcap()`, published by the code that does the allocating and a high-water mark so it can only ever be too generous; the engine-descriptor bound in `tagpu_native.c` became the shared `FOGW_ENGINE_DIMCAP`. The three numbers that had to agree are one. The grid itself is no longer a fixed square either — it is sized from the window the screen asks for at the worst eye residue (`fogw_capacity`), **212 KB for the set at 1920×1080 and 84 KB at 1024×768 against the old 6144 KB in every session**, and the set is grown behind `tagpu_reclaim`'s quiescence fence because the render thread holds `s_hold` across a whole frame with no lock | `tagpu_fx.c` `tagpu_fog_at`; `tagpu_fogwide.c` `fogw_capacity`/`fogw_alloc`/`fogw_retire` | the grow path has never run from a real video-mode change — only from a temporary probe. A session that goes game → shell → game at a different resolution is the untested path |
+| **The unit array's `beg`/`end` pair is read across the thread boundary as two unsynchronised loads**, at **nine** sites (`tagpu_native.c`, `tagpu_mark.c`, `tagpu_scaffold.c`, `tagpu_cat.c`, `tagpu_tracer.c`, `tagpu_overlay.c`, `tagpu_order.c`, `tagpu_scenario.c`, `tagpu_weapons.c`), and then used as the bounds of a `+= 0x118` walk that dereferences every slot. The guards are `ptr_ok` on both, `end > beg` and a 20000-slot cap — and **the cap does not save it**: 20000 × 0x118 is 5.6 MB, so a `beg` and `end` naming different allocations walks megabytes past the end of the first. The skew window is a level change. Handed over from the cursor_zoom work 2026-09-10, from a sweep for the misaligned-`main` class; not acted on, because nine files is its own landing | the nine `OFF_UNITS`/`0x14357` reads | **the proposed `(end - beg) % 0x118 == 0` is a filter, not a fix** — random skew passes it 1 time in 280 — and it is NOT the check `tagpu_order.c:753` / `tagpu_native.c:3938` already make, which is `(u - beg) % UNIT_STRIDE` on a *candidate pointer*, a different question. A by-construction answer is more likely to be `tagpu_reclaim`'s existing level fence: `tagpu_overlay_draw` already returns at `tagpu_reclaim_teardown_active()` before most of these sites run, so the first thing to establish is which of the nine are already covered by it and which are on the game thread |
+| **`tagpu_overlay_draw`'s two early returns above the teardown gate still run `writeback_paint`**, which dereferences `*(char**)(u + U_OBJ3DO)` — after `tagpu_reclaim_pass_begin` has already published `s_completed = s_started` for that pass. The gate's own comment says the writeback must not run during a teardown, and those two paths sit above it. Found by the G13t re-review while checking the latch that closed the same hole one line lower | `tagpu_overlay.c` lines 583 and 585, `writeback_paint` | reachable only with `tagpu_writeback.on` **and** (`tagpu_overlay.off` or `s_state != 1`), so it is debug-lever-only and a no-op in play — which is why G13t recorded it instead of widening its own diff. The fix is the same shape: those returns must consult the latched flag too |
+| **`tagpu_reclaim.c` claims every reader of the UnitDef array is on the game thread**, and uses that to justify leaving the free at `0x42DCCB` unhooked. But `tagpu_cat_frame`, `tagpu_weapons_frame` and `tagpu_scenario_frame` all run from `tagpu_overlay_draw`, on the RENDER thread, above the gate. PLAUSIBLE rather than confirmed — nobody has reproduced a fault — but the stated reason for not hooking it does not hold | `tagpu_reclaim.c` ~line 215 and the three `*_frame` call sites in `tagpu_overlay.c` | all three are trigger-file gated, so a no-op in play. Either hook the free or correct the justification; do not leave the justification standing |
+| **Past about 7680×4320 the wide fog grid is clamped and the outer ring smears again.** `tagpu_fogwide`'s three buffers are `FOGW_MAXDIM` square and allocated ONCE — it publishes a pointer into `s_pub` to the render thread while the game thread builds into `s_build`, so a buffer grown under a zoom change would be a use-after-free — and 1024 cells covers the window a real screen asks for (485 at 3840×2160, 645 at 5120×2880, 965 at 7680×4320, all MEASURED against the arithmetic 2026-09-09). Past that the clamp takes its trim off both ends, so the view's centre keeps its cover and only the edge returns to the border-cell smear | `tagpu_fogwide.c` `FOGW_MAXDIM` | a bigger allocation, or a publish handshake that makes growing one safe; neither is worth it for a screen nobody has |
+| The **unit** pass's `MAXU`/`MAXNV` are the first fixed budgets a very wide zoomed-out view meets, now that the terrain's and the feature pass's are the screen | `tagpu_native.c` | measure how many units a 4K 0.25× view over a full map actually gathers, then size or bail deliberately. The feature pass's `MAXBV_BODY`/`MAXBV_SHAD` were this row's other half until 2026-09-10; they are gone — `tagpu_feat.c`'s buckets `realloc`-double from `BV_BODY_0`/`BV_SHAD_0` behind `feat_room()` up to a 16 MB ceiling, and a 4K 0.25× view on Town & Country grew them to 65536/32768 verts with `DROPPED(full=0)` |
 
 ### 3.3 Open questions, not limits
 

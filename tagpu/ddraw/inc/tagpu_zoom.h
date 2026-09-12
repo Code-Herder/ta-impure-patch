@@ -2,6 +2,16 @@
 #define TAGPU_ZOOM_H
 #include <windows.h>
 
+/* THE RANGE THE LEVER CLAMPS TO, public because it is half of every "how much
+   world can be on screen at once" question. The rect each pass gathers over is
+   the viewport divided by the zoom, so the widest rect that can EVER be asked
+   for is this viewport at TAGPU_ZOOM_MIN — an expression with the live screen
+   in it and no resolution constant anywhere. tagpu_native.c bounds the rect
+   with it and tagpu_terr.c sizes its staging for it, so both track whatever
+   screen the player is on instead of a number someone picked. */
+#define TAGPU_ZOOM_MIN  0.25f
+#define TAGPU_ZOOM_MAX  8.0f
+
 /* tagpu_zoom — the view transform, and the ONE place that owns it.
 
    The native pass scales the world about the view centre; the engine's own
@@ -132,6 +142,14 @@ void  tagpu_zoom_frame_end(void);
 /* The level in force (1.0 until the first publish — menus are never zoomed). */
 float tagpu_zoom_level(void);
 
+/* The widest view the levers can produce: the LOWEST level either of them will
+   settle at, which is the same clamp tagpu_zoom_read_lever() applies to both.
+   Anything that has to size a buffer for "however far out this view can go"
+   asks here rather than pinning the number itself — tagpu_fogwide.c does,
+   because the level it can read is always one frame old and an ease step is
+   wider than the slack it would otherwise have. */
+float tagpu_zoom_min(void);
+
 /* The camera range in force: the engine's own eye bounds, widened to the range
    the zoom actually shows (see the camera-range block in tagpu_zoom.c), or the
    engine's own verbatim whenever that patch is not the one clamping. Returns 0
@@ -143,6 +161,51 @@ float tagpu_zoom_level(void);
    the map's, and using them at zoom > 1 pulls the view back off every map edge,
    which is the bug the camera range exists to fix. */
 int   tagpu_zoom_eye_range(int* loX, int* hiX, int* loY, int* hiY);
+
+/* ---- zoom to the cursor ----------------------------------------------------
+
+   The wheel holds the world point under the POINTER, not the one at the centre
+   of the screen, by stepping the engine's eye — the only free variable, since
+   the transform above is a similarity about the viewport centre. The rule, the
+   arithmetic and every gate on it are in tagpu_zoom.c; what leaves the module
+   is only the fog handshake, because the grid the frame is drawn over has to
+   agree with the camera the frame is drawn from.
+
+   1 while the fog grid on hand does not span where the camera now is: the eye
+   has been stepped and the game thread has not rebuilt for it yet. The frame
+   must then use the WIDE grid (tagpu_fogwide), which is built every tick from
+   the live eye and carries a margin around it. Render thread.
+
+   It can only ever be 1 while tagpu_terrown is skipping — with the engine
+   owning its own fog draw we do not step the eye at all — so this never puts a
+   second lattice in front of a 1x picture that is already right. */
+int  tagpu_zoom_fog_pending(void);
+
+/* The two halves of that handshake, for the game thread that answers it: read
+   the sequence BEFORE rebuilding, store it AFTER, so a step that lands during
+   a rebuild is not swallowed. Called from terrown's replicated rebuild. */
+LONG tagpu_zoom_fog_seq(void);
+void tagpu_zoom_fog_ack(LONG seq);
+
+/* GAME THREAD, from the same tick. Releases the camera FOLLOW while a cursor-
+   anchored gesture is trying to move the camera — three slots the stepper
+   0x41CA10 reads, two of them pointers it dereferences. It lives on this side
+   of the fence for the reason the fog request does, and one more: `main` is
+   randomly misaligned at every launch (0x41D920 pads it by
+   (GetTickCount() % 1000) * 7), so a cross-thread store into it is not atomic
+   in ~4.7% of launches, and a torn POINTER is a wild read where a torn
+   coordinate is merely clamped. Called from terrown's fog tick, which runs on
+   exactly the frames tagpu_terrown_owns_fog() is true — the same condition
+   anchoring is gated on, so the request always has a consumer. `ta` must
+   already be validated. */
+void tagpu_zoom_follow_tick(char* ta);
+
+/* An eye writer OUTSIDE this module moved the camera: recompute the minimap's
+   view box (0x41C3C0 is the only place the engine fills it, so a camera we
+   moved ourselves leaves the box stale) and ask for a fog grid that spans the
+   new view. Every direct writer of main+0x1431F must call this — the camera
+   hold in tagpu_input.c does. */
+void tagpu_zoom_eye_moved(void);
 
 /* s -> u. Returns 1 if the point was transformed, 0 if it was left alone
    (zoom 1, no view published yet, or a screen-space position outside the world

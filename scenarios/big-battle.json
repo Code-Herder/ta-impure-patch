@@ -1,0 +1,53 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Promo fixture: 980 units converging on the centre of Town & Country from four sides, ARM from north and west against CORE from south and east. Built for the camera rather than for a measurement — the four columns meet in the middle of the pinned view at roughly the same moment, so the shot is full of fighting from the first second instead of opening on a march. Positions follow ball10.json's proven centre (4320, 4320); the camera is pinned because this clip is tiled down to ~48 px in the montage wide shot, where a moving camera is noise. Resolution is 1024x768 to match the montage stage 1:1.",
+  "seed": 20260910,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Town & Country",
+    "res": "1024x768",
+    "unit_limit": 500,
+    "clear_existing": false,
+    "los": "permanent",
+    "mapping": true,
+    "switches": {"shootall": true, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0, "metal": 10000, "energy": 10000},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1, "metal": 10000, "energy": 10000},
+      {"slot": 2, "controller": "off"}
+    ]
+  },
+
+  "groups": [
+    { "id": "arm_north", "owner": 0, "at": [4320, 3300],
+      "pattern": {"kind": "grid", "cols": 20, "spacing": 45, "jitter": 8},
+      "composition": [{"type": "ARMPW", "count": 125}, {"type": "ARMHAM", "count": 70},
+                      {"type": "ARMROCK", "count": 50}],
+      "facing": 180,
+      "orders": [{"cmd": "attack", "to": [4320, 4320]}] },
+
+    { "id": "arm_west", "owner": 0, "at": [3300, 4320],
+      "pattern": {"kind": "grid", "cols": 15, "spacing": 45, "jitter": 8},
+      "composition": [{"type": "ARMPW", "count": 125}, {"type": "ARMHAM", "count": 70},
+                      {"type": "ARMROCK", "count": 50}],
+      "facing": 90,
+      "orders": [{"cmd": "attack", "to": [4320, 4320]}] },
+
+    { "id": "core_south", "owner": 1, "at": [4320, 5340],
+      "pattern": {"kind": "grid", "cols": 20, "spacing": 45, "jitter": 8},
+      "composition": [{"type": "CORAK", "count": 125}, {"type": "CORTHUD", "count": 70},
+                      {"type": "CORSTORM", "count": 50}],
+      "facing": 0,
+      "orders": [{"cmd": "attack", "to": [4320, 4320]}] },
+
+    { "id": "core_east", "owner": 1, "at": [5340, 4320],
+      "pattern": {"kind": "grid", "cols": 15, "spacing": 45, "jitter": 8},
+      "composition": [{"type": "CORAK", "count": 125}, {"type": "CORTHUD", "count": 70},
+                      {"type": "CORSTORM", "count": 50}],
+      "facing": 270,
+      "orders": [{"cmd": "attack", "to": [4320, 4320]}] }
+  ],
+
+  "camera": { "at": [4320, 4320], "pin": true }
+}

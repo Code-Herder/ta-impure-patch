@@ -37,4 +37,10 @@ int  tagpu_terrown_filled(void);
    black out that screen. A stall simply stops the inversion, which leaves our
    own FBO covering the viewport — always safe, and self-correcting. */
 unsigned tagpu_terrown_fill_seq(void);
+/* 1 while the engine's fog overlay 0x4848E0 is ours — which is to say while
+   the lazy rebuild of the screen fog grid is a decision WE make, in
+   terr_fogtick, rather than one the engine makes by testing a bit we would
+   have to race it to write. tagpu_zoom gates cursor anchoring on this: a
+   stepped eye it could not answer for is a silently stale fog. */
+int  tagpu_terrown_owns_fog(void);
 #endif

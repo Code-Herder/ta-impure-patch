@@ -194,7 +194,7 @@ They get re-derived every time they are not written down, and a *wrong* line cos
 missing one — G13g spent several probes chasing a skill note that claimed edge scroll "does not
 fire under injected input" (it does; the trigger is an exact equality on the outermost pixel).
 The most reused output of that landing was the page for functions we only *read* — the camera
-stepper `0x41CA30`, the scroll poll `0x41CF10`, the dead clamp `0x41C450`.
+stepper `0x41CA10`, the scroll poll `0x41CE90`, the dead clamp `0x41C450`.
 
 ## Step 5 — Review gate: check it, then run it if it is missing
 
@@ -213,7 +213,9 @@ it is worth that for a real change and not for a typo. Batching landings is what
 cheap: three commits that land together cost one review, not three.
 
 **Effort: `medium`**, or **`high`** when the landing writes engine or user state, adds or moves
-a byte patch, or touches anything sim-adjacent. That is the class that ships silently: the review
+a byte patch, touches anything sim-adjacent, or **changes the synchronisation between the game
+thread and the render thread** — a lock, a handshake, a published counter, or the lifetime of
+anything one thread writes and the other reads. That is the class that ships silently: the review
 that caught `ScrollSpeed` being persisted into the player's registry — where it would have
 compounded across launches — was exactly this case.
 
@@ -242,7 +244,11 @@ session, and a fork always runs on the session's model — the `model` override 
 the session's Fable model and had to be stopped). The review is therefore a **general-purpose
 Agent with `model: "opus"`** (Opus 5), given the brief below. One agent at `medium`; at `high`,
 two in parallel with the same brief and the second told to focus on state written, patches and
-sim-adjacent code, then merge their lists.
+sim-adjacent code, then merge their lists. **When the landing is a cross-thread one, that second
+agent's focus is the synchronisation itself** — every value one thread writes and the other reads,
+the fence or lock that is claimed to order them, what happens when the fence is unarmed or the
+other thread never arrives, and the lifetime of anything freed on one thread and read on the other.
+Ask it for the sequence that breaks the claim, not for an opinion on the design.
 
 The brief must contain, in the agent's own prompt (it starts with no context):
 

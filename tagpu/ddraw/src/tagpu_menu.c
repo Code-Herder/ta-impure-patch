@@ -135,7 +135,14 @@ static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00
 
 /* ---- the geometry, from tools/guipanel.py (the source of truth) ---------- */
 #define PANEL_W   304
-#define PANEL_H   212
+/* SEVEN rows: ROW_Y0 34 + ROW_PITCH 28 * 6 = 202, and the row is ROW_H 20, so
+   the last one ends at 222 and 240 leaves the 18 px the six-row panel left
+   below 194. One define carries it: the GAF frame header (`FRMOFF + 0x02`
+   below), `s_ground`, the ramp, the border and the corner bolts are all sized
+   from it, and the panel is COMPOSED AT RUNTIME from the player's install
+   rather than shipped, so no art is regenerated. tools/guipanel.py still says
+   304x212 -- it is the lab's copy of this layout, not its source. */
+#define PANEL_H   240
 #define MARGIN     16                   /* the panel and the trigger share it  */
 #define BAR_H      32                   /* the top bar: rows 0..31             */
 #define ROW_Y0     34
@@ -150,11 +157,13 @@ static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00
 #define TRIG       28                   /* 2 px of bar above and below         */
 
 /* ---- the rows ------------------------------------------------------------ */
-/* Six, and every one of them live -- mouse-wheel zoom was the seventh and was
+/* Seven, and every one of them live -- mouse-wheel zoom was a candidate and was
    cut because tagpu_zoom_init() installs byte patches once at attach, so the
    row would have lit green and changed no pixel until the next launch. The
-   menu keeps the invariant that NO ROW NEEDS A RESTART (renderers.md 2.10). */
-enum { R_STYLE, R_ASSETS, R_LIGHT, R_SHADOWS, R_SHADOWQ, R_SS, R_COUNT };
+   menu keeps the invariant that NO ROW NEEDS A RESTART (renderers.md 2.10), and
+   the FPS counter honours it: tagpu_fps.c polls its trigger on the render
+   thread and builds its GL objects on first use. */
+enum { R_STYLE, R_ASSETS, R_LIGHT, R_SHADOWS, R_SHADOWQ, R_SS, R_FPS, R_COUNT };
 
 typedef struct {
     const char* name;                   /* the gadget name in the .GUI         */
@@ -170,6 +179,7 @@ static const Row s_row[R_COUNT] = {
     { "SHADOWS", "Shadows",           "Off|Hard|Soft",            3 },
     { "SHADOWQ", "Shadow quality",    "Low|Med|High|Ultra",       4 },
     { "SS",      "Supersampling",     "Off|2x",                   2 },
+    { "FPS",     "FPS counter",       "Off|On",                   2 },
 };
 
 /* Renderer stages. Custom is DERIVED, never clicked into: clicking the row
@@ -219,6 +229,7 @@ static const int SHADOWQ_VAL[4] = { 512, 1024, 2048, 4096 };
 #define CFG_FILE   "tagpu_classicpp.cfg"
 #define CFG_TMP    "tagpu_classicpp.cfg.tmp"
 #define SS_OFF     "tagpu_ss.off"
+#define FPS_ON     "tagpu_fps.on"     /* the frame-rate readout, tagpu_fps.c */
 #define CPP_ON     "tagpu_classicpp.on"
 #define CPP_OFF    "tagpu_classicpp.off"
 #define POLL_MS    250
@@ -709,7 +720,7 @@ static void build_trigger(void)
    right edge land on one line and the menu visibly drops from the icon. Both
    are anchored to the frame's RIGHT edge, never to a fixed coordinate.
 
-   HUD SCALE (tagpu_hud.h, gui-renderer.md 20) MOVES THEM, and moves them
+   HUD SCALE (tagpu_hud.h, gui-renderer.md 22) MOVES THEM, and moves them
    differently, because they live in different regions of the composite:
 
      * the SPROCKET is in the top bar, which HUD scale magnifies. It is drawn
@@ -875,6 +886,7 @@ static void read_state(void)
     s_stage[R_ASSETS]  = tagpu_classicpp_assets() ? 1 : 0;
     s_stage[R_LIGHT]   = tagpu_classicpp_lit() ? 1 : 0;
     s_stage[R_SS]      = exists(SS_OFF) ? 0 : 1;
+    s_stage[R_FPS]     = exists(FPS_ON) ? 1 : 0;
 
     s_stage[R_SHADOWS] = 0;
     for (i = 0; i < 3; i++) if (L && SHADOW_VAL[i] == L->shadows) s_stage[R_SHADOWS] = i;
@@ -894,7 +906,11 @@ static void read_state(void)
    in both lanes. */
 static int row_greyed(int row)
 {
-    if (row == R_STYLE || row == R_SS) return 0;
+    /* R_SS and R_FPS are orthogonal to the Classic/Classic++ lane, so neither
+       is one of the switch's dependants: supersampling is a resolution choice
+       and the FPS counter is a diagnostic drawn OVER the finished frame. Grey
+       them with the lane and a player on Classic could not turn either on. */
+    if (row == R_STYLE || row == R_SS || row == R_FPS) return 0;
     if (s_stage[R_STYLE] == STYLE_CLASSIC) return 1;
     if (row == R_SHADOWQ) return s_stage[R_SHADOWS] == 2 ? 0 : 1;  /* Soft only */
     return 0;
@@ -1117,7 +1133,15 @@ void __stdcall tagpu_menu_oncommand(void* gi)
            value leaves nothing customised, and saying "Custom" there is the
            screen telling the player something untrue -- the same test
            `read_state` applies on the way in, so the label a visit opens with
-           and the label a click produces are now one rule. */
+           and the label a click produces are now one rule.
+
+           THAT RULE SUBSUMES THE R_FPS EXEMPTION main carried here as an
+           explicit `row != R_FPS`. The counter is not part of the look -- it
+           draws a diagnostic OVER the frame and changes no pixel the game
+           rendered -- and neither is supersampling; deriving from the four
+           rows that ARE the lane leaves both out by construction, on the way
+           in and on the way out, instead of by a list that has to be kept in
+           step in two places. */
         if (s_stage[R_STYLE] != STYLE_CLASSIC) s_stage[R_STYLE] = derive_style();
     }
 
@@ -1259,6 +1283,11 @@ static void write_levers(void)
     int cpp = s_stage[R_STYLE] != STYLE_CLASSIC;
 
     if (ss) DeleteFileA(SS_OFF); else touch(SS_OFF);
+
+    /* The readout's own trigger, the positive sense: present = on. Written here
+       rather than in OnCommand for the reason the whole function exists -- TA is
+       lockstep and OnCommand is the game thread. */
+    if (s_stage[R_FPS] == 1) touch(FPS_ON); else DeleteFileA(FPS_ON);
 
     if (cpp) { DeleteFileA(CPP_OFF); touch(CPP_ON); }
     else     { DeleteFileA(CPP_ON);  touch(CPP_OFF); }
@@ -1664,7 +1693,7 @@ static int  s_monChosen;
 /* 0 is UNLIMITED: fpsl_init maps a NEGATIVE maxfps onto the display refresh and
    only 0 falls through with tick_length left at 0. */
 static const int FPS_VAL[3] = { 60, 120, 0 };
-/* HUD SCALE (tagpu_hud.h, gui-renderer.md 20), 0 = Auto. The row used to be a
+/* HUD SCALE (tagpu_hud.h, gui-renderer.md 22), 0 = Auto. The row used to be a
    WINDOW multiplier -- `window = k x surface` -- which is why it was greyed in
    fullscreen; one name cannot carry both meanings, and 20.2 dropped the
    multiplier. These are percentages of the HUD's stock size, and Auto is the
@@ -2032,7 +2061,7 @@ static int vrow_greyed(int row)
     if (row == VD_MON)   return s_monCount < 2;
     /* VD_SCALE IS LIVE IN BOTH MODES now. It used to be the window multiplier,
        which fullscreen decides for itself; HUD scale is inside the picture and
-       means the same thing windowed or not (gui-renderer.md 20.2, "Row"). */
+       means the same thing windowed or not (gui-renderer.md 22.2, "Row"). */
     return 0;
 }
 

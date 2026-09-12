@@ -78,6 +78,7 @@
 #include "tagpu_restoreglsl.h"
 #include "tagpu_classicpp.h"
 #include "tagpu_terrown.h"
+#include "tagpu_fogwide.h" /* the fog grid over the zoomed-out view, not just the 1x one */
 #include "tagpu_mark.h"
 #include "tagpu_markown.h"
 #include "tagpu_order.h"
@@ -85,6 +86,8 @@
 #include "tagpu_reclaim.h"   /* tagpu_reclaim_level_gen: the model templates outlive units, not levels */
 #include "tagpu_posebake.h"
 #include "tagpu_posedraw.h"  /* G16 step 4: the per-type geometry bake and its caches */
+#include "tagpu_lerp.h"      /* smooth-motion.md option A: the pose between two sim ticks */
+#include "crc32.h"          /* the tagpu_posecrc.on gate oracle */
 #include "tagpu_glsl.h"
 #include "tagpu_zoom.h"
 #include "tagpu_overlay.h"   /* tagpu_overlay_target_fbo: the frame's default draw target */
@@ -306,7 +309,11 @@ static void* getgl(const char* n)
 }
 
 static int    s_state = 0;             /* 0=unloaded 1=ready 2=failed */
-static int    s_armed = -1;
+/* READ FROM THE GAME THREAD (tagpu_native_owns_unit, via tagpu_markown.c's
+   mark_selbox), written here on the render thread — volatile for the same
+   reason s_selComplete is, so the publishing store below cannot be hoisted
+   above the state it publishes. */
+static volatile int s_armed = -1;
 static char   s_type[32] = "armcom";
 static int    s_wrecks = 0;            /* "wrecks" token present            */
 static int    s_ss     = 1;            /* 2x supersample (tagpu_ss.off)     */
@@ -353,6 +360,7 @@ static float  s_zoom = 1.0f;
 static int    s_fboW = 0, s_fboH = 0, s_fboSS = 0;
 static int    s_palInit = 0;
 static int    s_fogCols = 0, s_fogRows = 0, s_fogOrgX = 0, s_fogOrgY = 0;
+static int    s_fogCells = 0;         /* what the buffer holds, not cols*rows */
 static const unsigned short* s_fogGrid = NULL;
 static int    s_fogLut = 0;   /* grey remap uploaded this frame (logged) */
 static unsigned s_fillSeq = 0;   /* terrain key-fill sequence + stall counter */
@@ -370,6 +378,12 @@ static float  s_verts[MAXNV * NVST];
 /* set by the frame, read by tagpu_markown.c on the game thread: 1 while every
    selection box this frame owed was actually emitted */
 static volatile int s_selComplete = 0;
+/* Frames that came up short and handed the WHOLE selection-rect set back to the
+   engine, and the last shortfall's numbers. Reported on the `native:` line only
+   when it has caught something, like BADMODELID: in a healthy game it never
+   does, and when it does the engine draws every box at its UNZOOMED projection
+   for that frame, which at zoom < 1 is a visible scatter. */
+static unsigned s_selHandback, s_selLastDrawn, s_selLastOwed;
 
 /* material constants copied per frame from render3do's calibration */
 static const float SH_V[3] = { 0.0f, 0.8944f, -0.4472f };
@@ -858,12 +872,51 @@ static int type_match(const char* def)
    with owndraw "all" in force it is not even the engine's own look any more:
    the rasterise is skipped, so 0x458DD0 recolours an empty composite and only
    its wireframe survives. */
+/* Is this unit's ModelId one model_root() will resolve? The bound is
+   UNITINFOCount, the count 0x42DBCA itself loops to. Factored out so
+   `tagpu_native_owns_unit` and `model_root` cannot drift apart about it —
+   they are two halves of one answer — and side-effect free, because
+   model_root's BADMODELID counter is a render-thread diagnostic and
+   owns_unit is called from the game thread. */
+static int model_id_ok(const char* ta, const char* u, unsigned* out_mid)
+{
+    unsigned mid = 0, n;
+    int ok = 0;
+    if (ptr_ok(ta) && ptr_ok(u)) {
+        mid = *(const unsigned short*)(u + U_MODELID);
+        n   = *(const unsigned*)(ta + OFF_UDEFCOUNT);
+        ok  = (mid != 0 && n != 0 && n <= 0x10000u && mid < n);
+    }
+    if (out_mid) *out_mid = mid;
+    return ok;
+}
+
 int tagpu_native_owns_unit(const char* u)
 {
     if (s_armed != 1) return 0;
     const char* def = *(const char* const*)(u + U_TYPE);
     if (!ptr_ok(def)) return 0;
     if (!type_match(def)) return 0;
+    /* A UNIT WHOSE MODEL WE CANNOT RESOLVE IS NOT OURS — ALL of it stays the
+       engine's. This predicate is the one place that decision is made: the
+       gather skips what it refuses, tagpu_overlay.c leaves the engine's
+       composite unwiped, tagpu_mark.c leaves the bar on the engine's anchor,
+       and tagpu_markown.c leaves the engine's own selection rect alone. Get it
+       wrong in one direction and a unit is drawn twice; wrong in the other and
+       it is INVISIBLE, or — the case this line was added for — it keeps its
+       sprite and silently loses its selection box for ever.
+
+       0x46A530 has NO ModelId test: its only early-out is the SelBoxes flag at
+       0x46A544, and it indexes MODEL_PTRS[ModelId] at 0x46A56B and bounds it
+       through 0x4CB650 unconditionally [BINARY-VERIFIED 2026-09-10]. So the
+       engine DOES draw a box for a unit we cannot bound, and suppressing it
+       while our own loop skips the unit leaves that unit unmarked every frame.
+       (This corrects the claim, made here and in ui-markers.md on 2026-09-09,
+       that a unit with no model is "owed nothing" — it is owed the engine's.) */
+    {
+        const char* ta = *(const char* const*)TA_MAINPP;
+        if (!model_id_ok(ta, u, NULL)) return 0;
+    }
     /* ...but a unit UNDER CONSTRUCTION only while we can actually take the
        whole of it over. Claiming one means the engine's blit-time build-state
        effect (0x458DD0) must be detoured away and we must stage the look
@@ -960,12 +1013,9 @@ static unsigned s_badModelId;          /* refused here, reported with the frame 
 
 static const char* model_root(const char* ta, const char* u)
 {
-    unsigned mid, n;
+    unsigned mid;
     const char* mptrs;
-    if (!ptr_ok(ta) || !ptr_ok(u)) return NULL;
-    mid = *(const unsigned short*)(u + U_MODELID);
-    n   = *(const unsigned*)(ta + OFF_UDEFCOUNT);
-    if (mid == 0 || n == 0 || n > 0x10000u || mid >= n) {
+    if (!model_id_ok(ta, u, &mid)) {        /* it does the ptr_ok pair too */
         if (mid) s_badModelId++;       /* 0 is "no model", not a refusal */
         return NULL;
     }
@@ -1624,6 +1674,56 @@ static int pose_accum_body(const char* o3, HPOSE* h, const unsigned short* bt)
    The piece count is NOT re-checked against the bake's: `tagpu_posebake_unit`
    matched the cache entry on `nparts` one call earlier, so equality holds at
    every call site, and `g->nparts` is used as the loop bound it always was. */
+/* GATE ORACLE -- tagpu_posecrc.on, and the only thing that watches the
+   matrices this pass hands the GPU. `tagpu_posedump.on` dumps the ENGINE's
+   fields and `tools/tacob pose-check` diffs tacob's own reconstruction of
+   them; neither ever looked at posed_pose's output.
+
+   IT IS CONTENT-ADDRESSED, NOT TICK-ADDRESSED, AND THAT IS THE WHOLE POINT.
+   Joining two runs on the sim tick would need the two to be tick-for-tick
+   deterministic, which they are not: the walk fixture's move order is issued
+   over the wire and lands on whatever tick it lands on, so run B's unit is
+   several ticks out of phase with run A's and every CRC differs for a reason
+   that has nothing to do with the code. Joining on the INPUT needs no
+   determinism at all -- `in` is a CRC of every byte posed_pose reads, `out` a
+   CRC of every byte it writes, and posed_pose is a pure function of the
+   former. So for every `in` that appears in both logs the `out` must match,
+   whatever tick each run saw it on, and a log that disagrees with ITSELF on
+   one `in` says the function is not pure.
+
+   smooth-motion.md gate 2 is exactly that join, with tagpu_lerp.on absent on
+   both sides. Off by default; the two extra passes cost nothing when it is. */
+static int s_poseCrcOn = 0;                 /* polled on the 30-frame cadence */
+static unsigned long s_poseCrcIn = 0, s_poseCrcOut = 0;
+static unsigned s_poseCrcRaced = 0;         /* samples the sim moved under */
+
+/* Every byte posed_pose reads, in the order it reads them: the body turn, and
+   per piece the rest offset, the two COB triples, the flag byte, the parent
+   link, and whether the node resolved and whether it is the base piece.
+   Deliberately the LIVE fields and not the blended ones -- `in` has to name
+   the ENGINE state, so a lever-on run and a lever-off run that saw the same
+   simulation join on the same key. */
+static unsigned long pose_crc_in(const char* basePrim, const TAGPU_PBGEOM* g,
+                                 const char* const* pr, const char* const* nd,
+                                 const unsigned short* bt, int nparts)
+{
+    unsigned long c = Crc32_ComputeBuf(0, bt, 3 * sizeof *bt);
+    int i;
+    for (i = 0; i < nparts; i++) {
+        unsigned char fl = *(const unsigned char*)(pr[i] + P_FLAGS);
+        short par = g->parent[i];
+        unsigned char link = (unsigned char)((nd[i] ? 1 : 0) |
+                                             (basePrim && pr[i] == basePrim ? 2 : 0));
+        if (nd[i]) c = Crc32_ComputeBuf(c, nd[i] + N_OFF, 12);
+        c = Crc32_ComputeBuf(c, pr[i] + P_POS, 12);
+        c = Crc32_ComputeBuf(c, pr[i] + P_TURN, 6);
+        c = Crc32_ComputeBuf(c, &fl, 1);
+        c = Crc32_ComputeBuf(c, &par, sizeof par);
+        c = Crc32_ComputeBuf(c, &link, 1);
+    }
+    return c;
+}
+
 static int posed_pose(const char* o3, const TAGPU_PBGEOM* g,
                       float* out, unsigned char* shaded, unsigned char* pvis)
 {
@@ -1635,6 +1735,12 @@ static int posed_pose(const char* o3, const TAGPU_PBGEOM* g,
     unsigned short bt[3];
     const char* basePrim;
     int nparts, i, pass, left, anyShadeFlag = 0;
+    /* smooth-motion.md option A: NULL unless tagpu_lerp.on is armed AND this
+       unit has two adjacent sim ticks of history. NULL is the blend weight of
+       1.0 that invariant 2 requires the degradation to be, and it is spelled
+       as the caller reading the live fields exactly as it always has. */
+    const int* lpos = NULL;
+    const unsigned short* lturn = NULL;
 
     if (!ptr_ok(o3)) return 0;
     /* the bake's count, not a fresh read of the unit's: tagpu_posebake_unit
@@ -1661,6 +1767,11 @@ static int posed_pose(const char* o3, const TAGPU_PBGEOM* g,
         fl = *(const unsigned char*)(pr[i] + P_FLAGS);
         if ((fl & 1) && (fl & 4)) anyShadeFlag = 1;
     }
+    /* After pr[] is built and before anything is composed: one call per unit
+       per frame, which is also where the tick's snapshot is taken. It reads
+       P_POS/P_TURN and writes nothing back -- invariant 1. */
+    if (!tagpu_lerp_unit(o3, nparts, pr, &lpos, &lturn)) { lpos = NULL; lturn = NULL; }
+    if (s_poseCrcOn) s_poseCrcIn = pose_crc_in(basePrim, g, pr, nd, bt, nparts);
     /* parents before children, exactly as pose_accum_body orders them; the
        links themselves come off the bake */
     left = nparts;
@@ -1677,6 +1788,11 @@ static int posed_pose(const char* o3, const TAGPU_PBGEOM* g,
             off = (const int*)(nd[i] + N_OFF);
             mv  = (const int*)(pr[i] + P_POS);
             tn  = (const unsigned short*)(pr[i] + P_TURN);
+            /* THE WHOLE OF OPTION A IS THESE TWO LINES. Everything below --
+               the rest offset, the body-turn fold, piece_local, the parent
+               multiply -- is the arithmetic it always was, on a blended pair
+               of triples instead of the live ones. */
+            if (lpos) { mv = lpos + i * 3; tn = lturn + i * 3; }
             for (k = 0; k < 3; k++)
                 d[k] = (float)off[k] / 65536.0f + (float)mv[k] / 65536.0f;
             if (basePrim && pr[i] == basePrim) {
@@ -1721,6 +1837,26 @@ static int posed_pose(const char* o3, const TAGPU_PBGEOM* g,
            is emit_wire's own test. Written as 0/1/3 rather than `fl & 3` so
            that a piece marked cached but NOT visible reads as hidden. */
         pvis[i] = (unsigned char)(!(fl & 1) ? 0 : ((fl & 2) ? 3 : 1));
+    }
+    if (s_poseCrcOn) {
+        /* every byte it wrote */
+        unsigned long c = Crc32_ComputeBuf(0, out, (size_t)nparts * 12 * sizeof *out);
+        c = Crc32_ComputeBuf(c, shaded, (size_t)nparts);
+        c = Crc32_ComputeBuf(c, pvis, (size_t)nparts);
+        s_poseCrcOut = c;
+        /* AND THE INPUT AGAIN. The COB scripts run on the GAME thread while
+           this one poses, so the fields can move between the hash above and
+           the loop that read them -- gpu-posing.md section 2's residual, one
+           tick of one piece, accepted there by design. It is real and it is
+           rare (measured at 1 sample in 1498 on the walk fixture), but it
+           makes `in` a lie for that one sample and the join then reports a
+           mismatch that is nothing to do with the code under test. Hashing the
+           input on BOTH sides of the loop turns that from a false positive
+           into a MEASUREMENT: the sample is dropped and counted instead. */
+        if (pose_crc_in(basePrim, g, pr, nd, bt, nparts) != s_poseCrcIn) {
+            s_poseCrcRaced++;
+            s_poseCrcIn = 0;                /* 0 = "do not join on this one" */
+        }
     }
     return nparts;
 }
@@ -1812,18 +1948,54 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     tagpu_posebake_frame(f->frame_counter);
     pose_rest_block_init();      /* the degradation's block, once per session */
     tagpu_posedraw_frame();      /* this frame's counters */
+    /* smooth-motion.md option A. BEFORE the gather, because posed_pose
+       samples through it: it latches this frame's sim tick and the phase
+       inside that tick, and ages the history table. Off by default and a
+       no-op past its own early-out when tagpu_lerp.on is absent. */
+    tagpu_lerp_frame(f->frame_counter);
+    if ((f->frame_counter % 30) == 0)
+        s_poseCrcOn = GetFileAttributesA("tagpu_posecrc.on") != INVALID_FILE_ATTRIBUTES;
     if (s_state == 2) return;
     if (s_armed < 0 || (f->frame_counter % 30) == 0) {
         int was = s_armed;
-        s_armed = 0;
+        /* NEVER PUBLISH "DISARMED" WHILE RE-READING. `s_armed` used to be zeroed
+           here and set back at the end of the block, with a FILE READ in
+           between -- and `tagpu_native_owns_unit()` opens `if (s_armed != 1)
+           return 0;` and is called from the GAME thread by tagpu_markown.c's
+           mark_selbox. So for the length of that read, twice a second, every
+           selected unit read as "not ours", markown stopped suppressing, and the
+           engine drew its own selection rects into the key-filled viewport --
+           where the GUI mirror published the boxes and painted them cyan over
+           the world (tagpu_gui_surf.c tap(), which now refuses the key).
+           [MEASURED 2026-09-09: the hit frames landed on a strict 30-frame
+           lattice -- 30/60/90/120/150/180/240 apart, the +1s being 60 fps
+           capture against a 59.8 fps game -- and 256 units with no combat at all
+           reproduced it at a HIGHER rate (0.70 %) than a 500 v 500 fight
+           (0.42 %), which is what ruled out the explosion and vertex-budget
+           theories. SELHANDBACK was 0 in every run.]
+           The state is computed into locals and published in ONE store, and
+           `s_armed` is volatile so that store cannot be hoisted above the state
+           it publishes. That closes the periodic window, which is the one the
+           shipped configuration hits twice a second.
+
+           RESIDUAL, stated rather than papered over: `s_type` is written only
+           when it has actually changed, and the pass is disarmed across that
+           write -- which NARROWS a window rather than removing one, since
+           nothing waits for the game thread to observe the disarm. It is
+           reachable only while a human is editing the arm file, never in a
+           steady configuration. Closing it properly wants the type published
+           by index into a double buffer, which is its own piece of work. */
         char buf[64];
+        char type[32];
+        int wrecks = s_wrecks, armed = 0;
+        lstrcpyA(type, s_type);
         int n = tagpu_opt_read("tagpu_native.on", buf, sizeof buf);
         if (n >= 0) {
             if (n > 0) {
                 int i = 0; while (buf[i] && buf[i] > ' ') i++;
-                s_wrecks = 0;
+                wrecks = 0;
                 if (i > 0 && i < 32) {
-                    buf[i] = 0; lstrcpyA(s_type, buf);
+                    buf[i] = 0; lstrcpyA(type, buf);
                     /* extra tokens: "wrecks" arms the native husk pass */
                     char* p = buf + i + 1;
                     while (p < buf + n) {
@@ -1832,14 +2004,22 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                         while (*q && *q > ' ') q++;
                         int last = (*q == 0);
                         *q = 0;
-                        if (!lstrcmpiA(p, "wrecks")) s_wrecks = 1;
+                        if (!lstrcmpiA(p, "wrecks")) wrecks = 1;
                         if (last) break;
                         p = q + 1;
                     }
                 }
             }
-            s_armed = 1;
+            armed = 1;
         }
+        /* the type is what owns_unit reads AFTER the gate, so a change to it is
+           the one case that has to disarm across the write */
+        if (lstrcmpA(type, s_type) != 0) {
+            s_armed = 0;
+            lstrcpyA(s_type, type);
+        }
+        s_wrecks = wrecks;
+        s_armed  = armed;                    /* the one store a reader can see */
         s_ss     = (GetFileAttributesA("tagpu_ss.off")     == INVALID_FILE_ATTRIBUTES);
         /* THE DEVICE-RESOLUTION WORLD IS OPT-IN, and the reason is the selection
            rects. The comment by the rect draw records the measurement: the
@@ -1943,7 +2123,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int vpL, vpT, vw, vh;
     tagpu_vpwide_true_rect(ta, &vpL, &vpT, &vw, &vh);
     int eyeX = *(int*)(ta + OFF_EYEX), eyeY = *(int*)(ta + OFF_EYEY);
-    if (vw < 64 || vh < 64 || vw > 4096 || vh > 4096) return;
+    /* A SANITY BOUND ON ENGINE DATA, NOT A SUPPORTED-RESOLUTION LIMIT. The
+       viewport is read out of engine memory and everything below sizes itself
+       from it, so a garbage pair must not be believed — but nothing here
+       assumes a number: the FBO is the game's own size, the gather rect is the
+       viewport over the zoom, and the terrain staging is reserved from the
+       viewport. 16384 is the largest 2D texture common hardware will hold,
+       which is the real ceiling on the FBO the frame is drawn into; it used to
+       read 4096, and a 5K or 8K desktop was refused the whole native pass. */
+    if (vw < 64 || vh < 64 || vw > 16384 || vh > 16384) return;
     int gw = f->game_width  > 0 ? f->game_width  : vpL + vw;
     int gh = f->game_height > 0 ? f->game_height : vpT + vh;
 
@@ -1952,22 +2140,38 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        viewport, so zooming out reaches further into the map instead of leaving
        the frame edge bare. At z >= 1 it IS the engine's viewport, bit for bit. */
     int evpL = vpL, evpT = vpT, evw = vw, evh = vh;
+    int maxeff_w = (int)((float)vw / TAGPU_ZOOM_MIN) + 64;
+    int maxeff_h = (int)((float)vh / TAGPU_ZOOM_MIN) + 64;
     if (s_zoom > 0.05f && s_zoom < 1.0f) {
         evw = (int)((float)vw / s_zoom) + 64;      /* +64: partial cells at the edge */
         evh = (int)((float)vh / s_zoom) + 64;
-        if (evw > 8192) evw = 8192;
-        if (evh > 8192) evh = 8192;
-        /* and never ask the terrain pass for more cells than it can draw: it
-           would bail, and a bail hands the whole draw back for a frame */
-        tagpu_terr_clamp_span(&evw, &evh);
-        /* the effective rect is only ever WIDER than the engine's — a clamp that
-           took it below the viewport would cull content that is plainly on
-           screen. Unreachable at any real resolution, stated so it stays true. */
-        if (evw < vw) evw = vw;
-        if (evh < vh) evh = vh;
-        evpL = vpL + (vw - evw) / 2;
-        evpT = vpT + (vh - evh) / 2;
+        /* THE BOUND IS THE ZOOM FLOOR, AND IT HAS THE SCREEN IN IT. The lever
+           clamps to TAGPU_ZOOM_MIN, so this is the same expression at its
+           extreme and it can never shorten a view the player can actually
+           reach — it is here so that a zoom that somehow slipped below the
+           floor cannot ask for an unbounded rect, which is a property of the
+           value and not of the resolution. The fixed 8192 it replaced was
+           already below what a 3840x2160 viewport asks for at 0.25x (14912),
+           so the rect lost a third of its width here before the cell budget
+           cut it again. */
+        if (evw > maxeff_w) evw = maxeff_w;
+        if (evh > maxeff_h) evh = maxeff_h;
     }
+    /* Reserve the terrain staging for THIS VIEWPORT at the zoom floor and trim
+       the rect to what could be reserved. Unconditional, at every zoom: the
+       reservation is what the gather draws out of, so a 1x frame needs it made
+       too, and making it from the viewport rather than from this frame's rect
+       is what keeps a zoom-out from allocating mid-gesture. It trims nothing
+       on any screen whose viewport was believed — see tagpu_terr.h. */
+    tagpu_terr_clamp_span(vw, vh, &evw, &evh);
+    /* the effective rect is only ever WIDER than the engine's — a trim that
+       took it below the viewport would cull content that is plainly on screen.
+       Then centre it: at z >= 1 the deltas are zero and this is the engine's
+       own viewport, bit for bit. */
+    if (evw < vw) evw = vw;
+    if (evh < vh) evh = vh;
+    evpL = vpL + (vw - evw) / 2;
+    evpT = vpT + (vh - evh) / 2;
 
     int scafR0 = 0, scafRows = 0;
     int scafOn = tagpu_scaffold_frameinfo(f->frame_counter, &scafR0, &scafRows);
@@ -1993,14 +2197,90 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        unexplored corner mask, high byte = the out-of-LOS one — so the engine
        buffer uploads with no conversion. */
     int fogMode = 0;
-    s_fogGrid = NULL; s_fogLut = 0;
+    s_fogGrid = NULL; s_fogCells = 0; s_fogLut = 0;
     {
         const int* fg = *(const int* const*)(ta + OFF_FOGGRID);
         if (ptr_ok(fg) && !IsBadReadPtr(fg, 16)) {
             const unsigned short* buf = (const unsigned short*)(size_t)fg[0];
             int cols = fg[1], rows = fg[2], cells = fg[3];
-            if (ptr_ok(buf) && cols > 0 && rows > 0 && cols <= 256 && rows <= 256 &&
-                cells == cols * rows && !IsBadReadPtr(buf, (SIZE_T)cells * 2)) {
+            int bufCells = cells;          /* replaced if the wide grid wins */
+            /* `cells` is the ALLOCATION, not cols*rows: the builder rounds the
+               count up to a multiple of 8 before it allocates (`0x483C84`:
+               add 7, and ~7) and clears that many entries. Demanding equality
+               refused every viewport whose cell count is not already a multiple
+               of 8 — and refusing here sets fogMode 0, which is not a degraded
+               fog but NO fog at all: no black over unexplored ground, no grey
+               band, the whole map drawn lit at every zoom. 1024x768 is 30x24 =
+               720 and passes; 1920x1080 is 58x34 = 1972 against an allocated
+               1976 and did not, so at 1080p the fog rule had never run. */
+            /* FOGW_ENGINE_DIMCAP (1024), not 256: this bound is a sanity check
+               on a count read out of
+               engine memory, and 256 made it a SCREEN limit as well. The engine
+               builds the grid at one cell per 32 px of its viewport plus two —
+               MEASURED 2026-09-09, 118 x 68 for the 3712 x 2096 viewport of a
+               3840x2160 screen and 78 x 45 for the 2432 x 1376 of a 2560x1440
+               one — so 256 is a viewport 8128 px wide, and a screen past that
+               would have been refused here. Refusing sets fogMode 0, which is
+               no fog at all, so the bound must not be the first thing a new
+               monitor meets. The relation below is the real test. */
+            if (ptr_ok(buf) && cols > 0 && rows > 0 &&
+                cols <= FOGW_ENGINE_DIMCAP && rows <= FOGW_ENGINE_DIMCAP &&
+                cells == (((cols * rows) + 7) & ~7) &&
+                !IsBadReadPtr(buf, (SIZE_T)cells * 2)) {
+                /* the overlay puts cell (0,0) at screen vp + (+-16 - eye%32);
+                   in world terms 32*col0 + 16, col0 being the builder's
+                   half-cell-rounded eye>>5. The grid lattice is offset half a
+                   cell from the map cells: a corner IS a map cell's centre. */
+                int orgX = fog_org(eyeX), orgY = fog_org(eyeY);
+                /* ...and that grid spans the 1x VIEWPORT, so at zoom < 1 the
+                   effective rect above reaches past its last row and column,
+                   where taFog's clamp smears the border cell across the whole
+                   outer ring. tagpu_fogwide builds the same masks over a window
+                   the whole zoom range fits in; when it has one, it replaces the
+                   engine's grid outright — same lattice, same bytes, more of
+                   them. Whenever the game thread is not building (terrain
+                   ownership disarmed, the menus, the off lever) it declines and
+                   the engine's own grid is used exactly as before — and so it is
+                   at zoom >= 1, which since G13s is decided HERE rather than by
+                   the producer (below). The engine's grid stays the GATE either
+                   way: if it cannot be read, neither can the state the wide one
+                   is built from. */
+                {
+                    const unsigned short* wb; int wc, wr, wox, woy;
+                    /* Asked for ONLY while this frame is drawn zoomed out. The
+                       engine's grid spans the 1x viewport with a cell or more to
+                       spare on every side (the origin is the eye rounded to a
+                       half cell and the count is viewW/32 + 2, so the last
+                       column starts at least one pixel past the viewport's right
+                       edge — same for the last row), so at zoom >= 1 it covers
+                       the frame by construction and taking the wide grid there
+                       would only put a second lattice in front of a picture that
+                       is right. Below 1 it cannot, and the wide one must be
+                       used: the producer builds it every tick, so the frame that
+                       first eases past 1.0 already has one. */
+                    /* ...OR while the eye has been stepped and the game
+                       thread has not rebuilt for it yet. Cursor anchoring moves
+                       the camera on every frame of a gesture, and the engine's
+                       grid has only its two spare columns of slack. The frame
+                       that eases up THROUGH 1.0 starts at z = 0.5 EXACTLY at
+                       the lowest: one ease step of 0.25 in log space is
+                       z1 = z0^0.75 * ztgt^0.25, which reaches 1.0 at
+                       z0 = 8^(-1/3) = 0.5. There the eye steps by up to vw/2 in
+                       that single frame — 896 px at the 1792-px viewport of a
+                       1920x1080 screen — against the 32 px those two columns
+                       are worth, leaving an 864 px band uncovered. The
+                       wide grid spans it with room over — measured against the
+                       same inequality, sizing at the zoom FLOOR covers any
+                       anchored step at any level with the margin untouched. */
+                    if ((tagpu_zoom_level() < 1.0f || tagpu_zoom_fog_pending()) &&
+                        tagpu_fogwide_get(&wb, &wc, &wr, &wox, &woy)) {
+                        buf = wb; cols = wc; rows = wr; orgX = wox; orgY = woy;
+                        /* ours is exactly cols*rows; the engine's `cells` above
+                           is its allocator's round-up and does not describe
+                           this buffer at all */
+                        bufCells = wc * wr;
+                    }
+                }
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
                 x_glActiveTexture(GL_TEXTURE4);
                 glBindTexture(GL_TEXTURE_2D, s_fogTex);
@@ -2012,12 +2292,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                                     GL_RG, GL_UNSIGNED_BYTE, buf);
                 x_glActiveTexture(GL_TEXTURE0);
                 s_fogGrid = buf; s_fogCols = cols; s_fogRows = rows;
-                /* the overlay puts cell (0,0) at screen vp + (+-16 - eye%32);
-                   in world terms 32*col0 + 16, col0 being the builder's
-                   half-cell-rounded eye>>5. The grid lattice is offset half a
-                   cell from the map cells: a corner IS a map cell's centre. */
-                s_fogOrgX = fog_org(eyeX);
-                s_fogOrgY = fog_org(eyeY);
+                /* the size of the buffer we are actually publishing — the
+                   engine's validated allocation, or the wide grid's exact
+                   cols*rows. It is what bounds the index tagpu_fog_at forms. */
+                s_fogCells = bufCells;
+                s_fogOrgX = orgX;
+                s_fogOrgY = orgY;
                 /* "fog is on" is NOT LosType bit0 — that bit is only the
                    MAPPING option. The overlay runs every frame and what it
                    paints is decided entirely by the grid bytes: the builder
@@ -2121,7 +2401,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (cloaked && owner != watched) continue;    /* enemies never see cloak */
         /* fog gate at the anchor tile: engine draws nothing there */
         if (fogMode & 1) {
-            int fog = tagpu_fog_at(s_fogGrid, s_fogCols, s_fogRows,
+            int fog = tagpu_fog_at(s_fogGrid, s_fogCols, s_fogRows, s_fogCells,
                                    s_fogOrgX, s_fogOrgY, wx, wy - wz / 2);
             if (fog & 1) continue;                    /* unexplored: black    */
             /* grey shows terrain, never units — the engine draws no unit it
@@ -2354,7 +2634,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 /* wreckage is remembered furniture: hidden only where the
                    map is unexplored, visible (darkened) in grey */
                 if ((fogMode & 1) &&
-                    (tagpu_fog_at(s_fogGrid, s_fogCols, s_fogRows,
+                    (tagpu_fog_at(s_fogGrid, s_fogCols, s_fogRows, s_fogCells,
                                   s_fogOrgX, s_fogOrgY, rx, ry - rz / 2) & 1))
                     continue;
                 NU* n2 = &units[nu++];
@@ -2467,6 +2747,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         }
         fv.fogGrid = fogMode ? s_fogGrid : NULL;
         fv.fogCols = s_fogCols; fv.fogRows = s_fogRows;
+        fv.fogCells = s_fogCells;
         fv.fogOrgX = s_fogOrgX; fv.fogOrgY = s_fogOrgY;
         fv.fogTex = s_fogTex; fv.fogLut = s_fogLutTex;
         fv.r0 = r0; fv.rows = rows;
@@ -2528,6 +2809,19 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     const int pdPoseMax = (int)(sizeof pdPose / sizeof pdPose[0]);
     const int pdShadedMax = (int)(sizeof pdShaded);
     int pdReady = tagpu_posedraw_ready();
+    /* tagpu_posecrc.on: one line per unit per SIM TICK. Per FRAME would be two
+       identical lines per tick at 60 fps and sixteen on a fast machine, which
+       buries the transitions the join is looking for. */
+    static unsigned crcTick = 0xFFFFFFFFu;
+    unsigned crcNow = 0;
+    int crcLog = 0;
+    if (s_poseCrcOn) {
+        const char* cta = *(const char* const*)TA_MAINPP;
+        if (ptr_ok(cta)) {
+            crcNow = (unsigned)*(const int*)(cta + 0x38A47);
+            if (crcNow != crcTick) { crcTick = crcNow; crcLog = 1; }
+        }
+    }
     s_hposeN = 0;
     for (i = 0; i < nu; i++) {
         firstv[i] = nv;
@@ -2659,6 +2953,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                     q->pvis   = pdPvis + pdShadedN;     /* same stride and slot */
                     pdPoseN += np * 12;
                     pdShadedN += np;
+                    if (crcLog && s_poseCrcIn) {
+                        char cb[128];
+                        _snprintf(cb, sizeof cb,
+                                  "posecrc: tick=%u o3=%p np=%d in=%08lx out=%08lx raced=%u",
+                                  crcNow, (const void*)units[i].o3, np,
+                                  s_poseCrcIn, s_poseCrcOut, s_poseCrcRaced);
+                        cb[sizeof cb - 1] = '\0';
+                        nlog(cb);
+                    }
                 } else {
                     q->pose   = s_poseRestPose;
                     q->shaded = s_poseRestShaded;
@@ -2711,11 +3014,32 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        GUI colour 0xA, at just-under-the-unit depth — as GL_LINES, or as two
        triangles per edge under `tagpu_selgeom.on` (the width the driver will
        not give us; see the comment inside the loop) ---- */
-    int lineStart = nv, selDrawn = 0;
+    int lineStart = nv, selDrawn = 0, selNone = 0;
     int selVerts = selgeom ? 24 : 8;      /* 4 edges: two triangles each, or one line */
     if (nsel) {
         for (i = 0; i < nu && nv + selVerts <= MAXNV; i++) {
-            if (units[i].dead || !units[i].sel || !units[i].u) continue;
+            if (!units[i].sel) continue;
+            /* NOT A SHORTFALL, and the two cases are not the same.
+
+               `dead` — the unit's model-object pointer moved since the gather
+               (the re-read above), so the pose we hold is stale. This is a
+               DELIBERATE TRADE, not "owed nothing": markown suppresses on
+               `tagpu_native_owns_unit` alone, which knows nothing about
+               `dead`, so the engine draws no box for it either and the unit is
+               unmarked for that ONE frame. The alternative is what this
+               replaced — one dying selected unit dropped `s_selComplete`,
+               markown handed all ~460 rects back, and the engine drew every one
+               of them at the UNZOOMED position [MEASURED 2026-09-09]. One
+               frame without one marker beats one frame of 460 wrong ones.
+
+               ModelId 0 is unreachable here since 2026-09-10:
+               `tagpu_native_owns_unit` refuses an unresolvable model, so the
+               gather (`:2213`) never admits such a unit and it is never in
+               `nsel`. Kept as a bound, not as a live path — and it is NOT
+               "owed nothing", because 0x46A530 has no ModelId test and the
+               engine draws its box. See the note there. */
+            if (units[i].dead || !units[i].u) { selNone++; continue; }
+            if (!*(const unsigned short*)(units[i].u + U_MODELID)) { selNone++; continue; }
             const char* root = model_root(ta, units[i].u);
             const MAABB* a = root ? selbox_aabb(root) : NULL;
             if (!a) continue;
@@ -2918,8 +3242,24 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        leaves a selected unit unmarked. So say so, and let markown hand the
        WHOLE set back for a frame: at 1x the engine's boxes land on the same
        pixels and nothing shows, at any other zoom a one-frame ghost is a much
-       smaller lie than a missing marker. Self-correcting either way. */
-    s_selComplete = (selDrawn == nsel && nu < MAXU);
+       smaller lie than a missing marker.
+
+       IT IS THE WHOLE SET, so what counts as "owed" has to be exact — this is
+       not a counter that can afford to be conservative. `selNone` above is
+       there for that: it is the units nobody draws a box for, and before
+       2026-09-09 they were counted as failures, which made one dying unit in a
+       big selection hand ~460 rects back to the engine. That was not
+       self-correcting at all: while `tagpu_vpwide` has the engine's viewport
+       rect widened, the engine's clip rect used to be clamped to the SURFACE,
+       so those boxes landed on the side panel and the strips — outside the
+       rect our key fill erases, hence permanent (tagpu_vpwide.c's clip guard
+       is the bound that now makes that impossible; this test is what stops the
+       frame happening in the first place). */
+    s_selComplete = (selDrawn + selNone == nsel && nu < MAXU);
+    if (!s_selComplete && nsel) {
+        s_selHandback++;
+        s_selLastDrawn = (unsigned)(selDrawn + selNone); s_selLastOwed = (unsigned)nsel;
+    }
     int lineEnd = nv;
 
     /* nanoframe wireframes: a second line range per unit, empty for everyone
@@ -3591,11 +3931,26 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (selgeom)
             _snprintf(selg, sizeof selg, " selgeom=%.2fgpx%s%s", selW,
                       s_selgeomDev ? "/dev" : "", selAt1x ? "@1x" : "@ss");
+        /* Frames the selection rects went back to the engine wholesale. Same
+           rule as BADMODELID: printed only when it has happened, because a
+           frame of the engine's own boxes at the unzoomed projection is a
+           visible scatter and should be attributable. */
+        char handback[48];
+        handback[0] = 0;
+        if (s_selHandback)
+            _snprintf(handback, sizeof handback, " SELHANDBACK=%u last=%u/%u",
+                      s_selHandback, s_selLastDrawn, s_selLastOwed);
+        /* smooth-motion.md option A, its own buffer rather than an append to
+           `posed` -- that one is already sized to the byte for the three
+           counters it carries. Writes "" whenever the lever is off, so the
+           line is unchanged in a default game. */
+        char lerp[64];
+        tagpu_lerp_stats(lerp, sizeof lerp);
         _snprintf(b, sizeof b,
-                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d devres=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d reread=%u%s%s%s%s%s",
+                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d devres=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d reread=%u%s%s%s%s%s%s%s",
                   nu - nwr, nwr, nsel, nmark, nslant, nwire, nv, gw, gh, ss, devres, s_subpix, scafOn, fogMode,
                   lostype, s_fogLut, keyOn, s_reread,
-                  selg, bake, posed, badmodel, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
+                  selg, bake, posed, lerp, badmodel, handback, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
         b[sizeof b - 1] = '\0';        /* _snprintf does not terminate a truncation */
         nlog(b);
         s_reread = 0;
@@ -3726,7 +4081,7 @@ static void pose_dump(const char* u, const char* o3)
 void tagpu_native_glreset(void)
 {
     s_state = 0; s_fboW = s_fboH = s_fboSS = 0; s_palInit = 0;
-    s_fogCols = s_fogRows = 0; s_fogGrid = NULL; s_fogLut = 0;
+    s_fogCols = s_fogRows = 0; s_fogCells = 0; s_fogGrid = NULL; s_fogLut = 0;
     tagpu_rglsl_glreset();      /* first: the passes below forget their jobs */
     tagpu_fx_glreset();
     tagpu_feat_glreset();

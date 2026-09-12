@@ -76,6 +76,7 @@
 #include "tagpu_vpwide.h"
 #include "tagpu_hud.h"
 #include "tagpu_terr.h"
+#include "tagpu_terrown.h"           /* is the world viewport carrying our key fill right now? */
 #include "tagpu_overlay.h"
 #include "tagpu_pal.h"                    /* the one resolution of the presented palette */
 #include "opengl_utils.h"
@@ -167,8 +168,10 @@ static GLuint s_sprProg, s_cpyProg, s_layProg, s_vao, s_vbo, s_palTex;
 static GLint  s_uSprSize, s_uSprCK, s_uSprRestored;
 static GLint  s_uCpySize, s_uCpyOff, s_uCpyHasCol;
 static GLint  s_uLaySize, s_uLayStrict, s_uLayKey, s_uLayVp, s_uLayCursor, s_uLayColOn;
+static GLint  s_uLayVpKey = -1;         /* the key to REFUSE inside the viewport, or -1 */
 static GLint  s_uLayCursOurs;
 static GLint  s_uLayScale, s_uLaySharpSize, s_uLaySharpOn, s_uLayHud;
+static GLint  s_uLayGuard;              /* the stale-mirror guard, below        */
 static TAGPU_GAFATLAS s_atlas;
 static TAGPU_GAFENT   s_ents[ATLAS_MAX];
 static unsigned char* s_rg;             /* interleave scratch, 2 bytes per texel */
@@ -432,11 +435,14 @@ static const char* LAY_FS =
     "uniform int uColOn; uniform int uSharpOn;\n"
     "uniform ivec2 uSize; uniform ivec2 uSharpSize; uniform vec2 uScale;\n"
     "uniform int uStrict; uniform int uKey; uniform vec4 uVp; uniform vec4 uCursor;\n"
+    "uniform int uVpKey;\n"
     "uniform int uCursOurs;\n"
-    /* HUD SCALE (gui-renderer.md 20): x = the reserved panel width, y = the
-       reserved bar height, z = 1/s, w = s. w == 1 is the whole feature off and
-       every line below is then the identity, which is the s = 1 gate. */
+    /* HUD SCALE (gui-renderer.md 22, and 22.5 for why nothing is "reserved"):
+       x = the panel's width ON SCREEN, y = the bars' height on screen, z = 1/s,
+       w = s. w == 1 is the whole feature off and every line below is then the
+       identity, which is the s = 1 gate. */
     "uniform vec4 uHud;\n"
+    "uniform int uGuard;\n"
     /* ONE TAP OF THE MIRROR, premultiplied by its coverage. rgb is the
        restored colour where this texel has one and the live palette
        everywhere else (the per-texel rule of 3.4, unchanged); a is coverage,
@@ -446,6 +452,28 @@ static const char* LAY_FS =
     "  p = clamp(p, ivec2(0), uSize - 1);\n"
     "  vec2 g = texelFetch(uTwin, p, 0).rg;\n"
     "  if (g.g <= 0.5) return vec4(0.0);\n"
+    /* THE KEY IS NOT UI, AND INSIDE THE VIEWPORT IT IS ALL WE EVER MIRROR.
+       The publisher hands us a box's bytes verbatim (pub_surface_bytes) and
+       twin_upload stamps coverage 255 on every one of them, key included -- so
+       any engine drawer still running inside the world viewport publishes a
+       rectangle of tagpu_terrown's fill, and without this rule the layer
+       resolves index 254 through the palette and paints BRIGHT CYAN, opaque,
+       over the world composite. [MEASURED 2026-09-09: the engine's selection
+       rect is drawn as four DrawLine 0x4BE950 calls, each recorded as its own
+       axis-aligned BOUNDING BOX, so one rotated rect published four boxes whose
+       union is a ~44 px cyan square with a hole -- 15 frames in 3600 of
+       ordinary play, and 12 of 12 with the engine's rects forced on.]
+       The composite makes the same judgement one layer down (tagpu_native.c
+       CFS, "THE KEY FILL MUST NEVER REACH THE SCREEN"); this is that rule for
+       the layer above it. Coverage 0 is exactly the right answer: it is what
+       "no UI here" already means to every reader of the twin, so the ramp
+       blends it as absence rather than dragging cyan into its neighbours.
+       uVpKey is -1 whenever the viewport is NOT ours (tagpu_terrown_filled),
+       so with the terrain pass off -- where the engine's own art fills the
+       viewport and 254 would be a real colour -- the rule is inert. */
+    "  if (uVpKey >= 0 && int(g.r * 255.0 + 0.5) == uVpKey &&\n"
+    "      float(p.x) >= uVp.x && float(p.x) < uVp.x + uVp.z &&\n"
+    "      float(p.y) >= uVp.y && float(p.y) < uVp.y + uVp.w) return vec4(0.0);\n"
     "  if (uColOn != 0) { vec4 c = texelFetch(uTwinCol, p, 0);\n"
     "    if (c.a > 0.5) return vec4(c.rgb, 1.0); }\n"
     "  return vec4(texture(uPal, vec2((g.r * 255.0 + 0.5) / 256.0, 0.5)).rgb, 1.0); }\n"
@@ -491,7 +519,7 @@ static const char* LAY_FS =
        AT uScale = 1 IT MUST BE THE IDENTITY, and that is the gate: tc lands on
        an integer, so w is 0 or 1 and the blend is a single tap, resolved
        through the palette and divided by its own coverage of 1. */
-    /* THE HUD'S REGION MAP (gui-renderer.md 20). Three regions, and they are
+    /* THE HUD'S REGION MAP (gui-renderer.md 22). Three regions, and they are
        the ones the engine RESERVED — tagpu_hud wrote the viewport rect from
        the same two integers this uniform carries, so the space the world was
        kept out of and the space the HUD art is blown up into cannot disagree.
@@ -516,7 +544,40 @@ static const char* LAY_FS =
     "  ivec2 ib = ivec2(b);\n"
     "  vec4 c = mix(mix(tap(ib),                tap(ib + ivec2(1, 0)), w.x),\n"
     "               mix(tap(ib + ivec2(0, 1)), tap(ib + ivec2(1, 1)), w.x), w.y);\n"
-    "  if (c.a > 0.5) { frag = vec4(c.rgb / c.a, 1.0); return; }\n"
+    /* THE STALE-MIRROR GUARD. The twin holds what the PUBLISHER saw; uSurf holds
+       what the engine actually has on the primary. The cursor rect above is one
+       instance of a general rule - the engine paints by paths we never observe -
+       and the intro Smacker is another: it writes the primary directly, so no op
+       ever reaches the queue, the twin keeps the black it was seeded with at
+       coverage 255, and the layer paints that stale black over a playing movie.
+
+       The test is deliberately NARROW: only where the mirror says index 0 and
+       the engine says otherwise. Index 0 does NOT mean "never published" --
+       twin_upload stamps (index, 255) from the engine's own bytes, so it also
+       means "black when we last saw it", and the two are indistinguishable.
+       The guard does not need to tell them apart: the publisher only ever
+       OBSERVES, so the twin can lag the engine's surface but never lead it, and
+       where the two disagree the engine's is the newer. A wider test (any index
+       mismatch) also unblanks the movie, but
+       the twin's index and its restored colour are separate channels, so it
+       discards restored texels whose index legitimately differs and drops that
+       art back to the engine's dithered original. Measured on the tab row: the
+       wide rule visibly de-restores it, this one leaves the panel bit-identical
+       to an unguarded build at matched interaction history. */
+    /* `p` and not `ib`: p = floor(tc + 0.5) is the NEAREST twin texel to this
+       fragment, which is the corner the bilinear blend above weights most (>= 0.5
+       per axis), and 13.3's sharpening ramp drives that weight toward 1 as k grows.
+       So the guard tests the texel `c` is made of. The uStrict branch below reads
+       the engine's surface at `p` for the same reason. */
+    "  if (c.a > 0.5) {\n"
+    "    if (uGuard != 0 && !cur) {\n"
+    "      int tm = int(texelFetch(uTwin, p, 0).r * 255.0 + 0.5);\n"
+    "      if (tm == 0) {\n"
+    "        int em = int(texelFetch(uSurf, p, 0).r * 255.0 + 0.5);\n"
+    "        if (em != 0) discard;\n"
+    "      }\n"
+    "    }\n"
+    "    frag = vec4(c.rgb / c.a, 1.0); return; }\n"
     "  if (uStrict == 1 && !cur) {\n"
     "    int e = int(texelFetch(uSurf, p, 0).r * 255.0 + 0.5);\n"
     "    bool inVp = f.x >= uVp.x && f.x < uVp.x + uVp.z && f.y >= uVp.y && f.y < uVp.y + uVp.w;\n"
@@ -621,6 +682,7 @@ static int init_gl(void)
     s_uLayStrict = glGetUniformLocation(s_layProg, "uStrict");
     s_uLayKey    = glGetUniformLocation(s_layProg, "uKey");
     s_uLayVp     = glGetUniformLocation(s_layProg, "uVp");
+    s_uLayVpKey  = glGetUniformLocation(s_layProg, "uVpKey");
     s_uLayCursor = glGetUniformLocation(s_layProg, "uCursor");
     s_uLayColOn  = glGetUniformLocation(s_layProg, "uColOn");
     s_uLayScale     = glGetUniformLocation(s_layProg, "uScale");
@@ -628,6 +690,7 @@ static int init_gl(void)
     s_uLaySharpSize = glGetUniformLocation(s_layProg, "uSharpSize");
     s_uLaySharpOn   = glGetUniformLocation(s_layProg, "uSharpOn");
     s_uLayCursOurs  = glGetUniformLocation(s_layProg, "uCursOurs");
+    s_uLayGuard     = glGetUniformLocation(s_layProg, "uGuard");
     glUseProgram(0);
     glGenVertexArrays(1, &s_vao);
     glGenBuffers(1, &s_vbo);
@@ -1706,6 +1769,8 @@ static void draw_layer(const TAGPU_FRAME* f)
     x_glUniform2iv(s_uLaySize, 1, sz);
     glUniform1i(s_uLayStrict, s_strict && f->surface_tex ? 1 : 0);
     glUniform1i(s_uLayKey, key);
+    /* only while the viewport really is our key fill -- see tap() */
+    glUniform1i(s_uLayVpKey, tagpu_terrown_filled() ? key : -1);
     x_glUniform4f(s_uLayVp, (float)L, (float)T, (float)W, (float)H);
     /* THE RECT tagpu_gui_cursor_frame READ, not a second read of the globals:
        the world composite was given that one before the native pass ran, and
@@ -1713,6 +1778,9 @@ static void draw_layer(const TAGPU_FRAME* f)
        different rectangles. */
     x_glUniform4f(s_uLayCursor, s_curEng[0], s_curEng[1], s_curEng[2], s_curEng[3]);
     glUniform1i(s_uLayCursOurs, s_curOwn ? 1 : 0);
+    /* the guard needs the engine's surface to compare against; without one
+       (no surface_tex this frame) it stays off and the layer behaves as before */
+    glUniform1i(s_uLayGuard, f->surface_tex ? 1 : 0);
     /* k, and with it the ramp's width (13.3): device pixels per twin texel.
        The twin is the engine's surface 1:1, so this is exactly 13.1's k — 1.0
        for as long as the engine's screen IS the window. That is NOT the same

@@ -2550,13 +2550,238 @@ refusal counts in `noeng=`.
 
 ---
 
-## 20. HUD scale — the HUD bigger, the map kept  [DECIDED 2026-09-11; mechanism changed by 20.5 the same day]
+## 20. The key is not UI — the cyan squares  [MEASURED 2026-09-09, FIXED 2026-09-10]
+
+Reported from play: in a 500 v 500 fight at zoom < 1 with the whole army selected, solid cyan
+squares flash inside the world viewport for an instant. Measured off the player's own frame:
+**~42-45 px, axis-aligned, fill 0.71 with a square hole, one at 0.95 nearly solid**, with a
+smaller rotated green rect inside, RGB(0,255,255) exactly — **palette index 254, the terrain
+key, and the only cyan entry in the live palette.**
+
+### The chain, every link verified in source
+
+1. The engine's `DrawUnitSelectBoxRect 0x46A530` draws each rect as **four `DrawLine 0x4BE950`
+   calls** (`ui-markers.md` §1).
+2. `0x4BE950` is an observed leaf (`tagpu_gui_leaves.h`), and `before_line` records the op box as
+   the **axis-aligned BOUNDING BOX of the line**, gated on nothing but `s_inFlip` and the game
+   thread. The world viewport is *not* excluded.
+3. `publish()` has no `OP_LINE` case, so it falls through to `as_pixels:` -> `PK_PIXELS` +
+   `pub_surface_bytes`, a plain `memcpy` of that box out of the live engine surface. Inside the
+   viewport that surface **is** `tagpu_terrown`'s key fill.
+4. `twin_upload` stamps `s_rg[2*i+1] = 255` — coverage on **every** byte of the box, key included.
+5. `LAY_FS`'s `tap()` gated on coverage alone. The only `uKey` compare in that shader was inside
+   the `uStrict` harness branch, which the shipped build never arms. So a covered 254 resolved
+   through the palette to bright cyan and was emitted **opaque, over the world composite**.
+
+The composite one layer down has exactly this rule already ("THE KEY FILL MUST NEVER REACH THE
+SCREEN, NOT EVEN A FRACTION OF IT", `tagpu_native.c` `CFS`) and the census has it too
+(`tagpu_gui_hook.c`, "a changed pixel that is now the key is that erase") — but the census only
+runs under `census`. The layer that actually paints had it nowhere.
+
+### Why it looked the way it did
+
+- **Shape.** Four bounding boxes of the four edges of a *rotated* square. Near 45° they tile the
+  square **solid**; at intermediate facings they leave a rectangular **hole**; near 0°/90° they
+  degenerate to a thin outline. The measured spread (0.71, and one at 0.95) is that.
+- **The green inside it.** Not ours — the ENGINE's own rect lines, index 233, captured into the
+  twin *with* the key because they are inside the same bounding boxes.
+- **Size, and why it does not scale with zoom.** The engine projects at the unzoomed 1× position
+  and the twin is 1:1 with its surface at `k = 1`, so the square is ~40-45 **device** px at any
+  world zoom, while our own rect goes through the zoom transform and is smaller.
+- **One frame.** `publish()` emits the viewport `PK_CLEAR` per flip, but **the last flip of a
+  batch gets none**, so only a hand-back landing on that flip survives to be presented.
+
+### The trigger was a race, not the vertex budget
+
+The arm block inside `tagpu_native_frame()` re-read its lever every 30 frames by setting
+`s_armed = 0`, doing a **file
+read**, and setting it back. `tagpu_native_owns_unit()` opens `if (s_armed != 1) return 0;` and is
+called **from the game thread** by `tagpu_markown.c`'s `mark_selbox`. So twice a second, for the
+length of a file read, every selected unit read as "not ours", markown stopped suppressing, and
+the engine drew its own rects into the key-filled viewport.
+
+The evidence that settled it, against two plausible wrong answers:
+
+- The hit frames fell on a **strict 30-frame lattice** (30/60/90/120/150/180/240 apart; the +1s
+  are 60 fps capture against a 59.8 fps game). Explosions are not periodic at 2 Hz.
+- **`crowd-static` — 256 units, no orders, no combat, `0 wreck(s)`, `reread=0`** — reproduced it
+  at a **higher** rate (19/2700 = 0.70 %) than the fight (15/3600 = 0.42 %). That killed both the
+  explosion theory and the vertex-budget theory.
+- **`SELHANDBACK` was 0 in every run**, so the `s_selComplete` hand-back was not involved at all.
+
+### The two fixes
+
+- **`tagpu_gui_surf.c`, `tap()`** — a covered texel whose index is the key, inside the true
+  viewport, returns coverage 0: "no UI here", which is what the twin's readers already mean by it.
+  A new `uVpKey` uniform carries the key only while `tagpu_terrown_filled()` says the viewport
+  really is our fill, so with the terrain pass off — where the engine's own art fills the viewport
+  and 254 would be a real colour — the rule is inert. `uKey` is left alone for `strict`.
+  This is the **bound**: it closes the whole class, not just `OP_LINE`. Every other op kind that
+  falls through to `as_pixels` (`OP_BAR`, `OP_RECT`, `OP_FRAME`, `OP_GAF*`, `OP_SCALE`, an
+  untwinned `OP_COPY`) leaked the same way whenever its box overlapped the fill.
+- **`tagpu_native.c`, the arm block** — the state is computed into locals and published in **one
+  store**; `s_armed` is never transiently zero. `s_type` is the other half of the same answer and
+  is written only when it has actually changed, and only then is the pass disarmed across the
+  write — a lever change a human is making, not something the shipped configuration does twice a
+  second.
+
+### The gate
+
+**`mark.on=noselbox` is the forcing lever for this whole class** — it sets `g_selbox = 0` so
+`mark_selbox` never suppresses and the engine draws every rect every frame, which turns a
+0.4-%-of-frames artifact into a deterministic one. Before: **12 of 12 sampled frames cyan**, 110
+000-135 000 px each. After (2026-09-10, 273 units selected at 0.42×, `markown: engine selection
+rects restored` confirmed in the log): **0 of 20 frames, with ~39 000 green px per frame** — the
+engine drawing throughout, so "no cyan" is not "nothing was drawn".
+
+### Not closed here
+
+- The natural, unforced rate was not re-measured after the fix; the forced gate is far harsher and
+  is the evidence offered. Catching a 0.4 % artifact needs the 60 fps video method
+  (`ffmpeg -f x11grab -window_id … -qp 0`), not `glshot` sampling at ~1 Hz.
+- `tagpu_render3do.c`'s shade-LUT fallback searches `for (c = 2; c <= 254; c++)`, so **254 is a
+  legal output** and a unit face could still render cyan through the world composite, which makes
+  it opaque. Untouched here, and untested — the engine's own `PALETTE.SHD` is uploaded unfiltered
+  too.
+- Whether any effect or unit GAF art contains index 254 was never measured; only tile art and the
+  panel/minimap/chat/build art were.
+
+---
+
+## 21. Windows: the GDI fallback, and the stale mirror over the intro  [MEASURED 2026-09-10]
+
+Both of these were found on the **first run of a shipped build on a real Windows driver**
+(AMD Radeon R9 290X, driver `26.20.12028.2`, Windows 10 19045) and neither can reproduce in
+this project's own harness. `tacli` runs every instance in a wine prefix, and it skips the
+intro movies. That is the finding under the findings: **`renderer=openglcore` had never been
+exercised on a Windows ICD, and the shell's first eighteen seconds had never been looked at
+at all.**
+
+### 21.1 `openglcore` fell all the way back to GDI, and blamed the driver
+
+The game rendered in software and printed `-WARNING- Using slow software rendering, please
+update your graphics card driver (3.3.13559)` across the frame. The version in that string is
+read **inside** the core context, which is the proof that the context was created and the
+driver was not at fault.
+
+`wglGetProcAddress` returns NULL for the OpenGL 1.1 entry points on Windows; only
+extension-level functions come back from it. `opengl_utils.c` already knows this —
+`glGetError`, `glGetString`, `glTexImage2D`, `glEnable` are all 1.1 and all fetched with
+`real_GetProcAddress(g_oglu_hmodule, …)`. **`glGetIntegerv` was the one 1.1 entry point still
+going through `xwglGetProcAddress`**, so on Windows it alone resolved to NULL. Then:
+
+| step | where |
+|---|---|
+| `oglu_ext_exists()` gates its `glGetStringi` path on `glGetIntegerv && glGetStringi` — NULL skips it | `opengl_utils.c` |
+| it falls through to `glGetString(GL_EXTENSIONS)`, not a legal enum in a core profile | same |
+| the driver raises `GL_INVALID_ENUM` and leaves it **pending** | the ICD |
+| `got_error` folds any pending error, at three sites | `render_ogl.c:120/135/138` |
+| `use_opengl = (main_program \|\| bpp==16 \|\| bpp==32) && !got_error` → FALSE | `render_ogl.c:140` |
+| `ogl_render_main` hands the game to `gdi_render_main`, `show_driver_warning` set | `render_ogl.c` |
+
+Fixed by fetching it from the module when `wglGetProcAddress` declines it, and by swallowing
+any error still pending after the `GL_EXTENSIONS` fallback so it cannot reach `got_error` by
+another route.
+
+**Wine is NOT immune because it resolves the pointer, and the landing review caught this note
+claiming it was.** [field notes](field-notes.html) records, `[VERIFIED]` and backed by a
+reproduced `ip=00000000` crash, that Wine returns NULL for the 1.1 entry points as well — and
+five in-tree comments (`render_ogl.c:1054`/`:1579`, `tagpu_posedraw.c:151`,
+`tagpu_shadow.c:49`, `tagpu_restoreglsl.c:153`) are written around exactly that. So **the
+fallback fires under Wine too**, and Wine escapes the GDI fallback somewhere further down the
+chain — most plausibly its `glGetString(GL_EXTENSIONS)` in a core profile does not leave the
+error pending for `got_error` to find. **That step is inferred, not measured** `[INFERRED]`;
+settling it needs a probe this project has never written.
+
+What that changes about the risk is worth stating, because it cuts the other way from how this
+section first read it. The new branch is **live on the platform every measurement in this
+repository is taken on**, not dormant — so the A/B below is evidence *about the changed path*
+rather than evidence that the path was untouched.
+
+It also matters that `oglu_ext_exists()` has exactly one caller, `render_ogl.c:123`, asking for
+**`WGL_EXT_swap_control`** — a WGL extension, which neither GL branch can ever find. It is
+answered by the `wglGetExtensionsStringARB` branch at the end of the function. So the GL
+branches were never doing useful work for this query at all: their only effect was the pending
+`GL_INVALID_ENUM`, and the fix's whole functional content is removing it.
+
+### 21.2 The layer painted a stale mirror over the intro movie
+
+With GL restored, the whole startup sequence was black until the main menu — 0.2 mean
+luminance, flat, for eighteen seconds.
+
+`draw_layer` does not draw *over* the frame; it **replaces** it with a full-screen quad
+composed from the twin of the presented surface (§3.4). The twin is fed by the publisher,
+which observes the engine's drawing routines. **The intro Smacker writes the primary surface
+directly**, so no op ever reaches that queue: the twin keeps the bytes its seed left there —
+black, at coverage 255 — and the layer faithfully paints that stale black over a movie
+playing underneath.
+
+The bisect is worth keeping because it names the diagnosis rather than the symptom:
+
+| configuration | result |
+|---|---|
+| original DLL (GDI) | draws, mean 188 |
+| OpenGL, all passes on | **black**, mean 0.2 |
+| `tagpu_defaults.off` | draws, mean 189 |
+| `native.off` / `terr.off` / `classicpp.off` | still black |
+| `tagpu_gui.off` | **draws** |
+| `strict` | still black, **not magenta** |
+
+`strict` staying black rather than turning magenta is the whole answer: magenta is the
+*uncovered* case, so the twin is **covered**, and what covers it is stale rather than absent.
+
+The layer already had this rule for exactly one case — the cursor rect is left to the engine's
+frame because the cursor is blitted onto the primary after everything we observe (§17), so it
+exists only there. The movie is the same situation without a known rect, so the test became
+general instead of positional: **where the engine has painted by a path we never saw, its
+frame is the truth.**
+
+The test is **narrow on purpose**. It fires only where the mirror holds index 0 and the engine
+has something else there.
+
+**What index 0 actually means, corrected by the landing review:** `twin_upload` stamps
+`(index, 255)` from the engine's own bytes and the seed op uploads a whole surface, so index 0
+at coverage 255 means *"the engine's surface was black here when we last saw it"* — **not**
+*"we were never told"*. The two are indistinguishable, and the guard's safety does not rest on
+telling them apart. It rests on a **staleness** rule instead: the publisher is purely
+observational, so the twin can lag the engine's surface but can never lead it. Where the twin
+says black and the engine says otherwise, the engine is by construction the newer of the two,
+and deferring to it is right whichever of the two cases produced the 0. A wider
+test (any index mismatch) also unblanks the movie and was tried first, but the twin's index
+and its restored colour are separate channels, so it discarded restored texels whose index
+legitimately differs and dropped that art back to the engine's dithered original, **visibly
+de-restoring the ORDERS/BUILD tab row**. The guard is gated on `f->surface_tex`: with no engine
+surface to compare against there is nothing to be right about, and the layer behaves as before.
+
+### 21.3 What was measured, and on which platform
+
+| | where | result |
+|---|---|---|
+| intro luminance, first frames | Windows | **187.3 / 200.0 / 190.1 / 128.0**, against GDI's 187.8/196.6/183.6/130.3 and an all-passes-off GL reference's 187.7/198.9/189.1/128.3. Before: 0.2 flat |
+| skirmish, matched interaction history | Windows | UI panel **0.00 %**, whole frame **0.00 %** against an unguarded build |
+| static scenario against shipped v0.2 | here, Wine + llvmpipe | side panel, top bar, world, bottom strip, whole frame all **0.00 %** |
+
+**A methodology note worth keeping.** The UI panel legitimately changes ~6 % within one
+session as the tab art is republished and undithered, so two captures must share an
+interaction history or the diff is meaningless — comparing a short session against a longer one
+produced a convincing but entirely false 1.46 % "regression" on the first attempt.
+
+### 21.4 Not covered
+
+A long match with heavy combat; resolutions other than the 1024×768 the Windows skirmish
+defaulted to. Inside our own cursor rect the guard is suppressed (`!cur`), so stale black there
+is still painted over the movie — a cursor-sized residual nobody has looked for. And whether
+Wine's `glGetString(GL_EXTENSIONS)` leaves an error pending is inferred rather than measured
+(§21.1). The intro movie renders washed-out with heavy scanlines, but it does so
+identically under plain GDI and with all passes off, so that is pre-existing and unrelated.
+
+## 22. HUD scale — the HUD bigger, the map kept  [DECIDED 2026-09-11; mechanism changed by 22.5 the same day]
 
 *The third interview. §13 settled how the UI is drawn at a scale; this settles what the
 player's **UI scale** row means, which turned out to be a different question with a different
 answer. Nothing here changes phase 1 or phase 2; it is additive and is an identity at `s = 1`.*
 
-### 20.1 The ask, and why the obvious reading of it was wrong
+### 22.1 The ask, and why the obvious reading of it was wrong
 
 The row's ask, in the owner's words: *"if I set UI scale to 50%, in the game the behavior is
 that it's 50% larger than it would be by default in the original renderer at that resolution"*
@@ -2574,7 +2799,7 @@ and UI scale are independent dials, not two names for one number. Measured again
 at the ceiling: **15 % panel and 6.38× the map, against 13.3 % and 1.63×.** Better on both
 axes at once, which is only true because of §3.4a's measurement.
 
-### 20.2 The six decisions
+### 22.2 The six decisions
 
 | | decision | why this and not the alternative |
 |---|---|---|
@@ -2589,8 +2814,8 @@ axes at once, which is only true because of §3.4a's measurement.
 
 | surface | s | panel | % of width |
 |---|---|---|---|
-| 640×480 | 1.00 | 128 | 20.0 % — identity |
-| 1024×768 | 1.60 | 205 | 20.0 % |
+| 640×480 | 1.00 | 128 | 22.0 % — identity |
+| 1024×768 | 1.60 | 205 | 22.0 % |
 | 1280×1024 | 2.13 | 273 | 21.3 % |
 | 1920×1080 | 2.25 | 288 | 15.0 % |
 | 3840×2160 | 4.50 | 576 | 15.0 % |
@@ -2598,7 +2823,7 @@ axes at once, which is only true because of §3.4a's measurement.
 15 % on a widescreen is not a shortfall against 20 %: a full-height panel is a smaller fraction
 of a wider screen. It is the same thing.
 
-### 20.3 The gate, and what is still open
+### 22.3 The gate, and what is still open
 
 **At `s = 1` the frame is bit-identical** — the parity md5 must not move. The same rule §13.3
 holds for `k = 1`, and for the same reason: it is what makes the rest of the claim checkable.
@@ -2606,7 +2831,7 @@ holds for `k = 1`, and for the same reason: it is what makes the rest of the cla
 - **The HUD is bigger, not sharper.** It is 1× art magnified. §18's string op exists but stamps
   glyphs **into the twin**, not into §13.2's device-res sharp layer, so text scales with
   everything else. Moving its output to the sharp layer is the fix and is a separate piece.
-- **Moot since 20.5: that nothing sim-relevant derives from viewW/H.** Nothing writes viewW/H
+- **Moot since 22.5: that nothing sim-relevant derives from viewW/H.** Nothing writes viewW/H
   any more, so the question no longer gates anything; the survey below is kept because it is
   the answer if a later pass does want to move them. The evidence is two-sided
   and neither half is a proof. Every attributed reader is view-side — the camera cluster
@@ -2620,26 +2845,26 @@ holds for `k = 1`, and for the same reason: it is what makes the rest of the cla
   [exe map](exe-reverse-engineering.html) called them map dimensions. A full-image scan finds
   **thirteen reads and no write** at that displacement, so neither claim was confirmed by it and
   the writer uses some other base. `main+0x14243/47/4B/4F`, which §3 lists alongside them, have
-  **no references at all**. It never changed 20.2's "when", because the rect and the SORT buffers
-  settle that on their own. **SETTLED by the first build, 20.4** — and it stays settled, because
-  the measurement was taken; note only that the instrument no longer exists, since 20.5 stopped
+  **no references at all**. It never changed 22.2's "when", because the rect and the SORT buffers
+  settle that on their own. **SETTLED by the first build, 22.4** — and it stays settled, because
+  the measurement was taken; note only that the instrument no longer exists, since 22.5 stopped
   writing the rect, so re-running it needs the two-resolutions run that was originally planned.
   ** — HUD scale moves viewW/viewH
   without moving the screen mode or the map, which separates the two candidate sources outright:
   they are the view size in 16-px tiles, §3 is right, and the exe map is corrected.
 
-### 20.4 The first build, and why it was withdrawn  [SUPERSEDED by 20.5]
+### 22.4 The first build, and why it was withdrawn  [SUPERSEDED by 22.5]
 
 **Read this as history, not as the mechanism.** What follows is the build of 2026-09-11 that
 reserved the space by writing the engine's viewport rect. It produced a torn world and was
-withdrawn the same day; 20.5 has the measurement that killed it and what replaced it. Three
+withdrawn the same day; 22.5 has the measurement that killed it and what replaced it. Three
 claims below are now known false and are left in place so the mistake stays legible: that the
 rect is "the origin every consumer projects about", that `vpwide`'s four constants could
 follow it, and that the setting had to wait for game entry. Everything else — the resolver,
 the ceiling, the three magnified regions, the pointer map, the parity result, the sprocket and
 the row — survived and is still the mechanism.
 
-**The one number.** Both halves of 20.2 — the space the engine reserves and the region the
+**The one number.** Both halves of 22.2 — the space the engine reserves and the region the
 composite magnifies — come out of `tagpu_hud_geom()`, a pure function of the screen
 dimensions and one percentage, which clamps to that screen's own ceiling. Neither half owns
 the answer, so they cannot disagree about where the HUD ends and the world begins.
@@ -2695,7 +2920,7 @@ other side: nothing was written.
 panel 288, bars 72, viewport {288,72,1919,1007} 1632x936`, and `vpwide: true viewport rect
 verified (288,72 1632x936)` — the two modules agreeing by construction. 3840×2160 Auto →
 `450% … panel 576, bars 144, viewport {576,144,3839,2015} 3264x1872`: **15.0 % panel and
-6.375× the 1997 map across**, which is 20.1's predicted figure to three decimals.
+6.375× the 1997 map across**, which is 22.1's predicted figure to three decimals.
 
 **The pointer, by region**, at `s = 2.25` — a device-space move, then the engine's own
 `main+0x2C76`/`+0x2C7A` and its region flags `+0x2CC6` read back:
@@ -2711,7 +2936,7 @@ The bottom bar's y is `H − (H − y)/s`, which is the bottom anchoring showing
 arithmetic. And the hit tests follow: a **device** click at the magnified position of `PREFS`
 (the engine reports its rect centre at (61,248); (138,558) on screen) opened PREFS.
 
-**The render-options trigger had to move, and it is the one thing 20.2 did not anticipate.**
+**The render-options trigger had to move, and it is the one thing 22.2 did not anticipate.**
 The sprocket is drawn into the top bar and anchored to `g_ddraw.width`, so at `s = 2.25` it
 landed past the last source column the bar band samples and simply was not there. It is now
 placed against the **bar's own** width, `W/s`, and comes out `s` times bigger at the screen's
@@ -2724,7 +2949,7 @@ division and the same nothing that `tagpu_hud_to_engine` applies.
 **The row.** "UI scale" is now `Auto|100%|150%|200%|300%|400%`, live in window *and*
 fullscreen (the greying rule is gone), and the window multiplier with `apply_scale()` is
 deleted. The store is the lever file `tagpu_hud.on` (`scale=auto` / `scale=<percent>`) — on
-the defaults table at `scale=auto` and read at game entry in this build; 20.5 took it off the
+the defaults table at `scale=auto` and read at game entry in this build; 22.5 took it off the
 defaults and made it live. Stages past a screen's ceiling are
 **skipped as the row cycles** rather than greyed — `VA_SETGRAYED` is per gadget, not per
 stage, so greying would take the honourable stages down with the rest. Measured: at a
@@ -2737,7 +2962,7 @@ will not honour; at 3840×2160 it walks all six and the store follows.
 
 #### Settled on the way past
 
-**`main+0x1423B`/`+0x1423F` are the view size in 16-px tiles**, and 20.3's third bullet is
+**`main+0x1423B`/`+0x1423F` are the view size in 16-px tiles**, and 22.3's third bullet is
 closed. The two notes disagreed and the displacement scan settled neither; HUD scale turned out
 to be a better instrument than the two-resolutions run that was planned, because it moves
 viewW/viewH **without** moving the screen mode or the map. Same map, same 1920×1080 surface:
@@ -2758,16 +2983,16 @@ corrected, and the write the scan could not find is LoadMap's, through a base at
   and `ui click --device` convert with `k` alone, so at `s > 1` they aim at the unmagnified
   place. Every `--device` measurement above was aimed by hand. `uiwalk.py`'s per-stop hit
   check inherits the same gap.
-- **The HUD is bigger, not sharper** — 20.3's first bullet, unchanged. §18's string op still
+- **The HUD is bigger, not sharper** — 22.3's first bullet, unchanged. §18's string op still
   stamps into the twin.
 - **`nocursor` is wrong at `s > 1`.** The harness A/B leaves the engine's own cursor on
   screen, and the shader discards our fragment at the engine's rect, which is where the
   engine drew it — so the cursor shows at the unmagnified position while the pointer is
   elsewhere. Ours (the default) is placed from the client point and is unaffected.
 
-### 20.5 The origin tear  [MEASURED 2026-09-11, the same day]
+### 22.5 The origin tear  [MEASURED 2026-09-11, the same day]
 
-**20.2's premise was false, and one measurement settles it.** The premise was that the engine's
+**22.2's premise was false, and one measurement settles it.** The premise was that the engine's
 viewport rect (the six ints at `main+0x37E27`) is the origin every consumer projects about, so
 writing `L = 128s`, `T = 32s` moves the world and everything that reasons about it together.
 
@@ -2808,9 +3033,9 @@ the magnified HUD covers the outer part of it. What is left is one transform app
 both halves still come out of the same `tagpu_hud_geom()`:
 
 - the composite samples the twin's three HUD regions at `s` texels per device pixel — unchanged
-  from 20.4;
+  from 22.4;
 - the pointer is divided by `s` inside those same regions before the engine sees it — unchanged
-  from 20.4.
+  from 22.4.
 
 **The boundary is exact, not nearly.** The panel's last screen column is `128s − 1` and
 `128s / s` is `128`, so the first screen point that belongs to the world is the first point the
@@ -2858,8 +3083,8 @@ free rather than merely cheap.
 
 **The setting is live now.** Nothing it changes is engine state, so the store puts it in force
 as it writes it and the next composited frame is already at the new scale. The "set it before
-you start a game" rule 20.2 argued for was a consequence of the rect, and the rect is gone.
+you start a game" rule 22.2 argued for was a consequence of the rect, and the rect is gone.
 
 **It is not a play default.** `tagpu_opt.c`'s table no longer carries it; `tagpu_hud.on` arms
-it by hand. Whether Auto should be on for everyone is 20.2's open question, it is the owner's,
+it by hand. Whether Auto should be on for everyone is 22.2's open question, it is the owner's,
 and it is not one to answer on the strength of a feature that spent a day torn.

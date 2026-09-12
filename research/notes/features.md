@@ -251,6 +251,123 @@ the feature atlas fills once per map and stays (16 entries in a forest, ~1000 ac
 200v200 battle as the ground fills with scar and smudge defs). `tagpu_detour.c` did the
 same for the stub/patch machinery, now shared by `tagpu_fxown.c` and `tagpu_featown.c`.
 
+### The atlas filled at 48 % — and now repacks instead of resetting (2026-09-10)
+
+*The illustrated version of this section — every diagram, both rejected options, and the
+plates of the real 229 frames — is [The GAF sprite atlas](atlas-packing.html). What follows
+is the code-level reference.*
+
+The feature atlas is one `GL_R8` 2048 square packed by a **shelf** packer: a cell is
+placed at the current shelf cursor, and if it is taller than the shelf the shelf grows
+under it (`tagpu_gaf.c` `atlas_insert`, `if (ch > a->shelfH) a->shelfH = ch;`). When a
+cell no longer fits the atlas latches `full` and refuses *everything* until it is reset;
+`tagpu_feat_gather` resets at the top of the next frame.
+
+**What that cost.** Measured offline against the shipped archives, Town & Country's TNT
+names 123 feature types, which resolve to **229 GAF frames** (body + shadow). Their cells
+total 2,033,017 texels — **48 % of one 2048 square**. Fed in map order the shelf packer
+places **197 of 229** and spans 86 % of the page before latching, because a 320-tall tree
+opens a shelf that a row of 12-tall rocks then sits in: 52 % of every consumed shelf is
+air. The 32 it cannot place are the `DROPPED(atlas-fail=)` count in the pass's log line,
+and at 4K zoom-out that reached **455**.
+
+The reset made it worse rather than better. It restored the same arrival order into the
+same geometry, so the atlas filled again on the same frame, and the loop ran once per
+frame for as long as the view was wide enough to want more frames than arrival order
+could pack. In one 4K session that was **37,140 resets** (generation 37,143) over roughly
+48,600 frames. Each one re-decoded ~200 GAF frames from RLE and re-uploaded them through
+`glTexSubImage2D` to produce a byte-identical layout, and cleared the Classic++ restore
+queue (`tagpu_rglsl_job_clear`, which also clears the twin) before the restorer could
+finish a batch — so **the feature twin could never converge while zoomed out**.
+
+**The fix is the order, not the packer.** A reset is the one moment the packer has perfect
+information: it has just observed the exact working set, and `tagpu_gaf_atlas_reset` never
+cleared `ents`, so every entry's size survives it. `atlas_repack` re-lays them **tallest
+cell first** — a counting sort over the cell height, no comparator and no allocation — so
+the cell that opens a shelf is always the tallest on it:
+
+| layout of the same 229 frames | placed | span | waste inside the span |
+|---|---|---|---|
+| arrival order (what shipped) | 197 | 86 % | 52 % |
+| **tallest-first (this change)** | **229** | **58 %** | **16 %** |
+| skyline bottom-left, sorted | 229 | 53 % | — |
+
+A real 2D packer is four times the code for five points of span the page does not need,
+so the shelf stays. What changes is the order it is fed in.
+
+**Nothing is evicted and nothing is decoded during the repack.** We do not keep a frame's
+decoded pixels — an entry records the frame's address, its size and its rect — and GL 3.3
+core has no `glCopyImageSubData` to shuffle texels with. So the repack only *reserves*:
+each entry keeps its identity, gets a new rect, and is marked `resv` with `ok = 0`, which
+keeps `tagpu_gaf_atlas_find` refusing it. The next `atlas_get` for that frame decodes it
+as it always did and `atlas_paint` uploads it into the rect already assigned. That is the
+same work one old reset did — done **once**, when the page fills, instead of once per
+frame for as long as it stays full.
+
+**The wall, and what a second page would cost.** A repack cannot beat its predecessor once
+the entries and the sort are the same, so `repackWall` latches when a repack places fewer
+than it was given or no more than the last one did. Past the wall the atlas **holds** what
+it has rather than dropping it for a rebuild that would place fewer, and the log says so:
+
+```
+feat: atlas repack wall — N of M frames fit one 2048 square tallest-first (X% spanned);
+      holding this layout, only a second page adds room
+```
+
+Nothing observed has reached it. There are four atlases, all 2048 squares, and in a full
+4K session only this one ever filled (`fx` 168 entries and no resets, `unit` none, `gui`
+two restarts that are re-arms, not fills). Its high-water mark is 231 entries against a
+4096-entry `max`, so the page area was always the constraint and never the entry table.
+After a tallest-first repack **42 % of the page is untouched** — room for roughly 660 more
+median-sized frames — and a map would need about four times Town & Country's feature
+variety before one page is genuinely tight.
+
+That matters because a second page is not a local change to `tagpu_gaf.c`. A sprite's UV
+is `(u, v)` into one bound texture, so multipage means one of:
+
+* **a texture array** — `sampler2D` → `sampler2DArray` in every consumer's shader and a
+  layer index in every vertex format (`tagpu_feat.c`'s two buckets, `tagpu_fx.c`, and
+  `tagpu_posebake.c`, which *bakes* UVs into a vertex stream keyed on `atlasGen`), plus
+  `glTexStorage3D` fixing the layer count at creation, so growing means recreate and
+  re-upload — the repack again, with more moving parts;
+* **a draw per page** — cheapest to write, but the page becomes a third sort key on top of
+  the shadow/body buckets and the single batched draw becomes N;
+* **bindless** — not GL 3.3.
+
+And each page carries its own Classic++ twin: 4.2 MB of `GL_R8` plus **16.8 MB of RGBA8**,
+with a second restorer job competing in the same queue. Build it when a map's log line
+says `WALL`, against a real case; the branch and the message exist so that it says so.
+
+**Keeping is per-map, and two things enforce that** — both added by the landing review, which
+caught that the first version of this made the wall a *terminal* state. `repack` pins what it
+holds, and what it holds is only ever right for one map; a session that walled on map A and
+then loaded map B would have refused every one of map B's frames for the rest of the session,
+because `full` stays latched and the only thing that cleared it was `tagpu_gaf_atlas_lost`,
+reached solely from `tagpu_native_glreset` on a *display-mode* change.
+
+- **The pass tells the atlas when the map changed.** `tagpu_feat_gather` keeps the identity of
+  the grid it is drawing — the `FeatureMap` pointer (`main+0x14287`) and the map's 16-px
+  dimensions — and calls `tagpu_gaf_atlas_forget` when any of the three moves. `forget` drops
+  every entry *and* the wall; it is the only way back from the wall. This is the identity test
+  `tagpu_terr.c` already makes on its `TILE_SET` (`s_setPtr` / `s_setCount`).
+- **The repack evicts what nothing asked for.** Every lookup that lands sets the entry's `hit`;
+  a repack re-lays only the entries marked since the last one and drops the rest, clearing the
+  marks. So even a map change the pointer test missed — a new map handed the same allocation at
+  the same size — cannot accumulate: the previous map's frames go at the first repack that needs
+  the room. It also makes the wall mean *the live set does not fit one page*, which is the
+  condition worth logging, rather than *the set we happen to be holding does not fit*.
+
+**The residual.** The repack reads only `w` and `h` out of an entry, both bounded to
+1..`TAGPU_GAF_DECMAX` by `atlas_get`/`atlas_put` before the entry existed, and it
+dereferences no pointer an entry stores — so a stale entry cannot make it address outside
+the atlas. What a stale entry *can* do is draw old art: the `(frame, pix, w, h)` key is a
+value test, not a lifetime guarantee, and a GAF frame freed by the engine and re-allocated
+at the same address with the same pixel pointer and the same size would hit it. That hazard
+predates this change and is now bounded to the interval between two repacks rather than the
+atlas's whole life. `repack` is opt-in per atlas and set only on the feature atlas, whose
+header contract is "fills once per map and stays"; the effects atlas, which frees and
+re-allocates sequences, leaves it clear.
+
 ## 6. Owning the draw — `tagpu_featown.c` [LIVE-VERIFIED]
 
 One byte-matched prologue detour, installed once at DllMain when `tagpu_featown.on`

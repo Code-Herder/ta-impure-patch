@@ -132,9 +132,13 @@ offsets **0x90A50 and 0x90A60**, which must be set identically. [CLAIMED — sou
 from a
 [Steam discussion](https://steamcommunity.com/app/298030/discussions/0/597405278050241107/)
 summary; the underlying TAU thread is unreachable and I could not read the bytes
-myself.] Applying the verified delta, these correspond to VAs **0x491650 and 0x491660** —
-which land plausibly close to `fcn.004916a0`, the routine `totala-re` independently
-identified as the game-update/resource entry. Consistent, but **not confirmed**.
+myself.] **Resolved 2026-09-11 against the pristine build** (*The per-player unit
+cap* below): the two values are the `0x1F4` (500) immediates of `cmp eax, 0x1f4` at
+`0x491658` and `mov eax, 0x1f4` at `0x491665` — the bound the ini value is compared
+against, and the value stored when it exceeds the bound, which is exactly why the two
+must be set identically. Their file offsets are **0x90A59 and 0x90A66** (`.text` is VA
+`0x401000` at file `0x400`, delta `0x400C00`); the community's 0x90A50 and 0x90A60 are
+the 16-byte hex-editor rows that hold them [INFERRED].
 
 **The supported alternative is a config file, not a hex edit.** A `TA.ini` /
 `TotalA.ini` in the game folder is read for: [CLAIMED — verbatim from a user-quoted
@@ -149,9 +153,52 @@ AISearchMapEntries = 90050;
 ```
 
 Caution: in the same threads a user reports `UnitLimit` having **no effect** on a
-stock Steam install. The most probable reading is that ini parsing for these keys is
-itself part of the unofficial **v3.9.02 patch**, not of retail v3.1 — i.e. these are
-knobs added by a patched exe, not latent retail features. Treat as unresolved.
+stock Steam install. **Retail 3.1 does read the key** — `0x491653` reads `UnitLimit`
+with a default of 250 [VERIFIED, below] — but clamps it to **[20, 500]** before the
+store, so `UnitLimit = 1500` yields 500, and 6553 is the width of the field, not a
+value the retail engine will ever hold. The "6553" and the "v3.9.02 default is 1500"
+are that patch's business, not retail's. (`AISearchMapEntries` is not examined here.)
+
+### The per-player unit cap — `0x49163F..0x49168B` — mapped by us [VERIFIED 2026-09-11, objdump of the pristine build]
+
+At game start the engine reads the cap out of `totala.ini` and clamps it before
+writing `MaxUnitNumberPerPlayer`; the value cannot be raised in a running game, and
+`tools/tacli` writes the file before launch for exactly that reason:
+
+```
+49163f: push 0xfa                        ; default 250
+491644: push 0x509238                    ; "UnitLimit" (.data; file offset 0x107838)
+491653: call 0x49f5a0                    ; GetPrivateProfileIntA("Preferences", key, default,
+                                         ;   "<exe dir>\totala.ini") [VERIFIED: ret 8; pushes
+                                         ;   "Preferences" 0x509894 then calls the IAT slot
+                                         ;   0x4FC0D8, whose hint entry is GetPrivateProfileIntA]
+491658: cmp  eax, 0x1f4                  ; 500
+49165d: jle  0x491678
+49165f:   mov ecx, ds:0x511de8           ; the TAdynmem base pointer
+491665:   mov eax, 0x1f4                 ; ANY larger value becomes exactly 500
+49166a:   mov WORD PTR [ecx+0x37eec], ax ; MaxUnitNumberPerPlayer
+491671:   pop edi / pop esi / pop ebx / add esp, 0x24 / ret
+491678: cmp  eax, 0x14                   ; 20
+49167b: jge  0x491682
+49167d:   mov eax, 0x14
+491682: mov  ecx, ds:0x511de8
+49168b: mov  WORD PTR [ecx+0x37eec], ax
+```
+
+* **The ceiling is 500 per player**, whatever the file says; four players hold 2000
+  between them. Measured live 2026-09-10 with `tacli roster`: at the cap of 500 a
+  fresh skirmish hands out idx 1 to player 0, **501** to player 1, **1001** to player 2.
+* The store is a WORD, so the field is an `unsigned short` (where the 6553 figure
+  comes from), but no retail path writes more than 500 into it. Raising the cap means
+  patching **both** immediates, the compare and the stored value — the community's
+  "two offsets, set identically".
+* `ActualUnitLimit` (`+0x37EEA`) is not touched on this path.
+* What this cost before it was written down: `tools/tacli`'s scenario schema accepted
+  `unit_limit: 1500` from the old `[20, 1500]` line above and a 600-unit scenario
+  failed in the fork after launch instead of at validate time; the schema is now bounded
+  at `SCN_MAX_LIMIT = 500`, and `research/notes/scenario-format.md` carries the
+  scenario-side consequences (`scenarios/ball10.json` asks 625 per player and has never
+  had them).
 
 ## Built-in cheat/console command surface
 
@@ -271,6 +318,25 @@ at `gamespeed` 20 **Game Time runs at exactly 2× real time** — read off the s
 `00:00:16` at tick 489, `00:01:17` at tick 2319, 30.6 real seconds apart. And any tool that
 treats `main+0x38A47` as seconds×30, or as a sim-step count, is only right at `gamespeed` 10.
 
+**The engine's DRAW loop is neither of these rates, and it is scene-dependent.** `DrawGameScreen`
+— and with it the fog overlay `0x4848E0`, which is where `tagpu_fogwide.c` ticks — turns over as
+fast as the scene allows while the presenter caps only the flip.
+
+**`0x4848E0` has exactly ONE call site: `0x469D8E`, inside the per-frame world draw**
+[VERIFIED 2026-09-11 by `objdump -d -M intel` over the whole image of
+`pristine/TotalA.exe.pristine`: one `call 0x4848e0` in `.text`, encoded `e8 4d ab 01 00`. The grid
+builder it drives, `0x4843C0`, likewise has exactly one]. That is worth stating because the
+function reads like a sim tick and is not one: **it is on the DRAW path and keeps running with the
+sim paused**, so anything hung off it runs at the draw rate below and not at `gamespeed`'s. What
+*does* follow the sim rate is the fog REBUILD, because the is-current bit it tests is cleared by
+the LOS stamps and nothing stamps while the sim is stopped. Reported by the cursor_zoom session,
+whose own note had it the other way round; verified here rather than taken on trust. Counted against the wall clock
+[MEASURED 2026-09-10, 1920×1080, `--maxfps 60`, both instances presenting 58–60 fps]: **330 calls
+a second** on `crowd-static` (256 units, Two Continents) and **3200–4900** on a sparse Town &
+Country skirmish. So a per-draw counter is not a per-frame counter and not a per-tick one either:
+anything reported "per N draws" is a ratio, and turning it into a rate needs the draw rate
+measured in the same run.
+
 **`gamespeed` is shared machine state, exactly like `Gamma`.** It lives in `user.reg`, which
 the template prefix and every instance hold as **one inode** (`clone_prefix` is `cp -al`;
 measured 2026-09-09: 101 links). A running instance keeps its own copy and writes it back at
@@ -278,6 +344,105 @@ exit, so a session that presses `+` leaves every later launch at that speed. It 
 **20** on 2026-09-09 and set back to 10; **read it before trusting any timing measurement**,
 and note that a walking-unit artifact measured at 20 is twice the size a player at normal
 speed would see.
+
+## `main` is deliberately MISALIGNED, and it is redrawn at every launch — mapped by us
+
+[MEASURED 2026-09-10, this project — `objdump -d -M intel` of the pristine build, plus the
+arithmetic over all 1000 tick residues. Found by the landing review of G13u, which caught a
+change that assumed the opposite.]
+
+**Nothing at `main+0xNNN` can be assumed aligned, so no cross-thread access to an engine field
+is atomic by virtue of its width — a READ as much as a write.** `0x41D920` is the only *function*
+that stores into `ds:0x511DE8`, and it pads the allocation by a random amount first:
+
+```
+0x41D924  call ds:0x4FC0DC        ; GetTickCount  (confirmed in the import table)
+0x41D92C  mov  ecx, 0x3E8         ; div by 1000
+0x41D935  shl  esi,3 / sub esi,edx ; pad = (tick % 1000) * 7      -> 0..6993
+0x41D93A  lea  edi,[esi+0x3924D]  ; malloc(0x3924D + pad)
+0x41D965  add  esi, ebx           ; main = base + pad
+0x41D9D5  mov  ds:0x511DE8, esi
+```
+
+It stores twice: `0x41D9D5` above, and `0x41D9E1` (`mov ds:0x511DE8, ebp` with `ebp` zero) on the
+allocation-failure branch taken at `0x41D96E` — so **`main` can legitimately be NULL**, which is
+why every reader in the fork tests it before use rather than out of habit.
+
+`7 * n mod 4` walks every residue, so the struct's alignment is drawn afresh at each launch and
+then **fixed for that session** — which is the worst possible diagnostic signature, because a
+bug of this shape reproduces perfectly inside one launch and not at all in the next. Why the
+engine does it is not established; the effect is a per-run jitter of every field's address.
+
+For a field at `main+N`, over the 1000 reachable pads:
+
+| | `main+0x142F7` (a followed-object pointer) |
+| --- | --- |
+| 4-aligned | **25.0 %** of launches — exact, and independent of the allocator's own base |
+| crosses a 64-byte cache line | **4.5–4.8 %**, depending on that base (4.7 % if malloc returns 64-aligned) |
+
+**The load-bearing number is the first one read the other way round: 75 % of launches have the
+field misaligned at all.** That one survives every assumption. The cache-line figure additionally
+assumes a base alignment nobody has established, and `GetTickCount`'s ~15.6 ms granularity means
+the reachable residue set is coarser than 1000 values — so quote "about one launch in twenty",
+not 4.7 %. Every offset this project reads across threads (`0x142F3`, `0x142F7`, `0x1431F`,
+`0x1421F`, `0x14357`) is ≡ 3 mod 4, so they all share the same 25 %.
+
+An x86 access that crosses a cache line is not atomic (SDM 3A §8.1.1), so in about one launch in
+twenty a cross-thread reader can observe a half-written field. **The rule this gives:**
+
+* "it is one aligned 32-bit slot, which x86 loads and stores atomically" is true of **our own
+  statics** (the compiler aligns them — `tagpu_zoom.h`'s published view is fine) and **false of
+  every engine field**.
+* A torn **coordinate** is survivable when the consumer bounds it — which is why the eye and the
+  scroll target are written from the render thread anyway, behind `clamp_pair()`.
+* A torn **pointer, length or index** is not: it is a wild read. `main+0x142F3`/`+0x142F7` are
+  dereferenced by the camera stepper at `0x41CA58` and `0x41CA95`, which is why G13u releases the
+  camera follow from the **game thread** rather than storing zero into them from ours.
+* A `lock`-prefixed store on our side does not rescue it, because the engine's own plain **split
+  load** can still straddle an atomic store.
+
+**The fog overlay draw `0x4848E0` has exactly one call site, `0x469D8E`, inside the per-frame
+world draw.** That is what makes `tagpu_terrown`'s `terr_fogtick` — and everything hung off it,
+including `tagpu_zoom`'s follow release — run at the DRAW rate and not the sim rate. It keeps
+running with the sim paused, and it stops only when the game stops drawing. Measured on the
+heartbeat's `ticks=` counter: **443/s at 1920x1080 and ~900/s at 1024x768 against a presenter
+holding 60**, i.e. `DrawGameScreen` turns over roughly 7-15x per presented frame. *[2026-09-10.
+A note in the ta-drive skill claimed the opposite — that pausing the sim stops it — and was
+wrong.]*
+
+**Where this may already have bitten — and the argument AGAINST the obvious suspect.**
+`tagpu_fog_at`'s guard exists because the render thread faulted twice on 2026-09-03 reading the
+fog descriptor `{u16* buf; int cols; int rows; int cells}` out of `*(main+0x1421F)` off a base of
+`-9` = `0xFFFFFFF7` (earlier `-318` = `0xFFFFFEC2`), root cause never found. A torn `buf` looks
+like the answer and probably is not: composing either value needs **three `0xFF` bytes**, and
+neither operand of that store has an `0xFF` byte up there at any split offset — a userland heap
+pointer's top byte is `0x00`–`0x7F`, and the value it replaces is the previous such pointer or
+zero. No split offset composes either observed value out of two valid pointers, so the tear
+reading survives only if the slot already held `0xFF` poison — in which case the interesting bug
+is the freed-and-reused descriptor, i.e. a **lifetime** fault, not an alignment one. Both readings
+are recorded in `fog-grid-sizing.md` §2. The test that separates them in one fault: log the other
+three descriptor fields at the guard trip — a tear gives one bad field and three consistent ones,
+a reused slot gives four that are garbage together. The defensive shape
+already in `tagpu_native.c` is the one to copy for any multi-field engine struct read across
+threads: bound every field AND check a **relation the builder guarantees** —
+`cells == ((cols*rows + 7) & ~7)`, the round-up at `0x483C84` — because a tear almost certainly
+breaks the relation even when each field looks individually plausible.
+
+**A relation is a filter, not a proof, and the distinction matters here.** Two pointers into
+unrelated allocations satisfy `(end − begin) % stride == 0` about one time in `stride`, so such a
+check catches most skews and ships the rest — which by this project's own standard is the bug with
+better odds rather than a fix. Use it as a cheap refusal on top of a real argument (a lifetime
+fence, a thread), never as the argument itself.
+
+**Not swept, and worth a pass of its own [2026-09-10].** A review sweep of the fork found nine
+places where an engine field is written by one thread and read by the other. Most are coordinates
+or counts whose consumer bounds them. The one it rated most dangerous is the unit array's
+`begin`/`end` pair (`main+0x14357`/`+0x1435B`) read at nine sites as two unsynchronised loads and
+used as the bounds of a `+= 0x118` walk that dereferences each slot, with no mutual-consistency
+check at all; its skew window is a level change, when the two can name different allocations. None
+of this was addressed in the G13u landing that found it. Note before acting: `tagpu_reclaim`'s
+teardown gate already covers some of those sites, so the first job is establishing which are
+uncovered rather than writing nine diffs.
 
 ## The camera module — mapped by us
 
@@ -294,9 +459,15 @@ the eye is eased toward.
 | **`0x41C3C0`** | **The eye clamp.** `eyeX = clamp(eyeX, 0, mapW − W)`, the same for Y, then `0x466B70(main+0x142CB)` to refill the minimap's view rect — every path through it ends in that one call. TADR calls it `ScrollMinimap`, which describes the tail rather than the job. **12 call sites:** `0x41C59F`, `0x41C898`, `0x41C9CC`, `0x41CC16`, `0x41CC37`, `0x41CC52`, `0x41CDE1`, `0x41D054`, `0x41D184`, `0x41D26B`, `0x41D319`, `0x41D459`. |
 | `0x41C450` | The same clamp shape for the *target* pair — and it has **no callers**. Dead code; an `E8`/`E9` scan of `.text` finds nothing pointing at it. |
 | `0x41C4C0` | `SetCamera(x, y, smooth)` — writes the target, then clamps it **inline** against `[0, map − view]` without calling `0x41C3C0`. Callers: `0x495C68`, `0x495E11`, `0x497060`, `0x4978C9` (game-screen entry / load). |
-| **`0x41CA30`** | **The per-frame camera stepper.** With no follow object it takes `je 0x41CB4A`. Where eye ≠ target it sets bit 1 of `main+0x142F1` ("camera moved"), **clears bit 3 of `main+0x14281`** — the screen fog grid's own is-current flag — then moves the eye *halfway* toward the target, capped at ±`0x140` (320 px) per axis per frame, and hands the result to `0x41C3C0`. It never writes the target. |
-| `0x41CAF7` | Inside the stepper: the camera-**follow** target, recomputed every frame from the tracked unit as `pos − view/2` and clamped **inline** to `[0, map − view]`. |
+| **`0x41CA10`** | **The per-frame camera stepper.** One caller, `0x495599`. It first picks a follow source (next row); with none it takes `je 0x41CB4A`. Where eye ≠ target it sets bit 1 of `main+0x142F1` ("camera moved"), **clears bit 3 of `main+0x14281`** — the screen fog grid's own is-current flag — then moves the eye *halfway* toward the target, capped at ±`0x140` (320 px) per axis per frame, and hands the result to `0x41C3C0`. It never writes the target. *[CORRECTED 2026-09-10: this row said `0x41CA30`, which is mid-function — the byte there is the LAST byte of the 7-byte `mov WORD PTR [ecx+0x1434B], ax` at `0x41CA2A`, and an `E8`/`E9` scan of `.text` finds nothing calling it. `0x41CA10` is the prologue (`mov ecx, ds:0x511DE8; push ebp; push esi; xor ebp, ebp`).]* |
+| **`0x41CA1A`…`0x41CA8D`** | **The follow selection, and it takes the FIRST of three sources that is set** [MEASURED 2026-09-10]: the countdown `main+0x1434B`, then the object `main+0x142F7` (position at `+0x4`), then the unit `main+0x142F3` = `CameraToUnit` (position at `+0x6A`). A unit whose `[+0x110] & 0x10000000` has gone away is not followed and the stepper **releases all three itself** at `0x41CA69`. The countdown is *decremented* here (`0x41CA29`, unlocked `dec` on a u16), which is what makes it expire. |
+| `0x41CAC7`/`0x41CAD2` | Inside the stepper: the camera-**follow** target written from the followed source as `pos − view/2`, then clamped **inline** at `0x41CAF7` to `[0, map − view]`. |
+| **`0x41C390`** | **Release the camera follow** — a leaf with no arguments: `main+0x1434B` (u16) = 0, then `main+0x142F3` = 0, then `main+0x142F7` = 0, `ret`. Two callers, `0x4174FD` (the camera-track toggle on bit 1 of `main+0x14373`) and `0x48D709` (centre-on-unit, which releases and then calls the smooth centre-on `0x41C8E0`). The same three stores are **inlined** at `0x41C2B0`, `0x41CC60`, `0x41D091`, `0x41D1C4` and `0x41D406`. |
+| `0x41C2B0` | Camera reset: `rep stosd` of `0x17` dwords from `main+0x142F3` (i.e. `0x142F3`…`0x1434E`, the whole camera block — follow slots, eye, target and countdown), preserving the byte at `main+0x1434D` across it. |
+| `0x41C2E0` | `SetFollowUnit(dir)` — `0x48C190(currentFollow, dir)` picks the next/previous unit and the result is stored into `CameraToUnit`. Callers `0x48B074`, `0x4964E7` (dir 0), `0x4964F3` (dir 1) — the cycle-through-units keys. |
+| `0x41C310` | Scans the unit list for one matching a per-player bitmask and stores it into `CameraToUnit`. Sole caller `0x496409`, in the command dispatch under the string `CTRL_C` — **so Ctrl+C makes the camera FOLLOW the commander, it does not merely centre on it** (confirmed live 2026-09-10: `main+0x142F3` goes from 0 to a unit pointer). |
 | `0x41C7F7` | Smooth centre-on; clamps its target inline the same way. |
+| `0x41CB5F` | Inside the stepper, the eye≠target branch: `or word [ecx+0x142F1], di` with `di = 2` — the "camera moved" bit every engine eye writer sets and ours deliberately do not (row below). |
 | `0x41CE90`…`0x41D060` | The scroll poll — see the table below. One caller, `0x496976`. *[CORRECTED 2026-09-04: this said `0x41CF10`, which is not an instruction boundary — `0x41CF0E` is `lea ebp,[esi+0x64]`.]* |
 | `0x466B70` | Fills a RECT with the minimap's view box from the eye and the view size in map cells (`main+0x1423B`/`+0x1423F`). Pure computation; its only two call sites are inside `0x41C3C0`. |
 
@@ -333,8 +504,14 @@ Two things follow, and both cost time to learn the hard way:
 | Where | What |
 | --- | --- |
 | `main+0x1431F` / `+0x14323` | eyeX / eyeY |
+| **the two sites that put a NON-ZERO value in `main+0x142F7`** | `0x49AE8C` (guard `0x49AE84`, 8 bytes earlier — a pointer fixup during the compaction of the record array) and `0x49C7FB` (guard `0x49C7F3`, 8 bytes earlier — the unit→object migration when `[unit+0x110] & 0x20000000`). Like the countdown's seven, the guard is read well before the store, so **neither is usable as a cross-thread interlock**: clearing the slot after the compare has been passed does not stop the write. |
+| `main+0x142F3` / `+0x142F7` / `+0x1434B` | **the camera follow**, three slots the stepper takes in that priority [MEASURED 2026-09-10]. `+0x142F3` is `CameraToUnit` [CORPUS] — a followed *unit*, position at `+0x6A`, set by Ctrl+C (`0x41C310`) and the cycle keys (`0x41C2E0`); `+0x142F7` a followed *object*, position at `+0x4`, which `0x49C7FB` migrates the unit follow onto when `[unit+0x110] & 0x20000000`; `+0x1434B` a u16 **frame countdown** on the remembered position at `main+0x1433F`, both filled by `0x499E50` when a followed object is destroyed. Released together by `0x41C390`. **All seven sites in `.text` that store a NON-ZERO value into the countdown** — `0x499E8E`, `0x499F1B`, `0x499F89`, `0x49B0E5`, `0x49B992`, `0x49BCBD`, `0x49C8DD` — first compare their object against `main+0x142F7` and take the `jne` when it differs. **That guard is NOT usable as a cross-thread interlock:** each reads its guard 40-60 bytes before its store (`0x499E60`->`0x499E8E`, `0x499EF0`->`0x499F1B`, `0x49B0BA`->`0x49B0E5`), so clearing `+0x142F7` from another thread after the compare has been passed does not stop the store. Every other write to the countdown, anywhere, is a zero — apart from the stepper's own decrement at `0x41CA2A`, which stores a non-zero value whenever the countdown was 2 or more. *[The count said six until 2026-09-10; `0x499E8E` was missed. Found by the landing review.]* |
+| **a manual camera move releases the follow** | The engine's own rule, not a convention: the scroll poll's eye-writing tail runs the three stores at `0x41D091`…`0x41D0AA`, and `0x41D035` skips that whole tail on a frame where the eye did **not** change — so it is released exactly when the player actually moved the camera. `tagpu_zoom`'s cursor-anchored wheel does the same, for the same reason: the stepper recomputes the target from the followed unit every frame, so a delta added to the eye is otherwise eased straight back out [MEASURED 2026-09-10 — with the release removed the same gesture moved the eye by (0, −2) instead of the exact (−150, −100)]. |
 | `main+0x14327` / `+0x1432B` | **the scroll target** (`MapXScrollingTo`) the stepper eases the eye toward. Every reference to it in `.text` is inside `0x41C4xx`–`0x41D4xx` — 30 and 28 respectively, and **no drawing code reads it**, which is what makes it camera-local. |
+| **why we do NOT set `main+0x142F1` bit 1** | Every engine eye writer sets it; ours deliberately do not [2026-09-10]. It is the same unlocked-RMW exposure as bit 3 and a far worse one in practice, because `DrawMinimap 0x466B00` **clears it at `0x466B16` in the same breath** — measured 2026-09-09, `tagpu_gui_surf.c:1385`: it reads 0 on almost every frame, so a read-modify-write from the render thread would be racing a writer that is always writing. What actually needs to follow a camera we moved is the view BOX, and `tagpu_zoom_eye_moved()` recomputes `main+0x142CB` directly through the same `0x466B70` wrapper the engine's own clamp calls; the sharp minimap layer reads that rect every frame and is not gated on the dirty bit at all. |
 | `main+0x142F1` bit 1 | set by every camera-module path that moves the eye: the operand appears at `0x41C59A`, `0x41C893`, `0x41C9C7`, `0x41CB62`, `0x41CBD2`, `0x41CDDD`, `0x41D04F`, `0x41D17F`, `0x41D266`, `0x41D314`, `0x41D454` — one per eye writer, immediately before its `0x41C3C0` call — plus minimap/GUI readers in `0x466xxx`. Name *[INFERRED]* ("the camera moved this frame"); what is measured is which sites touch it. |
+| **who may clear `main+0x14281` bit 3** | **Nobody outside the game thread, and that is a hard constraint, not a preference [2026-09-10].** `0x484904` sets it with `or word [eax+0x14281], bx` — an **unlocked** read-modify-write — so a clear issued from the render thread can be swallowed whole by the engine's own store, and a swallowed clear is a fog grid left anchored at an eye that has moved, silently, until the next camera move. No atomic on the other side fixes it: a `lock and` on our byte is still clobbered by their unlocked word write. This is why `tagpu_zoom`'s cursor anchoring is gated on `tagpu_terrown` owning the fog draw — with `terr_fogtick` replicating the lazy rebuild, the rebuild DECISION is ours and on the right thread, and our request is simply OR-ed into its condition instead of being written into the engine's word. |
+| **the engine grid's own slack, and why it runs out at z = 1** | The screen fog grid spans `viewW/32 + 2` columns from the eye rounded to a half cell, i.e. half-width `vw/2 + 32` about `eye + vw/2`; the view at level `z` has half-width `vw/(2z)`. So an eye moved by `D` between the build and the frame is covered only while `|D| <= (vw/2)(1 - 1/z) + 32`, and **that slack collapses to the bare `+ 32` as `z -> 1`** [2026-09-10] — the `(vw/2)(1 - 1/z)` term, which is all of it at high zoom, is worth nothing at 1x. That is why a cursor-anchored gesture takes the WIDE grid on any frame it stepped the eye rather than only below 1.0. One ease step is `z1 = z0^0.75 * ztgt^0.25`, so a step crossing 1.0 upward starts at `z0 = 8^(-1/3) = 0.5` exactly at the lowest — 0.489 lands at 0.9835 and does not cross — and there the eye moves by up to `vw/2` in that one frame, **896 px** at the 1792-px viewport of a 1920x1080 screen, against 32 px of slack: an 864 px band the engine's grid does not reach. |
 | `main+0x14281` bit 3 | the screen fog grid is current — already documented (`terrain-depth.md`: "if `LosType & 8` clear, first rebuild the screen fog grid"). **New here:** the camera stepper clears it at `0x41CB6B` on every frame the eye and target disagree, so a stale target becomes a per-frame grid rebuild. Also cleared at `0x41CB3B`, `0x41C567`, `0x41CE0D`. |
 | `main+0x2C76` / `+0x2C7A` | the engine's mouse position, two **DWORDs**, in **SCREEN** space (measured 2026-09-03: an injected pointer at screen (400,300) reads back 400 / 300; `0x498DA0` is what makes the world point). Worth restating because `+0x2C78` looks like the y and is the high half of x; and `main+0x2C74` is an unrelated word (the battleroom lock bit, `cmdline-options.md`). |
 | `main+0x37E1F` / `+0x37E23` | screen width / height — the fields `vpwide` derives the true viewport rect from, and the ones the scroll poll compares against |
@@ -352,6 +529,103 @@ the eye, and they do not agree:
   check at all**: `0x48409B` does `imul` row × stride, `add` col, `lea ebp,[edx+eax*2]`. A
   negative eye would read before the array. Moot in practice — `terrown` skips the whole
   function — but it is the reason to keep the eye's excursion a property of *our* passes.
+
+## The screen fog grid — where it is allocated, and every cell the builder reads — mapped by us
+
+[MEASURED 2026-09-09, this project — `objdump -d -M intel` of the pristine Steam build over
+`0x483BB8..0x483CA6` and `0x4843C0..0x4848D6`, plus a live oracle: `tagpu_fogwide.c` replicates
+the builder in C and, under `tagpu_fogwide_check.on`, rebuilds over the engine's own window and
+compares. **0 differing bytes of 720 (30×24, 1024×768) and of 1972 (58×34, 1920×1080)**, 357 and
+1555 non-zero cells respectively. The overlay that consumes the grid is `terrain-depth.md` §5.1;
+what is new here is its **allocation** and the **cell-by-cell reads** of `0x4843C0`.]
+
+### The allocation, at map load — `0x483BB8..0x483CA6`
+
+The struct behind `*(main+0x1421F)` is built **once per map**, inside `LoadMap 0x483610`, from the
+engine's viewport size — and nothing resizes it afterwards:
+
+```
+483bbf  esi = [main+0x37E37]          ; viewW      (1792 at 1920x1080)
+483bc5  ebx = [main+0x37E3B]          ; viewH      (1016)
+483c03  call 0x4B4F10 (16)            ; the {u16* buf; int cols; int rows; int cells} struct
+483c28  [main+0x1421F] = it
+        cols = viewW/32 + (viewW % 32 ? 3 : 2)      ; 483c1e..483c79
+        rows = viewH/32 + (viewH % 32 ? 3 : 2)
+483c84  cells = (cols*rows + 7) & ~7                ; ROUNDED UP TO A MULTIPLE OF 8
+483c96  buf   = malloc(cells * 2)
+```
+
+Three consequences, all of which have bitten:
+
+- **`cells` is the allocation, not `cols*rows`.** A reader that asserts `cells == cols*rows`
+  accepts 1024×768 (30×24 = 720, already a multiple of 8) and **refuses 1920×1080** (58×34 = 1972
+  against an allocated 1976). `tagpu_native.c` asserted exactly that until 2026-09-09, and the
+  refusal is not a degraded fog — it clears `fogMode`, so at 1080p there was **no fog at all**: no
+  black over unexplored ground, no grey band, the whole map drawn lit at every zoom.
+- **The grid spans the 1x viewport and about two cells more**, for ever. It cannot be made to
+  cover a zoomed-out view by asking it to: the size is a map-load decision.
+- **The origin is not stored** — the builder recomputes it from the eye every time (below), so
+  the grid cannot be re-anchored either without lying to the builder about `main+0x1431F`.
+
+### The builder `0x4843C0` — void, no args, `ret` @ `0x4848D6`
+
+Clears `cells*2` bytes, then walks the map cells `[col0, col0+cols) × [row0, row0+rows)`:
+
+| Where | What it reads |
+| --- | --- |
+| `0x4843CD` | `main+0x2A43` — the **LOCAL** player id (not `+0x2A42`, the watched one). `mask = 1 << id` |
+| `0x4843F0` | `ebp = main + 0x1B63 + id*0x14B + 0x7C` — that player's LOS block: `{u8* counters; i32 w; i32 h}` at `+0`/`+4`/`+8` |
+| `0x48442D..0x484485` | `col0 = eyeX/32 − (eyeX % 32 < 16)`, `row0` the same from `eyeY`. Equivalently **origin = `32·col0 + 16`** |
+| `0x4844B9`/`0x4844C7` | `cx`/`cy` bounded against the LOS block's own `w`/`h`, **unsigned**, so a negative index is skipped |
+| `0x4844D7` | `los[cy*w + cx]` — one byte, an overlap **counter**; 0 means out of LOS |
+| `0x4844E7` | `LosType & 2` — the grey mask is written only in true-LOS mode |
+| `0x4845A9` | `idx = (main[0x14233] * cy) / 2 + cx` into `*(main+0x14273)`, **u16** per tile, one **bit per player**. The row stride is `PLOT_C` *bytes*, i.e. the map is `PLOT_C/2` tiles wide; the allocation is `PLOT_C*PLOT_R/2` bytes (`0x483CF6`), so the last index used is exactly its last entry |
+
+A cell that is dark ORs **a different corner bit into each of the four grid entries around it** —
+entry `(cx−col0, cy−row0)` gets bit 1, `(cx−col0−1, cy−row0)` bit 2, `(…, cy−row0−1)` bits 4 and
+8 — into byte `+1` for the out-of-LOS mask (`0x4844FF..0x4845A2`) and byte `+0` for the
+unexplored one (`0x4845CC..0x484678`). The two blocks fall through, so a cell that is both sets
+both. **The last column and the last row of any window are therefore short their right/bottom
+corners**, because the cell that would supply them is outside the loop.
+
+**That is a trap for anything that CLAMPS into the grid** [MEASURED 2026-09-10]. Bilinear
+coverage over an entry whose right corners are 0 falls to 0 as you cross it, so a sampler that
+clamps a world point past the grid onto `cols − ε` lands on corners nobody wrote and reads **no
+fog** — the most dangerous answer available, because the caller then draws unexplored ground lit.
+The engine never meets it: its own overlay paints the viewport only, and **the viewport's right
+and bottom edges are always inside the grid's last column and row** — enumerated over the
+allocation arithmetic above for every viewport from 64 to 16384 and every eye residue, the worst
+slack is **1 px** (a 64-px viewport at `eye % 32 == 15`) and **16 px** for the negative eyes the
+zoom's widened camera range produces. At the 1792×1016 viewport of a 1920×1080 screen — measured
+`cols = 58`, `rows = 34` — it is `16 − r` or `48 − r` px horizontally and `24 − r` or `56 − r`
+vertically, `r` being `eye % 32`. Ours *does* meet it, because a zoomed-out view reaches past the
+grid by design, which is why `taFog` clamps to `uFogDim − 1.0` and not to the last cell
+(`terrain-depth.md` §8a).
+
+### The four border completions — `0x4846A1..0x4848CD`, and the index that is only right by luck
+
+Off the map there is no cell to darken a corner, so each edge copies the corner bits it does have
+outward: top `4→1, 8→2` (`0x4846AE`), bottom `1→4, 2→8` (`0x484731`), left `8→4, 2→1`
+(`0x4847CA`), right `4→8, 1→2` (`0x48485A`); each pair is gated on `LosType & 2` for the grey
+byte and unconditional for the black one, and **the four run in that order**, reading bits an
+earlier one may have set.
+
+The engine writes them into grid **row 0**, **row `rows−2`**, **column 0** and **column
+`cols−2`**. Those are not the general answer — they are the straddling entries only because the
+engine's own grid never reaches more than one cell past the map (the eye clamp holds `row0` at 0
+or −1). The entry that straddles an edge is the one whose corners are on the map on one side and
+off it on the other:
+
+| edge | gate | straddling entry | the engine's literal |
+|---|---|---|---|
+| top | `row0 < 0` | `gy = −row0 − 1` | `0` |
+| bottom | `row0 + rows > PLOT_R/2` | `gy = PLOT_R/2 − 1 − row0` | `rows − 2` |
+| left | `col0 < 0` | `gx = −col0 − 1` | `0` |
+| right | `col0 + cols > PLOT_C/2` | `gx = PLOT_C/2 − 1 − col0` | `cols − 2` |
+
+The two columns agree whenever the window overshoots by exactly one cell, which is the only case
+the engine can produce. A window that reaches further — ours does — must use the derived index,
+or the completion lands rows out in open water and the shoreline entry keeps a half-set mask.
 
 ## The blend LUT and the marker composites — mapped by us
 
@@ -509,6 +783,26 @@ if (r < l) swap;  if (b < t) swap           0x469E92 / 0x469EA0
 So the block projects against the true origin while its gate tests the widened rect; that
 combination is what makes the rect correct in the ring and is why `tagpu_vpwide`'s `0x498DA0`
 stub redoes the mouse conversion with the true origin and the wide clamp.
+
+**`0x46A530 DrawUnitSelectBoxRect` has NO ModelId test — a negative result that cost a landing
+review to establish [BINARY-VERIFIED 2026-09-10].** Its only early-out is the `SelBoxes` option
+bit:
+
+```
+46a538  mov  cl,BYTE PTR [eax+0x37f2f]     ; the UI gate byte
+46a541  test cl,0x1
+46a544  je   0x46a602                      ; the ONLY early return
+46a54a  mov  eax,DWORD PTR [eax+0x14377]   ; MODEL_PTRS
+46a55f  mov  dx,WORD PTR [esi+0xa6]        ; ModelId -- not tested
+46a56b  mov  ecx,DWORD PTR [eax+edx*4]     ; MODEL_PTRS[ModelId], unconditional
+46a56f  call 0x4cb650                      ; bound it, unconditional
+```
+
+So a unit whose `ModelId` is 0, or out of `UNITINFOCount`'s range, **still gets a box** — bounded
+by whatever `MODEL_PTRS[0]` holds. Anything of ours that suppresses this call must therefore
+either draw the box itself or leave the unit entirely alone; "it has no model, so the engine
+draws nothing" is false, and believing it left such a unit permanently unmarked
+(`ui-markers.md` §1, `gpu-status.md` §2.3a-bis).
 
 **The colours.** `[esp+0x74]` is `main+0xDCB`, the GUI colour byte array — written once in the
 prologue, `0x468D49 lea ebx,[eax+0xDCB]` / `0x468D51 mov [esp+0x74],ebx`. The outer index is
@@ -1579,7 +1873,8 @@ caller is expected to respect.
 
 **Six call sites, and `vpwide` redirects three.** `0x468D85`, `0x46964F` and `0x469F95` are the
 `DrawGameScreen` sites that feed it the viewport rect `main+0x37E27`, so those are the ones that
-would hand it a widened rect; they are redirected and clamped (`gpu-status.md` §2.3b). The other
+would hand it a widened rect; they are redirected and clamped — to the surface allocation *and*,
+since 2026-09-09, to the **true viewport rect** (`gpu-status.md` §2.3b). The other
 three are `0x495CAC`, `0x4A20A1` and `0x4A22DF`, and **none of them is handed the viewport
 rect** — settled by two independent disassembly reads during the G13m landing review. `0x495CAC`
 builds its argument block at `0x495C91..0x495CA9` from a loop accumulator, a literal `0` for `t`,
@@ -1591,9 +1886,18 @@ its enclosing function `0x495A30` does read `main+0x37E27`/`+0x37E2B`, but into 
 `0x468D85`/`0x46964F`/`0x469F95` copy `main+0x37E27` immediately before the call, and those are
 the three that are redirected.
 
+**A widened rect DOES reach engine drawers, and they DO honour this clip rect [MEASURED
+2026-09-09].** Both halves were open until a 500 v 500 fight with the whole army selected at 0.42×
+answered them: with the clip clamped only to the surface, the engine's own selection rect
+`0x46A530` painted the side panel and the strips (5768 stray pixels, permanent and accumulating);
+clamping the same three sites to the true viewport as well took it to 31 — the minimap's own view
+rect — *with the same five hand-back frames still occurring*. So the drawers inside
+`DrawGameScreen` read `ctx+0x1C..+0x28` and stop at it, and nothing else reaches outside the
+viewport there. `gpu-status.md` §2.3b has the numbers; `ui-markers.md` §1 has the drawer.
+
 **Still open:** `0x495A30` calls `DrawGameScreen 0x468CF0` in a loop while driving the eye, so it
-renders *under* whatever rect is in force. Whether a widened rect can reach an engine drawer that
-way was not settled.
+renders *under* whatever rect is in force. Whether that path can be entered while the rect is wide
+was not settled — the clip guard bounds it either way now.
 
 **`GetCursorPos` is the IAT slot `ds:0x4FC2E4`, reached from six places, and only three of them
 move the cursor.**
@@ -2287,14 +2591,14 @@ cannot be prologue-detoured without relocating the call.
   (panel) and `0x20` (bars); this function's `+0x81` for both bars and
   `screenH − 0x20` for the bottom one; and, in `DrawGameScreen`'s tail, x `0x81` (the `+bps`
   lines), `0x82` (the `+clock` line), `0x83`, `0xBC`, `0x1EE` (the debug line). The list is not
-  known to be complete, which is why [GUI renderer](gui-renderer.html) §20 magnifies a region
+  known to be complete, which is why [GUI renderer](gui-renderer.html) §22 magnifies a region
   rather than re-laying the HUD out.
 
 ### The viewport rect at game entry — what builds it, and why it will not patch [BINARY-VERIFIED 2026-09-11]
 
-Read for [GUI renderer](gui-renderer.html) §20 (HUD scale), which tried to make the engine
+Read for [GUI renderer](gui-renderer.html) §22 (HUD scale), which tried to make the engine
 reserve a bigger HUD and found out it cannot be done this way — see the projection section
-below, and §20.5. The disassembly here is unaffected by that; nothing of ours writes this rect
+below, and §22.5. The disassembly here is unaffected by that; nothing of ours writes this rect
 any more. `objdump -d -M intel` of the pristine Steam build, `0x498170..0x498240`.
 
 The rect is eight stores, and the first two are what the other six are built from:
@@ -3430,6 +3734,56 @@ wholly free pages (`0x4F24A9`), and `0x4F2410` releases a region whose `0x400` p
 wine 9.0's `heap_free_block` decommits a subheap's free tail past its `0x10000` hysteresis or
 releases a subheap that has emptied.
 
+## The simulation clock — `main+0x38A3B..0x38A52` — mapped by us (2026-09-09)
+
+*Layout `[VERIFIED]` against the vendored TADR corpus (`tools/tamem_ghidra.h`, which carries these
+offsets in its comments); the rates below are **ours**, measured live with `tacli peek` against the
+wall clock on `scenarios/walk-lerp.json`.*
+
+| VA | type | what |
+|---|---|---|
+| `main+0x38A3B` | u32 | `DeltaTime` — **sim ticks to execute this engine frame, 0..5**, computed by `ApplyDeltaTime` and consumed by `InGameAsynchronousThread`. This is why the tick can advance by more than one between two render frames |
+| `main+0x38A3F` | u32 | `scrollLen_buf` — raw elapsed, current − previous `GameRunSec()` |
+| `main+0x38A43` | u32 | the fractional-tick accumulator (used as a float) |
+| `main+0x38A47` | i32 | **`GameTime`** — the sim tick. `tagpu_cobtrace` and `tagpu_posedump` both stamp it, which is how their logs join |
+| `main+0x38A4B` | i16 | the speed **CEILING** — the corpus calls it `GameSpeed`, and it is what `minus`/`plus` set, but it is *not* what scales time into ticks. `0x49546A` only lets the throttle raise the live value back **while `0x38A4D < 0x38A4B`** (`cmp cx,[eax+0x38a4b]; jae skip`) |
+| `main+0x38A4D` | i16 | the **LIVE effective speed** — the corpus calls it `GameSpeed_Init` and the name is misleading. `0x495260` loads `WORD [main+0x38A4D]`, `fild`s it and multiplies by the double `0.1` at `0x4FDA28`, and *that* product scales elapsed time into ticks. **This is the field to read.** `[VERIFIED 2026-09-09 by disassembly]` |
+| `main+0x38A4F` | i16 | the **lag counter** the throttle runs on: `inc` at `0x49540A`, `dec` at `0x495448`. At **+10** (`0x495415`) it is zeroed and the live speed `0x38A4D` is **decremented**, floored at 1 (`cmp ax,1; jbe`); at **−100** (`0xff9c`, `0x495454`) it is zeroed and the live speed is **incremented**, capped at the ceiling above `[VERIFIED 2026-09-09 by disassembly]` |
+| `main+0x38A51` | u8 | `IsGamePaused` (bit 0 is also read as `[main+0x38A51] & 1` by the HUD's pause icon) |
+
+### The tick rate is `3 × GameSpeed` a second, and a skirmish does not start at 30 `[MEASURED 2026-09-09]`
+
+| GameSpeed | GameTime per wall-clock second | ratio |
+|---|---|---|
+| **20** — what `tacli scenario load` lands on | 59.88 | 2.994 |
+| 15 | 44.78 | 2.985 |
+| 10 | ≈ 30 | 3 |
+
+`minus` / `plus` step `GameSpeed` by one per press. So the tick period is
+`1000 / (3 × GameSpeed)` ms — **16.7 ms on a default skirmish, not 33.3.**
+
+**This corrects a reading of the `+clock` cheat.** Its arithmetic (`÷108 000, ÷1 800, ÷30`, in the
+HUD-extras table above) is right, but "30 ticks a second" is the **GameSpeed-10** rate, not a
+property of the engine: at the speed a skirmish actually starts at, that clock runs at double wall
+time. Anything converting sim ticks to wall-clock time must read the **live** speed at
+`main+0x38A4D` — **not** `main+0x38A4B`, which the corpus labels `GameSpeed` but which is only the
+ceiling — or measure the interval; a hard-coded 33.3 ms is wrong by 2× out of the box. **The two
+fields agree until the machine falls behind**, which is exactly the case where the difference
+matters: the throttle drops `0x38A4D` and leaves `0x38A4B` where the player set it, so code that
+reads the ceiling then believes a rate the sim is no longer running at. *(Corrected 2026-09-09 by
+the landing review, which disassembled `0x495260` and the throttle at `0x495415`–`0x49547B`; the
+table above previously carried the corpus's names with no note that they do not describe which
+field drives the rate.)* **Measuring the interval, as `tagpu_lerp.c` does, sidesteps the whole
+question and is the reason that module is right at any speed and through a throttle event. `tagpu_lerp.c` measures it, and its
+learned period read `p=33.2ms` against a predicted 33.3 at GameSpeed 10 (0.3%) and tracked a live
+speed change down from 20.
+
+**The COB `sleep` conversion does NOT scale with GameSpeed.** The divisor is the COB object's
+`+4`, i.e. `0x4B6330() = [[0x51FBD0]+0xE8]`, and that reads **30** with `GameSpeed` at 20
+`[MEASURED]` — so `sleep 100` is always 3 COB ticks and a raised game speed simply plays every
+animation at `GameSpeed/10 ×` real time. That settles the `[INFERRED from that use]` on `cob+4` in
+the next section: it is 30, and it is a constant rather than the live tick rate.
+
 ## The COB engine — mapped by us (tacob landing 2, 2026-09-07)
 
 *Everything here is from `i686-w64-mingw32-objdump -d -M intel` of `pristine/TotalA.exe.pristine`
@@ -4111,8 +4465,10 @@ looked like before the site's displacement was fixed.
   structural.
 - **Unit limit: not a compile-time constant.** It is *live state*:
   `TAdynmemStruct::ActualUnitLimit` (offset `0x37EEA`) and `MaxUnitNumberPerPlayer`
-  (`0x37EEC`), both **`unsigned short`** — hence the widely quoted 6553 ceiling in the
-  ini. 250 is the retail *default*, not a hard cap.
+  (`0x37EEC`), both **`unsigned short`** — which is where the widely quoted 6553 comes
+  from, but retail never writes more than **500** into it: `0x491658` clamps the ini
+  value to [20, 500] before the store (*The per-player unit cap* under *Documented
+  patch offsets*). 250 is the retail *default*; 500 is the retail *ceiling*.
 - Network dropout timeout: default 30 s, range [30, 300], settable with the `-T`
   command-line flag.
 - **The real ceiling is the 32-bit address space**, and it bites: TADR's

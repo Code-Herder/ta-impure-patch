@@ -60,6 +60,7 @@
 
 #include <windows.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
 #include <math.h>
@@ -112,8 +113,24 @@
 #define MODE_OPAQUE TAGPU_FXMODE_OPAQUE
 #define MODE_ALPHA  TAGPU_FXMODE_ALPHA
 
-#define MAXBV_BODY   32768     /* vertices per bucket per frame (6 = one quad)*/
-#define MAXBV_SHAD   16384
+/* THE BUCKETS GROW; THESE ARE ONLY WHERE THEY START. One anchor is one quad
+   (more with sub-frames), and how many anchors are on screen is the map's
+   density times the zoomed-out view — neither of which is a constant. These
+   two were fixed caps, and a 3840x2160 view at the 0.25x zoom floor over Town
+   & Country offers 6206 anchors against a body bucket that holds 5461 and a
+   shadow bucket that holds 2730: MEASURED 2026-09-09 from a live session,
+   `feat: ... DROPPED(full=3872)`, and because the gather walks rows from the
+   top the drop is the BOTTOM of the screen losing its trees and wrecks.
+   They are start sizes now (today's values, so ordinary play never reallocs)
+   and feat_room() grows past them. */
+#define BV_BODY_0    32768     /* vertices per bucket to start (6 = one quad) */
+#define BV_SHAD_0    16384
+/* THE CEILING IS MEMORY, NOT A VIEW. Per bucket: 16 MB is 400k vertices, 66k
+   quads — an order of magnitude past the anchors any stock map has in total,
+   let alone on screen — so it is the point past which something is wrong, not
+   a budget the view is expected to live inside. Hitting it still logs
+   DROPPED(full=), which is then a real report and not a resolution. */
+#define BV_MAX_BYTES (16u * 1024u * 1024u)
 #define FVST         10        /* x,y,enc, u,v, ck,mode, wx,wz, lam           */
 #define ATLAS_DIM    2048
 #define ATLAS_MAX    4096      /* a map's feature frames: a body and a shadow */
@@ -231,13 +248,48 @@ static GLint  s_uGame, s_uFog, s_uFogOrg, s_uFogDim, s_uZoom, s_uZoomC, s_uDepth
               s_uRestored, s_uLit;
 static TAGPU_GAFENT   s_atlasEnts[ATLAS_MAX];
 static TAGPU_GAFATLAS s_atlas;
+/* the map the atlas's entries belong to (see tagpu_feat_gather) */
+static const char* s_mapGrid;
+static int         s_mapW, s_mapH;
 
 enum { B_SHADOW = 0, B_BODY = 1, NBUCKET = 2 };
-static float s_vShadow[MAXBV_SHAD * FVST];
-static float s_vBody[MAXBV_BODY * FVST];
-static float* const s_verts[NBUCKET] = { s_vShadow, s_vBody };
-static const int    s_vcap[NBUCKET]  = { MAXBV_SHAD, MAXBV_BODY };
-static int   s_nv[NBUCKET];
+/* grown on demand by feat_room(), never shrunk: a zoom-out reallocs once and
+   every frame after it costs nothing */
+static float* s_verts[NBUCKET];
+static int    s_vcap[NBUCKET];         /* vertices each can hold             */
+static int    s_nv[NBUCKET];           /* what this frame put in them        */
+static const int s_vcap0[NBUCKET] = { BV_SHAD_0, BV_BODY_0 };
+
+/* Room for `need` more vertices in bucket `b`, growing it if there is not.
+   Doubling from the start size, so the growth is amortised and a view that
+   settles reallocs once. A refusal — the ceiling above, or a failed realloc —
+   leaves the bucket intact and the caller counts the drop, which is the old
+   behaviour and is now the only way to see one. Render thread, and put_vert
+   re-reads s_verts[b] every call, so a realloc between quads is safe: the
+   check is made once per quad, before its six writes. */
+static int feat_room(int b, int need)
+{
+    int cap = s_vcap[b];
+    int want = s_nv[b] + need;
+    float* p;
+    const int max = (int)(BV_MAX_BYTES / (FVST * sizeof(float)));
+    if (want <= cap) return 1;
+    if (cap <= 0) cap = s_vcap0[b];
+    while (cap < want && cap < max) cap *= 2;
+    if (cap > max) cap = max;
+    if (want > cap) return 0;                    /* the ceiling, not a bug   */
+    p = (float*)realloc(s_verts[b], (size_t)cap * FVST * sizeof(float));
+    if (!p) return 0;                            /* keep what we have        */
+    {
+        char m[128];
+        _snprintf(m, sizeof m, "feat: bucket %d grew %d -> %d verts (%u KB)",
+                  b, s_vcap[b], cap,
+                  (unsigned)((size_t)cap * FVST * sizeof(float) / 1024));
+        flog(m);
+    }
+    s_verts[b] = p; s_vcap[b] = cap;
+    return 1;
+}
 
 static const char* VS =
     "#version 330 core\n"
@@ -347,8 +399,8 @@ static void init_gl(void)
 
     glGenVertexArrays(1, &s_vao); glBindVertexArray(s_vao);
     glGenBuffers(1, &s_vbo); glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)sizeof s_vShadow + (GLsizeiptr)sizeof s_vBody,
-                 NULL, GL_STREAM_DRAW);
+    /* no storage yet: the draw re-specifies it at this frame's size, and the
+       attributes below only record the binding */
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, FVST * 4, (void*)0);
     glEnableVertexAttribArray(1);
@@ -365,6 +417,15 @@ static void init_gl(void)
     s_atlas.dim = ATLAS_DIM; s_atlas.max = ATLAS_MAX;
     s_atlas.ents = s_atlasEnts; s_atlas.tag = "feat";
     s_atlas.prio = 1;                        /* restored after the terrain, before effects */
+    /* Every frame in here is a feature standing on the map, so nothing in it
+       ever stops being wanted: when it fills, re-lay it tallest-first and
+       keep it rather than drop it (tagpu_gaf.h `repack`). Before this the
+       atlas hit `full` at 48% occupancy and was rebuilt from nothing on the
+       next frame -- and on the frame after that, for as long as the view
+       stayed wide enough to want more frames than arrival order could pack:
+       37,140 rebuilds in one 4K session, each of them re-decoding ~200 GAF
+       frames and clearing the Classic++ restore queue before it could land. */
+    s_atlas.repack = 1;
     tagpu_gaf_atlas_create(&s_atlas);   /* never bind texture 0 to uAtlas */
     s_state = 1;
     flog("feat: GL ready");
@@ -374,6 +435,7 @@ void tagpu_feat_glreset(void)
 {
     s_state = 0;
     tagpu_gaf_atlas_lost(&s_atlas);
+    s_mapGrid = NULL;           /* the entries went with the context */
 }
 
 /* ---- emission ---- */
@@ -433,7 +495,7 @@ static void emit_frame(const TAGPU_FXVIEW* v, const unsigned char* g, int sx, in
     x1 = x0 + (float)w; y1 = y0 + (float)h;
     if (x1 < (float)v->evpL || x0 > (float)(v->evpL + v->evw) ||
         y1 < (float)v->evpT || y0 > (float)(v->evpT + v->evh)) return;
-    if (s_nv[b] + 6 > s_vcap[b]) { s_cOverflow++; return; }
+    if (!feat_room(b, 6)) { s_cOverflow++; return; }
     e = tagpu_gaf_atlas_get(&s_atlas, g);
     if (!e) { s_cAtlasFail++; return; }
     c = (float)e->ck / 255.0f;
@@ -656,6 +718,23 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     if (mapW <= 0 || mapH <= 0 || mapW > 4096 || mapH > 4096) return feat_bail();
     if (nCols <= 0 || nRows <= 0 || nCols > 1024 || nRows > 1024) return feat_bail();
 
+    /* THE MAP CHANGED — tell the atlas its contents are meaningless.
+       `repack` makes the atlas keep what it holds, and the wall makes it keep
+       that layout for good; both are right for one map and wrong across two.
+       The engine allocates `FeatureMap` per map (main+0x14287, 0xD per 16-px
+       tile) with its dimensions beside it, so the grid pointer moving, or the
+       dimensions moving under it, is the load. The same identity test the
+       terrain pass makes on its TILE_SET (tagpu_terr.c `s_setPtr`/`s_setCount`).
+       Belt and braces: the repack also evicts every entry nothing has asked
+       for since the last one, so even an undetected change (a new map handed
+       the same allocation at the same size) cannot accumulate -- the previous
+       map's frames go at the first repack that needs the room. Checked here,
+       after the pointer is validated and before any atlas_get can run. */
+    if (fmap != s_mapGrid || mapW != s_mapW || mapH != s_mapH) {
+        if (s_mapGrid) tagpu_gaf_atlas_forget(&s_atlas);
+        s_mapGrid = fmap; s_mapW = mapW; s_mapH = mapH;
+    }
+
     /* The engine's own sweep rect and its edge clamps (DrawGameScreen), run
        over the ZOOM's viewport rather than the engine's (TAGPU_FXVIEW.evpL):
        screen and world differ by a pure translation, so reaching further is
@@ -762,6 +841,10 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
             sappend(b, sizeof b, &p, " defs=%d", nDefs);
             sappend(b, sizeof b, &p, " anim=%d los-skip=%d junk=%d -> body=%d shadow=%d atlas=%d",
                     s_c.animated, s_c.losSkip, s_c.junk, s_cBody, s_cShadow, s_atlas.n);
+            /* repacks should settle at a small number and stop; `wall` means
+               the map wants more than one 2048 page holds (tagpu_gaf.h) */
+            sappend(b, sizeof b, &p, " repack=%u%s", s_atlas.repacks,
+                    s_atlas.repackWall ? " WALL" : "");
             if (s_cOverflow || s_cAtlasFail)
                 sappend(b, sizeof b, &p, " DROPPED(full=%d atlas-fail=%d)",
                         s_cOverflow, s_cAtlasFail);
@@ -802,10 +885,10 @@ void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)total * FVST * 4, NULL, GL_STREAM_DRAW);
     if (s_nv[B_SHADOW])
         glBufferSubData(GL_ARRAY_BUFFER, 0,
-                        (GLsizeiptr)s_nv[B_SHADOW] * FVST * 4, s_vShadow);
+                        (GLsizeiptr)s_nv[B_SHADOW] * FVST * 4, s_verts[B_SHADOW]);
     if (s_nv[B_BODY])
         glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)s_nv[B_SHADOW] * FVST * 4,
-                        (GLsizeiptr)s_nv[B_BODY] * FVST * 4, s_vBody);
+                        (GLsizeiptr)s_nv[B_BODY] * FVST * 4, s_verts[B_BODY]);
     glEnable(GL_BLEND);
     x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);      /* premultiplied FBO */
     /* shadows are ground decals: they test depth but never write it, so a

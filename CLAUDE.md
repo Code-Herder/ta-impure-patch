@@ -67,8 +67,17 @@ again after they change it.
 
 Once approved, once per landing (not per commit), on the accumulated branch diff, review at
 **`medium`** when the landing touches **`tagpu/ddraw/**`**, **`tagpu/src/**`** or
-**`tools/tacli`** — `high` if it writes engine or user state, adds or moves a byte patch, or is
-sim-adjacent. Verify each finding against the code before acting on it, and never apply findings
+**`tools/tacli`** — `high` if it writes engine or user state, adds or moves a byte patch, is
+sim-adjacent, **or changes the synchronisation between the game thread and the render thread**.
+
+That last one is not covered by the others and is the reason this line was amended. A change to a
+lock, a handshake, a published counter, or the lifetime of anything one thread writes and the other
+reads is the class this stack fails at silently: it does not throw, it produces a dead render
+thread or a wrong frame days later, on one launch in twenty, and the reproduction is a story about
+timing rather than a test. `tagpu_reclaim` exists because of one; `tagpu_fog_at`'s guard exists
+because of another whose root cause was never found; G13s was a producer gated on a value the
+other thread published. A diff that adds three lines to a critical section is small in the
+reviewer's sense and large in this one. Verify each finding against the code before acting on it, and never apply findings
 blindly.
 
 **Reviews run on Opus (Opus 5), not on the session model.** The built-in `/code-review` cannot
@@ -192,6 +201,21 @@ does not commit.
 the separate act: it runs the setup check, then the full content scan (every revision, every
 worktree, every blob against the manifest), and pushes `main` only when both are clean. Anything
 already pushed is permanent — fix forward.
+
+### Releases: a `v*` tag, and notes written for players
+
+Pushing a `v*` tag is what cuts a release — GitHub Actions builds `ddraw.dll`, packages it and
+publishes the zip. The workflow writes only a one-line placeholder note, so the body is set
+afterwards with `gh release edit <tag> --notes-file <file>`.
+
+**Release notes are for the person downloading the zip, not a lab report.** Say what changed and
+what it means for them, lead with anything that made the previous release not work, and stop
+there. **Never carry the engineering apparatus into them** — no "what was measured", no
+"not covered", no coverage caveats, no percentage tables, no methodology notes. All of that
+belongs in `research/notes/` and in the commit messages, where the next person working on the
+code will look for it; in a release note it reads as hedging and buries the one line a player
+actually needs. Ask before choosing a version number that is not the obvious next one: a patch
+release on top of `v0.2` is `v0.2.1`, and `v0.21` sorts *above* `v0.3` under semver.
 
 ### The local half: `CLAUDE.local.md`
 

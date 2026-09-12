@@ -169,6 +169,18 @@ reallocs only when the viewport size changes (`tagpu_scaffold.c:368`), the 3DO c
 (`tagpu_markown.c:207`), the terrain atlas is per tile-set load (`tagpu_terr.c:345`), and the
 capture buffer is behind a trigger file (`tagpu_overlay.c:160`).
 
+**The table above is missing one, and 2026-09-09 removed it.** The terrain pass had a
+`s_verts[32768 × 6 × 6]` of its own — **4.50 MiB**, the same size as the fx buckets — which this
+list never recorded. It is gone: a terrain cell is four shorts and an instanced quad now, and
+the staging is a **ninth amortised `realloc`**, reserved from the live viewport at the zoom
+floor and grown only when the viewport changes (`tagpu_terr.c` `terr_reserve`, through
+`tagpu_terr_clamp_span`). MEASURED with `i686-w64-mingw32-size` across the change: `.bss`
+**42,216,340 → 37,497,780**, a drop of exactly 4,718,560 bytes. What it costs back is
+viewport-sized and small — MEASURED off the `terr: staging` line, **83 KB at 1024×768, 423 KB at
+2560×1440, 972 KB at 3840×2160, 1746 KB at 5120×2880** —
+so every resolution below 4K is ahead on both counts, and the fixed array it replaced could not
+have covered 4K at all (17.9 MiB would have been needed).
+
 ### GPU side — 235 MiB, and not address space
 
 `nvidia-smi` with the game running: **`TotalA.exe` 235 MiB** of the RTX 4070's 12,282 MiB.

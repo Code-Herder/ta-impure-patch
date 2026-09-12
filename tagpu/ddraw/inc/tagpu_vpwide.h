@@ -32,9 +32,17 @@
 
      CLIP: three sites in `DrawGameScreen` copy the rect into the offscreen
        surface's clip rect through `0x4C6B10`, which is a bare four-dword store
-       with no clamping. A rect wider than the surface would license any engine
-       drawer still running inside the viewport to write outside the
-       allocation, so those three sites are redirected and clamped.
+       with no clamping. Those three sites are redirected and clamped TWICE
+       over, because there are two different bounds to respect. A rect wider
+       than the surface would license any engine drawer still running inside
+       the viewport to write outside the allocation. And a rect wider than the
+       TRUE VIEWPORT — which is the whole point of this module — would license
+       one to write on the side panel and the strips, where nothing ever
+       repaints: our key fill covers the true viewport only, so a mark left
+       there stands for the rest of the session. That second clamp is stock
+       TA's own bound at these sites (unwidened, the rect they are handed IS
+       the true one), so it can never remove anything the engine would have
+       drawn on screen.
 
      W/H: the eye clamp `0x41C3C0` derives `maxEye = map - W` from them, and a
        negative maxEye makes it alternate between 0 and a negative eye every

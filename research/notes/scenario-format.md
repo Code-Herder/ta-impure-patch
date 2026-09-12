@@ -324,9 +324,57 @@ Every call is `__stdcall` and every address is from the merged community symbol 
 | commander-death gate | `ActiveCommanderDeath` | `main+0x37EF6` | `0x486688` compares it against zero and only then calls `UNITS_KillAllForPlayer`. [VERIFIED, binary] |
 | apply point | `Game_MainLoopTick` detour | `0x4969D2` | See *The apply point* below. |
 | map extents | `MapWidth/Height` | `main+0x14223`/`0x14227` | World units. Bounds-checking source; `FeatureMapSizeX/Y` (`0x14233`/`0x14237`) is the same map in tiles. |
-| per-player cap | `MaxUnitNumberPerPlayer` | `main+0x37EEC` | Reads **250** in stock skirmish, and **500** after `setup.unit_limit: 500` (phase D writes it to `totala.ini`; the array grows with it, `array_slots` 2500 -> 5000). `ActualUnitLimit` (`0x37EEA`) reads 0 either way and is not written. |
+| per-player cap | `MaxUnitNumberPerPlayer` | `main+0x37EEC` | Reads **250** in stock skirmish, and **500** after `setup.unit_limit: 500` (phase D writes it to `totala.ini`; the array grows with it, `array_slots` 2500 -> 5000). **500 is the CEILING, not an example** — see below. `ActualUnitLimit` (`0x37EEA`) reads 0 either way and is not written. |
 | loaded map | `GameingState.TNTFile` | `*(main+0x391E9) + 0x204` | The map the engine really has, `"Maps\Two Continents.TNT"`. TA falls back silently on a `SkirmishMap` it does not know, so this is the only honest answer [VERIFIED live, tamem.h:632,811]. |
 | player resources | `PlayerStruct[10]`, stride `0x14B` | `main+0x1B63` | `fCurrentEnergy +0x8C`, `fCurrentMetal +0x98`, `fMaxEnergyStorage +0xA4`, `fMaxMetalStorage +0xA8` — all confirmed against a live read, and the stride with them (slot 1 at `+0x1CAE`). Writable, but not *settable* from the apply point: see the phase C notes. Set them **at launch** instead, `Player<N>Metal`/`Energy` in the skirmish registry key (phase D). |
+
+### `UnitLimit` is clamped to 500, and asking for more is silent
+
+`0x491653` reads `UnitLimit` out of `totala.ini` with a default of `0xFA` (250) and
+then clamps it **before** storing `MaxUnitNumberPerPlayer` [BINARY-VERIFIED
+2026-09-10, `objdump` of the pristine build]:
+
+```
+491653: call 0x49f5a0              ; GetPrivateProfileIntA("Preferences", "UnitLimit", 250, "<exe dir>\totala.ini")
+491658: cmp  eax, 0x1f4            ; 500
+49165d: jle  0x491678
+49165f:   mov ecx, ds:0x511DE8
+491665:   mov eax, 0x1f4           ; ANY larger value becomes exactly 500
+49166a:   mov WORD PTR [ecx+0x37eec], ax
+491671:   pop edi / pop esi / pop ebx / add esp, 0x24 / ret   ; this path RETURNS here
+491678: cmp  eax, 0x14             ; 20
+49167b: jge  0x491682
+49167d:   mov eax, 0x14
+491682: mov  ecx, ds:0x511DE8
+49168b: mov  WORD PTR [ecx+0x37eec], ax
+```
+
+So **the per-player cap can never exceed 500**, whatever the file says. This is a
+cap per *player*, not per game: four players hold 2000 units between them, and the
+index blocks confirm it — with the cap at 500 a fresh skirmish hands out idx 1 to
+player 0, **501** to player 1 and **1001** to player 2 [MEASURED live 2026-09-10,
+`tacli roster`].
+
+Two things followed from this being written down as `[20, 1500]` until 2026-09-10:
+
+* `tacli`'s scenario schema accepted `setup.unit_limit: 1500`, reported "unit limit
+  1500" at launch, and the fork then refused the apply with *"player 0 would end up
+  with 600 units and this game's cap is 500"* — **after** the game had launched and
+  the map had loaded, rather than at `scenario validate` time. The schema is now
+  bounded by `SCN_MAX_LIMIT = 500`, so the existing per-owner check catches it with
+  no game at all.
+* **`scenarios/ball10.json` asked for 625 units on each of four players and never
+  had them.** It declared 2500 kbots against an engine ceiling of 2000; its
+  `on_error: "skip"` is why that was never loud. Any measurement taken on it — it is
+  the scale fixture for sub-tick pose interpolation — was taken at an unknown count
+  at or below 2000, not at 2500. With the schema bounded, `scenario validate` and
+  `load` both **refuse** the old file outright (`die`, not a warning), so the fixture
+  was re-cut on 2026-09-11 to 500 per player (240/160/100, the same 12:8:5 mix),
+  which is the most the engine will seat. If a smaller scale is wanted that is a
+  one-number edit; larger is not available.
+
+Note also that the count the cap is compared against is *live units*, so
+`clear_existing: false` leaves each player's commander occupying one of the 500.
 
 ### The apply point
 

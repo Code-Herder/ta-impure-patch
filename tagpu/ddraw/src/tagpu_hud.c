@@ -1,7 +1,7 @@
 /* tagpu_hud.c — HUD scale. See tagpu_hud.h for what it is, why it writes no
    engine memory at all, and what makes the one word that crosses threads safe;
-   research/notes/gui-renderer.md §20 for why the art is magnified rather than
-   re-laid-out and §20.5 for the origin tear that took the viewport rect out of
+   research/notes/gui-renderer.md §22 for why the art is magnified rather than
+   re-laid-out and §22.5 for the origin tear that took the viewport rect out of
    this file. */
 
 #include <windows.h>

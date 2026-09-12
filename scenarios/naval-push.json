@@ -1,0 +1,47 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Promo fixture: 200 warships meeting head-on in the open water south of Anteer Strait's central island, close enough to be in contact from the first second. SURVEYED, not guessed: promo/survey-map.py puts that island at x 3000-4000, y 800-1700, so everything here sits south of y=1800. Two earlier cuts failed in different ways and both are worth remembering: the first put core_fleet at [3550, 1980], which is ON the island, and forty ships spawned ashore and never sailed; the second placed 80 ships correctly but 700 units apart in a 1920-wide frame, and the take measured 88 % duplicate frames -- a sea with a few specks in it. A pinned camera wants the fight dense and already joined.",
+  "seed": 20260913,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Anteer Strait",
+    "res": "1024x768",
+    "unit_limit": 500,
+    "clear_existing": false,
+    "los": "permanent",
+    "mapping": true,
+    "switches": {"shootall": true, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0, "metal": 10000, "energy": 10000},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1, "metal": 10000, "energy": 10000},
+      {"slot": 2, "controller": "off"}
+    ]
+  },
+
+  "units": [
+    { "id": "shore_fus1", "type": "CORFUS",   "owner": 1, "pos": [3480, 1500], "facing": 180 },
+    { "id": "shore_fus2", "type": "CORFUS",   "owner": 1, "pos": [3660, 1500], "facing": 180 },
+    { "id": "shore_es1",  "type": "CORESTOR", "owner": 1, "pos": [3480, 1620], "facing": 180 },
+    { "id": "shore_es2",  "type": "CORESTOR", "owner": 1, "pos": [3560, 1620], "facing": 180 },
+    { "id": "arm_solar",  "type": "ARMSOLAR", "owner": 0, "pos": [3760, 1560], "facing": 180 }
+  ],
+
+  "groups": [
+    { "id": "arm_fleet", "owner": 0, "at": [2850, 2400],
+      "pattern": {"kind": "grid", "cols": 12, "spacing": 55, "jitter": 10},
+      "composition": [{"type": "ARMCRUS", "count": 30}, {"type": "ARMROY", "count": 20},
+                      {"type": "ARMPT", "count": 50}],
+      "facing": 90,
+      "orders": [{"cmd": "attack", "to": [3550, 2400]}] },
+
+    { "id": "core_fleet", "owner": 1, "at": [3550, 2400],
+      "pattern": {"kind": "grid", "cols": 12, "spacing": 55, "jitter": 10},
+      "composition": [{"type": "CORCRUS", "count": 30}, {"type": "CORMSHIP", "count": 20},
+                      {"type": "CORPT", "count": 50}],
+      "facing": 270,
+      "orders": [{"cmd": "attack", "to": [2850, 2400]}] }
+  ],
+
+  "camera": { "at": [3200, 2400], "pin": true }
+}

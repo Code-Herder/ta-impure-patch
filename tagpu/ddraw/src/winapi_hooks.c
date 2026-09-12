@@ -76,7 +76,7 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
         x = min(x, g_ddraw.width - 1);
         y = min(y, g_ddraw.height - 1);
 
-        /* HUD SCALE (tagpu_hud.h, gui-renderer.md 20): the last step of every
+        /* HUD SCALE (tagpu_hud.h, gui-renderer.md 22): the last step of every
            client -> game conversion in the fork. Over a magnified HUD region the
            engine is handed the point on its own 1x HUD grid, so its hit tests --
            which are all written against the 128 / 32 constants -- go on being right

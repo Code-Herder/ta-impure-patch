@@ -17,6 +17,7 @@
 #include "tagpu_fxown.h"
 #include "tagpu_featown.h"
 #include "tagpu_terrown.h"
+#include "tagpu_fogwide.h"
 #include "tagpu_gui.h"
 #include "tagpu_markown.h"
 #include "tagpu_zoom.h"
@@ -110,6 +111,13 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            lazy rebuild. */
         tagpu_terrown_init();
 
+        /* fogwide: the fog grid over the ZOOMED-OUT view (tagpu_fogwide.h).
+           No engine patch of its own — it rides terrown's fog-overlay call
+           site — but its critical section is created here, before either the
+           game thread or the render thread can reach it. Inert unless a
+           zoomed-out view is live; `tagpu_fogwide.off` turns it off. */
+        tagpu_fogwide_init();
+
         /* tagpu: own the engine's world-space UI markers (G13d) — health bars
            re-drawn natively, order markers / group digits / build cursor
            captured out of the engine's frame and replayed through the zoom.
@@ -165,7 +173,7 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            returns to the heap; the sim reads nothing different. */
         tagpu_reclaim_init();
 
-        /* tagpu: HUD scale (Phase F, gui-renderer.md 20) -- the in-game HUD
+        /* tagpu: HUD scale (Phase F, gui-renderer.md 22) -- the in-game HUD
            magnified inside the player's Screen Size, with the world viewport
            shrunk by exactly as much. One observer on the background loader
            0x4288D0, acting only at the call 0x49823D makes, which is the first

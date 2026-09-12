@@ -34,6 +34,7 @@
 #include "tagpu_zoom.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_pal.h"
+#include "tagpu_fps.h"
 
 /* GL entry points the fork does not already expose — load once ourselves. */
 typedef void (APIENTRY *PFN_READPIXELS)(GLint,GLint,GLsizei,GLsizei,GLenum,GLenum,void*);
@@ -555,6 +556,7 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
                 tagpu_scaffold_glreset();
                 tagpu_r3d_glreset();
                 tagpu_gui_glreset();
+                tagpu_fps_glreset();
                 olog("tagpu: GL CONTEXT CHANGED - all modules reset");
             }
             s_ctx = cur;
@@ -618,6 +620,13 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        early there, this does not. */
     tagpu_gui_present(f);
     oerr("gui");
+
+    /* The frame-rate readout, ABOVE the UI layer: it is a diagnostic drawn over
+       the finished frame and must not be hidden by the side panel or a dialog.
+       Off unless `tagpu_fps.on` is there, which the render-options screen's FPS
+       row writes -- see tagpu_fps.c for why this is not cnc-ddraw's own OSD. */
+    tagpu_fps_present(f);
+    oerr("fps");
 
     /* If the native pass did not publish a view this frame, nothing zoomed was
        drawn, so the input path goes back to 1:1 (tagpu_zoom.h). Every early

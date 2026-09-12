@@ -44,7 +44,7 @@ static const Def s_defs[] = {
        about the unmoved origin while the world is drawn about the moved
        one. Measured 2026-09-11: at 1024x768 Auto the engine picks a unit
        76 px left and 19 px up from where it is drawn. Arm tagpu_hud.on by
-       hand to look at it; see gui-renderer.md 20.5. */
+       hand to look at it; see gui-renderer.md 22.5. */
 };
 #define NDEFS (int)(sizeof s_defs / sizeof s_defs[0])
 

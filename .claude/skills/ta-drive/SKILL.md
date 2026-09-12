@@ -478,6 +478,7 @@ id.
 
 ```bash
 tools/tacli scenario load     t1 200v200        # launch → menus → live → spawned → camera
+tools/tacli scenario load     t1 500v500        # the big fight: 1000 units, 1920x1080 (UI-damage fixture)
 tools/tacli scenario list                       # what is in scenarios/
 tools/tacli scenario validate 200v200 --instance t1   # schema + this game's catalogue
 tools/tacli scenario expand   200v200 --wire    # the flat list, and the file the fork reads
@@ -740,6 +741,7 @@ healthy game none of them ever does:
 | `unpl=` | *pieces* the pose walk could not place, left at rest inside a unit that is otherwise posed |
 | `nobake=` | units whose type would not bake, which **draw nothing** — the one honest drop. Over 256 pieces or 49152 vertices; stock's worst is 36 and 574 |
 | `q=` | units the gather queued against units the pass drew, printed only when they disagree. A queued unit the draw dropped is a unit missing from the screen |
+| `SELHANDBACK=<n> last=<drawn>/<owed>` | frames the pass came up short on selection rects and `markown` handed the **whole set** back to the engine, which then draws every box at the **unzoomed** projection. Harmless at 1×, a one-frame scatter at any other zoom, and it must not climb steadily: 0 over a four-minute `500v500` run with ~470 units selected at 0.42× [MEASURED 2026-09-09] |
 
 **`posed=` reading lower than the unit count is usually the HIRES pass, not a miss.** A gamedir with
 `hires/<name>.glb` in it draws those units through the replacement-mesh renderer instead, and they
@@ -1053,7 +1055,61 @@ Three things about this one are unlike the other passes:
   `key=N` moves it if a mod's UI ever uses 254.
 - **It owns the fog overlay too**, so `terr.on` off/`passive` restores *both*. If the grey
   band ever disappears, check `native: … fog=N los=N` in the log before suspecting the shader:
-  fog is on whenever the grid uploaded, and `los` is the engine's raw `LosType`.
+  fog is on whenever the grid uploaded, and `los` is the engine's raw `LosType`. **`fog=0` means
+  the grid was REFUSED, and that is no fog at all** — not black, not grey, the whole map lit at
+  every zoom. It read 0 at every resolution whose grid cell count is not a multiple of 8
+  (1920×1080 among them) until 2026-09-09.
+- **The fog grid at zoom < 1 is OURS, not the engine's** (G13r): the engine's spans the 1× viewport
+  only, so `tagpu_fogwide.c` builds the same masks over a window the whole zoom range fits in and
+  the passes sample that instead. Levers: `tacli arm <i> fogwide.off` disables it live (the A/B —
+  with it the outer ring goes back to a smear of the border cell), `fogwide_check.on` arms the
+  oracle, which logs `fogwide check: … compared=N of cells=M differ=N` every 120th tick and
+  **must read `differ=0`**. `compared` is `cols*rows` and `cells` the engine's ALLOCATION, which
+  it rounds up to a multiple of 8 — comparing the tail reads entries nothing built.
+  Its heartbeat is `fogwide: <cols>x<rows> cells=… cap=<C>x<R> rebuilds=N in 5.0s = R/s ticks=…
+  build=…/… us (mean/max) bare=N ret=F/R held=N strand=N/NKB`, **one line per five seconds of wall
+  time** (G13s; it used to be per 300
+  ticks, which was incomparable between runs because a tick is a `DrawGameScreen` call and the game
+  loop turns that over 330–4900 times a second depending on the scene while the presenter holds 60).
+  **`bare=` must read 0**: it counts render frames that drew zoomed and were refused a wide grid,
+  i.e. frames painted over the engine's 1× grid, and it read 1 per gesture before the fix. It does
+  **not** count `tagpu_fogwide.off`, so the lever does not make the heartbeat cry wolf.
+  **The module builds at every zoom since G13s** — the grid has to exist before the frame that
+  eases past 1.0, so the tick no longer waits for the level — while the *picture* at zoom ≥ 1 is
+  still the engine's grid, bit for bit, because the consumer is what gates on the level now. That
+  costs **~30 rebuilds a second whenever anything is moving** (the rate is the sim tick's, not the
+  camera's: every LOS stamp clears the engine's is-current bit) at ~145 µs, i.e. ~4.4 ms of
+  game-thread time a second.
+  **The grid is sized from the screen since 2026-09-10, not from a constant** — `cap=` is what the
+  three buffers are allocated for and the `fogwide: grid CxR, N KB for the set` line says the cost
+  once per size: **212 KB at 1920x1080, 84 KB at 1024x768**, where it used to be a flat 6144 KB in
+  every session. `ret=freed/retired held=N/NKB` is the grow path — a video-mode change grows the set
+  and hands the old three blocks to `tagpu_reclaim`'s quiescence fence, so **`held=` must fall
+  back to 0** and **`strand=` must read 0**: stranding is what happens when the fence is unarmed
+  (`tagpu_reclaim.off`, or an exe where the install failed) or the ring is full, and it is safe but
+  it means memory is not coming back. A session that never changes resolution shows `ret=0/0`
+  throughout — **the grow path does not run on a normal launch**, so testing it needs either a real
+  game → shell → game cycle at a different resolution or a temporary probe that inflates
+  `fogw_capacity`.
+  **`rebuilds=0` is not a fault — check `LosType` before you chase it.** The rebuild fires on the
+  engine's is-current bit, which the LOS stamps clear; at **`LosType 12` (permanent LOS,
+  `--los 0`) nothing stamps**, so the rate is legitimately 0 however much is moving on screen.
+  At 14 (true LOS) the same scene gives ~30/s. Read the word at `*0x511DE8 + 0x14281` with
+  `tacli peek` rather than guessing — this cost a round of "is my change broken?" on 2026-09-11
+  when the answer was that `scenario load` had been given `--los 0`.
+  **One `bare=1` per video-mode change is expected** and is not the alarm the counter is for: the
+  render thread is recreated across a mode switch while `fogwide`'s staleness statics survive, so
+  the first frame after it reports one refusal. A second one, or any at all without a mode change,
+  is the real signal.
+- **A one-frame fog artifact is not findable with `glshot`.** Record the window losslessly
+  (`ffmpeg -f x11grab -window_id <id> -framerate 60 -c:v libx264rgb -qp 0`) and scan every frame;
+  the criterion that separates a fog failure from the grey band is **green dominance**
+  (`g > r+20 && g > b+20 && g > 60`), because the band is a grey remap and lit grass is not.
+- **Put the camera where you want it by SCROLLING, not with `tacli eye`.** The engine rebuilds its
+  fog grid only when its own is-current bit is cleared, which a camera *move* does; `tacli eye`
+  writes the eye and the scroll target together, so nothing clears it and the stale grid is drawn
+  at the new position. The symptom is a lit LOS circle sitting over an enemy base you have never
+  scouted, which looks exactly like a fog bug and is not. `keys <i> mouse:0,1079` and wait.
 - **Without `terrown.on` it refuses to draw at all**, and says so:
   `terr: … (NOTHING EMITTED: terrown.on must exist at DLL attach — arm it before launch,
   not after)`. Our terrain is opaque and covers the whole viewport, so drawing it with no
@@ -1136,7 +1192,40 @@ every scenario and every `tacli` recipe still drives zoom exactly as before.
 
 **The mouse wheel** is what the player uses, and what the level falls back to whenever the
 file is *absent*: one notch is ×1.1 geometric, clamped to the same 0.25–8.0, eased over
-about six frames. It is live **only while our zoomed world is actually on screen and the
+about six frames.
+
+**The wheel ZOOMS TO THE CURSOR since G13t (2026-09-10), so it MOVES THE CAMERA.** The world
+point under the pointer is held still, which means `tacli wheel --at X Y` is no longer a
+camera-neutral operation: the eye steps by `(a − c)(1/z0 − 1/z1)`, where `c` is the viewport
+centre. Four consequences for driving:
+
+- **Re-read the eye after any wheel**, and do not assume a recipe's camera survived one.
+- **`--at` the viewport centre is the old behaviour exactly** — the delta is 0 there, so that
+  is the control for any A/B, and it needs no flag (there isn't one).
+- **`tagpu_zoom.txt` still does NOT move the camera.** Only the wheel anchors, so every
+  scripted zoom and every fixture is unchanged.
+- **An off-centre wheel RELEASES a camera follow (G13u), and it needs the GAME THREAD to be
+  ticking.** Ctrl+C follows your commander (it does not merely centre on it) and the
+  cycle-through-units keys do the same; a wheel that wants to move the eye asks for all three
+  follow slots to be cleared, and `terrown`'s fog tick does the clearing. Two consequences for
+  driving: a recipe that sets up a follow and then wheels has no follow afterwards — read
+  `main+0x142F3` (`CameraToUnit`, 0 = nothing followed) rather than assuming, and expect one
+  `zoom: cursor anchor took the camera - the unit follow is released` per follow in the log.
+  **Pausing the sim (`tab`) does NOT stop this** — the fog tick is a detour on the fog-overlay
+  *draw* `0x4848E0`, whose sole call site `0x469D8E` is inside the per-frame world draw, so a
+  paused game still services the request and the wheel still takes the camera. What does stop it
+  is the game thread ceasing to DRAW, which is the fail-safe direction and not a state you meet
+  while testing. A wheel aimed at the viewport centre moves the eye by nothing and leaves the
+  follow alone, which is the control.
+- **`Ctrl+C` needs the SHIELD ON.** It is a modifier combo, so under injection it only reaches
+  the game through `fake_GetAsyncKeyState` — with `--no-shield` your `ctrl` is invisible and
+  the follow is never established, which looks exactly like the feature not working.
+
+Anchoring is off — and says so once a second in the log — while `tagpu_eye.txt` holds the
+camera (`zoom: cursor anchor off - tagpu_eye.txt holds the camera`), and while `terrown` is
+not skipping, because the fog grid is view-anchored and only then is its rebuild ours to ask
+for. **`scenario load` pins the camera**, so `tacli eye <i> --release` first or the wheel will
+zoom to the centre and the log will tell you why. It is live **only while our zoomed world is actually on screen and the
 pointer is over the world viewport** — the menus, the side panel and the minimap keep their
 wheel, and the log says which gate refused (`zoom: wheel ignored — no zoomed world on
 screen` / `— pointer is off the world viewport`). Every accepted turn logs
@@ -1228,7 +1317,10 @@ Three things to know when driving zoomed:
   zoom-out reveals beyond it has no address: a click there is **dropped** (the selection is
   left alone rather than being moved to whatever sat at the 1× position). At 0.5× the
   addressable region is then the central half of the frame in each axis. Zoom ≥ 1 has no
-  such limit either way.
+  such limit either way. **A band-box drag is a click and goes the same way**: with
+  `vpwide.off` armed, a drag across the whole viewport at 0.42× selected **0** units where
+  the same drag with vpwide selects ~470 [MEASURED 2026-09-09] — so an A/B that turns
+  vpwide off has to make its selection at 1× first, or it is comparing against an empty one.
 - **In-game dialogs drawn inside the viewport take bent clicks at any zoom ≠ 1.** The
   transform's gate is geometric — inside the world viewport rect or not — so `ARMOPT`,
   `EXITMENU` and `YESORNO`, which the engine draws over the middle of the world, are
@@ -1281,6 +1373,27 @@ storage's does not); `tacli log` returns a tail of the file, so count lines in t
 
 ## Things that will bite you
 
+- **`ErrorLog.txt` is rotated to `.prev` at every launch since 2026-09-10**, so a report in it
+  belongs to the current run. Before that it was appended to forever and `tacli crash` reported
+  the FIRST (oldest) entry with no timestamp — a 20-minute-old fault read as five consecutive
+  fresh crashes on 2026-09-09. It is also per-instance by construction now (TA writes it beside
+  the exe, and `mirror_gamedir` no longer symlinks it through from the template; instances built
+  on or before 2026-09-03 carry a dangling symlink that the launch rotation unlinks). **It lives
+  in the MAIN CHECKOUT** at `tagpu/instances/<inst>/gamedir/`, never under a worktree — a relative
+  path from a worktree deletes nothing, silently.
+- **`mark.on=noselbox` is the forcing lever for anything the engine draws inside the viewport.**
+  It sets `g_selbox = 0`, so `markown` never suppresses the engine's selection rects and the
+  engine draws every one of them, every frame, at the **unzoomed** position. That turns a
+  fraction-of-a-percent artifact into a deterministic one — it is how the cyan-square bug
+  (`gui-renderer.md` §20) went from 15 hits in 3600 frames to 12 of 12. Confirm it took with
+  `tacli log <i> -g 'markown: engine selection'` → `restored`; the `mark: ARMED (… selbox=…)`
+  line is written only when the arm state changes and is stale otherwise. **Remove it afterwards**
+  — a player seeing hundreds of green boxes scattered over the map is this lever, not a bug.
+- **A 1-frame artifact is not findable with `glshot`** (~1 sample/s against 60 fps). Record the
+  window losslessly instead and scan every frame:
+  `ffmpeg -f x11grab -window_id <id> -framerate 60 -c:v libx264rgb -qp 0 out.mkv`. Use
+  `-window_id`, not `:0+x,y` — a screen-region grab captures whatever is on top, which on a shared
+  desktop is usually a browser.
 - **A launch or wait that "timed out" has usually crashed instead.** Check
   `tacli crash <name>` before theorising about loading screens — the commands do it
   for you now, but a hand-rolled poll will not.
@@ -1593,7 +1706,7 @@ and **4.5 at 4K**.
 **It is NOT a play default** — it is armed by hand. It was one for a day, and in that day it
 wrote the engine's viewport rect and tore the world in two (what you clicked was
 `((s−1)·128, (s−1)·32)` from what you saw); [GUI renderer](../../../research/notes/gui-renderer.md)
-§20.5 has the measurement. It writes no engine memory now.
+§22.5 has the measurement. It writes no engine memory now.
 
 ```bash
 tools/tacli arm <i> hud.off                 # stock HUD; the A/B, and what a 1x measurement needs

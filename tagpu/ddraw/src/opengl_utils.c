@@ -195,7 +195,16 @@ void oglu_init()
     wglGetExtensionsStringARB = (PFNWGLGETEXTENSIONSSTRINGARBPROC)xwglGetProcAddress("wglGetExtensionsStringARB");
 
     glTexBuffer = (PFNGLTEXBUFFERPROC)xwglGetProcAddress("glTexBuffer");
+    /* glGetIntegerv is OpenGL 1.1, and wglGetProcAddress returns NULL for the 1.1
+       entry points on a real Windows ICD - so it has to come from the module. Left
+       NULL, oglu_ext_exists() below skips its glGetStringi path and falls back to
+       glGetString(GL_EXTENSIONS), which is illegal in a core profile context: that
+       raises GL_INVALID_ENUM, render_ogl.c folds it into got_error, and use_opengl
+       goes FALSE - the game renders through GDI and blames the graphics driver. */
     glGetIntegerv = (PFNGLGETINTEGERVPROC)xwglGetProcAddress("glGetIntegerv");
+    if (!glGetIntegerv && g_oglu_hmodule)
+        glGetIntegerv = (PFNGLGETINTEGERVPROC)real_GetProcAddress(g_oglu_hmodule, "glGetIntegerv");
+
     glGetStringi = (PFNGLGETSTRINGIPROC)xwglGetProcAddress("glGetStringi");
 
     char* glversion = (char*)glGetString(GL_VERSION);
@@ -257,6 +266,13 @@ BOOL oglu_ext_exists(char* ext, HDC hdc)
     if (!got_num_extensions)
     {
         char* glext = (char*)glGetString(GL_EXTENSIONS);
+
+        /* GL_EXTENSIONS is not a legal glGetString() enum in a core profile, and
+           some drivers still hand back a string while setting GL_INVALID_ENUM.
+           Swallow it here so a pending error cannot leak into render_ogl.c's
+           got_error check and force the whole game onto the GDI renderer. */
+        if (glGetError)
+            while (glGetError() != GL_NO_ERROR);
 
         if (glext && strstr(glext, ext))
             return TRUE;

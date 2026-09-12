@@ -3175,7 +3175,8 @@ def _err_line(err):
 # engine's own. **The events are exact; the path is a sketch** and is never the
 # engine's movement model — nothing here was measured against a moving unit.
 
-MOTIONS = ("ground", "static", "circuit", "hover", "runin", "glide", "dive")
+MOTIONS = ("ground", "static", "circuit", "hover", "runin", "glide", "dive", "loop",
+           "forward")
 
 # range and reload come from the weapon TDF; these are the fallbacks for a slot
 # whose weapon we cannot read, in world units and ticks.
@@ -3238,16 +3239,27 @@ class Director:
     this class's own idea of them."""
 
     def __init__(self, vm, world, motion="ground", slots=(), speed=60, alt=0,
-                 radius=480, sfx_occupy=False, activates=False):
+                 radius=480, sfx_occupy=False, activates=False, turn_rate=0):
         self.vm, self.world = vm, world
         self.motion = motion if motion in MOTIONS else "ground"
         self.slots = list(slots)
         self.speed = speed                       # world units a second
         self.alt = alt
         self.radius = radius
+        self.turn_rate = turn_rate               # FBI TurnRate, TAang a tick
         self.sfx_occupy = sfx_occupy
         self.activates = activates
+        # A VIEWING override, set by the page and never by a scenario: `ground`
+        # shuttles and stops, which is right for the trace fixtures and useless
+        # for looking at a walk cycle. Not cleared by reset(), so a restart keeps
+        # whatever the viewer chose.
+        self.path = None
         self.reset()
+
+    @property
+    def running_motion(self):
+        """The viewer's override if it set one, else the class's own."""
+        return self.path or self.motion
 
     def reset(self):
         self.started = False
@@ -3306,9 +3318,41 @@ class Director:
         per = self.speed / float(SIM_RATE)                  # world units a tick
         x, y, z = (v / float(FIXED) for v in w.pos)
         moving = True
-        if self.motion == "static":
+        motion = self.running_motion
+        if motion == "static":
             moving = False
-        elif self.motion in ("ground", "glide", "dive"):
+        elif motion == "forward":
+            # The walk cycle and nothing else: straight ahead at a fixed heading,
+            # never stopping, never turning, and `step` runs no weapon events for
+            # it so there is nothing to aim at. It walks away from the origin for
+            # as long as it is left running; the viewer keeps the grid under it.
+            z += per
+            w.body[1] = 0
+        elif motion == "loop":
+            # A wide ground circle: never stops, never snaps a heading, stays in
+            # frame. `ground`'s shuttle does all three of those wrong for looking
+            # at a walk -- two 1 s dead stops a lap and a 180 deg flip in ONE tick,
+            # which reads as the unit walking backwards. Radius is set from speed
+            # so a lap is about 12 s at any class's pace.
+            radius = max(60.0, self.speed * 2.0)
+            # and never tighter than the unit could actually turn: TurnRate is
+            # TAang a tick, so omega = rate/65536 * 2pi * SIM_RATE rad a second and
+            # the tightest circle it can hold is v/omega. For stock units this
+            # never binds (ARMCOM: 36 wu/s against 3.0 rad/s is a 12 wu circle,
+            # where the sketch asks for 72) -- it is a guard, not a change.
+            if self.turn_rate > 0:
+                omega = self.turn_rate / 65536.0 * 2 * math.pi * SIM_RATE
+                if omega > 0:
+                    radius = max(radius, self.speed / omega)
+            a = t * self.speed / radius                     # radians travelled
+            x = radius * math.sin(a)
+            z = radius * math.cos(a)
+            y = 0.0
+            # heading is the TANGENT: position is (R sin a, R cos a), so the
+            # velocity direction is (cos a, -sin a) and TA's heading convention
+            # (0 = +z, direction = (sin h, cos h)) makes that h = a + pi/2.
+            w.body[1] = int(round((a + math.pi / 2) * 65536 / (2 * math.pi))) & 0xFFFF
+        elif motion in ("ground", "glide", "dive"):
             leg = self.radius / max(self.speed, 1.0)        # seconds to the far end
             cycle = 2 * (leg + 1.0)
             phase = t % cycle
@@ -3322,22 +3366,22 @@ class Director:
                 w.body[1] = 0x8000
             else:
                 moving = False
-            if self.motion == "glide":
+            if motion == "glide":
                 y = w.water / float(FIXED)
-            elif self.motion == "dive":
+            elif motion == "dive":
                 y = -18.0 * (0.5 - 0.5 * math.cos(t * 0.7))
-        elif self.motion == "circuit":
+        elif motion == "circuit":
             a = t * self.speed / max(self.radius, 1.0)
             x = self.radius * math.sin(a)
             z = self.radius * math.cos(a)
             y = self.alt
             w.body[1] = int(round(a * 65536 / (2 * math.pi))) & 0xFFFF
             w.body[2] = int(round(-0.35 * 65536 / (2 * math.pi))) & 0xFFFF   # the bank
-        elif self.motion == "hover":
+        elif motion == "hover":
             y = self.alt + 4.0 * math.sin(t * 1.6)
             w.body[1] = int(round(t * 0.25 * 65536 / (2 * math.pi))) & 0xFFFF
             moving = False
-        elif self.motion == "runin":
+        elif motion == "runin":
             z = -self.radius + t * self.speed
             y = self.alt if abs(z) > self.radius * 0.25 else self.alt * 0.6
             w.body[1] = 0
@@ -3472,6 +3516,8 @@ class Director:
             self.flush("pre")
             self.flush("post")
             return
+        if self.running_motion == "forward" and self.slots:
+            self.slots = []               # the walk cycle alone: no aim, no reload
         moving = self.step_motion(tick)
         self.motion_events(moving)
         if self.activates:
@@ -3482,7 +3528,8 @@ class Director:
                 self.active = want
                 w.bits["activation"] = want
                 self.issue("Activate" if want else "Deactivate")
-        self.weapon_events(tick)
+        if self.running_motion != "forward":
+            self.weapon_events(tick)      # `forward` is the walk cycle alone
         self.flush("pre")
         vm.do_scripts_now(1)
         self.flush("post")
@@ -3884,9 +3931,36 @@ def classify(fbi):
         return "sub"
     if on("floater") or on("waterline") or "SHIP" in cat:
         return "ship"
-    if "KBOT" in cat:
+    # ARMCOM reads `ARM commander LEVEL10 WEAPON NOTAIR NOTSUB CTRL_C` and CORCOM
+    # the same with CORE -- no KBOT word anywhere, so a plain KBOT test calls a
+    # walking commander a tank and drives it at a tank's pace.
+    if {"KBOT", "COMMANDER"} & cat:
         return "kbot"
     return "tank"
+
+
+def fbi_float(fbi, key, fallback):
+    """A numeric FBI field, or the fallback when it is absent or unparseable."""
+    try:
+        return float(str(fbi.get(key, "")).strip())
+    except (TypeError, ValueError):
+        return fallback
+
+
+def fbi_speed(fbi, fallback):
+    """World units a second, from the unit's own `MaxVelocity`.
+
+    The class plans below carry ONE speed per class, so every kbot moved at the
+    same pace: ARMPW is 1.8 and ARMCOM 1.2, and the commander was being walked
+    50% too fast. The ratio between units is exact -- it is the field the engine
+    itself reads. The **scale** is inferred: `MaxVelocity x SIM_RATE` puts ARMPW
+    at 54 against the 60 that was hand-chosen for kbots here, which is the only
+    correspondence we have. TA's unit for the field is not documented in these
+    notes and has not been measured against a moving unit in the game, so treat
+    the absolute pace as a good guess and the relative pace as right.
+    """
+    v = fbi_float(fbi, "maxvelocity", 0)
+    return v * SIM_RATE if v > 0 else fallback
 
 
 CLASS_PLANS = {
@@ -3943,6 +4017,13 @@ def slots_from_fbi(fbi, weapons):
         if not name:
             continue
         spec = weapons.get(name.lower(), {})
+        # `commandfire=1` is TA's manual-fire tag -- the D-Gun and its kin. The
+        # engine's AutoAim never calls their Aim/Fire scripts; only an explicit
+        # player order does. ARMCOM's Weapon3 is ARM_DISINTEGRATOR, so a director
+        # that drives every slot it finds had the commander D-gunning on a loop
+        # forever, which no unit does in a game.
+        if str(spec.get("commandfire", "0")).strip() not in ("0", ""):
+            continue
         try:
             rng = int(float(spec.get("range", DEFAULT_RANGE)))
         except ValueError:
@@ -4128,6 +4209,8 @@ class Session:
         self.error = None
         self.diagnostics = []
         self.playing = False
+        # the viewer's motion-path override (transport `path`); None = the class's own
+        self.view_path = None
         self.speed = 1.0
         self.frames = []
         self.frames_from = 0
@@ -4230,11 +4313,13 @@ class Session:
             elif motion in ("circuit", "runin"):
                 radius = max(120.0, 0.55 * reach)
             self.director = Director(vm, world, motion=motion, slots=self.slots,
-                                     speed=plan.get("speed", 60),
+                                     speed=fbi_speed(fbi, plan.get("speed", 60)),
                                      alt=min(plan.get("alt", 0), 0.3 * reach),
                                      radius=radius,
                                      sfx_occupy=plan.get("sfx_occupy", False),
-                                     activates=plan.get("activates", False))
+                                     activates=plan.get("activates", False),
+                                     turn_rate=fbi_float(fbi, "turnrate", 0))
+            self.director.path = self.view_path      # survives restart
             self.tick = 0
             self.director.step(0)   # Create, at the tick the page shows first
             self.record()
@@ -4320,6 +4405,13 @@ class Session:
                 "diagnostics": self.diagnostics,
                 "tick": self.tick,
                 "head": self.tick,
+                # what the director is ACTUALLY driving with, from the unit's FBI
+                "pace": ({"wu_s": round(self.director.speed, 1),
+                          "maxvelocity": fbi_float(self.project.meta.get("fbi") or {},
+                                                   "maxvelocity", 0),
+                          "turnrate": fbi_float(self.project.meta.get("fbi") or {},
+                                                "turnrate", 0)}
+                         if self.director is not None else None),
                 "first": self.frames[0]["tick"] if self.frames else 0,
                 "playing": self.playing,
                 "speed": self.speed,
@@ -4664,6 +4756,25 @@ class Server:
             elif action == "restart":
                 s.playing = False
                 s.restart()
+            elif action == "path":
+                want = body.get("path") or ""
+                new_path = want if want in MOTIONS else None
+                if new_path != s.view_path:
+                    s.view_path = new_path
+                    # RESTART, do not just retarget. Switching mid-run leaves the
+                    # unit's own script in whatever state it had reached: after any
+                    # aiming, ARMPW's `aiming` static stays 1 and MotionControl keeps
+                    # calling `walklegs` (torso locked for the gun) instead of `walk`
+                    # for the rest of the session, so `forward` showed the aim-while-
+                    # moving cycle and looked like it was still fighting. Nothing
+                    # short of re-running from Create clears a static the script only
+                    # clears on its own events.
+                    was_playing = s.playing
+                    s.playing = False
+                    s.restart()
+                    s.playing = was_playing
+                elif s.director is not None:
+                    s.director.path = s.view_path
             elif action == "speed":
                 s.speed = max(0.05, min(8.0, float(body.get("speed") or 1.0)))
             elif action == "class":

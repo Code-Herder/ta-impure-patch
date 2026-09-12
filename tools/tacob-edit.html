@@ -109,12 +109,32 @@
     <option value="0.25">¼×</option><option value="0.5">½×</option>
     <option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option>
   </select>
+  <select id="view3d" title="camera. The presets are ta3do's standard views and are relative to the unit's front, so they track its heading; a drag returns to `free`.">
+    <option value="free">free</option>
+    <option value="front">front</option>
+    <option value="side" selected>side</option>
+    <option value="back">back</option>
+    <option value="top">top</option>
+    <option value="quarter">quarter</option>
+  </select>
+  <select id="path" title="the director's motion sketch. `shuttle` is the class's own — for ground units it walks a short leg, STOPS for a second and flips its heading 180 degrees in one tick, which is right for the trace fixtures and useless for judging a walk. `loop` walks a wide circle: never stops, never snaps.">
+    <option value="forward" selected>walk forward</option>
+    <option value="loop">loop</option>
+    <option value="">shuttle (the fixtures' path)</option>
+  </select>
+  <select id="posemode" title="smooth-motion.md gate 0 — does interpolating COB piece poses look better than the authored stepping?">
+    <option value="stepped" selected>stepped</option>
+    <option value="smooth">smooth</option>
+    <option value="ab">A|B side by side</option>
+  </select>
+  <label class="pill" title="also interpolate the unit's own translation and yaw. That is smooth-motion.md section 8, NOT what the pose pass would ship — turn it off to see the honest result of interpolating pieces alone."><input type="checkbox" id="smoothbody" checked> body</label>
   <span class="dim mono" id="tick">tick 0</span>
   <input type="range" id="scrub" min="0" max="0" value="0" title="scrub the recorded timeline">
   <span class="sep"></span>
   <button id="build" title="compile and restart from Create (edit and play are separate states)">build &amp; restart</button>
   <button id="pack" title="write the project as a .ufo the game loads">pack .ufo</button>
   <span class="sep"></span>
+  <span class="dim" id="ablegend" style="display:none">left: <b>stepped</b> · right: <b>smooth</b></span>
   <span class="dim" id="status">loading…</span>
 </div>
 
@@ -182,6 +202,17 @@ const FIXED = 65536;
 const scene3 = (w) => new THREE.Vector3(-w[0] / FIXED, w[1] / FIXED, -w[2] / FIXED);
 
 let state = null, pieceNodes = [], head = 0, scrubbing = false, live = true;
+/* The pose ring and the playback clock -- smooth-motion.md gate 0.
+   The server steps the VM in real time at SIM_RATE x speed while we poll at
+   66 ms, so head advances ~2 ticks a poll: drawing head directly SKIPS
+   keyframes, which would flatter interpolation by smoothing over poses it never
+   saw. So the ring is kept DENSE (gaps backfilled) and a clock walks it at the
+   sim rate. Both models read the same clock and the same two frames -- only the
+   blend differs, which is what makes this a test of interpolation and not of
+   timing. */
+const SIM_RATE = 30, PLAY_LAG = 5, RING_KEEP = 120, BACKFILL_MAX = 8;
+let ring = new Map(), ringTop = -1, playTick = -1, lastRAF = 0, rateAdj = 1, lastShown = -1;
+let pieceNodesB = [], abGap = 0;
 let traceSeen = 0, traceText = [], tab = 'state';
 
 /* ------------------------------------------------------------------ viewport */
@@ -195,13 +226,47 @@ scene.background = new THREE.Color(0x0f1216);
 const camera = new THREE.PerspectiveCamera(35, 1, 0.5, 20000);
 camera.position.set(120, 90, 180);
 const controls = new OrbitControls(camera, renderer.domElement);
-let follow = true;
+let follow = true;                    // always on: the unit walks away forever
+/* tools/ta3do's VIEWS, verbatim: azimuth 0 faces the model's front, azimuth
+   rises anticlockwise seen from above, elevation is degrees above the horizon,
+   and `side` means the unit's RIGHT-hand side. Model-relative, so a preset
+   tracks the unit's heading and keeps meaning what it says. */
+const VIEWS = {
+  front:   [0, 0],
+  side:    [-90, 0],
+  back:    [180, 0],
+  top:     [0, 89.9],
+  quarter: [-45, 30],
+};
+let modelYaw = 0;                     // set each frame by applyWorld
 scene.add(new THREE.HemisphereLight(0xc4d4e8, 0x23262b, 0.7));
 const key = new THREE.DirectionalLight(0xfff4e6, 1.4); key.position.set(-90, 160, 120);
 scene.add(key);
-const grid = new THREE.GridHelper(1600, 40, 0x39414d, 0x252b33);
+/* BOTH colours the same, deliberately. GridHelper's first colour is the centre
+   cross, and with the grid snapped under a walking unit that lighter cross jumps
+   back one cell every GRID_CELL of travel -- at 36 wu/s, a landmark resetting
+   every 1.1 s, which reads as shuttling between two points however far the unit
+   actually walks. A uniform grid makes the snap exactly periodic and invisible.
+   The span is large and fog eats the edge, so there is a horizon and never a
+   visible boundary. */
+const GRID_CELL = 40, GRID_SPAN = 4000, GRID_DIV = GRID_SPAN / GRID_CELL;
+const grid = new THREE.GridHelper(GRID_SPAN, GRID_DIV, 0x2b323b, 0x2b323b);
 scene.add(grid);
 const unit = new THREE.Group(); scene.add(unit);
+/* unit is the follow anchor and carries the world position; the two model roots
+   hang off it so A|B offsets are local and `follow` keeps working unchanged. */
+/* Three levels, and the order matters. `unit` carries the world position only.
+   The rigs carry the A|B separation, ABOVE the yaw -- putting the offset inside
+   the rotation swings the outer copy through an arc, so every yaw step became a
+   large lateral jump on that side and a small one on the other. The models carry
+   the yaw, which is `body[1] + PI`: scene3 maps world to scene as (-x, y, -z),
+   a half turn about Y, and the heading has to take the same half turn or the
+   unit faces exactly backwards. It always did -- measured 2026-09-09 at a
+   constant 180 deg between travel and facing. */
+const rigA = new THREE.Group(), rigB = new THREE.Group();
+const modelA = new THREE.Group(), modelB = new THREE.Group();
+rigA.add(modelA); rigB.add(modelB);
+unit.add(rigA); unit.add(rigB); rigB.visible = false;
 const marker = new THREE.Mesh(new THREE.SphereGeometry(6, 16, 12),
                               new THREE.MeshBasicMaterial({ color: 0xd8a657, wireframe: true }));
 scene.add(marker);
@@ -217,15 +282,22 @@ new ResizeObserver(resize).observe(view);
 function loadModel(name) {
   if (!name) { say('no model exported for this unit', 'err'); return; }
   new GLTFLoader().load('/model.glb', (gltf) => {
-    unit.clear();
-    unit.add(gltf.scene);
-    const byName = new Map();
-    gltf.scene.traverse((n) => { if (n.name) byName.set(n.name.toLowerCase(), n); });
-    // 0x45A950 binds by NAME, and the COB's piece order is not the 3DO's tree
-    // order — ARMPW's COB piece 0 is `torso` while the 3DO's root is `ground`.
-    pieceNodes = state.pieces.map((p) => byName.get(p.toLowerCase()) || null);
+    modelA.clear(); modelB.clear();
+    const twin = gltf.scene.clone(true);      // geometry and materials are shared
+    modelA.add(gltf.scene); modelB.add(twin);
+    const bind = (root) => {
+      const byName = new Map();
+      root.traverse((n) => { if (n.name) byName.set(n.name.toLowerCase(), n); });
+      // 0x45A950 binds by NAME, and the COB's piece order is not the 3DO's tree
+      // order — ARMPW's COB piece 0 is `torso` while the 3DO's root is `ground`.
+      return state.pieces.map((p) => byName.get(p.toLowerCase()) || null);
+    };
+    pieceNodes = bind(gltf.scene); pieceNodesB = bind(twin);
     const box = new THREE.Box3().setFromObject(gltf.scene);
     const size = box.getSize(new THREE.Vector3()).length() || 100;
+    abGap = size * 0.55;
+    scene.fog = new THREE.Fog(0x0f1216, size * 2.5, size * 9);
+    layoutModels();
     camera.position.set(size * 0.9, size * 0.7, size * 1.3);
     controls.target.set(0, size * 0.2, 0);
     controls.update();
@@ -233,26 +305,70 @@ function loadModel(name) {
   }, undefined, (err) => say('model: ' + err, 'err'));
 }
 
-function applyPose(frame) {
+const lerp = (a, b, u) => a + (b - a) * u;
+/* shortest arc, as the engine's own TURN takes it (file-formats.md §2.6) */
+function alerp(a, b, u) {
+  let d = b - a;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return a + d * u;
+}
+
+function layoutModels() {
+  const ab = $('posemode').value === 'ab';
+  rigB.visible = ab;
+  if (!ab) { rigA.position.set(0, 0, 0); rigB.position.set(0, 0, 0); }
+  $('ablegend').style.display = ab ? '' : 'none';   // layoutAB places them
+}
+
+/* `next`/`u` absent (or u === 0) is the stepped path and is byte-for-byte what
+   this page did before: the pose is applied exactly as the sim wrote it. */
+function applyPieces(nodes, frame, next, u) {
   if (!frame || !frame.gl) return;
+  const blend = !!(next && next.gl && u > 0);
   const t = frame.gl.t, r = frame.gl.r;
-  for (let i = 0; i < pieceNodes.length; i++) {
-    const node = pieceNodes[i];
+  const t2 = blend ? next.gl.t : null, r2 = blend ? next.gl.r : null;
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
     if (!node) continue;
-    node.position.set(t[i * 3], t[i * 3 + 1], t[i * 3 + 2]);
-    node.rotation.set(r[i * 3], r[i * 3 + 1], r[i * 3 + 2], 'YXZ');
-    node.visible = !!frame.visible[i];
+    if (blend) {
+      node.position.set(lerp(t[i*3], t2[i*3], u), lerp(t[i*3+1], t2[i*3+1], u),
+                        lerp(t[i*3+2], t2[i*3+2], u));
+      node.rotation.set(alerp(r[i*3], r2[i*3], u), alerp(r[i*3+1], r2[i*3+1], u),
+                        alerp(r[i*3+2], r2[i*3+2], u), 'YXZ');
+    } else {
+      node.position.set(t[i*3], t[i*3+1], t[i*3+2]);
+      node.rotation.set(r[i*3], r[i*3+1], r[i*3+2], 'YXZ');
+    }
+    node.visible = !!frame.visible[i];      // SHOW/HIDE is binary; never blended
   }
-  const u = frame.unit;
+}
+
+function applyWorld(frame, next, u) {
+  const w = frame.unit, w2 = (next && next.unit) || null;
+  const smooth = w2 && u > 0 && $('smoothbody').checked;
+  const pos = smooth ? [lerp(w.pos[0], w2.pos[0], u), lerp(w.pos[1], w2.pos[1], u),
+                        lerp(w.pos[2], w2.pos[2], u)] : w.pos;
   const was = unit.position.clone();
-  unit.position.copy(scene3(u.pos));
+  unit.position.copy(scene3(pos));
   if (follow) {                       // keep the unit in frame; a drag turns this off
     const move = unit.position.clone().sub(was);
     controls.target.add(move);
     camera.position.add(move);
   }
-  unit.rotation.set(0, u.body[1] * Math.PI * 2 / 65536, 0);
-  marker.position.copy(scene3(u.target));
+  /* Snap the grid to its own cell under the unit: `forward` walks away from the
+     origin indefinitely and would otherwise run off a 1600-unit grid, and the
+     snap keeps the lines world-aligned so they still read as ground going past. */
+  grid.position.x = Math.round(unit.position.x / GRID_CELL) * GRID_CELL;
+  grid.position.z = Math.round(unit.position.z / GRID_CELL) * GRID_CELL;
+  const K = Math.PI * 2 / 65536;
+  const yaw = (smooth ? alerp(w.body[1] * K, w2.body[1] * K, u) : w.body[1] * K)
+              + Math.PI;                 // scene3's half turn — see the rig comment
+  modelA.rotation.set(0, yaw, 0);
+  modelB.rotation.set(0, yaw, 0);
+  modelYaw = yaw;                     // the presets are relative to it
+  marker.visible = $('path').value !== 'forward';   // `forward` has no target
+  marker.position.copy(scene3(w.target));
   fx.clear();
   for (const e of frame.effects || []) {
     if (!e.at || frame.tick - e.tick > 12) continue;
@@ -262,9 +378,10 @@ function applyPose(frame) {
     fx.add(dot);
   }
   $('hud').textContent =
-    `tick ${frame.tick}   records ${frame.running}/8   trace ${frame.trace}\n` +
-    `unit  (${(u.pos[0] / FIXED).toFixed(0)}, ${(u.pos[1] / FIXED).toFixed(0)}, ` +
-    `${(u.pos[2] / FIXED).toFixed(0)})  heading ${u.body[1]}`;
+    `tick ${frame.tick}   records ${frame.running}/8   trace ${frame.trace}   ` +
+    `path ${$('path').selectedOptions[0].textContent}\n` +
+    `unit  (${(w.pos[0] / FIXED).toFixed(0)}, ${(w.pos[1] / FIXED).toFixed(0)}, ` +
+    `${(w.pos[2] / FIXED).toFixed(0)})  heading ${w.body[1]}`;
   drawThreads(frame);
   if (tab === 'slots') drawTab();
 }
@@ -287,7 +404,117 @@ function drawThreads(frame) {
   }
 }
 
-renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+function frameAt(t) { return ring.get(t) || null; }
+
+/* One clock, two models. playTick trails head by PLAY_LAG so both ends of the
+   segment are always in the ring; if it drifts outside the ring it snaps back
+   rather than extrapolating -- smooth-motion.md rejects extrapolation (§4 C). */
+function stepPlayback(now) {
+  const dt = lastRAF ? Math.min(0.1, (now - lastRAF) / 1000) : 0;
+  lastRAF = now;
+  if (scrubbing || ringTop < 0) return;
+  /* Run our own clock at the sim rate and EASE toward a fixed lag behind the
+     ring, instead of hard-clamping to its head. The old clamp sat one tick off
+     the newest frame, so every poll (66 ms, ~2 ticks at a time) the clock ran
+     into it and stalled: a visible ~15 Hz stutter in everything, the ground grid
+     included, because the camera follows the unit. PLAY_LAG ticks of buffer is
+     what stops that; the hard resync is only for a restart or a long stall. */
+  const lo = Math.max(0, ringTop - RING_KEEP + 2);
+  const rate = SIM_RATE * (+$('speed').value || 1);
+  if (playTick < 0) playTick = Math.max(lo, ringTop - PLAY_LAG);
+  else {
+    /* Advance at the sim rate and correct toward the target lag only WEAKLY.
+       `ringTop` arrives in steps (one poll, one or two ticks), so any correction
+       proportional to the instantaneous drift modulates playback speed at the
+       poll frequency -- measured at +-20% per frame, which surges visibly
+       against the grid. The correction is capped at 5% of a frame's advance, so
+       the clock converges over a second or two and the rendered speed stays
+       flat. */
+    /* Correct the RATE, not the position. The server's real tick rate is not
+       exactly SIM_RATE -- it is a Python sleep plus the VM's own step cost -- so
+       a position correction never settles: it saturates every frame and
+       modulates playback speed at the poll frequency (measured at +-20% before
+       this, which surges visibly against the grid). Trimming a rate multiplier
+       instead lets the clock LOCK to whatever the server is really doing, and
+       the per-frame advance stays flat because rateAdj moves slowly. */
+    const drift = (ringTop - PLAY_LAG) - playTick;
+    if (drift > 15 || drift < -15) {
+      playTick = Math.max(lo, lastShown, ringTop - PLAY_LAG);   // never backwards
+      rateAdj = 1;
+    } else {
+      rateAdj += drift * 0.0008;
+      if (rateAdj < 0.85) rateAdj = 0.85;
+      if (rateAdj > 1.15) rateAdj = 1.15;
+      playTick += dt * rate * rateAdj;
+    }
+  }
+  if (playTick < lo) playTick = lo;
+  if (playTick > ringTop) playTick = ringTop;         // safety, not the normal path
+  /* Monotonic by construction: the displayed tick never decreases inside a run,
+     so no hiccup, resync or missing frame can make the unit walk backwards. If
+     the frame under playTick is missing we move FORWARD to the newest pair the
+     ring actually holds, never back. */
+  if (playTick < lastShown) playTick = lastShown;
+  let base = Math.floor(playTick);
+  if (!ring.has(base)) {
+    let snap = ring.has(ringTop - 1) ? ringTop - 1 : ringTop;
+    if (snap > base) { playTick = snap; base = snap; }
+    else return;                       // nothing newer to show; hold this frame
+  }
+  lastShown = playTick;
+  const a = frameAt(base), b = frameAt(base + 1);
+  if (!a) return;
+  const u = b ? playTick - base : 0;
+  const mode = $('posemode').value;
+  /* A is the LEFT copy and is the stepped one in A|B -- it takes the blend only
+     when the whole view is set to `smooth`. Testing `mode !== 'stepped'` here
+     smoothed BOTH copies in A|B, which made the comparison show nothing. */
+  applyPieces(pieceNodes, a, mode === 'smooth' ? b : null, u);
+  if (mode === 'ab') applyPieces(pieceNodesB, a, b, u);
+  applyWorld(a, b, u);
+  $('tick').textContent = 'tick ' + a.tick;
+}
+
+/* A preset holds its angle relative to the unit's front and keeps the current
+   orbit DISTANCE, so switching view never loses your zoom. `free` leaves the
+   camera alone; a drag flips the select to `free` (below), so the dropdown can
+   never disagree with where the camera actually is. */
+function applyView() {
+  const want = VIEWS[$('view3d').value];
+  if (!want) return;
+  const [azDeg, elDeg] = want;
+  const dist = camera.position.distanceTo(controls.target) || 100;
+  const a = modelYaw + azDeg * Math.PI / 180, el = elDeg * Math.PI / 180;
+  const ce = Math.cos(el);
+  controls.target.copy(unit.position);
+  camera.position.set(unit.position.x + Math.sin(a) * ce * dist,
+                      unit.position.y + Math.sin(el) * dist,
+                      unit.position.z + Math.cos(a) * ce * dist);
+  camera.lookAt(controls.target);
+}
+
+/* The A|B gap goes along the CAMERA's right vector, not the unit's, so the two
+   copies are always separated across the screen instead of one hiding the other
+   from `side` or `front`. Taken off the camera's world matrix so it stays valid
+   looking straight down, where fwd x up is degenerate. */
+const abRight = new THREE.Vector3();
+function layoutAB() {
+  if (!rigB.visible) return;
+  camera.updateMatrixWorld();
+  abRight.setFromMatrixColumn(camera.matrixWorld, 0).setY(0);
+  if (abRight.lengthSq() < 1e-6) abRight.set(1, 0, 0);
+  abRight.normalize().multiplyScalar(abGap);
+  rigA.position.set(-abRight.x, 0, -abRight.z);
+  rigB.position.set(abRight.x, 0, abRight.z);
+}
+
+renderer.setAnimationLoop((now) => {
+  stepPlayback(now);
+  applyView();
+  layoutAB();
+  controls.update();
+  renderer.render(scene, camera);
+});
 
 /* -------------------------------------------------------------------- editor */
 let getSource = () => '', setSource = () => {}, showDiags = () => {}, editorError = null;
@@ -548,11 +775,24 @@ $('play').onclick = () => transport(state && $('play').textContent.startsWith('�
 $('step').onclick = () => transport('step', { n: 1 });
 $('restart').onclick = () => transport('restart');
 $('speed').onchange = () => transport('speed', { speed: +$('speed').value });
+$('posemode').onchange = layoutModels;
+$('path').onchange = () => {
+  // `side` is how a walk cycle is read; pick it when the walk-only path is chosen
+  if ($('path').value === 'forward' && $('view3d').value === 'free') $('view3d').value = 'side';
+  transport('path', { path: $('path').value });
+};
+controls.addEventListener('start', () => { $('view3d').value = 'free'; });
 $('cls').onchange = () => transport('class', { class: $('cls').value });
 $('scrub').oninput = async () => {
   scrubbing = true; live = false;
   const frame = await api('/pose?tick=' + $('scrub').value);
-  if (!frame.error) { lastFrame = frame; applyPose(frame); $('tick').textContent = 'tick ' + frame.tick; }
+  if (!frame.error) {
+    lastFrame = frame;
+    applyPieces(pieceNodes, frame, null, 0);
+    if ($('posemode').value === 'ab') applyPieces(pieceNodesB, frame, null, 0);
+    applyWorld(frame, null, 0);
+    $('tick').textContent = 'tick ' + frame.tick;
+  }
 };
 $('scrub').onchange = () => { scrubbing = false; };
 $('build').onclick = async () => {
@@ -589,8 +829,14 @@ async function refreshState() {
   $('cls').value = state.class;
   paintDiags(state.diagnostics || []);
   drawTab();
-  if (first) say(`${state.scripts.length} scripts, ${state.pieces.length} pieces, ` +
-                 `${state.statics} statics`, 'ok');
+  if (first) {
+    const p = state.pace;
+    say(`${state.scripts.length} scripts, ${state.pieces.length} pieces, ` +
+        `${state.statics} statics` +
+        (p ? ` — ${p.wu_s} wu/s from MaxVelocity ${p.maxvelocity}` : ''), 'ok');
+    // the page defaults to `loop`; tell the director, which defaults to the class's own
+    transport('path', { path: $('path').value });
+  }
 }
 
 async function poll() {
@@ -600,8 +846,24 @@ async function poll() {
       if (!frame.error) {
         lastFrame = frame;
         head = frame.tick;
-        applyPose(frame);
-        $('tick').textContent = 'tick ' + frame.tick;
+        /* Backfill the ticks the 66 ms poll stepped over, so no keyframe is
+           missed -- see the note on the ring above. A restart moves head
+           backwards, which resets the ring rather than backfilling into it. */
+        /* Only a genuine restart (head moved BACKWARDS) resets the ring. A gap
+           does not: wiping the ring on a slow poll left playTick pointing into
+           a hole, so nothing rendered until frames refilled and playback then
+           resumed EARLIER than it froze -- a pause followed by the unit
+           teleporting backwards, once per hiccup. */
+        if (ringTop >= 0 && head < ringTop) { ring.clear(); ringTop = -1; playTick = -1; lastShown = -1; }
+        if (ringTop >= 0 && head > ringTop) {
+          const want = [];
+          for (let t = ringTop + 1; t < head && want.length < BACKFILL_MAX; t++) want.push(t);
+          const got = await Promise.all(want.map((t) => api('/pose?tick=' + t)));
+          for (const gap of got) if (!gap.error) ring.set(gap.tick, gap);
+        }
+        ring.set(frame.tick, frame);
+        ringTop = frame.tick;
+        for (const t of ring.keys()) if (t < ringTop - RING_KEEP) ring.delete(t);
         $('scrub').max = String(head);
         if (live) $('scrub').value = String(head);
         if (frame.trace > traceSeen) {
@@ -615,7 +877,7 @@ async function poll() {
       }
     }
   } catch (err) { /* the server is restarting a build; the next tick will do */ }
-  setTimeout(poll, 66);
+  setTimeout(poll, 33);        // the sim is 30 Hz; 66 ms arrived in lumps of two
 }
 
 refreshState().then(poll);
