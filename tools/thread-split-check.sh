@@ -15,11 +15,13 @@
 # owner's decision, made in a review, never a session's fix for a red build.
 #
 # PATTERNS (perl, case-insensitive, after `/* */` and `//` comments are removed):
-#   VA       \b0x0*(4[0-9a-f]{5}|5[01][0-9a-f]{4})(?![0-9a-f])
-#            0x400000..0x4FFFFF (.text) and 0x510000..0x51FFFF (.data: the main pointer
+#   VA       \b0x0*(4[0-9a-f]{5}|5[0-2][0-9a-f]{4})(?![0-9a-f])
+#            0x4xxxxx (.text, from 0x401000) and 0x5[0-2]xxxx (.rdata from 0x4FC000, .data
+#            from 0x501000 and its bss up to the .tls at 0x52C000: the main pointer
 #            0x511DE8, the graphics globals 0x51FBD0, the debris slots 0x511DF0.., the
-#            order descriptors 0x512344). The suffix-aware tail is what catches the
-#            `0x00511DE8u` spelling 19 files use; `grep 0x511DE8` matched 6 of 25.
+#            order descriptors 0x512344, the allocator's flag byte 0x5289A4). The
+#            suffix-aware tail is what catches the `0x00511DE8u` spelling 19 files use;
+#            `grep 0x511DE8` matched 6 of 25.
 #   INCLUDE  #\s*include\s*"tagpu_engine\.h"
 #   PROBE    \bIsBad(Read|Write|Code|String)Ptr\w*
 #   CONDUIT  \b(ta|main|main_p)\s*\+   an offset added to the main pointer, whatever
@@ -50,7 +52,7 @@ scan() {   # $1 = file; prints "line: TAG: text" for every hit, comments strippe
         for my $l (split /\n/, $_) {
             $n++;
             my @tags;
-            push @tags, "VA"      if $l =~ /\b0x0*(4[0-9a-f]{5}|5[01][0-9a-f]{4})(?![0-9a-f])/i;
+            push @tags, "VA"      if $l =~ /\b0x0*(4[0-9a-f]{5}|5[0-2][0-9a-f]{4})(?![0-9a-f])/i;
             push @tags, "INCLUDE" if $l =~ /#\s*include\s*"tagpu_engine\.h"/;
             push @tags, "PROBE"   if $l =~ /\bIsBad(Read|Write|Code|String)Ptr\w*/;
             push @tags, "CONDUIT" if $l =~ /\b(ta|main|main_p)\s*\+/;
