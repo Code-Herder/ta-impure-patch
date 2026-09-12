@@ -164,11 +164,48 @@ static void on_surface(int* x, int* y)
     if (*y < 0) *y = 0;
 }
 
+/* EDGE SCROLL IS AN EXACT EQUALITY ON THE OUTERMOST PIXEL, so the border has
+   to be mapped border to border and the region map is not enough.
+
+   The scroll poll (exe map, "The scroll poll") fires left on `x == 0`, up on
+   `y == 0`, right on `x == main+0x37E1F - 1` and down on `y == main+0x37E23 - 1`
+   — the SCREEN size, which we do not write, and never the viewport rect. Run
+   the region map over a 3840x2160 screen at s = 4.5 and:
+
+     - the screen's right column (3839) is in the world region, so it comes back
+       as 3839 - 448 = 3391 and the right edge NEVER FIRES;
+     - the left column maps to 0, but so do device columns 1..4, because the
+       panel contracts by 1/s — a five-pixel band where stock has one pixel.
+
+   So: the outermost device column IS the outermost engine column, and only it.
+   It costs nothing anywhere else, because `0x498DA0` clamps the point into
+   [L,R] x [T,B] before it makes a world point (`0x498E32`..`0x498E86`), so
+   engine 3839 picks exactly the column the player is pointing at — the same
+   world point the region map would have produced. */
+static void border_to_border(int dx, int dy, int* x, int* y)
+{
+    int W = (int)g_ddraw.width, H = (int)g_ddraw.height;
+
+    if (W > 2) {
+        if      (dx == 0)     *x = 0;
+        else if (dx == W - 1) *x = W - 1;
+        else if (*x <= 0)     *x = 1;
+        else if (*x >= W - 1) *x = W - 2;
+    }
+    if (H > 2) {
+        if      (dy == 0)     *y = 0;
+        else if (dy == H - 1) *y = H - 1;
+        else if (*y <= 0)     *y = 1;
+        else if (*y >= H - 1) *y = H - 2;
+    }
+}
+
 void tagpu_hud_to_engine(int* x, int* y)
 {
-    int pw, bh, q, H;
+    int pw, bh, q, H, dx, dy;
     if (!x || !y || !tagpu_hud_live(&pw, &bh, &q)) return;
     H = (int)g_ddraw.height;
+    dx = *x; dy = *y;                        /* the DEVICE point, for the border */
     /* the same three regions, in the same order, as LAY_FS's map — and the
        same order again in tagpu_hud_to_screen. The panel owns its full column
        height, so the bottom-left corner is the panel's and not the bar's. */
@@ -188,6 +225,7 @@ void tagpu_hud_to_engine(int* x, int* y)
         *y -= bh - HUD_BAR_H;
     }
     on_surface(x, y);
+    border_to_border(dx, dy, x, y);
 }
 
 void tagpu_hud_to_screen(int* x, int* y)
