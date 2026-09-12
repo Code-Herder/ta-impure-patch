@@ -1493,6 +1493,38 @@ still set is asking to be popped — whereupon `0x4AA7BC..0x4AA7FA`, an **inline
 ends with `0x4AB0A0(gi)` for exactly this reason; see *The pump's dispatch contract* in the
 [engine map](exe-reverse-engineering.html).
 
+**The front-end screen carries fifteen rows in two columns** [2026-09-11]. `VISUALS.GUI`
+is re-emitted into the same `.ufo` with the stock eleven gadgets moved (names, `assoc`,
+`commonattribs`, `range` and `stages` all verbatim) and four rows of our own added:
+
+| column | rows |
+|---|---|
+| **Window** | Display mode (window / borderless fullscreen, `util_toggle_fullscreen`), Monitor (`EnumDisplayMonitors`, `SetWindowPos`), UI scale (Auto / 1x..4x, the client set to k x the Screen Size row's own mode at `main+0x37F1B/+0x37F1F`), Screen Size (stock `VIDSLDR`), Frame cap (60 / 120 / uncapped, `g_config.maxfps` + `fpsl_init`), Gamma (stock) |
+| **Impure rendering** | Renderer, Undithered assets, Dynamic lighting, Shadows, Shadow quality, Shading (stock), Anti-aliasing (stock), Engine shadows (stock `BSHADOWS`), Supersampling |
+
+Three things this rests on, each measured rather than assumed:
+
+- **The four Window rows are applied on the thread that owns the window.** Each ends in a
+  window call, and a cross-thread one is a wait on a message pump rather than a visible
+  error, so the click POSTS `WM_TAGPU_DISPLAY` and the wndproc does the work — the same
+  contract `tagpu_shield.c` uses for injected input.
+- **`util_toggle_fullscreen` does not restore the window size on the way back** (measured:
+  1024x768 -> 3840x2160 -> 3840x2160), so the Display mode row saves the windowed client
+  before leaving and puts it back itself.
+- **The ground is ours.** STARTOPT's background paints one column of recess bars across
+  x 267..405, drawn for a single centred column; two columns cannot sit in it and it is
+  the game's art. So the screen carries one `id=12` ground frame (270x420 at (200,54)) in
+  `anims/visuals.gaf`, with its own recesses, covering those bars.
+
+**Restore Default and Undo Changes reach our rows too.** Both are STARTOPT's buttons and
+both end in `GUI_Pop` + `0x45E5E0(0)`; we handle them before forwarding and set `s_visKeep`
+so the rebuild seeds the plates from the model rather than re-reading levers the deferred
+write has not reached yet. **Undo** restores every row the screen opened with, Display mode
+and Monitor included — it is the escape hatch for a mode the player cannot see the menu on.
+**Restore** sets the rendering rows to the Classic++ defaults, UI scale to Auto and the cap
+to 60, and deliberately leaves Display mode and Monitor alone: a default that moves the
+window to a monitor the player cannot see would hide the button that undoes it.
+
 Until 2026-09-11 this screen did not, so **every click popped and freed it**, and the tick's
 `on_stack` recovery re-opened it with `fresh == 0` the same frame — which is why it looked
 like it worked. On the front-end screen, where there is no recovery, the same omission simply

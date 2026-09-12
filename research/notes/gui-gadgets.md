@@ -271,6 +271,25 @@ by **attribs bits, not position**: `0x1800` marks a scroll arrow at all, `0x1000
 up/left (attribs exactly `0x3400`), `0x0800` is down/right (`0x2C00`) — read at
 `0x4A6F97`/`0x4A6FE8`. [BINARY-VERIFIED]
 
+**And an arrow finds its slider by `assoc`, FIRST MATCH WINS** [VERIFIED 2026-09-11].
+`0x4A6FA4` takes the arrow's own `assoc` byte and scans the array from record 1 for the
+first `id == 4` whose `assoc` equals it:
+
+```asm
+4a6fa4:  mov   cl,[ebp+0x01]       ; the arrow's assoc
+4a6fc0:  cmp   BYTE PTR [eax],0x4  ; an id=4 slider?
+4a6fc5:  cmp   BYTE PTR [eax+1],cl ; with my assoc?
+4a6fc8:  je    0x4a6fd6            ; -> mine
+4a6fca:  inc   esi / add eax,0x15b / loop
+4a6fd4:  xor   esi,esi             ; no match -> gadget 0, the panel
+```
+
+**So two sliders on one screen MUST have different `assoc`**, or both arrow pairs drive
+whichever is emitted first. `VISUALS.GUI` ships `GAMMA` at `assoc 0` and `VIDSLDR`,
+`VIDVAL` and `VIDTEXT` at `assoc 243` for exactly this reason. A screen that re-emits the
+file and flattens the field gets a Screen Size arrow that moves Gamma — and no fault,
+because the miss at `0x4A6FD4` falls back to gadget 0 rather than running off the array.
+
 **A click on an arrow moves `knobpos` by one *pixel*, not one row** (`0x4A7006`,
 `0x4A7018`), and the row only follows through the `round(maxtop * knobpos / (range-1))`
 above — so it takes roughly `(range-1)/maxtop` clicks to move a single row, and usually

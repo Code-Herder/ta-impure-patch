@@ -53,6 +53,10 @@
 #include <math.h>
 
 #include "dd.h"
+#include "config.h"
+#include "utils.h"
+#include "hook.h"
+#include "fps_limiter.h"
 #include "tagpu_detour.h"
 #include "tagpu_classicpp.h"
 #include "tagpu_ufo.h"
@@ -64,6 +68,8 @@
 #define OFF_GUIINFO         0x519u      /* main + this = GUIInfo               */
 #define OFF_TOPGUI          0x531u      /* main + this = gi->TheActive_GUIMEM  */
 #define OFF_EXPECT        0x37EA0u      /* the screen the engine keeps on top  */
+#define OFF_SELW          0x37F1Bu      /* the Screen Size row's own w and h,  */
+#define OFF_SELH          0x37F1Fu      /* written by VIDSLDR's callback 0x45BBF0 */
 #define VA_GUI_LOAD     0x004AA8F0u
 #define VA_SETSTATUS    0x004A1080u
 #define VA_SETGRAYED    0x004A1250u     /* (gi, name, grayed): see push_stages */
@@ -277,57 +283,63 @@ static int exists(const char* p)
 #define DIV_BOT   202
 #define PAD         2
 
-static void px(unsigned char* f, int x, int y, unsigned char v)
+/* THE FRAMES ARE NO LONGER ALL ONE SIZE, so the pixel helpers carry their
+   surface rather than reading PANEL_W. The front-end screen's recesses are
+   small frames of their own (see `draw_recess_frame`), and a helper that
+   silently strides by 304 would shear every one of them. */
+typedef struct { unsigned char* p; int w, h; } Surf;
+
+static void px(Surf* s, int x, int y, unsigned char v)
 {
-    if (x >= 0 && x < PANEL_W && y >= 0 && y < PANEL_H) f[y * PANEL_W + x] = v;
+    if (x >= 0 && x < s->w && y >= 0 && y < s->h) s->p[y * s->w + x] = v;
 }
 
-static void hline(unsigned char* f, int x0, int x1, int y, unsigned char v)
+static void hline(Surf* s, int x0, int x1, int y, unsigned char v)
 {
-    for (; x0 <= x1; x0++) px(f, x0, y, v);
+    for (; x0 <= x1; x0++) px(s, x0, y, v);
 }
 
-static void vline(unsigned char* f, int x, int y0, int y1, unsigned char v)
+static void vline(Surf* s, int x, int y0, int y1, unsigned char v)
 {
-    for (; y0 <= y1; y0++) px(f, x, y0, v);
+    for (; y0 <= y1; y0++) px(s, x, y0, v);
 }
 
-static void fillrect(unsigned char* f, int x, int y, int w, int h, unsigned char v)
+static void fillrect(Surf* s, int x, int y, int w, int h, unsigned char v)
 {
     int i, j;
-    for (j = 0; j < h; j++) for (i = 0; i < w; i++) px(f, x + i, y + j, v);
+    for (j = 0; j < h; j++) for (i = 0; i < w; i++) px(s, x + i, y + j, v);
 }
 
 /* A sunken band: dark lip above and left, lit lip below and right -- guipanel's
    recess(), which is what every stock runtime panel paints and what makes a
    stagebuttn plate sit IN the panel rather than on it. */
-static void recess(unsigned char* f, int x, int y, int w, int h)
+static void recess(Surf* s, int x, int y, int w, int h)
 {
     int j;
     for (j = 1; j < h - 1; j++)
-        fillrect(f, x + 1, y + j, w - 2, 1,
+        fillrect(s, x + 1, y + j, w - 2, 1,
                  (unsigned char)(j * 2 < h ? IX_RECESS_HI : IX_RECESS_LO));
-    hline(f, x, x + w - 1, y, IX_EDGE);
-    vline(f, x, y, y + h - 1, IX_EDGE);
-    hline(f, x, x + w - 1, y + h - 1, IX_RECESS_LIGHT);
-    vline(f, x + w - 1, y, y + h - 1, IX_RECESS_LIGHT);
+    hline(s, x, x + w - 1, y, IX_EDGE);
+    vline(s, x, y, y + h - 1, IX_EDGE);
+    hline(s, x, x + w - 1, y + h - 1, IX_RECESS_LIGHT);
+    vline(s, x + w - 1, y, y + h - 1, IX_RECESS_LIGHT);
 }
 
-static void bolt(unsigned char* f, int cx, int cy)
+static void bolt(Surf* s, int cx, int cy)
 {
     int i, j;
     for (j = -3; j <= 3; j++)
         for (i = -3; i <= 3; i++) {
             int r2 = i * i + j * j;
-            if (r2 <= 9)  px(f, cx + i, cy + j, IX_BOLT_LO);
-            if (r2 <= 2)  px(f, cx + i, cy + j, IX_BOLT_HI);
+            if (r2 <= 9)  px(s, cx + i, cy + j, IX_BOLT_LO);
+            if (r2 <= 2)  px(s, cx + i, cy + j, IX_BOLT_HI);
         }
 }
 
-static void divider(unsigned char* f, int y)
+static void divider(Surf* s, int y)
 {
-    hline(f, 10, PANEL_W - 11, y,     IX_EDGE);
-    hline(f, 10, PANEL_W - 11, y + 1, IX_BEVEL_HI);
+    hline(s, 10, s->w - 11, y,     IX_EDGE);
+    hline(s, 10, s->w - 11, y + 1, IX_BEVEL_HI);
 }
 
 /* tools/guipanel.py draw_panel(), in indices: the face's vertical ramp, the
@@ -335,74 +347,127 @@ static void divider(unsigned char* f, int y)
    recess per row. */
 static void draw_panel(unsigned char* f, int rows)
 {
-    int y, i;
+    Surf s; int y, i;
+    s.p = f; s.w = PANEL_W; s.h = PANEL_H;
 
     for (y = 0; y < PANEL_H; y++) {
         int t = y * 3 / PANEL_H;            /* three steps is all the ramp has */
-        fillrect(f, 0, y, PANEL_W, 1,
+        fillrect(&s, 0, y, PANEL_W, 1,
                  (unsigned char)(t == 0 ? IX_GROUND_HI :
                                  t == 1 ? IX_GROUND_MID : IX_GROUND_LO));
     }
 
-    hline(f, 0, PANEL_W - 1, 0, IX_EDGE);
-    hline(f, 0, PANEL_W - 1, PANEL_H - 1, IX_EDGE);
-    vline(f, 0, 0, PANEL_H - 1, IX_EDGE);
-    vline(f, PANEL_W - 1, 0, PANEL_H - 1, IX_EDGE);
-    hline(f, 1, PANEL_W - 2, 1, IX_EDGE);
-    hline(f, 1, PANEL_W - 2, PANEL_H - 2, IX_EDGE);
-    vline(f, 1, 1, PANEL_H - 2, IX_EDGE);
-    vline(f, PANEL_W - 2, 1, PANEL_H - 2, IX_EDGE);
-    hline(f, 2, PANEL_W - 3, 2, IX_BEVEL_HI);
-    vline(f, 2, 2, PANEL_H - 3, IX_BEVEL_HI);
-    hline(f, 3, PANEL_W - 3, PANEL_H - 3, IX_BEVEL_LO);
-    vline(f, PANEL_W - 3, 3, PANEL_H - 3, IX_BEVEL_LO);
+    hline(&s, 0, PANEL_W - 1, 0, IX_EDGE);
+    hline(&s, 0, PANEL_W - 1, PANEL_H - 1, IX_EDGE);
+    vline(&s, 0, 0, PANEL_H - 1, IX_EDGE);
+    vline(&s, PANEL_W - 1, 0, PANEL_H - 1, IX_EDGE);
+    hline(&s, 1, PANEL_W - 2, 1, IX_EDGE);
+    hline(&s, 1, PANEL_W - 2, PANEL_H - 2, IX_EDGE);
+    vline(&s, 1, 1, PANEL_H - 2, IX_EDGE);
+    vline(&s, PANEL_W - 2, 1, PANEL_H - 2, IX_EDGE);
+    hline(&s, 2, PANEL_W - 3, 2, IX_BEVEL_HI);
+    vline(&s, 2, 2, PANEL_H - 3, IX_BEVEL_HI);
+    hline(&s, 3, PANEL_W - 3, PANEL_H - 3, IX_BEVEL_LO);
+    vline(&s, PANEL_W - 3, 3, PANEL_H - 3, IX_BEVEL_LO);
 
-    bolt(f, 9, 9);
-    bolt(f, PANEL_W - 10, 9);
-    bolt(f, 9, PANEL_H - 10);
-    bolt(f, PANEL_W - 10, PANEL_H - 10);
+    bolt(&s, 9, 9);
+    bolt(&s, PANEL_W - 10, 9);
+    bolt(&s, 9, PANEL_H - 10);
+    bolt(&s, PANEL_W - 10, PANEL_H - 10);
 
-    divider(f, DIV_TOP);
-    divider(f, DIV_BOT);
+    divider(&s, DIV_TOP);
+    divider(&s, DIV_BOT);
 
     for (i = 0; i < rows; i++) {
         y = ROW_Y0 + ROW_PITCH * i;
-        recess(f, CTL_X - PAD, y - PAD, CTL_W + 2 * PAD, ROW_H + 2 * PAD);
+        recess(&s, CTL_X - PAD, y - PAD, CTL_W + 2 * PAD, ROW_H + 2 * PAD);
     }
 }
 
+/* ---- the front-end screen's own art ------------------------------------
+   THE STOCK BACKGROUND CANNOT BE REUSED FOR TWO COLUMNS. STARTOPT's
+   background PCX paints one column of recess bars, centred on the stock
+   gadget column at x = 278, and it is the game's art -- we do not ship it and
+   we cannot repaint it. Moving the stock controls left to make room therefore
+   took them OUT of their recesses and left our own column sitting on bare
+   background: the screen read as two columns of plates floating over a panel
+   drawn for one.
+
+   So the recesses come from us. These are small frames placed by an `id=12`
+   gadget per row -- one frame per SIZE, reused by every row of that size,
+   rather than one big slab -- so the stock background still shows everywhere
+   between them and nothing of the game's art is touched or needed. */
 /* One entry, one uncompressed frame (file-formats.md 3). Uncompressed is not
    laziness: the DLL repaints this plane in place at screen-load time, and a
    flat w*h copy is what makes that a memcpy rather than a re-encode. */
-static unsigned build_gaf(unsigned char* out, unsigned cap, int rows)
+/* ONE ARCHIVE, SEVERAL ENTRIES. The GAF carries the in-game panel and the
+   front-end screen's recess and rule frames, each a one-frame entry:
+
+     header   u32 sig | u32 entries | u32 pad | u32 entryOffset[entries]
+     entry    u16 frames | u32 sig | pad | char name[32]          (0x28)
+     table    u32 frameHeaderOffset | u32 flag                    (8, per frame)
+     frame    u16 w | u16 h | ... | u8 key | u8 raw | u32 pixels   (0x18)
+
+   The frame table follows its entry immediately, which is what the single-entry
+   version relied on implicitly; with several entries that has to be laid out
+   rather than assumed. */
+typedef struct {
+    const char* name;
+    int         w, h;
+    void      (*draw)(unsigned char* f, int w, int h);
+} GafEnt;
+
+static int s_panelRows;                 /* draw_panel's argument, set by build_gaf */
+
+static void draw_panel_frame(unsigned char* f, int w, int h)
 {
-    const unsigned ENTOFF = 12 + 4;                  /* header + one offset    */
-    const unsigned TABOFF = ENTOFF + 0x28;           /* the frame table        */
-    const unsigned FRMOFF = TABOFF + 8;              /* the frame header       */
-    const unsigned PIXOFF = FRMOFF + 0x18;
-    unsigned need = PIXOFF + (unsigned)PANEL_W * PANEL_H;
+    (void)w; (void)h;
+    draw_panel(f, s_panelRows);
+}
+
+static unsigned build_gaf(unsigned char* out, unsigned cap,
+                          const GafEnt* ent, int n, int rows)
+{
+    const unsigned HDR = 12 + 4u * (unsigned)n;
+    unsigned at = HDR, pix, need = 0;
+    int i;
     unsigned v;
 
+    s_panelRows = rows;
+
+    /* the fixed part first, so the pixel offsets are known before anything is
+       written into them */
+    for (i = 0; i < n; i++) need += 0x28 + 8 + 0x18;
+    pix = HDR + need;
+    need = pix;
+    for (i = 0; i < n; i++) need += (unsigned)ent[i].w * (unsigned)ent[i].h;
     if (cap < need) return 0;
     memset(out, 0, need);
 
-    v = 0x00010100u; memcpy(out + 0, &v, 4);         /* signature              */
-    v = 1u;          memcpy(out + 4, &v, 4);         /* one entry              */
-    v = ENTOFF;      memcpy(out + 12, &v, 4);
+    v = 0x00010100u;      memcpy(out + 0, &v, 4);    /* signature              */
+    v = (unsigned)n;      memcpy(out + 4, &v, 4);
 
-    *(unsigned short*)(out + ENTOFF + 0) = 1;        /* one frame              */
-    v = 1u;          memcpy(out + ENTOFF + 2, &v, 4);/* entry signature        */
-    lstrcpynA((char*)out + ENTOFF + 8, ART_NAME, 32);
-    v = FRMOFF;      memcpy(out + TABOFF + 0, &v, 4);
-    v = 10u;         memcpy(out + TABOFF + 4, &v, 4);/* flag 10 = a fixed frame */
+    for (i = 0; i < n; i++) {
+        unsigned entoff = at, taboff = at + 0x28, frmoff = taboff + 8;
+        v = entoff; memcpy(out + 12 + 4 * i, &v, 4);
 
-    *(unsigned short*)(out + FRMOFF + 0x00) = PANEL_W;
-    *(unsigned short*)(out + FRMOFF + 0x02) = PANEL_H;
-    out[FRMOFF + 0x08] = IX_KEY;                     /* transparency index     */
-    out[FRMOFF + 0x09] = 0;                          /* raw 8bpp               */
-    v = PIXOFF;      memcpy(out + FRMOFF + 0x10, &v, 4);
+        *(unsigned short*)(out + entoff + 0) = 1;    /* one frame per entry    */
+        v = 1u;     memcpy(out + entoff + 2, &v, 4); /* entry signature        */
+        lstrcpynA((char*)out + entoff + 8, ent[i].name, 32);
 
-    draw_panel(out + PIXOFF, rows);
+        v = frmoff; memcpy(out + taboff + 0, &v, 4);
+        v = 10u;    memcpy(out + taboff + 4, &v, 4); /* flag 10 = a fixed frame */
+
+        *(unsigned short*)(out + frmoff + 0x00) = (unsigned short)ent[i].w;
+        *(unsigned short*)(out + frmoff + 0x02) = (unsigned short)ent[i].h;
+        out[frmoff + 0x08] = IX_KEY;                 /* transparency index     */
+        out[frmoff + 0x09] = 0;                      /* raw 8bpp               */
+        v = pix;    memcpy(out + frmoff + 0x10, &v, 4);
+
+        ent[i].draw(out + pix, ent[i].w, ent[i].h);
+        pix += (unsigned)ent[i].w * (unsigned)ent[i].h;
+        at = frmoff + 0x18;
+    }
     return need;
 }
 
@@ -436,13 +501,14 @@ typedef struct { unsigned char px[KIT_MAX * KIT_MAX]; int w, h, ok; } Kit;
 
 static void blit_tile(unsigned char* dst, const Kit* k, int x0, int y0, int x1, int y1)
 {
-    int x, y, i, j;
+    Surf s; int x, y, i, j;
     if (!k->ok || k->w <= 0 || k->h <= 0) return;
+    s.p = dst; s.w = PANEL_W; s.h = PANEL_H;    /* the panel ground, always */
     for (y = y0; y < y1; y += k->h)
         for (x = x0; x < x1; x += k->w)
             for (j = 0; j < k->h && y + j < y1; j++)
                 for (i = 0; i < k->w && x + i < x1; i++)
-                    px(dst, x + i, y + j, k->px[j * k->w + i]);
+                    px(&s, x + i, y + j, k->px[j * k->w + i]);
 }
 
 /* The composed ground, built once and kept: our screen is torn down and rebuilt
@@ -495,9 +561,12 @@ static int compose_ground_once(int rows)
     blit_tile(s_ground, &kit[6], 0, PANEL_H - ch, cw, PANEL_H);
     blit_tile(s_ground, &kit[8], PANEL_W - cw, PANEL_H - ch, PANEL_W, PANEL_H);
 
-    for (i = 0; i < rows; i++) {
-        int y = ROW_Y0 + ROW_PITCH * i;
-        recess(s_ground, CTL_X - PAD, y - PAD, CTL_W + 2 * PAD, ROW_H + 2 * PAD);
+    {
+        Surf s; s.p = s_ground; s.w = PANEL_W; s.h = PANEL_H;
+        for (i = 0; i < rows; i++) {
+            int y = ROW_Y0 + ROW_PITCH * i;
+            recess(&s, CTL_X - PAD, y - PAD, CTL_W + 2 * PAD, ROW_H + 2 * PAD);
+        }
     }
     s_groundOk = 1;
     return 1;
@@ -1400,13 +1469,108 @@ static const unsigned char VIS_BUILD_STOLEN[7] =
     { 0x8B, 0x44, 0x24, 0x04, 0x83, 0xEC, 0x10 };   /* mov eax,[esp+4]; sub esp,0x10 */
 
 #define VIS_FILE      "guis/visuals.gui"
-/* the stock column now carries its own x in the table: 208, clear of the tabs */
-#define VIS_COL_X     345       /* ours: 345..465, clear of STARTOPT's actions    */
-#define VIS_Y0        80
-#define VIS_PITCH     68
-#define VIS_LBL_H     17
-#define VIS_CTL_DY    21
-#define VIS_W         120
+
+/* ---- the layout, in screen coordinates ----------------------------------
+   TWO COLUMNS, in the space STARTOPT leaves free: x 200..470, between its tab
+   column (68..188) and its action column (478..598). The left column is the
+   WINDOW -- what the picture is displayed in -- and the right one the
+   RENDERER; the stock controls are folded into whichever column they belong
+   to rather than kept as a third, which is what the prototype settled.
+
+   THE RECESSES ARE OURS (see `draw_recess_frame`). STARTOPT's background PCX
+   paints one column of them, centred on the stock gadget column at x = 278,
+   and it is the game's art: we cannot repaint it and do not ship it. Two
+   columns therefore cannot sit in it, so every control here gets an `id=12`
+   recess frame of its own placed behind it, and the stock background shows
+   through everywhere between them. */
+#define VP_X      200           /* the ground panel, in screen coordinates     */
+/* VP_Y clears the background's own "VISUAL" title, whose glyphs end at y = 50
+   -- at 46 the panel ate the bottom of the L. */
+#define VP_Y       54
+#define VP_W      270
+#define VP_H      420
+#define VC0_X     207           /* the WINDOW column                           */
+#define VC1_X     342           /* the RENDERER column, clear of the actions   */
+#define VCOL_W    120
+#define VHDR_Y     56           /* the column heading                          */
+#define VRULE_Y    72
+#define VROW_Y0    80           /* the first row's caption                     */
+#define VPITCH     44
+#define VLBL_H     14
+#define VCTL_DY    16           /* caption -> control                          */
+#define VCTL_H     20
+#define VSLD_W    122           /* both stock sliders, so one recess fits both */
+#define VSLD_H     16
+#define VPAD        2           /* the recess's margin around its control      */
+
+/* The screen's own GAF is `anims\\<panel gadget's name>.GAF` -- `0x4A8537`
+   strncpy's `ControlsAry[0].name` into the path and `0x4A8565` sets the
+   extension -- and `GUI_Load` stamps that name with the file it loaded. The
+   merge renames the screen VISUALS.GUI, so ours is `anims/visuals.gaf`. The
+   stock game ships no such file, so nothing is shadowed. */
+#define VIS_GAF       "anims/visuals.gaf"
+#define ART_VISBG     "VISBG"       /* the one ground frame, VP_W x VP_H       */
+
+/* the control positions, in screen coordinates: the WINDOW column's four
+   buttons and two sliders, then the RENDERER column's nine on one pitch */
+static const short VC0_BTN[4] = { 96, 140, 184, 292 };
+static const short VC0_SLD[2] = { 244, 336 };
+#define VC1_ROWS  9
+
+/* ONE GROUND, NOT FIFTEEN RECESSES. A first attempt placed a small recess
+   frame behind each control and let the stock background show between them.
+   It cannot work: STARTOPT's background paints its own row of recess bars
+   across x 267..405 -- the middle of the space, because it was drawn for ONE
+   centred column -- so between two columns those bars show through as stripes
+   behind our captions. They are the game's art and we neither ship nor
+   repaint it, so the only way to be rid of them is to cover them. This panel
+   does, and carries our own recesses on its face. */
+static void draw_visbg(unsigned char* f, int w, int h)
+{
+    Surf s; int y, i;
+    s.p = f; s.w = w; s.h = h;
+
+    for (y = 0; y < h; y++) {
+        int t = y * 3 / h;
+        fillrect(&s, 0, y, w, 1,
+                 (unsigned char)(t == 0 ? IX_GROUND_HI :
+                                 t == 1 ? IX_GROUND_MID : IX_GROUND_LO));
+    }
+    hline(&s, 0, w - 1, 0, IX_EDGE);
+    hline(&s, 0, w - 1, h - 1, IX_EDGE);
+    vline(&s, 0, 0, h - 1, IX_EDGE);
+    vline(&s, w - 1, 0, h - 1, IX_EDGE);
+    hline(&s, 1, w - 2, 1, IX_BEVEL_HI);
+    vline(&s, 1, 1, h - 2, IX_BEVEL_HI);
+    hline(&s, 1, w - 2, h - 2, IX_BEVEL_LO);
+    vline(&s, w - 2, 1, h - 2, IX_BEVEL_LO);
+
+    bolt(&s, 8, 8);
+    bolt(&s, w - 9, 8);
+    bolt(&s, 8, h - 9);
+    bolt(&s, w - 9, h - 9);
+
+    /* a rule under each column heading */
+    for (i = 0; i < 2; i++) {
+        int x = (i ? VC1_X : VC0_X) - VP_X;
+        hline(&s, x, x + VCOL_W - 1, VRULE_Y - VP_Y,     IX_EDGE);
+        hline(&s, x, x + VCOL_W - 1, VRULE_Y - VP_Y + 1, IX_BEVEL_HI);
+    }
+
+    /* one recess per control, at the position the .GUI puts the control */
+    for (i = 0; i < 4; i++)
+        recess(&s, VC0_X - VP_X - VPAD, VC0_BTN[i] - VP_Y - VPAD,
+               VCOL_W + 2 * VPAD, VCTL_H + 2 * VPAD);
+    for (i = 0; i < 2; i++)
+        recess(&s, VC0_X - VP_X - VPAD, VC0_SLD[i] - VP_Y - VPAD,
+               VSLD_W + 2 * VPAD, VSLD_H + 2 * VPAD);
+    for (i = 0; i < VC1_ROWS; i++)
+        recess(&s, VC1_X - VP_X - VPAD,
+               VROW_Y0 + VCTL_DY + VPITCH * i - VP_Y - VPAD,
+               VCOL_W + 2 * VPAD, VCTL_H + 2 * VPAD);
+}
+
+
 #define VIS_STOCK_N   11
 
 typedef struct {
@@ -1417,32 +1581,93 @@ typedef struct {
 } VisStock;
 
 /* The stock gadgets, verbatim from the shipped VISUALS.GUI (extracted with
-   tools/hpipack.py) except for x and y, in their own order.
+   tools/hpipack.py) except for x and y, in their own order -- so anything in
+   the engine that dispatches by index rather than by name sees what it saw.
 
-   THE STOCK COLUMN IS RE-RULED ONTO THE SAME 68-px PITCH AS OURS. Its own y
-   values are irregular -- 80, 143, 224, 292, 358 -- because the Screen Size
-   control is a three-line trio (caption, value, slider) and the stock file
-   simply fits it in. Left alone beside a regular second column the two read as
-   a mistake, so both are on VIS_Y0 + VIS_PITCH*i here and the trio is
-   compressed into its row (148 / 164 / 180, ending at 196, clear of 216).
-   Each caption keeps its own offset from its control, which is how the stock
-   file centres them over unequal widths. */
+   ONLY x AND y MOVE. Every other field is the stock one, `assoc` included:
+   243 is what binds the synthesized scroll arrows to VIDSLDR rather than to
+   GAMMA (see `common` above), and `commonattribs` is what picks each caption's
+   face. VIDSLDR's width goes 121 -> 122 so that it and GAMMA share one recess
+   frame; that moves its knob track by one pixel and nothing else. */
 static const VisStock s_visStock[VIS_STOCK_N] = {
-    /* id  asc    x    y    w   h  att  cf  ca   name        text            a    b   */
-    { 1,   0, 208, 237, 120, 20,  1,  0,   0, "SHADING",  "Off|On",       79, 2 },
-    { 1,   0, 208, 305, 120, 20,  1,  0,   0, "ANTI",     "Off|On",      102, 2 },
-    { 4,   0, 208, 101, 122, 16,  1,  4,   0, "GAMMA",    NULL,          114, 20 },
-    { 5,   0, 212,  80, 118, 14, 18, 15,   0, "TEXT",     "Gamma",         0, 0 },
-    /* 243 is the stock group id, and it is what binds the synthesized scroll
-       arrows to THIS slider rather than to GAMMA -- see `common` above. */
-    { 4, 243, 208, 180, 121, 16,  1,  4,   0, "VIDSLDR",  NULL,          114, 26 },
-    { 5, 243, 211, 164, 118, 13, 18, 15,   0, "VIDVAL",   "640x480",       0, 0 },
-    { 5, 243, 207, 148, 122, 14, 18, 15,   0, "VIDTEXT",  "Screen Size",   0, 0 },
-    { 1,   0, 208, 373, 120, 20,  1,  0, 109, "BSHADOWS", "Off|On",      124, 2 },
-    { 5,   0, 209, 352, 118, 18, 18, 15, 104, "TEXT",     "Shadows",       0, 0 },
-    { 5,   0, 206, 284, 120, 17, 18, 15, 104, "TEXT",     "Anti-aliasing", 0, 0 },
-    { 5,   0, 204, 216, 123, 17, 18, 15, 104, "TEXT",     "Shading",       0, 0 },
+    /* id  asc      x    y       w       h  att  cf  ca   name        text            a    b   */
+    { 1,   0, VC1_X, 316, VCOL_W,     20,  1,  0,   0, "SHADING",  "Off|On",       79, 2 },
+    { 1,   0, VC1_X, 360, VCOL_W,     20,  1,  0,   0, "ANTI",     "Off|On",      102, 2 },
+    { 4,   0, VC0_X, 336, VSLD_W, VSLD_H,  1,  4,   0, "GAMMA",    NULL,          114, 20 },
+    { 5,   0, VC0_X, 320, VCOL_W, VLBL_H, 18, 15, 104, "TEXT",     "Gamma",         0, 0 },
+    { 4, 243, VC0_X, 244, VSLD_W, VSLD_H,  1,  4,   0, "VIDSLDR",  NULL,          114, 26 },
+    { 5, 243, VC0_X, 228, VCOL_W, VLBL_H, 18, 15,   0, "VIDVAL",   "640x480",       0, 0 },
+    { 5, 243, VC0_X, 212, VCOL_W, VLBL_H, 18, 15, 104, "VIDTEXT",  "Screen Size",   0, 0 },
+    { 1,   0, VC1_X, 404, VCOL_W,     20,  1,  0, 109, "BSHADOWS", "Off|On",      124, 2 },
+    { 5,   0, VC1_X, 388, VCOL_W, VLBL_H, 18, 15, 104, "TEXT",     "Engine shadows", 0, 0 },
+    { 5,   0, VC1_X, 344, VCOL_W, VLBL_H, 18, 15, 104, "TEXT",     "Anti-aliasing", 0, 0 },
+    { 5,   0, VC1_X, 300, VCOL_W, VLBL_H, 18, 15, 104, "TEXT",     "Shading",       0, 0 },
 };
+
+/* ---- the WINDOW rows ----------------------------------------------------
+   These four are the FORK's settings, not the engine's: they change the window
+   the picture is presented in rather than what is drawn into it. That is why
+   they are not in `s_row` and never appear on the in-game panel -- and why
+   every one of them is applied on the thread that owns the window (below)
+   rather than wherever the click happened to land. */
+enum { VD_MODE, VD_MON, VD_SCALE, VD_FPS, VD_COUNT };
+
+#define VD_MONMAX 8
+static char s_monText[VD_MONMAX * 20];
+static RECT s_monRect[VD_MONMAX];
+static int  s_monCount;
+
+/* 0 is UNLIMITED: fpsl_init maps a NEGATIVE maxfps onto the display refresh and
+   only 0 falls through with tick_length left at 0. */
+static const int FPS_VAL[3] = { 60, 120, 0 };
+static const int SCALE_VAL[5] = { 0, 1, 2, 3, 4 };   /* 0 = Auto (fit the window) */
+
+typedef struct {
+    const char* name;
+    const char* label;
+    const char* text;
+    int         stages;
+} VisRow;
+
+static VisRow s_vrow[VD_COUNT] = {
+    { "VMODE",  "Display mode", "Window|Fullscreen",          2 },
+    { "VMON",   "Monitor",      s_monText,                    0 },
+    { "VSCALE", "UI scale",     "Auto|1x|2x|3x|4x",           5 },
+    { "VFPS",   "Frame cap",    "60 fps|120 fps|Uncapped",    3 },
+};
+static int s_vstage[VD_COUNT];
+
+static BOOL CALLBACK mon_cb(HMONITOR h, HDC dc, LPRECT clip, LPARAM p)
+{
+    MONITORINFO mi;
+    (void)dc; (void)clip; (void)p;
+    if (s_monCount >= VD_MONMAX) return FALSE;
+    mi.cbSize = sizeof mi;
+    if (!GetMonitorInfoA(h, &mi)) return TRUE;
+    s_monRect[s_monCount++] = mi.rcMonitor;
+    return TRUE;
+}
+
+/* Built once at attach, because the `.GUI` is written then and a stage button's
+   captions live in the file. A monitor hot-plugged afterwards is not offered
+   until the next launch, which is the same bargain every other caption makes. */
+static void enum_monitors(void)
+{
+    int i, at = 0;
+    s_monCount = 0;
+    s_monText[0] = 0;
+    EnumDisplayMonitors(NULL, NULL, mon_cb, 0);
+    for (i = 0; i < s_monCount; i++) {
+        at += _snprintf(s_monText + at, sizeof s_monText - at - 1, "%s%d: %ldx%ld",
+                        i ? "|" : "", i + 1,
+                        s_monRect[i].right - s_monRect[i].left,
+                        s_monRect[i].bottom - s_monRect[i].top);
+        if (at >= (int)sizeof s_monText - 1) break;
+    }
+    s_monText[sizeof s_monText - 1] = 0;
+    if (s_monCount < 1) { lstrcpynA(s_monText, "1: default", sizeof s_monText); s_monCount = 1; }
+    s_vrow[VD_MON].stages = s_monCount;
+}
 
 static int build_visuals_gui(char* b, int cap, int rows)
 {
@@ -1454,8 +1679,16 @@ static int build_visuals_gui(char* b, int cap, int rows)
         "\ttotalgadgets=%d;\r\n"
         "\t[VERSION]\r\n\t\t{\r\n\t\tmajor=1;\r\n\t\tminor=0;\r\n\t\trevision=1;\r\n\t\t}\r\n"
         "\tpanel=;\r\n\tcrdefault=;\r\n\tescdefault=;\r\n\tdefaultfocus=;\r\n\t}\r\n",
-        VIS_STOCK_N + 1 + rows * 2);
+        1 + VIS_STOCK_N + 2 + (rows + VD_COUNT) * 2);
 
+    /* THE GROUND FIRST, so every caption and control is drawn on top of it --
+       gadgets are drawn in array order, and ours are appended to STARTOPT's,
+       so this covers the background's own recess bars and nothing else. */
+    at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
+    at = common(b, cap, at, 12, 0, ART_VISBG, VP_X, VP_Y, VP_W, VP_H, 0, 15, 0);
+    at = gput(b, cap, at, "\t}\r\n");
+
+    /* ---- the stock gadgets, moved but otherwise verbatim ----------------- */
     for (i = 0; i < VIS_STOCK_N; i++) {
         const VisStock* s = &s_visStock[i];
         at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
@@ -1472,25 +1705,320 @@ static int build_visuals_gui(char* b, int cap, int rows)
             at = gput(b, cap, at, "\ttext=%s;\r\n\tlink=;\r\n\t}\r\n", s->text);
     }
 
-    /* our column's heading, set in the same face the stock captions use */
+    /* ---- the two column headings ----------------------------------------- */
     at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
-    at = common(b, cap, at, 5, 0, "TEXT", VIS_COL_X, VIS_Y0 - 24, VIS_W, VIS_LBL_H, 18, 15, 104);
+    at = common(b, cap, at, 5, 0, "TEXT", VC0_X, VHDR_Y, VCOL_W, VLBL_H, 18, 15, 104);
+    at = gput(b, cap, at, "\ttext=%s;\r\n\tlink=;\r\n\t}\r\n", "Window");
+    at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
+    at = common(b, cap, at, 5, 0, "TEXT", VC1_X, VHDR_Y, VCOL_W, VLBL_H, 18, 15, 104);
     at = gput(b, cap, at, "\ttext=%s;\r\n\tlink=;\r\n\t}\r\n", "Impure rendering");
 
+    /* ---- the WINDOW rows -------------------------------------------------- */
+    {
+        static const short dy[VD_COUNT] = { 80, 124, 168, 276 };
+        for (i = 0; i < VD_COUNT; i++) {
+            at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
+            at = common(b, cap, at, 5, 0, "TEXT", VC0_X, dy[i], VCOL_W, VLBL_H, 18, 15, 104);
+            at = gput(b, cap, at, "\ttext=%s;\r\n\tlink=;\r\n\t}\r\n", s_vrow[i].label);
+
+            at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
+            at = common(b, cap, at, 1, 0, s_vrow[i].name, VC0_X, dy[i] + VCTL_DY,
+                        VCOL_W, VCTL_H, 1, 0, 0);
+            at = gput(b, cap, at, "\tstatus=0;\r\n\ttext=%s;\r\n\tquickkey=0;\r\n"
+                                  "\tgrayedout=0;\r\n\tstages=%d;\r\n\t}\r\n",
+                      s_vrow[i].text, s_vrow[i].stages);
+        }
+    }
+
+    /* ---- the RENDERER rows ------------------------------------------------
+       The column is nine slots and OUR rows are not all of them: the three
+       stock controls placed above sit at slots 5, 6 and 7, so Supersampling --
+       the last of ours -- goes to slot 8 and not to slot 5, where it would land
+       exactly on top of Shading. `vslot` is that mapping and nothing else. */
     for (i = 0; i < rows; i++) {
-        int y = VIS_Y0 + VIS_PITCH * i;
+        int vslot = (i < rows - 1) ? i : rows + 2;
+        int y = VROW_Y0 + VPITCH * vslot;
         at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
-        at = common(b, cap, at, 5, 0, "TEXT", VIS_COL_X, y, VIS_W, VIS_LBL_H, 18, 15, 104);
+        at = common(b, cap, at, 5, 0, "TEXT", VC1_X, y, VCOL_W, VLBL_H, 18, 15, 104);
         at = gput(b, cap, at, "\ttext=%s;\r\n\tlink=;\r\n\t}\r\n", s_row[i].label);
 
         at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
-        at = common(b, cap, at, 1, 0, s_row[i].name, VIS_COL_X, y + VIS_CTL_DY,
-                    VIS_W, ROW_H, 1, 0, 0);
+        at = common(b, cap, at, 1, 0, s_row[i].name, VC1_X, y + VCTL_DY,
+                    VCOL_W, VCTL_H, 1, 0, 0);
         at = gput(b, cap, at, "\tstatus=0;\r\n\ttext=%s;\r\n\tquickkey=0;\r\n"
                               "\tgrayedout=0;\r\n\tstages=%d;\r\n\t}\r\n",
                   s_row[i].text, s_row[i].stages);
     }
     return at;
+}
+
+
+/* ---- applying a WINDOW row ----------------------------------------------
+   ON THE THREAD THAT OWNS THE WINDOW, ALWAYS. Every one of these ends in a
+   window call -- `SetWindowPos`, or `dd_SetDisplayMode`, which tears the
+   presentation down and rebuilds it -- and a cross-thread window call is not an
+   error you see, it is a wait for a message pump that is not running. OnCommand
+   runs wherever the engine's GUI pump runs; rather than rest on that being the
+   window's thread (it is today, and nothing promises it stays), the click POSTS
+   and the wndproc does the work. That is the contract `tagpu_shield.c` already
+   uses for injected input, and it holds by construction rather than by
+   measurement. */
+static void apply_display(int row)
+{
+    if (g_ddraw.hwnd) PostMessageA(g_ddraw.hwnd, WM_TAGPU_DISPLAY, (WPARAM)row, 0);
+}
+
+static void move_to_monitor(int i)
+{
+    const RECT* m;
+    if (i < 0 || i >= s_monCount || !g_ddraw.hwnd) return;
+    m = &s_monRect[i];
+    if (g_config.fullscreen)
+        /* borderless fullscreen: the window IS the monitor, so moving it is
+           the whole operation */
+        real_SetWindowPos(g_ddraw.hwnd, HWND_TOP, m->left, m->top,
+                          m->right - m->left, m->bottom - m->top, SWP_NOACTIVATE);
+    else
+        real_SetWindowPos(g_ddraw.hwnd, HWND_TOP, m->left + 32, m->top + 32,
+                          0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
+/* THE SCALE IS AGAINST THE SCREEN SIZE ROW, NOT THE LIVE SURFACE. This screen
+   is the SHELL's, and the shell's surface is atom-locked at 640x480 whatever
+   the player's Screen Size says -- so scaling the live `g_ddraw.width` made
+   "2x" mean 1280x960 here and something else entirely the moment a game
+   started. `main+0x37F1B/+0x37F1F` is the mode the Screen Size slider writes
+   (`0x45BBF0`, and `0x45E3AD` restores 640x480 into it), which is the number
+   the player just chose one row up, so that is what k multiplies. The live
+   surface is the fallback for the case where the field has not been written.
+
+   Auto (k == 0) leaves the window wherever the player put it -- what `maintas`
+   was already doing. In fullscreen the monitor decides k and the row is greyed,
+   so this is never reached there. */
+static void sel_mode(int* w, int* h)
+{
+    char* main_p = *(char**)TA_MAIN;
+    int sw = 0, sh = 0;
+    if (main_p) {
+        sw = *(int*)(main_p + OFF_SELW);
+        sh = *(int*)(main_p + OFF_SELH);
+    }
+    if (sw < 320 || sh < 240 || sw > 8192 || sh > 8192) { sw = g_ddraw.width; sh = g_ddraw.height; }
+    *w = sw; *h = sh;
+}
+
+static void apply_scale(int k)
+{
+    int sw, sh;
+    if (g_config.fullscreen || k <= 0) return;
+    sel_mode(&sw, &sh);
+    if (sw <= 0 || sh <= 0) return;
+    g_config.window_rect.right  = sw * k;
+    g_config.window_rect.bottom = sh * k;
+    dd_SetDisplayMode(0, 0, 0, 0);
+}
+
+/* The windowed client, remembered across a trip to fullscreen. MEASURED
+   2026-09-11: `util_toggle_fullscreen`'s borderless path leaves the window at
+   the monitor's size on the way BACK -- 1024x768 -> 3840x2160 -> 3840x2160 --
+   so the row would be a one-way door. The size is ours to put back, and this is
+   a value we saved rather than a timing guess. */
+static int s_winW, s_winH;
+
+BOOL tagpu_menu_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESULT* result)
+{
+    (void)hwnd; (void)lparam;
+    if (msg != WM_TAGPU_DISPLAY) return FALSE;
+    switch ((int)wparam) {
+    case VD_MODE:
+        if (!!g_config.fullscreen != !!s_vstage[VD_MODE]) {
+            if (s_vstage[VD_MODE]) {                 /* window -> fullscreen  */
+                s_winW = g_config.window_rect.right;
+                s_winH = g_config.window_rect.bottom;
+                util_toggle_fullscreen();
+            } else {                                  /* fullscreen -> window */
+                util_toggle_fullscreen();
+                if (s_winW > 0 && s_winH > 0) {
+                    g_config.window_rect.right  = s_winW;
+                    g_config.window_rect.bottom = s_winH;
+                    dd_SetDisplayMode(0, 0, 0, 0);
+                }
+            }
+        }
+        break;
+    case VD_MON:   move_to_monitor(s_vstage[VD_MON]);              break;
+    case VD_SCALE: apply_scale(SCALE_VAL[s_vstage[VD_SCALE]]);     break;
+    case VD_FPS:
+        /* fpsl_init reads g_config.maxfps and computes tick_length, so the cap
+           is live from the next presented frame rather than the next launch. */
+        g_config.maxfps = FPS_VAL[s_vstage[VD_FPS]];
+        fpsl_init();
+        break;
+    }
+    *result = 0;
+    return TRUE;
+}
+
+/* The rows are a FRONT END over the fork's live settings, exactly as the
+   render rows are over the levers: read on the way in, never stored here. */
+static void read_display_state(void)
+{
+    int i, k;
+    HMONITOR h;
+
+    s_vstage[VD_MODE] = g_config.fullscreen ? 1 : 0;
+
+    s_vstage[VD_MON] = 0;
+    h = g_ddraw.hwnd ? MonitorFromWindow(g_ddraw.hwnd, MONITOR_DEFAULTTONEAREST) : NULL;
+    if (h) {
+        MONITORINFO mi;
+        mi.cbSize = sizeof mi;
+        if (GetMonitorInfoA(h, &mi))
+            for (i = 0; i < s_monCount; i++)
+                if (s_monRect[i].left == mi.rcMonitor.left &&
+                    s_monRect[i].top  == mi.rcMonitor.top) { s_vstage[VD_MON] = i; break; }
+    }
+
+    /* Auto unless the client really is an exact whole multiple of the surface --
+       anything else is a fit, and calling it "2x" would be a lie the player
+       could measure. */
+    s_vstage[VD_SCALE] = 0;
+    {
+        int sw, sh;
+        sel_mode(&sw, &sh);
+        if (sw > 0 && sh > 0) {
+            k = g_ddraw.render.width / sw;
+            if (k >= 1 && k <= 4 && k * sw == g_ddraw.render.width
+                                 && k * sh == g_ddraw.render.height)
+                s_vstage[VD_SCALE] = k;
+        }
+    }
+
+    s_vstage[VD_FPS] = 2;
+    for (i = 0; i < 3; i++) if (FPS_VAL[i] == g_config.maxfps) s_vstage[VD_FPS] = i;
+}
+
+/* A row that cannot bite is greyed rather than left looking live -- the same
+   rule `row_greyed` applies to the render column. */
+static int vrow_greyed(int row)
+{
+    if (row == VD_MON)   return s_monCount < 2;
+    if (row == VD_SCALE) return g_config.fullscreen ? 1 : 0;
+    return 0;
+}
+
+static void push_display(void* gi)
+{
+    int i;
+    for (i = 0; i < VD_COUNT; i++)
+        ((set_status_fn)VA_SETSTATUS)(gi, s_vrow[i].name, s_vstage[i]);
+    for (i = 0; i < VD_COUNT; i++)
+        ((set_grayed_fn)VA_SETGRAYED)(gi, s_vrow[i].name, vrow_greyed(i));
+    ((set_dirty_fn)VA_SETDIRTY)(gi);
+}
+
+/* ---- Restore Default and Undo Changes ------------------------------------
+   Both are STARTOPT's own buttons, handled by `0x45E100`'s RESTORE
+   (`0x45E331`) and UNDO (`0x45E2FD`) branches -- and both branches end the
+   same way: `GUI_Pop`, then `0x45E5E0(0)` to rebuild the screen. So they were
+   already reaching the engine through our chain and already resetting the
+   engine's own options; what they did not do was touch a single one of OUR
+   fifteen rows, which is what made them look broken.
+
+   We handle them BEFORE forwarding, so the model is already what we want by
+   the time the engine's rebuild re-seeds the plates from it. That rebuild runs
+   `vis_build_after`, which would normally re-read the levers -- and the levers
+   still hold the OLD values, because the cfg is written from the render thread
+   at the next present. `s_visKeep` is how the rebuild is told the model is
+   authoritative this once; it is the same bargain `menu_open(fresh = 0)`
+   makes for the in-game panel's recovery. */
+static int s_visKeep;
+static int s_stageOpen[R_COUNT];
+static int s_vstageOpen[VD_COUNT];
+
+/* The actuated gadget's name, or NULL. */
+static const char* vis_actuated(void* gi)
+{
+    char* main_p = *(char**)TA_MAIN;
+    char* top;
+    char* ctrls;
+    int idx;
+
+    if (!gi || !main_p) return 0;
+    idx = *(int*)((char*)gi + GI_UICHANGE);
+    if (idx < 0) return 0;
+    top   = *(char**)(main_p + OFF_TOPGUI);
+    ctrls = top ? *(char**)(top + GM_CTRLS) : 0;
+    if (!ctrls || idx < 1 || idx > *(short*)(ctrls + 0xB6)) return 0;
+    return ctrls + (size_t)idx * STRIDE + G_NAME;
+}
+
+/* Every WINDOW row re-applied, because a restored model is only a picture
+   until the window is actually changed to match it. */
+static void apply_display_all(void)
+{
+    int i;
+    for (i = 0; i < VD_COUNT; i++) apply_display(i);
+}
+
+/* UNDO -- back to what the screen opened with, every row, the two that move
+   the window included. This is the escape hatch for a Display mode or Monitor
+   the player cannot see the menu on any more, so it is the one place those two
+   ARE put back. */
+static void vis_undo(void)
+{
+    memcpy(s_stage,  s_stageOpen,  sizeof s_stage);
+    memcpy(s_vstage, s_vstageOpen, sizeof s_vstage);
+    apply_display_all();
+    InterlockedExchange(&s_dirty, 1);
+    s_visKeep = 1;
+}
+
+/* RESTORE -- the shipped defaults: Classic++ with every row it owns at its
+   Classic++ value, supersampling on, the window fitted rather than pinned to a
+   whole multiple, and the stock 60 fps cap.
+
+   DISPLAY MODE AND MONITOR ARE DELIBERATELY NOT RESTORED. "Restore defaults"
+   would otherwise move the player's window to another monitor, or into
+   fullscreen, in one click -- and if the default lands where they cannot see
+   the screen, the button that would put it back is on the screen. Undo is the
+   row that moves the window, because there the player has just moved it
+   themselves and is asking for it back. */
+static void vis_restore(void)
+{
+    s_stage[R_STYLE]   = STYLE_PP;
+    s_stage[R_ASSETS]  = 1;
+    s_stage[R_LIGHT]   = 1;
+    s_stage[R_SHADOWS] = 2;
+    s_stage[R_SHADOWQ] = 2;
+    s_stage[R_SS]      = 1;
+    s_vstage[VD_SCALE] = 0;         /* Auto  */
+    s_vstage[VD_FPS]   = 0;         /* 60 fps */
+    apply_display(VD_SCALE);
+    apply_display(VD_FPS);
+    InterlockedExchange(&s_dirty, 1);
+    s_visKeep = 1;
+}
+
+/* Which WINDOW row was actuated, or -1. `menu_row_of`'s twin, by name for the
+   same reason. */
+static int vis_row_of(void* gi)
+{
+    char* main_p = *(char**)TA_MAIN;
+    char* top;
+    char* ctrls;
+    int idx, i;
+
+    if (!gi || !main_p) return -1;
+    idx = *(int*)((char*)gi + GI_UICHANGE);
+    if (idx < 0) return -1;
+    top   = *(char**)(main_p + OFF_TOPGUI);
+    ctrls = top ? *(char**)(top + GM_CTRLS) : 0;
+    if (!ctrls || idx < 1 || idx > *(short*)(ctrls + 0xB6)) return -1;
+    for (i = 0; i < VD_COUNT; i++)
+        if (!memcmp(ctrls + (size_t)idx * STRIDE + G_NAME, s_vrow[i].name,
+                    strlen(s_vrow[i].name) + 1)) return i;
+    return -1;
 }
 
 /* ---- the two observers --------------------------------------------------- */
@@ -1550,8 +2078,16 @@ static void* __cdecl vis_build_after(unsigned int* regs)
             s_visPrevOnCmd = cur;
             *(oncmd_fn*)(top + GM_ONCMD) = tagpu_vis_oncommand;
         }
-        read_state();
+        if (s_visKeep) {
+            s_visKeep = 0;              /* the model is already what we want */
+        } else {
+            read_state();
+            read_display_state();
+            memcpy(s_stageOpen,  s_stage,  sizeof s_stageOpen);
+            memcpy(s_vstageOpen, s_vstage, sizeof s_vstageOpen);
+        }
         push_stages(main_p + OFF_GUIINFO);
+        push_display(main_p + OFF_GUIINFO);
     }
     return s_visRetDepth > 0 ? s_visRet[--s_visRetDepth] : NULL;
 }
@@ -1601,7 +2137,24 @@ static void* __cdecl vis_build_after(unsigned int* regs)
    for what actually took the screen down. */
 static void __stdcall tagpu_vis_oncommand(void* gi)
 {
+    int d;
     if (menu_row_of(gi) >= 0) { tagpu_menu_oncommand(gi); return; }
+    d = vis_row_of(gi);
+    if (d >= 0) {
+        int n = s_vrow[d].stages > 0 ? s_vrow[d].stages : 1;
+        s_vstage[d] = (s_vstage[d] + 1) % n;
+        apply_display(d);       /* posts; the wndproc does the window work */
+        push_display(gi);
+        menu_accept(gi);
+        return;
+    }
+    {
+        const char* n = vis_actuated(gi);
+        if (n && !memcmp(n, "UNDO", 5))    vis_undo();
+        if (n && !memcmp(n, "RESTORE", 8)) vis_restore();
+    }
+    /* forwarded either way: the engine still has its own options to reset, and
+       its rebuild is what puts the restored model back on the plates */
     if (s_visPrevOnCmd) s_visPrevOnCmd(gi);
 }
 
@@ -1616,22 +2169,30 @@ static void vis_install(void)
 void tagpu_menu_init(void)
 {
     static char gui[8192];
-    static char vgui[16384];
-    static unsigned char gaf[16 + 0x28 + 8 + 0x18 + PANEL_W * PANEL_H];
-    TAGPU_UFO_FILE f[3];
+    static char vgui[49152];
+    /* one GAF per screen, because the engine picks the file from the panel
+       gadget's own name (`0x4A8537`): anims\\RENDER.GAF and anims\\VISUALS.GAF */
+    static unsigned char gaf[64 + 0x28 + 8 + 0x18 + PANEL_W * PANEL_H];
+    static unsigned char vgaf[64 + 0x28 + 8 + 0x18 + VP_W * VP_H];
+    static const GafEnt ENTS[1]  = { { ART_NAME,  PANEL_W, PANEL_H, draw_panel_frame } };
+    static const GafEnt VENTS[1] = { { ART_VISBG, VP_W,    VP_H,    draw_visbg       } };
+    TAGPU_UFO_FILE f[4];
     char b[300];
     int len, vlen, wrote, armed;
-    unsigned glen;
+    unsigned glen, vglen;
 
     read_tokens();
+    enum_monitors();        /* the Monitor row's captions go into the file */
 
     /* The archive is written UNCONDITIONALLY every launch, arm file or not:
        staleness after a DLL upgrade is the one failure here that would be
        genuinely confusing, and it costs a few ms. */
     len = build_gui(gui, sizeof gui, s_nrows);
     if (len < 0) { mlog("menu: NOT armed - the generated .GUI does not fit"); return; }
-    glen = build_gaf(gaf, sizeof gaf, s_nrows);
+    glen = build_gaf(gaf, sizeof gaf, ENTS, 1, s_nrows);
     if (!glen) { mlog("menu: NOT armed - the panel frame does not fit"); return; }
+    vglen = build_gaf(vgaf, sizeof vgaf, VENTS, 1, s_nrows);
+    if (!vglen) { mlog("menu: NOT armed - the front-end ground does not fit"); return; }
     /* The front-end screen is a THIRD entry in the same archive. It is written
        whether or not the observers arm: a half-written archive after a DLL
        upgrade is the confusing failure, exactly as for render.gui above. */
@@ -1646,7 +2207,10 @@ void tagpu_menu_init(void)
     f[2].path = VIS_FILE;
     f[2].data = vgui;
     f[2].size = (unsigned)vlen;
-    wrote = tagpu_ufo_write(UFO_FILE, f, 3);
+    f[3].path = VIS_GAF;
+    f[3].data = vgaf;
+    f[3].size = vglen;
+    wrote = tagpu_ufo_write(UFO_FILE, f, 4);
 
     armed = wrote && !exists(OFF_FILE) &&
             tagpu_detour_bytes_ok(VA_DRAWSCREEN, DRAW_STOLEN, sizeof DRAW_STOLEN) &&
@@ -1664,10 +2228,10 @@ void tagpu_menu_init(void)
     }
 
     _snprintf(b, sizeof b,
-              "menu: %s " UFO_STAMP " ufo=%d rows=%d gui=%d gaf=%u vis=%d trigger=%d bytes "
+              "menu: %s " UFO_STAMP " ufo=%d rows=%d gui=%d gaf=%u vis=%d vgaf=%u trigger=%d bytes "
               "(RENDER.GUI over DrawGameScreen 0x468CF0, open with " OPEN_FILE "; "
               "VISUALS.GUI over the dialog build 0x45E5E0, OnCommand chained at GUIMEMSTRUCT+8, front end=%d)",
-              armed ? "ARMED" : "NOT armed", wrote, s_nrows, len, glen, vlen,
+              armed ? "ARMED" : "NOT armed", wrote, s_nrows, len, glen, vlen, vglen,
               s_drawTrigger, s_visArmed);
     b[sizeof b - 1] = 0;
     mlog(b);

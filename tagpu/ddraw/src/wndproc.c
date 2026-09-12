@@ -15,6 +15,7 @@
 #include "debug.h"
 #include "versionhelpers.h"
 #include "tagpu_shield.h"
+#include "tagpu_menu.h"
 #include "tagpu_zoom.h"
 
 
@@ -47,6 +48,11 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     LRESULT shielded = 0;
 
     if (tagpu_shield_wndproc(hWnd, uMsg, wParam, lParam, &shielded))
+        return shielded;
+
+    /* the render-options screen's WINDOW rows: posted from the click, applied
+       here so the window is changed on the thread that owns it */
+    if (tagpu_menu_wndproc(hWnd, uMsg, wParam, lParam, &shielded))
         return shielded;
 
     switch (uMsg)

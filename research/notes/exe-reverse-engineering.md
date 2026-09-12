@@ -2819,6 +2819,14 @@ A screen's own GAF is therefore **optional**, and this also explains `armopt.gaf
 `RENDER.GUI` was never opened and the panel kept the engine's dialog composite; the same
 bytes at `anims/render.gaf` load.
 
+**On a MERGED screen it is the merged file's name, not the pushed one** [VERIFIED
+2026-09-11]. `0x45E5E0` pushes `STARTOPT.GUI` and then merges `VISUALS.GUI` over it with
+flags `0x200`, and the merge re-stamps `ControlsAry[0].name` (`0x4AAC98`) — so by the time
+stage 1 runs the panel is called `VISUALS.GUI` and the file it opens is
+**`anims/visuals.gaf`**. The stock game ships no such file, which is what lets a `.ufo`
+supply one without shadowing anything. Putting the frames in `anims/startopt.gaf` instead
+loads nothing at all.
+
 **`0x4B8D40(bank, name)` is the by-name entry lookup**, and it gives the bank's layout:
 
 ```asm
