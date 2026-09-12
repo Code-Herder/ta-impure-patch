@@ -1583,7 +1583,8 @@ would hand it a widened rect; they are redirected and clamped (`gpu-status.md` �
 three are `0x495CAC`, `0x4A20A1` and `0x4A22DF`, and **none of them is handed the viewport
 rect** — settled by two independent disassembly reads during the G13m landing review. `0x495CAC`
 builds its argument block at `0x495C91..0x495CA9` from a loop accumulator, a literal `0` for `t`,
-and map dimensions (`main+0x1423B`/`+0x1423F`), on a **stack-local** surface (`lea ecx,[esp+0x9c]`);
+and the view size in 16-px tiles (`main+0x1423B`/`+0x1423F` — **not** map dimensions; see
+below), on a **stack-local** surface (`lea ecx,[esp+0x9c]`);
 its enclosing function `0x495A30` does read `main+0x37E27`/`+0x37E2B`, but into other locals.
 `0x4A20A1` and `0x4A22DF` are a save/restore pair around `0x4C6AE0`, which is the matching clip
 **getter** — `add ecx,0x1C` then four dwords copied OUT (verified here). Only
@@ -2369,6 +2370,24 @@ filler `0x466B70`, `0x47F300` (called from the in-play frame handlers `0x499EB0`
 references at all**, which is worth recording as a negative result:
 [resolution](resolution.html) §3 lists all six as LoadMap's derivations from viewW/H, and this
 scan neither confirms the writer nor finds a reader for four of them.
+
+**SETTLED 2026-09-11: they are the view size in 16-px tiles, and this page was wrong.**
+[resolution](resolution.html) §3 is right and the "map dimensions" reading above is not.
+HUD scale gave a cleaner experiment than the two-resolutions one this was waiting on: it
+changes viewW/viewH **without** changing the screen mode or the map, so the two candidate
+sources are separated outright. Same map, same 1920×1080 surface, one lever:
+
+| | viewW `+0x37E37` | viewH `+0x37E3B` | map px `+0x1422B`/`+0x1422F` | `+0x1423B` | `+0x1423F` |
+|---|---|---|---|---|---|
+| stock HUD | 1792 | 1016 | 10720 × 12672 | **112** | **63** |
+| HUD scale Auto (`s` = 2.25) | 1632 | 936 | 10720 × 12672 (unchanged) | **102** | **58** |
+
+`1792 >> 4 = 112`, `1016 >> 4 = 63`, `1632 >> 4 = 102`, `936 >> 4 = 58` — all four exact.
+The map dimensions did not move; these did. The minimap's view-box filler `0x466B70` above is
+therefore reading *view tiles*, which is what a view box is drawn from, and the write the scan
+could not find is `0x483BD6`/`0x483BE4` inside LoadMap reaching them through `ebp = main+0x141FB`
+at `+0x40`/`+0x44` — a base the displacement scan cannot see, which is exactly why it found
+thirteen reads and no write.
 
 ### The frame's HUD extras — what gates each, what it draws, where [VERIFIED 2026-09-07, Phase E G15c]
 

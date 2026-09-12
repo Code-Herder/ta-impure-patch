@@ -2615,11 +2615,13 @@ holds for `k = 1`, and for the same reason: it is what makes the rest of the cla
   ones, which a sim dependency on viewW/H could not survive.
 - **Our two notes disagree about `main+0x1423B/+0x1423F`.** [resolution](resolution.html) §3
   calls them tile-view dims derived from viewW/H by `>>4`;
-  [exe map](exe-reverse-engineering.html) calls them map dimensions. A full-image scan finds
-  **thirteen reads and no write** at that displacement, so neither claim is confirmed by it and
+  [exe map](exe-reverse-engineering.html) called them map dimensions. A full-image scan finds
+  **thirteen reads and no write** at that displacement, so neither claim was confirmed by it and
   the writer uses some other base. `main+0x14243/47/4B/4F`, which §3 lists alongside them, have
-  **no references at all**. Unresolved; it does not change 20.2's "when", because the rect and
-  the SORT buffers settle that on their own.
+  **no references at all**. It never changed 20.2's "when", because the rect and the SORT buffers
+  settle that on their own. **SETTLED by the landing, 20.4** — HUD scale moves viewW/viewH
+  without moving the screen mode or the map, which separates the two candidate sources outright:
+  they are the view size in 16-px tiles, §3 is right, and the exe map is corrected.
 
 ### 20.4 Built  [MEASURED 2026-09-11]
 
@@ -2720,6 +2722,18 @@ will not honour; at 3840×2160 it walks all six and the store follows.
 **Zoom composes.** At `s = 2.25` and zoom 0.5 the engine's unzoomed point for screen
 (960,600) reads (816,660) — exactly the transform about the **scaled** viewport centre
 (1104,540), because `vpwide` takes that centre from `tagpu_hud` rather than from `0x80/0x20`.
+
+#### Settled on the way past
+
+**`main+0x1423B`/`+0x1423F` are the view size in 16-px tiles**, and 20.3's third bullet is
+closed. The two notes disagreed and the displacement scan settled neither; HUD scale turned out
+to be a better instrument than the two-resolutions run that was planned, because it moves
+viewW/viewH **without** moving the screen mode or the map. Same map, same 1920×1080 surface:
+stock gives `1792/1016` and `112/63`, Auto gives `1632/936` and `102/58`, the map dimensions at
+`+0x1422B/+0x1422F` unchanged at 10720×12672 throughout. All four are exactly `>>4`.
+[resolution](resolution.html) §3 was right; the [exe map](exe-reverse-engineering.html) is
+corrected, and the write the scan could not find is LoadMap's, through a base at
+`main+0x141FB` that a displacement scan cannot see.
 
 #### Still open
 
