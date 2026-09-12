@@ -345,6 +345,7 @@ static float  s_zoom = 1.0f;
 static int    s_fboW = 0, s_fboH = 0, s_fboSS = 0;
 static int    s_palInit = 0;
 static int    s_fogCols = 0, s_fogRows = 0, s_fogOrgX = 0, s_fogOrgY = 0;
+static int    s_fogCells = 0;         /* what the buffer holds, not cols*rows */
 static const unsigned short* s_fogGrid = NULL;
 static int    s_fogLut = 0;   /* grey remap uploaded this frame (logged) */
 static unsigned s_fillSeq = 0;   /* terrain key-fill sequence + stall counter */
@@ -2152,12 +2153,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        unexplored corner mask, high byte = the out-of-LOS one — so the engine
        buffer uploads with no conversion. */
     int fogMode = 0;
-    s_fogGrid = NULL; s_fogLut = 0;
+    s_fogGrid = NULL; s_fogCells = 0; s_fogLut = 0;
     {
         const int* fg = *(const int* const*)(ta + OFF_FOGGRID);
         if (ptr_ok(fg) && !IsBadReadPtr(fg, 16)) {
             const unsigned short* buf = (const unsigned short*)(size_t)fg[0];
             int cols = fg[1], rows = fg[2], cells = fg[3];
+            int bufCells = cells;          /* replaced if the wide grid wins */
             /* `cells` is the ALLOCATION, not cols*rows: the builder rounds the
                count up to a multiple of 8 before it allocates (`0x483C84`:
                add 7, and ~7) and clears that many entries. Demanding equality
@@ -2167,7 +2169,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                band, the whole map drawn lit at every zoom. 1024x768 is 30x24 =
                720 and passes; 1920x1080 is 58x34 = 1972 against an allocated
                1976 and did not, so at 1080p the fog rule had never run. */
-            /* 1024, not 256: this bound is a sanity check on a count read out of
+            /* FOGW_ENGINE_DIMCAP (1024), not 256: this bound is a sanity check
+               on a count read out of
                engine memory, and 256 made it a SCREEN limit as well. The engine
                builds the grid at one cell per 32 px of its viewport plus two —
                MEASURED 2026-09-09, 118 x 68 for the 3712 x 2096 viewport of a
@@ -2176,7 +2179,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                would have been refused here. Refusing sets fogMode 0, which is
                no fog at all, so the bound must not be the first thing a new
                monitor meets. The relation below is the real test. */
-            if (ptr_ok(buf) && cols > 0 && rows > 0 && cols <= 1024 && rows <= 1024 &&
+            if (ptr_ok(buf) && cols > 0 && rows > 0 &&
+                cols <= FOGW_ENGINE_DIMCAP && rows <= FOGW_ENGINE_DIMCAP &&
                 cells == (((cols * rows) + 7) & ~7) &&
                 !IsBadReadPtr(buf, (SIZE_T)cells * 2)) {
                 /* the overlay puts cell (0,0) at screen vp + (+-16 - eye%32);
@@ -2227,6 +2231,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                     if ((tagpu_zoom_level() < 1.0f || tagpu_zoom_fog_pending()) &&
                         tagpu_fogwide_get(&wb, &wc, &wr, &wox, &woy)) {
                         buf = wb; cols = wc; rows = wr; orgX = wox; orgY = woy;
+                        /* ours is exactly cols*rows; the engine's `cells` above
+                           is its allocator's round-up and does not describe
+                           this buffer at all */
+                        bufCells = wc * wr;
                     }
                 }
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -2240,6 +2248,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                                     GL_RG, GL_UNSIGNED_BYTE, buf);
                 x_glActiveTexture(GL_TEXTURE0);
                 s_fogGrid = buf; s_fogCols = cols; s_fogRows = rows;
+                /* the size of the buffer we are actually publishing — the
+                   engine's validated allocation, or the wide grid's exact
+                   cols*rows. It is what bounds the index tagpu_fog_at forms. */
+                s_fogCells = bufCells;
                 s_fogOrgX = orgX;
                 s_fogOrgY = orgY;
                 /* "fog is on" is NOT LosType bit0 — that bit is only the
@@ -2345,7 +2357,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (cloaked && owner != watched) continue;    /* enemies never see cloak */
         /* fog gate at the anchor tile: engine draws nothing there */
         if (fogMode & 1) {
-            int fog = tagpu_fog_at(s_fogGrid, s_fogCols, s_fogRows,
+            int fog = tagpu_fog_at(s_fogGrid, s_fogCols, s_fogRows, s_fogCells,
                                    s_fogOrgX, s_fogOrgY, wx, wy - wz / 2);
             if (fog & 1) continue;                    /* unexplored: black    */
             /* grey shows terrain, never units — the engine draws no unit it
@@ -2578,7 +2590,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 /* wreckage is remembered furniture: hidden only where the
                    map is unexplored, visible (darkened) in grey */
                 if ((fogMode & 1) &&
-                    (tagpu_fog_at(s_fogGrid, s_fogCols, s_fogRows,
+                    (tagpu_fog_at(s_fogGrid, s_fogCols, s_fogRows, s_fogCells,
                                   s_fogOrgX, s_fogOrgY, rx, ry - rz / 2) & 1))
                     continue;
                 NU* n2 = &units[nu++];
@@ -2670,6 +2682,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         }
         fv.fogGrid = fogMode ? s_fogGrid : NULL;
         fv.fogCols = s_fogCols; fv.fogRows = s_fogRows;
+        fv.fogCells = s_fogCells;
         fv.fogOrgX = s_fogOrgX; fv.fogOrgY = s_fogOrgY;
         fv.fogTex = s_fogTex; fv.fogLut = s_fogLutTex;
         fv.r0 = r0; fv.rows = rows;
@@ -3881,7 +3894,7 @@ static void pose_dump(const char* u, const char* o3)
 void tagpu_native_glreset(void)
 {
     s_state = 0; s_fboW = s_fboH = s_fboSS = 0; s_palInit = 0;
-    s_fogCols = s_fogRows = 0; s_fogGrid = NULL; s_fogLut = 0;
+    s_fogCols = s_fogRows = 0; s_fogCells = 0; s_fogGrid = NULL; s_fogLut = 0;
     tagpu_rglsl_glreset();      /* first: the passes below forget their jobs */
     tagpu_fx_glreset();
     tagpu_feat_glreset();

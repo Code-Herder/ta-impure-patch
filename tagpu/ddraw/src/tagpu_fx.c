@@ -58,6 +58,7 @@
 #include "tagpu_gaf.h"
 #include "tagpu_restoreglsl.h"
 #include "tagpu_classicpp.h"
+#include "tagpu_fogwide.h"
 
 #define TA_MAINPP     0x00511DE8u
 #define TAPROG_PP     0x0051FBD0u
@@ -603,7 +604,7 @@ static void fog_alarm(const char* why, const unsigned short* grid, int cols,
     }
 }
 
-int tagpu_fog_at(const unsigned short* grid, int cols, int rows,
+int tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
                  int orgX, int orgY, int wx, int wzp)
 {
     if (!grid || cols <= 0 || rows <= 0) return 0;
@@ -617,12 +618,36 @@ int tagpu_fog_at(const unsigned short* grid, int cols, int rows,
                   grid, cols, rows, orgX, orgY, wx, wzp);
         return 0;
     }
-    /* and the dims: 256 is the engine's own ceiling (its grid is sized from a
-       viewport the native pass caps at 4096), 512 covers the widest window
-       tagpu_fogwide will build. Past that, cols/rows and the buffer have come
-       apart. */
-    if (cols > 512 || rows > 512) {
-        fog_alarm("grid dims exceed the 512 the producers accept",
+    /* and the dims, against the bound the PRODUCER publishes rather than a
+       number typed here. This used to be a literal 512, chosen when it covered
+       both producers and then left behind by both: the wide grid's own cap went
+       to 1024 and the viewport bound to 16384, so a screen between 4057 and
+       8153 px wide got a grid tagpu_fogwide built and this test refused — and a
+       refusal here is `0`, which every caller reads as "nothing is hidden",
+       so the whole screen's units, wrecks and effects drew through the black.
+       tagpu_fogwide_dimcap() is a high-water mark, so it can only ever be too
+       generous, which for a corruption guard is the right direction to err. */
+    {
+        int cap = tagpu_fogwide_dimcap();
+        if (cols > cap || rows > cap) {
+            fog_alarm("grid dims exceed the cap the producers publish",
+                      grid, cols, rows, orgX, orgY, wx, wzp);
+            return 0;
+        }
+    }
+    /* AND THE CELL COUNT, which is the bound that actually matters. The largest
+       index this function can form is cols*rows - 1, so the exposure is
+       cols*rows*2 bytes past `grid` — and a per-DIMENSION cap has to be
+       generous enough for the largest grid EITHER producer could legitimately
+       hand over, which at 1920x1080 is 1024x1024 against a buffer of 245x148.
+       That is a 2 MB window in front of a 72 KB allocation, and it is four
+       times wider than the literal 512 this replaced. `cells` closes it: the
+       caller knows what the buffer it is passing actually holds — the engine's
+       own validated `cells` field for its grid, cols*rows for ours — so the
+       bound becomes exact for both instead of shared and loose. A caller that
+       does not know passes 0, which refuses. */
+    if (cells <= 0 || (long)cols * rows > (long)cells) {
+        fog_alarm("grid dims exceed the cells the buffer holds",
                   grid, cols, rows, orgX, orgY, wx, wzp);
         return 0;
     }
@@ -665,7 +690,7 @@ int tagpu_fog_at(const unsigned short* grid, int cols, int rows,
 int tagpu_fx_tile_visible(const TAGPU_FXVIEW* v, int wx, int wzp)
 {
     if (!(v->fogMode & 1) || !v->fogGrid) return 1;
-    return tagpu_fog_at(v->fogGrid, v->fogCols, v->fogRows,
+    return tagpu_fog_at(v->fogGrid, v->fogCols, v->fogRows, v->fogCells,
                         v->fogOrgX, v->fogOrgY, wx, wzp) == 0;
 }
 

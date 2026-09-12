@@ -10,6 +10,7 @@
 #include "tagpu_fogwide.h"
 #include "tagpu_zoom.h"
 #include "tagpu_vpwide.h"
+#include "tagpu_reclaim.h"
 
 /* the engine fields the builder reads, all in the TAdynmem block */
 #define OFF_LOSTYPE  0x14281       /* u16; bit1 = true LOS, bit3 = grid current */
@@ -23,34 +24,47 @@
 #define PLAYER_STRIDE 0x14B
 #define PLAYER_LOS   0x7C          /* {u8* counters; i32 w; i32 h} inside it    */
 
-/* The cap on a wide grid. ALLOCATED ONCE AND NEVER GROWN, and that is a
-   lifetime argument, not a convenience: `tagpu_fogwide_get` hands the RENDER
-   thread a pointer into `s_pub` while the game thread builds into `s_build`,
-   so a buffer that could be reallocated under a zoom change would be a
-   use-after-free with a window nobody would ever reproduce. The size is
-   therefore chosen for the widest window worth covering, up front.
+/* THE BUFFER SET. Three blocks, all the same size, sized from the window the
+   screen actually asks for (fogw_capacity below) rather than from a constant.
+   They are GROWN AS A SET, never shrunk, and the old set is NOT freed on the
+   spot: `tagpu_fogwide_get` hands the RENDER thread the pointer in `s_hold`,
+   and that thread reads it without a lock for the whole of its frame. A grow
+   therefore retires the three old blocks behind tagpu_reclaim's quiescence
+   fence and frees them on a later tick, once the reader has completed every
+   pass that could still be holding one (fogw_retire / fogw_drain).
 
-   IT USED TO BE DERIVED FROM TWO CONSTANTS THAT NO LONGER EXIST. `tagpu_native.c`
-   refused a viewport over 4096 a side and clamped the effective span to 8192,
-   which made 275 cells the widest window reachable and 320 a comfortable cap.
-   Both were resolution limits and both are gone (the viewport bound is 16384
-   and the span is the viewport at the zoom floor), so the window a real screen
-   asks for is now: **485 cells at 3840x2160, 645 at 5120x2880, 965 at
-   7680x4320** — every one of them past 320, which would have clamped the wide
-   grid back to a 10240-px-wide core and left the rest of a 4K zoom-out smeared
-   from the border cell again. 1024 covers all three and costs 2 MB a buffer,
-   **6 MB for the three, in every session** — since G13s the producer builds at
-   every zoom (see tagpu_fogwide_tick), so this is allocated on the first
-   in-game tick whether or not the player ever zooms out, and nothing frees it
-   before the process exits.
+   IT USED TO BE A FIXED SQUARE — `FOGW_MAXDIM` 1024, three 2 MB blocks in
+   every session, which is 29x what 1920x1080 needs and 72x what 1024x768 does,
+   and still not enough past a 7680x4320 screen. Worse, two constants had to
+   agree about it and one of them did not: `tagpu_fog_at` bounded the same
+   dimensions at 512, so a screen between 4057 and 8153 px wide got a grid the
+   producer built and the CPU-side gate refused, answering "nothing is hidden
+   here" for every unit, wreck and effect on it (research/notes/
+   fog-grid-sizing.md). Deriving the size is what removes that disagreement
+   rather than re-typing it one number later: the cap the gate applies is now
+   `tagpu_fogwide_dimcap()`, published by the code that does the allocating.
 
-   THE RESIDUAL, stated so it stays true: past about 7680x4320 the window is
-   clamped again. The clamp takes its trim off both ends (fogw_window below),
-   so what is left is centred on the view and the smear returns only at the
-   outer edge — the same degradation as before, moved out by a factor of three
-   and a half. */
-#define FOGW_MAXDIM  1024
+   WHAT THE SIZE IS. The span of the window is fixed for a given viewport and
+   zoom floor; only its PHASE moves with the eye, and the phase is worth exactly
+   one cell (`col0` is `x0 - 16` floor-divided by 32, so the residue rides on
+   the count). Sizing from this tick's `cols` would therefore reallocate every
+   time the camera crossed a 32-world-pixel boundary — several times a second
+   while scrolling. fogw_capacity sizes from the WORST residue instead, which
+   takes the eye out of the expression; what is left moves only when the video
+   mode does, which stock TA can only do at game entry (resolution.md §6) and
+   this fork does across its game -> shell -> game cycles. */
 #define FOGW_MARGIN  256           /* world px of slack on each side (below)   */
+
+/* Retired blocks waiting on the fence. THE QUANTITY THIS BOUNDS IS BLOCKS
+   PENDING AT ONCE, not the distinct sizes a session reaches: fogw_drain runs at
+   the top of every tick, so entries normally live for one tick and the ring is
+   empty again. Four grows' worth of slack is far more than the reader can hold
+   up in practice, and it is not the number of video modes — that reading was
+   wrong and is recorded here so it is not re-derived.
+
+   THE OVERFLOW POLICY IS TO STRAND, not to stall or to free early: a block
+   nobody frees faults nothing, and `strand=` on the heartbeat says so. */
+#define FOGW_RETIRE_MAX 12
 
 static void flog(const char* s)
 {
@@ -91,6 +105,27 @@ static volatile LONG    s_csInit;
 static unsigned short*  s_build;
 static unsigned short*  s_pub;
 static unsigned short*  s_hold;
+
+/* What the three blocks are sized for. Game thread's, except that the grow
+   stores them under s_cs alongside the pointers so that a reader can never see
+   one paired with the other set's block. */
+static int              s_capCols, s_capRows;
+
+/* THE CAP THE CPU-SIDE GATE APPLIES, published for tagpu_fog_at. A HIGH-WATER
+   MARK, deliberately: it only ever relaxes, so a grid built at the old, larger
+   size and still in flight can never be refused by a cap that has since come
+   down. It starts at the bound tagpu_native.c applies to the ENGINE's own grid
+   descriptor, which is the other producer the gate sees. */
+static volatile LONG    s_dimcap = FOGW_ENGINE_DIMCAP;
+
+/* Blocks the grow took out of the set, waiting for the render thread to finish
+   the frame it may have started with one of them. Game thread only — enqueued
+   by the grow, drained at the top of the next tick. */
+typedef struct { void* p; size_t bytes; long stamp; } FOGW_RETIRED;
+static FOGW_RETIRED     s_ret[FOGW_RETIRE_MAX];
+static int              s_retN;
+static unsigned         s_cRetired, s_cFreed, s_cStrand;
+static size_t           s_strandBytes;   /* what stranding has actually cost */
 
 static int              s_pubValid;                       /* s_pub holds a grid */
 static int              s_pubCols, s_pubRows, s_pubOrgX, s_pubOrgY;
@@ -144,6 +179,14 @@ static const void*      s_lastLos;
 static const void*      s_lastMapped;
 static int              s_lastLosW, s_lastLosH, s_lastMask, s_lastTrue;
 static int              s_said;                           /* one-shot diagnostics */
+static int              s_saidFail;
+/* The capacity request that malloc refused, and when. Game thread only. A
+   different request asks at once; the same one asks again after FOGW_RETRY_MS,
+   because a refusal that is never forgiven pins the grid smaller for the rest
+   of the session — see fogw_alloc. */
+static int              s_failCols, s_failRows;
+static DWORD            s_failMs;
+#define FOGW_RETRY_MS   5000
 
 /* ---- the replication of 0x4843C0 ---------------------------------------- */
 
@@ -383,15 +426,14 @@ static int floor_div32(int v) { return v >= 0 ? v / 32 : -(((-v) + 31) / 32); }
    ease is ever replaced by something that can jump, this derivation goes with
    it. [the constraint was missing when this was first written; landing review,
    2026-09-10] So the margin is slack for this, not budget. */
-static int fogw_window(char* ta, int* col0, int* row0, int* cols, int* rows)
+static int fogw_window(char* ta, int vw, int vh,
+                       int* col0, int* row0, int* cols, int* rows)
 {
-    int vpL, vpT, vw, vh, eyeX, eyeY, evw, evh, x0, y0, x1, y1;
+    int eyeX, eyeY, evw, evh, x0, y0, x1, y1;
     float zmin = tagpu_zoom_min();
 
-    tagpu_vpwide_true_rect(ta, &vpL, &vpT, &vw, &vh);
-    /* the same sanity bound the native pass applies to the same field — it was
-       4096 in both, which refused a 5120x2880 screen the whole wide grid */
-    if (vw < 64 || vh < 64 || vw > 16384 || vh > 16384) return 0;
+    /* vw/vh come from fogw_view, sampled once for this tick and shared with
+       fogw_capacity, so the two cannot derive from different viewports. */
     if (zmin < 0.05f || zmin > 1.0f) return 0;
     eyeX = *(const int*)(ta + OFF_EYEX);
     eyeY = *(const int*)(ta + OFF_EYEY);
@@ -403,8 +445,9 @@ static int fogw_window(char* ta, int* col0, int* row0, int* cols, int* rows)
     /* No span clamp: this expression IS what the native pass gathers over now.
        It used to be clamped to a fixed 8192 here because the native pass
        clamped there too, and once that went the clamp would only have made
-       this grid narrower than the view it exists to cover. FOGW_MAXDIM is the
-       one bound left, and it is the buffer, not the screen. */
+       this grid narrower than the view it exists to cover. The one bound left
+       is the allocated set below, and since it is SIZED from this expression
+       (fogw_capacity) it is not a limit on the screen either. */
     if (evw < vw) evw = vw;
     if (evh < vh) evh = vh;
 
@@ -430,10 +473,14 @@ static int fogw_window(char* ta, int* col0, int* row0, int* cols, int* rows)
     *cols = (x1 - (32 * *col0 + 16) + 31) / 32 + 2;
     *rows = (y1 - (32 * *row0 + 16) + 31) / 32 + 2;
     if (*cols < 3 || *rows < 3) return 0;
-    /* Clamp, and take the trim off both ends so the view's centre keeps the
-       cover. Reachable only past a 7680x4320 screen now — see FOGW_MAXDIM. */
-    if (*cols > FOGW_MAXDIM) { *col0 += (*cols - FOGW_MAXDIM) / 2; *cols = FOGW_MAXDIM; }
-    if (*rows > FOGW_MAXDIM) { *row0 += (*rows - FOGW_MAXDIM) / 2; *rows = FOGW_MAXDIM; }
+    /* Clamp to what is ALLOCATED, and take the trim off both ends so the
+       view's centre keeps the cover. fogw_capacity sized the set for this same
+       viewport at the worst residue and fogw_alloc ran first, so in the normal
+       case this is inert — it bites only when a malloc failed and we are still
+       running on a smaller set, where a centred window with a smeared outer
+       ring beats no wide grid at all. */
+    if (*cols > s_capCols) { *col0 += (*cols - s_capCols) / 2; *cols = s_capCols; }
+    if (*rows > s_capRows) { *row0 += (*rows - s_capRows) / 2; *rows = s_capRows; }
     return 1;
 }
 
@@ -492,23 +539,200 @@ static void fogw_check(char* ta, const FOGW_SRC* s)
 
 /* ---- the tick ----------------------------------------------------------- */
 
-static int fogw_alloc(void)
+/* ---- growing the set, and giving the old one back ----------------------- */
+
+/* The size the CURRENT video mode asks for, independent of where the eye is.
+   Same expression as fogw_window's, evaluated at the worst residue: the span
+   is `evw + 2*MARGIN` and the count is `ceil((span + r)/32) + 2` for a residue
+   r in [0,31], so the largest it can be is at r = 31. */
+/* ONE SAMPLE OF THE VIEWPORT PER TICK, taken here and passed to fogw_window.
+   The two used to sample tagpu_vpwide_true_rect separately, and that function
+   is not guaranteed to answer the same twice: when its derived path is
+   unavailable it falls back to the live OFF_VIEW_W/H fields, which the render
+   thread writes. Two different answers make the capacity and the window
+   disagree, and then fogw_window's clamp — documented as inert — is load
+   bearing instead. One sample removes the question. */
+static int fogw_view(char* ta, int* vw, int* vh)
 {
-    size_t bytes = (size_t)FOGW_MAXDIM * FOGW_MAXDIM * 2;
-    if (s_build && s_pub && s_hold) return 1;
-    if (!s_build) s_build = (unsigned short*)malloc(bytes);
-    if (!s_pub)   s_pub   = (unsigned short*)malloc(bytes);
-    if (!s_hold)  s_hold  = (unsigned short*)malloc(bytes);
-    if (s_build && s_pub && s_hold) {
-        if (!s_said) {
-            char b[128];
-            sprintf(b, "fogwide: %d KB for the wide grid (3 x %dx%d cells)",
-                    (int)(bytes * 3 / 1024), FOGW_MAXDIM, FOGW_MAXDIM);
-            flog(b); s_said = 1;
-        }
-        return 1;
+    int vpL, vpT;
+    tagpu_vpwide_true_rect(ta, &vpL, &vpT, vw, vh);
+    return !(*vw < 64 || *vh < 64 || *vw > 16384 || *vh > 16384);
+}
+
+static int fogw_capacity(int vw, int vh, int* capCols, int* capRows)
+{
+    int evw, evh;
+    float zmin = tagpu_zoom_min();
+
+    if (zmin < 0.05f || zmin > 1.0f) return 0;
+    evw = (int)((float)vw / zmin) + 64;  if (evw < vw) evw = vw;
+    evh = (int)((float)vh / zmin) + 64;  if (evh < vh) evh = vh;
+    *capCols = (evw + 2 * FOGW_MARGIN + 31 + 31) / 32 + 2;
+    *capRows = (evh + 2 * FOGW_MARGIN + 31 + 31) / 32 + 2;
+    return (*capCols >= 3 && *capRows >= 3);
+}
+
+/* Game thread. `stamp` was taken AFTER the store that removed `p` from the set,
+   so every pass that could still hold it had already begun by then and the
+   block is free to go once the reader has completed that many.
+
+   TWO OF THE THREE COULD BE FREED OUTRIGHT — `s_build` is the game thread's
+   alone and `s_pub`'s bytes are never read outside s_cs, so only the block that
+   was `s_hold` can be under a live read. They go through the same gate anyway:
+   one rule for the set is cheaper to keep true than three, and the whole point
+   of the exercise is that nothing here depends on remembering which slot a
+   block came from. */
+static void fogw_retire(void* p, size_t bytes, long stamp)
+{
+    if (!p) return;
+    if (!tagpu_reclaim_armed() || s_retN >= FOGW_RETIRE_MAX) {
+        s_cStrand++;              /* never freed — the safe answer, not a fault */
+        s_strandBytes += bytes;
+        return;
     }
-    return 0;
+    s_ret[s_retN].p = p;
+    s_ret[s_retN].bytes = bytes;
+    s_ret[s_retN].stamp = stamp;
+    s_retN++;
+    s_cRetired++;
+}
+
+/* What the ring is still holding. Blocks left here when the tick stops for good
+   — terrain ownership disarmed, the shell — are stranded in every sense that
+   matters, and s_cStrand does not count them because nothing decided to strand
+   them; `held=` is where they show up. */
+static size_t fogw_held_bytes(void)
+{
+    size_t n = 0; int i;
+    for (i = 0; i < s_retN; i++) n += s_ret[i].bytes;
+    return n;
+}
+
+/* Game thread, top of the tick. Nothing is ever enqueued on a build where the
+   fence is unarmed, so this is a no-op there rather than a wrong answer.
+
+   THE PASS THAT REPORTS ITSELF COMPLETE WITHOUT READING was a hole in this, and
+   the fix is in tagpu_reclaim rather than here. pass_begin publishes completion
+   immediately and returns 0 during a level teardown, on the understanding that
+   tagpu_overlay_draw's gate stops such a pass before tagpu_native_frame. That
+   held only while the flag could not change between the two reads of it —
+   it could, and a pass that answered "teardown" at pass_begin and "no teardown"
+   at the gate reached tagpu_fogwide_get while the counters said the reader was
+   idle, so a block it held could be stamped and freed under it. pass_begin now
+   LATCHES the decision and teardown_active() returns the latch, which makes the
+   two answers the same answer by construction. This comment is the reason that
+   latch must not be undone. */
+static void fogw_drain(void)
+{
+    int i, n = 0;
+    for (i = 0; i < s_retN; i++) {
+        if (tagpu_reclaim_pass_passed(s_ret[i].stamp)) {
+            free(s_ret[i].p);
+            s_cFreed++;
+        } else {
+            s_ret[n++] = s_ret[i];
+        }
+    }
+    s_retN = n;
+}
+
+/* Ensure the set covers capCols x capRows. Grows as a SET so that the three
+   blocks stay interchangeable — which is what lets a swap move a bare pointer
+   between slots without carrying a capacity beside it. Never shrinks. */
+static int fogw_alloc(int capCols, int capRows)
+{
+    size_t bytes, oldBytes;
+    unsigned short *nb, *np, *nh, *ob, *op, *oh;
+    long stamp;
+
+    if (s_build && s_pub && s_hold &&
+        capCols <= s_capCols && capRows <= s_capRows) return 1;
+    /* THE CLAMP COMES FIRST, and the order is a bug I had the other way round:
+       the set never shrinks, so what is actually requested is the componentwise
+       max of the ask and what we already have. Latching the pre-clamp ask and
+       comparing the post-clamp one never matched when one dimension shrank
+       while the other grew — which is exactly the window-resize case the
+       backoff exists for. */
+    if (capCols < s_capCols) capCols = s_capCols;
+    if (capRows < s_capRows) capRows = s_capRows;
+
+    /* A REQUEST THAT COULD NOT BE SERVED IS NOT RETRIED EVERY TICK. This
+       function is reached at the DRAW rate, not the sim rate — hundreds to
+       thousands of times a second — and the grow needs all three blocks at
+       once, so under memory pressure an un-latched retry is two malloc/free
+       pairs per call, for as long as the pressure lasts, on the thread this
+       module is otherwise careful to keep at ~4 ms/s. The pre-G13t code kept
+       each block it managed to get and converged within three ticks; this one
+       cannot, so it must ask less often instead.
+
+       IT MUST NOT STOP ASKING ALTOGETHER, which is what the first version did.
+       Memory pressure is transient, and a latch cleared only by a *successful*
+       grow pins the set at whatever size it had when the one refusal happened:
+       the window is then clamped inside the view for the rest of the session,
+       on-screen cells fall off the grid, and `tagpu_fog_at` answers 0 — "nothing
+       is hidden here" — for every one of them. That is this landing's own bug
+       class, made permanent, where the code it replaced recovered on the next
+       tick. So the latch EXPIRES. The interval is a quality knob and not a
+       safety argument: running on the smaller set is correct at any cadence,
+       and this only decides how soon a transient failure is forgiven. */
+    if (capCols == s_failCols && capRows == s_failRows &&
+        GetTickCount() - s_failMs < FOGW_RETRY_MS)
+        return (s_build && s_pub && s_hold);
+
+    bytes = (size_t)capCols * capRows * 2;
+    nb = (unsigned short*)malloc(bytes);
+    np = (unsigned short*)malloc(bytes);
+    nh = (unsigned short*)malloc(bytes);
+    if (!nb || !np || !nh) {
+        free(nb); free(np); free(nh);
+        s_failCols = capCols; s_failRows = capRows; s_failMs = GetTickCount();
+        if (!s_saidFail) {
+            char fb[128];
+            sprintf(fb, "fogwide: could not allocate 3 x %dx%d (%d KB) — staying "
+                        "on %dx%d and not retrying until the window changes",
+                    capCols, capRows, (int)(bytes * 3 / 1024), s_capCols, s_capRows);
+            flog(fb); s_saidFail = 1;
+        }
+        /* Keep whatever we already had: a smaller set still covers a clamped
+           window (fogw_window), where no set at all covers nothing. */
+        return (s_build && s_pub && s_hold);
+    }
+
+    oldBytes = (size_t)s_capCols * s_capRows * 2;
+    EnterCriticalSection(&s_cs);
+    {
+        ob = s_build; op = s_pub; oh = s_hold;
+        s_build = nb; s_pub = np; s_hold = nh;
+        s_capCols = capCols; s_capRows = capRows;
+        s_failCols = s_failRows = 0;
+        /* The new set holds nothing yet. This is also what keeps the render
+           thread off it: with s_pubValid clear, tagpu_fogwide_get takes its
+           first branch and returns before it reads s_hold, so it cannot be
+           handed a fresh block with the old set's descriptor. */
+        s_pubValid = 0;
+    }
+    LeaveCriticalSection(&s_cs);
+
+    /* AFTER the store, and after the section's own fence: any pass that can
+       still hold one of the old blocks has already begun, so a snapshot taken
+       here is an upper bound on all of them. */
+    stamp = tagpu_reclaim_armed() ? tagpu_reclaim_pass_stamp() : 0;
+    fogw_retire(ob, oldBytes, stamp);
+    fogw_retire(op, oldBytes, stamp);
+    fogw_retire(oh, oldBytes, stamp);
+
+    {
+        LONG want = capCols > capRows ? capCols : capRows;
+        if (want > s_dimcap) InterlockedExchange(&s_dimcap, want);
+    }
+    {
+        char b[160];
+        sprintf(b, "fogwide: grid %dx%d, %d KB for the set (3 x %d cells)%s",
+                capCols, capRows, (int)(bytes * 3 / 1024), capCols * capRows,
+                s_said ? " — grown" : "");
+        flog(b); s_said = 1;
+    }
+    return 1;
 }
 
 static void fogw_heartbeat(int cols, int rows);
@@ -524,11 +748,14 @@ void tagpu_fogwide_init(void)
 void tagpu_fogwide_tick(char* ta, int rebuilt)
 {
     FOGW_SRC s;
-    int col0, row0, cols, rows, changed;
+    int col0, row0, cols, rows, changed, capCols, capRows, vw, vh;
 
     if (!s_csInit) return;                  /* attach did not run, or refused */
     InterlockedIncrement(&s_tick);          /* "the game thread is still here" */
     fogw_poll_off();
+    /* Before anything that could grow the set, and unconditionally — a tick
+       that bails out still has to hand back what an earlier grow retired. */
+    fogw_drain();
 
     /* EVERY bail-out withdraws the published grid, not just the first two.
        `s_tick` has already advanced by the time any of them is reached, so the
@@ -567,8 +794,10 @@ void tagpu_fogwide_tick(char* ta, int rebuilt)
        needs it, and the alternative was a frame drawn without one. */
     if (s_off ||
         !fogw_source(ta, &s) ||
-        !fogw_window(ta, &col0, &row0, &cols, &rows) ||
-        !fogw_alloc()) {
+        !fogw_view(ta, &vw, &vh) ||
+        !fogw_capacity(vw, vh, &capCols, &capRows) ||
+        !fogw_alloc(capCols, capRows) ||
+        !fogw_window(ta, vw, vh, &col0, &row0, &cols, &rows)) {
         if (s_pubValid) {
             EnterCriticalSection(&s_cs);
             s_pubValid = 0;
@@ -645,7 +874,7 @@ void tagpu_fogwide_tick(char* ta, int rebuilt)
    any non-zero value is a frame drawn zoomed over the engine's 1x grid. */
 static void fogw_heartbeat(int cols, int rows)
 {
-    char b[224];
+    char b[288];
     LONG bare;
     DWORD now = GetTickCount();
     double secs;
@@ -655,11 +884,14 @@ static void fogw_heartbeat(int cols, int rows)
     if (now - s_hbMs < FOGW_HB_MS) return;
     secs = (double)(now - s_hbMs) / 1000.0;
     bare = InterlockedExchange(&s_bare, 0);
-    sprintf(b, "fogwide: %dx%d cells=%d rebuilds=%u in %.1fs = %.1f/s ticks=%u "
-               "build=%.0f/%.0f us (mean/max) bare=%ld",
-            cols, rows, cols * rows, s_hbBuilds, secs,
+    sprintf(b, "fogwide: %dx%d cells=%d cap=%dx%d rebuilds=%u in %.1fs = %.1f/s "
+               "ticks=%u build=%.0f/%.0f us (mean/max) bare=%ld "
+               "ret=%u/%u held=%d/%uKB strand=%u/%uKB",
+            cols, rows, cols * rows, s_capCols, s_capRows, s_hbBuilds, secs,
             secs > 0.0 ? (double)s_hbBuilds / secs : 0.0, s_hbTicks,
-            s_hbBuilds ? s_hbUs / s_hbBuilds : 0.0, s_hbUsMax, (long)bare);
+            s_hbBuilds ? s_hbUs / s_hbBuilds : 0.0, s_hbUsMax, (long)bare,
+            s_cFreed, s_cRetired, s_retN, (unsigned)(fogw_held_bytes() / 1024),
+            s_cStrand, (unsigned)(s_strandBytes / 1024));
     flog(b);
     s_hbMs = now;
     s_hbTicks = s_hbBuilds = 0; s_hbUs = s_hbUsMax = 0.0;
@@ -728,10 +960,30 @@ int tagpu_fogwide_get(const unsigned short** buf,
            flag did not take the grid with it */
         s_holdValid = 1;
     }
-    LeaveCriticalSection(&s_cs);
+    /* THE OUTPUTS ARE TAKEN INSIDE THE SECTION, and that is not tidiness. The
+       game thread may replace all three pointers (fogw_alloc's grow), so a
+       `*buf = s_hold` after the leave could read the NEW block while the
+       descriptor beside it came from the old set — a grid read at the wrong
+       stride. Inside, the pointer and its four numbers are one atom.
 
-    if (!s_holdValid || !s_hold) { InterlockedIncrement(&s_bare); return 0; }
+       What the caller then holds is a plain local into a block the grow may
+       retire a moment later; that is what the fence in fogw_retire is for. */
+    if (!s_holdValid || !s_hold) {
+        LeaveCriticalSection(&s_cs);
+        InterlockedIncrement(&s_bare);
+        return 0;
+    }
     *buf = s_hold; *cols = s_holdCols; *rows = s_holdRows;
     *orgX = s_holdOrgX; *orgY = s_holdOrgY;
+    LeaveCriticalSection(&s_cs);
     return 1;
+}
+
+/* The largest grid dimension any producer in this fork can legitimately hand
+   out, for the CPU-side gate in tagpu_fx.c to bound a descriptor against. See
+   s_dimcap: a high-water mark over the sets this process has allocated, never
+   below the bound tagpu_native.c applies to the engine's own descriptor. */
+int tagpu_fogwide_dimcap(void)
+{
+    return (int)s_dimcap;
 }

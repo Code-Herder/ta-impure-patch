@@ -187,6 +187,19 @@ int  tagpu_zoom_fog_pending(void);
 LONG tagpu_zoom_fog_seq(void);
 void tagpu_zoom_fog_ack(LONG seq);
 
+/* GAME THREAD, from the same tick. Releases the camera FOLLOW while a cursor-
+   anchored gesture is trying to move the camera — three slots the stepper
+   0x41CA10 reads, two of them pointers it dereferences. It lives on this side
+   of the fence for the reason the fog request does, and one more: `main` is
+   randomly misaligned at every launch (0x41D920 pads it by
+   (GetTickCount() % 1000) * 7), so a cross-thread store into it is not atomic
+   in ~4.7% of launches, and a torn POINTER is a wild read where a torn
+   coordinate is merely clamped. Called from terrown's fog tick, which runs on
+   exactly the frames tagpu_terrown_owns_fog() is true — the same condition
+   anchoring is gated on, so the request always has a consumer. `ta` must
+   already be validated. */
+void tagpu_zoom_follow_tick(char* ta);
+
 /* An eye writer OUTSIDE this module moved the camera: recompute the minimap's
    view box (0x41C3C0 is the only place the engine fills it, so a camera we
    moved ourselves leaves the box stale) and ask for a fog grid that spans the

@@ -29,6 +29,7 @@ typedef struct TAGPU_FXVIEW {
                                  /* bit1 = LosType true-LOS mode, diagnostic   */
     const unsigned short* fogGrid;  /* engine screen fog grid, corner masks    */
     int fogCols, fogRows;           /* its dims (view-anchored 32-px cells)    */
+    int fogCells;                   /* cells the BUFFER holds — the real bound */
     int fogOrgX, fogOrgY;           /* world x, projected z of its cell (0,0)  */
     unsigned int fogTex, fogLut;    /* RG8 grid; 256x1 grey palette remap      */
     unsigned int frame_counter;
@@ -70,6 +71,6 @@ int  tagpu_fx_tile_visible(const TAGPU_FXVIEW* v, int wx, int wzp);   /* engine 
 /* the fragment shaders' fog rule (tagpu_glsl.h) on the CPU, for gather-side
    gates: bit0 = the engine paints this point black, bit1 = it shade-remaps it.
    wzp is the PROJECTED world z (y - alt/2), the space the grid is built in. */
-int  tagpu_fog_at(const unsigned short* grid, int cols, int rows,
+int  tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
                   int orgX, int orgY, int wx, int wzp);
 #endif

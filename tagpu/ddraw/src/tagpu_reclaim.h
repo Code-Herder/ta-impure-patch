@@ -41,13 +41,43 @@ int  tagpu_reclaim_teardown_active(void);
 
 int  tagpu_reclaim_armed(void);
 
+/* THE QUIESCENCE FENCE, for other modules with the same problem. This module
+   owns the only published fact about whether the render thread is inside the
+   region that reads memory the game thread may free, and that fact is worth
+   more than one client: tagpu_fogwide's grid buffers are the second.
+
+   The rule is THE RULE above, exposed as two calls so that it is written down
+   once rather than re-derived:
+
+       p = old;  old = new;                       // unreachable to a new reader
+       stamp = tagpu_reclaim_pass_stamp();        // fence, then snapshot
+       ...
+       if (tagpu_reclaim_pass_passed(stamp)) free(p);
+
+   Take the stamp AFTER the store that made the pointer unreachable and on the
+   thread that made it — the call issues the same MemoryBarrier the drain does,
+   so that store is globally visible before any pass the stamp can be passed by.
+   Then poll; never spin, and never free under doubt.
+
+   BOTH ARE MEANINGLESS UNLESS tagpu_reclaim_armed(), and the failure is not the
+   one you would guess. On a build where the install did not happen the two pass
+   counters are never written, so they are equal for ever and
+   tagpu_reclaim_pass_passed() answers TRUE from the very first call — an
+   immediate, unfenced free. The caller must ask armed() FIRST and keep the
+   block for ever when the answer is no. That is not a degradation to work
+   around: a block that is never freed faults nothing. */
+long tagpu_reclaim_pass_stamp(void);
+int  tagpu_reclaim_pass_passed(long stamp);
+
 /* THE LEVEL GENERATION. Bumped once per level teardown, on the game thread, in
    the POST hook — after the cascade has freed the templates, and before the
    render thread is released.
 
    NOT the pre hook, and the difference is a bug rather than a preference: the
    render thread is stopped by tagpu_overlay.c's teardown_active() gate, not by
-   pass_begin, so a pass that got past that gate before the flag was set runs on
+   pass_begin's return value — and since G13t that gate replays the flag as
+   pass_begin latched it, so the boundary is pass_begin. A pass that had already
+   begun when the flag was set latched 0 and runs its engine reads to completion
    while the pre hook waits for it — and would there see a generation bumped in
    the pre hook, drop its template caches and refill them from templates the
    cascade has not freed yet. reclaim_teardown_post carries the full reasoning.

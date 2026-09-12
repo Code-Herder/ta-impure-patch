@@ -162,6 +162,11 @@ static void __cdecl terr_fogtick(void* ctxv)
     LONG want;
     (void)ctxv;
     if (!ptr_ok(ta)) return;
+    /* The camera FOLLOW, released here for the same reason the fog request is
+       answered here: this is the game thread, and the slots are pointers the
+       camera stepper dereferences. tagpu_zoom.c's follow_tick explains why a
+       render-thread store is not an option (main is randomly misaligned). */
+    tagpu_zoom_follow_tick(ta);
     los = (unsigned short*)(ta + OFF_LOSTYPE);
     /* OUR OWN REQUEST, OR-ed into the engine's lazy test rather than written
        into it. The screen fog grid is view-anchored, so an eye that moved must

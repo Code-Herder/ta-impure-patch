@@ -1066,8 +1066,9 @@ Three things about this one are unlike the other passes:
   oracle, which logs `fogwide check: … compared=N of cells=M differ=N` every 120th tick and
   **must read `differ=0`**. `compared` is `cols*rows` and `cells` the engine's ALLOCATION, which
   it rounds up to a multiple of 8 — comparing the tail reads entries nothing built.
-  Its heartbeat is `fogwide: <cols>x<rows> cells=… rebuilds=N in 5.0s = R/s ticks=… build=…/… us
-  (mean/max) bare=N`, **one line per five seconds of wall time** (G13s; it used to be per 300
+  Its heartbeat is `fogwide: <cols>x<rows> cells=… cap=<C>x<R> rebuilds=N in 5.0s = R/s ticks=…
+  build=…/… us (mean/max) bare=N ret=F/R held=N strand=N/NKB`, **one line per five seconds of wall
+  time** (G13s; it used to be per 300
   ticks, which was incomparable between runs because a tick is a `DrawGameScreen` call and the game
   loop turns that over 330–4900 times a second depending on the scene while the presenter holds 60).
   **`bare=` must read 0**: it counts render frames that drew zoomed and were refused a wide grid,
@@ -1078,7 +1079,28 @@ Three things about this one are unlike the other passes:
   still the engine's grid, bit for bit, because the consumer is what gates on the level now. That
   costs **~30 rebuilds a second whenever anything is moving** (the rate is the sim tick's, not the
   camera's: every LOS stamp clears the engine's is-current bit) at ~145 µs, i.e. ~4.4 ms of
-  game-thread time a second, plus 6 MB of heap in every session.
+  game-thread time a second.
+  **The grid is sized from the screen since 2026-09-10, not from a constant** — `cap=` is what the
+  three buffers are allocated for and the `fogwide: grid CxR, N KB for the set` line says the cost
+  once per size: **212 KB at 1920x1080, 84 KB at 1024x768**, where it used to be a flat 6144 KB in
+  every session. `ret=freed/retired held=N/NKB` is the grow path — a video-mode change grows the set
+  and hands the old three blocks to `tagpu_reclaim`'s quiescence fence, so **`held=` must fall
+  back to 0** and **`strand=` must read 0**: stranding is what happens when the fence is unarmed
+  (`tagpu_reclaim.off`, or an exe where the install failed) or the ring is full, and it is safe but
+  it means memory is not coming back. A session that never changes resolution shows `ret=0/0`
+  throughout — **the grow path does not run on a normal launch**, so testing it needs either a real
+  game → shell → game cycle at a different resolution or a temporary probe that inflates
+  `fogw_capacity`.
+  **`rebuilds=0` is not a fault — check `LosType` before you chase it.** The rebuild fires on the
+  engine's is-current bit, which the LOS stamps clear; at **`LosType 12` (permanent LOS,
+  `--los 0`) nothing stamps**, so the rate is legitimately 0 however much is moving on screen.
+  At 14 (true LOS) the same scene gives ~30/s. Read the word at `*0x511DE8 + 0x14281` with
+  `tacli peek` rather than guessing — this cost a round of "is my change broken?" on 2026-09-11
+  when the answer was that `scenario load` had been given `--los 0`.
+  **One `bare=1` per video-mode change is expected** and is not the alarm the counter is for: the
+  render thread is recreated across a mode switch while `fogwide`'s staleness statics survive, so
+  the first frame after it reports one refusal. A second one, or any at all without a mode change,
+  is the real signal.
 - **A one-frame fog artifact is not findable with `glshot`.** Record the window losslessly
   (`ffmpeg -f x11grab -window_id <id> -framerate 60 -c:v libx264rgb -qp 0`) and scan every frame;
   the criterion that separates a fog failure from the grey band is **green dominance**
@@ -1175,13 +1197,29 @@ about six frames.
 **The wheel ZOOMS TO THE CURSOR since G13t (2026-09-10), so it MOVES THE CAMERA.** The world
 point under the pointer is held still, which means `tacli wheel --at X Y` is no longer a
 camera-neutral operation: the eye steps by `(a − c)(1/z0 − 1/z1)`, where `c` is the viewport
-centre. Three consequences for driving:
+centre. Four consequences for driving:
 
 - **Re-read the eye after any wheel**, and do not assume a recipe's camera survived one.
 - **`--at` the viewport centre is the old behaviour exactly** — the delta is 0 there, so that
   is the control for any A/B, and it needs no flag (there isn't one).
 - **`tagpu_zoom.txt` still does NOT move the camera.** Only the wheel anchors, so every
   scripted zoom and every fixture is unchanged.
+- **An off-centre wheel RELEASES a camera follow (G13u), and it needs the GAME THREAD to be
+  ticking.** Ctrl+C follows your commander (it does not merely centre on it) and the
+  cycle-through-units keys do the same; a wheel that wants to move the eye asks for all three
+  follow slots to be cleared, and `terrown`'s fog tick does the clearing. Two consequences for
+  driving: a recipe that sets up a follow and then wheels has no follow afterwards — read
+  `main+0x142F3` (`CameraToUnit`, 0 = nothing followed) rather than assuming, and expect one
+  `zoom: cursor anchor took the camera - the unit follow is released` per follow in the log.
+  **Pausing the sim (`tab`) does NOT stop this** — the fog tick is a detour on the fog-overlay
+  *draw* `0x4848E0`, whose sole call site `0x469D8E` is inside the per-frame world draw, so a
+  paused game still services the request and the wheel still takes the camera. What does stop it
+  is the game thread ceasing to DRAW, which is the fail-safe direction and not a state you meet
+  while testing. A wheel aimed at the viewport centre moves the eye by nothing and leaves the
+  follow alone, which is the control.
+- **`Ctrl+C` needs the SHIELD ON.** It is a modifier combo, so under injection it only reaches
+  the game through `fake_GetAsyncKeyState` — with `--no-shield` your `ctrl` is invisible and
+  the follow is never established, which looks exactly like the feature not working.
 
 Anchoring is off — and says so once a second in the log — while `tagpu_eye.txt` holds the
 camera (`zoom: cursor anchor off - tagpu_eye.txt holds the camera`), and while `terrown` is
