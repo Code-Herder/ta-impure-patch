@@ -2746,12 +2746,19 @@ So **the effect tables cost 2 µs of publish and 6.4 KB, and the wide fog grid 6
 landing 3's world gather: at ~340 units the same run read p50 112 µs and 308 KB, and at 55 units
 46 µs.
 
-**And the whole build is not slower — it is faster with the passes armed.** `draws/s` reads 3389
-and 3540 with everything on against 2374 and 2421 with the effect tables off, because turning them
-off releases the engine's own projectile, explosion and particle draws and the engine pays more for
-them than we do. That is the direction the two adjacent pairs agree on; the absolute numbers are a
-ratio and nothing else ([ta-drive](../../.claude/skills/ta-drive/SKILL.md), "a frame-rate figure is
-only ever a RATIO").
+**Landing 3's DLL, on a 63-unit scene of the same run's shape, reads p50 30 µs and a 66 392-byte
+packet against landing 4's 46 µs and 153 712** — two different battles' leftovers, so it is a
+supporting figure and not the measurement; the within-launch phases above are. Turning both new
+gathers off inside landing 4's own launch lands at 38 µs and 74 760 B, which is the same place from
+the other side.
+
+**The whole build is not slower.** In-play `draws/s` reads 3389 and 3540 on landing 4 against 3347
+and 3293 on landing 3, at 55 and 63 units. (The `draws/s` figures for the middle two phases — 2374
+and 2421 on landing 4, 1794 and 1850 on landing 3 — are *lower* on **both** builds, because
+`fx.on=off` hands the engine back its own projectile, explosion and particle draws and it pays more
+for them than our pass does. That is a fact about the effects pass and not about this landing; it
+reproduces on the DLL that predates it.) Every one of these is a ratio and nothing else
+([ta-drive](../../.claude/skills/ta-drive/SKILL.md), "a frame-rate figure is only ever a RATIO").
 
 
 ### 2.22 What landing 4's review changed
