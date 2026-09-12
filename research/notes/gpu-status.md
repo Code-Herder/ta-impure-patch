@@ -2756,12 +2756,13 @@ only ever a RATIO").
 
 ### 2.22 What landing 4's review changed
 
-**Four Opus reviewers at `high`, read-only, launched as `Agent`s** — one per plan row with a
-numbered risk list, and a fourth told to range freely and to check the notes' claims against the
-pristine binary. **Eleven findings**, every one verified in the code or the disassembly before
-anything moved, and all eleven acted on. Six were correctness, five were documentation — which is
-the ratio worth noticing, because the documentation half included the sentence that licensed a
-cache.
+**FIVE Opus reviewers at `high`, read-only, launched as `Agent`s and never `/code-review`** (a fork
+runs on the session model). Four read the landing — one per plan row with a numbered risk list, and
+one told to range freely and to check the notes' claims against the pristine binary — and a fifth
+read the fix diff afterwards. **Fourteen findings between them**, every one verified in the code or
+the disassembly before anything moved, and all fourteen acted on except one, rejected below with
+its reason. Nine were correctness, five were documentation — and the documentation half is the one
+worth noticing, because it included the sentence that licensed a cache.
 
 | # | what it was | why it mattered |
 |---|---|---|
@@ -2776,6 +2777,28 @@ cache.
 | 9 | `tagpu_packet_pub_level_end`'s foreign-thread return skipped the picture reset | the picture's state is keyed on the level generation now and needs no reset at all |
 | 10 | **the per-tick cache's stated argument was disproved by the binary** | it said the engine's draw passes read the effect arrays and write nothing. **They do not**: `0x420B00`'s debris loop calls `0x421550` (`0x420B18`), which calls the grey-smoke emitter `0x472810` and the fire emitter `0x472AB0`, and both append to a particle layer. So the layers are not constant within a tick. The cache stands on three weaker things instead, and the comment now says all three: the tables are copies so a later append cannot dangle one; positions are the tick's so nothing already present goes stale; and what it costs is the newest smoke of a tick landing one publish late |
 | 11 | **an explosion's two anim states are PER-LEVEL**, not from the session `"fx"` bank | the add site takes the sequence from `main+0x1AB8F[idx]` (`0x420AA2`), a table `0x420620` builds from the level load and `0x420960` frees and nulls from the teardown. The notes said this was "not established"; it is now, and unfavourably — those two frames stand on `tagpu_reclaim`'s fence exactly as the model templates do |
+
+**A FIFTH REVIEWER read the fix diff**, because fixes of that size introduce new mechanisms and a
+fix is exactly where a landing stops paying attention. Three of the eleven had added a cross-thread
+word. It found **three more, all confirmed**, and they are the reason that pass was worth running:
+
+| # | what it was | why it mattered |
+|---|---|---|
+| 12 | **the glyph-feed fix was bypassed by the skip-to-reset path** | `drain()` jumps the whole switch for every op queued before a GL context change — its own comment measures 705 of them — so installing the block *inside* the switch still let those ops take their first-sight glyph records with them while the producer had already marked the pairs sent. The block goes in before the skip gate, and the producer's reseed handling clears `sent[]` alongside the sprite and pixel tables it already re-arms. Finding 4's own commit message said "every string op"; it was not |
+| 13 | **the fog stamp proved the observer ran, not that the latch was fresh** | after ownership is dropped and returns, the engine rebuilt the grid at a live eye where we could not see it, and on the first tick back `LosType` bit 3 is already set — no rebuild, the stamp matches, and the pre-gap eye goes into the packet against a live grid. Handing the fog site back clears the latch |
+| 14 | **the minimap ack could be raised for a picture nobody has** | with `gui.on='mmbase nominimap'` the render half acked without a copy; dropping `nominimap` mid-level then left the level with no picture and nothing to recover it. The ack is withdrawn whenever the copy is absent, which makes every reason it can be absent self-healing |
+
+It also caught the cursor rect's **fourth** outcome, which finding 11's fix had collapsed: a
+readable sprite record of zero extent gives the position with a zero size, not "no rect". Making
+that exact meant gating on `in_game`, which surfaced the one thing this landing does not close —
+**on a shell frame the cursor is the engine's own again**, named above.
+
+**One finding was rejected, and here is why.** The producer publishes glyphs for `0x20..0xFF` and
+the reviewer observed that `0x4CCF60` refuses only `0x00` and `0x0A`, so `0x01..0x1F` could in
+principle be glyphs too. They could — but `tagpu_text.c`'s cache has always started at `0x20`
+(`CH_LO`), so the producer's floor matches the consumer the landing replaced exactly and **nothing
+regressed**. Lowering it means widening the consumer's atlas as well, which is a change to a landed
+gate for a case no engine UI string contains.
 
 Three more documentation corrections came with them: the particle emitter list undercounted
 (**twenty** sites cap a layer, not thirteen — all twenty are listed now, because a partial list
