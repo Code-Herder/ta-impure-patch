@@ -1004,7 +1004,7 @@ instead: `tacli arm <i> classicpp.on=off`.
   exercise the level generation at all.
 - **The frame packet exchange is on by default and `packet.off` is its A/B lever, not a feature
   switch** (landing 1, 2026-09-12; [frame packet exchange](../../research/notes/frame-packet-exchange.html),
-  gpu-status §2.15). The game thread publishes a copy of the per-frame engine state after every
+  gpu-status §2.16). The game thread publishes a copy of the per-frame engine state after every
   in-play `DrawGameScreen` (only when the renderer has taken the previous one) and the render
   thread takes it once at the top of its frame; today the copy is the header plus the marker
   text's font as glyph bytes, so **with `packet.off` the group digits and the `ShowRanges` labels
