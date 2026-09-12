@@ -776,6 +776,31 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
         {
             border = FALSE;
 
+            /* tagpu: size to the MONITOR the window is on, not to the display
+               "mode". `EnumDisplaySettings(NULL, ENUM_CURRENT_SETTINGS)` above
+               reports the VIRTUAL DESKTOP on a multi-monitor X server --
+               measured 2026-09-11 on a three-output setup: 6200x2160 where the
+               target monitor is 3840x2160 -- so the render target came out
+               desktop-wide, the 4:3 viewport was centred in 6200 rather than in
+               3840, and the borderless window showed a slice of it pushed off
+               to the right. `mouse.scale_*` is derived from the same viewport a
+               few lines down, so clicks were displaced with it.
+
+               Borderless fullscreen presents into ONE monitor by definition, so
+               that monitor's rect is the size. Exclusive fullscreen is left
+               alone: there the mode really is the screen. */
+            {
+                HMONITOR mon = MonitorFromWindow(g_ddraw.hwnd, MONITOR_DEFAULTTONEAREST);
+                MONITORINFO mi;
+                mi.cbSize = sizeof(MONITORINFO);
+
+                if (mon && GetMonitorInfoA(mon, &mi))
+                {
+                    g_ddraw.render.width = mi.rcMonitor.right - mi.rcMonitor.left;
+                    g_ddraw.render.height = mi.rcMonitor.bottom - mi.rcMonitor.top;
+                }
+            }
+
             if (!g_config.remove_menu && GetMenu(g_ddraw.hwnd))
             {
                 g_ddraw.render.height -= real_GetSystemMetrics(SM_CYMENU);

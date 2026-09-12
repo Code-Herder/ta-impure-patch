@@ -1610,7 +1610,10 @@ static const VisStock s_visStock[VIS_STOCK_N] = {
    they are not in `s_row` and never appear on the in-game panel -- and why
    every one of them is applied on the thread that owns the window (below)
    rather than wherever the click happened to land. */
-enum { VD_MODE, VD_MON, VD_SCALE, VD_FPS, VD_COUNT };
+enum { VD_MODE, VD_MON, VD_SCALE, VD_FPS, VD_COUNT,
+       /* not a row: a second message the Display mode row posts to itself, so
+          the frame restore lands after the style restore the fork posts */
+       VD_RESTORE_FRAME };
 
 #define VD_MONMAX 8
 static char s_monText[VD_MONMAX * 20];
@@ -1823,7 +1826,8 @@ static void apply_scale(int k)
    the monitor's size on the way BACK -- 1024x768 -> 3840x2160 -> 3840x2160 --
    so the row would be a one-way door. The size is ours to put back, and this is
    a value we saved rather than a timing guess. */
-static int s_winW, s_winH;
+static RECT s_winFrame;         /* the frame's own screen rect */
+static int  s_winSaved;
 
 BOOL tagpu_menu_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESULT* result)
 {
@@ -1832,19 +1836,50 @@ BOOL tagpu_menu_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESU
     switch ((int)wparam) {
     case VD_MODE:
         if (!!g_config.fullscreen != !!s_vstage[VD_MODE]) {
-            if (s_vstage[VD_MODE]) {                 /* window -> fullscreen  */
-                s_winW = g_config.window_rect.right;
-                s_winH = g_config.window_rect.bottom;
-                util_toggle_fullscreen();
-            } else {                                  /* fullscreen -> window */
-                util_toggle_fullscreen();
-                if (s_winW > 0 && s_winH > 0) {
-                    g_config.window_rect.right  = s_winW;
-                    g_config.window_rect.bottom = s_winH;
-                    dd_SetDisplayMode(0, 0, 0, 0);
-                }
-            }
+            if (s_vstage[VD_MODE])                    /* window -> fullscreen */
+                s_winSaved = GetWindowRect(g_ddraw.hwnd, &s_winFrame) ? 1 : 0;
+            util_toggle_fullscreen();
+            /* PUT THE FRAME BACK, RECT AND ALL -- and LATER, not here.
+               `g_config.window_rect` is no good for it: the wndproc re-derives
+               that field from the frame on every move ("save new window
+               position") and un-adjusts it by the CURRENT style, so a size
+               written while the window is still borderless comes back one
+               caption short -- measured 2026-09-11, three round trips walked
+               the window 118 -> 155 -> 192 -> 229 down the screen, losing 37 px
+               of height each time with its bottom edge pinned.
+
+               And a `SetWindowPos` right here loses too: `dd_SetDisplayMode`
+               POSTS `WM_RESTORE_STYLE` (wndproc.c) rather than restoring the
+               style inline, so that handler runs after we return and re-applies
+               its own geometry over ours -- which left the window stuck at the
+               monitor's size. Posting puts our restore BEHIND it in the same
+               queue, which is an ordering rather than a delay. */
+            if (!s_vstage[VD_MODE] && s_winSaved)
+                PostMessageA(g_ddraw.hwnd, WM_TAGPU_DISPLAY, (WPARAM)VD_RESTORE_FRAME, 0);
         }
+        break;
+
+    /* KNOWN GAP UNDER WINE, and this is the correct Win32 either way: leaving
+       borderless fullscreen should put the frame back where it was. On the
+       reference setup it does not, and the cause is outside the process --
+       measured 2026-09-11, the X window still carries `_NET_WM_STATE_FULLSCREEN`
+       after the return even though its caption is back (`_NET_FRAME_EXTENTS`
+       reads 0,0,37,0), and a WM-fullscreen window ignores SetWindowPos. Three
+       things were tried and none dropped that state: restoring through
+       `g_config.window_rect` + `dd_SetDisplayMode`, a direct SetWindowPos
+       inline, and `SW_RESTORE` before the move. Posting is still right (the
+       fork posts `WM_RESTORE_STYLE`, so an inline move is overwritten), and the
+       call is kept because it is what a native Windows build needs; the
+       residue is that the window comes back the monitor's size rather than its
+       own. The PICTURE is correct either way -- the viewport is centred and the
+       mouse scale matches it -- so this is ergonomics, not corruption. */
+    case VD_RESTORE_FRAME:
+        if (s_winSaved && !g_config.fullscreen)
+            real_SetWindowPos(g_ddraw.hwnd, NULL,
+                              s_winFrame.left, s_winFrame.top,
+                              s_winFrame.right - s_winFrame.left,
+                              s_winFrame.bottom - s_winFrame.top,
+                              SWP_NOZORDER | SWP_NOACTIVATE);
         break;
     case VD_MON:   move_to_monitor(s_vstage[VD_MON]);              break;
     case VD_SCALE: apply_scale(SCALE_VAL[s_vstage[VD_SCALE]]);     break;
@@ -1900,10 +1935,15 @@ static void read_display_state(void)
 
 /* A row that cannot bite is greyed rather than left looking live -- the same
    rule `row_greyed` applies to the render column. */
+/* GREYED FROM THE MODEL, NOT FROM `g_config`. The window work is POSTED, so
+   `g_config.fullscreen` still holds the old value when `push_display` runs
+   immediately after a click -- which left the plate saying "Window" and UI
+   scale greyed at the same time, one click behind. `s_vstage[VD_MODE]` is what
+   the player just asked for, and the two agree again. */
 static int vrow_greyed(int row)
 {
     if (row == VD_MON)   return s_monCount < 2;
-    if (row == VD_SCALE) return g_config.fullscreen ? 1 : 0;
+    if (row == VD_SCALE) return s_vstage[VD_MODE] ? 1 : 0;
     return 0;
 }
 
