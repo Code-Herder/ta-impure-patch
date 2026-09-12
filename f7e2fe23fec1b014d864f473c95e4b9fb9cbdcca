@@ -1,0 +1,1 @@
+landing-review: model=opus effort=high reviewers=2 range=main..f7e2fe2 findings=15 acted=13 rejected=2 date=2026-09-12 (rejected: the tick-aware give-back is landing 3's, documented; a second live loader is unreachable, the slot made atomic anyway)
