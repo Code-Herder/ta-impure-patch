@@ -59,6 +59,8 @@
 #define FOG_VA       0x004848E0u   /* stdcall(ctx), ret 4  */
 #define FOGGRID_BUILD_VA 0x004843C0u
 #define TA_MAINPP    0x00511DE8u
+#define OFF_EYEX      0x1431F
+#define OFF_EYEY      0x14323
 #define OFF_LOSTYPE  0x14281       /* u16; bit3 = grid is current              */
 #define OFF_VP_L     0x37E27
 #define OFF_VP_T     0x37E2B
@@ -154,6 +156,15 @@ static void __cdecl terr_fill(void* ctxv)
    range fits in. It runs here because here is where the maps it reads are the
    engine's own to read (tagpu_fogwide.h), and it needs to know whether the
    engine rebuilt on this tick — that is the same "the LOS state moved" signal. */
+/* the eye the engine's own fog grid was last built at; see the latch below */
+static int s_fogEyeX, s_fogEyeY, s_fogEyeOk;
+int tagpu_terrown_fog_eye(int* x, int* y)
+{
+    if (!s_fogEyeOk) return 0;
+    *x = s_fogEyeX; *y = s_fogEyeY;
+    return 1;
+}
+
 static void __cdecl terr_fogtick(void* ctxv)
 {
     char* ta = *(char**)TA_MAINPP;
@@ -181,6 +192,15 @@ static void __cdecl terr_fogtick(void* ctxv)
         if (!ptr_ok(ta)) return;
         *(unsigned short*)(ta + OFF_LOSTYPE) |= 8;
         rebuilt = 1;
+        /* THE EYE THE ENGINE'S GRID IS ANCHORED AT, latched at the instant its
+           builder read it (0x4843C0 recomputes the origin from these two words
+           itself). The packet's publisher turns it into the grid's world origin
+           later in this same draw; taking it from the packet's own eye instead
+           would be right only while nothing moved the camera between here and
+           the post-flip publish (landing 4b). */
+        s_fogEyeX = *(const int*)(ta + OFF_EYEX);
+        s_fogEyeY = *(const int*)(ta + OFF_EYEY);
+        s_fogEyeOk = 1;
     }
     tagpu_fogwide_tick(ta, rebuilt);
 }

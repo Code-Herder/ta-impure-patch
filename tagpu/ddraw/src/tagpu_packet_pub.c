@@ -93,6 +93,8 @@
 #include "tagpu_model3do.h"  /* TAGPU_PBMAXPIECE, to assert the packet's copy of it */
 #include "tagpu_gaf.h"       /* the GAF resolvers: pure reads, taken on THIS thread */
 #include "tagpu_fxown.h"     /* whether the render thread wants the effect tables */
+#include "tagpu_fogwide.h"   /* the wide fog grid, built in THIS draw on this thread */
+#include "tagpu_terrown.h"   /* the eye the engine's own fog grid is anchored at */
 
 /* DrawGameScreen's prologue, `sub esp,0x214` — the same six bytes
    tagpu_menu.c observes */
@@ -1193,6 +1195,122 @@ static unsigned fill_fx(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 }
 
 
+/* ======================== THE FOG GRIDS (landing 4b) ======================
+   Two lattices, both read on the thread that writes them.
+
+   THE ENGINE'S is `*(main+0x1421F)` — a descriptor {u16* buf, cols, rows,
+   cells} built once per map by LoadMap (0x483C03 / 0x483C96) and REWRITTEN in
+   place by the builder 0x4843C0, which this fork's terrain owner calls from the
+   engine's own fog site inside the draw. So the render thread used to read the
+   descriptor, and the buffer behind it, while this thread was rewriting both:
+   the read `tagpu_fog_at`'s guard was added for after a hard fault off a base
+   of -9 (2026-09-03; the root cause was never found and still is not — what
+   changes here is that the class is gone, not that it was diagnosed).
+
+   THE RELATION IS THE CHECK, and it is the engine's own: `cells` is the
+   allocation, which the builder rounds up to a multiple of 8 before allocating
+   (0x483C84: add 7, and ~7), so `cells == ((cols*rows + 7) & ~7)` says the
+   three numbers describe one block. Demanding `cells == cols*rows` refused
+   every viewport whose cell count is not already a multiple of 8 — 1920x1080 is
+   58x34 = 1972 against an allocated 1976 — and a refusal here is not degraded
+   fog but NO fog at all. What lands in the packet is exactly `cols*rows`
+   entries, so the consumer's bound is its own length and the round-up is this
+   file's business alone.
+
+   THE ORIGIN IS TAKEN HERE, from the eye this packet carries, because that is
+   the eye the grid was built at. The render thread used to derive it from its
+   PREDICTED eye — the packet's plus a cursor-anchor step not yet applied — and
+   covered the disagreement by taking the wide grid whenever anything was
+   unacknowledged. It still takes the wide grid there; the origin is now right
+   either way.
+
+   THE WIDE ONE is tagpu_fogwide's, built in `terr_fogtick` during THIS draw,
+   on this thread. Copying it here is what retired that module's three buffers,
+   its critical section and its retire ring. */
+
+#define FOG_DESC     0x1421F      /* -> {u16* buf, i32 cols, i32 rows, i32 cells} */
+#define PROG_FOGSH   0x0CC        /* u8[256]: the grey band's palette remap,
+                                     applied by 0x4BFE10 as p -> shade[p]      */
+
+static unsigned char s_fogsh[TAGPU_PK_FOGSHADE_BYTES];
+static const unsigned char* s_fogshPtr;
+static int s_fogshOk;
+static volatile unsigned s_cFogshCopies, s_cFogRefused, s_cFogwSeen;
+static volatile int      s_lastFogC, s_lastFogR, s_lastFogwC, s_lastFogwR;
+
+static void fogshade_snapshot(void)
+{
+    const char* g = *(const char* const*)TA_GFX_PP;
+    const unsigned char* t;
+    if (!ptr_ok(g)) return;
+    t = *(const unsigned char* const*)(g + PROG_FOGSH);
+    if (!ptr_ok(t)) return;
+    if (t == s_fogshPtr && s_fogshOk) return;
+    /* THE BOUND IS THE FORMAT: 0x4BFE10 indexes it with a palette byte, so it
+       is exactly 256 entries and a copy of that size reads what the remap
+       reads and nothing more. */
+    tagpu_pk_copy(s_fogsh, t, sizeof s_fogsh);
+    s_fogshPtr = t; s_fogshOk = 1; s_cFogshCopies++;
+}
+
+/* the eye rounded to the lattice the overlay anchors on: cell (0,0)'s world
+   point is 32*col0 + 16, col0 being the builder's half-cell-rounded eye>>5 */
+static int fog_org(int eye) { int r = eye % 32; return eye + (r > 15 ? 16 : -16) - r; }
+
+static unsigned fill_fog(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
+{
+    unsigned need = *cursor, e;
+    const int* fg = *(const int* const*)(ta + FOG_DESC);
+    if (ptr_ok(fg)) {
+        const unsigned short* buf = (const unsigned short*)(size_t)fg[0];
+        int cols = fg[1], rows = fg[2], cells = fg[3];
+        if (ptr_ok(buf) && cols > 0 && rows > 0 &&
+            cols <= FOGW_ENGINE_DIMCAP && rows <= FOGW_ENGINE_DIMCAP &&
+            cells == (((cols * rows) + 7) & ~7)) {
+            int ex = p->eye[0], ey = p->eye[1];
+            /* the eye the grid was ANCHORED at, latched inside the fog site
+               when the engine's builder ran, not the one this packet carries:
+               between the two the engine's own camera stepper may have moved
+               the camera, and the grid does not follow until the next draw */
+            tagpu_terrown_fog_eye(&ex, &ey);
+            p->fog_cols = cols; p->fog_rows = rows;
+            p->fog_org[0] = fog_org(ex);
+            p->fog_org[1] = fog_org(ey);
+            e = append_area(p, cursor, buf, (unsigned)cols * (unsigned)rows * 2u,
+                            &p->fog_off, &p->fog_len, TAGPU_PK_TRUNC_FOG);
+            if (e > need) need = e;
+            if (!p->fog_len) { p->fog_cols = 0; p->fog_rows = 0; }
+        } else {
+            s_cFogRefused++;
+        }
+    } else {
+        s_cFogRefused++;
+    }
+    {
+        const unsigned short* wb; int wc, wr, wox, woy;
+        if (tagpu_fogwide_current(&wb, &wc, &wr, &wox, &woy) &&
+            wc > 0 && wr > 0 && wc <= TAGPU_PK_FOG_DIMCAP && wr <= TAGPU_PK_FOG_DIMCAP) {
+            p->fogw_cols = wc; p->fogw_rows = wr;
+            p->fogw_org[0] = wox; p->fogw_org[1] = woy;
+            e = append_area(p, cursor, wb, (unsigned)wc * (unsigned)wr * 2u,
+                            &p->fogw_off, &p->fogw_len, TAGPU_PK_TRUNC_FOGW);
+            if (e > need) need = e;
+            if (!p->fogw_len) { p->fogw_cols = 0; p->fogw_rows = 0; }
+            else s_cFogwSeen++;
+        }
+    }
+    s_lastFogC = p->fog_cols;  s_lastFogR = p->fog_rows;
+    s_lastFogwC = p->fogw_cols; s_lastFogwR = p->fogw_rows;
+    fogshade_snapshot();
+    if (s_fogshOk) {
+        e = append_area(p, cursor, s_fogsh, (unsigned)sizeof s_fogsh,
+                        &p->fogsh_off, &p->fogsh_len, TAGPU_PK_TRUNC_FOGSH);
+        if (e > need) need = e;
+    }
+    return need;
+}
+
+
 /* The engine's palette table and gamma factor, into the packet — both kinds
    of packet carry them (the level-end one from the teardown, where `main` is
    still valid), so the render thread's palette module never reads either
@@ -1288,6 +1406,9 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     if (e > need) need = e;
     /* ---- the effects and the particle layers (landing 4a) ---- */
     e = fill_fx(p, ta, &cursor);
+    if (e > need) need = e;
+    /* ---- the two fog grids (landing 4b) ---- */
+    e = fill_fog(p, ta, &cursor);
     if (e > need) need = e;
     shd_snapshot();
     if (s_shdOk) {
@@ -1516,10 +1637,13 @@ static void extra(char* buf, unsigned cap, double secs)
         unsigned n = 0;
         while (n < cap && buf[n]) n++;
         _snprintf(buf + n, cap > n ? cap - n : 0,
-                  " | fx: proj=%u expl=%u deb=%u part=%u/%u scan=%u/%u trunc=%u layerbad=%u subbad=%u lht=%u want=%d/%d",
+                  " | fx: proj=%u expl=%u deb=%u part=%u/%u scan=%u/%u trunc=%u layerbad=%u subbad=%u lht=%u want=%d/%d"
+                  " | fog: %dx%d wide=%dx%d/%u refused=%u shade=%u",
                   s_cLastProj, s_cLastExpl, s_cLastDebris, s_cLastPart, s_cPartMax,
                   s_cFxScan, s_cFxReuse, s_cPartTrunc, s_cLayerBad, s_cSubBad, s_cLhtCopies,
-                  tagpu_fxown_want_fx(), tagpu_fxown_want_sfx());
+                  tagpu_fxown_want_fx(), tagpu_fxown_want_sfx(),
+                  s_lastFogC, s_lastFogR, s_lastFogwC, s_lastFogwR, s_cFogwSeen,
+                  s_cFogRefused, s_cFogshCopies);
     }
     if (cap) buf[cap - 1] = 0;
     lastAll = all; lastIn = in;

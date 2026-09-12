@@ -43,4 +43,11 @@ unsigned tagpu_terrown_fill_seq(void);
    have to race it to write. tagpu_zoom gates cursor anchoring on this: a
    stepped eye it could not answer for is a silently stale fog. */
 int  tagpu_terrown_owns_fog(void);
+/* GAME THREAD, from the packet's publisher. The eye the ENGINE's own fog grid
+   was last anchored at, latched inside the fog site the moment its builder ran
+   (0x4843C0 recomputes the origin from those two words itself). 0 when this
+   fork has never seen that builder run — terrain ownership disarmed, so the
+   engine calls it where we cannot observe — and the publisher then falls back
+   to the packet's own eye, which is what the render thread used to use. */
+int tagpu_terrown_fog_eye(int* x, int* y);
 #endif

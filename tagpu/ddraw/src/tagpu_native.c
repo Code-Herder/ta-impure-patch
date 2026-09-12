@@ -110,11 +110,6 @@
 #define OFF_VIEW_W   0x37E37
 #define OFF_VIEW_H   0x37E3B
 #define OFF_GFXOPT   0x37F06   /* bit2 Shadow, bit3 TShadow                 */
-#define TAPROG_PP    0x0051FBD0u
-#define PROG_FOGLUT  0xCC      /* u8[256] fog shade remap (0x4BFE10)        */
-#define OFF_FOGGRID  0x1421F   /* -> {u16* buf, cols, rows, cells}: the      
-                                  engine screen fog grid, 4-bit corner masks
-                                  per 32-px view cell (terrain-depth.md 5)  */
 #define OFF_LOSTYPE  0x14281   /* u16: b0 mapping, b1 true LOS              */
 #define UNIT_STRIDE  0x118
 #define U_STATE      0x110
@@ -366,6 +361,11 @@ static int    s_fboW = 0, s_fboH = 0, s_fboSS = 0;
 static int    s_palInit = 0;
 static int    s_fogCols = 0, s_fogRows = 0, s_fogOrgX = 0, s_fogOrgY = 0;
 static int    s_fogCells = 0;         /* what the buffer holds, not cols*rows */
+/* Frames drawn zoomed out, or from an unacknowledged eye, whose packet carried
+   no WIDE fog grid — so the outer ring falls back to the engine's 1x grid and
+   taFog's clamp. This is tagpu_fogwide's old `bare=` counter, moved here with
+   the grid (landing 4b): it must read 0 unless `tagpu_fogwide.off` is armed. */
+static unsigned s_fogBare = 0;
 static const unsigned short* s_fogGrid = NULL;
 static int    s_fogLut = 0;   /* grey remap uploaded this frame (logged) */
 static unsigned s_fillSeq = 0;   /* terrain key-fill sequence + stall counter */
@@ -376,7 +376,6 @@ static int      s_fillStall = 0;
    computes col0 as ((eye + (sign & 31)) >> 5) - 1, which is C's truncating
    division, so a floor-based remainder would disagree with the engine for a
    negative eye (eye = -20: engine origin -16, floor would say -48). */
-static int fog_org(int eye) { int r = eye % 32; return eye + (r > 15 ? 16 : -16) - r; }
 static GLint  s_uCast;                 /* the caster's three numbers (G14i) */
 static TAGPU_SHADOWU s_shU;            /* the shadow read-back uniforms      */
 static float  s_verts[MAXNV * NVST];
@@ -2251,157 +2250,106 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int fogMode = 0;
     s_fogGrid = NULL; s_fogCells = 0; s_fogLut = 0;
     {
-        /* PER MAP, NOT PER FRAME: LoadMap 0x483610 builds this descriptor and
-           its buffer once (0x483C03 / 0x483C96), the builder 0x4843C0 only
-           rewrites cells, and the only free is the map-free routine 0x483DD0,
-           inside the teardown cascade tagpu_reclaim fences. That lifetime is
-           the argument; the probe below is a sanity net (cross-thread-engine-
-           reads.md §4). Cells rewritten under this read cost one frame of
-           mixed fog, bounded by cols*rows <= cells. */
-        const int* fg = *(const int* const*)(ta + OFF_FOGGRID);
-        if (ptr_ok(fg) && !IsBadReadPtr(fg, 16)) {
-            const unsigned short* buf = (const unsigned short*)(size_t)fg[0];
-            int cols = fg[1], rows = fg[2], cells = fg[3];
-            int bufCells = cells;          /* replaced if the wide grid wins */
-            /* `cells` is the ALLOCATION, not cols*rows: the builder rounds the
-               count up to a multiple of 8 before it allocates (`0x483C84`:
-               add 7, and ~7) and clears that many entries. Demanding equality
-               refused every viewport whose cell count is not already a multiple
-               of 8 — and refusing here sets fogMode 0, which is not a degraded
-               fog but NO fog at all: no black over unexplored ground, no grey
-               band, the whole map drawn lit at every zoom. 1024x768 is 30x24 =
-               720 and passes; 1920x1080 is 58x34 = 1972 against an allocated
-               1976 and did not, so at 1080p the fog rule had never run. */
-            /* FOGW_ENGINE_DIMCAP (1024), not 256: this bound is a sanity check
-               on a count read out of
-               engine memory, and 256 made it a SCREEN limit as well. The engine
-               builds the grid at one cell per 32 px of its viewport plus two —
-               MEASURED 2026-09-09, 118 x 68 for the 3712 x 2096 viewport of a
-               3840x2160 screen and 78 x 45 for the 2432 x 1376 of a 2560x1440
-               one — so 256 is a viewport 8128 px wide, and a screen past that
-               would have been refused here. Refusing sets fogMode 0, which is
-               no fog at all, so the bound must not be the first thing a new
-               monitor meets. The relation below is the real test. */
-            if (ptr_ok(buf) && cols > 0 && rows > 0 &&
-                cols <= FOGW_ENGINE_DIMCAP && rows <= FOGW_ENGINE_DIMCAP &&
-                cells == (((cols * rows) + 7) & ~7) &&
-                !IsBadReadPtr(buf, (SIZE_T)cells * 2)) {
-                /* the overlay puts cell (0,0) at screen vp + (+-16 - eye%32);
-                   in world terms 32*col0 + 16, col0 being the builder's
-                   half-cell-rounded eye>>5. The grid lattice is offset half a
-                   cell from the map cells: a corner IS a map cell's centre. */
-                int orgX = fog_org(eyeX), orgY = fog_org(eyeY);
-                /* ...and that grid spans the 1x VIEWPORT, so at zoom < 1 the
-                   effective rect above reaches past its last row and column,
-                   where taFog's clamp smears the border cell across the whole
-                   outer ring. tagpu_fogwide builds the same masks over a window
-                   the whole zoom range fits in; when it has one, it replaces the
-                   engine's grid outright — same lattice, same bytes, more of
-                   them. Whenever the game thread is not building (terrain
-                   ownership disarmed, the menus, the off lever) it declines and
-                   the engine's own grid is used exactly as before — and so it is
-                   at zoom >= 1, which since G13s is decided HERE rather than by
-                   the producer (below). The engine's grid stays the GATE either
-                   way: if it cannot be read, neither can the state the wide one
-                   is built from. */
-                {
-                    const unsigned short* wb; int wc, wr, wox, woy;
-                    /* Asked for ONLY while this frame is drawn zoomed out. The
-                       engine's grid spans the 1x viewport with a cell or more to
-                       spare on every side (the origin is the eye rounded to a
-                       half cell and the count is viewW/32 + 2, so the last
-                       column starts at least one pixel past the viewport's right
-                       edge — same for the last row), so at zoom >= 1 it covers
-                       the frame by construction and taking the wide grid there
-                       would only put a second lattice in front of a picture that
-                       is right. Below 1 it cannot, and the wide one must be
-                       used: the producer builds it every tick, so the frame that
-                       first eases past 1.0 already has one. */
-                    /* ...OR while the eye this frame is drawn from is AHEAD of
-                       the packet's (a cursor-anchored step the game thread has
-                       not applied yet — tagpu_zoom_unacked): the engine's grid
-                       spans the packet's eye, and it has only its two spare
-                       columns of slack. Cursor anchoring moves the camera on
-                       every frame of a gesture, and the frame
-                       that eases up THROUGH 1.0 starts at z = 0.5 EXACTLY at
-                       the lowest: one ease step of 0.25 in log space is
-                       z1 = z0^0.75 * ztgt^0.25, which reaches 1.0 at
-                       z0 = 8^(-1/3) = 0.5. There the eye steps by up to vw/2 in
-                       that single frame — 896 px at the 1792-px viewport of a
-                       1920x1080 screen — against the 32 px those two columns
-                       are worth, leaving an 864 px band uncovered. The
-                       wide grid spans it with room over — measured against the
-                       same inequality, sizing at the zoom FLOOR covers any
-                       anchored step at any level with the margin untouched. */
-                    if ((tagpu_zoom_level() < 1.0f || tagpu_zoom_unacked()) &&
-                        tagpu_fogwide_get(&wb, &wc, &wr, &wox, &woy)) {
-                        buf = wb; cols = wc; rows = wr; orgX = wox; orgY = woy;
-                        /* ours is exactly cols*rows; the engine's `cells` above
-                           is its allocator's round-up and does not describe
-                           this buffer at all */
-                        bufCells = wc * wr;
-                    }
+        /* BOTH GRIDS COME OUT OF THE PACKET (landing 4b). This was a read of
+           the engine's descriptor `*(main+0x1421F)` and of the buffer behind
+           it, on this thread, while the game thread's own fog site was
+           rewriting both — the read `tagpu_fog_at`'s guard was added for after
+           a hard fault off a base of -9 (2026-09-03). The publisher copies the
+           bytes now, with the relation between the descriptor's three numbers
+           checked there, and the acquire proves the copy's length is exactly
+           `cols * rows * 2`, so every index this frame can form is inside the
+           bytes it was handed. The wide grid arrives the same way and
+           tagpu_fogwide's three buffers, its critical section and its retire
+           ring went with the hand-over they existed for.
+
+           WHICH GRID THIS FRAME USES IS UNCHANGED, and it is this thread's
+           decision because it is the one that knows what it is about to draw:
+           the engine's own at zoom >= 1, where it spans the frame by
+           construction (its origin is the eye rounded to a half cell and its
+           count is viewW/32 + 2, so the last column starts at least a pixel
+           past the viewport's right edge — same for the last row); the wide one
+           below 1, where it cannot, and the ring beyond it would otherwise get
+           taFog's clamp smearing the border cell.
+
+           ...OR while the eye this frame is drawn from is AHEAD of the
+           packet's — a cursor-anchored step the game thread has not applied yet
+           (tagpu_zoom_unacked). The engine's grid is anchored at the packet's
+           eye with only its two spare columns of slack, and the frame that
+           eases up THROUGH 1.0 starts at z = 0.5 exactly at the lowest (one
+           ease step of 0.25 in log space is z1 = z0^0.75 * ztgt^0.25, which
+           reaches 1.0 at z0 = 8^(-1/3)), where the eye steps by up to vw/2 in
+           that single frame — 896 px at the 1792-px viewport of a 1920x1080
+           screen, against the 32 px those two columns are worth. The wide grid
+           spans it with room over: sizing at the zoom FLOOR covers any anchored
+           step at any level with the margin untouched. */
+        const unsigned short* buf = tagpu_pk_fog(pk);
+        int cols = pk->fog_cols, rows = pk->fog_rows;
+        int orgX = pk->fog_org[0], orgY = pk->fog_org[1];
+        int bufCells = cols * rows;
+        {
+            const unsigned short* wb = tagpu_pk_fogw(pk);
+            if (wb && (tagpu_zoom_level() < 1.0f || tagpu_zoom_unacked())) {
+                buf = wb; cols = pk->fogw_cols; rows = pk->fogw_rows;
+                orgX = pk->fogw_org[0]; orgY = pk->fogw_org[1];
+                bufCells = cols * rows;
+            } else if (!wb && (tagpu_zoom_level() < 1.0f || tagpu_zoom_unacked())) {
+                /* a zoomed frame drawn over the engine's 1x grid: the outer ring
+                   falls back to taFog's clamp. This is what `bare=` counted on
+                   tagpu_fogwide's own heartbeat before the grid rode in the
+                   packet; it must read 0 outside a deliberate `fogwide.off`. */
+                s_fogBare++;
+            }
+        }
+        if (buf && cols > 0 && rows > 0) {
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            x_glActiveTexture(GL_TEXTURE4);
+            glBindTexture(GL_TEXTURE_2D, s_fogTex);
+            if (cols != s_fogCols || rows != s_fogRows)
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, cols, rows, 0,
+                             GL_RG, GL_UNSIGNED_BYTE, buf);
+            else
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cols, rows,
+                                GL_RG, GL_UNSIGNED_BYTE, buf);
+            x_glActiveTexture(GL_TEXTURE0);
+            s_fogGrid = buf; s_fogCols = cols; s_fogRows = rows;
+            s_fogCells = bufCells;
+            s_fogOrgX = orgX;
+            s_fogOrgY = orgY;
+            /* "fog is on" is NOT LosType bit0 — that bit is only the MAPPING
+               option. The overlay runs every frame and what it paints is
+               decided entirely by the grid bytes: the builder writes the grey
+               mask only when LosType&2 and the black mask only where MAPPED is
+               clear, so an inactive mode is already an all-zero grid and costs
+               nothing to sample. Gating on bit0 dropped the whole rule under
+               true-LOS-without-mapping (LosType=14, a reachable skirmish
+               setting) — and since G13b suppresses the engine's overlay, that
+               would delete the grey band outright instead of merely disagreeing
+               with it. */
+            fogMode = 1 | (lostype & 2);
+            /* the grey band's darken is a palette remap, not a scale: 0x4BFE10
+               rewrites every pixel p as shade[p] (256 bytes, everything folded
+               into the dark-grey ramp), copied into the packet by the game
+               thread. Cheap enough to re-upload each frame. */
+            {
+                const unsigned char* t = tagpu_pk_fogshade(pk);
+                static unsigned char ident[256];
+                s_fogLut = t ? 1 : 0;
+                if (!t) {
+                    /* identity, so an absent table degrades to "grey is not
+                       darkened" — never to "every grey pixel is palette index
+                       0", which is solid black over the whole band */
+                    int i;
+                    for (i = 0; i < 256; i++) ident[i] = (unsigned char)i;
+                    t = ident;
                 }
-                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-                x_glActiveTexture(GL_TEXTURE4);
-                glBindTexture(GL_TEXTURE_2D, s_fogTex);
-                if (cols != s_fogCols || rows != s_fogRows)
-                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, cols, rows, 0,
-                                 GL_RG, GL_UNSIGNED_BYTE, buf);
-                else
-                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cols, rows,
-                                    GL_RG, GL_UNSIGNED_BYTE, buf);
+                /* 256 bytes: always re-spec, so no init flag can survive a
+                   context reset and leave the texture storageless (which has
+                   the same all-black failure mode) */
+                x_glActiveTexture(GL_TEXTURE5);
+                glBindTexture(GL_TEXTURE_2D, s_fogLutTex);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, 256, 1, 0,
+                             GL_RED, GL_UNSIGNED_BYTE, t);
                 x_glActiveTexture(GL_TEXTURE0);
-                s_fogGrid = buf; s_fogCols = cols; s_fogRows = rows;
-                /* the size of the buffer we are actually publishing — the
-                   engine's validated allocation, or the wide grid's exact
-                   cols*rows. It is what bounds the index tagpu_fog_at forms. */
-                s_fogCells = bufCells;
-                s_fogOrgX = orgX;
-                s_fogOrgY = orgY;
-                /* "fog is on" is NOT LosType bit0 — that bit is only the
-                   MAPPING option. The overlay runs every frame and what it
-                   paints is decided entirely by the grid bytes: the builder
-                   writes the grey mask only when LosType&2 and the black mask
-                   only where MAPPED is clear, so an inactive mode is already an
-                   all-zero grid and costs nothing to sample. Gating on bit0
-                   dropped the whole rule under true-LOS-without-mapping
-                   (LosType=14, a reachable skirmish setting: LineOfSight cycle
-                   stage 1 with the mapping option off) — and since G13b
-                   suppresses the engine's overlay, that would delete the grey
-                   band outright instead of merely disagreeing with it. */
-                fogMode = 1 | (lostype & 2);
-                /* the grey band's darken is a palette remap, not a scale:
-                   0x4BFE10 rewrites every pixel p as shadeLUT[p] through
-                   *(TAProgram+0xCC) (256 bytes, everything folded into the
-                   dark-grey ramp). Cheap enough to re-upload each frame. */
-                {
-                    const char* prog = *(const char* const*)TAPROG_PP;
-                    const unsigned char* t = NULL;
-                    static unsigned char ident[256];
-                    if ((size_t)prog > 0x400000u && !IsBadReadPtr(prog, 0x100)) {
-                        const unsigned char* p = 
-                            *(const unsigned char* const*)(prog + PROG_FOGLUT);
-                        if (ptr_ok(p) && !IsBadReadPtr(p, 256)) t = p;
-                    }
-                    s_fogLut = t ? 1 : 0;
-                    if (!t) {
-                        /* identity, so an unreadable table degrades to "grey is
-                           not darkened" — never to "every grey pixel is palette
-                           index 0", which is solid black over the whole band */
-                        int i;
-                        for (i = 0; i < 256; i++) ident[i] = (unsigned char)i;
-                        t = ident;
-                    }
-                    /* 256 bytes: always re-spec, so no init flag can survive a
-                       context reset and leave the texture storageless (which
-                       has the same all-black failure mode) */
-                    x_glActiveTexture(GL_TEXTURE5);
-                    glBindTexture(GL_TEXTURE_2D, s_fogLutTex);
-                    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, 256, 1, 0,
-                                 GL_RED, GL_UNSIGNED_BYTE, t);
-                    x_glActiveTexture(GL_TEXTURE0);
-                }
             }
         }
     }
@@ -4042,8 +3990,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         char lerp[64];
         tagpu_lerp_stats(lerp, sizeof lerp);
         _snprintf(b, sizeof b,
-                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d devres=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d reread=%u%s%s%s%s%s%s%s",
+                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d devres=%d subpix=%d scaf=%d fog=%d(%dx%d) bare=%u los=%u foglut=%d key=%d reread=%u%s%s%s%s%s%s%s",
                   nu - nwr, nwr, nsel, nmark, nslant, nwire, nv, gw, gh, ss, devres, s_subpix, scafOn, fogMode,
+                  s_fogCols, s_fogRows, s_fogBare,
                   lostype, s_fogLut, keyOn, s_reread,
                   selg, bake, posed, lerp, badmodel, handback, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
         b[sizeof b - 1] = '\0';        /* _snprintf does not terminate a truncation */

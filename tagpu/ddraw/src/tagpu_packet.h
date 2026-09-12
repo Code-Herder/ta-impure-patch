@@ -317,6 +317,45 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_LHT_ROWS    32u
 #define TAGPU_PK_LHT_BYTES   (TAGPU_PK_LHT_ROWS * 256u)
 
+/* ---- THE FOG GRIDS (landing 4b) -----------------------------------------
+   Two lattices of 32-px cells, each cell two bytes of 4-bit corner masks — low
+   byte the unexplored corners, high byte the out-of-LOS ones, laid out exactly
+   as an RG8 texture so the bytes upload with no conversion.
+
+   THE ENGINE'S OWN, `*(main+0x1421F)`, spans the 1x viewport and about two
+   cells more. It is built once per map by LoadMap and only REWRITTEN by the
+   builder 0x4843C0, which the terrain owner calls from the engine's own fog
+   site — so the render thread used to read a buffer the game thread was
+   rewriting, and the descriptor beside it, unsynchronised. That is the read
+   `tagpu_fog_at`'s guard was added for after a hard fault off a base of -9
+   (2026-09-03, root cause never found). Both now cross as ONE record whose
+   bounds the acquire checks: `fog_len` must be exactly `fog_cols * fog_rows *
+   2` and must lie inside the packet, so the largest index a consumer can form
+   is inside the bytes it was given, by construction rather than by a probe.
+
+   THE WIDE ONE is tagpu_fogwide's replication of the same builder over a
+   window the whole zoom range fits in — the same lattice, the same rule, more
+   cells — used by a frame drawn at zoom < 1, where the engine's stops partway
+   across the screen. Until this landing it reached the render thread through
+   three heap buffers swapped under a critical section, with a retire ring
+   behind tagpu_reclaim's fence for the grow. All of that is gone: the grid is
+   built on the game thread inside the draw and copied into the packet after
+   it, so there is one buffer, no lock, and nothing to retire.
+
+   THE ORIGIN IS THE PUBLISHER'S. `fog_org` is the world point of cell (0,0) —
+   `32*col0 + 16` — derived from the eye the grid was actually built at. The
+   render thread used to derive it from its PREDICTED eye, which is the packet's
+   eye plus a cursor-anchor step the game thread has not applied yet: right
+   whenever nothing was unacknowledged, and a lattice offset from its own bytes
+   when something was. (The pass covered it by taking the wide grid whenever
+   anything was unacknowledged, which is still what it does.) */
+#define TAGPU_PK_FOG_DIMCAP 4096   /* a sanity ceiling on a dimension; the real
+                                      bound is `len == cols*rows*2` inside the
+                                      record, checked once at acquire          */
+#define TAGPU_PK_FOGSHADE_BYTES 256u  /* the grey band's palette remap,
+                                         *(TAProgram+0xCC): 0x4BFE10 rewrites
+                                         every pixel p as shade[p]             */
+
 /* truncation bits, one per table (TAGPU_PK_TRUNC_FONT/STRESS are above) */
 #define TAGPU_PK_TRUNC_UNITS   0x4u
 #define TAGPU_PK_TRUNC_PIECES  0x8u
@@ -328,6 +367,9 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_TRUNC_DEBRIS  0x200u
 #define TAGPU_PK_TRUNC_PART    0x400u
 #define TAGPU_PK_TRUNC_LHT     0x800u
+#define TAGPU_PK_TRUNC_FOG     0x1000u
+#define TAGPU_PK_TRUNC_FOGW    0x2000u
+#define TAGPU_PK_TRUNC_FOGSH   0x4000u
 
 #define TAGPU_PK_SHD_ROWS   32u      /* the engine's PALETTE.SHD shade table:  */
 #define TAGPU_PK_SHD_BYTES  (TAGPU_PK_SHD_ROWS * 256u)   /* 32 x 256 bytes     */
@@ -501,6 +543,17 @@ typedef struct TAGPU_PACKET {
     uint32_t lht_off, lht_len;        /* the engine's 32x256 LHT lighten table
                                          (TAProgram+0xC8), the explosion flash's
                                          colour ramp                             */
+
+    /* ---- landing 4b: the two fog grids ---- */
+    int32_t  fog_cols, fog_rows;      /* the ENGINE's screen grid; 0 = none this
+                                         frame (the descriptor did not hold up) */
+    int32_t  fog_org[2];              /* world x, projected z of its cell (0,0) */
+    uint32_t fog_off, fog_len;        /* fog_cols * fog_rows * 2 bytes          */
+    int32_t  fogw_cols, fogw_rows;    /* the WIDE grid; 0 = the module is off,
+                                         not building, or has published nothing */
+    int32_t  fogw_org[2];
+    uint32_t fogw_off, fogw_len;
+    uint32_t fogsh_off, fogsh_len;    /* the grey band's 256-byte palette remap */
     uint32_t truncated;         /* TAGPU_PK_TRUNC_* bits: what did not fit      */
     uint32_t crc;               /* CRC-32 of the slot with these two fields as
                                    zero, under `tagpu_packet.check`; else 0     */
@@ -564,6 +617,17 @@ static __inline const unsigned char* tagpu_pk_shd(const TAGPU_PACKET* p)
 /* The LHT lighten table, same shape, or NULL. */
 static __inline const unsigned char* tagpu_pk_lht(const TAGPU_PACKET* p)
 { return p->lht_len == TAGPU_PK_LHT_BYTES ? (const unsigned char*)p + p->lht_off : (const unsigned char*)0; }
+/* ---- the fog grids (landing 4b). Each is NULL, or `cols * rows` u16 corner
+   masks — the acquire proved the length is exactly that and that it lies
+   inside the record, so `grid[cy * cols + cx]` for cx < cols, cy < rows is
+   inside the bytes by construction. ---- */
+static __inline const unsigned short* tagpu_pk_fog(const TAGPU_PACKET* p)
+{ return p->fog_len ? (const unsigned short*)(const void*)((const unsigned char*)p + p->fog_off) : (const unsigned short*)0; }
+static __inline const unsigned short* tagpu_pk_fogw(const TAGPU_PACKET* p)
+{ return p->fogw_len ? (const unsigned short*)(const void*)((const unsigned char*)p + p->fogw_off) : (const unsigned short*)0; }
+/* the grey band's palette remap, 256 bytes, or NULL */
+static __inline const unsigned char* tagpu_pk_fogshade(const TAGPU_PACKET* p)
+{ return p->fogsh_len == TAGPU_PK_FOGSHADE_BYTES ? (const unsigned char*)p + p->fogsh_off : (const unsigned char*)0; }
 /* ---- the effects tables (landing 4a) ---- */
 static __inline const TAGPU_PK_PROJ* tagpu_pk_proj(const TAGPU_PACKET* p)
 { return p->n_proj ? (const TAGPU_PK_PROJ*)(const void*)((const unsigned char*)p + p->off_proj) : (const TAGPU_PK_PROJ*)0; }

@@ -516,6 +516,32 @@ static const char* frame_valid(const void* rec)
         }
         if (sum != p->n_part) return "particle layer counts do not sum";
     }
+    /* THE TWO FOG GRIDS (landing 4b). The bound a consumer needs is not a cap
+       on the dimensions — it is that the bytes it was given hold every index it
+       can form. `len == cols * rows * 2`, checked here against the record's own
+       extent, IS that bound: the largest index is cols*rows - 1 and the area is
+       exactly cols*rows entries long. The dimension ceiling below is a sanity
+       filter on two numbers read out of engine memory, not the safety
+       argument. */
+    if (p->fog_len || p->fog_cols || p->fog_rows) {
+        if (p->fog_cols <= 0 || p->fog_rows <= 0 ||
+            p->fog_cols > TAGPU_PK_FOG_DIMCAP || p->fog_rows > TAGPU_PK_FOG_DIMCAP)
+            return "fog grid dims";
+        if (p->fog_len != (unsigned)p->fog_cols * (unsigned)p->fog_rows * 2u ||
+            !area_ok(p, p->fog_off, p->fog_len))
+            return "fog grid area";
+    }
+    if (p->fogw_len || p->fogw_cols || p->fogw_rows) {
+        if (p->fogw_cols <= 0 || p->fogw_rows <= 0 ||
+            p->fogw_cols > TAGPU_PK_FOG_DIMCAP || p->fogw_rows > TAGPU_PK_FOG_DIMCAP)
+            return "wide fog grid dims";
+        if (p->fogw_len != (unsigned)p->fogw_cols * (unsigned)p->fogw_rows * 2u ||
+            !area_ok(p, p->fogw_off, p->fogw_len))
+            return "wide fog grid area";
+    }
+    if (p->fogsh_len && (p->fogsh_len != TAGPU_PK_FOGSHADE_BYTES ||
+                         !area_ok(p, p->fogsh_off, p->fogsh_len)))
+        return "fog shade area";
     return NULL;
 }
 
