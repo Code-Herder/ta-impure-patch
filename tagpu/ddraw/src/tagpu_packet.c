@@ -1,17 +1,17 @@
-/* tagpu_packet.c — the frame packet exchange: the primitive (landing 1).
+/* tagpu_packet.c — the frame packet exchange: the primitive (landings 1, 2).
    Contract: tagpu_packet.h (consumer), tagpu_packet_pub.h (producer). Design
    and the four reviews it survived: research/notes/frame-packet-exchange.html.
 
    THE EXCHANGE. Four slots with roles, not owners fixed for life: W is the
-   one the game thread is filling, READ and PREV the two the render thread
-   holds (this frame's and the previous one's), and the fourth sits in the
-   CELL — fresh (published, not yet taken) or stale (returned, waiting to be
-   reused). The cell is ONE aligned 32-bit word in our static storage:
-   `idx (2 bits) | FRESH (bit 2)`, the reserved bits asserted zero. Each side
-   exchanges a slot it holds into the cell and takes whatever was there, so
-   the four roles stay a permutation of the four slots without a lock — and
-   the init below makes them one to begin with: zeroed statics would put both
-   threads on slot 0.
+   one the producer is filling, READ and PREV the two the consumer holds (this
+   frame's and the previous one's), and the fourth sits in the CELL — fresh
+   (published, not yet taken) or stale (returned, waiting to be reused). The
+   cell is ONE aligned 32-bit word in our static storage: `idx (2 bits) |
+   FRESH (bit 2)`, the reserved bits asserted zero. Each side exchanges a slot
+   it holds into the cell and takes whatever was there, so the four roles
+   stay a permutation of the four slots without a lock — and the init below
+   makes them one to begin with: zeroed statics would put both threads on
+   slot 0.
 
    ORDERING (x86-TSO). Four orderings the protocol needs, one instruction:
      P1  the payload is globally visible before the index that names it
@@ -46,33 +46,42 @@
    current bytes and never freed memory. Reference counting was rejected: a
    count cannot see the raw pointer a module copies.
 
-   WAIT-FREE, BOTH SIDES. Neither exchange can fail or block. A stuck render
-   thread costs the game thread one relaxed load per draw (the FRESH gate
-   skips the copy); a stuck game thread leaves the renderer redrawing its
-   held packet, which is our memory. The sim never waits on the renderer.
+   WAIT-FREE, BOTH SIDES. Neither exchange can fail or block. A stuck consumer
+   costs the producer one relaxed load per attempt (the FRESH gate skips the
+   copy); a stuck producer leaves the consumer redrawing its held record,
+   which is our memory. The sim never waits on the renderer, and — with the
+   threads swapped for the command record — the renderer never waits on the
+   sim.
 
    VIOLATIONS ARE LOUD, NEVER FATAL. Thread identity on both sides, the
    permutation after every exchange, head == tail and the structural bounds
    at acquire, a canary past the capacity, one acquire per frame, the tail at
-   frame_end, the CRC under `check`. A packet that fails a bound is refused
-   for the frame (NULL) and counted; `viol=0` on the heartbeat is landing 1's
-   gate. The levers, all read once at DLL attach from the gamedir:
-     tagpu_packet.off     no slots, no publish, no acquire; the observer stays
-                          in count-only mode so draws/s is still reported
-     tagpu_packet.check   CRC-32 of the slot in the tail, verified per frame
+   frame_end, the CRC under `check`. A record that fails a bound is refused
+   for the frame (NULL) and counted; `viol=0` on the heartbeat is the gate.
+   The levers, all read once at DLL attach from the gamedir:
+     tagpu_packet.off     no slots, no publish, no acquire, no commands; the
+                          observer stays in count-only mode so draws/s is
+                          still reported
+     tagpu_packet.check   CRC-32 of the record in the tail, verified per take
      tagpu_packet.stress  the producer publishes on EVERY in-play draw (the
                           overrun path) with a garbage pre-fill before the
                           real fill, from a one-page initial commit with a
-                          dummy table that forces growth; the consumer sleeps
-                          0..50 ms inside each take
+                          dummy table that forces growth; the render thread
+                          sleeps 0..50 ms inside each take of a frame packet
      tagpu_packet.poison  the consumer memsets the header of the slot it
                           hands back, so a pointer cached across frames
                           reads 0xDD instead of plausible stale data
 
-   INSTANTIABLE. Every piece of state lives in a PKX and the four operations
-   take one; the frame packet is the one instance today (s_frame). The
-   commands (landing 2) and the wide fog grid (landing 4b) are further
-   instances of the same struct, so the proof above is written once. */
+   INSTANTIABLE, AND INSTANTIATED TWICE (landing 2). Every piece of state
+   lives in a PKX and the four operations take one. A record is anything
+   that starts with the three-dword prefix {head_seq, cap_bytes, used_bytes}
+   and ends with {crc, tail_seq}; what lies between is the instance's
+   business, checked by its own `valid` callback after the structural checks
+   here. The frame packet (s_frame: game thread -> render thread, 8 MB
+   slots, PREV handed out for the lerp) and the command record (s_cmd:
+   render thread -> game thread, 64 KB slots, latest wins with `force`, no
+   PREV) are the two instances; the wide fog grid (landing 4b) is the next.
+   The proof above is written once and holds for each. */
 
 #include <windows.h>
 #include <stdio.h>
@@ -84,9 +93,10 @@
 #include "crc32.h"
 
 #define PK_SLOTS      4
-#define PK_RESERVE    (8u << 20)           /* address space per slot          */
+#define PK_RESERVE    (8u << 20)           /* address space per FRAME slot    */
+#define PK_CMD_RESERVE (64u << 10)         /* ...and per COMMAND slot         */
 #define PK_GRAIN      (64u << 10)          /* commit granularity              */
-#define PK_PAGE       4096u                /* ...under stress: one page        */
+#define PK_PAGE       4096u                /* ...under stress, and for commands: one page */
 #define PK_CANARY     0xC0FFEE42u
 #define PKX_IDX       0x3u                 /* two index bits                   */
 #define PKX_FRESH     0x4u                 /* set by publish, cleared by acquire */
@@ -94,9 +104,29 @@
 #define PK_HEARTBEAT  300
 #define PK_HIST_N     256                  /* 2 us buckets to 512 us, + overflow */
 #define PK_LOG_EVERY  64                   /* violations logged: the first, then every this many */
+#define PK_PREFIX     12u                  /* head_seq, cap_bytes, used_bytes  */
+#define PK_SUFFIX     8u                   /* crc, tail_seq                    */
+
+/* the record's prefix and suffix, wherever the instance's suffix sits */
+#define REC_HEAD(p)     (((uint32_t*)(p))[0])
+#define REC_CAP(p)      (((uint32_t*)(p))[1])
+#define REC_USED(p)     (((uint32_t*)(p))[2])
+#define REC_CRC(m, p)   (*(uint32_t*)((unsigned char*)(p) + (m)->recBytes - 8u))
+#define REC_TAIL(m, p)  (*(uint32_t*)((unsigned char*)(p) + (m)->recBytes - 4u))
+
+typedef const char* (*pkx_valid_fn)(const void* rec);              /* NULL = valid */
+typedef int         (*pkx_pair_fn)(const void* rec, const void* prev); /* prev may be handed out */
+typedef unsigned    (*pkx_fill_fn)(void* rec, void* ctx);
 
 typedef struct PKX {
     const char*     name;
+    unsigned        recBytes;              /* the record's fixed part: prefix at 0, suffix at the end */
+    unsigned        reserve, grain;
+    pkx_valid_fn    valid;
+    pkx_pair_fn     pair;                  /* NULL: never hands out a prev    */
+    int             prodByRole;            /* the producer is whoever the driver says (the
+                                              render thread, which restarts): recorded, not refused */
+    int             consSleep;             /* under stress the consumer sleeps inside its take */
     unsigned char*  slot[PK_SLOTS];        /* reserved base, fixed for life   */
     unsigned        cap[PK_SLOTS];         /* committed bytes minus the canary;
                                               written by whoever holds slot i
@@ -104,10 +134,10 @@ typedef struct PKX {
                                               by the consumer only for a slot
                                               it holds, after the exchange   */
     LONG            cell __attribute__((aligned(64)));   /* THE shared word  */
-    /* game thread only */
+    /* producer only */
     unsigned        write, seq, need;
     DWORD           prodTid;
-    /* render thread only */
+    /* consumer only */
     unsigned        read, prev;
     uint32_t        frameHead, lastSeq;
     int             inFrame;
@@ -122,9 +152,13 @@ typedef struct PKX {
 } PKX;
 
 static PKX s_frame = { "packet" };
+static PKX s_cmd   = { "cmd" };
 static int s_armed, s_check, s_stress, s_poison;
 static LARGE_INTEGER s_freq;
 static tagpu_packet_extra_fn s_extra;
+/* the render thread's own copy of the last command it posted, for the
+   heartbeat's unacked delta (never a read of a slot it has handed over) */
+static TAGPU_CMD s_lastPosted;
 
 #define XCHG(m, v)  __atomic_exchange_n(&(m)->cell, (LONG)(v), __ATOMIC_ACQ_REL)
 #define PEEK(m)     __atomic_load_n(&(m)->cell, __ATOMIC_RELAXED)
@@ -154,15 +188,16 @@ static void violation(PKX* m, const char* what, unsigned a, unsigned b)
     }
 }
 
-/* Commit pages to slot i so that it can hold `need` packet bytes, plus the
+/* Commit pages to slot i so that it can hold `need` record bytes, plus the
    canary. Already-committed pages are untouched by MEM_COMMIT (their content
    survives); the canary moves to the new end. 1 when cap[i] >= need. */
 static int slot_commit(PKX* m, unsigned i, unsigned need)
 {
-    unsigned grain = s_stress ? PK_PAGE : PK_GRAIN;
+    unsigned grain = m->grain;
     unsigned want = need + 4u;
-    if (want > PK_RESERVE) want = PK_RESERVE;
+    if (want > m->reserve) want = m->reserve;
     want = (want + grain - 1u) & ~(grain - 1u);
+    if (want > m->reserve) want = m->reserve;
     if (want <= m->cap[i] + 4u) return m->cap[i] >= need;
     if (!VirtualAlloc(m->slot[i], want, MEM_COMMIT, PAGE_READWRITE)) {
         m->cCommitFail++;
@@ -177,32 +212,32 @@ static int pkx_init(PKX* m, unsigned commit0)
 {
     unsigned i;
     for (i = 0; i < PK_SLOTS; i++) {
-        unsigned char* b = (unsigned char*)VirtualAlloc(NULL, PK_RESERVE, MEM_RESERVE, PAGE_NOACCESS);
+        unsigned char* b = (unsigned char*)VirtualAlloc(NULL, m->reserve, MEM_RESERVE, PAGE_NOACCESS);
         if (!b) return 0;
         m->slot[i] = b;
         m->cap[i] = 0;
         if (!slot_commit(m, i, commit0)) return 0;
-        memset(b, 0, sizeof(TAGPU_PACKET));           /* head_seq 0: never held a packet */
+        memset(b, 0, m->recBytes);                    /* head_seq 0: never held a record */
     }
     /* the initial permutation: {W, cell, READ, PREV} = {0, 1, 2, 3} */
     m->write = 0; m->read = 2; m->prev = 3;
-    m->seq = 0; m->need = sizeof(TAGPU_PACKET);
+    m->seq = 0; m->need = m->recBytes;
     __atomic_store_n(&m->cell, 1L, __ATOMIC_RELEASE);  /* slot 1, stale */
     return 1;
 }
 
 /* CRC-32 of the slot as published: every byte of [0, used) with the crc and
-   tail fields — the last two of the header, adjacent — taken as zero. The
-   producer computes it with both fields actually zero (before the tail is
-   stored); the consumer substitutes the zeros. */
-static uint32_t pk_crc(const TAGPU_PACKET* p)
+   tail fields — the last two of the record's fixed part, adjacent — taken as
+   zero. The producer computes it with both fields actually zero (before the
+   tail is stored); the consumer substitutes the zeros. */
+static uint32_t pk_crc(const PKX* m, const void* rec)
 {
     static const unsigned char zeros[8];
-    const unsigned char* b = (const unsigned char*)p;
-    size_t off = offsetof(TAGPU_PACKET, crc);
+    const unsigned char* b = (const unsigned char*)rec;
+    size_t off = m->recBytes - PK_SUFFIX;
     unsigned long c = Crc32_ComputeBuf(0, b, off);
     c = Crc32_ComputeBuf(c, zeros, 8);
-    c = Crc32_ComputeBuf(c, b + off + 8, p->used_bytes - (off + 8));
+    c = Crc32_ComputeBuf(c, b + off + 8, REC_USED(rec) - (off + 8));
     return (uint32_t)c;
 }
 
@@ -215,45 +250,58 @@ static unsigned us_of(const LARGE_INTEGER* t0, const LARGE_INTEGER* t1)
     return (unsigned)((d * 1000000LL) / s_freq.QuadPart);
 }
 
-static int pkx_publish(PKX* m, tagpu_packet_fill_fn fill, void* ctx, int force)
+static int pkx_publish(PKX* m, pkx_fill_fn fill, void* ctx, int force)
 {
-    TAGPU_PACKET* p;
+    void* p;
     LARGE_INTEGER t0, t1;
     LONG old;
     unsigned w, need, us;
     DWORD tid = GetCurrentThreadId();
 
-    if (!m->prodTid) m->prodTid = tid;                /* unregistered: latch (a bare instance) */
-    else if (tid != m->prodTid) { m->cForeign++; return 0; }
+    if (!m->prodTid) m->prodTid = tid;                /* unregistered: latch */
+    else if (tid != m->prodTid) {
+        if (!m->prodByRole) { m->cForeign++; return 0; }
+        /* by role (the render thread, which is restarted across a display-mode
+           change, joined never killed): the new thread inherits W — recorded */
+        {
+            char b[120];
+            _snprintf(b, sizeof b, "%s: producer thread %u -> %u (render thread restarted)",
+                      m->name, (unsigned)m->prodTid, (unsigned)tid);
+            b[sizeof b - 1] = 0;
+            plog(b);
+        }
+        m->prodTid = tid;
+    }
 
-    /* THE FRESH GATE: a packet the renderer has not taken is not replaced.
+    /* THE FRESH GATE: a record the consumer has not taken is not replaced.
        The engine draws 330..4900 times a second against ~60 presents, so
        this one relaxed load is what most draws cost. `force` (the level-end
-       packet) and `stress` (the overrun path, on purpose) go past it. */
+       packet; every command record — latest wins) and `stress` (the overrun
+       path, on purpose) go past it. */
     if (!force && !s_stress && (PEEK(m) & PKX_FRESH)) { m->cSkip++; return 0; }
 
     w = m->write;
     if (m->need > m->cap[w] && slot_commit(m, w, m->need)) m->cGrow++;
-    p = (TAGPU_PACKET*)m->slot[w];
+    p = m->slot[w];
 
     QueryPerformanceCounter(&t0);
     if (s_stress) tagpu_pk_fill(p, 0xA5, m->cap[w] < 16384u ? m->cap[w] : 16384u);
-    p->head_seq  = ++m->seq;                       /* head BEFORE the payload */
-    p->cap_bytes = m->cap[w];
+    REC_HEAD(p) = ++m->seq;                        /* head BEFORE the payload */
+    REC_CAP(p)  = m->cap[w];
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
     need = fill(p, ctx);                           /* every engine read is in there */
     /* our own bounds on what the fill left — a misbehaving fill is a producer
-       violation, and the packet is still made valid for the consumer */
-    if (p->used_bytes < sizeof(TAGPU_PACKET) || p->used_bytes > p->cap_bytes || (p->used_bytes & 3u)) {
+       violation, and the record is still made valid for the consumer */
+    if (REC_USED(p) < m->recBytes || REC_USED(p) > REC_CAP(p) || (REC_USED(p) & 3u)) {
         m->cPViol++;
-        p->used_bytes = sizeof(TAGPU_PACKET);
-        p->font_len = 0; p->stress_len = 0;
+        REC_USED(p) = m->recBytes;
+        if (m == &s_frame) { ((TAGPU_PACKET*)p)->font_len = 0; ((TAGPU_PACKET*)p)->stress_len = 0; }
     }
-    if (need > p->cap_bytes) { m->cTrunc++; if (need > m->need) m->need = need; }
-    p->crc = 0; p->tail_seq = 0;
-    if (s_check) p->crc = pk_crc(p);
+    if (need > REC_CAP(p)) { m->cTrunc++; if (need > m->need) m->need = need; }
+    REC_CRC(m, p) = 0; REC_TAIL(m, p) = 0;
+    if (s_check) REC_CRC(m, p) = pk_crc(m, p);
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
-    p->tail_seq = p->head_seq;                     /* tail AFTER the payload  */
+    REC_TAIL(m, p) = REC_HEAD(p);                  /* tail AFTER the payload  */
     /* P1: the payload is visible before the index. P2: the next fill of the
        slot we receive stays after this exchange. Both from the ACQ_REL xchg. */
     old = XCHG(m, w | PKX_FRESH);
@@ -267,31 +315,57 @@ static int pkx_publish(PKX* m, tagpu_packet_fill_fn fill, void* ctx, int force)
     return 1;
 }
 
+/* the frame packet's fill, in the producer's own type */
+typedef struct { tagpu_packet_fill_fn fn; void* ctx; } FRAME_FILL;
+static unsigned frame_fill(void* rec, void* ctx)
+{
+    FRAME_FILL* a = (FRAME_FILL*)ctx;
+    return a->fn((TAGPU_PACKET*)rec, a->ctx);
+}
+
 int tagpu_packet_publish(tagpu_packet_fill_fn fill, void* ctx, int force)
 {
+    FRAME_FILL a;
     if (!s_armed || !fill) return 0;
-    return pkx_publish(&s_frame, fill, ctx, force);
+    a.fn = fill; a.ctx = ctx;
+    return pkx_publish(&s_frame, frame_fill, &a, force);
 }
 
 void tagpu_packet_producer(unsigned long tid) { s_frame.prodTid = (DWORD)tid; }
 
+/* the command record's fill: the caller's record between the prefix and the
+   suffix, through the volatile copy like every other payload store; its
+   cmd_seq is the primitive's own publish counter, so the acknowledgement the
+   packet echoes names a post exactly */
+static unsigned cmd_fill(void* rec, void* ctx)
+{
+    const TAGPU_CMD* c = (const TAGPU_CMD*)ctx;
+    TAGPU_CMD* d = (TAGPU_CMD*)rec;
+    tagpu_pk_copy((unsigned char*)d + PK_PREFIX, (const unsigned char*)c + PK_PREFIX,
+                  sizeof(TAGPU_CMD) - PK_PREFIX - PK_SUFFIX);
+    d->cmd_seq    = d->head_seq;
+    d->used_bytes = sizeof(TAGPU_CMD);
+    return sizeof(TAGPU_CMD);
+}
+
+int tagpu_cmd_post(const TAGPU_CMD* c)
+{
+    int ok;
+    if (!s_armed || !c) return 0;
+    ok = pkx_publish(&s_cmd, cmd_fill, (void*)c, 1 /* latest wins */);
+    if (ok) { s_lastPosted = *c; s_lastPosted.cmd_seq = s_cmd.seq; }
+    return ok;
+}
+
 /* ------------------------------------------------------- the consumer ---- */
 
-/* The structural bounds, on a slot the consumer holds. `cap` is the
-   committed capacity the producer recorded for this slot before handing it
-   over — read from our own table, never from the packet, because a packet
-   whose header is garbage would otherwise send this probe to an uncommitted
-   page. Every offset and length in the header is checked against it. */
-static const char* pk_valid(const TAGPU_PACKET* p, unsigned cap)
+/* The frame packet's own bounds, after the structural ones below. */
+static const char* frame_valid(const void* rec)
 {
+    const TAGPU_PACKET* p = (const TAGPU_PACKET*)rec;
     unsigned i;
-    if (p->head_seq != p->tail_seq) return "head != tail";
-    if (p->cap_bytes != cap) return "cap_bytes != the slot's capacity";
-    if (cap < sizeof(TAGPU_PACKET) || cap > PK_RESERVE - 4u) return "cap out of range";
-    if (*(const uint32_t*)((const unsigned char*)p + cap) != PK_CANARY) return "canary";
-    if (p->used_bytes < sizeof(TAGPU_PACKET) || p->used_bytes > cap || (p->used_bytes & 3u))
-        return "used_bytes";
     if (p->in_game > 1u) return "in_game";
+    if (p->pal_ok > 1u) return "pal_ok";
     if (p->font_len) {
         if (p->font_len > TAGPU_PK_FONT_MAX || (p->font_off & 3u) ||
             p->font_off < sizeof(TAGPU_PACKET) || p->font_off > p->used_bytes ||
@@ -314,9 +388,47 @@ static const char* pk_valid(const TAGPU_PACKET* p, unsigned cap)
     return NULL;
 }
 
-static const TAGPU_PACKET* pkx_acquire(PKX* m, const TAGPU_PACKET** prev)
+/* `prev` is handed out only when it is from the same level and in-game */
+static int frame_pair(const void* rec, const void* prev)
 {
-    const TAGPU_PACKET* p;
+    const TAGPU_PACKET* p = (const TAGPU_PACKET*)rec;
+    const TAGPU_PACKET* q = (const TAGPU_PACKET*)prev;
+    return q->in_game && p->in_game && q->level_gen == p->level_gen;
+}
+
+/* The command record's bounds: a level the game thread will apply as a
+   float must be a number in the lever's own band; the hold is clamped by
+   the game thread into the camera's range, so it needs only to be finite. */
+static const char* cmd_valid(const void* rec)
+{
+    const TAGPU_CMD* c = (const TAGPU_CMD*)rec;
+    if (c->used_bytes != sizeof(TAGPU_CMD)) return "cmd size";
+    if (!(c->zoom >= 0.05f && c->zoom <= 16.0f)) return "cmd zoom";
+    if (c->live > 1u || c->eyeoff > 1u || c->hold_on > 1u || c->drop_follow > 1u) return "cmd flags";
+    if (c->hold_x < -0x1000000 || c->hold_x > 0x1000000 ||
+        c->hold_y < -0x1000000 || c->hold_y > 0x1000000) return "cmd hold";
+    return NULL;
+}
+
+/* The structural bounds, on a slot the consumer holds. `cap` is the
+   committed capacity the producer recorded for this slot before handing it
+   over — read from our own table, never from the record, because a record
+   whose header is garbage would otherwise send this probe to an uncommitted
+   page. Every offset and length in the header is checked against it. */
+static const char* pk_valid(const PKX* m, const void* rec, unsigned cap)
+{
+    if (REC_HEAD(rec) != REC_TAIL(m, rec)) return "head != tail";
+    if (REC_CAP(rec) != cap) return "cap_bytes != the slot's capacity";
+    if (cap < m->recBytes || cap > m->reserve - 4u) return "cap out of range";
+    if (*(const uint32_t*)((const unsigned char*)rec + cap) != PK_CANARY) return "canary";
+    if (REC_USED(rec) < m->recBytes || REC_USED(rec) > cap || (REC_USED(rec) & 3u))
+        return "used_bytes";
+    return m->valid ? m->valid(rec) : NULL;
+}
+
+static const void* pkx_acquire(PKX* m, const void** prev)
+{
+    const void* p;
     const char* bad;
     DWORD tid = GetCurrentThreadId();
 
@@ -327,7 +439,7 @@ static const TAGPU_PACKET* pkx_acquire(PKX* m, const TAGPU_PACKET** prev)
     if (m->consTid != tid) {
         if (m->consTid) {
             char b[120];
-            _snprintf(b, sizeof b, "%s: consumer thread %u -> %u (render thread restarted)",
+            _snprintf(b, sizeof b, "%s: consumer thread %u -> %u (thread restarted)",
                       m->name, (unsigned)m->consTid, (unsigned)tid);
             b[sizeof b - 1] = 0;
             plog(b);
@@ -343,7 +455,7 @@ static const TAGPU_PACKET* pkx_acquire(PKX* m, const TAGPU_PACKET** prev)
         LONG old;
         /* C2: our last loads of `give` were last frame's, before this
            exchange. The poison makes a pointer kept past its frame loud. */
-        if (s_poison) tagpu_pk_fill(m->slot[give], 0xDD, sizeof(TAGPU_PACKET));
+        if (s_poison) tagpu_pk_fill(m->slot[give], 0xDD, m->recBytes);
         old = XCHG(m, give);
         got = (unsigned)old & PKX_IDX;
         if (!((unsigned)old & PKX_FRESH)) violation(m, "FRESH vanished between peek and exchange", (unsigned)old, give);
@@ -354,26 +466,25 @@ static const TAGPU_PACKET* pkx_acquire(PKX* m, const TAGPU_PACKET** prev)
         m->cTaken++;
         /* C1: our loads of the new slot follow the exchange (and depend on
            its result). Under stress, hold the slot for a while first. */
-        if (s_stress) Sleep((DWORD)(rand() % 51));
+        if (s_stress && m->consSleep) Sleep((DWORD)(rand() % 51));
     }
-    p = (const TAGPU_PACKET*)m->slot[m->read];
-    if (!p->head_seq) { m->cNoPkt++; m->frameHead = 0; return NULL; }
-    bad = pk_valid(p, m->cap[m->read]);
+    p = m->slot[m->read];
+    if (!REC_HEAD(p)) { m->cNoPkt++; m->frameHead = 0; return NULL; }
+    bad = pk_valid(m, p, m->cap[m->read]);
     if (bad) {
-        violation(m, bad, p->head_seq, p->used_bytes);
+        violation(m, bad, REC_HEAD(p), REC_USED(p));
         m->frameHead = 0;
         return NULL;
     }
     if (m->lastSeq) {
-        if (p->head_seq > m->lastSeq + 1u) m->cGap += p->head_seq - m->lastSeq - 1u;
-        else if (p->head_seq < m->lastSeq) violation(m, "head_seq went backwards", p->head_seq, m->lastSeq);
+        if (REC_HEAD(p) > m->lastSeq + 1u) m->cGap += REC_HEAD(p) - m->lastSeq - 1u;
+        else if (REC_HEAD(p) < m->lastSeq) violation(m, "head_seq went backwards", REC_HEAD(p), m->lastSeq);
     }
-    m->lastSeq = p->head_seq;
-    m->frameHead = p->head_seq;                    /* latched for frame_end   */
-    if (prev) {
-        const TAGPU_PACKET* q = (const TAGPU_PACKET*)m->slot[m->prev];
-        if (q != p && q->head_seq && q->in_game && p->in_game && q->level_gen == p->level_gen &&
-            !pk_valid(q, m->cap[m->prev]))
+    m->lastSeq = REC_HEAD(p);
+    m->frameHead = REC_HEAD(p);                    /* latched for frame_end   */
+    if (prev && m->pair) {
+        const void* q = m->slot[m->prev];
+        if (q != p && REC_HEAD(q) && m->pair(p, q) && !pk_valid(m, q, m->cap[m->prev]))
             *prev = q;
     }
     return p;
@@ -381,8 +492,18 @@ static const TAGPU_PACKET* pkx_acquire(PKX* m, const TAGPU_PACKET** prev)
 
 const TAGPU_PACKET* tagpu_packet_acquire(const TAGPU_PACKET** prev)
 {
+    const void* q = NULL;
+    const void* p;
     if (!s_armed) { if (prev) *prev = NULL; return NULL; }
-    return pkx_acquire(&s_frame, prev);
+    p = pkx_acquire(&s_frame, prev ? &q : NULL);
+    if (prev) *prev = (const TAGPU_PACKET*)q;
+    return (const TAGPU_PACKET*)p;
+}
+
+const TAGPU_CMD* tagpu_cmd_take(void)
+{
+    if (!s_armed) return NULL;
+    return (const TAGPU_CMD*)pkx_acquire(&s_cmd, NULL);
 }
 
 static void heartbeat(PKX* m, unsigned fc)
@@ -394,7 +515,7 @@ static void heartbeat(PKX* m, unsigned fc)
     double secs = 0.0;
     unsigned i, total = 0, acc = 0, p50 = 0, p99 = 0, pubs, taken;
     const TAGPU_PACKET* p = m->frameHead ? (const TAGPU_PACKET*)m->slot[m->read] : NULL;
-    char b[640];
+    char b[900];
     int n;
 
     if (have && fc - last < PK_HEARTBEAT) return;
@@ -423,14 +544,28 @@ static void heartbeat(PKX* m, unsigned fc)
     if (p) {
         double tps = (have && secs > 0.0 && p->tick >= lastTick) ? (double)(p->tick - lastTick) / secs : 0.0;
         int k = _snprintf(b + n, sizeof b - (size_t)n,
-                          " | seq=%u tick=%u tps=%.2f speed=%d paused=%u in_game=%u gen=%u flags=0x%04X eye=(%d,%d) vp=(%d,%d,%d,%d) flips=%u font=%u/%uB fg=%d trunc=%u used=%u/%u",
+                          " | seq=%u tick=%u tps=%.2f speed=%d paused=%u in_game=%u gen=%u flags=0x%04X eye=(%d,%d) vp=(%d,%d,%d,%d) addr=(%d,%d,%d,%d) z=%.3f pal=%u gamma=%.3f flips=%u font=%u/%uB fg=%d trunc=%u used=%u/%u",
                           p->head_seq, p->tick, tps, p->game_speed, (unsigned)p->paused, p->in_game, p->level_gen,
-                          (unsigned)p->load_flags, p->eye[0], p->eye[1], p->vp[0], p->vp[1], p->vp[2], p->vp[3], p->gui_flips,
-                          p->font_gen, p->font_len, p->text_fg, p->truncated, p->used_bytes, p->cap_bytes);
+                          (unsigned)p->load_flags, p->eye[0], p->eye[1], p->vp[0], p->vp[1], p->vp[2], p->vp[3],
+                          p->vp_addr[0], p->vp_addr[1], p->vp_addr[2], p->vp_addr[3], p->zoom_applied, p->pal_ok, p->gamma,
+                          p->gui_flips, p->font_gen, p->font_len, p->text_fg, p->truncated, p->used_bytes, p->cap_bytes);
         if (k < 0 || n + k >= (int)sizeof b) n = (int)sizeof b - 1; else n += k;
         lastTick = p->tick;
     } else {
         int k = _snprintf(b + n, sizeof b - (size_t)n, " | no packet held");
+        if (k < 0 || n + k >= (int)sizeof b) n = (int)sizeof b - 1; else n += k;
+    }
+    /* the other direction: posts and takes, and how far the render thread's
+       cumulative delta is ahead of what the last packet acknowledged. The
+       consumer-side counters are the game thread's; a stale dword is the
+       worst this read can get. */
+    {
+        int k = _snprintf(b + n, sizeof b - (size_t)n,
+                          " | cmd: post=%u take=%u new=%u overrun=%u viol=%u nocmd=%u seq=%u ack=%u unacked=(%d,%d) z=%.3f live=%u hold=%u",
+                          s_cmd.cPub, s_cmd.cAcq, s_cmd.cTaken, s_cmd.cOverrun, s_cmd.cViol, s_cmd.cNoPkt,
+                          s_lastPosted.cmd_seq, p ? p->cmd_ack_seq : 0u,
+                          p ? s_lastPosted.cum_dx - p->cmd_ack_dx : 0, p ? s_lastPosted.cum_dy - p->cmd_ack_dy : 0,
+                          s_lastPosted.zoom, s_lastPosted.live, s_lastPosted.hold_on);
         if (k < 0 || n + k >= (int)sizeof b) n = (int)sizeof b - 1; else n += k;
     }
     if (s_extra && n < (int)sizeof b - 1) s_extra(b + n, (unsigned)(sizeof b - (size_t)n), secs);
@@ -446,15 +581,14 @@ static void pkx_frame_end(PKX* m, unsigned fc)
     m->inFrame = 0;
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
     if (m->frameHead) {
-        const TAGPU_PACKET* p = (const TAGPU_PACKET*)m->slot[m->read];
-        if (p->head_seq != m->frameHead || p->tail_seq != m->frameHead)
-            violation(m, "our slot was rewritten during our frame", p->head_seq, m->frameHead);
-        else if (s_check && p->crc && pk_crc(p) != p->crc) {
+        const void* p = m->slot[m->read];
+        if (REC_HEAD(p) != m->frameHead || REC_TAIL(m, p) != m->frameHead)
+            violation(m, "our slot was rewritten during our frame", REC_HEAD(p), m->frameHead);
+        else if (s_check && REC_CRC(m, p) && pk_crc(m, p) != REC_CRC(m, p)) {
             m->cCrcBad++;
-            violation(m, "CRC mismatch", p->crc, pk_crc(p));
+            violation(m, "CRC mismatch", REC_CRC(m, p), pk_crc(m, p));
         }
     }
-    heartbeat(m, fc);
 }
 
 void tagpu_packet_frame_end(unsigned frame_counter)
@@ -463,6 +597,13 @@ void tagpu_packet_frame_end(unsigned frame_counter)
        count-only observer feeds it draws/s, which is the cost A/B's other arm */
     if (!s_armed) { heartbeat(&s_frame, frame_counter); return; }
     pkx_frame_end(&s_frame, frame_counter);
+    heartbeat(&s_frame, frame_counter);
+}
+
+void tagpu_cmd_done(void)
+{
+    if (!s_armed) return;
+    pkx_frame_end(&s_cmd, 0);
 }
 
 void tagpu_packet_set_extra(tagpu_packet_extra_fn fn) { s_extra = fn; }
@@ -471,30 +612,45 @@ int tagpu_packet_armed(void) { return s_armed; }
 
 /* ------------------------------------------------------------- attach ---- */
 
+static void pkx_setup(PKX* m, const char* name, unsigned recBytes, unsigned reserve, unsigned grain,
+                      pkx_valid_fn valid, pkx_pair_fn pair, int prodByRole, int consSleep)
+{
+    m->name = name; m->recBytes = recBytes; m->reserve = reserve; m->grain = grain;
+    m->valid = valid; m->pair = pair; m->prodByRole = prodByRole; m->consSleep = consSleep;
+}
+
 void tagpu_packet_init(void)
 {
-    char b[240];
+    char b[300];
     s_check  = lever("tagpu_packet.check");
     s_stress = lever("tagpu_packet.stress");
     s_poison = lever("tagpu_packet.poison");
     QueryPerformanceFrequency(&s_freq);       /* the heartbeat's clock, armed or not */
     if (lever("tagpu_packet.off")) {
-        plog("packet: disabled by tagpu_packet.off — no slots, nothing published or taken; "
-             "every string through tagpu_text_place draws nothing (the group digits, the ShowRanges "
-             "labels, the FPS readout); the DrawGameScreen observer stays in count-only mode so "
-             "draws/s is still reported");
+        plog("packet: disabled by tagpu_packet.off — no slots, nothing published, taken or applied: "
+             "no world pass draws (every one reads the packet's view), every string through "
+             "tagpu_text_place draws nothing, the zoom's commands are not applied (the engine keeps "
+             "its own camera range, viewport rect and scroll rate); the DrawGameScreen observer stays "
+             "in count-only mode so draws/s is still reported");
         return;
     }
-    if (!pkx_init(&s_frame, s_stress ? PK_PAGE : PK_GRAIN)) {
-        plog("packet: NOT armed — could not reserve or commit the four slots (nothing is "
-             "published or taken; the reservation stays as it is)");
+    pkx_setup(&s_frame, "packet", sizeof(TAGPU_PACKET), PK_RESERVE, s_stress ? PK_PAGE : PK_GRAIN,
+              frame_valid, frame_pair, 0, 1);
+    pkx_setup(&s_cmd, "cmd", sizeof(TAGPU_CMD), PK_CMD_RESERVE, PK_PAGE,
+              cmd_valid, NULL, 1, 0);
+    if (!pkx_init(&s_frame, s_stress ? PK_PAGE : PK_GRAIN) || !pkx_init(&s_cmd, PK_PAGE)) {
+        plog("packet: NOT armed — could not reserve or commit the slots (nothing is "
+             "published, taken or applied; the reservation stays as it is)");
         return;
     }
     s_armed = 1;
     _snprintf(b, sizeof b,
-              "packet: ARMED %d slots x %u MB reserved, %u KB committed each; W=0 cell=1(stale) READ=2 PREV=3; "
-              "check=%d stress=%d poison=%d (frame-packet-exchange, landing 1)",
-              PK_SLOTS, PK_RESERVE >> 20, s_frame.cap[0] >> 10, s_check, s_stress, s_poison);
+              "packet: ARMED %d slots x %u MB reserved, %u KB committed each, header %u B; "
+              "commands: %d slots x %u KB, %u KB committed each, record %u B; "
+              "W=0 cell=1(stale) READ=2 PREV=3 both; check=%d stress=%d poison=%d (frame-packet-exchange, landing 2)",
+              PK_SLOTS, PK_RESERVE >> 20, s_frame.cap[0] >> 10, (unsigned)sizeof(TAGPU_PACKET),
+              PK_SLOTS, PK_CMD_RESERVE >> 10, s_cmd.cap[0] >> 10, (unsigned)sizeof(TAGPU_CMD),
+              s_check, s_stress, s_poison);
     b[sizeof b - 1] = 0;
     plog(b);
 }

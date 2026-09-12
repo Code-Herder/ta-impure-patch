@@ -6,13 +6,18 @@
    tagpu_fx.on. See research/notes/effects.md. */
 #include "tagpu.h"
 
-/* everything the effects gather/render needs from the native pass's frame */
+/* everything the effects gather/render needs from the native pass's frame.
+   THE ENGINE POINTER IS NOT IN IT (frame packet exchange, landing 2): the
+   eye and the viewport below come from the packet, and a pass that still
+   walks engine memory on the render thread (units, features, effects — to
+   convert in landings 3 and 4) takes the main pointer itself, in its own
+   file, where the build rule can see it; a shared record carrying it would
+   be a conduit the rule cannot. */
 struct TAGPU_PACKET;
 typedef struct TAGPU_FXVIEW {
-    const char* ta;              /* TAdynmem                                   */
-    const struct TAGPU_PACKET* packet;  /* this frame's packet (tagpu_packet.h), or NULL;
-                                    valid for this frame only, never cached */
-    int eyeX, eyeY, vpL, vpT;
+    const struct TAGPU_PACKET* packet;  /* this frame's packet (tagpu_packet.h), never NULL
+                                    here; valid for this frame only, never cached */
+    int eyeX, eyeY, vpL, vpT;    /* the PREDICTED eye and the true viewport, from the packet */
     int gw, gh, ss;
     float zoom, zoomCx, zoomCy;  /* the native pass's view zoom (G12d demo)    */
     float encSprite, depthScale; /* this frame's sprite depth key and VS scale */

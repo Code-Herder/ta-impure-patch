@@ -159,35 +159,27 @@ static void __cdecl terr_fogtick(void* ctxv)
     char* ta = *(char**)TA_MAINPP;
     unsigned short* los;
     int rebuilt = 0;
-    LONG want;
     (void)ctxv;
     if (!ptr_ok(ta)) return;
-    /* The camera FOLLOW, released here for the same reason the fog request is
-       answered here: this is the game thread, and the slots are pointers the
-       camera stepper dereferences. tagpu_zoom.c's follow_tick explains why a
-       render-thread store is not an option (main is randomly misaligned). */
-    tagpu_zoom_follow_tick(ta);
     los = (unsigned short*)(ta + OFF_LOSTYPE);
-    /* OUR OWN REQUEST, OR-ed into the engine's lazy test rather than written
-       into it. The screen fog grid is view-anchored, so an eye that moved must
-       rebuild it — and every engine path that moves the eye says so by clearing
-       LosType bit 3. tagpu_zoom moves the eye too (cursor anchoring, the camera
-       range, the hold) and CANNOT clear that bit safely: `0x484904` below is an
-       unlocked read-modify-write on the same word, so a clear from the render
-       thread can simply be lost, and a lost one is a silently stale fog.
-       Asking here instead costs nothing and cannot be lost — this is the only
-       code that decides, and it is on the thread that owns the word.
-       Sampled BEFORE the rebuild and acked after, so a step that lands during
-       one is answered by the next tick rather than swallowed. */
-    want = tagpu_zoom_fog_seq();
-    if (!(*(unsigned char*)los & 8) || tagpu_zoom_fog_pending()) {
+    /* THE ENGINE'S OWN LAZY TEST, and nothing OR-ed into it any more. The
+       screen fog grid is view-anchored, so an eye that moved must rebuild it,
+       and every path that moves the eye says so by clearing LosType bit 3 —
+       the engine's writers, and since the frame packet's landing 2 ours too:
+       the cursor anchor, the camera range and the hold all move the eye from
+       the GAME THREAD's command apply at the top of this same draw
+       (tagpu_zoom_apply), which clears the bit exactly as `0x41CB6B` does,
+       on the only thread that may (`0x484904` sets it with an unlocked
+       read-modify-write, so a clear from any other thread could be lost).
+       The old request/ack handshake between the render thread and this tick
+       is gone with the render-thread eye writes it existed for. */
+    if (!(*(unsigned char*)los & 8)) {
         ((void (*)(void))(size_t)FOGGRID_BUILD_VA)();
         /* re-read: the builder reallocates nothing, but the engine reloads the
            TAdynmem pointer here and so do we */
         ta = *(char**)TA_MAINPP;
         if (!ptr_ok(ta)) return;
         *(unsigned short*)(ta + OFF_LOSTYPE) |= 8;
-        tagpu_zoom_fog_ack(want);
         rebuilt = 1;
     }
     tagpu_fogwide_tick(ta, rebuilt);

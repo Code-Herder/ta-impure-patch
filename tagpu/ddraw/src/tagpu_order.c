@@ -722,6 +722,7 @@ void tagpu_order_trace_drawer(int bit, const void* node, const int* pos, int fla
 
 /* the frame's derived constants, set once per gather */
 static const TAGPU_FXVIEW* s_v;
+static const char*         s_ta;   /* this file's own read of the main pointer (to-convert:3) */
 static ORDREC s_rec[MAXORD];     /* the present thread's private copy       */
 static const unsigned char* s_gui;
 static double s_px;              /* one SCREEN pixel, in game-frame units    */
@@ -747,8 +748,8 @@ static const char* sane_unit(const char* u)
 {
     const char *beg, *end;
     if (!u || !s_v) return NULL;
-    beg = *(const char* const*)(s_v->ta + OFF_UNITS);
-    end = *(const char* const*)(s_v->ta + OFF_UNITEND);
+    beg = *(const char* const*)(s_ta + OFF_UNITS);
+    end = *(const char* const*)(s_ta + OFF_UNITEND);
     if (!ptr_ok(beg) || !ptr_ok(end) || u < beg || u >= end) return NULL;
     if ((size_t)(u - beg) % UNIT_STRIDE) return NULL;
     return u;
@@ -987,7 +988,7 @@ static int seq_ink(const char* seq, int fallback)
        RANKING over one sprite's own colours, which a uniform scale of every
        entry cannot change — the ink index this picks is a property of the art,
        not of the display. */
-    pal = (const unsigned char*)(s_v->ta + OFF_PALETTE);
+    pal = (const unsigned char*)(s_ta + OFF_PALETTE);
     if (w > 0 && h > 0 && w <= 128 && h <= 128 &&
         tagpu_gaf_decode(g, w, h, pix)) {
         memset(hist, 0, sizeof hist);
@@ -1064,7 +1065,7 @@ static void draw_build(const ORDREC* r, int gameTime)
    information — translucency costs legibility. */
 static void draw_sprite(const ORDREC* r, int gameTime, int showRanges)
 {
-    const char* ta = s_v->ta;
+    const char* ta = s_ta;
     const char* seq;
     double wx, wy, wz;
     float cx, cy;
@@ -1144,7 +1145,7 @@ static void draw_sprite(const ORDREC* r, int gameTime, int showRanges)
 /* --- bit 1: the marching route dots --- */
 static void draw_dots(const ORDREC* r, int gameTime)
 {
-    const char* ta = s_v->ta;
+    const char* ta = s_ta;
     const char* seq;
     double ax, ay, az, bx, by, bz;
     double dx, dy, dz, len, cursor, phase;
@@ -1306,7 +1307,10 @@ int tagpu_order_gather(const TAGPU_FXVIEW* v)
     /* Without the redirect the engine is still drawing its own and ours would
        be a second set at the unzoomed position. Refuse rather than double. */
     if (!tagpu_markown_installed()) return 0;
-    if (!ptr_ok(v) || !ptr_ok(v->ta)) return 0;
+    /* this file's own read of the main pointer: the view record no longer
+       carries it (frame packet exchange, landing 2), so the rule sees it here */
+    s_ta = *(const char* const*)TA_MAINPP;
+    if (!ptr_ok(v) || !ptr_ok(s_ta)) return 0;
     /* Taking the draw is done HERE and not from the arm poll, for the reason
        tagpu_mark_armed spells out: the render is the only place that knows the
        pass is really running, and the arm poll is reached at the menus too. */
@@ -1350,7 +1354,7 @@ int tagpu_order_gather(const TAGPU_FXVIEW* v)
     if (n <= 0) return 0;
 
     s_v   = v;
-    s_gui = (const unsigned char*)(v->ta + OFF_GUICOL);
+    s_gui = (const unsigned char*)(s_ta + OFF_GUICOL);
     s_px  = 1.0 / (double)(v->zoom > 0.0f ? v->zoom : 1.0f);
 
     for (i = 0; i < n; i++) {

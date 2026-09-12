@@ -718,7 +718,10 @@ static void gather_fx(const TAGPU_FXVIEW* v)
     if (!s_passive) tagpu_fxown_set_skip(1);
     tagpu_fxown_beat(v->frame_counter);
 
-    const char* ta = v->ta;
+    /* this file's own read of the main pointer (to-convert:4a): the view
+       record no longer carries it, so the rule can see every reader */
+    const char* ta = *(const char* const*)TA_MAINPP;
+    if (!ptr_ok(ta)) return;
     int tick = *(const int*)(ta + OFF_TICK);
     const unsigned char* coltab = (const unsigned char*)(ta + OFF_COLTAB);
     unsigned caps = tagpu_fx_caps();

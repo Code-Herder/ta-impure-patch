@@ -50,6 +50,12 @@
 #define OFF_SCROLLTO_Y     0x1432B
 #define OFF_SCREEN_W       0x37E1F      /* i32: the screen, never written by us      */
 #define OFF_SCREEN_H       0x37E23
+#define OFF_VP_L           0x37E27      /* i32 x4: the viewport rect L, T, R, B the   */
+#define OFF_VP_T           0x37E2B      /* engine can NAME (0x497F40 builds it at    */
+#define OFF_VP_R           0x37E2F      /* game entry; tagpu_vpwide widens L/T/R/B   */
+#define OFF_VP_B           0x37E33      /* on the game thread at zoom < 1)           */
+#define OFF_PALETTE        0x143A7      /* 256 x {R,G,B,pad}: the engine's own table, */
+                                        /* never gamma-scaled (tagpu_pal.h)          */
 #define OFF_MAP_PXW        0x1422B      /* i32: map size in world px                 */
 #define OFF_MAP_PXH        0x1422F
 #define OFF_MAP_W16        0x14233      /* i32: the PLOT grid, 16-px cells           */
@@ -68,5 +74,7 @@
 /* ---- the graphics globals ------------------------------------------------ */
 #define GFX_FONT           0x204        /* the current font object: SetFont 0x4C1420 */
 #define GFX_TEXTFG         0x208        /* its foreground index: SetTextColors 0x4C13A0 */
+#define GFX_GAMMA          0x614        /* float: the factor 0x4BA200 scales every     */
+                                        /* palette entry by (SetGamma 0x4BA590)        */
 
 #endif

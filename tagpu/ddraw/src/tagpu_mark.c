@@ -615,16 +615,23 @@ static void put_outline(int* nv, int l, int t, int r, int b, int col,
 
 /* the build-cursor footprint and the drag band box — the whole of
    `0x469DB4..0x469F23`, transcribed in the header comment */
+#define TA_MAINPP 0x00511DE8u   /* this file's own read (to-convert:3) */
+
 static void gather_cursor(const TAGPU_FXVIEW* v)
 {
-    const char* ta = v->ta;
-    const unsigned char* gui = (const unsigned char*)(ta + OFF_GUICOL);
-    const int* vp = (const int*)(ta + OFF_VPRECT);
+    const char* ta = *(const char* const*)TA_MAINPP;
+    const unsigned char* gui;
+    /* the rect the engine can NAME, from the packet (landing 2): the field
+       0x37E27 as the game thread left it after its own widening — inclusive
+       L, T, R, B, exactly what IsPositionInRect tests against */
+    const int* vp = v->packet ? v->packet->vp_addr : NULL;
     int mode, fl, l, t, r, b, idx, outer, inner, nv = CURSBASE;
     float wx, wz;
 
     s_ncurs = 0;
     if (s_armed != 1 || !s_cursor || s_passive) return;
+    if (!ptr_ok(ta) || !vp) return;
+    gui = (const unsigned char*)(ta + OFF_GUICOL);
     /* Without the redirect the engine is still drawing its own pair and ours
        would be a second, differently placed one. Refuse rather than double. */
     if (!tagpu_markown_installed()) return;
@@ -687,13 +694,14 @@ static void gather_cursor(const TAGPU_FXVIEW* v)
 
 int tagpu_mark_gather(const TAGPU_FXVIEW* v)
 {
-    const char* ta = v->ta;
+    const char* ta = *(const char* const*)TA_MAINPP;   /* this file's own read (to-convert:3) */
     const char *beg, *end, *u;
     const unsigned char* gui;
     int watched, nv = BARBASE;
 
     s_nbar = 0; s_cBar = 0; s_nordt = 0; s_nordl = 0; s_nordx = 0;
     s_nordxOrd = 0; s_ntext = 0; s_xover = 0;
+    if (!ptr_ok(ta)) return 0;
     /* before anything emits: tagpu_order.c's labels come through
        tagpu_mark_emit_text, which sizes its quads with this */
     /* one font for the whole frame, before anything asks the atlas for a string:

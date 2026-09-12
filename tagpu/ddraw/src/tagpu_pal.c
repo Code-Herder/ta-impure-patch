@@ -6,7 +6,15 @@
 
    Until G15d every pass read main+0x143A7 and was wrong by the Gamma factor;
    G15d fixed the UI twin alone and left the world. This is that fix's other
-   half, and the resolution now lives in one place instead of two. */
+   half, and the resolution now lives in one place instead of two.
+
+   NO ENGINE MEMORY since the frame packet's landing 2: the engine's own table
+   and the gamma factor are fields of the packet, copied by the publisher on
+   the game thread (both kinds of packet carry them, the level-end one too),
+   and the copy taken here outlives the packet — a frame with no packet keeps
+   the last table it saw, exactly as the old direct read kept its last good
+   snapshot. The presented half is the fork's own palette object, which is
+   not engine memory at all. */
 
 #include <windows.h>
 #include <stdio.h>
@@ -15,16 +23,9 @@
 #include "IDirectDrawSurface.h"
 #include "IDirectDrawPalette.h"
 #include "tagpu_pal.h"
+#include "tagpu_packet.h"
 
-#define TA_MAINPP      0x00511DE8u  /* -> the engine's main struct         */
-#define OFF_PALETTE    0x143A7      /* 256 x {R,G,B,pad}, never gamma'd    */
-#define GFX_GLOBALS_PP 0x0051FBD0u  /* -> the graphics globals (0x4B6220)  */
-#define OFF_GAMMA      0x614        /* the float 0x4BA200 scales by        */
-#define GAMMA_MIN      0.05f
-#define GAMMA_MAX      8.0f
 #define LOG_MS         1000         /* a campaign fade is a change a step  */
-
-static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
 
 static void plog(const char* s)
 {
@@ -33,8 +34,9 @@ static void plog(const char* s)
 }
 
 static unsigned char s_pal[1024];       /* R,G,B,255 — what the screen shows  */
-static unsigned char s_eng[1024];       /* R,G,B,255 — main+0x143A7, unscaled  */
+static unsigned char s_eng[1024];       /* R,G,B,255 — the engine's table, from the packet */
 static int      s_haveEng;
+static float    s_gamma = 1.0f;         /* the engine's factor, from the packet */
 static int      s_have;                 /* s_pal holds a resolved palette      */
 static int      s_presented;            /* it came from the primary's object   */
 static unsigned s_serial;               /* bumped on every change of s_pal     */
@@ -43,16 +45,28 @@ static int      s_diff = 0, s_diffAt = -1;
 static int      s_dirty = 1;
 static DWORD    s_lastLog;
 
-void tagpu_pal_frame(void) { s_dirty = 1; }
+void tagpu_pal_frame(const TAGPU_PACKET* pk)
+{
+    s_dirty = 1;
+    /* the engine half, from the packet: bounded by the publisher (the gamma
+       to 0.05..8.0, the table a fixed 1 KB copy), taken whenever a packet
+       carries it, kept when none does */
+    if (pk && pk->pal_ok) {
+        int i;
+        for (i = 0; i < 256; i++) {
+            s_eng[4*i+0] = pk->pal[4*i+0]; s_eng[4*i+1] = pk->pal[4*i+1];
+            s_eng[4*i+2] = pk->pal[4*i+2]; s_eng[4*i+3] = 255;
+        }
+        s_haveEng = 1;
+        s_gamma = (pk->gamma >= 0.05f && pk->gamma <= 8.0f) ? pk->gamma : 1.0f;
+    }
+}
 
 static void resolve(void)
 {
-    const char* ta = *(const char* const*)TA_MAINPP;
-    const unsigned char* engine = NULL;
+    const unsigned char* engine = s_haveEng ? s_eng : NULL;
     unsigned char rgba[1024];
     int i, presented = 0, have = 0;
-
-    if (ptr_ok(ta) && ptr_ok(ta + OFF_PALETTE)) engine = (const unsigned char*)(ta + OFF_PALETTE);
 
     /* A LIFETIME, not a probe: the game thread NULLs g_ddraw.primary inside
        this section when the primary's last reference goes
@@ -73,13 +87,6 @@ static void resolve(void)
     }
     LeaveCriticalSection(&g_ddraw.cs);
 
-    if (engine) {
-        for (i = 0; i < 256; i++) {
-            s_eng[4*i+0] = engine[4*i+0]; s_eng[4*i+1] = engine[4*i+1];
-            s_eng[4*i+2] = engine[4*i+2]; s_eng[4*i+3] = 255;
-        }
-        s_haveEng = 1;
-    }
     if (!have) {
         if (!engine) return;                    /* keep the last good one */
         memcpy(rgba, s_eng, 1024);
@@ -131,14 +138,10 @@ int      tagpu_pal_diff(int* first) { if (first) *first = s_diffAt; return s_dif
 
 float tagpu_pal_gamma(void)
 {
-    const char* g = *(const char* const*)GFX_GLOBALS_PP;
-    float v;
-    if (!ptr_ok(g) || !ptr_ok(g + OFF_GAMMA)) return 1.0f;
-    v = *(const float*)(g + OFF_GAMMA);
-    /* a BOUND, not a probe: the slider's own range is 0.5..1.5 and the chat
-       command's is N/10, so anything outside this band is a field we are not
-       reading or a struct that has moved — and 1.0 is the identity that leaves
-       every colour where the engine's table put it */
-    if (!(v >= GAMMA_MIN && v <= GAMMA_MAX)) return 1.0f;
-    return v;
+    /* a BOUND, not a probe, applied by the publisher and again here: the
+       slider's own range is 0.5..1.5 and the chat command's is N/10, so
+       anything outside this band is a field we are not reading or a struct
+       that has moved — and 1.0 is the identity that leaves every colour where
+       the engine's table put it */
+    return (s_gamma >= 0.05f && s_gamma <= 8.0f) ? s_gamma : 1.0f;
 }

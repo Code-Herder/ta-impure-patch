@@ -79,7 +79,15 @@
    `0x498DA0` redirect ALONE — the mouse-point repair, no rect ever widened —
    because the zoom transform goes live from its own lever with no arm file at
    all, and once the engine is told the truth about the pointer that repair is
-   what keeps its world point right. */
+   what keeps its world point right.
+
+   WRITTEN ON THE GAME THREAD since the frame packet's landing 2: the render
+   thread posts the zoom level (tagpu_zoom_frame_end) and the game thread
+   derives the addressable rect from it at the top of every in-play draw
+   (tagpu_vpwide_apply, from the packet publisher's `before`), so the store
+   and 0x497F40's own writes are on one thread and cannot interleave — the
+   W/H repair that raced them is gone, and a counter says it stays 0. Every
+   reader of the rect that is not the engine's own runs on that thread too. */
 
 /* Install the call-site redirects and the wndproc lParam patch. DllMain only,
    byte-matched; the widening half is all-or-nothing and needs
@@ -91,16 +99,34 @@
    report.) */
 void tagpu_vpwide_init(void);
 
-/* Render thread, once a frame, from tagpu_zoom_frame_end(): widen the rect to
-   the range the transform produces at `z`, or put the true rect back. */
-void tagpu_vpwide_frame(float z);
+/* GAME THREAD, at the top of every in-play draw, from the frame packet
+   publisher's `before` with the latest command record (NULL until the first
+   post): widen the rect to the range the transform produces at the level the
+   record carries — while a zoomed-out world is live — or put the true rect
+   back. Verifies the rect once against what 0x497F40 builds, on a draw it
+   does not own, and COUNTS (never repairs) a W/H that disagrees with the
+   screen dimensions: on one thread that cannot happen, and the counter is
+   the proof it does not. */
+struct TAGPU_CMD;
+void tagpu_vpwide_apply(char* ta, const struct TAGPU_CMD* c);
 
-/* The TRUE 1x viewport rect. EVERY pass that means "the viewport the engine's
-   UI is built around" must call this instead of reading `main+0x37E27`,
-   because while this module is live that field is deliberately wider — and a
-   key fill or a composite key rect taken from the wide one would erase the
-   side panel. Falls back to the field verbatim when nothing was ever widened,
-   so it is exactly today's behaviour with the module disarmed. */
+/* GAME THREAD, from the level teardown: the true rect back before the shell
+   draws — no in-play draw will apply a record until the next level. */
+void tagpu_vpwide_level_end(char* ta);
+
+/* For the heartbeat: in-play draws the apply ran on, and the draws on which
+   W/H disagreed with the screen-derived size (must stay 0). */
+void tagpu_vpwide_counters(unsigned* applies, unsigned* wh_mismatch);
+
+/* The TRUE 1x viewport rect. GAME THREAD ONLY since landing 2 — every
+   render-thread pass takes it from the frame packet's `vp` field, which the
+   publisher fills from this call. Every game-thread reader that means "the
+   viewport the engine's UI is built around" must call this instead of reading
+   `main+0x37E27`, because while this module is live that field is
+   deliberately wider — and a key fill or a capture rect taken from the wide
+   one would erase the side panel. Falls back to the field verbatim when
+   nothing was ever widened, so it is exactly the old behaviour with the
+   module disarmed. */
 void tagpu_vpwide_true_rect(const char* ta, int* L, int* T, int* W, int* H);
 
 /* Is the `0x498DA0` mouse->world repair INSTALLED? The zoom transform may not go

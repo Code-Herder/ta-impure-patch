@@ -11,6 +11,7 @@
 #include "tagpu_detour.h"
 #include "tagpu_zoom.h"
 #include "tagpu_hud.h"
+#include "tagpu_packet.h"
 
 #define TA_MAINPP    0x00511DE8u
 
@@ -150,28 +151,32 @@ static int clampi(int v, int lo, int hi)
 
 static int  s_installed;        /* the mouse->world redirect went in         */
 static int  s_widenArmed;       /* ...and tagpu_vpwide.on, so the rect widens */
+/* GAME THREAD ONLY since landing 2, all of it: the verification, the widening
+   store, the restore and every reader of the rect that is not the engine's
+   own (the clip guard, the mouse->world stub, the capture window) run inside
+   DrawGameScreen on the game thread, so no flag here crosses a thread any
+   more. `volatile` stays on the two the stub reads mid-function, as a promise
+   about the COMPILER: a plain int lets -O2 sink the store past the rect
+   writes, and the order "ours, before the wide stores; not ours, after the
+   restoring ones" is what the stub's origin arithmetic relies on. */
 static volatile int s_verified; /* the rect matched what 0x497F40 builds     */
-/* volatile for the same reason s_wide below is: since the clip guard began
-   calling tagpu_vpwide_true_rect(), this flag is read on the GAME thread
-   three times per DrawGameScreen, and a stale 0 there makes true_rect_of
-   fall back to the FIELD -- which is the widened rect -- turning the
-   viewport clamp into the identity and re-opening the side panel. */
 static int  s_saidUnverified;   /* the diagnostic is one-shot                */
-static int  s_saidRepair;       /* the W/H repair diagnostic is one-shot     */
-/* VOLATILE, and not merely because two threads read it: the ordering the
-   comment on restore() relies on is a promise about the COMPILER as much as
-   about x86, and a plain int lets -O2 sink the store past the rect writes. */
 static volatile LONG s_wide;    /* we are currently writing the rect         */
+static unsigned s_whMismatch;   /* draws on which W/H disagreed with the screen
+                                   dimensions: MUST READ 0 (heartbeat)        */
+static unsigned s_applies;      /* in-play draws the apply ran on             */
 
-/* Published for the two readers on other threads: the message thread's ring
-   test and markown's capture window on the game thread. Five aligned 32-bit
-   slots, the same discipline tagpu_zoom uses. `s_pubLive` is stored last and
-   cleared first, and x86 does not reorder stores with stores or loads with
-   loads, so "live" never advertises a rect that was not written. The values
-   themselves can still change under a reader mid-read while live stays set —
-   only when the zoom LEVEL changes, and the cost is one frame's ring decision
-   or one frame's capture rect taken from a mixed pair. Not worth a lock on the
-   input path; a steady zoom writes nothing at all. */
+/* Published for the reader on the other thread: the message thread's ring
+   test (markown's capture window reads it on this thread). Five aligned
+   32-bit slots, the same discipline tagpu_zoom uses. `s_pubLive` is stored
+   last and cleared first, and x86 does not reorder stores with stores or
+   loads with loads, so "live" never advertises a rect that was not written.
+   The values themselves can still change under a reader mid-read while live
+   stays set — only when the zoom LEVEL changes, and the cost is one frame's
+   ring decision taken from a mixed pair. Not worth a lock on the input path;
+   a steady zoom writes nothing at all. Written by the game thread right
+   after the field, so what the ring test sees is exactly what the engine can
+   name. */
 static volatile LONG s_pubL, s_pubT, s_pubW, s_pubH, s_pubLive;
 
 /* ---- the clip guard -------------------------------------------------------
@@ -493,21 +498,25 @@ static void restore(char* ta)
     flog("vpwide: viewport rect restored to 1x");
 }
 
-void tagpu_vpwide_frame(float z)
+/* GAME THREAD, at the top of every in-play draw (tagpu_packet_pub.c's
+   `before`), with the latest command record. The level it carries is what
+   the addressable rect is derived from; a record that says no zoomed world
+   is live — or no record at all — puts the true rect back. */
+void tagpu_vpwide_apply(char* ta, const TAGPU_CMD* c)
 {
-    char* ta;
     int tR, tB, tW, tH, aL, aT, aR, aB, tL, tT;
-    float cx, cy;
+    float cx, cy, z;
 
     if (!s_installed || !s_widenArmed) return;   /* the repair-only arm writes
                                                     no rect, so it verifies
-                                                    nothing and repairs nothing */
-    ta = *(char**)TA_MAINPP;
+                                                    nothing and counts nothing */
     if (!ptr_ok(ta)) return;
+    s_applies++;
+    z = (c && c->live) ? c->zoom : 1.0f;
     if (!true_rect_of(ta, &tR, &tB, &tW, &tH)) { restore(ta); return; }
     vp_true(ta, &tL, &tT, NULL);
 
-    /* Verify once, on a frame we do not own, that the rect really is what
+    /* Verify once, on a draw we do not own, that the rect really is what
        0x497F40 builds — everything below assumes that construction, so a build
        or a resolution that disagrees must widen nothing rather than half of it. */
     if (!s_verified) {
@@ -540,26 +549,26 @@ void tagpu_vpwide_frame(float z)
         }
     }
 
-    /* W AND H CAN BE COLLATERAL DAMAGE, so they are checked every frame.
-       0x497F40 computes W = R - L + 1 by RE-READING L (0x4981C9 writes it,
-       0x498214 reads it back) and H likewise from T. Our store of the widened L
+    /* W AND H ARE COUNTED, NOT REPAIRED. 0x497F40 computes W = R - L + 1 by
+       RE-READING L (0x4981C9 writes it, 0x498214 reads it back) and H likewise
+       from T; while the widened L was stored from the render thread, a store
        landing in that window — re-entering the game screen while a zoomed view
-       is live — leaves W hundreds of pixels too wide, and the eye clamp
-       0x41C3C0 then derives maxEye = map - W and oscillates the camera. They
-       are the two fields this module is built around NOT writing, so when they
-       disagree with the screen dimensions they are put back rather than
-       tolerated. */
+       was live — left W hundreds of pixels too wide and the eye clamp 0x41C3C0
+       oscillating the camera, so the old per-frame apply put them back. Now
+       the store is on THIS thread, in the in-play draw, and 0x497F40 runs on
+       this thread at game entry, before any in-play draw: the two cannot
+       interleave, so a disagreement cannot come from us. It is counted (the
+       heartbeat's `vpwh=`, which must read 0) and logged, and NOT written:
+       the two fields are the ones this module is built around not writing. */
     if (*(const int*)(ta + OFF_VIEW_W) != tW || *(const int*)(ta + OFF_VIEW_H) != tH) {
-        if (!s_saidRepair) {
+        s_whMismatch++;
+        if (s_whMismatch == 1 || (s_whMismatch & 255u) == 0) {
             char b[160];
-            s_saidRepair = 1;
             _snprintf(b, sizeof b,
-                "vpwide: REPAIRED view size %dx%d -> %dx%d (0x497F40 raced our L/T store)",
-                *(const int*)(ta + OFF_VIEW_W), *(const int*)(ta + OFF_VIEW_H), tW, tH);
+                "vpwide: view size %dx%d disagrees with the screen-derived %dx%d (#%u; NOT repaired — one thread, so not ours)",
+                *(const int*)(ta + OFF_VIEW_W), *(const int*)(ta + OFF_VIEW_H), tW, tH, s_whMismatch);
             flog(b);
         }
-        *(volatile int*)(ta + OFF_VIEW_W) = tW;
-        *(volatile int*)(ta + OFF_VIEW_H) = tH;
     }
 
     if (!(z > 0.05f && z < 1.0f)) { restore(ta); return; }
@@ -591,6 +600,17 @@ void tagpu_vpwide_frame(float z)
         s_pubL = aL; s_pubT = aT; s_pubW = aR - aL + 1; s_pubH = aB - aT + 1;
         s_pubLive = 1;
     }
+}
+
+void tagpu_vpwide_level_end(char* ta)
+{
+    if (!s_installed || !s_widenArmed || !ptr_ok(ta)) return;
+    restore(ta);
+}
+
+void tagpu_vpwide_counters(unsigned* applies, unsigned* wh_mismatch)
+{
+    *applies = s_applies; *wh_mismatch = s_whMismatch;
 }
 
 /* ---- install ------------------------------------------------------------- */

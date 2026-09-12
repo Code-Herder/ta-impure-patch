@@ -21,9 +21,11 @@
    gather does.
 
    THE PACKET LINE. `tagpu_packet.show` (polled with the trigger) adds a second
-   row under the frame rate: `PK <seq> T<tick> E<eyeX>,<eyeY>` from the packet
-   the driver acquired this frame — the frame packet exchange's "visibly alive"
-   readout (landing 1). Same eleven strings plus "PK", "T", "E", "," and "-",
+   row under the frame rate: `PK<seq> T<tick> E<eyeX>,<eyeY> A<ack> D<dx>,<dy>`
+   from the packet the driver acquired this frame — the frame packet exchange's
+   "visibly alive" readout (landing 1), with the command acknowledgement since
+   landing 2 (the last record applied, and the cumulative anchor delta applied
+   by then). Same eleven strings plus "PK", "T", "E", "A", "D", "," and "-",
    so it costs the atlas nothing per frame either. */
 #include <windows.h>
 #include <stdio.h>
@@ -228,7 +230,11 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
         const TAGPU_PACKET* p = f->packet;
         char line[64];
         int ax, ay, w, h = 0, yoff;
-        _snprintf(line, sizeof line, "PK%u T%u E%d,%d", p->head_seq, p->tick, p->eye[0], p->eye[1]);
+        /* ...and since landing 2 the command acknowledgement: the last record
+           the game thread applied before this draw, and the cumulative anchor
+           delta it had applied by then */
+        _snprintf(line, sizeof line, "PK%u T%u E%d,%d A%u D%d,%d", p->head_seq, p->tick, p->eye[0], p->eye[1],
+                  p->cmd_ack_seq, p->cmd_ack_dx, p->cmd_ack_dy);
         line[sizeof line - 1] = 0;
         if (tagpu_text_place("FPS", &ax, &ay, &w, &h, &yoff)) {
             x = 6.0f;

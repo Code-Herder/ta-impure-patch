@@ -19,7 +19,15 @@
    0x495E66 at the end), the movie recorder (0x4962C2), and — the reason it
    is a correctness gate and not a filter — every draw of the LOADING SCREEN,
    during which the loader thread owns the per-map arrays (below).
-     before  = reserved for the commands (landing 2); a no-op today
+     before  = THE COMMANDS (landing 2): post-tick, pre-draw, the latest
+               record the render thread posted is taken and applied on
+               this thread — the zoom level (the camera range, the
+               addressable rect, ScrollSpeed), the cursor anchor's eye
+               delta, the camera hold, the follow release — so the frame
+               the engine is about to draw, its fog rebuild and its minimap
+               box all see the commanded camera (tagpu_zoom_apply,
+               tagpu_vpwide_apply). No render-thread store into engine
+               memory remains.
      after   = the publish, post-flip, only when the cell holds no FRESH
                packet: the engine draws 330..4900 times a second against
                about 60 presents, so most draws cost one relaxed load
@@ -78,6 +86,7 @@
 #include "tagpu_detour.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_vpwide.h"
+#include "tagpu_zoom.h"
 #include "tagpu_gui.h"
 
 /* DrawGameScreen's prologue, `sub esp,0x214` — the same six bytes
@@ -240,6 +249,26 @@ static unsigned append_area(TAGPU_PACKET* p, unsigned* cursor, const void* src, 
     return end;
 }
 
+/* The engine's palette table and gamma factor, into the packet — both kinds
+   of packet carry them (the level-end one from the teardown, where `main` is
+   still valid), so the render thread's palette module never reads either
+   field itself (tagpu_pal.c, converted by landing 2). The gamma is BOUNDED
+   here to the band a slider or the chat command can produce; anything else,
+   NaN included, ships as 1.0, the identity. */
+static void fill_pal(TAGPU_PACKET* p, const char* ta)
+{
+    const char* g = *(const char* const*)TA_GFX_PP;
+    float v = 1.0f;
+    if (!ta) return;
+    tagpu_pk_copy(p->pal, ta + OFF_PALETTE, sizeof p->pal);
+    if (ptr_ok(g)) {
+        v = *(const float*)(g + GFX_GAMMA);
+        if (!(v >= 0.05f && v <= 8.0f)) v = 1.0f;
+    }
+    p->gamma  = v;
+    p->pal_ok = 1;
+}
+
 /* the in-play frame: every field of the header, from the thread that owns it */
 static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
 {
@@ -254,6 +283,7 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
                   sizeof(TAGPU_PACKET) - offsetof(TAGPU_PACKET, used_bytes));
     p->used_bytes = sizeof(TAGPU_PACKET);
     p->text_fg = -1;
+    p->gamma = 1.0f;
     if (!ta) return need;                                  /* in_game stays 0: fail closed */
 
     p->in_game   = 1;
@@ -265,14 +295,21 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     p->tick_start_lo = s_tickStart.LowPart;
     p->tick_start_hi = (uint32_t)s_tickStart.HighPart;
     p->level_gen   = tagpu_reclaim_level_gen();
-    p->cmd_ack_seq = 0;
+    /* what the command apply in `before` had done by this draw: the render
+       thread reconciles its prediction against these */
+    tagpu_zoom_applied(&p->cmd_ack_seq, &p->cmd_ack_dx, &p->cmd_ack_dy, &p->zoom_applied);
     p->gui_flips   = tagpu_gui_flips();
     p->draw_seq    = s_cDraws;
     p->eye[0]       = RD32(ta, OFF_EYE_X);      p->eye[1]       = RD32(ta, OFF_EYE_Y);
     p->scroll_to[0] = RD32(ta, OFF_SCROLLTO_X); p->scroll_to[1] = RD32(ta, OFF_SCROLLTO_Y);
     tagpu_vpwide_true_rect(ta, &L, &T, &W, &H);
     p->vp[0] = L; p->vp[1] = T; p->vp[2] = W; p->vp[3] = H;
+    /* the rect the engine can NAME, as its field stands after `before` wrote
+       it: the true rect, or the widened one at zoom < 1 */
+    p->vp_addr[0] = RD32(ta, OFF_VP_L); p->vp_addr[1] = RD32(ta, OFF_VP_T);
+    p->vp_addr[2] = RD32(ta, OFF_VP_R); p->vp_addr[3] = RD32(ta, OFF_VP_B);
     p->screen[0] = RD32(ta, OFF_SCREEN_W);  p->screen[1] = RD32(ta, OFF_SCREEN_H);
+    fill_pal(p, ta);
     p->map_pxw = RD32(ta, OFF_MAP_PXW);     p->map_pxh = RD32(ta, OFF_MAP_PXH);
     p->map_w16 = RD32(ta, OFF_MAP_W16);     p->map_h16 = RD32(ta, OFF_MAP_H16);
     p->view_cells[0] = RD32(ta, OFF_VIEWCELLS_W); p->view_cells[1] = RD32(ta, OFF_VIEWCELLS_H);
@@ -316,7 +353,8 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     return need;
 }
 
-/* the level end: header only, in_game = 0, the new generation */
+/* the level end: header only, in_game = 0, the new generation (and the
+   palette, which the shell's passes may still resolve through) */
 static unsigned fill_level_end(TAGPU_PACKET* p, void* ctx)
 {
     unsigned gen = *(const unsigned*)ctx;
@@ -328,6 +366,9 @@ static unsigned fill_level_end(TAGPU_PACKET* p, void* ctx)
     p->tick       = s_lastTick;
     p->load_flags = (unsigned short)load_flags();
     p->text_fg    = -1;
+    p->gamma      = 1.0f;
+    tagpu_zoom_applied(&p->cmd_ack_seq, &p->cmd_ack_dx, &p->cmd_ack_dy, &p->zoom_applied);
+    fill_pal(p, ta_main());
     return sizeof(TAGPU_PACKET);
 }
 
@@ -342,8 +383,16 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
         b[sizeof b - 1] = 0; plog(b);
         return;
     }
-    if (s_installed && !s_countOnly)
+    /* the level's camera state is handed back here, on the game thread, before
+       the shell draws: the engine's own range flag, viewport rect and scroll
+       rate — no in-play draw will apply a command until the next level's
+       first one, and the shell must not inherit a widened rect or a scaled
+       ScrollSpeed (its options screen shows that byte) */
+    if (s_installed && !s_countOnly) {
+        char* ta = (char*)ta_main();
+        if (ta) { tagpu_zoom_level_end(ta); tagpu_vpwide_level_end(ta); }
         tagpu_packet_publish(fill_level_end, &level_gen, 1 /* past the FRESH gate */);
+    }
     _snprintf(b, sizeof b, "packet: level end -> gen %u: in_game=0 published%s; %u in-play draw(s) this level; load flags 0x%04X",
               level_gen, (s_installed && !s_countOnly) ? "" : " (NOT: module off)", s_levelDraws, flags);
     b[sizeof b - 1] = 0; plog(b);
@@ -369,7 +418,24 @@ static int __cdecl before_draw(void* entry_esp)
     if (s_countOnly) return 0;
     if (s_retDepth >= RET_DEPTH) { s_cDeep++; return 0; }
     s_retStack[s_retDepth++] = (void*)(size_t)ret;
-    /* landing 2: apply the commands here — post-tick, pre-draw */
+    /* THE COMMANDS: post-tick, pre-draw, on the thread that owns every word
+       they write. The stepper 0x41CA10 and the scroll poll 0x41CE90 have run
+       for this frame (both are called from the frame callback before
+       0x4969CD), so a delta applied here composes with the engine's own
+       camera move and the draw that follows reads the commanded eye; its fog
+       rebuild and its minimap box see it too. The latest record is taken and
+       every part of it applied by the module that owns the field; a record
+       already applied re-applies only its levels. `done` on every path, like
+       the frame packet's frame_end. */
+    {
+        char* ta = (char*)ta_main();
+        const TAGPU_CMD* c = tagpu_cmd_take();
+        if (ta) {
+            tagpu_zoom_apply(ta, c);
+            tagpu_vpwide_apply(ta, c);
+        }
+        tagpu_cmd_done();
+    }
     return 1;
 }
 
@@ -432,13 +498,15 @@ static void* __cdecl after_loader(unsigned int* regs)
 static void extra(char* buf, unsigned cap, double secs)
 {
     static unsigned lastAll, lastIn;
-    unsigned all = s_cDrawsAll, in = s_cDraws;
-    _snprintf(buf, cap, " | draws=%u inplay=%u draws/s=%.0f inplay/s=%.0f foreign=%u deep=%u fontcopies=%u/%u levelend=%s",
+    unsigned all = s_cDrawsAll, in = s_cDraws, vpApplies = 0, vpWh = 0;
+    tagpu_vpwide_counters(&vpApplies, &vpWh);     /* two game-thread dwords, not engine memory */
+    _snprintf(buf, cap, " | draws=%u inplay=%u draws/s=%.0f inplay/s=%.0f foreign=%u deep=%u fontcopies=%u/%u levelend=%s vpapply=%u vpwh=%u",
               all, in,
               secs > 0.0 ? (double)(all - lastAll) / secs : 0.0,
               secs > 0.0 ? (double)(in - lastIn) / secs : 0.0,
               s_cForeign, s_cDeep, s_cFontCopies, s_cFontRefused,
-              s_levelEndBy == 1 ? "reclaim" : s_levelEndBy == 2 ? "own" : "none");
+              s_levelEndBy == 1 ? "reclaim" : s_levelEndBy == 2 ? "own" : "none",
+              vpApplies, vpWh);
     if (cap) buf[cap - 1] = 0;
     lastAll = all; lastIn = in;
 }

@@ -163,10 +163,13 @@ static const char* seq_name(const char* seq)
     return seq + SQ_NAME;
 }
 
+#define TA_MAINPP 0x00511DE8u   /* this file's own read (to-convert:4a) */
+
 void tagpu_sfx_gather(const TAGPU_FXVIEW* v, int from, int to)
 {
     if (s_armed != 1) return;
-    const char* ta = v->ta;
+    const char* ta = *(const char* const*)TA_MAINPP;
+    if (!ptr_ok(ta)) return;
     /* NO LIFETIME ARGUMENT EXISTS FOR WHAT FOLLOWS, and the probes are not
        one. The layer table itself is per game (0x471D90 allocates it from the
        level load, 0x471DE0 frees and nulls it inside the teardown cascade

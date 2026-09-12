@@ -51,13 +51,11 @@ src/tagpu_weapons.c      publisher           # the extra-weapons module: sim-sid
 src/tagpu_scenario.c     tooling             # the applier runs on the tick detour (game thread); its detection and reporting half runs in the overlay
 src/tagpu_cat.c          tooling             # unit/feature catalogues behind tagpu_units.trigger / tagpu_features.trigger
 src/tagpu_gui_snap.c     tooling             # the gadget-tree snapshot behind tagpu_ui.trigger
-src/tagpu_input.c        to-convert:2        # in-process input injection writes the eye and the scroll target from the render thread: a command
-src/tagpu_zoom.c         to-convert:2        # the eye, the scroll target, ScrollSpeed and the minimap rect: render-thread stores that become commands; the clamp detour stays a publisher
-src/tagpu_vpwide.c       to-convert:2        # the viewport rect widened from the render thread: a command; the 0x498DA0 redirect stays a publisher
-src/tagpu_pal.c          to-convert:2        # the palette table and the gamma factor, read per present: header fields
-src/tagpu_overlay.c      to-convert:3        # the roster log walks the unit array on the render thread
+src/tagpu_zoom.c         publisher           # the camera clamp 0x41C3C0, the follow clamp 0x41CAF7, the minimap-rect and ScrollSpeed-save redirects, and the command apply at the top of every in-play draw: every engine word here is read and written on the game thread; the render half (the levers, the anchor arithmetic, the predicted eye) reads only the packet
+src/tagpu_vpwide.c       publisher           # the 0x498DA0 mouse->world redirect and the clip guard inside DrawGameScreen; the rect is widened and restored from the command apply, game thread; the true rect is read on the game thread only
+src/tagpu_overlay.c      to-convert:3        # the roster log and the model probe walk the unit array on the render thread (the eye it logs is the packet's since landing 2)
 src/tagpu_native.c       to-convert:3        # the unit pass: the unit array, poses, fog descriptor, option bits on the render thread
-src/tagpu_scaffold.c     to-convert:3        # the scene-depth scaffold walks the unit array on the render thread
+src/tagpu_scaffold.c     to-convert:3        # the scene-depth scaffold walks the unit array and the feature grid on the render thread (its eye and viewport come from the packet since landing 2)
 src/tagpu_mark.c         to-convert:3        # bars, digits and boxes gathered from the unit array on the render thread
 src/tagpu_lerp.c         to-convert:3        # the pose history samples P_POS/P_TURN on the render thread; rekeyed to the packet's stable id
 src/tagpu_render3do.c    to-convert:3        # the opt-in writeback / render3do path reads Object3do on the render thread

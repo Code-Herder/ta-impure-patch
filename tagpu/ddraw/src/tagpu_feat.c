@@ -685,15 +685,18 @@ static int feat_bail(void)
     return 0;
 }
 
+#define TA_MAINPP 0x00511DE8u   /* this file's own read (to-convert:3) */
+
 int tagpu_feat_gather(const TAGPU_FXVIEW* v)
 {
-    const char* ta = v->ta;
+    const char* ta = *(const char* const*)TA_MAINPP;
     const char* fmap;
     const char* fdefs;
     int mapW, mapH, nCols, nRows, r0, c0, row, col;
     int localPl, shadowsOn, nDefs;
     float flatSpan;
     if (s_armed != 1) return feat_bail();
+    if (!ptr_ok(ta)) return feat_bail();
     if (s_state == 0) init_gl();
     if (s_state != 1) return feat_bail();
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);

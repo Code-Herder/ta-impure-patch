@@ -30,7 +30,8 @@
 #include <stdlib.h>
 #include "opengl_utils.h"
 #include "tagpu_scaffold.h"
-#include "tagpu_vpwide.h"
+#include "tagpu_zoom.h"      /* the predicted eye every pass draws from */
+#include "tagpu_packet.h"    /* the true viewport, from this frame's packet */
 
 /* ---- engine layout (terrain-depth.md, binary-verified) ---- */
 #define TA_MAINPP    0x00511DE8u
@@ -343,10 +344,16 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
     char* ta = *(char**)TA_MAINPP;
     if (!ptr_ok(ta)) return;
 
-    /* live view geometry — the Phase D rule: no constants */
-    int vpL, vpT, vw, vh;
-    tagpu_vpwide_true_rect(ta, &vpL, &vpT, &vw, &vh);   /* TRUE, not the field */
-    int eyeX = *(int*)(ta + OFF_EYEX), eyeY = *(int*)(ta + OFF_EYEY);
+    /* live view geometry — the Phase D rule: no constants. The view comes
+       from the FRAME PACKET (landing 2): the true 1x rect the game thread
+       published and the same predicted eye the native pass draws from, so
+       the two never disagree by a frame; the feature grid and the sweep
+       below are still engine reads (landing 3). No in-game packet, no
+       scaffold. */
+    int vpL, vpT, vw, vh, eyeX, eyeY;
+    if (!f->packet || !f->packet->in_game) return;
+    vpL = f->packet->vp[0]; vpT = f->packet->vp[1]; vw = f->packet->vp[2]; vh = f->packet->vp[3];
+    if (!tagpu_zoom_predicted_eye(&eyeX, &eyeY)) return;
     int mapW = *(int*)(ta + OFF_MAP_W16), mapH = *(int*)(ta + OFF_MAP_H16);
     int nCols = *(int*)(ta + OFF_SWEEP_C), nRows = *(int*)(ta + OFF_SWEEP_R);
     const char* fmap = *(const char* const*)(ta + OFF_FEATMAP);

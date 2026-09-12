@@ -14,9 +14,14 @@
                       accelerators and chat chars behave like real typing.
 
      tagpu_eye.txt    "X Y" (world px). While the file exists the camera eye
-                      (main+0x1431F/0x14323) is written every frame, clamped
-                      to the map; delete the file to release. The eye is
-                      display state, not sim state — read-only-over-sim holds.
+                      (main+0x1431F/0x14323) is held there: the point rides
+                      the frame packet's command record and the GAME THREAD
+                      writes the eye and its scroll target, clamped into the
+                      camera's range, at the top of every in-play draw
+                      (tagpu_zoom_apply). Delete the file to release. The eye
+                      is display state, not sim state — read-only-over-sim
+                      holds, and since landing 2 of the frame packet exchange
+                      this module writes no engine memory at all.
 
    Both are checked every 15 frames from the present hook.
 
@@ -30,7 +35,7 @@
 #include "tagpu.h"
 #include "tagpu_input.h"
 #include "tagpu_shield.h"
-#include "tagpu_zoom.h"   /* the camera's range — the eye hold clamps with it */
+#include "tagpu_packet.h"  /* the command record the hold rides on */
 #include "mouse.h"        /* the fork's own mouse-lock (wndproc drops mouse
                              messages while unlocked — the "clicks never work
                              under a locked session" root cause) */
@@ -41,23 +46,11 @@ extern BOOL g_mouse_locked;
    up would race that poll — hold it a few frames instead. */
 #define MOD_HOLD_MS 150
 
-#define TA_MAINPP   0x00511DE8u
-#define OFF_EYEX    0x1431F
-#define OFF_EYEY    0x14323
-#define OFF_SCRTX   0x14327    /* MapXScrollingTo — the engine eases the    */
-#define OFF_SCRTY   0x1432B    /* eye toward these; write them too or WAR   */
-#define OFF_MAPPXW  0x14223    /* map W in px */
-#define OFF_MAPPXH  0x14227    /* map H in px */
-#define OFF_VIEW_W  0x37E37
-#define OFF_VIEW_H  0x37E3B
-
 static void ilog(const char* s)
 {
     FILE* f = fopen("tagpu.log", "a");
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
-
-static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
 
 static int token_vk(const char* t)
 {
@@ -341,10 +334,14 @@ static void do_keys(HWND hwnd)
 
 /* eye hold: polled every 15 frames with the other tokens (a GetFileAttributes
    probe first, because the absent case is the common one and an open-fail per
-   frame is not free) */
+   frame is not free). Render thread only: the point is read here and rides
+   the command record; the write is the game thread's (tagpu_zoom_apply),
+   clamped there into the camera's range — not into [0, map - view], which at
+   zoom > 1 would pull a scripted camera back off every map edge. */
 static int s_eyeHold = 0;
+static int s_holdX, s_holdY, s_holdValid;
 
-static void do_eye(void)
+static void do_eye(const TAGPU_FRAME* f)
 {
     char buf[64]; DWORD n = 0;
     HANDLE h = CreateFileA("tagpu_eye.txt", GENERIC_READ,
@@ -358,14 +355,15 @@ static void do_eye(void)
 
     int x = 0, y = 0;
     if (sscanf(buf, "%d %d", &x, &y) != 2) return;
-    char* ta = *(char**)TA_MAINPP;
-    if (!ptr_ok(ta)) return;
-    /* expose eye wars: if the engine moved the eye away from the hold target
-       since last frame, say so (the units: log samples AFTER our write and
-       would otherwise hide the fight) */
-    {
-        static unsigned lastwar = 0; static unsigned warn = 0;
-        int cx = *(volatile int*)(ta + OFF_EYEX), cy = *(volatile int*)(ta + OFF_EYEY);
+    s_holdX = x; s_holdY = y; s_holdValid = 1;
+    /* expose eye wars: if the engine moved the eye away from the hold target,
+       say so — read off this frame's packet, which is the eye the last in-play
+       draw was made with (the hold is applied before every draw, so a packet
+       that disagrees by more than a few pixels means something else is
+       driving the camera between our apply and the engine's own writers) */
+    if (f->packet && f->packet->in_game) {
+        static unsigned warn = 0;
+        int cx = f->packet->eye[0], cy = f->packet->eye[1];
         int dx = cx - x, dy = cy - y;
         if ((dx > 8 || dx < -8 || dy > 8 || dy < -8) && ++warn >= 60) {
             warn = 0;
@@ -373,54 +371,22 @@ static void do_eye(void)
             _snprintf(b, sizeof b, "eye: WAR engine=(%d,%d) hold=(%d,%d)", cx, cy, x, y);
             ilog(b);
         }
-        (void)lastwar;
-    }
-    int mw = *(int*)(ta + OFF_MAPPXW), mh = *(int*)(ta + OFF_MAPPXH);
-    int vw = *(int*)(ta + OFF_VIEW_W), vh = *(int*)(ta + OFF_VIEW_H);
-    int loX, hiX, loY, hiY;
-    if (mw <= 0 || mh <= 0 || vw <= 0 || vh <= 0) return;
-    /* THE CAMERA'S RANGE, not [0, map - view]: at zoom > 1 those are the bounds
-       that hold the 1x VIEWPORT's edges on the map's, so clamping a hold with
-       them would pull a scripted camera back off every map edge — the same bug
-       the engine's own clamp had (tagpu_zoom.h). Falls back to them when the
-       zoom has nothing to say, which is what this always did. */
-    if (!tagpu_zoom_eye_range(&loX, &hiX, &loY, &hiY)) {
-        loX = 0; hiX = mw - vw;
-        loY = 0; hiY = mh - vh;
-    }
-    if (x < loX) x = loX; else if (x > hiX) x = hiX;
-    if (y < loY) y = loY; else if (y > hiY) y = hiY;
-    /* ONLY WHEN IT ACTUALLY MOVES, and that guard is what makes the
-       invalidation below affordable. A hold normally asserts the eye the
-       camera already has — `pin` reports the eye precisely so it can — so this
-       is a no-op on almost every frame, and running the fog rebuild on every
-       frame of every held-camera capture would be a real cost on exactly the
-       path the fixtures use. */
-    {
-        volatile int* eye = (volatile int*)(ta + OFF_EYEX);
-        volatile int* scr = (volatile int*)(ta + OFF_SCRTX);
-        int moved = (eye[0] != x || eye[1] != y);
-
-        if (!moved && scr[0] == x && scr[1] == y) return;
-        eye[0] = x; eye[1] = y;
-        scr[0] = x; scr[1] = y;
-        /* A DIRECT EYE WRITER OWES THE ENGINE THE SAME TWO THINGS ITS OWN
-           WRITERS DO (exe-reverse-engineering.md: eleven sites, each one
-           immediately before its 0x41C3C0 call): the minimap's view box
-           recomputed, and a fog grid that spans where the camera now is. The
-           screen fog grid is view-anchored and rebuilt lazily, so a hold that
-           MOVED the camera and said nothing would leave the fog built for
-           where it used to be until the engine next moved the camera itself. */
-        if (moved) tagpu_zoom_eye_moved();
     }
 }
 
 /* 1 while tagpu_eye.txt is holding the camera. tagpu_zoom asks before stepping
    the eye for the cursor anchor: a hold means the camera does not move, and
-   two writers asserting different positions on alternate frames is a judder
+   two sources asserting different positions on alternate draws is a judder
    plus the "eye: WAR" line above. Reads the flag this module already polls
    every 15 frames, so it costs no extra file system call. */
 int tagpu_input_eye_held(void) { return s_eyeHold; }
+
+void tagpu_input_cmd(TAGPU_CMD* rec)
+{
+    rec->hold_on = (s_eyeHold && s_holdValid) ? 1u : 0u;
+    rec->hold_x  = s_holdX;
+    rec->hold_y  = s_holdY;
+}
 
 void tagpu_input_frame(const TAGPU_FRAME* f)
 {
@@ -435,6 +401,7 @@ void tagpu_input_frame(const TAGPU_FRAME* f)
         s_frame = f;
         if (f->hwnd) do_keys((HWND)f->hwnd);
         s_eyeHold = (GetFileAttributesA("tagpu_eye.txt") != INVALID_FILE_ATTRIBUTES);
+        if (!s_eyeHold) s_holdValid = 0;
     }
-    if (s_eyeHold) do_eye();
+    if (s_eyeHold) do_eye(f);
 }

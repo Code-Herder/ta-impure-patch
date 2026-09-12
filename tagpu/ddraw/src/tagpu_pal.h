@@ -19,13 +19,20 @@
    RENDER THREAD ONLY, every entry point: they resolve into a shared snapshot,
    so a call from the game thread would race it. tagpu_order.c's seq_ink is the
    one world reader left on the engine's table directly, and its walk being on
-   the game thread is why. */
+   the game thread is why.
+
+   Since the frame packet's landing 2 the engine's table and the gamma factor
+   arrive in the PACKET (`pal[]`, `gamma`, copied on the game thread by the
+   publisher) and this module reads no engine memory: the engine half of the
+   resolution is the packet's copy, kept across frames without one. */
 #ifndef TAGPU_PAL_H
 #define TAGPU_PAL_H
+struct TAGPU_PACKET;
 
-/* Once per present, before any pass reads it: the next tagpu_pal_live()
-   re-resolves. Cheap — one critical section per frame, not per reader. */
-void tagpu_pal_frame(void);
+/* Once per present, before any pass reads it, with this frame's packet (or
+   NULL): the next tagpu_pal_live() re-resolves. Cheap — one critical section
+   per frame, not per reader. */
+void tagpu_pal_frame(const struct TAGPU_PACKET* pk);
 
 /* 256 x {R,G,B,255}. The buffer is ours and lives as long as the process, so
    a caller may keep the pointer (the atlases and the restorer jobs do); its

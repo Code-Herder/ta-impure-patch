@@ -35,6 +35,7 @@
 #include "tagpu_reclaim.h"
 #include "tagpu_pal.h"
 #include "tagpu_fps.h"
+#include "tagpu_packet.h"
 
 /* GL entry points the fork does not already expose — load once ourselves. */
 typedef void (APIENTRY *PFN_READPIXELS)(GLint,GLint,GLsizei,GLsizei,GLenum,GLenum,void*);
@@ -450,8 +451,13 @@ static void log_units(const TAGPU_FRAME* f)
     if ((size_t)beg < 0x600000u || (size_t)end < 0x600000u || end <= beg) return;
     if ((size_t)(end - beg) > (size_t)UNIT_STRIDE * 20000) return; /* sanity */
 
-    int eyeX = *(int*)(ta + OFF_EYEX);
-    int eyeY = *(int*)(ta + OFF_EYEY);
+    /* the eye the world was drawn with, from the packet (the roster's screen=
+       is the 1x projection about it); the last one seen when no in-game
+       packet is held this frame — never the engine's field from this thread */
+    static int s_eyeX, s_eyeY;
+    if (f->packet && f->packet->in_game) { s_eyeX = f->packet->eye[0]; s_eyeY = f->packet->eye[1]; }
+    int eyeX = s_eyeX;
+    int eyeY = s_eyeY;
     unsigned char me = *(unsigned char*)(ta + OFF_LOCALPID);
     int gw = f->game_width  > 0 ? f->game_width  : 640;
     int gh = f->game_height > 0 ? f->game_height : 480;
@@ -591,8 +597,16 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
 
     /* the palette the screen is shown with, once for every pass that resolves
        an 8-bit index this frame -- the world's and the UI layer's alike
-       (tagpu_pal.h). A flag, not a read: the first reader below does the work. */
-    tagpu_pal_frame();
+       (tagpu_pal.h). The engine's half comes from this frame's packet; a flag
+       otherwise: the first reader below does the work. */
+    tagpu_pal_frame(f->packet);
+
+    /* THE VIEW FOR THIS FRAME, once, before any pass reads the eye: the zoom
+       level (the levers, the wheel's ease), the cursor anchor's step against
+       this frame's packet, and the predicted eye every pass — the scaffold
+       and the native pass alike — draws from (tagpu_zoom.h). Called here and
+       nowhere else, so no two passes can draw one frame from two eyes. */
+    tagpu_zoom_read_lever(f->packet);
 
     /* live-state logs tacli depends on (roster, units:, mouse:) + the 3DO probe */
     log_units(f);

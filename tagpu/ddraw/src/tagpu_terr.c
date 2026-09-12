@@ -1061,9 +1061,11 @@ static int terr_bail(void)
     return 0;
 }
 
+#define TA_MAINPP 0x00511DE8u   /* this file's own read (fenced: the tile set and map) */
+
 int tagpu_terr_gather(const TAGPU_FXVIEW* v)
 {
-    const char* ta = v->ta;
+    const char* ta = *(const char* const*)TA_MAINPP;
     const unsigned short* tmap;
     int mapW16, mapH16, stride, mrows;
     int tx0, ty0, fx, fy, cols, rows, r, c;
@@ -1072,6 +1074,7 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     float iw, ih;
 
     if (s_armed != 1) return terr_bail();
+    if (!ptr_ok(ta)) return terr_bail();
     if (s_state == 0) init_gl();
     if (s_state != 1) return terr_bail();
     if (!ensure_atlas(ta)) return terr_bail();

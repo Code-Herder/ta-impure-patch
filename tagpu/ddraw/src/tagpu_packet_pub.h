@@ -28,6 +28,20 @@ int tagpu_packet_publish(tagpu_packet_fill_fn fill, void* ctx, int force);
    (landing review). */
 void tagpu_packet_producer(unsigned long tid);
 
+/* ---- the command record's consumer entry, GAME thread only (landing 2) ---- */
+/* At the top of every in-play draw, from the observer's `before`: take the
+   latest command record if the render thread posted one, else keep the one
+   held. Returns the record the game thread now holds — NULL before the first
+   post, when the exchange is off, or when the record fails its bounds (a
+   violation, counted) — valid until tagpu_cmd_done(), which must follow on
+   every path, like the frame packet's frame_end. The same slot ownership
+   proof as the packet's, with the threads swapped: the render thread never
+   waits for this, and a render thread that stops posting leaves the game
+   thread re-applying the last record's LEVELS (the zoom, the hold) — the
+   same standing as the render thread ceasing to write those words itself. */
+const TAGPU_CMD* tagpu_cmd_take(void);
+void             tagpu_cmd_done(void);
+
 /* PLAIN STORES, BY CONSTRUCTION. The exchange's ordering argument (P1: the
    payload is visible before the index) rests on the payload being ordinary
    stores that `xchg`'s lock orders — and the toolchain targets i686 without

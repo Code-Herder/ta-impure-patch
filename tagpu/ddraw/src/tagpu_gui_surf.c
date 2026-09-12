@@ -1777,7 +1777,6 @@ static void draw_layer(const TAGPU_FRAME* f)
     TWIN* t = s_presented ? twin_find(s_presented) : NULL;
     float v[24], ky;
     GLint sz[2], sh[2];
-    const char* ta = *(const char* const*)TA_MAINPP;
     int L = 0, T = 0, W = 0, H = 0, key;
     if (!t || t->w != f->game_width || t->h != f->game_height) return;
     /* the palette was uploaded in tagpu_gui_present, BEFORE restore_step
@@ -1787,7 +1786,13 @@ static void draw_layer(const TAGPU_FRAME* f)
        restore snapshotted beside indexed texels resolved through a NEWER one,
        which is the "wrong art" 3.4 exists to prevent. One upload per frame,
        and it is the one s_colValid was decided against. */
-    tagpu_vpwide_true_rect(ta, &L, &T, &W, &H);
+    /* THE TRUE VIEWPORT, from this frame's packet (landing 2) — the rect the
+       game thread published, the same one the world composite keyed on this
+       frame. Out of a game there is no viewport: an empty rect, so nothing is
+       inside it and the key test below never fires (uVpKey is -1 then too). */
+    if (f->packet && f->packet->in_game) {
+        L = f->packet->vp[0]; T = f->packet->vp[1]; W = f->packet->vp[2]; H = f->packet->vp[3];
+    }
     key = tagpu_terr_key();
     glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
     glViewport(f->vp_x, f->vp_y, f->vp_w, f->vp_h);

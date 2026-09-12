@@ -90,6 +90,7 @@
 #include "crc32.h"          /* the tagpu_posecrc.on gate oracle */
 #include "tagpu_glsl.h"
 #include "tagpu_zoom.h"
+#include "tagpu_packet.h"  /* the view every pass draws from (landing 2) */
 #include "tagpu_overlay.h"   /* tagpu_overlay_target_fbo: the frame's default draw target */
 #include "tagpu_gui.h"       /* tagpu_gui_cursor_own: whose cursor is on screen (G17c) */
 #include "tagpu_pal.h"       /* the palette the screen is SHOWN with, not main+0x143A7 */
@@ -2075,12 +2076,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             nlog(b);
         }
     }
-    /* View zoom — re-read EVERY frame, unlike the arm state above. It is a
-       continuous control, so a 30-frame poll would quantise any ramp to 2 Hz and
-       make a perfectly smooth renderer look like a staircase on video. The lever
-       and the transform built on it live in tagpu_zoom.c, because the input path
-       needs exactly the same numbers and the two must never disagree. */
-    s_zoom = tagpu_zoom_read_lever();
+    /* View zoom — the level tagpu_zoom_read_lever() settled on at the top of
+       THIS overlay frame (tagpu_overlay.c calls it once, before the scaffold,
+       so every pass draws from the same level and the same predicted eye). It
+       is re-read every frame there: a continuous control, so a 30-frame poll
+       would quantise any ramp to 2 Hz and make a perfectly smooth renderer
+       look like a staircase on video. The lever and the transform built on it
+       live in tagpu_zoom.c, because the input path needs exactly the same
+       numbers and the two must never disagree. */
+    s_zoom = tagpu_zoom_lever();
 
     /* the effects pass (tagpu_fx.on) rides this frame: it needs the view,
        fog and palette set up here and draws into this FBO */
@@ -2134,12 +2138,17 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     if (!ptr_ok(beg) || !ptr_ok(end) || end <= beg) return;
     if ((size_t)(end - beg) > (size_t)UNIT_STRIDE * 20000) return;
 
-    /* the TRUE 1x rect, not the field: while tagpu_vpwide is live the engine's
-       copy is deliberately wider, and the composite key rect (uVp), the zoom's
-       published view and the effective gather below all mean the real one */
-    int vpL, vpT, vw, vh;
-    tagpu_vpwide_true_rect(ta, &vpL, &vpT, &vw, &vh);
-    int eyeX = *(int*)(ta + OFF_EYEX), eyeY = *(int*)(ta + OFF_EYEY);
+    /* THE VIEW COMES FROM THE PACKET (frame packet exchange, landing 2): the
+       TRUE 1x rect — not the field, which tagpu_vpwide widens at zoom < 1 —
+       as the game thread published it, and the eye this frame is drawn from:
+       the packet's eye plus the cursor anchor's deltas the game thread has not
+       applied yet (tagpu_zoom_predicted_eye). No packet, or an out-of-game
+       one, is no world to draw. The composite key rect (uVp), the zoom's
+       published view and the effective gather below all mean this rect. */
+    if (!f->packet || !f->packet->in_game) return;
+    int vpL = f->packet->vp[0], vpT = f->packet->vp[1], vw = f->packet->vp[2], vh = f->packet->vp[3];
+    int eyeX, eyeY;
+    if (!tagpu_zoom_predicted_eye(&eyeX, &eyeY)) return;
     /* A SANITY BOUND ON ENGINE DATA, NOT A SUPPORTED-RESOLUTION LIMIT. The
        viewport is read out of engine memory and everything below sizes itself
        from it, so a garbage pair must not be believed — but nothing here
@@ -2282,10 +2291,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                        is right. Below 1 it cannot, and the wide one must be
                        used: the producer builds it every tick, so the frame that
                        first eases past 1.0 already has one. */
-                    /* ...OR while the eye has been stepped and the game
-                       thread has not rebuilt for it yet. Cursor anchoring moves
-                       the camera on every frame of a gesture, and the engine's
-                       grid has only its two spare columns of slack. The frame
+                    /* ...OR while the eye this frame is drawn from is AHEAD of
+                       the packet's (a cursor-anchored step the game thread has
+                       not applied yet — tagpu_zoom_unacked): the engine's grid
+                       spans the packet's eye, and it has only its two spare
+                       columns of slack. Cursor anchoring moves the camera on
+                       every frame of a gesture, and the frame
                        that eases up THROUGH 1.0 starts at z = 0.5 EXACTLY at
                        the lowest: one ease step of 0.25 in log space is
                        z1 = z0^0.75 * ztgt^0.25, which reaches 1.0 at
@@ -2296,7 +2307,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                        wide grid spans it with room over — measured against the
                        same inequality, sizing at the zoom FLOOR covers any
                        anchored step at any level with the margin untouched. */
-                    if ((tagpu_zoom_level() < 1.0f || tagpu_zoom_fog_pending()) &&
+                    if ((tagpu_zoom_level() < 1.0f || tagpu_zoom_unacked()) &&
                         tagpu_fogwide_get(&wb, &wc, &wr, &wox, &woy)) {
                         buf = wb; cols = wc; rows = wr; orgX = wox; orgY = woy;
                         /* ours is exactly cols*rows; the engine's `cells` above
@@ -2742,7 +2753,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     TAGPU_FXVIEW fv;
     int nfx = 0, nfeat = 0, nterr = 0, nmark = 0;
     if (fxOn || sfxOn || featOn || terrOn || markOn) {
-        fv.ta = ta; fv.eyeX = eyeX; fv.eyeY = eyeY;
+        fv.eyeX = eyeX; fv.eyeY = eyeY;
         fv.packet = f->packet;
         fv.vpL = vpL; fv.vpT = vpT; fv.vw = vw; fv.vh = vh; fv.scafOn = scafOn;
         fv.evpL = evpL; fv.evpT = evpT; fv.evw = evw; fv.evh = evh;
