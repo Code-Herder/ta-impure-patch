@@ -558,7 +558,13 @@ static const void* pkx_acquire(PKX* m, const void** prev)
     m->cAcq++;
 
     if (PEEK(m) & PKX_FRESH) {
-        unsigned give = m->spare, got;
+        /* WHAT GOES BACK IS THE OLDEST SLOT THIS THREAD HOLDS, and with two
+           held slots that is PREV — there is no spare to keep, and the
+           rotation below has nothing to choose. (`spare` is the third slot's
+           name and is only maintained when there is a third: an instance with
+           two that handed `spare` back would give the same index every time,
+           because nothing would advance it.) */
+        unsigned give = (m->holds >= 3) ? m->spare : m->prev, got;
         LONG old;
         /* C2: our last loads of `give` were at least a frame ago — with three
            held slots, the frame BEFORE the one in which it became the spare —

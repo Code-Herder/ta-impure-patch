@@ -317,6 +317,22 @@ static const unsigned char* s_shdPtr;
 static int s_shdOk;
 static volatile unsigned s_cShdCopies;
 
+/* THE ANCHOR SCAN IS PER TICK, SO IT IS TAKEN PER TICK. The widest zoom rect
+   is 465 x 273 cells on a 1080p viewport over Two Continents — 126 945 u16
+   loads, which MEASURED 168 us of the publish's first 200 (2026-09-12). The
+   grid it reads is sim state: the def index, the flags nibble and the wreck
+   index are written by the tick and by nothing else, so two publishes of one
+   tick over one rect must produce the same table, and the second may reuse the
+   first. At the 256 published frames a second this machine reaches against a
+   60 Hz sim that is four publishes out of five; at or below the sim rate it
+   costs one comparison and changes nothing. The WRECKS are re-derived from the
+   cached anchors either way, because their piece runs go into THIS packet's
+   arena. */
+static unsigned s_aTick;
+static int      s_aHave, s_aRect[4];
+static unsigned s_aN;
+static volatile unsigned s_cAnchScan, s_cAnchReuse;
+
 /* counters the heartbeat prints; game thread writes, render thread reads */
 static volatile unsigned s_cUnitTrunc, s_cWreckTrunc, s_cAnchTrunc, s_cPieceTrunc;
 static volatile unsigned s_cUnitDup, s_cRelBad, s_cAnchCells;
@@ -629,69 +645,86 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
         for (i = 0; i < nu; i++) s_idSeen[s_idUsed[i] >> 3] = 0;
     }
 
-    /* ---- the feature anchors, and the 3D wrecks they name ---- */
+    /* ---- the feature anchors: scanned once per tick per rect ---- */
     if (ptr_ok(fmap) && mapW > 0 && mapH > 0 && cols > 0 && rows > 0) {
-        for (row = r0; row < r0 + rows; row++) {
-            const char* trow = fmap + ((size_t)row * mapW) * FT_STRIDE;
-            for (col = c0; col < c0 + cols; col++) {
-                const char* t = trow + (size_t)col * FT_STRIDE;
-                unsigned d = RDU16(t, FT_DEFIDX);
-                TAGPU_PK_ANCHOR* a;
-                if (d >= 0xFFFBu) continue;
-                if (na >= TAGPU_PK_MAX_ANCHORS) { s_cAnchTrunc++; p->truncated |= TAGPU_PK_TRUNC_ANCHORS; row = r0 + rows; break; }
-                a = &s_aScratch[na++];
-                a->col = (unsigned short)col; a->row = (unsigned short)row;
-                a->def = (unsigned short)d;
-                a->wreck = RDU16(t, FT_WIDX);
-                a->flags = RDU8(t, FT_FLAGS);
-                a->h   = RDU8(t, FT_HEIGHT);
-                a->hr  = (col + 1 < mapW) ? RDU8(t + FT_STRIDE, FT_HEIGHT) : a->h;
-                a->hl  = (col > 0)        ? RDU8(t - FT_STRIDE, FT_HEIGHT) : a->h;
-                a->hu  = (row > 0)        ? RDU8(t - (size_t)mapW * FT_STRIDE, FT_HEIGHT) : a->h;
-                if (row + 1 < mapH) {
-                    const char* t2 = t + (size_t)mapW * FT_STRIDE;
-                    a->hd  = RDU8(t2, FT_HEIGHT);
-                    a->hrd = (col + 1 < mapW) ? RDU8(t2 + FT_STRIDE, FT_HEIGHT) : a->hd;
-                } else { a->hd = a->h; a->hrd = a->hr; }
-                a->pad = 0;
-                /* the 3D husk: the engine draws it through a scratch fake unit,
-                   so it is posed exactly as a unit and carries the same fields.
-                   A GAF wreck (FeatureMask bit0) is the feature pass's, not
-                   this table's. */
-                if ((a->flags & 1u) && ptr_ok(recs) && ptr_ok(fdefs) &&
-                    p->feat_defcount && (int)d < p->feat_defcount &&
-                    !(RDU8(fdefs + (size_t)d * FD_STRIDE, FD_MASK) & 1u)) {
-                    const char* rec = recs + (size_t)a->wreck * WR_STRIDE;
-                    const char* o3 = *(const char* const*)(rec + WR_OBJ3DO);
-                    if (nw >= TAGPU_PK_MAX_WRECKS) { s_cWreckTrunc++; p->truncated |= TAGPU_PK_TRUNC_WRECKS; }
-                    else if (ptr_ok(o3)) {
-                        TAGPU_PK_WRECK* we = &s_wScratch[nw++];
-                        unsigned np = RDU16(o3, O3_NUMPARTS), k;
-                        memset(we, 0, sizeof *we);
-                        we->pos[0] = RD32(rec, WR_XPOS);
-                        we->pos[1] = RD32(rec, WR_ZPOS);
-                        we->pos[2] = RD32(rec, WR_YPOS);
-                        we->o3_key = (unsigned)(size_t)o3;
-                        we->rec = a->wreck; we->def = (unsigned short)d;
-                        we->base_piece = 0xFFFFu;
-                        if (np && np <= TAGPU_PK_MAXPIECE) we->nparts = (unsigned short)np;
-                        for (k = 0; k < 3; k++) we->bturn[k] = RDU16(o3, O3_BTURN + k * 2);
-                        {
-                            const char* bp = *(const char* const*)(o3 + O3_BASEPRIM);
-                            const char* p0 = o3 + O3_PRIM0;
-                            if (bp >= p0 && we->nparts) {
-                                size_t dd = (size_t)(bp - p0);
-                                if (dd % PRIM_STRIDE == 0 && dd / PRIM_STRIDE < we->nparts)
-                                    we->base_piece = (unsigned short)(dd / PRIM_STRIDE);
-                            }
-                        }
-                        if (we->nparts) {
-                            unsigned at = pieces_base + pk * (unsigned)sizeof(TAGPU_PK_PIECE);
-                            unsigned got = fill_pieces(p, o3, we->nparts, at, &pTrunc);
-                            if (got) { we->piece_off = at; we->piece_n = (unsigned short)got; pk += got; }
-                            need = at + we->nparts * (unsigned)sizeof(TAGPU_PK_PIECE);
-                        }
+        if (s_aHave && s_aTick == p->tick &&
+            s_aRect[0] == c0 && s_aRect[1] == r0 &&
+            s_aRect[2] == cols && s_aRect[3] == rows) {
+            na = s_aN;
+            s_cAnchReuse++;
+        } else {
+            for (row = r0; row < r0 + rows; row++) {
+                const char* trow = fmap + ((size_t)row * mapW) * FT_STRIDE;
+                for (col = c0; col < c0 + cols; col++) {
+                    const char* t = trow + (size_t)col * FT_STRIDE;
+                    unsigned d = RDU16(t, FT_DEFIDX);
+                    TAGPU_PK_ANCHOR* a;
+                    if (d >= 0xFFFBu) continue;
+                    if (na >= TAGPU_PK_MAX_ANCHORS) { s_cAnchTrunc++; p->truncated |= TAGPU_PK_TRUNC_ANCHORS; row = r0 + rows; break; }
+                    a = &s_aScratch[na++];
+                    a->col = (unsigned short)col; a->row = (unsigned short)row;
+                    a->def = (unsigned short)d;
+                    a->wreck = RDU16(t, FT_WIDX);
+                    a->flags = RDU8(t, FT_FLAGS);
+                    a->h   = RDU8(t, FT_HEIGHT);
+                    a->hr  = (col + 1 < mapW) ? RDU8(t + FT_STRIDE, FT_HEIGHT) : a->h;
+                    a->hl  = (col > 0)        ? RDU8(t - FT_STRIDE, FT_HEIGHT) : a->h;
+                    a->hu  = (row > 0)        ? RDU8(t - (size_t)mapW * FT_STRIDE, FT_HEIGHT) : a->h;
+                    if (row + 1 < mapH) {
+                        const char* t2 = t + (size_t)mapW * FT_STRIDE;
+                        a->hd  = RDU8(t2, FT_HEIGHT);
+                        a->hrd = (col + 1 < mapW) ? RDU8(t2 + FT_STRIDE, FT_HEIGHT) : a->hd;
+                    } else { a->hd = a->h; a->hrd = a->hr; }
+                    a->pad = 0;
+                }
+            }
+            s_aHave = 1; s_aTick = p->tick; s_aN = na;
+            s_aRect[0] = c0; s_aRect[1] = r0; s_aRect[2] = cols; s_aRect[3] = rows;
+            s_cAnchScan++;
+        }
+        /* ---- the 3D husks the anchors name, from THIS packet's arena ----
+           The engine draws a husk through a scratch fake unit, so it is posed
+           exactly as a unit and carries the same fields. A GAF wreck
+           (FeatureMask bit0) is the feature pass's, not this table's. */
+        for (i = 0; i < na && ptr_ok(recs) && ptr_ok(fdefs); i++) {
+            const TAGPU_PK_ANCHOR* a = &s_aScratch[i];
+            unsigned d = a->def;
+            const char* rec;
+            const char* o3;
+            if (!(a->flags & 1u)) continue;
+            if (!p->feat_defcount || (int)d >= p->feat_defcount) continue;
+            if (RDU8(fdefs + (size_t)d * FD_STRIDE, FD_MASK) & 1u) continue;
+            rec = recs + (size_t)a->wreck * WR_STRIDE;
+            o3 = *(const char* const*)(rec + WR_OBJ3DO);
+            if (nw >= TAGPU_PK_MAX_WRECKS) { s_cWreckTrunc++; p->truncated |= TAGPU_PK_TRUNC_WRECKS; break; }
+            if (!ptr_ok(o3)) continue;
+            {
+                TAGPU_PK_WRECK* we = &s_wScratch[nw++];
+                unsigned np = RDU16(o3, O3_NUMPARTS), k;
+                memset(we, 0, sizeof *we);
+                we->pos[0] = RD32(rec, WR_XPOS);
+                we->pos[1] = RD32(rec, WR_ZPOS);
+                we->pos[2] = RD32(rec, WR_YPOS);
+                we->o3_key = (unsigned)(size_t)o3;
+                we->rec = a->wreck; we->def = (unsigned short)d;
+                we->base_piece = 0xFFFFu;
+                if (np && np <= TAGPU_PK_MAXPIECE) we->nparts = (unsigned short)np;
+                for (k = 0; k < 3; k++) we->bturn[k] = RDU16(o3, O3_BTURN + k * 2);
+                {
+                    const char* bp = *(const char* const*)(o3 + O3_BASEPRIM);
+                    const char* p0 = o3 + O3_PRIM0;
+                    if (bp >= p0 && we->nparts) {
+                        size_t dd = (size_t)(bp - p0);
+                        if (dd % PRIM_STRIDE == 0 && dd / PRIM_STRIDE < we->nparts)
+                            we->base_piece = (unsigned short)(dd / PRIM_STRIDE);
                     }
+                }
+                if (we->nparts) {
+                    unsigned at = pieces_base + pk * (unsigned)sizeof(TAGPU_PK_PIECE);
+                    unsigned got = fill_pieces(p, o3, we->nparts, at, &pTrunc);
+                    if (got) { we->piece_off = at; we->piece_n = (unsigned short)got; pk += got; }
+                    if (at + we->nparts * (unsigned)sizeof(TAGPU_PK_PIECE) > need)
+                        need = at + we->nparts * (unsigned)sizeof(TAGPU_PK_PIECE);
                 }
             }
         }
@@ -896,6 +929,8 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
               level_gen, (s_installed && !s_countOnly) ? "" : " (NOT: module off)", s_levelDraws, flags);
     b[sizeof b - 1] = 0; plog(b);
     s_levelOpen = 0; s_levelDraws = 0; s_shellSeen = 0; s_shellFlags = 0xFFFFu;
+    /* the anchor cache names cells of the level that is going away */
+    s_aHave = 0; s_aN = 0;
 }
 
 /* ---- the observers ------------------------------------------------------- */
@@ -1023,7 +1058,7 @@ static void extra(char* buf, unsigned cap, double secs)
         if (!p99 && total && acc * 100u >= total * 99u) p99 = i * 2u;
     }
     _snprintf(buf, cap, " | draws=%u inplay=%u draws/s=%.0f inplay/s=%.0f foreign=%u deep=%u fontcopies=%u/%u levelend=%s vpapply=%u vpwh=%u applyus p50=%u p99=%s%u"
-              " | world: u=%u p=%u w=%u a=%u/%u cells dup=%u trunc=%u/%u/%u/%u relbad=%u shd=%u",
+              " | world: u=%u p=%u w=%u a=%u/%u cells scan=%u/%u dup=%u trunc=%u/%u/%u/%u relbad=%u shd=%u",
               all, in,
               secs > 0.0 ? (double)(all - lastAll) / secs : 0.0,
               secs > 0.0 ? (double)(in - lastIn) / secs : 0.0,
@@ -1031,6 +1066,7 @@ static void extra(char* buf, unsigned cap, double secs)
               s_levelEndBy == 1 ? "reclaim" : s_levelEndBy == 2 ? "own" : "none",
               vpApplies, vpWh, p50, p99 >= APPLY_HIST_N * 2u ? ">" : "", p99,
               s_cLastUnits, s_cLastPieces, s_cLastWrecks, s_cLastAnchors, s_cAnchCells,
+              s_cAnchScan, s_cAnchReuse,
               s_cUnitDup, s_cUnitTrunc, s_cPieceTrunc, s_cWreckTrunc, s_cAnchTrunc,
               s_cRelBad, s_cShdCopies);
     if (cap) buf[cap - 1] = 0;
