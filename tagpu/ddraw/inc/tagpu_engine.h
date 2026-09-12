@@ -229,8 +229,10 @@
 #define OFF_FLARESEQ       0x147F3     /* rt 5                                  */
 /* the ten particle layers: {u8 flag, void** begin @4, end @8, cap @0xC} x 10,
    allocated per game by 0x471D90 and freed AND NULLED by 0x471DE0 in the
-   teardown cascade. Every emitter refuses a layer already holding 400
-   objects (`cmp eax,0x190` at 0x472071, 0x47219F, ... thirteen sites). */
+   teardown cascade. Every emitter caps a layer at 401 objects: it takes the
+   size, `cmp eax,0x190 / jbe append` (0x472071, 0x47219F, ... thirteen sites),
+   and past 400 destroys the FRONT object, shifts the vector down by one and
+   appends anyway — so 401 is the steady state and 400 is not the bound. */
 #define OFF_LAYERS         0x38D77
 #define LAYER_STRIDE       0x10
 #define LAYER_BEGIN        0x04

@@ -830,9 +830,10 @@ static TAGPU_PK_DEBRIS s_dScratch[TAGPU_PK_MAX_DEBRIS];
 static TAGPU_PK_PART   s_partScratch[TAGPU_PK_MAX_PART];
 static unsigned s_nProj, s_nExpl, s_nDebris, s_nPart;
 static unsigned s_partN[TAGPU_PK_NLAYER], s_partObj[TAGPU_PK_NLAYER];
-static unsigned s_fxTick, s_fxGen, s_fxLevel;
+static unsigned s_fxTick, s_fxGen, s_fxLevel, s_fxWant;
 static int      s_fxHave, s_fxPartTrunc;
-static volatile unsigned s_cFxScan, s_cFxReuse, s_cPartTrunc, s_cPartMax, s_cLayerBad;
+static volatile unsigned s_cFxScan, s_cFxReuse, s_cPartTrunc, s_cPartMax, s_cLayerBad, s_cSubBad;
+#define PART_SUBCAP 4096u   /* sub-particles per object: a containment filter */
 static volatile unsigned s_cLastProj, s_cLastExpl, s_cLastDebris, s_cLastPart;
 
 /* the LHT lighten table, latched exactly like the shade table */
@@ -889,20 +890,26 @@ PART_FMT[TAGPU_PK_NPARTKIND] = {
     { 0x30, 0,    0, 0x28, 0 }    /* nano    */
 };
 
-/* one layer's objects into the particle table; returns what it appended */
-static unsigned gather_layer(const char* layers, int L)
+/* one layer's objects into the particle table */
+static void gather_layer(const char* layers, int L)
 {
     const char* lay = layers + (size_t)L * LAYER_STRIDE;
     const char* const* b = *(const char* const* const*)(lay + LAYER_BEGIN);
     const char* const* e = *(const char* const* const*)(lay + LAYER_END);
-    unsigned n, i, added = 0;
-    if (!ptr_ok(b) || !ptr_ok(e) || e <= b) return 0;
-    /* THE BOUND IS THE ENGINE'S OWN CAP, not a probe: every emitter refuses a
-       layer already holding 400 objects, and this thread is the one that runs
-       them, so the pair cannot be mid-update. A pair that says otherwise is a
-       fact worth counting, not a walk worth attempting. */
+    unsigned n, i;
+    if (!ptr_ok(b) || !ptr_ok(e) || e <= b) return;
+    /* THE BOUND IS THE ENGINE'S OWN RULE, not a probe, and the rule is 401 —
+       one MORE than the number in the compare. Every emitter reads the layer's
+       size and `cmp eax,0x190 / jbe append` (0x472071 and twelve more): at 400
+       or fewer it appends, and past that it destroys the FRONT object, shifts
+       the vector down by one and appends anyway. So a layer at 401 is the
+       engine's steady state, and a walk that stopped at 400 would drop the
+       whole layer every time it filled — measured 2026-09-12, 86 layers
+       refused in one fx-mix run before this line said 401. The pair itself is
+       sound because this thread is the one that runs those emitters; a count
+       past 401 is a fact worth counting, not a walk worth attempting. */
     n = (unsigned)(e - b);
-    if (n > (unsigned)LAYER_OBJCAP) { s_cLayerBad++; return 0; }
+    if (n > (unsigned)LAYER_OBJCAP + 1u) { s_cLayerBad++; return; }
     s_partObj[L] = n;
     for (i = 0; i < n; i++) {
         const char* o = b[i];
@@ -917,13 +924,20 @@ static unsigned gather_layer(const char* layers, int L)
         se = *(const char* const*)(o + PO_SUB1);
         if (!ptr_ok(sb) || !ptr_ok(se) || se <= sb) continue;
         ns = (unsigned)(se - sb) / (unsigned)PART_FMT[k].stride;
+        /* A SANITY FILTER ON A VALUE, not the safety argument — the argument is
+           that this thread is the one that grows these vectors. What it buys is
+           containment: without it one object with a wild `end` fills the whole
+           table and truncates every layer after it, and with it that object is
+           skipped and the frame is otherwise complete. 4096 is the number the
+           render-thread pass used. */
+        if (ns > PART_SUBCAP) { s_cSubBad++; continue; }
         for (j = 0; j < ns; j++) {
             const char* q = sb + (size_t)j * (size_t)PART_FMT[k].stride;
             TAGPU_PK_PART* pe;
             int X = *(const int*)(q + PART_FMT[k].pos);
             int A = *(const int*)(q + PART_FMT[k].pos + 4);
             int Y = *(const int*)(q + PART_FMT[k].pos + 8);
-            if (s_nPart >= TAGPU_PK_MAX_PART) { s_fxPartTrunc = 1; return added; }
+            if (s_nPart >= TAGPU_PK_MAX_PART) { s_fxPartTrunc = 1; return; }
             pe = &s_partScratch[s_nPart];
             pe->x  = X >> 16;
             pe->zp = (Y >> 16) - ((A >> 16) >> 1);
@@ -941,10 +955,9 @@ static unsigned gather_layer(const char* layers, int L)
                 pe->frame = 0;
                 pe->col = *(const unsigned char*)(q + PART_FMT[k].col);
             }
-            s_nPart++; s_partN[L]++; added++;
+            s_nPart++; s_partN[L]++;
         }
     }
-    return added;
 }
 
 /* the projectiles, the debris slots and the explosions */
@@ -975,6 +988,7 @@ static void gather_effects(const char* ta, int tick, const unsigned char* coltab
             if (rt < 0 || rt > 7) continue;
             color  = *(const unsigned char*)(w + W_COLOR);
             color2 = *(const unsigned char*)(w + W_COLOR2);
+            if (s_nProj >= TAGPU_PK_MAX_PROJ) break;      /* np <= 300 already */
             pe = &s_pScratch[s_nProj++];
             tagpu_pk_fill(pe, 0, (unsigned)sizeof *pe);
             pe->pos[0]   = *(const int*)(q + PJ_X);
@@ -1080,7 +1094,9 @@ static void gather_effects(const char* ta, int tick, const unsigned char* coltab
         if (ne > EXPL_COUNT) ne = EXPL_COUNT;
         for (i = 0; i < ne; i++) {
             const char* q = ta + OFF_EXPL + (size_t)i * EXPL_STRIDE;
-            TAGPU_PK_EXPL* xe = &s_eScratch[s_nExpl++];
+            TAGPU_PK_EXPL* xe;
+            if (s_nExpl >= TAGPU_PK_MAX_EXPL) break;      /* ne <= 300 already */
+            xe = &s_eScratch[s_nExpl++];
             const short* tr = (const short*)(q + EX_TURN);
             const char* node = *(const char* const*)(q + EX_NODE);
             xe->pos[0] = *(const int*)(q + EX_X);
@@ -1101,6 +1117,7 @@ static void gather_effects(const char* ta, int tick, const unsigned char* coltab
 static void fx_gather(const char* ta, unsigned tick, unsigned level)
 {
     const char* layers;
+    unsigned want = (tagpu_fxown_want_fx() ? 1u : 0u) | (tagpu_fxown_want_sfx() ? 2u : 0u);
     int L;
     /* THE KEY IS (LEVEL, TICK), not the tick alone. A new level restarts
        GameTime, and every template address in the tables belongs to the level
@@ -1108,12 +1125,13 @@ static void fx_gather(const char* ta, unsigned tick, unsigned level)
        native pass a model root the teardown has freed. The level end clears
        the cache as well (tagpu_packet_pub_level_end), but that is the second
        line — this is the one that holds whichever provider fired. */
-    if (s_fxHave && tick == s_fxTick && level == s_fxLevel) { s_cFxReuse++; return; }
+    if (s_fxHave && tick == s_fxTick && level == s_fxLevel && want == s_fxWant)
+        { s_cFxReuse++; return; }
     s_nProj = s_nExpl = s_nDebris = s_nPart = 0;
     s_fxPartTrunc = 0;
     tagpu_pk_fill(s_partN, 0, (unsigned)sizeof s_partN);
     tagpu_pk_fill(s_partObj, 0, (unsigned)sizeof s_partObj);
-    if (tagpu_fxown_want_sfx()) {
+    if (want & 2u) {
         /* the layer TABLE is per game (0x471D90 allocates it, 0x471DE0 frees
            and NULLS it in the teardown), which is the refusal after a level
            ends; the vectors inside it are this thread's own */
@@ -1121,13 +1139,13 @@ static void fx_gather(const char* ta, unsigned tick, unsigned level)
         if (ptr_ok(layers))
             for (L = 0; L < (int)TAGPU_PK_NLAYER; L++) gather_layer(layers, L);
     }
-    if (tagpu_fxown_want_fx()) {
+    if (want & 1u) {
         const unsigned char* coltab = (const unsigned char*)(ta + OFF_GUICOL);
         gather_effects(ta, (int)tick, coltab);
     }
     if (s_fxPartTrunc) s_cPartTrunc++;
     if (s_nPart > s_cPartMax) s_cPartMax = s_nPart;
-    s_fxTick = tick; s_fxLevel = level; s_fxHave = 1; s_fxGen++;
+    s_fxTick = tick; s_fxLevel = level; s_fxWant = want; s_fxHave = 1; s_fxGen++;
     s_cFxScan++;
 }
 
@@ -1498,9 +1516,9 @@ static void extra(char* buf, unsigned cap, double secs)
         unsigned n = 0;
         while (n < cap && buf[n]) n++;
         _snprintf(buf + n, cap > n ? cap - n : 0,
-                  " | fx: proj=%u expl=%u deb=%u part=%u/%u scan=%u/%u trunc=%u layerbad=%u lht=%u want=%d/%d",
+                  " | fx: proj=%u expl=%u deb=%u part=%u/%u scan=%u/%u trunc=%u layerbad=%u subbad=%u lht=%u want=%d/%d",
                   s_cLastProj, s_cLastExpl, s_cLastDebris, s_cLastPart, s_cPartMax,
-                  s_cFxScan, s_cFxReuse, s_cPartTrunc, s_cLayerBad, s_cLhtCopies,
+                  s_cFxScan, s_cFxReuse, s_cPartTrunc, s_cLayerBad, s_cSubBad, s_cLhtCopies,
                   tagpu_fxown_want_fx(), tagpu_fxown_want_sfx());
     }
     if (cap) buf[cap - 1] = 0;
