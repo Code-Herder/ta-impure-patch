@@ -94,6 +94,7 @@
 #include "tagpu_gui.h"       /* tagpu_gui_cursor_own: whose cursor is on screen (G17c) */
 #include "tagpu_pal.h"       /* the palette the screen is SHOWN with, not main+0x143A7 */
 #include "tagpu_vpwide.h"
+#include "tagpu_hud.h"
 #include "tagpu_shadow.h"    /* Classic++ cast shadows: the depth pass + read-back (G14i) */
 
 /* ---- engine layout (all binary-verified in earlier phases) ---- */
@@ -3825,8 +3826,35 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
 
     /* ---- composite over the frame (restore the letterbox viewport) ---- */
+    /* HUD SCALE (tagpu_hud.h, gui-renderer.md 22.6) SHIFTS EXACTLY THIS DRAW,
+       and nothing else in the pass. Everything above renders the world in the
+       ENGINE's own screen coordinates, about the baked 0x80/0x20 origin, into
+       our own target -- and it must keep doing that, because the engine's hit
+       tests and every projection in the fork agree on that origin. What moves
+       is where that finished block lands on the frame: the engine's viewport
+       is now the visible WINDOW, so the block belongs inset by what the HUD
+       covers.
+
+       ONE draw rather than a uniform in each world shader, and it has to be
+       here rather than around tagpu_native_frame as a whole: the passes above
+       set their own viewports (the shadow map, the supersampled target), so an
+       outer bracket is overwritten before the first triangle. Measured that way
+       round first -- the world came out short on the right and bottom by
+       exactly the shift, which is what an unshifted block under a shrunken
+       viewport looks like.
+
+       The shift is in the frame's own pixels, so it follows the letterbox and
+       any window scale; at stock it is (0,0) and glViewport is handed exactly
+       what it was handed before. */
     int keyOn = -1;
-    glViewport(f->vp_x, f->vp_y, f->vp_w, f->vp_h);
+    {
+        int hdx = 0, hdy = 0;
+        if (tagpu_hud_shift(&hdx, &hdy) && gw > 0 && gh > 0) {
+            hdx = hdx * f->vp_w / gw;
+            hdy = hdy * f->vp_h / gh;
+        } else { hdx = hdy = 0; }
+        glViewport(f->vp_x + hdx, f->vp_y - hdy, f->vp_w, f->vp_h);
+    }
     glUseProgram(s_cprog);
     glBindVertexArray(s_cvao);
     glEnable(GL_BLEND);

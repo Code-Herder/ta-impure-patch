@@ -505,6 +505,12 @@ static const char* LAY_FS =
     "    if (d.x < uHud.x || d.y < uHud.y) { sd = d * uHud.z; ramp = uHud.w; }\n"
     "    else if (d.y >= H - uHud.y) {\n"
     "      sd = vec2(d.x * uHud.z, H - (H - d.y) * uHud.z); ramp = uHud.w; }\n"
+    /* THE WORLD IS TRANSLATED, NOT MAGNIFIED (22.6). The engine's viewport is
+       now the visible window itself -- it draws the world into [128, R] x
+       [32, B] of its own surface -- and this puts that block where the player
+       sees it. uHud.xy carry the panel width and bar height on screen, so the
+       vector is (uHud.x - 128, uHud.y - 32) and the sampling subtracts it. */
+    "    else sd = d - vec2(uHud.x - 128.0, uHud.y - 32.0);\n"
     "  }\n"
     "  ivec2 p = clamp(ivec2(sd), ivec2(0), uSize - 1);\n"
     "  vec2 f = vec2(p);\n"

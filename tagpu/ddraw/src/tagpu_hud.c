@@ -178,6 +178,14 @@ void tagpu_hud_to_engine(int* x, int* y)
     } else if (*y >= H - bh) {
         *x = *x * 256 / q;
         *y = H - (H - *y) * 256 / q;
+    } else {
+        /* THE WORLD, and it is no longer the identity (22.6). The engine draws
+           the world into [128, R] x [32, B] of its own surface and we put that
+           block on screen at [128s, W-1] x [32s, H-1-32s], so a screen point in
+           the world comes back by the same vector. Screen 128s -> engine 128
+           and screen 32s -> engine 32, exactly. */
+        *x -= pw - HUD_PANEL_W;
+        *y -= bh - HUD_BAR_H;
     }
     on_surface(x, y);
 }
@@ -193,122 +201,132 @@ void tagpu_hud_to_screen(int* x, int* y)
     } else if (*y >= H - HUD_BAR_H) {
         *x = *x * q / 256;
         *y = H - (H - *y) * q / 256;
+    } else {
+        int pw, bh;
+        tagpu_hud_geom((int)g_ddraw.width, (int)g_ddraw.height,
+                       (int)s_pctLive, NULL, &pw, &bh);
+        *x += pw - HUD_PANEL_W;          /* the inverse of to_engine's world  */
+        *y += bh - HUD_BAR_H;
     }
     on_surface(x, y);
 }
 
 
-/* ---- the camera's centre-on ---------------------------------------------
+/* ---- the rect, and the one translation -----------------------------------
 
-   THE ONE PLACE HUD SCALE HAS TO TOUCH THE CAMERA, and the reason is the same
-   one that makes the eye clamp wrong (tagpu_zoom.c, zoom_eye_range): the
-   engine reasons about the VIEWPORT it draws into, and the player looks at
-   that viewport with the magnified HUD laid over its left column and its two
-   bar bands.
+   MAKE THE TWO RECTANGLES THE SAME ONE. gui-renderer.md 22.6: the engine has
+   at least four places that assume its viewport IS what the player looks at --
+   the eye clamp 0x41C3C0, the centre-on 0x41C7C0, the per-frame FOLLOW at
+   0x41CAF7 and the smooth SetCamera 0x41C4C0 -- and patching them one at a
+   time was a losing game. So the viewport is made to BE the visible window,
+   and every one of them is then simply right.
 
-   `0x41C7C0` is the smooth centre-on -- f(worldX, worldZ, flag), stdcall-ish
-   with the caller cleaning up; it computes
+   WHAT IS WRITTEN, and what is deliberately not:
 
-       targetX = worldX - viewW/2        (0x41C7D8..0x41C7E9)
-       targetY = worldZ - viewH/2        (0x41C7CB..0x41C7D6)
+     L, T   NOT WRITTEN. 0x80 / 0x20 are baked as immediates into every site
+            that projects world -> screen (exe map, "The world->screen
+            projection is NOT derived from the viewport rect"), so moving them
+            tears the world in two -- 22.5, and the whole reason the first
+            build was withdrawn.
+     R, B   the far edges pulled in by what the HUD covers.
+     viewW  R - L + 1, and viewH B - T + 1, so every clamp and every centre the
+            engine computes is about the window the player can actually see.
 
-   and, when `flag` is non-zero, stores the pair at main+0x14327/+0x1432B and
-   clamps it INLINE to [0, map - view] (0x41C7F7..0x41C874) without going
-   through `0x41C3C0`, which is why widening that clamp does not reach here.
+   THE TRANSLATION is what pays for it: the engine now draws the world into
+   [128, R] x [32, B] of its own surface, and that block belongs on screen at
+   [128s, W-1] x [32s, H-1-32s]. One vector, (128s - 128, 32s - 32), applied in
+   the three places we own -- the world layer's viewport, the composite's
+   world-region sampling, and the pointer map's world branch. At stock it is
+   (0, 0) and not one of the three does anything.
 
-   TWO THINGS ARE WRONG AND ONLY ONE OF THEM SHOWS UP AWAY FROM AN EDGE.
+   AT STOCK NOT ONE BYTE IS WRITTEN either: R = W-1, B = H-33, viewW = W-128
+   and viewH = H-64 are exactly what 0x497F40 just built, so the s = 1 frame is
+   the engine's own and the parity gate cannot move because of this file.
 
-   The CENTRE. targetX puts the unit at engine screen 128 + viewW/2, but the
-   visible window runs [128s, W-1], whose centre is (128s + W - 1)/2. The unit
-   therefore lands (128s - 128)/2 to the LEFT of where the player is looking --
-   224 px at s = 4.5, which is exactly the "snaps a bit to the side" this was
-   reported as. VERTICALLY THERE IS NOTHING TO FIX: the bars are the same
-   height top and bottom, so 32 + viewH/2 already IS the visible centre. That
-   asymmetry is the signature of this bug and is how a regression here will be
-   recognised.
+   GAME-ENTRY-TIME AGAIN, and this is the cost of the change: LoadMap's
+   derivations and the SORT allocations are sized from viewW/viewH, and the
+   loader thread is not created until 0x4982CA, so the rect has to be in place
+   before then. The observer is back on 0x4288D0 gated on the return address
+   0x498242 -- the call at 0x49823D, which is the first one after the last
+   store of the rect. A scale chosen mid-game therefore waits for the next
+   game, which is what 22.2 said before the live version briefly replaced it. */
+#define VA_LOADBG   0x004288D0u
+#define SITE_RET    0x00498242u
+static const unsigned char LOADBG_STOLEN[7] = { 0x83,0xEC,0x30, 0x8B,0x44,0x24,0x38 };
 
-   The CLAMP, which only shows up near a map edge: [0, map - view] is the range
-   that puts the VIEWPORT's edges on the map's, so it stops the visible edge
-   (128s - 128) short on the left and (32s - 32) short top and bottom.
-
-   MECHANISM: an observer, because the numbers have to be recomputed rather
-   than repaired -- the engine's inline clamp is lossy, so a target it has
-   already pinned to 0 cannot be widened afterwards. `before` reads the two
-   world coordinates off the caller's stack and stashes them; `after` recomputes
-   the pair with the visible centre and the widened range and stores it. Both
-   halves run on the game thread inside one call, and the stash is only live
-   between them.
-
-   NOT COVERED, and it was not covered before this either: the same inline
-   clamp exists at `0x41C4C0` (the smooth SetCamera) and `0x41CAF7` (the
-   per-frame FOLLOW), and zoom's own `d` widening does not reach any of the
-   three. This closes the HUD half of ONE of them. */
-#define VA_CENTREON  0x0041C7C0u
-static const unsigned char CENTREON_STOLEN[7] = { 0x56, 0x8B,0x35,0xE8,0x1D,0x51,0x00 };
-
-#define OFF_SCRTX    0x14327
-#define OFF_SCRTY    0x1432B
-#define OFF_MAP_W    0x1422B
-#define OFF_MAP_H    0x1422F
-#define OFF_VIEW_W   0x37E37
-#define OFF_VIEW_H   0x37E3B
+#define OFF_SCREEN_W  0x37E1F
+#define OFF_SCREEN_H  0x37E23
+#define OFF_VP_R      0x37E2F
+#define OFF_VP_B      0x37E33
+#define OFF_VIEW_W    0x37E37
+#define OFF_VIEW_H    0x37E3B
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
 
-/* Between `before` and `after` of ONE call on the game thread. TA is lockstep
-   and this function does not re-enter itself; a stale pair is refused by
-   `have` rather than used. */
-static int s_conX, s_conY, s_conFlag, s_conHave;
-
-/* The magnified HUD's insets in the engine's own coordinates: how much of the
-   viewport's left column and of each bar band the composite covers. 0 whenever
-   the pass is inert, which is what makes every line below the identity then. */
-static void hud_inset(int* left, int* bar)
+/* The vector that takes a point in the ENGINE's surface to the same point on
+   the screen, inside the world region. 1 when it is not (0,0). */
+int tagpu_hud_shift(int* dx, int* dy)
 {
-    int pw = 0, bh = 0;
-    if (!tagpu_hud_live(&pw, &bh, NULL)) { *left = 0; *bar = 0; return; }
-    *left = pw - HUD_PANEL_W; if (*left < 0) *left = 0;
-    *bar  = bh - HUD_BAR_H;   if (*bar  < 0) *bar  = 0;
+    int pw, bh;
+    if (!tagpu_hud_live(&pw, &bh, NULL)) { if (dx) *dx = 0; if (dy) *dy = 0; return 0; }
+    if (dx) *dx = pw - HUD_PANEL_W;
+    if (dy) *dy = bh - HUD_BAR_H;
+    return 1;
 }
 
-static int __cdecl before_centreon(void* entry_esp)
+
+/* The insets `tagpu_vpwide.c` derives the TRUE rect from. L and T are the
+   engine's own 0x80/0x20 and never move -- the projection bakes them (22.5) --
+   but the far edges come in by what the HUD covers, so that the rect this
+   fork reasons about is the same rect the engine's own fields now hold.
+   ONCE horizontally and TWICE vertically, for the reason apply_rect gives. */
+void tagpu_hud_true_inset(const char* ta, int* L, int* T, int* rInset, int* bInset)
 {
-    const int* a = (const int*)entry_esp;   /* [0] ret, [1] worldX, [2] worldZ, [3] flag */
-    s_conX = a[1]; s_conY = a[2]; s_conFlag = a[3];
-    s_conHave = 1;
-    return 0;
+    int pw = HUD_PANEL_W, bh = HUD_BAR_H, w, h;
+    if (ptr_ok(ta)) {
+        w = *(const int*)(ta + OFF_SCREEN_W);
+        h = *(const int*)(ta + OFF_SCREEN_H);
+        tagpu_hud_geom(w, h, (int)s_pctLive, NULL, &pw, &bh);
+    }
+    if (L)      *L      = HUD_PANEL_W;
+    if (T)      *T      = HUD_BAR_H;
+    if (rInset) *rInset = 1  + (pw - HUD_PANEL_W);
+    if (bInset) *bInset = 33 + 2 * (bh - HUD_BAR_H);
 }
 
-static void* __cdecl after_centreon(unsigned int* regs)
+static void apply_rect(void)
 {
     char* ta = *(char**)TA_MAINPP;
-    int hudL, hudB, vw, vh, mapW, mapH, tx, ty, lo, hi;
+    char b[220];
+    int W, H, q8 = 256, pw, bh, pct;
 
-    (void)regs;
-    if (!s_conHave) return 0;
-    s_conHave = 0;
-    if (!s_conFlag) return 0;               /* the arm that writes no target   */
-    hud_inset(&hudL, &hudB);
-    if (!hudL && !hudB) return 0;           /* stock: the engine's own answer  */
-    if (!ptr_ok(ta)) return 0;
-    vw   = *(const int*)(ta + OFF_VIEW_W);
-    vh   = *(const int*)(ta + OFF_VIEW_H);
-    mapW = *(const int*)(ta + OFF_MAP_W);
-    mapH = *(const int*)(ta + OFF_MAP_H);
-    if (vw <= 0 || vh <= 0 || mapW <= 0 || mapH <= 0) return 0;
+    pct = tagpu_hud_stored_pct();
+    InterlockedExchange(&s_pctLive, pct);   /* latched: this game keeps this scale */
+    if (!ptr_ok(ta)) return;
+    W = *(int*)(ta + OFF_SCREEN_W);
+    H = *(int*)(ta + OFF_SCREEN_H);
+    tagpu_hud_geom(W, H, pct, &q8, &pw, &bh);
+    if (q8 <= 256) return;                  /* stock: the engine's own six stores stand */
+    *(int*)(ta + OFF_VP_R)   = W - 1 - (pw - HUD_PANEL_W);
+    /* TWICE, unlike R: the panel is only on the left, so the width loses one
+       inset, but a bar is covered at BOTH ends while T stays at 0x20. */
+    *(int*)(ta + OFF_VP_B)   = H - 33 - 2 * (bh - HUD_BAR_H);
+    *(int*)(ta + OFF_VIEW_W) = W - pw;              /* R - 128 + 1 */
+    *(int*)(ta + OFF_VIEW_H) = H - 2 * bh;          /* B -  32 + 1 */
+    _snprintf(b, sizeof b,
+              "hud: scale %d%% (%s, ceiling %d%%) on %dx%d - panel %d, bars %d, "
+              "viewport {128,32,%d,%d} %dx%d, world shifted by (%d,%d)",
+              q8 * 100 / 256, pct == 0 ? "Auto" : "chosen",
+              tagpu_hud_ceiling_pct(W, H), W, H, pw, bh,
+              W - 1 - (pw - HUD_PANEL_W), H - 33 - 2 * (bh - HUD_BAR_H),
+              W - pw, H - 2 * bh, pw - HUD_PANEL_W, bh - HUD_BAR_H);
+    b[sizeof b - 1] = 0;
+    hlog(b);
+}
 
-    /* the engine's own centre, then the half-inset that moves it from the
-       viewport's centre to the VISIBLE one (x only -- the bars are symmetric) */
-    tx = s_conX - vw / 2 - hudL / 2;
-    ty = s_conY - vh / 2;
-    /* and the engine's own range, widened by what the HUD covers */
-    lo = -hudL;      hi = mapW - vw;          if (hi < lo) hi = lo;
-    if (tx < lo) tx = lo; else if (tx > hi) tx = hi;
-    lo = -hudB;      hi = mapH - vh + hudB;   if (hi < lo) hi = lo;
-    if (ty < lo) ty = lo; else if (ty > hi) ty = hi;
-
-    *(volatile int*)(ta + OFF_SCRTX) = tx;
-    *(volatile int*)(ta + OFF_SCRTY) = ty;
+static int __cdecl before_loadbg(void* entry_esp)
+{
+    if (((void**)entry_esp)[0] == (void*)SITE_RET) apply_rect();
     return 0;
 }
 
@@ -318,14 +336,15 @@ void tagpu_hud_init(void)
     int armed;
     char b[220];
     InterlockedExchange(&s_pctLive, pct);
-    armed = tagpu_detour_bytes_ok(VA_CENTREON, CENTREON_STOLEN, sizeof CENTREON_STOLEN) &&
-            tagpu_detour_observe(VA_CENTREON, CENTREON_STOLEN, sizeof CENTREON_STOLEN,
-                                 before_centreon, after_centreon);
+    armed = tagpu_detour_bytes_ok(VA_LOADBG, LOADBG_STOLEN, sizeof LOADBG_STOLEN) &&
+            tagpu_detour_observe(VA_LOADBG, LOADBG_STOLEN, sizeof LOADBG_STOLEN,
+                                 before_loadbg, NULL);
     _snprintf(b, sizeof b,
-              "hud: %s - the HUD covers the world; centre-on re-aimed at the visible "
-              "window (observer on 0x41C7C0: %s); stored %d",
+              "hud: %s - the viewport IS the visible window (observer on 0x4288D0, "
+              "site 0x49823D: %s); stored %d",
               pct < 0 ? "off" : "ARMED",
               armed ? "ok" : "NOT armed - engine bytes differ", pct);
     b[sizeof b - 1] = 0;
     hlog(b);
+    if (!armed) InterlockedExchange(&s_pctLive, -1);
 }

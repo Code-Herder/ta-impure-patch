@@ -92,6 +92,17 @@ void tagpu_hud_store_pct(int pct);
    wherever the resolved scale is stock. */
 int  tagpu_hud_live(int* panelW, int* barH, int* q8);
 
+/* The insets tagpu_vpwide.c builds the TRUE rect from: L/T are always the
+   engine's own 0x80/0x20, the far edges come in by what the HUD covers. */
+void tagpu_hud_true_inset(const char* ta, int* L, int* T, int* rInset, int* bInset);
+
+/* The vector from a point in the ENGINE's surface to the same point on the
+   screen, inside the WORLD region: (128s - 128, 32s - 32). 0 - and both
+   outputs 0 - whenever the pass is inert. The composite subtracts it, the
+   world layer's viewport adds it, and the pointer map's world branch
+   subtracts it; those three are the whole of the translation. */
+int  tagpu_hud_shift(int* dx, int* dy);
+
 /* The point maps, between the engine's 1x HUD coordinates and the screen the
    player sees. Both are the identity outside a HUD region and at stock scale,
    so an unconditional call costs a compare. */

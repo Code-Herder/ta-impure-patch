@@ -1720,15 +1720,22 @@ tools/tacli log <i> -g 'k=[0-9.]* s='       # the gui heartbeat carries s= besid
   immediately (the store writes the live word as well as the file), but `tacli arm` only writes
   the file, so **arming it on a running instance does nothing until you relaunch**.
 - **640×480 is always stock**, because Auto's ceiling is 1.0 there, whatever `scale=` says.
-- **The engine's viewport rect must NOT move.** It is the tell for the withdrawn design, so it
-  is worth a peek in anything that touches this:
+- **`L` and `T` must NEVER move; `R`/`B`/`viewW`/`viewH` must.** That split is the whole design
+  (gui-renderer 22.6), so it is the first thing to peek at:
   `tacli peek <i> '*0x511DE8+0x37E27:4' '*0x511DE8+0x37E2B:4' '*0x511DE8+0x37E37:4' '*0x511DE8+0x37E3B:4'`
-  (L, T, viewW, viewH) must read `128`, `32`, `W−128`, `H−64` at every scale (1024×768: `128 32 896 704`, measured).
-- **The one check that catches a torn world**, and the one the first build failed: `tacli
-  roster` gives a unit's `screen`, and parking the pointer there must make `main+0x2CBA` name
-  that unit. `tacli keys <i> pmove:X,Y` then `tacli peek <i> '*0x511DE8+0x2CBA:4'` — `0xFFFF` in
-  the top half and the engine index in the bottom, `0xFFFF0000` for nothing. If the roster's
-  position and the drawn position are not the same point, stop.
+  must read `128`, `32`, `W−128s`, `H−64s`. At 4K Auto: `128 32 3264 1872`. A moved `L` is the
+  withdrawn design and means a torn world.
+- **`tacli` coordinates are the ENGINE's, and at s > 1 that is NOT where the thing is drawn.**
+  The world is drawn shifted by `(128s−128, 32s−32)`, so `roster`'s `screen` — and `pmove:`,
+  `click`, `ui show` — are all in engine space and a screenshot will show the unit that vector
+  away. `dmove:`/`dclick:` speak device pixels and DO go through the map, so **a device click is
+  the only one that tests "what you click is what you see"**.
+- **The one check that catches a torn world**: take a unit's `screen` from `tacli roster`, add
+  the shift, and **click it in device space** — `keys <i> dclick:X+dx,Y+dy` then `order <i> --sel
+  stop`, which reports `1 issued` when it selected. Clicking the UNSHIFTED place must select
+  nothing. Use a click, not a hover: `main+0x2CBA` is refreshed by the engine's own GetCursorPos
+  polls and drifts back to the screen centre within a second of an injected move, so a hover read
+  a moment later is measuring the poll, not your point. A selection persists.
 - **`tacli click --device` and `ui click --device` were measured wrong at `s > 1`** before the
   rebuild: they aimed where the gadget would be *unmagnified*. The engine-side conversion
   (`mouse_client_to_game`) does apply the map — a raw `keys <i> dmove:X,Y` in device pixels is

@@ -10,6 +10,7 @@
 #include "tagpu_vpwide.h"
 #include "tagpu_detour.h"
 #include "tagpu_zoom.h"
+#include "tagpu_hud.h"
 
 #define TA_MAINPP    0x00511DE8u
 
@@ -116,10 +117,7 @@ static int iround(float v) { return (int)(v >= 0.0f ? v + 0.5f : v - 0.5f); }
    makes the origin a variable again. */
 static void vp_true(const char* ta, int* L, int* T, int* bInset)
 {
-    (void)ta;
-    if (L)      *L      = VP_TRUE_L;
-    if (T)      *T      = VP_TRUE_T;
-    if (bInset) *bInset = VP_B_INSET;
+    tagpu_hud_true_inset(ta, L, T, NULL, bInset);
 }
 
 /* The true rect from the SCREEN dimensions — the two fields we never write, so
@@ -132,7 +130,11 @@ static int true_rect_of(const char* ta, int* R, int* B, int* W, int* H)
     int tl, tt, bi;
     if (sw < 320 || sh < 200 || sw > 8192 || sh > 8192) return 0;
     vp_true(ta, &tl, &tt, &bi);
-    *R = sw - VP_R_INSET;
+    {   /* the far edges come in with the HUD, the origin never does (22.6) */
+        int ri;
+        tagpu_hud_true_inset(ta, NULL, NULL, &ri, NULL);
+        *R = sw - ri;
+    }
     *B = sh - bi;
     *W = *R - tl + 1;
     *H = *B - tt + 1;

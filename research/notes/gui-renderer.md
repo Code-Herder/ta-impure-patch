@@ -3169,3 +3169,69 @@ you start a game" rule 22.2 argued for was a consequence of the rect, and the re
 **It is not a play default.** `tagpu_opt.c`'s table no longer carries it; `tagpu_hud.on` arms
 it by hand. Whether Auto should be on for everyone is 22.2's open question, it is the owner's,
 and it is not one to answer on the strength of a feature that spent a day torn.
+
+### 22.6 Make the two rectangles the same one  [MEASURED 2026-09-12]
+
+22.5 stopped reserving and let the HUD cover the world. That was the wrong trade, and the way it
+failed is the useful part: **the engine has at least four places that assume its viewport IS what
+the player looks at** — the eye clamp `0x41C3C0`, the centre-on `0x41C7C0`, the per-frame FOLLOW
+at `0x41CAF7` and the smooth SetCamera `0x41C4C0` — and each one wants its own patch. Two were
+written and a third was about to be. From play: *"snapping the camera to the commander … appears
+in the middle of nowhere"* and *"we cannot scroll to the edge of the map on the bottom left"*.
+
+**Ctrl+C is the clearest case.** It reaches `0x41C7C0` through its single caller `0x463F90`
+(`movsx ecx,[eax+0x74]` / `movsx edx,[eax+0x6c]` — the unit's own z and x), which also sets a
+follow flag at `[esi+0x47] |= 0x30`; the follow then recomputes and re-clamps the target every
+frame, so a one-shot correction at the centre-on is overwritten before it is seen. Measured at
+4K Auto: commander at world (400,3536), eye and target both pinned at the engine's `[0, map−view]`
+clamp, commander at engine screen 528 — **behind the 576 px panel**, invisible, and the target
+pinned *at* the bound so the camera could not move until the unit walked right of world 448.
+
+**So the viewport is made to BE the visible window**, and every one of those four is then simply
+right with no engine patch at all:
+
+| field | written | why |
+|---|---|---|
+| `L`, `T` | **no** | `0x80`/`0x20` are baked into every world→screen site (22.5); moving them tears the world |
+| `R` | `W − 1 − (128s − 128)` | one inset: the panel is only on the left |
+| `B` | `H − 33 − 2(32s − 32)` | **twice**: a bar is covered at both ends while `T` stays at `0x20` |
+| `viewW`, `viewH` | `W − 128s`, `H − 64s` | `R−L+1` and `B−T+1`, so every clamp and centre is about the visible window |
+
+At stock those are exactly what `0x497F40` builds, so **not one byte is written** and the `s = 1`
+gate stands. The rect is game-entry-time again (the SORT buffers are sized from viewW/viewH
+before the loader thread at `0x4982CA`), which is the price: a scale chosen mid-game waits.
+
+**The translation pays for it.** The engine now draws the world into `[128, R] × [32, B]` of its
+own surface and that block belongs on screen at `[128s, W−1] × [32s, H−1−32s]`. One vector,
+`(128s − 128, 32s − 32)`, in the three places we own: the composite's world-region sampling, the
+pointer map's world branch, and **the single `glViewport` on the draw that puts the world target
+on the frame** (`tagpu_native.c`, the "composite over the frame"). Not a uniform per world
+shader, and not a bracket around `tagpu_native_frame` — that was tried first and the passes
+inside set their own viewports (the shadow map, the supersampled target), so it was overwritten
+before the first triangle. The symptom of that attempt is worth recognising: the world came out
+**short on the right and bottom by exactly the shift**, which is what an unshifted block under a
+shrunken viewport looks like.
+
+`tagpu_vpwide.c`'s true rect follows the same insets, so `vpwide: true viewport rect verified
+(128,32 3264x1872)` and the `hud:` line now agree by construction.
+
+**Measured**, 3840×2160 Auto, map 4064×3968:
+
+- rect `{128,32,3391,1903}` 3264×1872, world shifted by (448,112); the two modules agree.
+- **What you click is what you see**: a device click at the commander's drawn position
+  (3488,664) selects it; the same click at the unshifted place (3040,552) selects **nothing**.
+  `dmove:3488,664` reads back engine (3040,552) — the shift, exactly.
+- **The edges reach**: `eyeY` now clamps at **2096** (`mapH − viewH`) where the engine's old
+  range stopped at 1872, and at `eyeX = 0` the visible left column is world 0.
+- **Ctrl+C centres**: commander at engine (2173, **969**) against a visible centre of
+  (1760, **968**) — vertically exact. The 413 px left horizontally is the MAP's limit, not ours:
+  the camera is hard against `eyeX = 800 = mapW − viewW`, and a 4064-wide map cannot centre a
+  unit inside a 3264-wide window. It is visible, which is the point.
+
+**The two camera patches 22.5 needed are reverted** — the eye-range widening in
+`zoom_eye_range` and the centre-on observer — because the engine's own arithmetic is now correct
+and a second correction would be a double one.
+
+**Still not driven**: nothing here has exercised the smooth SetCamera `0x41C4C0`, and the ~20 %
+overdraw of 22.5 is gone (the engine draws only the visible window) but that has not been
+measured as a frame-time change.

@@ -1993,9 +1993,8 @@ covers the outer world instead of asking for it.
 | `mouse.c`, `winapi_hooks.c` ×4, `wndproc.c` ×3 | `tagpu_hud_to_engine()` at the end of every client → game conversion: inside a HUD region the engine is handed the point on its own 1× HUD grid | message |
 | `sharp_cursor`, `sharp_minimap` | `tagpu_hud_to_screen()` — the engine's own cursor position (the fallback path only) and the minimap's box go the other way, so the sharp layer lands on the magnified art | render |
 | `tagpu_menu.c` | the "UI scale" row, `trigger_rect()` and `panel_rect()` | game / window |
-| `0x41C7C0` (observer) | the smooth centre-on: re-aim `main+0x14327/+0x1432B` at the VISIBLE window's centre — `(128s−128)/2` left of the viewport's — and re-clamp past the engine's own inline `[0, map−view]` | game |
-| `tagpu_zoom.c` `zoom_eye_range()` | the eye's range widened by what the HUD covers: `loX −= 128s−128`, `loY −= 32s−32`, `hiY += 32s−32`, `hiX` unmoved | game / render |
-
+| `0x4288D0` (observer), gated on return address `0x498242` | write `R`, `B`, `viewW`, `viewH` so the engine's viewport IS the visible window — `L`/`T` untouched, because the projection bakes them. Writes nothing at stock | game |
+| `tagpu_native.c`, the world composite's `glViewport` | the one draw that puts the world target on the frame, shifted by `(128s−128, 32s−32)` | render |
 **One resolver, so the two halves cannot disagree.** `tagpu_hud_geom(W, H, pct, …)` is a pure
 function that clamps to the screen's own ceiling and yields `s`, the panel width and the bar
 height. The composite and the pointer map both call it; neither owns the answer, and because
@@ -2004,11 +2003,10 @@ column where the world begins. The ceiling is `H/480` — [resolution](resolutio
 measured the panel to be a fixed 128×480 block that does not stretch — with a second bound
 that keeps at least 256 px of world width.
 
-**Fields we write.** The scroll target `main+0x14327/+0x1432B`, and only from the centre-on
-observer, and only when the scale is past stock — the engine had just written that same pair
-two instructions earlier and we recompute it about the visible window instead of the viewport
-(§22.5). Nothing else: no viewport rect, which is why the setting is live rather than
-game-entry-time.
+**Fields we write.** Four of the six viewport ints at `main+0x37E2F..0x37E3B` (`R`, `B`, `viewW`,
+`viewH`), once per game entry and only when the resolved scale is past stock. **`L` and `T` are
+never written** — that is the whole lesson of §22.5. Because viewW/viewH size the SORT buffers at
+LoadMap, the setting is game-entry-time: a scale chosen mid-game waits for the next game.
 
 **Why a stale scale is safe.** One word crosses threads — the percentage in force — and every
 consumer re-resolves it against the screen *it* sees, so either value a racing 32-bit read can
@@ -2020,13 +2018,9 @@ is exactly 1.0.
 **Files.** `tagpu_hud.on` (`scale=auto` / `scale=<percent>`) and `tagpu_hud.off`, written as a
 pair for the reason §2.8 gives.
 
-**Known costs.** The HUD is 1× art magnified: bigger, not sharper. The world under it is
-rendered and then covered — about 20 % of the fill at `s = 4.5`. And the first world column the
-player can see is `eye + (128s − 128)` rather than `eye`: **measured 2026-09-12**, 4K Auto on a
-lava map, the engine clamps `eyeX` to 0 and the player's own starting commander (world x = 400,
-engine screen x = 528) sits behind the 576-px panel with no smaller eye to scroll to. Moving
-that clamp is the rest of the feature, not a follow-up — until it moves, Auto at 4K is not a
-defensible default (§22.5).
+**Known costs.** The HUD is 1× art magnified: bigger, not sharper. That is now the only one:
+§22.6 made the engine's viewport the visible window, so the whole map is reachable, the camera
+centres on what the player sees, and the world under the HUD is no longer drawn at all.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 
