@@ -424,8 +424,10 @@ know, for each field the render thread reads, whether it changes per tick, per m
 `0x471DE0` the particle layer table (`0x491B9A`), `0x466AA0` the minimap surfaces (`0x491BAE`),
 `0x483DD0` the map (`0x491BB3` — it reaches the feature teardown `0x422170` and frees the tile
 set, tile map, feature map, wreck records and fog descriptor), `0x42DB90` the model templates
-(`0x491C21`), `0x499A80` the projectile array (`0x491C30`). The level load — the routine that
-calls `LoadMap` at `0x4918C0`, entry not traced — allocates in this order: `0x471D90` layers
+(`0x491C21`), `0x499A80` the projectile array (`0x491C30`). The level load — `LoadGameData_Main
+0x4917D0`, the routine that calls `LoadMap` at `0x4918C0`, called at `0x497581` from the loader
+body `0x497180` **on the loader thread** (see "The in-play publish point, the loader thread and the
+load flags", traced 2026-09-12) — allocates in this order: `0x471D90` layers
 (`0x4918B1`), `0x499A30` projectiles (`0x4918B6`), `0x483610` `LoadMap` (`0x4918C0`), `0x4854A0`
 the unit array (`0x4918D4`), and later `0x4669B0` the minimap (`0x4919C3`). Between the two the
 render thread is live: the reclaim post hook clears its flag as soon as `0x491B60` returns.
@@ -1257,6 +1259,13 @@ group digit and the `ShowRanges` labels vanished in the outer ring at zoom < 1, 
 G13p ports them rather than widening anything.
 
 #### `0x4CCF60` — the blitter, which takes its destination directly
+
+**Pure, instruction by instruction [VERIFIED 2026-09-12, `0x4CCF60..0x4CD00E`]:** it reads its nine
+stack arguments, the font's four fields (`+0`, `+2`, `+3`, the `u16` table at `+4`, then the width
+byte and the bits at the table's offset) and the string's bytes, and writes only `[edi]`, the
+destination; no global, no call, no allocation, no clip. `leave; ret` at `0x4CD00D`/`0x4CD00E`.
+That is the whole argument for calling it on the render thread over a buffer of ours, and the
+reason `tagpu_text.c` is the one "pure engine code" entry of `tagpu/ddraw/thread-split.allow`.
 
 **cdecl, nine arguments** (`add esp,0x24` at `0x4C16D9`):
 
@@ -2454,6 +2463,85 @@ does not, and a diff taken there never sees the cursor. The surface-lost arm re-
 [INFERRED from the IAT slot]. **MEASURED: the shell flips about 5 000 times a second** on the
 reference setup (31 678 flips in the first 6 s of a launch); in game once per `DrawGameScreen`.
 
+### The in-play publish point, the loader thread and the load flags `main+0x38D75` [VERIFIED by disassembly 2026-09-12; the order MEASURED the same day]
+
+[This project — `objdump -d -M intel` of the pristine build for every reference to
+`main+0x38D75`, the thread creation at `0x4982CA`, the import thunks it reaches and the function
+boundaries; the ORDER measured live by the log lines of the frame packet's publisher
+(`tagpu_packet_pub.c`, landing 1 of the [frame packet exchange](frame-packet-exchange.html)),
+`200v200` at 1920×1080.]
+
+**The image, for the build rule's address ranges** (`objdump -h` of the pristine exe, 2026-09-12):
+`.text` at `0x401000` (size `0xFA92A`), `.rdata` at `0x4FC000`, `.data` at `0x501000` (file size
+`0x10A00`, its bss extending to the `.tls` at `0x52C000` — which is where `0x511DE8` the main pointer,
+`0x511DF0..0x511F80` the fx pass's 100 debris slots, `0x512344` the order descriptors, `0x51FBD0`
+the graphics globals and `0x5289A4` the allocator's flag byte live), `.rsrc` at `0x52D000`. So an
+engine virtual address is `0x4xxxxx` or `0x5[0-2]xxxx`, which is what `tools/thread-split-check.sh`
+looks for.
+
+**One call of `DrawGameScreen 0x468CF0` is the played frame, and its return address names it.**
+The four call sites are in the sweep-order table above; only `0x4969CD` — inside the in-game
+frame callback `0x496790`, `push ebx; push ebx` with `ebx = 1`, i.e. `DrawGameScreen(1, 1)` —
+is the played path, and the address the call pushes, **`0x4969D2`**, is what the publisher gates
+every action on. That gate excludes the shell (no call), the movie recorder (`0x4962C2`), the
+screenshot function `0x495A30` and, the reason it is a correctness gate and not a filter, every
+frame drawn while a level is loading (below). Two facts about `0x495A30` *[name INFERRED from
+its loop]*: it is one function, `0x495A30..0x495E7E` (`ret 0x18`), with one caller, `0x417738`,
+and it holds both `0x495C76` (`DrawGameScreen(1, 0)` in its loop, after `0x41C4C0` and the
+HotUnits cull `0x48BAE0`) and `0x495E66` (`DrawGameScreen(1, 1)`, once, at the end); it never
+calls the flip itself. The scenario applier's tick stub lands its `jmp` AT `0x4969D2` while a
+scenario is being applied (`tagpu_scenario.c`, stolen `A1 E8 1D 51 00`): that changes the bytes
+there, not the return address the call pushed, so the gate holds with it installed.
+
+**The observer chain on `0x468CF0`.** `tagpu_menu.c` observes the site first (`before` only, the
+tick of its trigger poll; it never hijacks the return) and `tagpu_packet_pub.c` chains after it
+(`before` reserved for the commands, `after` = the publish, post-flip). `tagpu_detour_observe`
+chains by rewriting the earlier stub's copy of the stolen bytes into a `jmp` to the new stub, so
+the `before`s run in install order and each stub sees the engine's own stack. **An observer that
+hijacks the return must be installed AFTER every observer that does not, and there can be only
+one hijacker per site in practice**: a later observer reads `((void**)entry_esp)[0]` after an
+earlier hijacker replaced it with a trampoline, so its return-address gate would never match. The
+menu's observer never hijacks; the publisher's is the last installed (`dllmain.c`).
+
+**The level load runs on a LOADER THREAD, and the in-play gate is what orders the first publish
+after it.** The engine review of the plan found what the cross-thread audit had missed; the
+disassembly confirms it:
+
+| where | what |
+|---|---|
+| `0x497F40` | the game-screen enter callback (the one `0x49821D` writes the viewport rect from, §vpwide). Its first test is bit 0 of `main+0x38D75` (`mov cl,[eax+0x38d75]; test cl,1` at `0x497F4B`/`0x497F54`): set → `0x498340`, the POLL path; clear → the first-entry path |
+| `0x4982C5`/`0x4982CA` | `push 0x497C70; push ebp; push ebp; call 0x4B6B20` — the thread is created here. `0x4B6B20(start, stack, arg)` is a three-argument wrapper (`ret 0xC`) over the CRT's `0x4E77D0`: a `0x74`-byte thread block, **`CreateThread`** (IAT `0x4FC1A8`) with flags `4` = suspended, then **`ResumeThread`** (IAT `0x4FC240`) — the `_beginthread` shape |
+| `0x49832A` | the game thread sets **bit 0** (`or ecx,1`) right after creating the thread, calls `0x45B640`, and falls into `0x498342`: **bit 1** tested (`shr dl,1; test dl,1`), clear → `je 0x4984DD`, the loading-screen path; set → the in-play handler is installed |
+| `0x497C70` | the thread's entry: an SEH frame (`push -1; push 0x4FDA48; push 0x4E6718`) around `call 0x497180(arg)` at `0x497CA1`. Stolen bytes `55 8B EC 6A FF` are position-independent, which is what lets an observer sit on it |
+| `0x497180` | the loader body: one function, `0x497180..0x497C6C`, one `ret`. First act `QueryPerformanceCounter` (IAT `0x4FC0BC`, it times itself); calls **`LoadGameData_Main 0x4917D0`** at `0x497581` — the routine the *per-map arrays* section left as "entry not traced": its one caller is this thread, and everything that section lists as allocated by the load (layers, projectiles, `LoadMap`, the unit array, the minimap) is allocated **on the loader thread** |
+| `0x4975C7` / `0x4975DE..0x4975F1` | the loader sets **bit 2** (`or edx,4`) and then waits for **bit 3** in a loop: `push 0x32; call SleepBatch100ms 0x4B6B50` per iteration *[name from `tools/ta_symbols.txt`]* |
+| `0x498539..0x498580` | the game thread's half of that handshake, inside `0x497F40`'s poll path: bit 2 set and `0x4568C0` non-zero → clear bit 2 (`and ecx,0xFFFB` at `0x49855D`), set bit 3 (`or edx,8` at `0x498576`), `call HAPINET_guaranteepackets 0x4C9790`. The in-game frame callback `0x496790` clears bit 2 the same way at `0x496868` (`0x496846..0x49686E`) |
+| `0x497C57..0x497C62` | the loader body's LAST act: **bit 1** set (`or ecx,2` at `0x497C5F`, the store at `0x497C62`), then `ret` at `0x497C6C` |
+| bits 0/1, the readers | `0x45290E`/`0x452917`, `0x4550C2`/`0x4550CB`, `0x494E8B`/`0x494E94` (`test byte,1` / `test byte,2` pairs), `0x497D28`, `0x497F4B` (bit 0), `0x498342` (bit 1); bit 2: `0x45578A`, `0x498539`, `0x496846` |
+
+**Every writer of the word** is in that table: `or 1`, `or 2`, `or 4`, `or 8` and the two
+`and ~4`. **No instruction clears bit 0 or bit 1.** MEASURED, then: the publisher's per-frame
+copy of the word reads `0x0003` at the level's first in-play draw and **`0x0000` from a few
+seconds later on**, so a bulk store zeroes it after the load — where, is not established; the
+level-cycle run below is what says whether the next load starts from zero.
+
+**The order, measured** (the log of `tagpu_packet_pub.c`, one append per line, so the file's order
+is the time order; game thread 736, render thread 744 then 760 after the mode switch):
+
+```
+packet: loader thread 756 entered 0x497C70 (entry #1; game thread 736; load flags 0x0001; level gen 0; 0 in-play draw(s) so far)
+packet: loader thread 756 leaving 0x497C70 (load flags 0x0003; level gen 0; 0 in-play draw(s) so far; first in-play packet of this level not yet)
+packet: font 06C3E3A8 copied: rows=11 yoff=1 first=0x00 glyphs=95 bytes=1612 dropped=0 gen=1 fg=255
+packet: level gen 0: first in-play packet at draw #1 (tick 4, load flags now 0x0003, ...)
+```
+
+So "the game thread owns all of `main`" is false while the loader runs and true for every in-play
+draw — exactly the set the `0x4969D2` gate selects — and the audit's open begin/end hazard closes
+by the engine's own ORDERING once the readers take the packet (landing 3), not because any copy is
+faster than the load. Nothing of ours may publish or apply outside the gate: the GL UI's minimap
+observer, which fires inside `BuildMinimapSurface 0x466780` on *this* thread (the "own thread"
+that note measured is the loader thread), goes with landing 4c.
+
 ### The GUI is retained: `GUI_StageUpdateDraw 0x4A81E0` builds, `0x4AB0B0` blits [VERIFIED]
 
 **`0x4A81E0(GUIInfo* gi, int flags)`** — `stdcall`, `ret 8`; prologue
@@ -3435,10 +3523,13 @@ whole rationale for the fork's level generation
 
 ### Why the drain has no tick to ride — `0x4969D2`
 
-The only game-thread hook the fork owns is the scenario applier's `Game_MainLoopTick` detour at
-`0x4969D2` (stolen `A1 E8 1D 51 00`, `tagpu_scenario.c`), and it is installed **only while a
-scenario is being applied**, then left to its one-shot state machine — it cannot host a per-tick
-drain, and two detours cannot share the site. So `tagpu_reclaim.c` drains from inside
+The only game-thread hook the fork owned, until 2026-09-12, was the scenario applier's
+`Game_MainLoopTick` detour at `0x4969D2` (stolen `A1 E8 1D 51 00`, `tagpu_scenario.c`), and it is
+installed **only while a scenario is being applied**, then left to its one-shot state machine — it
+cannot host a per-tick drain, and two detours cannot share the site. *(Since the frame packet's
+landing 1 there IS a per-frame game-thread hook that rides every in-play draw: the observer on
+`DrawGameScreen 0x468CF0` gated on the return address `0x4969D2` — see "The in-play publish
+point" above. The drain has not been moved onto it; it could be.)* So `tagpu_reclaim.c` drains from inside
 `FreeObjectState` itself (every death first frees what became safe), which is why the most recent
 death's object is held until the next death or the level ends.
 

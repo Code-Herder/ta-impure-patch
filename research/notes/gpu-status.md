@@ -1187,7 +1187,8 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `main+0x2A43` | the player id the health-bar and group-digit loop compares unit owners against (`0x46967D` → `[esp+0x70]`, read at `0x469CA6`/`0x469CC9`). Read only. **Not `main+0x2A42`**, which is what the order-marker driver `0x48CC30` uses for its player range — two bytes, two loops, one block, written independently at `0x416B25`/`0x416B38`. `tagpu_mark.c` was on `0x2A42` from G13d until G13p corrected it |
 | `main+0x1426B`, `+0x142CB`, `+0x142DB`, `+0x142DF`, `+0x142E3`, `+0x142E7..+0x142ED`, `+0xDD9` | the minimap: the TNT's picture, the view rect and its colour, and the three 126-px surfaces (composite, fog base, scaled base). **Read only.** The picture is decoded on the MINIMAP BUILD's own thread inside `BuildMinimapSurface 0x466780` — not the game thread, measured — and the three surfaces are read per frame on the render thread while the game thread may be rewriting them, the same standing as the fork's own surface upload (G17e, [GL UI renderer](gui-renderer.html) §19) |
 | `[0x51FBD0]+0x1B2`, `+0x1B6`, `+0x1BA` | the cursor's **GAF frame** and the position it was last drawn at. Read only, on the render thread, once per frame in `tagpu_gui_cursor_frame()` — and read ONCE because two modules act on the answer: the UI layer stops discarding that rect and the world composite counts it as the terrain key, and a second read a pass later would leave a sliver of the engine's cursor standing (G17c, [GL UI renderer](gui-renderer.html) §17). The frame's pixels go through `tagpu_gaf_decode` into the UI atlas like any other sprite |
-| `[0x51FBD0]+0x204` / `+0x208` | the current font object and text foreground colour. Read only, on the GAME THREAD at hook 8: the engine re-points both many times a frame, so a present-thread read would get whatever the side panel last drew with (`tagpu_text.c`) |
+| `[0x51FBD0]+0x204` / `+0x208` | the current font object and text foreground colour. Read only, on the GAME THREAD at hook 8: the engine re-points both many times a frame, so a present-thread read would get whatever the side panel last drew with. **Since 2026-09-12 (the frame packet's landing 1) the font is COPIED there**, header and 95 printable glyphs, each as a one-glyph font object, into the packet (`tagpu_packet_pub.c`); the present thread rasterises from the copy and no longer dereferences the engine's font at all (`tagpu_text.c`, §2.15). The GL UI's string op still carries the font's address — landing 4c |
+| **the frame packet's header** — `main+0x38A47` (`GameTime`), `+0x38A4D` (the live speed), `+0x38A51` (paused), `+0x38D75` (the load flags), `+0x1431F`/`+0x14323` (eye), `+0x14327`/`+0x1432B` (scroll target), `+0x37E1F`/`+0x37E23` (screen), `+0x1422B`/`+0x1422F`, `+0x14233`/`+0x14237` (map px, map cells), `+0x1423B`/`+0x1423F` (view cells), `+0x1438F` (`UNITINFOCount`), `+0x14351` (unit slots), `+0x14281` (`LosType`), `+0x37F06`, `+0x37F2F`, `+0x2A43`, `+0x2A42`, `+0x1427F` | **Read only, on the GAME THREAD**, from the `after` of the `DrawGameScreen` observer on in-play frames only, and COPIED into the packet every presented frame (§2.15; the addresses live in `inc/tagpu_engine.h`). Nothing reads them from the packet yet except the heartbeat, the FPS readout's packet row and the text path's colour: landing 2 makes the header the source of the view every pass reads |
 | **order node `+0x32`, `+0x34`, `+0x42`** | **the target sprite's last-seen cache. WRITTEN, on the GAME THREAD, at the instant the engine's own drawer would have written it.** It is the only sim-side field this stack writes for a marker, and it is not optional: the cache is what stops a waypoint marker following a target that has left LOS, so a port that drops it leaks the target's live position (`tagpu_order.c`, `resolve_sprite`) |
 | **`Object3do+0x08`** | **the pose-dirty flag, and the interlock the unit pass reads it as.** Read only, on the render thread, on either side of every piece's posed-vertex copy: the engine rewrites `prim+0x22` in place and in two stages, and this field is 1 for exactly that window ([engine map](exe-reverse-engineering.html) "The repose"). Non-zero on either side means the buffer may be mid-rewrite and the pass emits the piece from the pose fields instead (§2.9) |
 | `Object3do+0x18/+0x1A/+0x1C` | the CACHED body turn — `unit+0x64` (about Z), `unit+0x66` (the heading, about Y), `unit+0x68` (about X), copied at `0x45AC7C` when any axis moves ≥ 8. Read only, and read in preference to the live `unit+0x64..` on the reconstruction path, because this copy is the one the compose baked into the vertices. **`[MEASURED 2026-09-08]` "In preference" is not a nicety: on a bomber the cached triple read `(0, 16128, 3)` against a live `(0, 44767, 65508)` — 157° of heading apart — and the drawn geometry followed the CACHED one.** On a tank the two were identical; which of them moves is not established. Anything folding `unit+0x64..` instead draws the unit at the wrong attitude, which is what `pose_dump` and `tacob pose-check` did until 2026-09-08 and `hires_pose` until 2026-09-09 |
@@ -1841,6 +1842,124 @@ diagnostic that is off by default, but it means a `glshot` of that corner shows 
 grey/yellow view rectangle behind the digits, which reads convincingly as a corrupted glyph until
 you take the pair with the readout off. And the glyph advance is `w + 1`, so it renders as
 `FPS175` with no gap after the label.
+
+### 2.15 The frame packet exchange, landing 1 (`tagpu_packet.c`, `tagpu_packet_pub.c`, on by default, `tagpu_packet.off`) — 2026-09-12
+
+The first step of the plan the cross-thread audit led to ([frame packet exchange](frame-packet-exchange.html);
+the audit: [cross-thread engine reads](cross-thread-engine-reads.html)): every render-thread read of engine
+memory becomes a read of a COPY the game thread published, handed over through one wait-free
+four-slot exchange. Landing 1 builds the exchange, publishes a header-only packet, moves the one
+render-thread read whose lifetime no note could establish — the marker text's font — into it as
+bytes, and starts the build rule that keeps the rest from growing back. No world pass reads the
+packet yet (landing 2: the view and the commands; 3: units; 4a–c: effects, fog, the GL UI's render
+half).
+
+| site | what we do there | thread |
+|---|---|---|
+| `DrawGameScreen 0x468CF0` | **observer** (`tagpu_detour_observe`, stolen `81 EC 14 02 00 00` — the six bytes `tagpu_menu.c` already observes; chained AFTER it, because the menu's `before` never hijacks the return and ours must). Every action gated on the return address **`0x4969D2`**, the in-play frame callback's call: `before` reserved for the commands (a no-op today), `after` = the publish, post-flip, **only when the cell holds no fresh packet** — the engine draws 330..4900 times a second against ~60 presents, so most draws cost one relaxed load (`skip=`) | game |
+| `0x497C70` | **observer** on the loader thread's entry (stolen `55 8B EC 6A FF`, position-independent): logs the thread's id, the load-flag word and, at its return, whether the level's first in-play packet had already been published — the direct measurement of the loader thread and of the ORDER the in-play gate rests on ([engine map](exe-reverse-engineering.html), "The in-play publish point") | loader |
+| hook 8, `0x469BD7` (markown's stub) | `tagpu_packet_pub_font_snapshot()`: whenever `[globals+0x204]` or its header signature changed, copy the font's header and its 95 printable glyphs into a game-side buffer, each as a one-glyph font object the blitter accepts; latch `[globals+0x208]`. Every packet carries the buffer (1612 B for the stock in-game font) | game |
+| the teardown post hook (`tagpu_reclaim.c`, inside the `0x491B60` wrap) | `tagpu_packet_pub_level_end()`: a header-only packet with `in_game = 0` and the bumped generation, forced past the fresh gate, before the reader is released — without it the renderer would draw the dead level's last packet over the menus | game |
+| `render_ogl.c`, around the overlay | `tagpu_packet_acquire()` once, before `tagpu_reclaim_pass_begin`, the pointer handed down through `TAGPU_FRAME.packet` / `TAGPU_FXVIEW.packet`; `tagpu_packet_frame_end()` after `pass_end`, unconditionally — the tail check and the heartbeat | render |
+| `tagpu_text.c` | `tagpu_text_frame(packet)` copies the font area out of the packet once per font generation; the measure walks the glyph table, the raster hands each one-glyph object to `0x4CCF60` at the x the engine's own string loop would reach. **No `IsBadReadPtr`, no engine pointer on this path any more**; the GL UI's glyph cache (`tagpu_text_glyph`) keeps its probes until 4c | render |
+
+**The primitive, in one paragraph.** Four slots — W (the producer fills it), READ and PREV (the
+consumer holds them), and the one in the CELL, fresh or stale. The cell is one aligned dword,
+`idx (2 bits) | FRESH`, reserved bits asserted zero. Each side exchanges a slot it holds into the
+cell and takes what was there (`__atomic_exchange_n`, ACQ_REL — NOT mingw's `InterlockedExchange`,
+whose contract is acquire-only), so the roles stay a permutation without a lock, provided the init
+made them one: explicit at DLL attach, `W=0, cell=1 (stale), READ=2, PREV=3`, because zeroed
+statics would put both threads on slot 0. `head_seq` stored before the fill, `tail_seq` after;
+the consumer latches the head at acquire and compares the tail at frame end. Slots are 8 MB of
+address space each, reserved once, committed as the high-water mark rises on the producer's own
+slot, never moved, never freed; a fill that does not fit truncates this frame and the next publish
+grows first. Neither side ever waits. Every violation is counted, logged rate-limited, never
+fatal: thread identity both sides (the render thread's restart across a display-mode change is
+recorded, not refused — ownership is by role), the permutation after every exchange, `head ==
+tail`, the structural bounds of every offset against the slot's committed size, a canary past the
+capacity, one acquire per frame, the tail at frame end, the CRC under `check`.
+
+**The build rule** (`tools/thread-split-check.sh`, a prerequisite of `ddraw.dll` in
+`tagpu/ddraw/Makefile`, so `make -C tagpu/ddraw` and the CI job both fail on an offender; the
+upstream `build.cmd`/vcxproj do not run it). A source not on `tagpu/ddraw/thread-split.allow` may
+not name an engine virtual address (`0x0*4xxxxx` / `0x0*51xxxx`, suffix-aware — the `0x00511DE8u`
+spelling 19 files use defeats a `\b`), include `inc/tagpu_engine.h`, probe with `IsBad*Ptr`, or add
+an offset to `ta`/`main`/`main_p`; comments are stripped first. The list started FULL — 41 files
+on 2026-09-12, each with its class (`publisher`, `session-reader`, `fenced`, `tooling`,
+`pure-engine-code`, `engine-map`, `to-convert:N`) and its argument — and only shrinks. Verified:
+a planted `*(int*)(*(char**)0x00511DE8u + 0x38A47)` in `tagpu_fps.c` fails `make`; removed, it
+passes.
+
+**Read it in `tagpu.log`.** `packet: ARMED 4 slots x 8 MB reserved, 64 KB committed each …` and
+`packet: publisher ARMED on DrawGameScreen 0x468CF0 …` at launch; then every 300 frames
+`packet: pub= skip= overrun= foreign= acq= taken= gap= grow= commitfail= trunc= viol= pviol=
+crcbad= nopkt= | pub/s= taken/s= pubus p50= p99= | seq= tick= tps= speed= paused= in_game= gen=
+flags= eye= vp= flips= font= fg= trunc= used= | draws= inplay= draws/s= inplay/s= foreign= deep=`.
+`viol`, `pviol`, `crcbad`, `foreign` and `commitfail` must stay 0; `skip` is the fresh gate
+working; `overrun`/`gap` are 0 in play and count only under `stress` or across a level end;
+`tps` is `GameTime` per wall second and must read 3 × `speed`. A level change logs `packet: level
+end -> gen N …`, then the loader thread's entry and exit and `packet: level gen N: first in-play
+packet …`, in that order. Levers, read at attach: `tagpu_packet.off` (no slots, no publish, no
+acquire; the observer stays in count-only mode so `draws/s` is still reported — **the marker
+text draws nothing under it**, the render thread has no font), `.check` (CRC-32 per packet),
+`.stress` (publish on every draw with a garbage pre-fill, one-page slots that must grow, the
+consumer sleeping 0..50 ms per take), `.poison` (the slot handed back is memset), `.show` (a
+`PK<seq> T<tick> E<eye>` row under the FPS readout).
+
+**The gates, measured 2026-09-12 on the reference setup, `200v200` at 1920×1080, `--maxfps 0`,
+the play defaults:**
+
+- *Protocol.* `check` + `stress` + `poison`: **10 205 taken frames, `viol=0 pviol=0 crcbad=0
+  foreign=0`**, 639 181 publishes at 2 906/s (every in-play draw, the overrun path 628 975 times),
+  `head_seq` monotone (626 778 sequence numbers skipped and counted as `gap`, never a step back),
+  each slot grown once past its one-page start (`grow=4 trunc=1 commitfail=0`); publish p50 12 µs,
+  p99 18 µs with the 16 KB garbage pre-fill and the CRC inside the timed region.
+- *Cost.* `--maxfps 0`, the camera pinned, one 5-second heartbeat per sample. Armed, sim running: in-play
+  `DrawGameScreen` calls/s **795, 826, 795, 847 (mean 816)**; one publish per presented frame
+  (`pub/s` = `taken/s` = 307–314, the render thread's own rate uncapped), **publish p50 2 µs,
+  p99 2 µs**; the in-play tick rate `tps` **59.79, 60.93, 60.40, 59.01 (mean 60.0)** at the live
+  speed 20, i.e. 3 ×. Armed, the ARMOPT menu open (`paused=1`, the tick frozen at 2814 across a
+  3-second peek): draws/s **741, 834, 846, 857, 902, 870 (mean 842)**. `tagpu_packet.off`
+  (count-only observer, no publish, no acquire), sim running: **795, 770, 845, 783 (mean 798)**;
+  menu open: **741, 790, 800 (mean 777)**; the tick frozen at 2815 across the same peek. So the
+  armed arm is not slower in either state — it reads 2 % (running) and 8 % (menu) HIGHER — and the
+  spread of the 5-second samples (±6 %) is wider than the 3 % band the gate named; the publisher's
+  own cost is the measured 2 µs × ~310/s, 0.06 % of the game thread's second. The off arm's tick rate, by two `peek`s 20 s apart: **60.61/s** at the live speed 20 — the same 3 × as the armed arm's 60.0.
+- *Levels.* two games in one process (`Tab → EXIT → MAINMENU → CHOICE1`, then `SINGLE → Skirmish →
+  Mapping 1 → Start`). The log, in order: `reclaim: level teardown (gen 0 -> 1)`, `reclaim:
+  teardown post: freed 279 block(s)`, **`packet: level end -> gen 1: in_game=0 published; 86137
+  in-play draw(s) this level; load flags 0x0000`**, `native: level 0 -> 1`, the render thread
+  restarted and the GL context changed, **`packet: loader thread 592 entered 0x497C70 (entry #2;
+  load flags 0x0001; level gen 1)`**, **`… leaving 0x497C70 (load flags 0x0003 …; first in-play
+  packet of this level not yet)`**, **`packet: level gen 1: first in-play packet at draw #86138
+  (tick 0, load flags now 0x0003 …)`**, the context changed again. `viol=0` across the boundary;
+  the first heartbeat of gen 1 carries `gen=1`. (The second game began PAUSED — `tick=0
+  paused=1` — because the first was left in the ARMOPT menu; the engine's, not ours.)
+- *The rule.* The planted offender above.
+- *Text.* `one-unit` at 1920×1080, the commander selected, put in group 1 (the digit) and `+showranges`
+  typed (nine def-range and three weapon circles, each labelled — `build distance`, `mincloak`,
+  `weapon1 range`, `weapon3 range`, `sight` …), SHIFT held for the order block, the pointer parked,
+  two `glshot`s 4 s apart per DLL. Noise floor (same DLL, 4 s apart): **0 differing pixels** outside
+  the top-left readout corner, both DLLs. Previous DLL (`ddraw.dll` built from `1cb60b8`) against
+  this one: **0 differing pixels** outside that corner — the digit's own 130×120 rect included —
+  and the corner differs only by the readout's numbers and the new `PK` row. So the glyphs
+  rasterised from the copy are the glyphs the engine's font pointer gave, pixel for pixel.
+- *The two engine facts.* The loader thread's id is now measured at its entry (756 against the
+  game thread 736 on the first run), and its exit is logged before the level's first in-play
+  packet. Bits 0 and 1 of `main+0x38D75`: no instruction clears them; the packet's per-frame copy
+  reads `0x0003` at the first in-play draw and `0x0000` a few seconds later, so a bulk store
+  zeroes the word after the load, and the level-cycle run shows the word at **`0x0000` at the level end and `0x0001` at the next
+  loader's entry** (bit 0 freshly set by the game thread, bit 1 clear), so a second game in one
+  process starts from zero and the loader's bit 1 is a fresh fact each time — the ordering argument
+  holds for every level, not only the first.
+
+**Not closed here, by design.** No world pass reads the packet: the eye is still read from engine
+memory by every pass and written by the zoom from the render thread (landing 2, with the
+commands — the two must land together or zoom-to-cursor wobbles). The unit array, the fog grid,
+the effects arrays and the GL UI's render half still read engine memory on the render thread and
+say so on the allow-list (`to-convert:N`). The GL UI's string op still hands the render thread a
+font pointer (4c). The `tick_start` stamp and `prev` are carried but unused until the lerp
+rekeys onto them (3).
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 

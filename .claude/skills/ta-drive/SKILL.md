@@ -984,6 +984,31 @@ instead: `tacli arm <i> classicpp.on=off`.
   2026-09-09 over two cycles under the play defaults; the `tab` → `ui click EXIT` →
   `ui click MAINMENU` → `ui click CHOICE1` route is how you do it, and it is the only way to
   exercise the level generation at all.
+- **The frame packet exchange is on by default and `packet.off` is its A/B lever, not a feature
+  switch** (landing 1, 2026-09-12; [frame packet exchange](../../research/notes/frame-packet-exchange.html),
+  gpu-status §2.15). The game thread publishes a copy of the per-frame engine state after every
+  in-play `DrawGameScreen` (only when the renderer has taken the previous one) and the render
+  thread takes it once at the top of its frame; today the copy is the header plus the marker
+  text's font as glyph bytes, so **with `packet.off` the group digits and the `ShowRanges` labels
+  draw nothing** (the render thread no longer holds an engine font). Read `packet: ARMED 4 slots
+  x 8 MB reserved …` and `packet: publisher ARMED on DrawGameScreen 0x468CF0 …` at launch, then
+  every 300 frames `packet: pub=… skip=… overrun=… foreign=… acq=… taken=… gap=… grow=…
+  commitfail=… trunc=… viol=… pviol=… crcbad=… nopkt=… | pub/s=… taken/s=… pubus p50=… p99=… |
+  seq=… tick=… tps=… speed=… paused=… in_game=… gen=… flags=… eye=… vp=… flips=… font=… fg=…
+  trunc=… used=… | draws=… inplay=… draws/s=… inplay/s=… foreign=… deep=…`. **`viol`, `pviol`,
+  `crcbad`, `foreign` and `commitfail` must stay 0**; `skip` is the FRESH gate doing its job (one
+  relaxed load per engine draw), `overrun` and `gap` are 0 in play and count only under `stress`
+  or across a level end (the forced out-of-game packet); `grow`/`trunc` say a slot grew past its
+  first fill (once per slot under `stress`, never in play so far). `tps` is `GameTime` per wall
+  second — **3 × `speed`**, 60 at the GameSpeed 20 a scenario lands on — and `pubus` the publish
+  cost in µs. Levers, read at attach: `packet.check` (CRC-32 of every packet, verified per frame),
+  `packet.stress` (publish on every draw with a garbage pre-fill, one-page slots that must grow,
+  the consumer sleeping 0..50 ms per take — the protocol gate's mode, ~35 taken frames/s),
+  `packet.poison` (the slot handed back is memset, so a pointer cached past its frame reads
+  0xDD), `packet.show` (a `PK<seq> T<tick> E<eye>` row under the FPS readout, needs `fps.on`).
+  A level change logs `packet: level end -> gen N …`, then `packet: loader thread T entered
+  0x497C70 …` / `… leaving 0x497C70 …` and `packet: level gen N: first in-play packet …` — in
+  that order, which is the load hazard's closing argument (exe note, "The in-play publish point").
 - The instrumentation triggers (`suppress.on`, `tracer.on`, `gldbg.on`, `posedump.on`,
   `cobtrace.on`, `spxlog.on`, `fpsosd.on`) — debugging, not features.
 - `hires.on` only carries the hires renderer's *tweaks* (`anchor=`, sun, ambient,

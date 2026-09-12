@@ -21,7 +21,8 @@ produced).*
 | **Fence** | `tagpu_reclaim`'s wrap of the level teardown `0x491B60`, the pass counters, and the gate at `tagpu_overlay.c:590` — covers the level **teardown**, not the next level's **load** (§2) |
 | **Audit** | the nine sites of the G13u sweep, each classified against the writer it reads (§5): one open hazard, one already catalogued, six under the fence with two named residuals |
 | **Open** | §7 |
-| **Design** | the plan this audit led to, kept in the wiki as authored HTML: [Frame packet exchange](frame-packet-exchange.html) — one publisher on the game thread, one wait-free four-slot exchange, four reviews folded in on 2026-09-11, **not built** |
+| **Design** | the plan this audit led to, kept in the wiki as authored HTML: [Frame packet exchange](frame-packet-exchange.html) — one publisher on the game thread, one wait-free four-slot exchange, four reviews folded in on 2026-09-11. **Landing 1 built 2026-09-12** (`tagpu_packet.c`, `tagpu_packet_pub.c`): the primitive, the header packet, the marker font as glyph bytes, the out-of-game packet and the build rule in census mode; the readers in §4 are still on engine memory until landings 2–4 |
+| **The loader thread** | the plan's engine review found it and the disassembly confirmed it on 2026-09-12: the level load runs on a thread created at `0x4982CA`, whose last act sets bit 1 of `main+0x38D75`; the in-play frame is installed only after that bit is seen, so the first publish after a load is ORDERED after the loader by the engine itself ([engine map](exe-reverse-engineering.html), "The in-play publish point"). That is what closes §5's open hazard once the unit array is read from the packet (landing 3) |
 
 ## 1. The two threads, and the one that is not
 
@@ -164,6 +165,14 @@ note's *per-map arrays* section.
 | `main+0x37E37`/`+0x37E3B` view W/H | the engine's setter `0x49821D`/`0x498237`; **and the render thread**, through `tagpu_vpwide` | per resolution change | n/a | consumers fail closed on a zero; the lost-update case is detected and repaired (`vpwide: REPAIRED`) |
 | `main+0x1431F`, `+0x142F3`/`+0x142F7` eye, scroll target, followed object | the camera stepper, per draw; **and the render thread** for the first two | per draw | n/a | coordinates behind `clamp_pair()`; the followed-object *pointer* is released from the game thread for exactly this reason (G13u) |
 
+**What landing 1 of the exchange changed here (2026-09-12).** None of the rows above moved: the
+header fields the packet carries (the eye, the scroll target, the true viewport, the option bits,
+the tick and the live speed, the counts) are not in this table because the audit's census was of
+per-map *arrays*, and the one render-thread read that did go — the marker font behind
+`[globals+0x204]`, dereferenced per glyph behind `IsBadReadPtr` — was not in it either, because
+no note had established the font's lifetime. It now travels as bytes copied at hook 8. The table
+gains a "source after" column when its first row converts (landing 3).
+
 ## 5. The audit of the G13u sweep — nine sites, one open hazard
 
 The sweep of 2026-09-10 listed nine places where a field written by one thread is read by the
@@ -265,6 +274,8 @@ a comment saying so.
 
 ## Changelog
 
+- **2026-09-12** — the loader thread row in the status table and the landing-1 note under §4;
+  the design's first landing is built, the readers are unchanged.
 - **2026-09-11** — first version, from the audit of the G13u sweep. Corrected the same day in
   three other notes: the fog grid is per map and under the fence (destruction note §3), the fence
   clears in the post hook and not at the next live game (§6), and the alignment figures are
