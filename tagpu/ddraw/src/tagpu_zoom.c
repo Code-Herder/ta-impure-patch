@@ -693,6 +693,12 @@ static void __stdcall zoom_minimap_rect(int* r)
    the range above, and inside it everywhere else. */
 
 #define EYECLAMP_VA      0x0041C3C0u   /* stdcall(void), ret 0: clamp + mm rect */
+/* The per-frame stepper `0x41CA10` clamps the scroll target INLINE, and the
+   block is `0x41CAF7`..`0x41CB43` — reached only on a frame that is following
+   something, because `0x41CA8F` jumps straight to `0x41CB4A` when nothing is.
+   Nothing jumps INTO it, so the whole block is ours to replace. */
+#define FOLLOWCLAMP_VA   0x0041CAF7u   /* mov esi,[eax+0x14327] — the clamp's top */
+#define FOLLOWCLAMP_END  0x0041CB44u   /* the instruction past the block          */
 #define VA_GETTPOS       0x00484B50u   /* GetTPosition(x,y,out), stdcall, ret 0xC */
 #define SITE_GETTPOS     0x00498EF9u   /* its call site inside 0x498DA0           */
 #define OFF_EYEX         0x1431F
@@ -706,10 +712,17 @@ static void __stdcall zoom_minimap_rect(int* r)
 #define OFF_FOLLOW_OBJ   0x142F7       /* followed object, position at +0x4       */
 #define OFF_FOLLOW_UNIT  0x142F3       /* followed unit, position at +0x6A        */
 #define OFF_FOLLOW_HOLD  0x1434B       /* u16 frame countdown on main+0x1433F     */
+#define OFF_LOSTYPE      0x14281       /* bit 3: the screen fog grid is current   */
+#define OFF_VIEW_W       0x37E37       /* the viewport FIELDS, which is what the  */
+#define OFF_VIEW_H       0x37E3B       /* stepper's own clamp reads               */
 
 /* `mov eax, ds:0x511DE8` — the whole first instruction, so the five stolen
    bytes end on an instruction boundary (0x41C3C5 is `push esi`). */
 static const unsigned char EYE_STOLEN[5] = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 };
+
+/* `mov esi,[eax+0x14327]` — six bytes, and they are never executed: the stub
+   jumps past the whole clamp block to FOLLOWCLAMP_END. */
+static const unsigned char FOLLOW_STOLEN[6] = { 0x8B, 0xB0, 0x27, 0x43, 0x01, 0x00 };
 
 typedef void (__stdcall *PFN_GETTPOS)(int x, int y, int* out);
 
@@ -765,6 +778,11 @@ static int zoom_eye_range(const char* ta, float z,
         dx = iround((float)W * 0.5f * (1.0f - 1.0f / z));
         dy = iround((float)H * 0.5f * (1.0f - 1.0f / z));
     }
+    /* HUD SCALE NEEDS NOTHING HERE (gui-renderer.md 22.6). It briefly did --
+       the range was widened by what the magnified HUD covered -- but the
+       viewport the engine clamps about IS the visible window now, so the
+       engine's own range is already the right one and a second correction
+       would be a double one. */
     *loX = -dx; *hiX = mapW - W + dx;
     *loY = -dy; *hiY = mapH - H + dy;
     /* A map smaller than the viewport inverts the ENGINE's range too — it then
@@ -810,6 +828,88 @@ static void __cdecl zoom_eye_clamp(void* arg)
                    loX, hiX, loY, hiY);
     /* the engine's own last act, and the only place this rect is recomputed */
     zoom_minimap_rect((int*)(ta + OFF_MM_RECT));
+}
+
+/* THE FOLLOW'S OWN CLAMP, MADE ZOOM-AWARE — the third of the three inline ones
+   this module's range never reached, and the first to be closed.
+
+   The per-frame stepper `0x41CA10` recomputes the scroll target from whatever
+   is being followed (`want = unit - view/2`, `0x41CA95`..`0x41CAD2`) and then
+   clamps it INLINE to `[0, map - view]` without going anywhere near
+   `0x41C3C0`. That bound is about the UNZOOMED viewport, so at zoom z the
+   camera's centre cannot come closer than `W/2` to a map edge while the window
+   the player is looking at is only `W/z` wide. Ctrl+C on a commander inside
+   that band therefore takes the follow, aims the camera, and stops short --
+   with the unit off screen entirely once `W/2 - W/(2z)` exceeds the distance.
+   Reported from play 2026-09-12: "when zoomed in to the maximum possible zoom
+   level, ctrl-c does not manage to focus on the commander". Measured there, at
+   1920x1080 with the HUD at 225% (view 1632x936) on a 4064x3968 map, z = 8,
+   commander at world (3808,3600): the follow asked for (2992,3132), the
+   engine's clamp cut it to (2432,3032), and the visible window was world
+   x [3145,3349] y [3440,3558] -- 459 px short.
+
+   Correcting it afterwards is not open to us: the stepper eases the eye toward
+   the target and calls `0x41C3C0` only after, so a target widened from our eye
+   clamp would be overwritten before it was ever used. So the block is replaced
+   instead of chased, which is also why it is the WHOLE block -- the fog bit it
+   clears at `0x41CB3B` is part of it.
+
+   AT z <= 1 THIS IS THE ENGINE'S OWN ARITHMETIC, to the byte, read from the
+   same two viewport FIELDS the block read (`vpwide` owns those below 1x and the
+   stepper's `want` is computed from them, so ours must clamp against them too;
+   above 1x the field and the true rect are the same rect). The widened range is
+   consulted only where it differs, which is z > 1 and nowhere else. */
+static void __cdecl zoom_follow_clamp(void)
+{
+    char* ta = *(char**)TA_MAINPP;
+    int loX, hiX, loY, hiY;
+    float z;
+
+    if (!ta_ok(ta)) return;
+
+    loX = loY = 0;
+    hiX = *(const int*)(ta + OFF_MAP_W) - *(const int*)(ta + OFF_VIEW_W);
+    hiY = *(const int*)(ta + OFF_MAP_H) - *(const int*)(ta + OFF_VIEW_H);
+
+    z = eye_level();
+    if (z > 1.0f) {
+        int zloX, zhiX, zloY, zhiY;
+        /* on a frame whose engine state is not sane enough for a range, the
+           engine's own bound above stands rather than nothing being clamped */
+        if (zoom_eye_range(ta, z, &zloX, &zhiX, &zloY, &zhiY)) {
+            loX = zloX; hiX = zhiX; loY = zloY; hiY = zhiY;
+        }
+    }
+    /* The engine does not guard this, because its own `lo` is a literal 0 and
+       its `else if` leaves a target below an inverted `hi` at 0 anyway; ours
+       has a computed `lo`, so the pair is ordered before it is used. */
+    if (hiX < loX) hiX = loX;
+    if (hiY < loY) hiY = loY;
+
+    clamp_pair((int*)(ta + OFF_SCRTX), (int*)(ta + OFF_SCRTY), loX, hiX, loY, hiY);
+
+    /* `0x41CB3B`, the block's last act: bit 3 of main+0x14281 is the screen fog
+       grid's is-current flag and the target it was built for has just moved.
+       This is the GAME thread -- the only one that may touch that word at all
+       (exe map, "who may clear main+0x14281 bit 3"). */
+    *(unsigned short*)(ta + OFF_LOSTYPE) &= (unsigned short)~8u;
+}
+
+/* pushfd ; pushad ; call zoom_follow_clamp ; popad ; popfd ; jmp past the block.
+   The flags are saved as well as the registers because this lands in the MIDDLE
+   of a function rather than on a prologue. */
+static unsigned char* build_follow_stub(void)
+{
+    unsigned char* s = tagpu_detour_stub();
+    unsigned char* p = s;
+    if (!s) return NULL;
+    *p++ = 0x9C;                                                /* pushfd  */
+    *p++ = 0x60;                                                /* pushad  */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)&zoom_follow_clamp); p += 4;
+    *p++ = 0x61;                                                /* popad   */
+    *p++ = 0x9D;                                                /* popfd   */
+    *p++ = 0xE9; tagpu_detour_rel(p, FOLLOWCLAMP_END); p += 4;  /* jmp     */
+    return s;
 }
 
 /* THE EYE HAS TO COME HOME WHEN THE ZOOM DOES. The clamp above runs only when
@@ -1411,9 +1511,10 @@ void tagpu_zoom_init(void)
         !site_is(SITE_MMRECT2_VA, MINIMAP_RECT_VA) ||
         !site_is(SITE_SAVESCROLL, SAVE_SETTING_VA) ||
         !site_is(SITE_GETTPOS, VA_GETTPOS) ||
-        !bytes_are(EYECLAMP_VA, EYE_STOLEN, (int)sizeof EYE_STOLEN)) {
+        !bytes_are(EYECLAMP_VA, EYE_STOLEN, (int)sizeof EYE_STOLEN) ||
+        !bytes_are(FOLLOWCLAMP_VA, FOLLOW_STOLEN, (int)sizeof FOLLOW_STOLEN)) {
         zlog("zoom: NOT armed — engine bytes differ at one of "
-             "0x41C426/0x41C442/0x430FAE/0x498EF9/0x41C3C0");
+             "0x41C426/0x41C442/0x430FAE/0x498EF9/0x41C3C0/0x41CAF7");
         return;
     }
     ok  = redirect(SITE_MMRECT1_VA, (void*)zoom_minimap_rect);
@@ -1432,10 +1533,25 @@ void tagpu_zoom_init(void)
                                          (int)sizeof EYE_STOLEN,
                                          &g_eyeWide, 0, zoom_eye_clamp);
         g_eyeInstalled = eye;
-        zlog(eye ? "zoom: ARMED (minimap rect 0x466B70 x2, ScrollSpeed save "
-                   "0x430FAE, camera range 0x41C3C0 + world guard 0x498EF9)"
-                 : "zoom: PARTIAL — minimap and ScrollSpeed only, the camera "
-                   "range did NOT install");
+        /* THE FOLLOW'S CLAMP ONLY ON TOP OF THE EYE'S, and built before it is
+           landed so a failed allocation arms nothing: its whole job is to agree
+           with the range `zoom_eye_clamp` enforces, and widening the target
+           where the eye is still clamped to `[0, map - view]` would be a camera
+           that asks for a place it is then dragged out of every frame. */
+        if (eye) {
+            unsigned char* sf = build_follow_stub();
+            int fol = sf && tagpu_detour_land(FOLLOWCLAMP_VA, sf,
+                                              (int)sizeof FOLLOW_STOLEN);
+            zlog(fol ? "zoom: ARMED (minimap rect 0x466B70 x2, ScrollSpeed save "
+                       "0x430FAE, camera range 0x41C3C0 + follow clamp 0x41CAF7 "
+                       "+ world guard 0x498EF9)"
+                     : "zoom: ARMED without the follow clamp — 0x41CAF7 did NOT "
+                       "install, so a followed unit still stops W/2 from a map "
+                       "edge at zoom > 1");
+        } else {
+            zlog("zoom: PARTIAL — minimap and ScrollSpeed only, the camera "
+                 "range did NOT install");
+        }
     } else {
         zlog("zoom: PARTIAL — see above");
     }

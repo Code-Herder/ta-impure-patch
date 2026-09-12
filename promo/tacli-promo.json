@@ -1,0 +1,431 @@
+{
+  "name": "tacli-promo",
+  "duration": 57.0,
+  "_stage": [
+    "The tile is the WINDOW, and the game fills the window's CLIENT rect — so it",
+    "is the client that has to be 4:3, not the tile. The title bar takes 5.5% of",
+    "the height, so a 1024x768 tile leaves a 1022x724 client (1.412) and every",
+    "frame of footage was stretched 5.9% wide. 1024x813 leaves 1022x767 (1.3325).",
+    "The 64px gap is the desktop showing between windows — it is what makes the",
+    "wide shot read as 'a desktop full of games' rather than one big texture."
+  ],
+  "stage": {
+    "tile": {
+      "w": 1024,
+      "h": 813
+    },
+    "gap": {
+      "x": 64,
+      "y": 64
+    },
+    "bg": [
+      16,
+      18,
+      22
+    ]
+  },
+  "_camera": [
+    "cols = how many window columns fit across the frame, interpolated in log",
+    "space. Centre (512,384) is hero 1's middle; (1056,800) the 2x2 block's.",
+    "",
+    "The camera is FROZEN whenever text is on screen: 0-7.5s for hero 1, and",
+    "10.5-25.0s across terminals 2-4. Both holds must be EXACTLY constant in",
+    "`cols` — a drift of 3.05 to 2.95 looks like a hold in the file and is a slow",
+    "zoom in the picture, creeping the tiles 593.8 -> 599.3 px and making every",
+    "glyph crawl. Measured on the prompt region, temporal 2nd difference:",
+    "any push 7.453, frozen 0.000. There is no such thing as a subtle push here.",
+    "",
+    "cols 1.476 on the opening is ARITHMETIC, not taste: the hero window has to",
+    "sit inside the frame with 5% of the height clear above and below it.",
+    "  visible world height = cols * pitch_x * (out_h / out_w) = cols * 612",
+    "  cols = tile.h / (0.90 * 612) = 813 / 550.8 = 1.4760",
+    "At the 1.3 this opened on, the visible height was 795.6 against an 813-tall",
+    "tile, so the window was 17 units TALLER than the frame and its top and",
+    "bottom borders were cut off -- it read as a window with no edges. 1.476",
+    "leaves 45 units of desktop top and bottom. It also matches the 2x2 block at",
+    "cols 3.05, which sits at 1690/(3.05*612) = 90.5% of the height: beats 1 and",
+    "2 are now framed the same way instead of one bleeding and one not. The",
+    "16:9 ratio is what makes the sides wider (18.1% each) -- a 1.26:1 window",
+    "cannot be inset vertically and tight horizontally at the same time."
+  ],
+  "camera": [
+    {
+      "t": 0.0,
+      "cols": 1.476,
+      "cx": 512,
+      "cy": 406.5
+    },
+    {
+      "t": 7.47,
+      "cols": 1.476,
+      "cx": 512,
+      "cy": 406.5,
+      "ease": "linear"
+    },
+    {
+      "t": 10.5,
+      "cols": 3.05,
+      "cx": 1056,
+      "cy": 845.0,
+      "ease": "smooth"
+    },
+    {
+      "t": 25.0,
+      "cols": 3.05,
+      "cx": 1056,
+      "cy": 845.0,
+      "ease": "linear"
+    },
+    {
+      "t": 51.0,
+      "cols": 40.0,
+      "cx": 1056,
+      "cy": 845.0,
+      "ease": "linear"
+    },
+    {
+      "t": 57.0,
+      "cols": 44.0,
+      "cx": 1056,
+      "cy": 845.0,
+      "ease": "out"
+    }
+  ],
+  "_windows": [
+    "The four hero windows. Each opens as a terminal, types its command, prints",
+    "output, then cross-fades into the game in the SAME rect — that is beat 2.",
+    "`clip` is the clip id used by --backend clip; `variant` only colours the",
+    "white box in --backend wire.",
+    "",
+    "Window 0's `output` is the REAL transcript, captured 2026-09-10 from the",
+    "shoot. Windows 1-3 are still the placeholder format and get replaced when",
+    "their clips are shot."
+  ],
+  "windows": [
+    {
+      "col": 0,
+      "row": 0,
+      "variant": 0,
+      "clip": "big-battle",
+      "label": "big-battle",
+      "t_open": 0.3,
+      "t_type": 1.2,
+      "t_enter": 5.73,
+      "t_game": 6.97,
+      "prompt": "~/ta $",
+      "command": "tools/tacli scenario load front1 big-battle",
+      "output": [
+        "big-battle: loaded on front1",
+        "  launched 2048x1536, map 'Town & Country', unit limit 500",
+        "  clicked SINGLE on MAINMENU.GUI — screen MAINMENU.GUI -> SINGLE.GUI",
+        "  clicked Skirmish on SINGLE.GUI — engine confirmed",
+        "  map unmapped -> mapped",
+        "  line of sight is permanent",
+        "  clicked Start on SKIRMISH.GUI",
+        "  live with 2 units",
+        "  map Maps\\Town & Country.TNT",
+        "applied 980 of 980 (980 units + 0 features), 0 failed, 0 cleared",
+        "orders: 980 issued, 0 failed",
+        "camera: [4320, 4320] (eye [3424, 3544], pinned)"
+      ]
+    },
+    {
+      "col": 1,
+      "row": 0,
+      "variant": 1,
+      "clip": "air-war",
+      "label": "air-war",
+      "t_open": 11.0,
+      "t_type": 11.4,
+      "t_enter": 14.35,
+      "t_game": 15.39,
+      "prompt": "~/ta $",
+      "command": "tools/tacli scenario load front2 air-war",
+      "output": [
+        "air-war: loaded on front2",
+        "  launched 2048x1536, map 'Two Continents', unit limit 500",
+        "  clicked SINGLE on MAINMENU.GUI — screen MAINMENU.GUI -> SINGLE.GUI",
+        "  clicked Skirmish on SINGLE.GUI — engine confirmed",
+        "  map unmapped -> mapped",
+        "  line of sight is permanent",
+        "  clicked Start on SKIRMISH.GUI",
+        "  live with 2 units",
+        "  map Maps\\Two Continents.TNT",
+        "applied 284 of 284 (284 units + 0 features), 0 failed, 0 cleared",
+        "orders: 200 issued, 0 failed",
+        "camera: [3000, 1500] (eye [2104, 722], pinned)"
+      ]
+    },
+    {
+      "col": 0,
+      "row": 1,
+      "variant": 2,
+      "clip": "last-stand",
+      "label": "last-stand",
+      "t_open": 11.5,
+      "t_type": 11.9,
+      "t_enter": 15.03,
+      "t_game": 16.07,
+      "prompt": "~/ta $",
+      "command": "tools/tacli scenario load front3 last-stand",
+      "output": [
+        "last-stand: loaded on front3",
+        "  launched 2048x1536, map 'Two Continents', unit limit 500",
+        "  clicked SINGLE on MAINMENU.GUI — screen MAINMENU.GUI -> SINGLE.GUI",
+        "  clicked Skirmish on SINGLE.GUI — engine confirmed",
+        "  map unmapped -> mapped",
+        "  line of sight is permanent",
+        "  clicked Start on SKIRMISH.GUI",
+        "  live with 2 units",
+        "  map Maps\\Two Continents.TNT",
+        "applied 427 of 427 (427 units + 0 features), 0 failed, 0 cleared",
+        "orders: 400 issued, 0 failed",
+        "camera: [2980, 1400] (eye [2084, 619], pinned)"
+      ]
+    },
+    {
+      "col": 1,
+      "row": 1,
+      "variant": 3,
+      "clip": "naval-push",
+      "label": "naval-push",
+      "t_open": 12.0,
+      "t_type": 12.4,
+      "t_enter": 15.53,
+      "t_game": 16.57,
+      "prompt": "~/ta $",
+      "command": "tools/tacli scenario load front4 naval-push",
+      "output": [
+        "naval-push: loaded on front4",
+        "  launched 2048x1536, map 'Anteer Strait', unit limit 500",
+        "  clicked SINGLE on MAINMENU.GUI — screen MAINMENU.GUI -> SINGLE.GUI",
+        "  clicked Skirmish on SINGLE.GUI — engine confirmed",
+        "  map unmapped -> mapped",
+        "  line of sight is permanent",
+        "  clicked Start on SKIRMISH.GUI",
+        "  live with 2 units",
+        "  map Maps\\Anteer Strait.TNT",
+        "applied 205 of 205 (205 units + 0 features), 0 failed, 0 cleared",
+        "orders: 200 issued, 0 failed",
+        "camera: [3200, 2400] (eye [2304, 1663], pinned)"
+      ]
+    }
+  ],
+  "_fill": [
+    "The grid behind the heroes. Each cell gets a random clip and a random time",
+    "offset so no two tiles are in step. Range covers the cols=44 wide shot with",
+    "margin: 44 cols across, 44*612/832 = 32 rows down.",
+    "",
+    "reveal.not_before is the hard gate that keeps beats 1-4 honest: until 22.0s",
+    "the desktop holds exactly the scripted windows (one, then four), so no",
+    "neighbour creeps into frame. At 22.0 the first ring fades up over `wave`",
+    "seconds — the desktop filling is a deliberate shot. Every outer ring is",
+    "already open `lead` seconds before the camera reaches it, so nothing pops",
+    "on screen. The times come from the camera path, so retiming the pull-back",
+    "retimes the reveal with no hand-edited open times."
+  ],
+  "fill": {
+    "cols": [
+      -22,
+      23
+    ],
+    "rows": [
+      -16,
+      18
+    ],
+    "seed": 20260910,
+    "reveal": {
+      "not_before": 25.0,
+      "lead": 0.8,
+      "wave": 1.4,
+      "fade": 0.25
+    },
+    "clips": [
+      "big-battle",
+      "air-war",
+      "last-stand",
+      "naval-push",
+      "ridge-assault",
+      "shore-raid"
+    ],
+    "labels": [
+      "big-battle",
+      "air-war",
+      "last-stand",
+      "naval-push",
+      "ridge-assault",
+      "shore-raid"
+    ],
+    "_text": [
+      "The wall spells IMPURE in big-battle tiles. Town & Country is the one",
+      "dark clip (luma 44 against 68-99 for the other five), so its tiles read",
+      "as ink on the wide shot and it appears NOWHERE else in the fill -- a",
+      "stray dark tile is a smudge on the letters.",
+      "",
+      "origin is arithmetic, not taste. The block is 29 cols x 7 rows. Centred",
+      "on the camera's final target (1056, 845) it sat exactly where the title",
+      "card lands at 51.5s: the card's plate hid P-U-R for the last 5.5s and",
+      "left I-M and E poking out either side. So the word sits BELOW the card:",
+      "rows 5..11 span 64-89% of the frame height at cols 40 and 63-86% at 44,",
+      "and the card's plate ends at 61%. The word enters from the bottom edge",
+      "as the camera pulls back (fully in frame from ~50s) and the card then",
+      "drops in above it, URL over word. Cols -13..15 centre it 1.3% right.",
+      "No hero window is inside the block, so nothing constrains the mask;",
+      "tamontage would print a WARNING if one were and disagreed."
+    ],
+    "text": {
+      "string": "IMPURE",
+      "clip": "big-battle",
+      "origin": [
+        -13,
+        5
+      ],
+      "gap": 1
+    }
+  },
+  "_captions": [
+    "The Card treatment: full-frame typographic cards, chosen from the five",
+    "prototype cuts on 2026-09-10. Claims are checked in the ta-video-montage",
+    "skill's table. Captions wrap and shrink to fit, so a long line is safe.",
+    "",
+    "Beat 1's card sits AFTER the terminal flips to the game (4.6s, not 1.2s):",
+    "over the terminal it covered the command and the lines it printed.",
+    "",
+    "The title card has fade_out 0 so it is at FULL opacity on the last frame. The last frame is t1 - 1/fps, so any fade-out leaves it mid-dissolve -- it shipped once at alpha 0.02, present in the file and invisible in every thumbnail and paused player."
+  ],
+  "captions": [
+    {
+      "t0": 7.82,
+      "t1": 12.02,
+      "text": "One command.",
+      "sub": "no menu, no map setup, no clicking",
+      "full": true,
+      "dim": 170
+    },
+    {
+      "t0": 18.0,
+      "t1": 22.6,
+      "text": "Every fight is a file.",
+      "sub": "edit it, commit it, re-run it",
+      "full": true,
+      "dim": 185
+    },
+    {
+      "t0": 29.0,
+      "t1": 33.5,
+      "text": "Run one",
+      "sub": "or as many as the machine will hold",
+      "full": true,
+      "dim": 185
+    },
+    {
+      "t0": 39.0,
+      "t1": 44.0,
+      "text": "Control units, spawn more on demand, send any command to a scenario as it runs.",
+      "full": true,
+      "dim": 195
+    },
+    {
+      "t0": 51.5,
+      "t1": 57.0,
+      "text": "tacli",
+      "sub": "github.com/Code-Herder/ta-impure-patch",
+      "big": true,
+      "fade_out": 0
+    }
+  ],
+  "terminal_style": "soft",
+  "_audio": [
+    "The soundtrack, laid over the finished cut by `--audio <file>`. The PATH is",
+    "not here on purpose: it would name someone's home directory, and the track is",
+    "licensed for use inside a work rather than for redistribution, so the file",
+    "never enters this repository. promo/MUSIC.md carries the full metadata and the",
+    "dispute answer if the video is ever content-matched.",
+    "",
+    "ALIGN THE MUSIC'S HIT TO THE FILM'S HIT, NOT THE FILE'S ENDS. The mp3 is",
+    "40.18s long but about 5s of that is digital silence: the music peaks at 31.5s",
+    "and its tail resolves by ~35s, which is why the source lists it as 0:36.",
+    "Aligning 57.0 - 40.18 = 16.82 put the peak at 48s and left the climax -- the",
+    "1600-window wide shot and the title card -- playing over dead air.",
+    "",
+    "start 20.0 lands the peak at 51.5s, exactly where the title card appears on",
+    "the full wall, and the tail resolves at ~55s under it. The ~20s of silence",
+    "before it is forced arithmetic, not taste: 35s of music cannot cover 57s of",
+    "film AND finish at the end. It falls over the opening, where one terminal",
+    "types one command, and that plays better dry anyway."
+  ],
+  "audio": {
+    "title": "Evening Melodrama",
+    "artist": "Kevin MacLeod",
+    "source": "https://incompetech.com/music/royalty-free/music.html",
+    "license": "CC BY 4.0",
+    "license_url": "http://creativecommons.org/licenses/by/4.0/",
+    "isrc": "USUAN1200049",
+    "track_seconds": 40.18,
+    "start": 19.9,
+    "fade_in": 0.8,
+    "fade_out": 0.0,
+    "gain_db": -2.0,
+    "credit": "\"Evening Melodrama\" Kevin MacLeod (incompetech.com)\nLicensed under Creative Commons: By Attribution 4.0 License\nhttp://creativecommons.org/licenses/by/4.0/",
+    "music_ends": 35.0,
+    "peak": 31.5,
+    "_keyboard": [
+      "The typing. `--keys <recording>` supplies a take of someone typing; it is",
+      "sliced into individual one-shots at render time and one is placed on each",
+      "keystroke. The PATH is an argument and never this file, for the same two",
+      "reasons as the music: it would name someone's home directory, and the",
+      "recording is licensed for use inside a work rather than for redistribution.",
+      "promo/MUSIC.md carries which recording and its licence.",
+      "",
+      "`windows` picks which terminals are heard. Only window 0 is: it types alone",
+      "on a silent desktop, and that is the shot the sound is for. Windows 1-3 would",
+      "put three keyboards on top of each other at 11-15.5s, which is a different",
+      "idea and needs deciding on its own.",
+      "",
+      "Each keystroke lands on the FRAME its glyph appears on, not at the analytic",
+      "instant: the renderer only samples the typing at frame times, so the analytic",
+      "time is up to 33ms early. Snapping is both the right sync and free jitter --",
+      "17 chars/s into 30fps gives 33 and 67ms gaps instead of a metronomic 59.",
+      "",
+      "Synthesised clicks were tried first and rejected by the only test that",
+      "counts: the owner listened to them. Real recordings, sliced, replaced them."
+    ],
+    "keyboard": {
+      "windows": [
+        0
+      ],
+      "gain_db": -5.0,
+      "spread": 0.3,
+      "seed": 20260911,
+      "pitch": 0.06
+    },
+    "_loop": [
+      "The cue extended so the music can enter at the first zoom-out instead of",
+      "22s. ONE join, in the flat body of the track, with a one-beat crossfade:",
+      "play 0 -> 21.48, jump back six bars to 9.018, play on to the end. Adds",
+      "12.43s minus the fade.",
+      "",
+      "`start` 19.9 is authored against the UNLOOPED track and is 22.0 - 2.1: a",
+      "six-bar loop alone reaches 9.6s, so the whole cue sits 2.1s earlier to meet",
+      "the zoom. The tail goes quiet at 53s instead of 55s -- a small price for a",
+      "single seam. The loop only extends the front, so tamontage subtracts its",
+      "measured length from `start` and nothing downstream moves: loudest second",
+      "45s either way.",
+      "",
+      "THIS CUE IS NOT LOOP MUSIC. Read the skill's 'Stretching music' section",
+      "before touching these numbers: four plans were built and rejected by ear",
+      "before this one, and the reasons are all measured there. In short -- never",
+      "loop the crescendo, never trust the stated tempo (2.0717s a bar, not",
+      "2.0870), never rely on 18ms fades, and the fewer joins the better. No two",
+      "bars of this piece correlate above 0.33 at the waveform, so a join is",
+      "hidden by a long fade, not by alignment."
+    ],
+    "loop": {
+      "crossfade_ms": 500,
+      "segments": [
+        [0.0, 21.48],
+        [9.018, null]
+      ]
+    }
+  }
+}

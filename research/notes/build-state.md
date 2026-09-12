@@ -513,12 +513,40 @@ commander or factory building it. Reported from play, reproduced on a scripted
   (`uNanoOn`, `uNanoT`, `uNanoC`), classifying by `vVY + 50` exactly as §1.2.
   An **erased fragment discards**, and that is a deliberate divergence — see
   the gap below.
-- **The wireframe** is a second line range per unit (`emit_wire`), every face of
-  every visible piece, in the second oscillator's colour, biased 0.15 depth-key
-  units nearer than the skin it traces (1.8 + 0.15 = 1.95 against the 2.0
-  half-gap between row keys — inside it, with 0.05 to spare). It is not
-  decoration: at the top of a build the recolour erases the whole model and the
-  skeleton is the only thing on screen.
+- **The wireframe** is a second line range per unit (since G16 step 8 the bake's
+  own `WIRE` range), every face of every visible piece, in the second
+  oscillator's colour, biased 0.15 depth-key units nearer than the skin it
+  traces (1.8 + 0.15 = 1.95 against the 2.0 half-gap between row keys — inside
+  it, with 0.05 to spare). It is not decoration: at the top of a build the
+  recolour erases the whole model and the skeleton is the only thing on screen.
+- **GAP — the wireframe is drawn at HALF the engine's intensity on the shipped
+  default, and has been all along** [MEASURED 2026-09-11]. It is `GL_LINES` with
+  `glLineWidth(ss)` in the main pass, and the driver clamps an aliased line to
+  one pixel *of the buffer it is drawn into* — the same fact the selection rect
+  ran into ([UI markers](ui-markers.html) §1) — so at the default `ss = 2` each
+  line is one SUPERSAMPLE wide and the box-downsample averages it with three
+  untouched samples. Nothing covers it: `selAt1x` defers the selection rect past
+  the resolve, the wireframe stays in the main pass.
+
+  Measured on three ARM nanoframes (30/45/60 % built) on Two Continents at
+  1024×768, sim paused at tick 287, `ss = 2` against `ss = 1` in the same run
+  (the colour is an index in `0xA0..0xAF` per unit, so a fully covered pixel is
+  exactly that palette entry and a partly covered one is not):
+
+  | | ss = 1 | ss = 2 |
+  |---|---|---|
+  | wire pixels at exactly the line's colour | 2214 | 394 (17.8 %) |
+  | coverage of a thin wire pixel, median | 1.000 by construction | **0.500** |
+  | …mean over the thin-wire samples | — | 0.39–0.44 per unit |
+
+  The 0.500 is not a coincidence: a line of *L* game pixels is 2*L* samples long
+  in a 2× buffer and still lights one sample per major-axis step, so the
+  coverage a game pixel receives is 2*L*/4 = *L*/2, exactly half, for any
+  direction. `ss = 1` is the control and matches the engine's own rule (the
+  engine draws the outline through `0x458FA0` into an 8-bit plane, where every
+  pixel it touches IS the index). The fix is the selection rect's — emit the
+  outline as geometry with a width — and the wire range is the posed program's,
+  not the shared stream's, so it is a second piece of work.
 - **Where the rest of this lives.** A factory's unit-in-progress is *carried*, and being carried
   is a separate axis from being a nanoframe: the attach/detach function, the guards it enforces,
   why a released unit appears to walk under the plant, and the A/B proving that is stock, are all

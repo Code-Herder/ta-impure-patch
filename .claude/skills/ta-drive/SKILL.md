@@ -202,6 +202,24 @@ That whole path — launch, the three clicks, the wait — is what `tacli scenar
 in one command, with the map and players from the file (see *Scenarios* below). Drive it
 by hand when you want the menus themselves; use `load` when you want the game.
 
+**Leaving a game for the main menu is four steps, and none of them is Esc.** The button
+that opens the exit menu sits on `ARMOPT.GUI`, which **Tab** raises over the world — not
+on the side panel, and not on the top bar (its `MOREBAR` row is collapsed, and at any HUD
+scale above 100 % the right of that bar is off-screen anyway). Esc in game does nothing
+at all: its code lands on the in-game dispatcher's default case. So:
+
+```bash
+tools/tacli keys t1 tab tab          # TWICE: a keys invocation drops its first token
+tools/tacli ui   t1 click EXIT       # ARMOPT.GUI -> EXITMENU.GUI
+tools/tacli ui   t1 click MAINMENU   # -> YESORNO.GUI, "Surrender this battle…?"
+tools/tacli keys t1 y y              # CHOICE1 — the click on it is unreliable, the key is not
+tools/tacli ui   t1                  # confirm: MAINMENU.GUI 640x480
+```
+
+The shell runs at **640×480** whatever the game ran at, so `tacli ui` reporting
+`MAINMENU.GUI 640x480` is how you know the level really tore down. `EXITMENU.GUI` also
+carries `RESTART`, `EXITGAME` (quit to the desktop) and `CANCEL`.
+
 Skirmish settings come from the registry, no clicking: `--map "Two Continents"`,
 `--player 2:2:1:1` (`N:controller[:side[:color[:metal[:energy]]]]`, controller 0=off
 1=human 2=AI, side 0=ARM 1=CORE; an empty field leaves that key alone, so `0:1::3` sets
@@ -1721,6 +1739,86 @@ tools/tacli scenario load <i> <scn> --mapping 0    # THE fixture: an unmapped ga
 - The dots, arcs and points are the engine's own pixels, not a replay: `+0x142DB` differs from
   `+0x142DF` exactly where one landed.
 
+### The HUD is scaled inside the Screen Size (G18f, `tagpu_hud.on`)
+
+Since G18f the in-game HUD is magnified **within** the player's chosen Screen Size — the panel
+`128s` wide, the two bars `32s` tall — and simply **covers** the outer part of a world the
+engine goes on drawing at full size. Auto is `H/480`: exactly 1.0 at 640×480, **2.25 at 1080p**
+and **4.5 at 4K**.
+
+**It is NOT a play default** — it is armed by hand. It was one for a day, and in that day it
+wrote the engine's viewport rect and tore the world in two (what you clicked was
+`((s−1)·128, (s−1)·32)` from what you saw); [GUI renderer](../../../research/notes/gui-renderer.md)
+§22.5 has the measurement. It writes no engine memory now.
+
+```bash
+tools/tacli arm <i> hud.off                 # stock HUD; the A/B, and what a 1x measurement needs
+tools/tacli arm <i> 'hud.on=scale=auto'     # Auto: the panel fills the screen height
+tools/tacli arm <i> 'hud.on=scale=150'      # a percentage of stock; clamped to this screen's ceiling
+tools/tacli log <i> -g '^hud:'              # one line at attach: ARMED/off, the centre-on observer, the stored percentage
+tools/tacli log <i> -g 'k=[0-9.]* s='       # the gui heartbeat carries s= beside k=
+```
+
+- **The lever file is read once, at attach.** The in-game row puts a change in force
+  immediately (the store writes the live word as well as the file), but `tacli arm` only writes
+  the file, so **arming it on a running instance does nothing until you relaunch**.
+- **640×480 is always stock**, because Auto's ceiling is 1.0 there, whatever `scale=` says.
+- **`L` and `T` must NEVER move; `R`/`B`/`viewW`/`viewH` must.** That split is the whole design
+  (gui-renderer 22.6), so it is the first thing to peek at:
+  `tacli peek <i> '*0x511DE8+0x37E27:4' '*0x511DE8+0x37E2B:4' '*0x511DE8+0x37E37:4' '*0x511DE8+0x37E3B:4'`
+  must read `128`, `32`, `W−128s`, `H−64s`. At 4K Auto: `128 32 3264 1872`. A moved `L` is the
+  withdrawn design and means a torn world.
+- **`tacli` coordinates are the ENGINE's, and at s > 1 that is NOT where the thing is drawn.**
+  The world is drawn shifted by `(128s−128, 32s−32)`, so `roster`'s `screen` — and `pmove:`,
+  `click`, `ui show` — are all in engine space and a screenshot will show the unit that vector
+  away. `dmove:`/`dclick:` speak device pixels and DO go through the map, so **a device click is
+  the only one that tests "what you click is what you see"**.
+- **The one check that catches a torn world**: take a unit's `screen` from `tacli roster`, add
+  the shift, and **click it in device space** — `keys <i> dclick:X+dx,Y+dy` then `order <i> --sel
+  stop`, which reports `1 issued` when it selected. Clicking the UNSHIFTED place must select
+  nothing. Use a click, not a hover: `main+0x2CBA` is refreshed by the engine's own GetCursorPos
+  polls and drifts back to the screen centre within a second of an injected move, so a hover read
+  a moment later is measuring the poll, not your point. A selection persists.
+- **`tacli click --device` and `ui click --device` were measured wrong at `s > 1`** before the
+  rebuild: they aimed where the gadget would be *unmagnified*. The engine-side conversion
+  (`mouse_client_to_game`) does apply the map — a raw `keys <i> dmove:X,Y` in device pixels is
+  correct, measured — so what is left is whichever of the two computes its own screen point,
+  and that has **not** been re-checked since. Until it is, multiply the
+  engine coordinate by `s` yourself: `ui <i> show <gadget>` gives the engine rect centre, and
+  the screen point is that times `s` in the panel and the top bar, and
+  `H − (H − y)·s` for y in the bottom bar. `uiwalk.py`'s per-stop hit check has the same gap,
+  so **run it with `hud.off`**.
+- **Every other injected click is unaffected** — `tacli click`, `ui click`, `order`, `eye` all
+  speak the engine's own coordinates and never touch the map. Only the `--device` path does.
+- **Reading the pointer back is the cheapest check that the map is right**:
+  `tacli keys <i> dmove:X,Y` then peek `*0x511DE8+0x2C76:4` / `+0x2C7A:4` (the engine's point)
+  and `+0x2CC6:1` (bit0 minimap, bit1 world). At `s = 2.25`, screen (140,140) must read
+  engine (62,62) flags 5, and screen (960,600) must read (960,600) flags 6 — the world region
+  is the identity at every scale. **`dmove:` is device pixels; `pmove:` is the engine's own
+  coordinates** and does not go through the map at all, so `pmove` over a magnified HUD region
+  aims at the 1× grid, which is a different point from the one under your finger.
+- **Three ways of driving the CAMERA do not work through the harness**, all of them with the
+  pass on *or* off, so none is a HUD symptom (measured 2026-09-11/12): injected band-select
+  (`down:lbutton` / `mouse:x,y` / `up:lbutton`) selects nothing; arrow keys do not scroll; and
+  an injected `click` on the minimap — at the engine coordinates `main+0x142BB` itself reports —
+  does not move the camera. **To move the camera, use `tacli eye`**, and note it clamps its own
+  x argument at 0, so it cannot test a negative eye. To test a camera BOUND, pin past the edge
+  and release: `tacli eye <i> <x> <y>` then `tacli eye <i> --release`, then peek
+  `*0x511DE8+0x1431F:4` / `+0x14323:4`.
+- **`--res` does not always reach the game.** The in-game resolution is the Screen Size
+  (`main+0x37F1B/+0x37F1F`), and `tacli` records the resolution the game actually came up at —
+  so once it drops, the next launch re-applies the dropped value and it is sticky. Symptom: you
+  ask for 3840x2160 and `hud:`/the rect say 1024x768. Fix by editing `res` in the instance's
+  `instance.json` before launching, or drive Screen Size from Options > Visuals.
+- **`--shield on` is not a flag** — it is bare `--shield` (and `--no-shield`). `--shield on`
+  makes the whole launch fail, and because `tagpu.log` is only truncated by a launch that
+  succeeds, the log still holds the PREVIOUS run and reads exactly like a healthy one. Check the
+  `launched <name> pid=` line is actually there before you believe an arm list.
+- **A cross-build pixel A/B must state which band it is diffing.** At `s = 1` the panel, top
+  bar and bottom bar are byte-identical by construction (nothing is written, the shader takes
+  the identity path); the world is relaunch noise, and on `selbox-facings` that floor is
+  ~3800 px at 1080p — bigger than most differences worth chasing. Diff the bands separately.
+
 ### Driving and measuring at k != 1 (phase 2, G17b)
 
 ```bash
@@ -1756,8 +1854,23 @@ tools/tacli ui <i> click SINGLE --device                   # aim where the gadge
   so the composite downsamples rather than nearest-stretching. The native log line carries
   `devres=` beside `ss=`. It is not the default because a selection rect drawn in an `ss` buffer
   is one *supersample* wide (the driver clamps aliased line width to 1), which under `devres`
-  reaches the screen thinner and dimmer than the engine's — that wants the rects drawn as real
-  geometry first.
+  reaches the screen thinner and dimmer than the engine's.
+- **`tagpu_selgeom.on` is the answer to that, and the second lever to arm under `devres`.** It
+  draws the rect as two triangles per edge instead of `GL_LINES`, a band of `w` GAME pixels
+  (`arm <i> 'selgeom.on=w=2'`, default 1; `wdev=` states it in device pixels). At `k = 1.5` the
+  rect then reaches full colour — 1019 device pixels at ≥ 0.9 coverage against the line path's 5
+  — and at 1:1 it is **bit-identical**, so the parity md5 does not move (measured 2026-09-11 at
+  `ss = 1`, `ss = 2`, zoom 0.5 and 2.0). The native log line carries
+  `selgeom=<w>gpx@1x|@ss` whenever it is armed, and `selgeom.on=main` turns the 1x detour off
+  (the A/B for whether that apparatus is still owed — it is: 1320 px at `ss = 2`).
+- **A/B-ing the rect needs a fixture that is frozen without pausing.** `tacli keys <i> tab` opens
+  the in-game menu and writes PAUSED across the middle of the viewport, over whatever is there.
+  Still tanks on `Two Continents` settle by themselves: `scenarios/selbox-facings.json` and
+  `selbox-slope.json` both reach a **0-pixel noise floor** within a few seconds and reproduce the
+  same md5 across relaunches. Two things still move in a "static" frame — the **cursor sprite**
+  animates wherever it is parked (exclude its rect, as `uiwalk` does), and at zoom < 1 a stray
+  animating feature can come into view (mask it). Band-select with
+  `keys <i> mouse:X,Y down:lbutton mouse:… up:lbutton`; there is no `tacli select`.
 
 ### The Q2 diff — is the restored UI right? (G15e)
 

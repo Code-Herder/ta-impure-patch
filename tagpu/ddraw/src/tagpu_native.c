@@ -94,6 +94,7 @@
 #include "tagpu_gui.h"       /* tagpu_gui_cursor_own: whose cursor is on screen (G17c) */
 #include "tagpu_pal.h"       /* the palette the screen is SHOWN with, not main+0x143A7 */
 #include "tagpu_vpwide.h"
+#include "tagpu_hud.h"
 #include "tagpu_shadow.h"    /* Classic++ cast shadows: the depth pass + read-back (G14i) */
 
 /* ---- engine layout (all binary-verified in earlier phases) ---- */
@@ -330,6 +331,21 @@ static GLuint s_prog, s_vao, s_vbo, s_fbo, s_colTex, s_depTex, s_palTex;
 #define TAGPU_SS_MAX 4                 /* the most we will supersample by (G17b) */
 static int    s_devres = 0;            /* the world at device res — OPT IN, tagpu_devres.on */
 static int    s_devresFailed = 0;      /* the driver refused the supersampled target: stay down */
+/* ---- the selection rect as GEOMETRY, not GL_LINES (OPT IN, tagpu_selgeom.on) ----
+   A GL line is one pixel wide IN THE BUFFER IT IS DRAWN INTO and the driver
+   clamps an aliased line's width to 1 (measured: `glLineWidth(ss*3)` draws
+   pixel-identically to `glLineWidth(ss)`), so the width is not ours to set and
+   any buffer that is not the game's own resolution draws the rect at the wrong
+   one. Armed, each edge is emitted as two triangles instead, with a width WE
+   choose. Tokens in the trigger file:
+     w=<n>     the width in GAME pixels (default 1 — the engine's own rule)
+     wdev=<n>  the width in DEVICE pixels instead, converted by k = vp_w / gw
+     main      draw in the main pass even when the 1x resolve exists, i.e. turn
+               `selAt1x` off — the A/B for whether that apparatus is still owed */
+static int    s_selgeom = 0;
+static float  s_selgeomW = 1.0f;
+static int    s_selgeomDev = 0;
+static int    s_selgeomMain = 0;
 static GLuint s_fogTex, s_fogLutTex, s_cprog, s_cvao, s_cvbo;
 static GLuint s_fbo2, s_colTex2, s_depTex2, s_dprog;
 static GLint  s_uGame, s_uShadow, s_uAlpha, s_uFog, s_uFogOrg, s_uFogDim,
@@ -2015,11 +2031,40 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            downsample, so the rects would reach the screen thinner and dimmer
            than the engine's (about 0.75 of a device pixel at k = 1.5) while
            everything else got sharper. Two landing reviewers found this
-           independently. `tagpu_devres.on` is how it was measured; making it
-           the default waits on drawing the rects as real geometry with a
-           width, which is its own piece of work. */
+           independently. `tagpu_devres.on` is how it was measured.
+           `tagpu_selgeom.on` is the width the rect was waiting for — at k = 1.5
+           it then reaches full colour, 1019 device pixels at >= 0.9 coverage
+           against the GL line's 5 [MEASURED 2026-09-11] — but it is opt-in too,
+           so arming devres alone still gets the thin rect and the pair have not
+           been a default together yet. */
         s_devres = !s_devresFailed &&
                    (GetFileAttributesA("tagpu_devres.on") != INVALID_FILE_ATTRIBUTES);
+        /* ...and the rect-as-geometry trigger, on the same poll. Not in
+           tagpu_opt.c's table on purpose: this is an A/B against the shipped
+           path, not a play default, so only the file arms it. */
+        {
+            char sg[96];
+            int sn = tagpu_opt_read("tagpu_selgeom.on", sg, sizeof sg);
+            s_selgeom = (sn >= 0);
+            s_selgeomW = 1.0f; s_selgeomDev = 0; s_selgeomMain = 0;
+            if (sn > 0) {
+                char* p = sg;
+                while (*p) {
+                    char* q = p;
+                    while (*q && *q > ' ') q++;
+                    if (*q) *q++ = 0;
+                    if (!lstrcmpiA(p, "main")) s_selgeomMain = 1;
+                    else if (!strncmp(p, "w=", 2))    { s_selgeomW = (float)atof(p + 2); s_selgeomDev = 0; }
+                    else if (!strncmp(p, "wdev=", 5)) { s_selgeomW = (float)atof(p + 5); s_selgeomDev = 1; }
+                    while (*q && *q <= ' ') q++;
+                    p = q;
+                }
+                /* a width of zero or worse would emit degenerate quads and draw
+                   nothing at all: keep it inside what a marker can sensibly be */
+                if (!(s_selgeomW > 0.05f)) s_selgeomW = 1.0f;
+                if (s_selgeomW > 16.0f)    s_selgeomW = 16.0f;
+            }
+        }
         s_subpix = (GetFileAttributesA("tagpu_subpix.off") == INVALID_FILE_ATTRIBUTES);
         s_spxlog = (GetFileAttributesA("tagpu_spxlog.on")  != INVALID_FILE_ATTRIBUTES);
         s_nano   = (GetFileAttributesA("tagpu_nano.off")   == INVALID_FILE_ATTRIBUTES);
@@ -2671,6 +2716,27 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             devres = 1;
         }
     }
+    /* the rect's own path, snapshotted beside ss for the same reason: the
+       gather decides how many vertices an edge is worth and the draw decides
+       what primitive to read them as, and the two must not disagree inside one
+       frame. `selW` is a width in GAME pixels whatever the trigger said, which
+       is the one unit both the 1x buffer and an ss buffer can be expressed in. */
+    int   selgeom = s_selgeom;
+    float selW    = s_selgeomW;
+    if (selgeom && s_selgeomDev)
+        selW = (gw > 0 && f->vp_w > 0) ? s_selgeomW * (float)gw / (float)f->vp_w
+                                       : s_selgeomW;
+    /* WHICH BUFFER THE RECT LANDS IN IS DECIDED HERE TOO, for the same reason
+       `ss` is: the gather needs it (a quad's tie bias is a fraction of a pixel
+       of the buffer it is rasterised into) and so does the draw, and the two
+       reading it from different expressions is how a pass drifts. The comment
+       by the draw carries the history: `selAt1x` defers the rect past the box-
+       downsample, into the 1x FBO where a GL line IS the engine's one-whole-
+       pixel-per-step rule. `selgeom main` turns it off so the main pass at `ss`
+       can be compared against it directly. */
+    int selAt1x = (!devres && ss > 1 && x_glBlitFramebuffer != NULL &&
+                   !(selgeom && s_selgeomMain));
+    int selSS   = selAt1x ? 1 : ss;      /* samples per game pixel where it lands */
 
     /* ---- effects gather (projectiles, explosions, debris, particles) ---- */
     TAGPU_FXVIEW fv;
@@ -2970,10 +3036,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* ---- native selection rects (ui-markers: the ONLY marker interleaved
        with unit draws — the engine's is unreadable under our pixels, redraw
        it): flat model-XZ AABB rect at lowest model Y, rotated by body yaw,
-       GUI colour 0xA, drawn as GL_LINES at just-under-the-unit depth ---- */
+       GUI colour 0xA, at just-under-the-unit depth — as GL_LINES, or as two
+       triangles per edge under `tagpu_selgeom.on` (the width the driver will
+       not give us; see the comment inside the loop) ---- */
     int lineStart = nv, selDrawn = 0, selNone = 0;
+    int selVerts = selgeom ? 24 : 8;      /* 4 edges: two triangles each, or one line */
     if (nsel) {
-        for (i = 0; i < nu && nv + 8 <= MAXNV; i++) {
+        for (i = 0; i < nu && nv + selVerts <= MAXNV; i++) {
             if (!units[i].sel) continue;
             /* NOT A SHORTFALL, and the two cases are not the same.
 
@@ -3067,13 +3136,116 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 }
             }
             float enc = encb[i] - 0.5f;
+            /* The edge positions, as this frame's primitive wants them: eight
+               endpoints for GL_LINES, or 24 triangle corners for the geometry
+               path. Built first, written into the stream once, so the fourteen
+               per-vertex fields below are spelled out in exactly one place.
+
+               THE GEOMETRY PATH EXPANDS ALONG THE MINOR AXIS, NOT THE
+               PERPENDICULAR, and that is what makes it the engine's own rule
+               rather than a lookalike. Bresenham (0x4BE950) puts exactly ONE
+               fully-coloured pixel on each major-axis step, so its perpendicular
+               thickness is cos(theta) of a pixel, not a pixel — a 45-degree edge
+               is 1/sqrt(2) across. A band offset by +-w/2 along the true
+               perpendicular is a uniform w across and therefore covers up to
+               sqrt(2) pixels per step on a diagonal: a thicker line than the
+               engine's, and one that cannot reproduce today's frame. Offset
+               along the minor axis instead and each major-axis step is covered
+               by exactly one pixel of the band, at any width and any scale.
+
+               The caps are extended by the same half-width so that the corner
+               pixel — which is a sample lying exactly ON the end cap, the
+               endpoints being pixel centres — is inside the quad rather than on
+               its edge, where the fill rule would keep it or drop it depending
+               on which way round the edge runs. The rect is a closed loop, so
+               a corner covered by both of its edges is covered once in the
+               frame regardless: the colour is opaque and every vertex of the
+               rect carries the same depth key.
+
+               AND THE BAND IS NUDGED BACK ALONG ITS MINOR AXIS BY ONE 256th OF
+               A PIXEL, which is what takes the rasteriser's FILL RULE out of
+               the answer. Every corner is a pixel CENTRE and the default
+               half-width is half a pixel, so wherever the band's centre passes
+               exactly through a pixel corner both of its long edges land
+               exactly ON pixel centres, and whether such a sample is covered is
+               a rule the GL spec leaves to the implementation: this one
+               resolves it towards the larger coordinate, GL's own line
+               rasteriser rounds the same tie towards the smaller. Nudge the
+               band back by less than a subpixel step and every sample is
+               strictly inside or strictly outside, so only the arithmetic
+               decides. It is worth exactly the ties and nothing else, measured
+               on the sixteen-facing sweep at 1024x768 [2026-09-11]: 6 differing
+               pixels without it, 0 with it, and 6 again at 1/64 and 77 at 1/16,
+               where the nudge starts moving samples that were never ties (the
+               smallest honest margin on a box this size is about 1/80 of a
+               pixel). A rasteriser with fewer than 8 subpixel bits rounds the
+               nudge away and lands back on those 6 — it degrades to the fill
+               rule, it does not break. */
+            float qx[24], qy[24];
+            int nq = 0;
+            if (selgeom) {
+                /* half the width, in aPos units. The vertex stage scales aPos
+                   by uZoom and the viewport puts `ss` samples on a game pixel,
+                   so a half-width of selW/2 game pixels is selW/(2*uZoom) here
+                   and comes out selW game pixels across in ANY buffer. */
+                float zdiv = (s_zoom > 0.0f) ? s_zoom : 1.0f;
+                float hw = 0.5f * selW / zdiv;
+                /* one 256th of a pixel OF THE BUFFER THIS LANDS IN: one aPos
+                   unit is selSS * uZoom pixels there */
+                float bias = -(1.0f / 256.0f) / ((float)selSS * zdiv);
+                for (k = 0; k < 4; k++) {
+                    int k2 = (k + 1) & 3, t2;
+                    float axp = px[k],  ayp = py[k];
+                    float bxp = px[k2], byp = py[k2];
+                    float dx = bxp - axp, dy = byp - ayp;
+                    float adx = fabsf(dx), ady = fabsf(dy);
+                    float maj = (adx >= ady) ? adx : ady;
+                    /* THE CAP RUNS ALONG THE SEGMENT, not along the major axis
+                       alone. Extending purely along it lengthens the major
+                       component and leaves the minor one, which TILTS the two
+                       long edges: the band's centre line then has slope
+                       dy/(dx+2*hw) instead of dy/dx and wanders up to half a
+                       pixel away from the segment in the middle of a long edge.
+                       That is a wrong line, not a tie, and it was worth 39 of
+                       the facing-200 box's pixels [MEASURED 2026-09-11]. */
+                    float s  = (maj > 0.0f) ? hw / maj : 0.0f;
+                    float ex = dx * s, ey = dy * s;
+                    float ox, oy, bx = 0.0f, by = 0.0f;
+                    if (adx >= ady) {                  /* x-major: band in y   */
+                        ox = 0.0f; oy = hw;
+                        by = bias;
+                    } else {                           /* y-major: band in x   */
+                        ox = hw; oy = 0.0f;
+                        bx = bias;
+                    }
+                    {
+                        const float cx4[4] = { axp - ex - ox + bx, bxp + ex - ox + bx,
+                                               bxp + ex + ox + bx, axp - ex + ox + bx };
+                        const float cy4[4] = { ayp - ey - oy + by, byp + ey - oy + by,
+                                               byp + ey + oy + by, ayp - ey + oy + by };
+                        static const int TRI[6] = { 0, 1, 2, 0, 2, 3 };
+                        for (t2 = 0; t2 < 6; t2++) {
+                            qx[nq] = cx4[TRI[t2]]; qy[nq] = cy4[TRI[t2]]; nq++;
+                        }
+                    }
+                }
+            } else {
+                for (k = 0; k < 4; k++) {
+                    int k2 = (k + 1) & 3, t2;
+                    for (t2 = 0; t2 < 2; t2++) {
+                        qx[nq] = t2 ? px[k2] : px[k];
+                        qy[nq] = t2 ? py[k2] : py[k];
+                        nq++;
+                    }
+                }
+            }
             selDrawn++;
-            for (k = 0; k < 4; k++) {
-                int k2 = (k + 1) & 3, t2;
-                for (t2 = 0; t2 < 2; t2++) {
+            {
+                int t2;
+                for (t2 = 0; t2 < nq; t2++) {
                     float* o = s_verts + nv * NVST;
-                    o[0] = t2 ? px[k2] : px[k];
-                    o[1] = t2 ? py[k2] : py[k];
+                    o[0] = qx[t2];
+                    o[1] = qy[t2];
                     o[2] = enc;
                     o[3] = -1.0f; o[4] = -1.0f;                 /* flat path  */
                     o[5] = (float)*(unsigned char*)(ta + OFF_GUICOL + SELBOX_COLIDX)
@@ -3382,8 +3554,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        without supersampling, and then this draws it here as before. */
     /* the 1x selection-rect path draws OVER the resolved frame, so it exists
        only when there is one: under `devres` the rects are drawn in the main
-       pass at ss, which is what the ss == 1 path has always done */
-    int selAt1x = (!devres && ss > 1 && x_glBlitFramebuffer != NULL);
+       pass at ss, which is what the ss == 1 path has always done. `selAt1x` is
+       decided up beside `ss` — the gather reads it too. */
     glUniform1i(s_uNanoOn, 0);
     if (lineEnd > lineStart && !selAt1x) {
         glUniform1i(s_uFog, fogMode & 1);
@@ -3393,8 +3565,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         x_glUniform1f(s_uWaterT, -1e9f);
         x_glUniform1f(s_uDigT, -1e9f);
         glUniform1i(s_uWaterMode, 0);
-        if (x_glLineWidth) x_glLineWidth((GLfloat)ss);
-        x_glDrawArrays(GL_LINES, lineStart, lineEnd - lineStart);
+        if (selgeom) {
+            x_glDrawArrays(GL_TRIANGLES, lineStart, lineEnd - lineStart);
+        } else {
+            if (x_glLineWidth) x_glLineWidth((GLfloat)ss);
+            x_glDrawArrays(GL_LINES, lineStart, lineEnd - lineStart);
+        }
     }
 
     /* shadow first (engine order), only when options allow; per unit so an
@@ -3659,8 +3835,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                fragments are already 1x, so it is 1 here, not ss. The next
                frame sets it back with the rest of the pass's uniforms. */
             x_glUniform1f(s_uSS, 1.0f);
-            if (x_glLineWidth) x_glLineWidth(1.0f);
-            x_glDrawArrays(GL_LINES, lineStart, lineEnd - lineStart);
+            if (selgeom) {
+                x_glDrawArrays(GL_TRIANGLES, lineStart, lineEnd - lineStart);
+            } else {
+                if (x_glLineWidth) x_glLineWidth(1.0f);
+                x_glDrawArrays(GL_LINES, lineStart, lineEnd - lineStart);
+            }
             x_glDisable(GL_DEPTH_TEST);
             if (x_glDepthMask) x_glDepthMask(GL_TRUE);
             if (x_glScissor) x_glDisable(GL_SCISSOR_TEST);
@@ -3670,8 +3850,35 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
 
     /* ---- composite over the frame (restore the letterbox viewport) ---- */
+    /* HUD SCALE (tagpu_hud.h, gui-renderer.md 22.6) SHIFTS EXACTLY THIS DRAW,
+       and nothing else in the pass. Everything above renders the world in the
+       ENGINE's own screen coordinates, about the baked 0x80/0x20 origin, into
+       our own target -- and it must keep doing that, because the engine's hit
+       tests and every projection in the fork agree on that origin. What moves
+       is where that finished block lands on the frame: the engine's viewport
+       is now the visible WINDOW, so the block belongs inset by what the HUD
+       covers.
+
+       ONE draw rather than a uniform in each world shader, and it has to be
+       here rather than around tagpu_native_frame as a whole: the passes above
+       set their own viewports (the shadow map, the supersampled target), so an
+       outer bracket is overwritten before the first triangle. Measured that way
+       round first -- the world came out short on the right and bottom by
+       exactly the shift, which is what an unshifted block under a shrunken
+       viewport looks like.
+
+       The shift is in the frame's own pixels, so it follows the letterbox and
+       any window scale; at stock it is (0,0) and glViewport is handed exactly
+       what it was handed before. */
     int keyOn = -1;
-    glViewport(f->vp_x, f->vp_y, f->vp_w, f->vp_h);
+    {
+        int hdx = 0, hdy = 0;
+        if (tagpu_hud_shift(&hdx, &hdy) && gw > 0 && gh > 0) {
+            hdx = hdx * f->vp_w / gw;
+            hdy = hdy * f->vp_h / gh;
+        } else { hdx = hdy = 0; }
+        glViewport(f->vp_x + hdx, f->vp_y - hdy, f->vp_w, f->vp_h);
+    }
     glUseProgram(s_cprog);
     glBindVertexArray(s_cvao);
     glEnable(GL_BLEND);
@@ -3768,6 +3975,14 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         badmodel[0] = 0;
         if (s_badModelId)
             _snprintf(badmodel, sizeof badmodel, " BADMODELID=%u", s_badModelId);
+        /* the rect's path, printed only when it is not the shipped one — an
+           A/B flips a trigger file and has to be able to see that the flip
+           reached the render thread before it believes a pixel diff */
+        char selg[48];
+        selg[0] = 0;
+        if (selgeom)
+            _snprintf(selg, sizeof selg, " selgeom=%.2fgpx%s%s", selW,
+                      s_selgeomDev ? "/dev" : "", selAt1x ? "@1x" : "@ss");
         /* Frames the selection rects went back to the engine wholesale. Same
            rule as BADMODELID: printed only when it has happened, because a
            frame of the engine's own boxes at the unzoomed projection is a
@@ -3784,10 +3999,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         char lerp[64];
         tagpu_lerp_stats(lerp, sizeof lerp);
         _snprintf(b, sizeof b,
-                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d devres=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d reread=%u%s%s%s%s%s%s",
+                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d devres=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d reread=%u%s%s%s%s%s%s%s",
                   nu - nwr, nwr, nsel, nmark, nslant, nwire, nv, gw, gh, ss, devres, s_subpix, scafOn, fogMode,
                   lostype, s_fogLut, keyOn, s_reread,
-                  bake, posed, lerp, badmodel, handback, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
+                  selg, bake, posed, lerp, badmodel, handback, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
         b[sizeof b - 1] = '\0';        /* _snprintf does not terminate a truncation */
         nlog(b);
         s_reread = 0;

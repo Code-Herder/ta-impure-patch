@@ -68,7 +68,7 @@ GUI0IDControl*  ctrl = top->ControlsAry;                 /* top + 0x04 */
 |---|---|---|
 | `+0x00` | `per_active` → the GUI **below** this one (LIFO stack link) | [BINARY-VERIFIED] `0x4A969B` |
 | `+0x04` | `ControlsAry` → panel record, gadgets follow | [BINARY-VERIFIED] `0x4AB06B`, `0x49FE7D` |
-| `+0x08` | `OnCommand` — `__stdcall void(GUIInfo*)`; reads the actuated index from `gi->UIChange_f`, **not** an argument | [BINARY-VERIFIED] `0x4A967F` |
+| `+0x08` | `OnCommand` — `__stdcall void(GUIInfo*)`; reads the actuated index from `gi->UIChange_f`, **not** an argument, **and writes its answer back to the same field** (clear it to `-1` or the pump pops the screen — see §1.3) | [BINARY-VERIFIED] `0x4A967F`, `0x4AA790` |
 | `+0x10` | flags (bit `0x800` re-runs a stage on pop) | [BINARY-VERIFIED] `0x4A96B7` |
 | `+0x14` | `Active_b` — set to 1 on the GUI newly exposed by a pop | [BINARY-VERIFIED] `0x4A96A7` |
 | `+0x4F` | `GUIName[16]` | [CORPUS] |
@@ -79,7 +79,7 @@ GUI0IDControl*  ctrl = top->ControlsAry;                 /* top + 0x04 */
 |---|---|---|---|
 | `+0x18` | `main+0x531` | `TheActive_GUIMEM` (topmost = the only interactive screen) | [BINARY-VERIFIED] |
 | `+0x3C` | `main+0x555` | cursor / rect block, 6 dwords; `[0]`,`[1]` are the pointer x,y | [BINARY-VERIFIED] `0x49FD20` |
-| `+0x60` | `main+0x579` | `UIChange_f` — index of the last actuated gadget, or `-1` | [BINARY-VERIFIED] `0x4A9673`, `0x4AB0A4` |
+| `+0x60` | `main+0x579` | `UIChange_f` — index of the last actuated gadget, or `-1`. **Bidirectional**: the pump writes the index before calling `OnCommand` (`0x4AA675`) and reads it back after (`0x4AA79A`) to decide whether the screen handled the click or should be popped | [BINARY-VERIFIED] `0x4A9673`, `0x4AB0A4`, `0x4AA675`/`0x4AA79A` |
 | `+0x64`, `+0x68` | | reset to `-1` alongside `UIChange_f` on pop (focus/hot, [INFERRED]) | [BINARY-VERIFIED] reset only |
 
 ### 1.3 The stack is real
@@ -93,6 +93,16 @@ marks the newly exposed GUI active (`+0x14 = 1`) and frees the old one via `0x4D
 `while (main+0x531) { if (IsOnTop(gi, main+0x37EA0)) break; GUI_Pop(gi); }` — popping
 until the expected in-game screen (name held at `main+0x37EA0`) is on top.
 [BINARY-VERIFIED]
+
+**But `GUI_Pop` is not the only way off the stack, and watching it is not enough**
+[VERIFIED 2026-09-11]. The GUI pump carries its own **inlined copy** of that whole body at
+`0x4AA7BC..0x4AA7FA` — same lock pair, same stage 2, same relink, same `0x4D85A0` free — and
+runs it whenever a click's handler returns with `gi->UIChange_f` still set. An observer armed
+on `0x4A9660` never fires for it, so a screen can vanish with the pop apparently never
+happening. See *The pump's dispatch contract* in
+[exe-reverse-engineering](exe-reverse-engineering.html): clearing `UIChange_f` — the engine's
+own setter is `0x4AB0A0(gi)` — is how a handler says it consumed the click, and leaving it
+set is a request to be popped.
 
 **Consequence for tooling:** only the top GUI is interactive. A snapshot should report the
 top screen's gadgets in full and the names beneath it as a breadcrumb — listing covered
@@ -260,6 +270,25 @@ unnamed `id 1` buttons per slider at load (`0x4A8663`–`0x4A8979`), copying the
 by **attribs bits, not position**: `0x1800` marks a scroll arrow at all, `0x1000` is
 up/left (attribs exactly `0x3400`), `0x0800` is down/right (`0x2C00`) — read at
 `0x4A6F97`/`0x4A6FE8`. [BINARY-VERIFIED]
+
+**And an arrow finds its slider by `assoc`, FIRST MATCH WINS** [VERIFIED 2026-09-11].
+`0x4A6FA4` takes the arrow's own `assoc` byte and scans the array from record 1 for the
+first `id == 4` whose `assoc` equals it:
+
+```asm
+4a6fa4:  mov   cl,[ebp+0x01]       ; the arrow's assoc
+4a6fc0:  cmp   BYTE PTR [eax],0x4  ; an id=4 slider?
+4a6fc5:  cmp   BYTE PTR [eax+1],cl ; with my assoc?
+4a6fc8:  je    0x4a6fd6            ; -> mine
+4a6fca:  inc   esi / add eax,0x15b / loop
+4a6fd4:  xor   esi,esi             ; no match -> gadget 0, the panel
+```
+
+**So two sliders on one screen MUST have different `assoc`**, or both arrow pairs drive
+whichever is emitted first. `VISUALS.GUI` ships `GAMMA` at `assoc 0` and `VIDSLDR`,
+`VIDVAL` and `VIDTEXT` at `assoc 243` for exactly this reason. A screen that re-emits the
+file and flattens the field gets a Screen Size arrow that moves Gamma — and no fault,
+because the miss at `0x4A6FD4` falls back to gadget 0 rather than running off the array.
 
 **A click on an arrow moves `knobpos` by one *pixel*, not one row** (`0x4A7006`,
 `0x4A7018`), and the row only follows through the `round(maxtop * knobpos / (range-1))`
@@ -658,7 +687,19 @@ an `id=12` names a frame inside it, falling back to the shared `commongui` bank.
 is the clean case: its `id=12` is `OPTBG` and `anims/armopt.gaf` holds exactly `OPTBG`.
 `PREFS.GUI`'s `IGOPT` comes from `commongui` while its own `prefs.gaf` holds `PREFSBG`, and
 `VISUALRT` has no `anims/visualrt.gaf` at all. Full reading, and the bank layout
-`0x4B8D40` walks: [engine map](exe-reverse-engineering.html) *A screen's own GAF*.
+`0x4B8D40` walks: [engine map](exe-reverse-engineering.html) *A screen's own GAF*. The two
+instructions that build the path are **`0x4A8537`** (`strncpy` of `ControlsAry[0].name` into
+`anims\…`) and **`0x4A8565`** (the extension), so the name that decides the file is the one
+`GUI_Load` stamped and nothing else. [VERIFIED 2026-09-11]
+
+**`GUI_Load`'s flag `0x200` is MERGE, and a merged file is not a screen of its own**
+[VERIFIED 2026-09-11]. `0x4AAA2F` branches on it; `0x4AAA31` then parses the file straight into
+the tail of the CURRENT top screen's array (`edi = gi->TheActive_GUIMEM`,
+`ebp = ctrls + (count+1)*0x15B`), sums the counts into `ctrls+0xB6` (`0x4AABE6`), skips the
+stack push entirely (`0x4AAC54`) and stamps the LOADED file's name over `ControlsAry[0].name`
+(`0x4AAC98`). That is how `0x45E5E0` composes the front end's option screens: STARTOPT.GUI is
+pushed with flags `0x80`, then VISUALS.GUI is merged into it with `0x200`, so the one
+GUIMEMSTRUCT `tacli ui` reports as `VISUALS.GUI` holds STARTOPT's tabs **and** the visual rows.
 
 The panel itself is `id=0` at `xpos=128 ypos=128`, `150×352` — over the world, hard
 against the side panel, which is the rect every in-game options screen uses.

@@ -15,8 +15,15 @@
 #include "debug.h"
 #include "versionhelpers.h"
 #include "tagpu_shield.h"
+#include "tagpu_menu.h"
 #include "tagpu_zoom.h"
+#include "tagpu_hud.h"
 
+
+/* tagpu: whether a TME_LEAVE request is outstanding. Window-thread only — this
+   wndproc is the only reader and the only writer, and it runs on the thread
+   that owns the window. See the WM_MOUSELEAVE case. */
+static BOOL s_track_leave;
 
 LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
@@ -47,6 +54,11 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     LRESULT shielded = 0;
 
     if (tagpu_shield_wndproc(hWnd, uMsg, wParam, lParam, &shielded))
+        return shielded;
+
+    /* the render-options screen's WINDOW rows: posted from the click, applied
+       here so the window is changed on the thread that owns it */
+    if (tagpu_menu_wndproc(hWnd, uMsg, wParam, lParam, &shielded))
         return shielded;
 
     switch (uMsg)
@@ -127,6 +139,8 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                     x = (DWORD)(roundf(x * g_ddraw.mouse.unscale_x));
                     y = (DWORD)(roundf(y * g_ddraw.mouse.unscale_y));
                 }
+
+                tagpu_hud_to_engine(&x, &y);    /* winapi_hooks.c fake_GetCursorPos */
 
                 pt.x = min(x, g_ddraw.width - 1);
                 pt.y = min(y, g_ddraw.height - 1);
@@ -673,6 +687,36 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     case WM_MOUSELEAVE:
     {
         //mouse_unlock();
+        /* tagpu: THE POINTER CAN LEAVE THIS WINDOW, and when it does the engine
+           is left holding the last point it was told — which is, by definition,
+           a pixel on the client area's border. TA's scroll poll fires on an
+           exact equality with the outermost pixel (exe map, "The scroll poll"),
+           so the camera then scrolls that way FOR EVER, with nothing to stop it
+           and no pointer in the window to explain it; the scroll tail also
+           releases any camera follow (`0x41D091`), so a Ctrl+C snap is undone
+           in the same frame it happens. Reported from play at 4K fullscreen,
+           2026-09-12: "it keeps trying to pan to the left."
+           `mouse_lock()` would have fenced the pointer in, but tacli runs with
+           `tagpu_nowarp.on` precisely so the game never fences or warps a
+           pointer the human is also using (mouse.c), and a borderless fullscreen
+           window on a multi-monitor desktop has a live desktop on the other side
+           of every edge. So the fix is to answer the engine with the point the
+           fork already answers for a pointer outside the viewport — the centre
+           of its own screen (mouse_client_to_game) — the moment the pointer
+           leaves. Event-driven, not polled: the invariant is that the engine's
+           cursor is on a border pixel only while the pointer really is. */
+        s_track_leave = FALSE;
+        if (g_mouse_locked && !g_config.devmode && g_ddraw.width && g_ddraw.height)
+        {
+            int cx = (int)g_ddraw.width / 2, cy = (int)g_ddraw.height / 2;
+
+            mouse_forget_client();
+            InterlockedExchange((LONG*)&g_ddraw.cursor.x, cx);
+            InterlockedExchange((LONG*)&g_ddraw.cursor.y, cy);
+
+            CallWindowProcA(g_ddraw.wndproc, hWnd, WM_MOUSEMOVE, 0,
+                tagpu_zoom_mouse_lparam(WM_MOUSEMOVE, MAKELPARAM(cx, cy)));
+        }
         return 0;
     }
     case WM_ACTIVATE:
@@ -948,8 +992,20 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
            edge clamp the two lines below apply to the engine's own copy. */
         mouse_note_client(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
 
+        /* tagpu: ask for the one WM_MOUSELEAVE that tells us the pointer is
+           gone (see that case). Armed here because a move is the only proof
+           the pointer is inside; Windows cancels the request when it fires, so
+           the flag is what stops this being a call per mouse move. */
+        if (uMsg == WM_MOUSEMOVE && !s_track_leave)
+        {
+            TRACKMOUSEEVENT tme = { sizeof tme, TME_LEAVE, hWnd, 0 };
+            s_track_leave = TrackMouseEvent(&tme);
+        }
+
         int x = max(GET_X_LPARAM(lParam) - g_ddraw.mouse.x_adjust, 0);
         int y = max(GET_Y_LPARAM(lParam) - g_ddraw.mouse.y_adjust, 0);
+
+        int mapped = 0;
 
         if (g_config.adjmouse)
         {
@@ -960,6 +1016,7 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
                 x = pt.x;
                 y = pt.y;
+                mapped = 1;   /* fake_GetCursorPos already answered in game space */
             }
             else
             {
@@ -967,6 +1024,8 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                 y = (DWORD)(roundf(y * g_ddraw.mouse.unscale_y));
             }
         }
+
+        if (!mapped) tagpu_hud_to_engine(&x, &y);   /* winapi_hooks fake_GetCursorPos */
 
         x = min(x, g_ddraw.width - 1);
         y = min(y, g_ddraw.height - 1);
@@ -1008,6 +1067,8 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                     x = (DWORD)((x - g_ddraw.render.viewport.x) * g_ddraw.mouse.unscale_x);
                     y = (DWORD)((y - g_ddraw.render.viewport.y) * g_ddraw.mouse.unscale_y);
                 }
+
+                tagpu_hud_to_engine(&x, &y);    /* winapi_hooks fake_GetCursorPos */
 
                 x = min(x, g_ddraw.width - 1);
                 y = min(y, g_ddraw.height - 1);

@@ -132,9 +132,13 @@ offsets **0x90A50 and 0x90A60**, which must be set identically. [CLAIMED — sou
 from a
 [Steam discussion](https://steamcommunity.com/app/298030/discussions/0/597405278050241107/)
 summary; the underlying TAU thread is unreachable and I could not read the bytes
-myself.] Applying the verified delta, these correspond to VAs **0x491650 and 0x491660** —
-which land plausibly close to `fcn.004916a0`, the routine `totala-re` independently
-identified as the game-update/resource entry. Consistent, but **not confirmed**.
+myself.] **Resolved 2026-09-11 against the pristine build** (*The per-player unit
+cap* below): the two values are the `0x1F4` (500) immediates of `cmp eax, 0x1f4` at
+`0x491658` and `mov eax, 0x1f4` at `0x491665` — the bound the ini value is compared
+against, and the value stored when it exceeds the bound, which is exactly why the two
+must be set identically. Their file offsets are **0x90A59 and 0x90A66** (`.text` is VA
+`0x401000` at file `0x400`, delta `0x400C00`); the community's 0x90A50 and 0x90A60 are
+the 16-byte hex-editor rows that hold them [INFERRED].
 
 **The supported alternative is a config file, not a hex edit.** A `TA.ini` /
 `TotalA.ini` in the game folder is read for: [CLAIMED — verbatim from a user-quoted
@@ -149,9 +153,52 @@ AISearchMapEntries = 90050;
 ```
 
 Caution: in the same threads a user reports `UnitLimit` having **no effect** on a
-stock Steam install. The most probable reading is that ini parsing for these keys is
-itself part of the unofficial **v3.9.02 patch**, not of retail v3.1 — i.e. these are
-knobs added by a patched exe, not latent retail features. Treat as unresolved.
+stock Steam install. **Retail 3.1 does read the key** — `0x491653` reads `UnitLimit`
+with a default of 250 [VERIFIED, below] — but clamps it to **[20, 500]** before the
+store, so `UnitLimit = 1500` yields 500, and 6553 is the width of the field, not a
+value the retail engine will ever hold. The "6553" and the "v3.9.02 default is 1500"
+are that patch's business, not retail's. (`AISearchMapEntries` is not examined here.)
+
+### The per-player unit cap — `0x49163F..0x49168B` — mapped by us [VERIFIED 2026-09-11, objdump of the pristine build]
+
+At game start the engine reads the cap out of `totala.ini` and clamps it before
+writing `MaxUnitNumberPerPlayer`; the value cannot be raised in a running game, and
+`tools/tacli` writes the file before launch for exactly that reason:
+
+```
+49163f: push 0xfa                        ; default 250
+491644: push 0x509238                    ; "UnitLimit" (.data; file offset 0x107838)
+491653: call 0x49f5a0                    ; GetPrivateProfileIntA("Preferences", key, default,
+                                         ;   "<exe dir>\totala.ini") [VERIFIED: ret 8; pushes
+                                         ;   "Preferences" 0x509894 then calls the IAT slot
+                                         ;   0x4FC0D8, whose hint entry is GetPrivateProfileIntA]
+491658: cmp  eax, 0x1f4                  ; 500
+49165d: jle  0x491678
+49165f:   mov ecx, ds:0x511de8           ; the TAdynmem base pointer
+491665:   mov eax, 0x1f4                 ; ANY larger value becomes exactly 500
+49166a:   mov WORD PTR [ecx+0x37eec], ax ; MaxUnitNumberPerPlayer
+491671:   pop edi / pop esi / pop ebx / add esp, 0x24 / ret
+491678: cmp  eax, 0x14                   ; 20
+49167b: jge  0x491682
+49167d:   mov eax, 0x14
+491682: mov  ecx, ds:0x511de8
+49168b: mov  WORD PTR [ecx+0x37eec], ax
+```
+
+* **The ceiling is 500 per player**, whatever the file says; four players hold 2000
+  between them. Measured live 2026-09-10 with `tacli roster`: at the cap of 500 a
+  fresh skirmish hands out idx 1 to player 0, **501** to player 1, **1001** to player 2.
+* The store is a WORD, so the field is an `unsigned short` (where the 6553 figure
+  comes from), but no retail path writes more than 500 into it. Raising the cap means
+  patching **both** immediates, the compare and the stored value — the community's
+  "two offsets, set identically".
+* `ActualUnitLimit` (`+0x37EEA`) is not touched on this path.
+* What this cost before it was written down: `tools/tacli`'s scenario schema accepted
+  `unit_limit: 1500` from the old `[20, 1500]` line above and a 600-unit scenario
+  failed in the fork after launch instead of at validate time; the schema is now bounded
+  at `SCN_MAX_LIMIT = 500`, and `research/notes/scenario-format.md` carries the
+  scenario-side consequences (`scenarios/ball10.json` asks 625 per player and has never
+  had them).
 
 ## Built-in cheat/console command surface
 
@@ -470,6 +517,7 @@ the eye is eased toward.
 | **`0x41CA10`** | **The per-frame camera stepper.** One caller, `0x495599`. It first picks a follow source (next row); with none it takes `je 0x41CB4A`. Where eye ≠ target it sets bit 1 of `main+0x142F1` ("camera moved"), **clears bit 3 of `main+0x14281`** — the screen fog grid's own is-current flag — then moves the eye *halfway* toward the target, capped at ±`0x140` (320 px) per axis per frame, and hands the result to `0x41C3C0`. It never writes the target. *[CORRECTED 2026-09-10: this row said `0x41CA30`, which is mid-function — the byte there is the LAST byte of the 7-byte `mov WORD PTR [ecx+0x1434B], ax` at `0x41CA2A`, and an `E8`/`E9` scan of `.text` finds nothing calling it. `0x41CA10` is the prologue (`mov ecx, ds:0x511DE8; push ebp; push esi; xor ebp, ebp`).]* |
 | **`0x41CA1A`…`0x41CA8D`** | **The follow selection, and it takes the FIRST of three sources that is set** [MEASURED 2026-09-10]: the countdown `main+0x1434B`, then the object `main+0x142F7` (position at `+0x4`), then the unit `main+0x142F3` = `CameraToUnit` (position at `+0x6A`). A unit whose `[+0x110] & 0x10000000` has gone away is not followed and the stepper **releases all three itself** at `0x41CA69`. The countdown is *decremented* here (`0x41CA29`, unlocked `dec` on a u16), which is what makes it expire. |
 | `0x41CAC7`/`0x41CAD2` | Inside the stepper: the camera-**follow** target written from the followed source as `pos − view/2`, then clamped **inline** at `0x41CAF7` to `[0, map − view]`. |
+| `0x41CAF7`…`0x41CB43` | **The extent of that inline clamp**, and the whole of it is replaceable: it is reached only on a frame that follows something, because `0x41CA8F` jumps straight past it to `0x41CB4A` when none of the three sources is set, and nothing jumps INTO it — an `E8`/`E9`/`Jcc` scan of `.text` finds no target inside the range. `0x41CB44` is the instruction after it. Its tail clears fog bit 3 at `0x41CB3B`. G18-7's `zoom_follow_clamp` lands on `0x41CAF7` and rejoins at `0x41CB44`, which is what makes Ctrl+C arrive at any zoom. |
 | **`0x41C390`** | **Release the camera follow** — a leaf with no arguments: `main+0x1434B` (u16) = 0, then `main+0x142F3` = 0, then `main+0x142F7` = 0, `ret`. Two callers, `0x4174FD` (the camera-track toggle on bit 1 of `main+0x14373`) and `0x48D709` (centre-on-unit, which releases and then calls the smooth centre-on `0x41C8E0`). The same three stores are **inlined** at `0x41C2B0`, `0x41CC60`, `0x41D091`, `0x41D1C4` and `0x41D406`. |
 | `0x41C2B0` | Camera reset: `rep stosd` of `0x17` dwords from `main+0x142F3` (i.e. `0x142F3`…`0x1434E`, the whole camera block — follow slots, eye, target and countdown), preserving the byte at `main+0x1434D` across it. |
 | `0x41C2E0` | `SetFollowUnit(dir)` — `0x48C190(currentFollow, dir)` picks the next/previous unit and the result is stored into `CameraToUnit`. Callers `0x48B074`, `0x4964E7` (dir 0), `0x4964F3` (dir 1) — the cycle-through-units keys. |
@@ -1893,7 +1941,8 @@ since 2026-09-09, to the **true viewport rect** (`gpu-status.md` §2.3b). The ot
 three are `0x495CAC`, `0x4A20A1` and `0x4A22DF`, and **none of them is handed the viewport
 rect** — settled by two independent disassembly reads during the G13m landing review. `0x495CAC`
 builds its argument block at `0x495C91..0x495CA9` from a loop accumulator, a literal `0` for `t`,
-and map dimensions (`main+0x1423B`/`+0x1423F`), on a **stack-local** surface (`lea ecx,[esp+0x9c]`);
+and the view size in 16-px tiles (`main+0x1423B`/`+0x1423F` — **not** map dimensions; see
+below), on a **stack-local** surface (`lea ecx,[esp+0x9c]`);
 its enclosing function `0x495A30` does read `main+0x37E27`/`+0x37E2B`, but into other locals.
 `0x4A20A1` and `0x4A22DF` are a save/restore pair around `0x4C6AE0`, which is the matching clip
 **getter** — `add ecx,0x1C` then four dwords copied OUT (verified here). Only
@@ -1962,6 +2011,13 @@ read**: `GetUnitAtMouse 0x48CD80` at `0x499278` and the mouse routing test at `0
 load `main+0x2C76`/`+0x2C7A` directly. Anything that corrects the mouse point inside a
 `0x498DA0` redirect must therefore write the field as well as the copy.
 
+**`0x498DA0` clamps the screen point into the viewport rect before it makes a world point**
+[VERIFIED 2026-09-12]: `0x498E32`…`0x498E86` pins x into `[L, R]` and y into `[T, B]` — the
+rect at `main+0x37E2B`…`+0x37E33`, not the screen — and only then adds the eye. So a point
+outside the rect does not produce a world point outside the view; it produces the edge one.
+That is what makes G18f's `border_to_border` free: mapping the outermost device column to the
+outermost engine column costs nothing, because the engine would have clamped anything past it
+to the same column anyway.
 Readers of `main+0x2C76` found in the image: `0x41635D`, `0x419BF0`, `0x41A4B2`, `0x41CCAF`,
 `0x41CD63`, `0x41D101`, `0x469DE7`, `0x48CD91`/`0x48CD97`, `0x496490`, `0x498D16`, `0x499210`.
 The only writers are the three stores above. `0x419BF0` and `0x41A4B2` are inside the order
@@ -2425,7 +2481,11 @@ both by address (`main+0x37E1B == *(globals+0xBC) == 0x04490020` in a 1024×768 
 ```
 
 - **`SurfaceCreateNamed 0x4C69F0(const char* tag, int w, int h)`** — `stdcall`, `ret 0xC`,
-  returns the object. Prologue `53 56 8B 74 24 10`. 18 callers; the GUI's are `0x4A907C`
+  returns the object. Prologue `53 56 8B 74 24 10`. **Header and pixels are ONE block**:
+  `imul eax,esi; add eax,0x30` at `0x4C6A01`/`0x4C6A04` is the size it asks `0x4D83B0` for,
+  and `lea edx,[eax+0x30]` / `mov [eax+0xC],edx` at `0x4C6A0E`/`0x4C6A14` is what makes the
+  pixel base `object + 0x30`. That identity is what lets an observer on `MEM_Free` retire a
+  surface from the block pointer alone. 18 callers; the GUI's are `0x4A907C`
   (the screen's own surface, tagged with the screen's name) and `0x4A90B5` (its `"SAVE UNDER"`
   snapshot); `0x498407` creates the game offscreen `main+0x37E1B`; the minimap's are
   `0x466823`, `0x466881`, `0x4669CF`, `0x4669FA`. **The tags name the surfaces**, and a
@@ -2437,6 +2497,25 @@ both by address (`main+0x37E1B == *(globals+0xBC) == 0x04490020` in a 1024×768 
 - **`SurfaceFree 0x4C6AC0(OFFSCREEN*)`** — `stdcall`, `ret 4`: `if (p && p[+0x2C] & 1)
   0x4D85A0(p)`. Prologue `8B 44 24 04 85 C0`. 23 callers; the GUI's are `0x4A9537`
   (`panel+0xB8`) and `0x4A9549` (`panel+0xBC`) in the teardown arm.
+- **`SurfaceAttach 0x4C6A60(OFFSCREEN* out, w, h, pitch, base)`** — `stdcall`, `ret 0x14`: the
+  same header laid over memory the object does NOT own (`+0x2C` keeps bit0 clear, so
+  `SurfaceFree` frees nothing). **One caller, `0x4B5897`**: right after `[0x4FC06C]` (the
+  DirectDraw `Lock`) it wraps the locked surface's bits, `w`/`h` from `globals+0xD4`/`+0xD8`
+  and `pitch = (w+3) & ~3`, in the object at `that+0x50`. So the *primary* can be a drawing
+  destination too — although MEASURED 2026-09-12 across a whole session, no UI blit named it:
+  every destination the Phase E observers saw was a `0x4C69F0` object.
+- **`MEM_Free 0x4D85A0(p)` is the one way any engine allocation dies** [VERIFIED 2026-09-12].
+  It is a two-line wrapper (`mov eax,[esp+4]; push eax; call 0x4D85B0; add esp,4; ret`,
+  prologue `8B 44 24 04 50` — five relocatable bytes, which is what makes it detourable), and
+  **`0x4D85B0` has exactly one caller: this**. 363 sites call `0x4D85A0`, `SurfaceFree
+  0x4C6AC0` among them (`0x4C6ACF`). Its partner is `MEM_Alloc 0x4D83B0(tag, size)` →
+  `0x4D83C0`, which ignores the tag in the shipping build and goes to `0x4DACF0(size, 0)` or
+  `0x4E8890(size)`. Because a surface's header and pixels are ONE block (`w*h+0x30`, above),
+  `block + 0x30 == the pixel base`, and an observer at this function's entry is exactly a
+  surface destructor — which is what `tagpu_gui_hook.c`'s `before_memfree` is (G18-8): the
+  publisher reads `s->base` at the flip, and what makes that safe is that the table entry
+  cannot outlive the block. MEASURED in game: **~10 500 calls a second**, so an observer that
+  scans ≤ 24 recorded surfaces costs about 0.03 % of one core.
 - **`SurfaceFill 0x4C6890(surface, colour)`** — `stdcall`, `ret 8`: fills `h·pitch` bytes at
   `+0xC`; `NULL` ⇒ the back buffer. Prologue `83 EC 64 53 55 56 57`.
 - **`GetContext 0x4C5E70(OFFSCREEN* out)`** — `stdcall`, `ret 4`, prologue `83 EC 6C 56 57`
@@ -2675,6 +2754,152 @@ cannot be prologue-detoured without relocating the call.
   HotY)`** (top bar), `(HotX+0x81, HotY+screenH−0x20)` (bottom bar), `(HotX, HotY)` (side
   panel); then `0x4C63A0()`.
 - The `LIGHTBAR` slide `0x45FFB0`: `0x4B8D40`, `0x4B7F30`, `0x4B7F90`, `0x47F1A0`.
+- **Three blits, no loop** [BINARY-VERIFIED 2026-09-11]. `0x467DC8`, `0x467DFD` and `0x467E2B`
+  each fetch one frame and each blit it once; there is no tiling loop in the function. How the
+  bars nevertheless cover a 3840-wide screen is measured in
+  [resolution](resolution.html) §3.4a — left-anchored, repeating, nothing anchored right.
+- **The in-game HUD's geometry is a family of absolute immediates, not one constant.** Anything
+  that wants to move the panel's edge has to reckon with all of them: `0x4981C9`'s `0x80`
+  (panel) and `0x20` (bars); this function's `+0x81` for both bars and
+  `screenH − 0x20` for the bottom one; and, in `DrawGameScreen`'s tail, x `0x81` (the `+bps`
+  lines), `0x82` (the `+clock` line), `0x83`, `0xBC`, `0x1EE` (the debug line). The list is not
+  known to be complete, which is why [GUI renderer](gui-renderer.html) §22 magnifies a region
+  rather than re-laying the HUD out.
+
+### The viewport rect at game entry — what builds it, and why it will not patch [BINARY-VERIFIED 2026-09-11]
+
+Read for [GUI renderer](gui-renderer.html) §22 (HUD scale), which tried to make the engine
+reserve a bigger HUD and found out it cannot be done this way — see the projection section
+below, and §22.5. The disassembly here is unaffected by that; nothing of ours writes this rect
+any more. `objdump -d -M intel` of the pristine Steam build, `0x498170..0x498240`.
+
+The rect is eight stores, and the first two are what the other six are built from:
+
+| VA | instruction | field |
+|---|---|---|
+| `0x4981A7` | `mov ecx,[eax+0x37F1B]` → `0x4981AD` `mov [eax+0x37E1F],ecx` | **screen W**, copied from the Screen Size row's own field |
+| `0x4981B8` | `mov edx,[eax+0x37F1F]` → `0x4981BE` `mov [eax+0x37E23],edx` | **screen H**, likewise |
+| `0x4981C9` | `c7 80 27 7e 03 00 80 00 00 00` — `mov [eax+0x37E27],0x80` | left = **128**, `imm32` |
+| `0x4981D9` | `c7 81 2b 7e 03 00 20 00 00 00` — `mov [ecx+0x37E2B],0x20` | top = **32**, `imm32` |
+| `0x4981EE` | `dec edx` → `0x4981EF` `mov [eax+0x37E2F],edx` | right = **W − 1** |
+| `0x498200` | `83 e9 21` — `sub ecx,0x21` → `0x498203` store | bottom = **H − 33**, **`imm8`** |
+| `0x49821A` | `sub edx,esi` ; `0x49821C` **`inc edx`** ; `0x49821D` store | viewW = **right − left + 1** |
+| `0x498234` | `sub ecx,ebx` ; `0x498236` **`inc ecx`** ; `0x498237` store | viewH = **bottom − top + 1** |
+
+**The `inc` matters.** viewW and viewH are inclusive spans, `R−L+1` and `B−T+1`, not `R−L`:
+at 640×480 they are 512 and 416, not 511 and 415, which is what
+[resolution](resolution.html) §3 and `tagpu_vpwide.c`'s `true_rect_of` have always agreed on.
+Recorded because the HUD-scale handoff wrote them without the `+1` and a rect one pixel short
+in each axis would have been invisible in a screenshot and wrong in every clamp.
+
+**The three immediates do not all patch, and the bottom one is why.** `0x4981C9` and
+`0x4981D9` carry their constants as `imm32` and would take any value. `0x498200`'s
+`sub ecx,0x21` is a **sign-extended `imm8`**, so the bottom inset caps at 127 — i.e.
+`32s + 1 ≤ 127`, `s ≤ 3.94`, against a 4K ceiling of `s = 4.5`. Widening it to
+`81 e9 imm32` needs three bytes the next instruction owns. §20 therefore wrote all six fields
+from an observer instead — and that turned out to be the wrong thing to want, because moving
+`L`/`T` moves only `0x498DA0`'s origin and not the projection (next section). **Nothing writes
+this rect today**; the observer is gone. The encoding facts are kept because they are the
+answer for anything that does want to move the rect.
+
+**`0x4288D0` — the background-picture loader, and the one call that is a clock.** stdcall,
+`ret 0x10`, prologue `83 ec 30 8b 44 24 38` (7 bytes, `sub esp,0x30` + `mov eax,[esp+0x38]`).
+**42 call sites** in the image (full `E8` rel32 scan). The one at **`0x49823D`**, returning to
+**`0x498242`**, is `0x4288D0("loadgame2bg", 0, 0, 0)` — the first instruction after the last
+store of the rect, and **before the loader thread is created at `0x4982CA`**, so LoadMap's
+derivations and the SORT allocations see whatever the rect holds by then. An observer on
+`0x4288D0` that acts only when its return address is `0x498242` therefore runs exactly once
+per game entry, at exactly the point a rewritten rect has to land, without a stub of its own
+shape at an arbitrary address. HUD scale used it for one day and no longer needs it; the site
+is recorded because "runs once, on the game thread, at game entry, before the loader thread"
+is a useful hook to have found and it cost a 42-site call scan to identify.
+
+### The world→screen projection is NOT derived from the viewport rect [MEASURED 2026-09-11]
+
+**The rect's `L`/`T` are the screen→world origin inside `0x498DA0` and nowhere else.** Every
+site that projects the other way carries `+0x80` / `+0x20` as **baked immediates**:
+
+```
+screenX = worldX − eyeX + 0x80
+screenY = worldZ − (altitude >> 1) − eyeY + 0x20
+```
+
+— the unit-under-pointer probe, band select, build placement, the feature blits at
+`(col+8)*16 / (row+2)*16`, the health bars. So a rect whose `L` is not `0x80` makes the two
+directions disagree, and everything that goes out through one and comes back through the other
+lands `(L − 0x80, T − 0x20)` away from where it was drawn.
+
+**Measured** by writing `L = 204`, `T = 51` at 1024×768 and reading the engine's own
+unit-under-pointer field `main+0x2CBA` at two pointer positions for one `ARMSTUMP` at world
+(6180,12140), eye (5796,11731):
+
+| pointer | `+0x2CBA` |
+|---|---|
+| (512,384) = `world − eye + 0x80` | `0xFFFF0002` — the unit |
+| (588,403) = `world − eye + L` | `0xFFFF0000` — nothing |
+
+The engine answers about `0x80`, not about `L`. `tagpu_vpwide.c` has always relied on this
+without saying so: it widens `L` for the clamp while holding its own `VP_TRUE_L` at `0x80` and
+re-doing `0x498DA0`'s arithmetic with the true origin, which is exactly what keeps a widened
+rect from tearing the picture. Anything that wants to move the world's screen origin has to
+patch the immediates — every one of them — not the rect.
+
+### The resource bar tiles in a loop, and the readouts are not screen-relative [BINARY-VERIFIED 2026-09-11]
+
+[resolution](resolution.html) §3.4a measured the top and bottom bars to be **left-anchored,
+repeating, with nothing anchored right**, and recorded that `0x467D70` has no tiling loop —
+three straight-line blits and no more. The loop is in `DrawGameScreen`'s resource block
+instead: at **`0x469093`** the running x (`edi`, advanced by each frame's own width read at
+`0x469090`, `mov dx,[ebx]`) is compared against `[ecx+0x37E1F]` — the **screen width** — and
+`0x46909D` jumps back to `0x469055` while it is short. That is the measurement's mechanism,
+found in the binary rather than inferred from pixels.
+
+The readouts themselves are **not** placed from the screen width: `DrawTextCustomFont
+0x4C14F0` is called at `0x4691F3` and `0x469212` with x and y out of `[esi+0x62]`/`[esi+0x66]`
+and `[esi+0xD2]`/`[esi+0xD6]`, and again at `0x46926B` and `0x4692C0`. So the metal and
+energy blocks sit at layout-struct offsets near the left, which is what lets §20 magnify the
+bar about its top-left without pushing them off the screen — confirmed live at `s = 2.25` and
+`s = 4.5`.
+
+### Who reads the viewport dimensions `main+0x37E37`/`+0x37E3B` [MEASURED 2026-09-11]
+
+A full-image displacement scan, for §20's question of whether a changed viewport rect can reach
+the simulation. **Seventeen sites, twelve functions**, and every one that can be named is
+view-side:
+
+| function | what it is |
+|---|---|
+| `0x41C3C0`, `0x41C4C0`, `0x41C7C0`, `0x41C8E0`, `0x41CA10`, `0x41D0F0`, `0x41D1F0` | the camera / scroll cluster — `SetCamera`, smooth centre-on, the per-frame scroll, the minimap drag |
+| `0x483610` | LoadMap |
+| `0x483FA0` | the terrain pass |
+| `0x496EE0`, `0x497180` | game setup (`0x497180` folds the skirmish settings; it is `0x496EE0`'s only caller) |
+| `0x497CE0` | contains the write site itself — `0x498237` is the store, not a read |
+
+And `main+0x1423B`/`+0x1423F`: **thirteen reads, no write** at that displacement, from
+`0x4161F0` (which calls the flyby `0x495A30`), the map debug overlay `0x418310`, the minimap box
+filler `0x466B70`, `0x47F300` (called from the in-play frame handlers `0x499EB0`, `0x49B720`,
+`0x49C740`) and `0x495A30`. `main+0x14243`, `+0x14247`, `+0x1424B`, `+0x1424F` have **no
+references at all**, which is worth recording as a negative result:
+[resolution](resolution.html) §3 lists all six as LoadMap's derivations from viewW/H, and this
+scan neither confirms the writer nor finds a reader for four of them.
+
+**SETTLED 2026-09-11: they are the view size in 16-px tiles, and this page was wrong.**
+[resolution](resolution.html) §3 is right and the "map dimensions" reading above is not.
+HUD scale gave a cleaner experiment than the two-resolutions one this was waiting on: it
+changes viewW/viewH **without** changing the screen mode or the map, so the two candidate
+sources are separated outright. Same map, same 1920×1080 surface, one lever:
+
+| | viewW `+0x37E37` | viewH `+0x37E3B` | map px `+0x1422B`/`+0x1422F` | `+0x1423B` | `+0x1423F` |
+|---|---|---|---|---|---|
+| stock HUD | 1792 | 1016 | 10720 × 12672 | **112** | **63** |
+| HUD scale Auto (`s` = 2.25) | 1632 | 936 | 10720 × 12672 (unchanged) | **102** | **58** |
+
+`1792 >> 4 = 112`, `1016 >> 4 = 63`, `1632 >> 4 = 102`, `936 >> 4 = 58` — all four exact.
+The map dimensions did not move; these did. The minimap's view-box filler `0x466B70` above is
+therefore reading *view tiles*, which is what a view box is drawn from, and the write the scan
+could not find is `0x483BD6`/`0x483BE4` inside LoadMap reaching them through `ebp = main+0x141FB`
+at `+0x40`/`+0x44` — a base the displacement scan cannot see, which is exactly why it found
+thirteen reads and no write.
 
 ### The frame's HUD extras — what gates each, what it draws, where [VERIFIED 2026-09-07, Phase E G15c]
 
@@ -2902,7 +3127,24 @@ arg 1 is dereferenced at `+0x18` (`TheActive_GUIMEM`) at `0x4AA917`, and arg 2 i
 - **`flags` bit `0x800`** — before anything else, read the current top screen's panel rect
   (`+0x13/+0x15/+0x17/+0x19`) and call `0x4BF4D0(panel+0xBC, rect, -0x18)`; then set the top
   screen's `+0x14` to 1. A save/dirty step, `0x4AA912..0x4AA97C`.
-- **`flags` bit `0x200` suppresses the push** (`0x4AAA26`, `0x4AAC46`).
+- **`flags` bit `0x200` does not suppress the push so much as replace it: the file is
+  MERGED into the screen already on top** [VERIFIED 2026-09-11, and LIVE — see below].
+  `0x4AAA2F` branches on it and takes `edi = gi->TheActive_GUIMEM` instead of allocating:
+  `ebp` is set to `ControlsAry + (count+1)*0x15B`, i.e. **the tail of the existing gadget
+  array**, and the parse writes there. `0x4AABE6` then does `add WORD PTR [ctrls+0xB6],ax` —
+  the loaded file's gadget count is *added* to the existing one — a `rep movs` at `0x4AAC12`
+  shifts the loaded records down one stride to overwrite the loaded file's own panel record,
+  and `0x4AAC54` skips the push. `0x4AAC98` still stamps the **loaded** file's name over
+  `ControlsAry[0].name`, so the merged screen answers `IsOnTop` under the *second* file's
+  name.
+  **Consequence, and it is not cosmetic:** a screen built this way is ONE `GUIMEMSTRUCT`
+  whose array holds both files' gadgets, so nothing downstream — `GUI_FindGadgetByName`, the
+  pump's hit loop, an `OnCommand` — can tell which file a gadget came from. The
+  visual-options screen is exactly this: `0x45E5E0` loads `STARTOPT.GUI` with `0x80` (pushing)
+  and then `VISUALS.GUI` (or `VISUALRT.GUI` in game) with `0x200`, so what `tacli ui` reports
+  as `VISUALS.GUI` is STARTOPT's array with the video controls appended — its tabs, its
+  OK/Cancel/Restore/Undo and the video toggles listed together in one snapshot (LIVE
+  2026-09-11). The `STARTOPT.GUI` `tacli` shows *under* it is the earlier, un-merged one.
 - **THE PUSH, `0x4AAC56`** — the writer of `per_active` that was previously unmapped:
   ```asm
   4aac43:  mov [edi+0x04],ebp        ; new->ControlsAry = the gadget array
@@ -2991,6 +3233,109 @@ not text but the GAF entry **`igpaused`** (`0x5035BC`), looked up once at `0x429
 `0x4B8D40` into `main+0x1481B` beside two siblings at `main+0x14813`/`+0x14817`, and drawn on
 `[main+0x38A51] & 1`. **The pause is single-player only** — a network game cannot be paused
 unilaterally — so the earlier statements need that qualifier.
+
+### The pump's dispatch contract: `gi->UIChange_f` is the ANSWER, and an unanswered click POPS THE SCREEN [VERIFIED 2026-09-11]
+
+*Found the expensive way. The render-options work read `UIChange_f` as an inbound argument
+only, and its front-end screen was destroyed on every click with `GUI_Pop 0x4A9660` — armed
+with an observer — never firing once.*
+
+**`0x4AA78D`, in the GUI pump `0x4A9FD0`, is the only site that calls a screen's `OnCommand`
+for a mouse click**, and what it does afterwards is the whole protocol:
+
+```asm
+4aa675:  mov  [ebp+0x60],eax       ; gi->UIChange_f = the actuated gadget index
+...
+4aa78d:  mov  edx,[ebp+0x18]       ; gi->TheActive_GUIMEM
+4aa790:  mov  eax,[edx+0x08]       ; ->OnCommand
+4aa795:  je   0x4aa79a
+4aa797:  push ebp
+4aa798:  call eax                  ; the screen's handler
+4aa79a:  cmp  [ebp+0x60],edi       ; edi == -1. Still set?
+4aa79d:  je   0x4aa7fa             ;   -1 -> handled; return
+4aa7ac:  mov  [ebp+0x60],edi       ;   else: UIChange_f = -1 ...
+4aa7b9:  call eax                  ;   ... call OnCommand AGAIN, with -1 ...
+4aa7bc:  call 0x4c2470             ;   ... and then POP AND FREE the screen:
+4aa7c1:  push 2 / push ebp / call 0x4a81e0
+4aa7c9:  call 0x4c2870
+4aa7ce:  mov  ecx,[ebp+0x18]
+4aa7d1:  mov  eax,[ecx]            ;   top->per_active
+4aa7d5:  mov  [ebp+0x18],eax       ;   gi->TheActive_GUIMEM = it
+4aa7da:  mov  [eax+0x14],1
+4aa7e1:  push ecx / call 0x4d85a0  ;   free(top)
+4aa7ea:  test esi,0x800 -> 0x4a81e0(gi, 0x40)
+```
+
+**`0x4AA7BC..0x4AA7FA` is `GUI_Pop 0x4A9660`'s body inlined, instruction for instruction** —
+the same `0x4C2470`/`0x4C2870` lock pair, the same stage-2 draw, the same relink, the same
+`0x4D85A0` free, the same `flags & 0x800` repaint (compare `0x4A9689..0x4A96C7`). So **a
+screen can leave the stack without `GUI_Pop` being entered**, and an observer on `0x4A9660`
+is blind to it. `gui-gadgets.md` §1.3 now carries this too.
+
+**Clearing `UIChange_f` is how a handler says "I consumed this", and `0x4AB0A0(gi)` is the
+engine's own one-line setter for it** (`mov [eax+0x60],-1; ret 4`). The visual-options
+handler `0x45E100` is the worked example, and it uses both answers deliberately:
+
+| branch | ends with | because |
+|---|---|---|
+| SHADING / ANTI / BSHADOWS (`0x45E2EA`, `0x45E276`) | `0x49FA90(gi)` then **`0x4AB0A0(gi)`** (`0x45E2F0`, `0x45E27C`) | the toggle was handled; the screen stays |
+| a gadget it does not recognise that is **not** a button (`0x45E48C`) | **`0x4AB0A0(gi)`** | consumed and ignored |
+| UNDO / RESTORE (`0x45E318`, `0x45E425`) | its own `GUI_Pop` + rebuild | `GUI_Pop` sets `-1` at `0x4A9673`, so the pump is already answered |
+| a **button** it does not recognise — the tab column (`0x45E46A` → `0x45E499`) | `GUI_Pop`, restore the index, `call [below->OnCommand]` | "the player hit STARTOPT's own gadget": pop and forward |
+| OK while `selvmode.gui` is on top (`0x45E457`) | nothing | *deliberately* leaves it set so the pump pops `selvmode` |
+
+**And `-1` on the way in means this screen is being destroyed.** Both callers that pass it —
+`GUI_Pop` (`0x4A9673`) and the pump's inlined pop (`0x4AA7AC`) — free the `GUIMEMSTRUCT`
+within a dozen instructions of the call returning. `0x45E100`'s `-1` branch is accordingly the
+screen's destructor: it frees the display-mode list hanging off `GUIMEMSTRUCT+0x0C`
+(`0x45E11B`: `[list+0x14]`, `[list+0x04]`, then the block), nulls the field, and clears
+`main+0x37EBE` bit 0 — the bit `0x45E5E0` reads to choose `VISUALS.GUI` over `VISUALRT.GUI`.
+A chained handler that declines to forward that call leaks all three.
+
+**`0x45E5E0(selvmode)` is the visual-options dialog build**, and its shape is worth recording
+because two of its calls are easy to misread:
+
+| | |
+|---|---|
+| `selvmode != 0` | `GUI_Load(gi, "SELVMODE.GUI", 0x800)` and nothing else |
+| `selvmode == 0` | `0x45CFC0` → `GUI_Load(gi, in game ? "PREFS.GUI" : "STARTOPT.GUI", 0x80)`, **which pushes**, and sets `main+0x37EBE` bit 0 on the in-game side (`0x45D002`); then `GUI_StageUpdateDraw(gi, 2)`; then `0x45CE80`, which *appends a synthesized gadget* to the pushed screen's array in game (`ctrls+0xB6` incremented at `0x45CECC`); then `GUI_Load(gi, "VISUALRT.GUI" or "VISUALS.GUI", **0x200**)` — the merge |
+| both | `0x49FA50(gi)`, then `[ebx+0x08] = 0x45E100` at `0x45E68B` — the OnCommand goes on the **pushed** screen, which is the one the merge landed in |
+
+The display-mode list is built after that: `0x45E6B0` allocates the 0x20-byte header into
+`GUIMEMSTRUCT+0x0C`, `0x45E6BD` a 0x4B0-byte table, `0x45E6EC` a string block of
+`count << 8`, and `0x45E726` hangs it off the `VIDSLDR` gadget (`+0x13C` = count-1,
+`+0x144` = the per-gadget callback `0x45BBF0`, `+0x14A` = the list). In game the whole block
+is skipped (`0x45E69E` branches on `main+0x37EBE` bit 0), which is why `GUIMEMSTRUCT+0x0C` is
+NULL there and the destructor's frees are guarded by `test edi,edi` at `0x45E11B`.
+
+**The header's own layout** [MEASURED 2026-09-11, by reading a live screen]. Worth writing
+down because it is how the list a player is actually being offered can be read without
+walking the slider a stop at a time:
+
+| off | what |
+|---|---|
+| `+0x00` | **count** — the number of surviving modes, after `0x45E4C0`'s sort-and-drop |
+| `+0x04` | the **table**: `count` records of 12 bytes, `{ u32 width, u32 height, u32 refresh }` |
+| `+0x08`, `+0x0C` | two small blocks inside the header's own allocation |
+| `+0x14` | the **string block**, `count << 8` bytes — the `"1024 X 768"` captions, 256 apart |
+
+`+0x04` and `+0x14` are the two the destructor frees at `0x45E11B` before the block itself,
+which is the independent check that they are the two allocations. Read it from a live game
+as `main+0x531` → `+0x0C` → `+0x00`/`+0x04`.
+
+**The rebuild idiom** is four instructions at the tail of the UNDO branch, and it is what a
+caller outside the engine uses to make this screen re-enumerate:
+
+```
+45e318:  call 0x45cae0          ; UNDO only: put the engine's own option bits back
+45e31d:  push esi               ; gi
+45e31e:  call 0x4a9660          ; GUI_Pop(gi)   -- stdcall, ret 4; sets gi->UIChange_f = -1
+45e323:  push 0x0
+45e325:  call 0x45e5e0          ; the dialog build again, with a fresh mode list
+```
+
+`0x45CAE0` belongs to UNDO alone (it XORs `main+0x37F06`'s bits back from the saved copy at
+`0x512F38`); the pop-and-rebuild pair is the general part.
 
 ### The GAF banks a screen can reach [VERIFIED 2026-09-09]
 
@@ -3125,6 +3470,14 @@ A screen's own GAF is therefore **optional**, and this also explains `armopt.gaf
 **Live consequence, measured:** an archive carrying `anims/renderdd.gaf` for a screen called
 `RENDER.GUI` was never opened and the panel kept the engine's dialog composite; the same
 bytes at `anims/render.gaf` load.
+
+**On a MERGED screen it is the merged file's name, not the pushed one** [VERIFIED
+2026-09-11]. `0x45E5E0` pushes `STARTOPT.GUI` and then merges `VISUALS.GUI` over it with
+flags `0x200`, and the merge re-stamps `ControlsAry[0].name` (`0x4AAC98`) — so by the time
+stage 1 runs the panel is called `VISUALS.GUI` and the file it opens is
+**`anims/visuals.gaf`**. The stock game ships no such file, which is what lets a `.ufo`
+supply one without shadowing anything. Putting the frames in `anims/startopt.gaf` instead
+loads nothing at all.
 
 **`0x4B8D40(bank, name)` is the by-name entry lookup**, and it gives the bank's layout:
 
@@ -3305,6 +3658,18 @@ frees the four. All of it is one family, `0x41D8A0..0x41FEyy`, entered at `0x41F
 and **nothing a skirmish does reaches it** (MEASURED: the walk's `palchg` moves only at the
 switches and at `+gamma`). Whatever runs it, the layer follows: each step is a `SetEntries`, and
 the twin's palette texture is re-uploaded from the presented table at the next present.
+
+**Getting there: the in-game exit menu** [VERIFIED 2026-09-12]. `0x4608B0` is the only thing
+that raises it — `GUI_Push(main+0x519, "EXITMENU.GUI" @0x506D64, 0x1800)`, then
+`0x49FDF0(gadget, "RESTART" @0x506CA8, 1)` and `[screen+8] = 0x460800` (its OnCommand). It has
+**one caller**, `0x460C81`, inside the in-game panel's OnCommand — the arm taken when the
+gadget that fired is named **`"EXIT"`** (`0x503034`), one of `PREFS` / `HELP` / `MISSION` /
+`MOREBAR` / `SAVEGAME` / `LOADGAME` / `EXIT` that handler dispatches. That gadget is **not on
+the side panel**: it lives on `ARMOPT.GUI`, which **Tab** opens over the world. `EXITMENU.GUI`
+itself carries `MAINMENU`, `EXITGAME`, `RESTART` and `CANCEL`, and `MAINMENU` raises a
+`YESORNO.GUI` ("Surrender this battle and return to main menu?") whose `CHOICE1` is the one
+that reaches the handler below. Esc does nothing in game: code `0x1B` lands on case 39 of the
+in-game dispatcher's table (`0x496694` → `0x4965F4[39] = 0x4965CE`), the default.
 
 **Leaving a game — `0x491ADC..0x491B38`** (inside the leave-game handler; the block begins with
 the width test at `0x491AA0`) [VERIFIED]. `cmp eax, 0x1E0; je 0x491B5D` (already 480 high:
@@ -4287,8 +4652,10 @@ looked like before the site's displacement was fixed.
   structural.
 - **Unit limit: not a compile-time constant.** It is *live state*:
   `TAdynmemStruct::ActualUnitLimit` (offset `0x37EEA`) and `MaxUnitNumberPerPlayer`
-  (`0x37EEC`), both **`unsigned short`** — hence the widely quoted 6553 ceiling in the
-  ini. 250 is the retail *default*, not a hard cap.
+  (`0x37EEC`), both **`unsigned short`** — which is where the widely quoted 6553 comes
+  from, but retail never writes more than **500** into it: `0x491658` clamps the ini
+  value to [20, 500] before the store (*The per-player unit cap* under *Documented
+  patch offsets*). 250 is the retail *default*; 500 is the retail *ceiling*.
 - Network dropout timeout: default 30 s, range [30, 300], settable with the `-T`
   command-line flag.
 - **The real ceiling is the 32-bit address space**, and it bites: TADR's

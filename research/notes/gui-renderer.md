@@ -2775,3 +2775,464 @@ Wine's `glGetString(GL_EXTENSIONS)` leaves an error pending is inferred rather t
 (§21.1). The intro movie renders washed-out with heavy scanlines, but it does so
 identically under plain GDI and with all passes off, so that is pre-existing and unrelated.
 
+## 22. HUD scale — the HUD bigger, the map kept  [DECIDED 2026-09-11; mechanism changed by 22.5 the same day]
+
+*The third interview. §13 settled how the UI is drawn at a scale; this settles what the
+player's **UI scale** row means, which turned out to be a different question with a different
+answer. Nothing here changes phase 1 or phase 2; it is additive and is an identity at `s = 1`.*
+
+### 22.1 The ask, and why the obvious reading of it was wrong
+
+The row's ask, in the owner's words: *"if I set UI scale to 50%, in the game the behavior is
+that it's 50% larger than it would be by default in the original renderer at that resolution"*
+— and the scale is **relative to the Screen Size the player picked**.
+
+The obvious reading, and the one four options were drawn around, is that the surface shrinks:
+`surface = monitor ÷ k`, so everything grows together. That ladder is real and it works, but it
+buys a bigger HUD by spending map, one for one, and it **cannot reach the HUD size the game was
+designed around**. TA's panel is a hard 128 logical px (`0x4981C9`, an immediate), so at
+640×480 it was 20 % of the screen; the best rung of a monitor÷k ladder on a 4K screen is a
+13.3 % panel with 1.63× the 1997 map across.
+
+What the ask actually describes is the HUD scaling **within** the chosen grid — so Screen Size
+and UI scale are independent dials, not two names for one number. Measured against the ladder,
+at the ceiling: **15 % panel and 6.38× the map, against 13.3 % and 1.63×.** Better on both
+axes at once, which is only true because of §3.4a's measurement.
+
+### 22.2 The six decisions
+
+| | decision | why this and not the alternative |
+|---|---|---|
+| **Space** | The engine reserves it. `0x4981C9..0x498237` computes its rect from `s`: left `128s`, top `32s`, bottom `H−32s−1`. | The alternative is to overlay the HUD over a full-size world. The engine would then still believe the world viewport is full size, so edge scroll, the unit-under-pointer probe at `main+0x2CBA` and drag-selection would all reason about pixels the player cannot see — a unit hoverable but invisible. Reserving makes every clamp right by construction. |
+| **Pixels** | We magnify what the engine drew. The HUD regions of the twin are scaled by `s` at composite; the pointer is divided by `s` inside them. | **128 is not one constant.** `0x467D70` positions at `HotX+0x81`; `DrawGameScreen`'s tail draws at `0x81`, `0x82`, `0x83`, `0xBC`, `0x1EE`. Re-laying the HUD out means patching a family whose size nobody knows, and a missed member is a misplaced element rather than a build error. Magnifying a *region* cannot be wrong about a constant nobody has found. |
+| **Scale** | `Auto = H / 480` — the panel fills the screen height. Percentages over stock override; stages past the ceiling grey out. | §3.4a: the panel block is 128×480 and does not stretch, so `H/480` is simultaneously the natural target and the hard ceiling. It is **exactly 1.0 at 640×480**, the shipped default, so an untouched install is unchanged. |
+| **Extent** | Panel, top bar and bottom bar all by the same `s`. | The top bar carries the resource readouts, the hardest thing to read at 4K. §3.4a rules out the complication: the bars are left-anchored tiling with nothing anchored right, so no nine-slice is needed. |
+| **Row** | "UI scale" becomes HUD scale, live in window **and** fullscreen. The window multiplier is dropped. | The existing row means `window = k × surface`, which is why it is greyed in fullscreen. One name cannot carry both. Dropping the multiplier costs the integer-window snap (an exact upscale landing on texel centres); the owner took that trade for one row instead of seven. |
+| **When** | At game entry, like the Screen Size row above it. | The rect is written once inside `0x497F40`, before the loader thread, and the SORT buffers are allocated from the dims it produces. |
+
+**The ceiling, by surface** — `s = H/480`, panel `= 128s`:
+
+| surface | s | panel | % of width |
+|---|---|---|---|
+| 640×480 | 1.00 | 128 | 22.0 % — identity |
+| 1024×768 | 1.60 | 205 | 22.0 % |
+| 1280×1024 | 2.13 | 273 | 21.3 % |
+| 1920×1080 | 2.25 | 288 | 15.0 % |
+| 3840×2160 | 4.50 | 576 | 15.0 % |
+
+15 % on a widescreen is not a shortfall against 20 %: a full-height panel is a smaller fraction
+of a wider screen. It is the same thing.
+
+### 22.3 The gate, and what is still open
+
+**At `s = 1` the frame is bit-identical** — the parity md5 must not move. The same rule §13.3
+holds for `k = 1`, and for the same reason: it is what makes the rest of the claim checkable.
+
+- **The HUD is bigger, not sharper.** It is 1× art magnified. §18's string op exists but stamps
+  glyphs **into the twin**, not into §13.2's device-res sharp layer, so text scales with
+  everything else. Moving its output to the sharp layer is the fix and is a separate piece.
+- **Open again since 22.6, and it is this landing's one unproved premise: that nothing
+  sim-relevant derives from viewW/H.** 22.5 made the question moot by writing nothing; **22.6
+  writes `R`, `B`, `viewW` and `viewH` again** (`tagpu_hud.c:apply_rect`, latched at game entry),
+  so the survey below is the actual argument and not an archive. **The evidence is two-sided and
+  neither half is a proof.** Every attributed reader is view-side — the camera cluster
+  (`0x41C3C0`, `0x41C4C0`, `0x41C7C0`, `0x41C8E0`, `0x41CA10`, `0x41D0F0`, `0x41D1F0`), the
+  terrain pass `0x483FA0`, LoadMap `0x483610`, the minimap box filler `0x466B70`, the map debug
+  overlay `0x418310`, and the eye-driving flyby `0x495A30`; and structurally, TA broadcasts each
+  player's own resolution (`PlayerInfo+0x8B/+0x8D`) and lets players in one game run different
+  ones, which a sim dependency on viewW/H could not survive.
+- **Our two notes disagree about `main+0x1423B/+0x1423F`.** [resolution](resolution.html) §3
+  calls them tile-view dims derived from viewW/H by `>>4`;
+  [exe map](exe-reverse-engineering.html) called them map dimensions. A full-image scan finds
+  **thirteen reads and no write** at that displacement, so neither claim was confirmed by it and
+  the writer uses some other base. `main+0x14243/47/4B/4F`, which §3 lists alongside them, have
+  **no references at all**. It never changed 22.2's "when", because the rect and the SORT buffers
+  settle that on their own. **SETTLED by the first build, 22.4** — and it stays settled, because
+  the measurement was taken; the instrument exists again since 22.6 writes viewW/viewH, so it can
+  be re-run without the two-resolutions run that was originally planned.
+  ** — HUD scale moves viewW/viewH
+  without moving the screen mode or the map, which separates the two candidate sources outright:
+  they are the view size in 16-px tiles, §3 is right, and the exe map is corrected.
+
+### 22.4 The first build, and why it was withdrawn  [SUPERSEDED by 22.5]
+
+**Read this as history, not as the mechanism.** What follows is the build of 2026-09-11 that
+reserved the space by writing the engine's viewport rect. It produced a torn world and was
+withdrawn the same day; 22.5 has the measurement that killed it and what replaced it. Three
+claims below are now known false and are left in place so the mistake stays legible: that the
+rect is "the origin every consumer projects about", that `vpwide`'s four constants could
+follow it, and that the setting had to wait for game entry. Everything else — the resolver,
+the ceiling, the three magnified regions, the pointer map, the parity result, the sprocket and
+the row — survived and is still the mechanism.
+
+**The one number.** Both halves of 22.2 — the space the engine reserves and the region the
+composite magnifies — come out of `tagpu_hud_geom()`, a pure function of the screen
+dimensions and one percentage, which clamps to that screen's own ceiling. Neither half owns
+the answer, so they cannot disagree about where the HUD ends and the world begins.
+`tagpu_vpwide.c`'s four hardcoded constants (`VP_TRUE_L 0x80`, `VP_TRUE_T 0x20`,
+`VP_B_INSET 33`) are gone with it: it asks the same function, so the origin every zoom reader
+projects about is the origin the rect was written with.
+
+**The reserve.** An observer on the background loader `0x4288D0`, acting only on the call at
+`0x49823D` — identified by its return address `0x498242`, which is exactly the site and not
+nearly it. The three immediates would not carry it: `sub ecx,0x21` is a sign-extended `imm8`
+and caps the scale at 3.94 against a 4K ceiling of 4.5 ([exe map](exe-reverse-engineering.html),
+"The viewport rect at game entry"). **At stock scale the observer writes nothing at all**, so
+the `s = 1` frame is the engine's own bytes.
+
+**The magnify.** Three regions in `LAY_FS`, mapped dest → source: the panel over its full
+column height about its top-left, the top bar about its top-left, the bottom bar about its
+**bottom**-left (which is where the engine anchors it, `screenH − 0x20`). The world region is
+the identity and has no coverage in the twin anyway — the viewport's key fill erased it, and
+that fill covers exactly the rect the observer wrote. The sharp-bilinear ramp is widened by
+`s` inside a HUD region, because it is "one device pixel" and one device pixel is `s` source
+texels fewer there.
+
+**The pointer** is divided by `s` inside a HUD region at the eight sites that end the fork's
+client → game conversion, through one helper. The two `vhack` branches that take their point
+from `fake_GetCursorPos` are flagged `mapped` and skipped, because that function has already
+answered in game space.
+
+**Why a stale scale is safe.** Exactly one word crosses threads — the percentage in force,
+latched at game entry — and every consumer re-resolves it against the screen *it* is looking
+at. A naturally aligned 32-bit store gives either the old value or the new one, and both are
+valid, because `tagpu_hud_geom` clamps to the live screen's ceiling. **The shell needs no
+signal of its own**: its surface is atom-locked at 640×480 whatever the Screen Size row says,
+and 640×480's ceiling is exactly 1.0, so the whole module is the identity there.
+
+#### The gate, and what was measured
+
+**`s = 1` is bit-identical, and that is a cross-build measurement** — the same fixture
+(`selbox-facings`, 1920×1080, sim paused at a fixed tick, pointer parked) shot with this DLL
+and with one built from the commit before it:
+
+| | panel `x < 128` | top bar | bottom bar | world |
+|---|---|---|---|---|
+| this build vs the previous one | **0** | **0** | **0** | 2620 |
+| this build vs **itself**, relaunched | **0** | **0** | **0** | 3814 |
+
+The world's 2620 differing pixels are **below the same-DLL noise floor of 3814** — the
+fixture is not as static as hoped across relaunches — so the only claim the numbers support
+is the one that matters: every band the feature touches is byte-identical. At 640×480 with
+Auto the log carries **no `hud: scale` line at all**, which is the same statement from the
+other side: nothing was written.
+
+**The rect, at both ends of the ladder.** 1920×1080 Auto → `scale 225% (ceiling 225%) …
+panel 288, bars 72, viewport {288,72,1919,1007} 1632x936`, and `vpwide: true viewport rect
+verified (288,72 1632x936)` — the two modules agreeing by construction. 3840×2160 Auto →
+`450% … panel 576, bars 144, viewport {576,144,3839,2015} 3264x1872`: **15.0 % panel and
+6.375× the 1997 map across**, which is 22.1's predicted figure to three decimals.
+
+**The pointer, by region**, at `s = 2.25` — a device-space move, then the engine's own
+`main+0x2C76`/`+0x2C7A` and its region flags `+0x2CC6` read back:
+
+| screen | engine | flags |
+|---|---|---|
+| (140,140) magnified minimap | (62,62) | `5` = minimap + either |
+| (960,600) world | (960,600) — identity | `6` = world + either |
+| (400,40) top bar | (177,17) | `0` |
+| (960,1050) bottom bar | (426,**1067**) | `0` |
+
+The bottom bar's y is `H − (H − y)/s`, which is the bottom anchoring showing up in the
+arithmetic. And the hit tests follow: a **device** click at the magnified position of `PREFS`
+(the engine reports its rect centre at (61,248); (138,558) on screen) opened PREFS.
+
+**The render-options trigger had to move, and it is the one thing 22.2 did not anticipate.**
+The sprocket is drawn into the top bar and anchored to `g_ddraw.width`, so at `s = 2.25` it
+landed past the last source column the bar band samples and simply was not there. It is now
+placed against the **bar's own** width, `W/s`, and comes out `s` times bigger at the screen's
+right edge; the drop-down below it hangs in the world region, which the composite leaves
+alone, so it is placed in screen pixels with only its top edge following the bar's height.
+Both still hang off one margin measured on screen, so their right edges land on one line at
+every `s`. Each is hit-tested in exactly the space it was placed in, which is the same
+division and the same nothing that `tagpu_hud_to_engine` applies.
+
+**The row.** "UI scale" is now `Auto|100%|150%|200%|300%|400%`, live in window *and*
+fullscreen (the greying rule is gone), and the window multiplier with `apply_scale()` is
+deleted. The store is the lever file `tagpu_hud.on` (`scale=auto` / `scale=<percent>`) — on
+the defaults table at `scale=auto` and read at game entry in this build; 22.5 took it off the
+defaults and made it live. Stages past a screen's ceiling are
+**skipped as the row cycles** rather than greyed — `VA_SETGRAYED` is per gadget, not per
+stage, so greying would take the honourable stages down with the rest. Measured: at a
+640×480 Screen Size the row alternates Auto/100% and the plate never shows a number the game
+will not honour; at 3840×2160 it walks all six and the store follows.
+
+**Zoom composes.** At `s = 2.25` and zoom 0.5 the engine's unzoomed point for screen
+(960,600) reads (816,660) — exactly the transform about the **scaled** viewport centre
+(1104,540), because `vpwide` takes that centre from `tagpu_hud` rather than from `0x80/0x20`.
+
+#### Settled on the way past
+
+**`main+0x1423B`/`+0x1423F` are the view size in 16-px tiles**, and 22.3's third bullet is
+closed. The two notes disagreed and the displacement scan settled neither; HUD scale turned out
+to be a better instrument than the two-resolutions run that was planned, because it moves
+viewW/viewH **without** moving the screen mode or the map. Same map, same 1920×1080 surface:
+stock gives `1792/1016` and `112/63`, Auto gives `1632/936` and `102/58`, the map dimensions at
+`+0x1422B/+0x1422F` unchanged at 10720×12672 throughout. All four are exactly `>>4`.
+[resolution](resolution.html) §3 was right; the [exe map](exe-reverse-engineering.html) is
+corrected, and the write the scan could not find is LoadMap's, through a base at
+`main+0x141FB` that a displacement scan cannot see.
+
+#### Still open
+
+- **The loading screen is unmeasured.** The surface is already the game's mode when it is
+  drawn (sampled: 640×480 through the shell, 1920×1080 from the loading screen on), so the
+  map is live there — but `glshot` returns the *previous* frame's GL buffer during a load, so
+  90 samples across two entries caught no loading frame at all. Whether its edges are
+  magnified for those few seconds is not known. Cosmetic either way.
+- **`tacli`'s own device-space inverse does not know about HUD scale.** `tacli click --device`
+  and `ui click --device` convert with `k` alone, so at `s > 1` they aim at the unmagnified
+  place. Every `--device` measurement above was aimed by hand. `uiwalk.py`'s per-stop hit
+  check inherits the same gap.
+- **The HUD is bigger, not sharper** — 22.3's first bullet, unchanged. §18's string op still
+  stamps into the twin.
+- **`nocursor` is wrong at `s > 1`.** The harness A/B leaves the engine's own cursor on
+  screen, and the shader discards our fragment at the engine's rect, which is where the
+  engine drew it — so the cursor shows at the unmagnified position while the pointer is
+  elsewhere. Ours (the default) is placed from the client point and is unaffected.
+
+### 22.5 The origin tear  [MEASURED 2026-09-11, the same day]
+
+**22.2's premise was false, and one measurement settles it.** The premise was that the engine's
+viewport rect (the six ints at `main+0x37E27`) is the origin every consumer projects about, so
+writing `L = 128s`, `T = 32s` moves the world and everything that reasons about it together.
+
+It moves one thing. `L` and `T` are the screen→world origin **inside `0x498DA0` and nowhere
+else**. TA's world→screen projection is a `+0x80`/`+0x20` pair of immediates **baked at each
+site that performs it** — the unit-under-pointer probe, band select, build placement, the
+feature blits, the health bars — and our own passes reproduce that projection byte for byte
+(`tagpu_feat.c`, `tagpu_mark.c`, `tagpu_order.c`, `tagpu_overlay.c`, `tagpu_tracer.c`), while
+terrain and units project about the rect (`tagpu_native.c`, `tagpu_terrown.c`, through
+`tagpu_vpwide_true_rect`). Moving `L`/`T` therefore tears the world into two halves
+`((s−1)·128, (s−1)·32)` apart.
+
+**The measurement**, 1024×768 Auto (`s = 1.598`, panel 204, bars 51), scenario `selbox-slope`,
+`ARMSTUMP` #2 at world (6180,12140) with the eye at (5796,11731):
+
+| pointer at | `main+0x2CBA` (unit under pointer) | |
+|---|---|---|
+| (512,384) — where the **engine** projects it, `world − eye + 128` | `0xFFFF0002` | the unit |
+| (588,403) — where it is **drawn**, `world − eye + 204` | `0xFFFF0000` | nothing |
+
+So what you click was 76 px right and 19 px down from what you see. With `hud.off` both agree
+at (512,384). A `glshot` shows the same vector directly: every health bar sits 76 px left and
+19 px up of its tank. That is drag select, build placement, map drawing and feature placement
+in one cause — which is how it was reported.
+
+**The general fact is the part worth keeping**, and it is now in
+[exe map](exe-reverse-engineering.html): *TA's world→screen projection is not derived from the
+viewport rect.* `vpwide` has always known it — it widens `L` while holding `vp_true()` at
+`0x80`, and hands `0x498DA0` the true origin with the wide clamp, precisely so that the two can
+never disagree. HUD scale broke that invariant instead of joining it.
+
+#### What replaced it: cover, do not reserve
+
+**Nothing is written to engine memory at all.** The observer on `0x4288D0` is gone, the rect
+write is gone, and `tagpu_vpwide.c`'s `VP_TRUE_L` / `VP_TRUE_T` / `VP_B_INSET` are constants
+again. The engine draws the world across its own full viewport exactly as it always did, and
+the magnified HUD covers the outer part of it. What is left is one transform applied twice, and
+both halves still come out of the same `tagpu_hud_geom()`:
+
+- the composite samples the twin's three HUD regions at `s` texels per device pixel — unchanged
+  from 22.4;
+- the pointer is divided by `s` inside those same regions before the engine sees it — unchanged
+  from 22.4.
+
+**The boundary is exact, not nearly.** The panel's last screen column is `128s − 1` and
+`128s / s` is `128`, so the first screen point that belongs to the world is the first point the
+map sends to engine column 128. The engine's own hit tests never move, because the grid they
+were written against never moves.
+
+**Verified after the change**, same fixture, `hud.on` at Auto: the rect reads the engine's own
+`128 / 32 / 1023 / 735 / 896 / 704`; the roster, the hover field and a click all agree at
+(512,384); the health bars sit on their tanks. The pointer map is exact in every region, by a
+**device**-space move so that the whole client → game path is under test —
+
+| device px | engine | flags `+0x2CC6` |
+|---|---|---|
+| (100,100) magnified minimap | (62,62) | `5` = minimap |
+| (60,160) magnified minimap, lower | (37,100) | `5` — unmapped, this point is **off** the minimap |
+| (600,400) world | (600,400) — identity | `6` = world |
+| (150,600) magnified panel | (93,375) | `0` |
+| (500,25) magnified top bar | (312,15) | `0` |
+| (500,745) magnified bottom bar | (312,754) | `0` |
+
+**The composite has an ordering rule, and breaking it cost a build.** Everything in `LAY_FS`
+downstream of the region map indexes the ENGINE's surface — `uCursor` is "the engine's own rect,
+GAME px", `uVp` is the engine's viewport rect, and `uTwin`/`uSurf` are the twin and the primary.
+So all of them must be asked about the texel the colour actually came from, not about the dest
+fragment. Merging main brought in the stale-mirror guard (§21), which compares the twin against
+the primary at `p`; with the map still sitting *below* it, `p` was the dest texel, so inside a
+magnified region the guard read the twin out in the world — where our own key fill had erased it
+— found index 0 against a non-zero primary, and **discarded the HUD it was about to draw**. The
+symptom is specific and worth recognising: the HUD measures 128/32 on screen while the heartbeat
+says `s=4.500`. The fix is ordering, not a special case — the map runs first and `p`/`f` are
+derived from `sd` — and at `s = 1` `sd` is `d`, so the guard and the parity gate are untouched.
+
+**The map is exact at every screen a player can pick, and that is checked by exhaustion rather
+than by sampling** — 108 (mode, stage) pairs where the scale is past stock, twenty-two modes
+from 320×240 to 7680×4320 against all six stages. Two properties: the panel's last screen
+column maps below engine 128 while the next one is the identity (and the same for both bar
+edges), and every mapped point lands on the surface. The second one failed before the check
+existed: the bottom bar's map is the shader's inverted, `H − (H − y)/s`, and at the very last
+row `(H − y)` is 1 and `256/q` is 0, so `y = H − 1` landed on engine row `H`. The shader does
+not care — it samples in floats and clamps — but an integer hit test does. The clamp is now a
+**postcondition of the map itself** and not a rule at the nine call sites, because two of them
+(`fake_GetCursorPos`, and `HandleMessage`'s `WM_MOUSEMOVE` arm) clamp *before* calling it.
+Confirmed in the game: `dmove:500,767` at 1024×768 reads engine 767, where it read 768.
+
+**Not tested: band select through injected input.** `down:lbutton` / `mouse:` / `up:lbutton`
+selected nothing — but it selects nothing with `hud.off` either, so it is the harness and not
+the feature, and it is left as an open question about `tacli` rather than about this.
+
+**Two costs, and the second one is worse than it was written down as.** The world under the HUD
+is rendered and then covered — about 20 % of the fill at `s = 4.5`. And the first world column
+the player can see is `eye + (128s − 128)` rather than `eye`, so the map's top-left
+`((s−1)·128, (s−1)·32)` world px cannot be scrolled into view — 160×40 at 1080p Auto, 448×112
+at 4K Auto.
+
+That second one was written here as *derived, not measured*. **It is now measured, and it bites
+on the first frame of an ordinary skirmish.** 3840×2160, Auto, a lava map, ARM start near the
+west edge: the engine clamps `eyeX` to **0**, the player's own commander sits at world x = 400
+— engine screen x = 528 — and the magnified panel covers screen 0..575. So the commander is
+drawn, covered, and cannot be revealed, because there is no smaller eye. Hovering the engine
+point picks it (`main+0x2CBA` = `0xFFFF0001`); hovering the *screen* point cannot, because the
+pointer map correctly sends anything under 576 into the panel.
+
+**So the eye clamp is not a follow-up, it is the rest of this feature.** Until it moves, Auto at
+4K is not a defensible default, and the honest ceiling for a default is whatever keeps
+`128s − 128` inside the margin a player would never build in — which nothing here has measured.
+
+#### The camera reasons about the viewport; the player looks at the visible window
+
+Reported from play: *"snapping the camera to the commander snaps a bit to the side"*, and
+*"we cannot scroll to the edge of the map on the bottom left when zoomed out"*. One cause, and
+it is the same one as the covered strip — every camera bound in the engine puts the **viewport's**
+edges on the map's, and the viewport is not what the player sees.
+
+**The centre.** `0x41C7C0` is the smooth centre-on, `f(worldX, worldZ, flag)`:
+
+```
+41c7cb  mov eax,[esi+0x37e3b] / cdq / sub eax,edx / sar eax,1 / sub ecx,eax   ; targetY = worldZ - viewH/2
+41c7d8  mov eax,[esi+0x37e37] / cdq / sub eax,edx / sar edx,1 / sub eax,edx   ; targetX = worldX - viewW/2
+41c7f7  mov [esi+0x14327],eax ... clamp both to [0, map - view]               ; INLINE, not via 0x41C3C0
+```
+
+`targetX` puts the unit at engine screen `128 + viewW/2`; the visible window is `[128s, W−1]`,
+whose centre is `(128s + W − 1)/2`. So the unit lands **`(128s − 128)/2` to the left** — 224 px
+at `s = 4.5`. **Vertically there is nothing to fix**: the bars are the same height top and
+bottom, so `32 + viewH/2` already is the visible centre. That asymmetry is the signature, and
+it is why the report said *to the side* and not *up* or *down*.
+
+**The bounds.** `0x41C3C0` clamps the eye to `[0, map − view]`, which stops the visible edge
+`(128s − 128)` short on the left and `(32s − 32)` short top and bottom. In the engine's own
+coordinates (`L = 128`, `T = 32`):
+
+| visible | engine screen | world | bound |
+|---|---|---|---|
+| left column | `128s` | `eye + (128s − 128)` | `loX = −(128s − 128)` |
+| right column | `W + 127` | `eye + W − 1` | `hiX = mapW − viewW` — **unmoved** |
+| top row | `32s` | `eye + (32s − 32)` | `loY = −(32s − 32)` |
+| bottom row | `H + 31 − 32s` | `eye + H − 1 − (32s − 32)` | `hiY = mapH − viewH + (32s − 32)` |
+
+**Asymmetric on purpose**: the panel is only on the left, so only the low x bound moves; the
+bars are on both, so both y bounds move, in opposite directions.
+
+**Both fixes take their numbers from `tagpu_hud_live()`, never from 128/32 and a scale** — so a
+panel of a different width, or a stage this code has never seen, is covered by construction.
+That was the report's own condition.
+
+**Measured**, 3840×2160 Auto (`s = 4.5`, so the insets are 448 and 112), map 4064×3968,
+view 3712×2096: the camera pinned past the map's bottom edge and released settles at
+**`eyeY = 1984`**, which is `mapH − viewH + 112`; the engine's own range stops at 1872.
+
+**Not independently driven**, and worth saying rather than implying: the *x* half of the same
+two lines was not measured, because `tacli eye` clamps its own argument at 0 and injected
+minimap clicks do not reach the engine in this harness (nor does a band drag, nor arrow-key
+scroll — all three fail with the pass off too). The centre-on observer is confirmed **armed**
+(`observer on 0x41C7C0: ok`) and its arithmetic is read off the disassembly above, but nothing
+here has driven a centre-on either.
+
+**Two more inline clamps are still open**, and they were open before this: `0x41C4C0` (the
+smooth SetCamera) and `0x41CAF7` (the per-frame FOLLOW) clamp the same way without going
+through `0x41C3C0`, and zoom's own `d` widening never reached any of the three either. This
+closes the HUD half of one of them.
+
+**And the clamp fix rides on `zoom.on`**: `zoom_eye_range` lives in `tagpu_zoom.c` and
+`apply_eye_range` returns early when zoom is not installed. With `zoom.off` and `hud.on` the
+edges are short again. The play defaults arm zoom, so this is a note for an A/B, not for a
+player.
+
+**The setting is live now.** Nothing it changes is engine state, so the store puts it in force
+as it writes it and the next composited frame is already at the new scale. The "set it before
+you start a game" rule 22.2 argued for was a consequence of the rect, and the rect is gone.
+
+**It is not a play default.** `tagpu_opt.c`'s table no longer carries it; `tagpu_hud.on` arms
+it by hand. Whether Auto should be on for everyone is 22.2's open question, it is the owner's,
+and it is not one to answer on the strength of a feature that spent a day torn.
+
+### 22.6 Make the two rectangles the same one  [MEASURED 2026-09-12]
+
+22.5 stopped reserving and let the HUD cover the world. That was the wrong trade, and the way it
+failed is the useful part: **the engine has at least four places that assume its viewport IS what
+the player looks at** — the eye clamp `0x41C3C0`, the centre-on `0x41C7C0`, the per-frame FOLLOW
+at `0x41CAF7` and the smooth SetCamera `0x41C4C0` — and each one wants its own patch. Two were
+written and a third was about to be. From play: *"snapping the camera to the commander … appears
+in the middle of nowhere"* and *"we cannot scroll to the edge of the map on the bottom left"*.
+
+**Ctrl+C is the clearest case.** It reaches `0x41C7C0` through its single caller `0x463F90`
+(`movsx ecx,[eax+0x74]` / `movsx edx,[eax+0x6c]` — the unit's own z and x), which also sets a
+follow flag at `[esi+0x47] |= 0x30`; the follow then recomputes and re-clamps the target every
+frame, so a one-shot correction at the centre-on is overwritten before it is seen. Measured at
+4K Auto: commander at world (400,3536), eye and target both pinned at the engine's `[0, map−view]`
+clamp, commander at engine screen 528 — **behind the 576 px panel**, invisible, and the target
+pinned *at* the bound so the camera could not move until the unit walked right of world 448.
+
+**So the viewport is made to BE the visible window**, and every one of those four is then simply
+right with no engine patch at all:
+
+| field | written | why |
+|---|---|---|
+| `L`, `T` | **no** | `0x80`/`0x20` are baked into every world→screen site (22.5); moving them tears the world |
+| `R` | `W − 1 − (128s − 128)` | one inset: the panel is only on the left |
+| `B` | `H − 33 − 2(32s − 32)` | **twice**: a bar is covered at both ends while `T` stays at `0x20` |
+| `viewW`, `viewH` | `W − 128s`, `H − 64s` | `R−L+1` and `B−T+1`, so every clamp and centre is about the visible window |
+
+At stock those are exactly what `0x497F40` builds, so **not one byte is written** and the `s = 1`
+gate stands. The rect is game-entry-time again (the SORT buffers are sized from viewW/viewH
+before the loader thread at `0x4982CA`), which is the price: a scale chosen mid-game waits.
+
+**The translation pays for it.** The engine now draws the world into `[128, R] × [32, B]` of its
+own surface and that block belongs on screen at `[128s, W−1] × [32s, H−1−32s]`. One vector,
+`(128s − 128, 32s − 32)`, in the three places we own: the composite's world-region sampling, the
+pointer map's world branch, and **the single `glViewport` on the draw that puts the world target
+on the frame** (`tagpu_native.c`, the "composite over the frame"). Not a uniform per world
+shader, and not a bracket around `tagpu_native_frame` — that was tried first and the passes
+inside set their own viewports (the shadow map, the supersampled target), so it was overwritten
+before the first triangle. The symptom of that attempt is worth recognising: the world came out
+**short on the right and bottom by exactly the shift**, which is what an unshifted block under a
+shrunken viewport looks like.
+
+`tagpu_vpwide.c`'s true rect follows the same insets, so `vpwide: true viewport rect verified
+(128,32 3264x1872)` and the `hud:` line now agree by construction.
+
+**Measured**, 3840×2160 Auto, map 4064×3968:
+
+- rect `{128,32,3391,1903}` 3264×1872, world shifted by (448,112); the two modules agree.
+- **What you click is what you see**: a device click at the commander's drawn position
+  (3488,664) selects it; the same click at the unshifted place (3040,552) selects **nothing**.
+  `dmove:3488,664` reads back engine (3040,552) — the shift, exactly.
+- **The edges reach**: `eyeY` now clamps at **2096** (`mapH − viewH`) where the engine's old
+  range stopped at 1872, and at `eyeX = 0` the visible left column is world 0.
+- **Ctrl+C centres**: commander at engine (2173, **969**) against a visible centre of
+  (1760, **968**) — vertically exact. The 413 px left horizontally is the MAP's limit, not ours:
+  the camera is hard against `eyeX = 800 = mapW − viewW`, and a 4064-wide map cannot centre a
+  unit inside a 3264-wide window. It is visible, which is the point.
+
+**The two camera patches 22.5 needed are reverted** — the eye-range widening in
+`zoom_eye_range` and the centre-on observer — because the engine's own arithmetic is now correct
+and a second correction would be a double one.
+
+**Still not driven**: nothing here has exercised the smooth SetCamera `0x41C4C0`, and the ~20 %
+overdraw of 22.5 is gone (the engine draws only the visible window) but that has not been
+measured as a frame-time change.

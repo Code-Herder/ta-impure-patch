@@ -105,6 +105,9 @@ static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x
 static void ops_forget_base(unsigned base);       /* below, with the ring */
 typedef struct SURF {
     unsigned base;                    /* pixel base — the identity           */
+    unsigned owner;                   /* the block MEM_Free 0x4D85A0 will be handed: the
+                                         surface object itself, whose pixels are the same
+                                         allocation at object+0x30 — see before_memfree */
     int w, h, pitch;
     unsigned char* copy;              /* the surface as of the last flip     */
     unsigned char* mask;              /* the last census: 0/128/255          */
@@ -164,12 +167,109 @@ static void surf_drop_offscreens(unsigned keepBase)
     }
 }
 
-static SURF* surf_get(unsigned base, int w, int h, int pitch)
+/* ---- blocks freed on a thread that is not the game thread ---------------
+   The table is the game thread's alone — `surf_drop` swap-removes and
+   `surf_get` memsets the tail — so an observer that fires on another thread
+   must not walk it: it would read a slot mid-move, mark the wrong entry and
+   leave the right one standing, which is the crash this whole mechanism exists
+   to stop. It leaves the block pointer here instead, and the game thread
+   retires the entry at the top of the next flip, BEFORE the census or the
+   publisher read any base. The engine's allocator is genuinely multi-threaded
+   (`0x4D85B0` takes a critical section at `0x4D85C2`), so this is not a
+   theoretical path even though no off-thread free of a recorded surface has
+   yet been observed.
+
+   EVERY OFF-THREAD FREE IS PUSHED, unfiltered, and that is deliberate. The
+   obvious optimisation — scan the table off-thread and push only on a match —
+   is NOT safe and was caught being unsafe: `MEM_Free` fires once per block, so
+   a scan that races a swap-remove and misses (the moved entry lands in a slot
+   the scan has already passed) queues nothing, the game thread never hears
+   about it, and the entry stands for ever. A filter would have been
+   load-bearing, not an optimisation.
+
+   THE DRAIN ONLY EVER READS A QUIESCENT RING. A producer claims a slot with
+   `s_freeqN`, stores into it, and only THEN bumps `s_freeqIn`; the consumer
+   reads `s_freeqIn` first and `s_freeqN` second, so any push still in flight
+   makes the two disagree and it does not read the window at all. That is what
+   makes the slots trustworthy: every index in [done, head) was stored by its
+   own claimant, so no stale value from an earlier lap can be read as a live
+   one. (The third review found exactly that hole in the version before this:
+   a flush skipped slots without clearing them, so a stale pointer survived a
+   lap and was taken as real while the pointer that should have been there was
+   written after the consumer had moved past. The zero-on-take below is kept as
+   an assertion — a 0 now means a bug — and is NOT the argument.)
+
+   EVERY WAY THIS RING CAN LOSE AN ENTRY ENDS IN THE SAME PLACE: retire the
+   WHOLE table and let the surfaces re-register from the engine's own draws.
+   The three ways are a push in flight, more than FREEQ claimed since the last
+   drain, and a producer lapping the window while we walk it (the head is
+   re-read against where the walk STARTED, which is the comparison that catches
+   a claim at index >= from + FREEQ).
+
+   WHAT IT COSTS, MEASURED 2026-09-12 over a load and four minutes of play:
+   33 842 off-thread frees, EVERY ONE of them during the level load — the
+   loader thread, created at 0x4982CA — and not one in the 236 000 flips of
+   play that followed. Three flushes, all in the load. So in play this
+   mechanism is inert, and its cost is three re-seeds while a map is loading.
+   That is also why the ring exists rather than "any off-thread free flushes":
+   at 33 842 frees spread over a load, an unconditional flush would re-seed
+   every surface on most of the load's flips. */
+#define FREEQ 256
+static volatile LONG s_freeqN;                  /* claimed, ever — any thread   */
+static volatile LONG s_freeqIn;                 /* STORED, ever — any thread    */
+static LONG          s_freeqDone;               /* taken, ever — game thread    */
+static volatile LONG s_freeq[FREEQ];            /* 0 = taken, or claimed-not-yet-stored */
+static unsigned      s_freeqFlush;              /* times the table was flushed  */
+
+static void surf_free_offthread(unsigned p)
+{
+    LONG n = InterlockedIncrement(&s_freeqN) - 1;   /* claim */
+    InterlockedExchange(&s_freeq[n & (FREEQ - 1)], (LONG)p);
+    InterlockedIncrement(&s_freeqIn);               /* and only now is it there */
+}
+
+static void surf_drain_freeq(void)              /* game thread only */
+{
+    /* STORED BEFORE CLAIMED, in that order: a push that completes between the
+       two reads makes them disagree, which is the conservative answer. */
+    LONG in   = InterlockedExchangeAdd(&s_freeqIn, 0);
+    LONG head = InterlockedExchangeAdd(&s_freeqN, 0);
+    LONG from = s_freeqDone;
+    int flush = 0;
+
+    if (head == from) return;
+    /* The spans are taken in UNSIGNED arithmetic: these counters only grow, so
+       one day they wrap, and a signed difference across that wrap is undefined
+       where an unsigned one is exactly the distance we want. */
+    if (in != head) flush = 1;                   /* a push is in flight */
+    else if ((unsigned long)head - (unsigned long)from > FREEQ) flush = 1;
+    else {
+        LONG k;
+        for (k = from; k != head; k++) {
+            unsigned p = (unsigned)InterlockedExchange(&s_freeq[k & (FREEQ - 1)], 0);
+            int i;
+            if (!p) { flush = 1; break; }        /* claimed, not yet stored  */
+            for (i = 0; i < s_nsurf; i++)
+                if (s_surf[i].owner == p) { surf_drop(i); break; }
+        }
+        /* did a producer lap the window while we were walking it? */
+        if (!flush && (unsigned long)InterlockedExchangeAdd(&s_freeqN, 0)
+                      - (unsigned long)from > FREEQ) flush = 1;
+    }
+    if (flush) {
+        s_freeqFlush++;
+        while (s_nsurf) surf_drop(0);
+    }
+    s_freeqDone = head;
+}
+
+static SURF* surf_get(unsigned base, int w, int h, int pitch, unsigned owner)
 {
     int i;
     if (!base || w <= 0 || h <= 0 || pitch <= 0 || w > 4096 || h > 4096 || pitch > 8192) return NULL;
     for (i = 0; i < s_nsurf; i++)
         if (s_surf[i].base == base) {
+            s_surf[i].owner = owner;       /* re-made over the same bytes: the new block */
             if (s_surf[i].w != w || s_surf[i].h != h || s_surf[i].pitch != pitch) {
                 /* the object was re-allocated over the same bytes: start over.
                    The ops already recorded against the base carry the OLD
@@ -191,7 +291,7 @@ static SURF* surf_get(unsigned base, int w, int h, int pitch)
     if (s_nsurf >= MAX_SURF) return NULL;
     memset(&s_surf[s_nsurf], 0, sizeof(SURF));
     s_surf[s_nsurf].base = base; s_surf[s_nsurf].w = w; s_surf[s_nsurf].h = h;
-    s_surf[s_nsurf].pitch = pitch;
+    s_surf[s_nsurf].pitch = pitch; s_surf[s_nsurf].owner = owner;
     s_surf[s_nsurf].bl = s_surf[s_nsurf].bt = 0x7FFF; s_surf[s_nsurf].br = s_surf[s_nsurf].bb = -1;
     return &s_surf[s_nsurf++];
 }
@@ -199,8 +299,28 @@ static SURF* surf_get(unsigned base, int w, int h, int pitch)
 /* a drawing context's destination as a surface */
 static SURF* surf_of_ctx(const int* ctx)
 {
+    unsigned base;
     if (!ptr_ok(ctx)) return NULL;
-    return surf_get((unsigned)ctx[CTX_BASE], ctx[CTX_W], ctx[CTX_H], ctx[CTX_PITCH]);
+    base = (unsigned)ctx[CTX_BASE];
+    /* THE OWNER IS DERIVED FROM THE BASE, NOT FROM THE CONTEXT POINTER.
+       `SurfaceCreateNamed 0x4C69F0` asks MEM_Alloc for w*h+0x30 bytes and points
+       the object's base field at block+0x30 (0x4C6A01..0x4C6A14), so the block
+       MEM_Free will be handed is `base - 0x30` — and that holds however we
+       reached the surface. The CONTEXT is not usable for this: `GetContext
+       0x4C5E70` rep-movs a 12-dword copy into the caller's stack frame, so most
+       blits hand us a copy whose address has nothing to do with the block.
+       (MEASURED 2026-09-12, and it is why the first cut of this rule was wrong:
+       keying on the context refused 1235 draws in one game while registering
+       the same surfaces through `after_alloc`, where the context IS the object.)
+
+       WHAT THIS DOES NOT COVER, stated rather than assumed: `SurfaceAttach
+       0x4C6A60` — one caller, `0x4B5897` — lays the same header over the locked
+       DirectDraw primary, memory the engine did not allocate and will not
+       MEM_Free. Such a surface would have no destructor here. None was ever
+       recorded (every base this module has seen is an `0x4C69F0` object;
+       measured over a full session in game and in the shell), and its pixels
+       belong to the fork, which frees them only in the surface's own Release. */
+    return surf_get(base, ctx[CTX_W], ctx[CTX_H], ctx[CTX_PITCH], base - 0x30);
 }
 
 /* ---- the ops recorded since the last flip ------------------------------ */
@@ -823,6 +943,9 @@ static int __cdecl before_flip(void* entry_esp)
     int hijack = 0;
     if (!s_gameTid) s_gameTid = GetCurrentThreadId();
     else if (!on_game_thread()) return 0;
+    /* FIRST, before the census or the publisher read a single base: retire every
+       surface another thread's MEM_Free left for us (surf_drain_freeq) */
+    surf_drain_freeq();
     s_flips++;
     if (s_flips == 1) {
         _snprintf(b, sizeof b, "gui: first flip on thread %u (init saw %u)", (unsigned)GetCurrentThreadId(), (unsigned)s_gameTid);
@@ -1029,9 +1152,9 @@ void tagpu_gui_flush(unsigned int frame_counter)
     if (!s_installed) return;
     if (frame_counter - last >= 600) {
         last = frame_counter;
-        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d",
+        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u",
                   s_flips, s_opsTotal, s_opsDropped, s_changedTotal, s_unexplTotal, s_nsurf,
-                  s_pubOps, s_pubBytes, g_guiq.qHead - g_guiq.qTail, g_guiq.resets, g_guiq.overflows, g_guiq.stalls, g_gui_draw);
+                  s_pubOps, s_pubBytes, g_guiq.qHead - g_guiq.qTail, g_guiq.resets, g_guiq.overflows, g_guiq.stalls, g_gui_draw, s_freeqFlush);
         glog(b);
         {
             int k, n = 0;

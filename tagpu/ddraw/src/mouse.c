@@ -5,6 +5,7 @@
 #include "hook.h"
 #include "utils.h"
 #include "config.h"
+#include "tagpu_hud.h"
 
 
 BOOL g_mouse_locked;
@@ -72,14 +73,24 @@ int mouse_last_client(int* cx, int* cy)
     return 1;
 }
 
+/* Is a CLIENT point over the picture? The one definition, because two paths
+   ask: the message path below, and the poll path (fake_GetCursorPos) that the
+   engine's edge scroll reads. They answered differently until G18-9 — the poll
+   CLAMPED an outside point into range and so reported x == 0 or width-1, the
+   exact equality 0x41CE90 scrolls on, ~700 times a launch. */
+int mouse_client_inside(int cx, int cy)
+{
+    return !(cx > g_ddraw.render.viewport.x + g_ddraw.render.viewport.width ||
+             cx < g_ddraw.render.viewport.x ||
+             cy > g_ddraw.render.viewport.y + g_ddraw.render.viewport.height ||
+             cy < g_ddraw.render.viewport.y);
+}
+
 int mouse_client_to_game(int cx, int cy, int* gx, int* gy)
 {
     int x, y, inside;
 
-    inside = !(cx > g_ddraw.render.viewport.x + g_ddraw.render.viewport.width ||
-               cx < g_ddraw.render.viewport.x ||
-               cy > g_ddraw.render.viewport.y + g_ddraw.render.viewport.height ||
-               cy < g_ddraw.render.viewport.y);
+    inside = mouse_client_inside(cx, cy);
 
     if (!inside)
     {
@@ -96,6 +107,14 @@ int mouse_client_to_game(int cx, int cy, int* gx, int* gy)
         y = (DWORD)((cy - g_ddraw.render.viewport.y) * g_ddraw.mouse.unscale_y);
         mouse_note_client(cx, cy);
     }
+
+    /* HUD SCALE (tagpu_hud.h, gui-renderer.md 22): the last step of every
+       client -> game conversion in the fork. Over a magnified HUD region the
+       engine is handed the point on its own 1x HUD grid, so its hit tests --
+       which are all written against the 128 / 32 constants -- go on being right
+       while the player points at art that is s times bigger. The identity
+       outside a HUD region and at stock scale. */
+    tagpu_hud_to_engine(&x, &y);
 
     /* The clamp keeps the ORIGINAL unsigned comparison. `g_ddraw.width` is a
        DWORD and the inline version in wndproc promoted `x` to unsigned against

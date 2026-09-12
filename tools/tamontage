@@ -1,0 +1,1928 @@
+#!/usr/bin/env python3
+"""tamontage — render a scripted desktop montage to video.
+
+The montage is a JSON script (see promo/*.json). It describes a *stage* — an
+unbounded virtual desktop laid out as a grid of equal window cells — a set of
+windows placed on cells, a keyframed camera flying over that stage, and timed
+captions. The renderer composites one output frame at a time and pipes raw
+RGB24 into ffmpeg.
+
+Two source backends fill a window, chosen per render, not per script:
+
+    wire    procedurally drawn white-box placeholders. No game, no capture,
+            renders a 50 s montage in about a minute. This is the backend you
+            iterate the *timing* on.
+    clip    real footage, one video file per clip id, captured from a running
+            instance with `ffmpeg -window_id` (see the ta-capture skill).
+
+Because the backend is a render-time choice, the same script that white-boxes today
+renders the real thing the moment the clips exist, and re-renders when a new
+version changes what the game looks like.
+
+Stage coordinates are "window units": cell (col, row) has its top-left at
+(col * pitch_x, row * pitch_y) where pitch = tile size + desktop gap. Cells may
+be negative; the hero windows sit at (0,0)..(1,1) and the filler grid spreads
+around them.
+
+The camera's zoom is expressed the way you would say it out loud: `cols` is how
+many window columns fit across the output frame. `cols: 1` is one window filling
+the width; `cols: 40` is the wide shot. Zoom is interpolated in log space so a
+pull-back reads at a constant rate rather than rushing at the end.
+
+Usage:
+    tools/tamontage render promo/tacli-promo.json -o /tmp/out.mp4
+    tools/tamontage render promo/tacli-promo.json -o /tmp/out.mp4 --backend clip --clips <dir>
+    tools/tamontage probe  promo/tacli-promo.json
+"""
+
+from __future__ import annotations
+
+import argparse
+import concurrent.futures as cf
+import json
+import math
+import os
+import random
+import re
+import shutil
+import subprocess
+import sys
+import wave
+from bisect import bisect_right
+from collections import OrderedDict
+from pathlib import Path
+
+try:
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:  # pragma: no cover - the venv carries Pillow and numpy
+    sys.exit("tamontage needs Pillow and numpy: use the project venv "
+             "(.venv-undither/bin/python)")
+
+REPO = Path(__file__).resolve().parents[1]
+
+
+# --------------------------------------------------------------------------
+# fonts
+# --------------------------------------------------------------------------
+
+_FONT_CACHE: dict[tuple[str, int], ImageFont.FreeTypeFont] = {}
+
+
+def _fc_match(pattern: str) -> str | None:
+    """Resolve a fontconfig pattern to a file, or None IF THE FAMILY IS ABSENT.
+
+    `fc-match` NEVER fails: asked for a font the machine does not have it returns
+    its best guess, and the fallback ladder below it is then dead code. Here that
+    silently typeset the terminal in a PROPORTIONAL face for the whole life of
+    the film -- "JetBrains Mono" is not installed on the reference setup and
+    fc-match answered NotoSans-Regular, which matched happily and won. So compare
+    the family it came back with against the family that was asked for, and treat
+    a mismatch as a miss.
+    """
+    if not shutil.which("fc-match"):
+        return None
+    try:
+        out = subprocess.run(["fc-match", "-f", "%{file}\t%{family}", pattern],
+                             capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    path, _, families = out.stdout.strip().partition("\t")
+    if not path or not Path(path).exists():
+        return None
+    want = pattern.split(":")[0].strip().lower()
+    # a generic alias (monospace, sans-serif) has no family to compare against:
+    # whatever fontconfig picks for it IS the answer.
+    if want in ("monospace", "sans-serif", "serif"):
+        return path
+    got = [f.strip().lower() for f in families.split(",")]
+    return path if any(want == g or want in g for g in got) else None
+
+
+def _font_file(kind: str) -> str | None:
+    """A font file for 'mono', 'sans' or 'sans-bold'.
+
+    Resolved through fontconfig so the montage renders on whatever the machine
+    has; no font path is baked in.
+    """
+    patterns = {
+        "mono": ["JetBrains Mono", "DejaVu Sans Mono", "Liberation Mono", "monospace"],
+        "mono-bold": ["JetBrains Mono:style=Bold", "DejaVu Sans Mono:style=Bold",
+                      "monospace:style=Bold"],
+        "sans": ["Inter", "Noto Sans", "DejaVu Sans", "Liberation Sans",
+                 "sans-serif"],
+        "sans-bold": ["Inter:style=Bold", "Noto Sans:style=Bold",
+                      "DejaVu Sans:style=Bold", "Liberation Sans:style=Bold",
+                      "sans-serif:style=Bold"],
+    }[kind]
+    for pat in patterns:
+        hit = _fc_match(pat)
+        if hit:
+            return hit
+    return None
+
+
+def font(kind: str, size: int) -> ImageFont.FreeTypeFont:
+    size = max(1, int(size))
+    key = (kind, size)
+    got = _FONT_CACHE.get(key)
+    if got is None:
+        path = _font_file(kind)
+        try:
+            got = ImageFont.truetype(path, size) if path else ImageFont.load_default()
+        except OSError:
+            got = ImageFont.load_default()
+        _FONT_CACHE[key] = got
+    return got
+
+
+def text_w(draw: ImageDraw.ImageDraw, s: str, f) -> int:
+    return int(draw.textlength(s, font=f))
+
+
+def _wrap(draw, text: str, f, maxw: float) -> list[str]:
+    """Greedy word wrap. Explicit newlines in the text are honoured."""
+    out = []
+    for para in text.split("\n"):
+        cur = ""
+        for word in para.split():
+            trial = f"{cur} {word}".strip()
+            if cur and text_w(draw, trial, f) > maxw:
+                out.append(cur)
+                cur = word
+            else:
+                cur = trial
+        out.append(cur)
+    return out or [""]
+
+
+def _fit_text(draw, text: str, kind: str, size: int, maxw: float,
+              max_lines: int):
+    """Wrap `text` to `maxw`, shrinking the font until it fits in `max_lines`.
+
+    Returns (font, lines). Wrapping alone is not enough: one unbreakable long
+    word, or a narrow output, still overflows, so the size steps down until the
+    widest line fits.
+    """
+    while size > 8:
+        f = font(kind, size)
+        lines = _wrap(draw, text, f, maxw)
+        if len(lines) <= max_lines and max(text_w(draw, l, f) for l in lines) <= maxw:
+            return f, lines
+        size = int(size * 0.92)
+    f = font(kind, max(8, size))
+    return f, _wrap(draw, text, f, maxw)
+
+
+# --------------------------------------------------------------------------
+# easing and interpolation
+# --------------------------------------------------------------------------
+
+def ease(name: str, u: float) -> float:
+    u = min(1.0, max(0.0, u))
+    if name == "linear":
+        return u
+    if name == "in":                      # slow start
+        return u * u
+    if name == "out":                     # slow stop
+        return 1.0 - (1.0 - u) ** 2
+    return u * u * (3.0 - 2.0 * u)        # "smooth" (smoothstep), the default
+
+
+class Camera:
+    """Keyframed (cx, cy, cols) over time.
+
+    cx/cy are stage units and interpolate linearly under the keyframe's easing.
+    cols interpolates in LOG space: a pull-back from 2 to 40 columns then covers
+    equal *ratios* in equal times, which is what reads as a steady zoom. Linear
+    interpolation of the same numbers spends most of its time near 40 and looks
+    like it is braking.
+    """
+
+    def __init__(self, keys: list[dict]):
+        if not keys:
+            raise ValueError("camera needs at least one keyframe")
+        self.keys = sorted(keys, key=lambda k: k["t"])
+        self.ts = [k["t"] for k in self.keys]
+
+    def at(self, t: float) -> tuple[float, float, float]:
+        ks = self.keys
+        if t <= self.ts[0]:
+            k = ks[0]
+            return k["cx"], k["cy"], k["cols"]
+        if t >= self.ts[-1]:
+            k = ks[-1]
+            return k["cx"], k["cy"], k["cols"]
+        i = bisect_right(self.ts, t) - 1
+        a, b = ks[i], ks[i + 1]
+        span = b["t"] - a["t"]
+        u = 0.0 if span <= 0 else (t - a["t"]) / span
+        e = ease(b.get("ease", "smooth"), u)
+        cx = a["cx"] + (b["cx"] - a["cx"]) * e
+        cy = a["cy"] + (b["cy"] - a["cy"]) * e
+        cols = math.exp(math.log(a["cols"]) + (math.log(b["cols"]) - math.log(a["cols"])) * e)
+        return cx, cy, cols
+
+
+# --------------------------------------------------------------------------
+# sources — what fills a window rect
+# --------------------------------------------------------------------------
+
+# Sources are drawn at a CANONICAL size off a power-of-two ladder and then scaled
+# to the destination, rather than drawn directly at the destination size.
+#
+# Drawing at the destination size is what made the picture shimmer: the camera moves
+# continuously, so a tile's pixel width creeps past a whole number every few frames,
+# and every feature inside it is positioned as int(w * k) — so a one-pixel change in
+# w moves the grid lines, the HUD, the text and the unit dots by differing amounts.
+# Measured before this change: 32.5 % of the wide-shot frame differed from the frame
+# before it, on content that is barely moving.
+#
+# The ladder targets ~2x the displayed size, so the scale-down also anti-aliases:
+# a 1 px border drawn at 128 and shown at 45 becomes a clean third-of-a-pixel line
+# instead of a hard one that pops in and out.
+LADDER = (32, 48, 64, 80, 96, 128, 160, 192, 256, 320, 384, 512, 640, 768,
+          1024, 1280, 1536, 2048, 2560, 3072, 4096)
+# Measured 2026-09-10 on the wide shot, as mean temporal second difference
+# (|2f(n) - f(n-1) - f(n+1)|, which cancels smooth motion and catches popping):
+#
+#   drawn at destination size (the old way) .......... 108.7   39 ms/frame
+#   supersample 2x, bilinear .......................... 43.2  434 ms
+#   supersample 3x, bilinear .......................... 30.7  628 ms   <- default
+#   supersample 3x, lanczos ........................... 36.3  931 ms
+#
+# LANCZOS is WORSE than BILINEAR here and costs more: its ringing on the hard
+# edges of a window border is itself a temporal artifact. Do not "upgrade" it.
+# 4x is identical to 3x because the ladder quantises both to the same canonical
+# size, so 3x is the knee. --supersample 1 disables all of this for fast drafts.
+SUPERSAMPLE = 3
+RESAMPLE = Image.BILINEAR
+
+# How much variety the filler wall carries, and therefore how much the per-frame
+# source cache can share. distinct sources = len(clips) * VARIANTS_PER_CLIP, and
+# each appears at PHASES different points in its animation. Keep the product well
+# BELOW the number of tiles on screen (~1400 at the widest) or the cache cannot
+# share and every tile pays for its own draw and its own resize.
+VARIANTS_PER_CLIP = 4
+PHASES = 4
+
+# Decoded full-size clip frames held in RAM. This must comfortably exceed the
+# number of distinct (clip, phase) combinations on screen, or it thrashes: at 8
+# it re-decoded a PNG from disk for nearly every tile and the clip backend was
+# SLOWER than the procedural one (1178 ms vs 621 ms per 4K frame). Costs about
+# 2.3 MB per entry at 1024x768.
+# The full-frame cache is bounded in BYTES, not in frames. "192 frames" means
+# 460 MB of 1024x768 footage and 1.8 GB of 2048x1536 footage -- per clip, per
+# worker -- and with six clips across sixteen workers that is how a render came
+# to be killed by the OOM killer at 5-6 GB per worker. Exactly the same mistake
+# as keying LOD on absolute pixels: a count is not a budget when the thing being
+# counted changes size. 192 MB per clip is ~20 frames of 2048x1536 hero footage
+# and ~80 of 1024x768 filler, and the whole six-clip set fits in ~1.2 GB.
+FULL_LRU_BYTES = 192 << 20
+FULL_LRU_MIN = 8            # never thrash down to nothing on huge frames
+
+
+def canonical_size(want_w: int, want_h: int,
+                   native_w: int | None = None) -> tuple[int, int]:
+    """The shared size a source is rendered at before being scaled to the tile.
+
+    `native_w` is the source's own resolution, where it has one. Supersampling
+    past it manufactures pixels and then throws them away: at a 1073 px tile the
+    ladder asked for 4096, so a 1024-wide clip was upscaled FOUR TIMES and
+    resampled back down, which is most of the cost of every large-tile frame and
+    cannot add a single pixel of detail. Capping at the native width leaves the
+    wide shot untouched -- there the ladder already sits far below 1024, which is
+    where the supersampling actually earns its keep -- and only bites in the
+    large-tile band where a tile is already near or above its source resolution.
+
+    The cap never drops below the displayed size: the chrome is drawn at this
+    size too, and a border drawn smaller than it is shown would go soft.
+    """
+    target = max(want_w * SUPERSAMPLE, LADDER[0])
+    if native_w:
+        target = min(target, max(native_w, want_w))
+    target = min(target, LADDER[-1])
+    cw = next((s for s in LADDER if s >= target), LADDER[-1])
+    return cw, max(1, round(cw * want_h / max(1, want_w)))
+
+
+PALETTES = [
+    # (terrain, terrain_dark, team_a, team_b)
+    ((58, 62, 48), (44, 47, 36), (120, 190, 255), (255, 122, 88)),
+    ((52, 58, 64), (38, 43, 48), (140, 255, 180), (255, 96, 140)),
+    ((66, 58, 44), (49, 43, 33), (255, 214, 120), (110, 170, 255)),
+    ((44, 56, 60), (32, 42, 45), (170, 140, 255), (255, 170, 90)),
+]
+
+
+def _lerp(a, b, u):
+    return tuple(int(a[i] + (b[i] - a[i]) * u) for i in range(3))
+
+
+def detail_ramp(lod_w: float, lo: float = 32.0, hi: float = 105.0) -> float:
+    """How visible fine detail should be at this apparent tile width, 0..1.
+
+    A hard threshold makes hairlines VANISH mid-shot: the borders were on at
+    t=46 and gone at t=47 as lod_w crossed 70, which reads as a glitch. Fading
+    them over a range removes both the pop and the shimmer on the way down.
+    """
+    u = max(0.0, min(1.0, (lod_w - lo) / (hi - lo)))
+    return u * u * (3.0 - 2.0 * u)
+
+
+def draw_window_chrome(img, st, title: str, lod_w: float):
+    """Draw the window frame into `img`; return its client rect.
+
+    Every window on the desktop wears this, the game included — the terminal
+    does not turn into a bare rectangle, it keeps its window. Solid fills (the
+    body, the title bar) are drawn at any size because a solid area cannot
+    shimmer; HAIRLINES (the border, the buttons, the title) fade out with
+    `detail_ramp` instead of switching off.
+    """
+    w, h = img.size
+    d = ImageDraw.Draw(img)
+    dv = detail_ramp(lod_w)
+    rad = int(min(w, h) * st["radius"])
+    bw = max(1, int(w * st["border_w"]))
+    body = st["bg"]
+
+    if rad:
+        d.rounded_rectangle([0, 0, w - 1, h - 1], radius=rad, fill=body)
+    else:
+        d.rectangle([0, 0, w, h], fill=body)
+
+    bar = 0
+    if st["header"]:
+        bar = max(1, int(h * 0.055))
+        hb = st["header_bg"]
+        if rad:
+            d.rounded_rectangle([bw, bw, w - 1 - bw, bar], radius=rad, fill=hb)
+            d.rectangle([bw, max(bw, bar - rad), w - 1 - bw, bar], fill=hb)
+        else:
+            d.rectangle([bw, bw, w - 1 - bw, bar], fill=hb)
+
+        if dv > 0.03 and bar >= 6:
+            if st["header"] == "dots":
+                r = bar * 0.22
+                for i, col in enumerate([(255, 95, 86), (255, 189, 46), (39, 201, 63)]):
+                    cx = bar * (0.75 + i * 0.85)
+                    d.ellipse([cx - r, bar / 2 - r, cx + r, bar / 2 + r],
+                              fill=_lerp(hb, col, dv))
+            elif st["header"] == "buttons":
+                col = _lerp(hb, st["header_fg"], dv)
+                lw = max(1, int(bar * 0.055))
+                g = bar * 0.26
+                cell = bar * 1.7
+                right = w - bw - cell * 0.55
+                cy = bar / 2
+                for n in range(3):
+                    cx = right - cell * (2 - n)
+                    if n == 0:
+                        d.line([(cx - g, cy), (cx + g, cy)], fill=col, width=lw)
+                    elif n == 1:
+                        d.rectangle([cx - g, cy - g, cx + g, cy + g], outline=col, width=lw)
+                    else:
+                        d.line([(cx - g, cy - g), (cx + g, cy + g)], fill=col, width=lw)
+                        d.line([(cx - g, cy + g), (cx + g, cy - g)], fill=col, width=lw)
+        if title and lod_w >= 150 and w >= 200:
+            ft = font("mono", max(8, int(bar * 0.5)))
+            d.text((w / 2, bar / 2), title, font=ft,
+                   fill=_lerp(hb, st["header_fg"], dv), anchor="mm")
+
+    if dv > 0.02:
+        bc = _lerp(body, st["border"], dv)
+        if rad:
+            d.rounded_rectangle([0, 0, w - 1, h - 1], radius=rad, outline=bc, width=bw)
+        else:
+            d.rectangle([0, 0, w - 1, h - 1], outline=bc, width=bw)
+
+    return (bw, (bar + 1) if bar else bw, w - bw, h - bw)
+
+
+class WireGame:
+    """A white-box stand-in for a running game window.
+
+    Deliberately schematic: outlines, a HUD frame and moving unit dots. It is a
+    wireframe, not a mock of the real renderer — nobody should be able to mistake
+    a prototype render for footage.
+    """
+
+    def __init__(self, variant: int, label: str = ""):
+        self.variant = variant
+        self.label = label
+        self.pal = PALETTES[variant % len(PALETTES)]
+        rng = random.Random(variant * 7919 + 13)
+        self.units = [(rng.random(), rng.random(), rng.random() * math.tau,
+                       0.012 + rng.random() * 0.03, rng.random() < 0.5)
+                      for _ in range(26)]
+
+    def avg_color(self) -> tuple[int, int, int]:
+        return self.pal[0]
+
+    def frame(self, t: float, w: int, h: int, disp_w: int | None = None) -> Image.Image:
+        """The window's CLIENT area only — the frame is drawn by the Window."""
+        terrain, dark, team_a, team_b = self.pal
+        img = Image.new("RGB", (w, h), terrain)
+        d = ImageDraw.Draw(img)
+        if w < 8 or h < 6:
+            return img
+
+        lod = disp_w if disp_w is not None else w
+        dv = detail_ramp(lod)                 # hairlines fade, they never snap off
+
+        for i in range(4 if dv > 0.5 else 2):
+            bx = (0.17 + 0.23 * i + 0.05 * math.sin(t * 0.2 + i)) * w
+            by = (0.25 + 0.19 * ((i * 5) % 3)) * h
+            r = 0.11 * w
+            d.ellipse([bx - r, by - r * 0.7, bx + r, by + r * 0.7], fill=dark)
+
+        if dv > 0.03:
+            # ImageDraw DISCARDS alpha on an RGB image, so blend by hand — a
+            # fill of (255,255,255,8) paints SOLID WHITE, not 3% white.
+            grid = _lerp(terrain, (255, 255, 255), 0.12 * dv)
+            step = max(6, int(w / 12))
+            for x in range(0, w, step):
+                d.line([(x, 0), (x, h)], fill=grid, width=1)
+            for y in range(0, h, step):
+                d.line([(0, y), (w, y)], fill=grid, width=1)
+
+        rad = max(1, round(w * 0.009))
+        for (ux, uy, phase, speed, side) in self.units:
+            ang = phase + t * speed * math.tau
+            x = (ux + 0.10 * math.cos(ang)) * w
+            y = (uy + 0.10 * math.sin(ang * 1.3)) * h
+            d.ellipse([x - rad, y - rad, x + rad, y + rad],
+                      fill=team_a if side else team_b)
+
+        # TA's side panel and bottom strip: SOLID fills, so they are safe at any
+        # size — a solid area cannot shimmer, only hairlines can.
+        panel = max(1, int(w * 0.135))
+        d.rectangle([0, 0, panel, h], fill=(24, 26, 30))
+        d.rectangle([0, h - max(1, int(h * 0.09)), w, h], fill=(24, 26, 30))
+        if dv > 0.05:
+            d.line([(panel, 0), (panel, h)],
+                   fill=_lerp((24, 26, 30), (210, 214, 220), dv * 0.7),
+                   width=max(1, int(w * 0.006)))
+        return img
+
+
+TERMINAL_STYLES = {
+    # The shipped look is chosen from these; render them with
+    # promo/prototype-cuts/terminal-styles.py and compare.
+    "classic": dict(
+        bg=(14, 17, 21), fg=(226, 230, 236), dim=(120, 128, 138),
+        prompt=(126, 214, 135), out=(150, 200, 255), radius=0.0,
+        header="dots", header_bg=(32, 36, 42), header_fg=(150, 156, 165),
+        border=(210, 214, 220), border_w=0.0035, cursor="block",
+        pad=0.028, tokens=None, scanlines=False, glow=0.0,
+        fscale=1.0, valign="top"),
+    "soft": dict(
+        bg=(18, 21, 27), fg=(223, 228, 236), dim=(110, 119, 131),
+        prompt=(122, 200, 255), out=(140, 190, 240), radius=0.022,
+        header="dots", header_bg=(25, 29, 36), header_fg=(120, 128, 140),
+        border=(52, 59, 70), border_w=0.0015, cursor="bar",
+        pad=0.05, tokens=None, scanlines=False, glow=0.0,
+        # "fit", not a multiplier: the output is a REAL transcript and is as long
+        # as the tool made it. At a fixed 1.0 the 68-character lines ran off the
+        # right edge of the window and the twelfth line fell out of the bottom.
+        # `out_fscale` then keeps the COMMAND big -- one shared size sets it to
+        # suit the longest line of a transcript nobody is meant to read, which
+        # leaves the typing beat a small line in a large empty window.
+        fscale="fit", max_fscale=1.9, out_fscale=0.62, valign="center"),
+    "chromeless": dict(
+        bg=(16, 19, 25), fg=(228, 233, 241), dim=(105, 114, 127),
+        prompt=(128, 222, 165), out=(132, 186, 232), radius=0.028,
+        header=None, header_bg=None, header_fg=None,
+        border=(46, 53, 64), border_w=0.0012, cursor="block",
+        pad=0.062, tokens=True, scanlines=False, glow=0.0,
+        fscale=1.0, valign="top"),
+    "phosphor": dict(
+        bg=(10, 13, 11), fg=(168, 255, 186), dim=(72, 128, 88),
+        prompt=(126, 255, 150), out=(120, 224, 150), radius=0.014,
+        header=None, header_bg=None, header_fg=None,
+        border=(46, 82, 56), border_w=0.002, cursor="block",
+        pad=0.055, tokens=None, scanlines=True, glow=0.35,
+        fscale=1.0, valign="top"),
+    # The shipped look: the plain bash window, but with Chrome's three window
+    # controls (minimise / maximise / close) rather than macOS traffic lights.
+    "bash": dict(
+        bg=(14, 17, 21), fg=(226, 230, 236), dim=(120, 128, 138),
+        prompt=(126, 214, 135), out=(150, 200, 255), radius=0.0,
+        header="buttons", header_bg=(32, 36, 42), header_fg=(154, 160, 166),
+        border=(210, 214, 220), border_w=0.0035, cursor="block",
+        pad=0.028, tokens=None, scanlines=False, glow=0.0,
+        fscale=1.0, valign="top"),
+    # The command is the hero of the first seven seconds, so set it like one:
+    # big type, the block composed against the window rather than clinging to
+    # the top edge. The other styles leave ~80% of a 4:3 window empty, which is
+    # what actually read as unpolished — not the chrome.
+    "hero": dict(
+        bg=(15, 18, 24), fg=(232, 237, 245), dim=(104, 113, 127),
+        prompt=(128, 222, 165), out=(130, 186, 234), radius=0.026,
+        header=None, header_bg=None, header_fg=None,
+        border=(48, 56, 68), border_w=0.0012, cursor="block",
+        pad=0.075, tokens=True, scanlines=False, glow=0.0,
+        fscale="fit", max_fscale=1.9, valign="center"),
+}
+
+
+class Terminal:
+    """A terminal window typing one command, then printing a few lines.
+
+    The look comes from TERMINAL_STYLES; `style` on the window spec picks one.
+    """
+
+    def __init__(self, prompt: str, command: str, output: list[str],
+                 t_type: float, type_rate: float, t_enter: float,
+                 scrollback: list[str] | None = None, style: str = "classic",
+                 desktop=(16, 18, 22), title: str = "bash",
+                 t_done: float | None = None):
+        self.prompt = prompt
+        self.command = command
+        self.output = output
+        self.t_type = t_type
+        self.type_rate = type_rate
+        self.t_enter = t_enter
+        self.scrollback = scrollback or []
+        self.st = TERMINAL_STYLES.get(style, TERMINAL_STYLES["classic"])
+        self.desktop = tuple(desktop)
+        self.title = title
+        self.t_done = t_done
+
+    def avg_color(self):
+        return self.st["bg"]
+
+    def typing_ends(self) -> float:
+        return self.t_type + len(self.command) / self.type_rate
+
+    def _typed(self, t: float) -> str:
+        if t < self.t_type:
+            return ""
+        n = int((t - self.t_type) * self.type_rate)
+        return self.command[:min(n, len(self.command))]
+
+    def _tokens(self):
+        """(text, colour_key) spans for the whole command, for syntax colour."""
+        st = self.st
+        if not st["tokens"]:
+            return [(self.command, st["fg"])]
+        out, i = [], 0
+        for n, word in enumerate(self.command.split(" ")):
+            col = st["fg"]
+            if n == 0:
+                col = st["prompt"]
+            elif n <= 2:
+                col = (238, 206, 130)
+            elif word.startswith("-"):
+                col = st["dim"]
+            out.append((word, col))
+        spans, pos = [], 0
+        for n, (word, col) in enumerate(out):
+            if n:
+                spans.append((" ", st["fg"]))
+            spans.append((word, col))
+        return spans
+
+    def frame(self, t: float, w: int, h: int, disp_w: int | None = None):
+        """The window's CLIENT area only — the frame is drawn by the Window."""
+        st = self.st
+        img = Image.new("RGB", (w, h), st["bg"])
+        if w < 40 or h < 24:
+            return img
+        d = ImageDraw.Draw(img)
+
+        scale = st.get("fscale", 1.0)
+        x0 = int(w * st["pad"])
+        avail = w - 2 * x0
+        avail_h = h * (1.0 - 2 * st["pad"])
+        cmd_line = self.prompt + " " + self.command
+        out_lines = list(self.scrollback) + list(self.output)
+        # `out_fscale` sets the output at a fraction of the command's size: the
+        # command is the shot and a REAL transcript's longest line is far longer
+        # than it, so one shared size shrinks the command to suit text nobody is
+        # meant to read. Unset, everything shares one size like a real terminal.
+        ratio = st.get("out_fscale")
+
+        def _fits(size: int) -> bool:
+            fm_try = font("mono", size)
+            osz = max(7, int(size * ratio)) if ratio else size
+            fo_try = font("mono", osz)
+            wide = (text_w(d, cmd_line, fm_try) > avail
+                    or any(text_w(d, s, fo_try) > avail for s in out_lines))
+            tall = int(size * 1.6) + len(out_lines) * int(osz * 1.6) > avail_h
+            return not (wide or tall)
+
+        if scale == "fit":
+            fs = max(7, int(h * 0.052 * st.get("max_fscale", 1.9)))
+            while fs > 8 and not _fits(fs):
+                fs = int(fs * 0.96)
+        else:
+            fs = max(7, int(h * 0.052 * scale))
+        fs_out = max(7, int(fs * ratio)) if ratio else fs
+        fm, fb = font("mono", fs), font("mono-bold", fs)
+        fo = font("mono", fs_out)
+        line_h = int(fs * 1.6)
+        out_h = int(fs_out * 1.6)
+
+        block_h = line_h + (len(self.scrollback) + len(self.output)) * out_h
+        if st.get("valign") == "center":
+            y = int((h - block_h) / 2)
+        else:
+            y = int(h * 0.055)
+
+        for i, line in enumerate(self.scrollback):
+            d.text((x0, y + out_h * i), line, font=fo, fill=st["dim"])
+        y += out_h * len(self.scrollback)
+
+        d.text((x0, y), self.prompt, font=fb, fill=st["prompt"])
+        cx = x0 + text_w(d, self.prompt, fb) + int(fs * 0.6)
+        typed = self._typed(t)
+
+        shown, pos = len(typed), 0
+        for span, col in self._tokens():
+            if pos >= shown:
+                break
+            part = span[:max(0, shown - pos)]
+            if part:
+                d.text((cx, y), part, font=fm, fill=col)
+                cx += text_w(d, part, fm)
+            pos += len(span)
+
+        if shown < len(self.command) or (t % 1.0) < 0.55:
+            if st["cursor"] == "bar":
+                d.rectangle([cx, y, cx + max(1, int(fs * 0.12)), y + fs], fill=st["fg"])
+            elif st["cursor"] == "underline":
+                d.rectangle([cx, y + fs, cx + int(fs * 0.6), y + fs + max(1, fs // 10)],
+                            fill=st["fg"])
+            else:
+                d.rectangle([cx, y, cx + int(fs * 0.6), y + fs], fill=st["fg"])
+
+        if t >= self.t_enter:
+            step = 0.22
+            if self.t_done is not None and self.output:
+                # every line up, and readable, before the flip
+                step = min(step, max(0.04, (self.t_done - 0.3 - self.t_enter)
+                                     / len(self.output)))
+            for i, line in enumerate(self.output):
+                ly = y + line_h + out_h * i
+                if ly + fs_out > h or t < self.t_enter + step * i:
+                    break
+                d.text((x0, ly), line, font=fo,
+                       fill=st["out"] if line.startswith("  ") else st["fg"])
+
+        if st["scanlines"]:
+            step = max(2, int(h / 240))
+            dark = tuple(int(c * 0.82) for c in st["bg"])
+            for yy in range(0, h, step * 2):
+                d.line([(0, yy), (w, yy)], fill=dark, width=1)
+        return img
+
+
+class _ThumbView:
+    """The thumb ladder as PIL images, built on demand off a mmapped array.
+
+    Indexing costs one small copy (160x120), which is nothing next to holding
+    every frame of every clip resident in every worker.
+    """
+
+    __slots__ = ("arr",)
+
+    def __init__(self, arr):
+        self.arr = arr
+
+    def __len__(self):
+        return len(self.arr)
+
+    def __getitem__(self, i):
+        return Image.fromarray(np.asarray(self.arr[i]))
+
+
+class Clip:
+    """Real footage for one clip id.
+
+    Frames are pre-extracted once into a cache directory at two ladders: a small
+    'thumb' ladder held in RAM for grid tiles, and full-size PNGs loaded on
+    demand (LRU) for hero windows. Tiles in the wide shot are ~48 px across, so
+    serving them from full-size frames would decode a thousand 1024x768 images
+    per output frame.
+    """
+
+    THUMB_W = 160
+    # Raw, memmapped ladders. THUMB_W alone is never reached at 4K -- the
+    # canonical sizes there run 254..2554 -- so every single source fetch was
+    # decoding a full 2048x1536 PNG (33-47 ms) to produce a 318 px tile, and PNG
+    # decode was 26-56% of a real sequential render. An LRU cannot help: each
+    # (clip, phase) advances one frame per output frame, so every access is a
+    # compulsory miss. The answer is a cheaper read, not a bigger cache.
+    LADDERS = (160, 512, 1024)
+    native_w = None          # set from the first extracted frame
+
+    def __init__(self, clip_id: str, path: Path, cache: Path, fps: float):
+        self.id = clip_id
+        self.path = path
+        self.fps = fps
+        self.dir = cache / clip_id
+        self.thumbs: list[Image.Image] = []
+        self.full = OrderedDict()
+        self._lru_n = None       # frames, derived from FULL_LRU_BYTES on first read
+        self.n = 0
+        self._extract()
+
+    def _extract(self) -> None:
+        stamp = self.dir / ".done"
+        if not stamp.exists():
+            if self.dir.exists():
+                shutil.rmtree(self.dir)
+            self.dir.mkdir(parents=True, exist_ok=True)
+            # -r alone, never with -fps_mode/-vsync: ffmpeg refuses the pair as
+            # contradictory ("One of -r/-fpsmax was specified together a non-CFR
+            # -vsync/-fps_mode"), and CFR is what we want anyway — frame index
+            # has to map linearly to time for Clip.frame()'s modulo to be right.
+            cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                   "-i", str(self.path), "-r", str(self.fps),
+                   str(self.dir / "f%05d.png")]
+            subprocess.run(cmd, check=True)
+            stamp.write_text("ok\n")
+        self.frames = sorted(self.dir.glob("f*.png"))
+        self.n = len(self.frames)
+        if self.n == 0:
+            raise SystemExit(f"clip {self.id}: no frames extracted from {self.path}")
+        with Image.open(self.frames[0]) as probe:
+            self.native_w = probe.width
+
+        # Each ladder is built ONCE, straight from the mp4 -- one ffmpeg pass that
+        # scales and hands over raw frames, ~3 s per clip. Building it by decoding
+        # the extracted PNGs instead costs minutes and buys nothing.
+        self.ladders = []
+        for lw in self.LADDERS:
+            if lw >= self.native_w:
+                break
+            npy = self.dir / f"ladder-{lw}.npy"
+            if not npy.exists():
+                self._build_ladder(npy, lw)
+            # mmap, and do NOT materialise: `np.asarray(a)` per frame copies the
+            # whole ladder into this process's heap, which is ~100 MB per clip
+            # per worker and is pure duplication -- the mapped pages are shared.
+            self.ladders.append((lw, np.load(npy, mmap_mode="r")))
+        if self.ladders:
+            self._thumb_arr = self.ladders[0][1]
+            self.thumbs = _ThumbView(self._thumb_arr)
+
+    def _build_ladder(self, npy: Path, width: int) -> None:
+        with Image.open(self.frames[0]) as im:
+            sw, sh = im.size
+        h = max(2, round(width * sh / sw) // 2 * 2)
+        proc = subprocess.Popen(
+            ["ffmpeg", "-v", "error", "-i", str(self.path), "-r", str(self.fps),
+             "-vf", f"scale={width}:{h}:flags=lanczos",
+             "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], stdout=subprocess.PIPE)
+        raw = proc.stdout.read()
+        proc.wait()
+        per = width * h * 3
+        n = len(raw) // per
+        if n == 0:
+            raise SystemExit(f"clip {self.id}: ladder {width} came back empty")
+        np.save(npy, np.frombuffer(raw[:n * per], np.uint8).reshape(n, h, width, 3))
+
+    def avg_color(self) -> tuple[int, int, int]:
+        small = self.thumbs[0].resize((1, 1), Image.BOX)
+        return small.getpixel((0, 0))
+
+    def _full(self, i: int) -> Image.Image:
+        got = self.full.get(i)
+        if got is None:
+            got = Image.open(self.frames[i]).convert("RGB")
+            if self._lru_n is None:
+                per = max(1, got.width * got.height * 3)
+                self._lru_n = max(FULL_LRU_MIN, FULL_LRU_BYTES // per)
+            self.full[i] = got
+            while len(self.full) > self._lru_n:
+                self.full.popitem(last=False)
+        else:
+            self.full.move_to_end(i)
+        return got
+
+    def frame(self, t: float, w: int, h: int, disp_w: int | None = None) -> Image.Image:
+        i = int(t * self.fps) % self.n
+        src = None
+        for lw, arr in self.ladders:            # smallest ladder that still has
+            if w <= lw:                         # more pixels than we are asked for
+                src = Image.fromarray(arr[i % len(arr)])
+                break
+        if src is None:
+            src = self._full(i)
+        return src.resize((max(1, w), max(1, h)), Image.BILINEAR)
+
+
+# --------------------------------------------------------------------------
+# windows
+# --------------------------------------------------------------------------
+
+class Window:
+    """One window on the stage: a cell, a schedule, and up to two sources.
+
+    A hero window starts as a terminal, the command types itself, and at
+    `t_game` it cross-fades into the game source over `flip`. A filler window
+    has no terminal at all and is simply always running.
+    """
+
+    def __init__(self, spec: dict, term: Terminal | None, game, stage,
+                 style=None, desktop=(16, 18, 22),
+                 term_title="bash", game_title=""):
+        self.style = style or TERMINAL_STYLES["classic"]
+        self.desktop = tuple(desktop)
+        self.term_title = term_title
+        self.game_title = game_title
+        self.col = spec["col"]
+        self.row = spec["row"]
+        self.t_open = spec.get("t_open", 0.0)
+        self.t_game = spec.get("t_game")
+        self.flip = spec.get("flip", 0.45)
+        self.fade = spec.get("fade", 0.3)
+        self.phase = spec.get("phase", 0.0)
+        self.term = term
+        self.game = game
+        self.stage = stage
+
+    def rect(self) -> tuple[float, float, float, float]:
+        s = self.stage
+        return (self.col * s.pitch_x, self.row * s.pitch_y, s.tile_w, s.tile_h)
+
+    def alpha(self, t: float) -> float:
+        if t < self.t_open:
+            return 0.0
+        if self.fade <= 0:
+            return 1.0
+        return min(1.0, (t - self.t_open) / self.fade)
+
+    def content(self, t: float, w: int, h: int,
+                disp_w: int | None = None) -> Image.Image | None:
+        """The whole window at time t — chrome plus client — or None if unopened.
+
+        The chrome is drawn ONCE, here, and the source fills the client area.
+        That is what keeps the game inside the same window the command was typed
+        in: the terminal does not become a bare rectangle, it keeps its frame,
+        its title bar and its buttons, and so does every tile on the desktop.
+        """
+        if t < self.t_open:
+            return None
+        lod = float(disp_w if disp_w is not None else w)
+        img = Image.new("RGB", (w, h), self.desktop)
+        cx0, cy0, cx1, cy1 = draw_window_chrome(img, self.style, self.title_at(t), lod)
+        cw, ch = max(1, cx1 - cx0), max(1, cy1 - cy0)
+        lod_c = max(1.0, lod * cw / max(1, w))
+
+        gt = t + self.phase
+        if self.term is None:
+            inner = self.game.frame(gt, cw, ch, lod_c)
+        elif self.t_game is None or t < self.t_game:
+            inner = self.term.frame(t, cw, ch, lod_c)
+        else:
+            u = (t - self.t_game) / self.flip if self.flip > 0 else 1.0
+            if u >= 1.0:
+                inner = self.game.frame(gt, cw, ch, lod_c)
+            else:
+                inner = Image.blend(self.term.frame(t, cw, ch, lod_c),
+                                    self.game.frame(gt, cw, ch, lod_c),
+                                    ease("smooth", u))
+        img.paste(inner, (cx0, cy0))
+        return img
+
+    def title_at(self, t: float) -> str:
+        """Title bar text: the shell while typing, the game once it is running."""
+        if self.term is not None and (self.t_game is None or t < self.t_game):
+            return self.term_title
+        return self.game_title
+
+
+class Stage:
+    def __init__(self, spec: dict):
+        self.tile_w = spec["tile"]["w"]
+        self.tile_h = spec["tile"]["h"]
+        self.gap_x = spec.get("gap", {}).get("x", 0)
+        self.gap_y = spec.get("gap", {}).get("y", 0)
+        self.pitch_x = self.tile_w + self.gap_x
+        self.pitch_y = self.tile_h + self.gap_y
+        self.bg = tuple(spec.get("bg", [16, 18, 22]))
+
+
+# --------------------------------------------------------------------------
+# the montage
+# --------------------------------------------------------------------------
+
+# A word spelled by the wall. Each glyph is 7 rows of '#'/'.'; widths vary so
+# the block stays compact (I is 3 wide, M/N/T/V/W/X/Y are 5, the rest 4).
+# Cells on a '#' get `text.clip`, every other filler cell gets one of the other
+# clips, so at the wide shot that clip's tone appears nowhere but the word.
+TEXT_FONT = {
+    "A": ".##. #..# #..# #### #..# #..# #..#",
+    "B": "###. #..# #..# ###. #..# #..# ###.",
+    "C": ".### #... #... #... #... #... .###",
+    "D": "###. #..# #..# #..# #..# #..# ###.",
+    "E": "#### #... #... ###. #... #... ####",
+    "F": "#### #... #... ###. #... #... #...",
+    "G": ".### #... #... #.## #..# #..# .###",
+    "H": "#..# #..# #..# #### #..# #..# #..#",
+    "I": "### .#. .#. .#. .#. .#. ###",
+    "J": "..## ...# ...# ...# ...# #..# .##.",
+    "K": "#..# #.#. ##.. ##.. #.#. #..# #..#",
+    "L": "#... #... #... #... #... #... ####",
+    "M": "#...# ##.## #.#.# #.#.# #...# #...# #...#",
+    "N": "#...# ##..# #.#.# #..## #...# #...# #...#",
+    "O": ".##. #..# #..# #..# #..# #..# .##.",
+    "P": "###. #..# #..# ###. #... #... #...",
+    "Q": ".##. #..# #..# #..# #.## #..# .###",
+    "R": "###. #..# #..# ###. #.#. #..# #..#",
+    "S": ".### #... #... .##. ...# ...# ###.",
+    "T": "##### ..#.. ..#.. ..#.. ..#.. ..#.. ..#..",
+    "U": "#..# #..# #..# #..# #..# #..# .##.",
+    "V": "#...# #...# #...# #...# .#.#. .#.#. ..#..",
+    "W": "#...# #...# #...# #.#.# #.#.# ##.## #...#",
+    "X": "#...# .#.#. ..#.. ..#.. ..#.. .#.#. #...#",
+    "Y": "#...# .#.#. ..#.. ..#.. ..#.. ..#.. ..#..",
+    "Z": "#### ...# ..#. .#.. #... #... ####",
+    " ": ".. .. .. .. .. .. ..",
+}
+TEXT_ROWS = 7
+# Render workers rebuild the Montage per segment; the word's summary line is
+# for the person running the render, once, not 56 times.
+QUIET = False
+
+
+def text_cells(text: dict | None) -> tuple[set, str | None, tuple | None]:
+    """The (col, row) cells that spell `text.string`, the clip they show, and
+    the block's (c0, r0, c1, r1) extent. `origin` is the block's top-left cell
+    and `gap` the empty columns between glyphs (default 1)."""
+    if not text:
+        return set(), None, None
+    word = str(text.get("string", "")).upper()
+    c0, r0 = text.get("origin", [0, 0])
+    gap = int(text.get("gap", 1))
+    cells: set = set()
+    x = c0
+    for ch in word:
+        rows = TEXT_FONT[ch].split()
+        assert len(rows) == TEXT_ROWS, ch
+        for dy, row in enumerate(rows):
+            for dx, bit in enumerate(row):
+                if bit == "#":
+                    cells.add((x + dx, r0 + dy))
+        x += len(rows[0]) + gap
+    extent = (c0, r0, x - gap - 1, r0 + TEXT_ROWS - 1)
+    return cells, text.get("clip"), extent
+
+
+class Montage:
+    def __init__(self, path: Path, backend: str, clips_dir: Path | None,
+                 cache: Path, fps: float, aspect: float = 1080 / 1920):
+        self.spec = json.loads(path.read_text())
+        self.name = self.spec.get("name", path.stem)
+        self.stage = Stage(self.spec["stage"])
+        self.camera = Camera(self.spec["camera"])
+        self.captions = self.spec.get("captions", [])
+        self.duration = self.spec["duration"]
+        self.backend = backend
+        self.clips_dir = clips_dir
+        self.cache = cache
+        self.fps = fps
+        self.aspect = aspect
+        self._games: dict[str, object] = {}
+        self.windows: list[Window] = []
+        self._build()
+
+    # -- reveal timing -----------------------------------------------------
+
+    def _first_visible(self, cells: list[tuple[int, int]], dt: float = 0.1):
+        """For each cell, the first time the camera's viewport touches it.
+
+        Computed from the camera rather than hand-authored, so retiming the
+        pull-back retimes the reveal with it. That is the whole reason the grid
+        can be re-cut without anyone editing 1600 open times.
+        """
+        s = self.stage
+        ts = np.arange(0.0, self.duration + dt, dt)
+        cam = np.array([self.camera.at(float(t)) for t in ts])
+        cx, cy, cols = cam[:, 0], cam[:, 1], cam[:, 2]
+        halfw = cols * s.pitch_x / 2.0
+        halfh = halfw * self.aspect
+        left, right = cx - halfw, cx + halfw
+        top, bottom = cy - halfh, cy + halfh
+
+        c = np.array(cells, dtype=float)
+        x0 = c[:, 0] * s.pitch_x
+        y0 = c[:, 1] * s.pitch_y
+        x1, y1 = x0 + s.tile_w, y0 + s.tile_h
+
+        vis = ((x1[:, None] > left[None, :]) & (x0[:, None] < right[None, :]) &
+               (y1[:, None] > top[None, :]) & (y0[:, None] < bottom[None, :]))
+        any_vis = vis.any(axis=1)
+        idx = vis.argmax(axis=1)
+        out = np.where(any_vis, ts[idx], self.duration + 1.0)
+        return out
+
+    # -- sources -----------------------------------------------------------
+
+    def _game(self, clip_id: str, variant: int, label: str):
+        # `variant` only recolours a white box, so it must NOT split a real clip
+        # into separate objects: keying on it gave 24 Clip instances for 6 files,
+        # each decoding and holding its own copy of every frame.
+        key = f"{clip_id}#{variant}" if self.backend == "wire" else clip_id
+        got = self._games.get(key)
+        if got is not None:
+            return got
+        if self.backend == "clip":
+            if self.clips_dir is None:
+                raise SystemExit("--backend clip needs --clips <dir>")
+            hit = None
+            for ext in (".mp4", ".mkv", ".webm", ".mov"):
+                cand = self.clips_dir / f"{clip_id}{ext}"
+                if cand.exists():
+                    hit = cand
+                    break
+            if hit is None:
+                raise SystemExit(f"no clip file for id {clip_id!r} in {self.clips_dir}")
+            got = Clip(clip_id, hit, self.cache, self.fps)
+        else:
+            got = WireGame(variant, label)
+        self._games[key] = got
+        return got
+
+    # -- window construction ----------------------------------------------
+
+    def _build(self) -> None:
+        style = TERMINAL_STYLES.get(self.spec.get("terminal_style", "classic"),
+                                    TERMINAL_STYLES["classic"])
+        taken = set()
+        for i, spec in enumerate(self.spec.get("windows", [])):
+            taken.add((spec["col"], spec["row"]))
+            term = None
+            if "command" in spec:
+                term = Terminal(spec.get("prompt", "$"), spec["command"],
+                                spec.get("output", []),
+                                spec.get("t_type", spec.get("t_open", 0.0) + 0.4),
+                                spec.get("type_rate", 17.0),
+                                spec.get("t_enter", 1e9),
+                                spec.get("scrollback", []),
+                                spec.get("style", self.spec.get("terminal_style",
+                                                                "classic")),
+                                self.stage.bg,
+                                spec.get("title", "bash"),
+                                spec.get("t_game"))
+            game = self._game(spec.get("clip", f"hero{i}"), spec.get("variant", i),
+                              spec.get("label", ""))
+            inst = re.search(r"load\s+(\S+)", spec.get("command", ""))
+            self.windows.append(Window(
+                spec, term, game, self.stage, style, self.stage.bg,
+                spec.get("title", "bash"),
+                spec.get("game_title",
+                         f"Total Annihilation — tacli:{inst.group(1)}"
+                         if inst else spec.get("label", ""))))
+
+        fill = self.spec.get("fill")
+        if not fill:
+            return
+        c0, c1 = fill["cols"]
+        r0, r1 = fill["rows"]
+        ids = fill.get("clips", ["fill"])
+        labels = fill.get("labels", [""])
+        rng = random.Random(fill.get("seed", 20260910))
+
+        cells = [(col, row)
+                 for col in range(c0, c1 + 1)
+                 for row in range(r0, r1 + 1)
+                 if (col, row) not in taken]
+
+        # When the filler desktop is allowed to exist. Everything before
+        # `not_before` is the scripted part of the film — one terminal, then
+        # four — and a stray neighbour showing at the frame edge ruins it.
+        rev = fill.get("reveal", {})
+        not_before = rev.get("not_before", 0.0)
+        lead = rev.get("lead", 0.6)
+        wave = rev.get("wave", 0.9)
+        fade = rev.get("fade", 0.25)
+
+        # The word, if the script spells one. The scripted (hero) windows keep
+        # their own clips, so a hero inside the block has to agree with it:
+        # on a stroke it must already play the word's clip, off a stroke it
+        # must not. That is a placement question, answered when `origin` is
+        # chosen; here it is only checked, loudly.
+        mask, word_clip, extent = text_cells(fill.get("text"))
+        if word_clip is not None and word_clip not in ids:
+            raise SystemExit(f"fill.text.clip {word_clip!r} is not in fill.clips")
+        others = [i for i, cid in enumerate(ids) if cid != word_clip] or [0]
+        if extent is not None:
+            ec0, er0, ec1, er1 = extent
+            for spec in self.spec.get("windows", []):
+                c, r = spec["col"], spec["row"]
+                if ec0 <= c <= ec1 and er0 <= r <= er1:
+                    on = (c, r) in mask
+                    plays = spec.get("clip") == word_clip
+                    if on != plays:
+                        print(f"  WARNING: hero window at ({c},{r}) plays "
+                              f"{spec.get('clip')!r} but the word wants "
+                              f"{'a stroke' if on else 'a gap'} there",
+                              file=sys.stderr)
+            if not QUIET:
+                print(f"  text {fill['text'].get('string')!r} in {word_clip}: "
+                      f"cols {ec0}..{ec1}, rows {er0}..{er1}, {len(mask)} cells",
+                      flush=True)
+
+        auto = self._first_visible(cells)
+        for (col, row), a in zip(cells, auto):
+            k = rng.randrange(len(ids) * VARIANTS_PER_CLIP)
+            if word_clip is not None:
+                # Keep the draw's variant, replace its clip: strokes show the
+                # word's clip, everything else one of the others.
+                ci = ids.index(word_clip) if (col, row) in mask else others[k % len(others)]
+                k = ci + len(ids) * (k // len(ids))
+            game = self._game(ids[k % len(ids)], k, labels[k % len(labels)])
+            # Already there before the camera reaches it (so nothing pops in
+            # frame), except the first ring, which is deliberately spread over
+            # `wave` seconds at `not_before` — the desktop filling up is the shot.
+            t_open = max(not_before + rng.random() * wave, float(a) - lead)
+            self.windows.append(Window(
+                {"col": col, "row": row, "t_open": t_open, "fade": fade,
+                 "phase": rng.randrange(PHASES) * (9.0 / PHASES)},
+                None, game, self.stage, style, self.stage.bg,
+                "bash", f"Total Annihilation — {labels[k % len(labels)]}"))
+
+    # -- rendering ---------------------------------------------------------
+
+    def render_frame(self, t: float, w: int, h: int) -> Image.Image:
+        s = self.stage
+        cx, cy, cols = self.camera.at(t)
+        scale = w / (cols * s.pitch_x)
+        img = Image.new("RGB", (w, h), s.bg)
+
+        # A cache of rendered content, keyed by the source and the exact pixel
+        # size asked for. Within one frame every tile at a given zoom is the
+        # same size, so the grid costs a handful of renders, not one per tile.
+        cache: dict = {}
+        # Scaled tiles, keyed by output size and sub-pixel offset quantised to a
+        # quarter pixel. Without this the sub-pixel path costs 1600 resizes per
+        # wide-shot frame instead of a few dozen; a quarter pixel is far below
+        # anything visible, so the sharing is free.
+        tcache: dict = {}
+
+        for win in self.windows:
+            sx, sy, sw, sh = win.rect()
+            px = (sx - cx) * scale + w / 2.0
+            py = (sy - cy) * scale + h / 2.0
+            pw = sw * scale
+            ph = sh * scale
+            if px + pw < 0 or py + ph < 0 or px > w or py > h:
+                continue
+            iw, ih = max(1, round(pw)), max(1, round(ph))
+            a = win.alpha(t)
+            if a <= 0.0:
+                continue
+
+            if iw <= 3 or ih <= 3:
+                col = win.game.avg_color()
+                img.paste(col, (int(px), int(py), int(px) + iw, int(py) + ih))
+                continue
+
+            # The destination span, fully-covered pixels only. Taking ceil/floor
+            # here (rather than rounding the origin and the size independently)
+            # is what lets the source be sampled at the exact sub-pixel offset
+            # below, so the CONTENT stops sliding around inside the tile.
+            X0, Y0 = math.ceil(px), math.ceil(py)
+            X1, Y1 = math.floor(px + pw), math.floor(py + ph)
+            if X1 - X0 < 1 or Y1 - Y0 < 1:
+                continue
+
+            cw, ch = canonical_size(iw, ih, getattr(win.game, "native_w", None))
+            # Level of detail is a question about APPARENT size, so normalise the
+            # tile width to a 1920-wide frame before deciding. In absolute pixels
+            # a 4K wide shot (88 px tiles) crosses a threshold that the identical
+            # 1080p shot (44 px) does not, re-enabling every 1 px border and grid
+            # line the threshold exists to remove — and those hairlines are the
+            # shimmer.
+            lod_w = max(1, int(iw * 1920 / w))
+            gt = round((t + win.phase) * 1000) / 1000.0
+            key = (id(win.game), gt if win.term else round(gt * self.fps) / self.fps,
+                   cw, ch, lod_w)
+            src = cache.get(key) if win.term is None else None
+            if src is None:
+                src = win.content(t, cw, ch, lod_w)
+                if src is None:
+                    continue
+                if win.term is None:
+                    cache[key] = src
+
+            # Map the destination span back into source coordinates and let
+            # resize() do the sub-pixel sampling. Because the canonical size is
+            # ~2x the destination, this reduction is small and also anti-aliases.
+            sw, sh = src.size
+            sx0 = max(0.0, min((X0 - px) / pw * sw, sw))
+            sx1 = max(sx0, min((X1 - px) / pw * sw, sw))
+            sy0 = max(0.0, min((Y0 - py) / ph * sh, sh))
+            sy1 = max(sy0, min((Y1 - py) / ph * sh, sh))
+            tkey = (key, X1 - X0, Y1 - Y0, round(sx0 * 4), round(sy0 * 4))
+            tile = tcache.get(tkey)
+            if tile is None:
+                tile = src.resize((X1 - X0, Y1 - Y0), RESAMPLE,
+                                  box=(sx0, sy0, sx1, sy1))
+                tcache[tkey] = tile
+
+            if a >= 1.0:
+                img.paste(tile, (X0, Y0))
+            else:
+                under = img.crop((X0, Y0, X1, Y1))
+                img.paste(Image.blend(under, tile, a), (X0, Y0))
+
+        return self._draw_captions(img, t)
+
+    def _draw_captions(self, img: Image.Image, t: float) -> Image.Image:
+        """Draw every live caption onto one RGBA layer, composited once."""
+        w, h = img.size
+        layer = None
+        dirty = (w, h, 0, 0)          # accumulated bounds of what captions touch
+        for cap in self.captions:
+            t0, t1 = cap["t0"], cap["t1"]
+            if not (t0 <= t <= t1):
+                continue
+            # `fade` sets both edges; fade_in / fade_out override one. A card
+            # that has to survive being PAUSED ON needs fade_out 0: the last
+            # frame of the film is t1 - 1/fps, so any fade-out at all leaves it
+            # part-way through the dissolve. The title card shipped once at
+            # alpha 0.02 on the final frame -- present in the file, invisible in
+            # the thumbnail and on every paused player.
+            fade = cap.get("fade", 0.4)
+            f_in = float(cap.get("fade_in", fade))
+            f_out = float(cap.get("fade_out", fade))
+            a = 1.0
+            if f_in > 0 and t < t0 + f_in:
+                a = (t - t0) / f_in
+            elif f_out > 0 and t > t1 - f_out:
+                a = (t1 - t) / f_out
+            a = ease("smooth", min(1.0, max(0.0, a)))
+            if a <= 0.01:
+                continue
+
+            # a full-frame card is centred and typeset large, like `big`
+            big = cap.get("big", False) or cap.get("full", False)
+            fs = int(h * (0.080 if big else 0.047))
+            ss = int(h * (0.030 if big else 0.025))
+
+            if layer is None:
+                layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+            d = ImageDraw.Draw(layer)
+
+            # Captions WRAP, and shrink if wrapping is not enough. A long line
+            # typeset at card size overruns the frame otherwise — "A test harness
+            # that happens to look like a war." at `full` size is wider than
+            # 1920 px, and simply ran off both edges.
+            maxw = w * cap.get("width", 0.84)
+            f1, head = _fit_text(d, cap["text"], "sans-bold", fs, maxw,
+                                 cap.get("max_lines", 3))
+            body = [(l, f1, (243, 246, 250)) for l in head]
+            if cap.get("sub"):
+                f2, subl = _fit_text(d, cap["sub"], "mono", ss, maxw, 2)
+                body += [(l, f2, (120, 205, 255)) for l in subl]
+
+            lh1 = int(f1.size * 1.22)
+            gap = int(f1.size * 0.42)
+            total = lh1 * len(head)
+            if cap.get("sub"):
+                total += gap + int(f2.size * 1.35) * (len(body) - len(head))
+            cy = h * (0.5 if big else 0.845)
+            y = cy - total / 2
+
+            wmax = max(text_w(d, l, f) for l, f, _ in body)
+            padx, pady = int(h * 0.035), int(h * 0.026)
+            box = [w / 2 - wmax / 2 - padx, y - pady,
+                   w / 2 + wmax / 2 + padx, y + total + pady]
+
+            if cap.get("full"):
+                # Full-frame card: the whole picture darkens and the words sit
+                # on it. Reads as a title card rather than as a subtitle.
+                d.rectangle([0, 0, w, h],
+                            fill=(6, 8, 11, int(cap.get("dim", 205) * a)))
+                dirty = (0, 0, w, h)
+            else:
+                # A soft scrim rather than a hard black plate: the grid stays
+                # readable behind the words, which is the point of the wide shot.
+                scrim = int(215 * a) if big else int(190 * a)
+                d.rounded_rectangle(box, radius=int(h * 0.012),
+                                    fill=(9, 11, 14, scrim))
+                dirty = (min(dirty[0], box[0]), min(dirty[1], box[1]),
+                         max(dirty[2], box[2]), max(dirty[3], box[3]))
+            ly = y
+            for i, (line, f, col) in enumerate(body):
+                if i == len(head) and len(body) > len(head):
+                    ly += gap          # breathing room before the sub-line(s)
+                d.text((w / 2, ly), line, font=f,
+                       fill=col + (int((255 if i < len(head) else 245) * a),),
+                       anchor="ma")
+                ly += int(f.size * (1.22 if i < len(head) else 1.35))
+
+        if layer is None:
+            return img
+        # Composite only the region the captions actually touch. A lower-third
+        # card covers ~12 % of the frame, but converting the whole thing to RGBA
+        # and back cost ~93 ms per 4K frame whatever its size. A full-frame card
+        # dirties everything, and then this is the same work as before.
+        bx0, by0, bx1, by1 = dirty
+        bx0 = max(0, int(bx0)); by0 = max(0, int(by0))
+        bx1 = min(w, int(bx1) + 1); by1 = min(h, int(by1) + 1)
+        if bx1 <= bx0 or by1 <= by0:
+            return img
+        region = (bx0, by0, bx1, by1)
+        merged = Image.alpha_composite(img.crop(region).convert("RGBA"),
+                                       layer.crop(region))
+        img.paste(merged.convert("RGB"), (bx0, by0))
+        return img
+
+    # -- introspection -----------------------------------------------------
+
+    def beat_sheet(self) -> str:
+        out = [f"{self.name}: {self.duration:.1f}s, "
+               f"{len(self.windows)} windows ({self.backend} backend)"]
+        out.append("")
+        out.append("camera")
+        for k in self.camera.keys:
+            out.append(f"  t={k['t']:6.2f}  cols={k['cols']:6.2f}  "
+                       f"centre=({k['cx']:.0f},{k['cy']:.0f})  {k.get('ease', 'smooth')}")
+        out.append("")
+        out.append("hero windows")
+        for spec in self.spec.get("windows", []):
+            if "command" not in spec:
+                continue
+            out.append(f"  ({spec['col']},{spec['row']}) open={spec.get('t_open', 0):.1f} "
+                       f"type={spec.get('t_type', 0):.1f} enter={spec.get('t_enter', 0):.1f} "
+                       f"game={spec.get('t_game', 0):.1f}")
+            out.append(f"      $ {spec['command']}")
+        out.append("")
+        out.append("captions")
+        for c in self.captions:
+            out.append(f"  {c['t0']:6.2f}-{c['t1']:6.2f}  {c['text']}")
+            if c.get("sub"):
+                out.append(f"                  {c['sub']}")
+        return "\n".join(out)
+
+
+# --------------------------------------------------------------------------
+# driver
+# --------------------------------------------------------------------------
+
+def _encode_cmd(out: str, w: int, h: int, fps: float, crf: int, preset: str) -> list[str]:
+    return ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "rawvideo", "-pix_fmt", "rgb24",
+            "-s", f"{w}x{h}", "-r", f"{fps:g}", "-i", "-",
+            "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart", out]
+
+
+def _render_segment(job):
+    """Render one contiguous run of frames straight into its own mp4 segment.
+
+    Frames are independent, so this is embarrassingly parallel. Each worker
+    encodes its own segment rather than shipping raw frames back to the parent:
+    a 4K frame is 24 MB, and piping 1600 of them through IPC costs more than the
+    rendering does. The segments are concatenated with `-c copy` afterwards.
+    """
+    (idx, spec, backend, clips, cache, fps, w, h, crf, preset,
+     t_start, n_frames, seg_path, supersample) = job
+    global SUPERSAMPLE, QUIET
+    SUPERSAMPLE = supersample
+    QUIET = True
+    # Rebuilt per segment on purpose: construction is 48 ms measured, so caching
+    # it across a worker's segments buys 2 s of CPU on the whole film and would
+    # keep a stale frame cache alive for parts of the film the worker has left.
+    m = Montage(Path(spec), backend, Path(clips) if clips else None,
+                Path(cache), fps, aspect=h / w)
+    proc = subprocess.Popen(_encode_cmd(seg_path, w, h, fps, crf, preset),
+                            stdin=subprocess.PIPE)
+    try:
+        for i in range(n_frames):
+            proc.stdin.write(m.render_frame(t_start + i / fps, w, h).tobytes())
+    finally:
+        proc.stdin.close()
+        rc = proc.wait()
+    return idx, seg_path, n_frames, rc
+
+
+# --------------------------------------------------------------------------
+# keyboard
+# --------------------------------------------------------------------------
+# SYNTHESISED, not sampled, on purpose. The film already carries one licensed
+# asset with an attribution obligation; a second would mean another credit,
+# another content-ID dispute answer and another file that must never enter the
+# repository. This is deterministic from a seed, regenerates for any re-cut, and
+# belongs to nobody. numpy only: `tools/tamontage` runs under the system
+# interpreter, which has numpy and PIL but no scipy, so the band-shaping is done
+# on the spectrum rather than with a filter design.
+
+KEY_SR = 48000
+SR_MUX = 44100
+
+
+def _key_hp(x: np.ndarray, cut_hz: float) -> np.ndarray:
+    """High-pass on the spectrum. numpy only: `tools/tamontage` runs under the
+    system interpreter, which has numpy and PIL but no scipy."""
+    X = np.fft.rfft(x)
+    f = np.maximum(np.fft.rfftfreq(len(x), 1.0 / KEY_SR), 1.0)
+    return np.fft.irfft(X * (1.0 / (1.0 + (cut_hz / f) ** 4)), len(x))
+
+
+def _key_load(path: str) -> np.ndarray:
+    out = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-f", "f32le",
+                          "-ac", "1", "-ar", str(KEY_SR), "-"],
+                         capture_output=True)
+    a = np.frombuffer(out.stdout, np.float32).astype(np.float64)
+    if a.size == 0:
+        raise SystemExit(f"--keys {path}: ffmpeg decoded nothing")
+    return a
+
+
+def _key_bank(path: str, thresh: float = 0.22, min_gap_ms: float = 45.0):
+    """Cut a recording of someone typing into individual keystroke one-shots.
+
+    A continuous take is not usable as-is: the film needs a click on one exact
+    frame, forty-odd times. So find the onsets, cut a window at each, and keep
+    the ones that are cleanly separated from their neighbour.
+
+    Detection runs on the HIGH band -- a keystroke IS a click, and the low end is
+    room and body that smears the onset and costs you the attack.
+    """
+    x = _key_load(path)
+    env = np.abs(_key_hp(x, 1500.0))
+    w = int(KEY_SR * 0.003)
+    env = np.convolve(env, np.ones(w) / w, mode="same")
+    env /= max(env.max(), 1e-9)
+
+    gap = int(KEY_SR * min_gap_ms / 1000.0)
+    idx, last = [], -gap
+    for i in np.where(env > thresh)[0]:
+        if i - last < gap:
+            continue
+        j = i                       # walk back to where the rise actually starts
+        while j > 0 and env[j] > env[i] * 0.12 and i - j < int(KEY_SR * 0.01):
+            j -= 1
+        idx.append(j)
+        last = i
+
+    pre = int(KEY_SR * 0.002)
+    normal, heavy = [], []
+    scored = []
+    for n, i in enumerate(idx):
+        nxt = idx[n + 1] if n + 1 < len(idx) else len(x)
+        end = min(i + int(KEY_SR * 0.170), nxt - int(KEY_SR * 0.004), len(x))
+        st = max(0, i - pre)
+        if end - st < int(KEY_SR * 0.05):
+            continue                # crowded by its neighbour: no clean tail
+        seg = x[st:end].copy()
+        seg[:pre] *= np.linspace(0, 1, pre)                  # no click-in
+        tail = min(len(seg) // 4, int(KEY_SR * 0.02))
+        seg[-tail:] *= np.linspace(1, 0, tail)               # no click-out
+        pk = float(np.abs(seg).max())
+        if pk < 0.02 or pk > 0.999:
+            continue                # silence, or clipped in the source
+        X = np.abs(np.fft.rfft(seg * np.hanning(len(seg))))
+        f = np.fft.rfftfreq(len(seg), 1.0 / KEY_SR)
+        lo = float(X[f < 500].sum() / max(X.sum(), 1e-9))
+        scored.append((lo, seg / pk))
+    if len(scored) < 8:
+        raise SystemExit(f"--keys {path}: only {len(scored)} usable keystrokes "
+                         f"found; is this a recording of typing?")
+    # The biggest, lowest one-shots are the space bar and the other long keys.
+    scored.sort(key=lambda r: r[0])
+    cut = max(3, len(scored) // 8)
+    heavy = [r[1] for r in scored[-cut:]]
+    normal = [r[1] for r in scored[:-cut]]
+    return normal, heavy
+
+
+def _key_pitch(seg: np.ndarray, f: float) -> np.ndarray:
+    n = max(1, int(len(seg) / f))
+    return np.interp(np.arange(n) * f, np.arange(len(seg)), seg)
+
+
+def _key_events(spec: dict, fps: float, t0: float, duration: float):
+    """When does each glyph actually appear? Not when it analytically should.
+
+    `Terminal._typed` shows character i once int((t - t_type) * rate) >= i + 1,
+    and it is only ever sampled at frame times -- so the analytic instant is up
+    to one frame early. Snapping each keystroke to the frame its glyph lands on
+    is both the correct sync AND free, natural-sounding jitter: at 17 chars/s
+    into 30 fps the gaps come out 33 and 67 ms instead of a metronomic 59.
+    """
+    kb = (spec.get("audio") or {}).get("keyboard") or {}
+    want = kb.get("windows")
+    ev = []
+    for i, w in enumerate(spec.get("windows", [])):
+        if "command" not in w:
+            continue
+        if want is not None and i not in want:
+            continue
+        cmd = w["command"]
+        rate = float(w.get("type_rate", 17.0))
+        ts = float(w.get("t_type", w.get("t_open", 0.0) + 0.4))
+        for n, ch in enumerate(cmd):
+            t = math.ceil((ts + (n + 1) / rate) * fps) / fps - t0
+            if 0.0 <= t < duration:
+                ev.append((t, "space" if ch == " " else "key"))
+        te = float(w.get("t_enter", 1e9)) - t0
+        if 0.0 <= te < duration:
+            ev.append((te, "enter"))
+    ev.sort()
+    return ev
+
+
+def _keyboard_wav(spec: dict, fps: float, t0: float, duration: float,
+                  path: str, source: str) -> str | None:
+    """Render the keystroke track to a wav, or None if there is nothing to play."""
+    kb = (spec.get("audio") or {}).get("keyboard") or {}
+    if not kb:
+        return None
+    ev = _key_events(spec, fps, t0, duration)
+    if not ev:
+        return None
+    normal, heavy = _key_bank(source)
+    rng = np.random.default_rng(int(kb.get("seed", 0)))
+    spread = float(kb.get("spread", 0.30))
+    pitch = float(kb.get("pitch", 0.06))
+    n = int(KEY_SR * duration) + KEY_SR
+    out = np.zeros((n, 2), np.float64)
+    recent: list[int] = []
+    for t, kind in ev:
+        pool = heavy if kind in ("space", "enter") else normal
+        j = int(rng.integers(len(pool)))
+        for _ in range(12):                  # never the same click twice running
+            if j not in recent[-4:]:
+                break
+            j = int(rng.integers(len(pool)))
+        recent.append(j)
+        k = _key_pitch(pool[j], float(rng.uniform(1 - pitch, 1 + pitch)))
+        k = k * rng.uniform(0.72, 1.06) * (1.18 if kind == "enter" else 1.0)
+        i = int(round(t * KEY_SR))
+        if i + len(k) > n:
+            k = k[: n - i]
+        pan = rng.uniform(-spread, spread)        # a hand moving across the board
+        out[i:i + len(k), 0] += k * math.sqrt(0.5 * (1 - pan))
+        out[i:i + len(k), 1] += k * math.sqrt(0.5 * (1 + pan))
+
+    peak = float(np.abs(out).max())
+    if peak > 0:
+        out /= peak
+    out *= 10.0 ** (float(kb.get("gain_db", -5.0)) / 20.0)
+    out = out[: int(KEY_SR * duration)]
+    with wave.open(path, "wb") as w:
+        w.setnchannels(2); w.setsampwidth(2); w.setframerate(KEY_SR)
+        w.writeframes((np.clip(out, -1, 1) * 32767).astype("<i2").tobytes())
+    print(f"  keyboard: {len(ev)} keystrokes from {len(normal)}+{len(heavy)} "
+          f"one-shots off {Path(source).name}, "
+          f"{float(kb.get('gain_db', -5.0)):g} dB")
+    return path
+
+
+def _extend_audio(src: str, loop: dict, out: str) -> tuple[str, float]:
+    """Splice a track longer by repeating bars of its own intro.
+
+    The film needed the music 14.5 s earlier without moving its climax, and the
+    only way to buy that is to make the track longer at the FRONT.
+
+    `segments` is the play order, in track seconds, as [start, end] pairs; a null
+    end means "to the end of the track". The join that matters is the jump from
+    the end of one segment back to the start of the next: the music there has to
+    follow naturally from what preceded the cut, which is true when the span is a
+    whole number of bars AND the phrase repeats. Chroma self-similarity is how
+    those points were found -- a spectral envelope says only "orchestra", while
+    chroma tracks the harmony that says two moments are the same bar. Measured on
+    this track: period 2.07 s, which is one bar at its stated 115 bpm, downbeats
+    at 0.30 + 2.087k.
+
+    The last segment runs to the end of the original, so that join is seamless by
+    construction and only the loop joins need to be right.
+    """
+    segs = loop.get("segments") or []
+    if not segs:
+        raise SystemExit("audio.loop needs a `segments` list")
+    xf = int(SR_MUX * float(loop.get("crossfade_ms", 18.0)) / 1000.0)
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", src, "-f", "f32le",
+                          "-ac", "2", "-ar", str(SR_MUX), "-"],
+                         capture_output=True).stdout
+    x = np.frombuffer(raw, np.float32).astype(np.float64).reshape(-1, 2)
+    if x.size == 0:
+        raise SystemExit(f"--audio {src}: ffmpeg decoded nothing")
+    orig = len(x) / SR_MUX
+
+    out_a = None
+    for a, b in segs:
+        i0 = int(float(a) * SR_MUX)
+        i1 = len(x) if b is None else int(float(b) * SR_MUX)
+        seg = x[i0:i1].copy()
+        if len(seg) == 0:
+            raise SystemExit(f"audio.loop segment [{a}, {b}] is empty")
+        if out_a is None:
+            out_a = seg
+            continue
+        n = min(xf, len(out_a), len(seg))
+        fo = np.cos(np.linspace(0, np.pi / 2, n))[:, None]      # equal power:
+        fi = np.sin(np.linspace(0, np.pi / 2, n))[:, None]      # no dip at the join
+        out_a = np.concatenate([out_a[:-n], out_a[-n:] * fo + seg[:n] * fi,
+                                seg[n:]])
+    with wave.open(out, "wb") as w:
+        w.setnchannels(2); w.setsampwidth(2); w.setframerate(SR_MUX)
+        w.writeframes((np.clip(out_a, -1, 1) * 32767).astype("<i2").tobytes())
+    added = len(out_a) / SR_MUX - orig
+    print(f"  music: {orig:.2f}s -> {len(out_a)/SR_MUX:.2f}s "
+          f"(+{added:.2f}s, {len(segs) - 1} join{'s' if len(segs) != 2 else ''})")
+    return out, added
+
+
+def _mux_audio(video: str, audio: str | None, spec: dict, duration: float,
+               out: str, keys: str | None = None) -> int:
+    """Lay the soundtrack over a finished cut. Video is COPIED, never re-encoded.
+
+    Measured: 1.5 s for a 57 s 4K cut. Which is the whole reason the track is
+    chosen AFTER the render rather than before — auditioning a candidate costs
+    seconds, so there is no case for deciding it up front.
+
+    `start` is where the music begins in the film. A track shorter than the film
+    is normal; what matters is that it ENDS with the film, because the climax is
+    at the end. `promo/MUSIC.md` works this out for the current track, and the
+    rule is start = duration_of_film - duration_of_track.
+    """
+    start = float(spec.get("start", 0.0))
+    gain = float(spec.get("gain_db", 0.0))
+    fade_in = float(spec.get("fade_in", 0.0))
+    fade_out = float(spec.get("fade_out", 0.0))
+
+    chain = []
+    if start > 0:
+        # adelay wants milliseconds, per channel
+        ms = int(round(start * 1000))
+        chain.append(f"adelay={ms}|{ms}")
+    if fade_in > 0:
+        chain.append(f"afade=t=in:st={start:g}:d={fade_in:g}")
+    if fade_out > 0:
+        chain.append(f"afade=t=out:st={max(0.0, duration - fade_out):g}:"
+                     f"d={fade_out:g}")
+    if gain:
+        chain.append(f"volume={gain:g}dB")
+    # -shortest alone would cut the VIDEO if the audio ends first, which it does
+    # here by design; apad pads the audio to the film instead.
+    chain.append("apad")
+    filt = ",".join(chain) if chain else "anull"
+
+    ins, graph, labels = ["-i", video], [], []
+    if audio:
+        ins += ["-i", audio]
+        graph.append(f"[{len(labels) + 1}:a]{filt}[m]")
+        labels.append("[m]")
+    if keys:
+        ins += ["-i", keys]
+        # The keystrokes are already mixed and levelled in the wav; they only
+        # need padding to the film so `-shortest` cannot trim the picture.
+        graph.append(f"[{len(labels) + 1}:a]apad[k]")
+        labels.append("[k]")
+    if not labels:
+        return 2
+    if len(labels) == 1:
+        graph.append(f"{labels[0]}anull[a]")
+    else:
+        # normalize=0, or amix halves BOTH sources to make room for each other
+        # and the music comes back 6 dB down from the level it was chosen at.
+        graph.append(f"{''.join(labels)}amix=inputs={len(labels)}:"
+                     f"normalize=0:duration=longest[a]")
+
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *ins,
+           "-filter_complex", ";".join(graph),
+           "-map", "0:v", "-map", "[a]",
+           "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+           "-t", f"{duration:g}", "-movflags", "+faststart", out]
+    rc = subprocess.run(cmd).returncode
+    if rc == 0 and audio:
+        cred = spec.get("credit")
+        print(f"  audio: {Path(audio).name} from {start:g}s"
+              + (f", {gain:g} dB" if gain else "")
+              + (f", {fade_out:g}s fade" if fade_out else ""))
+        if cred:
+            print(f"  CREDIT REQUIRED — put this where the film is posted:")
+            for line in cred.splitlines():
+                print(f"    {line}")
+    return rc
+
+
+def _finish_audio(m, args, aspec, fps, t0, rendered, tmp_out, keys_wav) -> int:
+    """Mux whatever audio this render actually has -- possibly none.
+
+    `audio.keyboard` in the script means the film WANTS keystrokes, not that
+    this render has any: a `--t0 30` preview is past the typing, so the track
+    comes back empty. That case has to put the silent render in place rather
+    than fall through the mux, which otherwise deletes the temp file and returns
+    a bare 2 -- the whole render gone, with no output and no message.
+    """
+    kw = (_keyboard_wav(m.spec, fps, t0, rendered, keys_wav, args.keys)
+          if keys_wav else None)
+    if not args.audio and not kw:
+        os.replace(tmp_out, args.out)
+        return 0
+    music, ext_wav = args.audio, None
+    if args.audio and aspec.get("loop"):
+        ext_wav = f"{args.out}.music.wav"
+        music, added = _extend_audio(args.audio, aspec["loop"], ext_wav)
+        # `start` is authored against the UNLOOPED track, and the loop only ever
+        # extends the front -- so it pulls the start earlier by exactly its own
+        # length and nothing downstream of it moves. Taking `added` from the
+        # built file rather than from the arithmetic makes that true whatever the
+        # crossfades cost.
+        aspec["start"] = max(0.0, float(aspec.get("start", 0.0)) - added)
+    rc = _mux_audio(tmp_out, music, aspec, rendered, args.out, kw)
+    os.unlink(tmp_out)
+    if kw:
+        os.unlink(kw)
+    if ext_wav and os.path.exists(ext_wav):
+        os.unlink(ext_wav)
+    return rc
+
+
+def cmd_render(args) -> int:
+    global SUPERSAMPLE
+    SUPERSAMPLE = max(1, args.supersample)
+    fps = args.fps
+    out_w, out_h = args.width, args.height
+    cache = Path(args.cache) if args.cache else Path(
+        os.environ.get("TMPDIR", "/tmp")) / "tamontage-cache"
+    cache.mkdir(parents=True, exist_ok=True)
+
+    m = Montage(Path(args.script), args.backend,
+                Path(args.clips) if args.clips else None, cache, fps,
+                aspect=out_h / out_w)
+
+    t0 = args.t0
+    t1 = args.t1 if args.t1 is not None else m.duration
+    n = int(round((t1 - t0) * fps))
+    print(f"[tamontage] {m.name}: {n} frames, {out_w}x{out_h}@{fps:g}, "
+          f"{len(m.windows)} windows, backend={args.backend}", flush=True)
+
+    aspec = dict(m.spec.get("audio") or {})
+    if args.audio:
+        # `start` is written against the whole film; a --t0 preview shifts it.
+        aspec["start"] = max(0.0, float(aspec.get("start", 0.0)) - t0)
+    rendered = n / fps
+    # The keystroke track is synthesised from the script's own typing, so it
+    # exists whether or not a music file was given -- and the keys land in the
+    # silent opening, which is where the music deliberately is not.
+    want_keys = bool(aspec.get("keyboard")) and bool(args.keys) and not args.no_keys
+    if aspec.get("keyboard") and not args.keys and not args.no_keys:
+        print("  note: the script asks for a keyboard track but no --keys "
+              "recording was given; rendering without it", file=sys.stderr)
+    has_audio = bool(args.audio) or want_keys
+    keys_wav = f"{args.out}.keys.wav" if want_keys else None
+    tmp_out = f"{args.out}.silent.mp4" if has_audio else args.out
+
+    jobs = max(1, args.jobs)
+    if jobs == 1:
+        proc = subprocess.Popen(
+            _encode_cmd(tmp_out, out_w, out_h, fps, args.crf, args.preset),
+            stdin=subprocess.PIPE)
+        assert proc.stdin is not None
+        try:
+            for i in range(n):
+                t = t0 + i / fps
+                proc.stdin.write(m.render_frame(t, out_w, out_h).tobytes())
+                if i % int(fps) == 0:
+                    print(f"\r  {t:6.2f}s  {100.0 * i / max(1, n):5.1f}%",
+                          end="", flush=True)
+        finally:
+            proc.stdin.close()
+            rc = proc.wait()
+        if rc == 0 and has_audio:
+            rc = _finish_audio(m, args, aspec, fps, t0, rendered, tmp_out, keys_wav)
+        print(f"\r  done: {args.out}" + " " * 20)
+        return rc
+
+    # Parallel: contiguous segments, one worker each, concatenated with -c copy.
+    import multiprocessing as mp
+
+    segdir = Path(args.out).parent / f".{Path(args.out).stem}-segments"
+    if segdir.exists():
+        shutil.rmtree(segdir)
+    segdir.mkdir(parents=True, exist_ok=True)
+    # More segments than workers, so the pool's queue BALANCES them. Equal frame
+    # counts are not equal work: measured on the 57 s cut, the dearest 123-frame
+    # segment is 81 s against a 38 s average, so fourteen equal segments put the
+    # wall floor at 2.1x the ideal and the workers holding the opening sit idle
+    # for most of the render. The cost is one extra keyframe per segment.
+    per = max(1, -(-n // (jobs * args.chunks)))
+    tasks = []
+    for i in range(-(-n // per)):
+        first = i * per
+        cnt = min(per, n - first)
+        if cnt <= 0:
+            break
+        tasks.append((i, args.script, args.backend, args.clips or "", str(cache),
+                      fps, out_w, out_h, args.crf, args.preset,
+                      t0 + first / fps, cnt, str(segdir / f"seg{i:03d}.mp4"),
+                      SUPERSAMPLE))
+    print(f"  {len(tasks)} segments x ~{per} frames across {jobs} workers")
+    # ProcessPoolExecutor, NOT multiprocessing.Pool: when a worker is killed --
+    # and the OOM killer does kill these, they are the largest processes on the
+    # machine -- Pool quietly starts a replacement and the dead worker's task is
+    # simply never completed, so the parent waits on a result that can never
+    # arrive. It sits there at "10/16 segments" with every worker idle, no error
+    # anywhere, looking exactly like a slow render. The executor raises
+    # BrokenProcessPool instead, which is a failure you can act on.
+    done, total = 0, 0
+    ctx = mp.get_context("spawn")
+    try:
+        with cf.ProcessPoolExecutor(max_workers=jobs, mp_context=ctx) as pool:
+            futures = [pool.submit(_render_segment, job) for job in tasks]
+            for fut in cf.as_completed(futures):
+                idx, path, cnt, rc = fut.result()
+                if rc != 0:
+                    print(f"\n  segment {idx} failed (ffmpeg rc={rc})")
+                    return rc
+                done += 1
+                total += cnt
+                print(f"\r  {done}/{len(tasks)} segments, {total}/{n} frames",
+                      end="", flush=True)
+    except cf.process.BrokenProcessPool:
+        print(f"\n  a render worker died ({done}/{len(tasks)} segments were done).")
+        print("  Almost certainly the OOM killer: each worker holds a frame cache")
+        print("  per clip, so peak memory scales with --jobs. Retry with a lower")
+        print("  -j, or lower FULL_LRU_BYTES.")
+        return 1
+    print()
+
+    listing = segdir / "segments.txt"
+    listing.write_text("".join(
+        f"file '{segdir / f'seg{i:03d}.mp4'}'\n" for i in range(len(tasks))))
+    rc = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                         "-f", "concat", "-safe", "0", "-i", str(listing),
+                         "-c", "copy", "-movflags", "+faststart",
+                         tmp_out]).returncode
+    if rc == 0 and has_audio:
+        rc = _finish_audio(m, args, aspec, fps, t0, rendered, tmp_out, keys_wav)
+    if rc == 0:
+        shutil.rmtree(segdir, ignore_errors=True)
+        print(f"  done: {args.out}")
+    return rc
+
+
+def cmd_probe(args) -> int:
+    cache = Path(os.environ.get("TMPDIR", "/tmp")) / "tamontage-cache"
+    m = Montage(Path(args.script), "wire", None, cache, 30.0)
+    print(m.beat_sheet())
+    return 0
+
+
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser(prog="tamontage", description=__doc__.split("\n")[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    r = sub.add_parser("render", help="render a montage script to video")
+    r.add_argument("script")
+    r.add_argument("-o", "--out", required=True)
+    r.add_argument("--backend", choices=("wire", "clip"), default="wire",
+                   help="wire = white-box placeholders (default); clip = real footage")
+    r.add_argument("--clips", help="directory of <clip-id>.mp4 for --backend clip")
+    r.add_argument("--cache", help="frame cache dir (default: $TMPDIR/tamontage-cache)")
+    r.add_argument("--width", type=int, default=1920)
+    r.add_argument("--height", type=int, default=1080)
+    r.add_argument("--fps", type=float, default=30.0)
+    r.add_argument("--jobs", "-j", type=int, default=max(1, (os.cpu_count() or 4) // 2),
+                   help="parallel render workers (frames are independent). "
+                        "1 renders serially into a single encoder")
+    r.add_argument("--supersample", type=int, default=SUPERSAMPLE,
+                   help="draw sources at N x the displayed size and scale down "
+                        "(default 3). 1 is the fast, shimmery draft path")
+    r.add_argument("--chunks", type=int, default=4,
+                   help="segments per worker (default 4). Frames are not equal "
+                        "work, so one segment per worker leaves most of them "
+                        "idle; more, smaller segments let the pool balance. 1 "
+                        "restores the old behaviour and the fewest concat seams")
+    r.add_argument("--crf", type=int, default=18)
+    r.add_argument("--preset", default="medium")
+    r.add_argument("--audio", help="soundtrack to lay over the finished cut. The "
+                   "PATH is a command-line argument on purpose: the script "
+                   "carries the timing and the credit, never a path into "
+                   "someone's home directory, and the track itself is licensed "
+                   "for use in a work rather than for redistribution")
+    r.add_argument("--keys", help="a recording of someone typing, sliced into "
+                   "one-shots at render time and placed on the film's own "
+                   "keystroke times (audio.keyboard in the script). Like "
+                   "--audio, the PATH is an argument and never the script: it "
+                   "would name someone's home directory, and the recording is "
+                   "licensed for use inside a work rather than for "
+                   "redistribution, so it never enters this repository")
+    r.add_argument("--no-keys", action="store_true",
+                   help="skip the synthesised keystroke track even if the script "
+                        "asks for one (audio.keyboard)")
+    r.add_argument("--t0", type=float, default=0.0, help="start time (preview a beat)")
+    r.add_argument("--t1", type=float, default=None, help="end time")
+    r.set_defaults(func=cmd_render)
+
+    q = sub.add_parser("probe", help="print the beat sheet without rendering")
+    q.add_argument("script")
+    q.set_defaults(func=cmd_probe)
+
+    args = p.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

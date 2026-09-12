@@ -1,0 +1,55 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Promo fixture: a fortified ARM position on Two Continents with 400 CORE units rolling onto it from the east. The defence is laid out as a deliberate line rather than a group so the heavy guns read as a wall on camera — Annihilator and Big Bertha behind, Guardians and heavy lasers on the firing line, light lasers picketed in front. Both players start with resources because clear_existing takes the commander's storage with it and the Annihilator is an energy weapon; without it the centrepiece of the shot never fires. Camera pinned on the firing line, not the centre of the fight, so the shot stays composed as the tide arrives. Resolution 1024x768 to match the montage stage 1:1.",
+  "seed": 20260912,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "unit_limit": 500,
+    "clear_existing": false,
+    "los": "permanent",
+    "mapping": true,
+    "switches": {"shootall": true, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0, "metal": 10000, "energy": 10000},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1, "metal": 10000, "energy": 10000},
+      {"slot": 2, "controller": "off"}
+    ]
+  },
+
+  "units": [
+    { "id": "anni",   "type": "ARMANNI",  "owner": 0, "pos": [2560, 1400], "facing": 90 },
+    { "id": "bertha", "type": "ARMBRTHA", "owner": 0, "pos": [2420, 1400], "facing": 90 },
+    { "id": "hlt_n",  "type": "ARMHLT",   "owner": 0, "pos": [2800, 1200], "facing": 90 },
+    { "id": "hlt_c",  "type": "ARMHLT",   "owner": 0, "pos": [2800, 1400], "facing": 90 },
+    { "id": "hlt_s",  "type": "ARMHLT",   "owner": 0, "pos": [2800, 1600], "facing": 90 },
+    { "id": "gd_n",   "type": "ARMGUARD", "owner": 0, "pos": [2700, 1300], "facing": 90 },
+    { "id": "gd_s",   "type": "ARMGUARD", "owner": 0, "pos": [2700, 1500], "facing": 90 },
+    { "id": "llt1",   "type": "ARMLLT",   "owner": 0, "pos": [2880, 1100], "facing": 90 },
+    { "id": "llt2",   "type": "ARMLLT",   "owner": 0, "pos": [2880, 1300], "facing": 90 },
+    { "id": "llt3",   "type": "ARMLLT",   "owner": 0, "pos": [2880, 1500], "facing": 90 },
+    { "id": "llt4",   "type": "ARMLLT",   "owner": 0, "pos": [2880, 1700], "facing": 90 },
+    { "id": "com",    "type": "ARMCOM",   "owner": 0, "pos": [2440, 1560], "facing": 90, "stance": "hold" },
+    { "id": "estor1", "type": "ARMESTOR", "owner": 0, "pos": [2340, 1300], "facing": 90 },
+    { "id": "estor2", "type": "ARMESTOR", "owner": 0, "pos": [2340, 1220], "facing": 90 },
+    { "id": "mex1",   "type": "ARMMEX",   "owner": 0, "pos": [2300, 1500], "facing": 90 }
+  ],
+
+  "groups": [
+    { "id": "solar_farm", "owner": 0, "at": [2260, 1660],
+      "pattern": {"kind": "grid", "cols": 4, "spacing": 70, "jitter": 0},
+      "composition": [{"type": "ARMSOLAR", "count": 12}],
+      "facing": 90 },
+
+    { "id": "core_tide", "owner": 1, "at": [4000, 1400],
+      "pattern": {"kind": "grid", "cols": 22, "spacing": 42, "jitter": 8},
+      "composition": [{"type": "CORAK", "count": 220}, {"type": "CORTHUD", "count": 110},
+                      {"type": "CORRAID", "count": 70}],
+      "facing": 270,
+      "orders": [{"cmd": "attack", "to": [2800, 1400]}] }
+  ],
+
+  "camera": { "at": [2980, 1400], "pin": true }
+}

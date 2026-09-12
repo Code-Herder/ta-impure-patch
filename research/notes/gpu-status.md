@@ -259,6 +259,20 @@ else stays ours, so both boxes land in one `glshot`):
    Bresenham step landing on the other neighbour, or a pixel where ours is correctly occluded
    and the A/B's engine box (which composites over our whole world) is not.
 
+**And since 2026-09-11 it can be drawn as GEOMETRY instead, behind
+`tagpu_selgeom.on`** — each edge two triangles, a band of `w` game pixels
+(`w=`, or `wdev=` in device pixels) expanded along the edge's *minor* axis,
+because Bresenham's own rule is one pixel per major-axis step. That is the width
+the driver would not give us, and it is the thing `devres` was waiting on: at
+`k = 1.5` the rect reaches full colour (1019 device pixels at ≥ 0.9 coverage,
+peak 1.000) where the GL line reaches 5 and peaks at 0.928. It is **bit-identical
+at 1:1** — 0 differing pixels and an unmoved md5 at `ss = 2` with the resolve, at
+`ss = 1`, at zoom 0.5 and 2.0, and on the slope fixture — and off by default.
+`selgeom main` turns `selAt1x` off for the A/B; that costs 1320 pixels at
+`ss = 2`, so the 1x detour is still what makes the default exact.
+[UI markers](ui-markers.html) §1 has the numbers and the two construction traps
+(the cap must run along the segment; the band is nudged 1/256 px off the tie).
+
 Two consequences worth knowing. **Supersampled — the default — the rect draws after the marker
 layer**, so where a box edge crosses a health bar our line wins where the engine's bar would (the
 bars sit inside the box on every stock unit measured); the fallback site under `tagpu_ss.off`, or
@@ -864,6 +878,7 @@ sees only the blits that really draw. Full argument lists, boxes and evidence: t
 | `0x4C6B70` | surface → surface `(dst, src, x, y)` — the GUI panel reaching the frame | 8 | the source's box at `(x−originX, y−originY)`, clipped |
 | `0x4C69F0` | `SurfaceCreateNamed(tag, w, h)` — return hijacked | 6 | registers the surface, seeds its copy so its build is diffed |
 | `0x4C6AC0` | `SurfaceFree(surface)` | 6 | forgets it |
+| `0x4D85A0` | `MEM_Free(block)` — the allocator's own free, **not a pixel writer** | 5 | retires the surface whose block it is (G18-8): `block+0x30` is the pixel base, and this is the only way an engine allocation dies |
 | `0x4A81E0` | `GUI_StageUpdateDraw(gi, flags)` | 10 | a build/redraw event for the log |
 
 **Two writers of the minimap composite are missing from this table, and what saves them is an
@@ -1016,6 +1031,13 @@ half on the render thread, and the two halves meet only in a lock-free SPSC queu
   OFFSCREEN — freed to the heap by `MEM_Free` at `0x491AB8`, not through `SurfaceFree`, and
   re-created 640×480 on the same base — no longer leaves a 1024-wide box in the ring for the
   next publish to trip on (`surf_get` forgets a base's ops on a same-base size change).
+  **Since G18-8 that surface is retired at the free itself** rather than at the next
+  `0x4C69F0("OFFSCREEN")`: the observer on `MEM_Free 0x4D85A0` is the surface's destructor, so
+  no entry in the table can outlive its block whatever path freed it. That is the whole safety
+  argument for `pub_surface_bytes` reading engine memory at the flip — the range test on the
+  pointer was never one. MEASURED 2026-09-12: the two frees the old rule left standing are the
+  shell's 640×480 offscreen at the mode switch (`0x498398`) and the game's at leave-game
+  (`0x491ABD`), both on the game thread.
 - *The palette (G15d):* the twin resolves through **the palette the engine's frame is presented
   with — cnc-ddraw's `g_ddraw.primary->palette->data_rgb`, what the engine's `SetEntries`
   stored — not `main+0x143A7`**. The engine scales every palette it sets by the Gamma option on
@@ -1060,8 +1082,9 @@ click takes the same path a player's does, the UI snapshot gained the frame's `v
 native pass gained `devres` — at `k > 1` `ss` follows `ceil(k)` and the box-resolve to the game's
 resolution is skipped, so the composite downsamples the supersampled buffer instead of
 nearest-stretching a game-res one (replication 42.6 % → 11.2 % of adjacent device pixels at
-`k = 1.5`, fps unchanged). `tagpu_devres.off` is the A/B and `devres=` is on the native log line;
-at `k = 1` it is inert.
+`k = 1.5`, fps unchanged). **It is OPT IN — `tagpu_devres.on`** (it was on by default with
+`tagpu_devres.off` as the A/B until the rect measurement above; `devres=` is on the native log
+line either way); at `k = 1` it is inert.
 
 ### 2.3f The palette the world resolves through (`tagpu_pal.c`, always on) — 2026-09-09
 
@@ -1187,8 +1210,8 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `main+0x2A43` | the player id the health-bar and group-digit loop compares unit owners against (`0x46967D` → `[esp+0x70]`, read at `0x469CA6`/`0x469CC9`). Read only. **Not `main+0x2A42`**, which is what the order-marker driver `0x48CC30` uses for its player range — two bytes, two loops, one block, written independently at `0x416B25`/`0x416B38`. `tagpu_mark.c` was on `0x2A42` from G13d until G13p corrected it |
 | `main+0x1426B`, `+0x142CB`, `+0x142DB`, `+0x142DF`, `+0x142E3`, `+0x142E7..+0x142ED`, `+0xDD9` | the minimap: the TNT's picture, the view rect and its colour, and the three 126-px surfaces (composite, fog base, scaled base). **Read only.** The picture is decoded on the MINIMAP BUILD's own thread inside `BuildMinimapSurface 0x466780` — not the game thread, measured — and the three surfaces are read per frame on the render thread while the game thread may be rewriting them, the same standing as the fork's own surface upload (G17e, [GL UI renderer](gui-renderer.html) §19) |
 | `[0x51FBD0]+0x1B2`, `+0x1B6`, `+0x1BA` | the cursor's **GAF frame** and the position it was last drawn at. Read only, on the render thread, once per frame in `tagpu_gui_cursor_frame()` — and read ONCE because two modules act on the answer: the UI layer stops discarding that rect and the world composite counts it as the terrain key, and a second read a pass later would leave a sliver of the engine's cursor standing (G17c, [GL UI renderer](gui-renderer.html) §17). The frame's pixels go through `tagpu_gaf_decode` into the UI atlas like any other sprite |
-| `[0x51FBD0]+0x204` / `+0x208` | the current font object and text foreground colour. Read only, on the GAME THREAD at hook 8: the engine re-points both many times a frame, so a present-thread read would get whatever the side panel last drew with. **Since 2026-09-12 (the frame packet's landing 1) the font is COPIED there**, header and 95 printable glyphs, each as a one-glyph font object, into the packet (`tagpu_packet_pub.c`); the present thread rasterises from the copy and no longer dereferences the engine's font at all (`tagpu_text.c`, §2.15). The GL UI's string op still carries the font's address — landing 4c |
-| **the frame packet's header** — `main+0x38A47` (`GameTime`), `+0x38A4D` (the live speed), `+0x38A51` (paused), `+0x38D75` (the load flags), `+0x1431F`/`+0x14323` (eye), `+0x14327`/`+0x1432B` (scroll target), `+0x37E1F`/`+0x37E23` (screen), `+0x1422B`/`+0x1422F`, `+0x14233`/`+0x14237` (map px, map cells), `+0x1423B`/`+0x1423F` (view cells), `+0x1438F` (`UNITINFOCount`), `+0x14351` (unit slots), `+0x14281` (`LosType`), `+0x37F06`, `+0x37F2F`, `+0x2A43`, `+0x2A42`, `+0x1427F` | **Read only, on the GAME THREAD**, from the `after` of the `DrawGameScreen` observer on in-play frames only, and COPIED into the packet every presented frame (§2.15; the addresses live in `inc/tagpu_engine.h`). Nothing reads them from the packet yet except the heartbeat, the FPS readout's packet row and the text path's colour: landing 2 makes the header the source of the view every pass reads |
+| `[0x51FBD0]+0x204` / `+0x208` | the current font object and text foreground colour. Read only, on the GAME THREAD at hook 8: the engine re-points both many times a frame, so a present-thread read would get whatever the side panel last drew with. **Since 2026-09-12 (the frame packet's landing 1) the font is COPIED there**, header and 95 printable glyphs, each as a one-glyph font object, into the packet (`tagpu_packet_pub.c`); the present thread rasterises from the copy and no longer dereferences the engine's font at all (`tagpu_text.c`, §2.16). The GL UI's string op still carries the font's address — landing 4c |
+| **the frame packet's header** — `main+0x38A47` (`GameTime`), `+0x38A4D` (the live speed), `+0x38A51` (paused), `+0x38D75` (the load flags), `+0x1431F`/`+0x14323` (eye), `+0x14327`/`+0x1432B` (scroll target), `+0x37E1F`/`+0x37E23` (screen), `+0x1422B`/`+0x1422F`, `+0x14233`/`+0x14237` (map px, map cells), `+0x1423B`/`+0x1423F` (view cells), `+0x1438F` (`UNITINFOCount`), `+0x14351` (unit slots), `+0x14281` (`LosType`), `+0x37F06`, `+0x37F2F`, `+0x2A43`, `+0x2A42`, `+0x1427F` | **Read only, on the GAME THREAD**, from the `after` of the `DrawGameScreen` observer on in-play frames only, and COPIED into the packet every presented frame (§2.16; the addresses live in `inc/tagpu_engine.h`). Nothing reads them from the packet yet except the heartbeat, the FPS readout's packet row and the text path's colour: landing 2 makes the header the source of the view every pass reads |
 | **order node `+0x32`, `+0x34`, `+0x42`** | **the target sprite's last-seen cache. WRITTEN, on the GAME THREAD, at the instant the engine's own drawer would have written it.** It is the only sim-side field this stack writes for a marker, and it is not optional: the cache is what stops a waypoint marker following a target that has left LOS, so a port that drops it leaks the target's live position (`tagpu_order.c`, `resolve_sprite`) |
 | **`Object3do+0x08`** | **the pose-dirty flag, and the interlock the unit pass reads it as.** Read only, on the render thread, on either side of every piece's posed-vertex copy: the engine rewrites `prim+0x22` in place and in two stages, and this field is 1 for exactly that window ([engine map](exe-reverse-engineering.html) "The repose"). Non-zero on either side means the buffer may be mid-rewrite and the pass emits the piece from the pose fields instead (§2.9) |
 | `Object3do+0x18/+0x1A/+0x1C` | the CACHED body turn — `unit+0x64` (about Z), `unit+0x66` (the heading, about Y), `unit+0x68` (about X), copied at `0x45AC7C` when any axis moves ≥ 8. Read only, and read in preference to the live `unit+0x64..` on the reconstruction path, because this copy is the one the compose baked into the vertices. **`[MEASURED 2026-09-08]` "In preference" is not a nicety: on a bomber the cached triple read `(0, 16128, 3)` against a live `(0, 44767, 65508)` — 157° of heading apart — and the drawn geometry followed the CACHED one.** On a tank the two were identical; which of them moves is not established. Anything folding `unit+0x64..` instead draws the unit at the wrong attitude, which is what `pose_dump` and `tacob pose-check` did until 2026-09-08 and `hires_pose` until 2026-09-09 |
@@ -1337,6 +1360,54 @@ relaunched with `--no-defaults` logged `opt: play defaults OFF` and armed only `
 and `shield`, the three that were never on the table. **Not measured**: a player's Windows, which
 is what the `_local` test VM is for; the defaults on a map change (the `*own` halves are attach
 time, the rest re-read every 30 frames, so nothing new is expected).
+
+### 2.8b The fork defaults (`tagpu_cfg.c`) — since 2026-09-10
+
+`tagpu_opt.c` arms our passes with no file; this is its sibling for **cnc-ddraw's own settings**,
+so that a player never edits `ddraw.ini` to get a working game. It runs at the END of `cfg_load()`,
+immediately before `ini_free()` — the parsed ini is still in memory there, which is what lets it
+ask whether the player wrote a key, through the same section rule `cfg_get_string` uses (the game
+section, then `ddraw`).
+
+| key | ours | why |
+|---|---|---|
+| `windowed` + `fullscreen` | both true | borderless fullscreen (`dd.c` sizes the render target from the desktop mode); **one decision, not two** |
+| `toggle_borderless` | true | alt+enter switches borderless ↔ window instead of taking `util_toggle_fullscreen`'s exclusive branch, which is a real `ChangeDisplaySettings` |
+| `max_resolutions` | 90 | the mode list TA is fed; **and bounded at 100 whatever the ini says** |
+| `inject_resolution` | the desktop mode | the one list entry exempt from the `CDS_TEST` filter, so the monitor's own mode is *guaranteed* into the picker ([resolution](resolution.html) §6.5) |
+
+**A key the player wrote wins**, and that includes the one `cfg_save()` writes back after they
+press alt+enter — so their own choice sticks across launches. One line at attach says which way it
+went: `cfg: tagpu defaults: max_resolutions 0 -> 90, toggle_borderless 0 -> 1, windowed 0 -> 1,
+fullscreen 0 -> 1 (the ini wins; the player set nothing)`.
+
+Four things about it are load-bearing and were each found by measuring rather than by reading:
+
+- **`windowed` and `fullscreen` are atomic.** `cfg_load` defaults `windowed` to FALSE, so owning
+  `fullscreen` alone would give a player with no ini fullscreen-*without*-windowed — the exclusive
+  modeset the `toggle_borderless` row exists to prevent. If the player wrote **either**, we own
+  **neither**. Verified: an ini with only `windowed=false` logs `the player set windowed,
+  fullscreen` and applies neither.
+- **The bound is not a default.** `max_resolutions=0` means *no cap*, and TA's "DISPLAY MODES"
+  allocation is 100 entries whose writer does not bounds-check ([resolution](resolution.html)
+  §6.1/§6.3). The clamp therefore applies to the player's own value too, and says so:
+  `cfg: max_resolutions 250 -> 100 (TA's mode buffer is 100 entries and its callback 0x4B5330
+  does not bounds-check)`.
+- **We had to stop shipping these keys, in two places.** `cfg_create_ini()` writes a full ini for a
+  player who has none, and its **generic `[ddraw]` block** set all four — so every key read as
+  "the player's" and *nothing applied*. That is exactly what the first end-to-end run showed
+  (`the player set max_resolutions, toggle_borderless, windowed, fullscreen`, all four skipped).
+  They are commented out there and gone from `[TotalA]` and from `tagpu/release/ddraw.ini`. **If
+  one comes back, this module silently stops working and nothing warns you.**
+- **No display API at `DLL_PROCESS_ATTACH`.** `cfg_load` runs under the loader lock, so
+  `inject_resolution` is filled lazily inside `EnumDisplayModes`, where the desktop mode has
+  already been read for `max_w`/`max_h`.
+
+**tacli is unaffected and deliberately so:** `write_ddraw_ini` writes all four explicitly, so an
+instance is always explicit and every measurement is unchanged — which also means **an instance
+does not exercise the player path**. To test that path, put `tagpu/release/ddraw.ini` in the
+gamedir (or delete it entirely and let the DLL create one) and launch bare, with no `--res`,
+`--window` or `--maxfps`, which are the only knobs that rewrite the file.
 
 ### 2.9 The pose race, and the guard that closed it — HISTORY (removed by G16 step 8, 2026-09-09)
 
@@ -1692,12 +1763,79 @@ one small archive.
 | `DLL_PROCESS_ATTACH` | write `impure-patch.ufo` (`guis/render.gui` + `anims/render.gaf`) unconditionally, with a version stamp. `DDRAW.dll` is TotalA.exe's first static import, so this precedes `InitTAHPIAry 0x41D4C0`'s `*.UFO` glob by the loader's rules | — |
 | `DrawGameScreen 0x468CF0` (observer) | the per-frame tick: sample the trigger file on its edges, open or close, re-assert `main+0x37EA0`, and recover if the screen was freed under us | game |
 | `0x46A308` (observer, post-GUI) | blit the sprocket into the back buffer with `CopyGafToContext 0x4B7F90(NULL, frame, x, y)` | game |
-| `GUIMEMSTRUCT+0x08` (our `OnCommand`) | advance the row, `GUIGADGET_SetStatus 0x4A1080` for every row, `grayedout` for Shadow quality, and set the repaint flag `gi+0xCCA` via `0x49FA90`. **It writes no file** | game |
+| `GUIMEMSTRUCT+0x08` (our `OnCommand`) | advance the row, `GUIGADGET_SetStatus 0x4A1080` for every row, `grayedout` for Shadow quality, set the repaint flag `gi+0xCCA` via `0x49FA90`, and **answer the pump with `0x4AB0A0(gi)`** (`gi->UIChange_f = -1`). **It writes no file** | game |
 | `tagpu_shield.c`, both paths | `tagpu_menu_click()` — the sprocket's hit test, from `deliver_mouse()` (injected) and from the wndproc before the shield's gate (real) | game |
 | `tagpu_zoom.c`, two entry points | `tagpu_menu_owns_point()` — the zoom transform must leave a point the menu owns alone. The panel hangs over the world and the transform's gate is geometric, so at any zoom ≠ 1 a row click was bent away and **no row worked**; `tagpu_zoom_drop_mouse` must not treat it as the display-only ring either | game |
 | `render_ogl.c`'s frame | `tagpu_menu_present()` — the deferred cfg/lever write | render |
 | open | `GUI_Load 0x4AA8F0(gi, main+0x37EA0, flags)` with `0x20` + `0x400`, patch the panel rect, set `+0x08`/`+0x0C`, then `0x4C2470(); GUI_StageUpdateDraw(gi, 0x21); 0x4C2870()` — GUI_Load's own suppressed stage 1, reproduced; then repaint the ground and set `gi+0xCCA` | game |
 | close | restore `main+0x37EA0` and call `UpdateIngameGUI 0x491D70(1)`. **`GUI_Pop` is never called** | game |
+
+**Answering the pump is not optional** [VERIFIED 2026-09-11]. `gi->UIChange_f` is
+bidirectional: the pump writes the actuated index into it before calling `OnCommand`
+(`0x4AA675`) and reads it back afterwards (`0x4AA79A`), and a handler that returns with it
+still set is asking to be popped — whereupon `0x4AA7BC..0x4AA7FA`, an **inlined copy of
+`GUI_Pop`'s body**, relinks the stack and `free()`s the `GUIMEMSTRUCT`. Every engine handler
+ends with `0x4AB0A0(gi)` for exactly this reason; see *The pump's dispatch contract* in the
+[engine map](exe-reverse-engineering.html).
+
+**The front-end screen carries fifteen rows in two columns** [2026-09-11]. `VISUALS.GUI`
+is re-emitted into the same `.ufo` with the stock eleven gadgets moved (names, `assoc`,
+`commonattribs`, `range` and `stages` all verbatim) and four rows of our own added:
+
+| column | rows |
+|---|---|
+| **Window** | Display mode (window / borderless fullscreen, `util_toggle_fullscreen`), Monitor (`EnumDisplayMonitors`, `SetWindowPos`), UI scale (Auto / 1x..4x, the client set to k x the Screen Size row's own mode at `main+0x37F1B/+0x37F1F`), Screen Size (stock `VIDSLDR`), Frame cap (60 / 120 / uncapped, `g_config.maxfps` + `fpsl_init`), Gamma (stock) |
+| **Impure rendering** | Renderer, Undithered assets, Dynamic lighting, Shadows, Shadow quality, Shading (stock), Anti-aliasing (stock), Engine shadows (stock `BSHADOWS`), Supersampling |
+
+Three things this rests on, each measured rather than assumed:
+
+- **The four Window rows are applied on the thread that owns the window.** Each ends in a
+  window call, and a cross-thread one is a wait on a message pump rather than a visible
+  error, so the click POSTS `WM_TAGPU_DISPLAY` and the wndproc does the work — the same
+  contract `tagpu_shield.c` uses for injected input.
+- **`util_toggle_fullscreen` does not restore the window size on the way back** (measured:
+  1024x768 -> 3840x2160 -> 3840x2160), so the Display mode row saves the windowed client
+  before leaving and puts it back itself.
+- **The monitor is a rect, never a display "mode".** On a multi-monitor X server wine
+  reports the VIRTUAL DESKTOP as the current, registry and largest-enumerated mode, for
+  every adapter alike — 6200x2160 on the reference setup's three outputs. So the Monitor
+  row, the borderless-fullscreen size AND position, and the Screen Size list all come from
+  `util_target_monitor` (`utils.c`), which asks `GetMonitorInfo`. The measurement, and the
+  per-monitor mode lists it produces, are in [resolution](resolution.html) §6.6.
+- **The ground is ours.** STARTOPT's background paints one column of recess bars across
+  x 267..405, drawn for a single centred column; two columns cannot sit in it and it is
+  the game's art. So the screen carries one `id=12` ground frame (270x420 at (200,54)) in
+  `anims/visuals.gaf`, with its own recesses, covering those bars.
+
+**The Monitor row rebuilds the screen**, because the Screen Size list belongs to a monitor
+and the engine builds it once per visit (`0x45E6B0` into `GUIMEMSTRUCT+0x0C`, hung off
+`VIDSLDR` at `0x45E726`). There is no "re-enumerate in place" call, so the row uses the
+engine's own idiom for a stale screen — `GUI_Pop(gi)` then `0x45E5E0(0)`, verbatim what
+UNDO does at `0x45E31E` — with `s_visKeep` set so the rebuild keeps the model. `GUI_Pop`
+writes -1 into `gi->UIChange_f` (`0x4A9673`), so the pump is answered and there is no
+`menu_accept` to do. **The list follows the model, not the window**: the move behind that
+row is posted, so at rebuild time the window is still on the old monitor — measured
+2026-09-11, the three lists come out 8 / 3 / 3 entries as the row is cycled, and the window
+follows one message later. In fullscreen the row applies as a single
+`dd_SetDisplayMode(0, 0, 0, 0)`, which re-derives position, size and render target from the
+same monitor; placing the window here as well left it a pixel taller than the screen and
+back at the primary's origin, because the re-apply places it last.
+
+**Restore Default and Undo Changes reach our rows too.** Both are STARTOPT's buttons and
+both end in `GUI_Pop` + `0x45E5E0(0)`; we handle them before forwarding and set `s_visKeep`
+so the rebuild seeds the plates from the model rather than re-reading levers the deferred
+write has not reached yet. **Undo** restores every row the screen opened with, Display mode
+and Monitor included — it is the escape hatch for a mode the player cannot see the menu on.
+**Restore** sets the rendering rows to the Classic++ defaults, UI scale to Auto and the cap
+to 60, and deliberately leaves Display mode and Monitor alone: a default that moves the
+window to a monitor the player cannot see would hide the button that undoes it.
+
+Until 2026-09-11 this screen did not, so **every click popped and freed it**, and the tick's
+`on_stack` recovery re-opened it with `fresh == 0` the same frame — which is why it looked
+like it worked. On the front-end screen, where there is no recovery, the same omission simply
+closed the screen; the `GUI_Pop 0x4A9660` observer that was armed to catch it could never fire,
+because the pop is inlined. The recovery path stays (the engine really does tear the in-game
+GUI stack down on a world click) but an ordinary click no longer reaches it.
 
 **Fields we write.** `main+0x37EA0`, the expected-screen name buffer — 16 bytes, saved and
 restored, and re-asserted every frame while the menu is open. Gadget `status_curnt` (`+0x137`)
@@ -1843,7 +1981,58 @@ grey/yellow view rectangle behind the digits, which reads convincingly as a corr
 you take the pair with the readout off. And the glyph advance is `w + 1`, so it renders as
 `FPS175` with no gap after the label.
 
-### 2.15 The frame packet exchange, landing 1 (`tagpu_packet.c`, `tagpu_packet_pub.c`, on by default, `tagpu_packet.off`) — 2026-09-12
+### 2.15 HUD scale (`tagpu_hud.c`, **off unless armed**, `tagpu_hud.on`) — Phase F G18f
+
+The in-game HUD magnified inside the player's own Screen Size, over a world the engine goes on
+drawing exactly as it always did — so Screen Size and HUD size are two dials rather than two
+names for one number. Design and every decision behind it: [GUI renderer](gui-renderer.html)
+§22, and **§22.5 for why the first build was withdrawn the same day**; the geometry it rests
+on: [resolution](resolution.html) §3.4a; the engine reading: [engine
+map](exe-reverse-engineering.html) *The viewport rect at game entry* and *The world→screen
+projection is NOT derived from the viewport rect*.
+
+**It writes no engine memory at all**, and that is the whole of the correction. The first build
+reserved the space by writing the viewport rect; `L`/`T` are the screen→world origin inside
+`0x498DA0` and nothing else, while TA's world→screen projection is a `+0x80`/`+0x20` pair of
+baked immediates, so the world tore in two by `((s−1)·128, (s−1)·32)` — measured, 1024×768
+Auto: the engine picked a unit 76 px left and 19 px up of where it was drawn. The HUD now
+covers the outer world instead of asking for it.
+
+| site | what we do there | thread |
+|---|---|---|
+| `LAY_FS` (`tagpu_gui_surf.c`) | `uHud` — the two integers, `1/s` and `s`. Three regions sample the twin at `s` texels per device pixel; the ramp widens by `s` with them. Inert at `s = 1` | render |
+| `mouse.c`, `winapi_hooks.c` ×4, `wndproc.c` ×3 | `tagpu_hud_to_engine()` at the end of every client → game conversion: inside a HUD region the engine is handed the point on its own 1× HUD grid | message |
+| `sharp_cursor`, `sharp_minimap` | `tagpu_hud_to_screen()` — the engine's own cursor position (the fallback path only) and the minimap's box go the other way, so the sharp layer lands on the magnified art | render |
+| `tagpu_menu.c` | the "UI scale" row, `trigger_rect()` and `panel_rect()` | game / window |
+| `0x4288D0` (observer), gated on return address `0x498242` | write `R`, `B`, `viewW`, `viewH` so the engine's viewport IS the visible window — `L`/`T` untouched, because the projection bakes them. Writes nothing at stock | game |
+| `tagpu_native.c`, the world composite's `glViewport` | the one draw that puts the world target on the frame, shifted by `(128s−128, 32s−32)` | render |
+**One resolver, so the two halves cannot disagree.** `tagpu_hud_geom(W, H, pct, …)` is a pure
+function that clamps to the screen's own ceiling and yields `s`, the panel width and the bar
+height. The composite and the pointer map both call it; neither owns the answer, and because
+`128s / s` is exactly `128`, the screen column where the panel ends is exactly the engine
+column where the world begins. The ceiling is `H/480` — [resolution](resolution.html) §3.4a
+measured the panel to be a fixed 128×480 block that does not stretch — with a second bound
+that keeps at least 256 px of world width.
+
+**Fields we write.** Four of the six viewport ints at `main+0x37E2F..0x37E3B` (`R`, `B`, `viewW`,
+`viewH`), once per game entry and only when the resolved scale is past stock. **`L` and `T` are
+never written** — that is the whole lesson of §22.5. Because viewW/viewH size the SORT buffers at
+LoadMap, the setting is game-entry-time: a scale chosen mid-game waits for the next game.
+
+**Why a stale scale is safe.** One word crosses threads — the percentage in force — and every
+consumer re-resolves it against the screen *it* sees, so either value a racing 32-bit read can
+return is one that fits that screen. The worst a mid-frame change can do is leave the pointer
+map and the picture one frame apart, and neither is engine state. The shell needs no signal of
+its own: its surface is atom-locked at 640×480 whatever Screen Size says, and 640×480's ceiling
+is exactly 1.0.
+
+**Files.** `tagpu_hud.on` (`scale=auto` / `scale=<percent>`) and `tagpu_hud.off`, written as a
+pair for the reason §2.8 gives.
+
+**Known costs.** The HUD is 1× art magnified: bigger, not sharper. That is now the only one:
+§22.6 made the engine's viewport the visible window, so the whole map is reachable, the camera
+centres on what the player sees, and the world under the HUD is no longer drawn at all.
+### 2.16 The frame packet exchange, landing 1 (`tagpu_packet.c`, `tagpu_packet_pub.c`, on by default, `tagpu_packet.off`) — 2026-09-12
 
 The first step of the plan the cross-thread audit led to ([frame packet exchange](frame-packet-exchange.html);
 the audit: [cross-thread engine reads](cross-thread-engine-reads.html)): every render-thread read of engine

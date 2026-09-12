@@ -12,6 +12,7 @@ extern BOOL g_mouse_locked;
    cannot drift. 1 = the point was inside the letterboxed viewport; outside it
    the outputs come back as the centre of the engine's screen, as they always
    have. */
+int mouse_client_inside(int cx, int cy);
 int mouse_client_to_game(int cx, int cy, int* gx, int* gy);
 
 /* tagpu (G17c): the last CLIENT-AREA point a real message carried, which is

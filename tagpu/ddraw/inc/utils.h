@@ -26,5 +26,6 @@ void util_set_window_rect(int x, int y, int width, int height, UINT flags);
 BOOL CALLBACK util_enum_thread_wnd_proc(HWND hwnd, LPARAM lParam);
 BOOL CALLBACK util_enum_child_proc(HWND hwnd, LPARAM lParam);
 BOOL util_detect_low_res_screen();
+BOOL util_target_monitor(RECT* out);
 
 #endif

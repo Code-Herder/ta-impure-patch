@@ -191,6 +191,89 @@ difference:
   other neighbour, or a pixel where ours is correctly hidden behind the unit
   and the A/B's engine box (composited over our whole world) is not.
 
+### Drawing it as geometry instead — `tagpu_selgeom.on` (2026-09-11)
+
+The 1x detour above only exists because a GL line's width is not ours to set. It
+needs a buffer at the game's own resolution to draw into, so under
+`tagpu_devres.on` — where the composite reads the supersampled buffer and there
+is no resolve — the condition goes false and the rect falls back to the main
+pass at `ss`, one supersample wide, ~0.75 of a device pixel at `k = 1.5`. That
+is the single reason `devres` is opt-in.
+
+`tagpu_selgeom.on` emits each edge as **two triangles** instead: a band of `w`
+game pixels (`w=<n>`, default 1; `wdev=<n>` states it in device pixels and
+converts by `k = vp_w / gw`), so the width is a number we choose and no driver
+capability is asked for. Three construction facts, each of which was a real
+difference measured against the shipped path:
+
+- **The band is expanded along the edge's MINOR axis, not its perpendicular.**
+  Bresenham's rule is one pixel per major-axis step, so its perpendicular
+  thickness is cos θ of a pixel — a 45° edge is 1/√2 across. A true-perpendicular
+  band of width 1 is 1 pixel across everywhere and therefore covers up to √2
+  pixels per step on a diagonal: a fatter line than the engine's, and one that
+  cannot reproduce the existing frame. A minor-axis band reproduces the rule at
+  any width and any scale.
+- **The end caps run along the segment**, extended by the half-width so the
+  corner pixel — a sample lying exactly on the cap, since every corner is a pixel
+  centre — is inside the quad rather than on its edge. Extending along the major
+  axis *alone* tilts the two long edges to slope `dy/(dx + 2·hw)` and walks the
+  band's centre line up to half a pixel off the segment in the middle of a long
+  edge. That was worth **39 of the ~110 pixels** of the facing-200 box.
+- **The band is nudged back 1/256 of a pixel along its minor axis.** Wherever the
+  band's centre passes exactly through a pixel corner, both long edges land
+  exactly on pixel centres, and whether such a sample is covered is left to the
+  implementation: the reference setup's rasteriser resolves it towards the larger
+  coordinate, GL's own line rasteriser rounds the same tie towards the smaller.
+  Under a nudge smaller than any honest margin (about 1/80 of a pixel on a box
+  this size) and larger than a subpixel step, only the arithmetic decides.
+  Measured on the sweep below: **6** differing pixels without it, **0** with it,
+  6 again at 1/64 and **77** at 1/16, where the nudge starts moving samples that
+  were never ties.
+
+**THE GATE — bit-identical at 1:1** [MEASURED 2026-09-11], sixteen ARMSTUMPs at
+sixteen facings all selected at once, 1024×768, both halves of each A/B taken
+inside **one run** with the trigger flipped live (so the sim state, the camera
+and the DLL are held) and after two fresh `native:` lines:
+
+| state | md5 of the frame | differing px |
+|---|---|---|
+| `ss = 2` with the resolve (`selAt1x`) | `d30931e371388f3e6373fa692a860b0d` | **0** |
+| `ss = 1` (main pass) | `c061e864da4b4556a5f085949fe9fa07` | **0** |
+| zoom 0.5 | `7ad1b2ea409c6ee945619d7dcfd7fa48` | **0** |
+| zoom 2.0 | `d71cbd92c617d8cc99f241c9ce75f056` | **0** |
+| `selbox-slope`, `ss = 2` | `10b14e51fd828641ed6b057635d25451` | **0** |
+| `selbox-facings`, `ss = 2` / `ss = 1` | `c0ebd5bf…` / `29d4be02…` | **0** |
+
+And the shipped path was checked against the binary that predates the change, not
+just against the same binary with the trigger off: the DLL built from the parent
+commit draws the sweep as `d30931e371388f3e6373fa692a860b0d` at `ss = 2` and
+`c061e864da4b4556a5f085949fe9fa07` at `ss = 1` — the same two md5s, so the
+frame a player sees is byte-for-byte what it was. (Both fixtures reach a **0-px
+noise floor** and reproduce their md5 across relaunches, which is what makes
+these comparable at all; the pointer is parked and its rect excluded, because
+the cursor sprite animates wherever it sits.)
+
+**What it buys, at `devres` `k = 1.5`** (1024×768 in a 1536×1152 client; the
+rect's coverage estimated per device pixel against a third shot with nothing
+selected, so the background is known):
+
+| | GL lines at `ss` (today) | geometry at `ss` |
+|---|---|---|
+| peak coverage of any rect pixel | 0.928 | **1.000** |
+| pixels at ≥ 0.9 coverage | 5 | **1019** |
+| pixels at ≥ 0.75 | 541 | 1574 |
+| total coverage laid down | 2410 | 3507 |
+
+**`selAt1x` is still owed at `ss = 2`.** `selgeom main` turns the 1x detour off
+so the main pass at `ss` can be measured against it: **1320 differing pixels** on
+the same sweep at `k = 1`. A one-game-pixel band in a 2× buffer covers 2–4 of a
+game pixel's four samples depending on where the slant falls, so the resolve
+gives a correctly-weighted but *antialiased* rect — brighter than the old
+hairline (which got 1–2 of 4) and not the engine's flat colour. Reproducing
+Bresenham through a box filter needs the geometry quantised to whole game
+pixels, which this does not do; until then the 1x detour is what makes `ss = 2`
+exact, and deleting it would move the parity md5.
+
 **Still ours and not the engine's:** with the pass supersampled — the default —
 the rect draws *after* the marker layer rather than before it, so where a box
 edge crosses a health bar our line wins where the engine's bar would. (The

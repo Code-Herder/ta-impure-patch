@@ -358,9 +358,54 @@ side-indexed sequences — top bar `*(main+0x1481F + side*4)` at
 x = frame.XPos+0x81, bottom bar `*(main+0x14833 + side*4)` at
 y = frame.YPos + **GetTA_ScreenHeight() − 0x20** (anchored to the real screen
 bottom), side panel `*(main+0x14847 + side*4)` at its own hotspot. So the
-bottom bar tracks the mode; the panel art itself is fixed-size GAF frames —
-how the art covers ≥1024-wide bars is an asset question, not engine code
-[INFERRED — verify live at a wide mode].
+bottom bar tracks the mode; the panel art itself is fixed-size GAF frames.
+
+**Three straight-line blits, no loop** [BINARY-VERIFIED 2026-09-11]: `0x467DC8`,
+`0x467DFD`, `0x467E2B` each fetch a frame (`0x4B7F30`) and each blit it once
+(`0x4B7F90`). Whatever covers a wide bar, it is not a tiling loop in this
+function.
+
+### 3.4a How the HUD actually covers a wide screen [MEASURED 2026-09-11]
+
+The `[INFERRED — verify live at a wide mode]` that stood here is closed. Three
+skirmishes on the same map, the engine's own surface read with `tacli shot` at
+**800×600, 1920×1080 and 3840×2160**:
+
+| | result |
+|---|---|
+| bar content reaches | x = 799, 1919 and **3839** — the full width every time, **no garbage strip** |
+| first 200 bar columns, left-aligned, 800 vs 1920 | **200 / 200 identical** (and 300/300 for 1920 vs 3840) |
+| last 200 bar columns, right-aligned, 800 vs 1920 | **0 / 200 identical** |
+| bottom-bar seams, 1920 | x = 298, 467, 811, 980, 1324, 1493, 1837 — 169 and 344 alternating, a ~513 px repeat |
+| whole-bar comparison under proportional stretch | 2 / 671 columns — **not stretched** |
+
+So the bars are **left-anchored and repeat to any width, with nothing anchored to
+the right edge**. (An ornament lands near the right edge at more than one width;
+it is the repeat arriving there, not a right-anchored element — the right-aligned
+comparison is what tells them apart.)
+
+**The side panel is a fixed 128×480 block, top-anchored, and it does not
+stretch.** Its content occupies rows 0..479 at *every* surface measured — 480
+rows at 600, at 1080 and at 2160 — leaving 120, 600 and **1680** dead rows of
+strip below it. `ARMPAN`/`CORPAN` in `anims/commongui.gaf` is 128×352; the rest
+of the block is the screen's own gadgets.
+
+Two consequences for anything that wants a larger HUD: the panel can be
+magnified about its top-left corner with no slicing, and the scale has a hard
+ceiling of **`s ≤ H / 480`** — which is exactly 1.0 at 640×480 and lands on
+20 % of the width for any 4:3 surface, 1997's own figure. See
+[GUI renderer](gui-renderer.html) §22.
+
+### 3.4b A 3840×2160 engine surface runs [MEASURED 2026-09-11]
+
+Recorded because §7 lists it as untested. At that surface `devres` does not
+engage and `ss` stays 2, so the supersampled target is **7680×4320** — and it
+allocated: `native: FBO 3840x2160 ss=2 status=8cd5/8cd5`, both framebuffers
+`GL_FRAMEBUFFER_COMPLETE` (the line prints `w×h` with `ss` separate; the texture
+is `w·ss × h·ss`). The composited frame carries 13 654 distinct colours over the
+world with no black and no un-keyed cyan. **On this GPU only** — the
+`s_devresFailed` latch still only stands `devres` down, and the resolve path has
+no fallback if a driver refuses the allocation.
 
 ---
 
@@ -507,6 +552,104 @@ Refresh-rate variants are harmless only if they don't multiply entries past the
 cap (flags=0 normally suppresses them; entries differing only in refresh would
 otherwise appear as duplicate rows — the matcher compares w/h only).
 
+### 6.5 What our fork actually serves — and why the cap was never the cap [MEASURED 2026-09-10]
+
+> **Superseded in part by §6.6.** Everything here holds, but it was measured
+> on a desktop with ONE monitor on it. The cap no longer comes from the display
+> mode, and the seven-mode table below is that one monitor's list, not the rule.
+
+`EnumDisplayModes` (`tagpu/ddraw/src/dd.c`) has **two** branches and only one of
+them runs for TA:
+
+- **The OS walk** — `real_EnumDisplaySettingsA` in order, emitting only modes
+  whose `dmDisplayFrequency`, `dmBitsPerPel`, `dmDisplayFlags` **and**
+  `dmDisplayFixedOutput` all equal the values computed in a first pass. Runs when
+  `g_ddraw.bpp && resolutions == RESLIST_NORMAL`, which is TA (8bpp, the default).
+- **A hardcoded table** (`dd.c:122`) topping out at 2048×1536 / 2560×1600 /
+  2560×1440, plus `{max_w, max_h}` from `ENUM_REGISTRY_SETTINGS`. Runs only when
+  `!bpp`, `RESLIST_FULL` or `windowed_hack` — **not** for us.
+
+Both are then truncated at `max_resolutions` entries (`dd.c:269`), and every
+entry except the injected one must pass a `ChangeDisplaySettings(CDS_TEST)`.
+
+**The measured list on the reference setup** (3840×2160 desktop, wine 9.0), read
+by walking `VIDSLDR` on `VISUALS.GUI` and reading the `VIDVAL` label at each stop:
+
+| | modes offered |
+|---|---|
+| no injection | 800×600, 1024×768, 1280×1024, 1600×1200, 1920×1080, 2048×1152, 2048×1280 — **7** |
+| injecting the desktop mode | the same 7 **plus 3840×2160** — 8 |
+
+So the "the picker stops around 2K" complaint was **not** `max_resolutions`:
+only seven modes survive the four-way match filter here, far under any cap, and
+raising 32 → 90 alone changes nothing. What puts the native mode in the list is
+`inject_resolution`, because it is the one entry exempt from the `CDS_TEST`.
+
+**The injection is ours-additive, upstream's was a replacement.** `dd.c`
+overwrote the first mode that passed the filter, and since the walk is ascending
+that is the *smallest* — measured here, injecting 3840×2160 cost **800×600**,
+which under our stack is the most useful entry of the whole list (the smallest
+engine surface gives the largest UI scale `k`). The fix steps the enumeration
+index back one so the same mode is re-enumerated with the injection guard
+already set, and both are emitted; the list goes 7 → 8 with nothing lost.
+
+### 6.6 The cap is the MONITOR, and no display API but `GetMonitorInfo` knows it [MEASURED 2026-09-11]
+
+§6.5 was measured on a single-monitor desktop, where "the display mode" and "the
+monitor" are the same number. **They are not the same number on a multi-monitor
+X server, and the difference is what the picker showed.** The reference setup
+grew to three outputs — 3840×2160 at 0,0 (primary), 1080×1920 at −1080,112,
+1280×1024 at 3840,0 — and a probe built against wine's own API reported:
+
+| asked | answer |
+|---|---|
+| `EnumDisplaySettingsA(NULL, ENUM_CURRENT_SETTINGS)` | **6200×2160** |
+| …`ENUM_REGISTRY_SETTINGS` | **6200×2160** |
+| the same, naming `\\.\DISPLAY1`, `2` or `3` | 6200×2160 for DISPLAY1; **0×0** for the two secondaries |
+| `EnumDisplaySettingsA(<any device>, i)`, walked | the SAME 96-mode union for all three, **6200×2160 included** |
+| `GetSystemMetrics(SM_CXSCREEN/SM_CYSCREEN)` | 3840×2160 — the primary, right, but only ever the primary |
+| `EnumDisplayMonitors` + `GetMonitorInfo` | the three rects, correctly |
+
+6200×2160 is the bounding box of the virtual desktop: no monitor can show it.
+So **the mode list is not a per-monitor list and cannot be filtered into one by
+naming the adapter** — wine has one mode table and hands it to every adapter.
+The only per-monitor fact available is the rect, which makes the rect the filter:
+
+- `util_target_monitor` (`utils.c`) is the single answer to "which monitor, and
+  how big" — the render-options screen's Monitor row when the player has been on
+  that screen, else `MonitorFromWindow`, else the primary.
+- `dd_EnumDisplayModes` takes `max_w`/`max_h` from it instead of
+  `ENUM_REGISTRY_SETTINGS`, and **drops every enumerated mode bigger than it**.
+- `tagpu_cfg_inject_native` is fed the same number, so the injected "native"
+  entry is the monitor's mode and not the desktop's.
+
+**The measured lists, read out of the engine's own table** (`GUIMEMSTRUCT+0x0C`
+→ `+0x00` count, `+0x04` the 12-byte-per-entry table `w,h,refresh`):
+
+| monitor | modes offered |
+|---|---|
+| 3840×2160 | 800×600, 1024×768, 1280×1024, 1600×1200, 1920×1080, 2048×1152, 2048×1280, **3840×2160** — 8 |
+| 1080×1920 | 800×600, 1024×768, **1080×1920** — 3 |
+| 1280×1024 | 800×600, 1024×768, **1280×1024** — 3 |
+
+Before the change the first row ended **6200×2160**, and the other two rows did
+not exist at all: every monitor was offered the 4K list.
+
+**The injected mode is de-duplicated now, and it had to be.** §6.5 noted that a
+mode the enumeration also reports appears twice, because `0x45E4C0` sorts
+without de-duplicating, and called it cosmetic. Capping made it likely rather
+than rare — a small monitor's own mode IS one wine enumerates. Measured before
+the fix: the 1280×1024 screen offered `1280×1024` twice, and its slider needed
+two stops to get past one size. The emit filter now skips an enumerated mode
+equal to the already-injected one.
+
+**The list follows the Monitor row, live.** There is no engine call for
+"re-enumerate in place", so the row does what UNDO and RESTORE do at `0x45E31E`:
+`GUI_Pop(gi)` then `0x45E5E0(0)`, which rebuilds the screen and with it the
+table. It follows the **model** rather than the window on purpose — the window
+move behind that row is posted, so at rebuild time the window is still on the
+old monitor. See [GPU status](gpu-status.html) §2.12.
+
 ---
 
 ## 7. Risks & watch-list for a non-640×480 mode
@@ -514,7 +657,10 @@ otherwise appear as duplicate rows — the matcher compares w/h only).
 1. **Mode-list buffer overflow** [BINARY-VERIFIED]: "DISPLAY MODES" is a fixed
    `0x4B0`-byte MEM alloc = 100 entries; callback `0x4B5330` appends unchecked.
    \>100 8-bpp modes from our ddraw ⇒ heap corruption in the options screen.
-   Cap the served list.
+   **Closed since 2026-09-10**: `tagpu_cfg.c` owns `max_resolutions` (90) and
+   **clamps any value, the player's included, to 100** — the fork's own default
+   for that key is `0`, i.e. *no cap*, so an ini without it was the hazard rather
+   than the protection ([GPU status](gpu-status.html) §2.8b).
 2. **Registry values are unclamped** [BINARY-VERIFIED]: whatever we write to
    `DisplaymodeWidth/Height` is what `SetDisplayMode` gets (mod the §6 UI
    filter, which only gates the *picker*). Setting the registry directly is a
@@ -567,6 +713,8 @@ otherwise appear as duplicate rows — the matcher compares w/h only).
 | `0x45E5E0` | visual-options dialog build (VISUALS/VISUALRT/SELVMODE.GUI) | stdcall(int selvmode), ret 4 |
 | `0x45BBF0` | VIDSLDR slider callback → writes `0x37F1B/1F` @`0x45BC88/97` | stdcall, ret 8 |
 | `0x45E100` | OnCommand_VISUALRT_GUI (UNDO→`0x45CAE0`, RESTORE 640×480 @`0x45E3AD/BD`) | stdcall(gui*), ret 4 |
+| `0x45E2FD` / `0x45E331` | its **UNDO** and **RESTORE** branches. Both end the same way — `GUI_Pop 0x4A9660`, then `0x45E5E0(0)` to rebuild the screen — so a chained OnCommand sees the rebuild whether or not it handled the button [VERIFIED 2026-09-11] | — |
+| `0x45E46A`…`0x45E4AB` | the fall-through, and it is **not** a no-op: `[gui+0x60]` is the actuated index, `-1` ⇒ `je 0x45E4AB` (return); otherwise, if that gadget's id is 1 (a BUTTON) it **pops the screen at `0x45E499` and calls the UNDERLYING screen's OnCommand**. That is how the tab buttons work — and why our VISUALS handler has to take the dispatch SLOT rather than be observed: an observer never skips, so the engine's fall-through would pop the screen out from under it [MEASURED 2026-09-11] | — |
 | `0x4461D0` | battleroom MODES listbox OnCommand — writes @`0x4462C7/D6` + PlayerInfo @`0x4462E2/F0` | stdcall(gui*), ret 4 |
 | `0x446310` | battleroom mode cycle — writes @`0x44641F/2E` | cdecl-ish, ret |
 | `0x450F90` | REPORTER_PlayerInfo — broadcast PlayerInfo (msg 0x20, 0xB9 B) | void |

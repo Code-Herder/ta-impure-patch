@@ -361,6 +361,67 @@ static int __cdecl before_free(void* e)
     return 0;
 }
 
+/* ---- 0x4D85A0 MEM_Free(block) cdecl: THE SURFACE'S DESTRUCTOR -----------
+   `pub_surface_bytes` reads a surface's pixels straight out of engine memory
+   at the flip. What makes that safe is not the range test on the pointer —
+   that answers a question about the value, not about the memory — but this:
+   the table entry cannot outlive the block it names.
+
+   Every destination this file records is a surface object from
+   SurfaceCreateNamed 0x4C69F0, which asks MEM_Alloc 0x4D83B0 for `w*h+0x30`
+   bytes (0x4C6A01..0x4C6A04) and points the object's base field at
+   `block+0x30` (0x4C6A0E/0x4C6A14): ONE allocation, header and pixels. The
+   block can only be released through this function — 0x4D85A0 is the only
+   caller of the allocator's own free 0x4D85B0, and all 363 sites that free
+   anything in the engine call it, SurfaceFree 0x4C6AC0 included (0x4C6ACF).
+   So an observer at its entry is the surface's destructor, and on the game
+   thread — the thread the flip and therefore the publisher run on — nothing
+   of ours can run between the drop here and the release, by ordering rather
+   than by luck.
+
+   Before this (G18-8) the table was retired by the two paths we had NAMED:
+   SurfaceFree (before_free) and the main offscreen's re-create
+   (surf_drop_offscreens, at the next 0x4C69F0("OFFSCREEN")). A surface freed
+   any other way left an entry pointing into the heap's free list, which reads
+   back as whatever the block became — and faults outright once the heap hands
+   the segment back, which is exactly what a level teardown makes likely.
+
+   The engine's allocator is genuinely multi-threaded (`0x4D85B0` takes a
+   critical section at `0x4D85C2`), and a free on another thread MUST NOT WALK
+   THE TABLE: `surf_drop` swap-removes and `surf_get` memsets the tail, so a
+   scan racing those reads a slot mid-move — it can mark a slot that is about
+   to become a different, live surface and leave the freed one standing, which
+   is the very fault this observer exists to remove. So an off-thread free
+   pushes the block pointer into `surf_free_offthread`'s ring, unfiltered and
+   without reading the table at all, and the game thread retires the entry at
+   the top of the next flip, before the census or the publisher read a base.
+   Filtering there would not be an optimisation but a hole: MEM_Free fires once
+   per block, so a filter that misses queues nothing and nobody ever re-checks.
+   The residual window — one thread freeing a surface another is drawing into —
+   is the engine's own and was never ours to close.
+
+   The observer sits at the ENTRY of 0x4D85A0, before the allocator's own
+   critical section, so the CRT `free()` that surf_drop calls inverts no lock. */
+static int __cdecl before_memfree(void* e)
+{
+    unsigned p = ARG(e, 1);
+    int i;
+    if (!p) return 0;
+    if (!on_game_thread()) { surf_free_offthread(p); return 0; }
+    for (i = 0; i < s_nsurf; i++) {
+        if (s_surf[i].owner != p) continue;   /* owner == base - 0x30 */
+        if (s_trace) {
+            char b[220];
+            _snprintf(b, sizeof b, "gui trace: MEM_Free surface %08X %dx%d from %08X",
+                      s_surf[i].base, s_surf[i].w, s_surf[i].h, ARG(e, 0));
+            glog(b);
+        }
+        surf_drop(i);
+        return 0;
+    }
+    return 0;
+}
+
 /* ---- 0x4A81E0 GUI_StageUpdateDraw(gi, flags) stdcall ret 8: the one place
         a screen's surface is drawn into. Traced, not boxed: it tells the
         census which screen was built or redrawn between two flips -------- */
@@ -452,6 +513,10 @@ static const LEAF LEAVES[] = {
     { 0x004BF7B0u, "focus", { 0x83, 0xEC, 0x30, 0x53, 0x55, 0x56, 0x57 }, 7, before_focus, NULL },
     { 0x004C6890u, "fill",  { 0x83, 0xEC, 0x64, 0x53, 0x55, 0x56, 0x57 }, 7, before_fill,  NULL },
     { 0x004C6AC0u, "free",  { 0x8B, 0x44, 0x24, 0x04, 0x85, 0xC0 }, 6, before_free,  NULL },
+    /* NOT a pixel-writing leaf: the allocator's free, the one place a recorded
+       surface's memory can go away. It rides the same table so it takes the
+       same all-or-nothing byte match — G18-8, before_memfree. */
+    { 0x004D85A0u, "memfree", { 0x8B, 0x44, 0x24, 0x04, 0x50 }, 5, before_memfree, NULL },
     { 0x004A81E0u, "build", { 0x8B, 0x44, 0x24, 0x04, 0x81, 0xEC, 0xC0, 0x03, 0x00, 0x00 }, 10, before_build, NULL },
     { 0x004BF4D0u, "frame", { 0x83, 0xEC, 0x40, 0x53, 0x55, 0x56, 0x57 }, 7, before_frame, NULL },
     /* G17e: NOT a pixel-writing leaf. `BuildMinimapSurface 0x466780` is the one

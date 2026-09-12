@@ -12,6 +12,7 @@
 #include "dllmain.h"
 #include "ini.h"
 #include "versionhelpers.h"
+#include "tagpu_cfg.h"
 
 static void cfg_init();
 static void cfg_create_ini();
@@ -126,6 +127,12 @@ void cfg_load()
     if (g_config.aspect_ratio[0])
         g_config.maintas = TRUE;
 
+    /* tagpu: the settings this DLL owns, so a player never edits an ini for
+       them (tagpu_cfg.h). It runs HERE, before the free below, because the
+       parsed ini is what lets it ask whether the player wrote a key -- and a
+       key they wrote wins. */
+    tagpu_cfg_defaults();
+
     ini_free(&g_config.ini);
 }
 
@@ -195,10 +202,14 @@ static void cfg_create_ini()
             "\n"
             "; Override the width/height settings shown above and always stretch to fullscreen\n"
             "; Note: Can be combined with 'windowed=true' to get windowed-fullscreen aka borderless mode\n"
-            "fullscreen=false\n"
+            "; tagpu: COMMENTED OUT ON PURPOSE. The DLL sets fullscreen and windowed\n"
+            "; together (both true = borderless fullscreen) and a key written here reads\n"
+            "; as your own choice, which turns that off -- so uncommenting either one is\n"
+            "; how you take the pair over. See the header of tagpu_cfg.c.\n"
+            "; fullscreen=false\n"
             "\n"
             "; Run in windowed mode rather than going fullscreen\n"
-            "windowed=false\n"
+            "; windowed=false\n"
             "\n"
             "; Maintain aspect ratio\n"
             "maintas=false\n"
@@ -272,7 +283,9 @@ static void cfg_create_ini()
             "screenshotdir=.\\Screenshots\\\n"
             "\n"
             "; Switch between windowed/borderless modes with alt+enter rather than windowed/fullscreen modes\n"
-            "toggle_borderless=false\n"
+            "; tagpu: COMMENTED OUT ON PURPOSE -- the DLL sets this true so that alt+enter\n"
+            "; never takes the exclusive path, which is a real display mode change.\n"
+            "; toggle_borderless=false\n"
             "\n"
             "; Switch between windowed/fullscreen upscaled modes with alt+enter rather than windowed/fullscreen modes\n"
             "toggle_upscaled=false\n"
@@ -325,7 +338,10 @@ static void cfg_create_ini()
             "fix_not_responding=false\n"
             "no_compat_warning=false\n"
             "guard_lines=200\n"
-            "max_resolutions=0\n"
+            "; tagpu: COMMENTED OUT ON PURPOSE -- 0 means NO cap, and TA's own mode list\n"
+            "; is a fixed 100-entry buffer whose writer does not bounds-check. The DLL\n"
+            "; sets it, and bounds whatever it is set to.\n"
+            "; max_resolutions=0\n"
             "lock_surfaces=false\n"
             "flipclear=false\n"
             "rgb555=false\n"
@@ -1773,8 +1789,10 @@ static void cfg_create_ini()
             "hook_peekmessage=true\n"
             "\n"
             "; Total Annihilation (Unofficial Beta Patch v3.9.02)\n"
+            "; tagpu: max_resolutions, windowed, fullscreen and toggle_borderless are\n"
+            "; DELIBERATELY absent -- the DLL owns them (tagpu_cfg.c), and a key written\n"
+            "; here would read as the player's own and turn that off.\n"
             "[TotalA]\n"
-            "max_resolutions=32\n"
             "lock_surfaces=true\n"
             "singlecpu=false\n"
             "\n"
