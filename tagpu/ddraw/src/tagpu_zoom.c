@@ -12,6 +12,7 @@
 #include "tagpu_menu.h"
 #include "tagpu_detour.h"
 #include "tagpu_vpwide.h"
+#include "tagpu_hud.h"
 #include "tagpu_terrown.h"
 #include "tagpu_input.h"
 
@@ -751,7 +752,7 @@ static float eye_level(void)
 static int zoom_eye_range(const char* ta, float z,
                           int* loX, int* hiX, int* loY, int* hiY)
 {
-    int L, T, W, H, mapW, mapH, dx = 0, dy = 0;
+    int L, T, W, H, mapW, mapH, dx = 0, dy = 0, hudL = 0, hudB = 0;
 
     if (!ta_ok(ta)) return 0;
     /* the TRUE viewport, never the field: vpwide owns that one at zoom < 1 */
@@ -765,8 +766,34 @@ static int zoom_eye_range(const char* ta, float z,
         dx = iround((float)W * 0.5f * (1.0f - 1.0f / z));
         dy = iround((float)H * 0.5f * (1.0f - 1.0f / z));
     }
-    *loX = -dx; *hiX = mapW - W + dx;
-    *loY = -dy; *hiY = mapH - H + dy;
+    /* HUD SCALE (tagpu_hud.h): the engine's range puts the VIEWPORT's edges on
+       the map's, and the viewport is what the engine draws into. What the
+       PLAYER sees is that viewport with the magnified HUD laid over its left
+       column and its two bar bands, so the visible window is inset by
+       (128s - 128) on the left and (32s - 32) top and bottom, and the engine's
+       own range stops the visible edge exactly that far short.
+
+       ASYMMETRIC, and deliberately: the panel is only on the left, so only the
+       LOW x bound moves; the bars are on both, so both y bounds move, in
+       opposite directions. The numbers come from tagpu_hud_live() rather than
+       from 128/32 and a scale, so a panel of any width -- a future HUD with a
+       different one, or a stage this file has never heard of -- is covered by
+       construction, which is what the report asked for.
+
+       Derivation, in the engine's own coordinates (rect L = 128, T = 32):
+         visible left column  = 128s        -> world eye + (128s - 128)
+         visible right column = W + 127     -> world eye + W - 1       (unmoved)
+         visible top row      = 32s         -> world eye + (32s - 32)
+         visible bottom row   = H + 31 - 32s -> world eye + H - 1 - (32s - 32)
+       Setting each of those to the map's own edge gives the four bounds. */
+    {
+        int pw = 0, bh = 0;
+        if (tagpu_hud_live(&pw, &bh, NULL)) { hudL = pw - 128; hudB = bh - 32; }
+        if (hudL < 0) hudL = 0;
+        if (hudB < 0) hudB = 0;
+    }
+    *loX = -dx - hudL; *hiX = mapW - W + dx;
+    *loY = -dy - hudB; *hiY = mapH - H + dy + hudB;
     /* A map smaller than the viewport inverts the ENGINE's range too — it then
        alternates between 0 and a negative bound on every call. Ours holds
        still, which is the most that can be said for either. */
@@ -844,7 +871,12 @@ static void apply_eye_range(void)
     if (!g_eyeInstalled) return;
     eye_poll_off();
     z = eye_level();
-    g_eyeWide = (unsigned char)(z > 1.0f);   /* 1.0 in the menus: s_live is 0 */
+    /* The replacement clamp is needed for a zoomed-IN world AND for a magnified
+       HUD, and for the same reason in both: the engine's range is about a
+       window the player is not looking at. tagpu_hud_live() answers 0 in the
+       shell (its surface is 640x480, whose ceiling is 1.0), so this is still
+       "1.0 in the menus" and s_live still gates the rest. */
+    g_eyeWide = (unsigned char)(z > 1.0f || tagpu_hud_live(NULL, NULL, NULL));
     if (!s_live) return;                     /* nothing to correct, and no game */
     ta = *(char**)TA_MAINPP;
     if (!zoom_eye_range(ta, z, &loX, &hiX, &loY, &hiY)) return;

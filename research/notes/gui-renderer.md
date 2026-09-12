@@ -3102,6 +3102,66 @@ pointer map correctly sends anything under 576 into the panel.
 4K is not a defensible default, and the honest ceiling for a default is whatever keeps
 `128s − 128` inside the margin a player would never build in — which nothing here has measured.
 
+#### The camera reasons about the viewport; the player looks at the visible window
+
+Reported from play: *"snapping the camera to the commander snaps a bit to the side"*, and
+*"we cannot scroll to the edge of the map on the bottom left when zoomed out"*. One cause, and
+it is the same one as the covered strip — every camera bound in the engine puts the **viewport's**
+edges on the map's, and the viewport is not what the player sees.
+
+**The centre.** `0x41C7C0` is the smooth centre-on, `f(worldX, worldZ, flag)`:
+
+```
+41c7cb  mov eax,[esi+0x37e3b] / cdq / sub eax,edx / sar eax,1 / sub ecx,eax   ; targetY = worldZ - viewH/2
+41c7d8  mov eax,[esi+0x37e37] / cdq / sub eax,edx / sar edx,1 / sub eax,edx   ; targetX = worldX - viewW/2
+41c7f7  mov [esi+0x14327],eax ... clamp both to [0, map - view]               ; INLINE, not via 0x41C3C0
+```
+
+`targetX` puts the unit at engine screen `128 + viewW/2`; the visible window is `[128s, W−1]`,
+whose centre is `(128s + W − 1)/2`. So the unit lands **`(128s − 128)/2` to the left** — 224 px
+at `s = 4.5`. **Vertically there is nothing to fix**: the bars are the same height top and
+bottom, so `32 + viewH/2` already is the visible centre. That asymmetry is the signature, and
+it is why the report said *to the side* and not *up* or *down*.
+
+**The bounds.** `0x41C3C0` clamps the eye to `[0, map − view]`, which stops the visible edge
+`(128s − 128)` short on the left and `(32s − 32)` short top and bottom. In the engine's own
+coordinates (`L = 128`, `T = 32`):
+
+| visible | engine screen | world | bound |
+|---|---|---|---|
+| left column | `128s` | `eye + (128s − 128)` | `loX = −(128s − 128)` |
+| right column | `W + 127` | `eye + W − 1` | `hiX = mapW − viewW` — **unmoved** |
+| top row | `32s` | `eye + (32s − 32)` | `loY = −(32s − 32)` |
+| bottom row | `H + 31 − 32s` | `eye + H − 1 − (32s − 32)` | `hiY = mapH − viewH + (32s − 32)` |
+
+**Asymmetric on purpose**: the panel is only on the left, so only the low x bound moves; the
+bars are on both, so both y bounds move, in opposite directions.
+
+**Both fixes take their numbers from `tagpu_hud_live()`, never from 128/32 and a scale** — so a
+panel of a different width, or a stage this code has never seen, is covered by construction.
+That was the report's own condition.
+
+**Measured**, 3840×2160 Auto (`s = 4.5`, so the insets are 448 and 112), map 4064×3968,
+view 3712×2096: the camera pinned past the map's bottom edge and released settles at
+**`eyeY = 1984`**, which is `mapH − viewH + 112`; the engine's own range stops at 1872.
+
+**Not independently driven**, and worth saying rather than implying: the *x* half of the same
+two lines was not measured, because `tacli eye` clamps its own argument at 0 and injected
+minimap clicks do not reach the engine in this harness (nor does a band drag, nor arrow-key
+scroll — all three fail with the pass off too). The centre-on observer is confirmed **armed**
+(`observer on 0x41C7C0: ok`) and its arithmetic is read off the disassembly above, but nothing
+here has driven a centre-on either.
+
+**Two more inline clamps are still open**, and they were open before this: `0x41C4C0` (the
+smooth SetCamera) and `0x41CAF7` (the per-frame FOLLOW) clamp the same way without going
+through `0x41C3C0`, and zoom's own `d` widening never reached any of the three either. This
+closes the HUD half of one of them.
+
+**And the clamp fix rides on `zoom.on`**: `zoom_eye_range` lives in `tagpu_zoom.c` and
+`apply_eye_range` returns early when zoom is not installed. With `zoom.off` and `hud.on` the
+edges are short again. The play defaults arm zoom, so this is a note for an A/B, not for a
+player.
+
 **The setting is live now.** Nothing it changes is engine state, so the store puts it in force
 as it writes it and the next composited frame is already at the new scale. The "set it before
 you start a game" rule 22.2 argued for was a consequence of the rect, and the rect is gone.

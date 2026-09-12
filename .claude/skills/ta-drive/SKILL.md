@@ -1712,7 +1712,7 @@ wrote the engine's viewport rect and tore the world in two (what you clicked was
 tools/tacli arm <i> hud.off                 # stock HUD; the A/B, and what a 1x measurement needs
 tools/tacli arm <i> 'hud.on=scale=auto'     # Auto: the panel fills the screen height
 tools/tacli arm <i> 'hud.on=scale=150'      # a percentage of stock; clamped to this screen's ceiling
-tools/tacli log <i> -g '^hud:'              # one line at attach: ARMED/off, and the stored percentage
+tools/tacli log <i> -g '^hud:'              # one line at attach: ARMED/off, the centre-on observer, the stored percentage
 tools/tacli log <i> -g 'k=[0-9.]* s='       # the gui heartbeat carries s= beside k=
 ```
 
@@ -1747,9 +1747,23 @@ tools/tacli log <i> -g 'k=[0-9.]* s='       # the gui heartbeat carries s= besid
   is the identity at every scale. **`dmove:` is device pixels; `pmove:` is the engine's own
   coordinates** and does not go through the map at all, so `pmove` over a magnified HUD region
   aims at the 1× grid, which is a different point from the one under your finger.
-- **Injected band-select does not work**, with the pass on *or* off:
-  `down:lbutton` / `mouse:x,y` / `up:lbutton` selects nothing. Measured 2026-09-11 — it is a
-  `tacli` question, not a HUD one, so do not use it as a HUD A/B.
+- **Three ways of driving the CAMERA do not work through the harness**, all of them with the
+  pass on *or* off, so none is a HUD symptom (measured 2026-09-11/12): injected band-select
+  (`down:lbutton` / `mouse:x,y` / `up:lbutton`) selects nothing; arrow keys do not scroll; and
+  an injected `click` on the minimap — at the engine coordinates `main+0x142BB` itself reports —
+  does not move the camera. **To move the camera, use `tacli eye`**, and note it clamps its own
+  x argument at 0, so it cannot test a negative eye. To test a camera BOUND, pin past the edge
+  and release: `tacli eye <i> <x> <y>` then `tacli eye <i> --release`, then peek
+  `*0x511DE8+0x1431F:4` / `+0x14323:4`.
+- **`--res` does not always reach the game.** The in-game resolution is the Screen Size
+  (`main+0x37F1B/+0x37F1F`), and `tacli` records the resolution the game actually came up at —
+  so once it drops, the next launch re-applies the dropped value and it is sticky. Symptom: you
+  ask for 3840x2160 and `hud:`/the rect say 1024x768. Fix by editing `res` in the instance's
+  `instance.json` before launching, or drive Screen Size from Options > Visuals.
+- **`--shield on` is not a flag** — it is bare `--shield` (and `--no-shield`). `--shield on`
+  makes the whole launch fail, and because `tagpu.log` is only truncated by a launch that
+  succeeds, the log still holds the PREVIOUS run and reads exactly like a healthy one. Check the
+  `launched <name> pid=` line is actually there before you believe an arm list.
 - **A cross-build pixel A/B must state which band it is diffing.** At `s = 1` the panel, top
   bar and bottom bar are byte-identical by construction (nothing is written, the shader takes
   the identity path); the world is relaunch noise, and on `selbox-facings` that floor is

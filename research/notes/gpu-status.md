@@ -1993,6 +1993,8 @@ covers the outer world instead of asking for it.
 | `mouse.c`, `winapi_hooks.c` ×4, `wndproc.c` ×3 | `tagpu_hud_to_engine()` at the end of every client → game conversion: inside a HUD region the engine is handed the point on its own 1× HUD grid | message |
 | `sharp_cursor`, `sharp_minimap` | `tagpu_hud_to_screen()` — the engine's own cursor position (the fallback path only) and the minimap's box go the other way, so the sharp layer lands on the magnified art | render |
 | `tagpu_menu.c` | the "UI scale" row, `trigger_rect()` and `panel_rect()` | game / window |
+| `0x41C7C0` (observer) | the smooth centre-on: re-aim `main+0x14327/+0x1432B` at the VISIBLE window's centre — `(128s−128)/2` left of the viewport's — and re-clamp past the engine's own inline `[0, map−view]` | game |
+| `tagpu_zoom.c` `zoom_eye_range()` | the eye's range widened by what the HUD covers: `loX −= 128s−128`, `loY −= 32s−32`, `hiY += 32s−32`, `hiX` unmoved | game / render |
 
 **One resolver, so the two halves cannot disagree.** `tagpu_hud_geom(W, H, pct, …)` is a pure
 function that clamps to the screen's own ceiling and yields `s`, the panel width and the bar
@@ -2002,8 +2004,11 @@ column where the world begins. The ceiling is `H/480` — [resolution](resolutio
 measured the panel to be a fixed 128×480 block that does not stretch — with a second bound
 that keeps at least 256 px of world width.
 
-**Fields we write.** None. Not one byte of engine memory, which is also why the setting is
-live rather than game-entry-time: the store puts it in force as it writes it.
+**Fields we write.** The scroll target `main+0x14327/+0x1432B`, and only from the centre-on
+observer, and only when the scale is past stock — the engine had just written that same pair
+two instructions earlier and we recompute it about the visible window instead of the viewport
+(§22.5). Nothing else: no viewport rect, which is why the setting is live rather than
+game-entry-time.
 
 **Why a stale scale is safe.** One word crosses threads — the percentage in force — and every
 consumer re-resolves it against the screen *it* sees, so either value a racing 32-bit read can
