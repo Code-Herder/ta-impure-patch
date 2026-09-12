@@ -2831,10 +2831,11 @@ holds for `k = 1`, and for the same reason: it is what makes the rest of the cla
 - **The HUD is bigger, not sharper.** It is 1× art magnified. §18's string op exists but stamps
   glyphs **into the twin**, not into §13.2's device-res sharp layer, so text scales with
   everything else. Moving its output to the sharp layer is the fix and is a separate piece.
-- **Moot since 22.5: that nothing sim-relevant derives from viewW/H.** Nothing writes viewW/H
-  any more, so the question no longer gates anything; the survey below is kept because it is
-  the answer if a later pass does want to move them. The evidence is two-sided
-  and neither half is a proof. Every attributed reader is view-side — the camera cluster
+- **Open again since 22.6, and it is this landing's one unproved premise: that nothing
+  sim-relevant derives from viewW/H.** 22.5 made the question moot by writing nothing; **22.6
+  writes `R`, `B`, `viewW` and `viewH` again** (`tagpu_hud.c:apply_rect`, latched at game entry),
+  so the survey below is the actual argument and not an archive. **The evidence is two-sided and
+  neither half is a proof.** Every attributed reader is view-side — the camera cluster
   (`0x41C3C0`, `0x41C4C0`, `0x41C7C0`, `0x41C8E0`, `0x41CA10`, `0x41D0F0`, `0x41D1F0`), the
   terrain pass `0x483FA0`, LoadMap `0x483610`, the minimap box filler `0x466B70`, the map debug
   overlay `0x418310`, and the eye-driving flyby `0x495A30`; and structurally, TA broadcasts each
@@ -2847,8 +2848,8 @@ holds for `k = 1`, and for the same reason: it is what makes the rest of the cla
   the writer uses some other base. `main+0x14243/47/4B/4F`, which §3 lists alongside them, have
   **no references at all**. It never changed 22.2's "when", because the rect and the SORT buffers
   settle that on their own. **SETTLED by the first build, 22.4** — and it stays settled, because
-  the measurement was taken; note only that the instrument no longer exists, since 22.5 stopped
-  writing the rect, so re-running it needs the two-resolutions run that was originally planned.
+  the measurement was taken; the instrument exists again since 22.6 writes viewW/viewH, so it can
+  be re-run without the two-resolutions run that was originally planned.
   ** — HUD scale moves viewW/viewH
   without moving the screen mode or the map, which separates the two candidate sources outright:
   they are the view size in 16-px tiles, §3 is right, and the exe map is corrected.

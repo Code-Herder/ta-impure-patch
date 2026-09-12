@@ -108,8 +108,6 @@ typedef struct SURF {
     unsigned owner;                   /* the block MEM_Free 0x4D85A0 will be handed: the
                                          surface object itself, whose pixels are the same
                                          allocation at object+0x30 — see before_memfree */
-    volatile int dead;                /* its block has been freed: do not read it. Written
-                                         by before_memfree, cleared only by a drop        */
     int w, h, pitch;
     unsigned char* copy;              /* the surface as of the last flip     */
     unsigned char* mask;              /* the last census: 0/128/255          */
@@ -169,6 +167,67 @@ static void surf_drop_offscreens(unsigned keepBase)
     }
 }
 
+/* ---- blocks freed on a thread that is not the game thread ---------------
+   The table is the game thread's alone — `surf_drop` swap-removes and
+   `surf_get` memsets the tail — so an observer that fires on another thread
+   must not walk it: it would read a slot mid-move, mark the wrong entry and
+   leave the right one standing (which is the crash this whole mechanism
+   exists to stop). It leaves the block pointer here instead, and the game
+   thread retires the entry at the top of the next flip, BEFORE the census or
+   the publisher read any base.
+
+   One naturally aligned 32-bit slot per entry, so a reader takes one whole
+   pointer or another; the worst a torn ring can do is retire a surface that is
+   still alive, which costs a re-seed and nothing else. And if more than FREEQ
+   blocks are freed off-thread between two flips, the count says so and EVERY
+   entry is retired — a bound, not a hope. The engine's allocator is genuinely
+   multi-threaded (`0x4D85B0` takes a critical section at `0x4D85C2`), so this
+   is not a theoretical path even though no off-thread free of a recorded
+   surface has yet been observed. */
+#define FREEQ 64
+static volatile LONG s_freeqN;                  /* pushed, ever — any thread    */
+static LONG          s_freeqDone;               /* retired, ever — game thread  */
+static volatile unsigned s_freeq[FREEQ];
+static unsigned      s_freeqFlush;              /* times the ring overflowed    */
+
+/* The engine frees ~10 500 blocks a second and only a handful of them are ever
+   a surface, so the ring is fed through a READ-ONLY filter: the off-thread
+   observer looks for a matching entry and pushes only then. That scan can race
+   a `surf_drop` moving a slot, so it may miss a match (leaving the entry for
+   one more flip, which is what this module did for every path before G18-8) or
+   find a stale one (costing a re-seed). Neither is the safety argument — the
+   game thread re-checks authoritatively in surf_drain_freeq — the filter only
+   decides whether to bother it. Without it the ring took every free on every
+   other thread and overflowed three times in one game (MEASURED 2026-09-12). */
+static void surf_free_offthread(unsigned p)
+{
+    int i;
+    LONG n;
+    for (i = 0; i < s_nsurf; i++) if (s_surf[i].owner == p) break;
+    if (i >= s_nsurf) return;
+    n = InterlockedIncrement(&s_freeqN) - 1;
+    s_freeq[n & (FREEQ - 1)] = p;
+}
+
+static void surf_drain_freeq(void)              /* game thread only */
+{
+    LONG n = InterlockedExchangeAdd(&s_freeqN, 0);
+    if (n == s_freeqDone) return;
+    if (n - s_freeqDone > FREEQ) {              /* overflowed: nothing is trusted */
+        s_freeqFlush++;
+        while (s_nsurf) surf_drop(0);
+    }
+    else {
+        for (; s_freeqDone != n; s_freeqDone++) {
+            unsigned p = s_freeq[s_freeqDone & (FREEQ - 1)];
+            int i;
+            for (i = 0; i < s_nsurf; i++)
+                if (s_surf[i].owner == p) { surf_drop(i); break; }
+        }
+    }
+    s_freeqDone = n;
+}
+
 static SURF* surf_get(unsigned base, int w, int h, int pitch, unsigned owner)
 {
     int i;
@@ -176,7 +235,6 @@ static SURF* surf_get(unsigned base, int w, int h, int pitch, unsigned owner)
     for (i = 0; i < s_nsurf; i++)
         if (s_surf[i].base == base) {
             s_surf[i].owner = owner;       /* re-made over the same bytes: the new block */
-            s_surf[i].dead = 0;
             if (s_surf[i].w != w || s_surf[i].h != h || s_surf[i].pitch != pitch) {
                 /* the object was re-allocated over the same bytes: start over.
                    The ops already recorded against the base carry the OLD
@@ -206,16 +264,28 @@ static SURF* surf_get(unsigned base, int w, int h, int pitch, unsigned owner)
 /* a drawing context's destination as a surface */
 static SURF* surf_of_ctx(const int* ctx)
 {
+    unsigned base;
     if (!ptr_ok(ctx)) return NULL;
-    /* THE OWNER IS THE CONTEXT. Every destination this file has ever recorded is
-       a surface object made by SurfaceCreateNamed 0x4C69F0, which asks MEM_Alloc
-       for w*h+0x30 bytes and hands the object the block, its pixels at +0x30
-       (0x4C6A04, 0x4C6A14). MEASURED 2026-09-12 over a whole session, every
-       registration: base == ctx + 0x30, no exception. So the context pointer IS
-       the block that MEM_Free will be handed, and before_memfree can retire the
-       entry by it. */
-    return surf_get((unsigned)ctx[CTX_BASE], ctx[CTX_W], ctx[CTX_H], ctx[CTX_PITCH],
-                    (unsigned)(size_t)ctx);
+    base = (unsigned)ctx[CTX_BASE];
+    /* THE OWNER IS DERIVED FROM THE BASE, NOT FROM THE CONTEXT POINTER.
+       `SurfaceCreateNamed 0x4C69F0` asks MEM_Alloc for w*h+0x30 bytes and points
+       the object's base field at block+0x30 (0x4C6A01..0x4C6A14), so the block
+       MEM_Free will be handed is `base - 0x30` — and that holds however we
+       reached the surface. The CONTEXT is not usable for this: `GetContext
+       0x4C5E70` rep-movs a 12-dword copy into the caller's stack frame, so most
+       blits hand us a copy whose address has nothing to do with the block.
+       (MEASURED 2026-09-12, and it is why the first cut of this rule was wrong:
+       keying on the context refused 1235 draws in one game while registering
+       the same surfaces through `after_alloc`, where the context IS the object.)
+
+       WHAT THIS DOES NOT COVER, stated rather than assumed: `SurfaceAttach
+       0x4C6A60` — one caller, `0x4B5897` — lays the same header over the locked
+       DirectDraw primary, memory the engine did not allocate and will not
+       MEM_Free. Such a surface would have no destructor here. None was ever
+       recorded (every base this module has seen is an `0x4C69F0` object;
+       measured over a full session in game and in the shell), and its pixels
+       belong to the fork, which frees them only in the surface's own Release. */
+    return surf_get(base, ctx[CTX_W], ctx[CTX_H], ctx[CTX_PITCH], base - 0x30);
 }
 
 /* ---- the ops recorded since the last flip ------------------------------ */
@@ -562,9 +632,6 @@ static void publish(unsigned flipSurf)
     int vl = 0, vt = 0, vr = -1, vb = -1;
     if (!g_gui_draw) return;
     if (consumer_stalled()) return;
-    /* an off-thread MEM_Free could not retire the entry itself (before_memfree):
-       this is the table's owner, so it does it here, before anything reads a base */
-    for (i = 0; i < s_nsurf; ) { if (s_surf[i].dead) surf_drop(i); else i++; }
     dedup();
     if (g_guiq.reseed || s_pubOverflow) {
         TAGPU_PUBOP* o;
@@ -835,6 +902,9 @@ static int __cdecl before_flip(void* entry_esp)
     int hijack = 0;
     if (!s_gameTid) s_gameTid = GetCurrentThreadId();
     else if (!on_game_thread()) return 0;
+    /* FIRST, before the census or the publisher read a single base: retire every
+       surface another thread's MEM_Free left for us (surf_drain_freeq) */
+    surf_drain_freeq();
     s_flips++;
     if (s_flips == 1) {
         _snprintf(b, sizeof b, "gui: first flip on thread %u (init saw %u)", (unsigned)GetCurrentThreadId(), (unsigned)s_gameTid);
@@ -1041,9 +1111,9 @@ void tagpu_gui_flush(unsigned int frame_counter)
     if (!s_installed) return;
     if (frame_counter - last >= 600) {
         last = frame_counter;
-        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d",
+        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u",
                   s_flips, s_opsTotal, s_opsDropped, s_changedTotal, s_unexplTotal, s_nsurf,
-                  s_pubOps, s_pubBytes, g_guiq.qHead - g_guiq.qTail, g_guiq.resets, g_guiq.overflows, g_guiq.stalls, g_gui_draw);
+                  s_pubOps, s_pubBytes, g_guiq.qHead - g_guiq.qTail, g_guiq.resets, g_guiq.overflows, g_guiq.stalls, g_gui_draw, s_freeqFlush);
         glog(b);
         {
             int k, n = 0;

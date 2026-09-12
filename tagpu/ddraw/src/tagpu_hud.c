@@ -1,8 +1,15 @@
-/* tagpu_hud.c — HUD scale. See tagpu_hud.h for what it is, why it writes no
-   engine memory at all, and what makes the one word that crosses threads safe;
-   research/notes/gui-renderer.md §22 for why the art is magnified rather than
-   re-laid-out and §22.5 for the origin tear that took the viewport rect out of
-   this file. */
+/* tagpu_hud.c — HUD scale. See tagpu_hud.h for what it is, which four ints of
+   the engine's viewport rect it writes and why never L/T, and what makes the
+   one word that crosses threads safe; research/notes/gui-renderer.md §22 for
+   why the art is magnified rather than re-laid-out, §22.5 for the origin tear
+   the first build caused and §22.6 for the rule that replaced it.
+
+   THE MAGNIFICATION ITSELF IS NOT HERE: it is the composite's shader in
+   tagpu_gui_surf.c, which this module only feeds. Arming `tagpu_hud.on`
+   without `tagpu_gui.on` therefore shifts the world and the pointer by
+   (128s−128, 32s−32) and leaves the HUD drawn at 1x — a hand-armed
+   combination, not a shipped one (tagpu_opt.c keeps HUD scale off the play
+   defaults), but the reason the two belong together. */
 
 #include <windows.h>
 #include <stdio.h>
@@ -178,10 +185,20 @@ static void on_surface(int* x, int* y)
        panel contracts by 1/s — a five-pixel band where stock has one pixel.
 
    So: the outermost device column IS the outermost engine column, and only it.
-   It costs nothing anywhere else, because `0x498DA0` clamps the point into
+
+   IN THE WORLD IT COSTS NOTHING, because `0x498DA0` clamps the point into
    [L,R] x [T,B] before it makes a world point (`0x498E32`..`0x498E86`), so
    engine 3839 picks exactly the column the player is pointing at — the same
-   world point the region map would have produced. */
+   world point the region map would have produced.
+
+   OVER THE HUD IT COSTS ONE DEVICE PIXEL, and this is a trade rather than an
+   oversight. At the bottom-left corner the region map would send device row
+   H−1 to the panel's own last row (2159 · 256/1152 = 479 at 4K/450 %) and the
+   rule sends it to 2159 instead, so that one device row prefers scrolling to
+   clicking; the panel's last row is still reachable from the 4 device rows
+   above it. At 1x there is no trade at all — the engine's bottom row IS the
+   panel's, and TA scrolls and clicks from the same point. Magnification is
+   what forces the choice, and edge scroll is the half a player notices. */
 static void border_to_border(int dx, int dy, int* x, int* y)
 {
     int W = (int)g_ddraw.width, H = (int)g_ddraw.height;
@@ -230,8 +247,11 @@ void tagpu_hud_to_engine(int* x, int* y)
 
 void tagpu_hud_to_screen(int* x, int* y)
 {
-    int q, H;
-    if (!x || !y || !tagpu_hud_live(NULL, NULL, &q)) return;
+    int q, pw, bh, H;
+    /* ONE sample of the live scale, as to_engine takes: asking tagpu_hud_live
+       for q and then resolving pw/bh again would read the word twice, and a
+       scale that changed between the two would map one point with two of them */
+    if (!x || !y || !tagpu_hud_live(&pw, &bh, &q)) return;
     H = (int)g_ddraw.height;
     if (*x < HUD_PANEL_W || *y < HUD_BAR_H) {
         *x = *x * q / 256;
@@ -240,9 +260,6 @@ void tagpu_hud_to_screen(int* x, int* y)
         *x = *x * q / 256;
         *y = H - (H - *y) * q / 256;
     } else {
-        int pw, bh;
-        tagpu_hud_geom((int)g_ddraw.width, (int)g_ddraw.height,
-                       (int)s_pctLive, NULL, &pw, &bh);
         *x += pw - HUD_PANEL_W;          /* the inverse of to_engine's world  */
         *y += bh - HUD_BAR_H;
     }

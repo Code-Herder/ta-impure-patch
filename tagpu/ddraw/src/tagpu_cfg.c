@@ -158,12 +158,12 @@ void tagpu_cfg_inject_native(unsigned int w, unsigned int h)
     if (!logged) {
         char c[160];
         logged = 1;
-        /* The injected entry REPLACES the first mode the walk enumerates, and
-           the walk is ascending, so what it costs is a small mode TA's own
-           post-filter 0x45E4C0 would have dropped below 640x480 anyway. If the
-           enumeration also reports this mode the picker shows it twice --
-           0x45E4C0 sorts but does not de-dup. Cosmetic, and visible in the
-           list, so it is checked rather than assumed. */
+        /* The injected entry is emitted BEFORE the first mode the walk
+           enumerates and costs that mode nothing: dd.c steps the index back
+           after injecting, so the same mode is re-enumerated and emitted too.
+           If the enumeration also reports the injected mode the picker shows it
+           twice -- 0x45E4C0 sorts but does not de-dup. Cosmetic, and visible in
+           the list, so it is checked rather than assumed. */
         _snprintf(c, sizeof c, "cfg: inject_resolution -> %s (the desktop mode, exempt from CDS_TEST)",
                   g_config.inject_resolution);
         cfglog(c);

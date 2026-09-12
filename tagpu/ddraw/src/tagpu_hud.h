@@ -26,25 +26,37 @@
    and the pointer map take that boundary from the same tagpu_hud_geom(), so
    they cannot disagree about it.
 
-   WE DO NOT WRITE THE ENGINE'S VIEWPORT RECT, and the reason is worth keeping.
-   The first build did: left = 128s, top = 32s, on the theory that the rect is
-   the one origin every consumer projects about. It is not. The rect's L and T
-   are the screen->world origin inside 0x498DA0 and nothing else; TA's
-   world->screen projection is a +0x80/+0x20 pair of immediates baked at every
-   site that uses it — unit picking, band select, build placement, the feature
-   blits — so moving the rect tore the world in two by ((s−1)·128, (s−1)·32).
-   Measured 2026-09-11 at 1024x768 Auto: the engine picked a unit 76 px left
-   and 19 px up from where it was drawn. Nothing here writes engine memory now,
-   which is also why the setting no longer has to wait for a game to start.
+   WE WRITE FOUR OF THE SIX INTS OF THE ENGINE'S VIEWPORT RECT, AND NEVER L/T.
+   That distinction is the whole design and it was learned the hard way.
 
-   THE COST OF NOT RESERVING, and it is bigger than it first looked: the world
-   under the HUD is rendered and covered (≈20% of the fill at s = 4.5), and the
-   first world column the player can see is eye + (128s − 128) rather than eye.
-   MEASURED 2026-09-12 at 4K Auto: the engine clamps eyeX to 0, so on a map with
-   a western start the player's own commander (world x = 400, engine screen
-   x = 528) sits behind the 576-px panel and there is no smaller eye to scroll
-   to. Moving that clamp is the rest of this feature, not a follow-up, and until
-   it moves Auto at 4K is not a defensible default. See gui-renderer.md §22.5.
+   The FIRST build wrote all six — left = 128s, top = 32s — on the theory that
+   the rect is the one origin every consumer projects about. It is not. The
+   rect's L and T are the screen->world origin inside 0x498DA0 and nothing else;
+   TA's world->screen projection is a +0x80/+0x20 pair of immediates baked at
+   every site that uses it — unit picking, band select, build placement, the
+   feature blits — so moving them tore the world in two by ((s−1)·128,
+   (s−1)·32). Measured 2026-09-11 at 1024x768 Auto: the engine picked a unit
+   76 px left and 19 px up from where it was drawn. §22.5 withdrew that build
+   and wrote nothing at all, which cost the other half: the world under the HUD
+   was rendered and covered, and the first world column the player could see was
+   eye + (128s − 128) rather than eye, with no smaller eye to scroll to.
+
+   §22.6 IS WHAT SHIPS: make the two rectangles the same one. `apply_rect`
+   writes R, B, viewW and viewH — the four the engine derives from its screen
+   size and nothing else derives a projection from — so the engine's own
+   viewport becomes the window the player is actually looking at, while L and T
+   keep the values the baked immediates assume. The world block is then
+   translated by (128s − 128, 32s − 32) in exactly three places: the composite,
+   the world layer's glViewport, and the pointer map's world branch. Because
+   the rect is what the camera clamp and the map loader read, the eye now
+   reaches mapW − viewW / mapH − viewH and the corner of the map is reachable.
+
+   THE WRITE IS LATCHED AT GAME ENTRY, and that ordering is load-bearing rather
+   than incidental: the observer sits on 0x4288D0 at site 0x49823D, which is the
+   first call after the last of the engine's own six rect stores (0x498237), and
+   the map loader thread is created afterwards at 0x4982CA and reads viewW/viewH
+   at 0x483BBF/0x483FDF. So the scale a game runs at is fixed when that game
+   starts; changing the row mid-game takes effect at the next one.
 
    THE SETTING is a percentage of stock, 0 meaning Auto. Auto is H/480 — the
    panel exactly fills the screen height, which §3.4a measured to be both the
@@ -52,7 +64,7 @@
    does not stretch). It is exactly 1.0 at 640x480, TA's shipped mode, so an
    untouched install is unchanged. The store is the lever file `tagpu_hud.on`
    with a `scale=auto` / `scale=<percent>` token; the front-end Visuals row
-   writes it, and writing it takes effect on the next frame.
+   writes it, and — see the latch above — it takes effect at the next game.
 
    WHAT MAKES A STALE VALUE SAFE. Exactly one word crosses threads: the
    percentage in force, written by the row (message thread) and read by the

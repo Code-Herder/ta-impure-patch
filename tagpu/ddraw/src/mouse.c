@@ -73,14 +73,24 @@ int mouse_last_client(int* cx, int* cy)
     return 1;
 }
 
+/* Is a CLIENT point over the picture? The one definition, because two paths
+   ask: the message path below, and the poll path (fake_GetCursorPos) that the
+   engine's edge scroll reads. They answered differently until G18-9 — the poll
+   CLAMPED an outside point into range and so reported x == 0 or width-1, the
+   exact equality 0x41CE90 scrolls on, ~700 times a launch. */
+int mouse_client_inside(int cx, int cy)
+{
+    return !(cx > g_ddraw.render.viewport.x + g_ddraw.render.viewport.width ||
+             cx < g_ddraw.render.viewport.x ||
+             cy > g_ddraw.render.viewport.y + g_ddraw.render.viewport.height ||
+             cy < g_ddraw.render.viewport.y);
+}
+
 int mouse_client_to_game(int cx, int cy, int* gx, int* gy)
 {
     int x, y, inside;
 
-    inside = !(cx > g_ddraw.render.viewport.x + g_ddraw.render.viewport.width ||
-               cx < g_ddraw.render.viewport.x ||
-               cy > g_ddraw.render.viewport.y + g_ddraw.render.viewport.height ||
-               cy < g_ddraw.render.viewport.y);
+    inside = mouse_client_inside(cx, cy);
 
     if (!inside)
     {

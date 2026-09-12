@@ -386,28 +386,34 @@ static int __cdecl before_free(void* e)
    back as whatever the block became — and faults outright once the heap hands
    the segment back, which is exactly what a level teardown makes likely.
 
-   A free on another thread cannot touch the table (no lock, and surf_drop
-   swap-removes), so it marks the entry `dead` and the publisher, which owns
-   the table, drops it at its next pass. Not observed in practice — every free
-   of a recorded surface measured 2026-09-12 was on the game thread — and the
-   remaining window is the engine's own: a surface freed by one thread while
-   another draws into it was never ours to make safe. */
+   The engine's allocator is genuinely multi-threaded (`0x4D85B0` takes a
+   critical section at `0x4D85C2`), and a free on another thread MUST NOT WALK
+   THE TABLE: `surf_drop` swap-removes and `surf_get` memsets the tail, so a
+   scan racing those reads a slot mid-move — it can mark a slot that is about
+   to become a different, live surface and leave the freed one standing, which
+   is the very fault this observer exists to remove. So an off-thread free
+   leaves the block pointer in `surf_freeq` and the game thread retires the
+   entry at the top of the next flip, before the census or the publisher read
+   a base. The residual window — one thread freeing a surface another is
+   drawing into — is the engine's own and was never ours to close.
+
+   The observer sits at the ENTRY of 0x4D85A0, before the allocator's own
+   critical section, so the CRT `free()` that surf_drop calls inverts no lock. */
 static int __cdecl before_memfree(void* e)
 {
     unsigned p = ARG(e, 1);
     int i;
     if (!p) return 0;
+    if (!on_game_thread()) { surf_free_offthread(p); return 0; }
     for (i = 0; i < s_nsurf; i++) {
-        if (s_surf[i].owner != p && s_surf[i].base != p + 0x30) continue;
+        if (s_surf[i].owner != p) continue;   /* owner == base - 0x30 */
         if (s_trace) {
             char b[220];
-            _snprintf(b, sizeof b, "gui trace: MEM_Free surface %08X %dx%d from %08X (%s thread)",
-                      s_surf[i].base, s_surf[i].w, s_surf[i].h, ARG(e, 0),
-                      on_game_thread() ? "game" : "OTHER");
+            _snprintf(b, sizeof b, "gui trace: MEM_Free surface %08X %dx%d from %08X",
+                      s_surf[i].base, s_surf[i].w, s_surf[i].h, ARG(e, 0));
             glog(b);
         }
-        if (on_game_thread()) surf_drop(i);
-        else s_surf[i].dead = 1;
+        surf_drop(i);
         return 0;
     }
     return 0;
