@@ -5,6 +5,7 @@
 #include "hook.h"
 #include "utils.h"
 #include "config.h"
+#include "tagpu_hud.h"
 
 
 BOOL g_mouse_locked;
@@ -96,6 +97,14 @@ int mouse_client_to_game(int cx, int cy, int* gx, int* gy)
         y = (DWORD)((cy - g_ddraw.render.viewport.y) * g_ddraw.mouse.unscale_y);
         mouse_note_client(cx, cy);
     }
+
+    /* HUD SCALE (tagpu_hud.h, gui-renderer.md 20): the last step of every
+       client -> game conversion in the fork. Over a magnified HUD region the
+       engine is handed the point on its own 1x HUD grid, so its hit tests --
+       which are all written against the 128 / 32 constants -- go on being right
+       while the player points at art that is s times bigger. The identity
+       outside a HUD region and at stock scale. */
+    tagpu_hud_to_engine(&x, &y);
 
     /* The clamp keeps the ORIGINAL unsigned comparison. `g_ddraw.width` is a
        DWORD and the inline version in wndproc promoted `x` to unsigned against

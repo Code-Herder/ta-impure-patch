@@ -37,6 +37,7 @@ static const Def s_defs[] = {
     { "tagpu_gui.on",       "", 0, 0 },                     /* the GL UI layer, Classic 1:1        */
     { "tagpu_classicpp.on", "", 0, 0 },                     /* restored true colour, lit, shadowed */
     { "tagpu_weapons.on",   "", 0, 0 },                     /* 0..N weapons per unit               */
+    { "tagpu_hud.on",       "scale=auto", 0, 0 },           /* the HUD sized to the screen         */
 };
 #define NDEFS (int)(sizeof s_defs / sizeof s_defs[0])
 

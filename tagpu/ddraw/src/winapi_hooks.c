@@ -19,6 +19,7 @@
 #include "directinput.h"
 #include "ddsurface.h"
 #include "tagpu_zoom.h"
+#include "tagpu_hud.h"
 #include "ddclipper.h"
 #include "dllmain.h"
 #include "hook.h"
@@ -74,6 +75,14 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
 
         x = min(x, g_ddraw.width - 1);
         y = min(y, g_ddraw.height - 1);
+
+        /* HUD SCALE (tagpu_hud.h, gui-renderer.md 20): the last step of every
+           client -> game conversion in the fork. Over a magnified HUD region the
+           engine is handed the point on its own 1x HUD grid, so its hit tests --
+           which are all written against the 128 / 32 constants -- go on being right
+           while the player points at art that is s times bigger. The identity
+           outside a HUD region and at stock scale. */
+        tagpu_hud_to_engine(&x, &y);
 
         if (g_config.vhack && 
             !g_ddraw.isworms2 && 
@@ -679,6 +688,8 @@ void HandleMessage(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMa
                 y = (DWORD)(roundf(y * g_ddraw.mouse.unscale_y));
             }
 
+            tagpu_hud_to_engine(&x, &y);            /* see fake_GetCursorPos */
+
             lpMsg->pt.x = min(x, g_ddraw.width - 1);
             lpMsg->pt.y = min(y, g_ddraw.height - 1);
         }
@@ -715,6 +726,8 @@ void HandleMessage(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMa
                     x = (DWORD)((x - g_ddraw.render.viewport.x) * g_ddraw.mouse.unscale_x);
                     y = (DWORD)((y - g_ddraw.render.viewport.y) * g_ddraw.mouse.unscale_y);
                 }
+
+                tagpu_hud_to_engine(&x, &y);        /* see fake_GetCursorPos */
 
                 InterlockedExchange((LONG*)&g_ddraw.cursor.x, x);
                 InterlockedExchange((LONG*)&g_ddraw.cursor.y, y);
@@ -766,6 +779,8 @@ void HandleMessage(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMa
             int x = max(GET_X_LPARAM(lpMsg->lParam) - g_ddraw.mouse.x_adjust, 0);
             int y = max(GET_Y_LPARAM(lpMsg->lParam) - g_ddraw.mouse.y_adjust, 0);
 
+            int mapped = 0;
+
             if (g_config.adjmouse)
             {
                 if (g_config.vhack && !g_config.devmode)
@@ -775,6 +790,7 @@ void HandleMessage(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMa
 
                     x = pt.x;
                     y = pt.y;
+                    mapped = 1;   /* fake_GetCursorPos already answered in game space */
                 }
                 else
                 {
@@ -782,6 +798,8 @@ void HandleMessage(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMa
                     y = (DWORD)(roundf(y * g_ddraw.mouse.unscale_y));
                 }
             }
+
+            if (!mapped) tagpu_hud_to_engine(&x, &y);    /* see fake_GetCursorPos */
 
             x = min(x, g_ddraw.width - 1);
             y = min(y, g_ddraw.height - 1);

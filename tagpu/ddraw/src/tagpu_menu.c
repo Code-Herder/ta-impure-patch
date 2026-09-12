@@ -62,6 +62,7 @@
 #include "tagpu_ufo.h"
 #include "tagpu_gaf.h"
 #include "tagpu_menu.h"
+#include "tagpu_hud.h"
 
 /* ---- the engine ---------------------------------------------------------- */
 #define TA_MAIN         0x00511DE8u     /* TAdynmemStruct**                    */
@@ -706,13 +707,48 @@ static void build_trigger(void)
 
 /* Both rects hang off ONE margin, so the icon's right edge and the drop-down's
    right edge land on one line and the menu visibly drops from the icon. Both
-   are anchored to the frame's RIGHT edge, never to a fixed coordinate. */
+   are anchored to the frame's RIGHT edge, never to a fixed coordinate.
+
+   HUD SCALE (tagpu_hud.h, gui-renderer.md 20) MOVES THEM, and moves them
+   differently, because they live in different regions of the composite:
+
+     * the SPROCKET is in the top bar, which HUD scale magnifies. It is drawn
+       into the engine's 1x bar and comes out s times bigger, so its x has to
+       be taken against the BAR's own width, W/s -- at the screen's width it
+       lands past the last source column the bar band samples and is simply not
+       there. (Measured 2026-09-11 at s = 2.25: the icon vanished.)
+     * the DROP-DOWN hangs below the bar, in the world region, which the
+       composite leaves alone. It is placed in SCREEN pixels, and only its top
+       edge follows the bar's height -- which is also what keeps it out of the
+       bar band, where half of it would otherwise be magnified and the other
+       half not.
+
+   The margin is measured ON SCREEN for both, so their right edges still land
+   on one line at every s. And the point each is hit-tested against arrives in
+   exactly the space it was placed in: tagpu_hud_to_engine divides inside a HUD
+   region and does nothing outside one, which is the same division and the same
+   nothing as here. At stock scale every line below is the arithmetic it
+   replaced, to the character. */
 static void trigger_rect(int* x, int* y)
 {
-    int w = (int)g_ddraw.width;
+    int q8 = 256, w;
+    tagpu_hud_live(NULL, NULL, &q8);
+    w = (int)g_ddraw.width * 256 / q8;       /* the bar's width in the bar's own px */
     if (w < TRIG + MARGIN) w = TRIG + MARGIN;
     *x = w - MARGIN - TRIG;
     *y = 2;
+}
+
+/* The drop-down, in screen pixels. `menu_open` writes this into the panel
+   gadget and `tagpu_menu_owns_point` tests against it, so there is one rule. */
+static void panel_rect(int* x, int* y)
+{
+    int q8 = 256, bh = BAR_H, w = (int)g_ddraw.width;
+    tagpu_hud_live(NULL, &bh, &q8);
+    w -= MARGIN * q8 / 256;                  /* the margin the sprocket leaves */
+    if (w < PANEL_W) w = PANEL_W;            /* never off the left */
+    *x = w - PANEL_W;
+    *y = bh;
 }
 
 /* ---- generating the .GUI ------------------------------------------------- */
@@ -917,7 +953,6 @@ static void menu_open(char* main_p, int fresh)
     char* expect = main_p + OFF_EXPECT;
     char* ctrls;
     void* gm;
-    int w;
 
     lstrcpynA(s_saved, expect, sizeof s_saved);
     lstrcpynA(expect, SCREEN, 16);
@@ -932,10 +967,10 @@ static void menu_open(char* main_p, int fresh)
 
     ctrls = *(char**)((char*)gm + GM_CTRLS);
     if (ctrls) {
-        w = (int)g_ddraw.width;
-        if (w < PANEL_W + MARGIN) w = PANEL_W + MARGIN;   /* never off the left */
-        *(short*)(ctrls + G_XPOS) = (short)(w - MARGIN - PANEL_W);
-        *(short*)(ctrls + G_YPOS) = (short)BAR_H;
+        int px, py;
+        panel_rect(&px, &py);
+        *(short*)(ctrls + G_XPOS) = (short)px;
+        *(short*)(ctrls + G_YPOS) = (short)py;
     }
     *(void**)((char*)gm + GM_ONCMD) = (void*)tagpu_menu_oncommand;
     *(void**)((char*)gm + GM_CTX)   = main_p;
@@ -1258,7 +1293,7 @@ void tagpu_menu_present(void)
    the same way the drawing and the push do, so there is one source of truth. */
 int tagpu_menu_owns_point(int gx, int gy)
 {
-    int x, y, w;
+    int x, y;
 
     if (!s_installed) return 0;
 
@@ -1272,10 +1307,8 @@ int tagpu_menu_owns_point(int gx, int gy)
     }
 
     if (!s_gm) return 0;
-    w = (int)g_ddraw.width;
-    if (w < PANEL_W + MARGIN) w = PANEL_W + MARGIN;
-    x = w - MARGIN - PANEL_W;
-    return gx >= x && gx < x + PANEL_W && gy >= BAR_H && gy < BAR_H + PANEL_H;
+    panel_rect(&x, &y);
+    return gx >= x && gx < x + PANEL_W && gy >= y && gy < y + PANEL_H;
 }
 
 int tagpu_menu_click(int gx, int gy, int down)
@@ -1631,7 +1664,20 @@ static int  s_monChosen;
 /* 0 is UNLIMITED: fpsl_init maps a NEGATIVE maxfps onto the display refresh and
    only 0 falls through with tick_length left at 0. */
 static const int FPS_VAL[3] = { 60, 120, 0 };
-static const int SCALE_VAL[5] = { 0, 1, 2, 3, 4 };   /* 0 = Auto (fit the window) */
+/* HUD SCALE (tagpu_hud.h, gui-renderer.md 20), 0 = Auto. The row used to be a
+   WINDOW multiplier -- `window = k x surface` -- which is why it was greyed in
+   fullscreen; one name cannot carry both meanings, and 20.2 dropped the
+   multiplier. These are percentages of the HUD's stock size, and Auto is the
+   ceiling H/480, where the panel exactly fills the screen height.
+
+   SIX STAGES BECAUSE THE ROW CYCLES. A 25%-step ladder to 450% would be
+   fifteen clicks to cross; these five stops span every surface a player can
+   pick (the ceiling is 1.00 at 640x480, 1.60 at 1024x768, 2.25 at 1080p and
+   4.50 at 4K) and 150% is the owner's own example of the ask. Stages past a
+   screen's ceiling are SKIPPED as the row cycles rather than greyed: the
+   engine's VA_SETGRAYED is per gadget, not per stage, so a greyed row would
+   take the honourable stages down with the dishonourable ones. */
+static const int SCALE_VAL[6] = { 0, 100, 150, 200, 300, 400 };
 
 typedef struct {
     const char* name;
@@ -1643,7 +1689,7 @@ typedef struct {
 static VisRow s_vrow[VD_COUNT] = {
     { "VMODE",  "Display mode", "Window|Fullscreen",          2 },
     { "VMON",   "Monitor",      s_monText,                    0 },
-    { "VSCALE", "UI scale",     "Auto|1x|2x|3x|4x",           5 },
+    { "VSCALE", "UI scale",     "Auto|100%|150%|200%|300%|400%", 6 },
     { "VFPS",   "Frame cap",    "60 fps|120 fps|Uncapped",    3 },
 };
 static int s_vstage[VD_COUNT];
@@ -1826,16 +1872,16 @@ static void move_to_monitor(int i)
 
 /* THE SCALE IS AGAINST THE SCREEN SIZE ROW, NOT THE LIVE SURFACE. This screen
    is the SHELL's, and the shell's surface is atom-locked at 640x480 whatever
-   the player's Screen Size says -- so scaling the live `g_ddraw.width` made
-   "2x" mean 1280x960 here and something else entirely the moment a game
-   started. `main+0x37F1B/+0x37F1F` is the mode the Screen Size slider writes
+   the player's Screen Size says -- so a scale resolved against the live
+   `g_ddraw.width` would be answered here for a 640x480 screen and mean
+   something else entirely the moment a game started.
+   `main+0x37F1B/+0x37F1F` is the mode the Screen Size slider writes
    (`0x45BBF0`, and `0x45E3AD` restores 640x480 into it), which is the number
-   the player just chose one row up, so that is what k multiplies. The live
-   surface is the fallback for the case where the field has not been written.
-
-   Auto (k == 0) leaves the window wherever the player put it -- what `maintas`
-   was already doing. In fullscreen the monitor decides k and the row is greyed,
-   so this is never reached there. */
+   the player just chose one row up, and it is also the number game entry
+   copies into the engine's screen dimensions and builds the viewport rect
+   from -- so it is the screen HUD scale's ceiling has to be taken against.
+   The live surface is the fallback for the case where the field has not been
+   written. */
 static void sel_mode(int* w, int* h)
 {
     char* main_p = *(char**)TA_MAIN;
@@ -1848,15 +1894,15 @@ static void sel_mode(int* w, int* h)
     *w = sw; *h = sh;
 }
 
-static void apply_scale(int k)
+/* Can this stage be honoured on the mode the player has chosen? Auto always
+   can -- it IS the ceiling -- and 100% always can, because tagpu_hud_geom
+   never resolves below stock. */
+static int scale_stage_ok(int stage)
 {
     int sw, sh;
-    if (g_config.fullscreen || k <= 0) return;
+    if (stage <= 0 || stage >= (int)(sizeof SCALE_VAL / sizeof SCALE_VAL[0])) return 1;
     sel_mode(&sw, &sh);
-    if (sw <= 0 || sh <= 0) return;
-    g_config.window_rect.right  = sw * k;
-    g_config.window_rect.bottom = sh * k;
-    dd_SetDisplayMode(0, 0, 0, 0);
+    return SCALE_VAL[stage] <= tagpu_hud_ceiling_pct(sw, sh);
 }
 
 /* The windowed client, remembered across a trip to fullscreen. MEASURED
@@ -1920,7 +1966,13 @@ BOOL tagpu_menu_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESU
                               SWP_NOZORDER | SWP_NOACTIVATE);
         break;
     case VD_MON:   move_to_monitor(s_vstage[VD_MON]);              break;
-    case VD_SCALE: apply_scale(SCALE_VAL[s_vstage[VD_SCALE]]);     break;
+    /* HUD scale touches no window: it is consumed by tagpu_hud's observer at
+       the NEXT game entry, because the viewport rect it writes is built once
+       inside 0x497F40 and the SORT buffers are allocated from the dimensions
+       that rect produces. Writing the store on the window thread anyway keeps
+       every row of this screen on one thread, which is the contract the
+       comment above apply_display states. */
+    case VD_SCALE: tagpu_hud_store_pct(SCALE_VAL[s_vstage[VD_SCALE]]); break;
     case VD_FPS:
         /* fpsl_init reads g_config.maxfps and computes tick_length, so the cap
            is live from the next presented frame rather than the next launch. */
@@ -1954,19 +2006,15 @@ static void read_display_state(void)
                 }
     }
 
-    /* Auto unless the client really is an exact whole multiple of the surface --
-       anything else is a fit, and calling it "2x" would be a lie the player
-       could measure. */
+    /* HUD scale is read back out of its own store, which is the lever file the
+       row writes -- not out of anything live, because the value in force is the
+       one the NEXT game entry will read and a game may not have started yet.
+       An unrecognised percentage plates as Auto rather than inventing a stage. */
     s_vstage[VD_SCALE] = 0;
     {
-        int sw, sh;
-        sel_mode(&sw, &sh);
-        if (sw > 0 && sh > 0) {
-            k = g_ddraw.render.width / sw;
-            if (k >= 1 && k <= 4 && k * sw == g_ddraw.render.width
-                                 && k * sh == g_ddraw.render.height)
-                s_vstage[VD_SCALE] = k;
-        }
+        int pct = tagpu_hud_stored_pct();
+        for (k = 1; pct > 0 && k < (int)(sizeof SCALE_VAL / sizeof SCALE_VAL[0]); k++)
+            if (SCALE_VAL[k] == pct) { s_vstage[VD_SCALE] = k; break; }
     }
 
     s_vstage[VD_FPS] = 2;
@@ -1983,7 +2031,9 @@ static void read_display_state(void)
 static int vrow_greyed(int row)
 {
     if (row == VD_MON)   return s_monCount < 2;
-    if (row == VD_SCALE) return s_vstage[VD_MODE] ? 1 : 0;
+    /* VD_SCALE IS LIVE IN BOTH MODES now. It used to be the window multiplier,
+       which fullscreen decides for itself; HUD scale is inside the picture and
+       means the same thing windowed or not (gui-renderer.md 20.2, "Row"). */
     return 0;
 }
 
@@ -2250,7 +2300,9 @@ static void __stdcall tagpu_vis_oncommand(void* gi)
     d = vis_row_of(gi);
     if (d >= 0) {
         int n = s_vrow[d].stages > 0 ? s_vrow[d].stages : 1;
-        s_vstage[d] = (s_vstage[d] + 1) % n;
+        int guard = n;
+        do { s_vstage[d] = (s_vstage[d] + 1) % n; }
+        while (d == VD_SCALE && !scale_stage_ok(s_vstage[d]) && --guard > 0);
         if (d == VD_MON) s_monChosen = 1;
         apply_display(d);       /* posts; the wndproc does the window work */
         /* The Monitor row changes what the Screen Size list may contain, so it

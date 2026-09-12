@@ -74,6 +74,7 @@
 #include "tagpu_classicpp.h"
 #include "tagpu_restoreglsl.h"
 #include "tagpu_vpwide.h"
+#include "tagpu_hud.h"
 #include "tagpu_terr.h"
 #include "tagpu_overlay.h"
 #include "tagpu_pal.h"                    /* the one resolution of the presented palette */
@@ -167,7 +168,7 @@ static GLint  s_uSprSize, s_uSprCK, s_uSprRestored;
 static GLint  s_uCpySize, s_uCpyOff, s_uCpyHasCol;
 static GLint  s_uLaySize, s_uLayStrict, s_uLayKey, s_uLayVp, s_uLayCursor, s_uLayColOn;
 static GLint  s_uLayCursOurs;
-static GLint  s_uLayScale, s_uLaySharpSize, s_uLaySharpOn;
+static GLint  s_uLayScale, s_uLaySharpSize, s_uLaySharpOn, s_uLayHud;
 static TAGPU_GAFATLAS s_atlas;
 static TAGPU_GAFENT   s_ents[ATLAS_MAX];
 static unsigned char* s_rg;             /* interleave scratch, 2 bytes per texel */
@@ -243,6 +244,7 @@ static unsigned s_curDrawn = 0;         /* frames ours was drawn                
 static unsigned s_curWarm = 0;          /* frames spent atlasing a shape we had not seen */
 static int    s_curDev = 0;             /* the last draw used the true client point      */
 static float  s_k = 1.0f;               /* device px per twin texel: 13.1's k, and the ramp's width    */
+static float  s_hudS = 1.0f;            /* HUD scale in force this frame (20); 1.0 is the feature off */
 
 /* ----------------------------------------------------------------- shaders */
 /* a quad in surface pixels -> the twin's FBO (row 0 = surface row 0) */
@@ -431,6 +433,10 @@ static const char* LAY_FS =
     "uniform ivec2 uSize; uniform ivec2 uSharpSize; uniform vec2 uScale;\n"
     "uniform int uStrict; uniform int uKey; uniform vec4 uVp; uniform vec4 uCursor;\n"
     "uniform int uCursOurs;\n"
+    /* HUD SCALE (gui-renderer.md 20): x = the reserved panel width, y = the
+       reserved bar height, z = 1/s, w = s. w == 1 is the whole feature off and
+       every line below is then the identity, which is the s = 1 gate. */
+    "uniform vec4 uHud;\n"
     /* ONE TAP OF THE MIRROR, premultiplied by its coverage. rgb is the
        restored colour where this texel has one and the live palette
        everywhere else (the per-texel rule of 3.4, unchanged); a is coverage,
@@ -444,7 +450,13 @@ static const char* LAY_FS =
     "    if (c.a > 0.5) return vec4(c.rgb, 1.0); }\n"
     "  return vec4(texture(uPal, vec2((g.r * 255.0 + 0.5) / 256.0, 0.5)).rgb, 1.0); }\n"
     "void main(){\n"
-    "  ivec2 p = clamp(ivec2(uv * vec2(uSize)), ivec2(0), uSize - 1);\n"
+    /* d IS THE DESTINATION POINT, in engine pixels, and stays that. The HUD
+       map below moves only where the MIRROR IS SAMPLED; the cursor rect and
+       `strict` both ask about the engine's own frame, which is at the
+       destination — the engine blits its cursor and holds its UI pixels at
+       screen positions, not at the twin positions we magnify from. */
+    "  vec2 d = uv * vec2(uSize);\n"
+    "  ivec2 p = clamp(ivec2(d), ivec2(0), uSize - 1);\n"
     "  vec2 f = vec2(p);\n"
     /* THE SHARP LAYER (gui-renderer.md 13.2), TOP of the composite: device
        resolution, drawn from live state at present time, row 0 the viewport's
@@ -479,9 +491,28 @@ static const char* LAY_FS =
        AT uScale = 1 IT MUST BE THE IDENTITY, and that is the gate: tc lands on
        an integer, so w is 0 or 1 and the blend is a single tap, resolved
        through the palette and divided by its own coverage of 1. */
-    "  vec2 tc = uv * vec2(uSize) - 0.5;\n"
+    /* THE HUD'S REGION MAP (gui-renderer.md 20). Three regions, and they are
+       the ones the engine RESERVED — tagpu_hud wrote the viewport rect from
+       the same two integers this uniform carries, so the space the world was
+       kept out of and the space the HUD art is blown up into cannot disagree.
+       The panel owns its full column height (its art is a 128x480 block that
+       does not stretch, resolution.md 3.4a) and magnifies about its top-left;
+       the top bar about its top-left; the bottom bar about its BOTTOM-left,
+       which is where the engine anchors it (screenH - 0x20). The world region
+       is the identity and has no coverage in the twin anyway — the viewport's
+       key fill erased it, and that fill covers exactly this rect.
+       `ramp` widens the sharp-bilinear ramp with the magnification: it is
+       "one DEVICE pixel", and one device pixel is s source texels fewer here. */
+    "  vec2 sd = d; float ramp = 1.0;\n"
+    "  if (uHud.w > 1.0) {\n"
+    "    float H = float(uSize.y);\n"
+    "    if (d.x < uHud.x || d.y < uHud.y) { sd = d * uHud.z; ramp = uHud.w; }\n"
+    "    else if (d.y >= H - uHud.y) {\n"
+    "      sd = vec2(d.x * uHud.z, H - (H - d.y) * uHud.z); ramp = uHud.w; }\n"
+    "  }\n"
+    "  vec2 tc = sd - 0.5;\n"
     "  vec2 b  = floor(tc);\n"
-    "  vec2 w  = clamp((tc - b - 0.5) * uScale + 0.5, 0.0, 1.0);\n"
+    "  vec2 w  = clamp((tc - b - 0.5) * (uScale * ramp) + 0.5, 0.0, 1.0);\n"
     "  ivec2 ib = ivec2(b);\n"
     "  vec4 c = mix(mix(tap(ib),                tap(ib + ivec2(1, 0)), w.x),\n"
     "               mix(tap(ib + ivec2(0, 1)), tap(ib + ivec2(1, 1)), w.x), w.y);\n"
@@ -593,6 +624,7 @@ static int init_gl(void)
     s_uLayCursor = glGetUniformLocation(s_layProg, "uCursor");
     s_uLayColOn  = glGetUniformLocation(s_layProg, "uColOn");
     s_uLayScale     = glGetUniformLocation(s_layProg, "uScale");
+    s_uLayHud       = glGetUniformLocation(s_layProg, "uHud");
     s_uLaySharpSize = glGetUniformLocation(s_layProg, "uSharpSize");
     s_uLaySharpOn   = glGetUniformLocation(s_layProg, "uSharpOn");
     s_uLayCursOurs  = glGetUniformLocation(s_layProg, "uCursOurs");
@@ -1247,6 +1279,12 @@ static void sharp_cursor(const TAGPU_FRAME* f)
     } else {
         int gx = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
         int gy = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
+        /* HUD SCALE (20): this is the ENGINE's point, and over a HUD region
+           the pointer chain divided it by s on the way in. Put it back before
+           it becomes device pixels, or our cursor sits at a fraction of where
+           the player is pointing. The client-point branch above needs none of
+           this -- it never left device space. */
+        tagpu_hud_to_screen(&gx, &gy);
         dx = (int)(((float)gx + 0.5f) * kx);
         dy = (int)(((float)gy + 0.5f) * ky);
         s_curDev = 0;
@@ -1375,6 +1413,19 @@ static void sharp_minimap(const TAGPU_FRAME* f)
     mx = *(const short*)(ta + MM_OFFX); my = *(const short*)(ta + MM_OFFY);
     mw = *(const short*)(ta + MM_W);    mh = *(const short*)(ta + MM_H);
     if (mw <= 0 || mh <= 0) return;
+    /* HUD SCALE (20): the engine fitted the box into its 1x panel and the
+       composite magnifies that panel, so the sharper copy has to land on the
+       magnified box, not the box the engine measured. The corner goes through
+       the same map the pointer does and the size through the same s, so the
+       three agree by construction rather than by two rounding rules meeting. */
+    {
+        int hq8 = 256;
+        tagpu_hud_live(NULL, NULL, &hq8);
+        tagpu_hud_to_screen(&mx, &my);
+        mw = mw * hq8 / 256;
+        mh = mh * hq8 / 256;
+        if (mw <= 0 || mh <= 0) return;
+    }
     kx = (f->game_width  > 0) ? (float)f->vp_w / (float)f->game_width  : 1.0f;
     ky = (f->game_height > 0) ? (float)f->vp_h / (float)f->game_height : 1.0f;
     /* AT k = 1 THE ENGINE'S MINIMAP STANDS, and that is not timidity — it is
@@ -1675,6 +1726,16 @@ static void draw_layer(const TAGPU_FRAME* f)
     ky = (t->h > 0 && f->vp_h > 0) ? (float)f->vp_h / (float)t->h : 1.0f;
     if (ky < 1.0f) ky = 1.0f;
     x_glUniform2f(s_uLayScale, s_k, ky);
+    /* HUD scale (20): the two reserved integers and s, resolved against the
+       surface being presented — so the shell, whose surface is 640x480
+       whatever the Screen Size row says, resolves to stock and the map is the
+       identity there without a signal of its own. */
+    {
+        int hpw = 0, hbh = 0, hq8 = 256;
+        if (!tagpu_hud_live(&hpw, &hbh, &hq8)) { hpw = hbh = 0; hq8 = 256; }
+        s_hudS = (float)hq8 / 256.0f;
+        x_glUniform4f(s_uLayHud, (float)hpw, (float)hbh, 256.0f / (float)hq8, s_hudS);
+    }
     /* the sharp layer, above everything, at the device resolution */
     glUniform1i(s_uLaySharpOn, s_sharpOn ? 1 : 0);
     sh[0] = s_sharpW; sh[1] = s_sharpH;
@@ -1815,14 +1876,14 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
                   s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.stalls,
                   s_skipped, tagpu_pal_changes(), palDiff, palDiffAt, tagpu_pal_presented(),
                   tagpu_classicpp_on() ? 1 : 0, tagpu_classicpp_assets() ? 1 : 0,
                   tagpu_classicpp_lit() ? 1 : 0,
                   s_colTwins, s_ntwins, s_colValid, s_rearms, s_atlas.rgb,
-                  s_k, s_sharpW, s_sharpH,
+                  s_k, s_hudS, s_sharpW, s_sharpH,
                   s_curOwn, s_curW, s_curH, s_curDev, s_cursorScale, s_curDrawn, s_curWarm,
                   s_strings, s_glyphs, s_strMiss, s_strReseed, s_strRepack, gCached, gDrops, gFonts,
                   /* the arena head is MONOTONIC, so the delta between two of these

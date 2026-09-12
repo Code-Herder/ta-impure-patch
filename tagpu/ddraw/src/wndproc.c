@@ -17,6 +17,7 @@
 #include "tagpu_shield.h"
 #include "tagpu_menu.h"
 #include "tagpu_zoom.h"
+#include "tagpu_hud.h"
 
 
 LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -133,6 +134,8 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                     x = (DWORD)(roundf(x * g_ddraw.mouse.unscale_x));
                     y = (DWORD)(roundf(y * g_ddraw.mouse.unscale_y));
                 }
+
+                tagpu_hud_to_engine(&x, &y);    /* winapi_hooks.c fake_GetCursorPos */
 
                 pt.x = min(x, g_ddraw.width - 1);
                 pt.y = min(y, g_ddraw.height - 1);
@@ -957,6 +960,8 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
         int x = max(GET_X_LPARAM(lParam) - g_ddraw.mouse.x_adjust, 0);
         int y = max(GET_Y_LPARAM(lParam) - g_ddraw.mouse.y_adjust, 0);
 
+        int mapped = 0;
+
         if (g_config.adjmouse)
         {
             if (g_config.vhack && !g_config.devmode)
@@ -966,6 +971,7 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
                 x = pt.x;
                 y = pt.y;
+                mapped = 1;   /* fake_GetCursorPos already answered in game space */
             }
             else
             {
@@ -973,6 +979,8 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                 y = (DWORD)(roundf(y * g_ddraw.mouse.unscale_y));
             }
         }
+
+        if (!mapped) tagpu_hud_to_engine(&x, &y);   /* winapi_hooks fake_GetCursorPos */
 
         x = min(x, g_ddraw.width - 1);
         y = min(y, g_ddraw.height - 1);
@@ -1014,6 +1022,8 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                     x = (DWORD)((x - g_ddraw.render.viewport.x) * g_ddraw.mouse.unscale_x);
                     y = (DWORD)((y - g_ddraw.render.viewport.y) * g_ddraw.mouse.unscale_y);
                 }
+
+                tagpu_hud_to_engine(&x, &y);    /* winapi_hooks fake_GetCursorPos */
 
                 x = min(x, g_ddraw.width - 1);
                 y = min(y, g_ddraw.height - 1);

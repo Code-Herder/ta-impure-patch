@@ -10,6 +10,7 @@
 #include "tagpu_vpwide.h"
 #include "tagpu_detour.h"
 #include "tagpu_zoom.h"
+#include "tagpu_hud.h"
 
 #define TA_MAINPP    0x00511DE8u
 
@@ -23,13 +24,17 @@
 
 /* The four constants `0x497F40` hardcodes when it builds the rect: L = 0x80,
    T = 0x20, R = screenW - 1, B = screenH - 33, and then W = R-L+1, H = B-T+1.
-   Every other consumer of the rect projects with the same 0x80/0x20 origin,
-   which is what makes the whole true rect derivable from the SCREEN dimensions
-   at `+0x37E1F`/`+0x37E23` — fields we never write — while we own L/T/R/B. */
-#define VP_TRUE_L    0x80
-#define VP_TRUE_T    0x20
+   Every other consumer of the rect projects with the same origin, which is what
+   makes the whole true rect derivable from the SCREEN dimensions at `+0x37E1F`
+   /`+0x37E23` — fields we never write — while we own L/T/R/B.
+
+   THEY ARE NO LONGER CONSTANTS. HUD scale (tagpu_hud.h) writes that same rect
+   at game entry with L = 128s and T = 32s, so the origin this module projects
+   about is whatever it wrote. `vp_true()` is the one place that is asked, and
+   it asks tagpu_hud rather than deciding: the reserved space and the origin
+   every reader here projects from are then the same integers by construction,
+   and at stock scale it answers 0x80 / 0x20 / 33 exactly as the constants did. */
 #define VP_R_INSET   1           /* R = screenW - VP_R_INSET  */
-#define VP_B_INSET   33          /* B = screenH - VP_B_INSET  */
 #define OFF_SCREEN_W 0x37E1F
 #define OFF_SCREEN_H 0x37E23
 
@@ -101,6 +106,15 @@ static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x
 
 static int iround(float v) { return (int)(v >= 0.0f ? v + 0.5f : v - 0.5f); }
 
+/* The viewport origin and bottom inset in force, from tagpu_hud. Sane for a
+   null or wild `ta` — the stock constants — because every caller here has
+   already checked `ta` for its own reasons and a second answer must not be a
+   different one. */
+static void vp_true(const char* ta, int* L, int* T, int* bInset)
+{
+    tagpu_hud_true_inset(ta, L, T, NULL, bInset);
+}
+
 /* The true rect from the SCREEN dimensions — the two fields we never write, so
    this stays right even while L/T/R/B are ours and even if W/H were corrupted.
    Returns 0 when the screen dimensions themselves do not look sane. */
@@ -108,11 +122,13 @@ static int true_rect_of(const char* ta, int* R, int* B, int* W, int* H)
 {
     int sw = *(const int*)(ta + OFF_SCREEN_W);
     int sh = *(const int*)(ta + OFF_SCREEN_H);
+    int tl, tt, bi;
     if (sw < 320 || sh < 200 || sw > 8192 || sh > 8192) return 0;
+    vp_true(ta, &tl, &tt, &bi);
     *R = sw - VP_R_INSET;
-    *B = sh - VP_B_INSET;
-    *W = *R - VP_TRUE_L + 1;
-    *H = *B - VP_TRUE_T + 1;
+    *B = sh - bi;
+    *W = *R - tl + 1;
+    *H = *B - tt + 1;
     return *W >= 64 && *H >= 64;
 }
 
@@ -242,7 +258,7 @@ static void __stdcall vpw_mouse_world(int* pos)
     char* ta;
     unsigned char* fl;
     int x, y, sx, sy, wx, wy, gx, gy;
-    int tR = 0, tB = 0, tW = 0, tH = 0, cL, cT, cR, cB, inWorld = 0;
+    int tR = 0, tB = 0, tW = 0, tH = 0, tL = 0, tT = 0, cL, cT, cR, cB, inWorld = 0;
 
     ta = *(char**)TA_MAINPP;
     if (!pos || !ptr_ok(ta) || !true_rect_of(ta, &tR, &tB, &tW, &tH)) {
@@ -301,12 +317,13 @@ static void __stdcall vpw_mouse_world(int* pos)
            coordinates. Without this gate a click out in the world would jump
            the camera as though the minimap had been clicked. */
     {
-        inWorld = sx >= VP_TRUE_L && sy >= VP_TRUE_T && sx <= tR && sy <= tB;
+        vp_true(ta, &tL, &tT, NULL);
+        inWorld = sx >= tL && sy >= tT && sx <= tR && sy <= tB;
         if (inWorld) {
             cL = *(const int*)(ta + OFF_VP_L); cT = *(const int*)(ta + OFF_VP_T);
             cR = *(const int*)(ta + OFF_VP_R); cB = *(const int*)(ta + OFF_VP_B);
         } else {
-            cL = VP_TRUE_L; cT = VP_TRUE_T; cR = tR; cB = tB;
+            cL = tL; cT = tT; cR = tR; cB = tB;
         }
     }
 
@@ -323,8 +340,8 @@ static void __stdcall vpw_mouse_world(int* pos)
     } else {
         /* TRUE origin, WIDE clamp: the rect's L/T/R/B are ours right now, and
            the clamp against them is exactly what makes the ring addressable */
-        wx = *(const int*)(ta + OFF_EYEX) + clampi(x, cL, cR) - VP_TRUE_L;
-        wy = *(const int*)(ta + OFF_EYEY) + clampi(y, cT, cB) - VP_TRUE_T;
+        wx = *(const int*)(ta + OFF_EYEX) + clampi(x, cL, cR) - tL;
+        wy = *(const int*)(ta + OFF_EYEY) + clampi(y, cT, cB) - tT;
         *fl = (unsigned char)((*fl & ~3)
             | ((x >= cL && x <= cR && y >= cT && y <= cB) ? 2 : 0));
     }
@@ -374,7 +391,7 @@ void tagpu_vpwide_true_rect(const char* ta, int* L, int* T, int* W, int* H)
     if (!ptr_ok(ta)) return;
     if (s_verified && true_rect_of(ta, &tR, &tB, &tW, &tH)) {
         /* derived, so it is right even while L/T/R/B are ours */
-        *L = VP_TRUE_L; *T = VP_TRUE_T; *W = tW; *H = tH;
+        vp_true(ta, L, T, NULL); *W = tW; *H = tH;
         return;
     }
     *L = *(const int*)(ta + OFF_VP_L);
@@ -406,12 +423,13 @@ int tagpu_vpwide_addressable(int* L, int* T, int* W, int* H)
    exactly. The other order would hand it a wide rect with a true origin. */
 static void restore(char* ta)
 {
-    int tR, tB, tW, tH;
+    int tR, tB, tW, tH, tL, tT;
     s_pubLive = 0;                       /* stop advertising it, always */
     if (!s_wide) return;
     if (!true_rect_of(ta, &tR, &tB, &tW, &tH)) return;   /* not with garbage */
-    *(volatile int*)(ta + OFF_VP_L) = VP_TRUE_L;
-    *(volatile int*)(ta + OFF_VP_T) = VP_TRUE_T;
+    vp_true(ta, &tL, &tT, NULL);
+    *(volatile int*)(ta + OFF_VP_L) = tL;
+    *(volatile int*)(ta + OFF_VP_T) = tT;
     *(volatile int*)(ta + OFF_VP_R) = tR;
     *(volatile int*)(ta + OFF_VP_B) = tB;
     s_wide = 0;
@@ -421,7 +439,7 @@ static void restore(char* ta)
 void tagpu_vpwide_frame(float z)
 {
     char* ta;
-    int tR, tB, tW, tH, aL, aT, aR, aB;
+    int tR, tB, tW, tH, aL, aT, aR, aB, tL, tT;
     float cx, cy;
 
     if (!s_installed || !s_widenArmed) return;   /* the repair-only arm writes
@@ -430,14 +448,15 @@ void tagpu_vpwide_frame(float z)
     ta = *(char**)TA_MAINPP;
     if (!ptr_ok(ta)) return;
     if (!true_rect_of(ta, &tR, &tB, &tW, &tH)) { restore(ta); return; }
+    vp_true(ta, &tL, &tT, NULL);
 
     /* Verify once, on a frame we do not own, that the rect really is what
        0x497F40 builds — everything below assumes that construction, so a build
        or a resolution that disagrees must widen nothing rather than half of it. */
     if (!s_verified) {
         if (s_wide) return;              /* cannot verify a rect we wrote */
-        if (*(const int*)(ta + OFF_VP_L) == VP_TRUE_L &&
-            *(const int*)(ta + OFF_VP_T) == VP_TRUE_T &&
+        if (*(const int*)(ta + OFF_VP_L) == tL &&
+            *(const int*)(ta + OFF_VP_T) == tT &&
             *(const int*)(ta + OFF_VP_R) == tR &&
             *(const int*)(ta + OFF_VP_B) == tB &&
             *(const int*)(ta + OFF_VIEW_W) == tW &&
@@ -445,7 +464,7 @@ void tagpu_vpwide_frame(float z)
             char b[128];
             s_verified = 1;
             _snprintf(b, sizeof b, "vpwide: true viewport rect verified (%d,%d %dx%d)",
-                      VP_TRUE_L, VP_TRUE_T, tW, tH);
+                      tL, tT, tW, tH);
             flog(b);
         } else {
             if (!s_saidUnverified) {
@@ -457,7 +476,7 @@ void tagpu_vpwide_frame(float z)
                     *(const int*)(ta + OFF_VP_L), *(const int*)(ta + OFF_VP_T),
                     *(const int*)(ta + OFF_VP_R), *(const int*)(ta + OFF_VP_B),
                     *(const int*)(ta + OFF_VIEW_W), *(const int*)(ta + OFF_VIEW_H),
-                    VP_TRUE_L, VP_TRUE_T, tR, tB, tW, tH);
+                    tL, tT, tR, tB, tW, tH);
                 flog(b);
             }
             return;
@@ -492,12 +511,12 @@ void tagpu_vpwide_frame(float z)
        range tagpu_zoom's transform produces, computed with the same formula
        about the same centre so the two cannot disagree at the edges, plus one
        pixel of slack each way against the rounding. */
-    cx = (float)VP_TRUE_L + (float)tW * 0.5f;
-    cy = (float)VP_TRUE_T + (float)tH * 0.5f;
-    aL = iround(((float)VP_TRUE_L            - cx) / z + cx) - 1;
-    aR = iround(((float)(VP_TRUE_L + tW - 1) - cx) / z + cx) + 1;
-    aT = iround(((float)VP_TRUE_T            - cy) / z + cy) - 1;
-    aB = iround(((float)(VP_TRUE_T + tH - 1) - cy) / z + cy) + 1;
+    cx = (float)tL + (float)tW * 0.5f;
+    cy = (float)tT + (float)tH * 0.5f;
+    aL = iround(((float)tL            - cx) / z + cx) - 1;
+    aR = iround(((float)(tL + tW - 1) - cx) / z + cx) + 1;
+    aT = iround(((float)tT            - cy) / z + cy) - 1;
+    aB = iround(((float)(tT + tH - 1) - cy) / z + cy) + 1;
     if (aR - aL + 1 > 32768 || aB - aT + 1 > 32768) { restore(ta); return; }
 
     /* Compare against the FIELD, not against what we last wrote: at a steady

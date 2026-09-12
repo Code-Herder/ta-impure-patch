@@ -26,6 +26,7 @@
 #include "tagpu_cobtrace.h"
 #include "tagpu_opt.h"
 #include "tagpu_menu.h"
+#include "tagpu_hud.h"
 #include "utils.h"
 #include "versionhelpers.h"
 #include "delay_imports.h"
@@ -163,6 +164,18 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            `tagpu_reclaim.off` disables. Changes only WHEN a freed block
            returns to the heap; the sim reads nothing different. */
         tagpu_reclaim_init();
+
+        /* tagpu: HUD scale (Phase F, gui-renderer.md 20) -- the in-game HUD
+           magnified inside the player's Screen Size, with the world viewport
+           shrunk by exactly as much. One observer on the background loader
+           0x4288D0, acting only at the call 0x49823D makes, which is the first
+           instruction after game entry has finished writing its viewport rect
+           and before the loader thread that reads it exists. Byte-matched;
+           disjoint from every detour above. At stock scale it writes nothing
+           at all, so an install that never touches the row is byte-identical.
+           MUST run before tagpu_menu_init(): the front-end row reads the
+           store through it. */
+        tagpu_hud_init();
 
         /* tagpu: the render-options screen (Phase F, G18). Writes
            impure-patch.ufo unconditionally -- the engine globs *.UFO from the
