@@ -1007,13 +1007,17 @@ instead: `tacli arm <i> classicpp.on=off`.
   gpu-status §2.16). The game thread publishes a copy of the per-frame engine state after every
   in-play `DrawGameScreen` (only when the renderer has taken the previous one) and the render
   thread takes it once at the top of its frame; today the copy is the header plus the marker
-  text's font as glyph bytes, so **with `packet.off` the group digits and the `ShowRanges` labels
-  draw nothing** (the render thread no longer holds an engine font). Read `packet: ARMED 4 slots
-  x 8 MB reserved …` and `packet: publisher ARMED on DrawGameScreen 0x468CF0 …` at launch, then
+  text's font as glyph bytes, so **with `packet.off` every string through `tagpu_text_place` draws nothing — the group
+  digits, the `ShowRanges` labels and the FPS readout** (the render thread no longer holds an
+  engine font). Read `packet: ARMED 4 slots
+  x 8 MB reserved …` and `packet: publisher ARMED on DrawGameScreen 0x468CF0 … level-end packet by tagpu_reclaim's
+  teardown post hook …` at launch (`… by our own observer on the teardown 0x491B60` under
+  `reclaim.off`), then
   every 300 frames `packet: pub=… skip=… overrun=… foreign=… acq=… taken=… gap=… grow=…
   commitfail=… trunc=… viol=… pviol=… crcbad=… nopkt=… | pub/s=… taken/s=… pubus p50=… p99=… |
   seq=… tick=… tps=… speed=… paused=… in_game=… gen=… flags=… eye=… vp=… flips=… font=… fg=…
-  trunc=… used=… | draws=… inplay=… draws/s=… inplay/s=… foreign=… deep=…`. **`viol`, `pviol`,
+  trunc=… used=… | draws=… inplay=… draws/s=… inplay/s=… foreign=… deep=…
+  fontcopies=… levelend=reclaim|own|none`. **`viol`, `pviol`,
   `crcbad`, `foreign` and `commitfail` must stay 0**; `skip` is the FRESH gate doing its job (one
   relaxed load per engine draw), `overrun` and `gap` are 0 in play and count only under `stress`
   or across a level end (the forced out-of-game packet); `grow`/`trunc` say a slot grew past its
