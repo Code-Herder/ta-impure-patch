@@ -1495,12 +1495,6 @@ static void sharp_minimap(const TAGPU_FRAME* f)
     float kx, ky, v[24];
 
     if ((!s_mmbase && !s_mmforce) || !s_mmProg || !pk) return;
-    /* THE STANDING REQUEST. The publisher interleaves the three surfaces only
-       while this is raised, because at k = 1 the sharp minimap is deliberately
-       the engine's own and the copy would be paid for nothing (landing 4c).
-       Raised on every frame that reaches here, dropped by the module's own
-       watchdog after 90 silent ones. */
-    tagpu_gui_set_want_minimap(1, f->frame_counter);
     /* NOT `+0x142F1 & 2`, which is what DrawMinimap 0x466B00 tests: that is a
        DIRTY flag and 0x466B16 CLEARS it in the same breath, so it reads 0 on
        almost every frame [MEASURED 2026-09-09 — the first build of this gated
@@ -1510,6 +1504,49 @@ static void sharp_minimap(const TAGPU_FRAME* f)
        ours has to be redrawn every frame. The honest gate is that the minimap
        surfaces exist at all, which is what being in a game with one means. */
     if (!pk->mm_live) return;
+    /* the box the engine fitted it into, in ITS screen pixels, out of the
+       packet: it is 0x0 at BuildMinimapSurface's entry, since that call is what
+       computes it, so the publisher reads it after the draw like everything
+       else in the header */
+    mx = pk->mm_box[0]; my = pk->mm_box[1];
+    mw = pk->mm_box[2]; mh = pk->mm_box[3];
+    if (mw <= 0 || mh <= 0) return;
+    /* HUD SCALE (20): the engine fitted the box into its 1x panel and the
+       composite magnifies that panel, so the sharper copy has to land on the
+       magnified box, not the box the engine measured. The corner goes through
+       the same map the pointer does and the size through the same s, so the
+       three agree by construction rather than by two rounding rules meeting. */
+    {
+        int hq8 = 256;
+        tagpu_hud_live(NULL, NULL, &hq8);
+        tagpu_hud_to_screen(&mx, &my);
+        mw = mw * hq8 / 256;
+        mh = mh * hq8 / 256;
+        if (mw <= 0 || mh <= 0) return;
+    }
+    kx = (f->game_width  > 0) ? (float)f->vp_w / (float)f->game_width  : 1.0f;
+    ky = (f->game_height > 0) ? (float)f->vp_h / (float)f->game_height : 1.0f;
+    /* AT k = 1 THE ENGINE'S MINIMAP STANDS, and that is not timidity — it is
+       where the arithmetic says the win is. The box is 106x126 DEVICE pixels
+       there, so drawing it from a 252x252 source throws three quarters of the
+       picture away and lands on a nearest downsample where the engine used its
+       own stretch: no sharper, and 7232 px away from the oracle every phase-1
+       measurement is taken against. The extra resolution only starts paying at
+       k > 1, where the engine blows its 126-px picture up and we do not.
+       `mmbase` forces it on anyway, which is how the k = 1 comparison above was
+       taken at all. */
+    if (kx <= 1.001f && ky <= 1.001f && !s_mmforce) return;
+    /* THE STANDING REQUEST, AND IT IS RAISED HERE RATHER THAN AT THE TOP. The
+       publisher interleaves the three minimap surfaces and carries the level's
+       picture only while this is up, and at k = 1 (the gate just above) the
+       sharp minimap is deliberately the engine's own — so a request raised
+       before the gate would have the game thread pay ~13 KB of interleave per
+       publish, for ever, in every session that never resizes its window. Past
+       the gate the first frame raises it and the next one draws, which costs
+       two frames of the engine's own minimap after a resize and nothing at all
+       before one. Dropped by the module's own watchdog after 90 silent
+       frames. */
+    tagpu_gui_set_want_minimap(1, f->frame_counter);
     if (s_mmbase) {
         if (!minimap_pic(pk, &pic, &pw, &ph, &gen)) return;
         if (pw <= 0 || ph <= 0) return;
@@ -1558,38 +1595,6 @@ static void sharp_minimap(const TAGPU_FRAME* f)
         glBindTexture(GL_TEXTURE_2D, 0);
         s_mmGenSeen = gen; s_mmPalSeen = tagpu_pal_serial(); s_mmTW = pw; s_mmTH = ph;
     }
-    /* the box the engine fitted it into, in ITS screen pixels, out of the
-       packet: it is 0x0 at BuildMinimapSurface's entry, since that call is what
-       computes it, so the publisher reads it after the draw like everything
-       else in the header */
-    mx = pk->mm_box[0]; my = pk->mm_box[1];
-    mw = pk->mm_box[2]; mh = pk->mm_box[3];
-    if (mw <= 0 || mh <= 0) return;
-    /* HUD SCALE (20): the engine fitted the box into its 1x panel and the
-       composite magnifies that panel, so the sharper copy has to land on the
-       magnified box, not the box the engine measured. The corner goes through
-       the same map the pointer does and the size through the same s, so the
-       three agree by construction rather than by two rounding rules meeting. */
-    {
-        int hq8 = 256;
-        tagpu_hud_live(NULL, NULL, &hq8);
-        tagpu_hud_to_screen(&mx, &my);
-        mw = mw * hq8 / 256;
-        mh = mh * hq8 / 256;
-        if (mw <= 0 || mh <= 0) return;
-    }
-    kx = (f->game_width  > 0) ? (float)f->vp_w / (float)f->game_width  : 1.0f;
-    ky = (f->game_height > 0) ? (float)f->vp_h / (float)f->game_height : 1.0f;
-    /* AT k = 1 THE ENGINE'S MINIMAP STANDS, and that is not timidity — it is
-       where the arithmetic says the win is. The box is 106x126 DEVICE pixels
-       there, so drawing it from a 252x252 source throws three quarters of the
-       picture away and lands on a nearest downsample where the engine used its
-       own stretch: no sharper, and 7232 px away from the oracle every phase-1
-       measurement is taken against. The extra resolution only starts paying at
-       k > 1, where the engine blows its 126-px picture up and we do not.
-       `mmbase` forces it on anyway, which is how the k = 1 comparison above was
-       taken at all. */
-    if (kx <= 1.001f && ky <= 1.001f && !s_mmforce) return;
     x_glDisable(GL_BLEND);
     x_glDisable(GL_DEPTH_TEST);
     /* the program, its uniforms and every texture unit are set by whichever
