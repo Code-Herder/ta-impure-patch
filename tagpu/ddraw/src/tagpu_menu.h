@@ -63,4 +63,16 @@ void tagpu_menu_present(void);
 #define WM_TAGPU_DISPLAY (WM_APP + 143)   /* wParam = the row index           */
 BOOL tagpu_menu_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESULT* result);
 
+/* The monitor the Monitor row has selected, as a desktop rect. FALSE means
+   nobody has chosen one yet -- the screen has never been opened -- and the
+   caller falls back to the monitor the window is on (`util_target_monitor`).
+
+   The resolution list is built from this rather than from where the window
+   actually is, because the two disagree for exactly as long as it matters: the
+   window move behind the Monitor row is POSTED, so when the row rebuilds the
+   list the window has not moved yet. Following the model is an ordering, not a
+   delay -- the list is right on the first frame it is drawn, and stays right
+   when the move lands. */
+BOOL tagpu_menu_monitor(RECT* out);
+
 #endif

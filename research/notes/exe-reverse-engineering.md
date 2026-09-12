@@ -2685,6 +2685,35 @@ The display-mode list is built after that: `0x45E6B0` allocates the 0x20-byte he
 is skipped (`0x45E69E` branches on `main+0x37EBE` bit 0), which is why `GUIMEMSTRUCT+0x0C` is
 NULL there and the destructor's frees are guarded by `test edi,edi` at `0x45E11B`.
 
+**The header's own layout** [MEASURED 2026-09-11, by reading a live screen]. Worth writing
+down because it is how the list a player is actually being offered can be read without
+walking the slider a stop at a time:
+
+| off | what |
+|---|---|
+| `+0x00` | **count** — the number of surviving modes, after `0x45E4C0`'s sort-and-drop |
+| `+0x04` | the **table**: `count` records of 12 bytes, `{ u32 width, u32 height, u32 refresh }` |
+| `+0x08`, `+0x0C` | two small blocks inside the header's own allocation |
+| `+0x14` | the **string block**, `count << 8` bytes — the `"1024 X 768"` captions, 256 apart |
+
+`+0x04` and `+0x14` are the two the destructor frees at `0x45E11B` before the block itself,
+which is the independent check that they are the two allocations. Read it from a live game
+as `main+0x531` → `+0x0C` → `+0x00`/`+0x04`.
+
+**The rebuild idiom** is four instructions at the tail of the UNDO branch, and it is what a
+caller outside the engine uses to make this screen re-enumerate:
+
+```
+45e318:  call 0x45cae0          ; UNDO only: put the engine's own option bits back
+45e31d:  push esi               ; gi
+45e31e:  call 0x4a9660          ; GUI_Pop(gi)   -- stdcall, ret 4; sets gi->UIChange_f = -1
+45e323:  push 0x0
+45e325:  call 0x45e5e0          ; the dialog build again, with a fresh mode list
+```
+
+`0x45CAE0` belongs to UNDO alone (it XORs `main+0x37F06`'s bits back from the saved copy at
+`0x512F38`); the pop-and-rebuild pair is the general part.
+
 ### The GAF banks a screen can reach [VERIFIED 2026-09-09]
 
 Three different name→bank paths, and only the first is the single common one:

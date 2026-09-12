@@ -1511,10 +1511,30 @@ Three things this rests on, each measured rather than assumed:
 - **`util_toggle_fullscreen` does not restore the window size on the way back** (measured:
   1024x768 -> 3840x2160 -> 3840x2160), so the Display mode row saves the windowed client
   before leaving and puts it back itself.
+- **The monitor is a rect, never a display "mode".** On a multi-monitor X server wine
+  reports the VIRTUAL DESKTOP as the current, registry and largest-enumerated mode, for
+  every adapter alike — 6200x2160 on the reference setup's three outputs. So the Monitor
+  row, the borderless-fullscreen size AND position, and the Screen Size list all come from
+  `util_target_monitor` (`utils.c`), which asks `GetMonitorInfo`. The measurement, and the
+  per-monitor mode lists it produces, are in [resolution](resolution.html) §6.6.
 - **The ground is ours.** STARTOPT's background paints one column of recess bars across
   x 267..405, drawn for a single centred column; two columns cannot sit in it and it is
   the game's art. So the screen carries one `id=12` ground frame (270x420 at (200,54)) in
   `anims/visuals.gaf`, with its own recesses, covering those bars.
+
+**The Monitor row rebuilds the screen**, because the Screen Size list belongs to a monitor
+and the engine builds it once per visit (`0x45E6B0` into `GUIMEMSTRUCT+0x0C`, hung off
+`VIDSLDR` at `0x45E726`). There is no "re-enumerate in place" call, so the row uses the
+engine's own idiom for a stale screen — `GUI_Pop(gi)` then `0x45E5E0(0)`, verbatim what
+UNDO does at `0x45E31E` — with `s_visKeep` set so the rebuild keeps the model. `GUI_Pop`
+writes -1 into `gi->UIChange_f` (`0x4A9673`), so the pump is answered and there is no
+`menu_accept` to do. **The list follows the model, not the window**: the move behind that
+row is posted, so at rebuild time the window is still on the old monitor — measured
+2026-09-11, the three lists come out 8 / 3 / 3 entries as the row is cycled, and the window
+follows one message later. In fullscreen the row applies as a single
+`dd_SetDisplayMode(0, 0, 0, 0)`, which re-derives position, size and render target from the
+same monitor; placing the window here as well left it a pixel taller than the screen and
+back at the primary's origin, because the re-apply places it last.
 
 **Restore Default and Undo Changes reach our rows too.** Both are STARTOPT's buttons and
 both end in `GUI_Pop` + `0x45E5E0(0)`; we handle them before forwarding and set `s_visKeep`

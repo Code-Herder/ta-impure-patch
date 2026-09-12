@@ -1464,6 +1464,9 @@ static void read_tokens(void)
        engine's own handler then runs and finds none of its gadgets actuated. */
 
 #define VA_VIS_BUILD    0x0045E5E0u     /* dialog build, stdcall(int selvmode) */
+#define VA_GUI_POP      0x004A9660u     /* GUI_Pop(gi): also answers the pump  */
+typedef void (__stdcall *gui_pop_fn)(void* gi);
+typedef void (__stdcall *vis_build_fn)(int selvmode);
 /* 0x45E100 (OnCommand_VISUALRT_GUI) is NOT detoured -- see tagpu_vis_oncommand */
 static const unsigned char VIS_BUILD_STOLEN[7] =
     { 0x8B, 0x44, 0x24, 0x04, 0x83, 0xEC, 0x10 };   /* mov eax,[esp+4]; sub esp,0x10 */
@@ -1619,6 +1622,11 @@ enum { VD_MODE, VD_MON, VD_SCALE, VD_FPS, VD_COUNT,
 static char s_monText[VD_MONMAX * 20];
 static RECT s_monRect[VD_MONMAX];
 static int  s_monCount;
+/* Is `s_vstage[VD_MON]` a CHOICE, or just the zero the array was born with?
+   The difference matters to `tagpu_menu_monitor`, whose caller needs to fall
+   back to the live window while the answer is "nobody has said". Set where the
+   row is seeded from the window, and where the player actuates it. */
+static int  s_monChosen;
 
 /* 0 is UNLIMITED: fpsl_init maps a NEGATIVE maxfps onto the display refresh and
    only 0 falls through with tick_length left at 0. */
@@ -1670,6 +1678,28 @@ static void enum_monitors(void)
     s_monText[sizeof s_monText - 1] = 0;
     if (s_monCount < 1) { lstrcpynA(s_monText, "1: default", sizeof s_monText); s_monCount = 1; }
     s_vrow[VD_MON].stages = s_monCount;
+}
+
+/* Declared in tagpu_menu.h, called by `util_target_monitor`.
+
+   READ FROM A THREAD THAT IS NOT THE ONE THAT WRITES, and safe by construction
+   rather than by the two being the same thread today. `s_monRect` and
+   `s_monCount` are written once, in `enum_monitors` at DLL attach, before any
+   other thread exists, and never again -- a monitor hot-plugged later is not
+   offered until the next launch, which is the bargain the captions already make.
+   `s_vstage[VD_MON]` is a naturally aligned int, so the read cannot tear, and it
+   is BOUNDED against `s_monCount` here before it indexes anything: the worst a
+   racing click can do is hand back the monitor selected one click ago. A stale
+   `s_monChosen` reads as "nobody has chosen", whose answer is the window's own
+   monitor -- the correct fallback, not a wrong rect. */
+BOOL tagpu_menu_monitor(RECT* out)
+{
+    int i = s_vstage[VD_MON];
+    if (!out || !s_monChosen || i < 0 || i >= s_monCount) return FALSE;
+    if (s_monRect[i].right <= s_monRect[i].left ||
+        s_monRect[i].bottom <= s_monRect[i].top) return FALSE;
+    *out = s_monRect[i];
+    return TRUE;
 }
 
 static int build_visuals_gui(char* b, int cap, int rows)
@@ -1777,10 +1807,18 @@ static void move_to_monitor(int i)
     if (i < 0 || i >= s_monCount || !g_ddraw.hwnd) return;
     m = &s_monRect[i];
     if (g_config.fullscreen)
-        /* borderless fullscreen: the window IS the monitor, so moving it is
-           the whole operation */
-        real_SetWindowPos(g_ddraw.hwnd, HWND_TOP, m->left, m->top,
-                          m->right - m->left, m->bottom - m->top, SWP_NOACTIVATE);
+        /* Borderless fullscreen: the window IS the monitor, so its position,
+           its size AND the render target all come from the monitor -- and
+           `dd_SetDisplayMode(0, 0, 0, 0)`, the fork's own "re-apply the current
+           mode", does all three from `util_target_monitor`, which already reads
+           the row the player just changed. Moving the window here as well only
+           fights it: measured 2026-09-11, a `SetWindowPos` to the monitor rect
+           followed by the re-apply left the window one pixel taller than the
+           screen and back at the primary's origin, because the re-apply places
+           it last. Leaving the render target alone is not an option either --
+           4K -> the portrait screen then kept a 3840x2160 framebuffer inside a
+           1080x1920 window. */
+        dd_SetDisplayMode(0, 0, 0, 0);
     else
         real_SetWindowPos(g_ddraw.hwnd, HWND_TOP, m->left + 32, m->top + 32,
                           0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
@@ -1911,7 +1949,9 @@ static void read_display_state(void)
         if (GetMonitorInfoA(h, &mi))
             for (i = 0; i < s_monCount; i++)
                 if (s_monRect[i].left == mi.rcMonitor.left &&
-                    s_monRect[i].top  == mi.rcMonitor.top) { s_vstage[VD_MON] = i; break; }
+                    s_monRect[i].top  == mi.rcMonitor.top) {
+                    s_vstage[VD_MON] = i; s_monChosen = 1; break;
+                }
     }
 
     /* Auto unless the client really is an exact whole multiple of the surface --
@@ -2038,6 +2078,34 @@ static void vis_restore(void)
     apply_display(VD_FPS);
     InterlockedExchange(&s_dirty, 1);
     s_visKeep = 1;
+}
+
+/* ---- the Monitor row rebuilds the screen ---------------------------------
+   THE SCREEN SIZE LIST BELONGS TO A MONITOR. The engine builds it once per
+   visit, in `0x45E5E0` (`0x45E6B0` allocates the header into GUIMEMSTRUCT+0x0C
+   and hangs the table off VIDSLDR at `0x45E726`), out of whatever our
+   `EnumDisplayModes` serves at that moment -- and what we serve is now capped
+   to the monitor (`util_target_monitor`, dd.c). So a Monitor row that changed
+   the monitor and left the list alone would be offering the OTHER screen's
+   sizes, which is the complaint this pair of changes answers.
+
+   There is no engine call for "re-enumerate in place", and there does not need
+   to be: `GUI_Pop` + `0x45E5E0(0)` is the engine's own idiom for "this screen's
+   contents are stale, build it again", used verbatim by both UNDO (`0x45E31E`)
+   and RESTORE. Calling it from OnCommand is calling it from exactly where the
+   engine does. `GUI_Pop` also writes -1 into `gi->UIChange_f` (`0x4A9673`), so
+   the pump is answered and there is no `menu_accept` to do -- the same reason
+   the engine's own two branches do not answer it either.
+
+   `s_visKeep` is what keeps the model across the rebuild: `vis_build_after`
+   would otherwise run `read_display_state`, which re-derives the Monitor row
+   from the window -- and the window has not moved yet, because that move is
+   posted. With it, the rebuilt plates show the row the player just chose. */
+static void vis_relist(void* gi)
+{
+    s_visKeep = 1;
+    ((gui_pop_fn)VA_GUI_POP)(gi);
+    ((vis_build_fn)VA_VIS_BUILD)(0);
 }
 
 /* Which WINDOW row was actuated, or -1. `menu_row_of`'s twin, by name for the
@@ -2183,7 +2251,12 @@ static void __stdcall tagpu_vis_oncommand(void* gi)
     if (d >= 0) {
         int n = s_vrow[d].stages > 0 ? s_vrow[d].stages : 1;
         s_vstage[d] = (s_vstage[d] + 1) % n;
+        if (d == VD_MON) s_monChosen = 1;
         apply_display(d);       /* posts; the wndproc does the window work */
+        /* The Monitor row changes what the Screen Size list may contain, so it
+           rebuilds the screen instead of just re-plating it. Nothing after the
+           call may touch `gi`'s screen: the old GUIMEMSTRUCT is freed inside. */
+        if (d == VD_MON) { vis_relist(gi); return; }
         push_display(gi);
         menu_accept(gi);
         return;

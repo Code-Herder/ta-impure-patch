@@ -14,6 +14,7 @@
 #include "config.h"
 #include "versionhelpers.h"
 #include "delay_imports.h"
+#include "tagpu_menu.h"
 
 
 /*
@@ -642,6 +643,62 @@ void util_update_bnet_pos(int new_x, int new_y)
 
     old_x = new_x;
     old_y = new_y;
+}
+
+/* THE MONITOR THE GAME IS PRESENTING TO, and its size in desktop pixels.
+
+   NEITHER `EnumDisplaySettings` NOR `g_ddraw.mode` CAN ANSWER THIS ON A
+   MULTI-MONITOR X SERVER, and that is not a corner case -- it is every wine
+   desktop with two screens on it. Measured 2026-09-11 on the reference setup,
+   three outputs (3840x2160 at 0,0 primary; 1080x1920 at -1080,112; 1280x1024
+   at 3840,0):
+
+     - `EnumDisplaySettingsA(NULL, ENUM_CURRENT_SETTINGS)` and
+       `ENUM_REGISTRY_SETTINGS` both report **6200x2160** -- the bounding box of
+       the virtual desktop, which is not a mode any monitor can show.
+     - Naming the adapter does not help. `\\.\DISPLAY1`, `DISPLAY2` and
+       `DISPLAY3` enumerate the SAME 96-mode union, 6200x2160 included, and the
+       two secondaries report their current and registry mode as 0x0.
+     - `EnumDisplayMonitors` + `GetMonitorInfo` reports the three rects
+       correctly.
+
+   So the monitor rect is the only trustworthy source of "how big is the screen
+   we are on", and every place that used to ask the display "mode" for it was
+   getting the whole desktop: the borderless-fullscreen render target (a 4:3
+   viewport centred in 6200 rather than in 3840, i.e. the picture pushed off to
+   one side) and the cap on the resolution picker (6200x2160 offered as the top
+   entry on a 3840-wide monitor).
+
+   WHICH monitor: the one the render-options screen has selected if the player
+   has been on that screen, else the one the window is on. See
+   `tagpu_menu_monitor` for why the model wins -- the window move behind that
+   row is posted, and the list has to be right before it lands. */
+BOOL util_target_monitor(RECT* out)
+{
+    HMONITOR mon;
+    MONITORINFO mi;
+    POINT origin = { 0, 0 };
+
+    if (!out)
+        return FALSE;
+
+    if (tagpu_menu_monitor(out))
+        return TRUE;
+
+    mon = g_ddraw.hwnd ?
+        MonitorFromWindow(g_ddraw.hwnd, MONITOR_DEFAULTTONEAREST) :
+        MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY);
+
+    mi.cbSize = sizeof(MONITORINFO);
+
+    if (!mon || !GetMonitorInfoA(mon, &mi))
+        return FALSE;
+
+    if (mi.rcMonitor.right <= mi.rcMonitor.left || mi.rcMonitor.bottom <= mi.rcMonitor.top)
+        return FALSE;
+
+    *out = mi.rcMonitor;
+    return TRUE;
 }
 
 BOOL util_get_lowest_resolution(

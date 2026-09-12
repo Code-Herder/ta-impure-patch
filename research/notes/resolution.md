@@ -509,6 +509,10 @@ otherwise appear as duplicate rows — the matcher compares w/h only).
 
 ### 6.5 What our fork actually serves — and why the cap was never the cap [MEASURED 2026-09-10]
 
+> **Superseded in part by §6.6.** Everything here holds, but it was measured
+> on a desktop with ONE monitor on it. The cap no longer comes from the display
+> mode, and the seven-mode table below is that one monitor's list, not the rule.
+
 `EnumDisplayModes` (`tagpu/ddraw/src/dd.c`) has **two** branches and only one of
 them runs for TA:
 
@@ -543,6 +547,63 @@ which under our stack is the most useful entry of the whole list (the smallest
 engine surface gives the largest UI scale `k`). The fix steps the enumeration
 index back one so the same mode is re-enumerated with the injection guard
 already set, and both are emitted; the list goes 7 → 8 with nothing lost.
+
+### 6.6 The cap is the MONITOR, and no display API but `GetMonitorInfo` knows it [MEASURED 2026-09-11]
+
+§6.5 was measured on a single-monitor desktop, where "the display mode" and "the
+monitor" are the same number. **They are not the same number on a multi-monitor
+X server, and the difference is what the picker showed.** The reference setup
+grew to three outputs — 3840×2160 at 0,0 (primary), 1080×1920 at −1080,112,
+1280×1024 at 3840,0 — and a probe built against wine's own API reported:
+
+| asked | answer |
+|---|---|
+| `EnumDisplaySettingsA(NULL, ENUM_CURRENT_SETTINGS)` | **6200×2160** |
+| …`ENUM_REGISTRY_SETTINGS` | **6200×2160** |
+| the same, naming `\\.\DISPLAY1`, `2` or `3` | 6200×2160 for DISPLAY1; **0×0** for the two secondaries |
+| `EnumDisplaySettingsA(<any device>, i)`, walked | the SAME 96-mode union for all three, **6200×2160 included** |
+| `GetSystemMetrics(SM_CXSCREEN/SM_CYSCREEN)` | 3840×2160 — the primary, right, but only ever the primary |
+| `EnumDisplayMonitors` + `GetMonitorInfo` | the three rects, correctly |
+
+6200×2160 is the bounding box of the virtual desktop: no monitor can show it.
+So **the mode list is not a per-monitor list and cannot be filtered into one by
+naming the adapter** — wine has one mode table and hands it to every adapter.
+The only per-monitor fact available is the rect, which makes the rect the filter:
+
+- `util_target_monitor` (`utils.c`) is the single answer to "which monitor, and
+  how big" — the render-options screen's Monitor row when the player has been on
+  that screen, else `MonitorFromWindow`, else the primary.
+- `dd_EnumDisplayModes` takes `max_w`/`max_h` from it instead of
+  `ENUM_REGISTRY_SETTINGS`, and **drops every enumerated mode bigger than it**.
+- `tagpu_cfg_inject_native` is fed the same number, so the injected "native"
+  entry is the monitor's mode and not the desktop's.
+
+**The measured lists, read out of the engine's own table** (`GUIMEMSTRUCT+0x0C`
+→ `+0x00` count, `+0x04` the 12-byte-per-entry table `w,h,refresh`):
+
+| monitor | modes offered |
+|---|---|
+| 3840×2160 | 800×600, 1024×768, 1280×1024, 1600×1200, 1920×1080, 2048×1152, 2048×1280, **3840×2160** — 8 |
+| 1080×1920 | 800×600, 1024×768, **1080×1920** — 3 |
+| 1280×1024 | 800×600, 1024×768, **1280×1024** — 3 |
+
+Before the change the first row ended **6200×2160**, and the other two rows did
+not exist at all: every monitor was offered the 4K list.
+
+**The injected mode is de-duplicated now, and it had to be.** §6.5 noted that a
+mode the enumeration also reports appears twice, because `0x45E4C0` sorts
+without de-duplicating, and called it cosmetic. Capping made it likely rather
+than rare — a small monitor's own mode IS one wine enumerates. Measured before
+the fix: the 1280×1024 screen offered `1280×1024` twice, and its slider needed
+two stops to get past one size. The emit filter now skips an enumerated mode
+equal to the already-injected one.
+
+**The list follows the Monitor row, live.** There is no engine call for
+"re-enumerate in place", so the row does what UNDO and RESTORE do at `0x45E31E`:
+`GUI_Pop(gi)` then `0x45E5E0(0)`, which rebuilds the screen and with it the
+table. It follows the **model** rather than the window on purpose — the window
+move behind that row is posted, so at rebuild time the window is still on the
+old monitor. See [GPU status](gpu-status.html) §2.12.
 
 ---
 

@@ -98,11 +98,28 @@ HRESULT dd_EnumDisplayModes(
     DWORD max_w = 0;
     DWORD max_h = 0;
     DEVMODE reg_m;
+    RECT mon_rc;
 
     memset(&reg_m, 0, sizeof(DEVMODE));
     reg_m.dmSize = sizeof(DEVMODE);
 
-    if (real_EnumDisplaySettingsA(NULL, ENUM_REGISTRY_SETTINGS, &reg_m))
+    /* tagpu: THE CAP IS THE MONITOR, NOT THE "REGISTRY DISPLAY MODE". On a
+       multi-monitor X server that mode is the whole virtual desktop -- 6200x2160
+       on the reference setup's three outputs -- so the picker's top entry was a
+       size no screen can show, and the same number went into `inject_resolution`
+       below as "the native mode". `util_target_monitor` is the one API that
+       answers per monitor, and it follows the Monitor row when the player has
+       chosen one, which is what makes this list the SELECTED screen's list.
+       ENUM_REGISTRY_SETTINGS stays as the fallback for a host where no monitor
+       can be identified at all. */
+    if (util_target_monitor(&mon_rc))
+    {
+        max_w = mon_rc.right - mon_rc.left;
+        max_h = mon_rc.bottom - mon_rc.top;
+
+        TRACE("     max_w=%u, max_h=%u (monitor)\n", max_w, max_h);
+    }
+    else if (real_EnumDisplaySettingsA(NULL, ENUM_REGISTRY_SETTINGS, &reg_m))
     {
         max_w = reg_m.dmPelsWidth;
         max_h = reg_m.dmPelsHeight;
@@ -233,10 +250,34 @@ HRESULT dd_EnumDisplayModes(
 
         while (real_EnumDisplaySettingsA(NULL, i, &m))
         {
+            /* tagpu: is THIS the mode the injection below adds? Once the
+               injection has fired, the enumeration reaching the same size on
+               its own would put it in the picker twice -- `0x45E4C0` sorts the
+               list but does not de-dup, so the player sees two identical rows
+               and the slider needs two clicks to get past one size. Seen on the
+               1280x1024 monitor of the reference setup, where the monitor's own
+               mode is both the injected "native" one and a mode wine
+               enumerates. */
+            BOOL is_injected =
+                custom_width && custom_height &&
+                m.dmPelsWidth == custom_width && m.dmPelsHeight == custom_height;
+
             if (refresh_rate == m.dmDisplayFrequency &&
                 bpp == m.dmBitsPerPel &&
                 flags == m.dmDisplayFlags &&
-                fixed_output == m.dmDisplayFixedOutput)
+                fixed_output == m.dmDisplayFixedOutput &&
+                !(custom_res_injected && is_injected) &&
+                /* tagpu: NOTHING BIGGER THAN THE MONITOR GETS INTO THE LIST.
+                   Wine hands every adapter the same union of every output's
+                   modes plus the virtual desktop's bounding box (see
+                   `util_target_monitor`), so without this the 1280x1024 screen
+                   was offered 3840x2160 and the 4K one 6200x2160. The injected
+                   entry below is written over `m` AFTER this test and is
+                   therefore exempt, exactly as it is exempt from CDS_TEST --
+                   an explicit `inject_resolution` in the ini stays the
+                   player's to make. */
+                (!max_w || m.dmPelsWidth <= max_w) &&
+                (!max_h || m.dmPelsHeight <= max_h))
             {
                 if (g_config.stronghold_hack && m.dmPelsWidth && (m.dmPelsWidth % 8))
                 {
@@ -776,28 +817,26 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
         {
             border = FALSE;
 
-            /* tagpu: size to the MONITOR the window is on, not to the display
-               "mode". `EnumDisplaySettings(NULL, ENUM_CURRENT_SETTINGS)` above
-               reports the VIRTUAL DESKTOP on a multi-monitor X server --
-               measured 2026-09-11 on a three-output setup: 6200x2160 where the
-               target monitor is 3840x2160 -- so the render target came out
-               desktop-wide, the 4:3 viewport was centred in 6200 rather than in
-               3840, and the borderless window showed a slice of it pushed off
-               to the right. `mouse.scale_*` is derived from the same viewport a
-               few lines down, so clicks were displaced with it.
+            /* tagpu: size to the MONITOR, not to the display "mode". The mode
+               read above is the VIRTUAL DESKTOP on a multi-monitor X server --
+               6200x2160 where the target monitor is 3840x2160 -- so the render
+               target came out desktop-wide, the 4:3 viewport was centred in
+               6200 rather than in 3840, and the borderless window showed a
+               slice of it pushed off to the right. `mouse.scale_*` is derived
+               from the same viewport a few lines down, so clicks were displaced
+               with it. The measurement, and why no display API but
+               `GetMonitorInfo` answers this, is on `util_target_monitor`.
 
                Borderless fullscreen presents into ONE monitor by definition, so
                that monitor's rect is the size. Exclusive fullscreen is left
                alone: there the mode really is the screen. */
             {
-                HMONITOR mon = MonitorFromWindow(g_ddraw.hwnd, MONITOR_DEFAULTTONEAREST);
-                MONITORINFO mi;
-                mi.cbSize = sizeof(MONITORINFO);
+                RECT mon_rc;
 
-                if (mon && GetMonitorInfoA(mon, &mi))
+                if (util_target_monitor(&mon_rc))
                 {
-                    g_ddraw.render.width = mi.rcMonitor.right - mi.rcMonitor.left;
-                    g_ddraw.render.height = mi.rcMonitor.bottom - mi.rcMonitor.top;
+                    g_ddraw.render.width = mon_rc.right - mon_rc.left;
+                    g_ddraw.render.height = mon_rc.bottom - mon_rc.top;
                 }
             }
 
@@ -1160,11 +1199,27 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
 
         if (g_config.fullscreen)
         {
+            /* tagpu: THE TARGET MONITOR'S ORIGIN, not the desktop's. `x = y = 0`
+               is the primary monitor's top-left, so borderless fullscreen on any
+               other monitor put the window on the WRONG SCREEN -- it took its
+               size from the right monitor (above) and its position from the
+               primary, which is the same mismatch, in the other direction, as
+               the virtual-desktop size this pair of changes removed. One source
+               of truth for both. Exclusive fullscreen keeps 0,0: there the mode
+               really is the screen. */
+            RECT mon_rc;
+
             x = y = 0;
+
+            if (g_config.windowed && util_target_monitor(&mon_rc))
+            {
+                x = mon_rc.left;
+                y = mon_rc.top;
+            }
 
             if (GetMenu(g_ddraw.hwnd))
             {
-                y = real_GetSystemMetrics(SM_CYMENU);
+                y += real_GetSystemMetrics(SM_CYMENU);
             }
         }
         else if (border && g_config.window_rect.top == -32000 && y < 0)
