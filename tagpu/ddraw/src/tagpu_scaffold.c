@@ -47,6 +47,7 @@
    packet and held for a frame reads past it (landing review, 2026-09-12). */
 #define TA_MAINPP    0x00511DE8u
 #define OFF_FEATDEF  0x1426F   /* FeatureDef array, stride 0x100                */
+#define OFF_FEATCOUNT 0x14253  /* i32 NumFeatureDefs: read LIVE beside the base  */
 #define FEAT_STRIDE  0x0D
 #define FT_HEIGHT    0x04      /* u8 tile height                                */
 #define FT_DEFIDX    0x08      /* u16; <0xFFFB = live feature anchor            */
@@ -306,6 +307,26 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
     int nCols = pk->sweep_cols, nRows = pk->sweep_rows;
     const char* taNow = *(const char* const*)TA_MAINPP;
     const char* fdef = ptr_ok(taNow) ? *(const char* const*)(taNow + OFF_FEATDEF) : NULL;
+    /* THE FEATUREDEF BOUND IS THE SMALLER OF THE LIVE COUNT AND THE PACKET'S, and
+       which one wins is an ORDERING FACT about the engine rather than a preference.
+       The array at `main+0x1426F` is grown ONE RECORD AT A TIME as the map's
+       features are read: `0x422543` reallocs it to `(count+1)·0x100`, `0x422558`
+       stores the new base, the caller fills the new record, and only then does
+       `0x422DAC` write `count + 1`. **The count is incremented last**, so it never
+       describes more records than the allocation holds — a live count read after a
+       live base is a conservative bound on that base, never an optimistic one.
+       The packet's count alone is NOT: it belongs to the packet's level, and across
+       a level boundary the teardown zeroes the count (`0x422299`) and nulls the
+       base (`0x42228B`) while the new map's array starts at one record and grows,
+       so a held packet from a map with 442 defs would authorise 442 records of a
+       30-record array. Taking the smaller is safe under both, and costs one load of
+       a field in a struct this pass is already dereferencing.
+       (landing review, 2026-09-12.) */
+    int liveDefs = ptr_ok(taNow) ? *(const int*)(taNow + OFF_FEATCOUNT) : 0;
+    int nDefs = pk->feat_defcount;
+    if (nDefs < 0 || nDefs > 4096) nDefs = 0;
+    if (liveDefs < 0 || liveDefs > 4096) liveDefs = 0;
+    if (!nDefs || (liveDefs && liveDefs < nDefs)) nDefs = liveDefs;
     if ((f->frame_counter % 300) == 0) {              /* gate trace */
         char b[192]; _snprintf(b, sizeof b,
             "scaffold GATES: vp=(%d,%d) view=%dx%d map16=%dx%d sweep=%dx%d fdef=%p anchors=%u eye=(%d,%d)",
@@ -353,7 +374,7 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
                terrain-depth note's "Corrections"); the feature pass has always
                refused those and this one indexed them. Counted as `junk`, as
                there — and applied BEFORE the address is formed, not after. */
-            if (pk->feat_defcount && (int)idx >= pk->feat_defcount) { junk++; continue; }
+            if (!nDefs || (int)idx >= nDefs) { junk++; continue; }
             def = fdef + (size_t)idx * FD_STRIDE;
             if (*(const unsigned char*)(def + FD_HEIGHT) < 10) { flat++; continue; }
             tall++;

@@ -321,7 +321,14 @@ typedef struct TAGPU_PACKET {
        three stay a LIVE read in the `fenced` files that index them, where the
        engine's own null still refuses them. The packet carries values, and a
        pointer whose lifetime it cannot state is not one. */
-    int32_t  feat_defcount;           /* NumFeatureDefs: the bound on a def row  */
+    /* NumFeatureDefs at publish time. It is the bound on a def row only
+       TOGETHER with the live count: `main+0x1426F`'s array is grown one record
+       at a time and `main+0x14253` is incremented LAST (0x422543 reallocs,
+       0x422558 stores the base, 0x422DAC counts), so the live count never
+       over-describes the live base — where this one belongs to the packet's
+       level and would over-describe the next map's smaller array. Consumers
+       take the smaller of the two (landing review, 2026-09-12). */
+    int32_t  feat_defcount;
     int32_t  sweep_cols, sweep_rows;  /* the engine's own feature sweep rect size */
     int32_t  mouse[2];                /* the dispatched mouse point, screen px    */
     int32_t  build_rect[6];           /* the build cursor's two corners as

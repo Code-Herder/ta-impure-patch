@@ -91,6 +91,7 @@
    for a frame reads straight past it (landing review, 2026-09-12). */
 #define TA_MAINPP    0x00511DE8u
 #define OFF_FEATDEF  0x1426F   /* FeatureDef array, stride 0x100               */
+#define OFF_FEATCOUNT 0x14253  /* i32 NumFeatureDefs: read LIVE beside the base  */
 #define OFF_WRECKS   0x1420B   /* wreck records, stride 0x30                   */
 #define FD_STRIDE    0x100
 #define FD_NAME      0x00      /* char Name[0x20] — INLINE, not a pointer      */
@@ -685,7 +686,7 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     const TAGPU_PK_ANCHOR* anch;
     const char* fdefs;
     int mapW, mapH, nCols, nRows, r0, c0;
-    int localPl, shadowsOn, nDefs, outside = 0;   /* a flag: see the loop below */
+    int localPl, shadowsOn, nDefs, liveDefs, outside = 0; /* a flag: see the loop below */
     unsigned ai;
     float flatSpan;
     if (s_armed != 1) return feat_bail();
@@ -714,6 +715,7 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     {   /* LIVE, once per frame: see the header */
         const char* taNow = *(const char* const*)TA_MAINPP;
         fdefs = ptr_ok(taNow) ? *(const char* const*)(taNow + OFF_FEATDEF) : NULL;
+        liveDefs = ptr_ok(taNow) ? *(const int*)(taNow + OFF_FEATCOUNT) : 0;
     }
     mapW = pk->map_w16;
     mapH = pk->map_h16;
@@ -764,8 +766,25 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     if (c0 + nCols > mapW - 1) nCols = mapW - c0 - 1;
     if (nRows <= 0 || nCols <= 0) return feat_bail();
 
+    /* THE FEATUREDEF BOUND IS THE SMALLER OF THE LIVE COUNT AND THE PACKET'S, and
+       which one wins is an ORDERING FACT about the engine rather than a preference.
+       The array at `main+0x1426F` is grown ONE RECORD AT A TIME as the map's
+       features are read: `0x422543` reallocs it to `(count+1)·0x100`, `0x422558`
+       stores the new base, the caller fills the new record, and only then does
+       `0x422DAC` write `count + 1`. **The count is incremented last**, so it never
+       describes more records than the allocation holds — a live count read after a
+       live base is a conservative bound on that base, never an optimistic one.
+       The packet's count alone is NOT: it belongs to the packet's level, and across
+       a level boundary the teardown zeroes the count (`0x422299`) and nulls the
+       base (`0x42228B`) while the new map's array starts at one record and grows,
+       so a held packet from a map with 442 defs would authorise 442 records of a
+       30-record array. Taking the smaller is safe under both, and costs one load of
+       a field in a struct this pass is already dereferencing.
+       (landing review, 2026-09-12.) */
     nDefs = pk->feat_defcount;
     if (nDefs < 0 || nDefs > 4096) nDefs = 0;         /* no guard we can trust */
+    if (liveDefs < 0 || liveDefs > 4096) liveDefs = 0;
+    if (!nDefs || (liveDefs && liveDefs < nDefs)) nDefs = liveDefs;
     localPl = pk->local_player;
     shadowsOn = (pk->gfx_opt & 0x10) != 0;
     flatSpan = (float)nRows * (float)nCols;
