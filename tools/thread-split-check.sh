@@ -14,7 +14,8 @@
 # so a conversion's diff shows what left the render thread. Adding a line is the
 # owner's decision, made in a review, never a session's fix for a red build.
 #
-# PATTERNS (perl, case-insensitive, after `/* */` and `//` comments are removed):
+# PATTERNS (perl, case-insensitive, after `/* */` and `//` comments and "string literals"
+# are removed — a log line that names an address dereferences nothing):
 #   VA       \b0x0*(4[0-9a-f]{5}|5[0-2][0-9a-f]{4})(?![0-9a-f])
 #            0x4xxxxx (.text, from 0x401000) and 0x5[0-2]xxxx (.rdata from 0x4FC000, .data
 #            from 0x501000 and its bss up to the .tls at 0x52C000: the main pointer
@@ -48,12 +49,14 @@ scan() {   # $1 = file; prints "line: TAG: text" for every hit, comments strippe
     perl -0777 -ne '
         s{/\*.*?\*/}{ $& =~ s/[^\n]//gr }gse;    # block comments: keep the newlines, drop the text
         s{//[^\n]*}{}g;                           # line comments
+        my @inc = map { /#\s*include\s*"tagpu_engine\.h"/ ? 1 : 0 } split /\n/, $_;   # before the strings go
+        s{"(?:[^"\\\n]|\\.)*"}{""}g;               # string literals: a log line naming an address reads nothing
         my $n = 0;
         for my $l (split /\n/, $_) {
             $n++;
             my @tags;
             push @tags, "VA"      if $l =~ /\b0x0*(4[0-9a-f]{5}|5[0-2][0-9a-f]{4})(?![0-9a-f])/i;
-            push @tags, "INCLUDE" if $l =~ /#\s*include\s*"tagpu_engine\.h"/;
+            push @tags, "INCLUDE" if $inc[$n - 1];
             push @tags, "PROBE"   if $l =~ /\bIsBad(Read|Write|Code|String)Ptr\w*/;
             push @tags, "CONDUIT" if $l =~ /\b(ta|main|main_p)\s*\+/;
             next unless @tags;

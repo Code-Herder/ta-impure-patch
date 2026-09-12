@@ -33,6 +33,7 @@ inc/tagpu_engine.h       engine-map          # the addresses, for publisher file
 src/tagpu_packet_pub.c   publisher           # the frame packet's fill, from DrawGameScreen's `after` at 0x4969D2; the font copy at hook 8; the level-end packet
 src/tagpu_markown.c      publisher           # the marker block's call-site redirects on the game thread; hook 8 latches the font through the publisher
 src/tagpu_menu.c         publisher           # the render-options screen: GUI calls on the game thread from the DrawGameScreen observer
+src/tagpu_hud.c          publisher           # HUD scale (G18f): an observer on the loading-screen flip 0x4288D0 gated on the return address 0x498242 writes the viewport rect's R/B/W/H on the game thread; the one word it publishes is its own
 src/tagpu_reclaim.c      publisher           # FreeObjectState and the teardown wrap on the game thread; the fence itself
 src/tagpu_gui_hook.c     publisher           # the GL UI observers and the flip publisher on the game thread; the probes are on its own arena
 src/tagpu_gui_leaves.h   to-convert:4c       # observers on the game thread — except before_minimap, which publishes from the LOADER thread and goes in 4c
