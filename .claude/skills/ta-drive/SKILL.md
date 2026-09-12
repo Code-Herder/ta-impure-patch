@@ -1083,7 +1083,7 @@ instead: `tacli arm <i> classicpp.on=off`.
     object count exceeded the engine's own 401 (the emitters drop the front and shift past 400, so
     401 is the steady state, not 400), and `subbad` an object whose sub-particle vector exceeded
     the containment filter. `scan` is the gather's per-(level, tick) cache: at the publish rates
-    this machine reaches against a 60 Hz sim, expect roughly one scan in five to twenty.
+    the reference setup reaches against a 60 Hz sim, expect roughly one scan in five to twenty.
     `part=`'s high-water was **800** on a 1080p `200v200`, against a 16 384-entry cap.
     `want=` is the render thread's standing request, and **the pass does not claim the engine's
     draw until the packet says the publisher was filling for it** — so a freshly armed `fx.on`
@@ -1635,6 +1635,13 @@ tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds=
   fps/resets/overflows. The bar is **0, 0 and 0 on every stop** — except `MAINMENU`, whose
   ~185 differing pixels are its sparkle animation between the two shots, single scattered
   pixels in the sky. Run it with the venv's python (numpy + PIL).
+- **When the walk is a REGRESSION gate, run the identical walk on the previous DLL and diff the
+  two `report.md` tables column by column** — it is ~25 minutes a pass at 1024x768 and it is the
+  only thing that tells a finding from a fixture. Measured 2026-09-12 on the frame packet's
+  landing 4: of the two non-zero columns, `MISS=1 [FPS] drift=23px` on `VISUALS.GUI` reproduced
+  exactly on the older DLL (pre-existing, `uiwalk`'s hit-test inverse on a row `tagpu_menu.c`
+  emits) and `strict holes = 4` did not (real). Ignore `fps`, `atlas`, `twins`, `skipped`,
+  `resets` and `stalls` in that diff — they are run-dependent and differ everywhere.
 - **The in-game walk is side-aware and reaches the HUD extras (G15c).** `--side core` runs the
   CORE parity fixture (`scenarios/tascene-parity-core.json`) and walks `CORMAIN2`/`CORCOM1`/`2`
   with the `COR*` pagers; the in-game menu is `ARMOPT.GUI` on both sides. After the screens the
@@ -1778,6 +1785,14 @@ tools/tacli log <i> -g 'curs='               # curs=<own>,<w>x<h>,dev=<1 if the 
   that keeps climbing means the atlas is refusing the frame.
 - **The cursor rect is excluded from `uiwalk`'s diff** (padded 8 px) and exempt from `strict`
   either way, so neither is a test of the cursor. The footprint above is.
+- **But the `strict holes` column is NOT masked by that rect** — `holes = mag.sum()` counts every
+  magenta pixel in the frame — and since the frame packet's landing 4c the exempt rect comes from
+  the packet, one `DrawGameScreen` behind the blit. **The engine's cursors pulse** (the move cursor
+  cycles 27x27, 29x29, 31x31, 33x33, 35x35, one pixel per side per step — which is why `uiwalk`
+  pads by 8 in the first place), so where the next step is larger its outer ring reads as holes: 4
+  px at two in-game stops, measured 2026-09-12. **A handful of holes at a stop where the pointer
+  sits over the world is that, not a lost op.** Read the `curs=` sizes in `tagpu.log` before
+  chasing one.
 
 ### Text is a string op (phase 2, G17d)
 

@@ -2727,7 +2727,51 @@ the picture went in **two** packets before the consumer's acknowledgement stoppe
 acknowledgement working, and `noeng=1` against the reference's 0 is the single warm-up frame the
 standing request costs.
 
-PLACEHOLDER-WALK2
+**The 120-stop `strict` UI walk, and the one column that moved.** `tools/uiwalk.py --inst <i>
+--res 1024x768 --layer --cycles 2`, run on landing 4's build and then, identically, on landing 3's
+— with `classicpp.on=off`, which is not optional: the walk diffs our GL frame against the engine's
+**indexed** surface, and the restorer makes the two halves come off different art. **Seventy stops compared
+column by column, and every column that is a measurement reads the same on both builds**:
+
+- `hit misses` and `drift px` **identical at every stop**, the one standing `MISS=1 [FPS]
+  drift=23px` on `VISUALS.GUI` included — it reproduces on landing 3's DLL at all three of its
+  cycles, so it is `uiwalk`'s hit-test inverse on a row `tagpu_menu.c` emits (*The front-end screen
+  carries fifteen rows in two columns*, above) and not this landing's.
+- `differing px outside the viewport` **0 at every stop** but the four `MAINMENU.GUI` ones, which
+  the [ta-drive](../../.claude/skills/ta-drive/SKILL.md) skill already records as that screen's own
+  sparkle animation between the two shots: 181–184 here against 179–188 on the reference.
+- `inside the viewport, engine non-key px` **0 / N at every stop** but `space-popup`, and that
+  stop is unstable on both builds rather than different between them: 41 of 37 294 here against 22
+  there, in the same 6x8 box at the bottom of the viewport, with the engine's OWN between-shot
+  self-difference reading 15 here and 93 there. The popup is mid-animation in both, and the
+  engine's two captures do not agree with each other either — it is a stop to re-take, not a
+  number to compare.
+- The two 8-column census tables are **identical**: `censuses`, `changed px`, `unexplained px` and
+  `ops in the window` match at all seventy stops.
+
+**The one column that moved is `strict holes`: 4 on landing 4's DLL at two in-game stops (`F4@0.5`
+and `move`), 0 on landing 3's** — and the cause is worth the space, because it is a property of
+reading the cursor from the packet and not a mistake in the conversion.
+
+The engine's cursors PULSE. The `curs=` counter reports the move cursor at 27×27, 29×29, 31×31,
+33×33 and 35×35 on **both** builds — one pixel per side per animation step. The rect the layer
+exempts from the fallback and from `strict` used to be read live on the render thread; it is the
+packet's now, taken inside `DrawGameScreen`, and the engine blits its cursor onto the primary
+*after* that. So the surface the layer composites against can already hold the NEXT step, and where
+the next step is larger its outermost ring is neither drawn by our sharp layer nor exempt. On this
+art — a four-way arrow whose outermost ring is four isolated tips — that ring is exactly **four
+pixels**, at (496,384), (512,368), (512,400) and (528,384) around a pointer parked at the screen
+centre, with the engine's two surface captures **byte-identical between the builds** (0 px) at that
+stop. It is one animation step, at two of forty-five in-game stops.
+
+**What a player sees is not magenta.** `strict` is the harness's mode; with the fallback on, those
+four pixels show the engine's own cursor art, so the frame carries the union of two adjacent steps
+of the same sprite — a cursor that looks one step thicker for one frame. **The fix is a bound, not
+a margin**: the exempt rect has to cover the sprite the engine will blit *next*, which means
+publishing the cursor's animation extent out of the cursor table — per-process and immutable, so a
+constant once read — and nobody has read that table's shape yet. Padding the rect by a guess is the
+timing argument `CLAUDE.md` refuses, so it is named in
+[GUI renderer](gui-renderer.html) §23 *Not closed here* and left for the landing that publishes it.
 
 ### 2.21b The protocol and the cost, measured across all three rows
 
@@ -2791,9 +2835,10 @@ reproduces on the DLL that predates it.) Every one of these is a ratio and nothi
 runs on the session model). Four read the landing — one per plan row with a numbered risk list, and
 one told to range freely and to check the notes' claims against the pristine binary — and a fifth
 read the fix diff afterwards. **Fourteen findings between them**, every one verified in the code or
-the disassembly before anything moved, and all fourteen acted on except one, rejected below with
-its reason. Nine were correctness, five were documentation — and the documentation half is the one
-worth noticing, because it included the sentence that licensed a cache.
+the disassembly before anything moved and every one acted on — plus a fifteenth, rejected below
+with its reason, and three further documentation corrections. Twelve of the fourteen were
+correctness and two were documentation, and it is the documentation pair worth noticing, because
+one of them is the sentence that licensed a cache.
 
 | # | what it was | why it mattered |
 |---|---|---|

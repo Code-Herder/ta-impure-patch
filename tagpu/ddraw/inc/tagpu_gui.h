@@ -83,7 +83,24 @@ struct TAGPU_PACKET;
    blown up instead of ours at the device's resolution, which is what G17c
    improved. Closing it needs a channel the shell can publish on, and "never
    publish outside the 0x4969D2 gate" is a rule of the plan's — so it is left
-   here, stated, for the landing that builds one. */
+   here, stated, for the landing that builds one.
+
+   AND THE RECT CAN BE ONE ANIMATION STEP BEHIND, which the 120-stop `strict`
+   walk measured rather than reasoned about. The engine's cursors PULSE -- the
+   move cursor cycles 27x27, 29x29, 31x31, 33x33, 35x35, one pixel per side per
+   step, on this build and on the one before it alike. The rect below is the
+   packet's, taken inside DrawGameScreen, and the engine blits its cursor onto
+   the primary AFTER that: so the surface the layer composites against can hold
+   the next step, and where that step is larger its outermost ring is neither
+   drawn by the sharp layer nor exempt. On the move cursor's four-way arrow
+   that ring is four isolated tips -- 4 pixels, at two of forty-five in-game
+   stops, against 0 on landing 3's DLL. With the fallback on they carry the
+   engine's own cursor art, so what a frame shows is the union of two adjacent
+   steps of one sprite. THE FIX IS A BOUND, NOT A MARGIN: the rect must cover
+   the sprite the engine will blit NEXT, which means publishing the cursor
+   table's animation extent (per-process and immutable, so a constant once
+   read) -- and nothing has established that table's shape. Padding by a guess
+   is the timing argument CLAUDE.md refuses. GUI renderer 23 has it. */
 void tagpu_gui_cursor_frame(const struct TAGPU_PACKET* packet);
 int  tagpu_gui_cursor_own(float* r);
 

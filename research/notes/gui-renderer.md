@@ -3282,6 +3282,22 @@ are untouched.
   device's resolution, which is exactly what §13.5's G17c improved. Closing it needs a channel the
   shell can publish on, and *never publish outside the `0x4969D2` gate* is one of the plan's own
   rules — so it is left stated for the landing that builds one.
+- **A size-ANIMATED cursor can show one animation step of the engine's own art around ours**, and
+  the 120-stop `strict` walk is what measured it. The engine's cursors pulse: `curs=` reports the
+  move cursor at 27×27, 29×29, 31×31, 33×33 and 35×35 on landing 3's DLL and on this one alike —
+  one pixel per side per step. The rect the layer exempts from the fallback and from `strict` is
+  the packet's now, taken inside `DrawGameScreen`, and the engine blits its cursor onto the primary
+  *after* that; so the surface the layer composites against can already hold the next step, and
+  where that step is larger its outermost ring is neither drawn by the sharp layer nor exempt. On
+  the move cursor's art — a four-way arrow whose outer ring is four isolated tips — that is exactly
+  **4 magenta pixels, at two of forty-five in-game stops, against 0 on landing 3's DLL**, with the
+  engine's own surface captures byte-identical between the builds at that stop. With the fallback
+  on (that is, in every build but the harness's) those four pixels carry the engine's own cursor
+  art, so a player sees the union of two adjacent steps of one sprite for one frame. **The fix is a
+  bound, not a margin:** the rect has to cover the sprite the engine will blit *next*, which means
+  publishing the cursor's animation extent out of the cursor table — per-process and immutable, so
+  a constant once read — and nothing has established that table's shape. Padding by a guess is the
+  timing argument `CLAUDE.md` refuses, so this is stated and left, like the shell cursor above.
 - **The GAF banks' lifetime is still a class, not a proof, for anything but the "fx" bank.** Landing
   4a verified that one is loaded once per process; the cursor table and the UI sprite frames are
   covered by the same `session-reader` line and no note establishes them the same way.
