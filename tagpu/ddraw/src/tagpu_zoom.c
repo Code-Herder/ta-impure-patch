@@ -799,10 +799,13 @@ static unsigned char* build_follow_stub(void)
    Called from the apply, on the draw that applies a NEW delta from a gesture
    that asked for the camera — the same ordering the engine's own scroll poll
    has: released, then the eye and the target stepped, in one thread, with no
-   stepper between the two (the stepper ran before DrawGameScreen was entered
-   and does not run again until the next frame callback). A gesture that moves
-   the eye by NOTHING — the pointer on the viewport centre — releases nothing,
-   so the A/B control holds exactly. */
+   stepper between the two. The stepper is called from the frame callback
+   before the draw call (0x495599 inside 0x495490, from 0x49680C/0x49693E;
+   it is skipped when the sim is paused or an in-game GUI screen is up) and
+   does not run again until the next frame callback; nothing inside
+   DrawGameScreen stores the eye. A gesture that moves the eye by NOTHING —
+   the pointer on the viewport centre — releases nothing, so the A/B control
+   holds exactly. */
 static void release_follow(char* ta)
 {
     int*   obj  = (int*)  (ta + OFF_FOLLOW_OBJ);
@@ -831,12 +834,18 @@ static void release_follow(char* ta)
 
    GAME THREAD, at the top of every in-play draw (tagpu_packet_pub.c's
    `before`), with the latest command record — NULL until the render thread's
-   first post. The order below is the order the engine's own camera writers
-   keep: release the follow, move the eye and the target together, clamp,
-   then the minimap box and the fog flag. Nothing here waits, and nothing
-   here can be torn: every word is written by this thread alone. */
+   first post. This runs after whichever of the frame callback's own camera
+   writers ran this frame (the stepper and the scroll poll both precede the
+   draw call at 0x4969CD, and both can be skipped: the stepper when paused,
+   both under an in-game GUI screen) and before the draw's first read of the
+   eye at 0x468DD9 — no store to the eye exists inside DrawGameScreen. The
+   order below is the order the engine's own camera writers keep: release the
+   follow, move the eye and the target together, clamp, then the minimap box
+   and the fog flag. Nothing here waits, and nothing here can be torn: every
+   word is written by this thread alone. */
 static unsigned s_appliedSeq;              /* game thread only */
 static int      s_appliedDx, s_appliedDy;
+static unsigned s_epoch;                   /* bumped at every level end (game thread) */
 
 void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c)
 {
@@ -865,7 +874,11 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c)
        packet's copy of the same fields, so the clamp below fires only when
        the engine moved the eye between the two, and then the packet's eye
        reconciles the prediction. */
-    if (c && c->cmd_seq != s_appliedSeq) {
+    /* A record of an OLDER epoch — posted before the render thread saw the
+       level end — carries the old level's sum and applies nothing; the render
+       thread's first record after seeing the new epoch starts from zero, as
+       the applied sum did at the level end (landing review). */
+    if (c && c->cmd_seq != s_appliedSeq && c->epoch == s_epoch) {
         int dx = c->cum_dx - s_appliedDx, dy = c->cum_dy - s_appliedDy;
         if (dx || dy) {
             if (c->drop_follow) release_follow(ta);
@@ -935,13 +948,16 @@ void tagpu_zoom_level_end(char* ta)
 {
     s_gLevel = 1.0f; s_gLive = 0; s_gEyeOff = 0;
     g_eyeWide = 0;
+    /* a new epoch: nothing owed to the old level survives into the next */
+    s_epoch++;
+    s_appliedSeq = 0; s_appliedDx = 0; s_appliedDy = 0;
     if (ta_ok(ta)) apply_scroll_rate(ta);      /* the player's own value, for the options screen */
 }
 
-void tagpu_zoom_applied(unsigned* seq, int* cum_dx, int* cum_dy, float* level)
+void tagpu_zoom_applied(unsigned* seq, int* cum_dx, int* cum_dy, float* level, unsigned* epoch)
 {
     *seq = s_appliedSeq; *cum_dx = s_appliedDx; *cum_dy = s_appliedDy;
-    *level = game_level();
+    *level = game_level(); *epoch = s_epoch;
 }
 
 /* ---- the end of the render frame: the command record ----------------------- */
@@ -964,6 +980,7 @@ static void eye_poll_off(void)
 /* the cursor anchor's state, render thread only (below) */
 static int s_cumX, s_cumY;                 /* the cumulative eye delta posted, world px */
 static int s_ackX, s_ackY;                 /* ...and what the last packet acknowledged  */
+static unsigned s_epochSeen;               /* the cmd_epoch of the last packet seen     */
 
 void tagpu_zoom_frame_end(void)
 {
@@ -983,6 +1000,7 @@ void tagpu_zoom_frame_end(void)
     rec.zoom        = s_zoom;
     rec.live        = s_live ? 1u : 0u;
     rec.eyeoff      = s_eyeOff ? 1u : 0u;
+    rec.epoch       = s_epochSeen;
     rec.cum_dx      = s_cumX;
     rec.cum_dy      = s_cumY;
     rec.drop_follow = (s_cumX != s_ackX || s_cumY != s_ackY) ? 1u : 0u;
@@ -1213,9 +1231,9 @@ LPARAM tagpu_zoom_mouse_lparam(UINT msg, LPARAM lparam)
    game thread applies the difference from what it applied last, at the top of
    its next in-play draw, releasing the follow first when the gesture asked —
    consumed exactly once, accumulated if the game thread is slow, and applied
-   AFTER the engine's own camera writers for that frame and BEFORE the draw
-   reads the eye, so the frame, its fog rebuild and its minimap box all see the
-   commanded camera. Meanwhile this frame is drawn from the PREDICTED eye: the
+   after whichever of the engine's own camera writers ran that frame and
+   BEFORE the draw reads the eye (nothing inside DrawGameScreen stores it), so
+   the frame, its fog rebuild and its minimap box all see the commanded camera. Meanwhile this frame is drawn from the PREDICTED eye: the
    packet's eye plus every delta not yet acknowledged (predict below), so the
    picture moves on the frame of the notch and the next packet, carrying the
    same delta applied, replaces the prediction with the truth — no wobble. The
@@ -1415,14 +1433,32 @@ static void predict(const TAGPU_PACKET* pk)
 {
     int ux, uy, ex, ey, loX, hiX, loY, hiY;
     s_havePred = 0; s_unacked = 0;
-    if (!pk || !pk->in_game) return;
+    if (!pk) return;
+    /* A NEW EPOCH — the level ended on the game thread, which reset what it
+       had applied to zero: the sum posted from here on starts from zero too,
+       and whatever was owed to the old level (a notch in its last frames, a
+       carry) dies with it. The level-end packet carries the new epoch, and so
+       does every packet of the next level, so this is seen at the latest on
+       the new level's first frame — before any record of it could carry a
+       delta the game thread would accept (landing review). */
+    if (pk->cmd_epoch != s_epochSeen) {
+        s_epochSeen = pk->cmd_epoch;
+        s_cumX = s_cumY = 0; s_ackX = s_ackY = 0;
+        s_residX = s_residY = 0.0f;
+    }
+    if (!pk->in_game) return;
     s_ackX = pk->cmd_ack_dx; s_ackY = pk->cmd_ack_dy;
     ux = s_cumX - s_ackX; uy = s_cumY - s_ackY;
     ex = pk->eye[0] + ux; ey = pk->eye[1] + uy;
     if (range_pk(pk, pred_level(), &loX, &hiX, &loY, &hiY))
         clamp_pair(&ex, &ey, loX, hiX, loY, hiY);
     s_predX = ex; s_predY = ey; s_havePred = 1;
-    s_unacked = (ux != 0 || uy != 0);
+    /* "ahead of the packet" is the DRAWN eye differing from the packet's,
+       whatever moved it — an unacknowledged delta, or the range walking the
+       eye home before the game thread has (a zoom-out at a map edge): either
+       way the engine's grid spans the packet's eye and this frame must take
+       the wide one (landing review) */
+    s_unacked = (ex != pk->eye[0] || ey != pk->eye[1]);
 }
 
 /* GetTPosition on the world point under the mouse, clamped to the map — see the

@@ -1788,10 +1788,19 @@ static void draw_layer(const TAGPU_FRAME* f)
        and it is the one s_colValid was decided against. */
     /* THE TRUE VIEWPORT, from this frame's packet (landing 2) — the rect the
        game thread published, the same one the world composite keyed on this
-       frame. Out of a game there is no viewport: an empty rect, so nothing is
-       inside it and the key test below never fires (uVpKey is -1 then too). */
-    if (f->packet && f->packet->in_game) {
-        L = f->packet->vp[0]; T = f->packet->vp[1]; W = f->packet->vp[2]; H = f->packet->vp[3];
+       frame. On a frame with no in-game packet the LAST one seen stands: the
+       level's tail (the out-of-game packet, a refused packet) can still carry
+       the key fill in the engine's surface while terrown's fill flag is up,
+       and an empty rect there would show the key colour raw for that frame
+       (landing review); between levels the old level's rect is the right one
+       and the next level's first packet replaces it. */
+    {
+        static int s_lastVp[4];
+        if (f->packet && f->packet->in_game) {
+            s_lastVp[0] = f->packet->vp[0]; s_lastVp[1] = f->packet->vp[1];
+            s_lastVp[2] = f->packet->vp[2]; s_lastVp[3] = f->packet->vp[3];
+        }
+        L = s_lastVp[0]; T = s_lastVp[1]; W = s_lastVp[2]; H = s_lastVp[3];
     }
     key = tagpu_terr_key();
     glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());

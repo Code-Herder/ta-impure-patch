@@ -405,6 +405,9 @@ static const char* cmd_valid(const void* rec)
     if (c->used_bytes != sizeof(TAGPU_CMD)) return "cmd size";
     if (!(c->zoom >= 0.05f && c->zoom <= 16.0f)) return "cmd zoom";
     if (c->live > 1u || c->eyeoff > 1u || c->hold_on > 1u || c->drop_follow > 1u) return "cmd flags";
+    /* the hold is clamped at its source (tagpu_input.c) so that a wild number
+       in the file cannot refuse the whole record and with it every other
+       command; this bound is the backstop, not the gate */
     if (c->hold_x < -0x1000000 || c->hold_x > 0x1000000 ||
         c->hold_y < -0x1000000 || c->hold_y > 0x1000000) return "cmd hold";
     return NULL;
@@ -561,10 +564,11 @@ static void heartbeat(PKX* m, unsigned fc)
        worst this read can get. */
     {
         int k = _snprintf(b + n, sizeof b - (size_t)n,
-                          " | cmd: post=%u take=%u new=%u overrun=%u viol=%u nocmd=%u seq=%u ack=%u unacked=(%d,%d) z=%.3f live=%u hold=%u",
+                          " | cmd: post=%u take=%u new=%u overrun=%u viol=%u nocmd=%u seq=%u ack=%u unacked=(%d,%d) cum=(%d,%d) epoch=%u/%u z=%.3f live=%u hold=%u",
                           s_cmd.cPub, s_cmd.cAcq, s_cmd.cTaken, s_cmd.cOverrun, s_cmd.cViol, s_cmd.cNoPkt,
                           s_lastPosted.cmd_seq, p ? p->cmd_ack_seq : 0u,
                           p ? s_lastPosted.cum_dx - p->cmd_ack_dx : 0, p ? s_lastPosted.cum_dy - p->cmd_ack_dy : 0,
+                          s_lastPosted.cum_dx, s_lastPosted.cum_dy, s_lastPosted.epoch, p ? p->cmd_epoch : 0u,
                           s_lastPosted.zoom, s_lastPosted.live, s_lastPosted.hold_on);
         if (k < 0 || n + k >= (int)sizeof b) n = (int)sizeof b - 1; else n += k;
     }

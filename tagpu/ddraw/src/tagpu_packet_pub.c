@@ -111,6 +111,12 @@ static void*    s_retStack[RET_DEPTH];     /* hijacked returns, LIFO            
 static int      s_retDepth;
 /* counters: written on the game thread, read by the heartbeat */
 static volatile unsigned s_cDrawsAll, s_cDraws, s_cForeign, s_cDeep;
+/* the apply's cost: 2 us buckets to 512 us, plus an overflow bucket, written
+   on the game thread and read by the heartbeat on the render thread */
+#define APPLY_HIST_N 256
+static volatile unsigned s_applyHist[APPLY_HIST_N + 1];
+static unsigned          s_applyPrev[APPLY_HIST_N + 1];   /* render thread only */
+static LARGE_INTEGER     s_freq;
 /* the tick's start */
 static unsigned       s_lastTick;
 static int            s_haveTick;
@@ -297,7 +303,7 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     p->level_gen   = tagpu_reclaim_level_gen();
     /* what the command apply in `before` had done by this draw: the render
        thread reconciles its prediction against these */
-    tagpu_zoom_applied(&p->cmd_ack_seq, &p->cmd_ack_dx, &p->cmd_ack_dy, &p->zoom_applied);
+    tagpu_zoom_applied(&p->cmd_ack_seq, &p->cmd_ack_dx, &p->cmd_ack_dy, &p->zoom_applied, &p->cmd_epoch);
     p->gui_flips   = tagpu_gui_flips();
     p->draw_seq    = s_cDraws;
     p->eye[0]       = RD32(ta, OFF_EYE_X);      p->eye[1]       = RD32(ta, OFF_EYE_Y);
@@ -367,7 +373,7 @@ static unsigned fill_level_end(TAGPU_PACKET* p, void* ctx)
     p->load_flags = (unsigned short)load_flags();
     p->text_fg    = -1;
     p->gamma      = 1.0f;
-    tagpu_zoom_applied(&p->cmd_ack_seq, &p->cmd_ack_dx, &p->cmd_ack_dy, &p->zoom_applied);
+    tagpu_zoom_applied(&p->cmd_ack_seq, &p->cmd_ack_dx, &p->cmd_ack_dy, &p->zoom_applied, &p->cmd_epoch);
     fill_pal(p, ta_main());
     return sizeof(TAGPU_PACKET);
 }
@@ -418,23 +424,36 @@ static int __cdecl before_draw(void* entry_esp)
     if (s_countOnly) return 0;
     if (s_retDepth >= RET_DEPTH) { s_cDeep++; return 0; }
     s_retStack[s_retDepth++] = (void*)(size_t)ret;
-    /* THE COMMANDS: post-tick, pre-draw, on the thread that owns every word
-       they write. The stepper 0x41CA10 and the scroll poll 0x41CE90 have run
-       for this frame (both are called from the frame callback before
-       0x4969CD), so a delta applied here composes with the engine's own
-       camera move and the draw that follows reads the commanded eye; its fog
-       rebuild and its minimap box see it too. The latest record is taken and
-       every part of it applied by the module that owns the field; a record
-       already applied re-applies only its levels. `done` on every path, like
-       the frame packet's frame_end. */
+    /* THE COMMANDS, on the thread that owns every word they write. This
+       runs after whichever of the frame callback's own camera writers ran
+       this frame — the stepper 0x41CA10 (0x495599 inside 0x495490, called at
+       0x49680C/0x49693E) and the scroll poll 0x41CE90 (0x496976) both precede
+       the draw call at 0x4969CD, and both can be skipped: the stepper when the
+       sim is paused, both under an in-game GUI screen — and before the draw's
+       first read of the eye at 0x468DD9; no store to the eye exists inside
+       DrawGameScreen (0x468CF0..0x46A200), so a delta applied here composes
+       with the engine's own camera move and the draw that follows reads the
+       commanded eye; its fog rebuild and its minimap box see it too. The
+       latest record is taken and every part of it applied by the module that
+       owns the field; a record already applied re-applies only its levels.
+       `done` on every path, like the frame packet's frame_end. Timed with the
+       performance counter like the publish: the heartbeat's `applyus`. */
     {
         char* ta = (char*)ta_main();
-        const TAGPU_CMD* c = tagpu_cmd_take();
+        const TAGPU_CMD* c;
+        LARGE_INTEGER t0, t1;
+        unsigned us;
+        QueryPerformanceCounter(&t0);
+        c = tagpu_cmd_take();
         if (ta) {
             tagpu_zoom_apply(ta, c);
             tagpu_vpwide_apply(ta, c);
         }
         tagpu_cmd_done();
+        QueryPerformanceCounter(&t1);
+        us = (s_freq.QuadPart && t1.QuadPart >= t0.QuadPart)
+             ? (unsigned)(((t1.QuadPart - t0.QuadPart) * 1000000LL) / s_freq.QuadPart) / 2u : 0u;
+        s_applyHist[us < APPLY_HIST_N ? us : APPLY_HIST_N]++;
     }
     return 1;
 }
@@ -499,14 +518,24 @@ static void extra(char* buf, unsigned cap, double secs)
 {
     static unsigned lastAll, lastIn;
     unsigned all = s_cDrawsAll, in = s_cDraws, vpApplies = 0, vpWh = 0;
+    unsigned i, total = 0, acc = 0, p50 = 0, p99 = 0;
     tagpu_vpwide_counters(&vpApplies, &vpWh);     /* two game-thread dwords, not engine memory */
-    _snprintf(buf, cap, " | draws=%u inplay=%u draws/s=%.0f inplay/s=%.0f foreign=%u deep=%u fontcopies=%u/%u levelend=%s vpapply=%u vpwh=%u",
+    /* the apply-time histogram over the interval, 2 us per bucket, like the publish's */
+    for (i = 0; i <= APPLY_HIST_N; i++) { unsigned h = s_applyHist[i]; total += h - s_applyPrev[i]; }
+    for (i = 0; i <= APPLY_HIST_N; i++) {
+        unsigned h = s_applyHist[i], d = h - s_applyPrev[i];
+        s_applyPrev[i] = h;
+        acc += d;
+        if (!p50 && total && acc * 2u >= total) p50 = i * 2u;
+        if (!p99 && total && acc * 100u >= total * 99u) p99 = i * 2u;
+    }
+    _snprintf(buf, cap, " | draws=%u inplay=%u draws/s=%.0f inplay/s=%.0f foreign=%u deep=%u fontcopies=%u/%u levelend=%s vpapply=%u vpwh=%u applyus p50=%u p99=%s%u",
               all, in,
               secs > 0.0 ? (double)(all - lastAll) / secs : 0.0,
               secs > 0.0 ? (double)(in - lastIn) / secs : 0.0,
               s_cForeign, s_cDeep, s_cFontCopies, s_cFontRefused,
               s_levelEndBy == 1 ? "reclaim" : s_levelEndBy == 2 ? "own" : "none",
-              vpApplies, vpWh);
+              vpApplies, vpWh, p50, p99 >= APPLY_HIST_N * 2u ? ">" : "", p99);
     if (cap) buf[cap - 1] = 0;
     lastAll = all; lastIn = in;
 }
@@ -553,6 +582,7 @@ void tagpu_packet_pub_init(void)
     char b[400];
     int drawOk, loaderOk;
     s_gameTid = GetCurrentThreadId();       /* DllMain runs on the game loop's thread */
+    QueryPerformanceFrequency(&s_freq);
     s_countOnly = !tagpu_packet_armed();
     s_stress = GetFileAttributesA("tagpu_packet.stress") != INVALID_FILE_ATTRIBUTES;
     if (!tagpu_detour_bytes_ok(VA_DRAWGAMESCREEN, DRAW_STOLEN, sizeof DRAW_STOLEN)) {
@@ -569,7 +599,10 @@ void tagpu_packet_pub_init(void)
         else {
             s_countOnly = 1;
             plog("packet: publisher COUNT-ONLY — no level-end provider: tagpu_reclaim is not armed and the "
-                 "teardown 0x491B60 could not be observed, so a level's last packet would outlive the level");
+                 "teardown 0x491B60 could not be observed, so a level's last packet would outlive the level. "
+                 "Nothing is published or applied: NO WORLD PASS DRAWS (every pass reads the packet's view), "
+                 "no command is applied (the engine keeps its own camera range, viewport rect and scroll rate; "
+                 "the wheel and tagpu_eye.txt do nothing), and every string through tagpu_text_place is blank");
         }
     }
     drawOk = tagpu_detour_observe(VA_DRAWGAMESCREEN, DRAW_STOLEN, sizeof DRAW_STOLEN,
@@ -589,7 +622,7 @@ void tagpu_packet_pub_init(void)
               s_countOnly ? "COUNT-ONLY" : "ARMED",
               s_levelEndBy == 1 ? "tagpu_reclaim's teardown post hook" : s_levelEndBy == 2 ? "our own observer on the teardown 0x491B60 (reclaim is not armed; the level generation stays 0)" : "nobody",
               loaderOk, (unsigned)s_gameTid,
-              s_countOnly ? " — nothing is published or taken: every string through tagpu_text_place draws nothing (the group digits, the ShowRanges labels, the FPS readout)" : "");
+              s_countOnly ? " — nothing is published, taken or applied: no world pass draws, no command is applied (the engine's own camera range, rect and scroll rate), every string through tagpu_text_place draws nothing" : "");
     b[sizeof b - 1] = 0;
     plog(b);
 }

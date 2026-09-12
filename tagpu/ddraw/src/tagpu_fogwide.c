@@ -548,8 +548,9 @@ static void fogw_check(char* ta, const FOGW_SRC* s)
 /* ONE SAMPLE OF THE VIEWPORT PER TICK, taken here and passed to fogw_window.
    The two used to sample tagpu_vpwide_true_rect separately, and that function
    is not guaranteed to answer the same twice: when its derived path is
-   unavailable it falls back to the live OFF_VIEW_W/H fields, which the render
-   thread writes. Two different answers make the capacity and the window
+   unavailable it falls back to the live OFF_VIEW_W/H fields (which nothing of
+   ours writes since the frame packet's landing 2; before it the render thread
+   repaired them). Two different answers make the capacity and the window
    disagree, and then fogw_window's clamp — documented as inert — is load
    bearing instead. One sample removes the question. */
 static int fogw_view(char* ta, int* vw, int* vh)

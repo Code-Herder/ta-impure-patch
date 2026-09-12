@@ -643,9 +643,10 @@ static void gather_cursor(const TAGPU_FXVIEW* v)
         if (mode != CUR_BUILD) return;
         mx = *(const int*)(ta + OFF_MOUSE_X);
         my = *(const int*)(ta + OFF_MOUSE_Y);
-        /* IsPositionInRect 0x4B6720 — inclusive on all four edges. Read the
-           FIELD, not tagpu_vpwide_true_rect: while zoomed out that field is
-           deliberately wider, and it is exactly that width which lets a
+        /* IsPositionInRect 0x4B6720 — inclusive on all four edges. The rect
+           the engine can NAME (the packet's vp_addr, the field as the game
+           thread left it), not the true viewport: while zoomed out that rect
+           is deliberately wider, and it is exactly that width which lets a
            placement in the outer ring pass the gate at all. */
         if (mx < vp[0] || mx > vp[2] || my < vp[1] || my > vp[3]) return;
     }

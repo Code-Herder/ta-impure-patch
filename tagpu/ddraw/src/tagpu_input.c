@@ -347,14 +347,27 @@ static void do_eye(const TAGPU_FRAME* f)
     HANDLE h = CreateFileA("tagpu_eye.txt", GENERIC_READ,
                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) return;
+    /* THE HOLD ENDS ON THE FIRST FRAME THE FILE IS GONE, not on the next
+       15-frame poll: the hold is a LEVEL the game thread re-applies on every
+       in-play draw, so a stale "valid" here would pin the camera — and rebuild
+       the fog grid per draw — for up to 15 render frames after the file was
+       deleted (landing review). Every early exit below drops the level. */
+    if (h == INVALID_HANDLE_VALUE) { s_holdValid = 0; return; }
     if (!ReadFile(h, buf, sizeof buf - 1, &n, NULL)) n = 0;
     CloseHandle(h);
-    if (n == 0) return;
+    if (n == 0) { s_holdValid = 0; return; }
     buf[n] = 0;
 
     int x = 0, y = 0;
-    if (sscanf(buf, "%d %d", &x, &y) != 2) return;
+    if (sscanf(buf, "%d %d", &x, &y) != 2) { s_holdValid = 0; return; }
+    /* BOUNDED AT THE SOURCE. The record's validator refuses a hold outside
+       +-2^24 world px, and a refused record disables the WHOLE command
+       channel for as long as it is reposted — one absurd number in the file
+       would silently turn off the camera range, the widened rect and the
+       scroll rate (landing review). The game thread clamps the point into the
+       camera's range anyway, so clamping here loses nothing. */
+    if (x < -0x1000000) x = -0x1000000; else if (x > 0x1000000) x = 0x1000000;
+    if (y < -0x1000000) y = -0x1000000; else if (y > 0x1000000) y = 0x1000000;
     s_holdX = x; s_holdY = y; s_holdValid = 1;
     /* expose eye wars: if the engine moved the eye away from the hold target,
        say so — read off this frame's packet, which is the eye the last in-play

@@ -115,6 +115,13 @@ typedef struct TAGPU_PACKET {
                                    index; -1 = never seen                       */
     float    zoom_applied;      /* the level the game thread applied before this
                                    draw (1.0 = none): a diagnostic, not a source */
+    uint32_t cmd_epoch;         /* the command apply's epoch: bumped at every
+                                   level end, with the applied cumulative delta
+                                   reset to zero. A record from an older epoch
+                                   carries no delta; the render thread resets
+                                   its own sum when it sees a new one, so a
+                                   notch in a level's last frames can never be
+                                   applied to the next level's camera         */
     uint32_t pal_ok;            /* 1 = pal[] and gamma below were copied        */
     float    gamma;             /* the engine's gamma factor, bounded 0.05..8.0 */
     uint8_t  pal[1024];         /* the engine's own palette table, 256 x RGBA,
@@ -149,9 +156,12 @@ typedef struct TAGPU_CMD {
     uint32_t cap_bytes;
     uint32_t used_bytes;
     uint32_t cmd_seq;           /* the render thread's post counter, monotone  */
+    uint32_t epoch;             /* the cmd_epoch of the last packet the render
+                                   thread saw: the game thread applies the delta
+                                   below only when it matches its own epoch    */
     int32_t  cum_dx, cum_dy;    /* the cursor anchor's cumulative eye delta,
-                                   world px, since attach — the game thread
-                                   applies `cum - applied` and clamps          */
+                                   world px, since the epoch began — the game
+                                   thread applies `cum - applied` and clamps   */
     float    zoom;              /* the zoom level in force this frame          */
     uint32_t live;              /* a zoomed world is on screen: the level above
                                    is what the picture is drawn at; 0 = the

@@ -526,8 +526,8 @@ the eye is eased toward.
 | `0x41CB5F` | Inside the stepper, the eye≠target branch: `or word [ecx+0x142F1], di` with `di = 2` — the "camera moved" bit every engine eye writer sets and ours deliberately do not (row below). |
 | `0x41CE90`…`0x41D060` | The scroll poll — see the table below. One caller, `0x496976`. *[CORRECTED 2026-09-04: this said `0x41CF10`, which is not an instruction boundary — `0x41CF0E` is `lea ebp,[esi+0x64]`.]* |
 | `0x466B70` | Fills a RECT with the minimap's view box from the eye and the view size in map cells (`main+0x1423B`/`+0x1423F`). Pure computation; its only two call sites are inside `0x41C3C0`. |
-| **the eye writers that copy the eye into the target** [VERIFIED by disassembly 2026-09-12] | Three paths set the eye, call the clamp, and then copy the clamped eye into the scroll target themselves: the `call 0x41C3C0` at `0x41C59F` (inside `SetCamera 0x41C4C0`; the eye-writing arm begins at `0x41C574`, `mov ecx,ds:0x511de8`), at `0x41CDE1`, and at `0x41D054` (the scroll poll, whose eye store is `0x41D037`, `mov [eax+0x1431f],edi`); the copies start right after each call, at `0x41C5A4`, `0x41CDE6` and `0x41D05E`, each with a fresh `mov eax,ds:0x511de8` (the third's next instruction, `mov ecx,[eax+0x1431f]`, is the read of the eye it copies). This is why `zoom_eye_clamp` may leave the target alone: every caller that meant to move the camera writes it afterwards. *[The zoom module's comments cited the second path as `0x41CDB0` until 2026-09-12; that is not an instruction boundary — `0x41CDAF` is `and edx,3` — so the path is named by its clamp call now.]* |
-| **the sites `tagpu_zoom.c` patches, besides the clamp** [VERIFIED by disassembly 2026-09-12] | `0x41C3C5` is `push esi`, the first instruction after the five stolen bytes of `0x41C3C0` (`a1 e8 1d 51 00`), so the `leaf_call` detour's stolen tail ends on a boundary. `0x430FAE` is `call 0x4B6A50` (`SaveSetting(section, name, dword)`), the one site that persists `ScrollSpeed` — the two pushes before it, `0x430FA4` and `0x430FA9`, are the section and value-name strings at `0x5046D4` and `0x5032E8`; redirected so the player's own value reaches the registry and never the scaled one. `0x498EF9` is `call 0x484B50` (`GetTPosition`) inside `0x498DA0`, after `push eax; push esi; push edi` at `0x498EF6..0x498EF8`; redirected so the world point is clamped to the map before the chain that dereferences its plot. |
+| **the eye writers that copy the eye into the target** [VERIFIED by disassembly 2026-09-12] | Three paths set the eye, call the clamp, and then copy the clamped eye into the scroll target themselves: the `call 0x41C3C0` at `0x41C59F` (inside `SetCamera 0x41C4C0`; the eye-writing arm begins at `0x41C574`, `mov ecx,ds:0x511de8`), at `0x41CDE1`, and at `0x41D054` (the scroll poll, whose eye store is `0x41D037`, `mov [eax+0x1431f],edi`); the copies start right after each call, at `0x41C5A4`, `0x41CDE6` and `0x41D059`, each with a fresh `mov eax,ds:0x511de8`; the third's next instructions, `0x41D05E mov ecx,[eax+0x1431f]` and `0x41D064 mov [eax+0x14327],ecx`, are the read of the eye and the store into the target (the zoom module's comment cites the path by that read, `0x41D05E`). This is why `zoom_eye_clamp` may leave the target alone: every caller that meant to move the camera writes it afterwards. *[The zoom module's comments cited the second path as `0x41CDB0` until 2026-09-12; that is not an instruction boundary — `0x41CDAF` is `and edx,3` — so the path is named by its clamp call now.]* |
+| **the sites `tagpu_zoom.c` patches, besides the clamp** [VERIFIED by disassembly 2026-09-12] | `0x41C3C5` is `push esi`, the first instruction after the five stolen bytes of `0x41C3C0` (`a1 e8 1d 51 00`), so the `leaf_call` detour's stolen tail ends on a boundary. `0x430FAE` is `call 0x4B6A50` (`SaveSetting(section, name, dword)`), the one site that persists `ScrollSpeed` — the two pushes before it are the arguments in stdcall order: `0x430FA4` pushes `0x5046D4` = `"scrollspeed"` (the value name, the second argument) and `0x430FA9` pushes `0x5032E8` = `"Total Annihilation"` (the section, the first); redirected so the player's own value reaches the registry and never the scaled one. *[The first draft of this row had the two strings the other way round; corrected by the landing review against the `.rdata` bytes.]* `0x498EF9` is `call 0x484B50` (`GetTPosition`) inside `0x498DA0`, after `push eax; push esi; push edi` at `0x498EF6..0x498EF8`; redirected so the world point is clamped to the map before the chain that dereferences its plot. |
 
 **The scroll poll.** The position it tests comes from `[obj+0x196]` — the mouse object's own
 record, fetched with `0x4C2340` at `0x41CEC5` — not from a fresh poll. *[CORRECTED 2026-09-04:
@@ -2576,10 +2576,27 @@ there, not the return address the call pushed, so the gate holds with it install
 
 **The commands, applied in `before` [landing 2, 2026-09-12].** The same observer's `before`, on
 the same in-play gate, is where every engine word the zoom used to write from the render thread
-is written now, on the game thread — post-tick and post-scroll-poll (the stepper `0x41CA10` is
-called from `0x495599` and the scroll poll `0x41CE90` from `0x496976`, both before the draw call
-at `0x4969CD`) and pre-draw, so the frame the engine is about to draw, its fog rebuild at
-`0x4848E0`/`0x469D8E` and its minimap box all see the commanded camera. The render thread posts
+is written now, on the game thread. **The ordering it rests on, verified by disassembly of the
+frame callback `0x496790`:** the stepper `0x41CA10` is called at `0x495599` inside `0x495490`,
+which the callback calls at `0x49680C` and `0x49693E`, and the scroll poll `0x41CE90` at
+`0x496976` — every one of those call sites precedes the draw call at `0x4969CD`, and the
+HotUnits cull `0x48BAE0` at `0x49697B` does too. None of them is guaranteed to RUN on a given
+frame: `0x496918` (`test [main+0x37EBE],1`, set at `0x45D002` when an in-game GUI screen is
+pushed) and `0x49696F` jump straight to `0x49697B`, skipping both the stepper's function and
+the poll, and `0x4968B0`/`0x496926`/`0x49693A` skip `0x495490` when the sim is paused or
+`[main+0x38A3B]` is 0. So the property the apply actually needs is the other one: **no
+instruction in `DrawGameScreen` `0x468CF0..0x46A200` stores to the eye** — all nine references
+to `main+0x1431F`/`+0x14323` inside it are loads, the first at `0x468DD9`, ~0xE9 bytes in, past
+only `0x4C69A0`, `0x4C2470`, `0x4C6B10`, `0x483FA0` and `0x418310` — so nothing moves the camera
+between the apply at the function's entry and the draw's reads, whichever of the engine's own
+writers ran that frame, and the frame, its fog rebuild at `0x4848E0`/`0x469D8E` and its minimap
+box all see the commanded camera. *[The first draft of this paragraph said the stepper and the
+poll "have run for this frame"; the landing review found the skip paths.]* One consequence,
+named: the HotUnits cull at `0x49697B` runs before the apply, so on the one draw that applies a
+wheel delta the engine's HotUnits list was culled for the pre-delta eye. Everything that list
+feeds — the engine's own unit, bar and selection draws — is replaced by passes that gather from
+the unit array or the packet, so the skew has no reader of ours; it is the same one-draw skew an
+edge scroll applied after the cull would have. The render thread posts
 one record per present through a second instance of the packet's own mailbox (latest wins; the
 anchor's delta is a cumulative sum, so an overwritten record loses nothing), and
 `tagpu_zoom_apply` / `tagpu_vpwide_apply` take the latest one. What they write, and where:

@@ -190,32 +190,41 @@ float tagpu_zoom_min(void);
 /* ---- game thread: the apply ------------------------------------------- */
 
 /* GAME THREAD, at the top of every in-play draw, from the frame packet
-   publisher's `before` (post-tick, pre-draw): apply the latest command record
-   `c` (NULL until the first post) to the words this module is responsible
-   for, on the thread that owns them. In order: the level it carries becomes
+   publisher's `before`: apply the latest command record `c` (NULL until the
+   first post) to the words this module is responsible for, on the thread
+   that owns them. The apply runs after whichever of the frame callback's own
+   camera writers ran this frame (the stepper 0x41CA10 and the scroll poll
+   0x41CE90 are both called before the draw call at 0x4969CD, and both can
+   be skipped — the stepper when the sim is paused, both under an in-game
+   GUI screen) and before the draw's first read of the eye at 0x468DD9; no
+   store to the eye exists inside DrawGameScreen, so nothing moves the camera
+   between the apply and the read. In order: the level it carries becomes
    the level every game-thread reader here uses (the clamp's flag, the
-   minimap rect's scale, the scroll rate); a NEW record's eye delta is
-   applied — the follow released first when the record asks, then the eye
-   and its scroll target stepped together and clamped into the camera range;
-   the hold, when on, is clamped into the range and written when it differs;
-   the range itself is re-applied to the eye and the target every draw, which
-   is what walks an eye home after a zoom-out at a map edge; a camera that
-   moved gets the minimap's view box recomputed and the screen fog grid
-   invalidated — bit 3 of main+0x14281 cleared, exactly as every engine eye
-   writer clears it, which is safe HERE and nowhere else; and ScrollSpeed is
-   driven at base/z. `ta` is validated by the caller. */
+   minimap rect's scale, the scroll rate); a NEW record of the current epoch
+   has its eye delta applied — the follow released first when the record
+   asks, then the eye and its scroll target stepped together and clamped into
+   the camera range; the hold, when on, is clamped into the range and written
+   when it differs; the range itself is re-applied to the eye and the target
+   every draw, which is what walks an eye home after a zoom-out at a map edge;
+   a camera that moved gets the minimap's view box recomputed and the screen
+   fog grid invalidated — bit 3 of main+0x14281 cleared, exactly as every
+   engine eye writer clears it, which is safe HERE and nowhere else; and
+   ScrollSpeed is driven at base/z. `ta` is validated by the caller. */
 void  tagpu_zoom_apply(char* ta, const struct TAGPU_CMD* c);
 
 /* GAME THREAD, from the level teardown (the packet publisher's level end):
    the level's camera state handed back — the range flag cleared, ScrollSpeed
    restored to the player's own value — before the shell draws; nothing applies
-   a command again until the next level's first in-play draw. */
+   a command again until the next level's first in-play draw. The command
+   EPOCH is bumped here and the applied delta reset, so a record posted for
+   the old level (a notch in its last frames) carries no delta into the new
+   one; the render thread resets its own sum when a packet shows the new epoch. */
 void  tagpu_zoom_level_end(char* ta);
 
 /* GAME THREAD: what the apply has done so far, for the packet's
    acknowledgement fields — the last record's cmd_seq, the cumulative delta
-   applied, and the level in force. */
-void  tagpu_zoom_applied(unsigned* seq, int* cum_dx, int* cum_dy, float* level);
+   applied, the level in force, and the epoch. */
+void  tagpu_zoom_applied(unsigned* seq, int* cum_dx, int* cum_dy, float* level, unsigned* epoch);
 
 /* ---- the input path ---------------------------------------------------- */
 

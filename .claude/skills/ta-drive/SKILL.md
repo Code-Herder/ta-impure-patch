@@ -1032,9 +1032,11 @@ instead: `tacli arm <i> classicpp.on=off`.
   or across a level end (the forced out-of-game packet); `grow`/`trunc` say a slot grew past its
   first fill (once per slot under `stress`, never in play so far). In the `cmd:` segment `post`
   is one per render frame, `take` one per in-play draw, `new` the records that were actually new,
-  `overrun` the posts nobody took (every one at the shell, a handful in play — not a fault), and
-  `unacked` must read `(0,0)` whenever no wheel gesture is in flight: it is how far the eye the
-  render thread is drawing runs ahead of the last packet's. `tps` is `GameTime` per wall
+  `overrun` the posts nobody took (every one at the shell, a handful in play — not a fault),
+  `unacked` must read `(0,0)` whenever no wheel gesture is in flight (how far the eye the render
+  thread is drawing runs ahead of the last packet's), `cum=(x,y)` is the anchor's sum since the
+  level began (it resets to (0,0) with `epoch=` at every level end), and `applyus p50= p99=`
+  at the very end is the cost of the whole command apply per in-play draw (2 µs on the landing). `tps` is `GameTime` per wall
   second — **3 × `speed`**, 60 at the GameSpeed 20 a scenario lands on — and `pubus` the publish
   cost in µs. Levers, read at attach: `packet.check` (CRC-32 of every record, verified per take),
   `packet.stress` (publish on every draw with a garbage pre-fill, one-page slots that must grow,
@@ -1312,6 +1314,13 @@ tools/tacli keys  <i> pmove:576,384 wheel:-6      # the same thing as raw tokens
 - **Aim it.** `--at` is a `pmove:` first, and without it the notches land wherever the
   injected pointer was left, and if that is the side panel or a menu the notches do
   nothing at all.
+- **An engine dialog over the world at zoom ≠ 1 does not take `ui click`.** The exit menu, the
+  surrender confirm and any other stock screen drawn inside the world viewport is hit-tested by
+  the engine in screen space, but a click there goes through the zoom transform like a world
+  click (only our own render-options panel is exempt), so at 0.683 `ui click MAINMENU` lands
+  ~20 px off and is "delivered (no GUI-visible change)". Use `ui press <gadget>` (the gadget's
+  own quickkey) or wheel back to 1.0 first. Found 2026-09-12 driving a level cycle after a
+  wheel; a pre-existing limit of the transform, not of the packet.
 - **Deleting `tagpu_zoom.txt` hands over, it does not reset.** While the file is there the
   wheel is pinned to it, so removing it leaves the view exactly where the file had it and
   the wheel continues from there. Wheel notches sent while the file is present are dropped.

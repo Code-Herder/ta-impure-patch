@@ -2211,7 +2211,7 @@ reach it only through the packet.
 
 | site | what we do there | thread |
 |---|---|---|
-| `DrawGameScreen 0x468CF0`, the observer's **`before`** (the in-play gate `0x4969D2`) | **the command apply**: take the latest record the render thread posted (a second instance of the packet's mailbox, latest wins, no waiting either side) and write every engine word it names, on the thread that owns them, post-tick and post-scroll-poll, pre-draw. `tagpu_zoom_apply`: the level → the clamp's flag, the minimap rect's scale, `ScrollSpeed` at base/z; a NEW record's anchor delta (`cum − applied`, consumed exactly once) → the follow released first when the gesture asked (`0x41C390`'s three stores), then eye and scroll target stepped together; the `tagpu_eye.txt` hold clamped into the camera range and written when it differs; the range re-applied while a zoomed world is live (the walk home after a zoom-out); any eye moved → the minimap box through `0x466B70` and **bit 3 of `main+0x14281` cleared**, as `0x41CB6B` does. `tagpu_vpwide_apply`: the rect widened to the transform's range at the commanded level, or restored; W/H never written, a disagreement counted. Under `tagpu_packet.off` nothing is applied: the engine keeps its own range, rect and rate ([engine map](exe-reverse-engineering.html), "The commands, applied in `before`") | game |
+| `DrawGameScreen 0x468CF0`, the observer's **`before`** (the in-play gate `0x4969D2`) | **the command apply**: take the latest record the render thread posted (a second instance of the packet's mailbox, latest wins, no waiting either side) and write every engine word it names, on the thread that owns them — after whichever of the frame callback's own camera writers ran this frame (the stepper and the scroll poll both precede the draw call, and both can be skipped: the stepper when paused, both under an in-game GUI screen) and before the draw's first read of the eye, which nothing inside `DrawGameScreen` stores ([engine map](exe-reverse-engineering.html), "The commands, applied in `before`"). `tagpu_zoom_apply`: the level → the clamp's flag, the minimap rect's scale, `ScrollSpeed` at base/z; a NEW record's anchor delta (`cum − applied`, consumed exactly once) → the follow released first when the gesture asked (`0x41C390`'s three stores), then eye and scroll target stepped together; the `tagpu_eye.txt` hold clamped into the camera range and written when it differs; the range re-applied while a zoomed world is live (the walk home after a zoom-out); any eye moved → the minimap box through `0x466B70` and **bit 3 of `main+0x14281` cleared**, as `0x41CB6B` does. `tagpu_vpwide_apply`: the rect widened to the transform's range at the commanded level, or restored; W/H never written, a disagreement counted. Under `tagpu_packet.off` nothing is applied: the engine keeps its own range, rect and rate ([engine map](exe-reverse-engineering.html), "The commands, applied in `before`") | game |
 | the observer's **`after`** | the packet grew: `vp_addr` (the rect the engine can name, `+0x37E27..`), `pal` (1 KB, `main+0x143A7`), `gamma` (`[0x51FBD0]+0x614`, bounded), `cmd_ack_seq`/`cmd_ack_dx`/`cmd_ack_dy` (what the apply had done by this draw), `zoom_applied` | game |
 | the level teardown (the packet's level-end provider) | `tagpu_zoom_level_end` + `tagpu_vpwide_level_end` before the out-of-game packet: the range flag cleared, `ScrollSpeed` restored to the base, the true rect restored — the shell inherits nothing | game |
 | `tagpu_overlay.c`, once per frame before any pass | `tagpu_zoom_read_lever(packet)`: the levers and the wheel's ease as before; the cursor anchor's step is pre-clamped against the same range computed from the packet's copy of the map size and the true viewport and added to a cumulative sum; the **predicted eye** = the packet's eye + the sum the packet has not acknowledged, clamped — what the native pass, the scaffold and every gather draw from (`tagpu_zoom_predicted_eye`). No packet, or an out-of-game one, is no world drawn | render |
@@ -2242,10 +2242,12 @@ reads; `tagpu_input.c`'s engine reads and writes; `TAGPU_FXVIEW.ta`. The allow-l
 
 **Read it in `tagpu.log`.** The `packet:` heartbeat gained `addr=(L,T,R,B) z=<applied> pal=1
 gamma=` in the packet segment and a `cmd:` segment: `cmd: post= take= new= overrun= viol=
-nocmd= seq= ack= unacked=(dx,dy) z= live= hold=` — `post` per render frame, `take` per in-play
-draw, `new` the records actually new, `overrun` the posts nobody took (all of the shell's, a
-handful in play), `viol` must stay 0, `unacked` (0,0) whenever no gesture is in flight — and
-`vpapply= vpwh=` at the end (`vpwh` must stay 0). The `.show` row reads `PK<seq> T<tick>
+nocmd= seq= ack= unacked=(dx,dy) cum=(x,y) epoch=<seen>/<packet's> z= live= hold=` — `post` per
+render frame, `take` per in-play draw, `new` the records actually new, `overrun` the posts nobody
+took (all of the shell's, a handful in play), `viol` must stay 0, `unacked` (0,0) whenever no
+gesture is in flight, `cum` the sum posted since the epoch began (it reads (0,0) again after a level
+end) — and `vpapply= vpwh= applyus p50= p99=` at the end (`vpwh` must stay 0; `applyus` is the
+whole apply, both modules, timed with the performance counter like the publish). The `.show` row reads `PK<seq> T<tick>
 E<x>,<y> A<ack> D<dx>,<dy>`.
 
 **The gates, measured 2026-09-12 on the reference setup, 1920×1080, `--maxfps 0`, the play
@@ -2260,9 +2262,19 @@ defaults, this DLL against the one built from landing 1's tip (`72772cf`):**
 - *The hover oracle*: the pointer parked on ARMPW unit 1 (screen 600,188), `main+0x2CBA` reads
   `0xFFFF0001` at 1×, after +6 (1.772), after +9 (2.358) and after −9 back; the centre-anchored
   control puts unit 53 there.
-- *The follow release* (second level, the commander followed with Ctrl+C, the game paused at
+- *The follow release*, measured twice. Paused (second level, the commander followed with Ctrl+C,
   tick 0): −4 notches at (900,600) moved the eye by exactly **(58,−28)** and zeroed
   `main+0x142F3`, with the release logged once; +4 at the centre moved nothing and left it set.
+  And **with the sim running** (`one-unit`, tick advancing 60/s, after the review pointed out
+  that a paused game never runs the stepper the claim is about): Ctrl+C eased the camera onto
+  the commander at (705,1047); −4 at (900,600) moved it by exactly **(58,−28)** to (763,1019),
+  zeroed the slot, and **three seconds and 750 ticks later the eye was still (763,1019)** —
+  the stepper found no follow to ease it back to.
+- *The apply's cost*: `applyus p50=2 p99=2` on every heartbeat of every run above — the whole
+  apply, both modules, per in-play draw.
+- *The epoch*: across the level cycle the render thread's sum read `cum=(58,−28)` at the end of
+  the first level and `cum=(0,0) epoch=1/1` in the second, `unacked=(0,0)`, no camera jump at
+  the new level's first draw.
 - *Minimap rect A/B at zoom*: `main+0x142CB` at the same pinned eye, by the file lever — **1.0
   (27,6,43,15), 0.5 (19,2,51,20), 2.0 (31,8,39,13), back (27,6,43,15) on both DLLs**, the
   viewport rect and `ScrollSpeed` identical at each level too.
@@ -2279,6 +2291,29 @@ defaults, this DLL against the one built from landing 1's tip (`72772cf`):**
   clamped to **(8928,11656)**, the map minus the view; released, the eye stays.
 - *Pictures*: `glshot` at 1× and at 0.564 anchored at (400,300) — the whole island at the
   lower level with the units held under the pointer, nothing torn.
+
+**What the landing review changed (two Opus reviewers, `high`, 2026-09-12; both could construct no
+interleaving that breaks the mailbox or loses a delta).** Five real defects, all fixed on the branch
+before landing: the camera hold outlived its file by up to 15 render frames (the hold is a level
+the game thread re-applies every draw, and `s_holdValid` was cleared only by the 15-frame poll —
+now every early exit of the file read drops it); one absurd number in `tagpu_eye.txt` made the
+record's validator refuse the WHOLE record and with it every other command (the hold is clamped
+at its source now); a notch in a level's last frames could be applied to the next level's camera
+(the command apply's **epoch**: bumped at the level end with the applied sum reset, carried in
+the packet, echoed in the record — an older epoch's record carries no delta, and the render
+thread resets its sum when it sees the new one); the wide-fog gate missed the case where the
+range walks the eye home ahead of the packet (`s_unacked` is now "the drawn eye differs from the
+packet's", whatever moved it); and the ordering claim was over-stated (above). Also from the
+review: the count-only log lines said only that text goes blank; the UI layer's viewport rect
+keeps the last in-game one on a frame with no in-game packet (an empty rect would have shown the
+key fill raw for one frame at a level's tail); two stale comments in `tagpu_fogwide.c` and
+`tagpu_mark.c`; the roadmap's row contradicted itself; two rows of the engine map had the
+save-site strings swapped and the third copy site one instruction late. One residual named and
+accepted: the message thread's ring test (`to_engine`) mixes the render thread's current level
+with the addressable rect the game thread derived from a record up to one render frame old, so a
+click exactly at the ring's edge during a wheel ease can be judged against a rect one frame
+stale — before the landing both came from the same frame; the true-viewport gate (world or UI)
+is unaffected.
 
 **Not closed here.** The unit array, the fog grid, the effects arrays and the GL UI's render half
 (the minimap surfaces, the cursor sprite, the string op's font pointer) still read engine memory
