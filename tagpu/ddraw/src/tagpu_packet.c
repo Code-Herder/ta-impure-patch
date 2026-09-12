@@ -172,6 +172,17 @@ typedef struct PKX {
     volatile unsigned hist[PK_HIST_N + 1];
     unsigned        histPrev[PK_HIST_N + 1];
     unsigned        cViolLogged;
+    /* THE ONE UNRECOVERABLE STATE, AND IT IS A FAIL-STOP. Every index that can
+       reach the cell comes from a chain rooted at this instance's own slot
+       numbers, so an out-of-range one means the word was corrupted by a bug
+       elsewhere in our code — and there is no recovery: the slot just handed
+       back is in the cell AND still ours by name, which is the one thing the
+       permutation exists to forbid, and the producer may fill it under us.
+       The instance stops rather than guessing: nothing further is published or
+       taken, the heartbeat says STOPPED, and the engine's own passes come
+       back. Unreachable by construction; here so that a bug is loud and not
+       a use-after-write. */
+    int             fatal;
 } PKX;
 
 static PKX s_frame = { "packet" };
@@ -301,6 +312,7 @@ static int pkx_publish(PKX* m, pkx_fill_fn fill, void* ctx, int force)
        this one relaxed load is what most draws cost. `force` (the level-end
        packet; every command record — latest wins) and `stress` (the overrun
        path, on purpose) go past it. */
+    if (m->fatal) return 0;
     if (!force && !s_stress && (PEEK(m) & PKX_FRESH)) { m->cSkip++; return 0; }
 
     w = m->write;
@@ -540,6 +552,7 @@ static const void* pkx_acquire(PKX* m, const void** prev)
     DWORD tid = GetCurrentThreadId();
 
     if (prev) *prev = NULL;
+    if (m->fatal) return NULL;
     /* the render thread is restarted across a display-mode change (joined,
        never killed, after its last SwapBuffers): ownership is by role, so the
        new thread simply inherits READ/PREV; the id is recorded, not asserted */
@@ -575,7 +588,13 @@ static const void* pkx_acquire(PKX* m, const void** prev)
         got = (unsigned)old & PKX_IDX;
         if (!((unsigned)old & PKX_FRESH)) violation(m, "FRESH vanished between peek and exchange", (unsigned)old, give);
         if ((unsigned)old & PKX_RESERVED) violation(m, "reserved bits set in the cell", (unsigned)old, 0);
-        if (got >= m->nslots) { violation(m, "slot index out of range", got, m->nslots); got = give; }
+        if (got >= m->nslots) {
+            violation(m, "slot index out of range — the exchange is STOPPED", got, m->nslots);
+            m->fatal = 1;
+            m->inFrame = 0;
+            m->frameHead = 0;
+            return NULL;
+        }
         if (got == give || got == m->read || (m->holds >= 3 && got == m->prev))
             violation(m, "permutation broken", got, give);
         /* THE ROTATION. Every slot named here is one this thread holds, and
@@ -671,8 +690,9 @@ static void heartbeat(PKX* m, unsigned fc)
     }
     pubs = m->cPub; taken = m->cTaken;
     n = _snprintf(b, sizeof b,
-                  "packet: pub=%u skip=%u overrun=%u foreign=%u acq=%u taken=%u gap=%u grow=%u commitfail=%u trunc=%u viol=%u pviol=%u crcbad=%u nopkt=%u"
+                  "packet:%s pub=%u skip=%u overrun=%u foreign=%u acq=%u taken=%u gap=%u grow=%u commitfail=%u trunc=%u viol=%u pviol=%u crcbad=%u nopkt=%u"
                   " | pub/s=%.0f taken/s=%.1f pubus p50=%u p99=%s%u",
+                  m->fatal ? " STOPPED" : "",
                   m->cPub, m->cSkip, m->cOverrun, m->cForeign, m->cAcq, m->cTaken, m->cGap,
                   m->cGrow, m->cCommitFail, m->cTrunc, m->cViol, m->cPViol, m->cCrcBad, m->cNoPkt,
                   secs > 0.0 ? (double)(pubs - lastPub) / secs : 0.0,
@@ -718,6 +738,7 @@ static void heartbeat(PKX* m, unsigned fc)
 
 static void pkx_frame_end(PKX* m, unsigned fc)
 {
+    if (m->fatal) { m->inFrame = 0; return; }
     if (GetCurrentThreadId() != m->consTid) violation(m, "frame_end on another thread", (unsigned)GetCurrentThreadId(), (unsigned)m->consTid);
     if (!m->inFrame) violation(m, "frame_end without acquire", fc, 0);
     m->inFrame = 0;

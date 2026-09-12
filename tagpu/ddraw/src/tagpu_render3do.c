@@ -66,6 +66,12 @@ static int    s_state = 0;         /* 0=unloaded 1=ready 2=failed */
 void tagpu_r3d_glreset(void);
 static GLuint s_lutTex;
 static int    s_lutBuilt = 0;
+/* 1 when the LUT that is up came from the ENGINE's own PALETTE.SHD rather than
+   our computed ramp. Without it a single frame that arrived with no table —
+   the first fill of a slot truncates until the slot has grown, so this is
+   reachable at startup — would latch the fallback for the whole session and
+   every unit would be shaded by the wrong ramp, quietly. */
+static int    s_lutFromShd = 0;
 
 /* ---- 8bpp texture atlas: the unit textures' GAF frames as palette indices
    in an R8 texture, NEAREST-sampled => the FBO stays index-exact. Since G14g
@@ -157,6 +163,7 @@ static void shade_build_lut(const unsigned char* shd)
             s_shNeutral = bestr;
             s_shDir     = (lum31 >= lum0) ? 1 : -1;
             shade_upload(shd);
+            s_lutFromShd = 1;
             { char b[96]; _snprintf(b, sizeof b,
                 "r3d shade: engine SHD table (neutral=%d id=%d/256 dir=%d)",
                 s_shNeutral, bestn, s_shDir); rlog(b); }
@@ -183,8 +190,12 @@ static void shade_build_lut(const unsigned char* shd)
         }
     }
     s_shNeutral = SH_NEUTRAL; s_shDir = 1;
+    s_lutFromShd = 0;
     shade_upload(lut);
-    rlog("r3d shade: computed palette LUT (32 rows, row 16 identity)");
+    rlog(shd ? "r3d shade: computed palette LUT (32 rows, row 16 identity) — the packet's "
+               "shade table was unreadable"
+             : "r3d shade: computed palette LUT (32 rows, row 16 identity) — no shade table in "
+               "the packet yet; it is rebuilt from the engine's own the first frame one arrives");
 }
 
 /* Model-space toward-camera axis: depth is 2y-z (larger = nearer), so the
@@ -400,7 +411,9 @@ void tagpu_r3d_atlas_frame(const unsigned char* pal)
    per GL context out of whichever the caller has. */
 GLuint tagpu_r3d_lut_texref(const unsigned char* shd)
 {
-    if (!s_lutBuilt && s_state == 1) shade_build_lut(shd);
+    /* build once — and REBUILD the first time the engine's own table arrives
+       after a frame that had none */
+    if (s_state == 1 && (!s_lutBuilt || (shd && !s_lutFromShd))) shade_build_lut(shd);
     return s_lutBuilt ? s_lutTex : 0;
 }
 int tagpu_r3d_shade_neutral(void) { return s_shNeutral; }
@@ -431,5 +444,6 @@ void tagpu_r3d_glreset(void)
        has already run tagpu_rglsl_glreset: tagpu_overlay.c orders them) */
     s_state = 0;
     s_lutBuilt = 0;
+    s_lutFromShd = 0;
     tagpu_gaf_atlas_lost(&s_atlas);
 }

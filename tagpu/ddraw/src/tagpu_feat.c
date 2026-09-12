@@ -676,7 +676,7 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     const TAGPU_PK_ANCHOR* anch;
     const char* fdefs;
     int mapW, mapH, nCols, nRows, r0, c0;
-    int localPl, shadowsOn, nDefs, outside = 0;
+    int localPl, shadowsOn, nDefs, outside = 0;   /* a flag: see the loop below */
     unsigned ai;
     float flatSpan;
     if (s_armed != 1) return feat_bail();
@@ -761,9 +761,11 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     /* THE ANCHORS COME OUT OF THE PACKET, in the same row-major order the grid
        walk produced them, over a rect the publisher sized for the WIDEST zoom —
        so this loop's own rect is a sub-rect of it and the filter below is the
-       one the double loop used to be. `outside=` counts an anchor the rect
-       wanted and the packet did not carry, which is 0 at every reachable zoom
-       and is the number to look at if features ever stop at the frame edge. */
+       one the double loop used to be. `outside=1` says THIS FRAME'S rect asked
+       for cells outside the ones the packet carried — it is a flag, not a
+       count, because what fell outside cannot be counted from here — and it is
+       0 at every reachable zoom. It is the number to look at if features ever
+       stop short of the frame edge. */
     anch = tagpu_pk_anchors(pk);
     if (r0 < pk->anch_r0 || c0 < pk->anch_c0 ||
         r0 + nRows > pk->anch_r0 + pk->anch_rows ||
