@@ -1212,22 +1212,26 @@ static void upload_palette(void)
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-/* THE FRAME'S PACKET, latched once per present by tagpu_gui_cursor_frame and
-   used by everything below it (landing 4c). The GL UI's render half took the
-   cursor's position and sprite out of the graphics globals, and the minimap's
-   box, surfaces and view box out of the TAdynmem block, on THIS thread, every
-   present — the last four engine reads on the render thread the plan had not
-   scheduled. They are all packet fields now. NULL is "no packet this frame",
-   which is a shell frame or a load, and every consumer below declines. */
-static const TAGPU_PACKET* s_pk;
+/* THE GL UI's RENDER HALF READS THE PACKET (landing 4c). It took the cursor's
+   position and sprite out of the graphics globals, and the minimap's box, its
+   surfaces and its view box out of the TAdynmem block, on THIS thread, every
+   present — the four engine reads the plan had not scheduled. They are all
+   packet fields now.
 
-static void cursor_rect(float* r)
+   THE POINTER IS NEVER KEPT ACROSS A CALL, let alone across a frame: it is
+   handed down from the driver's own record every time. A static holding it
+   would be exactly the cached packet pointer `tagpu_packet.poison` exists to
+   catch, and the two entry points here (the cursor decision before the world
+   pass, the layer after it) are separate calls with separate chances to be
+   skipped. NULL is "no packet this frame" — a shell frame or a load — and
+   every consumer below declines. */
+static void cursor_rect(const TAGPU_PACKET* pk, float* r)
 {
     r[0] = r[1] = -1.0f; r[2] = 64.0f; r[3] = 64.0f;
-    if (!s_pk) return;
-    r[0] = (float)s_pk->cur_pos[0];
-    r[1] = (float)s_pk->cur_pos[1];
-    if (s_pk->cur_w > 0 && s_pk->cur_h > 0) { r[2] = (float)s_pk->cur_w; r[3] = (float)s_pk->cur_h; }
+    if (!pk) return;
+    r[0] = (float)pk->cur_pos[0];
+    r[1] = (float)pk->cur_pos[1];
+    if (pk->cur_w > 0 && pk->cur_h > 0) { r[2] = (float)pk->cur_w; r[3] = (float)pk->cur_h; }
 }
 
 /* ------------------------------------------------------------- the cursor */
@@ -1251,13 +1255,12 @@ void tagpu_gui_cursor_frame(const TAGPU_PACKET* pk)
 {
     const unsigned char* fr;
     const void* pix;
-    s_pk = pk;
     s_curOwn = 0;
     s_curFrame = NULL;
     /* the engine's rect first and unconditionally: draw_layer's discard (and
        `strict`'s exemption) needs it on every path, including the ones below
        that decline to own the cursor */
-    cursor_rect(s_curEng);
+    cursor_rect(pk, s_curEng);
     if (!s_on || s_nocursor || s_gl != 1 || s_sharpFailed) return;
     if (!pk || !pk->cur_rec) return;
     /* the sprite record IS a GAF frame header -- size, hotspot, colour key and
@@ -1467,7 +1470,7 @@ static int minimap_pic(const TAGPU_PACKET* pk, const unsigned char** pix,
 
 static void sharp_minimap(const TAGPU_FRAME* f)
 {
-    const TAGPU_PACKET* pk = s_pk;
+    const TAGPU_PACKET* pk = f->packet;
     const unsigned char* pic = NULL;
     unsigned gen = 0;
     int pw = 0, ph = 0, mx, my, mw, mh;
@@ -1590,6 +1593,11 @@ static void sharp_minimap(const TAGPU_FRAME* f)
            13 KB. */
         const unsigned char* rg = tagpu_pk_minimap(pk);
         int ew = pk->mm_w, eh = pk->mm_h;
+        /* NOT A FAULT ON THE FIRST FRAME AFTER ARMING: the request above is
+           what makes the publisher copy them, so the frame that raises it finds
+           nothing and the next one has them. It IS a fault if it keeps
+           climbing — the publisher refused the descriptors, and its own
+           `gui: … refused=` counter says so. */
         if (!rg) { s_mmNoEng++; return; }
         if (!s_mmEngTex) glGenTextures(1, &s_mmEngTex);
         if (!s_mmEngTex) { s_mmNoEng++; return; }

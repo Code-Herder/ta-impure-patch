@@ -389,7 +389,10 @@ static GFONT* gfont_slot(unsigned id)
 static void glyph_raster(GFONT* g, int ch, int gw, const unsigned char* bits, unsigned nb)
 {
     int idx = ch - CH_LO, y;
-    unsigned char obj[7 + (GA_W * GA_H + 7) / 8];
+    /* STATIC, not a local: the widest cell this atlas admits makes the object
+       16 KB, and this runs on the render thread. One writer, one call at a
+       time, no state kept between calls. */
+    static unsigned char obj[7 + (GA_W * GA_H + 7) / 8];
     unsigned rows = g->rows;
     if (idx < 0 || idx >= GA_NCH || g->known[idx]) return;
     if (gw <= 0 || gw > GA_W || rows == 0 || rows > GA_H) { g->known[idx] = 2; s_gdrops++; return; }
