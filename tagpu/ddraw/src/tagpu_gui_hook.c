@@ -218,7 +218,7 @@ static void surf_drop_offscreens(unsigned keepBase)
 static volatile LONG s_freeqN;                  /* claimed, ever — any thread   */
 static volatile LONG s_freeqIn;                 /* STORED, ever — any thread    */
 static LONG          s_freeqDone;               /* taken, ever — game thread    */
-static volatile LONG s_freeq[FREEQ];            /* 0 = taken; see the assertion  */
+static volatile LONG s_freeq[FREEQ];            /* 0 = taken, or claimed-not-yet-stored */
 static unsigned      s_freeqFlush;              /* times the table was flushed  */
 
 static void surf_free_offthread(unsigned p)
@@ -238,8 +238,11 @@ static void surf_drain_freeq(void)              /* game thread only */
     int flush = 0;
 
     if (head == from) return;
+    /* The spans are taken in UNSIGNED arithmetic: these counters only grow, so
+       one day they wrap, and a signed difference across that wrap is undefined
+       where an unsigned one is exactly the distance we want. */
     if (in != head) flush = 1;                   /* a push is in flight */
-    else if (head - from > FREEQ) flush = 1;     /* more than the ring holds */
+    else if ((unsigned long)head - (unsigned long)from > FREEQ) flush = 1;
     else {
         LONG k;
         for (k = from; k != head; k++) {
@@ -250,7 +253,8 @@ static void surf_drain_freeq(void)              /* game thread only */
                 if (s_surf[i].owner == p) { surf_drop(i); break; }
         }
         /* did a producer lap the window while we were walking it? */
-        if (!flush && InterlockedExchangeAdd(&s_freeqN, 0) - from > FREEQ) flush = 1;
+        if (!flush && (unsigned long)InterlockedExchangeAdd(&s_freeqN, 0)
+                      - (unsigned long)from > FREEQ) flush = 1;
     }
     if (flush) {
         s_freeqFlush++;
