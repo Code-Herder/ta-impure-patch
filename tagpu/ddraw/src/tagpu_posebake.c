@@ -553,9 +553,9 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
    loss (every id dies), an atlas recycle (every UV moves) and the owner (part
    of the material key). The first three are checked here, once per frame,
    because every lookup below is on the render thread inside the native pass. */
-void tagpu_posebake_frame(unsigned frame_counter)
+void tagpu_posebake_frame(unsigned frame_counter, unsigned level_gen)
 {
-    unsigned lvl = tagpu_reclaim_level_gen();
+    unsigned lvl = level_gen;
     unsigned agen = tagpu_r3d_atlas_gen();
     int i, dg = 0, dm = 0;
     s_dropCascade = 0;

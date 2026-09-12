@@ -11,7 +11,9 @@
    THE MODEL3DONODE is the per-TYPE template: the rest vertices, the faces and
    the piece tree, shared by every unit of a type and freed with the LEVEL
    (0x42DB90 in the teardown cascade), not with any unit — which is why a cache
-   keyed on a node pointer needs tagpu_reclaim_level_gen().
+   keyed on a node pointer needs the LEVEL GENERATION, and specifically the
+   frame packet's, which advances at every level end whether or not
+   tagpu_reclaim is armed (tagpu_packet.h `level_gen`).
 
    Split out of tagpu_native.c so the geometry bake (tagpu_posebake.c) reads
    the same numbers as the emitters it replaces rather than a second copy of

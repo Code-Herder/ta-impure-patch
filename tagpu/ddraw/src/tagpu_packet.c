@@ -171,7 +171,6 @@ typedef struct PKX {
     volatile unsigned cAcq, cTaken, cGap, cViol, cCrcBad, cNoPkt, cSameTick, cPaired;
     volatile unsigned hist[PK_HIST_N + 1];
     unsigned        histPrev[PK_HIST_N + 1];
-    unsigned        cViolLogged;
     /* THE ONE UNRECOVERABLE STATE, AND IT IS A FAIL-STOP. Every index that can
        reach the cell comes from a chain rooted at this instance's own slot
        numbers, so an out-of-range one means the word was corrupted by a bug
@@ -595,8 +594,22 @@ static const void* pkx_acquire(PKX* m, const void** prev)
             m->frameHead = 0;
             return NULL;
         }
-        if (got == give || got == m->read || (m->holds >= 3 && got == m->prev))
-            violation(m, "permutation broken", got, give);
+        if (got == give || got == m->read || (m->holds >= 3 && got == m->prev)) {
+            /* A SECOND FAIL-STOP, and for the same reason as the one above.
+               The cell held a slot THIS THREAD ALREADY HOLDS, so the producer
+               wrote a slot it did not own: the partition that makes the whole
+               exchange safe — producer's W, consumer's held set, the cell —
+               is broken, and carrying on would leave our held set with a
+               duplicate and one slot owned by nobody, i.e. a reader and the
+               writer in the same bytes. Counting it and continuing was a
+               timing argument dressed as recovery (landing review,
+               2026-09-12). */
+            violation(m, "permutation broken — the exchange is STOPPED", got, give);
+            m->fatal = 1;
+            m->inFrame = 0;
+            m->frameHead = 0;
+            return NULL;
+        }
         /* THE ROTATION. Every slot named here is one this thread holds, and
            the tick it reads is out of a record no other thread writes (the
            producer's W is not among them), so the choice is a fact rather than

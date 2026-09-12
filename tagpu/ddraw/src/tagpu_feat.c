@@ -84,8 +84,14 @@
    the six height bytes the two height rules need. What stays is the FeatureDef
    record and the wreck record: per-MAP allocations the teardown cascade frees
    (0x483DD0 -> 0x422170), so their lifetime is tagpu_reclaim's fence, the same
-   standing tagpu_terr.c has for the tile set. Their bases arrive in the packet
-   header; this file adds no engine offset to them. */
+   standing tagpu_terr.c has for the tile set. THEIR BASES ARE READ LIVE, not
+   taken from the packet: the cascade frees each array and then NULLS its slot
+   (0x4221F8 then 0x422214; 0x42227D then 0x42228B), and that null is the only
+   invalidation this pass has ever had — a base copied into a packet and held
+   for a frame reads straight past it (landing review, 2026-09-12). */
+#define TA_MAINPP    0x00511DE8u
+#define OFF_FEATDEF  0x1426F   /* FeatureDef array, stride 0x100               */
+#define OFF_WRECKS   0x1420B   /* wreck records, stride 0x30                   */
 #define FD_STRIDE    0x100
 #define FD_NAME      0x00      /* char Name[0x20] — INLINE, not a pointer      */
 #define FD_FOOTX     0x94      /* i16 footprint in 16-px tiles                */
@@ -584,7 +590,10 @@ static void draw_feature(const TAGPU_FXVIEW* v, const TAGPU_PACKET* pk,
     lam = s_lit ? ground_lambert(a) : 1.0f;
 
     if (flags & 1) {                                  /* wreckage on this tile */
-        const char* recs = (const char*)(size_t)pk->feat_recs;
+        /* LIVE, every anchor: see the header — the null the teardown leaves is
+           what refuses this once the cascade has run */
+        const char* taNow = *(const char* const*)TA_MAINPP;
+        const char* recs = ptr_ok(taNow) ? *(const char* const*)(taNow + OFF_WRECKS) : NULL;
         const char* rec;
         if (!(mask & 1)) {                            /* body 1: 3D wreck      */
             s_c.wreck3d++;                            /* the native wreck pass */
@@ -702,7 +711,10 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     s_cpp = tagpu_classicpp_on();
     s_lit = tagpu_classicpp_lit();
 
-    fdefs = (const char*)(size_t)pk->feat_defs;
+    {   /* LIVE, once per frame: see the header */
+        const char* taNow = *(const char* const*)TA_MAINPP;
+        fdefs = ptr_ok(taNow) ? *(const char* const*)(taNow + OFF_FEATDEF) : NULL;
+    }
     mapW = pk->map_w16;
     mapH = pk->map_h16;
     nCols = pk->sweep_cols;

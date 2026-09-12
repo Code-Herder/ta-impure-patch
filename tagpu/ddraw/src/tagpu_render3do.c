@@ -28,16 +28,12 @@
 #include "tagpu_r3dcache.h"
 #include "tagpu_overlay.h"   /* tagpu_overlay_target_fbo: the frame's default draw target */
 
-/* ---- engine layout (binary-verified; wiki unit-3do-bridge / composite-buffer) ---- */
-#define O3_NUMPARTS   0x00     /* u16 piece count                          */
-#define O3_PRIM0      0x22     /* inline PrimitiveStruct[], stride 0x36    */
-#define PRIM_STRIDE   0x36
-#define P_NODE        0x00     /* Model3DONode*                            */
-#define P_VBUF        0x22     /* i32* posed verts, VertexCount*3, 16.16   */
-#define P_FLAGS       0x28     /* bit0 = visible                           */
-#define N_VCOUNT      0x04     /* Model3DONode.VertexCount                 */
-#define N_FCOUNT      0x08     /* Model3DONode.FaceCount                   */
-#define N_NAME        0x1C     /* Model3DONode.pNameStr                    */
+/* NO ENGINE LAYOUT HERE ANY MORE. This file carried nine offsets — the
+   Object3do piece array, PrimitiveStruct and Model3DONode — for the write-back
+   the frame packet's landing 3 deleted. Every one of them became unused with
+   it, which is the check that the deletion was complete rather than partial.
+   They live on in research/notes/exe-reverse-engineering.md, and the pieces
+   this file still needs arrive in the packet's PK_PIECE table. */
 #define N_FACES       0x28     /* Model3DONode.pFaceArray                  */
 #define FACE_STRIDE   0x20     /* Model3DOFace                             */
 #define F_COLORTAB    0x00     /* PaletteEntry resolved to a table pointer */
@@ -192,10 +188,9 @@ static void shade_build_lut(const unsigned char* shd)
     s_shNeutral = SH_NEUTRAL; s_shDir = 1;
     s_lutFromShd = 0;
     shade_upload(lut);
-    rlog(shd ? "r3d shade: computed palette LUT (32 rows, row 16 identity) — the packet's "
-               "shade table was unreadable"
-             : "r3d shade: computed palette LUT (32 rows, row 16 identity) — no shade table in "
-               "the packet yet; it is rebuilt from the engine's own the first frame one arrives");
+    /* only reachable with shd == NULL: the SHD branch above returns */
+    rlog("r3d shade: computed palette LUT (32 rows, row 16 identity) — no shade table in "
+         "the packet yet; it is rebuilt from the engine's own the first frame one arrives");
 }
 
 /* Model-space toward-camera axis: depth is 2y-z (larger = nearer), so the

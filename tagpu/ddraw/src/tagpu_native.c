@@ -83,7 +83,7 @@
 #include "tagpu_markown.h"
 #include "tagpu_order.h"
 #include "tagpu_owndraw.h"   /* tagpu_owndraw_structshadow_ours: who draws a building's shadow */
-#include "tagpu_reclaim.h"   /* tagpu_reclaim_level_gen: the model templates outlive units, not levels */
+#include "tagpu_reclaim.h"   /* the teardown fence this file's template reads stand behind */
 #include "tagpu_posebake.h"
 #include "tagpu_posedraw.h"  /* G16 step 4: the per-type geometry bake and its caches */
 #include "tagpu_lerp.h"      /* smooth-motion.md option A: the pose between two sim ticks */
@@ -115,7 +115,6 @@
                                   engine screen fog grid, 4-bit corner masks
                                   per 32-px view cell (terrain-depth.md 5)  */
 #define OFF_LOSTYPE  0x14281   /* u16: b0 mapping, b1 true LOS              */
-#define OFF_WATCHED  0x2A42    /* byte watched player id                    */
 #define UNIT_STRIDE  0x118
 #define U_STATE      0x110
 #define U_XPOS       0x6C
@@ -160,8 +159,10 @@
 #define UD_DIGGER    0x40000000u /* FBI mask bit30: clip below ground level  */
 #define OFF_SEALEVEL 0x1427F   /* u8 water level, elevation units           */
 #define OFF_LOCALPL  0x2A43    /* u8 the blit compares unit+0xFF against    */
-#define O3_COMPOSITE 0x10      /* GAFFrame* per-unit composite              */
-#define GF_PTRDEPTH  0x14      /* u8* depth plane; NULL = path A (no clip)  */
+/* The per-unit composite GAFFrame (Object3do+0x10) and its depth plane
+   (GAFFrame+0x14) used to be read here; the packet carries the answer as
+   TAGPU_PK_U_DEPTHPLANE since landing 3, and both offsets went unused with it.
+   They are in research/notes/exe-reverse-engineering.md. */
 #define OFF_FMAP     0x14287   /* FeatureStruct tile map, stride 0x0D       */
 #define OFF_MAPW     0x14233   /* map W in 16-px tiles                      */
 #define OFF_MAPH     0x14237   /* map H in 16-px tiles                      */
@@ -1023,8 +1024,18 @@ static unsigned s_badModelId;          /* refused here, reported with the frame 
    teardown wrap — the fence, unchanged by this landing. */
 static const char* model_root(const TAGPU_PACKET* pk, unsigned mid)
 {
-    const char* mptrs = (const char*)(size_t)pk->model_ptrs;
+    /* THE TABLE'S BASE IS READ LIVE, EVERY CALL, and that is the point: the
+       level teardown frees it at 0x42DCCB and NULLS main+0x14377 at 0x42DCD8,
+       so the null is what refuses this walk once the cascade has run. A copy
+       taken at publish time and held for a frame reads straight past it
+       (landing review, 2026-09-12). The bound on `mid` is the packet's — the
+       publisher dropped anything outside UNITINFOCount — and the LIFETIME is
+       tagpu_reclaim's teardown wrap, unchanged. */
+    const char* ta = *(const char* const*)TA_MAINPP;
+    const char* mptrs;
     unsigned n = pk->udef_count;
+    if (!ptr_ok(ta)) return NULL;
+    mptrs = *(const char* const*)(ta + OFF_MODELPTRS);
     if (!(mid && n && n <= 0x10000u && mid < n)) {
         if (mid) s_badModelId++;       /* 0 is "no model", not a refusal */
         return NULL;
@@ -1538,9 +1549,12 @@ static const HPMAP* pmap_for(const void* mesh, const char* const* nd, int nparts
    for the rest of the process. That is not a fault -- it is a wrong shadow
    height, a wrong select box and a mis-bound replacement pose, silently.
 
-   The cure is the level generation `tagpu_reclaim` bumps for the teardown
-   `0x491B60` -- in its POST hook, after the cascade has freed the templates,
-   which matters: a bump in the pre hook is observed by a pass that is already
+   The cure is THE PACKET'S level generation, which the publisher advances at
+   every level end -- it used to be tagpu_reclaim's own counter, and that moves
+   only when reclaim is armed, so with `reclaim.off` these caches never dropped
+   at all (landing review, 2026-09-12). The publisher's bump is in the same
+   place reclaim's is, the teardown `0x491B60`'s POST hook when reclaim is the
+   provider, which matters: a bump in the pre hook is observed by a pass that is already
    past `tagpu_overlay.c`'s teardown gate and still running (the pre hook is
    waiting for exactly that pass), and that pass would drop these caches and
    refill them from templates about to be freed, stamping the new generation on
@@ -1550,10 +1564,10 @@ static const HPMAP* pmap_for(const void* mesh, const char* const* nd, int nparts
    They hold no GL objects, so dropping them is resetting three counts; the
    entries rebuild on the next frame that asks. */
 static unsigned s_cacheGen;              /* the level s_aabb/s_sbox/s_pmap describe */
+static unsigned s_lastLevelGen;          /* the last packet's, carried over a frame with none */
 
-static void cache_gen_check(void)
+static void cache_gen_check(unsigned g)
 {
-    unsigned g = tagpu_reclaim_level_gen();
     if (g == s_cacheGen) return;
     if (s_naabb || s_nsbox || s_npmap) {
         char b[160];
@@ -1946,12 +1960,16 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* before the early-out and before any gather: a level that ended while this
        pass was disarmed still invalidates the template caches, and the check is
        one aligned load when nothing has changed */
-    cache_gen_check();
+    /* the level generation is THE PACKET'S: it is the only one that moves when
+       tagpu_reclaim is not armed. A frame with no packet keeps the one it had,
+       which is right — nothing has told us a level ended. */
+    if (f->packet) s_lastLevelGen = f->packet->level_gen;
+    cache_gen_check(s_lastLevelGen);
     /* the geometry bake's caches take the same three generations one frame
        later than they are bumped, for the same reason and on the same thread —
        and it holds GL objects, so its drop has to be here, on the render
        thread, and not wherever the generation moved */
-    tagpu_posebake_frame(f->frame_counter);
+    tagpu_posebake_frame(f->frame_counter, s_lastLevelGen);
     pose_rest_block_init();      /* the degradation's block, once per session */
     tagpu_posedraw_frame();      /* this frame's counters */
     /* smooth-motion.md option A. BEFORE the gather, because posed_pose
@@ -2700,6 +2718,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                    the wreck's own Object3do. */
                 n2->hires = NULL; n2->yaw = 0;
                 n2->waterT = -1e9f; n2->digT = -1e9f; n2->waterMode = 0;
+                /* ...and the nanoframe group, for the same reason: a wreck on
+                   an index that held a unit under construction inherited
+                   nanoOn = 1 and was staged and wire-drawn as one (landing
+                   review, 2026-09-12). Present on main since G16 too. */
+                n2->nanoOn = 0; n2->nanoT = 0.0f; n2->nanoWire = 0.0f;
+                n2->nanoC[0] = n2->nanoC[1] = n2->nanoC[2] = 0.0f;
                 nwr++;
             }
         }

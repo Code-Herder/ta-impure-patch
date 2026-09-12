@@ -2371,10 +2371,11 @@ draws on which `end != begin + (count−1)·0x118`, the relation the note record
 **The gates, measured 2026-09-12 on the reference setup, 1920×1080, `--maxfps 0`, the play
 defaults, this DLL against the one built from landing 2's tip (`4b84098`):**
 
-- *The protocol*, `200v200` under `check`+`stress`+`poison`, three runs of 300 s: **436 191 publishes
-  and 6 658 taken frames** in the first, `viol=0 pviol=0 crcbad=0 foreign=0 commitfail=0` on both
-  exchanges, **`dup=0`** (the stable-id collision oracle) and **`relbad=0`** (the `end` pointer
-  agreed with `begin + (count−1)·0x118` on every one of them), 0 `VIOLATION` lines in the log.
+- *The protocol*, `200v200` under `check`+`stress`+`poison`, three runs of 300 s: **1 271 008
+  publishes and 19 481 taken frames** (436 191/6 658, 376 318/6 177, 458 499/6 646),
+  `viol=0 pviol=0 crcbad=0 foreign=0 commitfail=0` on both exchanges in all three,
+  **`dup=0`** (the stable-id collision oracle) and **`relbad=0`** (the `end` pointer agreed with
+  `begin + (count−1)·0x118` on every published draw), 0 `VIOLATION` lines in the log.
 - *The pose CRC join* (`tagpu_posecrc.on`): **`raced=0`**. That is the gate this landing is
   measured by and its meaning changed with it — the race it counts is between the COB scripts on
   the game thread and the pose loop on the render thread, and the pose now comes out of a packet
@@ -2404,8 +2405,20 @@ defaults, this DLL against the one built from landing 2's tip (`4b84098`):**
   | `selbox-slope` | three tanks on a hillside, real bank and pitch in the angle triple | 0 within a launch, 26 across two | **0** |
   | `one-wreck` | the wreck table's own path | 0 | **0** |
   | `hires-vehicle-slope` | the glTF replacement pass | 0 | **0** |
-  | `hires-wreck` | the replacement pass over a husk | 780 (the fixture animates) | 780 — exactly the floor |
+  | `hires-wreck` | the replacement pass over a husk | 532 | 686 |
+  | `cob-kbot` | a live COB script over a burning wreck | 652 | 899 |
   | `feat-forest` | the anchor table, a forest and a walking commander | 512 (the commander) | 561 |
+  | `pose-inventory` | 69 units, all eight pose classes, every one idling | 8 556 | 9 192 |
+
+  **The three fixtures that are not zero animate, and the difference is confined to what
+  animates.** `hires-wreck` and `cob-kbot` both carry a burning wreck, and every differing pixel
+  of both — the cross-build figure AND the within-launch floor, which is the proof — lies inside
+  one 45×65 box that holds a smoke plume; the particle pass that draws it is landing 4a's and this
+  landing does not touch it. `feat-forest`'s is its walking commander, and `pose-inventory`'s 8 556-pixel floor is
+  69 units all running their idle scripts — it is the pose COVERAGE fixture, not a parity one, and
+  the pose CRC join is what holds this landing to the previous DLL there. A fixture with a live
+  particle emitter or a moving unit cannot be pixel-paired across two launches at all, which is
+  why the floor is quoted beside every figure rather than the figure alone.
 
   **Two harness traps cost a round of wrong numbers each, and both are worth writing down.**
 

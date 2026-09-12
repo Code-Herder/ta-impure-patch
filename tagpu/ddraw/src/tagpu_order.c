@@ -414,6 +414,11 @@ typedef struct ORDREC {
     unsigned char sel;       /* the issuing unit was selected                 */
     unsigned char cloaked;   /* the issuing unit is actively cloaked          */
     unsigned char kamikaze;  /* def+0x241 bit28                               */
+    unsigned char haveExplode;/* def+0x220, the ExplodeAs weapon, resolved.
+                                NOT the same question as explodeAoe != 0: the
+                                engine returns early on the POINTER (0x439125)
+                                and draws both circles otherwise, so a weapon
+                                whose AoE>>1 is 0 still gets the second one.   */
     unsigned char kamiPick;  /* the engine's *(u+0) test: kamikazedistance or
                                 sight for the second pulse circle             */
     unsigned char haveDef;   /* the issuing unit's def resolved               */
@@ -429,7 +434,6 @@ typedef struct ORDARENA {
     const char* pathIcon;    /* main+0x148D3, the route dots' GAF sequence:
                                 a session asset, resolved here so the present
                                 thread needs no engine pointer of its own     */
-    const unsigned char* gui;/* unused: the GUI colours ride in the packet    */
 } ORDARENA;
 
 /* Two arenas and a published index, filled the same way the capture layer is:
@@ -613,7 +617,10 @@ static void walk_unit(ORDARENA* A, const char* ta, const char* units, const char
                         r->kamikaze  = (unsigned char)((*(const unsigned*)(def + UD_TYPEMASK0) & 0x10000000u) ? 1 : 0);
                         if (r->kamikaze) {
                             const char* weap = *(const char* const*)(def + UD_EXPLODEAS);
-                            if (ptr_ok(weap)) r->explodeAoe = *(const unsigned short*)(weap + W_AOE) >> 1;
+                            if (ptr_ok(weap)) {
+                                r->haveExplode = 1;
+                                r->explodeAoe = *(const unsigned short*)(weap + W_AOE) >> 1;
+                            }
                         }
                         for (k = 0; k < 3; k++) {
                             const char* w;
@@ -1306,10 +1313,19 @@ static void draw_ranges(const ORDREC* r, int gameTime, int showRanges)
             range_circle(us, ux, uy, uz, (double)(short)r->cloakDist,
                          s_gui[GUI_WHITE], NULL, 0);
         if (!r->kamikaze) return;
+        /* THE EARLY RETURN IS ON THE WEAPON POINTER, NOT ON THE RADIUS.
+           `0x439125` loads def+0x220 and returns only when it is NULL; with a
+           weapon whose AoE>>1 is 0 the engine falls through, draws a circle of
+           radius 0, and still reaches `0x439196` — which draws the
+           kamikazedistance-or-sight circle. Gating on the radius dropped that
+           second circle for such a unit (landing review, 2026-09-12). Inert on
+           stock content, where every ExplodeAs weapon has an AoE. */
+        if (!r->haveExplode) return;
         aoe = r->explodeAoe;
-        if (!aoe) return;
-        /* radius = clamp(((gameTime % 60) * aoe * 2) / 60, 8, aoe/2), all of it
-           the engine's UNSIGNED arithmetic */
+        /* radius = clamp(((gameTime % 60) * aoe * 2) / 60, 8, aoe), all of it
+           the engine's UNSIGNED arithmetic and its own two clamps at
+           `0x439161` and `0x439168`, in that order — so an aoe under 8 ends at
+           aoe and not at 8 */
         t  = (int)((unsigned)gameTime % 60u);
         rr = (int)(((unsigned)t * (unsigned)aoe * 2u) / 60u);
         if (rr < 8) rr = 8;

@@ -144,6 +144,15 @@ static int           s_fontTrunc;
 static int           s_textFg = -1;
 static volatile unsigned s_cFontCopies, s_cFontRefused;
 static int      s_levelEndBy;              /* the level-end packet's provider: 1 reclaim's post hook, 2 our observer, 0 none */
+/* THE LEVEL GENERATION IS THE PACKET'S OWN, and it has to be: it was
+   tagpu_reclaim's counter, which is bumped only in reclaim's teardown post
+   hook — so with reclaim unarmed it never moved, and every consumer keyed on
+   it silently stopped invalidating. `frame_pair` withholds a PREV across a
+   level on it, the pose blend refuses a pair on it, and the model-template
+   caches drop on it; all three were inert in that configuration (landing
+   review, 2026-09-12). It advances here instead, at every level end, whoever
+   published it. Reclaim's own counter still exists for reclaim's own ring. */
+static unsigned s_levelGen;
 
 static int on_game_thread(void)
 {
@@ -329,13 +338,13 @@ static volatile unsigned s_cShdCopies;
    cached anchors either way, because their piece runs go into THIS packet's
    arena. */
 static unsigned s_aTick;
-static int      s_aHave, s_aRect[4];
+static int      s_aHave, s_aTrunc, s_aRect[4];
 static unsigned s_aN;
 static volatile unsigned s_cAnchScan, s_cAnchReuse;
 
 /* counters the heartbeat prints; game thread writes, render thread reads */
 static volatile unsigned s_cUnitTrunc, s_cWreckTrunc, s_cAnchTrunc, s_cPieceTrunc;
-static volatile unsigned s_cUnitDup, s_cRelBad, s_cAnchCells;
+static volatile unsigned s_cUnitDup, s_cRelBad, s_cAnchCells, s_cWreckOob;
 static volatile unsigned s_cLastUnits, s_cLastPieces, s_cLastWrecks, s_cLastAnchors;
 
 static void shd_snapshot(void)
@@ -554,9 +563,6 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
     int c0, r0, cols, rows, row, col;
     int inL, inT, inR, inB;
 
-    p->feat_defs   = (unsigned)(size_t)fdefs;
-    p->feat_recs   = (unsigned)(size_t)recs;
-    p->model_ptrs  = (unsigned)(size_t)*(const void* const*)(ta + OFF_MODELPTRS);
     p->feat_defcount = RD32(ta, OFF_FEATCOUNT);
     p->sweep_cols  = RD32(ta, OFF_SWEEP_C);
     p->sweep_rows  = RD32(ta, OFF_SWEEP_R);
@@ -656,6 +662,7 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
             s_aRect[0] == c0 && s_aRect[1] == r0 &&
             s_aRect[2] == cols && s_aRect[3] == rows) {
             na = s_aN;
+            if (s_aTrunc) p->truncated |= TAGPU_PK_TRUNC_ANCHORS;
             s_cAnchReuse++;
         } else {
             for (row = r0; row < r0 + rows; row++) {
@@ -684,6 +691,13 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
                 }
             }
             s_aHave = 1; s_aTick = p->tick; s_aN = na;
+            /* A TRUNCATED SCAN IS CACHED AS TRUNCATED. Without this every reuse
+               publish of the same tick reported a complete anchor table, and
+               the gate we read is "trunc is 0 after the first fill" — so the
+               one number that would have said the rect overflowed the table was
+               under-reported by exactly the reuse rate, which is 6 in 7
+               (landing review, 2026-09-12). */
+            s_aTrunc = (p->truncated & TAGPU_PK_TRUNC_ANCHORS) ? 1 : 0;
             s_aRect[0] = c0; s_aRect[1] = r0; s_aRect[2] = cols; s_aRect[3] = rows;
             s_cAnchScan++;
         }
@@ -699,6 +713,19 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
             if (!(a->flags & 1u)) continue;
             if (!p->feat_defcount || (int)d >= p->feat_defcount) continue;
             if (RDU8(fdefs + (size_t)d * FD_STRIDE, FD_MASK) & 1u) continue;
+            /* THE BOUND ON THE RECORD INDEX, and it has to be here. The cell's
+               u16 is engine DATA until the engine's own count says otherwise:
+               unbounded it addresses up to 65535*0x30 ~ 3 MB past the pool, and
+               a garbage "Object3do" that survives ptr_ok would put up to 256
+               rows of nonsense `node` pointers into the packet — dereferenced
+               later on the RENDER thread. The engine's own draw path does not
+               bound it, but it only forms the address for the cells it is
+               drawing; this walk covers the zoom-floor rect plus a margin,
+               which is most of a screen of cells the engine never touches.
+               WR_COUNT is the pool the level allocates (tagpu_engine.h), and
+               2048 is also the value its allocator hands back for "none".
+               (landing review, 2026-09-12) */
+            if (a->wreck >= WR_COUNT) { s_cWreckOob++; continue; }
             rec = recs + (size_t)a->wreck * WR_STRIDE;
             o3 = *(const char* const*)(rec + WR_OBJ3DO);
             if (nw >= TAGPU_PK_MAX_WRECKS) { s_cWreckTrunc++; p->truncated |= TAGPU_PK_TRUNC_WRECKS; break; }
@@ -812,7 +839,7 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     }
     p->tick_start_lo = s_tickStart.LowPart;
     p->tick_start_hi = (uint32_t)s_tickStart.HighPart;
-    p->level_gen   = tagpu_reclaim_level_gen();
+    p->level_gen   = s_levelGen;
     /* what the command apply in `before` had done by this draw: the render
        thread reconciles its prediction against these */
     tagpu_zoom_applied(&p->cmd_ack_seq, &p->cmd_ack_dx, &p->cmd_ack_dy, &p->zoom_applied, &p->cmd_epoch);
@@ -917,6 +944,9 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
 {
     char b[200];
     unsigned flags = load_flags();
+    /* the argument is reclaim's counter when reclaim is the provider, kept for
+       the log; ours is what the packet carries and what every consumer keys on */
+    s_levelGen++;
     if (!on_game_thread()) {
         s_cForeign++;
         _snprintf(b, sizeof b, "packet: level end on thread %u, not the game thread %u — NOT published (foreign=%u)",
@@ -932,14 +962,14 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
     if (s_installed && !s_countOnly) {
         char* ta = (char*)ta_main();
         if (ta) { tagpu_zoom_level_end(ta); tagpu_vpwide_level_end(ta); }
-        tagpu_packet_publish(fill_level_end, &level_gen, 1 /* past the FRESH gate */);
+        tagpu_packet_publish(fill_level_end, &s_levelGen, 1 /* past the FRESH gate */);
     }
-    _snprintf(b, sizeof b, "packet: level end -> gen %u: in_game=0 published%s; %u in-play draw(s) this level; load flags 0x%04X",
-              level_gen, (s_installed && !s_countOnly) ? "" : " (NOT: module off)", s_levelDraws, flags);
+    _snprintf(b, sizeof b, "packet: level end -> gen %u (reclaim's %u): in_game=0 published%s; %u in-play draw(s) this level; load flags 0x%04X",
+              s_levelGen, level_gen, (s_installed && !s_countOnly) ? "" : " (NOT: module off)", s_levelDraws, flags);
     b[sizeof b - 1] = 0; plog(b);
     s_levelOpen = 0; s_levelDraws = 0; s_shellSeen = 0; s_shellFlags = 0xFFFFu;
     /* the anchor cache names cells of the level that is going away */
-    s_aHave = 0; s_aN = 0;
+    s_aHave = 0; s_aN = 0; s_aTrunc = 0;
 }
 
 /* ---- the observers ------------------------------------------------------- */
@@ -1005,7 +1035,7 @@ static void* __cdecl after_draw(unsigned int* regs)
         s_levelOpen = 1;
         _snprintf(b, sizeof b,
                   "packet: level gen %u: first in-play packet at draw #%u (tick %u, load flags now 0x%04X, at the first non-in-play draw after the teardown 0x%04X, loader thread %u entered %u time(s), game thread %u)",
-                  tagpu_reclaim_level_gen(), s_cDraws, s_lastTick, load_flags(), s_shellFlags,
+                  s_levelGen, s_cDraws, s_lastTick, load_flags(), s_shellFlags,
                   (unsigned)s_loaderTid, s_loaderEntries, (unsigned)s_gameTid);
         b[sizeof b - 1] = 0; plog(b);
     }
@@ -1025,7 +1055,7 @@ static int __cdecl before_loader(void* entry_esp)
     s_loaderTid = GetCurrentThreadId();
     s_loaderEntries++;
     _snprintf(b, sizeof b, "packet: loader thread %u entered 0x497C70 (entry #%u; game thread %u; load flags 0x%04X; level gen %u; %u in-play draw(s) so far)",
-              (unsigned)s_loaderTid, s_loaderEntries, (unsigned)s_gameTid, load_flags(), tagpu_reclaim_level_gen(), s_cDraws);
+              (unsigned)s_loaderTid, s_loaderEntries, (unsigned)s_gameTid, load_flags(), s_levelGen, s_cDraws);
     b[sizeof b - 1] = 0; plog(b);
     /* one live loader at a time (0x497F40 creates it only on its first-entry
        path); the slot is claimed atomically all the same, so a second one
@@ -1040,7 +1070,7 @@ static void* __cdecl after_loader(unsigned int* regs)
     void* ret = (void*)InterlockedExchangePointer((void* volatile*)&s_loaderRet, NULL);
     (void)regs;
     _snprintf(b, sizeof b, "packet: loader thread %u leaving 0x497C70 (load flags 0x%04X; level gen %u; %u in-play draw(s) so far; first in-play packet of this level %s)",
-              (unsigned)GetCurrentThreadId(), load_flags(), tagpu_reclaim_level_gen(), s_cDraws,
+              (unsigned)GetCurrentThreadId(), load_flags(), s_levelGen, s_cDraws,
               s_levelOpen ? "ALREADY PUBLISHED" : "not yet");
     b[sizeof b - 1] = 0; plog(b);
     return ret;
@@ -1067,7 +1097,7 @@ static void extra(char* buf, unsigned cap, double secs)
         if (!p99 && total && acc * 100u >= total * 99u) p99 = i * 2u;
     }
     _snprintf(buf, cap, " | draws=%u inplay=%u draws/s=%.0f inplay/s=%.0f foreign=%u deep=%u fontcopies=%u/%u levelend=%s vpapply=%u vpwh=%u applyus p50=%u p99=%s%u"
-              " | world: u=%u p=%u w=%u a=%u/%u cells scan=%u/%u dup=%u trunc=%u/%u/%u/%u relbad=%u shd=%u",
+              " | world: u=%u p=%u w=%u a=%u/%u cells scan=%u/%u dup=%u trunc=%u/%u/%u/%u relbad=%u woob=%u shd=%u",
               all, in,
               secs > 0.0 ? (double)(all - lastAll) / secs : 0.0,
               secs > 0.0 ? (double)(in - lastIn) / secs : 0.0,
@@ -1077,7 +1107,7 @@ static void extra(char* buf, unsigned cap, double secs)
               s_cLastUnits, s_cLastPieces, s_cLastWrecks, s_cLastAnchors, s_cAnchCells,
               s_cAnchScan, s_cAnchReuse,
               s_cUnitDup, s_cUnitTrunc, s_cPieceTrunc, s_cWreckTrunc, s_cAnchTrunc,
-              s_cRelBad, s_cShdCopies);
+              s_cRelBad, s_cWreckOob, s_cShdCopies);
     if (cap) buf[cap - 1] = 0;
     lastAll = all; lastIn = in;
 }

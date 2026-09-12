@@ -307,13 +307,20 @@ typedef struct TAGPU_PACKET {
                                          asks for a sub-rect of it               */
     uint32_t unit_dup;                /* live units sharing a stable id in THIS
                                          packet: the collision oracle, and a gate */
-    uint32_t feat_defs;               /* the per-map arrays the fenced passes    */
-    uint32_t feat_recs;               /* index — FeatureDef (stride 0x100), the  */
-    uint32_t model_ptrs;              /* wreck records (0x30) and Model3DONode*[]:
-                                         published here so no render-thread file
-                                         needs the engine's root pointer at all.
-                                         Their LIFETIME is unchanged: the level,
-                                         under tagpu_reclaim's teardown fence     */
+    /* THE PER-MAP ARRAY BASES ARE NOT HERE, AND THAT IS DELIBERATE (the landing
+       review found them here and the disassembly agreed). FeatureDef
+       `main+0x1426F`, the wreck records `+0x1420B` and `MODEL_PTRS` `+0x14377`
+       are POINTERS the level teardown frees AND THEN NULLS — `0x4221F8` then
+       `0x422214`, `0x42227D` then `0x42228B`, `0x42DCCB` then `0x42DCD8`, all
+       inside the cascade `0x491B60`. That null is the only invalidation the
+       fenced passes have ever had, and a copy in a packet that outlives the
+       frame it was made in reads past it: with `tagpu_reclaim` unarmed —
+       which is a supported configuration, the publisher has a second level-end
+       provider for exactly that case — the render thread would walk a freed
+       FeatureDef or a freed model template for the whole cascade. So those
+       three stay a LIVE read in the `fenced` files that index them, where the
+       engine's own null still refuses them. The packet carries values, and a
+       pointer whose lifetime it cannot state is not one. */
     int32_t  feat_defcount;           /* NumFeatureDefs: the bound on a def row  */
     int32_t  sweep_cols, sweep_rows;  /* the engine's own feature sweep rect size */
     int32_t  mouse[2];                /* the dispatched mouse point, screen px    */

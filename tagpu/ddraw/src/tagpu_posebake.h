@@ -110,7 +110,10 @@ typedef struct TAGPU_PBMAT {
 /* Render thread, once per frame, before any tagpu_posebake_unit: drops every
    entry whose level generation, GL generation or atlas generation has moved,
    deleting its GL buffers (which is why this is render-thread only). */
-void tagpu_posebake_frame(unsigned frame_counter);
+/* `level_gen` is THE PACKET'S — it advances at every level end whoever
+   published it, where tagpu_reclaim's own counter moves only when reclaim is
+   armed (landing review, 2026-09-12). */
+void tagpu_posebake_frame(unsigned frame_counter, unsigned level_gen);
 
 /* Bake (or find) the geometry and the material stream for one unit's type.
    `pc` is the unit's PK_PIECE run out of the frame packet and supplies the
