@@ -105,6 +105,11 @@ static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x
 static void ops_forget_base(unsigned base);       /* below, with the ring */
 typedef struct SURF {
     unsigned base;                    /* pixel base — the identity           */
+    unsigned owner;                   /* the block MEM_Free 0x4D85A0 will be handed: the
+                                         surface object itself, whose pixels are the same
+                                         allocation at object+0x30 — see before_memfree */
+    volatile int dead;                /* its block has been freed: do not read it. Written
+                                         by before_memfree, cleared only by a drop        */
     int w, h, pitch;
     unsigned char* copy;              /* the surface as of the last flip     */
     unsigned char* mask;              /* the last census: 0/128/255          */
@@ -164,12 +169,14 @@ static void surf_drop_offscreens(unsigned keepBase)
     }
 }
 
-static SURF* surf_get(unsigned base, int w, int h, int pitch)
+static SURF* surf_get(unsigned base, int w, int h, int pitch, unsigned owner)
 {
     int i;
     if (!base || w <= 0 || h <= 0 || pitch <= 0 || w > 4096 || h > 4096 || pitch > 8192) return NULL;
     for (i = 0; i < s_nsurf; i++)
         if (s_surf[i].base == base) {
+            s_surf[i].owner = owner;       /* re-made over the same bytes: the new block */
+            s_surf[i].dead = 0;
             if (s_surf[i].w != w || s_surf[i].h != h || s_surf[i].pitch != pitch) {
                 /* the object was re-allocated over the same bytes: start over.
                    The ops already recorded against the base carry the OLD
@@ -191,7 +198,7 @@ static SURF* surf_get(unsigned base, int w, int h, int pitch)
     if (s_nsurf >= MAX_SURF) return NULL;
     memset(&s_surf[s_nsurf], 0, sizeof(SURF));
     s_surf[s_nsurf].base = base; s_surf[s_nsurf].w = w; s_surf[s_nsurf].h = h;
-    s_surf[s_nsurf].pitch = pitch;
+    s_surf[s_nsurf].pitch = pitch; s_surf[s_nsurf].owner = owner;
     s_surf[s_nsurf].bl = s_surf[s_nsurf].bt = 0x7FFF; s_surf[s_nsurf].br = s_surf[s_nsurf].bb = -1;
     return &s_surf[s_nsurf++];
 }
@@ -200,7 +207,15 @@ static SURF* surf_get(unsigned base, int w, int h, int pitch)
 static SURF* surf_of_ctx(const int* ctx)
 {
     if (!ptr_ok(ctx)) return NULL;
-    return surf_get((unsigned)ctx[CTX_BASE], ctx[CTX_W], ctx[CTX_H], ctx[CTX_PITCH]);
+    /* THE OWNER IS THE CONTEXT. Every destination this file has ever recorded is
+       a surface object made by SurfaceCreateNamed 0x4C69F0, which asks MEM_Alloc
+       for w*h+0x30 bytes and hands the object the block, its pixels at +0x30
+       (0x4C6A04, 0x4C6A14). MEASURED 2026-09-12 over a whole session, every
+       registration: base == ctx + 0x30, no exception. So the context pointer IS
+       the block that MEM_Free will be handed, and before_memfree can retire the
+       entry by it. */
+    return surf_get((unsigned)ctx[CTX_BASE], ctx[CTX_W], ctx[CTX_H], ctx[CTX_PITCH],
+                    (unsigned)(size_t)ctx);
 }
 
 /* ---- the ops recorded since the last flip ------------------------------ */
@@ -547,6 +562,9 @@ static void publish(unsigned flipSurf)
     int vl = 0, vt = 0, vr = -1, vb = -1;
     if (!g_gui_draw) return;
     if (consumer_stalled()) return;
+    /* an off-thread MEM_Free could not retire the entry itself (before_memfree):
+       this is the table's owner, so it does it here, before anything reads a base */
+    for (i = 0; i < s_nsurf; ) { if (s_surf[i].dead) surf_drop(i); else i++; }
     dedup();
     if (g_guiq.reseed || s_pubOverflow) {
         TAGPU_PUBOP* o;
