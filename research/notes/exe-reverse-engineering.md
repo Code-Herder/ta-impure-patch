@@ -842,6 +842,17 @@ So the block projects against the true origin while its gate tests the widened r
 combination is what makes the rect correct in the ring and is why `tagpu_vpwide`'s `0x498DA0`
 stub redoes the mouse conversion with the true origin and the wide clamp.
 
+**The unit being placed — `BuildUnitID main+0x2CC4` [VERIFIED LIVE 2026-09-12].** A u16,
+the UnitDef index of the building the placement cursor is carrying — the same index space as
+`UnitStruct+0xA6`'s `ModelId` and `OrderNode+0x36`'s build type, so it indexes both UnitDefs
+and `MODEL_PTRS` directly. TADR's `tamem.h` names it `BuildUnitID`, sitting between the mode
+byte `0x2CC3` and the flags byte `0x2CC6` (layout 1+2+1). Verified on the build-ghost
+landing: with a commander selected, clicking `ARMMEX` on the build page puts the mode byte at
+14 and the word at 78, the mex's in-game UnitDef index, while `0x2C92..` holds its 48×48
+footprint. A build-menu click changes no GUI state — only the mode byte moves — so the type
+is latched here, not in any `.GUI` gadget record. The frame packet carries it as
+`build_unit_id` for the ghost pass.
+
 **`0x46A530 DrawUnitSelectBoxRect` has NO ModelId test — a negative result that cost a landing
 review to establish [BINARY-VERIFIED 2026-09-10].** Its only early-out is the `SelBoxes` option
 bit:

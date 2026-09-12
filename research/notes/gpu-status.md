@@ -2887,6 +2887,44 @@ pre-landing-3 design, changed by landing 3's own review, with the text left behi
 it and reported a defect that is not in the code, which is the cost of a stale comment stated as a
 measurement.
 
+### 2.23 The build ghost (`tagpu_native.c`, OFF by default, `tagpu_ghost.on`) — 2026-09-12
+
+A translucent copy of the building under the placement cursor and of every queued build the order
+pass is showing a site rect for, drawn through the posed program in the game's green — the blocked
+red when the site bit is clear — at half opacity, over the footprint squares exactly as the mark
+and order passes draw them. Nothing about the squares changes; no new engine hook and no engine
+write: the ghost is a posed body draw whose DATA arrives entirely in the frame packet.
+
+- **The data.** `TAGPU_PK_BUILD`, a build-orders table the publisher copies out of the order
+  pass's own game-thread snapshot — the same records `draw_build` draws the squares from, so the
+  ghost and the squares cannot drift, and the same gate (`s_build`, a non-zero `btype`, a resolved
+  def). The cursor's unit type is `build_unit_id`, the header's copy of `BuildUnitID main+0x2CC4`
+  ([VERIFIED LIVE](exe-reverse-engineering.html): 78 = ARMMEX after a build-menu click), with the
+  cursor's position the midpoint of `build_rect` and its gate `gather_cursor`'s own (mode 14, and
+  the band bit or the mouse inside the rect the engine can NAME). Both ghosts bound their type by
+  `udef_count` before the model table.
+- **The draw.** The ghost pass lives in `tagpu_native.c` (the `fenced` file whose allowance the
+  `MODEL_PTRS` template read stands on) and synthesises the piece list from the model tree —
+  parents first, at rest, the same walk class the bake and `PK_PIECE.node` stand on — then bakes
+  and poses: a **rest pose**, per-piece translation by the bake's `restOff` (posed_pose's own
+  output for a unit holding every piece at rest), into render-thread scratch. One ghost = one
+  bake lookup (the geometry is shared with every unit of the type), one `glDrawArrays`, no pose
+  arena. `fog=0` so it never fog-dims, like the square; no shadow, no nanoframe wire, no
+  waterline.
+- **The shader.** `tagpu_native_unit_fs` gains `uGhost`/`uGhostTint` — `rgb *= uGhostTint` before
+  the alpha term, the same one-line shape as the underwater tint. The gate defaults to 0, so a
+  program that never sets it (the native program, the shadow and slant branches) draws as it
+  always has. `TAGPU_PDUNIT` carries `tint[3]` + `tintOn` beside `alpha`; ordinary units leave
+  them off. Green/red resolve through the live palette from `gui_col[0x0A]`/`[0x04]` — the
+  square's own slots.
+- **The lever.** `tagpu_ghost.on` (tokens: `alpha=<f>`, default 0.5), re-read on the pass's own
+  30-frame poll; the armed line and the `ghost: curs= queue= drawn= nopal= nobake=` heartbeat log
+  only on change / every 300 frames. `nopal` and `nobake` must stay 0.
+- **Verified in game** (one-unit fixture, play defaults): the blocked cursor ghost reads as the
+  red-tinted mex over the commander, the valid one as the green-tinted mex at the cursor, and the
+  queued ghosts as green-tinted mexs at the site rects — each diffed against `ghost.on=off` and
+  found only at the ghost's own footprint.
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out
