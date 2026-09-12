@@ -2705,6 +2705,32 @@ engine's sprite blown up instead of ours at the device's resolution.
 path: both hand it a one-glyph font object of ours, so TA's own glyphs are still TA's own blit.
 The list is **33 files**, from 36 before landing 4.
 
+### 2.21b The protocol and the cost, measured across all three rows
+
+**The protocol**, `200v200` at 1920×1080 under `check`+`stress`+`poison`, on landing 4's DLL and on
+landing 3's, back to back: **10 487** taken frames against 10 564, and on both exchanges of both
+builds `viol=0 pviol=0 crcbad=0 foreign=0 commitfail=0`, with `dup=0 relbad=0 woob=0` in the world
+segment and `trunc=0/0/0/0 layerbad=0 subbad=0` in the effects one. `grow` and `trunc` past the
+first fill of each slot are the stress lever's growth path doing its job and are 45/19 against
+21/11 — landing 4's record is bigger, so it grows more.
+
+**The packet is bigger, and most of it is one table.** `used=` on `200v200` at 1080p went from
+**65 KB** to **168 KB**. Turning the two new gathers off in the same launch says where it goes: the
+three effect tables and the particle one are **8 KB** and the wide fog grid is **72 KB** (245×148
+cells at 1080p, two bytes each). The engine's own fog grid is 4 KB, the LHT ramp 8 KB, the fog
+shade 256 B.
+
+**The wide grid is copied into every packet on purpose, and the alternative was considered and
+rejected.** It could be sent only while the render thread is drawing at zoom < 1 — the publisher
+knows the commanded zoom, because the command record carries it — but the render thread decides
+mid-frame to draw the first zoomed-out frame of a gesture and posts that command at the END of its
+frame, so the game thread learns one render frame late. That is exactly the bare frame G13s
+removed: one frame of the outer ring drawn over the engine's 1× grid, at the start of every
+zoom-out. The copy is what buys "never a bare frame", and it is 72 KB of memcpy on the game thread
+per publish.
+
+PLACEHOLDER-CLEANCOST
+
 ### 2.22 What landing 4's review changed
 
 **Four Opus reviewers at `high`, read-only, launched as `Agent`s** — one per plan row with a
