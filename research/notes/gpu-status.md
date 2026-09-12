@@ -2017,10 +2017,11 @@ pair for the reason §2.8 gives.
 
 **Known costs.** The HUD is 1× art magnified: bigger, not sharper. The world under it is
 rendered and then covered — about 20 % of the fill at `s = 4.5`. And the first world column the
-player can see is `eye + (128s − 128)` rather than `eye`, so **if** the engine's eye clamp
-bottoms out at 0 the map's top-left `((s−1)·128, (s−1)·32)` world px cannot be scrolled into
-view; that consequence is derived and not measured (§22.5), and moving the clamp is the piece
-of work that would close it.
+player can see is `eye + (128s − 128)` rather than `eye`: **measured 2026-09-12**, 4K Auto on a
+lava map, the engine clamps `eyeX` to 0 and the player's own starting commander (world x = 400,
+engine screen x = 528) sits behind the 576-px panel with no smaller eye to scroll to. Moving
+that clamp is the rest of the feature, not a follow-up — until it moves, Auto at 4K is not a
+defensible default (§22.5).
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 

@@ -37,16 +37,14 @@
    and 19 px up from where it was drawn. Nothing here writes engine memory now,
    which is also why the setting no longer has to wait for a game to start.
 
-   THE COST OF NOT RESERVING, stated so it is not rediscovered as a bug: the
-   world under the HUD is rendered and covered (≈20% of the fill at s = 4.5),
-   and the first world column the player can see is eye + (128s − 128) rather
-   than eye. That projection is measured (2026-09-11, 1024x768 Auto: the roster,
-   the engine's hover field and a click all agree at the drawn position). What
-   follows from it is NOT measured: if the engine's own eye clamp bottoms out
-   at 0, the map's top-left ((s−1)·128, (s−1)·32) world px cannot be scrolled
-   into the visible part of the viewport, and moving that clamp is a separate
-   patch. Two attempts to drive the camera to the clamp on a scenario fixture
-   scrolled nothing, so the clamp itself has not been read back.
+   THE COST OF NOT RESERVING, and it is bigger than it first looked: the world
+   under the HUD is rendered and covered (≈20% of the fill at s = 4.5), and the
+   first world column the player can see is eye + (128s − 128) rather than eye.
+   MEASURED 2026-09-12 at 4K Auto: the engine clamps eyeX to 0, so on a map with
+   a western start the player's own commander (world x = 400, engine screen
+   x = 528) sits behind the 576-px panel and there is no smaller eye to scroll
+   to. Moving that clamp is the rest of this feature, not a follow-up, and until
+   it moves Auto at 4K is not a defensible default. See gui-renderer.md §22.5.
 
    THE SETTING is a percentage of stock, 0 meaning Auto. Auto is H/480 — the
    panel exactly fills the screen height, which §3.4a measured to be both the

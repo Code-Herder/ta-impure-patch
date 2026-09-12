@@ -3056,6 +3056,18 @@ were written against never moves.
 | (500,25) magnified top bar | (312,15) | `0` |
 | (500,745) magnified bottom bar | (312,754) | `0` |
 
+**The composite has an ordering rule, and breaking it cost a build.** Everything in `LAY_FS`
+downstream of the region map indexes the ENGINE's surface — `uCursor` is "the engine's own rect,
+GAME px", `uVp` is the engine's viewport rect, and `uTwin`/`uSurf` are the twin and the primary.
+So all of them must be asked about the texel the colour actually came from, not about the dest
+fragment. Merging main brought in the stale-mirror guard (§21), which compares the twin against
+the primary at `p`; with the map still sitting *below* it, `p` was the dest texel, so inside a
+magnified region the guard read the twin out in the world — where our own key fill had erased it
+— found index 0 against a non-zero primary, and **discarded the HUD it was about to draw**. The
+symptom is specific and worth recognising: the HUD measures 128/32 on screen while the heartbeat
+says `s=4.500`. The fix is ordering, not a special case — the map runs first and `p`/`f` are
+derived from `sd` — and at `s = 1` `sd` is `d`, so the guard and the parity gate are untouched.
+
 **The map is exact at every screen a player can pick, and that is checked by exhaustion rather
 than by sampling** — 108 (mode, stage) pairs where the scale is past stock, twenty-two modes
 from 320×240 to 7680×4320 against all six stages. Two properties: the panel's last screen
@@ -3072,14 +3084,23 @@ Confirmed in the game: `dmove:500,767` at 1024×768 reads engine 767, where it r
 selected nothing — but it selects nothing with `hud.off` either, so it is the harness and not
 the feature, and it is left as an open question about `tacli` rather than about this.
 
-**Two costs, stated so they are not rediscovered as bugs.** The world under the HUD is rendered
-and then covered — about 20 % of the fill at `s = 4.5`. And the first world column the player
-can see is `eye + (128s − 128)` rather than `eye`; **if** the engine's eye clamp bottoms out at
-0, the map's top-left `((s−1)·128, (s−1)·32)` world px cannot be scrolled into view — 160×40 at
-1080p Auto, 448×112 at 4K Auto. That second one is **derived, not measured**: two attempts to
-drive the camera to its clamp on a scenario fixture scrolled nothing, so the clamp itself has
-not been read back. Moving it is the obvious next piece of work, and is what would make this
-free rather than merely cheap.
+**Two costs, and the second one is worse than it was written down as.** The world under the HUD
+is rendered and then covered — about 20 % of the fill at `s = 4.5`. And the first world column
+the player can see is `eye + (128s − 128)` rather than `eye`, so the map's top-left
+`((s−1)·128, (s−1)·32)` world px cannot be scrolled into view — 160×40 at 1080p Auto, 448×112
+at 4K Auto.
+
+That second one was written here as *derived, not measured*. **It is now measured, and it bites
+on the first frame of an ordinary skirmish.** 3840×2160, Auto, a lava map, ARM start near the
+west edge: the engine clamps `eyeX` to **0**, the player's own commander sits at world x = 400
+— engine screen x = 528 — and the magnified panel covers screen 0..575. So the commander is
+drawn, covered, and cannot be revealed, because there is no smaller eye. Hovering the engine
+point picks it (`main+0x2CBA` = `0xFFFF0001`); hovering the *screen* point cannot, because the
+pointer map correctly sends anything under 576 into the panel.
+
+**So the eye clamp is not a follow-up, it is the rest of this feature.** Until it moves, Auto at
+4K is not a defensible default, and the honest ceiling for a default is whatever keeps
+`128s − 128` inside the margin a player would never build in — which nothing here has measured.
 
 **The setting is live now.** Nothing it changes is engine state, so the store puts it in force
 as it writes it and the next composited frame is already at the new scale. The "set it before

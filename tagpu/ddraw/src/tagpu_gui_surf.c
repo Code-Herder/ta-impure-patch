@@ -484,7 +484,29 @@ static const char* LAY_FS =
        destination — the engine blits its cursor and holds its UI pixels at
        screen positions, not at the twin positions we magnify from. */
     "  vec2 d = uv * vec2(uSize);\n"
-    "  ivec2 p = clamp(ivec2(d), ivec2(0), uSize - 1);\n"
+    /* THE HUD'S REGION MAP RUNS FIRST, and `p`/`f` below are the SOURCE texel
+       it chose, not the dest fragment. Everything downstream of here indexes
+       the engine's own surface -- `uCursor` is "the engine's own rect, GAME
+       px", `uVp` is the engine's viewport rect, and uTwin/uSurf are the twin
+       and the primary -- so all of them have to be asked about the texel the
+       colour actually came from. At s == 1 `sd` IS `d` and this is the
+       identity, which is why the s = 1 gate and main's stale-mirror guard are
+       untouched by it.
+
+       This was wrong for one build (22.5): the map sat BELOW the cursor test
+       and the guard, so in a magnified region the guard compared the twin at
+       the dest texel -- out in the world, where our key fill had erased it --
+       found index 0 against a non-zero primary, and discarded the HUD it was
+       about to draw. The symptom was a HUD that measured 128/32 on screen
+       with `s=4.500` in the heartbeat. */
+    "  vec2 sd = d; float ramp = 1.0;\n"
+    "  if (uHud.w > 1.0) {\n"
+    "    float H = float(uSize.y);\n"
+    "    if (d.x < uHud.x || d.y < uHud.y) { sd = d * uHud.z; ramp = uHud.w; }\n"
+    "    else if (d.y >= H - uHud.y) {\n"
+    "      sd = vec2(d.x * uHud.z, H - (H - d.y) * uHud.z); ramp = uHud.w; }\n"
+    "  }\n"
+    "  ivec2 p = clamp(ivec2(sd), ivec2(0), uSize - 1);\n"
     "  vec2 f = vec2(p);\n"
     /* THE SHARP LAYER (gui-renderer.md 13.2), TOP of the composite: device
        resolution, drawn from live state at present time, row 0 the viewport's
@@ -531,13 +553,6 @@ static const char* LAY_FS =
        key fill erased it, and that fill covers exactly this rect.
        `ramp` widens the sharp-bilinear ramp with the magnification: it is
        "one DEVICE pixel", and one device pixel is s source texels fewer here. */
-    "  vec2 sd = d; float ramp = 1.0;\n"
-    "  if (uHud.w > 1.0) {\n"
-    "    float H = float(uSize.y);\n"
-    "    if (d.x < uHud.x || d.y < uHud.y) { sd = d * uHud.z; ramp = uHud.w; }\n"
-    "    else if (d.y >= H - uHud.y) {\n"
-    "      sd = vec2(d.x * uHud.z, H - (H - d.y) * uHud.z); ramp = uHud.w; }\n"
-    "  }\n"
     "  vec2 tc = sd - 0.5;\n"
     "  vec2 b  = floor(tc);\n"
     "  vec2 w  = clamp((tc - b - 0.5) * (uScale * ramp) + 0.5, 0.0, 1.0);\n"
