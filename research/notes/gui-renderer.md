@@ -3236,3 +3236,48 @@ and a second correction would be a double one.
 **Still not driven**: nothing here has exercised the smooth SetCamera `0x41C4C0`, and the ~20 %
 overdraw of 22.5 is gone (the engine draws only the visible window) but that has not been
 measured as a frame-time change.
+
+## 23. The render half reads the packet — the frame packet exchange's landing 4c  [2026-09-12]
+
+The plan's row 4c ([frame packet exchange](frame-packet-exchange.html) §9, §11). Everything about
+the GL UI layer is unchanged except **where its render half gets its inputs**: `tagpu_gui_surf.c`
+made four engine reads on the render thread, every present, and the plan's fifth review found that
+rows 2 to 5 of the migration had never named the file — so after landing 5 it would still have been
+on the allow-list. It is off it now.
+
+**The op QUEUE is untouched and stays a queue.** It carries an op STREAM into retained twins and a
+latest-wins snapshot cannot do that; §9 of the plan says why at length. What moved is the
+per-frame STATE the render half read beside it.
+
+### What crosses, and as what
+
+| what it was | what it is | why that shape |
+|---|---|---|
+| the cursor's position and sprite, read from `[0x51FBD0]+0x1B6`/`+0x1BA`/`+0x1B2` in `tagpu_gui_cursor_frame` | header fields, plus the sprite record as a **key** | the record IS a GAF frame header and it comes out of the cursor table, loaded once per session and never rewritten — the `session-reader` class. Only `tagpu_gaf.c` dereferences it, which is where that argument lives. The position and size ride as values |
+| the minimap's box (`main+0x142E7`..), its view rect (`+0x142CB`) and its colour byte (`+0xDD9`) | header fields | values; nothing to argue about |
+| the three 8bpp minimap surfaces, walked row by row here to interleave into RGB | **one copy**, interleaved by the publisher, gated on `tagpu_gui_want_minimap` | their DESCRIPTORS are what made the read dangerous rather than merely stale: each carries a base AND a pitch, so a torn one is a wild read of `eh × pitch` bytes. Every cross-check moved with them. The gate is because at k = 1 the sharp minimap is deliberately the engine's own (§19), so an unarmed frame must not pay for an `ew × eh × 3` interleave per publish |
+| the level's minimap picture, read through `tagpu_gui_minimap_pic` from a buffer the LOADER thread filled | the **level's first in-play packet**, and no other; the render half keeps its own copy keyed on the level generation | the copy is what a GL re-init needs anyway. The observer at `BuildMinimapSurface 0x466780` still decodes on the loader thread and **has to**: that call is the only place `main+0x1426B` is alive (it consumes the frame at `0x46684F`, and the loader frees the picture at `0x483DF3`/`0x483E0B`). What went is the render thread reading the loader's buffer |
+| `PK_STRING.frame`, the engine's FONT OBJECT, dereferenced in `tagpu_text.c` per glyph behind `IsBadReadPtr` | a **font id** the producer assigns per (font, signature), and each glyph's width and packed rows **on first sight of a (font, code) pair** | this was the plan's "missed": an engine address inside a queue op, handed to the render thread up to a queue backlog after the observer saw it, with no note anywhere establishing a UI font's lifetime. A probe is not a lifetime argument (`CLAUDE.md`). The bits are copied on the game thread, inside the flip the observer recorded the draw in, bounded by the format — the `.fnt` file image, whose offset table has 256 entries whatever the byte at `+3` says, and which is REFUSED rather than probed when that byte is not 0 |
+
+### What did not change
+
+TA's own glyphs are still stamped by TA's own blitter: `tagpu_text.c` builds a **one-glyph font
+object of ours** — `[rows][0][yoff][code][u16 6][w][bits]`, the same four header fields `0x4CCF60`
+reads — and hands the blitter that, which is exactly the shape the marker path has used since the
+exchange's landing 1. The blitter is still `pure-engine-code` on the allow-list, and it is now the
+ONLY thing on that list from either text path: `tagpu_text.c` carries no probe at all.
+
+The twins stay 1:1 with the engine's surfaces, `strict` means what it meant, and the census still
+explains every changed pixel. The queue's own control words, its stall guard and its skip-to-reset
+are untouched.
+
+### Not closed here
+
+- **The GAF banks' lifetime is still a class, not a proof, for anything but the "fx" bank.** Landing
+  4a verified that one is loaded once per process; the cursor table and the UI sprite frames are
+  covered by the same `session-reader` line and no note establishes them the same way.
+- **The twin-to-packet skew is counted, not eliminated.** The GUI batch is published inside the
+  flip at most every 5 ms and the packet after `DrawGameScreen` returns, so the twin can be ahead
+  of the packet's world by whatever the queue held. `gui_flips` in the header is what makes that a
+  number rather than an argument; nothing in the twin is world-anchored except the engine's own
+  minimap box and dots at 1×.

@@ -514,6 +514,26 @@ narrow-window guard this deferral sits behind — is deleted with them.
 - **The teardown wait itself** (§6b, §6c), which is what holds the render thread out of the whole
   cascade.
 
+### What landings 4a, 4b and 4c took off it (2026-09-12)
+
+**One CLIENT went and one DEPENDENCY went.**
+
+`tagpu_fogwide` was a client: a grow retired its three old buffers behind this fence's quiescence
+stamp, because the render thread held a raw pointer into the set for a whole frame. Landing 4b
+copies the grid into the frame packet on the game thread, in the same draw it is built in, so
+nothing outside that thread ever sees the block — the retire ring, `fogw_retire`, `fogw_drain`,
+`strand=`, `held=` and the `tagpu_reclaim_pass_stamp()` call are all deleted, and a grow frees the
+old block on the spot. §3's list of "the next clients" loses it.
+
+**The particle heap is not a future client any more either.** §3 named it as the next thing to
+defer — the layer vectors and the per-object sub-vectors the game thread grows mid-play — and
+landing 4a closed it by moving the walk instead: the thread that grows them is the thread that
+reads them now, so there is nothing to defer.
+
+**What is left of this fence is exactly the ASSET class**: the model templates, the FeatureDef and
+wreck records, the tile set, and the teardown wait that holds the render thread out of the whole
+cascade. That is the residual below, and it is unchanged by landings 4a–4c.
+
 ### What "under the fence" is worth when the fence is not there
 
 **`[NAMED 2026-09-12, a landing review — this is an OPEN residual, not a closed one]`** Every

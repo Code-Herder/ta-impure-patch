@@ -2690,8 +2690,48 @@ its bound.
 | one piece | `+0x00` the template node (crosses as a value the fence covers), `+0x04` the COB move, `+0x10` the COB turn, `+0x28` the flags | copied whole, `nparts` of them |
 | the feature grid | `main+0x14287`, `0x0D` per cell: `+0x04` height, `+0x08` def index, `+0x0A` wreck index, `+0x0C` flags | the rect is clamped to `main+0x14233`/`+0x14237`; a def index `≥ 0xFFFB` is not an anchor |
 | a wreck record | `main+0x1420B + idx·0x30`: `+0x04` Object3do, `+0x08/+0x0C/+0x10` the 16.16 position | reached only from an anchor whose FeatureDef row is inside `main+0x14253` and whose `FeatureMask` bit 0 is clear — **and whose cell index is under 2048**, the pool `0x421F29` allocates. **[ADDED 2026-09-12, a landing review]** the index had no bound at all before, and this walk is not the engine's: the engine's own read at `0x46A6C4` is equally unbounded but only ever forms the address for a cell it is drawing, where the publisher covers the zoom-floor rect plus a 32-cell margin. The allocator `0x4232A0` returns 2048 itself when the free list is empty, so 2048 is the engine's own "no record" value as well as the array's length |
-| the frame's option bytes | `main+0x0DCB` the GUI colour array (64 of them), `+0x2C76`/`+0x2C7A` the dispatched mouse point, `+0x2C92..+0x2CA6` the build cursor's two corners, `+0x2CC3` the cursor mode, `+0x2CC6` the region flags, `+0x37F06` the option byte (damagebars, Shadow, TShadow, FShadow), `+0x1424B`/`+0x1424F` the feature sweep | none needed: they are values, and every consumer of them already treated them as such |
+| the frame's option bytes | `main+0x0DCB` the GUI colour array — **256 bytes, not 64** [CORRECTED 2026-09-12, landing 4a: `0x4AC7D0` rebuilds it from `guipal` and its loop at `0x4AC7FF..0x4AC88F` writes exactly `0x100` of them], `+0x2C76`/`+0x2C7A` the dispatched mouse point, `+0x2C92..+0x2CA6` the build cursor's two corners, `+0x2CC3` the cursor mode, `+0x2CC6` the region flags, `+0x37F06` the option byte (damagebars, Shadow, TShadow, FShadow), `+0x1424B`/`+0x1424F` the feature sweep | none needed: they are values, and every consumer of them already treated them as such |
 | the shade table | `[0x51FBD0]+0xC4`, 32 × 256 bytes | the FORMAT is the bound: `0x459C70`'s Gouraud path indexes it with a 5-bit row and a byte, so a copy of exactly that size reads what the rasteriser reads |
+
+### The effects: the four per-frame arrays [VERIFIED 2026-09-12, landing 4a, objdump of the pristine build]
+
+All four are SIM state: the tick moves them, and the engine's own draw passes (`0x49BE60`
+projectiles, `0x420B00` explosions, `0x471F90` the particle layers) read them and write nothing.
+That is what lets the frame packet's publisher gather them ONCE PER TICK and reuse the tables for
+every publish of that tick.
+
+| array | where | how many, and who says so |
+| --- | --- | --- |
+| projectiles | count `main+0x141F3`, base `main+0x141F7`, stride `0x6B` | **exactly 300.** `0x499A30` allocates `0x7D64` bytes = 300 × `0x6B` (and `rep stos` clears `0x1F59` dwords, the same 32 100 bytes), then zeroes the count; `0x499A80` frees the base AND NULLS it inside the teardown cascade. **Both append sites refuse past 300** — `0x49B6EE` and `0x49B809`, each `cmp …,0x12C / jge` past the store — so the count is bounded by the allocation itself and no sanity cap is needed |
+| explosions | count `main+0x1491B`, records **inline** at `main+0x1491F`, stride `0x54` | **300.** `0x420A30`'s add site: `cmp ecx,0x12C / jge` refuses, then `lea eax,[ecx*8+0]; sub eax,ecx; lea edx,[eax+eax*2]; lea esi,[edi+edx*4+4]` — 84 × index past the count word, which is the stride and the base together. Nothing to free: the records are in the block |
+| flying debris | the 100 dwords at `0x511DF0..0x511F80`; each names a system whose `+0x2C` is the piece `{node @0, turn @0x12, x @0x16, alt @0x1A, y @0x1E}` | the slot count is the address range |
+| the ten particle layers | `*(main+0x38D77)`, `0x10` per layer: `{u8 flag, begin @4, end @8, cap @0xC}`. `0x471D90` allocates the table from the level load; `0x471DE0` frees AND NULLS it in the teardown | **401 objects, not 400.** Every emitter reads the layer's size and `cmp eax,0x190 / jbe append` (`0x472071`, `0x47219F`, `0x4722CF`, `0x4723D6`, `0x4724D5`, `0x4725D4`, `0x4726C0`, `0x4727B0`, `0x47289A`, `0x47297A`, `0x472A5A`, `0x472BF2`, `0x472CD9`): at 400 or fewer it appends, and **past 400 it destroys the FRONT object, shifts the vector down by one and appends anyway** (`0x472078..0x4720AF`). So 401 is the steady state. The sub-particle vectors inside each object are grown by `0x4732E0` and are the one thing the level fence never covered |
+
+**The effect GAF sequences are a SESSION asset, not a per-level one** [VERIFIED 2026-09-12].
+`0x429870` loads the `"fx"` bank (`0x4290F0(&path, "anims", "fx", "GAF")` → `0x4B8C60`) and
+resolves every named sequence into `main+0x147AB..0x14903` — `"smoke 1"` → `+0x147CF`, the five
+rendertype-4 sprite sequences → `+0x147BB..+0x147CB`, the rendertype-5 flare → `+0x147F3`, the
+projectile ground-shadow blob → `+0x1480F`. **Its only caller is `0x49134D`**, inside `0x491200`,
+**whose only caller is `0x49EA62`** inside `0x49E830` — WinMain, reached from the SEH wrapper
+`0x49EDC0` with the four `WinMain` arguments. So those sequences are loaded once per process. This
+is the lifetime argument for a sub-particle's or a projectile's sequence pointer crossing the
+thread boundary at all; the ANIM STATES an explosion carries are a different question and are not
+established here.
+
+`TAProgram` (`[0x51FBD0]`) carries two tables the effects pass needs beside them: `+0xC8` the
+32 × 256 LHT "lighten" ramp the explosion flash is derived from, `+0xCC` the 256-byte palette remap
+`0x4BFE10` applies to the fog band, and `+0xF0` the capability word (bit 5 the ALP alpha table is
+built, bit 7 the LHT one).
+
+### The two fog lattices, and the minimap's four surfaces [VERIFIED 2026-09-12, landing 4b and 4c]
+
+| what | where | lifetime, and the check that stands for it |
+| --- | --- | --- |
+| the engine's screen fog grid | descriptor `*(main+0x1421F)` = `{u16* buf, i32 cols, i32 rows, i32 cells}` | built once per map by LoadMap (`0x483C03` / `0x483C96`) and only REWRITTEN by the builder `0x4843C0`; freed by the map-free `0x483DD0` inside the teardown cascade. **The relation is the check**: the builder rounds the cell count up to a multiple of 8 before allocating (`0x483C84`: add 7, and ~7), so `cells == ((cols*rows + 7) & ~7)` says the three numbers describe one block. The grid's world origin is `32·col0 + 16`, `col0` the builder's half-cell-rounded eye — which is why the publisher latches the eye **inside** the fog site rather than taking the one the packet carries |
+| the minimap's three 8bpp surfaces | `main+0x142DF` the fog base, `+0x142E3` the unshaded base, `+0x142DB` the fog+dots composite; each a `{i32 w, i32 h, i32 pitch, u8* base}` descriptor | the minimap build `0x4669B0`, from the level load at `0x4919C3`, stores all three once; `0x466AA0` frees and NULLS them inside the teardown cascade. A descriptor carries a base AND a pitch, so a torn one is a wild read and not a stale picture: the publisher cross-checks `w`/`h` across all three and refuses a pitch below the width or past 4096 |
+| the minimap's box and view rect | `main+0x142E7`/`+0x142E9`/`+0x142EB`/`+0x142ED` the box the engine fitted it into (i16, ITS screen px), `+0x142CB` the view box (4 × i32, screen px, edges inclusive), `+0xDD9` its palette index | values. `+0x142F1` bit 1 is NOT a gate: it is `DrawMinimap 0x466B00`'s dirty flag and `0x466B16` clears it in the same breath |
+| the level's minimap picture | `main+0x1426B`, a GAF frame (TED_GENERATED_PIC) | **alive only inside `BuildMinimapSurface 0x466780`**: that call consumes the frame at `0x46684F`, its single caller is `0x4669B0`, and the loader frees the picture at `0x483DF3`/`0x483E0B` in a function that calls neither. So an observer at `0x466780`'s entry is the only way to see it — and it runs on the LOADER thread. What orders that decode against the packet is the engine's own flag: the loader's last act sets bit 1 of `main+0x38D75` and the game-screen handler installs the in-play frame handler only after testing it |
+| the cursor | `[0x51FBD0]+0x1B2` the sprite record — itself a GAF frame header — and `+0x1B6`/`+0x1BA` where it was last drawn | the record comes out of the cursor table, loaded once per session |
 
 **The FeatureDef array grows one record at a time, and the count is written LAST.** `0x422520`
 reallocs `main+0x1426F` to `(NumFeatureDefs + 1) · 0x100` (`0x422543`, through `0x4D84A0`), stores

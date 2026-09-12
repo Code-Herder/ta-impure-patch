@@ -2566,6 +2566,111 @@ defaults, this DLL against the one built from landing 2's tip (`4b84098`):**
   `tagpu_lerp.c` and `tagpu_hires.c` off it entirely and four more re-classed from `to-convert:3`
   to `fenced`; a planted `0x00511DE8` in `tagpu_mark.c` fails `make`.
 
+### 2.19 The frame packet exchange, landing 4a — the effects and the particle layers (`tagpu_packet.c`, `tagpu_packet_pub.c`, `tagpu_fx.c`, `tagpu_sfx.c`, `tagpu_fxown.c`, `tagpu_gaf.c`) — 2026-09-12
+
+The plan's row 4a ([frame packet exchange](frame-packet-exchange.html) §11): the projectiles, the
+explosions, the flying debris and the ten particle layers cross in the packet. **This is the one
+client `tagpu_reclaim`'s per-LEVEL fence never covered** — the layer table is per game, but each
+layer's `{begin,end}` pair and every object's sub-particle vector are `std::vector`s the game
+thread GROWS mid-play, freeing the old array (`0x4732E0`), so the pair could be read skewed and a
+consistent pair could name memory just freed ([cross-thread engine reads](cross-thread-engine-reads.html)
+§5). The probes both files carried made that rarer and nothing else.
+
+| site | what we do there | thread |
+|---|---|---|
+| `DrawGameScreen 0x468CF0`, the observer's **`after`** | four more tables. `PK_PROJ` (56 B) one per live projectile, with the rendertype's own rotation adjustment applied, the weapon's colour NUMBERS already through `main+0xDCB`, the attacker's owner byte, the ground-shadow blob's world y, and the sprite or flare frame already indexed by this tick; `PK_EXPL` (32 B) the debris node, the two anim states' resolved frames and the turn triple; `PK_DEBRIS` (24 B) one per occupied particle slot; `PK_PART` (16 B) one per drawable sub-particle, **in layer order**, with the projection done (`x` = hi(world x), `zp` = hi(y) − hi(alt)/2) and its GAF frame resolved. The header gained the ALP/LHT capability bits, the ground-shadow frame, the 32×256 LHT ramp and the **whole 256-byte** GUI colour LUT | game |
+| the same `after` | **the gather is taken once per SIM TICK**, keyed on `(level generation, tick)`. All four arrays are sim state — the tick moves a projectile, advances an explosion's anim frame and runs every particle's update leaf — and the engine's own draw passes (`0x49BE60`, `0x420B00`, `0x471F90`) read them and write nothing, so two publishes of one tick must produce the same table. Measured: **375 scans against 71 668 reuses** on a paused fixture, ~1 in 190. The LEVEL half of the key is what stops a hit across a boundary handing the native pass a model root the teardown has freed | game |
+| `tagpu_fx.c` | the three effect tables and the engine's DRAWING RULES over them — which rendertype makes which primitive, where the shadow blob goes, how the lightning bolt jitters. It reads no engine memory at all and is **off the allow-list**; the model roots it carries are per-TYPE templates it never dereferences, passed straight to `emit_fx_model` in the (fenced) native pass | render |
+| `tagpu_sfx.c` | the particle table, walked by layer because the layer IS the draw depth (0..6 before the projectiles, 7..9 after the explosions). Also **off the allow-list** | render |
+| `tagpu_gaf.c` | gained `tagpu_gaf_frame_geom` / `_subframe`, so a pass that only PLACES a sprite dereferences no engine byte of its own; the publisher calls its resolvers on the game thread | both |
+| `tagpu_fxown.c` | the render thread's standing request for the tables (`want`), with the same 90-frame watchdog the two skip bytes stand on: an unarmed pass costs the publisher nothing | both |
+
+**Three bounds became the engine's own, by disassembly** ([engine map](exe-reverse-engineering.html),
+"The effects: the four per-frame arrays"). `0x499A30` allocates the projectile array as `0x7D64`
+bytes = exactly **300** slots of `0x6B`, and both append sites refuse past 300 (`0x49B6EE`,
+`0x49B809`), so the render-thread pass's 8192-slot sanity cap is gone. The explosion add site
+refuses past 300 (`0x420A42`). The debris slots are the 100 dwords at `0x511DF0..0x511F80`. **The
+particle layer's bound is 401, not 400** — every emitter reads the size and `cmp eax,0x190 / jbe
+append`, and past 400 destroys the FRONT object, shifts the vector down and appends anyway, so 401
+is the steady state; a walk that stopped at 400 dropped the whole layer every time it filled, which
+is what the new `layerbad` counter read **86** times on one `fx-mix` run before this was corrected.
+
+**Two facts the landing established and the engine map now records.** The **"fx" GAF bank is a
+SESSION asset**: `0x429870` loads it and resolves every named sequence into `main+0x147AB..`, and
+its only caller is `0x49134D` inside `0x491200`, whose only caller is `0x49EA62` in WinMain
+(`0x49E830`) — so the effect sequences are loaded once per process, not per level. And
+**`main+0xDCB` is a 256-byte LUT**, not 64: `0x4AC7D0` writes exactly `0x100` bytes of it
+(`0x4AC7FF..0x4AC88F`). The packet's `gui_col` grew to match, because a weapon's colour NUMBER
+indexes that table and nothing bounds it below 256.
+
+**What the gates measured (2026-09-12, 1024×768, `--maxfps 0`, the play defaults).**
+
+- **A cross-build pixel A/B is NOT AVAILABLE on a combat fixture, and that is measured rather
+  than assumed.** Two runs of ONE build on `fx-mix`, both paused at a fixed tick, differ by
+  **39 478 px**: the sims reach different states (tick 649 against 655, `proj=3 expl=21` against
+  `proj=0 expl=2`). Aligning the pause to a fixed number of ticks after the load does not fix it
+  (784 against 810, `sub=130` against `sub=95`). What IS deterministic is one launch: the
+  **within-launch floor is 0 px** on every state of every fixture measured.
+- **So the effects gate is the ENGINE'S OWN DRAW of the same arrays, in the same launch, at the
+  same paused tick.** Three frames: ours (`fx.on`+`sfx.on`), the engine's (both `passive` — it
+  draws, we gather and count), and neither (both armed with every class muted, so we own the draw
+  and emit nothing). `engine != neither` is where the engine put effects and `ours != neither` is
+  where we put them, over one frozen world, with Classic++ off so both come off the same
+  palette-indexed frames.
+
+  | fixture | build | our px | engine px | both | IoU | ours-only | engine-only |
+  |---|---|---|---|---|---|---|---|
+  | `fx-mix` | **4a** | 13 436 | 13 280 | 13 207 | **0.978** | 229 | 73 |
+  | `fx-mix` | landing 3 | 8 100 | 8 216 | 8 093 | 0.984 | 7 | 123 |
+  | `sfx-strait` | **4a** | 777 | 777 | 777 | **1.000** | 0 | 0 |
+  | `sfx-strait` | landing 3 | 1 048 | 1 181 | 1 048 | 0.887 | 0 | 133 |
+
+  The two builds' scenes are not the same scene, so the counts are not comparable and the RATIO
+  is. `fx-mix`'s 229 ours-only pixels are three clusters, and the largest was looked at: a smoke
+  puff both builds draw in the same place, where our GL alpha blend covers a few pixels the
+  engine's `AlphaCompsteBuf2OFFScreen` leaves cyan-fringed. That is the pass's own pre-existing
+  character and scales with how much smoke is on screen.
+- **The heartbeat's new `fx:` segment**: `proj= expl= deb= part=<this packet>/<high water>
+  scan=<gathers>/<reuses> trunc= layerbad= subbad= lht= want=`. `trunc`, `layerbad` and `subbad`
+  must all read 0. The particle high-water mark on the fixtures measured was **315** against the
+  16 384-entry cap.
+
+### 2.20 The frame packet exchange, landing 4b — the fog grids (`tagpu_packet.c`, `tagpu_packet_pub.c`, `tagpu_fogwide.c`, `tagpu_native.c`, `tagpu_terrown.c`, `tagpu_fx.c`) — 2026-09-12
+
+The plan's row 4b: both fog lattices cross in the packet, and **`tagpu_fog_at`'s guard loses its
+reason to exist**. The engine's own screen grid (`*(main+0x1421F)`) was read on the render thread —
+the descriptor AND the buffer behind it — while this fork's terrain owner was calling the engine's
+builder over both from the game thread. That is the read a hard fault off a base of −9 came out of
+on 2026-09-03. **The root cause is still not found**; what changes is that the class is gone.
+
+| site | what we do there | thread |
+|---|---|---|
+| `DrawGameScreen`'s `after` | the engine's grid, with its own relation checked (`cells == ((cols*rows + 7) & ~7)`, the allocator's round-up at `0x483C84`) and exactly `cols*rows` entries copied; `tagpu_fogwide`'s wide grid the same way; the grey band's 256-byte palette remap (`*(TAProgram+0xCC)`), latched like the shade and lighten tables | game |
+| the engine's fog site, inside the draw | `terr_fogtick` latches the eye the engine's builder actually read, the instant it ran, so the grid's world ORIGIN is taken from that eye and not from the packet's | game |
+| `tagpu_fogwide.c` | **one buffer, no lock, nothing retired.** The three buffers swapped under a critical section, the retire ring behind `tagpu_reclaim`'s quiescence fence, the wall-clock liveness test, `tagpu_fogwide_dimcap()` and the `ret=` / `held=` / `strand=` / `bare=` counters are all gone with the hand-over they existed for. A grow frees the old block on the spot | game |
+| `tagpu_native.c` | both grids out of the packet; which one this frame uses is unchanged and still this thread's decision, because it is the thread that knows what it is about to draw | render |
+
+**The bound is exact now, not generous.** The acquire checks `len == cols * rows * 2` against the
+record's own extent, so the largest index a consumer can form is inside the bytes it was handed —
+by construction, where before it was a per-dimension cap the two producers had to agree about (and
+once did not: a screen between 4057 and 8153 px wide got a grid the producer built and the gate
+refused, answering "nothing is hidden here" for the whole screen).
+
+**The origin is right rather than right by coverage.** The render thread derived cell (0,0)'s world
+point from its PREDICTED eye — the packet's plus a cursor-anchor step the game thread had not
+applied — and covered the disagreement by taking the wide grid whenever anything was
+unacknowledged. It still takes the wide grid there; the origin is now the eye the builder read.
+
+**What the gates measured.** A static fixture is the one shape a cross-build fog A/B is available
+on, and `selbox-slope` is one: `shootall: false`, no orders, a pinned camera, the sim paused as
+soon as it is live, so the LOS state is a pure function of where the scenario put the units.
+Loaded `--mapping 0 --los 1` so there IS fog, at four stops — zoom 1.0 and 0.5, at the camera's own
+position and at the map's (0,0) corner, zoom driven through `tagpu_zoom.txt` so the camera never
+moves between the first two. **Every stop: within-launch floor 0 px, and 0 px between landing 3's
+DLL and this one.** `fogwide check: differ=0` on 720 of 720 cells on both builds; `bare=0`.
+The heartbeat's new `fog:` segment is `<cols>x<rows> wide=<cols>x<rows>/<publishes> refused=
+shade=`.
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out

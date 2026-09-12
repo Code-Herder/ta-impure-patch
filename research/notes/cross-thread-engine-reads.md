@@ -19,7 +19,7 @@ produced).*
 |---|---|
 | **Threads that touch engine memory** | two: the engine's own thread, which is the sim and every draw; and the fork's render thread, created at `dd.c:1354` |
 | **Fence** | `tagpu_reclaim`'s wrap of the level teardown `0x491B60`, the pass counters, and the gate at `tagpu_overlay.c:590` — covers the level **teardown**, not the next level's **load** (§2) |
-| **Audit** | the nine sites of the G13u sweep, each classified against the writer it reads (§5): one open hazard, one already catalogued, six under the fence with two named residuals |
+| **Audit** | the nine sites of the G13u sweep, each classified against the writer it reads (§5). **Every one of them is CLOSED as of 2026-09-12**: rows 1, 6, 7 and the fog half of 4 by landings 4a–4c, row 2 by landing 3, rows 8 and 9 by landing 2, row 3 — the particle heap, the one the fence never covered — by landing 4a. What is still read on the render thread is per-LEVEL ASSETS under the fence (model templates, FeatureDef and wreck records, the tile set, GAF frames), which is the deliberate residual [thread-safe destruction](thread-safe-destruction.html) §10b names and the plan's row 5 and the asset channel retire |
 | **Open** | §7 |
 | **Design** | the plan this audit led to, kept in the wiki as authored HTML: [Frame packet exchange](frame-packet-exchange.html) — one publisher on the game thread, one wait-free four-slot exchange, four reviews folded in on 2026-09-11. **Landing 1 built 2026-09-12** (`tagpu_packet.c`, `tagpu_packet_pub.c`): the primitive, the header packet, the marker font as glyph bytes, the out-of-game packet and the build rule in census mode. **Landing 2 the same day** ([GPU status](gpu-status.html) §2.17): the view (the eye, the true viewport, the rect the engine can name, the palette, the gamma) reaches the render thread only through the packet, and every render-thread STORE into engine memory became a command the game thread applies at the top of the in-play draw — the eye row of §4 is the first to convert, and no row is written across threads any more. The readers in §4 that walk per-map arrays are still on engine memory until landings 3–4 |
 | **The loader thread** | the plan's engine review found it and the disassembly confirmed it on 2026-09-12: the level load runs on a thread created at `0x4982CA`, whose last act sets bit 1 of `main+0x38D75`; the in-play frame is installed only after that bit is seen, so the first publish after a load is ORDERED after the loader by the engine itself ([engine map](exe-reverse-engineering.html), "The in-play publish point"). That is what closes §5's open hazard once the unit array is read from the packet (landing 3) |
@@ -155,13 +155,13 @@ note's *per-map arrays* section.
 | unit records (the slots themselves) | the sim, every tick | Mode B: a fixed array recycled in place | n/a | **source after landing 3: the packet.** Every value out of a slot is still bounded before use, and now in ONE place — `ModelId` by `UNITINFOCount`, the cargo links to packet indices, the shape [thread-safe destruction](thread-safe-destruction.md) §2 describes |
 | `Object3do` behind `unit+0x9E` | freed per death | Mode A | reclaim's first client | **NOT READ ON THE RENDER THREAD since landing 3**: the piece poses, the body turn, the base piece and the composite's rect are copied by the game thread. The address crosses as an opaque cache key. This is what makes reclaim's deferral redundant *for the render thread's unit reads* — it still covers the model templates |
 | model templates (and the FeatureDef and wreck records beside them) — **the fence is the argument only while `tagpu_reclaim` is ARMED; [thread-safe destruction](thread-safe-destruction.html) §10b names the residual when it is not** | freed by `0x42DB90` in the cascade | per map | reclaim's second client + the level-generation caches | still read on the render thread, deliberately: the fence IS the argument, and landing 3 did not change it. The packet carries the per-piece template node and the BOUND (`udef_count`); the `MODEL_PTRS` BASE is read live at every call, because the teardown frees it at `0x42DCCB` and nulls `main+0x14377` at `0x42DCD8` — that null is what refuses the walk, and a copy held for a frame would not see it. **[CORRECTED 2026-09-12 by a landing review, which found the base cached in the packet.]** |
-| `main+0x1421F` fog descriptor `{buf, cols, rows, cells}` | `LoadMap` once; the builder `0x4843C0` rewrites **cells** per draw | per map | yes | `cells == ((cols·rows + 7) & ~7)`, `ptr_ok`, dimension caps; a cell read under the builder is one frame of mixed fog, bounded by `cols·rows ≤ cells` |
+| `main+0x1421F` fog descriptor `{buf, cols, rows, cells}` | `LoadMap` once; the builder `0x4843C0` rewrites **cells** per draw | per map | yes | **NOT READ ON THE RENDER THREAD since 2026-09-12 (landing 4b): the source is the packet.** The publisher checks the same relation `cells == ((cols·rows + 7) & ~7)` on the thread that runs the builder, copies exactly `cols·rows` entries, and the acquire checks the area's length is exactly that — so the consumer's bound is its own bytes rather than a dimension cap |
 | `main+0x1428B` tile map, `+0x14287` feature map, `+0x14233`/`+0x14237` dims | `LoadMap`, dims before pointers | per map | yes | **the FEATURE map is not read on the render thread since landing 3** — its cells are per-TICK sim state, so the anchors of the widest zoom rect cross in the packet with the six height bytes the two height rules need. The tile map is the terrain pass's and unchanged; the dims come from the packet |
 | `main+0x14283` tile set `{count, pixels}` | `LoadMap` | per map | yes | `count ≤ MAX_TILES`, identity test before the megabyte probe |
 | `main+0x1420B` wreck records | one direct store, in the feature teardown the cascade reaches | per map | yes | the index is the ANCHOR's now, and the anchor came out of the packet; the 3D husks' poses are copied by the publisher, so only the feature pass's GAF wreck still reads a record |
-| `main+0x141F7` projectile array, `+0x141F3` live count | array at load, **300 slots** of `0x6B`; count by the sim at 13 sites | array per map, count per tick (Mode B) | yes | `np ≤ 8192` — 27× the allocation; 300 would be exact |
-| `main+0x38D77` particle layer table; each layer's `{begin, end}`; each object's sub-vector | table at load; the vectors **grow mid-play**, freeing the old array (`0x4732E0`) | table per map; vectors Mode A | table yes, **vectors no** | `LAYER_CAP`, `ns ≤ 4096`, probes — filters only |
-| `main+0x142DB`/`+0x142DF`/`+0x142E3` minimap surfaces `{w, h, pitch, base}` | the minimap build at load; pixels repainted per draw | per map | yes | dims cross-checked across the three, pitches bounded — the shape to copy |
+| `main+0x141F7` projectile array, `+0x141F3` live count | array at load, **300 slots** of `0x6B`; count by the sim at 13 sites | array per map, count per tick (Mode B) | yes | **NOT READ ON THE RENDER THREAD since landing 4a: the source is the packet.** The publisher's walk is bounded by the allocation — 300, which both of the engine's own append sites also refuse to exceed — so the 8192 cap is gone. The explosion records (`main+0x1491F`, inline, 300) and the 100 debris slots came with them |
+| `main+0x38D77` particle layer table; each layer's `{begin, end}`; each object's sub-vector | table at load; the vectors **grow mid-play**, freeing the old array (`0x4732E0`) | table per map; vectors Mode A | table yes, **vectors no** | **CLOSED 2026-09-12 by landing 4a — this was the one row no fence covered.** The walk is the game thread's now, which is the thread that grows those vectors, so the pair cannot be skewed and a consistent pair cannot name freed memory. The engine's own cap is 401 objects per layer (not 400: past 400 the emitter drops the front and shifts), and every drawable sub-particle crosses as 16 bytes with its GAF frame already resolved |
+| `main+0x142DB`/`+0x142DF`/`+0x142E3` minimap surfaces `{w, h, pitch, base}` | the minimap build at load; pixels repainted per draw | per map | yes | **NOT READ ON THE RENDER THREAD since landing 4c: the source is the packet.** The same cross-checks moved to the publisher, which does the three-way interleave the render half used to do per frame and per row — gated on the sharp minimap asking, because at k = 1 it is deliberately the engine's own minimap |
 | `main+0x37E37`/`+0x37E3B` view W/H | the engine's setter `0x49821D`/`0x498237`; **and the render thread**, through `tagpu_vpwide` | per resolution change | n/a | consumers fail closed on a zero; the lost-update case is detected and repaired (`vpwide: REPAIRED`) |
 | `main+0x1431F`, `+0x142F3`/`+0x142F7` eye, scroll target, followed object | the camera stepper, per draw; **and, until 2026-09-12, the render thread** for the first two | per draw | n/a | coordinates behind `clamp_pair()`; the followed-object *pointer* is released from the game thread for exactly this reason (G13u). **Source after landing 2: the packet** for every render-thread reader of the eye, and the game thread's command apply for every write — the row no longer crosses a thread in either direction |
 
@@ -188,19 +188,24 @@ the reader.
 
 | # | Site | Verdict | Why |
 |---|---|---|---|
-| 1 | fog descriptor, captured once and held for the frame (`tagpu_native.c`, used by `tagpu_fog_at`) | **not a live hazard; the sweep's mechanism was wrong** | nothing resizes the grid between map loads: the descriptor is built once by `LoadMap`, freed only by the fenced cascade, and the builder rewrites cells only. Holding the pointer for a frame is fine because the frame is inside the pass the fence waits for |
+| 1 | fog descriptor, captured once and held for the frame (`tagpu_native.c`, used by `tagpu_fog_at`) | **CLOSED 2026-09-12** by landing 4b; the sweep's mechanism was wrong and the row was never a live hazard for the reason it gave | nothing resizes the grid between map loads: the descriptor is built once by `LoadMap`, freed only by the fenced cascade, and the builder rewrites cells only. What landing 4b changes is that the descriptor and its bytes cross as ONE record whose length the acquire proves, so `tagpu_fog_at`'s guard — added after a hard fault off a base of −9 on 2026-09-03, **root cause never found and still not found** — is guarding a bound that now holds by construction |
 | 2 | unit array `begin`/`end` | **CLOSED 2026-09-12** by landing 3 of the [frame packet exchange](frame-packet-exchange.html) — it was real, unfenced and alignment-independent; the level-load skew is still described below because it is what had to be closed | no render-thread file reads the pair, or the array, or any Object3do. The game thread copies the units into the packet during an in-play draw, and its walk runs to the engine's own SLOT COUNT (`u16 main+0x14351`, stored *before* `begin`), so there is no pair to skew. The exact relation `end == begin + (count−1)·0x118` is asserted per publish for the record (`relbad=` on the heartbeat, 0 over every run) and bounds nothing |
-| 3 | particle layers and sub-vectors (`tagpu_sfx.c`) | real, already catalogued | the vectors grow mid-play and free the old array; no fence covers it; listed as reclaim's next client in [thread-safe destruction](thread-safe-destruction.md) §3. The `(se − sb) / stride` without a `% stride` test is a minor filter gap on top |
+| 3 | particle layers and sub-vectors (`tagpu_sfx.c`) | **CLOSED 2026-09-12** by landing 4a — it was real and it was the one row no fence covered | the vectors grow mid-play and free the old array, so no read-side gate could close it; what closed it is that the walk moved to the thread that grows them. The probes and the `ns ≤ 4096` filter went with it (a containment filter of the same shape stays in the publisher, and says so). It is no longer reclaim's next client: there is nothing left to defer |
 | 4 | tile map / feature map + dims (`tagpu_terr.c`, `tagpu_feat.c`) | not a skew hazard | `LoadMap` stores the dims before the pointers, the cascade nulls the pointers under the fence, every reader loads the pointer first — so a reader that sees a non-null pointer sees the matching dims. The "2048×2048 off a smaller allocation" sequence needs the opposite store order |
 | 5 | tile set `{count, pixels}` | same as 4 | same routine, same order, same null |
-| 6 | projectiles `np`/`pbase` | bounded; cap loose | the array is 300 slots, per map, fenced; `np` is a count of at most 300 whose upper bytes are zero in both operands of any store, so it cannot tear into a large value; the 8192 cap should be 300 |
-| 7 | minimap surfaces (`tagpu_gui_surf.c`) | not a live hazard; the comment was wrong, the code right | per map, fenced, dims and pitches cross-checked. The old comment's "the worst a torn read can do is put one frame's fog against another's" was true of the pixels and false of the descriptors, which carry a pointer and a pitch |
+| 6 | projectiles `np`/`pbase` | **CLOSED 2026-09-12** by landing 4a | the walk is the game thread's; the cap IS 300 now, and it is the allocation's rather than a number typed here — `0x499A30` allocates exactly 300 slots and both append sites refuse past 300 |
+| 7 | minimap surfaces (`tagpu_gui_surf.c`) | **CLOSED 2026-09-12** by landing 4c; it was not a live hazard, and the comment was wrong where the code was right | per map, fenced, dims and pitches cross-checked. The old comment's "the worst a torn read can do is put one frame's fog against another's" was true of the pixels and false of the descriptors, which carry a pointer and a pitch. All three now cross as one interleaved copy the publisher makes |
 | 8 | view W/H (`tagpu_vpwide.c`) | survivable | both threads write it; a torn dimension fails closed; the lost update is repaired |
 | 9 | eye / scroll target (`tagpu_zoom.c`) | documented | coordinates, bounded before the write |
 
 Residuals common to every fenced row (1, 4, 5, 6, 7): the timeout of §2, and a torn single-pointer
 load at the null-to-new publish, which needs a tear-capable launch *and* the load coinciding with the
-store. Negligible rate; not zero; named here so nobody has to re-derive it.
+store. Negligible rate; not zero; named here so nobody has to re-derive it. **After landings 4a–4c
+those residuals apply to the PUBLISHER's reads, on the game thread, where the store and the load are
+the same thread and neither can happen.** What is left on the render thread is the per-LEVEL asset
+class — model templates, FeatureDef and wreck records, the tile set, GAF frames and the cursor
+table — which is not in this table because it was never per-frame state, and whose retirement is
+the plan's row 5 and the asset channel after it ([thread-safe destruction](thread-safe-destruction.html) §10b).
 
 ### The unit array at level load
 
@@ -280,17 +285,26 @@ a comment saying so.
   readers went instead, and the ordering the loader thread already provides became the argument.
   The exact relation is still checked, as the option would have had it, but as a RECORD — nothing
   is bounded by it, because the walk that replaced them runs to the count.
-- **The particle layers' vectors and the per-object sub-vectors** — reclaim's catalogued next
-  client, still not done.
+- ~~**The particle layers' vectors and the per-object sub-vectors** — reclaim's catalogued next
+  client.~~ **CLOSED 2026-09-12** by landing 4a, and not by deferring anything: the walk moved to
+  the thread that grows those vectors, so there is nothing left for reclaim to defer. It was the
+  only row in §4 that no fence covered.
 - **The timeout** — a timing-dependent mitigation that the cascade's own frees fall through. Either
   accept it explicitly, per `CLAUDE.md`, or defer the cascade's remaining frees the way the
   templates' are deferred (§6c of the destruction note), which turns the timeout into a leak rather
   than a fault.
-- **The projectile cap** — `8192` in `tagpu_fx.c` against an allocation of 300; make it 300.
+- ~~**The projectile cap** — `8192` in `tagpu_fx.c` against an allocation of 300.~~ **CLOSED
+  2026-09-12** by landing 4a. It is 300, in the publisher, and it is the allocation's own number:
+  `0x499A30` allocates exactly 300 slots and both of the engine's append sites refuse past 300.
 - **Tooling before the gate** — document the level-change restriction in the `tacli` skill, or move
   the trigger frames below the gate at the cost of not serving triggers during a teardown.
-- **The one-fault test for the fog guard** — plumb `cells` into `fog_alarm` so the next trip logs
-  all four descriptor fields and separates a tear from a reused slot.
+- ~~**The one-fault test for the fog guard** — plumb `cells` into `fog_alarm` so the next trip logs
+  all four descriptor fields.~~ **MOOT since 2026-09-12** (landing 4b): both grids cross in the
+  packet with their dimensions, and the acquire checks that the area's length is exactly
+  `cols·rows·2`, so the bound the guard exists to enforce holds by construction. The guard is kept
+  — three comparisons — but a trip now means the packet validator has a hole, which is a different
+  and louder thing than a torn descriptor. **The 2026-09-03 fault's root cause was never found and
+  still has not been**; what is gone is the class, not the diagnosis.
 - **Zen's split behaviour** — unmeasured; the documented 8-byte guarantee is assumed.
 
 ## Changelog
