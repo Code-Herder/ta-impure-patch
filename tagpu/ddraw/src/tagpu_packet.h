@@ -300,6 +300,9 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_PK_NANO    5u   /* nanolathe spray: a dot                    */
 #define TAGPU_PK_NPARTKIND  6u
 
+#define TAGPU_PK_FXWANT_FX   0x1u    /* projectiles, explosions, debris        */
+#define TAGPU_PK_FXWANT_SFX  0x2u    /* the ten particle layers                */
+
 #define TAGPU_PK_NLAYER     10u
 
 #define TAGPU_PK_MAX_PROJ    300u
@@ -374,9 +377,20 @@ typedef struct TAGPU_PK_PART {
    the consumer keeps its own copy keyed on the level generation — which is also
    what a GL re-init needs. Until this landing it was decoded by an observer on
    the LOADER thread, the one publisher outside the in-play gate. */
-#define TAGPU_PK_MM_DIMCAP  512    /* the engine's own bound on a minimap
-                                      surface; its picture is a GAF frame, so
-                                      TAGPU_GAF_DECMAX (512) bounds that too   */
+#define TAGPU_PK_MM_DIMCAP  512    /* A SANITY CEILING OF OURS on a minimap
+                                      surface's dimension, and on the picture's.
+                                      It is NOT an engine bound — the engine
+                                      bounds only the BOX it fits the picture
+                                      into (0x7E), and the surfaces' own
+                                      dimensions are not bounded anywhere we
+                                      have found [corrected by landing 4c's
+                                      review]. What actually bounds a consumer
+                                      is `len == w * h * 3` (and `w * h` for the
+                                      picture), checked once at acquire; this
+                                      only keeps the product inside 32 bits and
+                                      the scratch inside its array. The picture
+                                      is a GAF frame, so TAGPU_GAF_DECMAX (512)
+                                      is its own decoder's ceiling as well      */
 
 #define TAGPU_PK_FOG_DIMCAP 4096   /* a sanity ceiling on a dimension; the real
                                       bound is `len == cols*rows*2` inside the
@@ -564,6 +578,15 @@ typedef struct TAGPU_PACKET {
                                          be truncated, this count never is       */
     uint32_t fx_caps;                 /* TAProgram+0xF0: bit5 the ALP alpha
                                          table is built, bit7 the LHT one        */
+    uint32_t fx_want;                 /* what the gather actually ran with: bit0
+                                         the three effect tables, bit1 the
+                                         particle one. A consumer must not claim
+                                         the engine's draw until this says the
+                                         publisher was filling for it — the
+                                         request crosses on the render thread's
+                                         clock and the fill on the game
+                                         thread's, so the first armed frames see
+                                         empty tables (landing review)           */
     uint32_t fx_gen;                  /* bumped whenever any of the four tables
                                          was re-gathered (once per sim tick):
                                          the consumer's own "is this the same

@@ -355,8 +355,16 @@ static GLuint s_gtex;
 static unsigned s_gglyphs, s_gdrops;
 /* Bumped whenever the shelves restart, i.e. whenever every cell handed out so
    far stops being valid. A caller that gathers a run of cells before it draws
-   them has to check this across the gather. */
-static unsigned s_ggen;
+   them has to check this across the gather.
+
+   IT IS ALSO READ ON THE GAME THREAD (landing 4c, and its review). The producer
+   of the string ops sends each glyph's bits once, on first sight of a (font,
+   code) pair, and marks the pair sent for ever — so a reset here would leave
+   every already-sent glyph missing from the atlas and never re-sent, and
+   `twin_string` would draw the string with those characters silently dropped
+   for the rest of the session. The producer watches this word and clears its
+   own "sent" table when it moves. One writer, one reader, monotone. */
+static volatile unsigned s_ggen;
 
 /* The slot for this font id, or NULL when the table is full and had to start
    over (a full table drops every cell rather than evict one font into a shelf

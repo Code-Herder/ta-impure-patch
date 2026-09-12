@@ -810,22 +810,58 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
    (cross-thread-engine-reads.md §5). Reading them here is not a narrower
    window; it is the same thread doing both.
 
-   THE GATHER IS TAKEN ONCE PER SIM TICK. All four arrays are sim state — the
-   tick moves a projectile, advances an explosion's anim frame and runs every
-   particle's update leaf — and the engine's own draw passes (0x49BE60,
-   0x420B00, 0x471F90) read them and write nothing, so two publishes of one
-   tick must produce the same table and the second reuses the first. That is
-   the anchor scan's argument (§ THE ANCHOR SCAN above) applied to a second
-   gather, and it matters more here: at the 250-odd publishes a second this
-   machine reaches against a 60 Hz sim, four publishes in five reuse.
+   THE GATHER IS TAKEN ONCE PER SIM TICK, AND THE ARGUMENT FOR THAT IS NOT THE
+   ONE THE ANCHOR SCAN USES. The anchor grid really is constant within a tick,
+   because only the tick writes it. These four are not: **the engine's own
+   explosion DRAW emits particles** — 0x420B00's debris loop calls 0x421550
+   (0x420B18), which calls the grey-smoke emitter 0x472810 (0x421583) and the
+   fire emitter 0x472AB0 (0x4215AA), and both append to a layer [FOUND BY
+   LANDING 4A'S REVIEW, which disproved the sentence this comment used to
+   carry]. So a second draw of one tick can find a layer the first did not
+   produce.
+
+   What actually licenses the cache is weaker and is enough:
+
+     * THE TABLES ARE COPIES. An append after the gather cannot dangle anything
+       in a packet, because nothing in a packet points into engine memory except
+       the asset addresses whose lifetimes are stated separately below. That is
+       the safety half, and it does not depend on the arrays being constant.
+     * THE POSITIONS ARE THE TICK'S. The sim moves every projectile, particle
+       and debris piece once per tick, so what a reused table gets WRONG is
+       confined to objects created between two publishes of one tick — never a
+       stale position for an object that was already there.
+     * WHAT THAT COSTS is that the newest smoke or fire of a tick can land one
+       publish late: under 4 ms of wall time at the publish rates this machine
+       reaches, on a sprite that is one frame old. It is a quality trade, taken
+       deliberately, and the alternative is the whole gather at the DRAW rate —
+       measured at 6 to 7 % of the game thread when the plan costed it.
+
+   At the 250-odd publishes a second this machine reaches against a 60 Hz sim,
+   four publishes in five reuse.
 
    EVERY ENGINE POINTER IS RESOLVED HERE. A sprite's GAF frame is looked up
    through the sequence the particle or the anim state names, while the object
    that names it is live on this thread; a weapon's colour NUMBER goes through
-   main+0xDCB here; the attacker's owner byte is read here. What still crosses
-   as an address is a model TEMPLATE root — `tagpu_fx.c` passes it straight to
-   the native pass's `emit_fx_model` and reads no byte of it — and a GAF frame,
-   which only `tagpu_gaf.c` (session-reader) ever dereferences. */
+   main+0xDCB here; the attacker's owner byte is read here.
+
+   WHAT STILL CROSSES AS AN ADDRESS, and on whose lifetime:
+
+     * a model TEMPLATE root — per LEVEL, freed by 0x42DB90 in the teardown
+       cascade, so tagpu_reclaim's fence. `tagpu_fx.c` passes it straight to the
+       native pass's `emit_fx_model` and reads no byte of it.
+     * a PROJECTILE's or a PARTICLE's GAF frame — from the "fx" bank, which
+       0x429870 loads once per process (its only caller chain is 0x49134D <-
+       0x491200 <- WinMain's 0x49EA62), so a SESSION asset.
+     * an EXPLOSION's GAF frame, `frame` and `flash` — **per LEVEL**, and this
+       is not the same answer [ESTABLISHED 2026-09-12 by landing 4a's review].
+       The add site takes the sequence from main+0x1AB8F[idx] (0x420AA2), a
+       table 0x420620 builds from the level load (0x4919D2) and 0x420960 frees
+       and nulls from the teardown (0x491B9F). So these two stand on
+       tagpu_reclaim's fence exactly as the templates do, and a consumer cache
+       keyed on such a frame's address must drop at a level boundary —
+       tagpu_fx.c's atlas does, on the packet's level generation.
+
+   Only tagpu_gaf.c ever dereferences any of the GAF frames. */
 
 static TAGPU_PK_PROJ   s_pScratch[TAGPU_PK_MAX_PROJ];
 static TAGPU_PK_EXPL   s_eScratch[TAGPU_PK_MAX_EXPL];
@@ -1160,6 +1196,7 @@ static unsigned fill_fx(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
     p->fx_caps = ptr_ok(g) ? RDU16(g, PROG_CAPS) : 0u;
     fx_gather(ta, p->tick, p->level_gen);
     p->fx_gen  = s_fxGen;
+    p->fx_want = s_fxWant;
     /* frame 0 of the ground-shadow sequence: one session asset, resolved once
        a frame rather than once a projectile */
     p->shadow_frame = (unsigned)(size_t)tagpu_gaf_seq_frame(
@@ -1272,7 +1309,13 @@ static unsigned fill_fog(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
             /* the eye the grid was ANCHORED at, latched inside the fog site
                when the engine's builder ran, not the one this packet carries:
                between the two the engine's own camera stepper may have moved
-               the camera, and the grid does not follow until the next draw */
+               the camera, and the grid does not follow until the next draw.
+               The latch is refused unless the site ran in THIS draw — with
+               terrain ownership dropped the engine calls its own builder where
+               we cannot see it, and a stale latch would put the engine's live
+               grid at an origin from whenever we last owned the site. The
+               fallback is this packet's own eye, which is what the render
+               thread used before landing 4b. */
             tagpu_terrown_fog_eye(&ex, &ey);
             p->fog_cols = cols; p->fog_rows = rows;
             p->fog_org[0] = fog_org(ex);
@@ -1289,7 +1332,17 @@ static unsigned fill_fog(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
     }
     {
         const unsigned short* wb; int wc, wr, wox, woy;
-        if (tagpu_fogwide_current(&wb, &wc, &wr, &wox, &woy) &&
+        /* ONLY WHILE THE FOG SITE RAN IN THIS DRAW. Both grids are stamped by
+           the observer inside it, and if terrain ownership was dropped — the
+           `terr.on` lever removed, `passive`, a `key=` change, a bail-out, or
+           the 90-frame watchdog — that observer stops while this one keeps
+           publishing. The producer's own "valid" flag cannot say so: it is only
+           ever cleared from inside the tick that has stopped running. Without
+           this test the packet would carry the LAST grid ever built, for ever,
+           against a camera and an LOS state that keep moving, and nothing would
+           count it [found by the landing review]. */
+        if (tagpu_terrown_fog_site_live() &&
+            tagpu_fogwide_current(&wb, &wc, &wr, &wox, &woy) &&
             wc > 0 && wr > 0 && wc <= TAGPU_PK_FOG_DIMCAP && wr <= TAGPU_PK_FOG_DIMCAP) {
             p->fogw_cols = wc; p->fogw_rows = wr;
             p->fogw_org[0] = wox; p->fogw_org[1] = woy;
@@ -1354,8 +1407,6 @@ static unsigned char s_mmRg[TAGPU_PK_MM_DIMCAP * TAGPU_PK_MM_DIMCAP * 3];
 /* the level's picture, decoded once per level (see fill_gui) */
 static unsigned char s_mmPic[TAGPU_PK_MM_DIMCAP * TAGPU_PK_MM_DIMCAP];
 static int s_mmPicW, s_mmPicH, s_mmPicGen = -1;
-/* the picture rides in ONE packet per level; this says it already has */
-static int s_mmPicSent;
 static volatile unsigned s_cMmCopies, s_cMmRefused, s_cMmPic;
 static volatile int s_lastMmW, s_lastMmH;
 
@@ -1410,7 +1461,7 @@ static unsigned fill_gui(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
        ordering makes every per-map pointer final (the in-play handler is
        installed only after the loader sets bit 1 of main+0x38D75), and this is
        that draw. */
-    if (!s_mmPicSent && s_mmPicGen != (int)p->level_gen) {
+    if (s_mmPicGen != (int)p->level_gen) {
         const unsigned char* fr = tagpu_gaf_frame_sane(*(const void* const*)(ta + MM_PICFRAME));
         s_mmPicGen = (int)p->level_gen;              /* tried: not once a draw */
         s_mmPicW = s_mmPicH = 0;
@@ -1423,12 +1474,20 @@ static unsigned fill_gui(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
             }
         }
     }
-    if (s_mmPicW > 0 && !s_mmPicSent && s_mmPicGen == (int)p->level_gen) {
+    /* IT RIDES UNTIL THE CONSUMER SAYS IT HAS IT, not until one packet has
+       carried it. The mailbox is latest-wins and a dropped packet is a counted
+       statistic — and the likeliest packet to be dropped is a level's first,
+       when the render thread is busiest. It is also gated on the minimap being
+       WANTED at all, so a session that never turns the sharp minimap on never
+       pays the 63 KB [found by the landing review]. */
+    if (s_mmPicW > 0 && s_mmPicGen == (int)p->level_gen &&
+        tagpu_gui_want_minimap() &&
+        tagpu_gui_minimap_have() != p->level_gen + 1u) {
         p->mmpic_w = s_mmPicW; p->mmpic_h = s_mmPicH;
         e = append_area(p, cursor, s_mmPic, (unsigned)s_mmPicW * (unsigned)s_mmPicH,
                         &p->mmpic_off, &p->mmpic_len, TAGPU_PK_TRUNC_MMPIC);
         if (e > need) need = e;
-        if (p->mmpic_len) { s_mmPicSent = 1; s_cMmPic++; }
+        if (p->mmpic_len) s_cMmPic++;
         else { p->mmpic_w = p->mmpic_h = 0; }        /* did not fit: the next packet tries */
     }
 
@@ -1663,7 +1722,7 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
     s_aHave = 0; s_aN = 0; s_aTrunc = 0;
     s_fxHave = 0; s_nProj = s_nExpl = s_nDebris = s_nPart = 0;
     /* the next level's picture is a different picture, and it has not been sent */
-    s_mmPicGen = -1; s_mmPicW = s_mmPicH = 0; s_mmPicSent = 0;
+    s_mmPicGen = -1; s_mmPicW = s_mmPicH = 0;
 }
 
 /* ---- the observers ------------------------------------------------------- */
@@ -1770,6 +1829,9 @@ static void* __cdecl after_loader(unsigned int* regs)
     return ret;
 }
 
+unsigned tagpu_packet_pub_draw_seq(void)  { return s_cDraws; }
+unsigned tagpu_packet_pub_level_gen(void) { return s_levelGen; }
+
 /* ---- the heartbeat's producer half --------------------------------------- */
 
 /* RUNS ON THE RENDER THREAD (from the consumer's frame_end), so it reads only
@@ -1834,9 +1896,15 @@ static void extra(char* buf, unsigned cap, double secs)
    `ret` returns through the same slot, so the hijacked return reaches
    `after` either way), and publishes from `after`. With neither provider the
    publisher stays COUNT-ONLY: no packet at all is better than a stale one.
-   The level generation is reclaim's counter, which does not move when
-   reclaim is off — one counter, as the plan requires, and 0 for the session
-   in that case. */
+
+   THE LEVEL GENERATION IS THIS MODULE'S OWN (`s_levelGen`), and these two
+   sentences used to say it was reclaim's and "0 for the session" when reclaim
+   is off. That was the pre-landing-3 design and it is what landing 3's review
+   had changed; the text stayed, and landing 4's review read it and reported a
+   defect that is not in the code. `tagpu_packet_pub_level_end` increments
+   `s_levelGen` before anything else, whichever provider called it, so the
+   generation moves with reclaim armed or not. Reclaim's own counter is passed
+   in for the log line and for nothing else. */
 static const unsigned char TEARDOWN_STOLEN[5] = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 };
 static void* volatile s_teardownRet;
 
@@ -1901,7 +1969,7 @@ void tagpu_packet_pub_init(void)
               "packet: publisher %s on DrawGameScreen 0x468CF0 (in-play gate: return address 0x4969D2; "
               "chained after tagpu_menu's observer), level-end packet by %s, loader-thread observer at 0x497C70=%d, game thread %u%s",
               s_countOnly ? "COUNT-ONLY" : "ARMED",
-              s_levelEndBy == 1 ? "tagpu_reclaim's teardown post hook" : s_levelEndBy == 2 ? "our own observer on the teardown 0x491B60 (reclaim is not armed; the level generation stays 0)" : "nobody",
+              s_levelEndBy == 1 ? "tagpu_reclaim's teardown post hook" : s_levelEndBy == 2 ? "our own observer on the teardown 0x491B60 (reclaim is not armed; the level generation is this module's own either way)" : "nobody",
               loaderOk, (unsigned)s_gameTid,
               s_countOnly ? " — nothing is published, taken or applied: no world pass draws, no command is applied (the engine's own camera range, rect and scroll rate), every string through tagpu_text_place draws nothing" : "");
     b[sizeof b - 1] = 0;

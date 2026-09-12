@@ -672,8 +672,14 @@ static void gather_fx(const TAGPU_FXVIEW* v)
     char lb[200];
 
     s_mute = s_passive;                /* passive: count + log, emit nothing */
-    /* we are drawing this frame: the engine may skip its own effects draw */
-    if (!s_passive) tagpu_fxown_set_skip(1);
+    /* WE ARE DRAWING THIS FRAME ONLY IF THE PACKET WAS FILLED FOR US. The
+       request travels render -> game and the fill comes back game -> render, so
+       the first frames after `tagpu_fx.on` appears carry empty tables — and
+       claiming the engine's draw there suppresses its projectile pass and its
+       explosion leaves against nothing of ours: a handful of frames with no
+       fire, explosions or debris at all. The skip follows the tables now
+       [found by the landing review]. */
+    if (!s_passive && (pk->fx_want & TAGPU_PK_FXWANT_FX)) tagpu_fxown_set_skip(1);
     tagpu_fxown_beat(v->frame_counter);
 
     /* ---- projectiles (the engine's 0x49BE60 rules) ---- */
@@ -883,6 +889,21 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
     /* the frame's capability bits, from the packet: bit5 the ALP alpha table
        is built, bit7 the LHT one. Read by the publisher, on the game thread. */
     s_caps = v->packet ? v->packet->fx_caps : 0u;
+    /* THE ATLAS KEYS ON A GAF FRAME'S ADDRESS, AND THE FRAMES ARE PER-LEVEL.
+       An explosion's two anim states come from `main+0x1AB8F`, a table
+       `0x420620` builds from the level load (`0x4919D2`) and `0x420960` frees
+       and NULLS from the teardown (`0x491B9F`) — not from the session "fx"
+       bank the projectile sequences live in. So a second level's allocator can
+       hand a new frame the address an old one had, and this atlas would serve
+       the old level's pixels for it. Dropping it at the boundary costs one
+       re-decode of what is on screen; not dropping it is a wrong picture that
+       nothing detects. (Pre-existing, and landing 4a's own review is what
+       established the table's lifetime.) */
+    {
+        static unsigned s_atlasGen;
+        unsigned g = v->packet ? v->packet->level_gen + 1u : 0u;
+        if (g && g != s_atlasGen) { tagpu_gaf_atlas_forget(&s_atlas); s_atlasGen = g; }
+    }
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
     /* Classic++: the lazy restore of this atlas (the palette the screen is
        SHOWN with -- tagpu_pal.h) */

@@ -206,8 +206,11 @@ void tagpu_sfx_frame_done(const TAGPU_FXVIEW* v)
 {
     const TAGPU_PACKET* pk = v->packet;
     if (s_armed != 1) return;
-    /* we gathered this frame: the engine's layer draw may be skipped */
-    if (!s_passive) tagpu_fxown_set_skip_sfx(1);
+    /* we gathered this frame: the engine's layer draw may be skipped — but only
+       once the packet says the publisher was filling the particle table for us,
+       or the first armed frames would suppress the engine's ten layer draws
+       against an empty table (landing review) */
+    if (!s_passive && (pk->fx_want & TAGPU_PK_FXWANT_SFX)) tagpu_fxown_set_skip_sfx(1);
     tagpu_fxown_beat_sfx(v->frame_counter);
     static unsigned last = 0;
     if (s_log && v->frame_counter - last >= 60) {

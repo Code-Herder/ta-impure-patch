@@ -53,6 +53,7 @@
 #include "tagpu_detour.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_fogwide.h"
+#include "tagpu_packet_pub.h"
 #include "tagpu_zoom.h"
 
 #define TERRAIN_VA   0x00483FA0u   /* stdcall(ctx), ret 4  */
@@ -156,11 +157,38 @@ static void __cdecl terr_fill(void* ctxv)
    range fits in. It runs here because here is where the maps it reads are the
    engine's own to read (tagpu_fogwide.h), and it needs to know whether the
    engine rebuilt on this tick — that is the same "the LOS state moved" signal. */
-/* the eye the engine's own fog grid was last built at; see the latch below */
+/* THE FOG SITE'S OWN LIVENESS, and it is a stamp rather than a flag. Our
+   `terr_fogtick` runs only while `g_terrown_skip` is set, and the render thread
+   drops that on every path that hands terrain back — the lever removed,
+   `passive`, `over`, a `key=` change, a bail-out, the 90-frame watchdog. When
+   it does, this observer stops and the ENGINE calls `0x4848E0` itself, at the
+   live eye, where we cannot see it. Both fog answers below then go stale and
+   neither module can tell: `tagpu_fogwide`'s "valid" flag is only ever cleared
+   from inside the tick that has stopped, and this eye latch was never cleared
+   at all. So the tick stamps the publisher's in-play draw counter, and the
+   publisher — which runs in the same draw's `after` — accepts either answer
+   only when the stamp is this draw's [found by the landing review]. */
 static int s_fogEyeX, s_fogEyeY, s_fogEyeOk;
+static unsigned s_fogEyeGen;                 /* the level the latch was taken in */
+static unsigned s_fogDrawSeq;
+static int      s_fogDrawSeen;
+
+int tagpu_terrown_fog_site_live(void)
+{
+    return s_fogDrawSeen && s_fogDrawSeq == tagpu_packet_pub_draw_seq();
+}
+
+/* AND IT IS ONLY VALID FOR ITS OWN LEVEL. The engine's builder fires when it
+   clears LosType bit 3, and a fresh level can go many draws without doing so —
+   LoadMap leaves the grid current — so a latch kept across the boundary would
+   put the new level's grid at the old level's origin for as long as the camera
+   stood still. Stamping the publisher's level generation beside it makes that
+   impossible without a level-end hook to remember [found by the landing
+   review]. */
 int tagpu_terrown_fog_eye(int* x, int* y)
 {
-    if (!s_fogEyeOk) return 0;
+    if (!s_fogEyeOk || !tagpu_terrown_fog_site_live() ||
+        s_fogEyeGen != tagpu_packet_pub_level_gen()) return 0;
     *x = s_fogEyeX; *y = s_fogEyeY;
     return 1;
 }
@@ -173,6 +201,9 @@ static void __cdecl terr_fogtick(void* ctxv)
     (void)ctxv;
     if (!ptr_ok(ta)) return;
     los = (unsigned short*)(ta + OFF_LOSTYPE);
+    /* we ran in this draw, rebuild or not: that is what the publisher tests */
+    s_fogDrawSeq = tagpu_packet_pub_draw_seq();
+    s_fogDrawSeen = 1;
     /* THE ENGINE'S OWN LAZY TEST, and nothing OR-ed into it any more. The
        screen fog grid is view-anchored, so an eye that moved must rebuild it,
        and every path that moves the eye says so by clearing LosType bit 3 —
@@ -200,6 +231,7 @@ static void __cdecl terr_fogtick(void* ctxv)
            the post-flip publish (landing 4b). */
         s_fogEyeX = *(const int*)(ta + OFF_EYEX);
         s_fogEyeY = *(const int*)(ta + OFF_EYEY);
+        s_fogEyeGen = tagpu_packet_pub_level_gen();
         s_fogEyeOk = 1;
     }
     tagpu_fogwide_tick(ta, rebuilt);

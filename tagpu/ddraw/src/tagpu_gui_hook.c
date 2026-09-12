@@ -42,6 +42,7 @@
 #include "tagpu_gui.h"
 #include "tagpu_opt.h"
 #include "tagpu_gui_int.h"
+#include "tagpu_text.h"
 #include "tagpu_detour.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_gaf.h"
@@ -355,11 +356,19 @@ typedef struct OP {
    THE BOUND IS THE FORMAT, as the marker font's copy already had it (landing
    1): the object is the `.fnt` file image — `u16 height; u16 yoff; u16
    offset[256]; glyphs` (tools/guifont.py, decoded over the twenty stock faces)
-   — so the offset table has 256 entries whatever the byte at +3 says, every
-   index `c - first` for `c <= 0x7E` is inside it, and an entry is a file offset
-   into the block the loader read the file into. A font whose byte at +3 is not
-   0 is not that format and is REFUSED, not probed: the op falls back to its
-   box's captured pixels, which is what every text draw was before G17d.
+   — so the offset table has 256 entries and an entry is a file offset into the
+   block the loader read the file into.
+
+   `f[3]` IS THE FIRST CODE, not "the high byte of the y-offset word" as this
+   comment said until landing 4c's review corrected it: `0x4CCF77` loads
+   `[esi+3]` and `0x4CCFAA` does `sub ebx,first / jb`, which is the blitter's
+   only lower bound on a character. It is 0 for every stock face, which is what
+   makes `f[3] != 0` a usable "this is not that format" test — but it is a
+   REFUSAL of an unusual font and not a statement about the format, and a font
+   with a real non-zero `first` would be refused with it. Refused means the op
+   falls back to its box's captured pixels, which is what every text draw was
+   before G17d, so the cost of being wrong here is a slower path and never a
+   wrong glyph.
 
    A SLOT IS KEYED ON THE POINTER AND THE SIGNATURE. An allocator that hands the
    same address to a different font would otherwise serve the old font's glyphs;
@@ -367,7 +376,7 @@ typedef struct OP {
    keys on the id, so nothing of the old font survives into the new one. */
 #define GF_SLOTS    8
 #define GF_LO       0x20
-#define GF_HI       0x7E
+#define GF_HI       0xFF
 #define GF_NCODE    (GF_HI - GF_LO + 1)
 #define F_ROWS_L    0            /* font[0], the rows the blitter writes */
 typedef struct {
@@ -379,12 +388,32 @@ typedef struct {
 static GFONT    s_gfont[GF_SLOTS];
 static int      s_ngfont;
 static unsigned s_gfontNext = 1;
-static unsigned s_gfontRecycles, s_gfontRefused, s_gfontGlyphs;
+static unsigned s_gfontRecycles, s_gfontRefused, s_gfontGlyphs, s_gfontResends;
+static unsigned s_gfontGenSeen;
+
+/* THE CONSUMER'S ATLAS CAN THROW EVERY CELL AWAY, and this is what notices.
+   `tagpu_text.c`'s glyph atlas resets on a shelf overflow and on a ninth font;
+   our `sent[]` would otherwise still say those glyphs are published, and they
+   would be missing from every string for the rest of the session — the string
+   drawn with the characters dropped and the rest closed up. The generation is
+   the render thread's, read here, monotone; when it moves every slot's `sent[]`
+   is cleared and the next string re-sends what it needs [found by the landing
+   review, twice]. */
+static void gfont_check_gen(void)
+{
+    unsigned g = tagpu_text_glyph_gen();
+    int i;
+    if (g == s_gfontGenSeen) return;
+    s_gfontGenSeen = g;
+    for (i = 0; i < s_ngfont; i++) memset(s_gfont[i].sent, 0, sizeof s_gfont[i].sent);
+    s_gfontResends++;
+}
 
 static GFONT* gfont_slot(const unsigned char* f)
 {
     int i;
     GFONT* g;
+    gfont_check_gen();
     /* the format test, not a probe: +3 is the high byte of the y-offset word
        and is 0 for every font of this format */
     if (f[3] != 0 || f[0] == 0) { s_gfontRefused++; return NULL; }
@@ -1297,6 +1326,9 @@ void tagpu_gui_set_want_minimap(int on, unsigned int frame_counter)
     if (on) g_wantMmBeat = frame_counter;
 }
 int tagpu_gui_want_minimap(void) { return g_wantMm != 0; }
+static volatile unsigned g_mmHave;
+void     tagpu_gui_set_minimap_have(unsigned v) { g_mmHave = v; }
+unsigned tagpu_gui_minimap_have(void) { return g_mmHave; }
 /* called from the module's own flush, on the render thread */
 static void want_minimap_watchdog(unsigned int frame_counter)
 {

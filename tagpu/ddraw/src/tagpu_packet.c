@@ -516,6 +516,18 @@ static const char* frame_valid(const void* rec)
         }
         if (sum != p->n_part) return "particle layer counts do not sum";
     }
+    /* THE PARTICLE TABLE'S TWO INDEX BYTES. `kind` indexes a consumer's
+       six-row class table and `layer` a ten-row one; every other index a
+       consumer forms out of this packet is bounded here, and these two were
+       the exception [found by the landing review]. */
+    {
+        const TAGPU_PK_PART* q = tagpu_pk_part(p);
+        unsigned k;
+        for (k = 0; k < p->n_part; k++) {
+            if (q[k].kind >= TAGPU_PK_NPARTKIND) return "particle kind";
+            if (q[k].layer >= TAGPU_PK_NLAYER) return "particle layer";
+        }
+    }
     /* THE TWO FOG GRIDS (landing 4b). The bound a consumer needs is not a cap
        on the dimensions — it is that the bytes it was given hold every index it
        can form. `len == cols * rows * 2`, checked here against the record's own

@@ -2705,7 +2705,19 @@ every publish of that tick.
 | projectiles | count `main+0x141F3`, base `main+0x141F7`, stride `0x6B` | **exactly 300.** `0x499A30` allocates `0x7D64` bytes = 300 × `0x6B` (and `rep stos` clears `0x1F59` dwords, the same 32 100 bytes), then zeroes the count; `0x499A80` frees the base AND NULLS it inside the teardown cascade. **Both append sites refuse past 300** — `0x49B6EE` and `0x49B809`, each `cmp …,0x12C / jge` past the store — so the count is bounded by the allocation itself and no sanity cap is needed |
 | explosions | count `main+0x1491B`, records **inline** at `main+0x1491F`, stride `0x54` | **300.** `0x420A30`'s add site: `cmp ecx,0x12C / jge` refuses, then `lea eax,[ecx*8+0]; sub eax,ecx; lea edx,[eax+eax*2]; lea esi,[edi+edx*4+4]` — 84 × index past the count word, which is the stride and the base together. Nothing to free: the records are in the block |
 | flying debris | the 100 dwords at `0x511DF0..0x511F80`; each names a system whose `+0x2C` is the piece `{node @0, turn @0x12, x @0x16, alt @0x1A, y @0x1E}` | the slot count is the address range |
-| the ten particle layers | `*(main+0x38D77)`, `0x10` per layer: `{u8 flag, begin @4, end @8, cap @0xC}`. `0x471D90` allocates the table from the level load; `0x471DE0` frees AND NULLS it in the teardown | **401 objects, not 400.** Every emitter reads the layer's size and `cmp eax,0x190 / jbe append` (`0x472071`, `0x47219F`, `0x4722CF`, `0x4723D6`, `0x4724D5`, `0x4725D4`, `0x4726C0`, `0x4727B0`, `0x47289A`, `0x47297A`, `0x472A5A`, `0x472BF2`, `0x472CD9`): at 400 or fewer it appends, and **past 400 it destroys the FRONT object, shifts the vector down by one and appends anyway** (`0x472078..0x4720AF`). So 401 is the steady state. The sub-particle vectors inside each object are grown by `0x4732E0` and are the one thing the level fence never covered |
+| the ten particle layers | `*(main+0x38D77)`, `0x10` per layer: `{u8 flag, begin @4, end @8, cap @0xC}`. `0x471D90` allocates the table from the level load; `0x471DE0` frees AND NULLS it in the teardown | **401 objects, not 400.** Every emitter reads the layer's size and `cmp e?x,0x190 / jbe append`: at 400 or fewer it appends, and **past 400 it destroys the FRONT object, shifts the vector down by one and appends anyway** (`0x472078..0x4720AF`). So 401 is the steady state. **Twenty sites**, and the whole list because a partial one invites the same mistake twice: `0x471183`, `0x4713D8`, `0x471508`, `0x47163D`, `0x471782`, `0x4718B1`, `0x471AD7`, `0x472071`, `0x47219F`, `0x4722CF`, `0x4723D6`, `0x4724D5`, `0x4725D4`, `0x4726C0`, `0x4727B0`, `0x47289A`, `0x47297A`, `0x472A5A`, `0x472BF2` (against `ecx`), `0x472CD9`. The sub-particle vectors inside each object are grown by `0x4732E0` and are the one thing the level fence never covered |
+
+**THE ENGINE'S OWN EXPLOSION DRAW EMITS PARTICLES**, which is not what a draw pass is supposed
+to do and is why it is recorded here. `0x420B00`'s debris loop calls `0x421550` at `0x420B18`, and
+that function calls the grey-smoke emitter `0x472810` (`0x421583`) and the fire emitter `0x472AB0`
+(`0x4215AA`) — both **append to a particle layer**, and past 400 destroy its front object. So the
+ten layers are not constant within a sim tick: a second draw of one tick can find a layer the first
+draw did not produce. [ESTABLISHED 2026-09-12 by landing 4a's review, which is what corrected the
+frame packet's per-tick cache argument — see the note in `tagpu_packet_pub.c`.]
+
+**Two of the three sequence tables are SESSION assets and the third is PER-LEVEL**, and the
+difference decides which of them may cross a thread boundary on its own lifetime and which needs
+the fence.
 
 **The effect GAF sequences are a SESSION asset, not a per-level one** [VERIFIED 2026-09-12].
 `0x429870` loads the `"fx"` bank (`0x4290F0(&path, "anims", "fx", "GAF")` → `0x4B8C60`) and
@@ -2717,6 +2729,15 @@ projectile ground-shadow blob → `+0x1480F`. **Its only caller is `0x49134D`**,
 is the lifetime argument for a sub-particle's or a projectile's sequence pointer crossing the
 thread boundary at all; the ANIM STATES an explosion carries are a different question and are not
 established here.
+
+**An EXPLOSION's two anim states do not come from that bank** [VERIFIED 2026-09-12, landing 4a's
+review]. The add site takes the sequence from `main+0x1AB8F[idx]` (`0x420AA2`), a table `0x420620`
+builds from the level load (`0x4919D2`) and `0x420960` frees and NULLS from the teardown cascade
+(`0x491B9F`). So an explosion's frame — and the LHT flash's — is a **per-LEVEL** GAF frame, and
+anything holding one across a teardown stands on `tagpu_reclaim`'s fence and on nothing else. A
+cache keyed on such a frame's ADDRESS must also drop at a level boundary, because the next level's
+allocator can hand a new frame the address an old one had; the effects atlas does that on the
+packet's level generation.
 
 `TAProgram` (`[0x51FBD0]`) carries two tables the effects pass needs beside them: `+0xC8` the
 32 × 256 LHT "lighten" ramp the explosion flash is derived from, `+0xCC` the 256-byte palette remap

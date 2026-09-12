@@ -50,4 +50,9 @@ int  tagpu_terrown_owns_fog(void);
    engine calls it where we cannot observe — and the publisher then falls back
    to the packet's own eye, which is what the render thread used to use. */
 int tagpu_terrown_fog_eye(int* x, int* y);
+/* GAME THREAD, from the packet's publisher. 1 while our fog observer ran in
+   THIS in-play draw — i.e. while terrain ownership is on and the site is ours.
+   0 means the engine is calling its own fog builder where we cannot see it, and
+   every fog answer either module holds is from whenever we last owned it. */
+int tagpu_terrown_fog_site_live(void);
 #endif

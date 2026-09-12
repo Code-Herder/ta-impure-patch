@@ -894,13 +894,14 @@ static void twin_sprite(TWIN* t, const TAGPU_GAFENT* e, const TAGPU_PUBOP* o)
 static void twin_string(TWIN* t, const TAGPU_PUBOP* o)
 {
     /* THE BLOCK IS GLYPH RECORDS THEN THE STRING (landing 4c). `feed` installs
-       any glyph the producer sent with this op — first sight of a (font, code)
-       pair — and returns where the string starts; nothing below has a font
-       address to dereference, and `o->frame` is NULL for a string now. */
+       the glyph records the producer sent with this op — first sight of a
+       (font, code) pair — are installed by the caller, before this runs;
+       nothing below has a font address to dereference, and `o->frame` is NULL
+       for a string now. */
     const char* str;
     unsigned goff;
-    tagpu_text_glyph_feed(o->font_id, o->font_rows, o->font_yoff,
-                          g_guiq.arena + o->aoff, o->gcount, o->alen);
+    /* the glyph records at the head of the block were installed by the drain
+       loop, before this was called and whether or not it was called at all */
     goff = tagpu_text_glyph_block_bytes(g_guiq.arena + o->aoff, o->gcount, o->alen);
     str = (const char*)(g_guiq.arena + o->aoff + goff);
     short cell[256][4];                 /* ax, ay, w, h per drawn glyph        */
@@ -993,8 +994,8 @@ reseed:
        never happen. Counted and logged rather than silent. */
     if (s_strReseed < 8) {
         char b[180];
-        _snprintf(b, sizeof b, "gui: string op stamped nothing (font %08X, %u bytes, surface %08X) — re-seeding",
-                  (unsigned)(size_t)o->frame, o->alen, o->surf);
+        _snprintf(b, sizeof b, "gui: string op stamped nothing (font id %u, %u bytes, surface %08X) — re-seeding",
+                  o->font_id, o->alen, o->surf);
         b[sizeof b - 1] = '\0';
         slog(b);
     }
@@ -1175,6 +1176,16 @@ static void drain(void)
             break; }
         case PK_STRING:
             t = twin_find(o->surf);
+            /* THE GLYPHS GO IN WHETHER OR NOT THE SURFACE HAS A TWIN. The
+               producer marks a (font, code) pair sent the moment it commits
+               the op and never sends it again, so an op dropped here — a
+               surface we do not twin, the frames after a reseed — would take
+               its glyphs with it and every later string in that font would
+               draw with those characters missing and the rest closed up
+               [found by the landing review, twice]. Installing them is
+               independent of the destination. */
+            tagpu_text_glyph_feed(o->font_id, o->font_rows, o->font_yoff,
+                                  g_guiq.arena + o->aoff, o->gcount, o->alen);
             if (t) twin_string(t, o);
             break;
         case PK_COPY: {
@@ -1466,6 +1477,8 @@ static int minimap_pic(const TAGPU_PACKET* pk, const unsigned char** pix,
             memcpy(nb, p, n);
             s_picCopy = nb; s_picW = pk->mmpic_w; s_picH = pk->mmpic_h;
             s_picGen = pk->level_gen + 1u;
+            /* the acknowledgement: the publisher stops sending it now */
+            tagpu_gui_set_minimap_have(s_picGen);
         }
     }
     if (!s_picCopy || s_picGen != pk->level_gen + 1u) return 0;

@@ -85,4 +85,15 @@ int  tagpu_gui_cursor_own(float* r);
    of the engine's own minimap. */
 void tagpu_gui_set_want_minimap(int on, unsigned int frame_counter);
 int  tagpu_gui_want_minimap(void);
+/* THE LEVEL'S MINIMAP PICTURE IS ACKNOWLEDGED, NOT ASSUMED (landing 4c, and its
+   review). The publisher puts it in a packet and the mailbox is latest-wins:
+   a packet the render thread never takes is a counted statistic, not an error,
+   so "it went into one packet" is not "the consumer has it". The render half
+   raises this to `level_gen + 1` the moment it has copied that level's picture,
+   and the publisher keeps sending until it does — which is normally one extra
+   packet and never more than the frames it takes the consumer to run once.
+   0 = nothing held. Written on the render thread, read on the game thread; one
+   writer, monotone within a level. */
+void     tagpu_gui_set_minimap_have(unsigned level_gen_plus_1);
+unsigned tagpu_gui_minimap_have(void);
 #endif
