@@ -337,8 +337,8 @@ static volatile unsigned s_cShdCopies;
    grid it reads is sim state: the def index, the flags nibble and the wreck
    index are written by the tick and by nothing else, so two publishes of one
    tick over one rect must produce the same table, and the second may reuse the
-   first. At the 256 published frames a second this machine reaches against a
-   60 Hz sim that is four publishes out of five; at or below the sim rate it
+   first. At the 256 published frames a second the reference setup reaches
+   against a 60 Hz sim that is four publishes out of five; at or below the sim rate it
    costs one comparison and changes nothing. The WRECKS are re-derived from the
    cached anchors either way, because their piece runs go into THIS packet's
    arena. */
@@ -831,13 +831,13 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
        confined to objects created between two publishes of one tick — never a
        stale position for an object that was already there.
      * WHAT THAT COSTS is that the newest smoke or fire of a tick can land one
-       publish late: under 4 ms of wall time at the publish rates this machine
-       reaches, on a sprite that is one frame old. It is a quality trade, taken
+       publish late: under 4 ms of wall time at the publish rates the reference
+       setup reaches, on a sprite that is one frame old. It is a quality trade, taken
        deliberately, and the alternative is the whole gather at the DRAW rate —
        measured at 6 to 7 % of the game thread when the plan costed it.
 
-   At the 250-odd publishes a second this machine reaches against a 60 Hz sim,
-   four publishes in five reuse.
+   At the 250-odd publishes a second the reference setup reaches against a
+   60 Hz sim, four publishes in five reuse.
 
    EVERY ENGINE POINTER IS RESOLVED HERE. A sprite's GAF frame is looked up
    through the sequence the particle or the anim state names, while the object
