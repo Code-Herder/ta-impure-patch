@@ -357,6 +357,8 @@ static GLint  s_uOffset, s_uSS, s_uZoom, s_uZoomC, s_uZoomF, s_uZoomCF, s_uDepth
 static GLint  s_uCKey = -1, s_uCSurfSz = -1, s_uCVp = -1;  /* composite: the key */
 static GLint  s_uCCurs = -1;                               /* G17c: the cursor rect */
 static float  s_zoom = 1.0f;
+static TAGPU_PDVIEW s_pv;          /* the posed pass's view, filled once per
+                                      frame and reused by the build-ghost pass */
 static int    s_fboW = 0, s_fboH = 0, s_fboSS = 0;
 static int    s_palInit = 0;
 static int    s_fogCols = 0, s_fogRows = 0, s_fogOrgX = 0, s_fogOrgY = 0;
@@ -444,6 +446,11 @@ static const char* FS =
     "uniform int uNanoOn;\n"                /* build-state staging on         */
     "uniform float uNanoT;\n"               /* height threshold, depth bytes  */
     "uniform vec3 uNanoC;\n"                /* cAbove, cBand, cBelow          */
+    "uniform int uGhost;\n"                 /* 1 = the build ghost: multiply  */
+    "uniform vec3 uGhostTint;\n"            /* rgb by this (green / blocked red).
+                                               Defaults to 0 / anything, so a
+                                               program that never sets it draws
+                                               as it always has               */
     TAGPU_GLSL_FOG_FN
     TAGPU_GLSL_LIGHT_UNIFORMS
     TAGPU_GLSL_SHADOW_UNIFORMS
@@ -536,6 +543,9 @@ static const char* FS =
     "    if (uWaterMode == 1) discard;\n"
     "    rgb = rgb * 0.5 + vec3(0.0, 0.0, 50.0/255.0);\n"
     "  }\n"
+    /* the build ghost's colour multiply — the placement preview drawn in the
+       game's green (or the blocked red), at the same alpha as a cloak. */
+    "  if (uGhost == 1) rgb *= uGhostTint;\n"
     /* the FBO is PREMULTIPLIED: additive content (effects flashes) can then
        ride the same composite as (rgb, alpha 0) */
     "  frag = vec4(rgb * uAlpha, uAlpha);\n"
@@ -1955,6 +1965,233 @@ static int hires_pose(const TAGPU_PK_PIECE* pc, int nparts, const unsigned short
     return 1;
 }
 
+/* ---- the build ghost -----------------------------------------------------
+   The translucent preview of a building under the placement cursor and of
+   every queued build the order pass is showing a site rect for, drawn in the
+   game's green (or the blocked red, when the site bit is clear) at half
+   opacity, through the posed program, as extra body draws. The squares
+   themselves are not ours: they stay exactly as tagpu_mark.c and
+   tagpu_order.c draw them.
+
+   ALL THE DATA IS THE PACKET'S. The cursor's unit type, corners, mode bytes
+   and GUI colours arrive in the header; the queue arrives as the PK_BUILD
+   table the publisher copies out of tagpu_order.c's game-thread snapshot —
+   the same snapshot the squares are drawn from, so this pass and the squares
+   cannot drift. The one engine read here is the per-type MODEL template
+   through model_root, the same fenced read the whole unit pass stands on
+   (thread-split.allow: `fenced`).
+
+   The pose is a rest pose — per-piece translation by the bake's restOff,
+   which is posed_pose's own output for a unit holding every piece at rest —
+   built into render-thread scratch, so a ghost costs one draw call, a bake
+   lookup and no pose arena.
+
+   Armed by tagpu_ghost.on (tokens: `alpha=<f>`, default 0.5). */
+static int   s_ghostOn = 0;
+static float s_ghostAlpha = 0.5f;
+static unsigned s_ghostCheck = 0;
+static int   s_ghostLogged = -1;     /* the armed state the log last named */
+static unsigned s_ghostCurs = 0, s_ghostQueue = 0, s_ghostDrawn = 0;
+static unsigned s_ghostNoPal = 0, s_ghostNoBake = 0;
+
+static int ghost_armed(unsigned frame_counter)
+{
+    char buf[64];
+    int n;
+    if (frame_counter - s_ghostCheck < 30) return s_ghostOn;
+    s_ghostCheck = frame_counter;
+    n = tagpu_opt_read("tagpu_ghost.on", buf, sizeof buf);
+    if (n < 0) {
+        if (s_ghostLogged != 0) { nlog("ghost: off"); s_ghostLogged = 0; }
+        s_ghostOn = 0;
+        return 0;
+    }
+    s_ghostOn = 1;
+    s_ghostAlpha = 0.5f;
+    if (n > 0) {
+        char* p = buf;
+        while (p < buf + n) {
+            while (*p && *p <= ' ') p++;
+            char* q = p;
+            while (*q && *q > ' ') q++;
+            int last = (*q == 0);
+            *q = 0;
+            if (!_strnicmp(p, "alpha=", 6)) {
+                float v = (float)atof(p + 6);
+                if (v >= 0.05f && v <= 1.0f) s_ghostAlpha = v;
+            }
+            if (last) break;
+            p = q + 1;
+        }
+    }
+    if (s_ghostLogged != 1) {
+        char b[96];
+        _snprintf(b, sizeof b, "ghost: ARMED alpha=%.2f", s_ghostAlpha);
+        nlog(b);
+        s_ghostLogged = 1;
+    }
+    return 1;
+}
+
+/* the model's piece list, parents first, as the packet would carry it for a
+   live unit: one TAGPU_PK_PIECE per template node, at rest (pos and turn 0,
+   visible). The tree is the per-type template PK_PIECE.node already
+   dereferences for units — the fenced read, nothing more. */
+static int ghost_pieces(const char* root, TAGPU_PK_PIECE* out, int max)
+{
+    const char* stack[TAGPU_PBMAXPIECE];
+    int sp = 0, n = 0;
+    if (!ptr_ok(root)) return 0;
+    stack[sp++] = root;
+    while (sp > 0 && n < max) {
+        const char* nd = stack[--sp];
+        const char* ch;
+        if (!ptr_ok(nd) || IsBadReadPtr(nd, N_CHILD + 4)) continue;
+        out[n].pos[0] = 0; out[n].pos[1] = 0; out[n].pos[2] = 0;
+        out[n].turn[0] = 0; out[n].turn[1] = 0; out[n].turn[2] = 0;
+        out[n].flags = 1;                     /* visible; bit1 unused here    */
+        out[n].node = (uint32_t)(size_t)nd;
+        n++;
+        for (ch = *(const char* const*)(nd + N_CHILD);
+             ptr_ok(ch) && !IsBadReadPtr(ch, N_CHILD + 4) && sp < TAGPU_PBMAXPIECE;
+             ch = *(const char* const*)(ch + N_SIB))
+            stack[sp++] = ch;
+    }
+    return n;
+}
+
+/* one ghost: the type's bake, a rest pose, one posed body draw. `fx/fy/fz`
+   are world px — x, ALTITUDE, z, the triple the anchor projection consumes. */
+static void ghost_one(const TAGPU_PACKET* pk, unsigned mid,
+                      float fx, float fy, float fz, const float* tint,
+                      const TAGPU_PDVIEW* pv, int eyeX, int eyeY, int vpL,
+                      int vpT, int r0)
+{
+    static TAGPU_PK_PIECE s_pc[TAGPU_PBMAXPIECE];
+    static float s_pose[TAGPU_PBMAXPIECE * 12];
+    static unsigned char s_shaded[TAGPU_PBMAXPIECE];
+    static unsigned char s_pvis[TAGPU_PBMAXPIECE];
+    const char* root;
+    const TAGPU_PBGEOM* bg;
+    const TAGPU_PBMAT* bm;
+    TAGPU_PDUNIT q;
+    int np, i;
+
+    if (mid >= pk->udef_count) return;        /* the bound every model id takes */
+    root = model_root(pk, mid);
+    if (!root) { s_ghostNoBake++; return; }
+    np = ghost_pieces(root, s_pc, TAGPU_PBMAXPIECE);
+    if (np <= 0) { s_ghostNoBake++; return; }
+    /* owner 0: the material's team-coloured frames. The green tint washes
+       them over anyway; the geometry is shared with every unit of the type. */
+    if (!tagpu_posebake_unit(s_pc, np, 0, &bg, &bm) ||
+        bg->nparts <= 0 || bg->count[TAGPU_PB_BODY] <= 0) { s_ghostNoBake++; return; }
+    for (i = 0; i < bg->nparts; i++) {
+        float* o = s_pose + (size_t)i * 12;
+        memset(o, 0, 12 * sizeof(float));
+        o[0] = o[5] = o[10] = 1.0f;
+        o[3] = bg->restOff[i][0];
+        o[7] = bg->restOff[i][1];
+        o[11] = bg->restOff[i][2];
+        s_shaded[i] = 1;
+        s_pvis[i] = 1;
+    }
+    memset(&q, 0, sizeof q);
+    q.geom = bg; q.mat = bm;
+    q.pose = s_pose; q.shaded = s_shaded; q.pvis = s_pvis;
+    q.npose = bg->nparts;
+    /* the engine's dimetric anchor: screen y = world z - altitude/2. The
+       gather's own locals name them the other way round (`fz` IS the
+       altitude there), which this comment exists to stop. */
+    q.ax = fx - (float)eyeX + (float)vpL;
+    q.ay = fz - fy * 0.5f - (float)eyeY + (float)vpT;
+    q.wx0 = fx; q.wz0 = fz - fy * 0.5f;
+    /* a ground unit's depth row at the ghost's own row — the ghost is a
+       preview of exactly that, and the row term keeps it in the plane's legal
+       band. Drawn LAST in the pass, so it covers what it sits on. */
+    q.enc = 1.0f + (float)(((int)fz >> 4) - r0) * 4.0f;
+    q.alpha = s_ghostAlpha;
+    q.fog = 0;                                /* never fog-dimmed, like the square */
+    q.waterT = -1e9f; q.digT = -1e9f;         /* no waterline, no digger clip    */
+    q.waterMode = 0;
+    q.nanoOn = 0;
+    q.cast[0] = 0.0f; q.cast[1] = 0.0f; q.cast[2] = 1.0f;
+    q.tintOn = 1;
+    q.tint[0] = tint[0]; q.tint[1] = tint[1]; q.tint[2] = tint[2];
+    tagpu_posedraw_unit(&q);
+}
+
+/* the pass itself, called once per frame from tagpu_native_frame after the
+   effects: collect the cursor ghost and the queue ghosts and draw them. */
+static void ghost_pass(const TAGPU_PACKET* pk, unsigned frame_counter,
+                       int eyeX, int eyeY, int vpL, int vpT, int r0)
+{
+    const unsigned char* pal;
+    float tintG[3], tintR[3];
+    const TAGPU_PK_BUILD* bs;
+    unsigned nb, k;
+    int haveCursor = 0;
+    float cfx = 0.0f, cfy = 0.0f, cfz = 0.0f;
+
+    if (!s_ghostOn || !pk || !pk->in_game) return;
+    pal = tagpu_pal_live();
+    if (!pal) { s_ghostNoPal++; if ((frame_counter % 300) == 0) {
+        char b[96]; _snprintf(b, sizeof b, "ghost: no live palette this frame (nopal=%u)",
+                              s_ghostNoPal); nlog(b); } return; }
+    /* the square's own colours, resolved through the palette the squares and
+       the units are shown with: GUI_GREEN 0x0A, GUI_BLOCKED 0x04 */
+    tintG[0] = pal[pk->gui_col[0x0A] * 4 + 0] / 255.0f;
+    tintG[1] = pal[pk->gui_col[0x0A] * 4 + 1] / 255.0f;
+    tintG[2] = pal[pk->gui_col[0x0A] * 4 + 2] / 255.0f;
+    tintR[0] = pal[pk->gui_col[0x04] * 4 + 0] / 255.0f;
+    tintR[1] = pal[pk->gui_col[0x04] * 4 + 1] / 255.0f;
+    tintR[2] = pal[pk->gui_col[0x04] * 4 + 2] / 255.0f;
+
+    /* the cursor: the square's own gate — mode 14, and either the band bit or
+       the mouse inside the rect the engine can NAME (gather_cursor's test) —
+       plus a build type the udef bound accepts */
+    if (pk->cursor_mode == 0x0E && pk->build_unit_id != 0 &&
+        pk->build_unit_id < pk->udef_count &&
+        (pk->region_flags & 8 ||
+         (pk->mouse[0] >= pk->vp_addr[0] && pk->mouse[0] <= pk->vp_addr[2] &&
+          pk->mouse[1] >= pk->vp_addr[1] && pk->mouse[1] <= pk->vp_addr[3]))) {
+        const int* br = pk->build_rect;       /* the corners, world px: x, altitude, z */
+        cfx = (float)(br[0] + br[3]) * 0.5f;
+        cfy = (float)(br[1] + br[4]) * 0.5f;
+        cfz = (float)(br[2] + br[5]) * 0.5f;
+        haveCursor = 1;
+    }
+    bs = tagpu_pk_builds(pk);
+    nb = pk->n_builds;
+    if (!haveCursor && (!bs || !nb)) return;
+
+    tagpu_posedraw_begin(&s_pv);
+    if (haveCursor) {
+        s_ghostCurs++;
+        ghost_one(pk, pk->build_unit_id, cfx, cfy, cfz,
+                  (pk->region_flags & 0x40) ? tintG : tintR,
+                  &s_pv, eyeX, eyeY, vpL, vpT, r0);
+    }
+    for (k = 0; k < nb; k++) {
+        s_ghostQueue++;
+        ghost_one(pk, bs[k].type,
+                  (float)bs[k].pos[0] / 65536.0f,
+                  (float)bs[k].pos[1] / 65536.0f,
+                  (float)bs[k].pos[2] / 65536.0f,
+                  tintG, &s_pv, eyeX, eyeY, vpL, vpT, r0);
+    }
+    s_ghostDrawn += (unsigned)haveCursor + nb;
+    tagpu_posedraw_end();
+    if ((frame_counter % 300) == 0) {
+        char b[160];
+        _snprintf(b, sizeof b,
+                  "ghost: curs=%u queue=%u drawn=%u nopal=%u nobake=%u tint=G(%.2f,%.2f,%.2f) R(%.2f,%.2f,%.2f)",
+                  s_ghostCurs, s_ghostQueue, s_ghostDrawn, s_ghostNoPal, s_ghostNoBake,
+                  tintG[0], tintG[1], tintG[2], tintR[0], tintR[1], tintR[2]);
+        nlog(b);
+    }
+}
+
 void tagpu_native_frame(const TAGPU_FRAME* f)
 {
     /* before the early-out and before any gather: a level that ended while this
@@ -2092,6 +2329,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         s_subpix = (GetFileAttributesA("tagpu_subpix.off") == INVALID_FILE_ATTRIBUTES);
         s_spxlog = (GetFileAttributesA("tagpu_spxlog.on")  != INVALID_FILE_ATTRIBUTES);
         s_nano   = (GetFileAttributesA("tagpu_nano.off")   == INVALID_FILE_ATTRIBUTES);
+        (void)ghost_armed(f->frame_counter);   /* tagpu_ghost.on, its own 30f poll */
         if (s_armed != was && was >= 0) {
             char b[96]; _snprintf(b, sizeof b, "native: %s (type=%s wrecks=%d ss=%d subpix=%d)",
                                   s_armed ? "ARMED" : "disarmed", s_type,
@@ -3689,10 +3927,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        unit at the same key, which is why this is a measurement lever and not
        a play setting until Gate B has run. */
     s_poseQueued = (unsigned)npd;
-    if (npd) {
+    {
         TAGPU_PDVIEW pv;
         const TAGPU_LIGHT* L = tagpu_classicpp_light();
-        int k;
         memset(&pv, 0, sizeof pv);
         pv.game[0] = (float)gw; pv.game[1] = (float)gh;
         pv.zoom = s_zoom;
@@ -3711,9 +3948,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         pv.norm = 1.0f / L->unitLevel;
         pv.shNeutral = tagpu_r3d_shade_neutral();
         pv.shDir = tagpu_r3d_shade_dir();
-        tagpu_posedraw_begin(&pv);
-        for (k = 0; k < npd; k++) tagpu_posedraw_unit(&pdu[k]);
-        tagpu_posedraw_end();
+        s_pv = pv;
+        if (npd) {
+            int k;
+            tagpu_posedraw_begin(&pv);
+            for (k = 0; k < npd; k++) tagpu_posedraw_unit(&pdu[k]);
+            tagpu_posedraw_end();
+        }
         HIRES_RESTORE();
     }
     glUniform1i(s_uNanoOn, 0);      /* the wireframe carries its own colour */
@@ -3748,6 +3989,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         x_glDrawArrays(GL_TRIANGLES, fxFirst, fxLast - fxFirst);
     }
     if (nfx) tagpu_fx_render(&fv, s_palTex, scafOn ? tagpu_scaffold_texref() : 0);
+    /* the build ghost: translucent placement previews, after the effects so
+       nothing world-anchored covers them — they are the square's twin, drawn
+       under the same gate and in the same colours */
+    ghost_pass(pk, f->frame_counter, eyeX, eyeY, vpL, vpT, r0);
 #undef FOGW
     x_glDisable(GL_BLEND);
     x_glDisable(GL_DEPTH_TEST);

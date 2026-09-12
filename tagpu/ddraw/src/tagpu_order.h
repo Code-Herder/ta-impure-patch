@@ -59,6 +59,7 @@
    `noranges` / `nolabels`. Refuses to take the draw unless tagpu_markown.c
    actually installed the `0x469BFC` redirect. */
 #include "tagpu_fx.h"
+#include "tagpu_packet.h"     /* TAGPU_PK_BUILD, the copy target below */
 
 /* ---- arming (present thread) ---- */
 int  tagpu_order_armed(unsigned frame_counter);  /* re-reads tagpu_order.on (30f) */
@@ -76,6 +77,13 @@ int  tagpu_order_snapshot(void* ctx, void* view);
    of leaving it standing on screen forever. */
 void tagpu_order_block_begin(void);
 void tagpu_order_block_end(void);
+/* GAME THREAD ONLY (the packet publisher, in the same draw): copy the last
+   snapshot's build entries — the ones `draw_build` would show a site rect
+   for — into `dst`, up to `max`. Returns the count copied. The publisher
+   appends these to the frame packet's PK_BUILD table, so the ghost pass and
+   the squares draw from one walk and cannot drift. 0 when no snapshot is
+   published (not armed, or a block in which no marker ran). */
+int  tagpu_order_copy_builds(TAGPU_PK_BUILD* dst, int max);
 /* One engine drawer call, logged under `trace` so the engine's own node list
    can be diffed against ours. `bit` is the capability bit (0..4; 5 = the
    sprite reached by delegation from the route-dot drawer). Inert otherwise. */

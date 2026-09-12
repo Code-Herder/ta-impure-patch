@@ -95,6 +95,13 @@ typedef struct {
     float wx0, wz0;             /* world x and projected world z at the anchor*/
     float enc;                  /* depth key base                             */
     float alpha;                /* 0.5 while cloaked                          */
+    float tint[3];              /* the build ghost's colour multiplier: the
+                                   resolved green (or red, blocked) in [0..1],
+                                   applied to the fragment when tintOn is set;
+                                   (1,1,1) for every ordinary unit. The shader's
+                                   uGhost gate defaults to OFF, so a record that
+                                   never sets tintOn cannot change the look     */
+    int   tintOn;               /* 1 = multiply rgb by tint before alpha       */
     int   fog;                  /* uFog bits, as the native shader takes them */
     float waterT, digT;
     int   waterMode;

@@ -809,6 +809,30 @@ int tagpu_order_snapshot(void* ctx, void* view)
     return !s_passive && !s_trace;
 }
 
+/* the packet publisher's copy: the published arena's build entries, in record
+   order. The same gate draw_build uses — the nobuild token, a non-zero build
+   type and a def that resolved — so every entry here is a site rect on screen,
+   and every site rect is here (the arena cap and the packet's truncation
+   apart; both are counted, the packet's in `truncated`). */
+int tagpu_order_copy_builds(TAGPU_PK_BUILD* dst, int max)
+{
+    const ORDARENA* A;
+    int i, n = 0;
+    if (g_pub < 0 || !dst || max <= 0) return 0;
+    A = &g_arena[g_pub];
+    for (i = 0; i < A->n && n < max; i++) {
+        const ORDREC* r = &A->rec[i];
+        if (!s_build || !r->btype || !r->haveBdef) continue;
+        dst[n].type = r->btype;
+        dst[n].pad = 0;
+        dst[n].pos[0] = r->bx;
+        dst[n].pos[1] = r->by;
+        dst[n].pos[2] = r->bz;
+        n++;
+    }
+    return n;
+}
+
 void tagpu_order_block_begin(void) { g_ran = 0; }
 
 void tagpu_order_block_end(void)

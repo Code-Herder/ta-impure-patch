@@ -199,6 +199,18 @@ typedef struct TAGPU_PK_ANCHOR {
     uint8_t  pad;
 } TAGPU_PK_ANCHOR;
 
+/* 12 B, one per QUEUED build the order-marker driver would show a site rect
+   for — the build-ghost pass draws these as translucent models. `type` is the
+   UnitDef index the engine hands MODEL_PTRS, the same index space as
+   PK_UNIT.model_id, so the same udef_count bound applies. The publisher copies
+   it out of tagpu_order.c's game-thread snapshot, so this table and the green
+   squares it mirrors cannot drift. */
+typedef struct TAGPU_PK_BUILD {
+    uint16_t type;            /* node+0x36, the build target's unit-type id     */
+    uint16_t pad;
+    int32_t  pos[3];          /* node+0x22.., 16.16 x, altitude, z              */
+} TAGPU_PK_BUILD;
+
 /* ---- THE EFFECTS AND THE PARTICLE LAYERS (landing 4a) -------------------
    The engine's four per-frame effect arrays, copied by the thread that owns
    them. All four are SIM STATE — the tick moves a projectile, advances an
@@ -415,6 +427,7 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_TRUNC_FOGSH   0x4000u
 #define TAGPU_PK_TRUNC_MM      0x8000u
 #define TAGPU_PK_TRUNC_MMPIC   0x10000u
+#define TAGPU_PK_TRUNC_BUILDS  0x20000u
 
 #define TAGPU_PK_SHD_ROWS   32u      /* the engine's PALETTE.SHD shade table:  */
 #define TAGPU_PK_SHD_BYTES  (TAGPU_PK_SHD_ROWS * 256u)   /* 32 x 256 bytes     */
@@ -432,6 +445,9 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_MAX_UNITS    16384u
 #define TAGPU_PK_MAX_WRECKS   4096u
 #define TAGPU_PK_MAX_ANCHORS  65536u
+#define TAGPU_PK_MAX_BUILDS   2048u    /* the order snapshot's own arena cap:
+                                          one record per queued marker, and a
+                                          build is a subset of those             */
 
 /* THE PRIMITIVE'S PREFIX AND SUFFIX. Every record the exchange carries — the
    frame packet below and the command record after it — starts with these
@@ -555,6 +571,9 @@ typedef struct TAGPU_PACKET {
     uint8_t  gui_col[256];
     uint8_t  cursor_mode;             /* 0x2CC3: 0x0E = build placement           */
     uint8_t  region_flags;            /* 0x2CC6: bit3 band box, bit6 site OK      */
+    uint16_t build_unit_id;           /* 0x2CC4: what the build cursor is placing,
+                                         a UnitDef index; 0 = none (not verified
+                                         in this repo yet: tagpu_engine.h)       */
     uint8_t  game_opt;                /* 0x37F06 low byte: bit0 damagebars,
                                          bit2 Shadow, bit3 TShadow, bit4 FShadow  */
     uint8_t  pad3;
@@ -562,6 +581,10 @@ typedef struct TAGPU_PACKET {
                                          (PALETTE.SHD at graphics+0xC4), copied
                                          whole: the Gouraud LUT the unit pass
                                          builds its shading from                  */
+
+    /* ---- the build-orders table (the ghost pass) ---- */
+    uint32_t n_builds, off_builds;    /* PK_BUILD: the queued builds whose site
+                                         rect the order pass is showing          */
 
     /* ---- landing 4a: the effects and the particle layers ---- */
     uint32_t n_proj,   off_proj;      /* PK_PROJ,   the live projectiles        */
@@ -725,6 +748,9 @@ static __inline const TAGPU_PK_DEBRIS* tagpu_pk_debris(const TAGPU_PACKET* p)
 { return p->n_debris ? (const TAGPU_PK_DEBRIS*)(const void*)((const unsigned char*)p + p->off_debris) : (const TAGPU_PK_DEBRIS*)0; }
 static __inline const TAGPU_PK_PART* tagpu_pk_part(const TAGPU_PACKET* p)
 { return p->n_part ? (const TAGPU_PK_PART*)(const void*)((const unsigned char*)p + p->off_part) : (const TAGPU_PK_PART*)0; }
+/* the queued builds the order pass is showing site rects for, or NULL */
+static __inline const TAGPU_PK_BUILD* tagpu_pk_builds(const TAGPU_PACKET* p)
+{ return p->n_builds ? (const TAGPU_PK_BUILD*)(const void*)((const unsigned char*)p + p->off_builds) : (const TAGPU_PK_BUILD*)0; }
 
 /* ---- lifetime ---- */
 /* DLL attach, before either thread exists — never lazily: reserves the slots

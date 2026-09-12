@@ -187,6 +187,7 @@ static GLint u_fog, u_fogOrg, u_fogDim, u_scafOn, u_scafP;
 static GLint u_waterT, u_waterMode, u_digT, u_nanoOn, u_nanoT, u_nanoC;
 static GLint u_lit, u_sun, u_amb, u_norm, u_shadow, u_restored, u_depthPass;
 static GLint u_range, u_wire;
+static GLint u_ghost, u_ghostTint;   /* the build ghost's colour multiply     */
 static TAGPU_SHADOWU s_shU;
 /* depth program */
 static GLint d_anchor, d_enc, d_cast, d_shadowMat, d_depthPass, d_range;
@@ -477,6 +478,7 @@ int tagpu_posedraw_ready(void)
     PU(u_shadow, "uShadow");    PU(u_restored, "uRestored");
     PU(u_depthPass, "uDepthPass");
     PU(u_range, "uRange");      PU(u_wire, "uWire");
+    PU(u_ghost, "uGhost");      PU(u_ghostTint, "uGhostTint");
 #undef PU
     /* the samplers name the same units the native pass binds its textures on,
        so this pass never re-binds them: it draws between that pass's own binds */
@@ -573,6 +575,8 @@ void tagpu_posedraw_begin(const TAGPU_PDVIEW* v)
     glUniform1i(u_shadow, 0);
     glUniform1i(u_depthPass, 0);
     glUniform1i(u_range, PD_R_BODY);
+    glUniform1i(u_ghost, 0);        /* a ghost sets it per unit; everything
+                                       after the body pass inherits this 0    */
     glUniform1i(u_restored,
                 (tagpu_r3d_atlas_rgbref() && tagpu_classicpp_on()) ? 1 : 0);
     x_glUniform2f(u_shd, (float)v->shNeutral, (float)v->shDir);
@@ -608,6 +612,12 @@ void tagpu_posedraw_unit(const TAGPU_PDUNIT* u)
     glUniform1f(u_enc, u->enc);
     glUniform1i(u_fog, u->fog);
     glUniform1f(u_alpha, u->alpha);
+    if (u->tintOn) {
+        glUniform1i(u_ghost, 1);
+        x_glUniform3f(u_ghostTint, u->tint[0], u->tint[1], u->tint[2]);
+    } else {
+        glUniform1i(u_ghost, 0);
+    }
     glUniform1f(u_waterT, u->waterT);
     glUniform1f(u_digT, u->digT);
     glUniform1i(u_waterMode, u->waterMode);

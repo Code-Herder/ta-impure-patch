@@ -164,6 +164,13 @@
 #define OFF_MOUSE_Y        0x2C7A
 #define OFF_BUILDRECT      0x2C92      /* i32[6]: x, altitude, z of two corners */
 #define OFF_CURMODE        0x2CC3      /* u8, 0x0E = build placement            */
+#define OFF_BUILDUNITID    0x2CC4      /* u16, the unit-type id (UnitDef index)
+                                          of the building being placed.
+                                          [VERIFIED 2026-09-12, tacli peek:
+                                          after a build-menu click on ARMMEX
+                                          the word read 78, the mex's in-game
+                                          UnitDef index; the footprint in
+                                          OFF_BUILDRECT matched its def.]    */
 #define OFF_REGIONFL       0x2CC6      /* u8, bit3 band box, bit6 site OK       */
 
 /* ---- the effects: the four per-frame arrays (landing 4a) ------------------

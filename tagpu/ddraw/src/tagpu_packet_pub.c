@@ -96,6 +96,8 @@
 #include "tagpu_fogwide.h"   /* the wide fog grid, built in THIS draw on this thread */
 #include "tagpu_terrown.h"   /* the eye the engine's own fog grid is anchored at */
 #include "tagpu_gui.h"       /* whether the render half wants the minimap surfaces */
+#include "tagpu_order.h"     /* tagpu_order_copy_builds: the build-ghost table,
+                                out of the snapshot the squares draw from        */
 
 /* DrawGameScreen's prologue, `sub esp,0x214` — the same six bytes
    tagpu_menu.c observes */
@@ -1433,6 +1435,24 @@ static void fill_cursor(TAGPU_PACKET* p)
     p->cur_w = rec[0]; p->cur_h = rec[1];
 }
 
+/* THE BUILD-ORDERS TABLE — the queued builds the order pass is showing site
+   rects for, copied out of that pass's own game-thread snapshot (the one the
+   squares are drawn from), so the ghost pass and the squares can never drift.
+   Both caps are counted: the arena's in the snapshot's `dropped`, this one's
+   in the packet's `truncated` bit. */
+static TAGPU_PK_BUILD s_builds[TAGPU_PK_MAX_BUILDS];
+
+static unsigned fill_builds(TAGPU_PACKET* p, unsigned* cursor)
+{
+    unsigned e, need = *cursor;
+    int n = tagpu_order_copy_builds(s_builds, TAGPU_PK_MAX_BUILDS);
+    if (n <= 0) return need;
+    e = append_table(p, cursor, s_builds, (unsigned)n, (unsigned)sizeof(TAGPU_PK_BUILD),
+                     &p->off_builds, &p->n_builds, TAGPU_PK_TRUNC_BUILDS);
+    if (e > need) need = e;
+    return need;
+}
+
 static unsigned fill_gui(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 {
     unsigned need = *cursor, e;
@@ -1622,10 +1642,14 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     }
     p->cursor_mode  = RDU8(ta, OFF_CURMODE);
     p->region_flags = RDU8(ta, OFF_REGIONFL);
+    p->build_unit_id = RDU16(ta, OFF_BUILDUNITID);
     p->game_opt     = RDU8(ta, OFF_GFXOPT);
 
     /* ---- the world tables ---- */
     e = fill_world(p, ta, &cursor);
+    if (e > need) need = e;
+    /* ---- the build-orders table (the ghost pass) ---- */
+    e = fill_builds(p, &cursor);
     if (e > need) need = e;
     /* ---- the effects and the particle layers (landing 4a) ---- */
     e = fill_fx(p, ta, &cursor);
