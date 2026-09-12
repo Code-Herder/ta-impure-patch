@@ -1073,6 +1073,33 @@ instead: `tacli arm <i> classicpp.on=off`.
   A level change logs `packet: level end -> gen N …`, then `packet: loader thread T entered
   0x497C70 …` / `… leaving 0x497C70 …` and `packet: level gen N: first in-play packet …` — in
   that order, which is the load hazard's closing argument (exe note, "The in-play publish point").
+
+  **Since landing 4 (2026-09-12) the heartbeat carries two more segments**, and every counter in
+  them must read 0 in a healthy game:
+
+  - `| fx: proj= expl= deb= part=<this packet>/<high water> scan=<gathers>/<reuses> trunc=
+    layerbad= subbad= lht= want=<fx>/<sfx>` — the effects and the ten particle layers.
+    **`trunc`, `layerbad` and `subbad` must all read 0**: `layerbad` counts a particle layer whose
+    object count exceeded the engine's own 401 (the emitters drop the front and shift past 400, so
+    401 is the steady state, not 400), and `subbad` an object whose sub-particle vector exceeded
+    the containment filter. `scan` is the gather's per-(level, tick) cache: at the publish rates
+    this machine reaches against a 60 Hz sim, expect roughly one scan in five to twenty.
+    `part=`'s high-water was **800** on a 1080p `200v200`, against a 16 384-entry cap.
+    `want=` is the render thread's standing request, and **the pass does not claim the engine's
+    draw until the packet says the publisher was filling for it** — so a freshly armed `fx.on`
+    costs a frame or two of the engine's own effects rather than a frame or two of none.
+  - `| fog: <cols>x<rows> wide=<cols>x<rows>/<publishes> refused= shade=` and, on the `gui:` half,
+    `| gui: mm=<w>x<h>/<copies> refused= pic=<w>x<h>/<sent>` — both fog grids and the GL UI's
+    minimap. **`refused` must read 0** on both.
+
+  **The native pass's line gained `fog=<mode>(<cols>x<rows>) bare=<n>`.** `bare` is
+  `tagpu_fogwide`'s old counter, moved here with the grid: frames drawn zoomed out (or from an eye
+  the game thread has not acknowledged) whose packet carried no WIDE fog grid, so the outer ring
+  fell back to the engine's 1× one. **It must read 0** unless `tagpu_fogwide.off` is armed.
+
+  **`tagpu_fogwide`'s own line lost `bare=`, `ret=`, `held=` and `strand=`** — it hands nothing
+  over any more, so there is nothing to retire and nothing to strand. It is
+  `fogwide: CxR cells=N cap=CxR rebuilds=N in S = R/s ticks=N build=…/… us (mean/max)`.
 - The instrumentation triggers (`suppress.on`, `tracer.on`, `gldbg.on`, `posedump.on`,
   `cobtrace.on`, `spxlog.on`, `fpsosd.on`) — debugging, not features.
 - `hires.on` only carries the hires renderer's *tweaks* (`anchor=`, sun, ambient,

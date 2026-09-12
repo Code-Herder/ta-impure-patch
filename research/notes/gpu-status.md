@@ -2671,6 +2671,67 @@ DLL and this one.** `fogwide check: differ=0` on 720 of 720 cells on both builds
 The heartbeat's new `fog:` segment is `<cols>x<rows> wide=<cols>x<rows>/<publishes> refused=
 shade=`.
 
+### 2.21 The frame packet exchange, landing 4c — the GL UI's render half (`tagpu_packet.c`, `tagpu_packet_pub.c`, `tagpu_gui_surf.c`, `tagpu_gui_hook.c`, `tagpu_gui_leaves.h`, `tagpu_gui_int.h`, `tagpu_text.c`, `tagpu_overlay.c`) — 2026-09-12
+
+The plan's row 4c and its §9. The GL UI layer is unchanged except in where its render half gets
+its inputs; the op QUEUE is untouched and stays a queue. Full detail:
+[GUI renderer](gui-renderer.html) §23. In one table:
+
+| what it was, on the render thread, every present | what it is |
+|---|---|
+| the cursor's position and sprite record through `[0x51FBD0]+0x1B6`/`+0x1BA`/`+0x1B2` | header fields; the record is a KEY into the session cursor table and only `tagpu_gaf.c` dereferences it |
+| the minimap's box, its view rect and its colour byte | header fields |
+| its three 8bpp surfaces, walked row by row to interleave into RGB | one area the PUBLISHER interleaves, gated on the sharp minimap asking for it (at k = 1 it is deliberately the engine's own) |
+| the level's picture, from a buffer the LOADER thread filled | the level's FIRST in-play packet, acknowledged by the consumer; **the loader-thread observer is deleted** |
+| `PK_STRING.frame`, the engine's FONT OBJECT, read per glyph behind `IsBadReadPtr` | a font ID and each glyph's width and packed ROWS, copied on first sight of a (font, code) pair on the game thread |
+
+**The loader-thread observer went because a fact in this fork's own notes was wrong.** They said
+the minimap picture `main+0x1426B` was alive only inside `BuildMinimapSurface 0x466780`. It is
+alive for the whole level: LoadMap stores it at `0x483900`, `0x466780` reads it at `0x46684F`
+without nulling it, and the only free is `0x483DFE` inside `0x483DD0`, whose only caller is
+`0x491BB3` — the teardown cascade. So the publisher decodes it itself on the level's first in-play
+draw, and **nothing of ours runs on the loader thread any more**, which is the second of the two
+things the row exists to close.
+
+**`tagpu_gui_surf.c` is off the allow-list and `tagpu_text.c` carries no probe.** The blitter
+`0x4CCF60` is still `pure-engine-code` and is now the only thing on that list from either text
+path: both hand it a one-glyph font object of ours, so TA's own glyphs are still TA's own blit.
+The list is **33 files**, from 36 before landing 4.
+
+### 2.22 What landing 4's review changed
+
+**Four Opus reviewers at `high`, read-only, launched as `Agent`s** — one per plan row with a
+numbered risk list, and a fourth told to range freely and to check the notes' claims against the
+pristine binary. **Eleven findings**, every one verified in the code or the disassembly before
+anything moved, and all eleven acted on. Six were correctness, five were documentation — which is
+the ratio worth noticing, because the documentation half included the sentence that licensed a
+cache.
+
+| # | what it was | why it mattered |
+|---|---|---|
+| 1 | **both fog answers froze silently** when `terr_fogtick` stopped running | our fog observer runs only while `g_terrown_skip` is set, and the render thread drops that on six documented paths (the `terr.on` lever, `passive`, `over`, a `key=` change, a bail-out, the 90-frame watchdog). `tagpu_fogwide`'s "valid" flag is only ever cleared from inside the tick that has stopped, and the eye latch was never cleared at all — so the packet would have carried the **last grid ever built, for ever**, against a camera and an LOS state that keep moving, with nothing counting it. The wall-clock liveness test landing 4b deleted was never about the hand-over; it was about the producer stopping. The observer stamps the publisher's in-play draw counter now and the publisher accepts either answer only when the stamp is this draw's |
+| 2 | **the eye latch outlived its level** | a fresh level can go many draws before the engine's fog builder next fires, so the old level's origin would stand until then. It carries the publisher's level generation too |
+| 3 | **the engine's effects draw was suppressed before our tables existed** | the request travels render → game and the fill comes back, so the first frames after `tagpu_fx.on` appears carried empty tables while the pass had already claimed the draw: a handful of frames with no fire, explosions or debris at all. The packet carries `fx_want` and the skip follows it |
+| 4 | **a glyph marked sent could be lost for ever**, two ways | the consumer's atlas resets on a shelf overflow and on a ninth font, and the producer's `sent[]` survived it; and an op the consumer DROPS (a surface with no twin, the frames after a reseed) took its glyph records with it. Either way every later string in that font draws with those characters **missing and the rest closed up**. The producer watches the atlas generation, and the drain loop installs the block for every string op before the twin lookup |
+| 5 | **the minimap picture rode in exactly one packet** | the mailbox is latest-wins and a dropped packet is a counted statistic — and the likeliest one to be dropped is a level's first, when the render thread is busiest. The render half acknowledges it and the publisher sends until it does |
+| 6 | **codes 0x7F..0xFF stopped reaching the glyph cache** | `0x4CCF60` bounds a character below `first` and NOT above, which is why the cache runs to 0xFF; the producer's range was 0x20..0x7E, so a high code drew nothing AND did not advance x |
+| 7 | `kind` and `layer` were the only packet indices a consumer formed without a bound at acquire | both are checked in `frame_valid` |
+| 8 | **the effects atlas keys on a GAF frame's ADDRESS** and was never invalidated at a level boundary | pre-existing, and finding 11 is what made it matter: a second level's allocator can hand a new frame an old one's address. It drops on the packet's level generation |
+| 9 | `tagpu_packet_pub_level_end`'s foreign-thread return skipped the picture reset | the picture's state is keyed on the level generation now and needs no reset at all |
+| 10 | **the per-tick cache's stated argument was disproved by the binary** | it said the engine's draw passes read the effect arrays and write nothing. **They do not**: `0x420B00`'s debris loop calls `0x421550` (`0x420B18`), which calls the grey-smoke emitter `0x472810` and the fire emitter `0x472AB0`, and both append to a particle layer. So the layers are not constant within a tick. The cache stands on three weaker things instead, and the comment now says all three: the tables are copies so a later append cannot dangle one; positions are the tick's so nothing already present goes stale; and what it costs is the newest smoke of a tick landing one publish late |
+| 11 | **an explosion's two anim states are PER-LEVEL**, not from the session `"fx"` bank | the add site takes the sequence from `main+0x1AB8F[idx]` (`0x420AA2`), a table `0x420620` builds from the level load and `0x420960` frees and nulls from the teardown. The notes said this was "not established"; it is now, and unfavourably — those two frames stand on `tagpu_reclaim`'s fence exactly as the model templates do |
+
+Three more documentation corrections came with them: the particle emitter list undercounted
+(**twenty** sites cap a layer, not thirteen — all twenty are listed now, because a partial list
+invites the same mistake twice); `f[3]` is the font's FIRST CODE (`0x4CCF77` / `0x4CCFAA`), not the
+high byte of the y-offset word, so the `f[3] != 0` test is a refusal of an unusual font rather than
+a statement about the format; and `TAGPU_PK_MM_DIMCAP` is a sanity ceiling of ours, the engine
+bounding only the BOX it fits the picture into. **The publisher's own comment and its launch log
+still said the level generation was reclaim's and "0 for the session" with reclaim off** — the
+pre-landing-3 design, changed by landing 3's own review, with the text left behind. A reviewer read
+it and reported a defect that is not in the code, which is the cost of a stale comment stated as a
+measurement.
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out
