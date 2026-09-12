@@ -8,6 +8,8 @@
 
 #define TAGPU_ABI 1
 
+struct TAGPU_PACKET;             /* tagpu_packet.h; opaque here */
+
 typedef struct TAGPU_FRAME {
     unsigned int struct_size;    /* sizeof(TAGPU_FRAME) — ABI guard              */
     unsigned int abi;            /* TAGPU_ABI                                     */
@@ -23,6 +25,13 @@ typedef struct TAGPU_FRAME {
        composite reads it to find the pixels the engine still paints inside the
        viewport once we own the terrain — see tagpu_terrown.c. */
     unsigned int surface_tex;
+    /* The frame packet exchange (tagpu_packet.h): the packet the driver took
+       for this frame and the previous one it still holds, or NULL. Valid until
+       the driver's frame_end; a module that caches either past its frame holds
+       a slot the producer may be filling — the poison lever exists to catch
+       exactly that. Appended, so the struct only grew. */
+    const struct TAGPU_PACKET* packet;
+    const struct TAGPU_PACKET* packet_prev;
 } TAGPU_FRAME;
 
 typedef void (__cdecl *TagpuPresentProc)(const TAGPU_FRAME*);

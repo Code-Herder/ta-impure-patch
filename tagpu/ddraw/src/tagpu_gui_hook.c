@@ -287,6 +287,12 @@ static int on_game_thread(void)
     return s_gameTid != 0 && GetCurrentThreadId() == s_gameTid;
 }
 
+/* The flip counter, for the frame packet to echo (tagpu_packet_pub.c): the
+   twin travels on this module's queue and the packet on the exchange, at
+   different cadences, and the heartbeat counts the skew between them. Game
+   thread reads only; 0 for ever when the layer is not armed. */
+unsigned tagpu_gui_flips(void) { return s_flips; }
+
 /* ---- the publisher (game thread -> tagpu_gui_surf.c) ------------------- */
 
 TAGPU_GUIQ g_guiq;                    /* the queue; storage below              */

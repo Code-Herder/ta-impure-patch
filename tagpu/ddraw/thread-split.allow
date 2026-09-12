@@ -1,0 +1,72 @@
+# thread-split.allow — the files that may name engine memory, each with its class and
+# the argument for it (tools/thread-split-check.sh; frame-packet-exchange §10).
+#
+# DEFAULT-DENY, STARTED FULL ON 2026-09-12 (landing 1 of the frame packet exchange): every
+# file that named an engine address, included the engine header, probed with IsBad*Ptr or
+# added an offset to the main pointer, with comments stripped. The list only SHRINKS: a
+# landing that converts a file to the packet removes its line in the same diff. Adding a
+# line loosens the rule for every future edit of that file and is the owner's decision,
+# taken in a review — never a session's way past a red build.
+#
+# Classes, one per line after the path:
+#   publisher         game-thread code inside an engine call, at a site that owns the
+#                     memory it reads (observers, the packet's fill, detour installers
+#                     that byte-match at attach)
+#   session-reader    render thread, data that lives for the session and is never
+#                     rewritten (GAF banks, the cursor table); NOT fonts
+#   fenced            render thread, per-LEVEL assets (model templates, the tile set)
+#                     under tagpu_reclaim's teardown fence; retired by the asset channel,
+#                     the decision after landing 5
+#   tooling           trigger-gated readers on the render thread (peek, catalogues, the
+#                     GUI snapshot, the weapon dump, scenario detection) with their
+#                     documented caveat; out of the exchange's scope
+#   pure-engine-code  render thread executes an engine FUNCTION over our buffers, with
+#                     the disassembly range that shows it reads only its arguments and
+#                     writes only its destination
+#   engine-map        the header the addresses live in (publisher files include it)
+#   to-convert:N      render-thread reader of per-frame or per-map engine state, to be
+#                     converted in landing N of the migration table
+#
+# The argument after `#` is what the reviewer checks, not what the script checks.
+
+inc/tagpu_engine.h       engine-map          # the addresses, for publisher files only (started landing 1)
+src/tagpu_packet_pub.c   publisher           # the frame packet's fill, from DrawGameScreen's `after` at 0x4969D2; the font copy at hook 8; the level-end packet
+src/tagpu_markown.c      publisher           # the marker block's call-site redirects on the game thread; hook 8 latches the font through the publisher
+src/tagpu_menu.c         publisher           # the render-options screen: GUI calls on the game thread from the DrawGameScreen observer
+src/tagpu_reclaim.c      publisher           # FreeObjectState and the teardown wrap on the game thread; the fence itself
+src/tagpu_gui_hook.c     publisher           # the GL UI observers and the flip publisher on the game thread; the probes are on its own arena
+src/tagpu_gui_leaves.h   to-convert:4c       # observers on the game thread — except before_minimap, which publishes from the LOADER thread and goes in 4c
+src/tagpu_order.c        to-convert:3        # the order-marker snapshot is game-thread (0x469BFC); its unit resolution and the palette read on the render thread go with the units table
+src/tagpu_owndraw.c      publisher           # the composite detours' classifier on the game thread (0x459830/0x459C70)
+src/tagpu_fxown.c        publisher           # effects call-site redirects and leaf detours on the game thread
+src/tagpu_featown.c      publisher           # the feature leaf detour 0x46A610 on the game thread
+src/tagpu_terrown.c      publisher           # the terrain and fog-overlay detours; the fog grid's lazy rebuild on the game thread
+src/tagpu_fogwide.c      to-convert:4b       # the wide fog grid: built on the game thread at the fog site, handed over through a critical section — becomes a mailbox instance
+src/tagpu_patches.c      publisher           # byte patches applied at attach, before the engine runs
+src/tagpu_suppress.c     publisher           # the DrawUnit detour's classifier on the game thread
+src/tagpu_tracer.c       publisher           # the G4 draw tracer's detours on the game thread
+src/tagpu_cobtrace.c     publisher           # the COB oracle's five sites inside the script engine, game thread
+src/tagpu_weapons.c      publisher           # the extra-weapons module: sim-side sites on the game thread; the weapon dump is tooling
+src/tagpu_scenario.c     tooling             # the applier runs on the tick detour (game thread); its detection and reporting half runs in the overlay
+src/tagpu_cat.c          tooling             # unit/feature catalogues behind tagpu_units.trigger / tagpu_features.trigger
+src/tagpu_gui_snap.c     tooling             # the gadget-tree snapshot behind tagpu_ui.trigger
+src/tagpu_input.c        to-convert:2        # in-process input injection writes the eye and the scroll target from the render thread: a command
+src/tagpu_zoom.c         to-convert:2        # the eye, the scroll target, ScrollSpeed and the minimap rect: render-thread stores that become commands; the clamp detour stays a publisher
+src/tagpu_vpwide.c       to-convert:2        # the viewport rect widened from the render thread: a command; the 0x498DA0 redirect stays a publisher
+src/tagpu_pal.c          to-convert:2        # the palette table and the gamma factor, read per present: header fields
+src/tagpu_overlay.c      to-convert:3        # the roster log walks the unit array on the render thread
+src/tagpu_native.c       to-convert:3        # the unit pass: the unit array, poses, fog descriptor, option bits on the render thread
+src/tagpu_scaffold.c     to-convert:3        # the scene-depth scaffold walks the unit array on the render thread
+src/tagpu_mark.c         to-convert:3        # bars, digits and boxes gathered from the unit array on the render thread
+src/tagpu_lerp.c         to-convert:3        # the pose history samples P_POS/P_TURN on the render thread; rekeyed to the packet's stable id
+src/tagpu_render3do.c    to-convert:3        # the opt-in writeback / render3do path reads Object3do on the render thread
+src/tagpu_hires.c        to-convert:3        # the glTF replacement pass poses from the unit's Object3do on the render thread
+src/tagpu_feat.c         to-convert:3        # feature anchors from the feature grid, per frame, on the render thread
+src/tagpu_fx.c           to-convert:4a       # projectiles, explosions and debris walked on the render thread
+src/tagpu_sfx.c          to-convert:4a       # the ten particle layers walked on the render thread
+src/tagpu_gui_surf.c     to-convert:4c       # the GL UI's render half: the true viewport, the minimap descriptors and pixels, the view box, the cursor sprite
+src/tagpu_text.c         pure-engine-code    # the glyph blitter 0x4CCF60..0x4CD00E over our one-glyph font objects: reads its arguments, writes its destination; the string op's font pointer (tagpu_text_glyph) is to-convert:4c
+src/tagpu_terr.c         fenced              # the tile set, the tile map and the height byte of every cell, per map under the fence; the level packet decides its fate
+src/tagpu_posebake.c     fenced              # the per-type geometry bake walks the model template tree on the render thread
+src/tagpu_r3dcache.c     fenced              # the unit atlas resolves template textures and GAF frames on the render thread
+src/tagpu_gaf.c          session-reader      # GAF banks and the cursor table: loaded once, never rewritten

@@ -696,8 +696,9 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     s_nordxOrd = 0; s_ntext = 0; s_xover = 0;
     /* before anything emits: tagpu_order.c's labels come through
        tagpu_mark_emit_text, which sizes its quads with this */
-    /* one font for the whole frame, before anything asks the atlas for a string */
-    tagpu_text_frame();
+    /* one font for the whole frame, before anything asks the atlas for a string:
+       the packet's glyph copy, keyed on its generation (tagpu_text.h) */
+    tagpu_text_frame(v->packet);
     s_px  = 1.0 / (double)(v->zoom > 0.0f ? v->zoom : 1.0f);
     s_zoom = v->zoom > 0.0f ? (double)v->zoom : 1.0;
     s_zcx = (double)v->zoomCx; s_zcy = (double)v->zoomCy;

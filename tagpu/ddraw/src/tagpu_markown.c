@@ -10,6 +10,7 @@
 #include "tagpu_opt.h"
 #include "tagpu_order.h"
 #include "tagpu_text.h"
+#include "tagpu_packet_pub.h"
 #include "tagpu_terr.h"
 #include "tagpu_native.h"
 #include "tagpu_detour.h"
@@ -325,8 +326,10 @@ static void __stdcall mark_hook8(void* ctx, int n)
        draws the group digit and the ShowRanges labels. Taken here rather than
        read from the present thread because `SetFont 0x4C1420` runs many times a
        frame and nothing between this hook and `0x469CF9` calls it
-       (tagpu_text.h). */
-    tagpu_text_snapshot();
+       (tagpu_text.h). Since the frame packet exchange's landing 1 the font is
+       COPIED here, glyph by glyph, and travels in the packet as bytes: the
+       present thread never dereferences it (tagpu_packet_pub.c). */
+    tagpu_packet_pub_font_snapshot();
 
     /* The post-fog window is per-call and every one of its calls is still ahead
        of us in this frame, so this is where its frame starts. Its "nothing to

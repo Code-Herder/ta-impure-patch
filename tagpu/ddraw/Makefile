@@ -58,14 +58,23 @@ SRCS     := $(wildcard src/*.c) $(wildcard src/*/*.c) res.rc
 OBJS     := $(addsuffix .o, $(basename $(SRCS)))
 DEPS     := $(filter %.d, $(OBJS:.o=.d))
 
-.PHONY: clean all
+.PHONY: clean all thread-split
 all: $(TARGET)
 
 %.o: %.rc
 	$(WINDRES) -J rc $< $@ || windres -J rc $< $@
 
-$(TARGET): $(OBJS)
-	$(CC) $(LDFLAGS) -o $@ $^ exports.def $(LIBS)
+# THE THREAD-SPLIT RULE (frame-packet-exchange §10, landing 1): a source file that is
+# not on thread-split.allow may not name an engine address, include tagpu_engine.h,
+# probe with IsBad*Ptr or add an offset to the main pointer. Checked before the link
+# so `make` here and the CI job (.github/workflows/build.yml runs exactly this
+# target) both fail on an offender; the upstream build.cmd / vcxproj do not run it.
+# The list is default-deny and only shrinks — see the file's header.
+thread-split:
+	../../tools/thread-split-check.sh .
+
+$(TARGET): $(OBJS) | thread-split
+	$(CC) $(LDFLAGS) -o $@ $(OBJS) exports.def $(LIBS)
 
 clean:
 	$(RM) $(TARGET) $(OBJS) $(DEPS) || del $(TARGET) $(subst /,\\,$(OBJS))

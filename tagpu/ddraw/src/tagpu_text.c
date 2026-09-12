@@ -1,7 +1,7 @@
 /* tagpu_text.c — TA's own glyphs, rasterised into an atlas of ours (G13p).
    See tagpu_text.h for why the engine's blitter can be called with our
-   destination and why the font and colour are snapshotted rather than read
-   live.
+   destination and why the font travels as BYTES in the frame packet rather
+   than as a pointer.
 
    THE FONT OBJECT, byte for byte (`DrawTextCustomFont 0x4C14F0`'s measure loop
    at `0x4C1527` and the blitter `0x4CCF60`; both read the same four fields):
@@ -30,7 +30,23 @@
    IT DOES NOT CLIP — no OFFSCREEN, no clip rect, not even a width — so it
    writes exactly `sum(widths) x rows` pixels and it is on US to have measured
    that first. The measure below is the engine's own loop, character for
-   character, so the two cannot disagree about how much lands. */
+   character, so the two cannot disagree about how much lands.
+
+   THE COPY (frame packet exchange, landing 1). tagpu_packet_pub.c builds, on
+   the game thread at hook 8, one such object PER GLYPH — `[rows][0][yoff]
+   [code][u16 6][w][bits]`, a font whose only character is the one being drawn
+   — and every packet carries the 95 of them. tagpu_text_frame() copies the
+   area out of the packet once per font generation; the measure walks the
+   glyph table's width bytes; the raster hands each one-glyph object to the
+   blitter at the x its own string loop would have reached (it advances by
+   the width byte and nothing else, `0x4CCFF7..0x4CCFFD`), so the pixels are
+   the engine's. No IsBadReadPtr anywhere on this path: the bytes are ours,
+   bounded when they were copied and re-bounded by tagpu_packet.c at acquire.
+   `0x4CCF60..0x4CD00E` is pure — reads its arguments, writes its destination,
+   no global, no allocation — which is the whole argument for running engine
+   code on the present thread, and why this file is the allow-list's one
+   "pure engine code" entry. The GLYPH cache below (the GL UI's string op)
+   still dereferences an engine font behind probes: that is landing 4c. */
 
 #include <windows.h>
 #include <stdio.h>
@@ -38,10 +54,7 @@
 #include "opengl_utils.h"
 #include "tagpu_text.h"
 
-#define GFX_GLOBALS_PP  0x0051FBD0u   /* 0x4B6220 is `mov eax,ds:0x51FBD0; ret` */
-#define GFX_FONT        0x204         /* SetFont 0x4C1420 writes it             */
-#define GFX_FG          0x208         /* SetTextColors 0x4C13A0 writes it       */
-#define BLIT_VA         0x004CCF60u
+#define BLIT_VA         0x004CCF60u   /* pure engine code, 0x4CCF60..0x4CD00E */
 
 #define F_ROWS          0
 #define F_YOFF          2
@@ -51,10 +64,7 @@
 /* The value a covered pixel gets. Full white, so the sampler sees 1.0. */
 #define INK             255
 
-/* The glyphs we will ever ask for: printable ASCII. The engine bounds neither
-   the measure nor the blit against the offset table's length — it trusts the
-   caller's string — so we bound the CHARACTER instead, which is the same thing
-   from the other end and costs one compare. */
+/* The glyphs we will ever ask for: printable ASCII — the packet's range. */
 #define CH_LO           0x20
 #define CH_HI           0x7E
 
@@ -77,10 +87,16 @@ static void flog(const char* s)
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
 
-/* the snapshot, written by the game thread at hook 8 and read by the present
-   thread; both are aligned dwords, so neither can be read half-written */
-static const unsigned char* volatile g_font;
-static volatile int                  g_fg = -1;
+/* THE FRAME'S FONT: our copy of the packet's font area, keyed on the packet's
+   font generation, and the colour the block draws in. Present thread only;
+   nothing here points into a packet once tagpu_text_frame has returned. */
+static unsigned       s_copyGen;              /* the generation the copy holds; 0 = none */
+static unsigned char  s_fontRows, s_fontFirst;
+static signed char    s_fontYoff;
+static TAGPU_PK_GLYPH s_glyph[TAGPU_PK_NGLYPH];
+static unsigned char  s_fontArea[TAGPU_PK_FONT_MAX];
+static unsigned       s_fontLen;              /* 0 = no font: nothing draws */
+static int            s_fg = -1;
 
 typedef struct { char s[STRMAX]; short ax, ay, w, h; } TXENT;
 
@@ -93,85 +109,53 @@ static int   s_shelfX, s_shelfY, s_shelfH;
 static char  s_drop[MAXDROP][STRMAX];
 static int   s_ndrop;                      /* distinct strings refused         */
 static int   s_nremem;                     /* ...of which we remember the text */
-static unsigned s_builtGen;                /* the font generation it holds     */
-static const unsigned char* s_fontOk;      /* ...and the one already validated */
-static unsigned char s_fontOkSig[3];       /* its rows/yoff/first, as validated */
-static unsigned s_fontGen;                 /* bumped whenever those change      */
-static const char*          s_gfxOk;       /* globals block already probed     */
+static unsigned s_builtGen;                /* the font generation the atlas holds */
+static unsigned s_fontGen;                 /* bumped whenever the copy changes */
 static unsigned char s_atlas[ATLAS_W * ATLAS_H];
 static int   s_dirty;
 static GLuint s_tex;
 
-void tagpu_text_snapshot(void)
+void tagpu_text_frame(const TAGPU_PACKET* pk)
 {
-    const char* g = *(const char* const*)GFX_GLOBALS_PP;
-    if (!ptr_ok(g)) return;
-    /* ONE SEH-guarded probe per distinct globals block, and the cache is what
-       makes that true: this runs at every hook 8, i.e. ~83 times per presented
-       frame, and an SEH-guarded probe is not free. markown's alpha table
-       learned exactly this and grew a `g_gfxOk` for it — there the probe was
-       IsBad*Write*Ptr, which really does read-modify-write the page it tests;
-       this one only reads, and the cost is the guard, not a write into engine
-       memory; the first revision here wrote the comment and left the
-       probe unconditional, which is worse than the "one per frame" it disclaims.
-       The probe spans BOTH fields we read (`+0x204` and `+0x208`), so a block
-       whose 0x204 sits on the previous page is refused rather than faulted. */
-    if (g != s_gfxOk) {
-        if (IsBadReadPtr((void*)(g + GFX_FONT), GFX_FG + 4 - GFX_FONT)) return;
-        s_gfxOk = g;
+    if (!pk) return;                          /* no packet this frame: keep what we have */
+    if (pk->in_game) s_fg = pk->text_fg;
+    /* font_gen 0 carries no font (the out-of-game packet, or none copied yet):
+       the copy stays, so a readout in the shell keeps the last game's font */
+    if (!pk->font_gen || pk->font_gen == s_copyGen) return;
+    s_copyGen = pk->font_gen;
+    s_fontLen = 0;
+    memset(s_glyph, 0, sizeof s_glyph);
+    /* the packet's bounds held at acquire (tagpu_packet.c pk_valid): the area
+       is inside used_bytes and every glyph inside the area. Ours once more,
+       because a copy is cheap and a wrong length here is a buffer overrun. */
+    if (pk->font_len && pk->font_len <= TAGPU_PK_FONT_MAX && pk->font_off >= sizeof(TAGPU_PACKET) &&
+        pk->font_off + pk->font_len <= pk->used_bytes) {
+        memcpy(s_fontArea, (const unsigned char*)pk + pk->font_off, pk->font_len);
+        memcpy(s_glyph, pk->font_glyph, sizeof s_glyph);
+        s_fontLen   = pk->font_len;
+        s_fontRows  = pk->font_rows;
+        s_fontYoff  = pk->font_yoff;
+        s_fontFirst = pk->font_first;
     }
-    g_font = *(const unsigned char* const*)(g + GFX_FONT);
-    g_fg   = *(const int*)(g + GFX_FG);
+    s_fontGen++;                              /* a different font: the atlas resets at the next place */
 }
 
-int tagpu_text_colour(void) { return g_fg; }
+int tagpu_text_colour(void) { return s_fg; }
 
-/* The font this FRAME rasterises with. The game thread republishes `g_font` at
-   every hook 8, ~83 times per present, so reading it per string would let a font
-   change land between the ShowRanges labels and the group digit — and a change
-   re-packs the atlas from scratch, which would leave the quads already emitted
-   into tagpu_mark.c's bucket naming texels that have just been cleared. Every
-   one of those labels would sample 0 and discard every fragment. Latched once
-   per gather instead, so within a frame the atlas cannot move under anyone. */
-static const unsigned char* s_frameFont;
-
-void tagpu_text_frame(void) { s_frameFont = g_font; }
-
-/* The font's HEADER and offset table, validated. Not the glyphs: an entry in
-   that table is an unbounded `u16`, so `f + off` reaches up to 64 KB past `f`
-   and no probe here could cover it. `measure()` probes each glyph it accepts
-   instead, which is the only place that knows how long one is.
-
-   `first` is read before the table probe because the probe's length depends on
-   it, so that byte gets a probe of its own.
-
-   THE CACHE IS BY POINTER PLUS A HEADER FINGERPRINT. Pointer identity alone is
-   what an allocator recycles: a different font object at the same address would
-   otherwise skip both this validation and the atlas reset, and be drawn with the
-   previous font's metrics out of the previous font's texels. The three header
-   bytes are a weak check and are honestly weak — they catch a font of a
-   different size or range, not a different font of the same shape — but they
-   cost nothing and the alternative is trusting an address. */
-static const unsigned char* font_ok(void)
+/* The one-glyph font object for `c`, or NULL when the font has no such glyph
+   (the blitter would skip it: `0x4CCFAA` below `first`, `0x4CCFB9` a zero
+   table entry) or it did not fit the copy. `w` is its width byte. */
+static const unsigned char* glyph_obj(unsigned c, unsigned* w)
 {
-    const unsigned char* f = s_frameFont;
-    unsigned char sig[3];
-    int first, need;
-
-    if (!ptr_ok(f)) return NULL;
-    if (IsBadReadPtr((void*)f, F_TAB)) return NULL;
-    sig[0] = f[F_ROWS]; sig[1] = f[F_YOFF]; sig[2] = f[F_FIRST];
-    if (f == s_fontOk && !memcmp(sig, s_fontOkSig, sizeof sig)) return f;
-
-    first = sig[2];
-    if (first > CH_HI) return NULL;
-    need = F_TAB + (CH_HI + 1 - first) * 2;
-    if (IsBadReadPtr((void*)f, (UINT_PTR)need)) return NULL;
-    if (sig[0] == 0 || sig[0] > ATLAS_H) return NULL;
-    s_fontOk = f;
-    memcpy(s_fontOkSig, sig, sizeof sig);
-    s_fontGen++;                  /* a different font, whatever its address */
-    return f;
+    const TAGPU_PK_GLYPH* g;
+    unsigned len;
+    if (c < CH_LO || c > CH_HI || !s_fontLen) return NULL;
+    g = &s_glyph[c - CH_LO];
+    if (!g->w) return NULL;
+    len = TAGPU_PK_GLYPH_HDR + (((unsigned)s_fontRows * g->w + 7u) >> 3);
+    if ((unsigned)g->off > s_fontLen || len > s_fontLen - g->off) return NULL;
+    *w = g->w;
+    return s_fontArea + g->off;
 }
 
 /* THE STRING WE WILL ACTUALLY RASTERISE, and the measure of it, from one pass.
@@ -186,50 +170,49 @@ static const unsigned char* font_ok(void)
    invariant was held by the call sites rather than by the code, in a function
    whose contract is "hand me any string".
 
-   So the filter is applied to the STRING: `out` is the subsequence the blitter
+   So the filter is applied to the STRING: `out` is the subsequence the raster
    will draw, and `total` is its width. Rasterise `out`, not `s`, and the two
    cannot disagree. `0x4C1527`, character for character otherwise: a NUL or a
-   newline ends it, and a skipped code does not advance the cursor. */
-static int measure(const unsigned char* f, const char* s, char* out, size_t outsz,
-                   int* w, int* h)
+   newline ends it, and a skipped code does not advance the cursor. A zero
+   width never reaches here — the copy refused it, because the blit's per-row
+   counter is a do-while (`mov ch,cl` at `0x4CCFCA`, `dec ch; je` at `0x4CCFE9`)
+   and `cl == 0` would write 256 columns. [BINARY-VERIFIED] */
+static int measure(const char* s, char* out, size_t outsz, int* w, int* h)
 {
-    const unsigned short* tab = (const unsigned short*)(f + F_TAB);
-    int first = f[F_FIRST];
-    int rows = f[F_ROWS];
     int total = 0;
     size_t n = 0;
+    if (!s_fontLen) return 0;
     for (; *s && n + 1 < outsz; s++) {
-        unsigned c = (unsigned char)*s;
-        unsigned off;
-        int gw;
+        unsigned c = (unsigned char)*s, gw;
         if (c == '\n') break;
-        if (c < (unsigned)first || c < CH_LO || c > CH_HI) continue;
-        off = tab[c - first];
-        if (!off) continue;
-        /* The glyph is at an unbounded u16 offset, so this is the first read of
-           it and the only place its length is known: probe the width byte, then
-           the bitstream the blit will walk (rows x width bits, one byte per
-           eight, restarted per glyph). A glyph that will not read is dropped
-           from `out` and therefore never reaches the blitter. */
-        if (IsBadReadPtr((void*)(f + off), 1)) continue;
-        gw = f[off];
-        /* A ZERO WIDTH IS NOT A ZERO-WIDTH GLYPH — it writes 256 columns. The
-           blit's per-row counter is a do-while: `mov ch,cl` at `0x4CCFCA` and
-           `dec ch; je` at `0x4CCFE9`, so `cl == 0` wraps to 255 and runs 256
-           times, on every row, while this measure would have reserved nothing.
-           The subsequence filter below is what keeps measure and blit agreeing
-           about the CHARACTER SET; this is the same class one level down, and
-           the guard is one compare. [BINARY-VERIFIED] */
-        if (gw <= 0) continue;
-        if (IsBadReadPtr((void*)(f + off + 1), (UINT_PTR)((rows * gw + 7) / 8)))
-            continue;
-        total += gw;
+        if (!glyph_obj(c, &gw)) continue;
+        total += (int)gw;
         out[n++] = (char)c;
     }
     out[n] = 0;
     *w = total;
-    *h = rows;
+    *h = s_fontRows;
     return total > 0;
+}
+
+/* The raster: the engine's own string loop, one glyph per call. Its loop puts
+   glyph i at rowstart + sum(widths before i) and restarts the bit counter per
+   glyph, so a call per glyph at that x, with y = yoff so that `y - font[2]`
+   lands on our row 0, writes byte for byte what one call over the whole
+   string would. `draw` is measure()'s subsequence: every code in it has an
+   object. */
+static void raster(unsigned char* dst, int pitch, const char* draw)
+{
+    int x = 0;
+    for (; *draw; draw++) {
+        unsigned gw;
+        const unsigned char* obj = glyph_obj((unsigned char)*draw, &gw);
+        char one[2];
+        if (!obj) continue;
+        one[0] = *draw; one[1] = 0;
+        ((PFN_BLIT)BLIT_VA)(dst + x, pitch, obj, one, 0, (int)s_fontYoff, INK, 0, 0);
+        x += (int)gw;
+    }
 }
 
 /* A string the atlas could not take. Counted as DISTINCT strings, not as calls:
@@ -259,11 +242,10 @@ static void drop(const char* s)
 
 int tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff)
 {
-    const unsigned char* f = font_ok();
     char draw[STRMAX];
     int i, sw, sh, y;
 
-    if (!f || !s || !*s) return 0;
+    if (!s_fontLen || !s || !*s) return 0;
     /* A new font is a new atlas: the glyphs in it are that font's, and the
        shelves are sized by its row count. Keyed on the GENERATION, not on the
        pointer — an allocator that hands the same address to a different font
@@ -276,7 +258,7 @@ int tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff)
         s_dirty = 1;
         flog("text: atlas reset (font changed)");
     }
-    *yoff = (int)(signed char)f[F_YOFF];
+    *yoff = (int)s_fontYoff;
 
     for (i = 0; i < s_nent; i++) {
         if (!strcmp(s_ent[i].s, s)) {
@@ -286,7 +268,7 @@ int tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff)
         }
     }
     if (s_nent >= MAXSTR || strlen(s) >= STRMAX) { drop(s); return 0; }
-    if (!measure(f, s, draw, sizeof draw, &sw, &sh)) return 0;
+    if (!measure(s, draw, sizeof draw, &sw, &sh)) return 0;
     if (sw > ATLAS_W || sh > ATLAS_H) { drop(s); return 0; }
 
     if (s_shelfX + sw > ATLAS_W) { s_shelfY += s_shelfH; s_shelfX = 0; s_shelfH = 0; }
@@ -296,10 +278,7 @@ int tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff)
        transparent index), so an unclear slot would keep the last string's ink */
     for (y = 0; y < sh; y++)
         memset(s_atlas + (size_t)(s_shelfY + y) * ATLAS_W + s_shelfX, 0, (size_t)sw);
-    /* x=0 and y=font+0x02 put the string's first pixel at the sub-rect's own
-       origin, because the blitter's destination is base + (y - font[2])*pitch + x */
-    ((PFN_BLIT)BLIT_VA)(s_atlas + (size_t)s_shelfY * ATLAS_W + s_shelfX, ATLAS_W,
-                        f, draw, 0, (int)(signed char)f[F_YOFF], INK, 0, 0);
+    raster(s_atlas + (size_t)s_shelfY * ATLAS_W + s_shelfX, ATLAS_W, draw);
 
     strcpy(s_ent[s_nent].s, s);
     s_ent[s_nent].ax = (short)s_shelfX;
@@ -372,8 +351,10 @@ static unsigned s_gglyphs, s_gdrops;
 static unsigned s_ggen;
 
 /* Validate an arbitrary font object — the UI's, which arrives in a published op
-   rather than from the snapshot font_ok() reads. Same probes, and it must stay
-   that way: the table is indexed to CH_HI and a short block would fault. */
+   as an ENGINE POINTER (the marker path's font arrives as bytes in the frame
+   packet since landing 1; this path converts in landing 4c). Probes, and they
+   must stay until then: the table is indexed to CH_HI and a short block would
+   fault. */
 static const unsigned char* gfont_ok(const unsigned char* f)
 {
     if (!ptr_ok(f)) return NULL;

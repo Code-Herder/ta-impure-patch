@@ -16,8 +16,15 @@
    This has its own two-triangle program in game-frame pixels and nothing else.
 
    THREADS. Render thread only, from the overlay's present. It reads the font
-   the game thread published (tagpu_text_snapshot at hook 8) through
-   tagpu_text_frame's per-frame latch, exactly as the marker gather does. */
+   the game thread published as bytes in the frame packet (tagpu_packet_pub.c,
+   at hook 8) through tagpu_text_frame's per-frame latch, exactly as the marker
+   gather does.
+
+   THE PACKET LINE. `tagpu_packet.show` (polled with the trigger) adds a second
+   row under the frame rate: `PK <seq> T<tick> E<eyeX>,<eyeY>` from the packet
+   the driver acquired this frame — the frame packet exchange's "visibly alive"
+   readout (landing 1). Same eleven strings plus "PK", "T", "E", "," and "-",
+   so it costs the atlas nothing per frame either. */
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
@@ -26,9 +33,10 @@
 #include "tagpu_text.h"
 
 #define TRIGGER   "tagpu_fps.on"
+#define PKSHOW    "tagpu_packet.show"
 #define POLL      30                  /* frames between trigger polls          */
 #define WINDOW_MS 500u                /* averaging window                      */
-#define MAXCH     16
+#define MAXCH     48
 #define QUADV     6
 #define VST       4                   /* x, y, u, v                            */
 
@@ -56,7 +64,7 @@ static void* getgl(const char* n)
 }
 
 static int    s_state;                /* 0 unbuilt, 1 ready, 2 refused         */
-static int    s_on = -1;
+static int    s_on = -1, s_pk;
 static GLuint s_prog, s_vao, s_vbo;
 static GLint  s_uFrame, s_uInk;
 static float  s_v[MAXCH * QUADV * VST];
@@ -184,8 +192,10 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
     int nv = 0, i;
 
     if (!f || s_state == 2) return;
-    if (s_on < 0 || (poll++ % POLL) == 0)
+    if (s_on < 0 || (poll++ % POLL) == 0) {
         s_on = GetFileAttributesA(TRIGGER) != INVALID_FILE_ATTRIBUTES;
+        s_pk = GetFileAttributesA(PKSHOW) != INVALID_FILE_ATTRIBUTES;
+    }
     if (!s_on) { s_fps = -1; s_frames = 0; s_t0 = 0; return; }
 
     /* the window: count every present, republish twice a second */
@@ -203,7 +213,7 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
 
     /* The font the game thread published, latched for this frame exactly as the
        marker gather latches it -- so the atlas cannot repack under our quads. */
-    tagpu_text_frame();
+    tagpu_text_frame(f->packet);
 
     if (!emit("FPS", &x, y, &nv)) return;   /* no font yet: draw nothing */
     _snprintf(num, sizeof num, "%d", s_fps > 9999 ? 9999 : s_fps);
@@ -211,6 +221,23 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
     for (i = 0; num[i]; i++) {
         char d[2]; d[0] = num[i]; d[1] = 0;
         if (!emit(d, &x, y, &nv)) break;
+    }
+    if (s_pk && f->packet) {
+        /* the second row: one cached string per character, like the first,
+           one row (the font's height) below it */
+        const TAGPU_PACKET* p = f->packet;
+        char line[64];
+        int ax, ay, w, h = 0, yoff;
+        _snprintf(line, sizeof line, "PK%u T%u E%d,%d", p->head_seq, p->tick, p->eye[0], p->eye[1]);
+        line[sizeof line - 1] = 0;
+        if (tagpu_text_place("FPS", &ax, &ay, &w, &h, &yoff)) {
+            x = 6.0f;
+            for (i = 0; line[i]; i++) {
+                char d[2]; d[0] = line[i]; d[1] = 0;
+                if (line[i] == ' ') { x += 4.0f; continue; }
+                if (!emit(d, &x, y + (float)h + 2.0f, &nv)) break;
+            }
+        }
     }
     if (!nv) return;
 

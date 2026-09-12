@@ -46,6 +46,7 @@ void tagpu_gui_flush(unsigned int frame_counter);   /* render thread: the heartb
 void tagpu_gui_glreset(void);                       /* the GL context changed */
 int  tagpu_gui_installed(void);
 int  tagpu_gui_drawing(void);                       /* the trigger says draw  */
+unsigned tagpu_gui_flips(void);                     /* the publisher's flip count, game thread */
 
 /* THE CURSOR, G17c (gui-renderer.md 13.5). Erasing the engine's own cursor
    takes two modules, so the decision is taken once and read by both:

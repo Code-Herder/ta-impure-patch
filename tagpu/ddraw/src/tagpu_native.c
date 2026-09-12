@@ -2677,6 +2677,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int nfx = 0, nfeat = 0, nterr = 0, nmark = 0;
     if (fxOn || sfxOn || featOn || terrOn || markOn) {
         fv.ta = ta; fv.eyeX = eyeX; fv.eyeY = eyeY;
+        fv.packet = f->packet;
         fv.vpL = vpL; fv.vpT = vpT; fv.vw = vw; fv.vh = vh; fv.scafOn = scafOn;
         fv.evpL = evpL; fv.evpT = evpT; fv.evw = evw; fv.evh = evh;
         fv.gw = gw; fv.gh = gh; fv.ss = ss; fv.fogMode = fogMode;

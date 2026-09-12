@@ -43,40 +43,39 @@
    the "1997 art blown up" this port exists to stop — at 0.25x it would be two
    pixels tall and unreadable.
 
-   THE FONT AND THE COLOUR ARE SNAPSHOTTED ON THE GAME THREAD, at hook 8, and
-   not read live: `[globals+0x204]` is whatever the engine's last `SetFont
-   0x4C1420` left there and the engine changes it many times a frame, so a
-   present-thread read would get the side panel's font as often as the game's.
-   Between hook 8 `0x469BD7` and the digit at `0x469CF9` nothing calls
-   `0x4C1420` or `0x4C13A0` — the order driver, the walker, the five drawers and
-   `DrawHealthBars` are all clear of both, checked against a full-image scan of
-   their call sites — so one latch at hook 8 is exactly what both the digit and
-   the range labels would have drawn with. `[globals+0x208]` is the foreground
-   colour those same two use, a palette index; `DrawGameScreen` sets it at
-   `0x4696E7` to `gui[0xF]` with the background left equal to the transparent
-   index. [BINARY-VERIFIED]
-
-   The rasterise itself runs on the PRESENT thread, on a cache miss only (at most
-   once per distinct string per font, ~20 in a session). That is safe in a way
-   the order-list walk was not: `0x4CCF60` reads the font object and writes our
-   buffer, and touches no engine state whatsoever — no globals, no allocation, no
-   clip. The one hazard left is the font object's lifetime, which is the session,
-   and which tagpu_ui.c already takes the same way when it measures a listbox
-   row. */
-
-/* ---- game thread ---- */
-/* Latch `[globals+0x204]` and `[globals+0x208]`. Called from markown's hook-8
-   stub, i.e. at the instant the engine's own marker block begins. */
-void tagpu_text_snapshot(void);
+   THE FONT ARRIVES AS BYTES, IN THE FRAME PACKET (landing 1 of the frame packet
+   exchange, 2026-09-12). The engine's font and text colour are latched on the
+   GAME THREAD at hook 8 — `[globals+0x204]` is whatever the engine's last
+   `SetFont 0x4C1420` left there and the engine changes it many times a frame,
+   so a present-thread read would get the side panel's font as often as the
+   game's, and between hook 8 `0x469BD7` and the digit at `0x469CF9` nothing
+   calls `0x4C1420` or `0x4C13A0` [BINARY-VERIFIED] — and the publisher
+   (tagpu_packet_pub.c) COPIES the font's header and its 95 printable glyphs,
+   each as a one-glyph font object the blitter accepts, into every packet.
+   Until this landing the present thread held the engine's font POINTER and
+   dereferenced it behind IsBadReadPtr; no note establishes a UI font's
+   lifetime and a probe is not a lifetime argument (CLAUDE.md). Now no
+   render-thread code touches an engine font: the raster runs the engine's
+   blitter, on the present thread, over our copy, one glyph at a time at the
+   same x the blitter's own string loop would have used (it advances by the
+   width byte and nothing else), so the pixels are the ones the engine draws.
+   `0x4CCF60..0x4CD00E` reads its arguments and writes its destination and
+   touches nothing else — verified instruction by instruction: no global, no
+   allocation, no clip — which is what makes engine code on the present thread
+   legitimate here, and the reason tagpu_text.c is the allow-list's one
+   "pure engine code" entry (tools/thread-split-check.sh). */
+#include "tagpu_packet.h"
 
 /* ---- present thread ---- */
-/* Latch the font this frame's rasters will use. Called once per gather, BEFORE
-   any tagpu_text_place: the game thread republishes the snapshot ~83 times per
-   present, and a font change re-packs the atlas, which must not happen between
-   two quads of the same frame. */
-void tagpu_text_frame(void);
-/* The palette index the engine would draw this block's text in; -1 if nothing
-   has been snapshotted yet (no in-game frame has run). */
+/* Latch the font and colour THIS frame's rasters will use, from the packet the
+   driver acquired this frame (NULL = no packet: keep what we have). Called once
+   per gather, BEFORE any tagpu_text_place: a font change re-packs the atlas,
+   which must not happen between two quads of the same frame. The glyph bytes
+   are copied out of the packet, keyed on its font generation, so nothing here
+   holds a packet pointer past the frame. */
+void tagpu_text_frame(const TAGPU_PACKET* pk);
+/* The palette index the engine would draw this block's text in; -1 if no
+   packet has carried one yet. */
 int  tagpu_text_colour(void);
 
 /* Find or rasterise `s` in the atlas. On success fills the atlas rect in TEXELS
@@ -97,7 +96,9 @@ int  tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff
    repacks that one) and different keys. 0 when the font will not read, the code
    is outside [0x20, 0x7E], the font's table skips it, or the atlas is full.
    `font` is validated here — it arrives from a published op, not from the
-   snapshot. */
+   packet. STILL AN ENGINE POINTER DEREFERENCED ON THE PRESENT THREAD: the
+   string op carries the font's address, and converting it to glyph bytes on
+   first sight is landing 4c of the frame packet exchange, not landing 1. */
 int  tagpu_text_glyph(const void* font, int ch, int* ax, int* ay, int* w, int* h, int* yoff);
 void tagpu_text_glyph_dims(int* w, int* h);
 /* Bumped whenever the glyph atlas repacks, which invalidates every cell handed

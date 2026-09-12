@@ -60,6 +60,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "tagpu_reclaim.h"
+#include "tagpu_packet_pub.h"
 #include "tagpu_detour.h"
 #include "dd.h"                            /* g_ddraw.gui_thread_id: the game thread */
 
@@ -348,6 +349,14 @@ static void __cdecl reclaim_teardown_post(void)
     s_quiesced = 0;
     s_defer = s_installed ? 1 : 0;
     InterlockedIncrement(&s_levelGen);
+    /* THE OUT-OF-GAME PACKET (frame-packet-exchange.md §8), before the reader
+       is released: a header-only packet with in_game = 0 and the NEW
+       generation, forced past the FRESH gate. After this hook the shell flips
+       thousands of times a second but no in-play frame exists until the next
+       level's loader has finished, so without it the renderer would keep the
+       dead level's last packet and draw it over the menus and the loading
+       screen. Game thread, like everything in this hook. */
+    tagpu_packet_pub_level_end((unsigned)s_levelGen);
     InterlockedExchange(&s_teardown, 0);
 }
 

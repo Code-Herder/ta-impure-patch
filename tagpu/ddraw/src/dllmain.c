@@ -27,6 +27,8 @@
 #include "tagpu_cobtrace.h"
 #include "tagpu_opt.h"
 #include "tagpu_menu.h"
+#include "tagpu_packet.h"
+#include "tagpu_packet_pub.h"
 #include "utils.h"
 #include "versionhelpers.h"
 #include "delay_imports.h"
@@ -74,6 +76,12 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            "no-op unless <file> exists" ask tagpu_opt now, and an absent file
            means the table's default. One log line says which apply. */
         tagpu_opt_init();
+
+        /* tagpu: the frame packet exchange's slots and cell (tagpu_packet.h)
+           -- before either thread exists, never lazily: the four slots are
+           reserved and the exchange put into its initial permutation here.
+           No engine patch; `tagpu_packet.off` leaves it disarmed. */
+        tagpu_packet_init();
 
         /* tagpu: install the G5 render-suppressor. No-op unless "tagpu_suppress.on"
            exists next to the exe; byte-match guarded. Runs BEFORE the tracer so that
@@ -181,6 +189,15 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            itself is one observer on DrawGameScreen 0x468CF0, byte-matched,
            disjoint from every detour above; `tagpu_menu.off` disables it. */
         tagpu_menu_init();
+
+        /* tagpu: the frame packet's publisher (tagpu_packet_pub.h): ONE more
+           observer on DrawGameScreen 0x468CF0, chained AFTER the menu's -- its
+           `before` never hijacks the return, ours must for `after` (post-flip,
+           the publish; in-play frames only, gated on the return address
+           0x4969D2) -- plus an observer on the loader thread's entry 0x497C70
+           that logs its identity. Byte-matched; nothing skipped, nothing
+           written into the engine. MUST run after tagpu_menu_init(). */
+        tagpu_packet_pub_init();
 
         PVOID(WINAPI * add_handler)(ULONG, PVECTORED_EXCEPTION_HANDLER) =
             (void*)real_GetProcAddress(GetModuleHandleA("Kernel32.dll"), "AddVectoredExceptionHandler");

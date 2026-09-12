@@ -7,8 +7,11 @@
 #include "tagpu.h"
 
 /* everything the effects gather/render needs from the native pass's frame */
+struct TAGPU_PACKET;
 typedef struct TAGPU_FXVIEW {
     const char* ta;              /* TAdynmem                                   */
+    const struct TAGPU_PACKET* packet;  /* this frame's packet (tagpu_packet.h), or NULL;
+                                    valid for this frame only, never cached */
     int eyeX, eyeY, vpL, vpT;
     int gw, gh, ss;
     float zoom, zoomCx, zoomCy;  /* the native pass's view zoom (G12d demo)    */

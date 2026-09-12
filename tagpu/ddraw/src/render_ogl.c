@@ -14,6 +14,7 @@
 #include "hook.h"
 #include "tagpu.h"
 #include "tagpu_overlay.h"
+#include "tagpu_packet.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_menu.h"
 
@@ -1586,9 +1587,17 @@ static void ogl_render()
                    input injection, the GL-context-change detection and the flushes
                    must — and skips only its engine reads while a level teardown is
                    in progress (tagpu_reclaim_teardown_active, tagpu_overlay.c). */
+                /* tagpu_packet: the frame packet, taken ONCE per frame here and
+                   handed to every pass through the frame struct; nothing below
+                   acquires on its own, and both pointers die at frame_end. The
+                   end is unconditional for the same reason the reclaim bracket's
+                   is: it checks the held slot was not rewritten under us and it
+                   writes the heartbeat (tagpu_packet.h). */
+                f.packet = tagpu_packet_acquire(&f.packet_prev);
                 tagpu_reclaim_pass_begin();
                 tagpu_overlay_draw(&f);
                 tagpu_reclaim_pass_end(f.frame_counter);
+                tagpu_packet_frame_end(f.frame_counter);
                 gldbg("E-tagpu");
 
                 /* tagpu_menu: the render-options screen's DEFERRED WRITE. A row
