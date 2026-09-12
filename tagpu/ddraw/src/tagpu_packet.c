@@ -421,9 +421,9 @@ static void heartbeat(PKX* m, unsigned fc)
     if (p) {
         double tps = (have && secs > 0.0 && p->tick >= lastTick) ? (double)(p->tick - lastTick) / secs : 0.0;
         int k = _snprintf(b + n, sizeof b - (size_t)n,
-                          " | seq=%u tick=%u tps=%.2f speed=%d paused=%u in_game=%u gen=%u eye=(%d,%d) vp=(%d,%d,%d,%d) flips=%u font=%u/%uB fg=%d trunc=%u used=%u/%u",
+                          " | seq=%u tick=%u tps=%.2f speed=%d paused=%u in_game=%u gen=%u flags=0x%04X eye=(%d,%d) vp=(%d,%d,%d,%d) flips=%u font=%u/%uB fg=%d trunc=%u used=%u/%u",
                           p->head_seq, p->tick, tps, p->game_speed, (unsigned)p->paused, p->in_game, p->level_gen,
-                          p->eye[0], p->eye[1], p->vp[0], p->vp[1], p->vp[2], p->vp[3], p->gui_flips,
+                          (unsigned)p->load_flags, p->eye[0], p->eye[1], p->vp[0], p->vp[1], p->vp[2], p->vp[3], p->gui_flips,
                           p->font_gen, p->font_len, p->text_fg, p->truncated, p->used_bytes, p->cap_bytes);
         if (k < 0 || n + k >= (int)sizeof b) n = (int)sizeof b - 1; else n += k;
         lastTick = p->tick;
@@ -457,7 +457,9 @@ static void pkx_frame_end(PKX* m, unsigned fc)
 
 void tagpu_packet_frame_end(unsigned frame_counter)
 {
-    if (!s_armed) return;
+    /* off: no slot to check, but the heartbeat still prints — the publisher's
+       count-only observer feeds it draws/s, which is the cost A/B's other arm */
+    if (!s_armed) { heartbeat(&s_frame, frame_counter); return; }
     pkx_frame_end(&s_frame, frame_counter);
 }
 
@@ -473,13 +475,13 @@ void tagpu_packet_init(void)
     s_check  = lever("tagpu_packet.check");
     s_stress = lever("tagpu_packet.stress");
     s_poison = lever("tagpu_packet.poison");
+    QueryPerformanceFrequency(&s_freq);       /* the heartbeat's clock, armed or not */
     if (lever("tagpu_packet.off")) {
         plog("packet: disabled by tagpu_packet.off — no slots, nothing published or taken; "
              "the marker text has no font and draws nothing; the DrawGameScreen observer stays "
              "in count-only mode so draws/s is still reported");
         return;
     }
-    QueryPerformanceFrequency(&s_freq);
     if (!pkx_init(&s_frame, s_stress ? PK_PAGE : PK_GRAIN)) {
         plog("packet: NOT armed — could not reserve or commit the four slots (nothing is "
              "published or taken; the reservation stays as it is)");

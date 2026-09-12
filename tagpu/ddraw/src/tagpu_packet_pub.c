@@ -391,15 +391,18 @@ static void* __cdecl after_loader(unsigned int* regs)
 
 /* ---- the heartbeat's producer half --------------------------------------- */
 
+/* RUNS ON THE RENDER THREAD (from the consumer's frame_end), so it reads only
+   this file's own counters — never engine memory: the flag word the level
+   log wants is the packet's own `load_flags` field, printed by the consumer. */
 static void extra(char* buf, unsigned cap, double secs)
 {
     static unsigned lastAll, lastIn;
     unsigned all = s_cDrawsAll, in = s_cDraws;
-    _snprintf(buf, cap, " | draws=%u inplay=%u draws/s=%.0f inplay/s=%.0f foreign=%u deep=%u flags=0x%04X",
+    _snprintf(buf, cap, " | draws=%u inplay=%u draws/s=%.0f inplay/s=%.0f foreign=%u deep=%u",
               all, in,
               secs > 0.0 ? (double)(all - lastAll) / secs : 0.0,
               secs > 0.0 ? (double)(in - lastIn) / secs : 0.0,
-              s_cForeign, s_cDeep, load_flags());
+              s_cForeign, s_cDeep);
     if (cap) buf[cap - 1] = 0;
     lastAll = all; lastIn = in;
 }
