@@ -271,6 +271,15 @@ void tagpu_terrown_set_skip(int on)
            the composite must not invert until a filled frame has gone through */
         g_filled = 0;
         g_terrown_skip = v;
+        /* HANDING THE FOG SITE BACK VOIDS THE EYE WE LATCHED. While the engine
+           calls `0x4843C0` itself we never see it rebuild, and it rebuilds at
+           the live eye — so on the first tick after ownership returns, LosType
+           bit 3 is already set, no rebuild runs, and the latch would hand the
+           publisher the PRE-GAP eye against a live grid. The draw stamp cannot
+           catch that: it proves the observer ran, not that the latch is fresh.
+           Clearing it here is the by-construction answer, and the fallback is
+           this packet's own eye [found by the review of the review's fixes]. */
+        if (!v) s_fogEyeOk = 0;
         flog(v ? "terrown: engine terrain + fog overlay SKIPPED (ours live)"
                : "terrown: engine terrain + fog overlay restored");
     }

@@ -2693,6 +2693,13 @@ without nulling it, and the only free is `0x483DFE` inside `0x483DD0`, whose onl
 draw, and **nothing of ours runs on the loader thread any more**, which is the second of the two
 things the row exists to close.
 
+**Not closed, and named rather than found later: on a SHELL frame the cursor is the engine's own
+again.** Its position and sprite were read live out of the graphics globals on the render thread —
+in play and on the menus alike — and the publisher only publishes from the in-play gate, so a shell
+frame holds the out-of-game packet and reports no rect. At k = 1 the same art; at k > 1 the
+engine's sprite blown up instead of ours at the device's resolution.
+[GUI renderer](gui-renderer.html) §23 *Not closed here* has it.
+
 **`tagpu_gui_surf.c` is off the allow-list and `tagpu_text.c` carries no probe.** The blitter
 `0x4CCF60` is still `pure-engine-code` and is now the only thing on that list from either text
 path: both hand it a one-glyph font object of ours, so TA's own glyphs are still TA's own blit.

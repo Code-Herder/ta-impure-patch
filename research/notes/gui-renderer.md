@@ -3273,6 +3273,15 @@ are untouched.
 
 ### Not closed here
 
+- **On a SHELL frame the cursor is the engine's own again, and that is a named regression.** The
+  cursor's position and sprite were read live out of the graphics globals on the render thread, in
+  play and on the menus alike. They are packet fields now, and the publisher only publishes from
+  the in-play gate — so a shell frame holds the out-of-game packet, `tagpu_gui_cursor_frame`
+  reports no rect, we do not own the cursor and the layer does not erase the engine's. At k = 1
+  that is the same art; at k > 1 it is the engine's 10×20 sprite blown up instead of ours at the
+  device's resolution, which is exactly what §13.5's G17c improved. Closing it needs a channel the
+  shell can publish on, and *never publish outside the `0x4969D2` gate* is one of the plan's own
+  rules — so it is left stated for the landing that builds one.
 - **The GAF banks' lifetime is still a class, not a proof, for anything but the "fx" bank.** Landing
   4a verified that one is loaded once per process; the cursor table and the UI sprite frames are
   covered by the same `session-reader` line and no note establishes them the same way.

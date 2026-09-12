@@ -1122,6 +1122,18 @@ static void drain(void)
     while (tail != head && budget-- > 0) {
         const TAGPU_PUBOP* o = &g_guiq.ops[tail & (TAGPU_GUI_QCAP - 1)];
         TWIN* t;
+        /* THE GLYPH BLOCK GOES IN BEFORE THE SKIP, NOT INSIDE THE SWITCH.
+           `s_skipToReset` jumps the whole switch for every op queued before a
+           GL context change (measured at 705 of them), so installing the block
+           inside it would let those ops take their first-sight glyph records
+           with them — and the producer has already marked the pairs sent. The
+           records are the op's own payload and installing them is independent
+           of everything the switch decides [found by the review of the
+           review's fixes]. The producer's reseed handling clears `sent[]` as
+           well, which is the second line. */
+        if (o->kind == PK_STRING && o->alen)
+            tagpu_text_glyph_feed(o->font_id, o->font_rows, o->font_yoff,
+                                  g_guiq.arena + o->aoff, o->gcount, o->alen);
         if (s_skipToReset && o->kind != PK_RESET) {
             /* published before the producer learned the context was gone:
                every twin and atlas entry it names is dead, and applying it
@@ -1176,16 +1188,9 @@ static void drain(void)
             break; }
         case PK_STRING:
             t = twin_find(o->surf);
-            /* THE GLYPHS GO IN WHETHER OR NOT THE SURFACE HAS A TWIN. The
-               producer marks a (font, code) pair sent the moment it commits
-               the op and never sends it again, so an op dropped here — a
-               surface we do not twin, the frames after a reseed — would take
-               its glyphs with it and every later string in that font would
-               draw with those characters missing and the rest closed up
-               [found by the landing review, twice]. Installing them is
-               independent of the destination. */
-            tagpu_text_glyph_feed(o->font_id, o->font_rows, o->font_yoff,
-                                  g_guiq.arena + o->aoff, o->gcount, o->alen);
+            /* the glyphs went in above, before the skip gate and whether or
+               not this surface has a twin: the producer marks a (font, code)
+               pair sent the moment it commits the op and never sends it again */
             if (t) twin_string(t, o);
             break;
         case PK_COPY: {
@@ -1238,12 +1243,19 @@ static void upload_palette(void)
    every consumer below declines. */
 static void cursor_rect(const TAGPU_PACKET* pk, float* r)
 {
-    /* (-1, -1, 0, 0) is "no rect": no packet, or a packet whose publisher could
-       not read the graphics globals, or the out-of-game packet — which zeroes
-       the header, so a zero SIZE is the test rather than a zero position. The
-       old live read had exactly these three outcomes. */
+    /* THE FOUR OUTCOMES THE LIVE READ HAD, reproduced exactly: no rect at all
+       (the globals unreadable — the publisher writes (-1,-1,0,0) itself); the
+       position with a 64x64 fallback (globals readable, sprite record not);
+       the position with the record's own size; and the position with a ZERO
+       size, which a readable record of zero extent gives and which the first
+       draft of this collapsed into "no rect".
+
+       The gate is `in_game`, not the size: the out-of-game packet zeroes the
+       whole header, and (0,0) is a real cursor position. ON A SHELL FRAME
+       THERE IS THEREFORE NO CURSOR STATE — see tagpu_gui.h, where that
+       deliberate consequence is written down. */
     r[0] = r[1] = -1.0f; r[2] = r[3] = 0.0f;
-    if (!pk || pk->cur_w <= 0 || pk->cur_h <= 0) return;
+    if (!pk || !pk->in_game) return;
     r[0] = (float)pk->cur_pos[0];
     r[1] = (float)pk->cur_pos[1];
     r[2] = (float)pk->cur_w;
@@ -1481,7 +1493,16 @@ static int minimap_pic(const TAGPU_PACKET* pk, const unsigned char** pix,
             tagpu_gui_set_minimap_have(s_picGen);
         }
     }
-    if (!s_picCopy || s_picGen != pk->level_gen + 1u) return 0;
+    if (!s_picCopy || s_picGen != pk->level_gen + 1u) {
+        /* WITHDRAW THE ACKNOWLEDGEMENT. It says "stop sending", and the one
+           path that raises it without a copy is the `mmbase nominimap` pair
+           below; dropping `nominimap` mid-level would then leave this level
+           with no picture at all and nothing to recover it. Clearing it here
+           makes the pair self-healing for every reason a copy can be absent
+           [found by the review of the review's fixes]. */
+        tagpu_gui_set_minimap_have(0);
+        return 0;
+    }
     *pix = s_picCopy; *w = s_picW; *h = s_picH; *gen = s_picGen;
     return 1;
 }

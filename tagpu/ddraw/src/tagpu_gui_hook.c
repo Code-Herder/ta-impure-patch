@@ -837,6 +837,13 @@ static void publish(unsigned flipSurf)
         unsigned why = g_guiq.why;
         for (i = 0; i < s_nsurf; i++) s_surf[i].seeded = 0;
         memset(s_seenF, 0, sizeof s_seenF); memset(s_seenP, 0, sizeof s_seenP);
+        /* AND THE GLYPHS. A reseed is the consumer saying it threw state away,
+           and the ops in flight when it did are skipped whole — so every
+           first-sight glyph record in them is lost while our `sent[]` still
+           says it was published. This is the same re-arm the sprite and pixel
+           tables above get, and it was missing [found by the review of the
+           review's fixes]. */
+        for (i = 0; i < s_ngfont; i++) memset(s_gfont[i].sent, 0, sizeof s_gfont[i].sent);
         /* an overflow drops the queue's tail too: what the consumer has not
            taken is stale against the fresh seeds */
         if (s_pubOverflow) g_guiq.overflows++;

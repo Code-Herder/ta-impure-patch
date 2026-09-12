@@ -70,6 +70,20 @@ unsigned tagpu_gui_flips(void);                     /* the publisher's flip coun
    either way — and recorded in gui-renderer.md 17 "Not closed here" rather
    than closed by guessing which module should own the question. */
 struct TAGPU_PACKET;
+/* ON A SHELL FRAME THERE IS NO CURSOR STATE, and that is a deliberate,
+   NAMED consequence of landing 4c rather than an oversight. The cursor's
+   position and sprite used to be read live out of the graphics globals here,
+   on the render thread, every present — in play and on the menus alike. They
+   are packet fields now, and the publisher only publishes from the in-play
+   gate, so a shell frame holds the out-of-game packet and this returns "no
+   rect": we do not own the cursor there and the layer does not erase the
+   engine's, so the ENGINE's own cursor is what the player sees on the menus.
+
+   At k = 1 that is the same art; at k > 1 it is the engine's 10x20 sprite
+   blown up instead of ours at the device's resolution, which is what G17c
+   improved. Closing it needs a channel the shell can publish on, and "never
+   publish outside the 0x4969D2 gate" is a rule of the plan's — so it is left
+   here, stated, for the landing that builds one. */
 void tagpu_gui_cursor_frame(const struct TAGPU_PACKET* packet);
 int  tagpu_gui_cursor_own(float* r);
 
