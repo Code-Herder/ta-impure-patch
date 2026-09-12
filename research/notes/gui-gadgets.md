@@ -687,7 +687,19 @@ an `id=12` names a frame inside it, falling back to the shared `commongui` bank.
 is the clean case: its `id=12` is `OPTBG` and `anims/armopt.gaf` holds exactly `OPTBG`.
 `PREFS.GUI`'s `IGOPT` comes from `commongui` while its own `prefs.gaf` holds `PREFSBG`, and
 `VISUALRT` has no `anims/visualrt.gaf` at all. Full reading, and the bank layout
-`0x4B8D40` walks: [engine map](exe-reverse-engineering.html) *A screen's own GAF*.
+`0x4B8D40` walks: [engine map](exe-reverse-engineering.html) *A screen's own GAF*. The two
+instructions that build the path are **`0x4A8537`** (`strncpy` of `ControlsAry[0].name` into
+`anims\…`) and **`0x4A8565`** (the extension), so the name that decides the file is the one
+`GUI_Load` stamped and nothing else. [VERIFIED 2026-09-11]
+
+**`GUI_Load`'s flag `0x200` is MERGE, and a merged file is not a screen of its own**
+[VERIFIED 2026-09-11]. `0x4AAA2F` branches on it; `0x4AAA31` then parses the file straight into
+the tail of the CURRENT top screen's array (`edi = gi->TheActive_GUIMEM`,
+`ebp = ctrls + (count+1)*0x15B`), sums the counts into `ctrls+0xB6` (`0x4AABE6`), skips the
+stack push entirely (`0x4AAC54`) and stamps the LOADED file's name over `ControlsAry[0].name`
+(`0x4AAC98`). That is how `0x45E5E0` composes the front end's option screens: STARTOPT.GUI is
+pushed with flags `0x80`, then VISUALS.GUI is merged into it with `0x200`, so the one
+GUIMEMSTRUCT `tacli ui` reports as `VISUALS.GUI` holds STARTOPT's tabs **and** the visual rows.
 
 The panel itself is `id=0` at `xpos=128 ypos=128`, `150×352` — over the world, hard
 against the side panel, which is the rect every in-game options screen uses.

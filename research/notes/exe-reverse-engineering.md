@@ -462,6 +462,7 @@ the eye is eased toward.
 | **`0x41CA10`** | **The per-frame camera stepper.** One caller, `0x495599`. It first picks a follow source (next row); with none it takes `je 0x41CB4A`. Where eye ≠ target it sets bit 1 of `main+0x142F1` ("camera moved"), **clears bit 3 of `main+0x14281`** — the screen fog grid's own is-current flag — then moves the eye *halfway* toward the target, capped at ±`0x140` (320 px) per axis per frame, and hands the result to `0x41C3C0`. It never writes the target. *[CORRECTED 2026-09-10: this row said `0x41CA30`, which is mid-function — the byte there is the LAST byte of the 7-byte `mov WORD PTR [ecx+0x1434B], ax` at `0x41CA2A`, and an `E8`/`E9` scan of `.text` finds nothing calling it. `0x41CA10` is the prologue (`mov ecx, ds:0x511DE8; push ebp; push esi; xor ebp, ebp`).]* |
 | **`0x41CA1A`…`0x41CA8D`** | **The follow selection, and it takes the FIRST of three sources that is set** [MEASURED 2026-09-10]: the countdown `main+0x1434B`, then the object `main+0x142F7` (position at `+0x4`), then the unit `main+0x142F3` = `CameraToUnit` (position at `+0x6A`). A unit whose `[+0x110] & 0x10000000` has gone away is not followed and the stepper **releases all three itself** at `0x41CA69`. The countdown is *decremented* here (`0x41CA29`, unlocked `dec` on a u16), which is what makes it expire. |
 | `0x41CAC7`/`0x41CAD2` | Inside the stepper: the camera-**follow** target written from the followed source as `pos − view/2`, then clamped **inline** at `0x41CAF7` to `[0, map − view]`. |
+| `0x41CAF7`…`0x41CB43` | **The extent of that inline clamp**, and the whole of it is replaceable: it is reached only on a frame that follows something, because `0x41CA8F` jumps straight past it to `0x41CB4A` when none of the three sources is set, and nothing jumps INTO it — an `E8`/`E9`/`Jcc` scan of `.text` finds no target inside the range. `0x41CB44` is the instruction after it. Its tail clears fog bit 3 at `0x41CB3B`. G18-7's `zoom_follow_clamp` lands on `0x41CAF7` and rejoins at `0x41CB44`, which is what makes Ctrl+C arrive at any zoom. |
 | **`0x41C390`** | **Release the camera follow** — a leaf with no arguments: `main+0x1434B` (u16) = 0, then `main+0x142F3` = 0, then `main+0x142F7` = 0, `ret`. Two callers, `0x4174FD` (the camera-track toggle on bit 1 of `main+0x14373`) and `0x48D709` (centre-on-unit, which releases and then calls the smooth centre-on `0x41C8E0`). The same three stores are **inlined** at `0x41C2B0`, `0x41CC60`, `0x41D091`, `0x41D1C4` and `0x41D406`. |
 | `0x41C2B0` | Camera reset: `rep stosd` of `0x17` dwords from `main+0x142F3` (i.e. `0x142F3`…`0x1434E`, the whole camera block — follow slots, eye, target and countdown), preserving the byte at `main+0x1434D` across it. |
 | `0x41C2E0` | `SetFollowUnit(dir)` — `0x48C190(currentFollow, dir)` picks the next/previous unit and the result is stored into `CameraToUnit`. Callers `0x48B074`, `0x4964E7` (dir 0), `0x4964F3` (dir 1) — the cycle-through-units keys. |
@@ -1948,6 +1949,13 @@ read**: `GetUnitAtMouse 0x48CD80` at `0x499278` and the mouse routing test at `0
 load `main+0x2C76`/`+0x2C7A` directly. Anything that corrects the mouse point inside a
 `0x498DA0` redirect must therefore write the field as well as the copy.
 
+**`0x498DA0` clamps the screen point into the viewport rect before it makes a world point**
+[VERIFIED 2026-09-12]: `0x498E32`…`0x498E86` pins x into `[L, R]` and y into `[T, B]` — the
+rect at `main+0x37E2B`…`+0x37E33`, not the screen — and only then adds the eye. So a point
+outside the rect does not produce a world point outside the view; it produces the edge one.
+That is what makes G18f's `border_to_border` free: mapping the outermost device column to the
+outermost engine column costs nothing, because the engine would have clamped anything past it
+to the same column anyway.
 Readers of `main+0x2C76` found in the image: `0x41635D`, `0x419BF0`, `0x41A4B2`, `0x41CCAF`,
 `0x41CD63`, `0x41D101`, `0x469DE7`, `0x48CD91`/`0x48CD97`, `0x496490`, `0x498D16`, `0x499210`.
 The only writers are the three stores above. `0x419BF0` and `0x41A4B2` are inside the order
@@ -2411,7 +2419,11 @@ both by address (`main+0x37E1B == *(globals+0xBC) == 0x04490020` in a 1024×768 
 ```
 
 - **`SurfaceCreateNamed 0x4C69F0(const char* tag, int w, int h)`** — `stdcall`, `ret 0xC`,
-  returns the object. Prologue `53 56 8B 74 24 10`. 18 callers; the GUI's are `0x4A907C`
+  returns the object. Prologue `53 56 8B 74 24 10`. **Header and pixels are ONE block**:
+  `imul eax,esi; add eax,0x30` at `0x4C6A01`/`0x4C6A04` is the size it asks `0x4D83B0` for,
+  and `lea edx,[eax+0x30]` / `mov [eax+0xC],edx` at `0x4C6A0E`/`0x4C6A14` is what makes the
+  pixel base `object + 0x30`. That identity is what lets an observer on `MEM_Free` retire a
+  surface from the block pointer alone. 18 callers; the GUI's are `0x4A907C`
   (the screen's own surface, tagged with the screen's name) and `0x4A90B5` (its `"SAVE UNDER"`
   snapshot); `0x498407` creates the game offscreen `main+0x37E1B`; the minimap's are
   `0x466823`, `0x466881`, `0x4669CF`, `0x4669FA`. **The tags name the surfaces**, and a

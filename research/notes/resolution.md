@@ -713,6 +713,8 @@ old monitor. See [GPU status](gpu-status.html) §2.12.
 | `0x45E5E0` | visual-options dialog build (VISUALS/VISUALRT/SELVMODE.GUI) | stdcall(int selvmode), ret 4 |
 | `0x45BBF0` | VIDSLDR slider callback → writes `0x37F1B/1F` @`0x45BC88/97` | stdcall, ret 8 |
 | `0x45E100` | OnCommand_VISUALRT_GUI (UNDO→`0x45CAE0`, RESTORE 640×480 @`0x45E3AD/BD`) | stdcall(gui*), ret 4 |
+| `0x45E2FD` / `0x45E331` | its **UNDO** and **RESTORE** branches. Both end the same way — `GUI_Pop 0x4A9660`, then `0x45E5E0(0)` to rebuild the screen — so a chained OnCommand sees the rebuild whether or not it handled the button [VERIFIED 2026-09-11] | — |
+| `0x45E46A`…`0x45E4AB` | the fall-through, and it is **not** a no-op: `[gui+0x60]` is the actuated index, `-1` ⇒ `je 0x45E4AB` (return); otherwise, if that gadget's id is 1 (a BUTTON) it **pops the screen at `0x45E499` and calls the UNDERLYING screen's OnCommand**. That is how the tab buttons work — and why our VISUALS handler has to take the dispatch SLOT rather than be observed: an observer never skips, so the engine's fall-through would pop the screen out from under it [MEASURED 2026-09-11] | — |
 | `0x4461D0` | battleroom MODES listbox OnCommand — writes @`0x4462C7/D6` + PlayerInfo @`0x4462E2/F0` | stdcall(gui*), ret 4 |
 | `0x446310` | battleroom mode cycle — writes @`0x44641F/2E` | cdecl-ish, ret |
 | `0x450F90` | REPORTER_PlayerInfo — broadcast PlayerInfo (msg 0x20, 0xB9 B) | void |
