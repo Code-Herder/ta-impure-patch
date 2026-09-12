@@ -106,6 +106,7 @@
                                /*     b3 shadow alpha                          */
 #define FD_MASKHI    0xFF      /* u8; bit3 = LOS-gated                         */
 #define WR_STRIDE    0x30
+#define WR_COUNT     2048      /* the pool 0x421F29 allocates: 0x18000/0x30   */
 #define WR_BODYANIM  0x04      /* anim state: GAF wreck body                  */
 #define WR_SHADANIM  0x10      /* anim state: GAF wreck shadow                */
 #define WR_FLAGS     0x2F      /* u8; bit2 = this wreck casts a shadow        */
@@ -602,16 +603,22 @@ static void draw_feature(const TAGPU_FXVIEW* v, const TAGPU_PACKET* pk,
         }
         s_c.gafwreck++;
         if (!s_wreck) return;
-        /* The record table is per map: its slot has one direct store in the
-           binary, 0x422214 inside the feature teardown the cascade reaches
-           (0x491B60 -> 0x483DD0 -> 0x422170), so it lives and dies under the
-           tagpu_reclaim fence [the load-side store goes through another base
-           and was not traced]. That lifetime is the argument; the index is
-           the tile's own, and the probe is a net (cross-thread-engine-reads.md
-           §4). */
-        if (!ptr_ok(recs)) return;
+        /* THE INDEX IS BOUNDED, AND THE PROBE IS GONE. The tile's `wreck` word
+           is engine DATA: unbounded it addresses up to 65535*0x30 ~ 3 MB past
+           the pool, and IsBadReadPtr answered a question about the past — a
+           net, as this comment used to say, never the argument (CLAUDE.md).
+           The pool is FIXED: 0x421F20 allocates 0x18000 bytes at stride 0x30
+           once per level and threads a free list through all of them, so there
+           are WR_COUNT = 2048 records, and 0x4232A0 returns 2048 itself for
+           "no record". The engine's own draw at 0x46A6C4 does not bound this
+           either, but it only forms the address for a cell it is drawing.
+           The remaining LIFETIME argument is unchanged: the base is read live
+           just above, the teardown frees the pool at 0x4221F8 and nulls
+           main+0x1420B at 0x422214 inside the cascade tagpu_reclaim fences
+           (0x491B60 -> 0x483DD0 -> 0x422170), and that null is the refusal.
+           [landing review, 2026-09-12] */
+        if (!ptr_ok(recs) || a->wreck >= WR_COUNT) return;
         rec = recs + (size_t)a->wreck * WR_STRIDE;
-        if (IsBadReadPtr(rec, WR_STRIDE)) return;
         if (shadowsOn && s_shadow && (*(const unsigned char*)(rec + WR_FLAGS) & 4)) {
             g = tagpu_gaf_state_frame(rec + WR_SHADANIM);
             if (g) {
@@ -814,9 +821,16 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
             /* tiles can name defs past the map's real ones, whose 0x100-byte
                records hold garbage — wild footprints and invalid sequence
                pointers (terrain-depth.md "Corrections") */
-            if (nDefs && (int)idx >= nDefs) { s_c.junk++; continue; }
+            /* THE COUNT IS THE BOUND AND THERE IS NO PROBE BEHIND IT. `nDefs`
+               is the smaller of the live count and the packet's, and the live
+               one never over-describes the live base (see the block above the
+               loop), so the address below is inside the allocation by
+               construction. The IsBadReadPtr that used to stand here answered
+               a question about the past and read as the argument; the refusal
+               when the count is 0 -- which is what the teardown leaves --
+               is the same line. [landing review, 2026-09-12] */
+            if (!nDefs || (int)idx >= nDefs) { s_c.junk++; continue; }
             def = fdefs + (size_t)idx * FD_STRIDE;
-            if (IsBadReadPtr(def, FD_STRIDE)) { s_c.junk++; continue; }
             s_c.anchors++;
             flat = *(const unsigned char*)(def + FD_HEIGHT) < 10;
             if (flat) s_c.flat++; else s_c.tall++;
