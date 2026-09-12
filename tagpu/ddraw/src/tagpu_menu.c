@@ -80,6 +80,7 @@
 #define VA_DRAWLOCK     0x004C2470u     /* the counted pair GUI_Load draws under */
 #define VA_DRAWUNLOCK   0x004C2870u
 #define VA_UPDGUI       0x00491D70u
+#define VA_GUI_POP      0x004A9660u     /* GUI_Pop(gi): also answers the pump  */
 #define VA_DRAWSCREEN   0x00468CF0u     /* the per-frame game-thread function  */
 #define VA_POSTGUI      0x0046A308u     /* DrawGameScreen, just past the GUI   */
 #define VA_GAFBLIT      0x004B7F90u     /* CopyGafToContext(ctx, frame, x, y)  */
@@ -106,6 +107,7 @@ typedef int   (__stdcall *stage_draw_fn)(void* gi, int flags);
 typedef void  (__stdcall *set_dirty_fn)(void* gi);
 typedef void  (__stdcall *act_done_fn)(void* gi);
 typedef int   (__stdcall *upd_gui_fn)(int);
+typedef void  (__stdcall *gui_pop_fn)(void* gi);
 typedef void  (__cdecl   *lock_fn)(void);
 typedef void  (__stdcall *gaf_blit_fn)(void* ctx, const void* frame, int x, int y);
 typedef int   (__stdcall *file_open_fn)(const char* path);
@@ -750,16 +752,34 @@ static void trigger_rect(int* x, int* y)
     *y = 2;
 }
 
-/* The drop-down, in screen pixels. `menu_open` writes this into the panel
-   gadget and `tagpu_menu_owns_point` tests against it, so there is one rule. */
+/* The drop-down. `menu_open` writes this into the panel gadget and
+   `tagpu_menu_owns_point` tests against it, so there is one rule.
+
+   IT IS AN ENGINE-SURFACE RECT THAT NAMES A PLACE ON SCREEN, and since 22.6
+   those are not the same point. The panel hangs below the bar, i.e. in the
+   WORLD region, and the world region is no longer composited where the engine
+   drew it: it is translated by (128s - 128, 32s - 32). So the screen rect is
+   chosen first -- right edge on the sprocket's line, top edge just under the
+   magnified bar -- and then moved back along that vector to say where the
+   ENGINE has to draw for it to land there.
+
+   Without the subtraction the panel walks right by the whole inset as the
+   scale rises: 124 px of it hang off a 1920 screen at s = 2.25, and at 4K's
+   s = 4.5 it is placed at 3912 on a 3840-wide screen and NEVER APPEARS AT ALL.
+   Reported from play 2026-09-12: "the drop down menu doesnt appear".
+
+   At stock the inset is zero and both lines below are the arithmetic they
+   replaced, to the character. */
 static void panel_rect(int* x, int* y)
 {
-    int q8 = 256, bh = BAR_H, w = (int)g_ddraw.width;
+    int q8 = 256, bh = BAR_H, w = (int)g_ddraw.width, dx = 0, dy = 0;
     tagpu_hud_live(NULL, &bh, &q8);
+    tagpu_hud_shift(&dx, &dy);               /* (0,0) whenever the pass is inert */
     w -= MARGIN * q8 / 256;                  /* the margin the sprocket leaves */
     if (w < PANEL_W) w = PANEL_W;            /* never off the left */
-    *x = w - PANEL_W;
-    *y = bh;
+    *x = w - PANEL_W - dx;
+    if (*x < 0) *x = 0;                      /* never off the left, again */
+    *y = bh - dy;                            /* screen bh, i.e. engine row 32 */
 }
 
 /* ---- generating the .GUI ------------------------------------------------- */
@@ -1016,17 +1036,42 @@ static void menu_open(char* main_p, int fresh)
     ((set_dirty_fn)VA_SETDIRTY)(gi);
 }
 
+/* UpdateIngameGUI IS NOT A POP, IT IS A COLLAPSE, and closing with it took the
+   player's build menu down with us.
+
+   `0x491D70` loops `GUI_Pop` until the top screen's name matches the 16-byte
+   buffer at `main+0x37EA0` (the compare is `0x4AB060`, `strncmp([top+4]+2,
+   buf, 16)`). That buffer names the BASE in-game screen and nothing else: with
+   a commander selected the stack is ARMMAIN2 -> ARMCOM1 -> ours and the buffer
+   still reads "ARMMAIN2.GUI" [MEASURED 2026-09-12 by peeking it]. So restoring
+   it and calling UpdateIngameGUI popped TWO screens -- ours and the unit's
+   build page -- while leaving the unit's selected flag alone. Reported from
+   play: "clicking it several times when the commander is selected will make
+   the commander build menu disappear as if it was unselected but I can still
+   see the selection rect around it."
+
+   `GUI_Pop` is the single pop the loop itself calls, and it is already this
+   module's idiom on the front end (`vis_relist`). It answers the pump too --
+   `0x4A9673` writes -1 into `gi->UIChange_f` -- so there is no `menu_accept`
+   to do, and `tagpu_menu_oncommand` returns on a negative row.
+
+   IT IS GUARDED ON BEING ON TOP rather than assumed: pop is positional, so
+   popping while something else sits above us would take that screen instead of
+   ours. The tick re-asserts our name every frame precisely to keep us on top,
+   so the guard is expected to hold; when it does not, the collapse is still the
+   honest fallback, because leaving our screen on the stack with the buffer
+   restored would let it linger until the player next moved the stack. */
 static void menu_close(char* main_p)
 {
-    /* Restore the buffer and let UpdateIngameGUI pop us -- the mirror of the
-       engine's own idiom, and never GUI_Pop. It is CALLED rather than waited
-       for, because its 21 call sites are all events: left to itself the popped
-       screen would linger until the player next did something that changes the
-       GUI stack. 1 is the argument both of the engine's own visible call sites
-       pass (0x460635, 0x4929E3), and it only matters on the early-out path. */
+    void* gm = s_gm;
+
     lstrcpynA((char*)main_p + OFF_EXPECT, s_saved, 16);
     s_gm = 0;
-    ((upd_gui_fn)VA_UPDGUI)(1);
+
+    if (gm && *(void**)(main_p + OFF_TOPGUI) == gm)
+        ((gui_pop_fn)VA_GUI_POP)((void*)(main_p + OFF_GUIINFO));
+    else
+        ((upd_gui_fn)VA_UPDGUI)(1);
 }
 
 /* ---- the engine calls this ----------------------------------------------- */
@@ -1526,8 +1571,6 @@ static void read_tokens(void)
        engine's own handler then runs and finds none of its gadgets actuated. */
 
 #define VA_VIS_BUILD    0x0045E5E0u     /* dialog build, stdcall(int selvmode) */
-#define VA_GUI_POP      0x004A9660u     /* GUI_Pop(gi): also answers the pump  */
-typedef void (__stdcall *gui_pop_fn)(void* gi);
 typedef void (__stdcall *vis_build_fn)(int selvmode);
 /* 0x45E100 (OnCommand_VISUALRT_GUI) is NOT detoured -- see tagpu_vis_oncommand */
 static const unsigned char VIS_BUILD_STOLEN[7] =
