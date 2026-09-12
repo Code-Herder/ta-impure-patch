@@ -202,6 +202,24 @@ That whole path — launch, the three clicks, the wait — is what `tacli scenar
 in one command, with the map and players from the file (see *Scenarios* below). Drive it
 by hand when you want the menus themselves; use `load` when you want the game.
 
+**Leaving a game for the main menu is four steps, and none of them is Esc.** The button
+that opens the exit menu sits on `ARMOPT.GUI`, which **Tab** raises over the world — not
+on the side panel, and not on the top bar (its `MOREBAR` row is collapsed, and at any HUD
+scale above 100 % the right of that bar is off-screen anyway). Esc in game does nothing
+at all: its code lands on the in-game dispatcher's default case. So:
+
+```bash
+tools/tacli keys t1 tab tab          # TWICE: a keys invocation drops its first token
+tools/tacli ui   t1 click EXIT       # ARMOPT.GUI -> EXITMENU.GUI
+tools/tacli ui   t1 click MAINMENU   # -> YESORNO.GUI, "Surrender this battle…?"
+tools/tacli keys t1 y y              # CHOICE1 — the click on it is unreliable, the key is not
+tools/tacli ui   t1                  # confirm: MAINMENU.GUI 640x480
+```
+
+The shell runs at **640×480** whatever the game ran at, so `tacli ui` reporting
+`MAINMENU.GUI 640x480` is how you know the level really tore down. `EXITMENU.GUI` also
+carries `RESTART`, `EXITGAME` (quit to the desktop) and `CANCEL`.
+
 Skirmish settings come from the registry, no clicking: `--map "Two Continents"`,
 `--player 2:2:1:1` (`N:controller[:side[:color[:metal[:energy]]]]`, controller 0=off
 1=human 2=AI, side 0=ARM 1=CORE; an empty field leaves that key alone, so `0:1::3` sets

@@ -876,6 +876,7 @@ sees only the blits that really draw. Full argument lists, boxes and evidence: t
 | `0x4C6B70` | surface → surface `(dst, src, x, y)` — the GUI panel reaching the frame | 8 | the source's box at `(x−originX, y−originY)`, clipped |
 | `0x4C69F0` | `SurfaceCreateNamed(tag, w, h)` — return hijacked | 6 | registers the surface, seeds its copy so its build is diffed |
 | `0x4C6AC0` | `SurfaceFree(surface)` | 6 | forgets it |
+| `0x4D85A0` | `MEM_Free(block)` — the allocator's own free, **not a pixel writer** | 5 | retires the surface whose block it is (G18-8): `block+0x30` is the pixel base, and this is the only way an engine allocation dies |
 | `0x4A81E0` | `GUI_StageUpdateDraw(gi, flags)` | 10 | a build/redraw event for the log |
 
 **Two writers of the minimap composite are missing from this table, and what saves them is an
@@ -1028,6 +1029,13 @@ half on the render thread, and the two halves meet only in a lock-free SPSC queu
   OFFSCREEN — freed to the heap by `MEM_Free` at `0x491AB8`, not through `SurfaceFree`, and
   re-created 640×480 on the same base — no longer leaves a 1024-wide box in the ring for the
   next publish to trip on (`surf_get` forgets a base's ops on a same-base size change).
+  **Since G18-8 that surface is retired at the free itself** rather than at the next
+  `0x4C69F0("OFFSCREEN")`: the observer on `MEM_Free 0x4D85A0` is the surface's destructor, so
+  no entry in the table can outlive its block whatever path freed it. That is the whole safety
+  argument for `pub_surface_bytes` reading engine memory at the flip — the range test on the
+  pointer was never one. MEASURED 2026-09-12: the two frees the old rule left standing are the
+  shell's 640×480 offscreen at the mode switch (`0x498398`) and the game's at leave-game
+  (`0x491ABD`), both on the game thread.
 - *The palette (G15d):* the twin resolves through **the palette the engine's frame is presented
   with — cnc-ddraw's `g_ddraw.primary->palette->data_rgb`, what the engine's `SetEntries`
   stored — not `main+0x143A7`**. The engine scales every palette it sets by the Gamma option on

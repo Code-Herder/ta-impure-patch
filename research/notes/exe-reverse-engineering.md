@@ -2423,6 +2423,25 @@ both by address (`main+0x37E1B == *(globals+0xBC) == 0x04490020` in a 1024×768 
 - **`SurfaceFree 0x4C6AC0(OFFSCREEN*)`** — `stdcall`, `ret 4`: `if (p && p[+0x2C] & 1)
   0x4D85A0(p)`. Prologue `8B 44 24 04 85 C0`. 23 callers; the GUI's are `0x4A9537`
   (`panel+0xB8`) and `0x4A9549` (`panel+0xBC`) in the teardown arm.
+- **`SurfaceAttach 0x4C6A60(OFFSCREEN* out, w, h, pitch, base)`** — `stdcall`, `ret 0x14`: the
+  same header laid over memory the object does NOT own (`+0x2C` keeps bit0 clear, so
+  `SurfaceFree` frees nothing). **One caller, `0x4B5897`**: right after `[0x4FC06C]` (the
+  DirectDraw `Lock`) it wraps the locked surface's bits, `w`/`h` from `globals+0xD4`/`+0xD8`
+  and `pitch = (w+3) & ~3`, in the object at `that+0x50`. So the *primary* can be a drawing
+  destination too — although MEASURED 2026-09-12 across a whole session, no UI blit named it:
+  every destination the Phase E observers saw was a `0x4C69F0` object.
+- **`MEM_Free 0x4D85A0(p)` is the one way any engine allocation dies** [VERIFIED 2026-09-12].
+  It is a two-line wrapper (`mov eax,[esp+4]; push eax; call 0x4D85B0; add esp,4; ret`,
+  prologue `8B 44 24 04 50` — five relocatable bytes, which is what makes it detourable), and
+  **`0x4D85B0` has exactly one caller: this**. 363 sites call `0x4D85A0`, `SurfaceFree
+  0x4C6AC0` among them (`0x4C6ACF`). Its partner is `MEM_Alloc 0x4D83B0(tag, size)` →
+  `0x4D83C0`, which ignores the tag in the shipping build and goes to `0x4DACF0(size, 0)` or
+  `0x4E8890(size)`. Because a surface's header and pixels are ONE block (`w*h+0x30`, above),
+  `block + 0x30 == the pixel base`, and an observer at this function's entry is exactly a
+  surface destructor — which is what `tagpu_gui_hook.c`'s `before_memfree` is (G18-8): the
+  publisher reads `s->base` at the flip, and what makes that safe is that the table entry
+  cannot outlive the block. MEASURED in game: **~10 500 calls a second**, so an observer that
+  scans ≤ 24 recorded surfaces costs about 0.03 % of one core.
 - **`SurfaceFill 0x4C6890(surface, colour)`** — `stdcall`, `ret 8`: fills `h·pitch` bytes at
   `+0xC`; `NULL` ⇒ the back buffer. Prologue `83 EC 64 53 55 56 57`.
 - **`GetContext 0x4C5E70(OFFSCREEN* out)`** — `stdcall`, `ret 4`, prologue `83 EC 6C 56 57`
@@ -3486,6 +3505,18 @@ frees the four. All of it is one family, `0x41D8A0..0x41FEyy`, entered at `0x41F
 and **nothing a skirmish does reaches it** (MEASURED: the walk's `palchg` moves only at the
 switches and at `+gamma`). Whatever runs it, the layer follows: each step is a `SetEntries`, and
 the twin's palette texture is re-uploaded from the presented table at the next present.
+
+**Getting there: the in-game exit menu** [VERIFIED 2026-09-12]. `0x4608B0` is the only thing
+that raises it — `GUI_Push(main+0x519, "EXITMENU.GUI" @0x506D64, 0x1800)`, then
+`0x49FDF0(gadget, "RESTART" @0x506CA8, 1)` and `[screen+8] = 0x460800` (its OnCommand). It has
+**one caller**, `0x460C81`, inside the in-game panel's OnCommand — the arm taken when the
+gadget that fired is named **`"EXIT"`** (`0x503034`), one of `PREFS` / `HELP` / `MISSION` /
+`MOREBAR` / `SAVEGAME` / `LOADGAME` / `EXIT` that handler dispatches. That gadget is **not on
+the side panel**: it lives on `ARMOPT.GUI`, which **Tab** opens over the world. `EXITMENU.GUI`
+itself carries `MAINMENU`, `EXITGAME`, `RESTART` and `CANCEL`, and `MAINMENU` raises a
+`YESORNO.GUI` ("Surrender this battle and return to main menu?") whose `CHOICE1` is the one
+that reaches the handler below. Esc does nothing in game: code `0x1B` lands on case 39 of the
+in-game dispatcher's table (`0x496694` → `0x4965F4[39] = 0x4965CE`), the default.
 
 **Leaving a game — `0x491ADC..0x491B38`** (inside the leave-game handler; the block begins with
 the width test at `0x491AA0`) [VERIFIED]. `cmp eax, 0x1E0; je 0x491B5D` (already 480 high:
