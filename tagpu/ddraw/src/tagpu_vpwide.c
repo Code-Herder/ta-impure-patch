@@ -10,7 +10,6 @@
 #include "tagpu_vpwide.h"
 #include "tagpu_detour.h"
 #include "tagpu_zoom.h"
-#include "tagpu_hud.h"
 
 #define TA_MAINPP    0x00511DE8u
 
@@ -28,13 +27,18 @@
    makes the whole true rect derivable from the SCREEN dimensions at `+0x37E1F`
    /`+0x37E23` — fields we never write — while we own L/T/R/B.
 
-   THEY ARE NO LONGER CONSTANTS. HUD scale (tagpu_hud.h) writes that same rect
-   at game entry with L = 128s and T = 32s, so the origin this module projects
-   about is whatever it wrote. `vp_true()` is the one place that is asked, and
-   it asks tagpu_hud rather than deciding: the reserved space and the origin
-   every reader here projects from are then the same integers by construction,
-   and at stock scale it answers 0x80 / 0x20 / 33 exactly as the constants did. */
+   THEY ARE CONSTANTS, and HUD scale does not move them (gui-renderer.md §20.5).
+   It was briefly allowed to: the first build wrote L = 128s / T = 32s here, on
+   the theory that the rect is the origin every consumer projects about. Only
+   `0x498DA0` reads it that way. The engine's world->screen projection is the
+   +0x80/+0x20 pair baked at each of its own sites, and the passes of ours that
+   reproduce it bake the same pair, so a moved L tore the two halves of the
+   world apart by ((s-1)*128, (s-1)*32). HUD scale now covers the world instead
+   of asking for it, and the origin is the engine's again. */
+#define VP_TRUE_L    0x80        /* the L 0x497F40 builds     */
+#define VP_TRUE_T    0x20        /* ...and the T              */
 #define VP_R_INSET   1           /* R = screenW - VP_R_INSET  */
+#define VP_B_INSET   33          /* B = screenH - VP_B_INSET  */
 #define OFF_SCREEN_W 0x37E1F
 #define OFF_SCREEN_H 0x37E23
 
@@ -106,13 +110,16 @@ static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x
 
 static int iround(float v) { return (int)(v >= 0.0f ? v + 0.5f : v - 0.5f); }
 
-/* The viewport origin and bottom inset in force, from tagpu_hud. Sane for a
-   null or wild `ta` — the stock constants — because every caller here has
-   already checked `ta` for its own reasons and a second answer must not be a
-   different one. */
+/* The viewport origin and bottom inset the engine projects about. `ta` is
+   taken and ignored: it was a parameter while HUD scale wrote the rect, and
+   keeping it costs nothing and leaves the call sites alone if a later pass
+   makes the origin a variable again. */
 static void vp_true(const char* ta, int* L, int* T, int* bInset)
 {
-    tagpu_hud_true_inset(ta, L, T, NULL, bInset);
+    (void)ta;
+    if (L)      *L      = VP_TRUE_L;
+    if (T)      *T      = VP_TRUE_T;
+    if (bInset) *bInset = VP_B_INSET;
 }
 
 /* The true rect from the SCREEN dimensions — the two fields we never write, so

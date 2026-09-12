@@ -2550,7 +2550,7 @@ refusal counts in `noeng=`.
 
 ---
 
-## 20. HUD scale — the HUD bigger, the map kept  [DECIDED 2026-09-11]
+## 20. HUD scale — the HUD bigger, the map kept  [DECIDED 2026-09-11; mechanism changed by 20.5 the same day]
 
 *The third interview. §13 settled how the UI is drawn at a scale; this settles what the
 player's **UI scale** row means, which turned out to be a different question with a different
@@ -2606,7 +2606,9 @@ holds for `k = 1`, and for the same reason: it is what makes the rest of the cla
 - **The HUD is bigger, not sharper.** It is 1× art magnified. §18's string op exists but stamps
   glyphs **into the twin**, not into §13.2's device-res sharp layer, so text scales with
   everything else. Moving its output to the sharp layer is the fix and is a separate piece.
-- **Not verified: that nothing sim-relevant derives from viewW/H.** The evidence is two-sided
+- **Moot since 20.5: that nothing sim-relevant derives from viewW/H.** Nothing writes viewW/H
+  any more, so the question no longer gates anything; the survey below is kept because it is
+  the answer if a later pass does want to move them. The evidence is two-sided
   and neither half is a proof. Every attributed reader is view-side — the camera cluster
   (`0x41C3C0`, `0x41C4C0`, `0x41C7C0`, `0x41C8E0`, `0x41CA10`, `0x41D0F0`, `0x41D1F0`), the
   terrain pass `0x483FA0`, LoadMap `0x483610`, the minimap box filler `0x466B70`, the map debug
@@ -2619,14 +2621,23 @@ holds for `k = 1`, and for the same reason: it is what makes the rest of the cla
   **thirteen reads and no write** at that displacement, so neither claim was confirmed by it and
   the writer uses some other base. `main+0x14243/47/4B/4F`, which §3 lists alongside them, have
   **no references at all**. It never changed 20.2's "when", because the rect and the SORT buffers
-  settle that on their own. **SETTLED by the landing, 20.4** — HUD scale moves viewW/viewH
+  settle that on their own. **SETTLED by the first build, 20.4** — and it stays settled, because
+  the measurement was taken; note only that the instrument no longer exists, since 20.5 stopped
+  writing the rect, so re-running it needs the two-resolutions run that was originally planned.
+  ** — HUD scale moves viewW/viewH
   without moving the screen mode or the map, which separates the two candidate sources outright:
   they are the view size in 16-px tiles, §3 is right, and the exe map is corrected.
 
-### 20.4 Built  [MEASURED 2026-09-11]
+### 20.4 The first build, and why it was withdrawn  [SUPERSEDED by 20.5]
 
-`tagpu_hud.c` / `.h`, one observer and one uniform. Every decision in 20.2 survived contact;
-nothing here changes them.
+**Read this as history, not as the mechanism.** What follows is the build of 2026-09-11 that
+reserved the space by writing the engine's viewport rect. It produced a torn world and was
+withdrawn the same day; 20.5 has the measurement that killed it and what replaced it. Three
+claims below are now known false and are left in place so the mistake stays legible: that the
+rect is "the origin every consumer projects about", that `vpwide`'s four constants could
+follow it, and that the setting had to wait for game entry. Everything else — the resolver,
+the ceiling, the three magnified regions, the pointer map, the parity result, the sprocket and
+the row — survived and is still the mechanism.
 
 **The one number.** Both halves of 20.2 — the space the engine reserves and the region the
 composite magnifies — come out of `tagpu_hud_geom()`, a pure function of the screen
@@ -2712,8 +2723,9 @@ division and the same nothing that `tagpu_hud_to_engine` applies.
 
 **The row.** "UI scale" is now `Auto|100%|150%|200%|300%|400%`, live in window *and*
 fullscreen (the greying rule is gone), and the window multiplier with `apply_scale()` is
-deleted. The store is the lever file `tagpu_hud.on` (`scale=auto` / `scale=<percent>`), on
-the defaults table at `scale=auto`, read at game entry. Stages past a screen's ceiling are
+deleted. The store is the lever file `tagpu_hud.on` (`scale=auto` / `scale=<percent>`) — on
+the defaults table at `scale=auto` and read at game entry in this build; 20.5 took it off the
+defaults and made it live. Stages past a screen's ceiling are
 **skipped as the row cycles** rather than greyed — `VA_SETGRAYED` is per gadget, not per
 stage, so greying would take the honourable stages down with the rest. Measured: at a
 640×480 Screen Size the row alternates Auto/100% and the plate never shows a number the game
@@ -2752,3 +2764,90 @@ corrected, and the write the scan could not find is LoadMap's, through a base at
   screen, and the shader discards our fragment at the engine's rect, which is where the
   engine drew it — so the cursor shows at the unmagnified position while the pointer is
   elsewhere. Ours (the default) is placed from the client point and is unaffected.
+
+### 20.5 The origin tear  [MEASURED 2026-09-11, the same day]
+
+**20.2's premise was false, and one measurement settles it.** The premise was that the engine's
+viewport rect (the six ints at `main+0x37E27`) is the origin every consumer projects about, so
+writing `L = 128s`, `T = 32s` moves the world and everything that reasons about it together.
+
+It moves one thing. `L` and `T` are the screen→world origin **inside `0x498DA0` and nowhere
+else**. TA's world→screen projection is a `+0x80`/`+0x20` pair of immediates **baked at each
+site that performs it** — the unit-under-pointer probe, band select, build placement, the
+feature blits, the health bars — and our own passes reproduce that projection byte for byte
+(`tagpu_feat.c`, `tagpu_mark.c`, `tagpu_order.c`, `tagpu_overlay.c`, `tagpu_tracer.c`), while
+terrain and units project about the rect (`tagpu_native.c`, `tagpu_terrown.c`, through
+`tagpu_vpwide_true_rect`). Moving `L`/`T` therefore tears the world into two halves
+`((s−1)·128, (s−1)·32)` apart.
+
+**The measurement**, 1024×768 Auto (`s = 1.598`, panel 204, bars 51), scenario `selbox-slope`,
+`ARMSTUMP` #2 at world (6180,12140) with the eye at (5796,11731):
+
+| pointer at | `main+0x2CBA` (unit under pointer) | |
+|---|---|---|
+| (512,384) — where the **engine** projects it, `world − eye + 128` | `0xFFFF0002` | the unit |
+| (588,403) — where it is **drawn**, `world − eye + 204` | `0xFFFF0000` | nothing |
+
+So what you click was 76 px right and 19 px down from what you see. With `hud.off` both agree
+at (512,384). A `glshot` shows the same vector directly: every health bar sits 76 px left and
+19 px up of its tank. That is drag select, build placement, map drawing and feature placement
+in one cause — which is how it was reported.
+
+**The general fact is the part worth keeping**, and it is now in
+[exe map](exe-reverse-engineering.html): *TA's world→screen projection is not derived from the
+viewport rect.* `vpwide` has always known it — it widens `L` while holding `vp_true()` at
+`0x80`, and hands `0x498DA0` the true origin with the wide clamp, precisely so that the two can
+never disagree. HUD scale broke that invariant instead of joining it.
+
+#### What replaced it: cover, do not reserve
+
+**Nothing is written to engine memory at all.** The observer on `0x4288D0` is gone, the rect
+write is gone, and `tagpu_vpwide.c`'s `VP_TRUE_L` / `VP_TRUE_T` / `VP_B_INSET` are constants
+again. The engine draws the world across its own full viewport exactly as it always did, and
+the magnified HUD covers the outer part of it. What is left is one transform applied twice, and
+both halves still come out of the same `tagpu_hud_geom()`:
+
+- the composite samples the twin's three HUD regions at `s` texels per device pixel — unchanged
+  from 20.4;
+- the pointer is divided by `s` inside those same regions before the engine sees it — unchanged
+  from 20.4.
+
+**The boundary is exact, not nearly.** The panel's last screen column is `128s − 1` and
+`128s / s` is `128`, so the first screen point that belongs to the world is the first point the
+map sends to engine column 128. The engine's own hit tests never move, because the grid they
+were written against never moves.
+
+**Verified after the change**, same fixture, `hud.on` at Auto: the rect reads the engine's own
+`128 / 32 / 1023 / 735 / 896 / 704`; the roster, the hover field and a click all agree at
+(512,384); the health bars sit on their tanks. The pointer map is exact in every region, by a
+**device**-space move so that the whole client → game path is under test —
+
+| device px | engine | flags `+0x2CC6` |
+|---|---|---|
+| (100,100) magnified minimap | (62,62) | `5` = minimap |
+| (60,160) magnified minimap, lower | (37,100) | `5` — unmapped, this point is **off** the minimap |
+| (600,400) world | (600,400) — identity | `6` = world |
+| (150,600) magnified panel | (93,375) | `0` |
+| (500,25) magnified top bar | (312,15) | `0` |
+| (500,745) magnified bottom bar | (312,754) | `0` |
+
+**Not tested: band select through injected input.** `down:lbutton` / `mouse:` / `up:lbutton`
+selected nothing — but it selects nothing with `hud.off` either, so it is the harness and not
+the feature, and it is left as an open question about `tacli` rather than about this.
+
+**Two costs, stated so they are not rediscovered as bugs.** The world under the HUD is rendered
+and then covered — about 20 % of the fill at `s = 4.5`. And the first world column the player
+can see is `eye + (128s − 128)` rather than `eye`; **if** the engine's eye clamp bottoms out at
+0, the map's top-left `((s−1)·128, (s−1)·32)` world px cannot be scrolled into view — 160×40 at
+1080p Auto, 448×112 at 4K Auto. That second one is **derived, not measured**: two attempts to
+drive the camera to its clamp on a scenario fixture scrolled nothing, so the clamp itself has
+not been read back. Moving it is the obvious next piece of work, and is what would make this
+free rather than merely cheap.
+
+**The setting is live now.** Nothing it changes is engine state, so the store puts it in force
+as it writes it and the next composited frame is already at the new scale. The "set it before
+you start a game" rule 20.2 argued for was a consequence of the rect, and the rect is gone.
+
+**It is not a play default.** `tagpu_opt.c`'s table no longer carries it; `tagpu_hud.on` arms
+it by hand. Whether Auto should be on for everyone is 20.2's open question, it is the owner's,
+and it is not one to answer on the strength of a feature that spent a day torn.

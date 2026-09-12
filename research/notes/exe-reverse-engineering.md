@@ -2292,8 +2292,10 @@ cannot be prologue-detoured without relocating the call.
 
 ### The viewport rect at game entry — what builds it, and why it will not patch [BINARY-VERIFIED 2026-09-11]
 
-Read for [GUI renderer](gui-renderer.html) §20 (HUD scale), which has to make the engine
-reserve a bigger HUD. `objdump -d -M intel` of the pristine Steam build, `0x498170..0x498240`.
+Read for [GUI renderer](gui-renderer.html) §20 (HUD scale), which tried to make the engine
+reserve a bigger HUD and found out it cannot be done this way — see the projection section
+below, and §20.5. The disassembly here is unaffected by that; nothing of ours writes this rect
+any more. `objdump -d -M intel` of the pristine Steam build, `0x498170..0x498240`.
 
 The rect is eight stores, and the first two are what the other six are built from:
 
@@ -2318,9 +2320,11 @@ in each axis would have been invisible in a screenshot and wrong in every clamp.
 `0x4981D9` carry their constants as `imm32` and would take any value. `0x498200`'s
 `sub ecx,0x21` is a **sign-extended `imm8`**, so the bottom inset caps at 127 — i.e.
 `32s + 1 ≤ 127`, `s ≤ 3.94`, against a 4K ceiling of `s = 4.5`. Widening it to
-`81 e9 imm32` needs three bytes the next instruction owns. So §20 writes all six fields from
-an observer instead, which has no encoding ceiling and leaves viewW/viewH ours as well, so
-nothing downstream can disagree with the rect it was derived from.
+`81 e9 imm32` needs three bytes the next instruction owns. §20 therefore wrote all six fields
+from an observer instead — and that turned out to be the wrong thing to want, because moving
+`L`/`T` moves only `0x498DA0`'s origin and not the projection (next section). **Nothing writes
+this rect today**; the observer is gone. The encoding facts are kept because they are the
+answer for anything that does want to move the rect.
 
 **`0x4288D0` — the background-picture loader, and the one call that is a clock.** stdcall,
 `ret 0x10`, prologue `83 ec 30 8b 44 24 38` (7 bytes, `sub esp,0x30` + `mov eax,[esp+0x38]`).
@@ -2330,7 +2334,39 @@ store of the rect, and **before the loader thread is created at `0x4982CA`**, so
 derivations and the SORT allocations see whatever the rect holds by then. An observer on
 `0x4288D0` that acts only when its return address is `0x498242` therefore runs exactly once
 per game entry, at exactly the point a rewritten rect has to land, without a stub of its own
-shape at an arbitrary address.
+shape at an arbitrary address. HUD scale used it for one day and no longer needs it; the site
+is recorded because "runs once, on the game thread, at game entry, before the loader thread"
+is a useful hook to have found and it cost a 42-site call scan to identify.
+
+### The world→screen projection is NOT derived from the viewport rect [MEASURED 2026-09-11]
+
+**The rect's `L`/`T` are the screen→world origin inside `0x498DA0` and nowhere else.** Every
+site that projects the other way carries `+0x80` / `+0x20` as **baked immediates**:
+
+```
+screenX = worldX − eyeX + 0x80
+screenY = worldZ − (altitude >> 1) − eyeY + 0x20
+```
+
+— the unit-under-pointer probe, band select, build placement, the feature blits at
+`(col+8)*16 / (row+2)*16`, the health bars. So a rect whose `L` is not `0x80` makes the two
+directions disagree, and everything that goes out through one and comes back through the other
+lands `(L − 0x80, T − 0x20)` away from where it was drawn.
+
+**Measured** by writing `L = 204`, `T = 51` at 1024×768 and reading the engine's own
+unit-under-pointer field `main+0x2CBA` at two pointer positions for one `ARMSTUMP` at world
+(6180,12140), eye (5796,11731):
+
+| pointer | `+0x2CBA` |
+|---|---|
+| (512,384) = `world − eye + 0x80` | `0xFFFF0002` — the unit |
+| (588,403) = `world − eye + L` | `0xFFFF0000` — nothing |
+
+The engine answers about `0x80`, not about `L`. `tagpu_vpwide.c` has always relied on this
+without saying so: it widens `L` for the clamp while holding its own `VP_TRUE_L` at `0x80` and
+re-doing `0x498DA0`'s arithmetic with the true origin, which is exactly what keeps a widened
+rect from tearing the picture. Anything that wants to move the world's screen origin has to
+patch the immediates — every one of them — not the rect.
 
 ### The resource bar tiles in a loop, and the readouts are not screen-relative [BINARY-VERIFIED 2026-09-11]
 

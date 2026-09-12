@@ -1585,34 +1585,42 @@ tools/tacli scenario load <i> <scn> --mapping 0    # THE fixture: an unmapped ga
 
 ### The HUD is scaled inside the Screen Size (G18f, `tagpu_hud.on`)
 
-Since G18f the in-game HUD is magnified **within** the player's chosen Screen Size and the
-world viewport is shrunk by exactly as much — the panel `128s` wide, the two bars `32s` tall.
-It is **on by default at Auto**, which is `H/480`: exactly 1.0 at 640×480, **2.25 at 1080p**
-and **4.5 at 4K**. So any measurement taken in game above 640×480 with the play defaults is
-taken against a scaled HUD unless you say otherwise.
+Since G18f the in-game HUD is magnified **within** the player's chosen Screen Size — the panel
+`128s` wide, the two bars `32s` tall — and simply **covers** the outer part of a world the
+engine goes on drawing at full size. Auto is `H/480`: exactly 1.0 at 640×480, **2.25 at 1080p**
+and **4.5 at 4K**.
+
+**It is NOT a play default** — it is armed by hand. It was one for a day, and in that day it
+wrote the engine's viewport rect and tore the world in two (what you clicked was
+`((s−1)·128, (s−1)·32)` from what you saw); [GUI renderer](../../../research/notes/gui-renderer.md)
+§20.5 has the measurement. It writes no engine memory now.
 
 ```bash
 tools/tacli arm <i> hud.off                 # stock HUD; the A/B, and what a 1x measurement needs
-tools/tacli arm <i> 'hud.on=scale=auto'     # the default: the panel fills the screen height
+tools/tacli arm <i> 'hud.on=scale=auto'     # Auto: the panel fills the screen height
 tools/tacli arm <i> 'hud.on=scale=150'      # a percentage of stock; clamped to this screen's ceiling
-tools/tacli log <i> -g '^hud:'              # ARMED at attach; one `hud: scale …` line per game entry
+tools/tacli log <i> -g '^hud:'              # one line at attach: ARMED/off, and the stored percentage
 tools/tacli log <i> -g 'k=[0-9.]* s='       # the gui heartbeat carries s= beside k=
 ```
 
-- **It is read at GAME ENTRY, not live.** The rect is built once inside `0x497F40`, before the
-  loader thread, and the SORT buffers are sized from what it produces — so arming it on a
-  running game does nothing until the next entry. `scenario load --restart`, not `arm`.
-- **At stock scale nothing is written and no `hud: scale` line appears.** An absent line is the
-  proof the pass was inert, not the proof it failed to arm — the `hud: ARMED` line at attach is
-  the arm. And **640×480 is always stock**, because Auto's ceiling is 1.0 there, whatever
-  `scale=` says.
-- **The `hud: scale` line is the whole geometry**: percentage, ceiling, panel width, bar height
-  and the viewport rect. Cross-check it against the engine with
+- **The lever file is read once, at attach.** The in-game row puts a change in force
+  immediately (the store writes the live word as well as the file), but `tacli arm` only writes
+  the file, so **arming it on a running instance does nothing until you relaunch**.
+- **640×480 is always stock**, because Auto's ceiling is 1.0 there, whatever `scale=` says.
+- **The engine's viewport rect must NOT move.** It is the tell for the withdrawn design, so it
+  is worth a peek in anything that touches this:
   `tacli peek <i> '*0x511DE8+0x37E27:4' '*0x511DE8+0x37E2B:4' '*0x511DE8+0x37E37:4' '*0x511DE8+0x37E3B:4'`
-  (L, T, viewW, viewH) — and `vpwide: true viewport rect verified (…)` in the log should name
-  the same origin, because both take it from the same resolver.
-- **`tacli click --device` and `ui click --device` do NOT know about the map.** They convert
-  with `k` alone, so at `s > 1` they aim where the gadget would be *unmagnified*. Multiply the
+  (L, T, viewW, viewH) must read `128`, `32`, `W−128`, `H−64` at every scale (1024×768: `128 32 896 704`, measured).
+- **The one check that catches a torn world**, and the one the first build failed: `tacli
+  roster` gives a unit's `screen`, and parking the pointer there must make `main+0x2CBA` name
+  that unit. `tacli keys <i> pmove:X,Y` then `tacli peek <i> '*0x511DE8+0x2CBA:4'` — `0xFFFF` in
+  the top half and the engine index in the bottom, `0xFFFF0000` for nothing. If the roster's
+  position and the drawn position are not the same point, stop.
+- **`tacli click --device` and `ui click --device` were measured wrong at `s > 1`** before the
+  rebuild: they aimed where the gadget would be *unmagnified*. The engine-side conversion
+  (`mouse_client_to_game`) does apply the map — a raw `keys <i> dmove:X,Y` in device pixels is
+  correct, measured — so what is left is whichever of the two computes its own screen point,
+  and that has **not** been re-checked since. Until it is, multiply the
   engine coordinate by `s` yourself: `ui <i> show <gadget>` gives the engine rect centre, and
   the screen point is that times `s` in the panel and the top bar, and
   `H − (H − y)·s` for y in the bottom bar. `uiwalk.py`'s per-stop hit check has the same gap,
@@ -1623,7 +1631,12 @@ tools/tacli log <i> -g 'k=[0-9.]* s='       # the gui heartbeat carries s= besid
   `tacli keys <i> dmove:X,Y` then peek `*0x511DE8+0x2C76:4` / `+0x2C7A:4` (the engine's point)
   and `+0x2CC6:1` (bit0 minimap, bit1 world). At `s = 2.25`, screen (140,140) must read
   engine (62,62) flags 5, and screen (960,600) must read (960,600) flags 6 — the world region
-  is the identity at every scale.
+  is the identity at every scale. **`dmove:` is device pixels; `pmove:` is the engine's own
+  coordinates** and does not go through the map at all, so `pmove` over a magnified HUD region
+  aims at the 1× grid, which is a different point from the one under your finger.
+- **Injected band-select does not work**, with the pass on *or* off:
+  `down:lbutton` / `mouse:x,y` / `up:lbutton` selects nothing. Measured 2026-09-11 — it is a
+  `tacli` question, not a HUD one, so do not use it as a HUD A/B.
 - **A cross-build pixel A/B must state which band it is diffing.** At `s = 1` the panel, top
   bar and bottom bar are byte-identical by construction (nothing is written, the shader takes
   the identity path); the world is relaunch noise, and on `selbox-facings` that floor is

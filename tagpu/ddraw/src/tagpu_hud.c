@@ -1,7 +1,8 @@
-/* tagpu_hud.c — HUD scale. See tagpu_hud.h for what it is and what makes the
-   one word that crosses threads safe; research/notes/gui-renderer.md §20 for
-   why the space is reserved rather than overlaid and why the art is magnified
-   rather than re-laid-out. */
+/* tagpu_hud.c — HUD scale. See tagpu_hud.h for what it is, why it writes no
+   engine memory at all, and what makes the one word that crosses threads safe;
+   research/notes/gui-renderer.md §20 for why the art is magnified rather than
+   re-laid-out and §20.5 for the origin tear that took the viewport rect out of
+   this file. */
 
 #include <windows.h>
 #include <stdio.h>
@@ -10,43 +11,26 @@
 #include "dd.h"
 #include "tagpu_hud.h"
 #include "tagpu_opt.h"
-#include "tagpu_detour.h"
 
-#define TA_MAINPP     0x00511DE8u
-
-/* the engine's own screen dimensions, written at game entry from the Screen
-   Size row's fields (+0x37F1B/+0x37F1F) and never by us */
-#define OFF_SCREEN_W  0x37E1F
-#define OFF_SCREEN_H  0x37E23
-/* the six ints of the viewport rect, in the order 0x497F40 writes them */
-#define OFF_VP_L      0x37E27
-#define OFF_VP_T      0x37E2B
-#define OFF_VP_R      0x37E2F
-#define OFF_VP_B      0x37E33
-#define OFF_VIEW_W    0x37E37
-#define OFF_VIEW_H    0x37E3B
-
-/* The panel's logical width and the bars' logical height at stock scale: the
-   two immediates at 0x4981C9 / 0x4981D9, and the 128x480 block §3.4a measured.
-   PANEL_ROWS is what makes H/480 the ceiling. */
+/* The panel's logical width and the bars' logical height: the two immediates
+   at 0x4981C9 / 0x4981D9, and the 128x480 block §3.4a measured. PANEL_ROWS is
+   what makes H/480 the ceiling. */
 #define HUD_PANEL_W   128
 #define HUD_BAR_H     32
 #define HUD_PANEL_ROWS 480
 /* The world keeps at least this much width whatever the ceiling says. H/480 is
    the ceiling for every aspect a player can choose, but a tall, narrow surface
-   would drive 128s past the screen and hand the engine a negative viewport —
-   a bound, so that cannot be a thing that happens rather than a thing that is
-   unlikely. */
+   would drive 128s past the screen and leave no world at all — a bound, so
+   that cannot be a thing that happens rather than a thing that is unlikely. */
 #define HUD_MIN_VIEW_W 256
 
 #define LEVER "tagpu_hud.on"
 #define LEVER_OFF "tagpu_hud.off"
 
 /* THE ONE WORD THAT CROSSES THREADS (tagpu_hud.h). -1 = the pass is off, 0 =
-   Auto, else a percentage. Written only by the game-entry observer, on the
-   game thread; read by the render thread and the message thread. Every reader
-   re-resolves it against the screen IT sees, so either value a racing read can
-   return is a value that fits that screen. */
+   Auto, else a percentage. Every reader re-resolves it against the screen IT
+   sees, so either value a racing read can return is a value that fits that
+   screen. */
 static volatile LONG s_pctLive = -1;
 
 static void hlog(const char* s)
@@ -54,8 +38,6 @@ static void hlog(const char* s)
     FILE* f = fopen("tagpu.log", "a");
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
-
-static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
 
 static int dims_ok(int w, int h)
 {
@@ -108,12 +90,19 @@ int tagpu_hud_stored_pct(void)
 /* BOTH FILES, always. tagpu_opt.c's precedence is that an `.on` wins and an
    `.off` only defeats a pass that was on BY DEFAULT, so driving one file fails
    in one direction or the other depending on how the install was armed — the
-   bug tagpu_menu.c's write_levers() documents at length. */
+   bug tagpu_menu.c's write_levers() documents at length.
+
+   The live word is set from the SAME call, so the row takes effect on the next
+   frame and the file is only how it survives a restart. Nothing here reaches
+   engine memory, so there is no game-entry ordering to respect: what the first
+   build needed the observer for was the viewport rect, and there is no longer
+   a viewport rect to write. */
 void tagpu_hud_store_pct(int pct)
 {
     HANDLE h;
     char body[64];
     DWORD wrote = 0;
+    InterlockedExchange(&s_pctLive, pct < 0 ? -1 : pct);
     if (pct < 0) {
         DeleteFileA(LEVER);
         h = CreateFileA(LEVER_OFF, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
@@ -147,6 +136,11 @@ int tagpu_hud_live(int* panelW, int* barH, int* q8)
     return 1;
 }
 
+/* Screen -> the engine's own 1x grid. The engine's hit tests are all written
+   against the 128 / 32 constants and its world->screen projection bakes
+   +0x80/+0x20, so the ONLY thing that may move is a point inside a magnified
+   HUD region: outside one this is the identity, which is what keeps the world
+   half of every click answering about the place it is drawn. */
 void tagpu_hud_to_engine(int* x, int* y)
 {
     int pw, bh, q, H;
@@ -178,93 +172,15 @@ void tagpu_hud_to_screen(int* x, int* y)
     }
 }
 
-void tagpu_hud_true_inset(const char* ta, int* L, int* T, int* rInset, int* bInset)
-{
-    int pw = HUD_PANEL_W, bh = HUD_BAR_H, w, h;
-    if (ptr_ok(ta)) {
-        w = *(const int*)(ta + OFF_SCREEN_W);
-        h = *(const int*)(ta + OFF_SCREEN_H);
-        tagpu_hud_geom(w, h, (int)s_pctLive, NULL, &pw, &bh);
-    }
-    if (L)      *L      = pw;
-    if (T)      *T      = bh;
-    if (rInset) *rInset = 1;
-    if (bInset) *bInset = bh + 1;
-}
-
-/* ---- the game-entry observer -------------------------------------------- */
-
-/* WHY HERE AND NOT ON THE IMMEDIATES. 0x4981C9 and 0x4981D9 carry the panel
-   and bar constants as imm32 and would patch, but the bottom inset at 0x498200
-   is `sub ecx,0x21` — a SIGN-EXTENDED imm8, so it caps at 127 and with it the
-   scale at 3.94. The 4K ceiling is 4.5. Widening it to `81 e9 imm32` needs
-   three bytes the next instruction owns. So the engine computes its rect as it
-   always did and we write all six fields over it, which has no encoding
-   ceiling and leaves viewW/viewH ours too, so nothing downstream can disagree
-   with the rect it was derived from.
-
-   WHY THIS CALL. 0x49823D is the first call after the last store of the rect
-   (0x498237), and the loader thread is not created until 0x4982CA — so LoadMap
-   and the SORT allocations, which size themselves from these fields, see ours.
-   That ordering is the whole reason the setting is game-entry-time. The
-   observer watches 0x4288D0 — a background-picture loader with 42 call sites —
-   and acts only when its return address is this one, which identifies the site
-   exactly rather than nearly. */
-#define VA_LOADBG   0x004288D0u
-#define SITE_RET    0x00498242u
-static const unsigned char LOADBG_STOLEN[7] = { 0x83,0xEC,0x30, 0x8B,0x44,0x24,0x38 };
-
-static void apply_rect(void)
-{
-    char* ta = *(char**)TA_MAINPP;
-    char b[220];
-    int W, H, q8 = 256, pw, bh, pct;
-
-    pct = tagpu_hud_stored_pct();
-    InterlockedExchange(&s_pctLive, pct);   /* latched: this game keeps this scale */
-    if (!ptr_ok(ta)) return;
-    W = *(int*)(ta + OFF_SCREEN_W);
-    H = *(int*)(ta + OFF_SCREEN_H);
-    tagpu_hud_geom(W, H, pct, &q8, &pw, &bh);
-    /* AT STOCK NOT ONE BYTE IS WRITTEN. The engine's own six stores stand, so
-       the s == 1 frame is the engine's frame and the parity md5 cannot move
-       because of anything in this file. */
-    if (q8 <= 256) return;
-    *(int*)(ta + OFF_VP_L)   = pw;
-    *(int*)(ta + OFF_VP_T)   = bh;
-    *(int*)(ta + OFF_VP_R)   = W - 1;
-    *(int*)(ta + OFF_VP_B)   = H - bh - 1;
-    *(int*)(ta + OFF_VIEW_W) = W - pw;
-    *(int*)(ta + OFF_VIEW_H) = H - 2 * bh;
-    _snprintf(b, sizeof b,
-              "hud: scale %d%% (%s, ceiling %d%%) on %dx%d - panel %d, bars %d, "
-              "viewport {%d,%d,%d,%d} %dx%d",
-              q8 * 100 / 256, pct == 0 ? "Auto" : "chosen",
-              tagpu_hud_ceiling_pct(W, H), W, H, pw, bh,
-              pw, bh, W - 1, H - bh - 1, W - pw, H - 2 * bh);
-    b[sizeof b - 1] = 0;
-    hlog(b);
-}
-
-static int __cdecl before_loadbg(void* entry_esp)
-{
-    if (((void**)entry_esp)[0] == (void*)SITE_RET) apply_rect();
-    return 0;                                   /* nothing wanted on the way out */
-}
-
 void tagpu_hud_init(void)
 {
-    int armed =
-        tagpu_detour_bytes_ok(VA_LOADBG, LOADBG_STOLEN, sizeof LOADBG_STOLEN) &&
-        tagpu_detour_observe(VA_LOADBG, LOADBG_STOLEN, sizeof LOADBG_STOLEN,
-                             before_loadbg, NULL);
+    int pct = tagpu_hud_stored_pct();
     char b[160];
+    InterlockedExchange(&s_pctLive, pct);
     _snprintf(b, sizeof b,
-              "hud: %s - the viewport rect at game entry (observer on 0x4288D0, site 0x49823D); "
+              "hud: %s - the HUD covers the world, nothing is written to the engine; "
               "stored %d",
-              armed ? "ARMED" : "NOT armed - engine bytes differ at 0x4288D0",
-              tagpu_hud_stored_pct());
+              pct < 0 ? "off" : "ARMED", pct);
     b[sizeof b - 1] = 0;
     hlog(b);
-    if (!armed) InterlockedExchange(&s_pctLive, -1);
 }

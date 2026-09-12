@@ -1878,8 +1878,8 @@ static void move_to_monitor(int i)
    `main+0x37F1B/+0x37F1F` is the mode the Screen Size slider writes
    (`0x45BBF0`, and `0x45E3AD` restores 640x480 into it), which is the number
    the player just chose one row up, and it is also the number game entry
-   copies into the engine's screen dimensions and builds the viewport rect
-   from -- so it is the screen HUD scale's ceiling has to be taken against.
+   copies into the engine's screen dimensions -- so it is the screen HUD
+   scale's ceiling has to be taken against.
    The live surface is the fallback for the case where the field has not been
    written. */
 static void sel_mode(int* w, int* h)
@@ -1966,12 +1966,11 @@ BOOL tagpu_menu_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESU
                               SWP_NOZORDER | SWP_NOACTIVATE);
         break;
     case VD_MON:   move_to_monitor(s_vstage[VD_MON]);              break;
-    /* HUD scale touches no window: it is consumed by tagpu_hud's observer at
-       the NEXT game entry, because the viewport rect it writes is built once
-       inside 0x497F40 and the SORT buffers are allocated from the dimensions
-       that rect produces. Writing the store on the window thread anyway keeps
-       every row of this screen on one thread, which is the contract the
-       comment above apply_display states. */
+    /* HUD scale touches no window, and since 20.5 it touches no engine memory
+       either -- the store puts it in force as it writes it, so the next
+       composited frame is already at the new scale. Writing it on the window
+       thread keeps every row of this screen on one thread, which is the
+       contract the comment above apply_display states. */
     case VD_SCALE: tagpu_hud_store_pct(SCALE_VAL[s_vstage[VD_SCALE]]); break;
     case VD_FPS:
         /* fpsl_init reads g_config.maxfps and computes tick_length, so the cap
