@@ -2289,6 +2289,65 @@ cannot be prologue-detoured without relocating the call.
   known to be complete, which is why [GUI renderer](gui-renderer.html) §20 magnifies a region
   rather than re-laying the HUD out.
 
+### The viewport rect at game entry — what builds it, and why it will not patch [BINARY-VERIFIED 2026-09-11]
+
+Read for [GUI renderer](gui-renderer.html) §20 (HUD scale), which has to make the engine
+reserve a bigger HUD. `objdump -d -M intel` of the pristine Steam build, `0x498170..0x498240`.
+
+The rect is eight stores, and the first two are what the other six are built from:
+
+| VA | instruction | field |
+|---|---|---|
+| `0x4981A7` | `mov ecx,[eax+0x37F1B]` → `0x4981AD` `mov [eax+0x37E1F],ecx` | **screen W**, copied from the Screen Size row's own field |
+| `0x4981B8` | `mov edx,[eax+0x37F1F]` → `0x4981BE` `mov [eax+0x37E23],edx` | **screen H**, likewise |
+| `0x4981C9` | `c7 80 27 7e 03 00 80 00 00 00` — `mov [eax+0x37E27],0x80` | left = **128**, `imm32` |
+| `0x4981D9` | `c7 81 2b 7e 03 00 20 00 00 00` — `mov [ecx+0x37E2B],0x20` | top = **32**, `imm32` |
+| `0x4981EE` | `dec edx` → `0x4981EF` `mov [eax+0x37E2F],edx` | right = **W − 1** |
+| `0x498200` | `83 e9 21` — `sub ecx,0x21` → `0x498203` store | bottom = **H − 33**, **`imm8`** |
+| `0x49821A` | `sub edx,esi` ; `0x49821C` **`inc edx`** ; `0x49821D` store | viewW = **right − left + 1** |
+| `0x498234` | `sub ecx,ebx` ; `0x498236` **`inc ecx`** ; `0x498237` store | viewH = **bottom − top + 1** |
+
+**The `inc` matters.** viewW and viewH are inclusive spans, `R−L+1` and `B−T+1`, not `R−L`:
+at 640×480 they are 512 and 416, not 511 and 415, which is what
+[resolution](resolution.html) §3 and `tagpu_vpwide.c`'s `true_rect_of` have always agreed on.
+Recorded because the HUD-scale handoff wrote them without the `+1` and a rect one pixel short
+in each axis would have been invisible in a screenshot and wrong in every clamp.
+
+**The three immediates do not all patch, and the bottom one is why.** `0x4981C9` and
+`0x4981D9` carry their constants as `imm32` and would take any value. `0x498200`'s
+`sub ecx,0x21` is a **sign-extended `imm8`**, so the bottom inset caps at 127 — i.e.
+`32s + 1 ≤ 127`, `s ≤ 3.94`, against a 4K ceiling of `s = 4.5`. Widening it to
+`81 e9 imm32` needs three bytes the next instruction owns. So §20 writes all six fields from
+an observer instead, which has no encoding ceiling and leaves viewW/viewH ours as well, so
+nothing downstream can disagree with the rect it was derived from.
+
+**`0x4288D0` — the background-picture loader, and the one call that is a clock.** stdcall,
+`ret 0x10`, prologue `83 ec 30 8b 44 24 38` (7 bytes, `sub esp,0x30` + `mov eax,[esp+0x38]`).
+**42 call sites** in the image (full `E8` rel32 scan). The one at **`0x49823D`**, returning to
+**`0x498242`**, is `0x4288D0("loadgame2bg", 0, 0, 0)` — the first instruction after the last
+store of the rect, and **before the loader thread is created at `0x4982CA`**, so LoadMap's
+derivations and the SORT allocations see whatever the rect holds by then. An observer on
+`0x4288D0` that acts only when its return address is `0x498242` therefore runs exactly once
+per game entry, at exactly the point a rewritten rect has to land, without a stub of its own
+shape at an arbitrary address.
+
+### The resource bar tiles in a loop, and the readouts are not screen-relative [BINARY-VERIFIED 2026-09-11]
+
+[resolution](resolution.html) §3.4a measured the top and bottom bars to be **left-anchored,
+repeating, with nothing anchored right**, and recorded that `0x467D70` has no tiling loop —
+three straight-line blits and no more. The loop is in `DrawGameScreen`'s resource block
+instead: at **`0x469093`** the running x (`edi`, advanced by each frame's own width read at
+`0x469090`, `mov dx,[ebx]`) is compared against `[ecx+0x37E1F]` — the **screen width** — and
+`0x46909D` jumps back to `0x469055` while it is short. That is the measurement's mechanism,
+found in the binary rather than inferred from pixels.
+
+The readouts themselves are **not** placed from the screen width: `DrawTextCustomFont
+0x4C14F0` is called at `0x4691F3` and `0x469212` with x and y out of `[esi+0x62]`/`[esi+0x66]`
+and `[esi+0xD2]`/`[esi+0xD6]`, and again at `0x46926B` and `0x4692C0`. So the metal and
+energy blocks sit at layout-struct offsets near the left, which is what lets §20 magnify the
+bar about its top-left without pushing them off the screen — confirmed live at `s = 2.25` and
+`s = 4.5`.
+
 ### Who reads the viewport dimensions `main+0x37E37`/`+0x37E3B` [MEASURED 2026-09-11]
 
 A full-image displacement scan, for §20's question of whether a changed viewport rect can reach

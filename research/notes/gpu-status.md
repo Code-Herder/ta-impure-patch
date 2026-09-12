@@ -1585,6 +1585,50 @@ panel hangs over the world, so clicking a row costs one frame of the panel being
 The row's own state survives it (the model is ours; the levers are read only on the player's
 open), but the rebuild is visible if you look for it.
 
+### 2.13 HUD scale (`tagpu_hud.c`, on by default at Auto, `tagpu_hud.off`) — Phase F G18f
+
+The in-game HUD magnified inside the player's own Screen Size, with the world viewport shrunk
+by exactly as much — so Screen Size and HUD size are two dials rather than two names for one
+number. Design and every decision behind it: [GUI renderer](gui-renderer.html) §20; the
+geometry it rests on: [resolution](resolution.html) §3.4a; the engine reading:
+[engine map](exe-reverse-engineering.html) *The viewport rect at game entry*.
+
+| site | what we do there | thread |
+|---|---|---|
+| `0x4288D0` (observer), acting only when the return address is **`0x498242`** | write all six ints of the viewport rect over the ones `0x497F40` just built: left `128s`, top `32s`, right `W−1`, bottom `H−32s−1`, viewW `W−128s`, viewH `H−64s`. **At stock scale it writes nothing** | game |
+| `LAY_FS` (`tagpu_gui_surf.c`) | `uHud` — the two reserved integers, `1/s` and `s`. Three regions sample the twin at `s` texels per device pixel; the ramp widens by `s` with them. Inert at `s = 1` | render |
+| `mouse.c`, `winapi_hooks.c` ×4, `wndproc.c` ×3 | `tagpu_hud_to_engine()` at the end of every client → game conversion: inside a HUD region the engine is handed the point on its own 1× HUD grid | message |
+| `sharp_cursor`, `sharp_minimap` | `tagpu_hud_to_screen()` — the engine's own cursor position (the fallback path only) and the minimap's box go the other way, so the sharp layer lands on the magnified art | render |
+| `tagpu_vpwide.c` | `tagpu_hud_true_inset()` replaces the four hardcoded constants `0x80 / 0x20 / 1 / 33`, so the origin every zoom reader projects about is the origin the rect was written with | game |
+| `tagpu_menu.c` | the "UI scale" row, `trigger_rect()` and `panel_rect()` | game / window |
+
+**One resolver, so the two halves cannot disagree.** `tagpu_hud_geom(W, H, pct, …)` is a pure
+function that clamps to the screen's own ceiling and yields `s`, the panel width and the bar
+height. The observer and every consumer call it; neither owns the answer. The ceiling is
+`H/480` — [resolution](resolution.html) §3.4a measured the panel to be a fixed 128×480 block
+that does not stretch — with a second bound that keeps at least 256 px of world width, so a
+tall, narrow surface cannot drive `128s` past the screen and hand the engine a negative
+viewport.
+
+**Fields we write.** The six ints of the viewport rect at `main+0x37E27..0x37E3B`, once per
+game entry, and only when the resolved scale is past stock. Nothing else, and nothing
+sim-side: every attributed reader of viewW/viewH is view-side ([engine
+map](exe-reverse-engineering.html), *Who reads the viewport dimensions*), and TA broadcasts
+each player's own resolution and lets one game hold several. Neither is a proof; §20.3 says so.
+
+**Why a stale scale is safe.** One word crosses threads — the percentage latched at game entry
+— and every consumer re-resolves it against the screen *it* sees, so either value a racing
+32-bit read can return is one that fits that screen. The shell needs no signal of its own:
+its surface is atom-locked at 640×480 whatever Screen Size says, and 640×480's ceiling is
+exactly 1.0.
+
+**Files.** `tagpu_hud.on` (`scale=auto` / `scale=<percent>`) and `tagpu_hud.off`, written as a
+pair for the reason §2.8 gives.
+
+**Known cost.** The HUD is 1× art magnified: bigger, not sharper. And the setting is
+game-entry-time, because the rect is built once inside `0x497F40` and the SORT buffers are
+sized from what it produces.
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out

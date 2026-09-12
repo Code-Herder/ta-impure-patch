@@ -2620,3 +2620,121 @@ holds for `k = 1`, and for the same reason: it is what makes the rest of the cla
   the writer uses some other base. `main+0x14243/47/4B/4F`, which §3 lists alongside them, have
   **no references at all**. Unresolved; it does not change 20.2's "when", because the rect and
   the SORT buffers settle that on their own.
+
+### 20.4 Built  [MEASURED 2026-09-11]
+
+`tagpu_hud.c` / `.h`, one observer and one uniform. Every decision in 20.2 survived contact;
+nothing here changes them.
+
+**The one number.** Both halves of 20.2 — the space the engine reserves and the region the
+composite magnifies — come out of `tagpu_hud_geom()`, a pure function of the screen
+dimensions and one percentage, which clamps to that screen's own ceiling. Neither half owns
+the answer, so they cannot disagree about where the HUD ends and the world begins.
+`tagpu_vpwide.c`'s four hardcoded constants (`VP_TRUE_L 0x80`, `VP_TRUE_T 0x20`,
+`VP_B_INSET 33`) are gone with it: it asks the same function, so the origin every zoom reader
+projects about is the origin the rect was written with.
+
+**The reserve.** An observer on the background loader `0x4288D0`, acting only on the call at
+`0x49823D` — identified by its return address `0x498242`, which is exactly the site and not
+nearly it. The three immediates would not carry it: `sub ecx,0x21` is a sign-extended `imm8`
+and caps the scale at 3.94 against a 4K ceiling of 4.5 ([exe map](exe-reverse-engineering.html),
+"The viewport rect at game entry"). **At stock scale the observer writes nothing at all**, so
+the `s = 1` frame is the engine's own bytes.
+
+**The magnify.** Three regions in `LAY_FS`, mapped dest → source: the panel over its full
+column height about its top-left, the top bar about its top-left, the bottom bar about its
+**bottom**-left (which is where the engine anchors it, `screenH − 0x20`). The world region is
+the identity and has no coverage in the twin anyway — the viewport's key fill erased it, and
+that fill covers exactly the rect the observer wrote. The sharp-bilinear ramp is widened by
+`s` inside a HUD region, because it is "one device pixel" and one device pixel is `s` source
+texels fewer there.
+
+**The pointer** is divided by `s` inside a HUD region at the eight sites that end the fork's
+client → game conversion, through one helper. The two `vhack` branches that take their point
+from `fake_GetCursorPos` are flagged `mapped` and skipped, because that function has already
+answered in game space.
+
+**Why a stale scale is safe.** Exactly one word crosses threads — the percentage in force,
+latched at game entry — and every consumer re-resolves it against the screen *it* is looking
+at. A naturally aligned 32-bit store gives either the old value or the new one, and both are
+valid, because `tagpu_hud_geom` clamps to the live screen's ceiling. **The shell needs no
+signal of its own**: its surface is atom-locked at 640×480 whatever the Screen Size row says,
+and 640×480's ceiling is exactly 1.0, so the whole module is the identity there.
+
+#### The gate, and what was measured
+
+**`s = 1` is bit-identical, and that is a cross-build measurement** — the same fixture
+(`selbox-facings`, 1920×1080, sim paused at a fixed tick, pointer parked) shot with this DLL
+and with one built from the commit before it:
+
+| | panel `x < 128` | top bar | bottom bar | world |
+|---|---|---|---|---|
+| this build vs the previous one | **0** | **0** | **0** | 2620 |
+| this build vs **itself**, relaunched | **0** | **0** | **0** | 3814 |
+
+The world's 2620 differing pixels are **below the same-DLL noise floor of 3814** — the
+fixture is not as static as hoped across relaunches — so the only claim the numbers support
+is the one that matters: every band the feature touches is byte-identical. At 640×480 with
+Auto the log carries **no `hud: scale` line at all**, which is the same statement from the
+other side: nothing was written.
+
+**The rect, at both ends of the ladder.** 1920×1080 Auto → `scale 225% (ceiling 225%) …
+panel 288, bars 72, viewport {288,72,1919,1007} 1632x936`, and `vpwide: true viewport rect
+verified (288,72 1632x936)` — the two modules agreeing by construction. 3840×2160 Auto →
+`450% … panel 576, bars 144, viewport {576,144,3839,2015} 3264x1872`: **15.0 % panel and
+6.375× the 1997 map across**, which is 20.1's predicted figure to three decimals.
+
+**The pointer, by region**, at `s = 2.25` — a device-space move, then the engine's own
+`main+0x2C76`/`+0x2C7A` and its region flags `+0x2CC6` read back:
+
+| screen | engine | flags |
+|---|---|---|
+| (140,140) magnified minimap | (62,62) | `5` = minimap + either |
+| (960,600) world | (960,600) — identity | `6` = world + either |
+| (400,40) top bar | (177,17) | `0` |
+| (960,1050) bottom bar | (426,**1067**) | `0` |
+
+The bottom bar's y is `H − (H − y)/s`, which is the bottom anchoring showing up in the
+arithmetic. And the hit tests follow: a **device** click at the magnified position of `PREFS`
+(the engine reports its rect centre at (61,248); (138,558) on screen) opened PREFS.
+
+**The render-options trigger had to move, and it is the one thing 20.2 did not anticipate.**
+The sprocket is drawn into the top bar and anchored to `g_ddraw.width`, so at `s = 2.25` it
+landed past the last source column the bar band samples and simply was not there. It is now
+placed against the **bar's own** width, `W/s`, and comes out `s` times bigger at the screen's
+right edge; the drop-down below it hangs in the world region, which the composite leaves
+alone, so it is placed in screen pixels with only its top edge following the bar's height.
+Both still hang off one margin measured on screen, so their right edges land on one line at
+every `s`. Each is hit-tested in exactly the space it was placed in, which is the same
+division and the same nothing that `tagpu_hud_to_engine` applies.
+
+**The row.** "UI scale" is now `Auto|100%|150%|200%|300%|400%`, live in window *and*
+fullscreen (the greying rule is gone), and the window multiplier with `apply_scale()` is
+deleted. The store is the lever file `tagpu_hud.on` (`scale=auto` / `scale=<percent>`), on
+the defaults table at `scale=auto`, read at game entry. Stages past a screen's ceiling are
+**skipped as the row cycles** rather than greyed — `VA_SETGRAYED` is per gadget, not per
+stage, so greying would take the honourable stages down with the rest. Measured: at a
+640×480 Screen Size the row alternates Auto/100% and the plate never shows a number the game
+will not honour; at 3840×2160 it walks all six and the store follows.
+
+**Zoom composes.** At `s = 2.25` and zoom 0.5 the engine's unzoomed point for screen
+(960,600) reads (816,660) — exactly the transform about the **scaled** viewport centre
+(1104,540), because `vpwide` takes that centre from `tagpu_hud` rather than from `0x80/0x20`.
+
+#### Still open
+
+- **The loading screen is unmeasured.** The surface is already the game's mode when it is
+  drawn (sampled: 640×480 through the shell, 1920×1080 from the loading screen on), so the
+  map is live there — but `glshot` returns the *previous* frame's GL buffer during a load, so
+  90 samples across two entries caught no loading frame at all. Whether its edges are
+  magnified for those few seconds is not known. Cosmetic either way.
+- **`tacli`'s own device-space inverse does not know about HUD scale.** `tacli click --device`
+  and `ui click --device` convert with `k` alone, so at `s > 1` they aim at the unmagnified
+  place. Every `--device` measurement above was aimed by hand. `uiwalk.py`'s per-stop hit
+  check inherits the same gap.
+- **The HUD is bigger, not sharper** — 20.3's first bullet, unchanged. §18's string op still
+  stamps into the twin.
+- **`nocursor` is wrong at `s > 1`.** The harness A/B leaves the engine's own cursor on
+  screen, and the shader discards our fragment at the engine's rect, which is where the
+  engine drew it — so the cursor shows at the unmagnified position while the pointer is
+  elsewhere. Ours (the default) is placed from the client point and is unaffected.
