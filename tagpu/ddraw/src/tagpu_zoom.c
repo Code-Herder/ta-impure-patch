@@ -426,7 +426,7 @@ static void apply_scroll_rate(char* ta)
 
    WHAT IS NOT COVERED, and it is the SCROLL TARGET `main+0x14327`/`+0x1432B`
    that draws the line. Every path that sets the eye and copies it into the
-   target afterwards (`0x41C574` SetCamera, `0x41CDB0`, the scroll `0x41D037`)
+   target afterwards (`0x41C574` SetCamera, the path whose clamp call is `0x41CDE1`, the scroll `0x41D037`)
    reaches the widened range through us. But three sites compute that target and
    clamp it INLINE against `[0, map - W]` without going through this function at
    all — `0x41C4C0` (the smooth SetCamera), `0x41C7F7` (the smooth centre-on) and

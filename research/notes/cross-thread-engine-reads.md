@@ -21,7 +21,7 @@ produced).*
 | **Fence** | `tagpu_reclaim`'s wrap of the level teardown `0x491B60`, the pass counters, and the gate at `tagpu_overlay.c:590` — covers the level **teardown**, not the next level's **load** (§2) |
 | **Audit** | the nine sites of the G13u sweep, each classified against the writer it reads (§5): one open hazard, one already catalogued, six under the fence with two named residuals |
 | **Open** | §7 |
-| **Design** | the plan this audit led to, kept in the wiki as authored HTML: [Frame packet exchange](frame-packet-exchange.html) — one publisher on the game thread, one wait-free four-slot exchange, four reviews folded in on 2026-09-11. **Landing 1 built 2026-09-12** (`tagpu_packet.c`, `tagpu_packet_pub.c`): the primitive, the header packet, the marker font as glyph bytes, the out-of-game packet and the build rule in census mode; the readers in §4 are still on engine memory until landings 2–4 |
+| **Design** | the plan this audit led to, kept in the wiki as authored HTML: [Frame packet exchange](frame-packet-exchange.html) — one publisher on the game thread, one wait-free four-slot exchange, four reviews folded in on 2026-09-11. **Landing 1 built 2026-09-12** (`tagpu_packet.c`, `tagpu_packet_pub.c`): the primitive, the header packet, the marker font as glyph bytes, the out-of-game packet and the build rule in census mode. **Landing 2 the same day** ([GPU status](gpu-status.html) §2.17): the view (the eye, the true viewport, the rect the engine can name, the palette, the gamma) reaches the render thread only through the packet, and every render-thread STORE into engine memory became a command the game thread applies at the top of the in-play draw — the eye row of §4 is the first to convert, and no row is written across threads any more. The readers in §4 that walk per-map arrays are still on engine memory until landings 3–4 |
 | **The loader thread** | the plan's engine review found it and the disassembly confirmed it on 2026-09-12: the level load runs on a thread created at `0x4982CA`, whose last act sets bit 1 of `main+0x38D75`; the in-play frame is installed only after that bit is seen, so the first publish after a load is ORDERED after the loader by the engine itself ([engine map](exe-reverse-engineering.html), "The in-play publish point"). That is what closes §5's open hazard once the unit array is read from the packet (landing 3) |
 
 ## 1. The two threads, and the one that is not
@@ -163,15 +163,22 @@ note's *per-map arrays* section.
 | `main+0x38D77` particle layer table; each layer's `{begin, end}`; each object's sub-vector | table at load; the vectors **grow mid-play**, freeing the old array (`0x4732E0`) | table per map; vectors Mode A | table yes, **vectors no** | `LAYER_CAP`, `ns ≤ 4096`, probes — filters only |
 | `main+0x142DB`/`+0x142DF`/`+0x142E3` minimap surfaces `{w, h, pitch, base}` | the minimap build at load; pixels repainted per draw | per map | yes | dims cross-checked across the three, pitches bounded — the shape to copy |
 | `main+0x37E37`/`+0x37E3B` view W/H | the engine's setter `0x49821D`/`0x498237`; **and the render thread**, through `tagpu_vpwide` | per resolution change | n/a | consumers fail closed on a zero; the lost-update case is detected and repaired (`vpwide: REPAIRED`) |
-| `main+0x1431F`, `+0x142F3`/`+0x142F7` eye, scroll target, followed object | the camera stepper, per draw; **and the render thread** for the first two | per draw | n/a | coordinates behind `clamp_pair()`; the followed-object *pointer* is released from the game thread for exactly this reason (G13u) |
+| `main+0x1431F`, `+0x142F3`/`+0x142F7` eye, scroll target, followed object | the camera stepper, per draw; **and, until 2026-09-12, the render thread** for the first two | per draw | n/a | coordinates behind `clamp_pair()`; the followed-object *pointer* is released from the game thread for exactly this reason (G13u). **Source after landing 2: the packet** for every render-thread reader of the eye, and the game thread's command apply for every write — the row no longer crosses a thread in either direction |
 
 **What landing 1 of the exchange changed here (2026-09-12).** None of the rows above moved: the
 header fields the packet carries (the eye, the scroll target, the true viewport, the option bits,
 the tick and the live speed, the counts) are not in this table because the audit's census was of
 per-map *arrays*, and the one render-thread read that did go — the marker font behind
 `[globals+0x204]`, dereferenced per glyph behind `IsBadReadPtr` — was not in it either, because
-no note had established the font's lifetime. It now travels as bytes copied at hook 8. The table
-gains a "source after" column when its first row converts (landing 3).
+no note had established the font's lifetime. It now travels as bytes copied at hook 8.
+
+**What landing 2 changed here (2026-09-12).** The eye row converted, in both directions: the
+render thread reads the eye (and the true viewport, the rect the engine can name, the palette and
+the gamma) from the packet and writes nothing into `main` — its camera writes are a command
+record the game thread applies at the top of the in-play draw ([GPU status](gpu-status.html)
+§2.17). §3's tearing arithmetic therefore no longer has a render-thread *store* to apply to; the
+remaining cross-thread loads are the per-map arrays below, landings 3–4. The follow release is
+now part of the same game-thread apply rather than a request consumed by terrown's fog tick.
 
 ## 5. The audit of the G13u sweep — nine sites, one open hazard
 

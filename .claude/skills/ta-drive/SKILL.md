@@ -1003,31 +1003,45 @@ instead: `tacli arm <i> classicpp.on=off`.
   `ui click MAINMENU` → `ui click CHOICE1` route is how you do it, and it is the only way to
   exercise the level generation at all.
 - **The frame packet exchange is on by default and `packet.off` is its A/B lever, not a feature
-  switch** (landing 1, 2026-09-12; [frame packet exchange](../../research/notes/frame-packet-exchange.html),
-  gpu-status §2.16). The game thread publishes a copy of the per-frame engine state after every
+  switch** (landings 1 and 2, 2026-09-12; [frame packet exchange](../../research/notes/frame-packet-exchange.html),
+  gpu-status §2.16, §2.17). The game thread publishes a copy of the per-frame engine state after every
   in-play `DrawGameScreen` (only when the renderer has taken the previous one) and the render
-  thread takes it once at the top of its frame; today the copy is the header plus the marker
-  text's font as glyph bytes, so **with `packet.off` every string through `tagpu_text_place` draws nothing — the group
-  digits, the `ShowRanges` labels and the FPS readout** (the render thread no longer holds an
-  engine font). Read `packet: ARMED 4 slots
-  x 8 MB reserved …` and `packet: publisher ARMED on DrawGameScreen 0x468CF0 … level-end packet by tagpu_reclaim's
+  thread takes it once at the top of its frame; since landing 2 the copy IS the view every pass
+  draws from (the true viewport, the eye, the rect the engine can name, the palette and gamma)
+  and the render thread's camera writes travel the other way as a command record the game
+  thread applies at the top of every in-play draw (the zoom level, the cursor anchor's eye
+  delta, `tagpu_eye.txt`, the follow release, the widened rect, `ScrollSpeed`). So **with
+  `packet.off` no world pass draws at all** (the engine's own terrain comes back once terrown's
+  skip expires, ~90 frames), no command is applied (the engine keeps its own camera range, rect
+  and scroll rate; `tagpu_eye.txt` and the wheel do nothing), and every string through
+  `tagpu_text_place` draws nothing — the group digits, the `ShowRanges` labels and the FPS
+  readout. Read `packet: ARMED 4 slots x 8 MB reserved … commands: 4 slots x 64 KB …` and
+  `packet: publisher ARMED on DrawGameScreen 0x468CF0 … level-end packet by tagpu_reclaim's
   teardown post hook …` at launch (`… by our own observer on the teardown 0x491B60` under
   `reclaim.off`), then
   every 300 frames `packet: pub=… skip=… overrun=… foreign=… acq=… taken=… gap=… grow=…
   commitfail=… trunc=… viol=… pviol=… crcbad=… nopkt=… | pub/s=… taken/s=… pubus p50=… p99=… |
-  seq=… tick=… tps=… speed=… paused=… in_game=… gen=… flags=… eye=… vp=… flips=… font=… fg=…
-  trunc=… used=… | draws=… inplay=… draws/s=… inplay/s=… foreign=… deep=…
-  fontcopies=… levelend=reclaim|own|none`. **`viol`, `pviol`,
-  `crcbad`, `foreign` and `commitfail` must stay 0**; `skip` is the FRESH gate doing its job (one
+  seq=… tick=… tps=… speed=… paused=… in_game=… gen=… flags=… eye=… vp=… addr=… z=… pal=… gamma=…
+  flips=… font=… fg=… trunc=… used=… | cmd: post=… take=… new=… overrun=… viol=… nocmd=… seq=…
+  ack=… unacked=(dx,dy) z=… live=… hold=… | draws=… inplay=… draws/s=… inplay/s=… foreign=…
+  deep=… fontcopies=… levelend=reclaim|own|none vpapply=… vpwh=…`. **`viol`, `pviol`,
+  `crcbad`, `foreign` and `commitfail` must stay 0, on both exchanges, and so must `vpwh`**
+  (in-play draws on which the viewport's W/H disagreed with the screen — the old race, now
+  impossible by construction); `skip` is the FRESH gate doing its job (one
   relaxed load per engine draw), `overrun` and `gap` are 0 in play and count only under `stress`
   or across a level end (the forced out-of-game packet); `grow`/`trunc` say a slot grew past its
-  first fill (once per slot under `stress`, never in play so far). `tps` is `GameTime` per wall
+  first fill (once per slot under `stress`, never in play so far). In the `cmd:` segment `post`
+  is one per render frame, `take` one per in-play draw, `new` the records that were actually new,
+  `overrun` the posts nobody took (every one at the shell, a handful in play — not a fault), and
+  `unacked` must read `(0,0)` whenever no wheel gesture is in flight: it is how far the eye the
+  render thread is drawing runs ahead of the last packet's. `tps` is `GameTime` per wall
   second — **3 × `speed`**, 60 at the GameSpeed 20 a scenario lands on — and `pubus` the publish
-  cost in µs. Levers, read at attach: `packet.check` (CRC-32 of every packet, verified per frame),
+  cost in µs. Levers, read at attach: `packet.check` (CRC-32 of every record, verified per take),
   `packet.stress` (publish on every draw with a garbage pre-fill, one-page slots that must grow,
-  the consumer sleeping 0..50 ms per take — the protocol gate's mode, ~35 taken frames/s),
+  the render thread sleeping 0..50 ms per take — the protocol gate's mode, ~35 taken frames/s),
   `packet.poison` (the slot handed back is memset, so a pointer cached past its frame reads
-  0xDD), `packet.show` (a `PK<seq> T<tick> E<eye>` row under the FPS readout, needs `fps.on`).
+  0xDD), `packet.show` (a `PK<seq> T<tick> E<eye> A<ack> D<dx>,<dy>` row under the FPS readout,
+  needs `fps.on`).
   A level change logs `packet: level end -> gen N …`, then `packet: loader thread T entered
   0x497C70 …` / `… leaving 0x497C70 …` and `packet: level gen N: first in-play packet …` — in
   that order, which is the load hazard's closing argument (exe note, "The in-play publish point").
@@ -1252,27 +1266,35 @@ centre. Four consequences for driving:
 - **`tagpu_zoom.txt` still does NOT move the camera.** Only the wheel anchors, so every
   scripted zoom and every fixture is unchanged.
 - **An off-centre wheel RELEASES a camera follow (G13u), and it needs the GAME THREAD to be
-  ticking.** Ctrl+C follows your commander (it does not merely centre on it) and the
-  cycle-through-units keys do the same; a wheel that wants to move the eye asks for all three
-  follow slots to be cleared, and `terrown`'s fog tick does the clearing. Two consequences for
+  DRAWING.** Ctrl+C follows your commander (it does not merely centre on it) and the
+  cycle-through-units keys do the same; since the frame packet's landing 2 the wheel's eye delta
+  travels as a command the game thread applies at the top of its next in-play `DrawGameScreen`,
+  and that apply zeroes the three follow slots on the draw it steps the eye. Two consequences for
   driving: a recipe that sets up a follow and then wheels has no follow afterwards — read
   `main+0x142F3` (`CameraToUnit`, 0 = nothing followed) rather than assuming, and expect one
   `zoom: cursor anchor took the camera - the unit follow is released` per follow in the log.
-  **Pausing the sim (`tab`) does NOT stop this** — the fog tick is a detour on the fog-overlay
-  *draw* `0x4848E0`, whose sole call site `0x469D8E` is inside the per-frame world draw, so a
-  paused game still services the request and the wheel still takes the camera. What does stop it
+  **Pausing the sim (`tab`) does NOT stop this** — the apply runs on the in-play draw, not the
+  sim tick (measured on the landing with the second game paused at tick 0: −4 notches at
+  (900,600) moved the eye by exactly (58,−28) and zeroed the slot). What does stop it
   is the game thread ceasing to DRAW, which is the fail-safe direction and not a state you meet
   while testing. A wheel aimed at the viewport centre moves the eye by nothing and leaves the
-  follow alone, which is the control.
+  follow alone, which is the control. **Read the eye AFTER the game thread has applied** — one
+  present later; a `peek` fired in the same instant as the wheel can read the old eye — and note
+  that the picture moves on the very frame of the notch (the render thread draws from the
+  packet's eye plus the unacknowledged delta) while the engine's field follows within a draw.
 - **`Ctrl+C` needs the SHIELD ON.** It is a modifier combo, so under injection it only reaches
   the game through `fake_GetAsyncKeyState` — with `--no-shield` your `ctrl` is invisible and
   the follow is never established, which looks exactly like the feature not working.
 
 Anchoring is off — and says so once a second in the log — while `tagpu_eye.txt` holds the
-camera (`zoom: cursor anchor off - tagpu_eye.txt holds the camera`), and while `terrown` is
-not skipping, because the fog grid is view-anchored and only then is its rebuild ours to ask
-for. **`scenario load` pins the camera**, so `tacli eye <i> --release` first or the wheel will
-zoom to the centre and the log will tell you why. It is live **only while our zoomed world is actually on screen and the
+camera (`zoom: cursor anchor off - tagpu_eye.txt holds the camera`). The old second gate, that
+`terrown` had to be skipping so the fog rebuild was ours to ask for, is gone since the frame
+packet's landing 2: the game thread's own apply invalidates the fog grid on the draw it moves the
+eye, whoever draws the fog. **`scenario load` pins the camera**, so `tacli eye <i> --release`
+first or the wheel will zoom to the centre and the log will tell you why. The hold itself is a
+command too: `tacli eye <i> X Y` is applied at the top of every in-play draw, clamped into the
+camera's range (a hold past the map edge lands on `map − view`), and the packet heartbeat's
+`hold=1` says it is in force. It is live **only while our zoomed world is actually on screen and the
 pointer is over the world viewport** — the menus, the side panel and the minimap keep their
 wheel, and the log says which gate refused (`zoom: wheel ignored — no zoomed world on
 screen` / `— pointer is off the world viewport`). Every accepted turn logs
