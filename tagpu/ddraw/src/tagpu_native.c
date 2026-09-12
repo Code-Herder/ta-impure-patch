@@ -2083,8 +2083,12 @@ static void ghost_one(const TAGPU_PACKET* pk, unsigned mid,
     np = ghost_pieces(root, s_pc, TAGPU_PBMAXPIECE);
     if (np <= 0) { s_ghostNoBake++; return; }
     /* owner 0: the material's team-coloured frames. The green tint washes
-       them over anyway; the geometry is shared with every unit of the type. */
-    if (!tagpu_posebake_unit(s_pc, np, 0, &bg, &bm) ||
+       them over anyway; the geometry is shared with every unit of the type.
+       ghost=1 keys the bake APART from the units' entries: this run walks the
+       template tree in ITS order, which is not the prim order a live unit's
+       packet run carries, so sharing a slot would pose a placed building's
+       parts with the wrong pieces' matrices (the 2026-09-12 leak). */
+    if (!tagpu_posebake_unit(s_pc, np, 0, 1, &bg, &bm) ||
         bg->nparts <= 0 || bg->count[TAGPU_PB_BODY] <= 0) { s_ghostNoBake++; return; }
     for (i = 0; i < bg->nparts; i++) {
         float* o = s_pose + (size_t)i * 12;
@@ -3184,7 +3188,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             hidx[i] = -1;
             topv[i] = 0.0f;
             if (!pdReady) continue;
-            if (!tagpu_posebake_unit(units[i].pc, units[i].nparts, units[i].owner, &bg, &bm) ||
+            if (!tagpu_posebake_unit(units[i].pc, units[i].nparts, units[i].owner, 0, &bg, &bm) ||
                 bg->nparts <= 0 || bg->count[TAGPU_PB_BODY] <= 0) {
                 s_poseNoBake++;
                 continue;

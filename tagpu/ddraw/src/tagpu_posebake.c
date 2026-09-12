@@ -342,7 +342,8 @@ static int mat_slot(void)
     return worst;
 }
 
-static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl)
+static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
+                               int ghost)
 {
     PBGEOMCTX c; PBWALKSTAT st;
     TAGPU_PBGEOM* g;
@@ -353,6 +354,7 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl)
     g = &s_geom[slot];
     memset(g, 0, sizeof *g);
     g->root = nd[0]; g->levelGen = lvl; g->glGen = s_glGen; g->nparts = nparts;
+    g->ghost = ghost;
     c.g = g;                    /* the per-piece rest AABB accumulates here */
     for (r = 0; r < TAGPU_PB_NRANGE; r++) {
         g->first[r] = c.nv;
@@ -598,6 +600,7 @@ void tagpu_posebake_glreset(void)
 
 /* ---- the lookup --------------------------------------------------------- */
 int tagpu_posebake_unit(const TAGPU_PK_PIECE* pc, int nparts, int owner,
+                        int ghost,
                         const TAGPU_PBGEOM** geomOut, const TAGPU_PBMAT** matOut)
 {
     const char* nd[TAGPU_PBMAXPIECE];
@@ -619,19 +622,25 @@ int tagpu_posebake_unit(const TAGPU_PK_PIECE* pc, int nparts, int owner,
         nd[i] = (const char*)(size_t)pc[i].node;
         if (!ptr_ok(nd[i]) || IsBadReadPtr(nd[i], N_CHILD + 4)) return 0;
     }
-    /* THE KEY IS THE TEMPLATE, NOT THE UNIT. Primitive 0's node identifies the
-       tree every unit of the type shares (the same identity `pmap_for` uses),
-       and the level generation says the tree is still the one it was baked
-       from — a template is freed by the teardown cascade, not by any unit's
-       destructor, so nothing else would notice its address being handed out
-       again (thread-safe-destruction.md §6a). */
+    /* THE KEY IS THE TEMPLATE, NOT THE UNIT — and `ghost` apart. Primitive 0's
+       node identifies the tree every unit of the type shares (the same
+       identity `pmap_for` uses), and the level generation says the tree is
+       still the one it was baked from — a template is freed by the teardown
+       cascade, not by any unit's destructor, so nothing else would notice its
+       address being handed out again (thread-safe-destruction.md §6a). The
+       ghost flag splits the entry in two: the ghost's synthesized run walks
+       the tree in its own order, so its VBO piece indices and `parent[]` do
+       not line up with a live unit's prim-ordered run, and a shared entry
+       would pose a building's parts with the wrong pieces' matrices
+       (2026-09-12, the ghost leak). */
     for (i = 0; i < s_ngeom; i++)
         if (s_geom[i].root == nd[0] && s_geom[i].levelGen == lvl &&
-            s_geom[i].glGen == s_glGen && s_geom[i].nparts == nparts) { g = &s_geom[i]; break; }
+            s_geom[i].glGen == s_glGen && s_geom[i].nparts == nparts &&
+            s_geom[i].ghost == ghost) { g = &s_geom[i]; break; }
     if (g && g->refused) { g->lastFrame = s_frame; return 0; }
     if (!g) {
         if (!tagpu_r3d_ready()) return 0;
-        g = geom_bake(nd, nparts, lvl);
+        g = geom_bake(nd, nparts, lvl, ghost);
         if (!g) return 0;
     }
     g->lastFrame = s_frame;

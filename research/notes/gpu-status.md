@@ -2908,9 +2908,17 @@ write: the ghost is a posed body draw whose DATA arrives entirely in the frame p
   parents first, at rest, the same walk class the bake and `PK_PIECE.node` stand on — then bakes
   and poses: a **rest pose**, per-piece translation by the bake's `restOff` (posed_pose's own
   output for a unit holding every piece at rest), into render-thread scratch. One ghost = one
-  bake lookup (the geometry is shared with every unit of the type), one `glDrawArrays`, no pose
-  arena. `fog=0` so it never fog-dims, like the square; no shadow, no nanoframe wire, no
-  waterline.
+  bake lookup, one `glDrawArrays`, no pose arena. `fog=0` so it never fog-dims, like the square;
+  no shadow, no nanoframe wire, no waterline.
+- **The cache key — and the leak it closed.** The synthesised run walks the tree in *its* order,
+  which is not the prim order a live unit's packet run carries, and the bake lays the VBO's
+  per-vertex piece indices and `parent[]` out in run order. So the ghost's bake is keyed apart
+  from the units' (`TAGPU_PBGEOM.ghost`, a `ghost` parameter on `tagpu_posebake_unit`): the first
+  cut shared the slot, and a placed building — same root, same piece count — then drew its
+  prim-ordered pose matrices against the ghost-ordered VBO, scrambling every part ("all of the
+  model parts of building are translated in an incorrect manner"; the commander was immune
+  because it baked before any ghost existed). Safe by construction: the two runs can never share
+  an entry whatever the walk order.
 - **The shader.** `tagpu_native_unit_fs` gains `uGhost`/`uGhostTint` — `rgb *= uGhostTint` before
   the alpha term, the same one-line shape as the underwater tint. The gate defaults to 0, so a
   program that never sets it (the native program, the shadow and slant branches) draws as it

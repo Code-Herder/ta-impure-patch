@@ -48,6 +48,12 @@ typedef struct TAGPU_PBGEOM {
     const char*  root;                        /* Model3DONode* of primitive 0 */
     unsigned     levelGen, glGen;
     int          nparts;
+    int          ghost;                       /* 1 = baked from the ghost's
+        synthesized piece run. Its walk order is the template tree's, which is
+        NOT the prim order a live unit's packet run carries, and the VBO's
+        per-vertex piece indices plus `parent[]` are laid out in that order —
+        so a ghost entry and a unit entry of the same model are DIFFERENT
+        geometry and must never share a cache slot (2026-09-12 leak). */
     /* the topology, cached per type: `pose_accum_body` rebuilds parent links by
        scanning the node list for every sibling of every node, which is fine on
        today's rare trip frames and not fine at 200 units a frame */
@@ -118,10 +124,13 @@ void tagpu_posebake_frame(unsigned frame_counter, unsigned level_gen);
 /* Bake (or find) the geometry and the material stream for one unit's type.
    `pc` is the unit's PK_PIECE run out of the frame packet and supplies the
    piece list — each entry's `node` is the TYPE's template, so the entry is
-   shared by every unit of it. Returns 0 when the template could not be read or
-   GL is not ready; a caller that gets 0 keeps whatever it was doing. */
+   shared by every unit of it. `ghost` is 1 for the build ghost's synthesized
+   run and keys the geometry entry APART from the units' (see the field).
+   Returns 0 when the template could not be read or GL is not ready; a caller
+   that gets 0 keeps whatever it was doing. */
 struct TAGPU_PK_PIECE;
 int  tagpu_posebake_unit(const struct TAGPU_PK_PIECE* pc, int nparts, int owner,
+                         int ghost,
                          const TAGPU_PBGEOM** geom, const TAGPU_PBMAT** mat);
 
 /* The vertex count `emit_geom` should produce for THIS unit out of this bake:
