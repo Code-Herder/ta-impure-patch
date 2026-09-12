@@ -446,11 +446,6 @@ static const char* FS =
     "uniform int uNanoOn;\n"                /* build-state staging on         */
     "uniform float uNanoT;\n"               /* height threshold, depth bytes  */
     "uniform vec3 uNanoC;\n"                /* cAbove, cBand, cBelow          */
-    "uniform int uGhost;\n"                 /* 1 = the build ghost: multiply  */
-    "uniform vec3 uGhostTint;\n"            /* rgb by this (green / blocked red).
-                                               Defaults to 0 / anything, so a
-                                               program that never sets it draws
-                                               as it always has               */
     TAGPU_GLSL_FOG_FN
     TAGPU_GLSL_LIGHT_UNIFORMS
     TAGPU_GLSL_SHADOW_UNIFORMS
@@ -543,9 +538,6 @@ static const char* FS =
     "    if (uWaterMode == 1) discard;\n"
     "    rgb = rgb * 0.5 + vec3(0.0, 0.0, 50.0/255.0);\n"
     "  }\n"
-    /* the build ghost's colour multiply — the placement preview drawn in the
-       game's green (or the blocked red), at the same alpha as a cloak. */
-    "  if (uGhost == 1) rgb *= uGhostTint;\n"
     /* the FBO is PREMULTIPLIED: additive content (effects flashes) can then
        ride the same composite as (rgb, alpha 0) */
     "  frag = vec4(rgb * uAlpha, uAlpha);\n"
@@ -1967,18 +1959,18 @@ static int hires_pose(const TAGPU_PK_PIECE* pc, int nparts, const unsigned short
 
 /* ---- the build ghost -----------------------------------------------------
    The translucent preview of a building under the placement cursor and of
-   every queued build the order pass is showing a site rect for, drawn in the
-   game's green (or the blocked red, when the site bit is clear) at half
-   opacity, through the posed program, as extra body draws. The squares
-   themselves are not ours: they stay exactly as tagpu_mark.c and
-   tagpu_order.c draw them.
+   every queued build the order pass is showing a site rect for: the model's
+   OWN colours at the ghost's alpha, through the posed program, as extra body
+   draws. The squares themselves are not ours: they stay exactly as
+   tagpu_mark.c and tagpu_order.c draw them, and they alone carry the
+   green/blocked distinction — the ghost reads no colour at all.
 
-   ALL THE DATA IS THE PACKET'S. The cursor's unit type, corners, mode bytes
-   and GUI colours arrive in the header; the queue arrives as the PK_BUILD
-   table the publisher copies out of tagpu_order.c's game-thread snapshot —
-   the same snapshot the squares are drawn from, so this pass and the squares
-   cannot drift. The one engine read here is the per-type MODEL template
-   through model_root, the same fenced read the whole unit pass stands on
+   ALL THE DATA IS THE PACKET'S. The cursor's unit type, corners and mode
+   bytes arrive in the header; the queue arrives as the PK_BUILD table the
+   publisher copies out of tagpu_order.c's game-thread snapshot — the same
+   snapshot the squares are drawn from, so this pass and the squares cannot
+   drift. The one engine read here is the per-type MODEL template through
+   model_root, the same fenced read the whole unit pass stands on
    (thread-split.allow: `fenced`).
 
    The pose is a rest pose — per-piece translation by the bake's restOff,
@@ -1986,13 +1978,13 @@ static int hires_pose(const TAGPU_PK_PIECE* pc, int nparts, const unsigned short
    built into render-thread scratch, so a ghost costs one draw call, a bake
    lookup and no pose arena.
 
-   Armed by tagpu_ghost.on (tokens: `alpha=<f>`, default 0.5). */
+   Armed by tagpu_ghost.on (tokens: `alpha=<f>`, default 0.40). */
 static int   s_ghostOn = 0;
-static float s_ghostAlpha = 0.5f;
+static float s_ghostAlpha = 0.40f;
 static unsigned s_ghostCheck = 0;
 static int   s_ghostLogged = -1;     /* the armed state the log last named */
 static unsigned s_ghostCurs = 0, s_ghostQueue = 0, s_ghostDrawn = 0;
-static unsigned s_ghostNoPal = 0, s_ghostNoBake = 0;
+static unsigned s_ghostNoBake = 0;
 
 static int ghost_armed(unsigned frame_counter)
 {
@@ -2007,7 +1999,7 @@ static int ghost_armed(unsigned frame_counter)
         return 0;
     }
     s_ghostOn = 1;
-    s_ghostAlpha = 0.5f;
+    s_ghostAlpha = 0.40f;
     if (n > 0) {
         char* p = buf;
         while (p < buf + n) {
@@ -2063,7 +2055,7 @@ static int ghost_pieces(const char* root, TAGPU_PK_PIECE* out, int max)
 /* one ghost: the type's bake, a rest pose, one posed body draw. `fx/fy/fz`
    are world px — x, ALTITUDE, z, the triple the anchor projection consumes. */
 static void ghost_one(const TAGPU_PACKET* pk, unsigned mid,
-                      float fx, float fy, float fz, const float* tint,
+                      float fx, float fy, float fz,
                       const TAGPU_PDVIEW* pv, int eyeX, int eyeY, int vpL,
                       int vpT, int r0)
 {
@@ -2082,12 +2074,12 @@ static void ghost_one(const TAGPU_PACKET* pk, unsigned mid,
     if (!root) { s_ghostNoBake++; return; }
     np = ghost_pieces(root, s_pc, TAGPU_PBMAXPIECE);
     if (np <= 0) { s_ghostNoBake++; return; }
-    /* owner 0: the material's team-coloured frames. The green tint washes
-       them over anyway; the geometry is shared with every unit of the type.
-       ghost=1 keys the bake APART from the units' entries: this run walks the
-       template tree in ITS order, which is not the prim order a live unit's
-       packet run carries, so sharing a slot would pose a placed building's
-       parts with the wrong pieces' matrices (the 2026-09-12 leak). */
+    /* owner 0: the material's team-coloured frames — the ghost shows the
+       model exactly as a built unit of the player would look. ghost=1 keys
+       the bake APART from the units' entries: this run walks the template
+       tree in ITS order, which is not the prim order a live unit's packet
+       run carries, so sharing a slot would pose a placed building's parts
+       with the wrong pieces' matrices (the 2026-09-12 leak). */
     if (!tagpu_posebake_unit(s_pc, np, 0, 1, &bg, &bm) ||
         bg->nparts <= 0 || bg->count[TAGPU_PB_BODY] <= 0) { s_ghostNoBake++; return; }
     for (i = 0; i < bg->nparts; i++) {
@@ -2120,8 +2112,6 @@ static void ghost_one(const TAGPU_PACKET* pk, unsigned mid,
     q.waterMode = 0;
     q.nanoOn = 0;
     q.cast[0] = 0.0f; q.cast[1] = 0.0f; q.cast[2] = 1.0f;
-    q.tintOn = 1;
-    q.tint[0] = tint[0]; q.tint[1] = tint[1]; q.tint[2] = tint[2];
     tagpu_posedraw_unit(&q);
 }
 
@@ -2130,26 +2120,12 @@ static void ghost_one(const TAGPU_PACKET* pk, unsigned mid,
 static void ghost_pass(const TAGPU_PACKET* pk, unsigned frame_counter,
                        int eyeX, int eyeY, int vpL, int vpT, int r0)
 {
-    const unsigned char* pal;
-    float tintG[3], tintR[3];
     const TAGPU_PK_BUILD* bs;
     unsigned nb, k;
     int haveCursor = 0;
     float cfx = 0.0f, cfy = 0.0f, cfz = 0.0f;
 
     if (!s_ghostOn || !pk || !pk->in_game) return;
-    pal = tagpu_pal_live();
-    if (!pal) { s_ghostNoPal++; if ((frame_counter % 300) == 0) {
-        char b[96]; _snprintf(b, sizeof b, "ghost: no live palette this frame (nopal=%u)",
-                              s_ghostNoPal); nlog(b); } return; }
-    /* the square's own colours, resolved through the palette the squares and
-       the units are shown with: GUI_GREEN 0x0A, GUI_BLOCKED 0x04 */
-    tintG[0] = pal[pk->gui_col[0x0A] * 4 + 0] / 255.0f;
-    tintG[1] = pal[pk->gui_col[0x0A] * 4 + 1] / 255.0f;
-    tintG[2] = pal[pk->gui_col[0x0A] * 4 + 2] / 255.0f;
-    tintR[0] = pal[pk->gui_col[0x04] * 4 + 0] / 255.0f;
-    tintR[1] = pal[pk->gui_col[0x04] * 4 + 1] / 255.0f;
-    tintR[2] = pal[pk->gui_col[0x04] * 4 + 2] / 255.0f;
 
     /* the cursor: the square's own gate — mode 14, and either the band bit or
        the mouse inside the rect the engine can NAME (gather_cursor's test) —
@@ -2173,7 +2149,6 @@ static void ghost_pass(const TAGPU_PACKET* pk, unsigned frame_counter,
     if (haveCursor) {
         s_ghostCurs++;
         ghost_one(pk, pk->build_unit_id, cfx, cfy, cfz,
-                  (pk->region_flags & 0x40) ? tintG : tintR,
                   &s_pv, eyeX, eyeY, vpL, vpT, r0);
     }
     for (k = 0; k < nb; k++) {
@@ -2182,16 +2157,16 @@ static void ghost_pass(const TAGPU_PACKET* pk, unsigned frame_counter,
                   (float)bs[k].pos[0] / 65536.0f,
                   (float)bs[k].pos[1] / 65536.0f,
                   (float)bs[k].pos[2] / 65536.0f,
-                  tintG, &s_pv, eyeX, eyeY, vpL, vpT, r0);
+                  &s_pv, eyeX, eyeY, vpL, vpT, r0);
     }
     s_ghostDrawn += (unsigned)haveCursor + nb;
     tagpu_posedraw_end();
     if ((frame_counter % 300) == 0) {
-        char b[160];
+        char b[128];
         _snprintf(b, sizeof b,
-                  "ghost: curs=%u queue=%u drawn=%u nopal=%u nobake=%u tint=G(%.2f,%.2f,%.2f) R(%.2f,%.2f,%.2f)",
-                  s_ghostCurs, s_ghostQueue, s_ghostDrawn, s_ghostNoPal, s_ghostNoBake,
-                  tintG[0], tintG[1], tintG[2], tintR[0], tintR[1], tintR[2]);
+                  "ghost: curs=%u queue=%u drawn=%u nobake=%u alpha=%.2f",
+                  s_ghostCurs, s_ghostQueue, s_ghostDrawn, s_ghostNoBake,
+                  s_ghostAlpha);
         nlog(b);
     }
 }

@@ -2890,10 +2890,11 @@ measurement.
 ### 2.23 The build ghost (`tagpu_native.c`, OFF by default, `tagpu_ghost.on`) — 2026-09-12
 
 A translucent copy of the building under the placement cursor and of every queued build the order
-pass is showing a site rect for, drawn through the posed program in the game's green — the blocked
-red when the site bit is clear — at half opacity, over the footprint squares exactly as the mark
-and order passes draw them. Nothing about the squares changes; no new engine hook and no engine
-write: the ghost is a posed body draw whose DATA arrives entirely in the frame packet.
+pass is showing a site rect for, drawn through the posed program in the **model's own colours**
+at the ghost's alpha, over the footprint squares exactly as the mark and order passes draw them.
+The squares alone carry the green/blocked distinction; the ghost reads no colour at all. Nothing
+about the squares changes; no new engine hook and no engine write: the ghost is a posed body draw
+whose DATA arrives entirely in the frame packet.
 
 - **The data.** `TAGPU_PK_BUILD`, a build-orders table the publisher copies out of the order
   pass's own game-thread snapshot — the same records `draw_build` draws the squares from, so the
@@ -2909,7 +2910,10 @@ write: the ghost is a posed body draw whose DATA arrives entirely in the frame p
   and poses: a **rest pose**, per-piece translation by the bake's `restOff` (posed_pose's own
   output for a unit holding every piece at rest), into render-thread scratch. One ghost = one
   bake lookup, one `glDrawArrays`, no pose arena. `fog=0` so it never fog-dims, like the square;
-  no shadow, no nanoframe wire, no waterline.
+  no shadow, no nanoframe wire, no waterline. The material is owner 0, so the ghost shows the
+  player's own team colour — exactly what the built unit will look like. An earlier cut tinted
+  it green/red (`uGhostTint`); the owner dropped the tint (2026-09-12): translucency alone, the
+  existing `uAlpha` blend the cloak already rides.
 - **The cache key — and the leak it closed.** The synthesised run walks the tree in *its* order,
   which is not the prim order a live unit's packet run carries, and the bake lays the VBO's
   per-vertex piece indices and `parent[]` out in run order. So the ghost's bake is keyed apart
@@ -2919,19 +2923,17 @@ write: the ghost is a posed body draw whose DATA arrives entirely in the frame p
   model parts of building are translated in an incorrect manner"; the commander was immune
   because it baked before any ghost existed). Safe by construction: the two runs can never share
   an entry whatever the walk order.
-- **The shader.** `tagpu_native_unit_fs` gains `uGhost`/`uGhostTint` — `rgb *= uGhostTint` before
-  the alpha term, the same one-line shape as the underwater tint. The gate defaults to 0, so a
-  program that never sets it (the native program, the shadow and slant branches) draws as it
-  always has. `TAGPU_PDUNIT` carries `tint[3]` + `tintOn` beside `alpha`; ordinary units leave
-  them off. Green/red resolve through the live palette from `gui_col[0x0A]`/`[0x04]` — the
-  square's own slots.
-- **The lever.** `tagpu_ghost.on` (tokens: `alpha=<f>`, default 0.5), re-read on the pass's own
-  30-frame poll; the armed line and the `ghost: curs= queue= drawn= nopal= nobake=` heartbeat log
-  only on change / every 300 frames. `nopal` and `nobake` must stay 0.
-- **Verified in game** (one-unit fixture, play defaults): the blocked cursor ghost reads as the
-  red-tinted mex over the commander, the valid one as the green-tinted mex at the cursor, and the
-  queued ghosts as green-tinted mexs at the site rects — each diffed against `ghost.on=off` and
-  found only at the ghost's own footprint.
+- **The shader.** None. The ghost rides the posed program untouched — `uAlpha` is the cloak's
+  blend, and the model's own colours pass through; the only per-unit field it adds is the
+  ordinary `alpha`. (The 2026-09-12 tint cut removed `uGhost`/`uGhostTint` again, so
+  `tagpu_native_unit_fs` is back to the shape it had before the feature.)
+- **The lever.** `tagpu_ghost.on` (tokens: `alpha=<f>`, default 0.40), re-read on the pass's own
+  30-frame poll; the armed line and the `ghost: curs= queue= drawn= nobake= alpha=` heartbeat log
+  only on change / every 300 frames. `nobake` must stay 0.
+- **Verified in game** (one-unit fixture, play defaults): the mex ghost at the placement cursor
+  and at the queued site rects, diffed against `ghost.on=off` and found only at the ghost's own
+  footprint; after the cache-key fix, a placed mex renders pixel-identical with the ghost armed
+  and disarmed (mean diff 6.0 vs the 6.7 off/off baseline).
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 
