@@ -168,8 +168,10 @@ writing `MaxUnitNumberPerPlayer`; the value cannot be raised in a running game, 
 ```
 49163f: push 0xfa                        ; default 250
 491644: push 0x509238                    ; "UnitLimit" (.data; file offset 0x107838)
-491653: call 0x49f5a0                    ; ini-integer reader [INFERRED a GetPrivateProfileInt
-                                         ;   wrapper: the two arguments are verified, the callee is not]
+491653: call 0x49f5a0                    ; GetPrivateProfileIntA("Preferences", key, default,
+                                         ;   "<exe dir>\totala.ini") [VERIFIED: ret 8; pushes
+                                         ;   "Preferences" 0x509894 then calls the IAT slot
+                                         ;   0x4FC0D8, whose hint entry is GetPrivateProfileIntA]
 491658: cmp  eax, 0x1f4                  ; 500
 49165d: jle  0x491678
 49165f:   mov ecx, ds:0x511de8           ; the TAdynmem base pointer

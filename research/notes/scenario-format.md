@@ -335,16 +335,18 @@ then clamps it **before** storing `MaxUnitNumberPerPlayer` [BINARY-VERIFIED
 2026-09-10, `objdump` of the pristine build]:
 
 ```
-491653: call 0x49f5a0              ; GetPrivateProfileInt("UnitLimit", 250)
+491653: call 0x49f5a0              ; GetPrivateProfileIntA("Preferences", "UnitLimit", 250, "<exe dir>\totala.ini")
 491658: cmp  eax, 0x1f4            ; 500
 49165d: jle  0x491678
 49165f:   mov ecx, ds:0x511DE8
 491665:   mov eax, 0x1f4           ; ANY larger value becomes exactly 500
 49166a:   mov WORD PTR [ecx+0x37eec], ax
+491671:   pop edi / pop esi / pop ebx / add esp, 0x24 / ret   ; this path RETURNS here
 491678: cmp  eax, 0x14             ; 20
 49167b: jge  0x491682
 49167d:   mov eax, 0x14
-49168b: mov WORD PTR [ecx+0x37eec], ax
+491682: mov  ecx, ds:0x511DE8
+49168b: mov  WORD PTR [ecx+0x37eec], ax
 ```
 
 So **the per-player cap can never exceed 500**, whatever the file says. This is a
@@ -361,12 +363,15 @@ Two things followed from this being written down as `[20, 1500]` until 2026-09-1
   the map had loaded, rather than at `scenario validate` time. The schema is now
   bounded by `SCN_MAX_LIMIT = 500`, so the existing per-owner check catches it with
   no game at all.
-* **`scenarios/ball10.json` asks for 625 units on each of four players and has never
-  been able to get them.** It declares 2500 kbots and the engine's ceiling is 2000;
-  its `on_error: "skip"` is why that was never loud. Any measurement taken on it —
-  it is the scale fixture for sub-tick pose interpolation — was taken at an unknown
-  count at or below 2000, not at 2500. The file is left asking for 625 deliberately,
-  so `scenario validate` now says so; what the fixture should be is the owner's call.
+* **`scenarios/ball10.json` asked for 625 units on each of four players and never
+  had them.** It declared 2500 kbots against an engine ceiling of 2000; its
+  `on_error: "skip"` is why that was never loud. Any measurement taken on it — it is
+  the scale fixture for sub-tick pose interpolation — was taken at an unknown count
+  at or below 2000, not at 2500. With the schema bounded, `scenario validate` and
+  `load` both **refuse** the old file outright (`die`, not a warning), so the fixture
+  was re-cut on 2026-09-11 to 500 per player (240/160/100, the same 12:8:5 mix),
+  which is the most the engine will seat. If a smaller scale is wanted that is a
+  one-number edit; larger is not available.
 
 Note also that the count the cap is compared against is *live units*, so
 `clear_existing: false` leaves each player's commander occupying one of the 500.

@@ -374,6 +374,14 @@ class Instance:
         # mid-take and the demuxer failed with BadMatch. Ranking is used rather
         # than skipping, because some wine windows carry no _NET_WM_PID at all
         # and refusing those outright would find no window on such a setup.
+        #
+        # Ownership outranks size. The weights are 4 for "the pid is ours" and 2
+        # for "the client is the size we asked for", so a pid-verified window at
+        # any size beats a pid-less leftover at exactly the right size -- during
+        # the launch poll our own window is still the 640x480 shell while a
+        # leftover can be a perfect 1024x768, and the first cut of this (size 2,
+        # pid 1) would have moved the leftover. Among our own windows size breaks
+        # the tie; with no readable pid anywhere, size alone decides as before.
         gw, gh = self.meta().get("res", list(DEFAULT_RES))
         ranked = []
         for wid in ids:
@@ -390,7 +398,7 @@ class Instance:
                 continue            # demonstrably another process's window
             w, h = int(vals.get("WIDTH", 0)), int(vals.get("HEIGHT", 0))
             rec = (int(wid), int(vals.get("X", 0)), int(vals.get("Y", 0)), w, h)
-            score = (2 if (w, h) == (gw, gh) else 0) + (1 if mine else 0)
+            score = (4 if mine else 0) + (2 if (w, h) == (gw, gh) else 0)
             ranked.append((score, rec))
         if not ranked:
             return None
