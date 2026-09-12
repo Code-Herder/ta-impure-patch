@@ -2671,6 +2671,11 @@ DLL and this one.** `fogwide check: differ=0` on 720 of 720 cells on both builds
 The heartbeat's new `fog:` segment is `<cols>x<rows> wide=<cols>x<rows>/<publishes> refused=
 shade=`.
 
+**And re-measured on the binary that SHIPS**, after the review's fix put a draw stamp in front of
+both fog answers — because that fix could have refused the wide grid outright and the only thing
+that would have said so is a picture. Same four stops, same 0 px within a launch and **0 px against
+landing 3's DLL**, `bare=0`, `fogwide check: differ=0`.
+
 ### 2.21 The frame packet exchange, landing 4c — the GL UI's render half (`tagpu_packet.c`, `tagpu_packet_pub.c`, `tagpu_gui_surf.c`, `tagpu_gui_hook.c`, `tagpu_gui_leaves.h`, `tagpu_gui_int.h`, `tagpu_text.c`, `tagpu_overlay.c`) — 2026-09-12
 
 The plan's row 4c and its §9. The GL UI layer is unchanged except in where its render half gets
@@ -2704,6 +2709,25 @@ engine's sprite blown up instead of ours at the device's resolution.
 `0x4CCF60` is still `pure-engine-code` and is now the only thing on that list from either text
 path: both hand it a one-glyph font object of ours, so TA's own glyphs are still TA's own blit.
 The list is **33 files**, from 36 before landing 4.
+
+### 2.21c Landing 4c's own gates
+
+The static fixture of §2.20 again — `selbox-slope`, `--mapping 0 --los 1`, paused as soon as it is
+live — with `gui.on=mmbase` forcing the sharp minimap on at k = 1, which is the only way the k = 1
+comparison can be taken at all (§19). **The whole UI frame: 0 px within a launch on both builds,
+and 0 px between landing 3's DLL and this one** — the minimap drawn from packet-carried surfaces
+against the same minimap drawn from live engine reads, with `fog=13333/13356` of its texels masked
+on both, so the fog mask was actually exercised rather than inert.
+
+The counters, both builds: `curs=1,10x20,dev=1` — **our** cursor, at the 10×20 device footprint
+that says ours is drawn and the engine's erased; `str=…,miss=0,reseed=0` — **no glyph the cache
+refused that the engine would have drawn**, over ~14 700 presented frames of text; `lost=0
+strict=0 overflows=0`. The packet's own segment reads `mm=106x126/14726 refused=0 pic=252x252/2`:
+the picture went in **two** packets before the consumer's acknowledgement stopped it, which is the
+acknowledgement working, and `noeng=1` against the reference's 0 is the single warm-up frame the
+standing request costs.
+
+PLACEHOLDER-WALK2
 
 ### 2.21b The protocol and the cost, measured across all three rows
 
