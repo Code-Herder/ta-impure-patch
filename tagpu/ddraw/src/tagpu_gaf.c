@@ -134,6 +134,33 @@ const unsigned char* tagpu_gaf_seq_frame(const char* seq, int idx)
     return tagpu_gaf_frame_sane(*(const void* const*)(tab + idx * 8));
 }
 
+int tagpu_gaf_frame_geom(const void* g0, TAGPU_GAFGEOM* out)
+{
+    const unsigned char* g = tagpu_gaf_frame_sane(g0);
+    if (!g || !out) return 0;
+    out->w      = *(const unsigned short*)(g + TAGPU_GF_W);
+    out->h      = *(const unsigned short*)(g + TAGPU_GF_H);
+    out->hotx   = *(const short*)(g + TAGPU_GF_HOTX);
+    out->hoty   = *(const short*)(g + TAGPU_GF_HOTY);
+    out->subn   = *(const unsigned char*)(g + TAGPU_GF_SUBN);
+    out->ck     = *(const unsigned char*)(g + TAGPU_GF_CK);
+    out->subalp = *(const unsigned char*)(g + TAGPU_GF_SUBALP);
+    return 1;
+}
+
+const unsigned char* tagpu_gaf_subframe(const void* g0, int k)
+{
+    const unsigned char* g = tagpu_gaf_frame_sane(g0);
+    const unsigned char* const* arr;
+    int sub;
+    if (!g) return NULL;
+    sub = *(const unsigned char*)(g + TAGPU_GF_SUBN);
+    if (k < 0 || k >= sub) return NULL;
+    arr = *(const unsigned char* const* const*)(g + TAGPU_GF_PIX);
+    if (!ptr_ok(arr) || IsBadReadPtr(arr, (SIZE_T)sub * 4)) return NULL;
+    return tagpu_gaf_frame_sane(arr[k]);
+}
+
 int tagpu_gaf_seq_nframes(const char* seq)
 {
     if (!ptr_ok(seq) || IsBadReadPtr(seq, 0x2C)) return 0;

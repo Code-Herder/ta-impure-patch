@@ -172,6 +172,25 @@ int                  tagpu_gaf_seq_nframes(const char* seq);
 const unsigned char* tagpu_gaf_state_frame(const char* animstate);
 const char*          tagpu_gaf_seq_name(const char* seq);
 
+/* THE HEADER FIELDS A CALLER NEEDS TO PLACE A SPRITE, read inside this module
+   so that a pass which only places sprites dereferences no engine byte of its
+   own. Landing 4a of the frame packet exchange is why this exists: the effects
+   and particle passes take their frames out of the packet now, resolved by the
+   game thread, and both files came off the thread-split allow-list — which
+   they could not while `emit_sprite` read w/h/hotspot/sub-count itself.
+   Returns 0 and writes nothing when the frame is not sane. */
+typedef struct TAGPU_GAFGEOM {
+    int w, h;                   /* the frame's size                          */
+    int hotx, hoty;             /* its hotspot, subtracted from the anchor    */
+    int subn;                   /* sub-frames; 0 = a plain frame             */
+    unsigned char ck;           /* its colour key                            */
+    unsigned char subalp;       /* this frame asks for the alpha blit         */
+} TAGPU_GAFGEOM;
+int tagpu_gaf_frame_geom(const void* g, TAGPU_GAFGEOM* out);
+/* Sub-frame `k` of a compound frame, bounded by the frame's own sub-count and
+   readable-checked like every other resolver here; NULL when there is none. */
+const unsigned char* tagpu_gaf_subframe(const void* g, int k);
+
 /* Decode a frame's colour plane (raw or TA-RLE) into `out`, which must hold
    w*h bytes; unwritten texels are left at the colour key. 0 if unreadable. */
 int tagpu_gaf_decode(const unsigned char* g, int w, int h, unsigned char* out);

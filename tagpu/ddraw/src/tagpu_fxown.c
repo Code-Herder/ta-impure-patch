@@ -165,6 +165,24 @@ void tagpu_fxown_set_skip_sfx(int on)
 
 int tagpu_fxown_installed(void) { return g_installed; }
 
+/* the render thread's standing request for the packet's effect tables. Written
+   on the render thread, read on the game thread, one writer, no ordering owed:
+   a frame either side of the change costs one frame of empty or unused tables
+   and nothing else — the publisher's watchdog below is what makes a pass that
+   stops paying stop being paid for. Unlike the skip bytes these are NOT gated
+   on the detours being installed: the tables are ours and the pass draws from
+   them whether or not the engine's own draw could be suppressed. */
+static volatile unsigned char g_wantFx, g_wantSfx;
+static unsigned g_beatWant;
+void tagpu_fxown_set_want(int fx, int sfx, unsigned int frame_counter)
+{
+    g_wantFx = (unsigned char)(fx != 0);
+    g_wantSfx = (unsigned char)(sfx != 0);
+    if (fx || sfx) g_beatWant = frame_counter;
+}
+int tagpu_fxown_want_fx(void)  { return g_wantFx != 0; }
+int tagpu_fxown_want_sfx(void) { return g_wantSfx != 0; }
+
 void tagpu_fxown_flush(unsigned int frame_counter)
 {
     if (!g_installed) return;
@@ -175,6 +193,12 @@ void tagpu_fxown_flush(unsigned int frame_counter)
     if (g_fxown_skipSfx && frame_counter - g_beatSfx > 90) {
         flog("fxown: particle pass silent for 90 frames");
         tagpu_fxown_set_skip_sfx(0);
+    }
+    /* the effect tables cost the publisher a walk of four engine arrays; a
+       pass that has stopped asking for them stops being charged for them */
+    if ((g_wantFx || g_wantSfx) && frame_counter - g_beatWant > 90) {
+        flog("fxown: neither effects pass asked for the packet's tables for 90 frames — they go idle");
+        tagpu_fxown_set_want(0, 0, frame_counter);
     }
     if (frame_counter - g_last >= 300) {
         char b[96];

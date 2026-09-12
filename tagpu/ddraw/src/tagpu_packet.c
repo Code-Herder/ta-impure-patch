@@ -492,6 +492,30 @@ static const char* frame_valid(const void* rec)
             if (w[k].base_piece != 0xFFFFu && w[k].base_piece >= w[k].nparts) return "wreck base piece";
         }
     }
+    /* THE FOUR EFFECT TABLES (landing 4a). Each count is bounded by what the
+       ENGINE's own array allows — 300 projectile slots, 300 explosion records,
+       100 debris slots — so a consumer's loop can never run past the array the
+       publisher walked even if the record were corrupt. The particle table's
+       cap is ours, and its per-layer counts have to add up to it or the
+       consumer's layer walk would read another layer's entries. */
+    if (!table_ok(p, p->off_proj,   p->n_proj,   sizeof(TAGPU_PK_PROJ)))   return "projectiles table";
+    if (!table_ok(p, p->off_expl,   p->n_expl,   sizeof(TAGPU_PK_EXPL)))   return "explosions table";
+    if (!table_ok(p, p->off_debris, p->n_debris, sizeof(TAGPU_PK_DEBRIS))) return "debris table";
+    if (!table_ok(p, p->off_part,   p->n_part,   sizeof(TAGPU_PK_PART)))   return "particles table";
+    if (p->n_proj   > TAGPU_PK_MAX_PROJ)   return "more projectiles than slots";
+    if (p->n_expl   > TAGPU_PK_MAX_EXPL)   return "more explosions than records";
+    if (p->n_debris > TAGPU_PK_MAX_DEBRIS) return "more debris than slots";
+    if (p->n_part   > TAGPU_PK_MAX_PART)   return "more particles than the cap";
+    if (p->lht_len && (p->lht_len != TAGPU_PK_LHT_BYTES || !area_ok(p, p->lht_off, p->lht_len)))
+        return "lighten table area";
+    {
+        unsigned k, sum = 0;
+        for (k = 0; k < TAGPU_PK_NLAYER; k++) {
+            if (p->part_n[k] > p->n_part) return "particle layer count";
+            sum += p->part_n[k];
+        }
+        if (sum != p->n_part) return "particle layer counts do not sum";
+    }
     return NULL;
 }
 
@@ -685,7 +709,7 @@ static void heartbeat(PKX* m, unsigned fc)
     double secs = 0.0;
     unsigned i, total = 0, acc = 0, p50 = 0, p99 = 0, pubs, taken;
     const TAGPU_PACKET* p = m->frameHead ? (const TAGPU_PACKET*)m->slot[m->read] : NULL;
-    char b[1400];
+    char b[1700];
     int n;
 
     if (have && fc - last < PK_HEARTBEAT) return;

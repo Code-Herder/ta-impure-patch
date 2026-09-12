@@ -59,60 +59,9 @@
 #include "tagpu_restoreglsl.h"
 #include "tagpu_classicpp.h"
 #include "tagpu_fogwide.h"
+#include "tagpu_packet.h"
 
-#define TA_MAINPP     0x00511DE8u
-#define TAPROG_PP     0x0051FBD0u
-#define OFF_TICK      0x38A47
-#define OFF_NPROJ     0x141F3
-#define OFF_PROJ      0x141F7
-#define PROJ_STRIDE   0x6B
-#define OFF_NEXPL     0x1491B
-#define OFF_EXPL      0x1491F
-#define EXPL_STRIDE   0x54
-#define OFF_COLTAB    0x0DCB    /* u8[]: weapon colour number -> palette idx */
-#define OFF_SHADOWSEQ 0x1480F   /* projectile ground-shadow blob sequence    */
-#define OFF_SPRSEQ0   0x147BB   /* 5 sprite-weapon sequences (rendertype 4)  */
-#define OFF_FLARESEQ  0x147F3   /* rendertype 5 sequence                     */
-#define OFF_VPRECT    0x37E27   /* int l,t,r,b (frame px)                    */
-#define PSYS_BEGIN    0x00511DF0u
-#define PSYS_END      0x00511F80u
-#define PROG_LHT      0xC8      /* u8[32*256] lighten table                  */
-#define PROG_CAPS     0xF0      /* u16: bit5 ALP built, bit7 LHT built       */
 
-#define P_WEAPON   0x00
-#define P_X        0x04         /* i32 16.16 world x                         */
-#define P_ALT      0x08         /* i32 16.16 altitude                        */
-#define P_Y        0x0C         /* i32 16.16 map depth                       */
-#define P_XS       0x10         /* start (tail) position, same layout        */
-#define P_ALTS     0x14
-#define P_YS       0x18
-#define P_TURN     0x34         /* short[3] rotation triple                  */
-#define P_SPAWN    0x42         /* int tick                                  */
-#define P_DEATH    0x46         /* int tick                                  */
-#define P_ATTACKER 0x52         /* UnitStruct*                               */
-#define P_GROUNDH  0x5E         /* u16 terrain height under the projectile   */
-#define P_HIDDEN   0x60         /* short; draw only when 0                   */
-#define P_SPIN     0x64         /* short                                     */
-#define W_NAME     0x00
-#define W_MODEL    0x74         /* Model3DONode*                             */
-#define W_LIFE     0xE6         /* u16                                       */
-#define W_RT       0x10C        /* i8 RenderType                             */
-#define W_COLOR    0x10D
-#define W_COLOR2   0x10E
-#define W_MASK     0x111        /* u32 WeaponTypeMask                        */
-#define E_NODE     0x00
-#define E_ST1      0x04         /* anim state: u16 frame @0, seq* @8         */
-#define E_ST2      0x10
-#define E_X        0x1C
-#define E_ALT      0x20
-#define E_Y        0x24
-#define E_TURN     0x4C
-#define D_NODE     0x00         /* debris piece (particle slot +0x2C)        */
-#define D_TURN     0x12
-#define D_X        0x16
-#define D_ALT      0x1A
-#define D_Y        0x1E
-#define U_OWNER    0xFF
 
 #define MODE_FLAT   TAGPU_FXMODE_FLAT
 #define MODE_OPAQUE TAGPU_FXMODE_OPAQUE
@@ -124,12 +73,6 @@
 #define MAXMODEL 1024
 #define ATLAS_DIM 2048
 #define ATLAS_MAX 2048
-
-static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
-/* the TAProgram block (*0x51FBD0) lives in the exe's own data segment,
-   below the heap floor ptr_ok assumes */
-static int prog_ok(const void* p)
-{ return (size_t)p > 0x400000u && (size_t)p < 0x7FFF0000u && !IsBadReadPtr(p, 0x100); }
 
 static void flog(const char* s)
 {
@@ -440,20 +383,23 @@ static void emit_line(int x0, int y0, int x1, int y1, int colidx, float wx, floa
    not here: the particle pass emits through this path too */
 static void emit_sprite(const unsigned char* g, int sx, int sy, int mode, float wx, float wz, int depth)
 {
+    TAGPU_GAFGEOM gm;
     if (depth > 4) return;
-    g = tagpu_gaf_frame_sane(g);
-    if (!g) return;
-    int sub = g[TAGPU_GF_SUBN];
-    if (sub) {
-        const unsigned char* const* arr = *(const unsigned char* const* const*)(g + TAGPU_GF_PIX);
-        if (!ptr_ok(arr) || IsBadReadPtr(arr, (SIZE_T)sub * 4)) return;
+    /* THE FRAME IS AN OPAQUE HANDLE HERE (landing 4a). It came out of the
+       packet, resolved by the game thread against the sequence the engine's
+       own record named; this file reads not one byte of it. Everything below
+       goes through tagpu_gaf.c, which is the module whose class (session
+       reader) carries the lifetime argument for GAF storage. */
+    if (!tagpu_gaf_frame_geom(g, &gm)) return;
+    if (gm.subn) {
         int k;
-        for (k = 0; k < sub; k++) {
-            const unsigned char* sg = tagpu_gaf_frame_sane(arr[k]);
-            if (!sg) continue;
-            int m = mode;
-            if (mode == MODE_OPAQUE && sg[TAGPU_GF_SUBALP]) m = MODE_ALPHA;
-            emit_sprite(sg, sx, sy, m, wx, wz, depth + 1);
+        for (k = 0; k < gm.subn; k++) {
+            TAGPU_GAFGEOM sm;
+            const unsigned char* sg = tagpu_gaf_subframe(g, k);
+            if (!sg || !tagpu_gaf_frame_geom(sg, &sm)) continue;
+            emit_sprite(sg, sx, sy,
+                        (mode == MODE_OPAQUE && sm.subalp) ? MODE_ALPHA : mode,
+                        wx, wz, depth + 1);
         }
         return;
     }
@@ -462,9 +408,9 @@ static void emit_sprite(const unsigned char* g, int sx, int sy, int mode, float 
     if (s_mute) return;
     const TAGPU_GAFENT* e = tagpu_gaf_atlas_get(&s_atlas, g);
     if (!e) { s_cAtlasFail++; return; }
-    int w = *(const unsigned short*)(g + TAGPU_GF_W), h = *(const unsigned short*)(g + TAGPU_GF_H);
-    float x0 = (float)(sx - *(const short*)(g + TAGPU_GF_HOTX));
-    float y0 = (float)(sy - *(const short*)(g + TAGPU_GF_HOTY));
+    int w = gm.w, h = gm.h;
+    float x0 = (float)(sx - gm.hotx);
+    float y0 = (float)(sy - gm.hoty);
     float x1 = x0 + (float)w, y1 = y0 + (float)h;
     float c = (float)e->ck / 255.0f;
     if (s_traceN > 0) {
@@ -483,11 +429,11 @@ static void fx_sprite(const unsigned char* g, int sx, int sy, int mode, float wx
 }
 
 /* ---- the particle pass emits through the same buckets, at its own key;
-   under = the engine draws this layer before its projectile pass ---- */
-int tagpu_fx_emit_seq_frame(const char* seq, int frame, int sx, int sy, int mode,
-                            float wx, float wz, float enc, int under)
+   under = the engine draws this layer before its projectile pass. The frame
+   is the packet's, already resolved on the game thread (landing 4a). ---- */
+int tagpu_fx_emit_frame(const unsigned char* g, int sx, int sy, int mode,
+                        float wx, float wz, float enc, int under)
 {
-    const unsigned char* g = tagpu_gaf_seq_frame(seq, frame);
     if (!g) return 0;
     float keep = s_encCur; int keepU = s_under, before = s_cQuads;
     s_encCur = enc; s_under = under;
@@ -511,20 +457,23 @@ int tagpu_fx_emit_dot(int x, int y, int colidx, float wx, float wz, float enc, i
 
 void tagpu_fx_set_mute(int on) { s_mute = on; }
 
-/* TAProgram capability bits (+0xF0): bit5 ALP alpha table built, bit7 LHT */
-unsigned tagpu_fx_caps(void)
-{
-    const char* prog = *(const char* const*)TAPROG_PP;
-    return prog_ok(prog) ? *(const unsigned short*)(prog + PROG_CAPS) : 0u;
-}
+/* TAProgram capability bits (+0xF0): bit5 ALP alpha table built, bit7 LHT.
+   Read by the publisher now; this is the frame's copy, latched at gather. */
+static unsigned s_caps;
+unsigned tagpu_fx_caps(void) { return s_caps; }
 
-static void emit_model(const char* node, float ax, float ay, float wx, float wz,
+/* The node is a per-TYPE Model3DONode template the PUBLISHER resolved and
+   range-checked on the game thread; this file only carries it to the native
+   pass's emit_fx_model, which is the (fenced) file that walks it, under
+   tagpu_reclaim's teardown fence — the same argument PK_PIECE.node stands on.
+   Not one byte of it is read here, which is what took this file off the
+   thread-split allow-list. */
+static void emit_model(unsigned node, float ax, float ay, float wx, float wz,
                        short t0, short t1, short t2, int owner)
 {
-    if (!s_models || s_mute || s_nm >= MAXMODEL) return;
-    if (!ptr_ok(node) || IsBadReadPtr(node, 0x40)) return;
+    if (!s_models || s_mute || s_nm >= MAXMODEL || !node) return;
     TAGPU_FXMODEL* m = &s_models_[s_nm++];
-    m->node = node; m->ax = ax; m->ay = ay; m->wx = wx; m->wz = wz;
+    m->node = (const char*)(size_t)node; m->ax = ax; m->ay = ay; m->wx = wx; m->wz = wz;
     m->turn[0] = t0; m->turn[1] = t1; m->turn[2] = t2; m->owner = owner;
 }
 
@@ -694,10 +643,13 @@ int tagpu_fx_tile_visible(const TAGPU_FXVIEW* v, int wx, int wzp)
                         v->fogOrgX, v->fogOrgY, wx, wzp) == 0;
 }
 
-static int in_vprect(const char* ta, int sx, int sy)
+/* the rect the engine's own explosion and debris passes cull against, out of
+   the packet (`vp_addr`: L, T, R, B inclusive — the true rect, or the widened
+   one at zoom < 1, exactly as the engine's field held it for this draw) */
+static int in_vprect(const TAGPU_PACKET* pk, int sx, int sy)
 {
-    const int* r = (const int*)(ta + OFF_VPRECT);
-    return sx >= r[0] && sx <= r[2] && sy >= r[1] && sy <= r[3];
+    return sx >= pk->vp_addr[0] && sx <= pk->vp_addr[2] &&
+           sy >= pk->vp_addr[1] && sy <= pk->vp_addr[3];
 }
 
 static unsigned s_rng = 0x12345u;
@@ -710,263 +662,186 @@ static int jitter5(void)            /* rand()*11/0x8000 - 5, visual only */
 typedef struct { int hidden, fogged, laser, model, ball, sprite, flare, light, expl, debris, flash, other; } FXC;
 static FXC s_c;
 
-/* weapon fire, explosions, debris: the two engine passes, gathered */
+/* weapon fire, explosions, debris: the three tables the publisher gathered.
+   NOTHING HERE READS ENGINE MEMORY (landing 4a). The projectile, explosion and
+   debris arrays are walked on the game thread, inside DrawGameScreen, once per
+   sim tick; every weapon field, every colour number and every GAF frame was
+   resolved there. What is left in this file is the engine's DRAWING RULES —
+   which rendertype makes which primitive, where the shadow blob goes, how the
+   lightning bolt jitters — applied to values. */
 static void gather_fx(const TAGPU_FXVIEW* v)
 {
+    const TAGPU_PACKET* pk = v->packet;
+    const TAGPU_PK_PROJ* pj = tagpu_pk_proj(pk);
+    const TAGPU_PK_EXPL* ex = tagpu_pk_expl(pk);
+    const TAGPU_PK_DEBRIS* db = tagpu_pk_debris(pk);
+    int alphaOn = (s_caps & 0x20) != 0, flashOn = (s_caps & 0x80) != 0;
+    int eyeX = v->eyeX, eyeY = v->eyeY, vpL = v->vpL, vpT = v->vpT;
+    unsigned i;
+    char lb[200];
+
     s_mute = s_passive;                /* passive: count + log, emit nothing */
     /* we are drawing this frame: the engine may skip its own effects draw */
     if (!s_passive) tagpu_fxown_set_skip(1);
     tagpu_fxown_beat(v->frame_counter);
 
-    /* this file's own read of the main pointer (to-convert:4a): the view
-       record no longer carries it, so the rule can see every reader */
-    const char* ta = *(const char* const*)TA_MAINPP;
-    if (!ptr_ok(ta)) return;
-    int tick = *(const int*)(ta + OFF_TICK);
-    const unsigned char* coltab = (const unsigned char*)(ta + OFF_COLTAB);
-    unsigned caps = tagpu_fx_caps();
-    int alphaOn = (caps & 0x20) != 0, flashOn = (caps & 0x80) != 0;
-    int eyeX = v->eyeX, eyeY = v->eyeY, vpL = v->vpL, vpT = v->vpT;
-    char lb[200];
-
-    /* ---- projectiles (0x49BE60) ---- */
-    /* The array is per game: 0x499A30, from the level load at 0x4918B6,
-       allocates it as 0x7D64 bytes = exactly 300 slots of PROJ_STRIDE, and
-       0x499A80 frees and nulls it inside the teardown cascade tagpu_reclaim
-       fences -- that lifetime, not the probe, is why `pbase` is readable here.
-       `np` is the live count the sim rewrites (13 store sites); it is at most
-       300 and cannot tear into a large value, both operands having zero upper
-       bytes, so the 8192 cap is 27x looser than the allocation. GAP: a cap of
-       300 would make the walk exact by construction (cross-thread-engine-
-       reads.md §5). */
-    int np = *(const int*)(ta + OFF_NPROJ);
-    const char* pbase = *(const char* const*)(ta + OFF_PROJ);
-    if (np > 0 && np <= 8192 && ptr_ok(pbase) && !IsBadReadPtr(pbase, (SIZE_T)np * PROJ_STRIDE)) {
-        const unsigned char* shadowFrame = tagpu_gaf_seq_frame(*(const char* const*)(ta + OFF_SHADOWSEQ), 0);
-        int i;
-        for (i = 0; i < np; i++) {
-            const char* p = pbase + (size_t)i * PROJ_STRIDE;
-            if (*(const short*)(p + P_HIDDEN) != 0) { s_c.hidden++; continue; }
-            int X = *(const int*)(p + P_X), ALT = *(const int*)(p + P_ALT), Y = *(const int*)(p + P_Y);
-            int hx = X >> 16, halt = ALT >> 16, hy = Y >> 16;
-            int hzp = hy - (halt >> 1);
-            if (!tagpu_fx_tile_visible(v, hx, hzp)) { s_c.fogged++; continue; }
-            const char* w = *(const char* const*)(p + P_WEAPON);
-            if (!ptr_ok(w) || IsBadReadPtr(w, 0x115)) { s_c.other++; continue; }
-            int rt = *(const signed char*)(w + W_RT);
-            int color = *(const unsigned char*)(w + W_COLOR);
-            int sx = hx - eyeX + vpL, sy = (hy - eyeY) - (halt >> 1) + vpT;
-            float ax = (float)X / 65536.0f - (float)eyeX + (float)vpL;
-            float ay = (float)Y / 65536.0f - (float)ALT / 65536.0f * 0.5f - (float)eyeY + (float)vpT;
-            float wx = (float)hx, wz = (float)hzp;
-            int owner = 0;
-            {
-                const char* au = *(const char* const*)(p + P_ATTACKER);
-                if (ptr_ok(au) && !IsBadReadPtr(au, 0x118)) owner = *(const unsigned char*)(au + U_OWNER);
-            }
-            if (s_log && i < 8 && (v->frame_counter % 60) == 0) {
-                _snprintf(lb, sizeof lb,
-                    "fx: p%d \"%.20s\" rt=%d col=%d/%d pos=(%d,%d,%d) start=(%d,%d,%d) scr=(%d,%d) turn=(%d,%d,%d) spawn=%d death=%d tick=%d gh=%u",
-                    i, w + W_NAME, rt, color, *(const unsigned char*)(w + W_COLOR2), hx, halt, hy,
-                    *(const int*)(p + P_XS) >> 16, *(const int*)(p + P_ALTS) >> 16, *(const int*)(p + P_YS) >> 16,
-                    sx, sy, *(const short*)(p + P_TURN), *(const short*)(p + P_TURN + 2), *(const short*)(p + P_TURN + 4),
-                    *(const int*)(p + P_SPAWN), *(const int*)(p + P_DEATH), tick,
-                    (unsigned)*(const unsigned short*)(p + P_GROUNDH));
-                flog(lb);
-            }
-            /* ground shadow blob (rendertypes 1,3,4,6): alpha blit of the
-               shadow sequence's frame 0 at the projectile's ground point */
-            #define SHADOW_BLOB() do { if (alphaOn && shadowFrame) { \
-                int gh = *(const unsigned short*)(p + P_GROUNDH); \
-                fx_sprite(shadowFrame, sx, (hy - eyeY) - (gh >> 1) + vpT, MODE_ALPHA, wx, wz); } } while (0)
-            const short* tr = (const short*)(p + P_TURN);
-            switch (rt) {
-            case 0: {
-                s_c.laser++;
-                int c1 = coltab[color];
-                int x0 = sx, y0 = sy;
-                int x1 = (*(const int*)(p + P_XS) >> 16) - eyeX + vpL;
-                int y1 = ((*(const int*)(p + P_YS) >> 16) - ((*(const int*)(p + P_ALTS) >> 16) >> 1)) - eyeY + vpT;
-                int color2 = *(const unsigned char*)(w + W_COLOR2);
-                if (color2 == 0) emit_line(x0, y0, x1, y1, c1, wx, wz);
-                else {
-                    /* engine: a second line one pixel beside the first, in
-                       colour2, drawn first (0x49BE60 case 0) */
-                    int ax0 = x0, ay0 = y0, bx = x1, by = y1;
-                    int sx2, sy2, ex2, ey2;
-                    if (abs(y0 - y1) < abs(x0 - x1)) {
-                        if (x1 < x0) { ax0 = x1; bx = x0; ay0 = y1; by = y0; }
-                        sx2 = ax0; sy2 = ay0 - 1; ex2 = bx; ey2 = by - 1;
-                    } else {
-                        if (y1 < y0) { ax0 = x1; bx = x0; ay0 = y1; by = y0; }
-                        sx2 = ax0 - 1; sy2 = ay0; ex2 = bx + 1; ey2 = by;
-                        /* the engine's variant shifts start x-1 / end x+1 */
-                    }
-                    emit_line(sx2, sy2, ex2, ey2, coltab[color2], wx, wz);
-                    emit_line(ax0, ay0, bx, by, c1, wx, wz);
+    /* ---- projectiles (the engine's 0x49BE60 rules) ---- */
+    for (i = 0; i < pk->n_proj; i++) {
+        const TAGPU_PK_PROJ* p = &pj[i];
+        int X = p->pos[0], ALT = p->pos[1], Y = p->pos[2];
+        int hx = X >> 16, halt = ALT >> 16, hy = Y >> 16;
+        int hzp = hy - (halt >> 1);
+        int sx, sy;
+        float ax, ay, wx, wz;
+        if (!tagpu_fx_tile_visible(v, hx, hzp)) { s_c.fogged++; continue; }
+        sx = hx - eyeX + vpL; sy = (hy - eyeY) - (halt >> 1) + vpT;
+        ax = (float)X / 65536.0f - (float)eyeX + (float)vpL;
+        ay = (float)Y / 65536.0f - (float)ALT / 65536.0f * 0.5f - (float)eyeY + (float)vpT;
+        wx = (float)hx; wz = (float)hzp;
+        if (s_log && i < 8 && (v->frame_counter % 60) == 0) {
+            _snprintf(lb, sizeof lb,
+                "fx: p%u rt=%d col=%d/%d pos=(%d,%d,%d) start=(%d,%d,%d) scr=(%d,%d) turn=(%d,%d,%d) node=%08x/%08x frame=%08x",
+                i, p->rt, p->col, p->col2, hx, halt, hy,
+                p->start[0] >> 16, p->start[1] >> 16, p->start[2] >> 16,
+                sx, sy, p->turn[0], p->turn[1], p->turn[2],
+                p->node, p->child, p->frame);
+            flog(lb);
+        }
+        /* ground shadow blob (rendertypes 1,3,4,6): alpha blit of the shadow
+           sequence's frame 0 at the projectile's ground point */
+        if ((p->flags & TAGPU_PK_FX_SHADOW) && alphaOn && pk->shadow_frame)
+            fx_sprite((const unsigned char*)(size_t)pk->shadow_frame,
+                      sx, (p->shadow_y - eyeY) + vpT, MODE_ALPHA, wx, wz);
+        switch (p->rt) {
+        case 0: {
+            s_c.laser++;
+            int x0 = sx, y0 = sy;
+            int x1 = (p->start[0] >> 16) - eyeX + vpL;
+            int y1 = ((p->start[2] >> 16) - ((p->start[1] >> 16) >> 1)) - eyeY + vpT;
+            if (!(p->flags & TAGPU_PK_FX_COL2)) emit_line(x0, y0, x1, y1, p->col, wx, wz);
+            else {
+                /* engine: a second line one pixel beside the first, in
+                   colour2, drawn first (0x49BE60 case 0) */
+                int ax0 = x0, ay0 = y0, bx = x1, by = y1;
+                int sx2, sy2, ex2, ey2;
+                if (abs(y0 - y1) < abs(x0 - x1)) {
+                    if (x1 < x0) { ax0 = x1; bx = x0; ay0 = y1; by = y0; }
+                    sx2 = ax0; sy2 = ay0 - 1; ex2 = bx; ey2 = by - 1;
+                } else {
+                    if (y1 < y0) { ax0 = x1; bx = x0; ay0 = y1; by = y0; }
+                    sx2 = ax0 - 1; sy2 = ay0; ex2 = bx + 1; ey2 = by;
+                    /* the engine's variant shifts start x-1 / end x+1 */
                 }
-                break;
+                emit_line(sx2, sy2, ex2, ey2, p->col2, wx, wz);
+                emit_line(ax0, ay0, bx, by, p->col, wx, wz);
             }
-            case 1: case 3: case 6: {
-                s_c.model++;
-                SHADOW_BLOB();
-                const char* node = *(const char* const*)(w + W_MODEL);
-                short t0 = 0, t1 = 0, t2 = 0;
-                if (rt == 1) { t0 = tr[0]; t1 = (short)(tr[1] - 0x8000); t2 = (short)(tr[2] - 0x8000); }
-                else if (rt == 6) { t0 = tr[0]; t1 = tr[1]; t2 = tr[2]; }
-                emit_model(node, ax, ay, wx, wz, t0, t1, t2, owner);
-                if (rt == 1 && ptr_ok(node) && !IsBadReadPtr(node, 0x40)) {
-                    const char* child = *(const char* const*)(node + 0x30);
-                    if (ptr_ok(child) && tick < *(const int*)(p + P_DEATH)) {
-                        unsigned mask = *(const unsigned*)(w + W_MASK);
-                        short c0 = (mask & (1u << 21)) ? *(const short*)(p + P_SPIN) : t0;
-                        emit_model(child, ax, ay, wx, wz, c0, t1, t2, owner);
+            break;
+        }
+        case 1: case 3: case 6:
+            s_c.model++;
+            emit_model(p->node, ax, ay, wx, wz, p->turn[0], p->turn[1], p->turn[2], p->owner);
+            if (p->child)
+                emit_model(p->child, ax, ay, wx, wz, p->cturn0, p->turn[1], p->turn[2], p->owner);
+            break;
+        case 2:
+            s_c.ball++;              /* background refraction: engine-only */
+            break;
+        case 4:
+            s_c.sprite++;
+            if (p->frame)
+                fx_sprite((const unsigned char*)(size_t)p->frame, sx, sy, MODE_OPAQUE, wx, wz);
+            break;
+        case 5:
+            s_c.flare++;
+            if (p->frame && alphaOn)
+                fx_sprite((const unsigned char*)(size_t)p->frame, sx, sy, MODE_ALPHA, wx, wz);
+            break;
+        case 7: {
+            s_c.light++;
+            int dx = X - p->start[0];
+            int dz = ALT - p->start[1];
+            int dy = Y - p->start[2];
+            double len = sqrt((double)dx * dx + (double)dz * dz + (double)dy * dy);
+            long long len16 = (long long)len;                    /* __ftol */
+            long long n16 = (len16 << 16) / 0x50000;              /* steps of 5 */
+            int nseg = (int)(n16 >> 16);
+            if (n16 != 0 && nseg > 0 && nseg < 512) {
+                long long stx = ((long long)dx << 16) / n16;
+                long long stz = ((long long)dz << 16) / n16;
+                long long sty = ((long long)dy << 16) / n16;
+                int pass;
+                for (pass = 0; pass < 2; pass++) {
+                    long long cx = p->start[0], cz = p->start[1], cy = p->start[2];
+                    int px = (int)(cx >> 16), pz = (int)(cz >> 16), py = (int)(cy >> 16);
+                    int k;
+                    for (k = 0; k < nseg; k++) {
+                        cx += stx; cz += stz; cy += sty;
+                        int jx = (int)(cx >> 16) + jitter5();
+                        int jz = (int)(cz >> 16) + jitter5();
+                        int jy = (int)(cy >> 16) + jitter5();
+                        emit_line(px - eyeX + vpL, (py - (pz >> 1)) - eyeY + vpT,
+                                  jx - eyeX + vpL, (jy - (jz >> 1)) - eyeY + vpT, p->col, wx, wz);
+                        px = jx; pz = jz; py = jy;
                     }
                 }
-                break;
             }
-            case 2:
-                s_c.ball++;              /* background refraction: engine-only */
-                break;
-            case 4: {
-                s_c.sprite++;
-                if (color == 0xFF) break;
-                SHADOW_BLOB();
-                if (color > 4) break;
-                const char* seq = *(const char* const*)(ta + OFF_SPRSEQ0 + color * 4);
-                int n = tagpu_gaf_seq_nframes(seq);
-                if (n > 0) {
-                    int idx = (tick - *(const int*)(p + P_SPAWN)) % n;
-                    if (idx < 0) idx += n;
-                    fx_sprite(tagpu_gaf_seq_frame(seq, idx), sx, sy, MODE_OPAQUE, wx, wz);
-                }
-                break;
-            }
-            case 5: {
-                s_c.flare++;
-                const char* seq = *(const char* const*)(ta + OFF_FLARESEQ);
-                int n = tagpu_gaf_seq_nframes(seq);
-                int life = *(const unsigned short*)(w + W_LIFE);
-                if (n > 0 && life > 0 && alphaOn) {
-                    int idx = n - ((*(const int*)(p + P_DEATH) - tick) * n) / life;
-                    if (idx >= 0 && idx < n)
-                        fx_sprite(tagpu_gaf_seq_frame(seq, idx), sx, sy, MODE_ALPHA, wx, wz);
-                }
-                break;
-            }
-            case 7: {
-                s_c.light++;
-                int c1 = coltab[color];
-                int dx = X - *(const int*)(p + P_XS);
-                int dz = ALT - *(const int*)(p + P_ALTS);
-                int dy = Y - *(const int*)(p + P_YS);
-                double len = sqrt((double)dx * dx + (double)dz * dz + (double)dy * dy);
-                long long len16 = (long long)len;                    /* __ftol */
-                long long n16 = (len16 << 16) / 0x50000;              /* steps of 5 */
-                int nseg = (int)(n16 >> 16);
-                if (n16 != 0 && nseg > 0 && nseg < 512) {
-                    long long stx = ((long long)dx << 16) / n16;
-                    long long stz = ((long long)dz << 16) / n16;
-                    long long sty = ((long long)dy << 16) / n16;
-                    int pass;
-                    for (pass = 0; pass < 2; pass++) {
-                        long long cx = *(const int*)(p + P_XS), cz = *(const int*)(p + P_ALTS), cy = *(const int*)(p + P_YS);
-                        int px = (int)(cx >> 16), pz = (int)(cz >> 16), py = (int)(cy >> 16);
-                        int k;
-                        for (k = 0; k < nseg; k++) {
-                            cx += stx; cz += stz; cy += sty;
-                            int jx = (int)(cx >> 16) + jitter5();
-                            int jz = (int)(cz >> 16) + jitter5();
-                            int jy = (int)(cy >> 16) + jitter5();
-                            emit_line(px - eyeX + vpL, (py - (pz >> 1)) - eyeY + vpT,
-                                      jx - eyeX + vpL, (jy - (jz >> 1)) - eyeY + vpT, c1, wx, wz);
-                            px = jx; pz = jz; py = jy;
-                        }
-                    }
-                }
-                break;
-            }
-            default:
-                s_c.other++;
-                break;
-            }
-            #undef SHADOW_BLOB
+            break;
+        }
+        default:
+            s_c.other++;
+            break;
         }
     }
 
-    /* ---- flying debris pieces (particle slots, drawn by 0x4211D0) ---- */
+    /* ---- flying debris pieces (drawn by 0x4211D0) ---- */
     if (s_debris) {
-        unsigned a;
-        for (a = PSYS_BEGIN; a < PSYS_END; a += 4) {
-            const char* sys = *(const char* const*)(size_t)a;
-            if (!ptr_ok(sys) || IsBadReadPtr(sys, 0x30)) continue;
-            const char* pc = *(const char* const*)(sys + 0x2C);
-            if (!ptr_ok(pc) || IsBadReadPtr(pc, 0x30)) continue;
-            const char* node = *(const char* const*)(pc + D_NODE);
-            int X = *(const int*)(pc + D_X), ALT = *(const int*)(pc + D_ALT), Y = *(const int*)(pc + D_Y);
+        for (i = 0; i < pk->n_debris; i++) {
+            const TAGPU_PK_DEBRIS* d = &db[i];
+            int X = d->pos[0], ALT = d->pos[1], Y = d->pos[2];
             int hx = X >> 16, halt = ALT >> 16, hy = Y >> 16;
             int sx = hx - eyeX + vpL, sy = (hy - eyeY) - (halt >> 1) + vpT;
-            if (!in_vprect(ta, sx, sy)) continue;
+            if (!in_vprect(pk, sx, sy)) continue;
             s_c.debris++;
-            const short* tr = (const short*)(pc + D_TURN);
-            emit_model(node, (float)X / 65536.0f - (float)eyeX + (float)vpL,
+            emit_model(d->node, (float)X / 65536.0f - (float)eyeX + (float)vpL,
                        (float)Y / 65536.0f - (float)ALT / 65536.0f * 0.5f - (float)eyeY + (float)vpT,
-                       (float)hx, (float)(hy - (halt >> 1)), tr[0], tr[1], tr[2], 0);
+                       (float)hx, (float)(hy - (halt >> 1)), d->turn[0], d->turn[1], d->turn[2], 0);
         }
     }
 
-    /* ---- explosions (0x420B00) ---- */
-    int ne = *(const int*)(ta + OFF_NEXPL);
-    if (s_expl && ne > 0 && ne <= 300) {
-        const char* ebase = ta + OFF_EXPL;
-        int i, pass;
-        s_c.expl = ne;
+    /* ---- explosions (0x420B00): the flash of every record, then the bodies ---- */
+    if (s_expl && pk->n_expl) {
+        int pass;
+        s_c.expl = (int)pk->n_expl;
         for (pass = 0; pass < 2; pass++)
-        for (i = 0; i < ne; i++) {
-            const char* e = ebase + (size_t)i * EXPL_STRIDE;
-            int X = *(const int*)(e + E_X), ALT = *(const int*)(e + E_ALT), Y = *(const int*)(e + E_Y);
+        for (i = 0; i < pk->n_expl; i++) {
+            const TAGPU_PK_EXPL* e = &ex[i];
+            int X = e->pos[0], ALT = e->pos[1], Y = e->pos[2];
             int hx = X >> 16, halt = ALT >> 16, hy = Y >> 16;
             int sx = hx - eyeX + vpL, sy = (hy - eyeY) - (halt >> 1) + vpT;
-            if (!in_vprect(ta, sx, sy)) continue;
-            float wx = (float)hx, wz = (float)(hy - (halt >> 1));
+            float wx, wz;
+            if (!in_vprect(pk, sx, sy)) continue;
+            wx = (float)hx; wz = (float)(hy - (halt >> 1));
             if (pass == 0) {
-                if (flashOn && *(const unsigned* )(e + E_ST2 + TAGPU_AS_SEQ) != 0) {
-                    const unsigned char* g = tagpu_gaf_state_frame(e + E_ST2);
-                    if (g) { fx_sprite(g, sx, sy, MODE_FLASH, wx, wz); s_c.flash++; }
+                if (flashOn && e->flash) {
+                    fx_sprite((const unsigned char*)(size_t)e->flash, sx, sy, MODE_FLASH, wx, wz);
+                    s_c.flash++;
                 }
             } else {
-                const char* node = *(const char* const*)(e + E_NODE);
-                if (ptr_ok(node)) {
-                    const short* tr = (const short*)(e + E_TURN);
-                    emit_model(node, (float)X / 65536.0f - (float)eyeX + (float)vpL,
-                               (float)Y / 65536.0f - (float)ALT / 65536.0f * 0.5f - (float)eyeY + (float)vpT,
-                               wx, wz, tr[0], tr[1], tr[2], 0);
-                }
-                if (*(const unsigned*)(e + E_ST1 + TAGPU_AS_SEQ) != 0) {
-                    const unsigned char* g = tagpu_gaf_state_frame(e + E_ST1);
-                    if (g) fx_sprite(g, sx, sy, MODE_OPAQUE, wx, wz);
-                    if (s_log && i < 4 && (v->frame_counter % 60) == 0) {
-                        const char* seq = *(const char* const*)(e + E_ST1 + TAGPU_AS_SEQ);
-                        const char* seq2 = *(const char* const*)(e + E_ST2 + TAGPU_AS_SEQ);
-                        _snprintf(lb, sizeof lb,
-                            "fx: e%d seq=\"%.24s\" f=%u/%d flash=\"%.24s\" f=%u node=%p pos=(%d,%d,%d) scr=(%d,%d)",
-                            i, ptr_ok(seq) ? seq + TAGPU_SQ_NAME : "?", (unsigned)*(const unsigned short*)(e + E_ST1),
-                            tagpu_gaf_seq_nframes(seq), ptr_ok(seq2) ? seq2 + TAGPU_SQ_NAME : "-",
-                            (unsigned)*(const unsigned short*)(e + E_ST2), (const void*)node, hx, halt, hy, sx, sy);
-                        flog(lb);
-                    }
-                }
+                emit_model(e->node, (float)X / 65536.0f - (float)eyeX + (float)vpL,
+                           (float)Y / 65536.0f - (float)ALT / 65536.0f * 0.5f - (float)eyeY + (float)vpT,
+                           wx, wz, e->turn[0], e->turn[1], e->turn[2], 0);
+                if (e->frame)
+                    fx_sprite((const unsigned char*)(size_t)e->frame, sx, sy, MODE_OPAQUE, wx, wz);
             }
         }
     }
 
-    /* ---- LHT flash colours from the live table + palette (32 levels) ---- */
+    /* ---- LHT flash colours from the packet's table + the live palette ---- */
     if (flashOn && (!s_lhtInit || v->frame_counter - s_lhtStamp >= 300)) {
-        const char* prog = *(const char* const*)TAPROG_PP;
-        const unsigned char* lht = prog_ok(prog) ? *(const unsigned char* const*)(prog + PROG_LHT) : NULL;
+        const unsigned char* lht = tagpu_pk_lht(pk);
         const unsigned char* pal = tagpu_pal_live();
         static unsigned char rgb[32 * 3];
-        if (pal && ptr_ok(lht) && !IsBadReadPtr(lht, 0x2000)) {
+        if (pal && lht) {
             int L;
             for (L = 0; L < 32; L++) {
                 long sr = 0, sg = 0, sb = 0; int d;
@@ -993,9 +868,9 @@ static void gather_fx(const TAGPU_FXVIEW* v)
     if (v->frame_counter - last >= 60) {
         last = v->frame_counter;
         _snprintf(lb, sizeof lb,
-            "fx: proj=%d (laser=%d model=%d sprite=%d flare=%d light=%d ball=%d hidden=%d fogged=%d) expl=%d flash=%d debris=%d -> lines=%d sprites=%d flashq=%d models=%d atlas=%d%s",
-            np, s_c.laser, s_c.model, s_c.sprite, s_c.flare, s_c.light, s_c.ball, s_c.hidden, s_c.fogged,
-            ne, s_c.flash, s_c.debris, s_cLines, s_cSprites, s_cFlash, s_nm, s_atlas.n,
+            "fx: proj=%u (laser=%d model=%d sprite=%d flare=%d light=%d ball=%d fogged=%d) expl=%u flash=%d debris=%u -> lines=%d sprites=%d flashq=%d models=%d atlas=%d%s",
+            pk->n_proj, s_c.laser, s_c.model, s_c.sprite, s_c.flare, s_c.light, s_c.ball, s_c.fogged,
+            pk->n_expl, s_c.flash, pk->n_debris, s_cLines, s_cSprites, s_cFlash, s_nm, s_atlas.n,
             s_passive ? " (passive)" : "");
         flog(lb);
     }
@@ -1014,6 +889,9 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
         if (sfxOn && !said) { said = 1; flog("fx: GL not ready — the particle pass (sfx) is idle too"); }
         return 0;
     }
+    /* the frame's capability bits, from the packet: bit5 the ALP alpha table
+       is built, bit7 the LHT one. Read by the publisher, on the game thread. */
+    s_caps = v->packet ? v->packet->fx_caps : 0u;
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
     /* Classic++: the lazy restore of this atlas (the palette the screen is
        SHOWN with -- tagpu_pal.h) */

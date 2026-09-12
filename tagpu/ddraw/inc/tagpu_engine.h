@@ -156,12 +156,101 @@
 #define OFF_SWEEP_C        0x1424B     /* i32 sweep cols = viewTilesX + 0x0C    */
 #define OFF_SWEEP_R        0x1424F     /* i32 sweep rows = viewTilesY + 0x20    */
 
-#define OFF_GUICOL         0x0DCB      /* GetGuiPaletteColor's byte array       */
+#define OFF_GUICOL         0x0DCB      /* GetGuiPaletteColor's byte array: 256  */
+                                       /* bytes, rebuilt from `guipal` once at  */
+                                       /* startup (0x4AC7D0 writes exactly 0x100 */
+                                       /* of them, 0x4AC7FF..0x4AC88F)          */
 #define OFF_MOUSE_X        0x2C76      /* the dispatched mouse point            */
 #define OFF_MOUSE_Y        0x2C7A
 #define OFF_BUILDRECT      0x2C92      /* i32[6]: x, altitude, z of two corners */
 #define OFF_CURMODE        0x2CC3      /* u8, 0x0E = build placement            */
 #define OFF_REGIONFL       0x2CC6      /* u8, bit3 band box, bit6 site OK       */
+
+/* ---- the effects: the four per-frame arrays (landing 4a) ------------------
+   All four are SIM state: the tick moves them, the two engine draw passes
+   (0x49BE60 projectiles, 0x420B00 explosions, 0x471F90 particle layers) read
+   and write nothing. research/notes/effects.md has the decompiled rules. */
+#define OFF_NPROJ          0x141F3     /* i32 live projectiles; both append    */
+                                       /* sites refuse past 300 (0x49B6EE,     */
+                                       /* 0x49B809 `cmp ...,0x12C / jge`)      */
+#define OFF_PROJ           0x141F7     /* ProjectileStruct*: 0x499A30 allocates */
+                                       /* 0x7D64 = 300 x 0x6B and 0x499A80     */
+                                       /* frees AND NULLS it in the teardown   */
+#define PROJ_STRIDE        0x6B
+#define PROJ_COUNT         300
+#define PJ_WEAPON          0x00        /* WeaponStruct*                        */
+#define PJ_X               0x04        /* i32 16.16 world x                    */
+#define PJ_ALT             0x08
+#define PJ_Y               0x0C
+#define PJ_XS              0x10        /* the start (tail) point, same layout  */
+#define PJ_ALTS            0x14
+#define PJ_YS              0x18
+#define PJ_TURN            0x34        /* i16[3] rotation triple               */
+#define PJ_SPAWN           0x42        /* i32 tick                             */
+#define PJ_DEATH           0x46        /* i32 tick                             */
+#define PJ_ATTACKER        0x52        /* UnitStruct*                          */
+#define PJ_GROUNDH         0x5E        /* u16 terrain height under it          */
+#define PJ_HIDDEN          0x60        /* i16; drawn only when 0               */
+#define PJ_SPIN            0x64        /* i16                                  */
+#define W_MODEL            0x74        /* Model3DONode*, the weapon's root     */
+#define W_LIFE             0xE6        /* u16                                  */
+#define W_RT               0x10C       /* i8 RenderType 0..7                   */
+#define W_COLOR            0x10D       /* u8 colour NUMBER, through OFF_GUICOL */
+#define W_COLOR2           0x10E
+#define W_MASK             0x111       /* u32 WeaponTypeMask; bit21 spins the  */
+                                       /* thrust flame by PJ_SPIN              */
+#define OFF_NEXPL          0x1491B     /* i32 live explosions; the add site    */
+                                       /* refuses past 300 (0x420A42)          */
+#define OFF_EXPL           0x1491F     /* the array, INLINE in the block       */
+#define EXPL_STRIDE        0x54
+#define EXPL_COUNT         300
+#define EX_NODE            0x00        /* Model3DONode* debris piece           */
+#define EX_ST1             0x04        /* anim state: u16 frame @0, seq* @8    */
+#define EX_ST2             0x10        /* the LHT flash's anim state           */
+#define EX_X               0x1C
+#define EX_ALT             0x20
+#define EX_Y               0x24
+#define EX_TURN            0x4C        /* i16[3]                               */
+/* the flying-debris particle slots, 100 dwords in .data */
+#define VA_PSYS_BEGIN      0x00511DF0u
+#define VA_PSYS_END        0x00511F80u
+#define PSYS_PIECE         0x2C        /* the system's piece record            */
+#define DB_NODE            0x00
+#define DB_TURN            0x12        /* i16[3]                               */
+#define DB_X               0x16
+#define DB_ALT             0x1A
+#define DB_Y               0x1E
+/* the effect GAF sequences, resolved ONCE PER PROCESS: 0x429870 loads the
+   "fx" bank and stores every one of them, and its only caller is 0x49134D
+   inside 0x491200, whose only caller is 0x49EA62 in WinMain (0x49E830). So
+   these are SESSION assets, not per-level ones [VERIFIED 2026-09-12]. */
+#define OFF_SHADOWSEQ      0x1480F     /* the projectile ground-shadow blob     */
+#define OFF_SPRSEQ0        0x147BB     /* 5 sprite-weapon sequences (rt 4)      */
+#define OFF_FLARESEQ       0x147F3     /* rt 5                                  */
+/* the ten particle layers: {u8 flag, void** begin @4, end @8, cap @0xC} x 10,
+   allocated per game by 0x471D90 and freed AND NULLED by 0x471DE0 in the
+   teardown cascade. Every emitter refuses a layer already holding 400
+   objects (`cmp eax,0x190` at 0x472071, 0x47219F, ... thirteen sites). */
+#define OFF_LAYERS         0x38D77
+#define LAYER_STRIDE       0x10
+#define LAYER_BEGIN        0x04
+#define LAYER_END          0x08
+#define LAYER_OBJCAP       400
+#define PO_END             0x04        /* the object: end tick                 */
+#define PO_TICK            0x08
+#define PO_LAYER           0x0C        /* u8, the layer it was emitted into    */
+#define PO_SUB0            0x10        /* its sub-particle vector {begin,end}  */
+#define PO_SUB1            0x14
+#define VT_SMOKE1          0x004FD638u /* grey smoke, NOT LOS-gated            */
+#define VT_SMOKE2          0x004FD618u /* dark smoke                           */
+#define VT_FIRE            0x004FD5D8u
+#define VT_FLARE           0x004FD588u
+#define VT_WAKE            0x004FD5F8u /* wake / bubbles: a 2x2 dot            */
+#define VT_NANO            0x004FD5B8u /* nanolathe spray: a 2x2 dot           */
+#define VT_BASE            0x004FD5A8u /* destroyed: draws nothing             */
+/* TAProgram (the graphics globals' owner, TA_GFX_PP) */
+#define PROG_LHT           0x0C8       /* u8[32][256] lighten table            */
+#define PROG_CAPS          0x0F0       /* u16: bit5 ALP built, bit7 LHT built  */
 
 /* ---- the graphics globals ------------------------------------------------ */
 #define GFX_FONT           0x204        /* the current font object: SetFont 0x4C1420 */

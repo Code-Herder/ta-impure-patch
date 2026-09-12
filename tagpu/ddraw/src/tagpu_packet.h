@@ -36,8 +36,13 @@
    the build cursor, the per-map array bases the fenced passes index, the
    engine's shade table), and makes the acquire tick-aware so that the two
    packets the consumer holds always span two distinct sim ticks. The
-   projectile, explosion, particle and fog tables arrive with landing 4 and
-   every table then has its `off`/`n` here. */
+   fog table arrives with landing 4b and every table then has its `off`/`n`
+   here. LANDING 4A adds the four effect tables — projectiles, explosions,
+   flying debris and the ten particle layers' sub-particles — with the LHT
+   ramp, the ALP/LHT capability bits and the whole 256-byte GUI colour LUT
+   they need. They are the first tables whose gather is CACHED PER SIM TICK
+   in the publisher: the engine's two effect passes read their arrays and
+   write nothing, so two publishes of one tick must produce the same table. */
 #include <stdint.h>
 
 /* One glyph of the marker font, as a self-contained one-glyph FONT OBJECT the
@@ -194,12 +199,135 @@ typedef struct TAGPU_PK_ANCHOR {
     uint8_t  pad;
 } TAGPU_PK_ANCHOR;
 
+/* ---- THE EFFECTS AND THE PARTICLE LAYERS (landing 4a) -------------------
+   The engine's four per-frame effect arrays, copied by the thread that owns
+   them. All four are SIM STATE — the tick moves a projectile, advances an
+   explosion's anim frame and walks every particle's update leaf, and the two
+   engine draw passes (0x49BE60 projectiles, 0x420B00 explosions) read and
+   write nothing — so the gather is taken ONCE PER TICK and every packet of
+   that tick carries the same table, exactly as the anchor scan is.
+
+   EVERY ENGINE POINTER IS RESOLVED HERE, ON THE GAME THREAD. A sprite's GAF
+   frame is looked up through its sequence and its frame number at copy time
+   (the sequence is the one the particle names, live while the thread that
+   wrote it is the thread reading it); a weapon's colour number goes through
+   the GUI colour LUT here; the model roots are the per-type templates the
+   native pass already walks under `tagpu_reclaim`'s fence, and no consumer of
+   these tables dereferences one — `tagpu_fx.c` hands the address straight to
+   `emit_fx_model` in the (fenced) native pass and reads no byte of it. */
+
+/* 56 B, one per live projectile, in the engine's own array order. The array
+   is exactly 300 slots (0x499A30 allocates 0x7D64 = 300 x 0x6B) and both
+   append sites refuse past 300 (0x49B6EE, 0x49B809 `cmp ...,0x12C / jge`), so
+   the walk's bound is the allocation itself rather than a sanity cap. */
+typedef struct TAGPU_PK_PROJ {
+    int32_t  pos[3];         /* proj+0x04/+0x08/+0x0C, 16.16: x, altitude, y */
+    int32_t  start[3];       /* proj+0x10/+0x14/+0x18, the tail              */
+    uint32_t node;           /* the weapon's Model3DONode root (rendertypes
+                                1, 3 and 6), 0 = none. A TEMPLATE ADDRESS the
+                                native pass resolves under the fence          */
+    uint32_t child;          /* node+0x30, the thrust flame, only while the
+                                projectile is alive (rendertype 1), else 0    */
+    uint32_t frame;          /* the resolved sprite (rt 4) or flare (rt 5)
+                                GAF frame, already indexed by this tick, 0 =
+                                none: an address in the GAF banks, opaque to
+                                every consumer but tagpu_gaf.c                */
+    int32_t  shadow_y;       /* the ground-shadow blob's screen y in WORLD
+                                terms: hi(y) - groundh/2 (the blob is drawn
+                                at the terrain point under the projectile)    */
+    int16_t  turn[3];        /* the rotation triple, ALREADY adjusted for the
+                                rendertype (rt 1 subtracts 0x8000 from two)   */
+    int16_t  cturn0;         /* the child's first turn word (rt 1)            */
+    uint8_t  rt;             /* WeaponStruct+0x10C RenderType, 0..7           */
+    uint8_t  col, col2;      /* PALETTE INDICES: the weapon's colour numbers
+                                are taken through main+0xDCB here             */
+    uint8_t  owner;          /* the attacker's player id, 0 when it is gone    */
+    uint8_t  flags;          /* TAGPU_PK_FX_* below                            */
+    uint8_t  pad[2];
+} TAGPU_PK_PROJ;
+
+#define TAGPU_PK_FX_SHADOW  0x01u   /* draw the ground-shadow blob            */
+#define TAGPU_PK_FX_COL2    0x02u   /* the weapon's SECOND colour number is
+                                       non-zero, so the laser is two lines.
+                                       The test is on the NUMBER, before the
+                                       LUT: `col2` below is already an index,
+                                       and index 0 is a real colour           */
+
+/* 32 B, one per live explosion. The array is INLINE at main+0x1491F, stride
+   0x54, and the engine's own add site refuses past 300 (0x420A42). */
+typedef struct TAGPU_PK_EXPL {
+    int32_t  pos[3];         /* expl+0x1C/+0x20/+0x24, 16.16                  */
+    uint32_t node;           /* the debris node (+0x00), a template, or 0     */
+    uint32_t frame;          /* anim state 1's current frame, the opaque
+                                sprite, resolved here; 0 = none               */
+    uint32_t flash;          /* anim state 2's, the LHT flash; 0 = none       */
+    int16_t  turn[3];        /* expl+0x4C                                     */
+    uint16_t pad;
+} TAGPU_PK_EXPL;
+
+/* 24 B, one per occupied debris particle slot. The slots are the 100 dwords
+   at 0x511DF0..0x511F80; each names a system whose +0x2C is the piece. */
+typedef struct TAGPU_PK_DEBRIS {
+    int32_t  pos[3];         /* piece+0x16/+0x1A/+0x1E, 16.16                 */
+    uint32_t node;           /* piece+0x00, a template, or 0                  */
+    int16_t  turn[3];        /* piece+0x12                                    */
+    uint16_t pad;
+} TAGPU_PK_DEBRIS;
+
+/* 16 B, one per drawable SUB-PARTICLE, in layer order (the layer IS the draw
+   depth: the engine calls 0x471F90(ctx, n) for n = 0..9 at ten fixed points
+   of its frame). The projection is done here because it is all the consumer
+   needs: `x` is hi(world x) and `zp` is hi(world y) - hi(altitude)/2, the
+   space both the screen transform and the fog grid are in. */
+typedef struct TAGPU_PK_PART {
+    int32_t  x, zp;
+    uint32_t frame;          /* the resolved GAF frame; 0 = a 2x2 dot in
+                                `col`, which is what the wake and nanolathe
+                                classes draw (DrawBar 0x4BF6F0)               */
+    uint8_t  layer;          /* 0..9                                          */
+    uint8_t  kind;           /* TAGPU_PK_PK_* below: which lever mutes it and
+                                whether the engine's LOS gate applies         */
+    uint8_t  col;            /* the dot's palette index (frame == 0)          */
+    uint8_t  pad;
+} TAGPU_PK_PART;
+
+/* the particle classes, by vtable, as tagpu_sfx.c's own enum had them */
+#define TAGPU_PK_PK_SMOKE1  0u   /* grey smoke, NOT LOS-gated by the engine   */
+#define TAGPU_PK_PK_SMOKE2  1u   /* dark smoke                                */
+#define TAGPU_PK_PK_FIRE    2u
+#define TAGPU_PK_PK_FLARE   3u
+#define TAGPU_PK_PK_WAKE    4u   /* wake / bubbles: a dot                     */
+#define TAGPU_PK_PK_NANO    5u   /* nanolathe spray: a dot                    */
+#define TAGPU_PK_NPARTKIND  6u
+
+#define TAGPU_PK_NLAYER     10u
+
+#define TAGPU_PK_MAX_PROJ    300u
+#define TAGPU_PK_MAX_EXPL    300u
+#define TAGPU_PK_MAX_DEBRIS  100u
+/* The particle table's ceiling. The engine allows 10 layers x 400 objects and
+   every object carries a sub-particle vector it grows as it burns, so no
+   engine count bounds this one: it is OUR cap, with a truncation bit and a
+   counter, and the heartbeat's `partmax` says how close a 200v200 fight came.
+   16 384 entries is 256 KB per slot. */
+#define TAGPU_PK_MAX_PART    16384u
+
+/* The engine's LHT "lighten" table, TAProgram+0xC8: 32 rows of 256 bytes, the
+   explosion flash's colour ramp. Copied whole, like the shade table. */
+#define TAGPU_PK_LHT_ROWS    32u
+#define TAGPU_PK_LHT_BYTES   (TAGPU_PK_LHT_ROWS * 256u)
+
 /* truncation bits, one per table (TAGPU_PK_TRUNC_FONT/STRESS are above) */
 #define TAGPU_PK_TRUNC_UNITS   0x4u
 #define TAGPU_PK_TRUNC_PIECES  0x8u
 #define TAGPU_PK_TRUNC_WRECKS  0x10u
 #define TAGPU_PK_TRUNC_ANCHORS 0x20u
 #define TAGPU_PK_TRUNC_SHD     0x40u
+#define TAGPU_PK_TRUNC_PROJ    0x80u
+#define TAGPU_PK_TRUNC_EXPL    0x100u
+#define TAGPU_PK_TRUNC_DEBRIS  0x200u
+#define TAGPU_PK_TRUNC_PART    0x400u
+#define TAGPU_PK_TRUNC_LHT     0x800u
 
 #define TAGPU_PK_SHD_ROWS   32u      /* the engine's PALETTE.SHD shade table:  */
 #define TAGPU_PK_SHD_BYTES  (TAGPU_PK_SHD_ROWS * 256u)   /* 32 x 256 bytes     */
@@ -333,7 +461,11 @@ typedef struct TAGPU_PACKET {
     int32_t  mouse[2];                /* the dispatched mouse point, screen px    */
     int32_t  build_rect[6];           /* the build cursor's two corners as
                                          x, altitude, z (0x2C92..0x2CA6)          */
-    uint8_t  gui_col[64];             /* GetGuiPaletteColor's byte array          */
+    /* main+0xDCB, the whole 256-byte LUT the engine rebuilds from `guipal` at
+       startup (0x4AC7D0 writes exactly 0x100 bytes). It was 64 here until
+       landing 4a, which needed the tail: a weapon's colour NUMBER indexes this
+       table and nothing bounds it below 256. */
+    uint8_t  gui_col[256];
     uint8_t  cursor_mode;             /* 0x2CC3: 0x0E = build placement           */
     uint8_t  region_flags;            /* 0x2CC6: bit3 band box, bit6 site OK      */
     uint8_t  game_opt;                /* 0x37F06 low byte: bit0 damagebars,
@@ -343,6 +475,32 @@ typedef struct TAGPU_PACKET {
                                          (PALETTE.SHD at graphics+0xC4), copied
                                          whole: the Gouraud LUT the unit pass
                                          builds its shading from                  */
+
+    /* ---- landing 4a: the effects and the particle layers ---- */
+    uint32_t n_proj,   off_proj;      /* PK_PROJ,   the live projectiles        */
+    uint32_t n_expl,   off_expl;      /* PK_EXPL,   the live explosions         */
+    uint32_t n_debris, off_debris;    /* PK_DEBRIS, the occupied debris slots   */
+    uint32_t n_part,   off_part;      /* PK_PART,   every drawable sub-particle,
+                                         IN LAYER ORDER                          */
+    uint32_t part_n[TAGPU_PK_NLAYER]; /* how many of them are in each layer, so
+                                         a consumer walks 0..6, then the two
+                                         effect passes, then 7..9 as the engine
+                                         does — the counts sum to n_part        */
+    uint32_t part_obj[TAGPU_PK_NLAYER];   /* the OBJECTS each layer held, a
+                                         diagnostic: the sub-particle table can
+                                         be truncated, this count never is       */
+    uint32_t fx_caps;                 /* TAProgram+0xF0: bit5 the ALP alpha
+                                         table is built, bit7 the LHT one        */
+    uint32_t fx_gen;                  /* bumped whenever any of the four tables
+                                         was re-gathered (once per sim tick):
+                                         the consumer's own "is this the same
+                                         gather" test, and the heartbeat's       */
+    uint32_t shadow_frame;            /* the projectile ground-shadow blob, frame
+                                         0 of main+0x1480F's sequence, resolved
+                                         here; 0 = the sequence is not there     */
+    uint32_t lht_off, lht_len;        /* the engine's 32x256 LHT lighten table
+                                         (TAProgram+0xC8), the explosion flash's
+                                         colour ramp                             */
     uint32_t truncated;         /* TAGPU_PK_TRUNC_* bits: what did not fit      */
     uint32_t crc;               /* CRC-32 of the slot with these two fields as
                                    zero, under `tagpu_packet.check`; else 0     */
@@ -403,6 +561,18 @@ static __inline const TAGPU_PK_PIECE* tagpu_pk_pieces(const TAGPU_PACKET* p, uns
 /* The engine's shade table, 32 rows of 256 bytes, or NULL if it did not fit. */
 static __inline const unsigned char* tagpu_pk_shd(const TAGPU_PACKET* p)
 { return p->shd_len == TAGPU_PK_SHD_BYTES ? (const unsigned char*)p + p->shd_off : (const unsigned char*)0; }
+/* The LHT lighten table, same shape, or NULL. */
+static __inline const unsigned char* tagpu_pk_lht(const TAGPU_PACKET* p)
+{ return p->lht_len == TAGPU_PK_LHT_BYTES ? (const unsigned char*)p + p->lht_off : (const unsigned char*)0; }
+/* ---- the effects tables (landing 4a) ---- */
+static __inline const TAGPU_PK_PROJ* tagpu_pk_proj(const TAGPU_PACKET* p)
+{ return p->n_proj ? (const TAGPU_PK_PROJ*)(const void*)((const unsigned char*)p + p->off_proj) : (const TAGPU_PK_PROJ*)0; }
+static __inline const TAGPU_PK_EXPL* tagpu_pk_expl(const TAGPU_PACKET* p)
+{ return p->n_expl ? (const TAGPU_PK_EXPL*)(const void*)((const unsigned char*)p + p->off_expl) : (const TAGPU_PK_EXPL*)0; }
+static __inline const TAGPU_PK_DEBRIS* tagpu_pk_debris(const TAGPU_PACKET* p)
+{ return p->n_debris ? (const TAGPU_PK_DEBRIS*)(const void*)((const unsigned char*)p + p->off_debris) : (const TAGPU_PK_DEBRIS*)0; }
+static __inline const TAGPU_PK_PART* tagpu_pk_part(const TAGPU_PACKET* p)
+{ return p->n_part ? (const TAGPU_PK_PART*)(const void*)((const unsigned char*)p + p->off_part) : (const TAGPU_PK_PART*)0; }
 
 /* ---- lifetime ---- */
 /* DLL attach, before either thread exists — never lazily: reserves the slots

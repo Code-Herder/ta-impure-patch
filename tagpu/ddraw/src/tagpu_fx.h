@@ -7,12 +7,10 @@
 #include "tagpu.h"
 
 /* everything the effects gather/render needs from the native pass's frame.
-   THE ENGINE POINTER IS NOT IN IT (frame packet exchange, landing 2): the
-   eye and the viewport below come from the packet, and a pass that still
-   walks engine memory on the render thread (units, features, effects — to
-   convert in landings 3 and 4) takes the main pointer itself, in its own
-   file, where the build rule can see it; a shared record carrying it would
-   be a conduit the rule cannot. */
+   THE ENGINE POINTER IS NOT IN IT (frame packet exchange, landing 2), and
+   since landing 4a neither effects pass reads engine memory at all: the
+   projectiles, explosions, debris and the ten particle layers arrive as
+   tables in `packet`, gathered by the game thread once per sim tick. */
 struct TAGPU_PACKET;
 typedef struct TAGPU_FXVIEW {
     const struct TAGPU_PACKET* packet;  /* this frame's packet (tagpu_packet.h), never NULL
@@ -45,7 +43,11 @@ typedef struct TAGPU_FXVIEW {
 
 /* one 3DO node to emit through the native geometry path */
 typedef struct TAGPU_FXMODEL {
-    const char* node;            /* Model3DONode*                              */
+    const char* node;            /* Model3DONode*: the per-TYPE template the
+                                    PUBLISHER resolved. tagpu_fx.c only carries
+                                    it; tagpu_native.c's emit_fx_model is the
+                                    (fenced) file that walks it, under
+                                    tagpu_reclaim's teardown fence              */
     float ax, ay;                /* anchor in frame px (engine projection)     */
     float wx, wz;                /* world x, projected world z (fog lookup)    */
     short turn[3];               /* engine rotation triple (65536 = 360 deg)   */
@@ -67,14 +69,16 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex,
                      unsigned int scafTex);
 void tagpu_fx_glreset(void);
 
-/* emission API for the particle pass (tagpu_sfx.c): a sequence frame or a
-   DrawBar 2x2 dot into the shared buckets at an explicit depth key */
-int  tagpu_fx_emit_seq_frame(const char* seq, int frame, int sx, int sy, int mode,
-                             float wx, float wz, float enc, int under);
+/* emission API for the particle pass (tagpu_sfx.c): a GAF frame the PACKET
+   resolved, or a DrawBar 2x2 dot, into the shared buckets at an explicit
+   depth key. `g` is an opaque handle: only tagpu_gaf.c ever reads it. */
+int  tagpu_fx_emit_frame(const unsigned char* g, int sx, int sy, int mode,
+                         float wx, float wz, float enc, int under);
 int  tagpu_fx_emit_dot(int x, int y, int colidx, float wx, float wz, float enc, int under);
 void tagpu_fx_set_mute(int on);                 /* passive: count, emit nothing */
 void tagpu_fx_trace(int n);                     /* log the next n sprite emissions */
-unsigned tagpu_fx_caps(void);                   /* TAProgram+0xF0: bit5 ALP, bit7 LHT */
+unsigned tagpu_fx_caps(void);                   /* the PACKET's copy of TAProgram+0xF0:
+                                                   bit5 ALP built, bit7 LHT built      */
 int  tagpu_fx_tile_visible(const TAGPU_FXVIEW* v, int wx, int wzp);   /* engine LOS gate */
 /* the fragment shaders' fog rule (tagpu_glsl.h) on the CPU, for gather-side
    gates: bit0 = the engine paints this point black, bit1 = it shade-remaps it.

@@ -73,6 +73,7 @@
 #include "tagpu_hires_draw.h"
 #include "tagpu_fx.h"
 #include "tagpu_sfx.h"
+#include "tagpu_fxown.h"
 #include "tagpu_feat.h"
 #include "tagpu_terr.h"
 #include "tagpu_restoreglsl.h"
@@ -2113,6 +2114,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        fog and palette set up here and draws into this FBO */
     int fxOn = tagpu_fx_armed(f->frame_counter);
     int sfxOn = tagpu_sfx_armed(f->frame_counter);
+    /* the publisher fills the packet's effect tables only while a pass is
+       asking for them: the walk costs it four engine arrays (landing 4a).
+       Raised every frame, PASSIVE OR NOT — a passive pass still counts what it
+       would have drawn — and dropped by fxown's watchdog after 90 silent
+       frames, the same one the two skip bytes stand on. */
+    tagpu_fxown_set_want(fxOn, sfxOn, f->frame_counter);
     int featOn = tagpu_feat_armed(f->frame_counter);
     int terrOn = tagpu_terr_armed(f->frame_counter);
     int markOn = tagpu_mark_armed(f->frame_counter);
