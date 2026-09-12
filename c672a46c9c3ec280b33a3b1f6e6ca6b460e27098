@@ -1,0 +1,1 @@
+landing-review: model=opus effort=high range=main..c672a46 findings=14 acted=13 rejected=1 date=2026-09-12 (two reviewers: general + the game/render synchronisation; the rejected one is the ring test's one-frame rect skew during a wheel ease, documented as a residual in gpu-status §2.17)
