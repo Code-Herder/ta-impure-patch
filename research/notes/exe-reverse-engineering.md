@@ -1288,6 +1288,12 @@ font+off    u8    that glyph's width, in pixels AND in bits
 font+off+1  ...   the glyph: rows x width bits, MSB first, packed ACROSS row boundaries
 ```
 
+`first` is the byte at **`font+3`**, loaded by `0x4CCF77` (`mov …,[esi+3]`) — it is 0 for every
+stock face, which is the only reason a `font[3] != 0` test reads as "this is not the `.fnt`
+format"; it is a refusal of an unusual font and not a statement about the layout
+[CLARIFIED 2026-09-12, landing 4c's review, which found this fork's own comment calling it the
+high byte of the y-offset word].
+
 Neither the measure nor the blit bounds the index against the table's length — a character
 past its end reads whatever follows — and both skip a code below `first` and a zero offset
 **without advancing the cursor**. Those two are the ONLY characters the blit skips: `sub
