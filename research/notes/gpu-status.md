@@ -2729,7 +2729,30 @@ removed: one frame of the outer ring drawn over the engine's 1× grid, at the st
 zoom-out. The copy is what buys "never a bare frame", and it is 72 KB of memcpy on the game thread
 per publish.
 
-PLACEHOLDER-CLEANCOST
+**THE COST, measured inside ONE launch, because a cross-build one is not available.** Two runs of
+`200v200` reach different scenes — the same reason the effects pixel A/B is unavailable — so the
+figure that means anything is the same launch with the new gathers turned off and on again. On a
+settled 55-unit scene at 1920×1080, `--maxfps 0`, no stress levers:
+
+| phase | publish p50 | p99 | packet | in-play draws/s |
+|---|---|---|---|---|
+| everything armed | **46 µs** | 234 | 153 712 B | 3389 |
+| the four effect tables off | 44 µs | 214 | 147 280 B | 2421 |
+| ...and the wide fog grid off | **38 µs** | 224 | 74 760 B | 2374 |
+| everything armed again | 44 µs | 230 | 152 912 B | 3540 |
+
+So **the effect tables cost 2 µs of publish and 6.4 KB, and the wide fog grid 6 µs and 72.5 KB** —
+8 µs of a 46 µs publish, and 79 KB of a 154 KB packet. The publish's own cost is still dominated by
+landing 3's world gather: at ~340 units the same run read p50 112 µs and 308 KB, and at 55 units
+46 µs.
+
+**And the whole build is not slower — it is faster with the passes armed.** `draws/s` reads 3389
+and 3540 with everything on against 2374 and 2421 with the effect tables off, because turning them
+off releases the engine's own projectile, explosion and particle draws and the engine pays more for
+them than we do. That is the direction the two adjacent pairs agree on; the absolute numbers are a
+ratio and nothing else ([ta-drive](../../.claude/skills/ta-drive/SKILL.md), "a frame-rate figure is
+only ever a RATIO").
+
 
 ### 2.22 What landing 4's review changed
 
