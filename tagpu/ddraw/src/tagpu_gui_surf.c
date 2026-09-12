@@ -1513,6 +1513,13 @@ static void sharp_minimap(const TAGPU_FRAME* f)
     if (s_mmbase) {
         if (!minimap_pic(pk, &pic, &pw, &ph, &gen)) return;
         if (pw <= 0 || ph <= 0) return;
+    } else {
+        /* `nominimap` with `mmbase`: the surfaces are wanted and the picture is
+           not. Acknowledge it anyway — the acknowledgement means "stop sending
+           it", not "I have used it", and without this the publisher would put
+           63 KB in every packet of the level for a consumer that never reads
+           it. The combination is a harness one and this is two lines. */
+        tagpu_gui_set_minimap_have(pk->level_gen + 1u);
     }
     if (s_mmbase && (gen != s_mmGenSeen || tagpu_pal_serial() != s_mmPalSeen || !s_mmTex)) {
         /* THE PALETTE THE SCREEN IS SHOWN WITH, not main+0x143A7: tagpu_pal.h
