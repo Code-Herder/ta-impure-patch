@@ -69,14 +69,40 @@ unsigned tagpu_gui_flips(void);                     /* the publisher's flip coun
    composite runs, and over the panel the twin covers the engine's cursor
    either way — and recorded in gui-renderer.md 17 "Not closed here" rather
    than closed by guessing which module should own the question. */
-void tagpu_gui_cursor_frame(void);
+struct TAGPU_PACKET;
+void tagpu_gui_cursor_frame(const struct TAGPU_PACKET* packet);
 int  tagpu_gui_cursor_own(float* r);
 
-/* G17e: the TNT's own minimap picture (`main+0x1426B`, TED_GENERATED_PIC),
-   decoded on the game thread inside `BuildMinimapSurface 0x466780` — the one
-   place it is alive, since the loader frees it before the map's first frame.
-   252x252 or 252x256, against the 126-px box the engine fits it into, so
-   drawing it at its native size is a free 2x with no new data path
-   (gui-renderer.md 13.6). `gen` moves once per map load. */
-int  tagpu_gui_minimap_pic(const unsigned char** pix, int* w, int* h, unsigned* gen);
+/* GAME THREAD, from the packet's publisher (landing 4c). The TNT's own minimap
+   picture (`main+0x1426B`, TED_GENERATED_PIC) — 252x252 or 252x256 against the
+   126-px box the engine fits it into, so drawing it at its native size is a
+   free 2x with no new data path (gui-renderer.md 13.6). `gen` moves once per
+   map load.
+
+   IT IS DECODED ON THE LOADER THREAD and there is no choice about that: the
+   observer sits at `BuildMinimapSurface 0x466780`'s entry because that call is
+   the one place the picture is alive — it consumes the frame at 0x46684F and
+   the loader frees the picture at 0x483DF3/0x483E0B, so by the first in-play
+   draw there is nothing left to decode.
+
+   WHAT LANDING 4C REMOVED IS THE RENDER THREAD READING THAT BUFFER. The
+   publisher copies it into the level's FIRST in-play packet and the render half
+   keeps its own copy from there, keyed on the level generation. The ordering
+   that makes the copy safe is the engine's own rather than a barrier of ours:
+   the loader's last act sets bit 1 of `main+0x38D75`, and the game-screen
+   handler installs the in-play frame handler only after testing that flag — so
+   the decode is complete before any in-play publish can exist. */
+int  tagpu_gui_minimap_pic_game(const unsigned char** pix, int* w, int* h, unsigned* gen);
+
+/* WHETHER THE PACKET CARRIES THE THREE MINIMAP SURFACES (landing 4c). The
+   sharp minimap raises it from its own frame — once per present, whenever it
+   would draw — and `tagpu_gui_flush`'s watchdog drops it after 90 silent
+   frames, the same shape tagpu_fxown uses for the effect tables. It costs the
+   publisher an ew x eh x 3 interleave per publish when set, and at k = 1 the
+   sharp minimap is deliberately the engine's own, so an unarmed frame must not
+   pay for it. Written on the render thread, read on the game thread; one
+   writer, no ordering owed — a frame either side of the change costs one frame
+   of the engine's own minimap. */
+void tagpu_gui_set_want_minimap(int on, unsigned int frame_counter);
+int  tagpu_gui_want_minimap(void);
 #endif

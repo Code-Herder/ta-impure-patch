@@ -79,7 +79,6 @@
 typedef void (__cdecl *PFN_BLIT)(unsigned char*, int, const void*, const char*,
                                  int, int, int, int, int);
 
-static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
 
 static void flog(const char* s)
 {
@@ -331,11 +330,20 @@ void tagpu_text_dims(int* w, int* h) { *w = ATLAS_W; *h = ATLAS_H; }
 #define GCH_HI     0xFF
 #define GA_NCH     (GCH_HI - CH_LO + 1)
 
+/* KEYED ON AN ID, NEVER ON A FONT ADDRESS (landing 4c). The string op used to
+   carry the engine's font object and this cache keyed on the pointer and its
+   signature — which meant dereferencing that pointer here, on the present
+   thread, up to a queue backlog after the observer saw it, behind probes, with
+   no note establishing a UI font's lifetime. The producer assigns a number per
+   (font, signature) now and sends the GLYPH BITS with the first string that
+   needs each code; an id is never reused, so a recycled font address cannot
+   serve the old font's cells. Nothing in this file dereferences a font. */
 typedef struct {
-    const unsigned char* font;             /* the object, and its signature:   */
-    unsigned char sig[3];                  /* rows / yoff / first              */
+    unsigned id;                           /* 0 = the slot is free             */
+    unsigned char rows;
+    signed char   yoff;
     short cell[GA_NCH][4];                 /* ax, ay, w, h; w == 0 = not cached */
-    unsigned char known[GA_NCH];           /* 1 = tried; 2 = tried and refused  */
+    unsigned char known[GA_NCH];           /* 1 = cached; 2 = refused           */
 } GFONT;
 
 static GFONT s_gf[GA_FONTS];
@@ -350,123 +358,140 @@ static unsigned s_gglyphs, s_gdrops;
    them has to check this across the gather. */
 static unsigned s_ggen;
 
-/* Validate an arbitrary font object — the UI's, which arrives in a published op
-   as an ENGINE POINTER (the marker path's font arrives as bytes in the frame
-   packet since landing 1; this path converts in landing 4c). Probes, and they
-   must stay until then: the table is indexed to CH_HI and a short block would
-   fault. */
-static const unsigned char* gfont_ok(const unsigned char* f)
-{
-    if (!ptr_ok(f)) return NULL;
-    if (IsBadReadPtr((void*)f, F_TAB)) return NULL;
-    if (f[F_ROWS] == 0 || f[F_ROWS] > GA_H) return NULL;
-    /* the TABLE is probed per character below, not here: its length is not
-       stated anywhere in the object, and demanding the full 0x100 - first
-       entries would reject a short font outright rather than serve the codes
-       it does have */
-    return f;
-}
-
-/* The slot for this font, matched on the POINTER AND THE SIGNATURE — an
-   allocator that hands the same address to a different font would otherwise
-   serve the old font's glyphs. A full table drops the oldest slot's cells
-   rather than refusing, because refusing would leave the UI text-less. */
-static GFONT* gfont_slot(const unsigned char* f)
+/* The slot for this font id, or NULL when the table is full and had to start
+   over (a full table drops every cell rather than evict one font into a shelf
+   another font's cells still occupy). */
+static GFONT* gfont_slot(unsigned id)
 {
     int i;
     GFONT* g;
-    for (i = 0; i < s_ngf; i++)
-        if (s_gf[i].font == f && s_gf[i].sig[0] == f[F_ROWS] &&
-            s_gf[i].sig[1] == f[F_YOFF] && s_gf[i].sig[2] == f[F_FIRST])
-            return &s_gf[i];
+    for (i = 0; i < s_ngf; i++) if (s_gf[i].id == id) return &s_gf[i];
     if (s_ngf < GA_FONTS) g = &s_gf[s_ngf++];
     else {
-        /* every slot is taken: start the whole cache over rather than evict one
-           font into a shelf another font's cells still occupy */
         memset(s_gf, 0, sizeof s_gf);
         memset(s_gatlas, 0, sizeof s_gatlas);
         s_gshelfX = s_gshelfY = s_gshelfH = 0;
         s_gdirty = 1;
         s_ngf = 1; g = &s_gf[0];
+        s_ggen++;
         flog("text: glyph atlas reset (more than 8 fonts seen)");
     }
     memset(g, 0, sizeof *g);
-    g->font = f;
-    g->sig[0] = f[F_ROWS]; g->sig[1] = f[F_YOFF]; g->sig[2] = f[F_FIRST];
+    g->id = id;
     return g;
 }
 
-int tagpu_text_glyph(const void* font, int ch, int* ax, int* ay, int* w, int* h, int* yoff)
+/* One glyph into the atlas, from the BITS the producer sent. The blitter is
+   handed a one-glyph font object of OURS — `[rows][0][yoff][code][u16 6][w]
+   [bits]`, the same four header fields it reads and the same packed rows,
+   exactly as the marker path's copy is built above — so TA's own glyphs are
+   still stamped by TA's own blitter and nothing engine-side is dereferenced. */
+static void glyph_raster(GFONT* g, int ch, int gw, const unsigned char* bits, unsigned nb)
 {
-    const unsigned char* f = gfont_ok((const unsigned char*)font);
-    const unsigned short* tab;
-    GFONT* g;
-    int idx, first, rows, off, gw, y;
-    char one[2];
-
-    if (!f || ch < CH_LO || ch > GCH_HI) return 0;
-    first = f[F_FIRST];
-    rows  = f[F_ROWS];
-    if (ch < first) return 0;                        /* 0x4CCFAA skips it      */
-    tab = (const unsigned short*)(f + F_TAB);
-    idx = ch - CH_LO;
-    g = gfont_slot(f);
-    if (yoff) *yoff = (int)(signed char)f[F_YOFF];
-    if (g->known[idx] == 2) return 0;
-    if (g->known[idx] == 1) {
-        *ax = g->cell[idx][0]; *ay = g->cell[idx][1];
-        *w  = g->cell[idx][2]; *h  = g->cell[idx][3];
-        return 1;
-    }
-    /* the table entry itself, probed at the index the engine would use */
-    if (IsBadReadPtr((void*)(tab + (ch - first)), 2)) { g->known[idx] = 2; return 0; }
-    off = tab[ch - first];
-    if (!off) { g->known[idx] = 2; return 0; }       /* 0x4CCFB9 skips it      */
-    if (IsBadReadPtr((void*)(f + off), 1)) { g->known[idx] = 2; return 0; }
-    gw = f[off];
-    /* A ZERO WIDTH WRITES 256 COLUMNS in the engine (the do-while at 0x4CCFCA /
-       0x4CCFE9 wraps cl to 255), so it is refused here exactly as `measure`
-       refuses it. That is a deliberate DIVERGENCE from the engine on a corrupt
-       font: the engine would smear 256 columns of ink and we draw nothing. No
-       stock font has one. */
-    if (gw <= 0) { g->known[idx] = 2; return 0; }
-    if (IsBadReadPtr((void*)(f + off + 1), (UINT_PTR)((rows * gw + 7) / 8))) {
-        g->known[idx] = 2; return 0;
-    }
-    if (gw > GA_W || rows > GA_H) { g->known[idx] = 2; s_gdrops++; return 0; }
+    int idx = ch - CH_LO, y;
+    unsigned char obj[7 + (GA_W * GA_H + 7) / 8];
+    unsigned rows = g->rows;
+    if (idx < 0 || idx >= GA_NCH || g->known[idx]) return;
+    if (gw <= 0 || gw > GA_W || rows == 0 || rows > GA_H) { g->known[idx] = 2; s_gdrops++; return; }
+    if (nb != ((rows * (unsigned)gw) + 7u) / 8u) { g->known[idx] = 2; s_gdrops++; return; }
     if (s_gshelfX + gw > GA_W) { s_gshelfY += s_gshelfH; s_gshelfX = 0; s_gshelfH = 0; }
-    if (s_gshelfY + rows > GA_H) {
+    if (s_gshelfY + (int)rows > GA_H) {
         /* out of shelf: start over. Every cached cell goes with it, which costs
-           one re-rasterise of what is on screen and never a wrong glyph */
+           one re-rasterise of what is on screen and never a wrong glyph. EVERY
+           CELL HANDED OUT BEFORE THIS POINT NOW NAMES CLEARED TEXELS, and a
+           caller gathering a whole string is holding a fistful of them — the
+           generation below is how it finds out. */
+        unsigned keep = g->id; unsigned char kr = g->rows; signed char ky = g->yoff;
         memset(s_gf, 0, sizeof s_gf);
         memset(s_gatlas, 0, sizeof s_gatlas);
         s_gshelfX = s_gshelfY = s_gshelfH = 0;
-        s_ngf = 0; s_gdirty = 1; s_gdrops++;
-        /* EVERY CELL HANDED OUT BEFORE THIS POINT NOW NAMES CLEARED TEXELS, and
-           a caller gathering a whole string is holding a fistful of them. This
-           is how it finds out -- the same rule as the `s_frameFont` latch
-           above, one level down. */
-        s_ggen++;
+        s_ngf = 1; s_gdirty = 1; s_gdrops++; s_ggen++;
+        g = &s_gf[0]; g->id = keep; g->rows = kr; g->yoff = ky;
         flog("text: glyph atlas full — reset");
-        g = gfont_slot(f);
+        if (s_gshelfY + (int)rows > GA_H) { g->known[idx] = 2; return; }
     }
-    /* clear first: the blitter stores nothing for a clear bit, so a dirty slot
-       would keep the previous glyph's ink */
-    for (y = 0; y < rows; y++)
+    for (y = 0; y < (int)rows; y++)
         memset(s_gatlas + (size_t)(s_gshelfY + y) * GA_W + s_gshelfX, 0, (size_t)gw);
-    one[0] = (char)ch; one[1] = 0;
-    /* fg = INK, bg = 0, transparent = 0: the store keeps only the set bits, so
-       what lands is a COVERAGE MASK and one raster serves every colour */
-    ((PFN_BLIT)BLIT_VA)(s_gatlas + (size_t)s_gshelfY * GA_W + s_gshelfX, GA_W,
-                        f, one, 0, (int)(signed char)f[F_YOFF], INK, 0, 0);
+    obj[0] = (unsigned char)rows;
+    obj[1] = 0;
+    obj[2] = (unsigned char)g->yoff;
+    obj[3] = (unsigned char)ch;
+    obj[4] = 6; obj[5] = 0;
+    obj[6] = (unsigned char)gw;
+    memcpy(obj + 7, bits, nb);
+    {
+        char one[2];
+        one[0] = (char)ch; one[1] = 0;
+        /* fg = INK, bg = 0, transparent = 0: the store keeps only the set bits,
+           so what lands is a COVERAGE MASK and one raster serves every colour */
+        ((PFN_BLIT)BLIT_VA)(s_gatlas + (size_t)s_gshelfY * GA_W + s_gshelfX, GA_W,
+                            obj, one, 0, (int)g->yoff, INK, 0, 0);
+    }
     g->cell[idx][0] = (short)s_gshelfX; g->cell[idx][1] = (short)s_gshelfY;
     g->cell[idx][2] = (short)gw;        g->cell[idx][3] = (short)rows;
     g->known[idx] = 1;
-    *ax = s_gshelfX; *ay = s_gshelfY; *w = gw; *h = rows;
     s_gshelfX += gw;
-    if (rows > s_gshelfH) s_gshelfH = rows;
+    if ((int)rows > s_gshelfH) s_gshelfH = (int)rows;
     s_gdirty = 1;
     s_gglyphs++;
+}
+
+/* Where the STRING starts inside a string op's arena block: past `n` glyph
+   records, each 4 + its padded bit count. Bounded by `len`, so a block the
+   producer truncated (the arena filled) leaves the string at the end and the
+   caller's own NUL test does the rest. */
+unsigned tagpu_text_glyph_block_bytes(const unsigned char* block, unsigned n, unsigned len)
+{
+    unsigned at = 0, k;
+    for (k = 0; k < n; k++) {
+        unsigned nb, pad;
+        if (at + 4u > len) return len;
+        nb = (unsigned)block[at + 2] | ((unsigned)block[at + 3] << 8);
+        pad = (nb + 3u) / 4u * 4u;
+        if (at + 4u + pad > len) return len;
+        at += 4u + pad;
+    }
+    return at;
+}
+
+void tagpu_text_glyph_feed(unsigned font_id, int rows, int yoff,
+                           const unsigned char* block, unsigned n, unsigned len)
+{
+    GFONT* g;
+    unsigned at = 0, k;
+    if (!font_id || rows <= 0 || rows > GA_H) return;
+    g = gfont_slot(font_id);
+    g->rows = (unsigned char)rows;
+    g->yoff = (signed char)yoff;
+    for (k = 0; k < n; k++) {
+        int ch, gw;
+        unsigned nb, pad;
+        if (at + 4u > len) return;                 /* the block ended early     */
+        ch = block[at]; gw = block[at + 1];
+        nb = (unsigned)block[at + 2] | ((unsigned)block[at + 3] << 8);
+        pad = (nb + 3u) / 4u * 4u;
+        if (at + 4u + pad > len) return;
+        glyph_raster(g, ch, gw, block + at + 4, nb);
+        /* the slot may have moved if the raster reset the table */
+        g = gfont_slot(font_id);
+        g->rows = (unsigned char)rows; g->yoff = (signed char)yoff;
+        at += 4u + pad;
+    }
+}
+
+int tagpu_text_glyph_id(unsigned font_id, int ch, int* ax, int* ay,
+                        int* w, int* h, int* yoff)
+{
+    GFONT* g;
+    int idx, i;
+    if (!font_id || ch < CH_LO || ch > GCH_HI) return 0;
+    for (i = 0, g = NULL; i < s_ngf; i++) if (s_gf[i].id == font_id) { g = &s_gf[i]; break; }
+    if (!g) return 0;
+    if (yoff) *yoff = (int)g->yoff;
+    idx = ch - CH_LO;
+    if (g->known[idx] != 1) return 0;
+    *ax = g->cell[idx][0]; *ay = g->cell[idx][1];
+    *w  = g->cell[idx][2]; *h  = g->cell[idx][3];
     return 1;
 }
 

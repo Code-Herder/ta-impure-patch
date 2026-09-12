@@ -93,13 +93,21 @@ int  tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff
    what tagpu_text_place cannot give it: the UI's text is metal readouts and a
    clock, a new STRING every tick, against a 64-entry string cache.
    Its atlas is separate from the string one: different lifetimes (a font change
-   repacks that one) and different keys. 0 when the font will not read, the code
-   is outside [0x20, 0x7E], the font's table skips it, or the atlas is full.
-   `font` is validated here — it arrives from a published op, not from the
-   packet. STILL AN ENGINE POINTER DEREFERENCED ON THE PRESENT THREAD: the
-   string op carries the font's address, and converting it to glyph bytes on
-   first sight is landing 4c of the frame packet exchange, not landing 1. */
-int  tagpu_text_glyph(const void* font, int ch, int* ax, int* ay, int* w, int* h, int* yoff);
+   repacks that one) and different keys. */
+/* THE UI'S GLYPHS, BY ID AND BY BITS (landing 4c). `feed` installs every glyph
+   record a string op carried — `{u8 code, u8 w, u16 nbytes, u8 bits[]}` each,
+   4-byte aligned, the producer's copy of the font's own packed rows — and
+   `glyph_id` is the lookup afterwards. Nothing here dereferences a font: the
+   string op used to carry the engine's font OBJECT and this file read its
+   header, its offset table and every glyph behind IsBadReadPtr, on the present
+   thread, up to a queue backlog after the observer saw it. The blitter still
+   stamps the glyph, from a one-glyph font object of OURS. */
+void tagpu_text_glyph_feed(unsigned font_id, int rows, int yoff,
+                           const unsigned char* block, unsigned n, unsigned len);
+int  tagpu_text_glyph_id(unsigned font_id, int ch, int* ax, int* ay,
+                         int* w, int* h, int* yoff);
+/* where the string starts inside the block, past the glyph records */
+unsigned tagpu_text_glyph_block_bytes(const unsigned char* block, unsigned n, unsigned len);
 void tagpu_text_glyph_dims(int* w, int* h);
 /* Bumped whenever the glyph atlas repacks, which invalidates every cell handed
    out before it. A caller that gathers a run of cells and draws them afterwards

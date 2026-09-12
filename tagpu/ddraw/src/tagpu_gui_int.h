@@ -42,10 +42,31 @@ typedef struct TAGPU_PUBOP {
                                        string: the x and y the blitter was GIVEN
                                        (y before the font's own -font[2])       */
     int            w, h, pitch;     /* seed: the surface's geometry             */
-    const void*    frame;           /* sprite: the key (header, pixel ptr);
-                                       string: the FONT object                  */
+    const void*    frame;           /* sprite: the key (header, pixel ptr).
+                                       NOT USED BY A STRING any more: it held
+                                       the engine's FONT OBJECT, which the
+                                       render thread then dereferenced up to a
+                                       queue backlog later, behind probes and
+                                       with no note establishing a UI font's
+                                       lifetime. Landing 4c replaced it with
+                                       `font_id` and the glyph BITS below.      */
     const void*    pix;
-    unsigned       aoff, alen;      /* arena bytes: seed / pixels / a sprite's first sight / the string */
+    unsigned       aoff, alen;      /* arena bytes: seed / pixels / a sprite's first sight / a string's block */
+    /* ---- string (landing 4c): the font as an identity and its glyphs as bits.
+       The arena block is `gcount` glyph records followed by the NUL-terminated
+       string; each record is `{u8 code, u8 w, u16 nbytes, u8 bits[nbytes]}`,
+       4-byte aligned, with nbytes = (rows * w + 7) / 8 — the same packed rows
+       the engine's blitter reads, copied on the GAME thread where the font is
+       live. A glyph is sent on FIRST SIGHT of its (font, code) pair and never
+       again, so a steady screen's ops carry the string alone.
+
+       `font_id` is a number this fork assigns per (font pointer, signature),
+       never an address: the consumer's glyph cache keys on it and no longer
+       has anything to dereference. */
+    unsigned       font_id;
+    unsigned short gcount;          /* glyph records at the head of the block   */
+    unsigned char  font_rows;       /* font[0], the rows the blitter writes     */
+    signed char    font_yoff;       /* font[2], subtracted from y               */
     unsigned       flip;            /* the flip this belongs to (diagnostics)   */
 } TAGPU_PUBOP;
 

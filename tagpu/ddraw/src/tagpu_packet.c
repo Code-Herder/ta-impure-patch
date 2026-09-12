@@ -542,6 +542,26 @@ static const char* frame_valid(const void* rec)
     if (p->fogsh_len && (p->fogsh_len != TAGPU_PK_FOGSHADE_BYTES ||
                          !area_ok(p, p->fogsh_off, p->fogsh_len)))
         return "fog shade area";
+    /* THE GL UI's TWO AREAS (landing 4c), bounded the same way the fog grids
+       are: the length has to be exactly what the dimensions describe, so the
+       largest index a consumer can form is inside the bytes it was handed. */
+    if (p->mm_len || p->mm_w || p->mm_h) {
+        if (p->mm_w <= 0 || p->mm_h <= 0 ||
+            p->mm_w > TAGPU_PK_MM_DIMCAP || p->mm_h > TAGPU_PK_MM_DIMCAP)
+            return "minimap surface dims";
+        if (p->mm_len != (unsigned)p->mm_w * (unsigned)p->mm_h * 3u ||
+            !area_ok(p, p->mm_off, p->mm_len))
+            return "minimap surface area";
+    }
+    if (p->mmpic_len || p->mmpic_w || p->mmpic_h) {
+        if (p->mmpic_w <= 0 || p->mmpic_h <= 0 ||
+            p->mmpic_w > TAGPU_PK_MM_DIMCAP || p->mmpic_h > TAGPU_PK_MM_DIMCAP)
+            return "minimap picture dims";
+        if (p->mmpic_len != (unsigned)p->mmpic_w * (unsigned)p->mmpic_h ||
+            !area_ok(p, p->mmpic_off, p->mmpic_len))
+            return "minimap picture area";
+    }
+    if (p->mm_live > 1u) return "mm_live";
     return NULL;
 }
 

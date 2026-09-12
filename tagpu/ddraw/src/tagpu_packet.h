@@ -349,6 +349,35 @@ typedef struct TAGPU_PK_PART {
    whenever nothing was unacknowledged, and a lattice offset from its own bytes
    when something was. (The pass covered it by taking the wide grid whenever
    anything was unacknowledged, which is still what it does.) */
+/* ---- THE GL UI'S RENDER HALF (landing 4c) -------------------------------
+   The four engine reads tagpu_gui_surf.c made on the render thread, every
+   present: the cursor's position and sprite through the graphics globals, the
+   minimap's box, its three 8bpp surfaces and the view box drawn over them. The
+   GL UI's op QUEUE is untouched and stays a queue — it carries an op stream
+   into retained twins and a latest-wins snapshot cannot do that (the plan's
+   §9). What crosses here is the per-frame STATE the render half read beside it.
+
+   THE CURSOR'S SPRITE IS A KEY, not a copy. `cur_rec` is the record at
+   `graphics+0x1B2`, which IS a GAF frame header — size, hotspot, colour key and
+   a pixel pointer — and it comes out of the cursor TABLE, a session asset
+   loaded once and never rewritten (tagpu_gaf.c's class). Only tagpu_gaf.c
+   dereferences it, which is where that argument lives.
+
+   THE MINIMAP SURFACES ARE A COPY, and they are gated. The engine repaints the
+   three at every draw and the render half walked all three, row by row, to
+   interleave them; the publisher does the interleave now and the packet carries
+   the result — but only while the consumer asks for it (tagpu_gui_want_minimap),
+   because at k = 1 the sharp minimap is deliberately the engine's own and the
+   whole copy would be paid for nothing.
+
+   THE PICTURE ARRIVES IN THE LEVEL'S FIRST IN-PLAY PACKET and in no other, so
+   the consumer keeps its own copy keyed on the level generation — which is also
+   what a GL re-init needs. Until this landing it was decoded by an observer on
+   the LOADER thread, the one publisher outside the in-play gate. */
+#define TAGPU_PK_MM_DIMCAP  512    /* the engine's own bound on a minimap
+                                      surface; its picture is a GAF frame, so
+                                      TAGPU_GAF_DECMAX (512) bounds that too   */
+
 #define TAGPU_PK_FOG_DIMCAP 4096   /* a sanity ceiling on a dimension; the real
                                       bound is `len == cols*rows*2` inside the
                                       record, checked once at acquire          */
@@ -370,6 +399,8 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_TRUNC_FOG     0x1000u
 #define TAGPU_PK_TRUNC_FOGW    0x2000u
 #define TAGPU_PK_TRUNC_FOGSH   0x4000u
+#define TAGPU_PK_TRUNC_MM      0x8000u
+#define TAGPU_PK_TRUNC_MMPIC   0x10000u
 
 #define TAGPU_PK_SHD_ROWS   32u      /* the engine's PALETTE.SHD shade table:  */
 #define TAGPU_PK_SHD_BYTES  (TAGPU_PK_SHD_ROWS * 256u)   /* 32 x 256 bytes     */
@@ -554,6 +585,31 @@ typedef struct TAGPU_PACKET {
     int32_t  fogw_org[2];
     uint32_t fogw_off, fogw_len;
     uint32_t fogsh_off, fogsh_len;    /* the grey band's 256-byte palette remap */
+
+    /* ---- landing 4c: the GL UI's render half ---- */
+    int32_t  cur_pos[2];              /* graphics+0x1B6 / +0x1BA, where the
+                                         engine last drew the cursor            */
+    int32_t  cur_w, cur_h;            /* its sprite's size; 64x64 when the
+                                         record could not be read               */
+    uint32_t cur_rec;                 /* graphics+0x1B2, the sprite record — a
+                                         GAF frame header in the SESSION cursor
+                                         table. A KEY: only tagpu_gaf.c reads it */
+    int32_t  mm_box[4];               /* main+0x142E7/E9/EB/ED, the box the
+                                         engine fitted the minimap into, ITS px */
+    int32_t  mm_view[4];              /* main+0x142CB, the view box, screen px,
+                                         edges inclusive                         */
+    int32_t  mm_w, mm_h;              /* the three surfaces' size               */
+    uint32_t mm_off, mm_len;          /* mm_w * mm_h * 3 bytes: the fog base,
+                                         the unshaded base and the composite,
+                                         interleaved as an RGB texture           */
+    uint8_t  mm_live;                 /* the engine's minimap exists this frame
+                                         (its composite pointer is non-NULL) —
+                                         the render half's "in a game" gate      */
+    uint8_t  mm_viewcol;              /* main+0xDD9, the view box's palette index */
+    uint8_t  mm_pad[2];
+    int32_t  mmpic_w, mmpic_h;        /* the decoded minimap picture, in the
+                                         LEVEL'S FIRST in-play packet only       */
+    uint32_t mmpic_off, mmpic_len;    /* mmpic_w * mmpic_h palette indices       */
     uint32_t truncated;         /* TAGPU_PK_TRUNC_* bits: what did not fit      */
     uint32_t crc;               /* CRC-32 of the slot with these two fields as
                                    zero, under `tagpu_packet.check`; else 0     */
@@ -628,6 +684,15 @@ static __inline const unsigned short* tagpu_pk_fogw(const TAGPU_PACKET* p)
 /* the grey band's palette remap, 256 bytes, or NULL */
 static __inline const unsigned char* tagpu_pk_fogshade(const TAGPU_PACKET* p)
 { return p->fogsh_len == TAGPU_PK_FOGSHADE_BYTES ? (const unsigned char*)p + p->fogsh_off : (const unsigned char*)0; }
+/* ---- the GL UI's render half (landing 4c) ---- */
+/* the three minimap surfaces interleaved, mm_w * mm_h RGB triples, or NULL */
+static __inline const unsigned char* tagpu_pk_minimap(const TAGPU_PACKET* p)
+{ return p->mm_len ? (const unsigned char*)p + p->mm_off : (const unsigned char*)0; }
+/* the level's decoded minimap picture, mmpic_w * mmpic_h palette indices —
+   present in the level's FIRST in-play packet and in no other, so a consumer
+   that needs it across frames copies it and keys the copy on `level_gen`. */
+static __inline const unsigned char* tagpu_pk_minimap_pic(const TAGPU_PACKET* p)
+{ return p->mmpic_len ? (const unsigned char*)p + p->mmpic_off : (const unsigned char*)0; }
 /* ---- the effects tables (landing 4a) ---- */
 static __inline const TAGPU_PK_PROJ* tagpu_pk_proj(const TAGPU_PACKET* p)
 { return p->n_proj ? (const TAGPU_PK_PROJ*)(const void*)((const unsigned char*)p + p->off_proj) : (const TAGPU_PK_PROJ*)0; }

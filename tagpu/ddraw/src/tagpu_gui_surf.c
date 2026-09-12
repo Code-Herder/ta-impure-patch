@@ -83,25 +83,12 @@
 #include "dd.h"                         /* g_ddraw.cursor: the pointer the fork last saw (13.5) */
 #include "mouse.h"                      /* mouse_last_client: the pointer at the DEVICE's resolution (13.5) */
 
-#define TA_MAINPP      0x00511DE8u
-#define OFF_PALETTE    0x143A7          /* 256 x {R,G,B,pad}                   */
-#define GFX_GLOBALS_PP 0x0051FBD0u
-#define MOUSE_POS_X    0x1B6            /* the cursor's last drawn position    */
-#define MOUSE_POS_Y    0x1BA
-#define MOUSE_SPRITE   0x1B2            /* -> record: u16 w, u16 h, s16 hotspots */
-/* the minimap's box on the engine's screen, filled by BuildMinimapSurface
-   0x466780 (engine map, "The minimap, located"); +0x142F1 bit 1 is what
-   DrawMinimap 0x466B00 itself is gated on */
-#define MM_OFFX        0x142E7
-#define MM_OFFY        0x142E9
-#define MM_W           0x142EB
-#define MM_H           0x142ED
-#define MM_FLAGS       0x142F1
-#define MM_COMPOSITE   0x142DB          /* the fog+dots composite; non-NULL = built */
-#define MM_VIEWRECT    0x142CB          /* the view box, 4 ints, SCREEN px, edges inclusive */
-#define MM_VIEWCOL     0xDD9            /* its palette index (0x466B50 reads this byte)     */
-#define MM_FOGBASE     0x142DF          /* the base WITH the engine's fog shading            */
-#define MM_SCALEDMAP   0x142E3          /* the same base WITHOUT it                          */
+/* The minimap's box, its three surfaces and the view box over them were read
+   here, on this thread, until the frame packet's landing 4c; every one of them
+   is a packet field now and the addresses live in inc/tagpu_engine.h with the
+   publisher. `+0x142F1 bit 1` is NOT among them and never was: it is
+   DrawMinimap 0x466B00's DIRTY flag, which 0x466B16 clears in the same breath,
+   so it reads 0 on almost every frame. */
 #define POLL_MS        500
 #define MAX_TWINS      32
 #define ATLAS_DIM      2048
@@ -150,7 +137,6 @@ static void slog(const char* s)
     FILE* f = fopen("tagpu.log", "a");
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
-static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
 
 /* ------------------------------------------------------------------ state */
 typedef struct TWIN {
@@ -222,8 +208,6 @@ static unsigned s_mmLogged;
 static GLuint   s_mmProg, s_mmEngTex;   /* the masked draw, and the engine's two bases as RG8 */
 static GLint    s_uMmEngSize;
 static int      s_mmEngW, s_mmEngH;
-static unsigned char* s_mmRg;           /* interleave scratch                                  */
-static unsigned s_mmRgCap;
 static unsigned s_mmNoEng;              /* frames the engine's pair could not be read          */
 static unsigned char* s_mmPicRgb;       /* the picture resolved through the presented palette  */
 static unsigned s_mmPicCap;
@@ -909,8 +893,16 @@ static void twin_sprite(TWIN* t, const TAGPU_GAFENT* e, const TAGPU_PUBOP* o)
    arithmetic the blitter does, not an approximation of it. */
 static void twin_string(TWIN* t, const TAGPU_PUBOP* o)
 {
-    const char* str = (const char*)(g_guiq.arena + o->aoff);
-    const unsigned char* font = (const unsigned char*)o->frame;
+    /* THE BLOCK IS GLYPH RECORDS THEN THE STRING (landing 4c). `feed` installs
+       any glyph the producer sent with this op — first sight of a (font, code)
+       pair — and returns where the string starts; nothing below has a font
+       address to dereference, and `o->frame` is NULL for a string now. */
+    const char* str;
+    unsigned goff;
+    tagpu_text_glyph_feed(o->font_id, o->font_rows, o->font_yoff,
+                          g_guiq.arena + o->aoff, o->gcount, o->alen);
+    goff = tagpu_text_glyph_block_bytes(g_guiq.arena + o->aoff, o->gcount, o->alen);
+    str = (const char*)(g_guiq.arena + o->aoff + goff);
     short cell[256][4];                 /* ax, ay, w, h per drawn glyph        */
     int n = 0, i, x, top, yoff = 0, aw = 0, ah = 0, restored;
     int attempt, miss = 0;
@@ -936,7 +928,7 @@ static void twin_string(TWIN* t, const TAGPU_PUBOP* o)
         n = 0; miss = 0;
         for (i = 0; i < 256 && str[i] && str[i] != '\n'; i++) {
             int ax, ay, gw, gh;
-            if (!tagpu_text_glyph(font, (unsigned char)str[i], &ax, &ay, &gw, &gh, &yoff)) {
+            if (!tagpu_text_glyph_id(o->font_id, (unsigned char)str[i], &ax, &ay, &gw, &gh, &yoff)) {
                 /* the engine skips a code below `first` and a zero table entry
                    and advances for neither, so a refusal here is only a
                    divergence when the cache refused something the engine would
@@ -1220,17 +1212,22 @@ static void upload_palette(void)
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
+/* THE FRAME'S PACKET, latched once per present by tagpu_gui_cursor_frame and
+   used by everything below it (landing 4c). The GL UI's render half took the
+   cursor's position and sprite out of the graphics globals, and the minimap's
+   box, surfaces and view box out of the TAdynmem block, on THIS thread, every
+   present — the last four engine reads on the render thread the plan had not
+   scheduled. They are all packet fields now. NULL is "no packet this frame",
+   which is a shell frame or a load, and every consumer below declines. */
+static const TAGPU_PACKET* s_pk;
+
 static void cursor_rect(float* r)
 {
-    const char* g = *(const char* const*)GFX_GLOBALS_PP;
-    const unsigned short* rec;
-    r[0] = r[1] = -1.0f; r[2] = r[3] = 0.0f;
-    if (!ptr_ok(g)) return;
-    rec = *(const unsigned short* const*)(g + MOUSE_SPRITE);
-    r[0] = (float)*(const int*)(g + MOUSE_POS_X);
-    r[1] = (float)*(const int*)(g + MOUSE_POS_Y);
-    if (ptr_ok(rec)) { r[2] = (float)rec[0]; r[3] = (float)rec[1]; }
-    else { r[2] = 64.0f; r[3] = 64.0f; }
+    r[0] = r[1] = -1.0f; r[2] = 64.0f; r[3] = 64.0f;
+    if (!s_pk) return;
+    r[0] = (float)s_pk->cur_pos[0];
+    r[1] = (float)s_pk->cur_pos[1];
+    if (s_pk->cur_w > 0 && s_pk->cur_h > 0) { r[2] = (float)s_pk->cur_w; r[3] = (float)s_pk->cur_h; }
 }
 
 /* ------------------------------------------------------------- the cursor */
@@ -1250,11 +1247,11 @@ static void cursor_rect(float* r)
    which costs one frame of the engine's own cursor per new shape and never a
    frame with no cursor at all. Getting that backwards is the one failure this
    gate can ship invisibly -- the erase is unconditional, the draw is not. */
-void tagpu_gui_cursor_frame(void)
+void tagpu_gui_cursor_frame(const TAGPU_PACKET* pk)
 {
-    const char* g;
     const unsigned char* fr;
     const void* pix;
+    s_pk = pk;
     s_curOwn = 0;
     s_curFrame = NULL;
     /* the engine's rect first and unconditionally: draw_layer's discard (and
@@ -1262,14 +1259,13 @@ void tagpu_gui_cursor_frame(void)
        that decline to own the cursor */
     cursor_rect(s_curEng);
     if (!s_on || s_nocursor || s_gl != 1 || s_sharpFailed) return;
-    g = *(const char* const*)GFX_GLOBALS_PP;
-    if (!ptr_ok(g)) return;
+    if (!pk || !pk->cur_rec) return;
     /* the sprite record IS a GAF frame header -- size, hotspot, colour key and
-       a pixel pointer at +0x10 -- which is what makes the cursor reachable
-       with no observer change at all: the blits themselves never become ops
-       (everything drawn inside the flip is excluded) but the frame behind them
-       is readable from here, on the render thread, every present. */
-    fr = tagpu_gaf_frame_sane(*(const void* const*)(g + MOUSE_SPRITE));
+       a pixel pointer at +0x10 -- and it comes out of the cursor TABLE, loaded
+       once and never rewritten, which is why it may cross as a key at all. The
+       publisher read the position and the size beside it; tagpu_gaf.c is the
+       only file that dereferences the frame (landing 4c). */
+    fr = tagpu_gaf_frame_sane((const void*)(size_t)pk->cur_rec);
     if (!fr) return;
     s_curW  = *(const unsigned short*)(fr + TAGPU_GF_W);
     s_curH  = *(const unsigned short*)(fr + TAGPU_GF_H);
@@ -1433,15 +1429,57 @@ static void sharp_cursor(const TAGPU_FRAME* f)
    data: `0x466C20` shades `+0x142E3` into `+0x142DF` per player, reading the
    player id at `main+0x2A43`. Re-deriving that is the thing 13.6 forbids for
    the dots, so the mask below asks the engine instead. */
+/* THE LEVEL'S MINIMAP PICTURE, kept on this side (landing 4c). It arrives in
+   the level's FIRST in-play packet and in no other — carrying 63 KB in every
+   packet of a 900-a-second stream to serve one bake would be absurd — so the
+   consumer copies it out of that packet and keys the copy on the level
+   generation. That copy is also what a GL re-init re-bakes from, which is why
+   it has to outlive the packet that brought it either way.
+
+   It used to be decoded by an observer on the LOADER thread and read from here
+   through a generation and a barrier: correct on its own, and exactly what
+   "never publish outside the in-play gate" forbids. The publisher decodes it
+   now, on the game thread, on the first in-play draw of the level — which the
+   engine's own ordering makes the earliest moment every per-map pointer is
+   final (the in-play handler is installed only after the loader sets bit 1 of
+   main+0x38D75). */
+static unsigned char* s_picCopy;
+static int      s_picW, s_picH;
+static unsigned s_picGen;               /* the packet level_gen it came from, +1 */
+
+static int minimap_pic(const TAGPU_PACKET* pk, const unsigned char** pix,
+                       int* w, int* h, unsigned* gen)
+{
+    const unsigned char* p = tagpu_pk_minimap_pic(pk);
+    if (p && pk->mmpic_w > 0 && pk->mmpic_h > 0 && s_picGen != pk->level_gen + 1u) {
+        unsigned n = (unsigned)pk->mmpic_w * (unsigned)pk->mmpic_h;
+        unsigned char* nb = (unsigned char*)realloc(s_picCopy, n);
+        if (nb) {
+            memcpy(nb, p, n);
+            s_picCopy = nb; s_picW = pk->mmpic_w; s_picH = pk->mmpic_h;
+            s_picGen = pk->level_gen + 1u;
+        }
+    }
+    if (!s_picCopy || s_picGen != pk->level_gen + 1u) return 0;
+    *pix = s_picCopy; *w = s_picW; *h = s_picH; *gen = s_picGen;
+    return 1;
+}
+
 static void sharp_minimap(const TAGPU_FRAME* f)
 {
-    const char* ta = *(const char* const*)TA_MAINPP;
+    const TAGPU_PACKET* pk = s_pk;
     const unsigned char* pic = NULL;
     unsigned gen = 0;
     int pw = 0, ph = 0, mx, my, mw, mh;
     float kx, ky, v[24];
 
-    if ((!s_mmbase && !s_mmforce) || !s_mmProg || !ptr_ok(ta)) return;
+    if ((!s_mmbase && !s_mmforce) || !s_mmProg || !pk) return;
+    /* THE STANDING REQUEST. The publisher interleaves the three surfaces only
+       while this is raised, because at k = 1 the sharp minimap is deliberately
+       the engine's own and the copy would be paid for nothing (landing 4c).
+       Raised on every frame that reaches here, dropped by the module's own
+       watchdog after 90 silent ones. */
+    tagpu_gui_set_want_minimap(1, f->frame_counter);
     /* NOT `+0x142F1 & 2`, which is what DrawMinimap 0x466B00 tests: that is a
        DIRTY flag and 0x466B16 CLEARS it in the same breath, so it reads 0 on
        almost every frame [MEASURED 2026-09-09 — the first build of this gated
@@ -1450,9 +1488,9 @@ static void sharp_minimap(const TAGPU_FRAME* f)
        something overdraws it; the sharp layer is cleared at every present, so
        ours has to be redrawn every frame. The honest gate is that the minimap
        surfaces exist at all, which is what being in a game with one means. */
-    if (!ptr_ok(*(const void* const*)(ta + MM_COMPOSITE))) return;
+    if (!pk->mm_live) return;
     if (s_mmbase) {
-        if (!tagpu_gui_minimap_pic(&pic, &pw, &ph, &gen)) return;
+        if (!minimap_pic(pk, &pic, &pw, &ph, &gen)) return;
         if (pw <= 0 || ph <= 0) return;
     }
     if (s_mmbase && (gen != s_mmGenSeen || tagpu_pal_serial() != s_mmPalSeen || !s_mmTex)) {
@@ -1492,10 +1530,12 @@ static void sharp_minimap(const TAGPU_FRAME* f)
         glBindTexture(GL_TEXTURE_2D, 0);
         s_mmGenSeen = gen; s_mmPalSeen = tagpu_pal_serial(); s_mmTW = pw; s_mmTH = ph;
     }
-    /* the box the engine fitted it into, in ITS screen pixels, read live: it is
-       0x0 at BuildMinimapSurface's entry, since that call is what computes it */
-    mx = *(const short*)(ta + MM_OFFX); my = *(const short*)(ta + MM_OFFY);
-    mw = *(const short*)(ta + MM_W);    mh = *(const short*)(ta + MM_H);
+    /* the box the engine fitted it into, in ITS screen pixels, out of the
+       packet: it is 0x0 at BuildMinimapSurface's entry, since that call is what
+       computes it, so the publisher reads it after the draw like everything
+       else in the header */
+    mx = pk->mm_box[0]; my = pk->mm_box[1];
+    mw = pk->mm_box[2]; mh = pk->mm_box[3];
     if (mw <= 0 || mh <= 0) return;
     /* HUD SCALE (20): the engine fitted the box into its 1x panel and the
        composite magnifies that panel, so the sharper copy has to land on the
@@ -1548,44 +1588,9 @@ static void sharp_minimap(const TAGPU_FRAME* f)
            teardown cascade tagpu_reclaim fences — and the cross-check below
            is the DATA bound on top of it (cross-thread-engine-reads.md §4).
            13 KB. */
-        const int* fo = *(const int* const*)(ta + MM_FOGBASE);
-        const int* so = *(const int* const*)(ta + MM_SCALEDMAP);
-        const int* co = *(const int* const*)(ta + MM_COMPOSITE);
-        const unsigned char *fb, *sb, *cb;
-        int ew, eh, fp, sp, cp, yy, xx;
-        if (!ptr_ok(fo) || !ptr_ok(so) || !ptr_ok(co)) { s_mmNoEng++; return; }
-        ew = fo[0]; eh = fo[1];
-        fb = (const unsigned char*)(size_t)fo[3];
-        sb = (const unsigned char*)(size_t)so[3];
-        cb = (const unsigned char*)(size_t)co[3];
-        /* THE PITCHES ARE VALIDATED LIKE THE DIMENSIONS [landing review,
-           2026-09-09]. `ptr_ok` covers the three bases and the four dimension
-           fields are cross-checked, but the walk below is `base + yy * pitch`
-           for yy up to 511: a wild or negative pitch out of a half-freed
-           surface reads 512 x pitch bytes of engine memory on the render
-           thread, every frame, and the read is the one thing here that cannot
-           be undone. A row cannot be shorter than the surface is wide, and
-           these are 8bpp offscreens of at most 512 px. */
-        fp = fo[2]; sp = so[2]; cp = co[2];
-        if (ew <= 0 || eh <= 0 || ew > 512 || eh > 512 || so[0] != ew || so[1] != eh ||
-            co[0] != ew || co[1] != eh || !ptr_ok(fb) || !ptr_ok(sb) || !ptr_ok(cb) ||
-            fp < ew || sp < ew || cp < ew || fp > 4096 || sp > 4096 || cp > 4096) {
-            s_mmNoEng++; return;
-        }
-        if ((unsigned)(ew * eh * 3) > s_mmRgCap) {
-            free(s_mmRg); s_mmRgCap = (unsigned)(ew * eh * 3) + 4096;
-            s_mmRg = (unsigned char*)malloc(s_mmRgCap);
-            if (!s_mmRg) { s_mmRgCap = 0; s_mmNoEng++; return; }
-        }
-        for (yy = 0; yy < eh; yy++) {
-            const unsigned char* fr = fb + (size_t)yy * fp;
-            const unsigned char* sr = sb + (size_t)yy * sp;
-            const unsigned char* cr = cb + (size_t)yy * cp;
-            unsigned char* d = s_mmRg + (size_t)yy * ew * 3;
-            for (xx = 0; xx < ew; xx++) {
-                d[3 * xx] = fr[xx]; d[3 * xx + 1] = sr[xx]; d[3 * xx + 2] = cr[xx];
-            }
-        }
+        const unsigned char* rg = tagpu_pk_minimap(pk);
+        int ew = pk->mm_w, eh = pk->mm_h;
+        if (!rg) { s_mmNoEng++; return; }
         if (!s_mmEngTex) glGenTextures(1, &s_mmEngTex);
         if (!s_mmEngTex) { s_mmNoEng++; return; }
         x_glActiveTexture(GL_TEXTURE1);
@@ -1597,18 +1602,18 @@ static void sharp_minimap(const TAGPU_FRAME* f)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, ew, eh, 0, GL_RGB, GL_UNSIGNED_BYTE, s_mmRg);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, ew, eh, 0, GL_RGB, GL_UNSIGNED_BYTE, rg);
             s_mmEngW = ew; s_mmEngH = eh;
         } else {
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, ew, eh, GL_RGB, GL_UNSIGNED_BYTE, s_mmRg);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, ew, eh, GL_RGB, GL_UNSIGNED_BYTE, rg);
         }
         /* how much of the map the engine is hiding right now, in its own
            texels — the number that says whether a run had any fog to mask at
            all. A fully-mapped skirmish reads 0 and proves nothing about the
            mask; a fogged one is the only fixture that tests it. */
         {
-            int d = 0;
-            for (yy = 0; yy < eh * ew; yy++) if (s_mmRg[3 * yy] != s_mmRg[3 * yy + 1]) d++;
+            int d = 0, n = ew * eh, i;
+            for (i = 0; i < n; i++) if (rg[3 * i] != rg[3 * i + 1]) d++;
             s_mmFogged = (unsigned)d;
         }
         glUseProgram(s_mmProg);
@@ -1632,8 +1637,8 @@ static void sharp_minimap(const TAGPU_FRAME* f)
     if (s_mmbase) {
         /* the same resolution the base was baked through, for the same reason */
         const unsigned char* pal = tagpu_pal_live();
-        const int* vr = (const int*)(ta + MM_VIEWRECT);
-        int ci = (int)*(const unsigned char*)(ta + MM_VIEWCOL);
+        const int* vr = pk->mm_view;
+        int ci = (int)pk->mm_viewcol;
         float r = pal ? pal[4 * ci] / 255.0f : 0.0f,
               g2 = pal ? pal[4 * ci + 1] / 255.0f : 0.0f,
               b2 = pal ? pal[4 * ci + 2] / 255.0f : 0.0f;

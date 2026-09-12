@@ -95,6 +95,7 @@
 #include "tagpu_fxown.h"     /* whether the render thread wants the effect tables */
 #include "tagpu_fogwide.h"   /* the wide fog grid, built in THIS draw on this thread */
 #include "tagpu_terrown.h"   /* the eye the engine's own fog grid is anchored at */
+#include "tagpu_gui.h"       /* whether the render half wants the minimap surfaces */
 
 /* DrawGameScreen's prologue, `sub esp,0x214` — the same six bytes
    tagpu_menu.c observes */
@@ -1311,6 +1312,154 @@ static unsigned fill_fog(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 }
 
 
+/* ==================== THE GL UI'S RENDER HALF (landing 4c) =================
+   The four engine reads tagpu_gui_surf.c made on the render thread, every
+   present. The queue itself is untouched: it carries an op STREAM into
+   retained twins and stays a queue (the plan's §9). What moves is the
+   per-frame state the render half read beside it.
+
+   THE MINIMAP SURFACES ARE THE ONLY EXPENSIVE ONE and they are gated on the
+   consumer asking (tagpu_gui_want_minimap), because at k = 1 the sharp minimap
+   is deliberately the engine's own and the copy would be paid for nothing.
+   Their DESCRIPTORS are what made the old read dangerous rather than merely
+   stale: each carries a base and a pitch, so a torn one is a wild read and not
+   a wrong picture. Their lifetime is the minimap build's — 0x4669B0, from the
+   level load at 0x4919C3, stores the three pointers once, and 0x466AA0 frees
+   and NULLS them inside the teardown cascade — and every field is cross-checked
+   here, on the thread that owns them, exactly as the render half checked them.
+
+   THE PICTURE IS DECODED HERE TOO, on the level's first in-play publish. It
+   used to be decoded by an observer on the LOADER thread (before_minimap), the
+   one publisher this plan's rule forbids outright; the engine's own ordering is
+   what makes decoding it here correct instead — the in-play handler is
+   installed only after the loader has set bit 1 of main+0x38D75, so on the
+   first in-play draw of a level every per-map pointer is final. */
+
+#define MM_OFFX      0x142E7      /* i16 the box the engine fitted it into    */
+#define MM_OFFY      0x142E9
+#define MM_W         0x142EB
+#define MM_H         0x142ED
+#define MM_VIEWRECT  0x142CB      /* i32[4] the view box, screen px, inclusive */
+#define MM_VIEWCOL   0x0DD9       /* u8 its palette index (0x466B50 reads it) */
+#define MM_COMPOSITE 0x142DB      /* the fog+dots composite; non-NULL = built */
+#define MM_FOGBASE   0x142DF      /* the base WITH the engine's fog shading   */
+#define MM_SCALEDMAP 0x142E3      /* the same base WITHOUT it                 */
+#define MM_PICFRAME  0x1426B      /* the level's minimap picture, a GAF frame */
+#define GFX_CUR_REC  0x1B2        /* the cursor sprite: a GAF frame header    */
+#define GFX_CUR_X    0x1B6        /* where the engine last drew it            */
+#define GFX_CUR_Y    0x1BA
+
+/* the interleave the render half used to do per frame, per row */
+static unsigned char s_mmRg[TAGPU_PK_MM_DIMCAP * TAGPU_PK_MM_DIMCAP * 3];
+/* the level's picture: what was sent, for the heartbeat. The bytes are the GL
+   UI observer's — see fill_gui — and are copied straight out of it. */
+static int s_mmPicW, s_mmPicH, s_mmPicGen = -1;
+/* the picture rides in ONE packet per level; this says it already has */
+static int s_mmPicSent;
+static volatile unsigned s_cMmCopies, s_cMmRefused, s_cMmPic;
+static volatile int s_lastMmW, s_lastMmH;
+
+static void fill_cursor(TAGPU_PACKET* p)
+{
+    const char* g = *(const char* const*)TA_GFX_PP;
+    const unsigned short* rec;
+    p->cur_w = 64; p->cur_h = 64;
+    if (!ptr_ok(g)) return;
+    p->cur_pos[0] = RD32(g, GFX_CUR_X);
+    p->cur_pos[1] = RD32(g, GFX_CUR_Y);
+    rec = *(const unsigned short* const*)(g + GFX_CUR_REC);
+    if (!ptr_ok(rec)) return;
+    /* the record IS a GAF frame header, so its first two u16 are the size the
+       render half read out of it; the frame itself crosses as a key */
+    p->cur_rec = (unsigned)(size_t)rec;
+    p->cur_w = rec[0]; p->cur_h = rec[1];
+}
+
+static unsigned fill_gui(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
+{
+    unsigned need = *cursor, e;
+    const int* co;
+    fill_cursor(p);
+    p->mm_box[0] = RDI16(ta, MM_OFFX); p->mm_box[1] = RDI16(ta, MM_OFFY);
+    p->mm_box[2] = RDI16(ta, MM_W);    p->mm_box[3] = RDI16(ta, MM_H);
+    { int k; for (k = 0; k < 4; k++) p->mm_view[k] = RD32(ta, MM_VIEWRECT + k * 4); }
+    p->mm_viewcol = RDU8(ta, MM_VIEWCOL);
+    co = *(const int* const*)(ta + MM_COMPOSITE);
+    p->mm_live = ptr_ok(co) ? 1u : 0u;
+
+    /* THE LEVEL'S PICTURE, INTO ITS FIRST IN-PLAY PACKET AND NO OTHER.
+       It cannot be decoded here: `main+0x1426B` is alive only inside
+       BuildMinimapSurface 0x466780, which consumes the frame at 0x46684F, and
+       the loader frees the picture at 0x483DF3/0x483E0B — by the first in-play
+       draw there is nothing left to decode. So the GL UI's observer at that
+       entry still decodes it, on the LOADER thread, into a buffer of ours; what
+       landing 4c removes is the render thread ever reading that buffer.
+
+       THE ORDERING IS THE ENGINE'S OWN, not a barrier of ours: the loader's
+       last act sets bit 1 of main+0x38D75 and the game-screen handler installs
+       the in-play frame handler only after testing it, so the decode is
+       complete before any in-play publish can run. That is the same ordering
+       the whole exchange's level story rests on. */
+    if (!s_mmPicSent && s_mmPicGen != (int)p->level_gen) {
+        const unsigned char* pic; int w, h; unsigned gen;
+        if (tagpu_gui_minimap_pic_game(&pic, &w, &h, &gen) &&
+            w > 0 && h > 0 && w <= TAGPU_PK_MM_DIMCAP && h <= TAGPU_PK_MM_DIMCAP) {
+            p->mmpic_w = w; p->mmpic_h = h;
+            e = append_area(p, cursor, pic, (unsigned)w * (unsigned)h,
+                            &p->mmpic_off, &p->mmpic_len, TAGPU_PK_TRUNC_MMPIC);
+            if (e > need) need = e;
+            if (p->mmpic_len) {                  /* it landed: no later packet carries it */
+                s_mmPicSent = 1; s_mmPicGen = (int)p->level_gen;
+                s_mmPicW = w; s_mmPicH = h; s_cMmPic++;
+            } else {
+                p->mmpic_w = p->mmpic_h = 0;     /* it did not fit: the next packet tries */
+            }
+        }
+    }
+
+    if (p->mm_live && tagpu_gui_want_minimap()) {
+        const int* fo = *(const int* const*)(ta + MM_FOGBASE);
+        const int* so = *(const int* const*)(ta + MM_SCALEDMAP);
+        const unsigned char *fb, *sb, *cb;
+        int ew, eh, fp, sp, cp, yy, xx;
+        if (!ptr_ok(fo) || !ptr_ok(so)) { s_cMmRefused++; return need; }
+        ew = fo[0]; eh = fo[1];
+        fb = (const unsigned char*)(size_t)fo[3];
+        sb = (const unsigned char*)(size_t)so[3];
+        cb = (const unsigned char*)(size_t)co[3];
+        fp = fo[2]; sp = so[2]; cp = co[2];
+        /* THE PITCHES ARE VALIDATED LIKE THE DIMENSIONS. The walk is
+           `base + yy * pitch` for yy up to eh: a wild or negative pitch out of
+           a half-freed surface reads eh x pitch bytes of engine memory. A row
+           cannot be shorter than the surface is wide, and these are 8bpp
+           offscreens of at most 512 px. */
+        if (ew <= 0 || eh <= 0 || ew > TAGPU_PK_MM_DIMCAP || eh > TAGPU_PK_MM_DIMCAP ||
+            so[0] != ew || so[1] != eh || co[0] != ew || co[1] != eh ||
+            !ptr_ok(fb) || !ptr_ok(sb) || !ptr_ok(cb) ||
+            fp < ew || sp < ew || cp < ew || fp > 4096 || sp > 4096 || cp > 4096) {
+            s_cMmRefused++; return need;
+        }
+        for (yy = 0; yy < eh; yy++) {
+            const unsigned char* fr = fb + (size_t)yy * fp;
+            const unsigned char* sr = sb + (size_t)yy * sp;
+            const unsigned char* cr = cb + (size_t)yy * cp;
+            unsigned char* d = s_mmRg + (size_t)yy * ew * 3;
+            for (xx = 0; xx < ew; xx++) {
+                d[3 * xx] = fr[xx]; d[3 * xx + 1] = sr[xx]; d[3 * xx + 2] = cr[xx];
+            }
+        }
+        p->mm_w = ew; p->mm_h = eh;
+        e = append_area(p, cursor, s_mmRg, (unsigned)ew * (unsigned)eh * 3u,
+                        &p->mm_off, &p->mm_len, TAGPU_PK_TRUNC_MM);
+        if (e > need) need = e;
+        if (!p->mm_len) { p->mm_w = p->mm_h = 0; }
+        else s_cMmCopies++;
+        s_lastMmW = p->mm_w; s_lastMmH = p->mm_h;
+    }
+    return need;
+}
+
+
 /* The engine's palette table and gamma factor, into the packet — both kinds
    of packet carry them (the level-end one from the teardown, where `main` is
    still valid), so the render thread's palette module never reads either
@@ -1410,6 +1559,9 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     /* ---- the two fog grids (landing 4b) ---- */
     e = fill_fog(p, ta, &cursor);
     if (e > need) need = e;
+    /* ---- the GL UI's render half (landing 4c) ---- */
+    e = fill_gui(p, ta, &cursor);
+    if (e > need) need = e;
     shd_snapshot();
     if (s_shdOk) {
         e = append_area(p, &cursor, s_shd, (unsigned)sizeof s_shd, &p->shd_off, &p->shd_len,
@@ -1495,6 +1647,8 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
        effect cache names its model templates */
     s_aHave = 0; s_aN = 0; s_aTrunc = 0;
     s_fxHave = 0; s_nProj = s_nExpl = s_nDebris = s_nPart = 0;
+    /* the next level's picture is a different picture, and it has not been sent */
+    s_mmPicGen = -1; s_mmPicW = s_mmPicH = 0; s_mmPicSent = 0;
 }
 
 /* ---- the observers ------------------------------------------------------- */
@@ -1638,12 +1792,15 @@ static void extra(char* buf, unsigned cap, double secs)
         while (n < cap && buf[n]) n++;
         _snprintf(buf + n, cap > n ? cap - n : 0,
                   " | fx: proj=%u expl=%u deb=%u part=%u/%u scan=%u/%u trunc=%u layerbad=%u subbad=%u lht=%u want=%d/%d"
-                  " | fog: %dx%d wide=%dx%d/%u refused=%u shade=%u",
+                  " | fog: %dx%d wide=%dx%d/%u refused=%u shade=%u"
+                  " | gui: mm=%dx%d/%u refused=%u pic=%dx%d/%u",
                   s_cLastProj, s_cLastExpl, s_cLastDebris, s_cLastPart, s_cPartMax,
                   s_cFxScan, s_cFxReuse, s_cPartTrunc, s_cLayerBad, s_cSubBad, s_cLhtCopies,
                   tagpu_fxown_want_fx(), tagpu_fxown_want_sfx(),
                   s_lastFogC, s_lastFogR, s_lastFogwC, s_lastFogwR, s_cFogwSeen,
-                  s_cFogRefused, s_cFogshCopies);
+                  s_cFogRefused, s_cFogshCopies,
+                  s_lastMmW, s_lastMmH, s_cMmCopies, s_cMmRefused,
+                  s_mmPicW, s_mmPicH, s_cMmPic);
     }
     if (cap) buf[cap - 1] = 0;
     lastAll = all; lastIn = in;

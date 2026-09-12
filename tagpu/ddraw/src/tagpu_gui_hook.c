@@ -344,6 +344,135 @@ typedef struct OP {
     unsigned char fg, bg, tr;                   /* text: 0x4CCF60's three colours */
     unsigned char dup;                          /* an identical op follows: dropped */
 } OP;
+/* ---- THE UI FONTS, AS IDENTITIES AND BITS (landing 4c) -------------------
+   The string op used to carry the engine's FONT OBJECT and the render thread
+   dereferenced it — the header, the offset table and every glyph's packed rows
+   — up to a queue backlog later, behind IsBadReadPtr, with no note anywhere
+   establishing a UI font's lifetime. A probe is not a lifetime argument, so the
+   bits cross instead: on FIRST SIGHT of a (font, code) pair, here, on the game
+   thread, inside the flip the observer recorded the draw in.
+
+   THE BOUND IS THE FORMAT, as the marker font's copy already had it (landing
+   1): the object is the `.fnt` file image — `u16 height; u16 yoff; u16
+   offset[256]; glyphs` (tools/guifont.py, decoded over the twenty stock faces)
+   — so the offset table has 256 entries whatever the byte at +3 says, every
+   index `c - first` for `c <= 0x7E` is inside it, and an entry is a file offset
+   into the block the loader read the file into. A font whose byte at +3 is not
+   0 is not that format and is REFUSED, not probed: the op falls back to its
+   box's captured pixels, which is what every text draw was before G17d.
+
+   A SLOT IS KEYED ON THE POINTER AND THE SIGNATURE. An allocator that hands the
+   same address to a different font would otherwise serve the old font's glyphs;
+   a changed signature takes a new slot and a new id, and the consumer's cache
+   keys on the id, so nothing of the old font survives into the new one. */
+#define GF_SLOTS    8
+#define GF_LO       0x20
+#define GF_HI       0x7E
+#define GF_NCODE    (GF_HI - GF_LO + 1)
+#define F_ROWS_L    0            /* font[0], the rows the blitter writes */
+typedef struct {
+    const unsigned char* font;
+    unsigned char sig[3];              /* rows, yoff, first                    */
+    unsigned      id;                  /* what the op and the cache key on     */
+    unsigned char sent[GF_NCODE];      /* this code's bits have been published */
+} GFONT;
+static GFONT    s_gfont[GF_SLOTS];
+static int      s_ngfont;
+static unsigned s_gfontNext = 1;
+static unsigned s_gfontRecycles, s_gfontRefused, s_gfontGlyphs;
+
+static GFONT* gfont_slot(const unsigned char* f)
+{
+    int i;
+    GFONT* g;
+    /* the format test, not a probe: +3 is the high byte of the y-offset word
+       and is 0 for every font of this format */
+    if (f[3] != 0 || f[0] == 0) { s_gfontRefused++; return NULL; }
+    for (i = 0; i < s_ngfont; i++)
+        if (s_gfont[i].font == f && s_gfont[i].sig[0] == f[0] &&
+            s_gfont[i].sig[1] == f[2] && s_gfont[i].sig[2] == f[3]) return &s_gfont[i];
+    if (s_ngfont < GF_SLOTS) g = &s_gfont[s_ngfont++];
+    else {
+        /* every slot taken: start over rather than evict one font into an id
+           another font's glyphs are cached under. The consumer keys on the id,
+           which is never reused, so the old cells simply stop being asked for. */
+        memset(s_gfont, 0, sizeof s_gfont);
+        s_ngfont = 1; g = &s_gfont[0];
+        s_gfontRecycles++;
+    }
+    memset(g, 0, sizeof *g);
+    g->font = f; g->sig[0] = f[0]; g->sig[1] = f[2]; g->sig[2] = f[3];
+    g->id = s_gfontNext++;
+    return g;
+}
+
+/* one glyph's width and packed rows, or NULL when this font has no such code —
+   exactly the two skips the blitter makes: 0x4CCFAA below `first` (f[3]) and
+   0x4CCFB9 on a zero table entry. A ZERO WIDTH is refused here as it is in the
+   render half's rasteriser: the engine's do-while at 0x4CCFCA/0x4CCFE9 wraps
+   the counter to 255 and smears 256 columns of ink, and no stock font has one. */
+static const unsigned char* gfont_glyph(const unsigned char* f, int code, int* w)
+{
+    int first = f[3], off;
+    if (code < first) return NULL;
+    off = *(const unsigned short*)(f + 4 + 2 * (code - first));
+    if (!off) return NULL;
+    *w = f[off];
+    if (*w <= 0) return NULL;
+    return f + off + 1;
+}
+
+/* what a string's UNSENT glyphs will take in the arena, 4-aligned per record */
+static unsigned glyph_block_size(GFONT* g, const unsigned char* f,
+                                 const unsigned char* str, int n, unsigned* ng)
+{
+    unsigned need = 0, k = 0;
+    int i, rows = f[F_ROWS_L];
+    unsigned char seen[GF_NCODE];
+    memset(seen, 0, sizeof seen);
+    for (i = 0; i < n; i++) {
+        int c = str[i], w;
+        if (c < GF_LO || c > GF_HI) continue;
+        if (g->sent[c - GF_LO] || seen[c - GF_LO]) continue;
+        if (!gfont_glyph(f, c, &w)) continue;
+        seen[c - GF_LO] = 1;
+        need += 4u + (((unsigned)(rows * w) + 7u) / 8u + 3u) / 4u * 4u;
+        k++;
+    }
+    *ng = k;
+    return need;
+}
+
+/* the same walk again, writing the records and marking them sent. Returns the
+   bytes written, which is where the string goes. */
+static unsigned glyph_block_fill(GFONT* g, const unsigned char* f,
+                                 const unsigned char* str, int n, unsigned char* dst)
+{
+    unsigned at = 0;
+    int i, rows = f[F_ROWS_L];
+    for (i = 0; i < n; i++) {
+        int c = str[i], w;
+        const unsigned char* bits;
+        unsigned nb, pad;
+        if (c < GF_LO || c > GF_HI) continue;
+        if (g->sent[c - GF_LO]) continue;
+        bits = gfont_glyph(f, c, &w);
+        if (!bits) continue;
+        nb = ((unsigned)(rows * w) + 7u) / 8u;
+        pad = (nb + 3u) / 4u * 4u;
+        dst[at + 0] = (unsigned char)c;
+        dst[at + 1] = (unsigned char)w;
+        dst[at + 2] = (unsigned char)(nb & 0xFFu);
+        dst[at + 3] = (unsigned char)(nb >> 8);
+        memcpy(dst + at + 4, bits, nb);
+        if (pad > nb) memset(dst + at + 4 + nb, 0, pad - nb);
+        at += 4u + pad;
+        g->sent[c - GF_LO] = 1;
+        s_gfontGlyphs++;
+    }
+    return at;
+}
+
 /* The batch's strings. Reset with s_nops, and bounded the same way: a census is
    ~5 ms of drawing, in which the whole UI redraws a few hundred short labels. */
 #define STR_SCRATCH (64u << 10)
@@ -769,15 +898,30 @@ static void publish(unsigned flipSurf)
            which is exactly what it was before this gate. */
         if (op->kind == OP_TEXT && op->slen && op->frame && !s_nostring) {
             unsigned char* dst;
+            const unsigned char* font = (const unsigned char*)op->frame;
+            const unsigned char* str = s_strBuf + op->soff;
+            GFONT* gf = gfont_slot(font);
+            unsigned need = 0, ng = 0, k;
+            if (!gf) goto as_pixels;              /* the font is not that format */
+            /* THE GLYPH BITS, ON THIS THREAD, WHERE THE FONT IS LIVE (landing
+               4c). Every code the string needs that this font has not sent yet
+               becomes a record at the head of the block; the render thread's
+               cache fills from those bytes and dereferences no font at all. */
+            need = glyph_block_size(gf, font, str, op->slen, &ng);
             o = pub_op(PK_STRING, s->base); if (!o) return;
             o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
             o->sl = op->dx; o->st = op->dy;
-            o->frame = op->frame;
+            o->frame = NULL;
+            o->font_id = gf->id;
+            o->font_rows = font[0];
+            o->font_yoff = (signed char)font[2];
             o->fg = op->fg; o->bg = op->bg; o->tr = op->tr;
-            dst = pub_bytes(o, (unsigned)op->slen + 1u);
+            dst = pub_bytes(o, need + (unsigned)op->slen + 1u);
             if (!dst) return;
-            memcpy(dst, s_strBuf + op->soff, (size_t)op->slen);
-            dst[op->slen] = 0;
+            k = glyph_block_fill(gf, font, str, op->slen, dst);
+            o->gcount = (unsigned short)ng;
+            memcpy(dst + k, str, (size_t)op->slen);
+            dst[k + op->slen] = 0;
             pub_commit();
             continue;
         }
@@ -1145,10 +1289,28 @@ void tagpu_gui_init(void)
 
 int tagpu_gui_installed(void) { return s_installed; }
 
+static volatile unsigned char g_wantMm;
+static unsigned g_wantMmBeat;
+void tagpu_gui_set_want_minimap(int on, unsigned int frame_counter)
+{
+    g_wantMm = (unsigned char)(on != 0);
+    if (on) g_wantMmBeat = frame_counter;
+}
+int tagpu_gui_want_minimap(void) { return g_wantMm != 0; }
+/* called from the module's own flush, on the render thread */
+static void want_minimap_watchdog(unsigned int frame_counter)
+{
+    if (g_wantMm && frame_counter - g_wantMmBeat > 90) {
+        g_wantMm = 0;
+        glog("gui: the sharp minimap stopped asking — the packet's surfaces go idle");
+    }
+}
+
 void tagpu_gui_flush(unsigned int frame_counter)
 {
     static unsigned last = 0;
     char b[200];
+    want_minimap_watchdog(frame_counter);
     if (!s_installed) return;
     if (frame_counter - last >= 600) {
         last = frame_counter;
@@ -1173,7 +1335,7 @@ void tagpu_gui_flush(unsigned int frame_counter)
    caches anything derived from these bytes drops it when the generation moves.
    The bytes are stable for the life of that generation: one writer, one write,
    and it happens inside the map loader before any frame of that map presents. */
-int tagpu_gui_minimap_pic(const unsigned char** pix, int* w, int* h, unsigned* gen)
+int tagpu_gui_minimap_pic_game(const unsigned char** pix, int* w, int* h, unsigned* gen)
 {
     unsigned g = s_mmGen;
     if (!g) return 0;
