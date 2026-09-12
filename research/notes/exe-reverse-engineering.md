@@ -132,9 +132,13 @@ offsets **0x90A50 and 0x90A60**, which must be set identically. [CLAIMED — sou
 from a
 [Steam discussion](https://steamcommunity.com/app/298030/discussions/0/597405278050241107/)
 summary; the underlying TAU thread is unreachable and I could not read the bytes
-myself.] Applying the verified delta, these correspond to VAs **0x491650 and 0x491660** —
-which land plausibly close to `fcn.004916a0`, the routine `totala-re` independently
-identified as the game-update/resource entry. Consistent, but **not confirmed**.
+myself.] **Resolved 2026-09-11 against the pristine build** (*The per-player unit
+cap* below): the two values are the `0x1F4` (500) immediates of `cmp eax, 0x1f4` at
+`0x491658` and `mov eax, 0x1f4` at `0x491665` — the bound the ini value is compared
+against, and the value stored when it exceeds the bound, which is exactly why the two
+must be set identically. Their file offsets are **0x90A59 and 0x90A66** (`.text` is VA
+`0x401000` at file `0x400`, delta `0x400C00`); the community's 0x90A50 and 0x90A60 are
+the 16-byte hex-editor rows that hold them [INFERRED].
 
 **The supported alternative is a config file, not a hex edit.** A `TA.ini` /
 `TotalA.ini` in the game folder is read for: [CLAIMED — verbatim from a user-quoted
@@ -149,9 +153,50 @@ AISearchMapEntries = 90050;
 ```
 
 Caution: in the same threads a user reports `UnitLimit` having **no effect** on a
-stock Steam install. The most probable reading is that ini parsing for these keys is
-itself part of the unofficial **v3.9.02 patch**, not of retail v3.1 — i.e. these are
-knobs added by a patched exe, not latent retail features. Treat as unresolved.
+stock Steam install. **Retail 3.1 does read the key** — `0x491653` reads `UnitLimit`
+with a default of 250 [VERIFIED, below] — but clamps it to **[20, 500]** before the
+store, so `UnitLimit = 1500` yields 500, and 6553 is the width of the field, not a
+value the retail engine will ever hold. The "6553" and the "v3.9.02 default is 1500"
+are that patch's business, not retail's. (`AISearchMapEntries` is not examined here.)
+
+### The per-player unit cap — `0x49163F..0x49168B` — mapped by us [VERIFIED 2026-09-11, objdump of the pristine build]
+
+At game start the engine reads the cap out of `totala.ini` and clamps it before
+writing `MaxUnitNumberPerPlayer`; the value cannot be raised in a running game, and
+`tools/tacli` writes the file before launch for exactly that reason:
+
+```
+49163f: push 0xfa                        ; default 250
+491644: push 0x509238                    ; "UnitLimit" (.data; file offset 0x107838)
+491653: call 0x49f5a0                    ; ini-integer reader [INFERRED a GetPrivateProfileInt
+                                         ;   wrapper: the two arguments are verified, the callee is not]
+491658: cmp  eax, 0x1f4                  ; 500
+49165d: jle  0x491678
+49165f:   mov ecx, ds:0x511de8           ; the TAdynmem base pointer
+491665:   mov eax, 0x1f4                 ; ANY larger value becomes exactly 500
+49166a:   mov WORD PTR [ecx+0x37eec], ax ; MaxUnitNumberPerPlayer
+491671:   pop edi / pop esi / pop ebx / add esp, 0x24 / ret
+491678: cmp  eax, 0x14                   ; 20
+49167b: jge  0x491682
+49167d:   mov eax, 0x14
+491682: mov  ecx, ds:0x511de8
+49168b: mov  WORD PTR [ecx+0x37eec], ax
+```
+
+* **The ceiling is 500 per player**, whatever the file says; four players hold 2000
+  between them. Measured live 2026-09-10 with `tacli roster`: at the cap of 500 a
+  fresh skirmish hands out idx 1 to player 0, **501** to player 1, **1001** to player 2.
+* The store is a WORD, so the field is an `unsigned short` (where the 6553 figure
+  comes from), but no retail path writes more than 500 into it. Raising the cap means
+  patching **both** immediates, the compare and the stored value — the community's
+  "two offsets, set identically".
+* `ActualUnitLimit` (`+0x37EEA`) is not touched on this path.
+* What this cost before it was written down: `tools/tacli`'s scenario schema accepted
+  `unit_limit: 1500` from the old `[20, 1500]` line above and a 600-unit scenario
+  failed in the fork after launch instead of at validate time; the schema is now bounded
+  at `SCN_MAX_LIMIT = 500`, and `research/notes/scenario-format.md` carries the
+  scenario-side consequences (`scenarios/ball10.json` asks 625 per player and has never
+  had them).
 
 ## Built-in cheat/console command surface
 
@@ -4143,8 +4188,10 @@ looked like before the site's displacement was fixed.
   structural.
 - **Unit limit: not a compile-time constant.** It is *live state*:
   `TAdynmemStruct::ActualUnitLimit` (offset `0x37EEA`) and `MaxUnitNumberPerPlayer`
-  (`0x37EEC`), both **`unsigned short`** — hence the widely quoted 6553 ceiling in the
-  ini. 250 is the retail *default*, not a hard cap.
+  (`0x37EEC`), both **`unsigned short`** — which is where the widely quoted 6553 comes
+  from, but retail never writes more than **500** into it: `0x491658` clamps the ini
+  value to [20, 500] before the store (*The per-player unit cap* under *Documented
+  patch offsets*). 250 is the retail *default*; 500 is the retail *ceiling*.
 - Network dropout timeout: default 30 s, range [30, 300], settable with the `-T`
   command-line flag.
 - **The real ceiling is the 32-bit address space**, and it bites: TADR's
