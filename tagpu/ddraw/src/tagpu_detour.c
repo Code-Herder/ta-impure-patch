@@ -51,7 +51,7 @@ int tagpu_detour_write(unsigned int va, const unsigned char* bytes, int n)
    (tagpu_detour_observe) hooks the earlier stub's copy of the stolen bytes.
    fxown holds CopyGafToContext 0x4B7F90 and the UI census needs to watch it —
    that is the case this exists for (Phase E, G15a). */
-typedef struct LANDED { unsigned va; unsigned char* stub; int stolenOff; int nst; } LANDED;
+typedef struct LANDED { unsigned va; unsigned char* stub; int stolenOff; int nst; int hijacks; } LANDED;
 static LANDED s_landed[64];
 static int    s_nlanded = 0;
 
@@ -60,8 +60,21 @@ static void detour_record(unsigned int va, unsigned char* stub, int stolenOff, i
     if (s_nlanded < (int)(sizeof s_landed / sizeof s_landed[0])) {
         s_landed[s_nlanded].va = va; s_landed[s_nlanded].stub = stub;
         s_landed[s_nlanded].stolenOff = stolenOff; s_landed[s_nlanded].nst = nst;
+        s_landed[s_nlanded].hijacks = 0;
         s_nlanded++;
     }
+}
+
+/* does the newest stub on `va` replace the return address (an observer with
+   an `after`)? A later observer chained onto it would read that stub's
+   trampoline as "the return address" and any gate on it would silently fail,
+   so tagpu_detour_observe refuses the chain instead (landing review). */
+static int detour_landed_hijacks(unsigned int va)
+{
+    int i;
+    for (i = s_nlanded - 1; i >= 0; i--)
+        if (s_landed[i].va == va) return s_landed[i].hijacks;
+    return 0;
 }
 
 unsigned char* tagpu_detour_landed(unsigned int va, int* stolenOff, int* nst)
@@ -149,6 +162,10 @@ int tagpu_detour_observe(unsigned int va, const unsigned char* stolen, int nst,
     if (!s || !before || nst < 5 || nst > 16) return 0;
     prev = tagpu_detour_landed(va, &prevOff, &prevN);
     if (prev && (prevN != nst || memcmp(prev + prevOff, stolen, (size_t)nst) != 0)) return 0;
+    /* THE CHAIN RULE: an observer that hijacks the return must be the LAST on
+       its site. Chained after a hijacker, this stub's `before` would see the
+       hijacker's trampoline where the engine's return address should be. */
+    if (prev && detour_landed_hijacks(va)) return 0;
     /* entry: [esp]=retaddr, [esp+4..]=args. pushfd then pushad put esp at
        E-0x24; the flags go back exactly as they came, so a caller that tests
        them after the call (none found, but the claim is "byte-identical")
@@ -169,6 +186,7 @@ int tagpu_detour_observe(unsigned int va, const unsigned char* stolen, int nst,
     }
     *p++ = 0x9D;                                       /* popfd                */
     detour_record(va, s, (int)(p - s), nst);
+    if (after && s_nlanded > 0 && s_landed[s_nlanded - 1].stub == s) s_landed[s_nlanded - 1].hijacks = 1;
     memcpy(p, stolen, (size_t)nst); p += nst;
     *p++ = 0xE9; tagpu_detour_rel(p, va + (unsigned)nst); p += 4;
     if (after) {

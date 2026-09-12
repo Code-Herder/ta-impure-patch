@@ -2049,6 +2049,7 @@ half).
 | `0x497C70` | **observer** on the loader thread's entry (stolen `55 8B EC 6A FF`, position-independent): logs the thread's id, the load-flag word and, at its return, whether the level's first in-play packet had already been published — the direct measurement of the loader thread and of the ORDER the in-play gate rests on ([engine map](exe-reverse-engineering.html), "The in-play publish point") | loader |
 | hook 8, `0x469BD7` (markown's stub) | `tagpu_packet_pub_font_snapshot()`: whenever `[globals+0x204]` or its header signature changed, copy the font's header and its 95 printable glyphs into a game-side buffer, each as a one-glyph font object the blitter accepts; latch `[globals+0x208]`. Every packet carries the buffer (1612 B for the stock in-game font) | game |
 | the teardown post hook (`tagpu_reclaim.c`, inside the `0x491B60` wrap) | `tagpu_packet_pub_level_end()`: a header-only packet with `in_game = 0` and the bumped generation, forced past the fresh gate, before the reader is released — without it the renderer would draw the dead level's last packet over the menus | game |
+| `0x491B60`, the teardown, **only when `tagpu_reclaim` is not armed** (`tagpu_reclaim.off`, or its own install refused) | **observer** (stolen `A1 E8 1D 51 00`, the five bytes reclaim's wrap takes; hijacked return, so both of the function's exits — the `ret` and the tail-jump to `0x450DD0` — reach `after`): the same level-end packet, published by us. The out-of-game packet must not depend on another module being armed (landing review); with neither provider the publisher stays count-only, because no packet is better than a stale one. The launch line says which: `level-end packet by tagpu_reclaim's teardown post hook` or `by our own observer …`. Under `tagpu_reclaim.off` the level generation stays 0 for the session (reclaim's counter is the one counter, and it does not move without reclaim) | game |
 | `render_ogl.c`, around the overlay | `tagpu_packet_acquire()` once, before `tagpu_reclaim_pass_begin`, the pointer handed down through `TAGPU_FRAME.packet` / `TAGPU_FXVIEW.packet`; `tagpu_packet_frame_end()` after `pass_end`, unconditionally — the tail check and the heartbeat | render |
 | `tagpu_text.c` | `tagpu_text_frame(packet)` copies the font area out of the packet once per font generation; the measure walks the glyph table, the raster hands each one-glyph object to `0x4CCF60` at the x the engine's own string loop would reach. **No `IsBadReadPtr`, no engine pointer on this path any more**; the GL UI's glyph cache (`tagpu_text_glyph`) keeps its probes until 4c | render |
 
@@ -2068,29 +2069,49 @@ recorded, not refused — ownership is by role), the permutation after every exc
 tail`, the structural bounds of every offset against the slot's committed size, a canary past the
 capacity, one acquire per frame, the tail at frame end, the CRC under `check`.
 
+**The chain rule, enforced.** `tagpu_detour_observe` chains a second observer onto a site by
+turning the earlier stub's copy of the stolen bytes into a jump, so the `before`s run in install
+order and each sees the engine's own stack — *unless* an earlier observer hijacks the return, in
+which case a later one reads that stub's trampoline where the return address should be, and a gate
+like ours on `0x4969D2` would silently never match. Since the landing review `tagpu_detour_observe`
+refuses to chain onto a stub that has an `after` (returns 0, arms nothing): the hijacker is the
+last observer on its site by construction, which is why `tagpu_packet_pub_init` runs after
+`tagpu_menu_init` in `dllmain.c`.
+
 **The build rule** (`tools/thread-split-check.sh`, a prerequisite of `ddraw.dll` in
 `tagpu/ddraw/Makefile`, so `make -C tagpu/ddraw` and the CI job both fail on an offender; the
 upstream `build.cmd`/vcxproj do not run it). A source not on `tagpu/ddraw/thread-split.allow` may
-not name an engine virtual address (`0x0*4xxxxx` / `0x0*51xxxx`, suffix-aware — the `0x00511DE8u`
-spelling 19 files use defeats a `\b`), include `inc/tagpu_engine.h`, probe with `IsBad*Ptr`, or add
-an offset to `ta`/`main`/`main_p`; comments are stripped first. The list started FULL — 41 files
-on 2026-09-12, each with its class (`publisher`, `session-reader`, `fenced`, `tooling`,
+not name an engine virtual address (`0x4xxxxx` or `0x5[0-2]xxxx` — `.text` from `0x401000`,
+`.rdata`/`.data` and its bss to the `.tls` at `0x52C000` — suffix-aware, because the `0x00511DE8u`
+spelling 19 files use defeats a `\b`), include `inc/tagpu_engine.h`, probe with `IsBad*Ptr`, or
+add an offset to `ta`/`main`/`main_p`/`cta`; comments and string literals are stripped first (a
+log line naming an address reads nothing; the include is detected before the strip). It scans
+`src/*.c`, `src/*.h`, `src/*/*.c` and `inc/*.h` minus the third-party GL and D3D headers. The
+list started FULL — **42 files** after the merge with main (its `tagpu_hud.c` joined as a
+publisher), each with its class (`publisher`, `session-reader`, `fenced`, `tooling`,
 `pure-engine-code`, `engine-map`, `to-convert:N`) and its argument — and only shrinks. Verified:
-a planted `*(int*)(*(char**)0x00511DE8u + 0x38A47)` in `tagpu_fps.c` fails `make`; removed, it
-passes.
+a planted `*(int*)(*(char**)0x00511DE8u + 0x38A47)` in `tagpu_fps.c` (and again in `tagpu_cfg.c`)
+fails `make`; removed, it passes. **What a text rule cannot catch, said plainly:** a main pointer
+under a new name plus a macro offset, an address assembled from split macros, an address that
+arrives at run time. It is a ratchet against the spellings in use, not a proof; a new spelling is
+a review matter.
 
-**Read it in `tagpu.log`.** `packet: ARMED 4 slots x 8 MB reserved, 64 KB committed each …` and
-`packet: publisher ARMED on DrawGameScreen 0x468CF0 …` at launch; then every 300 frames
+**Read it in `tagpu.log`.** `packet: ARMED 4 slots x 8 MB reserved, 127 KB committed each …` (the first 64 KB grain plus the
+grain the canary's four bytes tip it into) and
+`packet: publisher ARMED on DrawGameScreen 0x468CF0 … level-end packet by … loader-thread observer
+at 0x497C70=1 …` at launch; then every 300 frames
 `packet: pub= skip= overrun= foreign= acq= taken= gap= grow= commitfail= trunc= viol= pviol=
 crcbad= nopkt= | pub/s= taken/s= pubus p50= p99= | seq= tick= tps= speed= paused= in_game= gen=
-flags= eye= vp= flips= font= fg= trunc= used= | draws= inplay= draws/s= inplay/s= foreign= deep=`.
+flags= eye= vp= flips= font= fg= trunc= used= | draws= inplay= draws/s= inplay/s= foreign= deep=
+fontcopies=<copies>/<refused> levelend=reclaim|own|none`.
 `viol`, `pviol`, `crcbad`, `foreign` and `commitfail` must stay 0; `skip` is the fresh gate
 working; `overrun`/`gap` are 0 in play and count only under `stress` or across a level end;
 `tps` is `GameTime` per wall second and must read 3 × `speed`. A level change logs `packet: level
 end -> gen N …`, then the loader thread's entry and exit and `packet: level gen N: first in-play
 packet …`, in that order. Levers, read at attach: `tagpu_packet.off` (no slots, no publish, no
-acquire; the observer stays in count-only mode so `draws/s` is still reported — **the marker
-text draws nothing under it**, the render thread has no font), `.check` (CRC-32 per packet),
+acquire; the observer stays in count-only mode so `draws/s` is still reported — **every string
+through `tagpu_text_place` draws nothing under it**: the group digits, the `ShowRanges` labels and
+the FPS readout, since the render thread has no font), `.check` (CRC-32 per packet),
 `.stress` (publish on every draw with a garbage pre-fill, one-page slots that must grow, the
 consumer sleeping 0..50 ms per take), `.poison` (the slot handed back is memset), `.show` (a
 `PK<seq> T<tick> E<eye>` row under the FPS readout).
@@ -2148,7 +2169,11 @@ commands — the two must land together or zoom-to-cursor wobbles). The unit arr
 the effects arrays and the GL UI's render half still read engine memory on the render thread and
 say so on the allow-list (`to-convert:N`). The GL UI's string op still hands the render thread a
 font pointer (4c). The `tick_start` stamp and `prev` are carried but unused until the lerp
-rekeys onto them (3).
+rekeys onto them (3) — and until then the give-back is the plain one, so `prev` MAY carry the same
+tick as the packet returned; the tick-aware give-back the plan's §5 describes lands with the lerp
+that needs it. Under `tagpu_reclaim.off` the level generation never moves (0 for the session), so a
+cache keyed on it would not drop between levels; the level-end packet still arrives (our own
+observer), and nothing keys on the generation yet.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 

@@ -223,7 +223,7 @@ static int pkx_publish(PKX* m, tagpu_packet_fill_fn fill, void* ctx, int force)
     unsigned w, need, us;
     DWORD tid = GetCurrentThreadId();
 
-    if (!m->prodTid) m->prodTid = tid;
+    if (!m->prodTid) m->prodTid = tid;                /* unregistered: latch (a bare instance) */
     else if (tid != m->prodTid) { m->cForeign++; return 0; }
 
     /* THE FRESH GATE: a packet the renderer has not taken is not replaced.
@@ -237,7 +237,7 @@ static int pkx_publish(PKX* m, tagpu_packet_fill_fn fill, void* ctx, int force)
     p = (TAGPU_PACKET*)m->slot[w];
 
     QueryPerformanceCounter(&t0);
-    if (s_stress) memset(p, 0xA5, m->cap[w] < 16384u ? m->cap[w] : 16384u);
+    if (s_stress) tagpu_pk_fill(p, 0xA5, m->cap[w] < 16384u ? m->cap[w] : 16384u);
     p->head_seq  = ++m->seq;                       /* head BEFORE the payload */
     p->cap_bytes = m->cap[w];
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
@@ -272,6 +272,8 @@ int tagpu_packet_publish(tagpu_packet_fill_fn fill, void* ctx, int force)
     if (!s_armed || !fill) return 0;
     return pkx_publish(&s_frame, fill, ctx, force);
 }
+
+void tagpu_packet_producer(unsigned long tid) { s_frame.prodTid = (DWORD)tid; }
 
 /* ------------------------------------------------------- the consumer ---- */
 
@@ -341,7 +343,7 @@ static const TAGPU_PACKET* pkx_acquire(PKX* m, const TAGPU_PACKET** prev)
         LONG old;
         /* C2: our last loads of `give` were last frame's, before this
            exchange. The poison makes a pointer kept past its frame loud. */
-        if (s_poison) memset(m->slot[give], 0xDD, sizeof(TAGPU_PACKET));
+        if (s_poison) tagpu_pk_fill(m->slot[give], 0xDD, sizeof(TAGPU_PACKET));
         old = XCHG(m, give);
         got = (unsigned)old & PKX_IDX;
         if (!((unsigned)old & PKX_FRESH)) violation(m, "FRESH vanished between peek and exchange", (unsigned)old, give);
@@ -478,8 +480,9 @@ void tagpu_packet_init(void)
     QueryPerformanceFrequency(&s_freq);       /* the heartbeat's clock, armed or not */
     if (lever("tagpu_packet.off")) {
         plog("packet: disabled by tagpu_packet.off — no slots, nothing published or taken; "
-             "the marker text has no font and draws nothing; the DrawGameScreen observer stays "
-             "in count-only mode so draws/s is still reported");
+             "every string through tagpu_text_place draws nothing (the group digits, the ShowRanges "
+             "labels, the FPS readout); the DrawGameScreen observer stays in count-only mode so "
+             "draws/s is still reported");
         return;
     }
     if (!pkx_init(&s_frame, s_stress ? PK_PAGE : PK_GRAIN)) {

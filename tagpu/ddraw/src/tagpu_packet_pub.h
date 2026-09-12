@@ -21,6 +21,35 @@
    Returns 1 when a packet was published. */
 typedef unsigned (*tagpu_packet_fill_fn)(TAGPU_PACKET* p, void* ctx);
 int tagpu_packet_publish(tagpu_packet_fill_fn fill, void* ctx, int force);
+/* The producer's thread, registered once at install (the game thread, which
+   DllMain runs on). A publish from any other thread is refused and counted
+   as `foreign`; without a registration the first publisher would be latched,
+   and a stray first call would then refuse the real one for the session
+   (landing review). */
+void tagpu_packet_producer(unsigned long tid);
+
+/* PLAIN STORES, BY CONSTRUCTION. The exchange's ordering argument (P1: the
+   payload is visible before the index) rests on the payload being ordinary
+   stores that `xchg`'s lock orders — and the toolchain targets i686 without
+   SSE2, so the seq-cst fence it emits is a `lock or`, which orders ordinary
+   stores and NOT non-temporal ones. The CRT's memcpy/memset are free to use
+   non-temporal moves for large blocks; these two are not, and every byte a
+   fill writes into a slot goes through them. `volatile` keeps the compiler
+   from turning the loop back into a memcpy call. Slots are small (kilobytes),
+   so the cost is nothing measurable. */
+static __inline void tagpu_pk_copy(void* dst, const void* src, unsigned n)
+{
+    volatile unsigned char* d = (volatile unsigned char*)dst;
+    const unsigned char* s = (const unsigned char*)src;
+    unsigned i;
+    for (i = 0; i < n; i++) d[i] = s[i];
+}
+static __inline void tagpu_pk_fill(void* dst, unsigned char v, unsigned n)
+{
+    volatile unsigned char* d = (volatile unsigned char*)dst;
+    unsigned i;
+    for (i = 0; i < n; i++) d[i] = v;
+}
 
 /* ---- the frame packet's publisher (tagpu_packet_pub.c) ---- */
 /* DLL attach, AFTER tagpu_menu_init(): the DrawGameScreen observer chains

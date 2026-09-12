@@ -118,7 +118,12 @@ int  tagpu_packet_armed(void);
    else keeps the one it holds. Returns NULL when no packet has ever arrived,
    when the module is off, or when the packet fails its structural bounds
    (counted as a violation). `*prev` is the previously taken packet when it is
-   from the same level and in-game, else NULL. Both pointers are valid until
+   from the same level and in-game, else NULL — and, in landing 1, it MAY carry
+   the same tick as the packet returned: the give-back is the plain one (PREV
+   handed back on every take), and the tick-aware give-back the lerp needs (a
+   same-tick packet replaces READ and keeps PREV, so the pair spans two
+   distinct ticks) is landing 3's, with the lerp that consumes it. Nothing
+   reads `prev` until then. Both pointers are valid until
    tagpu_packet_frame_end(); caching either across frames is the bug the
    poison lever exists to expose. */
 const TAGPU_PACKET* tagpu_packet_acquire(const TAGPU_PACKET** prev);

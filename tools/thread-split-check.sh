@@ -25,11 +25,16 @@
 #            `grep 0x511DE8` matched 6 of 25.
 #   INCLUDE  #\s*include\s*"tagpu_engine\.h"
 #   PROBE    \bIsBad(Read|Write|Code|String)Ptr\w*
-#   CONDUIT  \b(ta|main|main_p)\s*\+   an offset added to the main pointer, whatever
-#            the offset is spelled as (a literal, or a macro from a header)
+#   CONDUIT  \b(ta|main|main_p|cta)\s*\+   an offset added to the main pointer, whatever
+#            the offset is spelled as (a literal, or a macro from a header); the four
+#            names are the ones the tree gives that pointer today
 #
-# What it does NOT prove: that a file on the list reads only what its class says.
-# That is the review's job; the list's argument column is what the review reads.
+# What it does NOT prove: that a file on the list reads only what its class says —
+# that is the review's job; the list's argument column is what the review reads. Known
+# false negatives, by construction of a text rule: a main pointer under a new name
+# plus a macro offset (neither VA nor CONDUIT fires), an address assembled from
+# split macros, an address that arrives at run time. A ratchet against the spellings
+# in use, not a proof; a new spelling is a review matter.
 #
 # Runs as a prerequisite of ddraw.dll in tagpu/ddraw/Makefile, so `make -C tagpu/ddraw`
 # on a desk and in CI (.github/workflows/build.yml) both fail on an offender. The
@@ -37,9 +42,10 @@
 set -u
 MODE=check
 if [ "${1:-}" = "--census" ]; then MODE=census; shift; fi
-DIR="${1:-$(cd "$(dirname "$0")/../tagpu/ddraw" && pwd)}"
+DIR="${1:-$(dirname "$0")/../tagpu/ddraw}"
+DIR="$(cd "$DIR" 2>/dev/null && pwd)" || { echo "thread-split: no such directory: ${1:-tagpu/ddraw}" >&2; exit 2; }
 ALLOW="$DIR/thread-split.allow"
-cd "$DIR" || { echo "thread-split: no such directory: $DIR" >&2; exit 2; }
+cd "$DIR" || exit 2
 command -v perl >/dev/null 2>&1 || { echo "thread-split: perl is required" >&2; exit 2; }
 
 # third-party headers carried by the fork: not ours, never scanned
@@ -58,7 +64,7 @@ scan() {   # $1 = file; prints "line: TAG: text" for every hit, comments strippe
             push @tags, "VA"      if $l =~ /\b0x0*(4[0-9a-f]{5}|5[0-2][0-9a-f]{4})(?![0-9a-f])/i;
             push @tags, "INCLUDE" if $inc[$n - 1];
             push @tags, "PROBE"   if $l =~ /\bIsBad(Read|Write|Code|String)Ptr\w*/;
-            push @tags, "CONDUIT" if $l =~ /\b(ta|main|main_p)\s*\+/;
+            push @tags, "CONDUIT" if $l =~ /\b(ta|main|main_p|cta)\s*\+/;
             next unless @tags;
             $l =~ s/^\s+//; $l = substr($l, 0, 96);
             print "$n: ", join("+", @tags), ": $l\n";
@@ -85,7 +91,7 @@ fi
 
 status=0
 listed_clean=()
-for f in src/*.c src/*.h inc/*.h; do
+for f in src/*.c src/*.h src/*/*.c src/*/*.h inc/*.h; do
     [ -e "$f" ] || continue
     echo "$f" | grep -Eq "$EXCLUDE" && continue
     hits="$(scan "$f")"

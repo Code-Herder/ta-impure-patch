@@ -31,6 +31,10 @@
    the CRT's _beginthread over CreateThread + ResumeThread), its entry the SEH
    wrapper 0x497C70 -> 0x497180, whose last act sets bit 1 of TA_LOADFLAGS */
 #define VA_LOADER_ENTRY    0x00497C70u
+#define VA_TEARDOWN        0x00491B60u  /* the level teardown cascade: no stack args, */
+                                        /* two exits (ret 0x491C59, tail-jump 0x491C54 */
+                                        /* to 0x450DD0 which rets); reclaim wraps it, */
+                                        /* the packet observes it when reclaim is off */
 
 /* ---- the header's fields, main + offset ---------------------------------- */
 #define OFF_GAMETIME       0x38A47      /* i32 GameTime, the sim tick                */

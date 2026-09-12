@@ -65,7 +65,13 @@ int tagpu_detour_leaf_call(unsigned int va, const unsigned char* stolen, int nst
    skip still wins and the observer sees only the calls that really draw. The
    stolen bytes must agree. `tagpu_detour_bytes_ok` is the byte-match to use
    at install time — it accepts either the pristine bytes at `va` or the same
-   bytes inside a stub that already owns `va`. */
+   bytes inside a stub that already owns `va`. THE CHAIN RULE: an observer
+   WITH an `after` replaces the return address the callee will use, so an
+   observer chained after it would read the trampoline instead of the engine's
+   return address; `tagpu_detour_observe` therefore refuses to chain onto a
+   stub that has an `after` (returns 0), i.e. the hijacker must be the last
+   observer installed on its site (tagpu_packet_pub.c on DrawGameScreen, after
+   tagpu_menu.c's). */
 unsigned char* tagpu_detour_landed(unsigned int va, int* stolenOff, int* nst);
 int tagpu_detour_bytes_ok(unsigned int va, const unsigned char* stolen, int nst);
 typedef int   (__cdecl *tagpu_detour_before_fn)(void* entry_esp);

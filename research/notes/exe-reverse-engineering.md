@@ -2580,7 +2580,9 @@ the `before`s run in install order and each stub sees the engine's own stack. **
 hijacks the return must be installed AFTER every observer that does not, and there can be only
 one hijacker per site in practice**: a later observer reads `((void**)entry_esp)[0]` after an
 earlier hijacker replaced it with a trampoline, so its return-address gate would never match. The
-menu's observer never hijacks; the publisher's is the last installed (`dllmain.c`).
+menu's observer never hijacks; the publisher's is the last installed (`dllmain.c`) — and since the
+landing review `tagpu_detour_observe` REFUSES to chain onto a stub that has an `after`, so the
+constraint holds by construction rather than by install order alone.
 
 **The level load runs on a LOADER THREAD, and the in-play gate is what orders the first publish
 after it.** The engine review of the plan found what the cross-thread audit had missed; the
@@ -2589,7 +2591,7 @@ disassembly confirms it:
 | where | what |
 |---|---|
 | `0x497F40` | the game-screen enter callback (the one `0x49821D` writes the viewport rect from, §vpwide). Its first test is bit 0 of `main+0x38D75` (`mov cl,[eax+0x38d75]; test cl,1` at `0x497F4B`/`0x497F54`): set → `0x498340`, the POLL path; clear → the first-entry path |
-| `0x4982C5`/`0x4982CA` | `push 0x497C70; push ebp; push ebp; call 0x4B6B20` — the thread is created here. `0x4B6B20(start, stack, arg)` is a three-argument wrapper (`ret 0xC`) over the CRT's `0x4E77D0`: a `0x74`-byte thread block, **`CreateThread`** (IAT `0x4FC1A8`) with flags `4` = suspended, then **`ResumeThread`** (IAT `0x4FC240`) — the `_beginthread` shape |
+| `0x4982C3`..`0x4982CA` | `push ebp; push ebp; push 0x497C70; call 0x4B6B20` — the thread is created here. `0x4B6B20(start, stack, arg)` is a three-argument wrapper (`ret 0xC`) over the CRT's `0x4E77D0`: a `0x74`-byte thread block, **`CreateThread`** (IAT `0x4FC1A8`) with flags `4` = suspended, then **`ResumeThread`** (IAT `0x4FC240`) — the `_beginthread` shape |
 | `0x49832A` | the game thread sets **bit 0** (`or ecx,1`) right after creating the thread, calls `0x45B640`, and falls into `0x498342`: **bit 1** tested (`shr dl,1; test dl,1`), clear → `je 0x4984DD`, the loading-screen path; set → the in-play handler is installed |
 | `0x497C70` | the thread's entry: an SEH frame (`push -1; push 0x4FDA48; push 0x4E6718`) around `call 0x497180(arg)` at `0x497CA1`. Stolen bytes `55 8B EC 6A FF` are position-independent, which is what lets an observer sit on it |
 | `0x497180` | the loader body: one function, `0x497180..0x497C6C`, one `ret`. First act `QueryPerformanceCounter` (IAT `0x4FC0BC`, it times itself); calls **`LoadGameData_Main 0x4917D0`** at `0x497581` — the routine the *per-map arrays* section left as "entry not traced": its one caller is this thread, and everything that section lists as allocated by the load (layers, projectiles, `LoadMap`, the unit array, the minimap) is allocated **on the loader thread** |
