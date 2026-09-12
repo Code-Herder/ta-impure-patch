@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Build the TotalA.exe modding wiki from research/notes/*.md into research/site/."""
+"""Build the TotalA.exe modding wiki from research/notes/*.md into research/site/.
+
+A note may also be authored HTML: research/notes/<slug>.html is passed through as it is
+(its own <title>, <link>s and <style> become the head, the rest the body) under a one-line
+wiki crumb, so a page whose layout IS the content keeps it. Register it in PAGES like any
+other slug; it is searched and carded like the markdown pages.
+"""
 
 import argparse
 import hashlib
@@ -73,6 +79,7 @@ PAGES = [
     ("gui-renderer",               "GL UI renderer (phase E)",    "Renderer"),
     ("thread-safe-destruction",    "Thread-safe destruction",     "Renderer"),
     ("cross-thread-engine-reads",  "Cross-thread engine reads",   "Renderer"),
+    ("frame-packet-exchange",      "Frame packet exchange (design)", "Renderer"),
     ("gpu-posing",                 "GPU posing for 3DOs (G16)",   "Renderer"),
     ("smooth-motion",              "Smooth unit movement & animation", "Renderer"),
 
@@ -623,6 +630,45 @@ def copy_static():
     return h.hexdigest()[:10]
 
 
+HTML_PAGE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+{head}
+<style>
+  .wiki-crumb {{ font: 500 .74rem/1.5 "IBM Plex Mono", ui-monospace, Consolas, monospace; letter-spacing: .05em; text-transform: uppercase; padding: .55rem clamp(16px, 4vw, 40px); border-bottom: 1px solid rgba(127,127,127,.3); }}
+  .wiki-crumb a {{ color: inherit; }}
+</style>
+</head>
+<body>
+<div class="wiki-crumb"><a href="index.html">{site}</a> &nbsp;/&nbsp; {section} &nbsp;/&nbsp; {title}</div>
+{body}
+</body>
+</html>
+"""
+
+
+def emit_html_page(slug, section, src):
+    """An authored HTML note: everything up to its </style> is the head, the rest the body."""
+    text = src.read_text()
+    cut = text.find("</style>")
+    head, body = (text[:cut + 8], text[cut + 8:]) if cut >= 0 else ("", text)
+    m = re.search(r"<title>(.*?)</title>", head, flags=re.S)
+    title = m.group(1).strip() if m else slug.replace("-", " ").title()
+    plain = strip_html(body)
+    m = re.search(r'<p class="lede">(.*?)</p>', body, flags=re.S)
+    blurb = strip_html(m.group(1)) if m else plain
+    blurb = blurb.strip()
+    if len(blurb) > 165:
+        blurb = blurb[:162].rsplit(" ", 1)[0] + "…"
+    (SITE / f"{slug}.html").write_text(
+        HTML_PAGE.format(head=head, body=body, site=SITE_TITLE, section=section, title=title)
+    )
+    return title, plain, blurb
+
+
 def render(title, body, nav_html, toc_html, base, is_index=False, lede=""):
     crumb = "" if is_index else f'<div class="crumb"><a href="{base}index.html">Wiki</a> &nbsp;/&nbsp; {title}</div>'
     ledehtml = f'<p class="lede">{lede}</p>' if lede else ""
@@ -684,13 +730,17 @@ def main(bake="auto"):
     ensure_learned_bakes(bake)
     static_ver = copy_static()
 
-    present = [(s, l, sec) for s, l, sec in PAGES if (NOTES / f"{s}.md").exists()]
+    def has_source(slug):
+        return (NOTES / f"{slug}.md").exists() or (NOTES / f"{slug}.html").exists()
+
+    present = [(s, l, sec) for s, l, sec in PAGES if has_source(s)]
     known = {s for s, _, _ in PAGES}
-    for f in sorted(NOTES.glob("*.md")):
+    for f in sorted(list(NOTES.glob("*.md")) + list(NOTES.glob("*.html"))):
         if f.stem.startswith("_"):
             continue
         if f.stem not in known:
             present.append((f.stem, f.stem.replace("-", " ").title(), "Survey"))
+            known.add(f.stem)
 
     def nav_for(current, base):
         out = []
@@ -709,6 +759,12 @@ def main(bake="auto"):
     meta = {}
 
     for slug, label, sec in present:
+        if not (NOTES / f"{slug}.md").exists():
+            title, plain, blurb = emit_html_page(slug, sec, NOTES / f"{slug}.html")
+            search_index.append({"u": f"{slug}.html", "t": title, "h": "", "b": plain[:2600]})
+            meta[slug] = {"title": title, "label": label, "section": sec,
+                          "words": len(plain.split()), "blurb": blurb}
+            continue
         md_text = (NOTES / f"{slug}.md").read_text()
         body, toc = build_page(md_text)
         flat = flatten_toc(toc)

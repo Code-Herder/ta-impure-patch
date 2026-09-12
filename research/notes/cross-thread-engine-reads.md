@@ -21,6 +21,7 @@ produced).*
 | **Fence** | `tagpu_reclaim`'s wrap of the level teardown `0x491B60`, the pass counters, and the gate at `tagpu_overlay.c:590` — covers the level **teardown**, not the next level's **load** (§2) |
 | **Audit** | the nine sites of the G13u sweep, each classified against the writer it reads (§5): one open hazard, one already catalogued, six under the fence with two named residuals |
 | **Open** | §7 |
+| **Design** | the plan this audit led to, kept in the wiki as authored HTML: [Frame packet exchange](frame-packet-exchange.html) — one publisher on the game thread, one wait-free four-slot exchange, four reviews folded in on 2026-09-11, **not built** |
 
 ## 1. The two threads, and the one that is not
 

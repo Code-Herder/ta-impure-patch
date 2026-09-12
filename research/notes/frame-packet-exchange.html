@@ -1,0 +1,1160 @@
+<title>Frame Packet Exchange</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --paper: #F5F7FA;
+    --paper-2: #EDF0F5;
+    --plate: #FFFFFF;
+    --ink: #1B2129;
+    --ink-2: #4A5563;
+    --ink-3: #7A8596;
+    --rule: #D5DAE2;
+    --rule-2: #C3C9D3;
+    --game: #0E7C86;
+    --game-bg: #D7EEF0;
+    --render: #B5651D;
+    --render-bg: #F7E6D3;
+    --cell: #5B4FB5;
+    --cell-bg: #E3E0F6;
+    --loader: #6B7280;
+    --loader-bg: #E5E7EB;
+    --bad: #B3261E;
+    --bad-bg: #F9E1DF;
+    --ok: #2F7D4F;
+    --ok-bg: #DCEFE3;
+    --code-bg: #EEF1F6;
+    --shadow: 0 1px 2px rgba(27,33,41,.06), 0 6px 20px -12px rgba(27,33,41,.18);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #0F141A;
+      --paper-2: #161C24;
+      --plate: #1A2129;
+      --ink: #E6EAF0;
+      --ink-2: #AEB7C4;
+      --ink-3: #7D8897;
+      --rule: #2A3340;
+      --rule-2: #39434F;
+      --game: #3FC1CC;
+      --game-bg: #0F3A3F;
+      --render: #E8A95A;
+      --render-bg: #44301A;
+      --cell: #A79DF5;
+      --cell-bg: #2C2857;
+      --loader: #9CA3AF;
+      --loader-bg: #2A3140;
+      --bad: #FF7B70;
+      --bad-bg: #4A2320;
+      --ok: #6CCB8E;
+      --ok-bg: #1E3A29;
+      --code-bg: #131920;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0F141A;
+    --paper-2: #161C24;
+    --plate: #1A2129;
+    --ink: #E6EAF0;
+    --ink-2: #AEB7C4;
+    --ink-3: #7D8897;
+    --rule: #2A3340;
+    --rule-2: #39434F;
+    --game: #3FC1CC;
+    --game-bg: #0F3A3F;
+    --render: #E8A95A;
+    --render-bg: #44301A;
+    --cell: #A79DF5;
+    --cell-bg: #2C2857;
+    --loader: #9CA3AF;
+    --loader-bg: #2A3140;
+    --bad: #FF7B70;
+    --bad-bg: #4A2320;
+    --ok: #6CCB8E;
+    --ok-bg: #1E3A29;
+    --code-bg: #131920;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.55;
+    padding-block: 0 4rem;
+    padding-inline: clamp(16px, 4vw, 40px);
+  }
+  a { color: var(--cell); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, summary:focus-visible { outline: 2px solid var(--cell); outline-offset: 2px; }
+  code, pre, .mono { font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, Menlo, monospace; }
+  code { font-size: .9em; background: var(--code-bg); padding: .05em .35em; border-radius: 3px; }
+  pre { background: var(--code-bg); border: 1px solid var(--rule); border-radius: 6px; padding: .9rem 1rem; overflow-x: auto; font-size: .82rem; line-height: 1.5; margin: 1rem 0; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  h1, h2, h3, h4 { font-family: "Barlow Semi Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif; text-wrap: balance; letter-spacing: -.005em; margin: 0; }
+  h1 { font-size: clamp(2.4rem, 6vw, 4rem); font-weight: 700; line-height: 1; }
+  h2 { font-size: clamp(1.55rem, 3vw, 2rem); font-weight: 600; line-height: 1.1; }
+  h3 { font-size: 1.2rem; font-weight: 600; line-height: 1.25; margin-top: 1.4rem; margin-bottom: .5rem; }
+  h4 { font-size: 1rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-2); }
+  p { margin: 0 0 1rem; max-width: 68ch; }
+  li { max-width: 68ch; }
+  ul, ol { padding-left: 1.3rem; margin: 0 0 1rem; }
+  li + li { margin-top: .35rem; }
+  strong { font-weight: 600; }
+  hr { border: 0; border-top: 1px solid var(--rule); margin: 2.5rem 0; }
+  details { border: 1px solid var(--rule); border-radius: 6px; background: var(--plate); padding: .4rem .9rem; margin: 1rem 0; }
+  summary { cursor: pointer; font-weight: 600; font-family: "Barlow Semi Condensed", sans-serif; font-size: 1.05rem; padding: .3rem 0; }
+  details pre { margin: .6rem 0 .4rem; }
+
+  .page { max-width: 1120px; margin: 0 auto; }
+  .eyebrow { font-family: "IBM Plex Mono", monospace; font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+  .eyebrow .dot { color: var(--rule-2); padding: 0 .4em; }
+
+  header.masthead { padding-block: 3rem 2rem; border-bottom: 1px solid var(--rule); display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.25rem; }
+  header.masthead .lede { font-size: 1.15rem; line-height: 1.5; color: var(--ink-2); max-width: 62ch; margin: 0; }
+  .thesis { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; background: var(--plate); }
+  .thesis > div { padding: .9rem 1.1rem; border-right: 1px solid var(--rule); }
+  .thesis > div:last-child { border-right: 0; }
+  .thesis .n { font-family: "Barlow Semi Condensed", sans-serif; font-size: 2.2rem; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+  .thesis .l { font-size: .85rem; color: var(--ink-2); margin-top: .25rem; }
+  .thesis .n.game { color: var(--game); } .thesis .n.render { color: var(--render); } .thesis .n.cell { color: var(--cell); }
+
+  main { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; }
+  @media (min-width: 980px) {
+    main { grid-template-columns: 200px minmax(0, 1fr); gap: 3rem; align-items: start; }
+    nav.toc { position: sticky; top: 1.25rem; }
+  }
+  nav.toc { padding-block: 2rem 0; }
+  nav.toc h4 { margin-bottom: .6rem; }
+  nav.toc ol { list-style: none; padding: 0; margin: 0; border-left: 1px solid var(--rule); }
+  nav.toc li { margin: 0; }
+  nav.toc a { display: block; padding: .3rem .75rem; color: var(--ink-2); text-decoration: none; font-size: .9rem; border-left: 2px solid transparent; margin-left: -1px; }
+  nav.toc a:hover { color: var(--ink); border-left-color: var(--rule-2); }
+  nav.toc .legend { margin-top: 1.25rem; display: grid; gap: .35rem; font-size: .82rem; color: var(--ink-2); }
+  nav.toc .legend span { display: inline-flex; align-items: center; gap: .5rem; }
+  .sw { width: 12px; height: 12px; border-radius: 2px; display: inline-block; flex: none; }
+  .sw.game { background: var(--game); } .sw.render { background: var(--render); } .sw.cell { background: var(--cell); } .sw.bad { background: var(--bad); } .sw.loader { background: var(--loader); }
+
+  article { padding-block: 2rem 0; min-width: 0; }
+  section { padding-block: 1.5rem 1rem; }
+  section + section { border-top: 1px solid var(--rule); }
+  section > h2 { margin-bottom: .9rem; }
+  .sec-eyebrow { display: block; margin-bottom: .45rem; }
+
+  figure { margin: 1.5rem 0; }
+  figcaption { font-size: .86rem; color: var(--ink-2); margin-top: .6rem; max-width: 76ch; line-height: 1.5; }
+  .plate { background: var(--plate); border: 1px solid var(--rule); border-radius: 8px; padding: 1rem; box-shadow: var(--shadow); }
+  .scroll { overflow-x: auto; }
+
+  /* thread map (before / after): the two halves stack so each lane gets the full column */
+  .tmap { display: grid; grid-template-columns: 1fr; gap: 1rem; }
+  .tmap .half { border: 1px solid var(--rule); border-radius: 6px; padding: .9rem; background: var(--paper-2); min-width: 0; }
+  .tmap h4 { margin-bottom: .7rem; }
+  .lane { display: grid; grid-template-columns: 1fr; gap: .6rem; align-items: start; }
+  @media (min-width: 720px) { .lane { grid-template-columns: minmax(12rem, 1fr) minmax(11rem, 1.15fr) minmax(12rem, 1fr); } }
+  .thread { border-radius: 6px; padding: .6rem .7rem; font-size: .86rem; line-height: 1.4; min-width: 0; }
+  .thread.game { background: var(--game-bg); border: 1px solid var(--game); }
+  .thread.render { background: var(--render-bg); border: 1px solid var(--render); }
+  .thread b { display: block; font-family: "Barlow Semi Condensed", sans-serif; font-size: 1.05rem; font-weight: 600; margin-bottom: .2rem; }
+  .thread.game b { color: var(--game); } .thread.render b { color: var(--render); }
+  .thread ul { padding-left: 1rem; margin: .3rem 0 0; font-size: .82rem; }
+  .thread li { margin: 0; max-width: none; }
+  .mid { display: flex; flex-direction: column; justify-content: center; gap: .35rem; font-size: .74rem; font-family: "IBM Plex Mono", monospace; color: var(--ink-2); text-align: center; min-width: 0; align-self: center; }
+  .arrow { display: block; white-space: normal; line-height: 1.35; padding: .2rem .45rem; border-radius: 4px; border: 1px dashed var(--rule-2); overflow-wrap: anywhere; }
+  .arrow.bad { border-color: var(--bad); color: var(--bad); }
+  .arrow.cell { border: 1px solid var(--cell); color: var(--cell); background: var(--cell-bg); font-weight: 500; }
+  .arrow.mute { border-style: dotted; color: var(--ink-3); }
+
+  /* exchange trace (logic-analyser style) */
+  .trace { display: grid; gap: 3px; font-size: .8rem; font-family: "IBM Plex Mono", monospace; width: 920px; }
+  .trace .hd { color: var(--ink-3); font-size: .72rem; padding: .2rem .3rem; align-self: end; line-height: 1.3; }
+  .trace .hd.ev { color: var(--ink-2); }
+  .trace .rl { color: var(--ink-2); padding: .35rem .3rem; white-space: nowrap; align-self: center; }
+  .trace .c { padding: .35rem .4rem; border-radius: 3px; text-align: center; white-space: nowrap; border: 1px solid transparent; }
+  .trace .c.g { background: var(--game-bg); color: var(--game); border-color: color-mix(in srgb, var(--game) 35%, transparent); }
+  .trace .c.m { background: var(--cell-bg); color: var(--cell); border-color: color-mix(in srgb, var(--cell) 35%, transparent); }
+  .trace .c.r { background: var(--render-bg); color: var(--render); border-color: color-mix(in srgb, var(--render) 35%, transparent); }
+  .trace .c.x { background: transparent; color: var(--ink-3); border-style: dashed; border-color: var(--rule); }
+  .trace .c.act { box-shadow: inset 0 0 0 2px currentColor; }
+  .trace .c .f { font-weight: 600; }
+  .trace .foot { grid-column: 1 / -1; color: var(--ink-2); font-family: "IBM Plex Sans", sans-serif; font-size: .84rem; padding-top: .4rem; }
+
+  /* packet memory map */
+  .pmap { display: block; }
+  .pmap > .mem { margin-bottom: 1.25rem; }
+  .pmap-text { display: grid; grid-template-columns: 1fr; gap: 0 2rem; }
+  @media (min-width: 860px) { .pmap-text { grid-template-columns: 1fr 1fr; } }
+  .mem { border: 1px solid var(--rule-2); border-radius: 6px; overflow: hidden; font-size: .88rem; }
+  .mem .row { display: grid; grid-template-columns: minmax(0, 1fr) 7rem 12rem; gap: .75rem 1.25rem; padding: .6rem .9rem; border-bottom: 1px solid var(--rule); align-items: start; }
+  @media (max-width: 640px) { .mem .row { grid-template-columns: 1fr; gap: .2rem; } .mem .sz { text-align: left; } }
+  .mem .row:last-child { border-bottom: 0; }
+  .mem .row.hdr { background: var(--cell-bg); }
+  .mem .row.tbl { background: var(--plate); }
+  .mem .row.arena { background: var(--paper-2); }
+  .mem .row.tail { background: var(--cell-bg); }
+  .mem .name { font-weight: 500; }
+  .mem .name small { display: block; font-weight: 400; color: var(--ink-2); font-size: .8rem; line-height: 1.45; margin-top: .15rem; max-width: 70ch; }
+  .mem .sz { font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; color: var(--ink-2); white-space: normal; text-align: right; font-size: .82rem; line-height: 1.4; }
+  .mem .sz b { color: var(--ink); font-weight: 500; }
+
+  /* data tables */
+  table { border-collapse: collapse; width: 100%; font-size: .88rem; }
+  th, td { text-align: left; vertical-align: top; padding: .55rem .7rem; border-bottom: 1px solid var(--rule); }
+  th { font-family: "Barlow Semi Condensed", sans-serif; font-weight: 600; font-size: .95rem; color: var(--ink-2); letter-spacing: .01em; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; font-family: "IBM Plex Mono", monospace; font-size: .82rem; white-space: nowrap; }
+  tbody tr:last-child td { border-bottom: 0; }
+  .tbl-wrap { border: 1px solid var(--rule); border-radius: 6px; overflow-x: auto; background: var(--plate); }
+
+  /* chips */
+  .chip { display: inline-block; font-size: .72rem; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; padding: .1rem .45rem; border-radius: 3px; vertical-align: middle; white-space: nowrap; }
+  .chip.game { background: var(--game-bg); color: var(--game); }
+  .chip.render { background: var(--render-bg); color: var(--render); }
+  .chip.cell { background: var(--cell-bg); color: var(--cell); }
+  .chip.loader { background: var(--loader-bg); color: var(--loader); }
+  .chip.bad { background: var(--bad-bg); color: var(--bad); }
+  .chip.ok { background: var(--ok-bg); color: var(--ok); }
+  .chip.mute { background: var(--paper-2); color: var(--ink-2); border: 1px solid var(--rule); }
+
+  /* callouts */
+  .note { border-left: 3px solid var(--cell); background: var(--plate); padding: .8rem 1rem; border-radius: 0 6px 6px 0; margin: 1.25rem 0; font-size: .92rem; }
+  .note.bad { border-left-color: var(--bad); }
+  .note.ok { border-left-color: var(--ok); }
+  .note p:last-child { margin-bottom: 0; }
+  .note h4 { margin-bottom: .3rem; }
+
+  /* the worked example: code full width, the explanation beneath */
+  .example pre { margin: .5rem 0 1rem; font-size: .84rem; line-height: 1.45; }
+  .example h4 { margin: 1.2rem 0 .2rem; }
+  .example-text { display: grid; grid-template-columns: 1fr; gap: 0 2rem; }
+  @media (min-width: 860px) { .example-text { grid-template-columns: 1fr 1fr; } .example-text p:first-child { grid-column: 1 / -1; } }
+  .example-text p { max-width: 68ch; }
+
+  /* two-column compare */
+  .cols { display: grid; grid-template-columns: 1fr; gap: 1rem; }
+  @media (min-width: 760px) { .cols { grid-template-columns: 1fr 1fr; } }
+  .cols > div { min-width: 0; }
+
+  /* edge case grid */
+  .cases { display: grid; grid-template-columns: 1fr; gap: 1rem; }
+  @media (min-width: 900px) { .cases { grid-template-columns: 1fr 1fr; } }
+  .case { border: 1px solid var(--rule); border-radius: 6px; padding: .9rem; background: var(--plate); min-width: 0; }
+  .case h3 { margin: 0 0 .4rem; display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+  .case p { font-size: .9rem; }
+  .case .trace { width: 880px; font-size: .78rem; }
+
+  /* level lifecycle */
+  .lifecycle { display: grid; grid-template-columns: 1fr; gap: .8rem; }
+  @media (min-width: 900px) { .lifecycle { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+  .stage { border-radius: 6px; padding: .75rem .85rem; border: 1px solid var(--rule-2); border-top-width: 3px; background: var(--paper-2); min-width: 0; display: flex; flex-direction: column; gap: .45rem; font-size: .86rem; }
+  .stage.game { border-top-color: var(--game); }
+  .stage.loader { border-top-color: var(--loader); }
+  .stage .tr { font-family: "IBM Plex Mono", monospace; font-size: .72rem; color: var(--ink-3); letter-spacing: .02em; line-height: 1.4; min-height: 2.1em; }
+  .stage b { font-family: "Barlow Semi Condensed", sans-serif; font-size: 1.15rem; font-weight: 600; line-height: 1.1; }
+  .stage.game b { color: var(--game); }
+  .stage.loader b { color: var(--loader); }
+  .stage .chip { align-self: flex-start; }
+  .stage p { margin: 0; font-size: .84rem; line-height: 1.45; max-width: none; }
+  .stage p.gt::before { content: "game thread · "; font-weight: 600; color: var(--game); }
+  .stage p.rt::before { content: "render thread · "; font-weight: 600; color: var(--render); }
+
+  /* review cards */
+  .reviews { display: grid; grid-template-columns: 1fr; gap: 1rem; }
+  @media (min-width: 900px) { .reviews { grid-template-columns: 1fr 1fr; } }
+  .rv { border: 1px solid var(--rule); border-radius: 6px; padding: .9rem 1rem; background: var(--plate); min-width: 0; }
+  .rv h3 { margin: 0 0 .3rem; }
+  .rv .verdict { font-size: .82rem; color: var(--ink-2); margin-bottom: .6rem; }
+  .rv ul { font-size: .9rem; margin-bottom: 0; }
+
+  /* fit-to-width figures with a 1:1 lightbox: each has a fixed design width and is scaled down to its column */
+  .fit { position: relative; overflow: hidden; cursor: zoom-in; }
+  .fit:focus-visible { outline: 2px solid var(--cell); outline-offset: 2px; }
+  .fit-inner { transform-origin: 0 0; width: max-content; }
+  .lb-hint { position: absolute; top: .3rem; right: .3rem; z-index: 1; font-family: "IBM Plex Mono", monospace; font-size: .68rem; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--cell); background: var(--cell-bg); border: 1px solid var(--cell); border-radius: 3px; padding: .2rem .45rem; pointer-events: none; }
+  .case.wide { grid-column: 1 / -1; }
+
+  /* sequence swimlanes: one column per participant, one row per step, the arrow line under each message */
+  .seq { display: grid; row-gap: .45rem; width: 920px; font-size: .84rem; background-size: 1px 100%; background-repeat: no-repeat; padding: .5rem 0 .6rem; }
+  .seq .lane { grid-row: 1; text-align: center; margin: 0 .35rem .35rem; padding: .45rem .3rem; border-radius: 4px 4px 0 0; border-bottom: 2px solid currentColor; font-family: "Barlow Semi Condensed", sans-serif; font-weight: 600; font-size: 1rem; line-height: 1.15; }
+  .seq .lane small { display: block; font-family: "IBM Plex Mono", monospace; font-weight: 400; font-size: .68rem; letter-spacing: .03em; color: var(--ink-3); margin-top: .15rem; }
+  .seq .lane.game { color: var(--game); background: var(--game-bg); }
+  .seq .lane.render { color: var(--render); background: var(--render-bg); }
+  .seq .lane.cell { color: var(--cell); background: var(--cell-bg); }
+  .seq .msg { position: relative; padding: .3rem .55rem .4rem; background: var(--plate); border: 1px solid var(--rule); border-radius: 4px; line-height: 1.4; align-self: center; min-width: 0; }
+  .seq .msg i { font-style: normal; font-family: "IBM Plex Mono", monospace; font-size: .7rem; color: var(--ink-3); margin-right: .4rem; }
+  .seq .msg.right, .seq .msg.left { border-bottom: 2px solid var(--ink-2); border-radius: 4px 4px 0 0; }
+  .seq .msg.ret { border-bottom-style: dashed; }
+  .seq .msg.right::after { content: ""; position: absolute; right: -2px; bottom: -7px; border: 6px solid transparent; border-left: 9px solid var(--ink-2); border-right: 0; }
+  .seq .msg.left::before { content: ""; position: absolute; left: -2px; bottom: -7px; border: 6px solid transparent; border-right: 9px solid var(--ink-2); border-left: 0; }
+  .seq .msg.self { border-style: dashed; margin: 0 6%; background: var(--paper-2); }
+  .seq .msg.note { background: var(--render-bg); border-color: var(--render); }
+
+  /* lightbox: the figure at 1:1, scrollable, with zoom */
+  #lightbox { position: fixed; inset: 0; z-index: 50; background: rgba(12,16,22,.93); display: flex; flex-direction: column; }
+  #lightbox .lb-bar { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; padding: .6rem 1rem; color: #E6EAF0; font-size: .85rem; border-bottom: 1px solid rgba(255,255,255,.12); }
+  #lightbox .lb-bar .t { font-family: "Barlow Semi Condensed", sans-serif; font-weight: 600; font-size: 1.05rem; flex: 1 1 12rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #lightbox .lb-bar .hint { color: #AEB7C4; font-size: .78rem; }
+  #lightbox button { font: inherit; font-size: .82rem; background: transparent; color: #E6EAF0; border: 1px solid rgba(255,255,255,.35); border-radius: 4px; padding: .3rem .65rem; cursor: pointer; }
+  #lightbox button:hover { border-color: #E6EAF0; }
+  #lightbox button[aria-pressed="true"] { background: #5B4FB5; border-color: #5B4FB5; }
+  #lightbox button:focus-visible { outline: 2px solid #A79DF5; outline-offset: 2px; }
+  #lightbox .lb-body { flex: 1; overflow: auto; padding: 1rem; touch-action: pan-x pan-y; }
+  #lightbox .sheet { display: inline-block; min-width: 100%; background: var(--plate); color: var(--ink); border-radius: 6px; padding: 1rem; }
+  #lightbox .zoombox { overflow: hidden; }
+  #lightbox .zoominner { transform-origin: 0 0; width: max-content; }
+
+  .kbd-list dt { font-weight: 600; margin-top: .6rem; }
+  .kbd-list dd { margin: 0 0 .2rem; color: var(--ink-2); font-size: .92rem; max-width: 68ch; }
+
+  footer { border-top: 1px solid var(--rule); margin-top: 3rem; padding-top: 1.25rem; font-size: .85rem; color: var(--ink-2); }
+  footer ul { padding-left: 1.1rem; }
+  @media (prefers-reduced-motion: no-preference) { nav.toc a { transition: color .15s, border-color .15s; } }
+</style>
+
+<div class="page">
+<header class="masthead">
+  <div class="eyebrow">Design plan<span class="dot">·</span>tagpu render thread<span class="dot">·</span>reviewed draft, 2026-09-11</div>
+  <h1>Frame Packet Exchange</h1>
+  <p class="lede">One construct for everything that crosses between the game thread and the render thread. The game thread publishes a packet of exactly what the renderer needs, once per drawn frame, through a wait-free four-slot mailbox. The renderer stops reading and writing the engine's per-frame state. What it still reads, the per-level assets, stays behind the fence that already exists until an asset channel retires it.</p>
+  <div class="thesis">
+    <div><div class="n game">25</div><div class="l">source files that read engine memory through <code>0x511DE8</code> today, about a dozen of them on the render thread every frame</div></div>
+    <div><div class="n render">7+</div><div class="l">ad hoc channels already built between the threads, each with its own proof: font dwords, fog buffers, zoom levels, order arena, reclaim counters, the GUI op ring, the scenario state</div></div>
+    <div><div class="n cell">1</div><div class="l">exchange primitive after this plan, instantiated for the frame packet, the commands, the wide fog grid, and later the level packet</div></div>
+    <div><div class="n">4</div><div class="l">independent reviews folded into this version: protocol, engine feasibility, migration, adversarial</div></div>
+  </div>
+</header>
+
+<main>
+<nav class="toc" aria-label="Sections">
+  <h4>Contents</h4>
+  <ol>
+    <li><a href="#why">Why</a></li>
+    <li><a href="#shape">The shape</a></li>
+    <li><a href="#frame">One frame, end to end</a></li>
+    <li><a href="#primitive">The primitive</a></li>
+    <li><a href="#stops">Edge cases</a></li>
+    <li><a href="#packet">What a packet holds</a></li>
+    <li><a href="#commands">Commands, the other way</a></li>
+    <li><a href="#level">Levels and the loader thread</a></li>
+    <li><a href="#rules">The rules afterwards</a></li>
+    <li><a href="#migration">Migration</a></li>
+    <li><a href="#review">What the reviews changed</a></li>
+  </ol>
+  <div class="legend">
+    <span><i class="sw game"></i>game thread (owns <code>main</code> in play)</span>
+    <span><i class="sw loader"></i>loader thread (owns it during a load)</span>
+    <span><i class="sw cell"></i>the shared cell</span>
+    <span><i class="sw render"></i>render thread (owns GL)</span>
+    <span><i class="sw bad"></i>hazard today</span>
+  </div>
+</nav>
+
+<article>
+
+<section id="why">
+  <span class="eyebrow sec-eyebrow">1 · the problem the audit left</span>
+  <h2>Every cross-thread read is its own proof, and the proofs keep failing silently</h2>
+  <p>The engine is single-threaded in play: one game thread owns every byte under <code>main = *(char**)0x511DE8</code>. The fork adds a GL render thread that re-renders the world from that memory once per presented frame. Each read site carries its own argument (a bound, a lifetime, an ordering). The 2026-09-11 audit found the arguments mostly hold, but the shape guarantees the next one will not:</p>
+  <ul>
+    <li><strong>The fence covers the teardown, not the load.</strong> <code>tagpu_reclaim</code> holds the renderer off while <code>0x491B60</code> frees a level. The next level's load (<code>0x4854A0</code>) stores the unit array's <code>begin</code>, memsets, allocates twice and only then stores <code>end</code>, with the renderer live. That pair is the one open hazard, in every launch, independent of alignment.</li>
+    <li><strong>Poses are read mid-tick.</strong> The unit pass reads each piece's <code>P_POS</code>/<code>P_TURN</code> from the engine with no interlock, so a unit can be drawn with its pieces mixed across a tick boundary. The unit's three-dword anchor likewise.</li>
+    <li><strong>The renderer also writes.</strong> The eye, its scroll target, the minimap view rect, the viewport edges and <code>ScrollSpeed</code> are stored into engine words from the render thread. <code>main</code> is misaligned afresh at every launch (<code>0x41D920</code> pads by <code>7·(GetTickCount()%1000)</code>), so those stores can tear. They are tolerated only because a torn coordinate is clamped. Pointer slots had to be moved to a game-thread handshake already (the camera follow, G13u).</li>
+    <li><strong>Seven channels exist, seven proofs.</strong> Two aligned dwords for the font at GUI hook 8; three fog buffers swapped under a critical section with a retire ring; request and ack levels for the zoom; a game-thread arena of order markers; the reclaim pass counters with a 4096-entry ring that leaks on overflow and a one-second teardown timeout; the GUI op ring; the scenario applier's state word. Each is right on its own terms. Each was a separate review.</li>
+    <li><strong>Three bugs of this class shipped silently</strong> before the fence: the 200v200 faults at 95 s, the fog guard whose root cause was never found, and a producer gated on a value the other thread published (G13s). They do not throw. They corrupt a frame days later, one launch in many.</li>
+  </ul>
+
+  <figure>
+    <div class="plate">
+      <div class="tmap">
+        <div class="half">
+          <h4>Today</h4>
+          <div class="lane">
+            <div class="thread game"><b>Game thread</b>sim tick, <code>DrawGameScreen</code>, input, all of <code>main</code> in play
+              <ul><li>unit array, poses</li><li>fog grid, LOS</li><li>tile map, features</li><li>eye, viewport, mouse</li></ul></div>
+            <div class="mid">
+              <span class="arrow bad">~12 direct reads / frame</span>
+              <span class="arrow bad">5 stores into <code>main</code> ←</span>
+              <span class="arrow">font dwords</span>
+              <span class="arrow">fog 3-buffer + CS</span>
+              <span class="arrow">zoom req / ack</span>
+              <span class="arrow">order arena</span>
+              <span class="arrow">reclaim counters</span>
+              <span class="arrow">GUI op ring</span>
+            </div>
+            <div class="thread render"><b>Render thread</b>GL context, overlay driver
+              <ul><li>native unit pass</li><li>terrain, fog, features</li><li>fx, sfx, markers</li><li>UI layer, zoom</li></ul></div>
+          </div>
+        </div>
+        <div class="half">
+          <h4>After</h4>
+          <div class="lane">
+            <div class="thread game"><b>Game thread</b>the only reader and writer of per-frame state
+              <ul><li>commands applied before the draw</li><li><code>tagpu_packet_publish()</code> after the flip</li><li>out-of-game packet at teardown</li><li>assets copied on first sight (later)</li></ul></div>
+            <div class="mid">
+              <span class="arrow cell">frame packet →</span>
+              <span class="arrow cell">← commands</span>
+              <span class="arrow cell">wide fog grid →</span>
+              <span class="arrow mute">level + assets → (optional end state)</span>
+              <span class="arrow mute">reclaim fence stays for assets until then</span>
+            </div>
+            <div class="thread render"><b>Render thread</b>reads packets, posts commands
+              <ul><li>one <code>const PACKET*</code> per frame</li><li>no per-frame engine address anywhere</li><li>no <code>IsBadReadPtr</code>, no <code>ptr_ok</code></li><li>asset reads allow-listed with their lifetime argument</li></ul></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <figcaption>What crosses the boundary, before and after. Today every module argues its own reads and seven unrelated channels carry the rest. After, instances of one primitive carry everything per frame, and the renderer holds nothing the engine can free between two of its frames.</figcaption>
+  </figure>
+</section>
+
+<section id="shape">
+  <span class="eyebrow sec-eyebrow">2 · the proposal</span>
+  <h2>Publish on the thread that owns the memory, hand over through a cell neither thread waits on</h2>
+  <p>Channels, one primitive.</p>
+  <dl class="kbd-list">
+    <dt><span class="chip game">game → render</span> Frame packet, once per taken frame</dt>
+    <dd>After the engine has drawn and flipped an in-play frame, the game thread copies exactly what the renderer needs into a slot of our memory, in our aligned layout, bounding every value as it copies, and swaps the slot's index into the shared cell. It does this only when the renderer has taken the previous packet, so the copy runs at the present rate, not the engine's draw rate. The renderer takes the newest complete packet at the top of its frame and draws from it alone.</dd>
+    <dt><span class="chip render">render → game</span> Commands, applied before the engine draws</dt>
+    <dd>Everything the renderer wants changed (the eye, its scroll target, the minimap rect, the viewport widen, <code>ScrollSpeed</code>, the follow release, tooling requests) becomes a record the game thread applies at the start of the next in-play draw. The anchor step travels as a delta consumed once; the eye hold as a level. The renderer predicts with its own unacknowledged deltas so zoom-to-cursor keeps its current feel.</dd>
+    <dt><span class="chip game">game → render</span> Out-of-game packet, at teardown</dt>
+    <dd>No in-play frame is drawn between levels, so nothing would be published. The teardown's post hook publishes a header-only packet with <code>in_game = 0</code>; every world consumer gates on it. Without this the renderer would keep drawing the dead level over the menus.</dd>
+    <dt><span class="chip game">game → render</span> Level packet and assets, optional end state</dt>
+    <dd>The per-level arrays (tile set, tile map, height map, feature defs, type table, minimap picture) and the pointer-linked assets the renderer still walks (model templates, GAF frames, fonts) can be copied once per level or on first sight through more instances of the same exchange. Until that lands, those reads stay allow-listed behind the reclaim fence, which is measured and proven for exactly that lifetime.</dd>
+  </dl>
+  <div class="note">
+    <h4>Why this is "by construction" in the project's sense</h4>
+    <p>The publisher runs on the thread that owns the memory, inside the engine's own frame, at a point where the engine has just drawn from the same state. "Is the engine mid-update?" is answered by "no, we are the engine's thread". Lifetime, ordering and tearing vanish for the copy. What remains is the data bound (<code>model_id &lt; UNITINFOCount</code>, counts against capacities), applied once, in one file, against counts that are consistent because nothing else is running on this thread. The exchange brings four ordering obligations and one init obligation of its own, proven once in section 4.</p>
+  </div>
+</section>
+
+<section id="frame">
+  <span class="eyebrow sec-eyebrow">3 · one frame, end to end</span>
+  <h2>Commands before the draw, publish after the flip, acquire at the top of the render frame</h2>
+  <p>Both directions hang on one observer of <code>DrawGameScreen 0x468CF0</code>, which <code>tagpu_menu.c</code> already observes with the same stolen bytes, so the chaining is proven. The observer acts only when the return address is <code>0x4969D2</code>, the in-play frame callback's call. That gate excludes the shell, the screenshot function's sweep of the eye (it calls <code>DrawGameScreen</code> in a loop without flipping) and the movie recorder for free, and it is what guarantees the loader thread has finished before the first publish (section 8). The engine draws 330 to 4900 times a second depending on resolution and scene, while the presenter shows about 60, so the publisher copies only when the cell has no fresh packet waiting.</p>
+
+  <figure>
+    <div class="plate"><div class="fit" data-zoom tabindex="0" role="button" aria-label="Open the diagram at full size"><span class="lb-hint">open 1:1 ⤢</span><div class="fit-inner">
+<div class="seq" style="grid-template-columns: repeat(4, minmax(0, 1fr)); background-image: linear-gradient(var(--rule-2), var(--rule-2)), linear-gradient(var(--rule-2), var(--rule-2)), linear-gradient(var(--rule-2), var(--rule-2)), linear-gradient(var(--rule-2), var(--rule-2)); background-position: 12.500% 0, 37.500% 0, 62.500% 0, 87.500% 0;">
+  <div class="lane game" style="grid-column:1">Engine<small>game thread</small></div>
+  <div class="lane game" style="grid-column:2">tagpu_packet<small>game thread, the observer</small></div>
+  <div class="lane cell" style="grid-column:3">shared cell<small>one aligned word</small></div>
+  <div class="lane render" style="grid-column:4">Render thread<small>overlay driver</small></div>
+  <div class="msg self" style="grid-column:1 / 2; grid-row:2"><i>1</i>frame callback <code>0x496790</code> runs the ticks and the scroll poll</div>
+  <div class="msg right" style="grid-column:1 / 3; grid-row:3; margin-left:calc(50% / 2); margin-right:calc(50% / 2)"><i>2</i><code>DrawGameScreen 0x468CF0</code> entered, return address <code>0x4969D2</code>: the in-play gate</div>
+  <div class="msg self" style="grid-column:2 / 3; grid-row:4"><i>3</i>apply commands: eye += delta (consumed once), the hold, vpwide rect, ScrollSpeed, follow release</div>
+  <div class="msg left ret" style="grid-column:1 / 3; grid-row:5; margin-left:calc(50% / 2); margin-right:calc(50% / 2)"><i>4</i>the engine draws this frame with the commanded eye</div>
+  <div class="msg self" style="grid-column:1 / 2; grid-row:6"><i>5</i><code>DrawGameScreen</code> body, <code>terr_fogtick</code>, flip <code>0x4C63A0</code> to the primary</div>
+  <div class="msg right" style="grid-column:1 / 3; grid-row:7; margin-left:calc(50% / 2); margin-right:calc(50% / 2)"><i>6</i><code>DrawGameScreen</code> returns</div>
+  <div class="msg right" style="grid-column:2 / 4; grid-row:8; margin-left:calc(50% / 2); margin-right:calc(50% / 2)"><i>7</i>peek: FRESH still set means the renderer has not taken the last packet, so skip the copy</div>
+  <div class="msg self" style="grid-column:2 / 3; grid-row:9"><i>8</i>otherwise fill slot W: <code>head_seq</code> first, the payload bounded as copied, <code>tail_seq</code> last</div>
+  <div class="msg right" style="grid-column:2 / 4; grid-row:10; margin-left:calc(50% / 2); margin-right:calc(50% / 2)"><i>9</i><code>xchg(cell, W + FRESH)</code> returns the old index, which becomes the new W</div>
+  <div class="msg note" style="grid-column:2 / 4; grid-row:11; margin-left:calc(50% / 2); margin-right:calc(50% / 2)"><i>10</i>the payload is globally visible before the index is</div>
+  <div class="msg left ret" style="grid-column:1 / 3; grid-row:12; margin-left:calc(50% / 2); margin-right:calc(50% / 2)"><i>11</i>back to the engine at <code>0x4969D2</code></div>
+  <div class="msg left" style="grid-column:3 / 5; grid-row:13; margin-left:calc(50% / 2); margin-right:calc(50% / 2)"><i>12</i>top of the render frame, exactly once: FRESH? then <code>xchg(cell, the slot given back)</code></div>
+  <div class="msg right ret" style="grid-column:3 / 5; grid-row:14; margin-left:calc(50% / 2); margin-right:calc(50% / 2)"><i>13</i>read and prev packets, valid until the next acquire</div>
+  <div class="msg self" style="grid-column:4 / 5; grid-row:15"><i>14</i>every pass draws from the packet; <code>frame_end</code> checks <code>tail_seq</code>; SwapBuffers</div>
+</div>
+</div></div></div>
+    <figcaption>One frame. The only instructions that touch shared state are the exchanges on the cell. The publisher never waits for the renderer; the renderer never waits for the publisher. Every module on the render thread receives the same packet pointer for the whole frame from the driver; no module acquires on its own.</figcaption>
+  </figure>
+
+  <h3>A worked example</h3>
+  <p>First the types, then a packet built from them. Every field names the engine location the publisher reads it from and the bound it applies, so the listing doubles as the census of what still has to be read from engine memory, and where: in one file, on the game thread.</p>
+  <div class="example">
+<pre><code>// tagpu_packet.h — the frame packet's tables. Every field says where the
+// publisher reads it (game thread, in-play frames only) and the bound it applies.
+// Nothing is packed; the padding is written out. "KEY" = an engine address that
+// crosses as an opaque identity and is never dereferenced by the renderer.
+
+typedef struct PK_UNIT {                 // 72 B, one per LIVE unit, in engine slot order
+    uint16_t slot;                       // index in the engine's unit array (stride 0x118)
+    uint16_t id;                         // unit+0xA8, the stable in-game id: the lerp's key
+    uint32_t state;                      // unit+0x110 state bits (bit28 alive, bit14 excluded)
+    int32_t  pos[3];                     // unit+0x6A / +0x6E / +0x72, 16.16: x, altitude, depth
+    uint16_t rot[3];                     // unit+0x64: bank, heading (the yaw at +0x66), pitch; 65536 = 360 deg
+    uint16_t model_id;                   // unit+0xA6; the entry is DROPPED unless &lt; UNITINFOCount (main+0x1438F)
+    uint16_t type_row;                   // the UnitDef row of unit+0x92, stride 0x249
+    int16_t  health;                     // unit+0x108, s16
+    uint8_t  owner;                      // unit+0xFF, player id
+    uint8_t  cloak;                      // unit+0x10E, bit2 = actively cloaked
+    uint8_t  flags;                      // bit0 = the composite has a depth plane (Object3do+0x10 -&gt; +0x14)
+    uint8_t  pad0;
+    float    nano;                       // unit+0x104, fraction of the build REMAINING
+    int16_t  cargo_first, cargo_next;    // unit+0x8A / +0x8E, resolved to PACKET indices, -1 = none
+    uint32_t squad;                      // unit+0xAC, read as a dword because 0x469C55 does
+    uint32_t o3_key;                     // unit+0x9E, the Object3do address, KEY (the bake caches key on it)
+    uint16_t nparts;                     // Object3do+0x00
+    uint16_t piece_n;                    // nparts if the unit is inside the widest zoom rect + margin, else 0
+    uint16_t bturn[3];                   // Object3do+0x18 / +0x1A / +0x1C, the cached body turn the compose baked
+    uint16_t pad1;
+    uint32_t piece_off;                  // byte offset of this unit's PK_PIECE run in the arena
+    uint8_t  ground_h;                   // feature cell +0x04 under the anchor
+    uint8_t  pad2[3];
+} PK_UNIT;
+
+typedef struct PK_PIECE {                // 20 B, piece_n per unit, in the model's own order (parents first)
+    int32_t  pos[3];                     // prim+0x04 P_POS, the COB MOVE delta, 16.16
+    uint16_t turn[3];                    // prim+0x10 P_TURN, the COB TURN triple, 65536 = 360 deg
+    uint8_t  flags;                      // prim+0x28 P_FLAGS
+    uint8_t  pad;
+} PK_PIECE;                              // prim = Object3do+0x22 + i * 0x36, walked on the game thread only
+
+typedef struct PK_WRECK {                // 28 B, one per live wreck record
+    uint16_t rec;                        // record index at main+0x1420B, stride 0x30
+    uint16_t def;                        // FeatureDef row (main+0x1426F, stride 0x100)
+    int32_t  pos[3];                     // record+0x08 / +0x0C / +0x10, 16.16
+    uint32_t o3_key;                     // record+0x04, KEY
+    uint16_t nparts, piece_n;            // as PK_UNIT
+    uint32_t piece_off;
+} PK_WRECK;
+
+typedef struct PK_ANCHOR {               // 12 B, one per feature-grid cell in the gather rect that anchors a feature
+    uint16_t col, row;                   // cell in 16-px tiles; the grid is main+0x14287, 13 B per cell
+    uint16_t def;                        // cell+0x08 FT_DEFIDX, live when &lt; 0xFFFB
+    uint16_t wreck;                      // cell+0x0A FT_WIDX, valid when flags bit0
+    uint8_t  flags;                      // cell+0x0C FT_FLAGS: bit0 wreckage present, higher bits seen-by-player
+    uint8_t  height;                     // cell+0x04
+    uint8_t  pad[2];
+} PK_ANCHOR;                             // per FRAME, not per level: def, flags and wreck change every tick
+
+typedef struct PK_PROJ {                 // 56 B, from the 300-slot array main+0x141F7 (count main+0x141F3), stride 0x6B
+    int32_t  pos[3];                     // rec+0x04 / +0x08 / +0x0C, 16.16: x, altitude, depth
+    int32_t  start[3];                   // rec+0x10 / +0x14 / +0x18, the tail
+    int16_t  turn[3];                    // rec+0x34
+    int16_t  spin;                       // rec+0x64
+    int32_t  spawn, death;               // rec+0x42 / +0x46, ticks
+    uint16_t ground_h;                   // rec+0x5E
+    int16_t  hidden;                     // rec+0x60, drawn only when 0
+    uint32_t weapon_key;                 // rec+0x00 WeaponDef, KEY; its fields below are resolved here
+    uint8_t  render_type, color, color2; // weapon+0x10C / +0x10D / +0x10E
+    uint8_t  owner;                      // rec+0x52 attacker -&gt; unit+0xFF, or 0xFF
+    uint32_t model_key;                  // weapon+0x74 Model3DONode, KEY
+} PK_PROJ;
+
+typedef struct PK_EXPL {                 // 36 B, from main+0x1491F (count main+0x1491B), stride 0x54
+    int32_t  pos[3];                     // rec+0x1C / +0x20 / +0x24
+    int16_t  turn[3], pad;               // rec+0x4C
+    uint32_t model_key;                  // rec+0x00, KEY
+    uint32_t anim1_key, anim2_key;       // rec+0x04 / +0x10 anim states: the sequence at +8 as a KEY
+    uint16_t frame1, frame2;             // the u16 frame at +0 of each
+} PK_EXPL;
+
+typedef struct PK_DEBRIS {               // 24 B, from the 100 static slots 0x511DF0..0x511F80 (in .data, not under main)
+    int32_t  pos[3];                     // slot+0x16 / +0x1A / +0x1E
+    int16_t  turn[3], pad;               // slot+0x12
+    uint32_t model_key;                  // slot+0x00, KEY
+} PK_DEBRIS;
+
+typedef struct PK_POBJ {                 // 16 B, one per particle object across the ten layers at *(main+0x38D77)
+    uint8_t  cls;                        // by vtbl: 0 grey smoke, 1 dark smoke, 2 fire, 3 flare, 4 wake, 5 nanolathe
+    uint8_t  layer;                      // obj+0x0C, 0..9 = the draw depth
+    uint16_t n_sub;                      // (obj+0x14 - obj+0x10) / the class stride, capped by the arena
+    uint32_t sub_off;                    // first PK_PSUB in the arena
+    int32_t  tick, end_tick;             // obj+0x08 / +0x04
+} PK_POBJ;
+
+typedef struct PK_PSUB {                 // 16 B, one per sub-particle; the class strides 0x20..0x44 collapse to this
+    int32_t  pos[3];                     // 16.16, at +0/+4/+8 (nanolathe) or +4/+8/+0xC (the rest)
+    union { int32_t frame; uint8_t colour; } u;   // frame at +0x14 (smoke) or +0x2C (fire, flare); colour at +0x30 / +0x28
+} PK_PSUB;
+
+typedef struct PK_HEAD {                 // about 1.4 KB with the palette; the slot is one block: head, tables, arena
+    uint32_t head_seq;                   // publish counter, stored BEFORE the fill
+    uint32_t in_game;                    // 0 from the teardown post hook: draw no world
+    uint32_t tick;                       // GameTime main+0x38A47, 3 x the live GameSpeed per second: 30 at speed 10, 60 at 20
+    uint32_t tick_start_lo, tick_start_hi;   // QueryPerformanceCounter when the producer first saw this tick
+    uint32_t level_gen;                  // tagpu_reclaim's counter while reclaim exists
+    uint32_t cmd_ack_seq;                // the last command applied before this draw (section 7)
+    int32_t  eye[2], scroll_to[2];       // main+0x1431F / +0x14323, +0x14327 / +0x1432B
+    int32_t  vp[4];                      // the TRUE 1x rect L, T, W, H via tagpu_vpwide_true_rect(), never raw main+0x37E27
+    int32_t  map_w16, map_h16;           // main+0x14233 / +0x14237
+    int32_t  map_pxw, map_pxh;           // main+0x14223 / +0x14227
+    int32_t  view_cells[2];              // main+0x1423B / +0x1423F
+    uint32_t udef_count;                 // main+0x1438F UNITINFOCount, the bound on model_id
+    uint32_t unit_slots;                 // u16 main+0x14351 = 10 x MaxUnits + 1, the units table's capacity
+    uint16_t los_type;                   // main+0x14281: bit1 true LOS, bit3 grid current
+    uint16_t gfx_opt, ui_gates;          // main+0x37F06 (bit2 Shadow, bit3 TShadow), +0x37F2F (bit2 SelBoxes)
+    uint8_t  local_player, watched;      // main+0x2A43, +0x2A42
+    uint8_t  sea_level;                  // main+0x1427F
+    uint8_t  cursor_mode, region_flags;  // main+0x2CC3, +0x2CC6
+    uint8_t  pad[3];
+    int32_t  mouse[2];                   // main+0x2C76, +0x2C7A
+    int32_t  build_rect[6];              // main+0x2C92 .. +0x2CA6: two corners as x, altitude, z
+    int32_t  mm_view[4];                 // main+0x142CB, the minimap's view box
+    int16_t  mm_screen[4];               // main+0x142E7 .. +0x142ED
+    uint16_t tracked_unit, hovered_unit; // main+0x37E9C, +0x2CBA
+    float    gamma;                      // [0x51FBD0]+0x614, bounded to 0.05 .. 8.0
+    uint8_t  pal[1024];                  // main+0x143A7, 256 x RGBA
+    uint8_t  gui_col[64];                // main+0xDCB
+    struct { uint32_t key; int16_t w, h, hx, hy, x, y; uint8_t ck; uint32_t pix_off; } cursor;
+                                         // [0x51FBD0]+0x1B2 the frame as a KEY plus its decoded pixels, +0x1B6 / +0x1BA where it was drawn
+    struct { uint16_t cols, rows; int32_t org_x, org_y; uint32_t off; } fog;
+                                         // main+0x1421F {buf, cols, rows}: the cells copied, u16 each
+    struct { uint16_t w, h; uint32_t off_comp, off_fog, off_scaled; } minimap;
+                                         // the three 126-px surfaces main+0x142DB / +0x142DF / +0x142E3, repainted per draw by the game thread
+    uint32_t n_units, n_pieces, n_wrecks, n_anchors, n_proj, n_expl, n_debris, n_pobj, n_psub, n_orders;
+    uint32_t off_units, off_pieces, off_wrecks, off_anchors, off_proj, off_expl, off_debris, off_pobj, off_psub, off_orders;
+    uint32_t truncated;                  // one bit per table that did not fit; the next publish gets a grown slot
+    uint32_t used_bytes, cap_bytes;
+    uint32_t tail_seq;                   // stored LAST, after the fill: must equal head_seq or the log says so
+} PK_HEAD;</code></pre>
+    <h4>The packet, filled</h4>
+<pre><code>// publish #4127 as the renderer took it. Example values, not a measurement:
+// 200v200 at 1920x1080, 1x zoom, MaxUnits 500, 281 units and 76 wrecks on screen.
+head_seq 4127   in_game 1   tick 2061   level_gen 2   cmd_ack_seq 88
+eye (5127, 7609)   scroll_to (5127, 7609)   vp (0, 0, 1920, 921)   unit_slots 5001
+los_type 0x000A   local 0   watched 0   gfx_opt 0x0C   sea_level 0   truncated 0x0
+fog 61 x 35   minimap 126 x 126 x 3   cursor 32 x 32
+
+table            count    each         bytes
+PK_HEAD              1   1 424 B      1 424    // with the palette and the GUI colours
+PK_UNIT            281      72 B     20 232    // live units only; the table's capacity is unit_slots
+PK_PIECE         3 372      20 B     67 440    // 281 units, 12 pieces on average, all inside the widest rect
+PK_WRECK            76      28 B      2 128
+PK_ANCHOR          302      12 B      3 624    // feature cells in the gather rect
+PK_PROJ             14      56 B        784
+PK_EXPL              3      36 B        108
+PK_DEBRIS            9      24 B        216
+PK_POBJ             41      16 B        656    // particle objects over the ten layers
+PK_PSUB            412      16 B      6 592    // their sub-particles
+fog cells        2 135       2 B      4 270
+minimap      3 x 15 876      1 B     47 628
+cursor pixels    1 024       1 B      1 024
+tail_seq                     4 B          4
+                                  = 156 130 B, about 152 KB, one gather pass on the game thread</code></pre>
+    <div class="example-text">
+      <p><strong>What the consumer does with it.</strong> The driver calls acquire once and passes the pointer down. The native pass walks <code>units[]</code> and indexes <code>pieces[]</code> by each unit's <code>piece_off</code>; it no longer knows what an <code>Object3do</code> is. The lerp module keeps the previous packet as well and blends the pieces of the same stable <code>id</code> between <code>tick 2060</code> and <code>tick 2061</code> by wall clock, from the producer's <code>tick_start</code> stamp rather than its own guess, and never past <code>u = 1</code>. The fx pass reads <code>PK_PROJ</code> with the weapon's render type and colours already resolved, so the pointer chase from projectile to weapon to attacker that it does today on the render thread is gone.</p>
+      <p><strong>What the producer did to make it.</strong> One walk of the engine's unit array from <code>begin</code> to <code>end</code>, both read on the thread that stores them, so the pair is never skewed. For each live unit: copy the fields, drop the entry if <code>model_id ≥ UNITINFOCount</code>, copy its pieces if the unit is inside the widest zoom rect plus a margin, resolve cargo links to packet indices. Then the wrecks, the feature anchors in the gather rect, the projectile, explosion and debris arrays, the ten particle layers, the fog grid, the three minimap surfaces the game thread repaints each draw, the cursor's pixels. Then the tail sequence, then one <code>xchg</code>.</p>
+      <p><strong>Cost envelope.</strong> The publish is a gather, not a memcpy: about 30 scattered loads per unit plus its pieces. Estimated 0.1 to 0.15 ms for this scene and about 1 ms at a few thousand drawable units, before particles and anchors. Gated to the present rate it is about 1 % of the game thread; ungated at the engine's draw rate it would be 6 to 7 %. It is a gate, not an assumption: the publisher is timed with the performance counter and the budget is stated before the first landing (section 10).</p>
+    </div>
+  </div>
+</section>
+
+<section id="primitive">
+  <span class="eyebrow sec-eyebrow">4 · the primitive</span>
+  <h2>Four slots, one aligned word, two exchanges</h2>
+  <p>The standard wait-free single-producer, single-consumer "latest value" exchange. Slots have roles, not owners fixed for life: <strong>W</strong> is the one the game thread is filling, <strong>READ</strong> and <strong>PREV</strong> are the two the renderer holds (current and previous, for interpolation), and the fourth sits in the <strong>cell</strong>, either fresh (published, not yet taken) or stale (returned by the renderer, waiting to be reused). The cell is one 32-bit aligned word in our static storage: two index bits plus a FRESH bit, reserved bits asserted zero.</p>
+
+  <figure>
+    <div class="plate"><div class="fit" data-zoom tabindex="0" role="button" aria-label="Open the diagram at full size"><span class="lb-hint">open 1:1 ⤢</span><div class="fit-inner">
+      <div class="trace" style="grid-template-columns: 5.5rem repeat(7, minmax(6.2rem, 1fr));">
+        <div class="hd"></div>
+        <div class="hd ev">t0 init at DLL attach</div>
+        <div class="hd ev">t1 game publishes</div>
+        <div class="hd ev">t2 render acquires</div>
+        <div class="hd ev">t3 game publishes</div>
+        <div class="hd ev">t4 game publishes again</div>
+        <div class="hd ev">t5 render acquires</div>
+        <div class="hd ev">t6 render frame, nothing new</div>
+
+        <div class="rl">slot 0</div>
+        <div class="c g">W</div>
+        <div class="c m act">cell <span class="f">★</span></div>
+        <div class="c r act">READ</div>
+        <div class="c r">READ</div>
+        <div class="c r">READ</div>
+        <div class="c r act">PREV</div>
+        <div class="c r">PREV</div>
+
+        <div class="rl">slot 1</div>
+        <div class="c m">cell</div>
+        <div class="c g act">W</div>
+        <div class="c g">W</div>
+        <div class="c m act">cell <span class="f">★</span></div>
+        <div class="c g act">W</div>
+        <div class="c g">W</div>
+        <div class="c g">W</div>
+
+        <div class="rl">slot 2</div>
+        <div class="c r">READ</div>
+        <div class="c r">READ</div>
+        <div class="c r act">PREV</div>
+        <div class="c r">PREV</div>
+        <div class="c r">PREV</div>
+        <div class="c m act">cell</div>
+        <div class="c m">cell</div>
+
+        <div class="rl">slot 3</div>
+        <div class="c r">PREV</div>
+        <div class="c r">PREV</div>
+        <div class="c m act">cell</div>
+        <div class="c g act">W</div>
+        <div class="c m act">cell <span class="f">★</span></div>
+        <div class="c r act">READ</div>
+        <div class="c r">READ</div>
+
+        <div class="foot">Each column is one step; the outlined cells are the ones that step touched. ★ marks FRESH. The init at t0 is explicit: zeroed statics would put both threads on slot 0. At every step the four roles are a permutation of the four slots: no slot is ever in two hands. At t4 the game thread publishes a second time before the renderer has taken the first (with the FRESH gate this only happens when a max-age override fires); the t3 packet is overwritten on its way back. At t6 the renderer finds no FRESH bit and keeps drawing slot 3 without touching the cell.</div>
+      </div>
+    </div></div></div>
+    <figcaption>The exchange as a logic-analyser trace. Reading down a column gives the ownership of all four slots at that instant; reading along a row gives one slot's life.</figcaption>
+  </figure>
+
+  <h3>Both sides, in C</h3>
+  <p>The whole of the cross-thread state is one word. Each side exchanges a slot <em>it owns</em> into the cell and takes whatever was there, which is what keeps the permutation a permutation without a lock. The exchange is spelled with the GCC atomic builtin: on this toolchain <code>InterlockedExchange</code> expands to <code>__sync_lock_test_and_set</code>, whose documented contract is acquire-only, and two of the four orderings the protocol needs are release. Same instruction (<code>xchg</code>, implicitly locked), stronger contract.</p>
+<pre><code>/* tagpu_packet.c — the exchange, as corrected by the protocol review. */
+#define PKX_IDX    0x3u          /* two index bits                              */
+#define PKX_FRESH  0x4u          /* set by publish, cleared by acquire          */
+
+static PACKET* volatile s_slot[4]; /* entry i written only by slot i's owner    */
+static LONG             s_cell;    /* idx | PKX_FRESH — the ONLY shared word    */
+static unsigned s_write, s_seq;    /* game thread only                          */
+static unsigned s_read, s_prev;    /* render thread only                        */
+static uint32_t s_frame_head;      /* render thread: head latched at acquire    */
+
+#define XCHG(v)  __atomic_exchange_n(&amp;s_cell, (LONG)(v), __ATOMIC_ACQ_REL)
+#define PEEK()   __atomic_load_n(&amp;s_cell, __ATOMIC_RELAXED)
+
+/* DLL ATTACH, before either thread exists — never lazily. */
+void tagpu_packet_init(void)
+{
+    /* allocate four slots at the initial high-water mark; head_seq 0 = no packet */
+    s_write = 0; s_read = 2; s_prev = 3;                  /* {0,1,2,3}: a permutation */
+    __atomic_store_n(&amp;s_cell, 1L, __ATOMIC_RELEASE);      /* slot 1 in the cell, stale */
+}
+
+/* GAME THREAD, from the DrawGameScreen observer's `after`, in-play frames only. */
+void tagpu_packet_publish(void)
+{
+    PACKET* p;
+    if (PEEK() &amp; PKX_FRESH) return;                       /* the renderer has not taken the last one */
+    p = commit_if_needed(s_write);                        /* our own slot: more pages at the same address, never a new block */
+    p-&gt;head_seq = ++s_seq;                                /* head BEFORE the payload            */
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
+    fill(p);                                              /* every engine read lives here; truncates, never fails */
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
+    p-&gt;tail_seq = s_seq;                                  /* tail AFTER the payload             */
+    {   /* P1: payload visible before the index. P2: the next fill of the slot we
+           receive stays after this exchange. Both from the ACQ_REL xchg.       */
+        LONG old = XCHG(s_write | PKX_FRESH);
+        s_write = (unsigned)(old &amp; PKX_IDX);              /* stale, or never taken: ours now    */
+    }
+}
+
+/* RENDER THREAD, exactly once per frame, at the top of the overlay driver. */
+const PACKET* tagpu_packet_acquire(const PACKET** prev)
+{
+    if (PEEK() &amp; PKX_FRESH) {
+        /* Tick-aware give-back: a packet of the SAME tick replaces read and keeps
+           prev, so the interpolation pair always spans two distinct ticks.       */
+        unsigned give = (peek_tick_of_cell() == s_slot[s_read]-&gt;tick) ? s_read : s_prev;
+        /* C2: our last loads of `give` precede this exchange. C1: our loads of
+           the new slot follow it and depend on its result.                       */
+        LONG old = XCHG(give);
+        unsigned got = (unsigned)(old &amp; PKX_IDX);
+        if (give == s_prev) s_prev = s_read;
+        s_read = got;
+    }
+    s_frame_head = s_slot[s_read]-&gt;head_seq;              /* latched for frame_end              */
+    *prev = s_slot[s_prev];                               /* NULL if it is from another level   */
+    return s_slot[s_read];                                /* unchanged if nothing was fresh     */
+}
+
+/* RENDER THREAD, after the frame's LAST read of either packet. */
+void tagpu_packet_frame_end(void)
+{
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
+    if (s_slot[s_read]-&gt;tail_seq != s_frame_head) violation("our slot was rewritten during our frame");
+}</code></pre>
+  <p>The tick-aware give-back needs the tick of the packet in the cell before taking it. The consumer may not read a slot it does not hold, so the producer carries the tick in the cell word's spare bits or, simpler, the consumer always takes the fresh packet and then decides which of its now three held packets to hand back at the next acquire. The reference implementation in the protocol review uses the plain form; the choice is the first landing's, and either keeps the permutation.</p>
+
+  <h3>Why it is safe, in five lines</h3>
+  <ul>
+    <li><strong>No shared slot.</strong> Each side only ever puts into the cell a slot it holds, and takes out the one that was there. Four indices, four roles, always a permutation, provided the init made it one. The producer's own slot is the only one that grows, and it grows in place: each slot's address range is reserved once and pages are committed as the high-water mark rises, so no block ever moves and nothing is ever freed. A rule-breaking cached pointer can only reach a slot's current bytes, never freed memory.</li>
+    <li><strong>No tearing.</strong> The cell is one aligned word. The packet's contents are never accessed by both threads at once, so their alignment is a performance property, not a safety one.</li>
+    <li><strong>Four orderings, one instruction.</strong> Payload before index (P1) and loads after the exchange (C1) hold on x86 for plain stores already; the give-back directions (P2: the next fill after the exchange, C2: the last loads of the returned slot before it) are what <code>xchg</code>'s implicit lock adds. The atomic builtin makes the compiler honour all four; <code>volatile</code> alone would not order the non-volatile payload.</li>
+    <li><strong>No waiting, anywhere.</strong> Neither exchange can fail or block. A slow or dead partner changes what the other side sees, never whether it proceeds. The game thread still joins the render thread on a display-mode change and release, and the render thread still holds the fork's critical section during the surface upload; those waits are cnc-ddraw's and pre-date this design.</li>
+    <li><strong>Violations are loud.</strong> Head stored before the fill, tail after; the consumer latches the head at acquire and compares the tail at frame end, which catches any overlap of a fill with a frame. Thread identity on both sides, the permutation after every exchange, a canary past the capacity, structural bounds on every table, one acquire per frame, a poison lever that memsets the received slot. The heartbeat prints <code>pub overrun acq taken gap grow commitfail trunc viol</code>, and <code>viol=0</code> is the first landing's gate.</li>
+  </ul>
+  <div class="note">
+    <h4>Foolproof by API shape, not by discipline</h4>
+    <p>Modules never see the exchange. The driver acquires once per frame and hands every pass the same <code>const PACKET*</code> through the frame struct it already passes. A module cannot acquire twice, cannot hold a slot across frames (the pointer it was given is valid for this frame only), and cannot reach the producer's slot at all. The lerp module, the one consumer that needs last frame's data, gets <code>prev</code> from the same call. Anything that needs engine memory is, by construction, game-thread code in the publisher. The same struct is instantiated for the frame packet, the commands, the wide fog grid, and later the level packet, so the proof is written once.</p>
+  </div>
+  <details>
+    <summary>Alternatives the protocol review weighed</summary>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Design</th><th>Failure mode</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr><td>Three buffers under a critical section (fogwide today)</td><td>The same three-role algorithm, but a holder preempted inside the section blocks the other thread for a scheduler quantum, and the render thread runs above normal priority</td><td>The mailbox is this algorithm made wait-free; replace it</td></tr>
+        <tr><td>Seqlock over the engine's memory</td><td>The engine cannot bump a sequence</td><td>Rejected by the audit</td></tr>
+        <tr><td>Seqlock over our packet, producer writing in place</td><td>The consumer reads across most of its frame while the producer publishes at hundreds per second: a consistent read can never complete under load</td><td>Fine for a 200-byte header alone; wrong for the packet</td></tr>
+        <tr><td>Generation-stamped double buffer</td><td>The producer's next write is the buffer the consumer took last frame; needs a done signal or validate-after-use</td><td>Not wait-free on both sides</td></tr>
+        <tr><td>Ring of packets</td><td>Queue semantics; a stuck consumer fills it; overflow is latest-wins with more memory</td><td>Only for a consumer that needs every tick, such as a recorder; the GUI op ring stays a ring for that reason</td></tr>
+        <tr><td>Per-field interlocked dwords (the font today)</td><td>Two dwords are a skew, not an atom</td><td>Right for one idempotent word; the commands are a small packet instead</td></tr>
+      </tbody>
+    </table></div>
+  </details>
+</section>
+
+<section id="stops">
+  <span class="eyebrow sec-eyebrow">5 · edge cases</span>
+  <h2>When one side stops, bursts, runs ahead, or the level ends</h2>
+  <p>Each case below is the same primitive under a different schedule. None of them allocates per frame, blocks, or reads a slot the other side holds. Three were found by the adversarial review and changed the design; they are marked.</p>
+  <div class="cases">
+    <div class="case wide">
+      <h3>Consumer stuck <span class="chip render">render</span><span class="chip ok">bounded</span></h3>
+      <p>A GL driver stall, a blocking <code>SwapBuffers</code>. The game thread keeps going: with the FRESH gate it skips the copy entirely (one relaxed load per draw); with a max-age override it alternates between its slot and the one in the cell, forever, in constant memory. When the renderer wakes it takes the latest packet. A stalled game thread would freeze this player's units for everyone, so the sim must never wait on the renderer, and here it does not.</p>
+      <div class="fit" data-zoom tabindex="0" role="button" aria-label="Open the diagram at full size"><span class="lb-hint">open 1:1 ⤢</span><div class="fit-inner"><div class="trace" style="grid-template-columns: 4.5rem repeat(6, minmax(4.6rem, 1fr));">
+        <div class="hd"></div><div class="hd ev">t1 pub</div><div class="hd ev">t2 pub</div><div class="hd ev">t3 pub</div><div class="hd ev">t4 pub</div><div class="hd ev">t5 pub</div><div class="hd ev">t6 render wakes</div>
+        <div class="rl">slot 0</div><div class="c m act">cell ★</div><div class="c g act">W</div><div class="c m act">cell ★</div><div class="c g act">W</div><div class="c m act">cell ★</div><div class="c r act">READ</div>
+        <div class="rl">slot 1</div><div class="c g act">W</div><div class="c m act">cell ★</div><div class="c g act">W</div><div class="c m act">cell ★</div><div class="c g act">W</div><div class="c g">W</div>
+        <div class="rl">slot 2</div><div class="c r">READ</div><div class="c r">READ</div><div class="c r">READ</div><div class="c r">READ</div><div class="c r">READ</div><div class="c r act">PREV</div>
+        <div class="rl">slot 3</div><div class="c r">PREV</div><div class="c r">PREV</div><div class="c r">PREV</div><div class="c r">PREV</div><div class="c r">PREV</div><div class="c m act">cell</div>
+        <div class="foot">Shown with the max-age override publishing through the stall. Each publish returns a FRESH slot, counted as <code>overrun</code>, not a fault.</div>
+      </div></div></div>
+    </div>
+    <div class="case wide">
+      <h3>Producer stuck <span class="chip game">game</span><span class="chip ok">bounded</span></h3>
+      <p>Sim paused, a network stall on a slow player: the engine keeps drawing with the same <code>tick</code>, so packets keep coming and the lerp refuses at <code>u ≥ 1</code>, freezing units exactly as the engine's own frame does. A menu or a load: no in-play frame, no packet; the renderer finds no FRESH bit and redraws its current packet, which is our memory and cannot be freed under it. The header's wall clock and tick say how old it is.</p>
+      <div class="fit" data-zoom tabindex="0" role="button" aria-label="Open the diagram at full size"><span class="lb-hint">open 1:1 ⤢</span><div class="fit-inner"><div class="trace" style="grid-template-columns: 4.5rem repeat(5, minmax(4.6rem, 1fr));">
+        <div class="hd"></div><div class="hd ev">t1 acquire</div><div class="hd ev">t2 frame</div><div class="hd ev">t3 frame</div><div class="hd ev">t4 frame</div><div class="hd ev">t5 frame</div>
+        <div class="rl">slot 0</div><div class="c r act">READ</div><div class="c r">READ</div><div class="c r">READ</div><div class="c r">READ</div><div class="c r">READ</div>
+        <div class="rl">slot 1</div><div class="c g">W</div><div class="c g">W</div><div class="c g">W</div><div class="c g">W</div><div class="c g">W</div>
+        <div class="rl">slot 2</div><div class="c r act">PREV</div><div class="c r">PREV</div><div class="c r">PREV</div><div class="c r">PREV</div><div class="c r">PREV</div>
+        <div class="rl">slot 3</div><div class="c m act">cell</div><div class="c m">cell</div><div class="c m">cell</div><div class="c m">cell</div><div class="c m">cell</div>
+        <div class="foot">No FRESH bit at t2..t5: the exchange is not even executed.</div>
+      </div></div></div>
+    </div>
+    <div class="case">
+      <h3>Between levels <span class="chip game">game</span><span class="chip bad">changed the design</span></h3>
+      <p>After the teardown the shell flips thousands of times a second but none is an in-play frame, and the render thread keeps running. Today the unit pass stops because the teardown nulls <code>begin</code>; the packet removes that read and replaces it with nothing, so the renderer would draw the dead level's units, wrecks and fog over the main menu and the loading screen. <strong>Fix:</strong> the teardown post hook publishes a header-only packet with <code>in_game = 0</code> and the new level generation; every world consumer gates on it.</p>
+    </div>
+    <div class="case">
+      <h3>Producer bursts <span class="chip game">game</span><span class="chip ok">latest wins</span></h3>
+      <p>The engine draws 7 to 15 times per presented frame; <code>DeltaTime</code> is 0 to 5 ticks per draw, so consecutive publishes can differ by several ticks. With the FRESH gate one packet per taken frame is copied; any that are skipped show as sequence gaps, counted, not violations. The one packet that must not be lost is the first of each tick, which is why the producer stamps <code>tick_start</code> itself with the performance counter when it first sees <code>GameTime</code> change and carries it in every packet of that tick. Which packet the consumer takes is then irrelevant to the blend.</p>
+    </div>
+    <div class="case">
+      <h3>Same-tick packets and the interpolation pair <span class="chip render">render</span><span class="chip bad">changed the design</span></h3>
+      <p>With several publishes per tick, a consumer that hands back <code>prev</code> on every take soon holds two packets of the same tick, and the blend refuses: stepped motion, always. <strong>Fix:</strong> the acquire is tick-aware; a packet of the same tick replaces <code>read</code> and keeps <code>prev</code>, so the pair always spans two distinct ticks. Units are matched between the two by stable id and level generation, never by table position. Never extrapolate past <code>u = 1</code>: a limb that stopped or reversed would overshoot, and a stalled producer would run off the map.</p>
+    </div>
+    <div class="case">
+      <h3>Consumer faster than producer <span class="chip render">render</span><span class="chip ok">interpolates</span></h3>
+      <p>A 144 Hz display over a sim ticking 30 or 60 times a second: most render frames find no FRESH bit and redraw the same packet, one relaxed load each, no cache-line bouncing. With <code>prev</code> and <code>read</code> both held, the lerp blends by wall clock from the producer's tick stamp, as it does today from its own guess.</p>
+    </div>
+    <div class="case">
+      <h3>Units table overflow <span class="chip game">game</span><span class="chip bad">changed the design</span></h3>
+      <p>The draft capped the units table at 2048 with a truncation counter. The engine allocates unit slots in per-player blocks, so cutting the walk in slot order would drop the highest-numbered players entirely: in a four-player game past 2048 units, two armies never render for the whole battle. <strong>Fix:</strong> size the units table to the engine's own slot count, <code>u16 main+0x14351</code>, at most 15001 entries, so unit truncation cannot happen. Cull only the piece arena, by the widest zoom rect plus a margin (never the current zoom level, which the game thread sees a frame late), so off-screen units carry no pieces and cost 72 bytes each.</p>
+    </div>
+    <div class="case">
+      <h3>Slot growth mid-game <span class="chip game">game</span><span class="chip ok">in place, nothing freed</span></h3>
+      <p>Each slot's address range is reserved once at DLL attach with <code>VirtualAlloc(MEM_RESERVE)</code>, at a ceiling well above the worst case (8 MB per frame slot against about 2.3 MB), and pages are committed as the high-water mark rises. A table that would overflow the committed size truncates this frame (a bit per table in the header), and the publisher commits more pages to its <em>own</em> write slot before the next fill. The block never moves, so nothing is ever freed or stranded and no pointer into a slot can dangle. A commit that fails keeps the current size and retries on a later publish rather than pinning it for the session. The pages come from the kernel, not the CRT heap, so fragmentation cannot arise. Anything ever retired is decommitted, not freed: the range stays reserved and inaccessible, so a stale pointer faults at an address that names the packet instead of reading reused memory. Reference counting was considered and rejected: a count cannot see the raw pointer a module copies, and a mismatched release is the use-after-free again. The renderer never holds the write slot and only dereferences indices of slots it holds.</p>
+    </div>
+    <div class="case">
+      <h3>Render thread restarted <span class="chip render">render</span><span class="chip ok">joined, not killed</span></h3>
+      <p>On a display-mode change cnc-ddraw sets the run flag false and joins the render thread with an infinite wait; the loop exits only after <code>SwapBuffers</code>. So the old thread is never mid-acquire when it ends, the consumer's <code>READ</code>/<code>PREV</code> indices are module statics the new thread inherits under a full synchronisation, and the GL re-init reads our held slots instead of engine memory. Ownership is by role, never by thread id; the consumer records the new id and continues.</p>
+    </div>
+    <div class="case">
+      <h3>Level change under a held packet <span class="chip game">game</span><span class="chip mute">header gated</span></h3>
+      <p>The renderer may hold <code>prev</code> from the old level when the first packet of the new one arrives. Model ids, template keys and piece counts in the old packet refer to a dead level. The acquire hands out <code>prev</code> only when its level generation matches; every per-model cache is keyed on <code>(level_gen, model_id)</code>; the lerp's unit key is <code>(level_gen, stable id)</code>. The packet carries reclaim's counter as long as reclaim exists, so there is one generation, not two.</p>
+    </div>
+    <div class="case">
+      <h3>A wrong pointer in the publisher <span class="chip game">game</span><span class="chip mute">moves the fault</span></h3>
+      <p>Today a bad engine read faults the render thread; after, the game thread. Not worse: an access violation on any thread ends the process, and a fault on the game thread is more likely to leave the engine's own error log naming our address than one on the render thread, which today reads as a freeze. Structured exception handling around the publisher is not a legitimate guard (it makes a wrong offset rarer) and 32-bit mingw has none anyway. The legitimate guards are the bounds against the engine's own counts and the byte-verified hook sites.</p>
+    </div>
+    <div class="case">
+      <h3>Layer coherence <span class="chip render">render</span><span class="chip mute">measured, not paired</span></h3>
+      <p>The render thread composites the engine's software frame, uploaded whenever it wakes, with our overlay from the packet. Publishing after the flip means the packet is never older than the surface, but the skew is up to one engine draw (under 3 ms of game time) either way, and the engine's own copy already races the upload since the fork does not lock surfaces. Invisible where it matters (the world and the UI twin are ours). <strong>Plan:</strong> stamp a surface sequence in <code>dds_Unlock</code> on in-play flips, echo it in the packet, count mismatches on the heartbeat. If a mismatch is ever seen, the by-construction answer is the surface itself in the packet (2 MB at 1080p, 8 MB at 4K).</p>
+    </div>
+  </div>
+  <div class="note ok">
+    <h4>Smooth motion keeps working, with a cleaner input</h4>
+    <p>The walking animation is interpolated today by sampling every piece's <code>P_POS</code>/<code>P_TURN</code> on the render thread into two banks of history and drawing the pose at tick T−1 plus the wall-clock fraction of tick T. Under the packet the two held packets <em>are</em> that history: <code>prev</code> and <code>read</code> always span two distinct ticks, the producer stamps when each tick began, and the blend runs over the same <code>PK_PIECE</code> values matched by the stable unit id. Same one-tick latency, same blend, same refusal to extrapolate; the 3.4 MB arena, the pointer-keyed hash and the same-type-reuse residual go away. Unit translation is not interpolated today at all: the sim moves a unit once per tick, 30 times a second at GameSpeed 10 (the rate the engine's own clock display assumes) and 60 at the GameSpeed 20 the project's fixtures land on, and the native pass reads the 16.16 anchor at whatever the tick rate is, which <code>PK_UNIT.pos</code> carries unchanged. At 30 ticks over 60 presents half the frames repeat the previous position today. What improves is that every sample is taken between ticks, so a unit can no longer be drawn with its pieces mixed across a tick boundary, and interpolating positions between the two held packets, which would make translation smooth at 60 fps over a 30 Hz tick, becomes a small option rather than a new sampling problem.</p>
+  </div>
+</section>
+
+<section id="packet">
+  <span class="eyebrow sec-eyebrow">6 · the data</span>
+  <h2>What a frame packet holds, and what it costs</h2>
+  <p>One contiguous block per slot: a fixed header, tables sized from the engine's own counts, a bump arena for the variable parts, and the tail sequence. Everything is in our layout; no consumer ever computes an engine offset, and no engine pointer crosses except as an opaque key.</p>
+  <div class="pmap">
+    <div class="mem">
+      <div class="row hdr"><div class="name">header<small>seq, in_game, tick, tick_start, level gen, cmd_ack_seq, eye, scroll target, true viewport, screen, LosType, players, option bits, sea level, cursor and mouse state, build-cursor rect, minimap rects, tracked and hovered ids, UNITINFOCount, slot count, gamma, the palette (1 KB), GUI colours, the cursor's geometry, table offsets and counts, truncation bits</small></div><div class="sz">typ <b>1.5 KB</b></div><div class="sz">max <b>1.5 KB</b></div></div>
+      <div class="row tbl"><div class="name">units[live, capacity = slot count ≤ 15001]<small>72 B (PK_UNIT above): slot, stable id, state, position 16.16 ×3, rotation, model id (bounded) and type row, health, owner, cloak, flags, nano, cargo links as packet indices, squad, Object3do key, nparts, cached body turn, piece_off / piece_n, ground height</small></div><div class="sz">typ <b>20 KB</b></div><div class="sz">max <b>~1.1 MB at the slot bound</b></div></div>
+      <div class="row arena"><div class="name">pieces arena<small>20 B per piece: P_POS i32×3, P_TURN u16×3, flags; only units inside the widest zoom rect plus a margin</small></div><div class="sz">typ <b>72 KB</b></div><div class="sz">max <b>~0.6 MB</b></div></div>
+      <div class="row tbl"><div class="name">wrecks[n] + their pieces<small>records at main+0x1420B stride 0x30: record, def, position, object key, pieces</small></div><div class="sz">typ <b>10 KB</b></div><div class="sz">max <b>~100 KB</b></div></div>
+      <div class="row tbl"><div class="name">anchors[n]<small>12 B: the feature-grid cells inside the gather rect with a live def, their flags and wreck index. Per frame, not per level: these change every tick</small></div><div class="sz">typ <b>4 KB</b></div><div class="sz">max <b>~216 KB at 4K, 0.25×</b></div></div>
+      <div class="row tbl"><div class="name">projectiles[≤ 300], explosions[≤ 300], debris[100]<small>the fx pass's three arrays; weapon fields resolved on the game thread; the 8192 cap becomes the exact 300</small></div><div class="sz">typ <b>~15 KB</b></div><div class="sz">max <b>~30 KB</b></div></div>
+      <div class="row arena"><div class="name">particle arena<small>ten layers of ≤ 400 objects, each with its sub-particle vector at its class stride; real counts unmeasured, sized from the sfx log over a 200v200 run and truncated with a counter</small></div><div class="sz">typ <b>~32 KB</b></div><div class="sz">max <b>capped ~320 KB</b></div></div>
+      <div class="row arena"><div class="name">fog cells, minimap surfaces, cursor pixels<small>the engine's screen grid as u16 per cell; the three 126-px minimap surfaces the game thread repaints each draw; the decoded cursor frame</small></div><div class="sz">typ <b>~60 KB</b></div><div class="sz">max <b>~70 KB</b></div></div>
+      <div class="row tail"><div class="name">tail_seq<small>equals head_seq, or the log says so</small></div><div class="sz">&nbsp;</div><div class="sz"><b>4 B</b></div></div>
+    </div>
+    <div class="pmap-text">
+      <p><strong>Envelope.</strong> About 0.25 MB typical, about 2.3 MB at the worst case the engine allows. Four slots reserve 32 MB of address space and commit only the high-water mark, under 10 MB at the worst case; the process has 726 MiB free below 2 GiB on the reference setup, most of it in two large holes. In exchange the lerp's 3.4 MB pose arena and fogwide's retire ring go away.</p>
+      <p><strong>Bounds at the copy.</strong> <code>model_id</code> against <code>UNITINFOCount</code>, the walk against the engine's slot count, piece count against the model's <code>nparts</code>, every table against its capacity, the fog grid against its dimension cap. A value that fails its bound drops the entry and bumps a counter; the packet is always complete and always valid.</p>
+      <p><strong>Keys, not pointers.</strong> The <code>Object3do</code>, the template, the GAF frame, the font: each may ride as a key the renderer resolves against its own caches. Nothing on the render thread dereferences one. The draft had the cursor frame pointer in the header; the cursor's pixels are copied instead.</p>
+      <p><strong>Wide fog grid.</strong> Fogwide already builds its grid on the game thread per LOS change, not per draw. It becomes a second instance of the mailbox (each slot carries its own dimensions, only the write slot grows) rather than a table in the frame packet; its critical section and retire ring go.</p>
+    </div>
+  </div>
+</section>
+
+<section id="commands">
+  <span class="eyebrow sec-eyebrow">7 · the other direction</span>
+  <h2>The renderer asks; the owner of the word writes</h2>
+  <p>The zoom already does this for the camera follow: the render thread raises a request, the game thread consumes it, because the follow slots are pointers the stepper dereferences. The plan makes that the only shape, with two record kinds. The <strong>anchor step is a delta</strong>, consumed once and accumulated if the game thread is slow, because a latched "the eye should be here" re-applied every draw would pin the camera against the engine's own arrow-key, edge and follow scrolling. The <strong>eye hold is a level</strong>, the one absolute. Both are applied at the start of the next in-play draw, after the engine's own camera writers for that frame and before the draw reads the eye, so the engine's frame, its fog rebuild and its minimap box all see the commanded eye.</p>
+  <figure>
+    <div class="plate"><div class="fit" data-zoom tabindex="0" role="button" aria-label="Open the diagram at full size"><span class="lb-hint">open 1:1 ⤢</span><div class="fit-inner">
+<div class="seq" style="grid-template-columns: repeat(4, minmax(0, 1fr)); background-image: linear-gradient(var(--rule-2), var(--rule-2)), linear-gradient(var(--rule-2), var(--rule-2)), linear-gradient(var(--rule-2), var(--rule-2)), linear-gradient(var(--rule-2), var(--rule-2)); background-position: 12.500% 0, 37.500% 0, 62.500% 0, 87.500% 0;">
+  <div class="lane render" style="grid-column:1">Zoom<small>render thread</small></div>
+  <div class="lane cell" style="grid-column:2">command cell<small>one aligned word</small></div>
+  <div class="lane game" style="grid-column:3">tagpu_packet<small>game thread, the observer</small></div>
+  <div class="lane game" style="grid-column:4">Engine<small>game thread</small></div>
+  <div class="msg self" style="grid-column:1 / 2; grid-row:2"><i>1</i>wheel notch: the anchor step wants an eye delta of (−150, −100)</div>
+  <div class="msg right" style="grid-column:1 / 3; grid-row:3; margin-left:calc(50% / 2); margin-right:calc(50% / 2)"><i>2</i>post the delta as <code>cmd_seq 88</code>, adding to any delta not yet applied</div>
+  <div class="msg self" style="grid-column:1 / 2; grid-row:4"><i>3</i>draw this frame at <code>packet.eye</code> + the unacked deltas: prediction</div>
+  <div class="msg left" style="grid-column:3 / 5; grid-row:5; margin-left:calc(50% / 2); margin-right:calc(50% / 2)"><i>4</i><code>DrawGameScreen</code> entered, return address <code>0x4969D2</code></div>
+  <div class="msg left" style="grid-column:2 / 4; grid-row:6; margin-left:calc(50% / 2); margin-right:calc(50% / 2)"><i>5</i>take the command: the delta is consumed once</div>
+  <div class="msg right" style="grid-column:3 / 5; grid-row:7; margin-left:calc(50% / 2); margin-right:calc(50% / 2)"><i>6</i>eye += delta, scroll target follows, follow slots cleared, all on the thread that owns the words</div>
+  <div class="msg self" style="grid-column:4 / 5; grid-row:8"><i>7</i>draws with the new eye; <code>terr_fogtick</code> rebuilds the fog grid for it</div>
+  <div class="msg left" style="grid-column:3 / 5; grid-row:9; margin-left:calc(50% / 2); margin-right:calc(50% / 2)"><i>8</i><code>DrawGameScreen</code> returns after the flip</div>
+  <div class="msg left" style="grid-column:1 / 4; grid-row:10; margin-left:calc(50% / 3); margin-right:calc(50% / 3)"><i>9</i>packet with eye (4977, 7511) and <code>cmd_ack_seq 88</code></div>
+  <div class="msg self" style="grid-column:1 / 2; grid-row:11"><i>10</i>drop the unacked deltas up to 88: prediction reconciled, no wobble</div>
+</div>
+</div></div></div>
+    <figcaption>A camera command. Without prediction the zoom would draw from an eye one game frame old and wobble on every notch of the ease, which is why the commands and the header must land in the same step. The mouse-position writeback is not on this path: it already runs on the game thread, synchronously inside the engine's own dispatch, and must stay there. Nothing here may touch sim state: TA replicates unit state and events from each unit's owner, so a local write to a unit is either broadcast as fact or silently overwritten.</figcaption>
+  </figure>
+  <p><strong>Tooling requests</strong> (peek, catalogues, weapon dumps, the GUI snapshot, scenario detection) take the same shape with a small ring: the render thread's file poller posts a request, the observer services it on any frame, in-play or shell, rate-limited, reading per-map memory only on in-play frames. The poller keeps the scenario applier's give-up discipline, a frame budget and a compare-and-swap between "the poller gave up" and "the servicer claimed it", so a stuck game thread costs one clear error instead of a hang or a late answer landing in a reused buffer.</p>
+</section>
+
+<section id="level">
+  <span class="eyebrow sec-eyebrow">8 · levels</span>
+  <h2>The loader thread, the out-of-game packet, and why the load hole closes</h2>
+  <p>The engine review found what the audit had missed: <strong>the level load runs on a loader thread</strong>. The game-screen handler creates it at <code>0x4982CA</code>; its body allocates the particle layers and the projectile array, runs <code>LoadMap</code>, builds the unit array (<code>0x4854A0</code>) and the minimap picture, and as its last act sets bit 1 of <code>main+0x38D75</code>. The game thread meanwhile draws the loading screen, and installs the in-play frame handler only after testing that flag. So "the game thread owns all of <code>main</code>" is false during a load, and true for every in-play draw, which is exactly the set the <code>0x4969D2</code> gate selects. The minimap builder's "own thread" is this loader thread.</p>
+  <figure>
+    <div class="plate">
+      <div class="lifecycle">
+        <div class="stage game">
+          <div class="tr">start of a level</div>
+          <b>In play</b>
+          <span class="chip game">game thread owns main</span>
+          <p class="gt">Every in-play <code>DrawGameScreen</code> applies the commands before the draw and publishes a packet after the flip.</p>
+          <p class="rt">Draws from its held packet, <code>in_game = 1</code>.</p>
+        </div>
+        <div class="stage game">
+          <div class="tr">→ <code>0x491B60</code> on the game thread</div>
+          <b>Teardown</b>
+          <span class="chip game">game thread</span>
+          <p class="gt">The cascade frees the per-map arrays. The post hook publishes a header-only packet: <code>in_game = 0</code>, <code>level_gen + 1</code>.</p>
+          <p class="rt">Takes the out-of-game packet and draws no world. Its held packets are ours and cannot be freed under it.</p>
+        </div>
+        <div class="stage loader">
+          <div class="tr">→ loader thread created at <code>0x4982CA</code></div>
+          <b>Loading</b>
+          <span class="chip loader">loader thread owns the per-map arrays</span>
+          <p class="gt">Draws the loading screen. No in-play frame exists, so nothing is published or applied. The loader's last act sets bit 1 of <code>main+0x38D75</code>.</p>
+          <p class="rt">Finds no fresh packet and keeps drawing nothing.</p>
+        </div>
+        <div class="stage game">
+          <div class="tr">→ <code>0x38D75</code> bit 1 set, in-play handler installed</div>
+          <b>In play, next level</b>
+          <span class="chip game">game thread owns main again</span>
+          <p class="gt">The first in-play <code>DrawGameScreen</code> follows the loader's flag, so every per-map pointer is final before the first publish. That ordering, the engine's own, is what closes the <code>begin</code>/<code>end</code> hazard.</p>
+          <p class="rt">Takes the level's first packet: <code>in_game = 1</code>, a new generation; every cache keyed on it refills.</p>
+        </div>
+      </div>
+    </div>
+    
+    <figcaption>Level lifecycle. The renderer is never told to stop and never spins waiting. The audit's open hazard closes not because the copy is faster than the load but because no publish can run before the loader has signalled completion. One thing to verify before relying on it for a second level in one process: whether bits 0 and 1 of <code>0x38D75</code> are reset between games (no instruction clears them; a bulk zero of the block is the likely reset).</figcaption>
+  </figure>
+  <h3>What the frame packet retires, and what it does not</h3>
+  <ul>
+    <li><strong>Retired once every render-thread reader of per-frame state is converted:</strong> the unit array and pose reads, the fog descriptor read and its guard, the render-thread stores, the deferred <code>FreeObjectState</code> ring (no render-thread code reads an <code>Object3do</code> any more, once the opt-in writeback and render3do paths are converted or deleted).</li>
+    <li><strong>Stays until an asset channel lands:</strong> the model-template redirects, the teardown wrap, the pass counters and the level generation, because the bake, the bounding boxes and the texture atlas still walk template trees and GAF frames on the render thread, and the terrain atlas reads the tile set. Those are per-level or per-session lifetimes the fence already covers, measured over seven level cycles.</li>
+    <li><strong>The timeout hole</strong> (the one-second teardown wait) closes independently by deferring the cascade's remaining frees through the existing ring, the audit's own alternative, in about 150 lines.</li>
+    <li><strong>The optional end state:</strong> a level packet (tile set at 1 KB per tile, so 11.8 MB on the biggest stock map; tile map; height bytes; feature defs; type table; minimap picture) keyed on the teardown count and the array pointers, plus assets copied on first sight from a request ring. Then the fence goes entirely and the rule becomes absolute. The migration review rates it the worst risk for its benefit; decide after step 4 with measured numbers.</li>
+  </ul>
+</section>
+
+<section id="rules">
+  <span class="eyebrow sec-eyebrow">9 · afterwards</span>
+  <h2>Rules that a build step can check</h2>
+  <ol>
+    <li><strong>Every engine address and offset lives in one header</strong>, and only publisher files may include it. "Does this file read engine memory" becomes "does it include the header". The draft's <code>grep -l 0x511DE8</code> would have matched 6 of the 25 files; 19 spell it <code>0x00511DE8u</code>.</li>
+    <li><strong>A default-deny allow-list</strong>, checked as a prerequisite of the DLL target so <code>make</code> and the CI job both fail on an offender. The check greps every source not on the list for any virtual address (<code>0x0*4xxxxx</code> or <code>0x0*51xxxx</code>, which also catches the graphics globals, the debris slots in <code>.data</code> and the order descriptors), for <code>IsBadReadPtr</code>, for the header include, and for the <code>ta + 0x</code> conduit through which a "converted" file could still dereference engine memory.</li>
+    <li><strong>Two classes on the list, each line with its argument:</strong> <em>publisher</em> (game thread) and <em>session reader</em> (render thread, data that lives for the session and is never rewritten: fonts, GAF banks, the cursor table, the shell's palette and gamma). The list only shrinks after the first landing; a conversion's diff shows the lines it removed.</li>
+    <li><strong>Bounds live in the publisher, once.</strong> Every value leaving engine memory is checked against the engine's own count before it is copied.</li>
+    <li><strong>The <code>high</code> review trigger</strong> "changes the synchronisation between the threads" becomes "changes the exchange, adds a publisher read, or adds an engine write". A conversion that only moves reads into the publisher and makes a consumer read a struct is <code>medium</code>, provided the primitive carries no engine reads, the producer API lives in a publisher-only header, and the allow-list shrinks in the diff.</li>
+  </ol>
+</section>
+
+<section id="migration">
+  <span class="eyebrow sec-eyebrow">10 · getting there</span>
+  <h2>Five landings, then a decision</h2>
+  <p>The order is by hazard closed and by what the half-migrated tree must never do. The migration review moved the commands up to the second step: the eye is read from the header and written through a command, and zoom-to-cursor couples the two inside one frame, so landing one without the other wobbles on every wheel gesture.</p>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>#</th><th>Landing</th><th>Deletes</th><th>Closes</th><th>Review</th><th>Gates</th></tr></thead>
+      <tbody>
+        <tr><td class="num">1</td><td>The primitive; a header-only packet from the <code>DrawGameScreen</code> observer; the out-of-game packet from the teardown post hook; the font dwords become header fields; the build rule in census mode; a debug readout</td><td>the font latch</td><td>proves the exchange on the real machine; the ratchet starts</td><td><span class="chip bad">high</span> two reviewers</td><td>10 000 taken frames at <code>--maxfps 0</code> with the check and stress levers on: <code>viol=0</code>, zero CRC mismatches; publish p99 ≤ 300 µs; engine draws per second within 3 % of <code>tagpu_packet.off</code>; <code>GameTime</code> advances at 3 × the live speed at <code>main+0x38A4D</code> armed and disarmed (59.9 ± 0.2 per second at the GameSpeed 20 the fixtures run at), and that live speed is logged too since the engine's throttle would lower it to hide a regression; a planted offender fails <code>make</code></td></tr>
+        <tr><td class="num">2</td><td>The view: the header becomes the source of the one-eye record every pass reads, its engine pointer field deleted, scaffold converted too; commands for the eye delta, the hold, the scroll target, the minimap rect, the viewport widen, <code>ScrollSpeed</code>, the follow release; <code>cmd_ack_seq</code> prediction on the consumer</td><td>every render-thread store into <code>main</code>; the zoom's separate request and ack levels; vpwide's lost-update repair once its rect is a command</td><td>the torn-coordinate tolerance; the one-frame eye disagreement</td><td><span class="chip bad">high</span></td><td>the zoom oracles re-run: centre-pointer wheel bit-identical to no zoom, the telescoping total on the eye, in-then-out returns exactly, a still pointer's world point on the same pixel across a whole ease by paired captures; the vpwide repair counter reads 0; minimap rect A/B at zoom</td></tr>
+        <tr><td class="num">3</td><td>Units, pieces, wrecks, anchors in the packet; all six <code>begin</code>/<code>end</code> readers converted (native, scaffold, mark, the roster log, the model probe, the opt-in writeback) or deleted; the lerp rekeyed to the stable id with the two held packets as its history</td><td>the render-thread unit array and per-piece reads, the lerp arena and its pointer hash, most of the unit pass's 47 range filters and 21 <code>IsBadReadPtr</code> (the template ones stay)</td><td>the audit's open hazard, the pose-mix residual, the anchor's three dwords</td><td><span class="chip bad">high</span> first conversion, biggest file</td><td>pixel A/B against the previous DLL on the pose inventory, hires, cob and 200v200 fixtures at 1× and a zoom; the pose CRC join with the raced counter exactly 0; a stable-id collision oracle reading 0; two level cycles in one process; 300 s 200v200 three times; cost delta</td></tr>
+        <tr><td class="num">4a</td><td>Projectiles, explosions, debris, the ten particle layers, the order arena folded in</td><td>the fx and sfx engine walks and probes; the 8192 cap</td><td>the particle-heap reads the fence never covered</td><td><span class="chip mute">medium</span></td><td>the fx fixtures A/B; the sfx count log sizes the arena; cost</td></tr>
+        <tr><td class="num">4b</td><td>The engine fog grid into the packet; fogwide's three buffers become a mailbox instance</td><td>fogwide's critical section, retire ring and reclaim stamps; the unit pass's fog descriptor capture</td><td>the fog guard's reason to exist</td><td><span class="chip bad">high</span></td><td>fog A/B at zoom-out on a map edge; the retire ring and its strand counter gone; the dimension cap stays a high-water mark</td></tr>
+        <tr><td class="num">5</td><td>Defer the cascade's remaining frees through the existing reclaim ring</td><td>the teardown wait as a hole</td><td>the timeout hole</td><td><span class="chip bad">high</span></td><td>seven surrender-to-second-game cycles clean; 300 s fights; the new free class at <code>n/0/0</code></td></tr>
+        <tr><td class="num">?</td><td>Decision: the level packet and the asset channel (templates, GAF frames, fonts, tiles) to retire the fence entirely, or stop here with the fence as the stated lifetime argument for assets</td><td>reclaim, if taken</td><td>uniformity</td><td><span class="chip bad">high</span></td><td>two level cycles on the biggest stock map; address-space headroom measured; the 12 MB tile copy timed on the first in-play frame</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Effort for steps 1 to 5: roughly 2.5 to 3 thousand lines over about twenty files and five <code>high</code> reviews. Tooling stays trigger-gated with its documented caveat unless the request ring is cheap once the observer exists.</p>
+  <div class="note bad">
+    <h4>What the half-migrated tree must never do</h4>
+    <p>Draw one pass from the packet's eye and another from the engine's (the world tears by a frame while scrolling); leave the one-eye record's engine pointer in place (a converted file keeps a conduit the rule cannot see); run two level-generation counters (caches drop on different frames); cull pieces by the current zoom level rather than the widest rect; let a refused page commit pin a table small for the session; skip the out-of-game packet (the dead level over the menus). Each of these is a line in the landing's brief.</p>
+  </div>
+</section>
+
+<section id="review">
+  <span class="eyebrow sec-eyebrow">11 · four reviews</span>
+  <h2>What the reviews changed</h2>
+  <p>Four independent reviews of the draft, each read-only against the tree and the binary. Their verdicts, and what each forced into this version.</p>
+  <div class="reviews">
+    <div class="rv">
+      <h3>Protocol correctness</h3>
+      <div class="verdict">Sound, with fixes. The permutation argument holds for every interleaving once it holds initially.</div>
+      <ul>
+        <li>The sketch had no init: zeroed statics put both threads on slot 0. Explicit init at DLL attach, slots allocated, <code>head_seq 0</code> meaning "no packet".</li>
+        <li>The head/tail self-check was blind: both written after the fill. Head before, tail after, compared at frame end against the head latched at acquire.</li>
+        <li>Spell the exchange with the atomic builtin; the mingw <code>InterlockedExchange</code> macro's contract is acquire-only. <code>xchg</code> is implicitly locked, no <code>lock</code> byte; the fork's <code>MemoryBarrier</code> is a locked byte exchange, not <code>mfence</code>.</li>
+        <li>Four orderings, not two; two index bits with the reserved bits asserted; twelve runtime assertions and the heartbeat line. Its strand-never-free growth policy was replaced after the review by reserve-and-commit, which has no old block to strand at all.</li>
+        <li>Three slots without interpolation, four with; the fogwide buffers are the same algorithm made blocking.</li>
+      </ul>
+    </div>
+    <div class="rv">
+      <h3>Engine feasibility</h3>
+      <div class="verdict">Buildable, with changes. Verified by disassembly that the flip call sits at <code>0x46A3DB</code>, returns to <code>0x46A3E0</code>, and the function returns at <code>0x46A3FD</code>.</div>
+      <ul>
+        <li>The publish point fires per engine draw (330 to 4900 per second), not per presented frame: rate-limit on the cell.</li>
+        <li>One observer on <code>DrawGameScreen</code>, gated on the return address <code>0x4969D2</code>; not the GUI flip observer (armed only with the GUI layer), not the scenario applier's site (non-chainable), not cnc-ddraw's present (cannot tell a game frame).</li>
+        <li><code>0x495A30</code> is the screenshot function, not a scroll path; its loop draws without flipping.</li>
+        <li>The level load runs on a loader thread; the in-play gate is what closes the load hazard.</li>
+        <li>Feature-grid anchors are per frame, only the height byte is per level; tiles are 1 KB each; the mouse writeback is already a game-thread store; <code>ScrollSpeed</code> is a render-thread store the draft omitted; assets need a third channel or stay behind the fence.</li>
+      </ul>
+    </div>
+    <div class="rv">
+      <h3>Migration and reviewability</h3>
+      <div class="verdict">Right end state, wrong order in one place that matters. Stop before the level packet.</div>
+      <ul>
+        <li>Commands land with the header, or zoom-to-cursor wobbles for two landings.</li>
+        <li>The build rule lands first as a ratchet, with a real address regex and an allow-list that only shrinks; the draft's grep would have passed the files it exists to catch.</li>
+        <li>Step 3 converts all six unit-array readers or the hazard stays open; the fence cannot shrink until the template walkers are converted.</li>
+        <li>The level packet has the worst risk for its benefit; the audit's own alternative closes the timeout hole in about 150 lines. Tooling stays out of scope.</li>
+        <li>A landing plan with deletes, review level and gates per step, and the twelve places a half-migrated tree could regress silently.</li>
+      </ul>
+    </div>
+    <div class="rv">
+      <h3>Adversarial</h3>
+      <div class="verdict">Survives with changes, none to the mailbox itself. Three findings changed the design.</div>
+      <ul>
+        <li>Between levels the renderer would draw the dead level over the menus: the teardown post hook publishes <code>in_game = 0</code>.</li>
+        <li>A latched eye command pins the camera against the engine's own scrolling and lags a frame: deltas consumed once, a level for the hold, prediction with <code>cmd_ack_seq</code>.</li>
+        <li>Truncating the units table in slot order drops whole players: size it to the engine's slot count, cull only pieces.</li>
+        <li>Same-tick packets would make the lerp stepped: tick-aware give-back. The producer stamps the tick start with the performance counter, never <code>GetTickCount</code>.</li>
+        <li>The render thread is joined, never killed; SEH is not a guard; TA is not classic lockstep; the memory headroom is real and the draft's level sizes were 2 to 4× low.</li>
+      </ul>
+    </div>
+  </div>
+  <h3>Still to verify before the first landing</h3>
+  <ul>
+    <li>Whether bits 0 and 1 of <code>main+0x38D75</code> are reset between two games in one process (one log line at the loader's completion store settles it).</li>
+    <li>The loader thread's identity as a direct measurement: a thread-id log at the load routine, not only the call-chain scan.</li>
+    <li>Real particle counts over a 200v200 run, to size the sub-particle arena.</li>
+    <li>Whether the engine's cursor worker thread is live in the fork's windowed configuration; it touches the graphics globals the cursor read copies, and the exposure is one wrong cursor rect.</li>
+    <li>Whether the tick of the packet in the cell can be carried in the cell word's spare bits, or the consumer takes first and chooses what to hand back at the next acquire.</li>
+  </ul>
+</section>
+
+</article>
+</main>
+
+<footer>
+  <p><strong>Sources in the repository</strong> (the wiki pages are the source of truth; this page is the plan):</p>
+  <ul>
+    <li><code>research/notes/cross-thread-engine-reads.md</code>: the audit, the census of render-thread reads, the one open hazard.</li>
+    <li><code>research/notes/thread-safe-destruction.md</code>: the reclaim fence this plan narrows, and its x86 ordering reasoning.</li>
+    <li><code>research/notes/gpu-status.md</code> §2.5: every engine field the renderer reads or writes today.</li>
+    <li><code>research/notes/exe-reverse-engineering.md</code>: the addresses named here, how each was established, the engine's draw rates.</li>
+    <li><code>tagpu/ddraw/src/tagpu_gui_hook.c</code>, <code>tagpu_menu.c</code>, <code>tagpu_reclaim.c</code>, <code>tagpu_fogwide.c</code>, <code>tagpu_zoom.c</code>, <code>tagpu_lerp.c</code>: the channels this replaces, and the observer it chains onto.</li>
+  </ul>
+  <p>Status: reviewed design, nothing built. Landing any step needs the owner's "ready" and the review level in the table. The four review reports are in the session that produced this page and should be committed beside the wiki note when the design is adopted.</p>
+</footer>
+</div>
+
+<div id="lightbox" hidden role="dialog" aria-modal="true" aria-label="Diagram at full size">
+  <div class="lb-bar">
+    <span class="t">Diagram</span>
+    <button type="button" data-fit aria-pressed="false">Fit</button>
+    <button type="button" data-scale="1" aria-pressed="true">1:1</button>
+    <button type="button" data-scale="1.5" aria-pressed="false">1.5×</button>
+    <button type="button" data-scale="2" aria-pressed="false">2×</button>
+    <span class="hint">scroll to pan · Esc closes</span>
+    <button type="button" class="lb-close" aria-label="Close">✕</button>
+  </div>
+  <div class="lb-body"><div class="sheet"><div class="zoombox"></div></div></div>
+</div>
+<script>
+(function () {
+  /* inline: scale every fitted figure down to its column; never up */
+  function fitAll() {
+    document.querySelectorAll('.fit').forEach(function (f) {
+      var inner = f.querySelector('.fit-inner'); if (!inner) return;
+      inner.style.transform = 'none'; f.style.height = '';
+      var w = inner.scrollWidth, avail = f.clientWidth;
+      if (!w || !avail) return;
+      var k = Math.min(1, avail / w);
+      inner.style.transform = 'scale(' + k + ')';
+      f.style.height = Math.ceil(inner.offsetHeight * k) + 'px';
+    });
+  }
+  fitAll();
+  window.addEventListener('load', fitAll);
+  window.addEventListener('resize', fitAll);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitAll);
+
+  /* the lightbox: the same content at 1:1, with scroll and zoom */
+  var lb = document.getElementById('lightbox');
+  var body = lb.querySelector('.lb-body'), box = lb.querySelector('.zoombox'), title = lb.querySelector('.t');
+  var clone = null, W = 0, H = 0, lastFocus = null;
+  function press(btn) { lb.querySelectorAll('[data-scale],[data-fit]').forEach(function (b) { b.setAttribute('aria-pressed', String(b === btn)); }); }
+  function setScale(k, btn) {
+    if (!clone) return;
+    clone.style.transform = 'scale(' + k + ')';
+    box.style.width = Math.ceil(W * k) + 'px'; box.style.height = Math.ceil(H * k) + 'px';
+    press(btn);
+  }
+  function fit() { setScale(Math.min(1, (body.clientWidth - 64) / W), lb.querySelector('[data-fit]')); }
+  function open(f) {
+    var src = f.querySelector('.fit-inner'); if (!src) return;
+    lastFocus = document.activeElement;
+    clone = src.cloneNode(true); clone.className = 'zoominner'; clone.style.transform = 'none';
+    box.style.width = ''; box.style.height = '';
+    box.replaceChildren(clone);
+    var fig = f.closest('figure'), cap = fig && fig.querySelector('figcaption');
+    var card = f.closest('.case'), h3 = card && card.querySelector('h3');
+    title.textContent = cap ? cap.textContent.split('. ')[0] : (h3 ? h3.textContent.trim() : 'Diagram');
+    lb.hidden = false;
+    document.documentElement.style.overflow = 'hidden';
+    W = clone.scrollWidth; H = clone.scrollHeight;
+    setScale(1, lb.querySelector('[data-scale="1"]'));
+    body.scrollLeft = 0; body.scrollTop = 0;
+    lb.querySelector('.lb-close').focus();
+  }
+  function close() {
+    lb.hidden = true;
+    document.documentElement.style.overflow = '';
+    box.replaceChildren(); clone = null;
+    if (lastFocus && lastFocus.focus) lastFocus.focus();
+  }
+  document.querySelectorAll('.fit').forEach(function (f) {
+    f.addEventListener('click', function () { open(f); });
+    f.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(f); } });
+  });
+  lb.querySelector('.lb-close').addEventListener('click', close);
+  body.addEventListener('click', function (e) { if (e.target === body) close(); });
+  document.addEventListener('keydown', function (e) { if (!lb.hidden && e.key === 'Escape') close(); });
+  lb.querySelectorAll('[data-scale]').forEach(function (b) { b.addEventListener('click', function () { setScale(parseFloat(b.getAttribute('data-scale')), b); }); });
+  lb.querySelector('[data-fit]').addEventListener('click', fit);
+})();
+</script>
