@@ -37,7 +37,14 @@ static const Def s_defs[] = {
     { "tagpu_gui.on",       "", 0, 0 },                     /* the GL UI layer, Classic 1:1        */
     { "tagpu_classicpp.on", "", 0, 0 },                     /* restored true colour, lit, shadowed */
     { "tagpu_weapons.on",   "", 0, 0 },                     /* 0..N weapons per unit               */
-    { "tagpu_hud.on",       "scale=auto", 0, 0 },           /* the HUD sized to the screen         */
+    /* HUD SCALE IS NOT A PLAY DEFAULT until the origin tear is fixed. Moving
+       the viewport rect moves only 0x498DA0's screen->world origin; TA's
+       world->screen projection is a +0x80/+0x20 pair of BAKED immediates,
+       so unit picking, band select and build placement go on answering
+       about the unmoved origin while the world is drawn about the moved
+       one. Measured 2026-09-11: at 1024x768 Auto the engine picks a unit
+       76 px left and 19 px up from where it is drawn. Arm tagpu_hud.on by
+       hand to look at it; see gui-renderer.md 20.5. */
 };
 #define NDEFS (int)(sizeof s_defs / sizeof s_defs[0])
 
