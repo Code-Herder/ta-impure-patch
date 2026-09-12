@@ -141,6 +141,26 @@ int tagpu_hud_live(int* panelW, int* barH, int* q8)
    +0x80/+0x20, so the ONLY thing that may move is a point inside a magnified
    HUD region: outside one this is the identity, which is what keeps the world
    half of every click answering about the place it is drawn. */
+/* ON THE SURFACE, ALWAYS. The bottom bar's map is the shader's, inverted:
+   source = H − (H − dest)/s, which is what keeps the pointer and the picture
+   on one relation rather than two that nearly agree. It is also unbounded at
+   the very last row — (H − y) is 1 there and 256/q is 0, so y = H − 1 lands on
+   engine row H, one past the surface. The shader does not care (it samples in
+   floats and clamps), an integer hit test does.
+
+   The clamp is HERE and not at the nine call sites, because two of them
+   (fake_GetCursorPos, and the WM_MOUSEMOVE arm of HandleMessage) clamp BEFORE
+   the map rather than after, so a call-site clamp would be a rule that holds
+   only where someone remembered it. A postcondition holds everywhere. */
+static void on_surface(int* x, int* y)
+{
+    int W = (int)g_ddraw.width, H = (int)g_ddraw.height;
+    if (W > 0) { if (*x > W - 1) *x = W - 1; }
+    if (H > 0) { if (*y > H - 1) *y = H - 1; }
+    if (*x < 0) *x = 0;
+    if (*y < 0) *y = 0;
+}
+
 void tagpu_hud_to_engine(int* x, int* y)
 {
     int pw, bh, q, H;
@@ -156,6 +176,7 @@ void tagpu_hud_to_engine(int* x, int* y)
         *x = *x * 256 / q;
         *y = H - (H - *y) * 256 / q;
     }
+    on_surface(x, y);
 }
 
 void tagpu_hud_to_screen(int* x, int* y)
@@ -170,6 +191,7 @@ void tagpu_hud_to_screen(int* x, int* y)
         *x = *x * q / 256;
         *y = H - (H - *y) * q / 256;
     }
+    on_surface(x, y);
 }
 
 void tagpu_hud_init(void)

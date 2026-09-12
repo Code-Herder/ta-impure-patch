@@ -2831,6 +2831,18 @@ were written against never moves.
 | (500,25) magnified top bar | (312,15) | `0` |
 | (500,745) magnified bottom bar | (312,754) | `0` |
 
+**The map is exact at every screen a player can pick, and that is checked by exhaustion rather
+than by sampling** — 108 (mode, stage) pairs where the scale is past stock, twenty-two modes
+from 320×240 to 7680×4320 against all six stages. Two properties: the panel's last screen
+column maps below engine 128 while the next one is the identity (and the same for both bar
+edges), and every mapped point lands on the surface. The second one failed before the check
+existed: the bottom bar's map is the shader's inverted, `H − (H − y)/s`, and at the very last
+row `(H − y)` is 1 and `256/q` is 0, so `y = H − 1` landed on engine row `H`. The shader does
+not care — it samples in floats and clamps — but an integer hit test does. The clamp is now a
+**postcondition of the map itself** and not a rule at the nine call sites, because two of them
+(`fake_GetCursorPos`, and `HandleMessage`'s `WM_MOUSEMOVE` arm) clamp *before* calling it.
+Confirmed in the game: `dmove:500,767` at 1024×768 reads engine 767, where it read 768.
+
 **Not tested: band select through injected input.** `down:lbutton` / `mouse:` / `up:lbutton`
 selected nothing — but it selects nothing with `hud.off` either, so it is the harness and not
 the feature, and it is left as an open question about `tacli` rather than about this.
