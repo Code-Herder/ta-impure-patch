@@ -49,7 +49,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | Terrain in restored true colour (Classic++), since G14e the feature and effect sprites, **since G14g the unit textures**; **lit since G14f** — terrain, units and sprites; **cast shadows since G14i** | ● spike (G14a, 2026-09-04), on the GPU (G14b, 2026-09-04), **as GLSL passes in our own context** (G14c, 2026-09-05), the ONNX stack deleted (G14d, 2026-09-05), **the reveal progressive and the two sprite atlases restored lazily** (G14e, 2026-09-05), **lit by the lab's rule** (G14f, 2026-09-05: the height grid as an R8 texture, the face normal in the unit stream, the ground's lambert per sprite; `tagpu_classicpp.cfg` for `sun`/`unitsun`/`amb`), **the unit atlas restored, padded and mipped** (G14g, 2026-09-05: `tagpu_render3do.c` on `TAGPU_GAFATLAS`, 4-texel pad, 4-aligned, the twin trilinear to level 2 and 4× anisotropic, the unit FS's restored branch), **soft shadows** (G14i, 2026-09-06: `tagpu_shadow.c` — a depth map along `shadowsun` anchored to the map, PCSS-lite read back in the terrain and unit shaders, the hills casting from a static mesh in `tagpu_terr.c`, the replacement meshes casting, the Classic silhouette and slant off under the switch; eight more cfg keys; the context at 3.3 core) | `tagpu_restoreglsl.c` runs the unditherer's full model as fragment passes — `tagpu_restore_glsl.h`'s shaders, `<model>.w32.bin`'s weights — sliced from `tagpu_terr.c`'s gather under a `GL_TIME_ELAPSED` budget of 12 ms per frame, visible tiles first, straight into the terrain pass's RGBA atlas; no worker thread, no runtime, no cache (renderers.md §2.5b); the ONNX Runtime path is gone (G14d). The mechanism and its eleven decisions: [Classic and Classic++](renderers.html) §4c | Two Continents: 5062 tiles in **2.14 s wall at 59.7 fps** (1.49 s of GPU time, 128 frames); the biggest stock map (Lava & Two Hills, 11,561 tiles) in 4.21 s at 59.7 fps; `tagpu_restoredump.on`'s atlas against the lab's fp32 reference: **max 1 level on 179 of 15.5 M bytes (0.0012 %)** — the same 179 bytes the browser bench differs on; the lab bench: 1.15 s GPU, NK=1 1.6× slower, fp16 no faster and 4.65 % of bytes off, tiny 0.1 s |
 | Wrecks (3DO husks) | ● native | scratch-unit draw suppressed by the owndraw classifier | A/B on `one-wreck` / `shadow-mix` |
 | The model objects of units and wrecks, freed by the game thread while the render thread still reads them (the `200v200` fault at ~95 s) | ● closed (G14h, 2026-09-06) | `tagpu_reclaim.c` defers the engine's own destructor `FreeObjectState 0x45AAA0` behind the render pass's published quiescence and drains on the game thread; the level teardown `0x491B60` is wrapped so the queue is flushed first. **Extended 2026-09-09** to the per-LEVEL model templates: `0x42DB90`'s two `MEM_Free` call sites (`0x42DC01`, `0x42DCB6`) are redirected onto the same ring, which is what stops the pre hook's one-second timeout from being a safety argument — it now only decides when the memory comes back ([thread-safe destruction](thread-safe-destruction.html) §6c) | seven `200v200` fights of 240–300 s clean where two in three used to fault (five consecutive at 300 s, two on the post-review DLL), an in-process level exit and second game clean — **re-measured 2026-09-09** under the play defaults, two full level cycles in one process with 279 template blocks deferred and released per teardown (`tmpl=279/0/0`, then `558/0/0`, `ovf=0`, ring high-water 279 of 4096) and the template caches dropping and refilling either side of each one; `reclaim:` counters `ovf=0`, `foreign=0`, drained tracking deferred within a frame or two, high-water 3–6; the engine's Classic surface byte-identical with the module on and off outside the top-of-viewport text strip that differs between any two launches |
-| Unit shadows, cloak, waterline | ● native, engine rules incl. FBI gates; structure shadows since G13k, by the engine's own raster rules since G14j (every face, flat, no waterline erase); one blend per silhouette pixel since G13n | part of the unit pass; `owndraw all` also flips the blit's two structure-shadow `je`s (`0x4592C6`, `0x45952C`) and the pass emits the slant projection | A/B `shadow-mix`, `waterline` (Anteer Strait), `shadow-struct` diffed against the engine's cached shadow over engine terrain; **aircraft** measured against the engine on `shadow-air` — offset `(+5, (alt−ground)/2)` on four airframes, darkening 0.487 engine vs 0.25 ours before the stencil and 0.44–0.52 after |
+| Unit shadows, cloak, waterline | ● native, engine rules incl. FBI gates; structure shadows since G13k, **the completed-unit silhouette suppressed at its own emit sites since 2026-09-13** (the blank-composite clause G13k leaned on held only while the classifier skipped), by the engine's own raster rules since G14j (every face, flat, no waterline erase); one blend per silhouette pixel since G13n | part of the unit pass; `owndraw all` also flips the blit's two structure-shadow `je`s (`0x4592C6`, `0x45952C`), empties the composite at `0x459338` / `0x45958C` / `0x4594DB`, and the pass emits the slant projection | A/B `shadow-mix`, `waterline` (Anteer Strait), `shadow-struct` diffed against the engine's cached shadow over engine terrain; **aircraft** measured against the engine on `shadow-air` — offset `(+5, (alt−ground)/2)` on four airframes, darkening 0.487 engine vs 0.25 ours before the stencil and 0.44–0.52 after |
 | Weapon fire, explosions, debris | ● native (G12e) | `fxown`: two call-site redirects + four leaf detours | A/B `fx-lasers`/`fx-mix`/`fx-rockets`, engine surface empty of effects |
 | Smoke, fire, wakes, nanolathe | ● native (G12f) | one detour on the layer walker `0x471F90` | A/B `sfx-strait`, engine surface empty of particles |
 | Features (trees, rocks, splats, wreckage) | ● native (G13a) | `featown`: one detour on the leaf `0x46A610` | occlusion parity vs the engine's own draw, engine surface empty of features, `feat-forest` |
@@ -1310,6 +1310,40 @@ the engine casts neither, and the reason is the bit1 test at `0x45A655`. Zero te
 piece; a nanoframe casts nothing until complete. Bit1's meaning is inferred, not proven. Full
 site table: [exe-reverse-engineering](exe-reverse-engineering.html) §"The unit blit's shadow
 branches".
+
+**G13l follow-on — the commander cast teal too, and the composite's emptiness was not the
+reason.** Reported from play 2026-09-13: *"entering a map, the commander has a blue silhouette on
+top of it; it stops as soon as the commander moves and never comes back."* 557 px of solid
+`(0,128,128)` sitting on the unit's own body — the same colour, from the same place, as G13k.
+
+**G13k's fix relied on a composite that is empty, and it is not empty on every frame.** Under
+`owndraw all` a completed unit takes the COMPLETED branch and `0x45A470` blackens the unit's own
+composite into the scratch, so a blank composite blits nothing — but that clause is the whole
+guarantee and nothing enforced it at the shadow. Instrumented: **none of 7047 wipes in a 60-frame
+window found the plane already empty**, and the plane held 557 bytes of palette indices (not the
+zeros a blackened shadow leaves) while reading 0 immediately after the wipe's own `memset`. So
+the engine was building a real silhouette on the frames the classifier skipped the rasterise, and
+the one it built at map entry — while the posed program is down and the engine is the only
+renderer — stayed until the unit's pose changed, which is the report to the letter: it goes on
+the first step and never returns.
+
+**What was done.** A fourth `owndraw` detour on the three emit sites (`0x459338` path A,
+`0x45958C` path B, `0x4594DB` path B's digger branch): the stub replays `call 0x45A470` and
+empties the composite first when the unit is the native pass's **and** `tagpu_posedraw_live()` —
+the classifier's own question, because with our pass down the composite is also the BODY's source
+(`0x459373`) and emptying it would take the unit with the shadow. The wipe is adjacent to the read
+inside one call, so whatever repaints the plane in between the classifier's wipes cannot run
+between those two instructions. **Measured**: one 129-frame `glshot` burst over a map entry — no
+`(0,128,128)` pixel in any frame, against 557 in nearly every in-play frame before the change;
+0 in every frame while moving; the commander renders as it should.
+
+**Not closed, and stated as open.** *What* repaints the composite plane between wipes is not
+settled — the detour removes the dependency rather than answering it, and the engine map says so
+in those words. While `tagpu_posedraw_live()` is false the engine keeps its own shadow, so the
+window's frames can still carry a teal one; the burst found none, and those frames are composited
+before our surface is up, so the engine's frame is not the one on screen. Sites and register
+lifetimes: [exe-reverse-engineering](exe-reverse-engineering.html) §"The completed-unit shadow's
+three emit sites"; hook row in [GPU status](gpu-status.html) §2.1.
 
 **G13j — selecting a unit gives the move cursor again.** Reported from play: *"when we select a
 unit, the move cursor should appear, instead we get the regular cursor. Similar issue for

@@ -1573,9 +1573,9 @@ The sites, one per branch — all three are the same two instructions and a call
 
 | VA | Branch | Shape |
 | --- | --- | --- |
-| `0x459338` | path A, the completed branch from `0x459324` | `56` `push esi` · `8B CF` `mov ecx,edi` · `E8 33 11 00 00` `call 0x45A470` · resume `0x45933D` |
-| `0x45958C` | path B, the completed branch from `0x459578` | same, `call` bytes `E8 DF 0E 00 00`, resume `0x459591` |
-| `0x4594DB` | path B's inline digger branch `0x4594D8..0x45951D` | same, `call` bytes `E8 90 0F 00 00`, resume `0x4594E0` |
+| `0x459338` | path A, the completed branch from `0x459324` | `0x459335` `56` `push esi` · `0x459336` `8B CF` `mov ecx,edi` · `0x459338` `E8 33 11 00 00` `call 0x45A470` · resume `0x45933D` |
+| `0x45958C` | path B, the completed branch from `0x459578` | same three instructions at `0x459589` / `0x45958A` / `0x45958C`, `call` bytes `E8 DF 0E 00 00`, resume `0x459591` |
+| `0x4594DB` | path B's inline digger branch `0x4594D8..0x45951D` | same three instructions at `0x4594D8` / `0x4594D9` / `0x4594DB`, `call` bytes `E8 90 0F 00 00`, resume `0x4594E0` |
 
 `0x45A470(this, composite)` is `ret 4` and writes **only the scratch** (`this+0x10`): it copies
 the composite's header, colour and depth planes into the scratch and calls `0x4B96A0`, which
