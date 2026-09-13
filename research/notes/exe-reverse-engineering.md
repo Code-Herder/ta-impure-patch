@@ -1562,9 +1562,12 @@ COMPLETED branch is the one every unit takes after the two `je`s are flipped, an
 composite blank `0x45A470` builds an all-key silhouette. That last clause is the whole
 guarantee, and it is not maintained by the composite being blank on every frame. Instrumented
 for one session: **not one of 7047 wipes in a 60-frame window found the plane already empty**
-(an empty plane reads 0, and reading the same plane back right after the wipe's own `memset`
-read 0), and the plane each window's last wipe sampled held **557 non-Key bytes — palette
-indices, not the zeros a blackened shadow would leave**. So the shadow was being built from a
+(an empty plane reads 0 NON-Key bytes — the wipe fills it with the ColorKey, palette index 1 —
+and reading the same plane back right after the wipe's own `memset` read 0), and the plane each
+window's last wipe sampled held **557 non-Key bytes, all of them palette indices rather than the
+zeros a blackened shadow leaves**. That 557 is also the number of teal pixels the silhouette
+measured on screen; whether the two counts are the same shape is NOT established — the
+instrumented plane and the drawn silhouette are read at different places. So the shadow was being built from a
 real sprite while the classifier was skipping the rasterise that would have painted it. What
 refills the plane that way is not settled by this reading and is left open here; the detour
 below removes the dependency instead of answering it.
@@ -1587,22 +1590,41 @@ the call is the whole silhouette** — and the blit draws its BODY from the comp
 on the frames the engine is the only renderer, emptying the composite would take the body with
 the shadow.
 
-`ebp` carries the blit's Object3do (`0x459205 mov ebp,[esp+0x30]`; `[ebp+0xc]` is the unit and
-`[ebp+0x10]` the composite) down to all three sites. It is **not** left alone for the whole
-function: the cargo loop reloads it — `0x459415 mov ebp,[edx+0x8A]`, `0x459489
-mov ebp,[ebp+0x8E]` — inside a bracket opened at `0x4593FC` `push ebp` and closed at `0x459495`
-`pop ebp`, and that bracket sits before `0x45949D`, where path B begins. So path A's site runs
-before the reload and path B's two run after the restore. Because "it happens to survive" is
-not an argument, the stub passes `ebp` and the helper checks it: `*(Object3do+0x10)` must be
-the very composite the site is about to read, and a mismatch is a no-op.
+`ebp` carries the blit's Object3do — the blit's **second** stack argument (`0x459205
+mov ebp,[esp+0x30]`, before the remaining two pushes, so entry esp + 8; `[ebp+0xc]` is the unit
+and `[ebp+0x10]` the composite) — down to all three sites. It is loaded once and **never
+reloaded on any path that reaches them**: every earlier use is a read or a push (`[ebp+0xc]`,
+`[ebp+0x14]`, `[ebp+0x10]`). The two cargo loops are the only reloads, and neither is in front
+of a site — path A's (`0x459415 mov ebp,[edx+0x8A]`, `0x459489 mov ebp,[ebp+0x8E]`) exits into
+the function's OWN epilogue (`0x459495 pop ebp`, `ret 0x18` at `0x45949A`), and path B's begins
+at `0x459649`, after its sites; path B is entered at `0x45949D` by the `jne` at `0x459282` and
+so executes path A's loop not at all. (`0x4593FC push ebp` is an argument to the pose helper
+`0x4584D0`, not the open of a bracket — an earlier note here said otherwise.) Because "it
+happens to survive" is not an argument, the stub passes `ebp` and the helper checks it:
+`*(Object3do+0x10)` must be the very composite the site is about to read, and a mismatch is a
+no-op.
 
-Two negative results worth having. The blit's own rasterise call `0x459641` (arg1 = the
-SCRATCH, `0x459639 mov ecx,[edi+0x10]`) is taken **only for a unit under construction**: the
-`fcomp` at `0x459622` compares `unit+0x104` (Nanoframe) against `[0x4FD4C0]` and `0x45962D
-je 0x459646` skips the call on equality, so a complete unit reaches the rasteriser only through
-the builder's `0x45878B`. And the two things that write a composite's planes are the
-rasterisers and the allocators `0x437B50` / `0x437BE0` (chosen at `0x458702` / `0x458719`) —
-`0x4581E0` and `0x4584D0`, the AABB/pose helpers, call neither.
+Two facts about the blit's own rasterise call, `0x459641` — and the first corrects an earlier
+reading of this note. **It is taken for every MOBILE unit, every frame.** The gate is
+`0x459610 test [ecx+0x110],0x20000000` / `0x45961A je 0x45962F`: the structure bit CLEAR jumps
+straight to the call, so the `fcomp` below it is never reached for a unit. Only for a STRUCTURE
+does `0x45961C fld [ecx+0x104]` / `0x459622 fcomp [0x4FD4C0]` (the constant is `0.0f`) /
+`0x45962D je 0x459646` run, and it skips the call when Nanoframe != 0 — `test ah,0x40` tests C3,
+which `fcomp` CLEARS on inequality, so ZF is set by *not* equal and the `je` is taken for an
+under-construction structure. **Its first argument is not the composite**: `0x459639
+mov ecx,[edi+0x10]` takes the blit's own frame — `edi` is the blit's `this`, which is not `ebp`
+(the Object3do) — so this call and the builder's pass DIFFERENT planes, and the classify stub is
+therefore called on two planes per unit per frame. The second fact: the only things that write a
+composite's planes are the rasterisers and the allocators `0x437B50` / `0x437BE0` (chosen at
+`0x458702` / `0x458719`) — `0x4581E0` and `0x4584D0`, the AABB/pose helpers, call neither.
+
+The one case where the wipe's predicate and the classifier's differ is a husk: the classifier
+recognises a 3D-wreck draw by the scratch feature-unit `*(main+0x1420F)` holding this Object3do
+at `+0x9E` `[documented where the wreck path is: features.md §1 and its table, terrain-depth.md
+§3.4]`, and hands it to the engine unless the `wrecks` token is armed; the detour asks the same
+question, in the same order. A/B'd on `one-wreck` with `native.on` = `all` and no `wrecks` token:
+with the clause disabled in a test build the husk rendered either way, so the unit predicate does
+not answer yes to a husk there — the clause is an invariant, not a fix for a measured blanking.
 
 The detour empties the composite at the site, before the replayed `0x45A470`, so the silhouette
 is all-key on every frame our pass draws the unit; the engine cannot repaint it in between,

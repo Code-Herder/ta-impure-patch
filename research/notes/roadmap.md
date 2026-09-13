@@ -1321,7 +1321,8 @@ top of it; it stops as soon as the commander moves and never comes back."* 557 p
 composite into the scratch, so a blank composite blits nothing — but that clause is the whole
 guarantee and nothing enforced it at the shadow. Instrumented: **none of 7047 wipes in a 60-frame
 window found the plane already empty**, and the plane held 557 bytes of palette indices (not the
-zeros a blackened shadow leaves) while reading 0 immediately after the wipe's own `memset`. So
+zeros a blackened shadow leaves) while reading 0 NON-Key bytes immediately after the wipe's own
+`memset`. So
 the engine was building a real silhouette on the frames the classifier skipped the rasterise, and
 the one it built at map entry — while the posed program is down and the engine is the only
 renderer — stayed until the unit's pose changed, which is the report to the letter: it goes on
@@ -1331,7 +1332,13 @@ the first step and never returns.
 `0x45958C` path B, `0x4594DB` path B's digger branch): the stub replays `call 0x45A470` and
 empties the composite first when the unit is the native pass's **and** `tagpu_posedraw_live()` —
 the classifier's own question, because with our pass down the composite is also the BODY's source
-(`0x459373`) and emptying it would take the unit with the shadow. The wipe is adjacent to the read
+(`0x459373`) and emptying it would take the unit with the shadow — **and it asks the wrecks
+question too**: the classifier recognises a husk by the scratch feature-unit and leaves it to the
+engine unless `tagpu_native_wrecks_armed()`, and the wipe now asks the same thing, so its
+predicate is the classifier's answer rather than a separate one. A/B'd on `one-wreck` with
+`native.on` = `all` and no `wrecks` token: disabling the clause in a test build changed nothing —
+the husk rendered either way, so the unit predicate does not answer yes to a husk there. The
+clause is kept for the invariant, not for that measurement. The wipe is adjacent to the read
 inside one call, so whatever repaints the plane in between the classifier's wipes cannot run
 between those two instructions. **Measured**: one 129-frame `glshot` burst over a map entry — no
 `(0,128,128)` pixel in any frame, against 557 in nearly every in-play frame before the change;

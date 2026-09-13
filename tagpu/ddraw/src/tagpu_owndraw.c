@@ -416,33 +416,47 @@ static void restore_one(unsigned int va, const unsigned char* stolen)
    the commander keeps ONE teal (0,128,128) silhouette — cyan halved, i.e. the
    ALP blend over terrown's palette-254 key fill — sitting on its own body and
    surviving until the unit's pose changes, and 557 px of the composite's plane
-   are back at every classify (an empty plane reads 0, and the wipe's own
-   read-back after the memset reads 0). Whatever refills it, the engine's
-   shadow cannot be allowed to depend on it. So the shadow's source is emptied
+   are back at every classify (an empty plane reads 0 NON-KEY bytes — the wipe
+   fills it with the ColorKey, index 1 — and the wipe's own read-back after the
+   memset read 0). Whatever refills it, the engine's shadow cannot be allowed to
+   depend on it. So the shadow's source is emptied
    HERE, at the shadow, on every frame we draw the unit — a wipe the engine
    cannot undo between the call and the read, because the two are adjacent
    instructions of the same call.
 
-   THE GATE IS THE CLASSIFIER'S OWN. `tagpu_posedraw_live()` is exactly the
-   question `tagpu_owndraw_classify` asks before it skips; while it is false the
-   engine is the only renderer, and emptying the composite would take the unit's
-   BODY with the shadow (the body blits from the composite too, 0x459373), which
-   is the invisible-unit failure the classifier's fallback exists to avoid. So
-   the wipe happens on exactly the frames our pass draws the unit and on no
-   others. RESIDUAL, stated rather than hidden: while the posed program is down
+   THE GATE IS THE CLASSIFIER'S OWN — its whole answer, including the branch that
+   is not about units at all. `tagpu_posedraw_live()` is exactly the question the
+   classifier asks before it skips; while it is false the engine is the only
+   renderer, and emptying the composite would take the unit's BODY with the
+   shadow (the body blits from the composite too, 0x459373), which is the
+   invisible-unit failure the classifier's fallback exists to avoid. And a 3D
+   WRECK is not covered by the target: the classifier recognises one by the
+   scratch feature-unit `*(main+0x1420F)`'s `+0x9E` and hands the husk back to
+   the engine unless `tagpu_native_wrecks_armed()`, while the unit predicate
+   `tagpu_native_owns_obj` answers YES to a husk under `target="all"` exactly as
+   it does to a unit. Wiping here without that branch would blank a husk's body
+   for the whole of a `native=all` arm that does not carry the `wrecks` token
+   (the play defaults do carry it, which is why this was not seen in play). So
+   this asks the wrecks question too, in the classifier's own order. RESIDUAL, stated rather than hidden: while the posed program is down
    the engine's own shadow is left alone, and with `target="all"` that is the
    only window in which the engine draws a unit at all. Measured over a 129-frame
    burst spanning one map entry — the load, the context change and the first
    seconds of play — no teal reached the screen; those frames are composited
    before our surface is up, so the engine's frame is not the one on screen.
 
-   The register. `ebp` holds the blit's Object3do from 0x459205 down to all
-   three sites — it is reloaded only inside the cargo loop (0x459415/0x459489),
-   which pops it back (0x4593FC/0x459495) before path B's sites run. A register
-   that "happens to survive" is not an argument, so the stub passes it and
-   tagpu_owndraw_preshadow CHECKS it: `*(Object3do + 0x10)` must be the very
-   composite the site is about to read, or it does nothing. A wrong ebp is then
-   a no-op, never a wipe of somebody else's plane.
+   The register. `ebp` is the blit's Object3do — the blit's SECOND stack
+   argument (`mov ebp,[esp+0x30]` at 0x459205, before the remaining two pushes:
+   0x20 + push ebx + push ebp puts it at entry esp + 8) — and it is never
+   reloaded on any path that reaches the three sites; every use of it before
+   them is a read or a push. The two cargo loops are the only reloads: path A's
+   (0x459415 / 0x459489, whose exit is the function's OWN epilogue — `pop ebp` at
+   0x459495 with `ret 0x18` at 0x45949A) and path B's at 0x459649, which begins
+   after its sites; path B is entered at 0x45949D by the `jne` at 0x459282 and
+   so executes neither. A register that "happens to survive" is not an argument,
+   so the stub passes it and tagpu_owndraw_preshadow CHECKS it:
+   `*(Object3do + 0x10)` must be the very composite the site is about to read, or
+   it does nothing. A wrong ebp is then a no-op, never a wipe of somebody else's
+   plane.
 
    Stub (entered by jmp from the site, so the composite is at [esp] and the
    blit's frame is untouched):
@@ -479,6 +493,28 @@ void __cdecl tagpu_owndraw_preshadow(unsigned int obj3do, unsigned int frame)
     if (!ptr_ok(obj3do) || !ptr_ok(frame)) return;
     if (*(volatile unsigned int*)(obj3do + O3_COMPOSITE) != frame) return;
     if (!tagpu_posedraw_live()) return;
+    /* A HUSK IS NOT OURS UNLESS THE WRECK PASS IS ARMED — the classifier's own
+       first branch, and the only place the two answers can differ. It
+       recognises a wreck draw by the scratch feature-unit *(main+0x1420F)
+       holding THIS Object3do at +0x9E. MEASURED 2026-09-13 on `one-wreck`
+       (armalab_dead, Two Continents) with `tagpu_native.on` = "all" and no
+       `wrecks` token: with this clause disabled in a test build the husk still
+       renders, so the unit predicate does not in fact answer yes to a husk
+       today, and the clause changes nothing on that fixture. It stays because
+       the wipe's predicate should BE the classifier's answer, not a fact about
+       what the wreck builder happens to leave at Object3do+0x0C — a fact this
+       landing did not establish. */
+    {
+        unsigned int taMain = *(volatile unsigned int*)0x00511DE8u;
+        if (ptr_ok(taMain)) {
+            unsigned int scratch = *(volatile unsigned int*)(taMain + 0x1420Fu);
+            if (ptr_ok(scratch) &&
+                *(volatile unsigned int*)(scratch + 0x9Eu) == obj3do) {
+                extern int tagpu_native_wrecks_armed(void);
+                if (!tagpu_native_wrecks_armed()) return;
+            }
+        }
+    }
     if (!tagpu_native_owns_obj(obj3do)) return;
     tagpu_r3dcache_wipe(frame);
 }
@@ -524,7 +560,10 @@ static int install_shadow(unsigned int va, unsigned int resume,
 
 void tagpu_owndraw_init(void)
 {
-    char b[256];
+    /* worst case is 259 chars: the arm token is capped at 31 and every field
+       takes its longest value. _snprintf does NOT terminate a truncation, so
+       the tail is forced rather than assumed. */
+    char b[320];
     int a, c;
 
     if (!tagpu_opt_on("tagpu_owndraw.on")) return;
@@ -591,6 +630,7 @@ void tagpu_owndraw_init(void)
         g_buildfx ? "OK" : "SKIP",
         g_shadow ? "OURS" : "SKIP",
         g_sshadow ? "OURS" : (g_all ? "SKIP" : "engine"));
+    b[sizeof b - 1] = 0;
     olog2(b);
 }
 

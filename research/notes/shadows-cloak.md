@@ -459,8 +459,9 @@ failed to coincide.
    from map entry until it first moved — the ALP blend `0x4B8500` over terrown's
    palette-254 fill, exactly the structure shadow's failure in a new place — with
    **the composite's plane non-empty at every classify** (7047 of 7047
-   wipes in a 60-frame window, the sampled plane holding 557 non-Key bytes), while reading 0
-   immediately after the wipe's own `memset`. `owndraw` now empties
+   wipes in a 60-frame window, the sampled plane holding 557 non-Key bytes — palette indices,
+   not the zeros a blackened shadow leaves), while reading 0 non-Key bytes immediately after the
+   wipe's own `memset`. `owndraw` now empties
    the composite at the shadow itself, at all three emit sites (`0x459338`,
    `0x45958C`, `0x4594DB`), so the guarantee is an instruction rather than an
    inheritance: `exe-reverse-engineering.md` §"The completed-unit shadow's three
