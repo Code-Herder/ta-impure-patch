@@ -425,7 +425,14 @@ static void restore_one(unsigned int va, const unsigned char* stolen)
    instructions of the same call.
 
    THE GATE IS THE CLASSIFIER'S OWN — its whole answer, including the branch that
-   is not about units at all. `tagpu_posedraw_live()` is exactly the question the
+   is not about units at all. And like the classifier's, it reads a value the
+   RENDER thread writes (tagpu_posedraw.c's `s_state`) from the game thread, with
+   no fence: a `1` left in the store buffer across a context loss is read here as
+   live and the wipe fires while the pass, reading the same word, draws nothing —
+   so the unit has neither body nor shadow for the frames that span the loss. That
+   is the classifier's own pre-existing exposure (tagpu_posedraw.c's "safe by
+   DIRECTION" argues it away and does not fully hold), and this adds a second
+   reader of the same word, not a new window. `tagpu_posedraw_live()` is exactly the question the
    classifier asks before it skips; while it is false the engine is the only
    renderer, and emptying the composite would take the unit's BODY with the
    shadow (the body blits from the composite too, 0x459373), which is the

@@ -1348,7 +1348,11 @@ between those two instructions. **Measured**: one 129-frame `glshot` burst over 
 settled — the detour removes the dependency rather than answering it, and the engine map says so
 in those words. While `tagpu_posedraw_live()` is false the engine keeps its own shadow, so the
 window's frames can still carry a teal one; the burst found none, and those frames are composited
-before our surface is up, so the engine's frame is not the one on screen. Sites and register
+before our surface is up, so the engine's frame is not the one on screen. And the gate reads a
+render-thread word with no fence, exactly as the classifier's does — a stale `1` across a context
+loss fires the wipe while the pass draws nothing, leaving the unit with neither body nor shadow
+for those frames. The review named that exposure; it is the classifier's own and this adds a
+second reader of the same word, not a new window. Sites and register
 lifetimes: [exe-reverse-engineering](exe-reverse-engineering.html) §"The completed-unit shadow's
 three emit sites"; hook row in [GPU status](gpu-status.html) §2.1.
 
