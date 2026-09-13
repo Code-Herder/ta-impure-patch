@@ -199,7 +199,7 @@ typedef struct TAGPU_PK_ANCHOR {
     uint8_t  pad;
 } TAGPU_PK_ANCHOR;
 
-/* 12 B, one per QUEUED build the order-marker driver would show a site rect
+/* 16 B, one per QUEUED build the order-marker driver would show a site rect
    for — the build-ghost pass draws these as translucent models. `type` is the
    UnitDef index the engine hands MODEL_PTRS, the same index space as
    PK_UNIT.model_id, so the same udef_count bound applies. The publisher copies
@@ -572,8 +572,9 @@ typedef struct TAGPU_PACKET {
     uint8_t  cursor_mode;             /* 0x2CC3: 0x0E = build placement           */
     uint8_t  region_flags;            /* 0x2CC6: bit3 band box, bit6 site OK      */
     uint16_t build_unit_id;           /* 0x2CC4: what the build cursor is placing,
-                                         a UnitDef index; 0 = none (not verified
-                                         in this repo yet: tagpu_engine.h)       */
+                                         a UnitDef index; 0 = none. VERIFIED
+                                         2026-09-12 (tagpu_engine.h): 78 =
+                                         ARMMEX after a build-menu click       */
     uint8_t  game_opt;                /* 0x37F06 low byte: bit0 damagebars,
                                          bit2 Shadow, bit3 TShadow, bit4 FShadow  */
     uint8_t  pad3;
