@@ -96,6 +96,13 @@ typedef struct {
     float enc;                  /* depth key base                             */
     float alpha;                /* 0.5 while cloaked; the build ghost rides   */
                                 /* the same blend at its own alpha            */
+    int   ghost;                /* 1 = a build-ghost preview: it draws through*/
+                                /* the same entry point but is NOT a unit, so */
+                                /* the per-frame unit and triangle counters   */
+                                /* skip it (they feed the `posed=N/` stats    */
+                                /* and the queued-vs-drawn heartbeat, which a */
+                                /* ghost would otherwise fire as a false      */
+                                /* positive every frame it draws)             */
     int   fog;                  /* uFog bits, as the native shader takes them */
     float waterT, digT;
     int   waterMode;

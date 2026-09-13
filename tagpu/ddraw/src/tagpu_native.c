@@ -359,6 +359,10 @@ static GLint  s_uCCurs = -1;                               /* G17c: the cursor r
 static float  s_zoom = 1.0f;
 static TAGPU_PDVIEW s_pv;          /* the posed pass's view, filled once per
                                       frame and reused by the build-ghost pass */
+static unsigned s_pvFrame = 0xFFFFFFFFu;   /* the frame that fill belongs to —
+                                      never a real frame, so a ghost armed on
+                                      the very first one cannot draw against a
+                                      zeroed view */
 static int    s_fboW = 0, s_fboH = 0, s_fboSS = 0;
 static int    s_palInit = 0;
 static int    s_fogCols = 0, s_fogRows = 0, s_fogOrgX = 0, s_fogOrgY = 0;
@@ -1968,23 +1972,36 @@ static int hires_pose(const TAGPU_PK_PIECE* pc, int nparts, const unsigned short
    ALL THE DATA IS THE PACKET'S. The cursor's unit type, corners and mode
    bytes arrive in the header; the queue arrives as the PK_BUILD table the
    publisher copies out of tagpu_order.c's game-thread snapshot — the same
-   snapshot the squares are drawn from, so this pass and the squares cannot
-   drift. The one engine read here is the per-type MODEL template through
-   model_root, the same fenced read the whole unit pass stands on
-   (thread-split.allow: `fenced`).
+   snapshot the squares are drawn from and under the same lever gate, so the
+   two can only differ by the copy's age: the squares read the arena as it
+   stands at present time and the ghost reads the copy the previous draw made
+   of it, one presented frame at most. The one engine read here is the
+   per-type MODEL template through model_root, the same fenced read the whole
+   unit pass stands on (thread-split.allow: `fenced`).
+
+   IT DRAWS WHAT THE UNIT PASS SET UP, so it has two prerequisites, both now
+   checked rather than assumed: the posed program must be live and the view
+   it draws in (s_pv) must be THIS frame's — the unit pass fills it, so a
+   frame that early-returned must not leave the ghost drawing against last
+   frame's eye. And because it draws after tagpu_fx_render, which rebinds the
+   texture units the posed program samples, it re-binds them itself (see
+   ghost_bind_textures).
 
    The pose is a rest pose — per-piece translation by the bake's restOff,
    which is posed_pose's own output for a unit holding every piece at rest —
    built into render-thread scratch, so a ghost costs one draw call, a bake
    lookup and no pose arena.
 
-   Armed by tagpu_ghost.on (tokens: `alpha=<f>`, default 0.40). */
+   Armed by tagpu_ghost.on (tokens: `alpha=<f>`, default 0.40), and only
+   useful with tagpu_native.on — the pass says so at runtime when armed
+   without it. */
 static int   s_ghostOn = 0;
 static float s_ghostAlpha = 0.40f;
 static unsigned s_ghostCheck = 0;
 static int   s_ghostLogged = -1;     /* the armed state the log last named */
 static unsigned s_ghostCurs = 0, s_ghostQueue = 0, s_ghostDrawn = 0;
-static unsigned s_ghostNoBake = 0;
+static unsigned s_ghostNoBake = 0, s_ghostTrunc = 0;
+static int   s_ghostNoDraw = 0;      /* the missing prerequisite was logged */
 
 static int ghost_armed(unsigned frame_counter)
 {
@@ -2022,40 +2039,85 @@ static int ghost_armed(unsigned frame_counter)
         nlog(b);
         s_ghostLogged = 1;
     }
+    /* THE PREREQUISITE, SAID OUT LOUD. The ghost draws through the unit pass —
+       its view and its program — so with tagpu_native.on off it can never draw
+       a pixel. Every other dependent lever declares that as a `needs` column
+       in tagpu_opt.c, which this one cannot: the table is the play-default set
+       and the ghost is deliberately not in it. Before this the lever armed,
+       logged ARMED, and then did nothing at all — the frame's early-out sits
+       in front of the pass when nothing else is armed, so not even the
+       heartbeat came out. Leaving s_ghostOn up would also keep the 30-frame
+       poll answering "armed" — the refusal is the honest state. */
+    if (!tagpu_opt_on("tagpu_native.on")) {
+        if (s_ghostLogged != 2) {
+            nlog("ghost: off — needs tagpu_native.on (it draws through the unit pass)");
+            s_ghostLogged = 2;
+        }
+        s_ghostOn = 0;
+        return 0;
+    }
     return 1;
 }
 
 /* the model's piece list, parents first, as the packet would carry it for a
    live unit: one TAGPU_PK_PIECE per template node, at rest (pos and turn 0,
    visible). The tree is the per-type template PK_PIECE.node already
-   dereferences for units — the fenced read, nothing more. */
+   dereferences for units — the fenced read, nothing more.
+
+   A MODEL THE WALK CANNOT HOLD IS REFUSED, NOT HALVED. Both caps — the piece
+   count and the stack of pending siblings — used to drop what did not fit and
+   return the rest, which bakes and draws cleanly as half a building with
+   `nobake=0` reading healthy; the live unit path publishes zero pieces for the
+   same condition and counts the refusal, so this one does too.
+
+   EVERY PIECE IS MARKED VISIBLE, which is the one place the ghost is not the
+   finished building: piece visibility is the COB script's (the live path takes
+   it from the unit's primitives), and no script runs for a preview. A
+   building whose script hides a piece at rest — doors, alternate geometry —
+   therefore shows it in the ghost. Every stock 3DO's full tree is what most
+   previews want, and the reviewed trigger for a stock building was unproven;
+   it is a known deviation, stated in gpu-status §2.23, not a hidden one. */
 static int ghost_pieces(const char* root, TAGPU_PK_PIECE* out, int max)
 {
     const char* stack[TAGPU_PBMAXPIECE];
-    int sp = 0, n = 0;
+    int sp = 0, n = 0, over = 0;
     if (!ptr_ok(root)) return 0;
     stack[sp++] = root;
-    while (sp > 0 && n < max) {
+    while (sp > 0) {
         const char* nd = stack[--sp];
         const char* ch;
         if (!ptr_ok(nd) || IsBadReadPtr(nd, N_CHILD + 4)) continue;
+        if (n >= max) { over = 1; break; }
         out[n].pos[0] = 0; out[n].pos[1] = 0; out[n].pos[2] = 0;
         out[n].turn[0] = 0; out[n].turn[1] = 0; out[n].turn[2] = 0;
         out[n].flags = 1;                     /* visible; bit1 unused here    */
         out[n].node = (uint32_t)(size_t)nd;
         n++;
         for (ch = *(const char* const*)(nd + N_CHILD);
-             ptr_ok(ch) && !IsBadReadPtr(ch, N_CHILD + 4) && sp < TAGPU_PBMAXPIECE;
-             ch = *(const char* const*)(ch + N_SIB))
+             ptr_ok(ch) && !IsBadReadPtr(ch, N_CHILD + 4);
+             ch = *(const char* const*)(ch + N_SIB)) {
+            if (sp >= TAGPU_PBMAXPIECE) { over = 1; break; }
             stack[sp++] = ch;
+        }
+        if (over) break;
     }
+    if (over) { s_ghostTrunc++; return 0; }
     return n;
 }
 
-/* one ghost: the type's bake, a rest pose, one posed body draw. `fx/fy/fz`
-   are world px — x, ALTITUDE, z, the triple the anchor projection consumes. */
+/* one ghost: the type's bake, a rest pose, one posed body draw.
+   `fx` and `fz` are world px — x, and z; `ay0` is the anchor's world-space
+   screen y, `fz - half the altitude`, and it is COMPUTED BY THE CALLER with
+   the same arithmetic as the square this ghost sits on. That is deliberate and
+   it is not the unit pass's: the squares halve the altitude with the engine's
+   own truncating `>> 1`, the unit pass halves it in float (its verified
+   convention for a placed unit), and the two differ by up to half a world
+   pixel — half a screen pixel at 1x and a visible few at the closest zoom
+   (the 2026-09-12 review measured it). The ghost is the square's twin while
+   the player is placing, so it takes the square's arithmetic; the difference
+   from where the building will actually stand is that same sub-pixel. */
 static void ghost_one(const TAGPU_PACKET* pk, unsigned mid,
-                      float fx, float fy, float fz,
+                      float fx, float fz, float ay0,
                       const TAGPU_PDVIEW* pv, int eyeX, int eyeY, int vpL,
                       int vpT, int r0)
 {
@@ -2097,12 +2159,13 @@ static void ghost_one(const TAGPU_PACKET* pk, unsigned mid,
     q.geom = bg; q.mat = bm;
     q.pose = s_pose; q.shaded = s_shaded; q.pvis = s_pvis;
     q.npose = bg->nparts;
-    /* the engine's dimetric anchor: screen y = world z - altitude/2. The
-       gather's own locals name them the other way round (`fz` IS the
-       altitude there), which this comment exists to stop. */
+    /* the engine's dimetric anchor: screen y = world z - altitude/2, already
+       halved by the caller into `ay0`. (The gather's own locals name the two
+       the other way round — its `fz` IS the altitude — which is the trap this
+       comment exists to stop.) */
     q.ax = fx - (float)eyeX + (float)vpL;
-    q.ay = fz - fy * 0.5f - (float)eyeY + (float)vpT;
-    q.wx0 = fx; q.wz0 = fz - fy * 0.5f;
+    q.ay = ay0 - (float)eyeY + (float)vpT;
+    q.wx0 = fx; q.wz0 = ay0;
     /* a ground unit's depth row at the ghost's own row — the ghost is a
        preview of exactly that, and the row term keeps it in the plane's legal
        band. Drawn LAST in the pass, so it covers what it sits on. */
@@ -2113,21 +2176,78 @@ static void ghost_one(const TAGPU_PACKET* pk, unsigned mid,
     q.waterMode = 0;
     q.nanoOn = 0;
     q.cast[0] = 0.0f; q.cast[1] = 0.0f; q.cast[2] = 1.0f;
+    q.ghost = 1;                              /* not a unit: the stats skip it   */
     tagpu_posedraw_unit(&q);
 }
 
 /* the pass itself, called once per frame from tagpu_native_frame after the
-   effects: collect the cursor ghost and the queue ghosts and draw them. */
+   effects: collect the cursor ghost and the queue ghosts and draw them.
+
+   THE SAMPLERS ARE THE POSED PROGRAM'S, WHICH NEVER RE-BINDS THEM — it draws
+   inside the unit pass's own binds (tagpu_posedraw.c says so where it sets
+   them). This pass runs after tagpu_fx_render, which rebinds units 0/1/2/4/5/6
+   to its own atlas, the palette and the fog grid for its own program, so
+   without rebinding the ghost samples fx textures with the model's UVs
+   whenever any effect is on screen — the frame the first in-game check never
+   had. Bind every unit the posed shader names, from the same sources the unit
+   pass binds (that is the invariant; "nothing else happens to touch it" is
+   not). */
+static void ghost_bind_textures(const TAGPU_PACKET* pk)
+{
+    x_glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tagpu_r3d_atlas_texref());
+    x_glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, tagpu_r3d_lut_texref(tagpu_pk_shd(pk)));
+    x_glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, s_palTex);
+    x_glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, s_pv.scafOn ? tagpu_scaffold_texref() : 0);
+    x_glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, s_fogTex);
+    x_glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_2D, s_fogLutTex);
+    x_glActiveTexture(GL_TEXTURE8);
+    glBindTexture(GL_TEXTURE_2D, tagpu_r3d_atlas_rgbref());
+    x_glActiveTexture(GL_TEXTURE0);
+}
+
+/* is this anchor outside the rect the zoom can show? The unit gather's own
+   test, margin included: it must never drop a ghost the pass would have drawn,
+   so it is the widest view the lever allows, not the current viewport. */
+static int ghost_offscreen(float ax, float ay, int evpL, int evpT, int evw, int evh)
+{
+    return ax < (float)(evpL - 256) || ax > (float)(evpL + evw + 256) ||
+           ay < (float)(evpT - 256) || ay > (float)(evpT + evh + 256);
+}
+
 static void ghost_pass(const TAGPU_PACKET* pk, unsigned frame_counter,
-                       int eyeX, int eyeY, int vpL, int vpT, int r0)
+                       int eyeX, int eyeY, int vpL, int vpT, int r0,
+                       int evpL, int evpT, int evw, int evh)
 {
     const TAGPU_PK_BUILD* bs;
     unsigned nb, k;
     int haveCursor = 0;
-    float cfx = 0.0f, cfy = 0.0f, cfz = 0.0f;
+    float cfx = 0.0f, cfz = 0.0f, cay = 0.0f;
 
     if (!s_ghostOn || !pk || !pk->in_game) return;
-
+    /* THE DRAW'S TWO PREREQUISITES, checked rather than assumed. Both are the
+       unit pass's and both are established in the same frame: the view this
+       pass draws through (s_pv, filled only when that pass really ran) and the
+       posed program itself — without the check a frame that early-returned
+       would draw against last frame's eye, and a refused program would keep
+       baking GL geometry that nothing can draw, ageing the live units out of
+       the bake cache for nothing (the review's findings). `ghost_armed` says
+       the lever-level half of this out loud, once. */
+    if (s_pvFrame != frame_counter || !tagpu_posedraw_live()) {
+        if (!s_ghostNoDraw) {
+            nlog(s_pvFrame != frame_counter
+                 ? "ghost: armed, but the unit pass is not drawing this frame — nothing to draw in"
+                 : "ghost: armed, but the posed program is not live on this driver");
+            s_ghostNoDraw = 1;
+        }
+        return;
+    }
+    s_ghostNoDraw = 0;
     /* the cursor: the square's own gate — mode 14, and either the band bit or
        the mouse inside the rect the engine can NAME (gather_cursor's test) —
        plus a build type the udef bound accepts */
@@ -2136,38 +2256,79 @@ static void ghost_pass(const TAGPU_PACKET* pk, unsigned frame_counter,
         (pk->region_flags & 8 ||
          (pk->mouse[0] >= pk->vp_addr[0] && pk->mouse[0] <= pk->vp_addr[2] &&
           pk->mouse[1] >= pk->vp_addr[1] && pk->mouse[1] <= pk->vp_addr[3]))) {
-        const int* br = pk->build_rect;       /* the corners, world px: x, altitude, z */
-        cfx = (float)(br[0] + br[3]) * 0.5f;
-        cfy = (float)(br[1] + br[4]) * 0.5f;
-        cfz = (float)(br[2] + br[5]) * 0.5f;
-        haveCursor = 1;
+        const int* br = pk->build_rect;   /* the corners, world px: x, altitude, z */
+        /* THE SQUARE'S OWN SANITY BOUND, and its own halving. gather_cursor
+           projects the two corners and drops the rect when any of them lands
+           past ±0x100000; a ghost averaged from a rect the square refuses
+           would draw where the square does not. The same projection here also
+           bounds the midpoint adds below, so a sentinel rect cannot overflow
+           them. And the altitude is halved the way the square halves it —
+           `>> 1` per corner, engine truncation, not the unit pass's float —
+           so the ghost sits ON its square rather than up to half a world
+           pixel above it. */
+        float l = (float)br[0] - (float)eyeX + (float)vpL;
+        float r = (float)br[3] - (float)eyeX + (float)vpL;
+        float t = (float)(br[2] - (br[1] >> 1)) - (float)eyeY + (float)vpT;
+        float b = (float)(br[5] - (br[4] >> 1)) - (float)eyeY + (float)vpT;
+        if (l >= -1048576.0f && l <= 1048576.0f &&
+            r >= -1048576.0f && r <= 1048576.0f &&
+            t >= -1048576.0f && t <= 1048576.0f &&
+            b >= -1048576.0f && b <= 1048576.0f) {
+            cfx = (float)(br[0] + br[3]) * 0.5f;
+            cfz = (float)(br[2] + br[5]) * 0.5f;
+            /* the square's centre, in the WORLD-space half of the anchor (the
+               part that has not had the eye subtracted yet): the mean of its
+               two edges, each with the engine's own truncating halving */
+            cay = cfz - (float)((br[1] >> 1) + (br[4] >> 1)) * 0.5f;
+            haveCursor = !ghost_offscreen(cfx - (float)eyeX + (float)vpL,
+                                          cay - (float)eyeY + (float)vpT,
+                                          evpL, evpT, evw, evh);
+        }
     }
     bs = tagpu_pk_builds(pk);
     nb = pk->n_builds;
     if (!haveCursor && (!bs || !nb)) return;
 
+    ghost_bind_textures(pk);
     tagpu_posedraw_begin(&s_pv);
+    /* THE GHOSTS BLEND WITH EACH OTHER. Depth writes off for the pass: the
+       normal case is the cursor ghost standing on a queued ghost's own site,
+       and with the mask on the second draw failed GL_LESS against the first's
+       depth and the overlap simply vanished. The TEST stays on, so terrain and
+       units still occlude a ghost in front of them; only ghost-against-ghost
+       needed the mask. Restored after, because that is the state the marker
+       pass and the composite expect. */
+    x_glDepthMask(GL_FALSE);
     if (haveCursor) {
         s_ghostCurs++;
-        ghost_one(pk, pk->build_unit_id, cfx, cfy, cfz,
+        s_ghostDrawn++;
+        ghost_one(pk, pk->build_unit_id, cfx, cfz, cay,
                   &s_pv, eyeX, eyeY, vpL, vpT, r0);
     }
     for (k = 0; k < nb; k++) {
+        float fx = (float)bs[k].pos[0] / 65536.0f;
+        float fz = (float)bs[k].pos[2] / 65536.0f;
+        /* the same truncating halving draw_build projects with: it halves the
+           whole world px `(foot + pos) >> 16`, and a footprint offset is a
+           whole world px, so truncating the position alone lands on the same
+           y. (The ghost draws at the site's centre either way — the offset
+           cancels between the footprint's two corners.) */
+        float alt = (float)((int)bs[k].pos[1] >> 16);
+        float ay = fz - alt * 0.5f;
+        if (ghost_offscreen(fx - (float)eyeX + (float)vpL, ay - (float)eyeY + (float)vpT,
+                            evpL, evpT, evw, evh)) continue;
         s_ghostQueue++;
-        ghost_one(pk, bs[k].type,
-                  (float)bs[k].pos[0] / 65536.0f,
-                  (float)bs[k].pos[1] / 65536.0f,
-                  (float)bs[k].pos[2] / 65536.0f,
-                  &s_pv, eyeX, eyeY, vpL, vpT, r0);
+        s_ghostDrawn++;
+        ghost_one(pk, bs[k].type, fx, fz, ay, &s_pv, eyeX, eyeY, vpL, vpT, r0);
     }
-    s_ghostDrawn += (unsigned)haveCursor + nb;
     tagpu_posedraw_end();
+    x_glDepthMask(GL_TRUE);
     if ((frame_counter % 300) == 0) {
-        char b[128];
+        char b[160];
         _snprintf(b, sizeof b,
-                  "ghost: curs=%u queue=%u drawn=%u nobake=%u alpha=%.2f",
+                  "ghost: curs=%u queue=%u drawn=%u nobake=%u trunc=%u alpha=%.2f",
                   s_ghostCurs, s_ghostQueue, s_ghostDrawn, s_ghostNoBake,
-                  s_ghostAlpha);
+                  s_ghostTrunc, s_ghostAlpha);
         nlog(b);
     }
 }
@@ -3929,6 +4090,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         pv.shNeutral = tagpu_r3d_shade_neutral();
         pv.shDir = tagpu_r3d_shade_dir();
         s_pv = pv;
+        /* the build ghost's dependency, made checkable: its pass may only draw
+           in a frame this ran (see ghost_pass) */
+        s_pvFrame = f->frame_counter;
         if (npd) {
             int k;
             tagpu_posedraw_begin(&pv);
@@ -3972,7 +4136,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* the build ghost: translucent placement previews, after the effects so
        nothing world-anchored covers them — they are the square's twin, drawn
        under the same gate and in the same colours */
-    ghost_pass(pk, f->frame_counter, eyeX, eyeY, vpL, vpT, r0);
+    ghost_pass(pk, f->frame_counter, eyeX, eyeY, vpL, vpT, r0,
+               evpL, evpT, evw, evh);
 #undef FOGW
     x_glDisable(GL_BLEND);
     x_glDisable(GL_DEPTH_TEST);

@@ -203,8 +203,9 @@ typedef struct TAGPU_PK_ANCHOR {
    for — the build-ghost pass draws these as translucent models. `type` is the
    UnitDef index the engine hands MODEL_PTRS, the same index space as
    PK_UNIT.model_id, so the same udef_count bound applies. The publisher copies
-   it out of tagpu_order.c's game-thread snapshot, so this table and the green
-   squares it mirrors cannot drift. */
+   it out of tagpu_order.c's game-thread snapshot under the same lever gate the
+   squares are drawn with, so this table and the green squares it mirrors can
+   differ only by one presented frame — the copy's age. */
 typedef struct TAGPU_PK_BUILD {
     uint16_t type;            /* node+0x36, the build target's unit-type id     */
     uint16_t pad;

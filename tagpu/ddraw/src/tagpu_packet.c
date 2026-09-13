@@ -460,7 +460,12 @@ static const char* frame_valid(const void* rec)
     if (!table_ok(p, p->off_pieces, p->n_pieces, sizeof(TAGPU_PK_PIECE))) return "pieces table";
     if (!table_ok(p, p->off_wrecks, p->n_wrecks, sizeof(TAGPU_PK_WRECK))) return "wrecks table";
     if (!table_ok(p, p->off_anchors, p->n_anchors, sizeof(TAGPU_PK_ANCHOR))) return "anchors table";
+    /* the build-orders table (the build ghost). Its consumer walks it with the
+       raw pointer and no cap of its own, which is this line's whole point:
+       every table a consumer indexes by `n_` alone is checked HERE. */
+    if (!table_ok(p, p->off_builds, p->n_builds, sizeof(TAGPU_PK_BUILD))) return "builds table";
     if (p->n_units && p->unit_slots && p->n_units > p->unit_slots) return "more units than slots";
+    if (p->n_builds > TAGPU_PK_MAX_BUILDS) return "more builds than slots";
     if (p->n_anchors && p->anch_cols > 0 && p->anch_rows > 0 &&
         p->n_anchors > (unsigned)p->anch_cols * (unsigned)p->anch_rows) return "more anchors than cells";
     if (p->anch_cols < 0 || p->anch_rows < 0 ||

@@ -2897,9 +2897,11 @@ about the squares changes; no new engine hook and no engine write: the ghost is 
 whose DATA arrives entirely in the frame packet.
 
 - **The data.** `TAGPU_PK_BUILD`, a build-orders table the publisher copies out of the order
-  pass's own game-thread snapshot — the same records `draw_build` draws the squares from, so the
-  ghost and the squares cannot drift, and the same gate (`s_build`, a non-zero `btype`, a resolved
-  def). The cursor's unit type is `build_unit_id`, the header's copy of `BuildUnitID main+0x2CC4`
+  pass's own game-thread snapshot — the same records `draw_build` draws the squares from, under
+  the same gate (`s_build`, a non-zero `btype`, a resolved def) and the same lever arm state, so
+  the ghost and the squares can differ only by the copy's age: the squares read the arena at
+  present time, the ghost the copy the previous draw made of it, one presented frame at most.
+  The cursor's unit type is `build_unit_id`, the header's copy of `BuildUnitID main+0x2CC4`
   ([VERIFIED LIVE](exe-reverse-engineering.html): 78 = ARMMEX after a build-menu click), with the
   cursor's position the midpoint of `build_rect` and its gate `gather_cursor`'s own (mode 14, and
   the band bit or the mouse inside the rect the engine can NAME). Both ghosts bound their type by
@@ -2928,8 +2930,42 @@ whose DATA arrives entirely in the frame packet.
   ordinary `alpha`. (The 2026-09-12 tint cut removed `uGhost`/`uGhostTint` again, so
   `tagpu_native_unit_fs` is back to the shape it had before the feature.)
 - **The lever.** `tagpu_ghost.on` (tokens: `alpha=<f>`, default 0.40), re-read on the pass's own
-  30-frame poll; the armed line and the `ghost: curs= queue= drawn= nobake= alpha=` heartbeat log
-  only on change / every 300 frames. `nobake` must stay 0.
+  30-frame poll; the armed line and the `ghost: curs= queue= drawn= nobake= trunc= alpha=`
+  heartbeat log only on change / every 300 frames. `nobake` and `trunc` must stay 0. **It needs
+  `tagpu_native.on`** — the ghost draws through the unit pass's view and program — and says so:
+  armed without it the log reads `ghost: off — needs tagpu_native.on (it draws through the unit
+  pass)` and the pass declines. It is deliberately **not** a play default, so it cannot carry a
+  `needs` column in `tagpu_opt.c` (that table is the default set) and says the same thing at
+  runtime instead.
+- **The review's fourteen findings (2026-09-12, xhigh, one reviewer) — what changed.** The pass
+  now checks its two prerequisites every frame (the posed program live; `s_pv` THIS frame's,
+  stamped when the unit pass fills it) instead of assuming them; it re-binds the posed program's
+  seven texture units itself (`ghost_bind_textures`) because `tagpu_fx_render` rebinds 0/1/2/4/5/6
+  for its own program and restores nothing; it draws with **depth writes off** so two ghosts at
+  one site blend instead of the second being culled by the first's depth; it culls both ghost
+  kinds against the widest-zoom rect the unit gather uses; the cursor's `build_rect` is bounded
+  and projected exactly as `gather_cursor` bounds it (so a rect the square refuses draws no
+  ghost, and the midpoint adds cannot overflow); the anchor halves the altitude with the
+  **square's** truncating `>> 1`, not the unit pass's float, so the ghost sits ON its square; a
+  model the piece walk cannot hold is **refused and counted** (`trunc`) rather than drawn as half
+  a building; the queue table is validated like every other packet table (`frame_valid`); and
+  `tagpu_order_copy_builds` is gated on the order pass's own arm state, so disarming it takes the
+  queue ghosts with the squares instead of leaving the last publication frozen on screen.
+  **Measured in game**: the cursor ghost centred on its square (bbox 975..1019 against square
+  973..1021, centroid x 996 vs 997); queue ghosts drawing from a real record (`bt=78 bdef=1`
+  through the packet); `posed=2/361tri` with **no `q=` suffix** while thousands of ghosts drew
+  (the false "queued units not drawn" heartbeat this fixes); `trunc=0`.
+  **Not verified in game**: the depth-overlap and disarm checks — the cursor and queue ghosts are
+  not co-located (their anchors come from `build_rect` and the order node, ~18 px apart on the
+  tested site) and every candidate site was animating (a nanoframe under construction), which is
+  a noise floor of ~2.8 k px against a ~950 px ghost. Both changes are read-verified against the
+  code path they guard.
+- **Latent, not fixed by the rebind alone.** With Classic++ on (the play default) a body fragment
+  takes its colour from the rgb atlas on **unit 8**, which fx never touches, and samples unit 0
+  only for the texture's colour-key discard; measured this session, unbinding units 0/1/2 changes
+  the ghost not at all in that configuration. The clobbering bites when the LUT/palette path is
+  live (`uLit == 0`, Classic++ off) and, for keyed textures, in the discard test — which is what
+  the rebind removes.
 - **Verified in game** (one-unit fixture, play defaults): the mex ghost at the placement cursor
   and at the queued site rects, diffed against `ghost.on=off` and found only at the ghost's own
   footprint; after the cache-key fix, a placed mex renders pixel-identical with the ghost armed

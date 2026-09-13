@@ -619,8 +619,17 @@ void tagpu_posedraw_unit(const TAGPU_PDUNIT* u)
     x_glUniform3f(u_cast, u->cast[0], u->cast[1], u->cast[2]);
     glBindVertexArray(m->vao);
     x_glDrawArrays(GL_TRIANGLES, g->first[TAGPU_PB_BODY], g->count[TAGPU_PB_BODY]);
-    s_units++;
-    s_tris += (unsigned)g->count[TAGPU_PB_BODY] / 3;
+    /* A GHOST IS NOT A UNIT. It rides this same entry point on purpose — that
+       is the whole of its draw — but the two counters below feed the `posed=N`
+       stats and the queued-vs-drawn heartbeat, which reads their inequality as
+       "units queued but not drawn". Counting ghosts there fires that alarm
+       every frame one draws and inflates the unit and triangle totals, so the
+       record says which it is and only the units are counted. The ghost pass
+       has its own `drawn=` counter for what it drew. */
+    if (!u->ghost) {
+        s_units++;
+        s_tris += (unsigned)g->count[TAGPU_PB_BODY] / 3;
+    }
 }
 
 /* ---- the Classic silhouette shadow -------------------------------------- */

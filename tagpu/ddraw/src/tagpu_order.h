@@ -81,8 +81,10 @@ void tagpu_order_block_end(void);
    snapshot's build entries — the ones `draw_build` would show a site rect
    for — into `dst`, up to `max`. Returns the count copied. The publisher
    appends these to the frame packet's PK_BUILD table, so the ghost pass and
-   the squares draw from one walk and cannot drift. 0 when no snapshot is
-   published (not armed, or a block in which no marker ran). */
+   the squares draw from one walk under one gate and can differ only by the
+   copy's age — the squares read the arena at present time, the ghost the copy
+   the previous draw made of it, one presented frame at most. 0 when no
+   snapshot is published (not armed, or a block in which no marker ran). */
 int  tagpu_order_copy_builds(TAGPU_PK_BUILD* dst, int max);
 /* One engine drawer call, logged under `trace` so the engine's own node list
    can be diffed against ours. `bit` is the capability bit (0..4; 5 = the

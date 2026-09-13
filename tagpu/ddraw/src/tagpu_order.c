@@ -813,12 +813,23 @@ int tagpu_order_snapshot(void* ctx, void* view)
    order. The same gate draw_build uses — the nobuild token, a non-zero build
    type and a def that resolved — so every entry here is a site rect on screen,
    and every site rect is here (the arena cap and the packet's truncation
-   apart; both are counted, the packet's in `truncated`). */
+   apart; both are counted, the packet's in `truncated`).
+
+   THE LEVER GATE FIRST, and it is the disarm case this was missing: taking
+   this pass off hands the engine its driver back and stops the block that
+   would clear the arena, so the last publication stayed readable for the rest
+   of the session and the ghost went on drawing a queue whose squares were
+   gone (the 2026-09-12 review). One int, read the way the block's own
+   passive/trace flags are — a stale read costs one frame of ghosts around a
+   disarm. `passive`/`trace` are deliberately NOT gated here: those leave the
+   engine drawing its own markers for comparison, and the ghost riding along
+   is what they are for. */
 int tagpu_order_copy_builds(TAGPU_PK_BUILD* dst, int max)
 {
     const ORDARENA* A;
     int i, n = 0;
     if (g_pub < 0 || !dst || max <= 0) return 0;
+    if (s_armed != 1) return 0;
     A = &g_arena[g_pub];
     for (i = 0; i < A->n && n < max; i++) {
         const ORDREC* r = &A->rec[i];
