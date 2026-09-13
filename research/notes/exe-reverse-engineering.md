@@ -1553,6 +1553,65 @@ build-state path `0x459641`) and `0x459C70` (nanoframe, called from the builder 
 Both open `mov eax,imm32` (5 bytes) before `call __chkstk`, which is the detour boundary;
 evidence and the classify-then-`ret 0x10` stub: `own-the-draw.md`, `tagpu_owndraw.c`.
 
+**The completed-unit shadow's three emit sites — the fourth `owndraw` detour.**
+[MEASURED 2026-09-13, from play: the commander kept one teal silhouette on its own body from
+map entry until it first moved. Read here off `objdump` of the pristine build.]
+
+Under `owndraw all` the engine's completed-unit shadow is supposed to be nothing: the
+COMPLETED branch is the one every unit takes after the two `je`s are flipped, and with the
+composite blank `0x45A470` builds an all-key silhouette. That last clause is the whole
+guarantee, and it is not maintained by the composite being blank on every frame. Instrumented
+for one session: **not one of 7047 wipes in a 60-frame window found the plane already empty**
+(an empty plane reads 0, and reading the same plane back right after the wipe's own `memset`
+read 0), and the plane each window's last wipe sampled held **557 non-Key bytes — palette
+indices, not the zeros a blackened shadow would leave**. So the shadow was being built from a
+real sprite while the classifier was skipping the rasterise that would have painted it. What
+refills the plane that way is not settled by this reading and is left open here; the detour
+below removes the dependency instead of answering it.
+
+The sites, one per branch — all three are the same two instructions and a call:
+
+| VA | Branch | Shape |
+| --- | --- | --- |
+| `0x459338` | path A, the completed branch from `0x459324` | `56` `push esi` · `8B CF` `mov ecx,edi` · `E8 33 11 00 00` `call 0x45A470` · resume `0x45933D` |
+| `0x45958C` | path B, the completed branch from `0x459578` | same, `call` bytes `E8 DF 0E 00 00`, resume `0x459591` |
+| `0x4594DB` | path B's inline digger branch `0x4594D8..0x45951D` | same, `call` bytes `E8 90 0F 00 00`, resume `0x4594E0` |
+
+`0x45A470(this, composite)` is `ret 4` and writes **only the scratch** (`this+0x10`): it copies
+the composite's header, colour and depth planes into the scratch and calls `0x4B96A0`, which
+rewrites every non-ColorKey texel to palette index 0 — the unit's own silhouette in black.
+Each site then blits the scratch at `sx + 0x85` (`0x459353`, `0x4595E9`) through the ALP blend
+`0x4B8500`, after the path-B clips. **The composite is read, never written, so emptying it at
+the call is the whole silhouette** — and the blit draws its BODY from the composite too
+(`0x459373` `mov esi,[ebp+0x10]`), which is why the wipe is gated on `tagpu_posedraw_live()`:
+on the frames the engine is the only renderer, emptying the composite would take the body with
+the shadow.
+
+`ebp` carries the blit's Object3do (`0x459205 mov ebp,[esp+0x30]`; `[ebp+0xc]` is the unit and
+`[ebp+0x10]` the composite) down to all three sites. It is **not** left alone for the whole
+function: the cargo loop reloads it — `0x459415 mov ebp,[edx+0x8A]`, `0x459489
+mov ebp,[ebp+0x8E]` — inside a bracket opened at `0x4593FC` `push ebp` and closed at `0x459495`
+`pop ebp`, and that bracket sits before `0x45949D`, where path B begins. So path A's site runs
+before the reload and path B's two run after the restore. Because "it happens to survive" is
+not an argument, the stub passes `ebp` and the helper checks it: `*(Object3do+0x10)` must be
+the very composite the site is about to read, and a mismatch is a no-op.
+
+Two negative results worth having. The blit's own rasterise call `0x459641` (arg1 = the
+SCRATCH, `0x459639 mov ecx,[edi+0x10]`) is taken **only for a unit under construction**: the
+`fcomp` at `0x459622` compares `unit+0x104` (Nanoframe) against `[0x4FD4C0]` and `0x45962D
+je 0x459646` skips the call on equality, so a complete unit reaches the rasteriser only through
+the builder's `0x45878B`. And the two things that write a composite's planes are the
+rasterisers and the allocators `0x437B50` / `0x437BE0` (chosen at `0x458702` / `0x458719`) —
+`0x4581E0` and `0x4584D0`, the AABB/pose helpers, call neither.
+
+The detour empties the composite at the site, before the replayed `0x45A470`, so the silhouette
+is all-key on every frame our pass draws the unit; the engine cannot repaint it in between,
+because the two are adjacent instructions of one call. Measured 2026-09-13 on a fresh skirmish, the same map and
+the same starting spot either side: one 129-frame `glshot` burst spanning the load, the GL
+context change and the first seconds of play — **no `(0,128,128)` pixel in any frame**. Before
+the change the same burst found **557 in nearly every in-play frame**, and 0 in every frame
+once the commander was ordered to move — the latch the play report describes.
+
 **`0x459228..0x45927A` — where the body and the shadow are placed, register by register.**
 [BINARY-VERIFIED 2026-09-04, read for the aircraft work.] `[ebp+0xc]` is the unit; `+0x6A`,
 `+0x6E`, `+0x72` are X, altitude and depth as 16.16.

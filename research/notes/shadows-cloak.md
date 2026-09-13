@@ -454,6 +454,17 @@ failed to coincide.
    **Ownership split, measured 2026-09-02 (native pass armed, composite wiped):**
    the engine's *completed-unit* shadow is built from the composite, so for a
    natively-owned mobile unit it comes out empty — that shadow is ours to draw.
+   [CORRECTED 2026-09-13: "the composite is wiped" is the classifier's doing, and
+   it is not enough. The commander kept one opaque teal `(0,128,128)` silhouette
+   from map entry until it first moved — the ALP blend `0x4B8500` over terrown's
+   palette-254 fill, exactly the structure shadow's failure in a new place — with
+   **the composite's plane non-empty at every classify** (7047 of 7047
+   wipes in a 60-frame window, the sampled plane holding 557 non-Key bytes), while reading 0
+   immediately after the wipe's own `memset`. `owndraw` now empties
+   the composite at the shadow itself, at all three emit sites (`0x459338`,
+   `0x45958C`, `0x4594DB`), so the guarantee is an instruction rather than an
+   inheritance: `exe-reverse-engineering.md` §"The completed-unit shadow's three
+   emit sites", `tagpu_owndraw.c`, and `gpu-status.md` §2.1.]
    The `0x20000000`-path shadow (structures: the cached slant projection at
    `Object3do+0x14`, built from the posed prims) and the `FShadow` feature
    shadow of a 3D wreck survive the wipe and keep drawing — the native pass

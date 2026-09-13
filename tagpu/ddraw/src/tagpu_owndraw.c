@@ -388,9 +388,143 @@ static void restore_one(unsigned int va, const unsigned char* stolen)
     FlushInstructionCache(GetCurrentProcess(), t, 5);
 }
 
+/* ---- the fourth detour: the engine's completed-unit silhouette shadow -----
+
+   The third thing the engine still draws for a unit we own is its SHADOW, and
+   it draws it from the unit's own composite. Inside the per-unit blit 0x459200
+   there are three sites that emit the completed-unit silhouette, one per path:
+
+     0x459335  push esi          ; esi = Object3do+0x10, the unit's composite
+     0x459336  mov  ecx,edi      ; this
+     0x459338  call 0x45A470     ; scratch := the composite, every non-ColorKey
+                                 ;   texel -> palette index 0 (0x4B96A0)
+     ...                         ; path B then clips the scratch (waterline,
+                                 ;   digger) and every path blits it through
+                                 ;   0x4B8500, the 50 % ALP blend, at sx+0x85.
+
+     0x45958C  path B (colour+depth composite) — same three instructions
+     0x4594DB  path B, the inline digger branch — same three instructions
+
+   0x45A470 writes the SCRATCH (this+0x10) and never the composite, so the
+   shadow is nothing more than the composite's own silhouette — which is why
+   the design calls it ours: for a unit the native pass draws, "the engine's
+   completed-unit shadow is built from the composite, so it comes out empty"
+   (shadows-cloak.md §4, measured 2026-09-02).
+
+   THAT ONLY HOLDS WHILE THE COMPOSITE IS EMPTY, and the classifier is not the
+   thing that keeps it empty on every frame. Measured 2026-09-13: at map entry
+   the commander keeps ONE teal (0,128,128) silhouette — cyan halved, i.e. the
+   ALP blend over terrown's palette-254 key fill — sitting on its own body and
+   surviving until the unit's pose changes, and 557 px of the composite's plane
+   are back at every classify (an empty plane reads 0, and the wipe's own
+   read-back after the memset reads 0). Whatever refills it, the engine's
+   shadow cannot be allowed to depend on it. So the shadow's source is emptied
+   HERE, at the shadow, on every frame we draw the unit — a wipe the engine
+   cannot undo between the call and the read, because the two are adjacent
+   instructions of the same call.
+
+   THE GATE IS THE CLASSIFIER'S OWN. `tagpu_posedraw_live()` is exactly the
+   question `tagpu_owndraw_classify` asks before it skips; while it is false the
+   engine is the only renderer, and emptying the composite would take the unit's
+   BODY with the shadow (the body blits from the composite too, 0x459373), which
+   is the invisible-unit failure the classifier's fallback exists to avoid. So
+   the wipe happens on exactly the frames our pass draws the unit and on no
+   others. RESIDUAL, stated rather than hidden: while the posed program is down
+   the engine's own shadow is left alone, and with `target="all"` that is the
+   only window in which the engine draws a unit at all. Measured over a 129-frame
+   burst spanning one map entry — the load, the context change and the first
+   seconds of play — no teal reached the screen; those frames are composited
+   before our surface is up, so the engine's frame is not the one on screen.
+
+   The register. `ebp` holds the blit's Object3do from 0x459205 down to all
+   three sites — it is reloaded only inside the cargo loop (0x459415/0x459489),
+   which pops it back (0x4593FC/0x459495) before path B's sites run. A register
+   that "happens to survive" is not an argument, so the stub passes it and
+   tagpu_owndraw_preshadow CHECKS it: `*(Object3do + 0x10)` must be the very
+   composite the site is about to read, or it does nothing. A wrong ebp is then
+   a no-op, never a wipe of somebody else's plane.
+
+   Stub (entered by jmp from the site, so the composite is at [esp] and the
+   blit's frame is untouched):
+     pushad
+     push [esp+0x20]            ; the composite (entry esp + 0 after pushad)
+     push ebp                   ; the Object3do
+     call tagpu_owndraw_preshadow   ; cdecl(obj3do, composite)
+     add esp,8 ; popad
+     E8 <rel32>                 ; the stolen call 0x45A470, replayed
+     E9 <rel32>                 ; resume at site+5
+   The callee is `ret 4`, so the composite the site pushed is consumed by the
+   replayed call exactly as the original did and esp leaves the stub unchanged. */
+#define SHADOW_A_VA   0x00459338u   /* path A: push esi; mov ecx,edi; call  */
+#define SHADOW_A_RES  0x0045933Du
+#define SHADOW_B_VA   0x0045958Cu   /* path B                                 */
+#define SHADOW_B_RES  0x00459591u
+#define SHADOW_C_VA   0x004594DBu   /* path B, the inline digger branch        */
+#define SHADOW_C_RES  0x004594E0u
+#define SHADOW_VA     0x0045A470u   /* scratch := blackened composite, ret 4   */
+#define O3_COMPOSITE  0x10
+
+static const unsigned char SHAD_A_STOLEN[5] = { 0xE8, 0x33, 0x11, 0x00, 0x00 };
+static const unsigned char SHAD_B_STOLEN[5] = { 0xE8, 0xDF, 0x0E, 0x00, 0x00 };
+static const unsigned char SHAD_C_STOLEN[5] = { 0xE8, 0x90, 0x0F, 0x00, 0x00 };
+
+static int g_shadow = 0;   /* all three sites patched */
+
+/* cdecl, called from the stub: empty the composite the engine is about to
+   build an owned unit's shadow from. See the block above for the gate. */
+void __cdecl tagpu_owndraw_preshadow(unsigned int obj3do, unsigned int frame)
+{
+    extern int tagpu_posedraw_live(void);
+    extern int tagpu_native_owns_obj(unsigned int obj3do);
+    if (!ptr_ok(obj3do) || !ptr_ok(frame)) return;
+    if (*(volatile unsigned int*)(obj3do + O3_COMPOSITE) != frame) return;
+    if (!tagpu_posedraw_live()) return;
+    if (!tagpu_native_owns_obj(obj3do)) return;
+    tagpu_r3dcache_wipe(frame);
+}
+
+static int install_shadow(unsigned int va, unsigned int resume,
+                          const unsigned char* stolen)
+{
+    unsigned char* t = (unsigned char*)va;
+    unsigned char* s;
+    unsigned char* p;
+    DWORD old;
+    int32_t rel;
+
+    if (memcmp(t, stolen, 5) != 0) return 0;
+    s = (unsigned char*)VirtualAlloc(NULL, 0x80,
+            MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!s) return 0;
+    p = s;
+
+    *p++ = 0x60;                                            /* pushad             */
+    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x20;     /* push [esp+0x20]    */
+    *p++ = 0x55;                                            /* push ebp           */
+    *p++ = 0xE8;                                            /* call preshadow     */
+    rel = (int32_t)((unsigned int)&tagpu_owndraw_preshadow - ((unsigned int)p + 4));
+    memcpy(p, &rel, 4); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x08;                  /* add esp,8          */
+    *p++ = 0x61;                                            /* popad              */
+    *p++ = 0xE8;                                            /* call 0x45A470      */
+    rel = (int32_t)(SHADOW_VA - ((unsigned int)p + 4));
+    memcpy(p, &rel, 4); p += 4;
+    *p++ = 0xE9;                                            /* jmp resume         */
+    rel = (int32_t)(resume - ((unsigned int)p + 4));
+    memcpy(p, &rel, 4); p += 4;
+
+    if (!VirtualProtect(t, 5, PAGE_EXECUTE_READWRITE, &old)) return 0;
+    t[0] = 0xE9;
+    rel = (int32_t)((unsigned int)s - (va + 5));
+    memcpy(t + 1, &rel, 4);
+    VirtualProtect(t, 5, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), t, 5);
+    return 1;
+}
+
 void tagpu_owndraw_init(void)
 {
-    char b[192];
+    char b[256];
     int a, c;
 
     if (!tagpu_opt_on("tagpu_owndraw.on")) return;
@@ -416,6 +550,20 @@ void tagpu_owndraw_init(void)
     }
     g_armed = a && c;
     if (g_armed) g_buildfx = install_buildfx();
+    /* the completed-unit shadow's three emit sites: all three or none, for the
+       same reason the structure-shadow pair is all-or-nothing — one path
+       emptied and not the others would make a unit's shadow depend on whether
+       it was moving when the frame was drawn */
+    if (g_armed) {
+        int sa = install_shadow(SHADOW_A_VA, SHADOW_A_RES, SHAD_A_STOLEN);
+        int sb = sa && install_shadow(SHADOW_B_VA, SHADOW_B_RES, SHAD_B_STOLEN);
+        int sc = sb && install_shadow(SHADOW_C_VA, SHADOW_C_RES, SHAD_C_STOLEN);
+        if (sa && !sc) {
+            if (sb) restore_one(SHADOW_B_VA, SHAD_B_STOLEN);
+            restore_one(SHADOW_A_VA, SHAD_A_STOLEN);
+        }
+        g_shadow = sa && sb && sc;
+    }
     /* structure shadows: only with "all" (every composite blank), and only
        as a pair -- one path redirected and not the other would leave a
        building's shadow depending on which composite it was given */
@@ -436,11 +584,12 @@ void tagpu_owndraw_init(void)
 
     _snprintf(b, sizeof b,
         "owndraw: %s target=\"%s\" opaque@0x459830=%s nano@0x459C70=%s "
-        "buildfx@0x458DD0=%s structshadow@0x4592C6+0x45952C=%s "
+        "buildfx@0x458DD0=%s structshadow@0x4592C6+0x45952C=%s shadow@0x459338+0x45958C+0x4594DB=%s "
         "(engine rasterise skipped for target; writeback must paint it)",
         g_armed ? "ARMED" : "not armed", g_target,
         a ? "OK" : "SKIP", c ? "OK" : "SKIP",
         g_buildfx ? "OK" : "SKIP",
+        g_shadow ? "OURS" : "SKIP",
         g_sshadow ? "OURS" : (g_all ? "SKIP" : "engine"));
     olog2(b);
 }
@@ -450,7 +599,7 @@ void tagpu_owndraw_flush(unsigned int frame_counter)
     if (!g_armed) return;
     if (frame_counter - g_last >= 60) {
         unsigned s = g_skipped, pa = g_passed;
-        char b[160];
+        char b[224];
         g_skipped = 0; g_passed = 0;
         g_skip_total += s; g_pass_total += pa;
         unsigned rs, ms;
