@@ -2235,6 +2235,9 @@ phenomenon and it is quoted as measured rather than rounded into the earlier ban
   the atlas's restored twin where its alpha says so, and cursor frames are above the 12-px restore
   floor, so they queue like any other UI art. Nothing has measured whether the restored cursor is
   *right*; `tascene uidiff` covers the atlas as a whole and does not single it out.
+  **[CLOSED 2026-09-13 by §24.1 — and the answer to the question this bullet asked is *no*, not
+  *unmeasured*: it is where the owner's second cyan came from, and the cursor is no longer restored
+  at all.**]**
 - **`cursorscale=` is implemented and unmeasured.** It is clamped and it scales the quad; no
   reading was taken of what a 2x or 3x cursor looks like against a 3x UI, which is the question
   §13.5 raises and leaves to the owner.
@@ -3403,11 +3406,69 @@ costs one frame with no cursor, where before it cost one frame of the engine's o
   engine's does not; captured, one cursor, correct size.
 - **In game, one cursor, no ghost** — the composite photographed at the pointer.
 
+### 24.1 The other cyan: the cursor's restored colour, and the window after a new shape  [MEASURED 2026-09-13]
+
+**THE SECOND REPORT, the same day, on the landed fix.** *"In our mouse cursor fix, we must've
+missed an edge case to de active the original game cursor. The Move cursor, the reclaim cursor
+exhibit the same clear artifact as the mouse cursor did but only once at the start of the game
+when we first use the move cursor for the first time and then just for a few seconds and then I
+can't see it anymore."*
+
+**IT IS NOT THE ENGINE'S CURSOR, and `nocursor` is the control that says so.** With our cursor off
+the engine's own is on screen every frame, and it looks like this: the sprite in its **palette**
+colours — a green four-pointed star with white highlights and a black centre. The artifact is the
+same silhouette in **flat cyan**, the terrain key's own colour, which no palette path can produce;
+it is `CURS_FS`'s twin branch (`uAtlasRGB`, the atlas's **restored** colours) that carries it. The
+suppression 24 landed is untouched by any of this — the engine is drawing nothing.
+
+**HOW IT WAS CAUGHT.** A level that has just started, a commander selected, the pointer moved over
+ground — the first use of the move cursor, which is an *animated* sprite (the 27, 29, 31, 33, 35
+pulse of §24: eight frames, cycling up and back down). Captured at `maxfps 6`, where a frame is
+166 ms and a burst of `tacli glshot` can see a transient at all: of the three presents in that
+burst that carried a cursor, **two drew the whole sprite in flat cyan — 293 and 321 texels, every
+one of them exactly (0,255,255)** — and the third in the palette's colours. A second run of the
+same trigger measured the same, 2 of 3. (A correct cursor carries four of those pixels at its
+outer tips, the sprite's own colour: the count is what separates the artifact from them.) Ten seconds later the same pointer position is clean, and the atlas dump
+(`tagpu_restoredump.on`) shows the twin's cursor cells holding restored colours of their own — dark
+olive — with no cyan anywhere in the 2048² twin: the state is transient, gone by the time anything
+has settled.
+
+**THE A/B THAT NAMES THE BRANCH.** `norestore` in `tagpu_gui.on` is `restore_step`'s own lever: it
+returns before arming, so `s_colValid` is 0 and `CURS_FS` cannot take the twin branch. The same
+trigger, the same 6 fps, eight presents: **none carrying cyan**, the one that carried a cursor in
+the palette's colours. With the change below, which makes the branch unreachable by construction,
+the artifact has two independent reasons to be gone.
+
+**WHY THE BRANCH IS WRONG HERE, not merely unlucky.** `CURS_FS` takes the twin wherever its alpha
+says "this texel has colour", and for a **newly inserted** entry that alpha is not yet a promise:
+the cell is painted by the lazy Classic++ job some frames after the insertion — the whole point of
+4b's hybrid, and the reason that job is rate-limited. Until the first paint lands, the cell holds
+whatever it held before, and a cursor that samples it draws the previous occupant's colours. That
+is the owner's *"it almost looks like the previous cursor image"* — the sentence §24 was opened
+for, one landing later and from a different cause.
+
+**THE FIX: the cursor is resolved through the PRESENTED PALETTE and never through the twin.** One
+line — `glUniform1i(s_uCursRestored, 0)` in `sharp_cursor`. §13.5's own argument already wanted it:
+the cursor sits on top of both halves of the frame and must not differ from the panel under it,
+and the palette path is the rule `LAY_FS` resolves every other engine pixel with. The engine draws
+its own cursor indexed; ours now matches it at any `k`. **Verified by running:** the same trigger
+at 6 fps, ten presents — **none cyan past the sprite's own four tip pixels** — the two that carried
+a cursor in the palette's colours and the same shape as the `nocursor` control.
+
+**NOT CLOSED HERE.** The window belongs to the *job*, not to the cursor: any other sprite whose
+cell is new — a unit frame's first appearance, an effect — samples its twin the same way, and a
+cursor-local change cannot reach it. Named rather than chased: the arithmetic that turns a stale
+activation into the key's cyan is `OUT_FS`'s `k = clamp(palette − net)`, whose channels saturate
+independently, and nothing measured here says how often or for how long that window opens for the
+world atlases.
+
 **NOT CLOSED HERE.**
 
 - **A one-frame blink on a new sprite shape** is the deliberate price of failing open: the frame
   whose draw is warm-up has neither cursor. Before this landing it had the engine's, in the
   engine's palette. Unmeasured against a player's eye and named because it is a behaviour change.
+  **[24.1:** the frames this bullet names are the same window seen from the other side — and there
+  the cursor could come out in the key's cyan, which is what the owner then reported.**]**
 - **The GAF cursor table's lifetime** is §23's open item and is unchanged by this.
 - **`cursorscale=`** stays what §17 leaves it: implemented, clamped, and the escape for a 3x UI
   at 4K. The default is 1 — one device pixel per sprite pixel, which is what the owner expects

@@ -417,7 +417,11 @@ static const char* CURS_FS =
     "    if (t.a > 0.5) { frag = vec4(t.rgb, 1.0); return; } }\n"
     /* the PRESENTED palette, the one the layer resolves the mirror through --
        not main+0x143A7. The cursor sits on top of both halves of the frame and
-       a cursor a Gamma step darker than the panel under it would show. */
+       a cursor a Gamma step darker than the panel under it would show.
+       AND IT IS THE ONLY PATH THIS PROGRAM TAKES: `uRestored` is passed 0 at
+       every call (sharp_cursor carries the argument, gui-renderer.md 24.1).
+       The twin branch above is kept because the uniform is shared with the
+       sprite program, not because a cursor may take it again. */
     "  frag = vec4(texture(uPal, vec2((i * 255.0 + 0.5) / 256.0, 0.5)).rgb, 1.0); }\n";
 static const char* LAY_FS =
     "#version 330 core\n"
@@ -1384,7 +1388,7 @@ static void sharp_cursor(const TAGPU_FRAME* f)
 {
     const TAGPU_GAFENT* e;
     float v[24], kx, ky;
-    int cx = 0, cy = 0, dx, dy, x0, y0, w, h, restored;
+    int cx = 0, cy = 0, dx, dy, x0, y0, w, h;
     if (!s_curFrame || !s_cursProg || !s_sharpW || !s_sharpH) return;
     e = tagpu_gaf_atlas_get(&s_atlas, s_curFrame);
     if (!e) {
@@ -1426,13 +1430,31 @@ static void sharp_cursor(const TAGPU_FRAME* f)
        the frame's origin either way */
     x0 = dx - (int)((float)s_curHX * s_cursorScale);
     y0 = dy - (int)((float)s_curHY * s_cursorScale);
-    restored = s_colValid && s_atlas.rgb != 0;
     x_glDisable(GL_BLEND);
     x_glDisable(GL_DEPTH_TEST);
     glUseProgram(s_cursProg);
     x_glUniform2f(s_uCursSize, (float)s_sharpW, (float)s_sharpH);
     glUniform1i(s_uCursCK, (int)e->ck);
-    glUniform1i(s_uCursRestored, restored ? 1 : 0);
+    /* THE CURSOR IS RESOLVED THROUGH THE PRESENTED PALETTE AND NEVER THROUGH
+       THE RESTORED TWIN, whatever `s_colValid` says about the rest of the
+       frame. [MEASURED 2026-09-13, from the owner's report: "the Move cursor,
+       the reclaim cursor exhibit the same clear artifact as the mouse cursor
+       did ... when we first use the move cursor for the first time ... for a
+       few seconds".] The artifact is the sprite's own silhouette drawn in the
+       terrain key's cyan, and the A/B that names its source is `norestore` in
+       tagpu_gui.on (tagpu_gui_surf.c, restore_step): with the twin off the
+       same trigger measures clean, so it is this branch -- uAtlasRGB -- that
+       carries it. A newly inserted entry's cell in the twin is painted by the
+       lazy Classic++ job some frames after the insertion, and until that
+       first paint lands the sample returns whatever the cell held: 321 texels
+       of exactly (0,255,255) over the whole star, on 2 of 8 consecutive
+       presents of a first use, gone within seconds. The palette path gives
+       the engine's own colours back, and it is the rule the layer above
+       resolves every other engine pixel with -- so the one sprite the player
+       is always looking at stops depending on that job at all. What is NOT
+       closed here: the same window exists for any other sprite whose cell is
+       new, which no cursor-local change can reach (gui-renderer.md 24). */
+    glUniform1i(s_uCursRestored, 0);
     /* units 1 and 2 must hold real textures even when the branch is off */
     x_glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, s_palTex);
