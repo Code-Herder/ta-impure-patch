@@ -27,6 +27,27 @@
 #define VA_DRAW_RET_INPLAY 0x004969D2u  /* the return address of the in-play call: */
                                         /* 0x4969CD `call 0x468cf0` inside the     */
                                         /* frame callback 0x496790, both args 1    */
+/* THE SHELL'S PUBLISH POINT. The shell never calls DrawGameScreen, so the
+   frame packet's gate has nothing to select on: what the shell does have is
+   the flip 0x4C63A0, which every present takes and which draws the cursor
+   itself. The flip cannot be observed a second time — tagpu_gui_hook's
+   observer on it hijacks the return, and tagpu_detour_observe refuses to
+   chain onto a hijacker (THE CHAIN RULE) — so the shell's channel hangs off
+   the cursor draw the flip makes: the one thing inside it that writes the
+   drawn position, and the only per-present site there that is unowned.
+
+   `stdcall(mouseObj, surface)`, `ret 8`, prologue `56 8B 74 24 08 8B 86 CE 01
+   00 00` (11 bytes, resuming at 0x4C67CB). It early-outs unless the globals'
+   +0x1CE, +0x1D2 and +0x1B2 are ALL non-zero, and only then computes
+   +0x1B6/+0x1BA from the mouse record minus the hotspot. Two call sites,
+   0x4C641B (the GDI arm, `[+0xF0] & 2` clear) and 0x4C6544 (the DirectDraw
+   arm) — mutually exclusive arms of the flip, so it runs exactly once per
+   present, in play and in the shell alike. [VERIFIED 2026-09-13 by
+   disassembly of the pristine exe; the live shell runs with all three words
+   non-zero and +0x1B6/+0x1BA == +0x196/+0x19A, and `gui off` presents the
+   cursor the layer was covering.] */
+#define VA_CURSOR_DRAW     0x004C67C0u
+
 /* the loader thread: created at 0x4982CA (`push 0x497C70; call 0x4B6B20`,
    the CRT's _beginthread over CreateThread + ResumeThread), its entry the SEH
    wrapper 0x497C70 -> 0x497180, whose last act sets bit 1 of TA_LOADFLAGS */
@@ -269,5 +290,17 @@
                                         /* uses; built at init, never rebuilt    */
 #define GFX_GAMMA          0x614        /* float: the factor 0x4BA200 scales every     */
                                         /* palette entry by (SetGamma 0x4BA590)        */
+
+/* ---- the cursor, in the same object -------------------------------------- */
+#define GFX_MOUSE_X        0x196        /* i32: the mouse record's x, and +0x19A its   */
+#define GFX_MOUSE_Y        0x19A        /* y — what 0x4C67C0 draws the cursor FROM     */
+#define GFX_CUR_REC        0x1B2        /* the sprite record: a GAF frame header, out  */
+                                        /* of the cursor table. 0 = none               */
+#define GFX_CUR_X          0x1B6        /* i32: where the engine last DREW it —        */
+#define GFX_CUR_Y          0x1BA        /* written ONLY by the draw paths, as the      */
+                                        /* mouse record minus the hotspot              */
+#define GFX_CUR_ON         0x1CE        /* u32: the cursor's hide counter — 0x4C67C0   */
+                                        /* draws only when it is non-zero              */
+#define GFX_CUR_OK         0x1D2        /* u32: and this one                           */
 
 #endif

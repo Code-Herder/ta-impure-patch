@@ -1250,12 +1250,18 @@ static void cursor_rect(const TAGPU_PACKET* pk, float* r)
        size, which a readable record of zero extent gives and which the first
        draft of this collapsed into "no rect".
 
-       The gate is `in_game`, not the size: the out-of-game packet zeroes the
-       whole header, and (0,0) is a real cursor position. ON A SHELL FRAME
-       THERE IS THEREFORE NO CURSOR STATE — see tagpu_gui.h, where that
-       deliberate consequence is written down. */
+       The gate is a flag, not the size: the level-end packet zeroes the whole
+       header, and (0,0) is a real cursor position. It was `in_game` alone
+       until landing 6 — which is exactly why the shell had no cursor: the
+       shell's packet must be in_game=0 (every world pass reads that field to
+       decide whether to draw at all), so the field could not distinguish "a
+       shell frame that carries a cursor" from "a level-end packet that
+       carries none". `cursor_live` is that distinction, and it is only ever
+       set by the two publishers that read the cursor: the in-play fill and
+       the shell's own channel. An in-play packet implies it. */
     r[0] = r[1] = -1.0f; r[2] = r[3] = 0.0f;
-    if (!pk || !pk->in_game) return;
+    if (!pk) return;
+    if (!pk->in_game && !pk->cursor_live) return;
     r[0] = (float)pk->cur_pos[0];
     r[1] = (float)pk->cur_pos[1];
     r[2] = (float)pk->cur_w;

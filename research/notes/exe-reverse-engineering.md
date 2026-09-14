@@ -2093,6 +2093,27 @@ transformed `u`: the sprite tracked `u` across the frame at 4× the pointer's sp
 left edge. `0x4C2380` — which the previous pass listed as the record-drawing path — is **DEAD**
 (zero `call` sites, literal absent); `0x4C67C0` is the live one.
 
+**`0x4C67C0` IS THE SHELL'S PUBLISH POINT — observed since 2026-09-13** (`tagpu_packet_pub.c`,
+the shell cursor channel; the *why* is the frame packet's: the GL UI layer needs the drawn
+cursor's rect on every frame it composites, and the packet's in-play gate never runs in the
+shell). Full prologue `56 8B 74 24 08 8B 86 CE 01 00 00` — `push esi; mov esi,[esp+8]; mov
+eax,[esi+0x1CE]` — 11 bytes, resuming at `0x4C67CB`; `stdcall(globals, surface)`, `ret 8`, so
+`entry_esp[1]` is `*(0x51FBD0)` itself. **The three early-out words are the gate an observer must
+reproduce**: `+0x1CE` then `+0x1D2` then `+0x1B2`, each `test`ed against zero with a jump to the
+shared exit at `0x4C6883` ([VERIFIED by disassembly of the pristine exe, 2026-09-13] — the
+`objdump -d -M intel --start-address=0x4C67C0 --stop-address=0x4C6890` above). **It runs on every
+present, in the shell too**: 40 663 entries in the first ~8 s of a main-menu session on the
+reference setup, ~5 000/s, with all three words non-zero and `+0x1B6/+0x1BA` equal to
+`+0x196/+0x19A` at a pointer over the window [MEASURED 2026-09-13].
+
+**THE ORDERING THAT MATTERS TO AN OBSERVER: `+0x1B6/+0x1BA` are written INSIDE this function**,
+at `0x4C683C` and `0x4C684E`, as `movsx` of the hotspot (`record+0x4`/`+0x6`, SIGNED — a build
+cursor's hotspot is routinely negative) subtracted from `+0x196`/`+0x19A`. So at its ENTRY those
+two words hold what the *previous* draw left — a whole frame stale whenever the pointer moved —
+and only its exit has this frame's position. An observer that needs the drawn rect must hijack
+the return (`after`), not read at entry. The other three draw paths (`0x4C2870`, `0x4C24B0`,
+`0x4C25E0`) write the same pair, from their own poll's answer rather than from `+0x196`.
+
 **`main+0x2C76` — the record the game actually acts on.** Filled once per mouse dispatch by the
 routine that ends at `0x499A2A`:
 
@@ -2671,6 +2692,17 @@ HotUnits cull `0x48BAE0`) and `0x495E66` (`DrawGameScreen(1, 1)`, once, at the e
 calls the flip itself. The scenario applier's tick stub lands its `jmp` AT `0x4969D2` while a
 scenario is being applied (`tagpu_scenario.c`, stolen `A1 E8 1D 51 00`): that changes the bytes
 there, not the return address the call pushed, so the gate holds with it installed.
+
+**THE SHELL HAS NO DRAWGAMESCREEN CALL, SO IT HAS NO RETURN ADDRESS TO GATE ON — and the flip
+cannot stand in for one [VERIFIED 2026-09-13].** `tagpu_gui_hook` already observes `0x4C63A0`
+with an `after` (it hijacks the return to close its census), and `tagpu_detour_observe` refuses
+to chain onto a stub that hijacks (tagpu_detour.h, THE CHAIN RULE) — nor can the packet's
+observer be installed first, because `tagpu_gui_init` runs before `tagpu_packet_pub_init` in
+`dllmain.c`. The shell's publish point is therefore the cursor draw the flip makes, `0x4C67C0`
+(above): unowned, once per present, and the only thing there that writes the rect the GL UI
+layer needs. **The gate that makes it the shell's and not the game's is `s_retDepth == 0`** —
+the cursor draw runs inside `DrawGameScreen`, so on an in-play frame the observer's own hijack
+of that call is on the stack (landing 6).
 
 **The commands, applied in `before` [landing 2, 2026-09-12].** The same observer's `before`, on
 the same in-play gate, is where every engine word the zoom used to write from the render thread

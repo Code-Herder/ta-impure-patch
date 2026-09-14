@@ -3273,15 +3273,24 @@ are untouched.
 
 ### Not closed here
 
-- **On a SHELL frame the cursor is the engine's own again, and that is a named regression.** The
-  cursor's position and sprite were read live out of the graphics globals on the render thread, in
-  play and on the menus alike. They are packet fields now, and the publisher only publishes from
-  the in-play gate — so a shell frame holds the out-of-game packet, `tagpu_gui_cursor_frame`
-  reports no rect, we do not own the cursor and the layer does not erase the engine's. At k = 1
-  that is the same art; at k > 1 it is the engine's 10×20 sprite blown up instead of ours at the
-  device's resolution, which is exactly what §13.5's G17c improved. Closing it needs a channel the
-  shell can publish on, and *never publish outside the `0x4969D2` gate* is one of the plan's own
-  rules — so it is left stated for the landing that builds one.
+- ~~**On a SHELL frame the cursor is the engine's own again, and that is a named regression.**~~
+  **CLOSED 2026-09-13 by landing 6** (`tagpu_packet_pub.c`, the shell cursor channel;
+  [frame packet exchange](frame-packet-exchange.html) §"The shell's channel";
+  `tagpu_engine.h VA_CURSOR_DRAW`). The regression, for the record: the cursor's position and
+  sprite were read live out of the graphics globals on the render thread, in play and on the
+  menus alike; they became packet fields, and the publisher only published from the in-play
+  gate — so a shell frame held the out-of-game packet, `tagpu_gui_cursor_frame` reported no
+  rect, we did not own the cursor, and the layer painted its twin **over** the engine's (the
+  cursor was not degraded, it was gone: measured 2026-09-13 on the main menu, `gui off` presents
+  it at (320,240) and `gui on` does not). The plan's own rule — *never publish outside the
+  `0x4969D2` gate*, because the loader thread owns the per-map arrays during a load — is intact
+  and is why the shell's channel publishes a **header-only** packet: no area, `used_bytes ==
+  sizeof(TAGPU_PACKET)`, so `area_ok` refuses every one of them and the fill reads only the
+  cursor's own words. What closed is the shell's cursor, not the rule.
+  **It is OURS in the shell now, at every k** — `curs=1,10x20,drawn=…` on the main menu — where
+  before landing 4c it was the engine's sprite at any scale. At the shell's own `k = 1` the two
+  are byte-identical (measured: the cursor zone differs by 0 px between `gui off` and `gui on`).
+  The two residuals below are unaffected and still open.
 - **A size-ANIMATED cursor can show one animation step of the engine's own art around ours**, and
   the 120-stop `strict` walk is what measured it. The engine's cursors pulse: `curs=` reports the
   move cursor at 27×27, 29×29, 31×31, 33×33 and 35×35 on landing 3's DLL and on this one alike —
