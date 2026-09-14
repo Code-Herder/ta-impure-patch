@@ -2096,7 +2096,12 @@ left edge. `0x4C2380` — which the previous pass listed as the record-drawing p
 **`0x4C67C0` IS THE SHELL'S PUBLISH POINT — observed since 2026-09-13** (`tagpu_packet_pub.c`,
 the shell cursor channel; the *why* is the frame packet's: the GL UI layer needs the drawn
 cursor's rect on every frame it composites, and the packet's in-play gate never runs in the
-shell). Full prologue `56 8B 74 24 08 8B 86 CE 01 00 00` — `push esi; mov esi,[esp+8]; mov
+shell). **It is also the FIRST of the two sites the engine's cursor draw is suppressed at,
+later the same day** — a leaf stub ahead of the observer, `cmp [g_gui_cursor_suppress]` then
+`ret 8` with a callback that keeps the channel publishing while the draw is skipped; the
+observer chains onto the leaf's *non-skip* path, so `draws` freezing while `sup` climbs is the
+suppression working rather than a dead channel. [GUI renderer](gui-renderer.html) §17 has the
+mechanism and the measurements; `0x4C25E0` below is the site that draws in play. Full prologue `56 8B 74 24 08 8B 86 CE 01 00 00` — `push esi; mov esi,[esp+8]; mov
 eax,[esi+0x1CE]` — 11 bytes, resuming at `0x4C67CB`; `stdcall(globals, surface)`, `ret 8`, so
 `entry_esp[1]` is `*(0x51FBD0)` itself. **The three early-out words are the gate an observer must
 reproduce**: `+0x1CE` then `+0x1D2` then `+0x1B2`, each `test`ed against zero with a jump to the
@@ -2121,6 +2126,50 @@ two words hold what the *previous* draw left — a whole frame stale whenever th
 and only its exit has this frame's position. An observer that needs the drawn rect must hijack
 the return (`after`), not read at entry. The other three draw paths (`0x4C2870`, `0x4C24B0`,
 `0x4C25E0`) write the same pair, from their own poll's answer rather than from `+0x196`.
+
+**`+0x1B6/+0x1BA` DOES NOT MEAN THE SAME THING ON EVERY PATH, and this line said it did until
+2026-09-13.** `0x4C683C` subtracts the hotspot; `0x4C25E0` does NOT — it stores the poll's
+answer at `0x4C284C`/`0x4C2852` and lets the blit apply the hotspot (`0x4C2728` pushes
+`[frame+4]`/`[frame+6]`). So on a frame where `0x4C25E0` ran, the pair reads `record`, where the
+flip's draw would leave `record − hotspot`, and a consumer that assumes one meaning is off by
+the sprite's hotspot on the frames the other path wrote. That is not a footnote: it is the
+fingerprint that identified which site draws in play, below, and it is why the composite's erase
+rect — `cur_pos` plus `cur_w/h` — was a hotspot's width away from the sprite it meant to erase.
+
+### `0x4C25E0` — the cursor draw that actually runs in play, and the second suppression site
+
+[MEASURED 2026-09-13, disassembly of the pristine exe plus live counters on the reference
+setup — established while retiring the engine's cursor draw, [GUI renderer](gui-renderer.html)
+§17's residual, reported by the owner as a pale outline of the previous cursor beside the real
+one while the mouse moved fast.]
+
+`stdcall(mouseObj)`, `ret 4` (epilogue `0x4C2864`), prologue `83 EC 58 56 8B 74 24 60` (8 bytes,
+resuming `0x4C25E8`). Two early-outs, both to the shared exit at `0x4C2860`: `test [+0x1D2]`
+zero, and the context acquire `0x4C5FF0` answering zero. Past them, in order: `GetCursorPos`
+(IAT `0x4FC2E4`), **write the RECORD `+0x196/+0x19A` from that answer** (not from any message),
+fill the saved-background descriptors at `+0x1C2` and `+0x1C6` from the sprite record's size,
+blit the sprite through `0x4B7F90` with the hotspot, and store `+0x1B6/+0x1BA` = the answer.
+
+**ONE CALLER, AND IT IS REACHED INDIRECTLY:** `0x4C2A0D`, inside the function at `0x4C2990`
+(which reads `[obj+0x1D6]` and `GetTickCount`). No `call 0x4C2990` exists in the image, so the
+mouse object's per-frame update runs through a pointer this pass did not chase. That matters to
+whoever reads this next: a `grep` for callers of this draw finds nothing, and "no callers" is
+what made the earlier pass write `0x4C24B0` off as dead — which it is (see the table below) —
+while this one, with the same absent callers, is the live in-play draw.
+
+**HOW IT WAS IDENTIFIED, since the callers do not say.** In play the flip's `0x4C67C0` is
+ENTERED ~6700 times a second and never draws, while `+0x1B6/+0x1BA` kept following the pointer
+— so a different site writes it, and the only candidate that stores the pair without the hotspot
+is this one. Measured after the fact: the pair equalled `+0x196/+0x19A` to the pixel at rest,
+with a 21x23 sprite whose hotspot is (10,11) — which no hotspot-subtracting path can produce.
+
+**THE OTHER TWO DRAW PATHS, AND WHY THEY ARE LEFT ALONE.** `0x4C2870` opens with `cmp
+[esi+0x1CE], 1; je 0x4C2983` — it returns at once unless the mode word is *not* 1 — and the
+runtime holds `+0x1CE == 1` in both the shell and a game, so it never draws here; its callers
+are the shell-side handlers (`0x41CE7E`, `0x41F7D0`, `0x420572`, …), which is why it looked
+live. `0x4C24B0` takes the object as an argument and has **no call site in the image**. Both
+were left unpatched deliberately [2026-09-13]: suppressing a site that cannot run buys nothing
+and costs a byte patch, and `+0x1CE` is an engine display-mode word, not ours to flip.
 
 **`main+0x2C76` — the record the game actually acts on.** Filled once per mouse dispatch by the
 routine that ends at `0x499A2A`:

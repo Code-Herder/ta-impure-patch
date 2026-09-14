@@ -2228,6 +2228,9 @@ phenomenon and it is quoted as measured rather than rounded into the earlier ban
   reachable in the shipped path (the terrain is ours whenever the world composite runs, and over
   the panel the layer's twin covers the engine's cursor either way), and not observed; the fix
   is a decision about which module owns the question, so it is recorded rather than guessed at.
+  **[MOOT 2026-09-13 (§24):** in that state the suppression flag is 0 as well, because it is set
+  by the same draw that the exemption's condition implies — so the engine's cursor is back and
+  ours is not drawn, which is one cursor rather than two.**]**
 - **The cursor is not restored under Classic++ in practice**, only in principle: `CURS_FS` reads
   the atlas's restored twin where its alpha says so, and cursor frames are above the 12-px restore
   floor, so they queue like any other UI art. Nothing has measured whether the restored cursor is
@@ -2238,7 +2241,9 @@ phenomenon and it is quoted as measured rather than rounded into the earlier ban
 - **The erase is the engine's LAST-DRAWN rect**, `+0x1B6/+0x1BA`, which is stale if the engine
   stops drawing its cursor without moving it. Phase 1's discard already trusted that rect, so this
   is not new, but under G17c a stale rect erases a rectangle of the engine's own in-viewport
-  pixels rather than merely deferring to them.
+  pixels rather than merely deferring to them. **[CLOSED 2026-09-13 by §24.** There is no engine
+  cursor to erase while ours is drawn; the rect survives as the fallback for the frames we do not
+  own, and §24 has the count that says so (`sup=` climbing, `draws=` frozen).**]**
 - **Inside the cursor's rect the world composite paints our world over whatever engine UI was
   there** — health bars, a nanoframe, chat — for that frame. Its own cursor had already covered
   those pixels in the frame being composited, so nothing is lost that the player could have seen,
@@ -3312,6 +3317,11 @@ are untouched.
   publishing the cursor's animation extent out of the cursor table — per-process and immutable, so
   a constant once read — and nothing has established that table's shape. Padding by a guess is the
   timing argument `CLAUDE.md` refuses, so this is stated and left, like the shell cursor above.
+  **[CLOSED 2026-09-13 by §24, and not by the bound this bullet asked for:** the owner reported the
+  artifact as a bug ("it leaves a blue ghost behind … the previous cursor image"), and the landing
+  retired the engine's draw instead of bounding a rect around it — a frame of pointer motion is
+  outside *any* rect taken inside `DrawGameScreen`, and the pulse is only the half of it a
+  stationary pointer can still show.**]
 - **The GAF banks' lifetime is still a class, not a proof, for anything but the "fx" bank.** Landing
   4a verified that one is loaded once per process; the cursor table and the UI sprite frames are
   covered by the same `session-reader` line and no note establishes them the same way.
@@ -3320,3 +3330,85 @@ are untouched.
   of the packet's world by whatever the queue held. `gui_flips` in the header is what makes that a
   number rather than an argument; nothing in the twin is world-anchored except the engine's own
   minimap box and dots at 1×.
+
+---
+
+## 24. The engine's cursor is retired, not erased  [MEASURED 2026-09-13]
+
+**THE REPORT.** *"Cursor and arrows seem to work now but when I move my mouse cursor quickly it
+leaves a blue ghost behind … it almost looks like the previous cursor image"*, and, from the
+clip: the cursor at rest was clean, and every star in motion carried some of its **tips in
+cyan** while the rest was ours. The cyan is the tell — it is the terrain key fill, so what was
+showing was the **engine's own frame** where the composite had discarded, and with it the
+engine's cursor.
+
+**WHY NO RECT COULD HAVE FIXED IT.** §17's erase was the packet's `cur_pos` — taken inside
+`DrawGameScreen`, before the engine blits its cursor onto the primary — so it described the
+*previous* frame's sprite. That leaves two artifacts, and only one of them needs a moving
+pointer:
+
+- **one frame of pointer motion**, which is tens of pixels at speed, and
+- **the sprite's SIZE PULSE** — the move cursor cycles 27, 29, 31, 33, 35, one pixel per side per
+  step — which leaves the outermost ring of the engine's sprite standing even with the pointer
+  perfectly still. §17's harness walk had already measured that as **4 magenta pixels at two of
+  forty-five stops**, and it asked for a *bound* on the rect. It was reported as a bug first.
+
+**THE FIX IS TO NOT DRAW IT.** `g_gui_cursor_suppress` (`tagpu_gui.h`) is 1 only while our
+cursor is the one on screen, and `tagpu_packet_pub.c` lands a flag-gated leaf stub on both sites
+that draw it: set → the function returns at once (`ret 8` / `ret 4`) and the engine draws no
+cursor at all. With nothing drawn there is nothing to erase, lag or leave standing, and §17's
+erase rect and the layer's `cur` exemption become **fallbacks for the frames we do not own** —
+`nocursor`, the atlas warming on a new sprite, a failed GL init — rather than the mechanism.
+
+**TWO SITES, AND IN PLAY IT WAS THE SECOND ONE.** `0x4C67C0`, the flip's draw and landing 6's
+publish point, is *entered* ~6700 times a second in play and never draws (its siblings' gates
+leave it nothing to do). The site that wrote `+0x1B6/+0x1BA` was **`0x4C25E0`**, the mouse
+object's per-frame update reached indirectly through `0x4C2990` — identified by its own
+fingerprint, that it stores the poll's answer with **no** hotspot subtraction where the flip's
+draw subtracts one, so at rest the pair equalled the record to the pixel under a sprite whose
+hotspot is (10, 11). `exe-reverse-engineering.md` has both entries and the anatomy.
+`0x4C2870` is gated out (`cmp [+0x1CE], 1`) and `0x4C24B0` has no call site; both are left
+unpatched, because suppressing a site that cannot run buys nothing and costs a byte patch.
+
+**THE FLAG IS LATCHED AT THE END OF A PRESENT, NEVER DURING ONE, and the first cut got that
+wrong in a way that reads like success.** It cleared the flag on entry to `tagpu_gui_present` and
+set it on the draw — but the engine draws its cursor *inside the flip whose present this is*, so
+the clear-and-set window let exactly one engine draw per frame through. Measured: `sup` climbing
+at 6610/s **with `draws` still at 60/s**, i.e. a suppression that suppressed everything except
+the draw that mattered. `s_curDrew` is now the present's own answer, published once when the
+present ends, so the game thread can never read the mid-present 0.
+
+**FAIL-OPEN, BY CONSTRUCTION.** The flag is 0 at rest; every path out of `tagpu_gui_present` that
+does not reach the cursor draw publishes 0 — not installed, no frame, the trigger off, `off`
+inside the trigger, a failed GL init. A frame that does not reach it leaves the engine's cursor
+alone exactly as before this landing, which is also the atlas's warm-up handoff: a new sprite
+costs one frame with no cursor, where before it cost one frame of the engine's own.
+
+**VERIFIED BY RUNNING, on the reference setup.**
+
+- In play, both sites suppressed: the flip observer's `draws` counter **frozen** while ours draws
+  60/s (`drawn` +300 per 5 s in the heartbeat), `sup` +6716/s at the flip and +30/s at the poll —
+  the poll rate is the sim tick, not the frame.
+- **The engine's pair stops tracking the pointer**: `+0x1B6/+0x1BA` stayed at (400, 300) while
+  the record followed injected moves to (1500, 900) and (800, 600). That is the direct test that
+  *nothing* draws: any path that drew would write that pair.
+- **The record still follows the pointer**, which is the input question this could have broken:
+  the suppressed poll wrote `+0x196/+0x19A` from its own `GetCursorPos`, and the game's dispatch
+  reads that record through `PeekMouseEvent`'s fallback (`0x4C2DE0`). The message path
+  (`0x4C2360`) writes the same record, and the measurement says so — with all input injected, not
+  read off the engine.
+- **The main menu** — the case landing 6 fixed, and the one this could have undone, because the
+  shell's cursor is the engine's there. With both sites suppressed our cursor draws (the
+  channel's `after` callback publishes the sprite record while the draw is skipped) and the
+  engine's does not; captured, one cursor, correct size.
+- **In game, one cursor, no ghost** — the composite photographed at the pointer.
+
+**NOT CLOSED HERE.**
+
+- **A one-frame blink on a new sprite shape** is the deliberate price of failing open: the frame
+  whose draw is warm-up has neither cursor. Before this landing it had the engine's, in the
+  engine's palette. Unmeasured against a player's eye and named because it is a behaviour change.
+- **The GAF cursor table's lifetime** is §23's open item and is unchanged by this.
+- **`cursorscale=`** stays what §17 leaves it: implemented, clamped, and the escape for a 3x UI
+  at 4K. The default is 1 — one device pixel per sprite pixel, which is what the owner expects
+  and what a 1024x768 window at `k = 1` delivers. Nothing scales the cursor with the HUD.
