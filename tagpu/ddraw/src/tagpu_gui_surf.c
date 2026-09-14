@@ -190,6 +190,14 @@ static GLuint s_sharpProg;              /* QVS + SHARP_FS: a client's flat-colou
 static GLint  s_uSharpProgSize, s_uSharpProgCol;
 static GLuint s_cursProg;               /* QVS + CURS_FS: the cursor's frame out of the UI atlas        */
 static GLint  s_uCursSize, s_uCursCK, s_uCursRestored;
+/* THE ENGINE'S CURSOR IS OURS TO DRAW (tagpu_gui.h carries the whole
+   argument). `s_curDrew` is THIS present's answer — zeroed on entry to
+   tagpu_gui_present, set at the tail of a successful sharp_cursor — and the
+   published flag is that answer, written once when the present ends. Read on
+   the game thread by the detour tagpu_packet_pub.c lands on the engine's own
+   cursor draw; it can never read the mid-present 0. */
+static int s_curDrew = 0;
+volatile unsigned char g_gui_cursor_suppress = 0;
 static GLuint s_strProg;                /* QVS + STR_FS: a string op's glyphs into a twin (G17d)        */
 static GLint  s_uStrSize, s_uStrFg, s_uStrBg, s_uStrTr;
 static unsigned s_strings = 0;          /* string ops stamped                                          */
@@ -1438,6 +1446,14 @@ static void sharp_cursor(const TAGPU_FRAME* f)
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
     x_glDrawArrays(GL_TRIANGLES, 0, 6);
     s_curDrawn++;
+    /* OUR CURSOR IS ON SCREEN FROM HERE, so the engine's next draw is skipped
+       and there is no second cursor to erase, lag or leave standing. Recorded,
+       not published: tagpu_gui_present writes the flag once, when the present
+       that this draw belongs to has finished (see the latch there). Paired
+       with the zero it writes on every path that does not reach here — the
+       atlas warming, `nocursor`, a bailed sharp pass, the layer off — so the
+       engine's cursor comes back for those frames exactly as it did before. */
+    s_curDrew = 1;
 }
 
 /* THE MINIMAP'S BASE AT ITS NATIVE SIZE (13.6, G17e).
@@ -2006,14 +2022,28 @@ static void poll(void)
 void tagpu_gui_present(const TAGPU_FRAME* f)
 {
     static unsigned last = 0;
-    if (!tagpu_gui_installed() || !f) return;
+    /* THE FLAG IS LATCHED AT THE END OF A PRESENT, NEVER DURING ONE. Setting
+       it on the draw and clearing it on entry looks equivalent and is not: the
+       engine draws its cursor from inside the flip whose present this is, so
+       a window that reads 0 while we composite lets exactly one engine draw
+       per frame through — which is what the first cut of this did, at 60 Hz,
+       with the pair still tracking the pointer to prove it. MEASURED
+       2026-09-13: `sup` climbing at 6610/s with `draws` still at 60/s is that
+       bug, and it reads like a working suppression.
+       So: `s_curDrew` is this present's own answer, and only the completed
+       present publishes it. Every early return below publishes 0 — not
+       installed, no frame, the trigger off, a failed GL init — which is the
+       behaviour every one of those paths had before the flag existed. */
+    s_curDrew = 0;
+    if (!tagpu_gui_installed() || !f) { g_gui_cursor_suppress = 0; return; }
     poll();
     if (!s_on) {
         /* off: nothing is published, but drain whatever was */
         g_guiq.qTail = g_guiq.qHead; g_guiq.aTail = g_guiq.aHead;
+        g_gui_cursor_suppress = 0;
         return;
     }
-    if (!init_gl()) return;
+    if (!init_gl()) { g_gui_cursor_suppress = 0; return; }
     upload_palette();       /* before restore_step, which compares against it */
     restore_step();         /* before the drain: its sprite ops ask whether colour is valid */
     /* STEP THE RESTORER WHEN NOTHING ELSE DID. tagpu_rglsl_step's only other
@@ -2040,6 +2070,10 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
     unbind_all();
     glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
     glViewport(f->vp_x, f->vp_y, f->vp_w, f->vp_h);
+    /* THE ONE PUBLICATION, and the present is over for this purpose: ours (if
+       sharp_cursor drew one) is in the frame that was just composited, so the
+       engine's draw at its next flip is skipped — see the latch at the top. */
+    g_gui_cursor_suppress = s_curDrew;
     if (f->frame_counter - last >= 300) {
         /* 318 bytes of literal + 52 conversions: the worst case is ~900, so the
            buffer grew with the merge (the cursor, string and minimap counters

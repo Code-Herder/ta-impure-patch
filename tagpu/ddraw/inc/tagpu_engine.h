@@ -55,6 +55,32 @@
    was covering.] */
 #define VA_CURSOR_DRAW     0x004C67C0u
 
+/* THE IN-GAME CURSOR DRAW, AND NOT THE FLIP'S. MEASURED 2026-09-13, while
+   retiring the engine's cursor: in play the flip's draw above is ENTERED ~5900
+   times a second and never once draws (its siblings' gates leave it nothing to
+   do), while THIS one is what writes +0x1B6/+0x1BA — the pair our composite's
+   erase rect was built from. Its fingerprint is exact and is what identified
+   it: it writes the pair from the POLL's answer with NO hotspot subtraction,
+   where the flip's draw subtracts it (0x4C683C), so in play the pair equalled
+   the mouse record to the pixel while our rect assumed a hotspot offset.
+
+   `stdcall(mouseObj)`, `ret 4` (epilogue 0x4C2864), prologue `83 EC 58 56 8B 74
+   24 60` (8 bytes, resuming 0x4C25E8). Two early-outs, both to 0x4C2860:
+   `[+0x1D2] == 0`, and the context acquire 0x4C5FF0 answering 0. Past them it
+   polls GetCursorPos (IAT 0x4FC2E4), writes the RECORD +0x196/+0x19A from that
+   answer, fills the saved-background descriptors at +0x1C2/+0x1C6 from the
+   sprite record, blits through 0x4B7F90 with the hotspot, and stores
+   +0x1B6/+0x1BA. ONE caller, 0x4C2A0D inside 0x4C2990 — itself reached
+   INDIRECTLY (no `call 0x4C2990` in the image), the mouse object's per-frame
+   update.
+
+   THE OTHER TWO DRAW PATHS ARE INERT IN THIS CONFIGURATION and are left alone
+   deliberately [disassembly, 2026-09-13]: 0x4C2870 early-outs on `cmp
+   [+0x1CE],1` (`je 0x4C2983`) and the runtime holds +0x1CE == 1, and 0x4C24B0
+   has no call site in the image at all. Suppressing a site that cannot run
+   buys nothing and costs a byte patch. */
+#define VA_CURSOR_POLL     0x004C25E0u
+
 /* the loader thread: created at 0x4982CA (`push 0x497C70; call 0x4B6B20`,
    the CRT's _beginthread over CreateThread + ResumeThread), its entry the SEH
    wrapper 0x497C70 -> 0x497180, whose last act sets bit 1 of TA_LOADFLAGS */

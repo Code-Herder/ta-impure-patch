@@ -70,6 +70,25 @@ unsigned tagpu_gui_flips(void);                     /* the publisher's flip coun
    either way — and recorded in gui-renderer.md 17 "Not closed here" rather
    than closed by guessing which module should own the question. */
 struct TAGPU_PACKET;
+/* THE ENGINE'S OWN CURSOR DRAW IS SUPPRESSED WHILE THIS IS SET (2026-09-13).
+   The line above this block is why: a rect taken inside DrawGameScreen cannot
+   describe a cursor the engine blits afterwards, so the engine's sprite was
+   forever one frame of motion, or one step of its size pulse, outside the
+   rect we erased — a pale outline of the PREVIOUS cursor standing beside ours,
+   worst while the pointer moves fast. Suppressing the draw retires the whole
+   coordination: with nothing drawn there is nothing to erase, nothing to lag,
+   and the composite's cursor rect and the layer's `cur` exemption become
+   fallbacks for the frames we do not own rather than the mechanism.
+
+   WRITTEN ON THE RENDER THREAD, READ ON THE GAME THREAD, and it is 1 only if
+   the sharp layer actually drew our cursor in the present just ended: the
+   engine's draw is then skipped at its next flip. The lag is one frame and it
+   is in the SAFE direction — a frame where we did not draw leaves the flag 0
+   and the engine's cursor comes back for that frame, which is the warm-up
+   handoff the atlas already relies on. It is 0 at rest, so an install that
+   never runs, a GL or atlas failure, or `nocursor` all fail open to exactly
+   today's behaviour. tagpu_packet_pub.c lands the detour that reads it. */
+extern volatile unsigned char g_gui_cursor_suppress;
 /* ON A SHELL FRAME THERE IS NO CURSOR STATE, and that is a deliberate,
    NAMED consequence of landing 4c rather than an oversight. The cursor's
    position and sprite used to be read live out of the graphics globals here,
