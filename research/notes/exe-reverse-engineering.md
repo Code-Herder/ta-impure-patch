@@ -2106,6 +2106,14 @@ present, in the shell too**: 40 663 entries in the first ~8 s of a main-menu ses
 reference setup, ~5 000/s, with all three words non-zero and `+0x1B6/+0x1BA` equal to
 `+0x196/+0x19A` at a pointer over the window [MEASURED 2026-09-13].
 
+**But AT MOST once per present, not exactly once — three exits leave before the call.** The
+DirectDraw arm skips `0x4C6544` at `0x4C666A` (no primary, `[+0xDC] == 0`), at `0x4C67B0` (the
+back buffer's size disagrees with the screen's) and at `0x4C65A0` (`Lock` failed — the
+DDERR_SURFACELOST arm), and on those presents the engine draws no cursor at all. An observer on
+this site therefore sees nothing on them, which is the one gap a hook here cannot close: the flip
+that would report "this present happened, without a cursor" is exactly the site the chain rule
+refuses.
+
 **THE ORDERING THAT MATTERS TO AN OBSERVER: `+0x1B6/+0x1BA` are written INSIDE this function**,
 at `0x4C683C` and `0x4C684E`, as `movsx` of the hotspot (`record+0x4`/`+0x6`, SIGNED — a build
 cursor's hotspot is routinely negative) subtracted from `+0x196`/`+0x19A`. So at its ENTRY those

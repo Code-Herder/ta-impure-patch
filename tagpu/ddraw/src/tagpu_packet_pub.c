@@ -126,6 +126,7 @@ static volatile unsigned s_cDrawsAll, s_cDraws, s_cForeign, s_cDeep;
    channel's own section */
 static volatile unsigned s_cCursorDraws, s_cCursorOwned, s_cCursorHidden,
                          s_cCursorPub, s_cCursorSkip, s_cCursorForeign;
+static volatile unsigned s_cCursorStuck;    /* hijack slots that were never given back */
 /* the apply's cost: 2 us buckets to 512 us, plus an overflow bucket, written
    on the game thread and read by the heartbeat on the render thread */
 #define APPLY_HIST_N 256
@@ -1932,9 +1933,9 @@ static void extra(char* buf, unsigned cap, double secs)
            thousands of times a second, since the gate is what keeps this
            channel off the in-play publisher's slot. */
         _snprintf(buf + n, cap > n ? cap - n : 0,
-                  " | cursor: draws=%u owned=%u hidden=%u pub=%u skip=%u foreign=%u",
+                  " | cursor: draws=%u owned=%u hidden=%u pub=%u skip=%u foreign=%u stuck=%u",
                   s_cCursorDraws, s_cCursorOwned, s_cCursorHidden,
-                  s_cCursorPub, s_cCursorSkip, s_cCursorForeign);
+                  s_cCursorPub, s_cCursorSkip, s_cCursorForeign, s_cCursorStuck);
     }
     if (cap) buf[cap - 1] = 0;
     lastAll = all; lastIn = in;
@@ -2004,18 +2005,35 @@ static void* __cdecl after_teardown(unsigned int* regs)
    per-present site inside it that nothing owns and the only code that WRITES
    the drawn position (+0x1B6/+0x1BA) out of the mouse record. It is called
    from two mutually exclusive arms of the flip (0x4C641B, 0x4C6544), so
-   exactly one call per present, in play and in the shell alike.
+   AT MOST one call per present, in play and in the shell alike — the
+   DirectDraw arm leaves before its call on three exits (no primary, the back
+   buffer's size disagreeing with the screen, and a failed Lock), and on those
+   the engine draws no cursor; nothing publishes and the consumer keeps the
+   previous state. tagpu_engine.h names the three, and it is the one gap a
+   hook here cannot close.
    tagpu_engine.h VA_CURSOR_DRAW carries the disassembly and the live reading.
 
-   THE GATE IS `s_retDepth == 0`, AND IT IS EXACT RATHER THAN TIMED. The cursor
-   draw runs INSIDE DrawGameScreen, so on every in-play frame `before_draw` has
-   already pushed the hijacked return and `s_retDepth` is non-zero; in the
-   shell, on the loading screen and under the screenshot sweep no in-play draw
-   is on the stack and it is 0 — the exact complement of the in-play gate,
-   decided by the same observer. That precision is not tidiness: this channel
-   and the in-play publish share ONE mailbox, whose FRESH gate drops the second
-   publisher of a frame, so two publishes in one draw would be a coin flip over
-   which one the render thread ends up holding.
+   THE GATE IS TWO TESTS, AND NEITHER IS A DELAY. `s_retDepth == 0` and
+   `!s_levelOpen`.
+     - **`s_retDepth == 0`** — the cursor draw runs INSIDE DrawGameScreen, so
+       on every in-play frame `before_draw` has already pushed the hijacked
+       return. Not tidiness: this channel and the in-play publish share ONE
+       mailbox, whose FRESH gate drops the second publisher of a frame, so two
+       publishes in one draw would be a coin flip over which one the render
+       thread ends up holding.
+     - **`!s_levelOpen`** — because `s_retDepth == 0` is NOT the complement of
+       the in-play gate, which the first review of this landing found and the
+       disassembly confirms: the screenshot sweep `0x495A30` ends with its own
+       `DrawGameScreen(1, 1)` at `0x495E66` (both arguments 1, so the flip's own
+       gate at `0x46A3CC`/`0x46A3D7` passes and the cursor draw runs), and the
+       address that call pushes is `0x495E6B` rather than the in-play
+       `0x4969D2`, so nothing is on the stack. Without this test a Ctrl+F9
+       screenshot would publish an `in_game = 0` packet from the middle of a
+       level — and every world pass reads that field to decide whether to draw
+       at all, so the world would blink out for a present or two. The movie
+       recorder 0x4962C2 is excluded by the flip's own gate (it passes
+       drawUnits = 0), which is why only the screenshot path needed this.
+   Both are decided by the same observer, and neither depends on timing.
 
    FOR THE SAME REASON the in-play publisher now FORCES its first packet of a
    level (see after_draw). This channel publishes all through a load, at the
@@ -2083,6 +2101,19 @@ static int __cdecl before_cursor(void* entry_esp)
     /* in play the frame packet carries the cursor, and this channel must not
        race the publish that follows it in the same draw */
     if (s_retDepth != 0) return 0;
+    /* AND NO LEVEL MAY BE IN PLAY, which is not the same test (landing review).
+       The screenshot sweep 0x495A30 ends with its own `DrawGameScreen(1, 1)` at
+       0x495E66 — drawUnits and blitScreen both 1, so the flip's gate at
+       0x46A3CC/0x46A3D7 passes and 0x4C67C0 runs — but the address that call
+       pushes is 0x495E6B, not the in-play 0x4969D2, so `before_draw` pushed
+       nothing and `s_retDepth` is 0. Mid-level, this channel would then publish
+       an `in_game = 0` packet from the middle of the level, and every world
+       pass reads that field to decide whether to draw at all: a Ctrl+F9
+       screenshot would blank the world for a present or two. `s_levelOpen` is
+       this module's own "a level is being played" — set at the level's first
+       in-play publish, cleared by `tagpu_packet_pub_level_end` — and it is 1
+       for the whole of a level, screenshots included. */
+    if (s_levelOpen) return 0;
     g = *(const char* const*)TA_GFX_PP;
     if (!ptr_ok(g)) return 0;
     if (RDU32(g, GFX_CUR_ON) && RDU32(g, GFX_CUR_OK) && RDU32(g, GFX_CUR_REC)) {
@@ -2091,7 +2122,22 @@ static int __cdecl before_cursor(void* entry_esp)
            which on a frame the pointer moved is a whole frame stale, and the
            rect the layer discards at is exactly this number */
         if (InterlockedCompareExchangePointer((void* volatile*)&s_cursorRet,
-                                              (void*)(size_t)((unsigned*)entry_esp)[0], NULL) != NULL) return 0;
+                                              (void*)(size_t)((unsigned*)entry_esp)[0], NULL) != NULL) {
+            /* THE SLOT WAS ALREADY TAKEN, which should be impossible: this
+               site does not nest. It means a hijacked return never reached the
+               trampoline — an exception unwinding through the draw — so the
+               slot is stuck and every later frame fails here. The channel is
+               then DEAD for the session and the shell cursor goes back to
+               being the engine's under our layer, which is the original bug.
+               COUNTED rather than recovered from: the stale value may be a
+               live frame's return address, and there is nothing here that can
+               tell. `stuck` climbing in the heartbeat is the only signal that
+               distinction can be made from, and without it the channel dies
+               silently — `draws` climbs and `pub` freezes, which is exactly
+               what the draw's own early-out looks like. */
+            s_cCursorStuck++;
+            return 0;
+        }
         s_cCursorOwned++;
         return 1;
     }

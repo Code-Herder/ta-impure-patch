@@ -41,11 +41,18 @@
    +0x1CE, +0x1D2 and +0x1B2 are ALL non-zero, and only then computes
    +0x1B6/+0x1BA from the mouse record minus the hotspot. Two call sites,
    0x4C641B (the GDI arm, `[+0xF0] & 2` clear) and 0x4C6544 (the DirectDraw
-   arm) — mutually exclusive arms of the flip, so it runs exactly once per
-   present, in play and in the shell alike. [VERIFIED 2026-09-13 by
-   disassembly of the pristine exe; the live shell runs with all three words
-   non-zero and +0x1B6/+0x1BA == +0x196/+0x19A, and `gui off` presents the
-   cursor the layer was covering.] */
+   arm) — mutually exclusive arms of the flip, so it runs AT MOST once per
+   present, in play and in the shell alike. "At most", not "exactly": the
+   DirectDraw arm leaves before reaching its call on three exits — 0x4C666A
+   (no primary, `[+0xDC] == 0`), 0x4C67B0 (the back buffer's size disagrees
+   with the screen) and 0x4C65A0 (`Lock` failed / DDERR_SURFACELOST) — and on
+   such a present the engine draws no cursor at all. Nothing then publishes
+   and the consumer keeps the previous state, which is one frame of a stale
+   rect on paths that mean the primary is gone anyway; named here because an
+   observer on this site cannot see them. [VERIFIED 2026-09-13 by disassembly
+   of the pristine exe; the live shell runs with all three words non-zero and
+   +0x1B6/+0x1BA == +0x196/+0x19A, and `gui off` presents the cursor the layer
+   was covering.] */
 #define VA_CURSOR_DRAW     0x004C67C0u
 
 /* the loader thread: created at 0x4982CA (`push 0x497C70; call 0x4B6B20`,
@@ -297,8 +304,11 @@
 #define GFX_CUR_REC        0x1B2        /* the sprite record: a GAF frame header, out  */
                                         /* of the cursor table. 0 = none               */
 #define GFX_CUR_X          0x1B6        /* i32: where the engine last DREW it —        */
-#define GFX_CUR_Y          0x1BA        /* written ONLY by the draw paths, as the      */
-                                        /* mouse record minus the hotspot              */
+#define GFX_CUR_Y          0x1BA        /* written ONLY by the draw paths. 0x4C67C0    */
+                                        /* writes it as the mouse record minus the     */
+                                        /* hotspot; the three polling paths          */
+                                        /* (0x4C2870, 0x4C24B0, 0x4C25E0) write the   */
+                                        /* same pair from their OWN poll's answer     */
 #define GFX_CUR_ON         0x1CE        /* u32: the cursor's hide counter — 0x4C67C0   */
                                         /* draws only when it is non-zero              */
 #define GFX_CUR_OK         0x1D2        /* u32: and this one                           */

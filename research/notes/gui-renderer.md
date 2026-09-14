@@ -3287,10 +3287,15 @@ are untouched.
   and is why the shell's channel publishes a **header-only** packet: no area, `used_bytes ==
   sizeof(TAGPU_PACKET)`, so `area_ok` refuses every one of them and the fill reads only the
   cursor's own words. What closed is the shell's cursor, not the rule.
-  **It is OURS in the shell now, at every k** — `curs=1,10x20,drawn=…` on the main menu — where
-  before landing 4c it was the engine's sprite at any scale. At the shell's own `k = 1` the two
-  are byte-identical (measured: the cursor zone differs by 0 px between `gui off` and `gui on`).
-  The two residuals below are unaffected and still open.
+  **It is OURS in the shell now** — `curs=1,10x20,drawn=599,warm=1` on the main menu — where
+  before landing 4c it was the engine's sprite at any scale. At `k = 1` the two are
+  byte-identical (measured: the cursor zone differs by 0 px between `gui off` and `gui on`).
+  **The shell's `k ≠ 1` case is NOT separately measured**: the shell runs at 640×480 in a
+  640×480 window here, so `k = 1`, and what the claim above rests on for larger `k` is that the
+  shell now goes through the same `tagpu_gui_cursor_frame` path whose device-size draw was
+  measured at `k = 1.5` and `3` in game (§17). An inference from that measurement, not a second
+  one — and the shell is where a dragged window would put it. The two residuals below are
+  unaffected and still open.
 - **A size-ANIMATED cursor can show one animation step of the engine's own art around ours**, and
   the 120-stop `strict` walk is what measured it. The engine's cursors pulse: `curs=` reports the
   move cursor at 27×27, 29×29, 31×31, 33×33 and 35×35 on landing 3's DLL and on this one alike —
