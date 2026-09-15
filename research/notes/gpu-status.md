@@ -2047,6 +2047,14 @@ grey/yellow view rectangle behind the digits, which reads convincingly as a corr
 you take the pair with the readout off. And the glyph advance is `w + 1`, so it renders as
 `FPS175` with no gap after the label.
 
+**Since G19d it is also the FIRST pass with a Vulkan edition** ([§2.26](#226-the-fps-readout-drawn-by-vulkan-tagpu_vk_fpsc-tagpu_vk_passh-tagpu_vk_shotc-phase-g-g19d)),
+and two things about this file changed for it. `tagpu_fps_quads` hands the frame's vertices over
+**exactly once** — the freshness rule, since the overlay does not run on every path that reaches
+the swap and a frame it skipped must not redraw the last one's text. And `tagpu_fps.ab` captures
+one frame of the readout over a black field to `tagpu_fps_gl.ppm`: an **oracle** rather than
+instrumentation, because a readout drawn over the game cannot be compared against anything with
+the game under it. It clears the whole frame on purpose, once, until the lever is taken away.
+
 ### 2.15 HUD scale (`tagpu_hud.c`, **off unless armed**, `tagpu_hud.on`) — Phase F G18f
 
 The in-game HUD magnified inside the player's own Screen Size, over a world the engine goes on
@@ -3029,7 +3037,9 @@ whose DATA arrives entirely in the frame packet.
   footprint; after the cache-key fix, a placed mex renders pixel-identical with the ghost armed
   and disarmed (mean diff 6.0 vs the 6.7 off/off baseline).
 
-### 2.20 The Vulkan lane (`tagpu_vk.c`, **off unless armed**, `tagpu_vk.on`) — Phase G, G19a + G19b
+### 2.24 The Vulkan lane (`tagpu_vk.c`, **off unless armed**, `tagpu_vk.on`) — Phase G, G19a + G19b
+
+*(This was numbered 2.20 until 2026-09-15, which §2.20 — landing 4b's fog grids — already was; §2.21c's "the static fixture of §2.20" means that one.)*
 
 **It touches no engine address, and it must never need to.** `tagpu_vk.c` is not on
 `thread-split.allow` and every value it uses arrives as an argument from `ogl_render` — which is
@@ -3147,6 +3157,213 @@ plate's bar count saturates while the caption stays right, which is the half tha
 card. The caption is clipped to the **120×20 plate** whatever width the gadget
 carries ([GUI gadgets](gui-gadgets.html) 10.2), which is why `build_gpu_text` drops the longest
 leading run of whole words every listed device shares rather than trying to widen the row.
+
+### 2.25 The shader pipeline (`tools/spirv-gen.py`, `tools/spirv-check.sh`, `tagpu/ddraw/inc/spirv/`) — Phase G, G19c
+
+**The GLSL does not move, and that is the design rather than an economy.** The fork's shaders live
+as C string literals inside the pass that owns them, next to the comment that explains the maths.
+A Vulkan lane carrying its own edition of them would be a second copy of twenty-one programs that
+nothing forces to agree, and Phase G's whole method is that the GL lane is the ORACLE for the
+Vulkan one — two shaders that disagree cannot be each other's oracle. So `tools/spirv-gen.py`
+reads them back out, transforms them and compiles them:
+
+```
+the C string --(cc -E)--> GL 3.3 GLSL --(transform)--> Vulkan GLSL --(glslang)--> SPIR-V
+                                                                   --> uint32_t[] C header
+```
+
+**Through the C PREPROCESSOR, not a regex.** `tagpu_terr.c`'s vertex shader splices
+`TAGPU_EDGE_NUDGE` into the middle of a line, so the extraction has to expand macros exactly as
+the compiler does. `$(CC) -E` is what does it — and its `# <line> "<file>"` markers have to be
+skipped, because the quoted FILE NAME in one of them is otherwise spliced into the middle of a
+shader, which compiles and then draws something wrong.
+
+**The invariant, checked on every run rather than argued.** Strip the global-scope `in` / `out` /
+`uniform` declarations out of a shader and out of its translation, and the two must be
+**byte-identical** — every function, every constant, every line of every body. That residual is
+**75 % of the source text** (27 687 of 36 744 bytes over the thirty-four). The transform may touch
+declarations and the two built-in renames below, and the build fails if it ever touches anything
+else. Verified not to be vacuous: a one-character edit inside a body is caught.
+
+**The transform, in full.**
+
+| | |
+|---|---|
+| `#version 330 core` → `#version 450` | |
+| non-opaque uniforms → one **unnamed** `std140` block | unnamed, so every reference in the body still reads `uGame` and no body line changes. The block's std140 offsets are computed and written into the generated header beside the code, because the C side has to fill that buffer and the offsets are the contract |
+| samplers and named blocks → a `binding` | |
+| **bindings are allocated BY STAGE, not per program** | vertex: 0 = the globals block, 1.. named blocks, 8.. samplers; fragment: 32, 33.., 40.. . `QVS` is the vertex stage of six programs, so a per-program allocation would need the same source compiled six times and two programs could then disagree about what binding 3 is. The gap means a vertex and a fragment stage can never collide whatever either declares |
+| varyings → explicit locations, **decided by the vertex stage** | each vertex `out` takes locations in declaration order; a fragment `in` of the same name takes the number ITS vertex stage gave it, so a fragment stage that declares a subset, or in another order, still matches. A fragment input with no matching vertex output is an error here rather than a link failure in a driver |
+| fragment outputs → locations in declaration order | which is the order `glDrawBuffers` addresses them in under GL |
+| `gl_VertexID` / `gl_InstanceID` → `gl_VertexIndex` / `gl_InstanceIndex` | the same value for every draw the fork issues (`firstVertex` and `firstInstance` are 0 everywhere) |
+
+**What it deliberately does NOT do**, because each is pipeline state and a source edit would make
+the shader disagree with its own GL oracle: the **Y flip** (a negative viewport height — G19d),
+the **depth range** (GL maps clip z [−1, 1] to [0, 1], Vulkan takes [0, 1] directly, and every
+shader here already writes a z in [0, 1], so under GL the near half of that range is thrown away
+and under Vulkan it is not — a pass that depth-tests must account for it), and **`gl_FragCoord`'s
+origin** (lower left under GL, upper left under Vulkan; a flipped viewport puts it back).
+
+**The count: 34 shader sources in 21 programs, not 37.** The roadmap's 37 was a `grep -c '#version
+330 core'`, and three of those hits are not shaders — a comment in `tagpu_terr.c`, a comment in
+`tagpu_restore_glsl.h`, and the `_snprintf` in `tagpu_restoreglsl.c` that builds a runtime prefix.
+Twenty-one programs over thirty-four sources because six of them share `QVS` and two share
+`tagpu_native`'s fragment stage. **39 649 SPIR-V words** in eleven headers, 546 KB of text.
+
+**The one cross-module pairing is a real check.** `tagpu_posedraw`'s vertex stage is linked with
+`tagpu_native`'s fragment stage (`tagpu_native_unit_fs()`), so that fragment shader's varying
+locations are computed from two different vertex stages and the generator fails if they disagree.
+They agree.
+
+**Where the translation runs: NOT in the build.** The roadmap's gate asked for build-time
+translation and named this as the fallback; it is the better answer rather than a retreat. The
+build has four entry points — `tagpu/ddraw/Makefile`, the CI job that runs it, `build.cmd` and the
+MSVC project — and only the first two are ours. A GLSL compiler in the build breaks the other two
+outright and puts a 30 MB toolchain between a contributor and a DLL, to translate text that
+changes when a shader changes, which is to say almost never. So the SPIR-V is generated on a desk
+and committed as text (`uint32_t[]` C headers, so `.publish-allow` has nothing to refuse).
+
+**What stops committed generated code from rotting**, which is the only real objection to it.
+Every header carries, per shader, the SHA-256 of the Vulkan GLSL it was compiled from, plus the
+hash of the tool's own transform. `tools/spirv-check.sh` — a prerequisite of `ddraw.dll` in the
+Makefile, in the same place and for the same reason as `thread-split-check.sh` — re-runs the
+extraction and the transform (the C preprocessor and python3, **never glslang**) and compares,
+and then syntax-compiles each header standalone because most of these arrays are not `#include`d
+anywhere yet. **2.0 s**, and verified: a one-character edit to `tagpu_fps`'s fragment shader fails
+the build naming that shader.
+
+**glslang is pinned by version AND by hash** in `tools/glslang-vendor.json` (16.6.0), fetched by
+`tools/glslang-fetch.sh` into gitignored `tools/glslang/` — a dev-loop tool, the same shape as
+`tools/ghidra/` and `tools/vendor/`.
+
+**The restorer's five shaders are NOT among the thirty-four**, and the reason is a fact about them
+rather than a shortcut. `tagpu_restore_glsl.h`'s shaders are compiled at run time under a prefix
+the DEVICE decides — `NK` from `GL_MAX_UNIFORM_BLOCK_SIZE` and `GL_MAX_DRAW_BUFFERS` divided by
+the weights' widest k-block, `WMAX` from `NK` times a number read out of the weights file. `NK`
+changes how many fragment outputs the conv pass declares (`#if NK > 1` … `> 4`), so it cannot be a
+specialisation constant, and pre-compiling means enumerating a cross product of a device limit and
+a data file. That is a decision about what the shipped weights are allowed to be — G19e's, when
+the restorer pass is actually ported.
+
+### 2.26 The FPS readout, drawn by Vulkan (`tagpu_vk_fps.c`, `tagpu_vk_pass.h`, `tagpu_vk_shot.c`) — Phase G, G19d
+
+The first pass of the renderer to run end to end on the second backend, and the smallest one that
+exercises a buffer, a texture, a shader and a draw with nothing depending on it.
+
+**No engine address, and no new one was read to build it** — so there is nothing for
+[exe reverse engineering](exe-reverse-engineering.html) in this landing, and nothing for the hook
+map above either. Neither new file is on `thread-split.allow` and neither may ever need to be
+(Phase G standing constraint 1); the list is **unchanged** by this landing, at the 34 entries
+`thread-split-check.sh` reports. Everything either one uses arrives
+as an argument: the frame's vertices from `tagpu_fps.c`, the atlas from `tagpu_text.c`, the device
+and the render pass from `tagpu_vk.c`.
+
+**MEASURED 2026-09-15**, on `scenarios/selbox-facings` under system wine on the reference setup's
+4070: **0 differing pixels of 786 432 at 1024×768 and 0 of 2 073 600 at 1920×1080** — 89 and 92 ink
+pixels on each side, and the two capture files are byte-identical. **0 again after the lever was
+cleared and re-armed**, which exercises the whole teardown and rebuild.
+
+**It is not a second implementation of the pass**, and that is what makes the number mean anything:
+
+| | where it comes from |
+|---|---|
+| the vertices | `tagpu_fps_quads` — the quads the GL lane just drew, handed over **exactly once** |
+| the texels | `tagpu_text_atlas` — the same 128 KB `tagpu_text_tex` uploads to GL |
+| the shader | `inc/spirv/tagpu_fps.spv.h`, generated from the GL string by §2.25 |
+| the frame size, the ink | the same numbers |
+
+So what the comparison compares is two RASTERISERS. If this file rebuilt the quads, 0 px would
+only mean two pieces of arithmetic agreed.
+
+**Handing the vertices over ONCE is the freshness rule.** The overlay does not run on every path
+that reaches the swap, and a frame whose geometry `tagpu_fps.c` did not rebuild must not be drawn
+again from the last one's. Consuming them makes that true by construction rather than by a counter
+the two files would have to share.
+
+**The Y flip is pipeline state, never a source edit.** GL's clip space has +Y up and Vulkan's has
++Y down, so the vertex shader — byte-identical to the GL one below its declarations — puts the
+readout at the bottom of the frame, mirrored. The fix is a **negative viewport height**
+(`VK_KHR_maintenance1`, asked for by name in `vkCreateDevice` and the pass refuses to arm without
+it, saying so). Flipping the geometry instead would mirror every glyph, because the texture
+coordinates travel with the vertices; flipping the shader would make it disagree with its oracle.
+
+**The atlas upload waits for the device**, and that is a fence rather than a hope. The atlas
+changes when a string is rasterised into it for the first time — about twenty times in a session —
+and by then earlier frames may still be sampling the image; a barrier in this command buffer
+orders nothing about submits already in flight. So the upload calls `vkDeviceWaitIdle` first and
+re-sends the whole image from `VK_IMAGE_LAYOUT_UNDEFINED`. A few milliseconds, twenty times a
+session.
+
+**One buffer set per FRAME SLOT**, and what proves slot *i* is free is the seam's fence wait at the
+top of its present — not a frame count, not "the GPU will have finished by now". `TAGPU_VK_SLOTS`
+is defined once in `tagpu_vk_pass.h` and `tagpu_vk.c`'s `MAXIMG` is defined from it, so the two
+cannot drift.
+
+**`tagpu_text.c` gained its own counter, and it is not `s_dirty`.** There are two consumers of that
+128 KB now, and `s_dirty` is CONSUMED by the upload that reads it — whichever consumer ran second
+would never see a raster land. `tagpu_text_atlas(&gen)` returns a counter that ticks when the
+PIXELS change and is never cleared; it deliberately does not tick in `tagpu_text_glreset`, because
+a lost GL context does not change a byte of the atlas.
+
+**The seam is still one file.** `tagpu_vk_pass.h` is what a ported pass is handed: an instance, a
+physical device, a device, a render pass, a slot count, the flip flag and the two `GetProcAddr`s.
+Nothing in it names a window, a surface or a swapchain, so `tagpu_vk_fps.c` would draw into an
+offscreen image or another process's image unchanged — standing constraint 3 holding rather than
+asserted. **Every pass resolves its own entry points**: the presentation table (swapchain, acquire,
+present, fences) and a pass's (pipelines, descriptors, buffers, images) barely overlap, and one
+shared table would have to be the union of every pass ever written.
+
+**What changed inside `tagpu_vk.c`.** A `VkRenderPass` per DEVICE — one colour attachment in the
+swapchain's format, `initialLayout` `TRANSFER_DST_OPTIMAL` (which is what `vkCmdClearColorImage`
+left it in) and `finalLayout` `PRESENT_SRC_KHR`, so it performs both transitions the old code did
+by hand, ordered by an external subpass dependency from `TRANSFER` to `COLOR_ATTACHMENT_OUTPUT`.
+It is per device rather than per swapchain so that a pass's pipeline survives every resize; the
+image views and framebuffers follow the swapchain, and a rebuild that came back with a different
+format brings the lane down and says so rather than drawing into a lie. `prepare` runs OUTSIDE the
+render pass and `record` inside it, because a texture upload is a transfer and a transfer may not
+be recorded inside a render pass.
+
+**A synchronisation fault found while adding it, and fixed.** The acquire semaphore was waited on
+at `COLOR_ATTACHMENT_OUTPUT` alone — while the first thing the command buffer does to the image is
+`vkCmdClearColorImage`, which runs at `TRANSFER` and is **not** later in the pipeline order. So the
+clear was free to run before the acquire had handed the image over: a write to an image the
+presentation engine may still be reading. It does not throw; it tears a frame now and then on a
+driver that happens to overlap. The mask is now `TRANSFER | COLOR_ATTACHMENT_OUTPUT`.
+
+**The oracle, and why it is not `tacli glshot`.** Route D gives Vulkan its own window, so nothing
+on the GL side can see what Vulkan drew — only Vulkan can. `tagpu_fps.ab` makes both lanes capture
+one frame over a black field: the GL pass clears the frame, draws, reads it back with
+`glReadPixels` and writes `tagpu_fps_gl.ppm`; the lane copies the swapchain image it just presented
+into a host-visible buffer and writes `tagpu_fps_vk.ppm` (`tagpu_vk_shot.c`, which allocates the
+buffer when the lever fires and gives it back as soon as the file is written — 8.3 MB at 1080p, in
+a 32-bit address space). `tools/vk-ab.py` diffs the two and **refuses two captures of different
+sizes** rather than scaling one, because a scaled comparison cannot be 0 px by construction.
+Set `color=0,0,0` in `tagpu_vk.on` so the two backgrounds match.
+
+**Both captures ride ONE frame, by construction.** The first shape had each lane poll the lever for
+itself — and they poll on different cadences (30 frames against 250 ms) while the readout changes
+its number twice a second, so the two could have landed hundreds of frames apart and differed in
+the digits while agreeing about everything else, which reads exactly like a broken port. The flag
+now travels WITH the vertices and is consumed with them.
+
+**Constraint 4, measured rather than argued.** With `tagpu_vk.off`, this DLL's GL frame against
+main's (`a043b05`) on the same fixture, same camera, pointer parked in the same place: **46
+differing pixels of 786 432, all of them inside x 25..43, y 8..14** — the DIGITS of the frame-rate
+readout, two processes running at different rates. Every other pixel is identical.
+
+**What the pass allocates**, sized by the swapchain's image count (four on the reference setup):
+one host-coherent vertex buffer of **18 KB** (`TAGPU_FPS_MAXV` = 288 vertices × four floats × four
+slots), one **512-byte** uniform buffer (a 128-byte stride a slot, which is
+`minUniformBufferOffsetAlignment` × 2), a 512×256 `R8_UNORM` device-local image (**128 KB**) and a
+128 KB staging buffer — four allocations, persistently mapped where they are host-visible. Too
+small to show in the lane's VA figures, which are unchanged at **+6.4 MB** peak committed
+(95.9 → 102.3 MB) with the largest free block still **247.4 MB**.
+
+**NOT COVERED.** No Vulkan **validation layer** ran — none is installed in the wine prefixes — so
+the barriers, the stage masks and the layout transitions are argued from the specification and
+from a correct picture, not verified by a layer. The stage-mask fault above is what that gap looks
+like when it bites, and it was found by reading rather than by a tool. Also not covered: any
+resolution but 1024×768 and 1920×1080, any device but the 4070, and Windows.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 

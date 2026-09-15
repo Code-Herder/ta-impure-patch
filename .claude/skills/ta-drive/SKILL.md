@@ -1853,8 +1853,9 @@ tools/tacli scenario load <i> <scn> --mapping 0    # THE fixture: an unmapped ga
 ### The Vulkan lane and the GPU row (Phase G, `tagpu_vk.on`)
 
 Since G19a a second backend can present the frame. It is **off unless armed** — GL stays the
-default through Phase G — and at G19a it draws a solid colour and nothing else, so an armed
-instance shows a magenta window and no game. That is the pass working, not a fault.
+default through Phase G. At G19a it drew a solid colour and nothing else; **since G19d it also
+draws the frame-rate readout**, so an armed instance with `tagpu_fps.on` shows a magenta window
+with `FPS<n>` in its top-left corner and no game. That is the lane working, not a fault.
 
 ```bash
 tools/tacli arm <i> vk.on                     # the lane; LIVE, polled every 250 ms
@@ -1879,6 +1880,43 @@ tools/tacli log <i> -g '^vk:'                 # the window, the device, the swap
   gated on `tagpu_vk.on`: the GPU enumeration runs whenever the GL render thread starts, armed or
   not, since the picker outlives the lane. (A launch that falls back to the GDI renderer never
   starts it — there is no lane to pick a GPU for there.)
+
+**The pixel A/B between the two lanes: `tagpu_fps.ab` (G19d).** Route D means no GL-side capture
+can see the Vulkan frame, so each lane captures its own half of the SAME frame and the two files
+are diffed. This is the shape every later ported pass should copy.
+
+```bash
+tools/tacli arm <i> fps.on mark.on 'vk.on=color=0,0,0'   # the readout, the FONT, a black field
+tools/tacli scenario load <i> selbox-facings --restart --res 1024x768 --maxfps 0
+sleep 8                                                  # the readout's first averaging window
+touch <gamedir>/tagpu_fps.ab                             # one frame, both lanes, then it latches
+../.venv-undither/bin/python tools/vk-ab.py <gamedir>    # 0 px apart, or it names the first
+```
+
+- **`mark.on` is not optional, and this costs half an hour if you miss it.** The readout draws
+  TA's own glyphs, and the font reaches the render thread in the frame packet, published at
+  **hook 8** — which is `markown`'s. With only `fps.on` armed the packet reads `font=0/0B`,
+  `tagpu_text_place` refuses every string, and the readout silently draws nothing on EITHER lane:
+  no `fps: the Vulkan edition is up` line, no quads, and an A/B that compares two black frames.
+  `grep -a 'packet:' tagpu.log | grep -o 'font=[^ ]*'` is the one-line check. Under `--defaults`
+  (the play set) the question does not arise.
+- **`color=0,0,0` matters.** The GL half clears the frame to black before it draws; the Vulkan
+  half clears to whatever `color=` says. Left at the default magenta the two captures differ in
+  every pixel that is not a glyph.
+- **The two captures are the same frame by construction** — the flag travels with the vertices,
+  not through two independent lever polls — so a difference in the digits is a real difference and
+  not two clocks.
+- **`vk-ab.py` REFUSES two captures of different sizes** rather than scaling one: the GL capture is
+  the GL viewport and the Vulkan one is the client rect, so a mismatch means the fork is
+  letterboxing (`--window` against `--res`, or k != 1). Run at a size where they agree.
+- The lever re-arms when the file is taken away and put back, on both lanes, so a second capture
+  needs no relaunch. `tagpu_fps_gl.ppm` / `tagpu_fps_vk.ppm` are binary PPMs;
+  `ffmpeg -i x.ppm x.png` to look at one.
+- **To measure constraint 4** — that the GL lane did not move — arm `vk.off` on two instances, one
+  running the tree's DLL and one the previous one, load the same static fixture, park the pointer
+  in the same place (`keys <i> mouse:200,700`) and diff two `glshot`s. On `selbox-facings` the
+  only difference between two builds should be the readout's own DIGITS (46 px of 786 432,
+  measured 2026-09-15) — two processes running at different rates.
 
 **The GPU row is in Options → Visuals, Window column, and its list is ONE LAUNCH BEHIND.** The
 captions live in the generated `.GUI`, which is written at DLL attach, and a Vulkan instance
