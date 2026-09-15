@@ -37,6 +37,45 @@ lock-screen gotcha below.
 
 ## Environment & toolchain
 
+- **2026-09-15 — What requiring Vulkan 1.0 would actually cost, from the Steam hardware survey.**
+  [DERIVED, not measured here] About **0.5–0.75 %** of surveyed systems, and it is **almost
+  entirely Intel iGPUs from 2011–2015** — HD 4600, 4000, 5500, 4400, 3000; Ivy Bridge and
+  Haswell — rather than old discrete cards. Only one discrete card appears in the band at all, a
+  GeForce 210 at 0.01 %. Two independent derivations agree, and the survey's own
+  `DIRECTX 10` minus `DIRECTX 12` section totals give 0.58 %.
+
+  **The caveat is bigger than the effect and has to be quoted with it:** the DX10 list leaves
+  **5.11 % unallocated**, an error bar eight times the number, and old hardware skews into
+  exactly that tail. So this bounds the decision loosely and does not settle it.
+
+  It matters because of the minimum-spec rule Phase G rests on: **GL 3.3 is the permanent floor
+  and the GL lane is the old-hardware lane**, Vulkan targets **1.0 core with no exotic
+  extensions**, and **ray tracing is device-gated and never required** — without that last
+  clause the RT goal would silently raise the minimum spec by about six years.
+
+- **2026-09-15 — A GRAPHICS API THAT ACCEPTS EVERY CALL MAY STILL BE PAINTING WHERE NOBODY CAN
+  SEE IT.** [MEASURED] The sharpest lesson of G19a, and it generalises past Vulkan. `tagpu_vk`'s
+  first design put the swapchain on the game's own `HWND` — the window cnc-ddraw's GL context
+  already holds — and every check said yes: `vkCreateWin32SurfaceKHR`, the swapchain and 10 of 10
+  presents all returned `VK_SUCCESS`, and afterwards GL's `SwapBuffers` returned `TRUE` with
+  `glGetError` clean. The window showed Vulkan's last frame for ever anyway. `tacli glshot` read
+  **168 distinct colours** off the GL framebuffer while the screen was 100 % magenta: GL
+  rendering correct frames that nothing would ever see. It **survived a full video-mode change**
+  and the new GL context that came with it — once winevulkan has put a surface on an `HWND`, that
+  `HWND` is finished for GL for the life of the process.
+
+  **The probe had already "passed" this.** `tools/vkcoexist.c` called the route a success because
+  it asked the API. The fix is `tools/vkcoexist-pixels.sh`, which runs one route and then spends
+  four seconds painting the GL window a known green, grabs the X window and counts — with a
+  control route that never touches Vulkan, so a run that reads no green is measuring a broken
+  harness rather than a broken route. Every verdict in the C probe now says `api-ok`, not
+  `WORKS`. **The rule: when a question is "does this reach the screen", the oracle is a grab, and
+  a return code is not evidence.**
+
+  The route table it produced, and the design it forced, are in [roadmap](roadmap.html) Phase G.
+  In short: of the roadmap's three routes only **Vulkan on its own top-level window** works on
+  system wine 9.0, and it was the one ranked last.
+
 - **2026-09-15 — Vulkan ray tracing is gated on BITNESS, not on wine: a 32-bit process never
   reaches it.** [MEASURED] The question was whether the renderer could stay where it is — inside
   `TotalA.exe`, a 32-bit DLL — and still reach `VK_KHR_ray_tracing_pipeline`. It cannot.

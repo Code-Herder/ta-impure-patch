@@ -1819,16 +1819,17 @@ still set is asking to be popped — whereupon `0x4AA7BC..0x4AA7FA`, an **inline
 ends with `0x4AB0A0(gi)` for exactly this reason; see *The pump's dispatch contract* in the
 [engine map](exe-reverse-engineering.html).
 
-**The front-end screen carries fifteen rows in two columns** [2026-09-11]. `VISUALS.GUI`
-is re-emitted into the same `.ufo` with the stock eleven gadgets moved (names, `assoc`,
-`commonattribs`, `range` and `stages` all verbatim) and four rows of our own added:
+**The front-end screen carries sixteen rows in two columns** [2026-09-11; the GPU row added
+2026-09-15]. `VISUALS.GUI` is re-emitted into the same `.ufo` with the stock eleven gadgets
+moved (names, `assoc`, `commonattribs`, `range` and `stages` all verbatim) and five rows of our
+own added:
 
 | column | rows |
 |---|---|
-| **Window** | Display mode (window / borderless fullscreen, `util_toggle_fullscreen`), Monitor (`EnumDisplayMonitors`, `SetWindowPos`), UI scale (Auto / 1x..4x, the client set to k x the Screen Size row's own mode at `main+0x37F1B/+0x37F1F`), Screen Size (stock `VIDSLDR`), Frame cap (60 / 120 / uncapped, `g_config.maxfps` + `fpsl_init`), Gamma (stock) |
+| **Window** | Display mode (window / borderless fullscreen, `util_toggle_fullscreen`), Monitor (`EnumDisplayMonitors`, `SetWindowPos`), UI scale (Auto / 1x..4x, the client set to k x the Screen Size row's own mode at `main+0x37F1B/+0x37F1F`), Screen Size (stock `VIDSLDR`), Frame cap (60 / 120 / uncapped, `g_config.maxfps` + `fpsl_init`), Gamma (stock), **GPU (Vulkan)** (G19b — `tagpu_vk.h`; caption at y 364, control at 380, in the space the Gamma slider left free) |
 | **Impure rendering** | Renderer, Undithered assets, Dynamic lighting, Shadows, Shadow quality, Shading (stock), Anti-aliasing (stock), Engine shadows (stock `BSHADOWS`), Supersampling |
 
-Three things this rests on, each measured rather than assumed:
+Four things this rests on, each measured rather than assumed:
 
 - **The four Window rows are applied on the thread that owns the window.** Each ends in a
   window call, and a cross-thread one is a wait on a message pump rather than a visible
@@ -1847,6 +1848,16 @@ Three things this rests on, each measured rather than assumed:
   x 267..405, drawn for a single centred column; two columns cannot sit in it and it is
   the game's art. So the screen carries one `id=12` ground frame (270x420 at (200,54)) in
   `anims/visuals.gaf`, with its own recesses, covering those bars.
+- **The GPU row's list is one launch behind, by construction** [G19b, 2026-09-15]. Its captions
+  have to be inside this generated `.GUI`, and `tagpu_menu_init` writes the archive at DLL
+  attach — where creating a Vulkan instance (and so loading an ICD) is exactly the
+  `LoadLibrary`-from-`DllMain` [field notes](field-notes.html) forbids. So a worker enumerates
+  the devices once the render thread is up and writes `tagpu_vk.gpus`, and the menu reads that
+  cache at the *next* attach. It is the same bargain the Monitor row already makes for a
+  hot-plugged monitor. The row's **model** is not one launch behind: the choice is stored by
+  name in `tagpu_vk.cfg`, and `read_display_state` plates `tagpu_vk_gpu_active()` — the device
+  the render thread actually bound — whenever the lane is up, so a request that could not be
+  honoured shows as the device that was.
 
 **The Monitor row rebuilds the screen**, because the Screen Size list belongs to a monitor
 and the engine builds it once per visit (`0x45E6B0` into `GUIMEMSTRUCT+0x0C`, hung off
@@ -3003,6 +3014,84 @@ whose DATA arrives entirely in the frame packet.
   and at the queued site rects, diffed against `ghost.on=off` and found only at the ghost's own
   footprint; after the cache-key fix, a placed mex renders pixel-identical with the ghost armed
   and disarmed (mean diff 6.0 vs the 6.7 off/off baseline).
+
+### 2.20 The Vulkan lane (`tagpu_vk.c`, **off unless armed**, `tagpu_vk.on`) — Phase G, G19a + G19b
+
+**It touches no engine address, and it must never need to.** `tagpu_vk.c` is not on
+`thread-split.allow` and every value it uses arrives as an argument from `ogl_render` — which is
+Phase G standing constraint 1 ([roadmap](roadmap.html)) and the line that decides whether the
+renderer can ever be lifted into another process. So it has no row in the hook map above.
+
+**Where it sits in the frame.** One call, in `ogl_render` immediately before the GL swap:
+
+```c
+if (!tagpu_vk_frame(g_ddraw.hwnd, g_ddraw.render.width, g_ddraw.render.height, g_config.vsync))
+    SwapBuffers(g_ogl.hdc);
+```
+
+It returns 1 only when Vulkan presented the frame itself, and the GL swap is then skipped — two
+backends must not both present in one frame. With `tagpu_vk.on` absent it returns 0 on a cached
+lever read (250 ms, as elsewhere in the fork) before touching anything.
+
+**Route D: Vulkan has its own window** — and the other two routes are not fallbacks, they are
+broken on system wine. The measurement, the route table and the reason the API's "yes" could not
+be trusted are in [roadmap](roadmap.html) Phase G, *Coexistence*. What the module does with it:
+an owned top-level popup over the game window's client rect, `WS_EX_NOACTIVATE |
+WS_EX_TOOLWINDOW` so it never takes focus or enters the taskbar, `HTTRANSPARENT` so a click falls
+through to the game window, created / moved / destroyed **on the window thread** (posted
+`WM_TAGPU_VK`, and `WM_WINDOWPOSCHANGED` on the owner is what keeps it in place — event-driven,
+so the render thread polls no geometry). The observer in `wndproc.c` claims no message.
+
+**The five-state machine is the whole of the thread safety**, and it is an ordering rather than a
+lock:
+
+| state | who may touch the Vulkan objects |
+|---|---|
+| `ST_OFF` | nobody; nothing exists |
+| `ST_STARTING` | the bring-up worker, alone |
+| `ST_READY` | the render thread, alone |
+| `ST_FAILED` / `ST_ZOMBIE` | nobody |
+
+`OFF → STARTING` is an `InterlockedCompareExchange` taken *before* the worker is created, so two
+frames cannot start two workers. `STARTING → READY` is an `InterlockedExchange` the worker does
+**after** every field is written, and the interlocked store is a full barrier, so a render thread
+that reads `READY` sees all of them. `READY → OFF` is the render thread's alone. There is no
+instant at which two threads may touch the same object.
+
+**The bring-up is on a worker thread and that is not a preference.** `vkCreateInstance` loads the
+ICD, so it *is* a `LoadLibrary`, and [field notes](field-notes.html)'s rule — load from your own
+thread, never from `DllMain` or mid-present, through `real_LoadLibraryA` — was paid for once
+already by the companion-DLL design.
+
+**`ST_ZOMBIE` is the one bounded wait, and it is not the safety argument.** If the render thread
+stops while a worker is still in `ST_STARTING` it waits 5 s; whichever way that goes the outcome
+is safe, because on a timeout it **abandons** the objects rather than freeing them under a live
+thread. A leak is recoverable and a free is not, so the timeout chooses between two safe outcomes.
+`ST_ZOMBIE` is terminal for the session and the log says so.
+
+**What the lane costs, measured in game** (640×480, 1024×768 and 1920×1080, shell → game →
+shell): the Vulkan window tracks the client rect **exactly** (bbox identical to `xwininfo`'s, 2
+073 600 of 1920×1080 px magenta), bring-up is **371–451 ms** on the worker, peak committed grows
+**+5.3 to +6.5 MB**, and the **largest free VA block does not move at all** (247.4 MB before and
+after) — which is the number that matters in a 32-bit process, because TA's allocator fails by
+failing rather than by saying anything.
+
+**The levers.**
+
+| file | what |
+|---|---|
+| `tagpu_vk.on` | arms the lane. Optional token `color=r,g,b` moves the clear colour off the default magenta |
+| `tagpu_vk.off` | turns the WHOLE module off, the GPU enumeration included — the control for an A/B against a pre-G19 DLL, and it beats `.on` |
+| `tagpu_vk.gpus` | written by the enumeration worker: one line per device, `<flag> <name>`, where the flag is 1 for `DISCRETE_GPU` and 0 otherwise. The menu reads it at the NEXT attach |
+| `tagpu_vk.cfg` | `gpu=<name>` — the player's choice, by NAME so adding or removing a card cannot silently re-point it |
+
+**G19b's row is in §2.12's front-end table.** Its two engine-imposed bounds are worth repeating
+because both were found by building it: the list is capped at **four** devices (a stage button's
+art is `commongui.stagebuttnN` and there is no `stagebuttn5`), and a device name is canonicalised
+and truncated on the way in — it comes from the driver and lands inside a generated `.GUI` where
+a pipe and a semicolon are syntax. The caption is clipped to the **120×20 plate** whatever width the gadget
+carries ([GUI gadgets](gui-gadgets.html) 10.2), which is why `build_gpu_text` drops the longest
+leading run of whole words every listed device shares rather than trying to widen the row.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 

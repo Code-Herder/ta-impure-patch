@@ -728,7 +728,20 @@ screen that would settle it has to carry a non-zero one.
 
 **There is no `stagebuttn5` or `6`, so no cycle button can carry more than four stages.**
 Anything longer has to page, and the build panel's own `commongui.armprev` / `armnext`
-(45×17, three frames: normal, pressed, greyed) are what to page with.
+(45×17, three frames: normal, pressed, greyed) are what to page with. G19b's GPU row is capped
+at four devices for exactly this reason, in `tagpu_vk.h` rather than in the menu, so the cache,
+the row and the device bind all agree about which four.
+
+**The 120×20 IS THE DRAWN SIZE, whatever `w` the gadget carries, and the caption is clipped to
+the PLATE and not to the gadget** [MEASURED 2026-09-15, building that row]. A device name is
+about 23 characters ("NVIDIA GeForce RTX 4070") and a `VCOL_W` row shows about thirteen, so the
+row was given the front-end panel's full 255 px as a footer spanning both columns. It changed
+nothing: the same 120-px plate was drawn at the same place and the same `NVIDIA GeForce` was
+clipped with the stage bars over its tail. **A caption that does not fit cannot be made to fit by
+widening the gadget** — the text has to be shortened instead. What `tagpu_menu.c` does is drop
+the longest leading run of whole words that *every* listed device shares, which is exactly the
+text that distinguishes none of them (two NVIDIA cards plate as `RTX 4070` and `RTX 3060` rather
+than as `NVIDIA GeForce` twice).
 
 Other shared controls in the same GAF: `checkbox` (16×16, four frames — a dark and a lit
 green lamp, twice), `sliders` (20 frames: a vertical knob 0–2, thin track pieces 3–5,
