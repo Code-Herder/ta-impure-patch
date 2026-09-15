@@ -38,15 +38,40 @@
    session by the first version of this in tagpu_fps.c. */
 typedef struct {
     GLfloat   clear[4];
+    GLfloat   cleardepth;
     GLboolean scissor;
+    GLint     depthmask;
     GLint     pack;
+    unsigned  flags;
     int       live;            /* 0 = `begin` never ran; `end` is then a no-op */
 } TAGPU_ABSHOT;
 
-/* Black the whole frame, scissor off -- a scissor left on by an earlier pass
-   would clear a rectangle rather than the frame. Call immediately before the
-   pass draws. */
-void tagpu_abshot_begin(TAGPU_ABSHOT* s);
+/* CLEAR THE DEPTH BUFFER TOO. For a pass that depth-tests, the colour clear
+   alone is half an oracle: the GL twin would test against whatever the passes
+   BEFORE it left in the depth buffer (the terrain, for the feature pass) while
+   the Vulkan lane's render pass starts from a cleared one, and every fragment
+   the two disagree about would read as a port failure. With this, both halves
+   are one pass over black with nothing in the depth buffer under it. The depth
+   WRITE MASK is forced on for the clear and put straight back, because
+   glClear(GL_DEPTH_BUFFER_BIT) is masked by it -- a pass that had just turned
+   writes off would otherwise clear nothing and say nothing.
+   Passes that do not test depth leave this off: clearing a buffer they never
+   read is a change to the frame for no gain. */
+#define TAGPU_ABSHOT_DEPTH    1u
+
+/* PUT THE SCISSOR BACK BEFORE THE PASS DRAWS. The clear is always unscissored
+   -- a scissor left on by an earlier pass would black a rectangle instead of
+   the frame -- but a world pass is CLIPPED to the world viewport by a scissor
+   its caller set, and drawing it unclipped is measuring a pass the player never
+   sees. With this the scissor is restored the instant the clear is done, and
+   the Vulkan edition sets the same rectangle. Without it the draw is
+   unscissored, which is what tagpu_fps.c and tagpu_scaffold.c have always
+   measured and what their 0-px results are results about. */
+#define TAGPU_ABSHOT_SCISSOR  2u
+
+/* Black the whole frame, scissor off for the clear itself. Call immediately
+   before the pass draws. `flags` is 0 or the two above. */
+void tagpu_abshot_begin(TAGPU_ABSHOT* s, unsigned flags);
 
 /* Read the viewport back and write it as a binary PPM, then put every piece of
    state `begin` moved back. Call immediately after the pass draws, before

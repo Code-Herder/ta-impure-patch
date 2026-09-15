@@ -46,6 +46,17 @@ typedef struct {
        may build a pipeline against it and keep it across a resize. */
     VkRenderPass              rp;
     VkFormat                  fmt;
+    /* THE DEPTH ATTACHMENT'S FORMAT, or VK_FORMAT_UNDEFINED when the render
+       pass has none (G19e). Every pipeline built against `rp` must supply a
+       VkPipelineDepthStencilStateCreateInfo once this is set -- a null
+       pDepthStencilState in a subpass that has a depth attachment is invalid --
+       so a pass that does not test depth still declares one with testing and
+       writes off. A pass that DOES test must refuse to arm when this is
+       UNDEFINED rather than draw untested.
+       24-bit fixed point by construction, because the GL lane's world FBO is
+       GL_DEPTH24_STENCIL8 and a comparison against it is a comparison of two
+       quantisations as much as of two rasterisers. */
+    VkFormat                  dfmt;
     uint32_t                  slots;    /* <= TAGPU_VK_SLOTS                   */
     /* VK_KHR_maintenance1, and so a NEGATIVE VIEWPORT HEIGHT. GL's clip space
        has +Y up and Vulkan's has +Y down, so a shader ported unchanged draws

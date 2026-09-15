@@ -346,6 +346,13 @@ static float  s_selgeomW = 1.0f;
 static int    s_selgeomDev = 0;
 static int    s_selgeomMain = 0;
 static GLuint s_fogTex, s_fogLutTex, s_cprog, s_cvao, s_cvbo;
+/* the 256-byte fog shade table as it was last uploaded to s_fogLutTex, for a
+   backend that cannot read a GL texture (Phase G / G19e, tagpu_native.h) */
+static unsigned char s_fogLutBytes[256];
+static int s_fogLutHave;
+/* whether this frame's world FBO pass is actually scissored to the viewport
+   (Phase G / G19e, tagpu_native.h) */
+static int s_scissorOn;
 static GLuint s_fbo2, s_colTex2, s_depTex2, s_dprog;
 static GLint  s_uGame, s_uShadow, s_uAlpha, s_uFog, s_uFogOrg, s_uFogDim,
               s_uScafOn, s_uScafP;
@@ -2824,6 +2831,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, 256, 1, 0,
                              GL_RED, GL_UNSIGNED_BYTE, t);
                 x_glActiveTexture(GL_TEXTURE0);
+                /* ...and the same 256 bytes kept where a second backend can
+                   reach them (Phase G / G19e). The identity fallback above is
+                   part of the pass's input, not a detail of the GL upload, so
+                   what is published is what was uploaded and never a second
+                   construction of it. */
+                memcpy(s_fogLutBytes, t, 256);
+                s_fogLutHave = 1;
             }
         }
     }
@@ -3926,7 +3940,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     if (x_glScissor) {
         glEnable(GL_SCISSOR_TEST);
         x_glScissor(vpL * ss, vpT * ss, vw * ss, vh * ss);
-    }
+        s_scissorOn = 1;
+    } else s_scissorOn = 0;
 
     /* terrain is the frame's implicit far plane: it draws under everything,
        writes depth at a key below every other band, and (since it is now the
@@ -4602,6 +4617,16 @@ void tagpu_native_glreset(void)
 int tagpu_native_wrecks_armed(void)
 {
     return s_armed > 0 && s_state != 2 && s_wrecks;
+}
+
+const unsigned char* tagpu_native_foglut(void)
+{
+    return s_fogLutHave ? s_fogLutBytes : NULL;
+}
+
+int tagpu_native_scissor_on(void)
+{
+    return s_scissorOn;
 }
 
 int tagpu_native_selbox_complete(void) { return s_selComplete; }

@@ -3632,6 +3632,13 @@ when one of them starts:
 > clips those and GL does not. **Neither is written yet**, and the render pass will need a depth
 > attachment before either matters.
 
+**Both halves of that were BUILT by the next landing and the answer held** — §2.29. The render
+pass carries a depth attachment (`tagpu_vk.c`, one image per swapchain image, `LOAD_OP_CLEAR` at
+1.0), and the viewport carries `minDepth 0.5 / maxDepth 1.0`. The feature pass is 0 px against its
+GL twin with them and the scaffold's own A/B still reads 0 px, so the attachment cost the passes
+that do not test nothing. `VK_EXT_depth_clip_control` is still unused and still the answer only if
+a shader is found writing a z below 0.
+
 **NOT COVERED.** No Vulkan **validation layer** ran — none is installed in the wine prefixes — so
 the barriers, the stage masks and the layout transitions are argued from the specification and
 from a correct picture. Also not covered: any resolution but 1024×768 and 1920×1080, any device
@@ -3659,7 +3666,205 @@ because both captures are of the same frame, and a useless one for anything acro
 Also worth knowing for any cross-launch diff on a scenario: the engine's own "**forces have been
 obliterated**" messages from `clear_existing` sit in the top-left of the viewport for tens of
 seconds and land differently per run — 8179 px until they expire. 35 seconds after the load is
-enough.
+enough — **but only if the game is RUNNING**: §2.29 found they expire on TICKS, so a `tab` sent
+straight after the load freezes them on screen for as long as the pause lasts.
+
+### 2.29 The feature pass, drawn by Vulkan (`tagpu_vk_feat.c`, `tagpu_gaf.c`'s CPU mirror) — Phase G, G19e
+
+The **second world pass**, and the first one that **depth-tests** — which is why it went next: it
+forces §2.28's depth decision, which was settled on paper and left for whichever pass needed it,
+into pipeline state that a 0-px comparison can grade.
+
+**No engine address, and no new one was read to build it** — the pass takes everything through
+`tagpu_feat_handover`, so there is nothing for [exe reverse engineering](exe-reverse-engineering.html)
+in this landing and nothing for the hook map above. `tagpu_vk_feat.c` is not on
+`thread-split.allow` and may never need to be (Phase G standing constraint 1); the list is
+**unchanged** at the 34 entries `thread-split-check.sh` reports.
+
+**MEASURED 2026-09-15**, on `scenarios/feat-forest` (151 tall features, 180 body and 150 shadow
+drawables in the sweep) under system wine on the reference setup's 4070, `ss=1`:
+
+| | |
+|---|---|
+| feat A/B, 1024×768 | **0 differing px of 786 432**, **243 538 non-black on *each* side** |
+| feat A/B, 1920×1080 | **0 of 2 073 600**, 506 936 non-black each side |
+| both | capture files byte-identical; the 1024×768 pair reproduced **the same md5** on an independent relaunch, and read 0 again after `tagpu_vk.on` *and* `tagpu_feat.on` were cleared and re-armed — which frees and rebuilds the pipelines, the descriptor sets, the shared atlas image and every per-slot resource |
+| scaffold A/B (§2.28's, the regression for the depth attachment) | **0 of 786 432**, **190 247 non-black a side — the same number §2.28 recorded** |
+| fps A/B (§2.26's) | **0 of 786 432**, 89 ink px a side |
+| constraint 4 | **0 of 630 784** in the world viewport against `6ad52e4` with `tagpu_vk.off` |
+
+Nearly a third of the frame is feature ink, so this is not two blank frames agreeing — the failure
+mode `tools/vk-ab.py` exists to name.
+
+**It is not a second implementation of the pass:**
+
+| | where it comes from |
+|---|---|
+| the vertices | `s_verts[B_SHADOW]` and `s_verts[B_BODY]` — the two arrays the GL gather filled and the GL upload took, handed over **exactly once** |
+| the vertex layout | `TAGPU_FEAT_ATTRS` in `tagpu_feat.h`, **one literal both lanes build their vertex input from** (the GL VAO loops over it too) |
+| the uniforms | the numbers the GL draw passed to `uGame`, `uZoom`, `uZoomC`, `uDepthScale`, `uRestored`, `uLit`, `uFog`, `uFogOrg`, `uFogDim` |
+| the atlas texels | `tagpu_gaf.c`'s **CPU mirror** — written by the same `atlas_paint` that writes the GL texture, from the same `s_pad` rows, in the same call |
+| the palette | `tagpu_pal_live()`, the buffer `s_palTex` is uploaded from |
+| the fog grid | the packet's grid, the very `unsigned short*` the GL lane hands `glTexImage2D(GL_RG8, …)` |
+| the fog shade LUT | `tagpu_native_foglut()` — the 256 bytes last uploaded to `s_fogLutTex`, identity fallback included, published rather than rebuilt |
+| the shader | `inc/spirv/tagpu_feat.spv.h`, generated from the GL string by §2.25 |
+
+#### The depth answer, built
+
+§2.28 wrote the rule down and this landing is where it became code. Two pieces:
+
+* **The seam grew a depth attachment** (`tagpu_vk.c`): one image **per swapchain image** — `nimg`
+  frames are in flight and each has a framebuffer of its own, so one shared buffer would be
+  written by two overlapping frames — `LOAD_OP_CLEAR` at **1.0** (what `glClear(GL_DEPTH_BUFFER_BIT)`
+  uses on the GL side, in the same place: the top of the world FBO), `STORE_OP_DONT_CARE`,
+  `UNDEFINED` in. Both subpass dependencies grew their depth halves
+  (`LATE_FRAGMENT_TESTS`/`DEPTH_STENCIL_ATTACHMENT_WRITE` →
+  `EARLY_FRAGMENT_TESTS`/read+write).
+* **The format is 24-bit fixed point or there is none.** The GL lane's world FBO is
+  `GL_DEPTH24_STENCIL8`, so a `D32_SFLOAT` attachment would settle a z-fight the other way in
+  exactly the cases that are too close to call — which are the cases a 0-px comparison is made of.
+  `vk_depth_format()` asks for `D24_UNORM_S8_UINT` and then `X8_D24_UNORM_PACK32`, and a device
+  offering neither gets **no depth attachment at all**: the passes that do not test go on working
+  and the ones that do refuse to arm and say so. On the reference setup it binds
+  `D24_UNORM_S8_UINT` (the log prints `depth format 129`).
+* **The range is the viewport's**: `minDepth = 0.5`, `maxDepth = 1.0`, which maps clip z ∈ [0, 1]
+  onto exactly GL's `(z+1)/2`. Never a shader edit — an edited shader would disagree with the twin
+  that is its oracle.
+
+**Every pipeline in the lane now declares a depth state**, because `pDepthStencilState` may not be
+null in a subpass that has a depth attachment. `tagpu_vk_fps.c` and `tagpu_vk_scaffold.c` declare
+one with test and write **off**, which is what their GL twins do — and their own A/Bs re-measuring
+0 px is what says the attachment cost them nothing.
+
+**Two depth-write modes, so two pipelines.** The GL twin draws shadows under `glDepthMask(GL_FALSE)`
+— they are ground decals and must occlude nothing — and bodies with it true. Two pipelines off one
+layout needs no extension; `VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE` is Vulkan 1.3 or an extension and
+would buy one object.
+
+#### The scissor is the one number that is not the same on both sides
+
+The native pass clips this draw to the world viewport, and a scissor is expressed in **framebuffer**
+coordinates, which the two APIs disagree about. In the GL world FBO, framebuffer row 0 is clip-space
+y = −1; with the negative viewport height every ported pass uses, row 0 of the Vulkan image is
+clip-space y = **+1**. The two images are stored the same way round — which is exactly what lets the
+bytes be compared at all — and a *rectangle* in one is the vertical mirror of the same rectangle in
+the other:
+
+    scissor.offset.y = H − (vpT + vh)
+
+§2.28's "the scissor is NOT flipped" is true of a **full-frame** scissor and of a pass drawn into
+the default framebuffer; this is neither, and the two statements do not conflict. The rect is also
+scaled by the attachment's extent over the game frame's, which is the same division the vertex
+shader does by `uGame` and reduces to the identity at the sizes an A/B runs at.
+
+**And it travels with its ENABLE, not just its rect.** `tagpu_native_scissor_on()` reports whether
+the clip is actually on (the native pass enables it only when it resolved `glScissor`). A Vulkan
+lane that clipped while GL did not would differ in every feature the gather's margin reaches past
+the viewport, which on a forest map is a wide band down both edges.
+
+**Both halves of this A/B are upside-down pictures of the world**, and that is correct: the GL twin
+draws into the world FBO, whose clip-space +1 is the *bottom* of the screen (the composite quad
+turns it over). They are upside down identically, which is the only thing the comparison asks.
+
+#### The atlas mirror — the mechanism the remaining world passes need
+
+Every world pass samples an atlas, and no atlas in this tree keeps a CPU copy of its texels: the
+decoder uploads and frees. So the first of them had to answer how a second backend gets those bytes.
+
+> **`TAGPU_GAFATLAS.mirror`** — `dim × dim` bytes written by the same `atlas_paint` that writes the
+> GL texture, from the same `s_pad` rows, in the same call. Not a second decode of the art: the very
+> rows the `glTexSubImage2D` above it hands GL.
+
+**It is correct from the instant it exists**, which is the part worth the paragraph. A mirror
+allocated after the atlas has painted frames would hold zeros where those frames are, and a backend
+uploading it would draw black trees for the rest of the session — silently, because nothing in the
+atlas is wrong. So `tagpu_gaf_atlas_mirror` marks every painted entry **reserved** (`ok` 0,
+`resv` 1), the state a repack leaves an entry in: the rect stays where it is and the next
+`tagpu_gaf_atlas_get` paints it again, into GL and the mirror together. And because `atlas_get`
+paints a reserved entry *before it returns it*, **every UV a vertex carries addresses texels that
+are in the mirror** — the request is made on the GL twin's arm poll, which runs before the gather,
+so the first frame that has a mirror is already correct. Entries nothing draws may stay stale in it;
+nothing samples them, in either lane. Measured on `feat-forest`: `atlas mirror armed, 4096 KB — 13
+painted frame(s) re-decode on their next use`.
+
+It is asked for **on the 30-frame arm poll and not per frame**, because `tagpu_vk_armed()` is two
+file-attribute queries and a pass that asked every frame would make them on every frame of ordinary
+play, where the answer is no and stays no. 4 MB, so it is paid for only while the Vulkan lane is
+armed, and once armed it stays for the process's life (there is no atlas destructor here).
+
+#### The uploads: §2.28's cheaper design, taken up
+
+§2.28 established one image and one staging buffer **per frame slot** on a one-line invariant, and
+named the cheaper alternative — one image shared, behind a write-after-read barrier — saying to
+reach for it when a pass needed the memory back. **This is that pass**, and the split is by size:
+
+| | |
+|---|---|
+| **the atlas** | 2048² R8 = **4 MiB**. Per-slot it would be 16 MiB of device-local on a four-image swapchain, in a 32-bit address space whose largest free block is the number this phase spends its budget measuring. So it is **one image**, and the barrier at the top of an upload — `FRAGMENT_SHADER`/`SHADER_READ` → `TRANSFER`/`TRANSFER_WRITE` — orders the copy after every earlier frame's sampling. Legal across submits because a barrier's first synchronisation scope includes everything submitted to the queue before it, and a write-after-read hazard needs only an execution dependency; the access masks are for the layout transition, which is a write. Uploaded only when the mirror's serial says the bytes moved, and only the rows the shelf packer has used (`shelfY + shelfH`, published as `atlasRows`) |
+| **the palette, the fog LUT, the fog grid** | 1 KiB, 256 B and 1 440 B at the measured fixture's 30×24 grid. **Per-slot**, because at that size §2.28's one-line invariant is worth more than the memory — and a dimension change (the grid's, whenever the view walks far enough) is then free: the slot is rebuilt at the moment we are handed it, which is the moment we own it. One staging buffer carries all three, and it is rebuilt **with** the fog image so the buffer and the image it feeds cannot disagree about the size |
+| **the vertices** | per-slot, doubling from 64 KiB, never shrunk while the pass is drawing |
+
+**The atlas's staging buffer is per-slot either way and cannot be anything else**: a barrier orders
+GPU work and the hazard there is a CPU write. It is allocated on the frame that uploads and **given
+back at that slot's next `prepare`** on which no upload is due — the same fence, one turn of the
+slots later — so a settled scene holds none of it and a map still filling its atlas holds at most
+one per slot while it does. *(The file header claimed this before it was true; §2.28's own lesson
+— "a header claim is a claim" — is why it now is.)*
+
+**And nothing is kept once there is nothing to draw**, exactly as §2.28's scaffold: a frame the GL
+twin handed nothing over gives that slot back.
+
+#### The A/B's oracle needed two more things, and both are in `tagpu_abshot.c`
+
+* **`TAGPU_ABSHOT_DEPTH` — the depth buffer is cleared too.** For a pass that depth-tests the colour
+  clear alone is half an oracle: the GL twin would test against what the passes *before* it left in
+  the depth buffer (the terrain) while the Vulkan lane's render pass starts from a cleared one. The
+  depth **write mask** is forced on for the clear and put straight back, because
+  `glClear(GL_DEPTH_BUFFER_BIT)` is masked by it.
+* **`TAGPU_ABSHOT_SCISSOR` — the scissor goes back before the pass draws.** The clear stays
+  unscissored (a scissor left on by an earlier pass would black a rectangle instead of the frame),
+  but a world pass clipped to the viewport *is* the pass and an unclipped one is something else.
+
+Both are opt-in, so `tagpu_fps.c` and `tagpu_scaffold.c` measure exactly what they measured before.
+
+**`ss` must be 1 for this A/B and the pass says so rather than writing a mismatched pair.** The GL
+capture is the world FBO's viewport, `gw*ss × gh*ss`, and the Vulkan one is the window's client
+rect; at `ss` 2 they differ by a factor of two and `tools/vk-ab.py` would refuse the pair after the
+fact. `tacli arm <i> ss.off` is the lever.
+
+#### What it does not do
+
+**Classic++'s restored atlas is not mirrored**, so when the GL twin reports `uRestored` 1 this pass
+draws **nothing** and says so once. Drawing with `uRestored` 0 instead would be a different picture
+from the twin's and the A/B would report it as a rasteriser difference, which is the one answer an
+oracle must never give. The twin is `tagpu_restoreglsl.c`'s RGBA8 surface; a mirror of it is the
+same mechanism as the R8 one and is a later landing's. A `tacli` instance opts out of the play
+defaults, so an A/B run does not meet this; a `--defaults` instance does.
+
+**NOT COVERED.** No Vulkan **validation layer** ran — none is installed in the wine prefixes — so
+the barriers, the stage masks and the layout transitions are argued from the specification and from
+a correct picture. Also not covered: any resolution but 1024×768 and 1920×1080, any device but the
+4070, Windows, `ss` 2, Classic++, and an **in-process map change** (every measurement here filled
+the atlas from empty after a relaunch, so `tagpu_gaf_atlas_forget` and a repack have not been
+watched feeding the mirror).
+
+#### Constraint 4, measured — and the fixture trap is not the one on record
+
+**0 differing pixels of 630 784** in the world viewport (`vp=(128,32,896,704)`), this landing's DLL
+against `6ad52e4`'s, both with `tagpu_vk.off`, on `selbox-facings` at 1024×768, the full arm set,
+pointer parked in the side panel, sim paused. The **cross-launch floor was measured first and read
+0**: two launches of the landing's own binary differ by 0 px, and a third pairing (the base's launch
+against a second launch of the landing's) also reads 0. §2.28's two-state 71-px sliver at
+x 1017..1023 did not appear in any of the five launches taken here — it is a real artefact, not a
+constant one, which is the whole reason the floor is re-measured every time rather than quoted.
+
+**The trap that did bite is a different one, and §2.28 has it half right.** The engine's "forces
+have been obliterated" chat lines expire on **TICKS, not on wall-clock seconds**, so "wait 35 s
+after the load" is only true of a game that is *running*. Pausing with `tab` immediately after
+`scenario load` freezes them on screen indefinitely: the first pair taken here read **8 282
+differing px in a bbox of x 138..430, y 52..106** — the chat block — purely because one instance had
+been paused at tick 155 and the other at tick 433. Let the game run until the lines go (about 60 s
+at speed 10), *then* park the pointer and pause.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 

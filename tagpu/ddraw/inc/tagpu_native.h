@@ -37,4 +37,20 @@ int  tagpu_native_selbox_complete(void);
    not use the outputs. Read-only, render thread. */
 struct TAGPU_PK_UNIT;
 int  tagpu_native_unit_pos(const struct TAGPU_PK_UNIT* u, float* x, float* y, float* z);
+
+/* The 256-byte fog shade table this pass last uploaded to its fog LUT texture
+   -- the packet's `fogshade`, or the identity when the packet carries none,
+   which is the same fallback the upload applies. NULL before the first upload.
+   Render thread only; the buffer is ours for the process's life.
+   [Phase G / G19e: the Vulkan editions of the world passes sample this table
+   and cannot read a GL texture, so the BYTES are published rather than the
+   texture name -- and they are the bytes that were uploaded, not a second
+   construction of them.] */
+const unsigned char* tagpu_native_foglut(void);
+
+/* 1 while this frame's world-FBO passes are clipped to the engine's viewport
+   rect (glScissor), 0 when glScissor could not be resolved and they are not.
+   The world passes' Vulkan editions must clip exactly as their GL twins do, and
+   "there is a rect" is not the same fact as "the clip is on". Render thread. */
+int tagpu_native_scissor_on(void);
 #endif

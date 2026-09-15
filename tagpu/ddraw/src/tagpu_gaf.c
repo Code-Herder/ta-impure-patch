@@ -275,10 +275,44 @@ void tagpu_gaf_atlas_forget(TAGPU_GAFATLAS* a)
     atlas_drop(a, "subject replaced");
 }
 
+/* The CPU mirror (tagpu_gaf.h). Correct from the instant it exists because
+   every entry that has already been painted is put back into the state a
+   repack leaves one in -- the rect assigned, nothing uploaded -- so the next
+   atlas_get repaints it where it sits, into GL and the mirror together. */
+int tagpu_gaf_atlas_mirror(TAGPU_GAFATLAS* a)
+{
+    char b[160];
+    int i, again = 0;
+    if (!a || a->dim <= 0) return 0;
+    if (a->mirror) return 1;
+    a->mirror = (unsigned char*)calloc((size_t)a->dim * a->dim, 1);
+    if (!a->mirror) {
+        _snprintf(b, sizeof b, "%s: no memory for a %d KB atlas mirror — the Vulkan"
+                  " edition of this pass stays down", a->tag ? a->tag : "gaf",
+                  (a->dim * a->dim) >> 10);
+        b[sizeof b - 1] = 0;
+        glog(b);
+        return 0;
+    }
+    for (i = 0; i < a->n; i++)
+        if (a->ents[i].ok) { a->ents[i].ok = 0; a->ents[i].resv = 1; again++; }
+    a->mirrorSerial = 0;
+    _snprintf(b, sizeof b, "%s: atlas mirror armed, %d KB — %d painted frame(s)"
+              " re-decode on their next use so the mirror holds them too",
+              a->tag ? a->tag : "gaf", (a->dim * a->dim) >> 10, again);
+    b[sizeof b - 1] = 0;
+    glog(b);
+    return 1;
+}
+
 void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
 {
     a->tex = 0; a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
     a->gen++;                   /* ...and again: the texture itself is gone */
+    /* and so is everything it held, so the mirror of it says nothing. (The
+       re-create zeroes it again; doing it here as well means a mirror is never
+       stale for the frames between a loss and the next create.) */
+    if (a->mirror) { memset(a->mirror, 0, (size_t)a->dim * a->dim); a->mirrorSerial++; }
     memset(a->hash, 0, sizeof a->hash);
     /* the twin and the job died with the context (tagpu_rglsl_glreset has
        already forgotten the job: it runs first); re-armed on the next frame */
@@ -461,6 +495,13 @@ int tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, a->dim, a->dim, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
     glBindTexture(GL_TEXTURE_2D, 0);
+    /* A FRESH TEXTURE IS A FRESH MIRROR. The storage above is unwritten (index
+       0, the assumption the border comment below rests on) and a mirror that
+       kept the previous texture's texels would be a copy of something that no
+       longer exists. atlas_drop is deliberately NOT here: it leaves the texels
+       alone and lets re-inserted entries overwrite them, and the mirror follows
+       exactly because it follows the paints. */
+    if (a->mirror) { memset(a->mirror, 0, (size_t)a->dim * a->dim); a->mirrorSerial++; }
     a->tex = t;
     a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
     memset(a->hash, 0, sizeof a->hash);
@@ -673,6 +714,20 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
             memcpy(s_pad + (size_t)(p + h + k) * pw, s_pad + (size_t)(p + h - 1) * pw, (size_t)pw);
         glTexSubImage2D(GL_TEXTURE_2D, 0, x - p, y - p, cw, ch,
                         GL_RED, GL_UNSIGNED_BYTE, s_pad);
+        /* THE CPU MIRROR TAKES THE SAME BYTES, FROM THE SAME BUFFER, IN THE
+           SAME CALL (Phase G / G19e). Not a second copy of the art: the very
+           rows the line above hands GL, so a backend that uploads the mirror
+           and a backend that samples `tex` cannot disagree about a texel. The
+           rect is the cell's, border and alignment slack included, exactly as
+           above -- and it is inside the atlas by construction, because the
+           shelf packer refused the cell otherwise. */
+        if (a->mirror) {
+            const int x0 = x - p, y0 = y - p;
+            for (k = 0; k < ch; k++)
+                memcpy(a->mirror + (size_t)(y0 + k) * a->dim + x0,
+                       s_pad + (size_t)k * pw, (size_t)cw);
+            a->mirrorSerial++;
+        }
     }
     glBindTexture(GL_TEXTURE_2D, 0);
 

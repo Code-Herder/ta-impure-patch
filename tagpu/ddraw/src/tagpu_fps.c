@@ -350,7 +350,7 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
         TAGPU_ABSHOT shot;
         int taking = s_ab && !s_abDone;
         shot.live = 0;
-        if (taking) tagpu_abshot_begin(&shot);
+        if (taking) tagpu_abshot_begin(&shot, 0u);
 
     glUseProgram(s_prog);
     x_glUniform2f(s_uFrame, (float)f->game_width, (float)f->game_height);

@@ -1882,8 +1882,9 @@ tools/tacli log <i> -g '^vk:'                 # the window, the device, the swap
   not, since the picker outlives the lane. (A launch that falls back to the GDI renderer never
   starts it — there is no lane to pick a GPU for there.)
 
-**Since G19e it also draws the SCAFFOLD overlay** (`tagpu_scaffold.on`), the first of the world
-passes. Two ported passes now, and their A/B levers must not be armed together — see below.
+**Since G19e it also draws the SCAFFOLD overlay** (`tagpu_scaffold.on`) and the **FEATURES**
+(`tagpu_feat.on` — trees, rocks, splats, GAF wreckage), the first two world passes. Three ported
+passes now, and their A/B levers must not be armed together — see below.
 
 **The pixel A/B between the two lanes: `tagpu_<pass>.ab`.** Route D means no GL-side capture can
 see the Vulkan frame, so each lane captures its own half of the SAME frame and the two files are
@@ -1924,7 +1925,8 @@ touch <gamedir>/tagpu_fps.ab                             # one frame, both lanes
   needs no relaunch — **`touch` on a file that is already there does NOT re-arm**, and the symptom
   is `vk-ab.py` reporting a missing half after you deleted the PPMs. `rm` it, sleep a second, then
   `touch`. `tagpu_<pass>_gl.ppm` / `_vk.ppm` are binary PPMs; `ffmpeg -i x.ppm x.png` to look.
-- **ARM ONE PASS'S `.ab` AT A TIME, and turn the other ported pass's `.on` off.** Each GL capture
+- **ARM ONE PASS'S `.ab` AT A TIME, and turn the other ported passes' `.on` off** (`fps`,
+  `scaffold`, `feat`). Each GL capture
   holds one pass (its twin blacks the frame around its own draw); the Vulkan capture is one frame
   and holds *every* armed pass. The lane refuses to capture when more than one pass claimed the
   frame **or** more than one drew into it, and says so:
@@ -1950,6 +1952,36 @@ rm -f $G/tagpu_scaffold.ab $G/tagpu_scaffold_*.ppm; sleep 2; touch $G/tagpu_scaf
   readout's alone.
 - The GL twin blacks the frame immediately before its own draw and reads back immediately after,
   so **the player sees one frame with the terrain missing**. That is the lever, not a fault.
+**The feature pass's A/B (G19e), which is the shape for every pass that DEPTH-TESTS:**
+
+```bash
+tools/tacli arm <i> 'native.on=all wrecks' feat.on ss.off 'vk.on=color=0,0,0'
+tools/tacli scenario load <i> feat-forest --restart --res 1024x768 --maxfps 0
+sleep 12
+G=<main checkout>/tagpu/instances/<i>/gamedir
+rm -f $G/tagpu_feat.ab $G/tagpu_feat_*.ppm; sleep 2; touch $G/tagpu_feat.ab; sleep 6
+../.venv-undither/bin/python tools/vk-ab.py $G --pass feat        # 0 px apart
+```
+
+- **`ss.off` is not optional and the pass says so if you forget.** The GL capture is the world
+  FBO's viewport, `gw*ss × gh*ss`; the Vulkan one is the window's client rect. At the default
+  `ss` 2 they differ by a factor of two, and rather than write a pair `vk-ab.py` would refuse
+  afterwards the twin logs `feat: the A/B needs ss=1 …` and captures nothing. Confirm with
+  `grep -a 'native: FBO' tagpu.log` → `ss=1`.
+- **`native.on` must carry `wrecks`, or the feature pass emits nothing at all.** It only owns the
+  draw when the native wreck pass owns `DrawUnit` (see *Features* below); without it the gather is
+  muted, both halves are black and the A/B reads a meaningless 0.
+- **No `mark.on` needed** — the readout's font trap is the readout's alone.
+- **Both halves come out UPSIDE DOWN**, and that is correct: this pass draws into the world FBO,
+  whose clip-space +1 is the bottom of the screen (the composite quad turns it over). They are
+  upside down identically, which is all the comparison asks. `ffmpeg -i x.ppm x.png` to look.
+- **Classic++ makes the pass stand down**, with one line in the log: its restored atlas has no CPU
+  mirror, and drawing without it would be a different picture from the twin's. A `tacli` instance
+  opts out of the play defaults so this does not arise; `--defaults` does.
+- Expect `feat: atlas mirror armed, 4096 KB — N painted frame(s) re-decode …` once per session, and
+  `vk: feat: the Vulkan edition is up … depth format 129` (`VK_FORMAT_D24_UNORM_S8_UINT`). A
+  `depth format 0` means the device offered no 24-bit depth and the pass stayed down on purpose.
+
 - **To measure constraint 4** — that the GL lane did not move — arm `vk.off` on two instances, one
   running the tree's DLL and one the previous one, load the same static fixture, park the pointer
   in the same place (`keys <i> mouse:60,400`, the side panel, so its animating sprite is outside a
@@ -1964,9 +1996,15 @@ rm -f $G/tagpu_scaffold.ab $G/tagpu_scaffold_*.ppm; sleep 2; touch $G/tagpu_scaf
   **`feat-forest` cannot answer a cross-launch question at all**: its walking commander gives it a
   ~4000 px floor, *larger* than the difference being looked for. It is an excellent two-lane A/B
   fixture (both captures are the same frame) and a useless cross-launch one.
-- **Wait ~35 s after a `scenario load` before a cross-launch shot.** The engine's own "Arm forces
-  have been obliterated" messages from `clear_existing` sit in the viewport's top-left for tens of
-  seconds and land differently per run — 8179 px until they expire.
+- **Let the game RUN until the "obliterated" chat lines go, and only then pause.** The engine's own
+  "Arm forces have been obliterated" messages from `clear_existing` sit in the viewport's top-left
+  (x 138..430, y 52..106 at 1024x768) and are worth ~8 200 px until they expire — and **they expire
+  on TICKS, not on wall-clock seconds**. Pausing with `tab` straight after `scenario load` freezes
+  them on screen indefinitely: G19e's second landing read **8 282 px** between two binaries purely
+  because one had been paused at tick 155 and the other at tick 433. About 60 s unpaused at
+  `speed` 10 clears them; check with
+  `grep -a 'packet:' tagpu.log | tail -1 | grep -o 'tick=[0-9]*'` on both instances before pausing.
+  (The older note here said "wait ~35 s after the load", which is only true of a game left running.)
 
 **The GPU row is in Options → Visuals, Window column, and its list is ONE LAUNCH BEHIND.** The
 captions live in the generated `.GUI`, which is written at DLL attach, and a Vulkan instance

@@ -161,6 +161,7 @@
 #include "tagpu_vk.h"
 #include "tagpu_vk_fps.h"
 #include "tagpu_vk_scaffold.h"
+#include "tagpu_vk_feat.h"
 #include "tagpu_vk_shot.h"
 
 #define ON_FILE    "tagpu_vk.on"
@@ -182,6 +183,7 @@
    lever. `s_abPath` below carries whichever one claimed the pending frame. */
 #define AB_FPS     "tagpu_fps_vk.ppm"
 #define AB_SCAF    "tagpu_scaffold_vk.ppm"
+#define AB_FEAT    "tagpu_feat_vk.ppm"
 #define GPUS_FILE  "tagpu_vk.gpus"      /* the cache the menu reads at attach */
 #define CFG_FILE   "tagpu_vk.cfg"       /* the player's choice, by name       */
 #define CFG_TMP    "tagpu_vk.cfg.tmp"
@@ -280,6 +282,7 @@ static PFN_vkGetInstanceProcAddr s_gipa;
     X(vkCreateInstance) X(vkDestroyInstance) \
     X(vkEnumeratePhysicalDevices) X(vkGetPhysicalDeviceProperties) \
     X(vkGetPhysicalDeviceQueueFamilyProperties) \
+    X(vkGetPhysicalDeviceFormatProperties) X(vkGetPhysicalDeviceMemoryProperties) \
     X(vkCreateWin32SurfaceKHR) X(vkDestroySurfaceKHR) \
     X(vkEnumerateDeviceExtensionProperties) \
     X(vkGetPhysicalDeviceSurfaceSupportKHR) \
@@ -301,7 +304,9 @@ static PFN_vkGetInstanceProcAddr s_gipa;
     X(vkDestroySemaphore) X(vkCreateFence) X(vkDestroyFence) \
     X(vkAcquireNextImageKHR) X(vkQueueSubmit) X(vkQueuePresentKHR) \
     X(vkWaitForFences) X(vkResetFences) X(vkResetCommandBuffer) \
-    X(vkDeviceWaitIdle)
+    X(vkDeviceWaitIdle) \
+    X(vkCreateImage) X(vkDestroyImage) X(vkGetImageMemoryRequirements) \
+    X(vkBindImageMemory) X(vkAllocateMemory) X(vkFreeMemory)
 
 #define DECL(n) static PFN_##n n;
 IFNS(DECL)
@@ -328,6 +333,17 @@ typedef struct {
     VkRenderPass     rp;
     VkImageView      view[MAXIMG];
     VkFramebuffer    fb[MAXIMG];
+    /* G19e: THE DEPTH ATTACHMENT, one per swapchain image and not one shared.
+       `nimg` frames are in flight at once and each has a framebuffer of its
+       own, so a single depth buffer would be written by two frames that
+       overlap on the GPU -- and the whole point of the seam's fence is that
+       slot i's resources are free when slot i comes round, which is a
+       statement about per-slot objects. It is cleared by the render pass's
+       loadOp and never stored, so nothing is carried between frames. */
+    VkFormat         dfmt;                 /* UNDEFINED = no depth attachment */
+    VkImage          dimg[MAXIMG];
+    VkDeviceMemory   dmem[MAXIMG];
+    VkImageView      dview[MAXIMG];
     VkSemaphore      semAcquire[MAXIMG];   /* by FRAME index                  */
     VkSemaphore      semRelease[MAXIMG];   /* by IMAGE index -- see vk_present */
     VkFence          fence[MAXIMG];
@@ -1298,32 +1314,85 @@ static int vk_swapchain(int w, int h)
    It is created once and kept for the life of the device so that a pass can
    build a pipeline against it and keep that pipeline across a resize; only the
    framebuffers follow the swapchain. */
+/* THE DEPTH FORMAT IS 24-BIT FIXED POINT OR THERE IS NONE, and that is a
+   parity decision rather than a preference. The GL lane's world FBO is
+   GL_DEPTH24_STENCIL8, so every depth value a ported pass is tested against
+   there is quantised to 24 bits; a D32_SFLOAT attachment here would resolve a
+   z-fight the other way in exactly the cases that are too close to call, and
+   those are the cases a 0-px comparison is made of. A device that offers
+   neither 24-bit format gets no depth attachment at all -- the passes that do
+   not test go on working and the ones that do refuse to arm and say so, which
+   is a stated gap rather than a silently different picture. */
+static VkFormat vk_depth_format(void)
+{
+    static const VkFormat want[2] = {
+        VK_FORMAT_D24_UNORM_S8_UINT,        /* what the GL FBO is */
+        VK_FORMAT_X8_D24_UNORM_PACK32       /* the same 24 bits, no stencil */
+    };
+    int i;
+    for (i = 0; i < 2; i++) {
+        VkFormatProperties fp;
+        memset(&fp, 0, sizeof fp);
+        vkGetPhysicalDeviceFormatProperties(s_vk.pd, want[i], &fp);
+        if (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)
+            return want[i];
+    }
+    return VK_FORMAT_UNDEFINED;
+}
+
 static int vk_renderpass(void)
 {
-    VkAttachmentDescription at;
-    VkAttachmentReference ref;
+    VkAttachmentDescription at[2];
+    VkAttachmentReference ref, dref;
     VkSubpassDescription sub;
     VkSubpassDependency dep[2];
     VkRenderPassCreateInfo rci = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
 
-    memset(&at, 0, sizeof at);
-    at.format = s_vk.fmt;
-    at.samples = VK_SAMPLE_COUNT_1_BIT;
-    at.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    at.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    at.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    at.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    at.initialLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    at.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    s_vk.dfmt = vk_depth_format();
+    if (s_vk.dfmt == VK_FORMAT_UNDEFINED)
+        vklog("no 24-bit depth format on this device - the passes that depth-test "
+              "will not arm (the GL lane's FBO is DEPTH24_STENCIL8 and a 32-bit "
+              "float attachment would not settle a z-fight the same way)");
+
+    memset(at, 0, sizeof at);
+    at[0].format = s_vk.fmt;
+    at[0].samples = VK_SAMPLE_COUNT_1_BIT;
+    at[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    at[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    at[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    at[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    at[0].initialLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    at[0].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    /* CLEARED BY THE RENDER PASS AND NEVER STORED. The GL lane clears depth at
+       the top of the world FBO (glClear(GL_DEPTH_BUFFER_BIT), clear value 1.0)
+       and this is the same thing in the same place; DONT_CARE on the way out
+       says the contents do not outlive the frame, which is what lets the driver
+       skip writing them back. UNDEFINED in, because a CLEAR discards whatever
+       was there -- so no layout has to be carried between frames and no barrier
+       orders one frame's depth writes against the next's clear beyond the
+       dependency below. */
+    at[1].format = s_vk.dfmt;
+    at[1].samples = VK_SAMPLE_COUNT_1_BIT;
+    at[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    at[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    at[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    at[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    at[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    at[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
     memset(&ref, 0, sizeof ref);
     ref.attachment = 0;
     ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    memset(&dref, 0, sizeof dref);
+    dref.attachment = 1;
+    dref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
     memset(&sub, 0, sizeof sub);
     sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     sub.colorAttachmentCount = 1;
     sub.pColorAttachments = &ref;
+    if (s_vk.dfmt != VK_FORMAT_UNDEFINED) sub.pDepthStencilAttachment = &dref;
 
     memset(dep, 0, sizeof dep);
     dep[0].srcSubpass = VK_SUBPASS_EXTERNAL;
@@ -1339,12 +1408,88 @@ static int vk_renderpass(void)
     dep[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     dep[1].dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
     dep[1].dstAccessMask = 0;
+    if (s_vk.dfmt != VK_FORMAT_UNDEFINED) {
+        /* THE DEPTH ATTACHMENT NEEDS ITS OWN HALF OF BOTH DEPENDENCIES. The
+           clear the render pass performs is an EARLY_FRAGMENT_TESTS write, and
+           the previous frame using this same image finished its depth writes at
+           LATE_FRAGMENT_TESTS; between two submits on one queue the ordering is
+           submission order, but the ACCESS still has to be made visible, which
+           is what these masks do. Leaving them off is the class of omission a
+           validation layer catches and a correct picture does not. */
+        dep[0].srcStageMask |= VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        dep[0].srcAccessMask |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        dep[0].dstStageMask |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dep[0].dstAccessMask |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        dep[1].srcStageMask |= VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        dep[1].srcAccessMask |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    }
 
-    rci.attachmentCount = 1; rci.pAttachments = &at;
+    rci.attachmentCount = s_vk.dfmt != VK_FORMAT_UNDEFINED ? 2 : 1;
+    rci.pAttachments = at;
     rci.subpassCount = 1; rci.pSubpasses = &sub;
     rci.dependencyCount = 2; rci.pDependencies = dep;
     if (vkCreateRenderPass(s_vk.dev, &rci, NULL, &s_vk.rp) != VK_SUCCESS) {
         vklog("the render pass would not create"); s_vk.rp = VK_NULL_HANDLE; return 0;
+    }
+    return 1;
+}
+
+/* One frame slot's depth image, at the swapchain's extent. Built with the rest
+   of the per-image objects and torn down with them, because it is sized by the
+   swapchain exactly as the framebuffers are. */
+static int vk_depth_image(uint32_t i)
+{
+    VkImageCreateInfo ici = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+    VkMemoryAllocateInfo mai = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+    VkImageViewCreateInfo ivi = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+    VkPhysicalDeviceMemoryProperties mp;
+    VkMemoryRequirements req;
+    uint32_t t;
+    int type = -1;
+
+    ici.imageType = VK_IMAGE_TYPE_2D;
+    ici.format = s_vk.dfmt;
+    ici.extent.width = s_vk.ext.width;
+    ici.extent.height = s_vk.ext.height;
+    ici.extent.depth = 1;
+    ici.mipLevels = 1;
+    ici.arrayLayers = 1;
+    ici.samples = VK_SAMPLE_COUNT_1_BIT;
+    ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (vkCreateImage(s_vk.dev, &ici, NULL, &s_vk.dimg[i]) != VK_SUCCESS) {
+        vklog("depth image %u", i); return 0;
+    }
+    vkGetImageMemoryRequirements(s_vk.dev, s_vk.dimg[i], &req);
+    vkGetPhysicalDeviceMemoryProperties(s_vk.pd, &mp);
+    for (t = 0; t < mp.memoryTypeCount; t++)
+        if ((req.memoryTypeBits & (1u << t)) &&
+            (mp.memoryTypes[t].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+            type = (int)t; break;
+        }
+    if (type < 0) { vklog("no device-local memory for a depth image"); return 0; }
+    mai.allocationSize = req.size;
+    mai.memoryTypeIndex = (uint32_t)type;
+    if (vkAllocateMemory(s_vk.dev, &mai, NULL, &s_vk.dmem[i]) != VK_SUCCESS) {
+        vklog("depth image memory %u", i); return 0;
+    }
+    if (vkBindImageMemory(s_vk.dev, s_vk.dimg[i], s_vk.dmem[i], 0) != VK_SUCCESS) {
+        vklog("binding depth image %u", i); return 0;
+    }
+    ivi.image = s_vk.dimg[i];
+    ivi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    ivi.format = s_vk.dfmt;
+    /* the STENCIL aspect is deliberately not in the view: nothing here tests or
+       writes stencil, and a depth/stencil format whose view carries both cannot
+       be used as a plain depth attachment on every driver */
+    ivi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    ivi.subresourceRange.levelCount = 1;
+    ivi.subresourceRange.layerCount = 1;
+    if (vkCreateImageView(s_vk.dev, &ivi, NULL, &s_vk.dview[i]) != VK_SUCCESS) {
+        vklog("depth image view %u", i); return 0;
     }
     return 1;
 }
@@ -1387,11 +1532,20 @@ static int vk_perimage(void)
         if (vkCreateImageView(s_vk.dev, &ivi, NULL, &s_vk.view[i]) != VK_SUCCESS) {
             vklog("swapchain image view %u", i); return 0;
         }
-        fbi.renderPass = s_vk.rp;
-        fbi.attachmentCount = 1; fbi.pAttachments = &s_vk.view[i];
-        fbi.width = s_vk.ext.width; fbi.height = s_vk.ext.height; fbi.layers = 1;
-        if (vkCreateFramebuffer(s_vk.dev, &fbi, NULL, &s_vk.fb[i]) != VK_SUCCESS) {
-            vklog("framebuffer %u", i); return 0;
+        {
+            VkImageView av[2];
+            av[0] = s_vk.view[i];
+            if (s_vk.dfmt != VK_FORMAT_UNDEFINED) {
+                if (!vk_depth_image(i)) return 0;
+                av[1] = s_vk.dview[i];
+            }
+            fbi.renderPass = s_vk.rp;
+            fbi.attachmentCount = s_vk.dfmt != VK_FORMAT_UNDEFINED ? 2 : 1;
+            fbi.pAttachments = av;
+            fbi.width = s_vk.ext.width; fbi.height = s_vk.ext.height; fbi.layers = 1;
+            if (vkCreateFramebuffer(s_vk.dev, &fbi, NULL, &s_vk.fb[i]) != VK_SUCCESS) {
+                vklog("framebuffer %u", i); return 0;
+            }
         }
     }
     return 1;
@@ -1411,9 +1565,14 @@ static void vk_perimage_free(void)
         memset(s_vk.cmd, 0, sizeof s_vk.cmd);
     }
     for (i = 0; i < MAXIMG; i++) {
-        /* The framebuffer goes before the view it is built on. */
+        /* The framebuffer goes before the views it is built on. */
         if (s_vk.fb[i])   { vkDestroyFramebuffer(s_vk.dev, s_vk.fb[i], NULL); s_vk.fb[i] = VK_NULL_HANDLE; }
         if (s_vk.view[i]) { vkDestroyImageView(s_vk.dev, s_vk.view[i], NULL); s_vk.view[i] = VK_NULL_HANDLE; }
+        /* the depth image is OURS, unlike the swapchain's colour image: the
+           view, then the image, then its memory */
+        if (s_vk.dview[i]) { vkDestroyImageView(s_vk.dev, s_vk.dview[i], NULL); s_vk.dview[i] = VK_NULL_HANDLE; }
+        if (s_vk.dimg[i])  { vkDestroyImage(s_vk.dev, s_vk.dimg[i], NULL);      s_vk.dimg[i] = VK_NULL_HANDLE; }
+        if (s_vk.dmem[i])  { vkFreeMemory(s_vk.dev, s_vk.dmem[i], NULL);        s_vk.dmem[i] = VK_NULL_HANDLE; }
         if (s_vk.semAcquire[i]) { vkDestroySemaphore(s_vk.dev, s_vk.semAcquire[i], NULL); s_vk.semAcquire[i] = VK_NULL_HANDLE; }
         if (s_vk.semRelease[i]) { vkDestroySemaphore(s_vk.dev, s_vk.semRelease[i], NULL); s_vk.semRelease[i] = VK_NULL_HANDLE; }
         if (s_vk.fence[i])      { vkDestroyFence(s_vk.dev, s_vk.fence[i], NULL);          s_vk.fence[i] = VK_NULL_HANDLE; }
@@ -1437,6 +1596,7 @@ static void vk_down(void)
            -- nothing of theirs is still in a queue. */
         tagpu_vk_fps_down(&s_pass);
         tagpu_vk_scaffold_down(&s_pass);
+        tagpu_vk_feat_down(&s_pass);
         ab_drop("the lane coming down", idle);
         tagpu_vk_shot_down(&s_pass);
         vk_perimage_free();
@@ -1689,6 +1849,7 @@ static DWORD WINAPI up_worker(LPVOID arg)
     s_pass.dev = s_vk.dev;
     s_pass.rp = s_vk.rp;
     s_pass.fmt = s_vk.fmt;
+    s_pass.dfmt = s_vk.dfmt;
     s_pass.slots = s_vk.nimg;
     s_pass.flipok = s_vk.flipok;
     s_pass.gipa = s_gipa;
@@ -1848,7 +2009,8 @@ static int vk_present(void)
        is what proves the GPU has finished with that slot's buffers, and it is
        the only thing that does. */
     {
-        int draw_fps = 0, draw_scaf = 0, ab_fps = 0, ab_scaf = 0;
+        int draw_fps = 0, draw_scaf = 0, draw_feat = 0;
+        int ab_fps = 0, ab_scaf = 0, ab_feat = 0;
         int ndraw = 0, nclaim = 0;
         const char* abpath = NULL;
         VkRenderPassBeginInfo rbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
@@ -1857,20 +2019,38 @@ static int vk_present(void)
                draws the scaffold before the readout, and two passes that blend
                are not commutative -- so the order here is that order, not the
                order the files were written in. */
+            /* The features are the WORLD, so they go first: the GL lane draws
+               them into the world FBO before the scaffold overlay and long
+               before the readout, and two passes that blend are not
+               commutative. */
+            draw_feat = tagpu_vk_feat_prepare(&s_pass, cb, fi);
+            ab_feat = tagpu_vk_feat_ab_frame();
             draw_scaf = tagpu_vk_scaffold_prepare(&s_pass, cb, fi);
             ab_scaf = tagpu_vk_scaffold_ab_frame();
             draw_fps = tagpu_vk_fps_prepare(&s_pass, cb, fi);
             ab_fps = tagpu_vk_fps_ab_frame();
         }
-        ndraw = draw_scaf + draw_fps;
-        nclaim = ab_scaf + ab_fps;
-        abpath = ab_scaf ? AB_SCAF : (ab_fps ? AB_FPS : NULL);
+        ndraw = draw_feat + draw_scaf + draw_fps;
+        nclaim = ab_feat + ab_scaf + ab_fps;
+        abpath = ab_feat ? AB_FEAT : (ab_scaf ? AB_SCAF : (ab_fps ? AB_FPS : NULL));
 
         if (s_vk.rp && s_vk.fb[idx]) {
+            VkClearValue cv[2];
+            memset(cv, 0, sizeof cv);
+            /* cv[0] is never used -- the colour attachment's loadOp is LOAD and
+               G19a's vkCmdClearColorImage above is what applies the lever's
+               colour -- but the array has to reach the index of the attachment
+               that DOES clear, which is the depth one. cv[1] is 1.0, the value
+               glClear(GL_DEPTH_BUFFER_BIT) uses on the GL side. */
+            cv[1].depthStencil.depth = 1.0f;
             rbi.renderPass = s_vk.rp;
             rbi.framebuffer = s_vk.fb[idx];
             rbi.renderArea.extent = s_vk.ext;
+            rbi.clearValueCount = s_vk.dfmt != VK_FORMAT_UNDEFINED ? 2 : 0;
+            rbi.pClearValues = cv;
             vkCmdBeginRenderPass(cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+            if (draw_feat)
+                tagpu_vk_feat_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_scaf)
                 tagpu_vk_scaffold_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_fps)
@@ -1968,6 +2148,7 @@ static int vk_resize(int w, int h)
        is a window drag, not a frame.) */
     tagpu_vk_fps_down(&s_pass);
     tagpu_vk_scaffold_down(&s_pass);
+    tagpu_vk_feat_down(&s_pass);
     ab_drop("the swapchain rebuilding", idle);
     vk_perimage_free();
     r = vk_swapchain(w, h);

@@ -158,6 +158,20 @@ typedef struct TAGPU_GAFATLAS {
     int           dumpedN;      /* entries when tagpu_restoredump.on last wrote */
     const unsigned char* pal;   /* the live palette, for the tileability test */
     unsigned      palSerial;    /* tagpu_pal serial the TWIN was restored through */
+    /* THE CPU MIRROR (Phase G / G19e, the Vulkan lane). `dim` x `dim` bytes
+       holding exactly what has been uploaded to `tex`, written by the same
+       atlas_paint that writes GL and by nothing else, so a second backend can
+       upload the SAME texels rather than decode the art a second time. NULL
+       until tagpu_gaf_atlas_mirror asks for it; a pass that never asks pays
+       nothing. `mirrorSerial` is bumped by every paint, and is what a backend
+       holding a copy tests to know its copy is stale -- 0 while there is no
+       mirror, and never 0 once a paint has landed in one.
+       ONCE ARMED IT STAYS for the process's life: there is no atlas destructor
+       here (every atlas in the tree is a static owned by its pass), and a lane
+       cleared and re-armed finds the mirror already correct rather than paying
+       for the re-decode again. */
+    unsigned char* mirror;
+    unsigned      mirrorSerial;
     /* open-addressed index over `ents`, keyed on the frame header address:
        the lookup runs once per emitted sprite and the feature pass emits
        hundreds per frame against a four-figure entry count, which a linear
@@ -229,4 +243,18 @@ int  tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a);
    Classic++ switch is seen on: creates the twin and the queue and queues
    every frame already in the atlas. A no-op after that; render thread only. */
 void tagpu_gaf_atlas_restore(TAGPU_GAFATLAS* a, const unsigned char* pal);
+
+/* Ask for the CPU mirror above, and make it CORRECT FROM THE INSTANT IT
+   EXISTS. A mirror allocated after the atlas has already painted frames would
+   hold zeros where those frames are, and a backend uploading it would draw
+   black trees for the rest of the session -- silently, because nothing in the
+   atlas is wrong. So this marks every painted entry RESERVED (`ok` 0, `resv`
+   1), which is the state a repack leaves an entry in: the rect stays where it
+   is and the next tagpu_gaf_atlas_get for that frame paints it again, into GL
+   and into the mirror together. The atlas re-converges over the next frames at
+   the cost of one RLE decode per frame still on screen.
+
+   Render thread only, like the rest of this module. Returns 0 if the memory
+   was refused, and the atlas then goes on working without one. Idempotent. */
+int  tagpu_gaf_atlas_mirror(TAGPU_GAFATLAS* a);
 #endif

@@ -363,6 +363,7 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     VkDynamicState dyn[2] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
     VkPipelineDynamicStateCreateInfo dy = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
     VkGraphicsPipelineCreateInfo gp = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+    VkPipelineDepthStencilStateCreateInfo ds;
     VkShaderModule vs = VK_NULL_HANDLE, fs = VK_NULL_HANDLE;
     VkResult r;
     int ok = 0;
@@ -449,16 +450,31 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     gp.pViewportState = &vp;
     gp.pRasterizationState = &rs;
     gp.pMultisampleState = &ms;
+    /* A DEPTH STATE THAT TESTS NOTHING AND WRITES NOTHING, and it is required
+       rather than tidy: since G19e the seam's render pass carries a depth
+       attachment, and a pipeline built against a subpass that has one may not
+       leave pDepthStencilState null. This pass's GL twin calls neither
+       glEnable(GL_DEPTH_TEST) nor glDepthMask, so all three flags are off and
+       the picture is what it was before the attachment existed -- which is what
+       its own A/B re-measures. */
+    memset(&ds, 0, sizeof ds);
+    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    ds.depthTestEnable = VK_FALSE;
+    ds.depthWriteEnable = VK_FALSE;
+    ds.depthBoundsTestEnable = VK_FALSE;
+    ds.stencilTestEnable = VK_FALSE;
+
     gp.pColorBlendState = &cb;
+    gp.pDepthStencilState = &ds;
     gp.pDynamicState = &dy;
     gp.layout = s_plo;
     gp.renderPass = d->rp;
     gp.subpass = 0;
-    /* NO DEPTH STATE, because the render pass has no depth attachment and this
-       pass does not test: the GL twin calls neither glEnable(GL_DEPTH_TEST) nor
-       glDepthMask. The world passes that DO test are G19e's next landings, and
-       the GL/Vulkan depth-range difference they have to answer is stated in
-       gpu-status §2.28 rather than guessed at here. */
+    /* THE DEPTH STATE IS OFF, not absent -- see where `ds` is filled above. The
+       seam's render pass carries a depth attachment since G19e's second world
+       pass, and the GL/Vulkan depth-range answer that one needed
+       (minDepth 0.5 / maxDepth 1.0, gpu-status §2.28) is in tagpu_vk_feat.c;
+       this pass does not test, so it does not need it. */
     r = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_pipe);
     if (r != VK_SUCCESS) { plog(d, "scaf: vkCreateGraphicsPipelines refused it (%d)", (int)r); goto out; }
     ok = 1;

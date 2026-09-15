@@ -520,7 +520,7 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
     TAGPU_ABSHOT shot;
     int taking = s_ab && !s_abDone;
     shot.live = 0;
-    if (taking) tagpu_abshot_begin(&shot);
+    if (taking) tagpu_abshot_begin(&shot, 0u);
 
     glUseProgram(s_prog);
     glBindVertexArray(s_vao);

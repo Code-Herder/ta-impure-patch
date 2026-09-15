@@ -12,19 +12,24 @@ static void alog(const char* s)
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
 
-/* The five this file needs that opengl_utils.h does not already carry. GL 1.1
-   is not offered by wglGetProcAddress on every driver, so opengl32 is asked
-   second -- the fork's own `getgl` shape. */
+/* The seven this file needs that opengl_utils.h does not already carry (five
+   until G19e's second world pass added the depth clear). GL 1.1 is not offered
+   by wglGetProcAddress on every driver, so opengl32 is asked second -- the
+   fork's own `getgl` shape. */
 typedef void      (APIENTRY *PFN_GETFLOATV)(GLenum, GLfloat*);
 typedef GLboolean (APIENTRY *PFN_ISENABLED)(GLenum);
 typedef void      (APIENTRY *PFN_DISABLE)(GLenum);
 typedef void      (APIENTRY *PFN_CLEARCOLOR)(GLfloat, GLfloat, GLfloat, GLfloat);
 typedef void      (APIENTRY *PFN_READPIXELS)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*);
+typedef void      (APIENTRY *PFN_DEPTHMASK)(GLboolean);
+typedef void      (APIENTRY *PFN_CLEARDEPTH)(GLdouble);
 static PFN_GETFLOATV   x_glGetFloatv;
 static PFN_ISENABLED   x_glIsEnabled;
 static PFN_DISABLE     x_glDisable;
 static PFN_CLEARCOLOR  x_glClearColor;
 static PFN_READPIXELS  x_glReadPixels;
+static PFN_DEPTHMASK   x_glDepthMask;
+static PFN_CLEARDEPTH  x_glClearDepth;
 static int s_ready;                 /* 0 unresolved, 1 ready, 2 refused once  */
 
 static void* getgl(const char* n)
@@ -47,11 +52,15 @@ static int init_gl(void)
     x_glDisable    = (PFN_DISABLE)    getgl("glDisable");
     x_glClearColor = (PFN_CLEARCOLOR) getgl("glClearColor");
     x_glReadPixels = (PFN_READPIXELS) getgl("glReadPixels");
+    x_glDepthMask  = (PFN_DEPTHMASK)  getgl("glDepthMask");
+    x_glClearDepth = (PFN_CLEARDEPTH) getgl("glClearDepth");
     if (!x_glGetFloatv)       miss = "glGetFloatv";
     else if (!x_glIsEnabled)  miss = "glIsEnabled";
     else if (!x_glDisable)    miss = "glDisable";
     else if (!x_glClearColor) miss = "glClearColor";
     else if (!x_glReadPixels) miss = "glReadPixels";
+    else if (!x_glDepthMask)  miss = "glDepthMask";
+    else if (!x_glClearDepth) miss = "glClearDepth";
     else if (!glClear)        miss = "glClear";
     else if (!glEnable)       miss = "glEnable";
     else if (!glGetIntegerv)  miss = "glGetIntegerv";
@@ -68,19 +77,39 @@ static int init_gl(void)
     return 1;
 }
 
-void tagpu_abshot_begin(TAGPU_ABSHOT* s)
+void tagpu_abshot_begin(TAGPU_ABSHOT* s, unsigned flags)
 {
+    GLbitfield bits = GL_COLOR_BUFFER_BIT;
     if (!s) return;
     s->live = 0;
+    s->flags = flags;
     if (!init_gl()) return;
     s->live = 1;
     x_glGetFloatv(GL_COLOR_CLEAR_VALUE, s->clear);
+    s->cleardepth = 1.0f;              /* the initial value, if the get fails */
+    x_glGetFloatv(GL_DEPTH_CLEAR_VALUE, &s->cleardepth);
     s->scissor = x_glIsEnabled(GL_SCISSOR_TEST);
+    s->depthmask = GL_TRUE;
+    glGetIntegerv(GL_DEPTH_WRITEMASK, &s->depthmask);
     s->pack = 4;                       /* the initial value, if the get fails */
     glGetIntegerv(GL_PACK_ALIGNMENT, &s->pack);
+    /* THE CLEAR IS ALWAYS UNSCISSORED. A scissor an earlier pass left on would
+       black a rectangle and leave the rest of the frame in the capture. */
     x_glDisable(GL_SCISSOR_TEST);
     x_glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
+    if (flags & TAGPU_ABSHOT_DEPTH) {
+        bits |= GL_DEPTH_BUFFER_BIT;
+        /* masked by the depth write mask, so it is forced for the clear alone */
+        x_glDepthMask(GL_TRUE);
+        x_glClearDepth(1.0);
+    }
+    glClear(bits);
+    if (flags & TAGPU_ABSHOT_DEPTH)
+        x_glDepthMask(s->depthmask ? GL_TRUE : GL_FALSE);
+    /* AND THE SCISSOR GOES BACK BEFORE THE PASS DRAWS when the caller asked,
+       because from here to `end` is the pass itself and a lever that changes
+       how the pass draws is measuring something else. */
+    if ((flags & TAGPU_ABSHOT_SCISSOR) && s->scissor) glEnable(GL_SCISSOR_TEST);
 }
 
 /* A binary PPM of an RGBA readback, rows turned over.
@@ -149,5 +178,9 @@ void tagpu_abshot_end(TAGPU_ABSHOT* s, const char* path, const char* tag)
        kind of leak from a lever into play state as the clear colour was. */
     glPixelStorei(GL_PACK_ALIGNMENT, s->pack);
     x_glClearColor(s->clear[0], s->clear[1], s->clear[2], s->clear[3]);
+    if (s->flags & TAGPU_ABSHOT_DEPTH) x_glClearDepth((GLdouble)s->cleardepth);
+    /* the scissor may already be back (TAGPU_ABSHOT_SCISSOR); enabling an
+       enabled capability is not an error and this is the one path that runs
+       for every caller */
     if (s->scissor) glEnable(GL_SCISSOR_TEST);
 }

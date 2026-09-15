@@ -75,6 +75,8 @@
 #include "tagpu_classicpp.h"
 #include "tagpu_native.h"
 #include "tagpu_packet.h"   /* the frame packet: the view, the tables (landing 3) */
+#include "tagpu_abshot.h"   /* the GL half of the Phase G A/B */
+#include "tagpu_vk.h"       /* tagpu_vk_armed(): whether to pay for the mirror */
 
 /* ---- engine layout (terrain-depth.md appendix, byte-confirmed) ----
    THE FEATURE GRID IS GONE FROM THIS FILE (frame packet exchange, landing 3).
@@ -132,7 +134,9 @@
    a budget the view is expected to live inside. Hitting it still logs
    DROPPED(full=), which is then a real report and not a resolution. */
 #define BV_MAX_BYTES (16u * 1024u * 1024u)
-#define FVST         10        /* x,y,enc, u,v, ck,mode, wx,wz, lam           */
+/* THE VERTEX LAYOUT IS THE HEADER'S, so that the Vulkan edition of this pass
+   builds its vertex input from the same table the VAO below is built from. */
+#define FVST         TAGPU_FEAT_VST
 #define ATLAS_DIM    2048
 #define ATLAS_MAX    4096      /* a map's feature frames: a body and a shadow */
                                /* per def, plus every frame of the animating  */
@@ -188,6 +192,24 @@ static int s_log = 0, s_passive = 0;
 static int s_flat = 1, s_tall = 1, s_shadow = 1, s_wreck = 1;
 static unsigned s_armCheck = 0;
 
+/* The GAF atlas this pass fills once per map. Declared here rather than beside
+   the rest of the GL state because the arm poll below asks it for a CPU mirror
+   (Phase G / G19e). */
+static TAGPU_GAFENT   s_atlasEnts[ATLAS_MAX];
+static TAGPU_GAFATLAS s_atlas;
+
+/* ---- the hand-over to the Vulkan edition, and the A/B lever (Phase G/G19e)
+   `tagpu_feat.ab` makes this pass draw over a black frame with a cleared depth
+   buffer and read it back ONCE; `s_abFrame` travels to the Vulkan lane with the
+   geometry rather than being polled twice on two cadences, so both lanes
+   capture the same frame. See tagpu_feat.h and tagpu_vk_feat.c. */
+#define ABFILE   "tagpu_feat.ab"
+#define ABOUT    "tagpu_feat_gl.ppm"
+static int s_ab, s_abDone, s_abFrame;
+static int s_pubHave;                  /* this frame's hand-over is waiting   */
+static TAGPU_FEATHAND s_pub;
+static int s_mirrorAsked;              /* the atlas mirror has been asked for */
+
 int tagpu_feat_armed(unsigned frame_counter)
 {
     int was;
@@ -229,6 +251,28 @@ int tagpu_feat_armed(unsigned frame_counter)
         }
     }
     s_armed = 1;
+    /* the A/B lever, on the same beat. It re-arms when the file goes away and
+       comes back, which is why `touch` on one that is already there does
+       nothing. */
+    s_ab = GetFileAttributesA(ABFILE) != INVALID_FILE_ATTRIBUTES;
+    if (!s_ab) s_abDone = 0;
+    /* THE ATLAS MIRROR (Phase G / G19e), on this beat and not per frame --
+       tagpu_vk_armed() is two file-attribute queries and a pass that asked
+       every frame would make them on every frame of ordinary play, where the
+       answer is no and stays no.
+
+       IT IS ASKED FOR HERE, AND THIS RUNS BEFORE THE GATHER, which is what
+       makes the hand-over correct on the first frame that has one rather than
+       a few frames later: asking marks every painted entry reserved, and
+       tagpu_gaf_atlas_get PAINTS a reserved entry before it returns it, so by
+       the time a quad carries a UV those texels are in the mirror as well as in
+       the texture. Entries nothing draws may stay stale in it; nothing samples
+       them, in either lane.
+       4 MB, so it is paid for only while the Vulkan lane is armed -- and
+       `s_mirrorAsked` is set only on SUCCESS, so a request made before the
+       atlas has its dimensions (the first frames of a session) is retried. */
+    if (!s_mirrorAsked && s_atlas.dim > 0 && tagpu_vk_armed())
+        s_mirrorAsked = tagpu_gaf_atlas_mirror(&s_atlas);
     if (s_passive) tagpu_featown_set_skip(0);
     if (was != 1) {
         char b[160];
@@ -247,8 +291,6 @@ static int    s_state = 0;             /* 0 unloaded, 1 ready, 2 failed       */
 static GLuint s_prog, s_vao, s_vbo;
 static GLint  s_uGame, s_uFog, s_uFogOrg, s_uFogDim, s_uZoom, s_uZoomC, s_uDepthScale,
               s_uRestored, s_uLit;
-static TAGPU_GAFENT   s_atlasEnts[ATLAS_MAX];
-static TAGPU_GAFATLAS s_atlas;
 /* the map the atlas's entries belong to (see tagpu_feat_gather) */
 static const char* s_mapGrid;
 static int         s_mapW, s_mapH;
@@ -402,16 +444,20 @@ static void init_gl(void)
     glGenBuffers(1, &s_vbo); glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     /* no storage yet: the draw re-specifies it at this frame's size, and the
        attributes below only record the binding */
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, FVST * 4, (void*)0);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, FVST * 4, (void*)12);
-    glEnableVertexAttribArray(2);
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, FVST * 4, (void*)20);
-    glEnableVertexAttribArray(3);
-    glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, FVST * 4, (void*)28);
-    glEnableVertexAttribArray(4);
-    glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, FVST * 4, (void*)36);
+    {
+        /* ONE TABLE, TWO LANES (tagpu_feat.h TAGPU_FEAT_ATTRS): this loop and
+           tagpu_vk_feat.c's VkVertexInputAttributeDescription array are built
+           from the same literal, so a layout change cannot reach one and miss
+           the other -- which would make the A/B compare two different meshes
+           and call it a rasteriser difference. */
+        static const struct { int loc, n, off; } at[TAGPU_FEAT_NATTR] = TAGPU_FEAT_ATTRS;
+        int i;
+        for (i = 0; i < TAGPU_FEAT_NATTR; i++) {
+            glEnableVertexAttribArray((GLuint)at[i].loc);
+            glVertexAttribPointer((GLuint)at[i].loc, at[i].n, GL_FLOAT, GL_FALSE,
+                                  FVST * 4, (void*)(size_t)at[i].off);
+        }
+    }
     glBindVertexArray(0);
 
     tagpu_gaf_atlas_lost(&s_atlas);          /* its texture is made on first use */
@@ -437,6 +483,9 @@ void tagpu_feat_glreset(void)
     s_state = 0;
     tagpu_gaf_atlas_lost(&s_atlas);
     s_mapGrid = NULL;           /* the entries went with the context */
+    /* and so did the hand-over: its texel pointers name an atlas that no longer
+       holds anything, and its vertices a frame that will not be drawn */
+    s_pubHave = 0; s_abFrame = 0;
 }
 
 /* ---- emission ---- */
@@ -910,10 +959,74 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     return s_nv[B_SHADOW] + s_nv[B_BODY];
 }
 
+/* Everything the draw above was made of, for the Vulkan edition of this pass
+   (tagpu_feat.h). Nothing is computed here that the draw did not already use:
+   each field is the value that went into a uniform, a pointer into the array
+   the upload took, or the buffer a texture was uploaded from. */
+static void feat_publish(const TAGPU_FXVIEW* v, int total)
+{
+    memset(&s_pub, 0, sizeof s_pub);
+    s_pub.shadow = s_verts[B_SHADOW]; s_pub.nShadow = s_nv[B_SHADOW];
+    s_pub.body   = s_verts[B_BODY];   s_pub.nBody   = s_nv[B_BODY];
+    s_pub.gw = (float)v->gw; s_pub.gh = (float)v->gh;
+    s_pub.zoom = v->zoom > 0.0f ? v->zoom : 1.0f;
+    s_pub.zoomCx = v->zoomCx; s_pub.zoomCy = v->zoomCy;
+    s_pub.depthScale = v->depthScale > 1.0f ? v->depthScale : 512.0f;
+    s_pub.restored = (s_atlas.rgb && tagpu_classicpp_assets()) ? 1 : 0;
+    s_pub.lit = s_cpp ? 1 : 0;
+    s_pub.fog = v->fogMode & 1;
+    s_pub.fogOrgX = (float)v->fogOrgX; s_pub.fogOrgY = (float)v->fogOrgY;
+    s_pub.fogCols = (float)v->fogCols; s_pub.fogRows = (float)v->fogRows;
+    s_pub.atlas = s_atlas.mirror; s_pub.atlasDim = s_atlas.dim;
+    {   /* the shelf cursor bounds every cell in the atlas (tagpu_feat.h) */
+        int rows = s_atlas.shelfY + s_atlas.shelfH;
+        if (rows < 0) rows = 0;
+        if (rows > s_atlas.dim) rows = s_atlas.dim;
+        s_pub.atlasRows = rows;
+    }
+    s_pub.atlasSerial = s_atlas.mirrorSerial;
+    s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();
+    /* the grid as the fragment shader will read it, and only when it will:
+       `uFog` 0 means taFog is never called and uFogGrid never sampled, which
+       is why the GL lane can leave its own (possibly stale) texture bound. */
+    if (s_pub.fog && v->fogGrid && v->fogCols > 0 && v->fogRows > 0) {
+        s_pub.fogGrid = v->fogGrid;
+        s_pub.fogGridCols = v->fogCols; s_pub.fogGridRows = v->fogRows;
+    }
+    s_pub.fogLut = tagpu_native_foglut();
+    s_pub.vpL = v->vpL; s_pub.vpT = v->vpT; s_pub.vw = v->vw; s_pub.vh = v->vh;
+    /* WHETHER THE CLIP IS ACTUALLY ON, not whether a rect exists. The native
+       pass enables the scissor only when it resolved glScissor, and a Vulkan
+       lane that clipped while the GL lane did not would differ in every feature
+       the gather's margin reaches outside the viewport -- which on a forest map
+       is a wide band down both edges. */
+    s_pub.scissorOn = tagpu_native_scissor_on();
+    s_pub.ss = v->ss;
+    /* THE A/B FLAG LIVES EXACTLY ONE FRAME. The Vulkan lane takes the hand-over
+       later in this same render-thread iteration, so a flag that was not taken
+       was not taken because the lane is down -- and a claim left standing would
+       pair a fresh Vulkan capture with a GL one from some earlier frame. */
+    s_pub.ab = s_abFrame; s_abFrame = 0;
+    s_pubHave = total > 0;
+}
+
+/* Hand it over, ONCE (tagpu_feat.h). */
+int tagpu_feat_handover(TAGPU_FEATHAND* out)
+{
+    if (!s_pubHave || !out) return 0;
+    *out = s_pub;
+    s_pubHave = 0; s_abFrame = 0;
+    return 1;
+}
+
 void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex)
 {
     int total = s_nv[B_SHADOW] + s_nv[B_BODY];
-    if (s_state != 1 || total == 0) return;
+    /* A FRAME WITH NOTHING TO DRAW HANDS NOTHING OVER. Leaving the previous
+       frame's hand-over standing would have the Vulkan lane draw last frame's
+       features over this frame's -- and on the frame a level is torn down, over
+       nothing at all. */
+    if (s_state != 1 || total == 0) { s_pubHave = 0; s_abFrame = 0; return; }
     glUseProgram(s_prog);
     x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
     glUniform1i(s_uFog, v->fogMode & 1);        /* features darken in grey */
@@ -943,6 +1056,33 @@ void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex)
                         (GLsizeiptr)s_nv[B_BODY] * FVST * 4, s_verts[B_BODY]);
     glEnable(GL_BLEND);
     x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);      /* premultiplied FBO */
+
+    /* THE FRAME GOES BLACK FIRST WHEN THE A/B IS ARMED, and only then -- and
+       for this pass the DEPTH buffer goes with it. What is compared is THIS
+       pass's pixels: the terrain has already drawn under us on the GL side and
+       has already written the depth every body here is tested against, while
+       the Vulkan lane's render pass starts from a cleared depth buffer. Both
+       have to start from nothing or every fragment the two disagree about
+       reads as a port failure. The scissor is put back before the draw
+       (TAGPU_ABSHOT_SCISSOR), because a world pass CLIPPED to the viewport is
+       the pass and an unclipped one is something else.
+       One frame, and the player sees it: the terrain drawn before the clear is
+       missing from it. That is what a measuring lever costs. */
+    TAGPU_ABSHOT shot;
+    int taking = s_ab && !s_abDone;
+    shot.live = 0;
+    if (taking && v->ss != 1) {
+        /* REFUSED RATHER THAN WRITTEN AT THE WRONG SIZE. The GL capture is this
+           FBO's viewport, gw*ss x gh*ss, and the Vulkan one is the window's
+           client rect; at ss 2 they differ by a factor of two and tools/vk-ab.py
+           would refuse the pair after the fact. Saying so here names the cause. */
+        flog("feat: the A/B needs ss=1 (the GL capture is the supersampled FBO) "
+             "- nothing captured; relaunch with supersampling off");
+        s_abDone = 1;
+        taking = 0;
+    }
+    if (taking) tagpu_abshot_begin(&shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR);
+
     /* shadows are ground decals: they test depth but never write it, so a
        feature's own body is not fighting its shadow and nothing is occluded
        by a shadow that the engine would have drawn under it */
@@ -954,4 +1094,15 @@ void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     /* bodies write depth — this is what occludes units behind trees */
     if (s_nv[B_BODY])
         x_glDrawArrays(GL_TRIANGLES, s_nv[B_SHADOW], s_nv[B_BODY]);
+
+    if (taking) {
+        tagpu_abshot_end(&shot, ABOUT, "feat");
+        s_abDone = 1;
+        s_abFrame = 1;
+    }
+
+    /* PUBLISHED AFTER THE GL DRAW, not before: these are the vertices, the
+       numbers and the texels that were just drawn, and the Vulkan lane is about
+       to draw the same ones. */
+    feat_publish(v, total);
 }

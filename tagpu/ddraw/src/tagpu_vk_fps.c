@@ -299,6 +299,7 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     VkDynamicState dyn[2] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
     VkPipelineDynamicStateCreateInfo dy = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
     VkGraphicsPipelineCreateInfo gp = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+    VkPipelineDepthStencilStateCreateInfo ds;
     VkShaderModule vs = VK_NULL_HANDLE, fs = VK_NULL_HANDLE;
     VkResult r;
     int ok = 0;
@@ -369,7 +370,22 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     gp.pViewportState = &vp;
     gp.pRasterizationState = &rs;
     gp.pMultisampleState = &ms;
+    /* A DEPTH STATE THAT TESTS NOTHING AND WRITES NOTHING, and it is required
+       rather than tidy: since G19e the seam's render pass carries a depth
+       attachment, and a pipeline built against a subpass that has one may not
+       leave pDepthStencilState null. This pass's GL twin calls neither
+       glEnable(GL_DEPTH_TEST) nor glDepthMask, so all three flags are off and
+       the picture is what it was before the attachment existed -- which is what
+       its own A/B re-measures. */
+    memset(&ds, 0, sizeof ds);
+    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    ds.depthTestEnable = VK_FALSE;
+    ds.depthWriteEnable = VK_FALSE;
+    ds.depthBoundsTestEnable = VK_FALSE;
+    ds.stencilTestEnable = VK_FALSE;
+
     gp.pColorBlendState = &cb;
+    gp.pDepthStencilState = &ds;
     gp.pDynamicState = &dy;
     gp.layout = s_plo;
     gp.renderPass = d->rp;
