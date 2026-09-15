@@ -162,6 +162,7 @@
 #include "tagpu_vk_fps.h"
 #include "tagpu_vk_scaffold.h"
 #include "tagpu_vk_feat.h"
+#include "tagpu_vk_terr.h"
 #include "tagpu_vk_shot.h"
 
 #define ON_FILE    "tagpu_vk.on"
@@ -184,6 +185,7 @@
 #define AB_FPS     "tagpu_fps_vk.ppm"
 #define AB_SCAF    "tagpu_scaffold_vk.ppm"
 #define AB_FEAT    "tagpu_feat_vk.ppm"
+#define AB_TERR    "tagpu_terr_vk.ppm"
 #define GPUS_FILE  "tagpu_vk.gpus"      /* the cache the menu reads at attach */
 #define CFG_FILE   "tagpu_vk.cfg"       /* the player's choice, by name       */
 #define CFG_TMP    "tagpu_vk.cfg.tmp"
@@ -1597,6 +1599,7 @@ static void vk_down(void)
         tagpu_vk_fps_down(&s_pass);
         tagpu_vk_scaffold_down(&s_pass);
         tagpu_vk_feat_down(&s_pass);
+        tagpu_vk_terr_down(&s_pass);
         ab_drop("the lane coming down", idle);
         tagpu_vk_shot_down(&s_pass);
         vk_perimage_free();
@@ -2009,8 +2012,8 @@ static int vk_present(void)
        is what proves the GPU has finished with that slot's buffers, and it is
        the only thing that does. */
     {
-        int draw_fps = 0, draw_scaf = 0, draw_feat = 0;
-        int ab_fps = 0, ab_scaf = 0, ab_feat = 0;
+        int draw_fps = 0, draw_scaf = 0, draw_feat = 0, draw_terr = 0;
+        int ab_fps = 0, ab_scaf = 0, ab_feat = 0, ab_terr = 0;
         int ndraw = 0, nclaim = 0;
         const char* abpath = NULL;
         VkRenderPassBeginInfo rbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
@@ -2019,10 +2022,13 @@ static int vk_present(void)
                draws the scaffold before the readout, and two passes that blend
                are not commutative -- so the order here is that order, not the
                order the files were written in. */
-            /* The features are the WORLD, so they go first: the GL lane draws
-               them into the world FBO before the scaffold overlay and long
-               before the readout, and two passes that blend are not
-               commutative. */
+            /* Terrain is the world's bottom layer and the frame's far plane --
+               tagpu_native.c draws it first of all and everything after it is
+               depth-tested against what it wrote -- so it goes first here too.
+               The features are the WORLD as well and follow it, before the
+               scaffold overlay and long before the readout. */
+            draw_terr = tagpu_vk_terr_prepare(&s_pass, cb, fi);
+            ab_terr = tagpu_vk_terr_ab_frame();
             draw_feat = tagpu_vk_feat_prepare(&s_pass, cb, fi);
             ab_feat = tagpu_vk_feat_ab_frame();
             draw_scaf = tagpu_vk_scaffold_prepare(&s_pass, cb, fi);
@@ -2030,9 +2036,10 @@ static int vk_present(void)
             draw_fps = tagpu_vk_fps_prepare(&s_pass, cb, fi);
             ab_fps = tagpu_vk_fps_ab_frame();
         }
-        ndraw = draw_feat + draw_scaf + draw_fps;
-        nclaim = ab_feat + ab_scaf + ab_fps;
-        abpath = ab_feat ? AB_FEAT : (ab_scaf ? AB_SCAF : (ab_fps ? AB_FPS : NULL));
+        ndraw = draw_terr + draw_feat + draw_scaf + draw_fps;
+        nclaim = ab_terr + ab_feat + ab_scaf + ab_fps;
+        abpath = ab_terr ? AB_TERR
+               : (ab_feat ? AB_FEAT : (ab_scaf ? AB_SCAF : (ab_fps ? AB_FPS : NULL)));
 
         if (s_vk.rp && s_vk.fb[idx]) {
             VkClearValue cv[2];
@@ -2049,6 +2056,8 @@ static int vk_present(void)
             rbi.clearValueCount = s_vk.dfmt != VK_FORMAT_UNDEFINED ? 2 : 0;
             rbi.pClearValues = cv;
             vkCmdBeginRenderPass(cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+            if (draw_terr)
+                tagpu_vk_terr_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_feat)
                 tagpu_vk_feat_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_scaf)
@@ -2149,6 +2158,7 @@ static int vk_resize(int w, int h)
     tagpu_vk_fps_down(&s_pass);
     tagpu_vk_scaffold_down(&s_pass);
     tagpu_vk_feat_down(&s_pass);
+    tagpu_vk_terr_down(&s_pass);
     ab_drop("the swapchain rebuilding", idle);
     vk_perimage_free();
     r = vk_swapchain(w, h);

@@ -52,6 +52,8 @@
 #include "tagpu_native.h"
 #include "tagpu_shadow.h"
 #include "tagpu_zoom.h"
+#include "tagpu_abshot.h"   /* the GL half of the Phase G A/B */
+#include "tagpu_vk.h"       /* tagpu_vk_armed(): whether to pay for the mirrors */
 
 /* ---- engine layout (terrain-depth.md 1, byte-confirmed) ---- */
 #define OFF_TILEMAP  0x1428B   /* u16 per 32-px cell, stride mapW16/2         */
@@ -132,6 +134,31 @@ static int s_armed = -1;
 static int s_log = 0, s_passive = 0, s_over = 0, s_key = DEFAULT_KEY;
 static unsigned s_armCheck = 0;
 
+/* ---- the hand-over to the Vulkan edition, and the A/B lever (Phase G/G19e)
+   `tagpu_terr.ab` makes this pass draw over a black frame with a cleared depth
+   buffer and read it back ONCE; `s_abFrame` travels to the Vulkan lane with the
+   instances rather than being polled twice on two cadences, so both lanes
+   capture the same frame. See tagpu_terr.h and tagpu_vk_terr.c. */
+#define ABFILE   "tagpu_terr.ab"
+#define ABOUT    "tagpu_terr_gl.ppm"
+static int s_ab, s_abDone, s_abFrame;
+static int s_pubHave;                  /* this frame's hand-over is waiting   */
+static TAGPU_TERRHAND s_pub;
+/* THE CPU MIRRORS ARE ASKED FOR, ONCE, AND THEN KEPT. Unlike tagpu_gaf.c's
+   incremental atlas (§2.29), both of this pass's big textures are built WHOLE
+   in one call out of a buffer that is freed three lines later -- so the whole
+   of the mechanism here is "do not free it", and a mirror is correct from the
+   instant it exists because it IS the buffer glTexImage2D was handed. What the
+   flag has to do instead is force ONE rebuild when the Vulkan lane arms after
+   the texture was built: `ensure_atlas` and `ensure_height` both early-return
+   on an identity test, and the extra term below is what makes them fall
+   through exactly once. */
+static int s_mirrorWant;               /* the Vulkan lane asked for mirrors   */
+static unsigned char* s_atlasMirror;   /* ATLAS_W x s_atlasH, or NULL         */
+static unsigned s_atlasMirrorSerial;
+static unsigned char* s_hMirror;       /* s_hW x s_hH, or NULL                */
+static unsigned s_hMirrorSerial;
+
 int tagpu_terr_key(void) { return s_key; }
 
 int tagpu_terr_armed(unsigned frame_counter)
@@ -181,6 +208,22 @@ int tagpu_terr_armed(unsigned frame_counter)
         if (s_key != wasKey) tagpu_terrown_set_skip(0);
     }
     s_armed = 1;
+    /* the A/B lever, on the same beat. It re-arms when the file goes away and
+       comes back, which is why `touch` on one that is already there does
+       nothing. */
+    s_ab = GetFileAttributesA(ABFILE) != INVALID_FILE_ATTRIBUTES;
+    if (!s_ab) s_abDone = 0;
+    /* THE CPU MIRRORS (Phase G / G19e), on this beat and not per frame --
+       tagpu_vk_armed() is two file-attribute queries and a pass that asked
+       every frame would make them on every frame of ordinary play, where the
+       answer is no and stays no.
+       ASKED FOR HERE, AND THIS RUNS BEFORE THE GATHER, so the rebuild the flag
+       forces happens in the same frame's ensure_atlas / ensure_height and the
+       first hand-over that carries a mirror carries a COMPLETE one. Once asked
+       it stays asked for the process's life: the flag is what keeps the buffers
+       off an ordinary play session, and un-asking it mid-session would only buy
+       back memory a re-arm would immediately spend again. */
+    if (!s_mirrorWant && tagpu_vk_armed()) s_mirrorWant = 1;
     if (s_passive || s_over) tagpu_terrown_set_skip(0);
     if (was != 1) {
         char b[160];
@@ -476,9 +519,10 @@ static void init_gl(void)
     glGenVertexArrays(1, &s_vao); glBindVertexArray(s_vao);
     /* the unit quad, in the engine's own vertex order: two triangles whose
        shared edge runs (1,0)-(0,1), exactly the six corners the per-vertex
-       gather used to write out per cell */
+       gather used to write out per cell. ONE LITERAL, IN tagpu_terr.h, that
+       both lanes build their per-vertex buffer from (Phase G / G19e). */
     {
-        static const GLfloat corners[12] = { 0,0, 1,0, 0,1, 1,0, 1,1, 0,1 };
+        static const GLfloat corners[TAGPU_TERR_QUADV * 2] = TAGPU_TERR_QUAD;
         glGenBuffers(1, &s_qvbo); glBindBuffer(GL_ARRAY_BUFFER, s_qvbo);
         glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)sizeof corners, corners,
                      GL_STATIC_DRAW);
@@ -571,6 +615,11 @@ static void build_height(const char* ta, unsigned frame)
     int r, c;
     char b[160];
     s_hW = s_hH = 0;
+    /* and the mirror goes with the dimensions, so that "s_hMirror is non-NULL"
+       and "it is s_hW x s_hH bytes" are one fact rather than two: every exit
+       below this point either fails, leaving no mirror, or installs one at the
+       size it also sets. */
+    free(s_hMirror); s_hMirror = NULL;
     s_hGrid = grid; s_hSet = s_setPtr; s_hFrame = frame;
     if (w <= 0 || h <= 0 || w > 4096 || h > 4096 || w > s_maxTex || h > s_maxTex) {
         flog("terr: height grid dims out of range -- Classic++ terrain draws unlit");
@@ -600,7 +649,20 @@ static void build_height(const char* ta, unsigned frame)
     build_hills(buf, w, h);          /* TODO: unconditional -- 19 MB even when
                                         terrainshadow=0, which is the default.
                                         See build_hills' header. */
-    free(buf);
+    /* THE MIRROR IS THE BUFFER (Phase G / G19e), exactly as the atlas's: the
+       memory the glTexImage2D above was handed, kept instead of freed, so the
+       Vulkan lane's uHeight is the same texels rather than a second read of the
+       engine's grid. 0.5 MB at 512x512 cells, 16 MB at the 4096 ceiling, and
+       paid for only while the Vulkan lane is armed. */
+    if (s_mirrorWant) {
+        free(s_hMirror);
+        s_hMirror = buf;
+        s_hMirrorSerial++;
+    } else {
+        free(s_hMirror);
+        s_hMirror = NULL;
+        free(buf);
+    }
     s_hW = w; s_hH = h;
     _snprintf(b, sizeof b, "terr: height grid %dx%d uploaded from %p (Classic++ lighting)",
               w, h, (const void*)grid);
@@ -704,7 +766,10 @@ static void ensure_height(const char* ta, unsigned frame)
     const char* grid = *(const char* const*)(ta + OFF_FEATMAP);
     int w = *(const int*)(ta + OFF_MAPW16), h = *(const int*)(ta + OFF_MAPH16);
     int same = s_hGrid == (const void*)grid && s_hSet == s_setPtr;
-    if (s_hW > 0 && same && s_hW == w && s_hH == h) return;
+    /* the mirror term is `ensure_atlas`'s, for the same reason: the only way to
+       obtain one for a grid that is already uploaded is to build it again, once */
+    if (s_hW > 0 && same && s_hW == w && s_hH == h &&
+        (!s_mirrorWant || s_hMirror)) return;
     if (s_hW == 0 && same && s_hFrame != 0 && frame - s_hFrame < 60) return;
     build_height(ta, frame);
 }
@@ -729,8 +794,14 @@ static int ensure_atlas(const char* ta)
     pix = (const unsigned char*)(size_t)(unsigned)set[1];
     if (count <= 0 || count > MAX_TILES) return 0;
     /* the identity test FIRST: the probe below walks megabytes of tile art and
-       this runs every frame */
-    if (s_atlasTex && s_setPtr == (const void*)set && s_setCount == count) return 1;
+       this runs every frame.
+       THE MIRROR TERM IS WHAT LETS THE VULKAN LANE ARM LATE (Phase G / G19e).
+       The mirror is the buffer this function is about to build and upload from,
+       so the only way to obtain one for an atlas that is already built is to
+       build it again -- once, on the first frame after the lane arms. Every
+       later frame takes the early return as before. */
+    if (s_atlasTex && s_setPtr == (const void*)set && s_setCount == count &&
+        (!s_mirrorWant || s_atlasMirror)) return 1;
     if (!ptr_ok(pix) || IsBadReadPtr((void*)pix, (SIZE_T)count * TILE_BYTES)) return 0;
 
     rows = (count + ATLAS_COLS - 1) / ATLAS_COLS;
@@ -776,7 +847,25 @@ static int ensure_atlas(const char* ta)
        every sample (the failure that cost G13c an hour) */
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, ATLAS_W, h, 0, GL_RED, GL_UNSIGNED_BYTE, buf);
     glBindTexture(GL_TEXTURE_2D, 0);
-    free(buf);
+    /* THE MIRROR IS THE BUFFER, NOT A COPY OF IT. Keeping `buf` here rather
+       than freeing it is the whole of this pass's answer to "how does a second
+       backend get these texels" (tagpu_terr.h): it is correct from the instant
+       it exists, because it is the very memory the glTexImage2D above was
+       handed, and it cannot drift from the texture because nothing writes
+       either one again -- the tile set is built by LoadMap and never changes.
+       ~5.9 MB on Two Continents, paid for only while the Vulkan lane is armed.
+       The serial is bumped whether or not the bytes differ from the last
+       build's: a rebuild means a new allocation, and the Vulkan lane's upload
+       test is about the buffer it last read, not about its contents. */
+    if (s_mirrorWant) {
+        free(s_atlasMirror);
+        s_atlasMirror = buf;
+        s_atlasMirrorSerial++;
+    } else {
+        free(s_atlasMirror);
+        s_atlasMirror = NULL;
+        free(buf);
+    }
 
     s_atlasH = h;
     s_atlasN = count < rows * ATLAS_COLS ? count : rows * ATLAS_COLS;
@@ -1192,9 +1281,89 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     return s_ncell;
 }
 
+/* Everything the draw below was made of, for the Vulkan edition of this pass
+   (tagpu_terr.h). Nothing is computed here that the draw did not already use:
+   each field is the value that went into a uniform, a pointer into the array
+   the upload took, or the buffer a texture was uploaded from. */
+static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT* L)
+{
+    memset(&s_pub, 0, sizeof s_pub);
+    s_pub.cells = s_inst; s_pub.ncell = s_ncell;
+    s_pub.gw = (float)v->gw; s_pub.gh = (float)v->gh;
+    s_pub.zoom = v->zoom > 0.0f ? v->zoom : 1.0f;
+    s_pub.zoomCx = v->zoomCx; s_pub.zoomCy = v->zoomCy;
+    s_pub.depthScale = v->depthScale > 1.0f ? v->depthScale : 512.0f;
+    s_pub.enc = TERR_ENC;
+    s_pub.origX = s_origX; s_pub.origY = s_origY;
+    s_pub.tile0X = (float)s_rectTx0; s_pub.tile0Y = (float)s_rectTy0;
+    s_pub.texelW = s_iw; s_pub.texelH = s_ih;
+    s_pub.restored = restored;
+    s_pub.lit = tagpu_classicpp_on() ? 1 : 0;
+    s_pub.lambert = tagpu_classicpp_lit() ? 1 : 0;
+    s_pub.fog = v->fogMode & 1;
+    /* THE CAST-SHADOW MAP IS A GL DEPTH TEXTURE WITH NO MIRROR, so the Vulkan
+       lane refuses a frame that reports this 1 rather than draw one without it.
+       tagpu_shadow_apply leaves every other shadow uniform ALONE when the map
+       is not live, which for a freshly linked program means zero -- so the rest
+       of that block is published as zero, and the two lanes agree about it. */
+    s_pub.shadowOn = tagpu_shadow_live() ? 1 : 0;
+    s_pub.fogOrgX = (float)v->fogOrgX; s_pub.fogOrgY = (float)v->fogOrgY;
+    s_pub.fogCols = (float)v->fogCols; s_pub.fogRows = (float)v->fogRows;
+    s_pub.hDimW = (float)s_hW; s_pub.hDimH = (float)s_hH;
+    s_pub.sun[0] = L->sun[0]; s_pub.sun[1] = L->sun[1]; s_pub.sun[2] = L->sun[2];
+    s_pub.amb = L->amb;
+    s_pub.norm = 1.0f / L->level;
+    s_pub.atlas = s_atlasMirror;
+    s_pub.atlasW = ATLAS_W; s_pub.atlasH = s_atlasH;
+    s_pub.atlasSerial = s_atlasMirrorSerial;
+    /* the height mirror only while it matches the dimensions the shader is
+       being told about -- build_height keeps those two in step (see there) */
+    if (s_hW > 0 && s_hH > 0) {
+        s_pub.height = s_hMirror;
+        s_pub.hW = s_hW; s_pub.hH = s_hH;
+        s_pub.heightSerial = s_hMirrorSerial;
+    }
+    s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();
+    /* the grid as the fragment shader will read it, and only when it will:
+       `uFog` 0 means taFog is never called and uFogGrid never sampled, which
+       is why the GL lane can leave its own (possibly stale) texture bound. */
+    if (s_pub.fog && v->fogGrid && v->fogCols > 0 && v->fogRows > 0) {
+        s_pub.fogGrid = v->fogGrid;
+        s_pub.fogGridCols = v->fogCols; s_pub.fogGridRows = v->fogRows;
+    }
+    s_pub.fogLut = tagpu_native_foglut();
+    s_pub.vpL = v->vpL; s_pub.vpT = v->vpT; s_pub.vw = v->vw; s_pub.vh = v->vh;
+    /* WHETHER THE CLIP IS ACTUALLY ON, not whether a rect exists -- the feature
+       pass's reasoning (tagpu_feat.c), and terrain covers the whole viewport,
+       so an unclipped Vulkan lane would differ in the entire margin the zoom's
+       widened gather reaches past it. */
+    s_pub.scissorOn = tagpu_native_scissor_on();
+    s_pub.ss = v->ss;
+    /* THE A/B FLAG LIVES EXACTLY ONE FRAME. The Vulkan lane takes the hand-over
+       later in this same render-thread iteration, so a flag that was not taken
+       was not taken because the lane is down -- and a claim left standing would
+       pair a fresh Vulkan capture with a GL one from some earlier frame. */
+    s_pub.ab = s_abFrame; s_abFrame = 0;
+    s_pubHave = s_ncell > 0;
+}
+
+/* Hand it over, ONCE (tagpu_terr.h). */
+int tagpu_terr_handover(TAGPU_TERRHAND* out)
+{
+    if (!s_pubHave || !out) return 0;
+    *out = s_pub;
+    s_pubHave = 0; s_abFrame = 0;
+    return 1;
+}
+
 void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
 {
-    if (s_state != 1 || s_ncell == 0) return;
+    int restored;
+    /* A FRAME WITH NOTHING TO DRAW HANDS NOTHING OVER. Leaving the previous
+       frame's hand-over standing would have the Vulkan lane draw last frame's
+       terrain over this frame's -- and on the frame a level is torn down, over
+       nothing at all. */
+    if (s_state != 1 || s_ncell == 0) { s_pubHave = 0; s_abFrame = 0; return; }
     glUseProgram(s_prog);
     x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
     glUniform1i(s_uFog, v->fogMode & 1);   /* terrain darkens in grey, never hides */
@@ -1218,7 +1387,8 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     /* running OR complete: while the job runs the alpha test in the shader
        reveals each cell as its out pass lands (and stays indexed elsewhere);
        a failed or absent job never samples the texture */
-    glUniform1i(s_uRestored, ((s_rgbState == 1 || s_rgbState == 2) && tagpu_classicpp_assets()) ? 1 : 0);
+    restored = ((s_rgbState == 1 || s_rgbState == 2) && tagpu_classicpp_assets()) ? 1 : 0;
+    glUniform1i(s_uRestored, restored);
     tagpu_shadow_apply(&s_shU);            /* this frame's map, or uShadowOn 0 */
     /* the lighting: the terrain's sun. uLit is the MASTER ARM (the Classic++
        colour path, which `assets=`/`light=` only subdivide) and uLambert the
@@ -1232,17 +1402,59 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
         x_glUniform1f(s_uAmb, L->amb);
         x_glUniform1f(s_uNorm, 1.0f / L->level);
         x_glUniform2f(s_uHDim, (float)s_hW, (float)s_hH);
+
+        glBindVertexArray(s_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
+        /* orphan and upload in one call, sized to what this frame USES. Even the
+           whole array is only 2 MB now, but a 1x view needs ~2.5k cells of it and
+           re-specifying the rest every frame would churn driver memory for nothing.
+           (GL_ARRAY_BUFFER's binding is not VAO state, so binding it to re-specify
+           the storage leaves the attribute's own buffer binding alone.) */
+        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)s_ncell * ICOMP * 2, s_inst,
+                     GL_STREAM_DRAW);
+
+        /* THE FRAME GOES BLACK FIRST WHEN THE A/B IS ARMED, and only then --
+           and the DEPTH buffer goes with it. Terrain happens to be the first
+           thing drawn into this FBO, so the depth clear finds a buffer the
+           native pass has just cleared anyway; asking for it regardless is what
+           makes "both halves start from nothing" a property of the oracle
+           rather than of the draw order. The scissor is put back before the
+           draw (TAGPU_ABSHOT_SCISSOR), because terrain CLIPPED to the viewport
+           is the pass and an unclipped one covers the side panel too.
+           One frame, and the player sees it: nothing is drawn before terrain,
+           so what is missing from it is the engine's own frame underneath. */
+        {
+            TAGPU_ABSHOT shot;
+            int taking = s_ab && !s_abDone;
+            shot.live = 0;
+            if (taking && v->ss != 1) {
+                /* REFUSED RATHER THAN WRITTEN AT THE WRONG SIZE. The GL capture
+                   is this FBO's viewport, gw*ss x gh*ss, and the Vulkan one is
+                   the window's client rect; at ss 2 they differ by a factor of
+                   two and tools/vk-ab.py would refuse the pair after the fact.
+                   Saying so here names the cause. */
+                flog("terr: the A/B needs ss=1 (the GL capture is the supersampled FBO) "
+                     "- nothing captured; relaunch with supersampling off");
+                s_abDone = 1;
+                taking = 0;
+            }
+            if (taking) tagpu_abshot_begin(&shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR);
+
+            /* opaque, and the far plane of the frame: depth writes ON, no
+               blending needed (the FBO is premultiplied and terrain's alpha is
+               1 everywhere) */
+            x_glDrawArraysInstanced(GL_TRIANGLES, 0, 6, s_ncell);
+
+            if (taking) {
+                tagpu_abshot_end(&shot, ABOUT, "terr");
+                s_abDone = 1;
+                s_abFrame = 1;
+            }
+        }
+
+        /* PUBLISHED AFTER THE GL DRAW, not before: these are the instances, the
+           numbers and the texels that were just drawn, and the Vulkan lane is
+           about to draw the same ones. */
+        terr_publish(v, restored, L);
     }
-    glBindVertexArray(s_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-    /* orphan and upload in one call, sized to what this frame USES. Even the
-       whole array is only 2 MB now, but a 1x view needs ~2.5k cells of it and
-       re-specifying the rest every frame would churn driver memory for nothing.
-       (GL_ARRAY_BUFFER's binding is not VAO state, so binding it to re-specify
-       the storage leaves the attribute's own buffer binding alone.) */
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)s_ncell * ICOMP * 2, s_inst,
-                 GL_STREAM_DRAW);
-    /* opaque, and the far plane of the frame: depth writes ON, no blending
-       needed (the FBO is premultiplied and terrain's alpha is 1 everywhere) */
-    x_glDrawArraysInstanced(GL_TRIANGLES, 0, 6, s_ncell);
 }

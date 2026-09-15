@@ -79,4 +79,102 @@ void tagpu_terr_clamp_span(int vw, int vh, int* w, int* h);
    engine's terrain blit; the composite treats every OTHER index in the engine's
    frame as "an overlay the engine still draws, and we must not cover it" */
 int  tagpu_terr_key(void);
+
+/* ---- the Vulkan edition of this pass (Phase G / G19e, the THIRD world pass)
+   ----------------------------------------------------------------------------
+
+   Everything the GL lane just drew this pass FROM, so that the Vulkan lane
+   draws the same thing rather than a second implementation of it. Nothing here
+   is re-derived: the instances are the array the gather filled and the GL
+   upload took, the uniforms are the numbers the GL draw passed, the texels are
+   the bytes each texture was uploaded from, and the shader is the same GLSL
+   through tools/spirv-gen.py.
+
+   HANDED OVER EXACTLY ONCE, like the scaffold's and the feature pass's, so one
+   frame's geometry can never be drawn twice; a frame this pass skipped hands
+   over nothing and the Vulkan lane draws nothing, which is what the GL lane did.
+
+   THE POINTERS ARE THIS FILE'S, and they are valid until the next frame
+   rebuilds them. That is safe for one reason worth naming: both lanes run on
+   the RENDER THREAD, and the whole of the native pass -- this one included --
+   happens earlier in the same iteration of render_ogl.c's loop than the
+   tagpu_vk_frame that consumes this. The game thread never touches them. */
+
+/* THE UNIT QUAD IS DEFINED ONCE, HERE, and both lanes build their per-vertex
+   buffer from it: the two triangles whose shared edge runs (1,0)-(0,1), in the
+   engine's own vertex order. It is the pass's fixed geometry -- what varies is
+   the per-INSTANCE cell record below -- but a six-vertex literal copied into a
+   second file is still two things that can drift, and the whole worth of a 0-px
+   comparison is that only the rasteriser differs. */
+#define TAGPU_TERR_QUAD  { 0.f,0.f, 1.f,0.f, 0.f,1.f, 1.f,0.f, 1.f,1.f, 0.f,1.f }
+#define TAGPU_TERR_QUADV 6
+/* SHORTS PER INSTANCE: the cell's column and row in this frame's gather grid,
+   then its tile's column and row in the atlas. The vertex shader rebuilds the
+   quad's position, world point and UVs from those four and the uniforms; see
+   the VS in tagpu_terr.c for why every term is exact in float.
+   Unnormalised GL_SHORT on the GL side, so the Vulkan vertex format is SSCALED
+   and not SINT -- the shader's attribute is a `vec4`, and SINT would need an
+   `ivec4`. tagpu_vk_terr.c asks the device for that format rather than
+   assuming it. */
+#define TAGPU_TERR_ICOMP 4
+
+typedef struct TAGPU_TERRHAND {
+    /* The geometry: one record per visible cell, one INSTANCE each. */
+    const short* cells;  int ncell;
+
+    /* The vertex stage's uniform block (std140 offsets are printed in
+       inc/spirv/tagpu_terr.spv.h and are the contract for the buffer). */
+    float gw, gh;
+    float zoom, zoomCx, zoomCy;
+    float depthScale, enc;
+    float origX, origY;       /* screen px of grid cell (0,0)'s corner  */
+    float tile0X, tile0Y;     /* the map cell grid cell (0,0) IS        */
+    float texelW, texelH;     /* 1/atlas width, 1/atlas height          */
+
+    /* The fragment stage's. `restored` and `lit` are the two Classic++
+       branches, `shadowOn` the cast-shadow one, `fog` the engine's overlay
+       bit. The lighting numbers are the ones the GL draw passed. */
+    int   restored, lit, lambert, fog, shadowOn;
+    float fogOrgX, fogOrgY, fogCols, fogRows;
+    float hDimW, hDimH;       /* uHDim: 0 while there is no usable grid */
+    float sun[3], amb, norm;
+
+    /* The texels, as bytes rather than as GL names -- a second backend cannot
+       read a GL texture. Each carries the serial that says when it last
+       changed, so the Vulkan lane re-uploads on a change and not per frame.
+       The atlas and the height grid are built ONCE PER MAP and their buffers
+       are RETAINED rather than freed (tagpu_terr.c `s_mirrorWant`), which is
+       this pass's whole answer to the texel problem: the mirror is the very
+       buffer the glTexImage2D above it was given, in the same call, so it is
+       correct from the instant it exists. */
+    const unsigned char* atlas;       /* atlasW x atlasH R8                 */
+    int                  atlasW, atlasH;
+    unsigned             atlasSerial;
+    const unsigned char* height;      /* hW x hH R8, or NULL                */
+    int                  hW, hH;
+    unsigned             heightSerial;
+    const unsigned char* pal;         /* 256 x RGBA8, tagpu_pal_live()      */
+    unsigned             palSerial;
+    const unsigned short* fogGrid;    /* cols x rows RG8; NULL when fog off */
+    int                  fogGridCols, fogGridRows;
+    const unsigned char* fogLut;      /* 256 x R8, tagpu_native_foglut()    */
+
+    /* THE SCISSOR THE NATIVE PASS SET AROUND THIS DRAW, in game-frame pixels
+       measured from the TOP of the frame -- the engine's own viewport rect.
+       The GL lane is clipped to it and so must the Vulkan one be, and the two
+       coordinate systems disagree about which way y runs: see
+       tagpu_vk_feat.c, where the flip is done and argued. */
+    int   vpL, vpT, vw, vh;
+    int   scissorOn;                  /* the GL lane actually enabled it     */
+    int   ss;                         /* the FBO's supersample factor        */
+
+    /* 1 on the ONE frame this pass captured `tagpu_terr_gl.ppm` under
+       `tagpu_terr.ab`, so the Vulkan lane captures the SAME frame rather than
+       whichever one its own lever poll landed on. */
+    int   ab;
+} TAGPU_TERRHAND;
+
+/* 0 when there is nothing to draw, or when this frame's has already been
+   taken. Render thread only. */
+int tagpu_terr_handover(TAGPU_TERRHAND* out);
 #endif

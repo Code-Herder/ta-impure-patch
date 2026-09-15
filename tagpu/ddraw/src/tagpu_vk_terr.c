@@ -1,0 +1,1384 @@
+/* tagpu_vk_terr.c -- the terrain pass (the 32x32 pre-rendered map tiles)
+   drawn by Vulkan. Contract: tagpu_vk_terr.h. Phase G / G19e, the THIRD WORLD
+   PASS, and the first INSTANCED one.
+
+   IT IS NOT A SECOND IMPLEMENTATION OF THE PASS. Everything arrives through
+   `tagpu_terr_handover` (tagpu_terr.h): the instances are the array the GL
+   gather filled and the GL upload took, the uniforms are the numbers the GL
+   draw passed, the texels are the bytes each GL texture was uploaded FROM --
+   the tile atlas and the height grid through tagpu_terr.c's CPU mirrors, which
+   ARE the buffers glTexImage2D was handed -- and the shader is the same GLSL
+   through tools/spirv-gen.py. What a 0-px comparison then compares is two
+   rasterisers.
+
+   ---- WHAT THIS LANDING HAD TO ANSWER, AND WHERE EACH ANSWER IS ----
+
+   1. INSTANCING. The GL twin draws one unit quad six vertices long and one
+      INSTANCE per visible cell (`glDrawArraysInstanced`, a divisor of 1 on the
+      cell stream). In Vulkan that is a SECOND VkVertexInputBindingDescription
+      at VK_VERTEX_INPUT_RATE_INSTANCE, and vkCmdDraw's `instanceCount`. Small,
+      and new to this lane.
+
+      The one trap in it is the FORMAT. The GL side passes the cell record as
+      four unnormalised GL_SHORTs into a `vec4` attribute, so the fixed-function
+      conversion is "the integer, as a float". The Vulkan format that does that
+      is R16G16B16A16_SSCALED; _SINT would require the shader's attribute to be
+      an `ivec4` and would read as garbage against a `vec4`. SSCALED is not a
+      format a driver must support as a vertex buffer, so `build_pipelines`
+      ASKS for it and the pass stays down if the answer is no, naming the
+      fallback (widening the record to floats on the CPU) rather than guessing.
+
+   2. THE TEXELS, AND WHY THIS PASS NEEDS NO MIRROR MECHANISM. §2.29's GAF
+      atlas is painted incrementally, so it needed a mirror that is correct from
+      the instant it exists. Terrain's two big textures are built WHOLE, once
+      per map, out of a buffer that was freed three lines later -- so the whole
+      of the answer is "do not free it" (tagpu_terr.c `s_mirrorWant`), and what
+      arrives here is the very memory the upload was given.
+
+   3. TWO SHARED IMAGES, AND SO A LIFETIME QUESTION §2.28 NAMED AND §2.29 DID
+      NOT HAVE TO ANSWER. The atlas is ~5.9 MB and the height grid up to a few;
+      per-slot they would be eight copies of each, in a 32-bit address space
+      whose largest free block is the number this phase spends its budget
+      measuring. So both are ONE image, uploaded when the mirror's serial says
+      the bytes moved, behind the write-after-read barrier §2.29 established.
+
+      Unlike §2.29's atlas, THEIR DIMENSIONS GENUINELY CHANGE -- an in-process
+      map change gives the tile set a different count and the height grid a
+      different size -- and a shared image that has to be replaced cannot have
+      its descriptor rewritten under frames in flight. Two things make that safe
+      BY CONSTRUCTION rather than by timing:
+
+        * every slot's samplers are (re)written during THAT SLOT'S OWN
+          `prepare`, which is the one instant the seam's fence proves nothing of
+          ours is in flight for it. So no write in this file ever touches a set
+          another frame may be using.
+        * the replaced image is RETIRED behind a slot bitmask, not a timer:
+          `pending` starts as every slot and a bit clears when that slot's set
+          has been rewritten (or its resources freed, which also happens only
+          under its own fence). `pending == 0` means every submit that could
+          name the old image has completed, and only then is it destroyed.
+          A second change arriving while one is pending draws NOTHING for the
+          frames it takes to clear rather than starting a second retire -- at
+          most `slots` frames, and only for back-to-back map changes.
+
+   4. DEPTH. Terrain is the frame's implicit far plane: it tests GL_LESS and
+      WRITES, and everything above it is tested against what it wrote. The
+      range answer is §2.28's, built by §2.29 and used unchanged here: a
+      viewport with `minDepth 0.5` / `maxDepth 1.0`, which maps clip z in [0, 1]
+      onto exactly GL's `(z+1)/2`, values and precision included. Never a shader
+      edit -- an edited shader would disagree with the twin that is its oracle.
+      The pass refuses to arm when the seam's render pass carries no depth
+      attachment.
+
+   5. NO BLENDING. The GL twin draws terrain before `glEnable(GL_BLEND)`
+      (tagpu_native.c), and terrain is opaque with alpha 1 everywhere, so the
+      colour blend attachment has blending OFF. The feature pass's premultiplied
+      pair is its own and does not belong here.
+
+   6. THE SCISSOR is §2.29's, unchanged and for the same reason: a scissor is
+      expressed in FRAMEBUFFER coordinates, GL's world-FBO row 0 is clip-space
+      y = -1 and this lane's row 0 is y = +1, so the rect is mirrored --
+      `offset.y = H - (vpT + vh)` -- and its ENABLE travels with it. It matters
+      more here than it did there: terrain covers the whole gather rect, which
+      at zoom < 1 reaches well past the viewport and over the side panel.
+
+   7. THE Y FLIP IS PIPELINE STATE, as in every ported pass: a negative viewport
+      height (VK_KHR_maintenance1), never a source edit. Both halves of this
+      A/B are therefore upside-down pictures of the world, identically, which is
+      the only thing the comparison asks of them.
+
+   ---- WHAT IT DOES NOT DO ----
+
+   TWO SURFACES OF THE GL LANE HAVE NO CPU MIRROR, and this pass refuses a frame
+   that would need either rather than draw a different picture from its own
+   oracle -- which is the one answer an oracle must never give:
+
+     uRestored 1   Classic++'s restored tile atlas (tagpu_restoreglsl.c writes
+                   it on the GPU and it is never read back), exactly as §2.29.
+     uShadowOn 1   the cast-shadow depth map (tagpu_shadow.c), a GL depth
+                   texture. Its two samplers still have to be VALID for the set
+                   to be bound, so they name a 1x1 depth image this file makes
+                   and clears; nothing ever samples it.
+
+   Both are Classic++ surfaces, and a `tacli` instance opts out of the play
+   defaults, so an A/B run does not meet either; a `--defaults` instance does.
+
+   IT KNOWS NOTHING ABOUT A WINDOW. Everything arrives in TAGPU_VKPASS.
+   A PASS READS NO ENGINE STATE: every value comes from the GL lane's
+   hand-over, so this file is not on thread-split.allow and must never be. */
+
+#include "tagpu_vk_pass.h"
+#include <windows.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "tagpu_vk_terr.h"
+#include "tagpu_terr.h"
+#include "spirv/tagpu_terr.spv.h"
+
+#define UBLK_VS  64                        /* std140, the generated header's   */
+#define UBLK_FS  192
+
+/* ---- the entry points ----------------------------------------------------
+   Resolved from the seam's `gdpa`/`gipa`, never linked, and this pass's own:
+   the presentation table and a pass's barely overlap (tagpu_vk_pass.h). */
+#define IFNS(X) \
+    X(vkGetPhysicalDeviceMemoryProperties) X(vkGetPhysicalDeviceProperties) \
+    X(vkGetPhysicalDeviceFormatProperties)
+
+#define DFNS(X) \
+    X(vkCreateShaderModule) X(vkDestroyShaderModule) \
+    X(vkCreateDescriptorSetLayout) X(vkDestroyDescriptorSetLayout) \
+    X(vkCreatePipelineLayout) X(vkDestroyPipelineLayout) \
+    X(vkCreateGraphicsPipelines) X(vkDestroyPipeline) \
+    X(vkCreateDescriptorPool) X(vkDestroyDescriptorPool) \
+    X(vkAllocateDescriptorSets) X(vkUpdateDescriptorSets) \
+    X(vkCreateBuffer) X(vkDestroyBuffer) X(vkGetBufferMemoryRequirements) \
+    X(vkBindBufferMemory) \
+    X(vkCreateImage) X(vkDestroyImage) X(vkGetImageMemoryRequirements) \
+    X(vkBindImageMemory) X(vkCreateImageView) X(vkDestroyImageView) \
+    X(vkCreateSampler) X(vkDestroySampler) \
+    X(vkAllocateMemory) X(vkFreeMemory) X(vkMapMemory) X(vkUnmapMemory) \
+    X(vkCmdBindPipeline) X(vkCmdBindVertexBuffers) X(vkCmdBindDescriptorSets) \
+    X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor) \
+    X(vkCmdCopyBufferToImage) X(vkCmdPipelineBarrier) X(vkCmdClearDepthStencilImage)
+
+#define DECL(n) static PFN_##n n;
+IFNS(DECL)
+DFNS(DECL)
+#undef DECL
+
+enum { ST_UNBUILT = 0, ST_READY = 1, ST_REFUSED = 2 };
+
+static int s_state;
+static int s_drawThis;                     /* `prepare` left a draw for `record` */
+static int s_abFrame;
+static int s_saidRestored;                 /* the Classic++ refusals, said once */
+static int s_saidShadow;
+static int s_saidNoMirror;
+
+static VkDescriptorSetLayout s_dsl;
+static VkPipelineLayout      s_plo;
+static VkPipeline            s_pipe;
+static VkDescriptorPool      s_dpool;
+static VkSampler             s_samp, s_sampCmp;
+
+static VkBuffer       s_ubuf;
+static VkDeviceMemory s_umem;
+static unsigned char* s_umap;
+static VkDeviceSize   s_ustride;           /* both blocks, each device-aligned */
+static VkDeviceSize   s_ublkF;             /* the fragment block's own offset  */
+
+/* the unit quad, once: six vertices from tagpu_terr.h's literal, uploaded at
+   build and never touched again -- it is the pass's fixed geometry */
+static VkBuffer       s_qbuf;
+static VkDeviceMemory s_qmem;
+
+/* the 1x1 depth image the two shadow samplers name; see the file header */
+static VkImage        s_shImg;
+static VkDeviceMemory s_shMem;
+static VkImageView    s_shView;
+static int            s_shReady;           /* cleared and in SHADER_READ layout */
+
+/* ---- A SHARED IMAGE, and the retire that makes replacing one safe ---------
+   See item 3 of the file header. `pending` is a bitmask of slots whose
+   descriptor set may still name `old*`; a bit clears only under that slot's own
+   fence, and `pending == 0` is what licenses the destroy. */
+typedef struct {
+    VkImage        img;
+    VkDeviceMemory mem;
+    VkImageView    view;
+    int            w, h;
+    unsigned       serial;                 /* the mirror serial it holds       */
+    int            have;                   /* a copy has been recorded into it */
+
+    VkImage        oldImg;
+    VkDeviceMemory oldMem;
+    VkImageView    oldView;
+    uint32_t       pending;                /* slots yet to stop naming oldView */
+} SHARED;
+static SHARED s_atlas;                     /* the tile atlas, R8              */
+static SHARED s_height;                    /* the height grid, R8             */
+
+/* what `record` was left to draw */
+static int s_ncell;
+static int s_scX, s_scY, s_scW, s_scH;     /* the scissor, in Vulkan framebuffer px */
+/* The scissor's INPUTS, kept as numbers rather than as a copy of the hand-over.
+   TAGPU_TERRHAND is full of pointers into the GL lane's own frame memory, and a
+   static holding those past the frame they were handed over on is a dangling
+   read waiting for someone to add a line that follows one. */
+static float s_hGw, s_hGh;
+static int   s_hVpL, s_hVpT, s_hVw, s_hVh, s_hScissorOn;
+
+/* ---- one of these per frame slot, and every field of it is ours for the
+   duration of the `prepare`/`record` pair we are handed that slot on. ---- */
+typedef struct {
+    VkBuffer        ibuf;                  /* the frame's cell instances       */
+    VkDeviceMemory  imem;
+    unsigned char*  imap;
+    VkDeviceSize    icap;
+
+    VkBuffer        bigStage;              /* the map-scoped uploads, when due  */
+    VkDeviceMemory  bigMem;
+    unsigned char*  bigMap;
+    VkDeviceSize    bigCap;
+
+    VkImage         pal, lut, fog;         /* the three small per-slot images  */
+    VkDeviceMemory  palMem, lutMem, fogMem;
+    VkImageView     palView, lutView, fogView;
+    VkBuffer        smallStage;
+    VkDeviceMemory  smallMem;
+    unsigned char*  smallMap;
+    int             fogW, fogH;            /* what the fog image is sized for  */
+
+    VkDescriptorSet dset;
+    int             built;                 /* the fixed-size half is made      */
+} SLOT;
+static SLOT s_slot[TAGPU_VK_SLOTS];
+
+/* THE BOUNDS ARE RE-CHECKED HERE, because a bound that lives in the file that
+   produced the number is a bound only while both files are read together
+   (the scaffold's rule). Every one of these sizes an allocation or a memcpy.
+   The atlas is 64 cells on a 34-texel pitch, so its width is 2176 and its
+   height grows with the tile count; the height grid is the map in 16-px cells,
+   which tagpu_terr.c already refuses past 4096; the fog grid is the wide-fog
+   builder's and is a few tens of cells. */
+#define ATLAS_MAXDIM 16384
+#define HEIGHT_MAXDIM 4096
+#define FOG_MAXDIM    1024
+/* ONE STAGING BUFFER CARRIES ALL THREE SMALL UPLOADS: the palette (256 x 1
+   RGBA), then the fog shade LUT (256 x 1 R8), then the fog grid (cols x rows
+   RG8, a few KB and a different size whenever the view walks far enough for the
+   grid to be re-laid). One allocation, three vkCmdCopyBufferToImage regions at
+   three offsets -- and it is rebuilt with the fog image, by the same call, so
+   the buffer and the image it feeds can never disagree about the size. */
+#define SMALL_PALOFF 0                     /* 256 x RGBA8                      */
+#define SMALL_LUTOFF (256 * 4)             /* 256 x R8                         */
+#define SMALL_FIXED  (256 * 4 + 256)       /* what the two fixed uploads take  */
+#define SMALL_FOGOFF SMALL_FIXED           /* the grid, cols x rows RG8        */
+/* Every one of those three is a multiple of 4 and of its own texel block size,
+   which is what vkCmdCopyBufferToImage requires of a bufferOffset. The two big
+   uploads share one buffer on the same rule -- the atlas at 0 and the height
+   grid at the atlas's size rounded up to 4. */
+#define ALIGN4(n) (((n) + 3u) & ~(VkDeviceSize)3u)
+
+static void plog(const TAGPU_VKPASS* d, const char* fmt, ...)
+{
+    char b[256];
+    va_list ap;
+    if (!d->log) return;
+    va_start(ap, fmt);
+    _vsnprintf(b, sizeof b - 1, fmt, ap);
+    va_end(ap);
+    b[sizeof b - 1] = 0;
+    d->log(b);
+}
+
+/* THE MEMORY TYPE IS CHOSEN, NOT ASSUMED -- tagpu_vk_fps.c's reasoning. */
+static int mem_type(const TAGPU_VKPASS* d, uint32_t bits, VkMemoryPropertyFlags want)
+{
+    VkPhysicalDeviceMemoryProperties mp;
+    uint32_t i;
+    vkGetPhysicalDeviceMemoryProperties(d->pd, &mp);
+    for (i = 0; i < mp.memoryTypeCount; i++)
+        if ((bits & (1u << i)) && (mp.memoryTypes[i].propertyFlags & want) == want)
+            return (int)i;
+    return -1;
+}
+
+static int mk_buffer(const TAGPU_VKPASS* d, VkDeviceSize size, VkBufferUsageFlags use,
+                     VkMemoryPropertyFlags want, VkBuffer* buf, VkDeviceMemory* mem,
+                     unsigned char** map)
+{
+    VkBufferCreateInfo bci = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+    VkMemoryAllocateInfo mai = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+    VkMemoryRequirements req;
+    int type;
+    void* p = NULL;
+
+    bci.size = size;
+    bci.usage = use;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(d->dev, &bci, NULL, buf) != VK_SUCCESS) return 0;
+    vkGetBufferMemoryRequirements(d->dev, *buf, &req);
+    type = mem_type(d, req.memoryTypeBits, want);
+    if (type < 0) { plog(d, "terr: no memory type for a buffer"); return 0; }
+    mai.allocationSize = req.size;
+    mai.memoryTypeIndex = (uint32_t)type;
+    if (vkAllocateMemory(d->dev, &mai, NULL, mem) != VK_SUCCESS) return 0;
+    if (vkBindBufferMemory(d->dev, *buf, *mem, 0) != VK_SUCCESS) return 0;
+    if (map) {
+        /* MAPPED ONCE AND LEFT MAPPED: the memory is HOST_COHERENT, so a write
+           is visible to the device without a flush and a map per frame would be
+           a driver call for an address that never moves. */
+        if (vkMapMemory(d->dev, *mem, 0, VK_WHOLE_SIZE, 0, &p) != VK_SUCCESS) return 0;
+        *map = (unsigned char*)p;
+    }
+    return 1;
+}
+
+static int mk_image(const TAGPU_VKPASS* d, int w, int h, VkFormat fmt,
+                    VkImageAspectFlags aspect,
+                    VkImage* img, VkDeviceMemory* mem, VkImageView* view)
+{
+    VkImageCreateInfo ici = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+    VkMemoryAllocateInfo mai = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+    VkImageViewCreateInfo ivi = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+    VkMemoryRequirements req;
+    int type;
+
+    ici.imageType = VK_IMAGE_TYPE_2D;
+    ici.format = fmt;
+    ici.extent.width = (uint32_t)w;
+    ici.extent.height = (uint32_t)h;
+    ici.extent.depth = 1;
+    ici.mipLevels = 1;
+    ici.arrayLayers = 1;
+    ici.samples = VK_SAMPLE_COUNT_1_BIT;
+    ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (vkCreateImage(d->dev, &ici, NULL, img) != VK_SUCCESS) return 0;
+    vkGetImageMemoryRequirements(d->dev, *img, &req);
+    type = mem_type(d, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (type < 0) { plog(d, "terr: no device-local memory for an image"); return 0; }
+    mai.allocationSize = req.size;
+    mai.memoryTypeIndex = (uint32_t)type;
+    if (vkAllocateMemory(d->dev, &mai, NULL, mem) != VK_SUCCESS) return 0;
+    if (vkBindImageMemory(d->dev, *img, *mem, 0) != VK_SUCCESS) return 0;
+
+    ivi.image = *img;
+    ivi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    ivi.format = fmt;
+    ivi.subresourceRange.aspectMask = aspect;
+    ivi.subresourceRange.levelCount = 1;
+    ivi.subresourceRange.layerCount = 1;
+    if (vkCreateImageView(d->dev, &ivi, NULL, view) != VK_SUCCESS) return 0;
+    return 1;
+}
+
+static void kill_image(const TAGPU_VKPASS* d, VkImage* img, VkDeviceMemory* mem,
+                       VkImageView* view)
+{
+    if (*view) { vkDestroyImageView(d->dev, *view, NULL); *view = VK_NULL_HANDLE; }
+    if (*img)  { vkDestroyImage(d->dev, *img, NULL);      *img  = VK_NULL_HANDLE; }
+    if (*mem)  { vkFreeMemory(d->dev, *mem, NULL);        *mem  = VK_NULL_HANDLE; }
+}
+
+static VkShaderModule mk_module(const TAGPU_VKPASS* d, const uint32_t* w, size_t words)
+{
+    VkShaderModuleCreateInfo sci = { VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
+    VkShaderModule m = VK_NULL_HANDLE;
+    sci.codeSize = words * 4;
+    sci.pCode = w;
+    if (vkCreateShaderModule(d->dev, &sci, NULL, &m) != VK_SUCCESS) return VK_NULL_HANDLE;
+    return m;
+}
+
+static int resolve(const TAGPU_VKPASS* d)
+{
+#define RES_I(n) n = (PFN_##n)d->gipa(d->inst, #n); if (!n) return 0;
+#define RES_D(n) n = (PFN_##n)d->gdpa(d->dev, #n); if (!n) return 0;
+    IFNS(RES_I)
+    DFNS(RES_D)
+#undef RES_I
+#undef RES_D
+    return 1;
+}
+
+/* ---- barriers ----------------------------------------------------------- */
+
+static void img_barrier(VkCommandBuffer cb, VkImage img, VkImageAspectFlags aspect,
+                        VkImageLayout from, VkImageLayout to,
+                        VkPipelineStageFlags srcStage, VkAccessFlags srcAcc,
+                        VkPipelineStageFlags dstStage, VkAccessFlags dstAcc)
+{
+    VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+    b.oldLayout = from;
+    b.newLayout = to;
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = img;
+    b.subresourceRange.aspectMask = aspect;
+    b.subresourceRange.levelCount = 1;
+    b.subresourceRange.layerCount = 1;
+    b.srcAccessMask = srcAcc;
+    b.dstAccessMask = dstAcc;
+    vkCmdPipelineBarrier(cb, srcStage, dstStage, 0, 0, NULL, 0, NULL, 1, &b);
+}
+
+/* one buffer->image copy of a w x h rect at the image's origin */
+static void copy_rect(VkCommandBuffer cb, VkBuffer src, VkDeviceSize srcOff,
+                      VkImage dst, int w, int h)
+{
+    VkBufferImageCopy rg;
+    memset(&rg, 0, sizeof rg);
+    rg.bufferOffset = srcOff;
+    rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    rg.imageSubresource.layerCount = 1;
+    rg.imageExtent.width = (uint32_t)w;
+    rg.imageExtent.height = (uint32_t)h;
+    rg.imageExtent.depth = 1;
+    vkCmdCopyBufferToImage(cb, src, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rg);
+}
+
+/* ---- the slot ----------------------------------------------------------- */
+
+static void slot_drop_bigstage(const TAGPU_VKPASS* d, SLOT* s)
+{
+    if (s->bigMap)   { vkUnmapMemory(d->dev, s->bigMem); s->bigMap = NULL; }
+    if (s->bigStage) { vkDestroyBuffer(d->dev, s->bigStage, NULL); s->bigStage = VK_NULL_HANDLE; }
+    if (s->bigMem)   { vkFreeMemory(d->dev, s->bigMem, NULL); s->bigMem = VK_NULL_HANDLE; }
+    s->bigCap = 0;
+}
+
+static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
+{
+    VkDevice dev = d->dev;
+    if (s->imap) { vkUnmapMemory(dev, s->imem); s->imap = NULL; }
+    if (s->ibuf) { vkDestroyBuffer(dev, s->ibuf, NULL); s->ibuf = VK_NULL_HANDLE; }
+    if (s->imem) { vkFreeMemory(dev, s->imem, NULL); s->imem = VK_NULL_HANDLE; }
+    s->icap = 0;
+    /* THE UNMAP IS GUARDED BY THE MAP POINTER, NOT BY THE ALLOCATION: a
+       vkMapMemory that failed leaves the allocation standing and unmapping it
+       would be an error of its own. */
+    slot_drop_bigstage(d, s);
+    if (s->smallMap) { vkUnmapMemory(dev, s->smallMem); s->smallMap = NULL; }
+    if (s->smallStage) { vkDestroyBuffer(dev, s->smallStage, NULL); s->smallStage = VK_NULL_HANDLE; }
+    if (s->smallMem) { vkFreeMemory(dev, s->smallMem, NULL); s->smallMem = VK_NULL_HANDLE; }
+    kill_image(d, &s->pal, &s->palMem, &s->palView);
+    kill_image(d, &s->lut, &s->lutMem, &s->lutView);
+    kill_image(d, &s->fog, &s->fogMem, &s->fogView);
+    s->fogW = s->fogH = 0;
+    s->built = 0;
+}
+
+/* The fixed-size half of a slot: the palette and LUT images, and the two
+   descriptor writes that never change again. The shared images' bindings are
+   NOT here -- they are rewritten on every prepare (see `shared_bind`). */
+static int slot_build(const TAGPU_VKPASS* d, SLOT* s)
+{
+    VkDescriptorImageInfo ii[2];
+    VkWriteDescriptorSet wr[2];
+
+    if (s->built) return 1;
+    if (!mk_image(d, 256, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT,
+                  &s->pal, &s->palMem, &s->palView)) return 0;
+    if (!mk_image(d, 256, 1, VK_FORMAT_R8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT,
+                  &s->lut, &s->lutMem, &s->lutView)) return 0;
+
+    memset(ii, 0, sizeof ii); memset(wr, 0, sizeof wr);
+    ii[0].sampler = s_samp; ii[0].imageView = s->palView;
+    ii[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    ii[1].sampler = s_samp; ii[1].imageView = s->lutView;
+    ii[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wr[0].dstSet = s->dset; wr[0].dstBinding = 41; wr[0].descriptorCount = 1;
+    wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[0].pImageInfo = &ii[0];
+    wr[1] = wr[0]; wr[1].dstBinding = 45; wr[1].pImageInfo = &ii[1];
+    vkUpdateDescriptorSets(d->dev, 2, wr, 0, NULL);
+    s->built = 1;
+    return 1;
+}
+
+/* This slot's fog-grid image at `w` x `h`, rebuilt when the dimensions move --
+   which they do whenever the view walks far enough for the grid to be re-laid.
+   Free because the slot is ours: see §2.28's one-line invariant. */
+static int slot_fog(const TAGPU_VKPASS* d, SLOT* s, int w, int h)
+{
+    VkDescriptorImageInfo ii;
+    VkWriteDescriptorSet wr;
+    if (s->fogW == w && s->fogH == h && s->fog && s->smallStage) return 1;
+    kill_image(d, &s->fog, &s->fogMem, &s->fogView);
+    s->fogW = s->fogH = 0;
+    if (!mk_image(d, w, h, VK_FORMAT_R8G8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT,
+                  &s->fog, &s->fogMem, &s->fogView)) return 0;
+    /* the staging buffer goes with it: the fog grid's bytes are its tail, so
+       its size follows the grid's and the two are made in one place */
+    if (s->smallMap) { vkUnmapMemory(d->dev, s->smallMem); s->smallMap = NULL; }
+    if (s->smallStage) { vkDestroyBuffer(d->dev, s->smallStage, NULL); s->smallStage = VK_NULL_HANDLE; }
+    if (s->smallMem) { vkFreeMemory(d->dev, s->smallMem, NULL); s->smallMem = VK_NULL_HANDLE; }
+    if (!mk_buffer(d, (VkDeviceSize)SMALL_FIXED + (VkDeviceSize)w * h * 2,
+                   VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                   &s->smallStage, &s->smallMem, &s->smallMap)) return 0;
+    memset(&ii, 0, sizeof ii); memset(&wr, 0, sizeof wr);
+    ii.sampler = s_samp; ii.imageView = s->fogView;
+    ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wr.dstSet = s->dset; wr.dstBinding = 44; wr.descriptorCount = 1;
+    wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr.pImageInfo = &ii;
+    vkUpdateDescriptorSets(d->dev, 1, &wr, 0, NULL);
+    s->fogW = w; s->fogH = h;
+    return 1;
+}
+
+/* Room for `bytes` of cell instances in this slot, grown by doubling and never
+   shrunk while the pass is drawing. */
+static int slot_inst(const TAGPU_VKPASS* d, SLOT* s, VkDeviceSize bytes)
+{
+    VkDeviceSize want = 65536;
+    if (s->icap >= bytes && s->ibuf) return 1;
+    while (want < bytes) want *= 2;
+    if (s->imap) { vkUnmapMemory(d->dev, s->imem); s->imap = NULL; }
+    if (s->ibuf) { vkDestroyBuffer(d->dev, s->ibuf, NULL); s->ibuf = VK_NULL_HANDLE; }
+    if (s->imem) { vkFreeMemory(d->dev, s->imem, NULL); s->imem = VK_NULL_HANDLE; }
+    s->icap = 0;
+    if (!mk_buffer(d, want, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                   &s->ibuf, &s->imem, &s->imap)) return 0;
+    s->icap = want;
+    return 1;
+}
+
+/* ---- the shared images -------------------------------------------------- */
+
+/* Retire what is there and put a new image of `w` x `h` in its place. Returns
+   0 when a retire is still outstanding (the caller draws nothing this frame and
+   tries again) or when the device refused the image. See item 3 of the header. */
+static int shared_resize(const TAGPU_VKPASS* d, SHARED* sh, int w, int h)
+{
+    if (sh->img && sh->w == w && sh->h == h) return 1;
+    if (sh->oldImg) return 0;              /* one retire at a time, by design  */
+    if (sh->img) {
+        sh->oldImg = sh->img; sh->oldMem = sh->mem; sh->oldView = sh->view;
+        sh->img = VK_NULL_HANDLE; sh->mem = VK_NULL_HANDLE; sh->view = VK_NULL_HANDLE;
+        sh->pending = d->slots >= 32 ? 0xFFFFFFFFu : ((1u << d->slots) - 1u);
+    }
+    sh->w = sh->h = 0; sh->serial = 0; sh->have = 0;
+    if (!mk_image(d, w, h, VK_FORMAT_R8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT,
+                  &sh->img, &sh->mem, &sh->view)) {
+        /* mk_image can fail after vkCreateImage succeeded, so the half-made
+           object is given back here: the caller's "is there an image at all"
+           test is what tells a device refusal from a retire still clearing, and
+           a partial one would read as the second for ever. */
+        kill_image(d, &sh->img, &sh->mem, &sh->view);
+        return 0;
+    }
+    sh->w = w; sh->h = h;
+    return 1;
+}
+
+/* THE RETIRE, and why it is a lifetime rather than a timer. Called for every
+   slot at the top of that slot's own `prepare` -- the one instant the seam's
+   fence proves the submit that last used this slot's descriptor set has
+   COMPLETED. Two facts then bound the old image's last reference:
+
+     * no SUBMITTED command buffer can still name it through this slot, because
+       that slot's submit is done;
+     * no FUTURE one will, because `record` runs only when `prepare` returned 1,
+       and every such `prepare` calls `shared_bind` first.
+
+   So when the last bit clears, the old image is unreferenced by construction,
+   whatever the frame rate, whatever the driver, and whatever this pass decided
+   to do on the frames in between. */
+static void shared_slot_done(const TAGPU_VKPASS* d, SHARED* sh, uint32_t slot)
+{
+    if (!sh->oldImg) return;
+    sh->pending &= ~(1u << slot);
+    if (sh->pending == 0) {
+        kill_image(d, &sh->oldImg, &sh->oldMem, &sh->oldView);
+    }
+}
+
+/* Upload when the mirror's serial says the bytes moved. `bytes` is what the
+   copy will read out of the staging buffer at `off`. */
+static void shared_upload(VkCommandBuffer cb, SHARED* sh, VkBuffer stage,
+                          VkDeviceSize off)
+{
+    /* THE WRITE-AFTER-READ BARRIER (§2.29). The image is shared by every slot,
+       so the frames still in flight may be sampling it; a barrier's first
+       synchronisation scope includes everything submitted to this queue before
+       it, which is all of them. A WAR hazard needs only an execution dependency
+       -- the access masks here are for the LAYOUT TRANSITION, which is a write.
+       On the very first upload there is nothing to order against and the image
+       has no contents to preserve, so it goes in as UNDEFINED. */
+    img_barrier(cb, sh->img, VK_IMAGE_ASPECT_COLOR_BIT,
+                sh->have ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                         : VK_IMAGE_LAYOUT_UNDEFINED,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                sh->have ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                         : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                sh->have ? VK_ACCESS_SHADER_READ_BIT : 0,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    copy_rect(cb, stage, off, sh->img, sh->w, sh->h);
+    img_barrier(cb, sh->img, VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+    sh->have = 1;
+}
+
+/* ---- build -------------------------------------------------------------- */
+
+static int build_samplers(const TAGPU_VKPASS* d)
+{
+    VkSamplerCreateInfo sci = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+    VkFormatProperties fp;
+    int i;
+    /* the four formats this pass samples, asked for rather than assumed */
+    static const VkFormat need[4] = { VK_FORMAT_R8_UNORM, VK_FORMAT_R8G8_UNORM,
+                                      VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_D16_UNORM };
+    for (i = 0; i < 4; i++) {
+        vkGetPhysicalDeviceFormatProperties(d->pd, need[i], &fp);
+        if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+            plog(d, "terr: this device cannot sample format %d - the pass stays down",
+                 (int)need[i]);
+            return 0;
+        }
+    }
+    /* NEAREST AND CLAMP_TO_EDGE, WHICH IS WHAT EVERY ONE OF THE GL TWIN'S
+       TEXTURES IS SET TO. The atlas is the only one the shader reaches through
+       the sampler at all -- the palette, the fog grid, the fog LUT and the
+       height grid are all texelFetch -- and its texels are palette INDICES,
+       which interpolate into numbers that mean nothing in the table. */
+    sci.magFilter = VK_FILTER_NEAREST;
+    sci.minFilter = VK_FILTER_NEAREST;
+    sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sci.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+    sci.maxLod = 0.0f;
+    if (vkCreateSampler(d->dev, &sci, NULL, &s_samp) != VK_SUCCESS) return 0;
+    /* THE COMPARE SAMPLER EXISTS ONLY SO THAT `uShadowCmp` IS A VALID
+       DESCRIPTOR. A sampler2DShadow must be paired with a compare-enabled
+       sampler or the set cannot be bound, and this pass refuses any frame whose
+       twin reports uShadowOn 1, so nothing ever samples through it. NEAREST
+       rather than the twin's bilinear PCF, which keeps it off
+       SAMPLED_IMAGE_FILTER_LINEAR for a depth format. */
+    sci.compareEnable = VK_TRUE;
+    sci.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    if (vkCreateSampler(d->dev, &sci, NULL, &s_sampCmp) != VK_SUCCESS) return 0;
+    return 1;
+}
+
+static int build_pipeline(const TAGPU_VKPASS* d)
+{
+    VkDescriptorSetLayoutBinding b[10];
+    VkDescriptorSetLayoutCreateInfo dli = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+    VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+    VkPipelineShaderStageCreateInfo st[2];
+    VkVertexInputBindingDescription vb[2];
+    VkVertexInputAttributeDescription va[2];
+    VkPipelineVertexInputStateCreateInfo vi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+    VkPipelineInputAssemblyStateCreateInfo ia = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
+    VkPipelineViewportStateCreateInfo vp = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
+    VkPipelineRasterizationStateCreateInfo rs = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+    VkPipelineMultisampleStateCreateInfo ms = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
+    VkPipelineDepthStencilStateCreateInfo ds;
+    VkPipelineColorBlendAttachmentState cba;
+    VkPipelineColorBlendStateCreateInfo cb = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
+    VkDynamicState dyn[2] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkPipelineDynamicStateCreateInfo dy = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
+    VkGraphicsPipelineCreateInfo gp = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+    VkFormatProperties fp;
+    VkShaderModule vs = VK_NULL_HANDLE, fs = VK_NULL_HANDLE;
+    VkResult r;
+    int i, ok = 0;
+
+    /* THE INSTANCE FORMAT IS ASKED FOR (item 1 of the file header). */
+    vkGetPhysicalDeviceFormatProperties(d->pd, VK_FORMAT_R16G16B16A16_SSCALED, &fp);
+    if (!(fp.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT)) {
+        plog(d, "terr: this device does not take R16G16B16A16_SSCALED as a vertex "
+                "format - the Vulkan edition of the terrain pass stays down (the "
+                "GL one is unaffected). The fix, if a device is ever found here, "
+                "is to widen the cell record to four floats on the CPU: every "
+                "field is a small integer and is exact in float.");
+        return 0;
+    }
+
+    /* THE BINDINGS ARE THE GENERATOR'S, NOT THIS FILE'S: tools/spirv-gen.py
+       allocates them BY STAGE, so set 0 binding 0 is the vertex stage's uniform
+       block, 32 the fragment stage's, and 40.. its samplers in declaration
+       order -- uAtlas, uPal, uAtlasRGB, uHeight, uFogGrid, uFogLUT, uShadowCmp,
+       uShadowRaw. The std140 offsets are printed in the generated header and
+       are the contract for what goes into those buffers. */
+    memset(b, 0, sizeof b);
+    b[0].binding = 0;  b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    b[0].descriptorCount = 1; b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    b[1].binding = 32; b[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    b[1].descriptorCount = 1; b[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    for (i = 2; i < 10; i++) {
+        b[i].binding = (uint32_t)(40 + (i - 2));
+        b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b[i].descriptorCount = 1;
+        b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+    dli.bindingCount = 10; dli.pBindings = b;
+    if (vkCreateDescriptorSetLayout(d->dev, &dli, NULL, &s_dsl) != VK_SUCCESS) return 0;
+
+    pli.setLayoutCount = 1; pli.pSetLayouts = &s_dsl;
+    if (vkCreatePipelineLayout(d->dev, &pli, NULL, &s_plo) != VK_SUCCESS) return 0;
+
+    vs = mk_module(d, tagpu_spv_tagpu_terr_VS,
+                   sizeof tagpu_spv_tagpu_terr_VS / sizeof(uint32_t));
+    fs = mk_module(d, tagpu_spv_tagpu_terr_FS,
+                   sizeof tagpu_spv_tagpu_terr_FS / sizeof(uint32_t));
+    if (!vs || !fs) { plog(d, "terr: a shader module was refused"); goto out; }
+
+    memset(st, 0, sizeof st);
+    st[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    st[0].stage = VK_SHADER_STAGE_VERTEX_BIT;   st[0].module = vs; st[0].pName = "main";
+    st[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; st[1].module = fs; st[1].pName = "main";
+
+    /* TWO BINDINGS, AND THE SECOND IS THE NEW THING (item 1). Binding 0 is the
+       unit quad at VERTEX rate -- six corners, uploaded once -- and binding 1 is
+       this frame's cell records at INSTANCE rate, which is the divisor of 1 the
+       GL VAO sets with glVertexAttribDivisor. */
+    memset(vb, 0, sizeof vb);
+    vb[0].binding = 0; vb[0].stride = 2 * sizeof(float);
+    vb[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    vb[1].binding = 1; vb[1].stride = TAGPU_TERR_ICOMP * sizeof(short);
+    vb[1].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
+    memset(va, 0, sizeof va);
+    va[0].location = 0; va[0].binding = 0; va[0].format = VK_FORMAT_R32G32_SFLOAT;
+    va[0].offset = 0;
+    va[1].location = 1; va[1].binding = 1;
+    va[1].format = VK_FORMAT_R16G16B16A16_SSCALED; va[1].offset = 0;
+    vi.vertexBindingDescriptionCount = 2; vi.pVertexBindingDescriptions = vb;
+    vi.vertexAttributeDescriptionCount = 2; vi.pVertexAttributeDescriptions = va;
+
+    /* A LIST, which is what the GL twin draws: TAGPU_TERR_QUAD is six corners
+       in the engine's own vertex order, with the shared edge on (1,0)-(0,1). */
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    vp.viewportCount = 1; vp.scissorCount = 1;     /* both dynamic, set per frame */
+
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    /* NO CULLING: the negative viewport height flips the winding of every
+       triangle, so a cull mode that was right under GL would throw the whole
+       frame away. The GL twin does not cull either. */
+    rs.cullMode = VK_CULL_MODE_NONE;
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    /* GL_LESS AND DEPTH WRITES ON, which is what the native pass sets around
+       this draw and what makes terrain the frame's far plane: everything above
+       it is tested against what it wrote. */
+    memset(&ds, 0, sizeof ds);
+    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    ds.depthTestEnable = VK_TRUE;
+    ds.depthWriteEnable = VK_TRUE;
+    ds.depthCompareOp = VK_COMPARE_OP_LESS;
+    ds.depthBoundsTestEnable = VK_FALSE;
+    ds.stencilTestEnable = VK_FALSE;
+
+    memset(&cba, 0, sizeof cba);
+    /* NO BLENDING (item 5): the GL twin draws before glEnable(GL_BLEND) and
+       terrain is opaque with alpha 1 everywhere. */
+    cba.blendEnable = VK_FALSE;
+    cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                         VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    cb.attachmentCount = 1; cb.pAttachments = &cba;
+
+    dy.dynamicStateCount = 2; dy.pDynamicStates = dyn;
+
+    gp.stageCount = 2; gp.pStages = st;
+    gp.pVertexInputState = &vi;
+    gp.pInputAssemblyState = &ia;
+    gp.pViewportState = &vp;
+    gp.pRasterizationState = &rs;
+    gp.pMultisampleState = &ms;
+    gp.pDepthStencilState = &ds;
+    gp.pColorBlendState = &cb;
+    gp.pDynamicState = &dy;
+    gp.layout = s_plo;
+    gp.renderPass = d->rp;
+    gp.subpass = 0;
+    r = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_pipe);
+    if (r != VK_SUCCESS) { plog(d, "terr: the pipeline was refused (%d)", (int)r); goto out; }
+    ok = 1;
+
+out:
+    if (vs) vkDestroyShaderModule(d->dev, vs, NULL);
+    if (fs) vkDestroyShaderModule(d->dev, fs, NULL);
+    return ok;
+}
+
+static int build_descriptors(const TAGPU_VKPASS* d)
+{
+    VkDescriptorPoolSize ps[2];
+    VkDescriptorPoolCreateInfo dpi = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
+    VkDescriptorSetLayout lay[TAGPU_VK_SLOTS];
+    VkDescriptorSet sets[TAGPU_VK_SLOTS];
+    VkDescriptorSetAllocateInfo dai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+    uint32_t i;
+
+    memset(ps, 0, sizeof ps);
+    ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;         ps[0].descriptorCount = d->slots * 2;
+    ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[1].descriptorCount = d->slots * 8;
+    dpi.maxSets = d->slots;
+    dpi.poolSizeCount = 2; dpi.pPoolSizes = ps;
+    if (vkCreateDescriptorPool(d->dev, &dpi, NULL, &s_dpool) != VK_SUCCESS) return 0;
+
+    for (i = 0; i < d->slots; i++) lay[i] = s_dsl;
+    dai.descriptorPool = s_dpool;
+    dai.descriptorSetCount = d->slots;
+    dai.pSetLayouts = lay;
+    if (vkAllocateDescriptorSets(d->dev, &dai, sets) != VK_SUCCESS) return 0;
+
+    /* The two uniform blocks are written now and never again -- they name a
+       fixed range of a buffer whose CONTENTS change per frame. The samplers are
+       written when there is an image to name: 41 and 45 by `slot_build`, 44 by
+       `slot_fog`, 46 and 47 by `shadow_build`, and 40/42/43 on every prepare by
+       `shared_bind`. */
+    for (i = 0; i < d->slots; i++) {
+        VkDescriptorBufferInfo bi[2];
+        VkWriteDescriptorSet w[2];
+        s_slot[i].dset = sets[i];
+        memset(bi, 0, sizeof bi); memset(w, 0, sizeof w);
+        bi[0].buffer = s_ubuf; bi[0].offset = i * s_ustride;             bi[0].range = UBLK_VS;
+        bi[1].buffer = s_ubuf; bi[1].offset = i * s_ustride + s_ublkF;   bi[1].range = UBLK_FS;
+        w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[0].dstSet = sets[i]; w[0].dstBinding = 0; w[0].descriptorCount = 1;
+        w[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; w[0].pBufferInfo = &bi[0];
+        w[1] = w[0]; w[1].dstBinding = 32; w[1].pBufferInfo = &bi[1];
+        vkUpdateDescriptorSets(d->dev, 2, w, 0, NULL);
+    }
+    return 1;
+}
+
+/* The 1x1 depth image bindings 46 and 47 name, and the two writes that name it.
+   Done once, at build, before any set has been bound. */
+static int shadow_build(const TAGPU_VKPASS* d)
+{
+    uint32_t i;
+    if (!mk_image(d, 1, 1, VK_FORMAT_D16_UNORM, VK_IMAGE_ASPECT_DEPTH_BIT,
+                  &s_shImg, &s_shMem, &s_shView)) return 0;
+    for (i = 0; i < d->slots; i++) {
+        VkDescriptorImageInfo ii[2];
+        VkWriteDescriptorSet wr[2];
+        memset(ii, 0, sizeof ii); memset(wr, 0, sizeof wr);
+        ii[0].sampler = s_sampCmp; ii[0].imageView = s_shView;
+        ii[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        ii[1].sampler = s_samp;    ii[1].imageView = s_shView;
+        ii[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr[0].dstSet = s_slot[i].dset; wr[0].dstBinding = 46; wr[0].descriptorCount = 1;
+        wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        wr[0].pImageInfo = &ii[0];
+        wr[1] = wr[0]; wr[1].dstBinding = 47; wr[1].pImageInfo = &ii[1];
+        vkUpdateDescriptorSets(d->dev, 2, wr, 0, NULL);
+    }
+    return 1;
+}
+
+/* Clear it once and leave it in SHADER_READ_ONLY_OPTIMAL. Nothing samples it
+   (the pass refuses any frame with uShadowOn 1), but an image whose contents
+   are undefined is one more thing to reason about for the price of one call. */
+static void shadow_ready(VkCommandBuffer cb)
+{
+    VkClearDepthStencilValue cv;
+    VkImageSubresourceRange rg;
+    if (s_shReady || !s_shImg) return;
+    memset(&rg, 0, sizeof rg);
+    rg.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    rg.levelCount = 1; rg.layerCount = 1;
+    cv.depth = 1.0f; cv.stencil = 0;
+    img_barrier(cb, s_shImg, VK_IMAGE_ASPECT_DEPTH_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    vkCmdClearDepthStencilImage(cb, s_shImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                &cv, 1, &rg);
+    img_barrier(cb, s_shImg, VK_IMAGE_ASPECT_DEPTH_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+    s_shReady = 1;
+}
+
+/* Point this slot's 40, 42 and 43 at the shared images as they stand now.
+   ON EVERY PREPARE, and that is the point: it is the one instant the seam's
+   fence proves this set is not in use, so a shared image that had to be
+   replaced is picked up here rather than by a write that reaches every slot. */
+static void shared_bind(const TAGPU_VKPASS* d, uint32_t slot)
+{
+    VkDescriptorImageInfo ii[3];
+    VkWriteDescriptorSet wr[3];
+    memset(ii, 0, sizeof ii); memset(wr, 0, sizeof wr);
+    ii[0].sampler = s_samp; ii[0].imageView = s_atlas.view;
+    ii[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    /* BINDING 42 IS uAtlasRGB, AND IT IS THE ATLAS'S OWN VIEW ON PURPOSE. The
+       fragment stage reads it only on the `uLit == 1 && uRestored == 1` branch,
+       and this pass refuses any frame whose twin reported `uRestored` 1 (see the
+       file header), so nothing ever samples it. A descriptor still has to be
+       VALID for the set to be bound, and naming the image that is already here
+       costs no memory and no second object. If the Classic++ restored atlas is
+       ever mirrored, this is the binding that stops being a placeholder. */
+    ii[1] = ii[0];
+    ii[2].sampler = s_samp;
+    ii[2].imageView = s_height.view ? s_height.view : s_atlas.view;
+    ii[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wr[0].dstSet = s_slot[slot].dset; wr[0].dstBinding = 40; wr[0].descriptorCount = 1;
+    wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    wr[0].pImageInfo = &ii[0];
+    wr[1] = wr[0]; wr[1].dstBinding = 42; wr[1].pImageInfo = &ii[1];
+    wr[2] = wr[0]; wr[2].dstBinding = 43; wr[2].pImageInfo = &ii[2];
+    vkUpdateDescriptorSets(d->dev, 3, wr, 0, NULL);
+}
+
+static int build(const TAGPU_VKPASS* d)
+{
+    VkPhysicalDeviceProperties props;
+    VkDeviceSize ualign;
+    static const float quad[TAGPU_TERR_QUADV * 2] = TAGPU_TERR_QUAD;
+    unsigned char* qmap = NULL;
+
+    if (d->slots == 0 || d->slots > TAGPU_VK_SLOTS) {
+        plog(d, "terr: %u frame slots is outside what this pass carries (%d)",
+             (unsigned)d->slots, TAGPU_VK_SLOTS);
+        return 0;
+    }
+    if (!d->flipok) {
+        plog(d, "terr: this device does not offer VK_KHR_maintenance1, so the "
+                "clip-space flip has no pipeline state to ride - the Vulkan "
+                "edition of the terrain pass stays down (the GL one is unaffected)");
+        return 0;
+    }
+    /* TERRAIN IS THE FRAME'S FAR PLANE: it writes the depth everything above it
+       is tested against, so it refuses rather than draws untested. */
+    if (d->dfmt == VK_FORMAT_UNDEFINED) {
+        plog(d, "terr: the seam's render pass carries no depth attachment, and "
+                "this pass writes the depth every later pass is tested against "
+                "- it stays down");
+        return 0;
+    }
+    if (!resolve(d)) { plog(d, "terr: an entry point is missing"); return 0; }
+
+    vkGetPhysicalDeviceProperties(d->pd, &props);
+    /* TWO BLOCKS PER SLOT, EACH AT AN OFFSET THE DEVICE ACCEPTS.
+       `minUniformBufferOffsetAlignment` is 16 on some devices and 256 on
+       others, and a bound buffer offset that is not a multiple of it is
+       undefined behaviour rather than a slow path. The two blocks are 64 and
+       192 bytes (the generated header prints the std140 offsets), so each is
+       rounded up to that alignment in turn. */
+    ualign = props.limits.minUniformBufferOffsetAlignment;
+    if (ualign < 1) ualign = 1;
+    s_ublkF = ((VkDeviceSize)UBLK_VS + ualign - 1) / ualign * ualign;
+    s_ustride = s_ublkF + ((VkDeviceSize)UBLK_FS + ualign - 1) / ualign * ualign;
+
+    if (!mk_buffer(d, s_ustride * d->slots, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                   &s_ubuf, &s_umem, &s_umap)) return 0;
+    /* the unit quad, once. tagpu_terr.h's literal, the same one the GL VAO's
+       static buffer is filled from. */
+    if (!mk_buffer(d, sizeof quad, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                   &s_qbuf, &s_qmem, &qmap)) return 0;
+    memcpy(qmap, quad, sizeof quad);
+    if (!build_samplers(d)) return 0;
+    if (!build_pipeline(d)) return 0;
+    if (!build_descriptors(d)) return 0;
+    if (!shadow_build(d)) return 0;
+
+    plog(d, "terr: the Vulkan edition is up - %u frame slots, uniform stride %u, "
+            "depth format %d",
+         (unsigned)d->slots, (unsigned)s_ustride, (int)d->dfmt);
+    return 1;
+}
+
+/* ---- the frame ---------------------------------------------------------- */
+
+/* THE SCISSOR, in Vulkan framebuffer pixels. Item 6 of the file header: the
+   rect arrives in GAME-FRAME pixels measured from the TOP of the frame (the
+   engine's own viewport rect, what the native pass hands glScissor), and a
+   Vulkan framebuffer row 0 is clip-space y = +1, which for this pass is the
+   BOTTOM of the world. So the rect is mirrored vertically on the way in.
+
+   It is also SCALED, by the attachment's extent over the game frame's. At the
+   sizes an A/B is run at those are the same number, but the Vulkan window
+   tracks the client rect and the GL lane's own render target need not match it;
+   scaling here keeps the clip on the same part of the world when they differ,
+   which is the same thing the vertex shader's division by uGame does. */
+static void terr_scissor(uint32_t w, uint32_t h)
+{
+    float sx = s_hGw > 0.0f ? (float)w / s_hGw : 1.0f;
+    float sy = s_hGh > 0.0f ? (float)h / s_hGh : 1.0f;
+    int x0 = (int)(s_hVpL * sx + 0.5f);
+    int ww = (int)(s_hVw * sx + 0.5f);
+    int ytop = (int)(s_hVpT * sy + 0.5f);
+    int hh = (int)(s_hVh * sy + 0.5f);
+    int y0 = (int)h - (ytop + hh);          /* the mirror */
+
+    /* NO CLIP WHERE THE GL LANE HAS NONE. `scissorOn` is what the native pass
+       actually did, not what it would have liked to. */
+    if (!s_hScissorOn || ww <= 0 || hh <= 0) {
+        s_scX = 0; s_scY = 0; s_scW = (int)w; s_scH = (int)h;
+        return;
+    }
+    if (x0 < 0) { ww += x0; x0 = 0; }
+    if (y0 < 0) { hh += y0; y0 = 0; }
+    if (x0 > (int)w) x0 = (int)w;
+    if (y0 > (int)h) y0 = (int)h;
+    if (ww < 0) ww = 0;
+    if (hh < 0) hh = 0;
+    if (x0 + ww > (int)w) ww = (int)w - x0;
+    if (y0 + hh > (int)h) hh = (int)h - y0;
+    s_scX = x0; s_scY = y0; s_scW = ww; s_scH = hh;
+}
+
+int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
+{
+    TAGPU_TERRHAND t;
+    SLOT* s;
+    VkDeviceSize ibytes, atlasBytes = 0, heightBytes = 0, heightOff = 0, bigBytes = 0;
+    /* A UNION, NOT A CAST. Both blocks mix `int` and `float` members and
+       writing an int through a float array is the aliasing rule broken at -O2,
+       which is not a place to find out that the fog branch took a garbage
+       uFog. */
+    union { float f[UBLK_FS / 4]; int i[UBLK_FS / 4]; } ub;
+    int fogW = 1, fogH = 1, hW = 1, hH = 1;
+    int doAtlas, doHeight;
+
+    if (s_state == ST_REFUSED) return 0;
+    if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
+
+    /* THE RETIRE ACCOUNTING, FIRST AND UNCONDITIONALLY, because from here on
+       every path either draws or returns and both leave this slot's set unused
+       until the next `shared_bind`. Doing it inside `shared_bind` instead would
+       stall for ever on the one path that matters: a resize that cannot be
+       applied because a retire is outstanding returns before binding, so the
+       bit that would end the retire would never clear. See `shared_slot_done`. */
+    if (s_state == ST_READY) {
+        shared_slot_done(d, &s_atlas, slot);
+        shared_slot_done(d, &s_height, slot);
+    }
+
+    /* NOTHING IS BUILT UNTIL THERE IS SOMETHING TO DRAW, AND NOTHING PER-SLOT
+       IS KEPT ONCE THERE IS NOT -- §2.28's rule. The two SHARED images stay:
+       they belong to every slot at once, so one slot going idle says nothing
+       about them, and they come back only with the map. Giving slot `slot` back
+       needs no new argument and no timer, because it is the same instant, and
+       the same ownership, that the rest of this function writes it in. */
+    if (!tagpu_terr_handover(&t)) {
+        if (s_state == ST_READY) slot_free(d, &s_slot[slot]);
+        return 0;
+    }
+
+    if (s_state == ST_UNBUILT) {
+        if (!build(d)) { tagpu_vk_terr_down(d); s_state = ST_REFUSED; return 0; }
+        s_state = ST_READY;
+    }
+    shadow_ready(cb);
+
+    /* CLASSIC++'S RESTORED ATLAS IS NOT MIRRORED, and neither is the cast-shadow
+       depth map (see the file header): drawing without either against a twin
+       that drew with it would be a different picture, and the A/B would call it
+       a rasteriser difference. */
+    if (t.restored) {
+        if (!s_saidRestored) {
+            s_saidRestored = 1;
+            plog(d, "terr: the GL twin is drawing through the Classic++ restored "
+                    "tile atlas and that surface has no CPU mirror - the Vulkan "
+                    "edition draws nothing this session rather than draw a "
+                    "different picture from its own oracle");
+        }
+        return 0;
+    }
+    if (t.shadowOn) {
+        if (!s_saidShadow) {
+            s_saidShadow = 1;
+            plog(d, "terr: the GL twin is reading the Classic++ cast-shadow map "
+                    "and that surface has no CPU mirror - the Vulkan edition "
+                    "draws nothing this session rather than draw a different "
+                    "picture from its own oracle");
+        }
+        return 0;
+    }
+
+    /* THE BOUNDS, RE-CHECKED. Every one of these sizes an allocation or a
+       memcpy, and a bound that lives in the file that produced the number is a
+       bound only while both files are read together. */
+    if (!t.atlas) {
+        /* SAID ONCE. The mirrors are asked for on the GL twin's 30-frame poll
+           and cannot be had before the tile set is loaded, so the first frames
+           of a session legitimately arrive without one. */
+        if (!s_saidNoMirror) {
+            s_saidNoMirror = 1;
+            plog(d, "terr: the GL tile atlas has no CPU mirror yet - nothing "
+                    "drawn until it does (the twin asks for one on its 30-frame "
+                    "poll, and the first one costs a rebuild of the atlas)");
+        }
+        return 0;
+    }
+    s_saidNoMirror = 0;
+    if (!t.pal || !t.fogLut) return 0;
+    if (t.ncell < 1 || !t.cells) return 0;
+    if (t.atlasW < 1 || t.atlasH < 1 ||
+        t.atlasW > ATLAS_MAXDIM || t.atlasH > ATLAS_MAXDIM) {
+        plog(d, "terr: a %dx%d tile atlas is outside what this pass carries - nothing drawn",
+             t.atlasW, t.atlasH);
+        return 0;
+    }
+    if (t.height) {
+        if (t.hW < 1 || t.hH < 1 || t.hW > HEIGHT_MAXDIM || t.hH > HEIGHT_MAXDIM) {
+            plog(d, "terr: a %dx%d height grid is outside what this pass carries - nothing drawn",
+                 t.hW, t.hH);
+            return 0;
+        }
+        hW = t.hW; hH = t.hH;
+    }
+    if (t.fogGrid) {
+        if (t.fogGridCols < 1 || t.fogGridRows < 1 ||
+            t.fogGridCols > FOG_MAXDIM || t.fogGridRows > FOG_MAXDIM) {
+            plog(d, "terr: a %dx%d fog grid is outside what this pass carries - nothing drawn",
+                 t.fogGridCols, t.fogGridRows);
+            return 0;
+        }
+        fogW = t.fogGridCols; fogH = t.fogGridRows;
+    }
+
+    s = &s_slot[slot];
+    /* THIS SLOT IS OURS -- the seam waited on fence[slot] at the top of this
+       frame, so the submit that last used these buffers, these images and this
+       descriptor set has completed. That is what makes every write below safe
+       with no device-wide wait. */
+
+    /* THE SHARED IMAGES FIRST, because a resize that cannot be applied yet
+       (one retire at a time) means this frame draws nothing at all rather than
+       sampling the previous map's texels. */
+    if (!shared_resize(d, &s_atlas, t.atlasW, t.atlasH)) {
+        if (!s_atlas.img) goto refuse;
+        return 0;                          /* a retire is still clearing       */
+    }
+    /* WITH NO HEIGHT GRID THE IMAGE IS ONE TEXEL AND uHDim IS 0, which is what
+       the GL twin does: the shader's `uHDim.x > 0.5` test is what keeps it
+       unsampled, and a 1x1 image keeps the descriptor valid meanwhile. */
+    if (!shared_resize(d, &s_height, hW, hH)) {
+        if (!s_height.img) goto refuse;
+        return 0;
+    }
+    if (!slot_build(d, s)) goto refuse;
+    if (!slot_fog(d, s, fogW, fogH)) goto refuse;
+    shared_bind(d, slot);
+
+    ibytes = (VkDeviceSize)t.ncell * TAGPU_TERR_ICOMP * sizeof(short);
+    if (!slot_inst(d, s, ibytes)) goto refuse;
+    memcpy(s->imap, t.cells, (size_t)ibytes);
+
+    /* THE TWO MAP-SCOPED UPLOADS SHARE ONE STAGING BUFFER, allocated on the
+       frame one of them is due and GIVEN BACK at this slot's next prepare on
+       which neither is -- the same fence, one turn of the slots later -- so a
+       settled map holds none of it and the frames after a map change hold at
+       most one per slot. */
+    doAtlas = !s_atlas.have || s_atlas.serial != t.atlasSerial;
+    doHeight = t.height ? (!s_height.have || s_height.serial != t.heightSerial)
+                        : !s_height.have;
+    if (doAtlas || doHeight) {
+        atlasBytes = doAtlas ? (VkDeviceSize)t.atlasW * t.atlasH : 0;
+        heightOff = ALIGN4(atlasBytes);
+        heightBytes = doHeight ? (VkDeviceSize)hW * hH : 0;
+        bigBytes = heightOff + heightBytes;
+        if (s->bigCap < bigBytes || !s->bigStage) {
+            slot_drop_bigstage(d, s);
+            if (!mk_buffer(d, bigBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                           &s->bigStage, &s->bigMem, &s->bigMap)) goto refuse;
+            s->bigCap = bigBytes;
+        }
+        if (doAtlas) {
+            memcpy(s->bigMap, t.atlas, (size_t)atlasBytes);
+            shared_upload(cb, &s_atlas, s->bigStage, 0);
+            s_atlas.serial = t.atlasSerial;
+        }
+        if (doHeight) {
+            /* no grid: one zero texel, which the shader never reads */
+            if (t.height) memcpy(s->bigMap + heightOff, t.height, (size_t)heightBytes);
+            else          memset(s->bigMap + heightOff, 0, 1);
+            shared_upload(cb, &s_height, s->bigStage, heightOff);
+            s_height.serial = t.height ? t.heightSerial : 0;
+        }
+    } else {
+        slot_drop_bigstage(d, s);
+    }
+
+    /* THE THREE SMALL IMAGES, per slot, so the one-line invariant covers them:
+       UNDEFINED in, because the whole of each is re-sent every frame and there
+       are therefore no contents to preserve and no layout to carry. */
+    memcpy(s->smallMap + SMALL_PALOFF, t.pal, 256 * 4);
+    memcpy(s->smallMap + SMALL_LUTOFF, t.fogLut, 256);
+    /* The grid is one `unsigned short` a cell and the image is RG8: the same
+       two bytes in the same order, which is exactly what the GL twin uploads
+       (GL_RG / GL_UNSIGNED_BYTE over this very buffer). With no grid this frame
+       the image is one zero cell, which the shader never reads -- taFog is
+       called only on the `uFog & 1` branch. */
+    if (t.fogGrid) memcpy(s->smallMap + SMALL_FOGOFF, t.fogGrid,
+                          (size_t)fogW * fogH * 2);
+    else           memset(s->smallMap + SMALL_FOGOFF, 0, 2);
+    img_barrier(cb, s->pal, VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    img_barrier(cb, s->lut, VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    img_barrier(cb, s->fog, VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    copy_rect(cb, s->smallStage, SMALL_PALOFF, s->pal, 256, 1);
+    copy_rect(cb, s->smallStage, SMALL_LUTOFF, s->lut, 256, 1);
+    copy_rect(cb, s->smallStage, SMALL_FOGOFF, s->fog, fogW, fogH);
+    img_barrier(cb, s->pal, VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+    img_barrier(cb, s->lut, VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+    img_barrier(cb, s->fog, VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+
+    /* The two uniform blocks, at the std140 offsets the generated header
+       prints -- the same numbers the GL draw passed to its uniforms. */
+    memset(&ub, 0, sizeof ub);
+    ub.f[0]  = t.gw;     ub.f[1]  = t.gh;        /* uGame        vec2 @0  */
+    ub.f[2]  = t.zoom;                           /* uZoom       float @8  */
+    ub.f[4]  = t.zoomCx; ub.f[5]  = t.zoomCy;    /* uZoomC       vec2 @16 */
+    ub.f[6]  = t.depthScale;                     /* uDepthScale float @24 */
+    ub.f[7]  = t.enc;                            /* uEnc        float @28 */
+    ub.f[8]  = t.origX;  ub.f[9]  = t.origY;     /* uOrigin      vec2 @32 */
+    ub.f[10] = t.tile0X; ub.f[11] = t.tile0Y;    /* uTile0       vec2 @40 */
+    ub.f[12] = t.texelW; ub.f[13] = t.texelH;    /* uTexel       vec2 @48 */
+    memcpy(s_umap + (size_t)slot * s_ustride, ub.f, UBLK_VS);
+
+    memset(&ub, 0, sizeof ub);
+    ub.i[0]  = t.restored;                       /* uRestored     int @0   */
+    ub.f[2]  = t.hDimW;  ub.f[3]  = t.hDimH;     /* uHDim        vec2 @8   */
+    ub.f[4]  = t.fogOrgX; ub.f[5] = t.fogOrgY;   /* uFogOrg      vec2 @16  */
+    ub.f[6]  = t.fogCols; ub.f[7] = t.fogRows;   /* uFogDim      vec2 @24  */
+    ub.i[8]  = t.fog;                            /* uFog          int @32  */
+    ub.i[9]  = t.lit;                            /* uLit          int @36  */
+    ub.i[10] = t.lambert;                        /* uLambert      int @40  */
+    ub.f[12] = t.sun[0]; ub.f[13] = t.sun[1];
+    ub.f[14] = t.sun[2];                         /* uSun         vec3 @48  */
+    ub.f[15] = t.amb;                            /* uAmb        float @60  */
+    ub.f[16] = t.norm;                           /* uNorm       float @64  */
+    ub.i[17] = t.shadowOn;                       /* uShadowOn     int @68  */
+    /* uShadowSun @80, uShadowMat @96, uShScale @160, uPenumbra @172 and
+       uShade @176 are left ZERO, which is what the GL twin's program holds:
+       tagpu_shadow_apply writes uShadowOn and then returns when the map is not
+       live, and this pass refuses any frame on which it IS live. */
+    memcpy(s_umap + (size_t)slot * s_ustride + s_ublkF, ub.f, UBLK_FS);
+
+    s_ncell = t.ncell;
+    s_hGw = t.gw; s_hGh = t.gh;
+    s_hVpL = t.vpL; s_hVpT = t.vpT; s_hVw = t.vw; s_hVh = t.vh;
+    s_hScissorOn = t.scissorOn;
+
+    /* THE A/B FRAME IS CLAIMED LAST, AFTER EVERY REASON NOT TO DRAW IS PAST. A
+       frame claimed and then not drawn would have the seam capture a bare clear
+       against a GL half that has the terrain in it, and report every terrain
+       pixel as differing: a port failure that is really an oracle failure. */
+    s_abFrame = t.ab;
+    s_drawThis = 1;
+    return 1;
+
+refuse:
+    plog(d, "terr: slot %u would not take this frame's resources - the pass comes down",
+         (unsigned)slot);
+    tagpu_vk_terr_down(d);
+    s_state = ST_REFUSED;
+    return 0;
+}
+
+void tagpu_vk_terr_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                          uint32_t w, uint32_t h)
+{
+    VkViewport vp;
+    VkRect2D sc;
+    VkBuffer bufs[2];
+    VkDeviceSize offs[2] = { 0, 0 };
+
+    (void)d;
+    if (s_state != ST_READY || !s_drawThis) return;
+    s_drawThis = 0;
+
+    /* THE FLIP, AND THE DEPTH RANGE, AND THEY ARE BOTH THE WHOLE OF THEMSELVES.
+       y starts at the bottom and the height is negative, so clip space is
+       turned over once and the ported shader keeps GL's convention without a
+       character changing. minDepth 0.5 / maxDepth 1.0 maps clip z in [0, 1]
+       onto GL's own (z+1)/2 -- see item 4 of the file header; without it every
+       depth VALUE here is twice GL's and the far plane terrain writes is not
+       the one the passes above it are tested against. */
+    vp.x = 0.0f;
+    vp.y = (float)h;
+    vp.width = (float)w;
+    vp.height = -(float)h;
+    vp.minDepth = 0.5f;
+    vp.maxDepth = 1.0f;
+    vkCmdSetViewport(cb, 0, 1, &vp);
+
+    terr_scissor(w, h);
+    sc.offset.x = s_scX; sc.offset.y = s_scY;
+    sc.extent.width = (uint32_t)s_scW; sc.extent.height = (uint32_t)s_scH;
+    vkCmdSetScissor(cb, 0, 1, &sc);
+
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipe);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_plo, 0, 1,
+                            &s_slot[slot].dset, 0, NULL);
+    bufs[0] = s_qbuf;                  /* the quad, per vertex     */
+    bufs[1] = s_slot[slot].ibuf;       /* the cells, per instance  */
+    vkCmdBindVertexBuffers(cb, 0, 2, bufs, offs);
+    vkCmdDraw(cb, TAGPU_TERR_QUADV, (uint32_t)s_ncell, 0, 0);
+}
+
+int tagpu_vk_terr_ab_frame(void)
+{
+    int a = s_abFrame;
+    s_abFrame = 0;
+    return a;
+}
+
+void tagpu_vk_terr_down(const TAGPU_VKPASS* d)
+{
+    VkDevice dev = d->dev;
+    uint32_t i;
+    if (!dev || !vkDestroyBuffer) { s_state = ST_UNBUILT; return; }
+
+    for (i = 0; i < TAGPU_VK_SLOTS; i++) {
+        slot_free(d, &s_slot[i]);
+        s_slot[i].dset = VK_NULL_HANDLE;   /* goes back with the pool below */
+    }
+    kill_image(d, &s_atlas.img, &s_atlas.mem, &s_atlas.view);
+    kill_image(d, &s_atlas.oldImg, &s_atlas.oldMem, &s_atlas.oldView);
+    memset(&s_atlas, 0, sizeof s_atlas);
+    kill_image(d, &s_height.img, &s_height.mem, &s_height.view);
+    kill_image(d, &s_height.oldImg, &s_height.oldMem, &s_height.oldView);
+    memset(&s_height, 0, sizeof s_height);
+    kill_image(d, &s_shImg, &s_shMem, &s_shView);
+    s_shReady = 0;
+    if (s_pipe)  { vkDestroyPipeline(dev, s_pipe, NULL); s_pipe = VK_NULL_HANDLE; }
+    if (s_plo)   { vkDestroyPipelineLayout(dev, s_plo, NULL); s_plo = VK_NULL_HANDLE; }
+    if (s_dpool) { vkDestroyDescriptorPool(dev, s_dpool, NULL); s_dpool = VK_NULL_HANDLE; }
+    if (s_dsl)   { vkDestroyDescriptorSetLayout(dev, s_dsl, NULL); s_dsl = VK_NULL_HANDLE; }
+    if (s_samp)    { vkDestroySampler(dev, s_samp, NULL); s_samp = VK_NULL_HANDLE; }
+    if (s_sampCmp) { vkDestroySampler(dev, s_sampCmp, NULL); s_sampCmp = VK_NULL_HANDLE; }
+    if (s_qbuf)  { vkDestroyBuffer(dev, s_qbuf, NULL); s_qbuf = VK_NULL_HANDLE; }
+    if (s_qmem)  { vkFreeMemory(dev, s_qmem, NULL); s_qmem = VK_NULL_HANDLE; }
+    if (s_umap)  { vkUnmapMemory(dev, s_umem); s_umap = NULL; }
+    if (s_ubuf)  { vkDestroyBuffer(dev, s_ubuf, NULL); s_ubuf = VK_NULL_HANDLE; }
+    if (s_umem)  { vkFreeMemory(dev, s_umem, NULL); s_umem = VK_NULL_HANDLE; }
+    s_drawThis = 0;
+    s_abFrame = 0;
+    s_ncell = 0;
+    /* ST_UNBUILT and not ST_REFUSED: a pass brought down by a mode change or a
+       cleared lever must be able to come back. `prepare` sets ST_REFUSED itself
+       when the device is the reason. */
+    s_state = ST_UNBUILT;
+}

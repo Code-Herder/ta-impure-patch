@@ -1,0 +1,46 @@
+#ifndef TAGPU_VK_TERR_H
+#define TAGPU_VK_TERR_H
+/* The terrain pass -- the 32x32 pre-rendered map tiles -- drawn by Vulkan
+   (Phase G / G19e, the THIRD world pass). Implementation: tagpu_vk_terr.c. The
+   GL edition is tagpu_terr.c and stays the source of the instances, the
+   uniforms, the texels and the shader.
+
+   THE TWO-PHASE CONTRACT is tagpu_vk_scaffold.h's, for the same reason: a
+   texture upload is a transfer and a transfer may not be recorded inside a
+   render pass.
+
+     prepare()   before vkCmdBeginRenderPass -- build what is missing, upload
+                 this frame's instances and any texels that moved, fill this
+                 slot's uniform blocks
+     record()    inside the render pass -- bind and draw, one instanced call
+
+   Both on the render thread, on the command buffer the seam is recording, in
+   that order, in one frame. `prepare` returning 0 means there is nothing to
+   draw and `record` must not be called.
+
+   IT DEPTH-TESTS AND WRITES, so it refuses to arm when `d->dfmt` is
+   VK_FORMAT_UNDEFINED rather than drawing untested -- terrain is the frame's
+   implicit far plane and everything above it is depth-tested against what it
+   wrote. */
+
+#include "tagpu_vk_pass.h"
+
+/* Build or refresh what this frame needs and say whether there is anything to
+   draw. `slot` is the frame slot (< d->slots) whose resources the GPU has
+   finished with; the seam's fence wait is what proves that. */
+int  tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot);
+
+/* Draw it, inside the render pass. `w`/`h` are the attachment's extent. */
+void tagpu_vk_terr_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                          uint32_t w, uint32_t h);
+
+/* 1 on the one frame the GL twin captured `tagpu_terr_gl.ppm`, so that the
+   seam captures the SAME frame. Consumed by the call. Valid after `prepare`. */
+int  tagpu_vk_terr_ab_frame(void);
+
+/* Give everything back. Called by the seam from `vk_down`, after its
+   vkDeviceWaitIdle and before the device is destroyed. Safe when nothing was
+   ever built. */
+void tagpu_vk_terr_down(const TAGPU_VKPASS* d);
+
+#endif
