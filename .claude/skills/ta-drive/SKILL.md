@@ -1909,6 +1909,13 @@ touch <gamedir>/tagpu_fps.ab                             # one frame, both lanes
 - **`vk-ab.py` REFUSES two captures of different sizes** rather than scaling one: the GL capture is
   the GL viewport and the Vulkan one is the client rect, so a mismatch means the fork is
   letterboxing (`--window` against `--res`, or k != 1). Run at a size where they agree.
+- **The Vulkan file appears a few frames after the GL one**, and that is by design: the capture
+  takes no wait of its own, so it is written when the seam's own fence for that frame slot comes
+  round again (swapchain image count frames later — milliseconds). Sleep a second before diffing,
+  or read `vk: shot: wrote …` in `tagpu.log`.
+- **A capture lost to a swapchain rebuild or a teardown is not written at all**, and the log says
+  so (`the A/B capture was lost to …`). `vk-ab.py` then reports the missing half rather than
+  comparing against a stale file.
 - The lever re-arms when the file is taken away and put back, on both lanes, so a second capture
   needs no relaunch. `tagpu_fps_gl.ppm` / `tagpu_fps_vk.ppm` are binary PPMs;
   `ffmpeg -i x.ppm x.png` to look at one.

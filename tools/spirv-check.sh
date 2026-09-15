@@ -34,7 +34,11 @@ cc="${CC:-i686-w64-mingw32-gcc}"
 
 command -v python3 >/dev/null 2>&1 || { echo "spirv-check: no python3" >&2; exit 2; }
 
-CC="$cc" python3 "$here/spirv-gen.py" --check || exit 1
+# THE EXIT CODE IS PASSED THROUGH, NOT FLATTENED. spirv-gen exits 1 for "stale"
+# and 2 for "could not run at all" (no preprocessor, a shader it cannot read),
+# and `|| exit 1` used to report the second as the first -- which would send
+# someone to regenerate headers that are perfectly current.
+CC="$cc" python3 "$here/spirv-gen.py" --check || exit $?
 
 shopt -s nullglob
 hdrs=("$ddraw"/inc/spirv/*.spv.h)

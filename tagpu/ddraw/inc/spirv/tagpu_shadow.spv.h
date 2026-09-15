@@ -4,7 +4,7 @@
  * truth is the GLSL string in that file; this is its translation, and
  * `make` fails if the two have drifted (tools/spirv-check.sh).
  *
- * transform 6d7dbe0afc22228c
+ * transform 5a710e607bf76131
  */
 #ifndef TAGPU_SPIRV_TAGPU_SHADOW_H
 #define TAGPU_SPIRV_TAGPU_SHADOW_H
@@ -13,6 +13,7 @@
 
 /* tagpu_shadow::FS_NONE -- frag stage, 45 words
  * glsl 541d516ee8256204bab1e0c79188431f
+ * words 989a771cb21ad770c937f5d782393c3a
  */
 static const uint32_t tagpu_spv_tagpu_shadow_FS_NONE[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x00000006u, 0x00000000u, 0x00020011u,
@@ -30,6 +31,7 @@ static const uint32_t tagpu_spv_tagpu_shadow_FS_NONE[] = {
  * set 0 binding 0, std140, 64 bytes:
  *      0  mat4   uShadowMat
  * glsl 3d0b737c1cadc251670505225ace8417
+ * words dc07573a91bbfca18dcff3bbb147ebc5
  */
 static const uint32_t tagpu_spv_tagpu_shadow_VS_H[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x00000023u, 0x00000000u, 0x00020011u,
@@ -87,6 +89,7 @@ static const uint32_t tagpu_spv_tagpu_shadow_VS_H[] = {
  *      0  mat4   uShadowMat
  *     64  vec3   uCast
  * glsl 36099c03c971dddadd0c83e0e41302a8
+ * words 4c3c3875e90afaf5ce0b1af23c0230b9
  */
 static const uint32_t tagpu_spv_tagpu_shadow_VS_U[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x0000003Fu, 0x00000000u, 0x00020011u,

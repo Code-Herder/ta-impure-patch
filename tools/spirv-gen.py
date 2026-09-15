@@ -32,13 +32,20 @@ shader changes -- which is to say, almost never. So the SPIR-V is generated
 here, committed as text, and the build only CHECKS it.
 
 WHAT STOPS THE COMMITTED HEADERS FROM ROTTING, which is the only real objection
-to committing generated code. Every generated header carries, per shader, the
-SHA-256 of the Vulkan GLSL it was compiled from, plus the hash of this tool's
-own transform. `--check` re-runs the extraction and the transform -- both of
-which need the C preprocessor and nothing else, never glslang -- and compares.
-A shader edited in its C string without re-running this tool fails the build,
-with the shader named. `tools/spirv-check.sh` is what the Makefile calls, in the
-same place and for the same reason as `thread-split-check.sh`.
+to committing generated code. Every generated header carries, per shader, THREE
+hashes: the SHA-256 of the Vulkan GLSL it was compiled from, the SHA-256 of the
+WORDS themselves, and the hash of this tool's own transform. `--check` re-runs
+the extraction and the transform -- both of which need the C preprocessor and
+nothing else, never glslang -- and compares all three. A shader edited in its C
+string without re-running this tool fails the build with the shader named; so
+does a word array that has been hand-edited, truncated or badly merged, which
+the GLSL hash alone could not see and which `-fsyntax-only` would accept.
+`tools/spirv-check.sh` is what the Makefile calls, in the same place and for the
+same reason as `thread-split-check.sh`.
+
+What is still NOT asserted, and cannot be without the compiler: that these words
+are what glslang would emit TODAY from that GLSL. The compiler is pinned by
+version and by hash instead (`tools/glslang-vendor.json`).
 
 THE TRANSFORM, in full. Each item is mechanical and applies to every shader:
 
@@ -199,8 +206,14 @@ def preprocess(cfile):
     return r.stdout.split("\n")
 
 
-_DECL = re.compile(r'static\s+const\s+char\s*\*\s*(\w+)\s*=\s*$')
+# The literal may begin on the declaration's own line. It never does today --
+# the fork's style puts `#version` on the next one -- but a tool that silently
+# SKIPS a shader is worse than one that refuses it, and the "a shader no program
+# uses" guard below is what forces every new shader through the pipeline: a
+# shader the extractor cannot see escapes that guard too.
+_DECL = re.compile(r'static\s+const\s+char\s*\*\s*(\w+)\s*=\s*(.*)$')
 _LIT = re.compile(r'"((?:[^"\\]|\\.)*)"')
+_VERSION_LIT = re.compile(r'"#version')
 
 
 def unescape(s):
@@ -226,19 +239,46 @@ def extract(cfile):
     lines = preprocess(cfile)
     found, i = {}, 0
     while i < len(lines):
-        if _DECL.search(lines[i].strip()) and i + 1 < len(lines) \
-                and "#version" in lines[i + 1]:
-            name = _DECL.search(lines[i].strip()).group(1)
-            i += 1
-            lits = []
-            while i < len(lines):
-                if not lines[i].startswith("#"):
-                    lits.extend(_LIT.findall(lines[i]))
-                if lines[i].rstrip().endswith(";"):
-                    break
+        m = _DECL.search(lines[i].strip())
+        here = bool(m) and "#version" in m.group(2)
+        nxt = bool(m) and i + 1 < len(lines) and "#version" in lines[i + 1]
+        if here or nxt:
+            name, lits = m.group(1), []
+            if here:
+                lits.extend(_LIT.findall(m.group(2)))
+                if not lines[i].rstrip().endswith(";"):
+                    i += 1
+                    while i < len(lines):
+                        if not lines[i].startswith("#"):
+                            lits.extend(_LIT.findall(lines[i]))
+                        if lines[i].rstrip().endswith(";"):
+                            break
+                        i += 1
+            else:
                 i += 1
+                while i < len(lines):
+                    if not lines[i].startswith("#"):
+                        lits.extend(_LIT.findall(lines[i]))
+                    if lines[i].rstrip().endswith(";"):
+                        break
+                    i += 1
             found[name] = "".join(unescape(x) for x in lits)
         i += 1
+
+    # THE CENSUS, AND IT IS WHY THE SHAPE ABOVE DOES NOT HAVE TO BE EXHAUSTIVE.
+    # Every `"#version` in the preprocessed text is the start of a shader's first
+    # literal (the preprocessor has already removed the comments, and none of
+    # these files builds a version line at run time -- tagpu_restoreglsl.c does,
+    # and is deliberately not in SOURCES). So the count must equal the number of
+    # shaders extracted, and a shader written in a shape this tool cannot read
+    # is an ERROR rather than a silent omission.
+    seen = sum(len(_VERSION_LIT.findall(l)) for l in lines if not l.startswith("#"))
+    if seen != len(found):
+        die("%s.c: the preprocessed source holds %d shader literals and %d were "
+            "extracted (%s). A shader written in a shape extract() does not read "
+            "would otherwise be skipped in silence -- and would escape the "
+            "'a shader no program uses' guard as well."
+            % (cfile, seen, len(found), ", ".join(sorted(found)) or "none"))
     return found
 
 
@@ -342,14 +382,21 @@ def parse(sh):
                     else:
                         sh.globals.append((ty, name, n))
                 elif kind == "out" and sh.stage == "vert":
-                    sh.outs[name] = (ty, n)
+                    sh.outs[name] = (ty, n, norm_quals(quals))
                     sh.out_order.append(name)
                 elif kind == "in" and sh.stage == "frag":
-                    sh.ins.append((name, ty, n))
+                    sh.ins.append((name, ty, n, norm_quals(quals)))
         m = _BLOCK_OPEN.match(raw)
         if m:
             sh.blocks.append(m.group(2))
         depth += raw.count("{") - raw.count("}")
+
+
+def norm_quals(q):
+    """The interpolation qualifier, order- and whitespace-independent. It has to
+    MATCH between the two stages: `flat out vec2` against a plain `in vec2` is a
+    link failure in a driver, and the generator can say so instead."""
+    return " ".join(sorted(q.split()))
 
 
 def strip_layout(s):
@@ -434,6 +481,20 @@ def transform(sh, varying_loc):
     to the location its vertex stage gave it."""
     base = VERT_BASE if sh.stage == "vert" else FRAG_BASE
     smp_base = base + 8
+    # THE GAPS IN THE ALLOCATION ARE BOUNDS, SO THEY ARE CHECKED. Named blocks
+    # run from base+1 and samplers from base+8, and a stage with seven named
+    # blocks is the last one that cannot collide; the stages run 32 apart, so a
+    # stage with twenty-four samplers is the last one that stays in its half.
+    # Neither is close today (one named block, four samplers at most) and
+    # neither would announce itself: two descriptors at one binding is a
+    # validation error nobody here is running a layer to see.
+    if len(sh.blocks) > 7:
+        die("%s: %d named uniform blocks would run into this stage's sampler "
+            "bindings at %d -- the allocation in this file's header needs "
+            "widening" % (sh.key, len(sh.blocks), smp_base))
+    if len(sh.samplers) > 24:
+        die("%s: %d samplers would run past this stage's half of the binding "
+            "space" % (sh.key, len(sh.samplers)))
     blk = {n: base + 1 + i for i, n in enumerate(sh.blocks)}
     smp = {n: smp_base + i for i, (_, n) in enumerate(sh.samplers)}
 
@@ -521,6 +582,13 @@ def transform(sh, varying_loc):
                     pieces.append(st)
             if changed:
                 joined = " ".join(p.strip() for p in pieces if p.strip())
+                # THE DEPTH IS UPDATED ON THIS PATH TOO. It is a `continue`, and
+                # an earlier version skipped the count -- so a line carrying both
+                # a declaration and a brace would have left every later line
+                # looking like global scope. No shader does that today; the
+                # reason to fix it is that the failure would be silent and would
+                # rewrite something inside a function body.
+                depth += line.count("{") - line.count("}")
                 if joined.strip():
                     out.append(joined)
                 continue
@@ -583,7 +651,7 @@ def build_all():
             continue
         at, m = 0, {}
         for name in sh.out_order:
-            ty, arr = sh.outs[name]
+            ty, arr, _ = sh.outs[name]
             m[name] = at
             at += locs_of(ty, arr)
         vloc[key] = m
@@ -595,6 +663,21 @@ def build_all():
             die("%s takes its varyings from two vertex stages that disagree "
                 "(%s); one of them has to change" % (fs, vs))
         floc[fs] = m
+        # THE STAGES ARE MATCHED BY NAME, SO THE REST OF THE DECLARATION IS
+        # CHECKED. A fragment input whose type, array size or interpolation
+        # qualifier differs from the vertex output of the same name links
+        # against nothing -- and under Vulkan that is a pipeline-creation
+        # failure at run time, on a device, rather than an error here.
+        for name, ty, arr, q in shaders[fs].ins:
+            if name not in shaders[vs].outs:
+                die("%s (program %s): fragment input '%s' has no matching "
+                    "output in %s" % (fs, prog, name, vs))
+            vty, varr, vq = shaders[vs].outs[name]
+            if (vty, varr, vq) != (ty, arr, q):
+                die("%s (program %s): '%s' is `%s%s%s` in %s and `%s%s%s` here "
+                    % (fs, prog, name, vq + " " if vq else "", vty,
+                       "[%d]" % varr if varr else "", vs,
+                       q + " " if q else "", ty, "[%d]" % arr if arr else ""))
 
     for key, sh in shaders.items():
         transform(sh, vloc[key] if sh.stage == "vert" else floc[key])
@@ -669,6 +752,7 @@ def emit(cfile, shaders, words):
                      % ((VERT_BASE if sh.stage == "vert" else FRAG_BASE) + 8 + i,
                         ty, name))
         L.append(" * glsl %s" % glsl_hash(sh))
+        L.append(" * words %s" % words_hash(w))
         L.append(" */")
         L.append("static const uint32_t tagpu_spv_%s[] = {" % sym(sh.key))
         for i in range(0, len(w), 6):
@@ -683,31 +767,61 @@ def glsl_hash(sh):
     return hashlib.sha256(sh.vk.encode()).hexdigest()[:32]
 
 
+def words_hash(w):
+    """The SPIR-V itself. The GLSL hash says the INPUT has not moved; this says
+    the OUTPUT in the file is the output that was generated from it -- which is
+    the half a hand edit, a truncation or a bad merge lands in, and the half
+    `-fsyntax-only` happily accepts."""
+    import struct
+    return hashlib.sha256(struct.pack("<%dI" % len(w), *w)).hexdigest()[:32]
+
+
 _HASHLINE = re.compile(r'^ \* glsl ([0-9a-f]{32})$')
+_WORDLINE = re.compile(r'^ \* words ([0-9a-f]{32})$')
 _TOOLLINE = re.compile(r'^ \* transform ([0-9a-f]{16})$')
+_ARRAY = re.compile(r'^static const uint32_t tagpu_spv_(\w+)\[\] = \{$')
+_WORD = re.compile(r'0x([0-9A-F]{8})u')
 
 
 def committed_hashes():
-    """What the committed headers say they were generated from. Read with a
-    regex rather than by compiling anything, because `--check` must run in a
-    build that has no glslang -- which is every build."""
-    out, tool = {}, {}
+    """What the committed headers say, and what they actually CONTAIN. Read with
+    a regex rather than by compiling anything, because `--check` must run in a
+    build that has no glslang -- which is every build. Returns
+    (glsl hash by key, words hash CLAIMED by key, words hash MEASURED by key,
+    transform hash by file)."""
+    claim, said, got, tool = {}, {}, {}, {}
     for cfile in SOURCES:
         p = OUTDIR / ("%s.spv.h" % cfile)
         if not p.exists():
-            return None, None
-        key = None
+            return None, None, None, None
+        key, arr, words = None, None, []
         for line in p.read_text().split("\n"):
             m = _TOOLLINE.match(line)
             if m:
                 tool[cfile] = m.group(1)
+                continue
             if line.startswith("/* tagpu_"):
                 key = line[3:].split(" --")[0]
+                continue
             m = _HASHLINE.match(line)
             if m and key:
-                out[key] = m.group(1)
-                key = None
-    return out, tool
+                claim[key] = m.group(1)
+                continue
+            m = _WORDLINE.match(line)
+            if m and key:
+                said[key] = m.group(1)
+                continue
+            m = _ARRAY.match(line)
+            if m:
+                arr, words = m.group(1), []
+                continue
+            if arr is not None:
+                if line.startswith("};"):
+                    got[key] = words_hash(words)
+                    arr, key = None, None
+                else:
+                    words.extend(int(x, 16) for x in _WORD.findall(line))
+    return claim, said, got, tool
 
 
 def main():
@@ -727,7 +841,7 @@ def main():
         return 0
 
     if a.check:
-        have, tool = committed_hashes()
+        have, said, got, tool = committed_hashes()
         if have is None:
             die("tagpu/ddraw/inc/spirv/ is not generated -- run tools/spirv-gen.py")
         bad = []
@@ -738,6 +852,11 @@ def main():
         for sh in shaders:
             if have.get(sh.key) != glsl_hash(sh):
                 bad.append("%s has changed since its SPIR-V was generated" % sh.key)
+            if sh.key not in said:
+                bad.append("%s has no `words` hash -- regenerate" % sh.key)
+            elif said[sh.key] != got.get(sh.key):
+                bad.append("%s's SPIR-V does not match the hash beside it -- the "
+                           "words in the header have been edited or truncated" % sh.key)
         for key in have:
             if key not in {s.key for s in shaders}:
                 bad.append("%s is in the headers and not in the source" % key)

@@ -80,6 +80,10 @@ thread-split:
 # -- and fails if a shader has been edited without regenerating. Same placement
 # and same reasoning as the thread-split rule above; the upstream build.cmd /
 # vcxproj run neither.
+#
+# IT NEEDS python3 (and the cross compiler, which the build has by definition).
+# That makes python3 a build dependency of this Makefile, which is why the CI
+# job names it explicitly instead of relying on the runner image having it.
 spirv:
 	../../tools/spirv-check.sh .
 

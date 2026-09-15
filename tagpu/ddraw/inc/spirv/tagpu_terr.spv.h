@@ -4,7 +4,7 @@
  * truth is the GLSL string in that file; this is its translation, and
  * `make` fails if the two have drifted (tools/spirv-check.sh).
  *
- * transform 6d7dbe0afc22228c
+ * transform 5a710e607bf76131
  */
 #ifndef TAGPU_SPIRV_TAGPU_TERR_H
 #define TAGPU_SPIRV_TAGPU_TERR_H
@@ -39,6 +39,7 @@
  * set 0 binding 46: sampler2DShadow uShadowCmp
  * set 0 binding 47: sampler2D uShadowRaw
  * glsl 460406f763d4a3c4d0a9a0718b5785a5
+ * words 26b6544a6e134f40aba5e271cf969536
  */
 static const uint32_t tagpu_spv_tagpu_terr_FS[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x000003FFu, 0x00000000u, 0x00020011u,
@@ -1029,6 +1030,7 @@ static const uint32_t tagpu_spv_tagpu_terr_FS[] = {
  *     40  vec2   uTile0
  *     48  vec2   uTexel
  * glsl 7686b56b3df6425f96c1c0da3a774561
+ * words 6b129db034a6bda1eab68a9230ed03be
  */
 static const uint32_t tagpu_spv_tagpu_terr_VS[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x00000071u, 0x00000000u, 0x00020011u,

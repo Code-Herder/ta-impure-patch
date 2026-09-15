@@ -4,7 +4,7 @@
  * truth is the GLSL string in that file; this is its translation, and
  * `make` fails if the two have drifted (tools/spirv-check.sh).
  *
- * transform 6d7dbe0afc22228c
+ * transform 5a710e607bf76131
  */
 #ifndef TAGPU_SPIRV_TAGPU_SCAFFOLD_H
 #define TAGPU_SPIRV_TAGPU_SCAFFOLD_H
@@ -17,6 +17,7 @@
  *      0  float  uRows
  * set 0 binding 40: sampler2D uScaf
  * glsl 7b8f02bcad6ef2a830c66881c49ef7fb
+ * words 809ca82dbcd6f819056054844aa4d6bc
  */
 static const uint32_t tagpu_spv_tagpu_scaffold_FS[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x00000049u, 0x00000000u, 0x00020011u,
@@ -98,6 +99,7 @@ static const uint32_t tagpu_spv_tagpu_scaffold_FS[] = {
  * set 0 binding 0, std140, 16 bytes:
  *      0  vec4   uRect
  * glsl b2b227db1fec33fcc1658938339b5f4a
+ * words 2e89cc7ca52150e7e167a5c52d15da58
  */
 static const uint32_t tagpu_spv_tagpu_scaffold_VS[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x00000031u, 0x00000000u, 0x00020011u,

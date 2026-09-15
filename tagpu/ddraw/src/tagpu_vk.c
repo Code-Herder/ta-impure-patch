@@ -154,6 +154,7 @@
 #include <windows.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "hook.h"
@@ -336,6 +337,7 @@ typedef struct {
     int              devIndex;             /* into the cached name table, or -1 */
     int              flipok;               /* VK_KHR_maintenance1 was enabled   */
     int              rebuild;              /* the surface said its extent moved */
+    int              cansrc;               /* the images carry TRANSFER_SRC     */
     unsigned         frame;
     char             devName[NAMELEN];
 } Vk;
@@ -355,6 +357,38 @@ static TAGPU_VKPASS s_pass;
 /* The passes log through the lane's log, so one file carries the whole lane's
    story in order. */
 static void passlog(const char* m) { vklog("%s", m); }
+
+/* THE CAPTURE IS COMPLETED BY THE SEAM'S OWN FENCE, AND ADDS NO WAIT AT ALL.
+   [REWRITTEN FROM REVIEW 2026-09-15.]
+
+   The first shape waited on the frame's fence right after the present, for up
+   to a second, and on a TIMEOUT it destroyed the staging buffer -- which the
+   already-submitted `vkCmdCopyImageToBuffer` writes into. The GPU would then
+   have completed the copy into freed memory, and the one-second timeout was
+   load-bearing for that rather than being the belt it claimed to be. A wait on
+   the render thread was also the one thing this file spent a whole review
+   removing: the game thread waits INFINITE on the render thread across a mode
+   change.
+
+   So nothing waits. The capture records into slot `fi` and says so, and the
+   NEXT frame that reaches that slot finds the fence already waited on at the
+   top of `vk_present` -- which is the proof, by construction and with no second
+   mechanism, that the copy has completed. `nimg` frames later, which at any
+   frame rate the lane runs at is a few milliseconds. */
+static int s_abSlot1;       /* 0 = nothing pending, else the slot index + 1 */
+
+/* The device is idle: the copy is done whatever stage it was at, so the buffer
+   can be given back. The FILE is not written here -- a lane that is coming down
+   or rebuilding its swapchain mid-capture is not evidence of anything, and
+   `tools/vk-ab.py` says loudly that one of the pair is missing. */
+static void ab_drop(const char* why)
+{
+    if (!s_abSlot1) return;
+    s_abSlot1 = 0;
+    vklog("the A/B capture was lost to %s - only the GL half was written", why);
+    tagpu_vk_shot_down(&s_pass);
+}
+
 
 /* The clear colour, `color=r,g,b` in the lever file. Magenta by default: no
    pixel of TA's palette is pure magenta, so "is the Vulkan lane on screen?" is
@@ -554,8 +588,6 @@ static DWORD s_lastPoll;
    frames, this one every 250 ms), so the two captures could land hundreds of
    frames apart -- and the readout changes its number twice a second, so they
    would have differed in the digits and agreed about nothing else. */
-static int s_abShot;
-
 static void read_lever(void)
 {
     char b[128];
@@ -1142,6 +1174,16 @@ static int vk_swapchain(int w, int h)
        composite mode: OPAQUE is what we want and INHERIT is the fallback every
        surface that lacks it offers. [FROM REVIEW 2026-09-15.] */
     swci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    /* TRANSFER_SRC IS FOR THE CAPTURE, AND ASKING FOR IT IS NOT OPTIONAL.
+       [FROM REVIEW 2026-09-15.] `tagpu_vk_shot.c` copies a presented image into
+       a host buffer, and `vkCmdCopyImageToBuffer` requires the source image to
+       have been CREATED with this usage — it is not something a layout
+       transition confers. It was missing, the reference ICD did it anyway, no
+       validation layer was running to say otherwise, and G19d's whole 0-px
+       result therefore rested on undefined behaviour. The lane does not need
+       it, so a surface that refuses it loses the CAPTURE and keeps the lane. */
+    s_vk.cansrc = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) ? 1 : 0;
+    if (s_vk.cansrc) swci.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     if (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT)
         swci.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     else {
@@ -1364,6 +1406,7 @@ static void vk_down(void)
            destroyed. The wait above is what makes that safe rather than a race
            -- nothing of theirs is still in a queue. */
         tagpu_vk_fps_down(&s_pass);
+        ab_drop("the lane coming down");
         tagpu_vk_shot_down(&s_pass);
         vk_perimage_free();
         if (s_vk.rp) { vkDestroyRenderPass(s_vk.dev, s_vk.rp, NULL); s_vk.rp = VK_NULL_HANDLE; }
@@ -1524,17 +1567,30 @@ static DWORD WINAPI up_worker(LPVOID arg)
            and the reference setup's 4070 lists 247 device extensions. Asked for
            rather than assumed all the same: a device without it keeps the lane
            and loses the passes, which say so. */
+        /* THE COUNT IS ASKED FOR AND THE LIST IS ALLOCATED, and both halves are
+           the review's. [FROM REVIEW 2026-09-15.] The first version read into a
+           512-entry array on the stack -- 130 KB on a worker thread, and worse,
+           it accepted only `VK_SUCCESS`: a driver with more than 512 extensions
+           answers `VK_INCOMPLETE` with a perfectly good partial list, and the
+           lane would then have reported that maintenance1 "is not offered" on a
+           device that offers it, and refused every ported pass for the session.
+           `VK_INCOMPLETE` is an answer, not an error. */
         if (vkEnumerateDeviceExtensionProperties) {
-            VkExtensionProperties ext[512];
-            uint32_t ne = 512, k;
-            if (vkEnumerateDeviceExtensionProperties(s_vk.pd, NULL, &ne, ext) == VK_SUCCESS) {
-                if (ne > 512) ne = 512;
-                for (k = 0; k < ne; k++)
-                    if (!strcmp(ext[k].extensionName, "VK_KHR_maintenance1")) {
-                        dexts[ndext++] = "VK_KHR_maintenance1";
-                        s_vk.flipok = 1;
-                        break;
-                    }
+            uint32_t ne = 0, k;
+            VkResult er = vkEnumerateDeviceExtensionProperties(s_vk.pd, NULL, &ne, NULL);
+            VkExtensionProperties* ext = NULL;
+            if ((er == VK_SUCCESS || er == VK_INCOMPLETE) && ne)
+                ext = (VkExtensionProperties*)malloc((size_t)ne * sizeof *ext);
+            if (ext) {
+                er = vkEnumerateDeviceExtensionProperties(s_vk.pd, NULL, &ne, ext);
+                if (er == VK_SUCCESS || er == VK_INCOMPLETE)
+                    for (k = 0; k < ne; k++)
+                        if (!strcmp(ext[k].extensionName, "VK_KHR_maintenance1")) {
+                            dexts[ndext++] = "VK_KHR_maintenance1";
+                            s_vk.flipok = 1;
+                            break;
+                        }
+                free(ext);
             }
         }
         if (!s_vk.flipok)
@@ -1662,24 +1718,6 @@ fail:
    is what makes frame `n` wait for frame `n - nimg` and nothing sooner. (An
    earlier comment here said "one frame in flight", which `fi = frame % nimg`
    plainly is not.) Deepening this into a pass that paces itself is G19d's. */
-/* Wait for the frame the capture rode on and write the file. THE ONE BLOCKING
-   WAIT IN THE LANE, and it is under a lever, for one frame, once -- the render
-   thread stalling for the length of a frame is exactly what an oracle is
-   allowed to cost and exactly what the steady-state path may not. The fence is
-   not reset here: the next frame in this slot waits on it (returning at once)
-   and resets it, as it always did. */
-static void ab_finish(uint32_t fi)
-{
-    if (!s_abShot) return;
-    s_abShot = 0;
-    if (vkWaitForFences(s_vk.dev, 1, &s_vk.fence[fi], VK_TRUE, 1000000000ull) != VK_SUCCESS) {
-        vklog("the A/B frame did not finish within a second - nothing written");
-        tagpu_vk_shot_down(&s_pass);
-        return;
-    }
-    tagpu_vk_shot_finish(&s_pass, AB_OUT);
-}
-
 static int vk_present(void)
 {
     uint32_t idx = 0, fi = s_vk.frame % s_vk.nimg;
@@ -1737,6 +1775,14 @@ static int vk_present(void)
     if (idx >= s_vk.nimg) {
         vklog("the swapchain handed back image %u of %u - down", idx, s_vk.nimg);
         return -2;
+    }
+
+    /* THE FENCE ABOVE IS THE CAPTURE'S PROOF TOO. It has just been waited on,
+       so the submit that used this slot -- and any copy recorded into it -- has
+       completed, and the staging buffer is ours to read. No second wait. */
+    if (s_abSlot1 == (int)fi + 1) {
+        s_abSlot1 = 0;
+        tagpu_vk_shot_finish(&s_pass, AB_OUT);
     }
 
     vkResetFences(s_vk.dev, 1, &s_vk.fence[fi]);
@@ -1801,10 +1847,13 @@ static int vk_present(void)
         /* THE A/B CAPTURE, ONE FRAME, UNDER THE LEVER tagpu_fps.c SHARES. It
            is recorded last so that what it reads is the finished frame, and it
            leaves the image in PRESENT_SRC so the present below is unaffected. */
-        if (ab)
-            s_abShot = tagpu_vk_shot_record(&s_pass, cb, s_vk.img[idx],
+        if (ab && !s_vk.cansrc)
+            vklog("the A/B asked for a capture and this surface's images do not "
+                  "carry TRANSFER_SRC - only the GL half will be written");
+        else if (ab && tagpu_vk_shot_record(&s_pass, cb, s_vk.img[idx],
                                             VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                                            s_vk.ext.width, s_vk.ext.height, s_vk.fmt);
+                                            s_vk.ext.width, s_vk.ext.height, s_vk.fmt))
+            s_abSlot1 = (int)fi + 1;
     }
     vkEndCommandBuffer(cb);
 
@@ -1826,12 +1875,10 @@ static int vk_present(void)
     pi.swapchainCount = 1; pi.pSwapchains = &s_vk.sc; pi.pImageIndices = &idx;
     r = vkQueuePresentKHR(s_vk.queue, &pi);
     s_vk.frame++;
-    /* THE CAPTURE IS FINISHED ON EVERY PATH OUT OF HERE, including the failing
-       ones: the copy is already inside the submit above, so the staging buffer
-       is owned by the GPU whatever the present then said, and an early return
-       that skipped this would keep a frame-sized host mapping -- 8.3 MB at
-       1080p, in a 32-bit address space -- for the rest of the session. */
-    ab_finish(fi);
+    /* A pending capture is NOT touched on any exit from here: the buffer is
+       owned by the GPU until this slot's fence is waited on again, and every
+       path that cannot get there -- a rebuild, a teardown -- goes through
+       `vkDeviceWaitIdle` and then `ab_drop`. */
     if (r == VK_ERROR_OUT_OF_DATE_KHR) return -1;
     /* SUBOPTIMAL: the frame WAS presented, so it is counted -- but the surface
        has moved on and the next frame should be drawn against a fresh
@@ -1856,6 +1903,7 @@ static int vk_resize(int w, int h)
        pass that rebuilds everything has one path instead of two, and a resize
        is a window drag, not a frame.) */
     tagpu_vk_fps_down(&s_pass);
+    ab_drop("the swapchain rebuilding");
     vk_perimage_free();
     r = vk_swapchain(w, h);
     if (r <= 0) return r;

@@ -4,7 +4,7 @@
  * truth is the GLSL string in that file; this is its translation, and
  * `make` fails if the two have drifted (tools/spirv-check.sh).
  *
- * transform 6d7dbe0afc22228c
+ * transform 5a710e607bf76131
  */
 #ifndef TAGPU_SPIRV_TAGPU_NATIVE_H
 #define TAGPU_SPIRV_TAGPU_NATIVE_H
@@ -22,6 +22,7 @@
  * set 0 binding 41: sampler2D uSurf
  * set 0 binding 42: sampler2D uPal
  * glsl cc34b14b185b9c8d3d8d99e9e2fa3e21
+ * words 8af3ed1ed24ba6b20b4f387390322bc0
  */
 static const uint32_t tagpu_spv_tagpu_native_CFS[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x000000C0u, 0x00000000u, 0x00020011u,
@@ -212,6 +213,7 @@ static const uint32_t tagpu_spv_tagpu_native_CFS[] = {
 
 /* tagpu_native::CVS -- vert stage, 282 words
  * glsl 459f4a3804d863fb688c4b86b0ed5108
+ * words 77b9eecfd11fe6ee4b238e48fe227ef1
  */
 static const uint32_t tagpu_spv_tagpu_native_CVS[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x0000002Au, 0x00000000u, 0x00020011u,
@@ -266,6 +268,7 @@ static const uint32_t tagpu_spv_tagpu_native_CVS[] = {
 /* tagpu_native::DFS -- frag stage, 137 words
  * set 0 binding 40: sampler2D uTex
  * glsl 8718e2c951da807b8e42d77daf140c4c
+ * words ababe3d6d729c82f8dfb1c5b61ab35bb
  */
 static const uint32_t tagpu_spv_tagpu_native_DFS[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x00000014u, 0x00000000u, 0x00020011u,
@@ -295,6 +298,7 @@ static const uint32_t tagpu_spv_tagpu_native_DFS[] = {
 
 /* tagpu_native::DVS -- vert stage, 263 words
  * glsl 091a534b46f48b92456b22b8e619c5ec
+ * words cf2392b04962ff2564f0af6601137205
  */
 static const uint32_t tagpu_spv_tagpu_native_DVS[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x00000026u, 0x00000000u, 0x00020011u,
@@ -384,6 +388,7 @@ static const uint32_t tagpu_spv_tagpu_native_DVS[] = {
  * set 0 binding 47: sampler2DShadow uShadowCmp
  * set 0 binding 48: sampler2D uShadowRaw
  * glsl 68a69c9eb2df2ea3445fb13b2ea59e93
+ * words 74c70982046e5422891892b18a082f6a
  */
 static const uint32_t tagpu_spv_tagpu_native_FS[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x000003A5u, 0x00000000u, 0x00020011u,
@@ -1305,6 +1310,7 @@ static const uint32_t tagpu_spv_tagpu_native_FS[] = {
  *     32  float  uDepthScale
  *     48  vec3   uCast
  * glsl e74199dba760e4206168eaaffc6d5091
+ * words 388a7e8da34f8c92689aceac109d4050
  */
 static const uint32_t tagpu_spv_tagpu_native_VS[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x0000007Au, 0x00000000u, 0x00020011u,

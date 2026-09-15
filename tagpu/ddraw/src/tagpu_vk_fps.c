@@ -521,11 +521,38 @@ int tagpu_vk_fps_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     if (atlas && gen != s_agen) {
         VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
         VkBufferImageCopy rg;
-        /* THE ONLY WAIT IN THIS FILE, AND IT IS A FENCE RATHER THAN A HOPE.
-           Frames already submitted may still be sampling this image, and a
-           barrier in THIS command buffer orders nothing about them. Twenty
-           times a session, for a few milliseconds. */
-        vkDeviceWaitIdle(d->dev);
+        /* THE ONLY WAIT IN THIS FILE, AND ITS COST IS REAL RATHER THAN NIL.
+           [SHARPENED BY REVIEW 2026-09-15.] Frames already submitted may still
+           be sampling this image, and a barrier in THIS command buffer orders
+           nothing about them, so the ordering has to come from outside it. That
+           part is sound.
+
+           WHAT IT COSTS, said rather than implied: this is the render thread,
+           and the game thread waits INFINITE on the render thread across a mode
+           change, so for the length of this wait the lockstep world is behind
+           the GPU. It is UNBOUNDED -- `vkDeviceWaitIdle` takes no timeout --
+           and it runs when a string is rasterised into the atlas for the first
+           time, about twenty times in a session. On a healthy device that is
+           the drain of two or three frames in flight; on a wedged one it is as
+           long as the wedge, which is the same exposure the lane's own fence
+           wait bounds at a second and this one does not.
+
+           THE BY-DESIGN ALTERNATIVE, and why it is not here: a second image
+           uploaded into while the first is sampled, swapped when every slot has
+           turned over. That moves the same in-flight problem up one level (the
+           descriptor sets naming the view would have to turn over too) for
+           twenty events a session, so it is a G19e question when a pass uploads
+           per frame rather than per session.
+
+           A FAILED WAIT IS NOT AN UPLOAD. If the device is lost, writing into
+           an image a live frame may be sampling is exactly what the wait was
+           for, so the upload is skipped and the generation left unclaimed; the
+           lane comes down on the next fatal result and rebuilds. */
+        if (vkDeviceWaitIdle(d->dev) != VK_SUCCESS) {
+            plog(d, "fps: the device would not go idle - the atlas upload is "
+                    "deferred to a later frame");
+            return 0;
+        }
         memcpy(s_smap, atlas, (size_t)s_aw * s_ah);
 
         b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;   /* the whole image is re-sent */

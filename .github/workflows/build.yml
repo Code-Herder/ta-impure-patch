@@ -26,11 +26,18 @@ jobs:
         with:
           fetch-depth: 0        # git describe names the build
 
+      # python3 is preinstalled on the runner, and it is named here anyway: the
+      # Makefile's `spirv` rule runs tools/spirv-check.sh, which needs it, so it
+      # is a BUILD dependency rather than a convenience. A build that silently
+      # relied on the image having it would fail with "no python3" the day the
+      # image changed. (It does NOT need glslang -- the SPIR-V headers are
+      # committed and the check only verifies them.)
       - name: mingw cross compiler
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-i686 make zip
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-i686 make zip python3
           i686-w64-mingw32-gcc --version | head -1
+          python3 --version
 
       - name: build
         run: make -C tagpu/ddraw -j"$(nproc)"

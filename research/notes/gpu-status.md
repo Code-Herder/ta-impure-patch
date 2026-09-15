@@ -3224,13 +3224,31 @@ changes when a shader changes, which is to say almost never. So the SPIR-V is ge
 and committed as text (`uint32_t[]` C headers, so `.publish-allow` has nothing to refuse).
 
 **What stops committed generated code from rotting**, which is the only real objection to it.
-Every header carries, per shader, the SHA-256 of the Vulkan GLSL it was compiled from, plus the
-hash of the tool's own transform. `tools/spirv-check.sh` — a prerequisite of `ddraw.dll` in the
-Makefile, in the same place and for the same reason as `thread-split-check.sh` — re-runs the
-extraction and the transform (the C preprocessor and python3, **never glslang**) and compares,
-and then syntax-compiles each header standalone because most of these arrays are not `#include`d
-anywhere yet. **2.0 s**, and verified: a one-character edit to `tagpu_fps`'s fragment shader fails
-the build naming that shader.
+Every header carries, per shader, **three** hashes: the SHA-256 of the Vulkan GLSL it was compiled
+from, the SHA-256 of the **words themselves**, and the hash of the tool's own transform.
+`tools/spirv-check.sh` — a prerequisite of `ddraw.dll` in the Makefile, in the same place and for
+the same reason as `thread-split-check.sh` — re-runs the extraction and the transform (the C
+preprocessor and python3, **never glslang**), compares all three, and then syntax-compiles each
+header standalone because most of these arrays are not `#include`d anywhere yet. **2.0 s**, and
+both halves are verified: one character changed in a shader fails the build naming that shader,
+and so does one word changed inside a committed array.
+
+**The words hash is the landing review's.** The gate covered only the GLSL, so a hand-edited,
+truncated or badly-merged array passed `--check`, passed `-fsyntax-only`, and would have shipped.
+What is still *not* asserted — and cannot be without the compiler — is that these words are what
+glslang would emit today from that GLSL; the compiler is pinned by version and by hash instead.
+**python3 is a build dependency of the Makefile** because of this check, and the CI job names it
+explicitly rather than relying on the runner image having it.
+
+**Four bounds the generator did not state and now does**, all from the review, none reachable by
+today's shaders and not one of which would have announced itself:
+
+| | |
+|---|---|
+| a census of the `"#version` literals in each preprocessed source against the shaders extracted from it | a shader written in a shape the extractor cannot read is an ERROR, not a silent omission — and it would have escaped the "a shader no program uses" guard as well |
+| a refusal past **seven** named uniform blocks in one stage | the eighth would run into that stage's sampler bindings, and two descriptors at one binding is a validation error nobody here runs a layer to see |
+| a fragment input must agree with its vertex output in **type, array size and interpolation qualifier**, not only in name | otherwise it is a pipeline-creation failure on a device rather than an error here |
+| the brace depth kept honest on the rewriting path | a line carrying both a declaration and a brace would have made the rest of the shader look like global scope |
 
 **glslang is pinned by version AND by hash** in `tools/glslang-vendor.json` (16.6.0), fetched by
 `tools/glslang-fetch.sh` into gitignored `tools/glslang/` — a dev-loop tool, the same shape as
@@ -3275,10 +3293,13 @@ cleared and re-armed**, which exercises the whole teardown and rebuild.
 So what the comparison compares is two RASTERISERS. If this file rebuilt the quads, 0 px would
 only mean two pieces of arithmetic agreed.
 
-**Handing the vertices over ONCE is the freshness rule.** The overlay does not run on every path
-that reaches the swap, and a frame whose geometry `tagpu_fps.c` did not rebuild must not be drawn
-again from the last one's. Consuming them makes that true by construction rather than by a counter
-the two files would have to share.
+**Handing the vertices over ONCE, and exactly what that buys.** The overlay does not run on every
+path that reaches the swap. Consuming makes it impossible for one frame's vertices to be drawn
+TWICE, which is the case that matters: the second draw would be of a readout already superseded.
+It does *not* make it impossible for the lane to draw the newest vertices there are on a frame
+`tagpu_fps.c` was skipped on — that frame shows a readout one frame stale, which is a digit and
+not a fault. **This paragraph claimed the stronger property until the landing's review disproved
+it**; making it true would need a frame stamp the two files share, and nothing yet needs one.
 
 **The Y flip is pipeline state, never a source edit.** GL's clip space has +Y up and Vulkan's has
 +Y down, so the vertex shader — byte-identical to the GL one below its declarations — puts the
@@ -3287,12 +3308,19 @@ readout at the bottom of the frame, mirrored. The fix is a **negative viewport h
 it, saying so). Flipping the geometry instead would mirror every glyph, because the texture
 coordinates travel with the vertices; flipping the shader would make it disagree with its oracle.
 
-**The atlas upload waits for the device**, and that is a fence rather than a hope. The atlas
-changes when a string is rasterised into it for the first time — about twenty times in a session —
-and by then earlier frames may still be sampling the image; a barrier in this command buffer
-orders nothing about submits already in flight. So the upload calls `vkDeviceWaitIdle` first and
-re-sends the whole image from `VK_IMAGE_LAYOUT_UNDEFINED`. A few milliseconds, twenty times a
-session.
+**The atlas upload waits for the device**, and that is a fence rather than a hope — but its cost is
+real and is stated rather than implied. The atlas changes when a string is rasterised into it for
+the first time, about twenty times in a session, and by then earlier frames may still be sampling
+the image; a barrier in this command buffer orders nothing about submits already in flight. So the
+upload calls `vkDeviceWaitIdle` first and re-sends the whole image from
+`VK_IMAGE_LAYOUT_UNDEFINED`. **What that costs:** this is the render thread, the game thread waits
+INFINITE on it across a mode change, and `vkDeviceWaitIdle` takes no timeout — so the stall is the
+drain of two or three frames in flight on a healthy device, and as long as the wedge on a wedged
+one, which is the exposure the lane's own fence wait bounds at a second and this one does not. The
+by-design alternative is a second image, swapped when every slot has turned over, which moves the
+same in-flight problem up to the descriptor sets for twenty events a session — a G19e question,
+when a pass uploads per frame rather than per session. **A failed wait is not an upload**: the
+generation is left unclaimed and the lane comes down on the next fatal result.
 
 **One buffer set per FRAME SLOT**, and what proves slot *i* is free is the seam's fence wait at the
 top of its present — not a frame count, not "the GPU will have finished by now". `TAGPU_VK_SLOTS`
@@ -3340,6 +3368,20 @@ a 32-bit address space). `tools/vk-ab.py` diffs the two and **refuses two captur
 sizes** rather than scaling one, because a scaled comparison cannot be 0 px by construction.
 Set `color=0,0,0` in `tagpu_vk.on` so the two backgrounds match.
 
+**The capture adds no wait, and the swapchain images are created so that it is legal.** Two things
+the review changed, both real. The copy is recorded into frame slot *i* and completed by the fence
+the seam **already** waits on at the top of the next frame that reaches slot *i* — `nimg` frames
+later, a few milliseconds, no second mechanism and nothing that can free a buffer the GPU still
+owns. And the swapchain is created with `VK_IMAGE_USAGE_TRANSFER_SRC_BIT`, gated on
+`caps.supportedUsageFlags` so that a surface refusing it loses the capture and keeps the lane:
+`vkCmdCopyImageToBuffer` requires that usage at image CREATION and no layout transition confers
+it, the reference ICD allowed it anyway, and with no validation layer running the 0-px result
+rested on undefined behaviour until this was fixed.
+
+**The lever puts back every piece of GL state it touches** — the clear colour, the scissor enable,
+`GL_PACK_ALIGNMENT`. It did not, and a lever that exists to measure the renderer is the last thing
+that should change it.
+
 **Both captures ride ONE frame, by construction.** The first shape had each lane poll the lever for
 itself — and they poll on different cadences (30 frames against 250 ms) while the readout changes
 its number twice a second, so the two could have landed hundreds of frames apart and differed in
@@ -3364,6 +3406,46 @@ the barriers, the stage masks and the layout transitions are argued from the spe
 from a correct picture, not verified by a layer. The stage-mask fault above is what that gap looks
 like when it bites, and it was found by reading rather than by a tool. Also not covered: any
 resolution but 1024×768 and 1920×1080, any device but the 4070, and Windows.
+
+### 2.27 What G19c + G19d's review changed — 2026-09-15
+
+Two independent read-only reviewers on `main...HEAD`, one on correctness and one on
+synchronisation and lifetime alone. **Both found the same two HIGH defects independently**, which
+is the strongest thing that can be said for running two.
+
+| | what it was | why it mattered |
+|---|---|---|
+| **HIGH** | the swapchain images were never created with `VK_IMAGE_USAGE_TRANSFER_SRC_BIT`, and the capture copied from them anyway | `vkCmdCopyImageToBuffer` requires that usage at image CREATION; no layout transition confers it. The reference ICD allowed it and no validation layer was running, so **G19d's entire 0-px result rested on undefined behaviour** — on another driver the oracle reads garbage or faults. It is asked for against `caps.supportedUsageFlags` now, and a surface that refuses it loses the capture rather than the lane |
+| **HIGH** | the capture waited up to a second on the frame's fence and, **on the timeout**, destroyed the staging buffer the already-submitted copy writes into | the GPU would then have completed a copy into freed memory, so the one-second timeout was load-bearing rather than the belt the comment claimed. It is also exactly the shape [CLAUDE.md](https://github.com/Code-Herder/ta-impure-patch/blob/main/CLAUDE.md) forbids — a correctness argument made of timing. There is no wait at all now: the copy is completed by the fence the seam **already** waits on at the top of the next frame that reaches that slot |
+| MEDIUM | the A/B flag latched when the Vulkan lane never consumed it | set once, cleared only on consumption — so on a frame that did not reach `tagpu_vk_fps_prepare` (the lane not yet `ST_READY`, a swapchain rebuild, the lever off) the flag rode a LATER frame's vertices and the two captures were of different frames. Which is the one thing the design exists to prevent, and §2.26 said so. Its life is one frame now |
+| MEDIUM | the freshness gate hashed the GLSL and not the SPIR-V | a hand-edited, truncated or badly-merged word array passed `--check` and `-fsyntax-only` and would have shipped. A `words` hash per shader closes it; verified by corrupting one word |
+| MEDIUM | `VK_INCOMPLETE` was treated as a failure when enumerating device extensions | a driver with more than 512 extensions returns it with a perfectly good partial list; the lane would have reported that `VK_KHR_maintenance1` "is not offered" on a device that offers it and refused **every ported pass for the session**. The list is counted and allocated now, and `VK_INCOMPLETE` is an answer — which also takes 130 KB off a worker's stack |
+| MEDIUM | `vkDeviceWaitIdle` in the atlas upload was described as costing nothing | the ordering is sound; the cost is a render-thread stall with no timeout, on the thread the game thread waits INFINITE on. Stated now, with the numbers and with the alternative that was not taken and why |
+| LOW | the capture's barrier was sourced at `COLOR_ATTACHMENT_OUTPUT` | the render pass performs its `finalLayout` transition at `BOTTOM_OF_PIPE`, which is later, so the barrier was not ordered after it |
+| LOW | the A/B lever left the clear colour, the scissor enable and `GL_PACK_ALIGNMENT` changed for the session | small in practice, and precisely the kind of leak from a measuring lever into play state that an A/B six months from now would be reading |
+| LOW | `spirv-check.sh` reported "could not run" (exit 2) as "stale" (exit 1) | it would send someone to regenerate headers that are perfectly current |
+| LOW | the extractor skipped a shader whose literal began on the declaration's own line | no shader does that today, and a tool that silently SKIPS one is worse than a tool that refuses it — it would escape the "a shader no program uses" guard too. A census makes it an error |
+| LOW | `s_abShot` survived a teardown | benign, and gone with the wait it belonged to |
+
+**Three claims in the notes were findings in their own right** and are corrected in place: that the
+vertex hand-over made staleness impossible "by construction" (it makes a *repeat* impossible; a
+frame the overlay skipped draws one-frame-stale digits), that the staging buffer was "owned by the
+GPU whatever the present then said" (it was, which is why freeing it on the timeout was the bug),
+and that the freshness gate covered the generated headers (it covered their input).
+
+**What survived verification without a finding**, because it is worth knowing which parts were
+actually checked: the std140 offsets — one reviewer decoded `OpMemberDecorate … Offset` out of all
+thirty-four committed arrays and compared them to the comments, **0 mismatches**; the descriptor
+layout against the SPIR-V's own decorations; that `fi = frame % nimg` with the fence wait on
+`fence[fi]` really does prove that slot's buffers free (a bound, not timing); that
+`tagpu_vk_fps_down` gives back exactly what was built including the mapped-but-failed path; that
+no handle or entry point from one `VkDevice` can reach another; `tagpu_text.c`'s generation
+counter; `tools/vk-ab.py`'s parser and the agreement of its verdict with its exit status; and that
+the diff contains no engine address and no byte patch.
+
+**Still not covered, and unchanged by the review:** no Vulkan validation layer ran. Every finding
+above was found by reading the specification against the code. The first HIGH is what that gap
+costs when nobody is reading.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 

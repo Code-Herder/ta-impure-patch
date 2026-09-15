@@ -23,6 +23,7 @@
 #include <windows.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "tagpu_vk_shot.h"
@@ -127,9 +128,20 @@ int tagpu_vk_shot_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, VkImage img,
     b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     b.subresourceRange.levelCount = 1;
     b.subresourceRange.layerCount = 1;
-    b.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    /* BOTTOM_OF_PIPE, NOT COLOR_ATTACHMENT_OUTPUT. [FROM REVIEW 2026-09-15.] The
+       render pass performs its own `finalLayout` transition as part of its
+       final subpass dependency, whose destination stage is BOTTOM_OF_PIPE --
+       which is LATER than COLOR_ATTACHMENT_OUTPUT, so a barrier sourced there
+       is not ordered after that transition and could observe the image in the
+       layout it was leaving. The access mask is 0 because BOTTOM_OF_PIPE
+       carries none; the colour writes were already made available by that same
+       dependency (`srcAccessMask = COLOR_ATTACHMENT_WRITE`), and this barrier's
+       `TRANSFER_READ` destination is what makes them visible -- an execution
+       dependency chain, which is the pattern the specification names for
+       exactly this. */
+    b.srcAccessMask = 0;
     b.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &b);
 
     memset(&rg, 0, sizeof rg);
@@ -155,6 +167,7 @@ void tagpu_vk_shot_finish(const TAGPU_VKPASS* d, const char* path)
 {
     void* p = NULL;
     const unsigned char* px;
+    unsigned char* line;
     FILE* f;
     uint32_t x, y;
 
@@ -178,17 +191,22 @@ void tagpu_vk_shot_finish(const TAGPU_VKPASS* d, const char* path)
        back the bottom row first; this one does not, and that asymmetry is
        exactly the kind of thing that produces a capture differing from its twin
        in every text pixel and nothing else. */
+    /* ONE fwrite A ROW. This runs on the render thread, and a stdio call per
+       pixel is two million of them at 1080p -- most of the one frame a capture
+       costs, for nothing. */
+    line = (unsigned char*)malloc((size_t)s_w * 3);
+    if (!line) { fclose(f); vkUnmapMemory(d->dev, s_mem); tagpu_vk_shot_down(d); return; }
     for (y = 0; y < s_h; y++) {
         const unsigned char* row = px + (size_t)y * s_w * 4;
         for (x = 0; x < s_w; x++) {
             const unsigned char* q = row + (size_t)x * 4;
-            unsigned char rgb[3];
-            rgb[0] = s_bgr ? q[2] : q[0];
-            rgb[1] = q[1];
-            rgb[2] = s_bgr ? q[0] : q[2];
-            fwrite(rgb, 1, 3, f);
+            line[x * 3 + 0] = s_bgr ? q[2] : q[0];
+            line[x * 3 + 1] = q[1];
+            line[x * 3 + 2] = s_bgr ? q[0] : q[2];
         }
+        fwrite(line, 1, (size_t)s_w * 3, f);
     }
+    free(line);
     fclose(f);
     vkUnmapMemory(d->dev, s_mem);
     slog(d, "shot: wrote %s, %ux%u", path, s_w, s_h);

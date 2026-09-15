@@ -4,7 +4,7 @@
  * truth is the GLSL string in that file; this is its translation, and
  * `make` fails if the two have drifted (tools/spirv-check.sh).
  *
- * transform 6d7dbe0afc22228c
+ * transform 5a710e607bf76131
  */
 #ifndef TAGPU_SPIRV_TAGPU_POSEDRAW_H
 #define TAGPU_SPIRV_TAGPU_POSEDRAW_H
@@ -13,6 +13,7 @@
 
 /* tagpu_posedraw::DFS -- frag stage, 45 words
  * glsl 541d516ee8256204bab1e0c79188431f
+ * words 989a771cb21ad770c937f5d782393c3a
  */
 static const uint32_t tagpu_spv_tagpu_posedraw_DFS[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x00000006u, 0x00000000u, 0x00020011u,
@@ -42,6 +43,7 @@ static const uint32_t tagpu_spv_tagpu_posedraw_DFS[] = {
  *    160  int    uRange
  *    164  float  uWire
  * glsl ca32cca75fff85608813d5559f278753
+ * words f02e52a08296de7bccf435c880d108cc
  */
 static const uint32_t tagpu_spv_tagpu_posedraw_VS[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x000001AAu, 0x00000000u, 0x00020011u,

@@ -25,9 +25,10 @@ void tagpu_fps_glreset(void);      /* the GL context changed: drop our objects *
    THE SAME GEOMETRY rather than a second implementation of it. The pointer is
    into this file's static array and is valid until the next present.
 
-   IT HANDS THEM OVER ONCE. A second call in the same frame returns 0, which is
-   what makes a frame the overlay did not run on draw nothing instead of
-   repeating the last one. Returns 0 when there is nothing to draw.
+   IT HANDS THEM OVER ONCE, so one frame's vertices can never be drawn twice.
+   A frame the overlay was SKIPPED on still gets the newest vertices there are,
+   which is a readout one frame stale -- a digit, not a fault. Returns 0 when
+   there is nothing to draw, and when they have already been taken.
 
    `ab` comes back 1 on the ONE frame this pass captured `tagpu_fps_gl.ppm`, so
    the Vulkan lane captures the same frame rather than whichever one its own

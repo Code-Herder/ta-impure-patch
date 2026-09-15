@@ -4,7 +4,7 @@
  * truth is the GLSL string in that file; this is its translation, and
  * `make` fails if the two have drifted (tools/spirv-check.sh).
  *
- * transform 6d7dbe0afc22228c
+ * transform 5a710e607bf76131
  */
 #ifndef TAGPU_SPIRV_TAGPU_GUI_SURF_H
 #define TAGPU_SPIRV_TAGPU_GUI_SURF_H
@@ -19,6 +19,7 @@
  * set 0 binding 40: sampler2D uSrc
  * set 0 binding 41: sampler2D uSrcCol
  * glsl a3e2df9e5c9b34843805af567205c135
+ * words 841a520a96d53b25d7161f3ad1f1f281
  */
 static const uint32_t tagpu_spv_tagpu_gui_surf_CPY_FS[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x00000042u, 0x00000000u, 0x00020011u,
@@ -104,6 +105,7 @@ static const uint32_t tagpu_spv_tagpu_gui_surf_CPY_FS[] = {
  * set 0 binding 41: sampler2D uAtlasRGB
  * set 0 binding 42: sampler2D uPal
  * glsl eae2bf62d34161264fd45da7281cc3a1
+ * words 2e46ddf70d990f5688ab41b21852efbe
  */
 static const uint32_t tagpu_spv_tagpu_gui_surf_CURS_FS[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x00000055u, 0x00000000u, 0x00020011u,
@@ -216,6 +218,7 @@ static const uint32_t tagpu_spv_tagpu_gui_surf_CURS_FS[] = {
  * set 0 binding 43: sampler2D uTwinCol
  * set 0 binding 44: sampler2D uSharp
  * glsl c591ce2f38c02010c5dfd7ac1c9e0691
+ * words d35c364b884abdf447961bb714b88ee5
  */
 static const uint32_t tagpu_spv_tagpu_gui_surf_LAY_FS[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x0000020Fu, 0x00000000u, 0x00020011u,
@@ -723,6 +726,7 @@ static const uint32_t tagpu_spv_tagpu_gui_surf_LAY_FS[] = {
 
 /* tagpu_gui_surf::LAY_VS -- vert stage, 270 words
  * glsl fe347c4b331e50c4b9727584f8380c8f
+ * words 78cca9e5b855a7cd1919192b50b6d51f
  */
 static const uint32_t tagpu_spv_tagpu_gui_surf_LAY_VS[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x00000027u, 0x00000000u, 0x00020011u,
@@ -780,6 +784,7 @@ static const uint32_t tagpu_spv_tagpu_gui_surf_LAY_VS[] = {
  * set 0 binding 41: sampler2D uEng
  * set 0 binding 42: sampler2D uPal
  * glsl de94041b248c8522823e0ca2ea31ea2c
+ * words e87a7cff4ae2e296a98520244ce235c2
  */
 static const uint32_t tagpu_spv_tagpu_gui_surf_MM_FS[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x000000A1u, 0x00000000u, 0x00020011u,
@@ -942,6 +947,7 @@ static const uint32_t tagpu_spv_tagpu_gui_surf_MM_FS[] = {
  * set 0 binding 0, std140, 16 bytes:
  *      0  vec2   uSize
  * glsl b1d975841cb260919d10aa17eb9667b7
+ * words fa7390ce4d08b9f5490049f466ed0683
  */
 static const uint32_t tagpu_spv_tagpu_gui_surf_QVS[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x00000031u, 0x00000000u, 0x00020011u,
@@ -1009,6 +1015,7 @@ static const uint32_t tagpu_spv_tagpu_gui_surf_QVS[] = {
  * set 0 binding 32, std140, 16 bytes:
  *      0  vec4   uCol
  * glsl 9466f3ebf72390d0467e9023eecc520b
+ * words aa1e818b1be6ada03deee7c8ba1406b2
  */
 static const uint32_t tagpu_spv_tagpu_gui_surf_SHARP_FS[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x00000012u, 0x00000000u, 0x00020011u,
@@ -1044,6 +1051,7 @@ static const uint32_t tagpu_spv_tagpu_gui_surf_SHARP_FS[] = {
  * set 0 binding 40: sampler2D uAtlas
  * set 0 binding 41: sampler2D uAtlasRGB
  * glsl 4f816bd64c3ce22d73798c9583567517
+ * words 8c2e1f61693cc6afeacdf6a04ed5a667
  */
 static const uint32_t tagpu_spv_tagpu_gui_surf_SPR_FS[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x0000004Bu, 0x00000000u, 0x00020011u,
@@ -1135,6 +1143,7 @@ static const uint32_t tagpu_spv_tagpu_gui_surf_SPR_FS[] = {
  *      8  int    uTr
  * set 0 binding 40: sampler2D uGlyph
  * glsl 943e5a89765109b3882f31d1e507da01
+ * words 205a1a4be82bd908ced7149e0de2df24
  */
 static const uint32_t tagpu_spv_tagpu_gui_surf_STR_FS[] = {
     0x07230203u, 0x00010000u, 0x0008000Bu, 0x00000040u, 0x00000000u, 0x00020011u,
