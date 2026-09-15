@@ -118,7 +118,11 @@ void tagpu_abshot_begin(TAGPU_ABSHOT* s, unsigned flags)
    TOP one, so the rows are written backwards. Getting this wrong produces a
    capture that differs from the Vulkan one in every drawn pixel and in nothing
    else, which reads as a Y-flip bug in the port rather than in the oracle. */
-static void write_ppm(const char* path, int w, int h, const unsigned char* rgba)
+/* 1 only when the whole capture reached the disk. A caller that claims the
+   Vulkan half of an A/B on a GL half that was never written would have
+   tools/vk-ab.py diff against a missing -- or, worse, a STALE -- _gl.ppm and
+   report a port failure that is really a capture failure. */
+static int write_ppm(const char* path, int w, int h, const unsigned char* rgba)
 {
     FILE* fp;
     int y, x;
@@ -127,8 +131,8 @@ static void write_ppm(const char* path, int w, int h, const unsigned char* rgba)
        written leaves a header-only PPM on disk, which reads as a broken writer
        rather than as a machine out of memory. */
     line = (unsigned char*)malloc((size_t)w * 3);
-    if (!line) { alog("abshot: no memory for a row of the capture"); return; }
-    if (!(fp = fopen(path, "wb"))) { alog("abshot: could not open the capture file"); free(line); return; }
+    if (!line) { alog("abshot: no memory for a row of the capture"); return 0; }
+    if (!(fp = fopen(path, "wb"))) { alog("abshot: could not open the capture file"); free(line); return 0; }
     fprintf(fp, "P6\n%d %d\n255\n", w, h);
     /* ONE fwrite A ROW: this is the render thread and a stdio call per pixel is
        two million of them at 1080p. */
@@ -142,16 +146,22 @@ static void write_ppm(const char* path, int w, int h, const unsigned char* rgba)
         fwrite(line, 1, (size_t)w * 3, fp);
     }
     free(line);
-    fclose(fp);
+    /* fclose IS part of the answer: a short write on a full disk surfaces here
+       and nowhere else, and a truncated PPM is exactly the stale-looking half
+       this return value exists to refuse. */
+    return fclose(fp) == 0;
 }
 
-void tagpu_abshot_end(TAGPU_ABSHOT* s, const char* path, const char* tag)
+int tagpu_abshot_end(TAGPU_ABSHOT* s, const char* path, const char* tag)
 {
     GLint vp[4] = { 0, 0, 0, 0 };
     unsigned char* buf;
     char msg[192];
+    int ok = 0;
 
-    if (!s || !s->live) return;
+    /* `live` 0 means `begin` never ran -- init_gl refused an entry point -- so
+       there is no state to put back and, above all, no capture on the disk. */
+    if (!s || !s->live) return 0;
     s->live = 0;
 
     glGetIntegerv(GL_VIEWPORT, vp);
@@ -162,9 +172,12 @@ void tagpu_abshot_end(TAGPU_ABSHOT* s, const char* path, const char* tag)
     } else if ((buf = (unsigned char*)malloc((size_t)vp[2] * vp[3] * 4)) != NULL) {
         glPixelStorei(GL_PACK_ALIGNMENT, 1);
         x_glReadPixels(vp[0], vp[1], vp[2], vp[3], GL_RGBA, GL_UNSIGNED_BYTE, buf);
-        write_ppm(path, vp[2], vp[3], buf);
+        ok = write_ppm(path, vp[2], vp[3], buf);
         free(buf);
-        _snprintf(msg, sizeof msg, "%s: A/B wrote %s, %dx%d", tag, path, (int)vp[2], (int)vp[3]);
+        if (ok)
+            _snprintf(msg, sizeof msg, "%s: A/B wrote %s, %dx%d", tag, path, (int)vp[2], (int)vp[3]);
+        else
+            _snprintf(msg, sizeof msg, "%s: the A/B capture did not reach %s", tag, path);
         msg[sizeof msg - 1] = 0;
         alog(msg);
     } else {
@@ -183,4 +196,5 @@ void tagpu_abshot_end(TAGPU_ABSHOT* s, const char* path, const char* tag)
        enabled capability is not an error and this is the one path that runs
        for every caller */
     if (s->scissor) glEnable(GL_SCISSOR_TEST);
+    return ok;
 }

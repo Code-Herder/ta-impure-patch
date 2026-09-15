@@ -172,6 +172,7 @@ DFNS(DECL)
 enum { ST_UNBUILT = 0, ST_READY = 1, ST_REFUSED = 2 };
 
 static int s_state;
+static int s_downOwed;                     /* a teardown the seam still owes us */
 static int s_drawThis;                     /* `prepare` left a draw for `record` */
 static int s_abFrame;
 static int s_saidRestored;                 /* the Classic++ refusal, said once  */
@@ -1113,10 +1114,25 @@ int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     return 1;
 
 refuse:
-    plog(d, "feat: slot %u would not take this frame's resources - the pass comes down",
-         (unsigned)slot);
-    tagpu_vk_feat_down(d);
+    /* NOTHING IS DESTROYED HERE, AND THAT IS THE WHOLE POINT. This is the
+       middle of a frame. The seam waited on fence[slot] ALONE (tagpu_vk.c), so
+       every OTHER slot's submit is still executing against this pass's
+       pipeline, its descriptor pool, its shared images and its per-slot
+       buffers -- and `cb`, which this function has already recorded uploads
+       and a depth clear into, is submitted whether this pass draws or not.
+       Destroying any of it from here is a use-after-free on the FIRST
+       refusal, not a rare one. [FOUND BY THE G19e LANDING REVIEW, 2026-09-15,
+       by both reviewers independently.]
+
+       So the pass stops drawing at once and OWES a teardown. The seam pays it
+       at the top of a later frame, behind the vkDeviceWaitIdle that makes "no
+       submit names these objects" a fact rather than a hope -- the same proof
+       vk_down and vk_resize already use. The memory is still given back, which
+       is what this path existed to do; it is given back where that is legal. */
+    plog(d, "feat: slot %u would not take this frame's resources - the pass stops "
+            "drawing and the seam tears it down", (unsigned)slot);
     s_state = ST_REFUSED;
+    s_downOwed = 1;
     return 0;
 }
 
@@ -1174,6 +1190,10 @@ void tagpu_vk_feat_down(const TAGPU_VKPASS* d)
 {
     VkDevice dev = d->dev;
     uint32_t i;
+    /* taken before anything is freed: whoever asked, the debt is settled by
+       this call and the seam must not drain a second time for it */
+    int owed = s_downOwed;
+    s_downOwed = 0;
     if (!dev || !vkDestroyBuffer) { s_state = ST_UNBUILT; return; }
 
     for (i = 0; i < TAGPU_VK_SLOTS; i++) {
@@ -1195,7 +1215,16 @@ void tagpu_vk_feat_down(const TAGPU_VKPASS* d)
     s_abFrame = 0;
     s_nShadow = s_nBody = 0;
     /* ST_UNBUILT and not ST_REFUSED: a pass brought down by a mode change or a
-       cleared lever must be able to come back. `prepare` sets ST_REFUSED itself
-       when the device is the reason. */
-    s_state = ST_UNBUILT;
+       cleared lever must be able to come back. THE ONE EXCEPTION IS THE
+       TEARDOWN THIS PASS ASKED FOR: there the device refusing resources IS the
+       reason, `prepare` has already latched ST_REFUSED, and clearing it here
+       would have the pass rebuild and fail again on the very next frame. */
+    s_state = owed ? ST_REFUSED : ST_UNBUILT;
+}
+
+/* 1 while this pass has stopped drawing and is waiting for the seam to drain
+   the device and tear it down -- see `prepare`'s refusal path. */
+int tagpu_vk_feat_down_owed(void)
+{
+    return s_downOwed;
 }

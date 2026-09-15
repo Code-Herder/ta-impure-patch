@@ -1285,8 +1285,35 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
    (tagpu_terr.h). Nothing is computed here that the draw did not already use:
    each field is the value that went into a uniform, a pointer into the array
    the upload took, or the buffer a texture was uploaded from. */
+/* THE FOG GRID IS COPIED, NOT ALIASED. `v->fogGrid` points INSIDE a frame-packet
+   slot, and tagpu_packet.h gives both packet pointers a lifetime that ends at
+   tagpu_packet_frame_end() -- which render_ogl.c calls BEFORE it runs the
+   Vulkan lane, so a pointer handed on from here is read past its contract. It
+   held only because the give-back happens at the next acquire, which is also
+   where the `poison` lever fills the slot: the one stale read that lever cannot
+   see, and outside frame_end's tail==head check as well. [FOUND BY THE G19e
+   LANDING REVIEW, 2026-09-15.] The atlas and the height grid were already
+   handed over as buffers this module owns; this makes the fog grid the same,
+   and makes the file header's "a pass reads no engine state" true of the whole
+   hand-over rather than of most of it.
+
+   `cells * 2` is the size the GL lane's own glTexImage2D was given for this
+   grid, so the read is bounded by the bound the GL upload already trusts; the
+   1024-a-side cap bounds the ALLOCATION, and the pass re-checks it (FOG_MAXDIM)
+   because a bound in one file is a bound only while both are read together. */
+#define FOG_COPY_MAXDIM 1024
+static unsigned short* s_fogCopy;
+static int             s_fogCopyCells;
+
 static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT* L)
 {
+    /* NOTHING IS PUBLISHED ON A SHIPPED FRAME. `s_mirrorWant` is the latch the
+       arm beat sets when the Vulkan lane is up (see there); while it is 0 the
+       lane is not armed, nothing will ever call the hand-over, and the memset
+       and the forty stores below are pure cost on the path every player runs.
+       `s_pubHave` is cleared with it so no earlier frame's hand-over can be
+       taken later. [FROM THE G19e LANDING REVIEW, 2026-09-15.] */
+    if (!s_mirrorWant) { s_pubHave = 0; s_abFrame = 0; return; }
     memset(&s_pub, 0, sizeof s_pub);
     s_pub.cells = s_inst; s_pub.ncell = s_ncell;
     s_pub.gw = (float)v->gw; s_pub.gh = (float)v->gh;
@@ -1327,9 +1354,18 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
     /* the grid as the fragment shader will read it, and only when it will:
        `uFog` 0 means taFog is never called and uFogGrid never sampled, which
        is why the GL lane can leave its own (possibly stale) texture bound. */
-    if (s_pub.fog && v->fogGrid && v->fogCols > 0 && v->fogRows > 0) {
-        s_pub.fogGrid = v->fogGrid;
-        s_pub.fogGridCols = v->fogCols; s_pub.fogGridRows = v->fogRows;
+    if (s_pub.fog && v->fogGrid && v->fogCols > 0 && v->fogRows > 0 &&
+        v->fogCols <= FOG_COPY_MAXDIM && v->fogRows <= FOG_COPY_MAXDIM) {
+        int cells = v->fogCols * v->fogRows;
+        if (cells > s_fogCopyCells) {
+            unsigned short* n = (unsigned short*)realloc(s_fogCopy, (size_t)cells * 2);
+            if (n) { s_fogCopy = n; s_fogCopyCells = cells; }
+        }
+        if (s_fogCopy && cells <= s_fogCopyCells) {
+            memcpy(s_fogCopy, v->fogGrid, (size_t)cells * 2);
+            s_pub.fogGrid = s_fogCopy;
+            s_pub.fogGridCols = v->fogCols; s_pub.fogGridRows = v->fogRows;
+        }
     }
     s_pub.fogLut = tagpu_native_foglut();
     s_pub.vpL = v->vpL; s_pub.vpT = v->vpT; s_pub.vw = v->vw; s_pub.vh = v->vh;
@@ -1446,9 +1482,12 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
             x_glDrawArraysInstanced(GL_TRIANGLES, 0, 6, s_ncell);
 
             if (taking) {
-                tagpu_abshot_end(&shot, ABOUT, "terr");
+                /* the Vulkan half is claimed only on a GL half that reached
+                   the disk -- see tagpu_abshot.h; `s_abDone` latches either
+                   way */
+                int wrote = tagpu_abshot_end(&shot, ABOUT, "terr");
                 s_abDone = 1;
-                s_abFrame = 1;
+                s_abFrame = wrote;
             }
         }
 

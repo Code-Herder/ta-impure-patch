@@ -37,4 +37,14 @@ int  tagpu_vk_scaffold_ab_frame(void);
    ever built. */
 void tagpu_vk_scaffold_down(const TAGPU_VKPASS* d);
 
+/* 1 while the pass has stopped drawing mid-frame because the device would not
+   give it this frame's resources, and is waiting for the seam to tear it down.
+   THE SEAM MUST vkDeviceWaitIdle BEFORE CALLING `_down` FOR THIS: the pass
+   cannot destroy anything itself at the moment it finds out, because only its
+   own slot's fence has been waited on and the command buffer of the frame in
+   hand already names its objects. Checked at the top of a frame, before
+   anything is recorded. */
+int  tagpu_vk_scaffold_down_owed(void);
+
+
 #endif

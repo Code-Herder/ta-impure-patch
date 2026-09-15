@@ -537,9 +537,11 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
     serr("s-quad");
 
     if (taking) {
-        tagpu_abshot_end(&shot, ABOUT, "scaffold");
+        /* the Vulkan half is claimed only on a GL half that reached the disk
+           -- see tagpu_abshot.h; `s_abDone` latches either way */
+        int wrote = tagpu_abshot_end(&shot, ABOUT, "scaffold");
         s_abDone = 1;
-        s_abFrame = 1;
+        s_abFrame = wrote;
     }
 
     /* PUBLISHED AFTER THE GL DRAW, not before: these are the bytes and the

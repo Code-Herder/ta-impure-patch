@@ -22,9 +22,12 @@
 
    THE ENTRY POINTS ARE RESOLVED IN ONE PLACE, ONCE, AND A MISSING ONE SAYS SO.
    This DLL is ddraw.dll: it does not link opengl32, it loads it, so even GL 1.1
-   is a pointer to resolve. Five of the nine this needs are not among the fork's
-   own globals in opengl_utils.h (glGetFloatv, glIsEnabled, glDisable,
-   glClearColor, glReadPixels) and are resolved here. What the G19d review found
+   is a pointer to resolve. Seven of the eleven this needs are not among the
+   fork's own globals in opengl_utils.h (glGetFloatv, glIsEnabled, glDisable,
+   glClearColor, glReadPixels, and glDepthMask and glClearDepth since G19e's
+   second world pass added the depth clear) and are resolved here; the other
+   four -- glClear, glEnable, glGetIntegerv, glPixelStorei -- come from the
+   fork. What the G19d review found
    in tagpu_fps.c was not the resolving but the SILENCE -- a context missing one
    made the lever do nothing at all, no clear, no capture and no line in the
    log, retried every poll for the session. Here there is one `init`, one
@@ -81,7 +84,16 @@ void tagpu_abshot_begin(TAGPU_ABSHOT* s, unsigned flags);
    what maps the pass's coordinates onto the target -- and the Vulkan lane's
    swapchain covers the window's CLIENT area, which is the same rect only when
    the fork is not letterboxing. tools/vk-ab.py refuses two captures of
-   different sizes rather than scaling one. */
-void tagpu_abshot_end(TAGPU_ABSHOT* s, const char* path, const char* tag);
+   different sizes rather than scaling one.
+
+   RETURNS 1 ONLY WHEN THE CAPTURE REACHED THE DISK, and the caller must not
+   claim the Vulkan half of the A/B on anything else. `begin` refusing an entry
+   point, a viewport that is not sane, a failed malloc, a file that would not
+   open and a short write all return 0 -- and on every one of them the _gl.ppm
+   of the PREVIOUS run is still lying on the disk, so a Vulkan half claimed
+   anyway would be diffed against a capture of a different frame and reported
+   as a port failure. That guard is what tagpu_fps.c spelled `can` before G19e
+   moved this code here. */
+int tagpu_abshot_end(TAGPU_ABSHOT* s, const char* path, const char* tag);
 
 #endif

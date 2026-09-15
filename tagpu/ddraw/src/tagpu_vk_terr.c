@@ -53,10 +53,21 @@
           ours is in flight for it. So no write in this file ever touches a set
           another frame may be using.
         * the replaced image is RETIRED behind a slot bitmask, not a timer:
-          `pending` starts as every slot and a bit clears when that slot's set
-          has been rewritten (or its resources freed, which also happens only
-          under its own fence). `pending == 0` means every submit that could
-          name the old image has completed, and only then is it destroyed.
+          `pending` starts as every slot and a bit clears when that slot has
+          been VISITED -- at the top of its own `prepare`, unconditionally, and
+          NOT when its set is rewritten. Saying "when the set has been
+          rewritten" would be the tidier invariant and it is not this one: the
+          bit has to clear on the paths that return without binding, or the one
+          resize that cannot be applied stalls the retire for ever (see the
+          accounting at the top of `prepare`). What makes the clear safe is the
+          pair of facts in `shared_slot_done`'s own comment -- the slot's last
+          submit is complete, and `record` runs only after a `prepare` that
+          returned 1, every one of which called `shared_bind`. The second of
+          those was an argument spread across two functions; since the G19e
+          landing review it is also a TEST, in `record`, against the views each
+          slot was last bound to. `pending == 0` then means every submit that
+          could name the old image has completed, and only then is it
+          destroyed.
           A second change arriving while one is pending draws NOTHING for the
           frames it takes to clear rather than starting a second retire -- at
           most `slots` frames, and only for back-to-back map changes.
@@ -152,6 +163,7 @@ DFNS(DECL)
 enum { ST_UNBUILT = 0, ST_READY = 1, ST_REFUSED = 2 };
 
 static int s_state;
+static int s_downOwed;                     /* a teardown the seam still owes us */
 static int s_drawThis;                     /* `prepare` left a draw for `record` */
 static int s_abFrame;
 static int s_saidRestored;                 /* the Classic++ refusals, said once */
@@ -234,6 +246,12 @@ typedef struct {
 
     VkDescriptorSet dset;
     int             built;                 /* the fixed-size half is made      */
+    /* WHAT THIS SLOT'S SET WAS LAST BOUND TO, so that "the set names the image
+       that still exists" is a fact this file can CHECK rather than an argument
+       about two functions a hundred lines apart. `shared_bind` writes them,
+       `record` refuses to draw unless they are still the live views, and
+       `slot_free` clears them. See the retire's second rule. */
+    VkImageView     boundAtlas, boundHeight;
 } SLOT;
 static SLOT s_slot[TAGPU_VK_SLOTS];
 
@@ -247,6 +265,17 @@ static SLOT s_slot[TAGPU_VK_SLOTS];
 #define ATLAS_MAXDIM 16384
 #define HEIGHT_MAXDIM 4096
 #define FOG_MAXDIM    1024
+/* THE CELL COUNT IS ONE OF THEM, and it was the one left out. It sizes both the
+   instance buffer (`ncell * ICOMP * sizeof(short)`) and vkCmdDraw's
+   instanceCount, so it belongs under this paragraph's own rule as much as the
+   three above do. tagpu_terr.c clamps its gather to INST_MAX_BYTES / a cell,
+   which is this number -- stated here in the terms this file allocates in, so
+   that neither file has to be read to trust the other. IT MUST NOT BE TIGHTER
+   THAN THE PRODUCER'S: a pass that refused a cell count the GL twin drew would
+   make the A/B report a rasteriser difference over the whole viewport.
+   [FROM THE G19e LANDING REVIEW, 2026-09-15.] */
+#define CELL_MAXBYTES (24u * 1024u * 1024u)
+#define CELL_MAX      ((int)(CELL_MAXBYTES / (TAGPU_TERR_ICOMP * sizeof(short))))
 /* ONE STAGING BUFFER CARRIES ALL THREE SMALL UPLOADS: the palette (256 x 1
    RGBA), then the fog shade LUT (256 x 1 R8), then the fog grid (cols x rows
    RG8, a few KB and a different size whenever the view walks far enough for the
@@ -451,6 +480,9 @@ static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
     kill_image(d, &s->lut, &s->lutMem, &s->lutView);
     kill_image(d, &s->fog, &s->fogMem, &s->fogView);
     s->fogW = s->fogH = 0;
+    /* the set this slot holds names nothing live any more, and `record` tests
+       exactly that before it draws */
+    s->boundAtlas = s->boundHeight = VK_NULL_HANDLE;
     s->built = 0;
 }
 
@@ -923,6 +955,8 @@ static void shared_bind(const TAGPU_VKPASS* d, uint32_t slot)
     wr[1] = wr[0]; wr[1].dstBinding = 42; wr[1].pImageInfo = &ii[1];
     wr[2] = wr[0]; wr[2].dstBinding = 43; wr[2].pImageInfo = &ii[2];
     vkUpdateDescriptorSets(d->dev, 3, wr, 0, NULL);
+    s_slot[slot].boundAtlas  = ii[0].imageView;
+    s_slot[slot].boundHeight = ii[2].imageView;
 }
 
 static int build(const TAGPU_VKPASS* d)
@@ -1112,6 +1146,10 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     s_saidNoMirror = 0;
     if (!t.pal || !t.fogLut) return 0;
     if (t.ncell < 1 || !t.cells) return 0;
+    if (t.ncell > CELL_MAX) {
+        plog(d, "terr: %d cells is outside what this pass carries - nothing drawn", t.ncell);
+        return 0;
+    }
     if (t.atlasW < 1 || t.atlasH < 1 ||
         t.atlasW > ATLAS_MAXDIM || t.atlasH > ATLAS_MAXDIM) {
         plog(d, "terr: a %dx%d tile atlas is outside what this pass carries - nothing drawn",
@@ -1290,10 +1328,25 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     return 1;
 
 refuse:
-    plog(d, "terr: slot %u would not take this frame's resources - the pass comes down",
-         (unsigned)slot);
-    tagpu_vk_terr_down(d);
+    /* NOTHING IS DESTROYED HERE, AND THAT IS THE WHOLE POINT. This is the
+       middle of a frame. The seam waited on fence[slot] ALONE (tagpu_vk.c), so
+       every OTHER slot's submit is still executing against this pass's
+       pipeline, its descriptor pool, its shared images and its per-slot
+       buffers -- and `cb`, which this function has already recorded uploads
+       and a depth clear into, is submitted whether this pass draws or not.
+       Destroying any of it from here is a use-after-free on the FIRST
+       refusal, not a rare one. [FOUND BY THE G19e LANDING REVIEW, 2026-09-15,
+       by both reviewers independently.]
+
+       So the pass stops drawing at once and OWES a teardown. The seam pays it
+       at the top of a later frame, behind the vkDeviceWaitIdle that makes "no
+       submit names these objects" a fact rather than a hope -- the same proof
+       vk_down and vk_resize already use. The memory is still given back, which
+       is what this path existed to do; it is given back where that is legal. */
+    plog(d, "terr: slot %u would not take this frame's resources - the pass stops "
+            "drawing and the seam tears it down", (unsigned)slot);
     s_state = ST_REFUSED;
+    s_downOwed = 1;
     return 0;
 }
 
@@ -1308,6 +1361,21 @@ void tagpu_vk_terr_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     (void)d;
     if (s_state != ST_READY || !s_drawThis) return;
     s_drawThis = 0;
+
+    /* THE RETIRE'S SECOND RULE, ENFORCED WHERE IT IS USED. The destroy is
+       licensed by `pending == 0`, and a slot's bit is cleared at the top of its
+       own `prepare` -- BEFORE `shared_bind` runs, and on paths that return
+       without ever reaching it. What makes that safe is not the bit: it is that
+       `record` only ever runs after a `prepare` that returned 1, and every such
+       path passes through `shared_bind`, so the set in hand names the CURRENT
+       images. That was an argument spread over two functions and one seam in
+       another file; this makes it a test. A slot whose set still names a
+       retired view draws nothing instead of sampling freed memory.
+       [FROM THE G19e LANDING REVIEW, 2026-09-15.] */
+    if (slot >= TAGPU_VK_SLOTS ||
+        s_slot[slot].boundAtlas != s_atlas.view ||
+        s_slot[slot].boundHeight != (s_height.view ? s_height.view : s_atlas.view))
+        return;
 
     /* THE FLIP, AND THE DEPTH RANGE, AND THEY ARE BOTH THE WHOLE OF THEMSELVES.
        y starts at the bottom and the height is negative, so clip space is
@@ -1349,6 +1417,10 @@ void tagpu_vk_terr_down(const TAGPU_VKPASS* d)
 {
     VkDevice dev = d->dev;
     uint32_t i;
+    /* taken before anything is freed: whoever asked, the debt is settled by
+       this call and the seam must not drain a second time for it */
+    int owed = s_downOwed;
+    s_downOwed = 0;
     if (!dev || !vkDestroyBuffer) { s_state = ST_UNBUILT; return; }
 
     for (i = 0; i < TAGPU_VK_SLOTS; i++) {
@@ -1378,7 +1450,16 @@ void tagpu_vk_terr_down(const TAGPU_VKPASS* d)
     s_abFrame = 0;
     s_ncell = 0;
     /* ST_UNBUILT and not ST_REFUSED: a pass brought down by a mode change or a
-       cleared lever must be able to come back. `prepare` sets ST_REFUSED itself
-       when the device is the reason. */
-    s_state = ST_UNBUILT;
+       cleared lever must be able to come back. THE ONE EXCEPTION IS THE
+       TEARDOWN THIS PASS ASKED FOR: there the device refusing resources IS the
+       reason, `prepare` has already latched ST_REFUSED, and clearing it here
+       would have the pass rebuild and fail again on the very next frame. */
+    s_state = owed ? ST_REFUSED : ST_UNBUILT;
+}
+
+/* 1 while this pass has stopped drawing and is waiting for the seam to drain
+   the device and tear it down -- see `prepare`'s refusal path. */
+int tagpu_vk_terr_down_owed(void)
+{
+    return s_downOwed;
 }

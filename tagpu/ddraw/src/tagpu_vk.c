@@ -1946,6 +1946,34 @@ static int vk_present(void)
         return -2;
     }
 
+    /* THE TEARDOWN A PASS OWES, PAID WHERE IT IS LEGAL TO PAY IT.
+       [FROM THE G19e LANDING REVIEW, 2026-09-15 -- both reviewers, separately.]
+       A pass that cannot get its per-slot resources mid-frame stops drawing and
+       raises this flag INSTEAD of destroying anything, because at the moment it
+       finds out, the fence wait above has proved one slot idle and nothing
+       more: every other slot's submit is still executing against that pass's
+       pipeline, pool and images, and the command buffer of the frame in hand
+       already names them too.
+
+       Here is the one place in the frame where the debt can be settled. It is
+       before `cb` is reset and recorded, so no command names those objects yet,
+       and `vkDeviceWaitIdle` makes "no submit names them either" a fact -- the
+       same proof vk_down and vk_resize use. An unresolved entry point is NOT
+       idle: with no way to prove the device quiet, the lane comes down rather
+       than destroy on a hope. The cost is one drain on the frame after a
+       refusal, and nothing at all on every other frame. */
+    if (tagpu_vk_terr_down_owed() || tagpu_vk_feat_down_owed() ||
+        tagpu_vk_scaffold_down_owed()) {
+        if (!vkDeviceWaitIdle || vkDeviceWaitIdle(s_vk.dev) != VK_SUCCESS) {
+            vklog("vkDeviceWaitIdle refused before an owed pass teardown - down");
+            return -2;
+        }
+        vklog("a pass asked to come down: the device is drained, tearing it down");
+        if (tagpu_vk_terr_down_owed())     tagpu_vk_terr_down(&s_pass);
+        if (tagpu_vk_feat_down_owed())     tagpu_vk_feat_down(&s_pass);
+        if (tagpu_vk_scaffold_down_owed()) tagpu_vk_scaffold_down(&s_pass);
+    }
+
     r = vkAcquireNextImageKHR(s_vk.dev, s_vk.sc, 1000000000ull,
                               s_vk.semAcquire[fi], VK_NULL_HANDLE, &idx);
     if (r == VK_ERROR_OUT_OF_DATE_KHR) return -1;   /* the caller rebuilds */

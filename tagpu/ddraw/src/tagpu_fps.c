@@ -369,9 +369,15 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
     s_nv = nv; s_fw = f->game_width; s_fh = f->game_height;
 
         if (taking) {
-            tagpu_abshot_end(&shot, ABOUT, "fps");
+            /* THE VULKAN HALF IS CLAIMED ONLY ON A GL HALF THAT REACHED THE
+               DISK. `end` returns 0 when `begin` never ran or the capture
+               failed, and the _gl.ppm of an earlier run is still there -- so
+               claiming anyway would diff two different frames and call a
+               capture failure a port failure. `s_abDone` latches either way:
+               a lever that cannot capture must not retry every frame. */
+            int wrote = tagpu_abshot_end(&shot, ABOUT, "fps");
             s_abDone = 1;
-            s_abFrame = 1;
+            s_abFrame = wrote;
         }
     }
 }
