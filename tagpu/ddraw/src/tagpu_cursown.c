@@ -29,10 +29,14 @@
       0x4C2732  in 0x4C25E0, the body of the engine's MOUSE THREAD (started at
                 0x4C2A9A by _beginthread with 0x4C2990 as its entry). Blits
                 into the private context [obj+0x1C6].
-      0x4C297E  in 0x4C2870, whose save is at 0x4C2937. Gated on
-                `cmp [esi+0x1CE],edi` and a `dec edx; jg` on a counter — NOT
-                the `cmp …,1` an earlier note claimed, and its callers include
-                in-play code, so "inert" was never established.
+      0x4C297E  in 0x4C2870, whose save is at 0x4C2937. Its first gate IS
+                `cmp [+0x1CE], 1` (0x4C287D loads edi = 1, 0x4C2882 compares
+                against it, 0x4C2888 exits when equal), so while the mouse
+                thread is up — +0x1CE == 1 — this path early-outs and draws
+                nothing, whatever its in-play callers do. Patched for the case
+                it is NOT inert in: the mouse thread down, +0x1CE == 0, where
+                this becomes a live draw path. Its second gate is a decrement
+                of the counter at +0x1AE.
       0x4C258C  in 0x4C24B0, which has no call site we can find. Patched
                 anyway: a byte-matched 5-byte patch on a function that never
                 runs costs one page write at startup, and "no caller in the
@@ -86,25 +90,29 @@ void tagpu_cursown_init(void)
     /* the A/B lever: `flip` or `poll` alone, to attribute a cursor on screen to
        one site. Empty (or absent) is both, which is the shipping arm. */
     if (tagpu_opt_read("tagpu_cursown.on", tok, sizeof tok) > 0) {
-        if (strstr(tok, "flip")) wantPoll = 0;
-        if (strstr(tok, "poll")) wantFlip = 0;
+        int wFlip = strstr(tok, "flip") != NULL, wPoll = strstr(tok, "poll") != NULL;
+        /* naming BOTH is the same as naming neither — it must not clear both
+           wants and leave the log claiming "one site only" */
+        if (wFlip != wPoll) { wantFlip = wFlip; wantPoll = wPoll; }
     }
     if (wantFlip)
         s_flipArmed = tagpu_detour_call_site(SITE_FLIP_VA, COPYGAF_VA, &s_skip, COPYGAF_ARGS);
-    if (wantPoll) {
+    if (wantPoll)
         s_pollArmed = tagpu_detour_call_site(SITE_POLL_VA, COPYGAF_VA, &s_skip, COPYGAF_ARGS);
-        /* the two arms nothing was ever seen to take, patched for the reason
-           in the block above: each is independent, so one that does not
-           byte-match arms nothing and leaves the others alone */
-        s_restArmed = tagpu_detour_call_site(SITE_HIDE_VA, COPYGAF_VA, &s_skip, COPYGAF_ARGS)
-                    + tagpu_detour_call_site(SITE_DEAD_VA, COPYGAF_VA, &s_skip, COPYGAF_ARGS);
-    }
+    /* the two arms nothing was ever seen to take. NOT nested under either
+       lever: `flip` and `poll` name the two sites anyone has a reason to A/B,
+       and hiding a third site behind one of them would silently disarm
+       0x4C297E — which has in-play callers — while the log said "one site
+       only". Each is independent, so one that does not byte-match arms nothing
+       and leaves the others alone. [FROM REVIEW 2026-09-14.] */
+    s_restArmed = tagpu_detour_call_site(SITE_HIDE_VA, COPYGAF_VA, &s_skip, COPYGAF_ARGS)
+                + tagpu_detour_call_site(SITE_DEAD_VA, COPYGAF_VA, &s_skip, COPYGAF_ARGS);
     s_installed = s_flipArmed || s_pollArmed || s_restArmed;
     _snprintf(b, sizeof b,
-              "cursown: flip 0x4C687D=%d poll 0x4C2732=%d rest=%d/2%s — the engine's cursor BLIT is skipped while "
+              "cursown: armed %d of 4 (flip 0x4C687D=%d poll 0x4C2732=%d rest=%d/2)%s — the engine's cursor BLIT is skipped while "
               "ours is on screen; its position words, its background save and its caller's restore all still "
               "run, so nothing of the engine's own bookkeeping changes%s",
-              s_flipArmed, s_pollArmed, s_restArmed,
+              s_flipArmed + s_pollArmed + s_restArmed, s_flipArmed, s_pollArmed, s_restArmed,
               (wantFlip && wantPoll) ? "" : " (A/B: one site only, tagpu_cursown.on)",
               s_installed ? "" : " — NOT ARMED: no site matched, the engine keeps drawing its cursor and the layer's rect exemption is the fallback");
     b[sizeof b - 1] = 0;
@@ -118,9 +126,9 @@ void tagpu_cursown_publish(int oursDrawn)
     s_skip = (unsigned char)((s_installed && oursDrawn) ? 1 : 0);
 }
 
-void tagpu_cursown_stats(int* flipArmed, int* pollArmed, int* skipping)
+void tagpu_cursown_stats(int* armed, int* ofN, int* skipping)
 {
-    if (flipArmed) *flipArmed = s_flipArmed;
-    if (pollArmed) *pollArmed = s_pollArmed;
-    if (skipping)  *skipping  = s_skip ? 1 : 0;
+    if (armed)    *armed    = s_flipArmed + s_pollArmed + s_restArmed;
+    if (ofN)      *ofN      = 4;
+    if (skipping) *skipping = s_skip ? 1 : 0;
 }

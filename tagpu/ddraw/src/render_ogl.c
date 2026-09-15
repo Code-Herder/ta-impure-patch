@@ -1671,6 +1671,17 @@ static void ogl_render()
         fpsl_frame_end();
     }
 
+    /* THE PRODUCER'S OWN TEARDOWN CLEARS IT. Every exit from the loop above
+       ends our cursor: a GL error sets use_opengl = FALSE and the caller falls
+       through to gdi_render_main(), which never returns; render.run = FALSE is
+       a mode change or a shutdown. Leaving the flag set would keep the engine's
+       cursor blit skipped for a session that no longer has a GL cursor to put
+       in its place — no pointer at all, which is exactly the fail-closed shape
+       this design exists to avoid. Publishing 0 here is by construction: the
+       thread that is the only writer clears it as it stops writing.
+       [FROM REVIEW 2026-09-14.] */
+    tagpu_cursown_publish(0);
+
     if (g_config.vhack)
         InterlockedExchange(&g_ddraw.upscale_hack_active, FALSE);
 }

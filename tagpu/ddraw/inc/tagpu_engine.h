@@ -74,11 +74,17 @@
    INDIRECTLY (no `call 0x4C2990` in the image), the mouse object's per-frame
    update.
 
-   THE OTHER TWO DRAW PATHS ARE INERT IN THIS CONFIGURATION and are left alone
-   deliberately [disassembly, 2026-09-13]: 0x4C2870 early-outs on `cmp
-   [+0x1CE],1` (`je 0x4C2983`) and the runtime holds +0x1CE == 1, and 0x4C24B0
-   has no call site in the image at all. Suppressing a site that cannot run
-   buys nothing and costs a byte patch. */
+   THE OTHER TWO DRAW PATHS ARE ALSO PATCHED SINCE 2026-09-14 — at their
+   blit call (0x4C297E, 0x4C258C), like these two, by tagpu_cursown.c.
+   0x4C2870 really is inert while the mouse thread is up (its first gate
+   is `cmp [+0x1CE], 1` — 0x4C287D loads edi = 1 — and +0x1CE is 1 for
+   exactly as long as that thread lives), and 0x4C24B0 has no call site
+   at all; both are covered anyway, because "cannot run" is a claim about
+   a configuration and the cost of being wrong about one is a second
+   cursor. An earlier revision of this block said they were left alone
+   deliberately; that stopped being true when the patch moved from the
+   function to the blit.
+   */
 #define VA_CURSOR_POLL     0x004C25E0u
 
 /* the loader thread: created at 0x4982CA (`push 0x497C70; call 0x4B6B20`,

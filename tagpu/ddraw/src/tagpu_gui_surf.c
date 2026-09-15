@@ -195,12 +195,13 @@ static GLint  s_uCursSize, s_uCursCK, s_uCursRestored;
    by the render_ogl.c bracket (tagpu_gui.h has the whole argument). Set only
    at the tail of a successful sharp_cursor; cleared by the take, so a frame
    that never reaches this module answers 0 and the engine keeps its cursor. */
-static int s_curDrew = 0;
+static int s_curInLayer = 0;            /* drawn into the sharp FBO                      */
+static int s_curDrew = 0;               /* ...and that FBO was composited to the screen  */
 
 int tagpu_gui_cursor_drew_take(void)
 {
     int v = s_curDrew;
-    s_curDrew = 0;
+    s_curDrew = s_curInLayer = 0;
     return v;
 }
 static GLuint s_strProg;                /* QVS + STR_FS: a string op's glyphs into a twin (G17d)        */
@@ -1473,14 +1474,17 @@ static void sharp_cursor(const TAGPU_FRAME* f)
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
     x_glDrawArrays(GL_TRIANGLES, 0, 6);
     s_curDrawn++;
-    /* OUR CURSOR IS ON SCREEN FROM HERE, so the engine's next draw is skipped
-       and there is no second cursor to erase, lag or leave standing. Recorded,
-       not published: tagpu_gui_present writes the flag once, when the present
-       that this draw belongs to has finished (see the latch there). Paired
-       with the zero it writes on every path that does not reach here — the
-       atlas warming, `nocursor`, a bailed sharp pass, the layer off — so the
-       engine's cursor comes back for those frames exactly as it did before. */
-    s_curDrew = 1;
+    /* OUR CURSOR IS IN THE SHARP FBO FROM HERE — which is NOT the same as
+       being on screen, and the difference is what decides whether the engine
+       may draw its own. Only draw_layer samples this layer, and draw_layer
+       returns early when there is no presented twin or its size disagrees with
+       the frame's (a mode change, a context reset, before the first PK_FRAME
+       op drains). On those frames our cursor sits in an FBO nobody reads, so
+       telling tagpu_cursown the engine may stand down would leave NO cursor at
+       all. The layer's own comment already warns that a client here must not
+       assume draw_layer ran; this is that warning obeyed. The screen answer is
+       set at the tail of draw_layer instead. [FROM REVIEW 2026-09-14.] */
+    s_curInLayer = 1;
 }
 
 /* THE MINIMAP'S BASE AT ITS NATIVE SIZE (13.6, G17e).
@@ -1982,6 +1986,11 @@ static void draw_layer(const TAGPU_FRAME* f)
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
     x_glDrawArrays(GL_TRIANGLES, 0, 6);
+    /* THE COMPOSITE HAS RUN, so anything the sharp layer carried is now on the
+       frame the player sees. This — not the draw into the layer — is what lets
+       the engine's own cursor blit stand down (tagpu_cursown.h). Every early
+       return above leaves it 0 and the engine keeps its cursor. */
+    if (s_sharpOn && s_curInLayer) s_curDrew = 1;
 }
 
 /* leave nothing of ours bound: the drain binds twin FBOs, the atlas, the
@@ -2104,15 +2113,15 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         unsigned gCached = 0, gDrops = 0; int gFonts = 0;
         /* the engine's own cursor blit: which sites are armed, and whether it
            is being skipped right now (tagpu_cursown.h) */
-        int cowFlip = 0, cowPoll = 0, cowSkip = 0;
-        tagpu_cursown_stats(&cowFlip, &cowPoll, &cowSkip);
+        int cowArmed = 0, cowOf = 0, cowSkip = 0;
+        tagpu_cursown_stats(&cowArmed, &cowOf, &cowSkip);
         tagpu_text_glyph_stats(&gCached, &gDrops, &gFonts);
         if (!fq.QuadPart) QueryPerformanceFrequency(&fq);
         QueryPerformanceCounter(&t1);
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mm=%u,fog=%u/%u,noeng=%u cursown=%d%d/%d fps=%.1f",
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mm=%u,fog=%u/%u,noeng=%u cursown=%d/%d,%d fps=%.1f",
                   s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.stalls,
                   s_skipped, tagpu_pal_changes(), palDiff, palDiffAt, tagpu_pal_presented(),
@@ -2128,7 +2137,7 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
                      carried ~968) and what §7's cadence note is about */
                   g_guiq.aHead, s_mmDrawn,
                   s_mmFogged, (unsigned)(s_mmEngW * s_mmEngH), s_mmNoEng,
-                  cowFlip, cowPoll, cowSkip, fps);
+                  cowArmed, cowOf, cowSkip, fps);
         b[sizeof b - 1] = '\0';
         slog(b);
     }

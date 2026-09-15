@@ -137,7 +137,7 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         tagpu_markown_init();
 
         /* tagpu: the engine's cursor BLIT, skipped while ours is on screen
-           (tagpu_cursown.h). Two 5-byte call-site redirects, byte-matched and
+           (tagpu_cursown.h). Four 5-byte call-site redirects, byte-matched and
            independent of each other; the functions they sit in are untouched,
            so the engine's position writes, its background save and its
            caller's restore all still run. Off with "tagpu_cursown.off". */

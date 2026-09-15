@@ -2246,7 +2246,7 @@ phenomenon and it is quoted as measured rather than rounded into the earlier ban
   is not new, but under G17c a stale rect erases a rectangle of the engine's own in-viewport
   pixels rather than merely deferring to them. **[CLOSED 2026-09-13 by §24.** There is no engine
   cursor to erase while ours is drawn; the rect survives as the fallback for the frames we do not
-  own, and §24 has the count that says so (`sup=` climbing, `draws=` frozen).**]**
+  own, and §24.1 has the measurement that says so — the engine's own surface with the blit armed and with `tagpu_cursown.off`. There is deliberately NO skip counter (`tagpu_cursown.h`): the stub staying a compare and a `ret` is most of why it is safe.**]**
 - **Inside the cursor's rect the world composite paints our world over whatever engine UI was
   there** — health bars, a nanoframe, chat — for that frame. Its own cursor had already covered
   those pixels in the frame being composited, so nothing is lost that the player could have seen,
@@ -3438,8 +3438,11 @@ there is the engine's, full stop. A/B by `tagpu_cursown.off`, everything else id
   whose draw is atlas warm-up has neither. It is visible in the measurements above — the first
   surface shot of a fresh level read 293 px because the flag was still 0 and the engine correctly
   drew its own.
-- **`0x4C24B0` is patched without ever having been seen to run.** Cheap and byte-matched, but it
-  is a patch with no test behind it.
+- **Two of the four sites are patched without ever having been seen to run.** `0x4C2870` early-outs
+  while the mouse thread is up (`cmp [+0x1CE], 1`) and `0x4C24B0` has no call site at all. Both are
+  covered because "cannot run" is a claim about a configuration — the mouse thread can be down —
+  and the cost of being wrong about one is a second cursor. They are patches with no test behind
+  them, and that is stated rather than dressed up.
 - **The GAF cursor table's lifetime** is §23's open item and is unchanged by this.
 - **`cursorscale=`** stays what §17 leaves it: implemented, clamped, and the escape for a 3x UI at
   4K. The default is 1 — one device pixel per sprite pixel, which is what a 1024x768 window at

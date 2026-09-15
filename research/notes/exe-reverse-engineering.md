@@ -2175,8 +2175,8 @@ the module that takes the cursor over stopped needing to know: `tagpu_cursown.c`
 | --- | --- | --- | --- |
 | `0x4C67C0` (the flip's draw) | `0x4C687D` | `0x4C6862` | the blit is the last instruction before the epilogue |
 | `0x4C25E0` (the mouse thread) | `0x4C2732` | — (descriptors at `+0x1C2`/`+0x1C6`) | blits into `[obj+0x1C6]` |
-| `0x4C2870` | `0x4C297E` | `0x4C2937` | gated `cmp [esi+0x1CE],edi` and a `dec edx; jg` on a counter — **not** the `cmp …,1` claimed on 2026-09-13, and its callers include in-play code (`0x46A3C7`, `0x496A8C`, `0x498434`), so "inert" was never established |
-| `0x4C24B0` | `0x4C258C` | `0x4C24DE` region | no call site and no literal found. Patched anyway — "no caller in the image" was also true of `0x4C2990`, which is a thread entry |
+| `0x4C2870` | `0x4C297E` | `0x4C2937` | first gate **is** `cmp [+0x1CE], 1` — `0x4C287D` loads `edi = 1`, `0x4C2882` compares against it, `0x4C2888` exits when equal — so it early-outs for as long as the mouse thread is up, whatever its callers do; second gate is a decrement of `+0x1AE`. Its in-play callers (`0x46A3C7`, `0x496A8C`, `0x498434`) are real but reach a function that returns. *[This row said the opposite for one revision on 2026-09-14 — a "correction" that reversed a claim which had been right. Patched anyway: with the mouse thread DOWN, `+0x1CE == 0` and this is a live draw path.]* |
+| `0x4C24B0` | `0x4C258C` | `0x4C256A` (`0x4CBBE0` into `+0x1BE`; `0x4C24DE` is the `GetCursorPos`, not the save) | no call site and no literal found. Patched anyway — "no caller in the image" was also true of `0x4C2990`, which is a thread entry |
 
 **THE SAVE/RESTORE PAIRING IS THE REASON THE BLIT IS THE PATCH POINT.** `0x4C67C0` is not a
 self-contained draw: it fills the descriptor, writes the position pair, calls the background SAVE

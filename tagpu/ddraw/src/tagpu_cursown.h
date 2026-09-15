@@ -4,7 +4,7 @@
 
    The fourth of the own-the-draw modules (terrown, featown, fxown, markown),
    and the smallest: it patches no function, only the single `call` that puts
-   the cursor's pixels on a surface, at each of the two sites that do it.
+   the cursor's pixels on a surface, at each of the four sites that do it.
 
    WHY THE ENGINE'S CURSOR HAD TO GO. The world composite paints our frame
    wherever the engine's surface holds the terrain key and discards elsewhere,
@@ -41,11 +41,12 @@ void tagpu_cursown_init(void);
    module: the caller cannot forget a path it does not know about. */
 void tagpu_cursown_publish(int oursDrawn);
 
-/* for the heartbeat: which sites are armed, and the flag as last published.
+/* for the heartbeat: how many of the sites are armed, out of how many, and
+   the flag as last published.
    NO skip counter: counting one would mean a callback in the stub, and the
    stub staying a compare and a `ret` is most of why this patch is safe. What
    the suppression is doing is measured from the outside instead — the engine's
    +0x1B6/+0x1BA still TRACK the pointer under this design (the position writes
    are upstream of the blit), so the oracle is the screen, not a counter. */
-void tagpu_cursown_stats(int* flipArmed, int* pollArmed, int* skipping);
+void tagpu_cursown_stats(int* armed, int* ofN, int* skipping);
 #endif
