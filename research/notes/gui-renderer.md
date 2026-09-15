@@ -2228,17 +2228,25 @@ phenomenon and it is quoted as measured rather than rounded into the earlier ban
   reachable in the shipped path (the terrain is ours whenever the world composite runs, and over
   the panel the layer's twin covers the engine's cursor either way), and not observed; the fix
   is a decision about which module owns the question, so it is recorded rather than guessed at.
+  **[MOOT 2026-09-13 (§24):** in that state the suppression flag is 0 as well, because it is set
+  by the same draw that the exemption's condition implies — so the engine's cursor is back and
+  ours is not drawn, which is one cursor rather than two.**]**
 - **The cursor is not restored under Classic++ in practice**, only in principle: `CURS_FS` reads
   the atlas's restored twin where its alpha says so, and cursor frames are above the 12-px restore
   floor, so they queue like any other UI art. Nothing has measured whether the restored cursor is
   *right*; `tascene uidiff` covers the atlas as a whole and does not single it out.
+  **[CLOSED 2026-09-13 by §24.1 — and the answer to the question this bullet asked is *no*, not
+  *unmeasured*: it is where the owner's second cyan came from, and the cursor is no longer restored
+  at all.**]**
 - **`cursorscale=` is implemented and unmeasured.** It is clamped and it scales the quad; no
   reading was taken of what a 2x or 3x cursor looks like against a 3x UI, which is the question
   §13.5 raises and leaves to the owner.
 - **The erase is the engine's LAST-DRAWN rect**, `+0x1B6/+0x1BA`, which is stale if the engine
   stops drawing its cursor without moving it. Phase 1's discard already trusted that rect, so this
   is not new, but under G17c a stale rect erases a rectangle of the engine's own in-viewport
-  pixels rather than merely deferring to them.
+  pixels rather than merely deferring to them. **[CLOSED 2026-09-13 by §24.** There is no engine
+  cursor to erase while ours is drawn; the rect survives as the fallback for the frames we do not
+  own, and §24.1 has the measurement that says so — the engine's own surface with the blit armed and with `tagpu_cursown.off`. There is deliberately NO skip counter (`tagpu_cursown.h`): the stub staying a compare and a `ret` is most of why it is safe.**]**
 - **Inside the cursor's rect the world composite paints our world over whatever engine UI was
   there** — health bars, a nanoframe, chat — for that frame. Its own cursor had already covered
   those pixels in the frame being composited, so nothing is lost that the player could have seen,
@@ -3273,15 +3281,29 @@ are untouched.
 
 ### Not closed here
 
-- **On a SHELL frame the cursor is the engine's own again, and that is a named regression.** The
-  cursor's position and sprite were read live out of the graphics globals on the render thread, in
-  play and on the menus alike. They are packet fields now, and the publisher only publishes from
-  the in-play gate — so a shell frame holds the out-of-game packet, `tagpu_gui_cursor_frame`
-  reports no rect, we do not own the cursor and the layer does not erase the engine's. At k = 1
-  that is the same art; at k > 1 it is the engine's 10×20 sprite blown up instead of ours at the
-  device's resolution, which is exactly what §13.5's G17c improved. Closing it needs a channel the
-  shell can publish on, and *never publish outside the `0x4969D2` gate* is one of the plan's own
-  rules — so it is left stated for the landing that builds one.
+- ~~**On a SHELL frame the cursor is the engine's own again, and that is a named regression.**~~
+  **CLOSED 2026-09-13 by landing 6** (`tagpu_packet_pub.c`, the shell cursor channel;
+  [frame packet exchange](frame-packet-exchange.html) §"The shell's channel";
+  `tagpu_engine.h VA_CURSOR_DRAW`). The regression, for the record: the cursor's position and
+  sprite were read live out of the graphics globals on the render thread, in play and on the
+  menus alike; they became packet fields, and the publisher only published from the in-play
+  gate — so a shell frame held the out-of-game packet, `tagpu_gui_cursor_frame` reported no
+  rect, we did not own the cursor, and the layer painted its twin **over** the engine's (the
+  cursor was not degraded, it was gone: measured 2026-09-13 on the main menu, `gui off` presents
+  it at (320,240) and `gui on` does not). The plan's own rule — *never publish outside the
+  `0x4969D2` gate*, because the loader thread owns the per-map arrays during a load — is intact
+  and is why the shell's channel publishes a **header-only** packet: no area, `used_bytes ==
+  sizeof(TAGPU_PACKET)`, so `area_ok` refuses every one of them and the fill reads only the
+  cursor's own words. What closed is the shell's cursor, not the rule.
+  **It is OURS in the shell now** — `curs=1,10x20,drawn=599,warm=1` on the main menu — where
+  before landing 4c it was the engine's sprite at any scale. At `k = 1` the two are
+  byte-identical (measured: the cursor zone differs by 0 px between `gui off` and `gui on`).
+  **The shell's `k ≠ 1` case is NOT separately measured**: the shell runs at 640×480 in a
+  640×480 window here, so `k = 1`, and what the claim above rests on for larger `k` is that the
+  shell now goes through the same `tagpu_gui_cursor_frame` path whose device-size draw was
+  measured at `k = 1.5` and `3` in game (§17). An inference from that measurement, not a second
+  one — and the shell is where a dragged window would put it. The two residuals below are
+  unaffected and still open.
 - **A size-ANIMATED cursor can show one animation step of the engine's own art around ours**, and
   the 120-stop `strict` walk is what measured it. The engine's cursors pulse: `curs=` reports the
   move cursor at 27×27, 29×29, 31×31, 33×33 and 35×35 on landing 3's DLL and on this one alike —
@@ -3298,6 +3320,11 @@ are untouched.
   publishing the cursor's animation extent out of the cursor table — per-process and immutable, so
   a constant once read — and nothing has established that table's shape. Padding by a guess is the
   timing argument `CLAUDE.md` refuses, so this is stated and left, like the shell cursor above.
+  **[CLOSED 2026-09-13 by §24, and not by the bound this bullet asked for:** the owner reported the
+  artifact as a bug ("it leaves a blue ghost behind … the previous cursor image"), and the landing
+  retired the engine's draw instead of bounding a rect around it — a frame of pointer motion is
+  outside *any* rect taken inside `DrawGameScreen`, and the pulse is only the half of it a
+  stationary pointer can still show.**]
 - **The GAF banks' lifetime is still a class, not a proof, for anything but the "fx" bank.** Landing
   4a verified that one is loaded once per process; the cursor table and the UI sprite frames are
   covered by the same `session-reader` line and no note establishes them the same way.
@@ -3306,3 +3333,157 @@ are untouched.
   of the packet's world by whatever the queue held. `gui_flips` in the header is what makes that a
   number rather than an argument; nothing in the twin is world-anchored except the engine's own
   minimap box and dots at 1×.
+
+---
+## 24. The engine's cursor: the BLIT is skipped, not the draw  [MEASURED 2026-09-14]
+
+**THE REPORT.** *"Cursor and arrows seem to work now but when I move my mouse cursor quickly it
+leaves a blue ghost behind … it almost looks like the previous cursor image"*, and from the clip:
+the cursor at rest was clean, every star in motion carried some of its **tips in cyan**. Cyan is
+the terrain key, so what showed was the **engine's own frame** where the composite had discarded,
+and with it the engine's cursor.
+
+**WHY NO RECT COULD HAVE FIXED IT.** §17's erase was the packet's `cur_pos` — read inside
+`DrawGameScreen`, before the engine blits its cursor — so it described the *previous* frame's
+sprite. That leaves two artifacts, and only one needs a moving pointer: one frame of pointer
+motion, and the sprite's **size pulse** (the move cursor cycles 27, 29, 31, 33, 35 — one pixel per
+side per step), which leaves the outermost ring standing even with the pointer still. §17's
+harness walk had measured that second one as 4 magenta pixels at two of forty-five stops.
+
+### 24.0 The first attempt, and why it was withdrawn  [2026-09-13, reverted 2026-09-14]
+
+The first cut suppressed the engine's cursor by putting a flag-gated leaf stub on the whole of
+`0x4C67C0` and `0x4C25E0`: flag set → the function returns at once. It measured well and it was
+wrong in three ways, all found by the landing review before it landed. Recorded because each is a
+trap the next person can walk into:
+
+- **It broke a pairing that lives in the caller.** `0x4C67C0` fills the saved-background
+  descriptor, writes `+0x1B6/+0x1BA`, calls the background SAVE and only *then* blits; its caller
+  restores that background unconditionally afterwards (`0x4C6585`, gated only on `+0x1CE` and
+  `+0x1D2`, never on whether the draw ran). Skipping the function left a restore with no save.
+- **It froze the position words.** `+0x1B6/+0x1BA` are written only by the draw paths, so
+  suppressing all of them stopped them. `fill_cursor` still published that frozen point and the
+  composite still exempted a rect at it — and the rect is non-empty *exactly* when we draw, i.e.
+  exactly when the engine does not. The exemption inverted: it painted our world over the
+  engine's own in-viewport art (a health bar, chat) in a fixed box, for the rest of the level.
+- **It failed CLOSED.** The flag was published from inside `tagpu_gui_present`, and
+  `tagpu_overlay_draw` returns above that call for `tagpu_overlay.off`, for a GL init that failed
+  and for a level teardown. A flag left at 1 across any of those suppressed the engine's cursor
+  while ours was not drawn: **no cursor at all**, with the `tagpu_overlay.off` lever — whose whole
+  job is to hand the frame back to the engine — as the unbounded case.
+
+It also rested on a **fingerprint that does not exist** (that `0x4C25E0` stores the position
+without subtracting the hotspot). It does subtract it; see `exe-reverse-engineering.md`. Nothing
+in that cut established which site draws in play, and the counters offered as proof were behind a
+gate that could not have counted an in-play draw.
+
+### 24.1 The design that shipped: patch the blit `call`
+
+`tagpu_cursown.c`, the fourth own-the-draw module after terrown, featown and fxown, and the
+smallest. It patches **no function** — only the single `call CopyGafToContext 0x4B7F90` inside
+each cursor draw, in all four of them (`0x4C687D`, `0x4C2732`, `0x4C297E`, `0x4C258C`). The stub
+is a flag compare and either `ret 0x10` — the callee's own stdcall pop — or a tail `jmp` to the
+real blit. The patch is **the same length as the instruction it replaces**, so there are no stolen
+bytes, no instruction boundary to land on and no trampoline; this is the shape `tagpu_fxown.c` has
+used since G13, lifted into `tagpu_detour_call_site`.
+
+Everything §24.0 broke stops being reachable rather than being fixed:
+
+- the background **save still runs**, so the caller's restore still pairs;
+- `+0x1B6/+0x1BA` **still track**, so nothing of ours reads a frozen point and the composite's
+  exemption stays where the cursor is;
+- **all four** sites are covered, so "which one draws in play" — the question the first cut got
+  wrong — stops being load-bearing.
+
+**AND IT FAILS OPEN BY CONSTRUCTION.** The answer is a latch in the GL UI module
+(`s_curDrew`, set only at the tail of a successful `sharp_cursor`) that is **taken and cleared**
+once per frame from the **frame bracket in `render_ogl.c`**, next to `tagpu_reclaim_pass_end` —
+the one point every path through `tagpu_overlay_draw` reaches. A frame that returns early, or
+never calls the GL UI at all, answers 0 through the same path as a frame that simply did not draw
+a cursor. The publication cannot be forgotten on a path its author did not know about, which is
+exactly how §24.0 failed.
+
+The latch is still a latch, and that part of §24.0 was right: the engine draws its cursor from
+inside the flip, on another thread, while our present runs, so a flag cleared at the start of a
+present and set at its end leaves a window one present wide in which the engine draws — one
+engine cursor per frame, wearing the counters of a fix (measured 2026-09-13 at 60/s).
+
+**VERIFIED BY RUNNING, on the reference setup, on the binary that ships.** The oracle is the
+engine's **own 8bpp surface** (`tacli shot`), which never contains our GL cursor — so a cursor
+there is the engine's, full stop. A/B by `tagpu_cursown.off`, everything else identical:
+
+| | engine cursor px near the pointer |
+| --- | --- |
+| armed, in game | **0** |
+| `tagpu_cursown.off`, in game | **293** (its 29×29 move cursor) |
+| armed, main menu | the engine's arrow absent — 108 px differ at the pointer, 8 and 0 px away from it |
+
+- **The position words track**: `pmove` to (300,250), (700,500), (850,600), (200,180) gives
+  (300,250), (686,486), (835,585), (183,163) — the offset is the hotspot of the pulsing cursor,
+  13..17 px. Under §24.0 this pair froze.
+- **Fail-open, live**: suppressed → 0 px; `tagpu_overlay.off` created mid-session → the engine's
+  cursor is **back** (289 px); removed → suppressed again (0 px). Under §24.0 the middle state was
+  no cursor at all, for the rest of the session.
+- **No ghost**: four frames across a fast pointer sweep, **0 key-cyan pixels** in the world each.
+- **One cursor, ours**, in game (it moves with the pointer: 348 px and 314 px at two positions)
+  and in the shell after a **level teardown** back to `MAINMENU.GUI 640x480`, with the module
+  still armed.
+
+**NOT CLOSED HERE.**
+
+- **Which of the four sites actually draws, in which mode, is still unknown.** The design no
+  longer depends on it, and `exe-reverse-engineering.md` says so rather than guessing. The oracle
+  that would settle it is the surface A/B above with one site disabled at a time.
+- **One frame with no cursor on a new sprite shape** remains the price of failing open: the frame
+  whose draw is atlas warm-up has neither. It is visible in the measurements above — the first
+  surface shot of a fresh level read 293 px because the flag was still 0 and the engine correctly
+  drew its own.
+- **Two of the four sites are patched without ever having been seen to run.** `0x4C2870` early-outs
+  while the mouse thread is up (`cmp [+0x1CE], 1`) and `0x4C24B0` has no call site at all. Both are
+  covered because "cannot run" is a claim about a configuration — the mouse thread can be down —
+  and the cost of being wrong about one is a second cursor. They are patches with no test behind
+  them, and that is stated rather than dressed up.
+- **The GAF cursor table's lifetime** is §23's open item and is unchanged by this.
+- **`cursorscale=`** stays what §17 leaves it: implemented, clamped, and the escape for a 3x UI at
+  4K. The default is 1 — one device pixel per sprite pixel, which is what a 1024x768 window at
+  `k = 1` delivers. Nothing scales the cursor with the HUD.
+
+### 24.2 The other cyan: the cursor's restored colour  [MEASURED 2026-09-13]
+
+**A SECOND REPORT, on the first fix:** *"The Move cursor, the reclaim cursor exhibit the same
+clear artifact as the mouse cursor did but only once at the start of the game when we first use
+the move cursor for the first time and then just for a few seconds."*
+
+**It is not the engine's cursor.** With `nocursor` armed the engine's own is on screen every
+frame and it looks like this: the sprite in its **palette** colours, a green four-pointed star.
+The artifact is the same silhouette in **flat cyan**, which no palette path can produce.
+
+**MEASURED** at `maxfps 6`, where a frame is 166 ms and a burst of `tacli glshot` can catch a
+transient: of the three presents after a first move-cursor use that carried a cursor, **two drew
+the whole sprite in flat cyan — 293 and 321 texels, every one exactly (0,255,255)** — the third in
+the palette's colours. A second run: 2 of 3. Ten seconds later the same position is clean. (A
+correct cursor carries four cyan pixels at its outer tips; the count is what separates them.)
+
+**THE A/B THAT NAMES THE BRANCH:** `norestore` in `tagpu_gui.on` makes `s_colValid` 0 so `CURS_FS`
+cannot take the twin branch (`uAtlasRGB`, the Classic++ restored colours). Same trigger, eight
+presents, **none cyan**.
+
+**THE FIX** is one line — `glUniform1i(s_uCursRestored, 0)` in `sharp_cursor`. The cursor resolves
+through the presented palette and never through the twin: the rule `LAY_FS` resolves every other
+engine pixel with, the colour the engine's own cursor has, and §13.5's own argument (a cursor that
+differs from the panel under it shows). Verified: ten presents, none cyan past the sprite's own
+four tip pixels.
+
+**THE MECHANISM IS NOT IDENTIFIED, and an earlier draft of this section asserted one.** It said a
+newly inserted atlas entry samples a twin cell its predecessor had painted. The code contradicts
+that: `job_new` clears the twin to alpha 0 and `atlas_drop`/`atlas_repack` call
+`tagpu_rglsl_job_clear` → `prepare_dest(clear = 1)` synchronously, so a fresh cell reads `a == 0`,
+`t.a > 0.5` fails, and the palette branch was already being taken. What is established is the
+measurement and the `norestore` A/B; what is not is how a cell came to hold opaque cyan. The
+window to look at is the one thing that writes alpha 1 into a cell — `OUT_FS`'s
+`k = clamp(palette − net)`, whose channels saturate independently — against a source rect that may
+have been re-used between enqueue and the OUT pass.
+
+**NOT CLOSED HERE.** Whether any *other* atlas (unit, feature, effects, terrain) can show the same
+thing is unmeasured, and with the mechanism unidentified it cannot be argued either way. A
+cursor-local fix does not reach them; nothing says one is needed.

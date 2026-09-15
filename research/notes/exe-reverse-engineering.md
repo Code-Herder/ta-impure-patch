@@ -2093,6 +2093,100 @@ transformed `u`: the sprite tracked `u` across the frame at 4× the pointer's sp
 left edge. `0x4C2380` — which the previous pass listed as the record-drawing path — is **DEAD**
 (zero `call` sites, literal absent); `0x4C67C0` is the live one.
 
+**`0x4C67C0` IS THE SHELL'S PUBLISH POINT — observed since 2026-09-13** (`tagpu_packet_pub.c`,
+the shell cursor channel; the *why* is the frame packet's: the GL UI layer needs the drawn
+cursor's rect on every frame it composites, and the packet's in-play gate never runs in the
+shell). **Its cursor BLIT — the `call` at `0x4C687D`, not this function — is one of the four `tagpu_cursown.c` skips (GUI renderer §24.1).** A flag-gated leaf on the whole function was tried on 2026-09-13 and withdrawn: this function's caller restores the background it saves, unconditionally, so taking it over unpaired the restore and froze `+0x1B6/+0x1BA`. Full prologue `56 8B 74 24 08 8B 86 CE 01 00 00` — `push esi; mov esi,[esp+8]; mov
+eax,[esi+0x1CE]` — 11 bytes, resuming at `0x4C67CB`; `stdcall(globals, surface)`, `ret 8`, so
+`entry_esp[1]` is `*(0x51FBD0)` itself. **The three early-out words are the gate an observer must
+reproduce**: `+0x1CE` then `+0x1D2` then `+0x1B2`, each `test`ed against zero with a jump to the
+shared exit at `0x4C6883` ([VERIFIED by disassembly of the pristine exe, 2026-09-13] — the
+`objdump -d -M intel --start-address=0x4C67C0 --stop-address=0x4C6890` above). **It runs on every
+present, in the shell too**: 40 663 entries in the first ~8 s of a main-menu session on the
+reference setup, ~5 000/s, with all three words non-zero and `+0x1B6/+0x1BA` equal to
+`+0x196/+0x19A` at a pointer over the window [MEASURED 2026-09-13].
+
+**But AT MOST once per present, not exactly once — three exits leave before the call.** The
+DirectDraw arm skips `0x4C6544` at `0x4C666A` (no primary, `[+0xDC] == 0`), at `0x4C67B0` (the
+back buffer's size disagrees with the screen's) and at `0x4C65A0` (`Lock` failed — the
+DDERR_SURFACELOST arm), and on those presents the engine draws no cursor at all. An observer on
+this site therefore sees nothing on them, which is the one gap a hook here cannot close: the flip
+that would report "this present happened, without a cursor" is exactly the site the chain rule
+refuses.
+
+**THE ORDERING THAT MATTERS TO AN OBSERVER: `+0x1B6/+0x1BA` are written INSIDE this function**,
+at `0x4C683C` and `0x4C684E`, as `movsx` of the hotspot (`record+0x4`/`+0x6`, SIGNED — a build
+cursor's hotspot is routinely negative) subtracted from `+0x196`/`+0x19A`. So at its ENTRY those
+two words hold what the *previous* draw left — a whole frame stale whenever the pointer moved —
+and only its exit has this frame's position. An observer that needs the drawn rect must hijack
+the return (`after`), not read at entry. The other three draw paths (`0x4C2870`, `0x4C24B0`,
+`0x4C25E0`) write the same pair, from their own poll's answer rather than from `+0x196`.
+
+**`+0x1B6/+0x1BA` MEANS THE SAME THING ON EVERY PATH: the drawn origin, i.e. the mouse record
+MINUS the sprite's hotspot.** *[CORRECTED 2026-09-14. A revision of 2026-09-13 claimed the
+opposite — that `0x4C25E0` stored the poll's raw answer where the flip's draw subtracted the
+hotspot — and built a "fingerprint" on it that was then used to identify which site draws in
+play and to explain why the composite's erase rect was a hotspot's width out. **All of it was
+false, and it replaced a line that had been right.** `0x4C25E0` subtracts the hotspot at
+`0x4C2638` (`sub edi,edx`) and `0x4C2645` (`sub ebx,ecx`), after `movsx`-ing `record+4`/`record+6`
+at `0x4C2630`/`0x4C2634`; `edi`/`ebx` are untouched from there to the stores at
+`0x4C284C`/`0x4C2852`. `0x4C2870` does the same at `0x4C28D4`/`0x4C28E0`. Verified twice: by the
+disassembly above, and live — with the engine's draws skipped at the blit only, the pair reads
+13..17 px off `+0x196/+0x19A`, which is precisely the hotspot of the move cursor at its 27..35 px
+pulse sizes.]* There is therefore **no way to tell the sites apart from the value of this pair**,
+and any future attempt to attribute a drawn cursor to one of them needs a different oracle — the
+one that worked is the engine's own surface (`tacli shot`, which never contains our GL cursor),
+with each site's blit disabled in turn.
+
+### `0x4C25E0` — the body of the engine's MOUSE THREAD, and one of four cursor blits
+
+[MEASURED 2026-09-14, disassembly of the pristine exe plus live A/B on the reference setup.
+This section replaces one written 2026-09-13 that called this function "the cursor draw that
+actually runs in play" and "the mouse object's per-frame update". Both were wrong, and the
+second was wrong in a way that hid the first.]
+
+`stdcall(mouseObj)`, `ret 4` (epilogue `0x4C2864`), prologue `83 EC 58 56 8B 74 24 60`. Two
+early-outs to `0x4C2860`: `test [+0x1D2]` zero, and the context acquire `0x4C5FF0` answering
+zero. Past them: `GetCursorPos` (IAT `0x4FC2E4`), write the RECORD `+0x196/+0x19A` from that
+answer, subtract the hotspot into `edi`/`ebx`, fill the saved-background descriptors at `+0x1C2`
+and `+0x1C6`, **blit the sprite at `0x4C2732` into the private context `[obj+0x1C6]`** (not the
+screen), and store `+0x1B6/+0x1BA`.
+
+**IT IS A THREAD ENTRY'S CALLEE, NOT A PER-FRAME UPDATE.** Its one caller is `0x4C2A0D`, inside
+`0x4C2990` — and `0x4C2990` is never `call`ed anywhere, because it is *started*:
+`0x4C2A8B` pushes it as the entry point, with a 0x8000 stack and the object as its argument, to
+`0x4B6B20` at `0x4C2A9A` (a three-argument forwarder to `0x4E77D0` — `_beginthread`). The handle
+is stored at `[obj+0x1CA]` and `[obj+0x1CE]` is set to **1** at `0x4C2AAE` on success, cleared at
+`0x4C2C72`. So `+0x1CE` means **"the mouse thread is running"**; this page previously called it
+"an engine display-mode word, not ours to flip" and `tagpu_engine.h` called it "the cursor's hide
+counter". Anything of ours that runs at this site runs **on that thread**, not on the game thread.
+
+**THE PREVIOUS PASS'S IDENTIFICATION WAS NOT EVIDENCE.** It rested on the hotspot "fingerprint"
+corrected above, which does not exist, and on counters that were gated behind
+`s_retDepth == 0 && !s_levelOpen` and so could not have counted an in-play draw whatever
+happened. **Which of the four paths draws in a given mode is still not established here**, and
+the module that takes the cursor over stopped needing to know: `tagpu_cursown.c` patches the blit
+`call` in all four.
+
+**THE FOUR CURSOR BLITS.** Every one of these functions contains exactly one
+`call CopyGafToContext 0x4B7F90`, and they are the only cursor blits in the image:
+
+| in | blit | its background save | notes |
+| --- | --- | --- | --- |
+| `0x4C67C0` (the flip's draw) | `0x4C687D` | `0x4C6862` | the blit is the last instruction before the epilogue |
+| `0x4C25E0` (the mouse thread) | `0x4C2732` | — (descriptors at `+0x1C2`/`+0x1C6`) | blits into `[obj+0x1C6]` |
+| `0x4C2870` | `0x4C297E` | `0x4C2937` | first gate **is** `cmp [+0x1CE], 1` — `0x4C287D` loads `edi = 1`, `0x4C2882` compares against it, `0x4C2888` exits when equal — so it early-outs for as long as the mouse thread is up, whatever its callers do; second gate is a decrement of `+0x1AE`. Its in-play callers (`0x46A3C7`, `0x496A8C`, `0x498434`) are real but reach a function that returns. *[This row said the opposite for one revision on 2026-09-14 — a "correction" that reversed a claim which had been right. Patched anyway: with the mouse thread DOWN, `+0x1CE == 0` and this is a live draw path.]* |
+| `0x4C24B0` | `0x4C258C` | `0x4C256A` (`0x4CBBE0` into `+0x1BE`; `0x4C24DE` is the `GetCursorPos`, not the save) | no call site and no literal found. Patched anyway — "no caller in the image" was also true of `0x4C2990`, which is a thread entry |
+
+**THE SAVE/RESTORE PAIRING IS THE REASON THE BLIT IS THE PATCH POINT.** `0x4C67C0` is not a
+self-contained draw: it fills the descriptor, writes the position pair, calls the background SAVE
+and only then blits — and **its caller restores that background unconditionally afterwards**
+(`0x4C6585`, reached whenever `+0x1CE` and `+0x1D2` are non-zero at `0x4C6558`/`0x4C6565`, with no
+test of whether the draw ran). Taking the whole function over therefore leaves a restore with no
+save to pair against and freezes `+0x1B6/+0x1BA` for every consumer; taking the `call` over leaves
+every one of those side effects running. [VERIFIED 2026-09-14: with the blit patched the pair
+still tracks the pointer to the pixel, where under the function-level patch it froze.]
+
 **`main+0x2C76` — the record the game actually acts on.** Filled once per mouse dispatch by the
 routine that ends at `0x499A2A`:
 
@@ -2671,6 +2765,17 @@ HotUnits cull `0x48BAE0`) and `0x495E66` (`DrawGameScreen(1, 1)`, once, at the e
 calls the flip itself. The scenario applier's tick stub lands its `jmp` AT `0x4969D2` while a
 scenario is being applied (`tagpu_scenario.c`, stolen `A1 E8 1D 51 00`): that changes the bytes
 there, not the return address the call pushed, so the gate holds with it installed.
+
+**THE SHELL HAS NO DRAWGAMESCREEN CALL, SO IT HAS NO RETURN ADDRESS TO GATE ON — and the flip
+cannot stand in for one [VERIFIED 2026-09-13].** `tagpu_gui_hook` already observes `0x4C63A0`
+with an `after` (it hijacks the return to close its census), and `tagpu_detour_observe` refuses
+to chain onto a stub that hijacks (tagpu_detour.h, THE CHAIN RULE) — nor can the packet's
+observer be installed first, because `tagpu_gui_init` runs before `tagpu_packet_pub_init` in
+`dllmain.c`. The shell's publish point is therefore the cursor draw the flip makes, `0x4C67C0`
+(above): unowned, once per present, and the only thing there that writes the rect the GL UI
+layer needs. **The gate that makes it the shell's and not the game's is `s_retDepth == 0`** —
+the cursor draw runs inside `DrawGameScreen`, so on an in-play frame the observer's own hijack
+of that call is on the stack (landing 6).
 
 **The commands, applied in `before` [landing 2, 2026-09-12].** The same observer's `before`, on
 the same in-play gate, is where every engine word the zoom used to write from the render thread

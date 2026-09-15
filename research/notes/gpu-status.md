@@ -894,6 +894,8 @@ sees only the blits that really draw. Full argument lists, boxes and evidence: t
 | VA | What it is | Stolen | Observer records |
 |---|---|---|---|
 | `0x4C63A0` | `FlipOffscreenToPrimary` — the engine's "this frame is complete"; the census runs here | 6 | the frame marker; diffs `*(globals+0xBC)` and every surface an op named |
+| `0x4C67C0` | the cursor draw **inside** the flip (`stdcall(globals, surface)`, `ret 8`), the shell's publish point since landing 6 — **its own observer, in `tagpu_packet_pub.c`**, not this census. The function itself is UNPATCHED: since 2026-09-14 `tagpu_cursown.c` skips only the `call` at `0x4C687D` that blits the sprite, so the observer, the background save at `0x4C6862` and the `+0x1B6/+0x1BA` writes all still run (a leaf on the whole function was tried on 2026-09-13 and withdrawn — GUI renderer §24.0) | 11 | the drawn cursor: `+0x1B2` the record, `+0x1B6/+0x1BA` the position it just wrote. Publishes a header-only `in_game = 0` packet with `cursor_live = 1` when the three early-out words hold, and `cursor_live = 0` when they do not — gated on `s_retDepth == 0`, i.e. **not** inside an in-play draw |
+| `0x4C25E0` | the body of the engine's **mouse thread** (`0x4C2990` is its entry, started by `_beginthread` at `0x4C2A9A` — which is why no `call 0x4C2990` exists); `stdcall(mouseObj)`, `ret 4`. Unpatched as a function; its cursor blit `0x4C2732` is one of the four `tagpu_cursown.c` skips | 8 | nothing — no observer, it is not a channel site. It writes `+0x196/+0x19A` and `+0x1B6/+0x1BA`, the latter as position **minus the hotspot**, exactly as `0x4C67C0` does [CORRECTED 2026-09-14: this row claimed the opposite and called it a fingerprint] |
 | `0x4B7F90` | `CopyGafToContext(ctx, frame, x, y)` — **chained onto fxown's stub** | 6 | a sprite box at `(x−HotX, y−HotY)`, clipped |
 | `0x4B8500`, `0x4B8310` | the shaded blit and DrawText's alternate blit, same shape | 6 | same |
 | `0x4C6D20` | descriptor blit `(ctx, desc, src, dst)` — listbox, textfield | 7 | `*dst` |
@@ -2869,8 +2871,12 @@ word. It found **three more, all confirmed**, and they are the reason that pass 
 
 It also caught the cursor rect's **fourth** outcome, which finding 11's fix had collapsed: a
 readable sprite record of zero extent gives the position with a zero size, not "no rect". Making
-that exact meant gating on `in_game`, which surfaced the one thing this landing does not close —
-**on a shell frame the cursor is the engine's own again**, named above.
+that exact meant gating on `in_game`, which surfaced the one thing this landing did not close —
+**on a shell frame the cursor is the engine's own again**, named above. **Closed 2026-09-13 by
+landing 6** (`tagpu_packet_pub.c`, the shell cursor channel, observed on the flip's cursor draw
+`0x4C67C0`): the gate is `in_game || cursor_live` now, and the shell publishes its own
+header-only packet. Measured on the main menu: `curs=1,10x20,…`, and the cursor's zone is
+**0 px different** between the layer on and the layer off.
 
 **One finding was rejected, and here is why.** The producer publishes glyphs for `0x20..0xFF` and
 the reviewer observed that `0x4CCF60` refuses only `0x00` and `0x0A`, so `0x01..0x1F` could in
