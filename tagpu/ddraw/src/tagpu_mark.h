@@ -41,6 +41,15 @@
 #include "tagpu_fx.h"
 
 int  tagpu_mark_armed(unsigned frame_counter);   /* re-reads tagpu_mark.on (30f) */
+
+/* Is the CURSOR LAYER ours this frame — the build placement square, the drag
+   band box and the pointer? Exactly gather_cursor's own gate (the lever, its
+   `nocursor` token, passive mode, and whether the engine's own draw is
+   actually redirected). A client that draws a twin of anything in that layer
+   must ask THIS rather than re-derive it: the build ghost is the twin of the
+   placement square, and when the two disagreed the ghost tracked the pointer
+   over the engine's unzoomed square. */
+int  tagpu_mark_cursor_ours(void);
 /* build this frame's health-bar quads; returns the number of bars. Also runs
    the order-marker gather (tagpu_order.c), which emits through the two
    functions below — that pass's geometry belongs in THIS pass's buckets,

@@ -593,6 +593,18 @@ static void put_outline(int* nv, int l, int t, int r, int b, int col,
     put_bar(nv, r, t, r, b, col, wx, wz);          /* right  */
 }
 
+/* Does the cursor layer belong to US this frame? This is the ONE place that
+   question is answered: gather_cursor asks it, and so does every client that
+   draws a twin of something in that layer. Folding `tagpu_markown_installed()`
+   in matters as much as the lever bits — without the redirect the engine is
+   still drawing its own pair, and ours would be a second, differently placed
+   one, so the honest answer there is "not ours" and the caller refuses rather
+   than doubles. */
+int tagpu_mark_cursor_ours(void)
+{
+    return s_armed == 1 && s_cursor && !s_passive && tagpu_markown_installed();
+}
+
 /* the build-cursor footprint and the drag band box — the whole of
    `0x469DB4..0x469F23`, transcribed in the header comment */
 static void gather_cursor(const TAGPU_FXVIEW* v)
@@ -603,7 +615,16 @@ static void gather_cursor(const TAGPU_FXVIEW* v)
        the draw that is about to use them. The rect the engine can NAME comes
        from the packet too (landing 2): the field 0x37E27 as the game thread
        left it after its own widening — inclusive L, T, R, B, exactly what
-       IsPositionInRect tests against. */
+       IsPositionInRect tests against.
+
+       THE GATE IS tagpu_mark_cursor_ours(), NOT AN OPEN-CODED COPY OF IT, so
+       that a client drawing a twin of the build square cannot arm on a
+       different answer than the square itself. The build ghost is that client
+       (tagpu_native.c, ghost_pass) and until 2026-09-14 it asked none of these
+       questions: with the marker pass off, or `mark.on=nocursor`, the
+       translucent building tracked the pointer while our square did not, and
+       the engine's own square is drawn at its UNZOOMED 1x projection, so at
+       any zoom != 1 the two were in different places. */
     const TAGPU_PACKET* pk = v->packet;
     const unsigned char* gui;
     const int* vp = pk ? pk->vp_addr : NULL;
@@ -611,12 +632,9 @@ static void gather_cursor(const TAGPU_FXVIEW* v)
     float wx, wz;
 
     s_ncurs = 0;
-    if (s_armed != 1 || !s_cursor || s_passive) return;
+    if (!tagpu_mark_cursor_ours()) return;
     if (!pk || !vp) return;
     gui = pk->gui_col;
-    /* Without the redirect the engine is still drawing its own pair and ours
-       would be a second, differently placed one. Refuse rather than double. */
-    if (!tagpu_markown_installed()) return;
 
     fl   = pk->region_flags;
     mode = pk->cursor_mode;

@@ -69,6 +69,16 @@ things remain from the original plan:
   authoring guide: [model import](model-import.html); **(c)** true-colour and translucent
   materials, which is the part of the stated purpose the palette-index path does not reach at
   all.
+- **Ray tracing is out of reach while the renderer is in-process** [MEASURED 2026-09-15].
+  Not a limit of our code: NVIDIA's 32-bit ICD does not advertise
+  `VK_KHR_acceleration_structure` / `ray_tracing_pipeline` / `ray_query` /
+  `deferred_host_operations` at all, and our renderer is a 32-bit DLL inside `TotalA.exe`. The
+  same probe in a 64-bit process on the same card and driver has all four. Bitness is the only
+  variable that moves it, across two wine versions, with the llvmpipe software device as the
+  control. Choosing *which* GPU renders is NOT affected — 32-bit Vulkan enumerates both devices
+  and flags the discrete one — so that stays reachable from the DLL as it stands. The table, the
+  control and what it does not establish: [field notes](field-notes.html), "Environment &
+  toolchain"; the probe is `tools/vkprobe.c`.
 - **G9 — the MP-safety replay byte-diff.** Mostly formalisation now: 200v200 measures 59.7 fps
   and every hook is read-only over the sim, but this is the gate that *proves* the native stack
   is sim-neutral, and the byte-diff needs an unlocked session. It has been deferred several
@@ -894,7 +904,7 @@ sees only the blits that really draw. Full argument lists, boxes and evidence: t
 | VA | What it is | Stolen | Observer records |
 |---|---|---|---|
 | `0x4C63A0` | `FlipOffscreenToPrimary` — the engine's "this frame is complete"; the census runs here | 6 | the frame marker; diffs `*(globals+0xBC)` and every surface an op named |
-| `0x4C67C0` | the cursor draw **inside** the flip (`stdcall(globals, surface)`, `ret 8`), the shell's publish point since landing 6 — **its own observer, in `tagpu_packet_pub.c`**, not this census. The function itself is UNPATCHED: since 2026-09-14 `tagpu_cursown.c` skips only the `call` at `0x4C687D` that blits the sprite, so the observer, the background save at `0x4C6862` and the `+0x1B6/+0x1BA` writes all still run (a leaf on the whole function was tried on 2026-09-13 and withdrawn — GUI renderer §24.0) | 11 | the drawn cursor: `+0x1B2` the record, `+0x1B6/+0x1BA` the position it just wrote. Publishes a header-only `in_game = 0` packet with `cursor_live = 1` when the three early-out words hold, and `cursor_live = 0` when they do not — gated on `s_retDepth == 0`, i.e. **not** inside an in-play draw |
+| `0x4C67C0` | the cursor draw **inside** the flip (`stdcall(globals, surface)`, `ret 8`), the shell's publish point since landing 6 — **its own observer, in `tagpu_packet_pub.c`**, not this census. The function itself is UNPATCHED: since 2026-09-14 `tagpu_cursown.c` skips only the `call` at `0x4C687D` that blits the sprite, so the observer, the background save at `0x4C6862` and the `+0x1B6/+0x1BA` writes all still run (a leaf on the whole function was tried on 2026-09-13 and withdrawn — GUI renderer §24.0) | 11 | the drawn cursor: `+0x1B2` the record, `+0x1B6/+0x1BA` the position it just wrote. Publishes a header-only `in_game = 0` packet with `cursor_live = 1` when the three early-out words hold, and `cursor_live = 0` when they do not — gated on **two** tests, `s_retDepth == 0` **and** `!s_levelOpen`. `s_retDepth == 0` alone is NOT the complement of the in-play gate: `0x495E66` calls `DrawGameScreen` and returns to `0x495E6B`, not the in-play `0x4969D2`, so a screenshot draw is in-play with `s_retDepth == 0`; `!s_levelOpen` is what keeps this channel out of a level. This row said "i.e. not inside an in-play draw" until the 2026-09-14 review — the code has always had both tests |
 | `0x4C25E0` | the body of the engine's **mouse thread** (`0x4C2990` is its entry, started by `_beginthread` at `0x4C2A9A` — which is why no `call 0x4C2990` exists); `stdcall(mouseObj)`, `ret 4`. Unpatched as a function; its cursor blit `0x4C2732` is one of the four `tagpu_cursown.c` skips | 8 | nothing — no observer, it is not a channel site. It writes `+0x196/+0x19A` and `+0x1B6/+0x1BA`, the latter as position **minus the hotspot**, exactly as `0x4C67C0` does [CORRECTED 2026-09-14: this row claimed the opposite and called it a fingerprint] |
 | `0x4B7F90` | `CopyGafToContext(ctx, frame, x, y)` — **chained onto fxown's stub** | 6 | a sprite box at `(x−HotX, y−HotY)`, clipped |
 | `0x4B8500`, `0x4B8310` | the shaded blit and DrawText's alternate blit, same shape | 6 | same |
@@ -1357,6 +1367,7 @@ the parsers, the polls, the `*own` install-at-attach rule.
 | `tagpu_feat.on`, `tagpu_featown.on` | | `featown` with `feat` |
 | `tagpu_fx.on`, `tagpu_sfx.on`, `tagpu_fxown.on` | | `fxown` with `fx` or `sfx` |
 | `tagpu_mark.on`, `tagpu_markown.on`, `tagpu_order.on` | | `markown` with `mark` |
+| `tagpu_ghost.on` | | `native` |
 | `tagpu_zoom.on`, `tagpu_vpwide.on` | | `vpwide` with `zoom` |
 | `tagpu_gui.on`, `tagpu_classicpp.on`, `tagpu_weapons.on` | | |
 
@@ -2589,6 +2600,7 @@ consistent pair could name memory just freed ([cross-thread engine reads](cross-
 | `tagpu_sfx.c` | the particle table, walked by layer because the layer IS the draw depth (0..6 before the projectiles, 7..9 after the explosions). Also **off the allow-list** | render |
 | `tagpu_gaf.c` | gained `tagpu_gaf_frame_geom` / `_subframe`, so a pass that only PLACES a sprite dereferences no engine byte of its own; the publisher calls its resolvers on the game thread | both |
 | `tagpu_fxown.c` | the render thread's standing request for the tables (`want`), with the same 90-frame watchdog the two skip bytes stand on: an unarmed pass costs the publisher nothing | both |
+| `tagpu_native.c` | **`g_wantBuilds`** [2026-09-14] — the BUILD GHOST's standing request for the packet's builds table, the same pattern: written by the render thread from the ghost's own 30-frame poll (`tagpu_native_set_want_builds`), read by the game thread in `fill_builds`, which otherwise walks the order arena and copies up to `TAGPU_PK_MAX_BUILDS * 16` B into the packet every frame for a pass that may not exist. Its 90-frame watchdog is `tagpu_native_flush_want`, driven from `tagpu_overlay.c`'s unconditional flush run — deliberately NOT from the setter, where the first version put it and where it could not see the one case it was for (a render thread that stops calling: a refused driver returns in front of the poll). The table is therefore CONDITIONAL; `tagpu_pk_builds()` returns NULL at `n_builds == 0` and every consumer loops to `n_builds`, so an absent table reads as an empty one | both |
 
 **Three bounds became the engine's own, by disassembly** ([engine map](exe-reverse-engineering.html),
 "The effects: the four per-frame arrays"). `0x499A30` allocates the projectile array as `0x7D64`
@@ -2896,7 +2908,7 @@ pre-landing-3 design, changed by landing 3's own review, with the text left behi
 it and reported a defect that is not in the code, which is the cost of a stale comment stated as a
 measurement.
 
-### 2.23 The build ghost (`tagpu_native.c`, OFF by default, `tagpu_ghost.on`) — 2026-09-12
+### 2.23 The build ghost (`tagpu_native.c`, a play default since 2026-09-14, `tagpu_ghost.on`) — 2026-09-12
 
 A translucent copy of the building under the placement cursor and of every queued build the order
 pass is showing a site rect for, drawn through the posed program in the **model's own colours**
@@ -2938,14 +2950,26 @@ whose DATA arrives entirely in the frame packet.
   blend, and the model's own colours pass through; the only per-unit field it adds is the
   ordinary `alpha`. (The 2026-09-12 tint cut removed `uGhost`/`uGhostTint` again, so
   `tagpu_native_unit_fs` is back to the shape it had before the feature.)
+- **The piece walk's provenance, now that the ghost is a default.** `ghost_pieces` carries no
+  per-node readability probe, on `aabb_walk`'s argument and by its lifetime (the level, under
+  `tagpu_reclaim`'s teardown wrap). One difference from `aabb_walk` is worth stating rather than
+  leaving to be found: `aabb_walk` walks the template of an INSTANTIATED unit, while
+  `ghost_pieces` walks `mptrs[mid]` for any `mid` the caller's `mid < udef_count` bound admits —
+  a def the player can select to build but whose model slot this level may never have
+  instantiated. The slot is guaranteed non-NULL by that bound; that it is *walkable* is inferred
+  from the engine's own unconditional walk at `0x4CB650`, not measured for a never-instantiated
+  def. [Named by the 2026-09-14 landing review; no fault observed in 57 480 walks.]
 - **The lever.** `tagpu_ghost.on` (tokens: `alpha=<f>`, default 0.40), re-read on the pass's own
   30-frame poll; the armed line and the `ghost: curs= queue= drawn= nobake= trunc= alpha=`
   heartbeat log only on change / every 300 frames. `nobake` and `trunc` must stay 0. **It needs
   `tagpu_native.on`** — the ghost draws through the unit pass's view and program — and says so:
   armed without it the log reads `ghost: off — needs tagpu_native.on (it draws through the unit
-  pass)` and the pass declines. It is deliberately **not** a play default, so it cannot carry a
-  `needs` column in `tagpu_opt.c` (that table is the default set) and says the same thing at
-  runtime instead.
+  pass)` and the pass declines. **Since 2026-09-14 it IS a play default** and carries `needs
+  tagpu_native.on` in `tagpu_opt.c`'s table, so the table withholds the default when the unit
+  pass is off. The runtime refusal above stays, and is not redundant: `needs` governs the
+  DEFAULT, not the lever, so a hand-written `tagpu_ghost.on` file arms the pass whatever the
+  table says. Turn it off with `tagpu_ghost.off`, or with `tagpu_defaults.off` for the whole
+  table.
 - **The review's fourteen findings (2026-09-12, xhigh, one reviewer) — what changed.** The pass
   now checks its two prerequisites every frame (the posed program live; `s_pv` THIS frame's,
   stamped when the unit pass fills it) instead of assuming them; it re-binds the posed program's

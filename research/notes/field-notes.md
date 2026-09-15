@@ -37,6 +37,55 @@ lock-screen gotcha below.
 
 ## Environment & toolchain
 
+- **2026-09-15 — Vulkan ray tracing is gated on BITNESS, not on wine: a 32-bit process never
+  reaches it.** [MEASURED] The question was whether the renderer could stay where it is — inside
+  `TotalA.exe`, a 32-bit DLL — and still reach `VK_KHR_ray_tracing_pipeline`. It cannot.
+  `tools/vkprobe.c` enumerates every Vulkan device and reports the extensions that decide it;
+  built for both bitnesses and run under each runtime, on the reference setup's RTX 4070, the
+  same driver throughout:
+
+  | runtime | bitness | device extensions | RT set | `VK_KHR_external_memory_win32` |
+  |---|---|---|---|---|
+  | system wine 9.0 | 32 | 186 | **no** | no |
+  | system wine 9.0 | 64 | 201 | **yes** | no |
+  | Proton Experimental 11.0 (wine 11.0) | 32 | 247 | **no** | yes |
+  | Proton Experimental 11.0 (wine 11.0) | 64 | **264** | **yes** | yes |
+  | native linux, no wine | 64 | 275 | yes | n/a — a win32-only extension |
+
+  "RT set" is all four of `VK_KHR_acceleration_structure`, `VK_KHR_ray_tracing_pipeline`,
+  `VK_KHR_ray_query` and `VK_KHR_deferred_host_operations`; they are present together or not at
+  all. Inside each wine it is a clean 2x2 — **bitness is the only variable that flips it** — and
+  two wine versions six years apart agree.
+
+  **The control that makes it conclusive.** The absence could have been wine filtering the
+  extension list rather than the driver withholding it. It is not: in the *same* 32-bit process
+  that reports the 4070 without RT, the llvmpipe software device reports all four as present. The
+  32-bit path carries RT extensions when the ICD offers them, so NVIDIA's 32-bit ICD is simply not
+  offering them. `VK_KHR_buffer_device_address` — the 64-bit address plumbing the RT extensions
+  rest on — is present at 32-bit in every run, so the gate is the RT extensions themselves and not
+  the addressing underneath them.
+
+  **What this does NOT establish.** Every row is the linux NVIDIA ICD. Windows' own 32-bit ICD was
+  not tested, so "32-bit gets no RT on windows either" is an inference from the linux driver and
+  not a measurement. That is the one cell a windows box would close.
+
+  **Consequences.** (a) Any ray-tracing work requires the renderer to leave `TotalA.exe` for a
+  64-bit process; no amount of effort reaches it in-process. (b) 32-bit Vulkan itself is healthy —
+  it enumerates both devices and flags the 4070 `VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU` — so
+  *choosing* which GPU renders needs no such move, and is reachable from the DLL as it stands.
+  (c) Proton is the stronger testbed: 63 more extensions than system wine at 64-bit, and
+  `VK_KHR_external_memory_win32`, which system wine lacks at **both** bitnesses, exists only
+  there — so any design that shares a surface between two processes has no fallback on wine 9.0.
+  The dev loop currently builds prefixes with system wine 9.0, whose 32-bit path is the weakest
+  environment in the table.
+
+  Re-run it rather than trusting the table; drivers change, which is why it is dated. The probe
+  needs no Vulkan SDK — a mingw cross compiler is enough — and prints its own pointer size first,
+  so the build under test is never in doubt. Two traps are recorded in its header comment: Vulkan
+  is `__stdcall` on win32 (getting that wrong corrupts the stack on the 32-bit build *only*, and
+  reads as "32-bit Vulkan is broken"), and calling `malloc` without `<stdlib.h>` truncates the
+  returned pointer to `int` on the 64-bit build *only*, which is invisible at 32-bit.
+
 - **2026-08-31 — Runtime confirmation of the DLL slots (baseline, wine `+loaddll`).** Launching
   `wine TotalA.exe` directly (NOT via `explorer /desktop`, which swallowed the child window) boots
   cleanly: exe loads at base `0x400000`, then `DDRAW.dll` loads **builtin** (wine's) — that is the

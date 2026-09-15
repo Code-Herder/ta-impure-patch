@@ -1459,7 +1459,15 @@ static TAGPU_PK_BUILD s_builds[TAGPU_PK_MAX_BUILDS];
 static unsigned fill_builds(TAGPU_PACKET* p, unsigned* cursor)
 {
     unsigned e, need = *cursor;
-    int n = tagpu_order_copy_builds(s_builds, TAGPU_PK_MAX_BUILDS);
+    int n;
+    /* GATED ON THE ONLY PASS THAT READS IT, like the effect tables above. The
+       walk and the copy below are pure cost to a session with no build ghost,
+       which was every session before 2026-09-14 and is still any session that
+       turns it off. `tagpu_native_want_builds()` is the ghost's own 30-frame
+       poll, published from the render thread; being a frame late either way
+       costs one frame of an unused or an empty table. */
+    if (!tagpu_native_want_builds()) return need;
+    n = tagpu_order_copy_builds(s_builds, TAGPU_PK_MAX_BUILDS);
     if (n <= 0) return need;
     e = append_table(p, cursor, s_builds, (unsigned)n, (unsigned)sizeof(TAGPU_PK_BUILD),
                      &p->off_builds, &p->n_builds, TAGPU_PK_TRUNC_BUILDS);
@@ -2074,18 +2082,37 @@ static unsigned fill_shell(TAGPU_PACKET* p, void* ctx)
 {
     const char* ta = ta_main();
     int live = *(const int*)ctx;
+    unsigned lf = load_flags();
     tagpu_pk_fill((unsigned char*)p + offsetof(TAGPU_PACKET, used_bytes), 0,
                   sizeof(TAGPU_PACKET) - offsetof(TAGPU_PACKET, used_bytes));
     p->used_bytes = sizeof(TAGPU_PACKET);
     p->in_game    = 0;                       /* must stay 0: no world draws  */
     p->level_gen  = s_levelGen;
     p->tick       = s_lastTick;
-    p->load_flags = (unsigned short)load_flags();
+    p->load_flags = (unsigned short)lf;
     p->text_fg    = -1;
     p->gamma      = 1.0f;
     if (live) fill_cursor(p);
-    fill_pal(p, ta);                         /* the shell's passes resolve
-                                                through the presented palette */
+    /* THE PALETTE READ HERE IS A KNOWN HAZARD, AND THE GATE FOR IT IS NOT YET
+       KNOWN. fill_pal copies 1 KB from `main+0x143A7`, the live palette, and
+       this channel publishes on the FLIP — ~5000 presents a second, through a
+       loading screen as well as the menu — while the LOADER thread rewrites
+       that palette at a level transition. A torn copy is a wrong-palette frame
+       on the load screen: cosmetic, pre-existing, and not introduced here.
+
+       A gate on `(load_flags & 3) == 1` was written on 2026-09-14 and REMOVED
+       the same day by the landing review, because it is a one-shot: bit0 is
+       `or 1` at 0x49832A and bit1 `or 2` at 0x497C5F, and NOTHING IN THE IMAGE
+       CLEARS EITHER (tagpu_engine.h's own OFF_LOADFLAGS entry says so — it was
+       read and then not believed). After the first level of a session the word
+       is 3 for ever, so the gate stopped firing exactly when a second load
+       needed it. The only bit both set and cleared is bit2 — set at 0x4975C7,
+       cleared at 0x496868 and 0x49855D — which tagpu_engine.h calls half of a
+       loader<->game handshake; whether "bit2 set" spans a whole load or is a
+       narrower one-shot signal is NOT measured, so no gate is written on it
+       here. It wants its own landing, with the window measured across a SECOND
+       level load in one process, which is the case the first attempt got
+       wrong. */
     return sizeof(TAGPU_PACKET);
 }
 
@@ -2123,7 +2150,25 @@ static int __cdecl before_cursor(void* entry_esp)
         /* it WILL draw: hijack the return so `after` reads the position this
            draw wrote (+0x1B6/+0x1BA), not the one the last draw left there —
            which on a frame the pointer moved is a whole frame stale, and the
-           rect the layer discards at is exactly this number */
+           rect the layer discards at is exactly this number.
+
+           AND THE ORDERING THAT MAKES THAT READ SAFE IS A LOCK, not the hijack.
+           The sentence above only rules out the GAME thread's own previous
+           draw; +0x1B6/+0x1BA have a SECOND writer — 0x4C284C and 0x4C2852,
+           inside 0x4C25E0, the body of the engine's mouse thread, which loops
+           every ~1 ms and is up precisely in the shell, where this channel
+           runs. Two plain dword reads against a live writer would be a race.
+           They are not, because the engine serialises the two: the flip takes
+           its tagged mutex at 0x52A4E8 before anything else (0x4C63CC
+           `mov edi,'MAIN'`, `push 0x52A4E8`, `call ebp` at 0x4C63D7) and holds
+           it across 0x4C67C0 and this hijack, releasing only at 0x4C6641; the
+           mouse thread takes the SAME lock around its own draw (0x4C29C8
+           `mov edi,'MOUS'`, `push 0x52A4E8`, `call ebx` at 0x4C29D3). Same
+           lock, so the two never overlap — an ORDERING, which is what
+           CLAUDE.md asks the argument to be. Verified by disassembly
+           2026-09-14; the landing shipped without naming it, which is the
+           defect this comment fixes. It is load-bearing: a future hook that
+           reads these words from outside the flip does NOT inherit it. */
         if (InterlockedCompareExchangePointer((void* volatile*)&s_cursorRet,
                                               (void*)(size_t)((unsigned*)entry_esp)[0], NULL) != NULL) {
             /* THE SLOT WAS ALREADY TAKEN, which should be impossible: this

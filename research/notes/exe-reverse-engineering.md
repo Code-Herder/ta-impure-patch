@@ -798,6 +798,53 @@ targets, re-read for the aircraft work rather than taken from the earlier note.]
 | `0x469B2C` | `0x420B00` | explosions and effects |
 | `0x469BA3` | `0x45AC20` DrawUnit | **site B** — everything `(state&3) != 1`, over ALL rows |
 
+#### The 3D wreck draw: a husk borrows the UNIT pipeline through one shared scratch [VERIFIED 2026-09-14]
+
+The feature draw `0x46A610` (arg = a feature-grid cell) splits twice. `0x46A6B5`
+`test [cell+0xC],1` separates wreck cells from plain features; `0x46A6DC`
+`test [def+0xFE],1` then separates **GAF wrecks** (bit set, `0x46A6E1`, their own shadow through
+`0x4B7EE0`/`0x4B7F90` on `rec+0x10`, gated by the FShadow option `[main+0x37F06]&0x10` at
+`0x46A6ED`) from **3D wrecks** (bit clear, `0x46A721`).
+
+There is no separate shadow path for a 3D wreck. It is drawn as a UNIT, through a single
+**scratch feature-unit** — a 0x118-byte record allocated once at feature init
+(`0x421F83 MEM_Alloc(0x118)`, stored at `main+0x1420F`, zeroed; `0x421FD3` then sets
+`[scratch+0x110] |= 0x20000000` permanently, i.e. the structure bit, for the life of the
+process). Per husk, `0x46A721` fills it in and draws:
+
+```
+0x46A721  mov eax,[main+0x1420F]   ; the scratch feature-unit
+0x46A727  mov ecx,[rec+0x4]        ; this husk's Object3do
+0x46A72B  mov [eax+0x9E],ecx       ; scratch -> Object3do
+0x46A731  mov [ecx+0x0C],eax       ; Object3do+0x0C -> scratch   (the unit field)
+0x46A73D..0x46A75A                 ; rec+0x20..0x25 -> scratch+0x64; rec+0x08/0C/10 -> +0x6A/6E/72
+0x46A762  call 0x45AC20            ; DrawUnit(ctx, scratch)
+```
+
+`DrawUnit` reads `[scratch+0x9E]` at `0x45AE65` and calls `0x458810`, which reaches the blit
+`0x459200` at `0x458948` — **so a husk does reach the blit's three shadow emit sites.** Which one
+depends on us: the scratch's permanent `0x20000000` puts both silhouette sites on the *bit-clear*
+side of the `je`s at `0x4592C6` and `0x45952C`, and those are exactly the two `je`s
+`tagpu_owndraw.c` flips to `EB` under target `all`. **Unpatched, a husk reaches only `0x4594DB`**
+(itself gated at `0x4594D0` on `[[scratch+0x92]+0x241] & 0x40000000`, where `+0x92` is
+`[main+0x1439B]`, the UnitInfo array base — so that test reads `UnitInfo[0]`'s flags, an
+arbitrary loaded def with nothing to do with wrecks).
+
+**`Object3do+0x0C` on a husk is a real pointer, to the shared scratch** — not to a unit record,
+and not null. Any predicate that only checks it is a plausible pointer passes for a husk. The
+live-unit analogue is `0x485E14 mov [eax+0xc],esi`.
+
+**The scratch is never cleared, which is an ABA.** `FEATURES_Destroy 0x42474F` calls
+`FreeObjectState 0x45AAA0` on the husk's `Object3do` and nulls `[rec+4]` at `0x424754`, but leaves
+`scratch+0x9E` naming the freed block. If the allocator returns that block for a live unit's
+`Object3do` (`0x485DCC` / `0x485E0E`), a recogniser testing only `*(scratch+0x9E) == obj3do`
+matches that live unit and goes on matching until the next 3D-wreck draw. Testing
+`*(obj3do+0x0C) == *(main+0x1420F)` as well closes it, because a block that has become a live
+unit's carries that unit's own record at `+0x0C`. `tagpu_owndraw.c`'s `is_wreck_draw()` tests
+both. Residual, not closed: the constructor path `0x485DCC` / `0x45A950` was not observed writing
+`+0x0C` within the first 0x60 bytes, so a reused block taken down that path could still carry a
+stale scratch there.
+
 Site B is last, and a unit's shadow is blitted inside that same `DrawUnit` call (the branch
 table above), through `0x4B8500`, which has **no depth test** — the ALP blit writes every
 non-key pixel of its source. So an aircraft's ground shadow composites **above** the ground
@@ -1469,7 +1516,7 @@ tree, drawn before the body. Every site in it:
 | `0x4592FE` `call 0x45A790` | `0x45955B` | build the cached slant shadow when `Object3do+0x14` is NULL |
 | **`0x459319`** `call 0x4B8500` | `0x459576` `jmp 0x4595E9` → **`0x4595E9`** | blit the cached shadow, at `sx + 0x85` (`add edx,0x85` at `0x45930B` / `0x45956C`). Path B shares one call site between the digger, structure and completed branches; path A has one per branch |
 | `0x459324` `shr al,3; test al,1` | `0x459578` | the COMPLETED branch: TShadow bit, then `test …,0x81000` (`canhover`/`floater`), `0x45A470` (scratch := composite silhouette), blit at `0x459353` / `0x4595E9` |
-| `0x4593BA` `call 0x4B8500` | `0x4597D3` | the body blit, further down each path |
+| `0x4593BA` `call 0x4B8500` | `0x4597D3` | the body blit, further down each path. Its source is the SAME composite plane the shadow sites read — `esi`, loaded once at `0x45920D` and pushed at **`0x4593A2`** (for `0x4593A4 call 0x4B7F90`) and again at `0x4593B8` — which is why emptying the composite at the shadow takes the BODY with it whenever the wipe's predicate says yes and the pass drawing the replacement says no |
 
 So the five "unit row sweep" call sites of `0x4B8500` in the blend-LUT survey above are:
 `0x459319` structure shadow (A), `0x459353` completed shadow (A), `0x4593BA` body (A),
@@ -1595,10 +1642,14 @@ mov ebp,[esp+0x30]`, before the remaining two pushes, so entry esp + 8; `[ebp+0x
 and `[ebp+0x10]` the composite) — down to all three sites. It is loaded once and **never
 reloaded on any path that reaches them**: every earlier use is a read or a push (`[ebp+0xc]`,
 `[ebp+0x14]`, `[ebp+0x10]`). The two cargo loops are the only reloads, and neither is in front
-of a site — path A's (`0x459415 mov ebp,[edx+0x8A]`, `0x459489 mov ebp,[ebp+0x8E]`) exits into
-the function's OWN epilogue (`0x459495 pop ebp`, `ret 0x18` at `0x45949A`), and path B's begins
-at `0x459649`, after its sites; path B is entered at `0x45949D` by the `jne` at `0x459282` and
-so executes path A's loop not at all. (`0x4593FC push ebp` is an argument to the pose helper
+of a site — and in fact only path A's is an `ebp` reload at all. Path A's
+(`0x459415 mov ebp,[edx+0x8A]`, `0x459489 mov ebp,[ebp+0x8E]`) exits into
+the function's OWN epilogue (`0x459495 pop ebp`, `ret 0x18` at `0x45949A`), and path B is
+entered at `0x45949D` by the `jne` at `0x459282`, so it never runs that loop. Path B's own
+cargo loop at `0x459649` walks the same list in **esi** (`8b b2 8a 00 00 00`
+= `mov esi,[edx+0x8A]`), not `ebp`; this note called it a second `ebp` reload until the
+2026-09-14 review disassembled it. The corrected fact is the stronger one: `ebp` is loaded
+once at `0x459205` and no path in the function reloads it before a site. (`0x4593FC push ebp` is an argument to the pose helper
 `0x4584D0`, not the open of a bracket — an earlier note here said otherwise.) Because "it
 happens to survive" is not an argument, the stub passes `ebp` and the helper checks it:
 `*(Object3do+0x10)` must be the very composite the site is about to read, and a mismatch is a
@@ -2736,6 +2787,40 @@ does not, and a diff taken there never sees the cursor. The surface-lost arm re-
 [INFERRED from the IAT slot]. **MEASURED: the shell flips about 5 000 times a second** on the
 reference setup (31 678 flips in the first 6 s of a launch); in game once per `DrawGameScreen`.
 
+#### The tagged lock at `0x52A4E8`, and why the cursor words can be read at all [VERIFIED 2026-09-14]
+
+The flip and the engine's **mouse thread** take the same lock, under different tags, and that —
+not anything of ours — is what orders their writes to the cursor position words `+0x1B6/+0x1BA`.
+The bytes, disassembled from the pristine exe:
+
+| where | bytes | what |
+|---|---|---|
+| `0x4C63CC` | `bf 4e 49 41 4d` | `mov edi,0x4D41494E` — the tag `'MAIN'` (first char in the high byte) |
+| `0x4C63D2` | `68 e8 a4 52 00` | `push 0x52A4E8` — the lock object |
+| `0x4C63D7` | `ff d5` | `call ebp` — acquire (indirect; the callee is not identified here) |
+| `0x4C63DD` | `39 3d ec a4 52 00` | `cmp ds:0x52A4EC,edi` — the current-owner tag against ours |
+| `0x4C6641` | `68 e8 a4 52 00` | release, part 1: `push 0x52A4E8` — the same object |
+| `0x4C6646` | `c7 05 ec a4 52 00 00 00 00 00` | release, part 2: `mov ds:0x52A4EC,0x0` — the owner tag cleared |
+| `0x4C29C8` | `bf 53 55 4f 4d` | `mov edi,0x4D4F5553` — the tag `'MOUS'` |
+| `0x4C29CE` | `68 e8 a4 52 00` | `push 0x52A4E8` — **the same object** |
+| `0x4C29D3` | `ff d3` | `call ebx` — acquire, around the mouse thread's own `call 0x4C25E0` |
+
+So `0x52A4E8` is the lock and `0x52A4EC` holds the owner's four-character tag, zeroed on
+release. Both tags pack the first character in the most significant byte, which is consistent
+across the two and is the evidence for reading them as `'MAIN'` and `'MOUS'` at all.
+**[INFERRED, from the shape rather than from the callee]** that acquiring is mutually exclusive:
+the acquire is an indirect call this note has not resolved, so what is *verified* is the object,
+the tags, the compare and the release — not the callee's semantics.
+
+**Why it matters.** `+0x1B6/+0x1BA` have two writers — the flip's cursor draw `0x4C67C0`
+(`0x4C683C`/`0x4C684E`) and `0x4C25E0` at `0x4C284C`/`0x4C2852`, the mouse thread's body, which
+loops every ~1 ms and is up precisely in the shell. Anything reading that pair as two plain
+dwords is racing the mouse thread unless it is inside the flip's hold, which spans `0x4C67C0`
+and runs to `0x4C6641`. `tagpu_packet_pub.c`'s shell cursor channel is inside it; its landing
+(2026-09-13) shipped with a different and insufficient argument — "read the position *this* draw
+wrote" — which rules out only the game thread's own previous draw. Corrected 2026-09-14. **A
+future reader of these words outside the flip does not inherit this ordering.**
+
 ### The in-play publish point, the loader thread and the load flags `main+0x38D75` [VERIFIED by disassembly 2026-09-12; the order MEASURED the same day]
 
 [This project — `objdump -d -M intel` of the pristine build for every reference to
@@ -2773,9 +2858,24 @@ to chain onto a stub that hijacks (tagpu_detour.h, THE CHAIN RULE) — nor can t
 observer be installed first, because `tagpu_gui_init` runs before `tagpu_packet_pub_init` in
 `dllmain.c`. The shell's publish point is therefore the cursor draw the flip makes, `0x4C67C0`
 (above): unowned, once per present, and the only thing there that writes the rect the GL UI
-layer needs. **The gate that makes it the shell's and not the game's is `s_retDepth == 0`** —
-the cursor draw runs inside `DrawGameScreen`, so on an in-play frame the observer's own hijack
-of that call is on the stack (landing 6).
+layer needs. **The gate that makes it the shell's and not the game's is TWO tests —
+`s_retDepth == 0` AND `!s_levelOpen`** (landing 6). The first is necessary because the cursor
+draw runs inside `DrawGameScreen`, so on an in-play frame the observer's own hijack of that
+call is on the stack. It is not sufficient, and this note asserted it alone until the
+2026-09-14 review: **`s_retDepth == 0` is not the complement of the in-play gate**, because
+`DrawGameScreen 0x468CF0` has **four** callers — `0x495C76`, `0x495E66`, `0x4962C2` and the
+in-play `0x4969CD` — so three of them return somewhere other than `0x4969D2`. Taking `0x495E66`
+(`6a 01 / 6a 01 / e8 85 2e fd ff`) as the example
+whose return address is `0x495E6B`, not the in-play `0x4969D2` the observer counts — a
+screenshot draw is in-play with `s_retDepth` at 0. `!s_levelOpen` — this module's own "a level
+is being played", set at the level's first in-play publish and cleared at the teardown — is
+what actually keeps the channel out of a level. `tagpu_packet_pub.c` carries the argument under the
+comment *"THE GATE IS TWO TESTS, AND NEITHER IS A DELAY"*, immediately above
+`before_cursor`; the tests themselves are that function's first two early returns,
+`if (s_retDepth != 0) return 0;` and `if (s_levelOpen) return 0;`. (Cited by
+anchor rather than by line: the line numbers this note carried were already
+stale one commit after they were written, which is what citing a moving file by
+line number always costs.)
 
 **The commands, applied in `before` [landing 2, 2026-09-12].** The same observer's `before`, on
 the same in-play gate, is where every engine word the zoom used to write from the render thread
