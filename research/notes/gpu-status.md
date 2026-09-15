@@ -69,6 +69,16 @@ things remain from the original plan:
   authoring guide: [model import](model-import.html); **(c)** true-colour and translucent
   materials, which is the part of the stated purpose the palette-index path does not reach at
   all.
+- **Ray tracing is out of reach while the renderer is in-process** [MEASURED 2026-09-15].
+  Not a limit of our code: NVIDIA's 32-bit ICD does not advertise
+  `VK_KHR_acceleration_structure` / `ray_tracing_pipeline` / `ray_query` /
+  `deferred_host_operations` at all, and our renderer is a 32-bit DLL inside `TotalA.exe`. The
+  same probe in a 64-bit process on the same card and driver has all four. Bitness is the only
+  variable that moves it, across two wine versions, with the llvmpipe software device as the
+  control. Choosing *which* GPU renders is NOT affected — 32-bit Vulkan enumerates both devices
+  and flags the discrete one — so that stays reachable from the DLL as it stands. The table, the
+  control and what it does not establish: [field notes](field-notes.html), "Environment &
+  toolchain"; the probe is `tools/vkprobe.c`.
 - **G9 — the MP-safety replay byte-diff.** Mostly formalisation now: 200v200 measures 59.7 fps
   and every hook is read-only over the sim, but this is the gate that *proves* the native stack
   is sim-neutral, and the byte-diff needs an unlocked session. It has been deferred several
