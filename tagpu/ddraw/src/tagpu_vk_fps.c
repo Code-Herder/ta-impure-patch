@@ -491,7 +491,6 @@ int tagpu_vk_fps_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        Asking first also means the atlas has a font in it by the time the image
        is created, which is what `tagpu_text_dims` needs to be right. */
     if (!tagpu_fps_quads(&v, &nv, &fw, &fh, &ab)) return 0;
-    s_abFrame = ab;
 
     if (s_state == ST_UNBUILT) {
         if (!build(d)) { tagpu_vk_fps_down(d); s_state = ST_REFUSED; return 0; }
@@ -591,6 +590,18 @@ int tagpu_vk_fps_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        because "cannot fire" is a claim about another file's initial value. */
     if (!s_agen) return 0;
 
+    /* THE A/B FRAME IS CLAIMED LAST, AFTER EVERY REASON NOT TO DRAW IS PAST.
+       [FROM THE REVIEW'S SECOND PASS 2026-09-15.] It used to be claimed the
+       moment the quads arrived, and every `return 0` between there and here --
+       a build that failed, the vertex bound, a device that would not go idle for
+       the atlas upload, an atlas never uploaded -- left it claimed while this
+       pass drew NOTHING. The seam would then have captured a bare clear against
+       a GL half that has text, and reported every text pixel as differing: a
+       port failure that is really an oracle failure, which is the worst kind of
+       answer an oracle can give. Claimed here, the flag means "this pass is
+       about to draw this frame" and nothing weaker; a frame that cannot draw
+       simply loses its half, and `tools/vk-ab.py` says which one is missing. */
+    s_abFrame = ab;
     s_nvThis = nv;
     return 1;
 }

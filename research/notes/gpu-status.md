@@ -3368,6 +3368,16 @@ a 32-bit address space). `tools/vk-ab.py` diffs the two and **refuses two captur
 sizes** rather than scaling one, because a scaled comparison cannot be 0 px by construction.
 Set `color=0,0,0` in `tagpu_vk.on` so the two backgrounds match.
 
+**What the teardown rests on, said once.** `vk_down` and `vk_resize` free everything behind a
+`vkDeviceWaitIdle`, and that call CAN fail — `VK_ERROR_OUT_OF_HOST_MEMORY` above all, in the
+32-bit address space this lane spends its budget measuring — returning without the device being
+idle. The capture's staging buffer is the one thing whose ownership this landing newly made rest
+on it, so its result is read there: a wait that did not succeed **leaks** the buffer instead of
+freeing it under a copy that may still be running, which is the same trade `ST_ZOMBIE` makes (a
+leak is recoverable, a free is not), it is logged, and it costs at most one capture for the
+session. The rest of that teardown — the swapchain, the per-image objects, the device — has always
+rested on the same wait and is unchanged here; naming it is not fixing it.
+
 **The capture adds no wait, and the swapchain images are created so that it is legal.** Two things
 the review changed, both real. The copy is recorded into frame slot *i* and completed by the fence
 the seam **already** waits on at the top of the next frame that reaches slot *i* — `nimg` frames
@@ -3382,11 +3392,16 @@ rested on undefined behaviour until this was fixed.
 `GL_PACK_ALIGNMENT`. It did not, and a lever that exists to measure the renderer is the last thing
 that should change it.
 
-**Both captures ride ONE frame, by construction.** The first shape had each lane poll the lever for
-itself — and they poll on different cadences (30 frames against 250 ms) while the readout changes
-its number twice a second, so the two could have landed hundreds of frames apart and differed in
-the digits while agreeing about everything else, which reads exactly like a broken port. The flag
-now travels WITH the vertices and is consumed with them.
+**Both captures are of the same frame, or there is only one of them.** The first shape had each
+lane poll the lever for itself — and they poll on different cadences (30 frames against 250 ms)
+while the readout changes its number twice a second, so the two could have landed hundreds of
+frames apart and differed in the digits while agreeing about everything else, which reads exactly
+like a broken port. The flag travels WITH the vertices now, and the Vulkan pass claims it only
+after every reason not to draw is past: a frame the pass cannot draw loses its half of the pair
+rather than capturing a bare clear against a GL half that has text, which would have reported every
+text pixel as differing — a port failure that is really an oracle failure. *(This paragraph said
+"by construction" and the review's second pass disproved that too: the flag was claimed the moment
+the quads arrived, with four `return 0`s still ahead of it.)*
 
 **Constraint 4, measured rather than argued.** With `tagpu_vk.off`, this DLL's GL frame against
 main's (`a043b05`) on the same fixture, same camera, pointer parked in the same place: **46
@@ -3443,7 +3458,27 @@ no handle or entry point from one `VkDevice` can reach another; `tagpu_text.c`'s
 counter; `tools/vk-ab.py`'s parser and the agreement of its verdict with its exit status; and that
 the diff contains no engine address and no byte patch.
 
-**Still not covered, and unchanged by the review:** no Vulkan validation layer ran. Every finding
+**A SECOND PASS on the rework** — because two of the fixes changed the synchronisation design
+rather than patching it, which is the class that ships silently. It confirmed both HIGH fixes hold
+and found five more, one of them the rework's own:
+
+| | |
+|---|---|
+| the rework's own | `vkDeviceWaitIdle`'s result was discarded in `vk_down` and `vk_resize`, and that result had just become the WHOLE safety argument for freeing the capture's staging buffer — the same defect one call further along. It is read now, and a wait that did not succeed leaks the buffer rather than freeing it under a live copy |
+| widened by the rework | the A/B flag was claimed the moment the quads arrived, with four `return 0`s still ahead of it (one of them added by the rework), so a frame the pass could not draw would have been captured as a bare clear against a GL half with text — every text pixel reported as differing, a port failure that is really an oracle failure |
+| | the state save and restore added three entry points to the A/B's list, and a context missing one made the lever do nothing at all, silently, retrying every poll for the session |
+| | a failed row-buffer allocation left a header-only PPM on disk, which reads as a broken writer rather than as a machine out of memory |
+| | the words hash was keyed off the comment above each array rather than the array's own symbol, so a header whose two had drifted apart could hash one shader's words under another's name |
+
+Its verdict on the two HIGH fixes, which is the reason the pass was run: `TRANSFER_SRC` **holds**
+(`cansrc` is re-derived on every swapchain creation, `vk_down`'s memset fails it closed, the single
+use site is the caller so a refusing surface loses the capture and not the lane); the capture
+lifetime **holds** on every enumerated path — lever cleared, any fatal result, `OUT_OF_DATE`,
+`SUBOPTIMAL`, mode change, window destroyed, GPU row changed, `ST_ZOMBIE`, render-thread stop —
+"nothing leaks; nothing frees early except through the unchecked waitIdle", which is the finding
+above and is now closed.
+
+**Still not covered, and unchanged by either pass:** no Vulkan validation layer ran. Every finding
 above was found by reading the specification against the code. The first HIGH is what that gap
 costs when nobody is reading.
 

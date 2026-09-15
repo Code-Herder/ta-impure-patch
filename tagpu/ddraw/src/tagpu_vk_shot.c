@@ -178,9 +178,22 @@ void tagpu_vk_shot_finish(const TAGPU_VKPASS* d, const char* path)
         return;
     }
     px = (const unsigned char*)p;
+    /* THE ROW BUFFER BEFORE THE FILE. [FROM THE REVIEW'S SECOND PASS
+       2026-09-15.] Allocating it after the header was written left a
+       header-only PPM on disk when it failed, and `tools/vk-ab.py` would then
+       report a MALFORMED capture rather than an absent one -- which reads as a
+       broken writer instead of a machine that ran out of memory. */
+    line = (unsigned char*)malloc((size_t)s_w * 3);
+    if (!line) {
+        slog(d, "shot: no memory for a row of the capture");
+        vkUnmapMemory(d->dev, s_mem);
+        tagpu_vk_shot_down(d);
+        return;
+    }
     f = fopen(path, "wb");
     if (!f) {
         slog(d, "shot: could not open the capture file");
+        free(line);
         vkUnmapMemory(d->dev, s_mem);
         tagpu_vk_shot_down(d);
         return;
@@ -194,8 +207,6 @@ void tagpu_vk_shot_finish(const TAGPU_VKPASS* d, const char* path)
     /* ONE fwrite A ROW. This runs on the render thread, and a stdio call per
        pixel is two million of them at 1080p -- most of the one frame a capture
        costs, for nothing. */
-    line = (unsigned char*)malloc((size_t)s_w * 3);
-    if (!line) { fclose(f); vkUnmapMemory(d->dev, s_mem); tagpu_vk_shot_down(d); return; }
     for (y = 0; y < s_h; y++) {
         const unsigned char* row = px + (size_t)y * s_w * 4;
         for (x = 0; x < s_w; x++) {

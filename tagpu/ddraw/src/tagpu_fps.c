@@ -269,7 +269,13 @@ static void ab_write_ppm(const char* path, int w, int h, const unsigned char* rg
     int y, x;
     unsigned char* row;
     unsigned char* line;
-    if (!(fp = fopen(path, "wb"))) { flog("fps: the A/B could not open its file"); return; }
+    /* The row buffer before the file, for the reason tagpu_vk_shot.c gives: a
+       header-only PPM reads as a broken writer rather than as a failed malloc. */
+    line = (unsigned char*)malloc((size_t)w * 3);
+    if (!line) { flog("fps: no memory for a row of the A/B capture"); return; }
+    if (!(fp = fopen(path, "wb"))) {
+        flog("fps: the A/B could not open its file"); free(line); return;
+    }
     fprintf(fp, "P6\n%d %d\n255\n", w, h);
     /* glReadPixels hands back the BOTTOM row first and a PPM's first row is the
        TOP one, so the rows are written backwards. Getting this wrong produces a
@@ -278,8 +284,6 @@ static void ab_write_ppm(const char* path, int w, int h, const unsigned char* rg
        oracle -- hence the note. */
     /* ONE fwrite A ROW, for the reason tagpu_vk_shot.c gives: this is the render
        thread and a stdio call per pixel is a million of them at 1080p. */
-    line = (unsigned char*)malloc((size_t)w * 3);
-    if (!line) { fclose(fp); return; }
     for (y = h - 1; y >= 0; y--) {
         row = (unsigned char*)rgba + (size_t)y * w * 4;
         for (x = 0; x < w; x++) {
@@ -440,8 +444,20 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
        and they are exactly the kind of "harmless today" that an A/B taken in
        six months would be reading. */
     {
-        int shot = s_ab && !s_abDone && x_glClear && x_glClearColor &&
-                   x_glDisable && x_glGetFloatv && x_glIsEnabled && x_glEnable;
+        int can = x_glClear && x_glClearColor && x_glDisable && x_glGetFloatv &&
+                  x_glIsEnabled && x_glEnable;
+        int shot = s_ab && !s_abDone && can;
+        /* AND AN A/B THAT CANNOT RUN SAYS SO, ONCE. [FROM THE REVIEW'S SECOND
+           PASS 2026-09-15.] The state save and restore added three more entry
+           points to this list, and a context missing any of them used to make
+           the lever do nothing at all -- no clear, no capture, no line in the
+           log, and `s_abDone` left clear so it tried again every poll for the
+           session. `ab_capture` logs for its own three; these had nothing. */
+        if (s_ab && !s_abDone && !can) {
+            flog("fps: the A/B needs glClearColor/glClear/glGetFloatv/glIsEnabled/"
+                 "glEnable and this context is missing one - nothing captured");
+            s_abDone = 1;
+        }
         GLfloat oldcol[4] = { 0, 0, 0, 0 };
         GLboolean oldsc = GL_FALSE;
         if (shot) {

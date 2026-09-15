@@ -377,14 +377,36 @@ static void passlog(const char* m) { vklog("%s", m); }
    frame rate the lane runs at is a few milliseconds. */
 static int s_abSlot1;       /* 0 = nothing pending, else the slot index + 1 */
 
-/* The device is idle: the copy is done whatever stage it was at, so the buffer
-   can be given back. The FILE is not written here -- a lane that is coming down
-   or rebuilding its swapchain mid-capture is not evidence of anything, and
-   `tools/vk-ab.py` says loudly that one of the pair is missing. */
-static void ab_drop(const char* why)
+/* Give the staging buffer back at a point where the device is idle. The FILE is
+   not written here -- a lane that is coming down or rebuilding its swapchain
+   mid-capture is not evidence of anything, and `tools/vk-ab.py` says loudly that
+   one of the pair is missing.
+
+   `idle` IS THE WHOLE SAFETY ARGUMENT, SO IT IS THE CALLER'S RESULT AND NOT AN
+   ASSUMPTION. [FROM THE REVIEW'S SECOND PASS 2026-09-15.] `vkDeviceWaitIdle`
+   can fail -- `VK_ERROR_OUT_OF_HOST_MEMORY` above all, in a 32-bit address space
+   this lane spends its budget measuring -- and it then returns WITHOUT the
+   device being idle. Freeing a buffer the submitted `vkCmdCopyImageToBuffer` is
+   still writing into would be the same defect this whole mechanism was rewritten
+   to remove, one call further along. So a wait that did not succeed LEAKS the
+   buffer instead: a leak is recoverable and a free is not, which is the same
+   trade `ST_ZOMBIE` makes two hundred lines up. It is once per process at worst,
+   it is logged, and `tagpu_vk_shot_record` then refuses further captures for the
+   session because the buffer is still there.
+
+   The rest of `vk_down`'s teardown rests on that same wait and always has --
+   the swapchain, the per-image objects, the device itself. That is pre-existing
+   and is named in [gpu-status] §2.26 rather than changed here. */
+static void ab_drop(const char* why, int idle)
 {
     if (!s_abSlot1) return;
     s_abSlot1 = 0;
+    if (!idle) {
+        vklog("the A/B capture was lost to %s AND the device would not go idle - "
+              "its readback buffer is leaked rather than freed under a copy that "
+              "may still be running", why);
+        return;
+    }
     vklog("the A/B capture was lost to %s - only the GL half was written", why);
     tagpu_vk_shot_down(&s_pass);
 }
@@ -1399,14 +1421,17 @@ static void vk_perimage_free(void)
 static void vk_down(void)
 {
     if (s_vk.dev) {
-        if (vkDeviceWaitIdle) vkDeviceWaitIdle(s_vk.dev);
+        /* The result is kept because `ab_drop` below is the one thing here whose
+           correctness depends on it rather than on the object's own ownership. */
+        int idle = !vkDeviceWaitIdle || vkDeviceWaitIdle(s_vk.dev) == VK_SUCCESS;
+        if (!idle) vklog("vkDeviceWaitIdle refused on the way down");
         /* THE PASSES GO FIRST, AFTER THE WAIT AND BEFORE ANYTHING THEY MIGHT
            BE HOLDING. A pass owns pipelines, descriptors, buffers and images of
            its own; they belong to this device and must be back before it is
            destroyed. The wait above is what makes that safe rather than a race
            -- nothing of theirs is still in a queue. */
         tagpu_vk_fps_down(&s_pass);
-        ab_drop("the lane coming down");
+        ab_drop("the lane coming down", idle);
         tagpu_vk_shot_down(&s_pass);
         vk_perimage_free();
         if (s_vk.rp) { vkDestroyRenderPass(s_vk.dev, s_vk.rp, NULL); s_vk.rp = VK_NULL_HANDLE; }
@@ -1894,7 +1919,8 @@ static int vk_present(void)
 static int vk_resize(int w, int h)
 {
     int r;
-    vkDeviceWaitIdle(s_vk.dev);
+    int idle = vkDeviceWaitIdle(s_vk.dev) == VK_SUCCESS;
+    if (!idle) vklog("vkDeviceWaitIdle refused before a swapchain rebuild");
     /* THE PASSES GO BACK ACROSS A RESIZE TOO, and the reason is the slot count:
        a rebuilt swapchain may come back with a different number of images, and
        a pass that kept buffers for the old count would be handed a slot index
@@ -1903,7 +1929,7 @@ static int vk_resize(int w, int h)
        pass that rebuilds everything has one path instead of two, and a resize
        is a window drag, not a frame.) */
     tagpu_vk_fps_down(&s_pass);
-    ab_drop("the swapchain rebuilding");
+    ab_drop("the swapchain rebuilding", idle);
     vk_perimage_free();
     r = vk_swapchain(w, h);
     if (r <= 0) return r;

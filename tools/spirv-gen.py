@@ -719,6 +719,16 @@ def sym(key):
     return key.replace("::", "_")
 
 
+def sym_key(name):
+    """`tagpu_fps_VS` back to `tagpu_fps::VS` -- the inverse of `sym`, which is
+    unambiguous because a shader symbol never contains `_` at the join and the
+    C file names are fixed in SOURCES."""
+    for cfile in SOURCES:
+        if name.startswith(cfile + "_"):
+            return "%s::%s" % (cfile, name[len(cfile) + 1:])
+    return name
+
+
 def emit(cfile, shaders, words):
     """One header per C source, so a shader edit moves one file and its diff is
     readable."""
@@ -813,11 +823,20 @@ def committed_hashes():
                 continue
             m = _ARRAY.match(line)
             if m:
-                arr, words = m.group(1), []
+                # KEYED BY THE ARRAY'S OWN SYMBOL, cross-checked against the
+                # comment above it. Keying purely off the comment would let a
+                # header whose comment and array had drifted apart -- a bad
+                # merge is exactly how that happens -- hash one shader's words
+                # under another shader's name and pass.
+                arr, words = sym_key(m.group(1)), []
+                if key is not None and key != arr:
+                    die("%s.spv.h: the comment names %s and the array under it "
+                        "is %s" % (cfile, key, arr))
+                key = arr
                 continue
             if arr is not None:
                 if line.startswith("};"):
-                    got[key] = words_hash(words)
+                    got[arr] = words_hash(words)
                     arr, key = None, None
                 else:
                     words.extend(int(x, 16) for x in _WORD.findall(line))
