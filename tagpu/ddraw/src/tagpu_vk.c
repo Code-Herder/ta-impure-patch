@@ -1118,10 +1118,11 @@ static DWORD WINAPI up_worker(LPVOID arg)
         sci.hwnd = s_vk.hwnd;
         r = vkCreateWin32SurfaceKHR(s_vk.inst, &sci, NULL, &s_vk.surf);
         if (r != VK_SUCCESS) {
-            /* THE ROUTE-A ANSWER, if a driver ever refuses it. The probe says
-               every runtime tested allows a surface on a window that already
-               carries a GL context; a refusal here is the case the roadmap's
-               route 1 exists for, and it is named rather than swallowed. */
+            /* NAMED RATHER THAN SWALLOWED. Route D is the last of the
+               roadmap's three still standing, so a driver that refuses a
+               surface even on a window of our own is the case the phase's
+               out-of-process pivot exists for -- and the difference between
+               that and a lane that merely did not arm is this line. */
             vklog("vkCreateWin32SurfaceKHR on our own top-level window: %s (%d) - "
                   "route D is refused by this driver, and it is the only one of the "
                   "roadmap's three that works on system wine; the lane stays down",
@@ -1136,7 +1137,7 @@ static DWORD WINAPI up_worker(LPVOID arg)
     vkEnumeratePhysicalDevices(s_vk.inst, &n, pds);
 
     pick = pick_device(pds, n, &s_vk.qfam, s_vk.devName);
-    if (pick < 0) { vklog("no device can present on the game window"); goto fail; }
+    if (pick < 0) { vklog("no device can present on our window"); goto fail; }
     s_vk.pd = pds[pick];
 
     /* The index the MENU means, which is an index into the cached name table
