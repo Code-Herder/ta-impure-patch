@@ -26,9 +26,34 @@
    "visibly alive" readout (landing 1), with the command acknowledgement since
    landing 2 (the last record applied, and the cumulative anchor delta applied
    by then). Same eleven strings plus "PK", "T", "E", "A", "D", "," and "-",
-   so it costs the atlas nothing per frame either. */
+   so it costs the atlas nothing per frame either.
+
+   TWO BACKENDS DRAW THIS PASS SINCE G19d, AND FROM ONE SET OF QUADS. The
+   Vulkan lane's edition of it (tagpu_vk_fps.c) does not rebuild the geometry;
+   it takes the vertices this file just built, through `tagpu_fps_quads`, and
+   samples the same atlas bytes. That is what makes "0 px apart" a statement
+   about the two APIs rather than about two pieces of arithmetic that happen to
+   agree -- the quads, the atlas, the frame size and the ink are literally the
+   same values, and only the rasteriser differs.
+
+   `tagpu_fps_quads` CONSUMES what it returns, and that is the freshness rule.
+   The Vulkan lane presents from `ogl_render` while this runs inside the
+   overlay, and the overlay does not run on every path that reaches the swap --
+   so a frame whose geometry this file did not rebuild must not be drawn again
+   from the last one's. Handing the vertices over exactly once makes that true
+   by construction rather than by a counter the two files would have to share.
+
+   THE A/B (`tagpu_fps.ab`) IS AN ORACLE, NOT INSTRUMENTATION. With the file
+   present this pass clears the frame to black before it draws, reads the result
+   back to `tagpu_fps_gl.ppm` and latches -- one frame, once, until the lever is
+   removed. Black because the Vulkan lane clears its own image to whatever
+   `color=` says and `color=0,0,0` makes the two backgrounds the same, which is
+   what turns two captures into a pixel comparison. It clears the WHOLE frame on
+   purpose: a readout drawn over the game cannot be compared against anything,
+   because the game is under it. */
 #include <windows.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "opengl_utils.h"
 #include "tagpu_fps.h"
@@ -36,10 +61,14 @@
 
 #define TRIGGER   "tagpu_fps.on"
 #define PKSHOW    "tagpu_packet.show"
+#define ABFILE    "tagpu_fps.ab"      /* the G19d A/B: capture one frame       */
+#define ABOUT     "tagpu_fps_gl.ppm"
 #define POLL      30                  /* frames between trigger polls          */
 #define WINDOW_MS 500u                /* averaging window                      */
 #define MAXCH     48
 #define QUADV     6
+/* the header's bound is this one; a build where they disagree does not link */
+typedef char tagpu_fps_maxv_agrees[(MAXCH * QUADV == TAGPU_FPS_MAXV) ? 1 : -1];
 #define VST       4                   /* x, y, u, v                            */
 
 typedef void (APIENTRY *PFN_DRAWARRAYS)(GLenum, GLint, GLsizei);
@@ -47,11 +76,23 @@ typedef void (APIENTRY *PFN_ACTIVETEX)(GLenum);
 typedef void (APIENTRY *PFN_UNIFORM2F)(GLint, GLfloat, GLfloat);
 typedef void (APIENTRY *PFN_UNIFORM3F)(GLint, GLfloat, GLfloat, GLfloat);
 typedef void (APIENTRY *PFN_DISABLE)(GLenum);
+typedef void (APIENTRY *PFN_CLEARCOLOR)(GLfloat, GLfloat, GLfloat, GLfloat);
+typedef void (APIENTRY *PFN_CLEAR)(GLbitfield);
+typedef void (APIENTRY *PFN_READPIXELS)(GLint, GLint, GLsizei, GLsizei,
+                                        GLenum, GLenum, void*);
+typedef void (APIENTRY *PFN_GETINTEGERV)(GLenum, GLint*);
+typedef void (APIENTRY *PFN_PIXELSTOREI)(GLenum, GLint);
 static PFN_DRAWARRAYS x_glDrawArrays;
 static PFN_ACTIVETEX  x_glActiveTexture;
 static PFN_UNIFORM2F  x_glUniform2f;
 static PFN_UNIFORM3F  x_glUniform3f;
 static PFN_DISABLE    x_glDisable;
+/* the A/B's five, resolved with the rest and never called without the lever */
+static PFN_CLEARCOLOR  x_glClearColor;
+static PFN_CLEAR       x_glClear;
+static PFN_READPIXELS  x_glReadPixels;
+static PFN_GETINTEGERV x_glGetIntegerv;
+static PFN_PIXELSTOREI x_glPixelStorei;
 
 /* The fork declares only the entry points its own passes use, so the core-1.1
    ones this needs are resolved by hand -- wglGetProcAddress first, then
@@ -66,7 +107,9 @@ static void* getgl(const char* n)
 }
 
 static int    s_state;                /* 0 unbuilt, 1 ready, 2 refused         */
-static int    s_on = -1, s_pk;
+static int    s_on = -1, s_pk, s_ab, s_abDone, s_abFrame;
+static int    s_nv;                   /* this frame's vertices, handed over once */
+static int    s_fw, s_fh;             /* ...and the frame size they are in     */
 static GLuint s_prog, s_vao, s_vbo;
 static GLint  s_uFrame, s_uInk;
 static float  s_v[MAXCH * QUADV * VST];
@@ -129,10 +172,18 @@ static void init_gl(void)
     x_glUniform2f     = (PFN_UNIFORM2F) getgl("glUniform2f");
     x_glUniform3f     = (PFN_UNIFORM3F) getgl("glUniform3f");
     x_glDisable       = (PFN_DISABLE)   getgl("glDisable");
+    x_glClearColor    = (PFN_CLEARCOLOR) getgl("glClearColor");
+    x_glClear         = (PFN_CLEAR)      getgl("glClear");
+    x_glReadPixels    = (PFN_READPIXELS) getgl("glReadPixels");
+    x_glGetIntegerv   = (PFN_GETINTEGERV)getgl("glGetIntegerv");
+    x_glPixelStorei   = (PFN_PIXELSTOREI)getgl("glPixelStorei");
     if (!x_glDrawArrays || !x_glActiveTexture ||
         !x_glUniform2f || !x_glUniform3f || !x_glDisable) {
         flog("fps: missing GL proc"); s_state = 2; return;
     }
+    /* The A/B's five are NOT in that test: the readout is a play feature and
+       the oracle is not, so a driver that somehow lacked one of them would
+       lose the A/B and keep the readout. `ab_capture` checks them itself. */
     /* Both are created before either is tested so the cleanup below is one
        path -- mksh returns the shader even when it failed, and a leak here is
        permanent: s_state 2 is never retried inside one GL context. */
@@ -185,6 +236,85 @@ static int emit(const char* s, float* x, float y, int* nv)
     return 1;
 }
 
+/* ---- the G19d A/B oracle ------------------------------------------------
+   One frame of the GL lane's readout over a black field, as a binary PPM, so
+   that it can be compared texel for texel against the Vulkan lane's capture of
+   the same frame (tools/vk-ab.py). Not a screenshot of the game: the game is
+   deliberately not in it.
+
+   THE RECT IS THE VIEWPORT'S, asked for rather than assumed. The pass draws in
+   GAME-FRAME pixels through `uFrame` and the viewport is what maps those onto
+   the target, so the viewport is the rect the comparison is about -- and the
+   Vulkan lane's swapchain covers the game window's CLIENT area, which is the
+   same rect only when the fork is not letterboxing. The compare tool refuses
+   two captures of different sizes rather than scaling one, because a scaled
+   comparison cannot be 0 px by construction. */
+static void ab_write_ppm(const char* path, int w, int h, const unsigned char* rgba)
+{
+    FILE* fp;
+    int y, x;
+    unsigned char* row;
+    if (!(fp = fopen(path, "wb"))) { flog("fps: the A/B could not open its file"); return; }
+    fprintf(fp, "P6\n%d %d\n255\n", w, h);
+    /* glReadPixels hands back the BOTTOM row first and a PPM's first row is the
+       TOP one, so the rows are written backwards. Getting this wrong produces a
+       capture that differs from the Vulkan one in every text pixel and in
+       nothing else, which reads as a Y-flip bug in the port rather than in the
+       oracle -- hence the note. */
+    for (y = h - 1; y >= 0; y--) {
+        row = (unsigned char*)rgba + (size_t)y * w * 4;
+        for (x = 0; x < w; x++) fwrite(row + (size_t)x * 4, 1, 3, fp);
+    }
+    fclose(fp);
+}
+
+static void ab_capture(void)
+{
+    GLint vp[4] = { 0, 0, 0, 0 };
+    unsigned char* buf;
+    char msg[160];
+    if (!x_glReadPixels || !x_glGetIntegerv || !x_glPixelStorei) {
+        flog("fps: the A/B needs glReadPixels and this context has none"); s_abDone = 1; return;
+    }
+    x_glGetIntegerv(GL_VIEWPORT, vp);
+    if (vp[2] <= 0 || vp[3] <= 0 || vp[2] > 8192 || vp[3] > 8192) {
+        flog("fps: the A/B found no sane viewport"); s_abDone = 1; return;
+    }
+    buf = (unsigned char*)malloc((size_t)vp[2] * vp[3] * 4);
+    if (!buf) { s_abDone = 1; return; }
+    x_glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    x_glReadPixels(vp[0], vp[1], vp[2], vp[3], GL_RGBA, GL_UNSIGNED_BYTE, buf);
+    ab_write_ppm(ABOUT, vp[2], vp[3], buf);
+    free(buf);
+    _snprintf(msg, sizeof msg,
+              "fps: A/B wrote %s, %dx%d - the Vulkan lane writes tagpu_fps_vk.ppm",
+              ABOUT, (int)vp[2], (int)vp[3]);
+    msg[sizeof msg - 1] = 0;
+    flog(msg);
+    s_abDone = 1;
+}
+
+/* The vertices this frame built, for the Vulkan edition of the pass, and HANDED
+   OVER EXACTLY ONCE -- see the file header. 0 means there is nothing to draw,
+   which is also what a frame the overlay did not run on returns.
+
+   `ab` RIDES WITH THEM, AND THAT IS WHAT MAKES THE COMPARISON HONEST. Both
+   lanes could poll `tagpu_fps.ab` for themselves -- and the first version did --
+   but they poll on different cadences (this one every 30 frames, the lane every
+   250 ms), so the two captures could land several hundred frames apart, and the
+   readout changes its number twice a second. The captures would then differ in
+   the digits and agree about nothing else, which reads exactly like a broken
+   port. Handing the flag over with the vertices it belongs to makes "the same
+   frame" a fact about one variable rather than a hope about two clocks. */
+int tagpu_fps_quads(const float** v, int* nv, int* fw, int* fh, int* ab)
+{
+    if (!s_nv) return 0;
+    *v = s_v; *nv = s_nv; *fw = s_fw; *fh = s_fh;
+    *ab = s_abFrame;
+    s_nv = 0; s_abFrame = 0;
+    return 1;
+}
+
 void tagpu_fps_present(const TAGPU_FRAME* f)
 {
     static unsigned poll;
@@ -193,10 +323,19 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
     float x = 6.0f, y = 6.0f;
     int nv = 0, i;
 
+    /* NOTHING TO HAND OVER UNTIL THIS FRAME HAS BUILT IT. Every return below
+       leaves it at 0, so the Vulkan lane draws the last frame's text on none
+       of them. */
+    s_nv = 0;
+
     if (!f || s_state == 2) return;
     if (s_on < 0 || (poll++ % POLL) == 0) {
         s_on = GetFileAttributesA(TRIGGER) != INVALID_FILE_ATTRIBUTES;
         s_pk = GetFileAttributesA(PKSHOW) != INVALID_FILE_ATTRIBUTES;
+        /* the A/B re-arms when the lever is taken away and put back, so a
+           second capture needs no relaunch */
+        s_ab = GetFileAttributesA(ABFILE) != INVALID_FILE_ATTRIBUTES;
+        if (!s_ab) s_abDone = 0;
     }
     if (!s_on) { s_fps = -1; s_frames = 0; s_t0 = 0; return; }
 
@@ -247,6 +386,16 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
     }
     if (!nv) return;
 
+    /* THE FRAME GOES BLACK FIRST WHEN THE A/B IS ARMED, and only then. The
+       comparison is of this pass's pixels, so everything that is not this pass
+       has to leave the frame -- scissor off, because a scissor left on from the
+       UI layer would clear a rectangle rather than the frame. One frame. */
+    if (s_ab && !s_abDone && x_glClear && x_glClearColor && x_glDisable) {
+        x_glDisable(GL_SCISSOR_TEST);
+        x_glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        x_glClear(GL_COLOR_BUFFER_BIT);
+    }
+
     glUseProgram(s_prog);
     x_glUniform2f(s_uFrame, (float)f->game_width, (float)f->game_height);
     x_glUniform3f(s_uInk, 1.0f, 1.0f, 1.0f);
@@ -258,10 +407,17 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
     x_glDisable(GL_DEPTH_TEST);
     x_glDrawArrays(GL_TRIANGLES, 0, nv);
     glBindVertexArray(0);
+
+    /* PUBLISHED AFTER THE GL DRAW, not before: `s_v` is what was just drawn,
+       and the Vulkan lane is about to draw the same array. */
+    s_nv = nv; s_fw = f->game_width; s_fh = f->game_height;
+
+    if (s_ab && !s_abDone) { ab_capture(); s_abFrame = 1; }
 }
 
 void tagpu_fps_glreset(void)
 {
     s_state = 0; s_prog = 0; s_vao = 0; s_vbo = 0;
     s_fps = -1; s_frames = 0; s_t0 = 0;
+    s_nv = 0; s_abFrame = 0;
 }

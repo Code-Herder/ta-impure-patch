@@ -148,9 +148,9 @@
    same name, so the headers must not also declare them as functions -- and the
    DLL must not import a single symbol from vulkan-1.dll, or a machine without
    Vulkan would fail to LOAD rather than simply not arming the lane. */
-#define VK_NO_PROTOTYPES
-#define VK_USE_PLATFORM_WIN32_KHR
-#include <vulkan/vulkan.h>
+/* tagpu_vk_pass.h defines VK_NO_PROTOTYPES and pulls the headers in, and the
+   comment above is why both are needed. */
+#include "tagpu_vk_pass.h"
 #include <windows.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -158,6 +158,8 @@
 
 #include "hook.h"
 #include "tagpu_vk.h"
+#include "tagpu_vk_fps.h"
+#include "tagpu_vk_shot.h"
 
 #define ON_FILE    "tagpu_vk.on"
 /* THE CONTROL, and the module needs one because half of it runs with the lever
@@ -168,13 +170,23 @@
    enumeration worker included, and the row plates whatever the cache last
    said. It is what an A/B against the pre-G19 DLL arms. */
 #define OFF_FILE   "tagpu_vk.off"
+/* THE A/B (Phase G / G19d). `tagpu_fps.c` owns the lever (`tagpu_fps.ab`): it
+   clears the GL frame to black, writes `tagpu_fps_gl.ppm` and hands the flag
+   over with the vertices, and this file writes `tagpu_fps_vk.ppm` out of the
+   swapchain image it presents THAT frame. Set `color=0,0,0` in the lever file
+   so the two backgrounds match, or the comparison is of two different fields
+   with the same text on them. */
+#define AB_OUT     "tagpu_fps_vk.ppm"
 #define GPUS_FILE  "tagpu_vk.gpus"      /* the cache the menu reads at attach */
 #define CFG_FILE   "tagpu_vk.cfg"       /* the player's choice, by name       */
 #define CFG_TMP    "tagpu_vk.cfg.tmp"
 #define GPUS_TMP   "tagpu_vk.gpus.tmp"
 #define POLL_MS    250                  /* the lever, as elsewhere in the fork */
 #define MAXDEV     TAGPU_VK_MAXGPU
-#define MAXIMG     8
+/* The frames in flight, and the bound on every per-image array here. Defined
+   in tagpu_vk_pass.h because a ported pass keeps one buffer set per slot and
+   is handed the slot index -- two files with their own 8 would drift. */
+#define MAXIMG     TAGPU_VK_SLOTS
 /* THE NAME WE KEEP IS NOT THE NAME THE DRIVER GAVE US. `deviceName` is up to
    VK_MAX_PHYSICAL_DEVICE_NAME_SIZE (256) bytes of whatever the ICD chose, and
    it ends up in three places that are not free-form: the generated `.GUI`,
@@ -264,6 +276,7 @@ static PFN_vkGetInstanceProcAddr s_gipa;
     X(vkEnumeratePhysicalDevices) X(vkGetPhysicalDeviceProperties) \
     X(vkGetPhysicalDeviceQueueFamilyProperties) \
     X(vkCreateWin32SurfaceKHR) X(vkDestroySurfaceKHR) \
+    X(vkEnumerateDeviceExtensionProperties) \
     X(vkGetPhysicalDeviceSurfaceSupportKHR) \
     X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) \
     X(vkGetPhysicalDeviceSurfaceFormatsKHR) \
@@ -271,6 +284,10 @@ static PFN_vkGetInstanceProcAddr s_gipa;
     X(vkCreateDevice) X(vkDestroyDevice) X(vkGetDeviceProcAddr)
 
 #define DFNS(X) \
+    X(vkCreateRenderPass) X(vkDestroyRenderPass) \
+    X(vkCreateImageView) X(vkDestroyImageView) \
+    X(vkCreateFramebuffer) X(vkDestroyFramebuffer) \
+    X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) \
     X(vkGetDeviceQueue) X(vkCreateSwapchainKHR) X(vkDestroySwapchainKHR) \
     X(vkGetSwapchainImagesKHR) X(vkCreateCommandPool) X(vkDestroyCommandPool) \
     X(vkAllocateCommandBuffers) X(vkFreeCommandBuffers) \
@@ -298,6 +315,14 @@ typedef struct {
     VkImage          img[MAXIMG];
     VkCommandPool    pool;
     VkCommandBuffer  cmd[MAXIMG];
+    /* G19d: what a pass draws into. THE RENDER PASS IS PER DEVICE AND THE
+       FRAMEBUFFERS ARE PER SWAPCHAIN -- a resize rebuilds the views and the
+       framebuffers and keeps the render pass, so a pipeline a pass built
+       against it stays valid across every resize. The format is checked on
+       every rebuild rather than assumed (`vk_swapchain`). */
+    VkRenderPass     rp;
+    VkImageView      view[MAXIMG];
+    VkFramebuffer    fb[MAXIMG];
     VkSemaphore      semAcquire[MAXIMG];   /* by FRAME index                  */
     VkSemaphore      semRelease[MAXIMG];   /* by IMAGE index -- see vk_present */
     VkFence          fence[MAXIMG];
@@ -309,6 +334,7 @@ typedef struct {
     HWND             hwnd;
     int              vsync;
     int              devIndex;             /* into the cached name table, or -1 */
+    int              flipok;               /* VK_KHR_maintenance1 was enabled   */
     int              rebuild;              /* the surface said its extent moved */
     unsigned         frame;
     char             devName[NAMELEN];
@@ -318,6 +344,17 @@ static Vk  s_vk;
 static volatile LONG s_state;
 static HANDLE s_worker;
 static struct { HWND hwnd; int w, h, vsync; } s_want;
+
+/* WHAT A PORTED PASS IS HANDED (tagpu_vk_pass.h), filled in by `up_worker` and
+   read by the render thread in ST_READY -- the same ownership rule as `s_vk`,
+   because it is a view of `s_vk` and nothing more. Nothing in it names a
+   window, a surface or a swapchain: that is standing constraint 3 holding
+   rather than being asserted. */
+static TAGPU_VKPASS s_pass;
+
+/* The passes log through the lane's log, so one file carries the whole lane's
+   story in order. */
+static void passlog(const char* m) { vklog("%s", m); }
 
 /* The clear colour, `color=r,g,b` in the lever file. Magenta by default: no
    pixel of TA's palette is pure magenta, so "is the Vulkan lane on screen?" is
@@ -510,6 +547,14 @@ void tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 /* ---- the lever ----------------------------------------------------------- */
 static volatile LONG s_armed = -1;      /* -1 = never polled */
 static DWORD s_lastPoll;
+/* THE A/B'S FRAME IS NOT DECIDED HERE (G19d). `tagpu_fps.c` polls the lever,
+   captures its own half and hands the flag over with the vertices; this file
+   only carries it through. Both lanes polling for themselves was the first
+   shape, and it was wrong: they poll on different cadences (that one every 30
+   frames, this one every 250 ms), so the two captures could land hundreds of
+   frames apart -- and the readout changes its number twice a second, so they
+   would have differed in the digits and agreed about nothing else. */
+static int s_abShot;
 
 static void read_lever(void)
 {
@@ -1018,6 +1063,7 @@ static int vk_swapchain(int w, int h)
     VkSwapchainCreateInfoKHR swci = { VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR };
     VkPresentModeKHR mode = VK_PRESENT_MODE_FIFO_KHR;
     VkSwapchainKHR old = s_vk.sc;
+    VkFormat rpfmt = s_vk.fmt;         /* what the render pass, if any, was built on */
     uint32_t nf = 16, nm = 8, want;
     VkResult r;
     uint32_t i;
@@ -1125,6 +1171,21 @@ static int vk_swapchain(int w, int h)
     }
     if (old) vkDestroySwapchainKHR(s_vk.dev, old, NULL);
 
+    /* THE FORMAT MAY NOT MOVE UNDER A LIVE RENDER PASS. `vk_renderpass` is
+       built once from this format and every ported pass's pipeline is built
+       against it; a rebuild that came back with a different format would leave
+       both describing an attachment that is no longer there, and Vulkan's
+       render-pass compatibility rules make that undefined rather than an error.
+       The format is chosen from the same surface by the same preference order
+       every time, so this cannot fire -- which is precisely why it is worth a
+       line: the day the surface changes its mind, the lane says so and comes
+       down instead of drawing into a lie. */
+    if (s_vk.rp && s_vk.fmt != rpfmt) {
+        vklog("the surface changed format under the render pass (%d -> %d) - down",
+              (int)rpfmt, (int)s_vk.fmt);
+        return 0;
+    }
+
     /* REFUSED, NOT CLAMPED. `minImageCount` bounds what we ASK for; nothing
        bounds what the implementation returns, and clamping the count would
        leave `vkAcquireNextImageKHR` free to hand back an index past the end of
@@ -1151,8 +1212,77 @@ static int vk_swapchain(int w, int h)
     return 1;
 }
 
+/* THE RENDER PASS, ONE PER DEVICE. One colour attachment in the swapchain's
+   format, and it does two things that would otherwise be barriers:
+
+     * it takes the image from TRANSFER_DST_OPTIMAL -- which is what
+       `vkCmdClearColorImage` left it in -- to COLOR_ATTACHMENT_OPTIMAL, and
+     * it leaves it in PRESENT_SRC_KHR, which is the transition `vk_present`
+       used to do by hand.
+
+   `loadOp` is LOAD and not CLEAR because the clear has already happened: the
+   colour is the lever's and G19a's `vkCmdClearColorImage` is what applies it.
+   The external dependency is what orders that transfer write before the first
+   colour write, and it is not optional -- without it the layout transition the
+   render pass performs is unordered against the clear.
+
+   It is created once and kept for the life of the device so that a pass can
+   build a pipeline against it and keep that pipeline across a resize; only the
+   framebuffers follow the swapchain. */
+static int vk_renderpass(void)
+{
+    VkAttachmentDescription at;
+    VkAttachmentReference ref;
+    VkSubpassDescription sub;
+    VkSubpassDependency dep[2];
+    VkRenderPassCreateInfo rci = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
+
+    memset(&at, 0, sizeof at);
+    at.format = s_vk.fmt;
+    at.samples = VK_SAMPLE_COUNT_1_BIT;
+    at.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    at.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    at.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    at.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    at.initialLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    at.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    memset(&ref, 0, sizeof ref);
+    ref.attachment = 0;
+    ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    memset(&sub, 0, sizeof sub);
+    sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sub.colorAttachmentCount = 1;
+    sub.pColorAttachments = &ref;
+
+    memset(dep, 0, sizeof dep);
+    dep[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    dep[0].dstSubpass = 0;
+    dep[0].srcStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    dep[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    dep[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                           VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep[1].srcSubpass = 0;
+    dep[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    dep[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep[1].dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+    dep[1].dstAccessMask = 0;
+
+    rci.attachmentCount = 1; rci.pAttachments = &at;
+    rci.subpassCount = 1; rci.pSubpasses = &sub;
+    rci.dependencyCount = 2; rci.pDependencies = dep;
+    if (vkCreateRenderPass(s_vk.dev, &rci, NULL, &s_vk.rp) != VK_SUCCESS) {
+        vklog("the render pass would not create"); s_vk.rp = VK_NULL_HANDLE; return 0;
+    }
+    return 1;
+}
+
 /* The per-image sync and command objects. Sized by the swapchain, so they are
-   built after it and torn down with it. */
+   built after it and torn down with it -- and since G19d the image views and
+   framebuffers a pass draws into are among them. */
 static int vk_perimage(void)
 {
     VkCommandBufferAllocateInfo cbai = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
@@ -1171,10 +1301,28 @@ static int vk_perimage(void)
         vklog("command buffers"); return 0;
     }
     for (i = 0; i < s_vk.nimg; i++) {
+        VkImageViewCreateInfo ivi = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+        VkFramebufferCreateInfo fbi = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
         if (vkCreateSemaphore(s_vk.dev, &sci, NULL, &s_vk.semAcquire[i]) != VK_SUCCESS ||
             vkCreateSemaphore(s_vk.dev, &sci, NULL, &s_vk.semRelease[i]) != VK_SUCCESS ||
             vkCreateFence(s_vk.dev, &fci, NULL, &s_vk.fence[i]) != VK_SUCCESS) {
             vklog("per-image sync objects"); return 0;
+        }
+        if (!s_vk.rp) continue;         /* no render pass: nothing draws */
+        ivi.image = s_vk.img[i];
+        ivi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        ivi.format = s_vk.fmt;
+        ivi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        ivi.subresourceRange.levelCount = 1;
+        ivi.subresourceRange.layerCount = 1;
+        if (vkCreateImageView(s_vk.dev, &ivi, NULL, &s_vk.view[i]) != VK_SUCCESS) {
+            vklog("swapchain image view %u", i); return 0;
+        }
+        fbi.renderPass = s_vk.rp;
+        fbi.attachmentCount = 1; fbi.pAttachments = &s_vk.view[i];
+        fbi.width = s_vk.ext.width; fbi.height = s_vk.ext.height; fbi.layers = 1;
+        if (vkCreateFramebuffer(s_vk.dev, &fbi, NULL, &s_vk.fb[i]) != VK_SUCCESS) {
+            vklog("framebuffer %u", i); return 0;
         }
     }
     return 1;
@@ -1194,6 +1342,9 @@ static void vk_perimage_free(void)
         memset(s_vk.cmd, 0, sizeof s_vk.cmd);
     }
     for (i = 0; i < MAXIMG; i++) {
+        /* The framebuffer goes before the view it is built on. */
+        if (s_vk.fb[i])   { vkDestroyFramebuffer(s_vk.dev, s_vk.fb[i], NULL); s_vk.fb[i] = VK_NULL_HANDLE; }
+        if (s_vk.view[i]) { vkDestroyImageView(s_vk.dev, s_vk.view[i], NULL); s_vk.view[i] = VK_NULL_HANDLE; }
         if (s_vk.semAcquire[i]) { vkDestroySemaphore(s_vk.dev, s_vk.semAcquire[i], NULL); s_vk.semAcquire[i] = VK_NULL_HANDLE; }
         if (s_vk.semRelease[i]) { vkDestroySemaphore(s_vk.dev, s_vk.semRelease[i], NULL); s_vk.semRelease[i] = VK_NULL_HANDLE; }
         if (s_vk.fence[i])      { vkDestroyFence(s_vk.dev, s_vk.fence[i], NULL);          s_vk.fence[i] = VK_NULL_HANDLE; }
@@ -1207,7 +1358,15 @@ static void vk_down(void)
 {
     if (s_vk.dev) {
         if (vkDeviceWaitIdle) vkDeviceWaitIdle(s_vk.dev);
+        /* THE PASSES GO FIRST, AFTER THE WAIT AND BEFORE ANYTHING THEY MIGHT
+           BE HOLDING. A pass owns pipelines, descriptors, buffers and images of
+           its own; they belong to this device and must be back before it is
+           destroyed. The wait above is what makes that safe rather than a race
+           -- nothing of theirs is still in a queue. */
+        tagpu_vk_fps_down(&s_pass);
+        tagpu_vk_shot_down(&s_pass);
         vk_perimage_free();
+        if (s_vk.rp) { vkDestroyRenderPass(s_vk.dev, s_vk.rp, NULL); s_vk.rp = VK_NULL_HANDLE; }
         if (s_vk.pool) { vkDestroyCommandPool(s_vk.dev, s_vk.pool, NULL); s_vk.pool = VK_NULL_HANDLE; }
         if (s_vk.sc)   { vkDestroySwapchainKHR(s_vk.dev, s_vk.sc, NULL);  s_vk.sc = VK_NULL_HANDLE; }
         vkDestroyDevice(s_vk.dev, NULL);
@@ -1216,6 +1375,7 @@ static void vk_down(void)
     if (s_vk.surf && s_vk.inst) { vkDestroySurfaceKHR(s_vk.inst, s_vk.surf, NULL); s_vk.surf = VK_NULL_HANDLE; }
     if (s_vk.inst) { vkDestroyInstance(s_vk.inst, NULL); s_vk.inst = VK_NULL_HANDLE; }
     memset(&s_vk, 0, sizeof s_vk);
+    memset(&s_pass, 0, sizeof s_pass);
     s_vk.devIndex = -1;
     InterlockedExchange(&s_activeIndex, -1);
 }
@@ -1346,13 +1506,54 @@ static DWORD WINAPI up_worker(LPVOID arg)
 
     {
         float prio = 1.0f;
-        const char* dexts[1] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+        const char* dexts[2] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME, NULL };
+        uint32_t ndext = 1;
         VkDeviceQueueCreateInfo qci = { VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
         VkDeviceCreateInfo dci = { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
+
+        /* VK_KHR_maintenance1 IS ASKED FOR AND NOT ASSUMED, AND IT BUYS EXACTLY
+           ONE THING: a NEGATIVE VIEWPORT HEIGHT. GL's clip space has +Y up and
+           Vulkan's has +Y down, so every shader the fork ports would draw its
+           frame upside down -- and the shaders are ported UNCHANGED on purpose,
+           because a source edit would make each one disagree with the GL twin
+           that is its oracle (tools/spirv-gen.py's header). So the flip is
+           pipeline state, and this is the state.
+
+           The instance asks for Vulkan 1.0, where this is an extension rather
+           than core; a 1.1+ driver still advertises it to a 1.0 application,
+           and the reference setup's 4070 lists 247 device extensions. Asked for
+           rather than assumed all the same: a device without it keeps the lane
+           and loses the passes, which say so. */
+        if (vkEnumerateDeviceExtensionProperties) {
+            VkExtensionProperties ext[512];
+            uint32_t ne = 512, k;
+            if (vkEnumerateDeviceExtensionProperties(s_vk.pd, NULL, &ne, ext) == VK_SUCCESS) {
+                if (ne > 512) ne = 512;
+                for (k = 0; k < ne; k++)
+                    if (!strcmp(ext[k].extensionName, "VK_KHR_maintenance1")) {
+                        dexts[ndext++] = "VK_KHR_maintenance1";
+                        s_vk.flipok = 1;
+                        break;
+                    }
+            }
+        }
+        if (!s_vk.flipok)
+            vklog("VK_KHR_maintenance1 is not offered - the lane will present but "
+                  "no ported pass can flip clip space, so none will draw");
+
         qci.queueFamilyIndex = s_vk.qfam; qci.queueCount = 1; qci.pQueuePriorities = &prio;
         dci.queueCreateInfoCount = 1; dci.pQueueCreateInfos = &qci;
-        dci.enabledExtensionCount = 1; dci.ppEnabledExtensionNames = dexts;
+        dci.enabledExtensionCount = ndext; dci.ppEnabledExtensionNames = dexts;
         r = vkCreateDevice(s_vk.pd, &dci, NULL, &s_vk.dev);
+        if (r != VK_SUCCESS && s_vk.flipok) {
+            /* The only extension that can be refused here is the optional one,
+               so one retry without it is a real fallback and not a loop. */
+            vklog("vkCreateDevice refused VK_KHR_maintenance1 (%s) - retrying without it",
+                  res_name(r));
+            s_vk.flipok = 0;
+            dci.enabledExtensionCount = 1;
+            r = vkCreateDevice(s_vk.pd, &dci, NULL, &s_vk.dev);
+        }
         if (r != VK_SUCCESS) { vklog("vkCreateDevice: %s (%d)", res_name(r), (int)r); goto fail; }
     }
 
@@ -1387,7 +1588,25 @@ static DWORD WINAPI up_worker(LPVOID arg)
             vklog("command pool"); goto fail;
         }
     }
+    /* THE RENDER PASS BEFORE THE PER-IMAGE OBJECTS, because the framebuffers
+       are built from it. It is per DEVICE and survives every resize, so a
+       ported pass's pipeline survives them too. */
+    if (!vk_renderpass()) goto fail;
     if (!vk_perimage()) goto fail;
+
+    /* What a ported pass is handed. Written before the publish below, like
+       every other field of the lane, so a render thread that reads ST_READY
+       sees all of it. */
+    s_pass.inst = s_vk.inst;
+    s_pass.pd = s_vk.pd;
+    s_pass.dev = s_vk.dev;
+    s_pass.rp = s_vk.rp;
+    s_pass.fmt = s_vk.fmt;
+    s_pass.slots = s_vk.nimg;
+    s_pass.flipok = s_vk.flipok;
+    s_pass.gipa = s_gipa;
+    s_pass.gdpa = vkGetDeviceProcAddr;
+    s_pass.log = passlog;
 
     va_log("with Vulkan up");
     vklog("up in %lu ms on \"%s\" (row %d), our window %p over %p, %ux%u, vsync %d "
@@ -1443,6 +1662,24 @@ fail:
    is what makes frame `n` wait for frame `n - nimg` and nothing sooner. (An
    earlier comment here said "one frame in flight", which `fi = frame % nimg`
    plainly is not.) Deepening this into a pass that paces itself is G19d's. */
+/* Wait for the frame the capture rode on and write the file. THE ONE BLOCKING
+   WAIT IN THE LANE, and it is under a lever, for one frame, once -- the render
+   thread stalling for the length of a frame is exactly what an oracle is
+   allowed to cost and exactly what the steady-state path may not. The fence is
+   not reset here: the next frame in this slot waits on it (returning at once)
+   and resets it, as it always did. */
+static void ab_finish(uint32_t fi)
+{
+    if (!s_abShot) return;
+    s_abShot = 0;
+    if (vkWaitForFences(s_vk.dev, 1, &s_vk.fence[fi], VK_TRUE, 1000000000ull) != VK_SUCCESS) {
+        vklog("the A/B frame did not finish within a second - nothing written");
+        tagpu_vk_shot_down(&s_pass);
+        return;
+    }
+    tagpu_vk_shot_finish(&s_pass, AB_OUT);
+}
+
 static int vk_present(void)
 {
     uint32_t idx = 0, fi = s_vk.frame % s_vk.nimg;
@@ -1450,7 +1687,18 @@ static int vk_present(void)
     VkImageSubresourceRange rng = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
     VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
     VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
-    VkPipelineStageFlags waitst = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    /* THE ACQUIRE IS WAITED ON AT THE TRANSFER STAGE TOO, AND THAT IS A FIX.
+       [FOUND 2026-09-15 while adding the render pass below.] A semaphore wait
+       blocks the stages named here and every LATER one -- and the first thing
+       this command buffer does to the image is `vkCmdClearColorImage`, which
+       runs at TRANSFER and is not later than COLOR_ATTACHMENT_OUTPUT. So with
+       COLOR_ATTACHMENT_OUTPUT alone the clear was free to run before the
+       acquire had actually handed the image over: a write to an image the
+       presentation engine may still be reading, which is the silent kind of
+       fault -- it does not throw, it tears a frame now and then on a driver
+       that happens to overlap. */
+    VkPipelineStageFlags waitst = VK_PIPELINE_STAGE_TRANSFER_BIT |
+                                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSubmitInfo si = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
     VkPresentInfoKHR pi = { VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
     VkClearColorValue col;
@@ -1512,12 +1760,52 @@ static int vk_present(void)
     col.float32[2] = s_clear[2]; col.float32[3] = 1.0f;
     vkCmdClearColorImage(cb, s_vk.img[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &col, 1, &rng);
 
-    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    b.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    b.dstAccessMask = 0;
-    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL, 0, NULL, 1, &b);
+    /* THE PASSES, AND THE RENDER PASS RUNS WHETHER OR NOT ONE DRAWS. It is what
+       takes the image from TRANSFER_DST to PRESENT_SRC -- the transition this
+       used to do with a second barrier -- so skipping it on a frame with
+       nothing to draw would present an image in the wrong layout.
+
+       `prepare` is OUTSIDE it and `record` INSIDE, because a pass's texture
+       upload is a transfer and a transfer may not be recorded inside a render
+       pass. `fi` is the frame slot: the fence wait at the top of this function
+       is what proves the GPU has finished with that slot's buffers, and it is
+       the only thing that does. */
+    {
+        int draw_fps = 0, ab = 0;
+        VkRenderPassBeginInfo rbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+        if (s_vk.rp && s_vk.fb[idx]) {
+            draw_fps = tagpu_vk_fps_prepare(&s_pass, cb, fi);
+            ab = tagpu_vk_fps_ab_frame();
+        }
+
+        if (s_vk.rp && s_vk.fb[idx]) {
+            rbi.renderPass = s_vk.rp;
+            rbi.framebuffer = s_vk.fb[idx];
+            rbi.renderArea.extent = s_vk.ext;
+            vkCmdBeginRenderPass(cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+            if (draw_fps)
+                tagpu_vk_fps_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
+            vkCmdEndRenderPass(cb);
+        } else {
+            /* No render pass: nothing can draw, so the clear is the frame and
+               the layout has to be moved by hand exactly as it was before
+               G19d. */
+            b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.dstAccessMask = 0;
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL, 0, NULL, 1, &b);
+        }
+
+        /* THE A/B CAPTURE, ONE FRAME, UNDER THE LEVER tagpu_fps.c SHARES. It
+           is recorded last so that what it reads is the finished frame, and it
+           leaves the image in PRESENT_SRC so the present below is unaffected. */
+        if (ab)
+            s_abShot = tagpu_vk_shot_record(&s_pass, cb, s_vk.img[idx],
+                                            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                                            s_vk.ext.width, s_vk.ext.height, s_vk.fmt);
+    }
     vkEndCommandBuffer(cb);
 
     si.waitSemaphoreCount = 1; si.pWaitSemaphores = &s_vk.semAcquire[fi];
@@ -1538,6 +1826,12 @@ static int vk_present(void)
     pi.swapchainCount = 1; pi.pSwapchains = &s_vk.sc; pi.pImageIndices = &idx;
     r = vkQueuePresentKHR(s_vk.queue, &pi);
     s_vk.frame++;
+    /* THE CAPTURE IS FINISHED ON EVERY PATH OUT OF HERE, including the failing
+       ones: the copy is already inside the submit above, so the staging buffer
+       is owned by the GPU whatever the present then said, and an early return
+       that skipped this would keep a frame-sized host mapping -- 8.3 MB at
+       1080p, in a 32-bit address space -- for the rest of the session. */
+    ab_finish(fi);
     if (r == VK_ERROR_OUT_OF_DATE_KHR) return -1;
     /* SUBOPTIMAL: the frame WAS presented, so it is counted -- but the surface
        has moved on and the next frame should be drawn against a fresh
@@ -1554,10 +1848,20 @@ static int vk_resize(int w, int h)
 {
     int r;
     vkDeviceWaitIdle(s_vk.dev);
+    /* THE PASSES GO BACK ACROSS A RESIZE TOO, and the reason is the slot count:
+       a rebuilt swapchain may come back with a different number of images, and
+       a pass that kept buffers for the old count would be handed a slot index
+       past the end of them. The wait above is what makes dropping them safe.
+       (Their PIPELINES could have survived -- the render pass does -- but a
+       pass that rebuilds everything has one path instead of two, and a resize
+       is a window drag, not a frame.) */
+    tagpu_vk_fps_down(&s_pass);
     vk_perimage_free();
     r = vk_swapchain(w, h);
     if (r <= 0) return r;
-    return vk_perimage();
+    if (!vk_perimage()) return 0;
+    s_pass.slots = s_vk.nimg;
+    return 1;
 }
 
 int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync)

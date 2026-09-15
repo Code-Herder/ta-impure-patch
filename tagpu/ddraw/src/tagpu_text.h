@@ -123,6 +123,13 @@ int  tagpu_text_glyph_stats(unsigned* glyphs, unsigned* drops, int* fonts);
    call. 0 when there is nothing to draw. */
 unsigned int tagpu_text_tex(void);
 void tagpu_text_dims(int* w, int* h);
+
+/* ---- the bytes, for a backend that is not GL (Phase G / G19d) ----
+   The CPU-side string atlas -- ATLAS_W x ATLAS_H, one coverage byte per texel,
+   the same 128 KB `tagpu_text_tex` uploads -- and a counter that ticks whenever
+   a raster lands in it. A second backend holds its own texture and refills it
+   when the counter moves. Valid for the process's life; render thread. */
+const unsigned char* tagpu_text_atlas(unsigned* gen);
 void tagpu_text_glreset(void);
 int  tagpu_text_stats(int* strings, int* dropped);
 #endif

@@ -112,6 +112,15 @@ static unsigned s_builtGen;                /* the font generation the atlas hold
 static unsigned s_fontGen;                 /* bumped whenever the copy changes */
 static unsigned char s_atlas[ATLAS_W * ATLAS_H];
 static int   s_dirty;
+/* THE ATLAS CONTENT'S OWN COUNTER, AND IT IS NOT `s_dirty`. Since G19d there
+   are two consumers of the same 128 KB -- the GL texture here and a Vulkan one
+   in tagpu_vk_fps.c -- and `s_dirty` is CONSUMED by the upload that reads it,
+   so whichever consumer ran second would never see a raster land. This ticks
+   when the PIXELS change and is never cleared; a consumer keeps the value it
+   last uploaded and compares. It deliberately does NOT tick in
+   `tagpu_text_glreset`: a lost GL context does not change a byte of the
+   atlas, and re-uploading a Vulkan texture for it would be work for nothing. */
+static unsigned s_agen = 1;
 static GLuint s_tex;
 
 void tagpu_text_frame(const TAGPU_PACKET* pk)
@@ -254,7 +263,7 @@ int tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff)
         s_ndrop = 0; s_nremem = 0;
         memset(s_atlas, 0, sizeof s_atlas);
         s_builtGen = s_fontGen;
-        s_dirty = 1;
+        s_dirty = 1; s_agen++;
         flog("text: atlas reset (font changed)");
     }
     *yoff = (int)s_fontYoff;
@@ -288,8 +297,16 @@ int tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff)
     s_nent++;
     s_shelfX += sw;
     if (sh > s_shelfH) s_shelfH = sh;
-    s_dirty = 1;
+    s_dirty = 1; s_agen++;
     return 1;
+}
+
+/* The atlas as bytes, for a backend that does not have our GL texture
+   (Phase G / G19d). Render thread, exactly like every other entry point here. */
+const unsigned char* tagpu_text_atlas(unsigned* gen)
+{
+    if (gen) *gen = s_agen;
+    return s_atlas;
 }
 
 void tagpu_text_dims(int* w, int* h) { *w = ATLAS_W; *h = ATLAS_H; }

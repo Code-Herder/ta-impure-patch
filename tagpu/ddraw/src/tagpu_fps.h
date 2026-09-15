@@ -18,4 +18,26 @@
    cadence and draws nothing at all when it is absent. */
 void tagpu_fps_present(const TAGPU_FRAME* f);
 void tagpu_fps_glreset(void);      /* the GL context changed: drop our objects */
+
+/* ---- the Vulkan edition of this pass (Phase G / G19d) ----
+   The quads `tagpu_fps_present` just built -- (x, y, u, v) per vertex, `nv`
+   vertices, in a frame `fw` x `fh` game pixels -- so that the Vulkan lane draws
+   THE SAME GEOMETRY rather than a second implementation of it. The pointer is
+   into this file's static array and is valid until the next present.
+
+   IT HANDS THEM OVER ONCE. A second call in the same frame returns 0, which is
+   what makes a frame the overlay did not run on draw nothing instead of
+   repeating the last one. Returns 0 when there is nothing to draw.
+
+   `ab` comes back 1 on the ONE frame this pass captured `tagpu_fps_gl.ppm`, so
+   the Vulkan lane captures the same frame rather than whichever one its own
+   lever poll happened to land on. */
+int tagpu_fps_quads(const float** v, int* nv, int* fw, int* fh, int* ab);
+
+/* The most vertices `tagpu_fps_quads` can ever hand over -- MAXCH quads of
+   QUADV vertices, checked against those two in tagpu_fps.c so the two cannot
+   drift. The Vulkan pass sizes its buffer from this AND re-checks `nv` against
+   it, because a #define in one file bounding an array in another is a bound
+   only while both are read together. */
+#define TAGPU_FPS_MAXV (48 * 6)
 #endif
