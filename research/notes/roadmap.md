@@ -1961,7 +1961,7 @@ image came from the game surface, not an X grab. Intro cinematic frame also capt
 | Presentation layer | Fork cnc-ddraw; add overlay callback before `SwapBuffers` in `render_ogl.c` |
 | Runtime | Proton-first (Steam appid 298030); system wine 9.0 for fast iteration; Windows sanity-check late |
 | Ecosystem position | Standalone stack — no dependence on TADR binaries; vendor their knowledge (MIT, attributed) |
-| GPU API | OpenGL 3.3+ core, shared context, render in cnc-ddraw's render thread |
+| GPU API | OpenGL 3.3+ core, shared context, render in cnc-ddraw's render thread. **Amended 2026-09-15 — a Vulkan backend joins it beside the GL one (Phase G / G19); GL is not removed and stays the default through that phase.** The GL context is 3.3 by choice, not by limit, and most of what it lacks (compute, SSBOs, indirect draw) is a context-version bump — but ray tracing is not available in OpenGL at all, and is gated on 64-bit besides ([field notes](field-notes.html) "Environment & toolchain") |
 | Hook depth | Blit-level replacement, staged through a sprite-cache stepping stone |
 | Endgame | **Full scene takeover** — GPU terrain, features, units; ortho camera + smooth zoom |
 | Camera until then | Pixel-exact match of the engine's fixed ortho view |
@@ -2359,6 +2359,91 @@ red/green plate** — read off the built screen, whose Off/On rows show red at s
 And the callback question is settled by construction: ours is `GUIMEMSTRUCT+0x08`, set right
 after the load exactly as `0x495219` does, and it writes an in-memory value that the render
 thread turns into files at the next present.
+
+## Phase G — the Vulkan backend (G19)  [PLANNED 2026-09-15]
+
+A second rendering backend beside the GL one, brought up **in the 32-bit DLL where the renderer
+already lives**, so that the stack has a Vulkan implementation ready before the question of ray
+tracing is decided. The GL renderer stays the default throughout Phase G and is not removed;
+the two run side by side behind a lever, because the parity oracles that make each ported pass
+verifiable *are* the GL renderer.
+
+**Why now, and why 32-bit** [MEASURED 2026-09-15, [field notes](field-notes.html) "Environment
+& toolchain"]. Ray tracing is gated on **bitness**: NVIDIA's 32-bit ICD does not advertise
+`VK_KHR_acceleration_structure` / `ray_tracing_pipeline` / `ray_query` /
+`deferred_host_operations` under any wine tested, while the same card and driver expose all four
+in a 64-bit process. So RT will eventually require the renderer to leave `TotalA.exe` for a
+64-bit process — but **everything except RT is reachable at 32-bit today**, and 32-bit is the
+*stricter* target: Vulkan's non-dispatchable handles are `uint64_t` at 32-bit and real pointers
+at 64-bit, so code that works at 32-bit works at 64-bit unchanged, while the reverse silently
+breaks. Writing this backend at 32-bit now makes the eventual move a matter of window ownership
+and the packet crossing a process boundary, not a port of the renderer.
+
+**What the probes have already settled** (`tools/vkprobe.c`, and the surface probe of the same
+session). From a 32-bit process under Proton 11: the loader reports 1.3, two physical devices
+enumerate, the 4070 is flagged `VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU` with 247 device
+extensions; an instance with `VK_KHR_surface` + `VK_KHR_win32_surface` creates; and
+`vkCreateWin32SurfaceKHR` on a real `HWND` returns a surface with a **graphics+present queue
+family**, `minImageCount` 3, `supportedUsageFlags` `0x9F` (`TRANSFER_DST` among them, so a
+compositing pass can clear or blit straight into a swapchain image) and two surface formats.
+**Not yet tested: creating a swapchain, and presenting a frame** — that is G19a's whole job, and
+the phase's kill rule hangs on it.
+
+**`VK_PRESENT_MODE_MAILBOX_KHR` is NOT offered on the 4070 under wine** — the surface reports
+FIFO, FIFO_RELAXED, IMMEDIATE and FIFO_LATEST_READY only (llvmpipe offers all four, so this is
+the driver and not our probe). Frame pacing must not be designed around mailbox triple
+buffering; `fps_limiter.c` and the `maxfps` knob remain the mechanism.
+
+| Gate | Status | Exit |
+|---|---|---|
+| G19a — **the bring-up**: Vulkan headers vendored into `tagpu/ddraw/inc/` (pinned, the way `glcorearb.h` and `ddraw.h` already are — *not* a system `libvulkan-dev`, which CI does not install), a device on the chosen physical device, a swapchain on the game's `HWND`, and a frame cleared to a known colour and presented | ○ | `tagpu_vk.on` brings up Vulkan and presents a solid colour over the game window at 1024×768 and 1080p, through a context switch (shell → game → shell) and an alt-enter cycle; **with the lever off, the DLL is byte-identical in behaviour to the GL build** — the full `uiwalk` `strict` walk at 0/0/0 and `tascene ab` unmoved. Address-space cost recorded: peak committed bytes and largest free VA block with Vulkan up, against the GL build on the same fixture |
+| G19b — **the GPU picker**: `vkEnumeratePhysicalDevices` behind a row in the Window panel (`tagpu_menu.c`), defaulting to the discrete device, persisted in the cfg | ○ | the row lists every device by `deviceName`; the default lands on `DISCRETE_GPU` when one exists; the choice survives a relaunch; and the device actually in use is reported back so the row can be verified rather than trusted. **Stated limit**: this binds the *Vulkan* device only — the GL lane cannot be retargeted in-process, so under GL the row is a launcher-level setting that needs a relaunch (`DRI_PRIME` / `__NV_PRIME_RENDER_OFFLOAD` through `tacli`'s `Instance.env()`, or the per-application driver profile on Windows) |
+| G19c — **the shader pipeline**: the 37 `#version 330 core` programs translated to SPIR-V | ○ | every program compiles to SPIR-V **in the build**, emitted as `uint32_t[]` C headers the way `tagpu_glsl.h` already carries GLSL — text, so `.publish-allow` has nothing to refuse and no blob is added to the repo. One program runs from its SPIR-V in G19d. Kill: if build-time translation cannot be made to work in CI (which installs only the mingw cross compiler, `make` and `zip`), the generated headers are committed instead and regenerated by a documented script |
+| G19d — **one pass, end to end**: the smallest self-contained pass ported and A/B'd against its GL twin | ○ | `tagpu_fps.c` is the candidate — its own two-triangle program in game-frame pixels, one quad per character out of eleven fixed atlas strings — because it exercises buffer, texture, shader and draw with nothing else depending on it, and it is 267 lines. Exit: the Vulkan pass and the GL pass are **0 px apart** on a still frame at both resolutions, under the lever, with the rest of the frame still drawn by GL |
+| G19e — **the world passes**: terrain, units, features, effects, shadows | ○ | each pass 0 px against its GL twin where the pass has an exact oracle (terrain's 0-px parity against the engine's own blit), and within its already-stated bar where it does not (the Classic++ Q2 bars of [renderers](renderers.html) §4c). Ported **one pass per landing**, each with its own A/B, never as one drop |
+| G19f — **the UI layer and the present**: the G15 twins ported, and the frame presented through Vulkan with the fork's ddraw path intact | ○ | the `uiwalk` `strict` walk at 0/0/0 across the full screen inventory at 1024×768 and 1080p, in the shell and in game, matching what the GL lane scores today; the shell↔game context switch clean; **frame time no worse than GL** on the 200v200 fixture at 1920x1080, sim paused, 281 units and 76 wrecks, run with `tacli --maxfps 0` (both paths read 58.5 fps against the cap otherwise). The GL figure to beat is whatever that fixture reads whole-frame; for scale, the GL posed-unit pass alone measures **313.0 / 306.9 fps** there against the CPU emitters' 184.0 / 180.0 — [gpu-status](gpu-status.html) |
+
+**Legend:** ● done · ◐ partial · ○ pending · ✕ blocked
+
+### Standing constraints for every Phase G landing
+
+These are what keep the eventual 64-bit move plumbing rather than a second port. They cost
+nothing if adopted from the first commit and are expensive to retrofit.
+
+1. **The Vulkan renderer reads the frame packet and nothing else.** Landings 1–4 of the frame
+   packet already removed every render-thread read of engine state; Vulkan code may not
+   re-introduce one. This is the line that decides whether the renderer can be lifted into
+   another process at all.
+2. **Never cast a Vulkan handle to a pointer**, store one in a `void*`, or key a container on
+   one. At 32-bit these are `uint64_t` and the compiler enforces it — which is the main reason
+   building at 32-bit first is a feature and not a compromise.
+3. **Presentation lives behind one seam** — surface, swapchain, acquire, present in a single
+   file. That file is what gets replaced when the window moves to another process; nothing else
+   may know a window exists.
+4. **The GL backend is not removed and not regressed.** Every gate above re-runs the GL lane's
+   own oracles with the lever off. A Phase G landing that moves a GL pixel has failed.
+
+### Not in this phase
+
+**Ray tracing** (needs 64-bit — see the kill rule), **the out-of-process split**, and **a D3D12
+backend**. On D3D12 specifically: even with Windows becoming the primary target, Vulkan is the
+backend that makes "develop under wine, smoke-test on Windows" hold, because winevulkan is a
+thin passthrough to the same driver while vkd3d-proton is a translation — behaviour under one
+predicts Windows, the other does not. D3D12 stays a possible second backend and is not a Phase
+G question.
+
+### Kill / pivot
+
+**G19a is the kill gate.** If a 32-bit swapchain cannot be created or presented on the game's
+`HWND` in-process — the one step the probes stopped short of — Phase G does not proceed at
+32-bit: it pivots directly to the out-of-process 64-bit renderer, which is where the RT goal
+leads anyway. The packet is already a wire format for that move (`tagpu_packet.h` is pointer-free
+and every struct is byte-identical at 32 and 64 bit), so the pivot costs the bring-up work and
+nothing that was written above it.
+
+**The phase itself may be abandoned after any gate without debt**, because the GL renderer is
+never removed and never regressed — that is the point of constraint 4. A Phase G that stops at
+G19b has still shipped the GPU picker, which is the player-facing half.
 
 ## Shipping — the build people can download (2026-09-08)
 
