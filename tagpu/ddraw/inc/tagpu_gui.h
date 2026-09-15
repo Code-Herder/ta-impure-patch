@@ -70,25 +70,29 @@ unsigned tagpu_gui_flips(void);                     /* the publisher's flip coun
    either way — and recorded in gui-renderer.md 17 "Not closed here" rather
    than closed by guessing which module should own the question. */
 struct TAGPU_PACKET;
-/* THE ENGINE'S OWN CURSOR DRAW IS SUPPRESSED WHILE THIS IS SET (2026-09-13).
-   The line above this block is why: a rect taken inside DrawGameScreen cannot
-   describe a cursor the engine blits afterwards, so the engine's sprite was
-   forever one frame of motion, or one step of its size pulse, outside the
-   rect we erased — a pale outline of the PREVIOUS cursor standing beside ours,
-   worst while the pointer moves fast. Suppressing the draw retires the whole
-   coordination: with nothing drawn there is nothing to erase, nothing to lag,
-   and the composite's cursor rect and the layer's `cur` exemption become
-   fallbacks for the frames we do not own rather than the mechanism.
+/* DID THE SHARP LAYER REALLY DRAW OUR CURSOR IN THE PRESENT JUST ENDED?
+   Take-and-clear, called ONCE per frame from the render_ogl.c frame bracket
+   and nowhere else; the answer goes straight to tagpu_cursown_publish, which
+   is what decides whether the engine's own cursor blit is skipped.
 
-   WRITTEN ON THE RENDER THREAD, READ ON THE GAME THREAD, and it is 1 only if
-   the sharp layer actually drew our cursor in the present just ended: the
-   engine's draw is then skipped at its next flip. The lag is one frame and it
-   is in the SAFE direction — a frame where we did not draw leaves the flag 0
-   and the engine's cursor comes back for that frame, which is the warm-up
-   handoff the atlas already relies on. It is 0 at rest, so an install that
-   never runs, a GL or atlas failure, or `nocursor` all fail open to exactly
-   today's behaviour. tagpu_packet_pub.c lands the detour that reads it. */
-extern volatile unsigned char g_gui_cursor_suppress;
+   IT IS TAKE-AND-CLEAR, AND THAT IS THE FAIL-OPEN. The latch is set only at
+   the tail of a successful sharp_cursor, and reading it clears it — so a frame
+   that never reaches the GL UI's present at all answers 0, and the engine's
+   cursor comes back. tagpu_overlay_draw returns early for `tagpu_overlay.off`,
+   for a GL init that failed and for a level teardown, and those returns are
+   ABOVE tagpu_gui_present: a flag published from inside the present would keep
+   its last value across every one of them and suppress the engine's cursor
+   while ours was not being drawn — no cursor at all, for as long as the
+   condition lasted, with `tagpu_overlay.off` (the A/B lever whose whole job is
+   to hand the frame back) the worst case. Publishing from the bracket instead
+   means the caller cannot forget a path it does not know about.
+
+   WHY THE ANSWER IS LATCHED RATHER THAN READ LIVE: the engine draws its cursor
+   INSIDE the flip, on another thread, while our present is running. A flag
+   cleared at the start of a present and set at its end leaves a window exactly
+   one present wide in which the engine's draw is not suppressed — which is one
+   engine cursor per frame, i.e. the bug, wearing the counters of a fix. */
+int tagpu_gui_cursor_drew_take(void);
 /* ON A SHELL FRAME THERE IS NO CURSOR STATE, and that is a deliberate,
    NAMED consequence of landing 4c rather than an oversight. The cursor's
    position and sprite used to be read live out of the graphics globals here,

@@ -127,8 +127,6 @@ static volatile unsigned s_cDrawsAll, s_cDraws, s_cForeign, s_cDeep;
 static volatile unsigned s_cCursorDraws, s_cCursorOwned, s_cCursorHidden,
                          s_cCursorPub, s_cCursorSkip, s_cCursorForeign;
 static volatile unsigned s_cCursorStuck;    /* hijack slots that were never given back */
-static volatile unsigned s_cCursorSup;      /* engine cursor draws the flag skipped     */
-static volatile unsigned s_cCursorSupPoll;  /* the same, at the poll site 0x4C25E0      */
 /* the apply's cost: 2 us buckets to 512 us, plus an overflow bucket, written
    on the game thread and read by the heartbeat on the render thread */
 #define APPLY_HIST_N 256
@@ -1933,15 +1931,14 @@ static void extra(char* buf, unsigned cap, double secs)
            it acted on; `skip` is the FRESH gate dropping a publish the render
            thread had not taken yet — expected throughout on a shell that flips
            thousands of times a second, since the gate is what keeps this
-           channel off the in-play publisher's slot. `sup` is the OTHER
-           mechanism at the same site: engine cursor draws the suppression leaf
-           skipped, so `draws` stopping while `sup` climbs is the suppression
-           working, and `sup` staying 0 with a cursor on screen is the GL UI
-           layer not owning the cursor that frame. */
+           channel off the in-play publisher's slot. The engine's cursor BLIT
+           is skipped elsewhere (tagpu_cursown.c) and leaves no mark here on
+           purpose: that module patches a call site, not this one's function,
+           so `draws` keeps counting the draws that really run. */
         _snprintf(buf + n, cap > n ? cap - n : 0,
-                  " | cursor: draws=%u owned=%u hidden=%u pub=%u skip=%u foreign=%u stuck=%u sup=%u/%u",
+                  " | cursor: draws=%u owned=%u hidden=%u pub=%u skip=%u foreign=%u stuck=%u",
                   s_cCursorDraws, s_cCursorOwned, s_cCursorHidden,
-                  s_cCursorPub, s_cCursorSkip, s_cCursorForeign, s_cCursorStuck, s_cCursorSup, s_cCursorSupPoll);
+                  s_cCursorPub, s_cCursorSkip, s_cCursorForeign, s_cCursorStuck);
     }
     if (cap) buf[cap - 1] = 0;
     lastAll = all; lastIn = in;
@@ -2160,94 +2157,13 @@ static void* __cdecl after_cursor(unsigned int* regs)
     return ret;
 }
 
-/* THE ENGINE'S CURSOR DRAW, SKIPPED WHILE OURS IS THE ONE ON SCREEN.
-   [MEASURED 2026-09-13, the owner's report: "when I move my mouse cursor
-   quickly it leaves a blue ghost behind … it almost looks like the previous
-   cursor image".]
-
-   The ghost was the engine's sprite standing where our erase rect did not
-   reach, and no version of that rect could reach it: it is read inside
-   DrawGameScreen, and the engine blits its cursor onto the primary AFTERWARDS,
-   so it was always one frame of pointer motion — and one step of the cursor's
-   size PULSE (the move cursor cycles 27, 29, 31, 33, 35 …) — behind the sprite
-   actually composited. The consumer documented the residual; the owner then
-   saw it. Rather than chase the rect, the draw is retired: with the engine
-   drawing nothing there is nothing to erase, lag or leave standing, and the
-   composite's cursor rect and the layer's `cur` exemption become the fallback
-   for frames we do not own instead of the mechanism.
-
-   The flag is `g_gui_cursor_suppress` (tagpu_gui.h), 1 only while the sharp
-   layer actually drew our cursor in the present just ended: a frame that drew
-   none — the atlas warming on a new sprite, `nocursor`, a failed GL init —
-   leaves it 0 and the engine's cursor comes back for that frame, which is the
-   handoff the atlas already relies on. So this fails open everywhere: off at
-   rest, off if the GUI module never runs, off if it cannot draw.
-
-   THE CHANNEL STILL RUNS, and that is not a detail: the draw being skipped
-   does not make the frame cursorless — OURS is in the sharp layer, and the
-   render half learns which sprite to draw from the packet published here. The
-   sprite record (+0x1B2) is written by the cursor-SELECTION code and keeps
-   tracking the shape; only the drawn pair (+0x1B6/+0x1BA) freezes at the last
-   frame the engine really drew, and its only remaining readers are this
-   module's own rect (inert while nothing is drawn) and the flip's tail
-   restore, which writes the background back where it saved it. */
-/* THE SECOND SITE, and in play the one that actually drew. `0x4C25E0` is the
-   mouse object's per-frame update reached from `0x4C2990` (indirectly), and it
-   is what wrote +0x1B6/+0x1BA in play — proved by its own fingerprint: it
-   stores the poll answer with no hotspot subtraction where the flip's draw
-   subtracts one, so the pair equalled the record to the pixel. The flip above
-   is still suppressed at the same time: it is entered thousands of times a
-   second and the two are mutually exclusive by `+0x1CE`, so whichever arm the
-   engine selects, the cursor stays ours.
-
-   NO PUBLISH HERE. This function is not a channel site — it writes the record
-   and the pair, not the packet — and the shell's channel is the flip's draw.
-   Publishing from both would be two publishes for one present, which the FRESH
-   gate would spend its budget dropping. It counts, so that a heartbeat with
-   `sup` climbing and `sup=…/0` not can be read for what it is.
-
-   THE RECORD IS NOT LOST BY SKIPPING IT: this path's write of +0x196/+0x19A
-   from its own poll is redundant with the message path, which writes the same
-   record from WM_MOUSEMOVE (0x4C2360) and is what the game's input dispatch
-   reads through PeekMouseEvent's `[obj+0x196]` fallback. Verified by
-   measurement after this landing rather than argued: an injected pmove still
-   moves the record with both sites suppressed. */
-static const unsigned char CURSOR_POLL_STOLEN[8] = { 0x83, 0xEC, 0x58, 0x56,
-                                                     0x8B, 0x74, 0x24, 0x60 };
-
-
-static void __cdecl cursor_poll_suppressed(void* arg)
-{
-    (void)arg;
-    s_cCursorSupPoll++;
-}
-
-static void __cdecl cursor_suppressed(void* arg)
-{
-    const char* g;
-    int live = 0;
-    (void)arg;
-    s_cCursorSup++;
-    if (s_countOnly) return;
-    /* the same two gates before_cursor applies, for the same reasons: in play
-       the frame packet carries the cursor, and no level may be in play or the
-       in_game = 0 packet would blank the world for a present */
-    if (s_retDepth != 0 || s_levelOpen) return;
-    g = *(const char* const*)TA_GFX_PP;
-    /* what the skipped draw WOULD have done — the three words it early-outs
-       on. `live` decides whether the layer treats this frame as carrying a
-       cursor, which is exactly the question the shell could not answer before
-       landing 6. */
-    if (ptr_ok(g) && RDU32(g, GFX_CUR_ON) && RDU32(g, GFX_CUR_OK) && RDU32(g, GFX_CUR_REC)) live = 1;
-    shell_cursor_publish(live);
-}
 
 /* ---- install ------------------------------------------------------------- */
 
 void tagpu_packet_pub_init(void)
 {
     char b[400];
-    int drawOk, loaderOk, cursorOk, supOk;
+    int drawOk, loaderOk, cursorOk;
     s_gameTid = GetCurrentThreadId();       /* DllMain runs on the game loop's thread */
     QueryPerformanceFrequency(&s_freq);
     s_countOnly = !tagpu_packet_armed();
@@ -2288,24 +2204,6 @@ void tagpu_packet_pub_init(void)
        is byte-matched like every other, and an install that does not take
        leaves the shell exactly as it was (a missing cursor, not a broken
        frame): a failed hijack here is logged and nothing else changes. */
-    /* THE SUPPRESSION GOES IN FIRST and the observer chains onto it: the leaf
-       owns the site, so a set flag returns from it without ever reaching the
-       observer's stub — nothing is drawn, so there is nothing to observe and
-       nothing to publish — while a clear flag runs the stolen bytes, which the
-       observer's stub now sits in the middle of, exactly as before this
-       landing. Landing the two the other way round would put the observer's
-       jmp at the site and lose the skip. */
-    supOk = !s_countOnly &&
-            tagpu_detour_bytes_ok(VA_CURSOR_DRAW, CURSOR_STOLEN, sizeof CURSOR_STOLEN) &&
-            tagpu_detour_leaf_call(VA_CURSOR_DRAW, CURSOR_STOLEN, sizeof CURSOR_STOLEN,
-                                   &g_gui_cursor_suppress, 8, cursor_suppressed);
-    /* and the poll path, which is the one that draws in play (VA_CURSOR_POLL
-       carries the proof). Installed whenever the flip's is: both arms are
-       suppressed, whichever `+0x1CE` selects. */
-    if (supOk)
-        supOk = tagpu_detour_bytes_ok(VA_CURSOR_POLL, CURSOR_POLL_STOLEN, sizeof CURSOR_POLL_STOLEN) &&
-                tagpu_detour_leaf_call(VA_CURSOR_POLL, CURSOR_POLL_STOLEN, sizeof CURSOR_POLL_STOLEN,
-                                       &g_gui_cursor_suppress, 4, cursor_poll_suppressed);
     cursorOk = !s_countOnly &&
                tagpu_detour_bytes_ok(VA_CURSOR_DRAW, CURSOR_STOLEN, sizeof CURSOR_STOLEN) &&
                tagpu_detour_observe(VA_CURSOR_DRAW, CURSOR_STOLEN, sizeof CURSOR_STOLEN,
@@ -2328,21 +2226,6 @@ void tagpu_packet_pub_init(void)
               cursorOk ? " (the shell's only publish point: the flip 0x4C63A0 cannot be observed a second time, tagpu_gui_hook's hijacks it)"
                        : s_countOnly ? " (count-only: nothing is published at all)"
                                      : " — NOT installed: the shell's cursor stays the engine's, and the GL UI layer paints over it (tagpu_engine.h VA_CURSOR_DRAW)");
-    b[sizeof b - 1] = 0;
-    plog(b);
-    /* and the suppression, on its own line for the same reason: with it armed
-       the engine's cursor is never drawn, so `draws` freezes while `sup`
-       climbs — a heartbeat reading that looks exactly like a dead channel and
-       is the opposite of one. */
-    _snprintf(b, sizeof b,
-              "packet: engine cursor draw suppression on the same site=%d%s",
-              supOk,
-              supOk ? " (g_gui_cursor_suppress: set only by a present whose sharp layer really drew our "
-                      "cursor, read here on the game thread — the flip that follows skips the engine's draw)"
-                    : s_countOnly ? " (count-only: nothing is published at all, so the cursor channel that "
-                                    "feeds the render half is not running either)"
-                                  : " — NOT installed: the engine keeps drawing its cursor and the composite's "
-                                    "cursor rect has to erase it, one present behind the engine's own blit");
     b[sizeof b - 1] = 0;
     plog(b);
 }

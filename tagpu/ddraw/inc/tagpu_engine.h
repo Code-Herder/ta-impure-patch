@@ -334,9 +334,29 @@
                                         /* writes it as the mouse record minus the     */
                                         /* hotspot; the three polling paths          */
                                         /* (0x4C2870, 0x4C24B0, 0x4C25E0) write the   */
-                                        /* same pair from their OWN poll's answer     */
-#define GFX_CUR_ON         0x1CE        /* u32: the cursor's hide counter — 0x4C67C0   */
-                                        /* draws only when it is non-zero              */
+                                        /* same pair, ALSO pos-hotspot, from their own */
+                                        /* poll's answer. [CORRECTED 2026-09-14: a     */
+                                        /* previous revision claimed 0x4C25E0 stored   */
+                                        /* the raw answer and made that difference a   */
+                                        /* "fingerprint". It does not — 0x4C2638 and   */
+                                        /* 0x4C2645 subtract the movsx'd hotspot into  */
+                                        /* edi/ebx, which are what 0x4C284C/0x4C2852   */
+                                        /* store. Measured live as well: the pair sits */
+                                        /* 13..17 px off the record, which is exactly  */
+                                        /* the pulsing move cursor's hotspot.]         */
+#define GFX_CUR_ON         0x1CE        /* u32: THE MOUSE THREAD IS RUNNING. Set to 1  */
+                                        /* at 0x4C2AAE, immediately after the          */
+                                        /* _beginthread at 0x4C2A9A succeeds, and 0 at */
+                                        /* 0x4C2C72 when it is torn down; the thread   */
+                                        /* handle lands beside it at +0x1CA.           */
+                                        /* [CORRECTED 2026-09-14: called "the cursor's */
+                                        /* hide counter" here and "an engine           */
+                                        /* display-mode word, not ours to flip" in the */
+                                        /* notes. It is neither, and the mistake       */
+                                        /* mattered: it is what made 0x4C2870 look     */
+                                        /* unreachable.] 0x4C67C0 draws only when it   */
+                                        /* is non-zero, i.e. only while that thread    */
+                                        /* exists.                                     */
 #define GFX_CUR_OK         0x1D2        /* u32: and this one                           */
 
 #endif

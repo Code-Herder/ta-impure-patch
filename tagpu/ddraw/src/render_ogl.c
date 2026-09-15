@@ -14,6 +14,8 @@
 #include "hook.h"
 #include "tagpu.h"
 #include "tagpu_overlay.h"
+#include "tagpu_cursown.h"
+#include "tagpu_gui.h"
 #include "tagpu_packet.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_menu.h"
@@ -1596,6 +1598,16 @@ static void ogl_render()
                 f.packet = tagpu_packet_acquire(&f.packet_prev);
                 tagpu_reclaim_pass_begin();
                 tagpu_overlay_draw(&f);
+                /* tagpu_cursown: whether the engine may draw its own cursor,
+                   published HERE and nowhere else. This is the only point every
+                   path through tagpu_overlay_draw reaches — it returns early for
+                   `tagpu_overlay.off`, for a GL init that failed and for a level
+                   teardown, all of them above the GL UI's present — so a flag
+                   published from inside that present would keep its last value
+                   across them and leave the engine's cursor suppressed while
+                   ours was not drawn: no cursor at all until the condition
+                   lifted. Take-and-clear, so "we never got there" answers 0. */
+                tagpu_cursown_publish(tagpu_gui_cursor_drew_take());
                 tagpu_reclaim_pass_end(f.frame_counter);
                 tagpu_packet_frame_end(f.frame_counter);
                 gldbg("E-tagpu");

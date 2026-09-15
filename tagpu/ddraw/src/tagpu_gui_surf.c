@@ -67,6 +67,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu_gui.h"
+#include "tagpu_cursown.h"
 #include "tagpu_opt.h"
 #include "tagpu_gui_int.h"
 #include "tagpu_gaf.h"
@@ -190,14 +191,18 @@ static GLuint s_sharpProg;              /* QVS + SHARP_FS: a client's flat-colou
 static GLint  s_uSharpProgSize, s_uSharpProgCol;
 static GLuint s_cursProg;               /* QVS + CURS_FS: the cursor's frame out of the UI atlas        */
 static GLint  s_uCursSize, s_uCursCK, s_uCursRestored;
-/* THE ENGINE'S CURSOR IS OURS TO DRAW (tagpu_gui.h carries the whole
-   argument). `s_curDrew` is THIS present's answer — zeroed on entry to
-   tagpu_gui_present, set at the tail of a successful sharp_cursor — and the
-   published flag is that answer, written once when the present ends. Read on
-   the game thread by the detour tagpu_packet_pub.c lands on the engine's own
-   cursor draw; it can never read the mid-present 0. */
+/* OUR CURSOR'S ANSWER FOR THIS PRESENT, latched here and taken once per frame
+   by the render_ogl.c bracket (tagpu_gui.h has the whole argument). Set only
+   at the tail of a successful sharp_cursor; cleared by the take, so a frame
+   that never reaches this module answers 0 and the engine keeps its cursor. */
 static int s_curDrew = 0;
-volatile unsigned char g_gui_cursor_suppress = 0;
+
+int tagpu_gui_cursor_drew_take(void)
+{
+    int v = s_curDrew;
+    s_curDrew = 0;
+    return v;
+}
 static GLuint s_strProg;                /* QVS + STR_FS: a string op's glyphs into a twin (G17d)        */
 static GLint  s_uStrSize, s_uStrFg, s_uStrBg, s_uStrTr;
 static unsigned s_strings = 0;          /* string ops stamped                                          */
@@ -2044,28 +2049,22 @@ static void poll(void)
 void tagpu_gui_present(const TAGPU_FRAME* f)
 {
     static unsigned last = 0;
-    /* THE FLAG IS LATCHED AT THE END OF A PRESENT, NEVER DURING ONE. Setting
-       it on the draw and clearing it on entry looks equivalent and is not: the
-       engine draws its cursor from inside the flip whose present this is, so
-       a window that reads 0 while we composite lets exactly one engine draw
-       per frame through — which is what the first cut of this did, at 60 Hz,
-       with the pair still tracking the pointer to prove it. MEASURED
-       2026-09-13: `sup` climbing at 6610/s with `draws` still at 60/s is that
-       bug, and it reads like a working suppression.
-       So: `s_curDrew` is this present's own answer, and only the completed
-       present publishes it. Every early return below publishes 0 — not
-       installed, no frame, the trigger off, a failed GL init — which is the
-       behaviour every one of those paths had before the flag existed. */
-    s_curDrew = 0;
-    if (!tagpu_gui_installed() || !f) { g_gui_cursor_suppress = 0; return; }
+    /* NOTHING IS CLEARED HERE. `s_curDrew` is cleared by the TAKE, once per
+       frame, from the render_ogl.c bracket — so a present that returns early
+       below, and a frame that never calls this function at all, both answer 0
+       through exactly the same path. Clearing on entry and setting on the draw
+       looks equivalent and is not: the engine draws its cursor from inside the
+       flip, on another thread, while this present runs, so a window that reads
+       0 while we composite lets one engine draw per frame through — the bug
+       wearing the counters of a fix (measured 2026-09-13 at 60/s). */
+    if (!tagpu_gui_installed() || !f) return;
     poll();
     if (!s_on) {
         /* off: nothing is published, but drain whatever was */
         g_guiq.qTail = g_guiq.qHead; g_guiq.aTail = g_guiq.aHead;
-        g_gui_cursor_suppress = 0;
         return;
     }
-    if (!init_gl()) { g_gui_cursor_suppress = 0; return; }
+    if (!init_gl()) return;
     upload_palette();       /* before restore_step, which compares against it */
     restore_step();         /* before the drain: its sprite ops ask whether colour is valid */
     /* STEP THE RESTORER WHEN NOTHING ELSE DID. tagpu_rglsl_step's only other
@@ -2092,10 +2091,6 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
     unbind_all();
     glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
     glViewport(f->vp_x, f->vp_y, f->vp_w, f->vp_h);
-    /* THE ONE PUBLICATION, and the present is over for this purpose: ours (if
-       sharp_cursor drew one) is in the frame that was just composited, so the
-       engine's draw at its next flip is skipped — see the latch at the top. */
-    g_gui_cursor_suppress = s_curDrew;
     if (f->frame_counter - last >= 300) {
         /* 318 bytes of literal + 52 conversions: the worst case is ~900, so the
            buffer grew with the merge (the cursor, string and minimap counters
@@ -2107,13 +2102,17 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         LARGE_INTEGER t1;
         double fps = 0.0;
         unsigned gCached = 0, gDrops = 0; int gFonts = 0;
+        /* the engine's own cursor blit: which sites are armed, and whether it
+           is being skipped right now (tagpu_cursown.h) */
+        int cowFlip = 0, cowPoll = 0, cowSkip = 0;
+        tagpu_cursown_stats(&cowFlip, &cowPoll, &cowSkip);
         tagpu_text_glyph_stats(&gCached, &gDrops, &gFonts);
         if (!fq.QuadPart) QueryPerformanceFrequency(&fq);
         QueryPerformanceCounter(&t1);
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mm=%u,fog=%u/%u,noeng=%u cursown=%d%d/%d fps=%.1f",
                   s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.stalls,
                   s_skipped, tagpu_pal_changes(), palDiff, palDiffAt, tagpu_pal_presented(),
@@ -2128,7 +2127,8 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
                      what `nostring` is A/B'd on (13.4: ~40 bytes where a text op
                      carried ~968) and what §7's cadence note is about */
                   g_guiq.aHead, s_mmDrawn,
-                  s_mmFogged, (unsigned)(s_mmEngW * s_mmEngH), s_mmNoEng, fps);
+                  s_mmFogged, (unsigned)(s_mmEngW * s_mmEngH), s_mmNoEng,
+                  cowFlip, cowPoll, cowSkip, fps);
         b[sizeof b - 1] = '\0';
         slog(b);
     }

@@ -78,4 +78,14 @@ typedef int   (__cdecl *tagpu_detour_before_fn)(void* entry_esp);
 typedef void* (__cdecl *tagpu_detour_after_fn)(unsigned int* regs);
 int tagpu_detour_observe(unsigned int va, const unsigned char* stolen, int nst,
                          tagpu_detour_before_fn before, tagpu_detour_after_fn after);
+
+/* Call-site skip: the 5-byte `call rel32` at `va` (which must resolve to
+   `callee`, checked) is repointed at a stub that unwinds as the callee would —
+   `ret argBytes`, the callee's own stdcall pop — while *flag is set, and
+   tail-jumps to it otherwise. Same length as the instruction it replaces: no
+   stolen bytes, no boundary, no trampoline. Use this instead of a leaf detour
+   whenever the callee's CALLER depends on side effects the callee's function
+   performs — see the comment in tagpu_detour.c. 1 on success. */
+int tagpu_detour_call_site(unsigned int va, unsigned int callee,
+                           volatile unsigned char* flag, unsigned char argBytes);
 #endif

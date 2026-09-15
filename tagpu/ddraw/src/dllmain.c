@@ -20,6 +20,7 @@
 #include "tagpu_fogwide.h"
 #include "tagpu_gui.h"
 #include "tagpu_markown.h"
+#include "tagpu_cursown.h"
 #include "tagpu_zoom.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_weapons.h"
@@ -134,6 +135,13 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            above (the redirects CALL 0x471F90 and 0x4BF8C0, so whatever fxown
            installed on them still runs). */
         tagpu_markown_init();
+
+        /* tagpu: the engine's cursor BLIT, skipped while ours is on screen
+           (tagpu_cursown.h). Two 5-byte call-site redirects, byte-matched and
+           independent of each other; the functions they sit in are untouched,
+           so the engine's position writes, its background save and its
+           caller's restore all still run. Off with "tagpu_cursown.off". */
+        tagpu_cursown_init();
 
         /* tagpu: the GL UI renderer's observers (Phase E, tagpu_gui.h). No-op
            unless "tagpu_gui.on" exists; byte-matched, all-or-nothing; every
