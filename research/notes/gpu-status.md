@@ -3062,9 +3062,14 @@ lock:
 | state | who may touch the Vulkan objects |
 |---|---|
 | `ST_OFF` | nobody; nothing exists |
-| `ST_STARTING` | the bring-up worker, alone |
+| `ST_STARTING` | the worker that took the lane, alone (a bring-up, or the enumeration) |
 | `ST_READY` | the render thread, alone |
-| `ST_FAILED` / `ST_ZOMBIE` | nobody |
+| `ST_FAILED` | nobody; the objects are already gone |
+| `ST_ZOMBIE` | **the abandoned worker, alone** — it is still the sole owner of everything it built, which is what lets it put its own objects back and hand the lane on |
+
+(That last row said "nobody" until the second review pass, and believing it is
+what put a `DestroyWindow` in `tagpu_vk_render_stop`'s tail underneath a
+zombie worker's live surface.)
 
 `OFF → STARTING` is an `InterlockedCompareExchange` taken *before* a worker is created, so two
 frames cannot start two workers **and the enumeration worker takes the same grant** — that last
@@ -3095,6 +3100,24 @@ finishing and nobody else may touch anything* — so the worker, which is still 
 everything it built, puts its own objects back, destroys its own window and hands the lane to
 `ST_OFF`. Nothing waits, nothing leaks, and the lane can be brought up again afterwards instead
 of staying down for the session.
+
+**The window belongs to the lane while it is up or coming up, and to nobody otherwise.** That is
+one function, `vkw_release_unless_worker`, and it exempts exactly `ST_STARTING` and `ST_ZOMBIE`
+— the two states in which a worker may hold a surface on the window and takes it down itself.
+The rule was spelled out at four call sites with three different guards until the second review
+pass, and two of them were wrong: `render_stop` destroyed the window under a zombie worker's
+surface, and an armed lane whose bring-up **failed** kept a shown, never-painted popup over the
+client area for the rest of the session.
+
+**The residual at `WM_DESTROY` is wider than it was, and this is the statement of it.** While
+`render_stop` waited for its worker, stopping the render thread implied the worker was done, so
+the handler was a backstop that found nothing up. It no longer implies that: an ordinary
+shutdown or mode change can run `DestroyWindow` on the game thread while an abandoned worker is
+still putting a surface on the window — and Windows destroys an owned popup with its owner
+whatever we do. Acquire then returns `VK_ERROR_SURFACE_LOST_KHR`, which the lane now treats as
+fatal, so the outcome is a lane that comes down rather than one that spins. The orders that
+would close it are a cross-thread block (the deadlock this module is arranged to avoid) or a
+window outliving its owner (which Windows does not allow), so it is named rather than fixed.
 
 **What the lane costs, measured in game** (640×480, 1024×768 and 1920×1080, shell → game →
 shell): the Vulkan window tracks the client rect **exactly** (bbox identical to `xwininfo`'s, 2
