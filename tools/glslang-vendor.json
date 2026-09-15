@@ -1,0 +1,15 @@
+{
+ "note": "the pinned GLSL-to-SPIR-V compiler tools/spirv-gen.py drives (Phase G / G19c). It is a DEV-LOOP tool, not a build dependency: it unpacks into tools/glslang/, which is gitignored, and nothing in tagpu/ddraw/Makefile, .github/workflows/build.yml, build.cmd or the MSVC project needs it. The generated headers are committed and the build only verifies them (tools/spirv-check.sh). Same shape as tools/ghidra/ and tools/vendor/.",
+ "fetch": "tools/glslang-fetch.sh",
+ "project": "https://github.com/KhronosGroup/glslang",
+ "licence": "BSD-3-Clause / Apache-2.0 / MIT, in LICENSE.txt inside the archive",
+ "version": "16.6.0",
+ "files": {
+  "glslang-16.6.0-linux-x86_64-release.tar.gz": {
+   "url": "https://github.com/KhronosGroup/glslang/releases/download/16.6.0/glslang-16.6.0-linux-x86_64-release.tar.gz",
+   "sha256": "2c34071f56ecf39d16233294d3739cf43f981fd39080f2fd9dccb782101191ce",
+   "unpack": "tools/glslang/",
+   "provides": "bin/glslang"
+  }
+ }
+}

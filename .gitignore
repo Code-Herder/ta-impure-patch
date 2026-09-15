@@ -10,6 +10,11 @@
 # Ghidra distribution (tools/ghidra-projects IS tracked)
 /tools/ghidra/
 
+# the pinned glslang tools/spirv-gen.py compiles the shaders with
+# (tools/glslang-vendor.json is the manifest and IS tracked, and no BUILD needs
+# the compiler -- the generated headers are committed)
+/tools/glslang/
+
 # Generated wiki output (rebuild with research/build_wiki.py)
 /research/site/
 

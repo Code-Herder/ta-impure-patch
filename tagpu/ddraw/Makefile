@@ -58,7 +58,7 @@ SRCS     := $(wildcard src/*.c) $(wildcard src/*/*.c) res.rc
 OBJS     := $(addsuffix .o, $(basename $(SRCS)))
 DEPS     := $(filter %.d, $(OBJS:.o=.d))
 
-.PHONY: clean all thread-split
+.PHONY: clean all thread-split spirv
 all: $(TARGET)
 
 %.o: %.rc
@@ -73,7 +73,17 @@ all: $(TARGET)
 thread-split:
 	../../tools/thread-split-check.sh .
 
-$(TARGET): $(OBJS) | thread-split
+# THE SHADER RULE (Phase G / G19c): inc/spirv/ is GENERATED from the GLSL string
+# literals in src/*.c by tools/spirv-gen.py and committed as text, so no build
+# needs a GLSL compiler. Generated code that is committed rots, so the build
+# re-derives each shader's hash -- the C preprocessor and python3, never glslang
+# -- and fails if a shader has been edited without regenerating. Same placement
+# and same reasoning as the thread-split rule above; the upstream build.cmd /
+# vcxproj run neither.
+spirv:
+	../../tools/spirv-check.sh .
+
+$(TARGET): $(OBJS) | thread-split spirv
 	$(CC) $(LDFLAGS) -o $@ $(OBJS) exports.def $(LIBS)
 
 clean:
