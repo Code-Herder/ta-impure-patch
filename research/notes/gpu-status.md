@@ -3866,6 +3866,172 @@ differing px in a bbox of x 138..430, y 52..106** — the chat block — purely 
 been paused at tick 155 and the other at tick 433. Let the game run until the lines go (about 60 s
 at speed 10), *then* park the pointer and pause.
 
+### 2.30 The terrain pass, drawn by Vulkan (`tagpu_vk_terr.c`, `tagpu_terr.c`'s two mirrors) — Phase G, G19e
+
+The **third world pass**, the first **instanced** one, and the one the gate names an exact
+oracle for. It is also the first whose shared textures **change size while the lane is up**,
+which is the lifetime question §2.28 named and §2.29 did not have to answer.
+
+**No engine address, and no new one was read to build it** — the pass takes everything through
+`tagpu_terr_handover`, so there is nothing for [exe reverse engineering](exe-reverse-engineering.html)
+in this landing and nothing for the hook map above. `tagpu_vk_terr.c` is not on
+`thread-split.allow` and may never need to be (Phase G standing constraint 1); the list is
+**unchanged** at the 34 entries `thread-split-check.sh` reports.
+
+**MEASURED 2026-09-15** under system wine on the reference setup's 4070, `ss=1`:
+
+| | |
+|---|---|
+| terr A/B, 1024×768, `feat-forest` (Two Continents) | **0 differing px of 786 432**, **630 719 non-black on *each* side** |
+| terr A/B, 1920×1080, same | **0 of 2 073 600**, 1 820 568 non-black each side |
+| terr A/B, 1024×768, **Anteer Strait**, reached by an **in-process level cycle** | **0 of 786 432**, **630 784 non-black each side — the entire viewport** |
+| all three | capture files byte-identical; the 1024×768 pair read 0 again after `tagpu_vk.on` *and* `tagpu_terr.on` were cleared and re-armed, which frees and rebuilds the pipeline, the descriptor sets, both shared images and every per-slot resource |
+| feat A/B (§2.29's, the regression) | **0 of 786 432**, **243 538 non-black a side — §2.29's own number** |
+| scaffold A/B (§2.28's) | **0 of 786 432**, **190 247 a side — §2.28's own number** |
+| fps A/B (§2.26's) | **0 of 786 432**, 88 ink px a side |
+| constraint 4 | **0 of 630 784** in the world viewport against `2ec4735` with `tagpu_vk.off`, over a cross-launch floor measured at **0 across three launches** |
+
+The whole world viewport is terrain ink (630 784 px at 1024×768; the 65 black pixels are the
+frame's own), so this is emphatically not two blank frames agreeing — the failure mode
+`tools/vk-ab.py` exists to name.
+
+**It is not a second implementation of the pass:**
+
+| | where it comes from |
+|---|---|
+| the instances | `s_inst` — the four-short-per-cell array the GL gather filled and the GL upload took, handed over **exactly once** |
+| the unit quad | `TAGPU_TERR_QUAD` in `tagpu_terr.h`, **one literal both lanes build their per-vertex buffer from** |
+| the uniforms | the numbers the GL draw passed to `uGame`, `uZoom`, `uZoomC`, `uDepthScale`, `uEnc`, `uOrigin`, `uTile0`, `uTexel`, `uRestored`, `uHDim`, `uFog*`, `uLit`, `uLambert`, `uSun`, `uAmb`, `uNorm`, `uShadowOn` |
+| the tile atlas | `tagpu_terr.c`'s **CPU mirror** — the very buffer `glTexImage2D` was handed, kept instead of freed |
+| the height grid | the same, for the R8 grid `build_height` uploads |
+| the palette | `tagpu_pal_live()`, the buffer `s_palTex` is uploaded from |
+| the fog grid | the packet's grid, the very `unsigned short*` the GL lane hands `glTexImage2D(GL_RG8, …)` |
+| the fog shade LUT | `tagpu_native_foglut()` — the 256 bytes last uploaded to `s_fogLutTex` |
+| the shader | `inc/spirv/tagpu_terr.spv.h`, generated from the GL strings by §2.25 — a 5840-word FS with a 192-byte uniform block and eight samplers, and a 765-word VS with a 64-byte one |
+
+#### Instancing, and the one trap in it
+
+The GL twin draws **six vertices and one instance per visible cell** (`glDrawArraysInstanced`,
+`glVertexAttribDivisor(1, 1)`), which is what lets a 4K view at the zoom floor fit in a
+megabyte. In Vulkan that is a second `VkVertexInputBindingDescription` at
+`VK_VERTEX_INPUT_RATE_INSTANCE` and `vkCmdDraw`'s `instanceCount` — small, and new to this lane.
+
+**The trap is the format.** The cell record is four **unnormalised `GL_SHORT`s** read into a
+`vec4` attribute, so GL's fixed-function conversion is "the integer, as a float". The Vulkan
+format that does that is **`R16G16B16A16_SSCALED`**; `_SINT` would require the shader's
+attribute to be an `ivec4` and would read as garbage against a `vec4`. SSCALED is not a format
+a driver must support as a vertex buffer, so `build_pipeline` **asks** for
+`VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT` and the pass stays down if the answer is no — naming the
+fallback (widening the record to four floats on the CPU, where every field is a small integer
+and exact) rather than guessing. The 4070 takes it.
+
+#### The texels, and why this pass needed no mirror mechanism
+
+§2.29's GAF atlas is painted **incrementally**, which is why it needed a mirror that is correct
+from the instant it exists. Terrain's two big textures are built **whole**, once per map, out of
+a buffer that was freed three lines later — so the whole of the answer is *do not free it*:
+
+> **`s_atlasMirror` and `s_hMirror` ARE the buffers** `glTexImage2D` was handed, kept rather
+> than freed. Nothing writes either again — the tile set is built by `LoadMap` and never
+> changes — so they cannot drift from the textures.
+
+The flag that asks for them (`s_mirrorWant`, set on the GL twin's 30-frame arm poll when
+`tagpu_vk_armed()`) has one job the GAF mirror's did not: **force one rebuild when the lane arms
+after the texture was built.** `ensure_atlas` and `ensure_height` both early-return on an
+identity test, and the extra term in each is what makes them fall through *exactly once* — the
+only way to obtain a mirror for a texture that already exists is to build it again. Measured:
+on an instance armed before launch the poll runs before the gather, so the **first** build
+already retains, and the log shows one `terr: atlas built …` line and no
+`no CPU mirror yet` refusal.
+
+**What they cost, and it is per map, not per frame:** Two Continents' atlas is 2176×2720 for
+5062 tiles = **5.64 MB**, its height grid 672×800 = **525 KB**; Anteer Strait's are 2176×3774
+for 7051 tiles = **7.83 MB** and 578×584 = **330 KB**. Paid for only while the Vulkan lane is
+armed, and once asked for, kept for the process's life — un-asking would buy back memory that a
+re-arm spends again.
+
+**The hills mesh is not mirrored and does not need to be.** `build_hills` is the heightfield
+*caster* for `tagpu_shadow.c`, a VBO/IBO the terrain fragment shader never samples.
+
+#### Two shared images whose dimensions change — the lifetime §2.28 named
+
+Per-slot, the atlas would be eight copies of 5.6–7.8 MB in a 32-bit address space whose largest
+free block is the number this phase spends its budget measuring. So both big images are
+**one image each**, uploaded when the mirror's serial says the bytes moved, behind §2.29's
+write-after-read barrier.
+
+Unlike §2.29's atlas, **their dimensions genuinely change**: `ATLAS_DIM` there is a compile-time
+constant, while terrain's atlas is `ceil(tiles/64) × 34` texels tall and the height grid is the
+map in 16-px cells. A shared image that has to be *replaced* cannot have its descriptor
+rewritten under frames in flight. Two things make that safe by construction:
+
+* **Every slot's samplers are rewritten during THAT SLOT'S OWN `prepare`** (`shared_bind`),
+  which is the one instant the seam's fence proves nothing of ours is in flight for it. No write
+  in the file ever touches a set another frame may be using — which is the property §2.29 got by
+  doing its one such write before any set had ever been bound, and cannot be had that way here.
+* **The replaced image is retired behind a slot bitmask, not a timer.** `pending` starts as
+  every slot; a bit clears when that slot's set has been rewritten, or its resources freed —
+  both of which happen only under that slot's own fence. Two facts then bound the old image's
+  last reference: no *submitted* command buffer can still name it through a cleared slot,
+  because that slot's submit has completed; and no *future* one will, because `record` runs only
+  when `prepare` returned 1 and every such `prepare` calls `shared_bind` first. So
+  `pending == 0` means unreferenced, whatever the frame rate and whatever the driver.
+
+**The accounting is done first and unconditionally**, at the top of `prepare`, and that is not a
+detail: doing it inside `shared_bind` stalls for ever on the one path that matters — a resize
+that cannot be applied because a retire is outstanding returns *before* binding, so the bit that
+would end the retire would never clear. A second change arriving while one is outstanding draws
+**nothing** for the frames it takes to clear rather than starting a second retire; at most
+`slots` frames, and only for back-to-back map changes.
+
+**MEASURED, and it is the honest half of this: that retire is NOT reached by the game as it
+stands.** A map change is the only thing that moves either dimension, and it goes through a
+shell transition that stops the GL render thread — which brings the whole Vulkan lane down and
+back up, this pass included. The in-process cycle run here (Two Continents → `MAINMENU` →
+Anteer Strait, no relaunch) logs `vk: render thread stopping - down` twice, rebuilds the atlas
+at 2176×3774 and the height grid at 578×584, and brings the pass back with
+`vk: terr: the Vulkan edition is up`. So the retire is **the guard that keeps the code correct
+rather than a path the game reaches today** — and the code cannot be written without it, because
+the dimensions are data and cannot be asserted away.
+
+#### Pipeline state: depth writes, no blending, and the scissor again
+
+* **Depth is §2.28's answer, used unchanged**: `VK_COMPARE_OP_LESS`, and **writes ON** — terrain
+  is the frame's implicit far plane and everything above it is tested against what it wrote, so
+  the pass refuses to arm when `d->dfmt` is `VK_FORMAT_UNDEFINED` rather than drawing untested.
+  The viewport carries `minDepth 0.5 / maxDepth 1.0`, which is GL's `(z+1)/2` exactly. One
+  pipeline, not §2.29's two: there is no shadow bucket here.
+* **No blending.** The GL twin draws terrain *before* `glEnable(GL_BLEND)` (`tagpu_native.c`),
+  and terrain is opaque with alpha 1 everywhere. §2.29's premultiplied pair is its own.
+* **The scissor is §2.29's**, mirrored as `offset.y = H − (vpT + vh)` with its enable travelling
+  with it. It matters more here: terrain covers the whole *gather* rect, which at zoom < 1
+  reaches well past the viewport and over the side panel.
+* **Both halves are upside-down pictures of the world**, identically, exactly as §2.29 — the GL
+  twin draws into the world FBO, whose clip-space +1 is the bottom of the screen.
+
+#### What it does not do
+
+**Two surfaces of the GL lane have no CPU mirror, and the pass refuses a frame that would need
+either** rather than draw a different picture from its own oracle:
+
+* **`uRestored` 1** — Classic++'s restored tile atlas (`tagpu_restoreglsl.c` writes it on the GPU
+  and it is never read back), which is §2.29's refusal again.
+* **`uShadowOn` 1** — the Classic++ cast-shadow depth map (`tagpu_shadow.c`), a GL depth texture.
+  Its two samplers must still be **valid** for the set to be bound, and a `sampler2DShadow` needs
+  a real depth image and a compare-enabled sampler — so they name a **1×1 `D16_UNORM` image**
+  this file makes and clears to 1.0 with `vkCmdClearDepthStencilImage`. Nothing ever samples it;
+  clearing it costs one call and removes an "undefined contents" from the argument. `uAtlasRGB`
+  is a placeholder too and names the atlas's own view, exactly as §2.29's binding 42.
+
+Both are Classic++ surfaces, so a `tacli` instance — which opts out of the play defaults — never
+meets either; a `--defaults` instance does.
+
+**NOT COVERED.** No Vulkan **validation layer** ran — none is installed in the wine prefixes —
+so the barriers, the stage masks and the layout transitions are argued from the specification and
+from a correct picture. Also not covered: any resolution but 1024×768 and 1920×1080, any device
+but the 4070, Windows, `ss` 2, Classic++ (both refusals above), and **the retire firing** — the
+one path in this file no run has watched execute, for the reason measured above.
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out

@@ -1882,9 +1882,10 @@ tools/tacli log <i> -g '^vk:'                 # the window, the device, the swap
   not, since the picker outlives the lane. (A launch that falls back to the GDI renderer never
   starts it — there is no lane to pick a GPU for there.)
 
-**Since G19e it also draws the SCAFFOLD overlay** (`tagpu_scaffold.on`) and the **FEATURES**
-(`tagpu_feat.on` — trees, rocks, splats, GAF wreckage), the first two world passes. Three ported
-passes now, and their A/B levers must not be armed together — see below.
+**Since G19e it also draws the SCAFFOLD overlay** (`tagpu_scaffold.on`), the **FEATURES**
+(`tagpu_feat.on` — trees, rocks, splats, GAF wreckage) and the **TERRAIN** (`tagpu_terr.on`), the
+first three world passes. Four ported passes now, and their A/B levers must not be armed together
+— see below.
 
 **The pixel A/B between the two lanes: `tagpu_<pass>.ab`.** Route D means no GL-side capture can
 see the Vulkan frame, so each lane captures its own half of the SAME frame and the two files are
@@ -1981,6 +1982,40 @@ rm -f $G/tagpu_feat.ab $G/tagpu_feat_*.ppm; sleep 2; touch $G/tagpu_feat.ab; sle
 - Expect `feat: atlas mirror armed, 4096 KB — N painted frame(s) re-decode …` once per session, and
   `vk: feat: the Vulkan edition is up … depth format 129` (`VK_FORMAT_D24_UNORM_S8_UINT`). A
   `depth format 0` means the device offered no 24-bit depth and the pass stayed down on purpose.
+
+**The terrain pass's A/B (G19e), the simplest of the world passes to run:**
+
+```bash
+tools/tacli arm <i> terr.on ss.off 'vk.on=color=0,0,0'
+tools/tacli scenario load <i> feat-forest --restart --res 1024x768 --maxfps 0
+sleep 10
+G=<main checkout>/tagpu/instances/<i>/gamedir
+rm -f $G/tagpu_terr.ab $G/tagpu_terr_*.ppm; sleep 2; touch $G/tagpu_terr.ab; sleep 8
+../.venv-undither/bin/python tools/vk-ab.py $G --pass terr     # 0 px apart
+```
+
+- **No `native.on` needed** — terrain takes the draw on `terrown.on` alone, which `tacli`
+  auto-arms at launch when `terr.on` exists. (That is unlike the feature pass, which is muted
+  without `native.on … wrecks`.) `ss.off` is still required, as for every world pass.
+- **Terrain covers the WHOLE viewport, so the ink count is the viewport**: 630 719 of 630 784 at
+  1024×768, 1 820 568 at 1080p. A pass that reads much less than the viewport has been scissored
+  wrong or has drawn nothing; there is no "sparse fixture" failure mode here to worry about.
+- **The terrain pass stands down under Classic++ AND under terrain shadows**, and says so once
+  each: its restored tile atlas and the cast-shadow depth map are both GPU-only surfaces with no
+  CPU mirror. A `tacli` instance opts out of the play defaults so neither arises; `--defaults`
+  does, and so does `classicpp.cfg=terrainshadow=1`.
+- Expect `terr: atlas built 2176x<h> for <n> tiles`, `terr: height grid WxH uploaded`, and
+  `vk: terr: the Vulkan edition is up - 4 frame slots, uniform stride 256, depth format 129`. The
+  two CPU mirrors are the buffers those two builds were handed, **kept rather than freed** while
+  the Vulkan lane is armed: **6.16 MB on Two Continents, 8.15 MB on Anteer Strait**. A
+  `terr: the GL tile atlas has no CPU mirror yet` line is the first frames of a session and clears
+  itself; if it persists, `tagpu_vk_armed()` is answering no (check `tagpu_vk.on` is really there).
+- **An in-process map change brings the WHOLE Vulkan lane down and back up**, pass included —
+  measured 2026-09-15: leaving a level to `MAINMENU` and starting another stops the GL render
+  thread, and the lane goes with it (`vk: render thread stopping - down`, then a fresh
+  `vk: swapchain`). So a second map is a fresh lane, not a resized one, and the atlas is rebuilt
+  at that map's size (Anteer Strait 2176×3774 for 7051 tiles against Two Continents' 2176×2720 for
+  5062). Useful as a **second fixture**: the pass reads 0 px there too.
 
 - **To measure constraint 4** — that the GL lane did not move — arm `vk.off` on two instances, one
   running the tree's DLL and one the previous one, load the same static fixture, park the pointer
