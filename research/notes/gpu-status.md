@@ -3705,7 +3705,7 @@ mode `tools/vk-ab.py` exists to name.
 | the uniforms | the numbers the GL draw passed to `uGame`, `uZoom`, `uZoomC`, `uDepthScale`, `uRestored`, `uLit`, `uFog`, `uFogOrg`, `uFogDim` |
 | the atlas texels | `tagpu_gaf.c`'s **CPU mirror** — written by the same `atlas_paint` that writes the GL texture, from the same `s_pad` rows, in the same call |
 | the palette | `tagpu_pal_live()`, the buffer `s_palTex` is uploaded from |
-| the fog grid | the packet's grid, the very `unsigned short*` the GL lane hands `glTexImage2D(GL_RG8, …)` |
+| the fog grid | a **copy of** the packet's grid, taken at publish time into a buffer the publishing module owns — the same bytes the GL lane hands `glTexImage2D(GL_RG8, …)`, and the pointer is not the packet's. It was the packet's until the G19e landing review (2026-09-15) pointed out that `tagpu_packet_frame_end()` ends that pointer's declared lifetime *before* `render_ogl.c` runs the Vulkan lane |
 | the fog shade LUT | `tagpu_native_foglut()` — the 256 bytes last uploaded to `s_fogLutTex`, identity fallback included, published rather than rebuilt |
 | the shader | `inc/spirv/tagpu_feat.spv.h`, generated from the GL string by §2.25 |
 
@@ -3905,7 +3905,7 @@ frame's own), so this is emphatically not two blank frames agreeing — the fail
 | the tile atlas | `tagpu_terr.c`'s **CPU mirror** — the very buffer `glTexImage2D` was handed, kept instead of freed |
 | the height grid | the same, for the R8 grid `build_height` uploads |
 | the palette | `tagpu_pal_live()`, the buffer `s_palTex` is uploaded from |
-| the fog grid | the packet's grid, the very `unsigned short*` the GL lane hands `glTexImage2D(GL_RG8, …)` |
+| the fog grid | a **copy of** the packet's grid, taken at publish time into a buffer the publishing module owns — the same bytes the GL lane hands `glTexImage2D(GL_RG8, …)`, and the pointer is not the packet's. It was the packet's until the G19e landing review (2026-09-15) pointed out that `tagpu_packet_frame_end()` ends that pointer's declared lifetime *before* `render_ogl.c` runs the Vulkan lane |
 | the fog shade LUT | `tagpu_native_foglut()` — the 256 bytes last uploaded to `s_fogLutTex` |
 | the shader | `inc/spirv/tagpu_terr.spv.h`, generated from the GL strings by §2.25 — a 5840-word FS with a 192-byte uniform block and eight samplers, and a 765-word VS with a 64-byte one |
 
@@ -3970,12 +3970,19 @@ rewritten under frames in flight. Two things make that safe by construction:
   in the file ever touches a set another frame may be using — which is the property §2.29 got by
   doing its one such write before any set had ever been bound, and cannot be had that way here.
 * **The replaced image is retired behind a slot bitmask, not a timer.** `pending` starts as
-  every slot; a bit clears when that slot's set has been rewritten, or its resources freed —
-  both of which happen only under that slot's own fence. Two facts then bound the old image's
-  last reference: no *submitted* command buffer can still name it through a cleared slot,
-  because that slot's submit has completed; and no *future* one will, because `record` runs only
-  when `prepare` returned 1 and every such `prepare` calls `shared_bind` first. So
-  `pending == 0` means unreferenced, whatever the frame rate and whatever the driver.
+  every slot; a bit clears when that slot has been **visited** — at the top of its own
+  `prepare`, unconditionally. It does **not** clear "when that slot's set has been rewritten":
+  this page and the file header both said so until the G19e landing review (2026-09-15) and
+  both were wrong, because the bit has to clear on the paths that return *without* binding or
+  the retire stalls (see the paragraph below). Two facts bound the old image's last reference:
+  no *submitted* command buffer can still name it through a cleared slot, because that slot's
+  submit has completed; and no *future* one will, because `record` runs only when `prepare`
+  returned 1 and every such `prepare` calls `shared_bind` first. So `pending == 0` means
+  unreferenced, whatever the frame rate and whatever the driver. **That second fact was an
+  argument spread over two functions and a seam in another file; since the review it is also a
+  test**: `shared_bind` records the views it wrote into each slot (`boundAtlas`/`boundHeight`)
+  and `record` draws nothing unless they are still the live ones, so a slot left holding a
+  retired view cannot sample it even if some future path reaches `record` without rebinding.
 
 **The accounting is done first and unconditionally**, at the top of `prepare`, and that is not a
 detail: doing it inside `shared_bind` stalls for ever on the one path that matters — a resize
@@ -4031,6 +4038,56 @@ so the barriers, the stage masks and the layout transitions are argued from the 
 from a correct picture. Also not covered: any resolution but 1024×768 and 1920×1080, any device
 but the 4070, Windows, `ss` 2, Classic++ (both refusals above), and **the retire firing** — the
 one path in this file no run has watched execute, for the reason measured above.
+
+#### What the landing review changed, 2026-09-15
+
+Two reviewers read `main...HEAD` independently at `high`, one on correctness and one on
+synchronisation alone. **Both returned the same first finding**, and it was real. The fixes below
+are on the branch; **none of them has been run yet** — the A/B numbers above were measured on the
+binary *before* this rework, and re-measuring them is the first thing the next session does.
+
+* **A pass may no longer tear itself down mid-frame.** `prepare`'s refusal path — reached when
+  the device will not give a slot its buffers or images, which is the 32-bit address-space
+  pressure this phase exists to measure — used to call `tagpu_vk_*_down()` on the spot. That
+  destroys the pipeline, the descriptor pool, the shared images and **every** slot's buffers,
+  while the seam has waited on `fence[slot]` **alone**: every other slot's submit is still
+  executing against them. Worse, the command buffer of the frame in hand has already had
+  `shadow_ready`'s barrier and depth clear — and the atlas uploads — recorded into it, and
+  `vk_present` submits it whether the pass draws or not. **It fires on the first refusal, not
+  rarely.** The pass now stops drawing and raises `s_downOwed`; `tagpu_vk.c` checks
+  `tagpu_vk_{terr,feat,scaffold}_down_owed()` at the top of the next frame — before `cb` is
+  reset, so nothing names the objects yet — runs `vkDeviceWaitIdle`, and only then tears the
+  pass down. An unresolved `vkDeviceWaitIdle` is **not** treated as idle: with no way to prove
+  the device quiet the lane comes down instead. The `build()`-failure teardowns were left alone;
+  they run with the pass `ST_UNBUILT`, so nothing of it is in flight.
+* **The retire's stated invariant was wrong, and is now also a test** — see the bullet above.
+* **The fog grid is copied at publish time** instead of handed over as a pointer into a
+  frame-packet slot, whose declared lifetime (`tagpu_packet.h`) ends at
+  `tagpu_packet_frame_end()` — which `render_ogl.c:1623` calls before it runs the Vulkan lane at
+  `:1674`. It held only because the give-back happens at the next acquire; that is also where
+  the `poison` lever fills the slot, so this was the one stale read that lever could not see.
+* **The A/B no longer claims a Vulkan half on a GL half that was never written.**
+  `tagpu_abshot_end` now returns whether the capture reached the disk, and the four callers set
+  `s_abFrame` from it. `tagpu_fps.c` had this guard (`can`) on `main`; extracting the shared
+  module dropped it, and the cost was `vk-ab.py` diffing a fresh Vulkan capture against a
+  **stale** `_gl.ppm` from an earlier run and reporting a port failure.
+* **Nothing is published on a shipped frame.** `terr_publish` and `feat_publish` ran their
+  `memset` and ~40 stores on every frame with the lane down; they now return at once unless the
+  module's mirror latch is set.
+* **The cell count is bounded in the pass**, like the atlas, height and fog dimensions already
+  were — it sizes both the instance buffer and `vkCmdDraw`'s `instanceCount`. The bound is the
+  producer's own 24 MB clamp restated in this file's terms, deliberately **not** tighter: a pass
+  that refused a cell count the GL twin drew would report a rasteriser difference over the whole
+  viewport.
+
+**Left unfixed, deliberately.** Arming the lane forces one height-grid rebuild
+(`ensure_height`'s mirror term), and `build_height` zeroes `s_hW` and frees the mirror before it
+starts — so if that one rebuild fails the *GL* lane draws unlit for up to 60 frames where it
+previously kept a working texture. It needs `tagpu_vk.on`, and it needs a grid that was readable
+a moment earlier to fail `ptr_ok`/`IsBadReadPtr`. Restructuring `build_height` to commit only on
+success would break the "`s_hMirror` non-NULL and it is `s_hW × s_hH`" single-fact invariant that
+function is written around, which is not worth doing inside a landing already carrying a
+synchronisation rework.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 
