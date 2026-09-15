@@ -70,10 +70,12 @@ def main():
                          "(fps, scaffold, ...); default fps")
     a = ap.parse_args()
 
+    lever = None
     if len(a.args) == 1:
         d = pathlib.Path(a.args[0])
         gl = d / ("tagpu_%s_gl.ppm" % a.which)
         vk = d / ("tagpu_%s_vk.ppm" % a.which)
+        lever = d / ("tagpu_%s.ab" % a.which)
     elif len(a.args) == 2:
         gl, vk = pathlib.Path(a.args[0]), pathlib.Path(a.args[1])
     else:
@@ -83,6 +85,27 @@ def main():
         if not p.exists():
             raise SystemExit("%s is not there -- did `tagpu_%s.ab` fire on both "
                              "lanes? tagpu.log says." % (p, a.which))
+
+    # THE CAPTURES MUST BE NEWER THAN THE LEVER THAT ASKED FOR THEM.
+    # Existence is not freshness: every way a capture silently does not fire
+    # this run -- the `.ab` file not re-armed (`touch` on a file that is
+    # already there does nothing), the lane down, `ss != 1`, the seam's
+    # "N levers claimed this frame" refusal -- leaves the PREVIOUS run's PPMs
+    # lying on the disk, and this tool would read them and print that run's
+    # verdict for the binary in front of you. The whole landing's evidence is
+    # this number, so it refuses instead.
+    # [ADDED BY THE G19e RE-REVIEW, 2026-09-15.]
+    if lever is not None and lever.exists():
+        arm = lever.stat().st_mtime
+        stale = [p for p in (gl, vk) if p.stat().st_mtime < arm - 1.0]
+        if stale:
+            raise SystemExit(
+                "REFUSED: %s predate%s tagpu_%s.ab -- these are an EARLIER run's "
+                "captures.\nThe lever did not fire this time (`touch` on a file "
+                "that already exists does not re-arm).\nrm the .ab and the "
+                "_gl/_vk .ppm files, sleep, then touch the .ab again."
+                % (", ".join(p.name for p in stale),
+                   "" if len(stale) > 1 else "s", a.which))
 
     gw, gh, gp = read_ppm(gl)
     vw, vh, vp = read_ppm(vk)

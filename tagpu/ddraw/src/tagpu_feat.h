@@ -58,6 +58,10 @@ void tagpu_feat_glreset(void);
 #define TAGPU_FEAT_ATTRS  { {0,3,0}, {1,2,12}, {2,2,20}, {3,2,28}, {4,1,36} }
 
 typedef struct TAGPU_FEATHAND {
+    /* THE FRAME THIS WAS PUBLISHED ON. `tagpu_feat_handover` refuses any other
+       -- see there, and tagpu_terr.h for the failure it bounds. */
+    unsigned frame;
+
     /* The geometry, in the GL lane's own two buckets and its own draw order:
        shadows first (they test depth and never write it), bodies second. */
     const float* shadow;  int nShadow;     /* vertices, TAGPU_FEAT_VST floats each */
@@ -107,7 +111,11 @@ typedef struct TAGPU_FEATHAND {
     int   ab;
 } TAGPU_FEATHAND;
 
-/* 0 when there is nothing to draw, or when this frame's has already been
-   taken. Render thread only. */
-int tagpu_feat_handover(TAGPU_FEATHAND* out);
+/* 0 when there is nothing to draw, when this frame's has already been taken,
+   or when the standing hand-over was published on a DIFFERENT frame than
+   `now` -- the fork's monotonic render-thread counter, which a Vulkan pass has
+   as TAGPU_VKPASS::frame. That last refusal is the safety one: the pointers
+   in here alias buffers this file frees and rebuilds, so a hand-over that
+   outlived its frame can name memory that is gone. Render thread only. */
+int tagpu_feat_handover(TAGPU_FEATHAND* out, unsigned now);
 #endif

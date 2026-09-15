@@ -43,8 +43,22 @@ void tagpu_vk_scaffold_down(const TAGPU_VKPASS* d);
    cannot destroy anything itself at the moment it finds out, because only its
    own slot's fence has been waited on and the command buffer of the frame in
    hand already names its objects. Checked at the top of a frame, before
-   anything is recorded. */
+   anything is recorded.
+
+   PAIR IT WITH `_down_paid`, AND DO NOT LET AN ORDINARY TEARDOWN SETTLE IT.
+   `vk_down` and `vk_resize` call `_down` for their own reasons and would
+   otherwise consume an outstanding debt -- leaving the pass latched at
+   ST_REFUSED, which `prepare` treats as terminal, so a transient refusal
+   followed by a window drag killed the pass for the life of the PROCESS. The
+   seam calls `_down_paid` after its drain; every other caller of `_down`
+   leaves the debt standing and the pass comes back ST_UNBUILT, which is what
+   it did before the owed-teardown protocol existed.
+   [FROM THE G19e RE-REVIEW, 2026-09-15.] */
 int  tagpu_vk_scaffold_down_owed(void);
+/* The seam, after its vkDeviceWaitIdle: tear the pass down AND settle the
+   debt, so `_down`'s ST_REFUSED latch applies to this teardown only. */
+void tagpu_vk_scaffold_down_paid(const TAGPU_VKPASS* d);
+
 
 
 #endif

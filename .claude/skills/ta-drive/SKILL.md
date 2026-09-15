@@ -1987,7 +1987,10 @@ rm -f $G/tagpu_feat.ab $G/tagpu_feat_*.ppm; sleep 2; touch $G/tagpu_feat.ab; sle
   opts out of the play defaults so this does not arise; `--defaults` does.
 - Expect `feat: atlas mirror armed, 4096 KB — N painted frame(s) re-decode …` once per session, and
   `vk: feat: the Vulkan edition is up … depth format 129` (`VK_FORMAT_D24_UNORM_S8_UINT`). A
-  `depth format 0` means the device offered no 24-bit depth and the pass stayed down on purpose.
+  device that offers no 24-bit depth does **not** print `depth format 0` — the pass returns before
+  that line — it prints `the seam's render pass carries no depth attachment …` and stays down on
+  purpose. *(This said to look for `depth format 0`, which cannot be printed; corrected by the
+  G19e re-review, 2026-09-15.)*
 
 **The terrain pass's A/B (G19e), the simplest of the world passes to run:**
 

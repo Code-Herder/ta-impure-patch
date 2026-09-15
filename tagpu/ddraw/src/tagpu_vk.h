@@ -75,8 +75,15 @@
 
    `w`/`h` are the render target's size; a change tears the swapchain down and
    builds it again. `vsync` picks the present mode, matching what the GL lane
-   does with `wglSwapIntervalEXT`. */
-int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync);
+   does with `wglSwapIntervalEXT`.
+
+   `frame_counter` is the fork's own monotonic render-thread frame number --
+   the SAME number the GL lane stamped its hand-overs with earlier in this
+   iteration of render_ogl.c's loop. It reaches a pass as TAGPU_VKPASS::frame,
+   and a pass uses it to refuse a hand-over published on any other frame; see
+   tagpu_vk_pass.h for why that refusal is a safety property and not tidiness.
+   [ADDED BY THE G19e RE-REVIEW, 2026-09-15.] */
+int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter);
 
 /* Called from the render thread as it stops -- a mode change or a shutdown,
    both of which invalidate the game window. Tears everything down. Safe to

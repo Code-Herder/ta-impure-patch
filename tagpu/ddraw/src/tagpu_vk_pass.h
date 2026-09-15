@@ -66,6 +66,19 @@ typedef struct {
        the device will do it. 0 means a pass that needs it must not arm; it may
        not fall back to flipping geometry, which would mirror every glyph. */
     int                       flipok;
+    /* WHICH RENDER-THREAD FRAME THIS IS -- the fork's own monotonic counter,
+       the same number the GL lane stamped its hand-over with earlier in this
+       iteration of render_ogl.c's loop.
+       A pass uses it to REFUSE a hand-over that is not this frame's, and that
+       refusal is the whole point: the GL modules' hand-overs alias buffers
+       those modules own and rebuild (the tile atlas, the height grid, the
+       vertex arrays), so a hand-over left standing from an earlier frame can
+       name memory that has since been freed. Before the G19e re-review the
+       only thing stopping that was "the publishing function is called every
+       frame, and it clears the flag on the way out" -- which is not true of a
+       frame whose gather bailed, because then it is not called at all.
+       [FROM THE G19e RE-REVIEW, 2026-09-15 -- both reviewers, separately.] */
+    unsigned                  frame;
     PFN_vkGetInstanceProcAddr gipa;
     PFN_vkGetDeviceProcAddr   gdpa;
     void                    (*log)(const char* s);

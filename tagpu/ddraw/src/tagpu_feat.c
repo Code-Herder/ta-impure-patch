@@ -985,6 +985,7 @@ static int             s_fogCopyCells;
 
 static void feat_publish(const TAGPU_FXVIEW* v, int total)
 {
+    int fogBad = 0;                    /* fog wanted, no grid: publish nothing */
     /* NOTHING IS PUBLISHED ON A SHIPPED FRAME. `s_mirrorAsked` is the latch the
        arm beat sets when the Vulkan lane is up (see there); while it is 0 the
        lane is not armed, nothing will ever call the hand-over, and the memset
@@ -1029,6 +1030,11 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
             s_pub.fogGridCols = v->fogCols; s_pub.fogGridRows = v->fogRows;
         }
     }
+    /* fog on with no grid is not a frame this pass may draw, so it publishes
+       NOTHING -- the copy can fail, and the port would sample a 1x1 image while
+       uFogDim carried the real size. Refused the way the restored atlas already
+       is; tagpu_terr.c has the argument in full. [G19e RE-REVIEW, 2026-09-15.] */
+    fogBad = (s_pub.fog && !s_pub.fogGrid);
     s_pub.fogLut = tagpu_native_foglut();
     s_pub.vpL = v->vpL; s_pub.vpT = v->vpT; s_pub.vw = v->vw; s_pub.vh = v->vh;
     /* WHETHER THE CLIP IS ACTUALLY ON, not whether a rect exists. The native
@@ -1043,13 +1049,20 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
        was not taken because the lane is down -- and a claim left standing would
        pair a fresh Vulkan capture with a GL one from some earlier frame. */
     s_pub.ab = s_abFrame; s_abFrame = 0;
-    s_pubHave = total > 0;
+    /* THE STAMP (tagpu_terr.h has the argument in full). `s_pub.shadow`/`body`
+       point into `s_verts`, which this file `realloc`s, and `s_pub.atlas` into
+       the GAF mirror -- so the hand-over is this frame's or it is nothing. */
+    s_pub.frame = v->frame_counter;
+    s_pubHave = total > 0 && !fogBad;
 }
 
 /* Hand it over, ONCE (tagpu_feat.h). */
-int tagpu_feat_handover(TAGPU_FEATHAND* out)
+int tagpu_feat_handover(TAGPU_FEATHAND* out, unsigned now)
 {
     if (!s_pubHave || !out) return 0;
+    /* not this frame's, so not alive -- and cleared, so the next frame starts
+       honest. See tagpu_terr.h. [G19e RE-REVIEW, 2026-09-15.] */
+    if (s_pub.frame != now) { s_pubHave = 0; s_abFrame = 0; return 0; }
     *out = s_pub;
     s_pubHave = 0; s_abFrame = 0;
     return 1;

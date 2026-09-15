@@ -94,11 +94,29 @@ int  tagpu_terr_key(void);
    frame's geometry can never be drawn twice; a frame this pass skipped hands
    over nothing and the Vulkan lane draws nothing, which is what the GL lane did.
 
-   THE POINTERS ARE THIS FILE'S, and they are valid until the next frame
-   rebuilds them. That is safe for one reason worth naming: both lanes run on
-   the RENDER THREAD, and the whole of the native pass -- this one included --
-   happens earlier in the same iteration of render_ogl.c's loop than the
-   tagpu_vk_frame that consumes this. The game thread never touches them. */
+   THE POINTERS ARE THIS FILE'S, AND THEY ARE VALID FOR THE FRAME THAT
+   PUBLISHED THEM AND NO LONGER. Both lanes run on the RENDER THREAD and the
+   whole of the native pass -- this one included -- happens earlier in the same
+   iteration of render_ogl.c's loop than the tagpu_vk_frame that consumes this,
+   so the game thread never touches them and there is no lock to take.
+
+   THAT IS NOT BY ITSELF ENOUGH, and until the G19e re-review (2026-09-15) this
+   paragraph stopped there and was wrong. `ensure_atlas` FREES `s_atlasMirror`
+   and `build_height` frees `s_hMirror` whenever the map changes, so a
+   hand-over left standing from an earlier frame names memory this file has
+   given back -- and one can be left standing, because the flag is cleared
+   inside `tagpu_terr_render`, which tagpu_native.c calls only when the gather
+   returned cells. A frame that bails (a level load makes `ptr_ok(tmap)` fail,
+   which is exactly when the atlas is rebuilt) never reaches it.
+
+   So the hand-over carries the frame it was published on and
+   `tagpu_terr_handover` REFUSES any other, which makes "these pointers are
+   alive" a property of the frame number rather than of which functions
+   happened to run. Both reviewers found this independently; the feature pass
+   had half the guard already (`tagpu_feat_glreset` clears the flag and says
+   why) and the scaffold had all of it (`tagpu_scaffold_frame` clears
+   unconditionally at the top), which is what made the terrain pass's omission
+   legible once it was looked for. */
 
 /* THE UNIT QUAD IS DEFINED ONCE, HERE, and both lanes build their per-vertex
    buffer from it: the two triangles whose shared edge runs (1,0)-(0,1), in the
@@ -119,6 +137,12 @@ int  tagpu_terr_key(void);
 #define TAGPU_TERR_ICOMP 4
 
 typedef struct TAGPU_TERRHAND {
+    /* THE FRAME THIS WAS PUBLISHED ON (the fork's monotonic render-thread
+       counter). `tagpu_terr_handover` refuses a hand-over whose stamp is not
+       the caller's own frame -- see the paragraph above for what that bounds.
+       It is first so that a hand-over read by a debugger leads with it. */
+    unsigned frame;
+
     /* The geometry: one record per visible cell, one INSTANCE each. */
     const short* cells;  int ncell;
 
@@ -174,7 +198,11 @@ typedef struct TAGPU_TERRHAND {
     int   ab;
 } TAGPU_TERRHAND;
 
-/* 0 when there is nothing to draw, or when this frame's has already been
-   taken. Render thread only. */
-int tagpu_terr_handover(TAGPU_TERRHAND* out);
+/* 0 when there is nothing to draw, when this frame's has already been taken,
+   or when the standing hand-over was published on a DIFFERENT frame than
+   `now` -- the fork's monotonic render-thread counter, which a Vulkan pass has
+   as TAGPU_VKPASS::frame. That last refusal is the safety one: the pointers
+   in here alias buffers this file frees and rebuilds, so a hand-over that
+   outlived its frame can name memory that is gone. Render thread only. */
+int tagpu_terr_handover(TAGPU_TERRHAND* out, unsigned now);
 #endif

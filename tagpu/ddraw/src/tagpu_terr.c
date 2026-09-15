@@ -575,6 +575,11 @@ static void init_gl(void)
 
 void tagpu_terr_glreset(void)
 {
+    /* and the hand-over goes with the context: its texel pointers name textures
+       that no longer exist and its cells a frame that will not be drawn. The
+       feature pass has carried this line since it was written; this one did
+       not, and the asymmetry was in the G19e diff. */
+    s_pubHave = 0; s_abFrame = 0;
     s_state = 0;
     s_atlasTex = 0;                     /* the id died with the context */
     s_rgbTex = 0;
@@ -1146,6 +1151,14 @@ static void put_cell(int col, int row, int cx, int cy)
    the viewport flat key-colour until the 90-frame watchdog notices. */
 static int terr_bail(void)
 {
+    /* A FRAME THAT GATHERS NOTHING HANDS NOTHING OVER. `tagpu_terr_render` is
+       where this used to be done, and tagpu_native.c calls that only when the
+       gather returned cells -- so every bail below left the PREVIOUS frame's
+       hand-over standing, pointing at a tile atlas `ensure_atlas` may have
+       freed on the way past. The frame stamp bounds it either way; this makes
+       the flag tell the truth as well, which is what tagpu_feat_glreset and
+       tagpu_scaffold_frame already did. [G19e RE-REVIEW, 2026-09-15.] */
+    s_pubHave = 0; s_abFrame = 0;
     tagpu_terrown_set_skip(0);
     return 0;
 }
@@ -1307,6 +1320,7 @@ static int             s_fogCopyCells;
 
 static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT* L)
 {
+    int fogBad = 0;                    /* fog wanted, no grid: publish nothing */
     /* NOTHING IS PUBLISHED ON A SHIPPED FRAME. `s_mirrorWant` is the latch the
        arm beat sets when the Vulkan lane is up (see there); while it is 0 the
        lane is not armed, nothing will ever call the hand-over, and the memset
@@ -1367,6 +1381,20 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
             s_pub.fogGridCols = v->fogCols; s_pub.fogGridRows = v->fogRows;
         }
     }
+    /* FOG ON WITH NO GRID IS NOT A FRAME THIS PASS MAY DRAW, so it publishes
+       NOTHING rather than a frame it cannot describe. The copy can fail -- a
+       refused `realloc`, which is precisely the address-space pressure this
+       phase exists to measure, or a grid past FOG_COPY_MAXDIM -- and publishing
+       `fog` 1 with a NULL grid had the Vulkan lane sample a 1x1 image while
+       `uFogDim` carried the real size: the GL twin draws correct fog and the
+       port draws something else, silently.
+       Clearing `fog` instead would be just as silent a difference the other
+       way (a lit ring where the twin has none), so the answer is the one this
+       file already gives for the restored atlas and the shadow map: stand down
+       for the frame. The GL lane is untouched either way -- it draws from its
+       own texture and never reads this struct.
+       [G19e RE-REVIEW, 2026-09-15.] */
+    fogBad = (s_pub.fog && !s_pub.fogGrid);
     s_pub.fogLut = tagpu_native_foglut();
     s_pub.vpL = v->vpL; s_pub.vpT = v->vpT; s_pub.vw = v->vw; s_pub.vh = v->vh;
     /* WHETHER THE CLIP IS ACTUALLY ON, not whether a rect exists -- the feature
@@ -1380,13 +1408,25 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
        was not taken because the lane is down -- and a claim left standing would
        pair a fresh Vulkan capture with a GL one from some earlier frame. */
     s_pub.ab = s_abFrame; s_abFrame = 0;
-    s_pubHave = s_ncell > 0;
+    /* THE STAMP IS WHAT MAKES THE POINTERS ABOVE SAFE (tagpu_terr.h). Every one
+       of them aliases a buffer this file owns and rebuilds, so the hand-over is
+       good for this frame and no other -- and `tagpu_terr_handover` is where
+       that is enforced, because the flag alone cannot be: a frame whose gather
+       bailed never reaches this function to clear it. */
+    s_pub.frame = v->frame_counter;
+    s_pubHave = s_ncell > 0 && !fogBad;
 }
 
 /* Hand it over, ONCE (tagpu_terr.h). */
-int tagpu_terr_handover(TAGPU_TERRHAND* out)
+int tagpu_terr_handover(TAGPU_TERRHAND* out, unsigned now)
 {
     if (!s_pubHave || !out) return 0;
+    /* NOT THIS FRAME'S, SO NOT ALIVE. Dropping it here rather than trusting the
+       flag is the whole of the G19e re-review's first finding: `s_pub.atlas`
+       and `s_pub.height` are buffers `ensure_atlas`/`build_height` free on a
+       map change, and the flag survives any frame the gather bailed on. The
+       stale hand-over is also CLEARED, so the next frame starts honest. */
+    if (s_pub.frame != now) { s_pubHave = 0; s_abFrame = 0; return 0; }
     *out = s_pub;
     s_pubHave = 0; s_abFrame = 0;
     return 1;

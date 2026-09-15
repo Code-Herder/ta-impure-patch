@@ -173,6 +173,7 @@ enum { ST_UNBUILT = 0, ST_READY = 1, ST_REFUSED = 2 };
 
 static int s_state;
 static int s_downOwed;                     /* a teardown the seam still owes us */
+static int s_downPaying;                   /* ...and the seam is paying it NOW  */
 static int s_drawThis;                     /* `prepare` left a draw for `record` */
 static int s_abFrame;
 static int s_saidRestored;                 /* the Classic++ refusal, said once  */
@@ -971,7 +972,7 @@ int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        staging alone is 4 MB a slot. Giving slot `slot` back at this point needs
        no new argument and no timer, because it is the same instant, and the
        same ownership, that the rest of this function writes it in. */
-    if (!tagpu_feat_handover(&h)) {
+    if (!tagpu_feat_handover(&h, d->frame)) {
         if (s_state == ST_READY) slot_free(d, &s_slot[slot]);
         return 0;
     }
@@ -1190,11 +1191,28 @@ void tagpu_vk_feat_down(const TAGPU_VKPASS* d)
 {
     VkDevice dev = d->dev;
     uint32_t i;
-    /* taken before anything is freed: whoever asked, the debt is settled by
-       this call and the seam must not drain a second time for it */
-    int owed = s_downOwed;
+    /* WHETHER THIS TEARDOWN IS THE ONE THE PASS ASKED FOR. Only the seam's
+       `_down_paid` sets it, and only after its vkDeviceWaitIdle -- so a
+       `vk_down` or a `vk_resize` that happens to run while a debt is
+       outstanding tears the pass down WITHOUT consuming it, and leaves it
+       ST_UNBUILT so it can come back on the next device. Reading `s_downOwed`
+       here instead is what let one transient refusal plus a window drag latch
+       the pass at ST_REFUSED for the life of the process.
+
+       THE DEBT ITSELF IS DISCHARGED BY EVERY TEARDOWN, paid or not, and that is
+       a separate fact from the verdict: once this function has run there is
+       nothing left to free, so an un-cleared flag would have the seam drain the
+       device and call `_down_paid` on an already-dead pass the next time it
+       looked -- which would latch ST_REFUSED by the back door and lose exactly
+       what the two lines above win. (Found while re-reading this fix, not by a
+       reviewer.) [G19e RE-REVIEW, 2026-09-15.] */
+    int owed = s_downPaying;
     s_downOwed = 0;
-    if (!dev || !vkDestroyBuffer) { s_state = ST_UNBUILT; return; }
+    /* NOTHING TO FREE, BUT THE VERDICT STILL STANDS. `owed` says the device
+       refused this pass its resources, and that is a fact about the pass and
+       not about whether the entry points resolved -- so it is latched here
+       too, exactly as below. [G19e RE-REVIEW, 2026-09-15.] */
+    if (!dev || !vkDestroyBuffer) { s_state = owed ? ST_REFUSED : ST_UNBUILT; return; }
 
     for (i = 0; i < TAGPU_VK_SLOTS; i++) {
         slot_free(d, &s_slot[i]);
@@ -1227,4 +1245,18 @@ void tagpu_vk_feat_down(const TAGPU_VKPASS* d)
 int tagpu_vk_feat_down_owed(void)
 {
     return s_downOwed;
+}
+
+/* THE SEAM'S OWN ENTRY POINT, called only after its vkDeviceWaitIdle. It is
+   what makes `_down`'s ST_REFUSED latch apply to the owed teardown and to
+   nothing else: `vk_down` and `vk_resize` go through plain `_down`, which
+   discharges the debt (there is nothing left to free) but returns the pass
+   ST_UNBUILT, so a pass refused once can try again on the device that replaces
+   this one. Here the verdict stands, because here the device's refusal is
+   still the reason. [G19e RE-REVIEW, 2026-09-15.] */
+void tagpu_vk_feat_down_paid(const TAGPU_VKPASS* d)
+{
+    s_downPaying = 1;
+    tagpu_vk_feat_down(d);          /* clears s_downOwed itself */
+    s_downPaying = 0;
 }

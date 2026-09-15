@@ -36,6 +36,15 @@ static void ogl_check_error(const char* stmt);
 
 static OGLRENDERER g_ogl;
 
+/* THE RENDER THREAD'S OWN FRAME NUMBER, at file scope because TWO places in
+   ogl_render need it: the TAGPU_FRAME handed to our passes, and the
+   tagpu_vk_frame that runs after them in the same iteration. The Vulkan lane
+   refuses a GL hand-over that is not this frame's, and it can only do that if
+   both halves of the iteration agree on which frame it is. It was a static
+   inside the tagpu block until the G19e re-review, where that block's scope
+   ends before the Vulkan call. */
+static unsigned int g_tagpu_frames = 0;
+
 BOOL ogl_create()
 {
     if (g_ogl.hwnd == g_ddraw.hwnd && g_ogl.hdc == g_ddraw.render.hdc && g_ogl.context)
@@ -1564,7 +1573,6 @@ static void ogl_render()
            quad and before the swap. Compiled into this DLL (no runtime LoadLibrary —
            that destabilised TA under wine). GL state is saved and restored around it. */
         {
-            static unsigned int s_tagpu_frames = 0;
 
             {
                 TAGPU_FRAME f;
@@ -1580,7 +1588,7 @@ static void ogl_render()
                 f.win_height   = g_ddraw.render.height;
                 f.hwnd         = g_ddraw.hwnd;
                 f.hdc          = g_ddraw.render.hdc;
-                f.frame_counter= s_tagpu_frames++;
+                f.frame_counter= g_tagpu_frames++;
                 f.bpp          = g_ddraw.bpp;
                 /* the index texture just uploaded above (or the last one still
                    on screen when the surface did not change) */
@@ -1671,8 +1679,13 @@ static void ogl_render()
            touches anything, so the GL path is what it was before the file
            existed. The GL context is neither released nor made non-current:
            route A of tools/vkcoexist.c, measured 2026-09-15. */
+        /* `g_tagpu_frames - 1` is THIS iteration's frame: the counter is
+           post-incremented when TAGPU_FRAME is filled above, so the number our
+           GL passes stamped their hand-overs with is the one before it. That
+           equality is what lets a Vulkan pass refuse a hand-over from any
+           other frame (tagpu_vk_pass.h). */
         if (!tagpu_vk_frame(g_ddraw.hwnd, g_ddraw.render.width, g_ddraw.render.height,
-                            g_config.vsync))
+                            g_config.vsync, g_tagpu_frames - 1u))
             SwapBuffers(g_ogl.hdc);
 
         /* Force redraw for GDI games (ClueFinders) */

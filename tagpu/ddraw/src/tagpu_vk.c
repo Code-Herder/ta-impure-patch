@@ -1969,9 +1969,13 @@ static int vk_present(void)
             return -2;
         }
         vklog("a pass asked to come down: the device is drained, tearing it down");
-        if (tagpu_vk_terr_down_owed())     tagpu_vk_terr_down(&s_pass);
-        if (tagpu_vk_feat_down_owed())     tagpu_vk_feat_down(&s_pass);
-        if (tagpu_vk_scaffold_down_owed()) tagpu_vk_scaffold_down(&s_pass);
+        /* `_down_paid`, not `_down`: settling the debt is what tells the pass
+           this teardown is ITS teardown, so the ST_REFUSED latch applies here
+           and not to a `vk_down` or `vk_resize` that merely happened to run
+           first. [G19e RE-REVIEW, 2026-09-15.] */
+        if (tagpu_vk_terr_down_owed())     tagpu_vk_terr_down_paid(&s_pass);
+        if (tagpu_vk_feat_down_owed())     tagpu_vk_feat_down_paid(&s_pass);
+        if (tagpu_vk_scaffold_down_owed()) tagpu_vk_scaffold_down_paid(&s_pass);
     }
 
     r = vkAcquireNextImageKHR(s_vk.dev, s_vk.sc, 1000000000ull,
@@ -2196,10 +2200,15 @@ static int vk_resize(int w, int h)
     return 1;
 }
 
-int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync)
+int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
 {
     LONG st;
     DWORD now = GetTickCount();
+
+    /* THIS FRAME'S NUMBER, BEFORE ANY PASS CAN ASK FOR IT. Every `prepare`
+       below reaches a GL module's hand-over through it, and refuses one that
+       was published on a different frame. [G19e RE-REVIEW, 2026-09-15.] */
+    s_pass.frame = frame_counter;
 
     /* THE LEVER FIRST AND CHEAPLY. With `tagpu_vk.on` absent this returns 0
        here, on a cached answer refreshed every 250 ms, so the GL lane's frame

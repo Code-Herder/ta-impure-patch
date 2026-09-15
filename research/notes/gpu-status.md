@@ -3577,9 +3577,12 @@ is compared is one pass over black against one pass over black. The player sees 
 everything drawn before that point missing from it; that is what a measuring lever costs, and it
 is why it is one frame.
 
-`tagpu_fps.c` is refactored onto it and **loses 117 lines** (501 → 384) — its own A/B still measures **0 px of
-786 432** (88 ink pixels a side) on the refactored oracle, which is the regression that says the
-move was clean. One thing improves rather than moves: the review of G19d found that a context
+`tagpu_fps.c` is refactored onto it and **loses 111 lines** (501 → 390) — its own A/B still measures **0 px of
+786 432** on the refactored oracle, which is the regression that says the move was clean.
+*(This said "117 lines (501 → 384)" until the G19e re-review counted it: 384 was the file before
+`fecd146` added the six-line depth-state block, and the figure was never re-taken. The ink count
+that used to be quoted here is gone on purpose — those pixels are the readout's own digits, so the
+number follows the frame rate on screen and is not a property of the port; see §2.30.)* One thing improves rather than moves: the review of G19d found that a context
 missing any of the A/B's entry points made the lever do nothing **silently**, retried every poll
 for the session. There is now one resolve, one message naming the entry point that was missing,
 and one latch. (The five it needs — `glGetFloatv`, `glIsEnabled`, `glDisable`, `glClearColor`,
@@ -3879,22 +3882,25 @@ in this landing and nothing for the hook map above. `tagpu_vk_terr.c` is not on
 **unchanged** at the 34 entries `thread-split-check.sh` reports.
 
 **MEASURED 2026-09-15** under system wine on the reference setup's 4070, `ss=1` — and then
-**RE-MEASURED IN FULL, on 2026-09-15, on the binary the landing review's rework produced**
-(md5 `1412a652…`), because the rework touches both the frame loop and the A/B harness itself and
-the first table was taken before it. **Every figure below reproduced**, ink counts included; the
-one that moved is the readout's, and it moves by construction (see its row):
+**RE-MEASURED IN FULL, TWICE**, on 2026-09-15: once on the binary the landing review's rework
+produced, and again on the binary the **re**-review's fixes produced (md5 `7f50fa3e…`), which is
+the one these figures are from and the one that would land. Both reworks touch the frame loop and
+one of them touches the A/B harness itself, so a table taken on an earlier binary is a table about
+a different program — that is the gate this landing failed the first time. **Every figure below
+reproduced on every binary**, ink counts included; the only one that moves is the readout's, and it
+moves by construction (see its row):
 
 | | |
 |---|---|
 | terr A/B, 1024×768, `feat-forest` (Two Continents) | **0 differing px of 786 432**, **630 719 non-black on *each* side** |
 | terr A/B, 1920×1080, same | **0 of 2 073 600**, 1 820 568 non-black each side |
 | terr A/B, 1024×768, **Anteer Strait**, reached by an **in-process level cycle** | **0 of 786 432**, **630 784 non-black each side — the entire viewport** |
-| all three | capture files byte-identical; a pair read 0 again after `tagpu_vk.on` *and* `tagpu_terr.on` were cleared and re-armed, which frees and rebuilds the pipeline, the descriptor sets, both shared images and every per-slot resource. **On the re-measurement that cycle was run on Anteer Strait** (630 784 ink a side) — the same free-and-rebuild on the larger atlas, and the run that matters most to the rework, because `_down` now returns the pass to `ST_REFUSED` rather than `ST_UNBUILT` when the teardown was *owed*, and a pass that got that wrong would fail to come back here |
+| all three | capture files byte-identical; a pair read 0 again after `tagpu_vk.on` *and* `tagpu_terr.on` were cleared and re-armed, which frees and rebuilds the pipeline, the descriptor sets, both shared images and every per-slot resource. That cycle has now been run on **both maps across the three binaries** — Anteer Strait (630 784 ink a side) on the rework, Two Continents (630 719) on the final one — and reads 0 every time. **It exercises `_down`'s non-owed branch and only that one**: with no refusal outstanding the pass must come back `ST_UNBUILT`, and it does. It says nothing about the owed branch, where the re-review found a real defect this run could not have caught (below) |
 | feat A/B (§2.29's, the regression) | **0 of 786 432**, **243 538 non-black a side — §2.29's own number** |
 | scaffold A/B (§2.28's) | **0 of 786 432**, **190 247 a side — §2.28's own number** (`tall=151` on the fixture) |
-| fps A/B (§2.26's) | **0 of 786 432**, **92 ink px a side** on the re-measurement against 88 on the first. **That count is the readout's own digits**, so it moves with the number displayed and is not a property of the port; what the A/B asserts is that both halves carry the *same* ones, which is the 0 |
+| fps A/B (§2.26's) | **0 of 786 432**. The ink count has read **88, 89, 92 and 94** across passing runs — **those pixels are the readout's own digits**, so the number follows the frame rate on screen and is not a property of the port. What the A/B asserts is that both halves carry the *same* digits, which is the 0. Do not treat this one as a regression figure; for the world passes the ink count *is* one, because there it is the scene |
 | constraint 4 | **0 of 630 784** in the world viewport against **`afceba5` — `main`, i.e. the whole seven-commit landing rather than one pass's predecessor** — with `tagpu_vk.off` and the full pass set on both, over a **cross-launch floor of 0** measured by running the landing's own binary twice, and a within-run floor of 0 on all three instances |
-| the owed teardown | **never fired**: 0 occurrences of `the seam tears it down` / `drained, tearing it down` across every instance of the re-measurement. That is the expected reading — the path needs an allocation refusal — and it is worth grepping for, because a run that *does* print them was refused its resources for real |
+| the owed teardown | **never fired**: 0 occurrences of `the seam tears it down` / `drained, tearing it down` / `WaitIdle refused` across every instance of every re-measurement. That is the expected reading — the path needs an allocation refusal — and it is worth grepping for, because a run that *does* print them was refused its resources for real |
 
 The whole world viewport is terrain ink (630 784 px at 1024×768; the 65 black pixels are the
 frame's own), so this is emphatically not two blank frames agreeing — the failure mode
@@ -3984,10 +3990,15 @@ rewritten under frames in flight. Two things make that safe by construction:
   submit has completed; and no *future* one will, because `record` runs only when `prepare`
   returned 1 and every such `prepare` calls `shared_bind` first. So `pending == 0` means
   unreferenced, whatever the frame rate and whatever the driver. **That second fact was an
-  argument spread over two functions and a seam in another file; since the review it is also a
-  test**: `shared_bind` records the views it wrote into each slot (`boundAtlas`/`boundHeight`)
-  and `record` draws nothing unless they are still the live ones, so a slot left holding a
-  retired view cannot sample it even if some future path reaches `record` without rebinding.
+  argument spread over two functions and a seam in another file; since the review it also carries
+  an assertion**: `shared_bind` records the views it wrote into each slot
+  (`boundAtlas`/`boundHeight`) and `record` draws nothing unless they are still the live ones, so
+  a slot left holding a retired view cannot sample it even if some future path reaches `record`
+  without rebinding. **It is not, however, "the fact that licenses the destroy" — the `pending`
+  bitmask still is, and this page said otherwise until the re-review.** `prepare` has exactly one
+  `return 1` with `shared_bind` on the straight-line path before it, so the comparison is a
+  tautology on every path that exists today and **can never fire**. It is a guard against a future
+  `prepare` that returns 1 without binding, which is worth its two lines; it is not evidence.
 
 **The accounting is done first and unconditionally**, at the top of `prepare`, and that is not a
 detail: doing it inside `shared_bind` stalls for ever on the one path that matters — a resize
@@ -4110,6 +4121,94 @@ a moment earlier to fail `ptr_ok`/`IsBadReadPtr`. Restructuring `build_height` t
 success would break the "`s_hMirror` non-NULL and it is `s_hW × s_hH`" single-fact invariant that
 function is written around, which is not worth doing inside a landing already carrying a
 synchronisation rework.
+
+#### What the RE-review changed, 2026-09-15
+
+The rework above changes the synchronisation *design* rather than patching it — it moves a
+teardown across a submit boundary and adds a drain point to the seam's frame loop — so `CLAUDE.md`
+asks for a second review, and two more reviewers read `main...HEAD` at `high`, one on correctness
+and one on synchronisation and object lifetime alone. **Both led with the same finding again**,
+independently, exactly as the first pair did. Every finding below was verified against the code
+before anything was changed.
+
+* **THE BLOCKER, AND IT IS THE FIRST REVIEW'S BUG IN A SECOND PLACE.** The terrain hand-over could
+  **outlive the frame that published it, and its pointers could be freed underneath it.**
+  `s_pubHave` was cleared only inside `tagpu_terr_render`, which `tagpu_native.c` calls only when
+  the gather returned cells — so every `terr_bail()` exit left the previous frame's hand-over
+  standing, and `tagpu_terr_glreset` did not clear it either. Meanwhile `ensure_atlas` **frees**
+  `s_atlasMirror` and `build_height` frees `s_hMirror` on a map change. The sequence is short and
+  is not exotic: publish on a frame the lane is too young to consume, change level, the gather
+  bails at `ptr_ok(tmap)` *during the load* — which is the same event that rebuilt the atlas — and
+  the lane's next `prepare` `memcpy`s up to 5.9 MB **out of freed heap**. The non-crashing version
+  of it is last frame's terrain drawn over this one, which `tagpu_terr.h` said was impossible.
+  What makes it conclusive rather than theoretical is that **the codebase already knew the rule in
+  two of its three places**: `tagpu_feat_glreset` clears the flag with a comment explaining this
+  hazard, and `tagpu_scaffold_frame` clears unconditionally at the top of the frame. The terrain
+  pass was the odd one out, and the asymmetry was sitting in the diff.
+  **The fix is a bound, not an enumeration.** The hand-over now carries the frame it was published
+  on and `tagpu_terr_handover`/`tagpu_feat_handover` refuse any other, so "these pointers are
+  alive" is a property of the frame number rather than of which functions happened to run — a
+  future `terr_bail` that forgets cannot resurrect the bug. The flag is *also* cleared on the bail
+  paths and in `tagpu_terr_glreset`, so the flag tells the truth as well. The frame number reaches
+  a pass as `TAGPU_VKPASS::frame`, from `tagpu_vk_frame`, from `render_ogl.c`'s own counter — the
+  same number the GL lane stamped with earlier in that iteration.
+* **A teardown nobody asked for could latch the pass refused for the life of the process.**
+  `_down` read `s_downOwed` directly and ended at `ST_REFUSED` when it was set — but `vk_down` and
+  `vk_resize` call `_down` for their own reasons, and `prepare` treats `ST_REFUSED` as terminal.
+  So one transient refusal followed by a window drag (the acquire returns `OUT_OF_DATE`, the
+  caller resizes before the seam's drain can run) killed the pass **permanently**, on a device
+  that was then destroyed and replaced anyway. This was a regression the rework introduced: before
+  it, `_down` always returned `ST_UNBUILT` and the pass recovered on the next lane cycle. The debt
+  is now settled only by the seam's own `tagpu_vk_*_down_paid`, called after its `vkDeviceWaitIdle`;
+  every other caller of `_down` leaves the debt standing and returns the pass `ST_UNBUILT`.
+  **The re-arm measurement in the table above could not have caught this** — it exercises the
+  non-owed branch — and the table now says so.
+* **A failed fog copy published `fog` 1 with no grid.** `realloc` can refuse, which is precisely
+  the address-space pressure this phase exists to measure, and the pass then sampled a 1×1 image
+  while `uFogDim` carried the real dimensions: the GL twin draws correct fog, the port draws
+  something else, in silence. Clearing `fog` instead would be just as silent a difference the
+  other way, so the publisher now **publishes nothing at all** for that frame — the answer this
+  file already gives for the restored atlas and the shadow map. Both publishers.
+* **`tools/vk-ab.py` compared whatever files existed.** Existence is not freshness: every way a
+  capture silently does not fire — the `.ab` lever not re-armed (`touch` on an existing file does
+  nothing), the lane down, `ss != 1`, the seam's "N levers claimed this frame" refusal — leaves
+  the previous run's PPMs on the disk, and the tool would print **that** run's verdict for the
+  binary in front of you. **The whole of this landing's evidence is that number.** It now refuses
+  a capture older than the `.ab` file that asked for it. (The re-measurements in the table were
+  taken by a harness that deleted the PPMs before every capture, so a missing half would have been
+  reported as missing; the tool no longer depends on the operator remembering that.)
+* **`_down`'s early return** (`!dev || !vkDestroyBuffer`) discarded the verdict along with the
+  debt. Neither reviewer could reach it and neither can I — `owed` implies the pass was `ST_READY`,
+  which implies a live device — but it now latches `ST_REFUSED` for the same reason the path below
+  it does.
+
+**And four documentation claims the code disproves**, which is the half of a review this project
+counts as findings rather than polish:
+
+* **The `boundAtlas`/`boundHeight` test in `record` is inert — it can never fire**, because
+  `prepare` has exactly one `return 1` and `shared_bind` is on the straight-line path before it.
+  It is a guard against a future `prepare` that returns 1 without binding, and worth its two
+  lines; it is **not** "the fact that licenses the destroy", which is what this page, the file
+  header and `fecd146`'s own commit message all called it. The `pending` bitmask still is.
+* §2.28's "loses 117 lines (501 → 384)" was never re-taken after `fecd146` added six lines:
+  **111, 501 → 390**. The commit that re-measured this landing said "every number reproduced" and
+  vouched for it without counting.
+* The **ta-drive** skill told an operator to look for `depth format 0` on a device with no 24-bit
+  depth. That line cannot be printed — the pass returns before it — and what does print is
+  `the seam's render pass carries no depth attachment …`.
+* The re-arm row of the table above read as though it validated the owed branch of `_down`. It
+  validates the other one.
+
+**What the reviewers checked and found clean** is worth recording too, because it is most of the
+lane: the retire bitmask's invariant holds (bits clear under each slot's own fence; a second
+resize is refused while one is outstanding; `slot_free` clears the bound record); no descriptor
+set is written outside its own fenced `prepare`; the drain point really is before anything names a
+pass's objects, and the debt is always settled and never twice; `CELL_MAX` equals the producer's
+own clamp exactly and `HEIGHT_MAXDIM`/`FOG_MAXDIM` match theirs, none tighter; the GAF mirror
+copies the rows `glTexSubImage2D` gets; and **no GL pixel moves on the unarmed path**. Nothing in
+the rework rests on timing — the drain is a real `vkDeviceWaitIdle`, the retire is a bitmask under
+fences, and no `IsBadReadPtr`, sleep or retry was added. The gaps were missing bounds, not weak
+ones.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 
