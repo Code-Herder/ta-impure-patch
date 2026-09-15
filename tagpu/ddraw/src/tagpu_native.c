@@ -2001,7 +2001,31 @@ static unsigned s_ghostCheck = 0;
 static int   s_ghostLogged = -1;     /* the armed state the log last named */
 static unsigned s_ghostCurs = 0, s_ghostQueue = 0, s_ghostDrawn = 0;
 static unsigned s_ghostNoBake = 0, s_ghostTrunc = 0;
-static int   s_ghostNoDraw = 0;      /* the missing prerequisite was logged */
+static int   s_ghostNoDraw = 0;      /* THE BUILD GHOST'S STANDING REQUEST FOR THE PACKET'S BUILDS TABLE. Written on
+   the render thread, read on the game thread inside fill_frame; one writer, no
+   ordering owed — a frame either side of a change costs one frame of an unused
+   or an empty table and nothing else. This is tagpu_fxown's `want` pattern and
+   exists for the same reason: the table costs the GAME thread a walk of the
+   order pass's arena and a copy of up to TAGPU_PK_MAX_BUILDS * 16 bytes into
+   the packet, every frame, and nothing but this pass ever reads it. Until
+   2026-09-14 fill_builds was called unconditionally, so every session paid for
+   it whether or not a ghost could draw — including every session before the
+   ghost became a play default, where the answer was always zero.
+
+   The 90-frame watchdog is fxown's too: a pass that has stopped asking stops
+   being charged, so a render thread that dies or a lever turned off between
+   polls cannot leave the publisher paying for ever. */
+static volatile unsigned char g_wantBuilds;
+static unsigned g_beatWantBuilds;
+void tagpu_native_set_want_builds(int want, unsigned int frame_counter)
+{
+    g_wantBuilds = (unsigned char)(want != 0);
+    if (want) g_beatWantBuilds = frame_counter;
+    else if ((unsigned)(frame_counter - g_beatWantBuilds) > 90) g_wantBuilds = 0;
+}
+int tagpu_native_want_builds(void) { return g_wantBuilds != 0; }
+
+/* the missing prerequisite was logged */
 
 static int ghost_armed(unsigned frame_counter)
 {
@@ -2033,26 +2057,22 @@ static int ghost_armed(unsigned frame_counter)
             p = q + 1;
         }
     }
-    if (s_ghostLogged != 1) {
-        char b[96];
-        _snprintf(b, sizeof b, "ghost: ARMED alpha=%.2f", s_ghostAlpha);
-        nlog(b);
-        s_ghostLogged = 1;
-    }
-    /* THE PREREQUISITE, SAID OUT LOUD, AND KEPT EVEN THOUGH THE TABLE NOW
-       DECLARES IT. The ghost draws through the unit pass — its view and its
+    /* THE PREREQUISITE IS ASKED BEFORE ANYTHING IS LOGGED, and that ORDER is
+       the fix. The ghost draws through the unit pass — its view and its
        program — so with tagpu_native.on off it can never draw a pixel. Since
        2026-09-14 the ghost IS a play default and carries `needs
        tagpu_native.on` in tagpu_opt.c's table like every other dependent
-       lever, so the table's own resolution withholds the default when the
-       unit pass is off. This test stays because `needs` governs the DEFAULT,
-       not the lever: a hand-written `tagpu_ghost.on` file arms the pass
-       whatever the table says, and that is the case this refusal is for.
-       Before it, the lever armed, logged ARMED, and then did nothing at all —
-       the frame's early-out sits in front of the pass when nothing else is
-       armed, so not even the heartbeat came out. Leaving s_ghostOn up would
-       also keep the 30-frame poll answering "armed" — the refusal is the
-       honest state. */
+       lever, so the table's own resolution withholds the default when the unit
+       pass is off. This test stays because `needs` governs the DEFAULT, not the
+       lever: a hand-written `tagpu_ghost.on` file arms the pass whatever the
+       table says, and that is the case this refusal is for.
+
+       Until 2026-09-14 the ARMED line was logged FIRST and this test came
+       after, so with the unit pass off each 30-frame poll wrote both lines —
+       ARMED set the state to 1, the refusal then found it != 2 and set it to
+       2, and the next poll found 2 != 1 and started again. Two file opens
+       every 30 frames for the life of the session, and a log that claimed the
+       pass was armed 15 lines before saying it was not. */
     if (!tagpu_opt_on("tagpu_native.on")) {
         if (s_ghostLogged != 2) {
             nlog("ghost: off — needs tagpu_native.on (it draws through the unit pass)");
@@ -2060,6 +2080,12 @@ static int ghost_armed(unsigned frame_counter)
         }
         s_ghostOn = 0;
         return 0;
+    }
+    if (s_ghostLogged != 1) {
+        char b[96];
+        _snprintf(b, sizeof b, "ghost: ARMED alpha=%.2f", s_ghostAlpha);
+        nlog(b);
+        s_ghostLogged = 1;
     }
     return 1;
 }
@@ -2141,7 +2167,7 @@ static int ghost_pieces(const char* root, TAGPU_PK_PIECE* out, int max)
    (the 2026-09-12 review measured it). The ghost is the square's twin while
    the player is placing, so it takes the square's arithmetic; the difference
    from where the building will actually stand is that same sub-pixel. */
-static void ghost_one(const TAGPU_PACKET* pk, unsigned mid,
+static int ghost_one(const TAGPU_PACKET* pk, unsigned mid,
                       float fx, float fz, float ay0,
                       const TAGPU_PDVIEW* pv, int eyeX, int eyeY, int vpL,
                       int vpT, int r0)
@@ -2156,11 +2182,11 @@ static void ghost_one(const TAGPU_PACKET* pk, unsigned mid,
     TAGPU_PDUNIT q;
     int np, i;
 
-    if (mid >= pk->udef_count) return;        /* the bound every model id takes */
+    if (mid >= pk->udef_count) return 0;      /* the bound every model id takes */
     root = model_root(pk, mid);
-    if (!root) { s_ghostNoBake++; return; }
+    if (!root) { s_ghostNoBake++; return 0; }
     np = ghost_pieces(root, s_pc, TAGPU_PBMAXPIECE);
-    if (np <= 0) { s_ghostNoBake++; return; }
+    if (np <= 0) { s_ghostNoBake++; return 0; }
     /* owner = the human whose cursor this is: the material's team-coloured
        frames, so the ghost shows the model exactly as the player's built
        unit will look. ghost=1 keys the bake APART from the units' entries:
@@ -2169,7 +2195,7 @@ static void ghost_one(const TAGPU_PACKET* pk, unsigned mid,
        placed building's parts with the wrong pieces' matrices (the
        2026-09-12 leak). */
     if (!tagpu_posebake_unit(s_pc, np, pk->local_player, 1, &bg, &bm) ||
-        bg->nparts <= 0 || bg->count[TAGPU_PB_BODY] <= 0) { s_ghostNoBake++; return; }
+        bg->nparts <= 0 || bg->count[TAGPU_PB_BODY] <= 0) { s_ghostNoBake++; return 0; }
     for (i = 0; i < bg->nparts; i++) {
         float* o = s_pose + (size_t)i * 12;
         memset(o, 0, 12 * sizeof(float));
@@ -2203,6 +2229,7 @@ static void ghost_one(const TAGPU_PACKET* pk, unsigned mid,
     q.cast[0] = 0.0f; q.cast[1] = 0.0f; q.cast[2] = 1.0f;
     q.ghost = 1;                              /* not a unit: the stats skip it   */
     tagpu_posedraw_unit(&q);
+    return 1;
 }
 
 /* the pass itself, called once per frame from tagpu_native_frame after the
@@ -2273,10 +2300,38 @@ static void ghost_pass(const TAGPU_PACKET* pk, unsigned frame_counter,
         return;
     }
     s_ghostNoDraw = 0;
+    /* THE HEARTBEAT GOES HERE, IN FRONT OF THE "nothing to draw" RETURN below.
+       It used to sit at the tail, so it printed only on a frame that was both a
+       multiple of 300 AND had a ghost on screen — which made `nobake` and
+       `trunc`, the two counters gpu-status §2.23 says must stay 0, almost never
+       observable, and never at all in the sessions where something had gone
+       wrong and no ghost drew. The counters are cumulative, so printing them on
+       a frame that drew nothing is exactly as meaningful. */
+    if ((frame_counter % 300) == 0) {
+        char b[160];
+        _snprintf(b, sizeof b,
+                  "ghost: curs=%u queue=%u drawn=%u nobake=%u trunc=%u alpha=%.2f",
+                  s_ghostCurs, s_ghostQueue, s_ghostDrawn, s_ghostNoBake,
+                  s_ghostTrunc, s_ghostAlpha);
+        nlog(b);
+    }
     /* the cursor: the square's own gate — mode 14, and either the band bit or
        the mouse inside the rect the engine can NAME (gather_cursor's test) —
-       plus a build type the udef bound accepts */
-    if (pk->cursor_mode == 0x0E && pk->build_unit_id != 0 &&
+       plus a build type the udef bound accepts.
+
+       AND THE SQUARE MUST BE OURS AT ALL. This ghost is the twin of the build
+       placement square, which lives in the marker pass's cursor layer, so it
+       arms on that layer's own answer — `tagpu_mark_cursor_ours()`, the one
+       gather_cursor asks — exactly as the QUEUE ghost below arms on the order
+       pass's (tagpu_order_copy_builds returns 0 when that pass is disarmed).
+       Until 2026-09-14 this half asked nothing: with `tagpu_mark` off, or
+       `mark.on=nocursor`, the translucent building followed the pointer while
+       our square did not, and the engine's own square is drawn at its UNZOOMED
+       1x projection, so at any zoom != 1 the building and its square were in
+       different places. Harmless while the ghost was opt-in; the ghost became
+       a play default the same day, which is what made it reachable. */
+    if (tagpu_mark_cursor_ours() &&
+        pk->cursor_mode == 0x0E && pk->build_unit_id != 0 &&
         pk->build_unit_id < pk->udef_count &&
         (pk->region_flags & 8 ||
          (pk->mouse[0] >= pk->vp_addr[0] && pk->mouse[0] <= pk->vp_addr[2] &&
@@ -2326,8 +2381,7 @@ static void ghost_pass(const TAGPU_PACKET* pk, unsigned frame_counter,
     x_glDepthMask(GL_FALSE);
     if (haveCursor) {
         s_ghostCurs++;
-        s_ghostDrawn++;
-        ghost_one(pk, pk->build_unit_id, cfx, cfz, cay,
+        s_ghostDrawn += ghost_one(pk, pk->build_unit_id, cfx, cfz, cay,
                   &s_pv, eyeX, eyeY, vpL, vpT, r0);
     }
     for (k = 0; k < nb; k++) {
@@ -2343,19 +2397,10 @@ static void ghost_pass(const TAGPU_PACKET* pk, unsigned frame_counter,
         if (ghost_offscreen(fx - (float)eyeX + (float)vpL, ay - (float)eyeY + (float)vpT,
                             evpL, evpT, evw, evh)) continue;
         s_ghostQueue++;
-        s_ghostDrawn++;
-        ghost_one(pk, bs[k].type, fx, fz, ay, &s_pv, eyeX, eyeY, vpL, vpT, r0);
+        s_ghostDrawn += ghost_one(pk, bs[k].type, fx, fz, ay, &s_pv, eyeX, eyeY, vpL, vpT, r0);
     }
     tagpu_posedraw_end();
     x_glDepthMask(GL_TRUE);
-    if ((frame_counter % 300) == 0) {
-        char b[160];
-        _snprintf(b, sizeof b,
-                  "ghost: curs=%u queue=%u drawn=%u nobake=%u trunc=%u alpha=%.2f",
-                  s_ghostCurs, s_ghostQueue, s_ghostDrawn, s_ghostNoBake,
-                  s_ghostTrunc, s_ghostAlpha);
-        nlog(b);
-    }
 }
 
 void tagpu_native_frame(const TAGPU_FRAME* f)
@@ -2495,7 +2540,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         s_subpix = (GetFileAttributesA("tagpu_subpix.off") == INVALID_FILE_ATTRIBUTES);
         s_spxlog = (GetFileAttributesA("tagpu_spxlog.on")  != INVALID_FILE_ATTRIBUTES);
         s_nano   = (GetFileAttributesA("tagpu_nano.off")   == INVALID_FILE_ATTRIBUTES);
-        (void)ghost_armed(f->frame_counter);   /* tagpu_ghost.on, its own 30f poll */
+        /* tagpu_ghost.on, its own 30f poll — and the answer is PUBLISHED, because
+           the packet's builds table is walked and copied by the game thread and
+           is worth nothing to anyone but this pass. */
+        tagpu_native_set_want_builds(ghost_armed(f->frame_counter), f->frame_counter);
         if (s_armed != was && was >= 0) {
             char b[96]; _snprintf(b, sizeof b, "native: %s (type=%s wrecks=%d ss=%d subpix=%d)",
                                   s_armed ? "ARMED" : "disarmed", s_type,

@@ -798,6 +798,53 @@ targets, re-read for the aircraft work rather than taken from the earlier note.]
 | `0x469B2C` | `0x420B00` | explosions and effects |
 | `0x469BA3` | `0x45AC20` DrawUnit | **site B** — everything `(state&3) != 1`, over ALL rows |
 
+#### The 3D wreck draw: a husk borrows the UNIT pipeline through one shared scratch [VERIFIED 2026-09-14]
+
+The feature draw `0x46A610` (arg = a feature-grid cell) splits twice. `0x46A6B5`
+`test [cell+0xC],1` separates wreck cells from plain features; `0x46A6DC`
+`test [def+0xFE],1` then separates **GAF wrecks** (bit set, `0x46A6E1`, their own shadow through
+`0x4B7EE0`/`0x4B7F90` on `rec+0x10`, gated by the FShadow option `[main+0x37F06]&0x10` at
+`0x46A6ED`) from **3D wrecks** (bit clear, `0x46A721`).
+
+There is no separate shadow path for a 3D wreck. It is drawn as a UNIT, through a single
+**scratch feature-unit** — a 0x118-byte record allocated once at feature init
+(`0x421F83 MEM_Alloc(0x118)`, stored at `main+0x1420F`, zeroed; `0x421FD3` then sets
+`[scratch+0x110] |= 0x20000000` permanently, i.e. the structure bit, for the life of the
+process). Per husk, `0x46A721` fills it in and draws:
+
+```
+46a721  mov eax,[main+0x1420f]   ; the scratch feature-unit
+46a727  mov ecx,[rec+0x4]        ; this husk's Object3do
+46a72b  mov [eax+0x9e],ecx       ; scratch -> Object3do
+46a731  mov [ecx+0xc],eax        ; Object3do+0x0C -> scratch   (the unit field)
+46a73d..46a75a                   ; rec+0x20..0x25 -> scratch+0x64; rec+0x08/0C/10 -> +0x6A/6E/72
+46a762  call 0x45ac20            ; DrawUnit(ctx, scratch)
+```
+
+`DrawUnit` reads `[scratch+0x9E]` at `0x45AE65` and calls `0x458810`, which reaches the blit
+`0x459200` at `0x458948` — **so a husk does reach the blit's three shadow emit sites.** Which one
+depends on us: the scratch's permanent `0x20000000` puts both silhouette sites on the *bit-clear*
+side of the `je`s at `0x4592C6` and `0x45952C`, and those are exactly the two `je`s
+`tagpu_owndraw.c` flips to `EB` under target `all`. **Unpatched, a husk reaches only `0x4594DB`**
+(itself gated at `0x4594D0` on `[[scratch+0x92]+0x241] & 0x40000000`, where `+0x92` is
+`[main+0x1439B]`, the UnitInfo array base — so that test reads `UnitInfo[0]`'s flags, an
+arbitrary loaded def with nothing to do with wrecks).
+
+**`Object3do+0x0C` on a husk is a real pointer, to the shared scratch** — not to a unit record,
+and not null. Any predicate that only checks it is a plausible pointer passes for a husk. The
+live-unit analogue is `0x485E14 mov [eax+0xc],esi`.
+
+**The scratch is never cleared, which is an ABA.** `FEATURES_Destroy 0x42474F` calls
+`FreeObjectState 0x45AAA0` on the husk's `Object3do` and nulls `[rec+4]` at `0x424754`, but leaves
+`scratch+0x9E` naming the freed block. If the allocator returns that block for a live unit's
+`Object3do` (`0x485DCC` / `0x485E0E`), a recogniser testing only `*(scratch+0x9E) == obj3do`
+matches that live unit and goes on matching until the next 3D-wreck draw. Testing
+`*(obj3do+0x0C) == *(main+0x1420F)` as well closes it, because a block that has become a live
+unit's carries that unit's own record at `+0x0C`. `tagpu_owndraw.c`'s `is_wreck_draw()` tests
+both. Residual, not closed: the constructor path `0x485DCC` / `0x45A950` was not observed writing
+`+0x0C` within the first 0x60 bytes, so a reused block taken down that path could still carry a
+stale scratch there.
+
 Site B is last, and a unit's shadow is blitted inside that same `DrawUnit` call (the branch
 table above), through `0x4B8500`, which has **no depth test** — the ALP blit writes every
 non-key pixel of its source. So an aircraft's ground shadow composites **above** the ground

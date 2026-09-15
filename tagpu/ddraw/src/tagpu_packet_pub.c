@@ -1459,7 +1459,15 @@ static TAGPU_PK_BUILD s_builds[TAGPU_PK_MAX_BUILDS];
 static unsigned fill_builds(TAGPU_PACKET* p, unsigned* cursor)
 {
     unsigned e, need = *cursor;
-    int n = tagpu_order_copy_builds(s_builds, TAGPU_PK_MAX_BUILDS);
+    int n;
+    /* GATED ON THE ONLY PASS THAT READS IT, like the effect tables above. The
+       walk and the copy below are pure cost to a session with no build ghost,
+       which was every session before 2026-09-14 and is still any session that
+       turns it off. `tagpu_native_want_builds()` is the ghost's own 30-frame
+       poll, published from the render thread; being a frame late either way
+       costs one frame of an unused or an empty table. */
+    if (!tagpu_native_want_builds()) return need;
+    n = tagpu_order_copy_builds(s_builds, TAGPU_PK_MAX_BUILDS);
     if (n <= 0) return need;
     e = append_table(p, cursor, s_builds, (unsigned)n, (unsigned)sizeof(TAGPU_PK_BUILD),
                      &p->off_builds, &p->n_builds, TAGPU_PK_TRUNC_BUILDS);

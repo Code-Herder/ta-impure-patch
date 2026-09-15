@@ -139,9 +139,77 @@ static int name_matches(const char* field)
     return 1;
 }
 
-int __cdecl tagpu_owndraw_classify(unsigned int obj3do, unsigned int frame)
+/* DOES owndraw's OWN TARGET COVER THIS OBJECT? `tagpu_owndraw.on`'s token —
+   `all`, or a name to match against the def's three name fields. ONE
+   definition, because there are two callers and they must not drift: the
+   classifier, which decides whether to skip the engine's rasterise, and
+   preshadow, which decides whether to empty the composite at the shadow.
+
+   Until 2026-09-14 only the classifier asked. With `owndraw.on=armcom` and
+   `native.on=all` — both legal — the classifier left a non-armcom unit to the
+   engine and preshadow then emptied that unit's composite anyway, taking its
+   BODY with the shadow (path A blits the body from the same plane at
+   0x4593A2). Masked under the play defaults only because the default target IS
+   `all`, so the two agreed by accident.
+
+   A bad pointer answers NO, which is the same answer as a name that does not
+   match, and both mean "the engine keeps this one" — so the classifier's old
+   early-outs on those two reads ARE this function returning 0, and its
+   accounting is unchanged (both fell through to the same `g_passed++`). */
+static int target_covers(unsigned int obj3do)
 {
     unsigned int unit, def;
+    if (g_all) return 1;
+    unit = *(volatile unsigned int*)(obj3do + O3_THISUNIT);
+    if (!ptr_ok(unit)) return 0;
+    def = *(volatile unsigned int*)(unit + U_UNITTYPE);
+    if (!ptr_ok(def)) return 0;
+    return name_matches((const char*)(def + UD_NAME)) ||
+           name_matches((const char*)(def + UD_UNITNAME)) ||
+           name_matches((const char*)(def + UD_OBJNAME));
+}
+
+/* IS THIS DRAW A 3D WRECK (a husk)? One definition; the classifier and
+   preshadow both ask it.
+
+   How a husk is drawn [BINARY-VERIFIED 2026-09-14]: the feature draw 0x46A610
+   splits wreck cells at 0x46A6B5 and GAF wrecks from 3D ones at 0x46A6DC; the
+   3D branch at 0x46A721 borrows the UNIT pipeline through a single shared
+   scratch "feature unit" allocated once at 0x421F83 and kept at main+0x1420F.
+   Two stores set it up, 0x41 bytes before the `call 0x45AC20` that draws:
+
+     0x46A72B  mov [scratch+0x9E], obj3do      ; scratch -> this husk
+     0x46A731  mov [obj3do+0x0C], scratch      ; and the husk back at the scratch
+
+   BOTH are tested here, and the second is the point. `scratch+0x9E` alone is
+   an ABA: FEATURES_Destroy 0x42474F frees the husk's Object3do and nulls
+   [rec+4] at 0x424754 but never clears +0x9E, so the scratch goes on naming a
+   freed block. If the allocator hands that block back for a LIVE unit's
+   Object3do (0x485DCC / 0x485E0E) the equality holds again and that unit is
+   misclassified as a husk — until the next 3D-wreck draw moves the pointer on.
+   `obj3do+0x0C == scratch` closes it: a block that has become a live unit's
+   carries that unit's own record there (0x485E14), not the scratch. It costs
+   no false negative, because a genuine husk has just had +0x0C written by
+   0x46A731 in the same straight line as +0x9E.
+
+   Residual, stated rather than assumed: the second constructor path
+   (0x485DCC / 0x45A950) was not seen writing +0x0C within the first 0x60 bytes
+   of the constructor, so a reused block taken down THAT path could in
+   principle still carry a stale scratch there. The test is strictly better
+   than the one it replaces, not proven airtight. */
+static int is_wreck_draw(unsigned int obj3do)
+{
+    unsigned int taMain = *(volatile unsigned int*)0x00511DE8u;
+    unsigned int scratch;
+    if (!ptr_ok(taMain)) return 0;
+    scratch = *(volatile unsigned int*)(taMain + 0x1420Fu);
+    if (!ptr_ok(scratch)) return 0;
+    if (*(volatile unsigned int*)(scratch + 0x9Eu) != obj3do) return 0;
+    return *(volatile unsigned int*)(obj3do + O3_THISUNIT) == scratch;
+}
+
+int __cdecl tagpu_owndraw_classify(unsigned int obj3do, unsigned int frame)
+{
     int skip = 0;
     if (!ptr_ok(obj3do)) { g_passed++; return 0; }
     /* 3D-wreck draws come through the scratch feature-unit *(main+0x1420F)
@@ -151,33 +219,17 @@ int __cdecl tagpu_owndraw_classify(unsigned int obj3do, unsigned int frame)
        rasterise + wipe the composite, exactly like native units). Without
        this branch, "all" would skip a fresh husk's FIRST rasterise with
        nothing cached to restore = invisible corpse. */
-    {
-        unsigned int taMain = *(volatile unsigned int*)0x00511DE8u;
-        if (ptr_ok(taMain)) {
-            unsigned int scratch = *(volatile unsigned int*)(taMain + 0x1420Fu);
-            if (ptr_ok(scratch) &&
-                *(volatile unsigned int*)(scratch + 0x9Eu) == obj3do) {
-                extern int tagpu_native_wrecks_armed(void);
-                if (tagpu_native_wrecks_armed()) {
-                    g_skipped++;
-                    tagpu_r3dcache_wipe(frame);
-                    return 1;
-                }
-                g_passed++;
-                return 0;
-            }
+    if (is_wreck_draw(obj3do)) {
+        extern int tagpu_native_wrecks_armed(void);
+        if (tagpu_native_wrecks_armed()) {
+            g_skipped++;
+            tagpu_r3dcache_wipe(frame);
+            return 1;
         }
+        g_passed++;
+        return 0;
     }
-    if (g_all) skip = 1;
-    else {
-        unit = *(volatile unsigned int*)(obj3do + O3_THISUNIT);
-        if (!ptr_ok(unit)) { g_passed++; return 0; }
-        def = *(volatile unsigned int*)(unit + U_UNITTYPE);
-        if (!ptr_ok(def)) { g_passed++; return 0; }
-        skip = name_matches((const char*)(def + UD_NAME)) ||
-               name_matches((const char*)(def + UD_UNITNAME)) ||
-               name_matches((const char*)(def + UD_OBJNAME));
-    }
+    skip = target_covers(obj3do);
     if (!skip) { g_passed++; return 0; }
     /* G16 step 8, decision B (gpu-posing.md §4). Skipping the engine's own
        rasterise is only safe while something replaces it, and since the CPU
@@ -541,17 +593,15 @@ void __cdecl tagpu_owndraw_preshadow(unsigned int obj3do, unsigned int frame)
        the wipe's predicate should BE the classifier's answer, not a fact about
        what the wreck builder happens to leave at Object3do+0x0C — a fact this
        landing did not establish. */
-    {
-        unsigned int taMain = *(volatile unsigned int*)0x00511DE8u;
-        if (ptr_ok(taMain)) {
-            unsigned int scratch = *(volatile unsigned int*)(taMain + 0x1420Fu);
-            if (ptr_ok(scratch) &&
-                *(volatile unsigned int*)(scratch + 0x9Eu) == obj3do) {
-                extern int tagpu_native_wrecks_armed(void);
-                if (!tagpu_native_wrecks_armed()) return;
-            }
-        }
+    if (is_wreck_draw(obj3do)) {
+        extern int tagpu_native_wrecks_armed(void);
+        if (!tagpu_native_wrecks_armed()) return;
     }
+    /* OUR TARGET, THE CLASSIFIER'S OWN QUESTION — the one this gate was missing
+       until 2026-09-14. Without it, `owndraw.on=armcom` + `native.on=all`
+       emptied the composite of every unit the classifier had deliberately left
+       to the engine, body and all. */
+    if (!target_covers(obj3do)) return;
     if (!tagpu_native_owns_obj(obj3do)) return;
     tagpu_r3dcache_wipe(frame);
 }
