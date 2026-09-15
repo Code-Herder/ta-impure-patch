@@ -1850,6 +1850,62 @@ tools/tacli scenario load <i> <scn> --mapping 0    # THE fixture: an unmapped ga
 - The dots, arcs and points are the engine's own pixels, not a replay: `+0x142DB` differs from
   `+0x142DF` exactly where one landed.
 
+### The Vulkan lane and the GPU row (Phase G, `tagpu_vk.on`)
+
+Since G19a a second backend can present the frame. It is **off unless armed** — GL stays the
+default through Phase G — and at G19a it draws a solid colour and nothing else, so an armed
+instance shows a magenta window and no game. That is the pass working, not a fault.
+
+```bash
+tools/tacli arm <i> vk.on                     # the lane; LIVE, polled every 250 ms
+tools/tacli arm <i> 'vk.on=color=0,255,255'   # a different clear colour
+tools/tacli arm <i> vk.on=off                 # back to GL, live, same second
+tools/tacli arm <i> vk.off                    # the WHOLE module off, enumeration included
+tools/tacli log <i> -g '^vk:'                 # the window, the device, the swapchain, the VA cost
+```
+
+- **`tacli glshot` and `tacli shot` do NOT show the Vulkan frame, and that is correct.** Route D
+  gives Vulkan its own top-level window over the game's client area; GL goes on rendering into
+  the game window underneath, so `glshot` reads the GL frame and `shot` reads the engine surface
+  exactly as before. **To see what is on screen, grab the X window or the root**:
+  `import -window root out.png`, then crop to `xwininfo -id <win>`'s *Absolute* origin and size —
+  which is the client rect, and is **not** the position `tacli ls` reports (that is the frame).
+  Using `tacli ls`'s origin is how a 100 % magenta window reads as 87.8 %.
+- **The lever is two-way.** Clearing it puts the GL frame back on screen the same second. That is
+  the whole reason the backend is on its own window: presenting on the game's `HWND` kills GL's
+  presentation for the life of the PROCESS (roadmap Phase G, *Coexistence*) — the API keeps
+  saying yes and the screen never changes again.
+- **`tagpu_vk.off` is what an A/B against a pre-G19 DLL arms**, because half the module is not
+  gated on `tagpu_vk.on`: the GPU enumeration runs whenever the GL render thread starts, armed or
+  not, since the picker outlives the lane. (A launch that falls back to the GDI renderer never
+  starts it — there is no lane to pick a GPU for there.)
+
+**The GPU row is in Options → Visuals, Window column, and its list is ONE LAUNCH BEHIND.** The
+captions live in the generated `.GUI`, which is written at DLL attach, and a Vulkan instance
+cannot be created there — so a worker enumerates after the render thread is up and writes
+`gamedir/tagpu_vk.gpus` for the *next* launch. On a gamedir that has never run this DLL the row
+reads `(not listed yet)` and is greyed; relaunch once and it lists the devices.
+
+```bash
+tools/tacli ui <i> show VGPU                  # stages, stage, grayed
+tools/tacli ui <i> click VGPU                 # cycle; the render thread rebuilds within a frame
+cat <gamedir>/tagpu_vk.gpus                   # "<0|1> <name>" per device, 1 = discrete
+cat <gamedir>/tagpu_vk.cfg                    # gpu=<name> — the choice, stored BY NAME
+```
+
+- **The row is greyed unless the Vulkan lane is armed**, and unless there are at least two
+  devices. It binds the *Vulkan* device only: OpenGL cannot be retargeted in-process, so under
+  the GL lane the GPU is a launcher-level setting (`DRI_PRIME` / `__NV_PRIME_RENDER_OFFLOAD`
+  through `Instance.env()`, or the per-application driver profile on Windows).
+- **The row plates the device actually BOUND, not the one requested.** A stored name that is no
+  longer present falls back to the discrete default and logs `the requested GPU "…" is not among
+  the devices present`, and the row then shows the device that was used.
+- **At most eight devices are listed** — our cap, not the engine's: a stage button's art index
+  is clamped at `0x4A8003`, so a row past four stages draws the four-bar plate and still works
+  (the `UI scale` row has six). Past the fourth the bar count saturates and the caption stays
+  right. The log says when any were dropped. Names are truncated to 31 characters at a word
+  boundary, because they come from the driver and land in a generated `.GUI`.
+
 ### The HUD is scaled inside the Screen Size (G18f, `tagpu_hud.on`)
 
 Since G18f the in-game HUD is magnified **within** the player's chosen Screen Size — the panel

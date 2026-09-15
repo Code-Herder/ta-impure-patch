@@ -1833,16 +1833,17 @@ still set is asking to be popped — whereupon `0x4AA7BC..0x4AA7FA`, an **inline
 ends with `0x4AB0A0(gi)` for exactly this reason; see *The pump's dispatch contract* in the
 [engine map](exe-reverse-engineering.html).
 
-**The front-end screen carries fifteen rows in two columns** [2026-09-11]. `VISUALS.GUI`
-is re-emitted into the same `.ufo` with the stock eleven gadgets moved (names, `assoc`,
-`commonattribs`, `range` and `stages` all verbatim) and four rows of our own added:
+**The front-end screen carries sixteen rows in two columns** [2026-09-11; the GPU row added
+2026-09-15]. `VISUALS.GUI` is re-emitted into the same `.ufo` with the stock eleven gadgets
+moved (names, `assoc`, `commonattribs`, `range` and `stages` all verbatim) and five rows of our
+own added:
 
 | column | rows |
 |---|---|
-| **Window** | Display mode (window / borderless fullscreen, `util_toggle_fullscreen`), Monitor (`EnumDisplayMonitors`, `SetWindowPos`), UI scale (Auto / 1x..4x, the client set to k x the Screen Size row's own mode at `main+0x37F1B/+0x37F1F`), Screen Size (stock `VIDSLDR`), Frame cap (60 / 120 / uncapped, `g_config.maxfps` + `fpsl_init`), Gamma (stock) |
+| **Window** | Display mode (window / borderless fullscreen, `util_toggle_fullscreen`), Monitor (`EnumDisplayMonitors`, `SetWindowPos`), UI scale (Auto / 1x..4x, the client set to k x the Screen Size row's own mode at `main+0x37F1B/+0x37F1F`), Screen Size (stock `VIDSLDR`), Frame cap (60 / 120 / uncapped, `g_config.maxfps` + `fpsl_init`), Gamma (stock), **GPU (Vulkan)** (G19b — `tagpu_vk.h`; caption at y 364, control at 380, in the space the Gamma slider left free) |
 | **Impure rendering** | Renderer, Undithered assets, Dynamic lighting, Shadows, Shadow quality, Shading (stock), Anti-aliasing (stock), Engine shadows (stock `BSHADOWS`), Supersampling |
 
-Three things this rests on, each measured rather than assumed:
+Four things this rests on, each measured rather than assumed:
 
 - **The four Window rows are applied on the thread that owns the window.** Each ends in a
   window call, and a cross-thread one is a wait on a message pump rather than a visible
@@ -1861,6 +1862,16 @@ Three things this rests on, each measured rather than assumed:
   x 267..405, drawn for a single centred column; two columns cannot sit in it and it is
   the game's art. So the screen carries one `id=12` ground frame (270x420 at (200,54)) in
   `anims/visuals.gaf`, with its own recesses, covering those bars.
+- **The GPU row's list is one launch behind, by construction** [G19b, 2026-09-15]. Its captions
+  have to be inside this generated `.GUI`, and `tagpu_menu_init` writes the archive at DLL
+  attach — where creating a Vulkan instance (and so loading an ICD) is exactly the
+  `LoadLibrary`-from-`DllMain` [field notes](field-notes.html) forbids. So a worker enumerates
+  the devices once the render thread is up and writes `tagpu_vk.gpus`, and the menu reads that
+  cache at the *next* attach. It is the same bargain the Monitor row already makes for a
+  hot-plugged monitor. The row's **model** is not one launch behind: the choice is stored by
+  name in `tagpu_vk.cfg`, and `read_display_state` plates `tagpu_vk_gpu_active()` — the device
+  the render thread actually bound — whenever the lane is up, so a request that could not be
+  honoured shows as the device that was.
 
 **The Monitor row rebuilds the screen**, because the Screen Size list belongs to a monitor
 and the engine builds it once per visit (`0x45E6B0` into `GUIMEMSTRUCT+0x0C`, hung off
@@ -3017,6 +3028,125 @@ whose DATA arrives entirely in the frame packet.
   and at the queued site rects, diffed against `ghost.on=off` and found only at the ghost's own
   footprint; after the cache-key fix, a placed mex renders pixel-identical with the ghost armed
   and disarmed (mean diff 6.0 vs the 6.7 off/off baseline).
+
+### 2.20 The Vulkan lane (`tagpu_vk.c`, **off unless armed**, `tagpu_vk.on`) — Phase G, G19a + G19b
+
+**It touches no engine address, and it must never need to.** `tagpu_vk.c` is not on
+`thread-split.allow` and every value it uses arrives as an argument from `ogl_render` — which is
+Phase G standing constraint 1 ([roadmap](roadmap.html)) and the line that decides whether the
+renderer can ever be lifted into another process. So it has no row in the hook map above.
+
+**Where it sits in the frame.** One call, in `ogl_render` immediately before the GL swap:
+
+```c
+if (!tagpu_vk_frame(g_ddraw.hwnd, g_ddraw.render.width, g_ddraw.render.height, g_config.vsync))
+    SwapBuffers(g_ogl.hdc);
+```
+
+It returns 1 only when Vulkan presented the frame itself, and the GL swap is then skipped — two
+backends must not both present in one frame. With `tagpu_vk.on` absent it returns 0 on a cached
+lever read (250 ms, as elsewhere in the fork) before touching anything.
+
+**Route D: Vulkan has its own window** — and the other two routes are not fallbacks, they are
+broken on system wine. The measurement, the route table and the reason the API's "yes" could not
+be trusted are in [roadmap](roadmap.html) Phase G, *Coexistence*. What the module does with it:
+an owned top-level popup over the game window's client rect, `WS_EX_NOACTIVATE |
+WS_EX_TOOLWINDOW` so it never takes focus or enters the taskbar, `HTTRANSPARENT` so a click falls
+through to the game window, created / moved / destroyed **on the window thread** (posted
+`WM_TAGPU_VK`, and `WM_WINDOWPOSCHANGED` on the owner is what keeps it in place — event-driven,
+so the render thread polls no geometry). The observer in `wndproc.c` claims no message.
+
+**The five-state machine is the whole of the thread safety**, and it is an ordering rather than a
+lock:
+
+| state | who may touch the Vulkan objects |
+|---|---|
+| `ST_OFF` | nobody; nothing exists |
+| `ST_STARTING` | the worker that took the lane, alone (a bring-up, or the enumeration) |
+| `ST_READY` | the render thread, alone |
+| `ST_FAILED` | nobody; the objects are already gone |
+| `ST_ZOMBIE` | **the abandoned worker, alone** — it is still the sole owner of everything it built, which is what lets it put its own objects back and hand the lane on |
+
+(That last row said "nobody" until the second review pass, and believing it is
+what put a `DestroyWindow` in `tagpu_vk_render_stop`'s tail underneath a
+zombie worker's live surface.)
+
+`OFF → STARTING` is an `InterlockedCompareExchange` taken *before* a worker is created, so two
+frames cannot start two workers **and the enumeration worker takes the same grant** — that last
+clause is the landing review's, and without it the two workers overlapped and shared `s_mod`,
+`s_gipa` and the whole instance-level dispatch table, which belongs to an instance. `STARTING →
+READY` is a **compare-exchange** the worker does after every field is written (also the review's:
+an unconditional store could stamp `READY` over an `ST_ZOMBIE` set behind its back). `READY → OFF`
+is the render thread's alone. So no two threads touch `s_vk` — **and, since the enumeration is
+inside the same grant, no two touch the dispatch table either.**
+
+**The bring-up is on a worker thread and that is not a preference.** `vkCreateInstance` loads the
+ICD, so it *is* a `LoadLibrary`, and [field notes](field-notes.html)'s rule — load from your own
+thread, never from `DllMain` or mid-present, through `real_LoadLibraryA` — was paid for once
+already by the companion-DLL design.
+
+**`ST_ZOMBIE` is a worker winding down, and NOTHING WAITS FOR IT.** An earlier shape had
+`tagpu_vk_render_stop` wait five seconds for a worker still in `ST_STARTING`, then abandon and
+leak its objects. The review killed both halves. The game thread waits `INFINITE` on the render
+thread across a mode change (`dd.c`) and the render thread was waiting on the worker, so a mode
+change that caught a bring-up in flight stalled the **lockstep world** for as long as the
+bring-up had left — 371–451 ms, routinely — and because the window thread *is* the game thread
+here, a winevulkan call that reached the window with an inter-thread send would have closed the
+cycle game → render → worker → window with only that timeout to break it. Load-bearing, which the
+note claimed it was not.
+
+Now `render_stop` marks the lane `ST_ZOMBIE` and returns at once. `ST_ZOMBIE` means *a worker is
+finishing and nobody else may touch anything* — so the worker, which is still the sole owner of
+everything it built, puts its own objects back, destroys its own window and hands the lane to
+`ST_OFF`. Nothing waits, nothing leaks, and the lane can be brought up again afterwards instead
+of staying down for the session.
+
+**The window belongs to the lane while it is up or coming up, and to nobody otherwise.** That is
+one function, `vkw_release_unless_worker`, and it exempts exactly `ST_STARTING` and `ST_ZOMBIE`
+— the two states in which a worker may hold a surface on the window and takes it down itself.
+The rule was spelled out at four call sites with three different guards until the second review
+pass, and two of them were wrong: `render_stop` destroyed the window under a zombie worker's
+surface, and an armed lane whose bring-up **failed** kept a shown, never-painted popup over the
+client area for the rest of the session.
+
+**The residual at `WM_DESTROY` is wider than it was, and this is the statement of it.** While
+`render_stop` waited for its worker, stopping the render thread implied the worker was done, so
+the handler was a backstop that found nothing up. It no longer implies that: an ordinary
+shutdown or mode change can run `DestroyWindow` on the game thread while an abandoned worker is
+still putting a surface on the window — and Windows destroys an owned popup with its owner
+whatever we do. Acquire then returns `VK_ERROR_SURFACE_LOST_KHR`, which the lane now treats as
+fatal, so the outcome is a lane that comes down rather than one that spins. The orders that
+would close it are a cross-thread block (the deadlock this module is arranged to avoid) or a
+window outliving its owner (which Windows does not allow), so it is named rather than fixed.
+
+**What the lane costs, measured in game** (640×480, 1024×768 and 1920×1080, shell → game →
+shell): the Vulkan window tracks the client rect **exactly** (bbox identical to `xwininfo`'s, 2
+073 600 of 1920×1080 px magenta), bring-up is **371–451 ms** on the worker, peak committed grows
+**+5.3 to +6.5 MB**, and the **largest free VA block does not move at all** (247.4 MB before and
+after) — which is the number that matters in a 32-bit process, because TA's allocator fails by
+failing rather than by saying anything.
+
+**The levers.**
+
+| file | what |
+|---|---|
+| `tagpu_vk.on` | arms the lane. Optional token `color=r,g,b` moves the clear colour off the default magenta |
+| `tagpu_vk.off` | turns the WHOLE module off, the GPU enumeration included — the control for an A/B against a pre-G19 DLL, and it beats `.on` |
+| `tagpu_vk.gpus` | written by the enumeration worker: one line per device, `<flag> <name>`, where the flag is 1 for `DISCRETE_GPU` and 0 otherwise. The menu reads it at the NEXT attach |
+| `tagpu_vk.cfg` | `gpu=<name>` — the player's choice, by NAME so adding or removing a card cannot silently re-point it |
+
+**G19b's row is in §2.12's front-end table.** Two bounds are worth repeating because both were
+found by building it. A device name is canonicalised and truncated on the way in — it comes from
+the driver and lands inside a generated `.GUI` where a pipe and a semicolon are syntax. And the
+list is capped at **eight** devices, which is **ours and not the engine's**: it said four, on
+[GUI gadgets](gui-gadgets.html) 10.2's claim that a stage button cannot carry more stages than
+`commongui.stagebuttnN` has art for, and this landing's review disproved both. `0x4A8003` clamps
+the art index before the name is built, so a row past four stages draws the four-bar plate and
+works — and the shipped `UI scale` row has carried six since G18f. Past the fourth device the
+plate's bar count saturates while the caption stays right, which is the half that says which
+card. The caption is clipped to the **120×20 plate** whatever width the gadget
+carries ([GUI gadgets](gui-gadgets.html) 10.2), which is why `build_gpu_text` drops the longest
+leading run of whole words every listed device shares rather than trying to widen the row.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 

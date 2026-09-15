@@ -16,6 +16,7 @@
 #include "versionhelpers.h"
 #include "tagpu_shield.h"
 #include "tagpu_menu.h"
+#include "tagpu_vk.h"
 #include "tagpu_zoom.h"
 #include "tagpu_hud.h"
 
@@ -60,6 +61,12 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
        here so the window is changed on the thread that owns it */
     if (tagpu_menu_wndproc(hWnd, uMsg, wParam, lParam, &shielded))
         return shielded;
+
+    /* tagpu_vk (Phase G / G19a): the Vulkan lane's own window is created, moved
+       and destroyed here, on the thread that owns windows and pumps their
+       messages. An OBSERVER -- it claims nothing and returns nothing, so every
+       message below reaches the fork exactly as it did before. */
+    tagpu_vk_wndproc(hWnd, uMsg, wParam, lParam);
 
     switch (uMsg)
     {

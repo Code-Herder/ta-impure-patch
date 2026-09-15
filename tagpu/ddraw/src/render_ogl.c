@@ -19,6 +19,7 @@
 #include "tagpu_packet.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_menu.h"
+#include "tagpu_vk.h"
 
 
 static HGLRC ogl_create_core_context(HDC hdc);
@@ -141,6 +142,16 @@ DWORD WINAPI ogl_render_main(void)
         g_ogl.got_error = g_ogl.got_error || (err = glGetError()) != GL_NO_ERROR;
 
         g_ogl.use_opengl = (g_ogl.main_program || g_ddraw.bpp == 16 || g_ddraw.bpp == 32) && !g_ogl.got_error;
+
+        /* tagpu_vk (Phase G / G19b): kick the GPU enumeration, once per launch
+           and on a thread of its own. It runs WHETHER OR NOT the Vulkan lane is
+           armed, because the GPU row is the player-facing half of Phase G and
+           outlives the lane -- and it runs HERE rather than at DLL attach,
+           because creating a Vulkan instance loads an ICD and that must never
+           happen under the loader lock (field-notes, the companion-DLL rule).
+           The list it writes is read by the menu at the NEXT attach; see
+           tagpu_vk.h. Returns immediately. */
+        tagpu_vk_enum_start();
 
         GL_CHECK(ogl_render());
 
@@ -1653,7 +1664,16 @@ static void ogl_render()
             }
         }
 
-        SwapBuffers(g_ogl.hdc);
+        /* tagpu_vk (Phase G / G19a): the Vulkan lane. Returns 1 only when it
+           presented this frame itself, and then the GL swap is SKIPPED -- two
+           backends must not both present to one window in one frame. With
+           `tagpu_vk.on` absent it returns 0 on a cached lever read before it
+           touches anything, so the GL path is what it was before the file
+           existed. The GL context is neither released nor made non-current:
+           route A of tools/vkcoexist.c, measured 2026-09-15. */
+        if (!tagpu_vk_frame(g_ddraw.hwnd, g_ddraw.render.width, g_ddraw.render.height,
+                            g_config.vsync))
+            SwapBuffers(g_ogl.hdc);
 
         /* Force redraw for GDI games (ClueFinders) */
         if (!g_ddraw.primary)
@@ -1681,6 +1701,12 @@ static void ogl_render()
        thread that is the only writer clears it as it stops writing.
        [FROM REVIEW 2026-09-14.] */
     tagpu_cursown_publish(0);
+
+    /* tagpu_vk: the same reason, and the same shape. Every exit from the loop
+       above is a mode change or a shutdown, and both invalidate the HWND the
+       Vulkan surface was made on -- so the lane comes down HERE, on the thread
+       that owns it, rather than being left to discover a dead window. */
+    tagpu_vk_render_stop();
 
     if (g_config.vhack)
         InterlockedExchange(&g_ddraw.upscale_hack_active, FALSE);

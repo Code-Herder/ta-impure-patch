@@ -63,6 +63,7 @@
 #include "tagpu_gaf.h"
 #include "tagpu_menu.h"
 #include "tagpu_hud.h"
+#include "tagpu_vk.h"
 
 /* ---- the engine ---------------------------------------------------------- */
 #define TA_MAIN         0x00511DE8u     /* TAdynmemStruct**                    */
@@ -251,7 +252,7 @@ static const unsigned char TRIG_INK[TS_COUNT][3] = {
 /* Bumped whenever the generated .GUI changes, so a stale archive beside a new
    DLL is impossible: the archive is rewritten every launch anyway, and this is
    what says so in the log. */
-#define UFO_STAMP  "G18-7"
+#define UFO_STAMP  "G19-1"
 
 static int    s_installed;
 static int    s_nrows = R_COUNT;
@@ -259,6 +260,7 @@ static void*  s_gm;                     /* our GUIMEMSTRUCT while open, else 0 *
 static char   s_saved[16];              /* what main+0x37EA0 held              */
 static int    s_stage[R_COUNT];
 static volatile LONG s_dirty;           /* a row moved: the cfg needs writing  */
+static volatile LONG s_vkDirty;         /* the GPU row moved: tagpu_vk.cfg     */
 static DWORD  s_lastPoll;
 static int    s_want;
 static int    s_fresh;                  /* the next open is the PLAYER'S open  */
@@ -1345,6 +1347,15 @@ void tagpu_menu_present(void)
         write_cfg();
         write_levers();
     }
+    /* THE GPU ROW HAS ITS OWN FLAG AND NOT `s_dirty`, because `s_dirty` means
+       "rewrite tagpu_classicpp.cfg and the lever files" and the GPU choice is
+       in neither. Sharing it would make every GPU click rewrite the player's
+       renderer cfg -- harmless, and exactly the kind of thing that is not
+       harmless the day a key moves. Same deferred-write discipline: the click
+       lands on the game thread and TA is lockstep, so the file is written
+       here. */
+    if (InterlockedExchange(&s_vkDirty, 0))
+        tagpu_vk_gpu_store();
 }
 
 /* ---- the trigger's two jobs: it is drawn, and it is hit-tested ----------- */
@@ -1621,7 +1632,22 @@ static const unsigned char VIS_BUILD_STOLEN[7] =
 
 /* the control positions, in screen coordinates: the WINDOW column's four
    buttons and two sliders, then the RENDERER column's nine on one pitch */
-static const short VC0_BTN[4] = { 96, 140, 184, 292 };
+/* The Gamma slider ends at 352 and the panel runs to VP_Y + VP_H = 474, so the
+   GPU row's caption at 364 and its control at 380 sit in space that was already
+   free -- no stock control moves and the panel does not grow.
+
+   A WIDER CONTROL WAS TRIED AND IS NOT AVAILABLE [MEASURED 2026-09-15]. A
+   device name is ~23 characters ("NVIDIA GeForce RTX 4070") and this plate
+   shows about thirteen, so the row was given the panel's full 255 px as a
+   footer under both columns. It changed nothing: a stage button's art is
+   `commongui.stagebuttnN` and that art is **120x20** (gui-gadgets.md 10.2), so
+   the engine draws the same plate and clips the caption to it whatever `w`
+   says -- the 255-px row rendered exactly the same "NVIDIA GeForce" with the
+   stage bars over its tail. The caption's width is not ours to set, so the row
+   goes back where it fits and `build_gpu_text` drops the part of the name that
+   distinguishes nothing instead. */
+static const short VC0_BTN[5] = { 96, 140, 184, 292, 380 };
+#define VC0_BTN_N (int)(sizeof VC0_BTN / sizeof VC0_BTN[0])
 static const short VC0_SLD[2] = { 244, 336 };
 #define VC1_ROWS  9
 
@@ -1666,7 +1692,7 @@ static void draw_visbg(unsigned char* f, int w, int h)
     }
 
     /* one recess per control, at the position the .GUI puts the control */
-    for (i = 0; i < 4; i++)
+    for (i = 0; i < VC0_BTN_N; i++)
         recess(&s, VC0_X - VP_X - VPAD, VC0_BTN[i] - VP_Y - VPAD,
                VCOL_W + 2 * VPAD, VCTL_H + 2 * VPAD);
     for (i = 0; i < 2; i++)
@@ -1718,7 +1744,7 @@ static const VisStock s_visStock[VIS_STOCK_N] = {
    they are not in `s_row` and never appear on the in-game panel -- and why
    every one of them is applied on the thread that owns the window (below)
    rather than wherever the click happened to land. */
-enum { VD_MODE, VD_MON, VD_SCALE, VD_FPS, VD_COUNT,
+enum { VD_MODE, VD_MON, VD_SCALE, VD_FPS, VD_GPU, VD_COUNT,
        /* not a row: a second message the Display mode row posts to itself, so
           the frame restore lands after the style restore the fork posts */
        VD_RESTORE_FRAME };
@@ -1758,11 +1784,25 @@ typedef struct {
     int         stages;
 } VisRow;
 
+/* THE GPU ROW'S LABEL SAYS "(Vulkan)" AND THAT IS THE STATED LIMIT, not a
+   decoration. The row binds the VULKAN device and nothing else: OpenGL cannot
+   be retargeted in-process (`WGL_NV_gpu_affinity` is Quadro-only), so under the
+   GL lane -- which is still the default through Phase G -- the GPU is a
+   launcher-level setting: `DRI_PRIME` / `__NV_PRIME_RENDER_OFFLOAD` through
+   tacli's `Instance.env()`, or the per-application driver profile on Windows.
+   `vrow_greyed` greys the row whenever the Vulkan lane is not armed, so it
+   never looks live while it cannot bite -- which is also what keeps the
+   one-stage "(not listed yet)" row inert, since the engine REWRITES a
+   `stages=1` button to 2 at `0x4A803C` and would otherwise have a second,
+   captionless stage to cycle into. */
+static char s_gpuText[TAGPU_VK_MAXGPU * (TAGPU_VK_NAMELEN + 1) + 24];
+
 static VisRow s_vrow[VD_COUNT] = {
     { "VMODE",  "Display mode", "Window|Fullscreen",          2 },
     { "VMON",   "Monitor",      s_monText,                    0 },
     { "VSCALE", "UI scale",     "Auto|100%|150%|200%|300%|400%", 6 },
     { "VFPS",   "Frame cap",    "60 fps|120 fps|Uncapped",    3 },
+    { "VGPU",   "GPU (Vulkan)", s_gpuText,                    0 },
 };
 static int s_vstage[VD_COUNT];
 
@@ -1796,6 +1836,74 @@ static void enum_monitors(void)
     s_monText[sizeof s_monText - 1] = 0;
     if (s_monCount < 1) { lstrcpynA(s_monText, "1: default", sizeof s_monText); s_monCount = 1; }
     s_vrow[VD_MON].stages = s_monCount;
+}
+
+/* The GPU row's captions, from the cache `tagpu_vk.gpus` -- which the previous
+   launch's enumeration worker wrote, because this runs at DLL attach and a
+   Vulkan instance may not be created there (tagpu_vk.h). Same shape as
+   `enum_monitors`, same bargain: a card added since the last launch is offered
+   at the next one.
+
+   A machine with no cache yet, or with no Vulkan at all, gets ONE stage saying
+   so -- never a zero-stage button, which the engine would divide by. */
+/* THE PLATE SHOWS ABOUT THIRTEEN CHARACTERS and a device name is twice that,
+   so the caption drops the longest LEADING RUN OF WHOLE WORDS THAT EVERY
+   DEVICE SHARES. That is not a vendor table and not a guess: it is exactly the
+   text that distinguishes none of them, computed from the list in front of us.
+   Two NVIDIA cards would otherwise both plate as "NVIDIA GeForce" -- the row
+   would look broken and be useless -- and stripping that prefix leaves
+   "RTX 4070" and "RTX 3060", which is the whole of what the player is
+   choosing between. A list whose names differ from the first character (the
+   reference setup's 4070 beside llvmpipe) has no common prefix and is left
+   alone, and the engine clips the long one; the full name reaches `tagpu.log`
+   and the stored cfg either way. Never applied to a single-device list, where
+   the "shared" prefix would be the entire name. */
+static int gpu_common_prefix(int n)
+{
+    int k = 0, i;
+    if (n < 2) return 0;
+    for (;;) {
+        char c = tagpu_vk_gpu_name(0)[k];
+        if (!c) break;
+        for (i = 1; i < n; i++)
+            if (tagpu_vk_gpu_name(i)[k] != c) c = 0;
+        if (!c) break;
+        k++;
+    }
+    while (k && tagpu_vk_gpu_name(0)[k - 1] != ' ') k--;   /* whole words only */
+    /* and never so far that some device is left with nothing to show */
+    for (i = 0; i < n; i++)
+        if (!tagpu_vk_gpu_name(i)[k]) return 0;
+    return k;
+}
+
+static void build_gpu_text(void)
+{
+    int n = tagpu_vk_gpu_count(), i, at = 0, cut;
+
+    s_gpuText[0] = 0;
+    if (n > TAGPU_VK_MAXGPU) n = TAGPU_VK_MAXGPU;
+    cut = gpu_common_prefix(n);
+    for (i = 0; i < n; i++) {
+        int k = _snprintf(s_gpuText + at, sizeof s_gpuText - at - 1, "%s%s",
+                          i ? "|" : "", tagpu_vk_gpu_name(i) + cut);
+        /* `_snprintf` returns -1 on truncation AND leaves no terminator, so a
+           break has to put one back -- otherwise the tail of a half-written
+           caption would run on into whatever the buffer held. It cannot
+           truncate at today's bounds; it is written this way so that it still
+           cannot the day TAGPU_VK_MAXGPU or NAMELEN moves. */
+        if (k < 0 || k >= (int)(sizeof s_gpuText - at - 1)) { s_gpuText[at] = 0; n = i; break; }
+        at += k;
+    }
+    s_gpuText[sizeof s_gpuText - 1] = 0;
+    /* NEVER A ZERO-STAGE BUTTON: the engine's own advance wraps against the
+       stage count and would divide by it. One stage saying why is the answer
+       to "no cache yet" and to "no Vulkan runtime installed" alike. */
+    if (!at) {
+        lstrcpynA(s_gpuText, "(not listed yet)", sizeof s_gpuText);
+        n = 0;
+    }
+    s_vrow[VD_GPU].stages = n > 0 ? n : 1;
 }
 
 /* Declared in tagpu_menu.h, called by `util_target_monitor`.
@@ -1866,7 +1974,7 @@ static int build_visuals_gui(char* b, int cap, int rows)
 
     /* ---- the WINDOW rows -------------------------------------------------- */
     {
-        static const short dy[VD_COUNT] = { 80, 124, 168, 276 };
+        static const short dy[VD_COUNT] = { 80, 124, 168, 276, 364 };
         for (i = 0; i < VD_COUNT; i++) {
             at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
             at = common(b, cap, at, 5, 0, "TEXT", VC0_X, dy[i], VCOL_W, VLBL_H, 18, 15, 104);
@@ -2050,6 +2158,14 @@ BOOL tagpu_menu_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESU
         g_config.maxfps = FPS_VAL[s_vstage[VD_FPS]];
         fpsl_init();
         break;
+    /* THE GPU ROW TOUCHES NO WINDOW AND NO VULKAN OBJECT. It records the
+       request and bumps a generation counter; the RENDER thread, which is the
+       only owner of the device, notices the counter on its next frame and
+       rebuilds. That is an ordering rather than a hand-off: nothing here can
+       reach an object the other thread is using, because nothing here reaches
+       an object at all. It rides this message with the rest for the reason the
+       comment above `apply_display` gives -- one screen, one thread. */
+    case VD_GPU:   tagpu_vk_gpu_select(s_vstage[VD_GPU]);          break;
     }
     *result = 0;
     return TRUE;
@@ -2090,6 +2206,16 @@ static void read_display_state(void)
 
     s_vstage[VD_FPS] = 2;
     for (i = 0; i < 3; i++) if (FPS_VAL[i] == g_config.maxfps) s_vstage[VD_FPS] = i;
+
+    /* THE DEVICE IN USE BEATS THE DEVICE REQUESTED, which is the whole of the
+       G19b exit's "reported back so the row can be verified rather than
+       trusted". `tagpu_vk_gpu_active` is what the render thread actually bound;
+       it is -1 while the lane is down, and only then does the row fall back to
+       the stored request (and that, in turn, to the discrete default). So a
+       choice that could not be honoured shows as the device that was. */
+    k = tagpu_vk_gpu_active();
+    if (k < 0) k = tagpu_vk_gpu_stored();
+    s_vstage[VD_GPU] = (k >= 0 && k < tagpu_vk_gpu_count()) ? k : 0;
 }
 
 /* A row that cannot bite is greyed rather than left looking live -- the same
@@ -2102,6 +2228,11 @@ static void read_display_state(void)
 static int vrow_greyed(int row)
 {
     if (row == VD_MON)   return s_monCount < 2;
+    /* Greyed unless there is a choice to make AND something that would act on
+       it. Under the GL lane -- still the default through Phase G -- the row
+       cannot retarget anything in-process, and a live-looking row that changes
+       no pixel is exactly what this rule exists to prevent. */
+    if (row == VD_GPU)   return tagpu_vk_gpu_count() < 2 || !tagpu_vk_armed();
     /* VD_SCALE IS LIVE IN BOTH MODES now. It used to be the window multiplier,
        which fullscreen decides for itself; HUD scale is inside the picture and
        means the same thing windowed or not (gui-renderer.md 22.2, "Row"). */
@@ -2375,6 +2506,7 @@ static void __stdcall tagpu_vis_oncommand(void* gi)
         do { s_vstage[d] = (s_vstage[d] + 1) % n; }
         while (d == VD_SCALE && !scale_stage_ok(s_vstage[d]) && --guard > 0);
         if (d == VD_MON) s_monChosen = 1;
+        if (d == VD_GPU) InterlockedExchange(&s_vkDirty, 1);
         apply_display(d);       /* posts; the wndproc does the window work */
         /* The Monitor row changes what the Screen Size list may contain, so it
            rebuilds the screen instead of just re-plating it. Nothing after the
@@ -2419,6 +2551,11 @@ void tagpu_menu_init(void)
 
     read_tokens();
     enum_monitors();        /* the Monitor row's captions go into the file */
+    /* The GPU row's captions likewise, out of the cache the LAST launch's
+       enumeration worker wrote -- this runs under the loader lock and a Vulkan
+       instance may not be created here (tagpu_vk.h). */
+    tagpu_vk_names_init();
+    build_gpu_text();
 
     /* The archive is written UNCONDITIONALLY every launch, arm file or not:
        staleness after a DLL upgrade is the one failure here that would be

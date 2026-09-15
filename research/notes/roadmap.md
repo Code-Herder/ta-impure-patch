@@ -2366,7 +2366,7 @@ And the callback question is settled by construction: ours is `GUIMEMSTRUCT+0x08
 after the load exactly as `0x495219` does, and it writes an in-memory value that the render
 thread turns into files at the next present.
 
-## Phase G — the Vulkan backend (G19)  [PLANNED 2026-09-15]
+## Phase G — the Vulkan backend (G19)  [G19a + G19b DONE 2026-09-15; G19c–f planned]
 
 A second rendering backend beside the GL one, brought up **in the 32-bit DLL where the renderer
 already lives**, so that the stack has a Vulkan implementation ready before the question of ray
@@ -2403,12 +2403,30 @@ is demonstrated rather than argued.
 **`VK_PRESENT_MODE_MAILBOX_KHR` is NOT offered on the 4070 under wine** — the surface reports
 FIFO, FIFO_RELAXED, IMMEDIATE and FIFO_LATEST_READY only (llvmpipe offers all four, so this is
 the driver and not our probe). Frame pacing must not be designed around mailbox triple
-buffering; `fps_limiter.c` and the `maxfps` knob remain the mechanism.
+buffering; `fps_limiter.c` and the `maxfps` knob remain the mechanism. `tagpu_vk.c` picks
+**FIFO when `vsync` is set and IMMEDIATE when it is not**, which is the parity the GL lane gets
+from `wglSwapIntervalEXT(g_config.vsync ? 1 : 0)`.
+
+**Where the bring-up runs, and it is not negotiable** [G19a]. `vkCreateInstance` loads the ICD,
+so bringing Vulkan up **is** a `LoadLibrary`, and [field notes](field-notes.html)'s rule —
+paid for once already by the companion-DLL design — is *load from your own thread, never from
+`DllMain` or mid-present, and go through `real_LoadLibraryA`*. So the instance, the device and
+the swapchain are built by a worker thread started from the render thread, and the render thread
+only presents. The hand-over is a five-state machine (`OFF`/`STARTING`/`READY`/`FAILED`/`ZOMBIE`)
+in which the Vulkan objects have exactly one owner at every instant, decided by the state and not
+by timing; the publish is an interlocked store after every field is written. A teardown that
+cannot wait for its worker goes to `ZOMBIE` and **abandons** the objects rather than freeing them
+under a live thread — a leak is recoverable and a free is not, so the one bounded wait in the
+file chooses between two safe outcomes and is never the safety argument.
+
+**And the GPU enumeration is NOT gated on the lane** — the picker outlives it (see G19b), so it
+runs on every launch whether `tagpu_vk.on` is there or not. `tagpu_vk.off` is the control that
+turns the whole module off, enumeration included.
 
 | Gate | Status | Exit |
 |---|---|---|
-| G19a — **the bring-up** *(two of its parts are DONE 2026-09-15: the headers are vendored, and the "can it present at all" question is CLOSED — see above. What remains is coexistence with the fork's GL context)*: ~~Vulkan headers vendored into `tagpu/ddraw/inc/`~~ **done** — `v1.3.275`, commit `217e93c6`, 11 headers in `inc/vulkan/` + `inc/vk_video/`, Apache-2.0 with the licence and provenance beside them (`inc/vulkan/README.md`); a device on the chosen physical device, a swapchain on the game's `HWND`, and a frame cleared to a known colour and presented | ○ | `tagpu_vk.on` brings up Vulkan and presents a solid colour over the game window at 1024×768 and 1080p, through a context switch (shell → game → shell) and an alt-enter cycle; **with the lever off, the DLL is byte-identical in behaviour to the GL build** — the full `uiwalk` `strict` walk at 0/0/0 and `tascene ab` unmoved. Address-space cost recorded: peak committed bytes and largest free VA block with Vulkan up, against the GL build on the same fixture |
-| G19b — **the GPU picker**: `vkEnumeratePhysicalDevices` behind a row in the Window panel (`tagpu_menu.c`), defaulting to the discrete device, persisted in the cfg | ○ | the row lists every device by `deviceName`; the default lands on `DISCRETE_GPU` when one exists; the choice survives a relaunch; and the device actually in use is reported back so the row can be verified rather than trusted. **Stated limit**: this binds the *Vulkan* device only — the GL lane cannot be retargeted in-process, so under GL the row is a launcher-level setting that needs a relaunch (`DRI_PRIME` / `__NV_PRIME_RENDER_OFFLOAD` through `tacli`'s `Instance.env()`, or the per-application driver profile on Windows) |
+| G19a — **the bring-up**: Vulkan headers vendored into `tagpu/ddraw/inc/` (`v1.3.275`, commit `217e93c6`, 11 headers in `inc/vulkan/` + `inc/vk_video/`, Apache-2.0 with the licence and provenance beside them, `inc/vulkan/README.md`); an instance, a device on the chosen physical device, a swapchain, and a frame cleared to a known colour and presented | ● **done 2026-09-15** (`tagpu_vk.c`/`.h`, `tools/vkcoexist.c`, `tools/vkcoexist-pixels.sh`) | met, and **not on the game's `HWND`** — see the route table below. `tagpu_vk.on` presents magenta over the game window at 640×480, 1024×768 and 1920×1080, the Vulkan window tracking the client rect **exactly** (2 073 600 of 1920×1080 px, bbox identical to `xwininfo`'s client rect), through shell → game → shell. The lever is **two-way**: cleared, the GL frame is back on screen the same second. Address-space cost, in game: peak committed **+5.3 to +6.5 MB**, and the **largest free VA block unchanged at 247.4 MB** — the number that decides whether a 32-bit TA survives a driver in its address space. `tagpu_vk.off` turns the whole module off, enumeration included, and is the control for an A/B against a pre-G19 DLL. **Not covered:** an alt-enter cycle (borderless fullscreen would take over the reference setup's live display) and the `HTTRANSPARENT` click-through with the shield off — both designed, neither measured |
+| G19b — **the GPU picker**: `vkEnumeratePhysicalDevices` behind a row in the Window panel (`tagpu_menu.c`), defaulting to the discrete device, persisted in the cfg | ● **done 2026-09-15** | met. `GPU (Vulkan)` in the Window column lists each device by `deviceName`; the default lands on the first `DISCRETE_GPU`; the choice is stored **by name** in `tagpu_vk.cfg` and survives a relaunch (measured: bound llvmpipe on a fresh process); a stored name that is no longer present falls back to the discrete default **and logs that it did**; and the row plates `tagpu_vk_gpu_active()` — the device actually bound — rather than the one requested. The **stated limit is the row's label**: it binds the *Vulkan* device only, and the row is **greyed whenever the Vulkan lane is not armed**, because under GL the GPU is a launcher-level setting (`DRI_PRIME` / `__NV_PRIME_RENDER_OFFLOAD` through `tacli`'s `Instance.env()`, or the per-application driver profile on Windows). Two bounds, both in [gui-gadgets](gui-gadgets.html) 10.2: the list is capped at **eight** devices — a choice, not an engine limit, and the note that said it was one was **corrected by this landing's review** (`0x4A8003` clamps the stage-button art index, so a row past four stages draws the four-bar plate and works; the shipped `UI scale` row has carried six all along) — and a device name is canonicalised and truncated to 31 characters on the way in, because it comes from the driver and lands inside a generated `.GUI` where a pipe and a semicolon are syntax |
 | G19c — **the shader pipeline**: the 37 `#version 330 core` programs translated to SPIR-V | ○ | every program compiles to SPIR-V **in the build**, emitted as `uint32_t[]` C headers the way `tagpu_glsl.h` already carries GLSL — text, so `.publish-allow` has nothing to refuse and no blob is added to the repo. One program runs from its SPIR-V in G19d. Kill: if build-time translation cannot be made to work in CI (which installs only the mingw cross compiler, `make` and `zip`), the generated headers are committed instead and regenerated by a documented script |
 | G19d — **one pass, end to end**: the smallest self-contained pass ported and A/B'd against its GL twin | ○ | `tagpu_fps.c` is the candidate — its own two-triangle program in game-frame pixels, one quad per character out of eleven fixed atlas strings — because it exercises buffer, texture, shader and draw with nothing else depending on it, and it is 267 lines. Exit: the Vulkan pass and the GL pass are **0 px apart** on a still frame at both resolutions, under the lever, with the rest of the frame still drawn by GL |
 | G19e — **the world passes**: terrain, units, features, effects, shadows | ○ | each pass 0 px against its GL twin where the pass has an exact oracle (terrain's 0-px parity against the engine's own blit), and within its already-stated bar where it does not (the Classic++ Q2 bars of [renderers](renderers.html) §4c). Ported **one pass per landing**, each with its own A/B, never as one drop |
@@ -2430,7 +2448,10 @@ nothing if adopted from the first commit and are expensive to retrofit.
    building at 32-bit first is a feature and not a compromise.
 3. **Presentation lives behind one seam** — surface, swapchain, acquire, present in a single
    file. That file is what gets replaced when the window moves to another process; nothing else
-   may know a window exists.
+   may know a window exists. **Route D put the window itself inside that seam** (`tagpu_vk.c`
+   creates, tracks and destroys it), which is the out-of-process shape early rather than a
+   detour: the only thing outside the file is the four-line observer in `wndproc.c` that runs
+   its window work on the thread that pumps messages.
 4. **The GL backend is not removed and not regressed.** Every gate above re-runs the GL lane's
    own oracles with the lever off. A Phase G landing that moves a GL pixel has failed.
 
@@ -2443,25 +2464,58 @@ thin passthrough to the same driver while vkd3d-proton is a translation — beha
 predicts Windows, the other does not. D3D12 stays a possible second backend and is not a Phase
 G question.
 
-### Kill / pivot
+### Coexistence: answered, and not the way it was ranked  [MEASURED 2026-09-15]
 
-**The original kill rule is retired** [2026-09-15]. It asked whether a 32-bit swapchain could be
-created and presented at all; it can, on both wines, at both bitnesses, from the same source.
+**Both kill rules are retired.** The first asked whether a 32-bit swapchain could be created and
+presented at all; it can, on both wines, at both bitnesses, from the same source. The second
+asked **coexistence** — whether Vulkan can present on the window the fork's GL renderer already
+holds (`ogl_create` on `g_ddraw.render.hdc`), and what the hand-over costs. It can, and the
+hand-over is fatal.
 
-**What replaces it, and it is a different risk.** The probe presented on a window *it created
-itself*. The game's `HWND` is not free: cnc-ddraw's GL context already owns it
-(`ogl_create` on `g_ddraw.render.hdc`), and a window generally cannot carry a GL context and a
-Vulkan swapchain at the same time. So G19a's real unknown is **coexistence** — whether Vulkan
-can present on the window the fork's GL renderer already holds, and what the hand-over between
-them costs. Three ways out, in order of preference, to be settled by measurement and not by
-argument: release the GL context when the Vulkan lever is on (simplest; costs an in-process
-renderer switch and so a relaunch, which the no-restart rule would have to grant an exception);
-give Vulkan its own child window over the client area; or keep the two on separate windows and
-swap which is visible. **If none of the three works**, Phase G pivots to the out-of-process
-64-bit renderer, where the renderer owns its own window and the question does not arise — which
-is where the RT goal leads anyway. The packet is already a wire format for that move
-(`tagpu_packet.h` is pointer-free and every struct is byte-identical at 32 and 64 bit), so the
-pivot costs the bring-up work and nothing written above it.
+`tools/vkcoexist.c` brings a 3.3 core context up exactly as the fork does — `GetDC`, the fork's
+own `PIXELFORMATDESCRIPTOR`, `wglCreateContextAttribsARB` — and then tries all three routes.
+`tools/vkcoexist-pixels.sh` asks the question that decides it: after the route, does a GL frame
+still **reach the screen**?
+
+| route | wine 9.0 | Proton 11 |
+|---|---|---|
+| **A** — same `HWND`, the GL context left current | API ok, **pixels dead** | ok |
+| **B** — route 1: release the GL context first, Vulkan, then GL back | API ok, **pixels dead** | ok |
+| **C** — route 2: a child window over the client area | **refused** — `vkCreateWin32SurfaceKHR` → `VK_ERROR_INCOMPATIBLE_DRIVER` (−9); winevulkan wants a top-level window | ok |
+| **D** — route 3: Vulkan on its **own top-level window** | **ok** | ok |
+
+**Only route D works on both, so route D is what G19a built** — and the roadmap had it ranked
+last. Routes 1 and 2 are not fallbacks; they are broken on the wine the dev loop builds prefixes
+with.
+
+**The API lied, and that is why the second script exists.** Routes A and B return `VK_SUCCESS`
+for every call, present 10 of 10 frames, and then accept every GL call afterwards —
+`SwapBuffers` returns `TRUE` and `glGetError` is clean — while the window keeps showing Vulkan's
+last frame for ever. It was met in the game before it was met in the probe: with the lever armed
+and then cleared, the window stayed magenta while `tacli glshot` read **168 distinct colours**
+off the GL framebuffer — GL rendering correct frames that nothing would ever see — and it
+**survived a full video-mode change** and the new GL context that comes with it. Once
+winevulkan has put a surface on an `HWND`, that `HWND` is finished for GL for the life of the
+process. The first version of the probe called route A a success because it asked the API; every
+verdict in `vkcoexist.c` is now labelled `api-ok` rather than `WORKS` for that reason.
+
+**What route D costs, and why it is worth it.** There is a second `HWND` to create, track, show,
+hide and destroy where route A was none — but the GL lane is never touched, so the lever is
+two-way and the menu keeps its invariant that no row needs a relaunch (on route A, arming Vulkan
+once would have killed the GL renderer for the session). And it is the shape the phase is heading
+for anyway: the out-of-process 64-bit renderer owns its own window by definition, so the tracking
+`tagpu_vk.c` does now is the work that move needs, written once instead of twice.
+
+**The honest limit.** Every row of that table is the linux NVIDIA ICD under wine. No Windows box
+has run it, and on Windows route A may well be fine — winevulkan's `HWND` takeover is a wine-side
+mechanism. Route D is correct on both regardless, which is why there is no per-platform branch.
+The cell that would close it is the `_local` test VM.
+
+**The pivot is still there and is unchanged**: if a driver is ever found that refuses route D as
+well, Phase G goes out of process to a 64-bit renderer, where the renderer owns its own window
+and the question does not arise — which is where the RT goal leads anyway. The packet is already
+a wire format for that move (`tagpu_packet.h` is pointer-free and every struct is byte-identical
+at 32 and 64 bit), so the pivot costs the bring-up work and nothing written above it.
 
 **The phase itself may be abandoned after any gate without debt**, because the GL renderer is
 never removed and never regressed — that is the point of constraint 4. A Phase G that stops at
