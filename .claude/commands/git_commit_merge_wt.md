@@ -1,6 +1,6 @@
 ---
 allowed-tools: Bash(git:*), Bash(make:*), Bash(.venv-undither/bin/python:*), Bash(grep:*), Read, Edit, Write, Agent
-description: Land this worktree on local main — commit, merge main in, then CHECK every landing gate (build, documentation pass, Opus review) and run whichever is missing before fast-forwarding main
+description: Land this worktree on local main — commit, merge main in, then CHECK every landing gate (build, documentation pass, dedicated review) and run whichever is missing before fast-forwarding main
 ---
 
 # Git Commit + Merge Worktree — the landing, with its gates checked
@@ -20,7 +20,7 @@ The gates, in order:
 2. Merge `main` into this branch (fast-forward, or a merge commit if diverged).
 3. Build gate — both DLLs compile on the post-merge tree.
 4. Documentation gate — the pass CLAUDE.md requires, checked against the diff.
-5. Review gate — `medium` (or `high`) review **on Opus**, checked against a record of what was
+5. Review gate — `medium` (or `high`) dedicated review, checked against a record of what was
    reviewed; findings verified and fixed as new commits; build re-run if anything changed.
 6. Fast-forward local `main` to this branch. Landing is local: publishing to GitHub is the
    separate `/git_publish`, with the content scan in front of it — this command never pushes.
@@ -50,7 +50,7 @@ Before Step 6, all of these hold:
 3. **Nothing is left half-done behind it** — no debug instrumentation, no counters added to
    chase a bug, no `.on` file the change depends on but does not create.
 4. **The documentation it taught us is written down** — Step 4, in the same landing.
-5. **It was reviewed, on Opus, and the findings were acted on** — Step 5.
+5. **It was independently reviewed and the findings were acted on** — Step 5.
 
 ## Step 1 — Commit local changes
 
@@ -236,19 +236,26 @@ git log --format='%h %s%n%N' main..HEAD | grep -B1 'landing-review:'
   - Anything else in the review paths (new code, a further fix that is not one of the findings)
     → the reviewed diff is not the diff that lands. Re-run the review on `main...HEAD`.
 
-### Running it — on Opus, not on the session model
+### Running it — in a dedicated read-only review context
 
-**The built-in `/code-review` cannot be used for this gate.** It launches as a *fork* of the
-session, and a fork always runs on the session's model — the `model` override is ignored
-(measured 2026-09-03: `/code-review medium` started as `@code-review`, "forked execution", on
-the session's Fable model and had to be stopped). The review is therefore a **general-purpose
-Agent with `model: "opus"`** (Opus 5), given the brief below. One agent at `medium`; at `high`,
-two in parallel with the same brief and the second told to focus on state written, patches and
-sim-adjacent code, then merge their lists. **When the landing is a cross-thread one, that second
-agent's focus is the synchronisation itself** — every value one thread writes and the other reads,
-the fence or lock that is claimed to order them, what happens when the fence is unarmed or the
-other thread never arrives, and the lifetime of anything freed on one thread and read on the other.
-Ask it for the sequence that breaks the claim, not for an opinion on the design.
+Use the current harness's native dedicated reviewer when it has one; otherwise launch a fresh
+read-only agent. Do not pin the gate to one vendor or model, and do not continue the implementation
+conversation as though that were an independent review.
+
+In Codex, use `/review` and choose **Review against a base branch** (`main`), or run
+`codex review --base main '<brief below>'` non-interactively. Codex's reviewer reads the selected
+diff and reports findings without modifying the worktree; `review_model` in `config.toml` may select
+a different available model when wanted. In another harness, give a fresh read-only agent the same
+brief.
+
+Run one reviewer at `medium`; at `high`, run two independent reviewers in parallel with the same
+brief and tell the second to focus on state written, patches and sim-adjacent code, then merge their
+lists. In Codex, explicitly ask it to spawn those two read-only review subagents and wait for both.
+**When the landing is a cross-thread one, that second reviewer's focus is the synchronisation
+itself** — every value one thread writes and the other reads, the fence or lock that is claimed to
+order them, what happens when the fence is unarmed or the other thread never arrives, and the
+lifetime of anything freed on one thread and read on the other. Ask it for the sequence that breaks
+the claim, not for an opinion on the design.
 
 The brief must contain, in the agent's own prompt (it starts with no context):
 
@@ -293,7 +300,7 @@ Then **record the review** on the commit whose diff it read, and re-run Step 3 i
 touched a build target:
 
 ```
-git notes add -m "landing-review: model=opus effort=<medium|high> range=main..<sha> findings=<n> acted=<k> rejected=<m> date=<YYYY-MM-DD>" <sha>
+git notes add -m "landing-review: model=<model> effort=<medium|high> range=main..<sha> findings=<n> acted=<k> rejected=<m> date=<YYYY-MM-DD>" <sha>
 ```
 
 (`git notes add -f` only if that commit already carries a note — never delete someone else's.)
@@ -317,7 +324,7 @@ After a successful run, report:
 - Anything left deliberately unstaged in Step 1 (build artifacts, suspicious files) and why.
 - Build-gate result per target — ddraw.dll, tagpu.dll — passed, skipped (with the reason), or what failed.
 - **Each gate's verdict**: docs — already done / done now (what was added) / not needed;
-  review — already recorded on `<sha>` / run now on Opus at `<effort>` (`n` findings, `k` acted
+  review — already recorded on `<sha>` / run now with `<model>` at `<effort>` (`n` findings, `k` acted
   on, `m` rejected and why) / skipped and why.
 - The range `main` advanced by in Step 6 (e.g., `50b2272..a1b2c3d`), and where it was updated (worktree path or headless ref).
 

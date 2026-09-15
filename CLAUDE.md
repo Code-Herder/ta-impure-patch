@@ -80,10 +80,11 @@ other thread published. A diff that adds three lines to a critical section is sm
 reviewer's sense and large in this one. Verify each finding against the code before acting on it, and never apply findings
 blindly.
 
-**Reviews run on Opus (Opus 5), not on the session model.** The built-in `/code-review` cannot
-do that: it launches as a fork of the session, and a fork always runs on the session's model
-(measured 2026-09-03 — it started on Fable and had to be stopped). So the review is a
-**general-purpose `Agent` with `model: "opus"`**, read-only, given the brief in
+**Reviews run in a dedicated, read-only review context, not as the implementation agent grading
+its own continuation.** Use the current harness's native review mechanism when it has one. In
+Codex, that is `/review` against `main`, or `codex review --base main` for a non-interactive run;
+in a harness without a dedicated reviewer, launch a fresh read-only agent. Do not pin this gate
+to one vendor or model. Give the reviewer the brief in
 `.claude/commands/git_commit_merge_wt.md` **Step 5**: the worktree path, the range
 `main...HEAD`, what the change does in engine terms, the binary and the `objdump` command to
 verify addresses against, the risky spots, and the report format. Record it afterwards as a
@@ -146,8 +147,8 @@ on the exact edge pixel — and the session's most reused new page was the funct
 
 Full conditions and rationale: `.claude/commands/git_commit_merge_wt.md`, which **checks each
 gate and runs whichever is missing** — commit, merge main in, build, the documentation pass
-(Step 4), the Opus review (Step 5), then the fast-forward. These lines exist so the rules still
-apply when landing by hand.
+(Step 4), the dedicated review (Step 5), then the fast-forward. These lines exist so the rules
+still apply when landing by hand.
 
 ## Python tooling: install what you need, into the shared venv
 

@@ -599,7 +599,7 @@ the simulation.
   only once the reader has published completion of the passes that could hold the object. The
   earlier "free N passes behind" wording was a probabilistic margin, not a proof — it assumed the
   engine's null landed within N−1 reader passes, which a preempted game thread can violate.
-- **2026-09-06** — **reviewed** (two Opus reviewers at high, ten findings, eight acted on). The
+- **2026-09-06** — **reviewed** (two reviewers at high, ten findings, eight acted on). The
   serious one: on the teardown wait's timeout the code leaked the queue and then switched
   deferral *off* for the cascade — hundreds of synchronous frees (`0x485980` frees every unit
   through the death routine, which this page's first draft denied) under a reader that might

@@ -556,7 +556,7 @@ an eye-induced artifact at all, so the excursions are the ease changing how much
 screen, and anchoring adds nothing above that floor. The criterion was checked live before
 being trusted: 196 210 green-dominant px at the units against **0** in the fogged corner.
 
-**What the landing review found, and what it settled** (two Opus reviewers, `high`,
+**What the landing review found, and what it settled** (two reviewers, `high`,
 2026-09-10). Three real defects, all fixed on the branch: the eye was stepped *before*
 `zoom_eye_range()` was consulted, so a frame with no sane engine state left it unclamped **and**
 skipped the invalidation; `anchor_step()` used the widened camera range without the
@@ -2323,7 +2323,7 @@ defaults, this DLL against the one built from landing 1's tip (`72772cf`):**
 - *Pictures*: `glshot` at 1× and at 0.564 anchored at (400,300) — the whole island at the
   lower level with the units held under the pointer, nothing torn.
 
-**What the landing review changed (two Opus reviewers, `high`, 2026-09-12; both could construct no
+**What the landing review changed (two reviewers, `high`, 2026-09-12; both could construct no
 interleaving that breaks the mailbox or loses a delta).** Five real defects, all fixed on the branch
 before landing: the camera hold outlived its file by up to 15 render frames (the hold is a level
 the game thread re-applies every draw, and `s_holdValid` was cleared only by the 15-frame poll —
@@ -2401,7 +2401,7 @@ draws on which `end != begin + (count−1)·0x118`, the relation the note record
 added by the landing review below; it is a monitor and not the safety argument, which is the
 engine's own 2048-record pool.
 
-**What the landing review changed.** Two Opus reviewers at `high` over the branch diff, one
+**What the landing review changed.** Two reviewers at `high` over the branch diff, one
 working down the brief's risk list and one told to range freely. **Eight defects**, every one
 verified against the pristine binary before anything moved — seven the reviewers' and one found
 while verifying their first. All eight are fixed on the branch:
@@ -2862,7 +2862,7 @@ reproduces on the DLL that predates it.) Every one of these is a ratio and nothi
 
 ### 2.22 What landing 4's review changed
 
-**FIVE Opus reviewers at `high`, read-only, launched as `Agent`s and never `/code-review`** (a fork
+**FIVE reviewers at `high`, read-only, launched as `Agent`s and never `/code-review`** (a fork
 runs on the session model). Four read the landing — one per plan row with a numbered risk list, and
 one told to range freely and to check the notes' claims against the pristine binary — and a fifth
 read the fix diff afterwards. **Fourteen findings between them**, every one verified in the code or
