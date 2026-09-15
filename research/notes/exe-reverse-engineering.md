@@ -4165,6 +4165,14 @@ this bit as an ownership gate before applying the world s -> u transform. Live a
 produced no GUI change. With the gate, the same click raises `YESORNO` at both
 limits, and `EXITGAME`, `CHOICE2` and `OK` land on their named gadgets as well.
 
+This is **not a general in-game-modal flag** [DISASSEMBLY 2026-09-15].
+`SHARE.GUI` is pushed at `0x49373C` and sets bit 6 of the same word at
+`0x49374F` (`or byte [main+0x37EBE], 0x40`), so the bit-0 input gate does not
+cover that screen. The options path pushes `ARMOPT.GUI` at `0x4961B7` and sets
+bit 0 afterwards at `0x4961C1`; the earlier wording said the bit was set before
+the push. The measured options/exit/preferences stack is closed; share-dialog
+input under zoom remains unverified and unfixed.
+
 **Leaving a game — `0x491ADC..0x491B38`** (inside the leave-game handler; the block begins with
 the width test at `0x491AA0`) [VERIFIED]. `cmp eax, 0x1E0; je 0x491B5D` (already 480 high:
 nothing to switch); **`MEM_Free 0x4D85A0(main+0x37E1B)` at `0x491AB8` — the game's OFFSCREEN goes

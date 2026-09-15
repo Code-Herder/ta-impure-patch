@@ -368,7 +368,7 @@ void tagpu_zoom_publish_view(int vpL, int vpT, int vw, int vh)
    least the rate scrolling is actually running at. */
 #define TA_MAINPP        0x00511DE8u
 #define OFF_SCROLLSPEED  0x1434D
-#define OFF_INGAME_GUI   0x37EBE   /* bit 0: a built-in in-game GUI owns input */
+#define OFF_GUI_FLAGS    0x37EBE   /* bit 0: ARMOPT/exit/preferences owns input */
 
 /* game thread only: the level the last command carried, and whether it is
    live — what every game-thread reader in this file uses in place of the
@@ -1038,8 +1038,11 @@ static int in_viewport(int x, int y, int L, int T, int W, int H)
     return x >= L && y >= T && x < L + W && y < T + H;
 }
 
-/* F2/Tab set main+0x37EBE bit 0 before pushing ARMOPT and keep it set through
-   EXITMENU, YESORNO and the preferences screens; every close path clears it.
+/* F2/Tab push ARMOPT and then set main+0x37EBE bit 0; the in-game preferences
+   path sets the same bit. It stays set through EXITMENU, YESORNO and the
+   preferences screens, and the measured Resume/close paths clear it. The
+   executable has more clear sites, but their full screen mapping is not
+   established. This bit is NOT a general modal flag: SHARE.GUI uses bit 6.
    DrawGameScreen continues underneath those screens, so s_live quite rightly
    remains set even though the GUI now owns every button event. Read the
    engine state here, at the one shared s -> u door, so hardware messages,
@@ -1048,10 +1051,10 @@ static int in_viewport(int x, int y, int L, int T, int W, int H)
    The executable mapping and TA_MAINPP live for the process. `view()` has
    already proved that an in-game world was published; ta_ok still guards the
    level pointer before the byte read. */
-static int ingame_gui_owns_input(void)
+static int options_gui_owns_input(void)
 {
     const char* ta = *(const char* const*)TA_MAINPP;
-    return ta_ok(ta) && (*(const unsigned char*)(ta + OFF_INGAME_GUI) & 1u) != 0;
+    return ta_ok(ta) && (*(const unsigned char*)(ta + OFF_GUI_FLAGS) & 1u) != 0;
 }
 
 /* The whole transform. `ring` (may be NULL) reports that `u` fell outside the
@@ -1077,7 +1080,7 @@ static int to_engine(int* x, int* y, int* ring)
     float z, cx, cy; int L, T, W, H, ux, uy;
     if (ring) *ring = 0;
     if (!x || !y || !view(&z, &cx, &cy, &L, &T, &W, &H)) return 0;
-    if (ingame_gui_owns_input()) return 0;             /* GUI space: 1:1 */
+    if (options_gui_owns_input()) return 0;             /* GUI space: 1:1 */
     if (!in_viewport(*x, *y, L, T, W, H)) return 0;   /* screen-space: 1:1 */
     ux = iround(((float)*x - cx) / z + cx);
     uy = iround(((float)*y - cy) / z + cy);

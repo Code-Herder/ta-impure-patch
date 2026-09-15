@@ -1465,7 +1465,9 @@ Three things to know when driving zoomed:
   F2 at 0.25x and 8x: `EXIT`, `MAINMENU`, `EXITGAME`, both confirmation choices
   and `OK` all land on the engine-reported gadget; the bit clears on Resume and
   world input resumes. The pre-fix 0.25x click at `(577,336)` returned to
-  `ARMMAIN2` or did nothing instead of raising `YESORNO`.
+  `ARMMAIN2` or did nothing instead of raising `YESORNO`. This gate is specific
+  to that stack: `SHARE.GUI` sets bit 6 of the same word and its zoomed clicks
+  remain a known gap.
 
 **`tacli arm <i> vpwide.on`** (at launch) closes that: it widens the rect the engine
 addresses to exactly what the zoom shows, so a ring click selects and orders normally.
