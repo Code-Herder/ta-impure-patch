@@ -2001,7 +2001,9 @@ static unsigned s_ghostCheck = 0;
 static int   s_ghostLogged = -1;     /* the armed state the log last named */
 static unsigned s_ghostCurs = 0, s_ghostQueue = 0, s_ghostDrawn = 0;
 static unsigned s_ghostNoBake = 0, s_ghostTrunc = 0;
-static int   s_ghostNoDraw = 0;      /* THE BUILD GHOST'S STANDING REQUEST FOR THE PACKET'S BUILDS TABLE. Written on
+static int   s_ghostNoDraw = 0;      /* the missing prerequisite was logged */
+
+/* THE BUILD GHOST'S STANDING REQUEST FOR THE PACKET'S BUILDS TABLE. Written on
    the render thread, read on the game thread inside fill_frame; one writer, no
    ordering owed — a frame either side of a change costs one frame of an unused
    or an empty table and nothing else. This is tagpu_fxown's `want` pattern and
@@ -2021,11 +2023,31 @@ void tagpu_native_set_want_builds(int want, unsigned int frame_counter)
 {
     g_wantBuilds = (unsigned char)(want != 0);
     if (want) g_beatWantBuilds = frame_counter;
-    else if ((unsigned)(frame_counter - g_beatWantBuilds) > 90) g_wantBuilds = 0;
+}
+
+/* THE WATCHDOG HAS TO LIVE OUTSIDE THE SETTER, which is the whole point of it
+   and which the first version of this got wrong: it decayed inside
+   set_want_builds, in an `else` arm reached only when `want == 0` — by which
+   point the line above had already stored 0, so the branch could never change
+   anything, and the case it was written for (the render thread STOPS CALLING)
+   was the one case it could not see. tagpu_fxown does it properly and this now
+   copies that: the decay runs from tagpu_overlay.c's unconditional flush run,
+   which sits in front of the `tagpu_overlay.off` early-return, so a render
+   thread that is STILL RUNNING but has stopped polling — a driver that refused
+   (`s_state == 2` returns ahead of the 30-frame poll), a context loss,
+   `tagpu_overlay.off` — stops charging the publisher for a table nothing will
+   read. What it does NOT cover, because it cannot: a render thread that has
+   EXITED stops calling this flush too, so the flag keeps its last value. That
+   is the same hole fxown's watchdog has and is not worth a second mechanism —
+   with no render thread there is no renderer, and an unused table copy is the
+   least of it. (An earlier draft of this comment claimed the exit case was
+   covered. It never was.) */
+void tagpu_native_flush_want(unsigned int frame_counter)
+{
+    if (g_wantBuilds && (unsigned)(frame_counter - g_beatWantBuilds) > 90)
+        g_wantBuilds = 0;
 }
 int tagpu_native_want_builds(void) { return g_wantBuilds != 0; }
-
-/* the missing prerequisite was logged */
 
 static int ghost_armed(unsigned frame_counter)
 {

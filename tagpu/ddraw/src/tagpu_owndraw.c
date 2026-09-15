@@ -593,9 +593,20 @@ void __cdecl tagpu_owndraw_preshadow(unsigned int obj3do, unsigned int frame)
        the wipe's predicate should BE the classifier's answer, not a fact about
        what the wreck builder happens to leave at Object3do+0x0C — a fact this
        landing did not establish. */
+    /* A HUSK IS ANSWERED HERE AND NOWHERE ELSE, exactly as the classifier
+       answers it: wrecks armed -> ours, wipe and stop; not armed -> the
+       engine's, leave it alone. Neither branch may fall through to
+       target_covers, and that is not a style point: a husk's Object3do+0x0C is
+       the SHARED SCRATCH feature-unit, whose +0x92 is the UnitInfo array BASE
+       (0x422003/0x422009), so target_covers would name-match every husk against
+       UnitInfo[0] — an arbitrary loaded def — and refuse under any named
+       target. The classifier reaches its own wipe before that test; this now
+       does too. */
     if (is_wreck_draw(obj3do)) {
         extern int tagpu_native_wrecks_armed(void);
         if (!tagpu_native_wrecks_armed()) return;
+        tagpu_r3dcache_wipe(frame);
+        return;
     }
     /* OUR TARGET, THE CLASSIFIER'S OWN QUESTION — the one this gate was missing
        until 2026-09-14. Without it, `owndraw.on=armcom` + `native.on=all`

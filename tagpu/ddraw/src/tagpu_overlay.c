@@ -363,6 +363,10 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     tagpu_owndraw_flush(f->frame_counter);
     /* effects own-the-draw flush: no-op unless armed at launch. */
     tagpu_fxown_flush(f->frame_counter);
+    /* the build ghost's standing request for the packet's builds table: decays
+       here, not in its setter, so a render thread that stops polling stops
+       charging the publisher for a walk nothing will read. */
+    tagpu_native_flush_want(f->frame_counter);
     tagpu_featown_flush(f->frame_counter);
     tagpu_terrown_flush(f->frame_counter);
     tagpu_markown_flush(f->frame_counter);

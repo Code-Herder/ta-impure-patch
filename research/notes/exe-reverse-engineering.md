@@ -2863,12 +2863,19 @@ layer needs. **The gate that makes it the shell's and not the game's is TWO test
 draw runs inside `DrawGameScreen`, so on an in-play frame the observer's own hijack of that
 call is on the stack. It is not sufficient, and this note asserted it alone until the
 2026-09-14 review: **`s_retDepth == 0` is not the complement of the in-play gate**, because
-`DrawGameScreen 0x468CF0` has a second caller at `0x495E66` (`6a 01 / 6a 01 / e8 85 2e fd ff`)
+`DrawGameScreen 0x468CF0` has **four** callers — `0x495C76`, `0x495E66`, `0x4962C2` and the
+in-play `0x4969CD` — so three of them return somewhere other than `0x4969D2`. Taking `0x495E66`
+(`6a 01 / 6a 01 / e8 85 2e fd ff`) as the example
 whose return address is `0x495E6B`, not the in-play `0x4969D2` the observer counts — a
 screenshot draw is in-play with `s_retDepth` at 0. `!s_levelOpen` — this module's own "a level
 is being played", set at the level's first in-play publish and cleared at the teardown — is
-what actually keeps the channel out of a level. `tagpu_packet_pub.c:2019-2027` carries the
-argument; the tests are at `:2106` and `:2119`.
+what actually keeps the channel out of a level. `tagpu_packet_pub.c` carries the argument under the
+comment *"THE GATE IS TWO TESTS, AND NEITHER IS A DELAY"*, immediately above
+`before_cursor`; the tests themselves are that function's first two early returns,
+`if (s_retDepth != 0) return 0;` and `if (s_levelOpen) return 0;`. (Cited by
+anchor rather than by line: the line numbers this note carried were already
+stale one commit after they were written, which is what citing a moving file by
+line number always costs.)
 
 **The commands, applied in `before` [landing 2, 2026-09-12].** The same observer's `before`, on
 the same in-play gate, is where every engine word the zoom used to write from the render thread

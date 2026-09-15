@@ -3300,10 +3300,16 @@ are untouched.
   from `main+0x143A7`, the live palette the loader rewrites at a level transition — and this
   channel runs on the flip, which is ~5000 presents a second through a LOADING SCREEN as well as
   the menu. The header-only shape bounds what is published; it says nothing about what is read.
-  The palette copy is now skipped while `(load_flags & 3) == 1` (started, not finished), leaving
-  `pal_ok` at 0 so a consumer is told there is no palette rather than handed a torn one; the flag
-  word itself is a single aligned u16 and was never the hazard. What closed is the shell's cursor,
-  and the rule now holds because the read was removed, not because it was never made.
+  The read is **still there**, documented as an open hazard rather than gated. A gate on
+  `(load_flags & 3) == 1` was written on 2026-09-14 and removed the same day by the landing
+  review: bit0 (`or 1` at `0x49832A`) and bit1 (`or 2` at `0x497C5F`) are never cleared anywhere
+  in the image — `tagpu_engine.h`'s own `OFF_LOADFLAGS` entry says so — so the gate fired on the
+  first load of a session and never again, and the case it was written for is the SECOND level.
+  The only bit both set and cleared is bit2 (`0x4975C7`; cleared at `0x496868` and `0x49855D`),
+  and whether "bit2 set" spans a whole load or is a narrower one-shot is UNMEASURED, so no gate
+  is written on it. Consequence today: a torn copy can give one wrong-coloured frame on a load
+  screen — cosmetic, pre-existing, not a regression. What closed is the shell's cursor; the rule
+  does **not** hold here, and saying so is the correction.
   **It is OURS in the shell now** — `curs=1,10x20,drawn=599,warm=1` on the main menu — where
   before landing 4c it was the engine's sprite at any scale. At `k = 1` the two are
   byte-identical (measured: the cursor zone differs by 0 px between `gui off` and `gui on`).

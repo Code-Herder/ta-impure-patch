@@ -2590,6 +2590,7 @@ consistent pair could name memory just freed ([cross-thread engine reads](cross-
 | `tagpu_sfx.c` | the particle table, walked by layer because the layer IS the draw depth (0..6 before the projectiles, 7..9 after the explosions). Also **off the allow-list** | render |
 | `tagpu_gaf.c` | gained `tagpu_gaf_frame_geom` / `_subframe`, so a pass that only PLACES a sprite dereferences no engine byte of its own; the publisher calls its resolvers on the game thread | both |
 | `tagpu_fxown.c` | the render thread's standing request for the tables (`want`), with the same 90-frame watchdog the two skip bytes stand on: an unarmed pass costs the publisher nothing | both |
+| `tagpu_native.c` | **`g_wantBuilds`** [2026-09-14] — the BUILD GHOST's standing request for the packet's builds table, the same pattern: written by the render thread from the ghost's own 30-frame poll (`tagpu_native_set_want_builds`), read by the game thread in `fill_builds`, which otherwise walks the order arena and copies up to `TAGPU_PK_MAX_BUILDS * 16` B into the packet every frame for a pass that may not exist. Its 90-frame watchdog is `tagpu_native_flush_want`, driven from `tagpu_overlay.c`'s unconditional flush run — deliberately NOT from the setter, where the first version put it and where it could not see the one case it was for (a render thread that stops calling: a refused driver returns in front of the poll). The table is therefore CONDITIONAL; `tagpu_pk_builds()` returns NULL at `n_builds == 0` and every consumer loops to `n_builds`, so an absent table reads as an empty one | both |
 
 **Three bounds became the engine's own, by disassembly** ([engine map](exe-reverse-engineering.html),
 "The effects: the four per-frame arrays"). `0x499A30` allocates the projectile array as `0x7D64`
@@ -2939,6 +2940,15 @@ whose DATA arrives entirely in the frame packet.
   blend, and the model's own colours pass through; the only per-unit field it adds is the
   ordinary `alpha`. (The 2026-09-12 tint cut removed `uGhost`/`uGhostTint` again, so
   `tagpu_native_unit_fs` is back to the shape it had before the feature.)
+- **The piece walk's provenance, now that the ghost is a default.** `ghost_pieces` carries no
+  per-node readability probe, on `aabb_walk`'s argument and by its lifetime (the level, under
+  `tagpu_reclaim`'s teardown wrap). One difference from `aabb_walk` is worth stating rather than
+  leaving to be found: `aabb_walk` walks the template of an INSTANTIATED unit, while
+  `ghost_pieces` walks `mptrs[mid]` for any `mid` the caller's `mid < udef_count` bound admits —
+  a def the player can select to build but whose model slot this level may never have
+  instantiated. The slot is guaranteed non-NULL by that bound; that it is *walkable* is inferred
+  from the engine's own unconditional walk at `0x4CB650`, not measured for a never-instantiated
+  def. [Named by the 2026-09-14 landing review; no fault observed in 57 480 walks.]
 - **The lever.** `tagpu_ghost.on` (tokens: `alpha=<f>`, default 0.40), re-read on the pass's own
   30-frame poll; the armed line and the `ghost: curs= queue= drawn= nobake= trunc= alpha=`
   heartbeat log only on change / every 300 frames. `nobake` and `trunc` must stay 0. **It needs

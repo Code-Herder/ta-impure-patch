@@ -2093,21 +2093,26 @@ static unsigned fill_shell(TAGPU_PACKET* p, void* ctx)
     p->text_fg    = -1;
     p->gamma      = 1.0f;
     if (live) fill_cursor(p);
-    /* THE PALETTE IS NOT OURS TO READ WHILE THE LEVEL IS LOADING. This channel
-       publishes on the flip, and the flip runs ~5000 times a second through a
-       loading screen as well as the menu — but `main+0x143A7` is per-map state
-       the LOADER thread rewrites, and fill_pal copies 1 KB of it. That is the
-       exact read the "never publish outside the in-play gate" rule exists to
-       prevent, and a torn copy is a wrong-palette frame on the load screen.
-       `load_flags` bit0 is "load started" and bit1 "finished", so `(lf & 3) ==
-       1` is the window where the loader owns it (measured: the word goes 0x0001
-       -> 0x0003 across a load). Skipped there, `pal_ok` stays 0 from the zeroing
-       above and `gamma` keeps the 1.0 fallback, so a consumer is told the packet
-       carries no palette rather than handed a torn one. Reading the flag word
-       itself is a single aligned u16 and is not the hazard. */
-    if ((lf & 3u) != 1u)
-        fill_pal(p, ta);                     /* the shell's passes resolve
-                                                through the presented palette */
+    /* THE PALETTE READ HERE IS A KNOWN HAZARD, AND THE GATE FOR IT IS NOT YET
+       KNOWN. fill_pal copies 1 KB from `main+0x143A7`, the live palette, and
+       this channel publishes on the FLIP — ~5000 presents a second, through a
+       loading screen as well as the menu — while the LOADER thread rewrites
+       that palette at a level transition. A torn copy is a wrong-palette frame
+       on the load screen: cosmetic, pre-existing, and not introduced here.
+
+       A gate on `(load_flags & 3) == 1` was written on 2026-09-14 and REMOVED
+       the same day by the landing review, because it is a one-shot: bit0 is
+       `or 1` at 0x49832A and bit1 `or 2` at 0x497C5F, and NOTHING IN THE IMAGE
+       CLEARS EITHER (tagpu_engine.h's own OFF_LOADFLAGS entry says so — it was
+       read and then not believed). After the first level of a session the word
+       is 3 for ever, so the gate stopped firing exactly when a second load
+       needed it. The only bit both set and cleared is bit2 — set at 0x4975C7,
+       cleared at 0x496868 and 0x49855D — which tagpu_engine.h calls half of a
+       loader<->game handshake; whether "bit2 set" spans a whole load or is a
+       narrower one-shot signal is NOT measured, so no gate is written on it
+       here. It wants its own landing, with the window measured across a SECOND
+       level load in one process, which is the case the first attempt got
+       wrong. */
     return sizeof(TAGPU_PACKET);
 }
 
