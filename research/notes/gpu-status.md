@@ -785,6 +785,19 @@ So `u` now reaches the engine in exactly two places, and neither is a poll:
 | a **button** message's `lParam` | `tagpu_zoom_mouse_lparam()`, at the three `CallWindowProcA` doors | a button is queued on the engine's own event ring (`0x4B5EB2`/`0x4B5EFE` → `0x4C2E30`) and dispatched whenever the game loop reaches it. Its position is where the press was MADE, and no later pointer sample can reconstruct that |
 | the **dispatched record**, at the mouse→world conversion | `vpw_mouse_world()`, our redirect of `0x498DA0` at `0x499221` | this is the one place the 1:1 arithmetic happens. It recomputes `u` from a single `g_ddraw.cursor` sample and writes it into `main+0x2C76` as well as the stack copy it is handed, because `GetUnitAtMouse 0x48CD80` (called at `0x499278`) and the routing test at `0x469DE1` read the field |
 
+**The options/exit/preferences stack owns the point before either path can treat it as world space.**
+F2 and Tab set `main+0x37EBE` bit 0 for `ARMOPT.GUI`; it stays set through
+`EXITMENU.GUI`, `YESORNO.GUI` and the preferences screens while `DrawGameScreen` keeps
+publishing the zoomed world underneath. The shared `to_engine()` door therefore reads the bit
+before its geometric viewport test and leaves the point unchanged while it is set. This covers
+hardware messages, injected button messages and the mouse→world repair with one read-only
+gate; the DLL-owned render-options panel remains the separate `tagpu_menu_owns_point()` case
+because it sets no engine ownership bit. Measured at 0.25× and 8×: `EXIT`, `MAINMENU`,
+`EXITGAME`, both confirmation choices and preferences `OK` landed on their reported gadgets;
+Resume cleared the bit and restored world input.
+This is deliberately narrower than "a built-in in-game GUI": `SHARE.GUI` sets bit 6 at
+`0x49374F`, not bit 0, and remains a known gap under zoom.
+
 **A MOVE message must NOT be rewritten, and that is the half that took a measurement to find.**
 `0x4B5E51` does not queue: it copies its record into `[obj+0x196]` through `0x4C2360`, and
 `[obj+0x196]` is *also* a position the cursor is drawn at — `0x4C67C0`, called from the surface
@@ -1237,6 +1250,7 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `main+0x142CB` | the minimap's view RECT. Engine-drawn and engine-filled — `0x41C3C0` is the only place it is computed — so the command apply recomputes it through the same wrapper on the draws it moved the eye. **Game thread since 2026-09-12**; it was the one render-thread write of it before (a one-frame torn box while the game thread drew the minimap) |
 | `main+0x14281` bit 3 | the screen fog grid's is-current flag. **CLEARED by the command apply after any eye it moved, on the game thread** — the same clear the engine's own eye writers make at `0x41CB6B`, and safe only there: `0x484904` sets it with an unlocked read-modify-write, so a clear from the render thread could be swallowed ([engine map](exe-reverse-engineering.html), "who may clear `main+0x14281` bit 3"). Until landing 2 the render thread asked terrown's fog tick for the rebuild through a request/ack pair instead; that handshake is gone |
 | `main+0x37E27..0x37E3B` | viewport rect: L, T, R, B, then W, H. **L/T/R/B are WRITTEN while `vpwide` is live, on the game thread since 2026-09-12** (§2.3b, §2.17): the command apply derives the widened rect from the level the record carries and restores the true one when nothing is zoomed. The true 1× rect reaches the render thread as the packet's `vp`; `tagpu_vpwide_true_rect()` is game-thread only now. W/H are never written; a disagreement with the screen-derived size is counted (`vpwh=`), not repaired |
+| `main+0x37EBE` bit 0 | options/exit/preferences-stack ownership. **Read only**, at the shared screen→world input transform: set across `ARMOPT.GUI`, `EXITMENU.GUI`, `YESORNO.GUI` and preferences, even though `DrawGameScreen` continues underneath; while set, the whole transform is the identity so those gadget clicks stay in 1:1 screen space at every zoom (§2.3d). Measured Resume/close paths clear it before world input resumes. **Not a general modal flag:** `SHARE.GUI` sets bit 6 and is not covered |
 | `main+0x2C76` / `+0x2C7A` | mouse position, two dwords (`+0x2C78` is the high half of x, not the y) — the x and y of the 6-dword record the dispatch fills. **WRITTEN by `vpw_mouse_world()` while the zoom transform is live** (§2.3d): the engine is polled with the true pointer now, so the unzoomed `u` is put back here, where `GetUnitAtMouse 0x48CD80` and the routing test at `0x469DE1` read it. Untouched at zoom 1, on the screen-space UI, and for a record that came off the event ring. **Local, but NOT inert:** all three fillers (`0x4999C4`, `0x4999E7`, `0x4999F9`) and our write sit inside one game-thread tick, before the first reader, so nothing races — but the readers include the order dispatchers `0x419BE0`/`0x41A490`, so a wrong value here becomes a wrong **replicated order**, not just a wrong highlight. That is why the ring test above has to be exact |
 | `main+0x0DCB` | GUI colour byte array (`gui[i]` is an INDEX INTO this, not a palette index). `DrawGameScreen` caches it in a local at `0x468D49`/`0x468D51`, which is the `[esp+0x74]` the build-cursor block indexes |
 | `main+0x2CC3` / `+0x2CC6` | cursor/order mode byte and the mouse-region flags. Read only. The build-cursor draw keys off `0x2CC3 == 0x0E` (placement) or `0x2CC6 & 8` (band drag), and picks green vs blocked from `0x2CC6 & 0x40` |

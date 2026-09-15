@@ -1456,14 +1456,18 @@ Three things to know when driving zoomed:
   `vpwide.off` armed, a drag across the whole viewport at 0.42× selected **0** units where
   the same drag with vpwide selects ~470 [MEASURED 2026-09-09] — so an A/B that turns
   vpwide off has to make its selection at 1× first, or it is comparing against an empty one.
-- **In-game dialogs drawn inside the viewport take bent clicks at any zoom ≠ 1.** The
-  transform's gate is geometric — inside the world viewport rect or not — so `ARMOPT`,
-  `EXITMENU` and `YESORNO`, which the engine draws over the middle of the world, are
-  treated as world clicks and unzoomed. Measured at 0.386×: `ui click MAINMENU` at its
-  own (577,336) does nothing and its **pre-image** (576,365) hits it. Pre-existing (it is
-  the same with the file lever), harmless (the keyboard is unaffected — `ui press` uses
-  the gadget's quickkey — and wheeling back to 1× restores clicking), and not the same
-  gap as the ring. `tagpu_zoom.h` promises dialogs arrive unmodified; it cannot see them.
+- **In-game dialogs drawn inside the viewport keep 1:1 clicks at every zoom since
+  the modal-input fix (2026-09-14).** `ARMOPT`, `EXITMENU`, `YESORNO` and the
+  preferences screens leave the zoomed world drawing underneath them, so the
+  published world view stays live. The shared s -> u transform now reads the
+  engine ownership bit at `main+0x37EBE`: while bit 0 is set, button positions
+  remain in screen space for both hardware and injected input. Measured through
+  F2 at 0.25x and 8x: `EXIT`, `MAINMENU`, `EXITGAME`, both confirmation choices
+  and `OK` all land on the engine-reported gadget; the bit clears on Resume and
+  world input resumes. The pre-fix 0.25x click at `(577,336)` returned to
+  `ARMMAIN2` or did nothing instead of raising `YESORNO`. This gate is specific
+  to that stack: `SHARE.GUI` sets bit 6 of the same word and its zoomed clicks
+  remain a known gap.
 
 **`tacli arm <i> vpwide.on`** (at launch) closes that: it widens the rect the engine
 addresses to exactly what the zoom shows, so a ring click selects and orders normally.

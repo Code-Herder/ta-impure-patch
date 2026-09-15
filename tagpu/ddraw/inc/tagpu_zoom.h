@@ -50,10 +50,13 @@ struct TAGPU_CMD;
    frame — a sub-millisecond lag on a pointer, not a correctness problem.
 
    OUTSIDE THE WORLD VIEWPORT THE TRANSFORM IS THE IDENTITY. The side panel,
-   minimap, top bar, chat and every dialog are screen-space: they are drawn by
-   the engine at 1:1 at any zoom, which is the whole point of the key-fill, and
-   a click on them must arrive unmodified. The gate is always on `s`, where the
-   player actually clicked. */
+   minimap, top bar and chat are screen-space: the engine draws them at 1:1 at
+   every zoom, so their clicks must arrive unmodified. The ARMOPT/exit/preferences
+   stack may also cover the viewport while DrawGameScreen continues underneath;
+   main+0x37EBE bit 0 says that stack owns input, and the whole transform becomes
+   the identity until the stack closes. This is not a general modal flag:
+   SHARE.GUI uses bit 6 and remains a known gap. The gate is always on `s`, where
+   the player actually clicked. */
 
 /* Install the engine patches the zoom needs. DllMain only, byte-matched,
    all-or-nothing, armed by tagpu_zoom.on, and every one of them inert at zoom 1.
@@ -229,8 +232,9 @@ void  tagpu_zoom_applied(unsigned* seq, int* cum_dx, int* cum_dy, float* level, 
 /* ---- the input path ---------------------------------------------------- */
 
 /* s -> u. Returns 1 if the point was transformed, 0 if it was left alone
-   (zoom 1, no view published yet, or a screen-space position outside the world
-   viewport). Both pointers are updated in place.
+   (zoom 1, no view published yet, the options/exit GUI stack owns input, or a
+   screen-space position outside the world viewport). Both pointers are updated
+   in place.
 
    THE ADDRESSABLE RING. The engine can only name screen positions inside its
    own viewport — anything outside it it routes to the screen-space UI instead
