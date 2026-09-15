@@ -424,15 +424,42 @@ static void restore_one(unsigned int va, const unsigned char* stolen)
    cannot undo between the call and the read, because the two are adjacent
    instructions of the same call.
 
-   THE GATE IS THE CLASSIFIER'S OWN — its whole answer, including the branch that
-   is not about units at all. And like the classifier's, it reads a value the
-   RENDER thread writes (tagpu_posedraw.c's `s_state`) from the game thread, with
-   no fence: a `1` left in the store buffer across a context loss is read here as
-   live and the wipe fires while the pass, reading the same word, draws nothing —
-   so the unit has neither body nor shadow for the frames that span the loss. That
-   is the classifier's own pre-existing exposure (tagpu_posedraw.c's "safe by
-   DIRECTION" argues it away and does not fully hold), and this adds a second
-   reader of the same word, not a new window. `tagpu_posedraw_live()` is exactly the question the
+   THE GATE IS NOT THE CLASSIFIER'S WHOLE ANSWER, though this comment claimed it
+   was until the 2026-09-14 review. Two gaps, both still open — read this as the
+   statement of a known defect, not as an argument that the wipe is correct:
+
+     - IT OMITS THE TARGET. The classifier gates on `g_all || name_matches(
+       g_target)` (the `tagpu_owndraw.on` token); preshadow never asks. With
+       `owndraw=armcom` and `native=all` — both valid — the classifier leaves a
+       non-armcom unit to the engine and this wipes its composite anyway, taking
+       the body with the shadow. Masked under the play default only because that
+       default target IS `all`. The three-site install is likewise ungated on
+       `g_all` while the structure-shadow pair below is correctly `g_armed &&
+       g_all`.
+
+     - IT READS AT THE WRONG TIME, AND "a second reader, not a new window" (the
+       residual 1b599e9 shipped) IS FALSE. The classifier runs only when the
+       engine REBUILDS a composite — `Object3do+0x04` (TimeVisible) tested at
+       0x458870, branch 0x4588F2, `inc [edi+4]` after each blit — while
+       preshadow runs on EVERY blit of every frame. On a non-rebuild frame
+       preshadow runs and the classifier does not run at all; for an idle unit
+       the gap is seconds, and nothing on the composite records which answer
+       built it. Worse, what actually gates OUR draw per unit is the packet flag
+       TAGPU_PK_U_NATIVE, stamped at publish, and the publish is skipped while
+       the cell still holds a fresh packet — so this wipe can act on an
+       ownership answer up to one present NEWER than the one the pass is drawing
+       from. Adjudicated 2026-09-14 by two reviewers arguing opposite sides: the
+       `s_state` 0->1 chain does NOT produce it (that store happens inside the
+       render frame that then draws, so the pass covers the wipe), but an
+       `s_armed` 0->1 does — a mid-session re-arm flips it on the render thread
+       while the in-flight packet still has every PK_U_NATIVE clear, and for
+       that packet's life every owned unit on screen loses body and shadow.
+       Reachable from the lever-editing loop and at the session's first arm, NOT
+       from play input, which is why play has never shown it. THE FIX IS AN
+       ORDERING — gate the wipe on the same published flag the draw used, not on
+       a live re-read — and it is not in this landing.
+
+   `tagpu_posedraw_live()` is exactly the question the
    classifier asks before it skips; while it is false the engine is the only
    renderer, and emptying the composite would take the unit's BODY with the
    shadow (the body blits from the composite too, 0x459373), which is the
@@ -455,11 +482,14 @@ static void restore_one(unsigned int va, const unsigned char* stolen)
    argument (`mov ebp,[esp+0x30]` at 0x459205, before the remaining two pushes:
    0x20 + push ebx + push ebp puts it at entry esp + 8) — and it is never
    reloaded on any path that reaches the three sites; every use of it before
-   them is a read or a push. The two cargo loops are the only reloads: path A's
-   (0x459415 / 0x459489, whose exit is the function's OWN epilogue — `pop ebp` at
-   0x459495 with `ret 0x18` at 0x45949A) and path B's at 0x459649, which begins
-   after its sites; path B is entered at 0x45949D by the `jne` at 0x459282 and
-   so executes neither. A register that "happens to survive" is not an argument,
+   them is a read or a push. Path A's cargo loop is the ONLY reload of ebp in
+   the function (0x459415 `mov ebp,[edx+0x8A]`, 0x459489 `mov ebp,[ebp+0x8E]`),
+   and its exit is the function's OWN epilogue — `pop ebp` at 0x459495 with
+   `ret 0x18` at 0x45949A; path B is entered at 0x45949D by the `jne` at
+   0x459282 and so never runs it. Path B's own cargo loop, at 0x459649, walks
+   the same list in ESI (`mov esi,[edx+0x8A]`) and does not touch ebp at all.
+   It was called a second ebp reload here until the 2026-09-14 review
+   disassembled it; the corrected fact is the stronger one. A register that "happens to survive" is not an argument,
    so the stub passes it and tagpu_owndraw_preshadow CHECKS it:
    `*(Object3do + 0x10)` must be the very composite the site is about to read, or
    it does nothing. A wrong ebp is then a no-op, never a wipe of somebody else's
@@ -635,8 +665,13 @@ void tagpu_owndraw_init(void)
         g_armed ? "ARMED" : "not armed", g_target,
         a ? "OK" : "SKIP", c ? "OK" : "SKIP",
         g_buildfx ? "OK" : "SKIP",
-        g_shadow ? "OURS" : "SKIP",
-        g_sshadow ? "OURS" : (g_all ? "SKIP" : "engine"));
+        /* each flag under ITS OWN label: g_sshadow is the structure pair (the
+           two je flips, installed only under `all`, hence its "engine" case),
+           g_shadow is the three-site detour. They were passed the other way
+           round from the landing until the 2026-09-14 review, so the one line
+           that says whether the detour went in reported the other flag. */
+        g_sshadow ? "OURS" : (g_all ? "SKIP" : "engine"),
+        g_shadow ? "OURS" : "SKIP");
     b[sizeof b - 1] = 0;
     olog2(b);
 }

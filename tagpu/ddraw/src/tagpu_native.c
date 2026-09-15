@@ -2070,6 +2070,27 @@ static int ghost_armed(unsigned frame_counter)
    `nobake=0` reading healthy; the live unit path publishes zero pieces for the
    same condition and counts the refusal, so this one does too.
 
+   NO PER-NODE READABILITY PROBE, for aabb_walk's reason and by its argument —
+   see the comment there, which this walk is the second instance of. Until the
+   2026-09-14 review this one probed every node and every sibling with
+   IsBadReadPtr, which was wrong twice over: it is the shape of check CLAUDE.md
+   rules out (its answer can go stale between the check and the read), and it
+   was ALSO a second way to halve a model, defeating the paragraph above — a
+   failed node probe `continue`d, dropping that node AND its whole subtree, and
+   a failed sibling probe ended the sibling loop, dropping that sibling and
+   every one after it, both without setting `over`, so the caller read
+   `nobake=0 trunc=0` over half a building. What the walk rests on instead:
+   `root` came through model_root behind the caller's `mid < udef_count` bound,
+   so it is a slot of the engine's own model table and the tree hanging off a
+   live template is internally consistent (the engine's own walk at 0x4CB650
+   probes nothing either); the two caps are DATA bounds that stop a malformed
+   model running away; and the lifetime is the LEVEL, the render thread held
+   out of the teardown cascade by tagpu_reclaim's wrap. The `ptr_ok` in the
+   sibling loop is a range test on a VALUE — the end-of-list test, not the
+   safety argument. The residual is the one aabb_walk already names: the pre
+   hook's 1 s timeout (thread-safe-destruction.md §6a), pre-existing and not
+   something this walk can close.
+
    EVERY PIECE IS MARKED VISIBLE, which is the one place the ghost is not the
    finished building: piece visibility is the COB script's (the live path takes
    it from the unit's primitives), and no script runs for a preview. A
@@ -2086,7 +2107,6 @@ static int ghost_pieces(const char* root, TAGPU_PK_PIECE* out, int max)
     while (sp > 0) {
         const char* nd = stack[--sp];
         const char* ch;
-        if (!ptr_ok(nd) || IsBadReadPtr(nd, N_CHILD + 4)) continue;
         if (n >= max) { over = 1; break; }
         out[n].pos[0] = 0; out[n].pos[1] = 0; out[n].pos[2] = 0;
         out[n].turn[0] = 0; out[n].turn[1] = 0; out[n].turn[2] = 0;
@@ -2094,7 +2114,7 @@ static int ghost_pieces(const char* root, TAGPU_PK_PIECE* out, int max)
         out[n].node = (uint32_t)(size_t)nd;
         n++;
         for (ch = *(const char* const*)(nd + N_CHILD);
-             ptr_ok(ch) && !IsBadReadPtr(ch, N_CHILD + 4);
+             ptr_ok(ch);
              ch = *(const char* const*)(ch + N_SIB)) {
             if (sp >= TAGPU_PBMAXPIECE) { over = 1; break; }
             stack[sp++] = ch;

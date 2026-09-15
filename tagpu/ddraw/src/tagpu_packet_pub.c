@@ -2123,7 +2123,25 @@ static int __cdecl before_cursor(void* entry_esp)
         /* it WILL draw: hijack the return so `after` reads the position this
            draw wrote (+0x1B6/+0x1BA), not the one the last draw left there —
            which on a frame the pointer moved is a whole frame stale, and the
-           rect the layer discards at is exactly this number */
+           rect the layer discards at is exactly this number.
+
+           AND THE ORDERING THAT MAKES THAT READ SAFE IS A LOCK, not the hijack.
+           The sentence above only rules out the GAME thread's own previous
+           draw; +0x1B6/+0x1BA have a SECOND writer — 0x4C284C and 0x4C2852,
+           inside 0x4C25E0, the body of the engine's mouse thread, which loops
+           every ~1 ms and is up precisely in the shell, where this channel
+           runs. Two plain dword reads against a live writer would be a race.
+           They are not, because the engine serialises the two: the flip takes
+           its tagged mutex at 0x52A4E8 before anything else (0x4C63CC
+           `mov edi,'MAIN'`, `push 0x52A4E8`, `call ebp` at 0x4C63D7) and holds
+           it across 0x4C67C0 and this hijack, releasing only at 0x4C6641; the
+           mouse thread takes the SAME lock around its own draw (0x4C29C8
+           `mov edi,'MOUS'`, `push 0x52A4E8`, `call ebx` at 0x4C29D3). Same
+           lock, so the two never overlap — an ORDERING, which is what
+           CLAUDE.md asks the argument to be. Verified by disassembly
+           2026-09-14; the landing shipped without naming it, which is the
+           defect this comment fixes. It is load-bearing: a future hook that
+           reads these words from outside the flip does NOT inherit it. */
         if (InterlockedCompareExchangePointer((void* volatile*)&s_cursorRet,
                                               (void*)(size_t)((unsigned*)entry_esp)[0], NULL) != NULL) {
             /* THE SLOT WAS ALREADY TAKEN, which should be impossible: this

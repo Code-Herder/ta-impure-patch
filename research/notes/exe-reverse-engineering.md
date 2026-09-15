@@ -1595,10 +1595,14 @@ mov ebp,[esp+0x30]`, before the remaining two pushes, so entry esp + 8; `[ebp+0x
 and `[ebp+0x10]` the composite) — down to all three sites. It is loaded once and **never
 reloaded on any path that reaches them**: every earlier use is a read or a push (`[ebp+0xc]`,
 `[ebp+0x14]`, `[ebp+0x10]`). The two cargo loops are the only reloads, and neither is in front
-of a site — path A's (`0x459415 mov ebp,[edx+0x8A]`, `0x459489 mov ebp,[ebp+0x8E]`) exits into
-the function's OWN epilogue (`0x459495 pop ebp`, `ret 0x18` at `0x45949A`), and path B's begins
-at `0x459649`, after its sites; path B is entered at `0x45949D` by the `jne` at `0x459282` and
-so executes path A's loop not at all. (`0x4593FC push ebp` is an argument to the pose helper
+of a site — and in fact only path A's is an `ebp` reload at all. Path A's
+(`0x459415 mov ebp,[edx+0x8A]`, `0x459489 mov ebp,[ebp+0x8E]`) exits into
+the function's OWN epilogue (`0x459495 pop ebp`, `ret 0x18` at `0x45949A`), and path B is
+entered at `0x45949D` by the `jne` at `0x459282`, so it never runs that loop. Path B's own
+cargo loop at `0x459649` walks the same list in **esi** (`8b b2 8a 00 00 00`
+= `mov esi,[edx+0x8A]`), not `ebp`; this note called it a second `ebp` reload until the
+2026-09-14 review disassembled it. The corrected fact is the stronger one: `ebp` is loaded
+once at `0x459205` and no path in the function reloads it before a site. (`0x4593FC push ebp` is an argument to the pose helper
 `0x4584D0`, not the open of a bracket — an earlier note here said otherwise.) Because "it
 happens to survive" is not an argument, the stub passes `ebp` and the helper checks it:
 `*(Object3do+0x10)` must be the very composite the site is about to read, and a mismatch is a
@@ -2773,9 +2777,17 @@ to chain onto a stub that hijacks (tagpu_detour.h, THE CHAIN RULE) — nor can t
 observer be installed first, because `tagpu_gui_init` runs before `tagpu_packet_pub_init` in
 `dllmain.c`. The shell's publish point is therefore the cursor draw the flip makes, `0x4C67C0`
 (above): unowned, once per present, and the only thing there that writes the rect the GL UI
-layer needs. **The gate that makes it the shell's and not the game's is `s_retDepth == 0`** —
-the cursor draw runs inside `DrawGameScreen`, so on an in-play frame the observer's own hijack
-of that call is on the stack (landing 6).
+layer needs. **The gate that makes it the shell's and not the game's is TWO tests —
+`s_retDepth == 0` AND `!s_levelOpen`** (landing 6). The first is necessary because the cursor
+draw runs inside `DrawGameScreen`, so on an in-play frame the observer's own hijack of that
+call is on the stack. It is not sufficient, and this note asserted it alone until the
+2026-09-14 review: **`s_retDepth == 0` is not the complement of the in-play gate**, because
+`DrawGameScreen 0x468CF0` has a second caller at `0x495E66` (`6a 01 / 6a 01 / e8 85 2e fd ff`)
+whose return address is `0x495E6B`, not the in-play `0x4969D2` the observer counts — a
+screenshot draw is in-play with `s_retDepth` at 0. `!s_levelOpen` — this module's own "a level
+is being played", set at the level's first in-play publish and cleared at the teardown — is
+what actually keeps the channel out of a level. `tagpu_packet_pub.c:2019-2027` carries the
+argument; the tests are at `:2106` and `:2119`.
 
 **The commands, applied in `before` [landing 2, 2026-09-12].** The same observer's `before`, on
 the same in-play gate, is where every engine word the zoom used to write from the render thread
