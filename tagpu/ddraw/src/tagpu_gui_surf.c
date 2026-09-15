@@ -67,6 +67,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu_gui.h"
+#include "tagpu_cursown.h"
 #include "tagpu_opt.h"
 #include "tagpu_gui_int.h"
 #include "tagpu_gaf.h"
@@ -190,6 +191,19 @@ static GLuint s_sharpProg;              /* QVS + SHARP_FS: a client's flat-colou
 static GLint  s_uSharpProgSize, s_uSharpProgCol;
 static GLuint s_cursProg;               /* QVS + CURS_FS: the cursor's frame out of the UI atlas        */
 static GLint  s_uCursSize, s_uCursCK, s_uCursRestored;
+/* OUR CURSOR'S ANSWER FOR THIS PRESENT, latched here and taken once per frame
+   by the render_ogl.c bracket (tagpu_gui.h has the whole argument). Set only
+   at the tail of a successful sharp_cursor; cleared by the take, so a frame
+   that never reaches this module answers 0 and the engine keeps its cursor. */
+static int s_curInLayer = 0;            /* drawn into the sharp FBO                      */
+static int s_curDrew = 0;               /* ...and that FBO was composited to the screen  */
+
+int tagpu_gui_cursor_drew_take(void)
+{
+    int v = s_curDrew;
+    s_curDrew = s_curInLayer = 0;
+    return v;
+}
 static GLuint s_strProg;                /* QVS + STR_FS: a string op's glyphs into a twin (G17d)        */
 static GLint  s_uStrSize, s_uStrFg, s_uStrBg, s_uStrTr;
 static unsigned s_strings = 0;          /* string ops stamped                                          */
@@ -409,7 +423,11 @@ static const char* CURS_FS =
     "    if (t.a > 0.5) { frag = vec4(t.rgb, 1.0); return; } }\n"
     /* the PRESENTED palette, the one the layer resolves the mirror through --
        not main+0x143A7. The cursor sits on top of both halves of the frame and
-       a cursor a Gamma step darker than the panel under it would show. */
+       a cursor a Gamma step darker than the panel under it would show.
+       AND IT IS THE ONLY PATH THIS PROGRAM TAKES: `uRestored` is passed 0 at
+       every call (sharp_cursor carries the argument, gui-renderer.md 24.1).
+       The twin branch above is kept because the uniform is shared with the
+       sprite program, not because a cursor may take it again. */
     "  frag = vec4(texture(uPal, vec2((i * 255.0 + 0.5) / 256.0, 0.5)).rgb, 1.0); }\n";
 static const char* LAY_FS =
     "#version 330 core\n"
@@ -1250,12 +1268,18 @@ static void cursor_rect(const TAGPU_PACKET* pk, float* r)
        size, which a readable record of zero extent gives and which the first
        draft of this collapsed into "no rect".
 
-       The gate is `in_game`, not the size: the out-of-game packet zeroes the
-       whole header, and (0,0) is a real cursor position. ON A SHELL FRAME
-       THERE IS THEREFORE NO CURSOR STATE — see tagpu_gui.h, where that
-       deliberate consequence is written down. */
+       The gate is a flag, not the size: the level-end packet zeroes the whole
+       header, and (0,0) is a real cursor position. It was `in_game` alone
+       until landing 6 — which is exactly why the shell had no cursor: the
+       shell's packet must be in_game=0 (every world pass reads that field to
+       decide whether to draw at all), so the field could not distinguish "a
+       shell frame that carries a cursor" from "a level-end packet that
+       carries none". `cursor_live` is that distinction, and it is only ever
+       set by the two publishers that read the cursor: the in-play fill and
+       the shell's own channel. An in-play packet implies it. */
     r[0] = r[1] = -1.0f; r[2] = r[3] = 0.0f;
-    if (!pk || !pk->in_game) return;
+    if (!pk) return;
+    if (!pk->in_game && !pk->cursor_live) return;
     r[0] = (float)pk->cur_pos[0];
     r[1] = (float)pk->cur_pos[1];
     r[2] = (float)pk->cur_w;
@@ -1370,7 +1394,7 @@ static void sharp_cursor(const TAGPU_FRAME* f)
 {
     const TAGPU_GAFENT* e;
     float v[24], kx, ky;
-    int cx = 0, cy = 0, dx, dy, x0, y0, w, h, restored;
+    int cx = 0, cy = 0, dx, dy, x0, y0, w, h;
     if (!s_curFrame || !s_cursProg || !s_sharpW || !s_sharpH) return;
     e = tagpu_gaf_atlas_get(&s_atlas, s_curFrame);
     if (!e) {
@@ -1412,13 +1436,31 @@ static void sharp_cursor(const TAGPU_FRAME* f)
        the frame's origin either way */
     x0 = dx - (int)((float)s_curHX * s_cursorScale);
     y0 = dy - (int)((float)s_curHY * s_cursorScale);
-    restored = s_colValid && s_atlas.rgb != 0;
     x_glDisable(GL_BLEND);
     x_glDisable(GL_DEPTH_TEST);
     glUseProgram(s_cursProg);
     x_glUniform2f(s_uCursSize, (float)s_sharpW, (float)s_sharpH);
     glUniform1i(s_uCursCK, (int)e->ck);
-    glUniform1i(s_uCursRestored, restored ? 1 : 0);
+    /* THE CURSOR IS RESOLVED THROUGH THE PRESENTED PALETTE AND NEVER THROUGH
+       THE RESTORED TWIN, whatever `s_colValid` says about the rest of the
+       frame. [MEASURED 2026-09-13, from the owner's report: "the Move cursor,
+       the reclaim cursor exhibit the same clear artifact as the mouse cursor
+       did ... when we first use the move cursor for the first time ... for a
+       few seconds".] The artifact is the sprite's own silhouette drawn in the
+       terrain key's cyan, and the A/B that names its source is `norestore` in
+       tagpu_gui.on (tagpu_gui_surf.c, restore_step): with the twin off the
+       same trigger measures clean, so it is this branch -- uAtlasRGB -- that
+       carries it. A newly inserted entry's cell in the twin is painted by the
+       lazy Classic++ job some frames after the insertion, and until that
+       first paint lands the sample returns whatever the cell held: 321 texels
+       of exactly (0,255,255) over the whole star, on 2 of 8 consecutive
+       presents of a first use, gone within seconds. The palette path gives
+       the engine's own colours back, and it is the rule the layer above
+       resolves every other engine pixel with -- so the one sprite the player
+       is always looking at stops depending on that job at all. What is NOT
+       closed here: the same window exists for any other sprite whose cell is
+       new, which no cursor-local change can reach (gui-renderer.md 24). */
+    glUniform1i(s_uCursRestored, 0);
     /* units 1 and 2 must hold real textures even when the branch is off */
     x_glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, s_palTex);
@@ -1432,6 +1474,17 @@ static void sharp_cursor(const TAGPU_FRAME* f)
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
     x_glDrawArrays(GL_TRIANGLES, 0, 6);
     s_curDrawn++;
+    /* OUR CURSOR IS IN THE SHARP FBO FROM HERE — which is NOT the same as
+       being on screen, and the difference is what decides whether the engine
+       may draw its own. Only draw_layer samples this layer, and draw_layer
+       returns early when there is no presented twin or its size disagrees with
+       the frame's (a mode change, a context reset, before the first PK_FRAME
+       op drains). On those frames our cursor sits in an FBO nobody reads, so
+       telling tagpu_cursown the engine may stand down would leave NO cursor at
+       all. The layer's own comment already warns that a client here must not
+       assume draw_layer ran; this is that warning obeyed. The screen answer is
+       set at the tail of draw_layer instead. [FROM REVIEW 2026-09-14.] */
+    s_curInLayer = 1;
 }
 
 /* THE MINIMAP'S BASE AT ITS NATIVE SIZE (13.6, G17e).
@@ -1933,6 +1986,11 @@ static void draw_layer(const TAGPU_FRAME* f)
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
     x_glDrawArrays(GL_TRIANGLES, 0, 6);
+    /* THE COMPOSITE HAS RUN, so anything the sharp layer carried is now on the
+       frame the player sees. This — not the draw into the layer — is what lets
+       the engine's own cursor blit stand down (tagpu_cursown.h). Every early
+       return above leaves it 0 and the engine keeps its cursor. */
+    if (s_sharpOn && s_curInLayer) s_curDrew = 1;
 }
 
 /* leave nothing of ours bound: the drain binds twin FBOs, the atlas, the
@@ -2000,6 +2058,14 @@ static void poll(void)
 void tagpu_gui_present(const TAGPU_FRAME* f)
 {
     static unsigned last = 0;
+    /* NOTHING IS CLEARED HERE. `s_curDrew` is cleared by the TAKE, once per
+       frame, from the render_ogl.c bracket — so a present that returns early
+       below, and a frame that never calls this function at all, both answer 0
+       through exactly the same path. Clearing on entry and setting on the draw
+       looks equivalent and is not: the engine draws its cursor from inside the
+       flip, on another thread, while this present runs, so a window that reads
+       0 while we composite lets one engine draw per frame through — the bug
+       wearing the counters of a fix (measured 2026-09-13 at 60/s). */
     if (!tagpu_gui_installed() || !f) return;
     poll();
     if (!s_on) {
@@ -2045,13 +2111,17 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         LARGE_INTEGER t1;
         double fps = 0.0;
         unsigned gCached = 0, gDrops = 0; int gFonts = 0;
+        /* the engine's own cursor blit: which sites are armed, and whether it
+           is being skipped right now (tagpu_cursown.h) */
+        int cowArmed = 0, cowOf = 0, cowSkip = 0;
+        tagpu_cursown_stats(&cowArmed, &cowOf, &cowSkip);
         tagpu_text_glyph_stats(&gCached, &gDrops, &gFonts);
         if (!fq.QuadPart) QueryPerformanceFrequency(&fq);
         QueryPerformanceCounter(&t1);
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mm=%u,fog=%u/%u,noeng=%u cursown=%d/%d,%d fps=%.1f",
                   s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.stalls,
                   s_skipped, tagpu_pal_changes(), palDiff, palDiffAt, tagpu_pal_presented(),
@@ -2066,7 +2136,8 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
                      what `nostring` is A/B'd on (13.4: ~40 bytes where a text op
                      carried ~968) and what §7's cadence note is about */
                   g_guiq.aHead, s_mmDrawn,
-                  s_mmFogged, (unsigned)(s_mmEngW * s_mmEngH), s_mmNoEng, fps);
+                  s_mmFogged, (unsigned)(s_mmEngW * s_mmEngH), s_mmNoEng,
+                  cowArmed, cowOf, cowSkip, fps);
         b[sizeof b - 1] = '\0';
         slog(b);
     }

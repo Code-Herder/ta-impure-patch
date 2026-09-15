@@ -642,6 +642,17 @@ typedef struct TAGPU_PACKET {
     uint32_t cur_rec;                 /* graphics+0x1B2, the sprite record — a
                                          GAF frame header in the SESSION cursor
                                          table. A KEY: only tagpu_gaf.c reads it */
+    uint32_t cursor_live;             /* the three fields above are THIS FRAME's.
+                                         An in-play packet implies it (in_game),
+                                         so this exists for the SHELL: a shell
+                                         frame's packet is in_game=0 — it must
+                                         stay so, every world pass reads in_game
+                                         to decide whether to draw at all — and
+                                         still carries a cursor, which is what
+                                         the layer needs to erase the engine's
+                                         (landing 6, tagpu_packet_pub.c). 0 on
+                                         the level-end packet and while the
+                                         engine's own cursor is not being drawn */
     int32_t  mm_box[4];               /* main+0x142E7/E9/EB/ED, the box the
                                          engine fitted the minimap into, ITS px */
     int32_t  mm_view[4];              /* main+0x142CB, the view box, screen px,

@@ -14,6 +14,8 @@
 #include "hook.h"
 #include "tagpu.h"
 #include "tagpu_overlay.h"
+#include "tagpu_cursown.h"
+#include "tagpu_gui.h"
 #include "tagpu_packet.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_menu.h"
@@ -1596,6 +1598,16 @@ static void ogl_render()
                 f.packet = tagpu_packet_acquire(&f.packet_prev);
                 tagpu_reclaim_pass_begin();
                 tagpu_overlay_draw(&f);
+                /* tagpu_cursown: whether the engine may draw its own cursor,
+                   published HERE and nowhere else. This is the only point every
+                   path through tagpu_overlay_draw reaches — it returns early for
+                   `tagpu_overlay.off`, for a GL init that failed and for a level
+                   teardown, all of them above the GL UI's present — so a flag
+                   published from inside that present would keep its last value
+                   across them and leave the engine's cursor suppressed while
+                   ours was not drawn: no cursor at all until the condition
+                   lifted. Take-and-clear, so "we never got there" answers 0. */
+                tagpu_cursown_publish(tagpu_gui_cursor_drew_take());
                 tagpu_reclaim_pass_end(f.frame_counter);
                 tagpu_packet_frame_end(f.frame_counter);
                 gldbg("E-tagpu");
@@ -1658,6 +1670,17 @@ static void ogl_render()
 
         fpsl_frame_end();
     }
+
+    /* THE PRODUCER'S OWN TEARDOWN CLEARS IT. Every exit from the loop above
+       ends our cursor: a GL error sets use_opengl = FALSE and the caller falls
+       through to gdi_render_main(), which never returns; render.run = FALSE is
+       a mode change or a shutdown. Leaving the flag set would keep the engine's
+       cursor blit skipped for a session that no longer has a GL cursor to put
+       in its place — no pointer at all, which is exactly the fail-closed shape
+       this design exists to avoid. Publishing 0 here is by construction: the
+       thread that is the only writer clears it as it stops writing.
+       [FROM REVIEW 2026-09-14.] */
+    tagpu_cursown_publish(0);
 
     if (g_config.vhack)
         InterlockedExchange(&g_ddraw.upscale_hack_active, FALSE);

@@ -19,6 +19,13 @@ const char* tagpu_native_unit_fs(void);
 int  tagpu_native_owns_unit(const char* unit);
 int  tagpu_native_owns_obj(unsigned int obj3do);
 int  tagpu_native_wrecks_armed(void);
+
+/* the build ghost's standing request for the packet's builds table: set on the
+   render thread from the ghost's own 30-frame poll, read by the publisher on
+   the game thread so a session with no ghost does not pay for the walk */
+void tagpu_native_set_want_builds(int want, unsigned int frame_counter);
+void tagpu_native_flush_want(unsigned int frame_counter);   /* its watchdog */
+int  tagpu_native_want_builds(void);
 /* 1 while the last frame drew a selection rect for EVERY unit it owed one to.
    tagpu_markown.c suppresses the engine's per unit, and must hand them all back
    when this is 0 or a selected unit ends up with no box at all. */

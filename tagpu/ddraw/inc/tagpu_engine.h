@@ -27,6 +27,66 @@
 #define VA_DRAW_RET_INPLAY 0x004969D2u  /* the return address of the in-play call: */
                                         /* 0x4969CD `call 0x468cf0` inside the     */
                                         /* frame callback 0x496790, both args 1    */
+/* THE SHELL'S PUBLISH POINT. The shell never calls DrawGameScreen, so the
+   frame packet's gate has nothing to select on: what the shell does have is
+   the flip 0x4C63A0, which every present takes and which draws the cursor
+   itself. The flip cannot be observed a second time — tagpu_gui_hook's
+   observer on it hijacks the return, and tagpu_detour_observe refuses to
+   chain onto a hijacker (THE CHAIN RULE) — so the shell's channel hangs off
+   the cursor draw the flip makes: the one thing inside it that writes the
+   drawn position, and the only per-present site there that is unowned.
+
+   `stdcall(mouseObj, surface)`, `ret 8`, prologue `56 8B 74 24 08 8B 86 CE 01
+   00 00` (11 bytes, resuming at 0x4C67CB). It early-outs unless the globals'
+   +0x1CE, +0x1D2 and +0x1B2 are ALL non-zero, and only then computes
+   +0x1B6/+0x1BA from the mouse record minus the hotspot. Two call sites,
+   0x4C641B (the GDI arm, `[+0xF0] & 2` clear) and 0x4C6544 (the DirectDraw
+   arm) — mutually exclusive arms of the flip, so it runs AT MOST once per
+   present, in play and in the shell alike. "At most", not "exactly": the
+   DirectDraw arm leaves before reaching its call on three exits — 0x4C666A
+   (no primary, `[+0xDC] == 0`), 0x4C67B0 (the back buffer's size disagrees
+   with the screen) and 0x4C65A0 (`Lock` failed / DDERR_SURFACELOST) — and on
+   such a present the engine draws no cursor at all. Nothing then publishes
+   and the consumer keeps the previous state, which is one frame of a stale
+   rect on paths that mean the primary is gone anyway; named here because an
+   observer on this site cannot see them. [VERIFIED 2026-09-13 by disassembly
+   of the pristine exe; the live shell runs with all three words non-zero and
+   +0x1B6/+0x1BA == +0x196/+0x19A, and `gui off` presents the cursor the layer
+   was covering.] */
+#define VA_CURSOR_DRAW     0x004C67C0u
+
+/* THE IN-GAME CURSOR DRAW, AND NOT THE FLIP'S. MEASURED 2026-09-13, while
+   retiring the engine's cursor: in play the flip's draw above is ENTERED ~5900
+   times a second and never once draws (its siblings' gates leave it nothing to
+   do), while THIS one is what writes +0x1B6/+0x1BA — the pair our composite's
+   erase rect was built from. Its fingerprint is exact and is what identified
+   it: it writes the pair from the POLL's answer with NO hotspot subtraction,
+   where the flip's draw subtracts it (0x4C683C), so in play the pair equalled
+   the mouse record to the pixel while our rect assumed a hotspot offset.
+
+   `stdcall(mouseObj)`, `ret 4` (epilogue 0x4C2864), prologue `83 EC 58 56 8B 74
+   24 60` (8 bytes, resuming 0x4C25E8). Two early-outs, both to 0x4C2860:
+   `[+0x1D2] == 0`, and the context acquire 0x4C5FF0 answering 0. Past them it
+   polls GetCursorPos (IAT 0x4FC2E4), writes the RECORD +0x196/+0x19A from that
+   answer, fills the saved-background descriptors at +0x1C2/+0x1C6 from the
+   sprite record, blits through 0x4B7F90 with the hotspot, and stores
+   +0x1B6/+0x1BA. ONE caller, 0x4C2A0D inside 0x4C2990 — itself reached
+   INDIRECTLY (no `call 0x4C2990` in the image), the mouse object's per-frame
+   update.
+
+   THE OTHER TWO DRAW PATHS ARE ALSO PATCHED SINCE 2026-09-14 — at their
+   blit call (0x4C297E, 0x4C258C), like these two, by tagpu_cursown.c.
+   0x4C2870 really is inert while the mouse thread is up (its first gate
+   is `cmp [+0x1CE], 1` — 0x4C287D loads edi = 1 — and +0x1CE is 1 for
+   exactly as long as that thread lives), and 0x4C24B0 has no call site
+   at all; both are covered anyway, because "cannot run" is a claim about
+   a configuration and the cost of being wrong about one is a second
+   cursor. An earlier revision of this block said they were left alone
+   deliberately; that stopped being true when the patch moved from the
+   function to the blit.
+   */
+#define VA_CURSOR_POLL     0x004C25E0u
+
 /* the loader thread: created at 0x4982CA (`push 0x497C70; call 0x4B6B20`,
    the CRT's _beginthread over CreateThread + ResumeThread), its entry the SEH
    wrapper 0x497C70 -> 0x497180, whose last act sets bit 1 of TA_LOADFLAGS */
@@ -269,5 +329,40 @@
                                         /* uses; built at init, never rebuilt    */
 #define GFX_GAMMA          0x614        /* float: the factor 0x4BA200 scales every     */
                                         /* palette entry by (SetGamma 0x4BA590)        */
+
+/* ---- the cursor, in the same object -------------------------------------- */
+#define GFX_MOUSE_X        0x196        /* i32: the mouse record's x, and +0x19A its   */
+#define GFX_MOUSE_Y        0x19A        /* y — what 0x4C67C0 draws the cursor FROM     */
+#define GFX_CUR_REC        0x1B2        /* the sprite record: a GAF frame header, out  */
+                                        /* of the cursor table. 0 = none               */
+#define GFX_CUR_X          0x1B6        /* i32: where the engine last DREW it —        */
+#define GFX_CUR_Y          0x1BA        /* written ONLY by the draw paths. 0x4C67C0    */
+                                        /* writes it as the mouse record minus the     */
+                                        /* hotspot; the three polling paths          */
+                                        /* (0x4C2870, 0x4C24B0, 0x4C25E0) write the   */
+                                        /* same pair, ALSO pos-hotspot, from their own */
+                                        /* poll's answer. [CORRECTED 2026-09-14: a     */
+                                        /* previous revision claimed 0x4C25E0 stored   */
+                                        /* the raw answer and made that difference a   */
+                                        /* "fingerprint". It does not — 0x4C2638 and   */
+                                        /* 0x4C2645 subtract the movsx'd hotspot into  */
+                                        /* edi/ebx, which are what 0x4C284C/0x4C2852   */
+                                        /* store. Measured live as well: the pair sits */
+                                        /* 13..17 px off the record, which is exactly  */
+                                        /* the pulsing move cursor's hotspot.]         */
+#define GFX_CUR_ON         0x1CE        /* u32: THE MOUSE THREAD IS RUNNING. Set to 1  */
+                                        /* at 0x4C2AAE, immediately after the          */
+                                        /* _beginthread at 0x4C2A9A succeeds, and 0 at */
+                                        /* 0x4C2C72 when it is torn down; the thread   */
+                                        /* handle lands beside it at +0x1CA.           */
+                                        /* [CORRECTED 2026-09-14: called "the cursor's */
+                                        /* hide counter" here and "an engine           */
+                                        /* display-mode word, not ours to flip" in the */
+                                        /* notes. It is neither, and the mistake       */
+                                        /* mattered: it is what made 0x4C2870 look     */
+                                        /* unreachable.] 0x4C67C0 draws only when it   */
+                                        /* is non-zero, i.e. only while that thread    */
+                                        /* exists.                                     */
+#define GFX_CUR_OK         0x1D2        /* u32: and this one                           */
 
 #endif

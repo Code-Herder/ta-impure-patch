@@ -727,7 +727,11 @@ terrown.on / markown.on`, and `tagpu.log` carries one `ARMED` line per pass — 
 because a missing one is the whole pass silently absent.
 
 **The shipped DLL arms all of this by itself** (`tagpu_opt.c`, gpu-status §2.8: with no arm
-file the play set is on, Classic++ and the extra weapons included). An instance opts out:
+file the play set is on, Classic++ and the extra weapons included). Note that the play set is
+**wider than the `arm` line above**: since 2026-09-14 it also carries `ghost.on`, the building
+preview at the placement cursor. It is deliberately left out of the bench line — it adds posed
+draws that perturb a measurement — so a `defaults.off` instance has no ghost unless you arm it,
+and `--defaults` (the player's configuration) does. An instance opts out:
 `launch` and `scenario load` write `tagpu_defaults.off` into the gamedir unless given
 `--defaults` (sticky per instance; `--no-defaults` back), so everything above still holds
 here and a bare launch is still the stock control. `--defaults` is the player's

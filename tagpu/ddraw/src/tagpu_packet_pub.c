@@ -121,6 +121,12 @@ static void*    s_retStack[RET_DEPTH];     /* hijacked returns, LIFO            
 static int      s_retDepth;
 /* counters: written on the game thread, read by the heartbeat */
 static volatile unsigned s_cDrawsAll, s_cDraws, s_cForeign, s_cDeep;
+/* the shell's cursor channel (landing 6) — declared here, with the rest of
+   the counters, because the heartbeat reads them and is defined above the
+   channel's own section */
+static volatile unsigned s_cCursorDraws, s_cCursorOwned, s_cCursorHidden,
+                         s_cCursorPub, s_cCursorSkip, s_cCursorForeign;
+static volatile unsigned s_cCursorStuck;    /* hijack slots that were never given back */
 /* the apply's cost: 2 us buckets to 512 us, plus an overflow bucket, written
    on the game thread and read by the heartbeat on the render thread */
 #define APPLY_HIST_N 256
@@ -1400,9 +1406,10 @@ static unsigned fill_fog(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 #define MM_FOGBASE   0x142DF      /* the base WITH the engine's fog shading   */
 #define MM_SCALEDMAP 0x142E3      /* the same base WITHOUT it                 */
 #define MM_PICFRAME  0x1426B      /* the level's minimap picture, a GAF frame */
-#define GFX_CUR_REC  0x1B2        /* the cursor sprite: a GAF frame header    */
-#define GFX_CUR_X    0x1B6        /* where the engine last drew it            */
-#define GFX_CUR_Y    0x1BA
+/* GFX_CUR_REC / GFX_CUR_X / GFX_CUR_Y / GFX_CUR_ON / GFX_CUR_OK / GFX_MOUSE_X
+   are in tagpu_engine.h with the rest of the graphics globals, because the
+   shell's cursor channel and this file's in-play fill read the same six words
+   and a second copy is how they would come to disagree. */
 
 /* the interleave the render half used to do per frame, per row */
 static unsigned char s_mmRg[TAGPU_PK_MM_DIMCAP * TAGPU_PK_MM_DIMCAP * 3];
@@ -1422,6 +1429,13 @@ static void fill_cursor(TAGPU_PACKET* p)
 {
     const char* g = *(const char* const*)TA_GFX_PP;
     const unsigned short* rec;
+    /* the fields below are THIS frame's however they come out — the consumer
+       distinguishes "no cursor this frame" (-1,-1,0,0) from "no cursor state
+       in this packet" by `cursor_live` alone, so it is set before the reads
+       that can leave the fields at their no-cursor values. The header was
+       zeroed by the caller, so cur_rec is 0 on every path that does not set
+       it. */
+    p->cursor_live = 1;
     p->cur_pos[0] = -1; p->cur_pos[1] = -1;
     p->cur_w = 0; p->cur_h = 0;
     if (!ptr_ok(g)) return;
@@ -1445,7 +1459,15 @@ static TAGPU_PK_BUILD s_builds[TAGPU_PK_MAX_BUILDS];
 static unsigned fill_builds(TAGPU_PACKET* p, unsigned* cursor)
 {
     unsigned e, need = *cursor;
-    int n = tagpu_order_copy_builds(s_builds, TAGPU_PK_MAX_BUILDS);
+    int n;
+    /* GATED ON THE ONLY PASS THAT READS IT, like the effect tables above. The
+       walk and the copy below are pure cost to a session with no build ghost,
+       which was every session before 2026-09-14 and is still any session that
+       turns it off. `tagpu_native_want_builds()` is the ghost's own 30-frame
+       poll, published from the render thread; being a frame late either way
+       costs one frame of an unused or an empty table. */
+    if (!tagpu_native_want_builds()) return need;
+    n = tagpu_order_copy_builds(s_builds, TAGPU_PK_MAX_BUILDS);
     if (n <= 0) return need;
     e = append_table(p, cursor, s_builds, (unsigned)n, (unsigned)sizeof(TAGPU_PK_BUILD),
                      &p->off_builds, &p->n_builds, TAGPU_PK_TRUNC_BUILDS);
@@ -1806,8 +1828,14 @@ static void* __cdecl after_draw(unsigned int* regs)
 {
     void* ret = s_retDepth > 0 ? s_retStack[--s_retDepth] : NULL;
     (void)regs;
-    /* post-flip: the packet. The FRESH gate inside makes most of these a load. */
-    if (tagpu_packet_publish(fill_frame, NULL, 0) && !s_levelOpen) {
+    /* post-flip: the packet. The FRESH gate inside makes most of these a load.
+       FORCED WHILE THE LEVEL HAS NO PACKET YET (landing 6): the shell's cursor
+       channel publishes through the load, so the FRESH gate can be set at the
+       instant this draw runs — and a first packet the gate dropped would leave
+       the renderer on an in_game = 0 packet, with no world, until the render
+       thread happened to take one in between. One forced publish per level,
+       counted as an overrun exactly like the level-end packet's. */
+    if (tagpu_packet_publish(fill_frame, NULL, !s_levelOpen) && !s_levelOpen) {
         char b[260];
         s_levelOpen = 1;
         _snprintf(b, sizeof b,
@@ -1902,6 +1930,23 @@ static void extra(char* buf, unsigned cap, double secs)
                   s_cFogRefused, s_cFogshCopies,
                   s_lastMmW, s_lastMmH, s_cMmCopies, s_cMmRefused,
                   s_mmPicW, s_mmPicH, s_cMmPic);
+        n = 0;
+        while (n < cap && buf[n]) n++;
+        /* THE SHELL'S CURSOR CHANNEL (landing 6). `draws` is every entry to
+           the cursor draw, in play and in the shell alike, so 0 over a session
+           in the shell means the 0x4C67C0 observer never fired and the channel
+           is not what the layer is missing. `owned` + `hidden` are the frames
+           it acted on; `skip` is the FRESH gate dropping a publish the render
+           thread had not taken yet — expected throughout on a shell that flips
+           thousands of times a second, since the gate is what keeps this
+           channel off the in-play publisher's slot. The engine's cursor BLIT
+           is skipped elsewhere (tagpu_cursown.c) and leaves no mark here on
+           purpose: that module patches a call site, not this one's function,
+           so `draws` keeps counting the draws that really run. */
+        _snprintf(buf + n, cap > n ? cap - n : 0,
+                  " | cursor: draws=%u owned=%u hidden=%u pub=%u skip=%u foreign=%u stuck=%u",
+                  s_cCursorDraws, s_cCursorOwned, s_cCursorHidden,
+                  s_cCursorPub, s_cCursorSkip, s_cCursorForeign, s_cCursorStuck);
     }
     if (cap) buf[cap - 1] = 0;
     lastAll = all; lastIn = in;
@@ -1948,12 +1993,222 @@ static void* __cdecl after_teardown(unsigned int* regs)
     return ret;
 }
 
+/* ---- the shell's cursor channel (landing 6) -------------------------------
+
+   THE PROBLEM IT SOLVES. The GL UI layer draws a twin of the engine's
+   presented surface over the composite and, on a frame whose packet carries a
+   cursor, DISCARDS its own fragment at that rect so the engine's cursor comes
+   through (tagpu_gui_surf.c, the layer shader's `cur` test). That rect comes
+   from the packet, and the packet's cursor fields were published on the
+   in-play gate alone — so on a shell frame the layer had no rect, discarded
+   nothing, and painted its twin over the engine's cursor. MEASURED on the
+   reference setup 2026-09-13, main menu, pointer over the window: `gui off`
+   presents the cursor at (320,240) and `gui on` does not, and the two frames
+   differ by 288 px whose box contains it. The note called this a named
+   regression (gui-renderer.md, "Not closed here"); this closes it.
+
+   WHY NOT THE FLIP. The shell never calls DrawGameScreen, so the in-play gate
+   has nothing to select on; what the shell has is the flip 0x4C63A0, which
+   every present takes. But tagpu_gui_hook already observes the flip WITH an
+   `after`, so THE CHAIN RULE refuses a second observer there, and it cannot be
+   installed first either (tagpu_gui_init runs before tagpu_packet_pub_init).
+   What the flip does have is the cursor draw it makes — 0x4C67C0, the only
+   per-present site inside it that nothing owns and the only code that WRITES
+   the drawn position (+0x1B6/+0x1BA) out of the mouse record. It is called
+   from two mutually exclusive arms of the flip (0x4C641B, 0x4C6544), so
+   AT MOST one call per present, in play and in the shell alike — the
+   DirectDraw arm leaves before its call on three exits (no primary, the back
+   buffer's size disagreeing with the screen, and a failed Lock), and on those
+   the engine draws no cursor; nothing publishes and the consumer keeps the
+   previous state. tagpu_engine.h names the three, and it is the one gap a
+   hook here cannot close.
+   tagpu_engine.h VA_CURSOR_DRAW carries the disassembly and the live reading.
+
+   THE GATE IS TWO TESTS, AND NEITHER IS A DELAY. `s_retDepth == 0` and
+   `!s_levelOpen`.
+     - **`s_retDepth == 0`** — the cursor draw runs INSIDE DrawGameScreen, so
+       on every in-play frame `before_draw` has already pushed the hijacked
+       return. Not tidiness: this channel and the in-play publish share ONE
+       mailbox, whose FRESH gate drops the second publisher of a frame, so two
+       publishes in one draw would be a coin flip over which one the render
+       thread ends up holding.
+     - **`!s_levelOpen`** — because `s_retDepth == 0` is NOT the complement of
+       the in-play gate, which the first review of this landing found and the
+       disassembly confirms: the screenshot sweep `0x495A30` ends with its own
+       `DrawGameScreen(1, 1)` at `0x495E66` (both arguments 1, so the flip's own
+       gate at `0x46A3CC`/`0x46A3D7` passes and the cursor draw runs), and the
+       address that call pushes is `0x495E6B` rather than the in-play
+       `0x4969D2`, so nothing is on the stack. Without this test a Ctrl+F9
+       screenshot would publish an `in_game = 0` packet from the middle of a
+       level — and every world pass reads that field to decide whether to draw
+       at all, so the world would blink out for a present or two. The movie
+       recorder 0x4962C2 is excluded by the flip's own gate (it passes
+       drawUnits = 0), which is why only the screenshot path needed this.
+   Both are decided by the same observer, and neither depends on timing.
+
+   FOR THE SAME REASON the in-play publisher now FORCES its first packet of a
+   level (see after_draw). This channel publishes all through a load, at the
+   shell's own rate, so the FRESH gate can well be set at the instant the
+   level's first in-play draw runs — and a dropped first packet would hold the
+   renderer on an in_game = 0 packet, with no world, until the render thread
+   happened to take one in between. Forcing makes the level's first packet land
+   whatever this channel is doing; it costs one counted overrun per level,
+   exactly like the level-end packet's own forced publish.
+
+   WHAT CROSSES is what the in-play fill already crosses, on the same trust:
+   the record pointer as a KEY (tagpu_gaf.c is its only reader), the position
+   and the size as the engine's own numbers. `cursor_live` is the one new
+   field, and what it is for is that the shell's packet MUST stay in_game = 0 —
+   every world pass reads that field to decide whether to draw at all — so
+   `in_game` could not tell the consumer that a non-play packet nonetheless
+   carries a cursor. See tagpu_packet.h.
+
+   THE HIDDEN CASE IS PUBLISHED TOO, and on every such frame rather than on the
+   edge: 0x4C67C0 early-outs unless +0x1CE, +0x1D2 and +0x1B2 are all
+   non-zero, and on those frames it writes nothing at all — so `before`
+   publishes cursor_live = 0 instead of leaving the last visible rect standing,
+   which would have the layer discard its twin over a cursor that is no longer
+   drawn. An edge-triggered publish cannot be used here: a publish the FRESH
+   gate drops is not an edge that comes again, and the render thread would hold
+   the stale state until the cursor happened to change once more. */
+static const unsigned char CURSOR_STOLEN[11] = { 0x56, 0x8B, 0x74, 0x24, 0x08,
+                                                 0x8B, 0x86, 0xCE, 0x01, 0x00, 0x00 };
+static void* volatile s_cursorRet;         /* the hijacked return, depth 1     */
+
+/* the shell packet: the header alone. used_bytes == the header is what makes
+   every area refused by area_ok — a packet with no world in it must not leave
+   the previous level's areas readable through offsets a slot still holds. */
+static unsigned fill_shell(TAGPU_PACKET* p, void* ctx)
+{
+    const char* ta = ta_main();
+    int live = *(const int*)ctx;
+    unsigned lf = load_flags();
+    tagpu_pk_fill((unsigned char*)p + offsetof(TAGPU_PACKET, used_bytes), 0,
+                  sizeof(TAGPU_PACKET) - offsetof(TAGPU_PACKET, used_bytes));
+    p->used_bytes = sizeof(TAGPU_PACKET);
+    p->in_game    = 0;                       /* must stay 0: no world draws  */
+    p->level_gen  = s_levelGen;
+    p->tick       = s_lastTick;
+    p->load_flags = (unsigned short)lf;
+    p->text_fg    = -1;
+    p->gamma      = 1.0f;
+    if (live) fill_cursor(p);
+    /* THE PALETTE READ HERE IS A KNOWN HAZARD, AND THE GATE FOR IT IS NOT YET
+       KNOWN. fill_pal copies 1 KB from `main+0x143A7`, the live palette, and
+       this channel publishes on the FLIP — ~5000 presents a second, through a
+       loading screen as well as the menu — while the LOADER thread rewrites
+       that palette at a level transition. A torn copy is a wrong-palette frame
+       on the load screen: cosmetic, pre-existing, and not introduced here.
+
+       A gate on `(load_flags & 3) == 1` was written on 2026-09-14 and REMOVED
+       the same day by the landing review, because it is a one-shot: bit0 is
+       `or 1` at 0x49832A and bit1 `or 2` at 0x497C5F, and NOTHING IN THE IMAGE
+       CLEARS EITHER (tagpu_engine.h's own OFF_LOADFLAGS entry says so — it was
+       read and then not believed). After the first level of a session the word
+       is 3 for ever, so the gate stopped firing exactly when a second load
+       needed it. The only bit both set and cleared is bit2 — set at 0x4975C7,
+       cleared at 0x496868 and 0x49855D — which tagpu_engine.h calls half of a
+       loader<->game handshake; whether "bit2 set" spans a whole load or is a
+       narrower one-shot signal is NOT measured, so no gate is written on it
+       here. It wants its own landing, with the window measured across a SECOND
+       level load in one process, which is the case the first attempt got
+       wrong. */
+    return sizeof(TAGPU_PACKET);
+}
+
+static void shell_cursor_publish(int live)
+{
+    if (tagpu_packet_publish(fill_shell, &live, 0)) s_cCursorPub++;
+    else s_cCursorSkip++;
+}
+
+static int __cdecl before_cursor(void* entry_esp)
+{
+    const char* g;
+    if (s_countOnly) return 0;
+    if (!on_game_thread()) { s_cCursorForeign++; return 0; }
+    s_cCursorDraws++;
+    /* in play the frame packet carries the cursor, and this channel must not
+       race the publish that follows it in the same draw */
+    if (s_retDepth != 0) return 0;
+    /* AND NO LEVEL MAY BE IN PLAY, which is not the same test (landing review).
+       The screenshot sweep 0x495A30 ends with its own `DrawGameScreen(1, 1)` at
+       0x495E66 — drawUnits and blitScreen both 1, so the flip's gate at
+       0x46A3CC/0x46A3D7 passes and 0x4C67C0 runs — but the address that call
+       pushes is 0x495E6B, not the in-play 0x4969D2, so `before_draw` pushed
+       nothing and `s_retDepth` is 0. Mid-level, this channel would then publish
+       an `in_game = 0` packet from the middle of the level, and every world
+       pass reads that field to decide whether to draw at all: a Ctrl+F9
+       screenshot would blank the world for a present or two. `s_levelOpen` is
+       this module's own "a level is being played" — set at the level's first
+       in-play publish, cleared by `tagpu_packet_pub_level_end` — and it is 1
+       for the whole of a level, screenshots included. */
+    if (s_levelOpen) return 0;
+    g = *(const char* const*)TA_GFX_PP;
+    if (!ptr_ok(g)) return 0;
+    if (RDU32(g, GFX_CUR_ON) && RDU32(g, GFX_CUR_OK) && RDU32(g, GFX_CUR_REC)) {
+        /* it WILL draw: hijack the return so `after` reads the position this
+           draw wrote (+0x1B6/+0x1BA), not the one the last draw left there —
+           which on a frame the pointer moved is a whole frame stale, and the
+           rect the layer discards at is exactly this number.
+
+           AND THE ORDERING THAT MAKES THAT READ SAFE IS A LOCK, not the hijack.
+           The sentence above only rules out the GAME thread's own previous
+           draw; +0x1B6/+0x1BA have a SECOND writer — 0x4C284C and 0x4C2852,
+           inside 0x4C25E0, the body of the engine's mouse thread, which loops
+           every ~1 ms and is up precisely in the shell, where this channel
+           runs. Two plain dword reads against a live writer would be a race.
+           They are not, because the engine serialises the two: the flip takes
+           its tagged mutex at 0x52A4E8 before anything else (0x4C63CC
+           `mov edi,'MAIN'`, `push 0x52A4E8`, `call ebp` at 0x4C63D7) and holds
+           it across 0x4C67C0 and this hijack, releasing only at 0x4C6641; the
+           mouse thread takes the SAME lock around its own draw (0x4C29C8
+           `mov edi,'MOUS'`, `push 0x52A4E8`, `call ebx` at 0x4C29D3). Same
+           lock, so the two never overlap — an ORDERING, which is what
+           CLAUDE.md asks the argument to be. Verified by disassembly
+           2026-09-14; the landing shipped without naming it, which is the
+           defect this comment fixes. It is load-bearing: a future hook that
+           reads these words from outside the flip does NOT inherit it. */
+        if (InterlockedCompareExchangePointer((void* volatile*)&s_cursorRet,
+                                              (void*)(size_t)((unsigned*)entry_esp)[0], NULL) != NULL) {
+            /* THE SLOT WAS ALREADY TAKEN, which should be impossible: this
+               site does not nest. It means a hijacked return never reached the
+               trampoline — an exception unwinding through the draw — so the
+               slot is stuck and every later frame fails here. The channel is
+               then DEAD for the session and the shell cursor goes back to
+               being the engine's under our layer, which is the original bug.
+               COUNTED rather than recovered from: the stale value may be a
+               live frame's return address, and there is nothing here that can
+               tell. `stuck` climbing in the heartbeat is the only signal that
+               distinction can be made from, and without it the channel dies
+               silently — `draws` climbs and `pub` freezes, which is exactly
+               what the draw's own early-out looks like. */
+            s_cCursorStuck++;
+            return 0;
+        }
+        s_cCursorOwned++;
+        return 1;
+    }
+    s_cCursorHidden++;
+    shell_cursor_publish(0);
+    return 0;
+}
+
+static void* __cdecl after_cursor(unsigned int* regs)
+{
+    void* ret = (void*)InterlockedExchangePointer((void* volatile*)&s_cursorRet, NULL);
+    (void)regs;
+    shell_cursor_publish(1);
+    return ret;
+}
+
+
 /* ---- install ------------------------------------------------------------- */
 
 void tagpu_packet_pub_init(void)
 {
     char b[400];
-    int drawOk, loaderOk;
+    int drawOk, loaderOk, cursorOk;
     s_gameTid = GetCurrentThreadId();       /* DllMain runs on the game loop's thread */
     QueryPerformanceFrequency(&s_freq);
     s_countOnly = !tagpu_packet_armed();
@@ -1988,6 +2243,16 @@ void tagpu_packet_pub_init(void)
     tagpu_packet_producer(s_gameTid);
     loaderOk = tagpu_detour_bytes_ok(VA_LOADER_ENTRY, LOADER_STOLEN, sizeof LOADER_STOLEN) &&
                tagpu_detour_observe(VA_LOADER_ENTRY, LOADER_STOLEN, sizeof LOADER_STOLEN, before_loader, after_loader);
+    /* the shell's cursor channel — the cursor draw inside the flip. Only when
+       something publishes: in count-only mode it would cost a hijack per
+       present to reach a publish that returns 0 at the door. Armed, the site
+       is byte-matched like every other, and an install that does not take
+       leaves the shell exactly as it was (a missing cursor, not a broken
+       frame): a failed hijack here is logged and nothing else changes. */
+    cursorOk = !s_countOnly &&
+               tagpu_detour_bytes_ok(VA_CURSOR_DRAW, CURSOR_STOLEN, sizeof CURSOR_STOLEN) &&
+               tagpu_detour_observe(VA_CURSOR_DRAW, CURSOR_STOLEN, sizeof CURSOR_STOLEN,
+                                    before_cursor, after_cursor);
     tagpu_packet_set_extra(extra);
     _snprintf(b, sizeof b,
               "packet: publisher %s on DrawGameScreen 0x468CF0 (in-play gate: return address 0x4969D2; "
@@ -1996,6 +2261,16 @@ void tagpu_packet_pub_init(void)
               s_levelEndBy == 1 ? "tagpu_reclaim's teardown post hook" : s_levelEndBy == 2 ? "our own observer on the teardown 0x491B60 (reclaim is not armed; the level generation is this module's own either way)" : "nobody",
               loaderOk, (unsigned)s_gameTid,
               s_countOnly ? " — nothing is published, taken or applied: no world pass draws, no command is applied (the engine's own camera range, rect and scroll rate), every string through tagpu_text_place draws nothing" : "");
+    b[sizeof b - 1] = 0;
+    plog(b);
+    /* its own line, because a missing shell cursor is otherwise a silent
+       symptom: the layer covers the engine's and nothing says why */
+    _snprintf(b, sizeof b,
+              "packet: shell cursor channel observer on the flip's cursor draw 0x4C67C0=%d%s",
+              cursorOk,
+              cursorOk ? " (the shell's only publish point: the flip 0x4C63A0 cannot be observed a second time, tagpu_gui_hook's hijacks it)"
+                       : s_countOnly ? " (count-only: nothing is published at all)"
+                                     : " — NOT installed: the shell's cursor stays the engine's, and the GL UI layer paints over it (tagpu_engine.h VA_CURSOR_DRAW)");
     b[sizeof b - 1] = 0;
     plog(b);
 }
