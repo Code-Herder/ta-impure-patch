@@ -1,0 +1,2 @@
+landing-review: model=Opus (two independent reviewers, parallel) effort=high range=main..b786a0c reviewers=2 focus=correctness+synchronisation findings=8 acted=8 rejected=0 date=2026-09-15
+Both reviewers independently returned the same first finding (the terrain hand-over outliving its frame and handing over freed mirror pointers). Acted on in 792e711, which also carries one defect found by re-reading that fix rather than by a reviewer. All A/Bs, the regressions and constraint 4 re-measured on the fixed binary (7f50fa3e): 0 px throughout, cross-launch floor 0.
