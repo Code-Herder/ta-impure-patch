@@ -811,7 +811,7 @@ seeds, 154 575 sprites, 2 002 copies, 20 729 pixel ops, 328 547 clears, 24 atlas
 
 ### After the review
 
-Two Opus reviewers at `high` on the landing diff, fourteen findings between them, eleven
+Two reviewers at `high` on the landing diff, fourteen findings between them, eleven
 distinct; acted on eight, all re-verified against the code or the disassembly first:
 
 - **`census_surface` could write past the mask** when a surface was freed and another
@@ -1520,7 +1520,7 @@ panel is indexed until something repaints it** — a mode switch, a build page, 
 
 ### After the review
 
-One Opus reviewer at `medium` on the landing diff, five findings, **all five verified against the
+One reviewer at `medium` on the landing diff, five findings, **all five verified against the
 code and all five acted on**:
 
 - **The restorer never stepped where the native pass returns early** — the shell, and in game with

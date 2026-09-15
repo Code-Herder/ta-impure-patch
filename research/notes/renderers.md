@@ -1647,7 +1647,7 @@ not isolated.
 | **Q8 — in-game proof** | A **dump trigger**, `tagpu_restoredump.on`: the finished atlas written once as raw RGBA, diffed by a `tascene` verb against the pack with the Q2 bar — same tiles, same 2176 × 34-pitch layout, same order. It is the restorer's **only disk write, and only under the trigger**, so "no cache" stays literally true. `tascene ab` remains the whole-frame ritual, not the restore's proof | Checks the bytes the game samples, in the context that matters, with a pass/fail number |
 | **Q9 — scope** | **Terrain only** for the prototype, with the per-layer mask taking a per-cell **rect** (x, y, w, h) so a GAF frame is a driver change and not a shader change. **Done 2026-09-05 (G14e)**: the driver change (size classes, the slot grid) and the colour-key stand-in landed with the lazy GAF work, proven on the pack's 51 non-square keyed feature frames rather than one debug cell | The go/no-go with the largest N and the only matched reference |
 | **Q10 — order of work** | GLSL **before** the lazy GAF atlases (the only step built *on* the engine); unit shading, terrain lighting and shadows proceed **alongside** in their own worktree — they sample an atlas and do not care what filled it | The engine question idles nothing but the one step that depends on it |
-| **Q11 — landings** | **Three.** (1) *Lab*: bench, weights verb, shader text, this section's numbers measured — lands whether or not the DLL half passes; no review. (2) *Engine*: the sliced restorer behind `restore_step()`, the dump trigger, in-game time and diff; ONNX stays compiled and reachable only through `tagpu_restoreonnx.on` for the same-map A/B; Opus review at medium. (3) *Deletion*, per Q7; review at medium. If full misses the bound, **tiny is judged by eye in the lab before landing 2 is written** | A negative result has somewhere to land; the engine review reads shader work, not `tacli` plumbing |
+| **Q11 — landings** | **Three.** (1) *Lab*: bench, weights verb, shader text, this section's numbers measured — lands whether or not the DLL half passes; no review. (2) *Engine*: the sliced restorer behind `restore_step()`, the dump trigger, in-game time and diff; ONNX stays compiled and reachable only through `tagpu_restoreonnx.on` for the same-map A/B; review at medium. (3) *Deletion*, per Q7; review at medium. If full misses the bound, **tiny is judged by eye in the lab before landing 2 is written** | A negative result has somewhere to land; the engine review reads shader work, not `tacli` plumbing |
 
 **Placements settled from the code, not asked**: the weights export is an `unditherer export-weights`
 subcommand (that package owns `full.pt`/`full.onnx` and already has a `models` verb), writing the
@@ -1795,7 +1795,7 @@ the graph itself is that stable.
    after the lambert, under the switch); the effects pass hides in grey and needs none.
 7. **Switch and cfg**, then the **menu** of §2.10.
 8. **Verify by running it**: `tascene ab` in Classic against `lane=classic` (nothing moved),
-   in Classic++ against `lane=classicpp` (the port measured). Engine code triggers the Opus
+   in Classic++ against `lane=classicpp` (the port measured). Engine code triggers the dedicated
    review at `medium` and the documentation pass; a human declares it ready.
    **G14f, measured 2026-09-05** (parity fixture, eye 2320,720, the lab pack built with
    `--undither`, shot with `lane=classicpp&shadows=0`): Classic `tascene ab` 7,602 of 630,784
