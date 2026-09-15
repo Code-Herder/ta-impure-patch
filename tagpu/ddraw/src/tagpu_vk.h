@@ -49,13 +49,21 @@
    ends up inside a generated `.GUI` where `|` and `;` are syntax. The caller
    sizes its caption buffer from these and never from `deviceName`. */
 #define TAGPU_VK_NAMELEN 32
-/* FOUR, AND THE BOUND IS THE ENGINE'S ART. A stage button's plate is
-   `commongui.stagebuttnN` and there is no `stagebuttn5` or `6`
-   (gui-gadgets.md 10.2), so no cycle row can carry more than four stages --
-   a fifth device would be a row the engine has no picture for. The list is
-   truncated here rather than in the menu, so the cache, the row and the bind
-   all agree about which four, and the log says when any were dropped. */
-#define TAGPU_VK_MAXGPU   4
+/* EIGHT, AND THE BOUND IS OURS RATHER THAN THE ENGINE'S. This said four, on
+   the theory that a stage button cannot carry more stages than
+   `commongui.stagebuttnN` has art for. That is not what the engine does
+   [MEASURED 2026-09-15 from the disassembly, after a review challenged it]:
+   `0x4A8003` is `cmp al,4; jae` onto `mov eax,4` and only THEN
+   `sprintf("stagebuttn%d")`, so the art index is CLAMPED and a row with more
+   than four stages draws the four-bar plate and works. The shipped `UI scale`
+   row has carried six stages all along, which is the same fact from the other
+   end. So eight: every device a player is plausibly choosing between stays
+   selectable, and past the fourth the plate's bar count saturates while the
+   caption -- the half that says which card -- stays right.
+   (`0x4A803C` is worth knowing too: a `stages=1` button is rewritten to 2 and
+   flagged, which is why the "(not listed yet)" row is also greyed rather than
+   relying on its stage count to keep it inert.) */
+#define TAGPU_VK_MAXGPU   8
 
 /* ---- G19a: the render thread ------------------------------------------- */
 

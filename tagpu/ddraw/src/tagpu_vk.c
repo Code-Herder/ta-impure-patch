@@ -154,6 +154,7 @@
 #define GPUS_FILE  "tagpu_vk.gpus"      /* the cache the menu reads at attach */
 #define CFG_FILE   "tagpu_vk.cfg"       /* the player's choice, by name       */
 #define CFG_TMP    "tagpu_vk.cfg.tmp"
+#define GPUS_TMP   "tagpu_vk.gpus.tmp"
 #define POLL_MS    250                  /* the lever, as elsewhere in the fork */
 #define MAXDEV     TAGPU_VK_MAXGPU
 #define MAXIMG     8
@@ -167,11 +168,6 @@
    is cached, what is stored as the choice AND what the bind compares against,
    so the three can never disagree. */
 #define NAMELEN    TAGPU_VK_NAMELEN
-
-/* How long `tagpu_vk_render_stop` waits for a worker still in ST_STARTING
-   before abandoning its objects. See the header comment: this decides between
-   two SAFE outcomes and is not the correctness argument. */
-#define WORKER_WAIT_MS 5000
 
 enum { ST_OFF = 0, ST_STARTING = 1, ST_READY = 2, ST_FAILED = 3, ST_ZOMBIE = 4 };
 
@@ -401,23 +397,41 @@ static void vkw_create(HWND owner)
     vklog("window: created %p over %p (route D)", (void*)win, (void*)owner);
 }
 
-static void vkw_destroy(void)
+/* THE HANDLE IS TAKEN AWAY WHEN THE DESTROY IS REQUESTED, NOT WHEN IT IS
+   SERVICED, AND IT TRAVELS IN THE MESSAGE. [FROM REVIEW 2026-09-15.]
+
+   The previous shape posted `VKW_DESTROY` and left `s_vkwnd` standing until the
+   window thread got round to pumping. Between those two moments the lever could
+   be re-armed, or the render thread restarted after a mode change: `ST_OFF`
+   read `s_vkwnd`, found it non-NULL, skipped the create and started a worker
+   that put a surface on that window -- and the window thread then serviced the
+   queued destroy and pulled the window out from under a live surface, which is
+   the one thing this file forbids everywhere else. Clearing the handle first
+   makes the window invisible to the render thread the instant it is doomed,
+   which is the ordering the old comment claimed and did not have.
+
+   Callable from the render thread and from the bring-up worker; the window
+   thread does the destroying, unless the owner is already gone. */
+static void vkw_request_destroy(void)
 {
     HWND win = (HWND)InterlockedExchangePointer((void* volatile*)&s_vkwnd, NULL);
+    HWND owner = s_owner;
     if (!win) return;
-    real_DestroyWindow(win);
-    vklog("window: destroyed %p", (void*)win);
+    if (owner) PostMessageA(owner, WM_TAGPU_VK, (WPARAM)VKW_DESTROY, (LPARAM)win);
+    else real_DestroyWindow(win);        /* no owner left to ask */
 }
 
 /* Called from the fork's wndproc on the game window's thread. An OBSERVER: it
    never swallows a message the fork or the engine needs. */
 void tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
-    (void)lparam;
     switch (msg) {
     case WM_TAGPU_VK:
-        if (wparam == VKW_CREATE)  vkw_create(hwnd);
-        if (wparam == VKW_DESTROY) vkw_destroy();
+        if (wparam == VKW_CREATE) vkw_create(hwnd);
+        if (wparam == VKW_DESTROY && lparam) {
+            real_DestroyWindow((HWND)lparam);
+            vklog("window: destroyed %p", (void*)lparam);
+        }
         break;
     case WM_WINDOWPOSCHANGED:
         if (s_vkwnd) vkw_place(s_vkwnd, hwnd, 0);
@@ -427,13 +441,13 @@ void tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
            what happens here is the least-bad of the available orders, and the
            residual is named rather than papered over.
 
-           `vkw_destroy` publishes `s_vkwnd = NULL` before it calls
-           `DestroyWindow`, so the render thread's very next frame sees its
-           window gone and takes the rebuild path, which tears the surface down.
-           But the window is destroyed in this handler, and that next frame has
-           not happened yet: for up to one frame a surface may name an HWND that
-           no longer exists. Acquire then returns VK_ERROR_SURFACE_LOST_KHR and
-           the frame is skipped, which is the safe answer.
+           The handle is taken out of `s_vkwnd` first, so the render thread's
+           very next frame sees its window gone and takes the rebuild path,
+           which tears the surface down. But the window is destroyed in this
+           handler, and that next frame has not happened yet: for up to one
+           frame a surface may name an HWND that no longer exists. Acquire then
+           returns VK_ERROR_SURFACE_LOST_KHR and the frame is skipped, which is
+           the safe answer.
 
            WHY IT IS NOT FIXABLE FROM HERE. The only orders that close it are
            blocking this thread on the render thread -- which in a lockstep game
@@ -443,7 +457,10 @@ void tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
            thread first (`ogl_release` refuses while `render.thread` is set), so
            in practice this handler is a backstop that finds nothing up; the
            residual is the process-exit case where it does. */
-        vkw_destroy();
+        {
+            HWND win = (HWND)InterlockedExchangePointer((void* volatile*)&s_vkwnd, NULL);
+            if (win) { real_DestroyWindow(win); vklog("window: destroyed %p with its owner", (void*)win); }
+        }
         break;
     }
 }
@@ -764,6 +781,44 @@ static VkInstance vk_instance(void)
     return inst;
 }
 
+/* ST_ZOMBIE IS A WORKER WINDING DOWN, NOT A GRAVE, and this is what clears it.
+   [FROM REVIEW 2026-09-15.]
+
+   A worker that finishes and finds the lane is no longer ST_STARTING has been
+   ABANDONED by `tagpu_vk_render_stop` -- but it is still the sole owner of
+   everything it built, because ST_ZOMBIE is the state in which nobody else
+   touches any of it. So it can put its own objects back, which the previous
+   design could not: that one LEAKED them and made ST_ZOMBIE terminal for the
+   session. Handing the lane back to ST_OFF here is what lets a later render
+   thread bring it up again.
+
+   The transition out of ST_ZOMBIE is this function and nothing else, so the
+   compare-exchange is unambiguous: whoever loses is not a second worker, it is
+   a state that was never ZOMBIE. */
+static void lane_release(void)
+{
+    if (InterlockedCompareExchange(&s_state, ST_OFF, ST_STARTING) == ST_STARTING) return;
+    InterlockedCompareExchange(&s_state, ST_OFF, ST_ZOMBIE);
+}
+
+/* The state, read so that the fields behind it cannot be hoisted over it.
+   `s_state` is volatile but `s_vk` is not, and a volatile load orders nothing
+   about a non-volatile one -- the interlocked read is a full barrier, which is
+   what the publish on the other side already is. It is what `s_choiceGen`'s
+   read already does, and this one had been left plain. [FROM REVIEW 2026-09-15] */
+static LONG lane_state(void)
+{
+    return InterlockedCompareExchange(&s_state, 0, 0);
+}
+
+/* The GPU row's generation, read the same way and for the same reason: the
+   index behind it is written first, and only a barrier keeps the two in that
+   order on the reading side. */
+static LONG lane_gen(void)
+{
+    return InterlockedCompareExchange(&s_choiceGen, 0, 0);
+}
+
 /* ---- G19b: the enumeration worker ---------------------------------------- */
 static DWORD WINAPI enum_worker(LPVOID arg)
 {
@@ -778,17 +833,33 @@ static DWORD WINAPI enum_worker(LPVOID arg)
     DWORD wrote = 0;
 
     (void)arg;
-    if (!vk_load()) return 0;
+    if (!vk_load())            { lane_release(); return 0; }
     inst = vk_instance();
-    if (!inst) return 0;
+    if (!inst)                 { lane_release(); return 0; }
 
-    vkEnumeratePhysicalDevices(inst, &n, NULL);
+    /* A FAILED OR EMPTY ENUMERATION LEAVES THE CACHE ALONE. [FROM REVIEW
+       2026-09-15.] The result used to go unchecked, and `n = 0` then differed
+       from `s_count` and counted as "the list changed" -- so one transient
+       refusal would have rewritten `tagpu_vk.gpus` to nothing and taken the
+       GPU row's captions away at the next launch. A list we could not read is
+       not a list of no devices. */
+    if (vkEnumeratePhysicalDevices(inst, &n, NULL) != VK_SUCCESS || !n) {
+        vklog("no devices enumerated - " GPUS_FILE " left as it was");
+        vkDestroyInstance(inst, NULL);
+        lane_release();
+        return 0;
+    }
     if (n > MAXDEV) {
-        vklog("%u devices, and the row can carry %d (there is no stagebuttn5) - "
-              "only the first %d are offered", n, MAXDEV, MAXDEV);
+        vklog("%u devices and the row carries %d - only the first %d are offered",
+              n, MAXDEV, MAXDEV);
         n = MAXDEV;
     }
-    if (n) vkEnumeratePhysicalDevices(inst, &n, pds);
+    if (vkEnumeratePhysicalDevices(inst, &n, pds) != VK_SUCCESS || !n) {
+        vklog("the device list would not come back - " GPUS_FILE " left as it was");
+        vkDestroyInstance(inst, NULL);
+        lane_release();
+        return 0;
+    }
 
     /* Build the file text first, and compare it with what the cache already
        says: an unchanged list is not rewritten, so the common launch does no
@@ -816,14 +887,24 @@ static DWORD WINAPI enum_worker(LPVOID arg)
         if (lstrcmpA(s_name[i], name[i]) || s_disc[i] != disc[i]) changed = 1;
 
     if (changed) {
-        h = CreateFileA(GPUS_FILE, GENERIC_WRITE, FILE_SHARE_READ, 0, CREATE_ALWAYS,
+        /* TEMPORARY AND RENAME, for the reason `tagpu_vk_gpu_store` and
+           `tagpu_menu.c`'s `write_cfg` both give and this one had not taken:
+           CREATE_ALWAYS truncates first, and the file is opened FILE_SHARE_READ,
+           so a second instance reading it at DLL attach -- or a crash between
+           the truncate and the write -- would see nothing and lose the GPU row's
+           captions for that launch. [FROM REVIEW 2026-09-15.] */
+        int ok = 0;
+        h = CreateFileA(GPUS_TMP, GENERIC_WRITE, FILE_SHARE_READ, 0, CREATE_ALWAYS,
                         FILE_ATTRIBUTE_NORMAL, 0);
         if (h != INVALID_HANDLE_VALUE) {
-            WriteFile(h, out, (DWORD)at, &wrote, 0);
+            ok = WriteFile(h, out, (DWORD)at, &wrote, 0) && wrote == (DWORD)at;
             CloseHandle(h);
+            if (ok) ok = MoveFileExA(GPUS_TMP, GPUS_FILE, MOVEFILE_REPLACE_EXISTING);
+            if (!ok) DeleteFileA(GPUS_TMP);
         }
-        vklog("enumerated %u device(s) - " GPUS_FILE " rewritten, so the GPU row lists "
-              "them from the NEXT launch (the menu's .GUI is written at attach)", n);
+        vklog("enumerated %u device(s) - " GPUS_FILE " %s, so the GPU row lists them "
+              "from the NEXT launch (the menu's .GUI is written at attach)",
+              n, ok ? "rewritten" : "could NOT be rewritten and is left as it was");
     } else {
         vklog("enumerated %u device(s) - " GPUS_FILE " already agrees", n);
     }
@@ -831,17 +912,41 @@ static DWORD WINAPI enum_worker(LPVOID arg)
         vklog("  device %d: %s%s", i, name[i], disc[i] ? "  [discrete]" : "");
 
     vkDestroyInstance(inst, NULL);
+    lane_release();
     return 0;
 }
 
+/* THE ENUMERATION TAKES ST_STARTING TOO, and that is not bookkeeping -- it is
+   what stops two workers existing at once. [FROM REVIEW 2026-09-15.]
+
+   Before this, `enum_start` created its thread unguarded while `tagpu_vk_frame`
+   could create the bring-up thread a few frames later, and the two share every
+   global in this file: `s_mod`, `s_gipa` and the whole IFNS/DFNS dispatch
+   table. Two faults, both live: `vk_load`'s `if (s_mod) return 1;` is a
+   double-checked lock with no barrier, so the second thread could see `s_mod`
+   set and `vkCreateInstance` still NULL and call through it; and INSTANCE-LEVEL
+   ENTRY POINTS BELONG TO AN INSTANCE, so with two instances alive the table
+   ends up holding one instance's thunks while the other instance's handle is
+   passed to them.
+
+   The state machine already grants exactly one owner, so the enumeration asks
+   for the same grant. A bring-up that arrives while it holds ST_STARTING waits
+   for ST_OFF, which is the ordering the rest of the file already relies on. */
 void tagpu_vk_enum_start(void)
 {
     static LONG once;
-    HANDLE t;
     if (exists(OFF_FILE)) { vklog("tagpu_vk.off - nothing in this module runs"); return; }
     if (InterlockedExchange(&once, 1)) return;
-    t = CreateThread(NULL, 0, enum_worker, NULL, 0, NULL);
-    if (t) CloseHandle(t);
+    if (InterlockedCompareExchange(&s_state, ST_STARTING, ST_OFF) != ST_OFF) {
+        vklog("something already holds the lane - the device list is not refreshed "
+              "this launch");
+        return;
+    }
+    s_worker = CreateThread(NULL, 0, enum_worker, NULL, 0, NULL);
+    if (!s_worker) {
+        vklog("could not start the enumeration thread (%lu)", GetLastError());
+        InterlockedExchange(&s_state, ST_OFF);
+    }
 }
 
 /* ---- G19a: the bring-up -------------------------------------------------- */
@@ -850,6 +955,7 @@ void tagpu_vk_enum_start(void)
    worker (ST_STARTING, the worker owns `s_vk`) and by the render thread on a
    resize (ST_READY, the render thread owns it). Never by both: that is what the
    state machine is for. */
+/* 1 built, 0 refused (the lane must come down), -1 not yet (try again). */
 static int vk_swapchain(int w, int h)
 {
     VkSurfaceCapabilitiesKHR caps;
@@ -910,9 +1016,13 @@ static int vk_swapchain(int w, int h)
         s_vk.ext.width  = (uint32_t)(w > 0 ? w : 640);
         s_vk.ext.height = (uint32_t)(h > 0 ? h : 480);
     }
-    /* A minimised window reports a zero extent and a swapchain cannot be made
-       on one. Not an error: the caller keeps the lane down and retries. */
-    if (!s_vk.ext.width || !s_vk.ext.height) return 0;
+    /* A minimised or hidden window reports a zero extent and a swapchain cannot
+       be made on one. THAT IS A WAIT, NOT A FAILURE -- the comment used to say
+       "the caller retries" and no caller did: every one of them treated 0 as
+       terminal and put the lane into ST_FAILED for the session, so minimising
+       the game once with the lever on would have killed it until the lever was
+       toggled. -1 says "come back later". [FROM REVIEW 2026-09-15.] */
+    if (!s_vk.ext.width || !s_vk.ext.height) return -1;
     if (s_vk.ext.width  < caps.minImageExtent.width)  s_vk.ext.width  = caps.minImageExtent.width;
     if (s_vk.ext.height < caps.minImageExtent.height) s_vk.ext.height = caps.minImageExtent.height;
     if (s_vk.ext.width  > caps.maxImageExtent.width)  s_vk.ext.width  = caps.maxImageExtent.width;
@@ -924,10 +1034,27 @@ static int vk_swapchain(int w, int h)
     swci.imageColorSpace = s_vk.cspace;
     swci.imageExtent = s_vk.ext;
     swci.imageArrayLayers = 1;
-    swci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    /* ASK THE SURFACE, DO NOT ASSUME. COLOR_ATTACHMENT is guaranteed on every
+       surface; TRANSFER_DST is not, and G19a's clear needs it -- a driver
+       without it would fail swapchain creation with a result that says nothing
+       about why. The reference setup reports 0x9F, so this has never fired;
+       it is here so that the day it does, the log names it. Same for the
+       composite mode: OPAQUE is what we want and INHERIT is the fallback every
+       surface that lacks it offers. [FROM REVIEW 2026-09-15.] */
+    swci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    if (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+        swci.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    else {
+        vklog("the surface does not support TRANSFER_DST (usage 0x%X) and the clear "
+              "needs it - the lane stays down", (unsigned)caps.supportedUsageFlags);
+        return 0;
+    }
     swci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     swci.preTransform = caps.currentTransform;
-    swci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    swci.compositeAlpha =
+        (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)
+            ? VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR
+            : VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
     swci.presentMode = mode;
     swci.clipped = VK_TRUE;
     swci.oldSwapchain = old;
@@ -944,11 +1071,25 @@ static int vk_swapchain(int w, int h)
     }
     if (old) vkDestroySwapchainKHR(s_vk.dev, old, NULL);
 
-    s_vk.nimg = MAXIMG;
-    vkGetSwapchainImagesKHR(s_vk.dev, s_vk.sc, &s_vk.nimg, NULL);
-    if (s_vk.nimg > MAXIMG) s_vk.nimg = MAXIMG;
-    vkGetSwapchainImagesKHR(s_vk.dev, s_vk.sc, &s_vk.nimg, s_vk.img);
-    if (!s_vk.nimg) { vklog("the swapchain reports no images"); return 0; }
+    /* REFUSED, NOT CLAMPED. `minImageCount` bounds what we ASK for; nothing
+       bounds what the implementation returns, and clamping the count would
+       leave `vkAcquireNextImageKHR` free to hand back an index past the end of
+       our per-image arrays -- a frame dropped every time, with an acquire
+       semaphore left signalled behind it. [FROM REVIEW 2026-09-15.] */
+    s_vk.nimg = 0;
+    if (vkGetSwapchainImagesKHR(s_vk.dev, s_vk.sc, &s_vk.nimg, NULL) != VK_SUCCESS ||
+        !s_vk.nimg) {
+        vklog("the swapchain reports no images"); s_vk.nimg = 0; return 0;
+    }
+    if (s_vk.nimg > MAXIMG) {
+        vklog("the swapchain came back with %u images and this build carries %d - "
+              "the lane stays down", s_vk.nimg, MAXIMG);
+        s_vk.nimg = 0;
+        return 0;
+    }
+    if (vkGetSwapchainImagesKHR(s_vk.dev, s_vk.sc, &s_vk.nimg, s_vk.img) != VK_SUCCESS) {
+        vklog("the swapchain would not hand over its images"); s_vk.nimg = 0; return 0;
+    }
 
     vklog("swapchain: %u images %ux%u format %d mode %s",
           s_vk.nimg, s_vk.ext.width, s_vk.ext.height, (int)s_vk.fmt,
@@ -1170,7 +1311,18 @@ static DWORD WINAPI up_worker(LPVOID arg)
 
     vkGetDeviceQueue(s_vk.dev, s_vk.qfam, 0, &s_vk.queue);
 
-    if (!vk_swapchain(s_want.w, s_want.h)) goto fail;
+    /* -1 here is a window with no extent yet -- a wait, not a failure -- and
+       the lane goes back to ST_OFF so the next frame asks again. */
+    {
+        int sc = vk_swapchain(s_want.w, s_want.h);
+        if (sc < 0) {
+            vklog("the window has no extent yet - trying again");
+            vk_down();
+            lane_release();
+            return 0;
+        }
+        if (!sc) goto fail;
+    }
 
     {
         VkCommandPoolCreateInfo pci = { VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
@@ -1189,15 +1341,29 @@ static DWORD WINAPI up_worker(LPVOID arg)
           (void*)s_owner, s_vk.ext.width, s_vk.ext.height, s_vk.vsync);
 
     InterlockedExchange(&s_activeIndex, s_vk.devIndex);
-    /* THE PUBLISH. Everything above is written before it; the interlocked store
-       is a full barrier, so a render thread that reads ST_READY sees all of it.
-       After this line the worker touches nothing. */
-    InterlockedExchange(&s_state, ST_READY);
+    /* THE PUBLISH, AND IT IS A COMPARE-EXCHANGE RATHER THAN A STORE.
+       [FROM REVIEW 2026-09-15.] Everything above is written before it and the
+       interlocked operation is a full barrier, so a render thread that reads
+       ST_READY sees all of it. It has to be conditional on ST_STARTING because
+       `tagpu_vk_render_stop` may have moved the lane to ST_ZOMBIE while we
+       worked -- an unconditional store used to stamp ST_READY over that and
+       hand the render thread objects the code had already declared abandoned.
+       After a successful publish the worker touches nothing. */
+    if (InterlockedCompareExchange(&s_state, ST_READY, ST_STARTING) == ST_STARTING)
+        return 0;
+    /* Abandoned while we built it. We are still the only owner -- that is what
+       ST_ZOMBIE means -- so we put our own objects back rather than leaking
+       them, and hand the lane on. */
+    vklog("abandoned during bring-up - releasing what was built");
+    vk_down();
+    vkw_request_destroy();
+    lane_release();
     return 0;
 
 fail:
     vk_down();
-    InterlockedExchange(&s_state, ST_FAILED);
+    if (InterlockedCompareExchange(&s_state, ST_FAILED, ST_STARTING) != ST_STARTING)
+        lane_release();          /* zombied: hand the lane back instead */
     return 0;
 }
 
@@ -1226,15 +1392,31 @@ static int vk_present(void)
     VkClearColorValue col;
     VkCommandBuffer cb;
 
-    if (vkWaitForFences(s_vk.dev, 1, &s_vk.fence[fi], VK_TRUE, 1000000000ull) != VK_SUCCESS)
-        return 0;                                   /* a second is not a frame */
+    /* A SECOND IS NOT A FRAME, AND IT IS NOT A HICCUP EITHER. A clear-to-colour
+       that has not completed in a second means the device is wedged, so this is
+       fatal rather than a skipped frame -- returning 0 here used to leave the
+       caller presenting nothing, for ever, at one frame a second, in silence. */
+    if (vkWaitForFences(s_vk.dev, 1, &s_vk.fence[fi], VK_TRUE, 1000000000ull) != VK_SUCCESS) {
+        vklog("a frame fence did not signal within a second - the device is not answering");
+        return -2;
+    }
 
     r = vkAcquireNextImageKHR(s_vk.dev, s_vk.sc, 1000000000ull,
                               s_vk.semAcquire[fi], VK_NULL_HANDLE, &idx);
     if (r == VK_ERROR_OUT_OF_DATE_KHR) return -1;   /* the caller rebuilds */
     if (r == VK_SUBOPTIMAL_KHR) s_vk.rebuild = 1;   /* usable; rebuild after */
     else if (r != VK_SUCCESS) return 0;
-    if (idx >= s_vk.nimg) return 0;                 /* bounded before it indexes */
+    /* BOUNDED, AND A BREACH IS FATAL RATHER THAN A SKIP. `vk_swapchain` refuses
+       a swapchain with more images than MAXIMG, so this cannot fire -- and if
+       it ever did, the acquire above has already SIGNALLED `semAcquire[fi]`
+       with nothing left to wait on it, and the next frame would hand the same
+       signalled semaphore back to `vkAcquireNextImageKHR`, which the
+       specification forbids. Tearing the lane down is the only exit that does
+       not carry that state forward. [FROM REVIEW 2026-09-15.] */
+    if (idx >= s_vk.nimg) {
+        vklog("the swapchain handed back image %u of %u - down", idx, s_vk.nimg);
+        return -2;
+    }
 
     vkResetFences(s_vk.dev, 1, &s_vk.fence[fi]);
 
@@ -1269,7 +1451,15 @@ static int vk_present(void)
     si.pWaitDstStageMask = &waitst;
     si.commandBufferCount = 1; si.pCommandBuffers = &cb;
     si.signalSemaphoreCount = 1; si.pSignalSemaphores = &s_vk.semRelease[idx];
-    if (vkQueueSubmit(s_vk.queue, 1, &si, s_vk.fence[fi]) != VK_SUCCESS) return 0;
+    /* A FAILED SUBMIT IS FATAL, because the fence was reset a few lines above
+       and nothing will ever signal it again: `s_vk.frame` does not advance on
+       an early return, so `fi` would stay on that fence and every later frame
+       would burn the full one-second wait. Silently, at one frame a second,
+       with GL still swapping underneath. [FROM REVIEW 2026-09-15.] */
+    if (vkQueueSubmit(s_vk.queue, 1, &si, s_vk.fence[fi]) != VK_SUCCESS) {
+        vklog("vkQueueSubmit refused the frame - down");
+        return -2;
+    }
 
     pi.waitSemaphoreCount = 1; pi.pWaitSemaphores = &s_vk.semRelease[idx];
     pi.swapchainCount = 1; pi.pSwapchains = &s_vk.sc; pi.pImageIndices = &idx;
@@ -1280,17 +1470,20 @@ static int vk_present(void)
        has moved on and the next frame should be drawn against a fresh
        swapchain. Rebuilding here instead would throw away a good frame. */
     if (r == VK_SUBOPTIMAL_KHR) { s_vk.rebuild = 1; return 1; }
-    if (r != VK_SUCCESS) return 0;
+    if (r != VK_SUCCESS) { vklog("vkQueuePresentKHR: %s - down", res_name(r)); return -2; }
     return 1;
 }
 
 /* Rebuild the swapchain in place: the render thread owns `s_vk` in ST_READY, so
    this is single-owner work. Everything sized by the swapchain goes with it. */
+/* 1 rebuilt, 0 the lane must come down, -1 not yet (a zero extent). */
 static int vk_resize(int w, int h)
 {
+    int r;
     vkDeviceWaitIdle(s_vk.dev);
     vk_perimage_free();
-    if (!vk_swapchain(w, h)) return 0;
+    r = vk_swapchain(w, h);
+    if (r <= 0) return r;
     return vk_perimage();
 }
 
@@ -1304,7 +1497,13 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync)
        is what it was before this file existed. */
     if (s_armed < 0 || (DWORD)(now - s_lastPoll) >= POLL_MS) { s_lastPoll = now; read_lever(); }
 
-    st = s_state;
+    /* THE DISARMED FRAME COSTS A PLAIN LOAD. `lane_state()` is a `lock cmpxchg`
+       and the barrier it carries is only owed when something is actually going
+       to be read behind it -- with the lever off and the lane at rest there is
+       nothing, and this is the render thread's per-frame path. */
+    if (!s_armed && s_state == ST_OFF && !s_vkwnd) return 0;
+
+    st = lane_state();
 
     /* THE WORKER'S HANDLE IS REAPED WHEREVER IT FINISHES, not only on the way
        into ST_READY. A lever cleared while a bring-up was still running used to
@@ -1318,13 +1517,23 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync)
            time the player arms it rather than once per launch. THE SURFACE GOES
            BEFORE THE WINDOW, always: a window destroyed under a live surface is
            a handle the driver still holds. `vk_down` is synchronous and the
-           destroy is posted behind it, so the order holds across the two
-           threads by construction. */
+           handle leaves `s_vkwnd` before the destroy is posted, so the order
+           holds across the two threads. */
         if (st == ST_READY || st == ST_FAILED) {
             if (st == ST_READY) { vk_down(); vklog("lever off - down"); }
             InterlockedExchange(&s_state, ST_OFF);
-            if (s_vkwnd && s_owner) PostMessageA(s_owner, WM_TAGPU_VK, (WPARAM)VKW_DESTROY, 0);
         }
+        /* AND THE WINDOW GOES WHATEVER THE STATE WAS. [FROM REVIEW 2026-09-15.]
+           This used to be inside the branch above, which left one shape behind:
+           arm the lever, have the window thread not pump (a map load, a modal),
+           clear the lever at the next 250 ms poll -- the state is still ST_OFF,
+           so nothing was posted -- and then the pump catches up and creates and
+           SHOWS the popup. Nothing ever took it down: an opaque dead window
+           over the client area for the rest of the session. An unarmed lane
+           owns no window, and that is the rule rather than a state's business.
+           Not while a worker holds it, though: in ST_STARTING/ST_ZOMBIE the
+           window may carry a surface, and the worker destroys it on its way. */
+        if (s_vkwnd && st != ST_STARTING && st != ST_ZOMBIE) vkw_request_destroy();
         s_askedWin = 0;
         return 0;
     }
@@ -1354,7 +1563,7 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync)
         }
         s_askedWin = 0;
         s_want.hwnd = win; s_want.w = w; s_want.h = h; s_want.vsync = vsync;
-        s_choiceSeen = InterlockedCompareExchange(&s_choiceGen, 0, 0);
+        s_choiceSeen = lane_gen();
         /* OFF -> STARTING before the thread exists, so two frames cannot start
            two workers even if this were ever called from two threads. */
         if (InterlockedCompareExchange(&s_state, ST_STARTING, ST_OFF) != ST_OFF) return 0;
@@ -1366,8 +1575,20 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync)
         return 0;
     }
 
-    case ST_STARTING:
     case ST_FAILED:
+        /* A FAILED LANE RETRIES WHEN THE PLAYER ASKS FOR A DIFFERENT GPU.
+           [FROM REVIEW 2026-09-15.] `s_choiceSeen` is latched in the ST_OFF
+           branch only, so a player whose chosen device would not come up used
+           to click every other row in the list and get nothing at all, for
+           ever, until they found the lever file. The click is exactly the
+           signal that the thing that failed is not what we would try now. */
+        if (lane_gen() != s_choiceSeen) {
+            vklog("the GPU row changed after a failed bring-up - trying again");
+            InterlockedCompareExchange(&s_state, ST_OFF, ST_FAILED);
+        }
+        return 0;
+
+    case ST_STARTING:
     case ST_ZOMBIE:
         return 0;
 
@@ -1383,7 +1604,7 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync)
        invalidates the surface or the device, and neither is patchable in
        place -- and going back through the worker is what keeps every bring-up
        off the render thread, not just the first. */
-    if (hwnd != s_owner || s_vkwnd != s_vk.hwnd || s_choiceGen != s_choiceSeen) {
+    if (hwnd != s_owner || s_vkwnd != s_vk.hwnd || lane_gen() != s_choiceSeen) {
         int owner_changed = (hwnd != s_owner);
         vklog(owner_changed       ? "the game window changed - rebuilding" :
               s_vkwnd != s_vk.hwnd ? "our window went away - rebuilding"
@@ -1395,8 +1616,7 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync)
            bring-up on a window hanging off a dead owner. A GPU change keeps it:
            the window is not what changed. The destroy is posted to the NEW
            owner, whose thread is the one that pumps; the handler needs no hwnd. */
-        if (owner_changed && s_vkwnd)
-            PostMessageA(hwnd, WM_TAGPU_VK, (WPARAM)VKW_DESTROY, 0);
+        if (owner_changed) vkw_request_destroy();
         s_askedWin = 0;
         return 0;
     }
@@ -1415,8 +1635,10 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync)
     if (vsync != s_vk.vsync) { s_vk.vsync = vsync; s_vk.rebuild = 1; }
 
     if (s_vk.rebuild) {
+        int rr = vk_resize(w, h);
+        if (rr < 0) return 0;          /* no extent yet: keep the flag, try later */
         s_vk.rebuild = 0;
-        if (!vk_resize(w, h)) {
+        if (!rr) {
             vklog("the swapchain would not rebuild - down");
             vk_down();
             InterlockedExchange(&s_state, ST_FAILED);
@@ -1426,6 +1648,11 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync)
 
     {
         int rc = vk_present();
+        if (rc == -2) {                /* fatal: the lane cannot carry on */
+            vk_down();
+            InterlockedExchange(&s_state, ST_FAILED);
+            return 0;
+        }
         if (rc < 0) {                  /* out of date: rebuild, and skip this frame */
             s_vk.rebuild = 1;
             return 0;
@@ -1434,30 +1661,40 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync)
     }
 }
 
+/* THERE IS NO WAIT HERE ANY MORE, and removing it removed the last place this
+   file could stall the game. [FROM REVIEW 2026-09-15.]
+
+   It used to wait up to five seconds for a worker still in ST_STARTING. The
+   game thread waits INFINITE on the render thread across a mode change
+   (`dd.c`), and the render thread was waiting on the worker, so a mode change
+   that caught a bring-up in flight stalled the whole LOCKSTEP world for as long
+   as the bring-up had left -- measured at 371-451 ms routinely. Worse, the
+   window thread IS the game thread here (`g_ddraw.gui_thread_id`), so if
+   winevulkan ever reaches the window with an inter-thread send during surface
+   or swapchain creation the cycle game -> render -> worker -> window closes and
+   the timeout is the only thing that breaks it: load-bearing, which the file
+   claimed it was not.
+
+   None of it is needed now that a worker cleans up after itself (`up_worker`'s
+   publish, and `lane_release`). Marking the lane ST_ZOMBIE tells the worker it
+   has been abandoned; it finishes at its own pace, puts back exactly what it
+   built and hands the lane to ST_OFF. Nothing waits, nothing leaks, and the
+   thread handle can be closed while the thread still runs -- that releases our
+   reference, not the thread. */
 void tagpu_vk_render_stop(void)
 {
-    LONG st = s_state;
+    LONG st = lane_state();
 
-    if (st == ST_STARTING && s_worker) {
-        /* THE ONE BOUNDED WAIT, AND IT IS NOT THE SAFETY ARGUMENT. Whichever
-           way it goes the outcome is safe: the worker finishes and we tear
-           down, or it does not and we ABANDON the objects rather than free them
-           under a live thread. A leak is recoverable; a free is not. */
-        DWORD wr = WaitForSingleObject(s_worker, WORKER_WAIT_MS);
-        if (wr != WAIT_OBJECT_0) {
-            vklog("the bring-up thread did not finish in %d ms - the Vulkan objects are "
-                  "ABANDONED, not freed, and the lane stays down until the next launch",
-                  WORKER_WAIT_MS);
-            InterlockedExchange(&s_state, ST_ZOMBIE);
-            s_worker = NULL;               /* deliberately not closed: still running */
-            /* AND THE WINDOW IS LEFT STANDING, deliberately. The abandoned
-               objects include a surface on it, and destroying a window under a
-               live surface is the one thing the order below exists to prevent.
-               It costs an invisible 0-byte window for the rest of the process,
-               which is the same bargain as the leak itself. */
+    if (st == ST_STARTING) {
+        if (InterlockedCompareExchange(&s_state, ST_ZOMBIE, ST_STARTING) == ST_STARTING) {
+            vklog("render thread stopping mid bring-up - the worker will release it");
+            if (s_worker) { CloseHandle(s_worker); s_worker = NULL; }
+            s_askedWin = 0;
+            /* THE WINDOW IS LEFT TO THE WORKER, which may have a surface on it.
+               It destroys it on its way out. */
             return;
         }
-        st = s_state;
+        st = lane_state();
     }
 
     if (s_worker) { CloseHandle(s_worker); s_worker = NULL; }
@@ -1467,6 +1704,6 @@ void tagpu_vk_render_stop(void)
         InterlockedExchange(&s_state, ST_OFF);
     }
     /* The window goes last, and only once nothing holds a surface on it. */
-    if (s_vkwnd && s_owner) PostMessageA(s_owner, WM_TAGPU_VK, (WPARAM)VKW_DESTROY, 0);
+    vkw_request_destroy();
     s_askedWin = 0;
 }

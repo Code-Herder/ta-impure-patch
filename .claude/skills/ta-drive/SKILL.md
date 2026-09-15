@@ -1876,8 +1876,9 @@ tools/tacli log <i> -g '^vk:'                 # the window, the device, the swap
   presentation for the life of the PROCESS (roadmap Phase G, *Coexistence*) — the API keeps
   saying yes and the screen never changes again.
 - **`tagpu_vk.off` is what an A/B against a pre-G19 DLL arms**, because half the module is not
-  gated on `tagpu_vk.on`: the GPU enumeration runs on every launch whether the lane is armed or
-  not, since the picker outlives the lane.
+  gated on `tagpu_vk.on`: the GPU enumeration runs whenever the GL render thread starts, armed or
+  not, since the picker outlives the lane. (A launch that falls back to the GDI renderer never
+  starts it — there is no lane to pick a GPU for there.)
 
 **The GPU row is in Options → Visuals, Window column, and its list is ONE LAUNCH BEHIND.** The
 captions live in the generated `.GUI`, which is written at DLL attach, and a Vulkan instance
@@ -1899,9 +1900,11 @@ cat <gamedir>/tagpu_vk.cfg                    # gpu=<name> — the choice, store
 - **The row plates the device actually BOUND, not the one requested.** A stored name that is no
   longer present falls back to the discrete default and logs `the requested GPU "…" is not among
   the devices present`, and the row then shows the device that was used.
-- **At most four devices are listed**, because a stage button's art is `commongui.stagebuttnN`
-  and there is no `stagebuttn5`; the log says when any were dropped. Names are truncated to 31
-  characters at a word boundary for the same family of reasons.
+- **At most eight devices are listed** — our cap, not the engine's: a stage button's art index
+  is clamped at `0x4A8003`, so a row past four stages draws the four-bar plate and still works
+  (the `UI scale` row has six). Past the fourth the bar count saturates and the caption stays
+  right. The log says when any were dropped. Names are truncated to 31 characters at a word
+  boundary, because they come from the driver and land in a generated `.GUI`.
 
 ### The HUD is scaled inside the Screen Size (G18f, `tagpu_hud.on`)
 

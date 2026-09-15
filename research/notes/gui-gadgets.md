@@ -726,11 +726,36 @@ stage 1 while its `stages=3` and `stages=4` rows are green throughout. What sele
 `stagebuttn2` instead is still unmeasured; `texturenumber` remains the suspect and the
 screen that would settle it has to carry a non-zero one.
 
-**There is no `stagebuttn5` or `6`, so no cycle button can carry more than four stages.**
-Anything longer has to page, and the build panel's own `commongui.armprev` / `armnext`
-(45×17, three frames: normal, pressed, greyed) are what to page with. G19b's GPU row is capped
-at four devices for exactly this reason, in `tagpu_vk.h` rather than in the menu, so the cache,
-the row and the device bind all agree about which four.
+**There is no `stagebuttn5` or `6` — but a button with more than four stages still works, and
+this note used to say it could not.** [CORRECTED 2026-09-15, from the disassembly, after a
+landing review challenged it.] The art index is **clamped before the name is built**:
+
+```
+4a7ff9:  mov   al,[ebp+0x136]        ; stages
+4a7fff:  test  al,al
+4a8001:  je    0x4a8052              ; 0 stages -> a different name entirely
+4a8003:  cmp   al,0x4
+4a8005:  jae   0x4a800e
+4a8007:  and   eax,0xff              ; 1..3 -> that many
+4a800c:  jmp   0x4a8013
+4a800e:  mov   eax,0x4               ; 4 OR MORE -> four
+4a8013:  push  eax
+4a8018:  push  0x5098f8              ; "stagebuttn%d"
+4a801e:  call  0x4e42b0              ; sprintf
+4a802f:  call  0x4b8d40              ; GAF find
+```
+
+So a five-stage row draws `stagebuttn4` — four bars for five stages, which is a wrong bar count
+and a correct caption, not a missing picture. **The shipped `UI scale` row has carried six
+stages since G18f**, which is the same fact from the other end and is what should have caught
+this the first time. Paging with `commongui.armprev` / `armnext` (45×17, three frames: normal,
+pressed, greyed) is still the right answer when the *list* is long; it is not forced at five.
+
+**A `stages=1` button is rewritten to 2** at `0x4A803C` — `cmp al,1; jne` past
+`mov byte [ebp+0x136],2` and `or ah,0x40` into the flags at `[ebp+0x1b]` — so a row emitted with
+one stage gains a second, captionless one. Grey it (the engine skips the advance on a greyed
+gadget, `0x4AA36A`) rather than relying on the stage count to keep it inert; G19b's
+"(not listed yet)" row is the case in the tree.
 
 **The 120×20 IS THE DRAWN SIZE, whatever `w` the gadget carries, and the caption is clipped to
 the PLATE and not to the gadget** [MEASURED 2026-09-15, building that row]. A device name is

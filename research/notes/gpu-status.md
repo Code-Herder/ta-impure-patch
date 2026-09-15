@@ -3066,22 +3066,35 @@ lock:
 | `ST_READY` | the render thread, alone |
 | `ST_FAILED` / `ST_ZOMBIE` | nobody |
 
-`OFF → STARTING` is an `InterlockedCompareExchange` taken *before* the worker is created, so two
-frames cannot start two workers. `STARTING → READY` is an `InterlockedExchange` the worker does
-**after** every field is written, and the interlocked store is a full barrier, so a render thread
-that reads `READY` sees all of them. `READY → OFF` is the render thread's alone. There is no
-instant at which two threads may touch the same object.
+`OFF → STARTING` is an `InterlockedCompareExchange` taken *before* a worker is created, so two
+frames cannot start two workers **and the enumeration worker takes the same grant** — that last
+clause is the landing review's, and without it the two workers overlapped and shared `s_mod`,
+`s_gipa` and the whole instance-level dispatch table, which belongs to an instance. `STARTING →
+READY` is a **compare-exchange** the worker does after every field is written (also the review's:
+an unconditional store could stamp `READY` over an `ST_ZOMBIE` set behind its back). `READY → OFF`
+is the render thread's alone. So no two threads touch `s_vk` — **and, since the enumeration is
+inside the same grant, no two touch the dispatch table either.**
 
 **The bring-up is on a worker thread and that is not a preference.** `vkCreateInstance` loads the
 ICD, so it *is* a `LoadLibrary`, and [field notes](field-notes.html)'s rule — load from your own
 thread, never from `DllMain` or mid-present, through `real_LoadLibraryA` — was paid for once
 already by the companion-DLL design.
 
-**`ST_ZOMBIE` is the one bounded wait, and it is not the safety argument.** If the render thread
-stops while a worker is still in `ST_STARTING` it waits 5 s; whichever way that goes the outcome
-is safe, because on a timeout it **abandons** the objects rather than freeing them under a live
-thread. A leak is recoverable and a free is not, so the timeout chooses between two safe outcomes.
-`ST_ZOMBIE` is terminal for the session and the log says so.
+**`ST_ZOMBIE` is a worker winding down, and NOTHING WAITS FOR IT.** An earlier shape had
+`tagpu_vk_render_stop` wait five seconds for a worker still in `ST_STARTING`, then abandon and
+leak its objects. The review killed both halves. The game thread waits `INFINITE` on the render
+thread across a mode change (`dd.c`) and the render thread was waiting on the worker, so a mode
+change that caught a bring-up in flight stalled the **lockstep world** for as long as the
+bring-up had left — 371–451 ms, routinely — and because the window thread *is* the game thread
+here, a winevulkan call that reached the window with an inter-thread send would have closed the
+cycle game → render → worker → window with only that timeout to break it. Load-bearing, which the
+note claimed it was not.
+
+Now `render_stop` marks the lane `ST_ZOMBIE` and returns at once. `ST_ZOMBIE` means *a worker is
+finishing and nobody else may touch anything* — so the worker, which is still the sole owner of
+everything it built, puts its own objects back, destroys its own window and hands the lane to
+`ST_OFF`. Nothing waits, nothing leaks, and the lane can be brought up again afterwards instead
+of staying down for the session.
 
 **What the lane costs, measured in game** (640×480, 1024×768 and 1920×1080, shell → game →
 shell): the Vulkan window tracks the client rect **exactly** (bbox identical to `xwininfo`'s, 2
@@ -3099,11 +3112,16 @@ failing rather than by saying anything.
 | `tagpu_vk.gpus` | written by the enumeration worker: one line per device, `<flag> <name>`, where the flag is 1 for `DISCRETE_GPU` and 0 otherwise. The menu reads it at the NEXT attach |
 | `tagpu_vk.cfg` | `gpu=<name>` — the player's choice, by NAME so adding or removing a card cannot silently re-point it |
 
-**G19b's row is in §2.12's front-end table.** Its two engine-imposed bounds are worth repeating
-because both were found by building it: the list is capped at **four** devices (a stage button's
-art is `commongui.stagebuttnN` and there is no `stagebuttn5`), and a device name is canonicalised
-and truncated on the way in — it comes from the driver and lands inside a generated `.GUI` where
-a pipe and a semicolon are syntax. The caption is clipped to the **120×20 plate** whatever width the gadget
+**G19b's row is in §2.12's front-end table.** Two bounds are worth repeating because both were
+found by building it. A device name is canonicalised and truncated on the way in — it comes from
+the driver and lands inside a generated `.GUI` where a pipe and a semicolon are syntax. And the
+list is capped at **eight** devices, which is **ours and not the engine's**: it said four, on
+[GUI gadgets](gui-gadgets.html) 10.2's claim that a stage button cannot carry more stages than
+`commongui.stagebuttnN` has art for, and this landing's review disproved both. `0x4A8003` clamps
+the art index before the name is built, so a row past four stages draws the four-bar plate and
+works — and the shipped `UI scale` row has carried six since G18f. Past the fourth device the
+plate's bar count saturates while the caption stays right, which is the half that says which
+card. The caption is clipped to the **120×20 plate** whatever width the gadget
 carries ([GUI gadgets](gui-gadgets.html) 10.2), which is why `build_gpu_text` drops the longest
 leading run of whole words every listed device shares rather than trying to widen the row.
 

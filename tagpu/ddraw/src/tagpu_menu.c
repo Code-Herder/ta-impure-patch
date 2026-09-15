@@ -1791,7 +1791,10 @@ typedef struct {
    launcher-level setting: `DRI_PRIME` / `__NV_PRIME_RENDER_OFFLOAD` through
    tacli's `Instance.env()`, or the per-application driver profile on Windows.
    `vrow_greyed` greys the row whenever the Vulkan lane is not armed, so it
-   never looks live while it cannot bite. */
+   never looks live while it cannot bite -- which is also what keeps the
+   one-stage "(not listed yet)" row inert, since the engine REWRITES a
+   `stages=1` button to 2 at `0x4A803C` and would otherwise have a second,
+   captionless stage to cycle into. */
 static char s_gpuText[TAGPU_VK_MAXGPU * (TAGPU_VK_NAMELEN + 1) + 24];
 
 static VisRow s_vrow[VD_COUNT] = {
@@ -1884,7 +1887,12 @@ static void build_gpu_text(void)
     for (i = 0; i < n; i++) {
         int k = _snprintf(s_gpuText + at, sizeof s_gpuText - at - 1, "%s%s",
                           i ? "|" : "", tagpu_vk_gpu_name(i) + cut);
-        if (k < 0 || k >= (int)(sizeof s_gpuText - at - 1)) break;
+        /* `_snprintf` returns -1 on truncation AND leaves no terminator, so a
+           break has to put one back -- otherwise the tail of a half-written
+           caption would run on into whatever the buffer held. It cannot
+           truncate at today's bounds; it is written this way so that it still
+           cannot the day TAGPU_VK_MAXGPU or NAMELEN moves. */
+        if (k < 0 || k >= (int)(sizeof s_gpuText - at - 1)) { s_gpuText[at] = 0; n = i; break; }
         at += k;
     }
     s_gpuText[sizeof s_gpuText - 1] = 0;
