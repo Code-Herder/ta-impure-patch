@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
 """The Vulkan lane against its GL twin, pixel for pixel (Phase G / G19d).
 
-    tools/vk-ab.py <gamedir>                 # the two captures in an instance
+    tools/vk-ab.py <gamedir>                 # the fps pair in an instance
+    tools/vk-ab.py <gamedir> --pass scaffold # another ported pass's pair
     tools/vk-ab.py a.ppm b.ppm [--out d.png] # two files
 
-WHAT IT COMPARES, AND WHY IT REFUSES RATHER THAN SCALES. `tagpu_fps.ab` in an
-instance's gamedir makes both backends capture ONE frame of the frame-rate
-readout over a black field -- the GL lane writes `tagpu_fps_gl.ppm` from
-`glReadPixels`, the Vulkan lane writes `tagpu_fps_vk.ppm` out of the swapchain
-image it just presented. Same quads, same atlas bytes, same shader, same frame
-size, two rasterisers. So the only honest verdict is "identical" or "not", and
-two captures of different sizes are a setup fault (the fork letterboxing, or the
-window not matching the render target) rather than something to resample: a
-scaled comparison cannot be 0 px by construction, so it would turn a real
-mismatch into a plausible-looking number.
+WHAT IT COMPARES, AND WHY IT REFUSES RATHER THAN SCALES. `tagpu_<pass>.ab` in an
+instance's gamedir makes both backends capture ONE frame of that pass over a
+black field -- the GL lane writes `tagpu_<pass>_gl.ppm` from `glReadPixels`, the
+Vulkan lane writes `tagpu_<pass>_vk.ppm` out of the swapchain image it just
+presented. Same inputs, same shader, same frame size, two rasterisers. So the
+only honest verdict is "identical" or "not", and two captures of different sizes
+are a setup fault (the fork letterboxing, or the window not matching the render
+target) rather than something to resample: a scaled comparison cannot be 0 px by
+construction, so it would turn a real mismatch into a plausible-looking number.
+
+ARM ONE PASS'S `.ab` AT A TIME. Each GL capture holds one pass, because its twin
+blacks the frame and reads back around its own draw; the Vulkan capture is one
+frame and holds every armed pass at once. The lane refuses to capture at all
+when more than one pass drew into the frame it was asked for, and says so in
+tagpu.log, so a contaminated pair is not written rather than being written and
+believed.
 
 The exit status is 0 only when every pixel agrees.
 """
@@ -58,11 +65,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("args", nargs="+")
     ap.add_argument("--out", help="write a difference image (PPM) here")
+    ap.add_argument("--pass", dest="which", default="fps",
+                    help="which ported pass's pair to compare in a gamedir "
+                         "(fps, scaffold, ...); default fps")
     a = ap.parse_args()
 
     if len(a.args) == 1:
         d = pathlib.Path(a.args[0])
-        gl, vk = d / "tagpu_fps_gl.ppm", d / "tagpu_fps_vk.ppm"
+        gl = d / ("tagpu_%s_gl.ppm" % a.which)
+        vk = d / ("tagpu_%s_vk.ppm" % a.which)
     elif len(a.args) == 2:
         gl, vk = pathlib.Path(a.args[0]), pathlib.Path(a.args[1])
     else:
@@ -70,8 +81,8 @@ def main():
 
     for p in (gl, vk):
         if not p.exists():
-            raise SystemExit("%s is not there -- did `tagpu_fps.ab` fire on both "
-                             "lanes? tagpu.log says." % p)
+            raise SystemExit("%s is not there -- did `tagpu_%s.ab` fire on both "
+                             "lanes? tagpu.log says." % (p, a.which))
 
     gw, gh, gp = read_ppm(gl)
     vw, vh, vp = read_ppm(vk)
@@ -126,9 +137,12 @@ def main():
         print("difference     %s (red where they disagree)" % a.out)
 
     if diff == 0 and ink_gl == 0:
-        print("\nBOTH CAPTURES ARE BLANK -- that is not a pass. The readout needs")
-        print("`tagpu_fps.on` and a couple of seconds for its first averaging")
-        print("window before either lane has a quad to draw.")
+        print("\nBOTH CAPTURES ARE BLANK -- that is not a pass. Two empty frames")
+        print("agree perfectly and prove nothing. Check that `tagpu_%s.on` is" % a.which)
+        print("there, that the pass had something to draw on the captured frame,")
+        print("and -- for the readout -- that `mark.on` is there too, because the")
+        print("font reaches the render thread in the frame packet at hook 8 and")
+        print("without it every string is refused and BOTH lanes draw nothing.")
         return 1
     print("\n%s" % ("0 px apart" if diff == 0 else "NOT identical"))
     return 0 if diff == 0 else 1

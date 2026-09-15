@@ -160,6 +160,7 @@
 #include "hook.h"
 #include "tagpu_vk.h"
 #include "tagpu_vk_fps.h"
+#include "tagpu_vk_scaffold.h"
 #include "tagpu_vk_shot.h"
 
 #define ON_FILE    "tagpu_vk.on"
@@ -177,7 +178,10 @@
    swapchain image it presents THAT frame. Set `color=0,0,0` in the lever file
    so the two backgrounds match, or the comparison is of two different fields
    with the same text on them. */
-#define AB_OUT     "tagpu_fps_vk.ppm"
+/* ONE FILE PER PORTED PASS, because each pass has its own GL twin and its own
+   lever. `s_abPath` below carries whichever one claimed the pending frame. */
+#define AB_FPS     "tagpu_fps_vk.ppm"
+#define AB_SCAF    "tagpu_scaffold_vk.ppm"
 #define GPUS_FILE  "tagpu_vk.gpus"      /* the cache the menu reads at attach */
 #define CFG_FILE   "tagpu_vk.cfg"       /* the player's choice, by name       */
 #define CFG_TMP    "tagpu_vk.cfg.tmp"
@@ -376,6 +380,7 @@ static void passlog(const char* m) { vklog("%s", m); }
    mechanism, that the copy has completed. `nimg` frames later, which at any
    frame rate the lane runs at is a few milliseconds. */
 static int s_abSlot1;       /* 0 = nothing pending, else the slot index + 1 */
+static const char* s_abPath;/* the file the pending capture belongs in         */
 
 /* Give the staging buffer back at a point where the device is idle. The FILE is
    not written here -- a lane that is coming down or rebuilding its swapchain
@@ -1431,6 +1436,7 @@ static void vk_down(void)
            destroyed. The wait above is what makes that safe rather than a race
            -- nothing of theirs is still in a queue. */
         tagpu_vk_fps_down(&s_pass);
+        tagpu_vk_scaffold_down(&s_pass);
         ab_drop("the lane coming down", idle);
         tagpu_vk_shot_down(&s_pass);
         vk_perimage_free();
@@ -1807,7 +1813,7 @@ static int vk_present(void)
        completed, and the staging buffer is ours to read. No second wait. */
     if (s_abSlot1 == (int)fi + 1) {
         s_abSlot1 = 0;
-        tagpu_vk_shot_finish(&s_pass, AB_OUT);
+        tagpu_vk_shot_finish(&s_pass, s_abPath);
     }
 
     vkResetFences(s_vk.dev, 1, &s_vk.fence[fi]);
@@ -1842,18 +1848,31 @@ static int vk_present(void)
        is what proves the GPU has finished with that slot's buffers, and it is
        the only thing that does. */
     {
-        int draw_fps = 0, ab = 0;
+        int draw_fps = 0, draw_scaf = 0, ab_fps = 0, ab_scaf = 0;
+        int ndraw = 0, nclaim = 0;
+        const char* abpath = NULL;
         VkRenderPassBeginInfo rbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
         if (s_vk.rp && s_vk.fb[idx]) {
+            /* THE PORTED PASSES, IN THE GL LANE'S OWN ORDER. tagpu_overlay.c
+               draws the scaffold before the readout, and two passes that blend
+               are not commutative -- so the order here is that order, not the
+               order the files were written in. */
+            draw_scaf = tagpu_vk_scaffold_prepare(&s_pass, cb, fi);
+            ab_scaf = tagpu_vk_scaffold_ab_frame();
             draw_fps = tagpu_vk_fps_prepare(&s_pass, cb, fi);
-            ab = tagpu_vk_fps_ab_frame();
+            ab_fps = tagpu_vk_fps_ab_frame();
         }
+        ndraw = draw_scaf + draw_fps;
+        nclaim = ab_scaf + ab_fps;
+        abpath = ab_scaf ? AB_SCAF : (ab_fps ? AB_FPS : NULL);
 
         if (s_vk.rp && s_vk.fb[idx]) {
             rbi.renderPass = s_vk.rp;
             rbi.framebuffer = s_vk.fb[idx];
             rbi.renderArea.extent = s_vk.ext;
             vkCmdBeginRenderPass(cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+            if (draw_scaf)
+                tagpu_vk_scaffold_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_fps)
                 tagpu_vk_fps_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             vkCmdEndRenderPass(cb);
@@ -1869,16 +1888,35 @@ static int vk_present(void)
                                  VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL, 0, NULL, 1, &b);
         }
 
-        /* THE A/B CAPTURE, ONE FRAME, UNDER THE LEVER tagpu_fps.c SHARES. It
-           is recorded last so that what it reads is the finished frame, and it
-           leaves the image in PRESENT_SRC so the present below is unaffected. */
-        if (ab && !s_vk.cansrc)
+        /* THE A/B CAPTURE, ONE FRAME, UNDER THE LEVER THE CLAIMING PASS SHARES
+           WITH ITS GL TWIN. Recorded last so that what it reads is the finished
+           frame, and it leaves the image in PRESENT_SRC so the present below is
+           unaffected.
+
+           ONE PASS IN THE FRAME, OR NO CAPTURE. [G19e.] Each GL twin captures
+           its own half by blacking the frame, drawing ITSELF and reading back
+           immediately -- so a GL half contains exactly one pass. This side is
+           one frame with every armed pass drawn into it. With two A/B levers
+           armed at once the Vulkan half would therefore hold two passes and
+           each GL half one, and the diff would report every pixel of the OTHER
+           pass as a difference: an oracle failure that reads exactly like a
+           broken port, which is the worst answer an oracle can give. Both
+           conditions are checked, not just the claim count -- a second pass
+           that drew without claiming contaminates the frame just as much. */
+        if (nclaim > 1 || (nclaim == 1 && ndraw > 1))
+            vklog("%d A/B levers claimed this frame and %d passes drew into it - "
+                  "nothing captured. A Vulkan frame carries every armed pass at "
+                  "once while each GL capture carries one, so arm one pass's .ab "
+                  "at a time (and turn the other pass's .on off).", nclaim, ndraw);
+        else if (nclaim == 1 && !s_vk.cansrc)
             vklog("the A/B asked for a capture and this surface's images do not "
                   "carry TRANSFER_SRC - only the GL half will be written");
-        else if (ab && tagpu_vk_shot_record(&s_pass, cb, s_vk.img[idx],
-                                            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                                            s_vk.ext.width, s_vk.ext.height, s_vk.fmt))
+        else if (nclaim == 1 && tagpu_vk_shot_record(&s_pass, cb, s_vk.img[idx],
+                                                     VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                                                     s_vk.ext.width, s_vk.ext.height, s_vk.fmt)) {
             s_abSlot1 = (int)fi + 1;
+            s_abPath = abpath;
+        }
     }
     vkEndCommandBuffer(cb);
 
@@ -1929,6 +1967,7 @@ static int vk_resize(int w, int h)
        pass that rebuilds everything has one path instead of two, and a resize
        is a window drag, not a frame.) */
     tagpu_vk_fps_down(&s_pass);
+    tagpu_vk_scaffold_down(&s_pass);
     ab_drop("the swapchain rebuilding", idle);
     vk_perimage_free();
     r = vk_swapchain(w, h);

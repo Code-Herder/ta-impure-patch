@@ -32,6 +32,7 @@
 #include "tagpu_scaffold.h"
 #include "tagpu_zoom.h"      /* the predicted eye every pass draws from */
 #include "tagpu_packet.h"    /* the true viewport, from this frame's packet */
+#include "tagpu_abshot.h"   /* the GL half of the Phase G A/B */
 
 /* ---- engine layout (terrain-depth.md, binary-verified) ----
    SINCE THE FRAME PACKET'S LANDING 3 this file reads no engine field of its
@@ -110,6 +111,22 @@ static int    s_texW = 0, s_texH = 0;
 static int    s_lastR0 = 0, s_lastRows = 0;
 static unsigned s_lastFrame = 0;
 
+/* ---- the G19e A/B, and what this frame hands the Vulkan lane ----
+   `tagpu_scaffold.ab` makes this pass draw over a black frame and read it back
+   once; the Vulkan lane captures the same frame because `s_abFrame` travels
+   with the scaffold below rather than being polled a second time. See
+   inc/tagpu_scaffold.h. */
+#define ABFILE  "tagpu_scaffold.ab"
+#define ABOUT   "tagpu_scaffold_gl.ppm"
+static int s_ab, s_abDone, s_abFrame;
+
+/* Published AFTER the GL draw, taken exactly once, and every field of it is
+   what the draw above actually used. `s_pubBuf` is `s_buf`, which this file
+   owns and rebuilds only on the render thread. */
+static const unsigned char* s_pubBuf;
+static int   s_pubW, s_pubH;
+static float s_pubRect[4], s_pubRows;
+
 static const char* VS =
     "#version 330 core\n"
     "layout(location=0) in vec2 p;\n"           /* unit quad 0..1 */
@@ -159,7 +176,7 @@ static void init_gl(void)
     s_uRows = glGetUniformLocation(s_prog, "uRows");
     GLint uScaf = glGetUniformLocation(s_prog, "uScaf");
 
-    const float quad[] = { 0,0, 1,0, 0,1, 1,1 };
+    const float quad[] = TAGPU_SCAF_QUAD;
     glGenVertexArrays(1, &s_vao); glBindVertexArray(s_vao);
     glGenBuffers(1, &s_vbo); glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof quad, quad, GL_STATIC_DRAW);
@@ -282,9 +299,23 @@ static const unsigned char* feat_frame0(const char* def)
 
 void tagpu_scaffold_frame(const TAGPU_FRAME* f)
 {
+    /* NOTHING IS HANDED OVER UNTIL THIS FRAME HAS DRAWN IT, and the A/B flag
+       goes with it. Every return below leaves both clear, which is what stops
+       the flag LATCHING: set once and cleared only on consumption, it would
+       survive a frame the Vulkan lane never collected and ride a LATER frame's
+       scaffold, so the two captures would be of different frames -- the one
+       thing the design exists to prevent. (The same defect was found in
+       tagpu_fps.c by the G19d review; it is designed out here.) */
+    s_pubBuf = NULL; s_abFrame = 0;
+
     if (s_state == 2) return;
-    if (s_armed < 0 || (f->frame_counter % 30) == 0)
+    if (s_armed < 0 || (f->frame_counter % 30) == 0) {
         s_armed = GetFileAttributesA("tagpu_scaffold.on") != INVALID_FILE_ATTRIBUTES;
+        /* the A/B re-arms when the lever is taken away and put back, so a
+           second capture needs no relaunch */
+        s_ab = GetFileAttributesA(ABFILE) != INVALID_FILE_ATTRIBUTES;
+        if (!s_ab) s_abDone = 0;
+    }
     if (!s_armed) return;
     if (s_state == 0) init_gl();
     if (s_state != 1) return;
@@ -478,6 +509,19 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
     float y0 = 1.f - (float)vpT        / gh * 2.f;   /* NDC top    */
     float y1 = 1.f - (float)(vpT + vh) / gh * 2.f;   /* NDC bottom */
 
+    /* THE FRAME GOES BLACK FIRST WHEN THE A/B IS ARMED, and only then. What is
+       being compared is THIS PASS's pixels, so everything that is not this pass
+       has to leave the frame -- and unlike the readout, which is the last thing
+       drawn, a world pass has the rest of the frame under it. The clear is
+       therefore here, immediately before the draw, and the readback is
+       immediately after it, before the native pass and the UI layer have run.
+       One frame, and the player sees it: the terrain drawn before the clear is
+       missing from it. That is what a measuring lever costs. */
+    TAGPU_ABSHOT shot;
+    int taking = s_ab && !s_abDone;
+    shot.live = 0;
+    if (taking) tagpu_abshot_begin(&shot);
+
     glUseProgram(s_prog);
     glBindVertexArray(s_vao);
     glEnable(GL_BLEND);
@@ -491,6 +535,34 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
     glBindVertexArray(0);
     glUseProgram(0);
     serr("s-quad");
+
+    if (taking) {
+        tagpu_abshot_end(&shot, ABOUT, "scaffold");
+        s_abDone = 1;
+        s_abFrame = 1;
+    }
+
+    /* PUBLISHED AFTER THE GL DRAW, not before: these are the bytes and the
+       numbers that were just drawn, and the Vulkan lane is about to draw the
+       same ones. */
+    s_pubBuf = s_buf; s_pubW = vw; s_pubH = vh;
+    s_pubRect[0] = x0; s_pubRect[1] = y0; s_pubRect[2] = x1; s_pubRect[3] = y1;
+    s_pubRows = (float)nRows;
+}
+
+/* The scaffold this frame drew, for the Vulkan edition of the pass, HANDED
+   OVER EXACTLY ONCE -- see inc/tagpu_scaffold.h. */
+int tagpu_scaffold_overlay(const unsigned char** buf, int* w, int* h,
+                           float rect[4], float* rows, int* ab)
+{
+    if (!s_pubBuf) return 0;
+    *buf = s_pubBuf; *w = s_pubW; *h = s_pubH;
+    rect[0] = s_pubRect[0]; rect[1] = s_pubRect[1];
+    rect[2] = s_pubRect[2]; rect[3] = s_pubRect[3];
+    *rows = s_pubRows;
+    *ab = s_abFrame;
+    s_pubBuf = NULL; s_abFrame = 0;
+    return 1;
 }
 
 /* exports for the native pass: this frame's scaffold texture + row encoding */
@@ -517,4 +589,8 @@ static void serr(const char* tag)
     if (e) { FILE* fp = fopen("tagpu.log", "a");
              if (fp) { fprintf(fp, "serr %s=%x\n", tag, e); fclose(fp); } }
 }
-void tagpu_scaffold_glreset(void) { s_state = 0; s_texW = s_texH = 0; }
+void tagpu_scaffold_glreset(void)
+{
+    s_state = 0; s_texW = s_texH = 0;
+    s_pubBuf = NULL; s_abFrame = 0;
+}

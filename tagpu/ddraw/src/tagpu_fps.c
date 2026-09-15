@@ -48,6 +48,12 @@
    2026-09-15; making it true would need a frame stamp the two files share, and
    nothing yet needs one.]
 
+   THE A/B'S MACHINERY IS SHARED (tagpu_abshot.h), not this file's. G19e wanted
+   the same black-the-frame-and-read-it-back around a world pass and copying a
+   PPM writer, a state save and an entry-point resolve into a second file was
+   one copy too many -- three more world passes are owed the same. What is left
+   here is the two lines that say WHEN.
+
    THE A/B (`tagpu_fps.ab`) IS AN ORACLE, NOT INSTRUMENTATION. With the file
    present this pass clears the frame to black before it draws, reads the result
    back to `tagpu_fps_gl.ppm` and latches -- one frame, once, until the lever is
@@ -63,6 +69,7 @@
 #include "opengl_utils.h"
 #include "tagpu_fps.h"
 #include "tagpu_text.h"
+#include "tagpu_abshot.h"
 
 #define TRIGGER   "tagpu_fps.on"
 #define PKSHOW    "tagpu_packet.show"
@@ -81,29 +88,11 @@ typedef void (APIENTRY *PFN_ACTIVETEX)(GLenum);
 typedef void (APIENTRY *PFN_UNIFORM2F)(GLint, GLfloat, GLfloat);
 typedef void (APIENTRY *PFN_UNIFORM3F)(GLint, GLfloat, GLfloat, GLfloat);
 typedef void (APIENTRY *PFN_DISABLE)(GLenum);
-typedef void (APIENTRY *PFN_CLEARCOLOR)(GLfloat, GLfloat, GLfloat, GLfloat);
-typedef void (APIENTRY *PFN_CLEAR)(GLbitfield);
-typedef void (APIENTRY *PFN_READPIXELS)(GLint, GLint, GLsizei, GLsizei,
-                                        GLenum, GLenum, void*);
-typedef void (APIENTRY *PFN_GETINTEGERV)(GLenum, GLint*);
-typedef void (APIENTRY *PFN_PIXELSTOREI)(GLenum, GLint);
-typedef void (APIENTRY *PFN_GETFLOATV)(GLenum, GLfloat*);
-typedef GLboolean (APIENTRY *PFN_ISENABLED)(GLenum);
-typedef void (APIENTRY *PFN_ENABLE)(GLenum);
 static PFN_DRAWARRAYS x_glDrawArrays;
 static PFN_ACTIVETEX  x_glActiveTexture;
 static PFN_UNIFORM2F  x_glUniform2f;
 static PFN_UNIFORM3F  x_glUniform3f;
 static PFN_DISABLE    x_glDisable;
-/* the A/B's five, resolved with the rest and never called without the lever */
-static PFN_CLEARCOLOR  x_glClearColor;
-static PFN_CLEAR       x_glClear;
-static PFN_READPIXELS  x_glReadPixels;
-static PFN_GETINTEGERV x_glGetIntegerv;
-static PFN_PIXELSTOREI x_glPixelStorei;
-static PFN_GETFLOATV   x_glGetFloatv;
-static PFN_ISENABLED   x_glIsEnabled;
-static PFN_ENABLE      x_glEnable;
 
 /* The fork declares only the entry points its own passes use, so the core-1.1
    ones this needs are resolved by hand -- wglGetProcAddress first, then
@@ -183,21 +172,14 @@ static void init_gl(void)
     x_glUniform2f     = (PFN_UNIFORM2F) getgl("glUniform2f");
     x_glUniform3f     = (PFN_UNIFORM3F) getgl("glUniform3f");
     x_glDisable       = (PFN_DISABLE)   getgl("glDisable");
-    x_glClearColor    = (PFN_CLEARCOLOR) getgl("glClearColor");
-    x_glClear         = (PFN_CLEAR)      getgl("glClear");
-    x_glReadPixels    = (PFN_READPIXELS) getgl("glReadPixels");
-    x_glGetIntegerv   = (PFN_GETINTEGERV)getgl("glGetIntegerv");
-    x_glPixelStorei   = (PFN_PIXELSTOREI)getgl("glPixelStorei");
-    x_glGetFloatv     = (PFN_GETFLOATV)  getgl("glGetFloatv");
-    x_glIsEnabled     = (PFN_ISENABLED)  getgl("glIsEnabled");
-    x_glEnable        = (PFN_ENABLE)     getgl("glEnable");
     if (!x_glDrawArrays || !x_glActiveTexture ||
         !x_glUniform2f || !x_glUniform3f || !x_glDisable) {
         flog("fps: missing GL proc"); s_state = 2; return;
     }
-    /* The A/B's five are NOT in that test: the readout is a play feature and
-       the oracle is not, so a driver that somehow lacked one of them would
-       lose the A/B and keep the readout. `ab_capture` checks them itself. */
+    /* The A/B's entry points are NOT in that test and are not resolved here at
+       all: the readout is a play feature and the oracle is not, so a driver
+       that somehow lacked one of them loses the A/B and keeps the readout.
+       tagpu_abshot.c resolves its own and says which one was missing. */
     /* Both are created before either is tested so the cleanup below is one
        path -- mksh returns the shader even when it failed, and a leak here is
        permanent: s_state 2 is never retried inside one GL context. */
@@ -248,85 +230,6 @@ static int emit(const char* s, float* x, float y, int* nv)
     *nv = i + QUADV;
     *x = x1 + 1.0f;
     return 1;
-}
-
-/* ---- the G19d A/B oracle ------------------------------------------------
-   One frame of the GL lane's readout over a black field, as a binary PPM, so
-   that it can be compared texel for texel against the Vulkan lane's capture of
-   the same frame (tools/vk-ab.py). Not a screenshot of the game: the game is
-   deliberately not in it.
-
-   THE RECT IS THE VIEWPORT'S, asked for rather than assumed. The pass draws in
-   GAME-FRAME pixels through `uFrame` and the viewport is what maps those onto
-   the target, so the viewport is the rect the comparison is about -- and the
-   Vulkan lane's swapchain covers the game window's CLIENT area, which is the
-   same rect only when the fork is not letterboxing. The compare tool refuses
-   two captures of different sizes rather than scaling one, because a scaled
-   comparison cannot be 0 px by construction. */
-static void ab_write_ppm(const char* path, int w, int h, const unsigned char* rgba)
-{
-    FILE* fp;
-    int y, x;
-    unsigned char* row;
-    unsigned char* line;
-    /* The row buffer before the file, for the reason tagpu_vk_shot.c gives: a
-       header-only PPM reads as a broken writer rather than as a failed malloc. */
-    line = (unsigned char*)malloc((size_t)w * 3);
-    if (!line) { flog("fps: no memory for a row of the A/B capture"); return; }
-    if (!(fp = fopen(path, "wb"))) {
-        flog("fps: the A/B could not open its file"); free(line); return;
-    }
-    fprintf(fp, "P6\n%d %d\n255\n", w, h);
-    /* glReadPixels hands back the BOTTOM row first and a PPM's first row is the
-       TOP one, so the rows are written backwards. Getting this wrong produces a
-       capture that differs from the Vulkan one in every text pixel and in
-       nothing else, which reads as a Y-flip bug in the port rather than in the
-       oracle -- hence the note. */
-    /* ONE fwrite A ROW, for the reason tagpu_vk_shot.c gives: this is the render
-       thread and a stdio call per pixel is a million of them at 1080p. */
-    for (y = h - 1; y >= 0; y--) {
-        row = (unsigned char*)rgba + (size_t)y * w * 4;
-        for (x = 0; x < w; x++) {
-            line[x * 3 + 0] = row[(size_t)x * 4 + 0];
-            line[x * 3 + 1] = row[(size_t)x * 4 + 1];
-            line[x * 3 + 2] = row[(size_t)x * 4 + 2];
-        }
-        fwrite(line, 1, (size_t)w * 3, fp);
-    }
-    free(line);
-    fclose(fp);
-}
-
-static void ab_capture(void)
-{
-    GLint vp[4] = { 0, 0, 0, 0 };
-    GLint oldpack = 4;
-    unsigned char* buf;
-    char msg[160];
-    if (!x_glReadPixels || !x_glGetIntegerv || !x_glPixelStorei) {
-        flog("fps: the A/B needs glReadPixels and this context has none"); s_abDone = 1; return;
-    }
-    x_glGetIntegerv(GL_VIEWPORT, vp);
-    if (vp[2] <= 0 || vp[3] <= 0 || vp[2] > 8192 || vp[3] > 8192) {
-        flog("fps: the A/B found no sane viewport"); s_abDone = 1; return;
-    }
-    buf = (unsigned char*)malloc((size_t)vp[2] * vp[3] * 4);
-    if (!buf) { s_abDone = 1; return; }
-    /* GL_PACK_ALIGNMENT goes back too: 4 is the initial value every other
-       reader in the fork assumes, and leaving it at 1 is the same kind of leak
-       from a lever into play state as the clear colour was. */
-    x_glGetIntegerv(GL_PACK_ALIGNMENT, &oldpack);
-    x_glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    x_glReadPixels(vp[0], vp[1], vp[2], vp[3], GL_RGBA, GL_UNSIGNED_BYTE, buf);
-    x_glPixelStorei(GL_PACK_ALIGNMENT, oldpack);
-    ab_write_ppm(ABOUT, vp[2], vp[3], buf);
-    free(buf);
-    _snprintf(msg, sizeof msg,
-              "fps: A/B wrote %s, %dx%d - the Vulkan lane writes tagpu_fps_vk.ppm",
-              ABOUT, (int)vp[2], (int)vp[3]);
-    msg[sizeof msg - 1] = 0;
-    flog(msg);
-    s_abDone = 1;
 }
 
 /* The vertices this frame built, for the Vulkan edition of the pass, and HANDED
@@ -444,29 +347,10 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
        and they are exactly the kind of "harmless today" that an A/B taken in
        six months would be reading. */
     {
-        int can = x_glClear && x_glClearColor && x_glDisable && x_glGetFloatv &&
-                  x_glIsEnabled && x_glEnable;
-        int shot = s_ab && !s_abDone && can;
-        /* AND AN A/B THAT CANNOT RUN SAYS SO, ONCE. [FROM THE REVIEW'S SECOND
-           PASS 2026-09-15.] The state save and restore added three more entry
-           points to this list, and a context missing any of them used to make
-           the lever do nothing at all -- no clear, no capture, no line in the
-           log, and `s_abDone` left clear so it tried again every poll for the
-           session. `ab_capture` logs for its own three; these had nothing. */
-        if (s_ab && !s_abDone && !can) {
-            flog("fps: the A/B needs glClearColor/glClear/glGetFloatv/glIsEnabled/"
-                 "glEnable and this context is missing one - nothing captured");
-            s_abDone = 1;
-        }
-        GLfloat oldcol[4] = { 0, 0, 0, 0 };
-        GLboolean oldsc = GL_FALSE;
-        if (shot) {
-            x_glGetFloatv(GL_COLOR_CLEAR_VALUE, oldcol);
-            oldsc = x_glIsEnabled(GL_SCISSOR_TEST);
-            x_glDisable(GL_SCISSOR_TEST);
-            x_glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-            x_glClear(GL_COLOR_BUFFER_BIT);
-        }
+        TAGPU_ABSHOT shot;
+        int taking = s_ab && !s_abDone;
+        shot.live = 0;
+        if (taking) tagpu_abshot_begin(&shot);
 
     glUseProgram(s_prog);
     x_glUniform2f(s_uFrame, (float)f->game_width, (float)f->game_height);
@@ -484,11 +368,10 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
        and the Vulkan lane is about to draw the same array. */
     s_nv = nv; s_fw = f->game_width; s_fh = f->game_height;
 
-        if (shot) {
-            ab_capture();
+        if (taking) {
+            tagpu_abshot_end(&shot, ABOUT, "fps");
+            s_abDone = 1;
             s_abFrame = 1;
-            x_glClearColor(oldcol[0], oldcol[1], oldcol[2], oldcol[3]);
-            if (oldsc) x_glEnable(GL_SCISSOR_TEST);
         }
     }
 }
