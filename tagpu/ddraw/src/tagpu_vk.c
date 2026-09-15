@@ -795,11 +795,19 @@ static DWORD WINAPI enum_worker(LPVOID arg)
        write at all and a file watcher sees a change only when there is one. */
     for (i = 0; i < (int)n; i++) {
         VkPhysicalDeviceProperties p;
+        int k;
         vkGetPhysicalDeviceProperties(pds[i], &p);
         vk_canon(name[i], NAMELEN, p.deviceName);
         disc[i] = (p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU);
-        at += _snprintf(out + at, sizeof out - at - 1, "%d %s\n", disc[i], name[i]);
-        if (at >= (int)sizeof out - 1) break;
+        /* `_snprintf` RETURNS -1 ON TRUNCATION, not the length it wanted, so
+           the return is checked BEFORE it is added: `at += -1` would step the
+           cursor backwards and the next device would be written in front of the
+           buffer. It cannot truncate at today's bounds (4 devices x 34 bytes
+           against 224), which is exactly why it would have sat here unnoticed
+           until one of them moved. */
+        k = _snprintf(out + at, sizeof out - at - 1, "%d %s\n", disc[i], name[i]);
+        if (k < 0 || k >= (int)(sizeof out - at - 1)) break;
+        at += k;
     }
     out[sizeof out - 1] = 0;
 
@@ -881,6 +889,18 @@ static int vk_swapchain(int w, int h)
             if (modes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR) { mode = modes[i]; break; }
     }
 
+    /* A BOUND, NOT A CLAMP. Our per-image arrays are MAXIMG long, so a surface
+       whose MINIMUM is larger than that is refused outright: clamping `want`
+       below `minImageCount` is invalid, and letting the swapchain come back
+       with more images than the arrays hold would mean `vkAcquireNextImageKHR`
+       eventually handing back an index the bound in `vk_present` rejects --
+       a lane that silently presents nothing rather than one that says why.
+       (`minImageCount` is 3 on the reference setup; this has never fired.) */
+    if (caps.minImageCount > MAXIMG) {
+        vklog("the surface wants at least %u images and this build carries %d - "
+              "the lane stays down", caps.minImageCount, MAXIMG);
+        return 0;
+    }
     want = caps.minImageCount + 1;
     if (caps.maxImageCount && want > caps.maxImageCount) want = caps.maxImageCount;
     if (want > MAXIMG) want = MAXIMG;
@@ -914,7 +934,12 @@ static int vk_swapchain(int w, int h)
     r = vkCreateSwapchainKHR(s_vk.dev, &swci, NULL, &s_vk.sc);
     if (r != VK_SUCCESS) {
         vklog("vkCreateSwapchainKHR: %s (%d)", res_name(r), (int)r);
-        s_vk.sc = old;                       /* keep what we had; caller decides */
+        /* PUT `old` BACK SO IT CAN BE DESTROYED, not so it can be used: the
+           specification retires `oldSwapchain` even when creation FAILS, so
+           presenting to it again would be presenting to a retired swapchain.
+           Every caller of this function treats 0 as "tear the lane down", and
+           `vk_down` is what then destroys this handle. */
+        s_vk.sc = old;
         return 0;
     }
     if (old) vkDestroySwapchainKHR(s_vk.dev, old, NULL);
