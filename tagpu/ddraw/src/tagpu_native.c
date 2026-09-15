@@ -2039,15 +2039,20 @@ static int ghost_armed(unsigned frame_counter)
         nlog(b);
         s_ghostLogged = 1;
     }
-    /* THE PREREQUISITE, SAID OUT LOUD. The ghost draws through the unit pass —
-       its view and its program — so with tagpu_native.on off it can never draw
-       a pixel. Every other dependent lever declares that as a `needs` column
-       in tagpu_opt.c, which this one cannot: the table is the play-default set
-       and the ghost is deliberately not in it. Before this the lever armed,
-       logged ARMED, and then did nothing at all — the frame's early-out sits
-       in front of the pass when nothing else is armed, so not even the
-       heartbeat came out. Leaving s_ghostOn up would also keep the 30-frame
-       poll answering "armed" — the refusal is the honest state. */
+    /* THE PREREQUISITE, SAID OUT LOUD, AND KEPT EVEN THOUGH THE TABLE NOW
+       DECLARES IT. The ghost draws through the unit pass — its view and its
+       program — so with tagpu_native.on off it can never draw a pixel. Since
+       2026-09-14 the ghost IS a play default and carries `needs
+       tagpu_native.on` in tagpu_opt.c's table like every other dependent
+       lever, so the table's own resolution withholds the default when the
+       unit pass is off. This test stays because `needs` governs the DEFAULT,
+       not the lever: a hand-written `tagpu_ghost.on` file arms the pass
+       whatever the table says, and that is the case this refusal is for.
+       Before it, the lever armed, logged ARMED, and then did nothing at all —
+       the frame's early-out sits in front of the pass when nothing else is
+       armed, so not even the heartbeat came out. Leaving s_ghostOn up would
+       also keep the 30-frame poll answering "armed" — the refusal is the
+       honest state. */
     if (!tagpu_opt_on("tagpu_native.on")) {
         if (s_ghostLogged != 2) {
             nlog("ghost: off — needs tagpu_native.on (it draws through the unit pass)");

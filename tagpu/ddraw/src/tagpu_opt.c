@@ -32,6 +32,7 @@ static const Def s_defs[] = {
     { "tagpu_mark.on",      "", 0, 0 },                     /* bars, cursor, band box, digits      */
     { "tagpu_markown.on",   "", "tagpu_mark.on", 0 },
     { "tagpu_order.on",     "", 0, 0 },                     /* the shift-held order overlay        */
+    { "tagpu_ghost.on",     "", "tagpu_native.on", 0 },     /* the building preview at the cursor  */
     { "tagpu_zoom.on",      "", 0, 0 },                     /* the wheel, the camera's range       */
     { "tagpu_vpwide.on",    "", "tagpu_zoom.on", 0 },       /* clicks land at zoom < 1             */
     { "tagpu_gui.on",       "", 0, 0 },                     /* the GL UI layer, Classic 1:1        */

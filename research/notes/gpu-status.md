@@ -1357,6 +1357,7 @@ the parsers, the polls, the `*own` install-at-attach rule.
 | `tagpu_feat.on`, `tagpu_featown.on` | | `featown` with `feat` |
 | `tagpu_fx.on`, `tagpu_sfx.on`, `tagpu_fxown.on` | | `fxown` with `fx` or `sfx` |
 | `tagpu_mark.on`, `tagpu_markown.on`, `tagpu_order.on` | | `markown` with `mark` |
+| `tagpu_ghost.on` | | `native` |
 | `tagpu_zoom.on`, `tagpu_vpwide.on` | | `vpwide` with `zoom` |
 | `tagpu_gui.on`, `tagpu_classicpp.on`, `tagpu_weapons.on` | | |
 
@@ -2896,7 +2897,7 @@ pre-landing-3 design, changed by landing 3's own review, with the text left behi
 it and reported a defect that is not in the code, which is the cost of a stale comment stated as a
 measurement.
 
-### 2.23 The build ghost (`tagpu_native.c`, OFF by default, `tagpu_ghost.on`) — 2026-09-12
+### 2.23 The build ghost (`tagpu_native.c`, a play default since 2026-09-14, `tagpu_ghost.on`) — 2026-09-12
 
 A translucent copy of the building under the placement cursor and of every queued build the order
 pass is showing a site rect for, drawn through the posed program in the **model's own colours**
@@ -2943,9 +2944,12 @@ whose DATA arrives entirely in the frame packet.
   heartbeat log only on change / every 300 frames. `nobake` and `trunc` must stay 0. **It needs
   `tagpu_native.on`** — the ghost draws through the unit pass's view and program — and says so:
   armed without it the log reads `ghost: off — needs tagpu_native.on (it draws through the unit
-  pass)` and the pass declines. It is deliberately **not** a play default, so it cannot carry a
-  `needs` column in `tagpu_opt.c` (that table is the default set) and says the same thing at
-  runtime instead.
+  pass)` and the pass declines. **Since 2026-09-14 it IS a play default** and carries `needs
+  tagpu_native.on` in `tagpu_opt.c`'s table, so the table withholds the default when the unit
+  pass is off. The runtime refusal above stays, and is not redundant: `needs` governs the
+  DEFAULT, not the lever, so a hand-written `tagpu_ghost.on` file arms the pass whatever the
+  table says. Turn it off with `tagpu_ghost.off`, or with `tagpu_defaults.off` for the whole
+  table.
 - **The review's fourteen findings (2026-09-12, xhigh, one reviewer) — what changed.** The pass
   now checks its two prerequisites every frame (the posed program live; `s_pv` THIS frame's,
   stamped when the unit pass fills it) instead of assuming them; it re-binds the posed program's
