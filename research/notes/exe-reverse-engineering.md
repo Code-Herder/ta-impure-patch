@@ -813,12 +813,12 @@ There is no separate shadow path for a 3D wreck. It is drawn as a UNIT, through 
 process). Per husk, `0x46A721` fills it in and draws:
 
 ```
-46a721  mov eax,[main+0x1420f]   ; the scratch feature-unit
-46a727  mov ecx,[rec+0x4]        ; this husk's Object3do
-46a72b  mov [eax+0x9e],ecx       ; scratch -> Object3do
-46a731  mov [ecx+0xc],eax        ; Object3do+0x0C -> scratch   (the unit field)
-46a73d..46a75a                   ; rec+0x20..0x25 -> scratch+0x64; rec+0x08/0C/10 -> +0x6A/6E/72
-46a762  call 0x45ac20            ; DrawUnit(ctx, scratch)
+0x46A721  mov eax,[main+0x1420F]   ; the scratch feature-unit
+0x46A727  mov ecx,[rec+0x4]        ; this husk's Object3do
+0x46A72B  mov [eax+0x9E],ecx       ; scratch -> Object3do
+0x46A731  mov [ecx+0x0C],eax       ; Object3do+0x0C -> scratch   (the unit field)
+0x46A73D..0x46A75A                 ; rec+0x20..0x25 -> scratch+0x64; rec+0x08/0C/10 -> +0x6A/6E/72
+0x46A762  call 0x45AC20            ; DrawUnit(ctx, scratch)
 ```
 
 `DrawUnit` reads `[scratch+0x9E]` at `0x45AE65` and calls `0x458810`, which reaches the blit
@@ -1516,7 +1516,7 @@ tree, drawn before the body. Every site in it:
 | `0x4592FE` `call 0x45A790` | `0x45955B` | build the cached slant shadow when `Object3do+0x14` is NULL |
 | **`0x459319`** `call 0x4B8500` | `0x459576` `jmp 0x4595E9` → **`0x4595E9`** | blit the cached shadow, at `sx + 0x85` (`add edx,0x85` at `0x45930B` / `0x45956C`). Path B shares one call site between the digger, structure and completed branches; path A has one per branch |
 | `0x459324` `shr al,3; test al,1` | `0x459578` | the COMPLETED branch: TShadow bit, then `test …,0x81000` (`canhover`/`floater`), `0x45A470` (scratch := composite silhouette), blit at `0x459353` / `0x4595E9` |
-| `0x4593BA` `call 0x4B8500` | `0x4597D3` | the body blit, further down each path |
+| `0x4593BA` `call 0x4B8500` | `0x4597D3` | the body blit, further down each path. Its source is the SAME composite plane the shadow sites read — `esi`, loaded once at `0x45920D` and pushed at **`0x4593A2`** (for `0x4593A4 call 0x4B7F90`) and again at `0x4593B8` — which is why emptying the composite at the shadow takes the BODY with it whenever the wipe's predicate says yes and the pass drawing the replacement says no |
 
 So the five "unit row sweep" call sites of `0x4B8500` in the blend-LUT survey above are:
 `0x459319` structure shadow (A), `0x459353` completed shadow (A), `0x4593BA` body (A),
