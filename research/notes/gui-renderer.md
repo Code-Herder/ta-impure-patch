@@ -3290,11 +3290,20 @@ are untouched.
   gate — so a shell frame held the out-of-game packet, `tagpu_gui_cursor_frame` reported no
   rect, we did not own the cursor, and the layer painted its twin **over** the engine's (the
   cursor was not degraded, it was gone: measured 2026-09-13 on the main menu, `gui off` presents
-  it at (320,240) and `gui on` does not). The plan's own rule — *never publish outside the
-  `0x4969D2` gate*, because the loader thread owns the per-map arrays during a load — is intact
-  and is why the shell's channel publishes a **header-only** packet: no area, `used_bytes ==
-  sizeof(TAGPU_PACKET)`, so `area_ok` refuses every one of them and the fill reads only the
-  cursor's own words. What closed is the shell's cursor, not the rule.
+  it at (320,240) and `gui on` does not). The shell's channel publishes a **header-only** packet: no
+  area, `used_bytes == sizeof(TAGPU_PACKET)`, so `area_ok` refuses every one of them.
+  [CORRECTED 2026-09-14, by the review.] This paragraph used to go on to say that the plan's own
+  rule — *never publish outside the `0x4969D2` gate*, because the loader thread owns the per-map
+  state during a load — was therefore **intact**, and that *the fill reads only the cursor's own
+  words*. Both halves were false. `fill_shell` also called `load_flags()` (`main+0x38D75`, the
+  word the loader thread writes at `0x4975C7`/`0x497C5F`) and `fill_pal`, which copies **1 KB**
+  from `main+0x143A7`, the live palette the loader rewrites at a level transition — and this
+  channel runs on the flip, which is ~5000 presents a second through a LOADING SCREEN as well as
+  the menu. The header-only shape bounds what is published; it says nothing about what is read.
+  The palette copy is now skipped while `(load_flags & 3) == 1` (started, not finished), leaving
+  `pal_ok` at 0 so a consumer is told there is no palette rather than handed a torn one; the flag
+  word itself is a single aligned u16 and was never the hazard. What closed is the shell's cursor,
+  and the rule now holds because the read was removed, not because it was never made.
   **It is OURS in the shell now** — `curs=1,10x20,drawn=599,warm=1` on the main menu — where
   before landing 4c it was the engine's sprite at any scale. At `k = 1` the two are
   byte-identical (measured: the cursor zone differs by 0 px between `gui off` and `gui on`).

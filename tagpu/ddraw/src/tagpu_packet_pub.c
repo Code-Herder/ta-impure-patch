@@ -2082,17 +2082,31 @@ static unsigned fill_shell(TAGPU_PACKET* p, void* ctx)
 {
     const char* ta = ta_main();
     int live = *(const int*)ctx;
+    unsigned lf = load_flags();
     tagpu_pk_fill((unsigned char*)p + offsetof(TAGPU_PACKET, used_bytes), 0,
                   sizeof(TAGPU_PACKET) - offsetof(TAGPU_PACKET, used_bytes));
     p->used_bytes = sizeof(TAGPU_PACKET);
     p->in_game    = 0;                       /* must stay 0: no world draws  */
     p->level_gen  = s_levelGen;
     p->tick       = s_lastTick;
-    p->load_flags = (unsigned short)load_flags();
+    p->load_flags = (unsigned short)lf;
     p->text_fg    = -1;
     p->gamma      = 1.0f;
     if (live) fill_cursor(p);
-    fill_pal(p, ta);                         /* the shell's passes resolve
+    /* THE PALETTE IS NOT OURS TO READ WHILE THE LEVEL IS LOADING. This channel
+       publishes on the flip, and the flip runs ~5000 times a second through a
+       loading screen as well as the menu — but `main+0x143A7` is per-map state
+       the LOADER thread rewrites, and fill_pal copies 1 KB of it. That is the
+       exact read the "never publish outside the in-play gate" rule exists to
+       prevent, and a torn copy is a wrong-palette frame on the load screen.
+       `load_flags` bit0 is "load started" and bit1 "finished", so `(lf & 3) ==
+       1` is the window where the loader owns it (measured: the word goes 0x0001
+       -> 0x0003 across a load). Skipped there, `pal_ok` stays 0 from the zeroing
+       above and `gamma` keeps the 1.0 fallback, so a consumer is told the packet
+       carries no palette rather than handed a torn one. Reading the flag word
+       itself is a single aligned u16 and is not the hazard. */
+    if ((lf & 3u) != 1u)
+        fill_pal(p, ta);                     /* the shell's passes resolve
                                                 through the presented palette */
     return sizeof(TAGPU_PACKET);
 }
