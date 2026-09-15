@@ -2740,6 +2740,40 @@ does not, and a diff taken there never sees the cursor. The surface-lost arm re-
 [INFERRED from the IAT slot]. **MEASURED: the shell flips about 5 000 times a second** on the
 reference setup (31 678 flips in the first 6 s of a launch); in game once per `DrawGameScreen`.
 
+#### The tagged lock at `0x52A4E8`, and why the cursor words can be read at all [VERIFIED 2026-09-14]
+
+The flip and the engine's **mouse thread** take the same lock, under different tags, and that —
+not anything of ours — is what orders their writes to the cursor position words `+0x1B6/+0x1BA`.
+The bytes, disassembled from the pristine exe:
+
+| where | bytes | what |
+|---|---|---|
+| `0x4C63CC` | `bf 4e 49 41 4d` | `mov edi,0x4D41494E` — the tag `'MAIN'` (first char in the high byte) |
+| `0x4C63D2` | `68 e8 a4 52 00` | `push 0x52A4E8` — the lock object |
+| `0x4C63D7` | `ff d5` | `call ebp` — acquire (indirect; the callee is not identified here) |
+| `0x4C63DD` | `39 3d ec a4 52 00` | `cmp ds:0x52A4EC,edi` — the current-owner tag against ours |
+| `0x4C6641` | `68 e8 a4 52 00` | release, part 1: `push 0x52A4E8` — the same object |
+| `0x4C6646` | `c7 05 ec a4 52 00 00 00 00 00` | release, part 2: `mov ds:0x52A4EC,0x0` — the owner tag cleared |
+| `0x4C29C8` | `bf 53 55 4f 4d` | `mov edi,0x4D4F5553` — the tag `'MOUS'` |
+| `0x4C29CE` | `68 e8 a4 52 00` | `push 0x52A4E8` — **the same object** |
+| `0x4C29D3` | `ff d3` | `call ebx` — acquire, around the mouse thread's own `call 0x4C25E0` |
+
+So `0x52A4E8` is the lock and `0x52A4EC` holds the owner's four-character tag, zeroed on
+release. Both tags pack the first character in the most significant byte, which is consistent
+across the two and is the evidence for reading them as `'MAIN'` and `'MOUS'` at all.
+**[INFERRED, from the shape rather than from the callee]** that acquiring is mutually exclusive:
+the acquire is an indirect call this note has not resolved, so what is *verified* is the object,
+the tags, the compare and the release — not the callee's semantics.
+
+**Why it matters.** `+0x1B6/+0x1BA` have two writers — the flip's cursor draw `0x4C67C0`
+(`0x4C683C`/`0x4C684E`) and `0x4C25E0` at `0x4C284C`/`0x4C2852`, the mouse thread's body, which
+loops every ~1 ms and is up precisely in the shell. Anything reading that pair as two plain
+dwords is racing the mouse thread unless it is inside the flip's hold, which spans `0x4C67C0`
+and runs to `0x4C6641`. `tagpu_packet_pub.c`'s shell cursor channel is inside it; its landing
+(2026-09-13) shipped with a different and insufficient argument — "read the position *this* draw
+wrote" — which rules out only the game thread's own previous draw. Corrected 2026-09-14. **A
+future reader of these words outside the flip does not inherit this ordering.**
+
 ### The in-play publish point, the loader thread and the load flags `main+0x38D75` [VERIFIED by disassembly 2026-09-12; the order MEASURED the same day]
 
 [This project — `objdump -d -M intel` of the pristine build for every reference to
