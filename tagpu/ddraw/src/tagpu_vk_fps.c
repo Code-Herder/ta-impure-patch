@@ -538,10 +538,12 @@ int tagpu_vk_fps_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 
            THE BY-DESIGN ALTERNATIVE, and why it is not here: a second image
            uploaded into while the first is sampled, swapped when every slot has
-           turned over. That moves the same in-flight problem up one level (the
-           descriptor sets naming the view would have to turn over too) for
-           twenty events a session, so it is a G19e question when a pass uploads
-           per frame rather than per session.
+           turned over. G19e's tagpu_vk_scaffold.c had to answer this for a pass
+           that uploads EVERY frame, and found something simpler than a swap: one
+           image per FRAME SLOT, which the seam's fence already proves free, so
+           there is no in-flight problem left to move. This file is deliberately
+           not changed to match -- twenty stalls a session buys nothing back, and
+           this atlas is 128 KB against that pass's whole viewport.
 
            A FAILED WAIT IS NOT AN UPLOAD. If the device is lost, writing into
            an image a live frame may be sampling is exactly what the wait was

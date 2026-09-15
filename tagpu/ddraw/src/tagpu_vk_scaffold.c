@@ -36,20 +36,25 @@
    contents to preserve and no layout to carry between frames.
 
    WHAT IT COSTS, stated rather than implied: nimg images plus nimg staging
-   buffers of the viewport's size. On the reference setup's four-image
-   swapchain that is 4 x (vw x vh) bytes of device-local and as much again
-   host-visible -- 3.1 MB + 3.1 MB at a 1024x768 viewport, 8.3 MB + 8.3 MB at
-   1920x1080. The pass allocates none of it until `tagpu_scaffold.on` is there
-   and gives all of it back when the lever clears, which is what makes that
-   affordable in a 32-bit address space whose largest free block is the number
-   this phase spends its budget measuring.
+   buffers of the VIEWPORT's size -- which is not the screen's, and measuring it
+   rather than assuming it halves the figure. On the reference setup's four-image
+   swapchain: a 1024x768 screen has an 896x704 viewport, so 630 784 bytes a slot,
+   2.4 MB of device-local and as much again host-visible, 4.8 MB in all; a
+   1920x1080 screen has 1792x1016, so 1 820 672 a slot and 13.9 MB in all. (The
+   image's own allocation is whatever vkGetImageMemoryRequirements asks for an
+   optimal-tiled R8 of that extent, so at or above those numbers.) The pass
+   allocates none of it until `tagpu_scaffold.on` is there and gives every byte
+   of it back -- a slot at a time, as each comes round -- on the first frame it
+   is handed nothing to draw, which is what makes that affordable in a 32-bit
+   address space whose largest free block is the number this phase spends its
+   budget measuring.
 
    THE CHEAPER ALTERNATIVE, and why it is not here. One image shared by every
    slot is also correct: a barrier at the top of each upload, FRAGMENT_SHADER /
    SHADER_READ -> TRANSFER / TRANSFER_WRITE, orders the copy after the previous
    frame's sampling, because submission order spans submits to one queue and a
    write-after-read hazard needs only an execution dependency. That saves
-   (nimg-1) images -- 6.2 MB at 1080p -- and costs three things this one does
+   (nimg-1) images -- 5.2 MB at 1080p -- and costs three things this one does
    not have: the image's layout has to be tracked across frames, a viewport
    change has to retire the old image until every slot has turned over, and the
    safety argument moves from an invariant one line long to a paragraph about
@@ -569,8 +574,25 @@ int tagpu_vk_scaffold_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_
 
     /* NOTHING IS BUILT UNTIL THERE IS SOMETHING TO DRAW: the scaffold is off
        unless `tagpu_scaffold.on` is there, and a pipeline plus nimg images for a
-       pass that will never draw is exactly the work the lever exists to avoid. */
-    if (!tagpu_scaffold_overlay(&buf, &w, &h, rect, &rows, &ab)) return 0;
+       pass that will never draw is exactly the work the lever exists to avoid.
+
+       AND NOTHING IS KEPT ONCE THERE IS NOT. The per-slot images and staging
+       buffers are the part of this pass that scales with the viewport -- 13.9 MB
+       of a 32-bit address space at 1080p -- and an early return here held every
+       byte of them for the life of the lane after one look at the scaffold.
+       Giving slot `slot` back at this point needs no new argument and no timer:
+       it is the same instant, and the same ownership, that the rest of this
+       function writes that slot in. The lever cleared, the shell, a level
+       teardown and a frame the GL twin skipped all arrive here, so after one
+       turn of the slots the pass holds nothing but its pipeline, its sampler,
+       its descriptor sets and a 512-byte uniform buffer -- none of which scales
+       with anything. The cost of being wrong about that is one vkCreateImage a
+       slot when the pass comes back, and that happens at a shell/game
+       transition, not in a frame. */
+    if (!tagpu_scaffold_overlay(&buf, &w, &h, rect, &rows, &ab)) {
+        if (s_state == ST_READY) slot_free(d, &s_slot[slot]);
+        return 0;
+    }
 
     if (s_state == ST_UNBUILT) {
         if (!build(d)) { tagpu_vk_scaffold_down(d); s_state = ST_REFUSED; return 0; }

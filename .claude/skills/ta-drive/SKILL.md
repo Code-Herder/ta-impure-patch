@@ -991,7 +991,8 @@ instead: `tacli arm <i> classicpp.on=off`.
 **Deliberately NOT in the set**, so that "everything" stays a decision and not a sweep:
 
 - `scaffold.on` — superseded by `feat.on` (features write real depth now) and its debug
-  overlay tints every tall feature purple.
+  overlay tints every tall feature purple. **It is a Vulkan-ported pass since G19e**, so arm it
+  when the Vulkan lane's A/B is what you are running, and not otherwise.
 - `writeback.on` — the older per-type sprite composite, targeted at one unit name;
   `native.on=all` + `owndraw.on` is the path that replaced it.
 - `weapons.on` — sim-changing, and inert without `.ufo` content built for it. Arm it
@@ -1881,9 +1882,12 @@ tools/tacli log <i> -g '^vk:'                 # the window, the device, the swap
   not, since the picker outlives the lane. (A launch that falls back to the GDI renderer never
   starts it — there is no lane to pick a GPU for there.)
 
-**The pixel A/B between the two lanes: `tagpu_fps.ab` (G19d).** Route D means no GL-side capture
-can see the Vulkan frame, so each lane captures its own half of the SAME frame and the two files
-are diffed. This is the shape every later ported pass should copy.
+**Since G19e it also draws the SCAFFOLD overlay** (`tagpu_scaffold.on`), the first of the world
+passes. Two ported passes now, and their A/B levers must not be armed together — see below.
+
+**The pixel A/B between the two lanes: `tagpu_<pass>.ab`.** Route D means no GL-side capture can
+see the Vulkan frame, so each lane captures its own half of the SAME frame and the two files are
+diffed. This is the shape every later ported pass copies.
 
 ```bash
 tools/tacli arm <i> fps.on mark.on 'vk.on=color=0,0,0'   # the readout, the FONT, a black field
@@ -1917,13 +1921,52 @@ touch <gamedir>/tagpu_fps.ab                             # one frame, both lanes
   so (`the A/B capture was lost to …`). `vk-ab.py` then reports the missing half rather than
   comparing against a stale file.
 - The lever re-arms when the file is taken away and put back, on both lanes, so a second capture
-  needs no relaunch. `tagpu_fps_gl.ppm` / `tagpu_fps_vk.ppm` are binary PPMs;
-  `ffmpeg -i x.ppm x.png` to look at one.
+  needs no relaunch — **`touch` on a file that is already there does NOT re-arm**, and the symptom
+  is `vk-ab.py` reporting a missing half after you deleted the PPMs. `rm` it, sleep a second, then
+  `touch`. `tagpu_<pass>_gl.ppm` / `_vk.ppm` are binary PPMs; `ffmpeg -i x.ppm x.png` to look.
+- **ARM ONE PASS'S `.ab` AT A TIME, and turn the other ported pass's `.on` off.** Each GL capture
+  holds one pass (its twin blacks the frame around its own draw); the Vulkan capture is one frame
+  and holds *every* armed pass. The lane refuses to capture when more than one pass claimed the
+  frame **or** more than one drew into it, and says so:
+  `vk: N A/B levers claimed this frame and M passes drew into it - nothing captured`. That is the
+  guard working — it writes no pair rather than a wrong one.
+
+**The scaffold's A/B (G19e), which is the world-pass shape:**
+
+```bash
+tools/tacli arm <i> scaffold.on 'vk.on=color=0,0,0'      # ONLY the pass under test
+tools/tacli scenario load <i> feat-forest --restart --res 1024x768 --maxfps 0
+sleep 8                                                   # let the level settle
+G=<main checkout>/tagpu/instances/<i>/gamedir
+rm -f $G/tagpu_scaffold.ab $G/tagpu_scaffold_*.ppm; sleep 2; touch $G/tagpu_scaffold.ab
+../.venv-undither/bin/python tools/vk-ab.py $G --pass scaffold     # 0 px apart
+```
+
+- **`feat-forest` is the fixture** because the scaffold only stamps TALL features (def Height >=
+  10): it gives `tall=151` and 190 247 ink pixels at 1024x768, where an empty scene would give a
+  0-px result that means nothing. `grep -a 'scaffold: swept' tagpu.log` reports `tall=` — read it
+  before believing a pass. `selbox-facings` works too (`tall=163`).
+- **No `mark.on` needed for this one** — the scaffold draws no text, so the font trap above is the
+  readout's alone.
+- The GL twin blacks the frame immediately before its own draw and reads back immediately after,
+  so **the player sees one frame with the terrain missing**. That is the lever, not a fault.
 - **To measure constraint 4** — that the GL lane did not move — arm `vk.off` on two instances, one
   running the tree's DLL and one the previous one, load the same static fixture, park the pointer
-  in the same place (`keys <i> mouse:200,700`) and diff two `glshot`s. On `selbox-facings` the
-  only difference between two builds should be the readout's own DIGITS (46 px of 786 432,
-  measured 2026-09-15) — two processes running at different rates.
+  in the same place (`keys <i> mouse:60,400`, the side panel, so its animating sprite is outside a
+  viewport crop), pause with `tab tab`, and diff two `glshot`s over the world viewport only.
+  **Build the previous DLL with `git archive <rev> | tar -x -C <dir>`** and symlink `wineprefix`,
+  `tagpu/gamedir` and `unditherer/models` into it: `tacli` pins the DLL of the tree it is run
+  from, purely by path, so that tree's `tools/tacli` launches the old binary with no other setup.
+- **MEASURE THE CROSS-LAUNCH FLOOR WITH TWO SAMPLES OF ONE BINARY, every time.**
+  `selbox-facings` at 1024x768 has a **two-state 71-px artefact** at x 1017..1023, y 236..277 —
+  the frame's right edge — which reproduces DLL-against-itself. G19e's first base-versus-landing
+  pair happened to land in the same state and read 0; the next sample of the same binary read 71.
+  **`feat-forest` cannot answer a cross-launch question at all**: its walking commander gives it a
+  ~4000 px floor, *larger* than the difference being looked for. It is an excellent two-lane A/B
+  fixture (both captures are the same frame) and a useless cross-launch one.
+- **Wait ~35 s after a `scenario load` before a cross-launch shot.** The engine's own "Arm forces
+  have been obliterated" messages from `clear_existing` sit in the viewport's top-left for tens of
+  seconds and land differently per run — 8179 px until they expire.
 
 **The GPU row is in Options → Visuals, Window column, and its list is ONE LAUNCH BEHIND.** The
 captions live in the generated `.GUI`, which is written at DLL attach, and a Vulkan instance

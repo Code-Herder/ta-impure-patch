@@ -3318,8 +3318,11 @@ INFINITE on it across a mode change, and `vkDeviceWaitIdle` takes no timeout —
 drain of two or three frames in flight on a healthy device, and as long as the wedge on a wedged
 one, which is the exposure the lane's own fence wait bounds at a second and this one does not. The
 by-design alternative is a second image, swapped when every slot has turned over, which moves the
-same in-flight problem up to the descriptor sets for twenty events a session — a G19e question,
-when a pass uploads per frame rather than per session. **A failed wait is not an upload**: the
+same in-flight problem up to the descriptor sets for twenty events a session. **§2.28 answered
+that for a pass that uploads every frame, and the answer was simpler than a swap**: one image per
+FRAME SLOT, which the seam's fence already proves free, so there is no in-flight problem to move.
+This file was not changed to match — twenty stalls a session buys nothing back, and the readout's
+atlas is 128 KB against a viewport. **A failed wait is not an upload**: the
 generation is left unclaimed and the lane comes down on the next fatal result.
 
 **One buffer set per FRAME SLOT**, and what proves slot *i* is free is the seam's fence wait at the
@@ -3481,6 +3484,182 @@ above and is now closed.
 **Still not covered, and unchanged by either pass:** no Vulkan validation layer ran. Every finding
 above was found by reading the specification against the code. The first HIGH is what that gap
 costs when nobody is reading.
+
+### 2.28 The scaffold overlay, drawn by Vulkan (`tagpu_vk_scaffold.c`, `tagpu_abshot.c`) — Phase G, G19e
+
+The first of the **world passes**, and the one chosen first because it is the smallest of them
+(a fragment stage of 430 words, one sampler, one 16-byte uniform block) *and* because it forces
+the question G19d was allowed to leave open: it uploads a **viewport-sized image every frame**,
+where the readout's atlas changes about twenty times in a session.
+
+**No engine address, and no new one was read to build it** — so there is nothing for
+[exe reverse engineering](exe-reverse-engineering.html) in this landing and nothing for the hook
+map above. Neither new file is on `thread-split.allow` and neither may ever need to be (Phase G
+standing constraint 1); the list is **unchanged** at the 34 entries `thread-split-check.sh`
+reports. Everything both files use arrives as an argument.
+
+**MEASURED 2026-09-15**, on `scenarios/feat-forest` (151 tall features in the sweep) under system
+wine on the reference setup's 4070: **0 differing pixels of 786 432 at 1024×768 and 0 of
+2 073 600 at 1920×1080**, with **190 247 and 377 020 non-black pixels on *each* side** — a
+quarter of the frame is scaffold ink, so this is not two blank frames agreeing, which is the
+failure mode `tools/vk-ab.py` exists to name. The capture files are byte-identical. **0 again
+after the lever was cleared and re-armed**, and **0 again after a full free-and-rebuild of every
+per-slot resource inside one lane** (below).
+
+**It is not a second implementation of the pass:**
+
+| | where it comes from |
+|---|---|
+| the scaffold bytes | `tagpu_scaffold_overlay` — the buffer the GL lane just uploaded to its own texture, handed over **exactly once** |
+| the quad | `TAGPU_SCAF_QUAD` in `inc/tagpu_scaffold.h`, **one literal both lanes build their vertex buffer from** |
+| the NDC rect, the row count | the numbers the GL draw passed to `uRect` and `uRows` |
+| the shader | `inc/spirv/tagpu_scaffold.spv.h`, generated from the GL string by §2.25 |
+
+#### The per-frame upload, which is this landing's real work
+
+§2.26 named the by-design alternative to `vkDeviceWaitIdle` and left it to this gate. It turned
+out to need **no new mechanism at all**:
+
+> **One image and one staging buffer per FRAME SLOT**, and the seam's fence is what makes writing
+> them safe.
+
+The invariant is the one `tagpu_vk_pass.h` already publishes for buffers, used for an image:
+when `prepare` is called with `slot`, the seam has just waited on `fence[slot]`, so the submit
+that last used that slot's resources has **completed**. Nothing of ours is in flight for it.
+Three things follow for the same one-line reason, none of them needing a device-wide wait:
+
+* the CPU may write that slot's staging buffer — a barrier could not help here anyway, because
+  it orders GPU work and the hazard is a CPU write;
+* the copy into that slot's image has no prior access to order against, so `oldLayout` is
+  `UNDEFINED` (the whole image is re-sent, so there are no contents to preserve) and
+  `TOP_OF_PIPE` with an empty source access mask is correct rather than lazy;
+* the descriptor set naming that image may be rewritten, which is what makes a **viewport change
+  free**: the slot is rebuilt at the moment we are handed it, which is the moment we own it. No
+  retire list, no deferred free, no second wait. (The game's viewport changes without the
+  swapchain changing — a shell/game transition alone does it.)
+
+**What it costs, and the viewport is not the screen.** Measuring that rather than assuming it
+halves the figure: a 1024×768 screen has an **896×704** viewport, so 630 784 bytes a slot, 2.4 MB
+of device-local and as much again host-visible, **4.8 MB** in all on the reference setup's
+four-image swapchain; 1920×1080 has **1792×1016**, so 1 820 672 a slot and **13.9 MB**. The
+image's own allocation is whatever `vkGetImageMemoryRequirements` asks for an optimal-tiled R8 of
+that extent, so at or above those numbers.
+
+**And none of it is kept once there is nothing to draw.** An early `return 0` when the GL twin
+publishes nothing held every byte of that for the life of the lane after one look at the
+scaffold — *the first version of this file claimed the opposite in its own header, and the claim
+was false*. Slot `slot` is given back at that point for the same reason and at the same instant
+the rest of the function writes it in, so after one turn of the slots the pass holds only its
+pipeline, its sampler, its descriptor sets and a 512-byte uniform buffer, none of which scales
+with anything. The lever cleared, the shell, a level teardown and a frame the twin skipped all
+arrive there. The cost of being wrong is one `vkCreateImage` a slot when the pass comes back, and
+that happens at a shell/game transition, not in a frame.
+
+**The cheaper alternative, and why it is not here.** One image shared by every slot is *also*
+correct: a barrier at the top of each upload, `FRAGMENT_SHADER`/`SHADER_READ` →
+`TRANSFER`/`TRANSFER_WRITE`, orders the copy after the previous frame's sampling, because
+submission order spans submits to one queue and a write-after-read hazard needs only an execution
+dependency. It saves `(nimg−1)` images — 5.2 MB at 1080p — and costs three things: the image's
+layout has to be tracked across frames, a viewport change has to retire the old image until every
+slot has turned over, and the safety argument goes from one line to a paragraph about cross-submit
+ordering. The staging buffers stay per-slot either way. **That is the design to reach for if a
+later per-frame pass needs the memory back**; for the first of them, the one-line invariant is
+worth 5.2 MB behind a lever.
+
+#### The oracle is shared now, because a world pass has a background
+
+`tagpu_abshot.c` is the GL half of every Phase G A/B, and the three world passes still owed one
+get it in three lines. G19d could black the whole GL frame because the readout is the **last**
+thing drawn; a world pass has the rest of the frame under it on the GL side and a bare clear
+under it on the Vulkan side. So the GL twin blacks the frame **immediately before its own draw**
+and reads it back **immediately after**, before the native pass and the UI layer have run. What
+is compared is one pass over black against one pass over black. The player sees one frame with
+everything drawn before that point missing from it; that is what a measuring lever costs, and it
+is why it is one frame.
+
+`tagpu_fps.c` is refactored onto it and **loses 117 lines** (501 → 384) — its own A/B still measures **0 px of
+786 432** (88 ink pixels a side) on the refactored oracle, which is the regression that says the
+move was clean. One thing improves rather than moves: the review of G19d found that a context
+missing any of the A/B's entry points made the lever do nothing **silently**, retried every poll
+for the session. There is now one resolve, one message naming the entry point that was missing,
+and one latch. (The five it needs — `glGetFloatv`, `glIsEnabled`, `glDisable`, `glClearColor`,
+`glReadPixels` — are not among the fork's own globals in `opengl_utils.h`; this DLL is
+`ddraw.dll` and does not link opengl32, it loads it, so even GL 1.1 is a pointer to resolve.)
+
+#### Two ported passes made a new way to get a plausible wrong answer
+
+Each GL capture holds **one** pass, because its twin blacks the frame around its own draw. The
+Vulkan capture is **one frame**, and a frame holds every armed pass at once. So with two A/B
+levers armed the diff would report the other pass's pixels as differing: a port failure that is
+really an oracle failure, which is the worst answer an oracle can give.
+
+The seam refuses to capture when **more than one pass claimed the frame, or more than one drew
+into it**, and says so in the log. Both conditions are checked, and the second is the one that
+does the work: verified 2026-09-15 by arming `fps.ab` and `scaffold.ab` together, the two levers
+landed on **different** frames (their poll cadences differ) so each claimed alone — and the frame
+was contaminated anyway, because both passes were drawing. A claim-count check alone would have
+written the pair and been believed.
+
+#### Pipeline state: blending is new, depth is not needed, and one of them is G19e's next question
+
+**Blending** is set on **both factor pairs** (`SRC_ALPHA`/`ONE_MINUS_SRC_ALPHA` for colour *and*
+alpha), because `glBlendFunc` sets the alpha factors as well as the colour ones. The shader
+writes a 0.55 alpha and `discard`s where the scaffold is free, so over the A/B's black field the
+result is 0.55 × the ramp colour on each lane — and the 0-px result is what says the two blend
+units agree to the least significant bit. The Y flip is a negative viewport height exactly as in
+§2.26, and there is no culling, because that flip reverses every triangle's winding. The topology
+is a **strip**, which is what the GL twin draws: four vertices as a strip and six as a list cover
+the same quad but not necessarily with the same two triangles, and a diagonal running the other
+way puts every pixel on it on the other side of a rounding decision.
+
+**Depth is not in this landing** — the GL twin calls neither `glEnable(GL_DEPTH_TEST)` nor
+`glDepthMask`, and the seam's render pass has one colour attachment and no depth one. The passes
+that **do** test are G19e's next landings, and the question is stated here rather than guessed at
+when one of them starts:
+
+> GL maps clip z from [−1, 1] onto the depth range and Vulkan takes [0, 1] directly. Every one of
+> these shaders already writes a z in [0, 1], so under GL the near half of the range is thrown
+> away and under Vulkan it is not. **The ordering is identical either way** — both mappings are
+> affine and increasing, so every depth *test* comes out the same — but the *values* are not, and
+> Vulkan gets a bit more precision out of a fixed-point buffer than GL does, which is enough to
+> settle a z-fight the other way and put a 0-px comparison out of reach.
+>
+> The fix is **pipeline state, never a shader edit** (an edited shader would disagree with the
+> twin that is its oracle), and it needs **no extension**: a viewport with `minDepth = 0.5` and
+> `maxDepth = 1.0` maps clip z ∈ [0, 1] onto exactly GL's `(z+1)/2`, values and precision
+> included. `VK_EXT_depth_clip_control` with `negativeOneToOne` would do the same by adopting GL's
+> convention outright, and is the answer if a shader is ever found that writes a z below 0 — Vulkan
+> clips those and GL does not. **Neither is written yet**, and the render pass will need a depth
+> attachment before either matters.
+
+**NOT COVERED.** No Vulkan **validation layer** ran — none is installed in the wine prefixes — so
+the barriers, the stage masks and the layout transitions are argued from the specification and
+from a correct picture. Also not covered: any resolution but 1024×768 and 1920×1080, any device
+but the 4070, and Windows.
+
+#### Constraint 4, measured — and a fixture correction worth more than the measurement
+
+**0 differing pixels of 630 784** in the world viewport, this landing's DLL against `afceba5`'s,
+both with `tagpu_vk.off`, on `selbox-facings` at 1024×768, sim paused (`tab`), pointer parked in
+the side panel so its animating sprite is outside the crop.
+
+**`selbox-facings` does NOT have a 0-px cross-launch floor at this camera**, and the note that
+says it does is about a *within-run* floor. Two launches of the **same** DLL differ by **71 px at
+x 1017..1023, y 236..277** — a two-state artefact in a 7×42 sliver at the frame's right edge,
+which reproduced DLL-against-itself and is therefore nobody's change. It was caught only because
+the first base-versus-landing pair happened to land in the same state and read 0; a second sample
+of the same binary read 71. **Take at least two samples of one binary before believing a
+cross-launch floor**, and mask that sliver on this fixture.
+
+`feat-forest` is worse and cannot answer the question at all: its walking commander gives it a
+**~4000 px** cross-launch floor (3985 px, same DLL, two launches), which is *larger* than the
+3906 px a base-versus-landing pair reads there. It is an excellent A/B fixture for the two lanes,
+because both captures are of the same frame, and a useless one for anything across launches.
+
+Also worth knowing for any cross-launch diff on a scenario: the engine's own "**forces have been
+obliterated**" messages from `clear_existing` sit in the top-left of the viewport for tens of
+seconds and land differently per run — 8179 px until they expire. 35 seconds after the load is
+enough.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 
