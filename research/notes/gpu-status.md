@@ -3878,18 +3878,23 @@ in this landing and nothing for the hook map above. `tagpu_vk_terr.c` is not on
 `thread-split.allow` and may never need to be (Phase G standing constraint 1); the list is
 **unchanged** at the 34 entries `thread-split-check.sh` reports.
 
-**MEASURED 2026-09-15** under system wine on the reference setup's 4070, `ss=1`:
+**MEASURED 2026-09-15** under system wine on the reference setup's 4070, `ss=1` — and then
+**RE-MEASURED IN FULL, on 2026-09-15, on the binary the landing review's rework produced**
+(md5 `1412a652…`), because the rework touches both the frame loop and the A/B harness itself and
+the first table was taken before it. **Every figure below reproduced**, ink counts included; the
+one that moved is the readout's, and it moves by construction (see its row):
 
 | | |
 |---|---|
 | terr A/B, 1024×768, `feat-forest` (Two Continents) | **0 differing px of 786 432**, **630 719 non-black on *each* side** |
 | terr A/B, 1920×1080, same | **0 of 2 073 600**, 1 820 568 non-black each side |
 | terr A/B, 1024×768, **Anteer Strait**, reached by an **in-process level cycle** | **0 of 786 432**, **630 784 non-black each side — the entire viewport** |
-| all three | capture files byte-identical; the 1024×768 pair read 0 again after `tagpu_vk.on` *and* `tagpu_terr.on` were cleared and re-armed, which frees and rebuilds the pipeline, the descriptor sets, both shared images and every per-slot resource |
+| all three | capture files byte-identical; a pair read 0 again after `tagpu_vk.on` *and* `tagpu_terr.on` were cleared and re-armed, which frees and rebuilds the pipeline, the descriptor sets, both shared images and every per-slot resource. **On the re-measurement that cycle was run on Anteer Strait** (630 784 ink a side) — the same free-and-rebuild on the larger atlas, and the run that matters most to the rework, because `_down` now returns the pass to `ST_REFUSED` rather than `ST_UNBUILT` when the teardown was *owed*, and a pass that got that wrong would fail to come back here |
 | feat A/B (§2.29's, the regression) | **0 of 786 432**, **243 538 non-black a side — §2.29's own number** |
-| scaffold A/B (§2.28's) | **0 of 786 432**, **190 247 a side — §2.28's own number** |
-| fps A/B (§2.26's) | **0 of 786 432**, 88 ink px a side |
-| constraint 4 | **0 of 630 784** in the world viewport against `2ec4735` with `tagpu_vk.off`, over a cross-launch floor measured at **0 across three launches** |
+| scaffold A/B (§2.28's) | **0 of 786 432**, **190 247 a side — §2.28's own number** (`tall=151` on the fixture) |
+| fps A/B (§2.26's) | **0 of 786 432**, **92 ink px a side** on the re-measurement against 88 on the first. **That count is the readout's own digits**, so it moves with the number displayed and is not a property of the port; what the A/B asserts is that both halves carry the *same* ones, which is the 0 |
+| constraint 4 | **0 of 630 784** in the world viewport against **`afceba5` — `main`, i.e. the whole seven-commit landing rather than one pass's predecessor** — with `tagpu_vk.off` and the full pass set on both, over a **cross-launch floor of 0** measured by running the landing's own binary twice, and a within-run floor of 0 on all three instances |
+| the owed teardown | **never fired**: 0 occurrences of `the seam tears it down` / `drained, tearing it down` across every instance of the re-measurement. That is the expected reading — the path needs an allocation refusal — and it is worth grepping for, because a run that *does* print them was refused its resources for real |
 
 The whole world viewport is terrain ink (630 784 px at 1024×768; the 65 black pixels are the
 frame's own), so this is emphatically not two blank frames agreeing — the failure mode
@@ -4036,15 +4041,32 @@ meets either; a `--defaults` instance does.
 **NOT COVERED.** No Vulkan **validation layer** ran — none is installed in the wine prefixes —
 so the barriers, the stage masks and the layout transitions are argued from the specification and
 from a correct picture. Also not covered: any resolution but 1024×768 and 1920×1080, any device
-but the 4070, Windows, `ss` 2, Classic++ (both refusals above), and **the retire firing** — the
-one path in this file no run has watched execute, for the reason measured above.
+but the 4070, Windows, `ss` 2, Classic++ (both refusals above), **the retire firing** — the
+one path in this file no run has watched execute, for the reason measured above — and, since the
+landing review, **the owed teardown firing**, which is the same kind of gap for the same kind of
+reason: it needs the device to refuse a slot its resources, and the 4070 with 247 MB of largest
+free block does not. Both are guards that keep the code correct rather than paths the game
+reaches today, and neither can be asserted away, because in both cases the trigger is data.
 
 #### What the landing review changed, 2026-09-15
 
 Two reviewers read `main...HEAD` independently at `high`, one on correctness and one on
 synchronisation alone. **Both returned the same first finding**, and it was real. The fixes below
-are on the branch; **none of them has been run yet** — the A/B numbers above were measured on the
-binary *before* this rework, and re-measuring them is the first thing the next session does.
+are on the branch, and **they have now been RUN**: every A/B, the regressions and constraint 4
+were re-measured on the reworked binary and all of them reproduced — the table above is that
+re-measurement, not the pre-rework one. What has **not** happened is the rework's own review:
+`CLAUDE.md` asks for a re-review when a fix changes the synchronisation *design* rather than
+patching it, and this one moves a teardown across a submit boundary and adds a drain point to the
+seam's frame loop, so it does.
+
+**What the re-measurement does and does not cover.** It exercises every path the rework touched
+*except the refusal itself*: the publish gate (every shipped frame in constraint 4 runs with the
+lane down), the copied fog grid (every terrain frame), the `record` bound-views test (every
+terrain frame, and it would show as a dropped draw over the whole viewport), the `_down`
+state change (the clear-and-re-arm cycle), and the A/B write guard (every capture). **The owed
+teardown itself is still unfired** — it needs the device to refuse a slot its resources, which is
+the same reason §2.28's uncovered list has stood since the scaffold. So the drain path in
+`tagpu_vk.c` is argued and reviewed, not run, and that is the honest statement of it.
 
 * **A pass may no longer tear itself down mid-frame.** `prepare`'s refusal path — reached when
   the device will not give a slot its buffers or images, which is the 32-bit address-space

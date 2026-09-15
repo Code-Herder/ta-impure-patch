@@ -1912,6 +1912,12 @@ touch <gamedir>/tagpu_fps.ab                             # one frame, both lanes
 - **The two captures are the same frame by construction** — the flag travels with the vertices,
   not through two independent lever polls — so a difference in the digits is a real difference and
   not two clocks.
+- **The readout's INK COUNT is not a regression figure — only the 0 is.** `vk-ab.py` prints
+  non-black pixels a side as the proof that it did not compare two blank frames, and for this pass
+  those pixels are the digits of the frame rate, so the count moves with the number on screen: 88,
+  89 and 92 have all been recorded on passing runs. Do not chase it. **For the world passes the
+  ink count IS worth reading**, because there it is the scene (terrain fills the viewport, the
+  scaffold's is `tall=`), and a big change in it means the fixture moved.
 - **`vk-ab.py` REFUSES two captures of different sizes** rather than scaling one: the GL capture is
   the GL viewport and the Vulkan one is the client rect, so a mismatch means the fork is
   letterboxing (`--window` against `--res`, or k != 1). Run at a size where they agree.
