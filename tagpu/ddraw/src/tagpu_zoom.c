@@ -368,6 +368,7 @@ void tagpu_zoom_publish_view(int vpL, int vpT, int vw, int vh)
    least the rate scrolling is actually running at. */
 #define TA_MAINPP        0x00511DE8u
 #define OFF_SCROLLSPEED  0x1434D
+#define OFF_INGAME_GUI   0x37EBE   /* bit 0: a built-in in-game GUI owns input */
 
 /* game thread only: the level the last command carried, and whether it is
    live — what every game-thread reader in this file uses in place of the
@@ -1037,6 +1038,22 @@ static int in_viewport(int x, int y, int L, int T, int W, int H)
     return x >= L && y >= T && x < L + W && y < T + H;
 }
 
+/* F2/Tab set main+0x37EBE bit 0 before pushing ARMOPT and keep it set through
+   EXITMENU, YESORNO and the preferences screens; every close path clears it.
+   DrawGameScreen continues underneath those screens, so s_live quite rightly
+   remains set even though the GUI now owns every button event. Read the
+   engine state here, at the one shared s -> u door, so hardware messages,
+   injected clicks and the mouse->world repair all make the same decision.
+
+   The executable mapping and TA_MAINPP live for the process. `view()` has
+   already proved that an in-game world was published; ta_ok still guards the
+   level pointer before the byte read. */
+static int ingame_gui_owns_input(void)
+{
+    const char* ta = *(const char* const*)TA_MAINPP;
+    return ta_ok(ta) && (*(const unsigned char*)(ta + OFF_INGAME_GUI) & 1u) != 0;
+}
+
 /* The whole transform. `ring` (may be NULL) reports that `u` fell outside the
    rect the engine can NAME — the display-only ring, where it has no screen
    position for the world under the pointer. tagpu_vpwide closes that ring while
@@ -1060,6 +1077,7 @@ static int to_engine(int* x, int* y, int* ring)
     float z, cx, cy; int L, T, W, H, ux, uy;
     if (ring) *ring = 0;
     if (!x || !y || !view(&z, &cx, &cy, &L, &T, &W, &H)) return 0;
+    if (ingame_gui_owns_input()) return 0;             /* GUI space: 1:1 */
     if (!in_viewport(*x, *y, L, T, W, H)) return 0;   /* screen-space: 1:1 */
     ux = iround(((float)*x - cx) / z + cx);
     uy = iround(((float)*y - cy) / z + cy);
@@ -1188,12 +1206,10 @@ LPARAM tagpu_zoom_mouse_lparam(UINT msg, LPARAM lparam)
     if (!carries_point(msg)) return lparam;
     int x = (int)(short)LOWORD(lparam);
     int y = (int)(short)HIWORD(lparam);
-    /* THE RENDER-OPTIONS PANEL IS OVER THE WORLD, so the geometric gate below
-       would treat every click on it as a world click and unzoom it -- at 3.1x
-       a row click landed hundreds of pixels away and no row worked at all
-       (found in play 2026-09-09). The engine hit-tests a GUI screen in screen
-       space, so a point the screen owns must reach it untouched. This module
-       cannot see GUI screens; tagpu_menu answers for its own. */
+    /* THE RENDER-OPTIONS PANEL IS OVER THE WORLD. Built-in GUI screens are
+       covered by the engine ownership gate in to_engine(); this DLL-owned panel
+       has no such engine bit, so tagpu_menu answers for its own screen-space
+       rectangle. */
     if (tagpu_menu_owns_point(x, y)) return lparam;
     if (!tagpu_zoom_to_engine(&x, &y)) return lparam;
     return MAKELPARAM((short)x, (short)y);
