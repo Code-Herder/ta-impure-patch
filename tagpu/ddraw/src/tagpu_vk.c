@@ -260,7 +260,8 @@ static PFN_vkGetInstanceProcAddr s_gipa;
 #define DFNS(X) \
     X(vkGetDeviceQueue) X(vkCreateSwapchainKHR) X(vkDestroySwapchainKHR) \
     X(vkGetSwapchainImagesKHR) X(vkCreateCommandPool) X(vkDestroyCommandPool) \
-    X(vkAllocateCommandBuffers) X(vkBeginCommandBuffer) X(vkEndCommandBuffer) \
+    X(vkAllocateCommandBuffers) X(vkFreeCommandBuffers) \
+    X(vkBeginCommandBuffer) X(vkEndCommandBuffer) \
     X(vkCmdPipelineBarrier) X(vkCmdClearColorImage) X(vkCreateSemaphore) \
     X(vkDestroySemaphore) X(vkCreateFence) X(vkDestroyFence) \
     X(vkAcquireNextImageKHR) X(vkQueueSubmit) X(vkQueuePresentKHR) \
@@ -295,6 +296,7 @@ typedef struct {
     HWND             hwnd;
     int              vsync;
     int              devIndex;             /* into the cached name table, or -1 */
+    int              rebuild;              /* the surface said its extent moved */
     unsigned         frame;
     char             devName[NAMELEN];
 } Vk;
@@ -339,8 +341,13 @@ enum { VKW_CREATE = 1, VKW_DESTROY = 2 };
 
 static HWND volatile s_vkwnd;           /* ours; published by the window thread */
 static HWND          s_owner;           /* the game window we are tracking     */
+static int           s_askedWin;        /* a create is already posted          */
 
-static void vkw_place(HWND win, HWND owner)
+/* `raise` only on the first placement. An OWNED window already stays above its
+   owner, so re-asserting HWND_TOP on every move of the owner would be pushing
+   our window up the desktop's z-order for no reason -- and the owner's move is
+   exactly when the player may be dragging something else over the game. */
+static void vkw_place(HWND win, HWND owner, int raise)
 {
     RECT c;
     POINT tl;
@@ -348,8 +355,9 @@ static void vkw_place(HWND win, HWND owner)
     if (!GetClientRect(owner, &c)) return;
     tl.x = c.left; tl.y = c.top;
     if (!ClientToScreen(owner, &tl)) return;
-    real_SetWindowPos(win, HWND_TOP, tl.x, tl.y, c.right - c.left, c.bottom - c.top,
-                      SWP_NOACTIVATE);
+    real_SetWindowPos(win, raise ? HWND_TOP : NULL, tl.x, tl.y,
+                      c.right - c.left, c.bottom - c.top,
+                      SWP_NOACTIVATE | (raise ? 0 : SWP_NOZORDER));
 }
 
 static LRESULT CALLBACK vkw_proc(HWND h, UINT m, WPARAM w, LPARAM l)
@@ -384,7 +392,7 @@ static void vkw_create(HWND owner)
                                VKW_CLASS, "", WS_POPUP,
                                0, 0, 64, 64, owner, NULL, inst, NULL);
     if (!win) { vklog("CreateWindowEx: %lu", GetLastError()); return; }
-    vkw_place(win, owner);
+    vkw_place(win, owner, 1);
     real_ShowWindow(win, SW_SHOWNOACTIVATE);
     /* PUBLISHED LAST, once the window is placed and shown: the render thread
        starts the bring-up on a handle it reads here, and a half-built window
@@ -412,12 +420,29 @@ void tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
         if (wparam == VKW_DESTROY) vkw_destroy();
         break;
     case WM_WINDOWPOSCHANGED:
-        if (s_vkwnd) vkw_place(s_vkwnd, hwnd);
+        if (s_vkwnd) vkw_place(s_vkwnd, hwnd, 0);
         break;
     case WM_DESTROY:
-        /* The owner is going; ours must not outlive it. The surface is the
-           render thread's to destroy and it will find the handle gone, which
-           is the same path a lever-off takes. */
+        /* THE OWNER IS GOING AND NOTHING WE CAN DO ORDERS THIS PROPERLY -- so
+           what happens here is the least-bad of the available orders, and the
+           residual is named rather than papered over.
+
+           `vkw_destroy` publishes `s_vkwnd = NULL` before it calls
+           `DestroyWindow`, so the render thread's very next frame sees its
+           window gone and takes the rebuild path, which tears the surface down.
+           But the window is destroyed in this handler, and that next frame has
+           not happened yet: for up to one frame a surface may name an HWND that
+           no longer exists. Acquire then returns VK_ERROR_SURFACE_LOST_KHR and
+           the frame is skipped, which is the safe answer.
+
+           WHY IT IS NOT FIXABLE FROM HERE. The only orders that close it are
+           blocking this thread on the render thread -- which in a lockstep game
+           is the deadlock this whole file is arranged around -- or letting our
+           window outlive its owner, which Windows does not allow for an owned
+           window anyway. The fork's own teardown normally stops the render
+           thread first (`ogl_release` refuses while `render.thread` is set), so
+           in practice this handler is a backstop that finds nothing up; the
+           residual is the process-exit case where it does. */
         vkw_destroy();
         break;
     }
@@ -938,6 +963,16 @@ static int vk_perimage(void)
 static void vk_perimage_free(void)
 {
     uint32_t i;
+    /* THE COMMAND BUFFERS GO BACK TO THE POOL. `vk_perimage` allocates `nimg`
+       of them and a resize calls this and then that again -- without the free,
+       every swapchain rebuild would leave its buffers in the pool for the life
+       of the device, and a window the player drags rebuilds often. `nimg` is
+       still the OLD count here, which is what was allocated, because
+       `vk_swapchain` has not run yet. */
+    if (s_vk.dev && s_vk.pool && s_vk.nimg && s_vk.cmd[0] && vkFreeCommandBuffers) {
+        vkFreeCommandBuffers(s_vk.dev, s_vk.pool, s_vk.nimg, s_vk.cmd);
+        memset(s_vk.cmd, 0, sizeof s_vk.cmd);
+    }
     for (i = 0; i < MAXIMG; i++) {
         if (s_vk.semAcquire[i]) { vkDestroySemaphore(s_vk.dev, s_vk.semAcquire[i], NULL); s_vk.semAcquire[i] = VK_NULL_HANDLE; }
         if (s_vk.semRelease[i]) { vkDestroySemaphore(s_vk.dev, s_vk.semRelease[i], NULL); s_vk.semRelease[i] = VK_NULL_HANDLE; }
@@ -1171,7 +1206,8 @@ static int vk_present(void)
     r = vkAcquireNextImageKHR(s_vk.dev, s_vk.sc, 1000000000ull,
                               s_vk.semAcquire[fi], VK_NULL_HANDLE, &idx);
     if (r == VK_ERROR_OUT_OF_DATE_KHR) return -1;   /* the caller rebuilds */
-    if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) return 0;
+    if (r == VK_SUBOPTIMAL_KHR) s_vk.rebuild = 1;   /* usable; rebuild after */
+    else if (r != VK_SUCCESS) return 0;
     if (idx >= s_vk.nimg) return 0;                 /* bounded before it indexes */
 
     vkResetFences(s_vk.dev, 1, &s_vk.fence[fi]);
@@ -1214,7 +1250,11 @@ static int vk_present(void)
     r = vkQueuePresentKHR(s_vk.queue, &pi);
     s_vk.frame++;
     if (r == VK_ERROR_OUT_OF_DATE_KHR) return -1;
-    if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) return 0;
+    /* SUBOPTIMAL: the frame WAS presented, so it is counted -- but the surface
+       has moved on and the next frame should be drawn against a fresh
+       swapchain. Rebuilding here instead would throw away a good frame. */
+    if (r == VK_SUBOPTIMAL_KHR) { s_vk.rebuild = 1; return 1; }
+    if (r != VK_SUCCESS) return 0;
     return 1;
 }
 
@@ -1240,6 +1280,13 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync)
 
     st = s_state;
 
+    /* THE WORKER'S HANDLE IS REAPED WHEREVER IT FINISHES, not only on the way
+       into ST_READY. A lever cleared while a bring-up was still running used to
+       leave the handle open for the session: the disarm branch below returns
+       before any close, and the state never passes through ST_READY again. Any
+       state but ST_STARTING means the worker has published and exited. */
+    if (st != ST_STARTING && s_worker) { CloseHandle(s_worker); s_worker = NULL; }
+
     if (!s_armed) {
         /* Disarmed: give the objects back, and let a FAILED lane retry the next
            time the player arms it rather than once per launch. THE SURFACE GOES
@@ -1252,6 +1299,7 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync)
             InterlockedExchange(&s_state, ST_OFF);
             if (s_vkwnd && s_owner) PostMessageA(s_owner, WM_TAGPU_VK, (WPARAM)VKW_DESTROY, 0);
         }
+        s_askedWin = 0;
         return 0;
     }
 
@@ -1266,7 +1314,19 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync)
            deadlock this whole file is arranged to avoid. */
         s_owner = hwnd;
         win = s_vkwnd;
-        if (!win) { PostMessageA(hwnd, WM_TAGPU_VK, (WPARAM)VKW_CREATE, 0); return 0; }
+        if (!win) {
+            /* ASKED ONCE, NOT ONCE A FRAME. The window thread answers when it
+               next pumps; posting again every frame would put sixty requests a
+               second into a queue that, in the one case where this matters --
+               a pump that has stopped -- nobody is draining. The flag is
+               cleared when the window arrives or the lane comes down. */
+            if (!s_askedWin) {
+                s_askedWin = 1;
+                PostMessageA(hwnd, WM_TAGPU_VK, (WPARAM)VKW_CREATE, 0);
+            }
+            return 0;
+        }
+        s_askedWin = 0;
         s_want.hwnd = win; s_want.w = w; s_want.h = h; s_want.vsync = vsync;
         s_choiceSeen = InterlockedCompareExchange(&s_choiceGen, 0, 0);
         /* OFF -> STARTING before the thread exists, so two frames cannot start
@@ -1291,14 +1351,6 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync)
         return 0;
     }
 
-    /* The worker is finished; its handle is ours to close, once. */
-    if (s_worker) { CloseHandle(s_worker); s_worker = NULL; }
-
-    /* A DIFFERENT WINDOW, OR A DIFFERENT GPU, IS A REBUILD AND NOT A PATCH. The
-       surface belongs to one HWND and the device to one physical device, so
-       either change goes all the way down and comes back through the worker --
-       which keeps the LoadLibrary-free, off-the-render-thread rule for every
-       bring-up and not only the first. */
     /* Three things force the whole lane down and back up through the worker:
        the game window changed (a mode switch), OUR window went away (the
        owner's WM_DESTROY takes it), or the player picked another GPU. Each
@@ -1306,19 +1358,40 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync)
        place -- and going back through the worker is what keeps every bring-up
        off the render thread, not just the first. */
     if (hwnd != s_owner || s_vkwnd != s_vk.hwnd || s_choiceGen != s_choiceSeen) {
-        vklog(hwnd != s_owner    ? "the game window changed - rebuilding" :
+        int owner_changed = (hwnd != s_owner);
+        vklog(owner_changed       ? "the game window changed - rebuilding" :
               s_vkwnd != s_vk.hwnd ? "our window went away - rebuilding"
-                                 : "the GPU row changed - rebuilding");
+                                  : "the GPU row changed - rebuilding");
         vk_down();
         InterlockedExchange(&s_state, ST_OFF);
+        /* AND THE WINDOW GOES TOO WHEN THE OWNER CHANGED, because ours is owned
+           by the window that just went away -- keeping it would put the next
+           bring-up on a window hanging off a dead owner. A GPU change keeps it:
+           the window is not what changed. The destroy is posted to the NEW
+           owner, whose thread is the one that pumps; the handler needs no hwnd. */
+        if (owner_changed && s_vkwnd)
+            PostMessageA(hwnd, WM_TAGPU_VK, (WPARAM)VKW_DESTROY, 0);
+        s_askedWin = 0;
         return 0;
     }
 
-    if (vsync != s_vk.vsync ||
-        (uint32_t)w != s_vk.ext.width || (uint32_t)h != s_vk.ext.height) {
-        s_vk.vsync = vsync;
+    /* THE SWAPCHAIN IS REBUILT WHEN VULKAN SAYS SO, NOT WHEN WE GUESS. An
+       earlier version compared the caller's `w`/`h` against the swapchain's
+       extent and rebuilt when they differed -- and the two are not the same
+       number: `g_ddraw.render.width/height` is the RENDER TARGET's size, while
+       the extent follows OUR window, which is the game's CLIENT rect. Any
+       window the fork letterboxes (`--window WxH`, k != 1) makes them differ
+       permanently, and the swapchain would have been torn down and rebuilt on
+       every single frame for the rest of the session. `VK_ERROR_OUT_OF_DATE_KHR`
+       and `VK_SUBOPTIMAL_KHR` are the surface telling us its extent moved, which
+       is the same answer without the guess. `vsync` stays ours, because no
+       amount of asking the surface reveals a present mode we chose. */
+    if (vsync != s_vk.vsync) { s_vk.vsync = vsync; s_vk.rebuild = 1; }
+
+    if (s_vk.rebuild) {
+        s_vk.rebuild = 0;
         if (!vk_resize(w, h)) {
-            vklog("the swapchain could not be rebuilt at %dx%d - down", w, h);
+            vklog("the swapchain would not rebuild - down");
             vk_down();
             InterlockedExchange(&s_state, ST_FAILED);
             return 0;
@@ -1327,12 +1400,8 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync)
 
     {
         int rc = vk_present();
-        if (rc < 0) {                      /* OUT_OF_DATE: rebuild and skip one */
-            if (!vk_resize(w, h)) {
-                vklog("the swapchain is out of date and would not rebuild - down");
-                vk_down();
-                InterlockedExchange(&s_state, ST_FAILED);
-            }
+        if (rc < 0) {                  /* out of date: rebuild, and skip this frame */
+            s_vk.rebuild = 1;
             return 0;
         }
         return rc;
@@ -1355,6 +1424,11 @@ void tagpu_vk_render_stop(void)
                   WORKER_WAIT_MS);
             InterlockedExchange(&s_state, ST_ZOMBIE);
             s_worker = NULL;               /* deliberately not closed: still running */
+            /* AND THE WINDOW IS LEFT STANDING, deliberately. The abandoned
+               objects include a surface on it, and destroying a window under a
+               live surface is the one thing the order below exists to prevent.
+               It costs an invisible 0-byte window for the rest of the process,
+               which is the same bargain as the leak itself. */
             return;
         }
         st = s_state;
@@ -1368,4 +1442,5 @@ void tagpu_vk_render_stop(void)
     }
     /* The window goes last, and only once nothing holds a surface on it. */
     if (s_vkwnd && s_owner) PostMessageA(s_owner, WM_TAGPU_VK, (WPARAM)VKW_DESTROY, 0);
+    s_askedWin = 0;
 }
