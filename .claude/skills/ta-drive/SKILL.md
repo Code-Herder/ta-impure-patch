@@ -42,6 +42,11 @@ Capture and video work: the **ta-capture** skill.
    `vpwide:` ARMED line, no `terr:` grid line), which reads like a failed arm rather
    than a stale DLL. When a module you know is armed does not log, `md5sum` the
    instance's `gamedir/ddraw.dll` against your build before debugging anything else.
+   That compares a **copy against the file on disk now**, which is what it is for. It does
+   **not** work against an md5 written down earlier: the link is not byte-reproducible, and
+   two builds of the identical tree differ in three bytes (the PE timestamp, its copy in the
+   debug directory, and the checksum — measured 2026-09-15). To answer "is this the binary
+   those figures were measured on", check the *tree*, not the hash.
 6. **When the human is going to play it, check the window is on their monitor**
    before handing it over — see *Where the window lands*. A game that is running
    perfectly but sits off-screen still answers every `tacli` command and shows

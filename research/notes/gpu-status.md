@@ -3886,7 +3886,13 @@ in this landing and nothing for the hook map above. `tagpu_vk_terr.c` is not on
 produced, and again on the binary the **re**-review's fixes produced (md5 `7f50fa3e…`), which is
 the one these figures are from and the one that would land. Both reworks touch the frame loop and
 one of them touches the A/B harness itself, so a table taken on an earlier binary is a table about
-a different program — that is the gate this landing failed the first time. **Every figure below
+a different program — that is the gate this landing failed the first time. **That md5 names a build, not a tree:**
+the link is not byte-reproducible — two builds of the *identical* tree differ in exactly three bytes
+(measured 2026-09-15: the COFF `TimeDateStamp` at `0x88`, the optional header's `CheckSum` at
+`0xD8`, and the debug directory's copy of the stamp at `0x129804`), so re-hashing a rebuild can
+never tell you whether you are on the measured binary. What can is that the *tree* has not moved —
+`git status` clean at the commit the table cites — and that is the check to run before trusting a
+figure here. **Every figure below
 reproduced on every binary**, ink counts included; the only one that moves is the readout's, and it
 moves by construction (see its row):
 
@@ -4065,10 +4071,11 @@ Two reviewers read `main...HEAD` independently at `high`, one on correctness and
 synchronisation alone. **Both returned the same first finding**, and it was real. The fixes below
 are on the branch, and **they have now been RUN**: every A/B, the regressions and constraint 4
 were re-measured on the reworked binary and all of them reproduced — the table above is that
-re-measurement, not the pre-rework one. What has **not** happened is the rework's own review:
-`CLAUDE.md` asks for a re-review when a fix changes the synchronisation *design* rather than
-patching it, and this one moves a teardown across a submit boundary and adds a drain point to the
-seam's frame loop, so it does.
+re-measurement, not the pre-rework one. The rework's own review — which `CLAUDE.md` asks for when a
+fix changes the synchronisation *design* rather than patching it, and this one moves a teardown
+across a submit boundary and adds a drain point to the seam's frame loop — **has since run, and it
+found a blocker**: it is the next subsection, and the table above is the *third* measurement, taken
+after its fixes.
 
 **What the re-measurement does and does not cover.** It exercises every path the rework touched
 *except the refusal itself*: the publish gate (every shipped frame in constraint 4 runs with the
