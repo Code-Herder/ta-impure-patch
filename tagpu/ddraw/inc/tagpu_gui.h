@@ -184,7 +184,8 @@ enum {
     TAGPU_GUIOP_PIXELS,     /* the box's bytes at aoff                        */
     TAGPU_GUIOP_SPRITE,     /* a keyed GAF quad; the atlas rect is RESOLVED   */
     TAGPU_GUIOP_COPY,       /* twin -> twin, the source's box at (sl, st)     */
-    TAGPU_GUIOP_RESET       /* forget every twin                              */
+    TAGPU_GUIOP_RESET,      /* forget every twin                              */
+    TAGPU_GUIOP_STRING      /* TA's own glyphs, stamped into the twin         */
 };
 
 typedef struct TAGPU_GUIOP {
@@ -196,6 +197,18 @@ typedef struct TAGPU_GUIOP {
     short          sl, st;          /* copy: source top-left; sprite: dst pos */
     int            w, h;            /* seed: the surface's geometry           */
     unsigned       aoff, alen;      /* into TAGPU_GUIHAND::arena              */
+    /* ---- STRING (landing 2). The three colour arguments of 0x4CCF60 as
+       BYTES, and `sl`/`st` are the PEN the GL lane started from -- already
+       past the font's own y offset, which the blitter subtracts.
+       `aoff`/`alen` carry `nglyph` cells of four `short` each: the atlas x, y,
+       w and h the GL lane RESOLVED. They are carried rather than looked up
+       again for a harder reason than the sprite's: `twin_string` resolves
+       against an atlas that can REPACK mid-string -- it retries once for
+       exactly that -- so a second lookup here could name texels that have
+       moved since, and the A/B would be comparing two atlases. */
+    unsigned char  fg, bg, tr;
+    unsigned short nglyph;
+
     /* THE ATLAS RECT THE GL LANE RESOLVED, not one this pass looks up again.
        "The port must not re-derive the pass's inputs" (roadmap, How a ported
        pass is A/B'd): a second lookup could answer differently after a repack
@@ -225,6 +238,11 @@ typedef struct TAGPU_GUIHAND {
     int                  atlasDim, atlasRows;
     unsigned             atlasSerial;
 
+    /* the GLYPH atlas, which `tagpu_text.c` already keeps as bytes */
+    const unsigned char* glyphs;
+    int                  glyphW, glyphH;
+    unsigned             glyphGen;
+
     const unsigned char* pal;       /* 256 x RGBA8, tagpu_pal_live()          */
     unsigned             palSerial;
 
@@ -251,7 +269,7 @@ typedef struct TAGPU_GUIHAND {
        A frame with any of these is refused whole, in the shape every world
        pass refuses what it has no copy of: drawing the rest would be a
        different picture and the A/B would call it a rasteriser difference. */
-    int   otherOps;                 /* PK_STRING, and anything added later    */
+    int   otherOps;                 /* ops still not carried, if any ever are */
     int   colourTwins;              /* Classic++ colour reached a twin        */
     int   sharpOn;                  /* the sharp layer had COVERAGE this frame
                                        -- not merely that it exists, which it

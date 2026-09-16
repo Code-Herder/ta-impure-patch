@@ -145,7 +145,7 @@ static int              s_ntw;
 static VkRenderPass     s_twRp;          /* one R8G8 colour attachment, LOAD  */
 static VkDescriptorSetLayout s_dslTwin, s_dslLay;
 static VkPipelineLayout s_ploTwin, s_ploLay;
-static VkPipeline       s_pipeSpr, s_pipeCpy, s_pipeLay;
+static VkPipeline       s_pipeSpr, s_pipeCpy, s_pipeStr, s_pipeLay;
 static VkRenderPass     s_layRp;         /* what s_pipeLay was built against  */
 static VkDescriptorPool s_dpool;
 static VkSampler        s_samp;
@@ -153,12 +153,12 @@ static VkDeviceSize     s_ualign;
 
 /* the shared texels: one of each, not one per slot (2.28's cheaper design --
    they are re-uploaded whole when their serial moves and read by every slot) */
-static VkImage          s_atImg, s_palImg, s_engImg, s_dumImg;
-static VkDeviceMemory   s_atMem, s_palMem, s_engMem, s_dumMem;
-static VkImageView      s_atView, s_palView, s_engView, s_dumView;
-static int              s_atDim, s_engW, s_engH;
-static unsigned         s_atSerial, s_palSerial;
-static int              s_atHave, s_palHave, s_engHave, s_dumReady;
+static VkImage          s_atImg, s_palImg, s_engImg, s_dumImg, s_glImg;
+static VkDeviceMemory   s_atMem, s_palMem, s_engMem, s_dumMem, s_glMem;
+static VkImageView      s_atView, s_palView, s_engView, s_dumView, s_glView;
+static int              s_atDim, s_engW, s_engH, s_glW, s_glH;
+static unsigned         s_atSerial, s_palSerial, s_glGen;
+static int              s_atHave, s_palHave, s_engHave, s_dumReady, s_glHave;
 
 static SLOT             s_slot[TAGPU_VK_SLOTS];
 
@@ -788,6 +788,10 @@ static int build(const TAGPU_VKPASS* d)
                          sizeof tagpu_spv_tagpu_gui_surf_SPR_FS / 4, &s_pipeSpr)) return 0;
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_CPY_FS,
                          sizeof tagpu_spv_tagpu_gui_surf_CPY_FS / 4, &s_pipeCpy)) return 0;
+    /* the string shares the twin pipelines' layout exactly: QVS at binding 0,
+       its own block at 32, one sampler at 40 */
+    if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_STR_FS,
+                         sizeof tagpu_spv_tagpu_gui_surf_STR_FS / 4, &s_pipeStr)) return 0;
     if (!build_descriptors(d)) return 0;
     return 1;
 }
@@ -973,7 +977,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     TAGPU_GUIHAND h;
     SLOT* s;
     unsigned i;
-    int ndraw = 0;
+    int ndraw = 0, nquad = 0, quads = 0;
+    int glUp = 0;
+    VkDeviceSize glOff = 0;
     VkDeviceSize stNeed = 0, stOff = 0, uStride, fStride;
     VkDeviceSize atOff = 0, palOff = 0, engOff = 0;
     int atUp = 0, palUp = 0, engUp = 0;
@@ -1029,20 +1035,18 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        [FOUND 2026-09-16, the landing review; §2.34's "the twins are kept
        level" was written of the ops the mirror CARRIES and was false of this
        one, which it does not.] */
+    /* `otherOps` is 0 for every op kind that exists today -- the string was the
+       last one it counted, and landing 2 carries it. The machinery stays,
+       because the NEXT op kind added to the queue will land here rather than
+       being drawn wrong, and it is a capability gap rather than a sync one:
+       a fresh start would not help, so it says so once, composites nothing,
+       and catches the store up when the op stops appearing. */
     if (h.otherOps > 0) {
-        /* A CAPABILITY GAP, NOT A SYNC GAP, and the difference is the whole of
-           finding 1 above. The GL lane applies these and this landing has no
-           glyph path, so a fresh start would not help: the very next frame
-           carries another one. Say it once, composite nothing, apply nothing,
-           and ask for NOTHING. The store is caught up with a single fresh start
-           when they stop — which is the `else` below. */
         if (!s_cantReplay) {
             s_cantReplay = 1;
             plog(d, "gui: the GL twin applied %d op(s) this landing cannot "
-                    "replay (a string) - nothing composited, and the store is "
-                    "caught up with ONE fresh start when they stop. "
-                    "`gui.on=nostring` is the lever the A/B is taken with",
-                 h.otherOps);
+                    "replay - nothing composited, and the store is caught up "
+                    "with ONE fresh start when they stop", h.otherOps);
         }
         s_drawThis = 0; s_abFrame = 0;
         return 0;
@@ -1110,15 +1114,29 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             break;
         case TAGPU_GUIOP_SPRITE:
             if (o->fw < 1 || o->fh < 1) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
-            if (!h.atlas) { if (!behind(d, "a malformed op")) goto refuse; return 0; }             /* nothing to sample          */
-            ndraw++;
+            if (!h.atlas) { if (!behind(d, "a sprite with no atlas")) goto refuse; return 0; }
+            ndraw++; nquad++;
+            break;
+        case TAGPU_GUIOP_STRING:
+            /* A STRING IS ONE UNIFORM WINDOW AND `nglyph` QUADS. Its cells were
+               resolved by the GL lane against an atlas that can repack
+               mid-string, so they are carried rather than looked up again --
+               and bounded here in this file's own terms all the same. */
+            if (o->nglyph < 1 || o->nglyph > 256 ||
+                o->alen != (unsigned)o->nglyph * 8 ||
+                o->aoff > h.alen || o->aoff + o->alen > h.alen) {
+                if (!behind(d, "a malformed string op")) goto refuse;
+                return 0;
+            }
+            if (!h.glyphs) { if (!behind(d, "a string with no glyph atlas")) goto refuse; return 0; }
+            ndraw++; nquad += o->nglyph;
             break;
         case TAGPU_GUIOP_COPY:
             /* A SELF-COPY IS REFUSED rather than guessed at: the GL lane reads
                and writes one texture in one draw there, which is undefined in
                both APIs, and reproducing undefined behaviour is not parity. */
             if (o->surf == o->src) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
-            ndraw++;
+            ndraw++; nquad++;
             break;
         case TAGPU_GUIOP_CLEAR:
             if (bw < 1 || bh < 1) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
@@ -1149,6 +1167,12 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         atUp = 1; stNeed += (VkDeviceSize)h.atlasDim * h.atlasRows;
     }
     if (h.pal && (!s_palHave || s_palSerial != h.palSerial)) { palUp = 1; stNeed += 256 * 4; }
+    if (h.glyphs && h.glyphW > 0 && h.glyphH > 0 &&
+        h.glyphW <= ATLAS_MAXDIM && h.glyphH <= ATLAS_MAXDIM &&
+        (!s_glHave || s_glGen != h.glyphGen ||
+         s_glW != h.glyphW || s_glH != h.glyphH)) {
+        glUp = 1; stNeed += (VkDeviceSize)h.glyphW * h.glyphH;
+    }
     /* the engine's frame moves every frame by definition, so it needs no
        serial -- but it is only there on a frame the composite can be drawn on,
        and this function now runs the replay on frames it cannot composite */
@@ -1160,7 +1184,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     if (!grow(d, &s->stage, &s->stMem, &s->stMap, &s->stCap,
               stNeed ? stNeed : 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT)) goto refuse;
     if (!grow(d, &s->vb, &s->vbMem, &s->vbMap, &s->vbCap,
-              (VkDeviceSize)(ndraw + 1) * 24 * sizeof(float),
+              (VkDeviceSize)(nquad + 1) * 24 * sizeof(float),
               VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)) goto refuse;
     if (!grow(d, &s->ub, &s->ubMem, &s->ubMap, &s->ubCap,
               uStride * (ndraw ? ndraw : 1), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)) goto refuse;
@@ -1188,6 +1212,20 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         atOff = stOff;
         memcpy(s->stMap + stOff, h.atlas, (size_t)h.atlasDim * h.atlasRows);
         stOff += (VkDeviceSize)h.atlasDim * h.atlasRows;
+    }
+    if (glUp) {
+        if (s_glW != h.glyphW || s_glH != h.glyphH) {
+            if (!ret_push(d, s_glImg, s_glMem, s_glView, VK_NULL_HANDLE)) goto refuse;
+            s_glImg = VK_NULL_HANDLE; s_glMem = VK_NULL_HANDLE; s_glView = VK_NULL_HANDLE;
+            s_glW = s_glH = 0; s_glHave = 0;
+            if (!mk_image(d, h.glyphW, h.glyphH, VK_FORMAT_R8_UNORM,
+                          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                          &s_glImg, &s_glMem, &s_glView)) goto refuse;
+            s_glW = h.glyphW; s_glH = h.glyphH;
+        }
+        glOff = stOff;
+        memcpy(s->stMap + stOff, h.glyphs, (size_t)h.glyphW * h.glyphH);
+        stOff += (VkDeviceSize)h.glyphW * h.glyphH;
     }
     if (palUp) {
         if (!s_palImg &&
@@ -1228,6 +1266,22 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
         s_atHave = 1; s_atSerial = h.atlasSerial;
+    }
+    if (glUp) {
+        img_barrier(cb, s_glImg,
+                    s_glHave ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                             : VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    s_glHave ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                             : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                    s_glHave ? VK_ACCESS_SHADER_READ_BIT : 0,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+        copy_rect(cb, s->stage, glOff, s_glImg, 0, 0, h.glyphW, h.glyphH);
+        img_barrier(cb, s_glImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        s_glHave = 1; s_glGen = h.glyphGen;
     }
     if (palUp) {
         img_barrier(cb, s_palImg,
@@ -1299,7 +1353,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
            needs none open at all (a transfer and a layout change may not be
            recorded inside one) */
         if (o->kind == TAGPU_GUIOP_SPRITE || o->kind == TAGPU_GUIOP_COPY ||
-            o->kind == TAGPU_GUIOP_CLEAR) {
+            o->kind == TAGPU_GUIOP_STRING || o->kind == TAGPU_GUIOP_CLEAR) {
             TWIN* src = NULL;
             t = tw_find(o->surf);
             if (!t) continue;               /* the GL lane had one; we do not  */
@@ -1340,7 +1394,12 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                 set_viewport(cb, t->w, t->h);
                 rpOpen = 1; cur = t;
             }
-            set_scissor(cb, o->l, o->t, bw, bh, t->w, t->h);
+            /* THE STRING SETS NO SCISSOR, which is the GL lane's own
+               behaviour: `twin_string` disables the scissor test outright
+               where the sprite and the copy enable it. Clipping here would cut
+               glyphs the GL twin has. */
+            if (o->kind == TAGPU_GUIOP_STRING) set_scissor(cb, 0, 0, t->w, t->h, t->w, t->h);
+            else                               set_scissor(cb, o->l, o->t, bw, bh, t->w, t->h);
 
             if (o->kind == TAGPU_GUIOP_CLEAR) {
                 /* the GL lane's scissored glClear to coverage 0 */
@@ -1370,10 +1429,48 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                 float* uq = (float*)(s->ubMap + (VkDeviceSize)drawn * uStride);
                 int*   fq = (int*)(s->fbMap + (VkDeviceSize)drawn * fStride);
                 uint32_t dyn[2];
-                VkDeviceSize vbOff = (VkDeviceSize)drawn * 24 * sizeof(float);
+                VkDeviceSize vbOff = (VkDeviceSize)quads * 24 * sizeof(float);
                 VkDescriptorSet ds;
                 int si_ = 0;
                 uq[0] = (float)t->w; uq[1] = (float)t->h;
+                if (o->kind == TAGPU_GUIOP_STRING) {
+                    /* ONE BLOCK, `nglyph` QUADS. Every glyph of a string shares
+                       its three colours and the twin's size, so the set is
+                       bound once and the vertex offset walks -- which is what
+                       `twin_string` does with one program and n draws. */
+                    const short* cell = (const short*)(h.arena + o->aoff);
+                    /* pass 1 refuses a string with no glyph atlas in the
+                       hand-over; this is the other half -- one whose DIMENSIONS
+                       were outside what this pass carries, so the upload never
+                       ran and the view is null. A descriptor must be valid. */
+                    if (!s_glHave) goto standdown;
+                    int g, penx = o->sl, top = o->st;
+                    int* fq3 = fq;
+                    fq3[0] = (int)o->fg; fq3[1] = (int)o->bg; fq3[2] = (int)o->tr;
+                    if (!set_claim(d, s, s_glView, QVS_SZ, TWF_SZ, &si_)) goto standdown;
+                    ds = s->sets[si_];
+                    dyn[0] = (uint32_t)((VkDeviceSize)drawn * uStride);
+                    dyn[1] = (uint32_t)((VkDeviceSize)drawn * fStride);
+                    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeStr);
+                    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                            s_ploTwin, 0, 1, &ds, 2, dyn);
+                    for (g = 0; g < (int)o->nglyph; g++) {
+                        int ax = cell[g * 4 + 0], ay = cell[g * 4 + 1];
+                        int gw = cell[g * 4 + 2], gh = cell[g * 4 + 3];
+                        VkDeviceSize off = (VkDeviceSize)quads * 24 * sizeof(float);
+                        quadv(qv, (float)penx, (float)top,
+                              (float)(penx + gw), (float)(top + gh),
+                              (float)ax / (float)s_glW,        (float)ay / (float)s_glH,
+                              (float)(ax + gw) / (float)s_glW, (float)(ay + gh) / (float)s_glH);
+                        memcpy(s->vbMap + off, qv, sizeof qv);
+                        vkCmdBindVertexBuffers(cb, 0, 1, &s->vb, &off);
+                        vkCmdDraw(cb, 6, 1, 0, 0);
+                        penx += gw;
+                        quads++;
+                    }
+                    drawn++;
+                    continue;
+                }
                 if (o->kind == TAGPU_GUIOP_SPRITE) {
                     fq[0] = (int)o->ck; fq[1] = 0;      /* uCK, uRestored      */
                     quadv(qv, (float)o->sl, (float)o->st,
@@ -1397,7 +1494,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                                         s_ploTwin, 0, 1, &ds, 2, dyn);
                 vkCmdBindVertexBuffers(cb, 0, 1, &s->vb, &vbOff);
                 vkCmdDraw(cb, 6, 1, 0, 0);
-                drawn++;
+                drawn++; quads++;
             }
             continue;
         }
@@ -1511,8 +1608,8 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     {
         float qv[24];
         quadv(qv, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f);
-        memcpy(s->vbMap + (VkDeviceSize)ndraw * 24 * sizeof(float), qv, sizeof qv);
-        s_layQuad = (VkDeviceSize)ndraw * 24 * sizeof(float);
+        memcpy(s->vbMap + (VkDeviceSize)nquad * 24 * sizeof(float), qv, sizeof qv);
+        s_layQuad = (VkDeviceSize)nquad * 24 * sizeof(float);
     }
     s_layVp[0] = h.vpX; s_layVp[1] = h.vpY;
     s_layVp[2] = h.vpW_gl; s_layVp[3] = h.vpH_gl;
@@ -1639,13 +1736,16 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     kill_image(d, &s_atImg,  &s_atMem,  &s_atView);
     kill_image(d, &s_palImg, &s_palMem, &s_palView);
     kill_image(d, &s_engImg, &s_engMem, &s_engView);
+    kill_image(d, &s_glImg,  &s_glMem,  &s_glView);
     kill_image(d, &s_dumImg, &s_dumMem, &s_dumView);
     s_atDim = 0; s_atHave = 0; s_atSerial = 0;
     s_palHave = 0; s_palSerial = 0;
     s_engW = s_engH = 0; s_engHave = 0; s_dumReady = 0;
+    s_glW = s_glH = 0; s_glHave = 0; s_glGen = 0;
     if (s_dpool) { vkDestroyDescriptorPool(d->dev, s_dpool, NULL); s_dpool = VK_NULL_HANDLE; }
     if (s_pipeSpr) { vkDestroyPipeline(d->dev, s_pipeSpr, NULL); s_pipeSpr = VK_NULL_HANDLE; }
     if (s_pipeCpy) { vkDestroyPipeline(d->dev, s_pipeCpy, NULL); s_pipeCpy = VK_NULL_HANDLE; }
+    if (s_pipeStr) { vkDestroyPipeline(d->dev, s_pipeStr, NULL); s_pipeStr = VK_NULL_HANDLE; }
     if (s_pipeLay) { vkDestroyPipeline(d->dev, s_pipeLay, NULL); s_pipeLay = VK_NULL_HANDLE; }
     s_layRp = VK_NULL_HANDLE;
     if (s_ploTwin) { vkDestroyPipelineLayout(d->dev, s_ploTwin, NULL); s_ploTwin = VK_NULL_HANDLE; }

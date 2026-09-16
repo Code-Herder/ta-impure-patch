@@ -922,6 +922,11 @@ static void twin_sprite(TWIN* t, const TAGPU_GAFENT* e, const TAGPU_PUBOP* o)
    kerning, no pair table (`0x4CCFF7`..`0x4CCFFD` adds `cl`, the width, to the
    row-start pointer). So a run of per-glyph quads at those offsets is the same
    arithmetic the blitter does, not an approximation of it. */
+/* G19f: the Vulkan mirror's record of a string, defined with the rest of the
+   mirror below -- this is drawn above it, and records what it resolved. */
+static void mir_string(const TAGPU_PUBOP* o, const short cell[][4], int n,
+                       int x0, int top);
+
 static void twin_string(TWIN* t, const TAGPU_PUBOP* o)
 {
     /* THE BLOCK IS GLYPH RECORDS THEN THE STRING (landing 4c). `feed` installs
@@ -1015,6 +1020,7 @@ static void twin_string(TWIN* t, const TAGPU_PUBOP* o)
         s_glyphs++;
     }
     s_strings++;
+    mir_string(o, cell, n, (int)o->sl, top);
     return;
 
 reseed:
@@ -1245,6 +1251,25 @@ static int mir_bytes(const void* src, unsigned n, unsigned* off)
     return 1;
 }
 
+/* A STRING, RECORDED WHERE IT IS DRAWN AND WITH WHAT IT RESOLVED. Called from
+   the tail of `twin_string`, after the draw succeeded -- a string that stamped
+   nothing re-seeds instead, and must not be published as though it had. */
+static void mir_string(const TAGPU_PUBOP* o, const short cell[][4], int n,
+                       int x0, int top)
+{
+    TAGPU_GUIOP* m;
+    if (!s_mirRec || n < 1) return;
+    m = mir_op();
+    if (!m) return;
+    m->kind = TAGPU_GUIOP_STRING;
+    m->surf = o->surf;
+    m->fg = o->fg; m->bg = o->bg; m->tr = o->tr;
+    m->sl = (short)x0; m->st = (short)top;
+    m->nglyph = (unsigned short)n;
+    m->alen = (unsigned)n * 8;           /* four shorts a glyph */
+    if (!mir_bytes(cell, m->alen, &m->aoff)) s_mNOps--;
+}
+
 /* the box ops all carry the same rectangle */
 static void mir_box(TAGPU_GUIOP* m, const TAGPU_PUBOP* o)
 {
@@ -1363,7 +1388,9 @@ static void drain(void)
             /* the glyphs went in above, before the skip gate and whether or
                not this surface has a twin: the producer marks a (font, code)
                pair sent the moment it commits the op and never sends it again */
-            if (t) { twin_string(t, o); s_mOther++; }
+            /* twin_string records the mirror op itself, from what it
+               resolved -- see mir_string */
+            if (t) twin_string(t, o);
             break;
         case PK_COPY: {
             TWIN* src = twin_find(o->src);
@@ -2412,6 +2439,9 @@ static void mir_finish(const TAGPU_FRAME* f)
         s_mHand.atlas = NULL; s_mHand.atlasDim = 0;
         s_mHand.atlasRows = 0; s_mHand.atlasSerial = 0;
     }
+
+    s_mHand.glyphs = tagpu_text_glyph_atlas(&s_mHand.glyphW, &s_mHand.glyphH);
+    s_mHand.glyphGen = tagpu_text_glyph_gen();
 
     s_mHand.pal = tagpu_pal_live();
     s_mHand.palSerial = tagpu_pal_serial();

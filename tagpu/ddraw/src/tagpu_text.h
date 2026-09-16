@@ -116,6 +116,12 @@ void tagpu_text_glyph_dims(int* w, int* h);
    cleared and re-used. */
 unsigned tagpu_text_glyph_gen(void);
 unsigned int tagpu_text_glyph_tex(void);
+/* THE GLYPH ATLAS AS BYTES (G19f landing 2). A second backend cannot read a GL
+   texture, and this one needs no mechanism to expose: the module already keeps
+   the atlas as a CPU array and uploads the texture FROM it, so this is the
+   array and `tagpu_text_glyph_gen`'s counter says when it last moved. Render
+   thread only. */
+const unsigned char* tagpu_text_glyph_atlas(int* w, int* h);
 int  tagpu_text_glyph_stats(unsigned* glyphs, unsigned* drops, int* fonts);
 
 /* ---- GL (present thread, context current) ---- */

@@ -526,6 +526,13 @@ int tagpu_text_glyph_id(unsigned font_id, int ch, int* ax, int* ay,
 void tagpu_text_glyph_dims(int* w, int* h) { *w = GA_W; *h = GA_H; }
 unsigned tagpu_text_glyph_gen(void) { return s_ggen; }
 
+const unsigned char* tagpu_text_glyph_atlas(int* w, int* h)
+{
+    if (w) *w = GA_W;
+    if (h) *h = GA_H;
+    return s_gatlas;
+}
+
 unsigned int tagpu_text_glyph_tex(void)
 {
     if (!s_gglyphs) return 0;
