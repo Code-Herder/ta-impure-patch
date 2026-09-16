@@ -60,6 +60,9 @@
 #include "tagpu_classicpp.h"
 #include "tagpu_fogwide.h"
 #include "tagpu_packet.h"
+#include "tagpu_native.h"   /* tagpu_native_foglut/scissor_on, for the hand-over */
+#include "tagpu_abshot.h"   /* the GL half of the Phase G A/B */
+#include "tagpu_vk.h"       /* tagpu_vk_armed(): whether to pay for the mirror */
 
 
 
@@ -69,7 +72,9 @@
 #define MODE_FLASH  TAGPU_FXMODE_FLASH
 
 #define MAXFXV   32768          /* vertices per bucket per frame             */
-#define FXST     9              /* x,y,enc, u,v, c,mode, wx,wz               */
+/* THE STRIDE IS tagpu_fx.h's, so the GL VAO and the Vulkan attribute array
+   cannot drift apart (Phase G / G19e). It was a local 9 until then. */
+#define FXST     TAGPU_FX_VST   /* x,y,enc, u,v, c,mode, wx,wz               */
 #define MAXMODEL 1024
 #define ATLAS_DIM 2048
 #define ATLAS_MAX 2048
@@ -103,7 +108,21 @@ static void* getgl(const char* n)
     return p;
 }
 
+/* the shared shelf atlas (tagpu_gaf.c). Its entries are keyed on the frame
+   header AND its pixel pointer/dims: effect sequences (the flash) are freed
+   when their explosion ends and the address is reused for other frames */
+static TAGPU_GAFENT   s_atlasEnts[ATLAS_MAX];
+static TAGPU_GAFATLAS s_atlas;
+
 /* ---- arming ---- */
+/* THE A/B LEVER (Phase G / G19e). It re-arms when the file goes away and comes
+   back, which is why `touch` on one that is already there does nothing. */
+#define ABFILE   "tagpu_fx.ab"
+#define ABOUT    "tagpu_fx_gl.ppm"
+static int  s_ab, s_abDone, s_abFrame;
+static int  s_pubHave;                 /* this frame's hand-over is waiting   */
+static TAGPU_FXHAND s_pub;
+static int  s_mirrorAsked;             /* the atlas mirror has been asked for */
 static int  s_armed = -1;
 static int  s_log = 0, s_lines = 1, s_models = 1, s_sprites = 1, s_expl = 1, s_debris = 1;
 static int  s_passive = 0;             /* gather + log only; engine keeps drawing */
@@ -144,6 +163,24 @@ static void read_arm(unsigned frame_counter)
         }
     }
     s_armed = 1;
+    /* the A/B lever, on the same beat as the arm (tagpu_feat.c's shape) */
+    s_ab = GetFileAttributesA(ABFILE) != INVALID_FILE_ATTRIBUTES;
+    if (!s_ab) s_abDone = 0;
+    /* THE ATLAS MIRROR (Phase G / G19e), on this beat and not per frame --
+       tagpu_vk_armed() is two file-attribute queries, and a pass that asked
+       every frame would make them on every frame of ordinary play, where the
+       answer is no and stays no.
+
+       IT IS ASKED FOR HERE, AND THIS RUNS BEFORE THE GATHER, which is what
+       makes the hand-over correct on the first frame that has one rather than
+       a few frames later: asking marks every painted entry reserved, and
+       tagpu_gaf_atlas_get PAINTS a reserved entry before it returns it, so by
+       the time a quad carries a UV those texels are in the mirror as well as
+       in the texture. 4 MB, so it is paid for only while the Vulkan lane is
+       armed -- and `s_mirrorAsked` is set only on SUCCESS, so a request made
+       before the atlas has its dimensions is retried. */
+    if (!s_mirrorAsked && s_atlas.dim > 0 && tagpu_vk_armed())
+        s_mirrorAsked = tagpu_gaf_atlas_mirror(&s_atlas);
     /* the engine skip is armed by a successful gather (below), never by the
        file alone; passive turns it off here */
     if (s_passive) tagpu_fxown_set_skip(0);
@@ -173,7 +210,14 @@ static GLint  s_uRestored;
    then particle layers 7..9) — so lasers and flashes sit over trail smoke and
    explosion sprites over their flash like the engine; no per-run segment
    table, so nothing is ever dropped for alternating too often */
-enum { B_UNDER = 0, B_LINES = 1, B_FLASH = 2, B_SPRITES = 3, NBUCKET = 4 };
+/* the bucket names are tagpu_fx.h's too, for the same reason: the Vulkan lane
+   concatenates the four arrays in this order and draws them with three
+   different pipelines, so the order is part of the contract */
+#define B_UNDER   TAGPU_FXB_UNDER
+#define B_LINES   TAGPU_FXB_LINES
+#define B_FLASH   TAGPU_FXB_FLASH
+#define B_SPRITES TAGPU_FXB_SPRITES
+#define NBUCKET   TAGPU_FXB_N
 static float  s_verts[NBUCKET][MAXFXV * FXST];
 static int    s_nv[NBUCKET];
 static float  s_encCur = 403.0f;       /* depth key of what is being emitted  */
@@ -182,13 +226,13 @@ static int    s_mute = 0;              /* passive: count, emit nothing        */
 static TAGPU_FXMODEL s_models_[MAXMODEL];
 static int    s_nm = 0;
 
-/* the shared shelf atlas (tagpu_gaf.c). Its entries are keyed on the frame
-   header AND its pixel pointer/dims: effect sequences (the flash) are freed
-   when their explosion ends and the address is reused for other frames */
-static TAGPU_GAFENT   s_atlasEnts[ATLAS_MAX];
-static TAGPU_GAFATLAS s_atlas;
 static int s_lhtInit = 0;
 static unsigned s_lhtStamp = 0;
+/* THE FLASH LIGHT TABLE'S OWN BYTES, at file scope since Phase G / G19e: the
+   GL lane uploads them with glTexImage2D and the Vulkan lane needs the same
+   buffer, because a second backend cannot read a GL texture. 32 x 1 RGB, and
+   `s_lhtInit` is what says whether it has ever been built. */
+static unsigned char s_lhtRGB[32 * 3];
 
 static const char* VS =
     "#version 330 core\n"
@@ -308,14 +352,18 @@ static void init_gl(void)
     glGenVertexArrays(1, &s_vao); glBindVertexArray(s_vao);
     glGenBuffers(1, &s_vbo); glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof s_verts, NULL, GL_STREAM_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, FXST * 4, (void*)0);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, FXST * 4, (void*)12);
-    glEnableVertexAttribArray(2);
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, FXST * 4, (void*)20);
-    glEnableVertexAttribArray(3);
-    glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, FXST * 4, (void*)28);
+    {   /* ONE TABLE, TWO LANES: tagpu_fx.h's TAGPU_FX_ATTRS is what the Vulkan
+           attribute array is built from too, so a layout change cannot reach
+           one lane and miss the other -- which would make the A/B compare two
+           different meshes and call it a rasteriser difference. */
+        static const struct { int loc, n, off; } at[TAGPU_FX_NATTR] = TAGPU_FX_ATTRS;
+        int i;
+        for (i = 0; i < TAGPU_FX_NATTR; i++) {
+            glEnableVertexAttribArray((GLuint)at[i].loc);
+            glVertexAttribPointer((GLuint)at[i].loc, at[i].n, GL_FLOAT, GL_FALSE,
+                                  FXST * 4, (void*)(size_t)at[i].off);
+        }
+    }
     glBindVertexArray(0);
 
     tagpu_gaf_atlas_lost(&s_atlas);      /* its texture is made on first use */
@@ -336,6 +384,12 @@ static void init_gl(void)
 void tagpu_fx_glreset(void)
 {
     s_state = 0; s_lhtInit = 0;
+    /* AND THE HAND-OVER GOES WITH IT. `s_pub` points into `s_verts` and into
+       the GAF mirror, and this is the context-loss path -- the atlas below is
+       dropped on the very next line. A hand-over left standing here is the
+       G19e re-review's finding in a third place. */
+    s_pubHave = 0; s_abFrame = 0;
+    s_mirrorAsked = 0;
     tagpu_gaf_atlas_lost(&s_atlas);
 }
 
@@ -837,7 +891,7 @@ static void gather_fx(const TAGPU_FXVIEW* v)
     if (flashOn && (!s_lhtInit || v->frame_counter - s_lhtStamp >= 300)) {
         const unsigned char* lht = tagpu_pk_lht(pk);
         const unsigned char* pal = tagpu_pal_live();
-        static unsigned char rgb[32 * 3];
+        unsigned char* rgb = s_lhtRGB;   /* file scope: the hand-over carries it */
         if (pal && lht) {
             int L;
             for (L = 0; L < 32; L++) {
@@ -931,11 +985,115 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
 int tagpu_fx_nmodels(void) { return s_nm; }
 const TAGPU_FXMODEL* tagpu_fx_model(int i) { return (i >= 0 && i < s_nm) ? &s_models_[i] : NULL; }
 
+/* ---- the Vulkan hand-over (Phase G / G19e, the fourth world pass) --------
+   tagpu_fx.h is the contract. Published AFTER the GL draw, from the very
+   arrays, numbers and texels that draw used.
+
+   THE FOG GRID IS COPIED, never aliased. `v->fogGrid` points into the frame
+   packet, whose declared lifetime ends at tagpu_packet_frame_end() -- earlier
+   in render_ogl.c's iteration than the tagpu_vk_frame that would read it.
+   tagpu_terr.c has the argument in full; this is the same one. */
+#define FOG_COPY_MAXDIM 1024
+static unsigned short* s_fogCopy;
+static int             s_fogCopyCells;
+
+static void fx_publish(const TAGPU_FXVIEW* v, int total, int scaf)
+{
+    int fogBad = 0;                    /* fog wanted, no grid: publish nothing */
+    int b;
+    /* NOTHING IS PUBLISHED ON A SHIPPED FRAME. `s_mirrorAsked` is the latch the
+       arm beat sets when the Vulkan lane is up; while it is 0 the lane is not
+       armed, nothing will ever call the hand-over, and the stores below are
+       pure cost on the path every player runs. */
+    if (!s_mirrorAsked) { s_pubHave = 0; s_abFrame = 0; return; }
+    memset(&s_pub, 0, sizeof s_pub);
+    for (b = 0; b < NBUCKET; b++) { s_pub.vert[b] = s_verts[b]; s_pub.n[b] = s_nv[b]; }
+    s_pub.gw = (float)v->gw; s_pub.gh = (float)v->gh;
+    s_pub.zoom = v->zoom > 0.0f ? v->zoom : 1.0f;
+    s_pub.zoomCx = v->zoomCx; s_pub.zoomCy = v->zoomCy;
+    s_pub.depthScale = v->depthScale > 1.0f ? v->depthScale : 512.0f;
+    s_pub.restored = (s_atlas.rgb && tagpu_classicpp_assets()) ? 1 : 0;
+    /* the number the GL draw passed, bit1 and all: effects hide in grey */
+    s_pub.fog = (v->fogMode & 1) | 2;
+    s_pub.fogOrgX = (float)v->fogOrgX; s_pub.fogOrgY = (float)v->fogOrgY;
+    s_pub.fogCols = (float)v->fogCols; s_pub.fogRows = (float)v->fogRows;
+    /* THE SCAFFOLD TEST, exactly as the GL lane set it for the B_UNDER draw.
+       The Vulkan pass refuses the frame when it is 1 -- the scaffold's texels
+       are another pass's image and this landing shares none. */
+    s_pub.scafOn = scaf;
+    s_pub.scafP[0] = (float)v->vpL; s_pub.scafP[1] = (float)v->vpT;
+    s_pub.scafP[2] = (float)v->vw;  s_pub.scafP[3] = (float)v->vh;
+    s_pub.uss   = (float)(v->ss > 0 ? v->ss : 1);
+    s_pub.zoomF = v->zoom > 0.0f ? v->zoom : 1.0f;
+    s_pub.zoomCFx = v->zoomCx; s_pub.zoomCFy = v->zoomCy;
+    s_pub.atlas = s_atlas.mirror; s_pub.atlasDim = s_atlas.dim;
+    {   /* the shelf cursor bounds every cell in the atlas (tagpu_feat.h) */
+        int rows = s_atlas.shelfY + s_atlas.shelfH;
+        if (rows < 0) rows = 0;
+        if (rows > s_atlas.dim) rows = s_atlas.dim;
+        s_pub.atlasRows = rows;
+    }
+    s_pub.atlasSerial = s_atlas.mirrorSerial;
+    s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();
+    /* THE LIGHT TABLE ONLY WHEN IT HAS BEEN BUILT. A frame with flash vertices
+       and no table is one the GL twin drew through an incomplete texture, and
+       the port cannot reproduce that -- so it is refused below rather than
+       drawn differently. */
+    s_pub.lht = s_lhtInit ? s_lhtRGB : NULL;
+    /* the grid as the fragment shader will read it, and only when it will:
+       uFog bit0 clear means taFog never samples uFogGrid. */
+    if ((s_pub.fog & 1) && v->fogGrid && v->fogCols > 0 && v->fogRows > 0 &&
+        v->fogCols <= FOG_COPY_MAXDIM && v->fogRows <= FOG_COPY_MAXDIM) {
+        int cells = v->fogCols * v->fogRows;
+        if (cells > s_fogCopyCells) {
+            unsigned short* n = (unsigned short*)realloc(s_fogCopy, (size_t)cells * 2);
+            if (n) { s_fogCopy = n; s_fogCopyCells = cells; }
+        }
+        if (s_fogCopy && cells <= s_fogCopyCells) {
+            memcpy(s_fogCopy, v->fogGrid, (size_t)cells * 2);
+            s_pub.fogGrid = s_fogCopy;
+            s_pub.fogGridCols = v->fogCols; s_pub.fogGridRows = v->fogRows;
+        }
+    }
+    /* fog on with no grid is not a frame this pass may draw, so it publishes
+       NOTHING -- the copy can fail, and the port would sample a 1x1 image while
+       uFogDim carried the real size. [G19e RE-REVIEW's rule, 2026-09-15.] */
+    fogBad = ((s_pub.fog & 1) && !s_pub.fogGrid);
+    s_pub.fogLut = tagpu_native_foglut();
+    s_pub.vpL = v->vpL; s_pub.vpT = v->vpT; s_pub.vw = v->vw; s_pub.vh = v->vh;
+    /* WHETHER THE CLIP IS ACTUALLY ON, not whether a rect exists: the native
+       pass enables the scissor only when it resolved glScissor. */
+    s_pub.scissorOn = tagpu_native_scissor_on();
+    s_pub.ss = v->ss;
+    /* THE A/B FLAG LIVES EXACTLY ONE FRAME (tagpu_feat.c has the argument). */
+    s_pub.ab = s_abFrame; s_abFrame = 0;
+    /* THE STAMP. `s_pub.vert[]` point into `s_verts` and `s_pub.atlas` into the
+       GAF mirror, so the hand-over is this frame's or it is nothing. */
+    s_pub.frame = v->frame_counter;
+    s_pubHave = total > 0 && !fogBad;
+}
+
+/* Hand it over, ONCE (tagpu_fx.h). */
+int tagpu_fx_handover(TAGPU_FXHAND* out, unsigned now)
+{
+    if (!s_pubHave || !out) return 0;
+    /* not this frame's, so not alive -- and cleared, so the next frame starts
+       honest. See tagpu_terr.h. */
+    if (s_pub.frame != now) { s_pubHave = 0; s_abFrame = 0; return 0; }
+    *out = s_pub;
+    s_pubHave = 0; s_abFrame = 0;
+    return 1;
+}
+
 void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex,
                      unsigned int scafTex)
 {
     int total = s_nv[0] + s_nv[1] + s_nv[2] + s_nv[3];
-    if (s_state != 1 || total == 0) return;
+    /* A FRAME WITH NOTHING TO DRAW HANDS NOTHING OVER. Leaving the previous
+       frame's hand-over standing would have the Vulkan lane draw last frame's
+       effects over this frame's -- and on the frame a level is torn down, over
+       nothing at all. [The G19e re-review's first finding, applied here.] */
+    if (s_state != 1 || total == 0) { s_pubHave = 0; s_abFrame = 0; return; }
     glUseProgram(s_prog);
     x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
     glUniform1i(s_uFog, (v->fogMode & 1) | 2);   /* effects hide in grey */
@@ -973,21 +1131,58 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex,
     x_glDepthMask(GL_FALSE);
     if (x_glLineWidth) x_glLineWidth((GLfloat)v->ss);
     x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-    /* only the under-layers can sit behind a stamped feature row: the
-       scaffold fetch is paid by that draw alone */
-    int first = 0;
-    glUniform1i(s_uScafOn, scaf);
-    if (s_nv[B_UNDER]) x_glDrawArrays(GL_TRIANGLES, first, s_nv[B_UNDER]);
-    first += s_nv[B_UNDER];
-    glUniform1i(s_uScafOn, 0);
-    if (s_nv[B_LINES]) x_glDrawArrays(GL_LINES, first, s_nv[B_LINES]);
-    first += s_nv[B_LINES];
-    if (s_nv[B_FLASH]) {
-        x_glBlendFunc(GL_ONE, GL_ONE);
-        x_glDrawArrays(GL_TRIANGLES, first, s_nv[B_FLASH]);
-        x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
+    /* ---- the GL half of the Phase G A/B (tagpu_abshot.h) ----
+       Black the frame and the depth buffer, draw this pass alone, read it
+       back: what the Vulkan half is compared against is then one pass over
+       black against one pass over black. The scissor is put back before the
+       draw, because a world pass CLIPPED to the viewport is the pass and an
+       unclipped one is something else. One frame, and the player sees it. */
+    {
+        TAGPU_ABSHOT shot;
+        int taking = s_ab && !s_abDone;
+        int first = 0;
+        shot.live = 0;
+        if (taking && v->ss != 1) {
+            /* REFUSED RATHER THAN WRITTEN AT THE WRONG SIZE: the GL capture is
+               this FBO's viewport, gw*ss x gh*ss, and the Vulkan one is the
+               window's client rect. tools/vk-ab.py would refuse the pair after
+               the fact; saying so here names the cause. */
+            flog("fx: the A/B needs ss=1 (the GL capture is the supersampled FBO) "
+                 "- nothing captured; relaunch with supersampling off");
+            s_abDone = 1;
+            taking = 0;
+        }
+        if (taking) tagpu_abshot_begin(&shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR);
+
+        /* only the under-layers can sit behind a stamped feature row: the
+           scaffold fetch is paid by that draw alone */
+        glUniform1i(s_uScafOn, scaf);
+        if (s_nv[B_UNDER]) x_glDrawArrays(GL_TRIANGLES, first, s_nv[B_UNDER]);
+        first += s_nv[B_UNDER];
+        glUniform1i(s_uScafOn, 0);
+        if (s_nv[B_LINES]) x_glDrawArrays(GL_LINES, first, s_nv[B_LINES]);
+        first += s_nv[B_LINES];
+        if (s_nv[B_FLASH]) {
+            x_glBlendFunc(GL_ONE, GL_ONE);
+            x_glDrawArrays(GL_TRIANGLES, first, s_nv[B_FLASH]);
+            x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+        }
+        first += s_nv[B_FLASH];
+        if (s_nv[B_SPRITES]) x_glDrawArrays(GL_TRIANGLES, first, s_nv[B_SPRITES]);
+
+        if (taking) {
+            /* the Vulkan half is claimed only on a GL half that reached the
+               disk -- see tagpu_abshot.h; `s_abDone` latches either way */
+            int wrote = tagpu_abshot_end(&shot, ABOUT, "fx");
+            s_abDone = 1;
+            s_abFrame = wrote;
+        }
     }
-    first += s_nv[B_FLASH];
-    if (s_nv[B_SPRITES]) x_glDrawArrays(GL_TRIANGLES, first, s_nv[B_SPRITES]);
     x_glDepthMask(GL_TRUE);
+
+    /* PUBLISHED AFTER THE GL DRAW, not before: these are the vertices, the
+       numbers and the texels that were just drawn, and the Vulkan lane is
+       about to draw the same ones. */
+    fx_publish(v, total, scaf);
 }

@@ -85,4 +85,112 @@ int  tagpu_fx_tile_visible(const TAGPU_FXVIEW* v, int wx, int wzp);   /* engine 
    wzp is the PROJECTED world z (y - alt/2), the space the grid is built in. */
 int  tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
                   int orgX, int orgY, int wx, int wzp);
+
+/* ---- the Vulkan edition of this pass (Phase G / G19e, the FOURTH world pass)
+   ----------------------------------------------------------------------------
+
+   Everything the GL lane just drew this pass FROM, so that the Vulkan lane
+   draws the same thing rather than a second implementation of it. Nothing here
+   is re-derived: the vertices are the four bucket arrays the gather filled and
+   the GL upload took, the uniforms are the numbers the GL draw passed, the
+   texels are the bytes each texture was uploaded from, and the shader is the
+   same GLSL through tools/spirv-gen.py.
+
+   HANDED OVER EXACTLY ONCE, like the feature pass's, so one frame's geometry
+   can never be drawn twice; a frame this pass skipped hands over nothing and
+   the Vulkan lane draws nothing, which is what the GL lane did.
+
+   THE POINTERS ARE THIS FILE'S AND THE ATLAS MODULE'S, and they are valid only
+   until the next frame rebuilds them -- which is why the hand-over carries the
+   FRAME it was published on and `tagpu_fx_handover` refuses any other. See
+   tagpu_terr.h for the failure that bound exists to stop; it is the same one
+   here, because `s_verts` and the GAF mirror are rebuilt and freed the same
+   way. Both lanes run on the RENDER THREAD and the whole of the native pass
+   happens earlier in the same iteration of render_ogl.c's loop than the
+   tagpu_vk_frame that consumes this; the game thread never touches them. */
+
+/* FLOATS PER VERTEX, AND THE ATTRIBUTE TABLE, DEFINED ONCE FOR BOTH LANES --
+   tagpu_feat.h's rule and for the same reason: a vertex layout copied into a
+   second file is two things that can drift, and the whole worth of a 0-px
+   comparison is that only the rasteriser differs. Each entry is {location,
+   components, byte offset}. */
+#define TAGPU_FX_VST    9          /* x,y,enc, u,v, c,mode, wx,wz            */
+#define TAGPU_FX_NATTR  4
+#define TAGPU_FX_ATTRS  { {0,3,0}, {1,2,12}, {2,2,20}, {3,2,28} }
+
+/* THE FOUR BUCKETS, IN THE GL LANE'S OWN DRAW ORDER, which is the order they
+   are concatenated into one vertex buffer in. They are not four draws of one
+   pipeline: the lines are a LINE_LIST and the flashes blend additively, so
+   this pass is the first ported one that needs more than one pipeline for the
+   same shader. */
+enum { TAGPU_FXB_UNDER = 0, TAGPU_FXB_LINES = 1,
+       TAGPU_FXB_FLASH = 2, TAGPU_FXB_SPRITES = 3, TAGPU_FXB_N = 4 };
+
+typedef struct TAGPU_FXHAND {
+    /* THE FRAME THIS WAS PUBLISHED ON. `tagpu_fx_handover` refuses any other. */
+    unsigned frame;
+
+    /* The geometry. `vert[b]` is bucket b's array and `n[b]` its vertex count,
+       TAGPU_FX_VST floats each. */
+    const float* vert[TAGPU_FXB_N];
+    int          n[TAGPU_FXB_N];
+
+    /* The vertex stage's uniform block (std140 offsets are printed in
+       inc/spirv/tagpu_fx.spv.h and are the contract for the buffer). */
+    float gw, gh;
+    float zoom, zoomCx, zoomCy;
+    float depthScale;
+
+    /* The fragment stage's. `uFog` carries bit1 set for this pass -- effects
+       hide in grey rather than darkening -- so it is the number the GL draw
+       passed and not `fogMode & 1`. */
+    int   restored;                   /* Classic++ restored atlas in use      */
+    int   fog;                        /* the uFog the GL lane passed          */
+    float fogOrgX, fogOrgY, fogCols, fogRows;
+    /* The scaffold test's inputs. `scafOn` is the value the GL lane put in
+       uScafOn FOR THE B_UNDER DRAW ALONE; every other draw got 0. This pass
+       REFUSES a frame with it set (see tagpu_vk_fx.c): the scaffold's texels
+       live in another pass's image and sharing one image between two passes is
+       a mechanism this landing does not build. */
+    int   scafOn;
+    float scafP[4];                   /* vpL, vpT, vw, vh, in frame px        */
+    float uss;                        /* the supersample factor as the FS sees it */
+    float zoomF, zoomCFx, zoomCFy;
+
+    /* The texels, as bytes rather than as GL names -- a second backend cannot
+       read a GL texture. Each carries the serial that says when it last
+       changed, so the Vulkan lane re-uploads on a change and not per frame. */
+    const unsigned char*  atlas;      /* dim x dim R8, tagpu_gaf.c's mirror   */
+    int                   atlasDim;
+    int                   atlasRows;  /* the rows the shelf packer has used   */
+    unsigned              atlasSerial;
+    const unsigned char*  pal;        /* 256 x RGBA8, tagpu_pal_live()        */
+    unsigned              palSerial;
+    /* THE FLASH LIGHT TABLE, 32 x 1, THREE BYTES A TEXEL -- the buffer the GL
+       lane's glTexImage2D(GL_RGB8, 32, 1) was handed. NULL when it has never
+       been built, and then a frame with flash vertices is refused rather than
+       drawn against a texture the GL twin sampled and this lane cannot. */
+    const unsigned char*  lht;        /* 32 x 3 bytes, or NULL                */
+    const unsigned short* fogGrid;    /* cols x rows RG8; NULL when fog is off */
+    int                   fogGridCols, fogGridRows;
+    const unsigned char*  fogLut;     /* 256 x R8, tagpu_native_foglut()      */
+
+    /* THE SCISSOR THE NATIVE PASS SET AROUND THIS DRAW, in game-frame pixels
+       measured from the TOP of the frame. tagpu_vk_feat.c has the argument for
+       why the two APIs disagree about it and where the flip is done. */
+    int   vpL, vpT, vw, vh;
+    int   scissorOn;                  /* the GL lane actually enabled it      */
+    int   ss;                         /* the FBO's supersample factor         */
+
+    /* 1 on the ONE frame this pass captured `tagpu_fx_gl.ppm` under
+       `tagpu_fx.ab`, so the Vulkan lane captures the SAME frame rather than
+       whichever one its own lever poll landed on. */
+    int   ab;
+} TAGPU_FXHAND;
+
+/* 0 when there is nothing to draw, when this frame's has already been taken,
+   or when the standing hand-over was published on a DIFFERENT frame than
+   `now` -- the fork's monotonic render-thread counter, which a Vulkan pass has
+   as TAGPU_VKPASS::frame. Render thread only. */
+int tagpu_fx_handover(TAGPU_FXHAND* out, unsigned now);
 #endif

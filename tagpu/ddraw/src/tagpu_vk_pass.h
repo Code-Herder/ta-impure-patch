@@ -66,6 +66,18 @@ typedef struct {
        the device will do it. 0 means a pass that needs it must not arm; it may
        not fall back to flipping geometry, which would mirror every glyph. */
     int                       flipok;
+    /* VK_EXT_line_rasterization WITH `bresenhamLines`, ENABLED ON THE DEVICE.
+       A pass that draws LINES needs it and may not draw without it.
+       MEASURED 2026-09-15 (G19e, the effects pass): under Vulkan's DEFAULT
+       lineRasterizationMode the ported lasers came out a strict SUPERSET of
+       their GL twin's -- all 126 of the twin's pixels plus exactly one extra
+       fragment at the END of each line segment. GL's non-antialiased lines
+       follow the diamond-exit rule; Vulkan's default mode does not and
+       BRESENHAM does. It is the same shape as `flipok`: a rule the GL twin
+       already obeys, adopted as pipeline state rather than worked around, and
+       a pass whose device will not offer it stands down instead of drawing a
+       picture four pixels away from its own oracle. */
+    int                       lineok;
     /* WHICH RENDER-THREAD FRAME THIS IS -- the fork's own monotonic counter,
        the same number the GL lane stamped its hand-over with earlier in this
        iteration of render_ogl.c's loop.

@@ -163,6 +163,7 @@
 #include "tagpu_vk_scaffold.h"
 #include "tagpu_vk_feat.h"
 #include "tagpu_vk_terr.h"
+#include "tagpu_vk_fx.h"
 #include "tagpu_vk_shot.h"
 
 #define ON_FILE    "tagpu_vk.on"
@@ -186,6 +187,7 @@
 #define AB_SCAF    "tagpu_scaffold_vk.ppm"
 #define AB_FEAT    "tagpu_feat_vk.ppm"
 #define AB_TERR    "tagpu_terr_vk.ppm"
+#define AB_FX      "tagpu_fx_vk.ppm"
 #define GPUS_FILE  "tagpu_vk.gpus"      /* the cache the menu reads at attach */
 #define CFG_FILE   "tagpu_vk.cfg"       /* the player's choice, by name       */
 #define CFG_TMP    "tagpu_vk.cfg.tmp"
@@ -358,6 +360,7 @@ typedef struct {
     int              vsync;
     int              devIndex;             /* into the cached name table, or -1 */
     int              flipok;               /* VK_KHR_maintenance1 was enabled   */
+    int              lineok;               /* VK_EXT_line_rasterization, bresenham */
     int              rebuild;              /* the surface said its extent moved */
     int              cansrc;               /* the images carry TRANSFER_SRC     */
     unsigned         frame;
@@ -1600,6 +1603,7 @@ static void vk_down(void)
         tagpu_vk_scaffold_down(&s_pass);
         tagpu_vk_feat_down(&s_pass);
         tagpu_vk_terr_down(&s_pass);
+        tagpu_vk_fx_down(&s_pass);
         ab_drop("the lane coming down", idle);
         tagpu_vk_shot_down(&s_pass);
         vk_perimage_free();
@@ -1743,8 +1747,10 @@ static DWORD WINAPI up_worker(LPVOID arg)
 
     {
         float prio = 1.0f;
-        const char* dexts[2] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME, NULL };
+        const char* dexts[3] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME, NULL, NULL };
         uint32_t ndext = 1;
+        VkPhysicalDeviceLineRasterizationFeaturesEXT lrf =
+            { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LINE_RASTERIZATION_FEATURES_EXT };
         VkDeviceQueueCreateInfo qci = { VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
         VkDeviceCreateInfo dci = { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
 
@@ -1778,29 +1784,81 @@ static DWORD WINAPI up_worker(LPVOID arg)
             if (ext) {
                 er = vkEnumerateDeviceExtensionProperties(s_vk.pd, NULL, &ne, ext);
                 if (er == VK_SUCCESS || er == VK_INCOMPLETE)
-                    for (k = 0; k < ne; k++)
+                    for (k = 0; k < ne; k++) {
                         if (!strcmp(ext[k].extensionName, "VK_KHR_maintenance1")) {
                             dexts[ndext++] = "VK_KHR_maintenance1";
                             s_vk.flipok = 1;
-                            break;
                         }
+                        /* VK_EXT_line_rasterization, AND IT BUYS EXACTLY ONE
+                           THING TOO: `BRESENHAM` line rasterisation, which is
+                           the rule GL's non-antialiased lines already follow.
+                           MEASURED 2026-09-15, and this is why it is here: with
+                           Vulkan's DEFAULT mode the effects pass's lasers came
+                           out a strict SUPERSET of the GL twin's -- every one of
+                           its 126 pixels plus exactly one extra fragment at the
+                           end of each line segment, 4 px on the fixture. That is
+                           the diamond-exit rule, which DEFAULT does not
+                           implement and BRESENHAM does.
+                           A pass that draws lines refuses the frame when this is
+                           off rather than drawing those four pixels. */
+                        if (!strcmp(ext[k].extensionName,
+                                    VK_EXT_LINE_RASTERIZATION_EXTENSION_NAME)) {
+                            dexts[ndext++] = VK_EXT_LINE_RASTERIZATION_EXTENSION_NAME;
+                            s_vk.lineok = 1;
+                        }
+                    }
                 free(ext);
             }
         }
         if (!s_vk.flipok)
             vklog("VK_KHR_maintenance1 is not offered - the lane will present but "
                   "no ported pass can flip clip space, so none will draw");
+        if (!s_vk.lineok)
+            vklog("VK_EXT_line_rasterization is not offered - a ported pass that "
+                  "draws LINES will stand down (its twin's rule is the diamond-exit "
+                  "one, and Vulkan's default mode is not it)");
 
         qci.queueFamilyIndex = s_vk.qfam; qci.queueCount = 1; qci.pQueuePriorities = &prio;
         dci.queueCreateInfoCount = 1; dci.pQueueCreateInfos = &qci;
         dci.enabledExtensionCount = ndext; dci.ppEnabledExtensionNames = dexts;
+        /* THE FEATURE IS ENABLED, NOT MERELY THE EXTENSION, and that is what
+           makes this a check rather than a hope: enabling a feature the device
+           does not support MUST fail vkCreateDevice with
+           VK_ERROR_FEATURE_NOT_PRESENT, so the retry below is the whole test.
+           (The instance asks for Vulkan 1.0, where vkGetPhysicalDeviceFeatures2
+           is itself an extension; letting the create call answer costs nothing
+           and cannot disagree with what the device will actually do.) */
+        if (s_vk.lineok) {
+            lrf.bresenhamLines = VK_TRUE;
+            lrf.pNext = (void*)dci.pNext;
+            dci.pNext = &lrf;
+        }
         r = vkCreateDevice(s_vk.pd, &dci, NULL, &s_vk.dev);
+        if (r != VK_SUCCESS && s_vk.lineok) {
+            /* Line rasterisation first: it is the one whose FEATURE can be
+               refused as well as its extension, and dropping it costs only the
+               passes that draw lines. */
+            vklog("vkCreateDevice refused VK_EXT_line_rasterization/bresenhamLines "
+                  "(%s) - retrying without it", res_name(r));
+            s_vk.lineok = 0;
+            dci.pNext = lrf.pNext;
+            /* THE LIST IS REBUILT, NOT SHORTENED. The two optional extensions
+               go in in the order the DRIVER enumerates them, so `ndext - 1`
+               would drop whichever happened to be last -- maintenance1 on a
+               driver that lists it second, which costs every ported pass for a
+               reason that has nothing to do with lines. */
+            ndext = 1;
+            if (s_vk.flipok) dexts[ndext++] = "VK_KHR_maintenance1";
+            dci.enabledExtensionCount = ndext;
+            r = vkCreateDevice(s_vk.pd, &dci, NULL, &s_vk.dev);
+        }
         if (r != VK_SUCCESS && s_vk.flipok) {
-            /* The only extension that can be refused here is the optional one,
-               so one retry without it is a real fallback and not a loop. */
+            /* Then the flip, which costs every ported pass. One retry each, so
+               this is a real fallback and not a loop. */
             vklog("vkCreateDevice refused VK_KHR_maintenance1 (%s) - retrying without it",
                   res_name(r));
             s_vk.flipok = 0;
+            dci.pNext = NULL;
             dci.enabledExtensionCount = 1;
             r = vkCreateDevice(s_vk.pd, &dci, NULL, &s_vk.dev);
         }
@@ -1855,6 +1913,7 @@ static DWORD WINAPI up_worker(LPVOID arg)
     s_pass.dfmt = s_vk.dfmt;
     s_pass.slots = s_vk.nimg;
     s_pass.flipok = s_vk.flipok;
+    s_pass.lineok = s_vk.lineok;
     s_pass.gipa = s_gipa;
     s_pass.gdpa = vkGetDeviceProcAddr;
     s_pass.log = passlog;
@@ -1963,7 +2022,7 @@ static int vk_present(void)
        than destroy on a hope. The cost is one drain on the frame after a
        refusal, and nothing at all on every other frame. */
     if (tagpu_vk_terr_down_owed() || tagpu_vk_feat_down_owed() ||
-        tagpu_vk_scaffold_down_owed()) {
+        tagpu_vk_fx_down_owed() || tagpu_vk_scaffold_down_owed()) {
         if (!vkDeviceWaitIdle || vkDeviceWaitIdle(s_vk.dev) != VK_SUCCESS) {
             vklog("vkDeviceWaitIdle refused before an owed pass teardown - down");
             return -2;
@@ -1975,6 +2034,7 @@ static int vk_present(void)
            first. [G19e RE-REVIEW, 2026-09-15.] */
         if (tagpu_vk_terr_down_owed())     tagpu_vk_terr_down_paid(&s_pass);
         if (tagpu_vk_feat_down_owed())     tagpu_vk_feat_down_paid(&s_pass);
+        if (tagpu_vk_fx_down_owed())       tagpu_vk_fx_down_paid(&s_pass);
         if (tagpu_vk_scaffold_down_owed()) tagpu_vk_scaffold_down_paid(&s_pass);
     }
 
@@ -2044,8 +2104,8 @@ static int vk_present(void)
        is what proves the GPU has finished with that slot's buffers, and it is
        the only thing that does. */
     {
-        int draw_fps = 0, draw_scaf = 0, draw_feat = 0, draw_terr = 0;
-        int ab_fps = 0, ab_scaf = 0, ab_feat = 0, ab_terr = 0;
+        int draw_fps = 0, draw_scaf = 0, draw_feat = 0, draw_terr = 0, draw_fx = 0;
+        int ab_fps = 0, ab_scaf = 0, ab_feat = 0, ab_terr = 0, ab_fx = 0;
         int ndraw = 0, nclaim = 0;
         const char* abpath = NULL;
         VkRenderPassBeginInfo rbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
@@ -2063,15 +2123,23 @@ static int vk_present(void)
             ab_terr = tagpu_vk_terr_ab_frame();
             draw_feat = tagpu_vk_feat_prepare(&s_pass, cb, fi);
             ab_feat = tagpu_vk_feat_ab_frame();
+            /* The effects are the LAST of the world, after the features and
+               the units -- tagpu_native.c draws them there so that lasers and
+               explosions sit over everything the world put down and under the
+               UI. Two passes that blend are not commutative, so this order is
+               the GL lane's and not the order the files were written in. */
+            draw_fx = tagpu_vk_fx_prepare(&s_pass, cb, fi);
+            ab_fx = tagpu_vk_fx_ab_frame();
             draw_scaf = tagpu_vk_scaffold_prepare(&s_pass, cb, fi);
             ab_scaf = tagpu_vk_scaffold_ab_frame();
             draw_fps = tagpu_vk_fps_prepare(&s_pass, cb, fi);
             ab_fps = tagpu_vk_fps_ab_frame();
         }
-        ndraw = draw_terr + draw_feat + draw_scaf + draw_fps;
-        nclaim = ab_terr + ab_feat + ab_scaf + ab_fps;
+        ndraw = draw_terr + draw_feat + draw_fx + draw_scaf + draw_fps;
+        nclaim = ab_terr + ab_feat + ab_fx + ab_scaf + ab_fps;
         abpath = ab_terr ? AB_TERR
-               : (ab_feat ? AB_FEAT : (ab_scaf ? AB_SCAF : (ab_fps ? AB_FPS : NULL)));
+               : (ab_feat ? AB_FEAT
+               : (ab_fx ? AB_FX : (ab_scaf ? AB_SCAF : (ab_fps ? AB_FPS : NULL))));
 
         if (s_vk.rp && s_vk.fb[idx]) {
             VkClearValue cv[2];
@@ -2092,6 +2160,8 @@ static int vk_present(void)
                 tagpu_vk_terr_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_feat)
                 tagpu_vk_feat_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
+            if (draw_fx)
+                tagpu_vk_fx_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_scaf)
                 tagpu_vk_scaffold_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_fps)
@@ -2191,6 +2261,7 @@ static int vk_resize(int w, int h)
     tagpu_vk_scaffold_down(&s_pass);
     tagpu_vk_feat_down(&s_pass);
     tagpu_vk_terr_down(&s_pass);
+    tagpu_vk_fx_down(&s_pass);
     ab_drop("the swapchain rebuilding", idle);
     vk_perimage_free();
     r = vk_swapchain(w, h);
