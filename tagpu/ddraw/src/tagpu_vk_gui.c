@@ -1035,6 +1035,11 @@ static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
     kill_buffer(d, &s->ub,    &s->ubMem, &s->ubMap);  s->ubCap = 0;
     kill_buffer(d, &s->fb_,   &s->fbMem, &s->fbMap);  s->fbCap = 0;
     kill_buffer(d, &s->lb,    &s->lbMem, &s->lbMap);
+    kill_buffer(d, &s->sb,    &s->sbMem, &s->sbMap);  s->sbCap = 0;
+    /* the sharp layer is this slot's, so it goes back with the rest of it */
+    if (s->shFb) { vkDestroyFramebuffer(d->dev, s->shFb, NULL); s->shFb = VK_NULL_HANDLE; }
+    kill_image(d, &s->shImg, &s->shMem, &s->shView);
+    s->shW = s->shH = 0;
     s->built = 0;
 }
 
@@ -1228,6 +1233,8 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     int ndraw = 0, nquad = 0, quads = 0;
     int glUp = 0;
     VkDeviceSize glOff = 0;
+    int shOn = 0, mmPicUp = 0, mmEngUp = 0, needMM = 0, needCurs = 0;
+    VkDeviceSize mmPicOff = 0, mmEngOff = 0, sStride = 0;
     VkDeviceSize stNeed = 0, stOff = 0, uStride, fStride;
     VkDeviceSize atOff = 0, palOff = 0, engOff = 0;
     int atUp = 0, palUp = 0, engUp = 0;
@@ -1326,14 +1333,46 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     "true. `gui.on=norestore` is the lever"); }
         compose = 0;
     } else s_saidColour = 0;
-    if (h.sharpOn) {
+    /* ---- THE SHARP LAYER (landing 3). `h.sharpOn` is COVERAGE, and landing 1
+       could only stand down on it. Now the quads that produced that coverage
+       cross with the record and are drawn here.
+
+       AN OVERFLOWING LIST IS A `compose = 0` AND NOT THE BEHIND STATE, which is
+       the distinction the twins made the hard way: a sharp-layer quad mutates
+       nothing that outlives its frame -- the layer is cleared at every present
+       -- so a frame we cannot draw is ONE frame, never a store out of step.
+       Nothing is asked of the producer for it. */
+    if (h.nsdraw < 0 || h.nsdraw > TAGPU_GUI_SDRAW_MAX ||
+        (h.nsdraw > 0 && (h.sharpW < 1 || h.sharpH < 1 ||
+                          h.sharpW > SURF_MAXDIM || h.sharpH > SURF_MAXDIM))) {
         if (!s_saidSharp) { s_saidSharp = 1;
-            plog(d, "gui: the GL twin has coverage in the sharp layer (the "
-                    "cursor, a string or the minimap) and this landing draws "
-                    "none - nothing composited. `gui.on=nocursor nominimap` are "
-                    "the levers"); }
+            plog(d, "gui: %d sharp-layer quad(s) at %dx%d is past what this pass "
+                    "carries - nothing composited this frame, and nothing is "
+                    "asked of the producer: the layer keeps no state",
+                 h.nsdraw, h.sharpW, h.sharpH); }
         compose = 0;
-    } else s_saidSharp = 0;
+    } else {
+        s_saidSharp = 0;
+        shOn = (h.nsdraw > 0) ? 1 : 0;
+        for (i = 0; i < (unsigned)h.nsdraw; i++) {
+            if (h.sdraw[i].kind == TAGPU_GUISK_MM)     needMM = 1;
+            if (h.sdraw[i].kind == TAGPU_GUISK_CURSOR) needCurs = 1;
+        }
+        /* the inputs each kind needs, refused in this file's own terms. A
+           cursor samples the UI atlas; the minimap its picture and the engine's
+           pair. Missing any of them is this frame not being composited. */
+        if (needCurs && !h.atlas) { shOn = 0; compose = 0; }
+        if (needMM && (!h.mmPic || h.mmPicW < 1 || h.mmPicH < 1 ||
+                       h.mmPicW > ATLAS_MAXDIM || h.mmPicH > ATLAS_MAXDIM ||
+                       !h.mmEng || h.mmEngW < 1 || h.mmEngH < 1 ||
+                       h.mmEngW > ATLAS_MAXDIM || h.mmEngH > ATLAS_MAXDIM)) {
+            shOn = 0; compose = 0;
+        }
+        /* the GL lane HAS coverage and we produced no quad for it: that is a
+           client this landing does not carry, and it composites nothing rather
+           than a layer missing a piece. */
+        if (h.sharpOn && !shOn) compose = 0;
+    }
     /* THE ENGINE'S OWN FRAME IS THE COMPOSITE'S BOTTOM LAYER. Without it the
        GL lane's `uSurf` reads an image ours would not have, so the two would
        differ everywhere the twin has no coverage -- which is most of a frame. */
@@ -1441,6 +1480,17 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         atUp = 1; stNeed += (VkDeviceSize)h.atlasDim * h.atlasRows;
     }
     if (h.pal && (!s_palHave || s_palSerial != h.palSerial)) { palUp = 1; stNeed += 256 * 4; }
+    /* THE MINIMAP'S TWO, WIDENED RGB8 -> RGBA8 ON THE WAY IN, so what they
+       reserve is FOUR bytes a texel and not three. The picture moves on a map
+       load and a palette change and says so with a serial; the engine's pair
+       moves every frame by definition, exactly as its own frame does. */
+    if (needMM) {
+        if (!s_mmPicHave || s_mmPicSerial != h.mmPicGen ||
+            s_mmPicW != h.mmPicW || s_mmPicH != h.mmPicH) {
+            mmPicUp = 1; stNeed += (VkDeviceSize)h.mmPicW * h.mmPicH * 4;
+        }
+        mmEngUp = 1; stNeed += (VkDeviceSize)h.mmEngW * h.mmEngH * 4;
+    }
     /* THE CONTENT SERIAL, NOT THE REPACK GENERATION -- see tagpu_gui.h. The
        first draft keyed this on `glyphGen`, which moves only when the atlas is
        thrown away, so the image was uploaded once and every glyph rasterised
@@ -1460,13 +1510,41 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     fStride = align_up(TWF_SZ, s_ualign);
     if (!grow(d, &s->stage, &s->stMem, &s->stMap, &s->stCap,
               stNeed ? stNeed : 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT)) goto refuse;
+    /* +nsdraw: the sharp layer's quads share this slot's vertex buffer, and
+       +1 is still the composite's own quad at the very end of it */
     if (!grow(d, &s->vb, &s->vbMem, &s->vbMap, &s->vbCap,
-              (VkDeviceSize)(nquad + 1) * 24 * sizeof(float),
+              (VkDeviceSize)(nquad + h.nsdraw + 1) * 24 * sizeof(float),
               VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)) goto refuse;
+    /* ndraw twin windows THEN nsdraw sharp ones: the sharp layer's quads take
+       a QVS window each out of the same buffer, at `ndraw + q` */
     if (!grow(d, &s->ub, &s->ubMem, &s->ubMap, &s->ubCap,
-              uStride * (ndraw ? ndraw : 1), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)) goto refuse;
+              uStride * (VkDeviceSize)((ndraw + h.nsdraw) ? (ndraw + h.nsdraw) : 1),
+              VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)) goto refuse;
     if (!grow(d, &s->fb_, &s->fbMem, &s->fbMap, &s->fbCap,
               fStride * (ndraw ? ndraw : 1), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)) goto refuse;
+    sStride = align_up(TWF_SZ, s_ualign);
+    if (shOn && !grow(d, &s->sb, &s->sbMem, &s->sbMap, &s->sbCap,
+                      sStride * (VkDeviceSize)h.nsdraw,
+                      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)) goto refuse;
+    /* THE LAYER ITSELF, this slot's own. Destroying it here is safe for the
+       same reason the slot's buffers are: the seam waited `fence[slot]` before
+       this hook ran, so nothing in flight names it. It is NOT the twins' case
+       and needs no retire. */
+    if (shOn && (s->shW != h.sharpW || s->shH != h.sharpH)) {
+        if (s->shFb) { vkDestroyFramebuffer(d->dev, s->shFb, NULL); s->shFb = VK_NULL_HANDLE; }
+        kill_image(d, &s->shImg, &s->shMem, &s->shView);
+        s->shW = s->shH = 0;
+    }
+    if (shOn && !s->shImg) {
+        VkFramebufferCreateInfo fi = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
+        if (!mk_image(d, h.sharpW, h.sharpH, VK_FORMAT_R8G8B8A8_UNORM,
+                      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                      &s->shImg, &s->shMem, &s->shView)) goto refuse;
+        fi.renderPass = s_sharpRp; fi.attachmentCount = 1; fi.pAttachments = &s->shView;
+        fi.width = (uint32_t)h.sharpW; fi.height = (uint32_t)h.sharpH; fi.layers = 1;
+        if (vkCreateFramebuffer(d->dev, &fi, NULL, &s->shFb) != VK_SUCCESS) goto refuse;
+        s->shW = h.sharpW; s->shH = h.sharpH;
+    }
     if (!s->lb && !mk_buffer(d, LAY_SZ, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                              VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -1503,6 +1581,30 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         glOff = stOff;
         memcpy(s->stMap + stOff, h.glyphs, (size_t)h.glyphW * h.glyphH);
         stOff += (VkDeviceSize)h.glyphW * h.glyphH;
+    }
+    if (mmPicUp || mmEngUp) {
+        /* RGB8 -> RGBA8, alpha 255. Three-channel formats are optional in
+           Vulkan and absent on plenty of real devices; MM_FS reads `.rgb`, so
+           the widening costs one byte a texel and no shader change. */
+        int pass_;
+        for (pass_ = 0; pass_ < 2; pass_++) {
+            const unsigned char* src = pass_ ? h.mmEng : h.mmPic;
+            int pw_ = pass_ ? h.mmEngW : h.mmPicW;
+            int ph_ = pass_ ? h.mmEngH : h.mmPicH;
+            unsigned char* dst_;
+            long n_, k_;
+            if (pass_ ? !mmEngUp : !mmPicUp) continue;
+            if (pass_) mmEngOff = stOff; else mmPicOff = stOff;
+            dst_ = s->stMap + stOff;
+            n_ = (long)pw_ * ph_;
+            for (k_ = 0; k_ < n_; k_++) {
+                dst_[4 * k_ + 0] = src[3 * k_ + 0];
+                dst_[4 * k_ + 1] = src[3 * k_ + 1];
+                dst_[4 * k_ + 2] = src[3 * k_ + 2];
+                dst_[4 * k_ + 3] = 255;
+            }
+            stOff += (VkDeviceSize)n_ * 4;
+        }
     }
     if (palUp) {
         if (!s_palImg &&
@@ -1559,6 +1661,56 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
         s_glHave = 1; s_glSerial = h.glyphSerial;
+    }
+    if (mmPicUp) {
+        if (s_mmPicW != h.mmPicW || s_mmPicH != h.mmPicH) {
+            if (!ret_push(d, s_mmPicImg, s_mmPicMem, s_mmPicView, VK_NULL_HANDLE)) goto refuse;
+            s_mmPicImg = VK_NULL_HANDLE; s_mmPicMem = VK_NULL_HANDLE;
+            s_mmPicView = VK_NULL_HANDLE; s_mmPicW = s_mmPicH = 0; s_mmPicHave = 0;
+            if (!mk_image(d, h.mmPicW, h.mmPicH, VK_FORMAT_R8G8B8A8_UNORM,
+                          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                          &s_mmPicImg, &s_mmPicMem, &s_mmPicView)) goto refuse;
+            s_mmPicW = h.mmPicW; s_mmPicH = h.mmPicH;
+        }
+        img_barrier(cb, s_mmPicImg,
+                    s_mmPicHave ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                : VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    s_mmPicHave ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                                : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                    s_mmPicHave ? VK_ACCESS_SHADER_READ_BIT : 0,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+        copy_rect(cb, s->stage, mmPicOff, s_mmPicImg, 0, 0, h.mmPicW, h.mmPicH);
+        img_barrier(cb, s_mmPicImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        s_mmPicHave = 1; s_mmPicSerial = h.mmPicGen;
+    }
+    if (mmEngUp) {
+        if (s_mmEngW != h.mmEngW || s_mmEngH != h.mmEngH) {
+            if (!ret_push(d, s_mmEngImg, s_mmEngMem, s_mmEngView, VK_NULL_HANDLE)) goto refuse;
+            s_mmEngImg = VK_NULL_HANDLE; s_mmEngMem = VK_NULL_HANDLE;
+            s_mmEngView = VK_NULL_HANDLE; s_mmEngW = s_mmEngH = 0; s_mmEngHave = 0;
+            if (!mk_image(d, h.mmEngW, h.mmEngH, VK_FORMAT_R8G8B8A8_UNORM,
+                          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                          &s_mmEngImg, &s_mmEngMem, &s_mmEngView)) goto refuse;
+            s_mmEngW = h.mmEngW; s_mmEngH = h.mmEngH;
+        }
+        img_barrier(cb, s_mmEngImg,
+                    s_mmEngHave ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                : VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    s_mmEngHave ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                                : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                    s_mmEngHave ? VK_ACCESS_SHADER_READ_BIT : 0,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+        copy_rect(cb, s->stage, mmEngOff, s_mmEngImg, 0, 0, h.mmEngW, h.mmEngH);
+        img_barrier(cb, s_mmEngImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        s_mmEngHave = 1;
     }
     if (palUp) {
         img_barrier(cb, s_palImg,
@@ -1843,6 +1995,110 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     }
     if (rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
 
+    /* ---- THE SHARP LAYER'S OWN PASS, drawn here because `prepare` is the hook
+       outside the seam's render pass and a render pass may not nest -- the same
+       reason the twin replay is here. It must be complete before `record`
+       samples it, and it is: this is recorded earlier in the same buffer.
+
+       NO FLIP (2.32). The layer is SAMPLED by the composite, not presented, and
+       `QVS` puts quad y = 0 at attachment row 0 under both APIs -- which is
+       what "row 0 is the viewport's TOP" already means on the GL side. Only the
+       composite flips, because only the composite is presented. */
+    if (shOn) {
+        VkRenderPassBeginInfo rb = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+        VkClearValue cv;
+        int q;
+        memset(&cv, 0, sizeof cv);          /* (0,0,0,0): alpha is coverage   */
+        /* the three sets, one per kind, written once for the whole list */
+        {
+            VkDescriptorBufferInfo bi[2];
+            VkDescriptorImageInfo ii[9];
+            VkWriteDescriptorSet wr[15];
+            int k, n = 0;
+            VkImageView v40[3], v41[3], v42[3];
+            v40[SDSET_FLAT] = s_dumView;  v41[SDSET_FLAT] = s_dumView;  v42[SDSET_FLAT] = s_dumView;
+            v40[SDSET_CURS] = s_atHave ? s_atView : s_dumView;          /* uAtlas    */
+            v41[SDSET_CURS] = s_dumView;                                /* uAtlasRGB */
+            v42[SDSET_CURS] = s_palView;                                /* uPal      */
+            v40[SDSET_MM]   = s_mmPicHave ? s_mmPicView : s_dumView;    /* uPic      */
+            v41[SDSET_MM]   = s_mmEngHave ? s_mmEngView : s_dumView;    /* uEng      */
+            v42[SDSET_MM]   = s_palView;                                /* uPal      */
+            memset(bi, 0, sizeof bi); memset(ii, 0, sizeof ii); memset(wr, 0, sizeof wr);
+            bi[0].buffer = s->ub; bi[0].offset = 0; bi[0].range = QVS_SZ;
+            bi[1].buffer = s->sb; bi[1].offset = 0; bi[1].range = TWF_SZ;
+            for (k = 0; k < 3; k++) {
+                int j;
+                ii[3 * k + 0].imageView = v40[k];
+                ii[3 * k + 1].imageView = v41[k];
+                ii[3 * k + 2].imageView = v42[k];
+                wr[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                wr[n].dstSet = s->shSet[k]; wr[n].dstBinding = 0;
+                wr[n].descriptorCount = 1;
+                wr[n].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+                wr[n].pBufferInfo = &bi[0]; n++;
+                wr[n] = wr[n - 1]; wr[n].dstBinding = 32;
+                wr[n].pBufferInfo = &bi[1]; n++;
+                for (j = 0; j < 3; j++) {
+                    ii[3 * k + j].sampler = s_samp;
+                    ii[3 * k + j].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    wr[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wr[n].dstSet = s->shSet[k];
+                    wr[n].dstBinding = (uint32_t)(40 + j);
+                    wr[n].descriptorCount = 1;
+                    wr[n].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    wr[n].pImageInfo = &ii[3 * k + j]; n++;
+                }
+            }
+            vkUpdateDescriptorSets(d->dev, (uint32_t)n, wr, 0, NULL);
+        }
+        rb.renderPass = s_sharpRp; rb.framebuffer = s->shFb;
+        rb.renderArea.extent.width = (uint32_t)h.sharpW;
+        rb.renderArea.extent.height = (uint32_t)h.sharpH;
+        rb.clearValueCount = 1; rb.pClearValues = &cv;
+        vkCmdBeginRenderPass(cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
+        set_viewport(cb, h.sharpW, h.sharpH);
+        set_scissor(cb, 0, 0, h.sharpW, h.sharpH, h.sharpW, h.sharpH);
+        /* IN THE ORDER THE GL LANE DREW THEM, which is load-bearing: the
+           minimap is drawn after the cursor and covers it where they overlap,
+           and its view box after its own base for the same reason the engine
+           draws them that way (0x466B44 then 0x466B5E). */
+        for (q = 0; q < h.nsdraw; q++) {
+            const TAGPU_GUISDRAW* sd = &h.sdraw[q];
+            float qv[24];
+            float* uq = (float*)(s->ubMap + (VkDeviceSize)(ndraw + q) * uStride);
+            unsigned char* sq = s->sbMap + (VkDeviceSize)q * sStride;
+            VkDeviceSize vbo = (VkDeviceSize)(nquad + q) * 24 * sizeof(float);
+            uint32_t dyn[2];
+            VkPipeline pipe;
+            int si;
+            uq[0] = (float)h.sharpW; uq[1] = (float)h.sharpH;
+            memset(sq, 0, TWF_SZ);
+            if (sd->kind == TAGPU_GUISK_CURSOR) {
+                int* ip = (int*)sq; ip[0] = sd->ck; ip[1] = 0;   /* uCK, uRestored */
+                pipe = s_pipeCurs; si = SDSET_CURS;
+            } else if (sd->kind == TAGPU_GUISK_MM) {
+                int* ip = (int*)sq; ip[0] = h.mmEngW; ip[1] = h.mmEngH;  /* uEngSize */
+                pipe = s_pipeMM; si = SDSET_MM;
+            } else {
+                float* fp = (float*)sq;
+                fp[0] = sd->col[0]; fp[1] = sd->col[1];
+                fp[2] = sd->col[2]; fp[3] = sd->col[3];          /* uCol */
+                pipe = s_pipeFlat; si = SDSET_FLAT;
+            }
+            quadv(qv, sd->dst[0], sd->dst[1], sd->dst[2], sd->dst[3],
+                  sd->uv[0], sd->uv[1], sd->uv[2], sd->uv[3]);
+            memcpy(s->vbMap + vbo, qv, sizeof qv);
+            dyn[0] = (uint32_t)((VkDeviceSize)(ndraw + q) * uStride);
+            dyn[1] = (uint32_t)((VkDeviceSize)q * sStride);
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    s_ploSharp, 0, 1, &s->shSet[si], 2, dyn);
+            vkCmdBindVertexBuffers(cb, 0, 1, &s->vb, &vbo);
+            vkCmdDraw(cb, 6, 1, 0, 0);
+        }
+        vkCmdEndRenderPass(cb);
+    }
+
     /* THE REPLAY GOT THROUGH, AND THAT -- NOT THE COMPOSITE -- IS THE EVIDENCE
        THE LAST FRESH START WORKED. The budget refund sat below the gate, past
        `s_drawThis = 1`, which is never reached on a frame the composite is
@@ -1867,9 +2123,10 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         int* ip; float* fp;
         memset(b, 0, LAY_SZ);
         ip = (int*)(b + 0);   *ip = 0;                       /* uColOn        */
-        ip = (int*)(b + 4);   *ip = 0;                       /* uSharpOn      */
+        ip = (int*)(b + 4);   *ip = shOn;                    /* uSharpOn      */
         ip = (int*)(b + 8);   ip[0] = h.surfW; ip[1] = h.surfH;      /* uSize */
-        ip = (int*)(b + 16);  ip[0] = 1; ip[1] = 1;          /* uSharpSize    */
+        ip = (int*)(b + 16);  ip[0] = shOn ? h.sharpW : 1;
+                              ip[1] = shOn ? h.sharpH : 1;   /* uSharpSize    */
         fp = (float*)(b + 24); fp[0] = h.scaleX; fp[1] = h.scaleY;   /* uScale */
         ip = (int*)(b + 32);  *ip = h.strict;
         ip = (int*)(b + 36);  *ip = h.key;
@@ -1898,7 +2155,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         ii[1].imageView = s_palView;                 /* 41 uPal               */
         ii[2].imageView = s_engView;                 /* 42 uSurf              */
         ii[3].imageView = s_dumView;                 /* 43 uTwinCol (unused)  */
-        ii[4].imageView = s_dumView;                 /* 44 uSharp  (unused)   */
+        ii[4].imageView = shOn ? s->shView : s_dumView;   /* 44 uSharp        */
         for (j = 0; j < 5; j++) {
             ii[j].sampler = s_samp;
             ii[j].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -1917,8 +2174,13 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     {
         float qv[24];
         quadv(qv, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f);
-        memcpy(s->vbMap + (VkDeviceSize)nquad * 24 * sizeof(float), qv, sizeof qv);
-        s_layQuad = (VkDeviceSize)nquad * 24 * sizeof(float);
+        /* PAST THE SHARP LAYER'S QUADS TOO. They occupy `nquad .. nquad +
+           nsdraw - 1`, so the composite's own quad is at `nquad + nsdraw` --
+           which is what the `+ nsdraw + 1` in the grow above reserves. Writing
+           it at `nquad` put it on top of the layer's first quad. */
+        memcpy(s->vbMap + (VkDeviceSize)(nquad + h.nsdraw) * 24 * sizeof(float),
+               qv, sizeof qv);
+        s_layQuad = (VkDeviceSize)(nquad + h.nsdraw) * 24 * sizeof(float);
     }
     s_layVp[0] = h.vpX; s_layVp[1] = h.vpY;
     s_layVp[2] = h.vpW_gl; s_layVp[3] = h.vpH_gl;
@@ -2047,17 +2309,27 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     kill_image(d, &s_palImg, &s_palMem, &s_palView);
     kill_image(d, &s_engImg, &s_engMem, &s_engView);
     kill_image(d, &s_glImg,  &s_glMem,  &s_glView);
+    kill_image(d, &s_mmPicImg, &s_mmPicMem, &s_mmPicView);
+    kill_image(d, &s_mmEngImg, &s_mmEngMem, &s_mmEngView);
     kill_image(d, &s_dumImg, &s_dumMem, &s_dumView);
     s_atDim = 0; s_atHave = 0; s_atSerial = 0;
     s_palHave = 0; s_palSerial = 0;
     s_engW = s_engH = 0; s_engHave = 0; s_dumReady = 0;
     s_glW = s_glH = 0; s_glHave = 0; s_glSerial = 0;
+    s_mmPicW = s_mmPicH = 0; s_mmPicHave = 0; s_mmPicSerial = 0;
+    s_mmEngW = s_mmEngH = 0; s_mmEngHave = 0;
     if (s_dpool) { vkDestroyDescriptorPool(d->dev, s_dpool, NULL); s_dpool = VK_NULL_HANDLE; }
     if (s_pipeSpr) { vkDestroyPipeline(d->dev, s_pipeSpr, NULL); s_pipeSpr = VK_NULL_HANDLE; }
     if (s_pipeCpy) { vkDestroyPipeline(d->dev, s_pipeCpy, NULL); s_pipeCpy = VK_NULL_HANDLE; }
     if (s_pipeStr) { vkDestroyPipeline(d->dev, s_pipeStr, NULL); s_pipeStr = VK_NULL_HANDLE; }
+    if (s_pipeCurs) { vkDestroyPipeline(d->dev, s_pipeCurs, NULL); s_pipeCurs = VK_NULL_HANDLE; }
+    if (s_pipeMM)   { vkDestroyPipeline(d->dev, s_pipeMM,   NULL); s_pipeMM   = VK_NULL_HANDLE; }
+    if (s_pipeFlat) { vkDestroyPipeline(d->dev, s_pipeFlat, NULL); s_pipeFlat = VK_NULL_HANDLE; }
     if (s_pipeLay) { vkDestroyPipeline(d->dev, s_pipeLay, NULL); s_pipeLay = VK_NULL_HANDLE; }
     s_layRp = VK_NULL_HANDLE;
+    if (s_ploSharp) { vkDestroyPipelineLayout(d->dev, s_ploSharp, NULL); s_ploSharp = VK_NULL_HANDLE; }
+    if (s_dslSharp) { vkDestroyDescriptorSetLayout(d->dev, s_dslSharp, NULL); s_dslSharp = VK_NULL_HANDLE; }
+    if (s_sharpRp) { vkDestroyRenderPass(d->dev, s_sharpRp, NULL); s_sharpRp = VK_NULL_HANDLE; }
     if (s_ploTwin) { vkDestroyPipelineLayout(d->dev, s_ploTwin, NULL); s_ploTwin = VK_NULL_HANDLE; }
     if (s_ploLay)  { vkDestroyPipelineLayout(d->dev, s_ploLay, NULL);  s_ploLay = VK_NULL_HANDLE; }
     if (s_dslTwin) { vkDestroyDescriptorSetLayout(d->dev, s_dslTwin, NULL); s_dslTwin = VK_NULL_HANDLE; }
