@@ -147,6 +147,11 @@ typedef struct TAGPU_GAFATLAS {
        both are made together, and both go when the job cannot be made or the
        context is lost -- a pass gates its restored branch on `rgb`. */
     unsigned int  rgb;
+    /* BUMPED EVERY TIME `rgb` IS CREATED, and never otherwise: a re-arm frees
+       the texture and the job and makes both again, which resets
+       `tagpu_rglsl_job_painted` to 0 -- so the painted count alone is not a
+       content key across that seam. This is the discontinuity it cannot see. */
+    unsigned      rgbGen;
     struct TAGPU_RGLSL_JOB* job;
     int           prio;
     /* frames whose shorter edge is under this are never queued for restore:
@@ -172,6 +177,27 @@ typedef struct TAGPU_GAFATLAS {
        for the re-decode again. */
     unsigned char* mirror;
     unsigned      mirrorSerial;
+    /* THE RESTORED TWIN'S MIRROR (G19f landing 4), opt-in in the same way and
+       for the same reason -- and it is NOT the same mechanism. `mirror` above
+       is written by the paint that writes GL, because the CPU holds the source
+       bytes; the restored twin's texels are the RESTORER'S OUTPUT and exist
+       only on the GPU, so the only way to them is a read-back. It is bounded
+       three ways: it happens at all only while a lane has asked for it, only
+       on a frame `tagpu_rglsl_job_painted` moved (which is the restorer's own
+       content counter, and is still through the whole fill and every steady
+       frame after it), and only over the rows the shelf has actually used.
+       `mirrorRgbSerial` is what a backend holding a copy tests, exactly as for
+       the indexed mirror. */
+    unsigned char* mirrorRgb;
+    unsigned      mirrorRgbSerial;
+    int           mirrorRgbRows;   /* rows of it that have been read back    */
+    unsigned int  mirrorRgbFbo;    /* the read-back's own FBO, made once     */
+    int           mirroredPainted; /* job_painted() at the last read-back    */
+    unsigned      mirroredRgbGen;  /* `rgbGen` at the last read-back         */
+    /* LATCHED, so a refusal is said once. Without it the owner's per-frame
+       `mirror_rgb()` re-allocates and re-fails every present and writes a line
+       to tagpu.log at the frame rate. */
+    int           mirrorRgbFailed;
     /* open-addressed index over `ents`, keyed on the frame header address:
        the lookup runs once per emitted sprite and the feature pass emits
        hundreds per frame against a four-figure entry count, which a linear
@@ -257,4 +283,26 @@ void tagpu_gaf_atlas_restore(TAGPU_GAFATLAS* a, const unsigned char* pal);
    Render thread only, like the rest of this module. Returns 0 if the memory
    was refused, and the atlas then goes on working without one. Idempotent. */
 int  tagpu_gaf_atlas_mirror(TAGPU_GAFATLAS* a);
+
+/* Ask for the RESTORED twin's mirror, and step it.
+
+   ARMING IS CORRECT FROM THE INSTANT IT EXISTS with no re-decode dance,
+   unlike the indexed mirror above: the destination the restorer paints into is
+   cleared to alpha 0 when the job is made and every texel it has painted since
+   is one `mirrorRgbStep` reads back, so a mirror allocated at any moment
+   converges on the next step and holds alpha 0 -- "not restored here" -- until
+   it does. That is the same answer a consumer would get from an unpainted
+   cell, so there is no window in which it is WRONG, only one in which it is
+   behind, and the step closes that on the frame the paint happened.
+
+   STEP IT WHERE THE PAINT IS ALREADY VISIBLE TO THIS FRAME'S DRAWS -- after
+   `tagpu_rglsl_step` and before the ops that sample the twin. tagpu_gui_surf.c
+   does exactly that, for exactly that stated reason, and the mirror is then
+   byte-identical to what those ops sampled rather than a frame behind them.
+
+   Render thread only, GL context current. Arming returns 0 if the memory or
+   the FBO was refused and the atlas goes on without one; the step is a no-op
+   when nothing is armed or nothing has been painted since the last one. */
+int  tagpu_gaf_atlas_mirror_rgb(TAGPU_GAFATLAS* a);
+void tagpu_gaf_atlas_mirror_rgb_step(TAGPU_GAFATLAS* a);
 #endif

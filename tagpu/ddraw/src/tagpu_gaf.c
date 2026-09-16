@@ -34,8 +34,12 @@ static void glog(const char* s)
    fork does not export (wglGetProcAddress first, then opengl32 itself) */
 typedef void (APIENTRY* PFN_GENERATEMIPMAP)(GLenum);
 typedef void (APIENTRY* PFN_TEXPARAMETERF)(GLenum, GLenum, GLfloat);
+/* ...and GL 1.0's read-back, which opengl_utils.h does not export either
+   (tagpu_abshot.c and tagpu_overlay.c both fetch it the same way) */
+typedef void (APIENTRY* PFN_READPIXELS)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*);
 static PFN_GENERATEMIPMAP x_glGenerateMipmap;
 static PFN_TEXPARAMETERF  x_glTexParameterf;
+static PFN_READPIXELS     x_glReadPixels;
 static int s_glFetched;
 #ifndef GL_TEXTURE_MAX_LEVEL
 #define GL_TEXTURE_MAX_LEVEL 0x813D
@@ -61,6 +65,7 @@ static void fetch_gl(void)
     s_glFetched = 1;
     x_glGenerateMipmap = (PFN_GENERATEMIPMAP)getgl("glGenerateMipmap");
     x_glTexParameterf  = (PFN_TEXPARAMETERF)getgl("glTexParameterf");
+    x_glReadPixels     = (PFN_READPIXELS)getgl("glReadPixels");
 }
 
 /* one scratch plane for every atlas: decoding happens only inside
@@ -305,6 +310,140 @@ int tagpu_gaf_atlas_mirror(TAGPU_GAFATLAS* a)
     return 1;
 }
 
+/* ---- the RESTORED twin's mirror (tagpu_gaf.h, G19f landing 4) ---- */
+
+/* The rows the shelf has actually used. Cells are laid in shelves from row 0
+   up, so nothing is painted at or below `shelfY + shelfH` and reading further
+   would be reading memory no entry can ever name -- the same bound
+   tagpu_gui_surf.c already publishes as `atlasRows` for the indexed mirror. */
+static int rgb_rows(const TAGPU_GAFATLAS* a)
+{
+    int rows = a->shelfY + a->shelfH;
+    if (rows < 1) rows = 1;
+    if (rows > a->dim) rows = a->dim;
+    return rows;
+}
+
+int tagpu_gaf_atlas_mirror_rgb(TAGPU_GAFATLAS* a)
+{
+    char b[160];
+    if (!a || a->dim <= 0) return 0;
+    if (a->mirrorRgb) return 1;
+    if (a->mirrorRgbFailed) return 0;
+    fetch_gl();
+    if (!x_glReadPixels || !glGenFramebuffers || !glBindFramebuffer ||
+        !glFramebufferTexture2D || !glCheckFramebufferStatus) {
+        a->mirrorRgbFailed = 1;
+        _snprintf(b, sizeof b, "%s: no glReadPixels/FBO entry points - the restored"
+                  " twin cannot be mirrored and the Vulkan edition stays indexed",
+                  a->tag ? a->tag : "gaf");
+        b[sizeof b - 1] = 0;
+        glog(b);
+        return 0;
+    }
+    a->mirrorRgb = (unsigned char*)calloc((size_t)a->dim * a->dim * 4, 1);
+    if (!a->mirrorRgb) {
+        a->mirrorRgbFailed = 1;
+        _snprintf(b, sizeof b, "%s: no memory for a %d KB restored-twin mirror - the"
+                  " Vulkan edition of this pass stays indexed",
+                  a->tag ? a->tag : "gaf", (a->dim * a->dim * 4) >> 10);
+        b[sizeof b - 1] = 0;
+        glog(b);
+        return 0;
+    }
+    /* NOTHING IS MARKED FOR REPAINT HERE, and that is the difference from the
+       indexed mirror's arming (tagpu_gaf.h): calloc's alpha 0 IS the restorer's
+       own "not painted here yet", so a consumer reading this mirror before the
+       first step gets the answer an unpainted cell would give it -- indexed
+       art -- rather than a wrong one. The first step reads the whole used
+       region back and it is level from there. */
+    a->mirrorRgbRows = 0;
+    a->mirrorRgbSerial = 0;
+    a->mirroredPainted = 0;
+    a->mirroredRgbGen = 0;
+    _snprintf(b, sizeof b, "%s: restored-twin mirror armed, %d KB - read back when"
+              " the restorer paints and not otherwise",
+              a->tag ? a->tag : "gaf", (a->dim * a->dim * 4) >> 10);
+    b[sizeof b - 1] = 0;
+    glog(b);
+    return 1;
+}
+
+void tagpu_gaf_atlas_mirror_rgb_step(TAGPU_GAFATLAS* a)
+{
+    GLint fbo0 = 0, pack = 4;
+    GLenum st;
+    int rows, painted;
+    if (!a || !a->mirrorRgb) return;
+    if (!a->rgb || !a->job) {
+        /* the twin is gone (a re-arm, or a context loss before the re-create).
+           Say so rather than leaving the last twin's colours standing: a
+           consumer that kept them would restore art the GL lane no longer
+           does. The `rgbGen` bump on the re-create brings the next step in. */
+        if (a->mirrorRgbRows) {
+            memset(a->mirrorRgb, 0, (size_t)a->dim * a->dim * 4);
+            a->mirrorRgbRows = 0;
+            a->mirrorRgbSerial++;
+        }
+        a->mirroredPainted = 0;
+        a->mirroredRgbGen = 0;
+        return;
+    }
+    painted = tagpu_rglsl_job_painted(a->job);
+    rows = rgb_rows(a);
+    /* THE CONTENT KEY IS THE PAINT COUNT, `rgbGen` FOR ITS DISCONTINUITY, AND
+       THE ROW BOUND FOR THE SHELF GROWING UNDER IT. Every one of the three is
+       a thing that changes what a consumer would read and nothing else is:
+       keying on the paint count alone misses the re-arm (it restarts at 0) and
+       keying on it plus the generation misses a shelf that grew without a
+       paint landing yet -- which leaves rows in the mirror that were never
+       read. [This is landing 2's lesson, which cost that landing two rounds: a
+       serial that is not the CONTENT's serial uploads once and then misses
+       everything after it.] */
+    if (painted == a->mirroredPainted && a->rgbGen == a->mirroredRgbGen &&
+        rows <= a->mirrorRgbRows)
+        return;
+    if (!a->mirrorRgbFbo) {
+        glGenFramebuffers(1, &a->mirrorRgbFbo);
+        if (!a->mirrorRgbFbo) return;
+    }
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo0);
+    glGetIntegerv(GL_PACK_ALIGNMENT, &pack);
+    glBindFramebuffer(GL_FRAMEBUFFER, a->mirrorRgbFbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, a->rgb, 0);
+    st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (st == GL_FRAMEBUFFER_COMPLETE) {
+        /* ROW 0 FIRST, AND IT IS NOT THE SCREEN'S ROW 0. glReadPixels is
+           described bottom-up because the default framebuffer's y = 0 is the
+           bottom of the SCREEN; here the attachment is a texture, whose y = 0
+           is memory row 0 -- the row glTexSubImage2D and vkCmdCopyBufferToImage
+           both write first. So this fills the mirror in the order a second
+           backend uploads it, with no flip, which is what the whole module
+           already claims of itself (tagpu_gui_surf.c, above SHARP_FS). */
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        x_glReadPixels(0, 0, a->dim, rows, GL_RGBA, GL_UNSIGNED_BYTE, a->mirrorRgb);
+        glPixelStorei(GL_PACK_ALIGNMENT, pack);
+        if (rows > a->mirrorRgbRows) a->mirrorRgbRows = rows;
+        a->mirroredPainted = painted;
+        a->mirroredRgbGen = a->rgbGen;
+        a->mirrorRgbSerial++;
+    } else {
+        char b[160];
+        _snprintf(b, sizeof b, "%s: restored-twin read-back FBO incomplete (%x) - the"
+                  " Vulkan edition of this pass stays indexed",
+                  a->tag ? a->tag : "gaf", (unsigned)st);
+        b[sizeof b - 1] = 0;
+        glog(b);
+        free(a->mirrorRgb);
+        a->mirrorRgb = NULL;
+        a->mirrorRgbRows = 0;
+        a->mirrorRgbFailed = 1;
+        a->mirrorRgbSerial++;
+    }
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)fbo0);
+}
+
 void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
 {
     a->tex = 0; a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
@@ -317,6 +456,18 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
     /* the twin and the job died with the context (tagpu_rglsl_glreset has
        already forgotten the job: it runs first); re-armed on the next frame */
     a->rgb = 0; a->job = NULL; a->restoreFailed = 0; a->mippedN = 0;
+    /* THE FBO DIED WITH THE CONTEXT TOO -- forgotten, never deleted, exactly
+       as `tex` is above: deleting a name from a context that is gone either
+       does nothing or destroys a live object of the NEW one that has been
+       handed the same number. The mirror's bytes survive, and are zeroed with
+       the twin they mirror because that twin no longer exists. */
+    a->mirrorRgbFbo = 0;
+    a->mirroredPainted = 0; a->mirroredRgbGen = 0;
+    if (a->mirrorRgb) {
+        memset(a->mirrorRgb, 0, (size_t)a->dim * a->dim * 4);
+        a->mirrorRgbRows = 0;
+        a->mirrorRgbSerial++;
+    }
     /* the entries went with the texture, so the wall the last fill hit says
        nothing about the next one */
     a->repackWall = 0;
@@ -451,6 +602,9 @@ void tagpu_gaf_atlas_restore(TAGPU_GAFATLAS* a, const unsigned char* pal)
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, a->dim, a->dim, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
         glBindTexture(GL_TEXTURE_2D, 0);
         a->rgb = t;
+        /* the content key's discontinuity: a fresh twin is alpha 0 everywhere
+           and the job that fills it counts from 0 again (tagpu_gaf.h) */
+        a->rgbGen++;
     }
     a->job = tagpu_rglsl_job_new(a->tag ? a->tag : "gaf", a->prio, 0,
                                  a->tex, a->dim, a->dim, pal, a->rgb, a->dim, a->dim);

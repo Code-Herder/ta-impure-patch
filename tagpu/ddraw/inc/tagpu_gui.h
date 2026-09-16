@@ -177,6 +177,8 @@ unsigned tagpu_gui_minimap_have(void);
    is the only thing a second backend has to reproduce. Keeping them separate
    means a change to the queue cannot silently change the port's contract.  */
 
+enum { TAGPU_GUICOL_DST = 1, TAGPU_GUICOL_ON = 2 };   /* TAGPU_GUIOP::col */
+
 enum {
     TAGPU_GUIOP_SEED = 1,   /* the surface's bytes, whole: `arena` at aoff    */
     TAGPU_GUIOP_FREE,       /* the surface is gone                            */
@@ -208,6 +210,21 @@ typedef struct TAGPU_GUIOP {
        moved since, and the A/B would be comparing two atlases. */
     unsigned char  fg, bg, tr;
     unsigned short nglyph;
+
+    /* ---- CLASSIC++ (landing 4). WHAT THE GL LANE DID ABOUT COLOUR, carried
+       for the fourth time on this pass rather than re-derived, and here the
+       reason is a lifetime rather than a moving input: whether `twin_colour`
+       made the destination's colour attachment depends on `s_colValid` and on
+       `s_atlas.rgb`, both of which the render half settles in `restore_step`
+       BEFORE the drain -- so a consumer asking again later would be asking a
+       different question about the same frame.
+         TAGPU_GUICOL_DST   the destination twin HAS a colour attachment after
+                            this op (`twin_colour` ran, or it already had one)
+         TAGPU_GUICOL_ON    the program's own `uRestored` (SPRITE) or
+                            `uSrcHasCol` (COPY) was 1
+       Both are 0 on every op of a session that is not restoring, which is what
+       makes this landing free when Classic++ is off. */
+    unsigned char  col;
 
     /* THE ATLAS RECT THE GL LANE RESOLVED, not one this pass looks up again.
        "The port must not re-derive the pass's inputs" (roadmap, How a ported
@@ -270,6 +287,28 @@ typedef struct TAGPU_GUIHAND {
     const unsigned char* atlas;
     int                  atlasDim, atlasRows;
     unsigned             atlasSerial;
+
+    /* ---- THE RESTORED UI ATLAS (landing 4), RGBA8, same dim and same shelf.
+       IT IS THE RESTORER'S OUTPUT AND NOT AN INPUT ANYONE CAN RE-DERIVE: the
+       five shaders that produce it are the one thing G19c did not translate,
+       so the port does not run them -- it is handed the texels the GL lane's
+       job already painted, read back out of the twin on the frames that job
+       painted on and on no others (`tagpu_gaf_atlas_mirror_rgb`). That is what
+       unblocks this landing: a second backend needs the TEXELS, never the
+       producer. Alpha is "this texel has restored colour", exactly as it is to
+       `SPR_FS` and `LAY_FS`; NULL while nothing is restored. */
+    const unsigned char* atlasRgb;
+    int                  atlasRgbRows;
+    unsigned             atlasRgbSerial;
+
+    /* EVERY COLOUR TWIN WAS INVALIDATED SINCE THE LAST FRAME THIS MOVED. The
+       presented palette moved out from under the restored art and settled
+       somewhere else, so `restore_step` frees the job, re-arms it against the
+       new palette and clears every colour twin whole. It happens BEFORE the
+       drain, so a consumer applies it before this frame's ops -- and it cannot
+       be inferred from `atlasRgbSerial`, which also moves for an ordinary
+       paint. Monotone, never reset. */
+    unsigned             colRearm;
 
     /* ---- the sharp layer's draws, BY VALUE. 16 x 60 bytes is small enough
        to copy and it retires the whole question of what they point into: the
@@ -341,7 +380,11 @@ typedef struct TAGPU_GUIHAND {
        behind state, not a refusal. */
     int   lost;
     int   otherOps;                 /* ops still not carried, if any ever are */
-    int   colourTwins;              /* Classic++ colour reached a twin        */
+    /* `uColOn` AS `draw_layer` SET IT: the presented surface has a colour twin
+       AND the palette-validity rule (gui-renderer.md 3.4) says it may be read
+       this frame. Landing 3 and before could only stand the composite down on
+       it; landing 4 composites it. */
+    int   colourTwins;
     int   sharpOn;                  /* the sharp layer had COVERAGE this frame
                                        -- not merely that it exists, which it
                                        does on every frame once it is made */

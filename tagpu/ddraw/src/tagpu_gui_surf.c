@@ -885,7 +885,12 @@ static void quad(float* v, float x0, float y0, float x1, float y1, float u0, flo
     memcpy(v, q, sizeof q);
 }
 
-static void twin_sprite(TWIN* t, const TAGPU_GAFENT* e, const TAGPU_PUBOP* o)
+/* G19f landing 4: the return is this op's TAGPU_GUIOP::col -- what this
+   function decided about colour, for the mirror to carry rather than decide
+   again. `twin_colour` can refuse (no MRT entry points, an incomplete FBO), so
+   "restored" and "the destination has a colour twin" are two different facts
+   and both are recorded. */
+static unsigned char twin_sprite(TWIN* t, const TAGPU_GAFENT* e, const TAGPU_PUBOP* o)
 {
     float v[24];
     int restored = s_colValid && s_atlas.rgb != 0;
@@ -910,6 +915,8 @@ static void twin_sprite(TWIN* t, const TAGPU_GAFENT* e, const TAGPU_PUBOP* o)
     x_glDrawArrays(GL_TRIANGLES, 0, 6);
     x_glDisable(GL_SCISSOR_TEST);
     s_sprites++;
+    return (unsigned char)((t->rgb ? TAGPU_GUICOL_DST : 0) |
+                           ((restored && t->rgb) ? TAGPU_GUICOL_ON : 0));
 }
 
 /* A STRING OP INTO ITS TWIN, glyph by glyph (13.4, G17d).
@@ -930,7 +937,7 @@ static void twin_sprite(TWIN* t, const TAGPU_GAFENT* e, const TAGPU_PUBOP* o)
 /* G19f: the Vulkan mirror's record of a string, defined with the rest of the
    mirror below -- this is drawn above it, and records what it resolved. */
 static void mir_string(const TAGPU_PUBOP* o, const short cell[][4], int n,
-                       int x0, int top);
+                       int x0, int top, unsigned char col);
 
 static void twin_string(TWIN* t, const TAGPU_PUBOP* o)
 {
@@ -1025,7 +1032,8 @@ static void twin_string(TWIN* t, const TAGPU_PUBOP* o)
         s_glyphs++;
     }
     s_strings++;
-    mir_string(o, cell, n, (int)o->sl, top);
+    mir_string(o, cell, n, (int)o->sl, top,
+               (unsigned char)(t->rgb ? TAGPU_GUICOL_DST : 0));
     return;
 
 reseed:
@@ -1045,7 +1053,7 @@ reseed:
     g_guiq.reseed = 1; g_guiq.why = TAGPU_GUI_WHY_STRING;
 }
 
-static void twin_copy(TWIN* t, const TWIN* src, const TAGPU_PUBOP* o)
+static unsigned char twin_copy(TWIN* t, const TWIN* src, const TAGPU_PUBOP* o)
 {
     float v[24];
     GLint off[2];
@@ -1075,6 +1083,8 @@ static void twin_copy(TWIN* t, const TWIN* src, const TAGPU_PUBOP* o)
     x_glDrawArrays(GL_TRIANGLES, 0, 6);
     x_glDisable(GL_SCISSOR_TEST);
     s_copies++;
+    return (unsigned char)((t->rgb ? TAGPU_GUICOL_DST : 0) |
+                           ((src->rgb && t->rgb) ? TAGPU_GUICOL_ON : 0));
 }
 
 static void twin_clear(TWIN* t, const TAGPU_PUBOP* o)
@@ -1273,7 +1283,7 @@ static int mir_bytes(const void* src, unsigned n, unsigned* off)
    the tail of `twin_string`, after the draw succeeded -- a string that stamped
    nothing re-seeds instead, and must not be published as though it had. */
 static void mir_string(const TAGPU_PUBOP* o, const short cell[][4], int n,
-                       int x0, int top)
+                       int x0, int top, unsigned char col)
 {
     TAGPU_GUIOP* m;
     if (!s_mirRec || n < 1) return;
@@ -1281,6 +1291,13 @@ static void mir_string(const TAGPU_PUBOP* o, const short cell[][4], int n,
     if (!m) return;
     m->kind = TAGPU_GUIOP_STRING;
     m->surf = o->surf;
+    /* ONLY `TAGPU_GUICOL_DST` IS EVER SET HERE, and that matters: `STR_FS`
+       writes `oCol = vec4(0.0)` and has no restored branch at all, so a string
+       on a colour twin ERASES colour under the glyphs it stamps and leaves it
+       standing between them (which is the whole point of stamping glyphs
+       rather than publishing the box). What the consumer needs is therefore
+       only whether that second attachment exists. */
+    m->col = col;
     m->fg = o->fg; m->bg = o->bg; m->tr = o->tr;
     m->sl = (short)x0; m->st = (short)top;
     m->nglyph = (unsigned short)n;
@@ -1339,6 +1356,7 @@ static void drain(void)
     while (tail != head && budget-- > 0) {
         const TAGPU_PUBOP* o = &g_guiq.ops[tail & (TAGPU_GUI_QCAP - 1)];
         TWIN* t;
+        unsigned char col = 0;          /* G19f landing 4: TAGPU_GUIOP::col   */
         /* THE GLYPH BLOCK GOES IN BEFORE THE SKIP, NOT INSIDE THE SWITCH.
            `s_skipToReset` jumps the whole switch for every op queued before a
            GL context change (measured at 705 of them), so installing the block
@@ -1425,11 +1443,11 @@ static void drain(void)
                 s_lostSprites++;
                 break;
             }
-            twin_sprite(t, e, o);
+            col = twin_sprite(t, e, o);
             { TAGPU_GUIOP* m = mir_op();
               if (m) {
                   m->kind = TAGPU_GUIOP_SPRITE; mir_box(m, o);
-                  m->ck = o->ck; m->fw = o->fw; m->fh = o->fh;
+                  m->ck = o->ck; m->fw = o->fw; m->fh = o->fh; m->col = col;
                   /* THE RECT THE GL LANE JUST RESOLVED, carried rather than
                      looked up again on the other side: a second lookup could
                      answer differently after a repack and the A/B would be
@@ -1451,8 +1469,8 @@ static void drain(void)
             t = twin_find(o->surf);
             if (t && src) {
                 TAGPU_GUIOP* m;
-                twin_copy(t, src, o);
-                m = mir_op(); if (m) { m->kind = TAGPU_GUIOP_COPY; mir_box(m, o); }
+                col = twin_copy(t, src, o);
+                m = mir_op(); if (m) { m->kind = TAGPU_GUIOP_COPY; mir_box(m, o); m->col = col; }
             }
             else if (t) { g_guiq.reseed = 1; g_guiq.why = TAGPU_GUI_WHY_COPY; }
             break; }
@@ -2397,6 +2415,15 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (n == s_rglslSeen) tagpu_rglsl_step();
         s_rglslSeen = tagpu_rglsl_calls();
     }
+    /* G19f landing 4: AND THE RESTORED TWIN IS MIRRORED HERE, between the step
+       that painted it and the drain whose sprites sample it. The comment three
+       lines up is the argument -- "what it paints this frame is what the
+       drain's sprites sample" -- and this read-back is on the same side of that
+       line, so the bytes a second backend is handed are the bytes the GL lane's
+       own draws read, on the same frame, and not a frame behind them. A no-op
+       unless a lane has armed it AND the restorer painted (tagpu_gaf.h). */
+    if (s_mirWant && tagpu_gaf_atlas_mirror_rgb(&s_atlas))
+        tagpu_gaf_atlas_mirror_rgb_step(&s_atlas);
     mir_begin();            /* G19f: the Vulkan mirror records this drain */
     drain();
     /* AFTER the drain, which binds twin FBOs and leaves one bound, and before
@@ -2540,6 +2567,27 @@ static void mir_finish(const TAGPU_FRAME* f)
         s_mHand.atlasRows = 0; s_mHand.atlasSerial = 0;
     }
 
+    /* THE RESTORED UI ATLAS (landing 4). Read back where the paint happens,
+       above -- nothing is read here. `atlasRgbRows` is the mirror's own
+       high-water mark and not this frame's shelf: the read-back never shrinks
+       what it has filled, and rows past the shelf name no entry, so uploading
+       them costs a little bandwidth and can change no texel any op samples.
+       IT IS NOT GATED ON `colValid`. Withholding it on an invalid frame would
+       make the image come and go under the consumer for a reason that has
+       nothing to do with the image, and nothing would be gained: whether a
+       texel of it is ever SAMPLED is `TAGPU_GUICOL_ON`, carried per op, and no
+       op carries it while `s_colValid` is 0. */
+    if (s_atlas.mirrorRgb && s_atlas.mirrorRgbRows > 0) {
+        s_mHand.atlasRgb = s_atlas.mirrorRgb;
+        s_mHand.atlasRgbRows = s_atlas.mirrorRgbRows;
+        s_mHand.atlasRgbSerial = s_atlas.mirrorRgbSerial;
+    } else {
+        s_mHand.atlasRgb = NULL;
+        s_mHand.atlasRgbRows = 0;
+        s_mHand.atlasRgbSerial = 0;
+    }
+    s_mHand.colRearm = s_rearms;
+
     /* ---- THE SHARP LAYER. `sharpOn` above already says whether anything has
        COVERAGE; this is what produced it. The list is copied BY VALUE, so its
        lifetime is the struct's and not the arena's.
@@ -2662,6 +2710,12 @@ void tagpu_gui_mirror_want(int on)
         free(s_mArena); s_mArena = NULL; s_mACap = 0;
         free(s_mEng);   s_mEng = NULL;   s_mEngCap = 0;
         s_mNOps = s_mALen = 0; s_mHave = 0;
+        /* THE TWO ATLAS MIRRORS ARE NOT FREED HERE, and that is the atlas's
+           rule rather than an oversight (tagpu_gaf.h): they are owned by a
+           static atlas with no destructor, the indexed one costs a re-decode of
+           every frame on screen to re-arm, and the restored one would be read
+           back again from scratch. A lane that disarms and re-arms -- which is
+           every `gui.on` edit -- finds both already correct. */
     }
     s_mirWant = on ? 1 : 0;
 }
