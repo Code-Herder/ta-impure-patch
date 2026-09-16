@@ -5690,27 +5690,57 @@ not the fix: a freed-but-still-mapped page passes `IsBadReadPtr` and returns gar
 same bug with better odds and wrong art instead of a stop. It is kept as a **bound**, and this page
 says plainly that it is not the safety argument.
 
-The safety argument is that the op carries **the level it was OBSERVED in**, and `pub_ops` refuses
-to resolve a GAF frame while a teardown is in flight or from a level that has ended. Both signals
-are read and written on the **game thread**, so this is program order on one thread rather than a
-claim about visibility — and **neither is sufficient alone**, which is the part worth writing down:
+The safety argument is that the op carries **the level it was OBSERVED in**, and `publish` refuses
+to resolve a GAF frame while a teardown is in flight, from a level that has ended, or when nothing
+is tracking levels at all. All three are read on the **game thread**, so this is program order on
+one thread rather than a claim about visibility.
 
-```
-      raise s_teardown ---- the cascade's frees ---- s_levelGen++ ---- lower s_teardown
-      [ the flag covers ....................................................... ]
-                                                 [ the generation covers ... onwards ]
-```
+**THE GENERATION IS `tagpu_packet_pub`'s, AND KEYING IT ON `tagpu_reclaim`'s WAS THE FIRST VERSION'S
+REAL DEFECT.** Reclaim's generation moves only while reclaim is ARMED — and `tagpu_reclaim.off`, one
+file, leaves it a constant `0` while the engine frees the GAF banks exactly as before, because the
+cascade is the ENGINE's and reclaim defers only `Object3do` and model templates. The gate was
+therefore inert in precisely the configuration that needs it, with `frame_sane` — the probe this
+section says is not the safety argument — left as the only thing between the shipped DLL and the
+crash. **Both landing-5 reviewers found it independently**, the ninth such pair on this lane.
 
-`s_levelGen` bumps **after** the frees (`tagpu_reclaim.c`, `reclaim_teardown_post`), so between the
-free and the bump a pre-teardown op still carries the current generation and no longer points at
-anything. The new `tagpu_reclaim_level_closing()` is raised before the frees and lowered after the
-bump, so the two windows overlap with no gap between them. A generation stamp alone was the first
-thing tried and it is exactly the window this diagram exists to show.
+The tree had already ruled on this class and the fix used the counter that does not move.
+`tagpu_packet_pub` installs its **own** observer on the teardown `0x491B60` when reclaim is not
+armed, for the stated reason that the level-end packet must not depend on another module being
+armed, and `tagpu_packet_pub_level_gen`'s own header says it is what "a game-thread observer that
+latches per-level state" should stamp with. `tagpu_packet_pub_level_tracked()` is the first test:
+when no provider exists the generation never moves, and no ordering being available is a reason to
+**refuse** the read rather than to take it.
 
-The fallback when either test refuses is the op's own box out of **our mirror of the surface**, not
-out of the asset — so the picture is unchanged and only the sprite's identity is lost. Measured in
-play: `sprites=` climbs 4 665 799 → 5 086 434 across three heartbeats with `lost=` flat, so the
-ordering refuses nothing inside a level, which is the check that matters for a gate this wide.
+**AND THE WINDOW THIS SITE ACTUALLY SEES IS NOT THE ONE THE FIRST DRAFT DREW.** It argued that the
+teardown flag covers the frees and the generation covers what follows, so neither is sufficient
+alone. That is true of the flag and the generation in general and **false of this call site**:
+`publish` runs only from `before_flip`, and `s_teardown` is non-zero only while that same thread is
+inside `0x491B60`, which does not flip — so the closing test is unreachable from here today. The
+case that is real is the **opposite** order, and it is why the generation does the work: at
+`0x460635` the engine calls the teardown and pops the screen **afterwards**, flag already down, and
+those ops are refused because their generation is stale. The closing test stays as belt — a flip
+reached from inside a teardown would be caught by it — and is named as belt rather than as the
+argument. [The reviewer traced all six `call 0x491b60` sites to establish this.]
+
+The fallback when any test refuses is the op's own box out of **our mirror of the surface**, not out
+of the asset — so the picture is unchanged and only the sprite's identity is lost.
+
+**THE EVIDENCE FOR "IT REFUSES NOTHING INSIDE A LEVEL" IS `gafstale=`, AND THE FIRST VERSION OF THIS
+PARAGRAPH ARGUED FROM A COUNTER THAT CANNOT MOVE.** It read "`sprites=` climbs with `lost=` flat" —
+but `lost=` is the CONSUMER's atlas miss, and a publisher-side refusal emits `PK_PIXELS` and never a
+`PK_SPRITE`, so it could not have moved whatever happened. The counter that does say it was the one
+added with the fix, and it was **not printed**: it rode a `gui census:` line an ordinary run never
+emits. It lives in the shared queue struct now, beside the other producer counters, where the render
+half's heartbeat prints it. This is the third time this section has had to withdraw an argument from
+counters, which is why it now prefers a second capture wherever one exists.
+
+| | |
+|---|---|
+| in play | **`gafstale=0`** while `sprites=` climbs 107 983 → 213 580 |
+| after the teardown | **`gafstale=225`** |
+
+Zero inside a level and a burst at the boundary is the shape the ordering predicts — and those 225
+are reads that used to go into freed memory.
 
 **This is the standing debt in `CLAUDE.md` coming due, once.** The roadmap already lists "the
 per-LEVEL ASSET class under `tagpu_reclaim`'s fence" as an open row of the frame-packet gate; this
@@ -5726,9 +5756,24 @@ the asset channel, and leaves the class itself open.
 * **THE PER-LEVEL ASSET CLASS ITSELF STAYS OPEN.** Landing 5 closes the one site of it the UI
   publisher owns, by ordering. The class — model templates, FeatureDef and wreck records, the GAF
   banks, all under `tagpu_reclaim`'s fence until the asset channel — is the frame-packet gate's own
-  row and nothing here touches it. **Every other reader of a per-level asset is as exposed as
-  `frame_key` was**, and the only reason this one was found is that a fixture happened to quit a
-  skirmish to the main menu.
+  row and nothing here touches it. The only reason this one was found is that a fixture happened to
+  quit a skirmish to the main menu. The landing-5 review swept the rest and **most are sound** — the
+  feature, unit, terrain, effects and packet-publisher readers all sit behind the level-end packet's
+  own `in_game` gate, which is published before the flag drops — but it named **two that are not**:
+* **THE SHELL'S SCREEN-POP ROUTE IS UNCOVERED, and it is not a level at all.** `GUI_Pop 0x4A9660`
+  frees a popped screen's art from 21 event-handler call sites, with no teardown flag and no
+  generation moving — and `frame_key`'s own comment has recorded for some time that the shell hands
+  those same addresses to the next screen. Ops accumulate for up to `CENSUS_MS` before they publish
+  (the shell flips thousands of times a second), so an op can outlive the screen that produced it.
+  On that route the only thing standing is `frame_sane`, which is a probe. Named here because the
+  bullet above covers the per-LEVEL class and this is not in it.
+* **`tagpu_render3do.c`'s unit atlas is never dropped at a level boundary.** Its entries key on the
+  template's texture-frame ADDRESS, and the atlas resets only when full or on a context loss —
+  where `tagpu_fx.c` and `tagpu_feat.c` both call `tagpu_gaf_atlas_forget` for exactly the recycled-
+  address reason. A second level handed the same address would be served the first level's texels,
+  and nothing would detect it. Not this landing's to fix, and it is wrong art rather than a crash.
+  (The GL UI atlas is safe here: `publish` stores a CONTENT hash as the identity, so a recycled
+  address cannot alias.)
 * ~~The cursor, the minimap and the sharp layer~~ **CLOSED by landing 3.** `norestore` is the only
   lever left.
 * **THE MINIMAP'S PICTURE PATH (`uPic`), and with it the only LINEAR sampler in this module.** The
