@@ -148,8 +148,30 @@ typedef struct {
 
     VkDescriptorSet sets[SET_MAX];  /* the twin draws'                       */
     VkDescriptorSet laySet;
+
+    /* THE SHARP LAYER IS PER SLOT, and that is the whole of its
+       synchronisation argument. A twin had to be shared because it ACCUMULATES
+       across frames; this one is cleared to (0,0,0,0) at every present, so it
+       holds nothing that outlives its frame and the seam's own `fence[slot]`
+       wait already covers it. None of 2.34's shared-state reasoning applies. */
+    VkImage         shImg;
+    VkDeviceMemory  shMem;
+    VkImageView     shView;
+    VkFramebuffer   shFb;
+    int             shW, shH;
+
+    VkBuffer        sb;             /* the sharp draws' own 16-byte blocks   */
+    VkDeviceMemory  sbMem;
+    unsigned char*  sbMap;
+    VkDeviceSize    sbCap;
+    VkDescriptorSet shSet[3];       /* one per KIND: flat, cursor, minimap   */
     int             built;
 } SLOT;
+
+/* the three kinds, as set indices */
+#define SDSET_FLAT   0
+#define SDSET_CURS   1
+#define SDSET_MM     2
 
 static int              s_state, s_downOwed, s_downPaying;
 static int              s_drawThis, s_abFrame;
@@ -162,6 +184,16 @@ static VkRenderPass     s_twRp;          /* one R8G8 colour attachment, LOAD  */
 static VkDescriptorSetLayout s_dslTwin, s_dslLay;
 static VkPipelineLayout s_ploTwin, s_ploLay;
 static VkPipeline       s_pipeSpr, s_pipeCpy, s_pipeStr, s_pipeLay;
+/* THE SHARP LAYER (landing 3). Its three programs share one layout -- G19c gave
+   all three a 16-byte block at binding 32 and CURS/MM three samplers at 40..42
+   -- so one descriptor set layout serves them and `SDSET_*` indexes one
+   pre-written set per KIND rather than one per draw: a frame's up-to-16 quads
+   sample at most three distinct combinations of images, and the per-draw
+   uniform window is reached with a dynamic offset. */
+static VkRenderPass     s_sharpRp;       /* one RGBA8 attachment, CLEAR       */
+static VkDescriptorSetLayout s_dslSharp;
+static VkPipelineLayout s_ploSharp;
+static VkPipeline       s_pipeCurs, s_pipeMM, s_pipeFlat;
 static VkRenderPass     s_layRp;         /* what s_pipeLay was built against  */
 static VkDescriptorPool s_dpool;
 static VkSampler        s_samp;
@@ -175,6 +207,18 @@ static VkImageView      s_atView, s_palView, s_engView, s_dumView, s_glView;
 static int              s_atDim, s_engW, s_engH, s_glW, s_glH;
 static unsigned         s_atSerial, s_palSerial, s_glSerial;
 static int              s_atHave, s_palHave, s_engHave, s_dumReady, s_glHave;
+/* the minimap's two: the TNT picture (shared, keyed on its content serial --
+   it moves on a map load and a palette change) and the ENGINE's own pair, which
+   moves every frame by definition and so needs no serial, exactly as the
+   engine's frame does. Both arrive RGB8 and are widened to RGBA8 on the way in:
+   `VK_FORMAT_R8G8B8_UNORM` is optional and rarely supported, the four-channel
+   one is universal, and MM_FS reads `.rgb` either way. */
+static VkImage          s_mmPicImg, s_mmEngImg;
+static VkDeviceMemory   s_mmPicMem, s_mmEngMem;
+static VkImageView      s_mmPicView, s_mmEngView;
+static int              s_mmPicW, s_mmPicH, s_mmEngW, s_mmEngH;
+static unsigned         s_mmPicSerial;
+static int              s_mmPicHave, s_mmEngHave;
 
 static SLOT             s_slot[TAGPU_VK_SLOTS];
 
@@ -627,8 +671,28 @@ static int build_layouts(const TAGPU_VKPASS* d)
     li.bindingCount = 6; li.pBindings = b;
     if (vkCreateDescriptorSetLayout(d->dev, &li, NULL, &s_dslLay) != VK_SUCCESS) return 0;
 
+    /* the sharp layer's three: QVS binding 0, their own 16-byte block at 32,
+       and samplers 40..42. CURS wants (uAtlas, uAtlasRGB, uPal) and MM wants
+       (uPic, uEng, uPal); FLAT reads none of them but a bound set must still be
+       complete, so its three are the dummy. */
+    memset(b, 0, sizeof b);
+    b[0].binding = 0;  b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    b[0].descriptorCount = 1; b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    b[1].binding = 32; b[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    b[1].descriptorCount = 1; b[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    for (i = 0; i < 3; i++) {
+        b[2 + i].binding = (uint32_t)(40 + i);
+        b[2 + i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b[2 + i].descriptorCount = 1;
+        b[2 + i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+    li.bindingCount = 5; li.pBindings = b;
+    if (vkCreateDescriptorSetLayout(d->dev, &li, NULL, &s_dslSharp) != VK_SUCCESS) return 0;
+
     pi.setLayoutCount = 1; pi.pSetLayouts = &s_dslTwin;
     if (vkCreatePipelineLayout(d->dev, &pi, NULL, &s_ploTwin) != VK_SUCCESS) return 0;
+    pi.pSetLayouts = &s_dslSharp;
+    if (vkCreatePipelineLayout(d->dev, &pi, NULL, &s_ploSharp) != VK_SUCCESS) return 0;
     pi.pSetLayouts = &s_dslLay;
     if (vkCreatePipelineLayout(d->dev, &pi, NULL, &s_ploLay) != VK_SUCCESS) return 0;
     return 1;
@@ -646,6 +710,52 @@ static void quad_layout(VkVertexInputBindingDescription* vb,
 
 /* the twin pipelines. NO FLIP: the target is SAMPLED, not presented, and
    QVS puts quad y = 0 at attachment row 0 under both APIs (the header). */
+/* THE SHARP LAYER'S RENDER PASS: one RGBA8, CLEARED. The opposite of the
+   twins' LOAD, and for the opposite reason -- `sharp_begin` clears this layer
+   to (0,0,0,0) at every present, so nothing in it survives a frame and there is
+   nothing to preserve. Its alpha is what the composite gates on, which is why
+   the clear has to be transparent rather than merely black. */
+static int build_sharp_rp(const TAGPU_VKPASS* d)
+{
+    VkAttachmentDescription a;
+    VkAttachmentReference ar;
+    VkSubpassDescription sp;
+    VkSubpassDependency dep[2];
+    VkRenderPassCreateInfo ri = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
+    memset(&a, 0, sizeof a); memset(&sp, 0, sizeof sp); memset(dep, 0, sizeof dep);
+    a.format = VK_FORMAT_R8G8B8A8_UNORM;
+    a.samples = VK_SAMPLE_COUNT_1_BIT;
+    a.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    a.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    a.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    a.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    a.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;   /* cleared, so never read  */
+    a.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    ar.attachment = 0; ar.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp.colorAttachmentCount = 1; sp.pColorAttachments = &ar;
+    /* it SAMPLES the UI atlas, the palette and the minimap's two while it is
+       the target, and the composite samples IT afterwards */
+    dep[0].srcSubpass = VK_SUBPASS_EXTERNAL; dep[0].dstSubpass = 0;
+    dep[0].srcStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT |
+                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dep[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dep[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+    dep[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                           VK_ACCESS_SHADER_READ_BIT;
+    dep[1] = dep[0];
+    dep[1].srcSubpass = 0; dep[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    dep[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dep[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    ri.attachmentCount = 1; ri.pAttachments = &a;
+    ri.subpassCount = 1; ri.pSubpasses = &sp;
+    ri.dependencyCount = 2; ri.pDependencies = dep;
+    return vkCreateRenderPass(d->dev, &ri, NULL, &s_sharpRp) == VK_SUCCESS;
+}
+
 static int build_twin_pipe(const TAGPU_VKPASS* d, const uint32_t* fs, size_t fsw,
                            VkPipeline* out)
 {
@@ -765,6 +875,65 @@ static int build_lay_pipe(const TAGPU_VKPASS* d, VkRenderPass rp)
     return r == VK_SUCCESS;
 }
 
+/* the same pipeline as the twins', with three differences and no more: it
+   writes all four channels (the twins are RG8 and the composite gates on this
+   one's ALPHA), it is built against the sharp render pass, and it takes the
+   three-sampler layout. Blending stays OFF because the GL lane disables it. */
+static int build_sharp_pipe(const TAGPU_VKPASS* d, const uint32_t* fs, size_t fsw,
+                            VkPipeline* out)
+{
+    VkPipelineShaderStageCreateInfo st[2];
+    VkVertexInputBindingDescription vb;
+    VkVertexInputAttributeDescription at;
+    VkPipelineVertexInputStateCreateInfo vi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+    VkPipelineInputAssemblyStateCreateInfo ia = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
+    VkPipelineViewportStateCreateInfo vp = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
+    VkPipelineRasterizationStateCreateInfo rs = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+    VkPipelineMultisampleStateCreateInfo ms = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
+    VkPipelineColorBlendAttachmentState cba;
+    VkPipelineColorBlendStateCreateInfo cb = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
+    VkDynamicState dyn[2] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkPipelineDynamicStateCreateInfo ds = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
+    VkGraphicsPipelineCreateInfo gp = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+    VkShaderModule vm, fm;
+    VkResult r;
+
+    vm = mk_module(d, tagpu_spv_tagpu_gui_surf_QVS,
+                   sizeof tagpu_spv_tagpu_gui_surf_QVS / 4);
+    fm = mk_module(d, fs, fsw);
+    if (!vm || !fm) {
+        if (vm) vkDestroyShaderModule(d->dev, vm, NULL);
+        if (fm) vkDestroyShaderModule(d->dev, fm, NULL);
+        return 0;
+    }
+    memset(st, 0, sizeof st); memset(&cba, 0, sizeof cba);
+    st[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    st[0].stage = VK_SHADER_STAGE_VERTEX_BIT; st[0].module = vm; st[0].pName = "main";
+    st[1] = st[0]; st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; st[1].module = fm;
+    quad_layout(&vb, &at);
+    vi.vertexBindingDescriptionCount = 1; vi.pVertexBindingDescriptions = &vb;
+    vi.vertexAttributeDescriptionCount = 1; vi.pVertexAttributeDescriptions = &at;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    vp.viewportCount = 1; vp.scissorCount = 1;
+    rs.polygonMode = VK_POLYGON_MODE_FILL; rs.cullMode = VK_CULL_MODE_NONE;
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; rs.lineWidth = 1.0f;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                         VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    cb.attachmentCount = 1; cb.pAttachments = &cba;
+    ds.dynamicStateCount = 2; ds.pDynamicStates = dyn;
+    gp.stageCount = 2; gp.pStages = st;
+    gp.pVertexInputState = &vi; gp.pInputAssemblyState = &ia;
+    gp.pViewportState = &vp; gp.pRasterizationState = &rs;
+    gp.pMultisampleState = &ms; gp.pColorBlendState = &cb;
+    gp.pDynamicState = &ds; gp.layout = s_ploSharp;
+    gp.renderPass = s_sharpRp; gp.subpass = 0;
+    r = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, out);
+    vkDestroyShaderModule(d->dev, vm, NULL);
+    vkDestroyShaderModule(d->dev, fm, NULL);
+    return r == VK_SUCCESS;
+}
+
 static int build_descriptors(const TAGPU_VKPASS* d)
 {
     VkDescriptorPoolSize ps[3];
@@ -773,12 +942,12 @@ static int build_descriptors(const TAGPU_VKPASS* d)
     uint32_t i;
     memset(ps, 0, sizeof ps);
     ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-    ps[0].descriptorCount = nslots * SET_MAX * 2;
+    ps[0].descriptorCount = nslots * (SET_MAX * 2 + 3 * 2);   /* +3 sharp sets */
     ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps[1].descriptorCount = nslots * (SET_MAX * 2 + 5);
+    ps[1].descriptorCount = nslots * (SET_MAX * 2 + 5 + 3 * 3);
     ps[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     ps[2].descriptorCount = nslots;
-    pi.maxSets = nslots * (SET_MAX + 1);
+    pi.maxSets = nslots * (SET_MAX + 1 + 3);
     pi.poolSizeCount = 3; pi.pPoolSizes = ps;
     if (vkCreateDescriptorPool(d->dev, &pi, NULL, &s_dpool) != VK_SUCCESS) return 0;
     for (i = 0; i < nslots && i < TAGPU_VK_SLOTS; i++) {
@@ -791,6 +960,12 @@ static int build_descriptors(const TAGPU_VKPASS* d)
         if (vkAllocateDescriptorSets(d->dev, &ai, s_slot[i].sets) != VK_SUCCESS) return 0;
         ai.descriptorSetCount = 1; ai.pSetLayouts = &s_dslLay;
         if (vkAllocateDescriptorSets(d->dev, &ai, &s_slot[i].laySet) != VK_SUCCESS) return 0;
+        {
+            VkDescriptorSetLayout sl[3];
+            sl[0] = sl[1] = sl[2] = s_dslSharp;
+            ai.descriptorSetCount = 3; ai.pSetLayouts = sl;
+            if (vkAllocateDescriptorSets(d->dev, &ai, s_slot[i].shSet) != VK_SUCCESS) return 0;
+        }
     }
     return 1;
 }
@@ -826,6 +1001,13 @@ static int build(const TAGPU_VKPASS* d)
        its own block at 32, one sampler at 40 */
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_STR_FS,
                          sizeof tagpu_spv_tagpu_gui_surf_STR_FS / 4, &s_pipeStr)) return 0;
+    if (!build_sharp_rp(d)) return 0;
+    if (!build_sharp_pipe(d, tagpu_spv_tagpu_gui_surf_SHARP_FS,
+                          sizeof tagpu_spv_tagpu_gui_surf_SHARP_FS / 4, &s_pipeFlat)) return 0;
+    if (!build_sharp_pipe(d, tagpu_spv_tagpu_gui_surf_CURS_FS,
+                          sizeof tagpu_spv_tagpu_gui_surf_CURS_FS / 4, &s_pipeCurs)) return 0;
+    if (!build_sharp_pipe(d, tagpu_spv_tagpu_gui_surf_MM_FS,
+                          sizeof tagpu_spv_tagpu_gui_surf_MM_FS / 4, &s_pipeMM)) return 0;
     if (!build_descriptors(d)) return 0;
     return 1;
 }
