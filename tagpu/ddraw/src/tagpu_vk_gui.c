@@ -990,9 +990,12 @@ static int build(const TAGPU_VKPASS* d)
        The twin, the atlas, the palette, the engine's frame and the ramp's own
        texelFetch taps are all nearest. The MINIMAP PICTURE is not: the GL
        texture is created `MIN_FILTER = GL_LINEAR, MAG_FILTER = GL_NEAREST`
-       and `MM_FS`'s own comment says why -- the destination box is smaller
-       than the 252-px picture at every k this draws at, so every fragment
-       takes the MINIFICATION filter, and a downsample wants one. GL blends
+       and `MM_FS`'s own comment says why -- at the scales the minimap is drawn
+       at the destination box is usually SMALLER than the 252-px picture, so the
+       fragments take the MINIFICATION filter and a downsample wants one. (Not
+       at every k: past k of about 2.4 the box is the bigger of the two and the
+       magnification filter, nearest in both lanes, is what runs -- "the blow-up
+       at k > 2 stays crisp", as the GL comment puts it.) GL blends
        four texels there; a nearest sampler takes one. A second sampler is the
        whole fix. [FOUND 2026-09-16 -- BOTH landing-3 reviewers led with it,
        independently, and the A/B could not see it: MM_FS reaches the picture
@@ -1003,7 +1006,18 @@ static int build(const TAGPU_VKPASS* d)
     si.maxLod = 0.0f; si.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
     if (vkCreateSampler(d->dev, &si, NULL, &s_samp) != VK_SUCCESS) return 0;
     si.minFilter = VK_FILTER_LINEAR;          /* MAG stays nearest, as in GL */
+    /* AND maxLod MUST LEAVE ROOM, OR minFilter IS DEAD CODE. Vulkan clamps the
+       level-of-detail to [minLod, maxLod] and only THEN asks whether this is a
+       magnification (lambda <= 0) or a minification -- so with both 0 the
+       answer is always "magnification" and `magFilter` is always the one used.
+       The first version of this fix left `maxLod` at the 0.0 it inherited from
+       the nearest sampler above, which made the whole second sampler a no-op
+       while the notes recorded the divergence as closed. `tagpu_vk_unit.c`
+       already had 0.25f here for exactly this reason, in this same repository.
+       [FOUND 2026-09-16, the landing-3 RE-review.] */
+    si.maxLod = 0.25f;
     if (vkCreateSampler(d->dev, &si, NULL, &s_sampMin) != VK_SUCCESS) return 0;
+    si.maxLod = 0.0f;
     if (!build_rp(d)) return 0;
     if (!build_layouts(d)) return 0;
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_SPR_FS,
@@ -1373,7 +1387,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                  h.nsdraw, h.sharpW, h.sharpH); }
         compose = 0;
     } else {
-        s_saidSharp = 0;
+        int shRefused = 0;
         nsd = h.nsdraw;
         shOn = (nsd > 0) ? 1 : 0;
         for (i = 0; i < (unsigned)nsd; i++) {
@@ -1384,7 +1398,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
            cursor samples the UI atlas; the minimap its picture and the engine's
            pair. Missing any of them is this frame not being composited. */
         if (needCurs && !h.atlas) {
-            shOn = 0; compose = 0;
+            shOn = 0; compose = 0; shRefused = 1;
             if (!s_saidSharp) { s_saidSharp = 1;
                 plog(d, "gui: the sharp layer wants the cursor and the hand-over "
                         "carries no UI atlas - nothing composited"); }
@@ -1400,7 +1414,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                `grow` sized from a rejected dimension that fails and refuses the
                pass for the session. A refusal that still consumes its input is
                not a refusal. [FOUND 2026-09-16, the landing-3 review.] */
-            shOn = 0; compose = 0; needMM = 0;
+            shOn = 0; compose = 0; needMM = 0; shRefused = 1;
             if (!s_saidSharp) { s_saidSharp = 1;
                 plog(d, "gui: the sharp layer wants the minimap and this frame's "
                         "copy of it is %s - nothing composited",
@@ -1410,6 +1424,12 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
            client this landing does not carry, and it composites nothing rather
            than a layer missing a piece. */
         if (h.sharpOn && !shOn) compose = 0;
+        /* THE LATCH IS CLEARED ONLY BY A GOOD FRAME. Clearing it at the top of
+           this branch -- which is where it was -- made `if (!s_saidSharp)`
+           true on every present, so a condition that holds every frame (the
+           atlas mirror not yet allocated, say) printed a line per present for
+           the session. [FOUND 2026-09-16, the re-review.] */
+        if (!shRefused) s_saidSharp = 0;
     }
     /* THE ENGINE'S OWN FRAME IS THE COMPOSITE'S BOTTOM LAYER. Without it the
        GL lane's `uSurf` reads an image ours would not have, so the two would
@@ -2041,7 +2061,16 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        the refund could never happen and every legitimate transition counted
        against the cap: four level loads and the pass was muted for good. Being
        LEVEL is a property of the replay. [FOUND 2026-09-16, the re-review.] */
-    if (!s_behindMute && s_behindAsks && ++s_goodRun >= BEHIND_GOOD_RUN) {
+    /* `!s_behind` IS PART OF THE CONDITION, and leaving it out is the third
+       version of this same mistake. While `s_behind` stands, pass 2 applies
+       NOTHING -- it skips every op waiting for a RESET -- so those frames are
+       exactly the ones on which the store is provably NOT level. Counting them
+       let a pass waiting for a fresh start that never comes climb to the
+       threshold, refund the budget, and go on asking the GL ORACLE for a full
+       reseed for the rest of the session with the mute unable to latch. The
+       comment beside it already said what to check: being level is a property
+       of the replay. [FOUND 2026-09-16, the re-review.] */
+    if (!s_behind && !s_behindMute && s_behindAsks && ++s_goodRun >= BEHIND_GOOD_RUN) {
         s_behindAsks = 0; s_goodRun = 0;
     }
 
