@@ -64,8 +64,13 @@
    and asks once, and nothing of the GL lane's is touched. Sized for the case
    that has to work, degrading predictably past it.
    (It was TW_MAX + 1 until landing 2, whose string op made the glyph atlas a
-   second non-twin view and left the old size one short.) */
-#define SET_MAX     (TW_MAX + 2)
+   second non-twin view and left the old size one short. Landing 4 made the
+   claim a PAIR -- binding 41 stopped being the dummy -- so one image can now
+   need two sets: sprites that sample the restored atlas and sprites that do
+   not are two combinations of the same UI atlas, and a copy from a twin is a
+   third and fourth. Two more, on the same reasoning as before and with the
+   same standing caveat that this is a size.) */
+#define SET_MAX     (TW_MAX + 4)
 /* objects waiting for every slot to turn over once before they are destroyed.
    THE LANE ALREADY HAD THE ANSWER AND THIS PASS DID NOT USE IT: the seam waits
    `fence[slot]` and nothing more, so `slots - 1` earlier submissions are still
@@ -119,6 +124,24 @@ typedef struct {
     VkFramebuffer   fb;
     VkImageLayout   layout;         /* what it is in RIGHT NOW               */
     int             needClear;      /* created this frame, not yet cleared   */
+    /* ---- CLASSIC++ (landing 4): THE COLOUR TWIN, made by the first op that
+       had colour to put in it, exactly as `twin_colour` makes the GL one.
+       It is a SECOND ATTACHMENT of the same draws and not a second pass: one
+       MRT draw writes the index and the colour together, so the two can never
+       disagree about what a texel holds -- which is the whole reason the GL
+       lane made it an attachment rather than a second program.
+       A framebuffer is immutable in Vulkan where `glDrawBuffers` is a switch on
+       a live FBO, so a twin that gains colour gains a SECOND framebuffer over
+       both views and every later draw on it uses that one and `s_twRp2`.
+       `colLayout` is tracked apart from `layout`: the two images are barriered
+       together at every point they are used together, but a colour twin made
+       mid-frame starts UNDEFINED while its index twin is already somewhere. */
+    VkImage         colImg;
+    VkDeviceMemory  colMem;
+    VkImageView     colView;
+    VkFramebuffer   fb2;            /* [index, colour], against s_twRp2      */
+    VkImageLayout   colLayout;
+    int             colNeedClear;   /* GL clears attachment 1 on creation    */
 } TWIN;
 
 typedef struct {
@@ -181,9 +204,14 @@ static TWIN             s_tw[TW_MAX];
 static int              s_ntw;
 
 static VkRenderPass     s_twRp;          /* one R8G8 colour attachment, LOAD  */
+/* ...and the Classic++ edition: R8G8 plus the RGBA8 colour twin, both LOAD.
+   A framebuffer is immutable, so where GL flips `glDrawBuffers` between 1 and 2
+   on one FBO this lane has two framebuffers and two render passes. */
+static VkRenderPass     s_twRp2;
 static VkDescriptorSetLayout s_dslTwin, s_dslLay;
 static VkPipelineLayout s_ploTwin, s_ploLay;
 static VkPipeline       s_pipeSpr, s_pipeCpy, s_pipeStr, s_pipeLay;
+static VkPipeline       s_pipeSpr2, s_pipeCpy2, s_pipeStr2;
 /* THE SHARP LAYER (landing 3). Its three programs share one layout -- G19c gave
    all three a 16-byte block at binding 32 and CURS/MM three samplers at 40..42
    -- so one descriptor set layout serves them and `SDSET_*` indexes one
@@ -209,6 +237,19 @@ static VkImageView      s_atView, s_palView, s_engView, s_dumView, s_glView;
 static int              s_atDim, s_engW, s_engH, s_glW, s_glH;
 static unsigned         s_atSerial, s_palSerial, s_glSerial;
 static int              s_atHave, s_palHave, s_engHave, s_dumReady, s_glHave;
+/* THE RESTORED UI ATLAS (landing 4). RGBA8, the same dim and the same shelf as
+   the indexed one -- the restorer paints cell for cell into the twin. It is the
+   one thing in this pass that the GL lane PRODUCES rather than reads, and the
+   port does not reproduce it: the five restorer shaders are G19c's uncovered
+   case, so the texels cross as bytes and the producer stays where it is. */
+static VkImage          s_arImg;
+static VkDeviceMemory   s_arMem;
+static VkImageView      s_arView;
+static int              s_arDim, s_arRows, s_arHave;
+static unsigned         s_arSerial;
+/* the last `colRearm` seen: when it moves, every colour twin was invalidated */
+static unsigned         s_colRearm;
+static int              s_colRearmSeen;
 /* the minimap's two: the TNT picture (shared, keyed on its content serial --
    it moves on a map load and a palette change) and the ENGINE's own pair, which
    moves every frame by definition and so needs no serial, exactly as the
@@ -224,11 +265,18 @@ static int              s_mmPicHave, s_mmEngHave;
 
 static SLOT             s_slot[TAGPU_VK_SLOTS];
 
+/* TWO OBJECT SETS PER ENTRY, AND THE PAIRING IS THE POINT rather than a way
+   to save entries. A colour twin's framebuffer names BOTH views, so the two
+   images have to be retired as one thing: split across two entries the sweep
+   below would run in index order and could destroy an attachment's view while
+   the framebuffer naming it was still alive. Within an entry the order is
+   fixed -- both framebuffers, then the views, then the images, then the
+   memory -- so that can never arise. */
 typedef struct {
-    VkImage         img;
-    VkDeviceMemory  mem;
-    VkImageView     view;
-    VkFramebuffer   fb;
+    VkImage         img[2];
+    VkDeviceMemory  mem[2];
+    VkImageView     view[2];
+    VkFramebuffer   fb[2];
     unsigned        pending;        /* bit per slot still to turn over       */
 } RET;
 static RET              s_ret[RET_MAX];
@@ -258,7 +306,7 @@ static int              s_behind, s_cantReplay;
    because it stands the composite down on every frame. */
 #define BEHIND_GOOD_RUN 120
 static int              s_behindAsks, s_behindMute, s_goodRun;
-static VkImageView      s_setView[SET_MAX];
+static VkImageView      s_setView[SET_MAX], s_setView2[SET_MAX];
 
 /* this frame's plan, filled by `prepare` and read by `record` */
 static unsigned         s_presented;
@@ -411,13 +459,13 @@ static void img_barrier(VkCommandBuffer cb, VkImage img,
     vkCmdPipelineBarrier(cb, srcS, dstS, 0, 0, NULL, 0, NULL, 1, &b);
 }
 
-/* move a twin into `to`, from whatever it is in now */
-static void tw_to(VkCommandBuffer cb, TWIN* t, VkImageLayout to)
+/* move one image into `to`, from whatever it is in now */
+static void lay_to(VkCommandBuffer cb, VkImage img, VkImageLayout* cur, VkImageLayout to)
 {
     VkPipelineStageFlags ss, ds;
     VkAccessFlags sa, da;
-    if (t->layout == to) return;
-    switch (t->layout) {
+    if (*cur == to) return;
+    switch (*cur) {
     case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
         ss = VK_PIPELINE_STAGE_TRANSFER_BIT; sa = VK_ACCESS_TRANSFER_WRITE_BIT; break;
     case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
@@ -437,13 +485,34 @@ static void tw_to(VkCommandBuffer cb, TWIN* t, VkImageLayout to)
     default:
         ds = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT; da = VK_ACCESS_SHADER_READ_BIT; break;
     }
-    img_barrier(cb, t->img, t->layout, to, ss, sa, ds, da);
-    t->layout = to;
+    img_barrier(cb, img, *cur, to, ss, sa, ds, da);
+    *cur = to;
+}
+
+/* THE TWO IMAGES OF A TWIN MOVE TOGETHER, and there is no case in this module
+   where they do not want to: they are attachments of the same draw, samplers of
+   the same copy and layers of the same composite. Keeping one layout variable
+   each rather than one shared is only because a colour twin made mid-frame
+   starts UNDEFINED while the index twin it joins is already somewhere. */
+static void tw_to(VkCommandBuffer cb, TWIN* t, VkImageLayout to)
+{
+    lay_to(cb, t->img, &t->layout, to);
+    if (t->colImg) lay_to(cb, t->colImg, &t->colLayout, to);
 }
 
 /* ---- the retire --------------------------------------------------------- */
 
 /* this slot has turned over: whatever was waiting on it is one step closer */
+static void ret_kill(const TAGPU_VKPASS* d, RET* r)
+{
+    int k;
+    for (k = 0; k < 2; k++) if (r->fb[k])   vkDestroyFramebuffer(d->dev, r->fb[k], NULL);
+    for (k = 0; k < 2; k++) if (r->view[k]) vkDestroyImageView(d->dev, r->view[k], NULL);
+    for (k = 0; k < 2; k++) if (r->img[k])  vkDestroyImage(d->dev, r->img[k], NULL);
+    for (k = 0; k < 2; k++) if (r->mem[k])  vkFreeMemory(d->dev, r->mem[k], NULL);
+    memset(r, 0, sizeof *r);
+}
+
 static void ret_slot_done(const TAGPU_VKPASS* d, uint32_t slot)
 {
     int i;
@@ -451,11 +520,7 @@ static void ret_slot_done(const TAGPU_VKPASS* d, uint32_t slot)
         if (!s_ret[i].pending) continue;
         s_ret[i].pending &= ~(1u << slot);
         if (s_ret[i].pending) continue;
-        if (s_ret[i].fb)   vkDestroyFramebuffer(d->dev, s_ret[i].fb, NULL);
-        if (s_ret[i].view) vkDestroyImageView(d->dev, s_ret[i].view, NULL);
-        if (s_ret[i].img)  vkDestroyImage(d->dev, s_ret[i].img, NULL);
-        if (s_ret[i].mem)  vkFreeMemory(d->dev, s_ret[i].mem, NULL);
-        memset(&s_ret[i], 0, sizeof s_ret[i]);
+        ret_kill(d, &s_ret[i]);
     }
 }
 
@@ -464,15 +529,18 @@ static void ret_slot_done(const TAGPU_VKPASS* d, uint32_t slot)
    certainly naming these handles, and its bit clears when it comes round
    again -- which is after its fence. A full list is not a reason to destroy
    anything here; it is a reason to stop. */
-static int ret_push(const TAGPU_VKPASS* d, VkImage img, VkDeviceMemory mem,
-                    VkImageView view, VkFramebuffer fb)
+static int ret_push2(const TAGPU_VKPASS* d,
+                     VkImage img0, VkDeviceMemory mem0, VkImageView view0, VkFramebuffer fb0,
+                     VkImage img1, VkDeviceMemory mem1, VkImageView view1, VkFramebuffer fb1)
 {
     int i;
-    if (!img && !mem && !view && !fb) return 1;
+    if (!img0 && !mem0 && !view0 && !fb0 && !img1 && !mem1 && !view1 && !fb1) return 1;
     for (i = 0; i < RET_MAX; i++) {
         if (s_ret[i].pending) continue;
-        s_ret[i].img = img; s_ret[i].mem = mem;
-        s_ret[i].view = view; s_ret[i].fb = fb;
+        s_ret[i].img[0] = img0; s_ret[i].mem[0] = mem0;
+        s_ret[i].view[0] = view0; s_ret[i].fb[0] = fb0;
+        s_ret[i].img[1] = img1; s_ret[i].mem[1] = mem1;
+        s_ret[i].view[1] = view1; s_ret[i].fb[1] = fb1;
         s_ret[i].pending = (d->slots >= 32) ? 0xFFFFFFFFu
                                             : ((1u << d->slots) - 1u);
         return 1;
@@ -480,17 +548,18 @@ static int ret_push(const TAGPU_VKPASS* d, VkImage img, VkDeviceMemory mem,
     return 0;
 }
 
+static int ret_push(const TAGPU_VKPASS* d, VkImage img, VkDeviceMemory mem,
+                    VkImageView view, VkFramebuffer fb)
+{
+    return ret_push2(d, img, mem, view, fb,
+                     VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE);
+}
+
 /* only ever called behind the seam's vkDeviceWaitIdle */
 static void ret_drain_idle(const TAGPU_VKPASS* d)
 {
     int i;
-    for (i = 0; i < RET_MAX; i++) {
-        if (s_ret[i].fb)   vkDestroyFramebuffer(d->dev, s_ret[i].fb, NULL);
-        if (s_ret[i].view) vkDestroyImageView(d->dev, s_ret[i].view, NULL);
-        if (s_ret[i].img)  vkDestroyImage(d->dev, s_ret[i].img, NULL);
-        if (s_ret[i].mem)  vkFreeMemory(d->dev, s_ret[i].mem, NULL);
-        memset(&s_ret[i], 0, sizeof s_ret[i]);
-    }
+    for (i = 0; i < RET_MAX; i++) ret_kill(d, &s_ret[i]);
 }
 
 /* ---- the twin store ----------------------------------------------------- */
@@ -508,7 +577,11 @@ static TWIN* tw_find(unsigned surf)
    use-after-free this list exists to prevent. */
 static int tw_drop(const TAGPU_VKPASS* d, TWIN* t)
 {
-    if (!ret_push(d, t->img, t->mem, t->view, t->fb)) return 0;
+    /* BOTH FRAMEBUFFERS AND BOTH IMAGES IN ONE ENTRY -- `fb2` names `view` as
+       well as `colView`, so retiring them apart would let the sweep destroy one
+       of its attachments first (see RET). */
+    if (!ret_push2(d, t->img, t->mem, t->view, t->fb,
+                   t->colImg, t->colMem, t->colView, t->fb2)) return 0;
     /* THE CLAIM IS DELIBERATELY LEFT STANDING. An earlier version cleared
        `s_setView` here, to stop a recycled view handle matching a stale claim —
        but now that `tw_drop` only RETIRES, the view stays alive for the whole
@@ -578,40 +651,117 @@ static void tw_fresh(VkCommandBuffer cb, TWIN* t)
 {
     VkClearColorValue cv;
     VkImageSubresourceRange rg;
-    if (!t->needClear) return;
-    t->needClear = 0;
+    if (!t->needClear && !t->colNeedClear) return;
     memset(&cv, 0, sizeof cv);
     memset(&rg, 0, sizeof rg);
     rg.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     rg.levelCount = 1; rg.layerCount = 1;
     tw_to(cb, t, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    vkCmdClearColorImage(cb, t->img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                         &cv, 1, &rg);
+    if (t->needClear) {
+        t->needClear = 0;
+        vkCmdClearColorImage(cb, t->img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                             &cv, 1, &rg);
+    }
+    /* AND THE COLOUR TWIN IS CLEARED TO ALPHA 0 THE SAME WAY, because
+       `twin_colour` clears it (`glClearBufferfv` with the zero vector) and
+       alpha 0 is the restorer's own "nothing restored here". A colour twin
+       that loaded whatever memory it was handed would composite that memory as
+       restored art wherever a byte of it read alpha > 0.5. */
+    if (t->colNeedClear && t->colImg) {
+        t->colNeedClear = 0;
+        vkCmdClearColorImage(cb, t->colImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                             &cv, 1, &rg);
+    }
+}
+
+/* THE COLOUR TWIN, MADE BY THE OP THAT SAID THE GL LANE MADE ONE. Never on
+   this pass's own judgement: `TAGPU_GUICOL_DST` is what `twin_colour` actually
+   did, refusals included, so the two stores hold colour for the same surfaces.
+   0 is a stand-down and not a shrug -- a twin the GL lane gave colour and this
+   one did not composites indexed art under a `uColOn` that says otherwise. */
+static int tw_colour(const TAGPU_VKPASS* d, TWIN* t)
+{
+    VkFramebufferCreateInfo fi = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
+    VkImageView att[2];
+    if (t->colImg) return 1;
+    if (!mk_image(d, t->w, t->h, VK_FORMAT_R8G8B8A8_UNORM,
+                  VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                  &t->colImg, &t->colMem, &t->colView))
+        return 0;
+    att[0] = t->view; att[1] = t->colView;
+    fi.renderPass = s_twRp2; fi.attachmentCount = 2; fi.pAttachments = att;
+    fi.width = (uint32_t)t->w; fi.height = (uint32_t)t->h; fi.layers = 1;
+    if (vkCreateFramebuffer(d->dev, &fi, NULL, &t->fb2) != VK_SUCCESS) {
+        kill_image(d, &t->colImg, &t->colMem, &t->colView);
+        return 0;
+    }
+    t->colLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    t->colNeedClear = 1;
+    return 1;
+}
+
+/* `twin_col_drop`: INDICES ARRIVED FOR THIS BOX AND THEY SAY NOTHING ABOUT
+   COLOUR, so the colour there goes and the layer falls back to the palette.
+   The GL lane does it with a scissored `glClearBufferfv` on buffer 1; here it
+   is a one-attachment clear inside a render pass instance of its own, because
+   `vkCmdClearAttachments` is the only rect clear Vulkan has and it needs one.
+   Called from outside any open pass -- the seed and pixel ops are transfers. */
+static void tw_col_drop(VkCommandBuffer cb, TWIN* t, int x, int y, int w, int h)
+{
+    VkRenderPassBeginInfo rb = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+    VkClearAttachment ca;
+    VkClearRect cr;
+    if (!t->colImg || w <= 0 || h <= 0) return;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > t->w) w = t->w - x;
+    if (y + h > t->h) h = t->h - y;
+    if (w <= 0 || h <= 0) return;
+    tw_to(cb, t, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    memset(&ca, 0, sizeof ca); memset(&cr, 0, sizeof cr);
+    ca.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    ca.colorAttachment = 1;
+    cr.rect.offset.x = x; cr.rect.offset.y = y;
+    cr.rect.extent.width = (uint32_t)w; cr.rect.extent.height = (uint32_t)h;
+    cr.layerCount = 1;
+    rb.renderPass = s_twRp2; rb.framebuffer = t->fb2;
+    rb.renderArea.extent.width = (uint32_t)t->w;
+    rb.renderArea.extent.height = (uint32_t)t->h;
+    vkCmdBeginRenderPass(cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdClearAttachments(cb, 1, &ca, 1, &cr);
+    vkCmdEndRenderPass(cb);
 }
 
 /* ---- build -------------------------------------------------------------- */
 
-static int build_rp(const TAGPU_VKPASS* d)
+/* `n` = 1 for an indexed twin, 2 for one that has gained its Classic++ colour
+   attachment. The second is the SAME pass in every other respect -- same LOAD,
+   same dependencies -- because it is the same draws writing one more output. */
+static int build_rp_n(const TAGPU_VKPASS* d, int n, VkRenderPass* out)
 {
-    VkAttachmentDescription a;
-    VkAttachmentReference ar;
+    VkAttachmentDescription a[2];
+    VkAttachmentReference ar[2];
     VkSubpassDescription sp;
     VkSubpassDependency dep[2];
     VkRenderPassCreateInfo ri = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
-    memset(&a, 0, sizeof a); memset(&sp, 0, sizeof sp); memset(dep, 0, sizeof dep);
-    a.format = VK_FORMAT_R8G8_UNORM;
-    a.samples = VK_SAMPLE_COUNT_1_BIT;
+    memset(a, 0, sizeof a); memset(ar, 0, sizeof ar);
+    memset(&sp, 0, sizeof sp); memset(dep, 0, sizeof dep);
+    a[0].format = VK_FORMAT_R8G8_UNORM;
+    a[0].samples = VK_SAMPLE_COUNT_1_BIT;
     /* LOAD, NOT CLEAR: a twin accumulates. Every op writes part of it and the
        rest has to survive -- which is the whole of what a twin IS. */
-    a.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    a.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    a.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    a.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    a.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    a.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    ar.attachment = 0; ar.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    a[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    a[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    a[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    a[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    a[0].initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    a[0].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    a[1] = a[0]; a[1].format = VK_FORMAT_R8G8B8A8_UNORM;
+    ar[0].attachment = 0; ar[0].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    ar[1].attachment = 1; ar[1].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    sp.colorAttachmentCount = 1; sp.pColorAttachments = &ar;
+    sp.colorAttachmentCount = (uint32_t)n; sp.pColorAttachments = ar;
     /* the copy reads ANOTHER twin in the fragment stage while this one is the
        target, so the external dependencies name both scopes */
     dep[0].srcSubpass = VK_SUBPASS_EXTERNAL; dep[0].dstSubpass = 0;
@@ -635,10 +785,15 @@ static int build_rp(const TAGPU_VKPASS* d)
     dep[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT |
                            VK_ACCESS_SHADER_READ_BIT |
                            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    ri.attachmentCount = 1; ri.pAttachments = &a;
+    ri.attachmentCount = (uint32_t)n; ri.pAttachments = a;
     ri.subpassCount = 1; ri.pSubpasses = &sp;
     ri.dependencyCount = 2; ri.pDependencies = dep;
-    return vkCreateRenderPass(d->dev, &ri, NULL, &s_twRp) == VK_SUCCESS;
+    return vkCreateRenderPass(d->dev, &ri, NULL, out) == VK_SUCCESS;
+}
+
+static int build_rp(const TAGPU_VKPASS* d)
+{
+    return build_rp_n(d, 1, &s_twRp) && build_rp_n(d, 2, &s_twRp2);
 }
 
 static int build_layouts(const TAGPU_VKPASS* d)
@@ -759,7 +914,7 @@ static int build_sharp_rp(const TAGPU_VKPASS* d)
 }
 
 static int build_twin_pipe(const TAGPU_VKPASS* d, const uint32_t* fs, size_t fsw,
-                           VkPipeline* out)
+                           VkRenderPass rp, int natt, VkPipeline* out)
 {
     VkPipelineShaderStageCreateInfo st[2];
     VkVertexInputBindingDescription vb;
@@ -769,7 +924,7 @@ static int build_twin_pipe(const TAGPU_VKPASS* d, const uint32_t* fs, size_t fsw
     VkPipelineViewportStateCreateInfo vp = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
     VkPipelineRasterizationStateCreateInfo rs = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
     VkPipelineMultisampleStateCreateInfo ms = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
-    VkPipelineColorBlendAttachmentState cba;
+    VkPipelineColorBlendAttachmentState cba[2];
     VkPipelineColorBlendStateCreateInfo cb = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
     VkDynamicState dyn[2] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
     VkPipelineDynamicStateCreateInfo ds = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
@@ -785,7 +940,7 @@ static int build_twin_pipe(const TAGPU_VKPASS* d, const uint32_t* fs, size_t fsw
         if (fm) vkDestroyShaderModule(d->dev, fm, NULL);
         return 0;
     }
-    memset(st, 0, sizeof st); memset(&cba, 0, sizeof cba);
+    memset(st, 0, sizeof st); memset(cba, 0, sizeof cba);
     st[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     st[0].stage = VK_SHADER_STAGE_VERTEX_BIT; st[0].module = vm; st[0].pName = "main";
     st[1] = st[0]; st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; st[1].module = fm;
@@ -799,15 +954,21 @@ static int build_twin_pipe(const TAGPU_VKPASS* d, const uint32_t* fs, size_t fsw
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
     /* the GL lane draws these with blending OFF: a sprite discards its keyed
        texels and writes the rest whole, which is what coverage means here */
-    cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT;
-    cb.attachmentCount = 1; cb.pAttachments = &cba;
+    cba[0].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT;
+    /* THE COLOUR ATTACHMENT TAKES ALL FOUR CHANNELS, ALPHA ABOVE ALL: alpha is
+       "this texel has restored colour" to every reader of a colour twin, so a
+       write mask that dropped it would leave the flag standing wherever an op
+       cleared the colour under it. */
+    cba[1].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    cb.attachmentCount = (uint32_t)natt; cb.pAttachments = cba;
     ds.dynamicStateCount = 2; ds.pDynamicStates = dyn;
     gp.stageCount = 2; gp.pStages = st;
     gp.pVertexInputState = &vi; gp.pInputAssemblyState = &ia;
     gp.pViewportState = &vp; gp.pRasterizationState = &rs;
     gp.pMultisampleState = &ms; gp.pColorBlendState = &cb;
     gp.pDynamicState = &ds; gp.layout = s_ploTwin;
-    gp.renderPass = s_twRp; gp.subpass = 0;
+    gp.renderPass = rp; gp.subpass = 0;
     r = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, out);
     vkDestroyShaderModule(d->dev, vm, NULL);
     vkDestroyShaderModule(d->dev, fm, NULL);
@@ -1020,14 +1181,33 @@ static int build(const TAGPU_VKPASS* d)
     si.maxLod = 0.0f;
     if (!build_rp(d)) return 0;
     if (!build_layouts(d)) return 0;
+    /* TWO OF EACH, one per render pass, and the SPIR-V is the same module for
+       both: `SPR_FS`, `CPY_FS` and `STR_FS` all declare `layout(location=1) out`
+       already -- landings 1 to 3 ran them against a one-attachment pass, where
+       a write to a location the subpass has no attachment for is discarded,
+       which is exactly what `glDrawBuffers(1)` does on the GL side. So the
+       colour edition is the same shader against a pass that HAS the second
+       attachment, and nothing was translated for this landing. */
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_SPR_FS,
-                         sizeof tagpu_spv_tagpu_gui_surf_SPR_FS / 4, &s_pipeSpr)) return 0;
+                         sizeof tagpu_spv_tagpu_gui_surf_SPR_FS / 4,
+                         s_twRp, 1, &s_pipeSpr)) return 0;
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_CPY_FS,
-                         sizeof tagpu_spv_tagpu_gui_surf_CPY_FS / 4, &s_pipeCpy)) return 0;
+                         sizeof tagpu_spv_tagpu_gui_surf_CPY_FS / 4,
+                         s_twRp, 1, &s_pipeCpy)) return 0;
     /* the string shares the twin pipelines' layout exactly: QVS at binding 0,
        its own block at 32, one sampler at 40 */
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_STR_FS,
-                         sizeof tagpu_spv_tagpu_gui_surf_STR_FS / 4, &s_pipeStr)) return 0;
+                         sizeof tagpu_spv_tagpu_gui_surf_STR_FS / 4,
+                         s_twRp, 1, &s_pipeStr)) return 0;
+    if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_SPR_FS,
+                         sizeof tagpu_spv_tagpu_gui_surf_SPR_FS / 4,
+                         s_twRp2, 2, &s_pipeSpr2)) return 0;
+    if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_CPY_FS,
+                         sizeof tagpu_spv_tagpu_gui_surf_CPY_FS / 4,
+                         s_twRp2, 2, &s_pipeCpy2)) return 0;
+    if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_STR_FS,
+                         sizeof tagpu_spv_tagpu_gui_surf_STR_FS / 4,
+                         s_twRp2, 2, &s_pipeStr2)) return 0;
     if (!build_sharp_rp(d)) return 0;
     if (!build_sharp_pipe(d, tagpu_spv_tagpu_gui_surf_SHARP_FS,
                           sizeof tagpu_spv_tagpu_gui_surf_SHARP_FS / 4, &s_pipeFlat)) return 0;
@@ -1155,15 +1335,23 @@ static void set_viewport(VkCommandBuffer cb, int w, int h)
    it, else take a free one. SET_MAX is the twins plus TWO -- the UI atlas and
    the glyph atlas -- which covers any frame that does not churn its store; a
    frame that does can run out, and answering 0 here is how it says so. */
-static int set_claim(const TAGPU_VKPASS* d, SLOT* s, VkImageView v,
+/* THE CLAIM IS ON THE PAIR SINCE LANDING 4, not on binding 40 alone. Binding 41
+   stopped being the dummy when Classic++ arrived: a sprite now samples the
+   restored atlas there and a copy its source's COLOUR twin, so two draws that
+   agree about 40 and differ about 41 are two different sets. Keying on 40 alone
+   would have handed the second draw the first one's set and sampled the wrong
+   colour image -- with the right indices, so the picture would have been
+   right everywhere the colour twin happened to be empty. */
+static int set_claim(const TAGPU_VKPASS* d, SLOT* s, VkImageView v, VkImageView v2,
                      VkDeviceSize uRange, VkDeviceSize fRange, int* out)
 {
     int j, free_j = -1;
     VkDescriptorBufferInfo bi[2];
     VkDescriptorImageInfo ii[2];
     VkWriteDescriptorSet wr[4];
+    if (!v2) v2 = s_dumView;
     for (j = 0; j < SET_MAX; j++) {
-        if (s_setView[j] == v) { *out = j; return 1; }
+        if (s_setView[j] == v && s_setView2[j] == v2) { *out = j; return 1; }
         if (!s_setView[j] && free_j < 0) free_j = j;
     }
     if (free_j < 0) return 0;
@@ -1176,7 +1364,7 @@ static int set_claim(const TAGPU_VKPASS* d, SLOT* s, VkImageView v,
     wr[0].pBufferInfo = &bi[0];
     wr[1] = wr[0]; wr[1].dstBinding = 32; wr[1].pBufferInfo = &bi[1];
     ii[0].sampler = s_samp; ii[0].imageView = v;
-    ii[1].sampler = s_samp; ii[1].imageView = s_dumView;   /* 41, unread here */
+    ii[1].sampler = s_samp; ii[1].imageView = v2;
     for (j = 0; j < 2; j++) {
         ii[j].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         wr[2 + j].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1188,6 +1376,7 @@ static int set_claim(const TAGPU_VKPASS* d, SLOT* s, VkImageView v,
     }
     vkUpdateDescriptorSets(d->dev, 4, wr, 0, NULL);
     s_setView[free_j] = v;
+    s_setView2[free_j] = v2;
     *out = free_j;
     return 1;
 }
@@ -1272,7 +1461,8 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     VkDeviceSize mmPicOff = 0, mmEngOff = 0, sStride = 0;
     VkDeviceSize stNeed = 0, stOff = 0, uStride, fStride;
     VkDeviceSize atOff = 0, palOff = 0, engOff = 0;
-    int atUp = 0, palUp = 0, engUp = 0;
+    int atUp = 0, palUp = 0, engUp = 0, arUp = 0;
+    VkDeviceSize arOff = 0;
     TWIN* cur = NULL;
     int rpOpen = 0;
     int drawn = 0;
@@ -1361,13 +1551,34 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         if (!behind(d, "ops this landing cannot replay have stopped")) goto refuse;
         return 0;
     }
-    if (h.colourTwins) {
+    /* CLASSIC++ IS CARRIED SINCE LANDING 4, so `colourTwins` is no longer a
+       stand-down: it IS `uColOn`, exactly as `draw_layer` set it, and it is
+       read where the composite's block is filled. The one thing still refused
+       here is a frame whose colour twins the GL lane can sample and whose
+       restored atlas never reached us -- the replay would then write alpha 0
+       where the GL lane wrote restored colour, silently and cumulatively. */
+    if (h.colourTwins && !h.atlasRgb) {
         if (!s_saidColour) { s_saidColour = 1;
-            plog(d, "gui: the GL twin is compositing a Classic++ colour twin and "
-                    "this landing has none - nothing composited while that is "
-                    "true. `gui.on=norestore` is the lever"); }
+            plog(d, "gui: the GL twin is compositing Classic++ colour and the "
+                    "hand-over carries no restored atlas - nothing composited "
+                    "while that is true"); }
         compose = 0;
     } else s_saidColour = 0;
+    /* EVERY COLOUR TWIN WAS INVALIDATED, and it happened BEFORE this frame's
+       ops (`restore_step` runs ahead of the drain), so it is applied before
+       them. The GL lane clears each colour attachment whole and keeps the
+       twin; ours does the same by asking for the clear again. */
+    if (h.colRearm != s_colRearm || !s_colRearmSeen) {
+        if (s_colRearmSeen && h.colRearm != s_colRearm) {
+            int k;
+            for (k = 0; k < s_ntw; k++)
+                if (s_tw[k].colImg) s_tw[k].colNeedClear = 1;
+            plog(d, "gui: the presented palette moved - %d colour twin(s) "
+                    "invalidated, as the GL lane invalidated its own", s_ntw);
+        }
+        s_colRearm = h.colRearm;
+        s_colRearmSeen = 1;
+    }
     /* ---- THE SHARP LAYER (landing 3). `h.sharpOn` is COVERAGE, and landing 1
        could only stand down on it. Now the quads that produced that coverage
        cross with the record and are drawn here.
@@ -1450,6 +1661,14 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         if (!behind(d, "an atlas outside what this pass carries")) goto refuse;
         return 0;
     }
+    /* AND THE RESTORED ONE, IN THIS FILE'S OWN TERMS TOO. It shares `atlasDim`
+       with the indexed atlas because they share a shelf, and its rows are
+       bounded by that dim for the same reason the indexed rows are. */
+    if (h.atlasRgb && (h.atlasDim < 1 || h.atlasDim > ATLAS_MAXDIM ||
+                       h.atlasRgbRows < 1 || h.atlasRgbRows > h.atlasDim)) {
+        if (!behind(d, "a restored atlas outside what this pass carries")) goto refuse;
+        return 0;
+    }
     /* THE GLYPH ATLAS'S DIMENSIONS, BOUNDED IN THIS FILE'S OWN TERMS. They are
        compile-time constants in `tagpu_text.c` and cannot move today, which is
        exactly why the bound belongs here rather than being inherited from
@@ -1486,6 +1705,19 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         case TAGPU_GUIOP_SPRITE:
             if (o->fw < 1 || o->fh < 1) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
             if (!h.atlas) { if (!behind(d, "a sprite with no atlas")) goto refuse; return 0; }
+            /* THE GL LANE SAMPLED THE RESTORED ATLAS AND WE HAVE NONE. Drawing
+               anyway writes alpha 0 where it wrote restored colour, into a twin
+               that keeps it -- so it is a `behind` and not a `compose = 0`. It
+               is reachable for exactly one frame: the Vulkan pass asks for the
+               mirror from inside its own prepare, so the present that ARMS the
+               restore can run before anything has asked, and the read-back
+               lands on the next one. A fresh start is the cure and not a
+               formality -- a reseed re-publishes every surface's bytes, whose
+               `twin_col_drop` clears the colour on both sides. */
+            if ((o->col & TAGPU_GUICOL_ON) && !h.atlasRgb) {
+                if (!behind(d, "a restored sprite before the restored atlas crossed")) goto refuse;
+                return 0;
+            }
             ndraw++; nquad++;
             break;
         case TAGPU_GUIOP_STRING:
@@ -1536,6 +1768,16 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     /* the shared texels, and the staging they need */
     if (h.atlas && (!s_atHave || s_atSerial != h.atlasSerial || s_atDim != h.atlasDim)) {
         atUp = 1; stNeed += (VkDeviceSize)h.atlasDim * h.atlasRows;
+    }
+    /* THE RESTORED ATLAS, ON ITS OWN SERIAL. It moves only on a frame the
+       restorer painted -- which is the whole fill and no frame after it -- so
+       in a settled session this uploads nothing at all, exactly as the indexed
+       atlas beside it does. `atlasRgbRows` is the mirror's high-water mark:
+       rows past the shelf name no entry and cost only their bandwidth. */
+    if (h.atlasRgb && h.atlasDim > 0 &&
+        (!s_arHave || s_arSerial != h.atlasRgbSerial ||
+         s_arDim != h.atlasDim || s_arRows < h.atlasRgbRows)) {
+        arUp = 1; stNeed += (VkDeviceSize)h.atlasDim * h.atlasRgbRows * 4;
     }
     if (h.pal && (!s_palHave || s_palSerial != h.palSerial)) { palUp = 1; stNeed += 256 * 4; }
     /* THE MINIMAP'S TWO, WIDENED RGB8 -> RGBA8 ON THE WAY IN, so what they
@@ -1626,6 +1868,25 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         memcpy(s->stMap + stOff, h.atlas, (size_t)h.atlasDim * h.atlasRows);
         stOff += (VkDeviceSize)h.atlasDim * h.atlasRows;
     }
+    if (arUp) {
+        if (s_arDim != h.atlasDim) {
+            if (!ret_push(d, s_arImg, s_arMem, s_arView, VK_NULL_HANDLE)) goto refuse;
+            s_arImg = VK_NULL_HANDLE; s_arMem = VK_NULL_HANDLE; s_arView = VK_NULL_HANDLE;
+            s_arDim = 0; s_arRows = 0; s_arHave = 0;
+            /* THE WHOLE SQUARE, NOT `atlasRgbRows` OF IT. The mirror's rows
+               grow as the shelf does and a shorter image would have to be
+               re-made on every growth -- and every re-make retires an image
+               every in-flight composite may still be sampling. The rows above
+               the high-water mark are never uploaded and never sampled. */
+            if (!mk_image(d, h.atlasDim, h.atlasDim, VK_FORMAT_R8G8B8A8_UNORM,
+                          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                          &s_arImg, &s_arMem, &s_arView)) goto refuse;
+            s_arDim = h.atlasDim;
+        }
+        arOff = stOff;
+        memcpy(s->stMap + stOff, h.atlasRgb, (size_t)h.atlasDim * h.atlasRgbRows * 4);
+        stOff += (VkDeviceSize)h.atlasDim * h.atlasRgbRows * 4;
+    }
     if (glUp) {
         if (s_glW != h.glyphW || s_glH != h.glyphH) {
             if (!ret_push(d, s_glImg, s_glMem, s_glView, VK_NULL_HANDLE)) goto refuse;
@@ -1703,6 +1964,23 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
         s_atHave = 1; s_atSerial = h.atlasSerial;
+    }
+    if (arUp) {
+        img_barrier(cb, s_arImg,
+                    s_arHave ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                             : VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    s_arHave ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                             : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                    s_arHave ? VK_ACCESS_SHADER_READ_BIT : 0,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+        copy_rect(cb, s->stage, arOff, s_arImg, 0, 0, h.atlasDim, h.atlasRgbRows);
+        img_barrier(cb, s_arImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        s_arHave = 1; s_arSerial = h.atlasRgbSerial;
+        if (h.atlasRgbRows > s_arRows) s_arRows = h.atlasRgbRows;
     }
     if (glUp) {
         img_barrier(cb, s_glImg,
@@ -1819,7 +2097,19 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                              0, 1, &mb, 0, NULL, 0, NULL);
     }
 
+    /* ANY COLOUR TWIN THE RE-ARM INVALIDATED IS CLEARED NOW, AND NOT LAZILY AT
+       ITS NEXT OP. `tw_fresh` is the per-twin path and every draw arm calls it,
+       which is enough for a twin an op touches -- and a twin nothing touches
+       this frame is still one the composite may PRESENT, and `uColOn` would
+       then read colour the GL lane threw away three frames ago. The sweep costs
+       one early-return per twin on every other frame. */
+    {
+        int k;
+        for (k = 0; k < s_ntw; k++) tw_fresh(cb, &s_tw[k]);
+    }
+
     memset(s_setView, 0, sizeof s_setView);   /* the frame's claims start clean */
+    memset(s_setView2, 0, sizeof s_setView2);
 
     /* WHILE BEHIND, ONLY A RESET IS APPLIED. Everything before the producer's
        fresh start names twins this store never made, and applying it would
@@ -1851,12 +2141,24 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                composite is drawn on -- and `compose` is 0 on most real frames.
                [FOUND 2026-09-16, the re-review; pre-existing since landing 1.] */
             if (!t) { sdWhy = "an op names a surface this store never seeded"; goto standdown; }
+            /* CLASSIC++: THE OP SAYS THE GL LANE GAVE THIS TWIN COLOUR, so this
+               one gets it too, and the open render pass closes because the
+               framebuffer this twin draws into is about to change. A twin that
+               HAS colour never loses it short of being dropped, which is the GL
+               lane's lifetime exactly (`twin_colour` only ever creates). */
+            if ((o->col & TAGPU_GUICOL_DST) && !t->colImg) {
+                if (rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
+                if (!tw_colour(d, t)) {
+                    sdWhy = "the GL lane gave a twin colour and this one could not";
+                    goto standdown;
+                }
+            }
             /* a clear and a layout change are both illegal inside a render
                pass instance, so the open one closes first. Unreachable while
                `tw_make` is the only creator and clears on the next line — but
                "unreachable" is an enumeration of today's call sites, and this
                is the bound. */
-            if (t->needClear && rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
+            if ((t->needClear || t->colNeedClear) && rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
             tw_fresh(cb, t);
             if (o->kind == TAGPU_GUIOP_COPY) {
                 src = tw_find(o->src);
@@ -1876,7 +2178,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     sdWhy = "a copy names a source twin this store never made";
                     goto standdown;
                 }
-                if (src->needClear && rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
+                if ((src->needClear || src->colNeedClear) && rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
                 tw_fresh(cb, src);
                 if (src != cur && rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
                 if (rpOpen && cur != t) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
@@ -1886,7 +2188,10 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             if (!rpOpen) {
                 VkRenderPassBeginInfo rb = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
                 tw_to(cb, t, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-                rb.renderPass = s_twRp; rb.framebuffer = t->fb;
+                /* one attachment or two, which is `glDrawBuffers(1)` against
+                   `glDrawBuffers(2)` on the GL lane's one FBO */
+                rb.renderPass = t->colImg ? s_twRp2 : s_twRp;
+                rb.framebuffer = t->colImg ? t->fb2 : t->fb;
                 rb.renderArea.extent.width = (uint32_t)t->w;
                 rb.renderArea.extent.height = (uint32_t)t->h;
                 vkCmdBeginRenderPass(cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
@@ -1901,12 +2206,20 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             else                               set_scissor(cb, o->l, o->t, bw, bh, t->w, t->h);
 
             if (o->kind == TAGPU_GUIOP_CLEAR) {
-                /* the GL lane's scissored glClear to coverage 0 */
-                VkClearAttachment ca;
+                /* THE GL LANE'S SCISSORED glClear TO COVERAGE 0 -- AND IT
+                   CLEARS BOTH ATTACHMENTS ON A COLOUR TWIN, because
+                   `glClear(GL_COLOR_BUFFER_BIT)` clears every buffer
+                   `glDrawBuffers` named and `twin_colour` left that at two.
+                   Clearing only the index here would leave restored colour
+                   standing under a box the engine erased. */
+                VkClearAttachment ca[2];
                 VkClearRect cr;
-                memset(&ca, 0, sizeof ca); memset(&cr, 0, sizeof cr);
-                ca.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                ca.colorAttachment = 0;
+                int nca = t->colImg ? 2 : 1;
+                memset(ca, 0, sizeof ca); memset(&cr, 0, sizeof cr);
+                ca[0].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                ca[0].colorAttachment = 0;
+                ca[1].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                ca[1].colorAttachment = 1;
                 cr.rect.offset.x = o->l; cr.rect.offset.y = o->t;
                 cr.rect.extent.width = (uint32_t)bw;
                 cr.rect.extent.height = (uint32_t)bh;
@@ -1918,7 +2231,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                 if (cr.rect.offset.y + (int)cr.rect.extent.height > t->h)
                     cr.rect.extent.height = (uint32_t)(t->h - cr.rect.offset.y);
                 if (cr.rect.extent.width && cr.rect.extent.height)
-                    vkCmdClearAttachments(cb, 1, &ca, 1, &cr);
+                    vkCmdClearAttachments(cb, (uint32_t)nca, ca, 1, &cr);
                 continue;
             }
 
@@ -1946,13 +2259,20 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     int g, penx = o->sl, top = o->st;
                     int* fq3 = fq;
                     fq3[0] = (int)o->fg; fq3[1] = (int)o->bg; fq3[2] = (int)o->tr;
-                    if (!set_claim(d, s, s_glView, QVS_SZ, TWF_SZ, &si_)) {
+                    if (!set_claim(d, s, s_glView, VK_NULL_HANDLE, QVS_SZ, TWF_SZ, &si_)) {
                         sdWhy = "this frame claimed more distinct images than there are sets";
                         goto standdown; }
                     ds = s->sets[si_];
                     dyn[0] = (uint32_t)((VkDeviceSize)drawn * uStride);
                     dyn[1] = (uint32_t)((VkDeviceSize)drawn * fStride);
-                    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeStr);
+                    /* STR_FS WRITES `oCol = vec4(0.0)`, so on a colour twin a
+                       string ERASES the restored colour under every glyph it
+                       stamps and leaves it standing between them -- which is
+                       what the GL comment calls the whole difference from
+                       publishing the box's bytes. The two-attachment pipeline
+                       is how that write lands. */
+                    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                      t->colImg ? s_pipeStr2 : s_pipeStr);
                     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                             s_ploTwin, 0, 1, &ds, 2, dyn);
                     for (g = 0; g < (int)o->nglyph; g++) {
@@ -1972,20 +2292,47 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     drawn++;
                     continue;
                 }
+                /* `uRestored` / `uSrcHasCol` ARE THE GL LANE'S OWN, carried
+                   as `TAGPU_GUICOL_ON`. Deriving them here would be asking
+                   `s_colValid && s_atlas.rgb` a second time, of a module that
+                   settled it before the drain -- and the whole hand-over exists
+                   because a second derivation is a second thing that can drift.
+                   A frame whose ops say ON and whose restored atlas never
+                   arrived was refused above; this is belt to that brace, and it
+                   is the difference between drawing indexed and sampling the
+                   dummy image as though it were art. */
                 if (o->kind == TAGPU_GUIOP_SPRITE) {
-                    fq[0] = (int)o->ck; fq[1] = 0;      /* uCK, uRestored      */
+                    int on = (o->col & TAGPU_GUICOL_ON) != 0;
+                    /* the image behind the flag, checked rather than assumed:
+                       drawing with `uRestored` and the DUMMY at binding 41
+                       would sample a 1x1 image as though it were the atlas */
+                    if (on && !s_arHave) {
+                        sdWhy = "a restored sprite and no restored atlas uploaded";
+                        goto standdown; }
+                    fq[0] = (int)o->ck; fq[1] = on;     /* uCK, uRestored      */
                     quadv(qv, (float)o->sl, (float)o->st,
                           (float)(o->sl + o->fw), (float)(o->st + o->fh),
                           o->u0, o->v0, o->u1, o->v1);
-                    if (!set_claim(d, s, s_atView, QVS_SZ, TWF_SZ, &si_)) {
+                    if (!set_claim(d, s, s_atView, on ? s_arView : VK_NULL_HANDLE,
+                                   QVS_SZ, TWF_SZ, &si_)) {
                         sdWhy = "this frame claimed more distinct images than there are sets";
                         goto standdown; }
                     ds = s->sets[si_];
                 } else {
-                    fq[0] = o->l - o->sl; fq[1] = o->t - o->st; fq[2] = 0;
+                    int on = (o->col & TAGPU_GUICOL_ON) != 0;
+                    /* THE SOURCE HAD COLOUR OVER THERE AND NOT HERE, which is
+                       our store behind theirs by at least the op that gave it
+                       one. Silently drawing `uSrcHasCol = 0` would propagate
+                       that gap into the destination and every copy after it. */
+                    if (on && !src->colImg) {
+                        sdWhy = "a copy whose source twin has colour in the GL lane and not here";
+                        goto standdown; }
+                    fq[0] = o->l - o->sl; fq[1] = o->t - o->st;
+                    fq[2] = on;                         /* uSrcHasCol          */
                     quadv(qv, (float)o->l, (float)o->t,
                           (float)(o->r + 1), (float)(o->b + 1), 0, 0, 0, 0);
-                    if (!set_claim(d, s, src->view, QVS_SZ, TWF_SZ, &si_)) {
+                    if (!set_claim(d, s, src->view, on ? src->colView : VK_NULL_HANDLE,
+                                   QVS_SZ, TWF_SZ, &si_)) {
                     sdWhy = "this frame claimed more distinct images than there are sets";
                     goto standdown; }
                     ds = s->sets[si_];
@@ -1994,7 +2341,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                 dyn[0] = (uint32_t)((VkDeviceSize)drawn * uStride);
                 dyn[1] = (uint32_t)((VkDeviceSize)drawn * fStride);
                 vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                  o->kind == TAGPU_GUIOP_SPRITE ? s_pipeSpr : s_pipeCpy);
+                                  o->kind == TAGPU_GUIOP_SPRITE
+                                    ? (t->colImg ? s_pipeSpr2 : s_pipeSpr)
+                                    : (t->colImg ? s_pipeCpy2 : s_pipeCpy));
                 vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         s_ploTwin, 0, 1, &ds, 2, dyn);
                 vkCmdBindVertexBuffers(cb, 0, 1, &s->vb, &vbOff);
@@ -2047,6 +2396,12 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             tw_to(cb, t, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
             copy_rect(cb, s->stage, stOff, t->img, ux, uy, uw, uh);
             stOff += (VkDeviceSize)n * 2;
+            /* AND THE COLOUR UNDER THE BOX GOES WITH IT -- `twin_upload` ends
+               in `twin_col_drop` and this is the same statement: bytes the
+               engine published are indexed art by definition, so restored
+               colour left standing under them would show through a panel the
+               engine has just repainted. */
+            tw_col_drop(cb, t, ux, uy, uw, uh);
             break; }
         default: break;
         }
@@ -2080,6 +2435,14 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     }
     pres = tw_find(h.presented);
     if (!pres || pres->w != h.surfW || pres->h != h.surfH) goto standdown;
+    /* `uColOn` IS THE GL LANE'S AND THE IMAGE UNDER IT HAS TO BE OURS. The two
+       agree by construction -- `TAGPU_GUICOL_DST` is what made both -- so this
+       is the belt to that brace, and the alternative to it is compositing
+       indexed art through a branch that says it is restored. */
+    if (h.colourTwins && !pres->colImg) {
+        sdWhy = "the presented twin has colour in the GL lane and none here";
+        goto standdown;
+    }
 
     /* ---- THE SHARP LAYER'S OWN PASS, BELOW THE COMPOSITE GATE, because the
        only thing that ever samples it is the composite: recording it above
@@ -2209,7 +2572,13 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         unsigned char* b = s->lbMap;
         int* ip; float* fp;
         memset(b, 0, LAY_SZ);
-        ip = (int*)(b + 0);   *ip = 0;                       /* uColOn        */
+        /* `uColOn` AS `draw_layer` SET IT (landing 4): the presented twin has a
+           colour attachment AND the palette-validity rule says it may be read
+           this frame. `&& pres->colImg` is not redundant -- the GL lane's flag
+           is about ITS twin, and a frame where ours has none would sample the
+           dummy image through a live branch. The two agree by construction and
+           this is what says so out loud. */
+        ip = (int*)(b + 0);   *ip = (h.colourTwins && pres->colImg) ? 1 : 0;
         ip = (int*)(b + 4);   *ip = shOn;                    /* uSharpOn      */
         ip = (int*)(b + 8);   ip[0] = h.surfW; ip[1] = h.surfH;      /* uSize */
         ip = (int*)(b + 16);  ip[0] = shOn ? h.sharpW : 1;
@@ -2241,7 +2610,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         ii[0].imageView = pres->view;                /* 40 uTwin              */
         ii[1].imageView = s_palView;                 /* 41 uPal               */
         ii[2].imageView = s_engView;                 /* 42 uSurf              */
-        ii[3].imageView = s_dumView;                 /* 43 uTwinCol (unused)  */
+        ii[3].imageView = pres->colImg ? pres->colView : s_dumView;   /* 43 uTwinCol */
         ii[4].imageView = shOn ? s->shView : s_dumView;   /* 44 uSharp        */
         for (j = 0; j < 5; j++) {
             ii[j].sampler = s_samp;
@@ -2381,7 +2750,9 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     /* behind the seam's vkDeviceWaitIdle: nothing of ours is in a queue, so
        the retire is emptied outright rather than one slot at a time */
     while (s_ntw) { TWIN* t = &s_tw[0];
+                    if (t->fb2) vkDestroyFramebuffer(d->dev, t->fb2, NULL);
                     if (t->fb) vkDestroyFramebuffer(d->dev, t->fb, NULL);
+                    kill_image(d, &t->colImg, &t->colMem, &t->colView);
                     kill_image(d, &t->img, &t->mem, &t->view);
                     *t = s_tw[--s_ntw]; memset(&s_tw[s_ntw], 0, sizeof s_tw[s_ntw]); }
     ret_drain_idle(d);
@@ -2393,6 +2764,7 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
         memset(s_slot[i].sets, 0, sizeof s_slot[i].sets);  /* back with the pool */
     }
     kill_image(d, &s_atImg,  &s_atMem,  &s_atView);
+    kill_image(d, &s_arImg,  &s_arMem,  &s_arView);
     kill_image(d, &s_palImg, &s_palMem, &s_palView);
     kill_image(d, &s_engImg, &s_engMem, &s_engView);
     kill_image(d, &s_glImg,  &s_glMem,  &s_glView);
@@ -2400,6 +2772,8 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     kill_image(d, &s_mmEngImg, &s_mmEngMem, &s_mmEngView);
     kill_image(d, &s_dumImg, &s_dumMem, &s_dumView);
     s_atDim = 0; s_atHave = 0; s_atSerial = 0;
+    s_arDim = 0; s_arRows = 0; s_arHave = 0; s_arSerial = 0;
+    s_colRearm = 0; s_colRearmSeen = 0;
     s_palHave = 0; s_palSerial = 0;
     s_engW = s_engH = 0; s_engHave = 0; s_dumReady = 0;
     s_glW = s_glH = 0; s_glHave = 0; s_glSerial = 0;
@@ -2409,6 +2783,9 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     if (s_pipeSpr) { vkDestroyPipeline(d->dev, s_pipeSpr, NULL); s_pipeSpr = VK_NULL_HANDLE; }
     if (s_pipeCpy) { vkDestroyPipeline(d->dev, s_pipeCpy, NULL); s_pipeCpy = VK_NULL_HANDLE; }
     if (s_pipeStr) { vkDestroyPipeline(d->dev, s_pipeStr, NULL); s_pipeStr = VK_NULL_HANDLE; }
+    if (s_pipeSpr2) { vkDestroyPipeline(d->dev, s_pipeSpr2, NULL); s_pipeSpr2 = VK_NULL_HANDLE; }
+    if (s_pipeCpy2) { vkDestroyPipeline(d->dev, s_pipeCpy2, NULL); s_pipeCpy2 = VK_NULL_HANDLE; }
+    if (s_pipeStr2) { vkDestroyPipeline(d->dev, s_pipeStr2, NULL); s_pipeStr2 = VK_NULL_HANDLE; }
     if (s_pipeCurs) { vkDestroyPipeline(d->dev, s_pipeCurs, NULL); s_pipeCurs = VK_NULL_HANDLE; }
     if (s_pipeMM)   { vkDestroyPipeline(d->dev, s_pipeMM,   NULL); s_pipeMM   = VK_NULL_HANDLE; }
     if (s_pipeFlat) { vkDestroyPipeline(d->dev, s_pipeFlat, NULL); s_pipeFlat = VK_NULL_HANDLE; }
@@ -2422,9 +2799,11 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     if (s_dslTwin) { vkDestroyDescriptorSetLayout(d->dev, s_dslTwin, NULL); s_dslTwin = VK_NULL_HANDLE; }
     if (s_dslLay)  { vkDestroyDescriptorSetLayout(d->dev, s_dslLay, NULL);  s_dslLay = VK_NULL_HANDLE; }
     if (s_twRp) { vkDestroyRenderPass(d->dev, s_twRp, NULL); s_twRp = VK_NULL_HANDLE; }
+    if (s_twRp2) { vkDestroyRenderPass(d->dev, s_twRp2, NULL); s_twRp2 = VK_NULL_HANDLE; }
     if (s_samp) { vkDestroySampler(d->dev, s_samp, NULL); s_samp = VK_NULL_HANDLE; }
     if (s_sampMin) { vkDestroySampler(d->dev, s_sampMin, NULL); s_sampMin = VK_NULL_HANDLE; }
     memset(s_setView, 0, sizeof s_setView);
+    memset(s_setView2, 0, sizeof s_setView2);
     /* ST_UNBUILT and not ST_REFUSED: a pass brought down by a mode change or a
        cleared lever must be able to come back. The owed teardown is the one
        exception. */
