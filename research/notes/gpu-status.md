@@ -5097,11 +5097,33 @@ and made it act on the transition only. Landing 2's review found the same storm 
 door: a RESET **clears** `s_behind`, and a condition that is structural rather than transient fires
 again inside the very frame that answered it — so the pass asks, is answered, asks again, at the
 frame rate, and the thing being reseeded is **the GL lane's own twin store**. The asks are capped
-now, and the cap counts **fruitless** asks: a run of frames that actually composited is the evidence
-the last fresh start worked and gives the budget back, so a map change still recovers while a
-structural condition — which never earns that run, because it stands the composite down every frame
-— goes quiet after eight tries and never touches the producer again. A capability gap costs the
-oracle nothing; that is the whole point of telling it apart from a sync gap.
+now, and the cap counts **fruitless** asks: a run of frames that got through **the replay** is the
+evidence the last fresh start worked and gives the budget back, so a map change still recovers while
+a structural condition goes quiet after eight tries and never touches the producer again. A
+capability gap costs the oracle nothing; that is the point of telling it apart from a sync gap.
+
+**"A run of frames that COMPOSITED" is what that said first, and the re-review disproved it out of
+this very page.** `compose` is 0 whenever the sharp layer has coverage — *"every frame with a cursor
+on screen"*, as "Not covered" below already stated — so the refund sat on a branch an ordinary
+session never reaches, every legitimate transition counted against the cap, and four level loads
+muted the pass for good. Being **level** is a property of the replay, not of the composite. The
+evidence against the claim was two screens down in the same section.
+
+**AND A LOST FRAME NOW RE-ASKS.** `g_guiq.reseed` is **one-shot**: the producer clears it the
+instant it publishes the RESET. If the present carrying that RESET is itself abandoned — and it is
+the likeliest one to be, being every surface seeded at once and so the largest arena there is — the
+answer never arrives, `s_behind` is already 1 so nothing asks again, and the replay skips every op
+for the rest of the session waiting for a RESET that will never be sent. Publishing the lost frame
+(above) turned *silently* behind into *permanently* behind with one line in the log. A lost frame
+therefore invalidates an outstanding request. That is not "the window is small": it is a message
+provably not delivered, re-sent.
+
+**Three `continue`s were doing the same thing quietly, since landing 1.** An op naming a surface
+this store never seeded, and a pixel op outside its own twin, were skipped — the GL lane applies
+them and we never do. The composite's own `tw_find(h.presented)` catches that for the **presented**
+surface only, and only on a frame it draws. They are the behind state now, and the fixture shows
+they were firing the whole time: the two events a shell→game transition produces used to report
+*"the presented surface has no twin here"* and now name their actual cause.
 
 #### The string op is the twin store's, not the sharp layer's (landing 2)
 
@@ -5237,14 +5259,15 @@ exactly.
 absence of `nostring` is the whole point of the table. Same binary discipline, same lever, same
 fixture:
 
-Re-taken on the binary the **landing review's** fixes produced, every figure:
+Re-taken on the binary the **re-review's** fixes produced, every figure:
 
 | | |
 |---|---|
-| `selbox-slope` in game, 1024×768 | **0 of 786 432**, `str=38/102 miss=0 reseed=0 repack=0 glyphs=27 fonts=1` |
-| `selbox-slope` in game, 1920×1080 | **0 of 2 073 600**, `str=7/30`, the same glyph cache |
+| `selbox-slope` in game, 1024×768 | **0 of 786 432**, `str=12/48 miss=0 reseed=0 repack=0 glyphs=27 fonts=1`, `mirlost=0` |
+| `selbox-slope` in game, 1920×1080 | **0 of 2 073 600**, `str=6/25`, `mirlost=0` |
 | the capability refusal | **gone** — no stand-down line at all, where landing 1 fired one on every in-game frame |
-| the behind state | fired twice, both `the presented surface has no twin here` at the shell→game transition, both recovered |
+| the behind state | fired twice, both at the shell→game transition, both recovered, no mute |
+| what those two events were | `an op names a surface this store never seeded` and the pixel-op form of it — the holes the re-review found, which used to be reported as the presented surface having no twin |
 | the states the fixes added | **none fired**: no lost record, no ask cap reached, no quad bound, no dimension refusal |
 
 So TA's own glyphs — rasterised by the GL lane into its own atlas, stamped from the cells that lane
@@ -5259,7 +5282,7 @@ Both halves of one A/B are the same frame by construction, so a 0 stands whateve
 says the strings were actually drawn is the producer's own counter, `str=38/102` with
 `glyphs=27 fonts=1` — 38 string ops, 102 glyph quads. Read the counter, not the ink.
 
-**That last row is the honest one and it is the shape of this whole pass.** The glyph serial, the
+**The last row is the honest one and it is the shape of this whole pass.** The glyph serial, the
 repack loss, the abandoned-frame publish, the ask cap, the quad bound and the `SET_MAX` size are all
 **correct by construction and exercised by nothing here** — the fixture's glyph set is complete
 before the first upload, its atlas never repacks, its store holds two twins, and its worst frame is
@@ -5267,10 +5290,16 @@ before the first upload, its atlas never repacks, its store holds two twins, and
 
 **Every defect this pass has had was invisible to every measurement taken of it** — the
 use-after-free, the five diverging paths, the reseed storm, the `SET_MAX` size, the glyph serial,
-the repack, the withheld record — and every one was found by **reading**: two reviewers, a
-re-review, and two passes of reading my own diff. On a pass whose output is a pixel count that
-reads 0, that is what to expect rather than the exception, and it is the reason this landing was
-reviewed at `high` with two reviewers for the third time rather than trusted.
+the repack, the withheld record, the one-shot reseed a lost frame could swallow, and three
+`continue`s that had been diverging quietly since landing 1 — and every one was found by
+**reading**: five reviewers across three rounds, and two passes of reading my own diff. On a pass
+whose output is a pixel count that reads 0, that is what to expect rather than the exception.
+
+**Three of those were introduced by a FIX for one of the others**, which is the real lesson of this
+landing and the reason each round was re-reviewed rather than trusted: clearing `s_setView` in
+`tw_drop` (worse than the hazard it closed), `behind()` reseeding the oracle every frame, and the
+ask cap whose refund an ordinary session could never reach. Twice the evidence against my own fix
+was already written down on this page.
 
 **One PLAUSIBLE finding was kept rather than fixed.** GL's `uSurf` is POT-padded by the fork
 (1024×512 for a 640×480 mode) while `s_engImg` is exactly the mode rect, so a `texelFetch` outside
