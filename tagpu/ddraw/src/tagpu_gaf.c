@@ -227,10 +227,23 @@ const char* tagpu_gaf_seq_name(const char* seq)
 
 int tagpu_gaf_decode(const unsigned char* g, int w, int h, unsigned char* out)
 {
-    unsigned char ck = g[TAGPU_GF_CK], comp = g[TAGPU_GF_COMP];
-    const unsigned char* px = *(const unsigned char* const*)(g + TAGPU_GF_PIX);
+    unsigned char ck, comp;
+    const unsigned char* px;
     const unsigned char* p;
     int y;
+    /* THE HEADER IS BOUNDED BEFORE IT IS READ, and it was not: this function
+       took `ck`, `comp` and the pixel POINTER out of `g` on its first three
+       lines with only `px` checked afterwards, which is the same one-line
+       defect `frame_key` had and which cost a crash to find. Its own header
+       promises "0 if unreadable", so the check belongs here rather than in each
+       caller. No caller reaches it unsanitised today -- the UI publisher is
+       behind `frame_key`, the menu and the order overlay come through
+       `tagpu_gaf_seq_frame` -- so this is a BOUND that closes the contract, not
+       the lifetime argument, which stays the caller's.
+       [FOUND 2026-09-16, the landing-5 review.] */
+    if (!tagpu_gaf_frame_sane(g)) return 0;
+    ck = g[TAGPU_GF_CK]; comp = g[TAGPU_GF_COMP];
+    px = *(const unsigned char* const*)(g + TAGPU_GF_PIX);
     if (!ptr_ok(px)) return 0;
     if (comp == 0) {
         if (IsBadReadPtr(px, (SIZE_T)w * h)) return 0;

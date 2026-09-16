@@ -48,6 +48,7 @@
 #include "tagpu_gaf.h"
 #include "tagpu_terrown.h"
 #include "tagpu_reclaim.h"
+#include "tagpu_packet_pub.h"
 
 #define TA_MAINPP     0x00511DE8u
 #define OFF_GUI_TOP   0x531           /* GUIInfo.TheActive_GUIMEM               */
@@ -91,12 +92,6 @@ static int      s_key = KEY_DEFAULT;
 static int      s_probeX = -1, s_probeY = -1;   /* trace: ops touching this pixel */
 static DWORD    s_gameTid = 0;        /* the thread the flip runs on          */
 static volatile unsigned s_flips = 0, s_opsTotal = 0, s_opsDropped = 0;
-/* GAF ops refused because the level they were observed in has ended, or is
-   ending right now -- published as their box's bytes instead, so the picture is
-   unchanged and only the sprite's identity is lost. Counted rather than silent:
-   a figure that climbs during PLAY would say the ordering is wrong, where a few
-   per level change is it working. */
-static unsigned s_gafStale = 0;
 static volatile unsigned s_unexplTotal = 0, s_changedTotal = 0;
 static unsigned s_lastLog = 0;
 static unsigned s_winChanged = 0, s_winUnexpl = 0, s_winCensus = 0;   /* since the last line */
@@ -356,7 +351,7 @@ typedef struct OP {
        teardown and resolved after one names memory that is gone. Stamped here,
        at observe time, for the same reason the string's bytes are copied here
        rather than read at publish: what the pointer meant is a property of WHEN
-       it was taken. `pub_ops` refuses a stale one. */
+       it was taken. `publish` refuses a stale one. */
     unsigned lgen;
 } OP;
 /* ---- THE UI FONTS, AS IDENTITIES AND BITS (landing 4c) -------------------
@@ -562,7 +557,7 @@ static void op_add(int kind, SURF* s, int l, int t, int r, int b)
     memset(o, 0, sizeof *o);
     o->base = s->base; o->l = (short)l; o->t = (short)t; o->r = (short)r; o->b = (short)b;
     o->kind = (unsigned char)kind;
-    o->lgen = tagpu_reclaim_level_gen();
+    o->lgen = tagpu_packet_pub_level_gen();
     s_lastOp = o;
 }
 
@@ -688,7 +683,7 @@ static const void* frame_key(const unsigned char* fr, const void* pix, int w, in
        tagpu_feat.c, tagpu_render3do.c, tagpu_gui_surf.c -- puts the header
        through `tagpu_gaf_frame_sane` first. It is a BOUND on a value and it is
        NOT the reason this read is safe: that is the caller's ordering against
-       the level teardown (see `pub_ops`). This is the parity the module already
+       the level teardown (see `publish`). This is the parity the module already
        had everywhere else, kept so a header that is merely garbage rather than
        unmapped is refused rather than hashed. */
     if (!tagpu_gaf_frame_sane(fr)) return NULL;
@@ -919,11 +914,15 @@ static void publish(unsigned flipSurf)
         if (!s) continue;
         if (s_probeX >= 0 && s->base == flipSurf && op->l <= s_probeX && s_probeX <= op->r && op->t <= s_probeY && s_probeY <= op->b) {
             char b[300];
-            const unsigned char* fr = (const unsigned char*)op->frame;
+            /* THE SAME READ THE GATE BELOW EXISTS TO STOP, and it sat ABOVE
+               it behind `ptr_ok` alone. Debug-only (`s_probeX >= 0`), but a
+               probe that crashes on the path being probed is worse than no
+               probe. [FOUND 2026-09-16, the landing-5 review.] */
+            const unsigned char* fr = tagpu_gaf_frame_sane((const void*)op->frame);
             _snprintf(b, sizeof b, "gui probe: %s box=(%d,%d)-(%d,%d) at (%d,%d) frame=%08X %ux%u ck=%u comp=%u sub=%u/%u src=%08X (%d,%d)",
                       OP_NAME[op->kind], op->l, op->t, op->r, op->b, op->dx, op->dy, (unsigned)(size_t)op->frame,
                       (unsigned)op->fw, (unsigned)op->fh, (unsigned)op->ck,
-                      ptr_ok(fr) ? fr[0x09] : 0u, ptr_ok(fr) ? fr[0x0A] : 0u, ptr_ok(fr) ? fr[0x0B] : 0u,
+                      fr ? fr[0x09] : 0u, fr ? fr[0x0A] : 0u, fr ? fr[0x0B] : 0u,
                       op->src, op->sl, op->st);
             glog(b);
         }
@@ -942,11 +941,41 @@ static void publish(unsigned flipSurf)
                thread, so the question is program order on one thread and not a
                race: refuse while a teardown is in flight, and refuse an op
                observed in a level that has since ended.
-               NEITHER TEST ALONE IS ENOUGH and tagpu_reclaim.h has the picture:
-               the generation moves AFTER the frees, so between the free and the
-               bump a pre-teardown op still carries the current generation; the
-               flag is raised BEFORE the frees and lowered AFTER the bump, so
-               the two windows overlap with no gap between them.
+               THE GENERATION IS WHAT DOES THE WORK AT THIS SITE, and the
+               first version of this comment drew a diagram that is not the
+               window this site can see. `publish` runs only from `before_flip`,
+               on the game thread, and `s_teardown` is non-zero only while that
+               same thread is inside `0x491B60` -- which does not flip. So the
+               CLOSING test is unreachable from here today. The case that is
+               real is the opposite order and it is why the generation is
+               needed: at `0x460635` the engine calls the teardown and pops the
+               screen AFTERWARDS, with the flag already down, and those ops are
+               refused because their generation is stale.
+               The closing test is kept as the cheap half of a pair whose other
+               half cannot be argued from this call site alone -- a flip reached
+               from inside a teardown would be refused by it -- and it is named
+               here as belt rather than as the argument.
+               [The diagram that stood here was FOUND wrong 2026-09-16 by the
+               landing-5 review, which traced all six `call 0x491b60` sites.]
+
+               THE GENERATION IS `tagpu_packet_pub`'s AND NOT `tagpu_reclaim`'s,
+               and that is the whole of the first version's mistake. Reclaim's
+               moves only when reclaim is ARMED, and `tagpu_reclaim.off` -- one
+               file -- leaves it a constant 0 while the engine frees the GAF
+               banks exactly as before, because the cascade is the ENGINE's and
+               reclaim only defers Object3do and model templates. So the gate was
+               inert in precisely the configuration that needs it, with nothing
+               saying so. `tagpu_packet_pub` already ruled on this class: it
+               installs its OWN observer on the teardown `0x491B60` when reclaim
+               is not armed, for the stated reason that the level-end packet must
+               not depend on another module being armed, and its generation moves
+               on either route. Its header says this is what a game-thread
+               observer latching per-level state should stamp with.
+               `level_tracked` IS THE FIRST TEST: when NO provider exists the
+               generation never moves at all, and no ordering being available is
+               a reason to refuse the read rather than to take it.
+               [FOUND 2026-09-16 -- BOTH landing-5 reviewers, independently, and
+               the second one found the counter the tree already had.]
 
                The fallback is the op's own box out of the SURFACE -- our
                mirror of what the engine drew, not the asset it drew from -- so
@@ -958,9 +987,10 @@ static void publish(unsigned flipSurf)
                cascade had just freed (279 blocks), and the process then spins.
                Reproduced with the Vulkan lane OFF, so it is the GL publisher's
                own and has nothing to do with the port.] */
-            if (tagpu_reclaim_level_closing() ||
-                op->lgen != tagpu_reclaim_level_gen()) {
-                s_gafStale++;
+            if (!tagpu_packet_pub_level_tracked() ||
+                tagpu_reclaim_level_closing() ||
+                op->lgen != tagpu_packet_pub_level_gen()) {
+                g_guiq.gafstale++;
                 goto as_pixels;
             }
             key = frame_key((const unsigned char*)op->frame, op->pix, op->fw, op->fh);
@@ -1302,12 +1332,11 @@ static int __cdecl before_flip(void* entry_esp)
             /* the numbers are the WINDOW's — every census since the previous line */
             _snprintf(b, sizeof b,
                 "gui census: %s %s %08X %dx%d flip=%u n=%u win=%u changed=%u unexplained=%u box=(%d,%d)-(%d,%d) ops=%d[%s] "
-                "builds=%u/%X nosurf=%u dropped=%u gafstale=%u lgen=%u",
+                "builds=%u/%X nosurf=%u dropped=%u",
                 isGame ? "GAME" : "shell", top_screen_name(), s->base, s->w, s->h, s_flips, s_censuses, s_winCensus,
                 s_winChanged, s_winUnexpl,
                 s_winUnexpl ? s_winL : 0, s_winUnexpl ? s_winT : 0, s_winUnexpl ? s_winR : 0, s_winUnexpl ? s_winB : 0,
-                s_nops, ops, s_builds, s_buildFlags, nullc, s_opsDropped,
-                s_gafStale, tagpu_reclaim_level_gen());
+                s_nops, ops, s_builds, s_buildFlags, nullc, s_opsDropped);
             glog(b);
             s_winChanged = s_winUnexpl = s_winCensus = 0;
             s_winL = s_winT = 0x7FFF; s_winR = s_winB = -1;

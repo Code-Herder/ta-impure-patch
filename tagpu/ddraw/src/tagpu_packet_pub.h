@@ -98,4 +98,10 @@ unsigned tagpu_packet_pub_draw_seq(void);
    per-level state stamps it beside the draw counter, so the latch cannot
    outlive its level. */
 unsigned tagpu_packet_pub_level_gen(void);
+/* GAME THREAD. 1 when a level-end provider exists at all -- reclaim's post hook
+   or this module's own observer on the teardown 0x491B60. When it is 0 the
+   generation above NEVER MOVES, so a consumer keyed on it would be inert
+   exactly where it is needed rather than merely unarmed. A caller using the
+   generation as a SAFETY argument must check this and refuse when it is 0. */
+int tagpu_packet_pub_level_tracked(void);
 #endif

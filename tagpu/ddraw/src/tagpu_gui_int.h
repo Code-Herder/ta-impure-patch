@@ -82,6 +82,14 @@ typedef struct TAGPU_GUIQ {
     volatile unsigned why;                   /* the last reason `reseed` (or an overflow) was raised: TAGPU_GUI_WHY_* */
     volatile unsigned overflows;             /* the producer ran out of queue or arena  */
     volatile unsigned resets;                /* fresh starts published (re-arm, GL, overflow, a lost frame) */
+    /* GAF ops the publisher refused to RESOLVE because the level they were
+       observed in has ended, is ending, or is not tracked at all -- published as
+       their box's bytes instead. It lives here, beside the other producer
+       counters, because this is what the render half's heartbeat prints: the
+       first version put it in a `gui census:` line that an ordinary run never
+       emits, so the one figure that says the ordering is behaving was invisible.
+       [FOUND 2026-09-16, the landing-5 review.] */
+    volatile unsigned gafstale;
     volatile unsigned stalls;                /* episodes where the consumer took nothing for TAGPU_GUI_STALL_MS
                                                 while work was queued (a display-mode switch kills the render
                                                 thread): the producer drops its batches until it moves again */

@@ -105,6 +105,16 @@ static volatile LONG s_levelGen;           /* game thread bumps, once per teardo
 static void (__stdcall *s_real_free)(void*);   /* trampoline into the real body           */
 static void (__cdecl   *s_mem_free)(void*) = (void (__cdecl*)(void*))MEMFREE_VA;
 static int   s_installed;
+/* THE TEARDOWN WRAP IS IN, WHICH IS NOT THE SAME THING AS `s_installed`.
+   `tagpu_reclaim_init` lands the wrap FIRST and says so ("inert on its own"),
+   and only sets `s_installed` after the FREE detour lands too -- so there is a
+   real configuration where `s_teardown` and `s_levelGen` are being maintained
+   correctly and `s_installed` is 0. A consumer that only wants to know WHEN a
+   level is ending, rather than whether frees are deferred, must key on this.
+   [FOUND 2026-09-16, the landing-5 review: keying the UI publisher's ordering
+   on `s_installed` made it inert in exactly that case, and the engine frees the
+   GAF banks whether or not our detour is in.] */
+static int   s_levelTracked;
 static int   s_tmplArmed;                  /* the two template redirects are in       */
 /* Render thread only: the teardown flag as pass_begin found it, held for the
    life of that pass so the driver's gate cannot disagree with the counters
@@ -420,7 +430,8 @@ unsigned tagpu_reclaim_level_gen(void) { return (unsigned)s_levelGen; }
 
 /* the raw game-thread flag, not the render thread's latched copy: see the
    header for why this and the generation are both needed */
-int tagpu_reclaim_level_closing(void) { return s_installed && s_teardown != 0; }
+int tagpu_reclaim_level_closing(void) { return s_levelTracked && s_teardown != 0; }
+int tagpu_reclaim_level_tracked(void) { return s_levelTracked; }
 
 int tagpu_reclaim_armed(void) { return s_installed; }
 
@@ -542,6 +553,7 @@ void tagpu_reclaim_init(void)
        detour, which is what changes behaviour. s_defer stays 0 until both
        are in, so an early call through the stub takes the real path. */
     if (!tagpu_detour_land(TEARDOWN_VA, st, 5)) { rlog("reclaim: NOT armed — could not write 0x491B60"); return; }
+    s_levelTracked = 1;          /* the level signal is live from here, alone */
     if (!tagpu_detour_land(FREEOBJ_VA, sf, 5))  { rlog("reclaim: NOT armed — could not write 0x45AAA0 (teardown wrap is in, inert)"); return; }
     s_installed = 1;
     s_defer = 1;

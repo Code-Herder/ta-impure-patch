@@ -1883,6 +1883,7 @@ static void* __cdecl after_loader(unsigned int* regs)
 
 unsigned tagpu_packet_pub_draw_seq(void)  { return s_cDraws; }
 unsigned tagpu_packet_pub_level_gen(void) { return s_levelGen; }
+int tagpu_packet_pub_level_tracked(void) { return s_levelEndBy != 0; }
 
 /* ---- the heartbeat's producer half --------------------------------------- */
 

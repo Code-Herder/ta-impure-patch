@@ -60,6 +60,16 @@ int  tagpu_reclaim_armed(void);
    `tagpu_reclaim_teardown_active()` above, which is the latched per-pass copy. */
 int  tagpu_reclaim_level_closing(void);
 
+/* 1 when the 0x491B60 teardown wrap is in, so `level_closing` and `level_gen`
+   above MEAN something. It is NOT `tagpu_reclaim_armed()`: the wrap lands before
+   the free detour and stays in if that one fails, and it is not landed at all
+   under `tagpu_reclaim.off` or on engine bytes we do not recognise.
+   A CALLER THAT USES THE LEVEL SIGNAL AS A SAFETY ARGUMENT MUST CHECK THIS,
+   because the engine frees its per-level assets whether or not we observe it:
+   0 here means "no ordering is available", which is a reason to refuse the read,
+   never a reason to take it. */
+int  tagpu_reclaim_level_tracked(void);
+
 /* THE QUIESCENCE FENCE, for other modules with the same problem. This module
    owns the only published fact about whether the render thread is inside the
    region that reads memory the game thread may free, and that fact is worth
