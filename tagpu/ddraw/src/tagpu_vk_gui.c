@@ -712,7 +712,7 @@ static int tw_colour(const TAGPU_VKPASS* d, TWIN* t)
     return 1;
 }
 
-/* `twin_col_drop`: INDICES ARRIVED FOR THIS BOX AND THEY SAY NOTHING ABOUT
+/* `twin_col_drop`: INDICES ARRIVED FOR THE BOX AND THEY SAY NOTHING ABOUT
    COLOUR, so the colour there goes and the layer falls back to the palette.
    The GL lane does it with a scissored `glClearBufferfv` on buffer 1; here it
    is a one-attachment clear inside a render pass instance of its own, because
