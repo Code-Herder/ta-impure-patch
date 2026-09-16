@@ -166,6 +166,7 @@
 #include "tagpu_vk_fx.h"
 #include "tagpu_vk_shadow.h"
 #include "tagpu_vk_unit.h"
+#include "tagpu_vk_gui.h"
 #include "tagpu_vk_shot.h"
 
 #define ON_FILE    "tagpu_vk.on"
@@ -191,6 +192,7 @@
 #define AB_TERR    "tagpu_terr_vk.ppm"
 #define AB_FX      "tagpu_fx_vk.ppm"
 #define AB_UNIT    "tagpu_posedraw_vk.ppm"
+#define AB_GUI     "tagpu_gui_vk.ppm"
 #define GPUS_FILE  "tagpu_vk.gpus"      /* the cache the menu reads at attach */
 #define CFG_FILE   "tagpu_vk.cfg"       /* the player's choice, by name       */
 #define CFG_TMP    "tagpu_vk.cfg.tmp"
@@ -1651,6 +1653,7 @@ static void vk_down(void)
         tagpu_vk_fx_down(&s_pass);
         tagpu_vk_shadow_down(&s_pass);
         tagpu_vk_unit_down(&s_pass);
+        tagpu_vk_gui_down(&s_pass);
         ab_drop("the lane coming down", idle);
         tagpu_vk_shot_down(&s_pass);
         vk_perimage_free();
@@ -2198,7 +2201,8 @@ static int vk_present(void)
        refusal, and nothing at all on every other frame. */
     if (tagpu_vk_terr_down_owed() || tagpu_vk_feat_down_owed() ||
         tagpu_vk_fx_down_owed() || tagpu_vk_scaffold_down_owed() ||
-        tagpu_vk_shadow_down_owed() || tagpu_vk_unit_down_owed()) {
+        tagpu_vk_shadow_down_owed() || tagpu_vk_unit_down_owed() ||
+        tagpu_vk_gui_down_owed()) {
         if (!vkDeviceWaitIdle || vkDeviceWaitIdle(s_vk.dev) != VK_SUCCESS) {
             vklog("vkDeviceWaitIdle refused before an owed pass teardown - down");
             return -2;
@@ -2214,6 +2218,7 @@ static int vk_present(void)
         if (tagpu_vk_scaffold_down_owed()) tagpu_vk_scaffold_down_paid(&s_pass);
         if (tagpu_vk_shadow_down_owed())   tagpu_vk_shadow_down_paid(&s_pass);
         if (tagpu_vk_unit_down_owed())     tagpu_vk_unit_down_paid(&s_pass);
+        if (tagpu_vk_gui_down_owed())      tagpu_vk_gui_down_paid(&s_pass);
     }
 
     r = vkAcquireNextImageKHR(s_vk.dev, s_vk.sc, 1000000000ull,
@@ -2283,9 +2288,9 @@ static int vk_present(void)
        the only thing that does. */
     {
         int draw_fps = 0, draw_scaf = 0, draw_feat = 0, draw_terr = 0, draw_fx = 0;
-        int draw_unit = 0;
+        int draw_unit = 0, draw_gui = 0;
         int ab_fps = 0, ab_scaf = 0, ab_feat = 0, ab_terr = 0, ab_fx = 0;
-        int ab_unit = 0;
+        int ab_unit = 0, ab_gui = 0;
         int ndraw = 0, nclaim = 0;
         const char* abpath = NULL;
         VkRenderPassBeginInfo rbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
@@ -2355,15 +2360,23 @@ static int vk_present(void)
                the GL lane's and not the order the files were written in. */
             draw_fx = tagpu_vk_fx_prepare(&s_pass, cb, fi);
             ab_fx = tagpu_vk_fx_ab_frame();
+            /* THE UI LAYER, whose whole replay is in `prepare`: a twin is
+               drawn into with its own render pass and render passes may not
+               nest, so this is the hook it has to be in -- the shadow pass's
+               shape, for the same reason. */
+            draw_gui = tagpu_vk_gui_prepare(&s_pass, cb, fi);
+            ab_gui = tagpu_vk_gui_ab_frame();
             draw_fps = tagpu_vk_fps_prepare(&s_pass, cb, fi);
             ab_fps = tagpu_vk_fps_ab_frame();
         }
-        ndraw = draw_terr + draw_feat + draw_unit + draw_fx + draw_scaf + draw_fps;
-        nclaim = ab_terr + ab_feat + ab_unit + ab_fx + ab_scaf + ab_fps;
+        ndraw = draw_terr + draw_feat + draw_unit + draw_fx + draw_scaf +
+                draw_gui + draw_fps;
+        nclaim = ab_terr + ab_feat + ab_unit + ab_fx + ab_scaf + ab_gui + ab_fps;
         abpath = ab_terr ? AB_TERR
                : (ab_feat ? AB_FEAT
                : (ab_unit ? AB_UNIT
-               : (ab_fx ? AB_FX : (ab_scaf ? AB_SCAF : (ab_fps ? AB_FPS : NULL)))));
+               : (ab_fx ? AB_FX : (ab_scaf ? AB_SCAF
+               : (ab_gui ? AB_GUI : (ab_fps ? AB_FPS : NULL))))));
 
         if (s_vk.rp && s_vk.fb[idx]) {
             VkClearValue cv[2];
@@ -2391,6 +2404,10 @@ static int vk_present(void)
                 tagpu_vk_unit_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_fx)
                 tagpu_vk_fx_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
+            /* THE UI IS ABOVE THE WORLD and below the readout, which is
+               where tagpu_overlay_draw puts it. */
+            if (draw_gui)
+                tagpu_vk_gui_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_scaf)
                 tagpu_vk_scaffold_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_fps)
@@ -2493,6 +2510,7 @@ static int vk_resize(int w, int h)
     tagpu_vk_fx_down(&s_pass);
     tagpu_vk_shadow_down(&s_pass);
     tagpu_vk_unit_down(&s_pass);
+    tagpu_vk_gui_down(&s_pass);
     ab_drop("the swapchain rebuilding", idle);
     vk_perimage_free();
     r = vk_swapchain(w, h);

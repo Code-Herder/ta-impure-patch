@@ -2384,6 +2384,15 @@ static void mir_finish(const TAGPU_FRAME* f)
     s_mHave = 1; s_mTaken = 0;
 }
 
+void tagpu_gui_mirror_reseed(void)
+{
+    /* the same flag, the same reason enum: a consumer that has fallen behind
+       is exactly what TAGPU_GUI_WHY_STALL names, and the producer's handling
+       of it (a RESET and every surface seeded again) is what both stores need */
+    g_guiq.why = TAGPU_GUI_WHY_STALL;
+    g_guiq.reseed = 1;
+}
+
 void tagpu_gui_mirror_want(int on)
 {
     if (!on && s_mirWant) {

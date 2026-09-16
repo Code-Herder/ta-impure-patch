@@ -262,6 +262,15 @@ typedef struct TAGPU_GUIHAND {
 /* Ask the render half to keep the mirror above. Render thread only. */
 void tagpu_gui_mirror_want(int on);
 
+/* ASK THE PRODUCER FOR A FRESH START, through the very flag the GL consumer
+   raises for itself. The mirror's consumer keeps a twin store of its own, and
+   any frame it refuses leaves that store behind the GL one -- so the next op
+   naming a twin it never made would apply to nothing, silently, for the rest
+   of the session. This is the same request `drain()` makes when a sprite
+   arrives without its bytes: the producer publishes a RESET and re-seeds every
+   surface, and both stores start level again. Render thread only. */
+void tagpu_gui_mirror_reseed(void);
+
 /* 0 when there is nothing to hand over, when this frame's has already been
    taken, or when the standing one was published on a different frame than
    `now` -- the fork's monotonic render-thread counter, which a Vulkan pass has
