@@ -1883,7 +1883,19 @@ static void* __cdecl after_loader(unsigned int* regs)
 
 unsigned tagpu_packet_pub_draw_seq(void)  { return s_cDraws; }
 unsigned tagpu_packet_pub_level_gen(void) { return s_levelGen; }
-int tagpu_packet_pub_level_tracked(void) { return s_levelEndBy != 0; }
+/* `s_levelEndBy` IS NOT THE WHOLE ANSWER, and reading it as one was a defect.
+   It is only ever assigned inside `if (!s_countOnly)`, and `s_countOnly` is
+   `!tagpu_packet_armed()` -- so under `tagpu_packet.off` it stays 0 while the
+   generation goes on moving perfectly well, because `tagpu_packet_pub_level_end`
+   bumps `s_levelGen` as its FIRST statement, above every gate, and reclaim's
+   stub calls it unconditionally. A consumer keyed on this alone refused every
+   frame for the whole session.
+   [FOUND 2026-09-16, the landing-5 RE-review -- a defect inside the fix for the
+   review's own first finding, which is the fourth landing running.] */
+int tagpu_packet_pub_level_tracked(void)
+{
+    return s_levelEndBy != 0 || tagpu_reclaim_level_tracked();
+}
 
 /* ---- the heartbeat's producer half --------------------------------------- */
 
