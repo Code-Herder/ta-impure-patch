@@ -5257,6 +5257,13 @@ two reviewers, and **both led with the sampler independently** — the seventh s
   than the 252-px picture at every `k` it draws at, so every fragment takes the *minification*
   filter, and a downsample wants one. GL blends four texels there; a nearest sampler takes one. A
   second sampler is the whole fix, and the A/B could not see the bug for the reason above.
+  **THE FIRST VERSION OF THAT FIX WAS A NO-OP AND THIS SECTION RECORDED IT AS CLOSED.** The new
+  sampler inherited `maxLod = 0.0f` from the nearest one it was copied from; Vulkan clamps the
+  level-of-detail to `[minLod, maxLod]` and only *then* decides magnification (λ ≤ 0) against
+  minification, so with both 0 the answer is always magnification and `magFilter` — still nearest —
+  is always what runs. `VK_FILTER_LINEAR` never executed. **An open divergence written down as
+  closed is worse than one written down as open**, and `tagpu_vk_unit.c` already carried
+  `maxLod = 0.25f` for exactly this reason, in this repository. [The re-review caught it.]
 * **THE ENGINE'S MINIMAP PAIR WAS ALIASED PACKET MEMORY, NOT COPIED.** The comment claimed the
   hand-over's frame rule covered it. It does not: the packet's rule is **stricter**, and
   `tagpu_packet_frame_end` gives it back *before* `tagpu_vk_frame` runs in the same iteration — so
@@ -5278,6 +5285,16 @@ two reviewers, and **both led with the sampler independently** — the seventh s
 * Two smaller: the layer was recorded **above** the composite gate, so it was drawn and discarded on
   every frame the composite was stood down on (every frame of a Classic++ session); and the two new
   refusals said nothing in the log.
+
+**And the re-review found two more of mine, both in the fixes above.** The refusal logs it asked for
+printed **at the frame rate**, because `s_saidSharp = 0` was the first statement of the branch that
+then tested `if (!s_saidSharp)` — the latch never held, so a condition holding every frame printed a
+line every present. And **the budget refund counted frames on which the store is provably not
+level**: while `s_behind` stands the replay applies *nothing*, so those are exactly the frames that
+prove nothing, and counting them let a pass waiting for a fresh start that never comes refund its
+budget for ever and go on asking the **oracle** for a reseed with the mute unable to latch. That is
+the **third** version of the same mistake on this pass, and the comment beside it already said what
+to check.
 
 One was mine and not theirs: publishing the engine pair through `mir_bytes` made a **latent**
 staleness reachable — `mir_finish` had already taken `arena` and `alen` further up, so a realloc
@@ -5440,9 +5457,11 @@ detail rather than an engine one. Named rather than silently carried.
 * ~~The cursor, the minimap and the sharp layer~~ **CLOSED by landing 3.** `norestore` is the only
   lever left.
 * **THE MINIMAP'S PICTURE PATH (`uPic`), and with it the only LINEAR sampler in this module.** The
-  GL texture is `MIN_FILTER = GL_LINEAR, MAG_FILTER = GL_NEAREST` and the Vulkan lane now matches
-  it with a second sampler — but no fixture here reaches that branch of `MM_FS` (99.2 % fogged), so
-  the match is **correct by construction and unmeasured**. It is the same category as §2.33's
+  GL texture is `MIN_FILTER = GL_LINEAR, MAG_FILTER = GL_NEAREST` and the Vulkan lane matches it
+  with a second sampler — **which took two attempts, the first being a no-op** (see above) — but no
+  fixture here reaches that branch of `MM_FS` (99.2 % fogged), so the match is **correct by
+  construction and unmeasured**. That combination is exactly how the first attempt survived: nothing
+  the pass measures would have changed had the sampler stayed wrong. It is the same category as §2.33's
   Classic++ refusal. Closing it needs a fixture with an explored map.
 * **The sharp layer's THIRD client, the sharp string path**, is not exercised by any fixture here:
   `SHARP_TEXT` draws at device resolution where `twin_string` stamps into the twin, and nothing in
