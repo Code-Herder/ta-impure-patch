@@ -155,6 +155,12 @@ choice between restored colour and the live palette, and the palette-validity ru
 atlas needs restoring in the Vulkan lane — check before starting; it may be that the hand-over
 can carry the restored texels the GL side already produced, which would unblock it.
 
+**Landing 5 BUILT AND MEASURED 2026-09-16**: the shell↔game switch crossed in ONE process, both
+directions, **0 of 307 200 → 0 of 2 073 600 → 0 of 307 200**. And the reverse crossing turned out to
+CRASH — in the GL publisher, reproducibly, with the Vulkan lane off — which is why the gate's
+"context switch clean" clause could not have been claimed before this landing whatever the Vulkan
+lane did. [gpu-status](gpu-status.html) §2.34 has the diagnosis and the ordering that fixes it.
+
 **Landing 5 — the present.** The clause the roadmap's row names that nothing above touches:
 the frame presented through Vulkan with the fork's ddraw path intact, and the shell↔game
 context switch clean.

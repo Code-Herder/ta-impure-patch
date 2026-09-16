@@ -4961,7 +4961,7 @@ still has no validation layer.
   retire, which needs an eviction the 512-entry table did not reach.
 * The validation layer, still, and no device but the 4070.
 
-### 2.34 The UI layer's 1x mirror, drawn by Vulkan (`tagpu_vk_gui.c`, `tagpu_gui_surf.c`'s op mirror) — Phase G, G19f landings 1–4
+### 2.34 The UI layer's 1x mirror, drawn by Vulkan (`tagpu_vk_gui.c`, `tagpu_gui_surf.c`'s op mirror) — Phase G, G19f landings 1–5
 
 **The first pass of G19f, and the first ported thing that is not a draw over a mesh.** §2.3e's UI
 layer is a **stateful store of per-surface twins** that an op stream mutates, plus a three-layer
@@ -5633,12 +5633,102 @@ were caught by the same thing and by nothing else: **regenerating the wiki and r
 of the page you just wrote.** A note that renders in the wrong section is not documentation, and
 `git diff` shows it as an addition in the right file.
 
+#### Landing 5 — the context switch, and the crash that was hiding behind it
+
+**THE SWITCH IS MEASURED IN ONE PROCESS, BOTH DIRECTIONS, AND IT IS 0 PX AT EVERY STOP.** Every
+figure above this was taken after a `--restart`, which starts a process, crosses the shell→game
+switch on the way in, and measures the far side. This one drives the menus by hand
+(`ui click SINGLE` → `Skirmish` → `Start`, and back out through `EXIT` → `MAINMENU` → `CHOICE1`)
+so that both sides of both crossings are the same process:
+
+| | |
+|---|---|
+| the shell, 640×480, Classic++ armed | **0 of 307 200** |
+| → the switch: lane down, window destroyed, new window, new swapchain, **up in 173 ms**, one fresh start | |
+| in game, 1920×1080 | **0 of 2 073 600** |
+| → the switch back: down, destroyed, created, swapchain at 640×480, **up in 145 ms** | |
+| the shell again, after the round trip | **0 of 307 200** |
+
+**THE WHOLE-LANE TEARDOWN IS CORRECT AND NOT A COST TO REMOVE.** `render_ogl.c`'s render loop calls
+`tagpu_vk_render_stop` on every exit, and its comment is the argument: a mode change invalidates the
+HWND the Vulkan surface was made on, so the lane comes down on the thread that owns it rather than
+being left to discover a dead window. This is also what the ta-drive skill measured for the world
+passes in G19e ("an in-process map change brings the WHOLE Vulkan lane down and back up").
+
+##### And the reverse crossing CRASHED, in the GL publisher, with nothing to do with this port
+
+Quitting a skirmish to the main menu at 1920×1080 took an access violation and the process then
+spun at 100 % CPU with no further output. The route is the one the skill documents as the way to do
+it, and `MAINMENU.GUI 640x480` is its own stated criterion for the level having really torn down.
+
+**IT REPRODUCES WITH `vk.on` REMOVED, and the fault is identical** — same instruction pointer, same
+call stack, same illegal-read shape. That is what makes it the fork's rather than the lane's, and it
+was worth an extra run to establish before touching anything.
+
+**Finding it took one step past what TA's own crash handler says.** The handler prints "in module
+TotalA.exe", but that image ends at `0x51FC00` and the IP was `0x7903BBA1`; `/proc/<pid>/maps` on
+the still-spinning process puts that page on **our own `ddraw.dll`**, so it is RVA `0x3BBA1`.
+Disassembling there gives `cmp BYTE PTR [edi+0x9], 0` — the exact bytes the ErrorLog printed — with
+`0x811C9DC5`, this function's own FNV basis, two instructions later.
+
+The function is `frame_key` in `tagpu_gui_hook.c`, and the defect is one line wide:
+
+```c
+if (!ptr_ok(px)) return NULL;      /* the PIXEL pointer is checked */
+if (fr[0x09] == 0) {               /* the FRAME HEADER is not, and never was */
+```
+
+`fr[0x09]` is `TAGPU_GF_COMP`, and the per-level GAF bank it lives in had just been freed by the
+teardown's cascade (`freed 279 block(s)`). Every other caller of the GAF resolvers in this tree —
+`tagpu_fx.c`, `tagpu_feat.c`, `tagpu_render3do.c`, `tagpu_gui_surf.c` — puts the header through
+`tagpu_gaf_frame_sane` first.
+
+##### The fix is an ordering, and the obvious cheaper key does not work
+
+A `frame_sane` on `fr` **would** have stopped this crash, because the page is unmapped. It is still
+not the fix: a freed-but-still-mapped page passes `IsBadReadPtr` and returns garbage, which is the
+same bug with better odds and wrong art instead of a stop. It is kept as a **bound**, and this page
+says plainly that it is not the safety argument.
+
+The safety argument is that the op carries **the level it was OBSERVED in**, and `pub_ops` refuses
+to resolve a GAF frame while a teardown is in flight or from a level that has ended. Both signals
+are read and written on the **game thread**, so this is program order on one thread rather than a
+claim about visibility — and **neither is sufficient alone**, which is the part worth writing down:
+
+```
+      raise s_teardown ---- the cascade's frees ---- s_levelGen++ ---- lower s_teardown
+      [ the flag covers ....................................................... ]
+                                                 [ the generation covers ... onwards ]
+```
+
+`s_levelGen` bumps **after** the frees (`tagpu_reclaim.c`, `reclaim_teardown_post`), so between the
+free and the bump a pre-teardown op still carries the current generation and no longer points at
+anything. The new `tagpu_reclaim_level_closing()` is raised before the frees and lowered after the
+bump, so the two windows overlap with no gap between them. A generation stamp alone was the first
+thing tried and it is exactly the window this diagram exists to show.
+
+The fallback when either test refuses is the op's own box out of **our mirror of the surface**, not
+out of the asset — so the picture is unchanged and only the sprite's identity is lost. Measured in
+play: `sprites=` climbs 4 665 799 → 5 086 434 across three heartbeats with `lost=` flat, so the
+ordering refuses nothing inside a level, which is the check that matters for a gate this wide.
+
+**This is the standing debt in `CLAUDE.md` coming due, once.** The roadmap already lists "the
+per-LEVEL ASSET class under `tagpu_reclaim`'s fence" as an open row of the frame-packet gate; this
+landing closes the one site of it that the UI publisher owns, by ordering rather than by waiting for
+the asset channel, and leaves the class itself open.
+
 #### Not covered
 
-* **The gate, which is the whole of G19f and not this landing.** `uiwalk`'s `strict` walk over the
-  **full screen inventory** at 1024×768 and 1080p, shell and in game; the shell↔game context
-  switch; and **frame time no worse than GL**, which nothing in Phase G has measured at all. This
-  landing is three fixtures, not an inventory.
+* **The gate, which is the whole of G19f and not these landings.** `uiwalk`'s `strict` walk over
+  the **full screen inventory** at 1024×768 and 1080p, shell and in game; and **frame time no worse
+  than GL**, which nothing in Phase G has measured at all. ~~the shell↔game context switch~~ is
+  **CLOSED by landing 5**. These are a handful of fixtures, not an inventory.
+* **THE PER-LEVEL ASSET CLASS ITSELF STAYS OPEN.** Landing 5 closes the one site of it the UI
+  publisher owns, by ordering. The class — model templates, FeatureDef and wreck records, the GAF
+  banks, all under `tagpu_reclaim`'s fence until the asset channel — is the frame-packet gate's own
+  row and nothing here touches it. **Every other reader of a per-level asset is as exposed as
+  `frame_key` was**, and the only reason this one was found is that a fixture happened to quit a
+  skirmish to the main menu.
 * ~~The cursor, the minimap and the sharp layer~~ **CLOSED by landing 3.** `norestore` is the only
   lever left.
 * **THE MINIMAP'S PICTURE PATH (`uPic`), and with it the only LINEAR sampler in this module.** The
