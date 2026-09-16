@@ -6060,25 +6060,50 @@ that memory inside the window:
   and no generation, and which landing 5 could **not** close. The disassembly is why:
 
   ```
-  460630:  call 0x491b60     ; the teardown -- bumps gen N->N+1, lowers s_teardown
+  460630:  call 0x491b60          ; the teardown -- bumps gen N->N+1, lowers s_teardown
   460635:  push 0x1
-  460637:  call 0x491d70     ; UpdateIngameGUI -- DRAWS, so op_add stamps lgen = N+1
+  460637:  call 0x491d70          ; UpdateIngameGUI -- DRAWS, so op_add stamps lgen = N+1
+  46063c:  mov  eax, ds:0x511de8
   460641:  add  eax, 0x519
-  460647:  call 0x4a9660     ; GUI_Pop -- frees that screen's art
+  460646:  push eax
+  460647:  call 0x4a9660          ; GUI_Pop -- frees that screen's art
   ```
 
-  The pop is three instructions **after** the bump, so ops recorded at `0x460637` carry the
+  The pop is **five** instructions after the bump, so ops recorded at `0x460637` carry the
   current generation and the gate passes. Only `frame_sane` stood there, and a bound is not the
-  safety argument.
+  safety argument. (**This listing said "three instructions" and silently omitted `0x46063c` and
+  `0x460646` until both landing reviewers counted them, independently.** The count changes
+  nothing about the argument — the pop is after the bump either way — but a listing that reads
+  as contiguous and is not is exactly the kind of note that costs the next person an hour.
+  `call 0x4a9660` appears **39** times in the pristine `.text`, `0x460647` among them; re-counted
+  with the correction.)
 
-**Both reads moved into `gaf_box`, the `before_` observer on the blit leaf.** The engine is about
-to read the same frame header and the same pixel plane as its next act, so the art cannot be dead
-there — if it were, the engine's own blit would fault on it. That is an ordering in the strict
-sense: the read happens **inside** the engine's use of the data. There is no window to be small,
-no flag to arm and no generation to compare, and it covers the teardown, all 39 pop sites and any
-future free route together, because after it `publish` dereferences **no engine asset memory on
-this path at all**. `frame`/`pix` survive in the op as the consumer's atlas KEY — a value compared
-against a table, never followed.
+**Both reads moved into `gaf_box`, the `before_` detour on the blit leaf**, and the ordering is on
+the engine's timeline:
+
+> our read  <  the engine's blit  <  the engine's free
+
+Every free route that opened this window — the cascade, and all 39 pop sites — runs **after** the
+blit it follows, and the caller holds the art alive across the call it is making. Our read precedes
+that call. It needs no flag, no generation and no `MEM_Free` block size, and it covers free routes
+nobody has found yet, because it does not enumerate them: it is earlier than all of them. After it,
+`publish` dereferences **no engine asset memory on this path at all** — the `gui probe:` trace
+included, which was the last one left. `frame`/`pix` survive in the op as the consumer's atlas KEY,
+a value compared against a table and never followed.
+
+**It is NOT the claim that "the engine would fault if this were dead".** This section said that
+until the landing review; the detour runs *before* the engine's read, so if the memory were dead
+**we** would fault first. That was a counterfactual dressed as a proof, and it is not what makes
+the change safe.
+
+**AND IT BOUNDS LIFETIME, NOT EXTENT.** The engine reads the **clipped sub-rect**;
+`tagpu_gaf_decode` reads all `w*h`, or every RLE row. A header whose `w`/`h` exceed the plane the
+loader actually allocated is therefore covered by nothing above — only by `tagpu_gaf_frame_sane`,
+a SHAPE test (`w,h <= 512`), and the decoder's own `IsBadReadPtr`, which this note says everywhere
+is not a safety argument. **That residual is unchanged by this landing**: the same decode read the
+same bytes at publish before it, over memory that might *also* have been freed. Moving it removes
+the lifetime half and leaves the extent half exactly where it was. Bounding it needs the plane's
+allocated length, and the plane is not a block start, so `MEM_Size` cannot answer it either.
 
 **It also fixes a wrong-art case the generation could not see.** The key is a hash of the plane's
 first bytes precisely because the shell hands a freed screen's addresses to the next screen's art.
@@ -6096,6 +6121,28 @@ quietly stop meaning what these notes say they mean. **The `OP_TEXT` path KEEPS 
 `strstale`**: `gfont_slot`, `glyph_block_size` and `glyph_block_fill` still read the font object
 at publish, so that window is still open, is still covered by the ordering, and is now the only
 user of `op->lgen`.
+
+#### The UI atlas: dropped at the level boundary too
+
+**Found by the landing review — both reviewers, independently, the eleventh such pair on this
+lane.** `tagpu_gui_surf.c`'s UI atlas matches entries on `(o->frame, o->pix, fw, fh)` — the
+frame's **address** and its content hash — and its only resets are `twins_reset`, the atlas
+filling, and a GL context loss. **None of those is a level boundary.** The engine frees a level's
+GAF banks and the next level's loader may hand a new frame an old one's address; `frame_key`
+hashes only the plane's first 64 bytes plus the hotspot, so **UI art whose first RLE row is one
+transparent run can collide by CONSTRUCTION**, not by 2^-32 luck — and then `atlas_find` hits the
+old entry and the twin draws the previous level's texels, with no counter moving.
+
+**The gate this landing removed was never the cover for that**, which is worth saying plainly
+because it is the obvious thing to assume: `op->lgen != level_gen` refused ops **recorded** before
+a boundary and **resolved** after one — a ~5 ms window — and did nothing whatever about entries
+already sitting in the consumer's atlas from the previous level. Those survived it. So the hole
+predates this landing and the fix is a **drop**, not a refusal.
+
+The publisher raises a reseed when the level generation moves, and the machinery is already
+there: `PK_RESET` makes the consumer call `twins_reset`, which calls `tagpu_gaf_atlas_reset`, and
+the UI atlas never asks for a repack, so that goes straight to `atlas_drop` — every entry, every
+hash. Same shape as the unit atlas's, one level down the stack.
 
 #### The unit atlas: dropped at the level boundary
 
@@ -6129,8 +6176,10 @@ where it is, every consumer sees one generation per frame.
 | a dropped atlas re-decodes the RIGHT texels | `glshot` on level 2, after the drop | units render with their own textures and shadows; terrain, trees and HUD intact |
 
 `gafreseed` is counted apart from `gafnoplane` and is **not** a failure: a reset clears the seen
-table after an op has already decided it needs no plane, and the same publish re-seeds every
-surface whole, so the op's box is bytes the seed already carried. It read **4 323** over the three
+table after an op has already decided it needs no plane. It is **cheap rather than free** — the
+word this section used until the review corrected it: each one costs a `PK_PIXELS` box in the
+arena and one window without its atlas identity, in a publish that is already re-seeding every
+surface whole, so nothing is on screen that would not have been, and it self-heals next window. It read **4 323** over the three
 walks. One counter for both would have read as 3923 failures on the first
 session that measured it — which is exactly what it did read before the split.
 
@@ -6190,7 +6239,7 @@ the lever is still on disk.
 | in game, 1024×768 | **13 / 13** | 118 232 – 174 781 | 786 432 |
 | in game, 1920×1080 | **13 / 13** | 175 576 – 232 125 | 2 073 600 |
 
-**52 of 52**, and **the ink column is half the claim.** On every one of the 39 rows the GL lane's
+**52 of 52**, and **the ink column is half the claim.** On every one of the 52 rows the GL lane's
 non-black count and the Vulkan lane's are the **same integer** — not merely both non-zero — so each
 0 px is a diff over a frame that had content, and had the same amount of it on both lanes. A row
 with 0 px and 0 ink is two blank frames agreeing and is refused, not counted; that is the fourth
