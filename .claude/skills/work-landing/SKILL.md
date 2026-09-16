@@ -20,10 +20,10 @@ ticket is a landing.
 
 **Invoking `/work-landing` authorizes this landing**: the dedicated review and the fast-forward
 of local `main` for *this one landing*, and nothing beyond it. The skill calls
-`/git_commit_merge_wt` itself (§7) without asking again.
+`/git_commit_merge_wt` itself (§8) without asking again.
 
 **Run it to `main` without checking in.** Once invoked, this skill is expected to come back with
-a landed gate, not with questions. Everything that goes wrong on the way is yours to fix (§8)
+a landed gate, not with questions. Everything that goes wrong on the way is yours to fix (§9)
 except the six escalation reasons in `CLAUDE.md`'s *Land it yourself — what actually requires a
 human*. Do not stop at a gate to ask permission to do the obvious thing.
 
@@ -74,8 +74,10 @@ The authorization is **scoped and expiring**:
    `kb t ls` has **no `--epic` flag** (verified 2026-09-15: its filters are `--project`,
    `--status`, `--type`, `--assignee`, `--label`, `--q`, `--archived`, `--only-archived`) —
    `kb epic show` is how you list an Epic's children.
-   The next landing is the lowest `n` in the table with no `landing:<n>` child. Bug children
-   (§8) carry **no** `landing:` label precisely so they do not corrupt this count.
+   The next landing is the **first row in table order** with no `landing:<n>` child — table
+   order, not lowest integer, because a gate that split mid-flight carries sub-numbered rows
+   (`3.1`, `3.2`, … — §7) that sort between `3` and `4` only by position. Bug children
+   (§9) carry **no** `landing:` label precisely so they do not corrupt this count.
 
 ## 3. Cut the child ticket
 
@@ -86,7 +88,8 @@ kb t pick <KEY>
 ```
 
 - **Title is the row's own name**, unchanged. The `landing:<n>` label is the machine key, so a
-  later retitle during a scope change cannot break the join.
+  later retitle during a scope change cannot break the join. `<n>` is the row's `#` cell
+  verbatim, sub-number included (`landing:3.2`), and it is never reassigned afterwards — §7.
 - **Description** states the landing's goal in one or two sentences and then, on its own line,
   copies the row's exit condition verbatim:
 
@@ -162,7 +165,65 @@ action** — self-contained, so a viewer with no context can follow it.
 a build change — do **not** film it. Attach the closest useful evidence (the measurement, the
 log, the rendered page) and add one line saying why a video would prove nothing.
 
-## 7. The landing
+## 7. When the shape changes — record the split, don't re-plan
+
+A gate is filed as one row and usually stays one. But the work is how you find out what a gate is
+made of, and a landing sometimes shows that the row in front of you is really several: parts with
+their own seam, their own thing to run, their own result. **When that happens, say so where the
+plan lives — in the landing that revealed it, not in a tidy-up afterwards.** A row that still
+reads as one undivided thing, three landings in, is out of date in the way that costs the most:
+the next reader takes it for nearly done.
+
+Two surfaces, and they have to agree:
+
+1. **`research/notes/roadmap.md`'s gate row** — `landing N of M`, one sentence per part, and a
+   closing *"Not covered by landings 1–N"* naming what is still open, **the gate's own exit
+   condition included** (a part's bar is not the gate's bar). This rides in the §8 documentation
+   pass — `/git_commit_merge_wt` Step 4 states the same rule and checks for it, so skipping it
+   here only moves the work to the gate.
+2. **The Epic's Landings table** — `kb t edit <EPIC> -f desc.md`, so a board reader and a roadmap
+   reader see the same plan, followed by a `decision` comment on the Epic saying what the work
+   showed and why the row became several. Without this half the board keeps counting the Epic
+   against a landing list that no longer exists.
+
+**Never renumber a row that already has a child.** The `landing:<n>` label is the join (§2), and
+renumbering desynchronises every child already open — the same reason `grill-to-kanban` refuses
+to rewrite an Epic's table wholesale. Split **in place** instead: row `n` becomes `n.1`, `n.2`, …
+with the work already done as `n.1`, rows after it keep their numbers, and the label follows the
+cell verbatim (`landing:3.2`). §2's "next landing" then means the first row in **table order**
+with no child, not the lowest integer.
+
+**The split does not extend this invocation's authorization** (§0). When the row that split is
+the one you are working, it becomes `n.1` and you finish that; the parts you have just named are
+in the table for the next invocation, not started in this one.
+
+### The bar for a part — the guard against over-splitting
+
+A part is a landing, so it meets a landing's bar: **something you can run that shows a result**,
+with its own *Verified by* line in its row. Beyond that:
+
+- **Split along a seam the work already has** — a pass, an op, a layer, a surface, a thread
+  hand-over. Not along a calendar, and not along "what I finished today".
+- **Never open a part for a fix, a review round, a re-measurement or a documentation pass.**
+  Those belong to the landing that produced them; that is what the landing's own gates are for.
+  G19f landing 2 absorbed six review findings, a re-review that disproved two of its own fixes,
+  and a re-measurement after each round, and it is still *one* landing.
+- **The calibration is the one already in the tree, and it is about right.** G19e ran one part
+  per world pass — six for the whole of it; G19f is six for the UI layer and the present. A gate
+  that comes out as ten-plus parts has been sliced rather than split. A gate that finishes in one
+  or two landings is not split at all, and writing "landing 1 of 2" on it buys nothing.
+- **`M` is allowed to move.** G19f was written up as "landing 1 of 5" when the UI op stream turned
+  out to hand over in pieces, then "landings 1–2 of 6" one landing later, when the string op
+  showed that landing 1 alone composited nothing in real play. A count that grew is the plan
+  catching up with the work. Do not keep a wrong number to look decisive, and do not re-split a
+  gate every landing to keep the shape tidy.
+
+**This records what the work showed; it does not re-plan the Epic.** Splitting a row into the
+parts the work turned out to have needs no turn. If the *exit condition* has to change — the gate
+is asking for the wrong thing, or the goal moved — stop: that is **escalation reason 1**, and the
+plan is the human's.
+
+## 8. The landing
 
 **Do the documentation pass yourself, and commit it, before invoking the landing command.**
 `CLAUDE.md` requires the docs to be in the diff the review reads, and this skill is the only
@@ -178,7 +239,8 @@ In order:
    source, never from memory.
 2. The module docs — `gpu-status.md`'s hook map and *fields we write* table, `roadmap.md`'s gate
    row, and the `ta-*` skills if how you drive or measure the game changed. Correct what the
-   work proved wrong; state the gaps it did **not** close.
+   work proved wrong; state the gaps it did **not** close. If this landing showed the gate to be
+   several, the row carries the split and the Epic's table matches it — §7, both surfaces.
 3. Regenerate and look at it:
    ```bash
    .venv-undither/bin/python research/build_wiki.py
@@ -201,7 +263,7 @@ documentation check, the review and its findings, and the fast-forward. This ski
 gate is to record the outcome (§5.3), not to re-implement the gate. Never `--force`,
 `--no-verify`, or `reset --hard`.
 
-## 8. Trouble — the default is to keep going
+## 9. Trouble — the default is to keep going
 
 `CLAUDE.md`'s *Land it yourself — what actually requires a human* governs. **Drive the landing to
 `main`.** Things going wrong on the way is the normal shape of this work, not a reason to hand it
@@ -224,7 +286,7 @@ with "could not verify" and a green board.
 Never silently abandon a ticket. If work pauses, `kb t unassign` or `kb t block` with a comment
 — the board reflects reality or it is worthless.
 
-## 9. Close
+## 10. Close
 
 `agent-kanban` §9's preconditions hold before `kb t done`, and the landing itself has already
 passed, so close directly — no announce-and-wait turn. Preconditions:
@@ -251,6 +313,12 @@ follow-up ticket, and **the next landing's number and name** so re-invoking is o
 - **Don't `/git_publish`.** Landing is local; publishing is always the human's.
 - **Don't pick, work, or close the Epic.** You work its children.
 - **Don't label a bug child `landing:<n>`** — it corrupts the next-landing count.
+- **Don't renumber a landing row that already has a child.** Split it in place (§7); the label is
+  the join.
+- **Don't split a gate into a part per fix, per review round or per documentation pass** (§7).
+  Those belong to the landing that produced them, and a ten-part gate has been sliced, not split.
+- **Don't leave a split in the roadmap row and not on the board, or the reverse.** Both surfaces
+  or neither.
 - **Don't inherit `default_project`.** Pass `ta_impure_patch` explicitly.
 - **Don't leave the documentation pass to Step 4.** Write it while you still know what the work
   learned.

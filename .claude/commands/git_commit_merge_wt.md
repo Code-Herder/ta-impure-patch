@@ -211,6 +211,11 @@ main in). Decide from it:
   `research/notes/gpu-status.md` (hook map / *fields we write*) and `research/notes/roadmap.md`
   (capability row and gate entry). `.claude/skills/ta-*/SKILL.md` only if how you drive or
   measure the game changed.
+- **Is the gate row still shaped like the work?** If this landing is one part of a gate that has
+  turned out to be several, the row must say which part landed and what is still open — see
+  *When a gate turns out to be several landings* below. A gate row that still reads as one
+  undivided thing, three landings into it, is out of date in the way that costs the most: the
+  next session reads it as nearly done.
 - **Does the wiki build?**
   ```
   .venv-undither/bin/python research/build_wiki.py
@@ -244,10 +249,47 @@ patched:
   **"State we read, and the fields we write"** table. Anything newly written, or newly written
   *from a second thread*, belongs in that table.
 - `research/notes/roadmap.md` — the capability row and the gate entry, **including the gaps the
-  landing did not close.**
+  landing did not close**, and — when the gate has turned out to be several landings — the split
+  itself (next).
 - `.claude/skills/ta-*/SKILL.md` — only if how you *drive or measure* the game changed. A
   procedure that cost you an hour to work out is the thing to write here.
 - And **correct whatever the work proved wrong.** A stale note is worse than a missing one.
+
+### When a gate turns out to be several landings
+
+A gate is planned as one row and usually stays one. But the work is how you find out what a gate
+is made of, and a gate sometimes opens along seams nobody could see from outside it. **Once the
+work has shown those seams, the row carries them — written by the landing that revealed them, not
+by a tidy-up afterwards.** The row then reads:
+
+- `landing N of M` in the status cell, one sentence per part saying what it is;
+- and a closing **"Not covered by landings 1–N"** naming what is still open — the gate's own exit
+  condition included, because a part's bar is not the gate's bar.
+
+**`M` is allowed to move.** G19f is the worked example: filed as one undivided row, written up as
+"landing 1 of 5" when the UI op stream turned out to hand over in pieces, and "landings 1–2 of 6"
+one landing later, when the string op showed that landing 1 alone composited nothing in real
+play. A count that grew is the plan catching up with the work; a stale count is the larger lie.
+
+**The bar for a part is the bar for a landing: something you can run that shows a result.** That
+is the whole guard against over-splitting, and it is worth being concrete about:
+
+- **Split along a seam the work already has** — a pass, an op, a layer, a surface, a thread
+  hand-over. Not along a calendar, and not along "what I finished today".
+- **Never open a part for a fix, a review round, a re-measurement or a documentation pass.**
+  Those belong to the landing that produced them; that is what the landing's own gates are for.
+  G19f landing 2 absorbed six review findings, a re-review that disproved two of its own fixes,
+  and a re-measurement after each round, and it is still *one* landing.
+- **The calibration is the one already in the tree, and it is about right.** G19e ran one part
+  per world pass — six for the whole of it; G19f is six for the UI layer and the present. A gate
+  that comes out as ten-plus parts has been sliced rather than split. A gate that finishes in one
+  or two landings is not split at all, and writing "landing 1 of 2" on it buys nothing.
+
+**This records what the work showed; it does not re-plan the gate.** If the *exit condition* is
+what has to change — the gate is asking for the wrong thing — that is **escalation reason 1** and
+it is the human's call, not a row edit. If the landing is being driven from a kanban Epic, its
+**Landings** table gets the same split; that half belongs to `/work-landing` §7, which owns the
+board and the label numbering.
 
 **The bar for the prose is the same as rule 2 above**: every claim traceable to disassembly or a
 live measurement, never to memory or to an agent's report you did not check. Mark guessed names
