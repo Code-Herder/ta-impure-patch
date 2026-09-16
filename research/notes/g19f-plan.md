@@ -137,6 +137,18 @@ plus a per-frame one (the engine pair), two pipelines, and turning on the `uShar
 composite already has. The device-resolution layer itself is a third render target in the pass,
 sized like the twins and cleared every frame.
 
+**Landing 4 BUILT AND MEASURED 2026-09-16**: 0 of 786 432 at 1024×768 and 0 of 2 073 600 at
+1920×1080 with the restore ARMED, and **no lever left on the pass**. [gpu-status](gpu-status.html)
+§2.34 is the module note.
+
+**AND THE QUESTION THIS PLAN LEFT OPEN IS ANSWERED, THE SECOND WAY ROUND.** It was *not* blocked on
+the restorer's five shaders. The paragraph below guessed right — "it may be that the hand-over can
+carry the restored texels the GL side already produced" — but the reason is worth stating as a rule
+rather than a lucky guess: **a second backend needs the TEXELS, never their producer.** The restorer
+goes on running exactly once, in the GL context, and `tagpu_gaf.c` reads its output back on the
+frames it painted on. The same answer applies to anything else in this tree that is produced on the
+GPU and consumed by a ported pass.
+
 **Landing 4 — Classic++.** The colour twins and the MRT sprite/copy programs, the per-texel
 choice between restored colour and the live palette, and the palette-validity rule. Drops
 `norestore`. **Blocked on the restorer's five shaders** (G19c's own uncovered case) if the UI

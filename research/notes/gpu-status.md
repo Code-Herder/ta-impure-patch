@@ -4961,7 +4961,7 @@ still has no validation layer.
   retire, which needs an eviction the 512-entry table did not reach.
 * The validation layer, still, and no device but the 4070.
 
-### 2.34 The UI layer's 1x mirror, drawn by Vulkan (`tagpu_vk_gui.c`, `tagpu_gui_surf.c`'s op mirror) — Phase G, G19f landings 1–2
+### 2.34 The UI layer's 1x mirror, drawn by Vulkan (`tagpu_vk_gui.c`, `tagpu_gui_surf.c`'s op mirror) — Phase G, G19f landings 1–4
 
 **The first pass of G19f, and the first ported thing that is not a draw over a mesh.** §2.3e's UI
 layer is a **stateful store of per-surface twins** that an op stream mutates, plus a three-layer
@@ -5407,9 +5407,10 @@ That matters because the picture is exactly where the two lanes' *filters* diffe
 finding below. **A fixture with a substantially explored map is what would close it**, and none of
 the ones here is that.
 
-**So `norestore` is the only lever left**, and with it the pass composites in an ordinary session —
-which through landings 1 and 2 it never did: landing 1 stood down on every frame with text on
-screen, and landing 2 on every frame with a cursor on screen, which is every frame of real play.
+**So `norestore` is the only lever left** — and landing 4 below takes it, after which the pass
+composites an ordinary session with nothing armed for it at all. Through landings 1 and 2 it never
+did: landing 1 stood down on every frame with text on screen, and landing 2 on every frame with a
+cursor on screen, which is every frame of real play.
 
 So TA's own glyphs — rasterised by the GL lane into its own atlas, stamped from the cells that lane
 resolved, coloured by the blitter's own three arguments — reproduce it exactly.
@@ -5448,6 +5449,142 @@ that rect reads a defined texel in GL and an undefined one here. It cannot reach
 composite samples inside the viewport — and closing it would mean padding our image to match a fork
 detail rather than an engine one. Named rather than silently carried.
 
+#### Landing 4 — Classic++, and the question the plan could not answer from the plan
+
+**THE PLAN SAID THIS LANDING MIGHT BE BLOCKED ON THE RESTORER'S FIVE SHADERS. IT IS NOT, AND THE
+REASON GENERALISES.** `SPR_FS` is the only producer of colour in this module and it samples
+`uAtlasRGB`, the UI atlas's **restored twin** — which the Classic++ restorer paints on the GPU
+(`tagpu_restoreglsl.c`, renderers.md 4c) out of five shaders G19c did not translate. Reading that as
+"the port needs the restorer" is the mistake: **a second backend needs the TEXELS, never their
+producer.** The restorer goes on running exactly once, in the GL context, and its output crosses as
+bytes like every other input on this hand-over.
+
+So `tagpu_gaf.c` grows a second opt-in mirror beside the indexed one, and it is deliberately **not**
+the same mechanism:
+
+| | the indexed mirror (landing 1) | the restored mirror (landing 4) |
+|---|---|---|
+| where the bytes come from | the CPU already has them — the decode that feeds GL feeds the mirror | only the GPU has them; a **read-back** is the only way |
+| when it is written | at every paint, beside the `glTexSubImage2D` | on a frame `tagpu_rglsl_job_painted` moved, and on no other |
+| arming it | marks every painted entry for repaint, or the mirror holds zeros where art is | nothing: the destination is cleared to **alpha 0** when the job is made, and alpha 0 is the restorer's own "not painted here", so a mirror allocated at any moment is behind but never wrong |
+| what it costs a settled session | nothing | **nothing** — the UI atlas's restore finishes and `painted` stops moving |
+
+**The content key is the paint count, `rgbGen` for its discontinuity, and the row bound for the
+shelf.** All three are things that change what a consumer would read and nothing else is: keying on
+the paint count alone misses a **re-arm** (the job is freed and counts from 0 again), and keying on
+those two misses a shelf that **grew** without a paint having landed in it yet. This is landing 2's
+lesson at a different atlas — a serial that is not the CONTENT's serial uploads once and then misses
+everything after it — applied before it cost a round rather than after.
+
+**The read-back sits between `tagpu_rglsl_step` and the drain**, which is where `tagpu_gui_present`
+already says, in its own comment, "what it paints this frame is what the drain's sprites sample". So
+the bytes handed over are the bytes the GL lane's own draws read, on the same frame — not a frame
+behind them. `glReadPixels` from an FBO over the twin gives memory row 0 first (the attachment is a
+texture, whose y = 0 is memory row 0, not the screen's bottom row), so there is no flip here either.
+
+##### What the ops carry, for the fourth time on this pass
+
+`TAGPU_GUIOP::col` is two bits of what the GL lane **did**:
+
+* `TAGPU_GUICOL_DST` — the destination twin has a colour attachment after this op. `twin_colour`
+  can refuse (no `glDrawBuffers`/`glClearBufferfv`, an incomplete FBO), so "the op wanted colour"
+  and "the twin has colour" are two facts and both are needed.
+* `TAGPU_GUICOL_ON` — the program's own `uRestored` (sprite) or `uSrcHasCol` (copy) was 1.
+
+Deriving either here would be asking `s_colValid && s_atlas.rgb` a second time, of a module that
+settled it in `restore_step` **before the drain**. Same rule as the sprite's atlas rect, the
+string's glyph cells and the cursor's destination — and the same reason each time.
+
+##### Where Vulkan is not GL
+
+* **A framebuffer is immutable.** GL flips `glDrawBuffers` between 1 and 2 on one live FBO; here a
+  twin that gains colour gains a **second framebuffer** over both views and a second render pass
+  with two attachments. Everything else about that pass is identical — same `LOAD`, same
+  dependencies — because it is the same draws writing one more output.
+* **No shader was translated.** `SPR_FS`, `CPY_FS` and `STR_FS` all already declare
+  `layout(location=1) out`, and landings 1–3 ran them against a **one-attachment** pass: a write to
+  a location the subpass has no attachment for is discarded, which is exactly what
+  `glDrawBuffers(1)` does over there. The colour edition is the same SPIR-V against a pass that has
+  the attachment.
+* **`twin_col_drop` is a render pass of its own.** `vkCmdClearAttachments` is the only rect clear
+  Vulkan has and it needs an instance; GL does it with a scissored `glClearBufferfv` on buffer 1.
+  For the same reason the CLEAR op now clears **both** attachments on a colour twin —
+  `glClear(GL_COLOR_BUFFER_BIT)` clears every buffer `glDrawBuffers` named.
+* **The descriptor claim is on the PAIR.** Binding 41 stopped being the dummy the moment Classic++
+  arrived — a sprite samples the restored atlas there and a copy its source's colour twin — so
+  keying the claim on binding 40 alone would hand a restored sprite the set of an unrestored one.
+  Right indices, wrong colour image, and a picture that is **correct everywhere the colour twin
+  happens to be empty**. `SET_MAX` gains two for the same reason.
+* **The retire takes two object sets in ONE entry.** `fb2` names both views, so split across
+  entries the sweep could destroy an attachment's view while the framebuffer naming it was alive.
+
+##### Five places the lanes could have diverged in silence, refused instead
+
+Every one of them writes a twin the **next** frame inherits, which is why none is a best-effort
+draw: a restored sprite before the restored atlas has crossed (reachable for exactly one frame —
+the pass asks for the mirror from inside its own `prepare`, so the present that ARMS the restore can
+run before anything has asked); a copy whose source has colour over there and not here; the
+presented twin the same way; the composite's own `uColOn`; and a `twin_colour` this lane could not
+honour. The first is answered with a **fresh start** and that is not a formality: a reseed
+re-publishes every surface's bytes, and `twin_col_drop` then clears the colour on both sides.
+
+And the palette re-arm — `restore_step` freeing the job and invalidating every colour twin —
+is applied on a **sweep** over the store rather than at each twin's next op. A twin nothing touches
+this frame is still one the composite may present.
+
+##### THE DEFECT, AND IT TOOK A SECOND RESOLUTION TO SEE
+
+`tagpu_rglsl_job_new` **clears its destination** when the job is made (`prepare_dest`), so every
+texel of the GL restored twin above the shelf reads alpha 0. Ours is only ever written for the rows
+the mirror has read back, and the rest of a 2048 square was **whatever the allocator handed us** —
+which `SPR_FS` reads as restored colour wherever a byte of it clears 0.5 alpha, writes into a colour
+twin, and the composite then shows.
+
+| the same build, the same fixture, the same levers | |
+|---|---|
+| `selbox-slope`, 1024×768 | **0 of 786 432** |
+| `selbox-slope`, 1920×1080 | **166 827 of 2 073 600** |
+
+**The garbage was always there and only sometimes read.** The run that measured 0 had not restored
+anything yet — `GL(restore)` and `GL(norestore)` were byte-identical on it — so no sprite took the
+`uRestored` branch at all. One resolution, taken alone, would have called this landing done. The fix
+is `vkCmdClearColorImage` over the whole image on creation, which is the GL lane's own behaviour
+rather than a guard added around it.
+
+##### Measured, with the restore ARMED and SETTLED
+
+`gui.on=mmbase` — **no `norestore`, and no lever of any kind is left on this pass.**
+`tagpu_classicpp.on` is in `tagpu_opt.c`'s play-defaults table with `assets=1`, so this is what an
+**ordinary session** does, and landings 1–3 stood down on every frame of one.
+
+| | |
+|---|---|
+| `selbox-slope` in game, 1024×768 | **0 of 786 432** |
+| `selbox-slope` in game, 1920×1080 | **0 of 2 073 600** |
+| the same two with `norestore`, after the fix | **0** and **0** — landings 1–3 unregressed |
+| the counters at 1024×768 | `colvalid=1 col=19/2 rgb=11 atlas=40/4096`, `sprites=847765 copies=5130 str=38/102 drawn=35090` |
+
+**AND THE NON-VACUITY CHECK IS A THIRD CAPTURE, not a counter.** §2.34 has twice had to correct an
+argument from ink counts, so this one is a picture-to-picture diff in the **GL lane alone**: the same
+frame with `norestore` and without.
+
+| what dropping `norestore` moves in the GL lane's own picture | |
+|---|---|
+| 1024×768 | **68 598 px of 786 432** — 8.7 % of the frame |
+| 1920×1080 | **220 372 px of 2 073 600** — 10.6 % |
+
+That is what the Vulkan lane reproduced to the pixel, and it is a claim no counter could make. It is
+also the check that caught the defect above: the run where this number was **0** was the run whose
+A/B was meaningless.
+
+**AND THIS SECTION WAS WRITTEN INTO §2.32 THE FIRST TIME, which is landing 1's bug wearing different
+clothes.** That one put §2.34 itself below the `## 3. Known limits` header; this one dropped 128
+lines about the UI pass into the middle of the shadow map's, because the anchor it was inserted
+before — `#### Not covered` — occurs in three sections and the first match is not this one. Both
+were caught by the same thing and by nothing else: **regenerating the wiki and reading the headings
+of the page you just wrote.** A note that renders in the wrong section is not documentation, and
+`git diff` shows it as an addition in the right file.
+
 #### Not covered
 
 * **The gate, which is the whole of G19f and not this landing.** `uiwalk`'s `strict` walk over the
@@ -5467,8 +5604,19 @@ detail rather than an engine one. Named rather than silently carried.
   `SHARP_TEXT` draws at device resolution where `twin_string` stamps into the twin, and nothing in
   `selbox-slope` takes it. The quads would cross like any other, but that is an argument and not a
   measurement.
-* **Classic++ colour twins and the MRT sprite/copy programs** — landing 4, still holding
-  `norestore`, and it may be blocked on the restorer's five shaders (G19c's own uncovered case).
+* ~~Classic++ colour twins and the MRT sprite/copy programs~~ **CLOSED by landing 4**, and it was
+  **not** blocked on the restorer's five shaders: they go on running in the GL context and their
+  output crosses as bytes. **No lever is left on this pass.**
+* **THE RESTORE'S OWN COST, which this landing pays and does not measure.** The read-back is a
+  `glReadPixels` of `2048 × (shelfY + shelfH) × 4` bytes on every frame the restorer painted, and it
+  **synchronises** — it is issued right after the paint draws. A settled session pays nothing (the
+  UI atlas's queue drains and `painted` stops moving) and an unarmed one pays nothing at all, but
+  the frames DURING a fill are not counted anywhere and no figure here bounds them. It belongs to
+  landing 6 with the rest of the cost question.
+* **A PALETTE RE-ARM IS NOT EXERCISED BY THESE FIXTURES BEYOND ITS FIRST.** `rearms=1` on every run
+  — the one the shell→game transition causes — so the sweep that invalidates every colour twin has
+  fired once and always with two twins in the store. The Gamma slider and `+gamma N` are what drive
+  it in play and neither is in a fixture here.
 * **The present itself** — landing 5. Route D still gives the Vulkan lane a window of its own.
 * **Frame time**, which is half the gate's own wording — landing 6, and nothing in Phase G has
   measured cost at all.
