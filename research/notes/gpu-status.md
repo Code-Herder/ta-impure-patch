@@ -5587,6 +5587,44 @@ That is what the Vulkan lane reproduced to the pixel, and it is a claim no count
 also the check that caught the defect above: the run where this number was **0** was the run whose
 A/B was meaningless.
 
+##### What the review and the RE-review found, and where they landed
+
+Two reviewers at `high`, then one re-review of the fixes. **No CONFIRMED defect in the
+synchronisation, the lifetime, the retire or the content key** — the arguments this section makes
+about those all held when traced. What they did find:
+
+* **The creation clear closed UNDEFINED memory and left STALE memory open.** `s_arRows` was a
+  monotone high-water reset only on a dimension change, and `mirrorRgbRows` drops to 0 in two places
+  that change no dimension. An upload after a shrink covered the new rows and left the previous
+  fill's colours above them. A high-water records that rows were once written, never that they still
+  say the right thing — which is exactly how it hid, and the 166 827 px above is the proof those
+  rows get sampled.
+* **THE UI ATLAS'S GENERATION WAS NEVER CHECKED ACROSS A PRESENT, AND THAT HAD BEEN OPEN SINCE
+  LANDING 1.** `tagpu_gaf_atlas_put` runs INSIDE the drain, so a sprite that fills the atlas recycles
+  it in the middle of the very present whose earlier sprites are already recorded with the rects it
+  resolved. Landing 2 built precisely this guard for the GLYPH atlas; the sprite atlas was left
+  without one for three landings. The subtlety that makes it safe is that `twins_reset` recycles the
+  atlas too — so *every* RESET moves the generation, and a guard that did not forget the ops before
+  one would lose every present answering a reseed and answer it with another.
+* **`SET_MAX` stopped bounding its worst case the moment the claim became a pair** — a copy SOURCE
+  can be claimed twice in one frame because `uSrcHasCol` is a property of the DESTINATION. Both
+  reviewers, independently; the eighth such pair on this lane. `2 * TW_MAX + 3` is exact rather than
+  slack: 64 copy claims, 2 sprite, 1 glyph.
+* **And the RE-REVIEW found a defect inside a fix, for the third round running on this pass.** The
+  whole-image clear and the row copy are two TRANSFER writes to overlapping memory recorded back to
+  back, and **recording order is not execution order**: without a barrier between them the driver may
+  land the clear after the copy, and every restored sprite then draws indexed against a `uRestored`
+  that says otherwise, silently, for as long as the serial stands still. The fix for the stale rows
+  is what made that path routine — it used to run once per image.
+
+Three documentation claims were disproved and corrected: a fresh start DESTROYS the colour twin
+rather than clearing it (the conclusion was right, the mechanism named was not); "no lever is left"
+meant no STAND-DOWN lever, beside a table measured with a force-ON one; and this page's own
+producer-side comment still asserted that rows past the shelf "can change no texel any op samples",
+which is precisely the premise the 166 827 px killed. A fourth was a safety claim with no mechanism
+behind it — the cursor's generation mark cannot fire, because `atlas_insert` answers exhaustion with
+a flag and a NULL and never touches the generation.
+
 **AND THIS SECTION WAS WRITTEN INTO §2.32 THE FIRST TIME, which is landing 1's bug wearing different
 clothes.** That one put §2.34 itself below the `## 3. Known limits` header; this one dropped 128
 lines about the UI pass into the middle of the shadow map's, because the anchor it was inserted

@@ -1768,10 +1768,20 @@ static void sharp_cursor(const TAGPU_FRAME* f)
     /* THE RESOLVED RECT, and this is the one that could not be re-derived:
        `dx`/`dy` above came from `mouse_last_client()` on THIS thread at THIS
        instant, and the Vulkan lane runs later in the same iteration. */
-    /* THE CURSOR'S QUAD CARRIES A RESOLVED ATLAS RECT TOO, and `sharp_cursor`
-       runs AFTER the drain -- so its own `tagpu_gaf_atlas_get` can recycle the
-       atlas when nothing in the drain did, and this is the only thing that
-       would notice on a frame with a cursor and no sprites. */
+    /* THE CURSOR'S QUAD CARRIES A RESOLVED ATLAS RECT TOO, so it is marked like
+       a sprite's -- AND ON TODAY'S CODE THIS CANNOT FIRE, which the first
+       version of this comment got wrong by claiming `sharp_cursor`'s own
+       `tagpu_gaf_atlas_get` could recycle the atlas. It cannot: `atlas_insert`
+       answers exhaustion with `a->full = 1` and NULL and never touches `gen`,
+       and the three sites that do bump it -- `atlas_drop` (through
+       `tagpu_gaf_atlas_reset`/`_forget`), `atlas_repack` (the gui atlas never
+       asks for one) and `tagpu_gaf_atlas_lost` -- all run inside the drain or
+       outside the present entirely. So nothing moves the generation between
+       here and `mir_finish`.
+       It stays because the RECT IS RESOLVED THE SAME WAY a sprite's is and the
+       next client drawn after the drain would need it; it is marked as a claim
+       about this quad, not as a guard that does work today.
+       [The false half was FOUND 2026-09-16 by the re-review.] */
     mir_atlas_seen();
     mir_sdraw(TAGPU_GUISK_CURSOR, (float)x0, (float)y0,
               (float)(x0 + w), (float)(y0 + h),
@@ -2614,10 +2624,17 @@ static void mir_finish(const TAGPU_FRAME* f)
     }
 
     /* THE RESTORED UI ATLAS (landing 4). Read back where the paint happens,
-       above -- nothing is read here. `atlasRgbRows` is the mirror's own
-       high-water mark and not this frame's shelf: the read-back never shrinks
-       what it has filled, and rows past the shelf name no entry, so uploading
-       them costs a little bandwidth and can change no texel any op samples.
+       above -- nothing is read here.
+       `atlasRgbRows` IS WHAT THE MIRROR HOLDS, and the first version of this
+       comment made two claims about it that are false. It is NOT true that
+       "rows past the shelf name no entry, so uploading them can change no texel
+       any op samples": `tagpu_gaf_atlas_put` runs inside the DRAIN, after the
+       read-back, so a cell lands above `atlasRgbRows` on the very next frame --
+       which is how 166 827 px of undefined memory reached the screen at 1080p
+       and 0 px at 1024x768 on the same build. And the read-back CAN shrink what
+       it has filled: `rgb_mirror_zeroed` keeps the row count and zeroes the
+       content, and a context loss drops the count to 0. The consumer's own
+       image is cleared on a shrink for exactly that reason.
        IT IS NOT GATED ON `colValid`. Withholding it on an invalid frame would
        make the image come and go under the consumer for a reason that has
        nothing to do with the image, and nothing would be gained: whether a

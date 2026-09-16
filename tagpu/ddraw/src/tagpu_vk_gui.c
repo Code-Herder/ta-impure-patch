@@ -2031,6 +2031,23 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             rg.levelCount = 1; rg.layerCount = 1;
             vkCmdClearColorImage(cb, s_arImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                  &cv, 1, &rg);
+            /* AND THE CLEAR IS ORDERED BEFORE THE COPY, which is not implied by
+               recording it first. Both are TRANSFER writes to overlapping
+               memory and Vulkan orders them only if something says so -- so
+               without this the driver may land the whole-image clear AFTER the
+               rows the copy just wrote, and every restored sprite then draws
+               indexed against a `uRestored` that says otherwise, for as long as
+               `atlasRgbSerial` stands still. Silent, driver-dependent, and it
+               poisons the colour twins cumulatively.
+               `ab864e0` is what made this reachable in the ordinary way: the
+               clear used to run once per image and now runs on every shrink.
+               [FOUND 2026-09-16, the re-review of the landing-4 fixes -- the
+               third round on this pass to find a defect inside a fix.] */
+            img_barrier(cb, s_arImg,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
         }
         copy_rect(cb, s->stage, arOff, s_arImg, 0, 0, h.atlasDim, h.atlasRgbRows);
         img_barrier(cb, s_arImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
