@@ -15,6 +15,7 @@
 #include "tagpu.h"
 #include "tagpu_overlay.h"
 #include "tagpu_cursown.h"
+#include "tagpu_ftime.h"
 #include "tagpu_gui.h"
 #include "tagpu_packet.h"
 #include "tagpu_reclaim.h"
@@ -1150,6 +1151,15 @@ static void ogl_render()
         BOOL scale_changed = FALSE;
 
         fpsl_frame_start();
+        /* tagpu_ftime (G19f landing 6): the GL lane's GPU bracket opens HERE,
+           before the frame issues anything, and closes immediately before the
+           swap -- so what it spans is every GL command this iteration produced,
+           the fork's own upload and composite as well as every tagpu pass,
+           which is exactly the work a replacement backend would have to do
+           instead. Two TIMESTAMP counters and nothing that blocks; inert
+           without `tagpu_ftime.on`. */
+        tagpu_ftime_poll();
+        tagpu_ftime_gl_begin();
 
         EnterCriticalSection(&g_ddraw.cs);
 
@@ -1684,6 +1694,10 @@ static void ogl_render()
            GL passes stamped their hand-overs with is the one before it. That
            equality is what lets a Vulkan pass refuse a hand-over from any
            other frame (tagpu_vk_pass.h). */
+        /* CLOSED BEFORE THE VULKAN LANE RUNS, not after it: the two lanes are
+           being compared, so the GL bracket must not contain the Vulkan lane's
+           own submit. `tagpu_vk_frame` is where the other half is taken. */
+        tagpu_ftime_gl_end();
         if (!tagpu_vk_frame(g_ddraw.hwnd, g_ddraw.render.width, g_ddraw.render.height,
                             g_config.vsync, g_tagpu_frames - 1u))
             SwapBuffers(g_ogl.hdc);

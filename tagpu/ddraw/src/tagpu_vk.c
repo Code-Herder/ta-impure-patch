@@ -151,6 +151,7 @@
 /* tagpu_vk_pass.h defines VK_NO_PROTOTYPES and pulls the headers in, and the
    comment above is why both are needed. */
 #include "tagpu_vk_pass.h"
+#include "tagpu_ftime.h"
 #include <windows.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -309,6 +310,8 @@ static PFN_vkGetInstanceProcAddr s_gipa;
     X(vkGetSwapchainImagesKHR) X(vkCreateCommandPool) X(vkDestroyCommandPool) \
     X(vkAllocateCommandBuffers) X(vkFreeCommandBuffers) \
     X(vkBeginCommandBuffer) X(vkEndCommandBuffer) \
+    X(vkCreateQueryPool) X(vkDestroyQueryPool) X(vkGetQueryPoolResults) \
+    X(vkCmdResetQueryPool) X(vkCmdWriteTimestamp) \
     X(vkCmdPipelineBarrier) X(vkCmdClearColorImage) X(vkCreateSemaphore) \
     X(vkDestroySemaphore) X(vkCreateFence) X(vkDestroyFence) \
     X(vkAcquireNextImageKHR) X(vkQueueSubmit) X(vkQueuePresentKHR) \
@@ -356,6 +359,14 @@ typedef struct {
     VkSemaphore      semAcquire[MAXIMG];   /* by FRAME index                  */
     VkSemaphore      semRelease[MAXIMG];   /* by IMAGE index -- see vk_present */
     VkFence          fence[MAXIMG];
+    /* tagpu_ftime (G19f landing 6): two timestamps a frame, slot i at 2i and
+       2i+1. READ BEHIND THE FENCE THIS SEAM ALREADY WAITS ON before it
+       re-records that slot -- so the results are complete by construction and
+       cost no wait of their own. `tsPend` says a slot has a pair worth reading;
+       it is cleared when read and when the lane comes down. */
+    VkQueryPool      tsPool;
+    char             tsPend[MAXIMG];
+    double           tsPeriod;       /* ns per tick, 0 = no timestamps here   */
     uint32_t         qfam;
     uint32_t         nimg;
     VkFormat         fmt;
@@ -1566,6 +1577,37 @@ static int vk_perimage(void)
     if (vkAllocateCommandBuffers(s_vk.dev, &cbai, s_vk.cmd) != VK_SUCCESS) {
         vklog("command buffers"); return 0;
     }
+    /* ---- tagpu_ftime's timestamps (G19f landing 6) ----------------------
+       TWO CONDITIONS, AND NEITHER IS "the device has a clock". `timestampPeriod`
+       is nanoseconds per tick and is 0 on a device that cannot do it at all;
+       `timestampValidBits` is per QUEUE FAMILY and can be 0 on the very family
+       we submit to while another family has it. Both are checked, the harness
+       simply goes without on a device that refuses, and the report then says
+       there is no comparison rather than printing half of one. It is NOT fatal:
+       a missing cost figure must never cost a frame. */
+    s_vk.tsPeriod = 0.0;
+    memset(s_vk.tsPend, 0, sizeof s_vk.tsPend);
+    {
+        VkPhysicalDeviceProperties dp;
+        VkQueueFamilyProperties qp[16];
+        uint32_t nq = 16;
+        vkGetPhysicalDeviceProperties(s_vk.pd, &dp);
+        vkGetPhysicalDeviceQueueFamilyProperties(s_vk.pd, &nq, qp);
+        if (dp.limits.timestampPeriod > 0.0f && s_vk.qfam < nq && qp[s_vk.qfam].timestampValidBits > 0) {
+            VkQueryPoolCreateInfo qi = { VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
+            qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            qi.queryCount = s_vk.nimg * 2u;
+            if (vkCreateQueryPool(s_vk.dev, &qi, NULL, &s_vk.tsPool) == VK_SUCCESS)
+                s_vk.tsPeriod = (double)dp.limits.timestampPeriod;
+            else
+                vklog("ftime: no timestamp query pool - the Vulkan lane cannot be timed");
+        } else {
+            vklog("ftime: this device/queue reports no usable timestamps (period %.3f, valid bits %u)"
+                  " - the Vulkan lane cannot be timed",
+                  (double)dp.limits.timestampPeriod,
+                  s_vk.qfam < nq ? qp[s_vk.qfam].timestampValidBits : 0u);
+        }
+    }
     for (i = 0; i < s_vk.nimg; i++) {
         VkImageViewCreateInfo ivi = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
         VkFramebufferCreateInfo fbi = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
@@ -1628,6 +1670,7 @@ static void vk_perimage_free(void)
         if (s_vk.semAcquire[i]) { vkDestroySemaphore(s_vk.dev, s_vk.semAcquire[i], NULL); s_vk.semAcquire[i] = VK_NULL_HANDLE; }
         if (s_vk.semRelease[i]) { vkDestroySemaphore(s_vk.dev, s_vk.semRelease[i], NULL); s_vk.semRelease[i] = VK_NULL_HANDLE; }
         if (s_vk.fence[i])      { vkDestroyFence(s_vk.dev, s_vk.fence[i], NULL);          s_vk.fence[i] = VK_NULL_HANDLE; }
+    s_vk.tsPend[i] = 0;
     }
 }
 
@@ -2183,6 +2226,23 @@ static int vk_present(void)
         return -2;
     }
 
+    /* ---- tagpu_ftime: THIS SLOT'S PREVIOUS PAIR, AND IT COSTS NO WAIT.
+       The fence above has just signalled, which is precisely the statement that
+       everything slot `fi` submitted last time round has completed -- so its two
+       timestamps are available and `vkGetQueryPoolResults` is asked WITHOUT the
+       WAIT bit. That is the whole reason the read lives here rather than after
+       the submit: a harness that blocks the thread it is measuring measures the
+       block. */
+    if (s_vk.tsPool && s_vk.tsPend[fi]) {
+        uint64_t ts[2] = { 0, 0 };
+        s_vk.tsPend[fi] = 0;
+        if (vkGetQueryPoolResults(s_vk.dev, s_vk.tsPool, fi * 2u, 2,
+                                  sizeof ts, ts, sizeof ts[0],
+                                  VK_QUERY_RESULT_64_BIT) == VK_SUCCESS &&
+            ts[1] > ts[0])
+            tagpu_ftime_vk_sample((double)(ts[1] - ts[0]) * s_vk.tsPeriod);
+    }
+
     /* THE TEARDOWN A PASS OWES, PAID WHERE IT IS LEGAL TO PAY IT.
        [FROM THE G19e LANDING REVIEW, 2026-09-15 -- both reviewers, separately.]
        A pass that cannot get its per-slot resources mid-frame stops drawing and
@@ -2261,6 +2321,19 @@ static int vk_present(void)
     vkResetCommandBuffer(cb, 0);
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cb, &bi);
+
+    /* RESET BEFORE WRITE, AND ON THE DEVICE. A timestamp query must be reset
+       between uses, and `vkCmdResetQueryPool` is the only form every Vulkan 1.0
+       device has (`vkResetQueryPool` is 1.2). It is recorded here, at the top of
+       the buffer, so the reset is ordered before the write that follows it by
+       the command buffer itself rather than by anything we argue.
+       The lever is read each frame: arming mid-session starts sampling on the
+       next slot round rather than needing a relaunch. */
+    if (s_vk.tsPool && tagpu_ftime_armed()) {
+        vkCmdResetQueryPool(cb, s_vk.tsPool, fi * 2u, 2);
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, s_vk.tsPool, fi * 2u);
+        s_vk.tsPend[fi] = 1;
+    }
 
     b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
@@ -2455,6 +2528,11 @@ static int vk_present(void)
             s_abPath = abpath;
         }
     }
+    /* BOTTOM_OF_PIPE, paired with the TOP_OF_PIPE above: between them lies
+       every stage of everything this buffer recorded, which is this lane's
+       whole frame -- the same span the GL bracket takes on its side. */
+    if (s_vk.tsPool && s_vk.tsPend[fi])
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s_vk.tsPool, fi * 2u + 1u);
     vkEndCommandBuffer(cb);
 
     si.waitSemaphoreCount = 1; si.pWaitSemaphores = &s_vk.semAcquire[fi];
