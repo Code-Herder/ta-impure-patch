@@ -5692,8 +5692,14 @@ says plainly that it is not the safety argument.
 
 The safety argument is that the op carries **the level it was OBSERVED in**, and `publish` refuses
 to resolve a GAF frame while a teardown is in flight, from a level that has ended, or when nothing
-is tracking levels at all. All three are read on the **game thread**, so this is program order on
-one thread rather than a claim about visibility.
+is tracking levels at all.
+
+**THE "ONE THREAD" PART IS AN OBSERVATION ABOUT THE ENGINE, NOT SOMETHING THE CODE ESTABLISHES, and
+this paragraph asserted it flatly until the re-review asked for the proof.** `before_flip` checks
+`on_game_thread()`; the blit observers that call `op_add` do not, so nothing in our code proves the
+stamp is taken on the same thread the generation is bumped on. It is benign either way — the
+generation is monotone, so a stale read can only ever make the gate REFUSE — and that asymmetry is
+the reason it is safe to leave rather than a reason it does not matter.
 
 **THE GENERATION IS `tagpu_packet_pub`'s, AND KEYING IT ON `tagpu_reclaim`'s WAS THE FIRST VERSION'S
 REAL DEFECT.** Reclaim's generation moves only while reclaim is ARMED — and `tagpu_reclaim.off`, one
@@ -5711,6 +5717,22 @@ latches per-level state" should stamp with. `tagpu_packet_pub_level_tracked()` i
 when no provider exists the generation never moves, and no ordering being available is a reason to
 **refuse** the read rather than to take it.
 
+**AND THAT PREDICATE WAS WRONG THE FIRST TIME, WHICH IS THE FOURTH LANDING RUNNING WHERE THE
+RE-REVIEW FOUND A DEFECT INSIDE A FIX.** It read `s_levelEndBy != 0`, which is assigned only when the
+PUBLISHER is armed — so under `tagpu_packet.off` it answered "nothing tracks levels" while the
+generation was moving perfectly well, because `tagpu_packet_pub_level_end` bumps it as its first
+statement, above every gate, and reclaim's wrap calls that from a hard-wired stub whether this
+module is armed or not. The gate would then have refused **every** GAF op for the whole session and
+degraded every UI sprite to a box upload — fail-safe, and a total silent loss of the sprite path on
+the one lane whose cost is about to be measured. It is `s_levelEndBy != 0 ||
+tagpu_reclaim_level_tracked()` now: either provider moving the counter is enough.
+
+One asymmetry between the two providers is worth knowing and is **not** closed: reclaim's wrap is an
+unconditional stub, so it bumps the generation on whatever thread the teardown runs on, while this
+module's own observer returns early off the game thread and the generation then does **not** move
+for that teardown — which fails OPEN at the gate. It is only reachable if `0x491B60` can run off the
+game thread, which the review could not establish either way.
+
 **AND THE WINDOW THIS SITE ACTUALLY SEES IS NOT THE ONE THE FIRST DRAFT DREW.** It argued that the
 teardown flag covers the frees and the generation covers what follows, so neither is sufficient
 alone. That is true of the flag and the generation in general and **false of this call site**:
@@ -5725,22 +5747,61 @@ argument. [The reviewer traced all six `call 0x491b60` sites to establish this.]
 The fallback when any test refuses is the op's own box out of **our mirror of the surface**, not out
 of the asset — so the picture is unchanged and only the sprite's identity is lost.
 
-**THE EVIDENCE FOR "IT REFUSES NOTHING INSIDE A LEVEL" IS `gafstale=`, AND THE FIRST VERSION OF THIS
-PARAGRAPH ARGUED FROM A COUNTER THAT CANNOT MOVE.** It read "`sprites=` climbs with `lost=` flat" —
-but `lost=` is the CONSUMER's atlas miss, and a publisher-side refusal emits `PK_PIXELS` and never a
-`PK_SPRITE`, so it could not have moved whatever happened. The counter that does say it was the one
-added with the fix, and it was **not printed**: it rode a `gui census:` line an ordinary run never
-emits. It lives in the shared queue struct now, beside the other producer counters, where the render
-half's heartbeat prints it. This is the third time this section has had to withdraw an argument from
-counters, which is why it now prefers a second capture wherever one exists.
+**THE COUNTER IS THE SHAPE OF THE FIX; IT IS NOT EVIDENCE THAT THE FIX WORKS.** Two versions of this
+paragraph thought otherwise. The first argued from `lost=` being flat — but `lost=` is the CONSUMER's
+atlas miss, and a publisher-side refusal emits `PK_PIXELS` and never a `PK_SPRITE`, so it could not
+have moved whatever happened. The second argued from `gafstale=` alone, which says how often the gate
+fired and nothing about whether the crash it is aimed at would have happened. **The fault is
+intermittent, so on this route every run that does not crash looks like a fix**, and a clean run
+after a change is worth nothing until the rate of the thing being prevented is known. That rate was
+never measured, and that — not the counter — is the real defect in how this landing was first argued.
+
+**SO IT WAS MEASURED, ON THREE BINARIES.** The same route five times per arm — `SINGLE` → `Skirmish`
+→ `Start`, into the game, then `tab tab` → `EXIT` → `MAINMENU` → `y`, with the shell's 640×480 read
+back as the proof that the level really tore down — at 1920×1080 with the **Vulkan lane DOWN**, which
+is the configuration the crash was first seen in:
+
+| arm | the `frame_sane` bound | the ordering | crashed |
+|---|---|---|---|
+| **A** — neither, i.e. the landing-4 tip | out | out | **4 of 5** |
+| **B** — the ordering ALONE | out | **in** | **0 of 3**, `gafstale=147` at the boundary |
+| **C** — what ships | **in** | **in** | **0 of 5** |
+
+**Arm B is the one that carries the claim, and it is why the bound is not the argument**: with
+`frame_sane` compiled OUT and only the ordering standing, 147 GAF resolves were refused at the
+teardown and nothing crashed, against a base rate of four in five.
+
+**Arm A's four crashes are one fault, not four.** Every one of them: `80 7f 09 00` at the
+instruction pointer — `cmp byte ptr [edi+9], 0`, which IS `fr[0x09] == 0` — at the same EIP, with
+the faulting address exactly `EDI+9` and reading `0x09A48D21` every time, because the per-level bank
+comes back at a fixed address and only the timing of the race varies.
+
+And the fifth arm-A run, the clean one, is the control: on arm C the counter reads `gafstale=0` on
+one run in five as well. **A run with nothing straddling the boundary is a run that would not have
+crashed unfixed either**, and the two fractions agreeing is the closest thing this fixture has to a
+positive control.
+
+The shape inside one arm-C run, which is what the counter is actually good for:
 
 | | |
 |---|---|
-| in play | **`gafstale=0`** while `sprites=` climbs 107 983 → 213 580 |
-| after the teardown | **`gafstale=225`** |
+| in play | **`gafstale=0`** on 30 heartbeats while `sprites=` climbs 9 831 → 534 525 |
+| `packet: level end -> gen 1 (reclaim's 1)` | 6462 in-play draws that level |
+| after the teardown | **`gafstale=215`** on 18 heartbeats — and **no other value all session** |
 
-Zero inside a level and a burst at the boundary is the shape the ordering predicts — and those 225
-are reads that used to go into freed memory.
+Across the five arm-C runs: 215, 225, 0, 225, 215. It steps once, at the boundary, and those are
+reads that used to go into freed memory.
+
+**THE TRAP THAT COST A ROUND OF THIS: THE ARMS WERE FIRST RUN WITH THE VULKAN LANE UP, AND ARM A
+READ CLEAN 1 OF 1 THAT WAY.** Route D draws a second window's worth of work in the same iteration of
+`ogl_render`, so the publisher's queue drains on a different schedule and the race closes. A crash
+reproduction has to run in the configuration the crash was seen in, and "the lane is off" is part of
+that configuration even when the bug has nothing to do with the lane. On the strength of those clean
+runs this section had already withdrawn the `225` above as an artefact of the `s_levelEndBy` defect.
+**That withdrawal was wrong** — the number reproduces at 215/225 on the corrected predicate, because
+in the configuration it was measured in the publisher was armed and that disjunct never fired. The
+re-review's finding stands as a latent defect under `tagpu_packet.off`; the measurement it appeared
+to discredit was sound.
 
 **This is the standing debt in `CLAUDE.md` coming due, once.** The roadmap already lists "the
 per-LEVEL ASSET class under `tagpu_reclaim`'s fence" as an open row of the frame-packet gate; this
@@ -5761,9 +5822,12 @@ the asset channel, and leaves the class itself open.
   feature, unit, terrain, effects and packet-publisher readers all sit behind the level-end packet's
   own `in_game` gate, which is published before the flag drops — but it named **two that are not**:
 * **THE SHELL'S SCREEN-POP ROUTE IS UNCOVERED, and it is not a level at all.** `GUI_Pop 0x4A9660`
-  frees a popped screen's art from 21 event-handler call sites, with no teardown flag and no
-  generation moving — and `frame_key`'s own comment has recorded for some time that the shell hands
-  those same addresses to the next screen. Ops accumulate for up to `CENSUS_MS` before they publish
+  frees a popped screen's art from **39** call sites, with no teardown flag and no generation moving
+  — and `frame_key`'s own comment has recorded for some time that the shell hands those same
+  addresses to the next screen. (This bullet said "21 event-handler call sites" until the
+  re-review counted them: 21 is `UpdateIngameGUI 0x491D70`'s figure, which
+  [exe-reverse-engineering](exe-reverse-engineering.html) records, and it was borrowed for the
+  wrong function. `call 0x4a9660` appears 39 times in the pristine exe.) Ops accumulate for up to `CENSUS_MS` before they publish
   (the shell flips thousands of times a second), so an op can outlive the screen that produced it.
   On that route the only thing standing is `frame_sane`, which is a probe. Named here because the
   bullet above covers the per-LEVEL class and this is not in it.
