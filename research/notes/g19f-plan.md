@@ -104,8 +104,38 @@ it looks:
   not do.
 * `STR_FS` is already translated (G19c) and takes `uSize`, `uFg`, `uBg`, `uTr` plus the atlas.
 
-**Landing 3 — the sharp layer proper.** `SHARP_FS`, `CURS_FS`, `MM_FS`: the cursor at device
-pixels and the sharp minimap. Drops `nocursor` and `nominimap`.
+**Landing 3 — the sharp layer proper.** `CURS_FS`, `MM_FS`: the cursor at device pixels and the
+sharp minimap. Drops `nocursor` and `nominimap`. **This is what still makes the pass composite
+nothing in an ordinary session** — `s_sharpInk` is coverage, and a cursor is on screen on every
+frame of real play — so it matters for the same reason landing 2 did.
+
+**SCOPED 2026-09-16 against `sharp_cursor` and `sharp_minimap`, and it is smaller than this plan
+assumed.** The layer has exactly two clients and neither needs a new mechanism:
+
+* **The cursor samples the UI ATLAS, which landing 1 already carries.** `sharp_cursor` resolves one
+  `TAGPU_GAFENT` through `tagpu_gaf_atlas_get` and draws one quad. So the texels are already on the
+  other side and what is missing is two rectangles.
+* **AND ITS POSITION IS LIVE STATE READ AT DRAW TIME** — `mouse_last_client()`, else
+  `g_ddraw.cursor` through `tagpu_hud_to_screen`. The Vulkan pass runs later in the same iteration,
+  so re-reading it would get a **different pointer position**: a guaranteed non-zero A/B, and a
+  re-derivation of the pass's input. **So the hand-over carries the RESOLVED destination rect
+  (`x0`, `y0`, `w`, `h`), the resolved atlas rect and `e->ck`** — the same rule as the sprite's
+  resolved rect and the string's resolved cells, for the third time on this pass. `uCursRestored`
+  is hard 0 in the GL lane (the cursor is resolved through the presented palette and never the
+  restored twin — 24.1's artifact), so the Classic++ branch does not arise here at all.
+* **The minimap's picture is already a CPU array** (`s_mmPicRgb`, resolved through the presented
+  palette and re-resolved when `tagpu_pal_serial()` moves), and the engine's two 126-px surfaces it
+  masks against are engine bytes we already read. So it carries: the resolved box (the packet's
+  `mm_box` after `tagpu_hud_to_screen` and the `hq8` scale — resolved, again, not re-derived), the
+  picture with its generation, and the engine pair as `RG8`. About 32 KB a frame for the pair.
+* **`SHARP_FS` is NOT the composite's sampler** — `LAY_FS` already samples the layer through
+  `uSharp`/`uSharpOn`, which landing 1 wired and left switched off. Check what `SHARP_FS` actually
+  draws (`s_sharptest` suggests the test pattern) before budgeting for it.
+
+So landing 3 is: two resolved records on the hand-over, one more shared image (the minimap picture)
+plus a per-frame one (the engine pair), two pipelines, and turning on the `uSharpOn` branch the
+composite already has. The device-resolution layer itself is a third render target in the pass,
+sized like the twins and cleared every frame.
 
 **Landing 4 — Classic++.** The colour twins and the MRT sprite/copy programs, the per-texel
 choice between restored colour and the live palette, and the palette-validity rule. Drops
