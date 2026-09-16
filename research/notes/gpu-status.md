@@ -6042,6 +6042,53 @@ merely unproven but false.
   inside the GL bracket and a candidate for both the absolute figures and the anomaly.
 * One fixture, one map, one scene, paused.
 
+### The gate's walk — the Vulkan lane against the GL lane, over the whole inventory
+
+`tools/uiwalk.py --vk`. The gate asks for a `strict` walk over the **full screen inventory** at both
+resolutions, shell and in game, with the Vulkan lane matching what the GL lane scores. `uiwalk` had
+no Vulkan support at all before this: it diffs **our** frame against the **engine's** surface, which
+is not a valid regression with Classic++ on (see above), so it could not answer this question.
+
+`--vk` arms the lane in its own window — `gui.on=mmbase classicpp.on vk.on=color=0,0,0`, **no
+`norestore`**, so landing 4's restored UI atlas is live and is what the comparison runs through —
+and at every stop re-arms `tagpu_gui.ab`, waits for both lanes to write, and diffs the pair with
+`tools/vk-ab.py --pass gui`. The lever is one-shot per arming (`s_abDone`), so it is created, waited
+on and removed at each stop rather than left standing.
+
+| walk | stops at 0 px |
+|---|---|
+| shell, 640×480 (what the shell runs at whatever the game res) | **13 / 13** |
+| in game, 1024×768 | **13 / 13** |
+| in game, 1920×1080 | **13 / 13** |
+
+**39 of 39.** The in-game walks include the four-deep stack `VISUALRT` over `PREFS` over `ARMOPT`
+over `ARMCOM1` over `ARMMAIN2`, both pages of the build menu, chat and F4; the shell walk includes
+`SELMAP` over `SKIRMISH` and our own injected `VISUALS.GUI` with its 50 gadgets.
+
+**A MISSING PAIR IS NOT A ZERO, and this is the part of the walker that matters most.** `vk_ab`
+returns `None` when either lane did not write; the stop prints `NO PAIR` and the report renders it
+**NO PAIR** and counts it *out* of the pass tally. Two runs earned that guard on the spot:
+
+* The first walk ran against an instance a killed run had left part-driven, and the game exited a
+  third of the way through. Twelve stops reported `NO PAIR` — against a dead game. Rendered as `0
+  px` they would have read as twelve passes, and the walk would have claimed 17 of 17.
+* The first 1080p walk read `tagpu_gui_vk.ppm` at **5 509 120 of 6 220 800 bytes** — a 6.2 MB file
+  caught mid-write, because "both files exist, sleep 0.4 s" is enough at 640×480 and not at 1080p.
+  One `NO PAIR`, at `VISUALRT`, the deepest stack in the inventory. It now polls until each file
+  reports the same size twice running, and that stop reads 0 px.
+
+This is the failure mode this lane produces over and over — landing 1 stood down on every frame
+while every counter read zero, landing 4 measured 0 px on a run that had restored nothing — and the
+walk is the one place where a hole and a pass look identical unless the tool refuses to conflate
+them.
+
+#### Not covered by the walk
+
+* **The inventory is the screens, not every state of them.** 13 stops per walk. A build menu page
+  the walk does not turn, a dialog it does not open, an animation mid-frame: not covered.
+* **One map, one side (ARM), one scenario** — `tascene-parity`.
+* **The cursor and the minimap are at their landing-3 levers** (`mmbase`), not swept.
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out
