@@ -51,17 +51,20 @@
    quads -- a 402 MB host-visible `grow()` per slot, which `grow` never shrinks
    again. Landing 1's worst measured frame was 7414 quads. */
 #define QUAD_MAX    65536
-/* one descriptor set per distinct IMAGE a frame's twin draws sample. There are
-   three kinds and only three: every sprite samples the ONE UI atlas, every
-   string the ONE glyph atlas, and a copy samples its SOURCE TWIN -- so the sets
-   a frame needs cannot exceed the twins plus two, whatever the op count.
-   IT WAS `TW_MAX + 1` UNTIL LANDING 2 AND THAT WAS THE STRING OP'S DOING: the
-   glyph atlas is the SECOND non-twin view, and the old bound's own comment
-   ("they all sample the one atlas") stopped being true the moment there were
-   two. A frame with all TW_MAX twins used as copy sources plus one sprite plus
-   one string wanted 34 of 33 and fell into `standdown` -- recoverable, because
-   `behind` catches the store up, but a store dropped every frame is not
-   parity. Bound it instead of arguing it is unreachable. */
+/* HOW MANY DESCRIPTOR SETS A FRAME IS GIVEN. Three kinds of image a twin draw
+   samples: every sprite the ONE UI atlas, every string the ONE glyph atlas, and
+   a copy its SOURCE TWIN -- so the twins alive plus two covers any frame that
+   does not CHURN its store.
+   THIS IS A SIZE AND NOT A BOUND, and saying otherwise here was a finding of
+   its own. `tw_drop` deliberately leaves a claim standing (see it), so what a
+   frame spends is DISTINCT VIEWS CLAIMED, and a present that batches
+   FREE + SEED + COPY claims one per surface GENERATION -- which nothing bounds
+   by TW_MAX. What IS by construction is the consequence: `set_claim` answers 0
+   deterministically, the replay goes to `standdown`, `behind` drops OUR store
+   and asks once, and nothing of the GL lane's is touched. Sized for the case
+   that has to work, degrading predictably past it.
+   (It was TW_MAX + 1 until landing 2, whose string op made the glyph atlas a
+   second non-twin view and left the old size one short.) */
 #define SET_MAX     (TW_MAX + 2)
 /* objects waiting for every slot to turn over once before they are destroyed.
    THE LANE ALREADY HAD THE ANSWER AND THIS PASS DID NOT USE IT: the seam waits
@@ -925,15 +928,19 @@ static void set_viewport(VkCommandBuffer cb, int w, int h)
     vkCmdSetViewport(cb, 0, 1, &vp);
 }
 
-/* (s_setView is declared with the pass's state, above: tw_drop clears a claim
-   whose view it is retiring.)
+/* (s_setView is declared with the pass's state, above. NOTE THAT `tw_drop`
+   DELIBERATELY DOES NOT CLEAR A CLAIM whose view it is retiring -- an earlier
+   round made it do exactly that and caused a worse hazard than the one it
+   closed; `tw_drop` carries the argument. This comment said the opposite until
+   2026-09-16, which is how a future session restores the regression.)
    A TWIN-DRAW SET, CLAIMED FOR ONE IMAGE FOR THE LENGTH OF ONE FRAME.
    A set may not be rewritten once a recorded draw names it, so each distinct
    image a frame samples needs its own -- and the twin ARRAY cannot be the
    index, because `tw_drop` moves the last entry into the hole and the indices
    shuffle under it. So the claim is on the VIEW: reuse the set already holding
    it, else take a free one. SET_MAX is the twins plus TWO -- the UI atlas and
-   the glyph atlas -- so a frame can never want more than there are. */
+   the glyph atlas -- which covers any frame that does not churn its store; a
+   frame that does can run out, and answering 0 here is how it says so. */
 static int set_claim(const TAGPU_VKPASS* d, SLOT* s, VkImageView v,
                      VkDeviceSize uRange, VkDeviceSize fRange, int* out)
 {
@@ -976,7 +983,17 @@ static int set_claim(const TAGPU_VKPASS* d, SLOT* s, VkImageView v,
    frame's ops goes through here, and there is exactly one way out -- which is
    what makes "our twins equal the GL lane's" checkable rather than hoped for.
    A drop the retire will not take leaves the pass owing a teardown instead. */
-static int behind(const TAGPU_VKPASS* d, const char* why)
+/* `reask` -- THE PRESENT THAT WOULD HAVE CARRIED THE ANSWER WAS LOST, SO ASK
+   AGAIN. `g_guiq.reseed` is ONE-SHOT: the producer clears it the instant it
+   publishes the RESET (`tagpu_gui_hook.c`). If the present carrying that RESET
+   is itself abandoned -- and it is the LIKELIEST one to be, a reseed present
+   being every surface seeded at once and so the largest arena there is -- the
+   answer never arrives, `s_behind` is already 1 so nothing asks again, and pass
+   2 skips every op for the rest of the session waiting for a RESET that will
+   never be sent. A lost frame therefore INVALIDATES an outstanding request.
+   This is not "the window is small": it is a message provably not delivered,
+   re-sent. [FOUND 2026-09-16, the re-review of the landing-2 fixes.] */
+static int behind_ex(const TAGPU_VKPASS* d, const char* why, int reask)
 {
     /* THE REQUEST IS RAISED ONCE, ON THE TRANSITION, AND THAT IS NOT TIDINESS.
        `tagpu_gui_mirror_reseed` raises the PRODUCER's flag, and the producer
@@ -988,7 +1005,7 @@ static int behind(const TAGPU_VKPASS* d, const char* why)
        the oracle and this port may not change it** — which the first version of
        this function did, and which `gui.on=nostring` hid from the A/B.
        [FOUND 2026-09-16, the re-review of the review's fixes.] */
-    if (!s_behind) {
+    if (!s_behind || reask) {
         s_behind = 1;
         s_goodRun = 0;
         if (s_behindMute) {
@@ -1008,6 +1025,13 @@ static int behind(const TAGPU_VKPASS* d, const char* why)
     }
     if (!tw_reset(d)) return 0;      /* caller refuses: the retire is full */
     return 1;
+}
+
+/* the ordinary entry: a condition we noticed. The request stands until a RESET
+   answers it, so asking again would be the storm. */
+static int behind(const TAGPU_VKPASS* d, const char* why)
+{
+    return behind_ex(d, why, 0);
 }
 
 /* THE REPLAY. Every reason not to draw is taken BEFORE a byte is written, and
@@ -1067,7 +1091,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        indistinguishable from an unarmed lane. */
     if (h.lost) {
         if (s_state == ST_UNBUILT) return 0;      /* nothing built to drop yet */
-        if (!behind(d, "the GL lane's record of this frame was lost")) goto refuse;
+        if (!behind_ex(d, "the GL lane's record of this frame was lost", 1)) goto refuse;
         return 0;
     }
 
@@ -1427,7 +1451,14 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             o->kind == TAGPU_GUIOP_STRING || o->kind == TAGPU_GUIOP_CLEAR) {
             TWIN* src = NULL;
             t = tw_find(o->surf);
-            if (!t) continue;               /* the GL lane had one; we do not  */
+            /* THE GL LANE HAD A TWIN AND WE DO NOT, WHICH IS THE DEFINITION OF
+               BEHIND. Skipping was silent divergence of exactly the shape this
+               pass keeps producing: the op is applied over there and never
+               here, for the session. The composite's own `tw_find(h.presented)`
+               catches it only for the PRESENTED surface and only on a frame the
+               composite is drawn on -- and `compose` is 0 on most real frames.
+               [FOUND 2026-09-16, the re-review; pre-existing since landing 1.] */
+            if (!t) { sdWhy = "an op names a surface this store never seeded"; goto standdown; }
             /* a clear and a layout change are both illegal inside a render
                pass instance, so the open one closes first. Unreachable while
                `tw_make` is the only creator and clears on the next line — but
@@ -1608,11 +1639,13 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                 if (!t) goto refuse;
             } else {
                 t = tw_find(o->surf);
-                if (!t) continue;
+                if (!t) { sdWhy = "a pixel op names a surface this store never seeded";
+                          goto standdown; }
             }
             tw_fresh(cb, t);
             if (!o->alen) break;
-            if (ux < 0 || uy < 0 || ux + uw > t->w || uy + uh > t->h) continue;
+            if (ux < 0 || uy < 0 || ux + uw > t->w || uy + uh > t->h) {
+                sdWhy = "a pixel op outside its own twin"; goto standdown; }
             /* THE SAME INTERLEAVE THE GL LANE DOES: R = the palette index,
                G = 255 for covered. tagpu_gui_surf.c's twin_upload. */
             n = (unsigned)uw * (unsigned)uh;
@@ -1627,6 +1660,18 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         }
     }
     if (rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
+
+    /* THE REPLAY GOT THROUGH, AND THAT -- NOT THE COMPOSITE -- IS THE EVIDENCE
+       THE LAST FRESH START WORKED. The budget refund sat below the gate, past
+       `s_drawThis = 1`, which is never reached on a frame the composite is
+       stood down on. `compose` is 0 whenever the sharp layer has coverage,
+       which is every frame with a cursor on screen, so in an ordinary session
+       the refund could never happen and every legitimate transition counted
+       against the cap: four level loads and the pass was muted for good. Being
+       LEVEL is a property of the replay. [FOUND 2026-09-16, the re-review.] */
+    if (!s_behindMute && s_behindAsks && ++s_goodRun >= BEHIND_GOOD_RUN) {
+        s_behindAsks = 0; s_goodRun = 0;
+    }
 
     /* ---- the composite's own set and block ---- */
     if (s_behind || !compose || !s_engHave || !s_palHave) {
@@ -1699,9 +1744,6 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     s_uStride = uStride; s_fStride = fStride;
     s_abFrame = h.ab;
     s_drawThis = 1;
-    if (!s_behindMute && s_behindAsks && ++s_goodRun >= BEHIND_GOOD_RUN) {
-        s_behindAsks = 0; s_goodRun = 0;    /* the last fresh start worked */
-    }
     return 1;
 
 standdown:

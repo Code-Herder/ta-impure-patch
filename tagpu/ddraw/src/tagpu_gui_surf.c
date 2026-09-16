@@ -2390,7 +2390,7 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mm=%u,fog=%u/%u,noeng=%u cursown=%d/%d,%d fps=%.1f",
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u cursown=%d/%d,%d fps=%.1f",
                   s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.stalls,
                   s_skipped, tagpu_pal_changes(), palDiff, palDiffAt, tagpu_pal_presented(),
@@ -2404,7 +2404,7 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
                      lines is the bytes the producer wrote in 300 frames — which is
                      what `nostring` is A/B'd on (13.4: ~40 bytes where a text op
                      carried ~968) and what §7's cadence note is about */
-                  g_guiq.aHead, s_mmDrawn,
+                  g_guiq.aHead, s_mirLost, s_mmDrawn,
                   s_mmFogged, (unsigned)(s_mmEngW * s_mmEngH), s_mmNoEng,
                   cowArmed, cowOf, cowSkip, fps);
         b[sizeof b - 1] = '\0';
