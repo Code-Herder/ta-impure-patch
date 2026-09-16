@@ -4781,8 +4781,14 @@ with three offsets.
   704 bytes of blocks and 14336 of pose per unit, compare sampler LINEAR`).
 
 Both are grown to the frame's own unit count rather than to `TAGPU_PD_MAXHAND` (512), and both are
-given back the moment a frame hands nothing over. At this size §2.28's "nothing is kept once there
-is nothing to draw" is the rule that makes the pass affordable at all in a 32-bit address space.
+given back the moment the pass will not draw — the frame that hands nothing over, and **every
+refusal taken before the slot is built** (the restored atlas, a build ghost, a missing mirror, the
+fog grid, the overlay, a device that will not filter the map). All of those are reached before a
+byte is recorded into the command buffer, so freeing the slot there rests on the same fence the
+hand-over-failed path rests on. At this size §2.28's "nothing is kept once there is nothing to
+draw" is the rule that makes the pass affordable at all in a 32-bit address space, and **until the
+landing review it held only for the frame that handed nothing over** — a session with the scaffold
+armed or a replacement mesh on screen kept 7.3 MB a slot for its life.
 
 #### A serial, not a pointer, and not a cache slot
 
@@ -4831,6 +4837,49 @@ So a frame with the overlay armed is **refused**, said once, and the reason is w
 than worked around. It costs nothing in play: `scaffold.on` is not in the default arm set. **Any
 later pass whose fragment shader reads `gl_FragCoord` inherits this** — the hi-res path and the
 effects pass both carry the same macro.
+
+#### What the landing review found, and four of the five were the seam rather than the shader
+
+Two Opus reviewers at `high`, one on correctness and one on synchronisation alone. **Both led with
+the same finding**, independently, and it is the one below.
+
+**A BAKE ENTRY THIS FRAME STILL NEEDS COULD BE EVICTED TO MAKE ROOM FOR ITS OWN SIBLING.**
+`vb_slot` refuses to evict an entry stamped with the frame in hand, and `upload` stamped the pair
+*after* resolving both — so a unit whose geometry was cached and whose material was not handed
+`vb_slot` its own geometry entry as the least recently drawn. The entry is retired and reused for
+the material, `g` and `m` then name the **same** entry, and the body draw fetches 32-byte vertices
+out of a buffer holding 20-byte ones: past its end, on a unit that still passes the
+every-unit-or-none gate because it *was* drawn. The stamps moved to the instant each entry
+resolves. The same eviction had a second mouth: `stageNeed` is counted before a byte is uploaded,
+so an eviction inside the loop turns a later unit's cache hit into a miss whose bytes were never
+reserved, and the staging `memcpy` runs past the mapped allocation. That one is now **bounded
+against `s->vscap`** rather than against the pre-pass, because a pre-pass cannot budget for the
+eviction it is trying to budget for; a unit that will not fit is not drawn, and the gate below
+turns that into a refused frame. Reachable once the 512-entry table fills, which two map loads do.
+
+**THE COMPARE-SAMPLER REFUSAL WAS TAKEN ONE HOOK TOO LATE.** It lived in `prepare` — which runs
+*after* `cast` has put this frame's casters into the map and after the shadow pass has published
+it. So on a device that will not filter a depth format linearly the bodies stood down while the
+terrain pass went on sampling a map those bodies are in: unit shadows lying on terrain with no
+units above them, every Classic++ shadow frame, silently. It is decided in `upload` now, where
+`tagpu_vk_unit_casters` still answers 0 and the census refuses the map with it. **The hook that
+owns a decision is the earliest one that can take it**, not the one that needs the answer.
+
+**THE WORLD SCISSOR WAS NOT SCALED.** The rect arrives in game-frame pixels and the viewport covers
+the whole attachment, exactly as in §2.29–§2.31 — and `unit_scissor` was `feat_scissor` without its
+`w/gw`, `h/gh`. At the 1:1 sizes an A/B is run at the two are the same number, which is why 786 432
+pixels of measurement could not see it; a 640×480 game frame in a 1920×1080 window would have
+clipped every unit to the left third of the bottom quarter.
+
+**A BARRIER SAT BELOW A GATE THAT CAN RETURN.** The `TRANSFER_WRITE → VERTEX_ATTRIBUTE_READ`
+barrier was recorded after the every-unit-or-none gate. That gate returns without drawing, but the
+copies are already in the command buffer and the buffers keep their serials — so a later frame
+finds them, uploads nothing, and reads vertices no barrier ever ordered against the write that
+filled them. Recorded before the gate now.
+
+The fifth is the give-back above. **Nothing was rejected**; the two minor notes (a latch shared by
+two different messages, and a comment claiming the fog cell count is "not always `cols*rows`" when
+every assignment makes it exactly that) were both corrected.
 
 #### The scaffold question: half answered, and the half that is says which half is not
 

@@ -166,6 +166,7 @@ static int s_downPaying;                   /* ...and the seam is paying it NOW  
 static int s_drawThis;                     /* `prepare` left a draw for `record` */
 static int s_abFrame;
 static int s_saidRestored, s_saidNoMirror, s_saidShadow, s_saidOther;
+static int s_saidShort, s_saidCmp;      /* a latch each: one message each */
 static int s_saidFog, s_saidScaf, s_saidVbFull;
 
 static VkDescriptorSetLayout s_dslMain, s_dslCast;
@@ -268,6 +269,7 @@ typedef struct {
 static DRAW*    s_draw;
 static unsigned s_drawCap, s_ndraw, s_ncast;
 static int      s_scissorOn, s_vpL, s_vpT, s_vw, s_vh;
+static float    s_gw, s_gh;            /* the game frame those four are in */
 static int      s_shadowOn;            /* the twin drew these against a map  */
 /* the strides and offsets `upload` settled and the three draw hooks bind with.
    They are the device's alignment applied to two block sizes, so they cannot
@@ -1248,6 +1250,47 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 
     /* ---- every reason not to draw, before a byte is written ---- */
 
+    /* EVERY REFUSAL BELOW LEAVES THROUGH `standdown`, WHICH GIVES THE SLOT
+       BACK. They are all taken before `slot_build`, so not a byte has been
+       recorded into `cb` that names any of this slot's buffers or images, and
+       the seam waited on fence[slot] -- the same ownership argument the
+       hand-over-failed path above makes, at the same instant. Without it a
+       refusal that holds for a session (the scaffold armed, a build ghost on
+       screen, a replacement mesh, a device that will not filter the map) keeps
+       this slot's pose buffer for the life of the process: 14 336 bytes a unit
+       a slot, 7.3 MB a slot at the hand-over's cap, in the 32-bit address
+       space whose largest free block this phase spends its budget measuring.
+       §2.28's rule is "nothing is kept once there is nothing to draw", and
+       before this it held only for the frame that handed nothing over.
+       [FOUND 2026-09-16, the landing review.] */
+
+    /* A COMPARE SAMPLER THAT IS NOT THE TWIN'S, AND THE DECISION IS TAKEN
+       HERE. The GL PCF is bilinear and linear filtering of a depth format is a
+       feature bit; a device that will not offer it would draw a harder penumbra
+       than the oracle's, so a frame that samples the map must not be drawn.
+
+       IT IS DECIDED IN `upload` AND NOT IN `prepare` BECAUSE OF WHEN THE MAP IS
+       DRAWN. `prepare` runs AFTER `cast` has put this frame's posed casters
+       into the map and after the shadow pass has published it -- so a refusal
+       taken there stands the BODIES down while the terrain pass goes on
+       sampling a map those bodies are in, and the frame shows unit shadows
+       lying on terrain with no units above them. Refusing here instead makes
+       `tagpu_vk_unit_casters` answer 0, which is what the census subtracts, so
+       the map is refused and the terrain stands down with it -- one decision,
+       taken before anything downstream can depend on the other answer.
+       `s_cmpLinear` is a device property settled in `build`, so it is knowable
+       at this instant. [FOUND 2026-09-16, the landing review.] */
+    if (h.shadowOn && !s_cmpLinear) {
+        if (!s_saidCmp) {
+            s_saidCmp = 1;
+            plog(d, "unit: this device will not filter a depth format linearly "
+                    "and the GL twin's shadow PCF is bilinear - nothing drawn "
+                    "on a frame that samples the map");
+        }
+        goto standdown;
+    }
+    s_saidCmp = 0;
+
     /* CLASSIC++'s RESTORED ATLAS IS NOT MIRRORED. Drawing with uRestored 0
        against a twin that drew with 1 would be a different picture, and the A/B
        would call it a rasteriser difference. */
@@ -1259,7 +1302,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     "edition draws nothing this session rather than draw a "
                     "different picture from its own oracle");
         }
-        return 0;
+        goto standdown;
     }
 
     /* THE FRAME HAS DRAWS THIS PASS DOES NOT CARRY -- a build ghost, a unit
@@ -1271,13 +1314,13 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     "not carry (a build ghost, or past its cap) - nothing drawn "
                     "while that is true", h.otherDraws);
         }
-        return 0;
+        goto standdown;
     }
     s_saidOther = 0;
 
-    if (h.nunit < 1) return 0;
-    if (h.nunit > TAGPU_PD_MAXHAND) return 0;       /* the producer's own cap  */
-    if (!h.units || !h.rows || !h.flags || !h.vis) return 0;
+    if (h.nunit < 1) goto standdown;
+    if (h.nunit > TAGPU_PD_MAXHAND) goto standdown;       /* the producer's own cap  */
+    if (!h.units || !h.rows || !h.flags || !h.vis) goto standdown;
 
     /* THE TEXELS. The mirrors are asked for on the twin's own beat and cannot
        be there before the atlas has its dimensions, so the first frames of a
@@ -1290,13 +1333,13 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     "nothing drawn until it is (the unit atlas is asked for on "
                     "the twin's publish and converges over the next frames)");
         }
-        return 0;
+        goto standdown;
     }
     s_saidNoMirror = 0;
     if (h.lutW != 256 || h.lutH != 32) {
         plog(d, "unit: the shade LUT is %dx%d and this pass carries 256x32 - "
                 "nothing drawn", h.lutW, h.lutH);
-        return 0;
+        goto standdown;
     }
 
     /* THE FOG GRID, and the bound re-checked in this file's own terms. A unit
@@ -1308,7 +1351,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             h.fogGridCols > FOG_MAXDIM || h.fogGridRows > FOG_MAXDIM) {
             plog(d, "unit: a %dx%d fog grid is outside what this pass carries - "
                     "nothing drawn", h.fogGridCols, h.fogGridRows);
-            return 0;
+            goto standdown;
         }
         fogW = h.fogGridCols; fogH = h.fogGridRows;
     } else if (fogWanted) {
@@ -1317,7 +1360,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             plog(d, "unit: a unit this frame samples the fog overlay and the "
                     "hand-over carries no grid - nothing drawn while that is true");
         }
-        return 0;
+        goto standdown;
     }
     s_saidFog = 0;
 
@@ -1369,7 +1412,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     "the two exact mirrors, so nothing is drawn while the "
                     "overlay is armed rather than cut the wrong fragments");
         }
-        return 0;
+        goto standdown;
     }
     s_saidScaf = 0;
 
@@ -1427,6 +1470,23 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         if ((size_t)r->rowOff * 4 + (size_t)r->npose * 12 > h.nrow * 4) continue;
         if (r->flagOff + (unsigned)(((r->npose + 3) / 4) * 4) > h.nflag) continue;
 
+        /* STAMPED THE MOMENT THEY RESOLVE, AND NOT AFTER THE LOOP BELOW.
+           `vb_slot` refuses to evict an entry stamped with the frame in hand,
+           and that is the ONLY thing keeping this unit's two entries alive
+           across its own second allocation. Stamped after the loop instead --
+           which is where these two stores used to be -- a unit whose geometry
+           is cached and whose material is not hands `vb_slot` its own geometry
+           entry as the least recently drawn: `ret_push` retires the buffer,
+           the entry is memset and handed back for the MATERIAL, and `g` and
+           `m` now name the SAME entry. The `if (*e) continue` above would then
+           leave `w->geom` and `w->mat` both pointing at it, and binding 0
+           would fetch 32-byte vertices out of a buffer holding 20-byte ones --
+           past its end, on a draw that still passes the every-unit-or-none
+           gate because the unit WAS drawn. [FOUND 2026-09-16, the landing
+           review, by both reviewers independently.] */
+        if (g) g->lastFrame = d->frame;
+        if (m) m->lastFrame = d->frame;
+
         for (j = 0; j < 2; j++) {
             VBENT** e = j ? &m : &g;
             unsigned serial = j ? r->matSerial : r->geomSerial;
@@ -1455,6 +1515,19 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                 break;
             }
             bytes = (VkDeviceSize)nv * st;
+            /* THE COPY IS BOUNDED BY THE ALLOCATION IT GOES INTO, and not by
+               the pre-pass that sized it. `stageNeed` above counts the
+               `vb_find` misses as the table stands BEFORE a byte is uploaded;
+               an eviction inside this loop can turn a hit into a miss for a
+               unit further down the list, and that unit's bytes were never
+               reserved. The pre-pass cannot be made exact without replaying
+               the eviction it is trying to budget for, so the bound is taken
+               here against the only number that is a fact -- the mapped
+               capacity -- and a unit that would not fit is simply not drawn,
+               which the every-unit-or-none gate below turns into a refused
+               frame rather than a memcpy past the end of host-visible memory.
+               [FOUND 2026-09-16, the landing review, by both reviewers.] */
+            if (stageOff + bytes > s->vscap) break;
             if (!mk_buffer(d, bytes,
                            VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
@@ -1481,9 +1554,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             stageOff += bytes;
             anyUpload = 1;
         }
-        if (!g || !m) continue;
-        g->lastFrame = d->frame;
-        m->lastFrame = d->frame;
+        if (!g || !m) continue;     /* both are stamped above, either way */
 
         w = &s_draw[s_ndraw];
         w->geom = g->buf; w->mat = m->buf;
@@ -1497,12 +1568,35 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         fill_pose(s->pmap + (VkDeviceSize)i * pstride, &h, r);
     }
 
+    /* ONE BARRIER FOR EVERY VERTEX BUFFER WRITTEN THIS FRAME, AND IT IS
+       RECORDED BEFORE THE GATE BELOW CAN RETURN. A buffer created this frame
+       has no prior access to order against, so the hazard is this transfer
+       against the reads the caster draw and the body draw are about to make
+       out of the SAME command buffer -- one TRANSFER_WRITE ->
+       VERTEX_ATTRIBUTE_READ dependency whatever the count.
+
+       IT MUST NOT SIT BELOW THE EVERY-UNIT-OR-NONE GATE, which is where it
+       used to be. That gate returns without drawing, but the copies are
+       already in `cb` and `cb` is submitted either way, and the buffers stay
+       in the table with their serials -- so a LATER frame finds them, uploads
+       nothing, sets no `anyUpload`, and reads vertices that no barrier ever
+       ordered against the write that filled them. Recording it here costs one
+       barrier on a frame that draws nothing and closes that for good.
+       [FOUND 2026-09-16, the landing review.] */
+    if (anyUpload) {
+        mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0,
+                             1, &mb, 0, NULL, 0, NULL);
+    }
+
     /* EVERY UNIT OR NONE. A frame drawn with one type missing is a frame the
        A/B reports as a port failure, and the shadow map would be missing a
        caster besides. */
     if (s_ndraw != (unsigned)h.nunit) {
-        if (!s_saidNoMirror) {
-            s_saidNoMirror = 1;
+        if (!s_saidShort) {
+            s_saidShort = 1;
             plog(d, "unit: %u of %d posed units could be drawn this frame - the "
                     "rest have no bake mirror (a type evicted and re-baked). "
                     "Nothing drawn while that is true",
@@ -1571,23 +1665,11 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
 
-    /* ONE BARRIER FOR EVERY VERTEX BUFFER WRITTEN THIS FRAME. A buffer created
-       this frame has no prior access to order against, so the only hazard is
-       this transfer against the reads the caster draw and the body draw are
-       about to make out of the SAME command buffer -- which is one
-       TRANSFER_WRITE -> VERTEX_ATTRIBUTE_READ dependency whatever the count. */
-    if (anyUpload) {
-        mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        mb.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0,
-                             1, &mb, 0, NULL, 0, NULL);
-    }
-
     dummies_ready(d, cb);
 
     s_scissorOn = h.scissorOn;
     s_vpL = h.vpL; s_vpT = h.vpT; s_vw = h.vw; s_vh = h.vh;
+    s_gw = h.gw; s_gh = h.gh;       /* the frame those four are measured in */
     s_shadowOn = h.shadowOn;
 
     /* THE A/B FRAME IS CLAIMED LAST, AFTER EVERY REASON NOT TO DRAW IS PAST. A
@@ -1600,6 +1682,13 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     s_uStride = ustride; s_vglOff2 = vglOff2; s_fglOff = fglOff;
     s_pStride = pstride;
     return 1;
+
+standdown:
+    /* NOT A REFUSAL OF THE PASS: a frame this pass will not draw, and the slot
+       given back because the next one may not draw either. Safe here and only
+       here -- see the block at the top of the refusal list. */
+    if (s_state == ST_READY) slot_free(d, s);
+    return 0;
 
 refuse:
     /* NOTHING IS DESTROYED HERE, AND THAT IS THE WHOLE POINT. This is the
@@ -1784,17 +1873,8 @@ int tagpu_vk_unit_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     }
     s_saidShadow = 0;
 
-    /* A COMPARE SAMPLER THAT IS NOT THE TWIN'S. The GL PCF is bilinear and
-       linear filtering of a depth format is a feature bit; a device that will
-       not offer it would draw a harder penumbra than the oracle's. */
-    if (s_shadowOn && !s_cmpLinear) {
-        plog(d, "unit: this device will not filter a depth format linearly and "
-                "the GL twin's shadow PCF is bilinear - nothing drawn on a "
-                "frame that samples the map");
-        s_drawThis = 0;
-        s_abFrame = 0;
-        return 0;
-    }
+    /* The compare sampler is checked in `upload`, which is the only instant a
+       refusal for it can still reach the census -- see the block there. */
 
     bind_main(d, slot);
     return 1;
@@ -1809,10 +1889,24 @@ int tagpu_vk_unit_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
 static void unit_scissor(uint32_t w, uint32_t h, VkRect2D* sc)
 {
     int x = 0, y = 0, cw = (int)w, ch = (int)h;
+    /* AND IT IS SCALED, by the attachment's extent over the game frame's, for
+       the same reason tagpu_vk_feat.c's is: the rect arrives in GAME-FRAME
+       pixels -- it is the rect the native pass hands glScissor -- while this
+       pass's viewport covers the whole attachment and its vertex shader
+       divides by `uGame`. At the 1:1 sizes an A/B is run at the two are the
+       same number, which is why the measurement could not see this; the
+       Vulkan window tracks the client rect and the GL lane's own render target
+       need not match it. Unscaled, a 640x480 game frame in a 1920x1080 window
+       clips every unit to the left third of the bottom quarter of the world.
+       [FOUND 2026-09-16, the landing review.] */
+    float sx = s_gw > 0.0f ? (float)w / s_gw : 1.0f;
+    float sy = s_gh > 0.0f ? (float)h / s_gh : 1.0f;
     if (s_scissorOn && s_vw > 0 && s_vh > 0) {
-        x = s_vpL; cw = s_vw;
-        y = (int)h - (s_vpT + s_vh);
-        ch = s_vh;
+        int ytop = (int)((float)s_vpT * sy + 0.5f);
+        x  = (int)((float)s_vpL * sx + 0.5f);
+        cw = (int)((float)s_vw  * sx + 0.5f);
+        ch = (int)((float)s_vh  * sy + 0.5f);
+        y  = (int)h - (ytop + ch);      /* the mirror, after the scale */
     }
     if (x < 0) { cw += x; x = 0; }
     if (y < 0) { ch += y; y = 0; }

@@ -4652,9 +4652,13 @@ int tagpu_native_wrecks_armed(void)
 /* THE FOG GRID AS THE NATIVE PASS UPLOADED IT (Phase G / G19e, the unit pass).
    The very buffer glTexImage2D/glTexSubImage2D above was given, with the
    dimensions it was given and the CELL COUNT the packet's own allocation
-   holds -- which is not always cols*rows, and is the bound a copy of it has to
-   be made against. NULL on a frame with no grid. Render thread only, and valid
-   for the frame that uploaded it: the pointer is into a frame packet. */
+   holds -- the bound a copy of it has to be made against. That count is
+   `cols * rows` at every one of its assignments today (`bufCells`, and the
+   wide grid re-derives it from its own pair); it is published separately
+   because it is the ALLOCATION's number and the dimensions are the IMAGE's,
+   and a caller bounding a memcpy wants the former. NULL on a frame with no
+   grid. Render thread only, and valid for the frame that uploaded it: the
+   pointer is into a frame packet. */
 const unsigned short* tagpu_native_foggrid(int* cols, int* rows, int* cells)
 {
     if (cols) *cols = s_fogCols;
