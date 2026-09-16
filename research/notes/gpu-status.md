@@ -5959,6 +5959,91 @@ the asset channel, and leaves the class itself open.
   in §2.33.
 * `ss` 2, the owed teardown, an in-process map change, and the validation layer still.
 
+### Landing 6 — what a frame costs on each lane
+
+`tagpu_ftime.c/.h`, armed by `tagpu_ftime.on`, inert without it. Two GPU timestamps per lane per
+frame, a 256-frame ring per lane, p50 and p99 rather than a mean, and **nothing blocks**: the GL
+side polls `GL_QUERY_RESULT_AVAILABLE` and carries a frame whose pair is not ready, the Vulkan side
+is read behind the fence the seam already waits on before it re-records that slot.
+
+**TIMESTAMPS ARE FORCED, NOT PREFERRED.** `GL_TIME_ELAPSED` is a scoped query, only one may be
+active per target, and `tagpu_restoreglsl.c` already runs one around every restorer slice — a frame
+bracket of that kind would either fail to begin or break the restorer's. `glQueryCounter` has no
+such rule and is also exactly what the Vulkan half does (`vkCmdWriteTimestamp`), so the two lanes
+are measured the same way rather than two ways that have to be argued equivalent.
+
+#### The fixture, and the clause in it that is load-bearing
+
+`tacli scenario load 200v200 --res 1920x1080 --maxfps 0`, then **the sim paused** through `ARMOPT`
+(`keys tab tab`) at a fixed sim tick, the pause verified by peeking `*0x511DE8+0x38A47:4` **twice**
+rather than by trusting the keystroke.
+
+**THE FIRST MEASUREMENT WAS OF A 10 fps CPU-BOUND FRAME AND SAID NOTHING ABOUT EITHER LANE.** The
+sim was left running at speed 10 with 401 units: `gl p50 103.705 ms` against a heartbeat `fps=10.3`,
+i.e. `1/10.3 s = 97 ms`. The bracket was reporting the frame period. "Sim paused" is in the gate's
+own fixture line and it is not decoration.
+
+#### What the bracket actually measures, and how that was established
+
+`gl p50` sat at 94-100 % of `1/fps` in every configuration, which is the signature of **both** a
+CPU-bound frame (the GPU idle inside the bracket) and a GPU-bound one (the GPU busy throughout), so
+it separates nothing on its own. What separates them is whether frame cost scales with pixels:
+
+| | fps, lane down |
+|---|---|
+| 1920x1080 | **17.5** |
+| 640x480 | **186.6** |
+
+**6.75x fewer pixels, 10.7x the frame rate** — the frame is fill-bound, the GPU is busy inside the
+bracket, and the figures are real GPU-side elapsed time rather than wall time with idle folded in.
+The scaling is *superlinear*, which says the cost is worse than plain fill; the synchronising
+`glReadPixels` landing 4 added for the restored-atlas mirror is the obvious suspect and is still
+**not** separately measured.
+
+#### The numbers
+
+Paused, 1920x1080, `gui.on=mmbase`, Classic++ armed. Two runs, two report windows each:
+
+| run | tick | alive | `gl p50` | `vk p50` | **vk/gl p50** |
+|---|---|---|---|---|---|
+| A | 969 | 387 | 89.149 ms | 49.583 ms | **0.556** |
+| A | 969 | 387 | 77.349 ms | 42.986 ms | **0.556** |
+| B | 1068 | 374 | 88.120 ms | 55.633 ms | **0.631** |
+| B | 1068 | 374 | 86.298 ms | 56.866 ms | **0.659** |
+
+**The Vulkan lane's frame costs 0.56-0.66 of the GL lane's on this fixture.** Read against the
+gate's wording — *frame time no worse than GL* — that is met with margin here.
+
+**The precision is not in the absolute figures, it is in the ratio.** Run A's absolute numbers drift
+13 % between two consecutive windows (89.1 -> 77.3 ms) while the ratio repeats to three decimals,
+because the drift is a common factor the ratio divides out. Between runs the ratio moves 0.556 vs
+0.631/0.659, and that is the **fixture** moving, not the harness: the two runs paused at different
+ticks with different unit counts. A cross-build comparison therefore has to pin the tick exactly,
+and the earlier 0.626-0.730 spread was the same effect on a fixture paused by wall clock while the
+battle was still thinning.
+
+**ROUTE D's OWN COST, WHICH IS NOT THE RATIO.** Arming the lane takes the GL lane's own frame from
+`p50 54-57 ms` (17.5 fps) to `p50 77-89 ms` (~11 fps). Both lanes draw the same scene into different
+windows in one iteration of `ogl_render`, so they contend for the GPU and neither figure is what
+either lane would cost alone. The ratio is still the comparison the gate wants — each lane's own
+per-frame GPU work, measured under the same contention — but **no number here is a prediction of
+what a Vulkan-only build would run at.**
+
+#### Not covered
+
+* **THE TWO BRACKETS ARE NOT THE SAME SPAN, and the ratio inherits that.** GL's runs from the top of
+  `ogl_render` to just before `tagpu_vk_frame`, so it contains every GL command the iteration
+  produced *and* any CPU-side gap inside it. Vulkan's is `TOP_OF_PIPE` after `vkBeginCommandBuffer`
+  to `BOTTOM_OF_PIPE` before `vkEndCommandBuffer`, so it contains only the submitted command
+  buffer's execution. On a fill-bound frame these converge; the ratio is a fair comparison *there*
+  and would not be on a frame that is not.
+* **ONE FIXTURE, ONE RESOLUTION, ONE SCENE.** 200v200 paused at 1080p. Nothing here says what the
+  shell costs, what a light scene costs, or what the ratio does at 1024x768.
+* **THE RESTORE'S READ-BACK IS STILL NOT SEPARATELY MEASURED** — the superlinear resolution scaling
+  above is the first evidence that it matters, and it is evidence, not a measurement of it.
+* **The gate's other exit clause is untouched by this landing**: the `uiwalk` `strict` walk over the
+  full screen inventory at both resolutions, shell and in game.
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out
