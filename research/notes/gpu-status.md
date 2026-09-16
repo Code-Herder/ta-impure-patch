@@ -4048,12 +4048,16 @@ either** rather than draw a different picture from its own oracle:
 * **`uShadowOn` 1** — the Classic++ cast-shadow depth map (`tagpu_shadow.c`), a GL depth texture.
   Its two samplers must still be **valid** for the set to be bound, and a `sampler2DShadow` needs
   a real depth image and a compare-enabled sampler — so they name a **1×1 `D16_UNORM` image**
-  this file makes and clears to 1.0 with `vkCmdClearDepthStencilImage`. Nothing ever samples it;
-  clearing it costs one call and removes an "undefined contents" from the argument. `uAtlasRGB`
-  is a placeholder too and names the atlas's own view, exactly as §2.29's binding 42.
+  this file makes and clears to 1.0 with `vkCmdClearDepthStencilImage`. `uAtlasRGB` is a
+  placeholder too and names the atlas's own view, exactly as §2.29's binding 42.
+  **[SUPERSEDED BY §2.32, 2026-09-15.]** The map is drawn by `tagpu_vk_shadow.c` now and this
+  pass samples it; the dummy is named only on a frame with no map, and the compare sampler is
+  LINEAR rather than NEAREST because the twin's PCF is. What is left of this refusal is
+  per-frame: a frame the shadow pass could not reproduce, which is every frame with a unit
+  caster until the unit pass lands.
 
-Both are Classic++ surfaces, so a `tacli` instance — which opts out of the play defaults — never
-meets either; a `--defaults` instance does.
+Both were Classic++ surfaces, so a `tacli` instance — which opts out of the play defaults — never
+met either; a `--defaults` instance does.
 
 **NOT COVERED.** No Vulkan **validation layer** ran — none is installed in the wine prefixes —
 so the barriers, the stage masks and the layout transitions are argued from the specification and
@@ -4417,6 +4421,237 @@ looking at the picture rather than the number is what explained it.)*
 This is a **different artefact from §2.28's two-state 71-px sliver** at x 1017..1023, y 236..277,
 which is at the frame's right edge and is not the banner. Both are reasons the floor is measured
 rather than quoted.
+
+### 2.32 The cast-shadow depth map, drawn by Vulkan (`tagpu_vk_shadow.c`, `tagpu_terr.c`'s caster mirror) — Phase G, G19e
+
+The **fifth world pass**, and the first that **draws into something other than the frame**. Every
+pass before it records into the seam's render pass and produces pixels; this one owns an offscreen
+depth image, draws the casters into it from the light's point of view, and leaves it in
+`SHADER_READ_ONLY_OPTIMAL` for the passes that sample it. `tagpu_vk_terr.c` stops refusing
+`uShadowOn` frames and samples it, which closes an uncovered case §2.30 had on record.
+
+**No engine address, and no new one was read to build it** — the pass takes everything through
+`tagpu_shadow_handover`, so there is nothing for
+[exe reverse engineering](exe-reverse-engineering.html) in this landing and nothing for the hook
+map above. The one engine word this work reads at all is `main+0x37F06` bit 2, the Shadows option
+the GL twin already gates on, and it is already recorded there. `tagpu_vk_shadow.c` is not on
+`thread-split.allow` and may never need to be (Phase G standing constraint 1); the list is
+**unchanged** at the 34 entries `thread-split-check.sh` reports.
+
+**MEASURED 2026-09-15** under system wine on the reference setup's 4070, `ss=1`, 1024×768, on the
+binary this landing builds and with the tree clean at that commit.
+
+| | |
+|---|---|
+| **a heavily shadowed frame** — `static-terrain`, Classic++ `assets=0 shadows=1 terrainshadow=1 shadowsun=225,8`, where the map shadows **517 270** of the frame's pixels | **0 of 786 432**, **630 574** non-black each side, reproduced |
+| the same, **`light=0`** (the lambert off, the map still on) | **0 of 786 432** |
+| an **empty** map — `terrainshadow=0`, which is the Classic++ **default** | **1 of 786 432**, and it is the lambert's (below) |
+| the default sun `225,40`, `terrainshadow=1` | **2 of 786 432**, same pixel every run, three runs |
+| the control: `shadows=0` (no map at all) | **the same 1–2 px**, at the same pixel |
+| the control: `light=0 shadows=0` | **0 of 786 432** |
+| the **refusal** with one posed caster on screen | fires, says so once, the terrain pass stands down with it, and both recover to **0 px** when the caster leaves view |
+| constraint 4 | **0 of 630 784** against `main` (`2e552d1`) with `tagpu_vk.off`, on **two** pairings, over a cross-launch floor measured at **0** |
+
+So the depth map itself is **exact**: its geometry, its stored depth values, the 16 Poisson taps on
+the raw depths, the blocker search, the bilinear PCF through the compare sampler and the
+receiver-plane bias all reproduce the GL twin bit for bit over a frame two thirds of which is
+shadow. The 1–2 px that remain are **not the shadow pass** — see "The lambert is 1 px, and it is
+not this landing's" below.
+
+#### It owns a second render target, and that is not a breach of the seam
+
+Standing constraint 3 says surface, swapchain, acquire and present live in `tagpu_vk.c` and that
+nothing else may know a window exists. **A render pass and a framebuffer over an image this file
+allocated name no window**, so the second target lives in the pass rather than in the seam: the
+seam still owns the one image that reaches a screen, and the pass would work unchanged against an
+offscreen frame or another process's. That also keeps the seam's file from growing a second
+personality every time a pass wants somewhere to draw.
+
+What it costs is that the pass records a **whole render pass inside `prepare`** — begin, draw, end
+— which is legal precisely because `prepare` is the hook the seam calls *outside* its own
+`vkCmdBeginRenderPass`, and render passes may not nest. The two-phase contract was written for
+texture uploads (a transfer may not be recorded inside a render pass); a second render pass turns
+out to need exactly the same hook for exactly the same reason.
+
+So the pass has a `prepare` and **no `record`**, and the seam does **not** add it to the `ndraw` /
+`nclaim` counts. Those two exist to catch two passes contaminating one A/B capture; this one puts
+no pixel in the frame, so counting it would refuse every capture taken while Classic++ shadows are
+on — which is the configuration the shadow work is measured in.
+
+#### GL's clip-space z range, and this is the pass that needed it
+
+§2.29 item 1 settled the depth question for every pass that came after it: GL maps clip z in
+[-1, 1] onto the depth range and Vulkan takes [0, 1], so a viewport with `minDepth 0.5 /
+maxDepth 1.0` reproduces GL's `(z+1)/2` exactly, values and precision included, and
+`VK_EXT_depth_clip_control` "is the answer only if a shader is ever found writing a z below 0."
+
+**The shadow matrix is that shader.** `tagpu_shadow.c`'s `mrow` builds an orthographic projection
+that fills [-1, 1] **by construction** — `ndc = 2(a·W − lo)/s − 1` over the light-space extent —
+so under Vulkan's own convention the near half of every caster is CLIPPED AWAY and the map is
+wrong rather than merely offset. And the values matter as much as the geometry: `taShadowAt`
+compares `p.z * 0.5 + 0.5`, computed in the consumer's own shader, against what is STORED in the
+map, so the viewport transform has to be GL's arithmetic and the format has to be GL's
+quantisation.
+
+The seam therefore queries `depthClipControl` and publishes it as `TAGPU_VKPASS::zclipok`, in the
+same shape as `flipok` and `lineok`, and the pass stands down without it. **The feature is
+QUERIED through `vkGetPhysicalDeviceFeatures2KHR`, never inferred from a `vkCreateDevice` that
+succeeded** — the effects review's rule (§2.31), applied on the first day rather than after a
+reviewer found it — and the device-creation ladder gains its own rung: depth clip control is
+dropped first because it costs one pass, then line rasterisation, then the flip, and each rung
+rebuilds both the extension list and the `pNext` chain rather than unlinking one struct out of
+the middle of it.
+
+**Measured on the reference setup, 2026-09-15**, with `tools/vkprobe.c` extended to print every
+extension: the 4070 offers `VK_EXT_depth_clip_control` from a 32-bit process under **system wine
+9.0**, and the device answers `depthClipControl` true. Two numbers worth recording beside it,
+because they are not the ones §2.24 has: this wine enumerates **186** device extensions where the
+Proton 11 run recorded 247, and neither list carries the four ray-tracing ones at 32-bit.
+
+#### There is no Y flip here, and that is not an omission
+
+Every other ported pass flips — a negative viewport height, `VK_KHR_maintenance1` — because its
+target is **presented**, and the two APIs disagree about which row of a window is the top.
+
+**This target is sampled.** In GL, clip y = −1 is window row 0, which is texel row 0, which is
+v = 0. In Vulkan with a *positive* viewport height, clip y = −1 is framebuffer row 0, which is
+texel row 0, which is v = 0. The two agree already, and flipping would put every shadow in the
+wrong half of the map. **The flip is a property of presentation, not of Vulkan** — which is worth
+stating plainly, because "every pass flips" was on its way to becoming a rule of this lane rather
+than a consequence of what each pass draws into.
+
+Cull is off on both sides (`tagpu_shadow.c` disables `GL_CULL_FACE`, so a caster's back faces
+write depth too), so the winding a flip would also have inverted is not in play either.
+
+#### One map per frame slot; the caster mesh is shared and takes the retire
+
+The map is written every frame and sampled in the **same** frame by the consumers, so with frames
+in flight one image would have frame N's writes racing frame N−1's reads. **One image per slot**
+makes the seam's fence the whole argument, exactly as the scaffold's per-slot upload does — and it
+means a resolution change (the zoom octave moves the map between 256 and 4096) is a rebuild of the
+slot we are being handed, under its own fence, rather than a retire. At the default `shadowres`
+2048 that is 16 MB a slot and 64 MB at the ceiling, none of it allocated until a map is drawn.
+
+The **caster mesh** is the other way round: it is shared by every slot and its size is data, so it
+takes §2.30's slot-bitmask retire unchanged — the old buffers are held until every slot has passed
+through its own `prepare` once, and `pending == 0` is then "no submitted command buffer names them
+and no future one will", by construction. The only difference from the terrain pass's is that a
+buffer is named by the **command buffer** rather than through a descriptor set, which changes
+nothing about the argument. The accounting is done **first** in `prepare`, before every early
+return, because the path that returns early is exactly the path that must still clear its bit.
+
+`mesh_resize` returns **three** values rather than two — 1 built, −1 a retire still clearing, 0 the
+device refused — because a refusal that read as "a retire is clearing" would loop silently for
+ever, which is the shape §2.30's own `shared_resize` guards against with its
+"is there an image at all" test.
+
+#### The texels: the mirror is the buffer, again
+
+`tagpu_terr.c`'s `build_hills` builds the heightfield caster once per map — one world-space vertex
+per 16-px grid point, two triangles per cell, indices ordered by cell row so the rows under the
+light window are one contiguous range — and hands both arrays to `glBufferData`. Since this
+landing it **keeps** them while the Vulkan lane is armed (`s_mirrorWant`, the same latch the tile
+atlas and the height grid use) instead of freeing them, so the Vulkan pass draws the same vertices
+and the same index order rather than a second evaluation of that arithmetic. On Town & Country
+that is **291 600 vertices and 1 743 126 indices, 10 226 KB**, uploaded once on the serial.
+
+`tagpu_terr_hills_draw` also reports **the index range it actually drew**, clamped, so the Vulkan
+pass draws the same `firstIndex`/`indexCount` rather than re-deriving the row clamp — the port
+rule ("the port must not re-derive the pass's inputs") applied to a draw range rather than to
+texels.
+
+#### Only the heightfield casts, and a map missing a caster is a different map
+
+The GL map is drawn from **four** kinds of geometry: the native 3DO stream, the posed program's
+depth twin, the replacement meshes, and the heightfield. Only the heightfield has a CPU mirror on
+this side of the seam today; the other three are the **unit pass's** to port.
+
+So `tagpu_shadow.c` **counts** the casters it drew that the hand-over carries no copy of — the
+native stream counts itself inside `tagpu_shadow_unit`, and `tagpu_native.c` reports the posed and
+hi-res ones the same way both loops draw them (`!castSkip`) — and a non-zero count is a **refusal**
+rather than a best effort. An OVER-count is the safe direction: it refuses a frame the lane could
+have drawn, where an under-count would draw a different picture from its own oracle. Measured: one
+posed caster on screen refuses the map, the terrain pass stands down with it and says so, and both
+come back to 0 px the moment the caster leaves view.
+
+**An empty map is not refused.** With `terrainshadow` at its default 0 and no unit caster in view
+the GL twin draws nothing into its depth texture either, and the clear at 1.0 **is** the map —
+every receiver then finds no blocker and is lit. Refusing that would stand the consumers down over
+a map this lane reproduces with a render pass and no draw call, and it is the Classic++ default
+configuration. Measured at the same 1 px as the `shadows=0` control, i.e. exactly.
+
+#### The consumer's compare sampler had to become the twin's
+
+`tagpu_vk_terr.c`'s compare sampler existed only so that `uShadowCmp` was a valid descriptor
+(§2.30) and was NEAREST, "which keeps it off `SAMPLED_IMAGE_FILTER_LINEAR` for a depth format".
+Now that it is sampled for real it has to be **LINEAR**, because the GL twin's is
+(`GL_COMPARE_REF_TO_TEXTURE` + `GL_LEQUAL` + MIN/MAG LINEAR) and the bilinear filtering is half of
+what makes the penumbra smooth.
+
+Linear filtering of a depth format is a **feature bit**, so it is asked of both formats the sampler
+is ever used against — the map's and the 1×1 dummy's — and a device that will not filter either
+keeps the NEAREST sampler and stands the pass down on a frame that would actually sample it. The
+map's format is **exposed by the shadow pass** (`tagpu_vk_shadow_format`) rather than re-derived in
+the consumer, so the two files agree by construction instead of by both happening to try the same
+candidates in the same order. On the reference setup it is
+`VK_FORMAT_X8_D24_UNORM_PACK32` — `GL_DEPTH_COMPONENT24` exactly — and linear filtering is
+available.
+
+#### The lambert is 1 px, and it is not this landing's
+
+The 1–2 differing pixels in the table above are the **Classic++ lambert**, and the controls say so
+outright: `light=0` reads 0 px with the map on, `light=1 shadows=0` reads the same 1 px at the same
+pixel with no map at all, and the heavily shadowed frame — which moves that pixel's value off
+whatever boundary it was sitting on — reads 0.
+
+It is a **newly measured** property rather than a new one. §2.30 measured the terrain pass at 0 px
+on `feat-forest`, which is not a Classic++ frame; with Classic++ on the pass refused every frame
+(the restored atlas), so the lambert path had never been through an oracle. `assets=0` is what
+opens it, and the answer is **one pixel of 786 432, one level**, deterministic for a given camera.
+Both lanes run the same GLSL — one through the NVIDIA GLSL compiler, one through glslang's SPIR-V
+and the NVIDIA SPIR-V path — and a single fragment landing on a quantisation boundary is the
+expected shape of the difference. **Stated as a bar, like the line tie-break**, and it is the
+terrain pass's rather than the shadow pass's.
+
+#### The fixture, and why finding one took longer than writing the pass
+
+`terrainshadow=1` "self-shadows the ground", which is why it defaults to 0 — and at the **default**
+sun (`shadowsun=225,40`) that self-shadowing is nearly invisible. Measured on `static-terrain`
+(Town & Country), nine camera positions across the map, shadows on against shadows off: **0 px at
+seven of them, 38 px and 54 px at the other two**. A 0-px A/B taken there proves nothing about the
+map, and the first one taken here did not.
+
+What opens it is the sun's **elevation**, which is a live knob:
+
+| `shadowsun=225,EL` | pixels the map changes, of 786 432 |
+|---|---|
+| 40 (the default) | ~0–54 |
+| 25 | 645 |
+| 15 | 8 042 |
+| **8** | **517 270** |
+| 4 | 535 034 |
+
+So `shadowsun=225,8` is the fixture: two thirds of the frame is terrain shadow and every one of
+those pixels depends on the map's contents. **Confirm the picture actually depends on the thing
+under test before believing a 0** — the GL-on against GL-off diff is one command and it is what
+turned a vacuous pass into a measurement.
+
+#### Not covered
+
+* **Every caster but the heightfield** — the units, the posed bodies and the replacement meshes,
+  which is the unit pass's landing. On any fixture with a unit on screen this pass refuses, and
+  the terrain pass refuses with it.
+* **`ss` 2**, as for every world pass (the two captures would be different sizes).
+* **Classic++ `assets=1`**, because the restored tile atlas still has no CPU mirror — the terrain
+  pass refuses it and the restorer's five shaders are still not in the SPIR-V pipeline.
+* **The owed-teardown path**, which has still never fired on any pass: it needs the device to
+  refuse a slot its resources. The lane's oldest open hole, argued and reviewed rather than run.
+* **The resolution change**, i.e. the per-slot rebuild when the zoom octave moves `res`. It needs
+  `zoom.on` armed and a zoom-out past the octave boundary, and this landing's fixture is at 1×.
+* **The caster-mesh retire**, for the same reason §2.30's image retire has never fired: the only
+  thing that changes the mesh is a map change, and that brings the whole lane down and back up.
+* The validation layer, still, and no device but the 4070.
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out

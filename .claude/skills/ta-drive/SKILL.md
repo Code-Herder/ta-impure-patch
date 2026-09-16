@@ -2014,10 +2014,12 @@ rm -f $G/tagpu_terr.ab $G/tagpu_terr_*.ppm; sleep 2; touch $G/tagpu_terr.ab; sle
 - **Terrain covers the WHOLE viewport, so the ink count is the viewport**: 630 719 of 630 784 at
   1024×768, 1 820 568 at 1080p. A pass that reads much less than the viewport has been scissored
   wrong or has drawn nothing; there is no "sparse fixture" failure mode here to worry about.
-- **The terrain pass stands down under Classic++ AND under terrain shadows**, and says so once
-  each: its restored tile atlas and the cast-shadow depth map are both GPU-only surfaces with no
-  CPU mirror. A `tacli` instance opts out of the play defaults so neither arises; `--defaults`
-  does, and so does `classicpp.cfg=terrainshadow=1`.
+- **The terrain pass stands down under Classic++ `assets=1`**, and says so once: the restored tile
+  atlas is a GPU-only surface with no CPU mirror. A `tacli` instance opts out of the play defaults
+  so it does not arise; `--defaults` does. **The cast-shadow map is NO LONGER one of these**
+  (G19e's fifth pass): `tagpu_vk_shadow.c` draws it and the terrain pass samples it. What stands
+  the pass down now is a frame whose map the shadow pass could not reproduce — every frame with a
+  unit caster on screen, until the unit pass lands — and that refusal is per-frame, not latched.
 - Expect `terr: atlas built 2176x<h> for <n> tiles`, `terr: height grid WxH uploaded`, and
   `vk: terr: the Vulkan edition is up - 4 frame slots, uniform stride 256, depth format 129`. The
   two CPU mirrors are the buffers those two builds were handed, **kept rather than freed** while
@@ -2063,6 +2065,52 @@ rm -f $G/tagpu_fx.ab $G/tagpu_fx_*.ppm; sleep 2; touch $G/tagpu_fx.ab; sleep 9
   50 columns identical ([gpu-status](gpu-status.html) §2.31). **Do not go hunting for it as a new
   bug.** Triangle buckets are 0 px and stay 0 px; if a *triangle* run is non-zero, that is real.
 
+**The shadow map's A/B (G19e), and it is the only pass whose oracle is another pass's pixels:**
+
+```bash
+tools/tacli arm <i> terr.on ss.off 'vk.on=color=0,0,0' classicpp.on \
+      'classicpp.cfg=assets=0 shadows=1 terrainshadow=1 shadowsun=225,8'
+tools/tacli scenario load <i> static-terrain --restart --res 1024x768 --maxfps 0
+sleep 12
+G=<main checkout>/tagpu/instances/<i>/gamedir
+rm -f $G/tagpu_terr.ab $G/tagpu_terr_*.ppm; sleep 2; touch $G/tagpu_terr.ab; sleep 8
+<main checkout>/.venv-undither/bin/python tools/vk-ab.py $G --pass terr    # 0 px apart
+```
+
+- **`tagpu_shadow.ab` does not exist, and cannot.** The pass draws a DEPTH MAP, not pixels, so its
+  A/B is **the terrain pass's** with the map on: 0 px there means the geometry, the stored depth
+  values, the blocker search, the bilinear PCF and the receiver-plane bias all agree.
+- **`assets=0` is what makes Classic++ measurable at all.** With `assets=1` the terrain pass
+  refuses every frame (the restored tile atlas has no CPU mirror), so there is nothing to compare.
+- **`shadowsun=225,8` is the fixture, and the default `225,40` is NOT.** `terrainshadow=1`
+  self-shadows the ground, and at 40 degrees of elevation that is nearly invisible — measured on
+  `static-terrain` at nine camera positions, shadows on against shadows off: **0 px at seven of
+  them, 38 and 54 at the other two**. At elevation 8 the map shadows **517 270 of 786 432**
+  pixels. A 0-px A/B at the default sun proves nothing about the map.
+- **CONFIRM THE PICTURE DEPENDS ON THE MAP BEFORE BELIEVING A 0.** One `glshot` with `shadows=1`
+  and one with `shadows=0`, diffed, is the whole check, and it is what turned a vacuous pass into
+  a measurement.
+- **`static-terrain` is the fixture because its two towers are in opposite CORNERS.** The gather is
+  on-screen only, so with the camera in the middle of the map there is no unit caster — and **every
+  caster but the heightfield refuses the frame**, because the units, the posed bodies and the
+  replacement meshes are the unit pass's to port. One tower in view is enough:
+  `vk: shadow: the GL map holds 1 caster(s) this lane has no copy of`, and the terrain pass stands
+  down with it. Both recover the moment it leaves view; the refusal is per-frame, not latched.
+- **Without `native.on` there are no unit casters at all**, which is why the recipe above does not
+  arm it. Arm it to test the refusal, not to take the measurement.
+- **The 1 px that is left is the LAMBERT, not the shadow.** With Classic++ `light=1` the terrain
+  pass reads **1 px of 786 432, one level**, deterministic for a given camera; `light=0` reads 0,
+  and `shadows=0` reads the same 1 px at the same pixel. It is a stated bar of the terrain pass
+  (gpu-status §2.32), newly measured because Classic++ frames used to be refused outright.
+- Expect `vk: shadow: up (depth format 125, linear 1, N slots)` — 125 is
+  `VK_FORMAT_X8_D24_UNORM_PACK32`, `GL_DEPTH_COMPONENT24` exactly — and one
+  `vk: shadow: caster mesh uploaded, … serial N` per map. The GL twin's own map is dumped with
+  `tacli arm <i> shadowdump.on` (`tagpu_shadow.pgm`, 16-bit, near = small) and is the way to check
+  the map has contents at all: on Town & Country 54 % of its texels carry geometry.
+- **The caster mesh costs 10 MB on Town & Country** (291 600 vertices / 1 743 126 indices) in the
+  GL module's CPU mirror and again in device memory, and the map is **16 MB a frame slot** at the
+  default `shadowres` 2048. Both are paid only while the Vulkan lane is armed.
+
 - **To measure constraint 4** — that the GL lane did not move — arm `vk.off` on two instances, one
   running the tree's DLL and one the previous one, load the same static fixture, park the pointer
   in the same place (`keys <i> mouse:60,400`, the side panel, so its animating sprite is outside a
@@ -2079,9 +2127,17 @@ rm -f $G/tagpu_fx.ab $G/tagpu_fx_*.ppm; sleep 2; touch $G/tagpu_fx.ab; sleep 9
   grass in the other, which took a minute and saved a fix for a problem that did not exist. This
   is a *different* artefact from the two-state 71-px sliver at x 1017..1023 (the frame's right
   edge); both are reasons the floor is measured rather than quoted.
-  **Build the previous DLL with `git archive <rev> | tar -x -C <dir>`** and symlink `wineprefix`,
+  **Build the previous DLL with `git archive <rev> | tar -x -C <dir>`** and symlink
   `tagpu/gamedir` and `unditherer/models` into it: `tacli` pins the DLL of the tree it is run
   from, purely by path, so that tree's `tools/tacli` launches the old binary with no other setup.
+  **`wineprefix` must be a `cp -al` CLONE, not a symlink**, and `tagpu/instances` is better
+  symlinked at the main checkout's than left inside the archive tree. `clone_prefix` runs
+  `cp -al <tree>/wineprefix <inst>/prefix`, and `cp -al` on a SYMLINK copies the symlink rather
+  than hardlinking the tree — so every instance made from such a tree gets a `prefix` symlink
+  pointing straight at the shared template, and the game exits during launch with **no
+  `ErrorLog.txt` and a perfectly healthy `tagpu.log`** that simply stops. (One instance created
+  that way launched anyway and therefore ran directly inside the template prefix; a base tree set
+  up this way can write the shared registry. Measured 2026-09-15.)
 - **MEASURE THE CROSS-LAUNCH FLOOR WITH TWO SAMPLES OF ONE BINARY, every time.**
   `selbox-facings` at 1024x768 has a **two-state 71-px artefact** at x 1017..1023, y 236..277 —
   the frame's right edge — which reproduces DLL-against-itself. G19e's first base-versus-landing

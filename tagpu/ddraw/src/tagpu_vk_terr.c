@@ -106,13 +106,19 @@
 
      uRestored 1   Classic++'s restored tile atlas (tagpu_restoreglsl.c writes
                    it on the GPU and it is never read back), exactly as §2.29.
-     uShadowOn 1   the cast-shadow depth map (tagpu_shadow.c), a GL depth
-                   texture. Its two samplers still have to be VALID for the set
-                   to be bound, so they name a 1x1 depth image this file makes
-                   and clears; nothing ever samples it.
 
-   Both are Classic++ surfaces, and a `tacli` instance opts out of the play
-   defaults, so an A/B run does not meet either; a `--defaults` instance does.
+   It is a Classic++ surface, and a `tacli` instance opts out of the play
+   defaults, so an A/B run does not meet it; a `--defaults` instance does.
+
+   uShadowOn 1 WAS THE SECOND ONE AND IS NOT ANY MORE (G19e's fifth pass).
+   tagpu_vk_shadow.c draws the cast-shadow map into an offscreen depth image of
+   its own and this pass SAMPLES it, through bindings 46 and 47, bound to that
+   slot's view during this slot's own `prepare`. What is left of the old
+   refusal is narrower and per-frame rather than latched: a frame whose twin
+   reports the map on is refused when THIS frame's Vulkan map was not drawn --
+   which is every frame with a unit caster in it until the unit pass lands,
+   because the shadow pass refuses a map it cannot reproduce. The 1x1 dummy
+   stays, because the descriptors must still be valid on a frame with no map.
 
    IT KNOWS NOTHING ABOUT A WINDOW. Everything arrives in TAGPU_VKPASS.
    A PASS READS NO ENGINE STATE: every value comes from the GL lane's
@@ -936,9 +942,11 @@ static int shadow_build(const TAGPU_VKPASS* d)
     return 1;
 }
 
-/* Clear it once and leave it in SHADER_READ_ONLY_OPTIMAL. Nothing samples it
-   (the pass refuses any frame with uShadowOn 1), but an image whose contents
-   are undefined is one more thing to reason about for the price of one call. */
+/* Clear it once and leave it in SHADER_READ_ONLY_OPTIMAL. Nothing samples it --
+   `shared_bind` names it only on a frame with no Vulkan map, and taShadowAt
+   returns 1.0 on `uShadowOn == 0` before it touches either sampler -- but an
+   image whose contents are undefined is one more thing to reason about for the
+   price of one call. */
 static void shadow_ready(VkCommandBuffer cb)
 {
     VkClearDepthStencilValue cv;
