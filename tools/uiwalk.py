@@ -216,6 +216,7 @@ class Walk:
         self.log_seen = 0
         self.parity = parity
         self.restore = restore
+        self.vk = False              # --vk: diff the Vulkan lane against GL at every stop
         self.scenario = scenario
         self.W, self.H = [int(v) for v in res.lower().split("x")]
 
@@ -464,6 +465,62 @@ class Walk:
               f"\n  tools/tascene uidiff {self.out}/{phase}-tagpu_restore_{tag}", file=sys.stderr)
         return n
 
+    def vk_ab(self, label):
+        """G19f: the Vulkan lane against the GL lane, at THIS stop.
+
+        `tagpu_gui.ab` is one-shot per arming (`s_abDone` in tagpu_gui_surf.c):
+        the GL half draws its composite over a black frame and reads the
+        viewport back once, the Vulkan half does the same in its own window, and
+        `tools/vk-ab.py --pass gui` diffs the pair. So the lever is created,
+        waited on, and removed again at every stop rather than left armed.
+
+        Returns the differing-pixel count, or None when the pair did not appear
+        -- which is NOT zero and must never be reported as a pass."""
+        if not self.gamedir:
+            return None
+        gl = self.gamedir / "tagpu_gui_gl.ppm"
+        vk = self.gamedir / "tagpu_gui_vk.ppm"
+        lever = self.gamedir / "tagpu_gui.ab"
+        for f in (gl, vk):
+            try: f.unlink()
+            except FileNotFoundError: pass
+        lever.touch()
+        # WAIT FOR THE SIZE TO SETTLE, NOT FOR THE FILE TO EXIST. A 1920x1080
+        # PPM is 6.2 MB and the two lanes write theirs independently; "both
+        # exist, sleep 0.4 s" was enough for a 640x480 pair and read a 1080p one
+        # at 5 509 120 of 6 220 800 bytes, which vk-ab.py then refused as a size
+        # mismatch. Poll until each file reports the SAME size twice running.
+        want = self.W * self.H * 3
+        deadline = time.time() + 40.0
+        last = (-1, -1)
+        while time.time() < deadline:
+            time.sleep(0.4)
+            if not (gl.exists() and vk.exists()):
+                continue
+            now = (gl.stat().st_size, vk.stat().st_size)
+            if now == last and all(n >= want for n in now):
+                break
+            last = now
+        try: lever.unlink()
+        except FileNotFoundError: pass
+        if not (gl.exists() and vk.exists()):
+            which = "neither lane wrote" if not gl.exists() and not vk.exists() else \
+                    ("the Vulkan lane did not write" if not vk.exists() else "the GL lane did not write")
+            print(f"  [{label}] vk A/B: {which} -- no comparison", file=sys.stderr)
+            return None
+        for keep, src in ((f"{label}-gl.ppm", gl), (f"{label}-vk.ppm", vk)):
+            try: shutil.copyfile(src, self.out / keep)
+            except Exception: pass
+        pr = subprocess.run([sys.executable, str(TREE / "tools" / "vk-ab.py"), "--pass", "gui", str(self.gamedir)],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120)
+        out = pr.stdout
+        m = re.search(r"differing px\s+(\d+)\s+of\s+(\d+)", out)
+        if not m:
+            print(f"  [{label}] vk A/B: vk-ab.py said nothing countable: {out.strip().splitlines()[-1] if out.strip() else ''}",
+                  file=sys.stderr)
+            return None
+        return int(m.group(1))
+
     def stop_at(self, label, actions, in_game=False):
         if self.restore:
             return self.stop_restore(label, actions, in_game)
@@ -521,10 +578,15 @@ class Walk:
         # read and the surface/GL/surface triple moves where those land on the
         # game's own timeline. It reads no state the shots consume.
         hit = hit_check(self.inst)
+        # G19f: the Vulkan A/B goes AFTER the hit check for the same reason the
+        # hit check goes after the parity bracket -- it re-arms a one-shot lever
+        # and waits on two files, so anything it sits in front of would land
+        # somewhere else on the game's own timeline.
+        vkdiff = self.vk_ab(label) if self.vk else None
         summary = parse_census(lines)
         hb = self.heartbeat() if self.parity else {}
         self.rows.append({"label": label, "screen": screen, "in_game": in_game, "lines": lines, **summary, **parity,
-                          "hit": hit,
+                          "hit": hit, "vkdiff": vkdiff,
                           "heartbeat": hb, "zoom": self.zoom_level() if (self.parity and in_game) else None})
         kstr = f"{hit['k']:.4f}" if hit.get("k") else "-"
         # the hit half prints on EVERY walk — it costs a snapshot whether or not
@@ -541,8 +603,11 @@ class Walk:
                  f" | fps={hb.get('fps', '-')} resets={hb.get('resets', '-')}"
                  f" overflows={hb.get('overflows', '-')} stalls={hb.get('stalls', '-')} lost={hb.get('lost', '-')}"
                  f" twins={hb.get('twins', '-')} atlas={hb.get('atlas', '-')} pal={hb.get('palchg', '-')}/{hb.get('paldiff', '-')}" if parity else "")
+        vkstr = ""
+        if self.vk:
+            vkstr = f" | vk: {vkdiff} px" if vkdiff is not None else " | vk: NO PAIR"
         print(f"  {label:14s} {screen:40s} flips={summary['flips']:4d} changed={summary['changed']:7d} "
-              f"unexplained={summary['unexplained']:7d} worst={summary['worst']}{hitstr}{extra}", file=sys.stderr)
+              f"unexplained={summary['unexplained']:7d} worst={summary['worst']}{hitstr}{extra}{vkstr}", file=sys.stderr)
 
     def stop_loading(self, label, timeout=150.0):
         """The loading screen, held under strict. It is presented exactly ONCE: the game
@@ -615,6 +680,24 @@ class Walk:
         p = self.out / "report.md"
         with p.open("w") as f:
             f.write(f"# uiwalk — {self.inst} at {self.res}\n\n")
+            if self.vk:
+                # G19f's gate table. A stop with NO PAIR is not a pass and is
+                # not blank: the lane wrote nothing and there was no comparison,
+                # which is the one way a walk of this kind reports a hole as a
+                # zero if you let it.
+                ok = sum(1 for r in self.rows if r.get("vkdiff") == 0)
+                bad = [r for r in self.rows if r.get("vkdiff") not in (0, None)]
+                nopair = [r for r in self.rows if r.get("vkdiff") is None]
+                f.write(f"## The Vulkan lane against the GL lane, every stop\n\n"
+                        f"**{ok} of {len(self.rows)} stops at 0 px**"
+                        f"{', ' + str(len(bad)) + ' DIFFER' if bad else ''}"
+                        f"{', ' + str(len(nopair)) + ' with NO PAIR (not a pass)' if nopair else ''}.\n\n")
+                f.write("| stop | screen | game | vk A/B px |\n|---|---|---|---|\n")
+                for r in self.rows:
+                    v = r.get("vkdiff")
+                    f.write(f"| {r['label']} | {r['screen']} | {'y' if r['in_game'] else ''} | "
+                            f"{'**NO PAIR**' if v is None else v} |\n")
+                f.write("\n")
             if self.parity:
                 f.write("| stop | screen | game | zoom | k | gadgets | hit misses | drift px | differing px outside the viewport | inside it, engine non-key px: differing / total | strict holes | box | engine self-diff | fps | resets | overflows | stalls | lost | skipped | twins | atlas | palette uploads / presented-vs-engine entries |\n"
                         "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
@@ -858,6 +941,10 @@ def main():
                     help="G17b: aim every gadget click in CLIENT-AREA pixels, so the walk exercises "
                          "the pointer unscale instead of handing the engine logical coordinates. "
                          "The hit check below runs either way")
+    ap.add_argument("--vk", action="store_true",
+                    help="G19f: arm the Vulkan lane (route D, its own window) and diff it against the GL lane "
+                         "at EVERY stop through `tagpu_gui.ab` + tools/vk-ab.py. The gate's walk. Implies the "
+                         "layer: the A/B compares the two lanes' composites, so there has to be one")
     ap.add_argument("--cycles", type=int, default=0,
                     help="G15d: after the in-game stops, this many game -> shell -> game cycles in one process "
                          "(the exit dialogs, the shell inventory again, the loading screen held, the fixture re-applied)")
@@ -868,10 +955,17 @@ def main():
     if a.restore and a.layer:
         sys.exit("uiwalk: --restore and --layer are different measurements: pick one")
     w = Walk(a.inst, a.out, a.res, parity=a.layer, scenario=scenario, restore=a.restore)
+    w.vk = a.vk
 
     tacli("stop", a.inst)
     if a.restore:
         tacli("arm", a.inst, "gui.on=log", "classicpp.on", "restoredump.on", check=True)
+    elif a.vk:
+        # G19f's walk: the lane up in its own window (route D), Classic++ armed
+        # because tagpu_opt's play defaults arm it and landing 4 is what the
+        # restored UI atlas is compared through. `mmbase` is the minimap lever
+        # landings 3-5 measured on; no `norestore`, so the restore is live.
+        tacli("arm", a.inst, "gui.on=mmbase", "classicpp.on", "vk.on=color=0,0,0", check=True)
     else:
         tacli("arm", a.inst, "gui.on=strict log" if a.layer else "gui.on=census log pgm trace", check=True)
     if not a.no_passes:
