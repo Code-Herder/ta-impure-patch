@@ -421,7 +421,12 @@ typedef struct {
 static GFONT    s_gfont[GF_SLOTS];
 static int      s_ngfont;
 static unsigned s_gfontNext = 1;
-static unsigned s_gfontRecycles, s_gfontRefused, s_gfontGlyphs, s_gfontResends;
+/* `volatile` because `tagpu_gui_font_stats` reads them from the RENDER thread for the
+   heartbeat while only the game thread writes them -- the convention every other
+   producer counter follows in `g_guiq`. Aligned 32-bit stores on x86 cannot tear, so
+   what this buys is that the render thread sees a figure rather than a cached one.
+   [FOUND 2026-09-16 by the landing review: the reader is what G19f-8 added.] */
+static volatile unsigned s_gfontRecycles, s_gfontRefused, s_gfontGlyphs, s_gfontResends;
 /* ...and a reader for them, because a counter the heartbeat does not print is a
    measurement nobody ever reads -- which these four were from landing 4c until
    G19f-8 made them the way to see this mechanism work. */
@@ -453,12 +458,18 @@ static unsigned s_gfontGenSeen;
    publish, and a mismatch publishes the box instead. Same shape, and the same
    reason, as the sprite path's `s_seenGen`.
 
-   A SLOT RECYCLE IS NOT A THIRD CLEAR, which is worth saying because
-   `gfont_slot` does `memset(s_gfont, ...)` when all eight are taken. That
-   changes which ID a font has rather than what the consumer holds: ids are
-   never reused, the cells published under the old one stay in the consumer's
-   cache, and an op captured before the recycle still names the id its block was
-   decided against. Nothing in flight is invalidated, so nothing has to be. */
+   A SLOT RECYCLE NEEDS NO BUMP OF ITS OWN, AND THE REASON IS NOT THE ONE THIS
+   COMMENT GAVE. It said "nothing in flight is invalidated", which is backwards:
+   both tables are eight deep, so the ninth `(font, sig)` that makes US recycle
+   is also the ninth ID the CONSUMER sees, and `tagpu_text.c`'s own `gfont_slot`
+   answers that with `memset(s_gf)` + `memset(s_gatlas)` + `s_ggen++` -- every
+   cell under every old id, gone. A recycle therefore RELIABLY CAUSES a consumer
+   clear rather than leaving everything valid. What makes it safe anyway is the
+   generation: that `s_ggen++` is what the poll above sees, one window later at
+   worst, and it re-arms every `sent[]` through the same path a shelf overflow
+   does. `gfont=` prints the recycles and the resends side by side, so the two
+   moving together is a cross-check on this paragraph rather than a hope.
+   [CORRECTED 2026-09-16 by the cross-thread reviewer.] */
 static unsigned s_sentGen = 1;
 static void gfont_sent_clear(void)
 {
@@ -1201,14 +1212,6 @@ static void publish(unsigned flipSurf)
     int vl = 0, vt = 0, vr = -1, vb = -1;
     if (!g_gui_draw) return;
     if (consumer_stalled()) return;
-    /* THE CONSUMER'S GLYPH GENERATION, READ HERE TOO (G19f-8). `gfont_slot`
-       polls it on every text draw, but a window whose last text op was observed
-       BEFORE the render thread dropped its atlas would otherwise publish that
-       op's "already sent" decision against a table nobody has any more. Reading
-       it once here makes the comparison in the text branch below a comparison
-       against NOW. It dereferences no font -- it is our own counter against the
-       render thread's. */
-    gfont_check_gen();
     dedup();
     /* ---- THE LEVEL BOUNDARY, FOR THE CONSUMER'S ATLAS (G19f-7, found by the
        landing review -- BOTH reviewers, independently, the eleventh such pair
@@ -1431,6 +1434,19 @@ static void publish(unsigned flipSurf)
                publish that is re-seeding surfaces whole anyway, and the next
                window re-captures everything. Exactly the sprite path's
                `gafreseed`, and counted apart for the same reason. */
+            /* POLLED HERE, PER OP, AND NOT ONCE AT THE TOP OF THIS FUNCTION.
+               `gfont_check_gen` reads the RENDER thread's glyph generation and
+               clears every `sent[]` when it has moved. The first version of this
+               landing called it once on entry and the comment claimed that made
+               the test below "a comparison against NOW" -- it made it a
+               comparison against the top of `publish`, and the render thread can
+               drop its atlas in the middle of the loop. That WIDENED a window
+               the code already had: before G19f-8 the poll was inside
+               `gfont_slot`, one statement before the decision it guards, which
+               is what this restores.
+               [FOUND 2026-09-16 by the cross-thread reviewer, with the
+               interleaving spelled out.] */
+            gfont_check_gen();
             if (op->fgen != s_sentGen) { g_guiq.strrearm++; goto as_pixels; }
             o = pub_op(PK_STRING, s->base); if (!o) return;
             o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;

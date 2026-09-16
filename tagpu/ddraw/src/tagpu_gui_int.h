@@ -131,8 +131,11 @@ typedef struct TAGPU_GUIQ {
        else. */
     volatile unsigned strrearm;
     /* the glyph scratch, so its bound can be judged rather than assumed:
-       `glyhigh` is the most bytes any one census window has wanted of it and
-       `glylost` the blocks it could not take whole. A settled session should
+       `glyhigh` is the most bytes any one census window has TAKEN of it -- a
+       refused block is counted in `glylost` and contributes nothing here, so
+       the two are read together and `glyhigh` alone is not demand [the word
+       was "wanted", which contradicted the code, found by the landing review]
+       -- and `glylost` the blocks it could not take whole. A settled session should
        hold both still -- `sent[]` means a (font, code) pair is captured once -- 
        and `glylost` at 0 is what says the 128 KB is not a guess that happens to
        hold. A block the scratch refuses publishes its box, exactly as a text op

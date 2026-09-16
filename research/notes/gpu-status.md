@@ -6297,9 +6297,25 @@ whole windows. Until this landing both were safe **by position** — the decisio
 its box instead on a mismatch. Same shape, and the same reason, as the sprite path's `s_seenGen`,
 and counted apart as `strrearm=` for the same reason `gafreseed` is.
 
-A **slot recycle** is not a third clear: it changes which id a font has rather than what the
-consumer holds, ids are never reused, and the cells published under the old id stay valid for the
-ops that named it.
+A **slot recycle** needs no bump of its own, but **not** for the reason this section first gave
+("nothing in flight is invalidated"), which the cross-thread reviewer showed is backwards. Both
+tables are eight deep, so the ninth `(font, sig)` that makes the producer recycle is also the
+ninth id the consumer sees, and `tagpu_text.c`'s own `gfont_slot` answers that with
+`memset(s_gf)` + `memset(s_gatlas)` + `s_ggen++` — every cell under every old id, gone. A recycle
+therefore *reliably causes* a consumer clear. What makes it safe is the generation catching that
+`s_ggen++` like any other, and `gfont=` now prints recycles and resends side by side so the two
+moving together is a cross-check rather than a hope.
+
+**And the poll sits beside the decision, not at the top of `publish`.** The first version of this
+landing called `gfont_check_gen()` once on entry and claimed that made the test "a comparison
+against NOW". It made it a comparison against the top of the publish loop, and the render thread
+can drop its atlas in the middle of one: op *k*'s block omits a code because `sent[]` said it was
+published, the consumer overflows its shelf and clears, and op *k* is then committed without it —
+one window of a string drawn with that character dropped and the rest closed up, `miss=` counting
+it. Before G19f-8 the poll was inside `gfont_slot`, one statement before the decision it guards,
+so that first version had *widened* an existing window rather than closed one. It is now polled
+per op, which restores exactly the old width. [Found by the cross-thread reviewer, with the
+interleaving spelled out.]
 
 #### Marked at publish, not at capture — and no cross-op dedup
 
@@ -6370,6 +6386,24 @@ figure that moves between two runs of the same build cannot have been caused by 
   `0x4CCF60` is reached only through `DrawTextCustomFont 0x4C14F0`, so `glyscratch` is 0 across
   the whole shell half and those rows are a regression gate on the rest of the module. Everything
   this landing changes is in game.
+* **A STRING LONGER THAN 256 BYTES IS TRUNCATED BY US AND NOT BY THE ENGINE** [named by the
+  landing review, 2026-09-16]. `0x4CCF60`'s walk has no counter — it draws to the NUL or the
+  `'\n'`, however long that is — while `before_text` measures the op's box from the first 256
+  widths and `twin_string` stamps at most 256 quads. So a longer string would draw short in the
+  twin AND have a box too narrow for the pixel fallback to cover. It predates this landing on
+  both sides and nothing here changes it; it is named because the note this landing adds to the
+  engine map originally attributed our 256 to the engine, which would have hidden it. No fixture
+  draws one: TA's HUD strings are short.
+* **THE WINDOW BETWEEN THE CHECK AND THE CONSUMER'S DRAW CANNOT BE CLOSED FROM THE PRODUCER, and
+  is not.** The generation makes the "already sent" half of a block true as of the moment the op
+  is committed; the render thread may still throw its glyph atlas away between that instant and
+  the drain, and then that one string draws with the missing characters dropped. It is bounded by
+  a window, self-heals on the next publish, and `miss=` counts it — 0 over 19 585 string ops here.
+  **The reviewer's proposed tightening was rejected after verification**: raising `g_guiq.reseed`
+  when `twin_string` records a miss would make the losing window the last one, but `miss` is not a
+  divergence signal — a string containing any code the font has no glyph for increments it while
+  the engine skips that code too, which `tagpu_gui_surf.c`'s own comment says at the counter. That
+  would re-seed every surface on an ordinary string.
 * **A font whose header lies is refused exactly as before and no better** — `f[3] != 0`,
   `f[0] == 0` and `gfont_glyph`'s zero tests. A table entry pointing outside the loaded file
   image, or a width byte that runs the bits past its end, is read by us and then by the engine one

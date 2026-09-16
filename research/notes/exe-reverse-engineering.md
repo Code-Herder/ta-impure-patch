@@ -1436,7 +1436,12 @@ the engine would smear, we draw nothing.
 string it walks, `0x4CCF60` reads `font[0]` (the rows), `font[2]` (the y offset), `font[3]` (the
 first code), the `u16` table entry at `font + 4 + 2*(code - first)` for every code, and, for every
 code with a non-zero entry, the `ceil(rows*w/8)` bytes at `font + off + 1`. It reads the string
-itself to `\0` or `'\n'`, at most 256 bytes. **There is no clip**, which is the load-bearing part:
+itself to `\0` or `'\n'` and **there is no length cap** — the walk at `0x4CCF94`…`0x4CCFA7` has
+no counter in it, so a 300-byte string draws 300 glyphs. (`tagpu_gui_hook.c` and
+`tagpu_gui_surf.c` both stop at 256; that bound is OURS. This paragraph said "at most 256 bytes"
+of the ENGINE until the landing review read the loop — an error in the safe direction for the
+subset claim below, and exactly the kind that makes one of our own limits invisible by attributing
+it to the engine.) **There is no clip either**, which is the load-bearing part:
 it does not skip a glyph because the destination would be off-screen — it has no destination
 bound at all — so a caller cannot arrange for a glyph's bits to go unread. A detour at the
 function's head that walks the same string with the same two skips (`sub ebx,first; jb` at
