@@ -238,10 +238,17 @@ typedef struct TAGPU_GUIHAND {
     int                  atlasDim, atlasRows;
     unsigned             atlasSerial;
 
-    /* the GLYPH atlas, which `tagpu_text.c` already keeps as bytes */
+    /* the GLYPH atlas, which `tagpu_text.c` already keeps as bytes.
+       `glyphSerial` IS THE CONTENT SERIAL AND NOT THE REPACK GENERATION. It
+       moves whenever the atlas's bytes move, an ordinary new glyph included;
+       `tagpu_text_glyph_gen()` moves only on a repack and is NOT carried here,
+       because the one thing a consumer would do with it -- decide whether the
+       cells it was handed are still valid -- is settled on this side by
+       `lost` below. Keying an upload on the generation uploads once and then
+       misses every glyph seen afterwards. */
     const unsigned char* glyphs;
     int                  glyphW, glyphH;
-    unsigned             glyphGen;
+    unsigned             glyphSerial;
 
     const unsigned char* pal;       /* 256 x RGBA8, tagpu_pal_live()          */
     unsigned             palSerial;
@@ -269,6 +276,16 @@ typedef struct TAGPU_GUIHAND {
        A frame with any of these is refused whole, in the shape every world
        pass refuses what it has no copy of: drawing the rest would be a
        different picture and the A/B would call it a rasteriser difference. */
+    /* THIS RECORD DOES NOT CARRY THIS FRAME'S OPS AND REPLAYING IT WILL NOT
+       CATCH THE STORE UP. Published rather than withheld, because withholding
+       is indistinguishable from "the lane is not armed" and leaves the consumer
+       believing it is level when it is a frame behind -- silently, for the rest
+       of the session. Two causes today: the mirror's op array or arena refused
+       to grow mid-frame, and the glyph atlas REPACKED between one string op
+       being recorded and the end of the drain, which invalidates the cells of
+       every string already recorded in this frame. The consumer's answer is the
+       behind state, not a refusal. */
+    int   lost;
     int   otherOps;                 /* ops still not carried, if any ever are */
     int   colourTwins;              /* Classic++ colour reached a twin        */
     int   sharpOn;                  /* the sharp layer had COVERAGE this frame

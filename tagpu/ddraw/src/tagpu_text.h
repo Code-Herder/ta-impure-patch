@@ -122,6 +122,11 @@ unsigned int tagpu_text_glyph_tex(void);
    array and `tagpu_text_glyph_gen`'s counter says when it last moved. Render
    thread only. */
 const unsigned char* tagpu_text_glyph_atlas(int* w, int* h);
+/* THE ATLAS'S CONTENT SERIAL -- bumped whenever its BYTES change, including an
+   ordinary new glyph, which `tagpu_text_glyph_gen` does NOT count. Key a second
+   backend's upload on this one; key the validity of CELLS ALREADY RESOLVED on
+   the generation above. Render thread only. */
+unsigned tagpu_text_glyph_serial(void);
 int  tagpu_text_glyph_stats(unsigned* glyphs, unsigned* drops, int* fonts);
 
 /* ---- GL (present thread, context current) ---- */

@@ -46,6 +46,11 @@
    hand-over routinely carries thousands. MEASURED 2026-09-16 at 7414 on a
    1080p level load. This is the bound on a runaway, not on a busy frame. */
 #define DRAW_MAX    16384
+/* AND THE QUADS, WHICH STOPPED BEING THE DRAWS IN LANDING 2. A string is ONE
+   draw and up to 256 quads, so `DRAW_MAX` alone bounds a runaway at 4.2 million
+   quads -- a 402 MB host-visible `grow()` per slot, which `grow` never shrinks
+   again. Landing 1's worst measured frame was 7414 quads. */
+#define QUAD_MAX    65536
 /* one descriptor set per distinct IMAGE a frame's twin draws sample. There are
    three kinds and only three: every sprite samples the ONE UI atlas, every
    string the ONE glyph atlas, and a copy samples its SOURCE TWIN -- so the sets
@@ -165,7 +170,7 @@ static VkImage          s_atImg, s_palImg, s_engImg, s_dumImg, s_glImg;
 static VkDeviceMemory   s_atMem, s_palMem, s_engMem, s_dumMem, s_glMem;
 static VkImageView      s_atView, s_palView, s_engView, s_dumView, s_glView;
 static int              s_atDim, s_engW, s_engH, s_glW, s_glH;
-static unsigned         s_atSerial, s_palSerial, s_glGen;
+static unsigned         s_atSerial, s_palSerial, s_glSerial;
 static int              s_atHave, s_palHave, s_engHave, s_dumReady, s_glHave;
 
 static SLOT             s_slot[TAGPU_VK_SLOTS];
@@ -186,6 +191,24 @@ static RET              s_ret[RET_MAX];
    the same reason -- applying ops to a store that has missed some is a wrong
    picture that every later frame inherits. */
 static int              s_behind, s_cantReplay;
+/* RESEEDS RAISED THIS SESSION. `behind` asks once on the transition, but the
+   transition REPEATS: a RESET clears `s_behind`, and a condition that is
+   structural rather than transient fires again inside the same frame that
+   answered it -- so "once on the transition" is once PER FRAME for exactly the
+   conditions that never go away. That is the reseed storm the re-review found,
+   re-entering through a different door, and it changes the ORACLE. After this
+   many fruitless asks the pass stops asking: it keeps its store dropped and
+   composites nothing, which is a capability statement and costs the GL lane
+   nothing. [FOUND 2026-09-16, the landing-2 review.] */
+#define BEHIND_ASKS_MAX 8
+/* ...and the cap counts FRUITLESS asks, not asks. A map change is a legitimate
+   reason to fall behind once, and a long session can hold several; muting the
+   pass for good after eight of those would be the cure killing the patient.
+   A run of frames that actually composited is the evidence the last ask WORKED,
+   so it gives the budget back. A structural condition never earns that run,
+   because it stands the composite down on every frame. */
+#define BEHIND_GOOD_RUN 120
+static int              s_behindAsks, s_behindMute, s_goodRun;
 static VkImageView      s_setView[SET_MAX];
 
 /* this frame's plan, filled by `prepare` and read by `record` */
@@ -966,11 +989,22 @@ static int behind(const TAGPU_VKPASS* d, const char* why)
        this function did, and which `gui.on=nostring` hid from the A/B.
        [FOUND 2026-09-16, the re-review of the review's fixes.] */
     if (!s_behind) {
-        plog(d, "gui: the twin store cannot follow the GL lane (%s) - asking "
-                "the producer for a fresh start, once, and compositing nothing "
-                "until it arrives", why);
         s_behind = 1;
-        tagpu_gui_mirror_reseed();
+        s_goodRun = 0;
+        if (s_behindMute) {
+            /* asked already, as often as this is worth asking */
+        } else if (++s_behindAsks > BEHIND_ASKS_MAX) {
+            s_behindMute = 1;
+            plog(d, "gui: %d fresh starts have not made the twin store able to "
+                    "follow the GL lane (%s) - this is a capability gap and not "
+                    "a sync one, so nothing further is asked of the producer "
+                    "and nothing is composited", BEHIND_ASKS_MAX, why);
+        } else {
+            plog(d, "gui: the twin store cannot follow the GL lane (%s) - asking "
+                    "the producer for a fresh start, once, and compositing nothing "
+                    "until it arrives", why);
+            tagpu_gui_mirror_reseed();
+        }
     }
     if (!tw_reset(d)) return 0;      /* caller refuses: the retire is full */
     return 1;
@@ -994,6 +1028,10 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     TWIN* cur = NULL;
     int rpOpen = 0;
     int drawn = 0;
+    /* WHY THE REPLAY STOOD DOWN. There are four ways to `standdown` now and
+       they were all reported as the first one, which is how a log stops being
+       evidence. */
+    const char* sdWhy = "the presented surface has no twin here";
     int compose = 1;               /* the OPS always run; this gates the quad */
     TWIN* pres;
 
@@ -1019,6 +1057,17 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         /* nothing handed over: the GL lane drew no composite either, and
            nothing is kept once there is nothing to draw (2.28) */
         if (s_state == ST_READY) slot_free(d, s);
+        return 0;
+    }
+
+    /* THE RECORD SAYS IT DOES NOT CARRY THIS FRAME'S OPS. Replaying it would
+       not catch the store up -- there is nothing in it to replay -- so this is
+       the behind state and not a `compose = 0`. It is published rather than
+       withheld precisely so that this branch exists: a withheld record is
+       indistinguishable from an unarmed lane. */
+    if (h.lost) {
+        if (s_state == ST_UNBUILT) return 0;      /* nothing built to drop yet */
+        if (!behind(d, "the GL lane's record of this frame was lost")) goto refuse;
         return 0;
     }
 
@@ -1098,6 +1147,17 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         if (!behind(d, "an atlas outside what this pass carries")) goto refuse;
         return 0;
     }
+    /* THE GLYPH ATLAS'S DIMENSIONS, BOUNDED IN THIS FILE'S OWN TERMS. They are
+       compile-time constants in `tagpu_text.c` and cannot move today, which is
+       exactly why the bound belongs here rather than being inherited from
+       another file: the draw arm below divides by `s_glW`/`s_glH`, and the only
+       thing that makes those equal the dimensions the cells were resolved
+       against is this refusal. */
+    if (h.glyphs && (h.glyphW < 1 || h.glyphH < 1 ||
+                     h.glyphW > ATLAS_MAXDIM || h.glyphH > ATLAS_MAXDIM)) {
+        if (!behind(d, "a glyph atlas outside what this pass carries")) goto refuse;
+        return 0;
+    }
 
     /* ---- pass 1: validate every op and count what the frame needs ----
        IN THIS FILE'S OWN TERMS. A bound that lives in the file that produced
@@ -1157,15 +1217,15 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             return 0;
         }
     }
-    if (ndraw > DRAW_MAX) {
+    if (ndraw > DRAW_MAX || nquad > QUAD_MAX) {
         /* THIS ONE CANNOT APPLY THE OPS, so it is not a `compose = 0`: the
            store would fall behind and stay there. It asks for the fresh start
            instead, which is the only way back to level. */
         if (!s_saidRoom) { s_saidRoom = 1;
-            plog(d, "gui: %d sprite/copy draws in one frame, past this pass's "
-                    "bound of %d - the store cannot follow, asking for a fresh "
-                    "start", ndraw, DRAW_MAX); }
-        if (!behind(d, "more sprite/copy draws in one frame than the bound")) goto refuse;
+            plog(d, "gui: %d draws / %d quads in one frame, past this pass's "
+                    "bounds of %d / %d - the store cannot follow, asking for a "
+                    "fresh start", ndraw, nquad, DRAW_MAX, QUAD_MAX); }
+        if (!behind(d, "more draws or quads in one frame than the bound")) goto refuse;
         return 0;
     }
     s_saidRoom = 0;
@@ -1175,10 +1235,13 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         atUp = 1; stNeed += (VkDeviceSize)h.atlasDim * h.atlasRows;
     }
     if (h.pal && (!s_palHave || s_palSerial != h.palSerial)) { palUp = 1; stNeed += 256 * 4; }
-    if (h.glyphs && h.glyphW > 0 && h.glyphH > 0 &&
-        h.glyphW <= ATLAS_MAXDIM && h.glyphH <= ATLAS_MAXDIM &&
-        (!s_glHave || s_glGen != h.glyphGen ||
-         s_glW != h.glyphW || s_glH != h.glyphH)) {
+    /* THE CONTENT SERIAL, NOT THE REPACK GENERATION -- see tagpu_gui.h. The
+       first draft keyed this on `glyphGen`, which moves only when the atlas is
+       thrown away, so the image was uploaded once and every glyph rasterised
+       afterwards stayed 0 in it: invisible text where `bg == tr` and a solid
+       box where it is not, permanently, and no counter anywhere said so. */
+    if (h.glyphs && (!s_glHave || s_glSerial != h.glyphSerial ||
+                     s_glW != h.glyphW || s_glH != h.glyphH)) {
         glUp = 1; stNeed += (VkDeviceSize)h.glyphW * h.glyphH;
     }
     /* the engine's frame moves every frame by definition, so it needs no
@@ -1289,7 +1352,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-        s_glHave = 1; s_glGen = h.glyphGen;
+        s_glHave = 1; s_glSerial = h.glyphSerial;
     }
     if (palUp) {
         img_barrier(cb, s_palImg,
@@ -1379,10 +1442,15 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                        GL consumer asks for in the same situation and stop
                        drawing until it arrives -- applying the rest would put a
                        wrong picture in a twin that the NEXT frame inherits. */
+                    /* THE ASK IS `behind`'s, NOT THIS SITE'S. Raising the
+                       producer's flag here and then falling into `standdown`
+                       -- which calls `behind`, which raises it again -- is two
+                       reseeds per occurrence, and it walks straight past the
+                       cap that stops a recurring condition reseeding the GL
+                       lane's own store at the frame rate. One door.
+                       [FOUND 2026-09-16, the landing-2 review.] */
                     if (rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
-                    tagpu_gui_mirror_reseed();
-                    plog(d, "gui: a copy names a source twin this store never "
-                            "made - asking the producer for a fresh start");
+                    sdWhy = "a copy names a source twin this store never made";
                     goto standdown;
                 }
                 if (src->needClear && rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
@@ -1451,11 +1519,13 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                        hand-over; this is the other half -- one whose DIMENSIONS
                        were outside what this pass carries, so the upload never
                        ran and the view is null. A descriptor must be valid. */
-                    if (!s_glHave) goto standdown;
+                    if (!s_glHave) { sdWhy = "no glyph atlas is uploaded"; goto standdown; }
                     int g, penx = o->sl, top = o->st;
                     int* fq3 = fq;
                     fq3[0] = (int)o->fg; fq3[1] = (int)o->bg; fq3[2] = (int)o->tr;
-                    if (!set_claim(d, s, s_glView, QVS_SZ, TWF_SZ, &si_)) goto standdown;
+                    if (!set_claim(d, s, s_glView, QVS_SZ, TWF_SZ, &si_)) {
+                        sdWhy = "this frame claimed more distinct images than there are sets";
+                        goto standdown; }
                     ds = s->sets[si_];
                     dyn[0] = (uint32_t)((VkDeviceSize)drawn * uStride);
                     dyn[1] = (uint32_t)((VkDeviceSize)drawn * fStride);
@@ -1484,13 +1554,17 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     quadv(qv, (float)o->sl, (float)o->st,
                           (float)(o->sl + o->fw), (float)(o->st + o->fh),
                           o->u0, o->v0, o->u1, o->v1);
-                    if (!set_claim(d, s, s_atView, QVS_SZ, TWF_SZ, &si_)) goto standdown;
+                    if (!set_claim(d, s, s_atView, QVS_SZ, TWF_SZ, &si_)) {
+                        sdWhy = "this frame claimed more distinct images than there are sets";
+                        goto standdown; }
                     ds = s->sets[si_];
                 } else {
                     fq[0] = o->l - o->sl; fq[1] = o->t - o->st; fq[2] = 0;
                     quadv(qv, (float)o->l, (float)o->t,
                           (float)(o->r + 1), (float)(o->b + 1), 0, 0, 0, 0);
-                    if (!set_claim(d, s, src->view, QVS_SZ, TWF_SZ, &si_)) goto standdown;
+                    if (!set_claim(d, s, src->view, QVS_SZ, TWF_SZ, &si_)) {
+                    sdWhy = "this frame claimed more distinct images than there are sets";
+                    goto standdown; }
                     ds = s->sets[si_];
                 }
                 memcpy(s->vbMap + vbOff, qv, sizeof qv);
@@ -1625,6 +1699,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     s_uStride = uStride; s_fStride = fStride;
     s_abFrame = h.ab;
     s_drawThis = 1;
+    if (!s_behindMute && s_behindAsks && ++s_goodRun >= BEHIND_GOOD_RUN) {
+        s_behindAsks = 0; s_goodRun = 0;    /* the last fresh start worked */
+    }
     return 1;
 
 standdown:
@@ -1634,7 +1711,7 @@ standdown:
        every later frame, land here again, and the pass would never draw for
        the rest of the session with no line in the log to say why.
        [FOUND 2026-09-16 -- both landing reviewers, separately.] */
-    if (!behind(d, "the presented surface has no twin here")) goto refuse;
+    if (!behind(d, sdWhy)) goto refuse;
     s_drawThis = 0; s_abFrame = 0;
     return 0;
 
@@ -1736,6 +1813,7 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
                     *t = s_tw[--s_ntw]; memset(&s_tw[s_ntw], 0, sizeof s_tw[s_ntw]); }
     ret_drain_idle(d);
     s_behind = 0; s_cantReplay = 0;
+    s_behindAsks = 0; s_behindMute = 0; s_goodRun = 0;
     for (i = 0; i < TAGPU_VK_SLOTS; i++) {
         slot_free(d, &s_slot[i]);
         s_slot[i].laySet = VK_NULL_HANDLE;
@@ -1749,7 +1827,7 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     s_atDim = 0; s_atHave = 0; s_atSerial = 0;
     s_palHave = 0; s_palSerial = 0;
     s_engW = s_engH = 0; s_engHave = 0; s_dumReady = 0;
-    s_glW = s_glH = 0; s_glHave = 0; s_glGen = 0;
+    s_glW = s_glH = 0; s_glHave = 0; s_glSerial = 0;
     if (s_dpool) { vkDestroyDescriptorPool(d->dev, s_dpool, NULL); s_dpool = VK_NULL_HANDLE; }
     if (s_pipeSpr) { vkDestroyPipeline(d->dev, s_pipeSpr, NULL); s_pipeSpr = VK_NULL_HANDLE; }
     if (s_pipeCpy) { vkDestroyPipeline(d->dev, s_pipeCpy, NULL); s_pipeCpy = VK_NULL_HANDLE; }

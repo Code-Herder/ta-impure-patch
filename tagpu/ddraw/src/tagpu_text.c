@@ -382,6 +382,18 @@ static unsigned s_gglyphs, s_gdrops;
    for the rest of the session. The producer watches this word and clears its
    own "sent" table when it moves. One writer, one reader, monotone. */
 static volatile unsigned s_ggen;
+/* THE CONTENT SERIAL, WHICH IS NOT `s_ggen`. `s_ggen` counts REPACKS -- the two
+   resets below -- because that is what a caller holding a fistful of cells
+   needs to know. It says NOTHING about an ordinary glyph being rasterised into
+   a fresh shelf, which changes the atlas's BYTES and leaves every cell valid.
+   The GL lane re-uploads on `s_gdirty` and so never noticed the difference; a
+   second backend keying its own upload on `s_ggen` would upload once and then
+   miss every glyph seen afterwards -- invisible text, permanently, for the
+   session. [FOUND 2026-09-16, the G19f landing-2 review: BOTH reviewers led
+   with it independently.] Bumped wherever `s_gatlas`'s bytes change and
+   nowhere else -- not when the GL TEXTURE is recreated, which is liveness
+   rather than content. */
+static volatile unsigned s_gserial;
 
 /* The slot for this font id, or NULL when the table is full and had to start
    over (a full table drops every cell rather than evict one font into a shelf
@@ -396,7 +408,7 @@ static GFONT* gfont_slot(unsigned id)
         memset(s_gf, 0, sizeof s_gf);
         memset(s_gatlas, 0, sizeof s_gatlas);
         s_gshelfX = s_gshelfY = s_gshelfH = 0;
-        s_gdirty = 1;
+        s_gdirty = 1; s_gserial++;
         s_ngf = 1; g = &s_gf[0];
         s_ggen++;
         flog("text: glyph atlas reset (more than 8 fonts seen)");
@@ -433,7 +445,7 @@ static void glyph_raster(GFONT* g, int ch, int gw, const unsigned char* bits, un
         memset(s_gf, 0, sizeof s_gf);
         memset(s_gatlas, 0, sizeof s_gatlas);
         s_gshelfX = s_gshelfY = s_gshelfH = 0;
-        s_ngf = 1; s_gdirty = 1; s_gdrops++; s_ggen++;
+        s_ngf = 1; s_gdirty = 1; s_gdrops++; s_ggen++; s_gserial++;
         g = &s_gf[0]; g->id = keep; g->rows = kr; g->yoff = ky;
         flog("text: glyph atlas full — reset");
         if (s_gshelfY + (int)rows > GA_H) { g->known[idx] = 2; return; }
@@ -460,7 +472,7 @@ static void glyph_raster(GFONT* g, int ch, int gw, const unsigned char* bits, un
     g->known[idx] = 1;
     s_gshelfX += gw;
     if ((int)rows > s_gshelfH) s_gshelfH = (int)rows;
-    s_gdirty = 1;
+    s_gdirty = 1; s_gserial++;
     s_gglyphs++;
 }
 
@@ -525,6 +537,7 @@ int tagpu_text_glyph_id(unsigned font_id, int ch, int* ax, int* ay,
 
 void tagpu_text_glyph_dims(int* w, int* h) { *w = GA_W; *h = GA_H; }
 unsigned tagpu_text_glyph_gen(void) { return s_ggen; }
+unsigned tagpu_text_glyph_serial(void) { return s_gserial; }
 
 const unsigned char* tagpu_text_glyph_atlas(int* w, int* h)
 {

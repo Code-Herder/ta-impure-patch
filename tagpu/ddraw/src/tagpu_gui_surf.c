@@ -1196,6 +1196,8 @@ static unsigned  s_mEngCap;
 
 static TAGPU_GUIHAND s_mHand;
 static int       s_mHave = 0;          /* a hand-over stands                  */
+static int       s_mStrAny;            /* a string op was recorded this frame  */
+static unsigned  s_mStrGen;            /* ...at this glyph-atlas generation     */
 static int       s_mTaken = 0;         /* ...and has been taken               */
 static unsigned  s_mFrame = 0;
 
@@ -1210,6 +1212,7 @@ static void mir_finish(const TAGPU_FRAME* f);   /* defined below draw_layer,
 static void mir_begin(void)
 {
     s_mNOps = 0; s_mALen = 0; s_mOther = 0; s_mLayer = 0;
+    s_mStrAny = 0; s_mStrGen = 0;
     s_abFrame = 0;          /* the claim never outlives the frame that made it */
     s_mirRec = s_mirWant;
     s_mHave = 0;
@@ -1236,6 +1239,13 @@ static int mir_bytes(const void* src, unsigned n, unsigned* off)
 {
     if (!s_mirRec) return 0;
     if (!n) { *off = 0; return 1; }
+    /* EVERY PAYLOAD STARTS 4-BYTE ALIGNED. A string's cells are read on the
+       other side as `short`, and the blocks before it are `w * h` bytes of
+       pixels, so an unaligned `aoff` is reachable -- defined nowhere in C and
+       tolerated by x86 only until something vectorises the read. Padding is the
+       whole fix and it costs at most three bytes an op. */
+    s_mALen = (s_mALen + 3u) & ~3u;
+    if (s_mALen > s_mACap) { s_mirRec = 0; s_mirLost++; return 0; }
     if (s_mALen + n > s_mACap) {
         unsigned want = s_mACap ? s_mACap * 2 : (1u << 20);
         unsigned char* nb;
@@ -1267,6 +1277,14 @@ static void mir_string(const TAGPU_PUBOP* o, const short cell[][4], int n,
     m->sl = (short)x0; m->st = (short)top;
     m->nglyph = (unsigned short)n;
     m->alen = (unsigned)n * 8;           /* four shorts a glyph */
+    /* THE GENERATION THESE CELLS WERE RESOLVED AT. `twin_string` retries around
+       a repack of ITS OWN string and is correct for itself -- it drew into the
+       GL twin from the texture as it stood. This record does not draw until the
+       drain is over, against the atlas as it stands THEN, so a repack caused by
+       a LATER string in the same present leaves these cells naming cleared
+       texels. `mir_finish` compares and loses the frame.
+       [FOUND 2026-09-16, the landing-2 review.] */
+    if (!s_mStrAny) { s_mStrAny = 1; s_mStrGen = tagpu_text_glyph_gen(); }
     if (!mir_bytes(cell, m->alen, &m->aoff)) s_mNOps--;
 }
 
@@ -2410,7 +2428,24 @@ static void mir_finish(const TAGPU_FRAME* f)
        `presented = 0` is how the consumer is told the composite state is not
        valid: it replays and does not draw. [FOUND 2026-09-16, the landing
        review.] */
-    if (!s_mirRec) { s_mHave = 0; return; }
+    /* AN ABANDONED FRAME IS PUBLISHED, NOT WITHHELD, and this is the same hole
+       the paragraph above closed at the other end. `s_mirRec` goes to 0 when
+       the op array or the arena refuses to grow; withholding the record then is
+       byte-identical, to the consumer, to "the lane is not armed" -- so it
+       believes it is level while it is a frame of ops behind, for the session.
+       A repack between a recorded string and here is the same statement about
+       the same frame. Both publish `lost`, which the consumer answers with the
+       behind state. [FOUND 2026-09-16, verifying the landing-2 review.] */
+    if (!s_mirWant) { s_mHave = 0; return; }
+    if (!s_mirRec || (s_mStrAny && s_mStrGen != tagpu_text_glyph_gen())) {
+        memset(&s_mHand, 0, sizeof s_mHand);
+        s_mHand.frame = f->frame_counter;
+        s_mHand.lost = 1;
+        s_mHave = 1; s_mTaken = 0; s_mFrame = f->frame_counter;
+        s_mirLost++;
+        return;
+    }
+    s_mHand.lost = 0;
     if (!s_mLayer) {
         s_mHand.presented = 0; s_mHand.surfW = s_mHand.surfH = 0;
         s_mHand.strict = 0; s_mHand.guard = 0; s_mHand.sharpOn = 0;
@@ -2441,7 +2476,7 @@ static void mir_finish(const TAGPU_FRAME* f)
     }
 
     s_mHand.glyphs = tagpu_text_glyph_atlas(&s_mHand.glyphW, &s_mHand.glyphH);
-    s_mHand.glyphGen = tagpu_text_glyph_gen();
+    s_mHand.glyphSerial = tagpu_text_glyph_serial();
 
     s_mHand.pal = tagpu_pal_live();
     s_mHand.palSerial = tagpu_pal_serial();
