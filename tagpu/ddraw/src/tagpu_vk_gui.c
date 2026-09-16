@@ -39,10 +39,13 @@
    the hand-over: the scaffold's rule -- a handed-over count never sizes an
    allocation. */
 #define TW_MAX      32
-/* sprite + copy draws in one frame. A steady screen is ~41 ops of which a
-   handful draw; a reseed burst is seeds and pixels, which need none. This is
-   the bound on a runaway, and a frame past it is refused rather than clipped. */
-#define DRAW_MAX    4096
+/* sprite + copy draws in one frame. The first draft said 4096 because "a
+   steady screen is ~41 ops of which a handful draw" -- which is true of a
+   FLIP and not of a PUBLISH: the publisher batches every flip since its last
+   one (the shell flips ~12 000 times a second at a 5 ms cadence), so one
+   hand-over routinely carries thousands. MEASURED 2026-09-16 at 7414 on a
+   1080p level load. This is the bound on a runaway, not on a busy frame. */
+#define DRAW_MAX    16384
 /* one descriptor set for every sprite (they all sample the one atlas) and one
    per distinct copy SOURCE twin -- so the sets a frame needs cannot exceed the
    twins plus one, whatever the op count. */
@@ -823,10 +826,11 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     int ndraw = 0;
     VkDeviceSize stNeed = 0, stOff = 0, uStride, fStride;
     VkDeviceSize atOff = 0, palOff = 0, engOff = 0;
-    int atUp = 0, palUp = 0;
+    int atUp = 0, palUp = 0, engUp = 0;
     TWIN* cur = NULL;
     int rpOpen = 0;
     int drawn = 0;
+    int compose = 1;               /* the OPS always run; this gates the quad */
     TWIN* pres;
 
     s_drawThis = 0; s_abFrame = 0;
@@ -854,33 +858,37 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         s_state = ST_READY;
     }
 
-    /* ---- what this landing does not carry ---- */
+    /* ---- WHAT THIS LANDING DOES NOT CARRY, AND WHY IT DOES NOT RETURN HERE.
+       These three gate the COMPOSITE and nothing else. The op stream still has
+       to be applied, because our twin store must equal the GL lane's or it is
+       worth nothing: the GL lane applied these ops whatever it drew, and a
+       frame we skip leaves our twins behind ITS twins for the rest of the
+       session, silently. So `compose` is cleared and the replay runs anyway.
+       [FOUND 2026-09-16, the first in-game run: the draw-count bound below
+       returned early and took the frame's ops with it.] ---- */
     if (h.otherOps > 0) {
         if (!s_saidOther) { s_saidOther = 1;
             plog(d, "gui: the GL twin applied %d op(s) this landing does not "
-                    "carry (a string) - nothing drawn while that is true. "
-                    "`gui.on=nostring` is the lever the A/B is taken with",
-                 h.otherOps); }
-        return 0;
-    }
-    s_saidOther = 0;
+                    "carry (a string) - the twins are kept level but nothing is "
+                    "composited while that is true. `gui.on=nostring` is the "
+                    "lever the A/B is taken with", h.otherOps); }
+        compose = 0;
+    } else s_saidOther = 0;
     if (h.colourTwins) {
         if (!s_saidColour) { s_saidColour = 1;
             plog(d, "gui: the GL twin is compositing a Classic++ colour twin and "
-                    "this landing has none - nothing drawn while that is true. "
-                    "`gui.on=norestore` is the lever"); }
-        return 0;
-    }
-    s_saidColour = 0;
+                    "this landing has none - nothing composited while that is "
+                    "true. `gui.on=norestore` is the lever"); }
+        compose = 0;
+    } else s_saidColour = 0;
     if (h.sharpOn) {
         if (!s_saidSharp) { s_saidSharp = 1;
             plog(d, "gui: the GL twin has coverage in the sharp layer (the "
                     "cursor, a string or the minimap) and this landing draws "
-                    "none - nothing drawn. `gui.on=nocursor nominimap` are the "
-                    "levers"); }
-        return 0;
-    }
-    s_saidSharp = 0;
+                    "none - nothing composited. `gui.on=nocursor nominimap` are "
+                    "the levers"); }
+        compose = 0;
+    } else s_saidSharp = 0;
     /* THE ENGINE'S OWN FRAME IS THE COMPOSITE'S BOTTOM LAYER. Without it the
        GL lane's `uSurf` reads an image ours would not have, so the two would
        differ everywhere the twin has no coverage -- which is most of a frame. */
@@ -888,14 +896,17 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         h.engW > SURF_MAXDIM || h.engH > SURF_MAXDIM) {
         if (!s_saidEng) { s_saidEng = 1;
             plog(d, "gui: the hand-over carries no copy of the engine's own "
-                    "frame - nothing drawn while that is true"); }
-        return 0;
-    }
-    s_saidEng = 0;
+                    "frame - nothing composited while that is true"); }
+        compose = 0;
+    } else s_saidEng = 0;
     if (!h.pal || !h.presented || h.surfW < 1 || h.surfH < 1 ||
-        h.surfW > SURF_MAXDIM || h.surfH > SURF_MAXDIM) return 0;
+        h.surfW > SURF_MAXDIM || h.surfH > SURF_MAXDIM) compose = 0;
     if (h.atlas && (h.atlasDim < 1 || h.atlasDim > ATLAS_MAXDIM ||
-                    h.atlasRows < 1 || h.atlasRows > h.atlasDim)) return 0;
+                    h.atlasRows < 1 || h.atlasRows > h.atlasDim)) {
+        /* the atlas is what a sprite samples: without a sane one the replay
+           itself cannot run, so this is a fresh start and not a `compose` */
+        tagpu_gui_mirror_reseed(); tw_reset(d); return 0;
+    }
 
     /* ---- pass 1: validate every op and count what the frame needs ----
        IN THIS FILE'S OWN TERMS. A bound that lives in the file that produced
@@ -936,13 +947,19 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         case TAGPU_GUIOP_FREE:
         case TAGPU_GUIOP_RESET:
             break;
-        default: return 0;
+        default: tagpu_gui_mirror_reseed(); tw_reset(d); return 0;
         }
     }
     if (ndraw > DRAW_MAX) {
+        /* THIS ONE CANNOT APPLY THE OPS, so it is not a `compose = 0`: the
+           store would fall behind and stay there. It asks for the fresh start
+           instead, which is the only way back to level. */
         if (!s_saidRoom) { s_saidRoom = 1;
             plog(d, "gui: %d sprite/copy draws in one frame, past this pass's "
-                    "bound of %d - nothing drawn", ndraw, DRAW_MAX); }
+                    "bound of %d - the store cannot follow, asking for a fresh "
+                    "start", ndraw, DRAW_MAX); }
+        tagpu_gui_mirror_reseed();
+        tw_reset(d);
         return 0;
     }
     s_saidRoom = 0;
@@ -951,10 +968,11 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     if (h.atlas && (!s_atHave || s_atSerial != h.atlasSerial || s_atDim != h.atlasDim)) {
         atUp = 1; stNeed += (VkDeviceSize)h.atlasDim * h.atlasRows;
     }
-    if (!s_palHave || s_palSerial != h.palSerial) { palUp = 1; stNeed += 256 * 4; }
-    /* the engine's frame moves every frame by definition, so it is never
-       conditional and needs no serial */
-    stNeed += (VkDeviceSize)h.engW * h.engH;
+    if (h.pal && (!s_palHave || s_palSerial != h.palSerial)) { palUp = 1; stNeed += 256 * 4; }
+    /* the engine's frame moves every frame by definition, so it needs no
+       serial -- but it is only there on a frame the composite can be drawn on,
+       and this function now runs the replay on frames it cannot composite */
+    if (h.eng) { engUp = 1; stNeed += (VkDeviceSize)h.engW * h.engH; }
 
     /* ---- room ---- */
     uStride = align_up(QVS_SZ, s_ualign);
@@ -998,17 +1016,19 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         memcpy(s->stMap + stOff, h.pal, 256 * 4);
         stOff += 256 * 4;
     }
-    if (s_engW != h.engW || s_engH != h.engH) {
-        kill_image(d, &s_engImg, &s_engMem, &s_engView);
-        s_engW = s_engH = 0; s_engHave = 0;
-        if (!mk_image(d, h.engW, h.engH, VK_FORMAT_R8_UNORM,
-                      VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                      &s_engImg, &s_engMem, &s_engView)) goto refuse;
-        s_engW = h.engW; s_engH = h.engH;
+    if (engUp) {
+        if (s_engW != h.engW || s_engH != h.engH) {
+            kill_image(d, &s_engImg, &s_engMem, &s_engView);
+            s_engW = s_engH = 0; s_engHave = 0;
+            if (!mk_image(d, h.engW, h.engH, VK_FORMAT_R8_UNORM,
+                          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                          &s_engImg, &s_engMem, &s_engView)) goto refuse;
+            s_engW = h.engW; s_engH = h.engH;
+        }
+        engOff = stOff;
+        memcpy(s->stMap + stOff, h.eng, (size_t)h.engW * h.engH);
+        stOff += (VkDeviceSize)h.engW * h.engH;
     }
-    engOff = stOff;
-    memcpy(s->stMap + stOff, h.eng, (size_t)h.engW * h.engH);
-    stOff += (VkDeviceSize)h.engW * h.engH;
 
     if (atUp) {
         img_barrier(cb, s_atImg,
@@ -1042,6 +1062,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
         s_palHave = 1; s_palSerial = h.palSerial;
     }
+    if (engUp) {
     img_barrier(cb, s_engImg,
                 s_engHave ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                           : VK_IMAGE_LAYOUT_UNDEFINED,
@@ -1056,6 +1077,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
     s_engHave = 1;
+    }
 
     /* ---- THE ORDERING THAT MAKES A SHARED TWIN STORE SAFE (the file header).
        Every earlier frame's composite read its twin in the fragment stage; this
@@ -1220,6 +1242,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     if (rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
 
     /* ---- the composite's own set and block ---- */
+    if (!compose || !s_engHave || !s_palHave) { s_drawThis = 0; s_abFrame = 0; return 0; }
     pres = tw_find(h.presented);
     if (!pres || pres->w != h.surfW || pres->h != h.surfH) goto standdown;
     tw_to(cb, pres, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
