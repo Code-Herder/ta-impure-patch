@@ -6168,12 +6168,27 @@ where it is, every consumer sees one generation per frame.
 
 | claim | how | result |
 |---|---|---|
-| the picture does not move | the A/B walk, all three resolutions | **52 of 52 stops at 0 px**; on the two walks that have a pre-change counterpart (1024×768 and 1080p) the ink is identical **stop for stop, to the byte** |
-| the crash route is clean | the landing-5 route, 5x at 1920x1080, **Vulkan lane DOWN** | **5 of 5 clean**, `teardowns=1` each |
-| the scratch bound holds | `gafscratch=high/lost` over the walks and the arm | high-water **811 474 bytes of 2 097 152 (39 %)** over the three walks, **`lost` 0** |
+Everything below is from the binary that lands — the whole set was re-run after the review's
+fixes, because those fixes changed the DLL and a figure off an earlier build names a build that no
+longer exists.
+
+| claim | how | result |
+|---|---|---|
+| the picture does not move | the A/B walk, all three resolutions | **52 of 52 stops at 0 px**; the 1024×768 and 1080p walks are identical to the pre-change runs **stop for stop, to the byte** |
+| the crash route is clean | the landing-5 route, 5x at 1920×1080, **Vulkan lane DOWN** | **5 of 5 clean**, `teardowns=1` each |
+| the scratch bound holds | `gafscratch=high/lost/baddec` | high-water **860 849 bytes of 2 097 152 (41 %)**, **`lost` 0, `baddec` 0** |
 | nothing falls back for a real reason | `gafnoplane` | **0**, over every run |
-| the atlas drop fires, once per boundary | two skirmishes in ONE process | **2 resets, one per level end**, `subject replaced` (our call, not a full-atlas recycle) |
+| **the UI atlas** drops at each boundary | two skirmishes in ONE process, `gui.on=...log` | **`gui: reset #3: level-changed` and `#6`** — exactly two, one per level end |
+| **the unit atlas** drops at each boundary | the same session | **2 resets**, logged `subject replaced` (our call, not a full-atlas recycle), each one line after the UI atlas's |
 | a dropped atlas re-decodes the RIGHT texels | `glshot` on level 2, after the drop | units render with their own textures and shadows; terrain, trees and HUD intact |
+
+**One stop of the 52 is not reproducible between runs and it is not this landing's.** `ARMMAIN2`
+at 640×480 — the first in-game stop, the one closest to the scenario load — read 103 153 px of
+ink in one run and 103 376 in the next, a 223 px difference. The same stop is **identical across
+all three 1024×768 runs** (118 946 every time), so it is not the review's fixes, and both lanes
+agreed exactly in both runs, so it says nothing about either. The cause is **not established**;
+it is recorded rather than explained, because the ink column is evidence about what the engine
+drew and an unexplained wobble in it is worth a line even when the diff it guards reads 0.
 
 `gafreseed` is counted apart from `gafnoplane` and is **not** a failure: a reset clears the seen
 table after an op has already decided it needs no plane. It is **cheap rather than free** — the
