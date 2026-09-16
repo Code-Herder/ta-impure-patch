@@ -1,0 +1,1 @@
+landing-review: model=opus-5 effort=high range=main..432f0f0 findings=6 acted=5 rejected=1 date=2026-09-16 note=two reviewers, landing-5 first pass; both independently found the gate inert under tagpu_reclaim.off
