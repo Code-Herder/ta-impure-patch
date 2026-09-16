@@ -282,6 +282,24 @@ static GLuint s_hVao, s_hVbo, s_hIbo;  /* the heightfield caster mesh (G14i)  */
 static int    s_hMeshW, s_hMeshH;      /* the grid it was built from: a failed
                                           rebuild leaves the old mesh, and this
                                           is what keeps it undrawn (review) */
+/* THE CASTER MESH'S CPU MIRROR (Phase G / G19e, the shadow pass). The same
+   answer as the atlas's and the height grid's: the very buffers the
+   glBufferData calls below were handed, kept instead of freed, so the Vulkan
+   shadow pass draws the SAME vertices and the SAME index order rather than a
+   second evaluation of build_hills' arithmetic. 19.3 MB on Two Continents
+   (6.4 vertices + 12.9 indices) and paid for only while the Vulkan lane is
+   armed -- `s_mirrorWant`, which is set from tagpu_vk_armed() on the arm beat.
+   The serial says when they last changed, so the Vulkan lane uploads on a map
+   change and not per frame. */
+static float*    s_hMeshV;             /* s_hMeshVN * 3 floats, or NULL       */
+static unsigned* s_hMeshI;             /* s_hMeshIN indices, or NULL          */
+static size_t    s_hMeshVN, s_hMeshIN;
+static unsigned  s_hMeshSerial;
+/* 1 when build_hills ran under `s_mirrorWant` and produced no mirror anyway --
+   a grid too small to mesh, or a malloc that failed. It is what stops
+   ensure_height's mirror term from asking for the same rebuild every frame for
+   the life of the map; cleared wherever the mesh itself is. */
+static int       s_hMeshNoMirror;
 static TAGPU_SHADOWU s_shU;            /* the shadow read-back uniforms      */
 
 /* THIS FRAME'S CELLS, one record each: the cell's column and row in the
@@ -586,6 +604,12 @@ void tagpu_terr_glreset(void)
     s_hTex = 0;                         /* the id died; ensure_height rebuilds */
     s_hVao = s_hVbo = s_hIbo = 0;       /* ...and the caster mesh with it      */
     s_hMeshW = s_hMeshH = 0;
+    /* the mirror goes with the mesh it mirrors: keeping it would hand the
+       Vulkan lane vertices for a grid the GL side is about to rebuild */
+    free(s_hMeshV); s_hMeshV = NULL;
+    free(s_hMeshI); s_hMeshI = NULL;
+    s_hMeshVN = s_hMeshIN = 0;
+    s_hMeshNoMirror = 0;
     s_hW = s_hH = 0; s_hGrid = NULL; s_hFrame = 0;
     s_rectValid = 0;
     /* The set identity (s_setPtr/s_setCount/s_setPix) is LEFT ALONE: zeroing
@@ -708,10 +732,14 @@ static void build_hills(const unsigned char* buf, int w, int h)
     float* vb; unsigned* ib;
     int r, c;
     char b[160];
-    if (w < 2 || h < 2) return;
+    /* THE TWO EXITS THAT LEAVE NO MESH LEAVE NO MIRROR EITHER, and say so, or
+       ensure_height's mirror term would ask for this rebuild on every frame of
+       the map. */
+    if (w < 2 || h < 2) { s_hMeshNoMirror = 1; return; }
     vb = (float*)malloc(nv * 3 * sizeof(float));
     ib = (unsigned*)malloc(ni * sizeof(unsigned));
-    if (!vb || !ib) { free(vb); free(ib); flog("terr: hills: out of memory"); return; }
+    if (!vb || !ib) { free(vb); free(ib); flog("terr: hills: out of memory");
+                      s_hMeshNoMirror = 1; return; }
     for (r = 0; r < h; r++)
         for (c = 0; c < w; c++) {
             float hh = (float)buf[(size_t)r * w + c];
@@ -739,16 +767,33 @@ static void build_hills(const unsigned char* buf, int w, int h)
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(ni * sizeof(unsigned)), ib, GL_STATIC_DRAW);
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
-    free(vb); free(ib);
+    /* THE MIRROR IS THE BUFFER, exactly as the atlas's and the height grid's:
+       the memory the two glBufferData calls above were handed, kept rather
+       than freed, and only while the Vulkan lane is armed. Every exit above
+       this point has already returned, so "the pointers are non-NULL" and
+       "they are s_hMeshVN/s_hMeshIN long" are one fact rather than two. */
+    free(s_hMeshV); free(s_hMeshI);
+    if (s_mirrorWant) {
+        s_hMeshV = vb; s_hMeshI = ib;
+        s_hMeshVN = nv; s_hMeshIN = ni;
+        s_hMeshSerial++;
+        s_hMeshNoMirror = 0;
+    } else {
+        s_hMeshV = NULL; s_hMeshI = NULL;
+        s_hMeshVN = s_hMeshIN = 0;
+        free(vb); free(ib);
+    }
     s_hMeshW = w; s_hMeshH = h;
     _snprintf(b, sizeof b, "terr: hills mesh %dx%d grid points, %u cells (Classic++ shadows)",
               w, h, (unsigned)((w - 1) * (h - 1)));
     flog(b);
 }
 
-int tagpu_terr_hills_draw(int r0, int r1)
+int tagpu_terr_hills_draw(int r0, int r1, TAGPU_TERRHILLS* out)
 {
     int cells = s_hMeshW - 1, rows = s_hMeshH - 1;
+    size_t first, count;
+    if (out) memset(out, 0, sizeof *out);
     /* only the mesh built from THIS grid: after a map change whose rebuild
        failed (too small, out of memory) the old mesh is still bound and
        the new grid's size would index past it */
@@ -757,10 +802,25 @@ int tagpu_terr_hills_draw(int r0, int r1)
     if (r0 < 0) r0 = 0;
     if (r1 > rows - 1) r1 = rows - 1;
     if (r1 < r0) return 0;
+    first = (size_t)r0 * (size_t)cells * 6u;
+    count = (size_t)(r1 - r0 + 1) * (size_t)cells * 6u;
     glBindVertexArray(s_hVao);
-    glDrawElements(GL_TRIANGLES, (GLsizei)((r1 - r0 + 1) * cells * 6), GL_UNSIGNED_INT,
-                   (const void*)(size_t)((size_t)r0 * (size_t)cells * 6u * 4u));
+    glDrawElements(GL_TRIANGLES, (GLsizei)count, GL_UNSIGNED_INT,
+                   (const void*)(first * 4u));
     glBindVertexArray(0);
+    /* THE RANGE THE DRAW ABOVE USED, not a second evaluation of it: the Vulkan
+       shadow pass draws this and nothing else, so the clamp is done once, here,
+       by the code that owns the mesh. Only published with the mirror the range
+       indexes into, and only when the range is inside it -- `first + count`
+       is at most `rows * cells * 6` by the clamp above, and the bound is
+       re-checked rather than argued because the two are separate mallocs. */
+    if (out && s_hMeshV && s_hMeshI && first + count <= s_hMeshIN) {
+        out->v = s_hMeshV;   out->nv = s_hMeshVN;
+        out->idx = s_hMeshI; out->ni = s_hMeshIN;
+        out->serial = s_hMeshSerial;
+        out->firstIndex = (unsigned)first;
+        out->indexCount = (unsigned)count;
+    }
     return 1;
 }
 
@@ -774,7 +834,7 @@ static void ensure_height(const char* ta, unsigned frame)
     /* the mirror term is `ensure_atlas`'s, for the same reason: the only way to
        obtain one for a grid that is already uploaded is to build it again, once */
     if (s_hW > 0 && same && s_hW == w && s_hH == h &&
-        (!s_mirrorWant || s_hMirror)) return;
+        (!s_mirrorWant || (s_hMirror && (s_hMeshV || s_hMeshNoMirror)))) return;
     if (s_hW == 0 && same && s_hFrame != 0 && frame - s_hFrame < 60) return;
     build_height(ta, frame);
 }
@@ -1342,12 +1402,23 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
     s_pub.lit = tagpu_classicpp_on() ? 1 : 0;
     s_pub.lambert = tagpu_classicpp_lit() ? 1 : 0;
     s_pub.fog = v->fogMode & 1;
-    /* THE CAST-SHADOW MAP IS A GL DEPTH TEXTURE WITH NO MIRROR, so the Vulkan
-       lane refuses a frame that reports this 1 rather than draw one without it.
+    /* THE CAST-SHADOW BLOCK. Since G19e's shadow pass the map itself is drawn
+       by tagpu_vk_shadow.c into an image of its own, so this is no longer a
+       refusal: the Vulkan lane samples ITS map with THESE uniforms, which are
+       the ones the GL draw below is about to be given.
        tagpu_shadow_apply leaves every other shadow uniform ALONE when the map
        is not live, which for a freshly linked program means zero -- so the rest
        of that block is published as zero, and the two lanes agree about it. */
     s_pub.shadowOn = tagpu_shadow_live() ? 1 : 0;
+    if (s_pub.shadowOn) {
+        memcpy(s_pub.shadowMat, tagpu_shadow_mat(), sizeof s_pub.shadowMat);
+        s_pub.shadowSun[0] = L->shadowSun[0];
+        s_pub.shadowSun[1] = L->shadowSun[1];
+        s_pub.shadowSun[2] = L->shadowSun[2];
+        tagpu_shadow_scale(s_pub.shScale);
+        s_pub.penumbra = L->penumbra;
+        s_pub.shade = L->shade;
+    }
     s_pub.fogOrgX = (float)v->fogOrgX; s_pub.fogOrgY = (float)v->fogOrgY;
     s_pub.fogCols = (float)v->fogCols; s_pub.fogRows = (float)v->fogRows;
     s_pub.hDimW = (float)s_hW; s_pub.hDimH = (float)s_hH;

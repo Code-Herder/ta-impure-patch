@@ -34,6 +34,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 #include "opengl_utils.h"
 #include "tagpu_shadow.h"
 #include "tagpu_classicpp.h"
@@ -96,6 +97,12 @@ static float  s_cot;           /* the shadow sun: horizontal / vertical */
 static unsigned s_logged;      /* frames logged (once per change)      */
 static int    s_lastRes, s_lastK;
 static float  s_lastZoom = -1.0f;
+
+/* ---- the Vulkan lane's hand-over (Phase G / G19e) ---------------------- */
+static TAGPU_SHADOWHAND s_pub;         /* this frame's, see tagpu_shadow.h   */
+static int              s_pubHave;     /* ...and whether it is this frame's  */
+static unsigned         s_frame;       /* the frame `begin` was handed       */
+static int              s_otherCasters;/* casters the hand-over cannot carry */
 
 /* ---- the depth program for the native stream: attributes 4 (world x,
    PROJECTED z) and 5 (posed height) of tagpu_native.c's VAO, and the
@@ -365,6 +372,16 @@ int tagpu_shadow_begin(const TAGPU_FXVIEW* v, int engineShadowBit)
 {
     const TAGPU_LIGHT* L = tagpu_classicpp_light();
     s_live = 0;
+    /* THE STANDING HAND-OVER IS DROPPED HERE, unconditionally and before any
+       refusal below can return. Every exit from this function leaves no map
+       drawn, so a hand-over left over from an earlier frame would name a mesh
+       for a map that is no longer being cast -- and the terrain module frees
+       that mesh on a map change. The frame stamp catches it as well; clearing
+       it at the top is the cheaper half and the one that does not depend on a
+       consumer asking. */
+    s_pubHave = 0;
+    s_otherCasters = 0;
+    s_frame = v ? v->frame_counter : 0;
     if (!tagpu_classicpp_on() || L->shadows != TAGPU_SHADOWS_SOFT ||
         !engineShadowBit || L->amb >= 1.0f) return 0;
     if (s_state == 0) init_gl();
@@ -384,21 +401,49 @@ int tagpu_shadow_begin(const TAGPU_FXVIEW* v, int engineShadowBit)
     glUseProgram(s_progU);
     glUniformMatrix4fv(s_uMatU, 1, GL_FALSE, s_mat);
     s_live = 1;
+    /* THE HAND-OVER IS OPENED HERE AND CLOSED IN `_end`, so that what it
+       carries is what the map actually holds: the matrix and the resolution
+       are final by this point (`frame` above set both), the caster fields are
+       filled by the draws between the two, and `_end` is the only thing that
+       publishes. A frame that never reaches `_end` therefore hands nothing
+       over, which is the honest answer for a map that was never finished. */
+    memset(&s_pub, 0, sizeof s_pub);
+    s_pub.frame = s_frame;
+    s_pub.res = s_res;
+    memcpy(s_pub.mat, s_mat, sizeof s_mat);
     return 1;
 }
 
 void tagpu_shadow_unit(float alt, float gndThrow, float sv)
 {
+    /* THE NATIVE 3DO STREAM COUNTS ITSELF. Its caller draws immediately after
+       this call, so one call is one caster the Vulkan hand-over has no copy of
+       -- see TAGPU_SHADOWHAND::otherCasters. */
+    s_otherCasters++;
     x_glUniform3f(s_uCast, alt, gndThrow, sv);
+}
+
+void tagpu_shadow_note_casters(int n)
+{
+    if (n > 0) s_otherCasters += n;
 }
 
 void tagpu_shadow_hills(void)
 {
     const TAGPU_LIGHT* L = tagpu_classicpp_light();
+    TAGPU_TERRHILLS th;
     if (!s_live || !L->terrainshadow) return;
     glUseProgram(s_progH);
     glUniformMatrix4fv(s_uMatH, 1, GL_FALSE, s_mat);
-    tagpu_terr_hills_draw(s_rows0, s_rows1);
+    /* the draw fills `th` with the mirror it drew out of and the index range it
+       used, so the Vulkan lane draws the same indices rather than re-deriving
+       the row clamp (tagpu_terr.h) */
+    if (!tagpu_terr_hills_draw(s_rows0, s_rows1, &th)) return;
+    s_pub.hv = th.v;   s_pub.hnv = th.nv;
+    s_pub.hi = th.idx; s_pub.hni = th.ni;
+    s_pub.hillsSerial = th.serial;
+    s_pub.firstIndex = th.firstIndex;
+    s_pub.indexCount = th.indexCount;
 }
 
 /* tagpu_shadowdump.on: write the map once as a 16-bit PGM (near = small),
@@ -447,6 +492,11 @@ static void dump_map(void)
 void tagpu_shadow_end(void)
 {
     if (!s_live) return;
+    /* THE HAND-OVER, PUBLISHED ONCE THE MAP IS COMPLETE. `otherCasters` is the
+       census the draws above kept; a non-zero one says the Vulkan lane cannot
+       reproduce this map and must stand down (tagpu_shadow.h). */
+    s_pub.otherCasters = s_otherCasters;
+    s_pubHave = 1;
     dump_map();
     /* the map on the lab's two units for every read-back this frame; the
        sampler bindings are unit state and outlive the frame */
@@ -462,6 +512,28 @@ void tagpu_shadow_end(void)
 
 const float* tagpu_shadow_mat(void) { return s_mat; }
 int tagpu_shadow_live(void) { return s_live; }
+
+void tagpu_shadow_scale(float* out3)
+{
+    if (!out3) return;
+    if (!s_live || s_res <= 0) { out3[0] = out3[1] = out3[2] = 0.0f; return; }
+    out3[0] = s_texel; out3[1] = s_depth; out3[2] = 1.0f / (float)s_res;
+}
+
+/* THE FRAME STAMP IS THE BOUND, not the sequence of calls that happens to
+   reach here. `hv`/`hi` name the terrain module's caster mirror, which that
+   module frees and rebuilds on a map change, so a hand-over that outlived its
+   frame can name memory that is gone -- the same defect both G19e re-reviewers
+   found in the terrain pass. Taken once per frame: a second consumer in the
+   same frame gets 0 rather than a second copy, which is what keeps "one pass
+   claimed this frame" checkable. */
+int tagpu_shadow_handover(TAGPU_SHADOWHAND* out, unsigned now)
+{
+    if (!out || !s_pubHave || s_pub.frame != now) return 0;
+    s_pubHave = 0;
+    *out = s_pub;
+    return 1;
+}
 
 /* the lab's buildUnits: sv = (a + b h) / (h cot el) on the model height,
    svAir the same over the altitude plus the height; `len` throws the
@@ -517,6 +589,11 @@ void tagpu_shadow_apply(const TAGPU_SHADOWU* u)
 
 void tagpu_shadow_glreset(void)
 {
+    /* the hand-over goes with the context: its mesh pointers name a mirror the
+       terrain module drops in its own glreset, and its matrix a frame that will
+       not be drawn */
+    s_pubHave = 0;
+    s_otherCasters = 0;
     s_state = 0;
     s_tex = s_fbo = s_cmp = s_raw = s_progU = s_progH = 0;
     s_res = 0;

@@ -16,6 +16,7 @@
    Armed by tagpu_terr.on (tokens: log, passive, over, key=N). `passive` emits
    nothing; `over` draws ours on top of the engine's own terrain without owning
    the draw (the pixel-parity A/B); the default owns it via tagpu_terrown.c. */
+#include <stddef.h>
 #include "tagpu_fx.h"
 
 int  tagpu_terr_armed(unsigned frame_counter);   /* re-reads tagpu_terr.on (30f) */
@@ -32,8 +33,25 @@ void tagpu_terr_glreset(void);
    caster. One world-space vertex per 16-px grid point of the height grid,
    built with it, row-major indices; draws the cell rows r0..r1 (inclusive,
    clamped) with the CALLER's program in use, attribute 0 = the world point.
-   Returns 1 if anything was drawn. */
-int  tagpu_terr_hills_draw(int r0, int r1);
+   Returns 1 if anything was drawn.
+
+   `out`, when given, comes back with THE CPU MIRROR OF THAT MESH AND THE RANGE
+   THE DRAW JUST USED (Phase G / G19e) -- the buffers glBufferData was handed,
+   retained instead of freed while the Vulkan lane is armed, and the clamped
+   first/count, so the Vulkan shadow pass draws the same indices rather than
+   re-deriving the clamp. Zeroed, and `v`/`idx` left NULL, whenever there is no
+   mirror; pass NULL when there is no Vulkan lane to feed. The pointers are the
+   terrain module's and live until the next map change -- a consumer takes them
+   through a hand-over that carries the frame they were published on. */
+typedef struct TAGPU_TERRHILLS {
+    const float*    v;          /* nv * 3 floats: the world point per vertex */
+    size_t          nv;
+    const unsigned* idx;        /* ni indices, cell-row major                */
+    size_t          ni;
+    unsigned        serial;     /* bumped when the mesh is rebuilt           */
+    unsigned        firstIndex, indexCount;   /* the range actually drawn    */
+} TAGPU_TERRHILLS;
+int  tagpu_terr_hills_draw(int r0, int r1, TAGPU_TERRHILLS* out);
 
 /* RESERVE FOR THIS VIEWPORT, then trim a would-be gather rect (game px) to
    what this pass can actually draw in one frame. Called once a frame by
@@ -159,6 +177,14 @@ typedef struct TAGPU_TERRHAND {
        branches, `shadowOn` the cast-shadow one, `fog` the engine's overlay
        bit. The lighting numbers are the ones the GL draw passed. */
     int   restored, lit, lambert, fog, shadowOn;
+    /* THE REST OF THE CAST-SHADOW BLOCK, and it is only meaningful while
+       `shadowOn` is 1 -- tagpu_shadow_apply writes uShadowOn and then RETURNS
+       when no map is live, so on such a frame the GL program keeps whatever it
+       had (zero, for a freshly linked one) and these are published as zero to
+       match. The numbers are the shadow module's own: the matrix it drew the
+       map with, the sun the knobs name, uShScale = (texel, depth span, 1/res),
+       and the two shading scalars. [Phase G / G19e, the shadow pass.] */
+    float shadowMat[16], shadowSun[3], shScale[3], penumbra, shade;
     float fogOrgX, fogOrgY, fogCols, fogRows;
     float hDimW, hDimH;       /* uHDim: 0 while there is no usable grid */
     float sun[3], amb, norm;

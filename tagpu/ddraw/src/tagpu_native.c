@@ -3923,6 +3923,21 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 if (!pdu[k].castSkip) tagpu_posedraw_depth_unit(&pdu[k]);
         }
         if (nhi) tagpu_hires_depth(&hv, hunits, nhi, tagpu_shadow_mat());
+        /* THE CENSUS THE VULKAN LANE NEEDS (Phase G / G19e). The posed depth
+           twin and the replacement meshes are casters the shadow hand-over
+           carries no copy of -- only the heightfield is on the Vulkan side of
+           the seam until the unit pass lands -- so a map holding either is one
+           tagpu_vk_shadow.c must refuse rather than draw incomplete. Counted
+           the same way both loops draw (`!castSkip`), and an OVER-count is the
+           safe direction: it refuses a frame the lane could have drawn, where
+           an under-count would draw a different map from its own oracle.
+           The native 3DO stream counts itself, inside tagpu_shadow_unit. */
+        {
+            int k, other = 0;
+            for (k = 0; k < npd; k++) if (!pdu[k].castSkip) other++;
+            for (k = 0; k < nhi; k++) if (!hunits[k].castSkip) other++;
+            tagpu_shadow_note_casters(other);
+        }
         tagpu_shadow_hills();
         tagpu_shadow_end();
     }

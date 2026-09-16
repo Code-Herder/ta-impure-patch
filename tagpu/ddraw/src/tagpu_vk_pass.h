@@ -78,6 +78,21 @@ typedef struct {
        a pass whose device will not offer it stands down instead of drawing a
        picture four pixels away from its own oracle. */
     int                       lineok;
+    /* VK_EXT_depth_clip_control WITH `depthClipControl`, ENABLED ON THE DEVICE,
+       and so a pipeline may ask for GL'S OWN CLIP-SPACE Z RANGE.
+       GL maps clip z in [-1, 1] onto the depth range; Vulkan takes [0, 1] and
+       CLIPS the rest. Every world pass ported through G19e writes a z already
+       in [0, 1], so `minDepth 0.5 / maxDepth 1.0` reproduces GL exactly and
+       none of them needs this. THE SHADOW PASS IS THE EXCEPTION: its
+       orthographic light matrix is built to fill [-1, 1] (tagpu_shadow.c
+       `mrow`), so without this the near half of every caster is clipped away
+       and the depth map is WRONG rather than merely different -- and the
+       depths it stores are what the consumers' taShadowAt compares against.
+       Same shape as `flipok` and `lineok`: a rule the GL twin already obeys,
+       adopted as pipeline state rather than worked around, and a pass whose
+       device will not offer it stands down instead of drawing a map its own
+       oracle would not recognise. */
+    int                       zclipok;
     /* WHICH RENDER-THREAD FRAME THIS IS -- the fork's own monotonic counter,
        the same number the GL lane stamped its hand-over with earlier in this
        iteration of render_ogl.c's loop.

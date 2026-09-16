@@ -164,6 +164,7 @@
 #include "tagpu_vk_feat.h"
 #include "tagpu_vk_terr.h"
 #include "tagpu_vk_fx.h"
+#include "tagpu_vk_shadow.h"
 #include "tagpu_vk_shot.h"
 
 #define ON_FILE    "tagpu_vk.on"
@@ -361,6 +362,7 @@ typedef struct {
     int              devIndex;             /* into the cached name table, or -1 */
     int              flipok;               /* VK_KHR_maintenance1 was enabled   */
     int              lineok;               /* VK_EXT_line_rasterization, bresenham */
+    int              zclipok;              /* VK_EXT_depth_clip_control, -1..1 z */
     int              rebuild;              /* the surface said its extent moved */
     int              cansrc;               /* the images carry TRANSFER_SRC     */
     unsigned         frame;
@@ -1645,6 +1647,7 @@ static void vk_down(void)
         tagpu_vk_feat_down(&s_pass);
         tagpu_vk_terr_down(&s_pass);
         tagpu_vk_fx_down(&s_pass);
+        tagpu_vk_shadow_down(&s_pass);
         ab_drop("the lane coming down", idle);
         tagpu_vk_shot_down(&s_pass);
         vk_perimage_free();
@@ -1788,10 +1791,12 @@ static DWORD WINAPI up_worker(LPVOID arg)
 
     {
         float prio = 1.0f;
-        const char* dexts[3] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME, NULL, NULL };
+        const char* dexts[4] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME, NULL, NULL, NULL };
         uint32_t ndext = 1;
         VkPhysicalDeviceLineRasterizationFeaturesEXT lrf =
             { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LINE_RASTERIZATION_FEATURES_EXT };
+        VkPhysicalDeviceDepthClipControlFeaturesEXT dcc =
+            { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_CONTROL_FEATURES_EXT };
         VkDeviceQueueCreateInfo qci = { VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
         VkDeviceCreateInfo dci = { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
 
@@ -1894,6 +1899,57 @@ static DWORD WINAPI up_worker(LPVOID arg)
                                       "stand down rather than chain a mode the device may ignore");
                             }
                         }
+                        /* VK_EXT_depth_clip_control, AND IT BUYS EXACTLY ONE
+                           THING: GL'S CLIP-SPACE Z RANGE. GL maps clip z in
+                           [-1, 1] onto the depth range and Vulkan takes [0, 1],
+                           CLIPPING anything below 0. Every world pass ported so
+                           far writes a z already in [0, 1] -- so the feature
+                           pass's `minDepth 0.5 / maxDepth 1.0` reproduces GL's
+                           (z+1)/2 exactly and nothing is clipped, and
+                           tagpu_vk_feat.c's header says this extension is the
+                           answer only if a shader is ever found writing a z
+                           below 0.
+                           G19e's SHADOW pass is that shader. Its orthographic
+                           light matrix is built to fill [-1, 1] (tagpu_shadow.c
+                           `mrow`), so under Vulkan's own convention the whole
+                           near half of every caster would be clipped away and
+                           the map would be wrong rather than merely different.
+                           With `negativeOneToOne` the viewport transform IS
+                           GL's, values and quantisation included, and the
+                           depths the consumer's taShadowAt compares against are
+                           the same numbers.
+                           Queried, never inferred, for the reason the line
+                           feature's comment above gives at length. */
+                        if (!strcmp(ext[k].extensionName,
+                                    VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME)) {
+                            PFN_vkGetPhysicalDeviceFeatures2KHR gpdf2 =
+                                (PFN_vkGetPhysicalDeviceFeatures2KHR)
+                                    s_gipa(s_vk.inst, "vkGetPhysicalDeviceFeatures2KHR");
+                            if (gpdf2) {
+                                VkPhysicalDeviceDepthClipControlFeaturesEXT q;
+                                VkPhysicalDeviceFeatures2 f2;
+                                memset(&q, 0, sizeof q);
+                                memset(&f2, 0, sizeof f2);
+                                q.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_CONTROL_FEATURES_EXT;
+                                f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+                                f2.pNext = &q;
+                                gpdf2(s_vk.pd, &f2);
+                                if (q.depthClipControl) {
+                                    dexts[ndext++] = VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME;
+                                    s_vk.zclipok = 1;
+                                } else {
+                                    vklog("the device offers VK_EXT_depth_clip_control but not "
+                                          "the depthClipControl feature - a ported pass that "
+                                          "needs GL's clip-space z range will stand down");
+                                }
+                            } else {
+                                vklog("VK_EXT_depth_clip_control is offered but "
+                                      "vkGetPhysicalDeviceFeatures2KHR is not, so "
+                                      "depthClipControl cannot be confirmed - a pass that needs "
+                                      "GL's z range will stand down rather than chain a struct "
+                                      "the device may ignore");
+                            }
+                        }
                     }
                 free(ext);
             }
@@ -1905,6 +1961,10 @@ static DWORD WINAPI up_worker(LPVOID arg)
             vklog("VK_EXT_line_rasterization is not offered - a ported pass that "
                   "draws LINES will stand down (its twin's rule is the diamond-exit "
                   "one, and Vulkan's default mode is not it)");
+        if (!s_vk.zclipok)
+            vklog("VK_EXT_depth_clip_control is not offered - a ported pass whose "
+                  "shader writes a clip z below 0 will stand down (Vulkan clips "
+                  "those and GL does not); the world passes are unaffected");
 
         qci.queueFamilyIndex = s_vk.qfam; qci.queueCount = 1; qci.pQueuePriorities = &prio;
         dci.queueCreateInfoCount = 1; dci.pQueueCreateInfos = &qci;
@@ -1919,7 +1979,30 @@ static DWORD WINAPI up_worker(LPVOID arg)
             lrf.pNext = (void*)dci.pNext;
             dci.pNext = &lrf;
         }
+        if (s_vk.zclipok) {
+            dcc.depthClipControl = VK_TRUE;
+            dcc.pNext = (void*)dci.pNext;
+            dci.pNext = &dcc;
+        }
         r = vkCreateDevice(s_vk.pd, &dci, NULL, &s_vk.dev);
+        /* THE LADDER DROPS THE CHEAPEST THING FIRST, and each rung REBUILDS
+           both the extension list and the pNext chain rather than unlinking one
+           struct out of the middle of it -- the same reason the list is rebuilt
+           rather than shortened. Depth clip control costs one pass (the shadow
+           map); line rasterisation costs the passes that draw lines; the flip
+           costs every pass. */
+        if (r != VK_SUCCESS && s_vk.zclipok) {
+            vklog("vkCreateDevice refused VK_EXT_depth_clip_control/depthClipControl "
+                  "(%s) - retrying without it", res_name(r));
+            s_vk.zclipok = 0;
+            dci.pNext = NULL;
+            if (s_vk.lineok) { lrf.pNext = NULL; dci.pNext = &lrf; }
+            ndext = 1;
+            if (s_vk.flipok) dexts[ndext++] = "VK_KHR_maintenance1";
+            if (s_vk.lineok) dexts[ndext++] = VK_EXT_LINE_RASTERIZATION_EXTENSION_NAME;
+            dci.enabledExtensionCount = ndext;
+            r = vkCreateDevice(s_vk.pd, &dci, NULL, &s_vk.dev);
+        }
         if (r != VK_SUCCESS && s_vk.lineok) {
             /* Line rasterisation first: it is the one whose FEATURE can be
                refused as well as its extension, and dropping it costs only the
@@ -1927,14 +2010,16 @@ static DWORD WINAPI up_worker(LPVOID arg)
             vklog("vkCreateDevice refused VK_EXT_line_rasterization/bresenhamLines "
                   "(%s) - retrying without it", res_name(r));
             s_vk.lineok = 0;
-            dci.pNext = lrf.pNext;
-            /* THE LIST IS REBUILT, NOT SHORTENED. The two optional extensions
-               go in in the order the DRIVER enumerates them, so `ndext - 1`
-               would drop whichever happened to be last -- maintenance1 on a
-               driver that lists it second, which costs every ported pass for a
-               reason that has nothing to do with lines. */
+            dci.pNext = NULL;
+            /* THE LIST IS REBUILT, NOT SHORTENED. The optional extensions go in
+               in the order the DRIVER enumerates them, so `ndext - 1` would
+               drop whichever happened to be last -- maintenance1 on a driver
+               that lists it second, which costs every ported pass for a reason
+               that has nothing to do with lines. */
             ndext = 1;
             if (s_vk.flipok) dexts[ndext++] = "VK_KHR_maintenance1";
+            /* `zclipok` is still 0 here: the rung above is the only thing that
+               can have left it set, and it clears it before retrying. */
             dci.enabledExtensionCount = ndext;
             r = vkCreateDevice(s_vk.pd, &dci, NULL, &s_vk.dev);
         }
@@ -2000,6 +2085,7 @@ static DWORD WINAPI up_worker(LPVOID arg)
     s_pass.slots = s_vk.nimg;
     s_pass.flipok = s_vk.flipok;
     s_pass.lineok = s_vk.lineok;
+    s_pass.zclipok = s_vk.zclipok;
     s_pass.gipa = s_gipa;
     s_pass.gdpa = vkGetDeviceProcAddr;
     s_pass.log = passlog;
@@ -2108,7 +2194,8 @@ static int vk_present(void)
        than destroy on a hope. The cost is one drain on the frame after a
        refusal, and nothing at all on every other frame. */
     if (tagpu_vk_terr_down_owed() || tagpu_vk_feat_down_owed() ||
-        tagpu_vk_fx_down_owed() || tagpu_vk_scaffold_down_owed()) {
+        tagpu_vk_fx_down_owed() || tagpu_vk_scaffold_down_owed() ||
+        tagpu_vk_shadow_down_owed()) {
         if (!vkDeviceWaitIdle || vkDeviceWaitIdle(s_vk.dev) != VK_SUCCESS) {
             vklog("vkDeviceWaitIdle refused before an owed pass teardown - down");
             return -2;
@@ -2122,6 +2209,7 @@ static int vk_present(void)
         if (tagpu_vk_feat_down_owed())     tagpu_vk_feat_down_paid(&s_pass);
         if (tagpu_vk_fx_down_owed())       tagpu_vk_fx_down_paid(&s_pass);
         if (tagpu_vk_scaffold_down_owed()) tagpu_vk_scaffold_down_paid(&s_pass);
+        if (tagpu_vk_shadow_down_owed())   tagpu_vk_shadow_down_paid(&s_pass);
     }
 
     r = vkAcquireNextImageKHR(s_vk.dev, s_vk.sc, 1000000000ull,
@@ -2205,6 +2293,22 @@ static int vk_present(void)
                depth-tested against what it wrote -- so it goes first here too.
                The features are the WORLD as well and follow it, before the
                scaffold overlay and long before the readout. */
+            /* THE SHADOW MAP IS FIRST, AND IT IS NOT ONE OF THE FRAME'S
+               PASSES. It draws into an offscreen depth image of its OWN -- a
+               render pass inside this one's `prepare`, which is legal here and
+               nowhere else, because render passes may not nest and `prepare`
+               runs before vkCmdBeginRenderPass below. Every pass that samples
+               the map points its descriptor set at
+               `tagpu_vk_shadow_view(fi)` during its own `prepare`, so this
+               call has to come first; that ordering is the whole contract and
+               it is stated in tagpu_vk_shadow.h as well.
+               ITS RESULT IS DELIBERATELY NOT ADDED TO `ndraw` OR `nclaim`.
+               Those two count the passes that put pixels in THIS frame, and
+               they exist to catch two of them contaminating one A/B capture.
+               This pass puts none there, so counting it would refuse every
+               capture taken while Classic++ shadows are on -- which is exactly
+               the configuration the shadow work is measured in. */
+            tagpu_vk_shadow_prepare(&s_pass, cb, fi);
             draw_terr = tagpu_vk_terr_prepare(&s_pass, cb, fi);
             ab_terr = tagpu_vk_terr_ab_frame();
             draw_feat = tagpu_vk_feat_prepare(&s_pass, cb, fi);
@@ -2348,6 +2452,7 @@ static int vk_resize(int w, int h)
     tagpu_vk_feat_down(&s_pass);
     tagpu_vk_terr_down(&s_pass);
     tagpu_vk_fx_down(&s_pass);
+    tagpu_vk_shadow_down(&s_pass);
     ab_drop("the swapchain rebuilding", idle);
     vk_perimage_free();
     r = vk_swapchain(w, h);

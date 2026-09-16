@@ -126,6 +126,7 @@
 
 #include "tagpu_vk_terr.h"
 #include "tagpu_terr.h"
+#include "tagpu_vk_shadow.h"
 #include "spirv/tagpu_terr.spv.h"
 
 #define UBLK_VS  64                        /* std140, the generated header's   */
@@ -169,6 +170,7 @@ static int s_drawThis;                     /* `prepare` left a draw for `record`
 static int s_abFrame;
 static int s_saidRestored;                 /* the Classic++ refusals, said once */
 static int s_saidShadow;
+static int s_saidCmp;
 static int s_saidNoMirror;
 
 static VkDescriptorSetLayout s_dsl;
@@ -188,7 +190,14 @@ static VkDeviceSize   s_ublkF;             /* the fragment block's own offset  *
 static VkBuffer       s_qbuf;
 static VkDeviceMemory s_qmem;
 
-/* the 1x1 depth image the two shadow samplers name; see the file header */
+/* THE 1x1 DEPTH IMAGE THE TWO SHADOW SAMPLERS NAME on a frame with no map.
+   D16 because it is the smallest depth format every device carries, and because
+   this image is never sampled: taShadowAt returns 1.0 on `uShadowOn == 0`
+   before it touches either sampler. It still has to be a VALID descriptor, and
+   its format still has to be one the compare sampler is legal against, which is
+   why `build_samplers` asks about this one as well as the map's. */
+#define SHADOW_DUMMY_FMT VK_FORMAT_D16_UNORM
+static int            s_cmpLinear;     /* the compare sampler is the twin's   */
 static VkImage        s_shImg;
 static VkDeviceMemory s_shMem;
 static VkImageView    s_shView;
@@ -252,7 +261,7 @@ typedef struct {
        about two functions a hundred lines apart. `shared_bind` writes them,
        `record` refuses to draw unless they are still the live views, and
        `slot_free` clears them. See the retire's second rule. */
-    VkImageView     boundAtlas, boundHeight;
+    VkImageView     boundAtlas, boundHeight, boundShadow;
 } SLOT;
 static SLOT s_slot[TAGPU_VK_SLOTS];
 
@@ -483,7 +492,7 @@ static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
     s->fogW = s->fogH = 0;
     /* the set this slot holds names nothing live any more, and `record` tests
        exactly that before it draws */
-    s->boundAtlas = s->boundHeight = VK_NULL_HANDLE;
+    s->boundAtlas = s->boundHeight = s->boundShadow = VK_NULL_HANDLE;
     s->built = 0;
 }
 
@@ -653,7 +662,7 @@ static int build_samplers(const TAGPU_VKPASS* d)
     int i;
     /* the four formats this pass samples, asked for rather than assumed */
     static const VkFormat need[4] = { VK_FORMAT_R8_UNORM, VK_FORMAT_R8G8_UNORM,
-                                      VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_D16_UNORM };
+                                      VK_FORMAT_R8G8B8A8_UNORM, SHADOW_DUMMY_FMT };
     for (i = 0; i < 4; i++) {
         vkGetPhysicalDeviceFormatProperties(d->pd, need[i], &fp);
         if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
@@ -676,12 +685,38 @@ static int build_samplers(const TAGPU_VKPASS* d)
     sci.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
     sci.maxLod = 0.0f;
     if (vkCreateSampler(d->dev, &sci, NULL, &s_samp) != VK_SUCCESS) return 0;
-    /* THE COMPARE SAMPLER EXISTS ONLY SO THAT `uShadowCmp` IS A VALID
-       DESCRIPTOR. A sampler2DShadow must be paired with a compare-enabled
-       sampler or the set cannot be bound, and this pass refuses any frame whose
-       twin reports uShadowOn 1, so nothing ever samples through it. NEAREST
-       rather than the twin's bilinear PCF, which keeps it off
-       SAMPLED_IMAGE_FILTER_LINEAR for a depth format. */
+    /* THE COMPARE SAMPLER, AND SINCE G19e IT IS SAMPLED FOR REAL. The GL twin's
+       is GL_COMPARE_REF_TO_TEXTURE + GL_LEQUAL with MIN and MAG **LINEAR** --
+       taShadowAt's 16-tap PCF is bilinear, and that filtering is half of what
+       makes the penumbra smooth -- so this one is LINEAR too.
+       LINEAR FILTERING OF A DEPTH FORMAT IS A FEATURE BIT, NOT A GIVEN, and it
+       is asked of BOTH formats this sampler is ever used against: the map's
+       (tagpu_vk_shadow.c chose it, and it is asked rather than assumed for the
+       same reason the four above are) and the 1x1 dummy's, which the set names
+       on every frame with no map. A device that will not filter either keeps a
+       NEAREST compare sampler -- still a valid descriptor, which is all the
+       dummy ever needed -- and `s_cmpLinear` 0 stands the pass down on a frame
+       that would actually sample it, because a NEAREST PCF is a different
+       picture from the twin's and the A/B would call it a port failure. */
+    {
+        VkFormat mapfmt = tagpu_vk_shadow_format(d, NULL);
+        int ok = 1;
+        VkFormat both[2];
+        int n = 0, j;
+        both[n++] = SHADOW_DUMMY_FMT;
+        if (mapfmt != VK_FORMAT_UNDEFINED) both[n++] = mapfmt;
+        for (j = 0; j < n; j++) {
+            vkGetPhysicalDeviceFormatProperties(d->pd, both[j], &fp);
+            if (!(fp.optimalTilingFeatures &
+                  VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) ok = 0;
+        }
+        s_cmpLinear = ok && mapfmt != VK_FORMAT_UNDEFINED;
+        if (ok) { sci.magFilter = VK_FILTER_LINEAR; sci.minFilter = VK_FILTER_LINEAR; }
+        else
+            plog(d, "terr: this device will not filter a depth format LINEARly, "
+                    "so the cast-shadow PCF cannot be the twin's - frames with "
+                    "the map on will stand down");
+    }
     sci.compareEnable = VK_TRUE;
     sci.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
     if (vkCreateSampler(d->dev, &sci, NULL, &s_sampCmp) != VK_SUCCESS) return 0;
@@ -881,7 +916,7 @@ static int build_descriptors(const TAGPU_VKPASS* d)
 static int shadow_build(const TAGPU_VKPASS* d)
 {
     uint32_t i;
-    if (!mk_image(d, 1, 1, VK_FORMAT_D16_UNORM, VK_IMAGE_ASPECT_DEPTH_BIT,
+    if (!mk_image(d, 1, 1, SHADOW_DUMMY_FMT, VK_IMAGE_ASPECT_DEPTH_BIT,
                   &s_shImg, &s_shMem, &s_shView)) return 0;
     for (i = 0; i < d->slots; i++) {
         VkDescriptorImageInfo ii[2];
@@ -933,8 +968,8 @@ static void shadow_ready(VkCommandBuffer cb)
    replaced is picked up here rather than by a write that reaches every slot. */
 static void shared_bind(const TAGPU_VKPASS* d, uint32_t slot)
 {
-    VkDescriptorImageInfo ii[3];
-    VkWriteDescriptorSet wr[3];
+    VkDescriptorImageInfo ii[5];
+    VkWriteDescriptorSet wr[5];
     memset(ii, 0, sizeof ii); memset(wr, 0, sizeof wr);
     ii[0].sampler = s_samp; ii[0].imageView = s_atlas.view;
     ii[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -955,7 +990,26 @@ static void shared_bind(const TAGPU_VKPASS* d, uint32_t slot)
     wr[0].pImageInfo = &ii[0];
     wr[1] = wr[0]; wr[1].dstBinding = 42; wr[1].pImageInfo = &ii[1];
     wr[2] = wr[0]; wr[2].dstBinding = 43; wr[2].pImageInfo = &ii[2];
-    vkUpdateDescriptorSets(d->dev, 3, wr, 0, NULL);
+    /* BINDINGS 46 AND 47 ARE ANOTHER PASS'S IMAGE (G19e's fifth), and this is
+       the one instant it may be written: the seam's fence has proved this set
+       is not in flight, and tagpu_vk_shadow.c's `prepare` for this same slot
+       has already run this frame -- the seam calls it first, and says why. The
+       view it hands back is that slot's own, so it cannot be replaced again
+       until this slot comes round, which is after this frame's draw.
+       With no map this frame it is the 1x1 dummy, exactly as before: the
+       descriptor must be valid whether or not anything samples it. */
+    {
+        VkImageView sv = tagpu_vk_shadow_view(slot);
+        if (!sv) sv = s_shView;
+        ii[3].sampler = s_sampCmp; ii[3].imageView = sv;
+        ii[3].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        ii[4].sampler = s_samp;    ii[4].imageView = sv;
+        ii[4].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        wr[3] = wr[0]; wr[3].dstBinding = 46; wr[3].pImageInfo = &ii[3];
+        wr[4] = wr[0]; wr[4].dstBinding = 47; wr[4].pImageInfo = &ii[4];
+        s_slot[slot].boundShadow = sv;
+    }
+    vkUpdateDescriptorSets(d->dev, 5, wr, 0, NULL);
     s_slot[slot].boundAtlas  = ii[0].imageView;
     s_slot[slot].boundHeight = ii[2].imageView;
 }
@@ -1118,13 +1172,38 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         }
         return 0;
     }
-    if (t.shadowOn) {
+    /* THE CAST-SHADOW MAP IS DRAWN BY tagpu_vk_shadow.c NOW (G19e's fifth
+       pass), so this is no longer "there is no mirror" but "is there a map for
+       THIS frame". It is asked with our own frame number, which is what stops a
+       map left standing from an earlier frame being sampled as though it were
+       this one's -- and the shadow pass refuses any frame whose map holds a
+       caster it has no copy of, so this refusal also carries every frame with a
+       unit on screen until the unit pass lands.
+       NOT LATCHED, unlike the restored-atlas one above: `uShadowOn` follows the
+       map, the map follows the casters, and a fixture walks in and out of both
+       -- so a refusal here is a per-frame answer and the message is said once
+       per run of them rather than once per session. */
+    if (t.shadowOn && !tagpu_vk_shadow_ready(d->frame)) {
         if (!s_saidShadow) {
             s_saidShadow = 1;
             plog(d, "terr: the GL twin is reading the Classic++ cast-shadow map "
-                    "and that surface has no CPU mirror - the Vulkan edition "
-                    "draws nothing this session rather than draw a different "
-                    "picture from its own oracle");
+                    "and this frame's Vulkan map was not drawn (its casters are "
+                    "not all on this side of the seam yet) - nothing drawn "
+                    "rather than a different picture from our own oracle");
+        }
+        return 0;
+    }
+    if (!t.shadowOn || tagpu_vk_shadow_ready(d->frame)) s_saidShadow = 0;
+    /* AND THE PCF HAS TO BE THE TWIN'S. `build_samplers` asked the device
+       whether it will filter a depth format LINEARly and kept a NEAREST compare
+       sampler when it will not; a 16-tap PCF through a NEAREST sampler is a
+       different picture, so the frame stands down rather than draw one. */
+    if (t.shadowOn && !s_cmpLinear) {
+        if (!s_saidCmp) {
+            s_saidCmp = 1;
+            plog(d, "terr: the cast-shadow map is on and this device's compare "
+                    "sampler could not be made LINEAR - nothing drawn while it "
+                    "is, because a NEAREST PCF is not the twin's picture");
         }
         return 0;
     }
@@ -1309,10 +1388,24 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     ub.f[15] = t.amb;                            /* uAmb        float @60  */
     ub.f[16] = t.norm;                           /* uNorm       float @64  */
     ub.i[17] = t.shadowOn;                       /* uShadowOn     int @68  */
-    /* uShadowSun @80, uShadowMat @96, uShScale @160, uPenumbra @172 and
-       uShade @176 are left ZERO, which is what the GL twin's program holds:
-       tagpu_shadow_apply writes uShadowOn and then returns when the map is not
-       live, and this pass refuses any frame on which it IS live. */
+    /* THE REST OF THE CAST-SHADOW BLOCK, and only when the map is on. With it
+       off they stay ZERO, which is what the GL twin's program holds:
+       tagpu_shadow_apply writes uShadowOn and then RETURNS, so a freshly linked
+       program keeps the zeros it was born with and the two lanes agree about a
+       block neither of them reads. The offsets are the generated header's.
+       [G19e's fifth pass; before it this whole block was zero and the pass
+       refused every frame that would have used it.] */
+    if (t.shadowOn) {
+        ub.f[20] = t.shadowSun[0];               /* uShadowSun   vec3 @80  */
+        ub.f[21] = t.shadowSun[1];
+        ub.f[22] = t.shadowSun[2];
+        memcpy(&ub.f[24], t.shadowMat, 16 * sizeof(float));  /* mat4 @96   */
+        ub.f[40] = t.shScale[0];                 /* uShScale     vec3 @160 */
+        ub.f[41] = t.shScale[1];
+        ub.f[42] = t.shScale[2];
+        ub.f[43] = t.penumbra;                   /* uPenumbra   float @172 */
+        ub.f[44] = t.shade;                      /* uShade      float @176 */
+    }
     memcpy(s_umap + (size_t)slot * s_ustride + s_ublkF, ub.f, UBLK_FS);
 
     s_ncell = t.ncell;
@@ -1382,7 +1475,9 @@ void tagpu_vk_terr_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        a dropped frame. [CORRECTED BY THE G19e RE-REVIEW, 2026-09-15.] */
     if (slot >= TAGPU_VK_SLOTS ||
         s_slot[slot].boundAtlas != s_atlas.view ||
-        s_slot[slot].boundHeight != (s_height.view ? s_height.view : s_atlas.view))
+        s_slot[slot].boundHeight != (s_height.view ? s_height.view : s_atlas.view) ||
+        s_slot[slot].boundShadow !=
+            (tagpu_vk_shadow_view(slot) ? tagpu_vk_shadow_view(slot) : s_shView))
         return;
 
     /* THE FLIP, AND THE DEPTH RANGE, AND THEY ARE BOTH THE WHOLE OF THEMSELVES.
