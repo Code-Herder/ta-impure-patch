@@ -1431,6 +1431,21 @@ so a corrupt width byte of 0 smears `256 × rows` pixels past everything the cal
 refuses `gw <= 0` in both `measure` and the per-glyph probe, which is a deliberate divergence:
 the engine would smear, we draw nothing.
 
+**WHAT THE BLITTER READS, EXACTLY — the fact a detour at its head can rest on** [G19f-8,
+2026-09-16, read off the instruction-by-instruction pass above rather than re-derived]. For the
+string it walks, `0x4CCF60` reads `font[0]` (the rows), `font[2]` (the y offset), `font[3]` (the
+first code), the `u16` table entry at `font + 4 + 2*(code - first)` for every code, and, for every
+code with a non-zero entry, the `ceil(rows*w/8)` bytes at `font + off + 1`. It reads the string
+itself to `\0` or `'\n'`, at most 256 bytes. **There is no clip**, which is the load-bearing part:
+it does not skip a glyph because the destination would be off-screen — it has no destination
+bound at all — so a caller cannot arrange for a glyph's bits to go unread. A detour at the
+function's head that walks the same string with the same two skips (`sub ebx,first; jb` at
+`0x4CCFAA`, `or ebx,ebx; je` at `0x4CCFB9`) therefore reads a **subset** of the bytes the engine
+is about to read, on the next instruction — which is what lets `tagpu_gui_hook.c`'s
+`text_capture` take a font's glyphs at observe time and dereference nothing at the flip. Contrast
+the GAF path, where the engine blits a CLIPPED sub-rect and `tagpu_gaf_decode` reads all `w*h`:
+there the same move bounds lifetime and not extent, and here it bounds both.
+
 #### The text globals, and who sets them
 
 | VA | What |

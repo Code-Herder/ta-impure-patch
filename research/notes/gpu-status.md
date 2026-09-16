@@ -923,7 +923,7 @@ sees only the blits that really draw. Full argument lists, boxes and evidence: t
 | `0x4B8500`, `0x4B8310` | the shaded blit and DrawText's alternate blit, same shape | 6 | same |
 | `0x4C6D20` | descriptor blit `(ctx, desc, src, dst)` — listbox, textfield | 7 | `*dst` |
 | `0x4C7580` | the textured-triangle stamp `(ctx, src, xy[6], uv[6])` — the option screens' wide backdrop | 5 | the vertices' bounding box |
-| `0x4CCF60` | the glyph blitter, cdecl 9 args | 6 | the string's box from the font's width table |
+| `0x4CCF60` | the glyph blitter, cdecl 9 args | 6 | the string's box from the font's width table, the string's bytes copied into a window scratch, and **since G19f-8 the font itself**: the slot id, `font[0]`/`font[2]`, and a glyph record for every code of this string the font has not sent yet (`text_capture`). `publish` then dereferences no font at all — the read happens one instruction before the engine's own, which is the whole of the lifetime argument |
 | `0x4BE950`, `0x4BF6F0`, `0x4BF8C0`, `0x4BF7B0`, `0x4BF4D0` | line, bar, hollow rect, focus rect, framed box | 8/7/6/7/7 | the rect, clipped |
 | `0x4C6890` | `SurfaceFill(surface, colour)` | 7 | the whole surface |
 | `0x4C6B70` | surface → surface `(dst, src, x, y)` — the GUI panel reaching the frame | 8 | the source's box at `(x−originX, y−originY)`, clipped |
@@ -5827,7 +5827,9 @@ the same way rather than a different way, because a different rule would need an
 lifetime does not give us, and a refusal falls through to the box's own bytes — what this path did
 before G17d, so the picture is unchanged. The refusal is counted as **`strstale=`** and NOT folded
 into `gafstale=`, because the A/B above is stated in that counter and a second reason inside it would
-make those numbers mean something else on the next run that reads them.
+make those numbers mean something else on the next run that reads them. **Both counters are gone
+since**: `gafstale` with landing 7 and `strstale` with landing 8, each when the gate it counted
+stopped existing — the figures quoted in this section belong to the builds they were measured on.
 
 **What could not be measured, and it is a gap that predates this gate.** The consumer's `str=`
 counter — strings actually drawn and mirrored — read **0/0 on every fixture driven for this landing**:
@@ -5837,6 +5839,22 @@ px over content that is not there is not a measurement** — the lesson landing 
 gate is not the cause: the control build with it reverted reads the same `0/0`, and `strstale=0` says
 it refused nothing. So the change is established to make no difference and is NOT established to be
 correct on a live string.
+
+**A FIXTURE THAT DOES PUBLISH STRINGS EXISTS SINCE, and it is the walk** [MEASURED 2026-09-16,
+landing 8]: the in-game `--vk` walk reads **`str=` 6 281–6 532 strings / 30 291–31 537 glyph
+quads**, `miss=0`, `fonts=1`, 27 glyph cells. Launching a skirmish and letting it sit still reads
+`str=0/0` with the same levers and `cpp=1` either way, so it is **what the walk drives** and not
+the arming; which of the walk's actions reaches `DrawTextCustomFont 0x4C14F0` is not established
+and does not need to be for the figure to be usable.
+
+**AND `glyphs=` CLIMBING DOES NOT MEAN A STRING WAS DRAWN**, which is the trap that made the
+sitting fixture look like it had no strings at all. In that run `glyphs=` reached 16 cells while
+`str=` stayed 0 — and `glyph_raster` has exactly one caller, `tagpu_text_glyph_feed`, so the
+string ops *did* arrive. The feed sits in the drain loop **above** the skip gate and runs whatever
+the switch decides; the stamping is `case PK_STRING`, which needs `twin_find(o->surf)` to find a
+twin and needs the op not to have been skipped to a reset. `miss=`, `reseed=` and the
+"stamped nothing" line were all 0, so `twin_string` was never entered. Read `str=` for "text was
+drawn" and `glyphs=`/`fonts=` for "the records arrived"; they are different questions.
 
 **AND THAT PUTS A QUESTION MARK ON LANDING 2's OWN NON-VACUITY.** Landing 2 reports "0 of 786 432 at
 1024×768 and 0 of 2 073 600 at 1920×1080, with strings ON" on that same lever set, and the run here
@@ -6117,10 +6135,10 @@ an argument from what the two versions read, and it is stated as one.
 reads that moved, could never cover the pop, and was not free. `gafstale` went with it — the name
 changed with the meaning on purpose, because `gafstale=215` is the figure landing 5's A/B is
 stated in and a counter that keeps its name while measuring something else is how those numbers
-quietly stop meaning what these notes say they mean. **The `OP_TEXT` path KEEPS its gate and its
-`strstale`**: `gfont_slot`, `glyph_block_size` and `glyph_block_fill` still read the font object
-at publish, so that window is still open, is still covered by the ordering, and is now the only
-user of `op->lgen`.
+quietly stop meaning what these notes say they mean. **The `OP_TEXT` path kept its gate and its
+`strstale` through this landing**, `gfont_slot`, `glyph_block_size` and `glyph_block_fill` still
+reading the font object at publish, and `op->lgen` existing for them alone — **closed the same
+way one landing later; see Landing 8 below.**
 
 #### The UI atlas: dropped at the level boundary too
 
@@ -6200,11 +6218,10 @@ session that measured it — which is exactly what it did read before the split.
 
 #### Not covered
 
-* **THE FONT WINDOW IS STILL OPEN.** The `OP_TEXT` path still dereferences the font object at
-  publish. It is gated by the same ordering the sprite path just stopped needing, and the font is
-  `[globals+0x204]`, for which **no free route has been measured at all** — which is why it was
-  not moved with the sprite. "No measured free route" is not a lifetime, and this is named as an
-  open window rather than left to look closed by the line above it in the source.
+* **THE FONT WINDOW WAS STILL OPEN AFTER THIS LANDING** — the `OP_TEXT` path still
+  dereferenced the font object at publish, covered by the level generation and by `ptr_ok`, neither
+  of which is a lifetime. It was named here as an open window rather than left to look closed by
+  the line above it in the source, and **Landing 8 closed it** by the same move.
 * **The wrong-art case the move fixes is an argument, not a measurement.** It needs a pop and a
   reload inside one ~5 ms census window, and no fixture here forces that.
 * **The A/B cannot see this class at all**, and that is worth saying plainly: both lanes consume
@@ -6217,6 +6234,152 @@ session that measured it — which is exactly what it did read before the split.
 * `MEM_Size 0x4D8360` exists and would have made the block-keyed forget buildable; it was not
   used because it reads the heap outside the allocator's own critical section. See
   [exe-reverse-engineering](exe-reverse-engineering.html).
+
+### Landing 8 — the font window, closed the same way
+
+Landing 7 moved the sprite's two reads into the observer and said, in the source and here, that
+the `OP_TEXT` path still read the font object at publish and that a level generation was standing
+in for a lifetime it did not have. **This closes that**, by the same move, and it is the last
+per-level engine asset `publish` dereferenced. Like landing 7 it is not about Vulkan: it is a
+defect in the shipped GL renderer that the port's fixtures found.
+
+#### What moved
+
+`gfont_slot` and the walk that turns a string's unsent codes into glyph records now run in
+`before_text` — the detour at the head of `0x4CCF60`, the engine's glyph blitter — with the
+engine's own `font` and `str` arguments in hand. The op carries what the publisher needs and
+nothing it would have to follow: `fid` (the slot id the consumer's glyph cache keys on), `gboff`/
+`gblen` (the records, in a 128 KB window scratch beside the sprite's 2 MB one), `frows`/`fyoff`
+(the two header bytes the consumer stamps quads with) and `fgen` (below). `publish` copies our own
+bytes out of our own scratch.
+
+**Two publish-time walks became one observe-time walk.** `glyph_block_size` sized the block and
+`glyph_block_fill` wrote it; with a scratch that can be bounded per record, sizing first buys
+nothing. `glyph_block_capture` writes, and `glyph_block_mark` — which reads no font, only our own
+records — marks them sent at publish.
+
+#### The ordering, and why it is a stronger argument here than on the sprite
+
+The detour sits at the head of the blitter with its arguments, one instruction before it walks
+that string through that font, so
+
+> our read < the engine's read < any free of the font
+
+holds by the engine's own sequencing. **It is not "the engine would fault if this were dead"** —
+the detour runs first, so we would fault first; that phrasing was a counterfactual dressed as a
+proof when the landing-7 review found it on the sprite path and it is no better here. What makes
+the read safe is that the engine has already committed to making it.
+
+**And it bounds EXTENT as well as lifetime, which the sprite's move did not.** `0x4CCF60` has no
+clip and no destination bound at all — it writes `sum(widths) × font[0]` pixels wherever the
+caller said, and it cannot skip a glyph's bits because the destination would be off-screen. Our
+walk takes the blitter's own two skips (`sub ebx,first; jb` at `0x4CCFAA`, `or ebx,ebx; je` at
+`0x4CCFB9`) and reads the same bytes for a **subset** of the string's codes — the ones this font
+has not sent yet. So where landing 7 closed the lifetime half and left the extent half exactly
+where it found it (the engine blits a clipped sub-rect; `tagpu_gaf_decode` reads all `w×h`), this
+path has no extent half to leave. The instruction-level read set is in
+[exe-reverse-engineering](exe-reverse-engineering.html), "WHAT THE BLITTER READS, EXACTLY".
+
+#### What the gate cost, and what replaced it
+
+**Nothing replaced it.** `op->lgen` is gone from the op and from `op_add`, `strstale` is gone, and
+`tagpu_packet_pub_level_tracked` and `tagpu_reclaim_level_closing` now have **no caller in the
+tree** — kept rather than deleted, because they are the level-lifetime API those modules expose
+and removing them is not this landing's business.
+
+**What did have to be added is a generation, and it is not the level's.** The block omits the
+codes the font has already sent, and *that* decision is the only thing between the capture and the
+flip that can go stale. Two things clear a `sent[]` table: the render thread throwing its glyph
+atlas away (a shelf overflow or a ninth font, `gfont_check_gen`), and a publisher reseed skipping
+whole windows. Until this landing both were safe **by position** — the decision was taken inside
+`publish`, after either clear had already happened in the same call. Now both go through
+`gfont_sent_clear`, which bumps `s_sentGen`; the op stamps it at capture and `publish` publishes
+its box instead on a mismatch. Same shape, and the same reason, as the sprite path's `s_seenGen`,
+and counted apart as `strrearm=` for the same reason `gafreseed` is.
+
+A **slot recycle** is not a third clear: it changes which id a font has rather than what the
+consumer holds, ids are never reused, and the cells published under the old id stay valid for the
+ops that named it.
+
+#### Marked at publish, not at capture — and no cross-op dedup
+
+`sent[]` is set by `glyph_block_mark`, after `pub_bytes` has taken the arena slot and the bytes are
+in it. Marking in the capture would mark glyphs that a queue overflow, an arena overflow, an
+untwinned surface or a `dedup()` drop then threw away — and a glyph marked sent but never sent is
+missing from every string for the rest of the session, which is the exact failure `gfont_check_gen`
+was added to prevent.
+
+That is also why **two ops in one window that need the same unsent code each carry it**. The
+sprite path can share one decode through `s_gcap` because its consumer keys on the frame and one
+copy serves every op; a glyph record is only ever read out of the op that carries it, and either op
+may be the one that does not get there. The duplicate is idempotent at the consumer
+(`glyph_raster` returns early on a known cell) and costs arena bytes in first-sight windows only.
+
+#### The cost, measured
+
+`OP` grew from **80 to 96 bytes**, so `s_ops[65536]` grew from 5.24 MB to 6.29 MB; with the 128 KB
+scratch the DLL's `.bss` goes from **42 163 060 to 43 343 252 bytes (+1 180 192, +2.8 %)** on a
+module that already reserves 42 MB of it. Read off `i686-w64-mingw32-objdump -h` on the two builds.
+
+#### What was measured
+
+Everything below is from one binary, driven by `tools/uiwalk.py --vk` and the landing-5 crash
+route. **This is the pre-review measurement**; anything the review changes in the DLL invalidates
+it and the set is re-run.
+
+| claim | how | result |
+|---|---|---|
+| the picture does not move | the A/B walk, three resolutions | **52 of 52 stops at 0 px** (26 shell + in game at 640×480, 13 in game at 1024×768, 13 at 1920×1080) |
+| …and not merely at 0 px | the ink column against the pre-change binary | **1024×768 and 1080p identical STOP FOR STOP, TO THE BYTE**; two of the twenty-six 640×480 rows differ, below |
+| the string path is actually live | `str=` | **19 585 string ops / 94 525 glyph quads** over the three walks, `fonts=1`, 27 glyph cells — the first fixture on this pass that publishes strings at all |
+| no glyph goes missing | `miss=`, `reseed=`, `repack=`, the "stamped nothing" log line | **0 of each**, over all of it |
+| **the re-arm guard fires, and costs nothing** | `strrearm=` | **6** at 1080p (0 on the other two): six text ops published their box because `sent[]` was re-armed between their capture and their flip — and `miss=` stayed **0** |
+| the scratch bound holds | `glyscratch=high/lost` | high-water **8 480 bytes of 131 072 (6.5 %)**, `lost` **0** on every run |
+| nothing regressed in the sprite half | `gafnoplane` / `gaflost` / `gafbaddec` | **0 / 0 / 0**, scratch high-water 895 675 of 2 097 152 |
+| the arena takes the duplicates | `overflows=` | **0** — the per-op blocks that a first-sight window now duplicates cost arena bytes and overflowed nothing |
+| the crash route is clean | the landing-5 route, 5× at 1920×1080, **Vulkan lane DOWN** | **5 of 5 clean**, `teardowns=1` each |
+| landing 7 still holds | two skirmishes in ONE process | `gui: reset #3: level-changed` and `#6`, and the unit atlas's **2** `subject replaced` resets (generations 4 and 9) |
+
+**`strrearm=6` is the line to read twice.** It is the only new failure mode this landing creates —
+a block that omits codes because they were "already sent", published after something cleared that
+table — and it is the reason the generation exists rather than being argued away. Six of those
+happened in one 1080p walk, all six published their box instead, and no glyph was missed. Without
+the stamp those six strings would have drawn with characters dropped and the rest closed up, which
+is the failure `gfont_check_gen` was added for in the first place.
+
+**Two 640×480 stops moved and neither is established as this landing's.** `ARMMAIN2` read 103 376
+before and 103 074 after — it is the stop landing 7 already recorded as not reproducible between
+runs (103 153 / 103 376 there) — and `ARMCOM1` read 93 688 before and 94 312 after, which is
+exactly what `ARMCOM1-back`, the same screen visited again, reads in **both** runs. Both lanes
+agree to the pixel at each of them, and the same screens at 1024×768 match the control exactly.
+The final round runs the 640×480 walk **twice on one binary**, which settles it either way: a
+figure that moves between two runs of the same build cannot have been caused by the change.
+
+#### Not covered
+
+* **The A/B cannot see this class at all**, exactly as in landing 7: both lanes consume the same
+  published ops, so a publisher that resolved the wrong glyphs would hand both the same wrong
+  glyphs and score 0 px. The walk is this landing's **regression gate**, never its evidence. What
+  is evidence here is `miss=` — a consumer-side count of glyphs the cache refused that the engine
+  would have drawn — and the ink column against the control.
+* **The wrong-font case the move fixes is an argument, not a measurement.** A font freed and
+  reloaded at the same address inside one ~5 ms census window would, before this, have had its
+  new header read under the old op; nothing here forces that, and the shell — where address
+  recycling is routine — draws no strings at all.
+* **THE SHELL DRAWS NO STRINGS**, which bounds what the 26 shell stops say about this landing:
+  `0x4CCF60` is reached only through `DrawTextCustomFont 0x4C14F0`, so `glyscratch` is 0 across
+  the whole shell half and those rows are a regression gate on the rest of the module. Everything
+  this landing changes is in game.
+* **A font whose header lies is refused exactly as before and no better** — `f[3] != 0`,
+  `f[0] == 0` and `gfont_glyph`'s zero tests. A table entry pointing outside the loaded file
+  image, or a width byte that runs the bits past its end, is read by us and then by the engine one
+  instruction later; this landing neither adds nor removes that.
+* **The level gate that was removed had never fired on any measured fixture** (`strstale=0` over
+  the control's whole walk), because every string is in game where `level_tracked()` is 1. So the
+  change is established to move no pixel, and its value is the lifetime argument rather than a
+  behaviour it corrects.
+* **`tagpu_packet_pub_level_tracked` and `tagpu_reclaim_level_closing` now have no caller.** They
+  are kept as those modules' level API; deleting them is a separate decision.
 
 ### The gate's walk — the Vulkan lane against the GL lane, over the whole inventory
 

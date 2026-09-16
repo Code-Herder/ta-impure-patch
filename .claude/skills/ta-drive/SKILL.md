@@ -1825,6 +1825,13 @@ tools/tacli log <i> -g 'arena='         # the queue's MONOTONIC arena head: the 
 - **`miss=` and `reseed=` must stay 0.** `miss` counts glyphs the cache refused that the engine
   would have drawn; `reseed` counts strings that stamped nothing and asked for a fresh seed. Two
   full 120-stop walks produced 0 of each over ~20 000 string ops.
+- **`glyphs=` climbing is NOT `str=` climbing** [2026-09-16]. The glyph records are installed in
+  the drain loop *above* the skip gate and unconditionally; the stamping happens in `case
+  PK_STRING` and needs a twin for that surface. A skirmish left to sit has read `glyphs=16,
+  fonts=1` with `str=0/0` and `miss=reseed=0` — the ops arrived and nothing drew them. Read
+  `str=` for "text was drawn", `glyphs=`/`fonts=` for "the records arrived". The `--vk` walk is
+  the fixture that makes `str=` climb (6 281–6 532 ops over a walk); a string figure from a
+  fixture whose `str=` is flat says nothing.
 - **A static in-game frame publishes its text ONCE** — `str=` freezes at ~22 ops on the parity
   fixture, because the panel's labels are drawn once and then deduped. To measure anything about
   text, turn the clock on (`+clock` in chat) or open a screen: then it is ~1 000 ops per 300

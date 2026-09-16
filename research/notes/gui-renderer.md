@@ -2263,6 +2263,14 @@ phenomenon and it is quoted as measured rather than rounded into the earlier ban
 `0x4CCF60`'s three colour bytes; the render thread stamps TA's own glyphs into the twin instead of
 publishing the box's captured pixels.
 
+**The font object stopped travelling twice since, and this section is the G17d shape.** Landing 4c
+of the frame packet replaced it with a **font id** plus each glyph's width and packed rows on first
+sight of a `(font, code)` pair, so the render thread dereferences no font at all; **G19f-8** then
+moved the read that built those records off the flip and into `before_text`, the detour at the head
+of `0x4CCF60`, so `publish` dereferences no font either. What `PK_STRING` carries today is the
+glyph records, the string, the font id, `font[0]`/`font[2]` and the three colours — no engine
+pointer anywhere. See [GPU status](gpu-status.html) §2.34, "Landing 8".
+
 ### What the gate needed that §13.4 does not say
 
 **The UI's text is not the marker path's text, and that decides the whole shape.**
