@@ -188,6 +188,16 @@ static unsigned s_rglslSeen = 0;        /* tagpu_rglsl_calls() at the last prese
 static GLuint s_sharpTex, s_sharpFbo;   /* the sharp layer: device res, RGBA8, row 0 the viewport's TOP */
 static int    s_sharpW, s_sharpH;       /* its size, = the frame's viewport in window px               */
 static int    s_sharpOn = 0;            /* it exists and may be sampled this frame                     */
+/* G19f: ...AND WHETHER ANYTHING IS ACTUALLY IN IT. `s_sharpOn` says the layer
+   exists and is bound, which it is on every frame once it has been made -- so
+   it is the wrong question for a port that does not carry the layer's CONTENT.
+   An EMPTY layer and a DISABLED one composite identically (it is taken only
+   where its alpha says it has coverage, and a cleared one has none anywhere),
+   so the Vulkan lane may draw a frame whose layer is empty and must refuse one
+   whose layer is not. [FOUND 2026-09-16, the first run of the UI A/B: with
+   `nocursor nominimap nostring` armed the pass stood down on every frame and
+   the counters all read 0.] */
+static int    s_sharpInk = 0;
 static int    s_sharptest = 0;          /* the harness lever that proves the layer is wired            */
 static int    s_sharpFailed = 0;        /* the target could not be made: stay off rather than retry     */
 static GLuint s_sharpProg;              /* QVS + SHARP_FS: a client's flat-coloured quad in the layer   */
@@ -2018,8 +2028,14 @@ static void sharp_begin(const TAGPU_FRAME* f)
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
         x_glDrawArrays(GL_TRIANGLES, 0, 6);
     }
-    sharp_cursor(f);                    /* 13.5's cursor: the layer's first real client */
-    sharp_minimap(f);                   /* 13.6's base, behind `mmbase` while it is alone */
+    /* the two clients, and whether either of them put anything there. Their
+       own counters answer it, so neither function grows a flag of its own. */
+    {
+        unsigned c0 = s_curDrawn, m0 = s_mmDrawn;
+        sharp_cursor(f);                /* 13.5's cursor: the layer's first real client */
+        sharp_minimap(f);               /* 13.6's base, behind `mmbase` while it is alone */
+        s_sharpInk = (s_sharptest || s_curDrawn != c0 || s_mmDrawn != m0) ? 1 : 0;
+    }
     /* THE CLEAR COLOUR IS MODULE-WIDE STATE AND WE OWN IT AT (0,0,0,0).
        render_ogl.c repaints the letterbox bars with a bare glClear on EVERY
        frame whose viewport is offset (`if (viewport.x || viewport.y)`), and
@@ -2156,7 +2172,7 @@ static void draw_layer(const TAGPU_FRAME* f)
         s_mHand.curOurs = s_curOwn ? 1 : 0;
         s_mHand.guard = f->surface_tex ? 1 : 0;
         s_mHand.scaleX = s_k; s_mHand.scaleY = ky;
-        s_mHand.sharpOn = s_sharpOn ? 1 : 0;
+        s_mHand.sharpOn = s_sharpInk ? 1 : 0;   /* COVERAGE, not existence */
         s_mHand.colourTwins = (s_colValid && t->rgb) ? 1 : 0;
         s_mHand.vpX = f->vp_x; s_mHand.vpY = f->vp_y;
         s_mHand.vpW_gl = f->vp_w; s_mHand.vpH_gl = f->vp_h;

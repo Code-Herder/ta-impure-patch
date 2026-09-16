@@ -253,7 +253,9 @@ typedef struct TAGPU_GUIHAND {
        different picture and the A/B would call it a rasteriser difference. */
     int   otherOps;                 /* PK_STRING, and anything added later    */
     int   colourTwins;              /* Classic++ colour reached a twin        */
-    int   sharpOn;                  /* the sharp layer had coverage           */
+    int   sharpOn;                  /* the sharp layer had COVERAGE this frame
+                                       -- not merely that it exists, which it
+                                       does on every frame once it is made */
 
     /* 1 on the ONE frame the GL half captured its half of the A/B. */
     int   ab;
