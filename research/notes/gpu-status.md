@@ -5694,12 +5694,16 @@ The safety argument is that the op carries **the level it was OBSERVED in**, and
 to resolve a GAF frame while a teardown is in flight, from a level that has ended, or when nothing
 is tracking levels at all.
 
-**THE "ONE THREAD" PART IS AN OBSERVATION ABOUT THE ENGINE, NOT SOMETHING THE CODE ESTABLISHES, and
-this paragraph asserted it flatly until the re-review asked for the proof.** `before_flip` checks
-`on_game_thread()`; the blit observers that call `op_add` do not, so nothing in our code proves the
-stamp is taken on the same thread the generation is bumped on. It is benign either way — the
-generation is monotone, so a stale read can only ever make the gate REFUSE — and that asymmetry is
-the reason it is safe to leave rather than a reason it does not matter.
+**THE "ONE THREAD" PART IS ESTABLISHED BY THE CODE, AND A PREVIOUS REVISION OF THIS PARAGRAPH SAID
+IT WAS NOT.** It claimed `before_flip` checks `on_game_thread()` while "the blit observers that call
+`op_add` do not". They all do: `tagpu_gui_leaves.h` gates every entry point that can reach `op_add`
+— `before_gaf`/`gafa`/`gafb` (:102,103,106), text (:121), line (:177), `bar`/`frame`/`rect`/`focus`
+(:202,205,206,208), copy (:219), gafd (:249), scale (:270), fill (:292) — and `on_game_thread()` is
+`s_gameTid != 0 && GetCurrentThreadId() == s_gameTid` with `s_gameTid` set in `tagpu_gui_init`, so it
+is never vacuously true. `publish` itself runs only from `before_flip`, past the same check. The
+stamp and the bump are on one thread, by construction, and this is program order rather than a claim
+about visibility. [The false version was caught by BOTH reviewers of the third pass; a note that
+invents a hole is worse than a missing one, because the next session goes and "fixes" it.]
 
 **THE GENERATION IS `tagpu_packet_pub`'s, AND KEYING IT ON `tagpu_reclaim`'s WAS THE FIRST VERSION'S
 REAL DEFECT.** Reclaim's generation moves only while reclaim is ARMED — and `tagpu_reclaim.off`, one
@@ -5764,22 +5768,31 @@ is the configuration the crash was first seen in:
 | arm | the `frame_sane` bound | the ordering | crashed |
 |---|---|---|---|
 | **A** — neither, i.e. the landing-4 tip | out | out | **4 of 5** |
-| **B** — the ordering ALONE | out | **in** | **0 of 3**, `gafstale=147` at the boundary |
+| **B** — the ordering ALONE | out | **in** | **0 of 8** |
 | **C** — what ships | **in** | **in** | **0 of 5** |
 
 **Arm B is the one that carries the claim, and it is why the bound is not the argument**: with
-`frame_sane` compiled OUT and only the ordering standing, 147 GAF resolves were refused at the
-teardown and nothing crashed, against a base rate of four in five.
+`frame_sane` compiled OUT and only the ordering standing, the gate refused the reads at the teardown
+and nothing crashed in **eight** runs, against a base rate of four in five — `0.2^8 ≈ 3×10⁻⁶` if the
+ordering did nothing. It was run to eight rather than five for a second reason: with no bound in the
+build, arm B is also the probe for the SCREEN-POP window below, which the gate provably does not
+cover.
 
 **Arm A's four crashes are one fault, not four.** Every one of them: `80 7f 09 00` at the
 instruction pointer — `cmp byte ptr [edi+9], 0`, which IS `fr[0x09] == 0` — at the same EIP, with
 the faulting address exactly `EDI+9` and reading `0x09A48D21` every time, because the per-level bank
 comes back at a fixed address and only the timing of the race varies.
 
-And the fifth arm-A run, the clean one, is the control: on arm C the counter reads `gafstale=0` on
-one run in five as well. **A run with nothing straddling the boundary is a run that would not have
-crashed unfixed either**, and the two fractions agreeing is the closest thing this fixture has to a
-positive control.
+And the fifth arm-A run, the clean one, has an explanation rather than being noise: on arm C the
+counter reads `gafstale=0` on one run in five as well, and **a run with nothing straddling the
+boundary is a run that would not have crashed unfixed either.** Two fractions of one-in-five
+agreeing is n=1 against n=1 and is called a coincidence worth noting, NOT a positive control — the
+third review pass asked for that word back and was right to. What carries weight is arm B: 0 of 3
+against a base rate of 0.8 is p ≈ 0.008 on its own.
+
+The counts differ between arms — arm B refused 147 where arm C refuses 215 or 225 — and that is
+run-to-run spread, not a difference between the builds: arm C alone ranges 0 to 225 across its five.
+How many ops are straddling the boundary depends on where in the census window the teardown lands.
 
 The shape inside one arm-C run, which is what the counter is actually good for:
 
@@ -5803,6 +5816,36 @@ in the configuration it was measured in the publisher was armed and that disjunc
 re-review's finding stands as a latent defect under `tagpu_packet.off`; the measurement it appeared
 to discredit was sound.
 
+**THE SAME GATE NOW STANDS IN FRONT OF THE FONT, AND IT SHIPS UNMEASURED ON THE PATH IT GUARDS.**
+`publish`'s `OP_TEXT` branch handed `op->frame` — the FONT object here, not a GAF frame — straight to
+`gfont_slot`, which reads `f[3]` and `f[0]` with no bound, no probe and no generation, on a pointer
+captured up to `CENSUS_MS` earlier. The identical recorded-before / published-after shape the rest of
+this function had just closed, twelve lines below it, and **both reviewers of the third pass found it
+independently** — the tenth such pair on this lane. The font is `[globals+0x204]` (`0x4B6220` is
+`mov eax,ds:0x51FBD0`), so it is probably not per-level; "probably" is not a lifetime. It is gated
+the same way rather than a different way, because a different rule would need an argument the font's
+lifetime does not give us, and a refusal falls through to the box's own bytes — what this path did
+before G17d, so the picture is unchanged. The refusal is counted as **`strstale=`** and NOT folded
+into `gafstale=`, because the A/B above is stated in that counter and a second reason inside it would
+make those numbers mean something else on the next run that reads them.
+
+**What could not be measured, and it is a gap that predates this gate.** The consumer's `str=`
+counter — strings actually drawn and mirrored — read **0/0 on every fixture driven for this landing**:
+in game at 1920×1080 under `gui.on=mmbase` and under landing 2's own `gui.on=nocursor nominimap
+norestore`, and in the shell on `SKIRMISH.GUI` at 640×480. The A/B reads 0 px in all of them, and **0
+px over content that is not there is not a measurement** — the lesson landing 1 already paid for. The
+gate is not the cause: the control build with it reverted reads the same `0/0`, and `strstale=0` says
+it refused nothing. So the change is established to make no difference and is NOT established to be
+correct on a live string.
+
+**AND THAT PUTS A QUESTION MARK ON LANDING 2's OWN NON-VACUITY.** Landing 2 reports "0 of 786 432 at
+1024×768 and 0 of 2 073 600 at 1920×1080, with strings ON" on that same lever set, and the run here
+at 1080p on that lever set published no string at all. The map and the instance differ, so this is a
+question and not a refutation — but the next work on this pass needs a fixture that DEMONSTRABLY
+publishes one (`str=` climbing, not merely `nostring` being absent) before any string figure on this
+page is believed, this gate's included. The only session today that read a non-zero `str=` had walked
+`RENDER.GUI` and `VISUALS.GUI`, which are our OWN injected menus and a different text route.
+
 **This is the standing debt in `CLAUDE.md` coming due, once.** The roadmap already lists "the
 per-LEVEL ASSET class under `tagpu_reclaim`'s fence" as an open row of the frame-packet gate; this
 landing closes the one site of it that the UI publisher owns, by ordering rather than by waiting for
@@ -5812,8 +5855,9 @@ the asset channel, and leaves the class itself open.
 
 * **The gate, which is the whole of G19f and not these landings.** `uiwalk`'s `strict` walk over
   the **full screen inventory** at 1024×768 and 1080p, shell and in game; and **frame time no worse
-  than GL**, which nothing in Phase G has measured at all. ~~the shell↔game context switch~~ is
-  **CLOSED by landing 5**. These are a handful of fixtures, not an inventory.
+  than GL**, which nothing in Phase G has measured at all. The shell↔game context switch is closed
+  **for the crash that was measured** — the teardown cascade — and the SCREEN-POP window inside the
+  same route is open, covered only by the bound, and written up below. These are a handful of fixtures, not an inventory.
 * **THE PER-LEVEL ASSET CLASS ITSELF STAYS OPEN.** Landing 5 closes the one site of it the UI
   publisher owns, by ordering. The class — model templates, FeatureDef and wreck records, the GAF
   banks, all under `tagpu_reclaim`'s fence until the asset channel — is the frame-packet gate's own
@@ -5821,16 +5865,45 @@ the asset channel, and leaves the class itself open.
   quit a skirmish to the main menu. The landing-5 review swept the rest and **most are sound** — the
   feature, unit, terrain, effects and packet-publisher readers all sit behind the level-end packet's
   own `in_game` gate, which is published before the flag drops — but it named **two that are not**:
-* **THE SHELL'S SCREEN-POP ROUTE IS UNCOVERED, and it is not a level at all.** `GUI_Pop 0x4A9660`
-  frees a popped screen's art from **39** call sites, with no teardown flag and no generation moving
-  — and `frame_key`'s own comment has recorded for some time that the shell hands those same
-  addresses to the next screen. (This bullet said "21 event-handler call sites" until the
-  re-review counted them: 21 is `UpdateIngameGUI 0x491D70`'s figure, which
-  [exe-reverse-engineering](exe-reverse-engineering.html) records, and it was borrowed for the
-  wrong function. `call 0x4a9660` appears 39 times in the pristine exe.) Ops accumulate for up to `CENSUS_MS` before they publish
-  (the shell flips thousands of times a second), so an op can outlive the screen that produced it.
-  On that route the only thing standing is `frame_sane`, which is a probe. Named here because the
-  bullet above covers the per-LEVEL class and this is not in it.
+* **THE SCREEN POP IS THREE INSTRUCTIONS INSIDE THE ROUTE THIS LANDING MEASURED, AND THE GATE DOES
+  NOT COVER IT.** This bullet used to file `GUI_Pop 0x4A9660` away as "the shell's route", which is
+  true and misleading. The disassembly of the site the landing itself cites:
+
+  ```
+  460630:  call 0x491b60     ; the teardown -- bumps gen N->N+1, lowers s_teardown
+  460635:  push 0x1
+  460637:  call 0x491d70     ; UpdateIngameGUI -- DRAWS, so op_add stamps lgen = N+1
+  460641:  add  eax, 0x519
+  460647:  call 0x4a9660     ; GUI_Pop -- frees that screen's art
+  ```
+
+  The pop happens **after** the bump, so ops recorded at `0x460637` carry the CURRENT generation.
+  At the next flip `level_tracked()` is 1, `level_closing()` is 0 and `op->lgen == gen()` — **the
+  gate passes**, and the only thing between `frame_key` and freed art is `frame_sane`, the probe
+  this section says twice is not the safety argument. `GUI_Pop` frees from **39** call sites with no
+  flag and no generation, and `frame_key`'s own comment has recorded for some time that the shell
+  hands those same addresses to the next screen. (The "21 event-handler call sites" this bullet
+  carried until the re-review is `UpdateIngameGUI 0x491D70`'s figure, borrowed for the wrong
+  function; `call 0x4a9660` appears 39 times in the pristine exe and `call 0x491d70` 21.)
+
+  **Arm B is the experiment that says whether it is live, and it says probably not — which is not
+  the same as no.** Arm B is the build with `frame_sane` compiled OUT and only the ordering standing,
+  so an unguarded read faults instead of being swallowed. **8 runs of the route, 0 crashes**, against
+  arm A's 4-in-5. If the ops recorded at `0x460637` named art the pop frees, arm B would have taken
+  the access violation. So on THIS route, with THIS fixture, those ops do not appear to name popped
+  art — evidence, not proof, and it says nothing about the shell's own screen-to-screen pops, which
+  no fixture here drives at all.
+
+  **The by-design fix exists and is not built.** The module already observes the engine's single
+  free — `before_memfree` on `MEM_Free 0x4D85A0`, which every one of the engine's 363 free sites
+  calls, on the game thread, at the entry before the allocator's own critical section — and already
+  uses it to retire surface-table entries by block. A block-keyed forget for queued ops would cover
+  the teardown cascade and the pop together and would not need a generation at all. What it needs
+  first is a size: `MEM_Free` is handed the block, not its length, so "is this op's frame inside
+  this block" is not answerable from the observer as it stands. [Raised by the third review pass,
+  2026-09-16. Named here rather than built because it is a mechanism, not a fix to this landing's
+  defect, and it wants its own measurement.]
+
 * **`tagpu_render3do.c`'s unit atlas is never dropped at a level boundary.** Its entries key on the
   template's texture-frame ADDRESS, and the atlas resets only when full or on a context loss —
   where `tagpu_fx.c` and `tagpu_feat.c` both call `tagpu_gaf_atlas_forget` for exactly the recycled-
