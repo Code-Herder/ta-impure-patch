@@ -4787,8 +4787,14 @@ fog grid, the overlay, a device that will not filter the map). All of those are 
 byte is recorded into the command buffer, so freeing the slot there rests on the same fence the
 hand-over-failed path rests on. At this size §2.28's "nothing is kept once there is nothing to
 draw" is the rule that makes the pass affordable at all in a 32-bit address space, and **until the
-landing review it held only for the frame that handed nothing over** — a session with the scaffold
-armed or a replacement mesh on screen kept 7.3 MB a slot for its life.
+landing review it held only for the frame that handed nothing over**.
+
+**The leak needed a session that DREW first and then met a sticky refusal**, not one armed the
+wrong way from the start: every refusal above sits above `slot_sized`, so a session launched with
+the overlay on never allocated the buffers to keep. The case that fits is the restorer arming
+mid-session, a build ghost appearing, or a bake eviction taking a mirror away — the pass had drawn
+240 units, holds 3.4 MB a slot for them (7.3 MB at the hand-over's cap), and then stops drawing
+without giving any of it back.
 
 #### A serial, not a pointer, and not a cache slot
 
@@ -4855,7 +4861,10 @@ so an eviction inside the loop turns a later unit's cache hit into a miss whose 
 reserved, and the staging `memcpy` runs past the mapped allocation. That one is now **bounded
 against `s->vscap`** rather than against the pre-pass, because a pre-pass cannot budget for the
 eviction it is trying to budget for; a unit that will not fit is not drawn, and the gate below
-turns that into a refused frame. Reachable once the 512-entry table fills, which two map loads do.
+turns that into a refused frame — and the bound carries the **atlas's reserved share** of that same
+allocation with it, because `atlas_upload` copies into the tail of it after the loop and an
+overspend small enough to leave every unit fitting would have run the atlas memcpy past the end
+instead. Reachable once the 512-entry table fills, which two map loads do.
 
 **THE COMPARE-SAMPLER REFUSAL WAS TAKEN ONE HOOK TOO LATE.** It lived in `prepare` — which runs
 *after* `cast` has put this frame's casters into the map and after the shadow pass has published

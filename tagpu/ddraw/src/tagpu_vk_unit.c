@@ -1070,6 +1070,12 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
     if (rows < 1) rows = 1;
     if (rows > h->atlasDim) rows = h->atlasDim;
     bytes = (VkDeviceSize)h->atlasDim * rows;
+    /* BOUNDED WHERE IT IS WRITTEN. `upload` reserves this many bytes at the top
+       of the allocation's tail and its own loop refuses to spend them, so this
+       cannot fire -- which is the reason to keep it: it is the assertion that
+       the reservation is still being made, and it costs one compare on a frame
+       that re-uploads the atlas. */
+    if (stageOff + bytes > s->vscap) return 0;
     memcpy(s->vsmap + stageOff, h->atlas, (size_t)bytes);
     img_barrier(cb, s_atImg, VK_IMAGE_ASPECT_COLOR_BIT,
                 s_atHave ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
@@ -1218,7 +1224,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     TAGPU_PDHAND h;
     SLOT* s;
     VkMemoryBarrier mb = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
-    VkDeviceSize ustride, vglOff2, fglOff, pstride, stageOff, stageNeed;
+    VkDeviceSize ustride, vglOff2, fglOff, pstride, stageOff, stageNeed, atlasNeed;
     int fogW = 1, fogH = 1, i, anyUpload = 0, fogWanted = 0;
 
     s_ndraw = 0; s_ncast = 0; s_drawThis = 0;
@@ -1441,8 +1447,20 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         if (!vb_find(r->matSerial))
             stageNeed += (VkDeviceSize)r->nvert * MAT_STRIDE;
     }
-    if (!s_atHave || s_atSerial != h.atlasSerial)
-        stageNeed += (VkDeviceSize)h.atlasDim * h.atlasDim;
+    /* THE ATLAS SHARES THIS ALLOCATION AND ITS SHARE IS RESERVED, not merely
+       counted. `atlas_upload` copies at `stageOff` once the loop below is done,
+       so every byte the loop spends past its own budget eats into the atlas's
+       room -- and the loop CAN spend more than the pre-pass counted, because an
+       eviction inside it turns a later unit's cache hit into a miss. Counted
+       but not reserved, an overspend of up to `atlasNeed` bytes leaves every
+       unit fitting, the every-unit-or-none gate passing, and the atlas memcpy
+       running that far past the end of the mapped allocation. So the loop's
+       bound carries `atlasNeed` with it and `atlas_upload` re-checks its own.
+       (`atlasRows` can only make the real copy smaller than this square.)
+       [FOUND 2026-09-16, the re-review of the fix.] */
+    atlasNeed = (!s_atHave || s_atSerial != h.atlasSerial)
+                ? (VkDeviceSize)h.atlasDim * h.atlasDim : 0;
+    stageNeed += atlasNeed;
     if (stageNeed) {
         if (!slot_vstage(d, s, stageNeed)) goto refuse;
     } else if (s->vstage) {
@@ -1513,7 +1531,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                reserved. The pre-pass cannot be made exact without replaying
                the eviction it is trying to budget for, so the bound is taken
                here against the only number that is a fact -- the mapped
-               capacity.
+               capacity, less the atlas's reserved share of it.
 
                IT IS TAKEN BEFORE `vb_slot`, NOT AFTER, and that placement is
                the whole of it: `vb_slot` RETIRES the buffer it evicts and
@@ -1525,7 +1543,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                not drawn, and the every-unit-or-none gate turns that into a
                refused frame. [FOUND 2026-09-16, the landing review; the
                placement, in the round after it.] */
-            if (stageOff + bytes > s->vscap) break;
+            if (stageOff + bytes + atlasNeed > s->vscap) break;
             *e = vb_slot(d, d->frame);
             if (!*e) {
                 if (!s_saidVbFull) {
@@ -1613,6 +1631,8 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         s_ndraw = 0; s_ncast = 0;
         return 0;
     }
+
+    s_saidShort = 0;
 
     if (!atlas_upload(d, cb, s, &h, stageOff)) goto refuse;
 

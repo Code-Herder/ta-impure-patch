@@ -373,7 +373,7 @@ static unsigned s_pvFrame = 0xFFFFFFFFu;   /* the frame that fill belongs to —
 static int    s_fboW = 0, s_fboH = 0, s_fboSS = 0;
 static int    s_palInit = 0;
 static int    s_fogCols = 0, s_fogRows = 0, s_fogOrgX = 0, s_fogOrgY = 0;
-static int    s_fogCells = 0;         /* what the buffer holds, not cols*rows */
+static int    s_fogCells = 0;         /* the ALLOCATION's cell count (= cols*rows) */
 /* Frames drawn zoomed out, or from an unacknowledged eye, whose packet carried
    no WIDE fog grid — so the outer ring falls back to the engine's 1x grid and
    taFog's clamp. This is tagpu_fogwide's old `bare=` counter, moved here with
