@@ -103,14 +103,30 @@ landing 4.
   takes no negative viewport height, so the mirror that makes the unit pass stand down cannot
   arise. `LAY_FS`, `SPR_FS`, `STR_FS`, `MM_FS` and `SHARP_FS` read it nowhere.
 
-  **But `CPY_FS` still needs deriving rather than assuming, and it is landing 1's first task.**
-  The GL lane renders into the twin's FBO, where `gl_FragCoord.y` counts from the BOTTOM, while
-  `twin_upload` stores surface row `tp` at texture row `tp` — top-down — and `texelFetch`
-  indexes that storage directly. So the GL lane's copy already contains a mirror between its
-  fragment coordinate and its texel index, and the port must **reproduce** it, not "fix" it. In
-  Vulkan with no flip, `gl_FragCoord.y` counts from the top, so the same GLSL computes a
-  different `p` unless `uOff` or the quad compensates. Work it out against the code and the
-  `uOff` call site; do not reason from conventions.
+  **DERIVED 2026-09-16 against `twin_copy` and `QVS`, and the answer is that `CPY_FS` ports
+  unchanged with no flip.** The paragraph that stood here said the GL lane "already contains a
+  mirror between its fragment coordinate and its texel index" and that the port had to reproduce
+  it. **That was wrong**, and it was reasoning from the convention instead of from the code —
+  the thing this bullet told itself not to do. The chain:
+
+  * `QVS` maps `y / uSize.y * 2 - 1` to NDC y, so quad y = 0 lands at NDC −1, which is
+    attachment row 0.
+  * GL measures `gl_FragCoord.y` from NDC −1 — i.e. from attachment row 0, which for an FBO
+    whose colour attachment is the twin IS texture row 0.
+  * `twin_upload`'s `glTexSubImage2D(…, l, tp, …)` writes texture row `tp`, and `twin_copy`'s
+    `glScissor(o->l, o->t, …)` restricts to attachment row `o->t`. Both address the same rows
+    as the quad does.
+
+  So in GL, `gl_FragCoord.y`, the texel index, the scissor row and the quad's y are **one
+  number**, and `p = gl_FragCoord.xy - uOff` is a direct texel index. In Vulkan with a POSITIVE
+  viewport height, NDC −1 is attachment row 0 and `OriginUpperLeft` measures `gl_FragCoord.y`
+  from attachment row 0 — **the same number again**. The two conventions differ only when the
+  viewport height is negative, which is exactly the presented case §2.32 already carved out.
+
+  `vkCmdSetScissor`'s `offset.y` and `vkCmdCopyBufferToImage`'s buffer row 0 agree with it, so
+  the entire twin path — seed, pixels, clear, copy, sprite — is convention-identical between the
+  lanes and needs no transform anywhere. Only the composite flips, because only the composite is
+  presented.
 
   The module being flip-free and top-down in storage is otherwise a gift: `vkCmdCopyBufferToImage`
   puts buffer row 0 at image row 0 exactly as `glTexSubImage2D` does here, so seeds and pixel ops

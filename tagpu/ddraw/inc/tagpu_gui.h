@@ -150,4 +150,121 @@ int  tagpu_gui_want_minimap(void);
    writer, monotone within a level. */
 void     tagpu_gui_set_minimap_have(unsigned level_gen_plus_1);
 unsigned tagpu_gui_minimap_have(void);
+
+/* ==================================================================== G19f ==
+   THE VULKAN LANE'S HAND-OVER — the op stream this present applied, copied
+   while it was live.
+
+   WHY A COPY AND NOT A POINTER INTO THE QUEUE. render_ogl.c's iteration is
+   `tagpu_packet_acquire` -> `tagpu_overlay_draw` (inside which
+   `tagpu_gui_present` drains) -> `tagpu_packet_frame_end` -> `tagpu_vk_frame`.
+   `drain()` advances the queue's arena tail PER OP, so the moment it returns
+   the game thread may overwrite the bytes those ops point into -- and the
+   Vulkan lane does not run until two calls later. A pass reading
+   `g_guiq.arena + aoff` would be tagpu_terr.c's fog-grid bug on a 16 MB
+   buffer. So the render half copies what the port needs, as it applies each
+   op, into an arena of its own. tagpu_terr.c keeps the buffer glTexImage2D was
+   handed and tagpu_gaf.c grows a CPU mirror for exactly the same reason.
+
+   IT IS OPT IN. Nothing is copied until `tagpu_gui_mirror_want(1)` is called,
+   which the Vulkan pass does when its lever is armed and undoes when it is
+   not, so an unarmed session pays nothing at all. That is the only reason
+   copying an op stream that can run to 20 000 ops a present is affordable.
+
+   THIS IS NOT THE PRODUCER'S QUEUE STRUCT. `TAGPU_PUBOP` is private to the
+   tagpu_gui_* family (tagpu_gui_int.h) and describes what the GAME thread
+   published; this describes what the RENDER half actually did with it, which
+   is the only thing a second backend has to reproduce. Keeping them separate
+   means a change to the queue cannot silently change the port's contract.  */
+
+enum {
+    TAGPU_GUIOP_SEED = 1,   /* the surface's bytes, whole: `arena` at aoff    */
+    TAGPU_GUIOP_FREE,       /* the surface is gone                            */
+    TAGPU_GUIOP_CLEAR,      /* coverage 0 over the box                        */
+    TAGPU_GUIOP_PIXELS,     /* the box's bytes at aoff                        */
+    TAGPU_GUIOP_SPRITE,     /* a keyed GAF quad; the atlas rect is RESOLVED   */
+    TAGPU_GUIOP_COPY,       /* twin -> twin, the source's box at (sl, st)     */
+    TAGPU_GUIOP_RESET       /* forget every twin                              */
+};
+
+typedef struct TAGPU_GUIOP {
+    unsigned char  kind;            /* TAGPU_GUIOP_*                          */
+    unsigned char  ck;              /* sprite: the colour key                 */
+    unsigned short fw, fh;          /* sprite: the frame's size               */
+    unsigned       surf, src;       /* destination / copy source, by pixel base */
+    short          l, t, r, b;      /* destination box, INCLUSIVE, surface px */
+    short          sl, st;          /* copy: source top-left; sprite: dst pos */
+    int            w, h;            /* seed: the surface's geometry           */
+    unsigned       aoff, alen;      /* into TAGPU_GUIHAND::arena              */
+    /* THE ATLAS RECT THE GL LANE RESOLVED, not one this pass looks up again.
+       "The port must not re-derive the pass's inputs" (roadmap, How a ported
+       pass is A/B'd): a second lookup could answer differently after a repack
+       and the A/B would then be comparing two atlases. Valid for SPRITE. */
+    float          u0, v0, u1, v1;
+} TAGPU_GUIOP;
+
+typedef struct TAGPU_GUIHAND {
+    /* THE FRAME THIS WAS PUBLISHED ON. `tagpu_gui_handover` refuses any other:
+       every pointer in here aliases a buffer this module reuses next present. */
+    unsigned frame;
+
+    const TAGPU_GUIOP*   ops;       /* in the order the drain applied them    */
+    unsigned             nops;
+    const unsigned char* arena;     /* seed / pixels / sprite payloads        */
+    unsigned             alen;
+
+    /* THE SURFACE THE COMPOSITE DRAWS, and its geometry. 0 when the drain left
+       none presented, which is a frame the GL lane drew nothing on either. */
+    unsigned             presented;
+    int                  surfW, surfH;
+
+    /* The UI atlas's texels, as bytes: a second backend cannot read a GL
+       texture. `atlasSerial` says when they last moved, so the port uploads on
+       a change and not per frame -- tagpu_feat.h's `atlasSerial` exactly. */
+    const unsigned char* atlas;
+    int                  atlasDim, atlasRows;
+    unsigned             atlasSerial;
+
+    const unsigned char* pal;       /* 256 x RGBA8, tagpu_pal_live()          */
+    unsigned             palSerial;
+
+    /* THE ENGINE'S OWN FRAME, which the composite samples as its bottom layer
+       and its stale-mirror guard compares against. The GL lane reads it as
+       `f->surface_tex`; a Vulkan lane cannot, so the bytes are copied here
+       from the fork's primary under `g_ddraw.cs` -- the same lock and the same
+       argument tagpu_pal.c makes for the palette (the game thread NULLs the
+       primary inside that section). NULL when there is none this frame, which
+       is what turns the guard off. 8bpp, `engPitch` bytes a row. */
+    const unsigned char* eng;
+    int                  engW, engH, engPitch;
+
+    /* ---- the composite's uniforms, as draw_layer set them ---- */
+    int   strict, key, vpKey;
+    float vpL, vpT, vpW, vpH;       /* the TRUE viewport, from the packet     */
+    float curEng[4];                /* the engine cursor's rect to erase      */
+    int   curOurs, guard;
+    float scaleX, scaleY;           /* k, and the ramp's width with it        */
+    float hud[4];
+    int   vpX, vpY, vpW_gl, vpH_gl; /* the GL viewport the composite drew into */
+
+    /* WHAT THIS LANDING DOES NOT CARRY, counted rather than dropped silently.
+       A frame with any of these is refused whole, in the shape every world
+       pass refuses what it has no copy of: drawing the rest would be a
+       different picture and the A/B would call it a rasteriser difference. */
+    int   otherOps;                 /* PK_STRING, and anything added later    */
+    int   colourTwins;              /* Classic++ colour reached a twin        */
+    int   sharpOn;                  /* the sharp layer had coverage           */
+
+    /* 1 on the ONE frame the GL half captured its half of the A/B. */
+    int   ab;
+} TAGPU_GUIHAND;
+
+/* Ask the render half to keep the mirror above. Render thread only. */
+void tagpu_gui_mirror_want(int on);
+
+/* 0 when there is nothing to hand over, when this frame's has already been
+   taken, or when the standing one was published on a different frame than
+   `now` -- the fork's monotonic render-thread counter, which a Vulkan pass has
+   as TAGPU_VKPASS::frame. Render thread only. */
+int tagpu_gui_handover(TAGPU_GUIHAND* out, unsigned now);
 #endif

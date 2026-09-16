@@ -82,6 +82,8 @@
 #include "tagpu_pal.h"                    /* the one resolution of the presented palette */
 #include "opengl_utils.h"
 #include "dd.h"                         /* g_ddraw.cursor: the pointer the fork last saw (13.5) */
+#include "ddsurface.h"                  /* G19f: g_ddraw.primary->surface/pitch, the composite's
+                                           bottom layer as BYTES (dd.h only forward-declares it) */
 #include "mouse.h"                      /* mouse_last_client: the pointer at the DEVICE's resolution (13.5) */
 
 /* The minimap's box, its three surfaces and the view box over them were read
@@ -1133,6 +1135,99 @@ static void restore_step(void)
 }
 
 /* ------------------------------------------------------------------ drain */
+/* ==================================================================== G19f ==
+   THE VULKAN LANE'S MIRROR of this present's op stream. tagpu_gui.h carries
+   the contract and the reason it is a COPY rather than a pointer into the
+   queue; here is the machinery.
+
+   RECORDED WHERE EACH OP IS APPLIED, not where it is read. The hand-over says
+   what the render half DID -- a sprite whose atlas entry could not be resolved
+   drew nothing here and must draw nothing there, and recording it at the top of
+   the switch would publish an op the GL lane skipped. So every `mir_*` call
+   below sits beside the GL call it mirrors.
+
+   A FRAME IS ALL OR NOTHING. If the arena or the op array will not grow, the
+   frame's record is abandoned and nothing is published: a truncated op stream
+   applied to a twin store is a DIFFERENT PICTURE, not a smaller one, and the
+   A/B would report it as a rasteriser difference. `s_mirLost` counts it. */
+
+static int       s_mirWant = 0;        /* the Vulkan pass asked for one       */
+static int       s_mirRec  = 0;        /* ...and this frame is being recorded */
+static unsigned  s_mirLost = 0;        /* frames abandoned for want of room   */
+static int       s_mOther = 0;         /* ops this landing does not carry     */
+static int       s_mLayer = 0;         /* draw_layer actually composited      */
+
+static TAGPU_GUIOP* s_mOps;
+static unsigned  s_mNOps, s_mCapOps;
+static unsigned char* s_mArena;
+static unsigned  s_mALen, s_mACap;
+static unsigned char* s_mEng;          /* the engine's own frame, copied      */
+static unsigned  s_mEngCap;
+
+static TAGPU_GUIHAND s_mHand;
+static int       s_mHave = 0;          /* a hand-over stands                  */
+static int       s_mTaken = 0;         /* ...and has been taken               */
+static unsigned  s_mFrame = 0;
+
+#define MIR_OPS_MAX   (1u << 16)       /* the queue's own ceiling             */
+#define MIR_ARENA_MAX (24u << 20)      /* the queue's 16 MB, plus the slack a
+                                          seed burst adds when every surface
+                                          reseeds in one present              */
+
+static void mir_finish(const TAGPU_FRAME* f);   /* defined below draw_layer,
+   which fills the composite half of the record it publishes */
+
+static void mir_begin(void)
+{
+    s_mNOps = 0; s_mALen = 0; s_mOther = 0; s_mLayer = 0;
+    s_mirRec = s_mirWant;
+    s_mHave = 0;
+}
+
+/* room for one more op, or abandon the frame */
+static TAGPU_GUIOP* mir_op(void)
+{
+    if (!s_mirRec) return NULL;
+    if (s_mNOps >= s_mCapOps) {
+        unsigned want = s_mCapOps ? s_mCapOps * 2 : 1024;
+        TAGPU_GUIOP* n;
+        if (want > MIR_OPS_MAX) { s_mirRec = 0; s_mirLost++; return NULL; }
+        n = (TAGPU_GUIOP*)realloc(s_mOps, want * sizeof *n);
+        if (!n) { s_mirRec = 0; s_mirLost++; return NULL; }
+        s_mOps = n; s_mCapOps = want;
+    }
+    memset(&s_mOps[s_mNOps], 0, sizeof s_mOps[0]);
+    return &s_mOps[s_mNOps++];
+}
+
+/* copy `n` bytes into our arena and answer the offset, or abandon the frame */
+static int mir_bytes(const void* src, unsigned n, unsigned* off)
+{
+    if (!s_mirRec) return 0;
+    if (!n) { *off = 0; return 1; }
+    if (s_mALen + n > s_mACap) {
+        unsigned want = s_mACap ? s_mACap * 2 : (1u << 20);
+        unsigned char* nb;
+        while (want < s_mALen + n) want *= 2;
+        if (want > MIR_ARENA_MAX) { s_mirRec = 0; s_mirLost++; return 0; }
+        nb = (unsigned char*)realloc(s_mArena, want);
+        if (!nb) { s_mirRec = 0; s_mirLost++; return 0; }
+        s_mArena = nb; s_mACap = want;
+    }
+    memcpy(s_mArena + s_mALen, src, n);
+    *off = s_mALen;
+    s_mALen += n;
+    return 1;
+}
+
+/* the box ops all carry the same rectangle */
+static void mir_box(TAGPU_GUIOP* m, const TAGPU_PUBOP* o)
+{
+    m->surf = o->surf; m->src = o->src;
+    m->l = o->l; m->t = o->t; m->r = o->r; m->b = o->b;
+    m->sl = o->sl; m->st = o->st;
+}
+
 static void drain(void)
 {
     unsigned tail = g_guiq.qTail, head = g_guiq.qHead;
@@ -1163,21 +1258,45 @@ static void drain(void)
         }
         switch (o->kind) {
         case PK_FRAME:  s_presented = o->surf; break;
-        case PK_RESET:  twins_reset(); s_skipToReset = 0; break;
+        case PK_RESET:  twins_reset(); s_skipToReset = 0;
+            { TAGPU_GUIOP* m = mir_op(); if (m) m->kind = TAGPU_GUIOP_RESET; }
+            break;
         case PK_SEED:
             t = twin_make(o->surf, o->w, o->h);
             if (t && o->alen) twin_upload(t, 0, 0, o->w, o->h, g_guiq.arena + o->aoff);
+            if (t) {
+                TAGPU_GUIOP* m = mir_op();
+                if (m) {
+                    m->kind = TAGPU_GUIOP_SEED; mir_box(m, o);
+                    m->w = o->w; m->h = o->h; m->alen = o->alen;
+                    if (o->alen && !mir_bytes(g_guiq.arena + o->aoff, o->alen, &m->aoff))
+                        s_mNOps--;          /* the frame is abandoned anyway */
+                }
+            }
             s_seeds++;
             break;
         case PK_FREE:
-            t = twin_find(o->surf); if (t) twin_drop(t);
+            t = twin_find(o->surf);
+            if (t) { TAGPU_GUIOP* m; twin_drop(t);
+                     m = mir_op(); if (m) { m->kind = TAGPU_GUIOP_FREE; m->surf = o->surf; } }
             break;
         case PK_CLEAR:
-            t = twin_find(o->surf); if (t) twin_clear(t, o);
+            t = twin_find(o->surf);
+            if (t) { TAGPU_GUIOP* m; twin_clear(t, o);
+                     m = mir_op(); if (m) { m->kind = TAGPU_GUIOP_CLEAR; mir_box(m, o); } }
             break;
         case PK_PIXELS:
             t = twin_find(o->surf);
-            if (t && o->alen) { twin_upload(t, o->l, o->t, o->r - o->l + 1, o->b - o->t + 1, g_guiq.arena + o->aoff); s_pixels++; }
+            if (t && o->alen) {
+                TAGPU_GUIOP* m;
+                twin_upload(t, o->l, o->t, o->r - o->l + 1, o->b - o->t + 1, g_guiq.arena + o->aoff);
+                m = mir_op();
+                if (m) {
+                    m->kind = TAGPU_GUIOP_PIXELS; mir_box(m, o); m->alen = o->alen;
+                    if (!mir_bytes(g_guiq.arena + o->aoff, o->alen, &m->aoff)) s_mNOps--;
+                }
+                s_pixels++;
+            }
             break;
         case PK_SPRITE: {
             const TAGPU_GAFENT* e;
@@ -1203,18 +1322,32 @@ static void drain(void)
                 break;
             }
             twin_sprite(t, e, o);
+            { TAGPU_GUIOP* m = mir_op();
+              if (m) {
+                  m->kind = TAGPU_GUIOP_SPRITE; mir_box(m, o);
+                  m->ck = o->ck; m->fw = o->fw; m->fh = o->fh;
+                  /* THE RECT THE GL LANE JUST RESOLVED, carried rather than
+                     looked up again on the other side: a second lookup could
+                     answer differently after a repack and the A/B would be
+                     comparing two atlases. */
+                  m->u0 = e->u0; m->v0 = e->v0; m->u1 = e->u1; m->v1 = e->v1;
+              } }
             break; }
         case PK_STRING:
             t = twin_find(o->surf);
             /* the glyphs went in above, before the skip gate and whether or
                not this surface has a twin: the producer marks a (font, code)
                pair sent the moment it commits the op and never sends it again */
-            if (t) twin_string(t, o);
+            if (t) { twin_string(t, o); s_mOther++; }
             break;
         case PK_COPY: {
             TWIN* src = twin_find(o->src);
             t = twin_find(o->surf);
-            if (t && src) twin_copy(t, src, o);
+            if (t && src) {
+                TAGPU_GUIOP* m;
+                twin_copy(t, src, o);
+                m = mir_op(); if (m) { m->kind = TAGPU_GUIOP_COPY; mir_box(m, o); }
+            }
             else if (t) { g_guiq.reseed = 1; g_guiq.why = TAGPU_GUI_WHY_COPY; }
             break; }
         default: break;
@@ -1991,6 +2124,36 @@ static void draw_layer(const TAGPU_FRAME* f)
        the engine's own cursor blit stand down (tagpu_cursown.h). Every early
        return above leaves it 0 and the engine keeps its cursor. */
     if (s_sharpOn && s_curInLayer) s_curDrew = 1;
+
+    /* G19f: the uniforms this composite just ran with, for the Vulkan mirror.
+       Taken HERE rather than recomputed in the publish: every one of them is a
+       local this function derived, and a second derivation is a second thing
+       that can drift from the draw it is supposed to describe. */
+    if (s_mirRec) {
+        s_mHand.presented = s_presented;
+        s_mHand.surfW = t->w; s_mHand.surfH = t->h;
+        s_mHand.strict = (s_strict && f->surface_tex) ? 1 : 0;
+        s_mHand.key = key;
+        s_mHand.vpKey = tagpu_terrown_filled() ? key : -1;
+        s_mHand.vpL = (float)L; s_mHand.vpT = (float)T;
+        s_mHand.vpW = (float)W; s_mHand.vpH = (float)H;
+        s_mHand.curEng[0] = s_curEng[0]; s_mHand.curEng[1] = s_curEng[1];
+        s_mHand.curEng[2] = s_curEng[2]; s_mHand.curEng[3] = s_curEng[3];
+        s_mHand.curOurs = s_curOwn ? 1 : 0;
+        s_mHand.guard = f->surface_tex ? 1 : 0;
+        s_mHand.scaleX = s_k; s_mHand.scaleY = ky;
+        s_mHand.sharpOn = s_sharpOn ? 1 : 0;
+        s_mHand.colourTwins = (s_colValid && t->rgb) ? 1 : 0;
+        s_mHand.vpX = f->vp_x; s_mHand.vpY = f->vp_y;
+        s_mHand.vpW_gl = f->vp_w; s_mHand.vpH_gl = f->vp_h;
+        {
+            int hpw = 0, hbh = 0, hq8 = 256;
+            if (!tagpu_hud_live(&hpw, &hbh, &hq8)) { hpw = hbh = 0; hq8 = 256; }
+            s_mHand.hud[0] = (float)hpw; s_mHand.hud[1] = (float)hbh;
+            s_mHand.hud[2] = 256.0f / (float)hq8; s_mHand.hud[3] = (float)hq8 / 256.0f;
+        }
+        s_mLayer = 1;
+    }
 }
 
 /* leave nothing of ours bound: the drain binds twin FBOs, the atlas, the
@@ -2090,6 +2253,7 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (n == s_rglslSeen) tagpu_rglsl_step();
         s_rglslSeen = tagpu_rglsl_calls();
     }
+    mir_begin();            /* G19f: the Vulkan mirror records this drain */
     drain();
     /* AFTER the drain, which binds twin FBOs and leaves one bound, and before
        the layer that samples it: the sharp layer is cleared for this frame
@@ -2097,6 +2261,7 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
        been written yet. */
     sharp_begin(f);
     draw_layer(f);
+    mir_finish(f);          /* G19f: close and publish the frame's record */
     unbind_all();
     glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
     glViewport(f->vp_x, f->vp_y, f->vp_w, f->vp_h);
@@ -2141,6 +2306,108 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         b[sizeof b - 1] = '\0';
         slog(b);
     }
+}
+
+/* G19f: the frame's record is closed and published. Everything the port
+   needs that is NOT an op goes in here -- the atlas texels, the palette, the
+   engine's own frame -- each of them a copy or a mirror this module owns,
+   because the Vulkan lane does not run until after `tagpu_packet_frame_end`
+   and cannot read a GL texture at all. */
+static void mir_finish(const TAGPU_FRAME* f)
+{
+    if (!s_mirRec || !s_mLayer) { s_mHave = 0; return; }
+
+    s_mHand.frame = f->frame_counter;
+    s_mHand.ops = s_mOps; s_mHand.nops = s_mNOps;
+    s_mHand.arena = s_mArena; s_mHand.alen = s_mALen;
+    s_mHand.otherOps = s_mOther;
+    s_mHand.ab = 0;
+
+    /* THE UI ATLAS, as bytes. Asked for once; `tagpu_gaf_atlas_mirror` makes
+       it correct from the instant it exists by marking every painted entry for
+       repaint, so there is no window where a sprite samples texels that were
+       never written (tagpu_gaf.h). */
+    if (tagpu_gaf_atlas_mirror(&s_atlas) && s_atlas.mirror) {
+        int rows = s_atlas.shelfY + s_atlas.shelfH;
+        if (rows < 1) rows = 1;
+        if (rows > s_atlas.dim) rows = s_atlas.dim;
+        s_mHand.atlas = s_atlas.mirror;
+        s_mHand.atlasDim = s_atlas.dim;
+        s_mHand.atlasRows = rows;
+        s_mHand.atlasSerial = s_atlas.mirrorSerial;
+    } else {
+        s_mHand.atlas = NULL; s_mHand.atlasDim = 0;
+        s_mHand.atlasRows = 0; s_mHand.atlasSerial = 0;
+    }
+
+    s_mHand.pal = tagpu_pal_live();
+    s_mHand.palSerial = tagpu_pal_serial();
+
+    /* THE ENGINE'S OWN FRAME. The composite's bottom layer and its
+       stale-mirror guard both sample it, as `f->surface_tex` -- a GL texture,
+       which is exactly what a second backend cannot have. The bytes behind it
+       are the fork's primary, and they are read HERE under `g_ddraw.cs` for
+       the lifetime reason tagpu_pal.c gives for the palette: the game thread
+       NULLs `g_ddraw.primary` inside that section and frees the object only
+       after leaving it, so a pointer read AND dereferenced inside it is a live
+       object or NULL, never a freed one. Copied rather than aliased, because
+       the Vulkan lane runs two calls later. */
+    s_mHand.eng = NULL; s_mHand.engW = s_mHand.engH = s_mHand.engPitch = 0;
+    if (f->surface_tex) {
+        EnterCriticalSection(&g_ddraw.cs);
+        if (g_ddraw.primary && g_ddraw.primary->surface &&
+            g_ddraw.bpp == 8 && g_ddraw.width > 0 && g_ddraw.height > 0) {
+            int w = g_ddraw.width, h = g_ddraw.height;
+            int pitch = g_ddraw.primary->pitch ? (int)g_ddraw.primary->pitch : w;
+            unsigned need = (unsigned)w * (unsigned)h;
+            if (pitch >= w && need && need <= (64u << 20)) {
+                if (need > s_mEngCap) {
+                    unsigned char* nb = (unsigned char*)realloc(s_mEng, need);
+                    if (nb) { s_mEng = nb; s_mEngCap = need; }
+                }
+                if (s_mEngCap >= need) {
+                    const unsigned char* src = (const unsigned char*)g_ddraw.primary->surface;
+                    int y;
+                    for (y = 0; y < h; y++)
+                        memcpy(s_mEng + (unsigned)y * w, src + (size_t)y * pitch, (size_t)w);
+                    s_mHand.eng = s_mEng;
+                    s_mHand.engW = w; s_mHand.engH = h; s_mHand.engPitch = w;
+                }
+            }
+        }
+        LeaveCriticalSection(&g_ddraw.cs);
+    }
+    /* the guard has nothing to compare against without those bytes */
+    if (!s_mHand.eng) { s_mHand.guard = 0; s_mHand.strict = 0; }
+
+    s_mFrame = f->frame_counter;
+    s_mHave = 1; s_mTaken = 0;
+}
+
+void tagpu_gui_mirror_want(int on)
+{
+    if (!on && s_mirWant) {
+        /* nothing is kept once nothing asks for it: this is the largest thing
+           the module owns after the twins themselves */
+        free(s_mOps);   s_mOps = NULL;   s_mCapOps = 0;
+        free(s_mArena); s_mArena = NULL; s_mACap = 0;
+        free(s_mEng);   s_mEng = NULL;   s_mEngCap = 0;
+        s_mNOps = s_mALen = 0; s_mHave = 0;
+    }
+    s_mirWant = on ? 1 : 0;
+}
+
+int tagpu_gui_handover(TAGPU_GUIHAND* out, unsigned now)
+{
+    if (!out || !s_mHave || s_mTaken) return 0;
+    /* THE FRAME, and it is the safety refusal rather than a tidiness one: every
+       pointer in the struct aliases a buffer this module reallocs on the next
+       present, so a hand-over that outlived its frame can name memory that has
+       moved. Same rule, same reason, as tagpu_feat.h's. */
+    if (s_mFrame != now) return 0;
+    *out = s_mHand;
+    s_mTaken = 1;
+    return 1;
 }
 
 void tagpu_gui_glreset(void)
