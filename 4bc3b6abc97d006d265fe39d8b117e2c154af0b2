@@ -1,0 +1,1 @@
+landing-review: model=opus-5 effort=high range=ba46c4c..4bc3b6a reviewers=1 findings=4 acted=4 rejected=0 date=2026-09-16 note=re-review; the LINEAR sampler fix was a no-op recorded as closed
