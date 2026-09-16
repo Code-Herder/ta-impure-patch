@@ -1722,6 +1722,20 @@ is left on the shared stream.
 **Fields we write: none.** Every engine read is one the emitters used to make; the pass adds GL
 objects and no engine state.
 
+**Two uniforms this program does NOT hold what `tagpu_native.c`'s holds** [FOUND 2026-09-15 by the
+Vulkan port, which had to reproduce them]. Both are facts about the shipped GL renderer, recorded
+because a port that "fixed" either would draw a different picture from the game:
+
+| | |
+|---|---|
+| `uLambert` | **never set at all.** `tagpu_posedraw.c` does not look the uniform up and never writes it, so it keeps a freshly linked program's **0** for the pass's life — and the Classic++ lambert therefore lights a unit from a **flat up normal** (`vec3(0,1,0)`) rather than from `vNrm`. `tagpu_native.c:4010` sets it from `tagpu_classicpp_lit()` on ITS program. Whether that is deliberate has not been established; what is established is that it is what the game draws |
+| `uRestored` | set from `tagpu_r3d_atlas_rgbref() && tagpu_classicpp_ON()` here, and from `… && tagpu_classicpp_ASSETS()` on the native program. The two disagree whenever the master arm is on and `assets=0` |
+
+A third is not an asymmetry but is the same kind of trap: **`uNanoT` and `uNanoC` are STICKY**. The
+pass writes them only on a unit with `nanoOn`, so a unit without one is drawn against whatever the
+last unit that had one left in the program. Nothing reads them on a `uNanoOn == 0` unit, which is
+what makes that safe — and it is a statement about the fragment shader, not about the upload.
+
 **The three degradations, and why none of them is a fallback** (step 8; the full ledger with its
 invariants is [GPU posing](gpu-posing.html) §4). There is one renderer, so every condition that
 used to fall through to `emit_geom` now degrades *inside* the unit. All three ride the `native:`
@@ -4682,6 +4696,211 @@ turned a vacuous pass into a measurement.
 * ~~The caster-mesh retire~~ — **covered**, see the table: `terrainshadow` is a live knob, so the
   retire fires and completes without a map change. §2.30's shared-image retire is still the one
   nothing has watched execute.
+* The validation layer, still, and no device but the 4070.
+
+### 2.33 The unit pass, drawn by Vulkan (`tagpu_vk_unit.c`, `tagpu_posebake.c`'s two mirrors) — Phase G, G19e
+
+The **sixth world pass and the last of G19e**, and the first that **both feeds and samples another
+pass's target**: it puts the posed casters into the cast-shadow depth map §2.32 draws and then
+samples the finished map in its own fragment shader. That is why it has four hooks where every
+pass before it had two, and why three of them are called at three different points in the seam's
+frame.
+
+| hook | where | what |
+|---|---|---|
+| `upload` | before `tagpu_vk_shadow_prepare` | the vertex buffers this frame's types need, the pose blocks, the texels |
+| `cast` | **inside the shadow pass's render pass** | the posed casters into the map |
+| `prepare` | after the map is drawn | point this slot's set at the map and the overlay; decide whether to draw |
+| `record` | inside the seam's render pass | the bodies |
+
+The GL twin has exactly this shape for exactly this reason: `tagpu_posedraw_depth_unit` runs at
+`tagpu_native.c:3936` and `tagpu_posedraw_unit` at `:4238`.
+
+**No engine address, and no new one was read to build it** — everything arrives through
+`tagpu_posedraw_handover`, so there is nothing for
+[exe reverse engineering](exe-reverse-engineering.html) in this landing and nothing for the hook
+map above. `tagpu_vk_unit.c` is not on `thread-split.allow` and may never need to be; the list is
+**unchanged** at 34 entries.
+
+**MEASURED 2026-09-15** under system wine on the reference setup's 4070, `ss=1`, **on the binary
+the two findings below produced** — every figure was taken again after them and every one
+reproduced.
+
+| | |
+|---|---|
+| `selbox-facings`, 4 units, **2125** ink a side, Classic++ `assets=0 shadows=0` | **0 of 786 432** |
+| the same with `shadows=1` — the depth twin drawn, the map sampled | **1 of 786 432**, one channel, the same pixel every run |
+| `crowd-static`, **240** posed units / 32 288 triangles, sim PAUSED, **208 699** ink a side | **64 of 786 432** |
+| the same at 1920×1080, **231 426** ink | **90 of 2 073 600** |
+| the same at three camera stops | 51 / 59 / 65 px — a stable **0.03 % of unit ink** |
+| `shadow-struct` under **Classic** (the switch off), 5 units, **9209** ink | **20 of 786 432** |
+| the caster census | 256 casters in the GL map, **240 carried** → refused, the terrain pass stands down with it, both recover |
+| constraint 4 | **0 of 630 784** against `main` (`2e552d1`) with `tagpu_vk.off`, on **six** pairings, over a cross-launch floor of **0** measured on each binary twice |
+
+#### A set may only be written in its own slot's `prepare`, so the caster draw binds a second one
+
+A descriptor set is written during its own slot's `prepare` because that is the one instant the
+seam's fence proves it is not in flight. `cast` runs *before* that, inside the shadow pass's render
+pass — and at that moment this slot's main set still names the map's image from the previous frame
+(the same image: the views are per slot), while that image is the render target being written. So
+`cast` binds a **second, smaller set** holding the two vertex-stage buffers and **no image at
+all**, and the question does not arise. Two layouts, two sets a slot, one pipeline each.
+
+#### The caster census is arithmetic now, not a flat refusal
+
+§2.32 refused any frame whose `otherCasters` was non-zero, which is every frame with a unit on
+screen. The shadow pass now subtracts what this pass is **ready** to draw and refuses on what is
+left — the replacement meshes and the native 3DO stream, both still to port.
+
+**The two counts are comparable by construction and ours can only be smaller.** `tagpu_native.c`
+counts every posed unit with `castSkip` clear; this pass counts the subset of those that reached
+the hand-over *and* still have a bake mirror. So `otherCasters − casters()` is 0 exactly when every
+caster in the GL map has a copy here, and positive otherwise — never negative. An over-count
+refuses a frame the lane could have drawn; an under-count would draw a different map, which is the
+direction that must not happen. A **short** `cast` leaves the map unready rather than partial: the
+draws already recorded stay (they are in a submitted command buffer either way) but `s_liveHave` is
+not set, so every consumer stands down and the picture nobody draws is the one that would have been
+wrong.
+
+#### Per-unit uniforms, which is what a unit pass is
+
+The GL twin re-uploads one 14 336-byte pose block and a dozen loose uniforms **per unit** and draws
+between the uploads. A Vulkan command buffer cannot: every draw it records is submitted together.
+So each unit gets its own window in three **dynamic** uniform buffers and the draw binds the set
+with three offsets.
+
+* **The pose buffer** is `TAGPU_PD_BLOCK` (14 336) a unit **per frame slot**. That size is the
+  256-piece ceiling and not the model — stock's worst is 36 pieces — but a descriptor must cover
+  the block the shader declares, so the window cannot be shortened to the model. 240 units is
+  3.4 MB a slot. The HAND-OVER does not pay that: its rows live in an arena and 240 stock units
+  cost about half a megabyte there.
+* **The small buffer** carries two vertex-stage blocks (the body's and the caster's) and one
+  fragment-stage block a unit, each at a device-accepted offset. The reference device's
+  `minUniformBufferOffsetAlignment` is **64**, which makes that **704 bytes a unit**; the pass logs
+  the number rather than assuming it (`vk: unit: up - 4 frame slots, uniform offset alignment 64,
+  704 bytes of blocks and 14336 of pose per unit, compare sampler LINEAR`).
+
+Both are grown to the frame's own unit count rather than to `TAGPU_PD_MAXHAND` (512), and both are
+given back the moment a frame hands nothing over. At this size §2.28's "nothing is kept once there
+is nothing to draw" is the rule that makes the pass affordable at all in a 32-bit address space.
+
+#### A serial, not a pointer, and not a cache slot
+
+The GL twin draws every unit out of its **type's** two static buffers, so this pass keeps one
+Vulkan buffer per baked stream and uploads it once. The table is keyed on a **monotonic serial**
+`tagpu_posebake.c` now stamps on every bake, because the bake's cache slots **are** reused —
+`geom_slot` evicts the least recently asked-for entry and bakes another type into it, so a table
+keyed on the slot, or on the entry pointer, would hand the new model the old model's vertices. The
+mirror accessor bounds the pointer against its own array, checks it lands **on** an entry rather
+than inside one, and only then compares the serial; a pointer into a recycled slot answers NULL and
+the unit is simply not drawn, which the caster census turns into a refusal of the whole map.
+
+**The latch drops every entry on the 0 → 1 transition**, and that is the point rather than a cost:
+an entry baked before the Vulkan lane came up has no mirror, and nothing re-bakes an entry that is
+still valid, so without it the pass would stand down for ever on whichever models happened to be on
+screen first.
+
+#### Two things the measurement found, and neither was a design choice
+
+**THE VIEW WAS READ UNINITIALISED WHENEVER NO GATHER WAS ARMED.** `tagpu_native.c` filled its
+`TAGPU_FXVIEW` inside `if (fxOn || sfxOn || featOn || terrOn || markOn)` and then handed that same
+struct to `tagpu_shadow_begin`, which is gated on **none** of those five. With all five disarmed —
+which is exactly the configuration a single pass is *measured* in — the shadow module read stack
+garbage: `zoom` came out `0.000`, its light window ran to millions of texels, and the hand-over it
+publishes carried a garbage frame stamp, so the Vulkan shadow pass silently found nothing every
+frame **with no line in the log**. The view is filled whatever is armed now and only the gathers
+are gated. It cannot happen under the play defaults, where `terr.on` is always on.
+
+**THE UNIT FRAGMENT SHADER READS `gl_FragCoord`, AND THIS IS THE FIRST PORTED PASS THAT WOULD HAVE
+SAMPLED IT.** `TAGPU_GLSL_SCAF_TEST` (`tagpu_glsl.h`) locates the fragment in the game frame with
+`gl_FragCoord.xy / uSS`. **GL measures that from the LOWER left; Vulkan measures it from the UPPER
+left**, and `OriginUpperLeft` is the only execution mode Vulkan permits — so with the negative
+viewport height every ported pass takes for its geometry, the two are **exact mirrors**, and the
+scaffold lookup would land on the wrong end of the overlay and cut the wrong fragments through its
+`discard`. Three ways out were considered and all three are worse than standing down:
+
+* editing the macro to take the origin as a uniform changes the GL twin, which is both the oracle
+  and the shipped renderer;
+* re-deriving `uScafP` so the mirrored coordinate comes out at GL's value is possible on paper
+  (`w = −vh`, `y = C − vpT` with `C` folding the zoom un-transform) but it is the port re-deriving
+  its own inputs, and it breaks silently the day the macro changes;
+* mirroring the uploaded overlay does **not** cancel — it would need the viewport's top and bottom
+  margins to be equal, and they are 32 and 33.
+
+So a frame with the overlay armed is **refused**, said once, and the reason is written down rather
+than worked around. It costs nothing in play: `scaffold.on` is not in the default arm set. **Any
+later pass whose fragment shader reads `gl_FragCoord` inherits this** — the hi-res path and the
+effects pass both carry the same macro.
+
+#### The scaffold question: half answered, and the half that is says which half is not
+
+The handoff asked this landing to decide, once, how a pass samples another pass's texture — for the
+units, the hi-res path and the effects. **The mechanism is settled and is in place**:
+`tagpu_vk_scaffold.c` exposes a **frame-stamped per-slot `VkImageView`** in exactly the shape
+`tagpu_vk_shadow.h` arrived at, its `prepare` moves to the top of the seam's frame while its
+`record` stays over the world, and this pass points binding 44 at the real image. **Prepare order
+is not record order**, which is new to the seam and stated at both call sites.
+
+What is *not* settled is the paragraph above. Binding 44 names the overlay anyway, so it is the
+descriptor that will still be right when the fragment-coordinate half is answered.
+
+#### The residual, and it is measured rather than asserted
+
+The 64 px are a **stated bar**, of the same family as the effects pass's line tie-break (§2.31) and
+the terrain pass's one-pixel lambert (§2.30, §2.32) — but larger, because a unit frame is 32 288
+triangles of dense sprite art rather than a terrain grid. What was established about it:
+
+* **Deterministic.** On a frozen sim each lane is **byte-identical to itself** across two captures,
+  and the differing **set** is the same both times. So it is not a race, not an ordering, and not a
+  mirror that had not converged.
+* **Per pixel, not per face.** **48 of 55** 8-connected clusters are **one pixel** and the largest
+  is **three**; there are **58 distinct (GL, Vulkan) colour pairs across 64 pixels**. A flipped SHD row would
+  repaint a whole triangle uniformly and give a handful of pairs, so the shade quantisation is not
+  what this is.
+* **Mostly colour, a little coverage.** **5 of 64** have one lane black; the other 59 are colour
+  changes at pixels both lanes covered.
+* **Not the lighting and not the map.** It is there with the lambert on and off, with the shadow
+  map on and off, and under **Classic** with the whole Classic++ switch removed.
+* **A texel boundary, looked at.** Zooming one of the runs shows a **horizontal texture-row
+  boundary picked one row apart** along eight pixels — the GL lane takes the dark row under a light
+  band, the Vulkan lane continues the light one.
+
+That last one is **§3.0's own finding in a second lane**: a fragment centre landing exactly on a
+texel boundary, which the terrain pass fixed with a 1-texel replicated border **plus**
+`TAGPU_EDGE_NUDGE`, a 1/32 game-pixel offset in its vertex shader. **The unit path has no nudge**,
+and the 16.16 snap puts posed vertices on an exact grid over art whose UVs are exact texel
+multiples, so a great many fragment centres land exactly on a boundary. In one lane the tie goes
+one way and in the other it goes the other.
+
+**The candidate fix is therefore the terrain's, and it is not this landing's to take.** Adding the
+nudge to the unit vertex shader would change the **shipped GL renderer** to serve the port, which
+is the owner's decision and not a session's; the terrain's own note records that its 1× output came
+out bit-identical, which is evidence the cost may be nil, not proof of it for units.
+
+**What is NOT established** is that the last-bit difference is the two compilers rather than
+something in the port. The lambert, the shadow map, the restored atlas, draw ordering and every
+per-face term are eliminated; the interpolated value itself cannot be read from here, and this lane
+still has no validation layer.
+
+#### Not covered
+
+* **The nanoframe WIRE, the Classic SILHOUETTE and the structure SLANT** — the same program and the
+  same bake at `uRange` 2 and 1. They draw *outside* the window the A/B brackets, so they cannot
+  make this comparison disagree, and the pass does not refuse for them; they are simply missing
+  from a Vulkan frame that has them in the GL one. The wire also draws **lines**, which is §2.31's
+  stated bar.
+* **The replacement meshes** (`tagpu_hires_draw.c`) **and the native 3DO stream's own unit
+  vertices** — the effects models and the selection lines. Both still count into the shadow map's
+  census, which is what refuses a frame with either in it: measured at 256 casters against 240
+  carried on `crowd-static`, whose 16 ARMPWs take the hi-res path.
+* **The BUILD GHOST**, which rides the same entry points in a second window: the hand-over counts
+  it in `otherDraws` and the pass stands down.
+* **Classic++ `assets=1`.** The refusal is written and is the same shape as the feature and terrain
+  passes', but it was **not exercised**: the restorer never armed the unit twin in this session, so
+  `uRestored` stayed 0 on both lanes and the frame was drawn rather than refused.
+* **`ss` 2**, as for every world pass (the two captures would be different sizes).
+* **The owed-teardown path**, which has still never fired on any pass, and the per-type buffer
+  retire, which needs an eviction the 512-entry table did not reach.
 * The validation layer, still, and no device but the 4070.
 
 ## 3. Known limits — what is still wrong, and what closing it needs

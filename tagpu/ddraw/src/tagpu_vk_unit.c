@@ -20,8 +20,8 @@
       the seam calls three of them at three different points in the frame --
       tagpu_vk_unit.h lists them and the seam repeats the ordering at the call
       sites. The GL twin has exactly the same shape for exactly the same
-      reason: `tagpu_posedraw_depth_unit` runs at tagpu_native.c:3921 and
-      `tagpu_posedraw_unit` at :4223.
+      reason: `tagpu_posedraw_depth_unit` runs at tagpu_native.c:3936 and
+      `tagpu_posedraw_unit` at :4238.
 
       AND THE CASTER DRAW BINDS A SET OF ITS OWN. A descriptor set may only be
       written during its own slot's `prepare`, which is after the map is drawn;
@@ -1028,6 +1028,16 @@ static int build(const TAGPU_VKPASS* d)
     if (!build_samplers(d) || !build_layouts(d) || !build_body_pipeline(d) ||
         !build_descriptors(d))
         return 0;
+    /* ONE LINE PER DEVICE, as every other ported pass writes: the numbers a
+       later reader needs to check a memory figure against are the device's
+       uniform alignment and what it makes the two per-unit strides, and
+       neither is knowable from the source alone. */
+    plog(d, "unit: up - %u frame slots, uniform offset alignment %u, %u bytes "
+            "of blocks and %d of pose per unit, compare sampler %s",
+         (unsigned)d->slots, (unsigned)s_ualign,
+         (unsigned)(align_up(VGL_SZ, s_ualign) * 2 + align_up(FGL_SZ, s_ualign)),
+         (int)align_up(POSE_SZ, s_ualign),
+         s_cmpLinear ? "LINEAR" : "NEAREST (the map cannot be sampled)");
     /* the stand-ins, in the map's own format so that one compare sampler is
        valid against both (tagpu_vk_shadow_format, and tagpu_vk_terr.c's note) */
     dfmt = tagpu_vk_shadow_format(d, NULL);

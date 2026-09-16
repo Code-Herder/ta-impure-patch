@@ -109,8 +109,11 @@ static const TAGPU_GAFENT* atlas_get(const char* g)
    0.60 + 0.025*row => row 16 is EXACT 1.0 and forced to identity (shade off
    and shade-neutral are bit-identical to the unshaded renderer). Candidate
    indices 2..254 only — never emit reserved 0/1(ColorKey)/255. Built once
-   from the live in-game palette; `tagpu_shade.off` in the game dir disables
-   the remap per frame (A/B in one run). */
+   from the live in-game palette.
+   [`tagpu_shade.off` USED TO DISABLE THE REMAP PER FRAME and this line still
+   said so on 2026-09-15, when the Vulkan unit pass went looking for it as an
+   A/B lever: nothing anywhere in the tree reads that file. The lever is gone;
+   only the sentence survived it.] */
 #define SH_ROWS    32
 #define SH_NEUTRAL 16
 static int s_shNeutral = SH_NEUTRAL;   /* LUT row that is identity/neutral      */

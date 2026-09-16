@@ -1002,9 +1002,11 @@ instead: `tacli arm <i> classicpp.on=off`.
   `native.on=all` + `owndraw.on` is the path that replaced it.
 - `weapons.on` — sim-changing, and inert without `.ufo` content built for it. Arm it
   for the extra-weapons work, not for a play session.
-- The `.off` flags (`curs.off`, `wheel.off`, `zoomedge.off`, `ss.off`, `shade.off`,
+- The `.off` flags (`curs.off`, `wheel.off`, `zoomedge.off`, `ss.off`,
   `subpix.off`, `nano.off`, `r3dcache.off`, `overlay.off`) — these **disable** features.
-  Arming everything means leaving all of them absent.
+  Arming everything means leaving all of them absent. (**`shade.off` was on this list and does
+  not exist** — nothing in the tree reads the file. Found 2026-09-15 looking for it as an A/B
+  lever; only `tagpu_render3do.c`'s comment still mentioned it, and that is corrected too.)
 - **`reclaim.off` disables a crash fix, not a feature** (G14h): `tagpu_reclaim` defers the
   engine's model-object frees so the render thread cannot read a freed unit or wreck — the
   `200v200` fault at ~95 s — and since 2026-09-09 the per-LEVEL model templates too, so a
@@ -1887,10 +1889,12 @@ tools/tacli log <i> -g '^vk:'                 # the window, the device, the swap
   not, since the picker outlives the lane. (A launch that falls back to the GDI renderer never
   starts it — there is no lane to pick a GPU for there.)
 
-**Since G19e it also draws the SCAFFOLD overlay** (`tagpu_scaffold.on`), the **FEATURES**
-(`tagpu_feat.on` — trees, rocks, splats, GAF wreckage) and the **TERRAIN** (`tagpu_terr.on`), the
-first three world passes. Four ported passes now, and their A/B levers must not be armed together
-— see below.
+**Since G19e it draws the whole world**: the SCAFFOLD overlay (`tagpu_scaffold.on`), the FEATURES
+(`tagpu_feat.on` — trees, rocks, splats, GAF wreckage), the TERRAIN (`tagpu_terr.on`), the EFFECTS
+and particles (`tagpu_fx.on` / `sfx.on`), the Classic++ cast-shadow DEPTH MAP (no lever of its
+own — it follows `classicpp.on` and `shadows=1`) and the UNITS (no lever of its own either —
+`tagpu_posedraw.c` is THE unit renderer, so what arms it is `native.on`). **Seven ported passes
+now**, and their A/B levers must not be armed together — see below.
 
 **The pixel A/B between the two lanes: `tagpu_<pass>.ab`.** Route D means no GL-side capture can
 see the Vulkan frame, so each lane captures its own half of the SAME frame and the two files are
@@ -2118,6 +2122,57 @@ rm -f $G/tagpu_terr.ab $G/tagpu_terr_*.ppm; sleep 2; touch $G/tagpu_terr.ab; sle
 - **The caster mesh costs 10 MB on Town & Country** (291 600 vertices / 1 743 126 indices) in the
   GL module's CPU mirror and again in device memory, and the map is **16 MB a frame slot** at the
   default `shadowres` 2048. Both are paid only while the Vulkan lane is armed.
+
+**The UNIT pass's A/B (G19e, the last of the gate), and it is the first that needs no `.on` of its
+own:**
+
+```bash
+tools/tacli arm <i> 'native.on=all wrecks' ss.off 'vk.on=color=0,0,0' classicpp.on \
+      'classicpp.cfg=assets=0 shadows=1'
+tools/tacli scenario load <i> crowd-static --restart --res 1024x768 --maxfps 0
+sleep 12; tools/tacli keys <i> tab tab            # PAUSE: crowd-static is NOT static
+G=<main checkout>/tagpu/instances/<i>/gamedir
+rm -f $G/tagpu_posedraw.ab $G/tagpu_posedraw_*.ppm; sleep 2; touch $G/tagpu_posedraw.ab; sleep 8
+<main checkout>/.venv-undither/bin/python tools/vk-ab.py $G --pass posedraw
+```
+
+- **The lever is `tagpu_posedraw.ab`, not `tagpu_unit.ab`** — it is named after the GL twin like
+  every other one, and `--pass posedraw` is what `vk-ab.py` wants.
+- **There is no `unit.on`.** `tagpu_posedraw.c` is THE unit renderer and has had no lever since
+  G16 step 8, so what arms the pass is `native.on` plus the Vulkan lane. `ss.off` is required as
+  for every world pass.
+- **`crowd-static` ANIMATES, whatever its name says.** Two captures a few seconds apart differ by
+  ~17 700 px on either lane. That does not invalidate the A/B — both halves are the same frame by
+  construction — but it makes every other comparison meaningless, so **pause with `tab tab`
+  first**: frozen, each lane is byte-identical to itself across captures and the differing SET
+  reproduces exactly.
+- **THE SHADOW MAP REFUSES ANY FRAME WITH A CASTER THIS LANE HAS NO COPY OF, AND `crowd-static` HAS
+  16 OF THEM.** Its ARMPWs take the hi-res path, so with `shadows=1` you get
+  `vk: shadow: the GL map holds 256 caster(s) this lane has no copy of (240 of them the unit pass
+  carries)` and both passes stand down. That is the census working. To measure the BODIES at scale,
+  set `shadows=0`; to measure the DEPTH TWIN, use a fixture with no replacement mesh —
+  `selbox-facings` with `shadows=1` is the one (4 units, 2125 ink, and `hires/armpw.glb` is not
+  among them).
+- **Expect a non-zero answer, and it is a stated bar.** 64 px of 786 432 on 208 699 ink at
+  1024×768, 90 of 2 073 600 at 1080p, 51–65 across three cameras — a stable **0.03 % of unit ink**.
+  It is deterministic, it is 48 single pixels of 55 clusters, and zooming one run shows a texture
+  ROW boundary picked one row apart: a fragment centre landing exactly on a texel edge, which is
+  §3.0's terrain finding in a second lane. **Do not chase it as a new bug**; a *structured*
+  difference (a whole unit, a whole face, a shift) would be real.
+- **The small fixture is the exact one**: `selbox-facings` reads **0 px** with `shadows=0` and
+  **1 px** with `shadows=1` — and that 1 px survives `light=0` and vanishes with `shadows=0`, so it
+  is the shadow term's own quantisation and not §2.32's lambert.
+- **`scaffold.on` makes the pass stand down, and that is not a bug**: the unit fragment shader
+  locates itself with `gl_FragCoord`, whose origin is the LOWER left in GL and the UPPER left in
+  Vulkan, so the flipped viewport mirrors it. The log says so once and the pass recovers within a
+  frame when the lever is cleared. `scaffold.on` is not in the default arm set anyway.
+- **ARM ONE OF `terr.on` / `feat.on` / `fx.on` / `mark.on` OR THE SHADOW MAP IS GARBAGE — this cost
+  an hour.** Until 2026-09-15 `tagpu_native.c` filled its `TAGPU_FXVIEW` only when one of those
+  five was armed and handed it to `tagpu_shadow_begin` regardless, so with none of them armed the
+  shadow module read uninitialised stack: `shadow: frame zoom=0.000 res=2048 k=-4 … window=(65776,
+  66912028 3486028x520)` in the log, and the Vulkan shadow pass silently found nothing **with no
+  line of its own**. Fixed, but **`shadow: frame zoom=0.000` in any older log means exactly this**,
+  and the tell is the insane window numbers beside it.
 
 - **To measure constraint 4** — that the GL lane did not move — arm `vk.off` on two instances, one
   running the tree's DLL and one the previous one, load the same static fixture, park the pointer

@@ -19,8 +19,8 @@
      record()    inside the SEAM's render pass -- bind and draw the bodies.
 
    The GL twin has exactly this shape and for exactly this reason: its depth
-   twin draws into the shadow FBO at tagpu_native.c:3921, long before its
-   bodies sample the finished map at :4223.
+   twin draws into the shadow FBO at tagpu_native.c:3936, long before its
+   bodies sample the finished map at :4238.
 
    A SET IS WRITTEN ONLY DURING ITS OWN SLOT'S `prepare`, which is the one
    instant the seam's fence proves it is not in flight -- so `cast` binds a
