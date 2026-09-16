@@ -6044,46 +6044,104 @@ merely unproven but false.
 
 ### The gate's walk — the Vulkan lane against the GL lane, over the whole inventory
 
-`tools/uiwalk.py --vk`. The gate asks for a `strict` walk over the **full screen inventory** at both
-resolutions, shell and in game, with the Vulkan lane matching what the GL lane scores. `uiwalk` had
-no Vulkan support at all before this: it diffs **our** frame against the **engine's** surface, which
-is not a valid regression with Classic++ on (see above), so it could not answer this question.
+`tools/uiwalk.py --vk`.
+
+**WHAT THE GATE ASKED FOR IS NOT WHAT WAS RUN, and the substitution is the first thing to say.**
+The gate's wording is a **`strict`** walk over the full screen inventory at both resolutions, shell
+and in game, with the Vulkan lane matching what the GL lane scores. `strict` is `uiwalk`'s existing
+mode and it means something specific: it diffs **our** frame against the **engine's own surface**
+and counts the holes. That is a parity oracle against the engine, and **it is not a valid
+regression with Classic++ on** (see above — Classic++ is deliberately not the engine's output), so
+it cannot answer a question about the Vulkan lane at all. `uiwalk` also had no Vulkan support
+whatever before this landing.
+
+What was run instead is an **A/B of the two lanes against each other**: same process, same frame,
+same UI ops, GL writes one capture and Vulkan writes the other, and the two are diffed pixel for
+pixel. It answers *"does the Vulkan layer put the same pixels on the screen as the GL layer"*,
+which is the question the gate is about. It does **not** answer *"are those pixels right"* — that
+is `strict`'s question and both lanes could be wrong together and still score 0. The GL layer's own
+parity against the engine is G15's evidence (§2.3e), measured under `norestore` where the oracle is
+valid, and this walk inherits it rather than re-establishing it.
 
 `--vk` arms the lane in its own window — `gui.on=mmbase classicpp.on vk.on=color=0,0,0`, **no
 `norestore`**, so landing 4's restored UI atlas is live and is what the comparison runs through —
 and at every stop re-arms `tagpu_gui.ab`, waits for both lanes to write, and diffs the pair with
-`tools/vk-ab.py --pass gui`. The lever is one-shot per arming (`s_abDone`), so it is created, waited
-on and removed at each stop rather than left standing.
+`tools/vk-ab.py --pass gui`. The lever is one-shot per arming (`s_abDone`), so it is created and
+removed at every stop rather than left standing; it is removed **after** `vk-ab.py` has run, not
+before, because `vk-ab.py`'s own "these captures predate the lever" staleness check only runs while
+the lever is still on disk.
 
-| walk | stops at 0 px |
-|---|---|
-| shell, 640×480 (what the shell runs at whatever the game res) | **13 / 13** |
-| in game, 1024×768 | **13 / 13** |
-| in game, 1920×1080 | **13 / 13** |
+| walk | stops at 0 px | non-black px a side, min–max | of |
+|---|---|---|---|
+| shell, 640×480 (what the shell runs at whatever the game res) | **13 / 13** | 297 477 – 307 200 | 307 200 |
+| in game, 1024×768 | **13 / 13** | 118 232 – 174 781 | 786 432 |
+| in game, 1920×1080 | **13 / 13** | 175 576 – 232 125 | 2 073 600 |
 
-**39 of 39.** The in-game walks include the four-deep stack `VISUALRT` over `PREFS` over `ARMOPT`
+**39 of 39**, and **the ink column is half the claim.** On every one of the 39 rows the GL lane's
+non-black count and the Vulkan lane's are the **same integer** — not merely both non-zero — so each
+0 px is a diff over a frame that had content, and had the same amount of it on both lanes. A row
+with 0 px and 0 ink is two blank frames agreeing and is refused, not counted; that is the fourth
+guard below, and it is the reason these figures are a re-measurement.
+
+The in-game walks include the four-deep stack `VISUALRT` over `PREFS` over `ARMOPT`
 over `ARMCOM1` over `ARMMAIN2`, both pages of the build menu, chat and F4; the shell walk includes
 `SELMAP` over `SKIRMISH` and our own injected `VISUALS.GUI` with its 50 gadgets.
 
-**A MISSING PAIR IS NOT A ZERO, and this is the part of the walker that matters most.** `vk_ab`
-returns `None` when either lane did not write; the stop prints `NO PAIR` and the report renders it
-**NO PAIR** and counts it *out* of the pass tally. Two runs earned that guard on the spot:
+The in-game ink is a **smaller fraction** of the frame than the shell's because the shell is UI
+edge to edge while in game the UI is the panel, the bars and the strings over a world the A/B
+blacks — 15–22 % of a 1024×768 frame, 8–11 % of a 1080p one. It is the count of pixels **this layer**
+put down, which is what the comparison is about.
 
-* The first walk ran against an instance a killed run had left part-driven, and the game exited a
-  third of the way through. Twelve stops reported `NO PAIR` — against a dead game. Rendered as `0
-  px` they would have read as twelve passes, and the walk would have claimed 17 of 17.
-* The first 1080p walk read `tagpu_gui_vk.ppm` at **5 509 120 of 6 220 800 bytes** — a 6.2 MB file
-  caught mid-write, because "both files exist, sleep 0.4 s" is enough at 640×480 and not at 1080p.
-  One `NO PAIR`, at `VISUALRT`, the deepest stack in the inventory. It now polls until each file
-  reports the same size twice running, and that stop reads 0 px.
+**A STOP WITH NO USABLE COMPARISON IS NOT A ZERO, and this is the part of the walker that matters
+most.** `vk_ab` returns `None`; the stop prints `NO COMPARISON` and the report renders it **NO
+COMPARISON** and counts it *out* of the pass tally. Four runs earned four separate guards, every
+one of them found by a walk that had already reported a pass:
+
+* **Neither lane wrote.** The first walk ran against an instance a killed run had left part-driven,
+  and the game exited a third of the way through. Twelve stops had no pair at all — against a dead
+  game. Rendered as `0 px` they would have read as twelve passes, and the walk would have claimed
+  17 of 17.
+* **A capture caught mid-write.** The first 1080p walk read `tagpu_gui_vk.ppm` at **5 509 120 of
+  6 220 800 bytes**, because "both files exist, sleep 0.4 s" is enough at 640×480 and not at 1080p.
+  It now polls until each file reports the same size twice running.
+* **The settle compared against the wrong number.** That poll then checked the settled size against
+  `--res`, i.e. the *game's* resolution — but **the shell runs at 640×480 whatever the game
+  resolution is**, so a 1024×768 shell walk waited for 2 359 296 bytes against a real 921 615, never
+  settled, and fell through on the 40 s deadline at **all 13 stops**. Every one of them was taken by
+  the timeout: by exactly the "both exist, then hope" behaviour the poll had been added to replace.
+  The expected size now comes from the **PPM header**, so it is the frame's own resolution.
+* **Both captures blank.** `vk-ab.py` prints `differing px 0 of N` *first* and only then decides
+  that `diff == 0 and ink_gl == 0` means "BOTH CAPTURES ARE BLANK — that is not a pass" and exits 1.
+  The walker read the count and never the exit status, so a stop where the layer composited nothing
+  scored **0 px and rendered as a pass**. The A/B blacks the frame and the layer's shader `discard`s
+  every fragment it does not own, so two all-black captures agree perfectly and prove nothing. The
+  exit status and the `non-black px` line are both read now, and **the ink is a column in the
+  report** — a 0 px row is only a pass with a non-zero ink beside it.
+
+The last two were found by a review of the walker *after* it had produced a "39 of 39", which is why
+**all three walks were re-run from scratch** under the corrected guards and the numbers below are
+the second set. The first set is withdrawn: two of its stops' guards were weaker than the prose
+describing them.
 
 This is the failure mode this lane produces over and over — landing 1 stood down on every frame
 while every counter read zero, landing 4 measured 0 px on a run that had restored nothing — and the
 walk is the one place where a hole and a pass look identical unless the tool refuses to conflate
-them.
+them. **0 px over content that is not there is not a measurement.**
 
 #### Not covered by the walk
 
+* **IT IS NOT THE `strict` WALK THE GATE'S WORDING ASKS FOR.** It is a lane-against-lane A/B, for
+  the reason given at the top of this section. 0 px means the two lanes agree, not that either is
+  right; the GL lane's own correctness is G15's, measured elsewhere and inherited here.
+* **The blank-pair guard is a refusal, not coverage.** It can tell a stop where nothing was
+  composited from a stop where the two lanes agreed on real content. It cannot tell a stop where
+  *most* of the content was missing from both lanes: the ink column would be non-zero and the
+  diff would be 0. A partial hole common to both lanes still scores as a pass.
+* **The size-settle guard never engaged on the shell walk.** The shell runs at 640×480, where the
+  captures are 921 615 bytes and the writes have always completed inside one 0.4 s poll; the
+  mid-write case was only ever observed at 1080p. So the shell walk's 13 stops exercise the
+  *settle-on-equality* path but never the *wait* it exists for, and the guard is evidenced by the
+  in-game walks alone.
 * **The inventory is the screens, not every state of them.** 13 stops per walk. A build menu page
   the walk does not turn, a dialog it does not open, an animation mid-frame: not covered.
 * **One map, one side (ARM), one scenario** — `tascene-parity`.
