@@ -177,7 +177,7 @@ static RET              s_ret[RET_MAX];
    until its RESET arrives. It is `tagpu_gui_surf.c`'s own `s_skipToReset`, for
    the same reason -- applying ops to a store that has missed some is a wrong
    picture that every later frame inherits. */
-static int              s_behind;
+static int              s_behind, s_cantReplay;
 static VkImageView      s_setView[SET_MAX];
 
 /* this frame's plan, filled by `prepare` and read by `record` */
@@ -428,14 +428,15 @@ static TWIN* tw_find(unsigned surf)
    use-after-free this list exists to prevent. */
 static int tw_drop(const TAGPU_VKPASS* d, TWIN* t)
 {
-    int j;
     if (!ret_push(d, t->img, t->mem, t->view, t->fb)) return 0;
-    /* A SET MAY NOT GO ON NAMING A VIEW THAT IS ON ITS WAY OUT. `s_setView`
-       keys the frame's descriptor claims on the view HANDLE, and a driver may
-       hand the same handle back for the next image it creates -- so a claim
-       left standing would match and the recorded draw would use a set still
-       describing the old one. */
-    for (j = 0; j < SET_MAX; j++) if (s_setView[j] == t->view) s_setView[j] = VK_NULL_HANDLE;
+    /* THE CLAIM IS DELIBERATELY LEFT STANDING. An earlier version cleared
+       `s_setView` here, to stop a recycled view handle matching a stale claim —
+       but now that `tw_drop` only RETIRES, the view stays alive for the whole
+       frame and no handle can be recycled inside it, while clearing the entry
+       frees the set index for `set_claim` to hand out again and REWRITE a set
+       a draw recorded earlier this frame already names. The fix for one hazard
+       was the cause of a worse one. The per-frame memset is what bounds this.
+       [FOUND 2026-09-16, the re-review.] */
     *t = s_tw[--s_ntw];
     memset(&s_tw[s_ntw], 0, sizeof s_tw[s_ntw]);
     return 1;
@@ -942,11 +943,23 @@ static int set_claim(const TAGPU_VKPASS* d, SLOT* s, VkImageView v,
    A drop the retire will not take leaves the pass owing a teardown instead. */
 static int behind(const TAGPU_VKPASS* d, const char* why)
 {
-    if (!s_behind) plog(d, "gui: the twin store cannot follow the GL lane (%s) "
-                           "- asking the producer for a fresh start and "
-                           "compositing nothing until it arrives", why);
-    s_behind = 1;
-    tagpu_gui_mirror_reseed();
+    /* THE REQUEST IS RAISED ONCE, ON THE TRANSITION, AND THAT IS NOT TIDINESS.
+       `tagpu_gui_mirror_reseed` raises the PRODUCER's flag, and the producer
+       answers it by dropping every `seeded` mark and re-seeding every surface —
+       megabytes into a 16 MB arena. Raising it on every call, from a condition
+       that holds every frame, reseeds the GL lane's own twin store at the frame
+       rate: `tagpu_gui_hook.c` calls that a reseed storm and measured 2 749
+       resets in one walk the last time something caused one. **The GL lane is
+       the oracle and this port may not change it** — which the first version of
+       this function did, and which `gui.on=nostring` hid from the A/B.
+       [FOUND 2026-09-16, the re-review of the review's fixes.] */
+    if (!s_behind) {
+        plog(d, "gui: the twin store cannot follow the GL lane (%s) - asking "
+                "the producer for a fresh start, once, and compositing nothing "
+                "until it arrives", why);
+        s_behind = 1;
+        tagpu_gui_mirror_reseed();
+    }
     if (!tw_reset(d)) return 0;      /* caller refuses: the retire is full */
     return 1;
 }
@@ -1017,7 +1030,26 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        level" was written of the ops the mirror CARRIES and was false of this
        one, which it does not.] */
     if (h.otherOps > 0) {
-        if (!behind(d, "a string op the hand-over does not carry")) goto refuse;
+        /* A CAPABILITY GAP, NOT A SYNC GAP, and the difference is the whole of
+           finding 1 above. The GL lane applies these and this landing has no
+           glyph path, so a fresh start would not help: the very next frame
+           carries another one. Say it once, composite nothing, apply nothing,
+           and ask for NOTHING. The store is caught up with a single fresh start
+           when they stop — which is the `else` below. */
+        if (!s_cantReplay) {
+            s_cantReplay = 1;
+            plog(d, "gui: the GL twin applied %d op(s) this landing cannot "
+                    "replay (a string) - nothing composited, and the store is "
+                    "caught up with ONE fresh start when they stop. "
+                    "`gui.on=nostring` is the lever the A/B is taken with",
+                 h.otherOps);
+        }
+        s_drawThis = 0; s_abFrame = 0;
+        return 0;
+    }
+    if (s_cantReplay) {
+        s_cantReplay = 0;
+        if (!behind(d, "ops this landing cannot replay have stopped")) goto refuse;
         return 0;
     }
     if (h.colourTwins) {
@@ -1096,7 +1128,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             break;
         default:
             if (!behind(d, "an op kind this pass does not know")) goto refuse;
-            { if (!behind(d, "a malformed op")) goto refuse; return 0; }
+            return 0;
         }
     }
     if (ndraw > DRAW_MAX) {
@@ -1271,6 +1303,12 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             TWIN* src = NULL;
             t = tw_find(o->surf);
             if (!t) continue;               /* the GL lane had one; we do not  */
+            /* a clear and a layout change are both illegal inside a render
+               pass instance, so the open one closes first. Unreachable while
+               `tw_make` is the only creator and clears on the next line — but
+               "unreachable" is an enumeration of today's call sites, and this
+               is the bound. */
+            if (t->needClear && rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
             tw_fresh(cb, t);
             if (o->kind == TAGPU_GUIOP_COPY) {
                 src = tw_find(o->src);
@@ -1285,6 +1323,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                             "made - asking the producer for a fresh start");
                     goto standdown;
                 }
+                if (src->needClear && rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
                 tw_fresh(cb, src);
                 if (src != cur && rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
                 if (rpOpen && cur != t) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
@@ -1366,9 +1405,15 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         /* everything else runs outside a render pass */
         if (rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
         switch (o->kind) {
-        case TAGPU_GUIOP_RESET: tw_reset(d); break;
+        case TAGPU_GUIOP_RESET:
+            /* the retire refusing is the pass stopping, not a drop to shrug
+               off: keeping twins the GL lane has destroyed is divergence */
+            if (!tw_reset(d)) goto refuse;
+            s_behind = 0;
+            break;
         case TAGPU_GUIOP_FREE:
-            t = tw_find(o->surf); if (t) tw_drop(d, t);
+            t = tw_find(o->surf);
+            if (t && !tw_drop(d, t)) goto refuse;
             break;
         case TAGPU_GUIOP_SEED:
         case TAGPU_GUIOP_PIXELS: {
@@ -1585,7 +1630,7 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
                     kill_image(d, &t->img, &t->mem, &t->view);
                     *t = s_tw[--s_ntw]; memset(&s_tw[s_ntw], 0, sizeof s_tw[s_ntw]); }
     ret_drain_idle(d);
-    s_behind = 0;
+    s_behind = 0; s_cantReplay = 0;
     for (i = 0; i < TAGPU_VK_SLOTS; i++) {
         slot_free(d, &s_slot[i]);
         s_slot[i].laySet = VK_NULL_HANDLE;

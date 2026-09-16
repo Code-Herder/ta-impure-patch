@@ -5045,7 +5045,11 @@ reviewers led with it, independently**, and the file already contained the corre
 The answer is the lane's own **slot-bitmask retire**, the one §2.30's terrain pass and §2.33's unit
 pass already use — every slot's bit set at push including the one being recorded, cleared when that
 slot comes round again behind its fence, destroyed at zero, and a full list stops the pass rather
-than destroying anything. **There is now no destruction reachable from `prepare` at all.**
+than destroying anything. **No Vulkan OBJECT is destroyed from `prepare` any more** — the two
+`kill_buffer`/`slot_free` sites that remain are the slot's own host-visible buffers, which are
+safe under the fence the seam already waited on and for which every world pass makes the same
+argument. That sentence read "no destruction at all" until the re-review pointed out it was false
+and, worse, told the next reader not to look — which is exactly how the original bug got in.
 
 #### The replay runs on frames the composite cannot
 
