@@ -71,7 +71,7 @@
 #define MODE_ALPHA  TAGPU_FXMODE_ALPHA
 #define MODE_FLASH  TAGPU_FXMODE_FLASH
 
-#define MAXFXV   32768          /* vertices per bucket per frame             */
+#define MAXFXV   TAGPU_FX_MAXV  /* vertices per bucket per frame (tagpu_fx.h) */
 /* THE STRIDE IS tagpu_fx.h's, so the GL VAO and the Vulkan attribute array
    cannot drift apart (Phase G / G19e). It was a local 9 until then. */
 #define FXST     TAGPU_FX_VST   /* x,y,enc, u,v, c,mode, wx,wz               */
@@ -384,10 +384,11 @@ static void init_gl(void)
 void tagpu_fx_glreset(void)
 {
     s_state = 0; s_lhtInit = 0;
-    /* AND THE HAND-OVER GOES WITH IT. `s_pub` points into `s_verts` and into
-       the GAF mirror, and this is the context-loss path -- the atlas below is
-       dropped on the very next line. A hand-over left standing here is the
-       G19e re-review's finding in a third place. */
+    /* AND THE HAND-OVER GOES WITH IT. This is the context-loss path: the atlas
+       is dropped on the very next line and its mirror is re-requested from
+       scratch, so a hand-over left standing here would be read against texels
+       that have been zeroed. (The vertex arrays are static and cannot dangle --
+       tagpu_fx.h has the distinction.) */
     s_pubHave = 0; s_abFrame = 0;
     s_mirrorAsked = 0;
     tagpu_gaf_atlas_lost(&s_atlas);
@@ -1001,10 +1002,17 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total, int scaf)
 {
     int fogBad = 0;                    /* fog wanted, no grid: publish nothing */
     int b;
-    /* NOTHING IS PUBLISHED ON A SHIPPED FRAME. `s_mirrorAsked` is the latch the
-       arm beat sets when the Vulkan lane is up; while it is 0 the lane is not
-       armed, nothing will ever call the hand-over, and the stores below are
-       pure cost on the path every player runs. */
+    /* NOTHING IS PUBLISHED UNTIL THE VULKAN LANE HAS BEEN ARMED. `s_mirrorAsked`
+       is the latch the arm beat sets the first time `tagpu_vk_armed()` says yes;
+       while it is 0 -- which is every session that never arms the lane, i.e.
+       every shipped one -- the stores below are pure cost that is not paid.
+       IT IS A ONE-WAY LATCH: clearing `tagpu_vk.on` brings the lane down but
+       does not take this cost back off until the GL context is lost
+       (`tagpu_fx_glreset`). That is deliberate on the cheap side of a trade --
+       the mirror it guards is already allocated by then, so re-testing per beat
+       would buy back a memcpy and nothing else -- and `tagpu_feat.c` does the
+       same, which is the reason not to make this one file differ.
+       [Stated accurately after the G19e effects review, 2026-09-15.] */
     if (!s_mirrorAsked) { s_pubHave = 0; s_abFrame = 0; return; }
     memset(&s_pub, 0, sizeof s_pub);
     for (b = 0; b < NBUCKET; b++) { s_pub.vert[b] = s_verts[b]; s_pub.n[b] = s_nv[b]; }
@@ -1067,8 +1075,11 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total, int scaf)
     s_pub.ss = v->ss;
     /* THE A/B FLAG LIVES EXACTLY ONE FRAME (tagpu_feat.c has the argument). */
     s_pub.ab = s_abFrame; s_abFrame = 0;
-    /* THE STAMP. `s_pub.vert[]` point into `s_verts` and `s_pub.atlas` into the
-       GAF mirror, so the hand-over is this frame's or it is nothing. */
+    /* THE STAMP, AND WHAT IT ACTUALLY BOUNDS (tagpu_fx.h has it in full): not a
+       freed pointer -- `s_verts` and the GAF mirror are static and are never
+       freed -- but a STALE READ. `tagpu_native.c` calls this pass only `if
+       (nfx)`, so a frame that gathered nothing never publishes while the next
+       gather overwrites `s_verts` underneath the standing hand-over. */
     s_pub.frame = v->frame_counter;
     s_pubHave = total > 0 && !fogBad;
 }

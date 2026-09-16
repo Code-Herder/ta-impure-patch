@@ -100,14 +100,23 @@ int  tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
    can never be drawn twice; a frame this pass skipped hands over nothing and
    the Vulkan lane draws nothing, which is what the GL lane did.
 
-   THE POINTERS ARE THIS FILE'S AND THE ATLAS MODULE'S, and they are valid only
-   until the next frame rebuilds them -- which is why the hand-over carries the
-   FRAME it was published on and `tagpu_fx_handover` refuses any other. See
-   tagpu_terr.h for the failure that bound exists to stop; it is the same one
-   here, because `s_verts` and the GAF mirror are rebuilt and freed the same
-   way. Both lanes run on the RENDER THREAD and the whole of the native pass
-   happens earlier in the same iteration of render_ogl.c's loop than the
-   tagpu_vk_frame that consumes this; the game thread never touches them. */
+   THE POINTERS ARE THIS FILE'S AND THE ATLAS MODULE'S. Both lanes run on the
+   RENDER THREAD and the whole of the native pass happens earlier in the same
+   iteration of render_ogl.c's loop than the tagpu_vk_frame that consumes this,
+   so the game thread never touches them.
+
+   WHAT THE FRAME STAMP BOUNDS HERE IS STALENESS, NOT A DANGLING POINTER, and
+   that is worth saying exactly because tagpu_terr.h's version of this comment
+   says the opposite and was copied here before it was re-derived. None of these
+   pointers can dangle: `s_verts` is a fixed file-static array, `s_lhtRGB` is
+   another, and tagpu_gaf.c never frees a mirror -- it memsets it. What CAN
+   happen is worse than it sounds anyway: `tagpu_native.c` calls
+   `tagpu_fx_render` only `if (nfx)`, so a frame that gathered nothing never
+   reaches the publisher at all, while the NEXT gather has already overwritten
+   `s_verts`. A hand-over left standing would then be read with one frame's
+   counts over another frame's vertices. Hence the stamp, and hence the
+   unconditional clear on every path that does not publish.
+   [Rationale corrected by the G19e effects review, 2026-09-15.] */
 
 /* FLOATS PER VERTEX, AND THE ATTRIBUTE TABLE, DEFINED ONCE FOR BOTH LANES --
    tagpu_feat.h's rule and for the same reason: a vertex layout copied into a
@@ -117,6 +126,10 @@ int  tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
 #define TAGPU_FX_VST    9          /* x,y,enc, u,v, c,mode, wx,wz            */
 #define TAGPU_FX_NATTR  4
 #define TAGPU_FX_ATTRS  { {0,3,0}, {1,2,12}, {2,2,20}, {3,2,28} }
+/* VERTICES PER BUCKET PER FRAME -- the GL twin's own `MAXFXV`, shared so that
+   the Vulkan lane can re-check a handed-over count against the very number that
+   produced it rather than against a second copy of it. */
+#define TAGPU_FX_MAXV   32768
 
 /* THE FOUR BUCKETS, IN THE GL LANE'S OWN DRAW ORDER, which is the order they
    are concatenated into one vertex buffer in. They are not four draws of one
@@ -127,7 +140,9 @@ enum { TAGPU_FXB_UNDER = 0, TAGPU_FXB_LINES = 1,
        TAGPU_FXB_FLASH = 2, TAGPU_FXB_SPRITES = 3, TAGPU_FXB_N = 4 };
 
 typedef struct TAGPU_FXHAND {
-    /* THE FRAME THIS WAS PUBLISHED ON. `tagpu_fx_handover` refuses any other. */
+    /* THE FRAME THIS WAS PUBLISHED ON. `tagpu_fx_handover` refuses any other --
+       see the header above for what that bounds, which for this pass is a stale
+       READ of live buffers rather than a freed one. */
     unsigned frame;
 
     /* The geometry. `vert[b]` is bucket b's array and `n[b]` its vertex count,

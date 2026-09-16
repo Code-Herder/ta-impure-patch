@@ -1025,9 +1025,31 @@ int tagpu_vk_fx_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         return 0;
     }
     s_saidNoMirror = 0;
-    if (!h.pal || !h.fogLut) return 0;
+    if (!h.pal) return 0;
+    /* THE FOG LUT IS DECLARED AND NEVER SAMPLED BY THIS PASS, so a missing one
+       is not a reason to refuse a frame. `uFogLUT` exists in the fragment stage
+       because TAGPU_GLSL_FOG_UNIFORMS declares it for every pass, but the
+       effects shader takes the FOG_DISCARD branch and never the FOG_SHADE one
+       that reads it -- effects hide in grey rather than shade-remapping. And
+       `tagpu_native_foglut()` returns NULL until a fog frame has built the
+       table, so refusing on it stood the whole pass down, for the life of that
+       state, on an input nothing reads -- and silently, because unlike every
+       other refusal here it had no message. The descriptor still has to name a
+       real image, so the upload below sends zeros when there is nothing.
+       [FROM THE G19e EFFECTS REVIEW, 2026-09-15.] */
     for (b = 0; b < TAGPU_FXB_N; b++) {
-        if (h.n[b] < 0) return 0;
+        /* BOUNDED AGAINST THE PRODUCER'S OWN CAP, not merely against negatives.
+           `total` sizes the vertex allocation and the memcpy that fills it, and
+           this file's rule -- the one every pass here repeats -- is that a bound
+           living in the file that produced the number is a bound only while both
+           files are read together. TAGPU_FX_MAXV is the twin's MAXFXV, shared
+           through tagpu_fx.h so the two cannot drift.
+           [FROM THE G19e EFFECTS REVIEW, 2026-09-15.] */
+        if (h.n[b] < 0 || h.n[b] > TAGPU_FX_MAXV) {
+            plog(d, "fx: bucket %d reports %d vertices, outside 0..%d - nothing drawn",
+                 b, h.n[b], TAGPU_FX_MAXV);
+            return 0;
+        }
         total += h.n[b];
     }
     if (total < 1) return 0;
@@ -1110,7 +1132,8 @@ int tagpu_vk_fx_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
        UNDEFINED in, because the whole of each is re-sent every frame and there
        are therefore no contents to preserve and no layout to carry. */
     memcpy(s->smallMap + SMALL_PALOFF, h.pal, 256 * 4);
-    memcpy(s->smallMap + SMALL_LUTOFF, h.fogLut, 256);
+    if (h.fogLut) memcpy(s->smallMap + SMALL_LUTOFF, h.fogLut, 256);
+    else          memset(s->smallMap + SMALL_LUTOFF, 0, 256);   /* never sampled */
     /* THE LIGHT TABLE, RGB -> RGBA (item 3 of the file header). The alpha is
        never sampled -- the shader reads `.rgb` -- so it is set to 255 rather
        than left as whatever the buffer held, because a staging buffer that is

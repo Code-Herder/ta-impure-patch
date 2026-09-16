@@ -934,16 +934,57 @@ static int vk_load(void)
    and the bring-up worker; each destroys its own. */
 static VkInstance vk_instance(void)
 {
-    const char* iexts[2] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME };
+    const char* iexts[3] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
+                             NULL };
+    uint32_t niext = 2;
     VkApplicationInfo app = { VK_STRUCTURE_TYPE_APPLICATION_INFO };
     VkInstanceCreateInfo ici = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
     VkInstance inst = VK_NULL_HANDLE;
     VkResult r;
 
+    /* VK_KHR_get_physical_device_properties2, WHEN THE LOADER HAS IT, AND IT IS
+       A DEPENDENCY RATHER THAN A WANT. This instance asks for Vulkan 1.0, where
+       VK_EXT_line_rasterization -- which the effects pass needs for GL's own
+       line rule (G19e) -- depends on it, and chaining
+       VkPhysicalDeviceLineRasterizationFeaturesEXT into VkDeviceCreateInfo is
+       only defined with it enabled. The reference setup's loader tolerates the
+       omission, which is exactly why it went unnoticed: a stricter one refuses
+       vkCreateDevice, the retry there clears `lineok`, and every frame with a
+       laser in it is refused for the session ON HARDWARE THAT SUPPORTS THE
+       FEATURE. [FROM THE G19e EFFECTS REVIEW, 2026-09-15.]
+
+       ASKED FOR ONLY WHEN IT IS OFFERED: an instance extension the loader does
+       not have fails vkCreateInstance outright, which would cost the whole lane
+       to buy one pass's lines. Resolved at GLOBAL level (a NULL instance),
+       because this runs before there is one. */
+    {
+        PFN_vkEnumerateInstanceExtensionProperties eiep =
+            (PFN_vkEnumerateInstanceExtensionProperties)
+                s_gipa(NULL, "vkEnumerateInstanceExtensionProperties");
+        if (eiep) {
+            uint32_t ne = 0, k;
+            VkResult er = eiep(NULL, &ne, NULL);
+            VkExtensionProperties* ext = NULL;
+            if ((er == VK_SUCCESS || er == VK_INCOMPLETE) && ne)
+                ext = (VkExtensionProperties*)malloc((size_t)ne * sizeof *ext);
+            if (ext) {
+                er = eiep(NULL, &ne, ext);
+                if (er == VK_SUCCESS || er == VK_INCOMPLETE)
+                    for (k = 0; k < ne; k++)
+                        if (!strcmp(ext[k].extensionName,
+                                    VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME)) {
+                            iexts[niext++] = VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME;
+                            break;
+                        }
+                free(ext);
+            }
+        }
+    }
+
     app.pApplicationName = "Total Annihilation (impure)";
     app.apiVersion = VK_API_VERSION_1_0;
     ici.pApplicationInfo = &app;
-    ici.enabledExtensionCount = 2;
+    ici.enabledExtensionCount = niext;
     ici.ppEnabledExtensionNames = iexts;
     r = vkCreateInstance(&ici, NULL, &inst);
     if (r != VK_SUCCESS) { vklog("vkCreateInstance: %s (%d)", res_name(r), (int)r); return VK_NULL_HANDLE; }
@@ -1785,6 +1826,13 @@ static DWORD WINAPI up_worker(LPVOID arg)
                 er = vkEnumerateDeviceExtensionProperties(s_vk.pd, NULL, &ne, ext);
                 if (er == VK_SUCCESS || er == VK_INCOMPLETE)
                     for (k = 0; k < ne; k++) {
+                        /* BOUNDED, because the array is three long and two
+                           optional names can each append. The specification says
+                           a name is not enumerated twice; an ICD or layer that
+                           does it anyway would write one past this array, and a
+                           bound that costs one comparison is cheaper than
+                           trusting that. [G19e effects review, 2026-09-15.] */
+                        if (ndext >= (uint32_t)(sizeof dexts / sizeof dexts[0])) break;
                         if (!strcmp(ext[k].extensionName, "VK_KHR_maintenance1")) {
                             dexts[ndext++] = "VK_KHR_maintenance1";
                             s_vk.flipok = 1;
@@ -1803,8 +1851,48 @@ static DWORD WINAPI up_worker(LPVOID arg)
                            off rather than drawing those four pixels. */
                         if (!strcmp(ext[k].extensionName,
                                     VK_EXT_LINE_RASTERIZATION_EXTENSION_NAME)) {
-                            dexts[ndext++] = VK_EXT_LINE_RASTERIZATION_EXTENSION_NAME;
-                            s_vk.lineok = 1;
+                            /* THE DEVICE IS ASKED WHETHER IT HAS THE FEATURE,
+                               AND THAT ANSWER IS THE TEST. Offering the
+                               extension is not offering `bresenhamLines`, and
+                               inferring the feature from a vkCreateDevice that
+                               SUCCEEDED does not work: an ICD that does not
+                               consider the extension properly enabled is
+                               entitled to ignore the unrecognised pNext struct
+                               and return VK_SUCCESS, which is indistinguishable
+                               from having enabled it. The pass would then build
+                               its line pipeline with BRESENHAM chained on a
+                               device where the feature is off -- undefined
+                               behaviour rather than an error, and in practice
+                               the default line mode, which is the four-pixel
+                               superset G19e added this for. So: query, and on
+                               no query, no lines.
+                               [G19e EFFECTS REVIEW, 2026-09-15, both reviewers.] */
+                            PFN_vkGetPhysicalDeviceFeatures2KHR gpdf2 =
+                                (PFN_vkGetPhysicalDeviceFeatures2KHR)
+                                    s_gipa(s_vk.inst, "vkGetPhysicalDeviceFeatures2KHR");
+                            if (gpdf2) {
+                                VkPhysicalDeviceLineRasterizationFeaturesEXT q;
+                                VkPhysicalDeviceFeatures2 f2;
+                                memset(&q, 0, sizeof q);
+                                memset(&f2, 0, sizeof f2);
+                                q.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LINE_RASTERIZATION_FEATURES_EXT;
+                                f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+                                f2.pNext = &q;
+                                gpdf2(s_vk.pd, &f2);
+                                if (q.bresenhamLines) {
+                                    dexts[ndext++] = VK_EXT_LINE_RASTERIZATION_EXTENSION_NAME;
+                                    s_vk.lineok = 1;
+                                } else {
+                                    vklog("the device offers VK_EXT_line_rasterization but not "
+                                          "bresenhamLines - a ported pass that draws LINES will "
+                                          "stand down");
+                                }
+                            } else {
+                                vklog("VK_EXT_line_rasterization is offered but "
+                                      "vkGetPhysicalDeviceFeatures2KHR is not, so bresenhamLines "
+                                      "cannot be confirmed - a ported pass that draws LINES will "
+                                      "stand down rather than chain a mode the device may ignore");
+                            }
                         }
                     }
                 free(ext);
@@ -1821,13 +1909,11 @@ static DWORD WINAPI up_worker(LPVOID arg)
         qci.queueFamilyIndex = s_vk.qfam; qci.queueCount = 1; qci.pQueuePriorities = &prio;
         dci.queueCreateInfoCount = 1; dci.pQueueCreateInfos = &qci;
         dci.enabledExtensionCount = ndext; dci.ppEnabledExtensionNames = dexts;
-        /* THE FEATURE IS ENABLED, NOT MERELY THE EXTENSION, and that is what
-           makes this a check rather than a hope: enabling a feature the device
-           does not support MUST fail vkCreateDevice with
-           VK_ERROR_FEATURE_NOT_PRESENT, so the retry below is the whole test.
-           (The instance asks for Vulkan 1.0, where vkGetPhysicalDeviceFeatures2
-           is itself an extension; letting the create call answer costs nothing
-           and cannot disagree with what the device will actually do.) */
+        /* THE FEATURE IS ENABLED, NOT MERELY THE EXTENSION. Which feature bits
+           the device actually has was settled above, by asking it; this only
+           turns the one we want on. The retry below is a fallback, NOT the test
+           -- a vkCreateDevice that succeeds proves nothing about a pNext struct
+           an ICD may have ignored. [Corrected by the G19e effects review.] */
         if (s_vk.lineok) {
             lrf.bresenhamLines = VK_TRUE;
             lrf.pNext = (void*)dci.pNext;

@@ -4235,10 +4235,10 @@ matters, because the link is not byte-reproducible (§2.30).
 
 | | |
 |---|---|
-| **triangles only** (`fx.on=nolines`), `fx-mix`, four runs | **0 of 786 432** every run, **6685 / 5327 / 4553 / 12 507** non-black each side |
-| **all four buckets**, `fx-mix`, four runs | **0 of 786 432** every run, **6746 / 35 707 / 7978 / 5239** each side |
-| **all four buckets**, `fx-lasers`, four runs | **3 px** on three (ink 932 / 911 / 1950), **0** on the fourth (ink 2741) |
-| **lines only**, `fx-lasers`, six runs | **0** on three (ink 26 / 26 / 52), **3 px** on three (ink 100, the same bolt each time) |
+| **triangles only** (`fx.on=nolines`), `fx-mix`, three runs | **0 of 786 432** every run, **5704 / 4061 / 23 932** non-black each side |
+| **all four buckets**, `fx-mix`, three runs | **0 / 2 / 0**, ink 5008 / 3970 / 5812 each side |
+| **all four buckets**, `fx-lasers`, three runs | **3 / 3 / 2**, ink 897 / 900 / 2835 each side |
+| **lines only**, `fx-lasers`, four runs | **3 / 0 / 0 / 6**, ink 100 / 50 / 26 / 152 each side |
 | constraint 4 | **0 of 630 784** against `main` with `tagpu_vk.off`, over a floor measured at **0** — see below, because the floor is the part that needed care |
 
 So **everything this pass draws as triangles is exact** — the weapon sprites, the explosion
@@ -4273,10 +4273,22 @@ before them.
 **exactly one extra fragment at the END of each segment** (4 px on the fixture, GL 126 ink against
 Vulkan 130, with *no* GL-only pixel anywhere). GL's non-antialiased lines follow the **diamond-exit
 rule** and Vulkan's default mode does not; `VK_LINE_RASTERIZATION_MODE_BRESENHAM` does. The seam
-now asks for `VK_EXT_line_rasterization` and enables **`bresenhamLines`** — the *feature*, not
-merely the extension, so `vkCreateDevice` refusing it with `VK_ERROR_FEATURE_NOT_PRESENT` **is**
-the test — and publishes it to passes as `TAGPU_VKPASS::lineok`, the same shape as `flipok`. A pass
-with line vertices and no `lineok` refuses the frame. That took 4 px to 0.
+now asks for `VK_EXT_line_rasterization` and enables **`bresenhamLines`**, publishing it to passes
+as `TAGPU_VKPASS::lineok`, the same shape as `flipok`. A pass with line vertices and no `lineok`
+refuses the frame. That took 4 px to 0.
+
+**The test for it is a QUERY, and this file said otherwise until the landing review.** It claimed
+that enabling the feature made `vkCreateDevice` the test, because a device that lacks a requested
+feature must fail with `VK_ERROR_FEATURE_NOT_PRESENT`. That does not hold here, and **both**
+reviewers found it independently: this instance is Vulkan 1.0 and did not enable
+`VK_KHR_get_physical_device_properties2`, which `VK_EXT_line_rasterization` depends on — so an ICD
+that does not consider the extension properly enabled is entitled to **ignore the unrecognised
+`pNext` struct and return `VK_SUCCESS`**, which is indistinguishable from having enabled it. The
+pass would then build its line pipeline with `BRESENHAM` chained on a device where the feature is
+off: undefined behaviour rather than an error, and in practice the default mode — the four-pixel
+superset this was added to remove, back again with nothing in the log. The seam now **asks the
+instance for that dependency when the loader offers it, and asks the DEVICE for the feature bit**
+through `vkGetPhysicalDeviceFeatures2KHR` before setting `lineok` at all; no query, no lines.
 
 **OPEN, AND IT IS STRUCTURAL: THE Y FLIP AND EXACT LINE RASTERISATION ARE IN TENSION.** What is
 left with Bresenham on both sides is a **one-row shift of a whole segment at a single column**,
@@ -4301,11 +4313,21 @@ lines inherits it:
   a tie, **and only at a tie**, the two lanes choose opposite pixels.
 
 That is why it is rare (one tie in fifty columns on this bolt, none at all on the shorter ones)
-and why it is perfectly reproducible when it happens. **There is no fix inside the current
+and why it is perfectly reproducible when it happens.
+
+**THE BAR IS ONE PIXEL PER TIED SEGMENT, NOT A FIXED THREE**, and the table above is what that
+looks like. A segment that hits a tie loses one pixel and gains one: **2 px** for a bolt drawn as a
+single line, **3 px** for one drawn as two parallel lines (the pixel between the lost and gained
+rows also changes which of the bolt's two colours wins there), and they ADD — **6 px** was measured
+on a frame with two tied bolts. So the honest statement of the bar is *a couple of pixels per laser
+that happens to land halfway*, with **6 of 786 432 the worst seen** across every run taken here, and
+not a constant. A frame full of lasers has more segments and therefore more chances to tie; nothing
+measured here bounds it at six. **There is no fix inside the current
 design**: pre-mirroring the line geometry, or flipping in the shader, would mean the Vulkan lane
 draws from something other than what the GL lane drew, which is the one thing the oracle forbids.
-**The owner's decision, 2026-09-15, is to ship it as a stated bar** — 3 px of 786 432 on the worst
-geometry found, on a bolt that moves every frame — rather than refuse line frames. It is the
+**The owner's decision, 2026-09-15, is to ship it as a stated bar** — a couple of pixels per tied
+laser, 6 of 786 432 at the worst measured, on bolts that move every frame — rather than refuse line
+frames. It is the
 first time this lane claims a bar where an exact oracle *does* exist, and it is recorded here
 because the unit pass's wireframe bucket (`tagpu_posedraw.c`'s `TAGPU_PB_WIRE`) and the hi-res
 path draw lines too and will inherit exactly this.
@@ -4365,7 +4387,9 @@ is exactly the kind of thing that is invisible until a picture is wrong.
 DLL against `main`'s (`e39b762`), both with `tagpu_vk.off` and the full arm set, on
 `selbox-facings` at 1024×768, pointer parked in the side panel, sim paused — **on two independent
 pairs**, and **0 for every other pairing taken**, including two separate relaunches of the same
-binary.
+binary. **Re-measured on the binary the landing review's fixes produced and still 0**, which is the
+whole table's rule here: those fixes changed device creation, so every figure above was taken
+again on the binary that would land rather than carried over.
 
 **The artefact that looked like a floor is the engine's own `PAUSED` banner, and it BLINKS.** Two
 paused instances captured at different moments in that blink differ by the whole banner:
