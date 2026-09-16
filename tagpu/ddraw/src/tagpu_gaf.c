@@ -104,6 +104,11 @@ static void twin_mips(TAGPU_GAFATLAS* a);   /* below; job_clear_dest wants it */
 static void rgb_mirror_zeroed(TAGPU_GAFATLAS* a)
 {
     if (!a->mirrorRgb) return;
+    /* AND IT RUNS WHETHER OR NOT A LANE IS CURRENTLY ASKING, which is 16 MB on
+       a recycle for nobody. That is not waste to be optimised away: the mirror
+       is deliberately never freed (tagpu_gaf.h), so a lane that re-arms later
+       finds it already correct -- and it can only do that if the zeroing
+       happened when the twin was zeroed, not when someone next looked. */
     memset(a->mirrorRgb, 0, (size_t)a->dim * a->dim * 4);
     /* the ROWS are kept: they are the high-water mark of what a consumer has
        been handed, and it has to be handed the zeros over exactly those */
@@ -471,6 +476,16 @@ void tagpu_gaf_atlas_mirror_rgb_step(TAGPU_GAFATLAS* a)
         a->mirrorRgbRows = 0;
         a->mirrorRgbFailed = 1;
         a->mirrorRgbSerial++;
+        /* and the FBO with it: the latch means nothing will ever ask again, so
+           holding a name for the process's life buys nothing. Deleted while its
+           context is still current, which is what separates this from
+           `tagpu_gaf_atlas_lost` -- there the context is gone and a delete
+           would either do nothing or destroy a live object of the NEW one. */
+        glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)fbo0);
+        glDeleteFramebuffers(1, &a->mirrorRgbFbo);
+        a->mirrorRgbFbo = 0;
+        glPixelStorei(GL_PACK_ALIGNMENT, pack);
+        return;
     }
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)fbo0);

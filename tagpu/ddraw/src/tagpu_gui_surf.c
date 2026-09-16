@@ -938,6 +938,7 @@ static unsigned char twin_sprite(TWIN* t, const TAGPU_GAFENT* e, const TAGPU_PUB
    mirror below -- this is drawn above it, and records what it resolved. */
 static void mir_string(const TAGPU_PUBOP* o, const short cell[][4], int n,
                        int x0, int top, unsigned char col);
+static void mir_atlas_seen(void);       /* with the mirror below              */
 
 static void twin_string(TWIN* t, const TAGPU_PUBOP* o)
 {
@@ -1215,6 +1216,21 @@ static int       s_mNSDraw;            /* the sharp layer's quads this frame   *
 static TAGPU_GUISDRAW s_mSDraw[TAGPU_GUI_SDRAW_MAX];
 static int       s_mStrAny;            /* a string op was recorded this frame  */
 static unsigned  s_mStrGen;            /* ...at this glyph-atlas generation     */
+/* THE SAME QUESTION ABOUT THE UI ATLAS, and it has been open since landing 1.
+   A sprite's record carries the atlas rect this lane RESOLVED, and the cursor
+   quad carries one too -- both valid only for the generation they were read in.
+   `tagpu_gaf_atlas_put` runs INSIDE the drain, so a sprite that fills the atlas
+   recycles it (`atlas_drop`, `a->gen++`) in the middle of the very present
+   whose earlier sprites are already recorded, and `sharp_cursor` can do it
+   again afterwards. Landing 2 built exactly this guard for the glyph atlas and
+   the sprite atlas was left without one.
+   `s_mAtAny` is CLEARED BY A RECORDED RESET rather than only by `mir_begin`,
+   and that is not tidiness: `twins_reset` recycles the atlas, so EVERY reset
+   moves the generation -- a guard that did not forget the ops before one would
+   lose every reseed present and answer the reseed with another.
+   [FOUND 2026-09-16, the landing-4 review.] */
+static int       s_mAtAny;             /* a resolved atlas rect is in the record */
+static unsigned  s_mAtGen;             /* ...at this UI-atlas generation         */
 static int       s_mTaken = 0;         /* ...and has been taken               */
 static unsigned  s_mFrame = 0;
 
@@ -1230,6 +1246,7 @@ static void mir_begin(void)
 {
     s_mNOps = 0; s_mALen = 0; s_mOther = 0; s_mLayer = 0;
     s_mStrAny = 0; s_mStrGen = 0;
+    s_mAtAny = 0; s_mAtGen = 0;
     s_mNSDraw = 0;
     s_abFrame = 0;          /* the claim never outlives the frame that made it */
     s_mirRec = s_mirWant;
@@ -1250,6 +1267,15 @@ static TAGPU_GUIOP* mir_op(void)
     }
     memset(&s_mOps[s_mNOps], 0, sizeof s_mOps[0]);
     return &s_mOps[s_mNOps++];
+}
+
+/* A RESOLVED UI-ATLAS RECT HAS GONE INTO THE RECORD at the generation it is
+   valid for. `mir_finish` compares and loses the frame if the atlas moved
+   under it before the present ended. */
+static void mir_atlas_seen(void)
+{
+    if (!s_mirRec || s_mAtAny) return;
+    s_mAtAny = 1; s_mAtGen = s_atlas.gen;
 }
 
 /* copy `n` bytes into our arena and answer the offset, or abandon the frame */
@@ -1290,6 +1316,7 @@ static void mir_string(const TAGPU_PUBOP* o, const short cell[][4], int n,
     m = mir_op();
     if (!m) return;
     m->kind = TAGPU_GUIOP_STRING;
+
     m->surf = o->surf;
     /* ONLY `TAGPU_GUICOL_DST` IS EVER SET HERE, and that matters: `STR_FS`
        writes `oCol = vec4(0.0)` and has no restored branch at all, so a string
@@ -1382,6 +1409,13 @@ static void drain(void)
         case PK_FRAME:  s_presented = o->surf; break;
         case PK_RESET:  twins_reset(); s_skipToReset = 0;
             { TAGPU_GUIOP* m = mir_op(); if (m) m->kind = TAGPU_GUIOP_RESET; }
+            /* AND EVERY RESOLVED ATLAS RECT BEFORE THIS POINT STOPS MATTERING.
+               The consumer drops its whole store on this op, so a sprite
+               recorded ahead of it drew into a twin that no longer exists --
+               and `twins_reset` has just recycled the atlas, so without this
+               line the generation check below would lose every present that
+               carries a reset, which is every present that answers a reseed. */
+            s_mAtAny = 0; s_mAtGen = 0;
             break;
         case PK_SEED:
             t = twin_make(o->surf, o->w, o->h);
@@ -1453,6 +1487,7 @@ static void drain(void)
                      answer differently after a repack and the A/B would be
                      comparing two atlases. */
                   m->u0 = e->u0; m->v0 = e->v0; m->u1 = e->u1; m->v1 = e->v1;
+                  mir_atlas_seen();
               } }
             break; }
         case PK_STRING:
@@ -1733,6 +1768,11 @@ static void sharp_cursor(const TAGPU_FRAME* f)
     /* THE RESOLVED RECT, and this is the one that could not be re-derived:
        `dx`/`dy` above came from `mouse_last_client()` on THIS thread at THIS
        instant, and the Vulkan lane runs later in the same iteration. */
+    /* THE CURSOR'S QUAD CARRIES A RESOLVED ATLAS RECT TOO, and `sharp_cursor`
+       runs AFTER the drain -- so its own `tagpu_gaf_atlas_get` can recycle the
+       atlas when nothing in the drain did, and this is the only thing that
+       would notice on a frame with a cursor and no sprites. */
+    mir_atlas_seen();
     mir_sdraw(TAGPU_GUISK_CURSOR, (float)x0, (float)y0,
               (float)(x0 + w), (float)(y0 + h),
               e->u0, e->v0, e->u1, e->v1, NULL, (int)e->ck);
@@ -2529,7 +2569,13 @@ static void mir_finish(const TAGPU_FRAME* f)
        the same frame. Both publish `lost`, which the consumer answers with the
        behind state. [FOUND 2026-09-16, verifying the landing-2 review.] */
     if (!s_mirWant) { s_mHave = 0; return; }
-    if (!s_mirRec || (s_mStrAny && s_mStrGen != tagpu_text_glyph_gen())) {
+    /* THE TWO ATLASES THE RECORD CARRIES RESOLVED RECTS INTO, checked the same
+       way and for the same reason: a rect is valid only for the generation it
+       was read in, and both of these can move in the middle of a present --
+       the glyph atlas when a string repacks it, the UI atlas when a sprite
+       fills it or `twins_reset` recycles it. */
+    if (!s_mirRec || (s_mStrAny && s_mStrGen != tagpu_text_glyph_gen()) ||
+        (s_mAtAny && s_mAtGen != s_atlas.gen)) {
         memset(&s_mHand, 0, sizeof s_mHand);
         s_mHand.frame = f->frame_counter;
         s_mHand.lost = 1;

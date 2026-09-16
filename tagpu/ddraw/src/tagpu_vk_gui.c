@@ -64,13 +64,24 @@
    and asks once, and nothing of the GL lane's is touched. Sized for the case
    that has to work, degrading predictably past it.
    (It was TW_MAX + 1 until landing 2, whose string op made the glyph atlas a
-   second non-twin view and left the old size one short. Landing 4 made the
-   claim a PAIR -- binding 41 stopped being the dummy -- so one image can now
-   need two sets: sprites that sample the restored atlas and sprites that do
-   not are two combinations of the same UI atlas, and a copy from a twin is a
-   third and fourth. Two more, on the same reasoning as before and with the
-   same standing caveat that this is a size.) */
-#define SET_MAX     (TW_MAX + 4)
+   second non-twin view and left the old size one short.)
+
+   LANDING 4 DOUBLED THE COPY DIMENSION AND `+ 4` DID NOT COVER IT. The claim
+   became a PAIR, so a copy SOURCE can be claimed twice in one frame -- once
+   with its colour view for a coloured destination, once with the dummy for an
+   uncoloured one, and `uSrcHasCol` is `src->rgb && t->rgb`, which is a property
+   of the DESTINATION. The sprite dimension doubles the same way (restored and
+   unrestored sprites in one frame are two pairs of the same atlas). So the
+   honest worst case is `2 * TW_MAX` copy pairs + 2 sprite pairs + 1 glyph, and
+   that is what this now is. The first version of this landing wrote `+ 4`,
+   which is the answer to the question the OLD key asked.
+   [FOUND 2026-09-16 -- BOTH landing-4 reviewers, independently. Eighth such
+   pair on this lane.]
+   It is still a SIZE and not a bound, for the reason above it: `tw_drop`
+   deliberately leaves a claim standing, so a present that churns its store can
+   exceed any fixed count. What is by construction is the consequence --
+   `set_claim` answers 0 deterministically and the replay stands down. */
+#define SET_MAX     (2 * TW_MAX + 3)
 /* objects waiting for every slot to turn over once before they are destroyed.
    THE LANE ALREADY HAD THE ANSWER AND THIS PASS DID NOT USE IT: the seam waits
    `fence[slot]` and nothing more, so `slots - 1` earlier submissions are still
@@ -1776,8 +1787,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        rows past the shelf name no entry and cost only their bandwidth. */
     if (h.atlasRgb && h.atlasDim > 0 &&
         (!s_arHave || s_arSerial != h.atlasRgbSerial ||
-         s_arDim != h.atlasDim || s_arRows < h.atlasRgbRows)) {
-        arUp = 1; stNeed += (VkDeviceSize)h.atlasDim * h.atlasRgbRows * 4;
+         s_arDim != h.atlasDim || s_arRows != h.atlasRgbRows)) {
+        /* +4 for the alignment `arOff` takes below */
+        arUp = 1; stNeed += (VkDeviceSize)h.atlasDim * h.atlasRgbRows * 4 + 4;
     }
     if (h.pal && (!s_palHave || s_palSerial != h.palSerial)) { palUp = 1; stNeed += 256 * 4; }
     /* THE MINIMAP'S TWO, WIDENED RGB8 -> RGBA8 ON THE WAY IN, so what they
@@ -1883,8 +1895,30 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                           &s_arImg, &s_arMem, &s_arView)) goto refuse;
             s_arDim = h.atlasDim;
             s_arNeedClear = 1;
+        } else if (h.atlasRgbRows < s_arRows) {
+            /* THE MIRROR'S ROWS WENT BACKWARDS, so the rows above the new count
+               are the PREVIOUS fill's colours in an image nothing is about to
+               overwrite -- and `prepare_dest` has cleared the GL twin whole, so
+               over there they are alpha 0. It is the same defect the creation
+               clear closed for UNDEFINED memory, still open for STALE memory,
+               and the 166 827 px that fix measured is itself the evidence that
+               rows above the count get sampled: `tagpu_gaf_atlas_put` runs
+               inside the drain, AFTER the read-back, so a cell can legitimately
+               land above `atlasRgbRows` on the very next frame.
+               `mirrorRgbRows` drops to 0 in exactly two places -- a GL context
+               loss and the step's own "the twin is gone" branch -- and neither
+               changes `atlasDim`, so the re-make above cannot catch it.
+               [FOUND 2026-09-16, the landing-4 review.] */
+            s_arNeedClear = 1;
         }
-        arOff = stOff;
+        /* FOUR-BYTE ALIGNED, because this one is an RGBA8 destination and
+           `VkBufferImageCopy::bufferOffset` must be a multiple of the texel
+           size. It is a multiple today only because `ATLAS_DIM` is 2048 and the
+           block before it copies one byte a texel; the bound this file applies
+           admits any `atlasDim` up to `ATLAS_MAXDIM`, so the alignment belongs
+           here rather than in that coincidence. */
+        arOff = align_up(stOff, 4);
+        stOff = arOff;
         memcpy(s->stMap + stOff, h.atlasRgb, (size_t)h.atlasDim * h.atlasRgbRows * 4);
         stOff += (VkDeviceSize)h.atlasDim * h.atlasRgbRows * 4;
     }
@@ -2004,7 +2038,11 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
         s_arHave = 1; s_arSerial = h.atlasRgbSerial;
-        if (h.atlasRgbRows > s_arRows) s_arRows = h.atlasRgbRows;
+        /* EXACTLY WHAT IS VALID IN THE IMAGE, not a high-water mark. A
+           high-water is what let the stale rows above sit there unnoticed:
+           it recorded that the rows had ONCE been written and never that they
+           still said the right thing. */
+        s_arRows = h.atlasRgbRows;
     }
     if (glUp) {
         img_barrier(cb, s_glImg,
