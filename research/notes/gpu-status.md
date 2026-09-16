@@ -5248,6 +5248,41 @@ normalised them: a 16-byte block at binding 32 each, and samplers at 40..42 for 
 **kind** rather than by draw — a frame's up-to-16 quads sample at most three distinct combinations
 of images — which is three sets a slot instead of sixteen.
 
+**What the landing review found, and the one that could not be measured.** Eight findings across
+two reviewers, and **both led with the sampler independently** — the seventh such pair on this lane:
+
+* **THE MINIMAP PICTURE IS MINIFIED `LINEAR` IN GL AND WAS POINT-SAMPLED HERE.** This module had one
+  sampler and a comment saying every texture it reads is nearest. That was true until this landing:
+  `MM_FS`'s own comment explains why the picture is the exception — the destination box is smaller
+  than the 252-px picture at every `k` it draws at, so every fragment takes the *minification*
+  filter, and a downsample wants one. GL blends four texels there; a nearest sampler takes one. A
+  second sampler is the whole fix, and the A/B could not see the bug for the reason above.
+* **THE ENGINE'S MINIMAP PAIR WAS ALIASED PACKET MEMORY, NOT COPIED.** The comment claimed the
+  hand-over's frame rule covered it. It does not: the packet's rule is **stricter**, and
+  `tagpu_packet_frame_end` gives it back *before* `tagpu_vk_frame` runs in the same iteration — so
+  the consumer read it after its owner released it. `tagpu_packet.poison` fires at that give-back,
+  which means the lever built to catch exactly this kind of mistake could not see it either. It is
+  copied now, as `eng`, `mmPic`, the atlas and the palette all already were. Its **dimensions come
+  from the same read as its bytes**, so the two cannot disagree.
+* **A refusal that still consumed its input.** The minimap guard cleared `compose` but left
+  `needMM` set, so the two cases it names — a null pointer, a dimension past the cap — were fed
+  straight into the staging path below, which reads `w * h * 3` bytes from the very pointer it
+  refused.
+* **`h.nsdraw` sized two allocations before its own validation gated anything**, which is this
+  file's own stated rule ("a handed-over count never sizes an allocation") being broken.
+* **`s_palView` was the one view bound with no `Have` guard**, so a null handle could reach
+  `vkUpdateDescriptorSets` on the frames before the palette first resolves.
+* **`s_sharpInk` was never reset** where `s_sharpOn` is reset on every call, so a session that once
+  had coverage and then took an early return published `sharpOn = 1` with no quads for ever — which
+  this pass reads as "the GL lane has coverage I did not produce" and stops compositing.
+* Two smaller: the layer was recorded **above** the composite gate, so it was drawn and discarded on
+  every frame the composite was stood down on (every frame of a Classic++ session); and the two new
+  refusals said nothing in the log.
+
+One was mine and not theirs: publishing the engine pair through `mir_bytes` made a **latent**
+staleness reachable — `mir_finish` had already taken `arena` and `alen` further up, so a realloc
+there would have left every op's `aoff` pointing into freed heap. Re-published after the copy.
+
 **An overflowing list is a `compose = 0` and NOT the behind state**, and that distinction is the
 one the twins established the hard way: a sharp-layer quad mutates nothing that outlives its frame,
 so a frame the pass cannot draw is *one frame*, never a store out of step. Nothing is asked of the
@@ -5342,6 +5377,19 @@ at `k = 1`, which it would otherwise leave to the engine. Same fixture, same dis
 21×23 cursor and a minimap, would differ by thousands of pixels and not by none. `drawn=` and `mm=`
 are what say both lanes had something to compare.
 
+**AND ONE PATH INSIDE THE MINIMAP IS STILL NOT COVERED BY IT, WHICH THE REVIEW FOUND AND THE
+COUNTER CONFIRMS.** `MM_FS` has two outcomes: where the engine's 3×3 neighbourhood is *fogged or
+overdrawn* it takes the engine's own texel through the palette, and only where that neighbourhood
+is **clean** does it sample our `uPic` picture. `fog=13251/13356` and `13250/13356` on the two runs
+above — **99.2 % of the engine's minimap is fogged**, so the clean test almost never passes and the
+picture is sampled almost nowhere. `200v200`, whose units are spread across the map, reads
+`13137/13356` and is no better. So these figures test the **mask** thoroughly and say **nothing**
+about the picture.
+
+That matters because the picture is exactly where the two lanes' *filters* differ — see the sampler
+finding below. **A fixture with a substantially explored map is what would close it**, and none of
+the ones here is that.
+
 **So `norestore` is the only lever left**, and with it the pass composites in an ordinary session —
 which through landings 1 and 2 it never did: landing 1 stood down on every frame with text on
 screen, and landing 2 on every frame with a cursor on screen, which is every frame of real play.
@@ -5391,6 +5439,11 @@ detail rather than an engine one. Named rather than silently carried.
   landing is three fixtures, not an inventory.
 * ~~The cursor, the minimap and the sharp layer~~ **CLOSED by landing 3.** `norestore` is the only
   lever left.
+* **THE MINIMAP'S PICTURE PATH (`uPic`), and with it the only LINEAR sampler in this module.** The
+  GL texture is `MIN_FILTER = GL_LINEAR, MAG_FILTER = GL_NEAREST` and the Vulkan lane now matches
+  it with a second sampler — but no fixture here reaches that branch of `MM_FS` (99.2 % fogged), so
+  the match is **correct by construction and unmeasured**. It is the same category as §2.33's
+  Classic++ refusal. Closing it needs a fixture with an explored map.
 * **The sharp layer's THIRD client, the sharp string path**, is not exercised by any fixture here:
   `SHARP_TEXT` draws at device resolution where `twin_string` stamps into the twin, and nothing in
   `selbox-slope` takes it. The quads would cross like any other, but that is an argument and not a
