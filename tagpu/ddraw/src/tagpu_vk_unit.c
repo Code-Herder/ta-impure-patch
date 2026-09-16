@@ -1504,6 +1504,28 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             src = j ? tagpu_posebake_mat_mirror((const TAGPU_PBMAT*)r->mat, serial, &nv)
                     : tagpu_posebake_geom_mirror((const TAGPU_PBGEOM*)r->geom, serial, &nv);
             if (!src || nv != r->nvert) break;
+            bytes = (VkDeviceSize)nv * st;
+            /* THE COPY IS BOUNDED BY THE ALLOCATION IT GOES INTO, and not by
+               the pre-pass that sized it. `stageNeed` above counts the
+               `vb_find` misses as the table stands BEFORE a byte is uploaded;
+               an eviction inside this loop can turn a hit into a miss for a
+               unit further down the list, and that unit's bytes were never
+               reserved. The pre-pass cannot be made exact without replaying
+               the eviction it is trying to budget for, so the bound is taken
+               here against the only number that is a fact -- the mapped
+               capacity.
+
+               IT IS TAKEN BEFORE `vb_slot`, NOT AFTER, and that placement is
+               the whole of it: `vb_slot` RETIRES the buffer it evicts and
+               memsets the entry before handing it back, so a `break` below it
+               would leave `g` or `m` pointing at a zeroed entry -- non-NULL,
+               so the `if (!g || !m) continue` below lets the unit through, and
+               `w->geom` would be VK_NULL_HANDLE on a recorded draw. Breaking
+               here consumes nothing: the pointer is still NULL, the unit is
+               not drawn, and the every-unit-or-none gate turns that into a
+               refused frame. [FOUND 2026-09-16, the landing review; the
+               placement, in the round after it.] */
+            if (stageOff + bytes > s->vscap) break;
             *e = vb_slot(d, d->frame);
             if (!*e) {
                 if (!s_saidVbFull) {
@@ -1514,20 +1536,6 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                 }
                 break;
             }
-            bytes = (VkDeviceSize)nv * st;
-            /* THE COPY IS BOUNDED BY THE ALLOCATION IT GOES INTO, and not by
-               the pre-pass that sized it. `stageNeed` above counts the
-               `vb_find` misses as the table stands BEFORE a byte is uploaded;
-               an eviction inside this loop can turn a hit into a miss for a
-               unit further down the list, and that unit's bytes were never
-               reserved. The pre-pass cannot be made exact without replaying
-               the eviction it is trying to budget for, so the bound is taken
-               here against the only number that is a fact -- the mapped
-               capacity -- and a unit that would not fit is simply not drawn,
-               which the every-unit-or-none gate below turns into a refused
-               frame rather than a memcpy past the end of host-visible memory.
-               [FOUND 2026-09-16, the landing review, by both reviewers.] */
-            if (stageOff + bytes > s->vscap) break;
             if (!mk_buffer(d, bytes,
                            VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
