@@ -107,10 +107,18 @@ typedef struct TAGPU_GUIQ {
        `gafnoplane` can move, and both being 0 over a session is what says the
        2 MB is not a guess that happens to hold. */
     volatile unsigned gafhigh, gaflost;
+    /* frames the DECODER refused (unreadable or malformed), counted apart from
+       `gaflost` because that one is a statement about the scratch's BOUND and
+       this one is not. They shared a counter until the landing review read the
+       declaration against its two call sites. */
+    volatile unsigned gafbaddec;
     /* sprite ops that published their box because a RESET cleared the seen table
-       between the blit and the flip. Free -- the same publish re-seeds every
-       surface whole -- and counted apart from `gafnoplane` so the one number
-       that means a real failure keeps meaning it. */
+       between the blit and the flip. CHEAP, not free: each costs a PK_PIXELS
+       box in the arena and one window without its atlas identity -- in a publish
+       that is already re-seeding every surface whole, so nothing is on screen
+       that would not have been, and it self-heals next window. Counted apart
+       from `gafnoplane` so the one number that means a real failure keeps
+       meaning it. ["free" corrected by the landing review.] */
     volatile unsigned gafreseed;
     /* the OP_TEXT branch KEEPS its generation gate and its own counter. The
        font object is still dereferenced at publish (`gfont_slot`,
@@ -138,6 +146,7 @@ enum {
     TAGPU_GUI_WHY_COPY,       /* a copy from a source with no twin                                       */
     TAGPU_GUI_WHY_STALL,      /* the consumer came back after a stall: what was dropped is re-seeded    */
     TAGPU_GUI_WHY_STRING,     /* a string op stamped nothing (an unreadable font): the text is missing  */
+    TAGPU_GUI_WHY_LEVEL,      /* the level changed: the UI atlas keys on frame ADDRESSES and they recycle */
     TAGPU_GUI_WHY_N
 };
 /* a consumer that has taken nothing for this long while ops were queued is not

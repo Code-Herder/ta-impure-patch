@@ -103,7 +103,17 @@ static void gaf_box(void* e, int kind)
            runs up to CENSUS_MS later, after a screen pop may have freed it.
            Only the sprite kinds resolve a frame at publish, so only they pay
            it. See `gaf_capture`. */
-        if (s_lastOp->kind == OP_GAF && s_lastOp->fw && s_lastOp->fh &&
+        s_lastOp->fcomp = fr[0x09]; s_lastOp->fsub = fr[0x0A]; s_lastOp->fsubn = fr[0x0B];
+        /* ONLY WHEN SOMETHING WILL CONSUME IT. `publish` returns at once when
+           `!g_gui_draw`, and a census-less, draw-less window is thrown away
+           unread (`s_nops = 0`) -- so without this test the decode ran inside
+           the engine's blit for every new frame, every window, for a queue
+           nobody would read, and with the seen table never filling every blit
+           was a first sight. `after_alloc` below already gates on exactly this
+           pair, which is the precedent.
+           [FOUND 2026-09-16 by BOTH landing reviewers, independently.] */
+        if ((s_census || g_gui_draw) &&
+            s_lastOp->kind == OP_GAF && s_lastOp->fw && s_lastOp->fh &&
             s_lastOp->fw <= TAGPU_GAF_DECMAX && s_lastOp->fh <= TAGPU_GAF_DECMAX)
             gaf_capture(s_lastOp, fr);       /* publish's own test, so the
                                                 scratch is never spent on a
