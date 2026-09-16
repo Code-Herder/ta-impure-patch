@@ -648,17 +648,27 @@ static int build(const TAGPU_VKPASS* d)
    the caller draws nothing this frame and tries again; 0 = THE DEVICE REFUSED,
    which is a different answer and has to be, or a refusal would read for ever
    as a retire that never clears. */
+/* Hand the mesh to the retire and keep nothing. 0 when there was nothing to
+   hand over or a retire is already outstanding, in which case the caller simply
+   tries again next frame -- this is a give-back, never a correctness step. */
+static int mesh_retire(const TAGPU_VKPASS* d)
+{
+    if (!s_mesh.vbuf && !s_mesh.ibuf) return 0;
+    if (s_mesh.oldV || s_mesh.oldI) return 0;    /* one retire at a time */
+    s_mesh.oldV = s_mesh.vbuf; s_mesh.oldVM = s_mesh.vmem;
+    s_mesh.oldI = s_mesh.ibuf; s_mesh.oldIM = s_mesh.imem;
+    s_mesh.vbuf = VK_NULL_HANDLE; s_mesh.vmem = VK_NULL_HANDLE;
+    s_mesh.ibuf = VK_NULL_HANDLE; s_mesh.imem = VK_NULL_HANDLE;
+    s_mesh.pending = d->slots >= 32 ? 0xFFFFFFFFu : ((1u << d->slots) - 1u);
+    s_mesh.vbytes = s_mesh.ibytes = 0; s_mesh.serial = 0; s_mesh.have = 0;
+    return 1;
+}
+
 static int mesh_resize(const TAGPU_VKPASS* d, VkDeviceSize vbytes, VkDeviceSize ibytes)
 {
     if (s_mesh.vbuf && s_mesh.vbytes == vbytes && s_mesh.ibytes == ibytes) return 1;
     if (s_mesh.oldV || s_mesh.oldI) return -1;   /* one retire at a time */
-    if (s_mesh.vbuf || s_mesh.ibuf) {
-        s_mesh.oldV = s_mesh.vbuf; s_mesh.oldVM = s_mesh.vmem;
-        s_mesh.oldI = s_mesh.ibuf; s_mesh.oldIM = s_mesh.imem;
-        s_mesh.vbuf = VK_NULL_HANDLE; s_mesh.vmem = VK_NULL_HANDLE;
-        s_mesh.ibuf = VK_NULL_HANDLE; s_mesh.imem = VK_NULL_HANDLE;
-        s_mesh.pending = d->slots >= 32 ? 0xFFFFFFFFu : ((1u << d->slots) - 1u);
-    }
+    mesh_retire(d);
     s_mesh.vbytes = s_mesh.ibytes = 0; s_mesh.serial = 0; s_mesh.have = 0;
     if (!mk_buffer(d, vbytes,
                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -856,6 +866,15 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
         }
     }
 
+    /* NOTHING IS KEPT ONCE THERE IS NOTHING TO DRAW -- the file header's own
+       rule, and the empty-map path was the one place it was not applied. The
+       caster mesh is the largest thing this pass owns (10 MB on Town & Country,
+       19 on Two Continents) and `terrainshadow` is a LIVE knob, so a map that
+       drew hills and then stopped held the whole pair for the rest of the
+       session. Through the retire rather than a destroy, because other slots'
+       submitted command buffers may still name the buffers.
+       [FROM THE G19e SHADOW REVIEW, 2026-09-15.] */
+    if (!casters) mesh_retire(d);
     vbytes = casters ? (VkDeviceSize)h.hnv * 3u * sizeof(float) : 0;
     ibytes = casters ? (VkDeviceSize)h.hni * sizeof(unsigned) : 0;
     mr = casters ? mesh_resize(d, vbytes, ibytes) : 1;
@@ -963,9 +982,20 @@ int tagpu_vk_shadow_ready(unsigned frame)
     return s_liveHave && s_liveFrame == frame;
 }
 
-VkImageView tagpu_vk_shadow_view(uint32_t slot)
+/* THE FRAME IS PART OF THE QUESTION, not an argument about call order.
+   `s_liveHave` is one flag for the whole pass rather than one per slot, and the
+   only thing that made this safe was that the seam calls this pass's `prepare`
+   first and the one consumer asks with the current slot. That is an enumeration
+   of today's call sites, not a bound -- and the UNIT pass is about to become a
+   second consumer. Asking for the frame makes a stale view impossible to
+   obtain: a caller out of step gets VK_NULL_HANDLE, binds its own dummy, and
+   `tagpu_vk_shadow_ready` refuses it the draw anyway.
+   [FROM THE G19e SHADOW REVIEW, 2026-09-15 -- flagged as a latent trap for the
+   next pass rather than a bug today, and closed by construction.] */
+VkImageView tagpu_vk_shadow_view(unsigned frame, uint32_t slot)
 {
-    if (!s_liveHave || slot >= TAGPU_VK_SLOTS) return VK_NULL_HANDLE;
+    if (!s_liveHave || s_liveFrame != frame || slot >= TAGPU_VK_SLOTS)
+        return VK_NULL_HANDLE;
     return s_slot[slot].view;
 }
 

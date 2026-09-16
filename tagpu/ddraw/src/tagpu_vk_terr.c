@@ -716,6 +716,16 @@ static int build_samplers(const TAGPU_VKPASS* d)
             if (!(fp.optimalTilingFeatures &
                   VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) ok = 0;
         }
+        /* THIS IS DELIBERATELY STRICTER THAN THE SPECIFICATION AND SAYS SO.
+           VUID-vkCmdDraw-magFilter-04553 conditions the FILTER_LINEAR format
+           feature on `compareEnable == VK_FALSE`, so a depth-COMPARE sampler is
+           arguably entitled to LINEAR without it -- which would make this gate
+           refuse Classic++ shadow frames on a device where the PCF is legal.
+           The reference device offers the bit, so nothing is lost here today,
+           and being wrong the other way is undefined behaviour rather than a
+           stand-down. Revisit with a validation layer running, which this lane
+           still does not have. [G19e SHADOW REVIEW, 2026-09-15 -- raised as
+           PLAUSIBLE on a spec reading; kept, with the reason written down.] */
         s_cmpLinear = ok && mapfmt != VK_FORMAT_UNDEFINED;
         if (ok) { sci.magFilter = VK_FILTER_LINEAR; sci.minFilter = VK_FILTER_LINEAR; }
         else
@@ -1007,7 +1017,7 @@ static void shared_bind(const TAGPU_VKPASS* d, uint32_t slot)
        With no map this frame it is the 1x1 dummy, exactly as before: the
        descriptor must be valid whether or not anything samples it. */
     {
-        VkImageView sv = tagpu_vk_shadow_view(slot);
+        VkImageView sv = tagpu_vk_shadow_view(d->frame, slot);
         if (!sv) sv = s_shView;
         ii[3].sampler = s_sampCmp; ii[3].imageView = sv;
         ii[3].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -1460,7 +1470,6 @@ void tagpu_vk_terr_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     VkBuffer bufs[2];
     VkDeviceSize offs[2] = { 0, 0 };
 
-    (void)d;
     if (s_state != ST_READY || !s_drawThis) return;
     s_drawThis = 0;
 
@@ -1483,10 +1492,12 @@ void tagpu_vk_terr_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        a dropped frame. [CORRECTED BY THE G19e RE-REVIEW, 2026-09-15.] */
     if (slot >= TAGPU_VK_SLOTS ||
         s_slot[slot].boundAtlas != s_atlas.view ||
-        s_slot[slot].boundHeight != (s_height.view ? s_height.view : s_atlas.view) ||
-        s_slot[slot].boundShadow !=
-            (tagpu_vk_shadow_view(slot) ? tagpu_vk_shadow_view(slot) : s_shView))
+        s_slot[slot].boundHeight != (s_height.view ? s_height.view : s_atlas.view))
         return;
+    {
+        VkImageView sv = tagpu_vk_shadow_view(d->frame, slot);
+        if (s_slot[slot].boundShadow != (sv ? sv : s_shView)) return;
+    }
 
     /* THE FLIP, AND THE DEPTH RANGE, AND THEY ARE BOTH THE WHOLE OF THEMSELVES.
        y starts at the bottom and the height is negative, so clip space is

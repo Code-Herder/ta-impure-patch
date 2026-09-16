@@ -439,6 +439,24 @@ void tagpu_shadow_hills(void)
        used, so the Vulkan lane draws the same indices rather than re-deriving
        the row clamp (tagpu_terr.h) */
     if (!tagpu_terr_hills_draw(s_rows0, s_rows1, &th)) return;
+    /* IT DREW; WHETHER WE HAVE A COPY OF WHAT IT DREW IS A SEPARATE QUESTION,
+       AND CONFLATING THE TWO IS A SILENT WRONG PICTURE.
+       `tagpu_terr_hills_draw` returns 1 whenever it issued the draw and fills
+       `out` only when the mirror is there, so "drew, no mirror" arrives here as
+       a zeroed struct -- byte-identical to "the hills did not draw", which the
+       Vulkan pass reads as an EMPTY MAP and reports as complete. The terrain
+       pass would then sample an all-1.0 map while the GL twin's holds the whole
+       heightfield, and the A/B would call that parity.
+       It is reachable: `build_hills`' out-of-memory exit returns before it
+       touches s_hMeshW/s_hMeshH or the GL buffers, so a same-grid mesh from an
+       earlier build keeps drawing while `s_hMeshNoMirror` stops ensure_height
+       ever asking again.
+       So the heightfield joins the census: a caster drawn that this hand-over
+       carries no copy of is exactly what `otherCasters` means, and the refusal
+       the design already has is the right answer. That makes the census cover
+       all FOUR kinds of caster rather than three.
+       [BOTH G19e SHADOW REVIEWERS, 2026-09-15, independently.] */
+    if (!th.v || !th.idx || th.indexCount == 0) { s_otherCasters++; return; }
     s_pub.hv = th.v;   s_pub.hnv = th.nv;
     s_pub.hi = th.idx; s_pub.hni = th.ni;
     s_pub.hillsSerial = th.serial;

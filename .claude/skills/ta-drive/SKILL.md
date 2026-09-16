@@ -2098,6 +2098,14 @@ rm -f $G/tagpu_terr.ab $G/tagpu_terr_*.ppm; sleep 2; touch $G/tagpu_terr.ab; sle
   down with it. Both recover the moment it leaves view; the refusal is per-frame, not latched.
 - **Without `native.on` there are no unit casters at all**, which is why the recipe above does not
   arm it. Arm it to test the refusal, not to take the measurement.
+- **`vk: shadow: the GL map holds N caster(s)` also fires when the HEIGHTFIELD has no CPU mirror**,
+  not only for units: `tagpu_terr_hills_draw` draws whether or not the mirror is there, and a draw
+  with no copy of it is counted as a caster like any other. The symptom of the alternative — which
+  is what the landing review caught before it shipped — would have been an A/B that reads 0 px on a
+  frame where the Vulkan map is empty and the GL one is not.
+- **The terrain pass has a THIRD way to stand down**: a device that will not filter a depth format
+  linearly, which makes the 16-tap PCF impossible to reproduce (`terr: … compare sampler could not
+  be made LINEAR`). It does not arise on the reference setup.
 - **The 1 px that is left is the LAMBERT, not the shadow.** With Classic++ `light=1` the terrain
   pass reads **1 px of 786 432, one level**, deterministic for a given camera; `light=0` reads 0,
   and `shadows=0` reads the same 1 px at the same pixel. It is a stated bar of the terrain pass

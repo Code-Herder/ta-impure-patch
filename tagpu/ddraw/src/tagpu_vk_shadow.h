@@ -45,10 +45,15 @@ int  tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t
 int  tagpu_vk_shadow_ready(unsigned frame);
 
 /* This slot's depth image, in SHADER_READ_ONLY_OPTIMAL, or VK_NULL_HANDLE.
-   Valid for the frame `prepare` was called with and that slot only; a consumer
-   writes it into its own descriptor set during its own `prepare`, which is the
-   one instant the seam's fence proves that set is not in flight. */
-VkImageView tagpu_vk_shadow_view(uint32_t slot);
+   A consumer writes it into its own descriptor set during its own `prepare`,
+   which is the one instant the seam's fence proves that set is not in flight.
+
+   ASK WITH YOUR OWN FRAME, as for `tagpu_vk_shadow_ready`: the map behind this
+   view is one image per slot and one `live` flag for the pass, so a caller out
+   of step with `prepare` would otherwise be handed an earlier frame's. Wrong
+   frame or wrong slot gives VK_NULL_HANDLE, and the caller names its own dummy
+   -- which it must have anyway for a frame with no map. */
+VkImageView tagpu_vk_shadow_view(unsigned frame, uint32_t slot);
 
 /* THE FORMAT THE MAP IS IN, asked of the device and cached. A consumer needs
    it for two things and must not guess at either: whether its COMPARE sampler

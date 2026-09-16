@@ -4438,19 +4438,30 @@ the GL twin already gates on, and it is already recorded there. `tagpu_vk_shadow
 `thread-split.allow` and may never need to be (Phase G standing constraint 1); the list is
 **unchanged** at the 34 entries `thread-split-check.sh` reports.
 
-**MEASURED 2026-09-15** under system wine on the reference setup's 4070, `ss=1`, 1024×768, on the
-binary this landing builds and with the tree clean at that commit.
+**MEASURED 2026-09-15** under system wine on the reference setup's 4070, `ss=1`, 1024×768, **on
+the binary the landing review's fixes produced** — every figure below was taken twice, once before
+the review and once after, and the second table is the one that stands. (The first run's ink counts
+were a few hundred higher because the camera was a pinned one rather than the scenario's own; the
+verdicts were the same.)
 
 | | |
 |---|---|
-| **a heavily shadowed frame** — `static-terrain`, Classic++ `assets=0 shadows=1 terrainshadow=1 shadowsun=225,8`, where the map shadows **517 270** of the frame's pixels | **0 of 786 432**, **630 574** non-black each side, reproduced |
+| **a heavily shadowed frame** — `static-terrain`, Classic++ `assets=0 shadows=1 terrainshadow=1 shadowsun=225,8`, where turning the map off moves **529 130** of the frame's pixels | **0 of 786 432**, **630 458** non-black each side, reproduced |
 | the same, **`light=0`** (the lambert off, the map still on) | **0 of 786 432** |
-| an **empty** map — `terrainshadow=0`, which is the Classic++ **default** | **1 of 786 432**, and it is the lambert's (below) |
+| an **empty** map — `terrainshadow=0`, which is the Classic++ **default** | **2 of 786 432**, and they are the lambert's (below) |
 | the default sun `225,40`, `terrainshadow=1` | **2 of 786 432**, same pixel every run, three runs |
-| the control: `shadows=0` (no map at all) | **the same 1–2 px**, at the same pixel |
+| the control: `shadows=0` (no map at all) | **the same 2 px**, at the same pixel |
 | the control: `light=0 shadows=0` | **0 of 786 432** |
-| the **refusal** with one posed caster on screen | fires, says so once, the terrain pass stands down with it, and both recover to **0 px** when the caster leaves view |
+| the **refusal** with one posed caster on screen | fires, says so once, the terrain pass stands down with it, and both recover to **0 px** (630 574 ink) when the caster leaves view |
 | constraint 4 | **0 of 630 784** against `main` (`2e552d1`) with `tagpu_vk.off`, on **two** pairings, over a cross-launch floor measured at **0** |
+
+**AND THE CASTER-MESH RETIRE HAS ACTUALLY FIRED**, which is the first time a retire in this lane
+has: §2.30's shared-image one is still argued rather than run, because only a map change moves it
+and that brings the whole lane down. This one is moved by a **live knob** — `terrainshadow` back to
+0 gives the buffers back through the retire, and turning it on again logs a second
+`caster mesh uploaded`. The **free** is what the next frame proves, not the upload: `mesh_resize`
+returns −1 while `oldV` is still set, so a pass that drew 0 px with full ink after the cycle is a
+pass whose `pending` bitmask reached 0 and whose `kill_buffer` ran.
 
 So the depth map itself is **exact**: its geometry, its stored depth values, the 16 Poisson taps on
 the raw depths, the blocker search, the bilinear PCF through the compare sampler and the
@@ -4566,13 +4577,24 @@ The GL map is drawn from **four** kinds of geometry: the native 3DO stream, the 
 depth twin, the replacement meshes, and the heightfield. Only the heightfield has a CPU mirror on
 this side of the seam today; the other three are the **unit pass's** to port.
 
-So `tagpu_shadow.c` **counts** the casters it drew that the hand-over carries no copy of — the
-native stream counts itself inside `tagpu_shadow_unit`, and `tagpu_native.c` reports the posed and
-hi-res ones the same way both loops draw them (`!castSkip`) — and a non-zero count is a **refusal**
-rather than a best effort. An OVER-count is the safe direction: it refuses a frame the lane could
-have drawn, where an under-count would draw a different picture from its own oracle. Measured: one
-posed caster on screen refuses the map, the terrain pass stands down with it and says so, and both
-come back to 0 px the moment the caster leaves view.
+So `tagpu_shadow.c` **counts** the casters it drew that the hand-over carries no copy of, and a
+non-zero count is a **refusal** rather than a best effort. An OVER-count is the safe direction: it
+refuses a frame the lane could have drawn, where an under-count would draw a different picture from
+its own oracle. Measured: one posed caster on screen refuses the map, the terrain pass stands down
+with it and says so, and both come back to 0 px the moment the caster leaves view.
+
+**The census covers all FOUR kinds, and it did not at first — both reviewers led with that,
+independently.** The native stream counts itself inside `tagpu_shadow_unit`; `tagpu_native.c`
+reports the posed and hi-res ones the same way both loops draw them (`!castSkip`); and **the
+heightfield counts itself too**, because `tagpu_terr_hills_draw` returns 1 whenever it issued the
+draw and fills its out-parameter only when the mirror is there. "Drew, no mirror" therefore arrived
+at the hand-over as a zeroed struct — **byte-identical to "the hills did not draw"** — which this
+pass reads as an empty map and reports as complete, so the terrain pass would sample an all-1.0 map
+while the GL twin's held the whole heightfield, and the A/B would call that parity. It is
+reachable: `build_hills`' out-of-memory exit returns before it touches `s_hMeshW`/`s_hMeshH` or the
+GL buffers, so a same-grid mesh from an earlier build keeps drawing while `s_hMeshNoMirror` stops
+`ensure_height` ever asking again. `tagpu_shadow_hills` now treats that as one more caster with no
+copy, which is the refusal the design already had.
 
 **An empty map is not refused.** With `terrainshadow` at its default 0 and no unit caster in view
 the GL twin draws nothing into its depth texture either, and the clear at 1.0 **is** the map —
@@ -4596,6 +4618,15 @@ the consumer, so the two files agree by construction instead of by both happenin
 candidates in the same order. On the reference setup it is
 `VK_FORMAT_X8_D24_UNORM_PACK32` — `GL_DEPTH_COMPONENT24` exactly — and linear filtering is
 available.
+
+**So the terrain pass has a third way to stand down**, beside the restored atlas and a map this
+frame's shadow pass could not draw: a device that will not filter a depth format linearly. **And
+that gate is deliberately stricter than the specification**, which the review raised and which is
+written down rather than acted on: VUID-vkCmdDraw-magFilter-04553 conditions the `FILTER_LINEAR`
+format feature on `compareEnable == VK_FALSE`, so a depth-*compare* sampler is arguably entitled to
+LINEAR without it. The reference device offers the bit either way, so nothing is lost here; being
+wrong in the other direction is undefined behaviour rather than a stand-down, and this lane still
+has no validation layer to settle it with. Revisit it with one running.
 
 #### The lambert is 1 px, and it is not this landing's
 
@@ -4648,8 +4679,9 @@ turned a vacuous pass into a measurement.
   refuse a slot its resources. The lane's oldest open hole, argued and reviewed rather than run.
 * **The resolution change**, i.e. the per-slot rebuild when the zoom octave moves `res`. It needs
   `zoom.on` armed and a zoom-out past the octave boundary, and this landing's fixture is at 1×.
-* **The caster-mesh retire**, for the same reason §2.30's image retire has never fired: the only
-  thing that changes the mesh is a map change, and that brings the whole lane down and back up.
+* ~~The caster-mesh retire~~ — **covered**, see the table: `terrainshadow` is a live knob, so the
+  retire fires and completes without a map change. §2.30's shared-image retire is still the one
+  nothing has watched execute.
 * The validation layer, still, and no device but the 4070.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
