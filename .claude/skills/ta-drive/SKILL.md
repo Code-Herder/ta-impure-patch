@@ -2031,10 +2031,54 @@ rm -f $G/tagpu_terr.ab $G/tagpu_terr_*.ppm; sleep 2; touch $G/tagpu_terr.ab; sle
   at that map's size (Anteer Strait 2176×3774 for 7051 tiles against Two Continents' 2176×2720 for
   5062). Useful as a **second fixture**: the pass reads 0 px there too.
 
+**The effects pass's A/B (G19e), and it has a bucket switch the others do not:**
+
+```bash
+tools/tacli arm <i> native.on fx.on ss.off 'vk.on=color=0,0,0'
+tools/tacli scenario load <i> fx-lasers --restart --res 1024x768 --maxfps 0   # or fx-mix
+sleep 13
+G=<main checkout>/tagpu/instances/<i>/gamedir
+rm -f $G/tagpu_fx.ab $G/tagpu_fx_*.ppm; sleep 2; touch $G/tagpu_fx.ab; sleep 9
+<main checkout>/.venv-undither/bin/python tools/vk-ab.py $G --pass fx
+```
+
+- **`native.on` is required** — `tagpu_fx_render` is called from inside the native pass, so with
+  only `fx.on` there is no gather and no capture, on either lane.
+- **`fx.on` TAKES TOKENS, AND THEY ARE HOW YOU ISOLATE A BUCKET.** `nolines` leaves the sprites,
+  flashes and explosions; `nosprites noexpl nodebris nomodels` leaves the lasers alone. Both lanes
+  read the same tokens, so either one is a valid A/B — and isolating is the only way to tell a
+  line finding from a sprite finding. Read the heartbeat to see what you actually got:
+  `grep -a '^fx: proj' $G/tagpu.log` prints `lines=N sprites=N flashq=N models=N`.
+- **THE COMBAT BURNS OUT.** `fx-lasers` fires for tens of seconds and then everything is dead;
+  `fx: proj=0 … lines=0 sprites=0` in the heartbeat means there is nothing to capture, and the
+  lever correctly waits rather than capturing an empty frame — `vk-ab.py` then reports the missing
+  half. **Reload the scenario before each capture** rather than firing the lever repeatedly at a
+  finished battle.
+- **The lever waits for a frame that has effects**, by construction: the GL twin returns before the
+  capture block when all four buckets are empty, so `tagpu_fx.ab` stays armed until something is
+  actually drawn. That is why a capture can appear several seconds after the `touch`.
+- **THE LASERS ARE NOT ALWAYS 0 px, AND THAT IS KNOWN AND SHIPPED.** A line whose exact path lands
+  *exactly* halfway between two pixel rows is a tie, and the Y flip makes the two lanes break it
+  opposite ways — measured at **3 px of 786 432** on one `fx-lasers` bolt, deterministic, 49 of its
+  50 columns identical ([gpu-status](gpu-status.html) §2.31). **Do not go hunting for it as a new
+  bug.** Triangle buckets are 0 px and stay 0 px; if a *triangle* run is non-zero, that is real.
+
 - **To measure constraint 4** — that the GL lane did not move — arm `vk.off` on two instances, one
   running the tree's DLL and one the previous one, load the same static fixture, park the pointer
   in the same place (`keys <i> mouse:60,400`, the side panel, so its animating sprite is outside a
   viewport crop), pause with `tab tab`, and diff two `glshot`s over the world viewport only.
+- **THE `PAUSED` BANNER BLINKS, AND IT IS WORTH ~2 800 px.** Measured 2026-09-15 on
+  `selbox-facings` at 1024x768: two paused instances captured at different moments in that blink
+  differ by the whole word — **2 747 px on one pair, 2 933 on another, at x 502..636, y 372..400**
+  — while **every pairing reads 0 outside that rect**, including two separate relaunches of the
+  same binary. So **exclude the banner rect from the diff, or catch both halves in the same blink
+  phase**; loading the two instances together does *not* help, because the blink is free-running.
+  **And crop the region and LOOK at it before explaining a floor.** The first pair here read 0,
+  the second read 2 747, and the obvious inference — tick skew, two sims frozen at different
+  ticks — was wrong; rendering the 180x60 crop showed the word `PAUSED` in one capture and bare
+  grass in the other, which took a minute and saved a fix for a problem that did not exist. This
+  is a *different* artefact from the two-state 71-px sliver at x 1017..1023 (the frame's right
+  edge); both are reasons the floor is measured rather than quoted.
   **Build the previous DLL with `git archive <rev> | tar -x -C <dir>`** and symlink `wineprefix`,
   `tagpu/gamedir` and `unditherer/models` into it: `tacli` pins the DLL of the tree it is run
   from, purely by path, so that tree's `tools/tacli` launches the old binary with no other setup.

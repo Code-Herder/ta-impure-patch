@@ -4217,6 +4217,182 @@ the rework rests on timing — the drain is a real `vkDeviceWaitIdle`, the retir
 fences, and no `IsBadReadPtr`, sleep or retry was added. The gaps were missing bounds, not weak
 ones.
 
+### 2.31 The effects pass, drawn by Vulkan (`tagpu_vk_fx.c`, `tagpu_fx.c`'s four buckets) — Phase G, G19e
+
+The **fourth world pass**, the first that needs **more than one pipeline for one shader**, and
+the first whose parity is not closed by construction — because it is the first that draws
+**lines**.
+
+**No engine address, and no new one was read to build it** — the pass takes everything through
+`tagpu_fx_handover`, so there is nothing for [exe reverse engineering](exe-reverse-engineering.html)
+in this landing and nothing for the hook map above. `tagpu_vk_fx.c` is not on
+`thread-split.allow` and may never need to be (Phase G standing constraint 1); the list is
+**unchanged** at the 34 entries `thread-split-check.sh` reports.
+
+**MEASURED 2026-09-15** under system wine on the reference setup's 4070, `ss=1`, 1024×768, on the
+binary this landing builds and with the tree clean at that commit — which is the check that
+matters, because the link is not byte-reproducible (§2.30).
+
+| | |
+|---|---|
+| **triangles only** (`fx.on=nolines`), `fx-mix`, four runs | **0 of 786 432** every run, **6685 / 5327 / 4553 / 12 507** non-black each side |
+| **all four buckets**, `fx-mix`, four runs | **0 of 786 432** every run, **6746 / 35 707 / 7978 / 5239** each side |
+| **all four buckets**, `fx-lasers`, four runs | **3 px** on three (ink 932 / 911 / 1950), **0** on the fourth (ink 2741) |
+| **lines only**, `fx-lasers`, six runs | **0** on three (ink 26 / 26 / 52), **3 px** on three (ink 100, the same bolt each time) |
+| constraint 4 | **0 of 630 784** against `main` with `tagpu_vk.off`, over a floor measured at **0** — see below, because the floor is the part that needed care |
+
+So **everything this pass draws as triangles is exact** — the weapon sprites, the explosion
+flashes with their additive blending, the debris, all ten particle layers, the palette lookups,
+the fog and the depth test, at **35 707 ink pixels a side** on the busiest frame measured. What is
+not exact is the **line** bucket, and the rest of this section is why.
+
+#### Three pipelines for one shader, and why that is new
+
+The GL twin draws four buckets with one program and three pieces of fixed-function state
+(`tagpu_fx.c`, the draw at the end of `tagpu_fx_render`):
+
+| bucket | topology | blend | what it is |
+|---|---|---|---|
+| `B_UNDER` | `TRIANGLES` | `ONE / ONE_MINUS_SRC_ALPHA` | particle layers 0..6 — wake foam, feature smoke, trail puffs, nanolathe |
+| `B_LINES` | **`LINES`** | the same | lasers (RenderType 0) and lightning (RenderType 7) |
+| `B_FLASH` | `TRIANGLES` | **`ONE / ONE`, additive** | the LHT explosion flash |
+| `B_SPRITES` | `TRIANGLES` | back to the first | weapon sprites, explosions, particle layers 7..9 |
+
+Topology and blend are both baked into a `VkPipeline`, so that is **three objects off one
+layout** — the feature pass needed two for its depth-write modes and this is the same shape one
+step further. `VK_EXT_extended_dynamic_state3` would make the blend dynamic and buy exactly one
+object; it is not worth an extension. Depth is **tested and never written** for all three: the
+native pass leaves `GL_LESS` and `GL_DEPTH_TEST` standing around this draw and the twin brackets
+itself in `glDepthMask(GL_FALSE)`, so effects occlude nothing and are occluded by everything drawn
+before them.
+
+#### The line rule, found twice — one fixed and one open
+
+**FIXED, and it is a named difference with a named fix.** Vulkan's default
+`lineRasterizationMode` drew a **strict superset** of the twin: all 126 of its pixels plus
+**exactly one extra fragment at the END of each segment** (4 px on the fixture, GL 126 ink against
+Vulkan 130, with *no* GL-only pixel anywhere). GL's non-antialiased lines follow the **diamond-exit
+rule** and Vulkan's default mode does not; `VK_LINE_RASTERIZATION_MODE_BRESENHAM` does. The seam
+now asks for `VK_EXT_line_rasterization` and enables **`bresenhamLines`** — the *feature*, not
+merely the extension, so `vkCreateDevice` refusing it with `VK_ERROR_FEATURE_NOT_PRESENT` **is**
+the test — and publishes it to passes as `TAGPU_VKPASS::lineok`, the same shape as `flipok`. A pass
+with line vertices and no `lineok` refuses the frame. That took 4 px to 0.
+
+**OPEN, AND IT IS STRUCTURAL: THE Y FLIP AND EXACT LINE RASTERISATION ARE IN TENSION.** What is
+left with Bresenham on both sides is a **one-row shift of a whole segment at a single column**,
+deterministic to the pixel — the same 3 px on every run of the same geometry. The measured case:
+one laser bolt, **x 553..602 (dx 49) by y 410..430 (dy 20)**, two parallel lines of different
+palette colours; **49 of its 50 columns are identical**, and at x 578 the GL pair sits at rows
+{420, 421} and the Vulkan pair at {419, 420}.
+
+The reason is the flip, and it is worth stating carefully because every remaining pass that draws
+lines inherits it:
+
+* A **triangle** is filled by a coverage test each pixel centre passes or fails on its own. That
+  test is symmetric under reflection, so mirroring the raster grid mirrors the result exactly —
+  which is why every world pass so far reads 0 and why the triangle buckets above do.
+* A **line** has no inside. It is *walked*: step a column, round to the nearer row, step again.
+  Where the exact line passes **exactly halfway** between two rows the walk needs a tie-break, and
+  the rule — in both APIs — rounds toward larger `y` **in the space the rasteriser is working in**.
+* The Vulkan lane rasterises the frame **mirrored** (the negative viewport height, which is how
+  every ported shader keeps GL's clip convention without a source edit). Mirroring is exact: a
+  pixel centre maps to a pixel centre and an endpoint to an endpoint, nothing lands between. But
+  "round toward larger `y`" in mirrored space is "round toward **smaller** `y`" in the world. So at
+  a tie, **and only at a tie**, the two lanes choose opposite pixels.
+
+That is why it is rare (one tie in fifty columns on this bolt, none at all on the shorter ones)
+and why it is perfectly reproducible when it happens. **There is no fix inside the current
+design**: pre-mirroring the line geometry, or flipping in the shader, would mean the Vulkan lane
+draws from something other than what the GL lane drew, which is the one thing the oracle forbids.
+**The owner's decision, 2026-09-15, is to ship it as a stated bar** — 3 px of 786 432 on the worst
+geometry found, on a bolt that moves every frame — rather than refuse line frames. It is the
+first time this lane claims a bar where an exact oracle *does* exist, and it is recorded here
+because the unit pass's wireframe bucket (`tagpu_posedraw.c`'s `TAGPU_PB_WIRE`) and the hi-res
+path draw lines too and will inherit exactly this.
+
+#### A three-byte format Vulkan does not have
+
+The flash light table is `glTexImage2D(GL_RGB8, 32, 1, …)` on the GL side, and
+**`VK_FORMAT_R8G8B8_UNORM` is optional and not supported for sampled images** on the device this
+lane is measured on. The 96 bytes are therefore **expanded to 32 × 1 RGBA8** on the way into the
+staging buffer, alpha 255; the shader reads `.rgb`, so the byte it gains is never looked at.
+`build_sampler` asks for every format this pass samples **by name** and refuses the pass rather
+than discover it later — a format the GL lane takes for granted and the Vulkan lane has to ask for
+is exactly the kind of thing that is invisible until a picture is wrong.
+
+#### It is not a second implementation of the pass
+
+| | where it comes from |
+|---|---|
+| the vertices | `s_verts[4]` — the four bucket arrays the GL gather filled and the GL upload took, handed over **exactly once**, concatenated in the twin's own draw order |
+| the vertex layout | `TAGPU_FX_ATTRS` in `tagpu_fx.h`, **one table both lanes build from** — the GL VAO and the `VkVertexInputAttributeDescription` array |
+| the uniforms | the numbers the GL draw passed to `uGame`, `uZoom`, `uZoomC`, `uDepthScale`, `uFog`, `uFogOrg`, `uFogDim`, `uScafP`, `uSS`, `uZoomF`, `uZoomCF`, `uRestored` |
+| the sprite atlas | `tagpu_gaf.c`'s **CPU mirror** of the fx atlas, §2.29's mechanism, asked for on the arm beat only while the Vulkan lane is armed |
+| the palette | `tagpu_pal_live()`, the buffer `s_palTex` is uploaded from |
+| the flash light table | `s_lhtRGB`, the very buffer `glTexImage2D` was handed, moved to file scope for this |
+| the fog grid | a **copy of** the packet's grid, taken at publish time into a buffer the publishing module owns — never the packet's pointer, whose declared lifetime ends at `tagpu_packet_frame_end()` |
+| the fog shade LUT | `tagpu_native_foglut()` |
+| the shader | `inc/spirv/tagpu_fx.spv.h`, generated from the GL strings by §2.25 |
+
+#### What it does not do
+
+* **THE SCAFFOLD TEST.** `uScafOn` is 1 for the `B_UNDER` draw alone when the G12a scene-depth
+  scaffold is armed, and the fragment shader then samples `uScaf` — **which is another pass's
+  texture**. `tagpu_vk_scaffold.c` holds those texels in an image it owns privately and
+  `tagpu_vk_scaffold.h` exposes no view; sharing one image between two passes is a mechanism with
+  an ordering contract of its own and this landing does not build it. A frame whose twin had the
+  test on is **refused**, said once. The scaffold is a debug overlay and is not in the default arm
+  set, so the measured configuration is unaffected — but **the unit pass and the hi-res path
+  sample the same texture** (`tagpu_native.c:3834, 3994, 4245, 4303`), so whichever landing ports
+  those has to answer it, and the answer should be chosen once for all three.
+* **Classic++'s restored atlas**, as in every world pass: no CPU mirror, so a frame whose twin
+  reported `uRestored` 1 draws nothing and says so once.
+* **The effects MODELS.** RenderType 1/3/6 projectiles are emitted as 3DO nodes and drawn by
+  `tagpu_native.c`'s unit pipeline, not by `tagpu_fx.c`'s own program — so they are the unit
+  pass's to port, and the A/B's clear erases them from the GL half exactly as it erases the
+  terrain.
+* **`ss` 2.** `glLineWidth(ss)` makes the twin's lasers two pixels wide, and a Vulkan `lineWidth`
+  other than 1.0 needs the `wideLines` device feature, which is the seam's to enable and it does
+  not. A frame with line vertices at `ss != 1` is refused, naming the cause. (The A/B needs `ss=1`
+  anyway: the GL capture is the supersampled FBO and the Vulkan one is the client rect.)
+* **The validation layer**, still — none is installed in the wine prefixes, so the barriers and
+  stage masks are argued from the specification and a correct picture.
+* **The owed teardown**, still unfired on any instance, as in every pass since the rework.
+
+#### Constraint 4, measured — and the floor artefact is the PAUSED banner, blinking
+
+**0 differing pixels of 630 784** in the world viewport (`vp=(128,32,896x704)`), this landing's
+DLL against `main`'s (`e39b762`), both with `tagpu_vk.off` and the full arm set, on
+`selbox-facings` at 1024×768, pointer parked in the side panel, sim paused — **on two independent
+pairs**, and **0 for every other pairing taken**, including two separate relaunches of the same
+binary.
+
+**The artefact that looked like a floor is the engine's own `PAUSED` banner, and it BLINKS.** Two
+paused instances captured at different moments in that blink differ by the whole banner:
+**2 747 px** on one pair, **2 933 px** on another, in a band at **x 502..636, y 372..400** — which
+is exactly where the word sits at this resolution. Every one of those pixels is inside it and
+**none is outside**:
+
+| pair | differing px | outside the banner |
+|---|---|---|
+| landing vs `main`, pair 1 | 0 | **0** |
+| landing vs `main`, pair 2 | 2 747 | **0** |
+| landing vs landing (same binary, two instances) | 0 | **0** |
+| landing vs itself, separately relaunched | 2 933 | **0** |
+| `main` vs landing, separately relaunched | 2 933 | **0** |
+
+So the GL lane did not move, and the way to see that is to **exclude the banner rect or catch both
+halves in the same blink phase** — not to load and pause the two instances together, which is what
+this section said until the crop was actually looked at. Loading together changes nothing: the
+blink is free-running, and a simultaneous pair lands in phase or out of it by luck. *(The first
+pair here read 0 and the inference drawn from it — tick skew, fixed by pausing together — was
+wrong; cropping the 180×60 region and rendering it showed the word `PAUSED` in one capture and
+bare grass in the other. §2.28's rule to measure the floor every time is what surfaced it, and
+looking at the picture rather than the number is what explained it.)*
+
+This is a **different artefact from §2.28's two-state 71-px sliver** at x 1017..1023, y 236..277,
+which is at the frame's right edge and is not the banner. Both are reasons the floor is measured
+rather than quoted.
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out
