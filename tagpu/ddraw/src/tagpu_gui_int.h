@@ -107,6 +107,11 @@ typedef struct TAGPU_GUIQ {
        `gafnoplane` can move, and both being 0 over a session is what says the
        2 MB is not a guess that happens to hold. */
     volatile unsigned gafhigh, gaflost;
+    /* sprite ops that published their box because a RESET cleared the seen table
+       between the blit and the flip. Free -- the same publish re-seeds every
+       surface whole -- and counted apart from `gafnoplane` so the one number
+       that means a real failure keeps meaning it. */
+    volatile unsigned gafreseed;
     /* the OP_TEXT branch KEEPS its generation gate and its own counter. The
        font object is still dereferenced at publish (`gfont_slot`,
        `glyph_block_size`, `glyph_block_fill` read the header, the offset table

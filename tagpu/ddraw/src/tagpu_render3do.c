@@ -408,6 +408,41 @@ static const char* face_texframe(const char* fa, int owner)
 GLuint tagpu_r3d_atlas_texref(void) { return s_atlas.tex; }
 GLuint tagpu_r3d_atlas_rgbref(void) { return s_atlas.rgb; }
 unsigned tagpu_r3d_atlas_gen(void)  { return s_atlas.gen; }
+/* ---- THE LEVEL BOUNDARY (G19f-7) ---------------------------------------
+   THIS ATLAS KEYS ON AN ADDRESS AND THE ADDRESSES ARE RECYCLED.
+   `tagpu_gaf_atlas_find(a, g, pix, w, h)` matches on the frame header's
+   address and the pixel plane's, so an entry is only right for as long as
+   that address means that art. The engine's per-level teardown frees the
+   model textures and the next level's loader is free to hand a new frame the
+   address an old one had -- at which point this atlas serves the PREVIOUS
+   level's texels for it, and nothing anywhere would detect it: the entry is
+   valid, the UV is in range, the picture is simply wrong.
+
+   `tagpu_fx.c` and `tagpu_feat.c` both already drop theirs at this boundary
+   for exactly this reason; the unit atlas was the one that did not, and reset
+   only when FULL or on a GL context loss. Neither is a level boundary.
+
+   It is called from `tagpu_native_frame` beside `cache_gen_check` and
+   `tagpu_posebake_frame`, the other two level-keyed caches, rather than from
+   `tagpu_r3d_atlas_frame` lower down this file: `tagpu_posebake_frame` LATCHES
+   `tagpu_r3d_atlas_gen()` for the frame, so a drop after it would leave this
+   frame's bakes stamped with the generation before the drop and cost a second,
+   pointless drop on the next frame. Taking it here means every consumer sees
+   one generation for the whole frame.
+
+   The cost of being right is one re-decode of whatever is on screen at a level
+   change -- the same cost `tagpu_fx.c` accepted -- and the first frame of a
+   session drops nothing, because `s_atlasGen` starts at 0 and no level's
+   generation encodes to that. */
+void tagpu_r3d_atlas_level(unsigned level_gen)
+{
+    static unsigned s_atlasGen;          /* 0 = no level seen yet */
+    unsigned g = level_gen + 1u;         /* so that 0 stays "nothing seen" */
+    if (g == s_atlasGen) return;
+    if (s_atlasGen && s_state == 1) tagpu_gaf_atlas_forget(&s_atlas);
+    s_atlasGen = g;
+}
+
 void tagpu_r3d_atlas_frame(const unsigned char* pal)
 {
     if (s_state != 1) return;

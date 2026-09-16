@@ -344,6 +344,7 @@ typedef struct OP {
        key the consumer matches on -- a VALUE compared against a table. */
     unsigned fkey;                              /* 0: not resolvable, use pixels */
     unsigned goff, glen;                        /* the decoded plane, 0 = none   */
+    unsigned sgen;                              /* the seen table `glen` was decided against */
     short dx, dy;                               /* sprite: unclipped top-left */
     unsigned src; short sl, st;                 /* copy: source, its top-left */
     unsigned seq;                               /* flip: terrown's fill seq   */
@@ -618,6 +619,18 @@ static unsigned s_pubOps = 0, s_pubBytes = 0;
 #define SEEN_N 8192
 static const void* s_seenF[SEEN_N];
 static const void* s_seenP[SEEN_N];
+/* THE SEEN TABLE'S GENERATION, so a stale decision can be told from a failure.
+   `gaf_capture` skips the decode when the table already has the frame -- the
+   consumer has those bytes, so nobody needs them again. A RESET then clears the
+   table (the consumer threw its atlas away), and the ops already recorded in
+   that window carry a decision taken against the old table: they believed the
+   bytes were sent, and after the clear they are not. Those ops publish their
+   box instead, which costs nothing at all because a reset re-seeds every
+   surface whole in the same publish -- but it is a different event from "the
+   scratch was full", and one counter for both would have read as 3923 failures
+   on the first session that measured it. [MEASURED 2026-09-16: 3923 of them,
+   15 resets, and `gaflost` 0.] */
+static unsigned s_seenGen = 1;
 static unsigned hash_ptr(const void* a, const void* b)
 {
     unsigned x = (unsigned)(size_t)a * 2654435761u ^ ((unsigned)(size_t)b >> 3) * 40503u;
@@ -792,15 +805,23 @@ static void gaf_capture(OP* o, const unsigned char* fr)
     unsigned char* dst;
     o->fkey = (unsigned)(size_t)key;
     o->goff = o->glen = 0;
+    o->sgen = s_seenGen;
     if (!key) return;                       /* unreadable now: publish the box */
     if (seen_frame(fr, key, 0)) return;      /* the consumer already has it     */
     /* the same new frame twice in one window -- 39 gadgets sharing one button
-       face -- reuses the first decode. Direct-mapped and compared on the whole
-       key, so a collision costs a second decode and can never serve the wrong
-       plane. `frame_key` never returns 0, so 0 is a free empty marker. */
-    i = o->fkey & (GCAP_N - 1);
-    if (s_gcap[i].key == o->fkey) { o->goff = s_gcap[i].off; o->glen = s_gcap[i].len; return; }
+       face -- reuses the first decode. Direct-mapped, and matched on the key AND
+       THE LENGTH: `s_gcap` is keyed on a 32-bit content hash, so two different
+       frames CAN collide on it, and serving the shorter frame's plane for the
+       longer one's `fw*fh` would hand the consumer a slot smaller than the
+       `fw x fh` the op declares. The length test makes the reuse safe whatever
+       the hash does -- a collision costs a second decode and can never serve a
+       plane of the wrong size. `frame_key` never returns 0, so 0 is a free
+       empty marker. */
     n = (unsigned)o->fw * (unsigned)o->fh;
+    i = o->fkey & (GCAP_N - 1);
+    if (s_gcap[i].key == o->fkey && s_gcap[i].len == n) {
+        o->goff = s_gcap[i].off; o->glen = s_gcap[i].len; return;
+    }
     if (!n || n > GAF_SCRATCH - s_gafUsed) { g_guiq.gaflost++; return; }
     dst = s_gafBuf + s_gafUsed;
     if (!tagpu_gaf_decode(fr, o->fw, o->fh, dst)) { g_guiq.gaflost++; return; }
@@ -957,6 +978,7 @@ static void publish(unsigned flipSurf)
         unsigned why = g_guiq.why;
         for (i = 0; i < s_nsurf; i++) s_surf[i].seeded = 0;
         memset(s_seenF, 0, sizeof s_seenF); memset(s_seenP, 0, sizeof s_seenP);
+        s_seenGen++;
         /* AND THE GLYPHS. A reseed is the consumer saying it threw state away,
            and the ops in flight when it did are skipped whole — so every
            first-sight glyph record in them is lost while our `sent[]` still
@@ -1078,8 +1100,16 @@ static void publish(unsigned flipSurf)
             have = seen_frame(op->frame, key, 0);
             /* A FIRST SIGHT WITH NO PLANE IN HAND PUBLISHES ITS BOX, and it is
                decided BEFORE the op is opened so a half-filled sprite can never
-               be committed. The scratch is the only way to get here. */
-            if (!have && !op->glen) { g_guiq.gafnoplane++; goto as_pixels; }
+               be committed. Two ways to get here and they mean opposite things:
+               a RESET cleared the seen table after this op decided it needed no
+               plane -- free, because the same publish re-seeds the surface
+               whole -- or the scratch was full when the blit was seen, which is
+               the only real failure and should read 0. */
+            if (!have && !op->glen) {
+                if (op->sgen != s_seenGen) g_guiq.gafreseed++;
+                else                       g_guiq.gafnoplane++;
+                goto as_pixels;
+            }
             o = pub_op(PK_SPRITE, s->base); if (!o) return;
             o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
             o->sl = op->dx; o->st = op->dy; o->fw = op->fw; o->fh = op->fh; o->ck = op->ck;

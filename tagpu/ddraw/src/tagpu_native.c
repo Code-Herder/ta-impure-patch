@@ -2442,6 +2442,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        which is right — nothing has told us a level ended. */
     if (f->packet) s_lastLevelGen = f->packet->level_gen;
     cache_gen_check(s_lastLevelGen);
+    /* and the UNIT ATLAS, which keys on frame ADDRESSES the next level's loader
+       may reuse and until G19f-7 reset only when full or on a context loss.
+       Here rather than in tagpu_r3d_atlas_frame below because
+       tagpu_posebake_frame latches tagpu_r3d_atlas_gen() on the next line. */
+    tagpu_r3d_atlas_level(s_lastLevelGen);
     /* the geometry bake's caches take the same three generations one frame
        later than they are bumped, for the same reason and on the same thread —
        and it holds GL objects, so its drop has to be here, on the render

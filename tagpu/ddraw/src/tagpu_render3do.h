@@ -22,6 +22,11 @@ unsigned int tagpu_r3d_atlas_gen(void);
    an emit and its draw) and drives the lazy restore -- arming it the first
    time the switch is on, rebuilding the twin's mips after each painted batch */
 void tagpu_r3d_atlas_frame(const unsigned char* pal);
+/* Once per frame from the native pass, beside the other level-keyed caches and
+   BEFORE tagpu_posebake_frame latches the atlas generation: drops every entry
+   when the level changes, because the atlas keys on frame addresses the next
+   level's loader may reuse. */
+void tagpu_r3d_atlas_level(unsigned level_gen);
 /* The shade LUT, built once per GL context. `shd` is the frame packet's copy
    of the engine's PALETTE.SHD table (tagpu_pk_shd), or NULL to use our own
    computed ramp — this module no longer reads the graphics globals itself. */
