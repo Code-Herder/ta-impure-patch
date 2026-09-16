@@ -7,12 +7,11 @@ description: Land this worktree on local main — commit, merge main in, then CH
 
 Argument (optional commit message): `$ARGUMENTS`
 
-**Invoking this command is the human saying "this is ready to land."** That is the trigger the
-review gate waits for (CLAUDE.md, "Review engine changes before they land"), so the review may
-run from inside this command without asking again. It is also the human saying "I may have
-forgotten a gate": every gate below is **checked first and only then done**, so a landing whose
-docs or review were already handled costs nothing extra, and one where they were forgotten gets
-them here instead of on `main`.
+**Invoking this command declares the work ready to land** — by the human directly, or by
+`/work-landing` on the landing it owns. The review runs from inside this command without asking
+again. It is also a statement that a gate may have been forgotten: every gate below is **checked
+first and only then done**, so a landing whose docs or review were already handled costs nothing
+extra, and one where they were forgotten gets them here instead of on `main`.
 
 The gates, in order:
 
@@ -25,9 +24,16 @@ The gates, in order:
 6. Fast-forward local `main` to this branch. Landing is local: publishing to GitHub is the
    separate `/git_publish`, with the content scan in front of it — this command never pushes.
 
-If any step produces an unexpected state (conflicts, non-fast-forward, detached HEAD, failing
-builds, a review you cannot verify) **STOP** and report the state. Never use `--force`,
-`--no-verify`, `reset --hard`, or rewrite history.
+**Drive this to `main` without stopping to ask.** `CLAUDE.md`'s *Land it yourself — what
+actually requires a human* is the policy and this command obeys it: a failing build, a review
+finding, a wrong documentation claim, a resolvable merge conflict are **ordinary work** — fix,
+commit a **new** commit, re-run the gate that failed, continue. Three fix-and-re-run attempts per
+gate; stop if the third fails or two in a row fail identically. Escalate only for that section's
+six numbered reasons, and when you do, **name the number**.
+
+A genuinely unexpected state (non-fast-forward, detached HEAD, a review you cannot verify) is
+reason 5 or a thrash-out — report the state rather than improvising past it. Never use
+`--force`, `--no-verify`, `reset --hard`, or rewrite history.
 
 ## Why there is a bar at all
 
@@ -62,13 +68,13 @@ Run these in parallel:
 Then:
 
 - **If `git status --porcelain` is empty**: skip to Step 2.
-- **If there are merge conflicts** (lines starting with `UU`, `AA`, `DD`, `AU`, `UA`, `DU`, `UD`): **STOP**. Report the conflicted files and ask the user to resolve.
+- **If there are merge conflicts already in the tree** (lines starting with `UU`, `AA`, `DD`, `AU`, `UA`, `DU`, `UD`): **STOP**. Report the conflicted files and ask the user to resolve. This is **escalation reason 5**, and deliberately stricter than Step 2: a conflict *this command* creates by merging `main` is one it understands the two sides of, whereas a conflict that was already here belongs to a merge someone else started and may be half-resolved by hand right now.
 - **Otherwise**:
   - **If `$ARGUMENTS` is non-empty**: use it as the commit title verbatim.
   - **Otherwise**: draft a 1–2 sentence commit message from the diff, matching the style of recent `git log` entries (imperative, capitalized first word, short title).
   - Stage only the files reported by `git status --porcelain` (named explicitly — do NOT use `git add -A` or `git add .`).
   - **Use judgement on what belongs in the commit — a dirty file is not automatically intentional work.** Read the diff of anything that looks machine-written, environment-specific, or unrelated to the branch's stated purpose, and challenge it rather than staging it: build outputs (`*.dll`, `*.o`), captures/recordings, wineprefix state, instance scratch dirs, generated symbol dumps. Leave anything suspicious unstaged and say so in the summary.
-  - **Skip files that may contain secrets** (`.env`, `*.pem`, `credentials*`, `*.key`). Warn the user if any are in the change set and wait for explicit authorization.
+  - **Skip files that may contain secrets** (`.env`, `*.pem`, `credentials*`, `*.key`). Warn the user if any are in the change set and wait for explicit authorization — **escalation reason 4**, one of the few things that genuinely stops an otherwise autonomous landing.
   - Commit using a HEREDOC, with the standard `Co-Authored-By` trailer this session's harness specifies:
     ```
     git commit -m "$(cat <<'EOF'
@@ -95,8 +101,73 @@ Before the docs and the review, so that both look at the tree that will actually
   ```
 - Run `git merge main --no-edit`.
   - **On fast-forward**: continue to Step 3.
-  - **On conflict**: **STOP**. Report the conflicted files and exit. Do NOT run `git merge --abort` automatically — leave the state for the user to resolve.
+  - **On conflict**: **resolve it yourself, best effort, under the rules below.**
   - **If a non-fast-forward merge commit would be created** (i.e., this branch has diverged from main): accept the merge commit that `--no-edit` produces, but report it explicitly so the user knows a merge commit was created.
+
+### Resolving a conflict
+
+A conflict here is `main` and this branch having edited the same region. **Resolve it by keeping
+both sides' intent** — this is a merge, so dropping either side's change is a silent regression,
+and `--ours` / `--theirs` used as a shortcut to avoid reading the hunk is exactly that. Never
+`--force`, never `--no-verify`, never `reset --hard`, never `merge --abort` without saying so.
+
+For each conflicted path, read all three sides before touching it:
+
+```
+git show :1:<path>   # merge base — what both sides started from
+git show :2:<path>   # ours — this branch
+git show :3:<path>   # theirs — main
+```
+
+**Resolve** when the two sides are doing different things that can both survive:
+
+- Disjoint edits that merely landed near each other.
+- Additive lists: includes/imports, a new entry in a table, a `roadmap.md` gate row, a new
+  section in a note, an `.publish-allow` class, a `.gitignore` re-include.
+- One side reformatted or moved text the other side edited in place.
+- A file added on both sides with content that composes.
+
+**STOP and report** — do not guess — when a wrong resolution would be invisible:
+
+- **Both sides changed the same logic.** Not the same file, the same *behaviour*.
+- **An absolute address, a byte patch, or an offset** (`tagpu/src/**`, `binary-patches.md`, any
+  `0x…` constant). A silently wrong address is this project's worst failure mode and no gate
+  below catches it.
+- **Synchronisation**: a lock, a handshake, a published counter, a fence, or the lifetime of
+  anything one thread writes and another reads. `CLAUDE.md` says a three-line diff in a critical
+  section is large; a *merged* three-line diff nobody chose is larger.
+- **Delete-vs-modify** (`DU`/`UD`), or a rename one side did and the other edited through.
+- **Any binary file**, or anything under `pristine/`.
+- **You cannot state, in one sentence, what each side was trying to do.** That sentence is the
+  test. If you cannot write it, you are guessing.
+
+On a STOP: leave the conflicted state in place (do **not** abort), list the paths, and say for
+each one which rule above it tripped.
+
+After resolving, before `git add`:
+
+```
+git diff --check                                   # whitespace/marker damage
+grep -rnE '^(<<<<<<<|=======|>>>>>>>)' <resolved paths>   # must be empty
+```
+
+Then `git add` the resolved paths and `git commit --no-edit`, and **amend the merge commit
+message to record the resolution** — one line per conflicted file saying what each side wanted
+and what you kept:
+
+```
+Merge main into <branch>
+
+Resolved tagpu/src/tagpu_native.c: main added the fog bound, this branch added
+the pass counter; kept both, counter after the bound.
+Resolved research/notes/roadmap.md: both appended a gate row; kept both, main's first.
+```
+
+**The resolution is not verified until Step 3 and Step 5 have seen it.** The build gate runs on
+the post-merge tree, and the review at Step 5 reads `main...HEAD`, which contains the merge —
+say in the reviewer's brief which files you resolved and how, so it reads those first. Carry the
+same list into the final summary. A conflict resolved without being named in the summary is the
+one that bites.
 
 ## Step 3 — Build gate
 
@@ -113,7 +184,7 @@ Run each build in the foreground, sequentially:
 
 Treat new warnings from changed files as worth reporting even when the build succeeds.
 
-**On failure — STOP before touching `main`.** Investigate, fix, commit a **NEW** commit (never `--amend`/`--no-verify`), and re-run the gate.
+**On failure — fix it yourself; `main` waits, you do not.** A build broken by this landing's own change is ordinary work, not an escalation. Investigate, fix, commit a **NEW** commit (never `--amend`/`--no-verify`), re-run the gate. Three attempts; if the third fails, or two in a row fail with the same error and nothing new learned, stop and report what the compiler actually says. `main` is not touched until the gate passes.
 
 ## Step 4 — Documentation gate: check it, then do what is missing
 
@@ -277,6 +348,9 @@ The brief must contain, in the agent's own prompt (it starts with no context):
    and the module note the change cites).
 4. **The docs are part of the review**: a stated address or claim in the diff's notes that the
    disassembly or the code disproves is a finding.
+4b. **Any conflict Step 2 resolved**: the paths, what each side wanted, and what was kept. A
+   resolution is a change nobody wrote and nobody has reviewed — it is the first thing the
+   reviewer should read. Omit this item when Step 2 hit no conflict.
 5. **What to look at specifically**: list the risky spots you know of — every byte patch, every
    new engine-state write, static arrays reused across frames (a field not written on one path is
    last frame's), index bounds on new vertex ranges, option-bit gating, behaviour for the units or
@@ -294,6 +368,11 @@ on this codebase is high but not perfect — on the G13e diff, 2 of 11 findings 
 forever; `ScrollSpeed` corrupting the registry), several MEDIUMs were real, and about a third
 were overstated or described existing intentional behaviour as a bug. Fix what is real, say what
 you rejected and why. **Never apply findings blindly** (no `--fix`-style bulk application).
+
+Fixing a real finding is ordinary work — do it, as new commits, and re-run the build. The one
+finding that is **not** yours to fix is the one that says the *approach* is wrong rather than the
+code: that is escalation reason 1, and a second finding of reason-2 shape (the only fix left is
+timing-dependent) stops the landing too. Everything else, you handle and carry on.
 
 Findings become **new commits on the branch** before Step 6; that is what the branch is for.
 Then **record the review** on the commit whose diff it read, and re-run Step 3 if any fix
@@ -313,14 +392,16 @@ Because Step 2 merged `main` into this branch, `main → HEAD` is now a pure fas
 - Run `git log main..HEAD --oneline`. **If empty**: nothing to land — report "main already contains this branch." and exit.
 - Run `git worktree list --porcelain` and find the line `branch refs/heads/main` — record the `worktree <path>` above it.
 - **If `main` is checked out in a worktree** (normally the repo root): run `git -C <that-path> merge --ff-only <this-branch>`.
-  - Fast-forward merges only touch files that actually changed; if that worktree has unrelated dirty files it will usually succeed, but if git refuses (conflict with uncommitted work in the main worktree), **STOP** and report. Do NOT force, stash, or discard anything in that worktree.
+  - Fast-forward merges only touch files that actually changed; if that worktree has unrelated dirty files it will usually succeed, but if git refuses (conflict with uncommitted work in the main worktree), **STOP** and report — **escalation reason 5**, the human's own uncommitted work. Do NOT force, stash, or discard anything in that worktree.
 - **If `main` is not checked out anywhere** (headless): run `git update-ref refs/heads/main HEAD`. Safe — no working tree affected.
 
 ## Final summary
 
 After a successful run, report:
 - Commit hash created (if any) and its one-line title.
-- Whether Step 2 was a fast-forward, a no-op, or produced a merge commit.
+- Whether Step 2 was a fast-forward, a no-op, or produced a merge commit — and, if it hit
+  conflicts, each path resolved with one line on what was kept, or each path that tripped a stop
+  rule and which one.
 - Anything left deliberately unstaged in Step 1 (build artifacts, suspicious files) and why.
 - Build-gate result per target — ddraw.dll, tagpu.dll — passed, skipped (with the reason), or what failed.
 - **Each gate's verdict**: docs — already done / done now (what was added) / not needed;

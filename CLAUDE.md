@@ -56,16 +56,44 @@ sit behind a bound already — but none of them should be cited as the reason a 
 safe, and any of them touched by new work gets the argument above or a note saying why
 it cannot.
 
+## Land it yourself — what actually requires a human
+
+**The default is to keep going.** A landing is meant to be driven to `main` without a human in
+the loop, and most of what goes wrong on the way is ordinary work: a build that breaks on your
+own change, a review finding, a documentation claim the reviewer disproved, a merge conflict
+whose two sides you can read. Fix it, commit the fix as a **new** commit, re-run the gate that
+failed, and carry on. None of those is an escalation, and stopping to report one costs the human
+a round trip to say "yes, fix it".
+
+**Bounded, not infinite.** Give a failing gate **three** fix-and-re-run attempts. If the third
+fails, or if two consecutive attempts fail the same way with no new information, stop — that is
+no longer iteration, it is thrashing, and the next attempt will not be the one that works.
+Report what was tried and what the failure actually says.
+
+**Escalate only for these.** The list is closed; anything not on it, you handle:
+
+1. **A decision that changes what the landing is.** The work or the review shows the *plan* is
+   wrong — not the code. Rewriting the goal is the human's call, not a fix.
+2. **No by-design fix is available** and only a timing-dependent mitigation is left. This is
+   already the rule above (*Fixes must be safe by construction*): say what the invariant would
+   have to be, why it cannot be established, and what the mitigation buys. Never ship one
+   silently.
+3. **The verification cannot be run at all.** Not "it failed" — failed is a bug to fix. This is
+   the game refusing to launch, a missing tool, hardware. A landing whose claim was never
+   actually run does not meet the bar in the first place, so it cannot proceed past this.
+4. **Credentials or secrets** anywhere in the change set.
+5. **Someone else's in-progress state**: a conflict that was already in the tree, uncommitted
+   work in the main checkout blocking the fast-forward, a ticket another agent owns. Never
+   force, stash, or discard it.
+6. **Anything outward-facing or irreversible beyond the local landing** — publishing above all.
+   `/git_publish` is always the human's, and a landing never implies one.
+
+**Say which one.** An escalation names the numbered reason and what would unblock it. "It didn't
+work" is not an escalation, it is a status update.
+
 ## Review engine changes before they land
 
-**A human declares a feature ready for review. Never launch the review off your own judgement.**
-When the work looks finished, stop: say what was built and how it was verified, and ask. Their
-"ready" — or an explicit "review it", or **invoking `/git_commit_merge_wt`** — is the trigger.
-Until then keep committing to the branch and leave it there; an unasked-for review is not a free
-extra check, it is ~100k tokens spent grading work the human may not consider done, and spent
-again after they change it.
-
-Once approved, once per landing (not per commit), on the accumulated branch diff, review at
+Once per landing (not per commit), on the accumulated branch diff, review at
 **`medium`** when the landing touches **`tagpu/ddraw/**`**, **`tagpu/src/**`** or
 **`tools/tacli`** — `high` if it writes engine or user state, adds or moves a byte patch, is
 sim-adjacent, **or changes the synchronisation between the game thread and the render thread**.
@@ -95,11 +123,6 @@ Skip it for docs, scenarios, comments, or a few lines with no new state, no new 
 no new GL object — a review costs ~100k tokens and is not worth that for a typo. Batching
 landings is what keeps this cheap: three commits landed together cost one review, not three.
 
-**Why the human's approval gates it:** on the window-title landing the review was launched the
-moment the code and docs were committed, without being asked for, and the human killed it — the
-tokens were already spent and no finding came back. Judging the work finished is not the same as
-being finished with it.
-
 **Why the review itself:** this stack patches a 1997 binary at absolute addresses, so mistakes are
 silent — they do not throw, they render slightly wrong or corrupt state days later. The reviews
 have paid for themselves every time: 6/6 real findings on the G13d diff, on G13e two HIGH findings
@@ -110,8 +133,8 @@ firing every frame after any zoom-out from a map edge.
 
 ## Document what the landing learned — before the review, not after
 
-Same trigger as the review, once per landing: if it touched engine code, the documentation pass
-lands with it.
+Once per landing, on the same diff the review reads: if it touched engine code, the documentation
+pass lands with it.
 
 - **The engine map — `research/notes/exe-reverse-engineering.md` — gets every address the work
   touched *or merely read*,** not only the ones we patched: what it is, its call sites, the
