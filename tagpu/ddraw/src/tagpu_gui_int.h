@@ -90,6 +90,12 @@ typedef struct TAGPU_GUIQ {
        emits, so the one figure that says the ordering is behaving was invisible.
        [FOUND 2026-09-16, the landing-5 review.] */
     volatile unsigned gafstale;
+    /* the SAME gate on the OP_TEXT branch, counted apart on purpose: gafstale=
+       is the figure the landing-5 A/B is stated in (arm A 4 of 5 crashed, arm B
+       0 of 3 at 147, arm C 0 of 5 at 215/225), and folding a second refusal
+       reason into it would make those numbers mean something else on the next
+       run that reads them. Two gates, two counters. */
+    volatile unsigned strstale;
     volatile unsigned stalls;                /* episodes where the consumer took nothing for TAGPU_GUI_STALL_MS
                                                 while work was queued (a display-mode switch kills the render
                                                 thread): the producer drops its batches until it moves again */

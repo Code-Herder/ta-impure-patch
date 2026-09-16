@@ -1021,7 +1021,31 @@ static void publish(unsigned flipSurf)
             unsigned char* dst;
             const unsigned char* font = (const unsigned char*)op->frame;
             const unsigned char* str = s_strBuf + op->soff;
-            GFONT* gf = gfont_slot(font);
+            GFONT* gf;
+            /* THE SAME WINDOW AS THE GAF PATH ABOVE, AND IT HAD NEITHER GUARD.
+               `op->frame` is the FONT object here, captured when the draw was
+               observed and dereferenced up to CENSUS_MS later by `gfont_slot`,
+               which reads `f[3]` and `f[0]` with nothing in front of them. The
+               font is `[globals+0x204]` (`0x4B6220` is `mov eax,ds:0x51FBD0`),
+               so it is probably not per-level -- but "probably" is not a
+               lifetime, and this is the identical recorded-before /
+               published-after shape the rest of this function just closed.
+               Gated the same way rather than a different way, because a
+               different rule here would need an argument the font's lifetime
+               does not give us. A refusal falls through to the box's own bytes,
+               which is what this path did before G17d, so the picture is
+               unchanged. `ptr_ok` is a BOUND on the value and is not the
+               safety argument; the ordering is.
+               [FOUND 2026-09-16 by BOTH reviewers of the third pass,
+               independently -- the tenth such pair on this lane.] */
+            if (!ptr_ok(font) ||
+                !tagpu_packet_pub_level_tracked() ||
+                tagpu_reclaim_level_closing() ||
+                op->lgen != tagpu_packet_pub_level_gen()) {
+                g_guiq.strstale++;
+                goto as_pixels;
+            }
+            gf = gfont_slot(font);
             unsigned need = 0, ng = 0, k;
             if (!gf) goto as_pixels;              /* the font is not that format */
             /* THE GLYPH BITS, ON THIS THREAD, WHERE THE FONT IS LIVE (landing
