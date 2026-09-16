@@ -97,6 +97,17 @@ static void gaf_box(void* e, int kind)
         s_lastOp->fw = GF_W(fr); s_lastOp->fh = GF_H(fr); s_lastOp->ck = fr[0x08];
         s_lastOp->dx = (short)(x - GF_HX(fr)); s_lastOp->dy = (short)(y - GF_HY(fr));
         if (kind == OP_GAF && fr[0x0A] != 0) s_lastOp->kind = OP_GAFA;   /* sub-frames: pixels */
+        /* THE IDENTITY AND THE PLANE, TAKEN HERE (G19f-7). We are inside the
+           engine's own blit of this frame, which is the only moment the art is
+           alive by the engine's ordering rather than by our hope; `publish`
+           runs up to CENSUS_MS later, after a screen pop may have freed it.
+           Only the sprite kinds resolve a frame at publish, so only they pay
+           it. See `gaf_capture`. */
+        if (s_lastOp->kind == OP_GAF && s_lastOp->fw && s_lastOp->fh &&
+            s_lastOp->fw <= TAGPU_GAF_DECMAX && s_lastOp->fh <= TAGPU_GAF_DECMAX)
+            gaf_capture(s_lastOp, fr);       /* publish's own test, so the
+                                                scratch is never spent on a
+                                                frame it will refuse anyway */
     }
 }
 static int __cdecl before_gaf(void* e)  { if (on_game_thread()) gaf_box(e, OP_GAF);  return 0; }

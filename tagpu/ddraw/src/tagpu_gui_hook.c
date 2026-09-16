@@ -334,7 +334,16 @@ typedef struct OP {
     unsigned base; short l, t, r, b; unsigned char kind;
     /* what the publisher needs beyond the box (gui-renderer.md 3.6) */
     unsigned char ck; unsigned short fw, fh;    /* sprite: key, frame size    */
-    const void* frame; const void* pix;         /* sprite: identity           */
+    const void* frame; const void* pix;         /* sprite: identity -- KEYS,
+                                                   never dereferenced again   */
+    /* THE SPRITE IS RESOLVED AT OBSERVE TIME, NOT AT PUBLISH (G19f-7).
+       `fkey` is `frame_key`'s content hash and `goff`/`glen` the decoded plane
+       in `s_gafBuf`, both taken in `gaf_box` while the engine is inside its own
+       blit of that frame. See `gaf_capture`. `publish` uses these and reads no
+       engine asset memory at all, so `frame`/`pix` survive only as the atlas
+       key the consumer matches on -- a VALUE compared against a table. */
+    unsigned fkey;                              /* 0: not resolvable, use pixels */
+    unsigned goff, glen;                        /* the decoded plane, 0 = none   */
     short dx, dy;                               /* sprite: unclipped top-left */
     unsigned src; short sl, st;                 /* copy: source, its top-left */
     unsigned seq;                               /* flip: terrown's fill seq   */
@@ -517,6 +526,21 @@ static unsigned glyph_block_fill(GFONT* g, const unsigned char* f,
 static unsigned char s_strBuf[STR_SCRATCH];
 static unsigned s_strUsed;
 static unsigned s_strLost;                      /* strings the scratch could not take */
+
+/* THE BATCH'S SPRITE PLANES, for the same reason and reset the same way.
+   Sized for one census window's FIRST SIGHTS, not for the screen: `seen_frame`
+   means a frame is decoded once and then never again, so what has to fit is the
+   art a single screen build introduces. The shell's whole inventory is 19 atlas
+   entries. A full 640x480 GAF would be 307 200 bytes on its own, so the bound
+   is generous rather than tight -- and being wrong is a slower path and never a
+   wrong picture: a frame the scratch cannot take publishes its box's bytes,
+   exactly as an undecodable one always has. `s_gafLost` counts those. */
+#define GAF_SCRATCH (2u << 20)
+static unsigned char s_gafBuf[GAF_SCRATCH];
+static unsigned s_gafUsed;
+/* `gaflost` and `gafhigh` live in g_guiq rather than here for the reason
+   `gafstale` was moved there: a counter the heartbeat does not print is a
+   measurement nobody ever reads. */
 static OP* s_lastOp = NULL;                     /* the op op_add just recorded */
 #define MAX_OPS 65536
 static OP       s_ops[MAX_OPS];
@@ -708,6 +732,82 @@ static const void* frame_key(const unsigned char* fr, const void* pix, int w, in
     hh ^= (unsigned)(unsigned short)*(const short*)(fr + 0x04) << 16;     /* the hotspot */
     hh ^= (unsigned)(unsigned short)*(const short*)(fr + 0x06);
     return (const void*)(size_t)(hh ? hh : 1u);
+}
+
+/* ---- THE SPRITE, RESOLVED WHERE IT IS PROVABLY ALIVE (G19f-7) ------------
+   `publish` used to take the identity hash AND the decoded plane out of engine
+   memory, up to CENSUS_MS after the blit that recorded the op. Between those
+   two moments the engine is free to release the art, and it does: the level
+   teardown's cascade frees the per-level GAF banks, and `GUI_Pop 0x4A9660`
+   frees a popped screen's from 39 call sites with no flag and no generation at
+   all. Landing 5 closed the teardown with an ordering against the level
+   generation and left the pop open, covered only by a BOUND -- which this
+   module says twice over is not a safety argument.
+
+   THE ORDERING IS THE ENGINE'S OWN, AND IT IS EXACT. This runs from `gaf_box`,
+   a `before_` observer on the blit leaf, so the engine is about to read the
+   same frame header and the same pixel plane as its next act. The art cannot
+   be dead here: if it were, the engine's own blit would fault on it. There is
+   no window to be small, no flag to be armed and no generation to compare --
+   the read happens inside the engine's use of the data, which is what an
+   ordering means. It needs neither `MEM_Free`'s block size (which the observer
+   is not handed) nor a generation, and it covers every one of the 39 pop sites,
+   the teardown cascade and any future free path together, because after it
+   `publish` dereferences no engine asset memory on this path at all.
+   `frame`/`pix` survive in the op as the consumer's atlas KEY, a value compared
+   against a table and never followed.
+
+   IT ALSO FIXES A WRONG-ART CASE THE GENERATION GATE COULD NOT SEE. The key is
+   a hash of the plane's first bytes precisely because the shell hands a freed
+   screen's addresses to the next screen's art. Taken at publish time, that hash
+   was read from whatever the address held THEN -- so art freed and replaced
+   inside one census window hashed the NEW content under the OLD op, and the
+   consumer matched a key that named pixels the op never drew. Taken here, the
+   hash is of the bytes the engine is about to blit, which is the only content
+   the op ever meant.
+
+   The plane is decoded only on FIRST SIGHT, exactly as `publish` did it -- a
+   settled session decodes nothing -- and `s_gcap` keeps one window from
+   decoding the same new frame once per gadget that shares it. The scratch is a
+   bound: what it cannot take publishes its box's bytes instead, which is what
+   an undecodable frame has always done. Slower, never wrong.
+   [BUILT 2026-09-16, after the landing-5 re-review named the pop window and
+   said the by-design fix wanted a block size. It wanted a different hook.] */
+#define GCAP_N 256
+static struct { unsigned key, off, len; } s_gcap[GCAP_N];   /* this window's decodes */
+
+/* the window's scratch, dropped with its ops. `s_gcap` MUST go with it: its
+   entries are offsets into `s_gafBuf`, so a stale one would hand the next
+   window a plane at an offset that now belongs to different bytes. */
+static void gaf_window_reset(void)
+{
+    s_gafUsed = 0;
+    memset(s_gcap, 0, sizeof s_gcap);
+}
+
+static void gaf_capture(OP* o, const unsigned char* fr)
+{
+    const void* key = frame_key(fr, o->pix, o->fw, o->fh);
+    unsigned n, i;
+    unsigned char* dst;
+    o->fkey = (unsigned)(size_t)key;
+    o->goff = o->glen = 0;
+    if (!key) return;                       /* unreadable now: publish the box */
+    if (seen_frame(fr, key, 0)) return;      /* the consumer already has it     */
+    /* the same new frame twice in one window -- 39 gadgets sharing one button
+       face -- reuses the first decode. Direct-mapped and compared on the whole
+       key, so a collision costs a second decode and can never serve the wrong
+       plane. `frame_key` never returns 0, so 0 is a free empty marker. */
+    i = o->fkey & (GCAP_N - 1);
+    if (s_gcap[i].key == o->fkey) { o->goff = s_gcap[i].off; o->glen = s_gcap[i].len; return; }
+    n = (unsigned)o->fw * (unsigned)o->fh;
+    if (!n || n > GAF_SCRATCH - s_gafUsed) { g_guiq.gaflost++; return; }
+    dst = s_gafBuf + s_gafUsed;
+    if (!tagpu_gaf_decode(fr, o->fw, o->fh, dst)) { g_guiq.gaflost++; return; }
+    o->goff = s_gafUsed; o->glen = n;
+    s_gcap[i].key = o->fkey; s_gcap[i].off = o->goff; s_gcap[i].len = n;
+    s_gafUsed += n;
+    if (s_gafUsed > g_guiq.gafhigh) g_guiq.gafhigh = s_gafUsed;
 }
 
 static SURF* surf_by_base(unsigned base)
@@ -933,80 +1033,62 @@ static void publish(unsigned flipSurf)
         if (op->kind == OP_GAF && op->frame && op->fw && op->fh &&
             op->fw <= TAGPU_GAF_DECMAX && op->fh <= TAGPU_GAF_DECMAX) {
             const void* key;
-            /* ---- THE ASSET THIS OP NAMES MUST STILL EXIST, AND THAT IS AN
-               ORDERING RATHER THAN A PROBE.
+            /* ---- THE ASSET THIS OP NAMES CANNOT GO AWAY, BECAUSE NOTHING
+               HERE NAMES IT ANY MORE.
 
-               `frame`/`pix` point into a per-LEVEL GAF bank. The teardown's
-               cascade frees those banks, and both of these run on the GAME
-               thread, so the question is program order on one thread and not a
-               race: refuse while a teardown is in flight, and refuse an op
-               observed in a level that has since ended.
-               THE GENERATION IS WHAT DOES THE WORK AT THIS SITE, and the
-               first version of this comment drew a diagram that is not the
-               window this site can see. `publish` runs only from `before_flip`,
-               on the game thread, and `s_teardown` is non-zero only while that
-               same thread is inside `0x491B60` -- which does not flip. So the
-               CLOSING test is unreachable from here today. The case that is
-               real is the opposite order and it is why the generation is
-               needed: at `0x460635` the engine calls the teardown and pops the
-               screen AFTERWARDS, with the flag already down, and those ops are
-               refused because their generation is stale.
-               The closing test is kept as the cheap half of a pair whose other
-               half cannot be argued from this call site alone -- a flip reached
-               from inside a teardown would be refused by it -- and it is named
-               here as belt rather than as the argument.
-               [The diagram that stood here was FOUND wrong 2026-09-16 by the
-               landing-5 review, which traced all six `call 0x491b60` sites.]
+               `frame`/`pix` point into a per-LEVEL GAF bank, and this function
+               used to take both the identity hash and the decoded plane out of
+               that bank -- up to CENSUS_MS after the blit that recorded the op.
+               Two engine routes free it inside that window: the level
+               teardown's cascade, and `GUI_Pop 0x4A9660`, which frees a popped
+               screen's art from 39 call sites with no flag and no generation.
 
-               THE GENERATION IS `tagpu_packet_pub`'s AND NOT `tagpu_reclaim`'s,
-               and that is the whole of the first version's mistake. Reclaim's
-               moves only when reclaim is ARMED, and `tagpu_reclaim.off` -- one
-               file -- leaves it a constant 0 while the engine frees the GAF
-               banks exactly as before, because the cascade is the ENGINE's and
-               reclaim only defers Object3do and model templates. So the gate was
-               inert in precisely the configuration that needs it, with nothing
-               saying so. `tagpu_packet_pub` already ruled on this class: it
-               installs its OWN observer on the teardown `0x491B60` when reclaim
-               is not armed, for the stated reason that the level-end packet must
-               not depend on another module being armed, and its generation moves
-               on either route. Its header says this is what a game-thread
-               observer latching per-level state should stamp with.
-               `level_tracked` IS THE FIRST TEST: when NO provider exists the
-               generation never moves at all, and no ordering being available is
-               a reason to refuse the read rather than to take it.
-               [FOUND 2026-09-16 -- BOTH landing-5 reviewers, independently, and
-               the second one found the counter the tree already had.]
+               G19f-7 MOVED BOTH READS INTO `gaf_box`, where the engine is
+               inside its own blit of the same frame and the art is alive by the
+               engine's ordering rather than by ours -- see `gaf_capture`. So
+               this path now dereferences NO engine asset memory: `op->fkey` is
+               a number, `op->goff`/`glen` index our own scratch, and
+               `op->frame`/`op->pix` survive only as the consumer's atlas key, a
+               value compared against a table and never followed.
 
-               The fallback is the op's own box out of the SURFACE -- our
-               mirror of what the engine drew, not the asset it drew from -- so
-               the picture is unchanged and only the sprite's identity is lost.
+               WHAT STOOD HERE BEFORE, AND WHY IT IS GONE. Landing 5 put a
+               level-generation gate here -- refuse while a teardown is in
+               flight, refuse an op whose observed generation is stale -- and it
+               was a correct ordering for the reads it guarded. It could not
+               cover the pop: `0x460647 call 0x4a9660` runs three instructions
+               after the teardown returns, so the generation has already moved
+               and those ops pass the test. With the reads gone the gate had
+               nothing left to protect, and it was not free: it refused 215 ops
+               at a single measured level end, each falling back to its box's
+               bytes and losing its sprite identity. A gate that guards nothing
+               and costs something is removed, not kept as belt.
 
-               [MEASURED 2026-09-16: without this, quitting a skirmish to the
-               main menu at 1920x1080 takes an access violation in `frame_key`
-               reading the frame header's `TAGPU_GF_COMP` byte out of a bank the
-               cascade had just freed (279 blocks), and the process then spins.
-               Reproduced with the Vulkan lane OFF, so it is the GL publisher's
-               own and has nothing to do with the port.] */
-            if (!tagpu_packet_pub_level_tracked() ||
-                tagpu_reclaim_level_closing() ||
-                op->lgen != tagpu_packet_pub_level_gen()) {
-                g_guiq.gafstale++;
-                goto as_pixels;
-            }
-            key = frame_key((const unsigned char*)op->frame, op->pix, op->fw, op->fh);
-            if (!key) goto as_pixels;                  /* the art is not readable now */
+               [The crash that bought all this, MEASURED 2026-09-16: quitting a
+               skirmish to the main menu at 1920x1080 took an access violation
+               in `frame_key` reading the frame header's `TAGPU_GF_COMP` byte
+               out of a bank the cascade had just freed (279 blocks), and the
+               process then spun. Reproduced with the Vulkan lane OFF, so it is
+               the GL publisher's own and nothing to do with the port. The
+               landing-5 re-review then named the pop window this closes and
+               said the by-design fix wanted `MEM_Free`'s block size, which the
+               observer is not handed. It wanted a different hook instead.] */
+            int have;
+            key = (const void*)(size_t)op->fkey;
+            if (!key) goto as_pixels;           /* it was not readable when drawn */
+            have = seen_frame(op->frame, key, 0);
+            /* A FIRST SIGHT WITH NO PLANE IN HAND PUBLISHES ITS BOX, and it is
+               decided BEFORE the op is opened so a half-filled sprite can never
+               be committed. The scratch is the only way to get here. */
+            if (!have && !op->glen) { g_guiq.gafnoplane++; goto as_pixels; }
             o = pub_op(PK_SPRITE, s->base); if (!o) return;
             o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
             o->sl = op->dx; o->st = op->dy; o->fw = op->fw; o->fh = op->fh; o->ck = op->ck;
             o->frame = op->frame; o->pix = key;
-            if (!seen_frame(op->frame, key, 0)) {
-                unsigned char* dst = pub_bytes(o, (unsigned)op->fw * op->fh);
+            if (!have) {
+                unsigned char* dst = pub_bytes(o, op->glen);
                 if (!dst) return;
-                if (!tagpu_gaf_decode((const unsigned char*)op->frame, op->fw, op->fh, dst)) {
-                    /* unreadable art: the box's bytes instead, exact if dull */
-                    o->kind = PK_PIXELS; o->alen = 0;
-                    if (!pub_surface_bytes(s, op->l, op->t, op->r, op->b, o)) return;
-                } else seen_frame(op->frame, key, 1);
+                memcpy(dst, s_gafBuf + op->goff, op->glen);
+                seen_frame(op->frame, key, 1);
             }
             pub_commit();
             continue;
@@ -1022,20 +1104,30 @@ static void publish(unsigned flipSurf)
             const unsigned char* font = (const unsigned char*)op->frame;
             const unsigned char* str = s_strBuf + op->soff;
             GFONT* gf;
-            /* THE SAME WINDOW AS THE GAF PATH ABOVE, AND IT HAD NEITHER GUARD.
-               `op->frame` is the FONT object here, captured when the draw was
-               observed and dereferenced up to CENSUS_MS later by `gfont_slot`,
-               which reads `f[3]` and `f[0]` with nothing in front of them. The
-               font is `[globals+0x204]` (`0x4B6220` is `mov eax,ds:0x51FBD0`),
-               so it is probably not per-level -- but "probably" is not a
-               lifetime, and this is the identical recorded-before /
-               published-after shape the rest of this function just closed.
-               Gated the same way rather than a different way, because a
-               different rule here would need an argument the font's lifetime
-               does not give us. A refusal falls through to the box's own bytes,
-               which is what this path did before G17d, so the picture is
-               unchanged. `ptr_ok` is a BOUND on the value and is not the
-               safety argument; the ordering is.
+            /* THE SAME WINDOW AS THE GAF PATH, AND THE ONLY ONE LEFT IN THIS
+               FUNCTION. `op->frame` is the FONT object here, captured when the
+               draw was observed and dereferenced up to CENSUS_MS later by
+               `gfont_slot`, `glyph_block_size` and `glyph_block_fill`, which
+               read `f[3]`, `f[0]`, the 256-entry offset table and the glyph
+               rows. The font is `[globals+0x204]` (`0x4B6220` is `mov
+               eax,ds:0x51FBD0`), so it is probably not per-level -- but
+               "probably" is not a lifetime.
+
+               THE GAF PATH ABOVE NO LONGER SHARES THIS GATE. G19f-7 moved its
+               two reads into the observer, where the engine's own blit proves
+               the art alive, so it needs no generation at all. THIS path still
+               reads at publish, so the gate stays here and is now the only
+               user of `op->lgen` -- kept rather than moved because the glyph
+               capture is a larger piece of work than the sprite's (the offset
+               table, the per-code `sent` state and the id the consumer caches
+               on all cross here) and because the font's lifetime, unlike a GAF
+               bank's, has no measured free route at all. Stated as an open
+               window rather than left to look closed by the line above it.
+
+               A refusal falls through to the box's own bytes, which is what
+               this path did before G17d, so the picture is unchanged. `ptr_ok`
+               is a BOUND on the value and is not the safety argument; the
+               ordering is.
                [FOUND 2026-09-16 by BOTH reviewers of the third pass,
                independently -- the tenth such pair on this lane.] */
             if (!ptr_ok(font) ||
@@ -1255,14 +1347,14 @@ static int __cdecl before_flip(void* entry_esp)
         s_inFlip = 1;
         hijack = 1;
     }
-    if (!s_census && !g_gui_draw) { s_nops = 0; s_strUsed = 0; return hijack; }
+    if (!s_census && !g_gui_draw) { s_nops = 0; s_strUsed = 0; gaf_window_reset(); return hijack; }
     if (!s_freq.QuadPart) QueryPerformanceFrequency(&s_freq);
     QueryPerformanceCounter(&now);
     if (s_lastQpc.QuadPart && (now.QuadPart - s_lastQpc.QuadPart) * 1000 < (LONGLONG)CENSUS_MS * s_freq.QuadPart)
         return hijack;                              /* too soon: keep accumulating ops */
     s_lastQpc = now;
     s_censuses++;
-    if (!s_census) { publish(s ? s->base : 0); s_nops = 0; s_strUsed = 0; return hijack; }
+    if (!s_census) { publish(s ? s->base : 0); s_nops = 0; s_strUsed = 0; gaf_window_reset(); return hijack; }
     if (s) {
         int vl = 0, vt = 0, vr = -1, vb = -1, sub = 0;
         if (isGame) {
@@ -1369,6 +1461,7 @@ static int __cdecl before_flip(void* entry_esp)
     publish(s ? s->base : 0);
     s_nops = 0;
     s_strUsed = 0;
+    gaf_window_reset();
     memset(s_kindCount, 0, sizeof s_kindCount);
     memset(s_nullCtx, 0, sizeof s_nullCtx);
     s_builds = 0; s_buildFlags = 0;

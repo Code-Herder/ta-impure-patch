@@ -82,19 +82,37 @@ typedef struct TAGPU_GUIQ {
     volatile unsigned why;                   /* the last reason `reseed` (or an overflow) was raised: TAGPU_GUI_WHY_* */
     volatile unsigned overflows;             /* the producer ran out of queue or arena  */
     volatile unsigned resets;                /* fresh starts published (re-arm, GL, overflow, a lost frame) */
-    /* GAF ops the publisher refused to RESOLVE because the level they were
-       observed in has ended, is ending, or is not tracked at all -- published as
-       their box's bytes instead. It lives here, beside the other producer
-       counters, because this is what the render half's heartbeat prints: the
-       first version put it in a `gui census:` line that an ordinary run never
-       emits, so the one figure that says the ordering is behaving was invisible.
-       [FOUND 2026-09-16, the landing-5 review.] */
-    volatile unsigned gafstale;
-    /* the SAME gate on the OP_TEXT branch, counted apart on purpose: gafstale=
-       is the figure the landing-5 A/B is stated in (arm A 4 of 5 crashed, arm B
-       0 of 3 at 147, arm C 0 of 5 at 215/225), and folding a second refusal
-       reason into it would make those numbers mean something else on the next
-       run that reads them. Two gates, two counters. */
+    /* GAF ops that fell back to their box's bytes because the sprite's decoded
+       plane was not in hand at publish -- which since G19f-7 can only mean the
+       observe-time scratch was full when the blit was seen (`gaf_capture`).
+       **THIS REPLACES `gafstale`**, which counted the level-generation gate that
+       used to stand on this path. That gate existed to stop `publish`
+       dereferencing a freed GAF bank; the hash and the plane are now both taken
+       inside the engine's own blit, `publish` dereferences nothing, and a gate
+       with nothing left to protect was refusing ops -- 215 of them at a single
+       level end, each losing its sprite identity for no remaining reason. The
+       name changed with the meaning on purpose: `gafstale=215` is the figure
+       landing 5's A/B is stated in, and a counter that keeps its name while
+       measuring something else is how those numbers would quietly stop meaning
+       what the notes say they mean.
+       It lives here, beside the other producer counters, because this is what
+       the render half's heartbeat prints: the first version put it in a `gui
+       census:` line that an ordinary run never emits, so the one figure that
+       says the mechanism is behaving was invisible.
+       [gafstale FOUND 2026-09-16, the landing-5 review; replaced the same day.] */
+    volatile unsigned gafnoplane;
+    /* the observe-time scratch, so its bound can be judged rather than assumed:
+       `gafhigh` is the most bytes any one census window has wanted and `gaflost`
+       the planes it could not take. A `gaflost` that is not 0 is the only way
+       `gafnoplane` can move, and both being 0 over a session is what says the
+       2 MB is not a guess that happens to hold. */
+    volatile unsigned gafhigh, gaflost;
+    /* the OP_TEXT branch KEEPS its generation gate and its own counter. The
+       font object is still dereferenced at publish (`gfont_slot`,
+       `glyph_block_size`, `glyph_block_fill` read the header, the offset table
+       and the glyph rows), so the window the sprite path just closed is still
+       open there and is still covered by the ordering. Counted apart so the two
+       mechanisms can never be read as one. */
     volatile unsigned strstale;
     volatile unsigned stalls;                /* episodes where the consumer took nothing for TAGPU_GUI_STALL_MS
                                                 while work was queued (a display-mode switch kills the render
