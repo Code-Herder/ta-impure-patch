@@ -1670,8 +1670,18 @@ static void vk_perimage_free(void)
         if (s_vk.semAcquire[i]) { vkDestroySemaphore(s_vk.dev, s_vk.semAcquire[i], NULL); s_vk.semAcquire[i] = VK_NULL_HANDLE; }
         if (s_vk.semRelease[i]) { vkDestroySemaphore(s_vk.dev, s_vk.semRelease[i], NULL); s_vk.semRelease[i] = VK_NULL_HANDLE; }
         if (s_vk.fence[i])      { vkDestroyFence(s_vk.dev, s_vk.fence[i], NULL);          s_vk.fence[i] = VK_NULL_HANDLE; }
-    s_vk.tsPend[i] = 0;
+        s_vk.tsPend[i] = 0;
     }
+    /* THE TIMESTAMP POOL IS PER-IMAGE TOO, and leaving it out of this function
+       leaked one per swapchain rebuild for the life of the device -- a window
+       the player drags rebuilds often, and `vk_resize` is exactly
+       `vk_perimage_free(); vk_swapchain(); vk_perimage();`, so `vk_perimage`
+       would overwrite a live handle every time. Nulled as well as destroyed:
+       the write path gates on `tsPool` alone, so a stale handle left behind by
+       an early return in `vk_perimage` would be written into.
+       [FOUND 2026-09-16, the landing-6 review.] */
+    if (s_vk.tsPool) { vkDestroyQueryPool(s_vk.dev, s_vk.tsPool, NULL); s_vk.tsPool = VK_NULL_HANDLE; }
+    s_vk.tsPeriod = 0.0;
 }
 
 /* Everything, in the reverse order it was built. Called with `s_vk` owned --
@@ -1684,6 +1694,16 @@ static void vk_down(void)
            correctness depends on it rather than on the object's own ownership. */
         int idle = !vkDeviceWaitIdle || vkDeviceWaitIdle(s_vk.dev) == VK_SUCCESS;
         if (!idle) vklog("vkDeviceWaitIdle refused on the way down");
+        /* THE FRAME-TIME RING GOES WITH THE LANE. `tagpu_ftime.h` says the seam
+           calls this "so a figure from a lane that no longer exists is not
+           averaged into one that does", and until the landing-6 review found it
+           the function had NO caller at all -- a documented invariant that was
+           never implemented. The shell<->game switch brings the lane down and
+           back up inside one process (145-173 ms, landing 5), possibly at
+           another resolution, so the old lane's samples would have been
+           averaged into the new one's percentiles.
+           [FOUND 2026-09-16, the landing-6 review.] */
+        tagpu_ftime_vk_reset();
         /* THE PASSES GO FIRST, AFTER THE WAIT AND BEFORE ANYTHING THEY MIGHT
            BE HOLDING. A pass owns pipelines, descriptors, buffers and images of
            its own; they belong to this device and must be back before it is

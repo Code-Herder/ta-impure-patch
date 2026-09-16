@@ -29,6 +29,11 @@
    frame is cheap but it is not free, and a cost harness that is always on is a
    cost. Read live, like every other lever in this tree.
 
+   `REPORT_FRAMES` counts frames that actually STAMPED a pair, not frames the
+   lever was on for: a frame that found no free pair is skipped and does not
+   advance the counter, so a report is "300 sampled frames" rather than "300
+   armed frames".
+
    The reported figure is a percentile over the last `TAGPU_FTIME_RING` frames
    and NOT a mean: a GPU frame time distribution has a tail (a shader compile, a
    restorer slice, the compositor) and a mean over a few hundred frames is
@@ -42,10 +47,22 @@ void tagpu_ftime_poll(void);
 int  tagpu_ftime_armed(void);
 
 /* The GL lane's bracket. Render thread, GL context current. `begin` is the
-   first thing the frame issues and `end` the last before the buffer swap, so
-   what lies between them is every GL command this iteration produced --
-   the fork's own upload and composite as well as every tagpu pass, which is
-   what a replacement backend would have to do instead. */
+   first thing the frame issues; `end` is immediately before `tagpu_vk_frame`,
+   NOT before the buffer swap -- with the lane armed the Vulkan lane runs
+   between the two, and the whole point is that the GL bracket must not contain
+   the other lane's submit. What lies between them is every GL command this
+   iteration produced: the fork's own upload and composite as well as every
+   tagpu pass, which is what a replacement backend would have to do instead.
+   [The "before the buffer swap" wording was loose and the landing-6 review
+   caught it; render_ogl.c's own comment had it right.]
+
+   IT IS AN ELAPSED SPAN ON THE GPU TIMELINE, NOT A BUSY COUNTER. `glQueryCounter`
+   records when the GPU reaches that point in the command stream, so anything
+   that stalls INSIDE the bracket -- the render thread's own critical section,
+   the restorer's synchronising read-back -- is counted whether the GPU was
+   working or idle. On a frame where the GPU is saturated the two coincide; on
+   one where it is not, this number is the frame, not the work. Say which of
+   those a fixture is before quoting a ratio from it. */
 void tagpu_ftime_gl_begin(void);
 void tagpu_ftime_gl_end(void);
 

@@ -137,6 +137,15 @@ void tagpu_ftime_poll(void)
            the only thing anyone reads. */
         s_glN = s_vkN = 0; s_glAt = s_vkAt = 0; s_frames = 0;
         s_glTotal = s_vkTotal = 0;
+        /* AND THE PAIRS STILL IN FLIGHT, which the first version left pending:
+           `gl_begin` returns above the harvest while the lever is off, so up to
+           GLQ pairs survived the toggle and the first frames after a re-arm
+           harvested them into the freshly cleared ring -- samples from an
+           arbitrarily old scene, at an arbitrarily old resolution, inside a
+           window that says it threw everything away.
+           [FOUND 2026-09-16, the landing-6 review.] */
+        memset(s_qPend, 0, sizeof s_qPend);
+        s_glOpen = 0;
         flog(on ? "ftime: ON - GPU frame time per lane, two timestamps each, nothing blocks"
                 : "ftime: off");
     }
@@ -167,11 +176,38 @@ void tagpu_ftime_gl_begin(void)
                  "so the GL lane cannot be timed and no comparison is possible");
         }
     }
-    if (!s_glOk) return;
+    if (!s_glOk) {
+        /* THE REPORT STILL HAS TO COME OUT. It is called from `gl_end`, which
+           returns on `!s_glOk` -- so the "no ratio: one lane has no samples"
+           line the comment above promises could never be printed in exactly the
+           case it was written for, and a session without ARB_timer_query said
+           nothing at all after its one-shot line. The Vulkan half goes on
+           sampling, so there IS something to report; it is just not a ratio.
+           [FOUND 2026-09-16, the landing-6 review.] */
+        if (++s_frames >= REPORT_FRAMES) { s_frames = 0; report(); }
+        return;
+    }
     if (!s_qMade) {
         x_glGenQueries(GLQ, s_qBeg);
         x_glGenQueries(GLQ, s_qEnd);
-        for (i = 0; i < GLQ; i++) if (!s_qBeg[i] || !s_qEnd[i]) return;
+        for (i = 0; i < GLQ; i++) if (!s_qBeg[i] || !s_qEnd[i]) break;
+        if (i != GLQ) {
+            /* GIVE THE NAMES BACK AND STOP ASKING. The first version returned
+               with `s_qMade` still 0, so the next frame generated 2*GLQ more
+               names over the top of these and leaked 16 a frame for ever. One
+               failure here means the driver will not give us queries; say so
+               once and stand down for the session rather than retry per frame.
+               [FOUND 2026-09-16, the landing-6 review.] */
+            if (x_glDeleteQueries) {
+                x_glDeleteQueries(GLQ, s_qBeg);
+                x_glDeleteQueries(GLQ, s_qEnd);
+            }
+            memset(s_qBeg, 0, sizeof s_qBeg);
+            memset(s_qEnd, 0, sizeof s_qEnd);
+            s_glOk = 0;
+            if (!s_glSaid) { s_glSaid = 1; flog("ftime: glGenQueries gave no usable names - the GL lane cannot be timed"); }
+            return;
+        }
         s_qMade = 1;
     }
     /* HARVEST FIRST, AND ONLY WHAT THE DRIVER SAYS IS THERE. Every pending pair
