@@ -3230,7 +3230,19 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* ---- effects gather (projectiles, explosions, debris, particles) ---- */
     TAGPU_FXVIEW fv;
     int nfx = 0, nfeat = 0, nterr = 0, nmark = 0;
-    if (fxOn || sfxOn || featOn || terrOn || markOn) {
+    /* THE VIEW IS FILLED WHATEVER IS ARMED, and only the GATHERS are gated.
+       It used to be filled inside the `if` below — but `tagpu_shadow_begin`
+       is handed this same struct further down, on the Classic++ shadow path,
+       which is gated on NONE of these five passes. With all five disarmed the
+       shadow module was therefore reading UNINITIALISED STACK: its `zoom` came
+       out 0.000 and its light window ran to millions of texels, and the
+       hand-over it publishes was stamped with a garbage frame, so the Vulkan
+       lane's shadow pass silently found nothing every frame.
+       It cannot happen under the play defaults, where `terr.on` is always on;
+       it happens in exactly the configuration a single pass is MEASURED in.
+       Forty stores on a path that already walks every unit is not worth
+       gating. [FOUND 2026-09-15 taking the unit pass's A/B.] */
+    {
         fv.eyeX = eyeX; fv.eyeY = eyeY;
         fv.packet = f->packet;
         fv.vpL = vpL; fv.vpT = vpT; fv.vw = vw; fv.vh = vh; fv.scafOn = scafOn;
@@ -3266,6 +3278,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         fv.fogTex = s_fogTex; fv.fogLut = s_fogLutTex;
         fv.r0 = r0; fv.rows = rows;
         fv.frame_counter = f->frame_counter;
+    }
+    if (fxOn || sfxOn || featOn || terrOn || markOn) {
         /* terrain first (the frame's far plane), then features: they own the
            depth the units are tested against */
         if (terrOn) nterr = tagpu_terr_gather(&fv);

@@ -1311,18 +1311,53 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     }
     s_saidFog = 0;
 
-    /* THE SCAFFOLD, which is the other pass's texture this one samples. With
-       the G12a overlay armed the fragment shader reads it on every unit, so a
-       frame whose twin had one and whose Vulkan lane does not is a different
-       picture. tagpu_vk_scaffold.h's `_ready` is the question, asked with OUR
-       frame; the seam calls that pass's `prepare` before this one and says so. */
-    if (h.scafOn && !tagpu_vk_scaffold_ready(d->frame)) {
+    /* ---- THE SCAFFOLD, AND THE HALF OF IT THIS LANDING DOES NOT CLOSE ----
+
+       Half the question IS answered, and the mechanism is in place: the
+       overlay is another pass's image, and tagpu_vk_scaffold.h now exposes a
+       FRAME-STAMPED per-slot view in exactly the shape tagpu_vk_shadow.h
+       settled on, which `bind_main` points binding 44 at. That is the part
+       the effects and hi-res passes will reuse.
+
+       THE OTHER HALF IS `gl_FragCoord`, AND IT CANNOT BE RECONCILED HERE.
+       TAGPU_GLSL_SCAF_TEST (tagpu_glsl.h) locates the fragment in the game
+       frame with `gl_FragCoord.xy / uSS` -- and the two APIs disagree about
+       where that coordinate is measured from. GL's origin is the LOWER left;
+       Vulkan's is the UPPER left and `OriginUpperLeft` is the only execution
+       mode Vulkan permits, so a fragment this lane draws at stored row r reads
+       `r + 0.5` where the GL twin reads `H - (r + 0.5)`. With the negative
+       viewport height this pass takes for its geometry, the two are exact
+       mirrors -- so the scaffold lookup would land on the wrong end of the
+       overlay, and the `discard` it drives would cut the wrong fragments.
+
+       THREE WAYS OUT WERE CONSIDERED AND ALL THREE ARE WORSE THAN STANDING
+       DOWN:
+         * Editing the macro to take the origin as a uniform changes the GL
+           twin, which is both the oracle and the shipped renderer.
+         * Re-deriving `uScafP` so the mirrored `gl_FragCoord` comes out at
+           GL's value is possible on paper -- w = -vh, y = C - vpT with C
+           folding the zoom un-transform -- but it is the port re-deriving the
+           pass's inputs, which is the one thing this lane does not do, and it
+           silently breaks the day the macro changes.
+         * Mirroring the uploaded overlay does NOT cancel: it would need the
+           viewport's top and bottom margins to be equal, and they are 32 and
+           33.
+       So a frame whose twin has the overlay armed is refused, exactly as the
+       effects pass refuses one (gpu-status §2.31), and the reason is written
+       down rather than worked around. It costs nothing in play: `scaffold.on`
+       is not in the default arm set and its own note says to leave it
+       disarmed.
+
+       ANY LATER PASS WHOSE FRAGMENT SHADER READS `gl_FragCoord` INHERITS
+       THIS. The hi-res path and the effects pass both carry the same macro. */
+    if (h.scafOn) {
         if (!s_saidScaf) {
             s_saidScaf = 1;
-            plog(d, "unit: the GL twin is sampling the scaffold overlay and the "
-                    "Vulkan lane has no copy of it this frame - nothing drawn "
-                    "while that is true (arm tagpu_scaffold.on for both, or "
-                    "neither)");
+            plog(d, "unit: the GL twin is sampling the scaffold overlay through "
+                    "gl_FragCoord, whose origin is the lower left in GL and the "
+                    "upper left in Vulkan - this pass's flipped viewport makes "
+                    "the two exact mirrors, so nothing is drawn while the "
+                    "overlay is armed rather than cut the wrong fragments");
         }
         return 0;
     }
@@ -1691,6 +1726,12 @@ static void bind_main(const TAGPU_VKPASS* d, uint32_t slot)
     ii[1].sampler = s_samp; ii[1].imageView = s->lutView;
     ii[2].sampler = s_samp; ii[2].imageView = s->palView;
     ii[3].sampler = s_samp; ii[3].imageView = s_atView;
+    /* BINDING 44 NAMES THE REAL OVERLAY WHEN THERE IS ONE, even though this
+       pass refuses every frame that samples it (see `upload`): the mechanism
+       is what the next landing needs, and a descriptor that names the actual
+       image is the one that will still be right when the `gl_FragCoord`
+       question is answered. Until then it is a valid descriptor nothing
+       reads. */
     ii[4].sampler = s_samp; ii[4].imageView = scaf;
     ii[5].sampler = s_samp; ii[5].imageView = s->fogGridView;
     ii[6].sampler = s_samp; ii[6].imageView = s->fogLutView;
