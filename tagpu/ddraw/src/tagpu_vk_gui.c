@@ -50,6 +50,15 @@
    per distinct copy SOURCE twin -- so the sets a frame needs cannot exceed the
    twins plus one, whatever the op count. */
 #define SET_MAX     (TW_MAX + 1)
+/* objects waiting for every slot to turn over once before they are destroyed.
+   THE LANE ALREADY HAD THE ANSWER AND THIS PASS DID NOT USE IT: the seam waits
+   `fence[slot]` and nothing more, so `slots - 1` earlier submissions are still
+   executing -- and the command buffer being recorded right now already names
+   the objects too. Destroying a twin inside `prepare` is a use-after-free on
+   the FIRST eviction, not a rare one. tagpu_vk_terr.c's slot bitmask and
+   tagpu_vk_unit.c's `ret_push` are the same mechanism.
+   [FOUND 2026-09-16 -- BOTH landing reviewers led with it, independently.] */
+#define RET_MAX 128
 #define ATLAS_MAXDIM 8192
 #define SURF_MAXDIM  8192
 
@@ -75,6 +84,7 @@
     X(vkCmdBindPipeline) X(vkCmdBindVertexBuffers) X(vkCmdBindDescriptorSets) \
     X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor) \
     X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdClearAttachments) \
+    X(vkCmdClearColorImage) \
     X(vkCmdCopyBufferToImage) X(vkCmdPipelineBarrier)
 
 #define DECL(n) static PFN_##n n;
@@ -92,6 +102,7 @@ typedef struct {
     VkImageView     view;
     VkFramebuffer   fb;
     VkImageLayout   layout;         /* what it is in RIGHT NOW               */
+    int             needClear;      /* created this frame, not yet cleared   */
 } TWIN;
 
 typedef struct {
@@ -126,7 +137,7 @@ typedef struct {
 
 static int              s_state, s_downOwed, s_downPaying;
 static int              s_drawThis, s_abFrame;
-static int              s_saidOther, s_saidColour, s_saidSharp, s_saidRoom, s_saidEng;
+static int              s_saidColour, s_saidSharp, s_saidRoom, s_saidEng;
 
 static TWIN             s_tw[TW_MAX];
 static int              s_ntw;
@@ -150,6 +161,24 @@ static unsigned         s_atSerial, s_palSerial;
 static int              s_atHave, s_palHave, s_engHave, s_dumReady;
 
 static SLOT             s_slot[TAGPU_VK_SLOTS];
+
+typedef struct {
+    VkImage         img;
+    VkDeviceMemory  mem;
+    VkImageView     view;
+    VkFramebuffer   fb;
+    unsigned        pending;        /* bit per slot still to turn over       */
+} RET;
+static RET              s_ret[RET_MAX];
+
+/* THE STORE MAY BE BEHIND THE GL LANE'S, and that is a state rather than an
+   accident. Any path that cannot apply a frame's ops sets it: the twins are
+   dropped, the producer is asked for a fresh start, and nothing is composited
+   until its RESET arrives. It is `tagpu_gui_surf.c`'s own `s_skipToReset`, for
+   the same reason -- applying ops to a store that has missed some is a wrong
+   picture that every later frame inherits. */
+static int              s_behind;
+static VkImageView      s_setView[SET_MAX];
 
 /* this frame's plan, filled by `prepare` and read by `record` */
 static unsigned         s_presented;
@@ -332,6 +361,58 @@ static void tw_to(VkCommandBuffer cb, TWIN* t, VkImageLayout to)
     t->layout = to;
 }
 
+/* ---- the retire --------------------------------------------------------- */
+
+/* this slot has turned over: whatever was waiting on it is one step closer */
+static void ret_slot_done(const TAGPU_VKPASS* d, uint32_t slot)
+{
+    int i;
+    for (i = 0; i < RET_MAX; i++) {
+        if (!s_ret[i].pending) continue;
+        s_ret[i].pending &= ~(1u << slot);
+        if (s_ret[i].pending) continue;
+        if (s_ret[i].fb)   vkDestroyFramebuffer(d->dev, s_ret[i].fb, NULL);
+        if (s_ret[i].view) vkDestroyImageView(d->dev, s_ret[i].view, NULL);
+        if (s_ret[i].img)  vkDestroyImage(d->dev, s_ret[i].img, NULL);
+        if (s_ret[i].mem)  vkFreeMemory(d->dev, s_ret[i].mem, NULL);
+        memset(&s_ret[i], 0, sizeof s_ret[i]);
+    }
+}
+
+/* Hand an object set to the retire, or say the list is full. EVERY slot's bit
+   is set, the one being recorded included: that slot's submit is the one most
+   certainly naming these handles, and its bit clears when it comes round
+   again -- which is after its fence. A full list is not a reason to destroy
+   anything here; it is a reason to stop. */
+static int ret_push(const TAGPU_VKPASS* d, VkImage img, VkDeviceMemory mem,
+                    VkImageView view, VkFramebuffer fb)
+{
+    int i;
+    if (!img && !mem && !view && !fb) return 1;
+    for (i = 0; i < RET_MAX; i++) {
+        if (s_ret[i].pending) continue;
+        s_ret[i].img = img; s_ret[i].mem = mem;
+        s_ret[i].view = view; s_ret[i].fb = fb;
+        s_ret[i].pending = (d->slots >= 32) ? 0xFFFFFFFFu
+                                            : ((1u << d->slots) - 1u);
+        return 1;
+    }
+    return 0;
+}
+
+/* only ever called behind the seam's vkDeviceWaitIdle */
+static void ret_drain_idle(const TAGPU_VKPASS* d)
+{
+    int i;
+    for (i = 0; i < RET_MAX; i++) {
+        if (s_ret[i].fb)   vkDestroyFramebuffer(d->dev, s_ret[i].fb, NULL);
+        if (s_ret[i].view) vkDestroyImageView(d->dev, s_ret[i].view, NULL);
+        if (s_ret[i].img)  vkDestroyImage(d->dev, s_ret[i].img, NULL);
+        if (s_ret[i].mem)  vkFreeMemory(d->dev, s_ret[i].mem, NULL);
+        memset(&s_ret[i], 0, sizeof s_ret[i]);
+    }
+}
+
 /* ---- the twin store ----------------------------------------------------- */
 
 static TWIN* tw_find(unsigned surf)
@@ -342,17 +423,28 @@ static TWIN* tw_find(unsigned surf)
     return NULL;
 }
 
-static void tw_drop(const TAGPU_VKPASS* d, TWIN* t)
+/* 0 when the retire would not take it, which is the one case a caller may not
+   shrug off: dropping the entry anyway leaks, destroying it here is the
+   use-after-free this list exists to prevent. */
+static int tw_drop(const TAGPU_VKPASS* d, TWIN* t)
 {
-    if (t->fb) { vkDestroyFramebuffer(d->dev, t->fb, NULL); t->fb = VK_NULL_HANDLE; }
-    kill_image(d, &t->img, &t->mem, &t->view);
+    int j;
+    if (!ret_push(d, t->img, t->mem, t->view, t->fb)) return 0;
+    /* A SET MAY NOT GO ON NAMING A VIEW THAT IS ON ITS WAY OUT. `s_setView`
+       keys the frame's descriptor claims on the view HANDLE, and a driver may
+       hand the same handle back for the next image it creates -- so a claim
+       left standing would match and the recorded draw would use a set still
+       describing the old one. */
+    for (j = 0; j < SET_MAX; j++) if (s_setView[j] == t->view) s_setView[j] = VK_NULL_HANDLE;
     *t = s_tw[--s_ntw];
     memset(&s_tw[s_ntw], 0, sizeof s_tw[s_ntw]);
+    return 1;
 }
 
-static void tw_reset(const TAGPU_VKPASS* d)
+static int tw_reset(const TAGPU_VKPASS* d)
 {
-    while (s_ntw) tw_drop(d, &s_tw[0]);
+    while (s_ntw) if (!tw_drop(d, &s_tw[0])) return 0;
+    return 1;
 }
 
 static TWIN* tw_make(const TAGPU_VKPASS* d, unsigned surf, int w, int h)
@@ -361,13 +453,13 @@ static TWIN* tw_make(const TAGPU_VKPASS* d, unsigned surf, int w, int h)
     VkFramebufferCreateInfo fi = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
     if (t) {
         if (t->w == w && t->h == h) return t;
-        tw_drop(d, t);                       /* a resized surface is a new one */
+        if (!tw_drop(d, t)) return NULL;     /* a resized surface is a new one */
     }
     if (w < 1 || h < 1 || w > SURF_MAXDIM || h > SURF_MAXDIM) return NULL;
     /* THE OLDEST GOES, which is what tagpu_gui_surf.c's twin_make does. The
        store is bounded by construction on both sides, so the two cannot
        disagree about which surfaces have a twin. */
-    if (s_ntw >= TW_MAX) tw_drop(d, &s_tw[0]);
+    if (s_ntw >= TW_MAX && !tw_drop(d, &s_tw[0])) return NULL;
     t = &s_tw[s_ntw];
     memset(t, 0, sizeof *t);
     if (!mk_image(d, w, h, VK_FORMAT_R8G8_UNORM,
@@ -383,8 +475,37 @@ static TWIN* tw_make(const TAGPU_VKPASS* d, unsigned surf, int w, int h)
     }
     t->surf = surf; t->w = w; t->h = h;
     t->layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    /* A FRESH TWIN IS CLEARED, because GL's `twin_make` clears one
+       (`glClearColor(0,0,0,0); glClear`) and a texel neither lane's seed
+       covers must read the same in both. Ours would otherwise load whatever
+       device memory it was handed, through a LOAD_OP_LOAD render pass, and
+       keep it. Cheap, and it removes the question rather than resting on "the
+       producer always sends the bytes". [FOUND 2026-09-16, the landing
+       review -- the two reviewers disagreed about whether a seed can arrive
+       with no bytes, which is itself the reason not to depend on it.] */
+    t->needClear = 1;
     s_ntw++;
     return t;
+}
+
+/* A TWIN CREATED THIS FRAME IS CLEARED BEFORE ANYTHING READS OR LOADS IT.
+   GL's `twin_make` clears; ours must, or the LOAD_OP_LOAD render pass loads
+   whatever memory the allocator handed us and keeps it in the twin. Done at
+   the first touch rather than at creation, because creation happens outside a
+   command buffer. */
+static void tw_fresh(VkCommandBuffer cb, TWIN* t)
+{
+    VkClearColorValue cv;
+    VkImageSubresourceRange rg;
+    if (!t->needClear) return;
+    t->needClear = 0;
+    memset(&cv, 0, sizeof cv);
+    memset(&rg, 0, sizeof rg);
+    rg.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    rg.levelCount = 1; rg.layerCount = 1;
+    tw_to(cb, t, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    vkCmdClearColorImage(cb, t->img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                         &cv, 1, &rg);
 }
 
 /* ---- build -------------------------------------------------------------- */
@@ -768,15 +889,15 @@ static void set_viewport(VkCommandBuffer cb, int w, int h)
     vkCmdSetViewport(cb, 0, 1, &vp);
 }
 
-/* A TWIN-DRAW SET, CLAIMED FOR ONE IMAGE FOR THE LENGTH OF ONE FRAME.
+/* (s_setView is declared with the pass's state, above: tw_drop clears a claim
+   whose view it is retiring.)
+   A TWIN-DRAW SET, CLAIMED FOR ONE IMAGE FOR THE LENGTH OF ONE FRAME.
    A set may not be rewritten once a recorded draw names it, so each distinct
    image a frame samples needs its own -- and the twin ARRAY cannot be the
    index, because `tw_drop` moves the last entry into the hole and the indices
    shuffle under it. So the claim is on the VIEW: reuse the set already holding
    it, else take a free one. SET_MAX is the twins plus one, so a frame can
    never want more than there are. */
-static VkImageView s_setView[SET_MAX];
-
 static int set_claim(const TAGPU_VKPASS* d, SLOT* s, VkImageView v,
                      VkDeviceSize uRange, VkDeviceSize fRange, int* out)
 {
@@ -814,6 +935,22 @@ static int set_claim(const TAGPU_VKPASS* d, SLOT* s, VkImageView v,
     return 1;
 }
 
+/* THE STORE IS BEHIND: drop it, ask the producer for the fresh start, and
+   composite nothing until its RESET arrives. Every path that cannot apply a
+   frame's ops goes through here, and there is exactly one way out -- which is
+   what makes "our twins equal the GL lane's" checkable rather than hoped for.
+   A drop the retire will not take leaves the pass owing a teardown instead. */
+static int behind(const TAGPU_VKPASS* d, const char* why)
+{
+    if (!s_behind) plog(d, "gui: the twin store cannot follow the GL lane (%s) "
+                           "- asking the producer for a fresh start and "
+                           "compositing nothing until it arrives", why);
+    s_behind = 1;
+    tagpu_gui_mirror_reseed();
+    if (!tw_reset(d)) return 0;      /* caller refuses: the retire is full */
+    return 1;
+}
+
 /* THE REPLAY. Every reason not to draw is taken BEFORE a byte is written, and
    each one stands the whole frame down rather than drawing part of it: a twin
    store is cumulative, so a partially applied frame is not a smaller picture,
@@ -837,6 +974,11 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     if (s_state == ST_REFUSED) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
     s = &s_slot[slot];
+
+    /* THE RETIRE'S ACCOUNTING, FIRST AND UNCONDITIONALLY: every path below can
+       return early, and the path that returns early is exactly the one that
+       must still clear this slot's bit or the retire stalls for ever. */
+    ret_slot_done(d, slot);
 
     /* ASK FOR THE MIRROR, and keep asking. The GL half copies nothing until
        something wants it, and its drain runs EARLIER in this same iteration of
@@ -866,14 +1008,18 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        session, silently. So `compose` is cleared and the replay runs anyway.
        [FOUND 2026-09-16, the first in-game run: the draw-count bound below
        returned early and took the frame's ops with it.] ---- */
+    /* A STRING OP IS APPLIED BY THE GL LANE AND CANNOT BE REPLAYED HERE -- the
+       hand-over does not carry it, by design, because this landing has no
+       glyph path. So it is not a `compose = 0`: those glyphs are in the GL
+       twin and will never be in ours, and every later frame would composite a
+       twin missing them. It is the behind state.
+       [FOUND 2026-09-16, the landing review; §2.34's "the twins are kept
+       level" was written of the ops the mirror CARRIES and was false of this
+       one, which it does not.] */
     if (h.otherOps > 0) {
-        if (!s_saidOther) { s_saidOther = 1;
-            plog(d, "gui: the GL twin applied %d op(s) this landing does not "
-                    "carry (a string) - the twins are kept level but nothing is "
-                    "composited while that is true. `gui.on=nostring` is the "
-                    "lever the A/B is taken with", h.otherOps); }
-        compose = 0;
-    } else s_saidOther = 0;
+        if (!behind(d, "a string op the hand-over does not carry")) goto refuse;
+        return 0;
+    }
     if (h.colourTwins) {
         if (!s_saidColour) { s_saidColour = 1;
             plog(d, "gui: the GL twin is compositing a Classic++ colour twin and "
@@ -904,8 +1050,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     if (h.atlas && (h.atlasDim < 1 || h.atlasDim > ATLAS_MAXDIM ||
                     h.atlasRows < 1 || h.atlasRows > h.atlasDim)) {
         /* the atlas is what a sprite samples: without a sane one the replay
-           itself cannot run, so this is a fresh start and not a `compose` */
-        tagpu_gui_mirror_reseed(); tw_reset(d); return 0;
+           itself cannot run */
+        if (!behind(d, "an atlas outside what this pass carries")) goto refuse;
+        return 0;
     }
 
     /* ---- pass 1: validate every op and count what the frame needs ----
@@ -916,38 +1063,40 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         int bw = o->r - o->l + 1, bh = o->b - o->t + 1;
         switch (o->kind) {
         case TAGPU_GUIOP_SEED:
-            if (o->w < 1 || o->h < 1 || o->w > SURF_MAXDIM || o->h > SURF_MAXDIM) return 0;
+            if (o->w < 1 || o->h < 1 || o->w > SURF_MAXDIM || o->h > SURF_MAXDIM) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
             if (o->alen) {
-                if (o->alen != (unsigned)o->w * (unsigned)o->h) return 0;
-                if (o->aoff > h.alen || o->aoff + o->alen > h.alen) return 0;
+                if (o->alen != (unsigned)o->w * (unsigned)o->h) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
+                if (o->aoff > h.alen || o->aoff + o->alen > h.alen) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
                 stNeed += (VkDeviceSize)o->alen * 2;
             }
             break;
         case TAGPU_GUIOP_PIXELS:
-            if (bw < 1 || bh < 1) return 0;
-            if (o->alen != (unsigned)bw * (unsigned)bh) return 0;
-            if (o->aoff > h.alen || o->aoff + o->alen > h.alen) return 0;
+            if (bw < 1 || bh < 1) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
+            if (o->alen != (unsigned)bw * (unsigned)bh) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
+            if (o->aoff > h.alen || o->aoff + o->alen > h.alen) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
             stNeed += (VkDeviceSize)o->alen * 2;
             break;
         case TAGPU_GUIOP_SPRITE:
-            if (o->fw < 1 || o->fh < 1) return 0;
-            if (!h.atlas) return 0;             /* nothing to sample          */
+            if (o->fw < 1 || o->fh < 1) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
+            if (!h.atlas) { if (!behind(d, "a malformed op")) goto refuse; return 0; }             /* nothing to sample          */
             ndraw++;
             break;
         case TAGPU_GUIOP_COPY:
             /* A SELF-COPY IS REFUSED rather than guessed at: the GL lane reads
                and writes one texture in one draw there, which is undefined in
                both APIs, and reproducing undefined behaviour is not parity. */
-            if (o->surf == o->src) return 0;
+            if (o->surf == o->src) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
             ndraw++;
             break;
         case TAGPU_GUIOP_CLEAR:
-            if (bw < 1 || bh < 1) return 0;
+            if (bw < 1 || bh < 1) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
             break;
         case TAGPU_GUIOP_FREE:
         case TAGPU_GUIOP_RESET:
             break;
-        default: tagpu_gui_mirror_reseed(); tw_reset(d); return 0;
+        default:
+            if (!behind(d, "an op kind this pass does not know")) goto refuse;
+            { if (!behind(d, "a malformed op")) goto refuse; return 0; }
         }
     }
     if (ndraw > DRAW_MAX) {
@@ -958,8 +1107,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             plog(d, "gui: %d sprite/copy draws in one frame, past this pass's "
                     "bound of %d - the store cannot follow, asking for a fresh "
                     "start", ndraw, DRAW_MAX); }
-        tagpu_gui_mirror_reseed();
-        tw_reset(d);
+        if (!behind(d, "more sprite/copy draws in one frame than the bound")) goto refuse;
         return 0;
     }
     s_saidRoom = 0;
@@ -996,7 +1144,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     /* ---- the shared texels ---- */
     if (atUp) {
         if (s_atDim != h.atlasDim) {
-            kill_image(d, &s_atImg, &s_atMem, &s_atView);
+            /* every in-flight composite samples this one */
+            if (!ret_push(d, s_atImg, s_atMem, s_atView, VK_NULL_HANDLE)) goto refuse;
+            s_atImg = VK_NULL_HANDLE; s_atMem = VK_NULL_HANDLE; s_atView = VK_NULL_HANDLE;
             s_atDim = 0; s_atHave = 0;
             if (!mk_image(d, h.atlasDim, h.atlasDim, VK_FORMAT_R8_UNORM,
                           VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -1018,7 +1168,8 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     }
     if (engUp) {
         if (s_engW != h.engW || s_engH != h.engH) {
-            kill_image(d, &s_engImg, &s_engMem, &s_engView);
+            if (!ret_push(d, s_engImg, s_engMem, s_engView, VK_NULL_HANDLE)) goto refuse;
+            s_engImg = VK_NULL_HANDLE; s_engMem = VK_NULL_HANDLE; s_engView = VK_NULL_HANDLE;
             s_engW = s_engH = 0; s_engHave = 0;
             if (!mk_image(d, h.engW, h.engH, VK_FORMAT_R8_UNORM,
                           VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -1097,11 +1248,20 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 
     memset(s_setView, 0, sizeof s_setView);   /* the frame's claims start clean */
 
+    /* WHILE BEHIND, ONLY A RESET IS APPLIED. Everything before the producer's
+       fresh start names twins this store never made, and applying it would
+       build a picture out of half a history. `tagpu_gui_surf.c`'s drain does
+       exactly this with `s_skipToReset` after a GL context change. */
+
     /* ---- pass 2: the ops, in the order the GL lane applied them ---- */
     for (i = 0; i < h.nops; i++) {
         const TAGPU_GUIOP* o = &h.ops[i];
         TWIN* t;
         int bw = o->r - o->l + 1, bh = o->b - o->t + 1;
+        if (s_behind) {
+            if (o->kind != TAGPU_GUIOP_RESET) continue;
+            s_behind = 0;               /* the fresh start has arrived */
+        }
 
         /* a draw needs a render pass open on ITS destination; everything else
            needs none open at all (a transfer and a layout change may not be
@@ -1111,6 +1271,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             TWIN* src = NULL;
             t = tw_find(o->surf);
             if (!t) continue;               /* the GL lane had one; we do not  */
+            tw_fresh(cb, t);
             if (o->kind == TAGPU_GUIOP_COPY) {
                 src = tw_find(o->src);
                 if (!src) {
@@ -1124,6 +1285,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                             "made - asking the producer for a fresh start");
                     goto standdown;
                 }
+                tw_fresh(cb, src);
                 if (src != cur && rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
                 if (rpOpen && cur != t) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
                 if (!rpOpen) tw_to(cb, src, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -1224,6 +1386,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                 t = tw_find(o->surf);
                 if (!t) continue;
             }
+            tw_fresh(cb, t);
             if (!o->alen) break;
             if (ux < 0 || uy < 0 || ux + uw > t->w || uy + uh > t->h) continue;
             /* THE SAME INTERLEAVE THE GL LANE DOES: R = the palette index,
@@ -1242,7 +1405,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     if (rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
 
     /* ---- the composite's own set and block ---- */
-    if (!compose || !s_engHave || !s_palHave) { s_drawThis = 0; s_abFrame = 0; return 0; }
+    if (s_behind || !compose || !s_engHave || !s_palHave) {
+        s_drawThis = 0; s_abFrame = 0; return 0;
+    }
     pres = tw_find(h.presented);
     if (!pres || pres->w != h.surfW || pres->h != h.surfH) goto standdown;
     tw_to(cb, pres, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -1314,8 +1479,12 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 
 standdown:
     if (rpOpen) vkCmdEndRenderPass(cb);
-    /* the store is behind: drop it and start again from the producer's seeds */
-    tw_reset(d);
+    /* THE STORE IS BEHIND AND SOMETHING HAS TO ASK. Dropping it and saying
+       nothing was the bug: `tw_find(h.presented)` would answer NULL again on
+       every later frame, land here again, and the pass would never draw for
+       the rest of the session with no line in the log to say why.
+       [FOUND 2026-09-16 -- both landing reviewers, separately.] */
+    if (!behind(d, "the presented surface has no twin here")) goto refuse;
     s_drawThis = 0; s_abFrame = 0;
     return 0;
 
@@ -1409,7 +1578,14 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
         s_ntw = 0;
         return;
     }
-    tw_reset(d);
+    /* behind the seam's vkDeviceWaitIdle: nothing of ours is in a queue, so
+       the retire is emptied outright rather than one slot at a time */
+    while (s_ntw) { TWIN* t = &s_tw[0];
+                    if (t->fb) vkDestroyFramebuffer(d->dev, t->fb, NULL);
+                    kill_image(d, &t->img, &t->mem, &t->view);
+                    *t = s_tw[--s_ntw]; memset(&s_tw[s_ntw], 0, sizeof s_tw[s_ntw]); }
+    ret_drain_idle(d);
+    s_behind = 0;
     for (i = 0; i < TAGPU_VK_SLOTS; i++) {
         slot_free(d, &s_slot[i]);
         s_slot[i].laySet = VK_NULL_HANDLE;

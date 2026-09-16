@@ -1204,6 +1204,7 @@ static void mir_finish(const TAGPU_FRAME* f);   /* defined below draw_layer,
 static void mir_begin(void)
 {
     s_mNOps = 0; s_mALen = 0; s_mOther = 0; s_mLayer = 0;
+    s_abFrame = 0;          /* the claim never outlives the frame that made it */
     s_mirRec = s_mirWant;
     s_mHave = 0;
 }
@@ -2309,7 +2310,14 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
                different frame -- tagpu_abshot.h */
             int wrote = tagpu_abshot_end(&shot, AB_OUT, "gui");
             s_abDone = 1;
-            if (wrote) s_abFrame = 1;
+            /* THE CLAIM IS THIS FRAME'S OR NOBODY'S. It used to be set here and
+               cleared only inside `mir_finish`, so a frame that published no
+               record carried the flag forward and the two lanes captured
+               DIFFERENT frames -- which is the one thing the "one lever, one
+               frame" rule exists to prevent, and it is why several captures in
+               the first measuring session would not pair.
+               [FOUND 2026-09-16, the landing review.] */
+            s_abFrame = wrote ? 1 : 0;
         }
     }
     mir_finish(f);          /* G19f: close and publish the frame's record */
@@ -2366,14 +2374,27 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
    and cannot read a GL texture at all. */
 static void mir_finish(const TAGPU_FRAME* f)
 {
-    if (!s_mirRec || !s_mLayer) { s_mHave = 0; return; }
+    /* PUBLISHED EVEN WHEN THE COMPOSITE DID NOT DRAW. `draw_layer` returns
+       early when the presented surface has no twin or its size has moved --
+       and on those frames the drain still APPLIED this frame's ops to the GL
+       twins. Withholding the record leaves the Vulkan store behind by exactly
+       those ops, for the session, which is the same hole the consumer was
+       restructured to close and which was still open here.
+       `presented = 0` is how the consumer is told the composite state is not
+       valid: it replays and does not draw. [FOUND 2026-09-16, the landing
+       review.] */
+    if (!s_mirRec) { s_mHave = 0; return; }
+    if (!s_mLayer) {
+        s_mHand.presented = 0; s_mHand.surfW = s_mHand.surfH = 0;
+        s_mHand.strict = 0; s_mHand.guard = 0; s_mHand.sharpOn = 0;
+        s_mHand.colourTwins = 0;
+    }
 
     s_mHand.frame = f->frame_counter;
     s_mHand.ops = s_mOps; s_mHand.nops = s_mNOps;
     s_mHand.arena = s_mArena; s_mHand.alen = s_mALen;
     s_mHand.otherOps = s_mOther;
     s_mHand.ab = s_abFrame;
-    s_abFrame = 0;
 
     /* THE UI ATLAS, as bytes. Asked for once; `tagpu_gaf_atlas_mirror` makes
        it correct from the instant it exists by marking every painted entry for
@@ -2407,9 +2428,17 @@ static void mir_finish(const TAGPU_FRAME* f)
     s_mHand.eng = NULL; s_mHand.engW = s_mHand.engH = s_mHand.engPitch = 0;
     if (f->surface_tex) {
         EnterCriticalSection(&g_ddraw.cs);
+        /* THE BOUND COMES FROM THE OBJECT BEING READ, not from the device
+           mode. `g_ddraw.width/height` is the mode; the bytes and the pitch
+           belong to the PRIMARY, which carries its own geometry -- and between
+           a mode change and the primary being recreated the two disagree, so
+           `h * pitch` off the mode can run past the primary's allocation.
+           CLAUDE.md: a value is DATA until it has been validated as data.
+           [FOUND 2026-09-16, the landing review.] */
         if (g_ddraw.primary && g_ddraw.primary->surface &&
-            g_ddraw.bpp == 8 && g_ddraw.width > 0 && g_ddraw.height > 0) {
-            int w = g_ddraw.width, h = g_ddraw.height;
+            g_ddraw.bpp == 8 &&
+            g_ddraw.primary->width > 0 && g_ddraw.primary->height > 0) {
+            int w = g_ddraw.primary->width, h = g_ddraw.primary->height;
             int pitch = g_ddraw.primary->pitch ? (int)g_ddraw.primary->pitch : w;
             unsigned need = (unsigned)w * (unsigned)h;
             if (pitch >= w && need && need <= (64u << 20)) {
