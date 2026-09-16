@@ -80,6 +80,7 @@
 #include "tagpu_terrown.h"           /* is the world viewport carrying our key fill right now? */
 #include "tagpu_overlay.h"
 #include "tagpu_pal.h"                    /* the one resolution of the presented palette */
+#include "tagpu_abshot.h"                 /* G19f: the GL half of the Phase G A/B */
 #include "opengl_utils.h"
 #include "dd.h"                         /* g_ddraw.cursor: the pointer the fork last saw (13.5) */
 #include "ddsurface.h"                  /* G19f: g_ddraw.primary->surface/pitch, the composite's
@@ -1155,6 +1156,19 @@ static int       s_mirWant = 0;        /* the Vulkan pass asked for one       */
 static int       s_mirRec  = 0;        /* ...and this frame is being recorded */
 static unsigned  s_mirLost = 0;        /* frames abandoned for want of room   */
 static int       s_mOther = 0;         /* ops this landing does not carry     */
+/* G19f: THE A/B'S GL HALF. `tagpu_gui.ab` makes this pass draw its composite
+   over a black frame and reads the viewport back, once, so the Vulkan lane can
+   be diffed against it -- tagpu_abshot.h has what an A/B is here.
+   NO DEPTH AND NO SCISSOR FLAG: the composite disables the depth test outright
+   and sets no scissor of its own, so clearing a buffer it never reads and
+   restoring a rectangle it never set would both be changes to the frame for no
+   gain. The clear itself barely matters either -- the composite is a
+   full-viewport quad with blending off, so it writes every pixel it covers --
+   but it is what removes whatever the world passes left under it, which the
+   Vulkan lane does not have. */
+#define AB_FILE  "tagpu_gui.ab"
+#define AB_OUT   "tagpu_gui_gl.ppm"
+static int       s_ab, s_abDone, s_abFrame;
 static int       s_mLayer = 0;         /* draw_layer actually composited      */
 
 static TAGPU_GUIOP* s_mOps;
@@ -2185,6 +2199,9 @@ static void poll(void)
        installed (they need the file at attach) while the layer is A/B'd */
     if (on && strstr(buf, "off")) on = 0;
     s_strict = on && strstr(buf, "strict") != NULL;
+    /* the lever is its own file, polled on this cadence like every other pass's */
+    s_ab = GetFileAttributesA(AB_FILE) != INVALID_FILE_ATTRIBUTES;
+    if (!s_ab) s_abDone = 0;
     /* `norestore`: the layer without Classic++ art, so the two halves can be
        A/B'd live without turning the world's restorer off too */
     s_norestore = on && strstr(buf, "norestore") != NULL;
@@ -2260,7 +2277,25 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
        (and, under `sharptest`, filled) while nothing of the composite has
        been written yet. */
     sharp_begin(f);
-    draw_layer(f);
+    {
+        /* ONE LEVER, ONE FRAME, AND THE FLAG TRAVELS WITH THE DATA (the
+           roadmap's A/B shape). The Vulkan lane captures the frame this flag
+           arrived on rather than whichever one its own poll landed on --
+           `mir_finish` hands it over with the ops. */
+        TAGPU_ABSHOT shot;
+        int taking = s_ab && !s_abDone;
+        if (taking) tagpu_abshot_begin(&shot, 0);
+        draw_layer(f);
+        if (taking) {
+            /* the claim is made only when the capture reached the disk: on any
+               failure the PREVIOUS run's _gl.ppm is still lying there, and a
+               Vulkan half claimed anyway would be diffed against a capture of a
+               different frame -- tagpu_abshot.h */
+            int wrote = tagpu_abshot_end(&shot, AB_OUT, "gui");
+            s_abDone = 1;
+            if (wrote) s_abFrame = 1;
+        }
+    }
     mir_finish(f);          /* G19f: close and publish the frame's record */
     unbind_all();
     glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
@@ -2321,7 +2356,8 @@ static void mir_finish(const TAGPU_FRAME* f)
     s_mHand.ops = s_mOps; s_mHand.nops = s_mNOps;
     s_mHand.arena = s_mArena; s_mHand.alen = s_mALen;
     s_mHand.otherOps = s_mOther;
-    s_mHand.ab = 0;
+    s_mHand.ab = s_abFrame;
+    s_abFrame = 0;
 
     /* THE UI ATLAS, as bytes. Asked for once; `tagpu_gaf_atlas_mirror` makes
        it correct from the instant it exists by marking every painted entry for
