@@ -132,6 +132,12 @@ static int s_downOwed;                     /* a teardown the seam still owes us 
 static int s_downPaying;                   /* ...and the seam is paying it NOW  */
 static int s_drawThis;                     /* `prepare` left a draw for `record` */
 static int s_abFrame;
+/* THE OVERLAY AS A SAMPLED TEXTURE, and the frame it is this frame's for.
+   Cleared wherever the pass stops being able to answer for one -- a slot given
+   back, a refusal, a teardown -- so that "no overlay" is what a consumer gets
+   rather than a stale one. */
+static int      s_liveHave;
+static unsigned s_liveFrame;
 
 static VkDescriptorSetLayout s_dsl;
 static VkPipelineLayout      s_plo;
@@ -587,6 +593,11 @@ int tagpu_vk_scaffold_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_
     VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
     VkBufferImageCopy rg;
 
+    /* THE OVERLAY A CONSUMER MAY SAMPLE IS NOT THIS FRAME'S UNTIL THE UPLOAD
+       BELOW HAS BEEN RECORDED. Cleared first so that every exit path leaves
+       `tagpu_vk_scaffold_ready` saying no rather than yes for an older frame. */
+    s_liveHave = 0;
+
     if (s_state == ST_REFUSED) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
 
@@ -705,7 +716,30 @@ int tagpu_vk_scaffold_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_
        defect until the G19d review's second pass.) */
     s_abFrame = ab;
     s_drawThis = 1;
+    /* THE OVERLAY IS ALSO A TEXTURE OTHER PASSES SAMPLE (Phase G / G19e, the
+       unit pass). It is in SHADER_READ_ONLY_OPTIMAL from the barrier above and
+       stays that way for the rest of the frame, so a consumer that points its
+       own descriptor set at it during its own `prepare` is naming an image
+       this frame's upload has already been ordered into.
+       STAMPED WITH THE FRAME, for the reason tagpu_vk_shadow.h gives at
+       length: the view behind it is one image per slot and one flag for the
+       pass, so a caller out of step would otherwise be handed an earlier
+       frame's overlay and draw a scaffold that is not this frame's. */
+    s_liveHave = 1;
+    s_liveFrame = d->frame;
     return 1;
+}
+
+int tagpu_vk_scaffold_ready(unsigned frame)
+{
+    return s_liveHave && s_liveFrame == frame;
+}
+
+VkImageView tagpu_vk_scaffold_view(unsigned frame, uint32_t slot)
+{
+    if (!s_liveHave || s_liveFrame != frame || slot >= TAGPU_VK_SLOTS)
+        return VK_NULL_HANDLE;
+    return s_slot[slot].view;
 }
 
 void tagpu_vk_scaffold_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
@@ -754,6 +788,8 @@ void tagpu_vk_scaffold_down(const TAGPU_VKPASS* d)
 {
     VkDevice dev = d->dev;
     uint32_t i;
+    /* the views are about to be destroyed, so no consumer may be handed one */
+    s_liveHave = 0;
     /* WHETHER THIS TEARDOWN IS THE ONE THE PASS ASKED FOR. Only the seam's
        `_down_paid` sets it, and only after its vkDeviceWaitIdle -- so a
        `vk_down` or a `vk_resize` that happens to run while a debt is

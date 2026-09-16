@@ -47,6 +47,9 @@ int  tagpu_native_unit_pos(const struct TAGPU_PK_UNIT* u, float* x, float* y, fl
    texture name -- and they are the bytes that were uploaded, not a second
    construction of them.] */
 const unsigned char* tagpu_native_foglut(void);
+/* the grid that went with it, for a pass that has to copy it -- see the
+   implementation for the bound and the lifetime */
+const unsigned short* tagpu_native_foggrid(int* cols, int* rows, int* cells);
 
 /* 1 while this frame's world-FBO passes are clipped to the engine's viewport
    rect (glScissor), 0 when glScissor could not be resolved and they are not.

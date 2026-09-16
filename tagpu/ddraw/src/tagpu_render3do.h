@@ -40,4 +40,26 @@ int tagpu_r3d_face_colour(const char* fa);
    frame packet carries. Returns 0 for a unit that is not under construction. */
 int tagpu_r3d_nano_state(float nano, unsigned id, unsigned tick,
                          float* t, float c[3], float* wire);
+
+/* ---- THE VULKAN LANE'S TEXELS (Phase G / G19e, the unit pass) ------------
+
+   The unit fragment shader samples the unit atlas on texture unit 0 and the
+   shade LUT on unit 1; a second backend cannot read either GL texture, so both
+   are mirrored on the CPU. The atlas takes tagpu_gaf.h's mechanism unchanged
+   -- the mirror is written by the same atlas_paint that writes GL, and asking
+   for one marks every painted entry for repaint so that it is correct from the
+   instant it exists. The LUT is 8 KB built once per context and is simply
+   kept.
+
+   `_want` is idempotent and costs nothing until it is called. `_mirror`
+   returns NULL while there is none, which a pass treats as "stand down this
+   frame" and not as an error: the atlas re-converges over the next few frames.
+   `rows` is the shelf cursor, so only the rows the packer has used are
+   uploaded. Render thread only, like the rest of this module. */
+void tagpu_r3d_atlas_mirror_want(void);
+const unsigned char* tagpu_r3d_atlas_mirror(int* dim, int* rows, unsigned* serial);
+/* 256 x 32 R8, the bytes `shade_upload` last gave glTexSubImage2D. The serial
+   moves when the table is rebuilt -- which happens once per context, and again
+   the first time the engine's own PALETTE.SHD arrives after a frame with none. */
+const unsigned char* tagpu_r3d_lut_mirror(int* w, int* h, unsigned* serial);
 #endif

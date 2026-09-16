@@ -165,6 +165,7 @@
 #include "tagpu_vk_terr.h"
 #include "tagpu_vk_fx.h"
 #include "tagpu_vk_shadow.h"
+#include "tagpu_vk_unit.h"
 #include "tagpu_vk_shot.h"
 
 #define ON_FILE    "tagpu_vk.on"
@@ -189,6 +190,7 @@
 #define AB_FEAT    "tagpu_feat_vk.ppm"
 #define AB_TERR    "tagpu_terr_vk.ppm"
 #define AB_FX      "tagpu_fx_vk.ppm"
+#define AB_UNIT    "tagpu_posedraw_vk.ppm"
 #define GPUS_FILE  "tagpu_vk.gpus"      /* the cache the menu reads at attach */
 #define CFG_FILE   "tagpu_vk.cfg"       /* the player's choice, by name       */
 #define CFG_TMP    "tagpu_vk.cfg.tmp"
@@ -1648,6 +1650,8 @@ static void vk_down(void)
         tagpu_vk_terr_down(&s_pass);
         tagpu_vk_fx_down(&s_pass);
         tagpu_vk_shadow_down(&s_pass);
+    tagpu_vk_unit_down(&s_pass);
+        tagpu_vk_unit_down(&s_pass);
         ab_drop("the lane coming down", idle);
         tagpu_vk_shot_down(&s_pass);
         vk_perimage_free();
@@ -2195,7 +2199,7 @@ static int vk_present(void)
        refusal, and nothing at all on every other frame. */
     if (tagpu_vk_terr_down_owed() || tagpu_vk_feat_down_owed() ||
         tagpu_vk_fx_down_owed() || tagpu_vk_scaffold_down_owed() ||
-        tagpu_vk_shadow_down_owed()) {
+        tagpu_vk_shadow_down_owed() || tagpu_vk_unit_down_owed()) {
         if (!vkDeviceWaitIdle || vkDeviceWaitIdle(s_vk.dev) != VK_SUCCESS) {
             vklog("vkDeviceWaitIdle refused before an owed pass teardown - down");
             return -2;
@@ -2210,6 +2214,7 @@ static int vk_present(void)
         if (tagpu_vk_fx_down_owed())       tagpu_vk_fx_down_paid(&s_pass);
         if (tagpu_vk_scaffold_down_owed()) tagpu_vk_scaffold_down_paid(&s_pass);
         if (tagpu_vk_shadow_down_owed())   tagpu_vk_shadow_down_paid(&s_pass);
+        if (tagpu_vk_unit_down_owed())     tagpu_vk_unit_down_paid(&s_pass);
     }
 
     r = vkAcquireNextImageKHR(s_vk.dev, s_vk.sc, 1000000000ull,
@@ -2279,7 +2284,9 @@ static int vk_present(void)
        the only thing that does. */
     {
         int draw_fps = 0, draw_scaf = 0, draw_feat = 0, draw_terr = 0, draw_fx = 0;
+        int draw_unit = 0;
         int ab_fps = 0, ab_scaf = 0, ab_feat = 0, ab_terr = 0, ab_fx = 0;
+        int ab_unit = 0;
         int ndraw = 0, nclaim = 0;
         const char* abpath = NULL;
         VkRenderPassBeginInfo rbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
@@ -2308,7 +2315,36 @@ static int vk_present(void)
                This pass puts none there, so counting it would refuse every
                capture taken while Classic++ shadows are on -- which is exactly
                the configuration the shadow work is measured in. */
+            /* ---- AND `prepare` ORDER IS NOT `record` ORDER, since G19e's
+               sixth pass. Three of the hooks below run in an order the DATA
+               forces, and the draws still happen in the GL lane's order inside
+               the render pass further down. ---- */
+
+            /* THE SCAFFOLD'S UPLOAD IS FIRST, though its DRAW is nearly last.
+               The G12a overlay is a texture the unit, hi-res and effects
+               fragment shaders sample (`uScafOn`), so the pass that fills it
+               has to have filled it before a consumer points a descriptor set
+               at it -- and a consumer does that in its own `prepare`.
+               tagpu_vk_scaffold.h states the contract; its `record` is still
+               where it always was, over the world. */
+            draw_scaf = tagpu_vk_scaffold_prepare(&s_pass, cb, fi);
+            ab_scaf = tagpu_vk_scaffold_ab_frame();
+
+            /* THEN THE UNIT PASS'S UPLOAD, because the shadow map's casters
+               are its geometry: its vertex buffers, pose blocks and texels all
+               have to exist before the map is drawn. It puts no pixel anywhere
+               yet and its own descriptor set is not written here -- that is
+               `tagpu_vk_unit_prepare`, below the map. */
+            tagpu_vk_unit_upload(&s_pass, cb, fi);
+
             tagpu_vk_shadow_prepare(&s_pass, cb, fi);
+
+            /* ...AND THE UNIT PASS'S `prepare` AFTER IT, which is the one
+               instant this slot's set may be pointed at the map the call above
+               just drew and at the overlay the call above that just filled. */
+            draw_unit = tagpu_vk_unit_prepare(&s_pass, cb, fi);
+            ab_unit = tagpu_vk_unit_ab_frame();
+
             draw_terr = tagpu_vk_terr_prepare(&s_pass, cb, fi);
             ab_terr = tagpu_vk_terr_ab_frame();
             draw_feat = tagpu_vk_feat_prepare(&s_pass, cb, fi);
@@ -2320,16 +2356,15 @@ static int vk_present(void)
                the GL lane's and not the order the files were written in. */
             draw_fx = tagpu_vk_fx_prepare(&s_pass, cb, fi);
             ab_fx = tagpu_vk_fx_ab_frame();
-            draw_scaf = tagpu_vk_scaffold_prepare(&s_pass, cb, fi);
-            ab_scaf = tagpu_vk_scaffold_ab_frame();
             draw_fps = tagpu_vk_fps_prepare(&s_pass, cb, fi);
             ab_fps = tagpu_vk_fps_ab_frame();
         }
-        ndraw = draw_terr + draw_feat + draw_fx + draw_scaf + draw_fps;
-        nclaim = ab_terr + ab_feat + ab_fx + ab_scaf + ab_fps;
+        ndraw = draw_terr + draw_feat + draw_unit + draw_fx + draw_scaf + draw_fps;
+        nclaim = ab_terr + ab_feat + ab_unit + ab_fx + ab_scaf + ab_fps;
         abpath = ab_terr ? AB_TERR
                : (ab_feat ? AB_FEAT
-               : (ab_fx ? AB_FX : (ab_scaf ? AB_SCAF : (ab_fps ? AB_FPS : NULL))));
+               : (ab_unit ? AB_UNIT
+               : (ab_fx ? AB_FX : (ab_scaf ? AB_SCAF : (ab_fps ? AB_FPS : NULL)))));
 
         if (s_vk.rp && s_vk.fb[idx]) {
             VkClearValue cv[2];
@@ -2350,6 +2385,11 @@ static int vk_present(void)
                 tagpu_vk_terr_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_feat)
                 tagpu_vk_feat_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
+            /* THE UNITS, between the features and the effects -- which is where
+               tagpu_native.c draws them, and two passes that blend are not
+               commutative. */
+            if (draw_unit)
+                tagpu_vk_unit_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_fx)
                 tagpu_vk_fx_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_scaf)
@@ -2453,6 +2493,7 @@ static int vk_resize(int w, int h)
     tagpu_vk_terr_down(&s_pass);
     tagpu_vk_fx_down(&s_pass);
     tagpu_vk_shadow_down(&s_pass);
+    tagpu_vk_unit_down(&s_pass);
     ab_drop("the swapchain rebuilding", idle);
     vk_perimage_free();
     r = vk_swapchain(w, h);

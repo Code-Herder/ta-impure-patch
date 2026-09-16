@@ -115,12 +115,21 @@ static const TAGPU_GAFENT* atlas_get(const char* g)
 #define SH_NEUTRAL 16
 static int s_shNeutral = SH_NEUTRAL;   /* LUT row that is identity/neutral      */
 static int s_shDir     = 1;            /* +1 = higher row is brighter           */
+/* THE LUT'S CPU MIRROR (Phase G / G19e). 8 KB, built once per context and
+   again when the engine's own table first arrives, so it is simply kept rather
+   than put behind a latch -- and it is the buffer this very call hands GL, in
+   the same call, so the two cannot differ. */
+static unsigned char s_lutMirror[SH_ROWS * 256];
+static unsigned      s_lutSerial;
+
 static void shade_upload(const unsigned char* lut)
 {
     glBindTexture(GL_TEXTURE_2D, s_lutTex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, SH_ROWS, GL_RED, GL_UNSIGNED_BYTE, lut);
     glBindTexture(GL_TEXTURE_2D, 0);
+    memcpy(s_lutMirror, lut, sizeof s_lutMirror);
+    s_lutSerial++;
     s_lutBuilt = 1;
 }
 static void shade_build_lut(const unsigned char* shd)
@@ -411,6 +420,43 @@ GLuint tagpu_r3d_lut_texref(const unsigned char* shd)
     if (s_state == 1 && (!s_lutBuilt || (shd && !s_lutFromShd))) shade_build_lut(shd);
     return s_lutBuilt ? s_lutTex : 0;
 }
+/* ---- the Vulkan lane's texels; tagpu_render3do.h has the contract ------- */
+void tagpu_r3d_atlas_mirror_want(void)
+{
+    /* Idempotent inside tagpu_gaf.c, and asked only once the atlas has its
+       dimensions -- before that there is nothing to size the mirror to, which
+       is the first frames of a session. */
+    if (s_state == 1 && !s_atlas.mirror && s_atlas.dim > 0)
+        tagpu_gaf_atlas_mirror(&s_atlas);
+}
+
+const unsigned char* tagpu_r3d_atlas_mirror(int* dim, int* rows, unsigned* serial)
+{
+    int r;
+    if (dim) *dim = 0;
+    if (rows) *rows = 0;
+    if (serial) *serial = 0;
+    if (!s_atlas.mirror || s_atlas.dim <= 0) return NULL;
+    /* the shelf cursor bounds every painted cell, so only the rows the packer
+       has used need uploading -- the feature pass's own bound, and for the same
+       reason: the rest of a 2048-square atlas has never been written */
+    r = s_atlas.shelfY + s_atlas.shelfH;
+    if (r < 0) r = 0;
+    if (r > s_atlas.dim) r = s_atlas.dim;
+    if (dim) *dim = s_atlas.dim;
+    if (rows) *rows = r;
+    if (serial) *serial = s_atlas.mirrorSerial;
+    return s_atlas.mirror;
+}
+
+const unsigned char* tagpu_r3d_lut_mirror(int* w, int* h, unsigned* serial)
+{
+    if (w) *w = 256;
+    if (h) *h = SH_ROWS;
+    if (serial) *serial = s_lutSerial;
+    return s_lutBuilt ? s_lutMirror : NULL;
+}
+
 int tagpu_r3d_shade_neutral(void) { return s_shNeutral; }
 int tagpu_r3d_shade_dir(void)     { return s_shDir; }
 int tagpu_r3d_atlas_uv(const char* g, float uv[4], float* ck)

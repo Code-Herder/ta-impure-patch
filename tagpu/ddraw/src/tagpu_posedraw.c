@@ -88,6 +88,8 @@
 #include "tagpu_shadow.h"
 #include "tagpu_abshot.h"  /* the GL half of the Phase G A/B */
 #include "tagpu_vk.h"      /* tagpu_vk_armed(): whether to publish at all */
+#include "tagpu_pal.h"
+#include "tagpu_posebake.h"
 
 #define STR2(x) #x
 #define STR(x)  STR2(x)
@@ -98,11 +100,13 @@
    1 KB (14336 against GL 3.1's guaranteed 16384) and a packed pair costs every
    reader of it a decode; the second is a word rather than two more arrays
    because its two values nest — a slant caster is always visible. */
-#define PD_ROWS   (TAGPU_PBMAXPIECE * 3)          /* 768 vec4 */
-#define PD_FLAGV  (TAGPU_PBMAXPIECE / 4)          /*  64 vec4 */
-#define PD_FLAGOFF (PD_ROWS * 16)                 /* bytes    */
-#define PD_VISOFF  ((PD_ROWS + PD_FLAGV) * 16)    /* bytes    */
-#define PD_BLOCK   ((PD_ROWS + PD_FLAGV * 2) * 16)  /* 14336  */
+/* the numbers themselves are tagpu_posebake.h's, shared with the Vulkan
+   edition of this pass so that the two cannot describe the block differently */
+#define PD_ROWS    TAGPU_PD_ROWS
+#define PD_FLAGV   TAGPU_PD_FLAGV
+#define PD_FLAGOFF TAGPU_PD_FLAGOFF
+#define PD_VISOFF  TAGPU_PD_VISOFF
+#define PD_BLOCK   TAGPU_PD_BLOCK
 
 /* uRange */
 #define PD_R_BODY  0
@@ -237,6 +241,14 @@ static float        s_depthMat[16];
    the program. Reset with the frame, because a freshly linked program holds
    zero and the first unit of a session has nothing behind it. */
 static float        s_lastNanoT, s_lastNanoC[3];
+
+/* THE FOG GRID'S COPY. `cells * 2` is the size the GL upload itself was given
+   for this grid, so the read is bounded by the bound the GL lane already
+   trusts; the cap bounds the ALLOCATION, and the Vulkan pass re-checks it
+   because a bound in one file is a bound only while both are read together. */
+#define PD_FOG_MAXDIM 1024
+static unsigned short* s_fogCopy;
+static int             s_fogCopyCells;
 
 /* the A/B lever, the same shape as every other ported pass's */
 #define PD_ABFILE "tagpu_posedraw.ab"
@@ -685,6 +697,37 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
     s_pub.vw  = (int)v->scafP[2]; s_pub.vh  = (int)v->scafP[3];
     s_pub.scissorOn = tagpu_native_scissor_on();
     s_pub.ss_i = (int)(v->ss > 0.0f ? v->ss : 1.0f);
+
+    /* THE TEXELS. The two mirrors are asked for HERE rather than on the arm
+       beat, because `tagpu_r3d_atlas_mirror_want` needs the atlas to have its
+       dimensions and that is not true of the first frames of a session; it is
+       idempotent, so asking every publish costs one branch once it is there. */
+    tagpu_r3d_atlas_mirror_want();
+    s_pub.atlas = tagpu_r3d_atlas_mirror(&s_pub.atlasDim, &s_pub.atlasRows,
+                                         &s_pub.atlasSerial);
+    s_pub.lut = tagpu_r3d_lut_mirror(&s_pub.lutW, &s_pub.lutH, &s_pub.lutSerial);
+    s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();
+    s_pub.fogLut = tagpu_native_foglut();
+    {   /* THE GRID IS COPIED. It points into a frame packet the game thread
+           reuses, and `cells` -- not cols*rows -- is what the packet actually
+           allocated, so it is the bound the copy is made against. */
+        int cols = 0, rows = 0, cells = 0;
+        const unsigned short* g = tagpu_native_foggrid(&cols, &rows, &cells);
+        int want = cols * rows;
+        if (g && cols > 0 && rows > 0 && want <= cells &&
+            cols <= PD_FOG_MAXDIM && rows <= PD_FOG_MAXDIM) {
+            if (want > s_fogCopyCells) {
+                unsigned short* n =
+                    (unsigned short*)realloc(s_fogCopy, (size_t)want * 2);
+                if (n) { s_fogCopy = n; s_fogCopyCells = want; }
+            }
+            if (s_fogCopy && want <= s_fogCopyCells) {
+                memcpy(s_fogCopy, g, (size_t)want * 2);
+                s_pub.fogGrid = s_fogCopy;
+                s_pub.fogGridCols = cols; s_pub.fogGridRows = rows;
+            }
+        }
+    }
 
     s_pub.depthOn = s_depthOn;
     if (s_depthOn) memcpy(s_pub.castMat, s_depthMat, sizeof s_pub.castMat);

@@ -313,6 +313,23 @@ typedef struct TAGPU_PDHAND {
     int   depthOn, ncast;
     float castMat[16];
 
+    /* THE TEXELS, as bytes rather than as GL names -- a second backend cannot
+       read a GL texture. Each carries the serial that says when it last
+       changed, so the Vulkan lane re-uploads on a change and not per frame.
+       The unit atlas and the shade LUT are tagpu_render3do.h's mirrors; the
+       palette is tagpu_pal's snapshot; the fog pair is what the native pass
+       uploaded this frame. `atlasRGB` has no mirror and is not here: the pass
+       refuses a `restored` frame outright, exactly as the feature and terrain
+       passes do, and names its own atlas view for that descriptor. */
+    const unsigned char* atlas;   int atlasDim, atlasRows; unsigned atlasSerial;
+    const unsigned char* lut;     int lutW, lutH;          unsigned lutSerial;
+    const unsigned char* pal;     unsigned palSerial;
+    /* COPIED, not aliased: the grid points into a frame packet the game thread
+       reuses, and tagpu_feat.c's own copy exists for the same reason. NULL when
+       this frame had none, which a unit with `uFog & 1` makes a refusal. */
+    const unsigned short* fogGrid; int fogGridCols, fogGridRows;
+    const unsigned char*  fogLut;  /* 256 x R8 */
+
     /* the scissor the native pass set around these draws, in game-frame pixels
        from the TOP of the frame -- tagpu_vk_feat.c is where the flip onto
        Vulkan's framebuffer coordinates is done and argued */

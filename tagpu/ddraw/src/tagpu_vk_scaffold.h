@@ -32,6 +32,28 @@ void tagpu_vk_scaffold_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_
    seam captures the SAME frame. Consumed by the call. Valid after `prepare`. */
 int  tagpu_vk_scaffold_ab_frame(void);
 
+/* ---- THE OVERLAY AS A TEXTURE OTHER PASSES SAMPLE (G19e, the unit pass) ----
+
+   The G12a overlay is not only drawn: the unit, hi-res and effects fragment
+   shaders sample it through `uScaf` whenever `uScafOn` is 1, which is the same
+   GL texture this pass's twin fills. So this pass exposes what it uploaded,
+   in exactly the shape tagpu_vk_shadow.h settled on for the depth map, and for
+   the same reasons.
+
+   ASK WITH YOUR OWN FRAME. The image behind the view is one per slot and the
+   "is it this frame's" flag is one for the pass, so a caller out of step with
+   `prepare` would be handed an earlier frame's overlay. Wrong frame or wrong
+   slot gives VK_NULL_HANDLE and the caller names its own dummy -- which it has
+   to have anyway, for a frame with no overlay at all.
+
+   AND IT ORDERS THE SEAM. A consumer points its descriptor set at this view
+   during its own `prepare`, so this pass's `prepare` has to have run first --
+   even though its `record` comes late, because the overlay is drawn OVER the
+   world. Prepare order and record order are not the same order, and the seam
+   says so at both call sites. */
+int  tagpu_vk_scaffold_ready(unsigned frame);
+VkImageView tagpu_vk_scaffold_view(unsigned frame, uint32_t slot);
+
 /* Give everything back. Called by the seam from `vk_down`, after its
    vkDeviceWaitIdle and before the device is destroyed. Safe when nothing was
    ever built. */

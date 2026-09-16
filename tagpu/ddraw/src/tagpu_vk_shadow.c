@@ -80,6 +80,7 @@
 #include <string.h>
 
 #include "tagpu_vk_shadow.h"
+#include "tagpu_vk_unit.h"   /* the posed casters, drawn inside our render pass */
 #include "tagpu_shadow.h"
 #include "spirv/tagpu_shadow.spv.h"
 
@@ -124,6 +125,7 @@ static int s_state;
 static int s_downOwed;                     /* a teardown the seam still owes us */
 static int s_downPaying;                   /* ...and the seam is paying it NOW  */
 static int s_saidCasters;                  /* the refusals, each said once      */
+static int s_saidUnitShort;                /* the unit pass owed casters, was short */
 static int s_saidZclip;
 static int s_saidFormat;
 static int s_saidRes;
@@ -750,7 +752,7 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
     VkViewport vp;
     VkRect2D sc;
     VkDeviceSize vbytes, ibytes, zero = 0;
-    int mr, casters;
+    int mr, casters, ours, drew;
 
     /* THE MAP THIS FRAME WOULD SAMPLE IS NOT THIS FRAME'S UNTIL THE DRAW BELOW
        SUCCEEDS. Cleared first so that every exit path leaves the consumers'
@@ -794,19 +796,33 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
         return 0;
     }
 
-    /* THE MAP IS INCOMPLETE ON THIS SIDE OF THE SEAM. Every caster but the
-       heightfield is the unit pass's to port; a map missing one is a different
-       map, and a consumer sampling it would draw a different picture from its
-       own oracle. Said once, and then quietly, because on any fixture with a
-       unit on screen it is every frame. */
-    if (h.otherCasters > 0) {
+    /* THE MAP IS INCOMPLETE ON THIS SIDE OF THE SEAM. `otherCasters` is
+       tagpu_native.c's count of everything it drew into the GL map that the
+       terrain hand-over carries no copy of: the native 3DO stream, the posed
+       bodies, the replacement meshes -- and the heightfield itself when its
+       mirror is missing.
+
+       SINCE THE UNIT PASS (G19e) THE POSED BODIES ARE COVERED, and this is
+       where that is accounted for. `tagpu_vk_unit_casters` is the subset of
+       that count this frame's unit pass is ready to draw into the map below,
+       and it can only be SMALLER than the posed bodies' share of it -- the
+       header says why, and an over-count is the safe direction: it refuses a
+       frame the lane could have drawn, where an under-count would draw a
+       different map from the oracle's. What is left over is the replacement
+       meshes and the native stream, which are still nobody's on this side.
+
+       The unit pass's `upload` has already run for this slot -- the seam calls
+       it before this function and says so -- which is what makes the number
+       available before the render pass begins. */
+    ours = tagpu_vk_unit_casters();
+    if (h.otherCasters - ours > 0) {
         if (!s_saidCasters) {
             s_saidCasters = 1;
             plog(d, "shadow: the GL map holds %d caster(s) this lane has no copy "
-                    "of - the units, the posed bodies and the replacement meshes "
-                    "are the unit pass's to port. Nothing drawn while there are, "
-                    "and the passes that sample the map stand down with it",
-                 h.otherCasters);
+                    "of (%d of them the unit pass carries) - the native 3DO "
+                    "stream and the replacement meshes are still to port. "
+                    "Nothing drawn while there are, and the passes that sample "
+                    "the map stand down with it", h.otherCasters, ours);
         }
         return 0;
     }
@@ -969,7 +985,31 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
         vkCmdDrawIndexed(cb, h.indexCount, 1, h.firstIndex, 0, 0);
     }
 
+    /* THE POSED CASTERS, drawn by the unit pass into OUR render pass with our
+       viewport and our scissor (G19e). It owns the geometry and the pose; this
+       pass owns the target, the matrix and the clear -- which is exactly the
+       split the GL lane has, where `tagpu_shadow_begin` binds the FBO and
+       `tagpu_posedraw_depth_unit` draws into it.
+
+       A SHORT COUNT IS A REFUSAL, not a partial map. `ours` was taken before
+       the render pass began and is what the census above was reconciled
+       against; if fewer arrive, the map is missing a caster the GL map has and
+       nothing may sample it. The draws already recorded stay -- they are in a
+       submitted command buffer either way -- but `s_liveHave` is not set, so
+       every consumer stands down and the picture nobody draws is the one that
+       would have been wrong. */
+    drew = tagpu_vk_unit_cast(d, cb, slot, s_rp);
     vkCmdEndRenderPass(cb);
+    if (drew < 0 || drew != ours) {
+        if (!s_saidUnitShort) {
+            s_saidUnitShort = 1;
+            plog(d, "shadow: the unit pass put %d of the %d posed caster(s) it "
+                    "owed into the map - the map is incomplete and nothing "
+                    "samples it this frame", drew, ours);
+        }
+        return 0;
+    }
+    s_saidUnitShort = 0;
 
     s_liveHave = 1;
     s_liveFrame = d->frame;
