@@ -2123,6 +2123,37 @@ rm -f $G/tagpu_terr.ab $G/tagpu_terr_*.ppm; sleep 2; touch $G/tagpu_terr.ab; sle
   GL module's CPU mirror and again in device memory, and the map is **16 MB a frame slot** at the
   default `shadowres` 2048. Both are paid only while the Vulkan lane is armed.
 
+**The UI pass's A/B (G19f landing 1), and its levers are the GL layer's own:**
+
+```bash
+# the four tokens are what empty the sharp layer and the colour twins, so the
+# GL lane draws the 1x mirror ALONE and the two halves are comparable.
+# `nostring` is read at ATTACH, so it must be armed BEFORE the launch.
+tools/tacli arm <i> 'gui.on=nostring nocursor nominimap norestore' 'vk.on=color=0,0,0'
+tools/tacli launch <i>                         # the SHELL is a valid fixture here
+# ...or in game, where the resolution clause actually bites:
+tools/tacli scenario load <i> selbox-slope --restart --res 1024x768 --maxfps 0
+sleep 12; tools/tacli keys <i> tab tab
+G=<main checkout>/tagpu/instances/<i>/gamedir
+rm -f $G/tagpu_gui.ab $G/tagpu_gui_*.ppm; sleep 2; touch $G/tagpu_gui.ab; sleep 6
+<main checkout>/.venv-undither/bin/python tools/vk-ab.py $G --pass gui
+```
+
+Four traps, every one of them paid for on 2026-09-16:
+
+* **THE LEVER LATCHES UNTIL THE FILE GOES AWAY.** `s_abDone` is cleared only by `tagpu_gui.ab`
+  being ABSENT on a poll, so `touch`ing it again captures nothing. Remove it, wait past the 500 ms
+  poll, then touch it — the recipe above does, and a second capture that "did not fire" is almost
+  always this.
+* **THE TWO HALVES CAN LAND ON DIFFERENT FRAMES**, and then `vk-ab.py` says one file "is not there"
+  rather than comparing stale captures. Retry the whole arm-and-wait; it pairs within a couple of
+  tries. It is not a port failure and it is not worth debugging in the moment.
+* **CHECK THE CAPTURE'S SIZE AGAINST THE FIXTURE YOU ASKED FOR.** `gui: A/B wrote
+  tagpu_gui_gl.ppm, 640x480` after a `--res 1920x1080` means the `--restart` left the game in the
+  SHELL and you are measuring the menu. A figure whose fixture cannot be confirmed is not a figure.
+* **THE SHELL IS 640×480 WHATEVER `--res` SAYS** — TA's front end has its own resolution, so the
+  `--res` clause only bites in game.
+
 **The UNIT pass's A/B (G19e, the last of the gate), and it is the first that needs no `.on` of its
 own:**
 

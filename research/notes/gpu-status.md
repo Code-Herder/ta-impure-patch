@@ -4963,6 +4963,145 @@ still has no validation layer.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 
+### 2.34 The UI layer's 1x mirror, drawn by Vulkan (`tagpu_vk_gui.c`, `tagpu_gui_surf.c`'s op mirror) — Phase G, G19f landing 1
+
+**The first pass of G19f, and the first ported thing that is not a draw over a mesh.** §2.3e's UI
+layer is a **stateful store of per-surface twins** that an op stream mutates, plus a three-layer
+composite. The state is the whole difficulty and it is what decided the cut:
+[the G19f plan](g19f-plan.html) has the landings.
+
+**Nine shaders, none of them new.** G19c already translated `QVS`, `CPY_FS`, `SPR_FS`, `STR_FS`,
+`CURS_FS`, `MM_FS`, `SHARP_FS`, `LAY_VS` and `LAY_FS`. This landing uses four of them — `QVS`,
+`CPY_FS`, `SPR_FS` and the `LAY_VS`/`LAY_FS` composite — and writes no GLSL.
+
+#### The op stream is dead by the time the Vulkan lane runs
+
+`render_ogl.c`'s iteration is `tagpu_packet_acquire` → `tagpu_overlay_draw` (inside which
+`tagpu_gui_present` drains) → `tagpu_packet_frame_end` → `tagpu_vk_frame`. `drain()` advances the
+queue's arena tail **per op**, so the game thread may overwrite the bytes those ops point into the
+instant it returns — two calls before the Vulkan lane exists. A pass reading `g_guiq.arena + aoff`
+would be §2.30's fog-grid bug on a 16 MB buffer.
+
+So `tagpu_gui_surf.c` grows an **opt-in mirror**, filled inside `drain()` as each op is applied,
+carrying a copy of the op and of its payload. The alternative — deferring the tail publication
+until after `tagpu_vk_frame` — was rejected because the release would have to run on every path
+through `tagpu_overlay_draw` including its three early returns, and it would make the GL queue's
+lifetime depend on a lane that is normally not armed. **Nothing is copied until
+`tagpu_gui_mirror_want(1)`**, which is the only reason copying an op stream that can run to
+thousands of ops a present is affordable at all.
+
+**It is recorded where each op is APPLIED, not where it is read.** The hand-over says what the
+render half DID: a sprite whose atlas entry would not resolve drew nothing, and a copy whose
+source has no twin is a reseed rather than a draw. And it is a **public struct of its own**
+(`TAGPU_GUIOP`), not the producer's private queue op, so a change to the queue cannot silently
+change the port's contract.
+
+Three things ride along that the port must not re-derive: **the atlas rect the GL lane resolved**
+for each sprite (a second lookup could answer differently after a repack, and the A/B would then
+be comparing two atlases), the UI atlas's texels through `tagpu_gaf.c`'s existing CPU mirror, and
+**the engine's own frame** — the composite's bottom layer and its stale-mirror guard, which the GL
+lane has as `f->surface_tex`, a GL texture, and which is therefore copied out of the fork's primary
+under `g_ddraw.cs` on the same lifetime argument §2.3f makes for the palette.
+
+#### The flip is a property of presentation, and this is its clearest case
+
+§2.32's rule decides every coordinate question here. The **twin draws take no flip**: their target
+is SAMPLED, and `QVS`'s `y / uSize.y * 2 - 1` puts quad y = 0 at attachment row 0 under both APIs.
+`CPY_FS` reads `gl_FragCoord` — the macro §2.33 had to stand the unit pass down for — and with no
+flip GL measures it from NDC −1 while Vulkan measures it from attachment row 0, **which is the
+same row index**. So it ports unchanged and §2.33's refusal does not arise. The **composite does
+flip**, because the composite is presented.
+
+That was derived against `twin_copy` and `QVS` rather than reasoned from conventions, and the
+first draft of the plan got it wrong in the other direction — it claimed the GL lane already
+contained a compensating mirror. It does not. There is no flip anywhere in `tagpu_gui_surf.c` and
+the module's own comment says so.
+
+#### The twin store is the first shared mutable state on this lane
+
+Every world pass through G19e keeps its state **per slot**, so the seam's `fence[slot]` wait is the
+whole argument. A twin cannot be per slot: it is persistent state an op stream mutates across
+frames, and 32 of them per slot is the memory this phase spends its budget measuring. So they are
+shared — and frame N writes them while frame N−1 may still be sampling them in its composite, a
+write-after-read across submissions.
+
+**It is closed by an ordering.** A `vkCmdPipelineBarrier`'s first synchronisation scope includes
+every command submitted previously to the same queue, so one barrier at the top of the replay —
+`FRAGMENT_SHADER`/`SHADER_READ` before `COLOR_ATTACHMENT_OUTPUT`/`COLOR_ATTACHMENT_WRITE` — orders
+this frame's twin writes after every earlier frame's composite reads. One barrier a frame, and it
+is a fact about the queue rather than a claim about timing. **There is still no validation layer in
+the wine prefixes**, so this is read against the spec and not checked by one.
+
+#### The replay runs on frames the composite cannot
+
+**This is the landing's own hardest-won line.** The refusals — a string op, a Classic++ colour
+twin, coverage in the sharp layer, a missing engine frame — first returned before the replay. But
+the GL lane applies those ops whatever it draws, so a frame the port skips leaves its twins behind
+the GL lane's **for the rest of the session**, silently, and every later frame composites from a
+store that has quietly diverged. They gate the composite now and the replay runs regardless.
+
+Only three things genuinely cannot replay — a draw count past the pass's bound, an atlas outside
+what the pass carries, a malformed op — and each of them **asks the producer for a fresh start**
+through the very `reseed` flag `drain()` raises for itself, then drops the store. That is the only
+way back to level, and it is the same request for the same reason.
+
+#### A set is claimed for one image for the length of a frame
+
+A descriptor set may not be rewritten once a recorded draw names it, and the twin **array** cannot
+be the index: `tw_drop` moves the last entry into the hole, so the indices shuffle under it. The
+claim is on the view instead, and `SET_MAX` is the twins plus one, so a frame can never want more
+than there are.
+
+#### Two things the measurement found, and both were the port's
+
+**`s_sharpOn` MEANS "THE LAYER EXISTS", NOT "ANYTHING IS IN IT"** — and it exists on every frame
+once it has been made. The pass refused on it, so with `nocursor nominimap nostring` armed it stood
+down on **every** frame while every counter that would explain why read zero. An empty layer and a
+disabled one composite identically (it is taken only where its alpha says it has coverage), so the
+port may draw a frame whose layer is empty and must refuse one whose layer is not. `s_sharpInk` is
+that question, answered from the two clients' own counters.
+
+**`DRAW_MAX` WAS SIZED FROM A FLIP AND THE HAND-OVER CARRIES A PUBLISH.** 4096 came from "a steady
+screen is ~41 ops of which a handful draw", which is true of a flip; the publisher batches every
+flip since its last one and the shell flips ~12 000 times a second at a 5 ms cadence. Measured at
+**7414** on a 1080p level load.
+
+#### Measured
+
+**MEASURED 2026-09-16** on the binary the two fixes above produced, `gui.on=nostring nocursor
+nominimap norestore`, `vk.on=color=0,0,0`, Classic, reference setup's 4070:
+
+| | |
+|---|---|
+| shell `MAINMENU`, 640×480, two runs | **0 of 307 200**, 306 737 ink a side |
+| `selbox-slope` in game, 1024×768, two runs | **0 of 786 432**, 748 916 ink a side |
+| `selbox-slope` in game, 1920×1080, one run | **0 of 2 073 600**, 1 994 732 ink a side |
+| one earlier shell run's two files | **byte-identical**, which is the strongest form of a 0 |
+| refusals logged across the session | **0** |
+| the twin store doing the work | 2 twins; 3 026 649 sprites, 30 450 copies, 727 170 pixel ops |
+
+So the op stream, the seeds, the pixel ops, the sprite quads through the resolved atlas rects, the
+copies through `CPY_FS`, the palette and the engine's own frame beneath all reproduce the GL twin
+exactly.
+
+**The 1080p column has ONE run rather than two, and the reason is worth keeping.** The second pair
+would not form, and the log said why: the GL half was capturing 640×480, so the `--restart` had
+left the game in the SHELL and the fixture was not what the command line said it was. The figure
+quoted is from a run whose capture size confirms it was in play. A figure whose fixture cannot be
+confirmed is not quoted.
+
+#### Not covered
+
+* **The gate, which is the whole of G19f and not this landing.** `uiwalk`'s `strict` walk over the
+  **full screen inventory** at 1024×768 and 1080p, shell and in game; the shell↔game context
+  switch; and **frame time no worse than GL**, which nothing in Phase G has measured at all. This
+  landing is three fixtures, not an inventory.
+* **`PK_STRING`, the cursor, the minimap and the sharp layer's content** — landing 2.
+* **Classic++ colour twins and the MRT sprite/copy programs** — landing 3, and it may be blocked on
+  the restorer's five shaders (G19c's own uncovered case).
+* **The present itself** — landing 4. Route D still gives the Vulkan lane a window of its own.
+* `ss` 2, the owed teardown, an in-process map change, and the validation layer still.
+
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out
 
 **Reproduced, root-caused and fixed** ([terrain & depth](terrain-depth.html) §7.6, the *fifth*
