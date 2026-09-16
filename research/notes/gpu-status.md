@@ -5025,25 +5025,57 @@ frames, and 32 of them per slot is the memory this phase spends its budget measu
 shared — and frame N writes them while frame N−1 may still be sampling them in its composite, a
 write-after-read across submissions.
 
-**It is closed by an ordering.** A `vkCmdPipelineBarrier`'s first synchronisation scope includes
-every command submitted previously to the same queue, so one barrier at the top of the replay —
-`FRAGMENT_SHADER`/`SHADER_READ` before `COLOR_ATTACHMENT_OUTPUT`/`COLOR_ATTACHMENT_WRITE` — orders
-this frame's twin writes after every earlier frame's composite reads. One barrier a frame, and it
-is a fact about the queue rather than a claim about timing. **There is still no validation layer in
-the wine prefixes**, so this is read against the spec and not checked by one.
+**The DATA hazard is closed by an ordering.** A `vkCmdPipelineBarrier`'s first synchronisation
+scope includes every command submitted previously to the same queue, so one barrier at the top of
+the replay — `FRAGMENT_SHADER`/`SHADER_READ` before
+`COLOR_ATTACHMENT_OUTPUT`/`COLOR_ATTACHMENT_WRITE` — orders this frame's twin writes after every
+earlier frame's composite reads. Both landing reviewers checked that argument and neither could
+break it. **There is still no validation layer in the wine prefixes**, so it is read against the
+spec and not checked by one.
+
+**AND IT SAYS NOTHING ABOUT LIFETIME, WHICH IS THE MISTAKE THIS SECTION ORIGINALLY MADE.** Ordering
+a write after a read does not keep the object alive to be read. The first version of this pass
+destroyed a twin's image, view, memory and framebuffer inside `prepare` — while `slots − 1` earlier
+submissions were still executing and while the command buffer being recorded already named them —
+and did the same to the shared atlas and engine images on a dimension change. A `PK_FREE` for the
+surface the previous frame presented is a use-after-free on the **first** eviction. **Both
+reviewers led with it, independently**, and the file already contained the correct rule: the
+`refuse` label destroys nothing and says why.
+
+The answer is the lane's own **slot-bitmask retire**, the one §2.30's terrain pass and §2.33's unit
+pass already use — every slot's bit set at push including the one being recorded, cleared when that
+slot comes round again behind its fence, destroyed at zero, and a full list stops the pass rather
+than destroying anything. **There is now no destruction reachable from `prepare` at all.**
 
 #### The replay runs on frames the composite cannot
 
-**This is the landing's own hardest-won line.** The refusals — a string op, a Classic++ colour
-twin, coverage in the sharp layer, a missing engine frame — first returned before the replay. But
-the GL lane applies those ops whatever it draws, so a frame the port skips leaves its twins behind
-the GL lane's **for the rest of the session**, silently, and every later frame composites from a
-store that has quietly diverged. They gate the composite now and the replay runs regardless.
+**This is the landing's own hardest-won line, and the first version of it was half a fix.** The
+refusals — a Classic++ colour twin, coverage in the sharp layer, a missing engine frame — first
+returned before the replay. But the GL lane applies those ops whatever it draws, so a frame the
+port skips leaves its twins behind the GL lane's **for the rest of the session**, silently. Those
+three gate the composite now and the replay runs regardless.
 
-Only three things genuinely cannot replay — a draw count past the pass's bound, an atlas outside
-what the pass carries, a malformed op — and each of them **asks the producer for a fresh start**
-through the very `reseed` flag `drain()` raises for itself, then drops the store. That is the only
-way back to level, and it is the same request for the same reason.
+**What the review found is that five other paths had the same shape and were missed**, and that a
+sixth was on the producer's side:
+
+* `standdown` dropped the store and asked for nothing, so the next frame found no presented twin,
+  landed there again, and **the pass never drew again for the session with no line in the log**.
+* Pass 1's eleven bare `return 0`s did it for one malformed op.
+* An abandoned mirror frame (the op array or arena refusing to grow) did it silently, counted by a
+  statistic nobody read.
+* **`PK_STRING` is the one that matters most**, because it is not a bug in a rare path: the GL lane
+  *applies* it (`twin_string`) and the hand-over does not carry it, by design. Treating it as a
+  `compose = 0` meant those glyphs were in the GL twin and would never be in ours. **The sentence
+  that stood here — "the twins are kept level" — was written of the ops the mirror carries and was
+  false of the one it does not.**
+* And `mir_finish` published nothing when `draw_layer` returned early, on frames whose ops the drain
+  had already applied — the same hole the consumer had just been restructured to close, still open
+  at the other end. It publishes with `presented = 0` now: replay, do not composite.
+
+So **falling behind is a STATE**, with one way in and one way out: drop the store, raise the
+producer's own `reseed`, composite nothing, and apply nothing but the RESET that answers it. That
+is `tagpu_gui_surf.c`'s own `s_skipToReset`, for the same reason. **Measured firing and recovering**
+on the binary the fixes produced.
 
 #### A set is claimed for one image for the length of a frame
 
@@ -5068,27 +5100,29 @@ flip since its last one and the shell flips ~12 000 times a second at a 5 ms cad
 
 #### Measured
 
-**MEASURED 2026-09-16** on the binary the two fixes above produced, `gui.on=nostring nocursor
-nominimap norestore`, `vk.on=color=0,0,0`, Classic, reference setup's 4070:
+**MEASURED 2026-09-16** on the binary the LANDING REVIEW's fixes produced (every figure re-taken
+after them), `gui.on=nostring nocursor nominimap norestore`, `vk.on=color=0,0,0`, Classic,
+reference setup's 4070. **Each capture's own size is what confirms its fixture** — see the trap in
+`ta-drive`:
 
 | | |
 |---|---|
 | shell `MAINMENU`, 640×480, two runs | **0 of 307 200**, 306 737 ink a side |
-| `selbox-slope` in game, 1024×768, two runs | **0 of 786 432**, 748 916 ink a side |
-| `selbox-slope` in game, 1920×1080, one run | **0 of 2 073 600**, 1 994 732 ink a side |
+| `selbox-slope` in game, 1024×768 | **0 of 786 432**, 748 890 ink a side |
+| `selbox-slope` in game, 1920×1080, two runs | **0 of 2 073 600**, 1 989 791 ink a side |
 | one earlier shell run's two files | **byte-identical**, which is the strongest form of a 0 |
-| refusals logged across the session | **0** |
-| the twin store doing the work | 2 twins; 3 026 649 sprites, 30 450 copies, 727 170 pixel ops |
+| the behind state | **fired, asked for the fresh start, and recovered to 0 px** |
+| the twin store doing the work | 2 twins; millions of sprite ops, tens of thousands of copies |
 
 So the op stream, the seeds, the pixel ops, the sprite quads through the resolved atlas rects, the
 copies through `CPY_FS`, the palette and the engine's own frame beneath all reproduce the GL twin
 exactly.
 
-**The 1080p column has ONE run rather than two, and the reason is worth keeping.** The second pair
-would not form, and the log said why: the GL half was capturing 640×480, so the `--restart` had
-left the game in the SHELL and the fixture was not what the command line said it was. The figure
-quoted is from a run whose capture size confirms it was in play. A figure whose fixture cannot be
-confirmed is not quoted.
+**One PLAUSIBLE finding was kept rather than fixed.** GL's `uSurf` is POT-padded by the fork
+(1024×512 for a 640×480 mode) while `s_engImg` is exactly the mode rect, so a `texelFetch` outside
+that rect reads a defined texel in GL and an undefined one here. It cannot reach the A/B — the
+composite samples inside the viewport — and closing it would mean padding our image to match a fork
+detail rather than an engine one. Named rather than silently carried.
 
 #### Not covered
 
