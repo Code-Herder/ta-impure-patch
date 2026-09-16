@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5 effort=high reviewers=2 range=main..aea4bf0 findings=5 acted=5 rejected=0 proposal-rejected=1 date=2026-09-16
