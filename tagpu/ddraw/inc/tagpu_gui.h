@@ -216,6 +216,39 @@ typedef struct TAGPU_GUIOP {
     float          u0, v0, u1, v1;
 } TAGPU_GUIOP;
 
+/* ---- THE SHARP LAYER (landing 3) ----------------------------------------
+   One RGBA8 at DEVICE resolution, row 0 the viewport's TOP, cleared to
+   (0,0,0,0) every frame and composited above the mirror where its alpha says
+   it has coverage. It is not a twin and not an op stream: it has three clients
+   drawn in a FIXED order -- the harness's flat quads, the cursor, then the
+   minimap (base, then its view box) -- so what crosses is the short ORDERED
+   list of quads they produced, at most `TAGPU_GUI_SDRAW_MAX` of them.
+
+   EVERY FIELD HERE IS RESOLVED BY THE GL LANE AND NONE IS RE-DERIVED, which
+   on this client is not a nicety: `sharp_cursor` takes the pointer position
+   from `mouse_last_client()` AT DRAW TIME, and the Vulkan pass runs later in
+   the same iteration of render_ogl.c's loop -- so re-reading it would place
+   the cursor where the mouse has moved to since. Same rule as the sprite's
+   atlas rect and the string's glyph cells, and the third landing it decides.
+   The minimap's box (the packet's, through the HUD map and the `hq8` scale)
+   and its view rect (`main+0x142CB`, four edges at one GAME pixel each, in the
+   colour the palette gives `mm_viewcol`) are resolved for the same reason. */
+enum { TAGPU_GUISK_FLAT = 1,    /* SHARP_FS: one colour, no sampler          */
+       TAGPU_GUISK_CURSOR,      /* CURS_FS:  the UI atlas + the palette      */
+       TAGPU_GUISK_MM };        /* MM_FS:    the picture, the engine's pair  */
+
+typedef struct TAGPU_GUISDRAW {
+    int   kind;
+    float dst[4];               /* x0, y0, x1, y1 in LAYER pixels           */
+    float uv[4];                /* CURSOR: the resolved atlas rect; MM: 0..1 */
+    float col[4];               /* FLAT: rgba, already through the palette   */
+    int   ck;                   /* CURSOR: the atlas entry's colour key      */
+} TAGPU_GUISDRAW;
+
+/* 2 harness quads + 1 cursor + 1 minimap base + 4 view-box edges = 8. Doubled,
+   because a bound wants room and this one is carried BY VALUE. */
+#define TAGPU_GUI_SDRAW_MAX 16
+
 typedef struct TAGPU_GUIHAND {
     /* THE FRAME THIS WAS PUBLISHED ON. `tagpu_gui_handover` refuses any other:
        every pointer in here aliases a buffer this module reuses next present. */
@@ -237,6 +270,27 @@ typedef struct TAGPU_GUIHAND {
     const unsigned char* atlas;
     int                  atlasDim, atlasRows;
     unsigned             atlasSerial;
+
+    /* ---- the sharp layer's draws, BY VALUE. 16 x 60 bytes is small enough
+       to copy and it retires the whole question of what they point into: the
+       op arena is reallocated per present, and this list is not in it. */
+    int                  sharpW, sharpH;   /* 0 = no layer this frame        */
+    int                  nsdraw;
+    TAGPU_GUISDRAW       sdraw[TAGPU_GUI_SDRAW_MAX];
+
+    /* the minimap's own two textures. The picture is the TNT's 252-px base
+       ALREADY RESOLVED through the presented palette (it is sampled as colour
+       and not as an index -- interpolating palette indices is meaningless, and
+       at 1 < k < 2 the box is smaller than the picture, so it is a downsample);
+       `mmPicGen` moves on a map load and when the palette serial does.
+       The pair is the engine's OWN two 126-px minimap surfaces, RGB8 and not
+       RG8: `MM_FS` reads three channels -- r the fogged base, g the unfogged
+       one, b the composite the engine drew its dots and arcs into. */
+    const unsigned char* mmPic;
+    int                  mmPicW, mmPicH;
+    unsigned             mmPicGen;
+    const unsigned char* mmEng;
+    int                  mmEngW, mmEngH;
 
     /* the GLYPH atlas, which `tagpu_text.c` already keeps as bytes.
        `glyphSerial` IS THE CONTENT SERIAL AND NOT THE REPACK GENERATION. It

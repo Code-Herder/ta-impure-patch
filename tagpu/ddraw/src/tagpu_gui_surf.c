@@ -238,6 +238,11 @@ static int      s_mmEngW, s_mmEngH;
 static unsigned s_mmNoEng;              /* frames the engine's pair could not be read          */
 static unsigned char* s_mmPicRgb;       /* the picture resolved through the presented palette  */
 static unsigned s_mmPicCap;
+/* G19f landing 3: the CONTENT serial of `s_mmPicRgb`, for the same reason the
+   glyph atlas needed one -- a second backend cannot read the GL texture and
+   must know when the bytes behind it moved. It moves on a map load and on a
+   palette change, which are exactly the two things that re-resolve it. */
+static unsigned s_mmPicSerial;
 static unsigned s_mmPalSeen;            /* tagpu_pal_serial() when it was last resolved        */
 static unsigned s_mmFogged;             /* engine texels where fogged != unfogged, this frame  */
 
@@ -1196,6 +1201,8 @@ static unsigned  s_mEngCap;
 
 static TAGPU_GUIHAND s_mHand;
 static int       s_mHave = 0;          /* a hand-over stands                  */
+static int       s_mNSDraw;            /* the sharp layer's quads this frame   */
+static TAGPU_GUISDRAW s_mSDraw[TAGPU_GUI_SDRAW_MAX];
 static int       s_mStrAny;            /* a string op was recorded this frame  */
 static unsigned  s_mStrGen;            /* ...at this glyph-atlas generation     */
 static int       s_mTaken = 0;         /* ...and has been taken               */
@@ -1213,6 +1220,7 @@ static void mir_begin(void)
 {
     s_mNOps = 0; s_mALen = 0; s_mOther = 0; s_mLayer = 0;
     s_mStrAny = 0; s_mStrGen = 0;
+    s_mNSDraw = 0;
     s_abFrame = 0;          /* the claim never outlives the frame that made it */
     s_mirRec = s_mirWant;
     s_mHave = 0;
@@ -1286,6 +1294,34 @@ static void mir_string(const TAGPU_PUBOP* o, const short cell[][4], int n,
        [FOUND 2026-09-16, the landing-2 review.] */
     if (!s_mStrAny) { s_mStrAny = 1; s_mStrGen = tagpu_text_glyph_gen(); }
     if (!mir_bytes(cell, m->alen, &m->aoff)) s_mNOps--;
+}
+
+/* A SHARP-LAYER QUAD, RECORDED WHERE IT IS DRAWN AND WITH WHAT IT RESOLVED.
+   The layer's three clients draw in a fixed order and this preserves it, which
+   matters: the minimap is drawn AFTER the cursor and so covers it where they
+   overlap, and its view box after its base for the same reason the engine draws
+   them that way (0x466B44 then 0x466B5E).
+
+   THE LIST OVERFLOWING IS NOT A `behind`. Unlike an op, a sharp-layer quad
+   mutates no state that persists into the next frame -- the layer is cleared to
+   (0,0,0,0) at every present -- so a frame that produced more quads than this
+   carries is one frame that cannot be composited, not a store that has fallen
+   out of step. It says so by counting, and the consumer refuses the frame. */
+static void mir_sdraw(int kind, float x0, float y0, float x1, float y1,
+                      float u0, float v0, float u1, float v1,
+                      const float col[4], int ck)
+{
+    TAGPU_GUISDRAW* q;
+    if (!s_mirRec) return;
+    if (s_mNSDraw >= TAGPU_GUI_SDRAW_MAX) { s_mNSDraw = TAGPU_GUI_SDRAW_MAX + 1; return; }
+    q = &s_mSDraw[s_mNSDraw++];
+    q->kind = kind;
+    q->dst[0] = x0; q->dst[1] = y0; q->dst[2] = x1; q->dst[3] = y1;
+    q->uv[0] = u0; q->uv[1] = v0; q->uv[2] = u1; q->uv[3] = v1;
+    if (col) { q->col[0] = col[0]; q->col[1] = col[1];
+               q->col[2] = col[2]; q->col[3] = col[3]; }
+    else     { q->col[0] = q->col[1] = q->col[2] = q->col[3] = 0.0f; }
+    q->ck = ck;
 }
 
 /* the box ops all carry the same rectangle */
@@ -1676,6 +1712,12 @@ static void sharp_cursor(const TAGPU_FRAME* f)
     quad(v, (float)x0, (float)y0, (float)(x0 + w), (float)(y0 + h), e->u0, e->v0, e->u1, e->v1);
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
     x_glDrawArrays(GL_TRIANGLES, 0, 6);
+    /* THE RESOLVED RECT, and this is the one that could not be re-derived:
+       `dx`/`dy` above came from `mouse_last_client()` on THIS thread at THIS
+       instant, and the Vulkan lane runs later in the same iteration. */
+    mir_sdraw(TAGPU_GUISK_CURSOR, (float)x0, (float)y0,
+              (float)(x0 + w), (float)(y0 + h),
+              e->u0, e->v0, e->u1, e->v1, NULL, (int)e->ck);
     s_curDrawn++;
     /* OUR CURSOR IS IN THE SHARP FBO FROM HERE — which is NOT the same as
        being on screen, and the difference is what decides whether the engine
@@ -1868,6 +1910,7 @@ static void sharp_minimap(const TAGPU_FRAME* f)
                 s_mmPicRgb[3 * i] = e[0]; s_mmPicRgb[3 * i + 1] = e[1]; s_mmPicRgb[3 * i + 2] = e[2];
             }
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, pw, ph, 0, GL_RGB, GL_UNSIGNED_BYTE, s_mmPicRgb);
+            s_mmPicSerial++;
         }
         glBindTexture(GL_TEXTURE_2D, 0);
         s_mmGenSeen = gen; s_mmPalSeen = tagpu_pal_serial(); s_mmTW = pw; s_mmTH = ph;
@@ -1940,6 +1983,9 @@ static void sharp_minimap(const TAGPU_FRAME* f)
                 (float)(mx + mw) * kx, (float)(my + mh) * ky, 0.0f, 0.0f, 1.0f, 1.0f);
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
         x_glDrawArrays(GL_TRIANGLES, 0, 6);
+        mir_sdraw(TAGPU_GUISK_MM, (float)mx * kx, (float)my * ky,
+                  (float)(mx + mw) * kx, (float)(my + mh) * ky,
+                  0.0f, 0.0f, 1.0f, 1.0f, NULL, 0);
     }
     /* THE VIEW BOX LAST, because that is where the engine puts it: DrawMinimap
        copies the composite at 0x466B44 and only then draws the box at
@@ -1988,6 +2034,11 @@ static void sharp_minimap(const TAGPU_FRAME* f)
                 quad(v, x0 * kx, y0 * ky, x1 * kx, y1 * ky, 0, 0, 0, 0);
                 glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
                 x_glDrawArrays(GL_TRIANGLES, 0, 6);
+                {   /* the colour is already through the presented palette */
+                    float bc[4]; bc[0] = r; bc[1] = g2; bc[2] = b2; bc[3] = 1.0f;
+                    mir_sdraw(TAGPU_GUISK_FLAT, x0 * kx, y0 * ky, x1 * kx, y1 * ky,
+                              0, 0, 0, 0, bc, 0);
+                }
             }
         }
     }
@@ -2065,14 +2116,20 @@ static void sharp_begin(const TAGPU_FRAME* f)
         x_glUniform2f(s_uSharpProgSize, (float)w, (float)h);
         glBindVertexArray(s_vao);
         glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-        x_glUniform4f(s_uSharpProgCol, 0.0f, 1.0f, 0.0f, 1.0f);
-        quad(v, 0.0f, 0.0f, 64.0f, 64.0f, 0, 0, 0, 0);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
-        x_glDrawArrays(GL_TRIANGLES, 0, 6);
-        x_glUniform4f(s_uSharpProgCol, 1.0f, 1.0f, 1.0f, 1.0f);
-        quad(v, 100.0f, 0.0f, 101.0f, (float)h, 0, 0, 0, 0);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
-        x_glDrawArrays(GL_TRIANGLES, 0, 6);
+        {
+            static const float green[4] = { 0.0f, 1.0f, 0.0f, 1.0f };
+            static const float white[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+            x_glUniform4f(s_uSharpProgCol, 0.0f, 1.0f, 0.0f, 1.0f);
+            quad(v, 0.0f, 0.0f, 64.0f, 64.0f, 0, 0, 0, 0);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
+            x_glDrawArrays(GL_TRIANGLES, 0, 6);
+            mir_sdraw(TAGPU_GUISK_FLAT, 0.0f, 0.0f, 64.0f, 64.0f, 0, 0, 0, 0, green, 0);
+            x_glUniform4f(s_uSharpProgCol, 1.0f, 1.0f, 1.0f, 1.0f);
+            quad(v, 100.0f, 0.0f, 101.0f, (float)h, 0, 0, 0, 0);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
+            x_glDrawArrays(GL_TRIANGLES, 0, 6);
+            mir_sdraw(TAGPU_GUISK_FLAT, 100.0f, 0.0f, 101.0f, (float)h, 0, 0, 0, 0, white, 0);
+        }
     }
     /* the two clients, and whether either of them put anything there. Their
        own counters answer it, so neither function grows a flag of its own. */
@@ -2474,6 +2531,24 @@ static void mir_finish(const TAGPU_FRAME* f)
         s_mHand.atlas = NULL; s_mHand.atlasDim = 0;
         s_mHand.atlasRows = 0; s_mHand.atlasSerial = 0;
     }
+
+    /* ---- THE SHARP LAYER. `sharpOn` above already says whether anything has
+       COVERAGE; this is what produced it. The list is copied BY VALUE, so its
+       lifetime is the struct's and not the arena's.
+       A list that OVERFLOWED is published as a refusal (`nsdraw` past the cap),
+       not as a truncation: the layer is cleared every present, so one frame the
+       consumer cannot composite is one frame, never a store out of step. */
+    s_mHand.sharpW = s_sharpOn ? s_sharpW : 0;
+    s_mHand.sharpH = s_sharpOn ? s_sharpH : 0;
+    s_mHand.nsdraw = s_mNSDraw;
+    if (s_mNSDraw > 0 && s_mNSDraw <= TAGPU_GUI_SDRAW_MAX)
+        memcpy(s_mHand.sdraw, s_mSDraw, (size_t)s_mNSDraw * sizeof s_mSDraw[0]);
+    s_mHand.mmPic = s_mmPicRgb; s_mHand.mmPicW = s_mmTW; s_mHand.mmPicH = s_mmTH;
+    s_mHand.mmPicGen = s_mmPicSerial;
+    /* the engine's pair is PACKET memory, so it is valid for this frame and no
+       other -- which is the rule the whole hand-over already lives under */
+    s_mHand.mmEng = f->packet ? tagpu_pk_minimap(f->packet) : NULL;
+    s_mHand.mmEngW = s_mmEngW; s_mHand.mmEngH = s_mmEngH;
 
     s_mHand.glyphs = tagpu_text_glyph_atlas(&s_mHand.glyphW, &s_mHand.glyphH);
     s_mHand.glyphSerial = tagpu_text_glyph_serial();
