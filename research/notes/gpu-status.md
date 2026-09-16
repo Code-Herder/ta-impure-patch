@@ -6121,17 +6121,17 @@ where it is, every consumer sees one generation per frame.
 
 | claim | how | result |
 |---|---|---|
-| the picture does not move | the A/B walk, all three resolutions | **39 of 39 stops at 0 px**, ink identical to the pre-change run stop for stop |
+| the picture does not move | the A/B walk, all three resolutions | **52 of 52 stops at 0 px**; on the two walks that have a pre-change counterpart (1024×768 and 1080p) the ink is identical **stop for stop, to the byte** |
 | the crash route is clean | the landing-5 route, 5x at 1920x1080, **Vulkan lane DOWN** | **5 of 5 clean**, `teardowns=1` each |
-| the scratch bound holds | `gafscratch=high/lost` over the walks and the arm | **107 006 and 78 263 bytes of 2 MB, `lost` 0 in both** |
+| the scratch bound holds | `gafscratch=high/lost` over the walks and the arm | high-water **811 474 bytes of 2 097 152 (39 %)** over the three walks, **`lost` 0** |
 | nothing falls back for a real reason | `gafnoplane` | **0**, over every run |
 | the atlas drop fires, once per boundary | two skirmishes in ONE process | **2 resets, one per level end**, `subject replaced` (our call, not a full-atlas recycle) |
 | a dropped atlas re-decodes the RIGHT texels | `glshot` on level 2, after the drop | units render with their own textures and shadows; terrain, trees and HUD intact |
 
 `gafreseed` is counted apart from `gafnoplane` and is **not** a failure: a reset clears the seen
 table after an op has already decided it needs no plane, and the same publish re-seeds every
-surface whole, so the op's box is bytes the seed already carried. It read **176** over the walks
-and **282** over the arm. One counter for both would have read as 3923 failures on the first
+surface whole, so the op's box is bytes the seed already carried. It read **4 323** over the three
+walks. One counter for both would have read as 3923 failures on the first
 session that measured it — which is exactly what it did read before the split.
 
 #### Not covered
@@ -6186,10 +6186,11 @@ the lever is still on disk.
 | walk | stops at 0 px | non-black px a side, min–max | of |
 |---|---|---|---|
 | shell, 640×480 (what the shell runs at whatever the game res) | **13 / 13** | 297 477 – 307 200 | 307 200 |
+| in game, 640×480 | **13 / 13** | 93 688 – 145 437 | 307 200 |
 | in game, 1024×768 | **13 / 13** | 118 232 – 174 781 | 786 432 |
 | in game, 1920×1080 | **13 / 13** | 175 576 – 232 125 | 2 073 600 |
 
-**39 of 39**, and **the ink column is half the claim.** On every one of the 39 rows the GL lane's
+**52 of 52**, and **the ink column is half the claim.** On every one of the 39 rows the GL lane's
 non-black count and the Vulkan lane's are the **same integer** — not merely both non-zero — so each
 0 px is a diff over a frame that had content, and had the same amount of it on both lanes. A row
 with 0 px and 0 ink is two blank frames agreeing and is refused, not counted; that is the fourth
@@ -6199,10 +6200,18 @@ The in-game walks include the four-deep stack `VISUALRT` over `PREFS` over `ARMO
 over `ARMCOM1` over `ARMMAIN2`, both pages of the build menu, chat and F4; the shell walk includes
 `SELMAP` over `SKIRMISH` and our own injected `VISUALS.GUI` with its 50 gadgets.
 
+**It was 39 until the run that produced these figures, and the extra 13 are the 640×480 walk's
+in-game half.** The earlier set took the 640×480 row from a shell-only run, so the resolution the
+shell actually renders at had no in-game stops at all; this set walks both halves there. The other
+two rows are unchanged — the same stops, the same ink, to the byte — which is also what says the
+landing that prompted the re-run moved no pixel.
+
 The in-game ink is a **smaller fraction** of the frame than the shell's because the shell is UI
 edge to edge while in game the UI is the panel, the bars and the strings over a world the A/B
-blacks — 15–22 % of a 1024×768 frame, 8–11 % of a 1080p one. It is the count of pixels **this layer**
-put down, which is what the comparison is about.
+blacks — 31–47 % of a 640×480 frame, 15–22 % of a 1024×768 one, 8–11 % of a 1080p one. The
+fraction falling as the frame grows is the expected shape: the panel is a fixed pixel size and the
+world around it is not. It is the count of pixels **this layer** put down, which is what the
+comparison is about.
 
 **A STOP WITH NO USABLE COMPARISON IS NOT A ZERO, and this is the part of the walker that matters
 most.** `vk_ab` returns `None`; the stop prints `NO COMPARISON` and the report renders it **NO
@@ -6230,7 +6239,15 @@ one of them found by a walk that had already reported a pass:
   exit status and the `non-black px` line are both read now, and **the ink is a column in the
   report** — a 0 px row is only a pass with a non-zero ink beside it.
 
-The last two were found by a review of the walker *after* it had produced a "39 of 39", which is why
+* **The walk ran even when there was nothing to walk.** `tacli launch` and, worse, `tacli scenario
+  load` both had their exit status captured into `rc` and never looked at. A failed load sent the
+  walk into `game_walk` against whatever was on screen — the shell, most likely — where the stops
+  would find real content, diff it, and report 0 px with a healthy ink count. Every guard above is
+  about telling a hole from a pass at one stop; this was a hole upstream of all of them, and none
+  of them could see it. Both calls now pass `check=True` and raise with tacli's own output.
+  [FOUND 2026-09-16, reconciling why one walk had recorded no in-game stops at all.]
+
+The middle two were found by a review of the walker *after* it had produced a "39 of 39", which is why
 **all three walks were re-run from scratch** under the corrected guards and the numbers below are
 the second set. The first set is withdrawn: two of its stops' guards were weaker than the prose
 describing them.

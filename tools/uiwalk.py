@@ -1044,7 +1044,12 @@ def main():
         launch_args = ["launch", a.inst, "--res", a.res]
         if a.window:
             launch_args += ["--window", a.window]
-        rc, out = tacli(*launch_args, timeout=300)
+        # A FAILED LAUNCH MUST STOP THE WALK, NOT BE WALKED THROUGH. `rc` was
+        # captured here and never looked at, so a launch that did not come up
+        # left every shell stop to be taken against nothing -- and a stop taken
+        # against nothing is the thing this walker refuses everywhere else.
+        # `check=True` raises with tacli's own output. [2026-09-16.]
+        rc, out = tacli(*launch_args, timeout=300, check=True)
         print(out.strip().splitlines()[-1] if out.strip() else "", file=sys.stderr)
         w.gamedir = instance_dir(a.inst) or (TREE / "tagpu" / "instances" / a.inst / "gamedir")
         rc, out = tacli("log", a.inst, "-g", "gui: ")
@@ -1055,7 +1060,14 @@ def main():
         if a.restore:
             w.collect_dump("shell")      # the atlas does not survive the switch
     if not a.shell_only:
-        rc, out = tacli("scenario", "load", a.inst, scenario, "--restart", "--res", a.res, timeout=600)
+        # AND THE SAME FOR THE SCENARIO LOAD, which is the one that decides
+        # whether there is a GAME to walk at all. Unchecked, a failed load sent
+        # the walk into `game_walk` against whatever was on screen -- the shell,
+        # most likely -- where the stops would find real content, diff it, and
+        # report 0 px. Every guard in `vk_ab` is about telling a hole from a
+        # pass, and this was a hole upstream of all of them. [2026-09-16.]
+        rc, out = tacli("scenario", "load", a.inst, scenario, "--restart", "--res", a.res,
+                        timeout=600, check=True)
         print(out.strip().splitlines()[-1] if out.strip() else "", file=sys.stderr)
         w.gamedir = w.gamedir or instance_dir(a.inst) or (TREE / "tagpu" / "instances" / a.inst / "gamedir")
         w.log_seen = 0
