@@ -41,6 +41,25 @@ int  tagpu_reclaim_teardown_active(void);
 
 int  tagpu_reclaim_armed(void);
 
+/* GAME THREAD: 1 while a level teardown is in flight -- from before the first
+   per-level asset is freed until after the generation below has moved.
+
+   IT IS THE OTHER HALF OF `tagpu_reclaim_level_gen`, AND NEITHER IS SUFFICIENT
+   ALONE. The generation bumps AFTER the cascade's frees (reclaim_teardown_post),
+   so between the free and the bump a pointer captured in this level still
+   carries the current generation and no longer points at anything. This flag is
+   raised BEFORE the frees and lowered AFTER the bump, so the two windows
+   overlap and a reader that refuses on either can never see a freed asset:
+
+       raise ---- frees ---- gen++ ---- lower
+             [ flag covers ................. ]
+                            [ gen covers ... onwards ]
+
+   Both are read and written on the game thread, so this is program order on one
+   thread rather than a claim about visibility. A render-thread caller wants
+   `tagpu_reclaim_teardown_active()` above, which is the latched per-pass copy. */
+int  tagpu_reclaim_level_closing(void);
+
 /* THE QUIESCENCE FENCE, for other modules with the same problem. This module
    owns the only published fact about whether the render thread is inside the
    region that reads memory the game thread may free, and that fact is worth

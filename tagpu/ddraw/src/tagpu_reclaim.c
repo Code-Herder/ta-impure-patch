@@ -418,6 +418,10 @@ int tagpu_reclaim_teardown_active(void) { return s_installed && s_passTeardown; 
 
 unsigned tagpu_reclaim_level_gen(void) { return (unsigned)s_levelGen; }
 
+/* the raw game-thread flag, not the render thread's latched copy: see the
+   header for why this and the generation are both needed */
+int tagpu_reclaim_level_closing(void) { return s_installed && s_teardown != 0; }
+
 int tagpu_reclaim_armed(void) { return s_installed; }
 
 /* ---- the fence, for other modules (tagpu_reclaim.h) ---------------------- */
