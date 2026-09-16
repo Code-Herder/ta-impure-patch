@@ -5091,6 +5091,18 @@ producer's own `reseed`, composite nothing, and apply nothing but the RESET that
 is `tagpu_gui_surf.c`'s own `s_skipToReset`, for the same reason. **Measured firing and recovering**
 on the binary the fixes produced.
 
+**"ONCE, ON THE TRANSITION" IS ONCE PER FRAME WHEN THE TRANSITION REPEATS, AND THAT IS THE RESEED
+STORM AGAIN.** The re-review of landing 1 caught `behind()` raising the producer's flag every frame
+and made it act on the transition only. Landing 2's review found the same storm through the other
+door: a RESET **clears** `s_behind`, and a condition that is structural rather than transient fires
+again inside the very frame that answered it — so the pass asks, is answered, asks again, at the
+frame rate, and the thing being reseeded is **the GL lane's own twin store**. The asks are capped
+now, and the cap counts **fruitless** asks: a run of frames that actually composited is the evidence
+the last fresh start worked and gives the budget back, so a map change still recovers while a
+structural condition — which never earns that run, because it stands the composite down every frame
+— goes quiet after eight tries and never touches the producer again. A capability gap costs the
+oracle nothing; that is the whole point of telling it apart from a sync gap.
+
 #### The string op is the twin store's, not the sharp layer's (landing 2)
 
 **`twin_string` stamps TA's own glyphs into the TWIN** (G17d), from a per-font glyph cache the
@@ -5100,10 +5112,38 @@ writes. So the port is landing 1's store plus one pipeline — `STR_FS` on the s
 as `SPR_FS` and `CPY_FS` — and not the device-resolution layer the plan had bundled it with.
 
 **The texels needed no mechanism.** `tagpu_text.c` already keeps its glyph atlas as a CPU array
-(`s_gatlas`) and uploads the GL texture *from* it, with `tagpu_text_glyph_gen()` already exposed
-for the repack. `tagpu_text_glyph_atlas()` hands back that array and its dimensions — one accessor
-where the feature pass needed a whole opt-in mirror for the same question. The Vulkan side keys its
-`R8_UNORM` upload on the generation and re-creates the image only when the dimensions move.
+(`s_gatlas`) and uploads the GL texture *from* it. `tagpu_text_glyph_atlas()` hands back that array
+and its dimensions — one accessor where the feature pass needed a whole opt-in mirror for the same
+question.
+
+**BUT IT NEEDED A SERIAL, AND THE ONE THAT WAS ALREADY THERE WAS THE WRONG ONE.** The first draft
+keyed the `R8_UNORM` upload on `tagpu_text_glyph_gen()`. **That counts REPACKS** — the two paths
+that throw the whole atlas away — and says nothing about an ordinary glyph being rasterised into a
+fresh shelf, which changes the atlas's bytes and leaves every previously issued cell valid. The GL
+lane never had to tell the two apart because it re-uploads on `s_gdirty`, a plain dirty bit. So the
+Vulkan image was uploaded **once** and every `(font, code)` pair first seen afterwards — a new digit
+in a resource counter, a unit name not yet displayed, a second font — stayed **0** in it: the glyph
+invisible where `bg == tr` and a solid `bg` box where it is not, permanently, for the session, with
+no counter anywhere saying so. `tagpu_text.c` now publishes a **content serial** beside the
+generation, bumped wherever `s_gatlas`'s bytes change and nowhere else (not when the GL *texture* is
+re-created, which is liveness). **Both landing-2 reviewers led with this, independently** — the
+sixth such pair on this lane, and the measurement could not have found it: the fixture's whole glyph
+set was in the atlas before the first upload, which is exactly the shape that reads 0 px.
+
+**AND A REPACK MID-PRESENT INVALIDATES EVERY STRING ALREADY RECORDED IN IT.** `twin_string`'s retry
+is correct *for itself*: it drew into the GL twin from the texture as it stood at the generation it
+resolved against. The mirror does not draw until the drain is over, against the atlas as it stands
+**then** — so a repack caused by a *later* string in the same present leaves the earlier strings'
+cells naming cleared texels. The producer records the generation with the first string of a frame
+and **loses the frame** if it has moved by `mir_finish`. Which introduces the third fix:
+
+**AN ABANDONED MIRROR FRAME USED TO BE WITHHELD, AND A WITHHELD RECORD IS INDISTINGUISHABLE FROM AN
+UNARMED LANE.** The consumer's "nothing handed over" branch reads it as *the GL lane drew nothing
+either* — true when the lane is not armed, false when the op array or the arena refused to grow
+mid-frame, and in that case the store is a frame of ops behind, silently, for the session. The
+record is published now with a `lost` flag and the consumer answers it with the behind state. This
+is the same hole the landing-1 review closed at the `!s_mLayer` end of `mir_finish` and left open at
+this one; it was found verifying the repack fix, and **neither reviewer named it**.
 
 **THE CELLS ARE CARRIED, NOT LOOKED UP, and for a harder reason than the sprite's.** The sprite's
 atlas rect is carried because a repack between the two lanes' lookups would answer differently.
@@ -5147,12 +5187,17 @@ three kinds of image a twin draw samples — the one UI atlas (every sprite), th
 
 **It was the twins plus ONE until landing 2, and the string op is what made that wrong.** The old
 comment's argument was "every sprite samples the one atlas", which stopped being true the moment
-there were two non-twin images. A frame using all `TW_MAX` twins as copy sources plus one sprite
-plus one string wants 34 of 33; `set_claim` answers 0, the replay falls into `standdown`, and
-`behind()` drops the store and asks for a fresh start. It recovers rather than corrupting anything,
-but a store dropped every frame is not parity. **Found by reading the landing's own diff for this
-documentation pass, not by any measurement** — every A/B of this pass has run with two twins in the
-store, so nothing in the numbers below could have shown it.
+there were two non-twin images.
+
+**AND `TW_MAX + 2` IS NOT A BOUND EITHER — IT IS A SIZE.** The landing review split on this and the
+dissenting reviewer is right: `tw_drop` **deliberately** leaves a claim standing (clearing it was a
+previous round's fix and caused a worse hazard — a set a recorded draw already names being
+rewritten), so what a frame counts against `SET_MAX` is **distinct views claimed**, not twins alive.
+A present that batches FREE + SEED + COPY churn claims a view per *generation* of a surface, and
+nothing bounds that by `TW_MAX`. What IS by construction is the consequence: `set_claim` answers 0
+deterministically, the replay goes to `standdown`, and `behind()` drops **our** store and asks the
+producer once. Nothing is corrupted and nothing of the GL lane's is touched. Sized for the case
+that has to work, degrading predictably past it — stated here rather than dressed up as a bound.
 
 #### Two things the measurement found, and both were the port's
 
@@ -5192,25 +5237,40 @@ exactly.
 absence of `nostring` is the whole point of the table. Same binary discipline, same lever, same
 fixture:
 
+Re-taken on the binary the **landing review's** fixes produced, every figure:
+
 | | |
 |---|---|
-| `selbox-slope` in game, 1024×768, two runs | **0 of 786 432**, 744 960 ink a side |
-| `selbox-slope` in game, 1920×1080 | **0 of 2 073 600**, 1 989 711 ink a side |
-| the glyph path | `str=6/25 miss=0 reseed=0 repack=0 fonts=1` |
+| `selbox-slope` in game, 1024×768 | **0 of 786 432**, `str=38/102 miss=0 reseed=0 repack=0 glyphs=27 fonts=1` |
+| `selbox-slope` in game, 1920×1080 | **0 of 2 073 600**, `str=7/30`, the same glyph cache |
 | the capability refusal | **gone** — no stand-down line at all, where landing 1 fired one on every in-game frame |
+| the behind state | fired twice, both `the presented surface has no twin here` at the shell→game transition, both recovered |
+| the states the fixes added | **none fired**: no lost record, no ask cap reached, no quad bound, no dimension refusal |
 
 So TA's own glyphs — rasterised by the GL lane into its own atlas, stamped from the cells that lane
-resolved, coloured by the blitter's own three arguments — reproduce it exactly. The ink figure is
-**different from landing 1's on the identical fixture** (744 960 against 748 890), which is the
-check that the lever actually changed the picture: a 0 px against an unchanged frame would be the
-vacuous A/B §2.32 was caught by.
+resolved, coloured by the blitter's own three arguments — reproduce it exactly.
 
-**The `SET_MAX` fix above is not in these numbers and could not be.** It was found afterwards, by
-reading the diff; the bound it corrects needs 32 twins in the store and every measurement here ran
-with two. **Every defect this pass has had so far was invisible to every measurement taken of
-it** — the use-after-free, the five diverging paths, the reseed storm, and now this — and every one
-was found by reading the code rather than by running it. On a pass whose output is a pixel count
-that reads 0, that is the thing to expect rather than the exception.
+**THE CHECK THAT THE 0 IS NOT VACUOUS IS `str=`, NOT THE INK FIGURE.** A first draft of this section
+argued from the ink count moving between landing 1's run and landing 2's (748 890 against 744 960)
+and that argument is **wrong**: re-running the identical fixture gives 748 916 and 1 995 067, so the
+figure moves between runs of the same configuration. The cause is on record — **the engine's
+`PAUSED` banner BLINKS**, ~2 800 px at 1024×768 (§2.33's traps), which is the size of the swing.
+Both halves of one A/B are the same frame by construction, so a 0 stands whatever the phase; what
+says the strings were actually drawn is the producer's own counter, `str=38/102` with
+`glyphs=27 fonts=1` — 38 string ops, 102 glyph quads. Read the counter, not the ink.
+
+**That last row is the honest one and it is the shape of this whole pass.** The glyph serial, the
+repack loss, the abandoned-frame publish, the ask cap, the quad bound and the `SET_MAX` size are all
+**correct by construction and exercised by nothing here** — the fixture's glyph set is complete
+before the first upload, its atlas never repacks, its store holds two twins, and its worst frame is
+7414 quads. They are in the same category as §2.33's Classic++ refusal: written, argued, unfired.
+
+**Every defect this pass has had was invisible to every measurement taken of it** — the
+use-after-free, the five diverging paths, the reseed storm, the `SET_MAX` size, the glyph serial,
+the repack, the withheld record — and every one was found by **reading**: two reviewers, a
+re-review, and two passes of reading my own diff. On a pass whose output is a pixel count that
+reads 0, that is what to expect rather than the exception, and it is the reason this landing was
+reviewed at `high` with two reviewers for the third time rather than trusted.
 
 **One PLAUSIBLE finding was kept rather than fixed.** GL's `uSurf` is POT-padded by the fork
 (1024×512 for a 640×480 mode) while `s_engImg` is exactly the mode rect, so a `texelFetch` outside
