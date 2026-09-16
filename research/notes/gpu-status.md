@@ -5199,6 +5199,60 @@ buffers. They were one number through landing 1 because every draw was exactly o
 them one here would have put the composite's own quad, which sits at the end of the vertex buffer,
 on top of a glyph's.
 
+#### The sharp layer, and why it needed none of the twins' machinery (landing 3)
+
+The third client of the composite is a single `RGBA8` at **device** resolution, row 0 the
+viewport's top, that the GL lane clears to `(0,0,0,0)` at every present and the composite takes
+wherever its **alpha** says it has coverage. Landing 1 wired `uSharpOn` and left it 0; landing 3
+turns it on.
+
+**IT IS PER SLOT, AND THAT IS ITS WHOLE SYNCHRONISATION ARGUMENT.** A twin had to be shared
+because it *accumulates* — which is what forced the barrier reasoning above, the slot-bitmask
+retire, and the use-after-free that got through the first time. This layer keeps nothing across
+frames, so it is per-slot state that the seam's own `fence[slot]` wait already covers, and none of
+that reasoning applies to it. Its render pass is the twins' opposite — `CLEAR` where they `LOAD`,
+for the opposite reason — and the clear is *transparent* rather than merely black, because alpha is
+what the composite gates on. It takes **no flip**, because like a twin it is sampled rather than
+presented (§2.32).
+
+**What crosses is a short ORDERED LIST of quads, not texels and not an op stream**, because that is
+what the layer is: three clients drawn in a fixed order — the harness's flat quads, the cursor, then
+the minimap's base and its view box. At most 16, carried **by value**, which retires any question
+of what they point into.
+
+**THE CURSOR'S RECT IS WHY THE LIST CARRIES RESOLVED GEOMETRY.** `sharp_cursor` takes the pointer
+position from `mouse_last_client()` **at draw time**, and the Vulkan lane runs later in the same
+iteration of `render_ogl.c`'s loop — so re-deriving it there places the cursor where the mouse has
+moved to *since*. That is a guaranteed non-zero A/B which would have read as a rasteriser
+difference. The resolved destination rect crosses instead, with the atlas rect and the colour key.
+**Same rule as the sprite's atlas rect and the string's glyph cells, and the third landing on this
+pass it has decided.** The minimap's box (the packet's, after the HUD map and the `hq8` scale), its
+view rect (`main+0x142CB`, four edges at one *game* pixel each so the box keeps its weight as `k`
+grows) and that box's colour, already through the presented palette, cross for the same reason.
+
+**Two things reading the code corrected, each of which would have cost a measurement round:**
+
+* **The engine's minimap pair is `RGB8`, not `RG8`.** The GL source calls it "the engine's two
+  bases" and the plan repeated that, but `MM_FS` reads **three** channels — `r` the fogged base,
+  `g` the unfogged one, `b` the composite the engine drew its dots, radar arcs and points into —
+  and the CPU loop beside it strides by 3. Both minimap images are widened to `RGBA8` on the way
+  into Vulkan, because `VK_FORMAT_R8G8B8_UNORM` is optional and rarely supported while the
+  four-channel one is universal, and `MM_FS` reads `.rgb` either way.
+* **`SHARP_FS` is needed by this landing**, which the plan doubted on the grounds that `LAY_FS`
+  already samples the layer. It is not the sampler; it is the *flat quad*, and the minimap's view
+  box is four of them.
+
+**One descriptor layout serves all three programs**, because G19c's translation had already
+normalised them: a 16-byte block at binding 32 each, and samplers at 40..42 for `CURS_FS`
+(`uAtlas`, `uAtlasRGB`, `uPal`) and `MM_FS` (`uPic`, `uEng`, `uPal`). So the sets are indexed by
+**kind** rather than by draw — a frame's up-to-16 quads sample at most three distinct combinations
+of images — which is three sets a slot instead of sixteen.
+
+**An overflowing list is a `compose = 0` and NOT the behind state**, and that distinction is the
+one the twins established the hard way: a sharp-layer quad mutates nothing that outlives its frame,
+so a frame the pass cannot draw is *one frame*, never a store out of step. Nothing is asked of the
+producer for it.
+
 #### A set is claimed for one image for the length of a frame
 
 A descriptor set may not be rewritten once a recorded draw names it, and the twin **array** cannot
@@ -5270,6 +5324,28 @@ Re-taken on the binary the **re-review's** fixes produced, every figure:
 | what those two events were | `an op names a surface this store never seeded` and the pixel-op form of it — the holes the re-review found, which used to be reported as the presented surface having no twin |
 | the states the fixes added | **none fired**: no lost record, no ask cap reached, no quad bound, no dimension refusal |
 
+**LANDING 3, MEASURED 2026-09-16 WITH THE SHARP LAYER ON** — `gui.on=norestore mmbase`, and the
+absence of `nocursor` and `nominimap` is the point of the table. `mmbase` forces the sharp minimap
+at `k = 1`, which it would otherwise leave to the engine. Same fixture, same discipline:
+
+| | |
+|---|---|
+| `selbox-slope` in game, 1024×768 | **0 of 786 432**, `sharp=1024x768` |
+| `selbox-slope` in game, 1920×1080 | **0 of 2 073 600**, `sharp=1920x1080` |
+| the cursor | `curs=1,21x23,dev=0,sc=1.00,drawn=20990` and `11388` — it is on screen and drawn, not absent |
+| the minimap | `mm=10810` and `2559` |
+| the strings, still | `str=7/30 miss=0 reseed=0 repack=0 glyphs=27 fonts=1`, `mirlost=0` |
+| the sharp stand-down | **gone** — where landing 2 fired it on every frame with a cursor on screen |
+
+**THE COUNTERS ARE THE CHECK THAT THIS 0 IS NOT VACUOUS, not the ink figure** — the lesson landing
+2 wrote two screens up. A layer the Vulkan lane drew *nothing* into, while the GL lane drew a
+21×23 cursor and a minimap, would differ by thousands of pixels and not by none. `drawn=` and `mm=`
+are what say both lanes had something to compare.
+
+**So `norestore` is the only lever left**, and with it the pass composites in an ordinary session —
+which through landings 1 and 2 it never did: landing 1 stood down on every frame with text on
+screen, and landing 2 on every frame with a cursor on screen, which is every frame of real play.
+
 So TA's own glyphs — rasterised by the GL lane into its own atlas, stamped from the cells that lane
 resolved, coloured by the blitter's own three arguments — reproduce it exactly.
 
@@ -5313,11 +5389,12 @@ detail rather than an engine one. Named rather than silently carried.
   **full screen inventory** at 1024×768 and 1080p, shell and in game; the shell↔game context
   switch; and **frame time no worse than GL**, which nothing in Phase G has measured at all. This
   landing is three fixtures, not an inventory.
-* **The cursor, the minimap and the sharp layer's content** — `CURS_FS`, `MM_FS`, `SHARP_FS`;
-  landing 3, and it drops `nocursor` and `nominimap`. The sharp layer is still refused whenever it
-  has COVERAGE (`s_sharpInk`), which is every frame with a cursor on screen, so **the pass composites
-  nothing in an ordinary session even now** — landing 2 closed the string half of that, not the
-  whole of it.
+* ~~The cursor, the minimap and the sharp layer~~ **CLOSED by landing 3.** `norestore` is the only
+  lever left.
+* **The sharp layer's THIRD client, the sharp string path**, is not exercised by any fixture here:
+  `SHARP_TEXT` draws at device resolution where `twin_string` stamps into the twin, and nothing in
+  `selbox-slope` takes it. The quads would cross like any other, but that is an argument and not a
+  measurement.
 * **Classic++ colour twins and the MRT sprite/copy programs** — landing 4, still holding
   `norestore`, and it may be blocked on the restorer's five shaders (G19c's own uncovered case).
 * **The present itself** — landing 5. Route D still gives the Vulkan lane a window of its own.
