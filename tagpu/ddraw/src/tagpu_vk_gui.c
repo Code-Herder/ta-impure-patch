@@ -46,10 +46,18 @@
    hand-over routinely carries thousands. MEASURED 2026-09-16 at 7414 on a
    1080p level load. This is the bound on a runaway, not on a busy frame. */
 #define DRAW_MAX    16384
-/* one descriptor set for every sprite (they all sample the one atlas) and one
-   per distinct copy SOURCE twin -- so the sets a frame needs cannot exceed the
-   twins plus one, whatever the op count. */
-#define SET_MAX     (TW_MAX + 1)
+/* one descriptor set per distinct IMAGE a frame's twin draws sample. There are
+   three kinds and only three: every sprite samples the ONE UI atlas, every
+   string the ONE glyph atlas, and a copy samples its SOURCE TWIN -- so the sets
+   a frame needs cannot exceed the twins plus two, whatever the op count.
+   IT WAS `TW_MAX + 1` UNTIL LANDING 2 AND THAT WAS THE STRING OP'S DOING: the
+   glyph atlas is the SECOND non-twin view, and the old bound's own comment
+   ("they all sample the one atlas") stopped being true the moment there were
+   two. A frame with all TW_MAX twins used as copy sources plus one sprite plus
+   one string wanted 34 of 33 and fell into `standdown` -- recoverable, because
+   `behind` catches the store up, but a store dropped every frame is not
+   parity. Bound it instead of arguing it is unreachable. */
+#define SET_MAX     (TW_MAX + 2)
 /* objects waiting for every slot to turn over once before they are destroyed.
    THE LANE ALREADY HAD THE ANSWER AND THIS PASS DID NOT USE IT: the seam waits
    `fence[slot]` and nothing more, so `slots - 1` earlier submissions are still
@@ -901,8 +909,8 @@ static void set_viewport(VkCommandBuffer cb, int w, int h)
    image a frame samples needs its own -- and the twin ARRAY cannot be the
    index, because `tw_drop` moves the last entry into the hole and the indices
    shuffle under it. So the claim is on the VIEW: reuse the set already holding
-   it, else take a free one. SET_MAX is the twins plus one, so a frame can
-   never want more than there are. */
+   it, else take a free one. SET_MAX is the twins plus TWO -- the UI atlas and
+   the glyph atlas -- so a frame can never want more than there are. */
 static int set_claim(const TAGPU_VKPASS* d, SLOT* s, VkImageView v,
                      VkDeviceSize uRange, VkDeviceSize fRange, int* out)
 {
