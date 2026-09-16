@@ -6042,6 +6042,118 @@ merely unproven but false.
   inside the GL bracket and a candidate for both the absolute figures and the anomaly.
 * One fixture, one map, one scene, paused.
 
+### Landing 7 — the two holes the landing-5 sweep named, closed by moving the read
+
+Landing 5's review swept the module for the per-level asset class and named two sites it could
+not close. This landing closes both. Neither is about Vulkan: they are defects in the shipped GL
+renderer that the port's fixtures found.
+
+#### The sprite: resolved where the engine proves it alive
+
+**The publisher took a sprite's identity hash AND its decoded plane out of engine memory at
+publish time**, up to `CENSUS_MS` after the blit that recorded the op. Two engine routes free
+that memory inside the window:
+
+* the level teardown's cascade — which landing 5 closed with a generation ordering, at the cost
+  of refusing 215 ops at a measured level end;
+* **`GUI_Pop 0x4A9660`**, which frees a popped screen's art from **39** call sites with no flag
+  and no generation, and which landing 5 could **not** close. The disassembly is why:
+
+  ```
+  460630:  call 0x491b60     ; the teardown -- bumps gen N->N+1, lowers s_teardown
+  460635:  push 0x1
+  460637:  call 0x491d70     ; UpdateIngameGUI -- DRAWS, so op_add stamps lgen = N+1
+  460641:  add  eax, 0x519
+  460647:  call 0x4a9660     ; GUI_Pop -- frees that screen's art
+  ```
+
+  The pop is three instructions **after** the bump, so ops recorded at `0x460637` carry the
+  current generation and the gate passes. Only `frame_sane` stood there, and a bound is not the
+  safety argument.
+
+**Both reads moved into `gaf_box`, the `before_` observer on the blit leaf.** The engine is about
+to read the same frame header and the same pixel plane as its next act, so the art cannot be dead
+there — if it were, the engine's own blit would fault on it. That is an ordering in the strict
+sense: the read happens **inside** the engine's use of the data. There is no window to be small,
+no flag to arm and no generation to compare, and it covers the teardown, all 39 pop sites and any
+future free route together, because after it `publish` dereferences **no engine asset memory on
+this path at all**. `frame`/`pix` survive in the op as the consumer's atlas KEY — a value compared
+against a table, never followed.
+
+**It also fixes a wrong-art case the generation could not see.** The key is a hash of the plane's
+first bytes precisely because the shell hands a freed screen's addresses to the next screen's art.
+Taken at publish time, that hash read whatever the address held *then* — so art freed and replaced
+inside one census window hashed the **new** content under the **old** op, and the consumer matched
+a key naming pixels the op never drew. Taken in the observer, it is a hash of the bytes the engine
+is about to blit, which is the only content the op ever meant. Nothing measures this case; it is
+an argument from what the two versions read, and it is stated as one.
+
+**The generation gate is removed from this path** rather than kept as belt. It guarded the two
+reads that moved, could never cover the pop, and was not free. `gafstale` went with it — the name
+changed with the meaning on purpose, because `gafstale=215` is the figure landing 5's A/B is
+stated in and a counter that keeps its name while measuring something else is how those numbers
+quietly stop meaning what these notes say they mean. **The `OP_TEXT` path KEEPS its gate and its
+`strstale`**: `gfont_slot`, `glyph_block_size` and `glyph_block_fill` still read the font object
+at publish, so that window is still open, is still covered by the ordering, and is now the only
+user of `op->lgen`.
+
+#### The unit atlas: dropped at the level boundary
+
+`tagpu_render3do.c`'s atlas matches entries on the frame header's **address** and the pixel
+plane's (`tagpu_gaf_atlas_find`), so an entry is right only while that address means that art. The
+engine's teardown frees the model textures and the next level's loader may hand a new frame an old
+one's address — at which point the atlas serves the **previous level's texels** and nothing
+detects it: the entry is valid, the UV is in range, the picture is simply wrong. It reset only
+when FULL or on a GL context loss, and neither is a level boundary. `tagpu_fx.c` and
+`tagpu_feat.c` both already drop theirs here for exactly this reason.
+
+**This was live in ordinary play**, not only under a lever: `tagpu_native.on` is in
+`tagpu_opt.c`'s play-defaults table as `"all wrecks"`, so every play session has the unit atlas
+up, and any session that played a second level was exposed.
+
+`tagpu_r3d_atlas_level` is called from `tagpu_native_frame` beside `cache_gen_check` and **before**
+`tagpu_posebake_frame`, not from `tagpu_r3d_atlas_frame` lower down the file: posebake **latches**
+`tagpu_r3d_atlas_gen()` for the whole frame, so a drop after it would stamp this frame's bakes
+with the generation before the drop and cost a second, pointless drop on the next frame. Taken
+where it is, every consumer sees one generation per frame.
+
+#### What was measured
+
+| claim | how | result |
+|---|---|---|
+| the picture does not move | the A/B walk, all three resolutions | **39 of 39 stops at 0 px**, ink identical to the pre-change run stop for stop |
+| the crash route is clean | the landing-5 route, 5x at 1920x1080, **Vulkan lane DOWN** | **5 of 5 clean**, `teardowns=1` each |
+| the scratch bound holds | `gafscratch=high/lost` over the walks and the arm | **107 006 and 78 263 bytes of 2 MB, `lost` 0 in both** |
+| nothing falls back for a real reason | `gafnoplane` | **0**, over every run |
+| the atlas drop fires, once per boundary | two skirmishes in ONE process | **2 resets, one per level end**, `subject replaced` (our call, not a full-atlas recycle) |
+| a dropped atlas re-decodes the RIGHT texels | `glshot` on level 2, after the drop | units render with their own textures and shadows; terrain, trees and HUD intact |
+
+`gafreseed` is counted apart from `gafnoplane` and is **not** a failure: a reset clears the seen
+table after an op has already decided it needs no plane, and the same publish re-seeds every
+surface whole, so the op's box is bytes the seed already carried. It read **176** over the walks
+and **282** over the arm. One counter for both would have read as 3923 failures on the first
+session that measured it — which is exactly what it did read before the split.
+
+#### Not covered
+
+* **THE FONT WINDOW IS STILL OPEN.** The `OP_TEXT` path still dereferences the font object at
+  publish. It is gated by the same ordering the sprite path just stopped needing, and the font is
+  `[globals+0x204]`, for which **no free route has been measured at all** — which is why it was
+  not moved with the sprite. "No measured free route" is not a lifetime, and this is named as an
+  open window rather than left to look closed by the line above it in the source.
+* **The wrong-art case the move fixes is an argument, not a measurement.** It needs a pop and a
+  reload inside one ~5 ms census window, and no fixture here forces that.
+* **The A/B cannot see this class at all**, and that is worth saying plainly: both lanes consume
+  the same published op stream, so a publisher that resolved the wrong art would hand both lanes
+  the same wrong art and score 0 px. The walk is the regression gate for this landing, never its
+  evidence.
+* **The unit atlas's drop is evidenced by the log line and a picture, not by a diff against the
+  bug.** Forcing the address reuse the fix exists for would need the second level's loader to be
+  handed a specific block, which nothing here can arrange.
+* `MEM_Size 0x4D8360` exists and would have made the block-keyed forget buildable; it was not
+  used because it reads the heap outside the allocator's own critical section. See
+  [exe-reverse-engineering](exe-reverse-engineering.html).
+
 ### The gate's walk — the Vulkan lane against the GL lane, over the whole inventory
 
 `tools/uiwalk.py --vk`.

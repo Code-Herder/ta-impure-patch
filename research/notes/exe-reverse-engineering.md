@@ -2755,7 +2755,23 @@ both by address (`main+0x37E1B == *(globals+0xBC) == 0x04490020` in a 1024×768 
   **`0x4D85B0` has exactly one caller: this**. 363 sites call `0x4D85A0`, `SurfaceFree
   0x4C6AC0` among them (`0x4C6ACF`). Its partner is `MEM_Alloc 0x4D83B0(tag, size)` →
   `0x4D83C0`, which ignores the tag in the shipping build and goes to `0x4DACF0(size, 0)` or
-  `0x4E8890(size)`. Because a surface's header and pixels are ONE block (`w*h+0x30`, above),
+  `0x4E8890(size)`.
+- **THE ALLOCATOR DOES KNOW A BLOCK'S SIZE: `MEM_Size 0x4D8360(p)`** [VERIFIED 2026-09-16,
+  objdump of the pristine build]. `0x4D85B0` calls it on the free path at `0x4D85E7` and feeds
+  the result to `0x4DA840`, which is the accounting. Its body is a two-way dispatch on the same
+  mode predicate the rest of the allocator uses — `call 0x4D80D0; test al,al` — to
+  `0x4DBAE0(p)` (the private heap's sizer) or `0x4E8FB0(p)` (the CRT `_msize`); it returns 0 for
+  a NULL block and the size in `eax` otherwise. `MEM_Alloc`'s dispatch at `0x4D83D5` tests the
+  same predicate, so the two agree by construction about which heap a block came from.
+  **This was looked up to answer a question and then not used, which is the fact worth
+  recording.** The landing-5 re-review proposed a block-keyed forget on the `MEM_Free` observer
+  and said it needed a size the observer is not handed; it is handed one, right here. The reason
+  G19f-7 did not build it is that `0x4D8360` reads the heap's own structures **outside the
+  critical section** — `0x4D85B0` takes the lock at `0x4D85C2`, i.e. *after* the entry an
+  observer sits at, and `0x4D8360` takes none of its own — so calling it from a detour on a
+  genuinely multi-threaded allocator would add a cross-thread hazard in order to fix a
+  single-thread one. The fix moved the read instead ([gpu-status](gpu-status.html) §2.34
+  landing 7). Anyone reaching for this later needs an answer to the lock, not to the size. Because a surface's header and pixels are ONE block (`w*h+0x30`, above),
   `block + 0x30 == the pixel base`, and an observer at this function's entry is exactly a
   surface destructor — which is what `tagpu_gui_hook.c`'s `before_memfree` is (G18-8): the
   publisher reads `s->base` at the flip, and what makes that safe is that the table entry
