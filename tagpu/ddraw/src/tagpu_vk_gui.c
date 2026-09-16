@@ -245,7 +245,7 @@ static int              s_atHave, s_palHave, s_engHave, s_dumReady, s_glHave;
 static VkImage          s_arImg;
 static VkDeviceMemory   s_arMem;
 static VkImageView      s_arView;
-static int              s_arDim, s_arRows, s_arHave;
+static int              s_arDim, s_arRows, s_arHave, s_arNeedClear;
 static unsigned         s_arSerial;
 /* the last `colRearm` seen: when it moves, every colour twin was invalidated */
 static unsigned         s_colRearm;
@@ -1882,6 +1882,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                           VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                           &s_arImg, &s_arMem, &s_arView)) goto refuse;
             s_arDim = h.atlasDim;
+            s_arNeedClear = 1;
         }
         arOff = stOff;
         memcpy(s->stMap + stOff, h.atlasRgb, (size_t)h.atlasDim * h.atlasRgbRows * 4);
@@ -1974,6 +1975,29 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                              : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                     s_arHave ? VK_ACCESS_SHADER_READ_BIT : 0,
                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+        /* THE WHOLE SQUARE GOES TO ALPHA 0 FIRST, and this is not tidiness --
+           it is the difference between matching the GL lane and not.
+           `tagpu_rglsl_job_new` CLEARS its destination at job creation
+           (`prepare_dest`), so every texel of the GL twin above the shelf is
+           alpha 0: "nothing restored here". Ours is only ever written for
+           `atlasRgbRows` rows, and the rest of a 2048 square is whatever the
+           allocator handed us -- which `SPR_FS` reads as restored colour
+           wherever a byte of it happens to exceed 0.5 alpha, writes into a
+           colour twin, and the composite then shows.
+           [MEASURED 2026-09-16: 166 827 px of 2 073 600 at 1920x1080 with the
+           restore armed, and 0 at 1024x768 on the same build -- the divergence
+           only appears where the garbage happens to be read. The A/B at one
+           resolution would have called this landing done.] */
+        if (s_arNeedClear) {
+            VkClearColorValue cv;
+            VkImageSubresourceRange rg;
+            s_arNeedClear = 0;
+            memset(&cv, 0, sizeof cv); memset(&rg, 0, sizeof rg);
+            rg.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            rg.levelCount = 1; rg.layerCount = 1;
+            vkCmdClearColorImage(cb, s_arImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                 &cv, 1, &rg);
+        }
         copy_rect(cb, s->stage, arOff, s_arImg, 0, 0, h.atlasDim, h.atlasRgbRows);
         img_barrier(cb, s_arImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -2772,7 +2796,7 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     kill_image(d, &s_mmEngImg, &s_mmEngMem, &s_mmEngView);
     kill_image(d, &s_dumImg, &s_dumMem, &s_dumView);
     s_atDim = 0; s_atHave = 0; s_atSerial = 0;
-    s_arDim = 0; s_arRows = 0; s_arHave = 0; s_arSerial = 0;
+    s_arDim = 0; s_arRows = 0; s_arHave = 0; s_arSerial = 0; s_arNeedClear = 0;
     s_colRearm = 0; s_colRearmSeen = 0;
     s_palHave = 0; s_palSerial = 0;
     s_engW = s_engH = 0; s_engHave = 0; s_dumReady = 0;
