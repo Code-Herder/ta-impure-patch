@@ -2052,6 +2052,14 @@ static void sharp_begin(const TAGPU_FRAME* f)
 {
     int w = f->vp_w, h = f->vp_h;
     s_sharpOn = 0;
+    /* ...AND THE INK WITH IT. `s_sharpOn` was reset on every call and this was
+       not, so a session that once had coverage and then took one of the early
+       returns below (an FBO re-create failing latches `s_sharpFailed`)
+       published `sharpOn = 1` with no quads for ever -- which the Vulkan pass
+       reads as "the GL lane has coverage I did not produce" and stops
+       compositing for the session. Re-decided from the two clients' own
+       counters at the tail. [FOUND 2026-09-16, the landing-3 review.] */
+    s_sharpInk = 0;
     /* A FAILURE LATCHES, like init_gl's s_gl = 2. sharp_drop() zeroes the ids,
        so without this every present would re-enter the allocation below --
        generating, sizing and deleting a vp_w x vp_h texture and appending a log
@@ -2545,10 +2553,41 @@ static void mir_finish(const TAGPU_FRAME* f)
         memcpy(s_mHand.sdraw, s_mSDraw, (size_t)s_mNSDraw * sizeof s_mSDraw[0]);
     s_mHand.mmPic = s_mmPicRgb; s_mHand.mmPicW = s_mmTW; s_mHand.mmPicH = s_mmTH;
     s_mHand.mmPicGen = s_mmPicSerial;
-    /* the engine's pair is PACKET memory, so it is valid for this frame and no
-       other -- which is the rule the whole hand-over already lives under */
-    s_mHand.mmEng = f->packet ? tagpu_pk_minimap(f->packet) : NULL;
-    s_mHand.mmEngW = s_mmEngW; s_mHand.mmEngH = s_mmEngH;
+    /* THE ENGINE'S PAIR IS COPIED, NOT ALIASED, and the comment that stood here
+       -- "packet memory, valid for this frame, which is the rule the whole
+       hand-over already lives under" -- WAS WRONG about which rule applies.
+       The hand-over's rule is the FRAME; the packet's is stricter than that.
+       It is given back inside `tagpu_packet_frame_end`, which `render_ogl.c`
+       calls BEFORE `tagpu_vk_frame` in the same iteration -- so the consumer
+       reads it after its owner has released it, and `tagpu_packet.poison` fires
+       at that give-back, which means the lever built to catch exactly this
+       cannot see it. Safe today only by the rotation, which is not a bound.
+       It is why `eng`, `mmPic`, the atlas and the palette are all copies
+       already. 47 KB a frame, and only when an MM quad was recorded.
+       THE DIMENSIONS COME FROM THE SAME READ as the bytes, so the two cannot
+       disagree -- `s_mmEngW/H` are the GL texture's and persist across a frame
+       that produced no pair at all. [FOUND 2026-09-16, the landing-3 review.] */
+    s_mHand.mmEng = NULL; s_mHand.mmEngW = 0; s_mHand.mmEngH = 0;
+    if (s_mNSDraw > 0 && s_mNSDraw <= TAGPU_GUI_SDRAW_MAX && f->packet) {
+        const unsigned char* eng = tagpu_pk_minimap(f->packet);
+        int ew = f->packet->mm_w, eh = f->packet->mm_h;
+        int want = 0, k;
+        for (k = 0; k < s_mNSDraw; k++)
+            if (s_mSDraw[k].kind == TAGPU_GUISK_MM) { want = 1; break; }
+        if (want && eng && ew > 0 && eh > 0) {
+            unsigned off = 0;
+            if (mir_bytes(eng, (unsigned)ew * (unsigned)eh * 3u, &off)) {
+                /* AND THE ARENA IS RE-PUBLISHED, because this is the only
+                   `mir_bytes` in `mir_finish` and it can REALLOC: `arena` and
+                   `alen` were taken further up, so a grow here left the ops'
+                   own base pointer stale and every `aoff` in the record
+                   pointing into freed heap. Latent until this copy existed. */
+                s_mHand.arena = s_mArena; s_mHand.alen = s_mALen;
+                s_mHand.mmEng = s_mArena + off;
+                s_mHand.mmEngW = ew; s_mHand.mmEngH = eh;
+            }
+        }
+    }
 
     s_mHand.glyphs = tagpu_text_glyph_atlas(&s_mHand.glyphW, &s_mHand.glyphH);
     s_mHand.glyphSerial = tagpu_text_glyph_serial();

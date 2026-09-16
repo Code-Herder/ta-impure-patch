@@ -197,6 +197,8 @@ static VkPipeline       s_pipeCurs, s_pipeMM, s_pipeFlat;
 static VkRenderPass     s_layRp;         /* what s_pipeLay was built against  */
 static VkDescriptorPool s_dpool;
 static VkSampler        s_samp;
+/* the one exception: the minimap picture, minified LINEAR as its GL twin is */
+static VkSampler        s_sampMin;
 static VkDeviceSize     s_ualign;
 
 /* the shared texels: one of each, not one per slot (2.28's cheaper design --
@@ -983,14 +985,25 @@ static int build(const TAGPU_VKPASS* d)
     vkGetPhysicalDeviceProperties(d->pd, &pr);
     s_ualign = pr.limits.minUniformBufferOffsetAlignment;
     if (!s_ualign) s_ualign = 4;
-    /* EVERY TEXTURE THIS MODULE SAMPLES IS GL_NEAREST in the twin, and the
-       ramp's own taps are texelFetch -- so one nearest sampler serves all of
-       them and a linear one would be a different picture. */
+    /* EVERY TEXTURE THIS MODULE SAMPLES IS NEAREST -- WITH EXACTLY ONE
+       EXCEPTION, and this comment claimed there was none until landing 3.
+       The twin, the atlas, the palette, the engine's frame and the ramp's own
+       texelFetch taps are all nearest. The MINIMAP PICTURE is not: the GL
+       texture is created `MIN_FILTER = GL_LINEAR, MAG_FILTER = GL_NEAREST`
+       and `MM_FS`'s own comment says why -- the destination box is smaller
+       than the 252-px picture at every k this draws at, so every fragment
+       takes the MINIFICATION filter, and a downsample wants one. GL blends
+       four texels there; a nearest sampler takes one. A second sampler is the
+       whole fix. [FOUND 2026-09-16 -- BOTH landing-3 reviewers led with it,
+       independently, and the A/B could not see it: MM_FS reaches the picture
+       only where a 3x3 neighbourhood is unfogged.] */
     si.magFilter = VK_FILTER_NEAREST; si.minFilter = VK_FILTER_NEAREST;
     si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
     si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     si.maxLod = 0.0f; si.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
     if (vkCreateSampler(d->dev, &si, NULL, &s_samp) != VK_SUCCESS) return 0;
+    si.minFilter = VK_FILTER_LINEAR;          /* MAG stays nearest, as in GL */
+    if (vkCreateSampler(d->dev, &si, NULL, &s_sampMin) != VK_SUCCESS) return 0;
     if (!build_rp(d)) return 0;
     if (!build_layouts(d)) return 0;
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_SPR_FS,
@@ -1234,6 +1247,14 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     int glUp = 0;
     VkDeviceSize glOff = 0;
     int shOn = 0, mmPicUp = 0, mmEngUp = 0, needMM = 0, needCurs = 0;
+    /* THE VALIDATED COUNT, AND NOTHING BELOW SIZES ANYTHING FROM `h.nsdraw`.
+       The file's own rule at the top -- "a handed-over count never sizes an
+       allocation" -- was the one being broken: the range check only cleared
+       `compose`, while the vertex and uniform `grow`s still added the raw
+       value, so a negative one cast to VkDeviceSize asks for a buffer the size
+       of the address space and refuses the pass for the session.
+       [FOUND 2026-09-16, the landing-3 review.] */
+    int nsd = 0;
     VkDeviceSize mmPicOff = 0, mmEngOff = 0, sStride = 0;
     VkDeviceSize stNeed = 0, stOff = 0, uStride, fStride;
     VkDeviceSize atOff = 0, palOff = 0, engOff = 0;
@@ -1353,20 +1374,37 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         compose = 0;
     } else {
         s_saidSharp = 0;
-        shOn = (h.nsdraw > 0) ? 1 : 0;
-        for (i = 0; i < (unsigned)h.nsdraw; i++) {
+        nsd = h.nsdraw;
+        shOn = (nsd > 0) ? 1 : 0;
+        for (i = 0; i < (unsigned)nsd; i++) {
             if (h.sdraw[i].kind == TAGPU_GUISK_MM)     needMM = 1;
             if (h.sdraw[i].kind == TAGPU_GUISK_CURSOR) needCurs = 1;
         }
         /* the inputs each kind needs, refused in this file's own terms. A
            cursor samples the UI atlas; the minimap its picture and the engine's
            pair. Missing any of them is this frame not being composited. */
-        if (needCurs && !h.atlas) { shOn = 0; compose = 0; }
+        if (needCurs && !h.atlas) {
+            shOn = 0; compose = 0;
+            if (!s_saidSharp) { s_saidSharp = 1;
+                plog(d, "gui: the sharp layer wants the cursor and the hand-over "
+                        "carries no UI atlas - nothing composited"); }
+        }
         if (needMM && (!h.mmPic || h.mmPicW < 1 || h.mmPicH < 1 ||
                        h.mmPicW > ATLAS_MAXDIM || h.mmPicH > ATLAS_MAXDIM ||
                        !h.mmEng || h.mmEngW < 1 || h.mmEngH < 1 ||
                        h.mmEngW > ATLAS_MAXDIM || h.mmEngH > ATLAS_MAXDIM)) {
-            shOn = 0; compose = 0;
+            /* `needMM` IS CLEARED, and that is the point. Leaving it set fed
+               the two cases this guard names straight into the staging path
+               below, which reads `mmEngW * mmEngH * 3` bytes out of the very
+               pointer the guard refused -- a NULL read of 15 876 texels, or a
+               `grow` sized from a rejected dimension that fails and refuses the
+               pass for the session. A refusal that still consumes its input is
+               not a refusal. [FOUND 2026-09-16, the landing-3 review.] */
+            shOn = 0; compose = 0; needMM = 0;
+            if (!s_saidSharp) { s_saidSharp = 1;
+                plog(d, "gui: the sharp layer wants the minimap and this frame's "
+                        "copy of it is %s - nothing composited",
+                     h.mmPic ? "outside what this pass carries" : "absent"); }
         }
         /* the GL lane HAS coverage and we produced no quad for it: that is a
            client this landing does not carry, and it composites nothing rather
@@ -1513,18 +1551,18 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     /* +nsdraw: the sharp layer's quads share this slot's vertex buffer, and
        +1 is still the composite's own quad at the very end of it */
     if (!grow(d, &s->vb, &s->vbMem, &s->vbMap, &s->vbCap,
-              (VkDeviceSize)(nquad + h.nsdraw + 1) * 24 * sizeof(float),
+              (VkDeviceSize)(nquad + nsd + 1) * 24 * sizeof(float),
               VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)) goto refuse;
     /* ndraw twin windows THEN nsdraw sharp ones: the sharp layer's quads take
        a QVS window each out of the same buffer, at `ndraw + q` */
     if (!grow(d, &s->ub, &s->ubMem, &s->ubMap, &s->ubCap,
-              uStride * (VkDeviceSize)((ndraw + h.nsdraw) ? (ndraw + h.nsdraw) : 1),
+              uStride * (VkDeviceSize)((ndraw + nsd) ? (ndraw + nsd) : 1),
               VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)) goto refuse;
     if (!grow(d, &s->fb_, &s->fbMem, &s->fbMap, &s->fbCap,
               fStride * (ndraw ? ndraw : 1), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)) goto refuse;
     sStride = align_up(TWF_SZ, s_ualign);
     if (shOn && !grow(d, &s->sb, &s->sbMem, &s->sbMap, &s->sbCap,
-                      sStride * (VkDeviceSize)h.nsdraw,
+                      sStride * (VkDeviceSize)nsd,
                       VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)) goto refuse;
     /* THE LAYER ITSELF, this slot's own. Destroying it here is safe for the
        same reason the slot's buffers are: the seam waited `fence[slot]` before
@@ -1995,7 +2033,35 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     }
     if (rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
 
-    /* ---- THE SHARP LAYER'S OWN PASS, drawn here because `prepare` is the hook
+    /* THE REPLAY GOT THROUGH, AND THAT -- NOT THE COMPOSITE -- IS THE EVIDENCE
+       THE LAST FRESH START WORKED. The budget refund sat below the gate, past
+       `s_drawThis = 1`, which is never reached on a frame the composite is
+       stood down on. `compose` is 0 whenever the sharp layer has coverage,
+       which is every frame with a cursor on screen, so in an ordinary session
+       the refund could never happen and every legitimate transition counted
+       against the cap: four level loads and the pass was muted for good. Being
+       LEVEL is a property of the replay. [FOUND 2026-09-16, the re-review.] */
+    if (!s_behindMute && s_behindAsks && ++s_goodRun >= BEHIND_GOOD_RUN) {
+        s_behindAsks = 0; s_goodRun = 0;
+    }
+
+    /* ---- the composite's own set and block ---- */
+    if (s_behind || !compose || !s_engHave || !s_palHave) {
+        s_drawThis = 0; s_abFrame = 0; return 0;
+    }
+    pres = tw_find(h.presented);
+    if (!pres || pres->w != h.surfW || pres->h != h.surfH) goto standdown;
+
+    /* ---- THE SHARP LAYER'S OWN PASS, BELOW THE COMPOSITE GATE, because the
+       only thing that ever samples it is the composite: recording it above
+       drew and threw away a device-resolution layer on every frame the
+       composite was stood down on -- which is EVERY frame of a Classic++
+       session, where `colourTwins` clears `compose`. [FOUND 2026-09-16, the
+       landing-3 review.] It is still inside `prepare`, which is the hook
+       outside the seam's render pass, and still recorded earlier in this
+       same command buffer than the composite that reads it.
+
+       Drawn here because `prepare` is the hook
        outside the seam's render pass and a render pass may not nest -- the same
        reason the twin replay is here. It must be complete before `record`
        samples it, and it is: this is recorded earlier in the same buffer.
@@ -2017,15 +2083,25 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             int k, n = 0;
             VkImageView v40[3], v41[3], v42[3];
             v40[SDSET_FLAT] = s_dumView;  v41[SDSET_FLAT] = s_dumView;  v42[SDSET_FLAT] = s_dumView;
+            VkSampler sm[9];
+            /* THE PALETTE IS GUARDED LIKE EVERY SIBLING HERE. It was the one
+               view written raw, and `s_palView` is null until the first
+               `tagpu_pal_live()` resolves -- which is a frame the composite
+               refuses but the layer is still recorded on, so a null handle
+               reached `vkUpdateDescriptorSets` with no validation layer to say
+               so. [FOUND 2026-09-16, both landing-3 reviewers.] */
             v40[SDSET_CURS] = s_atHave ? s_atView : s_dumView;          /* uAtlas    */
             v41[SDSET_CURS] = s_dumView;                                /* uAtlasRGB */
-            v42[SDSET_CURS] = s_palView;                                /* uPal      */
+            v42[SDSET_CURS] = s_palHave ? s_palView : s_dumView;        /* uPal      */
             v40[SDSET_MM]   = s_mmPicHave ? s_mmPicView : s_dumView;    /* uPic      */
             v41[SDSET_MM]   = s_mmEngHave ? s_mmEngView : s_dumView;    /* uEng      */
-            v42[SDSET_MM]   = s_palView;                                /* uPal      */
+            v42[SDSET_MM]   = s_palHave ? s_palView : s_dumView;        /* uPal      */
             memset(bi, 0, sizeof bi); memset(ii, 0, sizeof ii); memset(wr, 0, sizeof wr);
             bi[0].buffer = s->ub; bi[0].offset = 0; bi[0].range = QVS_SZ;
             bi[1].buffer = s->sb; bi[1].offset = 0; bi[1].range = TWF_SZ;
+            for (k = 0; k < 9; k++) sm[k] = s_samp;
+            /* the ONE linear tap in the module: the minimap picture, minified */
+            sm[3 * SDSET_MM + 0] = s_mmPicHave ? s_sampMin : s_samp;
             for (k = 0; k < 3; k++) {
                 int j;
                 ii[3 * k + 0].imageView = v40[k];
@@ -2039,7 +2115,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                 wr[n] = wr[n - 1]; wr[n].dstBinding = 32;
                 wr[n].pBufferInfo = &bi[1]; n++;
                 for (j = 0; j < 3; j++) {
-                    ii[3 * k + j].sampler = s_samp;
+                    ii[3 * k + j].sampler = sm[3 * k + j];
                     ii[3 * k + j].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
                     wr[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                     wr[n].dstSet = s->shSet[k];
@@ -2062,7 +2138,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
            minimap is drawn after the cursor and covers it where they overlap,
            and its view box after its own base for the same reason the engine
            draws them that way (0x466B44 then 0x466B5E). */
-        for (q = 0; q < h.nsdraw; q++) {
+        for (q = 0; q < nsd; q++) {
             const TAGPU_GUISDRAW* sd = &h.sdraw[q];
             float qv[24];
             float* uq = (float*)(s->ubMap + (VkDeviceSize)(ndraw + q) * uStride);
@@ -2099,24 +2175,6 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         vkCmdEndRenderPass(cb);
     }
 
-    /* THE REPLAY GOT THROUGH, AND THAT -- NOT THE COMPOSITE -- IS THE EVIDENCE
-       THE LAST FRESH START WORKED. The budget refund sat below the gate, past
-       `s_drawThis = 1`, which is never reached on a frame the composite is
-       stood down on. `compose` is 0 whenever the sharp layer has coverage,
-       which is every frame with a cursor on screen, so in an ordinary session
-       the refund could never happen and every legitimate transition counted
-       against the cap: four level loads and the pass was muted for good. Being
-       LEVEL is a property of the replay. [FOUND 2026-09-16, the re-review.] */
-    if (!s_behindMute && s_behindAsks && ++s_goodRun >= BEHIND_GOOD_RUN) {
-        s_behindAsks = 0; s_goodRun = 0;
-    }
-
-    /* ---- the composite's own set and block ---- */
-    if (s_behind || !compose || !s_engHave || !s_palHave) {
-        s_drawThis = 0; s_abFrame = 0; return 0;
-    }
-    pres = tw_find(h.presented);
-    if (!pres || pres->w != h.surfW || pres->h != h.surfH) goto standdown;
     tw_to(cb, pres, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     {
         unsigned char* b = s->lbMap;
@@ -2178,9 +2236,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
            nsdraw - 1`, so the composite's own quad is at `nquad + nsdraw` --
            which is what the `+ nsdraw + 1` in the grow above reserves. Writing
            it at `nquad` put it on top of the layer's first quad. */
-        memcpy(s->vbMap + (VkDeviceSize)(nquad + h.nsdraw) * 24 * sizeof(float),
+        memcpy(s->vbMap + (VkDeviceSize)(nquad + nsd) * 24 * sizeof(float),
                qv, sizeof qv);
-        s_layQuad = (VkDeviceSize)(nquad + h.nsdraw) * 24 * sizeof(float);
+        s_layQuad = (VkDeviceSize)(nquad + nsd) * 24 * sizeof(float);
     }
     s_layVp[0] = h.vpX; s_layVp[1] = h.vpY;
     s_layVp[2] = h.vpW_gl; s_layVp[3] = h.vpH_gl;
@@ -2336,6 +2394,7 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     if (s_dslLay)  { vkDestroyDescriptorSetLayout(d->dev, s_dslLay, NULL);  s_dslLay = VK_NULL_HANDLE; }
     if (s_twRp) { vkDestroyRenderPass(d->dev, s_twRp, NULL); s_twRp = VK_NULL_HANDLE; }
     if (s_samp) { vkDestroySampler(d->dev, s_samp, NULL); s_samp = VK_NULL_HANDLE; }
+    if (s_sampMin) { vkDestroySampler(d->dev, s_sampMin, NULL); s_sampMin = VK_NULL_HANDLE; }
     memset(s_setView, 0, sizeof s_setView);
     /* ST_UNBUILT and not ST_REFUSED: a pass brought down by a mode change or a
        cleared lever must be able to come back. The owed teardown is the one
