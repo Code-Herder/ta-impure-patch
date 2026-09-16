@@ -157,7 +157,23 @@ can carry the restored texels the GL side already produced, which would unblock 
 
 **Landing 5 — the present.** The clause the roadmap's row names that nothing above touches:
 the frame presented through Vulkan with the fork's ddraw path intact, and the shell↔game
-context switch clean. This is where route D stops being a second window.
+context switch clean.
+
+**AND IT IS NOT "WHERE ROUTE D STOPS BEING A SECOND WINDOW", which this line said until 2026-09-16
+and which `tagpu_vk.c`'s own header disproves.** Routes A and B are not fallbacks that landing 5
+graduates to — they are BROKEN: under wine, once winevulkan has put a surface on an HWND, that HWND
+is finished for GL for the life of the process. It was met in the game rather than in the probe (the
+window stayed magenta while `tacli glshot` read 168 distinct colours off a GL framebuffer nothing
+would ever see, and it survived a full video-mode change). Route D is also "the shape the phase is
+heading for anyway": an out-of-process 64-bit renderer owns its own window by definition. And the
+roadmap's G19f row — the gate's actual exit condition — never mentions route D at all.
+
+**So landing 5 is the CONTEXT SWITCH, and the log already shows what it has to answer.** On a
+shell→game transition the whole Vulkan lane tears down, destroys its window, creates another,
+rebuilds the swapchain at the new size (`up in 215 ms`), and then takes ONE fresh start
+(`the twin store cannot follow the GL lane … asking the producer for a fresh start`). It SURVIVES
+the switch today. Whether that is *clean* is the landing's question: 215 ms presenting nothing, and
+a reseed of the GL lane's own store — the oracle's — to recover.
 
 **Landing 6 — the frame-time gate.** `frame time no worse than GL` on the 200v200 fixture at
 1920×1080, sim paused, 281 units and 76 wrecks, `--maxfps 0`. **Nothing in Phase G has measured

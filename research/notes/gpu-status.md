@@ -5525,8 +5525,13 @@ draw: a restored sprite before the restored atlas has crossed (reachable for exa
 the pass asks for the mirror from inside its own `prepare`, so the present that ARMS the restore can
 run before anything has asked); a copy whose source has colour over there and not here; the
 presented twin the same way; the composite's own `uColOn`; and a `twin_colour` this lane could not
-honour. The first is answered with a **fresh start** and that is not a formality: a reseed
-re-publishes every surface's bytes, and `twin_col_drop` then clears the colour on both sides.
+honour. The first is answered with a **fresh start** and that is not a formality — though the
+mechanism is stronger than the first draft of this paragraph said, which claimed "a reseed
+re-publishes every surface's bytes, and `twin_col_drop` then clears the colour on both sides".
+Traced by the review: `behind()` raises `g_guiq.reseed`, the producer emits **`PK_RESET`**, and
+`twins_reset` → `twin_drop` **deletes** each colour twin outright (`glDeleteTextures(1, &t->rgb)`)
+while `tw_reset` retires ours. The colour is not cleared, it ceases to exist on both sides, which is
+a stronger guarantee than the one this page was resting on.
 
 And the palette re-arm — `restore_step` freeing the job and invalidating every colour twin —
 is applied on a **sweep** over the store rather than at each twin's next op. A twin nothing touches
@@ -5553,7 +5558,12 @@ rather than a guard added around it.
 
 ##### Measured, with the restore ARMED and SETTLED
 
-`gui.on=mmbase` — **no `norestore`, and no lever of any kind is left on this pass.**
+`gui.on=mmbase` — **no `norestore`, and no STAND-DOWN lever is left on this pass.** `mmbase` is not
+one: it is a force-ON for the harness (`s_mmforce`, "draw it at k = 1 too"), which makes the GL lane
+draw the sharp minimap at a scale where it would otherwise leave it to the engine, and so gives
+*both* lanes more to compare rather than less. Every token that made the GL lane draw LESS is gone.
+[The distinction is the review's: the sentence above the table read as a contradiction to the line
+beside it.]
 `tagpu_classicpp.on` is in `tagpu_opt.c`'s play-defaults table with `assets=1`, so this is what an
 **ordinary session** does, and landings 1–3 stood down on every frame of one.
 
@@ -5613,6 +5623,17 @@ of the page you just wrote.** A note that renders in the wrong section is not do
   UI atlas's queue drains and `painted` stops moving) and an unarmed one pays nothing at all, but
   the frames DURING a fill are not counted anywhere and no figure here bounds them. It belongs to
   landing 6 with the rest of the cost question.
+* **THE READ-BACK CHANGES THE ORACLE LANE'S TIMING, AND "THE GL LANE IS UNCHANGED" IS THEREFORE NOT
+  LITERALLY TRUE WHILE IT IS ARMED.** `glReadPixels` is synchronous, and the restorer slices its
+  work against a GPU-time budget (`tagpu_restoreglsl.c`, `budget=MS`) — so with the mirror armed the
+  GL lane paints a different number of batches per frame than without it. It changes no PIXEL, and
+  the lane is unarmed in every session that is not running this A/B, but the claim this page makes
+  everywhere else is about the lane's OUTPUT and this is the one place the distinction matters.
+  [The review's, and it is the honest form of the sentence.]
+* **THE UI ATLAS'S GENERATION GUARD IS UNFIRED HERE.** `mirlost=0` on every run above, and
+  `atlas=53/4096` — these fixtures never fill or recycle the sprite atlas, so the frame-loss path
+  the review opened is correct by construction and exercised by nothing. It is in the same category
+  as the glyph atlas's own repack guard, which landing 2 added and no fixture has ever taken either.
 * **A PALETTE RE-ARM IS NOT EXERCISED BY THESE FIXTURES BEYOND ITS FIRST.** `rearms=1` on every run
   — the one the shell→game transition causes — so the sweep that invalidates every colour twin has
   fired once and always with two twins in the store. The Gamma slider and `+gamma N` are what drive
