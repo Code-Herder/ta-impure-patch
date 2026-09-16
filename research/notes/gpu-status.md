@@ -6207,6 +6207,9 @@ all three 1024×768 runs** (118 946 every time), so it is not the review's fixes
 agreed exactly in both runs, so it says nothing about either. The cause is **not established**;
 it is recorded rather than explained, because the ink column is evidence about what the engine
 drew and an unexplained wobble in it is worth a line even when the diff it guards reads 0.
+**[SETTLED as far as it can be, 2026-09-16, landing 8]**: the same walk run TWICE on one binary
+reads 103 074 and then 103 376, so the wobble is the fixture and no binary difference produces
+it. The cause is still unknown; the question "is it the change?" is closed.
 
 `gafreseed` is counted apart from `gafnoplane` and is **not** a failure: a reset clears the seen
 table after an op has already decided it needs no plane. It is **cheap rather than free** — the
@@ -6339,37 +6342,40 @@ module that already reserves 42 MB of it. Read off `i686-w64-mingw32-objdump -h`
 
 #### What was measured
 
-Everything below is from one binary, driven by `tools/uiwalk.py --vk` and the landing-5 crash
-route. **This is the pre-review measurement**; anything the review changes in the DLL invalidates
-it and the set is re-run.
+Everything below is from the binary that lands — the whole set was re-run after the review's
+fixes, because those fixes changed the DLL and a figure off an earlier build names a build that no
+longer exists.
 
 | claim | how | result |
 |---|---|---|
-| the picture does not move | the A/B walk, three resolutions | **52 of 52 stops at 0 px** (26 shell + in game at 640×480, 13 in game at 1024×768, 13 at 1920×1080) |
-| …and not merely at 0 px | the ink column against the pre-change binary | **1024×768 and 1080p identical STOP FOR STOP, TO THE BYTE**; two of the twenty-six 640×480 rows differ, below |
-| the string path is actually live | `str=` | **19 585 string ops / 94 525 glyph quads** over the three walks, `fonts=1`, 27 glyph cells — the first fixture on this pass that publishes strings at all |
+| the picture does not move | the A/B walk, three resolutions, the 640×480 one run TWICE | **78 of 78 stops at 0 px** (2 × 26 shell + in game at 640×480, 13 in game at 1024×768, 13 at 1920×1080) |
+| …and not merely at 0 px | the ink column against the pre-change binary | **1024×768 and 1080p identical STOP FOR STOP, TO THE BYTE**; the 640×480 exception is below and is the fixture |
+| the string path is actually live | `str=` | **26 788 string ops / 129 288 glyph quads** over the four walks, `fonts=1`, 27 glyph cells |
 | no glyph goes missing | `miss=`, `reseed=`, `repack=`, the "stamped nothing" log line | **0 of each**, over all of it |
-| **the re-arm guard fires, and costs nothing** | `strrearm=` | **6** at 1080p (0 on the other two): six text ops published their box because `sent[]` was re-armed between their capture and their flip — and `miss=` stayed **0** |
-| the scratch bound holds | `glyscratch=high/lost` | high-water **8 480 bytes of 131 072 (6.5 %)**, `lost` **0** on every run |
-| nothing regressed in the sprite half | `gafnoplane` / `gaflost` / `gafbaddec` | **0 / 0 / 0**, scratch high-water 895 675 of 2 097 152 |
-| the arena takes the duplicates | `overflows=` | **0** — the per-op blocks that a first-sight window now duplicates cost arena bytes and overflowed nothing |
+| **the re-arm guard fires, and costs nothing** | `strrearm=` | **6** at 1080p (0 on the other three): six text ops published their box because `sent[]` was re-armed between their capture and their flip — and `miss=` stayed **0**. The same six appeared on the pre-review binary, so it is the walk's own 1080p shelf pressure and not a flake |
+| the scratch bound holds | `glyscratch=high/lost` | high-water **7 632 bytes of 131 072 (5.8 %)**, `lost` **0** on every run |
+| nothing regressed in the sprite half | `gafnoplane` / `gaflost` / `gafbaddec` | **0 / 0 / 0** |
+| the arena takes the duplicates | `overflows=` | **0** — the per-op blocks a first-sight window now duplicates cost arena bytes and overflowed nothing |
 | the crash route is clean | the landing-5 route, 5× at 1920×1080, **Vulkan lane DOWN** | **5 of 5 clean**, `teardowns=1` each |
 | landing 7 still holds | two skirmishes in ONE process | `gui: reset #3: level-changed` and `#6`, and the unit atlas's **2** `subject replaced` resets (generations 4 and 9) |
 
 **`strrearm=6` is the line to read twice.** It is the only new failure mode this landing creates —
 a block that omits codes because they were "already sent", published after something cleared that
-table — and it is the reason the generation exists rather than being argued away. Six of those
-happened in one 1080p walk, all six published their box instead, and no glyph was missed. Without
-the stamp those six strings would have drawn with characters dropped and the rest closed up, which
-is the failure `gfont_check_gen` was added for in the first place.
+table — and it is why the generation exists rather than being argued away. Six of those happened
+in each 1080p walk, all six published their box instead, and no glyph was missed. Without the
+stamp those six strings would have drawn with characters dropped and the rest closed up, which is
+the failure `gfont_check_gen` was added for in the first place.
 
-**Two 640×480 stops moved and neither is established as this landing's.** `ARMMAIN2` read 103 376
-before and 103 074 after — it is the stop landing 7 already recorded as not reproducible between
-runs (103 153 / 103 376 there) — and `ARMCOM1` read 93 688 before and 94 312 after, which is
-exactly what `ARMCOM1-back`, the same screen visited again, reads in **both** runs. Both lanes
-agree to the pixel at each of them, and the same screens at 1024×768 match the control exactly.
-The final round runs the 640×480 walk **twice on one binary**, which settles it either way: a
-figure that moves between two runs of the same build cannot have been caused by the change.
+**THE 640×480 WOBBLE IS THE FIXTURE, AND THAT IS NOW ESTABLISHED RATHER THAN ASSUMED.** Landing 7
+recorded `ARMMAIN2` at 640×480 as varying between runs and could not say why. Running that walk
+**twice on this one binary** settles the question the only way it can be settled: `ARMMAIN2` read
+**103 074** in the first and **103 376** in the second — the same two values the pre-change and
+post-change runs had produced, so a figure that moves between two runs of one build cannot have
+been caused by the change. `ARMCOM1` reads 93 688 in three of the four runs on record and 94 312
+in one (on the pre-review binary), which is what `ARMCOM1-back` — the same screen visited again —
+reads in all four. Both lanes agree to the pixel at every one of them, and both stops are
+identical to the control at 1024×768. The CAUSE is still not established; what is established is
+that it is not this landing, and not landing 7's fixes either.
 
 #### Not covered
 
