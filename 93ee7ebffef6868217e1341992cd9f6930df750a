@@ -1,0 +1,1 @@
+landing-review: model=opus-5 effort=high range=c0e0ea6..93ee7eb reviewers=1 findings=4 acted=4 rejected=0 date=2026-09-16 note=landing 4 re-review of the fixes; found a missing barrier inside one of them
