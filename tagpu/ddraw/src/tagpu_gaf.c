@@ -87,6 +87,38 @@ static int cell_up(const TAGPU_GAFATLAS* a, int v)
    only that level: tagpu_restoreglsl.c clear_dest), and once when the twin
    is made, so it is never sampled incomplete (an incomplete texture reads
    as opaque black, which the shader would take for a restored texel). */
+/* THE RESTORED TWIN HAS JUST BEEN ZEROED AND THE MIRROR HAS TO SAY SO.
+   `tagpu_rglsl_job_clear` clears the destination atlas to alpha 0 as well as
+   dropping the queue, and a CLEAR IS NOT A PAINT: `tagpu_rglsl_job_painted`
+   does not move for it, the twin's generation does not move, and the shelf
+   gets SMALLER rather than larger -- so not one of the three things
+   `tagpu_gaf_atlas_mirror_rgb_step` keys on can see it, and a mirror left
+   alone would hold the previous fill's colours over a texture that is now
+   empty. The next entry re-laid into those rects then draws restored in one
+   lane and indexed in the other until its repaint lands.
+   This is the third time on this pass that a key which was not the CONTENT's
+   key has been wrong, so the zeroing lives HERE, in one function beside the
+   call it mirrors, rather than at each site. */
+static void twin_mips(TAGPU_GAFATLAS* a);   /* below; job_clear_dest wants it */
+
+static void rgb_mirror_zeroed(TAGPU_GAFATLAS* a)
+{
+    if (!a->mirrorRgb) return;
+    memset(a->mirrorRgb, 0, (size_t)a->dim * a->dim * 4);
+    /* the ROWS are kept: they are the high-water mark of what a consumer has
+       been handed, and it has to be handed the zeros over exactly those */
+    a->mirrorRgbSerial++;
+}
+
+/* the job's destination back to unpainted, and every mirror of it with it */
+static void job_clear_dest(TAGPU_GAFATLAS* a)
+{
+    if (!a->job) return;
+    tagpu_rglsl_job_clear(a->job);
+    twin_mips(a);
+    rgb_mirror_zeroed(a);
+}
+
 static void twin_mips(TAGPU_GAFATLAS* a)
 {
     if (!a->mip || !a->rgb || !x_glGenerateMipmap) return;
@@ -243,7 +275,7 @@ static void atlas_drop(TAGPU_GAFATLAS* a, const char* why)
     memset(a->hash, 0, sizeof a->hash);
     /* the twin's rects are about to be re-used by other frames: back to
        unpainted, and whatever was queued is dropped (it re-queues on its miss) */
-    if (a->job) { tagpu_rglsl_job_clear(a->job); twin_mips(a); }
+    job_clear_dest(a);
     _snprintf(b, sizeof b, "%s: atlas reset (%s) — frames re-decode on demand, generation %u",
               a->tag ? a->tag : "gaf", why, a->gen);
     glog(b);
@@ -789,7 +821,7 @@ static int atlas_repack(TAGPU_GAFATLAS* a)
        level 0), and whatever was queued is dropped -- it re-queues as each
        reserved entry is painted. Unlike the recycle this happens once, which
        is what lets the twin converge at all while zoomed out. */
-    if (a->job) { tagpu_rglsl_job_clear(a->job); twin_mips(a); }
+    job_clear_dest(a);
 
     /* PART 3, the branch that says a second page is the only thing left.
        `wanted` is the set that was still being asked for; if the tallest-first
