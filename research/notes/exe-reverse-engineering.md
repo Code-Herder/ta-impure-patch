@@ -3652,6 +3652,20 @@ game it reads `ARMMAIN2.GUI` or `CORMAIN2.GUI`.
 `GUI_Pop 0x4A9660`, `0x491DF2` loops. **21 call sites.** So anything pushed over the world is
 popped again unless `main+0x37EA0` names it.
 
+**`GUI_Pop 0x4A9660` itself has 39 call sites, not 21** — the 21 above is `UpdateIngameGUI
+0x491D70`'s, and a downstream note borrowed it for the wrong function until 2026-09-16. `call
+0x4a9660` appears 39 times in the pristine exe; `call 0x491d70` 21. **The ORDER at `0x460630` is
+what matters to anything that gates on a per-level generation**, and it is the opposite of the
+intuitive one: `0x460630 call 0x491B60` (the level teardown, which is where a generation moves),
+then `0x460635 push 1; 0x460637 call 0x491D70` (which DRAWS — `0x491D70` reaches the GAF blit leaf
+`0x4B7F90` through `0x4A9660` → `0x4C2470`), then `0x460641 add eax,0x519; 0x460647 call 0x4A9660`
+(the pop, which FREES that screen's art). So art is drawn and then freed **after** the teardown has
+already ended the level: anything stamped with the level generation at `0x460637` carries the NEW
+one and a generation test cannot refuse it. [ESTABLISHED 2026-09-16, G19f landing 5's third review
+pass; see [gpu-status](gpu-status.html) §2.34. Note also `0x4AA7BC..0x4AA7FA`, below, which is
+`GUI_Pop`'s body inlined instruction for instruction — so an observer on `0x4A9660` does not see
+every pop either.]
+
 **Two of the 21 are the engine's own visible closes, and both pass 1**: `0x460635`, a `push 1`
 immediately after `call 0x491B60` (the level teardown), and `0x4929E3`, whose `call 0x491D70`
 is at `0x4929EB`. `tagpu_menu.c`'s close copies them — restore `main+0x37EA0`, then **call**
