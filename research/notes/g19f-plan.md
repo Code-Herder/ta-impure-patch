@@ -59,6 +59,11 @@ identical, which is the only claim an A/B can check.
 
 One per landing, each with its own A/B, never as one drop — the lane's standing rule.
 
+**Landing 1 LANDED 2026-09-16** (`main` `fdc8dbd..23d61d0`): the 1x mirror, 0 px on the shell at
+640x480 and in game at 1024x768 and 1920x1080. Three review rounds, sixteen findings, all acted
+on — including a use-after-free and, in the first round of fixes, a reseed storm that changed
+the GL oracle. [gpu-status](gpu-status.html) §2.34 is the module note.
+
 **Landing 1 — the 1× mirror.** The hand-over, the twin store, `PK_SEED`, `PK_PIXELS`,
 `PK_CLEAR`, `PK_SPRITE`, `PK_COPY`, the UI atlas mirror, and the `LAY_VS`/`LAY_FS` composite
 with the sharp layer empty and no colour twins. `PK_STRING` and Classic++ are **refused**, in
@@ -71,20 +76,41 @@ against, which is why this is the cut rather than a smaller one — a landing th
 measured on a screen with no sprites could not be measured at all, and the shell redraws every
 gadget on every flip.
 
-**Landing 2 — the sharp layer.** `SHARP_FS`, `CURS_FS`, `STR_FS`, `MM_FS`: the cursor at device
-pixels, the string op's glyph cache, the sharp minimap. Drops three of landing 1's four tokens.
+**Landing 2 — THE STRING OP, and it is not the sharp layer.** `STR_FS`. Landing 1 shipped with
+`PK_STRING` standing the whole pass down, and since text is on screen in essentially every in-game
+frame, that means **the pass composites nothing in real play** — it only works under
+`gui.on=nostring`. Closing that is worth more than anything else in G19f, and it is smaller than
+it looks:
 
-**Landing 3 — Classic++.** The colour twins and the MRT sprite/copy programs, the per-texel
+* **A string op writes the TWIN, not the sharp layer** (`twin_string`, G17d — the render thread
+  stamps TA's own glyphs into the twin from a per-font glyph cache). So it extends landing 1's
+  store rather than needing landing 2's machinery. §2.3e's "the sharp layer is empty until the
+  cursor and the string op fill it" is about the SHARP text path, not this one.
+* **The glyph atlas is already a CPU array.** `tagpu_text.c` keeps `s_gatlas[GA_W * GA_H]` and
+  uploads the GL texture FROM it, and `tagpu_text_glyph_gen()` already exists. So the "how does a
+  second backend get the texels" question — which cost the feature pass a whole mechanism — is
+  answered here by one accessor.
+* What the hand-over must carry, per op: `fg`/`bg`/`tr`, the destination box, and **the resolved
+  per-glyph cells** (`ax`, `ay`, `w`, `h` and the pen position), because `twin_string` resolves
+  them against an atlas that **can repack mid-string** (it retries once for exactly that reason) —
+  so re-resolving on the other side would be re-deriving the pass's inputs, which this lane does
+  not do.
+* `STR_FS` is already translated (G19c) and takes `uSize`, `uFg`, `uBg`, `uTr` plus the atlas.
+
+**Landing 3 — the sharp layer proper.** `SHARP_FS`, `CURS_FS`, `MM_FS`: the cursor at device
+pixels and the sharp minimap. Drops `nocursor` and `nominimap`.
+
+**Landing 4 — Classic++.** The colour twins and the MRT sprite/copy programs, the per-texel
 choice between restored colour and the live palette, and the palette-validity rule. Drops
 `norestore`. **Blocked on the restorer's five shaders** (G19c's own uncovered case) if the UI
 atlas needs restoring in the Vulkan lane — check before starting; it may be that the hand-over
 can carry the restored texels the GL side already produced, which would unblock it.
 
-**Landing 4 — the present.** The clause the roadmap's row names that nothing above touches:
+**Landing 5 — the present.** The clause the roadmap's row names that nothing above touches:
 the frame presented through Vulkan with the fork's ddraw path intact, and the shell↔game
 context switch clean. This is where route D stops being a second window.
 
-**Landing 5 — the frame-time gate.** `frame time no worse than GL` on the 200v200 fixture at
+**Landing 6 — the frame-time gate.** `frame time no worse than GL` on the 200v200 fixture at
 1920×1080, sim paused, 281 units and 76 wrecks, `--maxfps 0`. **Nothing in Phase G has measured
 cost at all**, so this landing is mostly a harness: a way to read whole-frame time on each lane
 that is not the readout's own `fps=`, and a floor measured on one binary twice before any
