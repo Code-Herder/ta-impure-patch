@@ -76,6 +76,13 @@ against, which is why this is the cut rather than a smaller one — a landing th
 measured on a screen with no sprites could not be measured at all, and the shell redraws every
 gadget on every flip.
 
+**Landing 2 BUILT AND MEASURED 2026-09-16**: 0 of 786 432 at 1024×768 and 0 of 2 073 600 at
+1920×1080 **with strings on**, and the capability refusal gone. The plan below is what it was cut
+to do and it did all of it; the section that follows it in
+[gpu-status](gpu-status.html) §2.34 is the module note. One defect was found afterwards by reading
+the diff — the glyph atlas is a second non-twin sampled image and `SET_MAX` was one short — which
+is the third thing on this gate that no measurement of it could have shown.
+
 **Landing 2 — THE STRING OP, and it is not the sharp layer.** `STR_FS`. Landing 1 shipped with
 `PK_STRING` standing the whole pass down, and since text is on screen in essentially every in-game
 frame, that means **the pass composites nothing in real play** — it only works under

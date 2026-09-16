@@ -4961,9 +4961,7 @@ still has no validation layer.
   retire, which needs an eviction the 512-entry table did not reach.
 * The validation layer, still, and no device but the 4070.
 
-## 3. Known limits — what is still wrong, and what closing it needs
-
-### 2.34 The UI layer's 1x mirror, drawn by Vulkan (`tagpu_vk_gui.c`, `tagpu_gui_surf.c`'s op mirror) — Phase G, G19f landing 1
+### 2.34 The UI layer's 1x mirror, drawn by Vulkan (`tagpu_vk_gui.c`, `tagpu_gui_surf.c`'s op mirror) — Phase G, G19f landings 1–2
 
 **The first pass of G19f, and the first ported thing that is not a draw over a mesh.** §2.3e's UI
 layer is a **stateful store of per-surface twins** that an op stream mutates, plus a three-layer
@@ -4971,8 +4969,16 @@ composite. The state is the whole difficulty and it is what decided the cut:
 [the G19f plan](g19f-plan.html) has the landings.
 
 **Nine shaders, none of them new.** G19c already translated `QVS`, `CPY_FS`, `SPR_FS`, `STR_FS`,
-`CURS_FS`, `MM_FS`, `SHARP_FS`, `LAY_VS` and `LAY_FS`. This landing uses four of them — `QVS`,
-`CPY_FS`, `SPR_FS` and the `LAY_VS`/`LAY_FS` composite — and writes no GLSL.
+`CURS_FS`, `MM_FS`, `SHARP_FS`, `LAY_VS` and `LAY_FS`. Landings 1 and 2 use **five** of them —
+`QVS`, `CPY_FS`, `SPR_FS`, `STR_FS` and the `LAY_VS`/`LAY_FS` composite — and write no GLSL.
+`CURS_FS`, `MM_FS` and `SHARP_FS` are the sharp layer, which is landing 3.
+
+**Landing 1 was the mirror with `PK_STRING` refused; landing 2 is the string op.** They are one
+section because they are one pass and the second is the first's machinery with one more program.
+The distinction that matters to a reader is that **landing 1 alone composited nothing in real
+play** — text is on screen in essentially every in-game frame, so the capability refusal below
+fired on all of them and only `gui.on=nostring` produced a picture to compare. Landing 2 is what
+made the pass a thing that draws the game's UI rather than a thing that draws a fixture's.
 
 #### The op stream is dead by the time the Vulkan lane runs
 
@@ -5068,10 +5074,14 @@ sixth was on the producer's side:
 * An abandoned mirror frame (the op array or arena refusing to grow) did it silently, counted by a
   statistic nobody read.
 * **`PK_STRING` is the one that matters most**, because it is not a bug in a rare path: the GL lane
-  *applies* it (`twin_string`) and the hand-over does not carry it, by design. Treating it as a
-  `compose = 0` meant those glyphs were in the GL twin and would never be in ours. **The sentence
+  *applies* it (`twin_string`) and landing 1's hand-over did not carry it, by design. Treating it as
+  a `compose = 0` meant those glyphs were in the GL twin and would never be in ours. **The sentence
   that stood here — "the twins are kept level" — was written of the ops the mirror carries and was
-  false of the one it does not.**
+  false of the one it does not.** Landing 2 carries it, so this is now a statement about the shape
+  of the refusal rather than about strings: `otherOps` is **0 for every op kind that exists today**
+  and the machinery stays, so the next kind added to the queue lands there rather than being drawn
+  wrong. A capability gap asks for **nothing** — a fresh start cannot help when the very next frame
+  carries another one — and the store is caught up with one fresh start when they stop.
 * And `mir_finish` published nothing when `draw_layer` returned early, on frames whose ops the drain
   had already applied — the same hole the consumer had just been restructured to close, still open
   at the other end. It publishes with `presented = 0` now: replay, do not composite.
@@ -5081,12 +5091,68 @@ producer's own `reseed`, composite nothing, and apply nothing but the RESET that
 is `tagpu_gui_surf.c`'s own `s_skipToReset`, for the same reason. **Measured firing and recovering**
 on the binary the fixes produced.
 
+#### The string op is the twin store's, not the sharp layer's (landing 2)
+
+**`twin_string` stamps TA's own glyphs into the TWIN** (G17d), from a per-font glyph cache the
+render thread rasterises. §2.3e's "the sharp layer is empty until the cursor and the string op fill
+it" is about the *sharp* text path; this one is a draw into the same `RG8` twin every other op
+writes. So the port is landing 1's store plus one pipeline — `STR_FS` on the same descriptor layout
+as `SPR_FS` and `CPY_FS` — and not the device-resolution layer the plan had bundled it with.
+
+**The texels needed no mechanism.** `tagpu_text.c` already keeps its glyph atlas as a CPU array
+(`s_gatlas`) and uploads the GL texture *from* it, with `tagpu_text_glyph_gen()` already exposed
+for the repack. `tagpu_text_glyph_atlas()` hands back that array and its dimensions — one accessor
+where the feature pass needed a whole opt-in mirror for the same question. The Vulkan side keys its
+`R8_UNORM` upload on the generation and re-creates the image only when the dimensions move.
+
+**THE CELLS ARE CARRIED, NOT LOOKED UP, and for a harder reason than the sprite's.** The sprite's
+atlas rect is carried because a repack between the two lanes' lookups would answer differently.
+A string is worse: `twin_string` resolves its glyphs against an atlas that can **repack in the
+middle of one string** — it takes the generation before and after and retries once for exactly
+that — so a second lookup here could name texels that moved while the GL lane was drawing, and the
+A/B would be comparing two atlases rather than two rasterisers. The hand-over carries the four
+`short`s a glyph that the GL lane settled on, `nglyph` of them in the mirror arena, plus:
+
+* **the pen it started from**, which is `o->sl` and `o->st − yoff`. `0x4CCF60` writes its first
+  pixel row at `y − (s8)font[2]`, not at the `y` it was given (§"The in-game bitmap font" in the
+  engine map), so the *resolved* top is carried rather than the op's.
+* **the three colour bytes** `fg`, `bg` and `tr` — the blitter's own three arguments, which
+  `STR_FS` takes as `uFg`, `uBg`, `uTr`.
+
+`mir_string` is called from the **tail** of `twin_string`, after the draw succeeded. A string that
+stamped nothing takes the `reseed:` label instead and raises the producer's own `g_guiq.reseed`, so
+both lanes are level: neither drew, and the RESET that answers it reaches the mirror as an op like
+any other. An arena that will not grow abandons the mirror frame, which is `behind()`'s business.
+
+**A STRING SETS NO SCISSOR**, because `twin_string` calls `glDisable(GL_SCISSOR_TEST)` outright
+where `twin_sprite` and `twin_copy` enable it. The port sets a full-twin scissor rather than the
+op's box; clipping to the box would cut glyphs the GL twin has.
+
+**One block, `nglyph` quads.** Every glyph of a string shares its three colours and the twin's
+size, so the descriptor set is bound once and the vertex offset walks — which is what the GL lane
+does with one program and n draws. That made the vertex count stop being the draw count, so the
+**vertex slots and the uniform windows are counted separately**: `nquad` sizes the vertex buffer
+(and positions the composite's own quad at the end of it), `ndraw` sizes the uniform and flags
+buffers. They were one number through landing 1 because every draw was exactly one quad; keeping
+them one here would have put the composite's own quad, which sits at the end of the vertex buffer,
+on top of a glyph's.
+
 #### A set is claimed for one image for the length of a frame
 
 A descriptor set may not be rewritten once a recorded draw names it, and the twin **array** cannot
 be the index: `tw_drop` moves the last entry into the hole, so the indices shuffle under it. The
-claim is on the view instead, and `SET_MAX` is the twins plus one, so a frame can never want more
-than there are.
+claim is on the **view** instead, and `SET_MAX` bounds how many a frame can want. There are exactly
+three kinds of image a twin draw samples — the one UI atlas (every sprite), the one glyph atlas
+(every string) and a copy's **source twin** — so the bound is **the twins plus two**.
+
+**It was the twins plus ONE until landing 2, and the string op is what made that wrong.** The old
+comment's argument was "every sprite samples the one atlas", which stopped being true the moment
+there were two non-twin images. A frame using all `TW_MAX` twins as copy sources plus one sprite
+plus one string wants 34 of 33; `set_claim` answers 0, the replay falls into `standdown`, and
+`behind()` drops the store and asks for a fresh start. It recovers rather than corrupting anything,
+but a store dropped every frame is not parity. **Found by reading the landing's own diff for this
+documentation pass, not by any measurement** — every A/B of this pass has run with two twins in the
+store, so nothing in the numbers below could have shown it.
 
 #### Two things the measurement found, and both were the port's
 
@@ -5104,8 +5170,8 @@ flip since its last one and the shell flips ~12 000 times a second at a 5 ms cad
 
 #### Measured
 
-**MEASURED 2026-09-16** on the binary the LANDING REVIEW's fixes produced (every figure re-taken
-after them), `gui.on=nostring nocursor nominimap norestore`, `vk.on=color=0,0,0`, Classic,
+**LANDING 1, MEASURED 2026-09-16** on the binary the LANDING REVIEW's fixes produced (every figure
+re-taken after them), `gui.on=nostring nocursor nominimap norestore`, `vk.on=color=0,0,0`, Classic,
 reference setup's 4070. **Each capture's own size is what confirms its fixture** — see the trap in
 `ta-drive`:
 
@@ -5122,6 +5188,30 @@ So the op stream, the seeds, the pixel ops, the sprite quads through the resolve
 copies through `CPY_FS`, the palette and the engine's own frame beneath all reproduce the GL twin
 exactly.
 
+**LANDING 2, MEASURED 2026-09-16 WITH STRINGS ON** — `gui.on=nocursor nominimap norestore`, and the
+absence of `nostring` is the whole point of the table. Same binary discipline, same lever, same
+fixture:
+
+| | |
+|---|---|
+| `selbox-slope` in game, 1024×768, two runs | **0 of 786 432**, 744 960 ink a side |
+| `selbox-slope` in game, 1920×1080 | **0 of 2 073 600**, 1 989 711 ink a side |
+| the glyph path | `str=6/25 miss=0 reseed=0 repack=0 fonts=1` |
+| the capability refusal | **gone** — no stand-down line at all, where landing 1 fired one on every in-game frame |
+
+So TA's own glyphs — rasterised by the GL lane into its own atlas, stamped from the cells that lane
+resolved, coloured by the blitter's own three arguments — reproduce it exactly. The ink figure is
+**different from landing 1's on the identical fixture** (744 960 against 748 890), which is the
+check that the lever actually changed the picture: a 0 px against an unchanged frame would be the
+vacuous A/B §2.32 was caught by.
+
+**The `SET_MAX` fix above is not in these numbers and could not be.** It was found afterwards, by
+reading the diff; the bound it corrects needs 32 twins in the store and every measurement here ran
+with two. **Every defect this pass has had so far was invisible to every measurement taken of
+it** — the use-after-free, the five diverging paths, the reseed storm, and now this — and every one
+was found by reading the code rather than by running it. On a pass whose output is a pixel count
+that reads 0, that is the thing to expect rather than the exception.
+
 **One PLAUSIBLE finding was kept rather than fixed.** GL's `uSurf` is POT-padded by the fork
 (1024×512 for a 640×480 mode) while `s_engImg` is exactly the mode rect, so a `texelFetch` outside
 that rect reads a defined texel in GL and an undefined one here. It cannot reach the A/B — the
@@ -5134,11 +5224,25 @@ detail rather than an engine one. Named rather than silently carried.
   **full screen inventory** at 1024×768 and 1080p, shell and in game; the shell↔game context
   switch; and **frame time no worse than GL**, which nothing in Phase G has measured at all. This
   landing is three fixtures, not an inventory.
-* **`PK_STRING`, the cursor, the minimap and the sharp layer's content** — landing 2.
-* **Classic++ colour twins and the MRT sprite/copy programs** — landing 3, and it may be blocked on
-  the restorer's five shaders (G19c's own uncovered case).
-* **The present itself** — landing 4. Route D still gives the Vulkan lane a window of its own.
+* **The cursor, the minimap and the sharp layer's content** — `CURS_FS`, `MM_FS`, `SHARP_FS`;
+  landing 3, and it drops `nocursor` and `nominimap`. The sharp layer is still refused whenever it
+  has COVERAGE (`s_sharpInk`), which is every frame with a cursor on screen, so **the pass composites
+  nothing in an ordinary session even now** — landing 2 closed the string half of that, not the
+  whole of it.
+* **Classic++ colour twins and the MRT sprite/copy programs** — landing 4, still holding
+  `norestore`, and it may be blocked on the restorer's five shaders (G19c's own uncovered case).
+* **The present itself** — landing 5. Route D still gives the Vulkan lane a window of its own.
+* **Frame time**, which is half the gate's own wording — landing 6, and nothing in Phase G has
+  measured cost at all.
+* **The glyph atlas at dimensions this pass will not carry.** `ATLAS_MAXDIM` bounds the upload, and
+  a glyph atlas outside it leaves `s_glHave` 0, which takes the replay to `standdown` and the store
+  to a fresh start on every frame that draws a string. `GA_W`/`GA_H` are compile-time **512 × 256**
+  in `tagpu_text.c` against an `ATLAS_MAXDIM` of **8192**, so this is a refusal that has never been
+  exercised and cannot be without editing the GL lane — the same category as the Classic++ one
+  in §2.33.
 * `ss` 2, the owed teardown, an in-process map change, and the validation layer still.
+
+## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out
 
