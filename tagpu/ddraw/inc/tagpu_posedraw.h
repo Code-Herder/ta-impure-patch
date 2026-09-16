@@ -124,7 +124,9 @@ int  tagpu_posedraw_live(void);
    state of the first frames. */
 int  tagpu_posedraw_refused(void);
 unsigned tagpu_posedraw_drawn(void);  /* units drawn this frame */
-void tagpu_posedraw_frame(void);      /* once per frame, before anything else */
+/* once per frame, before anything else. `frame_counter` is the fork's
+   monotonic render-thread counter and stamps this frame's hand-over. */
+void tagpu_posedraw_frame(unsigned frame_counter);
 
 /* 0 when the pass cannot draw (no GL, a driver whose uniform block is too
    small). Since step 8 there is no CPU emitter to leave those units to: the
@@ -179,6 +181,156 @@ void tagpu_posedraw_depth_unit(const TAGPU_PDUNIT* u);
    vertices stopped being built on the CPU (gpu-posing.md §4). Returns 0 when
    the unit has no baked body geometry. */
 float tagpu_posedraw_top(const TAGPU_PDUNIT* u);
+
+
+/* ---- THE VULKAN LANE'S HAND-OVER (Phase G / G19e, the SIXTH world pass) ----
+
+   tagpu_vk_unit.c draws the same bodies and the same depth twins from the same
+   bake, so that the frame the Vulkan lane presents has units in it. This is
+   everything it is handed; it reads no engine state and re-derives nothing.
+
+   NOTHING HERE IS A SECOND EVALUATION OF ANYTHING. The vertices are the two
+   streams `glBufferData` was handed, reached through tagpu_posebake.h's
+   mirrors; the ranges are the `first`/`count` this pass's own glDrawArrays
+   used; the pose block is the bytes `upload_pose` wrote, through the same
+   conversion; and the uniforms are the numbers these draws passed. What a 0-px
+   comparison then compares is two rasterisers.
+
+   THE POSE ROWS LIVE IN AN ARENA, not in the record. A unit's block is 14 336
+   bytes if it is carried whole, and almost all of that is the 256-piece
+   ceiling rather than the model: stock's worst is 36 pieces. So each record
+   names an offset into two arrays this module owns and grows, and 300 units of
+   stock content cost about half a megabyte rather than four. THE VULKAN PASS
+   STILL NEEDS THE WHOLE 14 336-byte WINDOW per unit, because that is the size
+   of the block the shader declares and a descriptor must cover it -- what the
+   arena saves is the hand-over, not the uniform buffer.
+
+   IT IS VALID FOR THE FRAME THAT PUBLISHED IT AND NO OTHER, like every other
+   hand-over in this lane, and here the reason is its own: `units`, `rows`,
+   `flags` and `vis` are arrays this module REALLOCATES when a frame needs more
+   room than the last, and the bake entries the records name are slots
+   tagpu_posebake.c evicts and re-bakes. The frame stamp bounds the first; the
+   SERIALS bound the second, and the mirror accessor checks them at the instant
+   of the read rather than trusting that the eviction has not happened yet.
+
+   `otherDraws` IS THE REFUSAL, AND IT IS NARROW ON PURPOSE. It counts the
+   units THIS PASS DREW INSIDE THE PUBLISHED WINDOW that the hand-over does not
+   carry -- a build ghost, a unit past TAGPU_PD_MAXHAND, a unit an arena would
+   not grow for -- and a non-zero count stands the Vulkan pass down. That is
+   the set the A/B brackets: the GL half is blacked immediately before this
+   window and read back immediately after it, so a unit drawn there and not
+   here is the one thing that makes the two halves differ.
+
+   IT DOES NOT COUNT THE REST OF THE FRAME, and that is not an oversight. The
+   nanoframe wire, the Classic silhouette, the slant, the replacement meshes
+   and the native 3DO stream all draw OUTSIDE this window -- they are not in
+   the GL capture, so they cannot make this comparison disagree -- and the one
+   place where the rest of the frame really does make a wrong picture rather
+   than a partial one is the cast-shadow MAP, which has its own exact census in
+   tagpu_shadow.h's `otherCasters` and needs no second one here.
+
+   RENDER THREAD ONLY, and published later in the same iteration of
+   render_ogl.c's loop than the tagpu_vk_frame that consumes it. */
+
+/* Units one frame hands over. A bound on an allocation that scales with what
+   is on screen, and the pass re-checks it: at the Vulkan end each unit costs a
+   14 336-byte uniform window per FRAME SLOT, so 512 is 7.3 MB a slot and the
+   ceiling is a deliberate one rather than MAXU's 2048. A frame with more posed
+   units than this hands over nothing and says so once. */
+#define TAGPU_PD_MAXHAND 512
+
+typedef struct TAGPU_PDUREC {
+    /* the bake entries, and the serial each was baked under. The POINTER alone
+       is not an identity: tagpu_posebake.c evicts the least recently used slot
+       and bakes another type into it. tagpu_posebake_geom_mirror bounds the
+       pointer and checks the serial, in that order. */
+    const void* geom;                 /* const TAGPU_PBGEOM*                  */
+    const void* mat;                  /* const TAGPU_PBMAT*                   */
+    unsigned    geomSerial, matSerial;
+    int   nvert;                      /* both streams carry this many         */
+    int   first, count;               /* the BODY range this draw used        */
+    int   npose;                      /* pieces the block below carries       */
+    unsigned rowOff;                  /* first of npose*3 vec4 in `rows`      */
+    unsigned flagOff;                 /* first of npose floats in flags/vis   */
+    /* the vertex stage's per-unit numbers */
+    float anchor[4];                  /* ax, ay, world x, projected world z   */
+    float enc, cast[3];
+    /* the fragment stage's. uNanoT and uNanoC are STICKY on the GL side -- the
+       twin sets them only on a unit with `nanoOn`, so a unit without one is
+       drawn against whatever the last one that had it left in the program --
+       and they are published that way rather than zeroed, because the port
+       reproduces the twin and not a tidier version of it. Nothing reads them
+       on a `uNanoOn == 0` unit; carrying the real value is what makes that a
+       statement about the shader rather than about the upload. */
+    float alpha, waterT, digT, nanoT, nanoC[3];
+    int   fog, waterMode, nanoOn;
+    /* 1 = this unit was drawn into the cast-shadow depth map this frame, which
+       is `!castSkip` on the frame the twin's depth block ran. Meaningless when
+       `depthOn` below is 0. */
+    int   casts;
+} TAGPU_PDUREC;
+
+typedef struct TAGPU_PDHAND {
+    unsigned frame;                   /* the fork's render-thread counter     */
+
+    const TAGPU_PDUREC* units; int nunit;
+    const float* rows;  unsigned nrow;    /* vec4s, 3 per piece per unit      */
+    const float* flags; const float* vis; unsigned nflag;
+
+    /* THE VERTEX STAGE'S BLOCK, as `_begin` left it. Its std140 offsets are
+       printed in inc/spirv/tagpu_posedraw.spv.h and are the contract for the
+       buffer the Vulkan pass fills. uOffset is (0, 0) for a body draw, which
+       is why it is not here. */
+    float gw, gh, zoom, zoomCx, zoomCy, depthScale;
+    float shd[2];                     /* uShd: shNeutral, shDir              */
+
+    /* THE FRAGMENT STAGE'S, as `_begin` and tagpu_shadow_apply left it.
+       uLambert IS PUBLISHED AS THE TWIN HOLDS IT, WHICH IS ZERO, AND THAT IS
+       NOT AN OVERSIGHT HERE: tagpu_posedraw.c never looks the uniform up and
+       never sets it, so on the posed program it keeps a freshly linked
+       program's 0 for the pass's life and the Classic++ lambert lights a unit
+       from a flat up normal rather than from vNrm. tagpu_native.c sets it on
+       ITS program; this one does not. Publishing a 1 here would be a different
+       picture from the oracle's. */
+    int   restored, scafOn, lit, lambert, shadowOn;
+    float scafP[4], ss;
+    float fogOrgX, fogOrgY, fogCols, fogRows;
+    float sun[3], amb, norm;
+    /* the cast-shadow read-back block, and it is only meaningful while
+       `shadowOn` is 1 -- tagpu_shadow_apply writes uShadowOn and RETURNS when
+       no map is live, so the rest is published as the zero a freshly linked
+       program holds. `shadowMat` goes into BOTH stages' blocks at the Vulkan
+       end: in GL the vertex and fragment stages share one uniform of that
+       name, and the SPIR-V translation gives each stage its own copy. */
+    float shadowMat[16], shadowSun[3], shScale[3], penumbra, shade;
+
+    /* THE DEPTH TWIN. `depthOn` is 1 when the twin drew its posed casters into
+       the cast-shadow map this frame; `castMat` is the matrix it used, which
+       is tagpu_shadow_mat() and NOT `shadowMat` above by accident -- they are
+       the same numbers, published twice because one is the map's projection
+       and the other is the read-back's, and a frame could have one without the
+       other. `ncast` is how many records carry `casts`. */
+    int   depthOn, ncast;
+    float castMat[16];
+
+    /* the scissor the native pass set around these draws, in game-frame pixels
+       from the TOP of the frame -- tagpu_vk_feat.c is where the flip onto
+       Vulkan's framebuffer coordinates is done and argued */
+    int   vpL, vpT, vw, vh, scissorOn, ss_i;
+
+    /* WHAT THE GL FRAME HAS THAT THIS DOES NOT -- see the header above. Any
+       non-zero value refuses the frame. */
+    int   otherDraws;
+
+    /* 1 on the ONE frame this pass captured `tagpu_posedraw_gl.ppm` under
+       `tagpu_posedraw.ab`, so the Vulkan lane captures the SAME frame. */
+    int   ab;
+} TAGPU_PDHAND;
+
+/* 0 when nothing was drawn this frame, when this frame's hand-over has already
+   been taken, or when the standing one was published on a different frame than
+   `now`. Render thread only. */
+int  tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now);
 
 void tagpu_posedraw_glreset(void);
 /* one `posed=` field for the native: line; writes nothing when disarmed */

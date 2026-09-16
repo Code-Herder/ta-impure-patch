@@ -64,6 +64,13 @@ typedef struct TAGPU_PBGEOM {
     int          count[TAGPU_PB_NRANGE];
     int          nvert;
     unsigned int vbo;
+    /* ONE MONOTONIC NUMBER PER BAKE, never reused (Phase G / G19e, the unit
+       pass). A cache slot IS reused -- `geom_slot` evicts the least recently
+       asked-for entry and re-bakes another type into it -- so a second backend
+       that keyed its own vertex buffer on the slot, or on this pointer, would
+       hand the new model the old model's vertices. The serial makes "the same
+       geometry" a property of the bake rather than of where it landed. */
+    unsigned     serial;
     /* the BODY range's rest AABB per piece, and whether the piece contributed
        any body vertex at all. G16 step 5 replaces `s_emitTop` — which emit_node
        took from the posed vertices it was writing — with a CPU walk of these 8
@@ -108,6 +115,8 @@ typedef struct TAGPU_PBMAT {
        drop cascades into every stream that names it, so the VAO can never
        outlive either buffer it points at. */
     unsigned int vao;
+    unsigned     serial;         /* as the geometry entry's, and for the same
+                                    reason: `mat_slot` recycles slots too      */
     int          nvert, nskip;   /* nskip: vertices the skip flag collapses    */
     int          noMaterial;     /* faces with neither a texture nor a colour  */
     unsigned     lastFrame;
@@ -138,6 +147,35 @@ int  tagpu_posebake_unit(const struct TAGPU_PK_PIECE* pc, int nparts, int owner,
    minus the pieces this unit is not showing. The lever compares the two. */
 
 int  tagpu_posebake_armed(void);         /* tagpu_posebake.on                 */
+
+/* ---- THE VULKAN LANE'S MIRRORS (Phase G / G19e, the UNIT pass) -----------
+
+   A second backend cannot read a GL buffer, so the two streams `glBufferData`
+   is handed are KEPT while the Vulkan lane is armed -- the same latch and the
+   same reasoning as tagpu_terr.c's `s_mirrorWant` and tagpu_gaf.c's atlas
+   mirror. The mirror is the very buffer the upload above it was given, in the
+   same call, so it is correct from the instant it exists and there is no
+   second evaluation of the bake's arithmetic to drift from the first.
+
+   ASK FOR THE BYTES WITH THE SERIAL YOU WERE PUBLISHED, and this is the whole
+   of the lifetime argument. The entry a `TAGPU_PBGEOM*` points at is a slot in
+   a fixed array that `geom_slot` evicts and re-bakes into, and `geom_drop`
+   frees the mirror with it. So the accessor below bounds the POINTER against
+   its own array (inside it, and on an entry boundary) and then checks the
+   serial, which is unique for the life of the process: a pointer into a slot
+   that has since been recycled answers NULL rather than another model's
+   vertices. That makes "these bytes are this model's" a property checked at
+   the instant of the read, by the module that owns them, rather than a
+   deduction about which functions have run since.
+
+   NULL when the lane never asked for mirrors, when the entry has been
+   re-baked, or when the malloc was refused -- and a refused malloc is not an
+   error here: the caller draws nothing for that unit, which is a frame the
+   Vulkan lane stands down on rather than a frame it draws wrong. */
+const float* tagpu_posebake_geom_mirror(const TAGPU_PBGEOM* g, unsigned serial,
+                                        int* nvert);
+const float* tagpu_posebake_mat_mirror(const TAGPU_PBMAT* m, unsigned serial,
+                                       int* nvert);
 
 void tagpu_posebake_glreset(void);       /* the GL context went              */
 /* one `bake=` field for the native: line; writes nothing when disarmed */

@@ -35,6 +35,7 @@
 #include "tagpu_posebake.h"
 #include "tagpu_render3do.h"
 #include "tagpu_packet.h"   /* the piece run the bake keys on (landing 3) */
+#include "tagpu_vk.h"       /* tagpu_vk_armed(): whether to pay for the mirrors */
 
 /* A 69-unit inventory of 67 distinct types filled a 64-entry table and started
    evicting, so both are set clear of a busy screen rather than at it. A stock
@@ -102,6 +103,17 @@ static TAGPU_PBGEOM s_geom[PB_MAXGEOM];
 static int          s_ngeom;
 static TAGPU_PBMAT  s_mat[PB_MAXMAT];
 static unsigned char* s_matSkip[PB_MAXMAT];   /* per vertex, for the predictor */
+/* ---- THE VULKAN LANE'S MIRRORS (Phase G / G19e, the unit pass) ----
+   The very buffers `glBufferData` was handed, kept while the lane is armed --
+   tagpu_posebake.h says why, and tagpu_terr.c's `s_mirrorWant` is the pattern.
+   Indexed by the same slot as the entry, freed by the same drop. */
+static float*       s_geomMirror[PB_MAXGEOM];
+static float*       s_matMirror[PB_MAXMAT];
+static int          s_mirrorWant;             /* the Vulkan lane asked for them */
+/* ONE COUNTER FOR BOTH TABLES, so that no geometry serial is ever a material
+   serial and a ref handed to the wrong accessor cannot match. It starts at 1:
+   0 is "never baked", which is what a zeroed entry reads. */
+static unsigned     s_serial = 1;
 static int          s_nmat;
 static unsigned     s_glGen;                  /* bumped by tagpu_posebake_glreset */
 static unsigned     s_frame;
@@ -302,6 +314,7 @@ static void mat_drop(int i)
     if (s_mat[i].vao) glDeleteVertexArrays(1, &s_mat[i].vao);
     if (s_mat[i].vbo) glDeleteBuffers(1, &s_mat[i].vbo);
     if (s_matSkip[i]) { free(s_matSkip[i]); s_matSkip[i] = NULL; }
+    if (s_matMirror[i]) { free(s_matMirror[i]); s_matMirror[i] = NULL; }
     memset(&s_mat[i], 0, sizeof s_mat[i]);
 }
 
@@ -317,6 +330,14 @@ static void geom_drop(TAGPU_PBGEOM* g)
     for (i = 0; i < s_nmat; i++)
         if (s_mat[i].geom == g) { mat_drop(i); s_dropCascade++; }
     if (g->vbo) glDeleteBuffers(1, &g->vbo);
+    /* the mirror goes with the entry, and the serial in it is what stops a
+       hand-over published before this from reading the next model's bytes */
+    {
+        int k = (int)(g - s_geom);
+        if (k >= 0 && k < PB_MAXGEOM && s_geomMirror[k]) {
+            free(s_geomMirror[k]); s_geomMirror[k] = NULL;
+        }
+    }
     memset(g, 0, sizeof *g);
 }
 
@@ -381,12 +402,23 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
         return NULL;
     }
     g->nvert = c.nv;
+    g->serial = s_serial++;
     glGenBuffers(1, &g->vbo);
     glBindBuffer(GL_ARRAY_BUFFER, g->vbo);
     glBufferData(GL_ARRAY_BUFFER,
                  (GLsizeiptr)c.nv * TAGPU_PB_GEOMST * sizeof(float),
                  s_scratchG, GL_STATIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
+    /* THE MIRROR IS THE BUFFER THE UPLOAD ABOVE WAS GIVEN, in the same call,
+       so there is no second evaluation of the bake to drift from the first.
+       A refused malloc leaves the slot NULL, which the accessor reports as
+       "no mirror" and the Vulkan pass stands down on -- the GL lane is
+       untouched either way. */
+    if (s_mirrorWant && c.nv > 0) {
+        size_t nb = (size_t)c.nv * TAGPU_PB_GEOMST * sizeof(float);
+        s_geomMirror[slot] = (float*)malloc(nb);
+        if (s_geomMirror[slot]) memcpy(s_geomMirror[slot], s_scratchG, nb);
+    }
     s_baked++;
     s_anomTotal += g->badNode + g->orphan;
     s_oddTotal  += g->oddFace;
@@ -499,12 +531,18 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
     m->geom = g; m->root = g->root; m->owner = owner; m->atlasGen = atlasGen;
     m->levelGen = lvl; m->glGen = s_glGen;
     m->nvert = c.nv; m->nskip = c.nskip; m->noMaterial = c.anom;
+    m->serial = s_serial++;
     glGenBuffers(1, &m->vbo);
     glBindBuffer(GL_ARRAY_BUFFER, m->vbo);
     glBufferData(GL_ARRAY_BUFFER,
                  (GLsizeiptr)c.nv * TAGPU_PB_MATST * sizeof(float),
                  s_scratchM, GL_STATIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
+    if (s_mirrorWant && c.nv > 0) {
+        size_t nb = (size_t)c.nv * TAGPU_PB_MATST * sizeof(float);
+        s_matMirror[slot] = (float*)malloc(nb);
+        if (s_matMirror[slot]) memcpy(s_matMirror[slot], s_scratchM, nb);
+    }
     /* THE POSED PASS'S VAO (G16 step 5). The two buffers are bound together
        once, here, rather than re-pointed per unit per frame: a draw is then
        one bind and one glDrawArrays. Locations 0-3 come off the geometry (the
@@ -564,7 +602,31 @@ void tagpu_posebake_frame(unsigned frame_counter, unsigned level_gen)
     s_lvlGen = lvl; s_atlasGen = agen;
     /* the same 30-frame cadence tagpu_native.on is read on: this is a file
        probe, and one per frame is a syscall nobody asked for */
-    if ((frame_counter % 30) == 0 || !s_polled) { lever_read(); s_polled = 1; }
+    if ((frame_counter % 30) == 0 || !s_polled) {
+        lever_read(); s_polled = 1;
+        /* THE MIRROR LATCH, on the same beat and once: tagpu_vk_armed() is two
+           file-attribute queries (tagpu_terr.c says the same). It only ever
+           goes 0 -> 1, because the memory a disarm would give back is handed
+           back by the ordinary eviction anyway and a latch that flapped would
+           re-bake the whole inventory every time the lever was touched.
+
+           EVERY ENTRY IS DROPPED ON THE TRANSITION, and that is the point
+           rather than a cost: an entry baked before the lane came up has no
+           mirror and would never grow one -- the bake is what takes it, and
+           nothing re-bakes an entry that is still valid. Dropping them makes
+           the next frame re-bake each type as it is asked for, with a mirror,
+           instead of leaving the Vulkan pass permanently standing down on
+           models that happen to have been on screen first. It costs one
+           re-bake of what is visible, once, at the moment a measuring lever is
+           armed. */
+        if (!s_mirrorWant && tagpu_vk_armed()) {
+            s_mirrorWant = 1;
+            for (i = 0; i < s_ngeom; i++)
+                if (s_geom[i].root) { geom_drop(&s_geom[i]); dg++; }
+            for (i = 0; i < s_nmat; i++)
+                if (s_mat[i].geom) { mat_drop(i); dm++; }
+        }
+    }
     for (i = 0; i < s_ngeom; i++)
         if (s_geom[i].root && (s_geom[i].levelGen != lvl || s_geom[i].glGen != s_glGen)) {
             geom_drop(&s_geom[i]); dg++;
@@ -585,6 +647,47 @@ void tagpu_posebake_frame(unsigned frame_counter, unsigned level_gen)
                   dg, s_dropCascade, dm, lvl, s_glGen, agen);
         blog(b);
     }
+}
+
+/* ---- the Vulkan lane's mirrors ------------------------------------------
+   The contract, and the whole lifetime argument, is in tagpu_posebake.h. Both
+   accessors do the same three things: bound the pointer against the array it
+   must be in, check that it lands ON an entry rather than inside one, and only
+   then compare the serial. A pointer from an evicted and re-baked slot fails
+   the third; a pointer from anywhere else fails the first two. */
+static int in_table(const void* p, const void* base, size_t stride, int n)
+{
+    size_t off;
+    if ((const char*)p < (const char*)base) return 0;
+    off = (size_t)((const char*)p - (const char*)base);
+    if (off % stride) return 0;
+    return (int)(off / stride) < n;
+}
+
+const float* tagpu_posebake_geom_mirror(const TAGPU_PBGEOM* g, unsigned serial,
+                                        int* nvert)
+{
+    int k;
+    if (nvert) *nvert = 0;
+    if (!g || !serial) return NULL;
+    if (!in_table(g, s_geom, sizeof s_geom[0], PB_MAXGEOM)) return NULL;
+    k = (int)(g - s_geom);
+    if (g->serial != serial || !s_geomMirror[k] || g->nvert <= 0) return NULL;
+    if (nvert) *nvert = g->nvert;
+    return s_geomMirror[k];
+}
+
+const float* tagpu_posebake_mat_mirror(const TAGPU_PBMAT* m, unsigned serial,
+                                       int* nvert)
+{
+    int k;
+    if (nvert) *nvert = 0;
+    if (!m || !serial) return NULL;
+    if (!in_table(m, s_mat, sizeof s_mat[0], PB_MAXMAT)) return NULL;
+    k = (int)(m - s_mat);
+    if (m->serial != serial || !s_matMirror[k] || m->nvert <= 0) return NULL;
+    if (nvert) *nvert = m->nvert;
+    return s_matMirror[k];
 }
 
 void tagpu_posebake_glreset(void)

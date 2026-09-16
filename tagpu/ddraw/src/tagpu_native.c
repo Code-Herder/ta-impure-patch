@@ -2448,7 +2448,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        thread, and not wherever the generation moved */
     tagpu_posebake_frame(f->frame_counter, s_lastLevelGen);
     pose_rest_block_init();      /* the degradation's block, once per session */
-    tagpu_posedraw_frame();      /* this frame's counters */
+    tagpu_posedraw_frame(f->frame_counter);   /* this frame's counters, and the
+                                              Vulkan hand-over's frame stamp */
     /* smooth-motion.md option A. BEFORE the gather, because posed_pose
        blends through it: it latches THIS FRAME'S PAIR — the packet and the
        previous one, which the exchange guarantees are two distinct sim ticks —
