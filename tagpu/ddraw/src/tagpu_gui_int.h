@@ -120,17 +120,33 @@ typedef struct TAGPU_GUIQ {
        from `gafnoplane` so the one number that means a real failure keeps
        meaning it. ["free" corrected by the landing review.] */
     volatile unsigned gafreseed;
-    /* the OP_TEXT branch KEEPS its generation gate and its own counter. The
-       font object is still dereferenced at publish (`gfont_slot`,
-       `glyph_block_size`, `glyph_block_fill` read the header, the offset table
-       and the glyph rows), so the window the sprite path just closed is still
-       open there and is still covered by the ordering. Counted apart so the two
-       mechanisms can never be read as one. */
-    volatile unsigned strstale;
+    /* text ops that published their box because the glyph `sent[]` table was
+       re-armed between the capture and the flip -- the OP_TEXT twin of
+       `gafreseed`, and cheap in the same way (a PK_PIXELS box, one window
+       without its stamped glyphs, self-healing next window). It replaces
+       `strstale`, which counted the LEVEL-generation refusals of the gate that
+       stood in for the font's lifetime until G19f-8 moved the reads into the
+       observer; the name changed with the meaning, as `gafstale`'s did, so that
+       a figure quoted in the notes cannot quietly start measuring something
+       else. */
+    volatile unsigned strrearm;
+    /* the glyph scratch, so its bound can be judged rather than assumed:
+       `glyhigh` is the most bytes any one census window has wanted of it and
+       `glylost` the blocks it could not take whole. A settled session should
+       hold both still -- `sent[]` means a (font, code) pair is captured once -- 
+       and `glylost` at 0 is what says the 128 KB is not a guess that happens to
+       hold. A block the scratch refuses publishes its box, exactly as a text op
+       did before G17d. */
+    volatile unsigned glyhigh, glylost;
     volatile unsigned stalls;                /* episodes where the consumer took nothing for TAGPU_GUI_STALL_MS
                                                 while work was queued (a display-mode switch kills the render
                                                 thread): the producer drops its batches until it moves again */
 } TAGPU_GUIQ;
+
+/* the producer's font-slot counters, for the render half's heartbeat: glyph
+   records published, re-arms of every `sent[]` table, fonts refused as not that
+   format, and slot-table recycles */
+void tagpu_gui_font_stats(unsigned* glyphs, unsigned* resends, unsigned* refused, unsigned* recycles);
 
 /* why a fresh start was raised — logged by the producer with every reset it
    publishes (`log`), so a count of resets is never a mystery again */

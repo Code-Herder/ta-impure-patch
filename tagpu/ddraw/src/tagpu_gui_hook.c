@@ -362,14 +362,21 @@ typedef struct OP {
        `frame` carries the font object and `dx`/`dy` the x/y it was given. */
     unsigned soff; unsigned short slen;
     unsigned char fg, bg, tr;                   /* text: 0x4CCF60's three colours */
+    /* AND THE FONT IS RESOLVED AT OBSERVE TIME TOO (G19f-8), for the reason
+       the sprite's plane is: `publish` runs up to CENSUS_MS after the draw and
+       the font object is engine memory whose lifetime nothing here can state.
+       `fid` is the slot id the consumer caches on (0: the font would not read,
+       so this op is its box's bytes), `gboff`/`gblen` the glyph records in
+       `s_glyBuf`, `frows`/`fyoff` the two header bytes the consumer needs, and
+       `fgen` the `sent[]` generation those records were decided against.
+       `frame` keeps the font's ADDRESS as an identity -- `op_same` tells two
+       fonts apart with it and the probe prints it -- and after this landing
+       nothing dereferences it. See `text_capture`. */
+    unsigned fid;
+    unsigned gboff; unsigned short gblen;
+    unsigned char frows; signed char fyoff;
+    unsigned fgen;
     unsigned char dup;                          /* an identical op follows: dropped */
-    /* THE LEVEL THIS OP WAS OBSERVED IN. `frame`/`pix` point at a per-LEVEL GAF
-       bank, and the teardown's cascade frees those -- so an op observed before a
-       teardown and resolved after one names memory that is gone. Stamped here,
-       at observe time, for the same reason the string's bytes are copied here
-       rather than read at publish: what the pointer meant is a property of WHEN
-       it was taken. `publish` refuses a stale one. */
-    unsigned lgen;
 } OP;
 /* ---- THE UI FONTS, AS IDENTITIES AND BITS (landing 4c) -------------------
    The string op used to carry the engine's FONT OBJECT and the render thread
@@ -415,6 +422,14 @@ static GFONT    s_gfont[GF_SLOTS];
 static int      s_ngfont;
 static unsigned s_gfontNext = 1;
 static unsigned s_gfontRecycles, s_gfontRefused, s_gfontGlyphs, s_gfontResends;
+/* ...and a reader for them, because a counter the heartbeat does not print is a
+   measurement nobody ever reads -- which these four were from landing 4c until
+   G19f-8 made them the way to see this mechanism work. */
+void tagpu_gui_font_stats(unsigned* glyphs, unsigned* resends, unsigned* refused, unsigned* recycles)
+{
+    *glyphs = s_gfontGlyphs; *resends = s_gfontResends;
+    *refused = s_gfontRefused; *recycles = s_gfontRecycles;
+}
 static unsigned s_gfontGenSeen;
 
 /* THE CONSUMER'S ATLAS CAN THROW EVERY CELL AWAY, and this is what notices.
@@ -425,13 +440,38 @@ static unsigned s_gfontGenSeen;
    the render thread's, read here, monotone; when it moves every slot's `sent[]`
    is cleared and the next string re-sends what it needs [found by the landing
    review, twice]. */
+/* THE GENERATION EVERY `sent[]` DECISION IS TAKEN AGAINST (G19f-8). `sent[]`
+   says "the consumer already has this glyph", and TWO things clear it: the
+   render thread throwing its glyph atlas away (below) and a publisher reseed
+   skipping whole windows (`publish`). Until this landing both were safe by
+   POSITION -- the decision was taken inside `publish`, after either clear had
+   already happened in the same call. The capture now runs at OBSERVE time, so
+   a clear can land between the decision and the flip, and a block that carries
+   no records BECAUSE they were already sent would then be a string with
+   characters missing from it for the rest of the session -- the exact failure
+   `gfont_check_gen` was added to prevent. Stamped into the op, compared at
+   publish, and a mismatch publishes the box instead. Same shape, and the same
+   reason, as the sprite path's `s_seenGen`.
+
+   A SLOT RECYCLE IS NOT A THIRD CLEAR, which is worth saying because
+   `gfont_slot` does `memset(s_gfont, ...)` when all eight are taken. That
+   changes which ID a font has rather than what the consumer holds: ids are
+   never reused, the cells published under the old one stay in the consumer's
+   cache, and an op captured before the recycle still names the id its block was
+   decided against. Nothing in flight is invalidated, so nothing has to be. */
+static unsigned s_sentGen = 1;
+static void gfont_sent_clear(void)
+{
+    int i;
+    for (i = 0; i < s_ngfont; i++) memset(s_gfont[i].sent, 0, sizeof s_gfont[i].sent);
+    s_sentGen++;
+}
 static void gfont_check_gen(void)
 {
     unsigned g = tagpu_text_glyph_gen();
-    int i;
     if (g == s_gfontGenSeen) return;
     s_gfontGenSeen = g;
-    for (i = 0; i < s_ngfont; i++) memset(s_gfont[i].sent, 0, sizeof s_gfont[i].sent);
+    gfont_sent_clear();
     s_gfontResends++;
 }
 
@@ -477,44 +517,56 @@ static const unsigned char* gfont_glyph(const unsigned char* f, int code, int* w
     return f + off + 1;
 }
 
-/* what a string's UNSENT glyphs will take in the arena, 4-aligned per record */
-static unsigned glyph_block_size(GFONT* g, const unsigned char* f,
-                                 const unsigned char* str, int n, unsigned* ng)
-{
-    unsigned need = 0, k = 0;
-    int i, rows = f[F_ROWS_L];
-    unsigned char seen[GF_NCODE];
-    memset(seen, 0, sizeof seen);
-    for (i = 0; i < n; i++) {
-        int c = str[i], w;
-        if (c < GF_LO || c > GF_HI) continue;
-        if (g->sent[c - GF_LO] || seen[c - GF_LO]) continue;
-        if (!gfont_glyph(f, c, &w)) continue;
-        seen[c - GF_LO] = 1;
-        need += 4u + (((unsigned)(rows * w) + 7u) / 8u + 3u) / 4u * 4u;
-        k++;
-    }
-    *ng = k;
-    return need;
-}
+/* ---- THE GLYPH RECORDS, WRITTEN WHERE THE ENGINE IS ABOUT TO READ THEM ----
+   One walk of the string, writing `[code][w][nb:u16][bits][pad to 4]` for every
+   code this font has not sent yet and this block does not already carry. It
+   marks NOTHING: an op that never reaches the queue must not take its glyphs
+   with it, so `glyph_block_mark` does the marking at publish, from the bytes
+   that actually went into the arena. (Two publish-time walks, `glyph_block_size`
+   then `glyph_block_fill`, did this before G19f-8; sizing first is pointless
+   once the destination is a scratch we can bound per record.)
 
-/* the same walk again, writing the records and marking them sent. Returns the
-   bytes written, which is where the string goes. */
-static unsigned glyph_block_fill(GFONT* g, const unsigned char* f,
-                                 const unsigned char* str, int n, unsigned char* dst)
+   OUR READ SET IS A SUBSET OF THE ENGINE'S, BYTE FOR BYTE. `0x4CCF60` has no
+   clip and no destination bound: it reads `font[0]`, `font[2]`, `font[3]`, the
+   `u16` table entry for every code of the string it walks, and each glyph's
+   `rows*w` bits, then writes `sum(widths) * font[0]` pixels wherever the caller
+   said (exe-reverse-engineering.md, "`0x4CCF60` -- the blitter, which takes its
+   destination directly"). We walk the same string with the blitter's own two
+   skips -- below `first` at `0x4CCFAA`, a zero table entry at `0x4CCFB9` -- and
+   read the same bytes for a SUBSET of its codes. So this is not the GAF path's
+   extent residual repeated: there the engine reads a clipped sub-rect while
+   `tagpu_gaf_decode` reads all `w*h`, and here there is nothing we touch that
+   the engine does not touch itself, on the next instruction.
+
+   Returns the bytes written, or `GLY_REFUSED` when the scratch could not take
+   the block WHOLE -- never a partial one, since half a record published as a
+   full one is a glyph made of someone else's bits. */
+#define GLY_REFUSED 0xFFFFFFFFu
+static unsigned glyph_block_capture(GFONT* g, const unsigned char* f,
+                                    const unsigned char* str, int n,
+                                    unsigned char* dst, unsigned room)
 {
     unsigned at = 0;
-    int i, rows = f[F_ROWS_L];
+    int i, rows = f[F_ROWS_L], any = 0;
+    unsigned char seen[GF_NCODE];
     for (i = 0; i < n; i++) {
         int c = str[i], w;
         const unsigned char* bits;
         unsigned nb, pad;
         if (c < GF_LO || c > GF_HI) continue;
         if (g->sent[c - GF_LO]) continue;
+        /* `seen` is cleared on the FIRST unsent code and not before: this walk
+           now runs inside the engine's blit rather than at the flip, and a
+           settled screen -- every code of every label already sent -- must cost
+           the walk and nothing else. */
+        if (!any) { memset(seen, 0, sizeof seen); any = 1; }
+        if (seen[c - GF_LO]) continue;
         bits = gfont_glyph(f, c, &w);
         if (!bits) continue;
+        seen[c - GF_LO] = 1;
         nb = ((unsigned)(rows * w) + 7u) / 8u;
         pad = (nb + 3u) / 4u * 4u;
+        if (4u + pad > room - at) return GLY_REFUSED;
         dst[at + 0] = (unsigned char)c;
         dst[at + 1] = (unsigned char)w;
         dst[at + 2] = (unsigned char)(nb & 0xFFu);
@@ -522,10 +574,38 @@ static unsigned glyph_block_fill(GFONT* g, const unsigned char* f,
         memcpy(dst + at + 4, bits, nb);
         if (pad > nb) memset(dst + at + 4 + nb, 0, pad - nb);
         at += 4u + pad;
-        g->sent[c - GF_LO] = 1;
-        s_gfontGlyphs++;
     }
     return at;
+}
+
+/* A GLYPH IS SENT ONCE IT IS IN THE ARENA, AND NOT BEFORE. Walks the block that
+   was just copied, marks each code against the font's slot, and returns the
+   record COUNT -- which is what `gcount` has to be for the consumer to find the
+   string that follows them (`tagpu_text_glyph_block_bytes`). It reads no font:
+   the walk is over our own bytes, in our own format.
+
+   A slot RECYCLED between the capture and here is simply not found, and the
+   block still publishes: the consumer keys on the id, ids are never reused, so
+   those cells land under an id nothing will ask for again and the next window
+   re-sends what it needs. The length test in the loop can never fire on a block
+   this file wrote and is there so that it cannot walk off one that it did. */
+static unsigned glyph_block_mark(unsigned fid, const unsigned char* blk, unsigned len)
+{
+    GFONT* g = NULL;
+    unsigned at = 0, k = 0;
+    int i;
+    for (i = 0; i < s_ngfont; i++) if (s_gfont[i].id == fid) { g = &s_gfont[i]; break; }
+    while (at + 4u <= len) {
+        unsigned nb  = (unsigned)blk[at + 2] | ((unsigned)blk[at + 3] << 8);
+        unsigned pad = (nb + 3u) / 4u * 4u;
+        int c = blk[at];
+        if (at + 4u + pad > len) break;
+        if (g && c >= GF_LO && c <= GF_HI) g->sent[c - GF_LO] = 1;
+        at += 4u + pad;
+        k++;
+        s_gfontGlyphs++;
+    }
+    return k;
 }
 
 /* The batch's strings. Reset with s_nops, and bounded the same way: a census is
@@ -546,6 +626,24 @@ static unsigned s_strLost;                      /* strings the scratch could not
 #define GAF_SCRATCH (2u << 20)
 static unsigned char s_gafBuf[GAF_SCRATCH];
 static unsigned s_gafUsed;
+/* AND THE BATCH'S GLYPH RECORDS (G19f-8), for the same reason and dropped by
+   the same reset. A SETTLED SESSION WRITES NOTHING HERE: `sent[]` means a
+   (font, code) pair is captured once and never again, so what has to fit is the
+   glyphs a screen's first window introduces -- about 16 bytes a code for a
+   12-row face, a few thousand for a whole screen of labels. 128 KB is generous
+   rather than tight, and `glyhigh` is what says so rather than this comment.
+
+   THERE IS NO CROSS-OP DEDUP INSIDE A WINDOW, ON PURPOSE. Two ops needing the
+   same unsent code each carry it: `sent[]` is not marked until publish, and
+   either op may be the one that never gets there (a dedup drop, a queue
+   overflow, an untwinned surface). The sprite path can share a decode through
+   `s_gcap` because its consumer keys on the frame and one copy serves every op;
+   a glyph record is only ever read out of the op that carries it. What the
+   scratch cannot take publishes its box's bytes instead, which is what a text
+   op did before G17d -- slower, never wrong. */
+#define GLY_SCRATCH (128u << 10)
+static unsigned char s_glyBuf[GLY_SCRATCH];
+static unsigned s_glyUsed;
 /* `gaflost` and `gafhigh` live in g_guiq rather than here for the reason
    `gafstale` was moved there: a counter the heartbeat does not print is a
    measurement nobody ever reads. */
@@ -589,7 +687,6 @@ static void op_add(int kind, SURF* s, int l, int t, int r, int b)
     memset(o, 0, sizeof *o);
     o->base = s->base; o->l = (short)l; o->t = (short)t; o->r = (short)r; o->b = (short)b;
     o->kind = (unsigned char)kind;
-    o->lgen = tagpu_packet_pub_level_gen();
     s_lastOp = o;
 }
 
@@ -819,11 +916,18 @@ static const void* frame_key(const unsigned char* fr, const void* pix, int w, in
 #define GCAP_N 256
 static struct { const void* fr; unsigned key, off, len; } s_gcap[GCAP_N];  /* this window's decodes */
 
-/* the window's scratch, dropped with its ops. `s_gcap` MUST go with it: its
-   entries are offsets into `s_gafBuf`, so a stale one would hand the next
-   window a plane at an offset that now belongs to different bytes. */
-static void gaf_window_reset(void)
+/* THE WINDOW'S SCRATCHES, DROPPED WITH ITS OPS -- all of them, here, because
+   an op's `soff`/`goff`/`gboff` are offsets into them and an op that outlived
+   its bytes would publish whatever now sits at that offset. `s_gcap` MUST go
+   too: its entries are offsets into `s_gafBuf`. The three call sites set
+   `s_nops = 0` and call this; the string scratch used to be reset beside
+   `s_nops` at each of them instead, which is one more place for the next
+   scratch to be forgotten. */
+static void ops_window_reset(void)
 {
+    s_nops = 0;
+    s_strUsed = 0;
+    s_glyUsed = 0;
     s_gafUsed = 0;
     memset(s_gcap, 0, sizeof s_gcap);
 }
@@ -872,6 +976,82 @@ static void gaf_capture(OP* o, const unsigned char* fr)
     s_gcap[i].fr = (const void*)fr; s_gcap[i].key = o->fkey; s_gcap[i].off = o->goff; s_gcap[i].len = n;
     s_gafUsed += n;
     if (s_gafUsed > g_guiq.gafhigh) g_guiq.gafhigh = s_gafUsed;
+}
+
+/* ---- THE FONT THIS OP NAMES CANNOT GO AWAY, BECAUSE NOTHING NAMES IT LATER
+   (G19f-8, the same move as G19f-7 made for the sprite).
+
+   `publish` used to take the font slot, the offset table and every unsent
+   glyph's packed rows out of the object at the flip -- `gfont_slot`,
+   `glyph_block_size` and `glyph_block_fill`, up to CENSUS_MS after the draw
+   that recorded the op. What stood in for a lifetime there was a level
+   generation and `ptr_ok`, and neither is one: the generation says the level
+   has not ENDED, which is not the same as the font still being mapped, and a
+   range test on a value is a filter and never an ordering. The note said so and
+   left the window open rather than let the line above it look closed.
+
+   THE ORDERING, ON THE ENGINE'S OWN TIMELINE. This runs from the detour at the
+   head of `0x4CCF60`, the glyph blitter, with the engine's own `font` and `str`
+   arguments in hand. The engine is committed to reading `font[0]`, `font[2]`,
+   `font[3]`, the table entry for every code of that string and each glyph's
+   bits before it returns, so:
+
+       our read  <  the engine's read  <  any free of the font
+
+   holds by the engine's sequencing rather than by our hope. It is NOT "the
+   engine would fault if this were dead" -- the detour runs FIRST, so we would
+   fault first; that phrasing was a counterfactual dressed as a proof when the
+   G19f-7 review found it on the sprite path, and it is no better here. What
+   makes the read safe is that the engine has already decided to make it.
+
+   AND THE EXTENT HALF IS CLOSED TOO, which it is not on the sprite path: we
+   read a SUBSET of the bytes the blitter reads, code for code (see
+   `glyph_block_capture`). The GAF path's residual -- the engine blits a clipped
+   sub-rect while we decode all `w*h` -- has no counterpart here, because
+   `0x4CCF60` has no clip at all.
+
+   AFTER THIS, `publish` DEREFERENCES NO PER-LEVEL ENGINE ASSET ON ANY PATH --
+   no GAF bank and no font object, the two whose lifetimes nothing here can
+   state. It is NOT "no engine memory at all", which would be an overclaim: it
+   still reads the graphics globals through `TA_MAINPP` for the true viewport
+   rect, and `pub_surface_bytes` still reads the surface's own pixels. Both have
+   stated lifetimes -- the globals are process-lifetime and the surfaces are the
+   FORK's, freed in their own Release (see `surf_of_ctx`) -- which is exactly
+   what a GAF bank and a font do not have. `frame` survives in a text op as the
+   font's address, an identity `op_same` compares and the probe prints, never
+   followed. `op->lgen` and `strstale` are gone with the gate they existed for,
+   and `tagpu_packet_pub_level_tracked` and `tagpu_reclaim_level_closing` have
+   no caller left in the tree.
+
+   NOT COVERED. A font whose header lies -- a table entry pointing outside the
+   loaded file image, a width byte that runs the bits past its end -- is refused
+   only by `f[3] != 0`, `f[0] == 0` and `gfont_glyph`'s zero tests, exactly as
+   before; the engine would read the same wrong bytes one instruction later, so
+   this landing neither adds nor removes that. `ptr_ok(font)` in `before_text`
+   is a BOUND on the value and is not the safety argument; the ordering is. */
+static void text_capture(OP* o, const unsigned char* f, const unsigned char* str, int n)
+{
+    GFONT* g;
+    unsigned room, at, len;
+    o->fid = 0; o->gboff = 0; o->gblen = 0;
+    g = gfont_slot(f);                          /* also polls the consumer's gen */
+    if (!g) return;                             /* not that format: the box's bytes */
+    at   = s_glyUsed;
+    room = GLY_SCRATCH - s_glyUsed;
+    if (room > 0xFFFFu) room = 0xFFFFu;         /* so `gblen` cannot be truncated */
+    len = glyph_block_capture(g, f, str, n, s_glyBuf + at, room);
+    if (len == GLY_REFUSED) { g_guiq.glylost++; return; }
+    /* every field the publisher needs, decided here and now: the slot's id, the
+       two header bytes the consumer stamps quads with, and the generation the
+       "already sent" half of the block was decided against */
+    o->fid   = g->id;
+    o->frows = f[F_ROWS_L];
+    o->fyoff = (signed char)f[2];
+    o->fgen  = s_sentGen;
+    o->gboff = at;
+    o->gblen = (unsigned short)len;
+    s_glyUsed += len;
+    if (s_glyUsed > g_guiq.glyhigh) g_guiq.glyhigh = s_glyUsed;
 }
 
 static SURF* surf_by_base(unsigned base)
@@ -927,6 +1107,12 @@ static int op_same(const OP* a, const OP* b)
     if (a->kind == OP_TEXT)
         return a->slen == b->slen && a->dx == b->dx && a->dy == b->dy &&
                a->fg == b->fg && a->bg == b->bg && a->tr == b->tr &&
+               /* G19f-8: and the SLOT, not just the address the prefix above
+                  compared. A font reloaded at its old address takes a new slot
+                  and a new id, and the consumer caches on the id -- so two ops
+                  whose only difference is which of them the consumer has the
+                  glyphs for are not the same op. */
+               a->fid == b->fid &&
                (a->slen == 0 || !memcmp(s_strBuf + a->soff, s_strBuf + b->soff, a->slen));
     return 1;
 }
@@ -1015,6 +1201,14 @@ static void publish(unsigned flipSurf)
     int vl = 0, vt = 0, vr = -1, vb = -1;
     if (!g_gui_draw) return;
     if (consumer_stalled()) return;
+    /* THE CONSUMER'S GLYPH GENERATION, READ HERE TOO (G19f-8). `gfont_slot`
+       polls it on every text draw, but a window whose last text op was observed
+       BEFORE the render thread dropped its atlas would otherwise publish that
+       op's "already sent" decision against a table nobody has any more. Reading
+       it once here makes the comparison in the text branch below a comparison
+       against NOW. It dereferences no font -- it is our own counter against the
+       render thread's. */
+    gfont_check_gen();
     dedup();
     /* ---- THE LEVEL BOUNDARY, FOR THE CONSUMER'S ATLAS (G19f-7, found by the
        landing review -- BOTH reviewers, independently, the eleventh such pair
@@ -1065,7 +1259,7 @@ static void publish(unsigned flipSurf)
            says it was published. This is the same re-arm the sprite and pixel
            tables above get, and it was missing [found by the review of the
            review's fixes]. */
-        for (i = 0; i < s_ngfont; i++) memset(s_gfont[i].sent, 0, sizeof s_gfont[i].sent);
+        gfont_sent_clear();
         /* an overflow drops the queue's tail too: what the consumer has not
            taken is stale against the fresh seeds */
         if (s_pubOverflow) g_guiq.overflows++;
@@ -1217,66 +1411,47 @@ static void publish(unsigned flipSurf)
            art it was drawn onto. A text op with no string (the scratch was
            full, or the font would not read) falls through to its box's bytes,
            which is exactly what it was before this gate. */
-        if (op->kind == OP_TEXT && op->slen && op->frame && !s_nostring) {
+        if (op->kind == OP_TEXT && op->slen && op->fid && !s_nostring) {
             unsigned char* dst;
-            const unsigned char* font = (const unsigned char*)op->frame;
             const unsigned char* str = s_strBuf + op->soff;
-            GFONT* gf;
-            /* THE SAME WINDOW AS THE GAF PATH, AND THE ONLY ONE LEFT IN THIS
-               FUNCTION. `op->frame` is the FONT object here, captured when the
-               draw was observed and dereferenced up to CENSUS_MS later by
-               `gfont_slot`, `glyph_block_size` and `glyph_block_fill`, which
-               read `f[3]`, `f[0]`, the 256-entry offset table and the glyph
-               rows. The font is `[globals+0x204]` (`0x4B6220` is `mov
-               eax,ds:0x51FBD0`), so it is probably not per-level -- but
-               "probably" is not a lifetime.
+            /* NO FONT IS READ HERE ANY MORE (G19f-8). The slot, the two header
+               bytes and every unsent glyph's rows were taken in `text_capture`,
+               inside the engine's own call to the glyph blitter; this branch
+               copies our own bytes out of our own scratch. `op->fid` being set
+               IS the statement that the capture succeeded, so the old
+               `op->frame` test, the level generation and `ptr_ok` are all gone
+               with the reads they were standing in for.
 
-               THE GAF PATH ABOVE NO LONGER SHARES THIS GATE. G19f-7 moved its
-               two reads into the observer, where the engine's own blit proves
-               the art alive, so it needs no generation at all. THIS path still
-               reads at publish, so the gate stays here and is now the only
-               user of `op->lgen` -- kept rather than moved because the glyph
-               capture is a larger piece of work than the sprite's (the offset
-               table, the per-code `sent` state and the id the consumer caches
-               on all cross here) and because the font's lifetime, unlike a GAF
-               bank's, has no measured free route at all. Stated as an open
-               window rather than left to look closed by the line above it.
-
-               A refusal falls through to the box's own bytes, which is what
-               this path did before G17d, so the picture is unchanged. `ptr_ok`
-               is a BOUND on the value and is not the safety argument; the
-               ordering is.
-               [FOUND 2026-09-16 by BOTH reviewers of the third pass,
-               independently -- the tenth such pair on this lane.] */
-            if (!ptr_ok(font) ||
-                !tagpu_packet_pub_level_tracked() ||
-                tagpu_reclaim_level_closing() ||
-                op->lgen != tagpu_packet_pub_level_gen()) {
-                g_guiq.strstale++;
-                goto as_pixels;
-            }
-            gf = gfont_slot(font);
-            unsigned need = 0, ng = 0, k;
-            if (!gf) goto as_pixels;              /* the font is not that format */
-            /* THE GLYPH BITS, ON THIS THREAD, WHERE THE FONT IS LIVE (landing
-               4c). Every code the string needs that this font has not sent yet
-               becomes a record at the head of the block; the render thread's
-               cache fills from those bytes and dereferences no font at all. */
-            need = glyph_block_size(gf, font, str, op->slen, &ng);
+               ONE THING CAN STILL HAVE CHANGED: the `sent[]` table. The block
+               omits the codes this font had already published, and both the
+               render thread's atlas reset and a publisher reseed clear that
+               table -- so a block decided against an older generation is a
+               string whose missing glyphs nobody holds. Publishing the box
+               instead costs this op its stamped glyphs for one window, in a
+               publish that is re-seeding surfaces whole anyway, and the next
+               window re-captures everything. Exactly the sprite path's
+               `gafreseed`, and counted apart for the same reason. */
+            if (op->fgen != s_sentGen) { g_guiq.strrearm++; goto as_pixels; }
             o = pub_op(PK_STRING, s->base); if (!o) return;
             o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
             o->sl = op->dx; o->st = op->dy;
             o->frame = NULL;
-            o->font_id = gf->id;
-            o->font_rows = font[0];
-            o->font_yoff = (signed char)font[2];
+            o->font_id = op->fid;
+            o->font_rows = op->frows;
+            o->font_yoff = op->fyoff;
             o->fg = op->fg; o->bg = op->bg; o->tr = op->tr;
-            dst = pub_bytes(o, need + (unsigned)op->slen + 1u);
+            dst = pub_bytes(o, (unsigned)op->gblen + (unsigned)op->slen + 1u);
             if (!dst) return;
-            k = glyph_block_fill(gf, font, str, op->slen, dst);
-            o->gcount = (unsigned short)ng;
-            memcpy(dst + k, str, (size_t)op->slen);
-            dst[k + op->slen] = 0;
+            memcpy(dst, s_glyBuf + op->gboff, op->gblen);
+            memcpy(dst + op->gblen, str, (size_t)op->slen);
+            dst[op->gblen + op->slen] = 0;
+            /* AND ONLY NOW ARE THEY SENT. The arena slot is taken and the bytes
+               are in it, so nothing between here and `pub_commit` can lose
+               them; marking in the capture would have marked glyphs that a
+               queue overflow, an untwinned surface or a dedup drop threw away.
+               The count comes back from the same walk, which is what the
+               consumer needs to find the string behind the records. */
+            o->gcount = (unsigned short)glyph_block_mark(op->fid, s_glyBuf + op->gboff, op->gblen);
             pub_commit();
             continue;
         }
@@ -1465,14 +1640,14 @@ static int __cdecl before_flip(void* entry_esp)
         s_inFlip = 1;
         hijack = 1;
     }
-    if (!s_census && !g_gui_draw) { s_nops = 0; s_strUsed = 0; gaf_window_reset(); return hijack; }
+    if (!s_census && !g_gui_draw) { ops_window_reset(); return hijack; }
     if (!s_freq.QuadPart) QueryPerformanceFrequency(&s_freq);
     QueryPerformanceCounter(&now);
     if (s_lastQpc.QuadPart && (now.QuadPart - s_lastQpc.QuadPart) * 1000 < (LONGLONG)CENSUS_MS * s_freq.QuadPart)
         return hijack;                              /* too soon: keep accumulating ops */
     s_lastQpc = now;
     s_censuses++;
-    if (!s_census) { publish(s ? s->base : 0); s_nops = 0; s_strUsed = 0; gaf_window_reset(); return hijack; }
+    if (!s_census) { publish(s ? s->base : 0); ops_window_reset(); return hijack; }
     if (s) {
         int vl = 0, vt = 0, vr = -1, vb = -1, sub = 0;
         if (isGame) {
@@ -1577,9 +1752,7 @@ static int __cdecl before_flip(void* entry_esp)
         }
     }
     publish(s ? s->base : 0);
-    s_nops = 0;
-    s_strUsed = 0;
-    gaf_window_reset();
+    ops_window_reset();
     memset(s_kindCount, 0, sizeof s_kindCount);
     memset(s_nullCtx, 0, sizeof s_nullCtx);
     s_builds = 0; s_buildFlags = 0;

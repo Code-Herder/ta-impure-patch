@@ -164,12 +164,33 @@ static int __cdecl before_text(void* e)
         s_strBuf[s_strUsed + n] = 0;
         o->soff = s_strUsed;
         o->slen = (unsigned short)n;
-        o->frame = font;                         /* the font object            */
+        o->frame = font;                         /* the font's ADDRESS, as an
+                                                    identity: `op_same` and the
+                                                    probe use it, and since
+                                                    G19f-8 nothing follows it  */
         o->dx = (short)x; o->dy = (short)y;      /* what the blitter was GIVEN */
         o->fg = (unsigned char)ARG(e, 7);
         o->bg = (unsigned char)ARG(e, 8);
         o->tr = (unsigned char)ARG(e, 9);
         s_strUsed += (unsigned)n + 1;
+        /* AND THE FONT, HERE, WHERE THE ENGINE IS ABOUT TO READ IT (G19f-8).
+           We are at the head of `0x4CCF60` with its own arguments, one
+           instruction before it walks this string through this font; `publish`
+           runs up to CENSUS_MS later over memory nothing here can say is still
+           mapped. See `text_capture`.
+
+           ONLY WHEN SOMETHING WILL CONSUME IT: `publish` returns at once when
+           `!g_gui_draw`, and a census-less, draw-less window is thrown away
+           unread, so without this test a font would be walked for every text
+           draw of every such window for a queue nobody reads. `gaf_capture`
+           above gates on exactly this pair and `after_alloc` below it does
+           too. `nostring` is the lever that turns the string op off outright,
+           and under it the capture would be scratch spent on an op that
+           publishes its box anyway. */
+        if ((s_census || g_gui_draw) && !s_nostring)
+            text_capture(o, font, s_strBuf + o->soff, n);   /* our copy, just
+                                                    taken: same bytes, one
+                                                    fewer read of the engine's */
     } else if (s_lastOp && n > 0) s_strLost++;
     return 0;
 }
