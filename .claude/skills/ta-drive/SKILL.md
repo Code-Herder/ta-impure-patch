@@ -914,13 +914,30 @@ same atlas, the same palette and the same rectangles in the same order, and each
 dump:
 
 ```bash
-tools/tacli arm <i> 'vk.on=color=0,0,0' terr.on classicpp.on 'restoreglsl.on=log' \
-                    restorevk.on restoredump.on
+# native.on=all wrecks is NOT optional for the sprite atlases -- see below
+tools/tacli arm <i> 'vk.on=color=0,0,0' 'native.on=all wrecks' terr.on feat.on fx.on sfx.on \
+                    classicpp.on 'restoreglsl.on=log' restorevk.on restoredump.on
 tools/tacli launch <i> --res 1024x768 --maxfps 0
-tools/tacli scenario load <i> static-terrain --restart --res 1024x768 --maxfps 0
-# poll for BOTH files, then:
-cmp <gamedir>/tagpu_restore.rgba <gamedir>/tagpu_restore_vk.rgba
+tools/tacli scenario load <i> fx-mix --restart --res 1024x768 --maxfps 0
+# let it settle, then one cmp per atlas that came up:
+for t in terr feat fx unit; do
+    cmp <gamedir>/tagpu_restore_$t.rgba <gamedir>/tagpu_restore_${t}_vk.rgba
+done
 ```
+
+- **The pair is `tagpu_restore_<tag>.rgba` against `tagpu_restore_<tag>_vk.rgba`, for every
+  consumer** — the Vulkan half moved out of `tagpu_vk_terr.c` into `tagpu_vk_restore.c` in landing
+  7d, so each job dumps its own destination and a new consumer gets the oracle for nothing. The
+  terrain's GL dump was renamed `tagpu_restore_terr.rgba` to match; **`tagpu_restore.rgba` and
+  `tagpu_restore_vk.rgba` are the pre-7d names and no longer written.**
+- **`feat.on` alone does not make a feature atlas exist.** Without `native.on=all wrecks` the
+  feature pass never owns the leaf, emits nothing and atlases nothing: the log says `atlas=0` and
+  `(nothing emitted: native.on needs "wrecks" before we can own the leaf)`, and the run measures a
+  clean terrain pair and two missing files. One whole run was spent on this. **Check for the dump
+  FILE and the `atlas=` count, not for the arm line.**
+- **A sprite atlas's two lanes dump on each lane's own `idle`**, so compare after the scene has
+  settled — an effects atlas that is still adding frames can be caught at two different moments,
+  which is a property of the measurement and not a bug in the lane.
 
 - **The GL lane's own log prefix is `restoreglsl:` and the Vulkan lane's is `restorevk:`**, both
   through the shared core, and `restoreglsl.on=log` turns on *both* — the options are the core's,
@@ -935,9 +952,21 @@ cmp <gamedir>/tagpu_restore.rgba <gamedir>/tagpu_restore_vk.rgba
   `(y / 34, x / 34)` before theorising — six whole cells and every other cell identical is a
   completely different bug from 6 936 scattered texels, and the count alone does not tell them
   apart.
-- **The lever suppresses the read-back, so the two paths are exclusive by construction** — with
-  `restorevk.on` there is no `atlasRgb` in the hand-over at all. Turning it off is what puts the
-  shipped mirror path back.
+- **The lever suppresses the read-back, and the producer publishes one or the other and never
+  both** — with `restorevk.on` there is no `atlasRgb` in the hand-over at all. Turning it off is
+  what puts the shipped mirror path back. (It is an either/or written as one, not an exclusivity
+  that follows from the arm: the lever is a poll that can land on any frame, and the first version
+  of this claim was wrong for exactly that reason.)
+- **A SPRITE ATLAS IS WHAT MAKES A SWAPPED PER-BATCH TABLE VISIBLE, and the terrain is blind to
+  it** (landing 7d, [gpu-status](gpu-status.html) §2.44). The restorer's per-frame tables carry
+  each frame's rect, source rect and **colour key**; the terrain's frames are one size with no key,
+  so a frame restored through another frame's table costs a source rect and looks plausible. On a
+  GAF atlas the same fault paints **the key's own palette colour, opaque (84, 84, 252), where the
+  GL twin writes (0, 0, 0, 0)** — which is a signature worth recognising: if a `_vk` dump has
+  opaque key-coloured texels the GL dump has transparent, a per-frame parameter reached the shader
+  from the wrong frame. Check `restorevk: <tag>: batch N … issued at slice M` for two batches
+  sharing a slice: that is the condition, it is **timing-dependent**, and a run where each slice
+  took one batch proves nothing about it.
 
 **Classic++ lighting knobs go in `tagpu_classicpp.cfg`** (G14f), and unlike the restorer's
 they are **live**: the file is re-read on the switch's own twice-a-second poll whenever its

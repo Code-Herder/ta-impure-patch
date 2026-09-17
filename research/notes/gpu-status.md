@@ -8073,6 +8073,151 @@ measured in.
   target, the out-of-memory returns — remain unreachable on a working device and unexercised, as
   §2.42 already records.
 
+### 2.44 Two more consumers, and the parameter tables had the vertex bug too — landing 7d of the Vulkan-only plan
+
+Landing 7c left three of the restorer's four consumers on the CPU mirror. This one wires the two
+sprite atlases — **features** and **effects** — and the oracle it needed found a bug in the code
+7c had already landed, in the sibling of the resource 7c fixed.
+
+**What crosses the hand-over is different from terrain's, because the queue is different.** The
+terrain's restore is a fixed list published whole under one serial: 10 036 tiles, arrived at once,
+and a consumer that misses a frame re-reads the whole list on the next one. A GAF atlas is a
+**lazy queue** — `tagpu_gaf.c`'s `restore_enqueue` adds one frame per miss for the life of the
+atlas — so what is published is an **append-only list with a generation**, and the consumer holds
+a **cursor** into it:
+
+| | terrain (landing 7c) | features / effects (7d) |
+|---|---|---|
+| shape | the whole list, per serial | append-only, per generation |
+| consumer state | the serial it built from | the generation **and a cursor** |
+| a frame the consumer skipped | re-read next frame | still there; it takes more next frame |
+| what restarts it | the serial moved | the generation moved |
+| bound | the map's tile count | **four times the atlas's entry ceiling** |
+
+`rlistGen` is the only thing a cursor cannot survive, and it is bumped by every event that makes
+the array stop being a continuation: the arm, a recycle, a repack (both of which drop the GL
+queue and blank the twin), a GL context loss, a palette move, and the overflow restart. A
+consumer that sees a new generation drops its job and starts at index 0. `rlistRepaint` is 1 for
+the palette-move generation alone, where the destination keeps what it holds.
+
+**The bound is a restart, not a bigger buffer.** An append-only list fed for a session's length is
+not bounded by anything; what *is* bounded is "the entries the atlas holds", so reaching the cap
+re-seeds the list from those (a new generation, repaint 0) and the other lane blanks and repaints.
+The arm path and the overflow recovery are **the same function** on purpose — it means the rare
+path is the one exercised on the first frame of every session.
+
+**Arming it frees the read-back's 16 MB**, and the publish is an either/or rather than a claim of
+exclusivity — the lever is a poll that can land on any frame, which is exactly what made the same
+claim wrong on landing 7c. `tagpu_gaf_atlas_mirror_rgb` also refuses while the list is armed, so
+the two can never both be live.
+
+**The restored twin's image now carries `COLOR_ATTACHMENT`** (`mk_image` takes the usage it is
+for, in both passes), and **the restored refusal cannot always be a `return`.** This lane's own
+restore needs the frame's indexed atlas uploaded before it can paint anything, and that upload is
+below the refusal: returning on the frames before the first paint is a **deadlock**, not a
+stand-down — nothing drawn because nothing painted, nothing painted because the atlas never
+arrived. Those frames now run the uploads and stop without claiming the frame.
+
+#### The bug: the parameter tables were staged per FRAME SLOT
+
+`upload_tables` wrote each batch's three per-frame tables — destination rect, source rect, **key
+and wrap** — into a host-mapped region indexed by the frame slot, under a comment that said *"one
+batch is ever in flight, so nothing else writes them in between"*. That is true of the **device**
+and false of the **recording**: a slice can issue more than one batch, which is landing 7c's own
+finding, and both batches' `memcpy` landed on the same address before either
+`vkCmdCopyBufferToImage` had executed. **The first batch's frames were therefore restored through
+the second batch's tables** — wrong source rects, and wrong colour keys.
+
+**The images themselves were already correctly ordered**: the write-after-read barrier in front of
+each batch's copy names the previous batch's shader reads. That is exactly why the bug survived
+7c — reasoning about the *images* finds nothing wrong, and the hole is in the staging buffer.
+
+**What it looked like, which is why a sprite atlas was needed to see it at all.** A frame whose
+key came from another frame's table has no keyed texel where it should have one, so the OUT pass
+writes the key's own palette colour — opaque **(84, 84, 252)** — where the GL twin writes
+`(0, 0, 0, 0)`. Measured on the first run of the sprite oracle, `fx-mix` at 1024×768:
+
+| atlas | frames | entries differing | texels differing | the difference |
+|---|---|---|---|---|
+| `terr` | 5 062 tiles | — | **0** | identical |
+| `feat` | 915 painted | **118 of 1 304** | 68 411 of 4 194 304 (1.63 %) | 13 803 of them opaque key colour against `(0,0,0,0)`; the rest wrong source rects |
+| `fx` | 139 painted | **3 of 167** | 2 891 (0.07 %) | colour deltas to 112, alpha equal |
+
+Every differing texel lay inside an entry's own cell, and 1 186 of 1 304 feature frames were
+byte-identical — the signature of a per-batch parameter swap rather than of a wrong pass.
+
+**The terrain could not have revealed this.** 10 036 tiles of one size with **no colour key at
+all**, so a swapped table costs a source rect and nothing else; and the two runs that measured it
+gave each slice one batch. It took a consumer whose frames have different sizes *and* a key —
+which is the argument for wiring consumers rather than declaring the port done.
+
+The fix is the same shape as 7c's and for the same stated reason: `vkCmdUpdateBuffer` puts each
+batch's tables **in the command stream at the point of its own copy**, with a buffer barrier both
+ways (TRANSFER → TRANSFER, because the previous batch's read of these bytes is a copy and not a
+draw). A bigger arena is still not the fix — batches per slice is a time budget, not a count. The
+staging buffer became device-local and unmapped, like the vertex buffer beside it.
+
+**Re-measured, and with the condition present.** `fx-mix` again: all three atlases byte-identical,
+**62 slices issued more than one batch** on the two sprite jobs while it ran, which is the
+collision exercised rather than avoided. Then `static-terrain`, the fixture landing 7c measured on:
+terrain byte-identical at **46 461 952 bytes**, features and effects identical beside it.
+
+| run | fixture | `terr` | `feat` | `fx` |
+|---|---|---|---|---|
+| 1 | `feat-forest`, wrong arm set | identical | **no atlas at all** | **no atlas at all** |
+| 2 | `fx-mix`, before the fix | identical | 118 of 1 304 frames differ | 3 of 167 differ |
+| 3 | `fx-mix`, after | identical | **identical** | **identical** |
+| 4 | `static-terrain`, after | **identical** (46 MB) | identical | identical |
+
+**And the terrain's clean result in landing 7c is NOT evidence that the tables were fine then.**
+7c's re-measurement was explicitly taken with batches 157 and 158 in one slice, so the table swap
+should have cost batch 157 its cells and the dump was `cmp` clean; why it survived is **not
+established, and was not chased** — the sprite evidence requires the fix on its own terms. What
+this landing did establish is that the condition is **not reproducible run to run**: the same
+fixture that put two batches in a slice for 7c gave terrain **158 batches and zero two-batch
+slices** today, while the sprite jobs hit 62. A clean terrain run is therefore not evidence that
+the hazard is absent; a consumer with heterogeneous frames and a colour key is what makes it
+visible, and that is the argument for wiring consumers rather than declaring the port finished.
+
+#### What else this landing found
+
+* **A bug in its own new code, found by reading the diff before the review.** `rlist_restart`
+  seeded the list from the atlas's entries **bounded by the current allocation**, so an atlas
+  holding more entries than the 256 the arm allocates would have lost the tail of its own list —
+  silently, which on the other lane is cells that stay indexed for ever with nothing in the log.
+  Both the seed and the append now go through one `rlist_room` helper that grows to what is asked
+  for or drops the list and says so.
+* **The arm set is part of the instrument.** The first run of the sprite oracle measured nothing
+  at all: both passes logged `atlas=0` and no restore, because without `native.on=all wrecks` the
+  feature pass never owns the leaf, emits nothing and atlases nothing. `feat.on` alone is not
+  enough to make a feature atlas exist.
+* **The oracle now belongs to the restorer.** The per-job dump moved out of `tagpu_vk_terr.c`
+  into `tagpu_vk_restore.c`, so every consumer gets it for free — which is what the next one
+  would otherwise have copied. Names are uniform: `tagpu_restore_<tag>.rgba` from the GL lane
+  against `tagpu_restore_<tag>_vk.rgba` from this one, and the terrain's GL dump was tagged to
+  match. Re-armed on the **paint count** rather than on a serial, because a lazy queue keeps
+  painting and a dump is owed again whenever the picture has moved.
+
+#### What this does NOT cover
+
+* **The units, which are the fourth consumer and the one with a seam of its own**: the unit
+  atlas's twin is **mipped and trilinear**, and its mirror is the whole chain because GL's own
+  levels are what make the two lanes byte-identical (§2.43's landing and the gate-3a pass before it). A Vulkan restore paints level
+  0 only, so that consumer needs its levels generated on this lane — and a blit chain is this
+  fork guessing at `glGenerateMipmap`'s reduction. That is the next landing's question, not this
+  one's.
+* **The UI atlas** (`tagpu_gui_surf.c`) is a fifth restore consumer and keeps its read-back; it
+  has a `restoreMinEdge` floor and its own arm beat.
+* **The mid-session lever flip** is correct by construction on both halves now and still has not
+  been run.
+* **`repaint` remains unexercised** on this lane, for the reason §2.43 records at length: no
+  fixture has been found that moves the palette once a level is up.
+* **The effects atlas churns during a fight**, and the two lanes' dumps are taken on each lane's
+  own "idle": a scene that is still adding frames can therefore be compared at two different
+  moments. The comparison above was taken after the fight settled, and that is a property of the
+  measurement rather than of the code.
+* One GPU, one model (`full`), one map, one fixture per atlas.
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out

@@ -2788,8 +2788,21 @@ Wiring the consumer found two more ordering holes that the absence of one had hi
 restorer's render passes declared a subpass dependency at all** — the implicit one orders the layout
 transition and nothing else, so FILL, every CONV, OUT and the consumer's own sample were unordered
 against each other — and `dst_ready` transitioned a **repaint's** destination from `UNDEFINED`,
-licensing the driver to discard exactly the atlas the repaint exists to recolour in place. Three of
-the four consumers still take the mirror, and `repaint` is built but unexercised.
+licensing the driver to discard exactly the atlas the repaint exists to recolour in place.
+
+**Then two more consumers, and they found the same bug in its sibling**
+([gpu-status](gpu-status.html) §2.44). Features and effects hand over an **append-only frame list
+with a generation** rather than terrain's whole list per serial, because a GAF atlas is a lazy
+queue and the consumer holds a cursor into it; the list is bounded at four times the atlas's entry
+ceiling and restarts from the entries actually present. Wiring them showed that the restorer's
+**per-frame parameter tables were staged per frame slot** exactly as the vertices had been, so the
+first batch of a two-batch slice was restored through the second batch's rects and **colour keys**:
+118 of 1 304 feature frames and 3 of 167 effects frames, with the key's own palette colour painted
+opaque where the GL twin writes transparent. The terrain could not have shown it — one tile size
+and no colour key — which is the argument for wiring consumers rather than declaring the port done.
+Fixed the same way, and re-measured byte-identical on two fixtures with 62 two-batch slices
+exercised. The units are the one consumer left and they carry their own seam: their twin is mipped,
+and a Vulkan restore paints level 0 only. `repaint` is still unexercised.
 
 **Its landing 1 ran the same day and is the reason the rest is ordered as it is**
 ([gpu-status](gpu-status.html) §2.35): started in the configuration the patch actually ships in

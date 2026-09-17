@@ -769,8 +769,33 @@ Back to the filed list:
    own draw. Wiring the consumer also found the restorer's render passes declaring **no subpass
    dependencies at all** and `dst_ready` discarding a repaint's destination; both are in §2.43.
 
-   **What is not done**: three of the four consumers (features, effects, units) still take the CPU
-   mirror, and `repaint` is built but unexercised.
+   **AND TWO MORE CONSUMERS, WHICH FOUND THE SAME BUG IN ITS SIBLING — 2026-09-17**
+   ([gpu-status](gpu-status.html) §2.44). Features and effects are wired, and what crosses is a
+   different shape from terrain's because the queue is: a GAF atlas is a **lazy queue**
+   (`tagpu_gaf.c:689`'s `restore_enqueue` adds one frame per miss for the life of the atlas), so
+   the hand-over is an **append-only list with a generation** and the consumer holds a **cursor**
+   into it. A frame on which the consumer took nothing costs nothing; a recycle, a repack, a
+   context loss or a palette move arrives as a new generation and rebuilds the job from index 0.
+   The list is bounded at four times the atlas's entry ceiling, and reaching it restarts from the
+   entries the atlas actually holds — the same function the arm uses, so the rare path is the one
+   exercised on every session's first frame.
+
+   **The bug was the parameter tables, staged per FRAME SLOT — landing 7c's own finding one
+   resource over.** `upload_tables` wrote each batch's destination rect, source rect and **key and
+   wrap** into a host-mapped region indexed by the slot, on a comment saying one batch is ever in
+   flight: true of the device, false of the recording. Both batches of a two-batch slice wrote the
+   same address before either copy executed, so the first batch's frames were restored through the
+   second batch's tables. **118 of 1 304 feature frames and 3 of 167 effects frames**, with 13 803
+   texels holding the key's own palette colour opaque where the GL twin writes `(0,0,0,0)` — a
+   frame restored through another frame's key has no keyed texel where it should have one. The
+   terrain could not have shown it: one tile size, no colour key, so a swapped table costs a source
+   rect and nothing else. Fixed the way 7c fixed the vertices, re-measured with the collision
+   exercised (62 two-batch slices), and all three atlases are byte-identical on two fixtures.
+
+   **What is not done**: the UNITS, which are the fourth consumer and carry a seam of their own —
+   their twin is mipped and trilinear, and a Vulkan restore paints level 0 only, so that landing
+   has to answer where the levels come from without guessing at `glGenerateMipmap`'s reduction.
+   The UI atlas is a fifth consumer and keeps its read-back. `repaint` is still unexercised.
 8. **`PK_PIXELS` closed.** `tagpu_gui_hook.c:330`'s op kinds `OP_LINE`, `OP_BAR`, `OP_RECT`,
    `OP_FRAME` and `OP_SCALE` publish through `pub_surface_bytes` at `:1489` — *the engine's
    surface bytes as they stand at the flip*. They become drawn geometry with their own packet
