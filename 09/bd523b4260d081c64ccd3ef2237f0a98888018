@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5 effort=medium-high range=main..09bd523 findings=6 acted=6 rejected=0 date=2026-09-17 fixes=a14e90c docs=a14e90c note=HIGH-stale-handover-could-OVERCOUNT-the-census-and-draw-a-phantom-shadow
