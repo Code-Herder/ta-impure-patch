@@ -115,7 +115,23 @@ static int load_weights(const char* who, const char* model)
             const TAGPU_RLAYER* L = &s_w.layer[l];
             /* every product in 64 bits: a corrupt header must not wrap its way past the bound */
             unsigned long long end = (unsigned long long)L->offset + (unsigned long long)L->kout * L->kstride;
+            /* AND BOTH TERMS OF THE BIND OFFSET ARE ALIGNED, which is a bound on
+               a value read from a FILE and therefore belongs here rather than at
+               the bind site. A conv draw binds the weight block at
+               `(offset + group x kstride) x 16` bytes, and both APIs require that
+               to be a multiple of the device's uniform-buffer offset alignment:
+               GL refuses above 256 in the backend, and the reference setup's
+               Vulkan device reports 64 (16 on llvmpipe). `kstride & 15` below
+               already makes the group term a multiple of 256; `offset & 15` is
+               what makes the base term one, and it was missing.
+               It held anyway for both shipped models -- the exporter lays layers
+               back to back from 0, so every offset is a running sum of
+               `kout x kstride` and therefore a multiple of 16 -- so this closes a
+               hole rather than fixing a fault, and the hole was in the GL path
+               too. [The Vulkan port is what made it concrete; measured through
+               winevulkan 2026-09-17.] */
             if (L->jin == 0 || L->kout == 0 || L->kstride == 0 || (L->kstride & 15) ||
+                (L->offset & 15) ||
                 L->kstride > ntex || L->kout > ntex || end > ntex || L->jin > 64) {
                 rlog_2(who, "weight layer table inconsistent"); fclose(f); return 0;
             }
