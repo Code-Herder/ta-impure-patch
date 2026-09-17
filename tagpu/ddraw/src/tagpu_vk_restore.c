@@ -79,6 +79,12 @@
 #include "tagpu_vk_restore.h"
 #include "tagpu_restore_core.h"
 #include "tagpu_classicpp.h"
+#include "tagpu_gaf.h"      /* tagpu_gaf_mip_off/_chain: the chain LAYOUT is the
+                              contract between the two lanes, so the offsets the
+                              dump copies to are the ones the GL dump writes,
+                              from the one function rather than from two copies
+                              of the arithmetic. tagpu_vk_unit.c includes it for
+                              the same reason. */
 #include "spirv/tagpu_restore_glsl.spv.h"
 
 #define LANE "restorevk"
@@ -2203,14 +2209,22 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
     if (g->dumpState == 1 && slot == g->dumpSlot) {
         FILE* f;
         size_t n = (size_t)g->dumpBytes;
-        _snprintf(name, sizeof name, "tagpu_restore_%s_vk.rgba", g->tag);
+        /* A CHAIN DUMPS AS `.mips`, LEVEL 0 ALONE AS `.rgba`, and the name is
+           what tells them apart -- the GL lane writes exactly the same two
+           names for exactly the same two cases (tagpu_gaf.c's dump_if_armed),
+           so a mipped consumer's pair is one `cmp` of two whole chains rather
+           than of two level-0 images. That is the whole of landing 7e-2's
+           oracle: the levels are the thing this landing claims to reproduce. */
+        _snprintf(name, sizeof name, "tagpu_restore_%s_vk.%s", g->tag,
+                  g->chainN > 0 ? "mips" : "rgba");
         name[sizeof name - 1] = 0;
         f = g->dumpMap ? fopen(name, "wb") : NULL;
         if (f) {
             size_t w = fwrite(g->dumpMap, 1, n, f);
             fclose(f);
-            _snprintf(b, sizeof b, LANE ": %s: restored atlas dumped to %s (%dx%d RGBA,"
-                      " %u bytes, %d frames)%s", g->tag, name, g->dumpW, g->dumpH,
+            _snprintf(b, sizeof b, LANE ": %s: restored atlas dumped to %s (%dx%d RGBA"
+                      "%s, %u bytes, %d frames)%s", g->tag, name, g->dumpW, g->dumpH,
+                      g->chainN > 0 ? " + its mip chain" : "",
                       (unsigned)n, g->dumpPainted, w == n ? "" : " - SHORT WRITE");
         } else {
             _snprintf(b, sizeof b, LANE ": %s: %s would not open - nothing written",
@@ -2239,6 +2253,13 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
 
     g->dumpW = g->dstW; g->dumpH = g->dstH;
     g->dumpBytes = (VkDeviceSize)g->dumpW * (VkDeviceSize)g->dumpH * 4;
+    /* THE WHOLE CHAIN WHEN THERE IS ONE, in the GL lane's own layout: level
+       after level, end to end, which is what `tagpu_gaf_mip_off` describes and
+       what tagpu_gaf.c's `.mips` dump writes. A chain is square by
+       construction (job_chain refuses an odd level), so this is the same
+       arithmetic on both sides. */
+    if (g->chainN > 0)
+        g->dumpBytes = (VkDeviceSize)tagpu_gaf_mip_chain(g->chainDim, g->chainN);
     if (!mk_buffer(d, g->dumpBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                    &g->dumpBuf, &g->dumpMem, &g->dumpMap)) {
@@ -2252,18 +2273,35 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
         return 1;
     }
     {
-        VkBufferImageCopy rg;
+        VkBufferImageCopy rg[1 + TAGPU_VK_MAXMIP];
+        uint32_t nrg = 1;
         VkImageMemoryBarrier mb = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-        memset(&rg, 0, sizeof rg);
-        rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        rg.imageSubresource.layerCount = 1;
-        rg.imageExtent.width = (uint32_t)g->dumpW;
-        rg.imageExtent.height = (uint32_t)g->dumpH;
-        rg.imageExtent.depth = 1;
+        memset(rg, 0, sizeof rg);
+        rg[0].imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        rg[0].imageSubresource.layerCount = 1;
+        rg[0].imageExtent.width = (uint32_t)g->dumpW;
+        rg[0].imageExtent.height = (uint32_t)g->dumpH;
+        rg[0].imageExtent.depth = 1;
+        /* ONE REGION PER LEVEL, at the offset the GL layout gives it. The
+           levels are copied in ONE vkCmdCopyImageToBuffer, so there is no
+           ordering question between them and no second barrier. */
+        for (; g->chainN > 0 && (int)nrg <= g->chainN; nrg++) {
+            int L = (int)nrg, dl = g->chainDim >> L;
+            rg[nrg].bufferOffset = (VkDeviceSize)tagpu_gaf_mip_off(g->chainDim, L);
+            rg[nrg].imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            rg[nrg].imageSubresource.mipLevel = (uint32_t)L;
+            rg[nrg].imageSubresource.layerCount = 1;
+            rg[nrg].imageExtent.width = (uint32_t)dl;
+            rg[nrg].imageExtent.height = (uint32_t)dl;
+            rg[nrg].imageExtent.depth = 1;
+        }
         mb.srcQueueFamilyIndex = mb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         mb.image = g->dstImg;
         mb.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        mb.subresourceRange.levelCount = 1;
+        /* AND THE BARRIER COVERS EVERY LEVEL IT COPIES, not level 0 alone: a
+           transition that names one level leaves the others in whatever layout
+           they were, and the copy would then read them from the wrong one. */
+        mb.subresourceRange.levelCount = (uint32_t)nrg;
         mb.subresourceRange.layerCount = 1;
         /* SHADER_READ_ONLY in and SHADER_READ_ONLY out: the OUT render pass
            leaves the image there and the consumer's own draw expects it there,
@@ -2279,7 +2317,7 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &mb);
         vkCmdCopyImageToBuffer(cb, g->dstImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               g->dumpBuf, 1, &rg);
+                               g->dumpBuf, nrg, rg);
         mb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         mb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         mb.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
