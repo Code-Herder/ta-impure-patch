@@ -7195,6 +7195,161 @@ from the difference image, not traced to a line of arithmetic.
   which is why the non-black count falls from 789 to 380 when the mesh is activated.
 
 
+### 2.39 The UI markers, drawn by Vulkan (`tagpu_vk_mark.c`, `tagpu_mark.c`'s draw list) — landing 5 of the Vulkan-only plan
+
+**MEASURED 2026-09-17.** The last engine-anchored layer in the viewport: health bars, group
+digits, order markers and their `ShowRanges` labels, the build-cursor footprint, the drag band box
+and the captured post-fog layer. §2.34 took the UI's own surface; this is what is drawn *over the
+world* and *under* nothing.
+
+#### It is seven draws, not one, and that is why a draw LIST crosses
+
+Every other ported pass hands over buckets and counts. This one cannot: `tagpu_mark_render` issues
+seven draws in the engine's own order — order triangles, order lines at `ss` line width, order
+labels, the health bars, the group digits, the post-fog layer, then the cursors — each with its
+own `uText`/`uFog`, and the last two with fog forced off because the engine draws them after its
+fog overlay and never darkens them. A consumer that re-derived which buckets were non-empty could
+disagree with the pass that drew them, so `TAGPU_MKHAND` carries `TAGPU_MKDRAW { first, count,
+lines, text, fog, tex }` records built **as the GL draw issues them**, and `mk_push` mirrors the
+VBO byte for byte so every `first` recorded is the one GL used rather than a number re-derived
+from the counts.
+
+Nothing else needed a new mirror: the vertices are `tagpu_mark.c`'s own arrays, the captured layer
+is already `TAGPU_MARKLAYER`'s CPU bytes, the text atlas was crossed in G19d
+(`tagpu_text_atlas(&gen)`), and the palette, fog grid and fog LUT were crossed for §2.30–2.33.
+
+#### The lever it owed, and paid before it was written
+
+Every restored-art A/B on this plan arms `mark.on`, for a reason that has nothing to do with
+markers: `tagpu_rglsl_step` runs from `tagpu_native.c` only when one of `fx|sfx|feat|terr|mark` is
+armed, and `mark` was the only one of the five with no Vulkan pass of its own — so it stepped the
+restorer while leaving exactly one pass drawing, which is what the capture requires. Porting it
+made all five drawing passes and the recipe stops working. `tagpu_rglsl.step` is the replacement:
+`tagpu_rglsl_step_forced()` polls it on a 30-frame cache and steps the restorer while arming no
+pass at all, with a call-count compare so a frame already stepped is not stepped twice.
+
+#### The fixture is the expensive part, and the four earlier runs failed on it
+
+`tagpu_mark_render` returns before it draws anything when every bucket is empty, so the GL half of
+the A/B never reaches the disk and there is nothing to diff. Four automated attempts ended there
+identically. What the pass actually needs is listed in the `ta-drive` skill; the short form is that
+**six of the seven draw kinds each have a separate gate**, and arming `mark.on` opens none of them:
+
+| kind | what makes it non-empty |
+|---|---|
+| health bars | a unit of the watched player on screen, `damagebars` on |
+| group digits | `u->squad` non-zero — `ctrl+<n>` on a selection, nothing else |
+| order lines | `tagpu_order.on` **and** SHIFT physically held (the engine's driver at `0x469BFC` is shift-gated) **and** an order that does not complete — a `patrol`, not a `move` |
+| order triangles | the marching route dots, which the engine draws only at `flag == 1`: the **hovered** unit. Game speed 1, or a slow unit walks out from under the pointer between `tacli roster` and `pmove` |
+| labels | the `ShowRanges` console cheat, typed — `tacli switches` does not reach it |
+| cursors | a **held** drag (`down:lbutton`, move, no release) or a build placement |
+| post-fog layer | `mark.on=nocursor`, the one window in normal play that still fills it |
+
+#### Two defects that the health bars alone could not show
+
+The first A/B on this pass carried `bars=3` and nothing else and measured **0 px**. Extending the
+fixture to six kinds took it to **4 066 px**, and two independent faults came apart behind it.
+
+**The order lines rasterised under the wrong rule.** The pipeline declared
+`VK_DYNAMIC_STATE_LINE_WIDTH` and never chained `VkPipelineRasterizationLineStateCreateInfoEXT`,
+so Vulkan used its default mode where GL's non-antialiased lines follow the diamond-exit rule.
+On 436 segments of route line and range circle that is **4 900 px** the Vulkan lane lit and the GL
+twin did not, with the GL half a near-perfect subset of the Vulkan one. `tagpu_vk_fx.c` has
+carried `VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT` for the same reason since G19e and this pass
+did not copy it. The line pipeline is now built **only** when the device gave us `bresenhamLines`,
+so `prepare`'s refusal is a refusal and not a fallback.
+
+**The text atlas was uploaded every frame and never bound.** The GL twin feeds ONE sampler —
+`uLayer` — from TWO textures, swapping the bind on unit 0 between the captured layer and
+`tagpu_text.c`'s coverage atlas. Vulkan has no per-draw texture bind and this pass had one
+descriptor set, whose binding 40 was always the layer. So every text draw sampled the layer — on a
+frame with no captured layer, the 1×1 `0xFF` stand-in — `texture(uLayer, vUV).r` was 1.0 for every
+fragment, the `< 0.5` discard never fired, and each label and digit came out a **solid filled quad**
+in its vertex colour: **3 891 px**. There are now two descriptor sets per slot, identical but for
+unit 0, and `record` picks one per draw. A draw naming a texture the hand-over did not bring is
+refused outright, because binding 40 falls back to whatever image exists rather than leaving a
+hole — the same bug by a second road.
+
+#### And the frame is upside down — the whole lane, and the A/B could not see it
+
+**[FOUND BY THE OWNER, LOOKING AT THE SCREEN, 2026-09-17.]** With the labels finally drawing, the
+Route D window showed them mirrored top-to-bottom. It is not the text: **every ported pass draws
+the whole frame vertically flipped**, and it has been true since G19e.
+
+**This is not a fact nobody wrote down — §2.28 states it, and states it as correct**: *"Both
+halves of this A/B are upside-down pictures of the world, and that is correct: the GL twin draws
+into the world FBO, whose clip-space +1 is the bottom of the screen (the composite quad turns it
+over). They are upside down identically, which is the only thing the comparison asks."* Every word
+of that is true **of the comparison**. What it does not cover is the lane's own window, and the
+reason it does not is that until this landing the Vulkan lane had no picture a human ever looked
+at: Route D exists to be captured.
+
+The two halves, then:
+
+1. **The lane reproduces the GL world FBO, and there is no composite quad on the Vulkan side.**
+   Every world and marker pass writes `gl_Position.y = p.y/uGame.y*2.0 - 1.0` on the engine's
+   screen-space y, which grows *downward*, so clip +1 is the bottom of the game frame. GL's own
+   composite turns the FBO over on the way to the window, which is why the game looks right.
+   `tagpu_vk_fx.c`'s `vp.y = h; vp.height = -h` makes the Vulkan image match that FBO — and the
+   ported passes draw **straight into the swapchain image**, so nothing ever turns it back. Eight
+   files carry that viewport (`fps`, `fx`, `mark`, `feat`, `unit`, `scaffold`, `gui`, `terr`) and
+   five carry a scissor rect mirrored to match it (`fx_scissor` and its four copies).
+   `tagpu_vk_shadow.c` is the exception and always was: its header says *NO Y FLIP* because the map
+   is an offscreen texture sampled by UV, never presented.
+2. **`tagpu_abshot.c` turns the GL half's rows over**, because `glReadPixels` hands back the
+   bottom row first and a PPM's first row is the top. For **this** framebuffer the bottom row is
+   the game frame's TOP, so the reversal produces an upside-down PPM — which is exactly the pair
+   §2.28 describes, and it is why the two halves line up.
+
+So every A/B on this plan has compared two upside-down pictures. That is a valid comparison **of
+content** — geometry, colour, coverage and ordering were all genuinely checked and those figures
+stand — but two things fall outside it: the lane's presented picture, and any rasterisation rule
+whose answer depends on which way up the viewport is. The 32 px below are the second of those.
+Nothing culls (`VK_CULL_MODE_NONE` in all thirteen ported pipelines), so the winding argument the
+flip is also justified by buys nothing.
+
+**Proven, not inferred, in three steps.** An X capture of the real game window shows the labels
+upright and the group digit *below* its bar; an X capture of the Route D window shows them mirrored
+and the digit *above*. Rebuilding this pass alone with `vp.y = 0; vp.height = +h` put the Route D
+window upright — and broke the A/B to **20 540 px with the non-black counts identical at 10 361 a
+side**, which is a mirror and nothing else. Undoing the capture's row-reversal on that same pair
+gives **0 differing pixels of 786 432**.
+
+That last number is why the flip is filed as its own landing rather than noted: **the 32 px this
+landing measures ARE the flip**, and they are the first thing on this plan that the matched
+upside-down pair could not absorb. A horizontal line whose window
+y is an exact integer — which every order marker's is, because the engine projects them with
+integer arithmetic — floors to one row under GL and to the other under a mirrored viewport, since
+`floor(h − y)` and `h − 1 − floor(y)` agree for every y except an integer. Vertical strokes are
+unaffected (x is not flipped) and area primitives are unaffected (their sample points are at
+half-integers and never on a boundary), which is exactly the pattern the difference image shows.
+
+#### The numbers
+
+Fixture `selbox-facings`, 1024×768, `ss=1`, zoom 1, `mark.on=log order.on=log vk.on=color=0,0,0`,
+three ARMSTUMPs on a patrol with SHIFT held, one hovered, `ctrl+1` assigned and `+showranges` on.
+The captured frame carries bars, route dots, route lines, range circles, nine labels and three
+group digits — verified in the captured image itself, not from the `mark:` counter line, which
+prints every 120 frames and is therefore the fixture's state and not the frame's.
+
+| build | non-black GL | non-black Vulkan | differing of 786 432 |
+|---|---|---|---|
+| bars only (the first fixture) | 297 | 297 | **0** |
+| six kinds, as first built | 10 208 | 15 097 | 5 144 |
+| + Bresenham lines | 10 266 | 14 157 | 4 066 |
+| + the text atlas bound | 10 324 | 10 324 | **32** |
+| + the lane's flip corrected | 10 361 | 10 361 | **0** |
+
+#### Not covered
+
+* **The cursor bucket and the post-fog layer are written and not measured.** Both need a held
+  drag at the moment of capture and they are mutually exclusive by lever (`nocursor` is what fills
+  the layer). Two of the seven draws, and the only two drawn with fog forced off.
+* **One map, one resolution, one GPU, one OS, `ss=1`, zoom 1.** The `ss != 1` line width is
+  *refused* rather than drawn, so it is a bound and not a gap; zoom is untested either way.
+* **The flip above is diagnosed and proven and NOT fixed** — it is nine files and every pass's A/B
+  has to be re-run, which is a landing and not a rider on this one.
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out

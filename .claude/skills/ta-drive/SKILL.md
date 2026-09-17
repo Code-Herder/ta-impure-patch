@@ -1312,6 +1312,44 @@ Three things to know:
   pixel-identical; at 0.25× in the ring the engine's is absent), and `order.on=nolabels` hands
   back the labels.
 
+### Making the marker pass actually DRAW — six levers, one per kind
+
+`mark.on` arms the pass; it opens **none** of the buckets. `tagpu_mark_render` returns before it
+draws anything while every bucket is empty, so a measurement fixture that only arms the pass
+produces no picture and no capture — four automated A/B runs died there before this was written
+down. Each draw kind has its own gate:
+
+| kind | what makes it non-empty |
+|---|---|
+| health bars | a unit of the **watched** player on screen, `damagebars` on. No selection needed |
+| group digits | `u->squad` non-zero — `tacli keys <i> ctrl+1` on a selection, and nothing else does it |
+| order lines | `order.on` **and** SHIFT held **and** an order that does not complete |
+| order triangles | the marching route dots — the engine draws them only for the **hovered** unit |
+| labels | `+showranges`, typed into the chat (above) |
+| cursors | a **held** drag, or a build placement |
+| post-fog layer | `mark.on=nocursor` — the only window in normal play that still fills it |
+
+Four of those are worth spelling out because each cost a run:
+
+- **SHIFT must be physically held, not tapped.** The engine's order driver at `0x469BFC` is
+  shift-gated, so the markers exist only while the key is down. `tacli keys <i> down:shift` holds
+  it across frames; `up:shift` releases. A bare `shift` token is a 150 ms tap and will not survive
+  to the capture.
+- **A `move` order completes and takes its markers with it. Use `patrol`** — it never finishes, so
+  the order node stays for the whole session.
+- **The route dots need `flag == 1`, which means the HOVERED unit** (or the tracked one, or the
+  camera's). Park the pointer on a unit with `pmove:x,y` from a fresh `tacli roster`. A unit under
+  orders walks out from under the pointer between the two commands, so **drop the game speed
+  first**: nine `tacli keys <i> minus` puts it at speed 1, where the gap does not matter.
+- **The band box is a held drag**: `pmove:x0,y0`, `down:lbutton`, `pmove:x1,y1`, capture, then
+  `up:lbutton`. Releasing before the capture leaves `s_ncurs` empty. The drag also takes the
+  pointer off the unit, so the cursor bucket and the route dots cannot be in the same frame.
+
+A band-box drag is also the reliable way to **select** several units for the bars and the digit:
+`0 sel` in the `native:` log line is our own selection-box count and is 0 whenever `native.on` is
+not armed, so it is not the signal. Ask the engine instead — `tacli order <i> move pos X Y --sel`
+reports `N issued`, and N is the selection.
+
 **Zoom has two levers, and the file wins.**
 
 **`tagpu_zoom.txt` in the gamedir** — a bare float 0.25–8.0, re-read every frame; write it

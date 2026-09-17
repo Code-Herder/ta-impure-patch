@@ -307,7 +307,7 @@ nothing"*, which is the right question for a port of something already verified 
 for a pass being ported for the first time: it would compare a new Vulkan pass against a previous
 build that did not draw it.
 
-**So the order is 5, 6, 7, then 4, then 8-11** — the exit conditions are untouched and no landing
+**So the order is 5, 5b, 6, 7, then 4, then 8-11** — the exit conditions are untouched and no landing
 changes shape; what moves is which of them runs first. 8, 9 and 10 are unaffected either way
 because their oracle is `strict`, which diffs against the engine's own surface and never needed
 the GL twin. Doing 4 first would have cost the instrument three landings still need, and the cost
@@ -359,27 +359,66 @@ would not have shown up as a failure — it would have shown up as three landing
    in 3b: a consumer that re-derives which buckets are non-empty can disagree with the pass that
    drew them.
 
-   **BUILT 2026-09-17 AND NOT YET MEASURED — the blocker is the FIXTURE, not the port.** All of
-   landing 5 is written and builds: the lever, the hand-over, `tagpu_vk_mark.c`, both A/B halves
-   and the seam. What has not been found is a fixture in which the GL mark pass DRAWS ANYTHING.
-   Four runs, every one ending the same way: `tagpu_mark_render` reaches its own guard —
-   `if (!have[POSTFOG] && s_nbar == 0 && s_ncurs == 0 && s_nordt == 0 && s_nordl == 0 &&
-   s_nordx == 0) return;` — so the GL half of the A/B never reaches the disk and there is nothing
-   to diff. Tried: `mark.on` alone and with `native.on=all wrecks`; `selbox-facings` and
-   `bar-wobble` (whose description says its ARMCOM is SELECTED). The pass logs
-   `ARMED (log=1 passive=0 ... patched=1)` every time, so it is armed and owns the draw; the
-   gather produces nothing.
+   **MEASURED 2026-09-17, and the blocker was the FIXTURE exactly as this entry predicted.**
+   `tagpu_mark_render` returns before it draws when every bucket is empty, so the GL half never
+   reaches the disk. Four automated runs ended there. What it needed was not one lever but SIX,
+   one per draw kind, and none of them is `mark.on`: a unit of the watched player for the bars;
+   `ctrl+<n>` for the group digit (`u->squad` non-zero is the whole gate); `order.on` **plus**
+   SHIFT physically held **plus** an order that does not complete — a `patrol`, not a `move` —
+   for the order lines; the HOVERED unit at game speed 1 for the marching route dots, which the
+   engine draws only at `flag == 1`; the typed `+showranges` cheat for the labels; and a HELD
+   drag for the cursors. The recipe is in the `ta-drive` skill and the table is in
+   [gpu-status](gpu-status.html) §2.39.
 
-   Ruled out by reading rather than by running: there is no early `return` in `tagpu_native.c`
-   between the gather at :3295 and the render at :4314, and `tagpu_mark_gather`'s only guard is
-   `if (!pk || !pk->in_game) return 0;` — so the pass IS reached and IS in game.
+   **The first A/B was a health bar and nothing else, and measured 0 px.** Extending the fixture
+   to six of the seven kinds took it to 4 066 px and two real defects came apart: a line pipeline
+   that never chained `VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT`, worth **4 900 px** on 436
+   segments of route line and range circle; and a text atlas uploaded every frame and **never
+   bound**, so every label and digit sampled the layer binding's 1x1 stand-in, never discarded,
+   and came out a solid filled quad — **3 891 px**. Fixed, the pass measures **32 px of 786 432**
+   with the non-black counts equal at 10 324 a side, and those 32 px are landing 5b's flip.
 
-   **What it probably needs is a live SELECTION**, which `scenario load --restart` may not leave
-   behind even when the scenario asks for one — the next session should drive a band-box drag or
-   a unit click with `tacli` input and watch for the `mark: bars=N cursor=N ...` line, which is
-   printed from the far side of that guard and is therefore the direct signal. Until that line
-   appears the A/B cannot be taken, and **landing 5 does not land**: a landing whose claim was
-   never run does not meet the bar, and the code being finished is not the same thing.
+   **Not covered**: the cursor bucket and the post-fog layer are written and not measured — both
+   need a held drag at the instant of capture and they are mutually exclusive by lever. `ss != 1`
+   is refused rather than drawn, so it is a bound; zoom is untested either way.
+#### Landing 5b — THE LANE'S FRAME IS UPSIDE DOWN, and no A/B on this plan could see it
+
+[FOUND BY THE OWNER, LOOKING AT THE ROUTE D WINDOW, 2026-09-17.] Filed here, between 5 and 6,
+because 6 and 7 are the last two landings that get the GL twin as an oracle and there is no
+sense measuring them through an instrument that is wrong.
+
+**It is not an undocumented fact — it is a documented decision whose blind spot nobody had
+reason to look into.** [gpu-status](gpu-status.html) §2.28 says in as many words that *both
+halves of the A/B are upside-down pictures of the world, and that is correct*: the GL twin
+draws into the world FBO, whose clip +1 is the bottom of the screen, and GL's composite quad
+turns it over on the way to the window. `tagpu_vk_fx.c`'s `vp.y = h; vp.height = -h` makes the
+Vulkan image match that FBO, and `tagpu_abshot.c` turns the GL rows over so the two line up.
+The comparison is honest. What it never covered is that **the ported passes draw straight into
+the swapchain image and there is no composite quad on the Vulkan side**, so the lane's own
+window shows the FBO orientation — upside down. That went unnoticed because until landing 5 the
+Vulkan lane had no picture a human ever looked at.
+
+**What this does and does not invalidate.** Geometry, colour, coverage and draw ordering were
+all genuinely compared and every published figure stands as a CONTENT comparison. Two things
+fall outside it: the lane's presented picture, and any rasterisation rule whose answer depends
+on which way up the viewport is — landing 5's 32 px are the first of the second kind to appear.
+
+**The work**: eight viewport sites (`fps`, `fx`, `mark`, `feat`, `unit`, `scaffold`, `gui`,
+`terr`) to a positive height; five scissor rects that are deliberately mirrored to compensate
+(`fx_scissor` and its four copies) to the unmirrored rect; `tagpu_abshot.c`'s row order; and
+`tagpu_vk_feat.c` item 3, `tagpu_vk_fx.c` items 5 and 6 and §2.28's prose, which are
+correct about the FBO they describe and have to be restated once the lane presents upright. `tagpu_vk_shadow.c` is untouched and always was right — its map is an
+offscreen texture sampled by UV and its header already says NO Y FLIP. Nothing culls
+(`VK_CULL_MODE_NONE` in all thirteen ported pipelines), so the winding argument the flip was
+justified by buys nothing.
+
+**Exit condition**: the Route D window is upright for every armed pass, AND every A/B on this
+plan is re-run and agrees with the figure already published. Landing 5's own pair is the
+worked example and is already measured both ways: 32 px through today's instrument,
+**0 px of 786 432** once both errors are corrected.
+
+Back to the filed list:
+
 6. **The build ghost and the `otherDraws` stand-down** (`tagpu_vk_unit.c:1316`). Not reached
    today — the unit pass refuses on the atlas mirror several checks earlier — so its cost is
    still unknown.

@@ -2654,6 +2654,46 @@ a pixel an edge passes through, it is 0.031 % of drawn pixels, and it has been i
 G19e because every A/B on this plan was taken on a four-unit fixture. Characterised, not traced;
 it needs its own landing.
 
+**Then the order of the plan itself was wrong, and the code said so rather than taste.** Landing 4
+deletes Route D; landings 5, 6 and 7 all need the GL twin as their oracle, and a same-frame
+GL-vs-Vulkan A/B is only expressible while Route D's window supplies the swapchain the lane renders
+into. So the running order is **5, 6, 7, then 4, then 8–11** — no exit condition moved and no
+landing changed shape; what moved is which of them runs first.
+
+**Landing 5 is the UI markers** ([gpu-status](gpu-status.html) §2.39): health bars, group digits,
+order markers and their `ShowRanges` labels, the cursors and the captured post-fog layer. It is the
+first pass on this plan that needed no new mirror — every input was already CPU-side — and the
+first that had to hand over a **draw list** rather than buckets and counts, because it is seven
+draws with different `uText`/`uFog` and a consumer that re-derived them could disagree with the
+pass that drew them. It also paid for the lever it broke before it broke it: `mark.on` was the only
+one of the five passes that step the Classic++ restorer with no Vulkan pass of its own, so
+`tagpu_rglsl.step` now steps it while arming nothing.
+
+**Its first A/B was a health bar and nothing else, and measured 0 px.** Extending the fixture to
+six of the seven draw kinds — which takes a patrol order, SHIFT held, a hovered unit, `ctrl+1` and
+the typed `+showranges` cheat, each gating a different bucket — took it to **4 066 px** and two
+real defects came apart behind it: a line pipeline that never chained `BRESENHAM`, so 4 900 px of
+route line and range circle rasterised under Vulkan's default rule instead of GL's diamond-exit
+one; and a text atlas that was uploaded every frame and **never bound**, so every label and digit
+sampled the layer binding's 1×1 stand-in, never discarded, and came out a solid filled quad —
+3 891 px. Fixed, the pass measures **32 px of 786 432** with the non-black counts equal at 10 324
+a side.
+
+**And then the owner looked at the window and found what no A/B on this plan could see: the whole
+Vulkan frame is upside down.** Not an undocumented fact — [gpu-status](gpu-status.html) §2.28 says
+plainly that both halves of the A/B are upside-down pictures of the world and that this is correct,
+because the GL twin draws into a world FBO whose clip +1 is the bottom of the screen and GL's
+composite quad turns it over. The lane's viewport makes the Vulkan image match that FBO. What the
+decision never covered is that the ported passes draw **straight into the swapchain image** and
+there is no composite quad on the Vulkan side, so Route D presents the FBO orientation — and until
+landing 5 the lane had no picture a human ever looked at. Proven three ways, including rebuilding
+one pass without the flip: the
+Route D window comes out upright, the A/B breaks to 20 540 px with the non-black counts *identical*,
+and undoing the capture's row-reversal on that pair gives **0 differing pixels**. The 32 px above
+are the flip too — a horizontal line on an exact pixel boundary floors the other way under a
+mirrored viewport. Every figure already published on this plan stands as a **content** comparison;
+the flip is nine files and its own landing, filed in the plan.
+
 **Its landing 1 ran the same day and is the reason the rest is ordered as it is**
 ([gpu-status](gpu-status.html) §2.35): started in the configuration the patch actually ships in
 — `--defaults`, `ss=2`, Classic++ on — the Vulkan lane draws **the UI and nothing else**, 630 589
