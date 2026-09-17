@@ -111,7 +111,7 @@ static void rgb_mirror_zeroed(TAGPU_GAFATLAS* a)
        is deliberately never freed (tagpu_gaf.h), so a lane that re-arms later
        finds it already correct -- and it can only do that if the zeroing
        happened when the twin was zeroed, not when someone next looked. */
-    memset(a->mirrorRgb, 0, tagpu_gaf_mip_chain(a->dim, a->mip));
+    memset(a->mirrorRgb, 0, tagpu_gaf_mip_chain(a->mirrorRgbDim, a->mirrorRgbMip));
     /* the ROWS are kept: they are the high-water mark of what a consumer has
        been handed, and it has to be handed the zeros over exactly those */
     a->mirrorRgbSerial++;
@@ -393,6 +393,7 @@ int tagpu_gaf_atlas_mirror_rgb(TAGPU_GAFATLAS* a)
         glog(b);
         return 0;
     }
+    a->mirrorRgbDim = a->dim; a->mirrorRgbMip = a->mip;
     a->mirrorRgb = (unsigned char*)calloc(tagpu_gaf_mip_chain(a->dim, a->mip), 1);
     if (!a->mirrorRgb) {
         a->mirrorRgbFailed = 1;
@@ -535,13 +536,22 @@ void tagpu_gaf_atlas_mirror_rgb_step(TAGPU_GAFATLAS* a)
     unsigned st = 0;
     int rows, painted;
     if (!a || !a->mirrorRgb) return;
+    /* AND THE BUFFER STILL HAS TO BE THIS ATLAS'S SHAPE. It is never freed, so
+       a `mip` that moved under it (the demote on a GL with no glGenerateMipmap,
+       against the owner's re-init on a context reset) would have this read-back
+       write levels the allocation has no room for. Refused for the frame and
+       NOT latched: the demote is re-applied at the top of the next restore, so
+       the window closes on its own and a latch would cost the mirror for ever
+       over a frame. [The gate-3a verification pass named the pair; the chain is
+       this landing's, so this hazard is too.] */
+    if (a->dim != a->mirrorRgbDim || a->mip != a->mirrorRgbMip) return;
     if (!a->rgb || !a->job) {
         /* the twin is gone (a re-arm, or a context loss before the re-create).
            Say so rather than leaving the last twin's colours standing: a
            consumer that kept them would restore art the GL lane no longer
            does. The `rgbGen` bump on the re-create brings the next step in. */
         if (a->mirrorRgbRows) {
-            memset(a->mirrorRgb, 0, tagpu_gaf_mip_chain(a->dim, a->mip));
+            memset(a->mirrorRgb, 0, tagpu_gaf_mip_chain(a->mirrorRgbDim, a->mirrorRgbMip));
             a->mirrorRgbRows = 0;
             a->mirrorRgbSerial++;
         }
@@ -588,10 +598,14 @@ void tagpu_gaf_atlas_mirror_rgb_step(TAGPU_GAFATLAS* a)
            per level, and a level read short is a level whose tail keeps the
            previous twin's colours. They are also written by glGenerateMipmap
            in one go, so there is no partial state to track.
-           A LEVEL THAT FAILS IS NOT FATAL: the chain is only as deep as the
-           levels that came back, and `mirrorRgbMips` says how deep, so a
-           consumer builds an image with what exists rather than one with holes
-           in it. */
+           A LEVEL THAT FAILS COSTS THE WHOLE MIRROR, and the first draft of
+           this comment said the opposite -- that the chain is only as deep as
+           the levels that came back and a consumer builds the shallower image.
+           It cannot: GL still filters this twin to its own MAX_LEVEL, so a
+           shallower chain on the other side is a different picture wherever
+           the art is minified. `mirrorRgbMips` still records how deep the read
+           got, and `tagpu_render3do.c`'s accessor turns anything short of
+           `mip` into NO MIRROR. [Corrected by the gate-3a re-review.] */
         int L;
         a->mirrorRgbMips = 0;
         for (L = 1; L <= a->mip; L++) {
@@ -660,7 +674,7 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
     a->mirrorRgbFbo = 0;
     a->mirroredPainted = 0; a->mirroredRgbGen = 0;
     if (a->mirrorRgb) {
-        memset(a->mirrorRgb, 0, tagpu_gaf_mip_chain(a->dim, a->mip));
+        memset(a->mirrorRgb, 0, tagpu_gaf_mip_chain(a->mirrorRgbDim, a->mirrorRgbMip));
         a->mirrorRgbRows = 0;
         a->mirrorRgbSerial++;
     }

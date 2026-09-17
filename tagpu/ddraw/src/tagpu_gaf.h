@@ -190,6 +190,18 @@ typedef struct TAGPU_GAFATLAS {
        `mirrorRgbSerial` is what a backend holding a copy tests, exactly as for
        the indexed mirror. */
     unsigned char* mirrorRgb;
+    /* THE SHAPE THE BUFFER WAS ALLOCATED WITH, and it is not `dim`/`mip` read
+       again later. This mirror is deliberately never freed, so it outlives
+       every change to the atlas it mirrors -- and `mip` DOES change: the twin
+       is demoted to 0 on a GL with no glGenerateMipmap, and the owner's own
+       init raises it back to its compile-time value on the next context reset.
+       Sizing a memset or a read-back off the CURRENT pair can therefore write
+       a 21 MB chain into a 16 MB allocation. Every write to this buffer is
+       bounded by the pair below instead. [Gate 3a; the mip chain is what made
+       this expressible at all -- before it, every one of those sites was the
+       same constant `dim * dim * 4`.] */
+    int            mirrorRgbDim;
+    int            mirrorRgbMip;
     int            mirrorRgbMips;   /* top level index read back; 0 = level 0 alone */
     float          rgbAniso;        /* anisotropy actually applied to the twin, 0 = none */
     unsigned      mirrorRgbSerial;

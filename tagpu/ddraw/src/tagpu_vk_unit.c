@@ -242,11 +242,19 @@ static int            s_atHave;
    Classic++ off never pays the 16 MB. Lazy is safe here precisely because the
    extent does not depend on the frame that triggers it.
 
-   THE SERIAL ALONE DECIDES WHETHER TO UPLOAD. `s_arReq` is the rows LAST SENT
-   and is read for one thing only: spotting a mirror that SHRANK, which needs
-   the whole square re-sent. It is never compared against the published rows to
-   decide whether to send -- that comparison is gate 2's finding 2, where the
-   two could never be equal and 16 MB went up every frame for ever. */
+   THE SERIAL ALONE DECIDES WHETHER TO UPLOAD. `s_arReq` is THE ROWS THE MIRROR
+   COVERED at the last upload, NOT the rows sent, and it is read for one thing
+   only: spotting a mirror that SHRANK, which needs the whole square re-sent
+   because the rows above the new mark still hold the previous twin's colours.
+   It is never compared against the published rows to decide WHETHER to send --
+   that comparison is gate 2's finding 2, where the two could never be equal and
+   16 MB went up every frame for ever.
+   This comment said "the rows LAST SENT" while claiming that discipline, and
+   the code did what the comment said: the whole-square rule forces the first
+   send to the full height, so the count latched there and every later frame
+   compared as a shrink. Same 16 MB, one atlas down, reached from the other
+   side. [The gate-3a re-review's finding 2; `tagpu_vk_feat.c`'s own
+   declaration carries the wording this one should have had.] */
 static VkImage        s_arImg;
 static VkDeviceMemory s_arMem;
 static VkImageView    s_arView;
@@ -438,14 +446,28 @@ static int mk_image(const TAGPU_VKPASS* d, int w, int h, int mips, VkFormat fmt,
     ii.usage = use;
     ii.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    if (vkCreateImage(d->dev, &ii, NULL, img) != VK_SUCCESS) return 0;
+    /* ON FAILURE, ALL THREE OUT-PARAMS ARE NULL, from every exit. The three
+       early returns used to leave the view -- and two of them the memory -- as
+       the caller found it, so the guarantee held only at the call sites that
+       happen to `kill_image` first. A guarantee that is a property of the
+       CALLER is the kind that a new call site does not inherit. */
+    if (vkCreateImage(d->dev, &ii, NULL, img) != VK_SUCCESS) {
+        *img = VK_NULL_HANDLE; *mem = VK_NULL_HANDLE; *view = VK_NULL_HANDLE;
+        return 0;
+    }
     vkGetImageMemoryRequirements(d->dev, *img, &mr);
     mt = mem_type(d, mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    if (mt < 0) { vkDestroyImage(d->dev, *img, NULL); *img = VK_NULL_HANDLE; return 0; }
+    if (mt < 0) {
+        vkDestroyImage(d->dev, *img, NULL);
+        *img = VK_NULL_HANDLE; *mem = VK_NULL_HANDLE; *view = VK_NULL_HANDLE;
+        return 0;
+    }
     ai.allocationSize = mr.size;
     ai.memoryTypeIndex = (uint32_t)mt;
     if (vkAllocateMemory(d->dev, &ai, NULL, mem) != VK_SUCCESS) {
-        vkDestroyImage(d->dev, *img, NULL); *img = VK_NULL_HANDLE; return 0;
+        vkDestroyImage(d->dev, *img, NULL);
+        *img = VK_NULL_HANDLE; *mem = VK_NULL_HANDLE; *view = VK_NULL_HANDLE;
+        return 0;
     }
     if (vkBindImageMemory(d->dev, *img, *mem, 0) != VK_SUCCESS) goto bad;
     vi.image = *img;
@@ -461,8 +483,8 @@ bad:
     /* AND THE VIEW, which this label used to leave as the caller found it.
        vkCreateImageView's out-param is undefined on failure, every caller's
        `kill_image` destroys `*view` on the strength of it being non-NULL, and
-       four of the seven call sites here hand it an out-param that has held a
-       live handle earlier in the session. Nulling it here closes all seven at
+       three of the EIGHT call sites here hand it an out-param that has held a
+       live handle earlier in the session. Nulling it here closes all eight at
        once; `atlas_rgb_build` carried a second `kill_image` to close one.
        [The gate-3a re-review's finding 3.] */
     *img = VK_NULL_HANDLE; *mem = VK_NULL_HANDLE; *view = VK_NULL_HANDLE;
@@ -1078,9 +1100,10 @@ static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int mips)
     if (!mk_image(d, dim, dim, mips + 1, VK_FORMAT_R8G8B8A8_UNORM,
                   VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                   VK_IMAGE_ASPECT_COLOR_BIT, &s_arImg, &s_arMem, &s_arView))
-        /* every out-param is NULL on this path -- `mk_image`'s own `bad:`
-           label, which the re-review corrected; this used to need a second
-           `kill_image` here to null the view it left behind. */
+        /* every out-param is NULL on this path, from EVERY exit of `mk_image`
+           and not merely because a `kill_image` ran before this call -- see its
+           contract. This used to need a second `kill_image` here to null the
+           view the failure label left behind. */
         return 0;
     s_arDim = dim; s_arMips = mips;
     return 1;

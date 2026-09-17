@@ -550,11 +550,18 @@ const unsigned char* tagpu_r3d_atlas_mirror_rgb(int* dim, int* rows, int* mips,
        same `*mips`, and the consumer's own dimension-and-depth test becomes
        the assertion it is written as. The consumer already draws nothing on a
        frame with no mirror, which is the right answer to a chain we cannot
-       reproduce. [The gate-3a re-review's finding 4.] */
-    if (s_atlas.mirrorRgbMips != s_atlas.mip) {
-        if (rows) *rows = 0;
-        return NULL;
-    }
+       reproduce. [The gate-3a re-review's finding 4.]
+       `mip` IS NOT LITERALLY IMMUTABLE, and the first draft of this argument
+       said it was. `r3d_init` reassigns it on every GL context reset and
+       `tagpu_gaf_atlas_restore` demotes it to 0 on a GL with no
+       glGenerateMipmap. The argument survives on ORDERING rather than on the
+       constant: both writes land strictly before any publish carrying rows,
+       because the restore runs at the top of the frame and the twin cannot
+       exist before the demote. Naming the real invariant matters -- the
+       verification pass found the false one, and the same pair is what
+       `tagpu_gaf.c` now bounds its mirror writes against. */
+    if (s_atlas.mirrorRgbMips != s_atlas.mip)
+        return NULL;                 /* every out-param was zeroed on entry */
     if (dim) *dim = s_atlas.dim;
     if (rows) *rows = s_atlas.mirrorRgbRows;
     if (mips) *mips = s_atlas.mirrorRgbMips;
