@@ -113,6 +113,20 @@ typedef struct {
 static HMesh s_mesh[MAXMESH];
 static GLuint s_white = 0;     /* 1x1 opaque white, for untextured materials */
 
+/* THE CPU VERTEX COPY, KEPT FOR THE VULKAN LANE (the Vulkan-only plan's gate
+   3b). The upload frees `m->v` the moment the VBO has it, which is right while
+   GL is the only consumer and wrong the moment a second lane needs the same
+   triangles: a Vulkan pass cannot read a GL buffer, so the caster meshes have
+   to cross the seam as bytes exactly as the restored atlases do. Off unless a
+   lane asks, because it is MAXMESH models' worth of vertices for a session
+   that may never arm Vulkan at all.
+   ASKING LATE IS THE CASE THAT NEEDS THE WORK. The lever can appear after the
+   models are already uploaded and freed, so the ask forces every loaded mesh
+   to re-read from its file rather than quietly answering NULL for the rest of
+   the session -- `mtime` zeroed is this file's own idiom for that, and the
+   RECHECK cadence picks it up within half a second. */
+static int s_keepVerts = 0;
+
 /* Every def name the gather has handed us, with or without a replacement.
    This is deliberately NOT the mesh table. A type with no .glb must not
    consume one of the MAXMESH payload slots — the gather asks about every
@@ -1362,6 +1376,55 @@ int tagpu_hires_group(const void* mesh, int i, TAGPU_HGROUP* out)
     return out->count > 0;
 }
 
+/* ARM THE RETENTION. Idempotent, and a no-op on every call after the first --
+   the work is only on the 0 -> 1 edge, where meshes already uploaded have had
+   their copy freed and must be re-read. It does NOT free anything on its own:
+   there is no disarm, because a lane that stopped asking this frame may ask
+   again next frame and re-reading megabytes on a lever's edge is worse than
+   holding MAXMESH models' vertices for the session. */
+void tagpu_hires_verts_want(void)
+{
+    int i, reread = 0;
+    char b[128];
+    if (s_keepVerts) return;
+    s_keepVerts = 1;
+    for (i = 0; i < MAXMESH; i++) {
+        HMesh* m = &s_mesh[i];
+        if (!m->name[0] || m->v) continue;
+        /* uploaded and freed before the ask: re-read it from the file. The GL
+           names are left alone -- the reload rebuilds them, and dropping them
+           here would blank the GL lane for a frame to serve the other one. */
+        memset(&m->mtime, 0, sizeof m->mtime);
+        reread++;
+    }
+    if (reread)
+        for (i = 0; i < s_nname; i++) s_name[i].ever = 0;
+    _snprintf(b, sizeof b, "hires: keeping the CPU vertex copy for a second lane"
+              " - %d model(s) re-read from file", reread);
+    b[sizeof b - 1] = 0;
+    hlog(b);
+}
+
+/* THE TRIANGLES, AS BYTES. NULL until the retention is armed AND the mesh has
+   been loaded since -- never a pointer into a GL object, and never one that
+   outlives a reload: `gen` moves on every load, so a consumer that cached
+   anything keyed on it knows. The layout is this file's own `HVSTRIDE`
+   (px,py,pz, nx,ny,nz, u,v, piece) and the vertex count is `ntri * 3`, which
+   is what `TAGPU_HGROUP`'s `first` and `count` are already expressed in. */
+const float* tagpu_hires_verts(const void* mesh, int* ntri, int* stride,
+                               unsigned* gen)
+{
+    const HMesh* m = (const HMesh*)mesh;
+    if (ntri) *ntri = 0;
+    if (stride) *stride = 0;
+    if (gen) *gen = 0;
+    if (!m || !m->v || m->ntri <= 0) return NULL;
+    if (ntri) *ntri = m->ntri;
+    if (stride) *stride = HVSTRIDE;
+    if (gen) *gen = m->gen;
+    return m->v;
+}
+
 unsigned int tagpu_hires_vao(const void* mesh)
 {
     HMesh* m = (HMesh*)mesh;
@@ -1391,9 +1454,13 @@ unsigned int tagpu_hires_vao(const void* mesh)
         if (h->albedo >= 0) upload_img(&m->img[h->albedo], h->magf, h->minf);
         if (h->normal >= 0) upload_img(&m->img[h->normal], 0, 0);
     }
-    /* the vertex data is the GPU's now, and the pixels went with the textures */
-    free(m->v);
-    m->v = NULL;
+    /* the vertex data is the GPU's now, and the pixels went with the textures
+       -- UNLESS a second lane needs the same triangles, in which case the GPU
+       has a copy and the copy above stays ours (gate 3b, `s_keepVerts`). */
+    if (!s_keepVerts) {
+        free(m->v);
+        m->v = NULL;
+    }
     m->uploaded = 1;
     return m->vao;
 }
@@ -1407,7 +1474,8 @@ void tagpu_hires_glreset(void)
         for (k = 0; k < MAXIMG; k++) m->img[k].tex = 0;
         m->vao = m->vbo = 0;
         /* the buffers those names stood for are gone with the context, and the
-           CPU copies were freed at upload — reload from the file instead */
+           CPU copy is freed at upload unless a lane asked to keep it — reload
+           from the file either way, which also re-reads it for the lane */
         mesh_free(m);
         m->valid = 0;
         memset(&m->mtime, 0, sizeof m->mtime);

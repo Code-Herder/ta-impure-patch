@@ -37,5 +37,17 @@ int          tagpu_hires_group(const void* mesh, int i, TAGPU_HGROUP* out);
 /* the mesh's VAO, uploading vertex buffer and textures on the first call —
    CALL ONLY WITH A CURRENT GL CONTEXT. 0 if there is nothing to draw. */
 unsigned int tagpu_hires_vao(const void* mesh);
+/* THE CPU VERTEX COPY, for a lane that cannot read a GL buffer (the
+   Vulkan-only plan's gate 3b). `_want` arms the retention -- idempotent, and
+   on its first call it forces every already-uploaded mesh to re-read from its
+   file, because the upload frees the copy when nobody has asked for it.
+   `_verts` then answers the triangles: `HVSTRIDE` floats a vertex
+   (px,py,pz, nx,ny,nz, u,v, piece), `*ntri * 3` vertices, in the units
+   `TAGPU_HGROUP`'s `first`/`count` already speak. NULL until both are true.
+   `*gen` moves on every load, so a cache keyed on it knows the triangles
+   changed under it. */
+void         tagpu_hires_verts_want(void);
+const float* tagpu_hires_verts(const void* mesh, int* ntri, int* stride,
+                               unsigned* gen);
 void         tagpu_hires_glreset(void);
 #endif
