@@ -104,6 +104,7 @@
 #include "tagpu_order.h"
 #include "tagpu_text.h"
 #include "tagpu_glsl.h"
+#include "tagpu_pal.h"    /* tagpu_pal_live/serial, for the hand-over */
 #include "tagpu_packet.h"   /* the frame packet: the view, the tables (landing 3) */
 
 /* ---- what the marker block reads, and where it comes from ----------------
@@ -1139,6 +1140,12 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
         }
         s_mkPub.text = tagpu_text_atlas(&s_mkPub.textGen);
         tagpu_text_dims(&s_mkPub.textW, &s_mkPub.textH);
+        /* the three the GL draw binds as textures, as bytes -- same shapes
+           tagpu_fx.h uses for the same three */
+        s_mkPub.pal = tagpu_pal_live(); s_mkPub.palSerial = tagpu_pal_serial();
+        s_mkPub.fogGrid = (v->fogMode & 1) ? v->fogGrid : NULL;
+        s_mkPub.fogGridCols = v->fogCols; s_mkPub.fogGridRows = v->fogRows;
+        s_mkPub.fogLut = tagpu_native_foglut();
         s_mkPub.key = tagpu_markown_key();
         s_mkPub.gw = (float)v->gw; s_mkPub.gh = (float)v->gh;
         s_mkPub.zoom = v->zoom > 0.0f ? v->zoom : 1.0f;
