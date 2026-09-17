@@ -353,27 +353,46 @@ int tagpu_rcore_job_add(TAGPU_RSCHED* s, TAGPU_RCORE* j,
 
 /* take the next batch off the queue: the head's size class, up to the grid
    that class allows, in queue order; the rest close up behind */
+/* 1 = a batch is in flight, 0 = the job just failed, -1 = the backend needs a
+   slice to settle and the queue is UNTOUCHED.
+
+   IT CHOOSES, THEN SECURES THE SCRATCH, THEN COMMITS -- in that order, and the
+   order is the point. The queue compaction is destructive, so calling
+   `act_ensure` after it would leave a -1 with the batch already taken out of a
+   queue it has to go back into. Two passes over the queue with the same
+   predicate pick the same frames, so the batch is identical to the one the
+   single destructive pass produced; what changes is only that nothing is
+   committed until the scratch exists. */
 static int form_batch(TAGPU_RSCHED* s, TAGPU_RCORE* j)
 {
-    int cls, cols, cap, i, k = 0, S = 0;
+    int cls, cols, cap, i, k = 0, S = 0, taken = 0, ok;
     if (j->qn == 0) return 0;
     cls = j->q[0].cls;
     cols = TAGPU_R_ACTMAX / s_classes[cls]; if (cols > TAGPU_R_SLOTCOLS) cols = TAGPU_R_SLOTCOLS;
     cap = cols * cols;
+    /* choose */
     j->bn = 0;
     for (i = 0; i < j->qn; i++) {
         if (j->q[i].cls == cls && j->bn < cap) {
             j->bf[j->bn++] = j->q[i];
             if (j->q[i].S > S) S = j->q[i].S;
-        } else j->q[k++] = j->q[i];
+        }
     }
-    j->qn = k;
     /* the grid is the smallest square that holds the batch: the passes cost
        by the fragment, and a queue's two-frame batch must not pay for 64 */
     for (cols = 1; cols * cols < j->bn; cols++) ;
+    /* secure */
+    ok = s->be->act_ensure(cols * S);
+    if (ok < 0) { j->bn = 0; return -1; }        /* the queue is as it was */
+    if (!ok) { j->failed = 1; tagpu_rcore_job_drop(j); return 0; }
+    /* commit: the same predicate, so the same frames */
+    for (i = 0; i < j->qn; i++) {
+        if (j->q[i].cls == cls && taken < cap) { taken++; continue; }
+        j->q[k++] = j->q[i];
+    }
+    j->qn = k;
     j->bS = S; j->bcols = cols;
     j->pass = 0; j->group = 0; j->srcAct = 0;
-    if (!s->be->act_ensure(cols * S)) { j->failed = 1; tagpu_rcore_job_drop(j); return 0; }
     j->inflight = 1;
     return 1;
 }
@@ -572,7 +591,11 @@ void tagpu_rcore_step(TAGPU_RSCHED* s)
         if (!j->inflight) {
             j = pick_job(s);
             if (!j) break;
-            if (!j->inflight && !form_batch(s, j)) continue;      /* it just failed: another */
+            if (!j->inflight) {
+                int fb = form_batch(s, j);
+                if (fb < 0) break;               /* the backend needs a slice to settle */
+                if (!fb) continue;               /* it just failed: another */
+            }
         }
         if (j->sliceMark != s->slice + 1) { j->sliceMark = s->slice + 1; j->rslices++; }
         {

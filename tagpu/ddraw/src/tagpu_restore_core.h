@@ -132,8 +132,19 @@ typedef struct {
     /* 1 when the backend's programs and tables are up: the core counts a step
        either way, so a pass can tell nothing stepped, but draws nothing */
     int    (*ready)(void);
-    /* the ping-pong activation arrays at `side` texels square, grown between
-       batches only; 0 = no float render target here, and the job fails */
+    /* The ping-pong activation arrays at `side` texels square, grown between
+       batches only. THREE ANSWERS, not two:
+         1  ready;
+         0  this device cannot (no float render target) -- the job FAILS;
+        -1  not yet, ask again next slice.
+       The third exists for a backend that must RETIRE the allocation it is
+       replacing behind a fence rather than freeing it at once: a Vulkan
+       backend's old arrays may still be named by a submitted command buffer,
+       and the licensing fact is a slot bitmask reaching zero, which takes a
+       few frames. Failing the job for that would be permanent damage from a
+       transient condition, and growing anyway would be a use-after-free.
+       `form_batch` therefore secures the scratch BEFORE it commits the batch,
+       so a -1 leaves the queue exactly as it was. */
     int    (*act_ensure)(int side);
     /* release the scratch after an idle spell; 1 = something was actually
        released, which is what the core logs on */
