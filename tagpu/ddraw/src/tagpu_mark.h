@@ -78,4 +78,64 @@ int  tagpu_mark_emit_text(float x, float y, const char* s, int colidx,
    program/VAO, leaves program, VAO and texture bindings dirty. */
 void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex);
 void tagpu_mark_glreset(void);
+
+/* ---- the hand-over to the Vulkan lane (the Vulkan-only plan's landing 5) ----
+
+   THIS PASS IS NOT ONE DRAW AND THAT IS THE WHOLE POINT OF THE RECORD. It is
+   order triangles, order lines at `ss` line width, order labels, health bars,
+   group digits, the post-fog layer and the build cursors -- in the engine's own
+   order (`0x469BFC` -> `0x469CB9` -> `0x469CF9`, then the cursor after the fog
+   overlay), each with its own `uText` and `uFog`, and the last two with fog
+   forced OFF because the engine draws them after its fog overlay and never
+   darkens them. A consumer that re-derived which buckets are non-empty from
+   the counts would be free to disagree with the pass that drew them, so what
+   crosses is the DRAW LIST `tagpu_mark_render` issued, built as it issues it.
+
+   NOTHING HERE NEEDS A NEW MIRROR, which is what makes this landing smaller
+   than gates 2 and 3: the vertices are this file's own arrays, the layer is
+   already CPU bytes (`TAGPU_MARKLAYER`), and `tagpu_text_atlas` has existed
+   since G19d for exactly this. */
+enum { TAGPU_MK_TEX_NONE = 0,   /* no sampler feeds uLayer this draw */
+       TAGPU_MK_TEX_LAYER = 1,  /* the captured post-fog layer, palette indices */
+       TAGPU_MK_TEX_TEXT = 2 }; /* tagpu_text.c's coverage atlas */
+
+typedef struct TAGPU_MKDRAW {
+    int first, count;           /* vertices into `verts` below              */
+    int lines;                  /* 1 = LINE_LIST at `ss` width, 0 = TRIANGLES */
+    int text;                   /* uText */
+    int fog;                    /* uFog, AS THE DRAW SET IT -- not derived  */
+    int tex;                    /* TAGPU_MK_TEX_*                           */
+} TAGPU_MKDRAW;
+
+#define TAGPU_MK_MAXDRAW 16
+
+typedef struct TAGPU_MKHAND {
+    unsigned frame;
+    /* 7 floats a vertex: x,y  u,v  wx,wz  colour -- this file's MVST, and the
+       layout `tagpu_mark.spv.h`'s vertex stage expects. */
+    const float* verts; int nvert;
+    const TAGPU_MKDRAW* draws; int ndraw;
+    /* the captured layer, or NULL. Palette indices, sampled NEAREST on both
+       lanes -- interpolating two indices gives a colour that is in neither. */
+    const unsigned char* layer;
+    int layerPitch, layerX, layerY, layerW, layerH;
+    /* tagpu_text.c's atlas: one coverage byte a texel. `textGen` moves when a
+       raster lands, which is how a backend holding its own copy is told. */
+    const unsigned char* text; unsigned textGen; int textW, textH;
+    int   key;                  /* uKey: the index an untouched layer texel holds */
+    float gw, gh, zoom, zoomCx, zoomCy;
+    float fogOrgX, fogOrgY, fogCols, fogRows;
+    float ss;                   /* the line width a one-screen-pixel line takes */
+} TAGPU_MKHAND;
+
+/* Exactly once per frame, and only for the frame it was published for -- `now`
+   is COMPARED, not stamped. [Landing 3b shipped a hand-over that stamped it and
+   the review found a stale record could make a census over-count; this one is
+   written the right way round from the start.] 0 = nothing to draw. */
+int  tagpu_mark_handover(TAGPU_MKHAND* out, unsigned now);
+/* This frame's counter, and the previous frame's record dropped with it.
+   Unconditional, beside `tagpu_posedraw_frame`: `tagpu_mark_render` returns
+   early on an ordinary empty frame, so without this a record outlives its
+   frame. */
+void tagpu_mark_frame(unsigned frame_counter);
 #endif

@@ -871,6 +871,67 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
 /* ---- render ---- */
 
 /* upload one captured layer into its texture; 0 if it cannot be shown */
+/* ---- THE HAND-OVER (the Vulkan-only plan's landing 5) --------------------
+   Built by `tagpu_mark_render` as it issues its draws. The vertex block is a
+   BYTE-FOR-BYTE mirror of the VBO that draw uploads -- the same concatenation
+   in the same order -- so every `first` recorded here is the first the GL draw
+   used, rather than a number re-derived from the counts and free to disagree
+   with it. */
+static float*        s_mkV;    static int s_mkVn, s_mkVcap;
+static TAGPU_MKDRAW  s_mkD[TAGPU_MK_MAXDRAW]; static int s_mkDn;
+static TAGPU_MKHAND  s_mkPub;
+static int           s_mkHave, s_mkDropped;
+static unsigned      s_mkFrame;
+
+static int mk_room(int need)
+{
+    float* q;
+    int c = s_mkVcap;
+    if (need <= c) return 1;
+    c = c ? c * 2 : 4096;
+    while (c < need) c *= 2;
+    q = (float*)realloc(s_mkV, (size_t)c * sizeof(float));
+    if (!q) return 0;
+    s_mkV = q; s_mkVcap = c;
+    return 1;
+}
+
+/* append `n` vertices of MVST floats, returning the FIRST vertex index -- which
+   is what the GL draw beside it is about to use as its own `first` */
+static int mk_push(const float* v, int n)
+{
+    int at = s_mkVn;
+    if (n <= 0) return at;
+    if (!mk_room((s_mkVn + n) * MVST)) { s_mkDropped = 1; return at; }
+    memcpy(s_mkV + (size_t)s_mkVn * MVST, v, (size_t)n * MVST * sizeof(float));
+    s_mkVn += n;
+    return at;
+}
+
+static void mk_draw(int first, int count, int lines, int text, int fog, int tex)
+{
+    if (count <= 0) return;
+    if (s_mkDn >= TAGPU_MK_MAXDRAW) { s_mkDropped = 1; return; }
+    s_mkD[s_mkDn].first = first; s_mkD[s_mkDn].count = count;
+    s_mkD[s_mkDn].lines = lines; s_mkD[s_mkDn].text = text;
+    s_mkD[s_mkDn].fog = fog;     s_mkD[s_mkDn].tex = tex;
+    s_mkDn++;
+}
+
+void tagpu_mark_frame(unsigned frame_counter)
+{
+    s_mkFrame = frame_counter;
+    s_mkHave = 0;
+}
+
+int tagpu_mark_handover(TAGPU_MKHAND* out, unsigned now)
+{
+    if (!s_mkHave || !out || s_mkPub.frame != now) return 0;
+    *out = s_mkPub;
+    s_mkHave = 0;
+    return 1;
+}
+
 static int upload_layer(int i, const TAGPU_MARKLAYER* L)
 {
     if (!s_tex[i]) {
@@ -929,6 +990,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     int i, total, textBase = 0;
     unsigned int textTex = 0;
 
+    s_mkVn = 0; s_mkDn = 0; s_mkDropped = 0;
     if (s_state == 0) init_gl();
     if (s_state != 1 || s_armed != 1) return;
     /* The heartbeat says "this pass ran", NOT "this pass drew something": a
@@ -988,6 +1050,15 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
                         (GLsizeiptr)s_nordx * MVST * 4, s_ordx);
     textBase = total + s_nordt + s_nordl;
 
+    /* THE SAME CONCATENATION THE VBO JUST GOT, so every `first` below is the
+       one GL is about to use. Pushed here rather than per draw because the
+       buckets are contiguous and re-slicing them per draw is how the two
+       would drift apart. */
+    mk_push(s_verts, total);
+    if (s_nordt) mk_push(s_ordt, s_nordt);
+    if (s_nordl) mk_push(s_ordl, s_nordl);
+    if (s_nordx) mk_push(s_ordx, s_nordx);
+
     /* The engine's own order inside the block: order markers and their
        ShowRanges labels first (`0x469BFC`), then the health bars over them
        (`0x469CB9`), then the group digit over those (`0x469CF9`), and the build
@@ -999,10 +1070,14 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
            keeps a native-res marker a hairline at 4x instead of a 1997 pixel
            blown up to sixteen */
         glUniform1i(s_uFog, v->fogMode & 1);
-        if (s_nordt) x_glDrawArrays(GL_TRIANGLES, total, s_nordt);
+        if (s_nordt) {
+            x_glDrawArrays(GL_TRIANGLES, total, s_nordt);
+            mk_draw(total, s_nordt, 0, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE);
+        }
         if (s_nordl) {
             if (x_glLineWidth) x_glLineWidth((GLfloat)(v->ss > 0 ? v->ss : 1));
             x_glDrawArrays(GL_LINES, total + s_nordt, s_nordl);
+            mk_draw(total + s_nordt, s_nordl, 1, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE);
         }
     }
     if (s_nordx) {
@@ -1010,14 +1085,17 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
         if (textTex) {
             glUniform1i(s_uFog, v->fogMode & 1);
             glUniform1i(s_uTextM, 1);
-            if (s_nordxOrd)
+            if (s_nordxOrd) {
                 x_glDrawArrays(GL_TRIANGLES, textBase, s_nordxOrd);
+                mk_draw(textBase, s_nordxOrd, 0, 1, v->fogMode & 1, TAGPU_MK_TEX_TEXT);
+            }
         }
     }
     if (s_nbar) {
         glUniform1i(s_uTextM, 0);
         glUniform1i(s_uFog, v->fogMode & 1);
         x_glDrawArrays(GL_TRIANGLES, BARBASE, s_nbar);
+        mk_draw(BARBASE, s_nbar, 0, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE);
     }
     if (textTex && s_nordx > s_nordxOrd) {
         /* the digits, over the bars, out of the same atlas — bound again
@@ -1026,12 +1104,15 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
         glUniform1i(s_uTextM, 1);
         glUniform1i(s_uFog, v->fogMode & 1);
         x_glDrawArrays(GL_TRIANGLES, textBase + s_nordxOrd, s_nordx - s_nordxOrd);
+        mk_draw(textBase + s_nordxOrd, s_nordx - s_nordxOrd, 0, 1,
+                v->fogMode & 1, TAGPU_MK_TEX_TEXT);
     }
     glUniform1i(s_uTextM, 0);
     if (have[TAGPU_MARK_POSTFOG]) {
         glUniform1i(s_uFog, 0);
         glBindTexture(GL_TEXTURE_2D, s_tex[TAGPU_MARK_POSTFOG]);
         x_glDrawArrays(GL_TRIANGLES, TAGPU_MARK_POSTFOG * QUADV, QUADV);
+        mk_draw(TAGPU_MARK_POSTFOG * QUADV, QUADV, 0, 0, 0, TAGPU_MK_TEX_LAYER);
     }
     /* last, and with the fog off for the same reason the layer above has it
        off: the engine draws these two rects after its fog overlay and never
@@ -1039,6 +1120,33 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     if (s_ncurs) {
         glUniform1i(s_uFog, 0);
         x_glDrawArrays(GL_TRIANGLES, CURSBASE, s_ncurs);
+        mk_draw(CURSBASE, s_ncurs, 0, 0, 0, TAGPU_MK_TEX_NONE);
+    }
+
+    /* PUBLISHED ONLY IF THE RECORD IS THE WHOLE DRAW. A list short of what GL
+       issued would have the Vulkan lane draw a marker layer missing a bucket,
+       which is a different picture rather than an absent one. */
+    if (!s_mkDropped && s_mkDn > 0) {
+        TAGPU_MARKLAYER* L = have[TAGPU_MARK_POSTFOG] ? &lay[TAGPU_MARK_POSTFOG] : NULL;
+        memset(&s_mkPub, 0, sizeof s_mkPub);
+        s_mkPub.frame = s_mkFrame;
+        s_mkPub.verts = s_mkV; s_mkPub.nvert = s_mkVn;
+        s_mkPub.draws = s_mkD; s_mkPub.ndraw = s_mkDn;
+        if (L && L->pix) {
+            s_mkPub.layer = L->pix; s_mkPub.layerPitch = L->pitch;
+            s_mkPub.layerX = L->x; s_mkPub.layerY = L->y;
+            s_mkPub.layerW = L->w; s_mkPub.layerH = L->h;
+        }
+        s_mkPub.text = tagpu_text_atlas(&s_mkPub.textGen);
+        tagpu_text_dims(&s_mkPub.textW, &s_mkPub.textH);
+        s_mkPub.key = tagpu_markown_key();
+        s_mkPub.gw = (float)v->gw; s_mkPub.gh = (float)v->gh;
+        s_mkPub.zoom = v->zoom > 0.0f ? v->zoom : 1.0f;
+        s_mkPub.zoomCx = v->zoomCx; s_mkPub.zoomCy = v->zoomCy;
+        s_mkPub.fogOrgX = (float)v->fogOrgX; s_mkPub.fogOrgY = (float)v->fogOrgY;
+        s_mkPub.fogCols = (float)v->fogCols; s_mkPub.fogRows = (float)v->fogRows;
+        s_mkPub.ss = v->ss > 0 ? v->ss : 1.0f;
+        s_mkHave = 1;
     }
 
     if (s_log) {

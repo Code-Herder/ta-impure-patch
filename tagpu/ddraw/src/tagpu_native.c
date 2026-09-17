@@ -2454,6 +2454,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     tagpu_posebake_frame(f->frame_counter, s_lastLevelGen);
     pose_rest_block_init();      /* the degradation's block, once per session */
     tagpu_hires_frame(f->frame_counter);      /* gate 3b: same beat, same reason */
+    tagpu_mark_frame(f->frame_counter);       /* landing 5: and again */
     tagpu_posedraw_frame(f->frame_counter);   /* this frame's counters, and the
                                               Vulkan hand-over's frame stamp */
     /* smooth-motion.md option A. BEFORE the gather, because posed_pose
