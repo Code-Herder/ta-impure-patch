@@ -8462,6 +8462,21 @@ the gate doing its job rather than something routed around: the two lanes cannot
 one of them is unwritten. Adding the row re-hashed the `transform` line of all twelve generated
 headers, which is the freshness chain covering the tool's own source.
 
+**Re-measured after the review's fixes**, on the same fixture: the chain is **byte-identical to the
+pre-fix run** (`cmp` of the two dumps), still 100.00 % at both levels, the three sprite pairs still
+`IDENTICAL`, and **no stand-down line fires on the happy path** — which was the one way the logging
+fix could itself have been a bug.
+
+**And the pending-error report fired, once, which is the LOW finding paying for itself in the same
+run.** `restoreglsl: 1 GL error(s) were pending before the mip reduction (not ours)` appears
+immediately after `restoreglsl: activations 512x512 x 16 layers (128 MB)` — so something in that
+neighbourhood leaves the process-wide flag set, and before this landing the reduction consumed it at
+frame top with no line. It is **not the reduction's own**: an error raised by the reduction fails it
+and prints the other line, which did not appear. The separate slice-bracket report
+(`before slice 2`, at startup) is the pre-existing one and is unchanged. Whose it is has not been
+chased — it is one line in the log now, and the line before it says where to look, which is the
+whole point of not swallowing it.
+
 **Not covered.**
 
 * **The Vulkan lane does not reduce yet.** This landing makes the GL side an arithmetic fact; the
