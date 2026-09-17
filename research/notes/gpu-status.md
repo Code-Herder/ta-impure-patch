@@ -7714,7 +7714,7 @@ correctness is never demonstrated is exactly the kind of silent wrongness this s
 
 | file | what it owns |
 |---|---|
-| `tagpu_restore_core.{h,c}` | the weight file, the options, the size-class ladder, `tileable`, the job table and its queues, batch formation, the **pass sequencer**, the cost model, the budget arithmetic, every counter and every log line. Names no rendering API. |
+| `tagpu_restore_core.{h,c}` | the weight file, the options, the size-class ladder, `tileable`, the job table and its queues, batch formation, the **pass sequencer**, the cost model, the budget arithmetic, every counter, and every log line but two (below). Names no rendering API. |
 | `tagpu_restoreglsl.c` | device resources and the three draws, behind a twelve-entry backend interface. |
 
 **The backend is TOLD which draw to make rather than working it out.** `issue_draw` in the core
@@ -7737,6 +7737,15 @@ reports.
   `tagpu_rcore_reload` is called from a backend's own init to preserve it. Making the model and
   options process-wide is the natural-looking mistake and it would have silently broken a
   documented knob.
+
+**Two diagnostics were reworded, and that is the one place "pure code motion" is not literally
+true.** The core cannot say *"timer query"* or *"MAX_UNIFORM_BLOCK_SIZE"* — both are GL terms, and a
+file that names no API must not assert them — so those two lines now read *"the GPU timer never
+completed"* and *"uniform block %d < one k-block"*. Neither string is referenced by any note, skill
+or tool, and **every line that IS documented is byte-identical**, because the lane name the core
+prefixes with is `"restoreglsl"`: `lazy restore armed`, `job started`, `done:`, `queue drained`,
+`idle: activations freed` and the `%dx%d %s, NK=%d …` banner all keep their exact text.
+[The overclaim was *"every counter and every log line"*, caught by this landing's review.]
 
 **MEASURED: the GL restorer's output is byte-for-byte identical.** `tagpu_restoredump.on` writes
 the finished terrain atlas with `glGetTexImage`, so the comparison needs no window and no capture.
@@ -7768,6 +7777,30 @@ fixtures, and every byte of every atlas matches.
 
 **The idle path is on the record too**: `restoreglsl: idle: activations freed` appears in both
 runs, so the 180-slice release fires through the new `act_free` return-value contract.
+
+**THE REVIEW FOUND ONE REAL DEFECT AND IT WAS IN THE NEW INTERFACE, NOT IN THE MOVED CODE** —
+which is the right place for it to be, and the reason a refactor gets reviewed at all.
+`tagpu_restore_core.h` promised `tagpu_rcore_job_new` returns NULL *"when the table is full **or the
+model is unusable**"*, and the code never looked at the model; `tagpu_rcore_ready()`, added in the
+same commit for apparently that purpose, was called from nowhere. Without the guard a backend that
+creates a job before loading weights gets a live job with `depth == 0`, and the sequencer then walks
+off the front of the model: FILL sets `pass = 1`, `pass <= depth` is `1 <= 0`, so the next draw
+takes the **OUT** branch and evaluates `layer[depth - 1]` — `layer[-1]`, the four ints in front of
+the array, read as an input-tile count.
+
+**The GL lane cannot reach it** (`job_new_x` runs `init_gl` first, which fails on a bad weight file),
+so it is zero risk today and a **trap laid for the second backend — which is the entire reason the
+interface exists**. Fixed by making the header true. Two dead additions went with it (`s_modelTried`,
+written and never read; `TAGPU_RDRAWREQ.cols`, set and never read) and the draw request now states
+the tables' actual lifetime: rebuilt on each batch's FILL, same contents for that batch's CONV and
+OUT.
+
+The reviewer separately confirmed, against the pre-split file, that the sequencer advances on the
+same side of the draw in the same order in all three branches; that the conv cost really does use
+the full `NK` rather than the clamped tail; that `pick_job`'s inflight-first loop means the slot
+tables can never describe another job's batch; that `state_push`/`state_pop` are balanced across
+every early return; that `s_sched.timer` and `s_query[0]` cannot disagree across `glreset`, a failed
+re-init or the give-up path; and that a `draw` returning 0 cannot spin.
 
 **What this measurement does NOT cover**, stated rather than implied:
 

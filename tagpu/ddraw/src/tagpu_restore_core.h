@@ -109,10 +109,13 @@ enum { TAGPU_RDRAW_FILL, TAGPU_RDRAW_CONV, TAGPU_RDRAW_OUT };
 typedef struct {
     int          kind;
     TAGPU_RCORE* job;
-    int          S, cols, TW, TH;      /* slot pitch, grid side, target extent */
-    /* FILL and OUT: the per-slot tables, TAGPU_R_SLOTCOLS x TAGPU_R_SLOTROWS
-       RGBA32F texels, laid out as the shaders index them. Owned by the core,
-       rebuilt per batch, valid for the duration of the call. */
+    int          S, TW, TH;            /* slot pitch, and the target extent    */
+    /* The per-slot tables, TAGPU_R_SLOTCOLS x TAGPU_R_SLOTROWS RGBA32F texels,
+       laid out as the shaders index them. Owned by the core and rebuilt on the
+       FILL of each batch, so FILL is where a backend uploads them and the CONV
+       and OUT draws of the same batch see the same contents. They are handed to
+       every kind for that reason -- a backend that keeps no upload of its own
+       may read them on any draw -- and the GL backend uploads on FILL only. */
     const float* rect;                 /* padded w,h at .zw                    */
     const float* src;                   /* atlas x,y,w,h                        */
     const float* key;                   /* colour key index at .x, -1 = opaque  */

@@ -81,7 +81,7 @@ static double now_ms(void)
 /* ---- the weight file (unditherer/weights.py) ---- */
 static TAGPU_RMODEL s_w;
 static TAGPU_ROPT   s_opt;
-static int          s_optRead, s_modelTried, s_modelOk;
+static int          s_optRead, s_modelOk;
 
 static int load_weights(const char* who, const char* model)
 {
@@ -178,7 +178,7 @@ static void read_options(void)
 int tagpu_rcore_reload(const char* who)
 {
     read_options();
-    s_optRead = 1; s_modelTried = 1;
+    s_optRead = 1;
     s_modelOk = load_weights(who, s_opt.tiny ? "tiny" : "full");
     return s_modelOk;
 }
@@ -249,6 +249,22 @@ TAGPU_RCORE* tagpu_rcore_job_new(TAGPU_RSCHED* s, const char* tag, int prio,
     TAGPU_RCORE* j = NULL;
     int i;
     char b[160];
+    /* NO MODEL, NO JOB, and this guard is the header's promise rather than a
+       precaution. Without it a backend that creates jobs before loading the
+       weights gets a live job with `depth == 0`, and the sequencer then walks
+       off the end of the model: FILL sets `pass = 1`, `pass <= depth` is
+       `1 <= 0`, so the next draw falls into the OUT branch and evaluates
+       `layer[depth - 1]` -- `layer[-1]`, which is the four ints in front of the
+       array, read as an input-tile count. The GL lane cannot reach it (its
+       `job_new_x` runs `init_gl` first, which fails on a bad weight file), so
+       this is a trap laid for the SECOND backend, which is the whole reason
+       this interface exists. [FOUND BY THE LANDING REVIEW, 2026-09-17: the
+       header said "or the model is unusable" and the code never looked.] */
+    if (!tagpu_rcore_ready()) {
+        _snprintf(b, sizeof b, "%s: %s: no model loaded, so no job", s->be->name, tag ? tag : "job");
+        rlog(b);
+        return NULL;
+    }
     for (i = 0; i < TAGPU_R_MAXJOBS; i++) if (!s->jobs[i].used) { j = &s->jobs[i]; break; }
     if (!j) { _snprintf(b, sizeof b, "%s: no free job slot", s->be->name); rlog(b); return NULL; }
     memset(j, 0, sizeof *j);
@@ -357,7 +373,7 @@ static double issue_draw(TAGPU_RSCHED* s, TAGPU_RCORE* j)
     double units;
 
     memset(&r, 0, sizeof r);
-    r.job = j; r.S = S; r.cols = cols; r.TW = TW; r.TH = TH;
+    r.job = j; r.S = S; r.TW = TW; r.TH = TH;
 
     if (j->pass == 0) {
         int t;

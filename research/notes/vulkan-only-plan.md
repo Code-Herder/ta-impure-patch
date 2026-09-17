@@ -635,7 +635,27 @@ Back to the filed list:
    **65 536**, `maxImageArrayLayers` **2 048**, `timestampComputeAndGraphics` **true** at a
    **1.0 ns** period, and all three formats colour-attachment + sampled + linear-filter in optimal
    tiling. The llvmpipe device answers the same, which matters for the headless lane.
-   It is still not the same PROCESS as the game, and that is the residual.
+   It is still not the same PROCESS as the game, and for the TIMESTAMP prerequisite that residual
+   is closed too, from inside the game, with no new instrumentation. `tagpu_vk.c:1599` already asks
+   both timestamp questions at device creation — `limits.timestampPeriod > 0` **and** the submitting
+   queue family's `timestampValidBits > 0` — and then actually creates a `VK_QUERY_TYPE_TIMESTAMP`
+   pool. That block is **unconditional**: the `tagpu_ftime.on` lever gates the *reporting*, not the
+   query. And it logs **only on failure**, either *"no timestamp query pool"* or *"this device/queue
+   reports no usable timestamps"*.
+
+   **Measured: the lane came up twice in one run (`vk: up in 121 ms`, then `188 ms`) and neither
+   failure line appears.** So in the game's own process, through winevulkan, on the family the lane
+   submits to, all three hold. The inference is spelled out because it is read off an absence, and
+   on this plan reading an absence as a result has already gone wrong once — it is sound here only
+   because the code path is unconditional and the lane demonstrably reached it. That is a stronger
+   answer than `timestampComputeAndGraphics` on its own: it covers the PER-QUEUE-FAMILY valid bits
+   and a real pool creation, neither of which `vulkaninfo` nor the probe checks.
+
+   **And the GL lane's own banner cross-checks the two limits that decide `NK`**, for free, in the
+   same log: `restoreglsl: 12x64 fp32, NK=4 (uniform block 37 KB of 64, 8 draw buffers)`. GL reports
+   the same 64 KiB block and the same 8 draw buffers Vulkan reports as `maxUniformBufferRange` and
+   `maxColorAttachments` — so both APIs agree on the numbers `NK` is derived from, which is what
+   makes "the same `NK` per model on both lanes" a measurement rather than an assumption.
 
    **The probe earned its keep by returning a limit the native run never showed:
    `minUniformBufferOffsetAlignment` = 64** (16 on llvmpipe). A conv draw binds the weight block at
