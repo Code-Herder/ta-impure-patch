@@ -18,6 +18,7 @@
    the draw (the pixel-parity A/B); the default owns it via tagpu_terrown.c. */
 #include <stddef.h>
 #include "tagpu_fx.h"
+#include "tagpu_restoreglsl.h"  /* TAGPU_RGLSL_FRAME -- a CPU struct, no GL in it */
 
 int  tagpu_terr_armed(unsigned frame_counter);   /* re-reads tagpu_terr.on (30f) */
 int  tagpu_terr_on(void);
@@ -210,6 +211,35 @@ typedef struct TAGPU_TERRHAND {
     const unsigned char* atlasRgb;    /* atlasW x atlasRgbRows RGBA8         */
     int                  atlasRgbRows;
     unsigned             atlasRgbSerial;
+    /* ...OR THE WORK ITSELF, for a lane that can restore on its own (the
+       Vulkan-only plan's landing 7). These two fields are MUTUALLY EXCLUSIVE
+       with `atlasRgb` above and the producer is what makes them so: under
+       `tagpu_restorevk.on` it stops reading the restored twin back and
+       publishes the frame list instead, so a consumer never has to choose
+       between a mirror and a request -- exactly one of them is here.
+
+       WHY THE LIST AND NOT JUST "RESTORE IT": three of a frame's eleven
+       numbers are content-dependent -- `wrap` is tagpu_rglsl_tileable() over
+       the tile's own texels against the ART palette, and the ORDER is the
+       centre-out rank over the live tile map. Both are engine-memory reads, so
+       both belong on this side of the hand-over; what crosses is their result.
+       `restoreFrames` therefore points at the very list the GL job was given,
+       in the very order it was given, which is also what makes the two lanes
+       comparable byte-for-byte rather than merely both-plausible.
+
+       LIFETIME: the frame list is retained for the map, not for the frame, but
+       a consumer must still copy on the frame it takes it (as
+       tagpu_vk_restore_job_add does) -- a new map frees it. `restoreSerial`
+       changes whenever the list or its destination does, including a repaint;
+       `restoreRepaint` is 1 when the destination already holds a restore and
+       only the palette moved, so it is recoloured in place rather than
+       blanked. The destination's size is the ATLAS's (`atlasW` x `atlasH`):
+       terrain restores the whole atlas, which is why there is no row count
+       here as there is for the mirror. */
+    const TAGPU_RGLSL_FRAME* restoreFrames;
+    int                      restoreN;
+    unsigned                 restoreSerial;
+    int                      restoreRepaint;
     const unsigned char* height;      /* hW x hH R8, or NULL                */
     int                  hW, hH;
     unsigned             heightSerial;

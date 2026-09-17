@@ -173,6 +173,35 @@ static int      s_rgbMirrorCap;        /* rows the ALLOCATION holds           */
 static int      s_rgbMirrorPainted;    /* tagpu_rglsl_job_painted at that read */
 static unsigned s_rgbMirrorFbo;        /* ours, made once                     */
 static int      s_rgbMirrorFailed;
+
+/* ---- THE RESTORE REQUEST, for a lane that restores on its own -----------
+   The other half of gate 2's mirror, and its replacement: instead of reading
+   the GL twin back so a second lane can upload it, hand that lane the WORK.
+   Latched on the arm beat exactly as `s_mirrorWant` is, and for the same
+   reason -- the answer is a file-attribute query and it does not change
+   mid-map in any way worth paying for every frame.
+
+   The list is the one `glsl_begin` built for the GL job, RETAINED instead of
+   freed: see tagpu_terr.h, `restoreFrames`. Retaining it costs
+   `s_atlasN * sizeof(TAGPU_RGLSL_FRAME)` -- 44 bytes a tile, so under 90 KB
+   for a full atlas -- and it is the only copy of two facts a `_vk` file cannot
+   re-derive, the tileability flags and the centre-out order. */
+static int                s_rvkWant;   /* tagpu_restorevk.on, latched         */
+static TAGPU_RGLSL_FRAME* s_rFrames;   /* s_rFrameN entries, restore order    */
+static int                s_rFrameN;
+static unsigned           s_rSerial;   /* bumped on every change, drop included */
+static int                s_rRepaint;  /* the list is a repaint over a restore */
+
+/* Forget the list. Every caller is a point where the ATLAS stopped being the
+   one the list describes, so the serial moves even though nothing replaces it:
+   a consumer keyed on the serial then drops its job instead of painting the
+   new map's atlas with the old map's rectangles. */
+static void rlist_drop(void)
+{
+    if (s_rFrames) { free(s_rFrames); s_rFrames = NULL; }
+    if (s_rFrameN || s_rRepaint) { s_rFrameN = 0; s_rRepaint = 0; }
+    s_rSerial++;
+}
 static unsigned char* s_hMirror;       /* s_hW x s_hH, or NULL                */
 static unsigned s_hMirrorSerial;
 
@@ -241,6 +270,15 @@ int tagpu_terr_armed(unsigned frame_counter)
        off an ordinary play session, and un-asking it mid-session would only buy
        back memory a re-arm would immediately spend again. */
     if (!s_mirrorWant && tagpu_vk_armed()) s_mirrorWant = 1;
+    /* AND THE OTHER WAY OF FEEDING THAT LANE: hand it the frame list and let
+       it restore, rather than reading our own restore back for it. Latched on
+       the same beat and read only when there is a lane to feed. */
+    if (!s_rvkWant && s_mirrorWant &&
+        GetFileAttributesA("tagpu_restorevk.on") != INVALID_FILE_ATTRIBUTES) {
+        s_rvkWant = 1;
+        flog("terr: restorevk -- the restored atlas is the other lane's to paint, "
+             "so no read-back and the frame list is published instead");
+    }
     if (s_passive || s_over) tagpu_terrown_set_skip(0);
     if (was != 1) {
         char b[160];
@@ -639,6 +677,7 @@ void tagpu_terr_glreset(void)
        The job is already gone: tagpu_native_glreset resets the restorer first. */
     s_job = NULL;
     s_rgbState = 0;
+    rlist_drop();
 }
 
 /* ---- the height grid: one R8 texel per 16-px cell, once per map ----
@@ -957,6 +996,7 @@ static int ensure_atlas(const char* ta)
     if (s_setPtr != (const void*)set || s_setCount != count || s_setPix != pix) {
         if (s_job) { tagpu_rglsl_job_free(s_job); s_job = NULL; }
         s_rgbState = 0;
+        rlist_drop();
     }
     s_setPtr = (const void*)set; s_setCount = count; s_setPix = pix;
     _snprintf(b, sizeof b, "terr: atlas built %dx%d for %d tiles (set=%p pix=%p, %d KB)",
@@ -1054,7 +1094,26 @@ static int glsl_begin(const char* ta, int repaint)
     s_rgbPalSerial = tagpu_pal_serial();
     ok = s_job && tagpu_rglsl_job_add(s_job, frames, n) > 0;
     if (!ok && s_job) { tagpu_rglsl_job_free(s_job); s_job = NULL; }
-    free(frames);
+    /* THE LIST IS RETAINED, NOT FREED, when a second lane is to restore from
+       it -- and only then, so an ordinary session frees it here as it always
+       did. `job_add` above has already COPIED it, so ownership is ours either
+       way and this is a keep rather than a hand-off.
+       Retained even when the GL job failed: the two lanes fail independently,
+       and standing the request down because OUR GL could not set up would make
+       one lane's fault the other's. */
+    if (s_rvkWant) {
+        rlist_drop();                      /* whatever was there is the old list */
+        s_rFrames = frames;
+        s_rFrameN = n;
+        s_rRepaint = repaint;
+        if (s_log) {
+            char b[160];
+            _snprintf(b, sizeof b, "terr: restore request published -- %d frames, "
+                      "%dx%d atlas, serial %u%s",
+                      n, ATLAS_W, s_atlasH, s_rSerial, repaint ? ", repaint" : "");
+            flog(b);
+        }
+    } else free(frames);
     return ok;
 }
 
@@ -1403,6 +1462,12 @@ static void rgb_mirror_step(void)
     unsigned st = 0;
     int rows, painted;
     if (!s_mirrorWant || s_rgbMirrorFailed) return;
+    /* THE WHOLE POINT OF THE REQUEST: under `restorevk` the other lane paints
+       its own restored atlas, so reading ours back for it is the cost the
+       request exists to retire. Standing down here is also what makes the two
+       fields of tagpu_terr.h mutually exclusive -- with no read-back there is
+       never a mirror to publish. */
+    if (s_rvkWant) return;
     /* THE TWIN IS GONE (a glreset, a new map before the re-create). Say so
        rather than leaving the last map's colours standing, exactly as
        tagpu_gaf.c's step does: a consumer that kept them would draw restored
@@ -1553,6 +1618,16 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
         s_pub.atlasRgb       = s_rgbMirror;
         s_pub.atlasRgbRows   = s_rgbMirrorRows;
         s_pub.atlasRgbSerial = s_rgbMirrorSerial;
+    }
+    /* ...OR THE REQUEST, never both -- `rgb_mirror_step` stands down under
+       `s_rvkWant`, so `s_rgbMirror` is NULL above whenever this publishes.
+       The serial goes out even with no list, because a DROP is news: it is
+       how a consumer learns the atlas it was painting is not this map's. */
+    if (s_rvkWant) {
+        s_pub.restoreFrames  = s_rFrames;
+        s_pub.restoreN       = s_rFrames ? s_rFrameN : 0;
+        s_pub.restoreSerial  = s_rSerial;
+        s_pub.restoreRepaint = s_rRepaint;
     }
     /* the height mirror only while it matches the dimensions the shader is
        being told about -- build_height keeps those two in step (see there) */

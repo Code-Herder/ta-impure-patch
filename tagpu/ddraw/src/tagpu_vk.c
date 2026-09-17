@@ -166,6 +166,7 @@
 #include "tagpu_vk_terr.h"
 #include "tagpu_vk_fx.h"
 #include "tagpu_vk_shadow.h"
+#include "tagpu_vk_restore.h"
 #include "tagpu_vk_unit.h"
 #include "tagpu_vk_hires.h"
 #include "tagpu_vk_mark.h"
@@ -1730,6 +1731,12 @@ static void vk_down(void)
         tagpu_vk_hires_down(&s_pass);
         tagpu_vk_mark_down(&s_pass);
         tagpu_vk_gui_down(&s_pass);
+        /* AFTER THE PASSES, because a pass owns the JOBS and the restorer owns
+           what they are drawn with: each `_down` above gives its job back, and
+           this then gives back the pipelines, the activations and the render
+           passes those jobs were using. The other way round would destroy a
+           framebuffer a live job still names. */
+        tagpu_vk_restore_down(&s_pass);
         ab_drop("the lane coming down", idle);
         tagpu_vk_shot_down(&s_pass);
         vk_perimage_free();
@@ -2523,6 +2530,27 @@ static int vk_present(void)
             ab_gui = tagpu_vk_gui_ab_frame();
             draw_fps = tagpu_vk_fps_prepare(&s_pass, cb, fi);
             ab_fps = tagpu_vk_fps_ab_frame();
+
+            /* THE CLASSIC++ RESTORER'S SLICE IS LAST OF `prepare`, AND IT IS
+               NOT ONE OF THE FRAME'S PASSES EITHER -- the shadow map's shape,
+               for the shadow map's reasons, so the warning above applies
+               word for word and `ndraw`/`nclaim` below do not count it.
+
+               LAST, unlike the shadow map, because it is the only one of the
+               two whose CONSUMERS feed it: a pass hands it a job and a frame
+               list in its own `prepare`, so every one of those has to have
+               run before the slice that drains them -- the reverse of the
+               shadow map's ordering and the same argument. The slice then
+               paints into images the render pass below samples; what makes
+               that write visible to those samples is the OUT render pass's
+               own subpass dependency, stated in tagpu_vk_restore.c, and not
+               the accident of a render-pass boundary.
+
+               Its own render passes are begun in here, which is legal in
+               `prepare` and nowhere else because render passes may not nest
+               and this runs before vkCmdBeginRenderPass. It is a no-op until
+               a consumer has asked the device for it. */
+            tagpu_vk_restore_step(&s_pass, cb, fi);
         }
         ndraw = draw_terr + draw_feat + draw_unit + draw_fx + draw_mark + draw_scaf +
                 draw_gui + draw_fps;
@@ -2685,6 +2713,13 @@ static int vk_resize(int w, int h)
     tagpu_vk_unit_down(&s_pass);
     tagpu_vk_hires_down(&s_pass);
     tagpu_vk_gui_down(&s_pass);
+    /* AND ON A RESIZE TOO, though the device survives one: the restorer's
+       staging and its timestamp pairs are sized by `d->slots`, which is
+       `s_vk.nimg` and can change under a swapchain rebuild. The passes above
+       have already dropped everything for the same reason, so their jobs are
+       gone and the restore would restart from scratch whatever this line did
+       -- keeping the shared build would buy a rebuild we have no use for. */
+    tagpu_vk_restore_down(&s_pass);
     ab_drop("the swapchain rebuilding", idle);
     vk_perimage_free();
     r = vk_swapchain(w, h);

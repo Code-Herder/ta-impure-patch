@@ -501,6 +501,58 @@ static int layer_view(const TAGPU_VKPASS* d, VkImage img, VkFormat fmt, int laye
     return vkCreateImageView(d->dev, &ivi, NULL, v) == VK_SUCCESS;
 }
 
+/* ---- THE DEPENDENCY EVERY ONE OF THESE RENDER PASSES OWES ---------------
+   The three draws of a slice are three render passes -- FILL writes activation
+   layers, each CONV samples the layers the one before it wrote and writes its
+   own, OUT samples the last of them and writes the consumer's atlas -- and
+   NOTHING BETWEEN THEM ORDERS THEM unless it is said here.
+
+   It is worth being exact about why a render-pass boundary is not enough. The
+   implicit dependency Vulkan adds when `dependencyCount` is 0 has
+   `dstStageMask = BOTTOM_OF_PIPE` and `dstAccessMask = 0`: it orders the
+   attachment's LAYOUT TRANSITION and nothing else. A later draw's sample of
+   what this pass wrote is not in that destination scope, so the read is
+   unordered against the write. Drivers that flush at a render-pass boundary
+   hide it -- which is the whole problem, because a hazard hidden by a driver's
+   habit is the bug with better odds and not a fix (CLAUDE.md, *Fixes must be
+   safe by construction*). Found by wiring the first consumer: the chain is
+   FILL -> CONV -> ... -> OUT -> the terrain's own sample of the atlas, and the
+   last link crosses out of this file entirely.
+
+   So each pass states both ends, and the two together make the chain
+   transitive: a 0 -> EXTERNAL dependency's destination scope is every
+   subsequent command, so one pass's outgoing dependency covers the next pass's
+   read whatever sits between them -- another slice, another frame's submit, or
+   the consumer's own render pass. The incoming one is the WAR/WAW half: the
+   previous slice may still be sampling these very layers.
+
+   `BY_REGION` is deliberately NOT set. A conv draw reads a 3x3 neighbourhood
+   of its input, and OUT reads the activation at the destination texel's own
+   position in a DIFFERENT image; neither is a framebuffer-local read, and a
+   by-region dependency would promise exactly the locality these do not have. */
+static void rp_deps(VkSubpassDependency dep[2], int out)
+{
+    VkPipelineStageFlags fs = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    VkPipelineStageFlags co = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    memset(dep, 0, 2 * sizeof *dep);
+    /* in: whatever was reading or writing these attachments, before we write */
+    dep[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    dep[0].dstSubpass = 0;
+    dep[0].srcStageMask = fs | co;
+    dep[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep[0].dstStageMask = co;
+    dep[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    /* ...and the OUT pass LOADS, so it reads the attachment as well as writes it */
+    if (out) dep[0].dstAccessMask |= VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+    /* out: our writes, before anything samples them or writes over them */
+    dep[1].srcSubpass = 0;
+    dep[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    dep[1].srcStageMask = co;
+    dep[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep[1].dstStageMask = fs | co;
+    dep[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+}
+
 /* A RENDER PASS PER USED ATTACHMENT COUNT. The subpass always declares NK
    colour references, so one pipeline shape fits, and the references past
    `used` are VK_ATTACHMENT_UNUSED -- which is what discards the shader's
@@ -515,6 +567,7 @@ static int build_rp_act(const TAGPU_VKPASS* d, int used, int nk)
     VkAttachmentDescription at[RP_MAX];
     VkAttachmentReference   ref[RP_MAX];
     VkSubpassDescription    sp;
+    VkSubpassDependency     dep[2];
     VkRenderPassCreateInfo  rci = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
     int i;
     if (used < 1 || used > nk) return 0;
@@ -538,10 +591,13 @@ static int build_rp_act(const TAGPU_VKPASS* d, int used, int nk)
     sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     sp.colorAttachmentCount = (uint32_t)nk;
     sp.pColorAttachments = ref;
+    rp_deps(dep, 0);
     rci.attachmentCount = (uint32_t)used;
     rci.pAttachments = at;
     rci.subpassCount = 1;
     rci.pSubpasses = &sp;
+    rci.dependencyCount = 2;
+    rci.pDependencies = dep;
     return vkCreateRenderPass(d->dev, &rci, NULL, &s_rpAct[used]) == VK_SUCCESS;
 }
 
@@ -555,6 +611,7 @@ static int build_rp_out(const TAGPU_VKPASS* d)
     VkAttachmentDescription at;
     VkAttachmentReference   ref;
     VkSubpassDescription    sp;
+    VkSubpassDependency     dep[2];
     VkRenderPassCreateInfo  rci = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
     memset(&at, 0, sizeof at); memset(&ref, 0, sizeof ref); memset(&sp, 0, sizeof sp);
     at.format = VK_FORMAT_R8G8B8A8_UNORM;
@@ -570,8 +627,10 @@ static int build_rp_out(const TAGPU_VKPASS* d)
     sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     sp.colorAttachmentCount = 1;
     sp.pColorAttachments = &ref;
+    rp_deps(dep, 1);
     rci.attachmentCount = 1; rci.pAttachments = &at;
     rci.subpassCount = 1; rci.pSubpasses = &sp;
+    rci.dependencyCount = 2; rci.pDependencies = dep;
     return vkCreateRenderPass(d->dev, &rci, NULL, &s_rpOut) == VK_SUCCESS;
 }
 
@@ -990,6 +1049,15 @@ struct TAGPU_VKRJOB {
     unsigned       setGen;                  /* the s_actGen the sets name     */
     int            dstReady;                /* brought to SHADER_READ_ONLY    */
     int            clearDue;                /* ...and cleared to alpha 0      */
+    /* 1 when the destination HOLDS SOMETHING this pass must not throw away --
+       which is what picks `dst_ready`'s source layout, and the second thing
+       wiring a consumer caught. A repaint exists to recolour a restored atlas
+       in place; transitioning it from UNDEFINED licenses the driver to discard
+       every texel of it, so the repaint would have blanked exactly the world
+       it was added to avoid blanking. Set from `repaint` at creation -- the
+       consumer's statement that the atlas already holds a restore -- and then
+       by `dst_ready` itself, so a clear and a re-queue keep it. */
+    int            dstHas;
 };
 static struct TAGPU_VKRJOB s_vjob[TAGPU_R_MAXJOBS];
 
@@ -1232,8 +1300,11 @@ static void upload_tables(const TAGPU_VKPASS* d, const TAGPU_RDRAWREQ* r)
     (void)d;
 }
 
-/* a job's destination, brought from UNDEFINED to the layout the OUT render pass
-   expects, and cleared to alpha 0 unless this is a repaint in place */
+/* A job's destination, brought to the layout the OUT render pass expects and
+   cleared to alpha 0 unless this is a repaint in place. `dstHas` is the source
+   layout: UNDEFINED for an image whose contents are ours to throw away (which
+   is cheaper -- the driver may skip a decompress), SHADER_READ_ONLY_OPTIMAL
+   for one a repaint is about to draw over. See the field. */
 static void dst_ready(const TAGPU_VKPASS* d, struct TAGPU_VKRJOB* g)
 {
     VkImageMemoryBarrier mb = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
@@ -1246,11 +1317,15 @@ static void dst_ready(const TAGPU_VKPASS* d, struct TAGPU_VKRJOB* g)
     mb.srcQueueFamilyIndex = mb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     mb.image = g->dstImg;
     mb.subresourceRange = rg;
-    mb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    mb.oldLayout = g->dstHas ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                             : VK_IMAGE_LAYOUT_UNDEFINED;
+    mb.srcAccessMask = g->dstHas ? VK_ACCESS_SHADER_READ_BIT : 0;
     mb.newLayout = g->clearDue ? VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
                                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     mb.dstAccessMask = g->clearDue ? VK_ACCESS_TRANSFER_WRITE_BIT : VK_ACCESS_SHADER_READ_BIT;
-    vkCmdPipelineBarrier(s_cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+    vkCmdPipelineBarrier(s_cb,
+                         g->dstHas ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                                   : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                          g->clearDue ? VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                          0, 0, NULL, 0, NULL, 1, &mb);
     if (g->clearDue) {
@@ -1265,6 +1340,7 @@ static void dst_ready(const TAGPU_VKPASS* d, struct TAGPU_VKRJOB* g)
         g->clearDue = 0;
     }
     g->dstReady = 1;
+    g->dstHas = 1;                         /* from here on there is something  */
     (void)d;
 }
 
@@ -1502,6 +1578,7 @@ TAGPU_VKRJOB* tagpu_vk_restore_job_new(const TAGPU_VKPASS* d, const char* tag,
     g->srcView = srcView; g->srcW = srcW; g->srcH = srcH;
     g->dstImg = dstImg; g->dstView = dstView; g->dstW = dstW; g->dstH = dstH;
     g->clearDue = repaint ? 0 : 1;
+    g->dstHas   = repaint ? 1 : 0;
 
     /* the palette snapshot: R,G,B,pad -> RGBA8, uploaded before the first FILL */
     if (!mk_image(d, 256, 1, 1, VK_FORMAT_R8G8B8A8_UNORM,
