@@ -167,6 +167,7 @@
 #include "tagpu_vk_fx.h"
 #include "tagpu_vk_shadow.h"
 #include "tagpu_vk_unit.h"
+#include "tagpu_vk_hires.h"
 #include "tagpu_vk_gui.h"
 #include "tagpu_vk_shot.h"
 
@@ -1724,6 +1725,7 @@ static void vk_down(void)
         tagpu_vk_fx_down(&s_pass);
         tagpu_vk_shadow_down(&s_pass);
         tagpu_vk_unit_down(&s_pass);
+    tagpu_vk_hires_down(&s_pass);
         tagpu_vk_gui_down(&s_pass);
         ab_drop("the lane coming down", idle);
         tagpu_vk_shot_down(&s_pass);
@@ -2317,7 +2319,7 @@ static int vk_present(void)
     if (tagpu_vk_terr_down_owed() || tagpu_vk_feat_down_owed() ||
         tagpu_vk_fx_down_owed() || tagpu_vk_scaffold_down_owed() ||
         tagpu_vk_shadow_down_owed() || tagpu_vk_unit_down_owed() ||
-        tagpu_vk_gui_down_owed()) {
+        tagpu_vk_hires_down_owed() || tagpu_vk_gui_down_owed()) {
         if (!vkDeviceWaitIdle || vkDeviceWaitIdle(s_vk.dev) != VK_SUCCESS) {
             vklog("vkDeviceWaitIdle refused before an owed pass teardown - down");
             return -2;
@@ -2333,6 +2335,7 @@ static int vk_present(void)
         if (tagpu_vk_scaffold_down_owed()) tagpu_vk_scaffold_down_paid(&s_pass);
         if (tagpu_vk_shadow_down_owed())   tagpu_vk_shadow_down_paid(&s_pass);
         if (tagpu_vk_unit_down_owed())     tagpu_vk_unit_down_paid(&s_pass);
+        if (tagpu_vk_hires_down_owed())    tagpu_vk_hires_down_paid(&s_pass);
         if (tagpu_vk_gui_down_owed())      tagpu_vk_gui_down_paid(&s_pass);
     }
 
@@ -2468,6 +2471,11 @@ static int vk_present(void)
                yet and its own descriptor set is not written here -- that is
                `tagpu_vk_unit_prepare`, below the map. */
             tagpu_vk_unit_upload(&s_pass, cb, fi);
+            /* AND THE REPLACEMENT MESHES' CASTERS, beside it and for the same
+               reason: they are geometry the shadow map is about to draw, so
+               they have to be on the device before it is. It draws nothing
+               here either. [Gate 3b.] */
+            tagpu_vk_hires_upload(&s_pass, cb, fi);
 
             tagpu_vk_shadow_prepare(&s_pass, cb, fi);
 
@@ -2643,6 +2651,7 @@ static int vk_resize(int w, int h)
     tagpu_vk_fx_down(&s_pass);
     tagpu_vk_shadow_down(&s_pass);
     tagpu_vk_unit_down(&s_pass);
+    tagpu_vk_hires_down(&s_pass);
     tagpu_vk_gui_down(&s_pass);
     ab_drop("the swapchain rebuilding", idle);
     vk_perimage_free();

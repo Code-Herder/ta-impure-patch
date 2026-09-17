@@ -655,6 +655,17 @@ void tagpu_vk_hires_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
         return;
     }
 
+    /* ASK THE PRODUCER TO KEEP THE TRIANGLES. Idempotent, and it belongs here
+       rather than in the GL pass: this is the only consumer that needs them, so
+       a session that never arms this lane never pays for the copy. It is asked
+       every frame because the answer is one branch once it is armed, and the
+       FIRST ask may land after the models are already uploaded and freed -- the
+       producer answers that by re-reading them, and until it has, the
+       hand-over below carries meshes with no bytes and refuses to publish. The
+       lane draws nothing for those few frames and the census says so, which is
+       the correct shape for "not yet" and needs no extra state here. */
+    tagpu_hires_verts_want();
+
     if (!tagpu_hires_handover(&s_h, d->frame)) return;
     s_have = 1;
     if (!s_h.depthOn || s_h.nunit <= 0) return;

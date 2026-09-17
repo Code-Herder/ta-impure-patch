@@ -80,7 +80,8 @@
 #include <string.h>
 
 #include "tagpu_vk_shadow.h"
-#include "tagpu_vk_unit.h"   /* the posed casters, drawn inside our render pass */
+#include "tagpu_vk_unit.h"
+#include "tagpu_vk_hires.h"   /* the posed casters, drawn inside our render pass */
 #include "tagpu_shadow.h"
 #include "spirv/tagpu_shadow.spv.h"
 
@@ -828,15 +829,21 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
        The unit pass's `upload` has already run for this slot -- the seam calls
        it before this function and says so -- which is what makes the number
        available before the render pass begins. */
-    ours = tagpu_vk_unit_casters();
+    /* SINCE GATE 3b THE REPLACEMENT MESHES ARE THE SECOND TERM. Both passes
+       count the same way -- the subset of the GL map's casters they are ready
+       to draw this frame -- so the sum is comparable to `otherCasters` by the
+       same construction, and both can only UNDER-count, which refuses a frame
+       the lane could have drawn rather than drawing a map the oracle does not
+       have. What is left over now is the heightfield whose mirror went
+       missing, which is an out-of-memory path and not a caster kind. */
+    ours = tagpu_vk_unit_casters() + tagpu_vk_hires_casters();
     if (h.otherCasters - ours > 0) {
         if (!s_saidCasters) {
             s_saidCasters = 1;
             plog(d, "shadow: the GL map holds %d caster(s) this lane has no copy "
-                    "of (%d of them the unit pass carries) - the replacement "
-                    "meshes are still to port. Nothing drawn while there are, "
-                    "and the passes that sample the map stand down with it",
-                 h.otherCasters, ours);
+                    "of (%d of them the unit and hi-res passes carry). Nothing "
+                    "drawn while there are, and the passes that sample the map "
+                    "stand down with it", h.otherCasters, ours);
         }
         return 0;
     }
@@ -1013,11 +1020,21 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
        every consumer stands down and the picture nobody draws is the one that
        would have been wrong. */
     drew = tagpu_vk_unit_cast(d, cb, slot, s_rp);
+    {
+        /* AND THE REPLACEMENT MESHES, into the same render pass, before it
+           ends. A -1 from either is the same refusal, and it must not be
+           allowed to cancel the other's count: summing a -1 into a positive
+           would read as a short count and land on the same branch by accident
+           rather than on purpose. */
+        int hi = tagpu_vk_hires_cast(d, cb, slot, s_rp);
+        if (drew < 0 || hi < 0) drew = -1;
+        else drew += hi;
+    }
     vkCmdEndRenderPass(cb);
     if (drew < 0 || drew != ours) {
         if (!s_saidUnitShort) {
             s_saidUnitShort = 1;
-            plog(d, "shadow: the unit pass put %d of the %d posed caster(s) it "
+            plog(d, "shadow: the caster passes put %d of the %d caster(s) they "
                     "owed into the map - the map is incomplete and nothing "
                     "samples it this frame", drew, ours);
         }
