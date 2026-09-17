@@ -70,4 +70,74 @@ void tagpu_hires_draw_glreset(void);
    program back afterwards */
 void tagpu_hires_depth(const TAGPU_HVIEW* v, const TAGPU_HUNIT* u, int n,
                        const float* shadowMat);
+
+/* ---- the hand-over to the Vulkan lane (the Vulkan-only plan's gate 3b) ----
+
+   WHAT CROSSES IS WHAT `tagpu_hires_depth` ABOVE DREW, recorded by that
+   function as it draws rather than re-derived afterwards -- the same discipline
+   as tagpu_posedraw.c's depth twin, and for the same reason: `castSkip`, a
+   missing VAO and a zero-count group each drop a unit from the GL map, and a
+   second pass that re-evaluates those tests can disagree with the first while
+   both look right.
+
+   NO GL NAME IS IN HERE. The triangles are `tagpu_hires_verts`' CPU copy, the
+   textures are not carried at all (below), and every pointer is valid for the
+   frame it was published for, exactly as TAGPU_PDHAND's arrays are. */
+#define TAGPU_HI_MAXHAND 256
+
+typedef struct TAGPU_HIGREC {       /* one glTF material's draw */
+    float base[4];                  /* baseColorFactor, linear  */
+    float cutoff;                   /* < 0 OPAQUE, else the alpha cutoff */
+    int   first, count;             /* VERTICES, as TAGPU_HGROUP gives them */
+} TAGPU_HIGREC;
+
+typedef struct TAGPU_HIMESH {
+    /* the triangles as bytes. `gen` moves on every reload of the file, so a
+       consumer caching a device buffer keyed on it is told when the triangles
+       under it changed -- the pointer alone is not an identity, because the
+       mesh table recycles its slots. */
+    const float* v;
+    int      ntri, stride;
+    unsigned gen;
+    int      npiece;
+    int      grpOff, ngroup;        /* this mesh's run in `groups` */
+} TAGPU_HIMESH;
+
+typedef struct TAGPU_HIUREC {
+    int   mesh;                     /* index into `meshes`      */
+    int   npose;                    /* pieces `rows` carries    */
+    unsigned rowOff;                /* first of npose*3 vec4 in `rows` */
+    float anchor[4];                /* ax, ay, world x, projected world z */
+    float yawEnc[3];                /* cos(yaw), sin(yaw), enc -- AS THE GL
+                                       pass computes them, so the port does no
+                                       trigonometry of its own to disagree in */
+    float cast[3];                  /* altitude, ground + throw, length scale */
+} TAGPU_HIUREC;
+
+typedef struct TAGPU_HIHAND {
+    unsigned frame;
+    /* 1 = the GL depth pass ran this frame. 0 means the map has no replacement
+       mesh in it, which is NOT the same as "no unit had one": the pass returns
+       early when it is not ready, and a consumer that read the unit records
+       alone would draw casters the oracle did not. */
+    int   depthOn;
+    float shadowMat[16];
+    const TAGPU_HIUREC* units;  int nunit;
+    const TAGPU_HIMESH* meshes; int nmesh;
+    const TAGPU_HIGREC* groups; int ngroup;
+    const float* rows; unsigned nrow;   /* vec4s, 3 per piece per unit */
+    /* THE ALBEDO IS NOT CARRIED, AND THIS IS THE FLAG THAT MAKES THAT HONEST.
+       The depth path samples the albedo for one thing only -- the alpha cutout
+       (`if (uCutoff >= 0.0 && tex.a * uBase.a < uCutoff) discard;`) -- and
+       every material of the shipped replacement is alphaMode OPAQUE, so
+       `cutoff` is negative for every group and the sampled value is discarded.
+       1 here means a group with a real cutoff was drawn into the GL map, and
+       the Vulkan pass must then draw NOTHING rather than a map with the holes
+       missing. Deferring the textures is only honest while this is checked. */
+    int   cutoutSeen;
+} TAGPU_HIHAND;
+
+/* Exactly once per frame, and only for the frame it was published for --
+   `now` is the fork's render-thread counter. 0 = nothing to draw. */
+int  tagpu_hires_handover(TAGPU_HIHAND* out, unsigned now);
 #endif

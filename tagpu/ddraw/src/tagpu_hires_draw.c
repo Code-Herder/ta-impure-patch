@@ -282,6 +282,92 @@ static GLint  u_depthPass, u_shadowMat, u_cast;    /* the depth pass (G14i) */
 
 /* tagpu_hires.on tweaks, re-read on the same 30-frame cadence as the rest */
 static float s_anchorMix = 0.0f;
+
+/* ---- THE HAND-OVER TO THE VULKAN LANE (gate 3b) -------------------------
+   Filled by `tagpu_hires_depth` as it draws, published for exactly the frame
+   that filled it. The arrays GROW and are never handed out across a frame
+   boundary -- `tagpu_hires_handover` clears the flag on the way out and
+   refuses a frame that is not the caller's, which is tagpu_posedraw.c's rule
+   and exists because these pointers are into buffers the next frame may
+   realloc. */
+static TAGPU_HIUREC* s_hiU;   static int s_hiUn, s_hiUcap;
+static TAGPU_HIMESH* s_hiM;   static int s_hiMn, s_hiMcap;
+static TAGPU_HIGREC* s_hiG;   static int s_hiGn, s_hiGcap;
+static float*        s_hiRow; static int s_hiRown, s_hiRowcap;
+static TAGPU_HIHAND  s_hiPub;
+static int           s_hiHave;
+static int           s_hiCutout;
+static int           s_hiDropped;   /* records that did not fit; refuses the frame */
+
+/* one grow helper per array: the count is small and the failure answer is the
+   same everywhere -- stop recording and let `handover` refuse the frame, never
+   publish a partial map. */
+static int hi_room(void** p, int* cap, int need, size_t esz, int max)
+{
+    void* q;
+    int c = *cap;
+    if (need <= c) return 1;
+    /* THE CEILING IS PER ARRAY, and it has to be: the records are one per unit
+       while `rows` is TWELVE FLOATS PER PIECE per unit, so one ceiling for both
+       is either uselessly small for the rows or pointless for the units. The
+       first draft of this had one, at 2048 -- which is 170 pieces, refused by
+       a dozen units of a 48-piece model, in a pass whose whole job is not to
+       refuse frames it can draw. */
+    if (need > max) return 0;
+    c = c ? c * 2 : 64;
+    while (c < need) c *= 2;
+    if (c > max) c = max;
+    q = realloc(*p, (size_t)c * esz);
+    if (!q) return 0;
+    *p = q; *cap = c;
+    return 1;
+}
+
+/* The mesh this unit draws, interned into the frame's small table so that N
+   units of one type carry the triangles ONCE. Returns -1 when the mesh has no
+   CPU copy -- which is the honest answer before `tagpu_hires_verts_want`'s
+   re-read has landed, and it drops the unit rather than the frame: the census
+   in tagpu_shadow.c still counts the GL draw, so the Vulkan lane refuses the
+   map on its own terms and never draws a lighter one. */
+static int hi_mesh(const void* mesh)
+{
+    int i, ng, k, ntri = 0, stride = 0;
+    unsigned gen = 0;
+    const float* v;
+    for (i = 0; i < s_hiMn; i++)
+        if (s_hiM[i].v && s_hiM[i].gen == tagpu_hires_gen(mesh) &&
+            s_hiM[i].npiece == tagpu_hires_npiece(mesh) &&
+            s_hiM[i].v == tagpu_hires_verts(mesh, NULL, NULL, NULL))
+            return i;
+    v = tagpu_hires_verts(mesh, &ntri, &stride, &gen);
+    if (!v || ntri <= 0) return -1;
+    ng = tagpu_hires_ngroup(mesh);
+    if (!hi_room((void**)&s_hiM, &s_hiMcap, s_hiMn + 1, sizeof *s_hiM,
+                 TAGPU_HI_MAXHAND)) return -1;
+    if (!hi_room((void**)&s_hiG, &s_hiGcap, s_hiGn + ng, sizeof *s_hiG,
+                 TAGPU_HI_MAXHAND * 32)) return -1;
+    s_hiM[s_hiMn].v = v;
+    s_hiM[s_hiMn].ntri = ntri;
+    s_hiM[s_hiMn].stride = stride;
+    s_hiM[s_hiMn].gen = gen;
+    s_hiM[s_hiMn].npiece = tagpu_hires_npiece(mesh);
+    s_hiM[s_hiMn].grpOff = s_hiGn;
+    s_hiM[s_hiMn].ngroup = 0;
+    for (k = 0; k < ng; k++) {
+        TAGPU_HGROUP g;
+        if (!tagpu_hires_group(mesh, k, &g)) continue;
+        memcpy(s_hiG[s_hiGn].base, g.base, sizeof s_hiG[s_hiGn].base);
+        s_hiG[s_hiGn].cutoff = g.cutoff;
+        s_hiG[s_hiGn].first = g.first;
+        s_hiG[s_hiGn].count = g.count;
+        /* THE ALBEDO IS NOT CARRIED, so a group that actually cuts out is a
+           frame this lane cannot reproduce. Recorded, not silently dropped. */
+        if (g.cutoff >= 0.0f) s_hiCutout = 1;
+        s_hiGn++;
+        s_hiM[s_hiMn].ngroup++;
+    }
+    return s_hiMn++;
+}
 static float s_sun = 2.67f;      /* pi * 0.85: full light lands near albedo   */
 static float s_amb = 0.18f;
 static int   s_normalMaps = 1;
@@ -602,6 +688,11 @@ void tagpu_hires_depth(const TAGPU_HVIEW* v, const TAGPU_HUNIT* u, int n,
     int i, k;
     (void)v;
     ensure();
+    /* THE RECORD STARTS EMPTY EVERY FRAME AND IS PUBLISHED ONLY AT THE END, so
+       an early return below leaves the previous frame's nothing rather than the
+       previous frame's units. */
+    s_hiUn = s_hiMn = s_hiGn = 0; s_hiRown = 0;
+    s_hiCutout = 0; s_hiDropped = 0; s_hiHave = 0;
     if (s_state != 1 || n <= 0) return;
     glUseProgram(s_prog);
     glUniform1i(u_depthPass, 1);
@@ -632,6 +723,37 @@ void tagpu_hires_depth(const TAGPU_HVIEW* v, const TAGPU_HUNIT* u, int n,
             glUniform4fv(u_anchor, 1, anc);
             glUniform3fv(u_yawEnc, 1, ye);
             glUniform3fv(u_cast, 1, h->cast);
+            /* AND THE SAME NUMBERS CROSS THE SEAM, taken from the uniforms
+               this draw is about to use rather than recomputed on the other
+               side: `ye` is the only trigonometry in the pass, and a port that
+               did its own would be free to disagree with it in the last bit. */
+            {
+                int np = tagpu_hires_npiece(h->mesh);
+                int mi = hi_mesh(h->mesh);
+                const float* pose;
+                if (np > TAGPU_HMAXPIECE) np = TAGPU_HMAXPIECE;
+                if (np < 0) np = 0;
+                pose = (h->pose && h->npose >= np) ? h->pose : ident_pose();
+                if (mi < 0) {
+                    s_hiDropped++;         /* no CPU copy yet: refuse, never draw light */
+                } else if (!hi_room((void**)&s_hiU, &s_hiUcap, s_hiUn + 1,
+                                    sizeof *s_hiU, TAGPU_HI_MAXHAND) ||
+                           !hi_room((void**)&s_hiRow, &s_hiRowcap,
+                                    s_hiRown + np * 12, sizeof *s_hiRow,
+                                    TAGPU_HI_MAXHAND * TAGPU_HMAXPIECE * 12)) {
+                    s_hiDropped++;
+                } else {
+                    s_hiU[s_hiUn].mesh = mi;
+                    s_hiU[s_hiUn].npose = np;
+                    s_hiU[s_hiUn].rowOff = (unsigned)s_hiRown;
+                    memcpy(s_hiU[s_hiUn].anchor, anc, sizeof anc);
+                    memcpy(s_hiU[s_hiUn].yawEnc, ye, sizeof ye);
+                    memcpy(s_hiU[s_hiUn].cast, h->cast, sizeof s_hiU[s_hiUn].cast);
+                    if (np > 0) memcpy(s_hiRow + s_hiRown, pose, (size_t)np * 12 * sizeof(float));
+                    s_hiRown += np * 12;
+                    s_hiUn++;
+                }
+            }
         }
         for (k = 0; k < ng; k++) {
             TAGPU_HGROUP g;
@@ -646,6 +768,37 @@ void tagpu_hires_depth(const TAGPU_HVIEW* v, const TAGPU_HUNIT* u, int n,
     glUniform1i(u_depthPass, 0);
     glBindVertexArray(0);
     x_glActiveTexture(GL_TEXTURE0);
+
+    /* PUBLISHED ONLY IF EVERY CASTER THIS PASS DREW IS IN IT. A record short of
+       the GL map is the one thing worse than no record: the census in
+       tagpu_shadow.c counts the GL draws, so a lane handed a lighter map would
+       satisfy the census with fewer casters and draw a DIFFERENT map -- lit
+       where the oracle has shadow. Dropping the frame costs a refusal; the
+       alternative is silent. */
+    if (s_hiDropped || s_hiUn <= 0) { s_hiHave = 0; return; }
+    memset(&s_hiPub, 0, sizeof s_hiPub);
+    s_hiPub.depthOn = 1;
+    memcpy(s_hiPub.shadowMat, shadowMat, sizeof s_hiPub.shadowMat);
+    s_hiPub.units = s_hiU;   s_hiPub.nunit = s_hiUn;
+    s_hiPub.meshes = s_hiM;  s_hiPub.nmesh = s_hiMn;
+    s_hiPub.groups = s_hiG;  s_hiPub.ngroup = s_hiGn;
+    s_hiPub.rows = s_hiRow;  s_hiPub.nrow = (unsigned)s_hiRown;
+    s_hiPub.cutoutSeen = s_hiCutout;
+    s_hiHave = 1;
+}
+
+/* The frame's casters, once. `frame` is stamped by the caller's counter at
+   publish time through this function rather than inside the pass, because the
+   pass does not carry one -- so the freshness test is the CALLER's `now`
+   against the frame the seam last asked for, and a second ask in the same frame
+   answers 0 exactly as tagpu_posedraw.c's does. */
+int tagpu_hires_handover(TAGPU_HIHAND* out, unsigned now)
+{
+    if (!s_hiHave || !out) return 0;
+    s_hiPub.frame = now;
+    *out = s_hiPub;
+    s_hiHave = 0;
+    return 1;
 }
 
 void tagpu_hires_draw_glreset(void)
