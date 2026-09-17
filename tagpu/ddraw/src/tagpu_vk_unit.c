@@ -207,21 +207,44 @@ static VkImageView    s_atView;
 static int            s_atDim;
 static unsigned       s_atSerial;
 static int            s_atHave;
-/* CLASSIC++'s RESTORED TWIN, RGBA8 (the Vulkan-only plan's gate 3). A second
-   shared image beside the indexed one, `atlasDim` wide and as many rows as the
-   read-back has covered -- so its extent is NOT the indexed atlas's and the two
-   cannot share a build.
-   THE SERIAL ALONE DECIDES WHETHER TO UPLOAD. Nothing here stores a row count
-   to compare against the hand-over's: the gate-2 review found exactly that on
-   the feature and effects passes, where what was stored was the rows SENT and
-   what was compared was the rows PUBLISHED, so the two could never be equal and
-   16 MB went up every frame for the life of the process. `s_arRows` is the
-   IMAGE's own height, used to decide whether the image has to be rebuilt and to
-   size the copy -- never to decide whether to make it. */
+/* CLASSIC++'s RESTORED TWIN, RGBA8 (the Vulkan-only plan's gate 3).
+
+   IT IS THE ATLAS'S FULL SQUARE, `dim x dim`, AND NOT THE ROWS THE READ-BACK
+   HAS COVERED. That is not a memory decision, it is the only extent that can
+   be right: the UVs the vertex stream carries are normalised against the whole
+   atlas (`tagpu_gaf.c`: `u0 = x / a->dim`, `v0 = y / a->dim`), the GL twin they
+   were computed for is `glTexImage2D(..., a->dim, a->dim, ...)`, and there is
+   no scale uniform between them. An image of `dim x rows` makes `v = 1.0` mean
+   row `rows` instead of row `dim`, so every restored texel is sampled from the
+   wrong place -- by a factor of `dim / rows`, which on a half-filled shelf is
+   two. The first version of this landing built it `dim x rows` and the A/B
+   could not see it, because the restorer had painted nothing in that fixture
+   and the branch only ever read alpha 0. [FOUND BY THE GATE-3a LANDING REVIEW,
+   2026-09-16. tagpu_vk_feat.c and tagpu_vk_fx.c had it right already, which is
+   what makes a pass that differs from its neighbours worth explaining.]
+
+   BUILT ONCE AND NEVER RESIZED, which is the second half of the same decision.
+   An extent that never moves means `kill_image` is never called on it in the
+   middle of a frame -- and this file's own `refuse:` label says why that
+   matters: the seam waited on fence[slot] ALONE, so every OTHER slot's submit
+   is still executing against this shared image. The earlier version rebuilt
+   whenever the read-back's high-water mark advanced, which is routinely, during
+   play. [Same review, and it is the same fault twice.]
+
+   It is still built LAZILY -- on the first frame that carries a mirror rather
+   than beside the indexed atlas as the feature pass does -- so a session with
+   Classic++ off never pays the 16 MB. Lazy is safe here precisely because the
+   extent does not depend on the frame that triggers it.
+
+   THE SERIAL ALONE DECIDES WHETHER TO UPLOAD. `s_arReq` is the rows LAST SENT
+   and is read for one thing only: spotting a mirror that SHRANK, which needs
+   the whole square re-sent. It is never compared against the published rows to
+   decide whether to send -- that comparison is gate 2's finding 2, where the
+   two could never be equal and 16 MB went up every frame for ever. */
 static VkImage        s_arImg;
 static VkDeviceMemory s_arMem;
 static VkImageView    s_arView;
-static int            s_arDim, s_arRows;
+static int            s_arDim, s_arReq;
 static unsigned       s_arSerial;
 static int            s_arHave;
 
@@ -959,25 +982,38 @@ static int build_descriptors(const TAGPU_VKPASS* d)
     return 1;
 }
 
-/* THE RESTORED TWIN'S IMAGE. Rebuilt when the extent moves, which is a new
-   atlas or a read-back that has covered more rows than last time; the serial
-   and `have` go with it, because a new image has no contents.
+/* THE RESTORED TWIN'S IMAGE: the atlas's full square, made once. See the
+   declarations above for why both halves of that are forced rather than chosen.
+   The only rebuild is a new ATLAS DIMENSION, which for this atlas is the
+   compile-time ATLAS_DIM and therefore never happens after the first build --
+   the test is kept as the assertion that it does not.
+
    A FAILURE HERE IS NOT FATAL AND MUST NOT BE. The view stays NULL, binding 43
    falls back to the indexed view exactly as it did before gate 3, and the
    restored refusal in `prepare` keeps the branch unreachable -- so a device
    that will not give us 16 MB of RGBA8 loses restored frames rather than the
-   pass. That is why this returns void-ish through its own test rather than
-   joining the `goto refuse` family, whose label stops the pass for the session. */
-static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int rows)
+   pass. That is why it does not join the `goto refuse` family, whose label
+   stops the pass for the session. */
+static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim)
 {
-    if (s_arImg && s_arDim == dim && s_arRows == rows) return 1;
+    if (s_arImg && s_arDim == dim) return 1;
     kill_image(d, &s_arImg, &s_arMem, &s_arView);
-    s_arDim = 0; s_arRows = 0; s_arSerial = 0; s_arHave = 0;
-    if (!mk_image(d, dim, rows, VK_FORMAT_R8G8B8A8_UNORM,
+    s_arDim = 0; s_arReq = 0; s_arSerial = 0; s_arHave = 0;
+    if (!mk_image(d, dim, dim, VK_FORMAT_R8G8B8A8_UNORM,
                   VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                  VK_IMAGE_ASPECT_COLOR_BIT, &s_arImg, &s_arMem, &s_arView))
+                  VK_IMAGE_ASPECT_COLOR_BIT, &s_arImg, &s_arMem, &s_arView)) {
+        /* `mk_image` can fail after vkCreateImage and vkAllocateMemory
+           succeeded, and its `bad:` label nulls the image and the memory but
+           not the VIEW -- a driver that writes a handle before failing
+           vkCreateImageView would leave `s_arView` non-NULL against
+           `s_arDim == 0`, which the refusal below reads as "we have it" and
+           binding 43 would then name a dead handle. One call closes it.
+           [The gate-3a review's minor finding; gate 2's finding 3 was the same
+           class one level down.] */
+        kill_image(d, &s_arImg, &s_arMem, &s_arView);
         return 0;
-    s_arDim = dim; s_arRows = rows;
+    }
+    s_arDim = dim;
     return 1;
 }
 
@@ -1155,26 +1191,40 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
 }
 
 /* THE RESTORED TWIN, on the same staging buffer and the same barrier shape.
-   The extent copied is the IMAGE's, which `prepare` has already sized to this
-   frame's rows -- not the hand-over's, because "I asked for this size" is not
-   "the image is this size" and a copy read off the wrong one of the two runs
-   past the end of one of them. [The gate-2 review's fourth finding, applied
-   here before it could be made again.] */
+
+   HOW MANY ROWS: `rgb_rows_due` decides, and the answer is either this frame's
+   covered rows or the WHOLE SQUARE. The square goes up on the first upload and
+   on a SHRINK -- the mirror drops to 0 rows on a context loss and on a re-arm
+   (tagpu_gaf.c) -- because uploading only the new, smaller count would leave
+   every row above it holding the previous twin's colours. The mirror's own
+   allocation is the full `dim * dim * 4` and it is calloc'd, so reading every
+   row of it is in bounds and the unpainted rows read as alpha 0, which is
+   exactly what an unpainted cell means. This is tagpu_vk_feat.c's rule,
+   unchanged, and the reason to keep the two files the same is that the one
+   place this pass DID differ from them is the fault its review found. */
+static int rgb_rows_due(const TAGPU_PDHAND* h)
+{
+    int rrows = h->atlasRgbRows;
+    if (rrows > h->atlasDim) rrows = h->atlasDim;
+    if (!s_arHave || rrows < s_arReq) rrows = h->atlasDim;
+    return rrows;
+}
+
 static int atlas_rgb_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
                             const TAGPU_PDHAND* h, VkDeviceSize stageOff)
 {
     VkDeviceSize bytes;
-    if (!s_arImg || !h->atlasRgb) return 1;
+    int rrows;
+    if (!s_arImg || !h->atlasRgb || h->atlasRgbRows < 1) return 1;
     if (s_arHave && s_arSerial == h->atlasRgbSerial) return 1;
-    /* THE EXTENTS AGREE OR NOTHING IS COPIED. `prepare` builds the image at
-       exactly (atlasDim, atlasRgbRows) or stands a restored frame down, so on
-       any frame that will sample this they do agree; a frame that will not
-       sample it loses nothing by skipping the copy. The test is kept because
-       it is what makes the memcpy's source bound and the copy's extent the
-       same rectangle, which is the whole of the fault the gate-2 review found
-       on the terrain pass. */
-    if (s_arDim != h->atlasDim || s_arRows > h->atlasRgbRows) return 1;
-    bytes = (VkDeviceSize)s_arDim * s_arRows * 4;
+    /* THE IMAGE IS THIS ATLAS'S SQUARE OR NOTHING IS COPIED. It is built to
+       `atlasDim` and that number is bounded in `prepare`, so this cannot fire;
+       it is kept as the assertion that the copy's extent and the memcpy's
+       source are the same rectangle -- the gate-2 review found the terrain pass
+       reading one off the other. */
+    if (s_arDim != h->atlasDim) return 1;
+    rrows = rgb_rows_due(h);
+    bytes = (VkDeviceSize)s_arDim * rrows * 4;
     if (stageOff + bytes > s->vscap) return 0;
     memcpy(s->vsmap + stageOff, h->atlasRgb, (size_t)bytes);
     img_barrier(cb, s_arImg, VK_IMAGE_ASPECT_COLOR_BIT,
@@ -1185,13 +1235,14 @@ static int atlas_rgb_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
                          : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                 s_arHave ? VK_ACCESS_SHADER_READ_BIT : 0,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    copy_rect(cb, s->vstage, stageOff, s_arImg, s_arDim, s_arRows);
+    copy_rect(cb, s->vstage, stageOff, s_arImg, s_arDim, rrows);
     img_barrier(cb, s_arImg, VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
     s_arSerial = h->atlasRgbSerial;
+    s_arReq = rrows;
     s_arHave = 1;
     return 1;
 }
@@ -1468,12 +1519,12 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        measured failing in exactly that shape twice on the way to gate 2, with
        a perfect hand-over against img=0 view=0. A failure is non-fatal: the
        view stays NULL and the refusal below then holds. */
-    if (rgbRows > 0 && !atlas_rgb_build(d, h.atlasDim, rgbRows)) {
+    if (rgbRows > 0 && !atlas_rgb_build(d, h.atlasDim)) {
         if (!s_saidRgbImg) {
             s_saidRgbImg = 1;
             plog(d, "unit: no %d MB device image for the Classic++ restored twin "
                     "- restored frames stand down while that is true",
-                 (h.atlasDim * rgbRows * 4) >> 20);
+                 (h.atlasDim * h.atlasDim * 4) >> 20);
         }
     }
     if (h.restored && !(s_arView && rgbRows > 0)) {
@@ -1608,7 +1659,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        the image was built to the rows, so there is nothing to round up to. */
     rgbNeed = (s_arView && h.atlasRgb && rgbRows > 0 &&
                (!s_arHave || s_arSerial != h.atlasRgbSerial))
-              ? (VkDeviceSize)s_arDim * s_arRows * 4 : 0;
+              ? (VkDeviceSize)s_arDim * rgb_rows_due(&h) * 4 : 0;
     atlasNeed += rgbNeed;
     stageNeed += atlasNeed;
     if (stageNeed) {
@@ -2190,7 +2241,7 @@ void tagpu_vk_unit_down(const TAGPU_VKPASS* d)
     kill_image(d, &s_dumImg, &s_dumMem, &s_dumView);
     kill_image(d, &s_dumDepth, &s_dumDepthMem, &s_dumDepthView);
     s_atDim = 0; s_atSerial = 0; s_atHave = 0; s_dumReady = 0;
-    s_arDim = 0; s_arRows = 0; s_arSerial = 0; s_arHave = 0;
+    s_arDim = 0; s_arReq = 0; s_arSerial = 0; s_arHave = 0;
     if (s_dpool) { vkDestroyDescriptorPool(d->dev, s_dpool, NULL); s_dpool = VK_NULL_HANDLE; }
     if (s_pipeBody) { vkDestroyPipeline(d->dev, s_pipeBody, NULL); s_pipeBody = VK_NULL_HANDLE; }
     if (s_pipeCast) { vkDestroyPipeline(d->dev, s_pipeCast, NULL); s_pipeCast = VK_NULL_HANDLE; }
