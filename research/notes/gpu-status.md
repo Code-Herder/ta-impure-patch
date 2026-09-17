@@ -7086,6 +7086,115 @@ shown rather than argued.
   landing, and widening a diff past what was reviewed is how an unreviewed change reaches `main`.
   Named here so it is a known debt rather than a silent one.
 
+### 2.38 The replacement meshes' casters, drawn by Vulkan — gate 3b of the Vulkan-only plan
+
+**MEASURED 2026-09-17.** Gate 3a left one caster kind uncovered and gate 3b is it. A tacli
+instance ships `hires/armpw.glb` **active**, so one Peewee on screen made `tagpu_shadow.c`'s
+census refuse **1** caster and a 257-unit crowd **16** — and a refused census stands the shadow
+map down, and the terrain and unit passes down behind it.
+
+#### What it is, and what it deliberately is not
+
+`tagpu_vk_hires.c` draws those silhouettes into the cast-shadow map and **nothing else**. The
+bodies stay with `tagpu_hires_draw.c`'s GL program: a glTF unit shaded per pixel with normal maps
+is not what blocks the lane, the census is. That is the whole difference between this file and
+its 1 400-line siblings.
+
+Three parts, in the order they had to be built:
+
+1. **`tagpu_hires.c` keeps the CPU vertex copy.** It freed `m->v` the moment the VBO had it —
+   right while GL is the only consumer, wrong the moment a lane that cannot read a GL buffer
+   needs the same triangles. The sizing written for this gate two days earlier said the vertices
+   came "out of the static buffer"; **that was wrong and the code was checked rather than
+   remembered.** The case worth the work is asking LATE: the lever can appear after the models
+   are uploaded and freed, so the ask forces a re-read from file rather than answering NULL for
+   the session.
+2. **`TAGPU_HIHAND` records what `tagpu_hires_depth` drew, as it draws it.** `castSkip`, a VAO
+   that would not build and a zero-count group each drop a unit from the GL map, and a second
+   walk is free to disagree about any of them while both look right. It publishes only if EVERY
+   caster the pass drew is in it: a record *short* of the GL map is worse than none, because the
+   census counts the GL draws and a lighter map would satisfy it with fewer casters and come out
+   **lit where the oracle has shadow**.
+3. **The pass, and the census becomes a sum** — `tagpu_vk_unit_casters() +
+   tagpu_vk_hires_casters()`. Both count the same way and both can only under-count, so the sum
+   stays comparable to `otherCasters` by the same construction G19e established.
+
+#### The albedo is deferred, and that is checked rather than hoped
+
+The fragment shader's depth path is three lines: sample `uAlbedo`, `discard` if the alpha cutout
+fails, return. One sampler read, one branch that can discard. The hand-over refuses any frame
+carrying a group with `cutoff >= 0` (`cutoutSeen`), so that branch cannot be taken — which makes
+the 1×1 white stand-in **not an approximation of the albedo but exactly equivalent to this path**.
+The other six samplers the shader declares are untouched there and need a valid descriptor and
+nothing more. Every material of the shipped `armpw.glb` is `alphaMode OPAQUE` (6 materials,
+checked in the file), so the refusal has nothing to fire on today and is there for the mesh that
+is not shipped yet.
+
+#### What was measured
+
+`hires-one` on Two Continents, 1024×768, `ss=1`, the unit pass's own A/B, `aniso=1`:
+
+| configuration | result |
+|---|---|
+| before this landing, mesh active | **no picture at all** — the census refused every frame |
+| mesh active, shadows on | **1 px of 786 432**, worst channel 1, 380 non-black a side |
+| mesh **parked**, shadows on | **the same 1 px, at the same (603, 377), with the same two values** |
+| mesh active, shadows **off** | **0 px of 786 432** |
+
+The second and third rows together are the point: the pixel is there with **no replacement mesh
+in the session at all**, so it is the soft-shadow PCF's and not this landing's. No refusal of any
+kind appears in the log of the measured run.
+
+#### AND THE SENSITIVE FIXTURE FOUND A DEFECT THAT IS NOT THIS GATE'S
+
+`hires-one` draws 380 unit pixels whether shadows are on or off, so it barely tests a caster
+silhouette at all. `crowd-static` — 257 units, 16 casters — draws ~220 000, and there the same
+A/B is **not** clean:
+
+| crowd-static, 1024×768 | differing | worst channel |
+|---|---|---|
+| mesh active, shadows on | 393 | 158 |
+| mesh parked, shadows on | 435 | 158 |
+| mesh active, shadows off | 267 | 158 |
+| mesh parked, shadows on, `assets=0` | 164 | 176 |
+| mesh active, shadows off, `assets=0` | **65** | 176 |
+
+**Every row has the same first differing pixel, (285, 33).** It survives parking the mesh, turning
+shadows off, and turning the Classic++ restored atlas off entirely — so it is neither gate 3b's
+nor the restored path gate 3a built, though that path amplifies it from 65 px to 267.
+
+**It is edge coverage, and that is measured rather than guessed.** Of the 65 pixels in the
+cleanest row, **65 lie on a GL colour edge** — all of them — and in 26 the Vulkan value is
+*exactly* a neighbouring GL pixel's. The differences are isolated singletons scattered from
+x 201–870 and y 33–726, in both directions (Vulkan brighter in 27 of 65), and at (336, 69) GL has
+blue (15, 39, 151) where Vulkan has grey (75, 75, 75) — two different UNITS winning one pixel.
+Both lanes use `LESS`, so it is not a compare-op mismatch. What is left is the two rasterisers
+disagreeing about which triangle owns a pixel whose centre an edge passes through: a 1-ULP
+difference between two compilations of the same GLSL moves an edge across a sample point, and
+with four units no edge lands on one while with 257 units 65 do.
+
+**This is the same SHAPE as the anisotropy residual §2.37 escalated, and it is not yet the
+owner's call because it is not yet traced.** It is 0.031 % of drawn pixels, bounded, symmetric,
+and independent of everything this gate and the last one built — but **gate 3a's headline "0 px"
+was taken on a four-unit fixture and could not have seen it**, and that is the honest correction
+this section makes to the one above it. What it needs is its own landing: the cause is attributed
+from the difference image, not traced to a line of arithmetic.
+
+#### Not covered
+
+* **The caster silhouette itself is not verified pixel-for-pixel.** The gate's exit condition —
+  the census closes and the passes stop standing down — is met and measured. But the A/B that
+  could see a *wrong* silhouette is the terrain pass's, and terrain cannot be A/B'd while the
+  unit pass draws, because the census needs the unit pass drawing and two drawing passes make the
+  lane refuse the capture (§2.37 records the same limit). The evidence here is the census closing
+  plus the unit pass matching; it is not a picture of the shadow.
+* **The edge-coverage defect above is characterised, not fixed, and not traced.**
+* **One map, one resolution, two fixtures, one GPU, one OS,** and `ss=1`.
+* **The bodies are still GL.** This gate ports the casters; a replacement mesh's own pixels are
+  drawn by `tagpu_hires_draw.c` on both lanes and are not in the unit pass's picture at all,
+  which is why the non-black count falls from 789 to 380 when the mesh is activated.
+
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out

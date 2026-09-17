@@ -195,7 +195,9 @@ of everything else. The order below is the corrected one.
    bytes across the seam with a serial; that is the class to read for each time.
 3. **The caster stream** — so the cast-shadow map can be drawn on this side of the seam and the
    passes that sample it stop standing down. **Landing 3a done 2026-09-16**
-   ([gpu-status](gpu-status.html) §2.37); **3b open**.
+   ([gpu-status](gpu-status.html) §2.37); **3b done 2026-09-17** (§2.38). The census now closes
+   with a replacement mesh on screen, which is this landing's whole exit condition, and the
+   passes that sample the map draw again.
 
    **The row as filed named the wrong two things, and the measurement is how that came out.**
    It said *"the native 3DO stream and the replacement meshes"*:
@@ -245,6 +247,17 @@ of everything else. The order below is the corrected one.
      So 3b ports geometry and poses, and **refuses any frame in which a group with
      `cutoff >= 0` is drawn** — the same stand-down discipline as everywhere else, and the thing
      that makes the deferral honest rather than a hole.
+
+     **DONE, and it found a defect that belongs to no gate on this list.** Measuring 3b on the
+     fixture that could actually see a caster — `crowd-static`, 257 units — turned up **65 px of
+     209 814 differing with everything this plan has built turned OFF**: shadows off, the restored
+     atlas off, the replacement mesh parked. All 65 lie on a GL colour edge and 26 carry a
+     neighbouring GL pixel's exact value, so it is the two rasterisers disagreeing about which
+     triangle owns a pixel an edge passes through. **It has been invisible since G19e because
+     every A/B on this plan has been taken on a four-unit fixture**, where no edge lands on a
+     sample point. It is 0.031 % of drawn pixels and symmetric, it is characterised but NOT
+     traced, and it needs a landing of its own — see §2.38. Nothing below should be measured on a
+     small fixture again.
 
    **The lesson worth carrying, and every remaining landing in this plan is exposed to it.**
    Landing 2's review said a serial is the class to read for each time; 3a's re-review says the

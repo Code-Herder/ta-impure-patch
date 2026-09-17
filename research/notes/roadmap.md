@@ -2640,8 +2640,19 @@ at all on that fixture.
 paid for, one of them a second instance of gate 2's use-after-free. Every figure above was
 re-taken on the fixed binary and is identical.
 
-What is left is **3b, the replacement meshes** — 1 refused caster with one Peewee on screen, 16 on
-a 257-unit crowd, because a tacli instance ships `hires/armpw.glb` active.
+**Landing 3b closed that** ([gpu-status](gpu-status.html) §2.38): `tagpu_vk_hires.c` puts the
+replacement meshes' silhouettes in the map, the census became a sum of the two caster passes, and
+the fixture that drew *no picture at all* before it now draws with 1 px differing — a pixel a
+control proves is the soft-shadow PCF's, because parking the mesh leaves it at the same
+coordinates with the same two values.
+
+**And measuring it on a fixture big enough to see a caster found a defect that belongs to no gate
+on this plan.** On the 257-unit crowd, 65 px of 209 814 differ with shadows off, the restored
+atlas off and the replacement mesh parked — every one of them on a colour edge, 26 carrying a
+neighbouring pixel's exact value. It is the two rasterisers disagreeing about which triangle owns
+a pixel an edge passes through, it is 0.031 % of drawn pixels, and it has been invisible since
+G19e because every A/B on this plan was taken on a four-unit fixture. Characterised, not traced;
+it needs its own landing.
 
 **Its landing 1 ran the same day and is the reason the rest is ordered as it is**
 ([gpu-status](gpu-status.html) §2.35): started in the configuration the patch actually ships in
