@@ -85,7 +85,24 @@ static VkPipelineLayout      s_plo;
 static VkPipeline            s_pipeTri, s_pipeLine;
 static VkRenderPass          s_pipeRp;
 static VkDescriptorPool      s_pool;
-static VkDescriptorSet       s_set[TAGPU_VK_SLOTS];
+/* TWO SETS PER SLOT, AND THE REASON IS THE GL TWIN'S OWN SHADER. `uLayer` is
+   ONE sampler that the twin feeds from TWO textures: the captured post-fog
+   layer for the layer draw, and tagpu_text.c's coverage atlas for the label
+   and digit draws -- `tagpu_text_tex()` simply binds the atlas to unit 0 and
+   the layer draw binds the layer back. Vulkan has no per-draw texture bind, so
+   the choice moves into the descriptor set: `s_setL` carries the layer at
+   binding 40 and `s_setT` the atlas, and `record` picks one per draw.
+
+   THE FIRST BUILD HAD ONE SET AND NEVER BOUND THE ATLAS AT ALL. The text image
+   was sized, uploaded and generation-tracked, and then nothing sampled it: every
+   text draw read the LAYER binding, which on a frame with no captured layer is
+   the 1x1 0xFF stand-in, so `texture(uLayer, vUV).r` was 1.0 for every fragment,
+   the `< 0.5` discard never fired and each label and digit came out a SOLID
+   filled quad in its vertex colour. The bars-only A/B could not see it -- there
+   was no text draw in the frame -- and the first A/B that had labels in it
+   measured 3 891 pixels. */
+static VkDescriptorSet       s_setL[TAGPU_VK_SLOTS];
+static VkDescriptorSet       s_setT[TAGPU_VK_SLOTS];
 static VkSampler             s_samp;          /* NEAREST: every texel here is an
                                                  index or a coverage byte */
 
@@ -121,7 +138,7 @@ static VkDeviceSize s_fsOff[TAGPU_MK_MAXDRAW];
 static VkDeviceSize s_ualign = 256;
 static uint32_t s_slot;
 static int s_abFrame;
-static int s_saidLine, s_saidFog, s_saidRoom, s_saidWhy, s_saidHand, s_saidDrew, s_saidIn;
+static int s_saidLine, s_saidWide, s_saidFog, s_saidTex, s_saidRoom, s_saidWhy, s_saidHand, s_saidDrew, s_saidIn;
 /* ONE LATCH PER SITE. A single `s_saidImg` shared by six upload sites hid every
    failure after the first -- including a failure at a DIFFERENT site, which is
    the case that matters. Two live diagnosis cycles were spent reading a masked
@@ -314,7 +331,8 @@ static int build_descriptors(const TAGPU_VKPASS* d)
     VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
     VkDescriptorPoolSize ps[2];
     VkDescriptorPoolCreateInfo pi = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
-    VkDescriptorSetLayout lay[TAGPU_VK_SLOTS];
+    VkDescriptorSetLayout lay[2 * TAGPU_VK_SLOTS];
+    VkDescriptorSet       all[2 * TAGPU_VK_SLOTS];
     VkDescriptorSetAllocateInfo ai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
     VkSamplerCreateInfo si = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
     uint32_t i;
@@ -340,19 +358,23 @@ static int build_descriptors(const TAGPU_VKPASS* d)
     }
     memset(ps, 0, sizeof ps);
     ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-    ps[0].descriptorCount = 2 * d->slots;
+    ps[0].descriptorCount = 2 * 2 * d->slots;
     ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps[1].descriptorCount = NSAMP * d->slots;
-    pi.maxSets = d->slots;
+    ps[1].descriptorCount = NSAMP * 2 * d->slots;
+    pi.maxSets = 2 * d->slots;
     pi.poolSizeCount = 2; pi.pPoolSizes = ps;
     if (vkCreateDescriptorPool(d->dev, &pi, NULL, &s_pool) != VK_SUCCESS) {
         s_pool = VK_NULL_HANDLE; return 0;
     }
-    for (i = 0; i < d->slots; i++) lay[i] = s_dsl;
+    for (i = 0; i < 2 * d->slots; i++) lay[i] = s_dsl;
     ai.descriptorPool = s_pool;
-    ai.descriptorSetCount = d->slots;
+    ai.descriptorSetCount = 2 * d->slots;
     ai.pSetLayouts = lay;
-    if (vkAllocateDescriptorSets(d->dev, &ai, s_set) != VK_SUCCESS) return 0;
+    if (vkAllocateDescriptorSets(d->dev, &ai, all) != VK_SUCCESS) return 0;
+    for (i = 0; i < d->slots; i++) {
+        s_setL[i] = all[i];
+        s_setT[i] = all[d->slots + i];
+    }
     /* NEAREST on all four, and it is not a style choice: uLayer's texel IS a
        palette index and interpolating two of them gives a colour that is in
        neither, which is the GL twin's own comment on the same sampler. */
@@ -383,6 +405,8 @@ static int build_pipelines(const TAGPU_VKPASS* d, VkRenderPass rp)
                               VK_DYNAMIC_STATE_LINE_WIDTH };
     VkPipelineDynamicStateCreateInfo dy = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
     VkGraphicsPipelineCreateInfo gp = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+    VkPipelineRasterizationLineStateCreateInfoEXT lr =
+        { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_LINE_STATE_CREATE_INFO_EXT };
     VkShaderModule vs = VK_NULL_HANDLE, fs = VK_NULL_HANDLE;
     int ok = 0;
 
@@ -432,7 +456,10 @@ static int build_pipelines(const TAGPU_VKPASS* d, VkRenderPass rp)
     ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                         VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     cb.attachmentCount = 1; cb.pAttachments = &ba;
-    dy.dynamicStateCount = d->lineok ? 3 : 2; dy.pDynamicStates = dyn;
+    /* TWO for the triangle pipeline: it rasterises no line, so declaring
+       LINE_WIDTH there would be a dynamic state nothing sets and nothing
+       reads. The line pipeline below raises it to three. */
+    dy.dynamicStateCount = 2; dy.pDynamicStates = dyn;
 
     gp.stageCount = 2; gp.pStages = st;
     gp.pVertexInputState = &vi;
@@ -450,9 +477,36 @@ static int build_pipelines(const TAGPU_VKPASS* d, VkRenderPass rp)
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     if (vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_pipeTri) != VK_SUCCESS)
         goto done;
-    ia.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
-    if (vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_pipeLine) != VK_SUCCESS)
-        goto done;
+
+    /* THE ORDER LINES, AND THE ONE PIECE OF STATE THAT MAKES THEM THE TWIN'S.
+       BRESENHAM is the diamond-exit rule GL's non-antialiased lines already
+       follow; Vulkan's DEFAULT mode is not it, and the difference is whole
+       fragments along every diagonal. This pass shipped without the chain and
+       the first A/B that had order lines in it measured the cost: 4 900 pixels
+       the Vulkan lane drew and the GL twin did not, on 436 segments of route
+       line and range circle, with the GL half a near-perfect SUBSET of the
+       Vulkan one. `tagpu_vk_fx.c` had the same state for the same reason and
+       this pass did not copy it -- the second time this file has been caught
+       by a rule a sibling already wrote down.
+
+       Built ONLY when the device gave us the mode, which is what makes the
+       refusal in `prepare` a refusal rather than a fallback: with `lineok`
+       clear there is no line pipeline to bind, so a frame with lines cannot
+       be drawn a different way by accident. */
+    if (d->lineok) {
+        ia.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+        dy.dynamicStateCount = 3;
+        lr.lineRasterizationMode = VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT;
+        lr.stippledLineEnable = VK_FALSE;
+        lr.pNext = rs.pNext;
+        rs.pNext = &lr;
+        if (vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL,
+                                      &s_pipeLine) != VK_SUCCESS) {
+            rs.pNext = lr.pNext;
+            goto done;
+        }
+        rs.pNext = lr.pNext;
+    }
     s_pipeRp = rp;
     ok = 1;
 done:
@@ -501,7 +555,12 @@ static int slot_buf(const TAGPU_VKPASS* d, uint32_t slot, VkDeviceSize ubo,
     return 1;
 }
 
-static void write_set(const TAGPU_VKPASS* d, uint32_t slot)
+/* One of the two sets: `unit0` is what binding 40 -- the shader's `uLayer` --
+   samples in it. Everything else in the two sets is identical, which is the
+   point: the only thing the GL twin changes between a text draw and a layer
+   draw is the texture on unit 0. */
+static void write_one(const TAGPU_VKPASS* d, uint32_t slot, VkDescriptorSet set,
+                      const IMG* unit0)
 {
     VkDescriptorBufferInfo bi[2];
     VkDescriptorImageInfo ii[NSAMP];
@@ -513,17 +572,17 @@ static void write_set(const TAGPU_VKPASS* d, uint32_t slot)
     const IMG* src[NSAMP];
     uint32_t i;
     int n = 0;
-    src[0] = &s_img[IMG_LAYER]; src[1] = &s_img[IMG_PAL];
+    src[0] = unit0;             src[1] = &s_img[IMG_PAL];
     src[2] = &s_img[IMG_FOG];   src[3] = &s_img[IMG_LUT];
     memset(bi, 0, sizeof bi); memset(ii, 0, sizeof ii); memset(w, 0, sizeof w);
     bi[0].buffer = s_ubo[slot]; bi[0].range = VS_SZ;
     bi[1].buffer = s_ubo[slot]; bi[1].range = FS_SZ;
     w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    w[n].dstSet = s_set[slot]; w[n].dstBinding = 0; w[n].descriptorCount = 1;
+    w[n].dstSet = set; w[n].dstBinding = 0; w[n].descriptorCount = 1;
     w[n].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
     w[n].pBufferInfo = &bi[0]; n++;
     w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    w[n].dstSet = s_set[slot]; w[n].dstBinding = 32; w[n].descriptorCount = 1;
+    w[n].dstSet = set; w[n].dstBinding = 32; w[n].descriptorCount = 1;
     w[n].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
     w[n].pBufferInfo = &bi[1]; n++;
     for (i = 0; i < NSAMP; i++) {
@@ -531,12 +590,18 @@ static void write_set(const TAGPU_VKPASS* d, uint32_t slot)
         ii[i].imageView = src[i]->view ? src[i]->view : s_img[IMG_LAYER].view;
         ii[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[n].dstSet = s_set[slot]; w[n].dstBinding = SAMP_BIND[i];
+        w[n].dstSet = set; w[n].dstBinding = SAMP_BIND[i];
         w[n].descriptorCount = 1;
         w[n].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w[n].pImageInfo = &ii[i]; n++;
     }
     vkUpdateDescriptorSets(d->dev, (uint32_t)n, w, 0, NULL);
+}
+
+static void write_set(const TAGPU_VKPASS* d, uint32_t slot)
+{
+    write_one(d, slot, s_setL[slot], &s_img[IMG_LAYER]);
+    write_one(d, slot, s_setT[slot], &s_img[IMG_TEXT]);
 }
 
 int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
@@ -573,7 +638,7 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
            diagnosis on this pass's first live A/B: no refusal, no draw and no
            voice at all, which says "never reached ready" and nothing else. */
         plog(d, "mark: up - %u frame slots, uniform offset alignment %u, "
-                "wide lines %s", (unsigned)d->slots, (unsigned)s_ualign,
+                "bresenham lines %s", (unsigned)d->slots, (unsigned)s_ualign,
              d->lineok ? "yes" : "NO (a frame with order lines will refuse)");
     }
 
@@ -642,12 +707,57 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
             }
             return 0;
         }
+        /* AND A DRAW THAT NAMES A TEXTURE THE HAND-OVER DID NOT BRING.
+           Binding 40 falls back to whatever image is there rather than leaving
+           a hole, so without this a text draw with no atlas would sample the
+           layer (or the 1x1 0xFF stand-in) and come out a solid quad -- which
+           is precisely the shape of the bug the two sets above exist to fix,
+           reachable by a second road. Refuse the frame instead. */
+        if (g->tex == TAGPU_MK_TEX_TEXT &&
+            !(s_h.text && s_h.textW > 0 && s_h.textH > 0)) {
+            if (!s_saidTex) { s_saidTex = 1;
+                plog(d, "mark: a text draw arrived with no coverage atlas - "
+                        "nothing drawn while that is true"); }
+            return 0;
+        }
+        if (g->tex == TAGPU_MK_TEX_LAYER &&
+            !(s_h.layer && s_h.layerW > 0 && s_h.layerH > 0)) {
+            if (!s_saidTex) { s_saidTex = 1;
+                plog(d, "mark: a layer draw arrived with no captured layer - "
+                        "nothing drawn while that is true"); }
+            return 0;
+        }
     }
+    /* THE TWO BOUNDS ON A LINE FRAME, and they are different features.
+
+       `lineok` is VK_EXT_line_rasterization with `bresenhamLines` -- the
+       diamond-exit rule the GL twin's lines already follow. Without it the
+       line pipeline is not built at all (build_pipelines), so this is a
+       refusal and not a fallback.
+
+       The WIDTH is the other one. The GL twin calls `glLineWidth(ss)`, and a
+       Vulkan `lineWidth` other than 1.0 needs the `wideLines` device feature
+       enabled at device creation -- which is the seam's business, not a
+       pass's, and the seam does not ask for it. So a frame that has line
+       vertices at ss != 1 is refused rather than drawn one pixel wide where
+       the twin drew `ss`. This is `tagpu_vk_fx.c`'s rule, item 2 of its
+       header, and the same two sentences apply here word for word. */
     if (needLines && !d->lineok) {
         if (!s_saidLine) {
             s_saidLine = 1;
-            plog(d, "mark: order lines need wideLines and the device has not got "
-                    "it - a thin line is a different picture, so nothing is drawn");
+            plog(d, "mark: order lines need VK_EXT_line_rasterization with "
+                    "bresenhamLines and the device has not got it - GL's "
+                    "diamond-exit line is a different picture from Vulkan's "
+                    "default, so nothing is drawn");
+        }
+        return 0;
+    }
+    if (needLines && s_h.ss != 1.0f) {
+        if (!s_saidWide) {
+            s_saidWide = 1;
+            plog(d, "mark: the order lines are %.1f px wide in the GL twin and "
+                    "this device's pipelines are built at 1.0 (wideLines is not "
+                    "enabled at device creation) - nothing drawn", s_h.ss);
         }
         return 0;
     }
@@ -861,13 +971,28 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     for (i = 0; i < s_h.ndraw; i++) {
         const TAGPU_MKDRAW* g = &s_h.draws[i];
         uint32_t dyno[2];
+        VkDescriptorSet set;
+        /* `prepare` refused every frame that has a line draw without the
+           line pipeline, so this cannot be NULL -- and it is checked anyway,
+           because a bind of VK_NULL_HANDLE is undefined rather than loud and
+           the cost of the branch is nothing. */
+        if (g->lines && !s_pipeLine) continue;
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           g->lines ? s_pipeLine : s_pipeTri);
-        if (g->lines && d->lineok) vkCmdSetLineWidth(cb, s_h.ss);
+        /* Always 1.0 in practice: `prepare` refuses a line frame at ss != 1
+           because `wideLines` is not enabled on the device. Written as `ss`
+           rather than as a literal so the day the seam does enable it, this
+           line is already the twin's. */
+        if (g->lines) vkCmdSetLineWidth(cb, s_h.ss);
         dyno[0] = 0;
         dyno[1] = (uint32_t)s_fsOff[i];
+        /* UNIT 0 IS PER DRAW, exactly as it is in the GL twin: the text
+           draws sample the coverage atlas and the layer draw samples the
+           captured layer. A TEX_NONE draw samples neither (its vertices carry
+           u < 0, the flat path), so either set is the same picture for it. */
+        set = (g->tex == TAGPU_MK_TEX_TEXT) ? s_setT[slot] : s_setL[slot];
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_plo,
-                                0, 1, &s_set[slot], 2, dyno);
+                                0, 1, &set, 2, dyno);
         vkCmdDraw(cb, (uint32_t)g->count, 1, (uint32_t)g->first, 0);
     }
     if (!s_saidDrew) {
@@ -896,7 +1021,7 @@ void tagpu_vk_mark_down(const TAGPU_VKPASS* d)
         s_uboMem[i] = s_vbMem[i] = s_stgMem[i] = VK_NULL_HANDLE;
         s_uboMap[i] = s_vbMap[i] = s_stgMap[i] = NULL;
         s_uboCap[i] = s_vbCap[i] = s_stgCap[i] = 0;
-        s_set[i] = VK_NULL_HANDLE;
+        s_setL[i] = s_setT[i] = VK_NULL_HANDLE;
     }
     if (s_pipeTri) { vkDestroyPipeline(d->dev, s_pipeTri, NULL); s_pipeTri = VK_NULL_HANDLE; }
     if (s_pipeLine) { vkDestroyPipeline(d->dev, s_pipeLine, NULL); s_pipeLine = VK_NULL_HANDLE; }
@@ -908,7 +1033,7 @@ void tagpu_vk_mark_down(const TAGPU_VKPASS* d)
     s_state = ST_UNBUILT;
     s_drawThis = 0; s_abFrame = 0;
     s_downOwed = 0; s_downPaying = 0;
-    s_saidLine = s_saidFog = s_saidRoom = s_saidWhy = 0;
+    s_saidLine = s_saidWide = s_saidFog = s_saidTex = s_saidRoom = s_saidWhy = 0;
     s_saidImgL = s_saidImgT = s_saidImgP = s_saidImgF = s_saidImgU = s_saidImgS = 0;
     s_saidNoDraw = s_saidSlot = 0;
     s_saidHand = s_saidDrew = s_saidIn = 0;
