@@ -7762,6 +7762,12 @@ Same instance, same map, the two DLLs swapped under `--keep-dll`:
 | | the `done` line | 5 062 frames (400 wrap-padded), 80 batches, 3 760 draws | **the same four counts** |
 | | `unit: queue drained` | 25 frames in 2 batches, 94 draws | **the same three counts** |
 
+**EVERY FIGURE ABOVE WAS RE-TAKEN AFTER THE REVIEW'S FIX AND AGREES WITH THE FIRST RUN** — all
+five dumps identical again, both `done` lines' counts unchanged, the `queue drained` tally
+unchanged. The guard added for the review's one real finding cannot fire on the GL lane, which is
+an argument; this is the measurement, and the number now describes the code that landed rather than
+the code the reviewer read.
+
 **Two fixtures on two different maps, and the second one is the one that matters most**: the
 terrain's job is a fixed list added once, but a GAF atlas's is an **open queue** fed on every miss,
 and that is where `job_add` while a run is live, the size-class mixing, the batch-boundary re-pick
