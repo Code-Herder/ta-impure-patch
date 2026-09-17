@@ -1197,16 +1197,17 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     /* DRAWABLE SINCE GATE 2 once the read-back has covered rows, and NO LONGER
        LATCHED -- gpu-status 2.35 measured what latching such a condition costs,
        and this one clears by itself as the restorer paints. */
-    if (t.restored && !(s_rgbAtlas.view && s_rgbAtlas.have)) {
-        if (!s_saidRestored) {
-            s_saidRestored = 1;
-            plog(d, "terr: the GL twin is drawing through the Classic++ restored "
-                    "tile atlas and this lane has no mirror of it yet - nothing "
-                    "drawn until the read-back covers rows");
-        }
-        return 0;
-    }
-    s_saidRestored = 0;
+    /* THE RESTORED ATLAS'S IMAGE IS MADE BEFORE THE REFUSAL THAT TESTS IT, and
+       that order is the whole of it: the refusal returns 0, so a resize placed
+       after it never ran -- the pass could not build the image because it
+       refused, and refused because there was no image. Found by measurement,
+       with a perfect hand-over (rows=2720, serial=1) against img=0 view=0.
+
+       A failure here stays non-fatal: the view stays NULL, binding 42 keeps the
+       indexed view, and the refusal below keeps the branch unreachable. */
+    if (t.atlasRgb && t.atlasRgbRows > 0)
+        shared_resize(d, &s_rgbAtlas, t.atlasW, t.atlasRgbRows,
+                      VK_FORMAT_R8G8B8A8_UNORM);
     /* THE CAST-SHADOW MAP IS DRAWN BY tagpu_vk_shadow.c NOW (G19e's fifth
        pass), so this is no longer "there is no mirror" but "is there a map for
        THIS frame". It is asked with our own frame number, which is what stops a
@@ -1305,13 +1306,6 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     /* WITH NO HEIGHT GRID THE IMAGE IS ONE TEXEL AND uHDim IS 0, which is what
        the GL twin does: the shader's `uHDim.x > 0.5` test is what keeps it
        unsampled, and a 1x1 image keeps the descriptor valid meanwhile. */
-    /* THE RESTORED ATLAS, only when the hand-over carries a read-back. A
-       failure is not fatal: `s_rgbAtlas.view` stays NULL, binding 42 keeps the
-       indexed view, and the refusal below keeps the branch unreachable -- which
-       is why that refusal tests THIS view and not just the hand-over. */
-    if (t.atlasRgb && t.atlasRgbRows > 0)
-        shared_resize(d, &s_rgbAtlas, t.atlasW, t.atlasRgbRows,
-                      VK_FORMAT_R8G8B8A8_UNORM);
     if (!shared_resize(d, &s_height, hW, hH, VK_FORMAT_R8_UNORM)) {
         if (!s_height.img) goto refuse;
         return 0;
@@ -1372,6 +1366,30 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     } else {
         slot_drop_bigstage(d, s);
     }
+
+    /* THE RESTORED REFUSAL SITS AFTER THE UPLOADS, NOT BEFORE THEM, and the
+       order is the point. `prepare` returning 0 skips everything below it, so a
+       refusal placed above the upload meant the upload never ran: the pass
+       refused because the image had no contents, and the image never got
+       contents because the pass refused. Measured twice on the way here --
+       first img=0 (the resize was below it too), then have=0.
+
+       So the data lands first and THEN this frame is refused; the next frame
+       has `have` set and draws. One frame of the GL twin's restored terrain
+       missing from the Vulkan window, once per map, against a permanent
+       stand-down. It tests the VIEW AND ITS CONTENTS because those are what
+       binding 42 names and what the shader samples -- not the hand-over, which
+       only says a mirror exists somewhere. */
+    if (t.restored && !(s_rgbAtlas.view && s_rgbAtlas.have)) {
+        if (!s_saidRestored) {
+            s_saidRestored = 1;
+            plog(d, "terr: the GL twin is drawing through the Classic++ restored "
+                    "tile atlas and this lane has not uploaded it yet - nothing "
+                    "drawn until it has");
+        }
+        return 0;
+    }
+    s_saidRestored = 0;
 
     /* THE THREE SMALL IMAGES, per slot, so the one-line invariant covers them:
        UNDEFINED in, because the whole of each is re-sent every frame and there

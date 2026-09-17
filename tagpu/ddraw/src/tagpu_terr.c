@@ -1405,7 +1405,15 @@ static void rgb_mirror_step(void)
        rather than leaving the last map's colours standing, exactly as
        tagpu_gaf.c's step does: a consumer that kept them would draw restored
        tiles the GL lane no longer draws. */
-    if (!s_rgbTex || !s_job || s_atlasH <= 0) {
+    /* THE TWIN IS THE TEXTURE AND THE STATE, NOT THE JOB. `s_job` is freed the
+       instant the restore COMPLETES -- `s_rgbState` goes to 2 and the comment
+       there says "the texture is ours" -- so testing `s_job` here zeroed this
+       mirror at exactly the moment the twin became fully painted. That is how
+       the first version of this failed its own A/B: the GL half wrote, the
+       Vulkan half refused, and the log said the read-back had covered no rows
+       on a map whose restore had just reported 5062 frames done.
+       `s_rgbState`: 1 restoring, 2 complete, -1 failed, 0 not started. */
+    if (!s_rgbTex || s_rgbState < 1 || s_atlasH <= 0) {
         if (s_rgbMirrorRows) {
             memset(s_rgbMirror, 0, (size_t)ATLAS_W * s_rgbMirrorRows * 4);
             s_rgbMirrorRows = 0;
@@ -1426,7 +1434,11 @@ static void rgb_mirror_step(void)
         s_rgbMirrorRows = 0;
         s_rgbMirrorPainted = 0;
     }
-    painted = tagpu_rglsl_job_painted(s_job);
+    /* THE CONTENT KEY: the restorer's paint count while a job is live, and a
+       sentinel once it is complete -- a finished restore has a fixed content
+       and no counter left to read, and -1 cannot collide with a real count, so
+       the last read-back happens once and then settles. */
+    painted = (s_rgbState == 2 || !s_job) ? -1 : tagpu_rglsl_job_painted(s_job);
     rows = s_atlasH;
     if (painted == s_rgbMirrorPainted && rows <= s_rgbMirrorRows) return;
     if (!tagpu_gl_rgba_readback(s_rgbTex, ATLAS_W, rows, s_rgbMirror,
