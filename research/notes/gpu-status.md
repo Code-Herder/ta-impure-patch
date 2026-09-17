@@ -6633,6 +6633,117 @@ the first thing in the way.
   unmeasured.
 * **No pixel A/B was run.** This section is an inventory of what draws, not a parity figure.
 
+### 2.36 The Classic++ restored atlases, mirrored for Vulkan — gate 2 of the Vulkan-only plan
+
+**MEASURED 2026-09-16.** [gpu-status](gpu-status.html) §2.35 found that in the shipped
+configuration the Vulkan lane drew the UI and nothing else, because four world passes each stood
+down on the same refusal: *the GL twin is drawing through the Classic++ restored atlas and that
+surface has no CPU mirror*. This closes that for three of them — features, effects and terrain.
+The unit pass is not here; see *Not covered*.
+
+**A Vulkan pass cannot read a GL texture**, which is why the refusals existed at all. The fix is
+the mechanism `tagpu_gaf.c` already had for the UI atlas — `tagpu_gaf_atlas_mirror_rgb` and
+`_rgb_step`, whose only caller was `tagpu_gui_surf.c:2475` — extended to the world atlases.
+
+#### What each pass needed
+
+**Features and effects** are `TAGPU_GAFATLAS` instances, so they ask for the same mirror on the
+same arm beat as their indexed one, behind the same latch and gated additionally on
+`tagpu_classicpp_assets()` so a session with Classic++ off never pays the second 16 MB. One
+read-back step per published frame, in the publish rather than the arm beat, because it is a
+`glReadPixels` off an FBO and that is the render thread with the context current.
+
+**Terrain needed a different mechanism.** Its existing mirrors are *"the buffer the
+glTexImage2D was handed, kept instead of freed"*, which cannot work for `s_rgbTex` — the
+restorer paints that on the GPU. And `tagpu_terr.c` had none of the entry points, because
+`glReadPixels` is not among the fork's own globals and has to be fetched. So
+**`tagpu_gl_rgba_readback()`** was added to `tagpu_gaf.c`, where those entry points are already
+resolved: a caller-owned FBO made once, the attachment dropped on every path so a caller's
+texture is not kept alive past a delete, `GL_PACK_ALIGNMENT` and the bound framebuffer restored.
+It knows nothing about an atlas.
+
+**The content key is the part that decides whether this works at all.** `tagpu_gaf.c`'s own step
+records why, from a landing it cost two rounds: *a serial that is not the CONTENT's serial
+uploads once and then misses everything after it.* Terrain keys on the restorer's paint count
+**plus** the row count, because `ensure_atlas` can grow the atlas without a paint landing in
+between.
+
+#### Three ordering faults, all found by measurement
+
+The terrain half did not work when first written, and the A/B is what said so. Each fault was
+hidden behind the one before it, and all three are the same shape — **a refusal placed above the
+code that would satisfy it**:
+
+1. The read-back was gated on `s_job`, which `tagpu_terr.c:1109` frees the instant the restore
+   COMPLETES (*"the texture is ours"*). It therefore zeroed the mirror at exactly the moment the
+   twin became fully painted. The twin is `s_rgbTex` plus `s_rgbState` (1 restoring, 2 complete);
+   the job is only meaningful during state 1, and the key takes a `-1` sentinel once there is no
+   counter left to read.
+2. The restored image's **resize** sat after the refusal that tests it. `prepare` returning 0
+   skips everything below, so the image was never created — measured as `img=0 view=0` against a
+   perfect hand-over (`rows=2720 serial=1`).
+3. The **upload** sat after the refusal too. Image created, `have=0`, the same deadlock one level
+   down.
+
+The refusal now sits after the uploads, so the data lands and the test passes in the same frame.
+
+**AND THE REFUSAL TESTS THE VIEW, NOT THE HAND-OVER.** A first version tested `t.atlasRgb`,
+which meant a resize failure left binding 42 naming the **indexed R8** image while the refusal
+passed — the shader would have sampled R8 through an RGBA sampler and drawn a wrong picture
+instead of standing down. Testing the view and its contents makes a failure self-correcting: the
+binding falls back to the indexed view, which keeps the descriptor valid, and the branch goes
+unreachable again. The placeholder comments the G19e author left at each of these bindings
+(`tagpu_vk_feat.c:773`, `tagpu_vk_fx.c`'s 43, `tagpu_vk_terr.c`'s 42, and `tagpu_vk_unit.c`'s 43
+which is still one) say *"this is the binding that stops being a placeholder"*; three of them now
+have.
+
+**The refusals are also no longer latched.** §2.35 measured what *"draws nothing this session"*
+costs: a pass that refuses once stays dark for the process even after the condition clears. These
+conditions clear by themselves as the restorer paints, so the flag now gates the log line and not
+the refusal.
+
+#### What was measured
+
+One-unit and fx-lasers on Two Continents, 1024x768, `ss=1`, one pass armed at a time, the
+reference setup's 4070:
+
+| pass | fixture | result |
+|---|---|---|
+| features | one-unit | **0 px of 786 432**, 243 695 non-black a side |
+| effects | fx-lasers | **0 px of 786 432**, 3 452 non-black a side |
+| terrain, Classic++ **off** | one-unit | **0 px of 786 432**, 630 606 non-black a side |
+| terrain, Classic++ **on** | one-unit | **5 px of 786 432**, worst channel 1 |
+
+**The terrain 5 px are not a regression, and the previous-build A/B is what established that.**
+On `bfbe8b6`'s DLL the same fixture gives **0 px with Classic++ off** and **no picture at all**
+with it on — the pass stood down. So the indexed path is unchanged and the 5 px belong to the
+newly-enabled restored path, which previously produced nothing to compare against. They are
+deterministic: three runs, same count, same first pixel (721, 173), GL (60, 60, 60) against
+Vulkan (59, 59, 59). That rules out a stale or racing mirror, and the magnitude rules the mirror
+out anyway — a wrong read-back differs in thousands of pixels, not five. One level on all three
+channels, arising only when Classic++ turns `uRestored` and `uLit` on together, is float rounding
+in the lit path. 0.0006 % of pixels at one level is inside the bar already accepted for restored
+art ([renderers](renderers.html) 4c: max 1 level on 0.0012 % of bytes).
+
+**The features 0 px covers less than it looks.** `restoreglsl: feat: lazy restore armed` and
+nothing after it — the restorer had painted no feature frame in that fixture, so the twin was
+alpha 0 throughout and both lanes fell back to the palette per texel. It proves the upload
+corrupts nothing, that the `uRestored == 1` branch is reachable on both sides, and that the
+fallback through it is identical. It does not prove restored feature colours match.
+
+#### Not covered
+
+* **The unit pass.** Its mirror is not in this landing: it cannot be verified until the caster
+  stream lands, because `tagpu_vk_unit.c` stands down on the cast-shadow map first — *"the native
+  3DO stream and the replacement meshes are still to port"* — so an unmeasured consumer would be
+  an unfinished unit of work. `tagpu_vk_unit.c`'s binding 43 stays a placeholder.
+* **Restored FEATURE and EFFECT colours**, for the reason above: the lazy queues had painted
+  nothing in either fixture. Terrain is the only pass here whose restore runs to completion.
+* **One map, one resolution, one GPU, one OS**, and `ss=1` — which the A/B requires and the patch
+  does not ship.
+* **The 5 px are attributed, not traced.** The argument is from magnitude and from which uniforms
+  turn on together, not from a line of shader arithmetic.
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out

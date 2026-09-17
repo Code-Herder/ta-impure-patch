@@ -131,12 +131,19 @@ gets the oracle that is valid for it and no other:
 
 | claim | oracle | valid when |
 |---|---|---|
-| a pass was ported without changing pixels | previous-build A/B, `tools/vk-ab.py`, 0 px | op coverage held fixed — the mechanism that measured constraint 4 against `afceba5` |
+| a pass was ported without changing pixels | previous-build A/B, `tools/vk-ab.py`, 0 px | op coverage held fixed — the mechanism that measured constraint 4 against `afceba5`. **It earned its place on gate 2**: an in-process control said a 5-px difference was pre-existing and the previous-build A/B proved it was not |
 | we draw a thing the engine draws, identically | `uiwalk --strict`, 0 diff / 0 holes | under `norestore`; it diffs against the engine's own *indexed* surface |
 | restored art is right | `tascene uidiff`'s Q2 bar, the `--restore` walk | Classic++ on |
 
 `tagpu_abshot.c` (the GL half) dies with GL; `tagpu_vk_shot.c` and `vk-ab.py` survive unchanged,
 because the latter only diffs two files and does not care what made them.
+
+**THE A/B AND THE SHIPPED CONFIGURATION CAN NEVER BE THE SAME RUN** [MEASURED 2026-09-16, and
+this plan implied otherwise]. The A/B requires `ss=1` — the pass refuses outright otherwise, and
+says so: *"the A/B needs ss=1 (the GL capture is the supersampled FBO)"* — while the patch ships
+`ss=2`. It also requires exactly one pass drawing, where the shipped set has eighteen. So "does
+it draw in the configuration players get" and "do the two lanes agree" are permanently separate
+measurements, and a landing states both or says which it skipped.
 
 **The known weakness, recorded rather than solved:** 0 px per step does not bound drift across
 many steps. An absolute bar would, and committing golden captures was rejected — the hooks refuse
@@ -162,10 +169,22 @@ of everything else. The order below is the corrected one.
 
 1. **The shipped-configuration audit.** ✓ done 2026-09-16, no code,
    [gpu-status](gpu-status.html) §2.35.
-2. **The restored-atlas CPU mirror.** What `tagpu_gaf.c` and `tagpu_terr.c`'s `s_mirrorWant`
-   already do for the indexed atlases, done for the surfaces the restorer paints, so `unit`,
-   `terr`, `feat` and `fx` can draw at all with Classic++ on. This is the single highest-value
-   piece of work in the programme and it was not in the first draft of this plan.
+2. **The restored-atlas CPU mirror.** ✓ **three of four passes done 2026-09-16**,
+   [gpu-status](gpu-status.html) §2.36: features **0 px**, effects **0 px**, terrain **0 px**
+   indexed and **5 px of 786 432 at worst channel 1** restored — no regression, established
+   against `bfbe8b6`'s own DLL, and inside the bar already accepted for restored art. It needed
+   a new read-back helper for terrain (`tagpu_gl_rgba_readback`, in `tagpu_gaf.c` where the entry
+   points are resolved) because terrain's twin is painted on the GPU rather than uploaded.
+   **The unit pass is deliberately not in it** — it stands down on the caster stream first, so
+   its mirror cannot be verified until landing 3, and an unmeasured consumer is not a finished
+   unit of work. Its binding 43 stays a placeholder.
+
+   **The lesson worth carrying:** three ordering faults, each hidden behind the one before it,
+   all the same shape — *a refusal placed above the code that would satisfy it*. A pass that
+   returns 0 skips its own resize and its own upload, so it refuses forever for want of the
+   thing the refusal was meant to wait for. And the refusal must test **the view the descriptor
+   names**, not the hand-over that says a mirror exists somewhere, or a failed resize draws R8
+   through an RGBA sampler instead of standing down.
 3. **The caster stream** — the native 3DO stream and the replacement meshes, so the cast-shadow
    map can be drawn on this side of the seam and the passes that sample it stop standing down.
 4. **`render_vk.c`** — the fourth backend, `renderer=vulkan`, present into `g_ddraw.hwnd`, the

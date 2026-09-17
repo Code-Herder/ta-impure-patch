@@ -1934,6 +1934,32 @@ touch <gamedir>/tagpu_fps.ab                             # one frame, both lanes
   89 and 92 have all been recorded on passing runs. Do not chase it. **For the world passes the
   ink count IS worth reading**, because there it is the scene (terrain fills the viewport, the
   scaffold's is `tall=`), and a big change in it means the fixture moved.
+- **THREE WAYS TO RUN AN A/B THAT LOOKS LIKE A RESULT AND IS NOT** [all three cost the gate-2
+  landing a tick or worse, 2026-09-16]:
+
+  * **`tacli arm <i> classicpp.off` does NOT turn Classic++ off** on an instance that was armed
+    with `classicpp.on`. Both files then exist and `tagpu_opt.c`'s precedence is that the **`.on`
+    wins** — `tagpu_menu.c`'s `write_levers` documents this after finding it in play, which is
+    why the menu row owns both files. An "indexed control" run this way is **still restored**, so
+    it agrees with the restored run exactly and proves nothing. It produced one confidently wrong
+    conclusion (that a 5-px difference was pre-existing) that the previous-build A/B then
+    disproved. Use a FRESH instance for the off side, or delete the `.on`.
+  * **The `.ab` lever must appear while the instance is settled**, not be present at boot. Armed
+    before a `--restart` it is consumed before the pass is ready and nothing is written: the GL
+    half's "A/B wrote" line in the log is then the PREVIOUS run's, because the log appends across
+    a restart. `rm` it, let the game reach the fixture, then `touch` it.
+  * **`ss.off` must be there at LAUNCH.** The A/B requires `ss=1` and says so — *"the A/B needs
+    ss=1 (the GL capture is the supersampled FBO) … relaunch with supersampling off"* — and
+    arming it live does not take, because the FBO is built where the lever is not re-read.
+    Which also means **the A/B can never run in the shipped configuration**: the patch ships
+    `ss=2`, so "does it draw for players" and "do the lanes agree" are always separate runs.
+
+- **A world pass's A/B needs the fixture to still be ALIVE.** `vk-ab.py` refuses two blank
+  frames — *"agree perfectly and prove nothing"* — and on `fx-lasers` that is what you get a
+  minute in: `units: alive=2 onscreen=0`, no projectiles, no explosions. Reload and trigger the
+  `.ab` within a few seconds of going live. The `fx:` log line is the check: `lines=`/`flashq=`
+  at 0 means there is nothing to capture.
+
 - **`vk-ab.py` REFUSES two captures of different sizes** rather than scaling one: the GL capture is
   the GL viewport and the Vulkan one is the client rect, so a mismatch means the fork is
   letterboxing (`--window` against `--res`, or k != 1). Run at a size where they agree.

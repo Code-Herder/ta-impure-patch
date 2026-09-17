@@ -2588,6 +2588,13 @@ because the constraint is stated here and a repealed rule that still reads as li
 no rule. The property it bought — that the phase could be abandoned after any gate without debt —
 goes with it, from the first deletion onward.
 
+**Landing 2 followed the same day**: the Classic++ restored atlases mirrored for three of the
+four world passes ([gpu-status](gpu-status.html) §2.36) — features **0 px**, effects **0 px**,
+terrain **0 px** indexed and **5 px of 786 432** restored, the latter established as *not* a
+regression against `bfbe8b6`'s own DLL, where the same fixture draws nothing at all with
+Classic++ on. The unit pass is held for landing 3, since it stands down on the caster stream
+before it reaches its atlas.
+
 **Its landing 1 ran the same day and is the reason the rest is ordered as it is**
 ([gpu-status](gpu-status.html) §2.35): started in the configuration the patch actually ships in
 — `--defaults`, `ss=2`, Classic++ on — the Vulkan lane draws **the UI and nothing else**, 630 589
