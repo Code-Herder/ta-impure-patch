@@ -2576,6 +2576,26 @@ nothing if adopted from the first commit and are expensive to retrofit.
 4. **The GL backend is not removed and not regressed.** Every gate above re-runs the GL lane's
    own oracles with the lever off. A Phase G landing that moves a GL pixel has failed.
 
+### After the phase — Vulkan only (planned 2026-09-16)
+
+The owner's decision on 2026-09-16, taken in a design interview and recorded in
+[vulkan-only-plan](vulkan-only-plan.html): **GL stops being a renderer.** Vulkan becomes a fourth
+`renderer=` backend, `render_ogl.c` and `render_d3d9.c` are deleted, `renderer=gdi` is left as the
+stock-game reference, and every `tagpu_*` GL draw goes one pass per landing.
+
+**This repeals standing constraint 4 below.** It is written here rather than only in the plan
+because the constraint is stated here and a repealed rule that still reads as live is worse than
+no rule. The property it bought — that the phase could be abandoned after any gate without debt —
+goes with it, from the first deletion onward.
+
+**Its landing 1 ran the same day and is the reason the rest is ordered as it is**
+([gpu-status](gpu-status.html) §2.35): started in the configuration the patch actually ships in
+— `--defaults`, `ss=2`, Classic++ on — the Vulkan lane draws **the UI and nothing else**, 630 589
+of 786 432 px at 1024x768 being the clear colour. Every world pass stands down on purpose, for two
+independent reasons: the Classic++ restored atlases have no CPU mirror, and the cast-shadow map
+holds casters the lane cannot draw. Both block every world pixel. Every Phase G figure above was
+taken under `tagpu_defaults.off` + `ss=1` + `gui.on=mmbase`, where neither arises.
+
 ### Not in this phase
 
 **Ray tracing** (needs 64-bit — see the kill rule), **the out-of-process split**, and **a D3D12

@@ -6543,6 +6543,96 @@ them. **0 px over content that is not there is not a measurement.**
 * **One map, one side (ARM), one scenario** — `tascene-parity`.
 * **The cursor and the minimap are at their landing-3 levers** (`mmbase`), not swept.
 
+### 2.35 What the Vulkan lane draws in the SHIPPED configuration — measured, and it is the UI alone
+
+**MEASURED 2026-09-16**, DLL `644ce2e`, instance launched with `--defaults` (the player's
+configuration, not a bench one), `one-unit` on Two Continents at 1024x768, the reference setup's
+4070, `tagpu_vk.on` armed live. This is landing 1 of [vulkan-only-plan](vulkan-only-plan.html) and
+it writes no code: the whole deliverable is this section.
+
+**Every Phase G figure was taken under `tagpu_defaults.off` + `ss=1` + `gui.on=mmbase`.** Nobody
+had started the lane in the configuration the patch ships in. The `opt:` line for this run is the
+shipped one —
+
+    opt: play defaults ON (no tagpu_defaults.off): native=all wrecks owndraw=all terr terrown
+    feat featown fx sfx fxown mark markown order ghost zoom vpwide gui classicpp weapons
+
+— all eighteen passes `ARMED`, `ghost: ARMED alpha=0.40`, no `tagpu_ss.off` so supersampling is
+at its shipped `2x`.
+
+**The result: the Vulkan window presents the UI and nothing else.** Of 786 432 px at 1024x768,
+**630 589 are the lane's clear colour** — the whole viewport. The side panel, the top and bottom
+bars, the minimap and the resource readouts are all there and correct; the world is not drawn at
+all. The lane is not broken and nothing crashed: every world pass **stood down on purpose**,
+which is the behaviour each of them documents.
+
+#### The two causes, and they are independent
+
+**1. The Classic++ restored atlases have no CPU mirror.** Four passes log the same refusal, once
+each, and then draw nothing:
+
+    vk: unit: the GL twin is drawing through the Classic++ restored atlas and that surface has no
+        CPU mirror - the Vulkan edition draws nothing this session rather than draw a different
+        picture from its own oracle
+    vk: terr: ... the Classic++ restored tile atlas ...
+    vk: feat: ... the Classic++ restored atlas ...
+    vk: fx:   ... the Classic++ restored atlas ...
+
+`classicpp` is a **play default**. So in the shipped build this refusal is the normal case, not
+an edge one. The GAF and tile atlases already have opt-in CPU mirrors for the indexed path
+(`tagpu_gaf.c`, `tagpu_terr.c`'s `s_mirrorWant`); the *restored* surfaces the restorer paints do
+not, and a Vulkan pass cannot read a GL texture.
+
+**2. The cast-shadow map has casters this lane cannot draw**, and it takes two more passes with
+it:
+
+    vk: shadow: the GL map holds 1 caster(s) this lane has no copy of (0 of them the unit pass
+        carries) - the native 3DO stream and the replacement meshes are still to port. Nothing
+        drawn while there are, and the passes that sample the map stand down with it
+    vk: unit: the GL twin drew these units against a cast-shadow map and the Vulkan lane has none
+        this frame - nothing drawn while that is true
+    vk: terr: the GL twin is reading the Classic++ cast-shadow map and this frame's Vulkan map was
+        not drawn (its casters are not all on this side of the seam yet) - nothing drawn rather
+        than a different picture from our own oracle
+
+**Cause 2 alone is enough to blank the world.** With `classicpp.off` armed live the FEATURES and
+their shadow splats appear — trees, rocks and their shadows over the clear colour — and the
+terrain and the commander still do not. So turning Classic++ off buys the feature pass and
+nothing else.
+
+#### The stand-downs are SESSION-LATCHED, and the word in the log is literal
+
+*"draws nothing **this session**"*. Each refusal sets a `s_said*`-style latch and the pass does
+not come back when the condition clears: after `classicpp.off` and then `classicpp.off=off`, the
+feature pass that had been drawing was dark again and stayed dark. A player who toggles Classic++
+mid-game does not get the world back; only a relaunch does. This is worth stating because it
+makes the lane's behaviour under a *live* lever different from its behaviour at launch, and every
+Phase G measurement armed its levers before the lane came up.
+
+#### What this does to the plan's landing order
+
+[vulkan-only-plan](vulkan-only-plan.html) had `tagpu_vk_mark.c` at landing 3 and the restorer at
+landing 5. That order is wrong: **a restored-atlas CPU mirror and the 3DO / replacement-mesh
+caster stream are prerequisites for any world pixel at all** in the shipped configuration, and
+the mark pass draws over a world that is not there. They move to the front.
+
+**The build ghost is moot for now.** `tagpu_vk_unit.c:1316`'s `otherDraws` stand-down — the one
+a build ghost or a frame past `TAGPU_PD_MAXHAND`'s 512 units trips — was never reached, because
+the unit pass refuses on the atlas mirror several checks earlier. It stays on the list; it is not
+the first thing in the way.
+
+#### Not covered
+
+* **One map, one scenario, one resolution, one GPU, one OS.** Two Continents, `one-unit`,
+  1024x768, the reference setup's 4070 under Wine. S3 has still never run.
+* **The shell was not walked** in this configuration — only in game.
+* **`ss=2` was on and is therefore untested as a difference**: with no world drawn there is
+  nothing for the supersample factor to change. The gap named in the plan (the lane has no
+  offscreen world target) is unaffected and still unmeasured.
+* **`tagpu_gui.off` was not tried** here; the plan's reading of `tagpu_vk_gui.h` stands
+  unmeasured.
+* **No pixel A/B was run.** This section is an inventory of what draws, not a parity figure.
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out
