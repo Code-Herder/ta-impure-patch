@@ -8296,6 +8296,69 @@ the shipped path is the read-back and the lever is absent by default.
   picture byte for byte, and proves nothing about the paths themselves.
 * One GPU, one model (`full`), one map, one fixture per atlas.
 
+### 2.45 What `glGenerateMipmap` actually did to the restored twin, and what that licenses — landing 7e's measurement
+
+The units are the restorer's last unwired consumer and the only one with a seam of its own: their
+twin is **mipped and trilinear** (`ATLAS_MIP 2`, `ATLAS_PAD 4`, 2048 square), a Vulkan restore
+paints level 0, and the levels have to come from somewhere. `tagpu_gaf.h` has said since gate 3a
+that *"a blit chain on the Vulkan side would be this fork guessing at `glGenerateMipmap`'s
+reduction, and the guess would be a per-driver difference that no note could pin down"* — so
+before writing that landing, **the driver was asked what it actually did**, which is a question
+this repository can answer rather than assume.
+
+`tagpu_gaf.c`'s dump now writes the whole chain (`tagpu_restore_unit.mips`, 3 levels of 2048,
+21 MB, under the same `tagpu_restoredump.on`), and each level was held against six candidate
+reductions of the level above it. `crowd-static`, 155 entries, 101 488 texels of level 1 carrying
+art:
+
+| candidate | level 1 exact | level 2 exact | max &#124;Δ&#124; R,G,B,A |
+|---|---|---|---|
+| **`(sum + 1) / 4`** | **99.61 %** | **99.63 %** | **1, 1, 1, 0** |
+| `floor(sum / 4)` | 95.96 % | 96.00 % | 1, 1, 1, 0 |
+| round-half-to-even | 96.92 % | 96.97 % | 1, 1, 1, 1 |
+| two-pass h then v, round up | 91.78 % | 91.86 % | 1, 1, 1, 1 |
+| alpha-weighted (premultiplied) | 96.92 % | 96.97 % | **57, 56, 49, 1** |
+| sRGB-aware (linearise, average, re-encode) | 93.40 % | 93.10 % | **54, 45, 45, 1** |
+
+**Two of the six are ruled OUT by the maximum rather than by the average**, which is the reason to
+report a maximum at all: alpha-weighting and gamma-awareness are wrong by up to 57 levels on a
+single channel while still matching 97 % of texels exactly. An average alone would have called
+them plausible.
+
+**What the driver does is an unweighted 2×2 box average of RGBA, with a rounding rule none of the
+six reproduces exactly and all of them reproduce to within one level.** Two further facts pin it
+down:
+
+* **Alpha is exact** (max Δ 0) under `floor`, `(sum+1)/4` and the two-pass floor — so alpha is
+  reduced the same unweighted way, and the disagreement is purely RGB rounding.
+* **The differences are on FULLY OPAQUE quads**, not on the mixed-alpha edges: of `floor`'s 42 371
+  differing texels at level 1, **42 370 sit on a quad whose four alphas are all 255** and exactly
+  one sits on a mixed quad. A different *filter* would have shown up at the edges; a different
+  *rounding* shows up in the interior, which is what this is.
+
+Chasing the last 0.4 % to an exact formula was not done: the useful result is the **bound**, and
+the bound is **±1 per RGB channel and 0 on alpha**.
+
+**What it licenses, and the choice it puts in front of landing 7e.** Three options, and the
+measurement is what makes them comparable rather than a matter of taste:
+
+| | what the Vulkan lane does | what the oracle can claim | what it costs |
+|---|---|---|---|
+| **A** | keep reading GL's levels back (today's mirror) | `cmp`, byte-identical | keeps the one read-back this plan exists to retire, and it would be the last one |
+| **B** | reduce with our own box average | **within 1 LSB on RGB, exact on alpha** — a measured bound, not equality | the plan's strongest instrument weakens from `cmp` to a bounded diff |
+| **C** | reduce with our own box average **on both lanes** — `glGenerateMipmap` replaced by the same pass on the GL side | `cmp`, byte-identical **by construction on every driver** | changes the shipped GL twin's minified texels by ≤1/255 per channel |
+
+**C is the recommendation**, and the measurement is what makes it a small decision: the GL side's
+own levels already differ from a box average by at most one level, so replacing the driver's
+reduction with ours moves no texel by more than 1/255 in art that is being minified — while
+removing a **per-driver unknown** from the shipped path and keeping `cmp` as the oracle for all
+four consumers. B is the fallback if the GL picture is to stay untouched; A is what the plan would
+have done by default, and it is the only one that leaves a read-back behind.
+
+**Not covered:** one driver, one atlas, one fixture. The reduction a *different* GPU performs is
+exactly what option C stops mattering and what options A and B leave open — which is the argument
+for C stated as a property rather than as a preference.
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out

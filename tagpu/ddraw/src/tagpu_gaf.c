@@ -950,6 +950,40 @@ static void dump_if_armed(TAGPU_GAFATLAS* a)
     f = fopen(name, "wb");
     if (f) { fwrite(buf, 1, (size_t)a->dim * a->dim * 4, f); fclose(f); }
     free(buf);
+    /* ...AND EVERY MIP LEVEL OF A MIPPED TWIN, as one file, level 0 first and
+       each level `dim >> L` square (the layout `tagpu_gaf_mip_off` describes).
+       Only the unit atlas is mipped, and it is the last consumer this lane has
+       to wire: a Vulkan restore paints level 0 and the twin is sampled
+       GL_LINEAR_MIPMAP_LINEAR, so the levels have to come from somewhere, and
+       the choice is between reading GL's back (what the mirror does today) and
+       reducing them here. That choice is a question about what
+       glGenerateMipmap ACTUALLY DID, and this file is the only place that can
+       answer it -- hence the dump. [landing 7e's measurement.] */
+    if (a->mip > 0 && a->rgb) {
+        size_t chain = tagpu_gaf_mip_chain(a->dim, a->mip);
+        unsigned char* mbuf = (unsigned char*)malloc(chain);
+        if (mbuf) {
+            int L, got = 0;
+            glBindTexture(GL_TEXTURE_2D, a->rgb);
+            for (L = 0; L <= a->mip; L++) {
+                int d = a->dim >> L;
+                if (d < 1) d = 1;
+                glGetTexImage(GL_TEXTURE_2D, L, GL_RGBA, GL_UNSIGNED_BYTE,
+                              mbuf + tagpu_gaf_mip_off(a->dim, L));
+                got = L;
+            }
+            glBindTexture(GL_TEXTURE_2D, 0);
+            _snprintf(name, sizeof name, "tagpu_restore_%s.mips", a->tag);
+            f = fopen(name, "wb");
+            if (f) { fwrite(mbuf, 1, chain, f); fclose(f); }
+            free(mbuf);
+            _snprintf(b, sizeof b, "%s: the twin's mip chain dumped to tagpu_restore_%s.mips"
+                      " (%d levels of %d, %u KB)", a->tag, a->tag, got + 1, a->dim,
+                      (unsigned)(chain >> 10));
+            b[sizeof b - 1] = 0;
+            glog(b);
+        }
+    }
     _snprintf(name, sizeof name, "tagpu_restore_%s.idx", a->tag);
     f = fopen(name, "w");
     if (f) {
