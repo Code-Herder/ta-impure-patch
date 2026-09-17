@@ -2614,9 +2614,13 @@ the shadow map and the terrain stood down behind it. Landing 3a is that mirror �
 mechanism a fourth time, with gate 2's five findings applied in advance.
 
 **And its own review found that the measurement was wrong before the code was.** `tagpu_rglsl_step()`
-runs only when `fx|sfx|feat|terr|mark` is armed, so a unit A/B armed with `native.on` alone never
-paints the restorer: the twin stays alpha 0, both lanes fall back to the palette per texel, and
-the 0 px that measures is about a branch neither of them took. `mark.on` steps it and has no
+has two callers — `tagpu_native.c:3297`, behind `fx|sfx|feat|terr|mark`, and `tagpu_gui_surf.c:2465`
+when the UI atlas has a job of its own — and with `native.on` alone the first never runs and the
+unit atlas's job sits at priority 3 behind terrain, features and effects. Measured, the twin stayed
+alpha 0 for the whole fixture: both lanes fell back to the palette per texel and the 0 px that
+measures is about a branch neither of them took. [The second caller was found by the re-review;
+this paragraph first said the native call was the only one, which is why the note beside it now
+tells you to check that the twin painted rather than to infer it from the levers.] `mark.on` steps it and has no
 Vulkan pass to contend for the capture. With that one lever the same fixture went from 0 px to
 **2 126 of 2 132 unit pixels differing**, and four faults came apart in order behind it — a
 `dim × rows` image where the UVs are normalised against the whole square, the indexed sampler on

@@ -2115,11 +2115,19 @@ rm -f $G/tagpu_posedraw.ab $G/tagpu_posedraw_*.ppm; sleep 2; touch $G/tagpu_pose
 ```
 
 - **`mark.on` IS NOT OPTIONAL AND IT IS NOT ABOUT MARKS.** `tagpu_rglsl_step()` — the only thing
-  that ever paints a Classic++ restored twin — is called from `tagpu_native.c` inside
-  `if (fxOn || sfxOn || featOn || terrOn || markOn)`. Armed with `native.on` alone, the twin is
-  created, the job is armed, `restoreglsl: unit: lazy restore armed` appears in the log, and
-  **nothing is ever painted**: the `uRestored == 1` branch reads alpha 0 on both lanes, both fall
-  back to the palette per texel, and the A/B reports **0 px about a branch neither lane took**.
+  that ever paints a Classic++ restored twin — has **two** callers. The one that matters for a
+  world A/B is `tagpu_native.c:3297`, inside `if (fxOn || sfxOn || featOn || terrOn || markOn)`;
+  the other is `tagpu_gui_surf.c:2465`, which steps it when the UI atlas has a restore job of its
+  own and nothing else stepped it this frame. Armed with `native.on` alone the first never runs —
+  the unit atlas's job is still queued (`tagpu_native_frame` reaches `tagpu_r3d_atlas_frame` on
+  `s_armed` alone) and it sits at priority 3, behind terrain, features and effects. **Measured:
+  the twin was still unpainted through the whole fixture** — the `uRestored == 1` branch read
+  alpha 0 on both lanes, both fell back to the palette per texel, and the A/B reported **0 px
+  about a branch neither lane took**. Treat that as what one fixture did, not as a guarantee the
+  code gives: the UI caller can step the queue, so **check the twin painted** (next bullet)
+  rather than inferring it from the levers.
+  [The second caller was found by the gate-3a re-review; the first wording said the native call
+  was the only one.]
   `mark.on` is the one item on that list with no Vulkan pass of its own, so it steps the restorer
   and still leaves the unit pass as the only pass drawing into the Vulkan frame. This cost gate 3a
   a whole round of wrong conclusions: the fixture went from 0 px to 2 126 of 2 132 differing when
