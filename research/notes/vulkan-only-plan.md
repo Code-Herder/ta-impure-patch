@@ -627,6 +627,36 @@ Back to the filed list:
    real path. Expected is not measured: the first thing `tagpu_vk_restore.c` should do is ask the
    device for these itself and refuse with a named reason, the way `lineok` and `flipok` already do.
 
+   **AND THEN THEY WERE MEASURED THROUGH WINEVULKAN, 2026-09-17, BECAUSE "EXPECTED" WAS NOT GOOD
+   ENOUGH TO PORT BEHIND.** A 32-bit Windows probe — the same bitness as `ddraw.dll`, run under the
+   game's own wine prefix so it loads the same `vulkan-1.dll` through the same loader — asks the
+   same questions. Every limit and every format **agrees with the native figures exactly**:
+   `maxColorAttachments` and `maxFragmentOutputAttachments` **8**, `maxUniformBufferRange`
+   **65 536**, `maxImageArrayLayers` **2 048**, `timestampComputeAndGraphics` **true** at a
+   **1.0 ns** period, and all three formats colour-attachment + sampled + linear-filter in optimal
+   tiling. The llvmpipe device answers the same, which matters for the headless lane.
+   It is still not the same PROCESS as the game, and that is the residual.
+
+   **The probe earned its keep by returning a limit the native run never showed:
+   `minUniformBufferOffsetAlignment` = 64** (16 on llvmpipe). A conv draw binds the weight block at
+   `(offset + group × kstride) × 16` bytes, and a Vulkan uniform offset must be a multiple of that
+   limit. Checked against the shipped weights: **every group offset of both models is 64- and
+   256-byte aligned**, so nothing is broken today.
+
+   **But it holds by construction of the exporter rather than by anything the loader checks, and
+   the GL lane has the same hole.** `load_weights` validates `kstride & 15` — so
+   `group × kstride × 16` is always a multiple of 256 — and validates `offset`'s *bound* but not its
+   *alignment*. Offsets come out aligned only because the exporter lays layers back to back from 0,
+   making each a running sum of `kout × kstride`. A hand-edited or differently-exported file with
+   `offset = 1` would bind at byte 16, which NVIDIA's 64 rejects — and GL's `glBindBufferRange` has
+   the identical requirement, so this is a **pre-existing hole in a shipping path, not something the
+   Vulkan port introduces**. The fix is one line in the shared loader's existing validation block —
+   `(offset & 15)` beside the `kstride & 15` already there, a bound on a value read from a file,
+   which is the shape `CLAUDE.md` *Fixes must be safe by construction* asks for. It is **deliberately
+   not in the split landing**, whose whole claim is that it changed nothing: adding a validation
+   would change behaviour on a malformed file. It goes in with `tagpu_vk_restore.c`, which is what
+   makes it concrete.
+
    **It is not a blocker and nothing stands down for it today** — landing 2 mirrored the restored
    atlases, so the lane draws restored art with the restore itself still running on GL. Landing 7
    is owed to the END STATE rather than to any present refusal, which is why it sits behind 5 and 6
