@@ -7017,6 +7017,44 @@ content key converges after exactly one extra read-back rather than spinning. Wh
   code.
 
 
+#### And a verification pass over the fixes, because this lane has a record
+
+The four fixes went through a second, narrowly-scoped read — not another landing review, a check
+that each fix does what it claims and introduces nothing — on the strength of this lane's own
+history: a re-review has found a defect *inside* a fix three rounds running. All four verified.
+What it returned instead was three comments asserting the pre-fix world, a guarantee that was not
+where it looked, and one hazard:
+
+* **`s_arReq`'s declaration still said "the rows LAST SENT"** — the exact wording the fix's own
+  commit message pillories — and the producer's level loop still argued for the shallower image
+  that finding 4 overturned. A comment left asserting the opposite of the code beside it is how
+  the next reader inherits the bug.
+* **The `mk_image` guarantee was a property of the CALLER, not of `mk_image`.** Its three *early*
+  returns still left the view — and two of them the memory — as the caller found it, so "every
+  out-param is NULL on this path" held only where a `kill_image` happened to run first. All four
+  exits now null all three, which is the kind of guarantee a new call site inherits.
+* **`mip` IS NOT IMMUTABLE, and the fix's stated invariant said it was.** `r3d_init` reassigns it
+  on every GL context reset and the restore demotes it to 0 on a GL with no `glGenerateMipmap`.
+  The fix survives on *ordering* — both writes land strictly before any publish carrying rows —
+  but the argument had to be rewritten to rest on the invariant that actually holds. That is
+  *Fixes must be safe by construction* applied to the argument rather than to the code.
+* **AND THE SAME PAIR WAS A HEAP OVERRUN THIS LANDING HAD CREATED.** The mirror is deliberately
+  never freed, so it outlives changes to the atlas it mirrors — and all three `memset`s plus the
+  read-back sized themselves off the *current* `dim`/`mip`. A buffer allocated at `mip == 0`
+  (16 MB) against a `mip` later raised back to 2 is a 21 MB write into it: ~5 MB past the end.
+  **The mip chain is what made this expressible** — before this landing every one of those sites
+  was the same constant `dim * dim * 4` — so it is this landing's hazard, not a pre-existing one.
+  The buffer now records the shape it was allocated with, every write is bounded by that pair
+  rather than by the live one, and the read-back refuses a frame whose atlas changed shape under
+  it **without latching**, because the demote is re-applied at the top of the next restore and a
+  latch would cost the mirror for ever over one frame. Reaching it needs a GL with no
+  `glGenerateMipmap` and two context resets; the fix does not rest on that being rare.
+
+The 1024×768 A/B was re-run after all of it: **0 px of 786 432, 2 128 non-black a side** — the new
+refusal does not fire on a healthy session, which a guard this close to the hot path has to be
+shown rather than argued.
+
+
 #### Not covered
 
 * **The replacement meshes — gate 3b, and not an optional case.** A tacli instance ships
