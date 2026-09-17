@@ -2257,6 +2257,17 @@ static int ghost_one(const TAGPU_PACKET* pk, unsigned mid,
     q.nanoOn = 0;
     q.cast[0] = 0.0f; q.cast[1] = 0.0f; q.cast[2] = 1.0f;
     q.ghost = 1;                              /* not a unit: the stats skip it   */
+    /* AND IT IS NOT IN THE DEPTH MAP, WHICH THIS FIELD NOW SAYS. The depth loop
+       runs earlier in the frame and over the real units only; a ghost is drawn
+       here, after it, with depth writes off. `castSkip` was left 0 by the memset
+       above, which was harmless for as long as `pd_record` refused ghosts
+       outright -- but it computes `casts = (depthOn && !castSkip)`, so the
+       moment ghosts are carried (landing 6) every one of them would be handed
+       over as a CASTER the GL map has no silhouette for, and
+       `tagpu_vk_unit_casters` feeds the shadow census that is compared against
+       the GL side's own count. An extra caster there is a wrong shadow map, not
+       a missing one. [Landing 6, 2026-09-17.] */
+    q.castSkip = 1;
     tagpu_posedraw_unit(&q);
     return 1;
 }

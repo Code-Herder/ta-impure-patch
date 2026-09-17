@@ -215,8 +215,11 @@ float tagpu_posedraw_top(const TAGPU_PDUNIT* u);
 
    `otherDraws` IS THE REFUSAL, AND IT IS NARROW ON PURPOSE. It counts the
    units THIS PASS DREW INSIDE THE PUBLISHED WINDOW that the hand-over does not
-   carry -- a build ghost, a unit past TAGPU_PD_MAXHAND, a unit an arena would
-   not grow for -- and a non-zero count stands the Vulkan pass down. That is
+   carry -- a unit past TAGPU_PD_MAXHAND, a unit an arena would not grow for --
+   and a non-zero count stands the Vulkan pass down. **The build ghost was in
+   that set until landing 6 and is now CARRIED**: it was measured costing the
+   whole pass, because `ghost.on` is a play default and an open building
+   placement made this non-zero every frame. That is
    the set the A/B brackets: the GL half is blacked immediately before this
    window and read back immediately after it, so a unit drawn there and not
    here is the one thing that makes the two halves differ.
@@ -268,6 +271,15 @@ typedef struct TAGPU_PDUREC {
        is `!castSkip` on the frame the twin's depth block ran. Meaningless when
        `depthOn` below is 0. */
     int   casts;
+    /* 1 = a BUILD GHOST rather than a unit, carried since landing 6. It is the
+       same draw with the same uniforms; the only two differences are `alpha`
+       (0.40, above) and that the GL twin brackets its ghosts in
+       glDepthMask(GL_FALSE) -- ghosts blend with each other, units still
+       occlude them -- so a consumer draws these with depth writes OFF and
+       after the units, which is the order they are recorded in. `casts` is
+       always 0 for one: the depth loop ran earlier in the frame and over the
+       real units only. */
+    int   ghost;
 } TAGPU_PDUREC;
 
 typedef struct TAGPU_PDHAND {

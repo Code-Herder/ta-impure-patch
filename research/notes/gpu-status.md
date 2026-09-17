@@ -7563,6 +7563,102 @@ measured, and it is left for the landing that measures it.
   measured**, and it needs a laser fixture that actually fires.
 * **One map, one resolution, one GPU, one OS, `ss=1`, zoom 1.**
 
+### 2.41 The build ghost, carried at last — landing 6 of the Vulkan-only plan
+
+**MEASURED BEFORE IT WAS STARTED, AND THE COST WAS TOTAL.** The plan's row read *"not reached today
+— the unit pass refuses on the atlas mirror several checks earlier — so its cost is still
+unknown"*. Gates 3a and 3b removed that earlier refusal, so it is reached now, and the first thing
+this landing did was find out what it costs. With one ARMCOM selected and a solar placement open
+(cursor mode `0x0E`, confirmed by peeking `main+0x2CC3`):
+
+```
+ghost: curs=6193 queue=0 drawn=6193 nobake=0 trunc=0 alpha=0.40
+vk: unit: the GL twin drew 1 posed unit(s) this hand-over does not carry
+          (a build ghost, or past its cap) - nothing drawn while that is true
+```
+
+**For as long as a building placement was open the Vulkan unit pass drew nothing at all** — not the
+ghost, and not the units either. `tagpu_ghost.on` is a play default gated on `tagpu_native.on`
+(`tagpu_opt.c`), and placing buildings is most of what a TA player does, so this was the ordinary
+case and not a corner. That is gate 3a's lesson applied rather than quoted: measure the refusal
+before porting the stream behind it.
+
+#### It is a change to the publish window, not a removed exclusion
+
+The obvious reading of `pd_record` — `if (!s_recording || u->ghost) { s_other++; return; }` — is
+that ghosts are excluded by that one clause. Dropping it changed **nothing**, and the verification
+still read `otherDraws = 1`. `ghost_pass` opens a **second** `tagpu_posedraw_begin`/`_end` window,
+and `s_recording = (s_win++ == 0)` meant only the **first** window of a frame recorded, so a ghost
+never reached that clause at all.
+
+Every window records now. The first is still the one that publishes the view and the one the A/B
+brackets — those are separate questions from which windows record, and conflating them is what hid
+this for as long as it was hidden.
+
+#### The ghost is the same draw, which is why the consumer is one pipeline
+
+A ghost rides `tagpu_posedraw_unit` with the same uniforms as a unit. It differs in exactly two
+things: `alpha` (0.40, which `pd_record` already carried) and that the GL twin brackets its ghosts
+in `glDepthMask(GL_FALSE)` — *"the ghosts blend with each other"*, while units drawn earlier still
+occlude them, because the depth TEST stays on. So `tagpu_vk_unit.c` gains `s_pipeGhost`: the body
+pipeline with `depthWriteEnable = VK_FALSE` and nothing else moved, bound per draw kind. The
+records arrive units-then-ghosts because `pd_record` appends as each draw is issued, so in practice
+it switches once.
+
+#### A caster the GL depth pass never drew, caught before it shipped
+
+`ghost_one` builds its record with `memset(&q, 0, sizeof q)` and then sets `alpha` and `ghost`, so
+**`castSkip` stayed 0**. That was harmless for exactly as long as ghosts were refused outright —
+but `pd_record` computes `casts = (s_depthOn && !u->castSkip)`, so the moment ghosts are carried
+every one of them is handed over as a **caster**. That count is what `tagpu_vk_unit_casters` feeds
+to the shadow census, which is compared against the GL side's own `otherCasters`; an extra caster
+there is a **wrong shadow map, not a missing one**. `ghost_one` now sets `castSkip = 1`, which is
+simply true: the depth loop runs earlier in the frame and over the real units only.
+
+#### The A/B cannot be this landing's oracle, for two independent reasons
+
+1. **The ghost needs the marker pass.** It arms on `tagpu_mark_cursor_ours()`, so it draws only
+   when `mark.on` owns the cursor layer — and the marker pass then draws the placement square.
+   Two Vulkan passes in one frame, which the capture refuses outright, and there is no way to keep
+   the ghost while removing the square. (`markown` installs its detours at DLL attach, so a
+   `mark.on` written to a running instance opens nothing; `ghost: curs=0 drawn=0` with the cursor
+   mode already 14 is that signature, and it cost two probe runs.)
+2. **The GL half cannot contain a ghost.** It is blacked and read back around the **first** window,
+   and the ghost draws in the second — while the Vulkan half is the whole presented image, which
+   can. The two halves would differ by the ghost and the difference would be the instrument's.
+
+So the pass **declines to claim the pair** on any frame that recorded a ghost, rather than report
+that difference: `s_pub.ab = s_nghost ? 0 : s_abFrame`. Landing 6's oracle is §2.40's two-window
+comparison instead, which needs neither a bracket nor a single drawing pass — the second time that
+method has paid for itself, and the reason it was worth building.
+
+#### Measured with §2.40's method, and the ghost's own pixels are exact
+
+`one-unit`, 1024x768, `ss=1`, `native.on=all wrecks` + `ghost.on` + `mark.on` + `terr.on` +
+`feat.on` + `gui.on`, `vk.on` armed **from launch** (§2.40's trap), the GL side read with
+`tacli glshot`, a solar placement held open across both captures.
+
+| | |
+|---|---|
+| cursor mode | `0x0E`, and `ghost: curs=11998 drawn=11998` |
+| `vk: unit: … nothing drawn while that is true` | **0 occurrences** — the stand-down is gone |
+| GL frame vs Route D, a ghost in both | **260 px of 786 432** |
+| **inside the ghost's own box** (560..650, 380..470) | **0 px** |
+
+**The ghost is reproduced exactly.** The 260 are two 64-px cells elsewhere — x 495..532,
+y 449..493, worst channel 184 — on the ARMCOM's own body, which is the same class of residual as
+§2.40's 311 px on two parked ARMSTUMPs and has the same two unseparated contributors: this run
+used the **play** anisotropy default rather than §2.37's `aniso=1` substitution, and the two
+captures are not the same instant.
+
+#### Not covered
+
+* **The queued-build ghosts are not exercised.** `ghost: queue=0` in every run here: the fixture
+  opens a placement but never commits one, so only the cursor ghost drew. The queue path goes
+  through the same `ghost_one` and the same record, so it is carried by construction, but that is
+  an argument and not a measurement.
+* **One map, one resolution, one GPU, `ss=1`, zoom 1, one building type.**
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out

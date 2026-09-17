@@ -2716,6 +2716,24 @@ measure it only because the unit pass was still standing down. And `fx-lasers` m
 the capture frame twice, so the effects A/B silently produced nothing; `fx-rockets` holds model
 projectiles in flight and is the fixture to use.
 
+**Landing 6 is the build ghost, and measuring it first is what made it worth doing**
+([gpu-status](gpu-status.html) §2.41). The row said its cost was unknown; gates 3a and 3b had
+removed the refusal that hid it, and with a building placement open the Vulkan unit pass drew
+**nothing at all** — not the ghost, not the units. `ghost.on` is a play default and placing
+buildings is most of what a TA player does, so that was the ordinary case.
+
+It was not the removed exclusion it looked like: `ghost_pass` opens a **second** `posedraw` window
+and only the first recorded, so dropping the `u->ghost` clause changed nothing. Every window records
+now. The consumer is one extra pipeline — the body pipeline with depth writes off, which is the one
+bit the twin's `glDepthMask(GL_FALSE)` bracket moves. A hazard was caught on the way: `ghost_one`
+left `castSkip` at 0, so carrying ghosts would have handed each one to the **shadow census** as a
+caster the GL depth pass never drew — a wrong shadow map, not a missing one.
+
+**The A/B cannot be its oracle** — the ghost needs the marker pass, which makes two Vulkan passes
+draw, and the GL half is bracketed around the first window while the ghost draws in the second. The
+pass declines to claim the pair on a ghost frame instead, and landing 5b's two-window comparison
+measures it: the stand-down gone, and **260 px of 786 432** with **0 inside the ghost's own box**.
+
 **Its landing 1 ran the same day and is the reason the rest is ordered as it is**
 ([gpu-status](gpu-status.html) §2.35): started in the configuration the patch actually ships in
 — `--defaults`, `ss=2`, Classic++ on — the Vulkan lane draws **the UI and nothing else**, 630 589

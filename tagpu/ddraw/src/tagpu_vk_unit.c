@@ -204,7 +204,7 @@ static int s_saidAniso;                 /* ...and its filter could not be matche
 
 static VkDescriptorSetLayout s_dslMain, s_dslCast;
 static VkPipelineLayout      s_ploMain, s_ploCast;
-static VkPipeline            s_pipeBody, s_pipeCast;
+static VkPipeline            s_pipeBody, s_pipeGhost, s_pipeCast;
 static VkRenderPass          s_castRp;     /* what s_pipeCast was built against */
 static VkDescriptorPool      s_dpool;
 static VkSampler             s_samp, s_sampCmp, s_sampTwin;
@@ -349,6 +349,7 @@ typedef struct {
     uint32_t first, count;
     uint32_t unit;                         /* its window in the slot buffers   */
     int      casts;
+    int      ghost;                        /* depth writes OFF, and drawn last */
 } DRAW;
 static DRAW*    s_draw;
 static unsigned s_drawCap, s_ndraw, s_ncast;
@@ -971,6 +972,19 @@ static int build_body_pipeline(const TAGPU_VKPASS* d)
     gp.subpass = 0;
     ok = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL,
                                    &s_pipeBody) == VK_SUCCESS;
+    /* THE GHOST PIPELINE, AND IT DIFFERS IN ONE BIT. The GL twin brackets its
+       build ghosts in glDepthMask(GL_FALSE)/glDepthMask(GL_TRUE) and changes
+       nothing else -- so ghosts blend with each other (the usual case is the
+       cursor ghost standing on a queued ghost's own site) while units drawn
+       earlier still occlude them, because the depth TEST stays on. Same
+       shaders, same blend, same layout; `depthWriteEnable` alone moves.
+       [Landing 6, 2026-09-17.] */
+    if (ok) {
+        ds.depthWriteEnable = VK_FALSE;
+        ok = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL,
+                                       &s_pipeGhost) == VK_SUCCESS;
+        ds.depthWriteEnable = VK_TRUE;
+    }
 done:
     if (vs) vkDestroyShaderModule(d->dev, vs, NULL);
     if (fs) vkDestroyShaderModule(d->dev, fs, NULL);
@@ -1609,8 +1623,8 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         if (!s_saidOther) {
             s_saidOther = 1;
             plog(d, "unit: the GL twin drew %d posed unit(s) this hand-over does "
-                    "not carry (a build ghost, or past its cap) - nothing drawn "
-                    "while that is true", h.otherDraws);
+                    "not carry (past its cap, or an arena that would not grow) - "
+                    "nothing drawn while that is true", h.otherDraws);
         }
         goto standdown;
     }
@@ -1960,6 +1974,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         w->geom = g->buf; w->mat = m->buf;
         w->first = (uint32_t)r->first; w->count = (uint32_t)r->count;
         w->unit = (uint32_t)i;
+        w->ghost = r->ghost ? 1 : 0;
         w->casts = (h.depthOn && r->casts) ? 1 : 0;
         if (w->casts) s_ncast++;
         s_ndraw++;
@@ -2336,6 +2351,7 @@ void tagpu_vk_unit_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
 {
     VkViewport vp;
     VkRect2D sc;
+    VkPipeline bound;
     unsigned i;
 
     (void)d;
@@ -2358,12 +2374,20 @@ void tagpu_vk_unit_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     unit_scissor(w, h, &sc);
     vkCmdSetScissor(cb, 0, 1, &sc);
 
-    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeBody);
+    /* THE PIPELINE IS BOUND PER DRAW KIND, NOT ONCE. The records arrive in the
+       GL twin's own draw order -- every unit, then every ghost, because
+       ghost_pass runs after the unit loop and `pd_record` appends as each draw
+       is issued -- so in practice this switches once. It is written as a
+       compare rather than as two loops so that it stays correct if that order
+       ever stops holding. */
+    bound = VK_NULL_HANDLE;
     for (i = 0; i < s_ndraw; i++) {
         const DRAW* q = &s_draw[i];
+        VkPipeline want = q->ghost ? s_pipeGhost : s_pipeBody;
         VkBuffer vbs[2];
         VkDeviceSize offs[2];
         uint32_t dyn[3];
+        if (want != bound) { vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want); bound = want; }
         dyn[0] = (uint32_t)((VkDeviceSize)q->unit * s_uStride);
         dyn[1] = (uint32_t)((VkDeviceSize)q->unit * s_pStride);
         dyn[2] = (uint32_t)((VkDeviceSize)q->unit * s_uStride + s_fglOff);
@@ -2422,6 +2446,7 @@ void tagpu_vk_unit_down(const TAGPU_VKPASS* d)
     s_arDim = 0; s_arMips = 0; s_arReq = 0; s_arSerial = 0; s_arHave = 0;
     if (s_dpool) { vkDestroyDescriptorPool(d->dev, s_dpool, NULL); s_dpool = VK_NULL_HANDLE; }
     if (s_pipeBody) { vkDestroyPipeline(d->dev, s_pipeBody, NULL); s_pipeBody = VK_NULL_HANDLE; }
+    if (s_pipeGhost) { vkDestroyPipeline(d->dev, s_pipeGhost, NULL); s_pipeGhost = VK_NULL_HANDLE; }
     if (s_pipeCast) { vkDestroyPipeline(d->dev, s_pipeCast, NULL); s_pipeCast = VK_NULL_HANDLE; }
     s_castRp = VK_NULL_HANDLE;
     if (s_ploMain) { vkDestroyPipelineLayout(d->dev, s_ploMain, NULL); s_ploMain = VK_NULL_HANDLE; }

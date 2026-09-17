@@ -221,7 +221,8 @@ static int          s_pubHave;
    window counts the same way: it is a real draw in the GL frame and this pass
    does not carry it. */
 static int          s_win;          /* windows opened this frame              */
-static int          s_recording;    /* inside the first one                   */
+static int          s_recording;    /* inside a recording window              */
+static unsigned     s_nghost;       /* ghosts recorded this frame             */
 static int          s_other;        /* draws the hand-over carries no copy of */
 
 static TAGPU_PDUREC* s_rec;       static unsigned s_recCap, s_nrec;
@@ -767,8 +768,18 @@ static void pd_record(const TAGPU_PDUNIT* u, const TAGPU_PBGEOM* g,
 
     /* EVERY DRAW THIS FRAME THAT IS NOT RECORDED IS COUNTED INSTEAD, and that
        is the refusal the design rests on: a frame the Vulkan lane draws with
-       one unit missing is a different frame, not a slightly worse one. */
-    if (!s_recording || u->ghost) { s_other++; return; }
+       one unit missing is a different frame, not a slightly worse one.
+
+       THE BUILD GHOST IS RECORDED SINCE LANDING 6 and no longer counted here.
+       It was excluded from the start, and the cost of that was measured before
+       the port: `ghost.on` is a play default, so for as long as a building
+       placement was open `otherDraws` was non-zero and the Vulkan unit pass
+       drew NOTHING -- not the ghost, not the units. A ghost rides this same
+       entry point with the same uniforms and differs in exactly two things:
+       `alpha` (0.40, which `r->alpha` already carried) and depth writes, which
+       the consumer takes with a second pipeline. The other two counted cases --
+       an arena that would not grow, a unit with no pieces -- stay refusals. */
+    if (!s_recording) { s_other++; return; }
     if (s_nrec >= (unsigned)TAGPU_PD_MAXHAND) {
         if (!s_saidCap) {
             s_saidCap = 1;
@@ -836,6 +847,8 @@ static void pd_record(const TAGPU_PDUNIT* u, const TAGPU_PBGEOM* g,
     /* THE DEPTH LOOP DREW EXACTLY THESE UNITS WITH `castSkip` CLEAR, earlier in
        the same frame and over the same array with the same `unit_ok` gate, so
        this reproduces which casters are in the map rather than guessing at it. */
+    r->ghost = u->ghost ? 1 : 0;
+    if (r->ghost) s_nghost++;
     r->casts = (s_depthOn && !u->castSkip) ? 1 : 0;
     if (r->casts) s_ncast++;
 }
@@ -844,12 +857,24 @@ static void pd_record(const TAGPU_PDUNIT* u, const TAGPU_PBGEOM* g,
 void tagpu_posedraw_begin(const TAGPU_PDVIEW* v)
 {
     if (s_state != 1) return;
-    /* THE PUBLISH WINDOW. The first of a frame is the one that publishes and
-       the one the A/B brackets; a second (the build ghost's) does not, and
-       everything it draws is counted against the hand-over instead. */
-    s_recording = (s_win++ == 0) && s_mirrorWant;
-    if (s_recording) {
-        pd_view_publish(v);
+    /* THE PUBLISH WINDOW. EVERY window of a frame records, since landing 6 --
+       the build ghost draws in a SECOND one (ghost_pass opens its own, after
+       the wire and the replacement meshes), and until landing 6 that window
+       recorded nothing and everything in it was counted against the hand-over
+       instead. That count is what stood the Vulkan unit pass down for the whole
+       of any building placement.
+
+       THE FIRST WINDOW IS STILL THE ONE THAT PUBLISHES THE VIEW AND THE ONE THE
+       A/B BRACKETS, and those two are not the same question as which windows
+       record. The view is the frame's and one publication of it is right; the
+       A/B's black-and-read-back has to stay around the first window alone,
+       because the wire, the replacement meshes and the effects draw between the
+       windows and none of them is in the hand-over. */
+    {
+        int first = (s_win++ == 0);
+        s_recording = s_mirrorWant;
+        if (first && s_recording) {
+            pd_view_publish(v);
         /* THE GL HALF OF THE PHASE G A/B (tagpu_abshot.h): black the frame
            immediately before this pass draws, read it back immediately after.
            DEPTH too, because these draws test it -- without the depth clear the
@@ -859,9 +884,10 @@ void tagpu_posedraw_begin(const TAGPU_PDVIEW* v)
            a port failure. SCISSOR because the native pass clips these draws to
            the world viewport and measuring them unclipped measures a pass the
            player never sees. */
-        if (s_ab && !s_abDone)
-            tagpu_abshot_begin(&s_shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR |
-                                        TAGPU_ABSHOT_TOPDOWN);
+            if (s_ab && !s_abDone)
+                tagpu_abshot_begin(&s_shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR |
+                                            TAGPU_ABSHOT_TOPDOWN);
+        }
     }
     glUseProgram(s_prog);
     x_glUniform2f(u_game, v->game[0], v->game[1]);
@@ -1013,7 +1039,17 @@ void tagpu_posedraw_end(void)
        the draws the refusal exists to catch. It is read at the moment the
        hand-over is taken, which is later in this same iteration of
        render_ogl.c's loop than every GL draw in the frame. */
-    s_pub.ab = s_abFrame; s_abFrame = 0;
+    /* AND A FRAME THAT DREW A BUILD GHOST CANNOT CLAIM THE PAIR. The GL half is
+       blacked and read back around the FIRST window, a few lines above, and the
+       ghost draws in a SECOND one -- so the GL capture cannot contain a ghost
+       while the Vulkan frame, which is the whole presented image, can. Landing 6
+       carries the ghost, so on exactly the frames that have one the A/B stops
+       being a valid oracle, and it says so by NOT CLAIMING rather than by
+       reporting a difference that is the instrument's own. Landing 6's oracle
+       is the two-window comparison instead (gpu-status §2.40), which needs
+       neither a bracket nor a single drawing pass. */
+    s_pub.ab = s_nghost ? 0 : s_abFrame;
+    s_abFrame = 0;
     s_pubHave = 1;
 }
 
@@ -1209,7 +1245,7 @@ void tagpu_posedraw_frame(unsigned frame_counter)
        belt-and-braces check instead of the only one. */
     s_frame = frame_counter;
     s_pubHave = 0;
-    s_win = 0; s_recording = 0; s_other = 0;
+    s_win = 0; s_recording = 0; s_other = 0; s_nghost = 0;
     s_depthOn = 0; s_ncast = 0;
     s_lastNanoT = 0.0f;
     s_lastNanoC[0] = s_lastNanoC[1] = s_lastNanoC[2] = 0.0f;

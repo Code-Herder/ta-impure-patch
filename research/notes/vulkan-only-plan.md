@@ -453,11 +453,34 @@ Back to the filed list:
    `mark.on` written to a running instance opens nothing. Two probe runs were lost to that;
    `ghost: curs=0 drawn=0` with cursor mode already 14 is the signature.
 
-   **What the port owes**: `tagpu_posedraw.c` excludes ghosts from the hand-over explicitly
-   (`if (!s_recording || u->ghost) { s_other++; return; }`), so the work is to carry them — with
-   their alpha, which is 0.40 and not a tint — and to draw them in `tagpu_vk_unit.c` with the
-   twin's own blend. The other two `s_other++` sites (an arena that would not grow, a unit with no
-   pieces) are refusals that should stay refusals.
+   **DONE 2026-09-17** ([gpu-status](gpu-status.html) §2.41). It was **not** the removed exclusion
+   it looked like: `ghost_pass` opens a SECOND `posedraw` window and `s_recording = (s_win++ == 0)`
+   meant only the first recorded, so dropping `|| u->ghost` changed nothing at all. Every window
+   records now, while the first stays the one that publishes the view and the one the A/B brackets.
+   The consumer is one extra pipeline — `s_pipeGhost`, the body pipeline with
+   `depthWriteEnable = VK_FALSE`, which is the single bit the twin's `glDepthMask(GL_FALSE)`
+   bracket moves. The other two `s_other++` sites stay refusals.
+
+   **A caster the GL depth pass never drew, caught before it shipped**: `ghost_one` memsets its
+   record and sets only `alpha` and `ghost`, leaving `castSkip` 0 — harmless while ghosts were
+   refused, but `pd_record` computes `casts = (depthOn && !castSkip)`, so carrying them would have
+   handed every ghost to the shadow census as a caster the GL map has no silhouette for. An extra
+   caster there is a wrong shadow map, not a missing one.
+
+   **AND THE A/B CANNOT BE THIS LANDING'S ORACLE**, for two independent reasons: the ghost arms on
+   `tagpu_mark_cursor_ours()` so it needs the marker pass, which then draws the placement square —
+   two Vulkan passes, which the capture refuses — and the GL half is blacked and read back around
+   the FIRST window while the ghost draws in the second, so it could not contain one anyway. The
+   pass declines to claim the pair on a ghost frame rather than report a difference that is the
+   instrument's. **Landing 5b's two-window comparison is the oracle instead**, which is the second
+   time that method has paid for itself.
+
+   **Measured**: cursor mode `0x0E`, `ghost drawn=11998`, the stand-down gone (**0** occurrences),
+   and the GL frame against Route D at **260 px of 786 432** — of which **0 lie inside the ghost's
+   own box**. The 260 are on the ARMCOM's body, worst channel 184, the same class as §2.40's 311 px.
+   **Not covered**: `ghost: queue=0` throughout, so only the CURSOR ghost was exercised; the queued
+   sites go through the same `ghost_one` and the same record, which is an argument and not a
+   measurement.
 7. **The restorer**, `tagpu_vk_restore.c`. Ported **unchanged**, which needs `spirv-gen.py` to
    emit four variants: `NK ∈ {1, 2, 4, 8}` (`tagpu_restore_glsl.h:10`), `WMAX = NK × kmax`
    (`tagpu_restoreglsl.c:472`). Spec constants cannot do it — `#if NK > 1` declares a different
