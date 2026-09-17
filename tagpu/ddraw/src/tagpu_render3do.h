@@ -63,6 +63,20 @@ int tagpu_r3d_nano_state(float nano, unsigned id, unsigned tick,
    uploaded. Render thread only, like the rest of this module. */
 void tagpu_r3d_atlas_mirror_want(void);
 const unsigned char* tagpu_r3d_atlas_mirror(int* dim, int* rows, unsigned* serial);
+
+/* AND THE CLASSIC++ RESTORED TWIN'S MIRROR (gate 3 of the Vulkan-only plan).
+   Same three calls, one difference each: `_want` is additionally gated on
+   `tagpu_classicpp_assets()`, because the twin is a second 16 MB that a session
+   with Classic++ off must not pay for; `_step` has no counterpart on the
+   indexed side at all, because that mirror is written by the paint and this one
+   has to be READ BACK off the GPU (glReadPixels through an FBO, so the render
+   thread with the context current, once per published frame); and `_mirror_rgb`
+   reports the rows the read-back has COVERED rather than the shelf cursor,
+   which is what a consumer can upload. NULL until the first step has produced
+   rows, and NULL again after a context loss until it has produced them anew. */
+void tagpu_r3d_atlas_mirror_rgb_want(void);
+void tagpu_r3d_atlas_mirror_rgb_step(void);
+const unsigned char* tagpu_r3d_atlas_mirror_rgb(int* dim, int* rows, unsigned* serial);
 /* 256 x 32 R8, the bytes `shade_upload` last gave glTexSubImage2D. The serial
    moves when the table is rebuilt -- which happens once per context, and again
    the first time the engine's own PALETTE.SHD arrives after a frame with none. */

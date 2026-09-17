@@ -3951,7 +3951,14 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            the same way both loops draw (`!castSkip`), and an OVER-count is the
            safe direction: it refuses a frame the lane could have drawn, where
            an under-count would draw a different map from its own oracle.
-           The native 3DO stream counts itself, inside tagpu_shadow_unit. */
+           The native 3DO stream counts itself, inside tagpu_shadow_unit -- and
+           NEVER DOES: the call above it is behind `firstv[i+1] == firstv[i]`
+           and `nv` is 0 for the whole of this loop since G16 step 8, so no
+           ordinary unit has native vertices. The posed share of this count is
+           covered by tagpu_vk_unit.c since G19e and the RESTORED half of it
+           since gate 3; what is genuinely left is `nhi`, the replacement
+           meshes. [MEASURED 2026-09-16: 1 refused caster with one armpw.glb on
+           screen, 16 on a 257-unit crowd.] */
         {
             int k, other = 0;
             for (k = 0; k < npd; k++) if (!pdu[k].castSkip) other++;

@@ -318,10 +318,20 @@ typedef struct TAGPU_PDHAND {
        changed, so the Vulkan lane re-uploads on a change and not per frame.
        The unit atlas and the shade LUT are tagpu_render3do.h's mirrors; the
        palette is tagpu_pal's snapshot; the fog pair is what the native pass
-       uploaded this frame. `atlasRGB` has no mirror and is not here: the pass
-       refuses a `restored` frame outright, exactly as the feature and terrain
-       passes do, and names its own atlas view for that descriptor. */
+       uploaded this frame.
+
+       `atlasRgb` IS HERE SINCE GATE 3 of the Vulkan-only plan, where before it
+       was the one texel the pass had no mirror of and a `restored` frame was
+       refused outright for the session. It is the Classic++ restored twin, READ
+       BACK off the GPU rather than written by the paint -- which is why it
+       carries its own rows and its own serial and why neither is the indexed
+       mirror's: the indexed rows are the shelf cursor, these are what the last
+       read-back covered. NULL until a read-back has covered rows, and NULL
+       again after a context loss until it has covered them anew, so a frame the
+       twin drew restored is still refused until then -- for a few frames rather
+       than for the process. */
     const unsigned char* atlas;   int atlasDim, atlasRows; unsigned atlasSerial;
+    const unsigned char* atlasRgb; int atlasRgbRows;       unsigned atlasRgbSerial;
     const unsigned char* lut;     int lutW, lutH;          unsigned lutSerial;
     const unsigned char* pal;     unsigned palSerial;
     /* COPIED, not aliased: the grid points into a frame packet the game thread

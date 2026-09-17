@@ -25,6 +25,7 @@
 #include "tagpu_render3do.h"
 #include "tagpu_pal.h"
 #include "tagpu_gaf.h"
+#include "tagpu_classicpp.h"  /* tagpu_classicpp_assets: the restored twin is only worth mirroring while it is what the twin samples */
 #include "tagpu_r3dcache.h"
 #include "tagpu_overlay.h"   /* tagpu_overlay_target_fbo: the frame's default draw target */
 
@@ -485,6 +486,54 @@ const unsigned char* tagpu_r3d_atlas_mirror(int* dim, int* rows, unsigned* seria
     if (rows) *rows = r;
     if (serial) *serial = s_atlas.mirrorSerial;
     return s_atlas.mirror;
+}
+
+/* THE RESTORED TWIN'S MIRROR (the Vulkan-only plan's gate 3), asked for
+   SEPARATELY from the indexed one and behind `tagpu_classicpp_assets()`. It is
+   a second 16 MB at this atlas's 2048 square and it is worth anything only
+   while the restorer is what the GL twin samples, so a session that never turns
+   Classic++ on never pays for it. Latched on SUCCESS only, so a request made
+   before the atlas has its dimensions -- the first frames of a session -- is
+   retried on the next publish rather than remembered as a failure.
+   `tagpu_gaf_atlas_mirror_rgb` is itself idempotent and latches its own
+   failures, so this flag is only about not re-asking on every frame. */
+static int s_mirrorRgbAsked;
+
+void tagpu_r3d_atlas_mirror_rgb_want(void)
+{
+    if (s_state == 1 && !s_mirrorRgbAsked && s_atlas.mirror && s_atlas.dim > 0 &&
+        tagpu_classicpp_assets())
+        s_mirrorRgbAsked = tagpu_gaf_atlas_mirror_rgb(&s_atlas);
+}
+
+/* ONE READ-BACK STEP PER PUBLISHED FRAME. It is a glReadPixels off an FBO, so
+   it belongs where the context is current and the caller is the render thread;
+   it is a no-op until the mirror is armed and again once the restorer has
+   stopped painting, so a settled scene pays one integer compare. */
+void tagpu_r3d_atlas_mirror_rgb_step(void)
+{
+    if (s_mirrorRgbAsked) tagpu_gaf_atlas_mirror_rgb_step(&s_atlas);
+}
+
+/* THE ROWS ARE THE READ-BACK'S, NOT THE SHELF'S, and that is the difference
+   from the indexed accessor above. The indexed mirror is written by the same
+   `atlas_paint` that writes GL, so the shelf cursor bounds what is in it; this
+   one is filled by a read-back that runs at its own cadence, so what is in the
+   buffer is what the last step covered. Reporting the shelf here would hand a
+   consumer rows nothing had read -- and reporting rows a consumer's serial
+   cannot distinguish is the fault the gate-2 review found on the other side of
+   exactly this hand-over. */
+const unsigned char* tagpu_r3d_atlas_mirror_rgb(int* dim, int* rows, unsigned* serial)
+{
+    if (dim) *dim = 0;
+    if (rows) *rows = 0;
+    if (serial) *serial = 0;
+    if (!s_atlas.mirrorRgb || s_atlas.mirrorRgbRows <= 0 || s_atlas.dim <= 0)
+        return NULL;
+    if (dim) *dim = s_atlas.dim;
+    if (rows) *rows = s_atlas.mirrorRgbRows;
+    if (serial) *serial = s_atlas.mirrorRgbSerial;
+    return s_atlas.mirrorRgb;
 }
 
 const unsigned char* tagpu_r3d_lut_mirror(int* w, int* h, unsigned* serial)

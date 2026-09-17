@@ -418,7 +418,17 @@ void tagpu_shadow_unit(float alt, float gndThrow, float sv)
 {
     /* THE NATIVE 3DO STREAM COUNTS ITSELF. Its caller draws immediately after
        this call, so one call is one caster the Vulkan hand-over has no copy of
-       -- see TAGPU_SHADOWHAND::otherCasters. */
+       -- see TAGPU_SHADOWHAND::otherCasters.
+       AND IT IS NOT REACHED. The single call site (tagpu_native.c, the caster
+       loop) is behind `firstv[i+1] == firstv[i]`, and `nv` is 0 for the whole
+       of that loop since G16 step 8 made the posed program the path for every
+       ordinary unit -- so this function is never called and `otherCasters`
+       never counts a native-stream caster. It is left standing rather than
+       deleted because the uniform it sets is the same one the body loop sets
+       and the deletion belongs to the Vulkan-only plan's landing 11; what is
+       NOT left standing is the claim that the Vulkan lane has a native stream
+       to port, which cost gate 3 its first hypothesis.
+       [FOUND 2026-09-16, gate 3 of the Vulkan-only plan.] */
     s_otherCasters++;
     x_glUniform3f(s_uCast, alt, gndThrow, sv);
 }

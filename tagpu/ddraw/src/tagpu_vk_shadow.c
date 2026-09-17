@@ -808,8 +808,22 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
        and it can only be SMALLER than the posed bodies' share of it -- the
        header says why, and an over-count is the safe direction: it refuses a
        frame the lane could have drawn, where an under-count would draw a
-       different map from the oracle's. What is left over is the replacement
-       meshes and the native stream, which are still nobody's on this side.
+       different map from the oracle's.
+
+       WHAT IS LEFT OVER IS THE REPLACEMENT MESHES, AND THE HEIGHTFIELD WHOSE
+       MIRROR WENT MISSING. The native 3DO stream used to be named here as a
+       third; it is not one. `tagpu_shadow_unit`'s only call site is behind
+       `firstv[i+1] == firstv[i]`, and `nv` is 0 for the whole of that loop
+       since G16 step 8 made the posed program the path -- so no ordinary unit
+       has native vertices and that counter never moves. Gate 3 measured the
+       census it could not otherwise account for and found this.
+
+       AND UNTIL GATE 3 THE UNIT PASS ANSWERED 0 IN THE ONE CONFIGURATION THAT
+       SHIPS: it stood down on the Classic++ restored atlas several checks
+       before it reached its casters, so `ours` was 0 whatever the casters were
+       and this refusal fired on every frame with a unit on it. That is what
+       §2.35 measured as "the lane draws the UI and nothing else", read from the
+       other end.
 
        The unit pass's `upload` has already run for this slot -- the seam calls
        it before this function and says so -- which is what makes the number
@@ -819,10 +833,10 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
         if (!s_saidCasters) {
             s_saidCasters = 1;
             plog(d, "shadow: the GL map holds %d caster(s) this lane has no copy "
-                    "of (%d of them the unit pass carries) - the native 3DO "
-                    "stream and the replacement meshes are still to port. "
-                    "Nothing drawn while there are, and the passes that sample "
-                    "the map stand down with it", h.otherCasters, ours);
+                    "of (%d of them the unit pass carries) - the replacement "
+                    "meshes are still to port. Nothing drawn while there are, "
+                    "and the passes that sample the map stand down with it",
+                 h.otherCasters, ours);
         }
         return 0;
     }

@@ -705,6 +705,17 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
     tagpu_r3d_atlas_mirror_want();
     s_pub.atlas = tagpu_r3d_atlas_mirror(&s_pub.atlasDim, &s_pub.atlasRows,
                                          &s_pub.atlasSerial);
+    /* AND THE RESTORED TWIN, on the same beat and for the same reason -- it too
+       needs the atlas to have its dimensions, and asking is idempotent. The
+       STEP is here rather than in the arm beat because it is a glReadPixels off
+       an FBO and this is the render thread with the context current; it is a
+       no-op until the mirror is armed and again once the restorer has stopped
+       painting. The accessor returns NULL until a step has covered rows, so
+       nothing is published that a consumer could not upload. */
+    tagpu_r3d_atlas_mirror_rgb_want();
+    tagpu_r3d_atlas_mirror_rgb_step();
+    s_pub.atlasRgb = tagpu_r3d_atlas_mirror_rgb(NULL, &s_pub.atlasRgbRows,
+                                                &s_pub.atlasRgbSerial);
     s_pub.lut = tagpu_r3d_lut_mirror(&s_pub.lutW, &s_pub.lutH, &s_pub.lutSerial);
     s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();
     s_pub.fogLut = tagpu_native_foglut();
