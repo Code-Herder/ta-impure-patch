@@ -1,0 +1,3 @@
+landing-review: model=claude-opus-5 effort=medium range=main..d06c1d7 findings=1 acted=1 rejected=0 date=2026-09-17 fixes=- docs=d06c1d7
+landing-review: model=claude-opus-5 effort=xhigh kind=re-review range=b104dc0..d06c1d7 findings=5 acted=5 rejected=0 date=2026-09-17 fixes=467287f docs=27adac1,43aeef1
+landing-review: model=claude-opus-5 effort=high kind=verify range=467287f findings=4 acted=4 rejected=0 date=2026-09-17 fixes=424d270 docs=2dcf6c2 note=all-four-fixes-VERIFIED,+1-heap-overrun-this-landing-created
