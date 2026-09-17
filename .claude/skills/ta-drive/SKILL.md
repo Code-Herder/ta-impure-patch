@@ -1367,7 +1367,20 @@ Three things to know:
   with `char:` tokens and press `return` again:
   `tacli keys <i> return`, `tacli keys <i> char:+ char:s char:h char:o char:w char:r char:a
   char:n char:g char:e char:s`, `tacli keys <i> return`, then confirm with
-  `tacli peek <i> '*0x511DE8+0x391BF:4'`. With it on, a selected unit draws nine def-range
+  `tacli peek <i> '*0x511DE8+0x391BF:4'`.
+  **THIS RECIPE NEEDS A CONDITION THIS NOTE DOES NOT STATE, measured 2026-09-17.** On a
+  `scenario load` fixture (`static-terrain`, `vk.on` + `terr.on` + `classicpp.on`) it does
+  nothing: every token is delivered and parsed — `tagpu.log` carries
+  `input: keys x char:+ char:s …` for all of them — and `tagpu_shield.c:362` translates
+  `WM_TAGPU_CHAR` into a real `WM_CHAR` for the engine, yet **`main+0x391BF` stays 0**.
+  `+gamma 13` behaves the same way (`main+0x37F08` stays at its startup value through both
+  `+gamma13` and `+gamma 13`), so it is not one cheat being refused — it is the chat path.
+  The likeliest cause, unproven: the Enter that OPENS the chat line has to reach the engine's
+  own key handling, and TA takes game keys through DirectInput rather than from the window, so
+  a posted `WM_KEYDOWN` never opens the line and the `WM_CHAR`s that follow have nowhere to go.
+  **So do not use a typed cheat as a probe on a scenario fixture without peeking its address
+  first** — the keystrokes will look like they landed. Whether the recipe works in a real
+  skirmish is untested here; it is recorded as verified above and that is not withdrawn. With it on, a selected unit draws nine def-range
   circles and three weapon ones, each labelled.
 - **Text is closed too, as of G13p.** The group digit and the `ShowRanges` labels are ours —
   TA's own glyphs, rasterised through `0x4CCF60` into an atlas of ours and drawn at a constant

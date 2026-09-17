@@ -8026,8 +8026,35 @@ measured in.
   argued from the spec's discard rule rather than measured, **and the job retire's licence is
   unexercised for the same reason** — every path that frees a job while submits are in flight is a
   repaint. Both are lifetimes rather than timings, which is what makes them defensible unmeasured;
-  neither is *shown*. Closing this needs a fixture that moves the palette under a live restore, and
-  that is the next thing worth building for this lane.
+  neither is *shown*.
+
+  **AND THE FIXTURE WAS ATTEMPTED, TWICE, AND IS RECORDED AS A NEGATIVE RESULT** (2026-09-17)
+  rather than left as a to-do, because what it found bounds the gap. Three mechanisms were tried
+  against a settled `static-terrain` restore, each confirmed by a **peek** rather than by
+  inference:
+
+  | mechanism | what it should move | what happened |
+  |---|---|---|
+  | the in-game options screen (`tab`, then `escape`) | the presented palette | no change — the palette serial stayed 2 |
+  | `+showranges`, a typed cheat the `ta-drive` note records as working, used here as the **control** | `main+0x391BF` | **stayed 0** |
+  | `+gamma 13` (`0x4172B2`, `SetGamma(N × 0.1)`) | `main+0x37F08`, then the palette | **stayed 12**, through both `+gamma13` and `+gamma 13` |
+
+  The control failing is what makes this conclusive: it is **not** `+gamma` being refused, it is
+  the chat path. Delivery is not the problem either — `tagpu.log` carries
+  `input: keys x char:+ char:s …` for every token, and `tagpu_shield.c:362` translates
+  `WM_TAGPU_CHAR` into a real `WM_CHAR` for the engine. The likeliest cause, **unproven and marked
+  as such**: the Enter that opens the chat line has to reach the engine's own key handling, and TA
+  takes game keys through DirectInput rather than from the window, so a posted `WM_KEYDOWN` never
+  opens the line and the `WM_CHAR`s that follow have nowhere to land.
+
+  **What this does and does not license.** It does *not* mean the repaint is dead code — the engine
+  has a gamma slider in its own UI, so a player reaches this path and both fixes have to be right.
+  It does establish that **the palette does not move on its own once a level is up**: three runs,
+  two fixtures, the serial reaching 2 *before* the tile atlas is even built. So the next attempt
+  should stop trying to provoke it through injected chat and either drive the gamma slider as a
+  gadget ([gui-gadgets](gui-gadgets.html) places it on the campaign screen) or reach `SetGamma`
+  another way. That is still the next thing worth building for this lane, and it is now a smaller
+  and better-aimed question than it was.
 * **The `restorevk` lever is measured in one configuration only**: created before launch, terrain
   only, one map, no mid-session flip. The mid-session flip is now correct by construction (the
   publish is an either/or) but has not been run.
