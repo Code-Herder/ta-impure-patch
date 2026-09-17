@@ -300,8 +300,353 @@ int tagpu_vk_restore_up(const TAGPU_VKPASS* d)
     return 1;
 }
 
-int tagpu_vk_restore_nk(void) { return 0; }   /* set once the scheduler is wired */
+/* ============================ RESOURCES ============================
+   ALL OF THEM ARE SHARED, NOT PER SLOT, AND THE ARGUMENT IS AN ORDERING.
 
-void tagpu_vk_restore_lost(void) { s_state = ST_UNBUILT; memset(&s_dev, 0, sizeof s_dev); }
+   A batch's draws can span slices: the budget cuts a batch off mid-way and the
+   next slice resumes it, so the activation arrays and the slot tables must hold
+   that batch's contents across submissions. Per-slot copies would be the
+   reflex, and for the activations they are not affordable -- two RGBA32F arrays
+   at 512 x 512 x 16 layers are 100 MB, and eight slots of them is not a
+   trade-off, it is a different program.
 
-void tagpu_vk_restore_down(const TAGPU_VKPASS* d) { (void)d; s_state = ST_UNBUILT; }
+   So they are shared and ORDERED instead. `vkCmdPipelineBarrier`'s first
+   synchronisation scope includes every command submitted EARLIER IN SUBMISSION
+   ORDER on the same queue, not merely earlier in the same command buffer, so
+   one barrier at the head of each slice makes the previous slice's reads a fact
+   before this slice's writes -- which is a fence rather than a hope, and is
+   what CLAUDE.md's *Fixes must be safe by construction* calls an ordering. It
+   costs one barrier per slice on background work that already has a GPU-time
+   budget.
+
+   THE ACTIVATIONS STAY IN VK_IMAGE_LAYOUT_GENERAL for their whole life. They
+   alternate between colour attachment and sampled image on every layer, and
+   GENERAL is valid for both; the alternative is a transition per ping-pong on
+   16 array layers, for a target nothing outside this file ever sees. */
+
+#define RP_MAX   TAGPU_R_MAXNK
+#define MAXLAYER 64                 /* ch <= 256, so ch/4 <= 64              */
+#define FB_CACHE 32
+#define GLOBALS_RING 256            /* 16-byte blocks of scalar uniforms      */
+
+static VkSampler             s_samp;        /* NEAREST, clamp: every sampler here */
+static VkDescriptorSetLayout s_dslFill, s_dslConv, s_dslOut;
+static VkPipelineLayout      s_ploFill, s_ploConv, s_ploOut;
+static VkPipeline            s_pipeFill, s_pipeConv[RP_MAX + 1], s_pipeOut;
+static VkRenderPass          s_rpAct[RP_MAX + 1];   /* index = USED count      */
+static VkRenderPass          s_rpOut;
+static VkDescriptorPool      s_dpool;
+static int                   s_built;
+
+static VkImage        s_actImg[2];
+static VkDeviceMemory s_actMem[2];
+static VkImageView    s_actArr[2];                  /* whole array, sampled    */
+static VkImageView    s_actLay[2][MAXLAYER];        /* per layer, attachments  */
+static int            s_actSide, s_actLayers;
+static unsigned       s_actGen = 1;                 /* bumped on realloc       */
+
+/* the framebuffer cache over (image, first layer, count) -- the combinations a
+   run actually uses are few (one per conv group shape plus FILL's single
+   layer), so a small linear cache beats computing them up front */
+typedef struct { int img, first, count, side; VkFramebuffer fb; } FBE;
+static FBE s_fb[FB_CACHE];
+static int s_nfb;
+
+/* the three 8x8 RGBA32F slot tables, and one host-visible staging buffer */
+static VkImage        s_tabImg[3];
+static VkDeviceMemory s_tabMem[3];
+static VkImageView    s_tabView[3];
+static VkBuffer       s_tabStage;
+static VkDeviceMemory s_tabStageMem;
+static unsigned char* s_tabMap;
+static int            s_tabInit;                    /* laid out GENERAL yet    */
+
+static VkBuffer       s_wbuf;                       /* the padded weights      */
+static VkDeviceMemory s_wmem;
+static VkDeviceSize   s_wrange;                     /* WMAX * 64, the bound range */
+
+static VkBuffer       s_gbuf;                       /* the scalar-uniform ring */
+static VkDeviceMemory s_gmem;
+static unsigned char* s_gmap;
+static VkDeviceSize   s_gstride;
+static uint32_t       s_gnext;
+
+static VkBuffer       s_vbuf;                       /* the OUT vertices        */
+static VkDeviceMemory s_vmem;
+static unsigned char* s_vmap;
+
+static VkQueryPool    s_qpool;                      /* 2 pairs, one per parity */
+
+/* the slice's context, stashed by `step` for the vtable to reach */
+static const TAGPU_VKPASS* s_d;
+static VkCommandBuffer     s_cb;
+static uint32_t            s_slot;
+static int                 s_sliceOpen;             /* the head barrier is done */
+static int                 s_sliceTables;           /* tables uploaded this slice */
+
+static TAGPU_RSCHED s_sched;                        /* `be` set in build()      */
+
+static uint32_t mem_type(const TAGPU_VKPASS* d, uint32_t bits, VkMemoryPropertyFlags want)
+{
+    VkPhysicalDeviceMemoryProperties mp;
+    uint32_t i;
+    memset(&mp, 0, sizeof mp);
+    vkGetPhysicalDeviceMemoryProperties(d->pd, &mp);
+    for (i = 0; i < mp.memoryTypeCount; i++)
+        if ((bits & (1u << i)) && (mp.memoryTypes[i].propertyFlags & want) == want) return i;
+    return UINT32_MAX;
+}
+
+static int mk_buffer(const TAGPU_VKPASS* d, VkDeviceSize bytes, VkBufferUsageFlags use,
+                     VkMemoryPropertyFlags want, VkBuffer* buf, VkDeviceMemory* mem,
+                     unsigned char** map)
+{
+    VkBufferCreateInfo bci = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+    VkMemoryAllocateInfo mai = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+    VkMemoryRequirements req;
+    uint32_t type;
+    bci.size = bytes; bci.usage = use; bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(d->dev, &bci, NULL, buf) != VK_SUCCESS) return 0;
+    memset(&req, 0, sizeof req);
+    vkGetBufferMemoryRequirements(d->dev, *buf, &req);
+    type = mem_type(d, req.memoryTypeBits, want);
+    if (type == UINT32_MAX) { vkDestroyBuffer(d->dev, *buf, NULL); *buf = VK_NULL_HANDLE; return 0; }
+    mai.allocationSize = req.size; mai.memoryTypeIndex = type;
+    if (vkAllocateMemory(d->dev, &mai, NULL, mem) != VK_SUCCESS) {
+        vkDestroyBuffer(d->dev, *buf, NULL); *buf = VK_NULL_HANDLE; return 0;
+    }
+    if (vkBindBufferMemory(d->dev, *buf, *mem, 0) != VK_SUCCESS) return 0;
+    if (map && vkMapMemory(d->dev, *mem, 0, bytes, 0, (void**)map) != VK_SUCCESS) return 0;
+    return 1;
+}
+
+/* a 2D image, optionally an ARRAY: `layers` > 1 gives a 2D_ARRAY view too */
+static int mk_image(const TAGPU_VKPASS* d, int w, int h, int layers, VkFormat fmt,
+                    VkImageUsageFlags use, VkImage* img, VkDeviceMemory* mem, VkImageView* view)
+{
+    VkImageCreateInfo ici = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+    VkMemoryAllocateInfo mai = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+    VkImageViewCreateInfo ivi = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+    VkMemoryRequirements req;
+    uint32_t type;
+
+    ici.imageType = VK_IMAGE_TYPE_2D;
+    ici.format = fmt;
+    ici.extent.width = (uint32_t)w; ici.extent.height = (uint32_t)h; ici.extent.depth = 1;
+    ici.mipLevels = 1; ici.arrayLayers = (uint32_t)(layers > 0 ? layers : 1);
+    ici.samples = VK_SAMPLE_COUNT_1_BIT;
+    ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage = use;
+    ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (vkCreateImage(d->dev, &ici, NULL, img) != VK_SUCCESS) return 0;
+    memset(&req, 0, sizeof req);
+    vkGetImageMemoryRequirements(d->dev, *img, &req);
+    type = mem_type(d, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (type == UINT32_MAX) { vkDestroyImage(d->dev, *img, NULL); *img = VK_NULL_HANDLE; return 0; }
+    mai.allocationSize = req.size; mai.memoryTypeIndex = type;
+    if (vkAllocateMemory(d->dev, &mai, NULL, mem) != VK_SUCCESS) {
+        vkDestroyImage(d->dev, *img, NULL); *img = VK_NULL_HANDLE; return 0;
+    }
+    if (vkBindImageMemory(d->dev, *img, *mem, 0) != VK_SUCCESS) return 0;
+    if (!view) return 1;
+    ivi.image = *img;
+    ivi.viewType = layers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+    ivi.format = fmt;
+    ivi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    ivi.subresourceRange.levelCount = 1;
+    ivi.subresourceRange.layerCount = (uint32_t)(layers > 0 ? layers : 1);
+    return vkCreateImageView(d->dev, &ivi, NULL, view) == VK_SUCCESS;
+}
+
+/* one layer of an array image, as a 2D view for use as a colour attachment */
+static int layer_view(const TAGPU_VKPASS* d, VkImage img, VkFormat fmt, int layer, VkImageView* v)
+{
+    VkImageViewCreateInfo ivi = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+    ivi.image = img;
+    ivi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    ivi.format = fmt;
+    ivi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    ivi.subresourceRange.levelCount = 1;
+    ivi.subresourceRange.baseArrayLayer = (uint32_t)layer;
+    ivi.subresourceRange.layerCount = 1;
+    return vkCreateImageView(d->dev, &ivi, NULL, v) == VK_SUCCESS;
+}
+
+/* A RENDER PASS PER USED ATTACHMENT COUNT. The subpass always declares NK
+   colour references, so one pipeline shape fits, and the references past
+   `used` are VK_ATTACHMENT_UNUSED -- which is what discards the shader's
+   writes to those locations, exactly as glDrawBuffers masking did on the GL
+   lane. A tail group is not hypothetical: `full` is eleven layers of kout 16
+   at NK 4 and then a last layer of kout 1, and `tiny` is kout 6 at NK 8.
+   LOAD is DONT_CARE because a conv draw covers every fragment of its target,
+   and the layout is GENERAL at both ends because the activations never leave
+   it. */
+static int build_rp_act(const TAGPU_VKPASS* d, int used, int nk)
+{
+    VkAttachmentDescription at[RP_MAX];
+    VkAttachmentReference   ref[RP_MAX];
+    VkSubpassDescription    sp;
+    VkRenderPassCreateInfo  rci = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
+    int i;
+    if (used < 1 || used > nk) return 0;
+    memset(at, 0, sizeof at); memset(ref, 0, sizeof ref); memset(&sp, 0, sizeof sp);
+    for (i = 0; i < used; i++) {
+        at[i].format = s_dev.actFmt;
+        at[i].samples = VK_SAMPLE_COUNT_1_BIT;
+        at[i].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        at[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        at[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        at[i].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        at[i].initialLayout = VK_IMAGE_LAYOUT_GENERAL;
+        at[i].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+        ref[i].attachment = (uint32_t)i;
+        ref[i].layout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+    for (i = used; i < nk; i++) {
+        ref[i].attachment = VK_ATTACHMENT_UNUSED;
+        ref[i].layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    }
+    sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp.colorAttachmentCount = (uint32_t)nk;
+    sp.pColorAttachments = ref;
+    rci.attachmentCount = (uint32_t)used;
+    rci.pAttachments = at;
+    rci.subpassCount = 1;
+    rci.pSubpasses = &sp;
+    return vkCreateRenderPass(d->dev, &rci, NULL, &s_rpAct[used]) == VK_SUCCESS;
+}
+
+/* The OUT pass renders into the CONSUMER's atlas, so it LOADS (cells are
+   painted onto what is already there) and it transitions the image in and out
+   of SHADER_READ_ONLY_OPTIMAL itself -- which is what render-pass layout
+   transitions are for, and it means the consumer's descriptor keeps naming the
+   layout it already names. */
+static int build_rp_out(const TAGPU_VKPASS* d)
+{
+    VkAttachmentDescription at;
+    VkAttachmentReference   ref;
+    VkSubpassDescription    sp;
+    VkRenderPassCreateInfo  rci = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
+    memset(&at, 0, sizeof at); memset(&ref, 0, sizeof ref); memset(&sp, 0, sizeof sp);
+    at.format = VK_FORMAT_R8G8B8A8_UNORM;
+    at.samples = VK_SAMPLE_COUNT_1_BIT;
+    at.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    at.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    at.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    at.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    at.initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    at.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    ref.attachment = 0;
+    ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp.colorAttachmentCount = 1;
+    sp.pColorAttachments = &ref;
+    rci.attachmentCount = 1; rci.pAttachments = &at;
+    rci.subpassCount = 1; rci.pSubpasses = &sp;
+    return vkCreateRenderPass(d->dev, &rci, NULL, &s_rpOut) == VK_SUCCESS;
+}
+
+static VkFramebuffer fb_for(const TAGPU_VKPASS* d, int img, int first, int count)
+{
+    VkFramebufferCreateInfo fci = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
+    VkImageView v[RP_MAX];
+    int i;
+    for (i = 0; i < s_nfb; i++)
+        if (s_fb[i].img == img && s_fb[i].first == first &&
+            s_fb[i].count == count && s_fb[i].side == s_actSide) return s_fb[i].fb;
+    if (s_nfb >= FB_CACHE || !s_rpAct[count]) return VK_NULL_HANDLE;
+    for (i = 0; i < count; i++) {
+        if (first + i >= s_actLayers) return VK_NULL_HANDLE;
+        v[i] = s_actLay[img][first + i];
+    }
+    fci.renderPass = s_rpAct[count];
+    fci.attachmentCount = (uint32_t)count;
+    fci.pAttachments = v;
+    fci.width = (uint32_t)s_actSide; fci.height = (uint32_t)s_actSide; fci.layers = 1;
+    if (vkCreateFramebuffer(d->dev, &fci, NULL, &s_fb[s_nfb].fb) != VK_SUCCESS) return VK_NULL_HANDLE;
+    s_fb[s_nfb].img = img; s_fb[s_nfb].first = first;
+    s_fb[s_nfb].count = count; s_fb[s_nfb].side = s_actSide;
+    return s_fb[s_nfb++].fb;
+}
+
+static void fb_flush(const TAGPU_VKPASS* d)
+{
+    int i;
+    for (i = 0; i < s_nfb; i++)
+        if (s_fb[i].fb) vkDestroyFramebuffer(d->dev, s_fb[i].fb, NULL);
+    memset(s_fb, 0, sizeof s_fb);
+    s_nfb = 0;
+}
+
+int tagpu_vk_restore_nk(void) { return s_sched.nk; }
+
+void tagpu_vk_restore_lost(void)
+{
+    /* every id died with the device: forget without destroying, and the jobs
+       with them -- the core's own `lost` frees the queues and nothing else */
+    memset(s_actImg, 0, sizeof s_actImg); memset(s_actMem, 0, sizeof s_actMem);
+    memset(s_actArr, 0, sizeof s_actArr); memset(s_actLay, 0, sizeof s_actLay);
+    memset(s_fb, 0, sizeof s_fb); s_nfb = 0;
+    memset(s_tabImg, 0, sizeof s_tabImg); memset(s_tabMem, 0, sizeof s_tabMem);
+    memset(s_tabView, 0, sizeof s_tabView);
+    s_tabStage = VK_NULL_HANDLE; s_tabStageMem = VK_NULL_HANDLE; s_tabMap = NULL; s_tabInit = 0;
+    s_wbuf = VK_NULL_HANDLE; s_wmem = VK_NULL_HANDLE;
+    s_gbuf = VK_NULL_HANDLE; s_gmem = VK_NULL_HANDLE; s_gmap = NULL;
+    s_vbuf = VK_NULL_HANDLE; s_vmem = VK_NULL_HANDLE; s_vmap = NULL;
+    s_qpool = VK_NULL_HANDLE;
+    s_samp = VK_NULL_HANDLE; s_dpool = VK_NULL_HANDLE;
+    s_dslFill = s_dslConv = s_dslOut = VK_NULL_HANDLE;
+    s_ploFill = s_ploConv = s_ploOut = VK_NULL_HANDLE;
+    s_pipeFill = s_pipeOut = VK_NULL_HANDLE;
+    memset(s_pipeConv, 0, sizeof s_pipeConv);
+    memset(s_rpAct, 0, sizeof s_rpAct); s_rpOut = VK_NULL_HANDLE;
+    s_actSide = 0; s_actLayers = 0; s_actGen++;
+    s_built = 0; s_state = ST_UNBUILT;
+    memset(&s_dev, 0, sizeof s_dev);
+    tagpu_rcore_lost(&s_sched);
+}
+
+void tagpu_vk_restore_down(const TAGPU_VKPASS* d)
+{
+    int i, l;
+    if (!d || !d->dev) { tagpu_vk_restore_lost(); return; }
+    fb_flush(d);
+    for (i = 0; i < 2; i++) {
+        for (l = 0; l < MAXLAYER; l++)
+            if (s_actLay[i][l]) vkDestroyImageView(d->dev, s_actLay[i][l], NULL);
+        if (s_actArr[i]) vkDestroyImageView(d->dev, s_actArr[i], NULL);
+        if (s_actImg[i]) vkDestroyImage(d->dev, s_actImg[i], NULL);
+        if (s_actMem[i]) vkFreeMemory(d->dev, s_actMem[i], NULL);
+    }
+    for (i = 0; i < 3; i++) {
+        if (s_tabView[i]) vkDestroyImageView(d->dev, s_tabView[i], NULL);
+        if (s_tabImg[i]) vkDestroyImage(d->dev, s_tabImg[i], NULL);
+        if (s_tabMem[i]) vkFreeMemory(d->dev, s_tabMem[i], NULL);
+    }
+    if (s_tabStage) vkDestroyBuffer(d->dev, s_tabStage, NULL);
+    if (s_tabStageMem) vkFreeMemory(d->dev, s_tabStageMem, NULL);
+    if (s_wbuf) vkDestroyBuffer(d->dev, s_wbuf, NULL);
+    if (s_wmem) vkFreeMemory(d->dev, s_wmem, NULL);
+    if (s_gbuf) vkDestroyBuffer(d->dev, s_gbuf, NULL);
+    if (s_gmem) vkFreeMemory(d->dev, s_gmem, NULL);
+    if (s_vbuf) vkDestroyBuffer(d->dev, s_vbuf, NULL);
+    if (s_vmem) vkFreeMemory(d->dev, s_vmem, NULL);
+    if (s_qpool) vkDestroyQueryPool(d->dev, s_qpool, NULL);
+    if (s_pipeFill) vkDestroyPipeline(d->dev, s_pipeFill, NULL);
+    if (s_pipeOut) vkDestroyPipeline(d->dev, s_pipeOut, NULL);
+    for (i = 0; i <= RP_MAX; i++) {
+        if (s_pipeConv[i]) vkDestroyPipeline(d->dev, s_pipeConv[i], NULL);
+        if (s_rpAct[i]) vkDestroyRenderPass(d->dev, s_rpAct[i], NULL);
+    }
+    if (s_rpOut) vkDestroyRenderPass(d->dev, s_rpOut, NULL);
+    if (s_ploFill) vkDestroyPipelineLayout(d->dev, s_ploFill, NULL);
+    if (s_ploConv) vkDestroyPipelineLayout(d->dev, s_ploConv, NULL);
+    if (s_ploOut) vkDestroyPipelineLayout(d->dev, s_ploOut, NULL);
+    if (s_dslFill) vkDestroyDescriptorSetLayout(d->dev, s_dslFill, NULL);
+    if (s_dslConv) vkDestroyDescriptorSetLayout(d->dev, s_dslConv, NULL);
+    if (s_dslOut) vkDestroyDescriptorSetLayout(d->dev, s_dslOut, NULL);
+    if (s_dpool) vkDestroyDescriptorPool(d->dev, s_dpool, NULL);
+    if (s_samp) vkDestroySampler(d->dev, s_samp, NULL);
+    tagpu_vk_restore_lost();
+}
