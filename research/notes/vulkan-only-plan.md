@@ -631,6 +631,40 @@ Back to the filed list:
    atlases, so the lane draws restored art with the restore itself still running on GL. Landing 7
    is owed to the END STATE rather than to any present refusal, which is why it sits behind 5 and 6
    and ahead of 4.
+
+   **THE SPLIT RAN FIRST, 2026-09-17, AND IT WAS NOT A CHOICE** ([gpu-status](gpu-status.html)
+   §2.42). The survey above says the API-independent half *"should be shared rather than
+   duplicated"*, and the natural reading of that is a preference between two workable designs. It
+   is not: **`tagpu_rglsl_tileable` is called from `tagpu_terr.c:1034` and `tagpu_gaf.c:1130`**,
+   both gather halves that survive landing 11, while the same file includes `opengl_utils.h`, which
+   landing 11 deletes. So the module could neither go with GL nor stay whole, whatever anyone
+   preferred. `tagpu_restore_core.{h,c}` is the scheduler with no API in it;
+   `tagpu_restoreglsl.c` is the GL draws behind a twelve-entry backend interface.
+
+   **And it had to run BEFORE the Vulkan half, for two independent reasons.** Extracting after
+   writing `tagpu_vk_restore.c` would mean writing a second scheduler and then deleting it — and
+   more importantly, **landing 4 takes the oracle away**. A refactor of the GL restorer can be held
+   to *"it changed no pixel"* only while the GL restorer is still running: `tagpu_restoredump.on`'s
+   terrain atlas came back **byte-for-byte identical across the two builds, 46 461 952 bytes, `cmp`
+   clean**, with the four code-determined counts in the `done` line matching (10 036 frames, 4 142
+   wrap-padded, 158 batches, 7 426 draws). After landing 4 that claim would be unmeasurable.
+
+   **THE DESTINATION QUESTION IS ALREADY ANSWERED BY GATE 2, and the answer is better than the row
+   assumed.** The GL restorer paints into the caller's GL atlas. It was not obvious what the Vulkan
+   restorer paints into — but both of a job's surfaces are ALREADY on the device for all four
+   consumers: the indexed source is the pass's own atlas image (`s_atImg`) and the destination is
+   the restored twin the pass already binds (`s_arImg`, binding 42 in `tagpu_vk_feat.c`, 43 in
+   `tagpu_vk_fx.c`). So **the Vulkan restorer needs no new mirror and no read-back at all**; what
+   it needs is those images' usage widened to carry `COLOR_ATTACHMENT` and their views lent to it
+   as render targets. That also makes the A/B exactly the GL restore against the Vulkan restore
+   through an otherwise unchanged pass, and it retires the CPU mirror gate 2 built rather than
+   adding a second one beside it.
+
+   **Still to write**: `tagpu_vk_restore.c` against that interface — timestamp queries for
+   `slice_begin`/`slice_end`/`timer_poll`, the ping-pong activation array images with a view per
+   layer, a render pass and framebuffer per `NK` attachment count, the weight UBO with dynamic
+   offsets, and the descriptor sets. The device prerequisites above are what it must ask for and
+   refuse by name.
 8. **`PK_PIXELS` closed.** `tagpu_gui_hook.c:330`'s op kinds `OP_LINE`, `OP_BAR`, `OP_RECT`,
    `OP_FRAME` and `OP_SCALE` publish through `pub_surface_bytes` at `:1489` — *the engine's
    surface bytes as they stand at the flip*. They become drawn geometry with their own packet
@@ -651,7 +685,18 @@ Back to the filed list:
     the bottom of three; G15b, G15c and G17d measured **0 holes** across 120 stops, so nothing
     reads it.
 11. **The deletion landing** — `render_ogl.c`, `render_d3d9.c`, `opengl_utils.c`,
-    `openglshader.h`, `render_ogl.h`. `renderer=gdi` becomes the documented stock reference.
+    `openglshader.h`, `render_ogl.h`, and **`tagpu_restoreglsl.c`**. `renderer=gdi` becomes the
+    documented stock reference.
+
+    **The restorer was missing from this list until 2026-09-17 and it is what proved the list was
+    a guess.** `tagpu_restoreglsl.c` includes `opengl_utils.h` and calls `glDeleteProgram`, so it
+    cannot survive this landing — but before landing 7 split it, deleting it would also have taken
+    `tagpu_rglsl_tileable` (called from `tagpu_terr.c:1034` and `tagpu_gaf.c:1130`), the weight
+    reader and every job queue, all of which the surviving gather halves need.
+    `tagpu_restore_core.{h,c}` is the half that stays and it is **not** in this list.
+    Worth checking the rest of the list the same way: a file named here for being GL may carry
+    something the gather halves call, and the way to find out is `git grep` on its exports rather
+    than on its includes.
 
 **A twelfth thing that is not a landing: the stand-downs are session-latched.** §2.35 measured it
 — a pass that has refused once stays dark for the process even after the condition clears. Every

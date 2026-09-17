@@ -876,6 +876,37 @@ the same once-per-300-slices rule as the sprites', so a small burst that drains 
 terrain logs nothing — `restoreglsl.on=log` for its per-batch lines, or the dump line's entry
 count.
 
+**THE DUMPS ARE A CROSS-BUILD BYTE ORACLE, and it is the cheapest strong one this repo has.**
+`tagpu_restoredump.on` reads the finished atlas with `glGetTexImage` off a **texture**, not off the
+framebuffer — so unlike every capture-based A/B it needs no visible window, no Route D, no parked
+pointer and no settle heuristics, and it answers a much harder question than a screenshot does:
+whether two builds produce the *same pixels* for the whole restore rather than for one frame of it.
+Used to prove the landing-7 split changed nothing:
+
+```bash
+# one instance, the two DLLs swapped under --keep-dll so tacli does not refresh
+tools/tacli arm <i> classicpp.on terr.on feat.on fx.on native.on restoredump.on 'restoreglsl.on=log'
+cp <build>/ddraw.dll <gamedir>/ddraw.dll        # md5sum it and print that line
+tools/tacli launch <i> --keep-dll --res 1024x768 --maxfps 0
+tools/tacli scenario load <i> feat-forest --restart --res 1024x768 --maxfps 0
+# poll tagpu.log for `terr: done`, then give the lazy queues ~25 s, then cmp the files
+```
+
+- **Compare the four CODE-DETERMINED counts in the `done` line, never the timings.** `N frames
+  (W wrap-padded) in B batches, D draws` are properties of the map and the model; the `in S of F
+  frames`, the wall ms and the fps are properties of the machine that hour, because the slice
+  budget is wall-clock driven. A run that matches on pixels and differs by 2 slices is a match.
+- **Use two fixtures, because they cover different halves of the scheduler.** `static-terrain`
+  exercises only the ONE-SHOT job (a fixed list added once). The open QUEUE path — `job_add` while
+  a run is live, size-class mixing, the batch-boundary re-pick, the `queue drained` tally — needs
+  an atlas that misses lazily, and `feat-forest` with `native.on` gets there through the **unit**
+  atlas, whose `tagpu_restore_unit.{r8,rgba,idx}` are all comparable.
+- **`feat` and `fx` arm their jobs on that fixture but often never drain inside the window**, so
+  do not read their `lazy restore armed` line as coverage. Check for the dump FILE, not the arm.
+- **The `.idx` file is worth diffing too** — it lists every entry, so it catches a twin that holds
+  the right pixels in the wrong cells, which the `.rgba` alone would also catch but the `.idx`
+  localises in one line.
+
 **Classic++ lighting knobs go in `tagpu_classicpp.cfg`** (G14f), and unlike the restorer's
 they are **live**: the file is re-read on the switch's own twice-a-second poll whenever its
 write time or size changes. `tacli arm <i> 'classicpp.cfg=sun=off'` writes it (tokens

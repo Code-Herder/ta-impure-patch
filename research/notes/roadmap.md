@@ -2734,6 +2734,35 @@ draw, and the GL half is bracketed around the first window while the ghost draws
 pass declines to claim the pair on a ghost frame instead, and landing 5b's two-window comparison
 measures it: the stand-down gone, and **260 px of 786 432** with **0 inside the ghost's own box**.
 
+**Landing 7 is the restorer, and its first half is a split nobody chose**
+([gpu-status](gpu-status.html) §2.42). The row reads *"ported unchanged"*, and the survey done
+before writing any of it found that what is left is not a pass at all:
+`tagpu_restoreglsl.c` is an incremental background **scheduler** — job queues, batch formation, a
+per-slice GPU-time budget on a smoothed cost estimate — with a GL draw sequence attached. The
+shaders were the small half, and they landed first (12 SPIR-V modules, `NK × kmax` in full).
+
+**What forced the split is a fact about the tree rather than a design taste.** Landing 11 deletes
+`opengl_utils.h`, which that file includes, while `tagpu_rglsl_tileable` is called from
+`tagpu_terr.c:1034` and `tagpu_gaf.c:1130` — gather halves that survive — so the module could
+neither go with GL nor stay whole. It ran **before** the Vulkan half both to save writing a second
+scheduler and because **landing 4 takes the oracle away**: only while the GL restorer still runs
+can a refactor of it be held to *"it changed no pixel"*. `tagpu_restoredump.on`'s terrain atlas
+came back **byte-for-byte identical across the two builds** — 46 461 952 bytes, `cmp` clean — with
+the four code-determined counts in the `done` line matching (10 036 frames, 4 142 wrap-padded, 158
+batches, 7 426 draws). The wall time and fps differ between runs and are not a finding: the slice
+budget is wall-clock driven, so how many slices a restore takes is a property of the machine that
+hour.
+
+Two things were kept deliberately, and each would have been a quiet regression: **one scheduler per
+backend** rather than a shared budget, so the GL lane's slicing is unchanged the moment a second
+lane comes up; and the **options stay per-CONTEXT**, because they were read inside `init_gl` and
+the `ta-drive` skill documents that a `budget=` edited between two contexts takes effect.
+
+**And landing 11's own deletion list was wrong, which this is what found.** It named five GL files
+and not `tagpu_restoreglsl.c`, which cannot survive the landing; the list is corrected in the plan,
+with the note that the way to check the rest of it is `git grep` on each file's exports rather than
+on its includes.
+
 **Its landing 1 ran the same day and is the reason the rest is ordered as it is**
 ([gpu-status](gpu-status.html) §2.35): started in the configuration the patch actually ships in
 — `--defaults`, `ss=2`, Classic++ on — the Vulkan lane draws **the UI and nothing else**, 630 589

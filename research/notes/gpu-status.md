@@ -7697,6 +7697,93 @@ captures are not the same instant.
   fixture either.
 * **One map, one resolution, one GPU, `ss=1`, zoom 1, one building type.**
 
+### 2.42 The restorer comes apart along the line that is not the API — landing 7 of the Vulkan-only plan
+
+**The split was mandatory and the forcing fact is in the tree, not in the plan.**
+`tagpu_restoreglsl.c` was one 1 132-line file doing two unrelated jobs: an incremental background
+**scheduler** — job queues, batch formation, a per-slice GPU-time budget driven by a smoothed
+cost-per-unit estimate — and a **GL draw sequence**. Landing 11 deletes `opengl_utils.h`, which the
+file includes. But `tagpu_rglsl_tileable` is called from `tagpu_terr.c:1034` and
+`tagpu_gaf.c:1130`, both *gather* halves that survive the deletion, and the job queues are what
+every consumer's lazy-restore contract is written against. So the module could neither be deleted
+with GL nor left as it was.
+
+**It was done now because landing 4 removes the oracle.** After Route D goes there is no way to
+show that a refactor of the GL restorer changed no pixel, and a scheduler refactor whose
+correctness is never demonstrated is exactly the kind of silent wrongness this stack produces.
+
+| file | what it owns |
+|---|---|
+| `tagpu_restore_core.{h,c}` | the weight file, the options, the size-class ladder, `tileable`, the job table and its queues, batch formation, the **pass sequencer**, the cost model, the budget arithmetic, every counter and every log line. Names no rendering API. |
+| `tagpu_restoreglsl.c` | device resources and the three draws, behind a twelve-entry backend interface. |
+
+**The backend is TOLD which draw to make rather than working it out.** `issue_draw` in the core
+decides fill / conv / out, advances `pass`, `group` and the ping-pong side, builds the per-slot
+tables and the out-pass vertices, and computes the draw's cost in work units; the backend binds and
+draws. That is the whole reason the line is drawn there: a second backend that re-derived the
+sequence could disagree with the first about which layer it was on, and **no A/B would show it** —
+both lanes would be internally consistent and produce different pictures for a reason neither
+reports.
+
+**Two things were kept deliberately rather than tidied, and both would have been quiet regressions.**
+
+* **One scheduler per backend, not one shared.** A shared budget is defensible on its merits — the
+  total restore work per frame is what matters to the frame — and it would also have changed the GL
+  lane's slicing the moment a second lane came up. This split is meant to be pure code motion, so
+  each backend declares its own `TAGPU_RSCHED`.
+* **The options stay per-CONTEXT.** They were read inside `init_gl`, so a `tiny` or `budget=`
+  edited between two GL contexts took effect, and the `ta-drive` skill documents exactly that
+  (*"read once per GL context… the startup GL reset re-reads them once, a map change does not"*).
+  `tagpu_rcore_reload` is called from a backend's own init to preserve it. Making the model and
+  options process-wide is the natural-looking mistake and it would have silently broken a
+  documented knob.
+
+**MEASURED: the GL restorer's output is byte-for-byte identical.** `tagpu_restoredump.on` writes
+the finished terrain atlas with `glGetTexImage`, so the comparison needs no window and no capture.
+Same instance, same map, the two DLLs swapped under `--keep-dll`:
+
+| fixture | dump | pre-split | post-split |
+|---|---|---|---|
+| `static-terrain` | `tagpu_restore.rgba` | 46 461 952 B (2176x5338, 10 036 tiles) | **identical, `cmp` clean** |
+| | the `done` line | 10 036 frames (4 142 wrap-padded), 158 batches, 7 426 draws | **the same four counts** |
+| `feat-forest` | `tagpu_restore.rgba` | 23 674 880 B (2176x2720, 5 062 tiles) | **identical** |
+| | `tagpu_restore_unit.rgba` | 16 777 216 B | **identical** |
+| | `tagpu_restore_unit.r8` | 4 194 304 B | **identical** |
+| | `tagpu_restore_unit.idx` | 427 B, 25 entries | **identical** |
+| | the `done` line | 5 062 frames (400 wrap-padded), 80 batches, 3 760 draws | **the same four counts** |
+| | `unit: queue drained` | 25 frames in 2 batches, 94 draws | **the same three counts** |
+
+**Two fixtures on two different maps, and the second one is the one that matters most**: the
+terrain's job is a fixed list added once, but a GAF atlas's is an **open queue** fed on every miss,
+and that is where `job_add` while a run is live, the size-class mixing, the batch-boundary re-pick
+and the `queue drained` tally all live. The unit atlas's twin is a product of that path and it came
+back byte-identical, index file included.
+
+The wall time and fps differ between the runs (10 337 ms at 122.9 fps against 11 083 ms at
+122.2 fps on the first fixture; 4 835 against 4 776 ms on the second) and **that is not a finding**
+— the slice budget is wall-clock-driven, so the number of slices a restore takes, and therefore how
+many *frames* it is spread over, is a property of the machine that hour rather than of the code.
+The counts that *are* code-determined — frames, wrap-padded, batches, draws — match on both
+fixtures, and every byte of every atlas matches.
+
+**The idle path is on the record too**: `restoreglsl: idle: activations freed` appears in both
+runs, so the 180-slice release fires through the new `act_free` return-value contract.
+
+**What this measurement does NOT cover**, stated rather than implied:
+
+* the **failure** paths — `act_ensure` returning 0 (no float render target), a destination that is
+  not a complete render target, the out-of-memory returns. None is reachable on a working device
+  and none is exercised.
+* the **timer give-up** path: 300 slices without a query result, which needs a driver that accepts
+  a timer query and never completes one.
+* `job_clear` and `repalette` — the palette-moved-under-a-live-job path. `tagpu_gaf.c` reaches
+  both on a palette change, which neither fixture produces.
+* **the feature and effects queues armed but never drained.** Both logged `lazy restore armed` on
+  `feat-forest` and neither reached a dump inside the window, so the `feat` and `fx` jobs are
+  covered only as far as job creation. They run the same `tagpu_rcore_job_add` and the same batch
+  path as the unit atlas that *was* verified, which is an argument and not a measurement.
+* two GPUs' worth of nothing: one GPU, one model, NK=4, fp32.
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out
