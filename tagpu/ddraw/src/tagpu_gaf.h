@@ -137,6 +137,7 @@ typedef struct TAGPU_GAFATLAS {
        every batch the restorer paints; 0 keeps it NEAREST, 1:1. */
     int           pad, align, mip;
     int           mippedN;      /* frames painted when the mips were last built */
+    int           mirroredMippedN; /* ...and when the mirror last read them back */
     /* Classic++ (renderers.md 4b Option 4): the RESTORED TWIN -- same dim,
        same shelf, GL_RGBA8 -- painted lazily by tagpu_restoreglsl.c from a
        queue that every miss feeds, so a frame draws indexed for the frame or
@@ -189,6 +190,8 @@ typedef struct TAGPU_GAFATLAS {
        `mirrorRgbSerial` is what a backend holding a copy tests, exactly as for
        the indexed mirror. */
     unsigned char* mirrorRgb;
+    int            mirrorRgbMips;   /* top level index read back; 0 = level 0 alone */
+    float          rgbAniso;        /* anisotropy actually applied to the twin, 0 = none */
     unsigned      mirrorRgbSerial;
     int           mirrorRgbRows;   /* rows of it that have been read back    */
     unsigned int  mirrorRgbFbo;    /* the read-back's own FBO, made once     */
@@ -314,6 +317,25 @@ void tagpu_gaf_atlas_mirror_rgb_step(TAGPU_GAFATLAS* a);
    0 if none was taken -- an incomplete framebuffer is a permanent property of
    the texture and both callers latch on it, which the return value alone cannot
    tell them. (The Vulkan-only plan's gate 2.) */
-int  tagpu_gl_rgba_readback(unsigned tex, int w, int rows, unsigned char* dst,
-                            unsigned* fbo, unsigned* status);
+int  tagpu_gl_rgba_readback(unsigned tex, int level, int w, int rows,
+                            unsigned char* dst, unsigned* fbo, unsigned* status);
+
+/* THE RESTORED TWIN'S MIRROR IS THE WHOLE MIP CHAIN when the atlas is mipped,
+   because its GL original is sampled GL_LINEAR_MIPMAP_LINEAR and a consumer
+   holding level 0 alone draws a different picture wherever the art is minified
+   -- which on the unit atlas is ordinary play. Level L is `dim >> L` square,
+   RGBA8, at `tagpu_gaf_mip_off`; the whole chain is `tagpu_gaf_mip_chain`
+   bytes. `mirrorRgbMips` is the TOP LEVEL INDEX actually read back (0 means
+   level 0 alone), so a consumer builds an image with the levels that exist
+   rather than one with holes in it. */
+/* THE ANISOTROPY A RESTORED TWIN IS FILTERED WITH, where the extension answers.
+   A second backend must apply the same ratio or draw different art wherever the
+   texture is minified at an angle -- so this is a shared constant rather than
+   each lane's own choice, and `rgbAniso` below says what was actually applied
+   on the GL side, which is what a consumer compares itself against. */
+#define TAGPU_GAF_TWIN_ANISO 4.0f
+
+size_t tagpu_gaf_mip_bytes(int dim, int level);
+size_t tagpu_gaf_mip_off(int dim, int level);
+size_t tagpu_gaf_mip_chain(int dim, int mip);
 #endif

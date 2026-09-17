@@ -331,7 +331,19 @@ typedef struct TAGPU_PDHAND {
        twin drew restored is still refused until then -- for a few frames rather
        than for the process. */
     const unsigned char* atlas;   int atlasDim, atlasRows; unsigned atlasSerial;
-    const unsigned char* atlasRgb; int atlasRgbRows;       unsigned atlasRgbSerial;
+    /* `atlasRgbMips` is the TOP MIP LEVEL the read-back covered, 0 meaning
+       level 0 alone. The twin is sampled GL_LINEAR_MIPMAP_LINEAR (tagpu_gaf.c),
+       so a consumer that builds a single-level image draws a different picture
+       wherever a unit is minified -- which at ordinary zoom is every unit. The
+       levels are GL's OWN, read back rather than re-derived, so the two are
+       byte-identical by construction; the layout is tagpu_gaf.h's
+       `tagpu_gaf_mip_off` / `_bytes`. */
+    const unsigned char* atlasRgb; int atlasRgbRows, atlasRgbMips;
+    /* the anisotropy GL actually applied to the twin (0 = none). A consumer
+       that cannot apply the same ratio draws different art wherever the texture
+       is minified at an angle, so this is compared and not assumed. */
+    float atlasRgbAniso;
+    unsigned atlasRgbSerial;
     const unsigned char* lut;     int lutW, lutH;          unsigned lutSerial;
     const unsigned char* pal;     unsigned palSerial;
     /* COPIED, not aliased: the grid points into a frame packet the game thread

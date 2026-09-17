@@ -123,6 +123,7 @@
 #include "tagpu_vk_scaffold.h"
 #include "tagpu_posedraw.h"
 #include "tagpu_posebake.h"
+#include "tagpu_gaf.h"   /* tagpu_gaf_mip_off/_bytes: the restored twin's chain layout */
 #include "spirv/tagpu_posedraw.spv.h"
 #include "spirv/tagpu_native.spv.h"
 
@@ -187,13 +188,17 @@ static int s_saidRestored, s_saidNoMirror, s_saidShadow, s_saidOther;
 static int s_saidShort, s_saidCmp;      /* a latch each: one message each */
 static int s_saidFog, s_saidScaf, s_saidVbFull;
 static int s_saidRgbImg;                /* the restored twin's image was refused */
+static int s_saidAniso;                 /* ...and its filter could not be matched */
 
 static VkDescriptorSetLayout s_dslMain, s_dslCast;
 static VkPipelineLayout      s_ploMain, s_ploCast;
 static VkPipeline            s_pipeBody, s_pipeCast;
 static VkRenderPass          s_castRp;     /* what s_pipeCast was built against */
 static VkDescriptorPool      s_dpool;
-static VkSampler             s_samp, s_sampCmp;
+static VkSampler             s_samp, s_sampCmp, s_sampTwin;
+/* the anisotropy `s_sampTwin` actually applies, compared against what the GL
+   twin got rather than assumed to agree with it */
+static float                 s_twinAniso;
 static int                   s_cmpLinear;  /* the compare sampler is the twin's */
 static VkDeviceSize          s_ualign;
 
@@ -244,7 +249,7 @@ static int            s_atHave;
 static VkImage        s_arImg;
 static VkDeviceMemory s_arMem;
 static VkImageView    s_arView;
-static int            s_arDim, s_arReq;
+static int            s_arDim, s_arReq, s_arMips;
 static unsigned       s_arSerial;
 static int            s_arHave;
 
@@ -408,7 +413,13 @@ static void kill_buffer(const TAGPU_VKPASS* d, VkBuffer* buf, VkDeviceMemory* me
     if (*mem) { vkFreeMemory(d->dev, *mem, NULL); *mem = VK_NULL_HANDLE; }
 }
 
-static int mk_image(const TAGPU_VKPASS* d, int w, int h, VkFormat fmt,
+/* `mips` is the number of MIP LEVELS, not the top level index: 1 is an image
+   with level 0 alone, which is what every caller but the Classic++ restored
+   twin wants. The twin is mipped because ITS GL ORIGINAL IS -- tagpu_gaf.c
+   gives it GL_LINEAR_MIPMAP_LINEAR to GL_TEXTURE_MAX_LEVEL -- and a single
+   level sampled against that is a different picture wherever a unit is
+   minified, which at ordinary zoom is everywhere. */
+static int mk_image(const TAGPU_VKPASS* d, int w, int h, int mips, VkFormat fmt,
                     VkImageUsageFlags use, VkImageAspectFlags aspect,
                     VkImage* img, VkDeviceMemory* mem, VkImageView* view)
 {
@@ -420,7 +431,7 @@ static int mk_image(const TAGPU_VKPASS* d, int w, int h, VkFormat fmt,
     ii.imageType = VK_IMAGE_TYPE_2D;
     ii.format = fmt;
     ii.extent.width = (uint32_t)w; ii.extent.height = (uint32_t)h; ii.extent.depth = 1;
-    ii.mipLevels = 1; ii.arrayLayers = 1;
+    ii.mipLevels = (uint32_t)(mips > 0 ? mips : 1); ii.arrayLayers = 1;
     ii.samples = VK_SAMPLE_COUNT_1_BIT;
     ii.tiling = VK_IMAGE_TILING_OPTIMAL;
     ii.usage = use;
@@ -440,7 +451,7 @@ static int mk_image(const TAGPU_VKPASS* d, int w, int h, VkFormat fmt,
     vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vi.format = fmt;
     vi.subresourceRange.aspectMask = aspect;
-    vi.subresourceRange.levelCount = 1;
+    vi.subresourceRange.levelCount = (uint32_t)(mips > 0 ? mips : 1);
     vi.subresourceRange.layerCount = 1;
     if (vkCreateImageView(d->dev, &vi, NULL, view) != VK_SUCCESS) goto bad;
     return 1;
@@ -481,7 +492,7 @@ static int resolve(const TAGPU_VKPASS* d)
 
 /* ---- barriers ----------------------------------------------------------- */
 static void img_barrier(VkCommandBuffer cb, VkImage img, VkImageAspectFlags aspect,
-                        VkImageLayout from, VkImageLayout to,
+                        uint32_t levels, VkImageLayout from, VkImageLayout to,
                         VkPipelineStageFlags srcStage, VkAccessFlags srcAcc,
                         VkPipelineStageFlags dstStage, VkAccessFlags dstAcc)
 {
@@ -490,19 +501,20 @@ static void img_barrier(VkCommandBuffer cb, VkImage img, VkImageAspectFlags aspe
     b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     b.image = img;
     b.subresourceRange.aspectMask = aspect;
-    b.subresourceRange.levelCount = 1;
+    b.subresourceRange.levelCount = levels ? levels : 1;
     b.subresourceRange.layerCount = 1;
     b.srcAccessMask = srcAcc; b.dstAccessMask = dstAcc;
     vkCmdPipelineBarrier(cb, srcStage, dstStage, 0, 0, NULL, 0, NULL, 1, &b);
 }
 
 static void copy_rect(VkCommandBuffer cb, VkBuffer src, VkDeviceSize srcOff,
-                      VkImage dst, int w, int h)
+                      VkImage dst, int level, int w, int h)
 {
     VkBufferImageCopy rg;
     memset(&rg, 0, sizeof rg);
     rg.bufferOffset = srcOff;
     rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    rg.imageSubresource.mipLevel = (uint32_t)level;
     rg.imageSubresource.layerCount = 1;
     rg.imageExtent.width = (uint32_t)w;
     rg.imageExtent.height = (uint32_t)h;
@@ -600,15 +612,15 @@ static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
 static int slot_build(const TAGPU_VKPASS* d, SLOT* s)
 {
     if (s->built) return 1;
-    if (!mk_image(d, 256, 1, VK_FORMAT_R8G8B8A8_UNORM,
+    if (!mk_image(d, 256, 1, 1, VK_FORMAT_R8G8B8A8_UNORM,
                   VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                   VK_IMAGE_ASPECT_COLOR_BIT, &s->pal, &s->palMem, &s->palView))
         return 0;
-    if (!mk_image(d, 256, 32, VK_FORMAT_R8_UNORM,
+    if (!mk_image(d, 256, 32, 1, VK_FORMAT_R8_UNORM,
                   VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                   VK_IMAGE_ASPECT_COLOR_BIT, &s->lut, &s->lutMem, &s->lutView))
         return 0;
-    if (!mk_image(d, 256, 1, VK_FORMAT_R8_UNORM,
+    if (!mk_image(d, 256, 1, 1, VK_FORMAT_R8_UNORM,
                   VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                   VK_IMAGE_ASPECT_COLOR_BIT, &s->fogLut, &s->fogLutMem, &s->fogLutView))
         return 0;
@@ -626,7 +638,7 @@ static int slot_fog(const TAGPU_VKPASS* d, SLOT* s, int w, int h)
     kill_image(d, &s->fogGrid, &s->fogGridMem, &s->fogGridView);
     kill_buffer(d, &s->smallStage, &s->smallMem, &s->smallMap);
     s->fogW = s->fogH = 0;
-    if (!mk_image(d, w, h, VK_FORMAT_R8G8_UNORM,
+    if (!mk_image(d, w, h, 1, VK_FORMAT_R8G8_UNORM,
                   VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                   VK_IMAGE_ASPECT_COLOR_BIT, &s->fogGrid, &s->fogGridMem, &s->fogGridView))
         return 0;
@@ -683,10 +695,14 @@ static int slot_vstage(const TAGPU_VKPASS* d, SLOT* s, VkDeviceSize bytes)
 static int build_samplers(const TAGPU_VKPASS* d)
 {
     VkSamplerCreateInfo si = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
-    /* THE TWIN'S: every texture this shader samples is GL_NEAREST with
+    /* THE TWIN'S: every INDEXED texture this shader samples is GL_NEAREST with
        GL_CLAMP_TO_EDGE -- the atlas, the shade LUT, the palette, the scaffold
        and the fog pair -- because every one of them is looked up by an exact
-       texel and a filtered fetch would blend two palette indices. */
+       texel and a filtered fetch would blend two palette indices.
+       THE RESTORED TWIN IS THE EXCEPTION AND GETS ITS OWN SAMPLER BELOW: it
+       holds true colour, so the GL twin filters it, and NEAREST against that is
+       a different picture. [Read as "every texture" until the gate-3a review;
+       it was true until binding 43 stopped being a placeholder.] */
     si.magFilter = VK_FILTER_NEAREST;
     si.minFilter = VK_FILTER_NEAREST;
     si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
@@ -715,6 +731,47 @@ static int build_samplers(const TAGPU_VKPASS* d)
     si.compareEnable = VK_TRUE;
     si.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
     if (vkCreateSampler(d->dev, &si, NULL, &s_sampCmp) != VK_SUCCESS) return 0;
+
+    /* THE CLASSIC++ RESTORED TWIN'S SAMPLER, AND IT IS THE GL TWIN'S SETTINGS
+       READ OFF tagpu_gaf.c RATHER THAN CHOSEN. That texture is the only one
+       here holding true colour instead of palette indices, and `tagpu_gaf.c`
+       gives it GL_LINEAR magnification, GL_LINEAR_MIPMAP_LINEAR minification to
+       GL_TEXTURE_MAX_LEVEL = `mip`, 4x anisotropy where the extension answers,
+       and GL_CLAMP_TO_EDGE.
+
+       MEASURED WHAT NEAREST COSTS, because the first version of gate 3a used
+       the indexed sampler here and the A/B could not see it until the fixture
+       was fixed: 2 126 of 2 132 unit pixels differing at 1024x768 and 1 523 of
+       1 528 at 640x480 -- the same ~99.7 %, the same worst channel 155, the
+       same first pixel -- which is the signature of a MAGNIFICATION filter and
+       not of a mip level, because it does not move with the sampling rate.
+
+       THE LOD IS NOT CLAMPED HERE, AND THAT IS DELIBERATE. GL bounds the twin
+       with GL_TEXTURE_MAX_LEVEL; the equivalent is the IMAGE's own level count,
+       which is exactly the levels the read-back produced, and Vulkan clamps
+       sampling to it. Putting the same number in the sampler as well would be
+       two places to keep in step for no gain -- and the wrong one of the two
+       would be silent.
+
+       ANISOTROPY IS ASKED FOR AT THE TWIN'S OWN RATIO, and what this sampler
+       actually got is remembered rather than assumed: `prepare` compares it
+       against the ratio the GL side reports having applied, and stands the
+       frame down when they differ. Both halves of that can fail independently
+       -- this device may not offer `samplerAnisotropy`, and GL's extension may
+       not have answered -- so neither can be inferred from the other. */
+    si.compareEnable = VK_FALSE;
+    si.magFilter = VK_FILTER_LINEAR;
+    si.minFilter = VK_FILTER_LINEAR;
+    si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    si.minLod = 0.0f;
+    si.maxLod = VK_LOD_CLAMP_NONE;
+    s_twinAniso = 0.0f;
+    if (d->anisook && d->maxAniso >= TAGPU_GAF_TWIN_ANISO) {
+        si.anisotropyEnable = VK_TRUE;
+        si.maxAnisotropy = TAGPU_GAF_TWIN_ANISO;
+        s_twinAniso = TAGPU_GAF_TWIN_ANISO;
+    }
+    if (vkCreateSampler(d->dev, &si, NULL, &s_sampTwin) != VK_SUCCESS) return 0;
     return 1;
 }
 
@@ -994,12 +1051,12 @@ static int build_descriptors(const TAGPU_VKPASS* d)
    that will not give us 16 MB of RGBA8 loses restored frames rather than the
    pass. That is why it does not join the `goto refuse` family, whose label
    stops the pass for the session. */
-static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim)
+static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int mips)
 {
-    if (s_arImg && s_arDim == dim) return 1;
+    if (s_arImg && s_arDim == dim && s_arMips == mips) return 1;
     kill_image(d, &s_arImg, &s_arMem, &s_arView);
-    s_arDim = 0; s_arReq = 0; s_arSerial = 0; s_arHave = 0;
-    if (!mk_image(d, dim, dim, VK_FORMAT_R8G8B8A8_UNORM,
+    s_arDim = 0; s_arMips = 0; s_arReq = 0; s_arSerial = 0; s_arHave = 0;
+    if (!mk_image(d, dim, dim, mips + 1, VK_FORMAT_R8G8B8A8_UNORM,
                   VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                   VK_IMAGE_ASPECT_COLOR_BIT, &s_arImg, &s_arMem, &s_arView)) {
         /* `mk_image` can fail after vkCreateImage and vkAllocateMemory
@@ -1013,7 +1070,7 @@ static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim)
         kill_image(d, &s_arImg, &s_arMem, &s_arView);
         return 0;
     }
-    s_arDim = dim;
+    s_arDim = dim; s_arMips = mips;
     return 1;
 }
 
@@ -1022,7 +1079,7 @@ static int atlas_build(const TAGPU_VKPASS* d, int dim)
     if (s_atImg && s_atDim == dim) return 1;
     kill_image(d, &s_atImg, &s_atMem, &s_atView);
     s_atDim = 0; s_atSerial = 0; s_atHave = 0;
-    if (!mk_image(d, dim, dim, VK_FORMAT_R8_UNORM,
+    if (!mk_image(d, dim, dim, 1, VK_FORMAT_R8_UNORM,
                   VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                   VK_IMAGE_ASPECT_COLOR_BIT, &s_atImg, &s_atMem, &s_atView))
         return 0;
@@ -1045,12 +1102,12 @@ static void dummies_ready(const TAGPU_VKPASS* d, VkCommandBuffer cb)
     memset(&rg, 0, sizeof rg);
     rg.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     rg.levelCount = 1; rg.layerCount = 1;
-    img_barrier(cb, s_dumImg, VK_IMAGE_ASPECT_COLOR_BIT,
+    img_barrier(cb, s_dumImg, VK_IMAGE_ASPECT_COLOR_BIT, 1,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
     vkCmdClearColorImage(cb, s_dumImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cv, 1, &rg);
-    img_barrier(cb, s_dumImg, VK_IMAGE_ASPECT_COLOR_BIT,
+    img_barrier(cb, s_dumImg, VK_IMAGE_ASPECT_COLOR_BIT, 1,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -1067,13 +1124,13 @@ static void dummies_ready(const TAGPU_VKPASS* d, VkCommandBuffer cb)
         drg.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
         drg.levelCount = 1; drg.layerCount = 1;
         dv.depth = 1.0f; dv.stencil = 0;
-        img_barrier(cb, s_dumDepth, VK_IMAGE_ASPECT_DEPTH_BIT,
+        img_barrier(cb, s_dumDepth, VK_IMAGE_ASPECT_DEPTH_BIT, 1,
                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
         vkCmdClearDepthStencilImage(cb, s_dumDepth,
                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &dv, 1, &drg);
-        img_barrier(cb, s_dumDepth, VK_IMAGE_ASPECT_DEPTH_BIT,
+        img_barrier(cb, s_dumDepth, VK_IMAGE_ASPECT_DEPTH_BIT, 1,
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -1138,11 +1195,11 @@ static int build(const TAGPU_VKPASS* d)
        valid against both (tagpu_vk_shadow_format, and tagpu_vk_terr.c's note) */
     dfmt = tagpu_vk_shadow_format(d, NULL);
     if (dfmt == VK_FORMAT_UNDEFINED) dfmt = d->dfmt;
-    if (!mk_image(d, 1, 1, VK_FORMAT_R8_UNORM,
+    if (!mk_image(d, 1, 1, 1, VK_FORMAT_R8_UNORM,
                   VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                   VK_IMAGE_ASPECT_COLOR_BIT, &s_dumImg, &s_dumMem, &s_dumView))
         return 0;
-    if (!mk_image(d, 1, 1, dfmt,
+    if (!mk_image(d, 1, 1, 1, dfmt,
                   VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                   VK_IMAGE_ASPECT_DEPTH_BIT, &s_dumDepth, &s_dumDepthMem, &s_dumDepthView))
         return 0;
@@ -1171,7 +1228,7 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
        that re-uploads the atlas. */
     if (stageOff + bytes > s->vscap) return 0;
     memcpy(s->vsmap + stageOff, h->atlas, (size_t)bytes);
-    img_barrier(cb, s_atImg, VK_IMAGE_ASPECT_COLOR_BIT,
+    img_barrier(cb, s_atImg, VK_IMAGE_ASPECT_COLOR_BIT, 1,
                 s_atHave ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                          : VK_IMAGE_LAYOUT_UNDEFINED,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -1179,8 +1236,8 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
                          : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                 s_atHave ? VK_ACCESS_SHADER_READ_BIT : 0,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    copy_rect(cb, s->vstage, stageOff, s_atImg, h->atlasDim, rows);
-    img_barrier(cb, s_atImg, VK_IMAGE_ASPECT_COLOR_BIT,
+    copy_rect(cb, s->vstage, stageOff, s_atImg, 0, h->atlasDim, rows);
+    img_barrier(cb, s_atImg, VK_IMAGE_ASPECT_COLOR_BIT, 1,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -1202,6 +1259,19 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
    exactly what an unpainted cell means. This is tagpu_vk_feat.c's rule,
    unchanged, and the reason to keep the two files the same is that the one
    place this pass DID differ from them is the fault its review found. */
+/* What the restored twin costs the staging buffer this frame: level 0's rows
+   plus every other level whole. One function so the RESERVATION and the COPY
+   cannot disagree -- they did on the terrain pass, and the gate-2 review is
+   where that was found. */
+static VkDeviceSize rgb_stage_bytes(const TAGPU_PDHAND* h, int rrows)
+{
+    VkDeviceSize n = (VkDeviceSize)h->atlasDim * rrows * 4;
+    int L;
+    for (L = 1; L <= h->atlasRgbMips; L++)
+        n += (VkDeviceSize)tagpu_gaf_mip_bytes(h->atlasDim, L);
+    return n;
+}
+
 static int rgb_rows_due(const TAGPU_PDHAND* h)
 {
     int rrows = h->atlasRgbRows;
@@ -1222,12 +1292,29 @@ static int atlas_rgb_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
        it is kept as the assertion that the copy's extent and the memcpy's
        source are the same rectangle -- the gate-2 review found the terrain pass
        reading one off the other. */
-    if (s_arDim != h->atlasDim) return 1;
+    if (s_arDim != h->atlasDim || s_arMips != h->atlasRgbMips) return 1;
     rrows = rgb_rows_due(h);
-    bytes = (VkDeviceSize)s_arDim * rrows * 4;
+    bytes = rgb_stage_bytes(h, rrows);
     if (stageOff + bytes > s->vscap) return 0;
-    memcpy(s->vsmap + stageOff, h->atlasRgb, (size_t)bytes);
+    /* LEVEL 0'S ROWS FIRST, THEN EVERY OTHER LEVEL WHOLE, each at its own
+       offset in the staging buffer -- they cannot be one memcpy, because the
+       mirror holds the FULL level 0 (its unpainted rows read as alpha 0) while
+       the staging holds only the rows due, so the two layouts diverge after
+       the first level. */
+    {
+        size_t so = 0;
+        int L;
+        memcpy(s->vsmap + stageOff, h->atlasRgb, (size_t)s_arDim * rrows * 4);
+        so = (size_t)s_arDim * rrows * 4;
+        for (L = 1; L <= s_arMips; L++) {
+            size_t n = tagpu_gaf_mip_bytes(s_arDim, L);
+            memcpy(s->vsmap + stageOff + so,
+                   h->atlasRgb + tagpu_gaf_mip_off(s_arDim, L), n);
+            so += n;
+        }
+    }
     img_barrier(cb, s_arImg, VK_IMAGE_ASPECT_COLOR_BIT,
+                (uint32_t)(s_arMips + 1),
                 s_arHave ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                          : VK_IMAGE_LAYOUT_UNDEFINED,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -1235,8 +1322,19 @@ static int atlas_rgb_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
                          : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                 s_arHave ? VK_ACCESS_SHADER_READ_BIT : 0,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    copy_rect(cb, s->vstage, stageOff, s_arImg, s_arDim, rrows);
+    copy_rect(cb, s->vstage, stageOff, s_arImg, 0, s_arDim, rrows);
+    {
+        VkDeviceSize so = (VkDeviceSize)s_arDim * rrows * 4;
+        int L;
+        for (L = 1; L <= s_arMips; L++) {
+            int dl = s_arDim >> L;
+            if (dl < 1) dl = 1;
+            copy_rect(cb, s->vstage, stageOff + so, s_arImg, L, dl, dl);
+            so += (VkDeviceSize)tagpu_gaf_mip_bytes(s_arDim, L);
+        }
+    }
     img_barrier(cb, s_arImg, VK_IMAGE_ASPECT_COLOR_BIT,
+                (uint32_t)(s_arMips + 1),
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -1519,7 +1617,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        measured failing in exactly that shape twice on the way to gate 2, with
        a perfect hand-over against img=0 view=0. A failure is non-fatal: the
        view stays NULL and the refusal below then holds. */
-    if (rgbRows > 0 && !atlas_rgb_build(d, h.atlasDim)) {
+    if (rgbRows > 0 && !atlas_rgb_build(d, h.atlasDim, h.atlasRgbMips)) {
         if (!s_saidRgbImg) {
             s_saidRgbImg = 1;
             plog(d, "unit: no %d MB device image for the Classic++ restored twin "
@@ -1527,6 +1625,28 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                  (h.atlasDim * h.atlasDim * 4) >> 20);
         }
     }
+    /* AND THE FILTER HAS TO BE THE TWIN'S, not merely a filter. The restored
+       atlas is the only texture this pass samples that holds true colour rather
+       than palette indices, so it is the only one GL filters -- trilinear to
+       its MAX_LEVEL with anisotropy where the extension answered. The mip
+       levels are carried across as bytes, so those match by construction; the
+       ANISOTROPY cannot be, because it is a device feature on one side and an
+       extension on the other and either can be absent. A ratio that differs is
+       a different picture wherever a unit is minified at an angle, which is
+       ordinary play, so the frame stands down rather than draw one. Same rule,
+       and the same shape, as `s_cmpLinear` above. */
+    if (h.restored && rgbRows > 0 && h.atlasRgbAniso != s_twinAniso) {
+        if (!s_saidAniso) {
+            s_saidAniso = 1;
+            plog(d, "unit: the GL twin filters the Classic++ restored atlas at %.1fx "
+                    "anisotropic and this lane can only do %.1fx - nothing drawn on a "
+                    "frame that samples it, rather than differently filtered art",
+                 (double)h.atlasRgbAniso, (double)s_twinAniso);
+        }
+        goto standdown;
+    }
+    s_saidAniso = 0;
+
     if (h.restored && !(s_arView && rgbRows > 0)) {
         if (!s_saidRestored) {
             s_saidRestored = 1;
@@ -1659,7 +1779,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        the image was built to the rows, so there is nothing to round up to. */
     rgbNeed = (s_arView && h.atlasRgb && rgbRows > 0 &&
                (!s_arHave || s_arSerial != h.atlasRgbSerial))
-              ? (VkDeviceSize)s_arDim * rgb_rows_due(&h) * 4 : 0;
+              ? rgb_stage_bytes(&h, rgb_rows_due(&h)) : 0;
     atlasNeed += rgbNeed;
     stageNeed += atlasNeed;
     if (stageNeed) {
@@ -1855,42 +1975,42 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                           (size_t)fogW * fogH * 2);
     else           memset(s->smallMap + SMALL_FOGOFF, 0, 2);
 
-    img_barrier(cb, s->pal, VK_IMAGE_ASPECT_COLOR_BIT,
+    img_barrier(cb, s->pal, VK_IMAGE_ASPECT_COLOR_BIT, 1,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    img_barrier(cb, s->lut, VK_IMAGE_ASPECT_COLOR_BIT,
+    img_barrier(cb, s->lut, VK_IMAGE_ASPECT_COLOR_BIT, 1,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    img_barrier(cb, s->fogLut, VK_IMAGE_ASPECT_COLOR_BIT,
+    img_barrier(cb, s->fogLut, VK_IMAGE_ASPECT_COLOR_BIT, 1,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    img_barrier(cb, s->fogGrid, VK_IMAGE_ASPECT_COLOR_BIT,
+    img_barrier(cb, s->fogGrid, VK_IMAGE_ASPECT_COLOR_BIT, 1,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    copy_rect(cb, s->smallStage, SMALL_PALOFF, s->pal, 256, 1);
-    copy_rect(cb, s->smallStage, SMALL_SHDOFF, s->lut, 256, 32);
-    copy_rect(cb, s->smallStage, SMALL_FLTOFF, s->fogLut, 256, 1);
-    copy_rect(cb, s->smallStage, SMALL_FOGOFF, s->fogGrid, fogW, fogH);
-    img_barrier(cb, s->pal, VK_IMAGE_ASPECT_COLOR_BIT,
+    copy_rect(cb, s->smallStage, SMALL_PALOFF, s->pal, 0, 256, 1);
+    copy_rect(cb, s->smallStage, SMALL_SHDOFF, s->lut, 0, 256, 32);
+    copy_rect(cb, s->smallStage, SMALL_FLTOFF, s->fogLut, 0, 256, 1);
+    copy_rect(cb, s->smallStage, SMALL_FOGOFF, s->fogGrid, 0, fogW, fogH);
+    img_barrier(cb, s->pal, VK_IMAGE_ASPECT_COLOR_BIT, 1,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-    img_barrier(cb, s->lut, VK_IMAGE_ASPECT_COLOR_BIT,
+    img_barrier(cb, s->lut, VK_IMAGE_ASPECT_COLOR_BIT, 1,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-    img_barrier(cb, s->fogLut, VK_IMAGE_ASPECT_COLOR_BIT,
+    img_barrier(cb, s->fogLut, VK_IMAGE_ASPECT_COLOR_BIT, 1,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-    img_barrier(cb, s->fogGrid, VK_IMAGE_ASPECT_COLOR_BIT,
+    img_barrier(cb, s->fogGrid, VK_IMAGE_ASPECT_COLOR_BIT, 1,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -2057,7 +2177,12 @@ static void bind_main(const TAGPU_VKPASS* d, uint32_t slot)
     ii[0].sampler = s_samp; ii[0].imageView = s_atView;
     ii[1].sampler = s_samp; ii[1].imageView = s->lutView;
     ii[2].sampler = s_samp; ii[2].imageView = s->palView;
-    ii[3].sampler = s_samp; ii[3].imageView = s_arView ? s_arView : s_atView;
+    /* THE RESTORED TWIN TAKES ITS OWN SAMPLER WITH ITS OWN VIEW. The fallback
+       is the indexed image AND the indexed sampler together: filtering palette
+       indices would blend two table entries, and the pair only ever stands in
+       on frames `prepare` has already refused. */
+    ii[3].sampler = s_arView ? s_sampTwin : s_samp;
+    ii[3].imageView = s_arView ? s_arView : s_atView;
     /* BINDING 44 NAMES THE REAL OVERLAY WHEN THERE IS ONE, even though this
        pass refuses every frame that samples it (see `upload`): the mechanism
        is what the next landing needs, and a descriptor that names the actual
@@ -2241,7 +2366,7 @@ void tagpu_vk_unit_down(const TAGPU_VKPASS* d)
     kill_image(d, &s_dumImg, &s_dumMem, &s_dumView);
     kill_image(d, &s_dumDepth, &s_dumDepthMem, &s_dumDepthView);
     s_atDim = 0; s_atSerial = 0; s_atHave = 0; s_dumReady = 0;
-    s_arDim = 0; s_arReq = 0; s_arSerial = 0; s_arHave = 0;
+    s_arDim = 0; s_arMips = 0; s_arReq = 0; s_arSerial = 0; s_arHave = 0;
     if (s_dpool) { vkDestroyDescriptorPool(d->dev, s_dpool, NULL); s_dpool = VK_NULL_HANDLE; }
     if (s_pipeBody) { vkDestroyPipeline(d->dev, s_pipeBody, NULL); s_pipeBody = VK_NULL_HANDLE; }
     if (s_pipeCast) { vkDestroyPipeline(d->dev, s_pipeCast, NULL); s_pipeCast = VK_NULL_HANDLE; }
@@ -2252,6 +2377,7 @@ void tagpu_vk_unit_down(const TAGPU_VKPASS* d)
     if (s_dslCast) { vkDestroyDescriptorSetLayout(d->dev, s_dslCast, NULL); s_dslCast = VK_NULL_HANDLE; }
     if (s_samp) { vkDestroySampler(d->dev, s_samp, NULL); s_samp = VK_NULL_HANDLE; }
     if (s_sampCmp) { vkDestroySampler(d->dev, s_sampCmp, NULL); s_sampCmp = VK_NULL_HANDLE; }
+    if (s_sampTwin) { vkDestroySampler(d->dev, s_sampTwin, NULL); s_sampTwin = VK_NULL_HANDLE; }
     s_cmpLinear = 0;
     /* ST_UNBUILT and not ST_REFUSED: a pass brought down by a mode change or a
        cleared lever must be able to come back. The one exception is the

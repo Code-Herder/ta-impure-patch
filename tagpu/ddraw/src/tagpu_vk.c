@@ -291,6 +291,7 @@ static PFN_vkGetInstanceProcAddr s_gipa;
 #define IFNS(X) \
     X(vkCreateInstance) X(vkDestroyInstance) \
     X(vkEnumeratePhysicalDevices) X(vkGetPhysicalDeviceProperties) \
+    X(vkGetPhysicalDeviceFeatures) \
     X(vkGetPhysicalDeviceQueueFamilyProperties) \
     X(vkGetPhysicalDeviceFormatProperties) X(vkGetPhysicalDeviceMemoryProperties) \
     X(vkCreateWin32SurfaceKHR) X(vkDestroySurfaceKHR) \
@@ -378,6 +379,13 @@ typedef struct {
     int              flipok;               /* VK_KHR_maintenance1 was enabled   */
     int              lineok;               /* VK_EXT_line_rasterization, bresenham */
     int              zclipok;              /* VK_EXT_depth_clip_control, -1..1 z */
+    /* samplerAnisotropy, a CORE feature bit rather than an extension, and the
+       largest ratio this device will apply. The Classic++ restored twins are
+       the only textures this fork filters at all, and tagpu_gaf.c asks GL for
+       4x on them -- so a lane without this draws minified restored art
+       differently from its own oracle. */
+    int              anisook;
+    float            maxAniso;
     int              rebuild;              /* the surface said its extent moved */
     int              cansrc;               /* the images carry TRANSFER_SRC     */
     unsigned         frame;
@@ -1868,6 +1876,7 @@ static DWORD WINAPI up_worker(LPVOID arg)
             { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_CONTROL_FEATURES_EXT };
         VkDeviceQueueCreateInfo qci = { VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
         VkDeviceCreateInfo dci = { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
+        VkPhysicalDeviceFeatures feat;      /* must outlive every vkCreateDevice below */
 
         /* VK_KHR_maintenance1 IS ASKED FOR AND NOT ASSUMED, AND IT BUYS EXACTLY
            ONE THING: a NEGATIVE VIEWPORT HEIGHT. GL's clip space has +Y up and
@@ -2035,6 +2044,30 @@ static DWORD WINAPI up_worker(LPVOID arg)
                   "shader writes a clip z below 0 will stand down (Vulkan clips "
                   "those and GL does not); the world passes are unaffected");
 
+        /* ANISOTROPY IS A CORE FEATURE BIT, so it goes in pEnabledFeatures and
+           not in the pNext chain -- which is why it is not on the retry ladder
+           below: the ladder drops EXTENSIONS, and this is asked for only when
+           the device has just said it has it. `feat` must outlive the
+           vkCreateDevice calls, which is why it is declared with them. */
+        {
+            VkPhysicalDeviceFeatures have;
+            memset(&have, 0, sizeof have);
+            memset(&feat, 0, sizeof feat);
+            vkGetPhysicalDeviceFeatures(s_vk.pd, &have);
+            if (have.samplerAnisotropy) {
+                VkPhysicalDeviceProperties dp;
+                feat.samplerAnisotropy = VK_TRUE;
+                s_vk.anisook = 1;
+                vkGetPhysicalDeviceProperties(s_vk.pd, &dp);
+                s_vk.maxAniso = dp.limits.maxSamplerAnisotropy;
+            } else {
+                vklog("samplerAnisotropy is not offered - a pass sampling a "
+                      "Classic++ restored twin will stand down, because its GL "
+                      "original is filtered 4x anisotropically and NOT doing "
+                      "that is a different picture from our own oracle");
+            }
+            dci.pEnabledFeatures = &feat;
+        }
         qci.queueFamilyIndex = s_vk.qfam; qci.queueCount = 1; qci.pQueuePriorities = &prio;
         dci.queueCreateInfoCount = 1; dci.pQueueCreateInfos = &qci;
         dci.enabledExtensionCount = ndext; dci.ppEnabledExtensionNames = dexts;
@@ -2153,6 +2186,8 @@ static DWORD WINAPI up_worker(LPVOID arg)
     s_pass.dfmt = s_vk.dfmt;
     s_pass.slots = s_vk.nimg;
     s_pass.flipok = s_vk.flipok;
+    s_pass.anisook = s_vk.anisook;
+    s_pass.maxAniso = s_vk.maxAniso;
     s_pass.lineok = s_vk.lineok;
     s_pass.zclipok = s_vk.zclipok;
     s_pass.gipa = s_gipa;

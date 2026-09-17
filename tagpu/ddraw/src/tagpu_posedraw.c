@@ -715,6 +715,8 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
     tagpu_r3d_atlas_mirror_rgb_want();
     tagpu_r3d_atlas_mirror_rgb_step();
     s_pub.atlasRgb = tagpu_r3d_atlas_mirror_rgb(NULL, &s_pub.atlasRgbRows,
+                                                &s_pub.atlasRgbMips,
+                                                &s_pub.atlasRgbAniso,
                                                 &s_pub.atlasRgbSerial);
     s_pub.lut = tagpu_r3d_lut_mirror(&s_pub.lutW, &s_pub.lutH, &s_pub.lutSerial);
     s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();

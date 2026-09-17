@@ -93,6 +93,17 @@ typedef struct {
        device will not offer it stands down instead of drawing a map its own
        oracle would not recognise. */
     int                       zclipok;
+    /* `samplerAnisotropy` WAS ENABLED ON THE DEVICE, and the largest ratio it
+       will apply. This fork filters exactly one class of texture -- the
+       Classic++ restored twins, the only ones holding true colour rather than
+       palette indices -- and tagpu_gaf.c gives those GL_LINEAR_MIPMAP_LINEAR
+       with GL_TEXTURE_MAX_ANISOTROPY_EXT 4. Same shape as `flipok` and
+       `zclipok`: a rule the GL twin already obeys, adopted rather than worked
+       around, and a pass whose device will not offer it stands down on the
+       frames that would sample one instead of drawing art its own oracle
+       filtered differently. */
+    int                       anisook;
+    float                     maxAniso;
     /* WHICH RENDER-THREAD FRAME THIS IS -- the fork's own monotonic counter,
        the same number the GL lane stamped its hand-over with earlier in this
        iteration of render_ogl.c's loop.

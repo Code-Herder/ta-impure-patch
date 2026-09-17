@@ -1454,7 +1454,7 @@ static void rgb_mirror_step(void)
     painted = (s_rgbState == 2 || !s_job) ? -1 : tagpu_rglsl_job_painted(s_job);
     rows = s_atlasH;
     if (painted == s_rgbMirrorPainted && rows <= s_rgbMirrorRows) return;
-    if (!tagpu_gl_rgba_readback(s_rgbTex, ATLAS_W, rows, s_rgbMirror,
+    if (!tagpu_gl_rgba_readback(s_rgbTex, 0, ATLAS_W, rows, s_rgbMirror,
                                 &s_rgbMirrorFbo, &st)) {
         /* AN INCOMPLETE FRAMEBUFFER IS ANSWERED ONCE, not asked again every
            published frame. It is a property of the texture -- the device will

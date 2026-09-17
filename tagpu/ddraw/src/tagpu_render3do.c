@@ -523,15 +523,25 @@ void tagpu_r3d_atlas_mirror_rgb_step(void)
    consumer rows nothing had read -- and reporting rows a consumer's serial
    cannot distinguish is the fault the gate-2 review found on the other side of
    exactly this hand-over. */
-const unsigned char* tagpu_r3d_atlas_mirror_rgb(int* dim, int* rows, unsigned* serial)
+const unsigned char* tagpu_r3d_atlas_mirror_rgb(int* dim, int* rows, int* mips,
+                                                float* aniso, unsigned* serial)
 {
     if (dim) *dim = 0;
     if (rows) *rows = 0;
+    if (mips) *mips = 0;
+    if (aniso) *aniso = 0.0f;
     if (serial) *serial = 0;
     if (!s_atlas.mirrorRgb || s_atlas.mirrorRgbRows <= 0 || s_atlas.dim <= 0)
         return NULL;
     if (dim) *dim = s_atlas.dim;
     if (rows) *rows = s_atlas.mirrorRgbRows;
+    /* THE LEVELS THAT WERE ACTUALLY READ, not the levels the twin has. They are
+       the same on any frame the read-back completed, and on one where a level
+       failed the consumer must build the shallower image rather than one with
+       an undefined level in it -- which it would then sample, because this
+       atlas is minified in ordinary play. */
+    if (mips) *mips = s_atlas.mirrorRgbMips;
+    if (aniso) *aniso = s_atlas.rgbAniso;
     if (serial) *serial = s_atlas.mirrorRgbSerial;
     return s_atlas.mirrorRgb;
 }

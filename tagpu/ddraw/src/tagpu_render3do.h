@@ -76,7 +76,8 @@ const unsigned char* tagpu_r3d_atlas_mirror(int* dim, int* rows, unsigned* seria
    rows, and NULL again after a context loss until it has produced them anew. */
 void tagpu_r3d_atlas_mirror_rgb_want(void);
 void tagpu_r3d_atlas_mirror_rgb_step(void);
-const unsigned char* tagpu_r3d_atlas_mirror_rgb(int* dim, int* rows, unsigned* serial);
+const unsigned char* tagpu_r3d_atlas_mirror_rgb(int* dim, int* rows, int* mips,
+                                                float* aniso, unsigned* serial);
 /* 256 x 32 R8, the bytes `shade_upload` last gave glTexSubImage2D. The serial
    moves when the table is rebuilt -- which happens once per context, and again
    the first time the engine's own PALETTE.SHD arrives after a frame with none. */

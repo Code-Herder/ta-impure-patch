@@ -47,7 +47,9 @@ static int s_glFetched;
 #ifndef GL_TEXTURE_MAX_ANISOTROPY_EXT
 #define GL_TEXTURE_MAX_ANISOTROPY_EXT 0x84FE
 #endif
-#define TWIN_ANISO 4.0f         /* the lab's default (tascene-view.html aniso) */
+/* the lab's default (tascene-view.html aniso); in the header because a
+   second backend has to apply the SAME ratio or draw different art */
+#define TWIN_ANISO TAGPU_GAF_TWIN_ANISO
 
 static void* getgl(const char* n)
 {
@@ -109,7 +111,7 @@ static void rgb_mirror_zeroed(TAGPU_GAFATLAS* a)
        is deliberately never freed (tagpu_gaf.h), so a lane that re-arms later
        finds it already correct -- and it can only do that if the zeroing
        happened when the twin was zeroed, not when someone next looked. */
-    memset(a->mirrorRgb, 0, (size_t)a->dim * a->dim * 4);
+    memset(a->mirrorRgb, 0, tagpu_gaf_mip_chain(a->dim, a->mip));
     /* the ROWS are kept: they are the high-water mark of what a consumer has
        been handed, and it has to be handed the zeros over exactly those */
     a->mirrorRgbSerial++;
@@ -391,12 +393,13 @@ int tagpu_gaf_atlas_mirror_rgb(TAGPU_GAFATLAS* a)
         glog(b);
         return 0;
     }
-    a->mirrorRgb = (unsigned char*)calloc((size_t)a->dim * a->dim * 4, 1);
+    a->mirrorRgb = (unsigned char*)calloc(tagpu_gaf_mip_chain(a->dim, a->mip), 1);
     if (!a->mirrorRgb) {
         a->mirrorRgbFailed = 1;
         _snprintf(b, sizeof b, "%s: no memory for a %d KB restored-twin mirror - the"
                   " Vulkan edition of this pass stays indexed",
-                  a->tag ? a->tag : "gaf", (a->dim * a->dim * 4) >> 10);
+                  a->tag ? a->tag : "gaf",
+                  (unsigned)(tagpu_gaf_mip_chain(a->dim, a->mip) >> 10));
         b[sizeof b - 1] = 0;
         glog(b);
         return 0;
@@ -411,12 +414,52 @@ int tagpu_gaf_atlas_mirror_rgb(TAGPU_GAFATLAS* a)
     a->mirrorRgbSerial = 0;
     a->mirroredPainted = 0;
     a->mirroredRgbGen = 0;
-    _snprintf(b, sizeof b, "%s: restored-twin mirror armed, %d KB - read back when"
-              " the restorer paints and not otherwise",
-              a->tag ? a->tag : "gaf", (a->dim * a->dim * 4) >> 10);
+    _snprintf(b, sizeof b, "%s: restored-twin mirror armed, %u KB (%d mip level(s))"
+              " - read back when the restorer paints and not otherwise",
+              a->tag ? a->tag : "gaf",
+              (unsigned)(tagpu_gaf_mip_chain(a->dim, a->mip) >> 10), a->mip + 1);
     b[sizeof b - 1] = 0;
     glog(b);
     return 1;
+}
+
+/* THE RESTORED TWIN'S MIRROR IS THE WHOLE MIP CHAIN, not level 0 alone, and
+   the reason is measurable: `tagpu_gaf_atlas_restore` gives a mipped twin
+   GL_LINEAR_MIPMAP_LINEAR to GL_TEXTURE_MAX_LEVEL, so a consumer holding only
+   level 0 draws a different picture wherever the art is minified. On the unit
+   atlas a 32-texel cell lands on a ~23 px sprite at 1024x768 -- LOD around 0.5,
+   which is a blend of levels 0 and 1 -- so "wherever it is minified" is
+   ordinary play. MEASURED before this existed: 2 126 of 2 132 unit pixels
+   differing, worst channel 155, and the figure barely moved when only the
+   MAGNIFICATION filter was matched. [gate 3a, 2026-09-16.]
+
+   THE LEVELS ARE READ BACK, NOT RE-DERIVED. A blit chain on the Vulkan side
+   would be this fork guessing at glGenerateMipmap's reduction, and the guess
+   would be a per-driver difference that no note could pin down. Reading GL's
+   own levels makes the two byte-identical by construction, which is the same
+   rule the whole seam runs on: hand over the bytes, never the derivation.
+
+   LAYOUT: level L is `dim >> L` square, RGBA8, at the offset the levels before
+   it occupy. Both are computed here so that producer and consumer cannot
+   disagree about it. */
+size_t tagpu_gaf_mip_bytes(int dim, int level)
+{
+    int d = dim >> level;
+    if (d < 1) d = 1;
+    return (size_t)d * (size_t)d * 4;
+}
+
+size_t tagpu_gaf_mip_off(int dim, int level)
+{
+    size_t off = 0;
+    int i;
+    for (i = 0; i < level; i++) off += tagpu_gaf_mip_bytes(dim, i);
+    return off;
+}
+
+size_t tagpu_gaf_mip_chain(int dim, int mip)
+{
+    return tagpu_gaf_mip_off(dim, mip) + tagpu_gaf_mip_bytes(dim, mip);
 }
 
 /* THE READ-BACK, FOR ANY TEXTURE (the Vulkan-only plan's gate 2).
@@ -439,6 +482,9 @@ int tagpu_gaf_atlas_mirror_rgb(TAGPU_GAFATLAS* a)
    vkCmdCopyBufferToImage both write first. So this fills `dst` in the order a
    second backend uploads it, with no flip.
 
+   `level` is the mip level to attach -- 0 for an unmipped texture, and the
+   whole chain read one call at a time for a mipped one.
+
    `fbo` is the caller's, created here on first use and owned by the caller:
    one FBO per client, made once, never per frame. Returns 1 when `dst` holds
    `rows` rows of RGBA8 and 0 when it holds nothing new.
@@ -449,8 +495,8 @@ int tagpu_gaf_atlas_mirror_rgb(TAGPU_GAFATLAS* a)
    name. An incomplete framebuffer will be incomplete again next frame -- it is
    a property of the texture, not of the moment -- so both callers latch on it
    and stop asking, and neither could do that from the return value alone. */
-int tagpu_gl_rgba_readback(unsigned tex, int w, int rows, unsigned char* dst,
-                           unsigned* fbo, unsigned* status)
+int tagpu_gl_rgba_readback(unsigned tex, int level, int w, int rows,
+                           unsigned char* dst, unsigned* fbo, unsigned* status)
 {
     GLint fbo0 = 0, pack = 4;
     GLenum st;
@@ -467,7 +513,7 @@ int tagpu_gl_rgba_readback(unsigned tex, int w, int rows, unsigned char* dst,
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo0);
     glGetIntegerv(GL_PACK_ALIGNMENT, &pack);
     glBindFramebuffer(GL_FRAMEBUFFER, *fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, level);
     st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     if (status) *status = (unsigned)st;
     if (st == GL_FRAMEBUFFER_COMPLETE) {
@@ -495,7 +541,7 @@ void tagpu_gaf_atlas_mirror_rgb_step(TAGPU_GAFATLAS* a)
            consumer that kept them would restore art the GL lane no longer
            does. The `rgbGen` bump on the re-create brings the next step in. */
         if (a->mirrorRgbRows) {
-            memset(a->mirrorRgb, 0, (size_t)a->dim * a->dim * 4);
+            memset(a->mirrorRgb, 0, tagpu_gaf_mip_chain(a->dim, a->mip));
             a->mirrorRgbRows = 0;
             a->mirrorRgbSerial++;
         }
@@ -514,17 +560,53 @@ void tagpu_gaf_atlas_mirror_rgb_step(TAGPU_GAFATLAS* a)
        read. [This is landing 2's lesson, which cost that landing two rounds: a
        serial that is not the CONTENT's serial uploads once and then misses
        everything after it.] */
+    /* AND THE MIP GENERATION IS PART OF THE KEY, which is the fourth thing
+       this content key has had to learn. `twin_mips` runs at the TOP of a frame
+       out of `tagpu_gaf_atlas_restore`, `tagpu_rglsl_step` paints in the
+       MIDDLE of it, and this read-back runs at the END -- so the read-back that
+       first sees a new paint count sees level 0 freshly painted and levels 1+
+       as they were BEFORE it, and then latches `mirroredPainted` and never
+       looks again. The mirror's level 0 was right and its levels 1+ were one
+       batch stale, for good.
+       MEASURED: 581 of 1 528 unit pixels differing at 640x480 with every filter
+       setting already matched, 422 of them by more than 8 levels, and the
+       Vulkan side showing flat greys where the GL side had colour -- the
+       signature of sampling a mip that was built from different texels.
+       [FOUND 2026-09-16, gate 3a, by looking at WHERE the residual was rather
+       than trying one more filter.] */
     if (painted == a->mirroredPainted && a->rgbGen == a->mirroredRgbGen &&
-        rows <= a->mirrorRgbRows)
+        a->mippedN == a->mirroredMippedN && rows <= a->mirrorRgbRows)
         return;
     /* THE READ-BACK ITSELF IS `tagpu_gl_rgba_readback` ABOVE -- the FBO, the
        pack alignment, the saved binding, the dropped attachment and the fact
        that row 0 is memory row 0 and not the screen's all live there, once. */
-    if (tagpu_gl_rgba_readback(a->rgb, a->dim, rows, a->mirrorRgb,
+    if (tagpu_gl_rgba_readback(a->rgb, 0, a->dim, rows, a->mirrorRgb,
                                &a->mirrorRgbFbo, &st)) {
+        /* AND EVERY OTHER LEVEL, WHOLE. Only level 0 is worth bounding by the
+           shelf: level 1 of a 2048 twin is 4 MB and level 2 is 1 MB, the
+           arithmetic to bound them would have to round the shelf cursor down
+           per level, and a level read short is a level whose tail keeps the
+           previous twin's colours. They are also written by glGenerateMipmap
+           in one go, so there is no partial state to track.
+           A LEVEL THAT FAILS IS NOT FATAL: the chain is only as deep as the
+           levels that came back, and `mirrorRgbMips` says how deep, so a
+           consumer builds an image with what exists rather than one with holes
+           in it. */
+        int L;
+        a->mirrorRgbMips = 0;
+        for (L = 1; L <= a->mip; L++) {
+            int d = a->dim >> L;
+            if (d < 1) d = 1;
+            if (!tagpu_gl_rgba_readback(a->rgb, L, d, d,
+                                        a->mirrorRgb + tagpu_gaf_mip_off(a->dim, L),
+                                        &a->mirrorRgbFbo, &st))
+                break;
+            a->mirrorRgbMips = L;
+        }
         if (rows > a->mirrorRgbRows) a->mirrorRgbRows = rows;
         a->mirroredPainted = painted;
         a->mirroredRgbGen = a->rgbGen;
+        a->mirroredMippedN = a->mippedN;
         a->mirrorRgbSerial++;
         return;
     }
@@ -569,6 +651,7 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
     /* the twin and the job died with the context (tagpu_rglsl_glreset has
        already forgotten the job: it runs first); re-armed on the next frame */
     a->rgb = 0; a->job = NULL; a->restoreFailed = 0; a->mippedN = 0;
+    a->mirroredMippedN = 0;
     /* THE FBO DIED WITH THE CONTEXT TOO -- forgotten, never deleted, exactly
        as `tex` is above: deleting a name from a context that is gone either
        does nothing or destroys a live object of the NEW one that has been
@@ -577,7 +660,7 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
     a->mirrorRgbFbo = 0;
     a->mirroredPainted = 0; a->mirroredRgbGen = 0;
     if (a->mirrorRgb) {
-        memset(a->mirrorRgb, 0, (size_t)a->dim * a->dim * 4);
+        memset(a->mirrorRgb, 0, tagpu_gaf_mip_chain(a->dim, a->mip));
         a->mirrorRgbRows = 0;
         a->mirrorRgbSerial++;
     }
@@ -702,6 +785,10 @@ void tagpu_gaf_atlas_restore(TAGPU_GAFATLAS* a, const unsigned char* pal)
             while (glGetError() != GL_NO_ERROR && pending < 16) pending++;
             x_glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, TWIN_ANISO);
             err = glGetError();
+            /* RECORDED, NOT JUST LOGGED. A second backend has to apply the
+               same ratio, and "the extension answered" is a per-driver fact it
+               cannot work out for itself. */
+            a->rgbAniso = (err == GL_NO_ERROR) ? TWIN_ANISO : 0.0f;
             _snprintf(b, sizeof b, "%s: restored twin %dx%d, trilinear to mip level %d, %s",
                       a->tag, a->dim, a->dim, a->mip,
                       err == GL_NO_ERROR ? "4x anisotropic" : "no anisotropic filtering (extension absent)");
@@ -709,6 +796,7 @@ void tagpu_gaf_atlas_restore(TAGPU_GAFATLAS* a, const unsigned char* pal)
         } else {
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            a->rgbAniso = 0.0f;
         }
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
