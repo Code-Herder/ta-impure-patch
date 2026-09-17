@@ -106,9 +106,34 @@ static VkDescriptorSet       s_setT[TAGPU_VK_SLOTS];
 static VkSampler             s_samp;          /* NEAREST: every texel here is an
                                                  index or a coverage byte */
 
-/* the five sampled images. `w`/`h` are what they were built for, so a change of
-   extent rebuilds -- safe because these are per-pass images no other slot
-   names, and the seam's fence for this slot has already been waited on. */
+/* the five sampled images, PER FRAME SLOT. `w`/`h` are what they were built
+   for, so a change of extent rebuilds.
+
+   THEY WERE ONE SET SHARED BY EVERY SLOT UNTIL A LANDING REVIEW, 2026-09-17,
+   and the comment here asserted the invariant that made that safe -- "per-pass
+   images no other slot names, and the seam's fence for this slot has already
+   been waited on". Both halves were false. Every slot's `s_setL`/`s_setT` names
+   these views, and the seam's fence makes frame `n` wait for frame `n - nimg`
+   and nothing sooner (`tagpu_vk.c`, THE SEMAPHORE INDEXING) -- so with two
+   swapchain images the previous frame's submission can still be sampling them.
+   Two faults followed from it, neither of which any A/B could show, because
+   both need a second frame in flight:
+
+     - the palette and the fog grid are re-uploaded EVERY frame, and `img_up`
+       barriers SHADER_READ_ONLY -> TRANSFER_DST and copies over an image the
+       previous submission may still be reading. Nothing orders the two;
+     - `img_size` destroys and rebuilds on any change of extent, and the
+       captured layer's extent changes per frame -- the GL twin re-specs on
+       exactly that condition (`tagpu_mark.c`, `upload_layer`). So a
+       `mark.on=nocursor` session frees an image a live command buffer names.
+
+   Per slot is what `tagpu_vk_fx.c` ("the four small per-slot images") and
+   `tagpu_vk_terr.c` ("the three small per-slot images") already do, and the one
+   pass that genuinely shares a device resource carries a per-slot retirement
+   mask for it instead (`tagpu_vk_unit.c`'s `VBRET.pending`). This pass had
+   neither. The cost is the text atlas uploading once per slot after a change
+   rather than once; it is 128 KB and it changes when a string is first
+   rasterised. */
 typedef struct {
     VkImage        img;
     VkDeviceMemory mem;
@@ -118,7 +143,7 @@ typedef struct {
     unsigned       gen;        /* the source's own serial, when it has one */
     int            have;
 } IMG;
-static IMG s_img[IMG_N];
+static IMG s_img[TAGPU_VK_SLOTS][IMG_N];
 
 static VkBuffer       s_ubo[TAGPU_VK_SLOTS];
 static VkDeviceMemory s_uboMem[TAGPU_VK_SLOTS];
@@ -138,7 +163,13 @@ static VkDeviceSize s_fsOff[TAGPU_MK_MAXDRAW];
 static VkDeviceSize s_ualign = 256;
 static uint32_t s_slot;
 static int s_abFrame;
-static int s_saidLine, s_saidWide, s_saidFog, s_saidTex, s_saidRoom, s_saidWhy, s_saidHand, s_saidDrew, s_saidIn;
+static int s_saidLine, s_saidWide, s_saidFog, s_saidLut, s_saidRoom, s_saidHand, s_saidDrew, s_saidIn;
+static int s_saidPal;
+/* ONE LATCH PER SITE HERE TOO. `s_saidWhy` covered three distinct refusals
+   and `s_saidTex` two, so the first to fire silenced a DIFFERENT one for the
+   rest of the session -- the same fault the image latches below were split
+   for, left standing on the draw-list ones. [LANDING REVIEW, 2026-09-17.] */
+static int s_saidEmpty, s_saidMany, s_saidBound, s_saidTexA, s_saidTexL;
 /* ONE LATCH PER SITE. A single `s_saidImg` shared by six upload sites hid every
    failure after the first -- including a failure at a DIFFERENT site, which is
    the case that matters. Two live diagnosis cycles were spent reading a masked
@@ -572,8 +603,8 @@ static void write_one(const TAGPU_VKPASS* d, uint32_t slot, VkDescriptorSet set,
     const IMG* src[NSAMP];
     uint32_t i;
     int n = 0;
-    src[0] = unit0;             src[1] = &s_img[IMG_PAL];
-    src[2] = &s_img[IMG_FOG];   src[3] = &s_img[IMG_LUT];
+    src[0] = unit0;                  src[1] = &s_img[slot][IMG_PAL];
+    src[2] = &s_img[slot][IMG_FOG];  src[3] = &s_img[slot][IMG_LUT];
     memset(bi, 0, sizeof bi); memset(ii, 0, sizeof ii); memset(w, 0, sizeof w);
     bi[0].buffer = s_ubo[slot]; bi[0].range = VS_SZ;
     bi[1].buffer = s_ubo[slot]; bi[1].range = FS_SZ;
@@ -587,7 +618,7 @@ static void write_one(const TAGPU_VKPASS* d, uint32_t slot, VkDescriptorSet set,
     w[n].pBufferInfo = &bi[1]; n++;
     for (i = 0; i < NSAMP; i++) {
         ii[i].sampler = s_samp;
-        ii[i].imageView = src[i]->view ? src[i]->view : s_img[IMG_LAYER].view;
+        ii[i].imageView = src[i]->view ? src[i]->view : s_img[slot][IMG_LAYER].view;
         ii[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[n].dstSet = set; w[n].dstBinding = SAMP_BIND[i];
@@ -600,8 +631,8 @@ static void write_one(const TAGPU_VKPASS* d, uint32_t slot, VkDescriptorSet set,
 
 static void write_set(const TAGPU_VKPASS* d, uint32_t slot)
 {
-    write_one(d, slot, s_setL[slot], &s_img[IMG_LAYER]);
-    write_one(d, slot, s_setT[slot], &s_img[IMG_TEXT]);
+    write_one(d, slot, s_setL[slot], &s_img[slot][IMG_LAYER]);
+    write_one(d, slot, s_setT[slot], &s_img[slot][IMG_TEXT]);
 }
 
 int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
@@ -671,17 +702,36 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     /* EVERY BAIL-OUT FROM HERE DOWN SAYS WHY. They were silent in the first
        draft, and the first A/B of this pass came back "GL 297 px, Vulkan 0"
        with the log holding not one word about the cause -- which is the exact
-       shape of failure this project keeps paying for. `s_saidWhy` latches so a
-       refusal is said once and not at the frame rate. */
+       shape of failure this project keeps paying for. Each latches SEPARATELY
+       so a refusal is said once and not at the frame rate -- and so that one
+       refusal cannot silence a different one. */
+    /* NO PALETTE, NO FRAME. Binding 41 falls back to the LAYER's view rather
+       than leaving a hole in the set, and the fragment shader's LAST line is
+       `texelFetch(uPal, ivec2(pi, 0), 0)` on EVERY path -- the flat one, the
+       text one and the layer one alike. So a frame with no palette would draw
+       every marker out of a 1x1 R8 image instead of refusing: the whole layer
+       in garbage colours, which is a different picture and not an absent one.
+       The fallback's own comment said "the uniform that would read it is 0 on
+       such a frame", which is true of uLayer and false of uPal.
+       `tagpu_pal_live()` returns NULL until it has resolved one
+       (`s_have ? s_pal : NULL`), and `tagpu_vk_fx.c` refuses on it for the same
+       reason. [LANDING REVIEW, 2026-09-17.] */
+    if (!s_h.pal) {
+        if (!s_saidPal) { s_saidPal = 1;
+            plog(d, "mark: the hand-over carries no palette - every marker "
+                    "would be drawn out of the fallback image, so nothing is "
+                    "drawn while that is true"); }
+        return 0;
+    }
     if (s_h.ndraw <= 0 || s_h.nvert <= 0 || !s_h.verts || !s_h.draws) {
-        if (!s_saidWhy) { s_saidWhy = 1;
+        if (!s_saidEmpty) { s_saidEmpty = 1;
             plog(d, "mark: the hand-over is empty - ndraw=%d nvert=%d verts=%s "
                     "draws=%s", s_h.ndraw, s_h.nvert,
                     s_h.verts ? "yes" : "NULL", s_h.draws ? "yes" : "NULL"); }
         return 0;
     }
     if (s_h.ndraw > TAGPU_MK_MAXDRAW) {
-        if (!s_saidWhy) { s_saidWhy = 1;
+        if (!s_saidMany) { s_saidMany = 1;
             plog(d, "mark: %d draws is past the %d this pass carries",
                  s_h.ndraw, TAGPU_MK_MAXDRAW); }
         return 0;
@@ -690,7 +740,7 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     for (i = 0; i < s_h.ndraw; i++) {
         const TAGPU_MKDRAW* g = &s_h.draws[i];
         if (g->first < 0 || g->count <= 0 || g->first + g->count > s_h.nvert) {
-            if (!s_saidWhy) { s_saidWhy = 1;
+            if (!s_saidBound) { s_saidBound = 1;
                 plog(d, "mark: draw %d is out of the vertex block - first=%d "
                         "count=%d nvert=%d", i, g->first, g->count, s_h.nvert); }
             return 0;
@@ -707,6 +757,21 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
             }
             return 0;
         }
+        /* AND THE LUT, WHICH IS THE SAME RULE AND WAS MISSING. The fog shade
+           re-indexes through `uFogLUT` inside the grey band
+           (`TAGPU_GLSL_FOG_SHADE`), so a fogged draw with no LUT samples
+           binding 43's fallback and every marker in that band takes a wrong
+           palette index. `tagpu_native_foglut()` returns NULL until a fog frame
+           has built the table, and `tagpu_vk_terr.c` refuses on exactly this.
+           [LANDING REVIEW, 2026-09-17.] */
+        if (g->fog && !s_h.fogLut) {
+            if (!s_saidLut) {
+                s_saidLut = 1;
+                plog(d, "mark: a fogged marker draw arrived with no fog LUT - "
+                        "nothing drawn while that is true");
+            }
+            return 0;
+        }
         /* AND A DRAW THAT NAMES A TEXTURE THE HAND-OVER DID NOT BRING.
            Binding 40 falls back to whatever image is there rather than leaving
            a hole, so without this a text draw with no atlas would sample the
@@ -715,14 +780,14 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
            reachable by a second road. Refuse the frame instead. */
         if (g->tex == TAGPU_MK_TEX_TEXT &&
             !(s_h.text && s_h.textW > 0 && s_h.textH > 0)) {
-            if (!s_saidTex) { s_saidTex = 1;
+            if (!s_saidTexA) { s_saidTexA = 1;
                 plog(d, "mark: a text draw arrived with no coverage atlas - "
                         "nothing drawn while that is true"); }
             return 0;
         }
         if (g->tex == TAGPU_MK_TEX_LAYER &&
             !(s_h.layer && s_h.layerW > 0 && s_h.layerH > 0)) {
-            if (!s_saidTex) { s_saidTex = 1;
+            if (!s_saidTexL) { s_saidTexL = 1;
                 plog(d, "mark: a layer draw arrived with no captured layer - "
                         "nothing drawn while that is true"); }
             return 0;
@@ -795,39 +860,39 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
 
     off = 0;
     if (s_h.layer && s_h.layerW > 0 && s_h.layerH > 0) {
-        if (!img_size(d, &s_img[IMG_LAYER], s_h.layerW, s_h.layerH, VK_FORMAT_R8_UNORM) ||
-            !img_up(d, cb, slot, &s_img[IMG_LAYER], s_h.layer, s_h.layerPitch, 1, off)) {
+        if (!img_size(d, &s_img[slot][IMG_LAYER], s_h.layerW, s_h.layerH, VK_FORMAT_R8_UNORM) ||
+            !img_up(d, cb, slot, &s_img[slot][IMG_LAYER], s_h.layer, s_h.layerPitch, 1, off)) {
             if (!s_saidImgL) { s_saidImgL = 1; plog(d, "mark: the captured layer would not upload (%dx%d)", s_h.layerW, s_h.layerH); }
             return 0;
         }
         off += (VkDeviceSize)s_h.layerW * s_h.layerH;
     }
     if (s_h.text && s_h.textW > 0 && s_h.textH > 0) {
-        int fresh = !s_img[IMG_TEXT].have || s_img[IMG_TEXT].gen != s_h.textGen;
-        if (!img_size(d, &s_img[IMG_TEXT], s_h.textW, s_h.textH, VK_FORMAT_R8_UNORM)) {
+        int fresh = !s_img[slot][IMG_TEXT].have || s_img[slot][IMG_TEXT].gen != s_h.textGen;
+        if (!img_size(d, &s_img[slot][IMG_TEXT], s_h.textW, s_h.textH, VK_FORMAT_R8_UNORM)) {
             if (!s_saidImgT) { s_saidImgT = 1; plog(d, "mark: no image for the %dx%d text atlas", s_h.textW, s_h.textH); }
             return 0;
         }
         if (fresh) {
-            if (!img_up(d, cb, slot, &s_img[IMG_TEXT], s_h.text, s_h.textW, 1, off)) {
+            if (!img_up(d, cb, slot, &s_img[slot][IMG_TEXT], s_h.text, s_h.textW, 1, off)) {
                 if (!s_saidImgT) { s_saidImgT = 1; plog(d, "mark: the text atlas would not upload (%dx%d)", s_h.textW, s_h.textH); }
                 return 0;
             }
-            s_img[IMG_TEXT].gen = s_h.textGen;
+            s_img[slot][IMG_TEXT].gen = s_h.textGen;
         }
         off += (VkDeviceSize)s_h.textW * s_h.textH;
     }
     if (s_h.pal) {
-        if (!img_size(d, &s_img[IMG_PAL], 256, 1, VK_FORMAT_R8G8B8A8_UNORM) ||
-            !img_up(d, cb, slot, &s_img[IMG_PAL], s_h.pal, 256 * 4, 4, off)) {
+        if (!img_size(d, &s_img[slot][IMG_PAL], 256, 1, VK_FORMAT_R8G8B8A8_UNORM) ||
+            !img_up(d, cb, slot, &s_img[slot][IMG_PAL], s_h.pal, 256 * 4, 4, off)) {
             if (!s_saidImgP) { s_saidImgP = 1; plog(d, "mark: the palette would not upload"); }
             return 0;
         }
         off += 256 * 4;
     }
     if (s_h.fogGrid && s_h.fogGridCols > 0 && s_h.fogGridRows > 0) {
-        if (!img_size(d, &s_img[IMG_FOG], s_h.fogGridCols, s_h.fogGridRows, VK_FORMAT_R8G8_UNORM) ||
-            !img_up(d, cb, slot, &s_img[IMG_FOG], (const unsigned char*)s_h.fogGrid,
+        if (!img_size(d, &s_img[slot][IMG_FOG], s_h.fogGridCols, s_h.fogGridRows, VK_FORMAT_R8G8_UNORM) ||
+            !img_up(d, cb, slot, &s_img[slot][IMG_FOG], (const unsigned char*)s_h.fogGrid,
                     s_h.fogGridCols * 2, 2, off)) {
             if (!s_saidImgF) { s_saidImgF = 1; plog(d, "mark: the %dx%d fog grid would not upload (R8G8)", s_h.fogGridCols, s_h.fogGridRows); }
             return 0;
@@ -835,8 +900,8 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         off += (VkDeviceSize)s_h.fogGridCols * s_h.fogGridRows * 2;
     }
     if (s_h.fogLut) {
-        if (!img_size(d, &s_img[IMG_LUT], 256, 1, VK_FORMAT_R8_UNORM) ||
-            !img_up(d, cb, slot, &s_img[IMG_LUT], s_h.fogLut, 256, 1, off)) {
+        if (!img_size(d, &s_img[slot][IMG_LUT], 256, 1, VK_FORMAT_R8_UNORM) ||
+            !img_up(d, cb, slot, &s_img[slot][IMG_LUT], s_h.fogLut, 256, 1, off)) {
             if (!s_saidImgU) { s_saidImgU = 1; plog(d, "mark: the fog LUT would not upload"); }
             return 0;
         }
@@ -851,10 +916,10 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        review -- "an image whose contents are UNDEFINED ... is not a mistake to
        make twice" -- and this is it made twice. The upload is what puts it in
        the layout the descriptor promises. */
-    if (!s_img[IMG_LAYER].have) {
+    if (!s_img[slot][IMG_LAYER].have) {
         static const unsigned char ONE = 0xFF;
-        if (!img_size(d, &s_img[IMG_LAYER], 1, 1, VK_FORMAT_R8_UNORM) ||
-            !img_up(d, cb, slot, &s_img[IMG_LAYER], &ONE, 1, 1, off)) {
+        if (!img_size(d, &s_img[slot][IMG_LAYER], 1, 1, VK_FORMAT_R8_UNORM) ||
+            !img_up(d, cb, slot, &s_img[slot][IMG_LAYER], &ONE, 1, 1, off)) {
             if (!s_saidImgS) { s_saidImgS = 1; plog(d, "mark: no 1x1 stand-in for the unused sampler bindings"); }
             return 0;
         }
@@ -1012,7 +1077,8 @@ void tagpu_vk_mark_down(const TAGPU_VKPASS* d)
     uint32_t i;
     int k;
     if (s_state == ST_UNBUILT && !s_pool) return;
-    for (k = 0; k < IMG_N; k++) kill_img(d, &s_img[k]);
+    for (i = 0; i < TAGPU_VK_SLOTS; i++)
+        for (k = 0; k < IMG_N; k++) kill_img(d, &s_img[i][k]);
     for (i = 0; i < TAGPU_VK_SLOTS; i++) {
         if (s_ubo[i]) { vkDestroyBuffer(d->dev, s_ubo[i], NULL); vkFreeMemory(d->dev, s_uboMem[i], NULL); }
         if (s_vb[i])  { vkDestroyBuffer(d->dev, s_vb[i], NULL);  vkFreeMemory(d->dev, s_vbMem[i], NULL); }
@@ -1033,7 +1099,8 @@ void tagpu_vk_mark_down(const TAGPU_VKPASS* d)
     s_state = ST_UNBUILT;
     s_drawThis = 0; s_abFrame = 0;
     s_downOwed = 0; s_downPaying = 0;
-    s_saidLine = s_saidWide = s_saidFog = s_saidTex = s_saidRoom = s_saidWhy = 0;
+    s_saidLine = s_saidWide = s_saidFog = s_saidLut = s_saidRoom = s_saidPal = 0;
+    s_saidEmpty = s_saidMany = s_saidBound = s_saidTexA = s_saidTexL = 0;
     s_saidImgL = s_saidImgT = s_saidImgP = s_saidImgF = s_saidImgU = s_saidImgS = 0;
     s_saidNoDraw = s_saidSlot = 0;
     s_saidHand = s_saidDrew = s_saidIn = 0;
