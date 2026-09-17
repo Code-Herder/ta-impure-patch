@@ -113,9 +113,11 @@ typedef struct {
     /* The per-slot tables, TAGPU_R_SLOTCOLS x TAGPU_R_SLOTROWS RGBA32F texels,
        laid out as the shaders index them. Owned by the core and rebuilt on the
        FILL of each batch, so FILL is where a backend uploads them and the CONV
-       and OUT draws of the same batch see the same contents. They are handed to
-       every kind for that reason -- a backend that keeps no upload of its own
-       may read them on any draw -- and the GL backend uploads on FILL only. */
+       and OUT draws of the same batch see the same contents -- only one batch
+       is ever in flight, so nothing else can write them in between. Both
+       backends therefore upload on FILL and read the device copy afterwards;
+       the pointers are handed to every kind so that a backend which keeps no
+       device copy could read them on any draw. */
     const float* rect;                 /* padded w,h at .zw                    */
     const float* src;                   /* atlas x,y,w,h                        */
     const float* key;                   /* colour key index at .x, -1 = opaque  */

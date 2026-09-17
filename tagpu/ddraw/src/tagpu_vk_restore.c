@@ -97,7 +97,7 @@
     X(vkCreatePipelineLayout) X(vkDestroyPipelineLayout) \
     X(vkCreateGraphicsPipelines) X(vkDestroyPipeline) \
     X(vkCreateDescriptorPool) X(vkDestroyDescriptorPool) \
-    X(vkAllocateDescriptorSets) X(vkUpdateDescriptorSets) \
+    X(vkAllocateDescriptorSets) X(vkFreeDescriptorSets) X(vkUpdateDescriptorSets) \
     X(vkCreateBuffer) X(vkDestroyBuffer) X(vkGetBufferMemoryRequirements) \
     X(vkBindBufferMemory) \
     X(vkCreateImage) X(vkDestroyImage) X(vkGetImageMemoryRequirements) \
@@ -392,7 +392,7 @@ static VkDeviceMemory s_wstageMem;
 static unsigned char* s_wstageMap;
 static VkDeviceSize   s_wbytes;
 static int            s_wUp;                        /* the copy has been recorded */
-static const TAGPU_RBACKEND s_be_fwd;               /* defined with the vtable   */
+static const TAGPU_RBACKEND s_be;                   /* defined with the draws    */
 
 static VkBuffer       s_gbuf;                       /* the scalar-uniform ring */
 static VkDeviceMemory s_gmem;
@@ -411,7 +411,6 @@ static const TAGPU_VKPASS* s_d;
 static VkCommandBuffer     s_cb;
 static uint32_t            s_slot;
 static int                 s_sliceOpen;             /* the head barrier is done */
-static int                 s_sliceTables;           /* tables uploaded this slice */
 
 static TAGPU_RSCHED s_sched;                        /* `be` set in build()      */
 
@@ -805,7 +804,7 @@ static int build_shared(const TAGPU_VKPASS* d)
        are its rules, not ours), from the limits this device reported */
     {
         uint32_t att = s_dev.maxColour < s_dev.maxFragOut ? s_dev.maxColour : s_dev.maxFragOut;
-        s_sched.be = &s_be_fwd;
+        s_sched.be = &s_be;
         nk = tagpu_rcore_pick_nk(&s_sched, (int)s_dev.maxUniformRange, (int)att);
     }
     if (!nk) return 0;
@@ -971,7 +970,660 @@ fail:
     return ok;
 }
 
+/* ============================= THE JOB ============================= */
+struct TAGPU_VKRJOB {
+    TAGPU_RCORE*   core;
+    VkImageView    srcView;                 /* the consumer's indexed atlas   */
+    int            srcW, srcH;
+    VkImage        dstImg;                  /* ...and its restored twin       */
+    VkImageView    dstView;
+    int            dstW, dstH;
+    VkFramebuffer  dstFb;
+    VkImage        palImg;                  /* the palette snapshot, ours     */
+    VkDeviceMemory palMem;
+    VkImageView    palView;
+    VkBuffer       palStage;
+    VkDeviceMemory palStageMem;
+    unsigned char* palMap;
+    int            palDue;                  /* an upload is pending           */
+    VkDescriptorSet setFill, setConv[2], setOut[2];
+    unsigned       setGen;                  /* the s_actGen the sets name     */
+    int            dstReady;                /* brought to SHADER_READ_ONLY    */
+    int            clearDue;                /* ...and cleared to alpha 0      */
+};
+static struct TAGPU_VKRJOB s_vjob[TAGPU_R_MAXJOBS];
+
+/* one 16-byte block of scalar uniforms out of this slot's ring region */
+static uint32_t g_alloc(const void* data, size_t bytes)
+{
+    VkDeviceSize off;
+    if (s_gnext >= GLOBALS_RING || !s_gmap) return 0xFFFFFFFFu;
+    off = ((VkDeviceSize)s_slot * GLOBALS_RING + s_gnext) * s_gstride;
+    memset(s_gmap + off, 0, (size_t)s_gstride);
+    memcpy(s_gmap + off, data, bytes);
+    s_gnext++;
+    return (uint32_t)off;
+}
+
+static void write_sets(const TAGPU_VKPASS* d, struct TAGPU_VKRJOB* g)
+{
+    VkDescriptorBufferInfo bi[2];
+    VkDescriptorImageInfo  ii[6];
+    VkWriteDescriptorSet   wr[8];
+    int i, n;
+
+    memset(bi, 0, sizeof bi); memset(ii, 0, sizeof ii);
+    bi[0].buffer = s_gbuf; bi[0].offset = 0; bi[0].range = s_gstride;
+    bi[1].buffer = s_wbuf; bi[1].offset = 0; bi[1].range = s_wrange;
+    for (i = 0; i < 6; i++) ii[i].sampler = s_samp, ii[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+#define W_BUF(set, bind, which) do { \
+        wr[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[n].dstSet = (set); \
+        wr[n].dstBinding = (bind); wr[n].descriptorCount = 1; \
+        wr[n].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC; \
+        wr[n].pBufferInfo = &bi[which]; n++; } while (0)
+#define W_IMG(set, bind, slot_, view_, layout_) do { \
+        ii[slot_].imageView = (view_); ii[slot_].imageLayout = (layout_); \
+        wr[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; wr[n].dstSet = (set); \
+        wr[n].dstBinding = (bind); wr[n].descriptorCount = 1; \
+        wr[n].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; \
+        wr[n].pImageInfo = &ii[slot_]; n++; } while (0)
+
+    /* FILL: 40 uAtlas, 41 uPal, 42 uRect, 43 uSrc, 44 uKey */
+    memset(wr, 0, sizeof wr); n = 0;
+    W_BUF(g->setFill, 32, 0);
+    W_IMG(g->setFill, 40, 0, g->srcView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    W_IMG(g->setFill, 41, 1, g->palView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    W_IMG(g->setFill, 42, 2, s_tabView[0], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    W_IMG(g->setFill, 43, 3, s_tabView[1], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    W_IMG(g->setFill, 44, 4, s_tabView[2], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    vkUpdateDescriptorSets(d->dev, (uint32_t)n, wr, 0, NULL);
+
+    for (i = 0; i < 2; i++) {
+        /* CONV: 33 WBlock, 40 uAct (the side being READ), 41 uRect */
+        memset(wr, 0, sizeof wr); n = 0;
+        W_BUF(g->setConv[i], 32, 0);
+        W_BUF(g->setConv[i], 33, 1);
+        W_IMG(g->setConv[i], 40, 0, s_actArr[i], VK_IMAGE_LAYOUT_GENERAL);
+        W_IMG(g->setConv[i], 41, 1, s_tabView[0], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        vkUpdateDescriptorSets(d->dev, (uint32_t)n, wr, 0, NULL);
+        /* OUT: 0 uDst (vertex), 40 uAct, 41 uAtlas, 42 uPal, 43 uRect, 44 uKey */
+        memset(wr, 0, sizeof wr); n = 0;
+        W_BUF(g->setOut[i], 0, 0);
+        W_BUF(g->setOut[i], 32, 0);
+        W_IMG(g->setOut[i], 40, 0, s_actArr[i], VK_IMAGE_LAYOUT_GENERAL);
+        W_IMG(g->setOut[i], 41, 1, g->srcView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        W_IMG(g->setOut[i], 42, 2, g->palView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        W_IMG(g->setOut[i], 43, 3, s_tabView[0], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        W_IMG(g->setOut[i], 44, 4, s_tabView[2], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        vkUpdateDescriptorSets(d->dev, (uint32_t)n, wr, 0, NULL);
+    }
+#undef W_BUF
+#undef W_IMG
+    g->setGen = s_actGen;
+}
+
+/* ====================== THE BACKEND'S TWELVE ====================== */
+
+/* THE ACTIVATIONS, grown between batches only, and RETIRED rather than freed.
+   The three answers are tagpu_restore_core.h's: 1 ready, 0 this device cannot,
+   -1 a retire is still in flight and the core should ask again next slice. */
+static int vk_act_ensure(int side)
+{
+    const TAGPU_RMODEL* w = tagpu_rcore_model();
+    const TAGPU_VKPASS* d = s_d;
+    VkImageMemoryBarrier mb[2];
+    int i, l, layers;
+
+    if (!d || !s_cb || !s_built) return 0;
+    if (side > TAGPU_R_ACTMAX) side = TAGPU_R_ACTMAX;
+    if (s_actImg[0] && s_actSide >= side) return 1;
+    if (s_ret.pending) return -1;               /* the queue is untouched */
+    layers = w->ch / 4;
+    if (layers < 1 || layers > MAXLAYER) return 0;
+
+    if (s_actImg[0]) {
+        retire_take();
+        s_ret.pending = d->slots >= 32 ? 0xFFFFFFFFu : ((1u << d->slots) - 1u);
+    }
+    for (i = 0; i < 2; i++) {
+        if (!mk_image(d, side, side, layers, s_dev.actFmt,
+                      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                      &s_actImg[i], &s_actMem[i], &s_actArr[i])) {
+            rlog(LANE ": the activation arrays could not be allocated");
+            return 0;
+        }
+        for (l = 0; l < layers; l++)
+            if (!layer_view(d, s_actImg[i], s_dev.actFmt, l, &s_actLay[i][l])) {
+                rlog(LANE ": an activation layer view could not be created");
+                return 0;
+            }
+    }
+    s_actSide = side; s_actLayers = layers; s_actGen++;
+
+    /* UNDEFINED -> GENERAL, once, and they never leave it */
+    memset(mb, 0, sizeof mb);
+    for (i = 0; i < 2; i++) {
+        mb[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        mb[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        mb[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        mb[i].srcQueueFamilyIndex = mb[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        mb[i].image = s_actImg[i];
+        mb[i].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        mb[i].subresourceRange.levelCount = 1;
+        mb[i].subresourceRange.layerCount = (uint32_t)layers;
+        mb[i].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+    }
+    vkCmdPipelineBarrier(s_cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         0, 0, NULL, 0, NULL, 2, mb);
+    if (tagpu_rcore_opt()->log) {
+        char b[160];
+        _snprintf(b, sizeof b, LANE ": activations %dx%d x %d layers (%d MB)", side, side, layers,
+                  (int)(2u * (unsigned)side * (unsigned)side * (unsigned)layers *
+                        (tagpu_rcore_opt()->fp16 ? 8u : 16u) >> 20));
+        rlog(b);
+    }
+    return 1;
+}
+
+/* THE IDLE RELEASE GOES THROUGH THE RETIRE, not through a free.
+   The core asks after 180 slices without work, and the images may still be
+   named by a submitted command buffer -- so freeing them here would be a
+   use-after-free decided by a clock, which is precisely what the GL lane gets
+   away with only because glDeleteTextures defers until the GL server is done.
+   Handing them to the retire instead gives the same ~100 MB back, a few frames
+   later, licensed by the slot bitmask reaching zero. */
+static int vk_act_free(void)
+{
+    if (!s_d || !s_actImg[0]) return 0;
+    if (s_ret.pending) return 0;            /* one retire at a time */
+    retire_take();
+    s_ret.pending = s_d->slots >= 32 ? 0xFFFFFFFFu : ((1u << s_d->slots) - 1u);
+    s_actSide = 0; s_actLayers = 0; s_actGen++;
+    return 1;
+}
+
+static int vk_ready(void) { return s_built && s_state == ST_READY; }
+static int vk_may_draw(void) { return tagpu_classicpp_assets(); }
+static void vk_state_push(unsigned slice) { (void)slice; }
+static void vk_state_pop(unsigned slice) { (void)slice; }
+
+static void vk_slice_begin(int q)
+{
+    if (!s_qpool || !s_cb) return;
+    vkCmdResetQueryPool(s_cb, s_qpool, (uint32_t)(q * 2), 2);
+    vkCmdWriteTimestamp(s_cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, s_qpool, (uint32_t)(q * 2));
+}
+
+static void vk_slice_end(int q)
+{
+    if (!s_qpool || !s_cb) return;
+    vkCmdWriteTimestamp(s_cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s_qpool, (uint32_t)(q * 2 + 1));
+}
+
+/* 1 = `*ns` is that slice's GPU time, 0 = not in yet. Asked WITHOUT
+   VK_QUERY_RESULT_WAIT_BIT, so this never blocks -- the core's double buffering
+   is what makes that safe. */
+static int vk_timer_poll(int q, double* ns)
+{
+    uint64_t t[2] = { 0, 0 };
+    if (!s_qpool || !s_d) return 0;
+    if (vkGetQueryPoolResults(s_d->dev, s_qpool, (uint32_t)(q * 2), 2, sizeof t, t,
+                              sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) != VK_SUCCESS) return 0;
+    if (t[1] <= t[0]) return 0;
+    *ns = (double)(t[1] - t[0]) * s_dev.tsPeriod;
+    return 1;
+}
+
+static void vk_timer_off(void) { /* the pool stays; the core stops asking */ }
+
+/* the slot tables onto the device, at each batch's FILL. One batch is ever in
+   flight, so nothing else writes them in between; the cross-SLICE hazard -- a
+   new batch's upload against the previous batch's reads, which may still be
+   executing -- is what the slice-head barrier orders. */
+static void upload_tables(const TAGPU_VKPASS* d, const TAGPU_RDRAWREQ* r)
+{
+    const float* src[3];
+    VkImageMemoryBarrier mb[3];
+    VkBufferImageCopy bc;
+    const size_t bytes = (size_t)TAGPU_R_BATCH * 16;
+    VkDeviceSize base = (VkDeviceSize)s_slot * bytes * 3;
+    int i;
+
+    src[0] = r->rect; src[1] = r->src; src[2] = r->key;
+    for (i = 0; i < 3; i++) if (src[i]) memcpy(s_tabMap + base + (size_t)i * bytes, src[i], bytes);
+
+    memset(mb, 0, sizeof mb);
+    for (i = 0; i < 3; i++) {
+        mb[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        mb[i].oldLayout = s_tabInit ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
+        mb[i].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        mb[i].srcQueueFamilyIndex = mb[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        mb[i].image = s_tabImg[i];
+        mb[i].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        mb[i].subresourceRange.levelCount = 1;
+        mb[i].subresourceRange.layerCount = 1;
+        mb[i].srcAccessMask = s_tabInit ? VK_ACCESS_SHADER_READ_BIT : 0;
+        mb[i].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    }
+    vkCmdPipelineBarrier(s_cb, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 0, NULL, 0, NULL, 3, mb);
+    memset(&bc, 0, sizeof bc);
+    bc.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    bc.imageSubresource.layerCount = 1;
+    bc.imageExtent.width = TAGPU_R_SLOTCOLS;
+    bc.imageExtent.height = TAGPU_R_SLOTROWS;
+    bc.imageExtent.depth = 1;
+    for (i = 0; i < 3; i++) {
+        bc.bufferOffset = base + (VkDeviceSize)i * bytes;
+        vkCmdCopyBufferToImage(s_cb, s_tabStage, s_tabImg[i],
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
+    }
+    for (i = 0; i < 3; i++) {
+        mb[i].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        mb[i].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        mb[i].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        mb[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    }
+    vkCmdPipelineBarrier(s_cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         0, 0, NULL, 0, NULL, 3, mb);
+    s_tabInit = 1;
+    (void)d;
+}
+
+/* a job's destination, brought from UNDEFINED to the layout the OUT render pass
+   expects, and cleared to alpha 0 unless this is a repaint in place */
+static void dst_ready(const TAGPU_VKPASS* d, struct TAGPU_VKRJOB* g)
+{
+    VkImageMemoryBarrier mb = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+    VkClearColorValue cc;
+    VkImageSubresourceRange rg;
+    if (g->dstReady) return;
+    memset(&cc, 0, sizeof cc);
+    memset(&rg, 0, sizeof rg);
+    rg.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT; rg.levelCount = 1; rg.layerCount = 1;
+    mb.srcQueueFamilyIndex = mb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    mb.image = g->dstImg;
+    mb.subresourceRange = rg;
+    mb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    mb.newLayout = g->clearDue ? VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+                               : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    mb.dstAccessMask = g->clearDue ? VK_ACCESS_TRANSFER_WRITE_BIT : VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(s_cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         g->clearDue ? VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         0, 0, NULL, 0, NULL, 1, &mb);
+    if (g->clearDue) {
+        vkCmdClearColorImage(s_cb, g->dstImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cc, 1, &rg);
+        mb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        mb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(s_cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             0, 0, NULL, 0, NULL, 1, &mb);
+        g->clearDue = 0;
+    }
+    g->dstReady = 1;
+    (void)d;
+}
+
+static void set_vp(int w, int h)
+{
+    VkViewport vp;
+    VkRect2D   sc;
+    memset(&vp, 0, sizeof vp); memset(&sc, 0, sizeof sc);
+    /* POSITIVE HEIGHT, and the file header says why: these shaders speak image
+       space, where GL and Vulkan already agree about row 0. */
+    vp.x = 0.0f; vp.y = 0.0f;
+    vp.width = (float)w; vp.height = (float)h;
+    vp.minDepth = 0.0f; vp.maxDepth = 1.0f;
+    sc.extent.width = (uint32_t)w; sc.extent.height = (uint32_t)h;
+    vkCmdSetViewport(s_cb, 0, 1, &vp);
+    vkCmdSetScissor(s_cb, 0, 1, &sc);
+}
+
+/* THE SLICE'S ORDERING BARRIER, and it is the whole argument for sharing the
+   activations and the tables rather than copying them per slot.
+
+   `vkCmdPipelineBarrier`'s first synchronisation scope includes every command
+   submitted EARLIER IN SUBMISSION ORDER on this queue -- not merely earlier in
+   this command buffer -- so one barrier here makes the previous slice's reads
+   of the activations a fact before this slice's writes to them. That is a
+   fence, not a hope: nothing about it depends on how long a slice took or on
+   how many frames are in flight.
+
+   It is emitted on the slice's FIRST DRAW rather than at the top of `step`,
+   because `step` runs every frame including the ones with nothing queued, and
+   a barrier per idle frame is a cost for nobody. */
+static void slice_head(void)
+{
+    VkMemoryBarrier mb = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
+    if (!s_wUp && s_wbuf && s_wstage) {
+        VkBufferCopy bc;
+        memset(&bc, 0, sizeof bc);
+        bc.size = s_wbytes;
+        vkCmdCopyBuffer(s_cb, s_wstage, s_wbuf, 1, &bc);
+        mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_UNIFORM_READ_BIT;
+        vkCmdPipelineBarrier(s_cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             0, 1, &mb, 0, NULL, 0, NULL);
+        s_wUp = 1;
+    }
+    memset(&mb, 0, sizeof mb);
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mb.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT |
+                       VK_ACCESS_TRANSFER_WRITE_BIT;
+    mb.dstAccessMask = mb.srcAccessMask;
+    vkCmdPipelineBarrier(s_cb,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 1, &mb, 0, NULL, 0, NULL);
+}
+
+/* the job's palette snapshot onto the device, before the FILL that samples it */
+static void upload_pal(struct TAGPU_VKRJOB* g)
+{
+    VkImageMemoryBarrier mb = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+    VkBufferImageCopy bc;
+    if (!g->palDue || !g->palStage) return;
+    mb.srcQueueFamilyIndex = mb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    mb.image = g->palImg;
+    mb.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    mb.subresourceRange.levelCount = 1;
+    mb.subresourceRange.layerCount = 1;
+    mb.oldLayout = g->palDue > 1 ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
+    mb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    mb.srcAccessMask = g->palDue > 1 ? VK_ACCESS_SHADER_READ_BIT : 0;
+    mb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(s_cb, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 0, NULL, 0, NULL, 1, &mb);
+    memset(&bc, 0, sizeof bc);
+    bc.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    bc.imageSubresource.layerCount = 1;
+    bc.imageExtent.width = 256; bc.imageExtent.height = 1; bc.imageExtent.depth = 1;
+    vkCmdCopyBufferToImage(s_cb, g->palStage, g->palImg,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
+    mb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    mb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(s_cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         0, 0, NULL, 0, NULL, 1, &mb);
+    g->palDue = 0;
+}
+
+static int vk_draw(const TAGPU_RDRAWREQ* r)
+{
+    struct TAGPU_VKRJOB* g = (struct TAGPU_VKRJOB*)r->job->owner;
+    const TAGPU_VKPASS* d = s_d;
+    VkRenderPassBeginInfo rbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+    uint32_t dyn[2];
+    int gi[4];
+
+    if (!d || !s_cb || !g || !s_built) return 0;
+    if (!s_sliceOpen) { slice_head(); s_sliceOpen = 1; }
+    if (g->setGen != s_actGen) write_sets(d, g);
+
+    if (r->kind == TAGPU_RDRAW_FILL) {
+        VkFramebuffer fb;
+        upload_pal(g);
+        upload_tables(d, r);
+        fb = fb_for(d, 0, 0, 1);
+        if (!fb) { rlog(LANE ": no framebuffer for the fill target"); return 0; }
+        gi[0] = r->S; gi[1] = tagpu_rcore_model()->depth;      /* uSlot, uKeyR */
+        dyn[0] = g_alloc(gi, 8);
+        if (dyn[0] == 0xFFFFFFFFu) return 0;
+        rbi.renderPass = s_rpAct[1]; rbi.framebuffer = fb;
+        rbi.renderArea.extent.width = (uint32_t)r->TW;
+        rbi.renderArea.extent.height = (uint32_t)r->TH;
+        vkCmdBeginRenderPass(s_cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+        set_vp(r->TW, r->TH);
+        vkCmdBindPipeline(s_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeFill);
+        vkCmdBindDescriptorSets(s_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_ploFill, 0, 1,
+                                &g->setFill, 1, dyn);
+        vkCmdDraw(s_cb, 3, 1, 0, 0);
+        vkCmdEndRenderPass(s_cb);
+        return 1;
+    }
+
+    if (r->kind == TAGPU_RDRAW_CONV) {
+        VkFramebuffer fb = fb_for(d, 1 - r->srcAct, r->group, r->n);
+        if (!fb || !s_rpAct[r->n] || !s_pipeConv[r->n]) {
+            rlog(LANE ": no render pass for this conv group shape");
+            return 0;
+        }
+        gi[0] = (int)r->L->jin; gi[1] = (int)(r->L->kstride / 4);
+        gi[2] = r->S;           gi[3] = r->relu;
+        dyn[0] = g_alloc(gi, 16);
+        if (dyn[0] == 0xFFFFFFFFu) return 0;
+        /* THE WEIGHT WINDOW, and its alignment is a loader bound rather than a
+           check here: `kstride & 15` makes the group term a multiple of 256 and
+           `offset & 15` the base term, so this is always a multiple of the
+           device's minUniformBufferOffsetAlignment. */
+        dyn[1] = (uint32_t)(((size_t)r->L->offset + (size_t)r->group * r->L->kstride) * 16);
+        rbi.renderPass = s_rpAct[r->n]; rbi.framebuffer = fb;
+        rbi.renderArea.extent.width = (uint32_t)r->TW;
+        rbi.renderArea.extent.height = (uint32_t)r->TH;
+        vkCmdBeginRenderPass(s_cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+        set_vp(r->TW, r->TH);
+        vkCmdBindPipeline(s_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeConv[r->n]);
+        vkCmdBindDescriptorSets(s_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_ploConv, 0, 1,
+                                &g->setConv[r->srcAct], 2, dyn);
+        vkCmdDraw(s_cb, 3, 1, 0, 0);
+        vkCmdEndRenderPass(s_cb);
+        return 1;
+    }
+
+    /* OUT: straight into the consumer's atlas, in the consumer's cell layout */
+    {
+        float uDst[4];
+        VkDeviceSize vbase = (VkDeviceSize)s_slot * sizeof s_sched.verts;
+        VkDeviceSize voff = vbase;
+        dst_ready(d, g);
+        if (!g->dstFb) { rlog(LANE ": the job has no destination framebuffer"); return 0; }
+        if (r->nv <= 0) return 1;                     /* an empty batch draws nothing */
+        memcpy(s_vmap + vbase, r->verts, (size_t)r->nv * 32);
+        uDst[0] = (float)g->dstW; uDst[1] = (float)g->dstH; uDst[2] = uDst[3] = 0.0f;
+        dyn[0] = g_alloc(uDst, 8);                    /* binding 0, the vertex uDst */
+        gi[0] = r->S;
+        dyn[1] = g_alloc(gi, 4);                      /* binding 32, the frag uSlot */
+        if (dyn[0] == 0xFFFFFFFFu || dyn[1] == 0xFFFFFFFFu) return 0;
+        rbi.renderPass = s_rpOut; rbi.framebuffer = g->dstFb;
+        rbi.renderArea.extent.width = (uint32_t)g->dstW;
+        rbi.renderArea.extent.height = (uint32_t)g->dstH;
+        vkCmdBeginRenderPass(s_cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+        set_vp(g->dstW, g->dstH);
+        vkCmdBindPipeline(s_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeOut);
+        vkCmdBindDescriptorSets(s_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_ploOut, 0, 1,
+                                &g->setOut[r->srcAct], 2, dyn);
+        vkCmdBindVertexBuffers(s_cb, 0, 1, &s_vbuf, &voff);
+        vkCmdDraw(s_cb, (uint32_t)r->nv, 1, 0, 0);
+        vkCmdEndRenderPass(s_cb);
+    }
+    return 1;
+}
+
+static const TAGPU_RBACKEND s_be = {
+    LANE,
+    vk_ready,
+    vk_act_ensure,
+    vk_act_free,
+    vk_draw,
+    vk_slice_begin,
+    vk_slice_end,
+    vk_timer_poll,
+    vk_timer_off,
+    vk_state_push,
+    vk_state_pop,
+    vk_may_draw
+};
+
+
 int tagpu_vk_restore_nk(void) { return s_sched.nk; }
+
+/* ======================== THE PUBLIC JOB API ======================== */
+
+static void pal_pack(unsigned char* out, const unsigned char* pal)
+{
+    int i;
+    for (i = 0; i < 256; i++) {
+        out[i * 4] = pal[i * 4]; out[i * 4 + 1] = pal[i * 4 + 1];
+        out[i * 4 + 2] = pal[i * 4 + 2]; out[i * 4 + 3] = 255;
+    }
+}
+
+TAGPU_VKRJOB* tagpu_vk_restore_job_new(const TAGPU_VKPASS* d, const char* tag,
+                                       int prio, int oneshot, int repaint,
+                                       VkImageView srcView, int srcW, int srcH,
+                                       const unsigned char* pal,
+                                       VkImage dstImg, VkImageView dstView,
+                                       int dstW, int dstH)
+{
+    VkDescriptorSetAllocateInfo dai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+    VkFramebufferCreateInfo fci = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
+    VkDescriptorSetLayout lay[5];
+    VkDescriptorSet got[5];
+    TAGPU_RCORE* c;
+    struct TAGPU_VKRJOB* g;
+    char b[220];
+
+    if (!d || !srcView || !dstImg || !dstView || !pal ||
+        srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) return NULL;
+    if (!build_shared(d)) return NULL;
+    c = tagpu_rcore_job_new(&s_sched, tag, prio, oneshot, NULL);
+    if (!c) return NULL;
+    g = &s_vjob[(int)(c - s_sched.jobs)];
+    memset(g, 0, sizeof *g);
+    c->owner = g; g->core = c;
+    g->srcView = srcView; g->srcW = srcW; g->srcH = srcH;
+    g->dstImg = dstImg; g->dstView = dstView; g->dstW = dstW; g->dstH = dstH;
+    g->clearDue = repaint ? 0 : 1;
+
+    /* the palette snapshot: R,G,B,pad -> RGBA8, uploaded before the first FILL */
+    if (!mk_image(d, 256, 1, 1, VK_FORMAT_R8G8B8A8_UNORM,
+                  VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                  &g->palImg, &g->palMem, &g->palView)) goto fail;
+    if (!mk_buffer(d, 256 * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                   &g->palStage, &g->palStageMem, &g->palMap)) goto fail;
+    pal_pack(g->palMap, pal);
+    g->palDue = 1;
+
+    /* the OUT target's framebuffer, over the consumer's own view */
+    fci.renderPass = s_rpOut;
+    fci.attachmentCount = 1;
+    fci.pAttachments = &g->dstView;
+    fci.width = (uint32_t)dstW; fci.height = (uint32_t)dstH; fci.layers = 1;
+    if (vkCreateFramebuffer(d->dev, &fci, NULL, &g->dstFb) != VK_SUCCESS) goto fail;
+
+    /* five sets: FILL, and CONV/OUT once per ping-pong side */
+    lay[0] = s_dslFill;
+    lay[1] = s_dslConv; lay[2] = s_dslConv;
+    lay[3] = s_dslOut;  lay[4] = s_dslOut;
+    dai.descriptorPool = s_dpool;
+    dai.descriptorSetCount = 5;
+    dai.pSetLayouts = lay;
+    if (vkAllocateDescriptorSets(d->dev, &dai, got) != VK_SUCCESS) goto fail;
+    g->setFill = got[0];
+    g->setConv[0] = got[1]; g->setConv[1] = got[2];
+    g->setOut[0] = got[3];  g->setOut[1] = got[4];
+    /* written on the first draw: the activations may not exist yet, and a set
+       naming VK_NULL_HANDLE is not a set that can be bound */
+    g->setGen = 0;
+
+    if (!oneshot) {
+        _snprintf(b, sizeof b, LANE ": %s: lazy restore armed (%dx%d twin of the %dx%d atlas)",
+                  c->tag, dstW, dstH, srcW, srcH);
+        rlog(b);
+    }
+    return g;
+fail:
+    tagpu_vk_restore_job_free(d, g);
+    return NULL;
+}
+
+void tagpu_vk_restore_job_repalette(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j,
+                                    const unsigned char* pal)
+{
+    (void)d;
+    if (!j || !j->core || !j->core->used || !j->palMap || !pal) return;
+    pal_pack(j->palMap, pal);
+    j->palDue = 2;                  /* 2: already SHADER_READ, not UNDEFINED */
+}
+
+int tagpu_vk_restore_job_add(TAGPU_VKRJOB* j, const TAGPU_RGLSL_FRAME* frames, int count)
+{
+    if (!j || !j->core) return 0;
+    return tagpu_rcore_job_add(&s_sched, j->core, frames, count);
+}
+
+void tagpu_vk_restore_job_clear(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j)
+{
+    (void)d;
+    if (!j || !j->core || !j->core->used) return;
+    tagpu_rcore_job_drop(j->core);
+    /* THE CLEAR IS DEFERRED to the next draw rather than recorded here: this is
+       called from a consumer's own code, which has no command buffer of ours,
+       and a clear needs one. `dstReady` going back to 0 is what re-runs the
+       UNDEFINED -> cleared -> SHADER_READ sequence. */
+    if (!j->core->failed) { j->dstReady = 0; j->clearDue = 1; }
+}
+
+int tagpu_vk_restore_job_idle(const TAGPU_VKRJOB* j)
+{
+    return !j || !j->core || !j->core->used || (j->core->qn == 0 && !j->core->inflight);
+}
+
+int tagpu_vk_restore_job_failed(const TAGPU_VKRJOB* j)
+{
+    return j && j->core && j->core->used && j->core->failed;
+}
+
+int tagpu_vk_restore_job_painted(const TAGPU_VKRJOB* j)
+{
+    return (j && j->core && j->core->used) ? j->core->tframes : 0;
+}
+
+void tagpu_vk_restore_job_free(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j)
+{
+    VkDescriptorSet set[5];
+    if (!j) return;
+    if (d && d->dev) {
+        if (j->dstFb) vkDestroyFramebuffer(d->dev, j->dstFb, NULL);
+        if (j->palView) vkDestroyImageView(d->dev, j->palView, NULL);
+        if (j->palImg) vkDestroyImage(d->dev, j->palImg, NULL);
+        if (j->palMem) vkFreeMemory(d->dev, j->palMem, NULL);
+        if (j->palStage) vkDestroyBuffer(d->dev, j->palStage, NULL);
+        if (j->palStageMem) vkFreeMemory(d->dev, j->palStageMem, NULL);
+        if (j->setFill && s_dpool) {
+            set[0] = j->setFill; set[1] = j->setConv[0]; set[2] = j->setConv[1];
+            set[3] = j->setOut[0]; set[4] = j->setOut[1];
+            vkFreeDescriptorSets(d->dev, s_dpool, 5, set);
+        }
+    }
+    if (j->core) tagpu_rcore_job_free(&s_sched, j->core);
+    memset(j, 0, sizeof *j);
+}
+
+/* ONE SLICE. The retire's bit for this slot clears FIRST and UNCONDITIONALLY,
+   before any early return -- tagpu_vk_terr.c's rule, and the reason for it is
+   that a bit which clears only on the paths that draw would stall the retire
+   for ever on a lane that is paused. */
+void tagpu_vk_restore_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
+{
+    if (!d || !d->dev) return;
+    retire_slot_done(d, slot);
+    if (!s_built || s_state != ST_READY) return;
+    s_d = d; s_cb = cb; s_slot = slot < TAGPU_VK_SLOTS ? slot : 0;
+    s_gnext = 0;
+    s_sliceOpen = 0;
+    tagpu_rcore_step(&s_sched);
+    s_cb = VK_NULL_HANDLE;
+}
 
 void tagpu_vk_restore_lost(void)
 {
