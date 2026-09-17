@@ -219,6 +219,21 @@ of everything else. The order below is the corrected one.
      instance ships `hires/armpw.glb` active, so the census refuses **1** caster with one Peewee
      on screen and **16** on a 257-unit crowd.
 
+     **Sized 2026-09-17, and it is smaller than it looks.** What the map needs is
+     `tagpu_hires_depth`, not the whole PBR body pass: positions and the per-vertex piece index
+     out of `tagpu_hires.c`'s static buffer, the per-group `first`/`count`/`base`/`cutoff` from
+     `TAGPU_HGROUP`, and the per-unit pose, anchor, yaw, enc and cast that `TAGPU_HUNIT` already
+     carries. The SPIR-V exists (`inc/spirv/tagpu_hires_draw.spv.h`, VS and FS).
+     **The albedo textures are the part that can be deferred.** The depth path samples the albedo
+     only for the alpha cutout — `if (uCutoff >= 0.0 && tex.a * uBase.a < uCutoff) discard;` one
+     line above the depth early-out — and every material of the shipped `armpw.glb` is
+     **alphaMode OPAQUE** (checked in the file: 6 materials, none MASK or BLEND), so `uCutoff` is
+     negative for every group and the sampled value is discarded. A 1×1 white stand-in satisfies
+     the descriptor, which is what `tagpu_hires.c` already hands a material with no texture.
+     So 3b ports geometry and poses, and **refuses any frame in which a group with
+     `cutoff >= 0` is drawn** — the same stand-down discipline as everywhere else, and the thing
+     that makes the deferral honest rather than a hole.
+
    **Two lessons worth carrying.** A gate's row names a mechanism, and the mechanism is a
    hypothesis: measuring the census first cost three runs and saved porting a stream that cannot
    draw, while the thing that actually had to be built was sitting in the previous gate's
