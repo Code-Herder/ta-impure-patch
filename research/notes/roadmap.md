@@ -2603,6 +2603,21 @@ feature and effects passes that could never stop, because the row count compared
 construction. **Every figure above was then re-taken on the fixed binary and agrees with the
 first run**, the terrain 5 px at the same pixel with the same two values.
 
+**Landing 3a followed, and the row it came from was wrong in both halves**
+([gpu-status](gpu-status.html) §2.37). It was filed as *"the native 3DO stream and the
+replacement meshes"*. The native 3DO stream **cannot occur** — `tagpu_shadow_unit`'s one call
+site is behind `firstv[i+1] == firstv[i]` and `nv` is 0 for the whole of that loop since G16
+step 8, so no ordinary unit has native vertices. And what was actually standing every world pass
+down was not a caster: the unit pass refused on **the Classic++ restored atlas** several checks
+before it reached its casters, so the caster census read 0 on every frame with a unit on it and
+the shadow map and the terrain stood down behind it. Landing 3a is that mirror — gate 2's
+mechanism a fourth time, with gate 2's five findings applied in advance. The build before it drew
+**no picture at all** on the unit pass's own A/B with Classic++ art on; this one is **0 px of
+786 432** with the cast-shadow map off and **1 px** with it on, and that 1 px is the soft-shadow
+PCF's, established against the previous build on the one configuration both can draw. What is
+left is **3b, the replacement meshes** — 1 refused caster with one Peewee on screen, 16 on a
+257-unit crowd, because a tacli instance ships `hires/armpw.glb` active.
+
 **Its landing 1 ran the same day and is the reason the rest is ordered as it is**
 ([gpu-status](gpu-status.html) §2.35): started in the configuration the patch actually ships in
 — `--defaults`, `ss=2`, Classic++ on — the Vulkan lane draws **the UI and nothing else**, 630 589

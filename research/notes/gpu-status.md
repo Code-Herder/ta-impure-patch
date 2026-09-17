@@ -6816,6 +6816,114 @@ completion.
   whole Vulkan lane down and back up, so the two-map test is a fresh lane rather than a resized
   one and does not exercise the retire path the fourth finding is about.
 
+### 2.37 The caster census, measured before it was ported — gate 3a of the Vulkan-only plan
+
+**MEASURED 2026-09-16.** The Vulkan-only plan filed landing 3 as *"the caster stream — the native
+3DO stream and the replacement meshes, so the cast-shadow map can be drawn on this side of the
+seam and the passes that sample it stop standing down."* The exit condition was right and the
+mechanism named in it was wrong, in both directions: one of the two things it named cannot
+happen at all, and the thing that was actually blocking every world pass was not a caster.
+
+#### What the census actually holds
+
+`tagpu_shadow.c` counts, as `otherCasters`, every caster it drew into the GL map that the Vulkan
+hand-over carries no copy of. Four kinds were named. Reading the code against the numbers:
+
+| caster kind | status |
+|---|---|
+| the posed bodies | **covered** since G19e — `tagpu_vk_unit_cast`, subtracted as `tagpu_vk_unit_casters()` |
+| the native 3DO stream | **cannot occur** — dead code, below |
+| the replacement meshes | **live and uncovered** — gate 3b |
+| the heightfield with no mirror | uncovered by design; an out-of-memory path both G19e reviewers found |
+
+**THE NATIVE 3DO STREAM IS DEAD CODE.** `tagpu_shadow_unit` has exactly one call site
+(`tagpu_native.c`, the caster loop) and it sits behind `if (skip || firstv[i + 1] == firstv[i])
+continue;`. `nv` is 0 at the top of that unit loop and is not incremented anywhere inside it —
+the first increment is `emit_fx_model`, *after* `firstv[nu] = nv`. So `firstv[i+1] == firstv[i]`
+for every unit, the caster draw never runs, the body `glDrawArrays` beside it draws zero
+vertices, and `otherCasters` never counts a native-stream caster. The file says as much in its
+own words three hundred lines earlier — *"an ordinary unit contributes no vertices either now"* —
+since G16 step 8 made the posed program the path. **There is nothing to port.** The code is
+marked where it stands rather than deleted; deletion is the plan's landing 11.
+
+#### What was actually blocking every world pass
+
+With the restored atlas **off** and four posed units on screen under Classic++ soft shadows, the
+census closes on its own: `otherCasters - ours == 0`, no refusal on any pass, the shadow pass
+uploads its caster mesh and draws, and the terrain and unit passes both draw into the Vulkan
+frame. With the restored atlas **on**, the same fixture: *"the GL map holds 1 caster(s) this lane
+has no copy of (0 of them the unit pass carries)"*.
+
+The difference is not a caster. The unit pass stood down on **the Classic++ restored atlas**
+several checks before it reached its casters, so `tagpu_vk_unit_casters()` answered 0 whatever
+the casters were, and the census refused every frame with a unit on it — which stood the shadow
+map down, which stood the terrain down. §2.35's *"the lane draws the UI and nothing else"*, read
+from the other end: **one missing mirror, propagating through three passes.**
+
+So gate 3a is the half §2.36 deferred — the unit atlas's restored twin — and the caster stream
+proper is gate 3b.
+
+#### The mirror, a fourth time
+
+Gate 2's mechanism applied unchanged: `tagpu_render3do.c` gains `_mirror_rgb_want` / `_step` /
+`_mirror_rgb` beside the indexed trio, asked behind `tagpu_classicpp_assets()` so a session with
+Classic++ off never pays the second 16 MB and stepped once per published frame on the render
+thread; `tagpu_posedraw.c` publishes `atlasRgb` with **its own rows and its own serial**; and
+`tagpu_vk_unit.c` takes a second RGBA8 image at binding 43, which stops being the placeholder the
+G19e author left there.
+
+**Gate 2's five findings were applied here before they could be made again**, and that is the
+point of writing them down: the serial ALONE decides the upload (nothing stores a row count to
+compare against a published one — finding 2), the rows are bounded against the atlas's own square
+in the consumer (finding 4's bound), the image is built **before** the refusal that tests it (the
+fault measured twice on terrain), the copy's extent is the **image's** and not the hand-over's
+(finding 4), and a device refusal of the image is non-fatal — the view stays NULL, binding 43
+falls back to the indexed view and the restored refusal keeps the branch unreachable.
+
+The refusal is also no longer a statement about the session. It said *"draws nothing this
+session"*; it now says *"until the read-back produces rows"*, which is a few frames.
+
+#### What was measured
+
+1024×768, `selbox-facings` on Two Continents, `ss=1`, the **unit pass's own A/B**
+(`tagpu_posedraw.ab`) with terrain not armed — the lane captures one drawing pass per frame and
+refuses a pair when two drew:
+
+| build | Classic++ art | shadows | result |
+|---|---|---|---|
+| pre-gate-3 (`16b97fe`) | on | on | **no picture at all** — the pass refused for the session |
+| gate 3a | on | **off** | **0 px of 786 432**, 2 125 non-black a side |
+| gate 3a | on | on | **1 px**, worst channel 1, at (517, 396), GL (97, 97, 74) vs Vulkan (97, 97, 75) |
+| gate 3a | off | on | the same 1 px, same pixel, same values |
+| pre-gate-3 (`16b97fe`) | off | on | **the same 1 px again** |
+
+The last row is the one that matters: it is the only configuration both builds can draw, and it
+carries the 1 px. **So the pixel is the soft-shadow PCF's and not this landing's** — which the
+shadows-off row corroborates from the other side at 0 px. Gate 3a turns *no picture at all* into
+parity.
+
+#### Not covered
+
+* **Restored unit COLOURS.** The unit restorer is lazy and painted nothing in that fixture: the
+  two GL captures with Classic++ art on and off are **byte-identical**, so the `uRestored == 1`
+  branch sampled an alpha-0 twin and both lanes fell back to the palette per texel. It proves the
+  upload corrupts nothing, that the branch is reachable on both sides and that the fallback
+  through it is identical. It does not prove restored unit colours match. Same caveat, and the
+  same words, as §2.36's feature and effects passes.
+* **The replacement meshes — gate 3b, and not an optional case.** A tacli instance ships
+  `hires/armpw.glb` **active** (`hires/off/` is a parking directory, not a lever), so the census
+  refuses **1** caster with one Peewee on screen and **16** on the 257-unit `crowd-static`. Every
+  world pass stands down on those frames.
+* **The 1 px is attributed, not traced.** The argument is from the two controls above, not from a
+  line of shader arithmetic.
+* **One map, one resolution, one GPU, one OS,** and `ss=1`, which the A/B requires and the patch
+  does not ship.
+* **The terrain and unit passes cannot be A/B'd in the same run** once shadows are on: terrain
+  needs the unit pass drawing for the census to close, and two drawing passes make the lane refuse
+  the capture (*"1 A/B levers claimed this frame and 2 passes drew into it"*). The chain closing
+  is evidenced by the absence of every refusal plus the guard's own message naming two passes;
+  the pixels are one pass at a time.
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out

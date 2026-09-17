@@ -2102,6 +2102,46 @@ rm -f $G/tagpu_fx.ab $G/tagpu_fx_*.ppm; sleep 2; touch $G/tagpu_fx.ab; sleep 9
   50 columns identical ([gpu-status](gpu-status.html) §2.31). **Do not go hunting for it as a new
   bug.** Triangle buckets are 0 px and stay 0 px; if a *triangle* run is non-zero, that is real.
 
+**The unit pass's A/B: the lever is `tagpu_posedraw.ab` and the pass name is `posedraw`.**
+
+```bash
+tools/tacli arm <i> 'native.on=all wrecks' classicpp.on \
+      'classicpp.cfg=assets=1 shadows=1 terrainshadow=1' ss.off 'vk.on=color=0,0,0'
+tools/tacli scenario load <i> selbox-facings --restart --res 1024x768 --maxfps 0
+sleep 20
+G=<main checkout>/tagpu/instances/<i>/gamedir
+rm -f $G/tagpu_posedraw.ab $G/tagpu_posedraw_*.ppm; sleep 2; touch $G/tagpu_posedraw.ab; sleep 10
+<main checkout>/.venv-undither/bin/python tools/vk-ab.py $G --pass posedraw
+```
+
+- **Do NOT arm `terr.on` for it.** With Classic++ soft shadows on, the terrain pass needs the
+  unit pass *drawing* for the caster census to close — and two drawing passes make the lane refuse
+  the capture outright (`1 A/B levers claimed this frame and 2 passes drew into it`). So with
+  shadows on, terrain and units are two runs, always. That message is also the best evidence you
+  have that both passes really drew: the guard counts them.
+- **`shadows=1` is worth 1 px of 786 432 on this pass** at `selbox-facings`, at (517, 396), one
+  level on the blue channel — the soft-shadow PCF, measured on both the pre- and post-gate-3
+  builds. With `shadows=0` the same fixture is **0 px**. Do not go hunting for it as a new bug.
+- **THE UNIT RESTORER IS LAZY AND A STATIC FIXTURE PAINTS NOTHING.** `restoreglsl: unit: lazy
+  restore armed` is not "it restored"; there is no eager mode and no progress line. The check is
+  free and it is the only one that works: run the fixture twice, `assets=1` and `assets=0`, and
+  `cmp` the two **GL** captures. Byte-identical means the twin was alpha 0 throughout and both
+  lanes fell back to the palette per texel — so the run proves the plumbing and the fallback, and
+  says nothing about restored unit colours. (Terrain is the exception: its restore runs to
+  completion in seconds and logs `terr: restored atlas complete`.)
+- **A tacli instance ships a REPLACEMENT MESH active.** `gamedir/hires/armpw.glb` is loaded for
+  every Peewee — `hires/off/` beside it is a *parking directory*, not a lever, so removing it
+  does nothing and `rm` says `Is a directory`. Until gate 3b lands, any fixture with an ARMPW in
+  it stands the whole Vulkan world down: the caster census refuses 1 with one Peewee on screen
+  and 16 on `crowd-static`. `grep -a 'hires\\' tagpu.log` names every unit that took a
+  replacement mesh.
+- **A scratch worktree cannot run tacli**: `tacli create` wants the wine prefix template, which is
+  gitignored and lives only in the real checkouts (`tacli: template wine prefix missing`). To A/B
+  a FOREIGN build, make the instance from a real worktree, `cp` the other tree's `ddraw.dll` over
+  `<gamedir>/ddraw.dll`, and launch with **`--keep-dll`** so tacli does not refresh it back.
+  `md5sum` the three DLLs in the script's own output; that line is what tells you the run tested
+  what you think it did.
+
 **The shadow map's A/B (G19e), and it is the only pass whose oracle is another pass's pixels:**
 
 ```bash

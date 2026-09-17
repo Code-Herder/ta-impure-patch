@@ -193,8 +193,34 @@ of everything else. The order below is the corrected one.
    stored was the rows we SENT while what was compared was the rows PUBLISHED, so the two could
    never be equal and the upload ran every frame. Every remaining landing in this plan hands
    bytes across the seam with a serial; that is the class to read for each time.
-3. **The caster stream** — the native 3DO stream and the replacement meshes, so the cast-shadow
-   map can be drawn on this side of the seam and the passes that sample it stop standing down.
+3. **The caster stream** — so the cast-shadow map can be drawn on this side of the seam and the
+   passes that sample it stop standing down. **Landing 3a done 2026-09-16**
+   ([gpu-status](gpu-status.html) §2.37); **3b open**.
+
+   **The row as filed named the wrong two things, and the measurement is how that came out.**
+   It said *"the native 3DO stream and the replacement meshes"*:
+
+   * **The native 3DO stream cannot occur.** `tagpu_shadow_unit` has one call site and it sits
+     behind `firstv[i+1] == firstv[i]`; `nv` is 0 for the whole of `tagpu_native.c`'s unit loop
+     since G16 step 8 made the posed program the path. Nothing to port. Marked where it stands;
+     deletion is landing 11.
+   * **What was blocking every world pass was not a caster at all** — it was the UNIT ATLAS'S
+     RESTORED MIRROR, the half landing 2 deferred. The unit pass stood down on it several checks
+     before it reached its casters, so `tagpu_vk_unit_casters()` answered 0 whatever the casters
+     were, the census refused every frame with a unit on it, and the shadow map and the terrain
+     stood down behind it. **That is landing 3a**, and with it the census closes on its own for
+     stock art: four posed units, soft shadows on, no refusal on any pass, the map drawn.
+     Measured: the build before it drew **no picture at all** on that fixture; this one is **0 px**
+     with shadows off and **1 px** with them on, and that 1 px is the shadow PCF's, established
+     against the previous build on the one configuration both can draw.
+   * **3b is the replacement meshes**, and they are not a hires-install curiosity: a tacli
+     instance ships `hires/armpw.glb` active, so the census refuses **1** caster with one Peewee
+     on screen and **16** on a 257-unit crowd.
+
+   **The lesson worth carrying:** a gate's row names a mechanism, and the mechanism is a
+   hypothesis. Measuring the census first cost three runs and saved porting a stream that cannot
+   draw — while the thing that actually had to be built was sitting in the previous gate's
+   *Not covered*.
 4. **`render_vk.c`** — the fourth backend, `renderer=vulkan`, present into `g_ddraw.hwnd`, the
    offscreen world target at `ss×` with its resolve, TA's surface uploaded by the backend instead
    of by the GUI pass. Route D's window, `tagpu_vk_wndproc`, `WM_TAGPU_VK` and the geometry
