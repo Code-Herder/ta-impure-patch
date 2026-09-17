@@ -1107,9 +1107,22 @@ void tagpu_gaf_atlas_restore(TAGPU_GAFATLAS* a, const unsigned char* pal)
            a reduction draws INTO level L through a framebuffer -- which a level
            with no storage makes incomplete, so the first chain of every twin
            would silently fall back to the driver's reduction and a twin painted
-           once would keep it for good. The levels are undefined for exactly the
-           two statements between here and the `twin_mips` below, which is why
-           that call is not optional and says so. */
+           once would keep it for good.
+
+           THE LEVELS ARE UNDEFINED UNTIL THE `twin_mips` BELOW, and what makes
+           that safe is an invariant rather than the shortness of the window --
+           which is what the first version of this comment argued, wrongly, and
+           it was six statements including a call:
+
+             * nothing between here and there SAMPLES the twin. The only thing
+               that touches it is `tagpu_rglsl_job_new`, which renders into
+               level 0 to clear it;
+             * the one path that abandons the twin DELETES it (`a->rgb = 0`
+               below), so no twin with an undefined chain is ever published;
+             * and `twin_mips` always writes the chain when `a->mip` is set,
+               because the branch above demotes `a->mip` to 0 whenever
+               `glGenerateMipmap` did not resolve -- so the fallback is
+               guaranteed to be there when it is needed. */
         {
             int L;
             for (L = 0; L <= a->mip; L++) {
@@ -1140,8 +1153,10 @@ void tagpu_gaf_atlas_restore(TAGPU_GAFATLAS* a, const unsigned char* pal)
        before anything samples them -- and since landing 7e-1 they are ALLOCATED
        but undefined until this runs, rather than absent until it runs, so this
        is the call that makes the twin samplable at all rather than merely
-       consistent. A twin whose chain this leaves undefined is one a trilinear
-       fetch reads garbage from; before, it was one GL reported incomplete. */
+       consistent. It cannot fail to write them: `a->mip` is 0 unless
+       `glGenerateMipmap` resolved, so either our reduction runs or that does.
+       A twin whose chain this left undefined is one a trilinear fetch reads
+       garbage from; before, it was one GL reported incomplete. */
     twin_mips(a);
     /* what is already in the atlas was uploaded before the switch: queue it,
        in upload order, so nothing stays indexed for want of a miss */

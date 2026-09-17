@@ -187,6 +187,11 @@ static GLuint s_progFill, s_progConv, s_progOut;
 static GLuint s_progMip;        /* the twin's own mip reduction (landing 7e) */
 static GLint  s_uMipSrc = -1, s_uMipDim = -1;
 static GLuint s_mipFBO;
+/* A STAND-DOWN IS LOGGED ONCE PER CONTEXT, not once per process: the context is
+   replaced on a device loss and on the startup GL reset, and a reduction that
+   works on one context and refuses on the next would otherwise say nothing the
+   second time. Both flags are cleared with every other piece of mip state. */
+static int    s_mipSaid, s_mipPendSaid;
 static GLint  s_uFill[7], s_uConv[6], s_uOut[7];
 static GLuint s_ubo, s_rectTex, s_srcTex, s_keyTex, s_act[2], s_vao, s_outVAO, s_outVBO, s_fbo, s_destFBO;
 static int    s_actSide, s_actLayers, s_attached;
@@ -292,6 +297,7 @@ static void free_gl(void)
     if (s_progMip) glDeleteProgram(s_progMip);
     if (s_mipFBO) glDeleteFramebuffers(1, &s_mipFBO);
     s_progMip = 0; s_mipFBO = 0; s_uMipSrc = s_uMipDim = -1;
+    s_mipSaid = 0; s_mipPendSaid = 0;
     s_progFill = s_progConv = s_progOut = 0;
     s_ubo = s_outVBO = s_rectTex = s_srcTex = s_keyTex = s_fbo = s_destFBO = s_vao = s_outVAO = 0;
     s_query[0] = s_query[1] = 0;
@@ -813,29 +819,62 @@ int tagpu_rglsl_step_forced(unsigned frame_counter)
    which is legal exactly because base = max = L-1 excludes the level being
    written from everything the sampler can reach. A second attachment or a
    staging copy would buy nothing and cost the chain. */
+/* EVERY WAY THIS STANDS DOWN SAYS SO, AND SAYS WHICH ONE. Four of the six used
+   to be silent -- no restorer program, no `glGetTexParameteriv`, an odd level, no
+   framebuffer -- and the skill told an operator to grep `mip reduction` to find
+   out. A measurement instrument whose "it did not run" reads exactly like "it
+   ran" is worse than no instrument: the chain check then reports the driver's
+   +/-1 and the operator reads it as a bug in the shader. [Landing 7e-1's review.] */
+static int mip_stand_down(const char* why)
+{
+    if (!s_mipSaid) {
+        char b[220];
+        s_mipSaid = 1;
+        _snprintf(b, sizeof b, LANE ": the mip reduction stood down (%s) - glGenerateMipmap builds the levels instead, inside the +/-1 per RGB channel gpu-status 2.45 measured", why);
+        rlog(b);
+    }
+    return 0;
+}
+
 int tagpu_rglsl_mips(unsigned tex, int dim, int mip)
 {
     GLint base = 0, maxl = 0, minf = 0, magf = 0;
     GLenum err;
     int L, ok = 1, bad = 0, pending = 0;
 
-    if (!tex || dim <= 0 || mip <= 0) return 0;
-    if (!s_glReady || !s_progMip || !x_glGetTexParameteriv) return 0;
+    if (!tex || dim <= 0 || mip <= 0) return 0;      /* nothing asked for */
+    if (!s_glReady)  return mip_stand_down("the restorer is not up");
+    if (!s_progMip)  return mip_stand_down("the reduction program did not build");
+    /* the one optional entry point, and it is what lets the four borrowed
+       texture parameters be given back exactly as they were found */
+    if (!x_glGetTexParameteriv) return mip_stand_down("glGetTexParameteriv is missing");
     /* an odd level would need GL's weighted three-tap, not a 2x2 average, so
        the chain is refused whole rather than reduced wrongly for part of it */
     for (L = 1; L <= mip; L++)
-        if ((dim >> L) < 1 || ((dim >> (L - 1)) & 1)) return 0;
+        if ((dim >> L) < 1 || ((dim >> (L - 1)) & 1))
+            return mip_stand_down("a level of this chain is odd");
     if (!s_mipFBO) {
         glGenFramebuffers(1, &s_mipFBO);
-        if (!s_mipFBO) return 0;
+        if (!s_mipFBO) return mip_stand_down("no framebuffer");
     }
 
-    /* the sentinel slice: gl_state_push/pop keep the whole list of state a
-       draw here disturbs, and this is not a numbered slice, so it owes none of
-       their per-slice error bookkeeping -- the error flag is drained and read
-       here instead, bounded the way every other drain in this file is */
+    /* the sentinel slice: gl_state_push/pop keep the whole list of state a draw
+       here disturbs, and this is not a numbered slice, so it owes none of their
+       PER-SLICE error bookkeeping -- but it owes the bookkeeping itself, because
+       this runs at the TOP of the frame and the slice runs later in the same
+       one, so a pending error another pass raised is consumed HERE. Reporting it
+       is the whole value of that drain: without this the slice bracket's
+       "N GL error(s) were pending (not ours)" -- the only place in the build
+       that reports an error nobody owns -- silently stopped firing on every
+       frame the unit twin was reduced. [Landing 7e-1's review.] */
     gl_state_push(~0u);
     while (glGetError() != GL_NO_ERROR && pending < 16) pending++;
+    if (pending && !s_mipPendSaid) {
+        char pb[160];
+        s_mipPendSaid = 1;
+        _snprintf(pb, sizeof pb, LANE ": %d GL error(s) were pending before the mip reduction (not ours)", pending);
+        rlog(pb);
+    }
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex);
     x_glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, &base);
@@ -873,11 +912,11 @@ int tagpu_rglsl_mips(unsigned tex, int dim, int mip)
        so the fallback leaves one reduction's levels rather than a mixture of
        two. That is the only reason a partial failure needs no unwinding. */
     if (err != GL_NO_ERROR) { ok = 0; if (!bad) bad = mip; }
-    if (!ok) {
-        static int said;
-        if (!said) { char b[160]; said = 1;
-            _snprintf(b, sizeof b, LANE ": the mip reduction failed at level %d of %d (GL 0x%x) - falling back to glGenerateMipmap", bad, mip, (unsigned)err);
-            rlog(b); }
+    if (!ok && !s_mipSaid) {
+        char b[200];
+        s_mipSaid = 1;      /* the same once-per-CONTEXT flag the refusals use */
+        _snprintf(b, sizeof b, LANE ": the mip reduction failed at level %d of %d (GL 0x%x) - glGenerateMipmap builds the levels instead", bad, mip, (unsigned)err);
+        rlog(b);
     }
     return ok;
 }
@@ -886,6 +925,7 @@ void tagpu_rglsl_glreset(void)
 {
     /* every id died with the context: forget them without deleting */
     s_progMip = 0; s_mipFBO = 0; s_uMipSrc = s_uMipDim = -1;
+    s_mipSaid = 0; s_mipPendSaid = 0;
     s_progFill = s_progConv = s_progOut = 0;
     s_ubo = s_outVBO = s_rectTex = s_srcTex = s_keyTex = s_fbo = s_destFBO = s_vao = s_outVAO = 0;
     s_act[0] = s_act[1] = 0; s_query[0] = s_query[1] = 0; s_actSide = 0;

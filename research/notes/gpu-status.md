@@ -8321,9 +8321,11 @@ art:
 | sRGB-aware (linearise, average, re-encode) | 93.40 % | 93.10 % | **54, 45, 45, 1** |
 
 **Two of the six are ruled OUT by the maximum rather than by the average**, which is the reason to
-report a maximum at all: alpha-weighting and gamma-awareness are wrong by up to 57 levels on a
-single channel while still matching 97 % of texels exactly. An average alone would have called
-them plausible.
+report a maximum at all: alpha-weighting and gamma-awareness are wrong by up to 57 and 54 levels on
+a single channel while still matching most texels exactly — 96.9 % for alpha-weighting, 93.4 % for
+the sRGB-aware one. An average alone would have called them plausible. (An earlier version of this
+paragraph said "97 %" of both; it is 97 % of one of them, and landing 7e-1's review caught the
+roadmap repeating the rounder number.)
 
 **What the driver does is an unweighted 2×2 box average of RGBA, with a rounding rule none of the
 six reproduces exactly and all of them reproduce to within one level.** Two further facts pin it
@@ -8400,14 +8402,24 @@ chain dumped to `tagpu_restore_unit.mips` under `tagpu_restoredump.on`):
 | 1 (1024²) | 1 048 576 | **1 048 576 — 100.00 %** | **0, 0, 0, 0** |
 | 2 (512²) | 262 144 | **262 144 — 100.00 %** | **0, 0, 0, 0** |
 
-For contrast, the same chain against the candidates §2.45 ranked: `floor(sum/4)` 96.24 %,
-round-half-up 94.20 %, alpha-weighted 96.61 % (max Δ 57), sRGB-aware 93.23 % (max Δ 54). Those
-percentages are now a statement about *our* chain rather than about the driver's, which is the
-point: the levels are a formula, and the formula is in one shader string both lanes compile.
+For contrast, **our** chain against four other reductions — these are *not* §2.45's figures and
+are not comparable with them, because §2.45 measured candidates against the DRIVER's chain and
+these measure them against ours: `floor(sum/4)` 96.24 %, `(sum+2)/4` 94.20 %, alpha-weighted
+96.61 % (max Δ 57), sRGB-aware 93.23 % (max Δ 54). The driver's chain is no longer on disk — the
+reduction replaced it — so §2.45's table is the record of it, and re-taking those figures would
+mean standing the reduction down deliberately.
 
 **The three sprite pairs stayed `IDENTICAL`** on the same run (terrain 23 674 880 bytes, features
-and effects 16 777 216 each), so landing 7d's oracle did not move, and the log carries no mip
-line at all — the reduction never stood down on any twin, on any frame of the run.
+and effects 16 777 216 each), so landing 7d's oracle did not move.
+
+**What establishes that the reduction actually ran is the 100.00 %, not the absence of a log line**
+— and the difference matters enough that the review made it a finding. The driver's own chain was
+95.96 % / 96.00 % against the nearest candidate, so a run that fell back could not read 100.00 %;
+whereas four of the six ways to stand down were *silent* when this was first written, so an empty
+grep proved nothing. All six say so now, once per context and with the reason. Note also that only
+**one** twin reduces at all: `twin_mips` returns before the reduction when `mip` is 0, and
+`tagpu_render3do.c` is the only caller that sets it — the terrain, feature, effects and UI atlases
+are unmipped, so "every twin" would be three twins doing nothing.
 
 **And the unit pass's own A/B still reads 0 px** — `selbox-facings` at 1024×768 with
 `classicpp.cfg=assets=1 shadows=1 terrainshadow=1`, **0 differing pixels of 786 432**, 2 125
@@ -8428,9 +8440,15 @@ because `glGenerateMipmap` created it. A reduction draws *into* level `L` throug
 and a level with no storage makes that framebuffer incomplete — so the first chain of every twin
 would have failed the completeness check, fallen back silently, and a twin painted once and never
 again would have kept the driver's chain **for good**. The fix is at creation: every level 0..`mip`
-gets its own `glTexImage2D`. The levels are then undefined for exactly the two statements between
-the allocation and the `twin_mips` that follows the job's creation — which is why that call is not
-optional, and the comment there now says so. (Before this landing the same call was merely
+gets its own `glTexImage2D`. The levels are then undefined until the `twin_mips` that follows the
+job's creation, and what makes that safe is an **invariant, not the shortness of the window** — the
+first version of the comment argued the window ("exactly the two statements"), which was both wrong
+(it is six statements including a call) and the shape of argument this project's rules reject.
+The invariant is three facts: nothing on that path samples the twin, the only thing that touches it
+being the job creation rendering into level 0 to clear it; the one path that abandons the twin
+**deletes** it, so no twin with an undefined chain is ever published; and `twin_mips` cannot fail to
+write the chain, because `tagpu_gaf.c` demotes `mip` to 0 before every creation if
+`glGenerateMipmap` did not resolve, so the fallback is guaranteed to be there when it is needed. (Before this landing the same call was merely
 *consistency*; now it is what makes the twin samplable at all. Those are different failures by the
 GL specification rather than by measurement: a texture whose chain is incomplete samples as a
 defined `(0,0,0,1)`, while a level allocated with `NULL` and not yet written holds whatever the

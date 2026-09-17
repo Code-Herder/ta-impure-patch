@@ -883,9 +883,16 @@ question a level-0 dump cannot ask: the unit twin is sampled trilinear, so its l
 the picture a second backend has to reproduce. **Since landing 7e-1 the levels are ours, not
 `glGenerateMipmap`'s** — the exact integer 2×2 box average `(sum + 1) / 4` — so reducing level
 `L-1` of the dump in Python and comparing with level `L` must come out **100.00 % exact, max |Δ| 0
-on every channel**. Anything less is a bug in the pass or in how the level was attached, and a
-result within ±1 specifically means the reduction stood down and `glGenerateMipmap` ran instead:
-grep `mip reduction` in `tagpu.log`, which says so once per context with the level and the GL error.
+on every channel**.
+
+**A result within ±1 means the reduction stood down and `glGenerateMipmap` ran** — that is §2.45's
+measured bound for this driver, and it is the figure to recognise rather than to debug. Grep
+`mip reduction` in `tagpu.log`: since landing 7e-1's review **all six** ways to stand down say so,
+once per GL context, with the reason — the restorer not up, the program not built,
+`glGetTexParameteriv` missing, an odd level, no framebuffer, or a level that failed with its GL
+error. Four of them were silent before that, so on an older build an empty grep means nothing.
+**Only the unit twin reduces at all**: the terrain, feature, effects and UI atlases are unmipped
+(`mip` 0), and `twin_mips` returns before the reduction for them.
 
 **THE DUMPS ARE A CROSS-BUILD BYTE ORACLE, and it is the cheapest strong one this repo has.**
 `tagpu_restoredump.on` reads the finished atlas with `glGetTexImage` off a **texture**, not off the

@@ -2806,10 +2806,11 @@ and a Vulkan restore paints level 0 only. `repaint` is still unexercised.
 
 **That seam was measured rather than argued, and the answer was to own the reduction on both
 lanes** ([gpu-status](gpu-status.html) §2.45 and §2.46). The driver's `glGenerateMipmap` turned out
-to be an unweighted 2×2 box average of RGBA with a rounding rule no candidate reproduced exactly
-and every candidate reproduced to within one level — alpha-weighting and gamma-awareness ruled out
-by a **maximum** error of 57 and 54 levels while both still matched 97 % of texels, which is why a
-maximum was reported at all. A per-driver ±1 is not something a note can pin down, so landing 7e-1
+to be an unweighted 2×2 box average of RGBA with a rounding rule no candidate reproduced exactly,
+every **integer rounding** of it landing within one level — while alpha-weighting and
+gamma-awareness were ruled out by a **maximum** error of 57 and 54 levels on a single channel
+although they still matched 96.9 % and 93.4 % of texels exactly, which is why a maximum was
+reported at all. A per-driver ±1 is not something a note can pin down, so landing 7e-1
 replaced the call with a pass of ours: the exact integer `(sum + 1) / 4`, and the dumped chain is
 now **100.00 % that formula at both levels, max |Δ| 0 on every channel including alpha**. The
 levels are arithmetic rather than a driver's rounding rule, which is what lets 7e-2's oracle stay a

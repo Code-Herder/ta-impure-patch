@@ -123,10 +123,25 @@ int tagpu_rglsl_step_forced(unsigned frame_counter);
    left alone filters to the previous picture's colours, which is worse than
    the per-driver +/-1 this replaces.
    0 without drawing when the reduction did not build, when the restorer is not
-   up, or when any level of the chain would be odd (GL's rule for an odd level
-   is a weighted three-tap, not a 2x2 average, and this does not pretend to be
-   one). Render thread, between frames, with the twin not currently sampled.
-   gpu-status 2.45 is the measurement that made this the shipped path. */
+   up, when `glGetTexParameteriv` did not resolve, or when any level of the chain
+   would be odd (GL's rule for an odd level is a weighted three-tap, not a 2x2
+   average, and this does not pretend to be one). EVERY ONE OF THOSE SAYS SO IN
+   THE LOG, once per context, with the reason -- `the mip reduction stood down
+   (<why>)` or `the mip reduction failed at level N` -- because an instrument
+   whose "it did not run" is indistinguishable from "it ran" makes the chain
+   check report the driver's +/-1 as a bug in the shader.
+
+   Render thread, between frames, with the twin not currently sampled.
+
+   IT LEAVES THE SAME STATE DIRTY AS `tagpu_rglsl_step` (above): program 0, VAO
+   0, unit-0 GL_TEXTURE_2D binding 0, active unit 0, unit-4 array binding 0 and
+   GL_UNPACK_ALIGNMENT 1. The framebuffer binding, the viewport, blend, depth
+   test, scissor, cull, the depth mask and the colour mask are saved and put
+   back; so are all four of the twin's own sampler parameters (base level, max
+   level, min and mag filter), on the success path, the break path and the error
+   path alike.
+   gpu-status 2.45 is the measurement that made this the shipped path, and 2.46
+   is what this one is. */
 int tagpu_rglsl_mips(unsigned tex, int dim, int mip);
 
 /* The GL context died with everything in it: forget the ids, no deletes, and
