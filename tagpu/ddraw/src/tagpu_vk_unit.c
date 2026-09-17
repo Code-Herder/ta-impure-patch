@@ -1617,8 +1617,11 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     }
     s_saidCmp = 0;
 
-    /* THE FRAME HAS DRAWS THIS PASS DOES NOT CARRY -- a build ghost, a unit
-       past the hand-over's cap. tagpu_posedraw.h says why the count is narrow. */
+    /* THE FRAME HAS DRAWS THIS PASS DOES NOT CARRY -- a unit past the
+       hand-over's cap, or one an arena would not grow for.
+       NOT THE BUILD GHOST since landing 6: it is carried, and drawn by
+       `tagpu_vk_unit_record_ghosts` after the effects pass.
+       tagpu_posedraw.h says why the count is narrow. */
     if (h.otherDraws > 0) {
         if (!s_saidOther) {
             s_saidOther = 1;
@@ -2346,8 +2349,19 @@ static void unit_scissor(uint32_t w, uint32_t h, VkRect2D* sc)
     sc->extent.width = (uint32_t)cw; sc->extent.height = (uint32_t)ch;
 }
 
-void tagpu_vk_unit_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
-                          uint32_t w, uint32_t h)
+/* ONE STAGE OF THIS PASS: the bodies, or the build ghosts. They are separate
+   calls because the GL twin draws them at DIFFERENT POINTS OF THE FRAME and
+   both blend -- `tagpu_native.c` draws the units, then the effects, then
+   `ghost_pass`. Recording the ghosts inside the body stage put them BEFORE the
+   effects on this lane and after them on the GL one, and premultiplied `over`
+   is not commutative: any translucent effect overlapping a ghost (nano spray on
+   a queued site, an explosion under the placement cursor) composites to a
+   different colour, by up to the ghost's own alpha share of the effect. The
+   seam's own comment states that rule as the reason the body stage sits where
+   it does; landing 6 put the ghosts in without re-running it, and the landing's
+   review caught it. [2026-09-17.] */
+static void record_stage(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                         uint32_t w, uint32_t h, int ghosts)
 {
     VkViewport vp;
     VkRect2D sc;
@@ -2355,15 +2369,15 @@ void tagpu_vk_unit_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     unsigned i;
 
     (void)d;
-    if (s_state != ST_READY || !s_drawThis) return;
-    s_drawThis = 0;
 
-    /* THE FLIP, AND THE DEPTH RANGE. y starts at the bottom and the height is
-       negative, so clip space is turned over once and the ported shader keeps
-       GL's convention without a character changing. minDepth 0.5 / maxDepth 1.0
-       maps clip z in [0, 1] onto GL's own (z+1)/2 -- the vertex shader writes
-       `clamp(1.0 - enc/uDepthScale, 0, 1)`, which is already in [0, 1], so this
-       needs no extension and must not use one. */
+    /* NO Y FLIP (landing 5b): this pass writes the engine's screen-space y,
+       which grows downward, so clip -1 is the game frame's top row and a
+       POSITIVE height puts it on row 0 -- where the game's top row is under
+       both APIs. minDepth 0.5 / maxDepth 1.0 maps clip z in [0, 1] onto GL's
+       own (z+1)/2 -- the vertex shader writes `clamp(1.0 - enc/uDepthScale, 0,
+       1)`, which is already in [0, 1], so this needs no extension and must not
+       use one. Both stages set it: the effects pass runs between them and sets
+       its own. */
     vp.x = 0.0f;
     vp.y = 0.0f;
     vp.width = (float)w;
@@ -2383,7 +2397,9 @@ void tagpu_vk_unit_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     bound = VK_NULL_HANDLE;
     for (i = 0; i < s_ndraw; i++) {
         const DRAW* q = &s_draw[i];
-        VkPipeline want = q->ghost ? s_pipeGhost : s_pipeBody;
+        VkPipeline want;
+        if (!q->ghost != !ghosts) continue;        /* this stage's draws only */
+        want = q->ghost ? s_pipeGhost : s_pipeBody;
         VkBuffer vbs[2];
         VkDeviceSize offs[2];
         uint32_t dyn[3];
@@ -2398,6 +2414,25 @@ void tagpu_vk_unit_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         vkCmdBindVertexBuffers(cb, 0, 2, vbs, offs);
         vkCmdDraw(cb, q->count, 1, q->first, 0);
     }
+}
+
+/* The bodies. `s_drawThis` is NOT cleared here: the ghost stage below closes the
+   frame, and the seam calls both or neither. */
+void tagpu_vk_unit_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+                          uint32_t w, uint32_t h)
+{
+    if (s_state != ST_READY || !s_drawThis) return;
+    record_stage(d, cb, slot, w, h, 0);
+}
+
+/* The build ghosts, AFTER the effects -- the GL twin's own order, and the whole
+   reason this is a second entry point. It also ends the pass's frame. */
+void tagpu_vk_unit_record_ghosts(const TAGPU_VKPASS* d, VkCommandBuffer cb,
+                                 uint32_t slot, uint32_t w, uint32_t h)
+{
+    if (s_state != ST_READY || !s_drawThis) return;
+    record_stage(d, cb, slot, w, h, 1);
+    s_drawThis = 0;
 }
 
 int tagpu_vk_unit_ab_frame(void)

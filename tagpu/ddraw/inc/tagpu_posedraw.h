@@ -138,6 +138,16 @@ int  tagpu_posedraw_ready(void);
 /* bodies: begin, then one call per unit, then end. Leaves the program and the
    VAO dirty — the caller puts its own back. */
 void tagpu_posedraw_begin(const TAGPU_PDVIEW* v);
+
+/* THE GHOST'S OWN WINDOW, and it is a different entry point for two reasons the
+   A/B depends on. The capture must never be opened around it -- the GL half is
+   one pass over black and a ghost inside it would be compared against a Vulkan
+   frame that draws its ghosts in a different STAGE (after the effects) -- and
+   the ghost window is not always the second: with no posed unit on screen
+   `tagpu_native.c` skips the unit window entirely and this one is the FIRST.
+   Telling the two apart by counting windows was wrong on exactly that frame.
+   [Landing 6's review, 2026-09-17.] */
+void tagpu_posedraw_begin_ghost(const TAGPU_PDVIEW* v);
 void tagpu_posedraw_unit(const TAGPU_PDUNIT* u);
 void tagpu_posedraw_end(void);
 

@@ -75,6 +75,16 @@ int  tagpu_vk_unit_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
 void tagpu_vk_unit_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                           uint32_t w, uint32_t h);
 
+/* The build ghosts, drawn AFTER the effects pass because that is where the GL
+   twin draws them (`tagpu_native.c`: units, then `tagpu_fx_render`, then
+   `ghost_pass`). Both pipelines blend premultiplied `over`, which is not
+   commutative, so a ghost recorded in the body stage composites differently
+   against any translucent effect that overlaps it. The seam calls this one
+   immediately after `tagpu_vk_fx_record`, and it is what ends the pass's frame
+   -- call both or neither. [Landing 6's review, 2026-09-17.] */
+void tagpu_vk_unit_record_ghosts(const TAGPU_VKPASS* d, VkCommandBuffer cb,
+                                 uint32_t slot, uint32_t w, uint32_t h);
+
 /* 1 on the one frame the GL twin captured `tagpu_posedraw_gl.ppm`, so that the
    seam captures the SAME frame. Consumed by the call. Valid after `prepare`. */
 int  tagpu_vk_unit_ab_frame(void);

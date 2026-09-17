@@ -7615,6 +7615,36 @@ to the shadow census, which is compared against the GL side's own `otherCasters`
 there is a **wrong shadow map, not a missing one**. `ghost_one` now sets `castSkip = 1`, which is
 simply true: the depth loop runs earlier in the frame and over the real units only.
 
+#### The review found two defects in the above, and both were real
+
+**THE GHOST COMPOSITED ON THE WRONG SIDE OF THE EFFECTS.** `tagpu_vk.c` records terrain, features,
+**units**, effects, markers — and carries a comment at that very line saying *two passes that blend
+are not commutative*, which is why the body stage sits where it does. `tagpu_native.c` draws the
+units, then `tagpu_fx_render`, and **then** `ghost_pass`. Recording the ghosts inside the body stage
+therefore put them BEFORE the effects on this lane and after them on the GL one. Both pipelines
+blend premultiplied `over`: GL yields `G over (F over D)` and Vulkan `F over (G over D)`, which
+differ by up to the ghost's own alpha share of the effect — 0.40·F per pixel — for any translucent
+effect overlapping a ghost, which is nano spray on a queued site or an explosion under the placement
+cursor. The fixture below has one commander and nothing firing, so the measurement could not see it.
+
+Fixed as a **second record stage**, `tagpu_vk_unit_record_ghosts`, called immediately after
+`tagpu_vk_fx_record`. Standing the pass down whenever an effects pass and a ghost coexist was the
+alternative and it defeats the landing: effects are armed in all ordinary play.
+
+**AND THE A/B CLAIM WAS DROPPED ON FRAMES THAT DESERVED IT.** The first version read
+`s_pub.ab = s_nghost ? 0 : s_abFrame;` followed by `s_abFrame = 0;`, in a publish block that runs at
+**every** window's `_end`. The second window re-ran it with the value already consumed, so the pair
+went unclaimed **whether or not a ghost had been recorded** — and `s_abDone` had latched, so the
+one-shot never retried and the instrument read as a port failure for the rest of the session. It is
+reachable on a frame whose queued build sites are all off screen, because `ghost_pass` opens its
+window on the site COUNT and culls each site afterwards. A second path was worse: with no posed unit
+on screen `tagpu_native.c` skips the unit window entirely, so the **ghost's window is the first**,
+and the capture was bracketed around the ghost pass itself.
+
+Both halves are fixed: the bracket opens only on a **non-ghost** window (`tagpu_posedraw_begin_ghost`
+is a separate entry point, because counting windows is exactly the test that fails), only the window
+that opened it closes it, and the claim is frame-scoped and idempotent.
+
 #### The A/B cannot be this landing's oracle, for two independent reasons
 
 1. **The ghost needs the marker pass.** It arms on `tagpu_mark_cursor_ours()`, so it draws only
@@ -7657,6 +7687,14 @@ captures are not the same instant.
   opens a placement but never commits one, so only the cursor ghost drew. The queue path goes
   through the same `ghost_one` and the same record, so it is carried by construction, but that is
   an argument and not a measurement.
+* **AN EFFECT OVERLAPPING A GHOST IS NOT MEASURED.** The composite-order fix above is by
+  construction — the ghosts are recorded in a stage after `tagpu_vk_fx_record`, which is where the
+  GL twin draws them — and the fixture here has nothing firing, so no measurement here distinguishes
+  the fixed order from the broken one. A fixture that puts nano spray or an explosion under a
+  placement cursor would, and none exists.
+* **The A/B paths repaired above are reasoned, not re-run.** The frames that exposed them — all
+  queued sites off screen, and no posed unit on screen with a placement open — are not in any
+  fixture either.
 * **One map, one resolution, one GPU, `ss=1`, zoom 1, one building type.**
 
 ## 3. Known limits — what is still wrong, and what closing it needs

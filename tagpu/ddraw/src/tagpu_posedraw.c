@@ -215,14 +215,21 @@ static int          s_pubHave;
 
 /* WINDOWS, because `_begin`/`_end` is not once a frame. The build ghost draws
    through the very same entry points (tagpu_posedraw.h's `ghost` field says
-   why) and opens a second pair after the units' — so the FIRST window of a
-   frame is the one that publishes, and everything any later window draws is
-   one more thing the Vulkan lane has no copy of. A ghost inside the first
-   window counts the same way: it is a real draw in the GL frame and this pass
-   does not carry it. */
+   why) and opens a pair of its own after the units'.
+
+   SINCE LANDING 6 EVERY WINDOW RECORDS, and this comment said the opposite:
+   that the first window publishes and everything a later one draws is one more
+   thing the Vulkan lane has no copy of. That was true, and it is what stood the
+   unit pass down for the whole of any building placement. What is left of the
+   first-window rule is narrower and is two separate things: the first window
+   PUBLISHES THE VIEW (one publication a frame is right), and the A/B's capture
+   is bracketed around a NON-GHOST window -- not around "the first", because
+   with no posed unit on screen the ghost's window IS the first. */
 static int          s_win;          /* windows opened this frame              */
 static int          s_recording;    /* inside a recording window              */
 static unsigned     s_nghost;       /* ghosts recorded this frame             */
+static int          s_abTaking;     /* THIS window opened the capture         */
+static int          s_abClaim;      /* it reached the disk; frame-scoped      */
 static int          s_other;        /* draws the hand-over carries no copy of */
 
 static TAGPU_PDUREC* s_rec;       static unsigned s_recCap, s_nrec;
@@ -854,7 +861,12 @@ static void pd_record(const TAGPU_PDUNIT* u, const TAGPU_PBGEOM* g,
 }
 
 /* ---- bodies ------------------------------------------------------------- */
-void tagpu_posedraw_begin(const TAGPU_PDVIEW* v)
+static void pd_begin(const TAGPU_PDVIEW* v, int ghostWindow);
+
+void tagpu_posedraw_begin(const TAGPU_PDVIEW* v)       { pd_begin(v, 0); }
+void tagpu_posedraw_begin_ghost(const TAGPU_PDVIEW* v) { pd_begin(v, 1); }
+
+static void pd_begin(const TAGPU_PDVIEW* v, int ghostWindow)
 {
     if (s_state != 1) return;
     /* THE PUBLISH WINDOW. EVERY window of a frame records, since landing 6 --
@@ -864,12 +876,13 @@ void tagpu_posedraw_begin(const TAGPU_PDVIEW* v)
        instead. That count is what stood the Vulkan unit pass down for the whole
        of any building placement.
 
-       THE FIRST WINDOW IS STILL THE ONE THAT PUBLISHES THE VIEW AND THE ONE THE
-       A/B BRACKETS, and those two are not the same question as which windows
-       record. The view is the frame's and one publication of it is right; the
-       A/B's black-and-read-back has to stay around the first window alone,
-       because the wire, the replacement meshes and the effects draw between the
-       windows and none of them is in the hand-over. */
+       THE FIRST WINDOW OF A FRAME PUBLISHES THE VIEW, whichever window that is.
+       THE A/B IS BRACKETED AROUND A NON-GHOST WINDOW AND NOTHING ELSE, and that
+       is NOT the same test: with no posed unit on screen `tagpu_native.c` skips
+       the unit window and the ghost's is the FIRST, so bracketing "the first"
+       would black the frame around a pass whose draws the Vulkan lane makes in
+       a different stage entirely. The two were one `s_win == 0` test until
+       landing 6's review found they disagree on exactly that frame. */
     {
         int first = (s_win++ == 0);
         s_recording = s_mirrorWant;
@@ -884,9 +897,11 @@ void tagpu_posedraw_begin(const TAGPU_PDVIEW* v)
            a port failure. SCISSOR because the native pass clips these draws to
            the world viewport and measuring them unclipped measures a pass the
            player never sees. */
-            if (s_ab && !s_abDone)
-                tagpu_abshot_begin(&s_shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR |
-                                            TAGPU_ABSHOT_TOPDOWN);
+        }
+        if (!ghostWindow && s_recording && s_ab && !s_abDone) {
+            s_abTaking = 1;
+            tagpu_abshot_begin(&s_shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR |
+                                        TAGPU_ABSHOT_TOPDOWN);
         }
     }
     glUseProgram(s_prog);
@@ -1019,9 +1034,13 @@ void tagpu_posedraw_end(void)
        disk, and the Vulkan half may be claimed on nothing else: a stale
        _gl.ppm from an earlier run would otherwise be diffed against a fresh
        Vulkan capture of a different frame. */
-    if (s_ab && !s_abDone) {
+    /* ONLY THE WINDOW THAT OPENED THE BRACKET CLOSES IT. `s_abDone` alone was
+       the test until landing 6's review, and it stopped being enough the moment
+       a frame could have more than one window. */
+    if (s_abTaking) {
+        s_abTaking = 0;
         s_abDone = 1;
-        s_abFrame = tagpu_abshot_end(&s_shot, PD_ABOUT, "posedraw");
+        s_abClaim = tagpu_abshot_end(&s_shot, PD_ABOUT, "posedraw");
     }
 
     /* PUBLISHED LAST, with the counts this window ended with. A frame that
@@ -1048,8 +1067,17 @@ void tagpu_posedraw_end(void)
        reporting a difference that is the instrument's own. Landing 6's oracle
        is the two-window comparison instead (gpu-status §2.40), which needs
        neither a bracket nor a single drawing pass. */
-    s_pub.ab = s_nghost ? 0 : s_abFrame;
-    s_abFrame = 0;
+    /* `s_abClaim` IS FRAME-SCOPED AND THIS LINE IS IDEMPOTENT, which the first
+       version was not: it read `s_pub.ab = s_nghost ? 0 : s_abFrame` and then
+       zeroed `s_abFrame`, so a SECOND window's `_end` re-ran it with the value
+       already consumed and dropped the claim WHETHER OR NOT a ghost had been
+       recorded. A frame whose queued build sites are all off screen opens the
+       ghost window -- `ghost_pass` opens it on the site COUNT, before the
+       per-site cull -- and records nothing, so the pair was silently lost, with
+       `s_abDone` latched so the one-shot never retried and the instrument read
+       as a port failure for the rest of the session.
+       [Landing 6's review, 2026-09-17.] */
+    s_pub.ab = s_nghost ? 0 : s_abClaim;
     s_pubHave = 1;
 }
 
@@ -1246,6 +1274,7 @@ void tagpu_posedraw_frame(unsigned frame_counter)
     s_frame = frame_counter;
     s_pubHave = 0;
     s_win = 0; s_recording = 0; s_other = 0; s_nghost = 0;
+    s_abTaking = 0; s_abClaim = 0;
     s_depthOn = 0; s_ncast = 0;
     s_lastNanoT = 0.0f;
     s_lastNanoC[0] = s_lastNanoC[1] = s_lastNanoC[2] = 0.0f;

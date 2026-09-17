@@ -2410,7 +2410,11 @@ static void ghost_pass(const TAGPU_PACKET* pk, unsigned frame_counter,
     if (!haveCursor && (!bs || !nb)) return;
 
     ghost_bind_textures(pk);
-    tagpu_posedraw_begin(&s_pv);
+    /* THE GHOST'S OWN WINDOW, and it says so: the A/B's capture must never be
+       bracketed around it (tagpu_posedraw.h), and this window is not always the
+       second -- with no posed unit on screen the unit window above is skipped
+       and this is the first. */
+    tagpu_posedraw_begin_ghost(&s_pv);
     /* THE GHOSTS BLEND WITH EACH OTHER. Depth writes off for the pass: the
        normal case is the cursor ghost standing on a queued ghost's own site,
        and with the mask on the second draw failed GL_LESS against the first's

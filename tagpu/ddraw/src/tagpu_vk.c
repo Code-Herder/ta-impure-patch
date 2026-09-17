@@ -2559,6 +2559,16 @@ static int vk_present(void)
                 tagpu_vk_unit_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_fx)
                 tagpu_vk_fx_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
+            /* AND THE BUILD GHOSTS AFTER THEM, which is the same rule applied a
+               second time: tagpu_native.c draws the units, then the effects,
+               then ghost_pass. Landing 6 first recorded the ghosts inside the
+               body stage above, which put them on the wrong side of an effect
+               they overlap -- `over` is not commutative and the difference is
+               up to the ghost's own alpha share. Both calls or neither: the
+               second is what ends the unit pass's frame. */
+            if (draw_unit)
+                tagpu_vk_unit_record_ghosts(&s_pass, cb, fi,
+                                            s_vk.ext.width, s_vk.ext.height);
             if (draw_mark)
                 tagpu_vk_mark_record(&s_pass, cb, fi, s_vk.rp,
                                      s_vk.ext.width, s_vk.ext.height);
