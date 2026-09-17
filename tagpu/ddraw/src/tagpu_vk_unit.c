@@ -458,7 +458,14 @@ static int mk_image(const TAGPU_VKPASS* d, int w, int h, int mips, VkFormat fmt,
     return 1;
 bad:
     vkFreeMemory(d->dev, *mem, NULL); vkDestroyImage(d->dev, *img, NULL);
-    *img = VK_NULL_HANDLE; *mem = VK_NULL_HANDLE;
+    /* AND THE VIEW, which this label used to leave as the caller found it.
+       vkCreateImageView's out-param is undefined on failure, every caller's
+       `kill_image` destroys `*view` on the strength of it being non-NULL, and
+       four of the seven call sites here hand it an out-param that has held a
+       live handle earlier in the session. Nulling it here closes all seven at
+       once; `atlas_rgb_build` carried a second `kill_image` to close one.
+       [The gate-3a re-review's finding 3.] */
+    *img = VK_NULL_HANDLE; *mem = VK_NULL_HANDLE; *view = VK_NULL_HANDLE;
     return 0;
 }
 
@@ -1070,18 +1077,11 @@ static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int mips)
     s_arDim = 0; s_arMips = 0; s_arReq = 0; s_arSerial = 0; s_arHave = 0;
     if (!mk_image(d, dim, dim, mips + 1, VK_FORMAT_R8G8B8A8_UNORM,
                   VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                  VK_IMAGE_ASPECT_COLOR_BIT, &s_arImg, &s_arMem, &s_arView)) {
-        /* `mk_image` can fail after vkCreateImage and vkAllocateMemory
-           succeeded, and its `bad:` label nulls the image and the memory but
-           not the VIEW -- a driver that writes a handle before failing
-           vkCreateImageView would leave `s_arView` non-NULL against
-           `s_arDim == 0`, which the refusal below reads as "we have it" and
-           binding 43 would then name a dead handle. One call closes it.
-           [The gate-3a review's minor finding; gate 2's finding 3 was the same
-           class one level down.] */
-        kill_image(d, &s_arImg, &s_arMem, &s_arView);
+                  VK_IMAGE_ASPECT_COLOR_BIT, &s_arImg, &s_arMem, &s_arView))
+        /* every out-param is NULL on this path -- `mk_image`'s own `bad:`
+           label, which the re-review corrected; this used to need a second
+           `kill_image` here to null the view it left behind. */
         return 0;
-    }
     s_arDim = dim; s_arMips = mips;
     return 1;
 }
@@ -1297,7 +1297,13 @@ static int atlas_rgb_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
 {
     VkDeviceSize bytes;
     int rrows;
-    if (!s_arImg || !h->atlasRgb || h->atlasRgbRows < 1) return 1;
+    /* ROWS OUT OF THIS ATLAS'S SQUARE ARE NO MIRROR, and `prepare` has already
+       said so in the log and zeroed its own copy -- so saying it here too is
+       what makes that message TRUE rather than half true. Without this the
+       upload went ahead on a clamped count while the pass refused the frame.
+       [The gate-3a re-review's minor finding.] */
+    if (!s_arImg || !h->atlasRgb || h->atlasRgbRows < 1 ||
+        h->atlasRgbRows > h->atlasDim) return 1;
     if (s_arHave && s_arSerial == h->atlasRgbSerial) return 1;
     /* THE IMAGE IS THIS ATLAS'S SQUARE OR NOTHING IS COPIED. It is built to
        `atlasDim` and that number is bounded in `prepare`, so this cannot fire;
@@ -1352,7 +1358,16 @@ static int atlas_rgb_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
     s_arSerial = h->atlasRgbSerial;
-    s_arReq = rrows;
+    /* THE ROWS THE MIRROR COVERED, NOT THE ROWS SENT. Storing the rows sent is
+       gate 2's finding 2 turned inside out: the whole-square rule forces the
+       first send to the full height, so `s_arReq` latched at `atlasDim`, every
+       later frame's shelf-bounded count compared as a SHRINK, and the partial
+       path below became unreachable -- 21 MB memcpy'd per serial change and 21
+       MB of host-visible staging reserved per slot, for ever. `tagpu_vk_feat.c`
+       stores the published rows for exactly this reason and says so in its own
+       declaration; this pass's comment claimed the same discipline while the
+       code did the opposite. [The gate-3a re-review's finding 2.] */
+    s_arReq = h->atlasRgbRows;
     s_arHave = 1;
     return 1;
 }

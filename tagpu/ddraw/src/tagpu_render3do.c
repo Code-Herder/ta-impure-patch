@@ -533,13 +533,30 @@ const unsigned char* tagpu_r3d_atlas_mirror_rgb(int* dim, int* rows, int* mips,
     if (serial) *serial = 0;
     if (!s_atlas.mirrorRgb || s_atlas.mirrorRgbRows <= 0 || s_atlas.dim <= 0)
         return NULL;
+    /* A CHAIN THAT DID NOT COME BACK WHOLE IS NO MIRROR AT ALL, and the first
+       draft of this accessor got that exactly backwards. It handed the levels
+       that were actually read and told the consumer to "build the shallower
+       image rather than one with an undefined level in it" -- which is a third
+       option nobody has: GL still filters this twin to its own MAX_LEVEL, so a
+       shallower Vulkan chain is A DIFFERENT PICTURE wherever a unit is
+       minified, which is ordinary play, and it is the very thing the aniso
+       check three lines from the consumer's refusal stands down for.
+       AND THE DEPTH IS ALSO WHAT SIZES THE IMAGE. Reporting a depth that moves
+       makes `atlas_rgb_build` rebuild, which is `kill_image` on an image the
+       other slots' submitted command buffers still name, with no fence between
+       -- gate 2's confirmed use-after-free, one atlas over. Refusing here is
+       what makes that rebuild UNREACHABLE rather than rare: `mip` is this
+       atlas's compile-time depth, so every publish carrying rows carries the
+       same `*mips`, and the consumer's own dimension-and-depth test becomes
+       the assertion it is written as. The consumer already draws nothing on a
+       frame with no mirror, which is the right answer to a chain we cannot
+       reproduce. [The gate-3a re-review's finding 4.] */
+    if (s_atlas.mirrorRgbMips != s_atlas.mip) {
+        if (rows) *rows = 0;
+        return NULL;
+    }
     if (dim) *dim = s_atlas.dim;
     if (rows) *rows = s_atlas.mirrorRgbRows;
-    /* THE LEVELS THAT WERE ACTUALLY READ, not the levels the twin has. They are
-       the same on any frame the read-back completed, and on one where a level
-       failed the consumer must build the shallower image rather than one with
-       an undefined level in it -- which it would then sample, because this
-       atlas is minified in ordinary play. */
     if (mips) *mips = s_atlas.mirrorRgbMips;
     if (aniso) *aniso = s_atlas.rgbAniso;
     if (serial) *serial = s_atlas.mirrorRgbSerial;
