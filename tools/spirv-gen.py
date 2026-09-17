@@ -1050,6 +1050,19 @@ def emit(cfile, shaders, words):
             for name, ty, arr, at in sh.offsets:
                 L.append(" *   %4d  %-6s %s%s" % (at, ty, name,
                                                   "[%d]" % arr if arr else ""))
+        # NAMED BLOCKS ARE REPORTED TOO, and until landing 7 they were not --
+        # because until landing 7 no shader in this tree had one. The header is
+        # the CONTRACT for the C side (that is what the offsets above are for),
+        # and `tagpu_restore_glsl`'s `WBlock` had its binding written down
+        # nowhere: the allocation rule is in this file's own header comment, so
+        # the only way to learn it was to read the generator or to decode the
+        # module by hand. Both were done before this line existed.
+        # The block's SIZE is deliberately not reported: `WBlock` is
+        # `mat4 w[WMAX]` and WMAX is NK x kmax, which varies per variant and
+        # which the C side already computes to size its buffer.
+        for i, bn in enumerate(sh.blocks):
+            L.append(" * set 0 binding %d: uniform block %s"
+                     % ((VERT_BASE if sh.stage == "vert" else FRAG_BASE) + 1 + i, bn))
         for i, (ty, name) in enumerate(sh.samplers):
             L.append(" * set 0 binding %d: %s %s"
                      % ((VERT_BASE if sh.stage == "vert" else FRAG_BASE) + 8 + i,

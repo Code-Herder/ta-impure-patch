@@ -4,7 +4,7 @@
  * truth is the GLSL string in that file; this is its translation, and
  * `make` fails if the two have drifted (tools/spirv-check.sh).
  *
- * transform e74458ff294bcefe
+ * transform 8768be3334cb676c
  */
 #ifndef TAGPU_SPIRV_TAGPU_RESTORE_GLSL_H
 #define TAGPU_SPIRV_TAGPU_RESTORE_GLSL_H
@@ -18,6 +18,7 @@
  *      4  int    uKStride
  *      8  int    uSlot
  *     12  int    uRelu
+ * set 0 binding 33: uniform block WBlock
  * set 0 binding 40: sampler2DArray uAct
  * set 0 binding 41: sampler2D uRect
  * glsl a752447f5d7af6d3e16617ea73fd2fd3
@@ -269,6 +270,7 @@ static const uint32_t tagpu_spv_tagpu_restore_glsl_CONV_FS_NK1_K148[] = {
  *      4  int    uKStride
  *      8  int    uSlot
  *     12  int    uRelu
+ * set 0 binding 33: uniform block WBlock
  * set 0 binding 40: sampler2DArray uAct
  * set 0 binding 41: sampler2D uRect
  * glsl 1018f9b52889a2d7b604ffb345e091fa
@@ -520,6 +522,7 @@ static const uint32_t tagpu_spv_tagpu_restore_glsl_CONV_FS_NK1_K56[] = {
  *      4  int    uKStride
  *      8  int    uSlot
  *     12  int    uRelu
+ * set 0 binding 33: uniform block WBlock
  * set 0 binding 40: sampler2DArray uAct
  * set 0 binding 41: sampler2D uRect
  * glsl fbca708d4e214647c86fda82b4e0ade1
@@ -775,6 +778,7 @@ static const uint32_t tagpu_spv_tagpu_restore_glsl_CONV_FS_NK2_K148[] = {
  *      4  int    uKStride
  *      8  int    uSlot
  *     12  int    uRelu
+ * set 0 binding 33: uniform block WBlock
  * set 0 binding 40: sampler2DArray uAct
  * set 0 binding 41: sampler2D uRect
  * glsl 1df39689ab07c48fbdebb559aba28948
@@ -1030,6 +1034,7 @@ static const uint32_t tagpu_spv_tagpu_restore_glsl_CONV_FS_NK2_K56[] = {
  *      4  int    uKStride
  *      8  int    uSlot
  *     12  int    uRelu
+ * set 0 binding 33: uniform block WBlock
  * set 0 binding 40: sampler2DArray uAct
  * set 0 binding 41: sampler2D uRect
  * glsl 01f5d869b7612514ba171e5c57d1a23d
@@ -1294,6 +1299,7 @@ static const uint32_t tagpu_spv_tagpu_restore_glsl_CONV_FS_NK4_K148[] = {
  *      4  int    uKStride
  *      8  int    uSlot
  *     12  int    uRelu
+ * set 0 binding 33: uniform block WBlock
  * set 0 binding 40: sampler2DArray uAct
  * set 0 binding 41: sampler2D uRect
  * glsl 003fdeb0144c28f026ddf85ede354f27
@@ -1558,6 +1564,7 @@ static const uint32_t tagpu_spv_tagpu_restore_glsl_CONV_FS_NK4_K56[] = {
  *      4  int    uKStride
  *      8  int    uSlot
  *     12  int    uRelu
+ * set 0 binding 33: uniform block WBlock
  * set 0 binding 40: sampler2DArray uAct
  * set 0 binding 41: sampler2D uRect
  * glsl 51c1319d3e0918bbfc9b3e920ea8b543
@@ -1841,6 +1848,7 @@ static const uint32_t tagpu_spv_tagpu_restore_glsl_CONV_FS_NK8_K148[] = {
  *      4  int    uKStride
  *      8  int    uSlot
  *     12  int    uRelu
+ * set 0 binding 33: uniform block WBlock
  * set 0 binding 40: sampler2DArray uAct
  * set 0 binding 41: sampler2D uRect
  * glsl 9b047902331f0fcf382e1f396b5e00f1

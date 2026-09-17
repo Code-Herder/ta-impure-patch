@@ -4,7 +4,7 @@
  * truth is the GLSL string in that file; this is its translation, and
  * `make` fails if the two have drifted (tools/spirv-check.sh).
  *
- * transform e74458ff294bcefe
+ * transform 8768be3334cb676c
  */
 #ifndef TAGPU_SPIRV_TAGPU_POSEDRAW_H
 #define TAGPU_SPIRV_TAGPU_POSEDRAW_H
@@ -42,6 +42,7 @@ static const uint32_t tagpu_spv_tagpu_posedraw_DFS[] = {
  *     96  mat4   uShadowMat
  *    160  int    uRange
  *    164  float  uWire
+ * set 0 binding 1: uniform block Pose
  * glsl ca32cca75fff85608813d5559f278753
  * words f02e52a08296de7bccf435c880d108cc
  */
