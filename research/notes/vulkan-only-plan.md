@@ -800,9 +800,26 @@ Back to the filed list:
    FILL→OUT chains to fit in one slice, which is why they found it on the first run.
 
    **What is not done**: the UNITS, which are the fourth consumer and carry a seam of their own —
-   their twin is mipped and trilinear, and a Vulkan restore paints level 0 only, so that landing
-   has to answer where the levels come from without guessing at `glGenerateMipmap`'s reduction.
+   their twin is mipped and trilinear, and a Vulkan restore paints level 0 only.
    The UI atlas is a fifth consumer and keeps its read-back. `repaint` is still unexercised.
+
+   **AND THAT SEAM IS MEASURED RATHER THAN ARGUED — 2026-09-17** ([gpu-status](gpu-status.html)
+   §2.45). This entry said the landing "has to answer where the levels come from without guessing
+   at `glGenerateMipmap`'s reduction", and `tagpu_gaf.h` has said the same since gate 3a. It is a
+   question this repository can ASK: the dump now writes the whole chain and each level was held
+   against six candidate reductions. The driver performs an **unweighted 2×2 box average of
+   RGBA** — alpha-weighting and gamma-awareness are ruled out by a maximum error of 57 and 54
+   levels on one channel (while both still match 97 % of texels, which is why the maximum is what
+   was reported), alpha comes back **exact**, every integer rounding lands **within ±1 per RGB
+   channel**, and the residual sits on fully opaque quads rather than on mixed-alpha edges, which
+   is a rounding rule and not a different filter.
+
+   So the landing has three options and a recommendation instead of an open question: keep the
+   read-back (byte-identical, and it would be the last one on this plan), reduce on the Vulkan side
+   (within 1 LSB — a measured bound rather than equality), or **reduce on BOTH lanes with our own
+   pass**, which is byte-identical by construction on every driver for ≤1/255 on the shipped GL
+   twin's minified texels. The third is the recommendation; the measurement is what makes it a
+   small decision rather than a leap.
 8. **`PK_PIXELS` closed.** `tagpu_gui_hook.c:330`'s op kinds `OP_LINE`, `OP_BAR`, `OP_RECT`,
    `OP_FRAME` and `OP_SCALE` publish through `pub_surface_bytes` at `:1489` — *the engine's
    surface bytes as they stand at the flip*. They become drawn geometry with their own packet
