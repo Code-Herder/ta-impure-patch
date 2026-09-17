@@ -419,6 +419,59 @@ int tagpu_gaf_atlas_mirror_rgb(TAGPU_GAFATLAS* a)
     return 1;
 }
 
+/* THE READ-BACK, FOR A TEXTURE THIS FILE DOES NOT OWN (the Vulkan-only plan's
+   gate 2). `tagpu_gaf_atlas_mirror_rgb_step` below is the atlas's own use of
+   exactly this; terrain's restored twin is a GL texture built by
+   tagpu_terr.c and painted by the restorer, so it needs the same read-back
+   without the atlas around it.
+
+   IT LIVES HERE RATHER THAN IN A NEW FILE because this is where the entry
+   points are already resolved -- `glReadPixels` is not in the fork's own
+   globals and has to be fetched (see `fetch_gl`), and a second file resolving
+   it again is a second place to get wrong. Nothing about the atlas is touched.
+
+   ROW 0 IS MEMORY ROW 0, NOT THE SCREEN'S. glReadPixels is described bottom-up
+   because the default framebuffer's y = 0 is the bottom of the screen; the
+   attachment here is a TEXTURE, whose y = 0 is the row glTexSubImage2D and
+   vkCmdCopyBufferToImage both write first. So this fills `dst` in the order a
+   second backend uploads it, with no flip.
+
+   `fbo` is the caller's, created here on first use and owned by the caller:
+   one FBO per client, made once, never per frame. Returns 1 when `dst` holds
+   `rows` rows of RGBA8 and 0 when it holds nothing new. */
+int tagpu_gl_rgba_readback(unsigned tex, int w, int rows, unsigned char* dst,
+                           unsigned* fbo)
+{
+    GLint fbo0 = 0, pack = 4;
+    GLenum st;
+    int ok = 0;
+    if (!tex || !dst || !fbo || w <= 0 || rows <= 0) return 0;
+    fetch_gl();
+    if (!x_glReadPixels || !glGenFramebuffers || !glBindFramebuffer ||
+        !glFramebufferTexture2D || !glCheckFramebufferStatus) return 0;
+    if (!*fbo) {
+        glGenFramebuffers(1, fbo);
+        if (!*fbo) return 0;
+    }
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo0);
+    glGetIntegerv(GL_PACK_ALIGNMENT, &pack);
+    glBindFramebuffer(GL_FRAMEBUFFER, *fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (st == GL_FRAMEBUFFER_COMPLETE) {
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        x_glReadPixels(0, 0, w, rows, GL_RGBA, GL_UNSIGNED_BYTE, dst);
+        glPixelStorei(GL_PACK_ALIGNMENT, pack);
+        ok = 1;
+    }
+    /* THE ATTACHMENT IS DROPPED WHATEVER HAPPENED: leaving someone else's
+       texture attached to our FBO would keep it alive past a delete and make
+       the next status check answer about the wrong image. */
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)fbo0);
+    return ok;
+}
+
 void tagpu_gaf_atlas_mirror_rgb_step(TAGPU_GAFATLAS* a)
 {
     GLint fbo0 = 0, pack = 4;

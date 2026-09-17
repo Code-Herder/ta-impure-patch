@@ -200,6 +200,16 @@ typedef struct TAGPU_TERRHAND {
     const unsigned char* atlas;       /* atlasW x atlasH R8                 */
     int                  atlasW, atlasH;
     unsigned             atlasSerial;
+    /* CLASSIC++'s RESTORED TILE ATLAS, MIRRORED (the Vulkan-only plan's gate
+       2). Unlike `atlas` above this is NOT the buffer an upload was handed --
+       the restorer paints it on the GPU, so it is a read-back, and it is NULL
+       until one has run. `restored` being 1 with this NULL is the case that
+       existed before the field and a consumer must stand down there, as it did
+       then. Rows are what the read-back covered; terrain's restore is one job
+       over the whole atlas rather than a lazy queue, so they reach atlasH. */
+    const unsigned char* atlasRgb;    /* atlasW x atlasRgbRows RGBA8         */
+    int                  atlasRgbRows;
+    unsigned             atlasRgbSerial;
     const unsigned char* height;      /* hW x hH R8, or NULL                */
     int                  hW, hH;
     unsigned             heightSerial;

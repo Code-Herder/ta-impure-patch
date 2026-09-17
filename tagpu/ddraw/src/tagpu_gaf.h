@@ -305,4 +305,12 @@ int  tagpu_gaf_atlas_mirror(TAGPU_GAFATLAS* a);
    when nothing is armed or nothing has been painted since the last one. */
 int  tagpu_gaf_atlas_mirror_rgb(TAGPU_GAFATLAS* a);
 void tagpu_gaf_atlas_mirror_rgb_step(TAGPU_GAFATLAS* a);
+
+/* Read an RGBA8 GL texture back into `dst`, `rows` rows of `w` texels, through
+   a caller-owned FBO created on first use. Not about an atlas: it is here
+   because this is where glReadPixels is resolved. Render thread, context
+   current. 1 when `dst` was filled. (The Vulkan-only plan's gate 2, for
+   tagpu_terr.c's restored twin.) */
+int  tagpu_gl_rgba_readback(unsigned tex, int w, int rows, unsigned char* dst,
+                            unsigned* fbo);
 #endif

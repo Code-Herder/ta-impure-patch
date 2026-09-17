@@ -45,6 +45,7 @@
 #include "tagpu_opt.h"
 #include "tagpu_terr.h"
 #include "tagpu_pal.h"
+#include "tagpu_gaf.h"      /* tagpu_gl_rgba_readback: the restored twin (gate 2) */
 #include "tagpu_restoreglsl.h"
 #include "tagpu_classicpp.h"
 #include "tagpu_glsl.h"
@@ -156,6 +157,21 @@ static TAGPU_TERRHAND s_pub;
 static int s_mirrorWant;               /* the Vulkan lane asked for mirrors   */
 static unsigned char* s_atlasMirror;   /* ATLAS_W x s_atlasH, or NULL         */
 static unsigned s_atlasMirrorSerial;
+/* ...and the RESTORED twin's mirror (gate 2). The indexed one above is the
+   buffer an upload was handed; this one cannot be, because `s_rgbTex` is
+   painted by tagpu_restoreglsl.c on the GPU -- so it is a read-back through
+   tagpu_gaf.c's helper, stepped once per published frame.
+   `s_rgbMirrorPainted` is the CONTENT key: the restorer's paint count, which
+   is what tagpu_gaf.c's own step keys on and for the reason recorded there --
+   a serial that is not the content's serial uploads once and misses
+   everything after it. Terrain adds the row count to it because the atlas can
+   grow (ensure_atlas) without a paint landing in between. */
+static unsigned char* s_rgbMirror;     /* ATLAS_W x s_atlasH x 4, or NULL     */
+static unsigned s_rgbMirrorSerial;
+static int      s_rgbMirrorRows;       /* rows the read-back has covered      */
+static int      s_rgbMirrorPainted;    /* tagpu_rglsl_job_painted at that read */
+static unsigned s_rgbMirrorFbo;        /* ours, made once                     */
+static int      s_rgbMirrorFailed;
 static unsigned char* s_hMirror;       /* s_hW x s_hH, or NULL                */
 static unsigned s_hMirrorSerial;
 
@@ -1378,6 +1394,49 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
 static unsigned short* s_fogCopy;
 static int             s_fogCopyCells;
 
+/* ONE STEP OF THE RESTORED READ-BACK, on the render thread with the context
+   current. A no-op unless the Vulkan lane asked for mirrors, and again once the
+   restorer has stopped painting, so a settled map pays one integer compare. */
+static void rgb_mirror_step(void)
+{
+    int rows, painted;
+    if (!s_mirrorWant || s_rgbMirrorFailed) return;
+    /* THE TWIN IS GONE (a glreset, a new map before the re-create). Say so
+       rather than leaving the last map's colours standing, exactly as
+       tagpu_gaf.c's step does: a consumer that kept them would draw restored
+       tiles the GL lane no longer draws. */
+    if (!s_rgbTex || !s_job || s_atlasH <= 0) {
+        if (s_rgbMirrorRows) {
+            memset(s_rgbMirror, 0, (size_t)ATLAS_W * s_rgbMirrorRows * 4);
+            s_rgbMirrorRows = 0;
+            s_rgbMirrorPainted = 0;
+            s_rgbMirrorSerial++;
+        }
+        return;
+    }
+    if (!s_rgbMirror || s_rgbMirrorRows > s_atlasH) {
+        free(s_rgbMirror);
+        s_rgbMirror = (unsigned char*)calloc((size_t)ATLAS_W * s_atlasH * 4, 1);
+        if (!s_rgbMirror) {
+            s_rgbMirrorFailed = 1;
+            flog("terr: no memory for the restored tile mirror - the Vulkan "
+                 "edition stays indexed");
+            return;
+        }
+        s_rgbMirrorRows = 0;
+        s_rgbMirrorPainted = 0;
+    }
+    painted = tagpu_rglsl_job_painted(s_job);
+    rows = s_atlasH;
+    if (painted == s_rgbMirrorPainted && rows <= s_rgbMirrorRows) return;
+    if (!tagpu_gl_rgba_readback(s_rgbTex, ATLAS_W, rows, s_rgbMirror,
+                                &s_rgbMirrorFbo))
+        return;
+    s_rgbMirrorRows = rows;
+    s_rgbMirrorPainted = painted;
+    s_rgbMirrorSerial++;
+}
+
 static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT* L)
 {
     int fogBad = 0;                    /* fog wanted, no grid: publish nothing */
@@ -1388,6 +1447,7 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
        `s_pubHave` is cleared with it so no earlier frame's hand-over can be
        taken later. [FROM THE G19e LANDING REVIEW, 2026-09-15.] */
     if (!s_mirrorWant) { s_pubHave = 0; s_abFrame = 0; return; }
+    rgb_mirror_step();
     memset(&s_pub, 0, sizeof s_pub);
     s_pub.cells = s_inst; s_pub.ncell = s_ncell;
     s_pub.gw = (float)v->gw; s_pub.gh = (float)v->gh;
@@ -1428,6 +1488,13 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
     s_pub.atlas = s_atlasMirror;
     s_pub.atlasW = ATLAS_W; s_pub.atlasH = s_atlasH;
     s_pub.atlasSerial = s_atlasMirrorSerial;
+    /* published only when the read-back has covered rows -- a non-NULL pointer
+       with 0 rows would hand a consumer an image with nothing to upload */
+    if (s_rgbMirror && s_rgbMirrorRows > 0) {
+        s_pub.atlasRgb       = s_rgbMirror;
+        s_pub.atlasRgbRows   = s_rgbMirrorRows;
+        s_pub.atlasRgbSerial = s_rgbMirrorSerial;
+    }
     /* the height mirror only while it matches the dimensions the shader is
        being told about -- build_height keeps those two in step (see there) */
     if (s_hW > 0 && s_hH > 0) {

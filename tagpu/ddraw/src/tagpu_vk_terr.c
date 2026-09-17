@@ -228,6 +228,12 @@ typedef struct {
 } SHARED;
 static SHARED s_atlas;                     /* the tile atlas, R8              */
 static SHARED s_height;                    /* the height grid, R8             */
+/* CLASSIC++'s RESTORED TILE ATLAS, RGBA8 (the Vulkan-only plan's gate 2). A
+   third shared image with the same retire discipline as the other two; binding
+   42 names it instead of being the placeholder `shared_bind` described. It is
+   only resized when the hand-over carries a read-back, so a session with
+   Classic++ off never creates it. */
+static SHARED s_rgbAtlas;
 
 /* what `record` was left to draw */
 static int s_ncell;
@@ -585,7 +591,8 @@ static int slot_inst(const TAGPU_VKPASS* d, SLOT* s, VkDeviceSize bytes)
 /* Retire what is there and put a new image of `w` x `h` in its place. Returns
    0 when a retire is still outstanding (the caller draws nothing this frame and
    tries again) or when the device refused the image. See item 3 of the header. */
-static int shared_resize(const TAGPU_VKPASS* d, SHARED* sh, int w, int h)
+static int shared_resize(const TAGPU_VKPASS* d, SHARED* sh, int w, int h,
+                         VkFormat fmt)
 {
     if (sh->img && sh->w == w && sh->h == h) return 1;
     if (sh->oldImg) return 0;              /* one retire at a time, by design  */
@@ -595,7 +602,7 @@ static int shared_resize(const TAGPU_VKPASS* d, SHARED* sh, int w, int h)
         sh->pending = d->slots >= 32 ? 0xFFFFFFFFu : ((1u << d->slots) - 1u);
     }
     sh->w = sh->h = 0; sh->serial = 0; sh->have = 0;
-    if (!mk_image(d, w, h, VK_FORMAT_R8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT,
+    if (!mk_image(d, w, h, fmt, VK_IMAGE_ASPECT_COLOR_BIT,
                   &sh->img, &sh->mem, &sh->view)) {
         /* mk_image can fail after vkCreateImage succeeded, so the half-made
            object is given back here: the caller's "is there an image at all"
@@ -998,7 +1005,12 @@ static void shared_bind(const TAGPU_VKPASS* d, uint32_t slot)
        VALID for the set to be bound, and naming the image that is already here
        costs no memory and no second object. If the Classic++ restored atlas is
        ever mirrored, this is the binding that stops being a placeholder. */
+    /* ...UNLESS THE RESTORED ATLAS HAS BEEN MIRRORED (gate 2), which is now the
+       ordinary case with Classic++ on. It falls back to the indexed view when
+       there is no restored image, which keeps the descriptor valid and leaves
+       the branch unreachable exactly as the refusal below arranges. */
     ii[1] = ii[0];
+    if (s_rgbAtlas.view) ii[1].imageView = s_rgbAtlas.view;
     ii[2].sampler = s_samp;
     ii[2].imageView = s_height.view ? s_height.view : s_atlas.view;
     ii[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -1143,7 +1155,8 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        uFog. */
     union { float f[UBLK_FS / 4]; int i[UBLK_FS / 4]; } ub;
     int fogW = 1, fogH = 1, hW = 1, hH = 1;
-    int doAtlas, doHeight;
+    int doAtlas, doHeight, doRgb;
+    VkDeviceSize rgbOff = 0, rgbBytes = 0;
 
     if (s_state == ST_REFUSED) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
@@ -1157,6 +1170,7 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     if (s_state == ST_READY) {
         shared_slot_done(d, &s_atlas, slot);
         shared_slot_done(d, &s_height, slot);
+        shared_slot_done(d, &s_rgbAtlas, slot);
     }
 
     /* NOTHING IS BUILT UNTIL THERE IS SOMETHING TO DRAW, AND NOTHING PER-SLOT
@@ -1180,16 +1194,19 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        depth map (see the file header): drawing without either against a twin
        that drew with it would be a different picture, and the A/B would call it
        a rasteriser difference. */
-    if (t.restored) {
+    /* DRAWABLE SINCE GATE 2 once the read-back has covered rows, and NO LONGER
+       LATCHED -- gpu-status 2.35 measured what latching such a condition costs,
+       and this one clears by itself as the restorer paints. */
+    if (t.restored && !(s_rgbAtlas.view && s_rgbAtlas.have)) {
         if (!s_saidRestored) {
             s_saidRestored = 1;
             plog(d, "terr: the GL twin is drawing through the Classic++ restored "
-                    "tile atlas and that surface has no CPU mirror - the Vulkan "
-                    "edition draws nothing this session rather than draw a "
-                    "different picture from its own oracle");
+                    "tile atlas and this lane has no mirror of it yet - nothing "
+                    "drawn until the read-back covers rows");
         }
         return 0;
     }
+    s_saidRestored = 0;
     /* THE CAST-SHADOW MAP IS DRAWN BY tagpu_vk_shadow.c NOW (G19e's fifth
        pass), so this is no longer "there is no mirror" but "is there a map for
        THIS frame". It is asked with our own frame number, which is what stops a
@@ -1281,14 +1298,21 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     /* THE SHARED IMAGES FIRST, because a resize that cannot be applied yet
        (one retire at a time) means this frame draws nothing at all rather than
        sampling the previous map's texels. */
-    if (!shared_resize(d, &s_atlas, t.atlasW, t.atlasH)) {
+    if (!shared_resize(d, &s_atlas, t.atlasW, t.atlasH, VK_FORMAT_R8_UNORM)) {
         if (!s_atlas.img) goto refuse;
         return 0;                          /* a retire is still clearing       */
     }
     /* WITH NO HEIGHT GRID THE IMAGE IS ONE TEXEL AND uHDim IS 0, which is what
        the GL twin does: the shader's `uHDim.x > 0.5` test is what keeps it
        unsampled, and a 1x1 image keeps the descriptor valid meanwhile. */
-    if (!shared_resize(d, &s_height, hW, hH)) {
+    /* THE RESTORED ATLAS, only when the hand-over carries a read-back. A
+       failure is not fatal: `s_rgbAtlas.view` stays NULL, binding 42 keeps the
+       indexed view, and the refusal below keeps the branch unreachable -- which
+       is why that refusal tests THIS view and not just the hand-over. */
+    if (t.atlasRgb && t.atlasRgbRows > 0)
+        shared_resize(d, &s_rgbAtlas, t.atlasW, t.atlasRgbRows,
+                      VK_FORMAT_R8G8B8A8_UNORM);
+    if (!shared_resize(d, &s_height, hW, hH, VK_FORMAT_R8_UNORM)) {
         if (!s_height.img) goto refuse;
         return 0;
     }
@@ -1308,11 +1332,19 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     doAtlas = !s_atlas.have || s_atlas.serial != t.atlasSerial;
     doHeight = t.height ? (!s_height.have || s_height.serial != t.heightSerial)
                         : !s_height.have;
-    if (doAtlas || doHeight) {
+    /* THE RESTORED ATLAS RIDES THE SAME STAGING BUFFER as the other two, for
+       the same reason: these are map-scoped uploads, so a settled map holds no
+       staging at all. Its rows are the read-back's, and the image was sized to
+       them just above, so the copy is always the whole image. */
+    doRgb = s_rgbAtlas.img && t.atlasRgb && t.atlasRgbRows > 0 &&
+            (!s_rgbAtlas.have || s_rgbAtlas.serial != t.atlasRgbSerial);
+    if (doAtlas || doHeight || doRgb) {
         atlasBytes = doAtlas ? (VkDeviceSize)t.atlasW * t.atlasH : 0;
         heightOff = ALIGN4(atlasBytes);
         heightBytes = doHeight ? (VkDeviceSize)hW * hH : 0;
-        bigBytes = heightOff + heightBytes;
+        rgbOff = ALIGN4(heightOff + heightBytes);
+        rgbBytes = doRgb ? (VkDeviceSize)s_rgbAtlas.w * s_rgbAtlas.h * 4 : 0;
+        bigBytes = rgbOff + rgbBytes;
         if (s->bigCap < bigBytes || !s->bigStage) {
             slot_drop_bigstage(d, s);
             if (!mk_buffer(d, bigBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -1331,6 +1363,11 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
             else          memset(s->bigMap + heightOff, 0, 1);
             shared_upload(cb, &s_height, s->bigStage, heightOff);
             s_height.serial = t.height ? t.heightSerial : 0;
+        }
+        if (doRgb) {
+            memcpy(s->bigMap + rgbOff, t.atlasRgb, (size_t)rgbBytes);
+            shared_upload(cb, &s_rgbAtlas, s->bigStage, rgbOff);
+            s_rgbAtlas.serial = t.atlasRgbSerial;
         }
     } else {
         slot_drop_bigstage(d, s);
@@ -1566,6 +1603,9 @@ void tagpu_vk_terr_down(const TAGPU_VKPASS* d)
         slot_free(d, &s_slot[i]);
         s_slot[i].dset = VK_NULL_HANDLE;   /* goes back with the pool below */
     }
+    kill_image(d, &s_rgbAtlas.img, &s_rgbAtlas.mem, &s_rgbAtlas.view);
+    kill_image(d, &s_rgbAtlas.oldImg, &s_rgbAtlas.oldMem, &s_rgbAtlas.oldView);
+    memset(&s_rgbAtlas, 0, sizeof s_rgbAtlas);
     kill_image(d, &s_atlas.img, &s_atlas.mem, &s_atlas.view);
     kill_image(d, &s_atlas.oldImg, &s_atlas.oldMem, &s_atlas.oldView);
     memset(&s_atlas, 0, sizeof s_atlas);
