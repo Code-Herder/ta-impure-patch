@@ -210,6 +210,7 @@ static int s_pubHave;                  /* this frame's hand-over is waiting   */
 static TAGPU_FEATHAND s_pub;
 static int s_mirrorAsked;              /* the atlas mirror has been asked for */
 static int s_mirrorRgbAsked;           /* ...and its Classic++ restored twin  */
+static int s_rlistAsked;               /* ...or the published restore list    */
 
 int tagpu_feat_armed(unsigned frame_counter)
 {
@@ -281,7 +282,16 @@ int tagpu_feat_armed(unsigned frame_counter)
        Classic++ on never pays for it. Like the indexed one it is set on SUCCESS
        only, so a request made before the atlas has its dimensions is retried on
        the next beat rather than latched as a failure. */
-    if (s_mirrorAsked && !s_mirrorRgbAsked && tagpu_classicpp_assets())
+    /* AND THE OTHER ANSWER TO THE SAME QUESTION, ASKED FIRST (the Vulkan-only
+       plan's landing 7d). With `tagpu_restorevk.on` beside TotalA.exe the
+       other lane restores for itself and there is nothing to read back, so the
+       list is armed and the read-back below is never asked for -- and if it
+       was already armed on an earlier beat, arming the list frees it. Polled
+       on every beat until it takes, exactly as the two mirrors are, because
+       the lever is allowed to appear mid-session. */
+    if (s_mirrorAsked && !s_rlistAsked && tagpu_classicpp_assets())
+        s_rlistAsked = tagpu_gaf_atlas_restore_vk(&s_atlas);
+    if (s_mirrorAsked && !s_rlistAsked && !s_mirrorRgbAsked && tagpu_classicpp_assets())
         s_mirrorRgbAsked = tagpu_gaf_atlas_mirror_rgb(&s_atlas);
     if (s_passive) tagpu_featown_set_skip(0);
     if (was != 1) {
@@ -1037,6 +1047,23 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
         s_pub.atlasRgb       = s_atlas.mirrorRgb;
         s_pub.atlasRgbRows   = s_atlas.mirrorRgbRows;
         s_pub.atlasRgbSerial = s_atlas.mirrorRgbSerial;
+    }
+    /* ...OR THE REQUEST INSTEAD OF THE PICTURE, and never both: the list is
+       armed only where the read-back is not, and `tagpu_gaf_atlas_restore_vk`
+       frees the mirror when it arms, so the branch above has already gone
+       NULL by the time this one publishes. Stated as an either/or here as
+       well rather than left to that -- the arm is a poll that can land on any
+       frame, and "mutually exclusive by construction" was already wrong once
+       on this plan for exactly that reason. [tagpu_terr.c carries the same
+       either/or.] */
+    if (s_atlas.rlistWant && s_atlas.rlist) {
+        s_pub.atlasRgb       = NULL;
+        s_pub.atlasRgbRows   = 0;
+        s_pub.atlasRgbSerial = 0;
+        s_pub.restoreFrames  = s_atlas.rlist;
+        s_pub.restoreN       = s_atlas.rlistN;
+        s_pub.restoreGen     = s_atlas.rlistGen;
+        s_pub.restoreRepaint = s_atlas.rlistRepaint;
     }
     s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();
     /* the grid as the fragment shader will read it, and only when it will:

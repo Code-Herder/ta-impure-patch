@@ -106,6 +106,17 @@ int  tagpu_vk_restore_job_failed(const TAGPU_VKRJOB* j);
 int  tagpu_vk_restore_job_painted(const TAGPU_VKRJOB* j);
 void tagpu_vk_restore_job_free(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j);
 
+/* THE BYTE ORACLE IS THIS FILE'S, and it needs no call of its own. Under
+   `tagpu_restoredump.on` each job writes its finished destination to
+   `tagpu_restore_<tag>_vk.rgba` out of `step`, once per picture: the copy is
+   recorded into the frame's command buffer and read at that slot's next step,
+   so nothing waits on the device. The GL lane writes the other half of the
+   pair -- `tagpu_restore_<tag>.rgba`, from tagpu_gaf.c and tagpu_terr.c, under
+   the same lever and in the same process on the same frames -- so a lane's
+   claim to reproduce the GL picture is one `cmp` of two files rather than a
+   screenshot diff. It lived in the terrain consumer until landing 7d, which is
+   when a second consumer would have had to copy it. */
+
 /* ONE SLICE, from the seam's `prepare` and NOWHERE ELSE: issue draws for the
    active job until the budget is spent. `cb` must be recording and OUTSIDE any
    render pass -- this begins its own. `slot` is the frame slot, for the

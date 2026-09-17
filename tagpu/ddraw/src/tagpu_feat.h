@@ -16,6 +16,7 @@
    scaffold. Armed by tagpu_feat.on (tokens log, passive, noflat, notall,
    noshadow, nowreck). Rides the native pass's per-frame view. */
 #include "tagpu_fx.h"
+#include "tagpu_restoreglsl.h"   /* TAGPU_RGLSL_FRAME, the restore request */
 
 int  tagpu_feat_armed(unsigned frame_counter);   /* re-reads tagpu_feat.on (30f) */
 int  tagpu_feat_on(void);                        /* armed state, no re-read      */
@@ -105,6 +106,32 @@ typedef struct TAGPU_FEATHAND {
     const unsigned char*  atlasRgb;      /* atlasDim x atlasRgbRows RGBA8     */
     int                   atlasRgbRows;
     unsigned              atlasRgbSerial;
+    /* ...OR THE WORK ITSELF, for a lane that can restore on its own (the
+       Vulkan-only plan's landing 7d). These four are MUTUALLY EXCLUSIVE with
+       `atlasRgb` above and the producer is what makes them so: under
+       `tagpu_restorevk.on` it stops reading the restored twin back and
+       publishes the frame list instead, so exactly one of the two is ever here
+       and a consumer never has to choose between a mirror and a request.
+
+       IT IS AN APPEND-ONLY LIST WITH A CURSOR, not terrain's whole list per
+       serial, because a feature atlas is a lazy QUEUE: tagpu_gaf.c adds one
+       frame on every miss for the life of the atlas. A consumer keeps its own
+       index into `restoreFrames` and takes `[cursor, restoreN)`; a frame on
+       which it takes nothing costs nothing, because the entries are still
+       there on the next one. `restoreGen` is the discontinuity a cursor cannot
+       survive -- the arm, a recycle, a repack, a context loss, a palette move
+       -- and a consumer that sees a new one drops its job and starts at 0.
+       `restoreRepaint` is 1 only for the palette-move generation, where the
+       destination keeps what it holds and is recoloured in place.
+
+       LIFETIME: the array is the atlas's, retained for the atlas rather than
+       for the frame, but a consumer still copies on the frame it takes it (as
+       tagpu_vk_restore_job_add does) -- a restart re-uses the same memory.
+       The destination's size is the ATLAS's (`atlasDim` square). */
+    const TAGPU_RGLSL_FRAME* restoreFrames;
+    int                      restoreN;
+    unsigned                 restoreGen;
+    int                      restoreRepaint;
     const unsigned char*  pal;        /* 256 x RGBA8, tagpu_pal_live()       */
     unsigned              palSerial;
     const unsigned short* fogGrid;    /* cols x rows RG8; NULL when fog is off */

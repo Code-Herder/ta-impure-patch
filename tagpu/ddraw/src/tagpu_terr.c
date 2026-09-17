@@ -1155,10 +1155,15 @@ static void dump_if_armed(void)
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, buf);
     glBindTexture(GL_TEXTURE_2D, 0);
-    f = fopen("tagpu_restore.rgba", "wb");
+    /* NAMED FOR THE PASS, so that every lane's pair of dumps is
+       `tagpu_restore_<tag>.rgba` against `tagpu_restore_<tag>_vk.rgba` -- the
+       GAF atlases were already tagged (tagpu_gaf.c `dump_twin`) and this one
+       was not, which made the terrain's `cmp` the one the recipe had to spell
+       differently. [landing 7d] */
+    f = fopen("tagpu_restore_terr.rgba", "wb");
     if (f) { fwrite(buf, 1, n, f); fclose(f); }
     free(buf);
-    _snprintf(b, sizeof b, "terr: restored atlas dumped to tagpu_restore.rgba (%dx%d RGBA, %d tiles)%s",
+    _snprintf(b, sizeof b, "terr: restored atlas dumped to tagpu_restore_terr.rgba (%dx%d RGBA, %d tiles)%s",
               ATLAS_W, s_atlasH, s_atlasN, f ? "" : " -- WRITE FAILED");
     flog(b);
 }

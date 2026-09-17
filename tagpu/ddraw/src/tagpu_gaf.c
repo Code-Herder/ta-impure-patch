@@ -84,6 +84,112 @@ static int cell_up(const TAGPU_GAFATLAS* a, int v)
     return (v + a->align - 1) / a->align * a->align;
 }
 
+/* ---- the published restore list (tagpu_gaf.h `rlist`) ------------------ */
+
+/* The frame the restorer is asked for, from the entry that was just painted:
+   the R8 atlas is the source, the twin the destination, same rect, the border
+   -- and the cell's alignment slack past it -- painted as a copy of the edge,
+   as the R8 upload painted them. 0 when this frame is below the model's floor
+   and is never restored at all.
+   SHARED BY THE QUEUE AND THE LIST ON PURPOSE: the whole claim of the list is
+   that it is the frames the GL lane was given, so the two must be built by
+   one piece of code rather than by two that agree today. */
+static int restore_frame_of(const TAGPU_GAFATLAS* a, const TAGPU_GAFENT* e,
+                            TAGPU_RGLSL_FRAME* f)
+{
+    if (a->restoreMinEdge > 0 && (e->w < a->restoreMinEdge || e->h < a->restoreMinEdge))
+        return 0;
+    f->ax = f->dx = e->x; f->ay = f->dy = e->y;
+    f->w = e->w; f->h = e->h; f->wrap = e->wrap; f->border = a->pad; f->key = e->ck;
+    f->padR = cell_up(a, e->w + 2 * a->pad) - (e->w + 2 * a->pad);
+    f->padB = cell_up(a, e->h + 2 * a->pad) - (e->h + 2 * a->pad);
+    return 1;
+}
+
+/* THE BOUND (tagpu_gaf.h): four times the entry ceiling. One append per paint,
+   and an entry is painted once unless a repack reserves it again -- so this is
+   room for the atlas to fill and be re-laid three times before the list has to
+   restart, and it is a function of the atlas rather than a number. */
+static int rlist_cap(const TAGPU_GAFATLAS* a)
+{
+    int c = a->max > 0 ? a->max * 4 : 1024;
+    return c < 1024 ? 1024 : c;
+}
+
+/* A new generation: the array stops being a continuation of what a consumer
+   holds. `repaint` says the destination keeps what it has (the palette moved)
+   rather than being blanked. */
+static void rlist_reset(TAGPU_GAFATLAS* a, int repaint)
+{
+    if (!a->rlistWant) return;
+    a->rlistN = 0;
+    a->rlistRepaint = repaint;
+    a->rlistGen++;
+}
+
+/* ...and re-seeded with every entry the atlas holds right now. This is both
+   the arm path and the overflow recovery, which is why it is one function:
+   "start from what is actually here" is the only state either can restart
+   from, and having the recovery share the arm's code means the rare path is
+   the one that has been exercised since the first frame of every session.
+   Bounded by the cap, and it cannot reach it: entries are at most `max`. */
+static void rlist_restart(TAGPU_GAFATLAS* a, int repaint)
+{
+    int i, cap = rlist_cap(a);
+    rlist_reset(a, repaint);
+    if (!a->rlistWant || !a->rlist) return;
+    for (i = 0; i < a->n && a->rlistN < cap && a->rlistN < a->rlistCap; i++) {
+        if (!a->ents[i].ok) continue;
+        if (restore_frame_of(a, &a->ents[i], &a->rlist[a->rlistN])) a->rlistN++;
+    }
+}
+
+static void rlist_add(TAGPU_GAFATLAS* a, const TAGPU_RGLSL_FRAME* f)
+{
+    if (!a->rlistWant || !a->rlist) return;
+    /* THE CAP IS REACHED BY RESTARTING, NOT BY GROWING PAST IT. The list is
+       fed for the atlas's life, so any ceiling is a number that can be
+       exceeded; what cannot be exceeded is "the entries that are here", and
+       that is what the restart leaves behind. Said once per restart because it
+       is a real event a consumer sees as a blank-and-repaint. */
+    if (a->rlistN >= rlist_cap(a)) {
+        char b[160];
+        _snprintf(b, sizeof b, "%s: the published restore list reached its %d-frame "
+                  "bound - restarting it from the %d entries in the atlas, so the "
+                  "other lane blanks its twin and repaints",
+                  a->tag ? a->tag : "gaf", rlist_cap(a), a->n);
+        b[sizeof b - 1] = 0;
+        glog(b);
+        rlist_restart(a, 0);
+    }
+    if (a->rlistN >= a->rlistCap) {
+        /* grow, up to the cap; a refused grow drops the list rather than
+           silently skipping frames, because a list with a hole in it would
+           have the other lane leave cells indexed for ever and nothing would
+           say so. The consumer sees the generation move and starts over. */
+        int want = a->rlistCap * 2, cap = rlist_cap(a);
+        TAGPU_RGLSL_FRAME* g;
+        if (want > cap) want = cap;
+        g = (TAGPU_RGLSL_FRAME*)realloc(a->rlist, (size_t)want * sizeof *g);
+        if (!g) {
+            char b[160];
+            _snprintf(b, sizeof b, "%s: no memory to grow the published restore list "
+                      "to %d frames - the other lane's restore stands down",
+                      a->tag ? a->tag : "gaf", want);
+            b[sizeof b - 1] = 0;
+            glog(b);
+            free(a->rlist);
+            a->rlist = NULL; a->rlistN = 0; a->rlistCap = 0;
+            a->rlistWant = 0; a->rlistFailed = 1;
+            a->rlistGen++;
+            return;
+        }
+        a->rlist = g;
+        a->rlistCap = want;
+    }
+    a->rlist[a->rlistN++] = *f;
+}
+
 /* Rebuild the twin's mip levels 1..mip from level 0 -- after every batch the
    restorer painted, after a recycle cleared level 0 (the restorer clears
    only that level: tagpu_restoreglsl.c clear_dest), and once when the twin
@@ -120,6 +226,13 @@ static void rgb_mirror_zeroed(TAGPU_GAFATLAS* a)
 /* the job's destination back to unpainted, and every mirror of it with it */
 static void job_clear_dest(TAGPU_GAFATLAS* a)
 {
+    /* THE PUBLISHED LIST GOES WHATEVER THE GL JOB IS, and that is deliberately
+       outside the early return below: the rects this atlas hands out have just
+       moved (a recycle, a repack), so a consumer's own destination is as wrong
+       as this twin is, whether or not a GL job exists to clear. The generation
+       is what tells it, and dropping the list is what stops it painting the
+       old layout over the new one. */
+    rlist_reset(a, 0);
     if (!a->job) return;
     tagpu_rglsl_job_clear(a->job);
     twin_mips(a);
@@ -382,6 +495,12 @@ int tagpu_gaf_atlas_mirror_rgb(TAGPU_GAFATLAS* a)
     if (!a || a->dim <= 0) return 0;
     if (a->mirrorRgb) return 1;
     if (a->mirrorRgbFailed) return 0;
+    /* THE LIST HAS TAKEN OVER: the restore is the other lane's to run, so
+       there is nothing here to read back and a 16 MB buffer would be armed for
+       a consumer that no longer looks at it. Refused rather than latched --
+       the list can go away (an out-of-memory grow drops it) and the read-back
+       is then the fallback again. */
+    if (a->rlistWant) return 0;
     fetch_gl();
     if (!x_glReadPixels || !glGenFramebuffers || !glBindFramebuffer ||
         !glFramebufferTexture2D || !glCheckFramebufferStatus) {
@@ -653,6 +772,63 @@ void tagpu_gaf_atlas_mirror_rgb_step(TAGPU_GAFATLAS* a)
     }
 }
 
+/* Arm the published restore list and stand the read-back down (tagpu_gaf.h).
+   Polled on the owner's arm beat, so the lever is allowed to appear
+   mid-session -- which is the case that has already been got wrong once on
+   this plan: a latch that is only ever tested at start-up reads as "off" for
+   a session the owner turned it on during. [tagpu_terr.c carries the same
+   poll for the terrain atlas, whose restore is a fixed list rather than a
+   queue and so needs no cursor.] */
+int tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a)
+{
+    char b[192];
+    if (!a || a->dim <= 0 || a->max <= 0 || !a->ents) return 0;
+    if (a->rlistWant) return 1;
+    if (a->rlistFailed) return 0;
+    if (GetFileAttributesA("tagpu_restorevk.on") == INVALID_FILE_ATTRIBUTES) return 0;
+    a->rlistCap = 256;
+    if (a->rlistCap > rlist_cap(a)) a->rlistCap = rlist_cap(a);
+    a->rlist = (TAGPU_RGLSL_FRAME*)malloc((size_t)a->rlistCap * sizeof *a->rlist);
+    if (!a->rlist) {
+        a->rlistFailed = 1;
+        a->rlistCap = 0;
+        _snprintf(b, sizeof b, "%s: no memory for a published restore list - the other"
+                  " lane keeps reading this one's restored texels back",
+                  a->tag ? a->tag : "gaf");
+        b[sizeof b - 1] = 0;
+        glog(b);
+        return 0;
+    }
+    a->rlistWant = 1;
+    /* SEEDED WITH WHAT IS HERE NOW, which is what makes it correct from the
+       instant it exists: whatever this lane has already restored, a consumer
+       starting at index 0 restores the same rectangles for itself. */
+    rlist_restart(a, 0);
+    /* AND THE READ-BACK'S 16 MB GOES BACK. The mirror is documented as never
+       freed -- because an atlas has no destructor and a re-arm should find it
+       already correct -- and this is the one exception, with its own reason:
+       the list is not a second consumer of the mirror, it is the mirror's
+       replacement, and nothing will read it again while the list is armed.
+       Every write to it is already guarded on the pointer (`mirror_rgb_step`
+       returns at the top when it is NULL), so freeing it here is not a new
+       lifetime to reason about. */
+    if (a->mirrorRgb) {
+        free(a->mirrorRgb);
+        a->mirrorRgb = NULL;
+        a->mirrorRgbRows = 0;
+        a->mirroredPainted = 0;
+        a->mirroredRgbGen = 0;
+        a->mirroredMippedN = 0;
+        a->mirrorRgbSerial++;       /* what a consumer holds is no longer fed  */
+    }
+    _snprintf(b, sizeof b, "%s: restorevk -- the restore is the other lane's to run, so"
+              " no read-back and the frame list is published instead (%d entries seeded,"
+              " %d-frame bound)", a->tag ? a->tag : "gaf", a->rlistN, rlist_cap(a));
+    b[sizeof b - 1] = 0;
+    glog(b);
+    return 1;
+}
+
 void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
 {
     a->tex = 0; a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
@@ -665,6 +841,12 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
     /* the twin and the job died with the context (tagpu_rglsl_glreset has
        already forgotten the job: it runs first); re-armed on the next frame */
     a->rgb = 0; a->job = NULL; a->restoreFailed = 0; a->mippedN = 0;
+    /* THE OTHER LANE'S DESTINATION DID NOT DIE -- ITS SOURCE DID. Nothing here
+       is a Vulkan object, so a consumer's twin still holds the colours of an
+       atlas whose every entry has just been dropped. The generation is what
+       tells it to blank and start over; without this it would keep painting
+       the old layout's rects for the rest of the session. */
+    rlist_reset(a, 0);
     a->mirroredMippedN = 0;
     /* THE FBO DIED WITH THE CONTEXT TOO -- forgotten, never deleted, exactly
        as `tex` is above: deleting a name from a context that is gone either
@@ -683,18 +865,14 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
     a->repackWall = 0;
 }
 
-/* one frame onto the restore queue: the R8 atlas is the source, the twin the
-   destination, same rect, the border -- and the cell's alignment slack past
-   it -- painted as a copy of the edge, as the R8 upload painted them */
+/* one frame onto the restore queue -- and onto the published list, which is
+   the same frame and must stay so: `restore_frame_of` is shared. */
 static void restore_enqueue(TAGPU_GAFATLAS* a, const TAGPU_GAFENT* e)
 {
     TAGPU_RGLSL_FRAME f;
-    if (a->restoreMinEdge > 0 && (e->w < a->restoreMinEdge || e->h < a->restoreMinEdge)) return;
-    f.ax = f.dx = e->x; f.ay = f.dy = e->y;
-    f.w = e->w; f.h = e->h; f.wrap = e->wrap; f.border = a->pad; f.key = e->ck;
-    f.padR = cell_up(a, e->w + 2 * a->pad) - (e->w + 2 * a->pad);
-    f.padB = cell_up(a, e->h + 2 * a->pad) - (e->h + 2 * a->pad);
+    if (!restore_frame_of(a, e, &f)) return;
     tagpu_rglsl_job_add(a->job, &f, 1);
+    rlist_add(a, &f);
 }
 
 /* tagpu_restoredump.on: the twin as the shader samples it, once per fill of
@@ -759,6 +937,11 @@ void tagpu_gaf_atlas_restore(TAGPU_GAFATLAS* a, const unsigned char* pal)
             char b[128];
             a->palSerial = tagpu_pal_serial();
             tagpu_rglsl_job_repalette(a->job, pal);
+            /* AND THE PUBLISHED LIST IS A REPAINT GENERATION, opened before
+               the loop below so that the loop's own `restore_enqueue` fills
+               it. A consumer rebuilds its job with `repaint` set and keeps
+               what its destination holds, exactly as this lane does. */
+            rlist_reset(a, 1);
             for (i = 0; i < a->n; i++) if (a->ents[i].ok) restore_enqueue(a, &a->ents[i]);
             _snprintf(b, sizeof b, "%s: palette changed (serial=%u): %d entries queued for repaint",
                       a->tag, a->palSerial, a->n);
@@ -853,6 +1036,7 @@ void tagpu_gaf_atlas_restore(TAGPU_GAFATLAS* a, const unsigned char* pal)
     twin_mips(a);
     /* what is already in the atlas was uploaded before the switch: queue it,
        in upload order, so nothing stays indexed for want of a miss */
+    rlist_reset(a, 0);          /* a new twin here is a new one over there    */
     for (i = 0; i < a->n; i++) if (a->ents[i].ok) restore_enqueue(a, &a->ents[i]);
 }
 

@@ -71,6 +71,8 @@ typedef struct TAGPU_GAFENT {
     char           resv;
 } TAGPU_GAFENT;
 
+#include "tagpu_restoreglsl.h"   /* TAGPU_RGLSL_FRAME, the shared frame */
+
 struct TAGPU_RGLSL_JOB;
 
 /* Caller-owned atlas. Zero it, then point `ents`/`max` at your storage and
@@ -213,6 +215,51 @@ typedef struct TAGPU_GAFATLAS {
        `mirror_rgb()` re-allocates and re-fails every present and writes a line
        to tagpu.log at the frame rate. */
     int           mirrorRgbFailed;
+    /* THE PUBLISHED RESTORE LIST (the Vulkan-only plan's landing 7d), which is
+       the OTHER answer to the same question the two mirrors above answer: a
+       second backend can either read this lane's restored texels back, or run
+       the restore itself. This is the second, and it is the cheaper one by a
+       whole read-back -- what crosses is the REQUEST rather than the picture.
+
+       It holds the very frames this atlas queued for the GL restorer, in the
+       order it queued them, because three of a frame's eleven numbers are
+       content-dependent: `wrap` is tagpu_rglsl_tileable() over the frame's own
+       texels against the ART palette, `key` is the frame header's, and the
+       padding comes from the atlas's cell layout. Those are this side's facts;
+       what crosses is their result. The same list therefore makes the two
+       lanes comparable byte-for-byte rather than merely both-plausible.
+
+       IT IS A LAZY QUEUE AND SO IT IS APPEND-ONLY WITH A GENERATION, which is
+       what makes it different from terrain's whole-list-per-serial: a GAF
+       atlas is fed one frame at a time, for the life of the atlas, so a
+       consumer holds a CURSOR into this array and takes what is past it. A
+       frame on which the consumer took nothing therefore costs nothing -- it
+       takes more on the next one.
+
+       `rlistGen` IS THE DISCONTINUITY and the only thing a cursor cannot
+       survive. It is bumped whenever the array stops being a continuation of
+       what a consumer already has: the arm, a recycle or a repack (both of
+       which drop the queue and blank the destination), a context loss, a
+       palette move, and the overflow restart below. A consumer that sees a new
+       generation drops its own job and starts from index 0.
+       `rlistRepaint` is 1 only for the palette-move generation, where the
+       destination already holds a restore and is recoloured in place.
+
+       BOUNDED, because an append-only list fed for a session's length is not.
+       The cap is four times the atlas's entry ceiling; reaching it RESTARTS
+       the list from the entries the atlas holds right now (a new generation,
+       repaint 0) rather than growing, so the memory is a function of `max`
+       and the recovery is the same path as the arm. Armed by
+       tagpu_gaf_atlas_restore_vk and NULL otherwise, so an atlas nobody asks
+       pays nothing -- and while it is armed the read-back mirror above stands
+       down, because the two are answers to one question and doing both would
+       pay for the mirror to be ignored. */
+    TAGPU_RGLSL_FRAME* rlist;
+    int           rlistN, rlistCap;
+    unsigned      rlistGen;
+    int           rlistRepaint;
+    int           rlistWant;       /* armed; the read-back has stood down    */
+    int           rlistFailed;     /* latched, and said once                 */
     /* open-addressed index over `ents`, keyed on the frame header address:
        the lookup runs once per emitted sprite and the feature pass emits
        hundreds per frame against a four-figure entry count, which a linear
@@ -320,6 +367,24 @@ int  tagpu_gaf_atlas_mirror(TAGPU_GAFATLAS* a);
    when nothing is armed or nothing has been painted since the last one. */
 int  tagpu_gaf_atlas_mirror_rgb(TAGPU_GAFATLAS* a);
 void tagpu_gaf_atlas_mirror_rgb_step(TAGPU_GAFATLAS* a);
+
+/* Ask for the PUBLISHED RESTORE LIST instead of the read-back above (the
+   Vulkan-only plan's landing 7d), and stand the read-back down.
+
+   It arms only while `tagpu_restorevk.on` is beside TotalA.exe: the second
+   backend restoring for itself is the end state, but until its bytes have been
+   compared against this lane's on the machine in front of you, the read-back
+   is the shipped path and this is the measurement. Poll it on the same beat as
+   the mirror -- the lever can appear mid-session, and arming then frees the
+   16 MB the read-back had already taken.
+
+   Seeded with every entry the atlas holds right now, so it is correct from the
+   instant it exists in the same sense the mirror is: a consumer starting from
+   index 0 restores exactly what this lane has, whatever has already been
+   painted here. Returns 1 when armed (and on every later call), 0 when the
+   lever is absent or the memory was refused -- and the atlas then goes on
+   reading back as before. Render thread only. */
+int  tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a);
 
 /* Read an RGBA8 GL texture back into `dst`, `rows` rows of `w` texels, through
    a caller-owned FBO created on first use. Not about an atlas: it is here
