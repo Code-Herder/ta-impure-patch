@@ -90,6 +90,21 @@ typedef struct TAGPU_FEATHAND {
        every time a feature frame is added to the atlas. */
     int                   atlasRows;
     unsigned              atlasSerial;
+
+    /* CLASSIC++'s RESTORED TWIN, MIRRORED (the Vulkan-only plan's gate 2).
+       NULL until the restorer has painted something and the read-back has run,
+       so `restored` being 1 with this NULL is the case that existed before this
+       field and a consumer must stand down there exactly as it did then.
+
+       `atlasRgbRows` is the READ-BACK's own high-water mark and NOT the shelf
+       cursor `atlasRows` above: tagpu_gaf.c reads back what the restorer has
+       painted, and the restorer is sliced across frames, so it lags the shelf
+       by design. A consumer uploads these rows and treats everything below them
+       as alpha 0 -- which is what an unpainted cell reads as anyway, so the
+       progressive reveal works on this side with no extra flag. */
+    const unsigned char*  atlasRgb;      /* atlasDim x atlasRgbRows RGBA8     */
+    int                   atlasRgbRows;
+    unsigned              atlasRgbSerial;
     const unsigned char*  pal;        /* 256 x RGBA8, tagpu_pal_live()       */
     unsigned              palSerial;
     const unsigned short* fogGrid;    /* cols x rows RG8; NULL when fog is off */

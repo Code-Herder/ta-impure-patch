@@ -209,6 +209,7 @@ static int s_ab, s_abDone, s_abFrame;
 static int s_pubHave;                  /* this frame's hand-over is waiting   */
 static TAGPU_FEATHAND s_pub;
 static int s_mirrorAsked;              /* the atlas mirror has been asked for */
+static int s_mirrorRgbAsked;           /* ...and its Classic++ restored twin  */
 
 int tagpu_feat_armed(unsigned frame_counter)
 {
@@ -273,6 +274,15 @@ int tagpu_feat_armed(unsigned frame_counter)
        atlas has its dimensions (the first frames of a session) is retried. */
     if (!s_mirrorAsked && s_atlas.dim > 0 && tagpu_vk_armed())
         s_mirrorAsked = tagpu_gaf_atlas_mirror(&s_atlas);
+    /* AND THE RESTORED TWIN'S MIRROR, on the same beat, behind the same latch
+       and asked for SEPARATELY. It is a second 16 MB and it is only worth
+       anything while the restorer is the thing the GL twin samples, which is
+       what `tagpu_classicpp_assets()` answers -- so a session that never turns
+       Classic++ on never pays for it. Like the indexed one it is set on SUCCESS
+       only, so a request made before the atlas has its dimensions is retried on
+       the next beat rather than latched as a failure. */
+    if (s_mirrorAsked && !s_mirrorRgbAsked && tagpu_classicpp_assets())
+        s_mirrorRgbAsked = tagpu_gaf_atlas_mirror_rgb(&s_atlas);
     if (s_passive) tagpu_featown_set_skip(0);
     if (was != 1) {
         char b[160];
@@ -993,6 +1003,12 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
        `s_pubHave` is cleared with it so no earlier frame's hand-over can be
        taken later. [FROM THE G19e LANDING REVIEW, 2026-09-15.] */
     if (!s_mirrorAsked) { s_pubHave = 0; s_abFrame = 0; return; }
+    /* ONE STEP OF THE RESTORED READ-BACK PER PUBLISHED FRAME, here rather than
+       in the arm beat, because it is a glReadPixels off an FBO and this is the
+       render thread with the context current. It is a no-op until the mirror
+       has been armed and again once the restorer has stopped painting, so a
+       settled screen pays nothing for it. */
+    if (s_mirrorRgbAsked) tagpu_gaf_atlas_mirror_rgb_step(&s_atlas);
     memset(&s_pub, 0, sizeof s_pub);
     s_pub.shadow = s_verts[B_SHADOW]; s_pub.nShadow = s_nv[B_SHADOW];
     s_pub.body   = s_verts[B_BODY];   s_pub.nBody   = s_nv[B_BODY];
@@ -1013,6 +1029,15 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
         s_pub.atlasRows = rows;
     }
     s_pub.atlasSerial = s_atlas.mirrorSerial;
+    /* PUBLISHED ONLY WHEN THERE IS SOMETHING READ BACK. `mirrorRgbRows` is 0
+       until the first step has run and drops back to 0 on a context loss or a
+       re-arm (tagpu_gaf.c), and publishing a non-NULL pointer with 0 rows would
+       hand a consumer an image with no contents to upload. */
+    if (s_atlas.mirrorRgb && s_atlas.mirrorRgbRows > 0) {
+        s_pub.atlasRgb       = s_atlas.mirrorRgb;
+        s_pub.atlasRgbRows   = s_atlas.mirrorRgbRows;
+        s_pub.atlasRgbSerial = s_atlas.mirrorRgbSerial;
+    }
     s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();
     /* the grid as the fragment shader will read it, and only when it will:
        `uFog` 0 means taFog is never called and uFogGrid never sampled, which
