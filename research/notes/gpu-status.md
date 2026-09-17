@@ -8168,6 +8168,7 @@ terrain byte-identical at **46 461 952 bytes**, features and effects identical b
 | 2 | `fx-mix`, before the fix | identical | 118 of 1 304 frames differ | 3 of 167 differ |
 | 3 | `fx-mix`, after | identical | **identical** | **identical** |
 | 4 | `static-terrain`, after | **identical** (46 MB) | identical | identical |
+| 5 | `fx-mix`, after the review's fixes | identical | identical | identical |
 
 **And the terrain's clean result in landing 7c was never in danger, which took the landing review
 to see.** The paragraph here first recorded it as an unexplained survival — 7c's re-measurement was
@@ -8288,6 +8289,11 @@ the shipped path is the read-back and the lever is absent by default.
   own "idle": a scene that is still adding frames can therefore be compared at two different
   moments. The comparison above was taken after the fight settled, and that is a property of the
   measurement rather than of the code.
+* **The failure paths the review's fixes are about are still unexercised.** The blank counter, the
+  cleared "this twin is a picture" flag on an abandoned restore, the out-of-memory list drop and
+  the dump's retire were all reasoned to and none of them has been run: the re-measurement after
+  the fixes (run 5 above, **91** two-batch slices) proves the steady path still produces the GL
+  picture byte for byte, and proves nothing about the paths themselves.
 * One GPU, one model (`full`), one map, one fixture per atlas.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
