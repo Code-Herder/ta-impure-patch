@@ -104,7 +104,8 @@
 #include "tagpu_order.h"
 #include "tagpu_text.h"
 #include "tagpu_glsl.h"
-#include "tagpu_pal.h"    /* tagpu_pal_live/serial, for the hand-over */
+#include "tagpu_pal.h"
+#include "tagpu_abshot.h"  /* the GL half of the Phase G A/B */    /* tagpu_pal_live/serial, for the hand-over */
 #include "tagpu_packet.h"   /* the frame packet: the view, the tables (landing 3) */
 
 /* ---- what the marker block reads, and where it comes from ----------------
@@ -192,6 +193,12 @@ static int s_log = 0, s_passive = 0, s_bars = 1, s_capture = 1, s_selbox = 1;
 static int s_cursor = 1, s_digits = 1;
 static unsigned s_armCheck = 0;
 
+#define MK_ABFILE  "tagpu_mark.ab"
+#define MK_ABOUT   "tagpu_mark_gl.ppm"
+static int s_ab, s_abDone, s_abFrame;
+static TAGPU_ABSHOT s_abShot;
+static int s_abTaking;
+
 int tagpu_mark_armed(unsigned frame_counter)
 {
     int was;
@@ -215,6 +222,9 @@ int tagpu_mark_armed(unsigned frame_counter)
         if (was > 0) flog("mark: disarmed");
         return 0;
     }
+    /* the A/B lever, on the same beat as the arm (tagpu_fx.c's shape) */
+    s_ab = GetFileAttributesA(MK_ABFILE) != INVALID_FILE_ATTRIBUTES;
+    if (!s_ab) s_abDone = 0;
     {
         s_log = 0; s_passive = 0; s_bars = 1; s_capture = 1; s_selbox = 1;
         s_cursor = 1; s_digits = 1;
@@ -1029,6 +1039,23 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, v->fogLut);
     x_glActiveTexture(GL_TEXTURE0);
 
+    /* ---- the GL half of the Phase G A/B (tagpu_abshot.h) ----
+       Black the frame, draw this pass alone, read it back, so what the Vulkan
+       half is compared against is one pass over black against one pass over
+       black. No DEPTH flag: this pass neither tests nor writes depth, so
+       clearing it would be clearing something the draw does not touch. */
+    {
+        int taking = s_ab && !s_abDone;
+        if (taking && v->ss != 1) {
+            flog("mark: the A/B needs ss=1 (the GL capture is the supersampled "
+                 "FBO) - nothing captured; relaunch with supersampling off");
+            s_abDone = 1;
+            taking = 0;
+        }
+        s_abTaking = taking;
+        if (taking) tagpu_abshot_begin(&s_abShot, TAGPU_ABSHOT_SCISSOR);
+    }
+
     total = BARBASE + s_nbar;
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
@@ -1124,6 +1151,14 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
         mk_draw(CURSBASE, s_ncurs, 0, 0, 0, TAGPU_MK_TEX_NONE);
     }
 
+    if (s_abTaking) {
+        /* the Vulkan half is claimed only on a GL half that reached the disk --
+           tagpu_abshot.h's rule; `s_abDone` latches either way */
+        s_abFrame = tagpu_abshot_end(&s_abShot, MK_ABOUT, "mark");
+        s_abDone = 1;
+        s_abTaking = 0;
+    }
+
     /* PUBLISHED ONLY IF THE RECORD IS THE WHOLE DRAW. A list short of what GL
        issued would have the Vulkan lane draw a marker layer missing a bucket,
        which is a different picture rather than an absent one. */
@@ -1153,6 +1188,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
         s_mkPub.fogOrgX = (float)v->fogOrgX; s_mkPub.fogOrgY = (float)v->fogOrgY;
         s_mkPub.fogCols = (float)v->fogCols; s_mkPub.fogRows = (float)v->fogRows;
         s_mkPub.ss = v->ss > 0 ? v->ss : 1.0f;
+        s_mkPub.ab = s_abFrame; s_abFrame = 0;
         s_mkHave = 1;
     }
 

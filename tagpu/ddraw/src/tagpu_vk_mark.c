@@ -557,6 +557,7 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     }
 
     if (!tagpu_mark_handover(&s_h, d->frame)) return 0;
+    s_abFrame = s_h.ab;
     if (s_h.ndraw <= 0 || s_h.nvert <= 0 || !s_h.verts || !s_h.draws) return 0;
     if (s_h.ndraw > TAGPU_MK_MAXDRAW) return 0;
 

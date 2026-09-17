@@ -138,6 +138,10 @@ typedef struct TAGPU_MKHAND {
     float gw, gh, zoom, zoomCx, zoomCy;
     float fogOrgX, fogOrgY, fogCols, fogRows;
     float ss;                   /* the line width a one-screen-pixel line takes */
+    /* 1 = `tagpu_mark.ab` claimed this frame AND the GL half reached the disk.
+       The Vulkan half is claimed only on that, which is tagpu_abshot.h's rule:
+       a pair where one side never wrote is worse than no pair. */
+    int   ab;
 } TAGPU_MKHAND;
 
 /* Exactly once per frame, and only for the frame it was published for -- `now`
