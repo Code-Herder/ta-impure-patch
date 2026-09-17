@@ -579,6 +579,135 @@ static void fb_flush(const TAGPU_VKPASS* d)
     s_nfb = 0;
 }
 
+/* THE CONV VARIANT, PICKED BY (NK, kmax). `spirv-gen.py` emits the cross
+   product `NK in {1,2,4,8}` x `kmax in {56, 148}` -- eight modules -- because
+   `#if NK > 1` declares a different number of `out` locations and SPIR-V
+   interface variables are static, and because WMAX = NK x kmax is the declared
+   length of `WBlock`. THE LANE IS THEREFORE PINNED TO THE TWO SHIPPED MODELS,
+   which is recorded in the plan as the owner's to widen: a third model needs
+   its four variants generated and committed, and until then this refuses it by
+   name rather than restoring with the wrong block length. */
+static const uint32_t* conv_spv(int nk, int kmax, size_t* words)
+{
+#define PICK(NKV, KV, SYM) \
+    if (nk == (NKV) && kmax == (KV)) { \
+        *words = sizeof tagpu_spv_tagpu_restore_glsl_##SYM / 4; \
+        return tagpu_spv_tagpu_restore_glsl_##SYM; }
+    PICK(1, 56,  CONV_FS_NK1_K56)   PICK(1, 148, CONV_FS_NK1_K148)
+    PICK(2, 56,  CONV_FS_NK2_K56)   PICK(2, 148, CONV_FS_NK2_K148)
+    PICK(4, 56,  CONV_FS_NK4_K56)   PICK(4, 148, CONV_FS_NK4_K148)
+    PICK(8, 56,  CONV_FS_NK8_K56)   PICK(8, 148, CONV_FS_NK8_K148)
+#undef PICK
+    *words = 0;
+    return NULL;
+}
+
+static VkShaderModule mk_mod(const TAGPU_VKPASS* d, const uint32_t* w, size_t words)
+{
+    VkShaderModuleCreateInfo smi = { VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
+    VkShaderModule m = VK_NULL_HANDLE;
+    smi.codeSize = words * 4;
+    smi.pCode = w;
+    if (vkCreateShaderModule(d->dev, &smi, NULL, &m) != VK_SUCCESS) return VK_NULL_HANDLE;
+    return m;
+}
+
+/* one graphics pipeline. No depth state at all, because none of this pass's
+   render passes has a depth attachment -- tagpu_vk_pass.h's rule that every
+   pipeline must declare one applies to pipelines built against the SEAM's
+   render pass, which has one. `nColour` is the subpass's colour count, which
+   the blend state must match exactly. */
+static VkPipeline mk_pipe(const TAGPU_VKPASS* d, VkShaderModule vs, VkShaderModule fs,
+                          VkRenderPass rp, int nColour, VkPipelineLayout plo,
+                          const VkPipelineVertexInputStateCreateInfo* vi)
+{
+    VkPipelineShaderStageCreateInfo st[2];
+    VkPipelineVertexInputStateCreateInfo viNone = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+    VkPipelineInputAssemblyStateCreateInfo ia = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
+    VkPipelineViewportStateCreateInfo vp = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
+    VkPipelineRasterizationStateCreateInfo rs = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+    VkPipelineMultisampleStateCreateInfo ms = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
+    VkPipelineColorBlendAttachmentState cba[RP_MAX];
+    VkPipelineColorBlendStateCreateInfo cb = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
+    VkPipelineDynamicStateCreateInfo dy = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
+    VkDynamicState dsv[2] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkGraphicsPipelineCreateInfo gp = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+    VkPipeline out = VK_NULL_HANDLE;
+    int i;
+
+    memset(st, 0, sizeof st); memset(cba, 0, sizeof cba);
+    st[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    st[0].stage = VK_SHADER_STAGE_VERTEX_BIT;   st[0].module = vs; st[0].pName = "main";
+    st[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; st[1].module = fs; st[1].pName = "main";
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    vp.viewportCount = 1; vp.scissorCount = 1;
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode = VK_CULL_MODE_NONE;
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    for (i = 0; i < nColour && i < RP_MAX; i++) {
+        cba[i].blendEnable = VK_FALSE;
+        cba[i].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    }
+    cb.attachmentCount = (uint32_t)nColour;
+    cb.pAttachments = cba;
+    dy.dynamicStateCount = 2; dy.pDynamicStates = dsv;
+    gp.stageCount = 2; gp.pStages = st;
+    gp.pVertexInputState = vi ? vi : &viNone;
+    gp.pInputAssemblyState = &ia;
+    gp.pViewportState = &vp;
+    gp.pRasterizationState = &rs;
+    gp.pMultisampleState = &ms;
+    gp.pColorBlendState = &cb;
+    gp.pDynamicState = &dy;
+    gp.layout = plo;
+    gp.renderPass = rp;                 /* OURS, never the seam's */
+    gp.subpass = 0;
+    if (vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &out) != VK_SUCCESS)
+        return VK_NULL_HANDLE;
+    return out;
+}
+
+/* THE THREE LAYOUTS ARE THREE, not one, because the SAMPLER INDICES DIFFER
+   BETWEEN THE PROGRAMS. spirv-gen.py allocates bindings by STAGE in
+   declaration order, so FILL has uAtlas at 40 while OUT has uAct at 40 and
+   uAtlas at 41. One shared layout would bind the atlas where OUT expects the
+   activations. [Read out of inc/spirv/tagpu_restore_glsl.spv.h, whose per-
+   shader interface comment is the contract -- and which only began reporting
+   the named WBlock block when this port needed it.] */
+static VkDescriptorSetLayout mk_dsl(const TAGPU_VKPASS* d, const int* bind,
+                                    const VkDescriptorType* type,
+                                    const VkShaderStageFlags* stage, int n)
+{
+    VkDescriptorSetLayoutBinding b[8];
+    VkDescriptorSetLayoutCreateInfo ci = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+    VkDescriptorSetLayout out = VK_NULL_HANDLE;
+    int i;
+    memset(b, 0, sizeof b);
+    for (i = 0; i < n && i < 8; i++) {
+        b[i].binding = (uint32_t)bind[i];
+        b[i].descriptorType = type[i];
+        b[i].descriptorCount = 1;
+        b[i].stageFlags = stage[i];
+    }
+    ci.bindingCount = (uint32_t)n;
+    ci.pBindings = b;
+    if (vkCreateDescriptorSetLayout(d->dev, &ci, NULL, &out) != VK_SUCCESS) return VK_NULL_HANDLE;
+    return out;
+}
+
+static VkPipelineLayout mk_plo(const TAGPU_VKPASS* d, VkDescriptorSetLayout dsl)
+{
+    VkPipelineLayoutCreateInfo ci = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+    VkPipelineLayout out = VK_NULL_HANDLE;
+    ci.setLayoutCount = 1; ci.pSetLayouts = &dsl;
+    if (vkCreatePipelineLayout(d->dev, &ci, NULL, &out) != VK_SUCCESS) return VK_NULL_HANDLE;
+    return out;
+}
+
 int tagpu_vk_restore_nk(void) { return s_sched.nk; }
 
 void tagpu_vk_restore_lost(void)
