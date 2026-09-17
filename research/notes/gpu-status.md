@@ -7437,8 +7437,16 @@ depends on which way up the viewport is. **The screen is the oracle for those, n
   clear, `write_ppm` emits rows `h−1 … 0` — byte-identical to the loop it replaced, so the change
   is a provable no-op for those three.
 * **Four `flipok` refusals deleted.** `VK_KHR_maintenance1` was needed *only* for the negative
-  height, so `terr`, `feat`, `fx` and `unit` no longer stand down without it. `gui`, `fps` and
-  `scaffold` still require it and still ask.
+  height — `tagpu_vk.c` says so itself ("*it buys exactly one thing*"), and nothing in the lane uses
+  `vkTrimCommandPool`, a 2D-array view of a 3D image, or `VK_ERROR_OUT_OF_POOL_MEMORY`. So `terr`,
+  `feat`, `fx` and `unit` no longer stand down without it; `gui`, `fps` and `scaffold` still require
+  it and still ask.
+  **AND THAT CHANGES WHAT A DEVICE WITHOUT IT SEES.** Before, no ported pass could flip and none
+  drew, so Route D presented the clear colour. Now the five world passes draw and the three overlay
+  passes stand down — **a world with no UI over it**. That is not a regression by this project's
+  rule (each pass still reproduces its own part or refuses), and it is the same shape as the
+  shipped configuration in §2.35, where the lane draws the UI and nothing else. It is written down
+  here and in the seam's own log line because it is a behaviour nobody chose deliberately.
 * The prose that argued for the flip, in five pass headers, in `tagpu_vk_pass.h`'s `flipok`
   contract, and in four places in this file — including three `NO CULLING` comments whose stated
   reason was the winding the flip reversed. Nothing culls and nothing should; only the
@@ -7462,6 +7470,19 @@ Two traps, each of which cost a run:
   which read as a 534 730-px difference that was really two different moments. Capture the game
   **before** the lane is armed, on a static fixture.
 
+**Each of the three that KEEP the flip was established on the screen separately**, because "its
+shader says so" is the inference this landing exists to distrust:
+
+* **`gui`** — with every pass armed, the difference between the two windows was *exactly* the world
+  viewport, `(128,32)–(1024,736)`. The side panel, the top bar and the bottom bar were identical
+  pixel for pixel, which is the composite reproducing them upright while the world was mirrored.
+* **`fps`** — the readout renders `FPS451` in Route D's top-left, upright and legible, at the
+  corner the GL window puts it in. A mirrored readout is unmistakable and this is not one.
+* **`scaffold`** — the overlay tints its silhouettes by row, blue at the top to red at the bottom.
+  Fitting `d(R−B)/dy` over the tinted pixels gives **+0.0166** in the GL window and **+0.2088** in
+  Route D's: the same sign, so the same way up. (The GL slope is shallower because the tint is
+  composited over terrain there; only the sign is the evidence.)
+
 | measurement | result |
 |---|---|
 | game window vs Route D, every pass armed | **1 394 px of 786 432** |
@@ -7474,6 +7495,15 @@ Two traps, each of which cost a run:
 | `mark` A/B, six draw kinds | **0 px** (10 305 a side) — **was 32 px**, and those 32 were this |
 | `mark` A/B, the band box | **0 px** (2 456 a side) |
 | `mark` A/B, the post-fog layer | **0 px** (2 456 a side) |
+
+**The 1 394 px are attributed, and they are not a lane difference.** All of them lie inside the
+world viewport, in one band — x 295..732, y 348..398 — which is where the fixture's three ARMSTUMPs
+stand; **not one is in the panel or the bars**. 1 201 of them are non-terrain in *both* captures,
+i.e. the unit is present in each and shaded differently, which is a **pose that moved between two
+moments** rather than a lane drawing something else. The method cannot avoid that: Route D covers
+the game window completely, so the game has to be captured *before* the lane is armed, and the two
+frames are seconds apart. The same-frame check on the same fixture is the unit pass's own A/B, and
+it reads **0 px**.
 
 #### What it closed
 
@@ -7497,6 +7527,22 @@ sample points on the half-integer grid, and mirroring cannot move one of those.
   the GL half never reached the disk and the A/B produced nothing. `fx-rockets` holds model
   projectiles in flight for minutes and is the fixture to use. This is the "a 0 px from a fixture
   that never took the branch" trap in its better form: no result rather than a false pass.
+
+#### And one premise it turned over on the way
+
+`tagpu_vk_unit.c` stood the unit pass down on any frame whose twin had the scaffold overlay armed,
+because `TAGPU_GLSL_SCAF_TEST` reads `gl_FragCoord` and *"this pass's flipped viewport makes the two
+exact mirrors"*. **That reason is now inverted**: `tagpu_glsl.h` states that the GL VS maps game row
+0 to FBO window y 0, so GL reads `g + 0.5` for game row g, and with a positive height this lane
+stores game row g at image row g and reads `g + 0.5` too. The two agree. The paragraph ended *"any
+later pass whose fragment shader reads `gl_FragCoord` inherits this"*, so it is corrected in place
+rather than deleted. [Found by the landing's review.]
+
+**The refusal itself stays, on the half that is still true**: `tagpu_vk_scaffold_view` returns
+VK_NULL_HANDLE for a frame or slot that is not its own and `bind_main` then binds a 1×1 stand-in,
+which against a twin sampling a real overlay is a different picture. Gating the refusal on the view
+rather than on `scafOn` is now a small bounded change — but it enables a path this lane has never
+measured, and it is left for the landing that measures it.
 
 #### Not covered
 

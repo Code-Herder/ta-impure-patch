@@ -954,9 +954,9 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     return 1;
 }
 
-/* the scissor in the target's pixels, mirrored top-to-bottom. This is
-   `tagpu_vk_fx.c`'s `fx_scissor` line for line: the two passes clip to the same
-   rect and deriving it twice differently is how they would drift. */
+/* the scissor in the target's pixels, and NOT mirrored since landing 5b. This
+   is `tagpu_vk_fx.c`'s `fx_scissor` line for line: the two passes clip to the
+   same rect and deriving it twice differently is how they would drift. */
 static void mk_scissor(const TAGPU_MKHAND* h, uint32_t w, uint32_t hh,
                        VkRect2D* out)
 {

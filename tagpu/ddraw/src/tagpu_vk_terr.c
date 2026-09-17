@@ -86,12 +86,12 @@
       colour blend attachment has blending OFF. The feature pass's premultiplied
       pair is its own and does not belong here.
 
-   6. THE SCISSOR is §2.29's, unchanged and for the same reason: a scissor is
-      expressed in FRAMEBUFFER coordinates, GL's world-FBO row 0 is clip-space
-      y = -1 and this lane's row 0 is y = +1, so the rect is mirrored --
-      `offset.y = H - (vpT + vh)` -- and its ENABLE travels with it. It matters
-      more here than it did there: terrain covers the whole gather rect, which
-      at zoom < 1 reaches well past the viewport and over the side panel.
+   6. THE SCISSOR is §2.29's, and since landing 5b it is the SAME rectangle on
+      both sides: `offset.y = vpT`. It was mirrored -- `H - (vpT + vh)` -- for
+      as long as this lane's row 0 was clip-space y = +1, and item 7 is why it
+      no longer is. Its ENABLE still travels with it. It matters more here than
+      it did there: terrain covers the whole gather rect, which at zoom < 1
+      reaches well past the viewport and over the side panel.
 
    7. NO Y FLIP, AND THAT IS LANDING 5b's CORRECTION. This pass writes
       `gl_Position.y = p.y/uGame.y*2 - 1` on the engine's screen-space y, which

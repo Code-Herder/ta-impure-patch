@@ -1744,45 +1744,43 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        settled on, which `bind_main` points binding 44 at. That is the part
        the effects and hi-res passes will reuse.
 
-       THE OTHER HALF IS `gl_FragCoord`, AND IT CANNOT BE RECONCILED HERE.
+       THE `gl_FragCoord` HALF IS CLOSED BY LANDING 5b, and this paragraph used
+       to say the opposite -- it is corrected here rather than deleted, because
+       it ended by telling every later pass to inherit it.
+       [FOUND BY THE 5b REVIEW, 2026-09-17.]
+
        TAGPU_GLSL_SCAF_TEST (tagpu_glsl.h) locates the fragment in the game
-       frame with `gl_FragCoord.xy / uSS` -- and the two APIs disagree about
-       where that coordinate is measured from. GL's origin is the LOWER left;
-       Vulkan's is the UPPER left and `OriginUpperLeft` is the only execution
-       mode Vulkan permits, so a fragment this lane draws at stored row r reads
-       `r + 0.5` where the GL twin reads `H - (r + 0.5)`. With the negative
-       viewport height this pass takes for its geometry, the two are exact
-       mirrors -- so the scaffold lookup would land on the wrong end of the
-       overlay, and the `discard` it drives would cut the wrong fragments.
+       frame with `gl_FragCoord.xy / uSS`, and the two APIs measure that from
+       opposite edges: GL's origin is the LOWER left, Vulkan's is the UPPER left
+       and `OriginUpperLeft` is the only execution mode Vulkan permits. That
+       used to make them exact mirrors -- but only because this pass took a
+       NEGATIVE viewport height. It no longer does (item 4). The GL twin's VS
+       maps game row 0 to FBO window y 0, which tagpu_glsl.h states outright, so
+       GL reads `g + 0.5` for game row g; with a positive height this lane
+       stores game row g at image row g and reads `g + 0.5` as well. THE TWO
+       AGREE, and the same is true of any later pass that reads `gl_FragCoord`.
 
-       THREE WAYS OUT WERE CONSIDERED AND ALL THREE ARE WORSE THAN STANDING
-       DOWN:
-         * Editing the macro to take the origin as a uniform changes the GL
-           twin, which is both the oracle and the shipped renderer.
-         * Re-deriving `uScafP` so the mirrored `gl_FragCoord` comes out at
-           GL's value is possible on paper -- w = -vh, y = C - vpT with C
-           folding the zoom un-transform -- but it is the port re-deriving the
-           pass's inputs, which is the one thing this lane does not do, and it
-           silently breaks the day the macro changes.
-         * Mirroring the uploaded overlay does NOT cancel: it would need the
-           viewport's top and bottom margins to be equal, and they are 32 and
-           33.
-       So a frame whose twin has the overlay armed is refused, exactly as the
-       effects pass refuses one (gpu-status §2.31), and the reason is written
-       down rather than worked around. It costs nothing in play: `scaffold.on`
-       is not in the default arm set and its own note says to leave it
-       disarmed.
+       WHAT STILL STANDS THE PASS DOWN IS THE OTHER HALF, and it is a real
+       bound rather than a restatement. `tagpu_vk_scaffold_view` hands back
+       VK_NULL_HANDLE for a frame or slot that is not its own, and `bind_main`
+       then points binding 44 at the 1x1 stand-in. A frame whose twin sampled a
+       real overlay while this lane sampled one texel is a DIFFERENT PICTURE,
+       so it is refused. Turning the refusal into `scafOn && !scaffold_view(...)`
+       is now a small, bounded change -- but it enables a drawing path this lane
+       has never measured, and it needs its own A/B, which is awkward because
+       the overlay's own Vulkan pass draws in the same frame. Left for the
+       landing that measures it.
 
-       ANY LATER PASS WHOSE FRAGMENT SHADER READS `gl_FragCoord` INHERITS
-       THIS. The hi-res path and the effects pass both carry the same macro. */
+       It costs nothing in play either way: `scaffold.on` is not in the default
+       arm set and its own note says to leave it disarmed. */
     if (h.scafOn) {
         if (!s_saidScaf) {
             s_saidScaf = 1;
-            plog(d, "unit: the GL twin is sampling the scaffold overlay through "
-                    "gl_FragCoord, whose origin is the lower left in GL and the "
-                    "upper left in Vulkan - this pass's flipped viewport makes "
-                    "the two exact mirrors, so nothing is drawn while the "
-                    "overlay is armed rather than cut the wrong fragments");
+            plog(d, "unit: the GL twin is sampling the scaffold overlay, and "
+                    "this lane has never measured that path - binding 44 falls "
+                    "back to a 1x1 stand-in on any frame the overlay's own pass "
+                    "did not hand over, which would be a different picture, so "
+                    "nothing is drawn while the overlay is armed");
         }
         goto standdown;
     }
@@ -2293,11 +2291,11 @@ int tagpu_vk_unit_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     return 1;
 }
 
-/* the world scissor, flipped onto Vulkan's framebuffer coordinates. The two
-   APIs disagree about which row of the target is row 0, and with the negative
-   viewport height this pass uses, a RECTANGLE in one is the vertical mirror of
-   the same rectangle in the other -- tagpu_vk_feat.c is where this is argued at
-   length. Getting it wrong shows up as the world clipped against the wrong
+/* the world scissor, and since landing 5b it is the SAME rectangle the GL twin
+   clips to rather than its vertical mirror: this pass's framebuffer row 0 is
+   the game frame's top row under both APIs now. It was mirrored for as long as
+   the viewport height was negative -- tagpu_vk_feat.c is where that is argued
+   at length. Getting it wrong shows up as the world clipped against the wrong
    edge rather than as anything subtle. */
 static void unit_scissor(uint32_t w, uint32_t h, VkRect2D* sc)
 {

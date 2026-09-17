@@ -1006,8 +1006,9 @@ rgb_only:
     return 1;
 }
 
-/* The world viewport, in Vulkan framebuffer pixels. tagpu_vk_feat.c item 3 is
-   the argument for the mirror; this is the same arithmetic. */
+/* The world viewport, in Vulkan framebuffer pixels, and NOT mirrored since
+   landing 5b. tagpu_vk_feat.c item 3 is the argument; this is the same
+   arithmetic. */
 static void fx_scissor(uint32_t w, uint32_t h)
 {
     float sx = s_hGw > 0.0f ? (float)w / s_hGw : 1.0f;

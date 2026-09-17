@@ -78,9 +78,12 @@ typedef struct {
    `glReadPixels` hands back the bottom row of the READ framebuffer first, and a
    PPM's first row is the top one, so the default here is to reverse them. That
    is right for a pass drawn into the DEFAULT framebuffer with GL's own
-   convention -- tagpu_gui_surf.c, tagpu_fps.c and tagpu_scaffold.c all write
-   `1 - y*2` or build their NDC rect y-up, so their content sits in the frame
-   the way GL expects.
+   convention -- tagpu_gui_surf.c's LAY_VS (`1 - a.y*2`, which is what the GUI
+   capture wraps), tagpu_fps.c (`1 - aPos.y/uFrame.y*2`) and tagpu_scaffold.c
+   (an NDC rect built y-up), so their content sits in the frame the way GL
+   expects. Note that gui_surf.c ALSO carries QVS, which is y-DOWN -- it draws
+   the offscreen 1x mirror, not the composite, and is not what is captured
+   here.
 
    It is wrong for the WORLD passes. They write `gl_Position.y = p.y/uGame.y*2 -
    1` on the engine's screen-space y, which grows DOWNWARD, so clip +1 is the

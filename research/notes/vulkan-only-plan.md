@@ -419,7 +419,10 @@ plan is re-run and agrees with the figure already published.
 
 **DONE 2026-09-17** ([gpu-status](gpu-status.html) §2.40). The fix set turned out to be five passes
 and not eight: the tree has TWO y conventions and `gui`, `fps` and `scaffold` were already right —
-established on the screen, one pass at a time, not inferred from their shaders. Game window vs
+each of those three established on the screen in its own right — the GUI by the two windows
+differing on exactly the world viewport and nowhere else, the FPS readout by reading upright in
+Route D's own corner, the scaffold by its row tint sloping the same way in both — rather than
+inferred from their shaders, which is the inference this landing exists to distrust. Game window vs
 Route D: **1 394 px of 786 432**, against 624 824 mirrored. Every A/B re-taken and at parity —
 terrain, features, units, effects and the untouched GUI control all **0 px**. Landing 5's 32 px
 were this flip and are gone.

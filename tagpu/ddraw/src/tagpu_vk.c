@@ -1885,11 +1885,18 @@ static DWORD WINAPI up_worker(LPVOID arg)
 
         /* VK_KHR_maintenance1 IS ASKED FOR AND NOT ASSUMED, AND IT BUYS EXACTLY
            ONE THING: a NEGATIVE VIEWPORT HEIGHT. GL's clip space has +Y up and
-           Vulkan's has +Y down, so every shader the fork ports would draw its
-           frame upside down -- and the shaders are ported UNCHANGED on purpose,
-           because a source edit would make each one disagree with the GL twin
-           that is its oracle (tools/spirv-gen.py's header). So the flip is
-           pipeline state, and this is the state.
+           Vulkan's has +Y down, so a shader written in GL's WINDOW convention
+           would draw its frame upside down -- and the shaders are ported
+           UNCHANGED on purpose, because a source edit would make each one
+           disagree with the GL twin that is its oracle (tools/spirv-gen.py's
+           header). So the flip is pipeline state, and this is the state.
+
+           NOT EVERY PORTED SHADER, which is what this said until landing 5b.
+           Only `gui`'s composite, `fps` and `scaffold` write that convention.
+           The world passes write the engine's screen-space y, which grows
+           DOWNWARD, so clip -1 is already the game frame's top row and a flip
+           would turn them over twice -- which is exactly what it did, for eight
+           landings. tagpu_vk_pass.h's `flipok` carries the table.
 
            The instance asks for Vulkan 1.0, where this is an extension rather
            than core; a 1.1+ driver still advertises it to a 1.0 application,
@@ -2038,8 +2045,10 @@ static DWORD WINAPI up_worker(LPVOID arg)
             }
         }
         if (!s_vk.flipok)
-            vklog("VK_KHR_maintenance1 is not offered - the lane will present but "
-                  "no ported pass can flip clip space, so none will draw");
+            vklog("VK_KHR_maintenance1 is not offered - the lane will present, and "
+                  "the WORLD passes will draw (since landing 5b they need no flip), "
+                  "but the GUI layer, the FPS readout and the scaffold overlay stay "
+                  "down, so route D shows a world with no UI over it");
         if (!s_vk.lineok)
             vklog("VK_EXT_line_rasterization is not offered - a ported pass that "
                   "draws LINES will stand down (its twin's rule is the diamond-exit "

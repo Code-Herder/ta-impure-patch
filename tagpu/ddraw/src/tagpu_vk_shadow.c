@@ -33,9 +33,16 @@
       the GL map is GL_DEPTH_COMPONENT24).
 
    3. THERE IS NO Y FLIP HERE, AND THAT IS NOT AN OMISSION.
-      Every other ported pass flips (a negative viewport height,
-      VK_KHR_maintenance1) because its target is PRESENTED, and the two APIs
-      disagree about which row of a window is the top. This target is SAMPLED.
+      This target is SAMPLED, not presented, and that alone settles it.
+      [THE RULE THIS ITEM USED TO STATE -- "every other ported pass flips
+      because its target is PRESENTED" -- WAS WRONG, and landing 5b is what
+      found it. Being presented is not the question; the SHADER's y convention
+      is. A pass whose shader writes GL's window convention (`1 - y*2`) flips;
+      one that writes the engine's screen-space y, which grows downward, does
+      not, because clip -1 is already the game frame's top row. Since 5b that
+      second group -- terrain, features, effects, units, markers -- takes a
+      POSITIVE height too, for a different reason than this pass does.
+      tagpu_vk_pass.h's `flipok` carries the whole table.]
       In GL, clip y = -1 is window row 0, which is texel row 0, which is v = 0.
       In Vulkan with a positive viewport height, clip y = -1 is framebuffer row
       0, which is texel row 0, which is v = 0. The two agree already, and

@@ -2776,10 +2776,16 @@ void tagpu_vk_gui_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         s_layRp = d->rp;
     }
 
-    /* THE GL LANE'S OWN VIEWPORT, turned over. GL's y counts from the BOTTOM of
-       the window and Vulkan's from the top, and this pass is PRESENTED -- so it
-       takes the negative height every presented pass on this lane takes, which
-       puts LAY_VS's `1 - a.y*2` back at attachment row 0 (the file header). */
+    /* THE GL LANE'S OWN VIEWPORT, turned over -- and this pass is one of the
+       THREE that still does. GL's y counts from the BOTTOM of the window and
+       Vulkan's from the top, and LAY_VS writes `1 - a.y*2`, which is GL's
+       window convention: so the negative height is what puts its row 0 back at
+       attachment row 0 (the file header). It is NOT "the negative height every
+       presented pass on this lane takes" -- landing 5b found that rule false.
+       The world passes are presented too and write the engine's screen-space y,
+       which grows downward, so they take a positive height. `gui`, `fps` and
+       `scaffold` are the ones whose shaders need the flip; tagpu_vk_pass.h's
+       `flipok` has the table. */
     x = s_layVp[0]; vw = s_layVp[2]; vh = s_layVp[3];
     if (vw <= 0 || vh <= 0) { x = 0; vw = (int)w; vh = (int)h; ytop = 0; }
     else ytop = (int)h - s_layVp[1] - vh;

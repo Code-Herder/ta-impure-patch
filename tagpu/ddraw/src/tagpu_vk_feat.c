@@ -1011,9 +1011,10 @@ rgb_only:
 
 /* THE SCISSOR, in Vulkan framebuffer pixels. Item 3 of the file header: the
    rect arrives in GAME-FRAME pixels measured from the TOP of the frame (the
-   engine's own viewport rect, what the native pass hands glScissor), and a
-   Vulkan framebuffer row 0 is clip-space y = +1, which for this pass is the
-   BOTTOM of the world. So the rect is mirrored vertically on the way in.
+   engine's own viewport rect, what the native pass hands glScissor), and since
+   landing 5b this pass's framebuffer row 0 IS that top row -- so the rect goes
+   in unchanged. It was mirrored on the way in until 2026-09-17, which was right
+   for as long as the viewport height was negative.
 
    It is also SCALED, by the attachment's extent over the game frame's. At the
    sizes an A/B is run at those are the same number, but the Vulkan window
