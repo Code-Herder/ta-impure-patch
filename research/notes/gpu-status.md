@@ -6643,7 +6643,7 @@ The unit pass is not here; see *Not covered*.
 
 **A Vulkan pass cannot read a GL texture**, which is why the refusals existed at all. The fix is
 the mechanism `tagpu_gaf.c` already had for the UI atlas — `tagpu_gaf_atlas_mirror_rgb` and
-`_rgb_step`, whose only caller was `tagpu_gui_surf.c:2475` — extended to the world atlases.
+`_rgb_step`, whose only caller was `tagpu_gui_surf.c:2476` — extended to the world atlases.
 
 #### What each pass needed
 
@@ -6709,10 +6709,16 @@ reference setup's 4070:
 
 | pass | fixture | result |
 |---|---|---|
-| features | one-unit | **0 px of 786 432**, 243 695 non-black a side |
-| effects | fx-lasers | **0 px of 786 432**, 3 452 non-black a side |
+| features | feat-forest | **0 px of 786 432**, 243 695 non-black a side |
+| effects | fx-lasers | **0 px of 786 432**, 2 557 non-black a side (3 452 on the first run: the duel's ink moves with what is in flight) |
 | terrain, Classic++ **off** | one-unit | **0 px of 786 432**, 630 606 non-black a side |
-| terrain, Classic++ **on** | one-unit | **5 px of 786 432**, worst channel 1 |
+| terrain, Classic++ **on** | one-unit | **5 px of 786 432**, worst channel 1, 630 774 non-black a side |
+
+**Every row above was taken twice: once before the landing review and once after its fixes**, and
+the two agree — the same counts, and the terrain 5 at the same pixel with the same two values. The
+figures quoted are the post-fix ones. That is the point of re-measuring rather than carrying the
+first numbers forward: three of the five findings changed code on the path these captures go
+through.
 
 **The terrain 5 px are not a regression, and the previous-build A/B is what established that.**
 On `bfbe8b6`'s DLL the same fixture gives **0 px with Classic++ off** and **no picture at all**
@@ -6731,6 +6737,67 @@ alpha 0 throughout and both lanes fell back to the palette per texel. It proves 
 corrupts nothing, that the `uRestored == 1` branch is reachable on both sides, and that the
 fallback through it is identical. It does not prove restored feature colours match.
 
+#### The landing review, and the two faults no picture would have shown
+
+Five findings at `medium` on the accumulated diff, all five verified against the code and acted
+on. **Two of them were invisible to every measurement above** — the pixels were already 0 px and
+the build was already clean — which is the case this gate is worth writing down:
+
+1. **A heap overflow in the terrain mirror's allocation, CONFIRMED.** The growth test read
+   `s_rgbMirrorRows > s_atlasH` — the rows last *read* against the atlas's height — so it fired
+   only when the atlas SHRANK, and the zero path sets those rows to 0 on the very map change that
+   precedes a growth, so it could never fire at all. The buffer then stayed at the first map's
+   size while `rows = s_atlasH` grew with the second and `glReadPixels` wrote past the end: a
+   1000-tile map followed by Two Continents is **4.7 MB allocated and 23.7 MB written**. The test
+   is now the ALLOCATED height (`s_rgbMirrorCap`), and the new buffer is allocated before the old
+   one is freed so a refused `calloc` leaves a working mirror rather than none.
+2. **A 16 MB-per-frame re-upload, for ever, CONFIRMED.** `doRgb` compared a stored row count
+   against the hand-over's, but what was stored was the rows *sent* — forced up to `atlasDim` —
+   which can never equal the shelf-bounded rows the producer publishes. So the comparison was
+   always unequal, the upload ran every frame on both the feature and the effects pass (**~32 MB
+   a frame between them**), the staging buffer was never given back, and a `mk_buffer` failure
+   would eventually take the pass down for the session. The serial alone decides now; the field
+   was renamed (`s_arReq`) because a name that says "rows" while holding "rows I asked for" is
+   how this happened.
+3. **An image lost with its memory still bound, CONFIRMED.** A partial `mk_image` failure nulled
+   the image and view but left the allocation, so the next `kill_image` would `vkFreeMemory`
+   memory with a live image bound to it. `kill_image` on that path, which is what
+   `tagpu_vk_terr.c`'s `shared_resize` already did for the identical case.
+4. **The restored resize ignored its return value, and ran before the bounds.** `shared_resize`
+   returns 0 when a retire is still outstanding — one at a time, by design — and the call site
+   dropped that, leaving the PREVIOUS image standing with `view && have` set. The refusal then
+   passed and the upload memcpy'd `s_rgbAtlas.w * s_rgbAtlas.h * 4` bytes out of a mirror holding
+   `atlasRgbRows`: a read past the mirror when the deferred size was the larger, the wrong rows
+   sampled when it was not. Two map changes inside one turn of the slots is what it takes. It now
+   sits with the other two shared images, after the bounds block, with its return read the same
+   way; `t.atlasRgbRows` is bounded against `t.atlasH` in that block (the producer's bound is a
+   bound only while both files are read together); and `doRgb` additionally requires the image's
+   own `w`/`h` to match, because *"I asked for this size"* is not *"the image is this size"*.
+5. **The helper duplicated the step it was extracted from.** `tagpu_gl_rgba_readback` re-stated
+   `tagpu_gaf_atlas_mirror_rgb_step`'s body line for line — ~35 lines, a second place for the
+   pack alignment, the saved binding and the dropped attachment to be got wrong. The step now
+   CALLS it. That needed one addition to the helper: an optional `status` out-parameter carrying
+   the `glCheckFramebufferStatus` value, because an **incomplete** framebuffer is a permanent
+   property of the texture and both callers latch on it, which a 0/1 return cannot tell them.
+   Terrain latches on it too now, and drops the mirror and its rows when it does — a mirror
+   nothing will read again is up to 23 MB held, and leaving the ROWS standing would be worse than
+   the memory, because the hand-over publishes on `rows > 0` and the consumer would go on drawing
+   the last read-back while the restorer painted past it.
+
+**And the prose was a finding of its own.** Each pass's *"WHAT IT DOES NOT DO"* header still
+opened *"CLASSIC++'s RESTORED ATLAS IS NOT MIRRORED"* with the new paragraph stacked underneath
+it, so a reader who stopped at the first sentence got the opposite of what the code does. The
+leading claim is rewritten in each of the three files rather than contradicted, on the rule this
+fork already applies to its counters (`gafstale` → `gafnoplane`): **the statement changes with the
+meaning.** `tagpu_vk_unit.c`'s copy is left alone and is still true.
+
+One statement in the code was wrong in the other direction and is also corrected: the terrain
+refusal's comment claimed the frame that uploads is lost and the next one draws. It is not —
+`shared_upload` sets `have` as it RECORDS the copy, into this frame's own command buffer ahead of
+this frame's draw with a barrier between them, so the upload and the draw are the same frame. The
+log bears it out: **zero refusal lines** in the post-fix runs, on a fixture whose twin restores to
+completion.
+
 #### Not covered
 
 * **The unit pass.** Its mirror is not in this landing: it cannot be verified until the caster
@@ -6743,6 +6810,11 @@ fallback through it is identical. It does not prove restored feature colours mat
   does not ship.
 * **The 5 px are attributed, not traced.** The argument is from magnitude and from which uniforms
   turn on together, not from a line of shader arithmetic.
+* **Findings 1, 2 and 4 are fixed but not reproduced.** Each needs a map change (two of them in
+  quick succession, for 4), and the A/B fixtures are single-map by construction; the arguments are
+  from reading the code against the allocation and the serial. An in-process map change brings the
+  whole Vulkan lane down and back up, so the two-map test is a fresh lane rather than a resized
+  one and does not exercise the retire path the fourth finding is about.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 

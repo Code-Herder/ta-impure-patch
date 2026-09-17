@@ -185,6 +185,14 @@ of everything else. The order below is the corrected one.
    thing the refusal was meant to wait for. And the refusal must test **the view the descriptor
    names**, not the hand-over that says a mirror exists somewhere, or a failed resize draws R8
    through an RGBA sampler instead of standing down.
+
+   **And the second lesson, from the review: 0 px is not a clean bill of health.** Five findings,
+   all five real. Two of them — a heap overflow in the mirror's growth test and a 32 MB-a-frame
+   re-upload that never stopped — were invisible to every capture above, because both need a map
+   change and the A/B fixtures are single-map by construction. One is about a *serial*: what was
+   stored was the rows we SENT while what was compared was the rows PUBLISHED, so the two could
+   never be equal and the upload ran every frame. Every remaining landing in this plan hands
+   bytes across the seam with a serial; that is the class to read for each time.
 3. **The caster stream** — the native 3DO stream and the replacement meshes, so the cast-shadow
    map can be drawn on this side of the seam and the passes that sample it stop standing down.
 4. **`render_vk.c`** — the fourth backend, `renderer=vulkan`, present into `g_ddraw.hwnd`, the

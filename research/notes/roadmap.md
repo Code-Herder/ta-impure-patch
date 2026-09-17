@@ -2595,6 +2595,14 @@ regression against `bfbe8b6`'s own DLL, where the same fixture draws nothing at 
 Classic++ on. The unit pass is held for landing 3, since it stands down on the caster stream
 before it reaches its atlas.
 
+Its review returned **five findings, all five real and all five acted on**, and two of them were
+the kind no capture reaches: a heap overflow in the terrain mirror's growth test (4.7 MB allocated
+against 23.7 MB written, on the second of two maps) and a 32 MB-a-frame re-upload across the
+feature and effects passes that could never stop, because the row count compared was the rows
+*sent* and not the rows *published*. Both need a map change; the A/B fixtures are single-map by
+construction. **Every figure above was then re-taken on the fixed binary and agrees with the
+first run**, the terrain 5 px at the same pixel with the same two values.
+
 **Its landing 1 ran the same day and is the reason the rest is ordered as it is**
 ([gpu-status](gpu-status.html) §2.35): started in the configuration the patch actually ships in
 — `--defaults`, `ss=2`, Classic++ on — the Vulkan lane draws **the UI and nothing else**, 630 589
