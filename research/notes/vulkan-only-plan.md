@@ -293,6 +293,26 @@ of everything else. The order below is the corrected one.
    quoting a restored-art figure, check the twin actually painted: `tagpu_restoredump.on`, or
    `cmp` the GL captures from `assets=1` and `assets=0`. Gate 2's feature and effects figures
    carry this caveat and now it is known why.
+**THE ORDER OF 4 AND 5-7 IS WRONG AS FILED, AND THE WORK FOUND IT [2026-09-17].** Landing 4
+deletes Route D. Landing 5 says *"the GL twin is the oracle"*, and landings 6 and 7 need the same
+instrument. **They cannot have it once 4 has run**, and this is a property of the code rather than
+a preference: every pass draws inside `tagpu_vk.c`'s `if (s_vk.rp && s_vk.fb[idx])`, that
+framebuffer comes from `vkAcquireNextImageKHR`, and `tagpu_vk_shot.c` captures a **presented**
+image. So the Vulkan lane cannot render one pixel without a swapchain — and while the GL backend
+owns `g_ddraw.hwnd`, Route D's own window is the only place that swapchain can come from. Delete
+it and a same-frame GL-vs-Vulkan A/B stops being expressible.
+
+The oracle table above is not a way out. Its previous-build A/B answers *"this landing changed
+nothing"*, which is the right question for a port of something already verified and the wrong one
+for a pass being ported for the first time: it would compare a new Vulkan pass against a previous
+build that did not draw it.
+
+**So the order is 5, 6, 7, then 4, then 8-11** — the exit conditions are untouched and no landing
+changes shape; what moves is which of them runs first. 8, 9 and 10 are unaffected either way
+because their oracle is `strict`, which diffs against the engine's own surface and never needed
+the GL twin. Doing 4 first would have cost the instrument three landings still need, and the cost
+would not have shown up as a failure — it would have shown up as three landings with no oracle.
+
 4. **`render_vk.c`** — the fourth backend, `renderer=vulkan`, present into `g_ddraw.hwnd`, the
    offscreen world target at `ss×` with its resolve, TA's surface uploaded by the backend instead
    of by the GUI pass. Route D's window, `tagpu_vk_wndproc`, `WM_TAGPU_VK` and the geometry
