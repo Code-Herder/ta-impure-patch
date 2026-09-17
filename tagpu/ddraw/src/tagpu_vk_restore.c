@@ -338,6 +338,15 @@ static VkPipelineLayout      s_ploFill, s_ploConv, s_ploOut;
 static VkPipeline            s_pipeFill, s_pipeConv[RP_MAX + 1], s_pipeOut;
 static VkRenderPass          s_rpAct[RP_MAX + 1];   /* index = USED count      */
 static VkRenderPass          s_rpOut;
+/* THE MIP REDUCTION (the Vulkan-only plan's landing 7e-2), and it is the same
+   arithmetic the GL lane draws -- one shader string, two backends, so a mipped
+   twin's levels are identical on both by construction rather than by two
+   drivers agreeing about glGenerateMipmap. gpu-status 2.45 is why, 2.46 is the
+   GL half. A job only has a chain if its consumer registered one. */
+static VkRenderPass          s_rpMip;
+static VkPipeline            s_pipeMip;
+static VkDescriptorSetLayout s_dslMip;
+static VkPipelineLayout      s_ploMip;
 static VkDescriptorPool      s_dpool;
 static int                   s_built;
 
@@ -404,13 +413,19 @@ static RETIRE s_ret;
    on a frame is honest; a destroy nobody has licensed is the bug this whole
    structure exists to prevent. */
 typedef struct {
-    VkFramebuffer   fb;
+    VkFramebuffer   fb[1 + TAGPU_VK_MAXMIP];
+    int             nfb;
     VkImage         palImg;
     VkDeviceMemory  palMem;
     VkImageView     palView;
     VkBuffer        palStage;
     VkDeviceMemory  palStageMem;
-    VkDescriptorSet set[5];
+    /* FIVE SETS AND ONE FRAMEBUFFER WAS THE WHOLE JOB UNTIL LANDING 7e-2. A
+       registered mip chain adds one framebuffer and one descriptor set PER
+       LEVEL, and they are retired with everything else for the same reason: a
+       reduction into them was recorded into some slot's command buffer, and a
+       consumer frees its job when its generation moves, which is any frame. */
+    VkDescriptorSet set[5 + TAGPU_VK_MAXMIP];
     int             nset;
     /* THE DUMP'S STAGING, when a job is freed with a copy into it still in
        flight. It is here for the same reason everything else is: the copy was
@@ -823,6 +838,47 @@ static VkPipeline mk_pipe(const TAGPU_VKPASS* d, VkShaderModule vs, VkShaderModu
     return out;
 }
 
+/* THE MIP PASS WRITES A WHOLE LEVEL, so it DISCARDS rather than loads, and it
+   takes the level from UNDEFINED -- which is not a shortcut but the thing that
+   makes a freshly created twin legal to reduce into: a Vulkan image's levels
+   begin UNDEFINED, and a render pass that promised to LOAD one would be reading
+   memory with no defined contents. `finalLayout` leaves every level it writes
+   SHADER_READ_ONLY_OPTIMAL, which is the layout the consumer's own descriptor
+   already names for the whole chain, so nothing else transitions it.
+   The attachment is a view of ONE LEVEL, so these transitions apply to that
+   level alone and the rest of the chain is untouched. */
+static int build_rp_mip(const TAGPU_VKPASS* d)
+{
+    VkAttachmentDescription at;
+    VkAttachmentReference   ref;
+    VkSubpassDescription    sp;
+    VkSubpassDependency     dep[2];
+    VkRenderPassCreateInfo  rci = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
+    memset(&at, 0, sizeof at); memset(&ref, 0, sizeof ref); memset(&sp, 0, sizeof sp);
+    at.format = VK_FORMAT_R8G8B8A8_UNORM;
+    at.samples = VK_SAMPLE_COUNT_1_BIT;
+    at.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    at.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    at.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    at.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    at.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    at.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    ref.attachment = 0;
+    ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp.colorAttachmentCount = 1;
+    sp.pColorAttachments = &ref;
+    /* `out` 0: this pass never reads its attachment. The dependency pair still
+       names FRAGMENT_SHADER on both sides, which is what orders level L-1's
+       write against level L's READ of it -- consecutive render passes over
+       levels of one image, and the hazard the whole reduction turns on. */
+    rp_deps(dep, 0);
+    rci.attachmentCount = 1; rci.pAttachments = &at;
+    rci.subpassCount = 1; rci.pSubpasses = &sp;
+    rci.dependencyCount = 2; rci.pDependencies = dep;
+    return vkCreateRenderPass(d->dev, &rci, NULL, &s_rpMip) == VK_SUCCESS;
+}
+
 /* THE THREE LAYOUTS ARE THREE, not one, because the SAMPLER INDICES DIFFER
    BETWEEN THE PROGRAMS. spirv-gen.py allocates bindings by STAGE in
    declaration order, so FILL has uAtlas at 40 while OUT has uAct at 40 and
@@ -885,7 +941,9 @@ static void retire_take(void)
    either its `pending` reached 0, or the device has been drained. */
 static void jret_kill(const TAGPU_VKPASS* d, JRETIRE* r)
 {
-    if (r->fb) vkDestroyFramebuffer(d->dev, r->fb, NULL);
+    int i;
+    for (i = 0; i < r->nfb; i++)
+        if (r->fb[i]) vkDestroyFramebuffer(d->dev, r->fb[i], NULL);
     if (r->palView) vkDestroyImageView(d->dev, r->palView, NULL);
     if (r->palImg) vkDestroyImage(d->dev, r->palImg, NULL);
     if (r->palMem) vkFreeMemory(d->dev, r->palMem, NULL);
@@ -967,6 +1025,7 @@ static int build_shared(const TAGPU_VKPASS* d)
     VkDescriptorPoolSize psz[2];
     VkShaderModule vsFS = VK_NULL_HANDLE, vsOut = VK_NULL_HANDLE;
     VkShaderModule fsFill = VK_NULL_HANDLE, fsConv = VK_NULL_HANDLE, fsOut = VK_NULL_HANDLE;
+    VkShaderModule fsMip = VK_NULL_HANDLE;
     VkPipelineVertexInputStateCreateInfo vi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
     VkVertexInputBindingDescription vb;
     VkVertexInputAttributeDescription va[3];
@@ -1034,18 +1093,28 @@ static int build_shared(const TAGPU_VKPASS* d)
             VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT,
             VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_FRAGMENT_BIT,
             VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_FRAGMENT_BIT };
+        /* MIP: the globals block at 32 and one sampler at 40, exactly as
+           inc/spirv/tagpu_restore_glsl.spv.h records for MIP_FS. */
+        static const int          bM[2] = { 32, 40 };
+        static const VkDescriptorType tM[2] = {
+            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER };
+        static const VkShaderStageFlags sM[2] = {
+            VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_FRAGMENT_BIT };
         s_dslFill = mk_dsl(d, bF, tF, sF, 6);
         s_dslConv = mk_dsl(d, bC, tC, sC, 4);
         s_dslOut  = mk_dsl(d, bO, tO, sO, 7);
+        s_dslMip  = mk_dsl(d, bM, tM, sM, 2);
     }
-    if (!s_dslFill || !s_dslConv || !s_dslOut) goto fail;
+    if (!s_dslFill || !s_dslConv || !s_dslOut || !s_dslMip) goto fail;
     s_ploFill = mk_plo(d, s_dslFill);
     s_ploConv = mk_plo(d, s_dslConv);
     s_ploOut  = mk_plo(d, s_dslOut);
-    if (!s_ploFill || !s_ploConv || !s_ploOut) goto fail;
+    s_ploMip  = mk_plo(d, s_dslMip);
+    if (!s_ploFill || !s_ploConv || !s_ploOut || !s_ploMip) goto fail;
 
     for (i = 1; i <= nk; i++) if (!build_rp_act(d, i, nk)) goto fail;
     if (!build_rp_out(d)) goto fail;
+    if (!build_rp_mip(d)) goto fail;
 
     vsFS   = mk_mod(d, tagpu_spv_tagpu_restore_glsl_FS_VS,
                     sizeof tagpu_spv_tagpu_restore_glsl_FS_VS / 4);
@@ -1056,7 +1125,9 @@ static int build_shared(const TAGPU_VKPASS* d)
     fsConv = mk_mod(d, convWords, convN);
     fsOut  = mk_mod(d, tagpu_spv_tagpu_restore_glsl_OUT_FS,
                     sizeof tagpu_spv_tagpu_restore_glsl_OUT_FS / 4);
-    if (!vsFS || !vsOut || !fsFill || !fsConv || !fsOut) goto fail;
+    fsMip  = mk_mod(d, tagpu_spv_tagpu_restore_glsl_MIP_FS,
+                    sizeof tagpu_spv_tagpu_restore_glsl_MIP_FS / 4);
+    if (!vsFS || !vsOut || !fsFill || !fsConv || !fsOut || !fsMip) goto fail;
 
     /* FILL goes through rpAct[1]: one layer, and the pipeline's blend state
        still declares NK because that is the subpass's colour count */
@@ -1073,7 +1144,9 @@ static int build_shared(const TAGPU_VKPASS* d)
     vi.vertexBindingDescriptionCount = 1; vi.pVertexBindingDescriptions = &vb;
     vi.vertexAttributeDescriptionCount = 3; vi.pVertexAttributeDescriptions = va;
     s_pipeOut = mk_pipe(d, vsOut, fsOut, s_rpOut, 1, s_ploOut, &vi);
-    if (!s_pipeFill || !s_pipeOut) goto fail;
+    /* MIP shares the full-viewport triangle FILL and CONV use */
+    s_pipeMip = mk_pipe(d, vsFS, fsMip, s_rpMip, 1, s_ploMip, NULL);
+    if (!s_pipeFill || !s_pipeOut || !s_pipeMip) goto fail;
     for (i = 1; i <= nk; i++) if (!s_pipeConv[i]) goto fail;
 
     /* the weights, device-local, padded to WMAX mat4s so the tail binds */
@@ -1127,10 +1200,11 @@ static int build_shared(const TAGPU_VKPASS* d)
     /* a descriptor pool big enough for every job's five sets */
     memset(psz, 0, sizeof psz);
     psz[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-    psz[0].descriptorCount = TAGPU_R_MAXJOBS * 8;
+    /* five sets per job, plus one per level of a registered mip chain */
+    psz[0].descriptorCount = TAGPU_R_MAXJOBS * (8 + TAGPU_VK_MAXMIP);
     psz[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    psz[1].descriptorCount = TAGPU_R_MAXJOBS * 32;
-    dpi.maxSets = TAGPU_R_MAXJOBS * 8;
+    psz[1].descriptorCount = TAGPU_R_MAXJOBS * (32 + TAGPU_VK_MAXMIP);
+    dpi.maxSets = TAGPU_R_MAXJOBS * (8 + TAGPU_VK_MAXMIP);
     dpi.poolSizeCount = 2; dpi.pPoolSizes = psz;
     dpi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     if (vkCreateDescriptorPool(d->dev, &dpi, NULL, &s_dpool) != VK_SUCCESS) goto fail;
@@ -1156,6 +1230,7 @@ fail:
     if (fsFill) vkDestroyShaderModule(d->dev, fsFill, NULL);
     if (fsConv) vkDestroyShaderModule(d->dev, fsConv, NULL);
     if (fsOut)  vkDestroyShaderModule(d->dev, fsOut, NULL);
+    if (fsMip)  vkDestroyShaderModule(d->dev, fsMip, NULL);
     if (!ok) rlog(LANE ": the shared resources could not be built - the lane stays indexed");
     return ok;
 }
@@ -1169,6 +1244,18 @@ struct TAGPU_VKRJOB {
     VkImageView    dstView;
     int            dstW, dstH;
     VkFramebuffer  dstFb;
+    /* THE MIP CHAIN, and only for a consumer whose twin has one: `chainN` is 0
+       everywhere else and every mip path below is then a single compare. The
+       views are the CONSUMER's -- one attachment view and one sampled view per
+       level, each naming exactly one level, which is what makes reading L-1
+       while writing L sound without GL's BASE_LEVEL/MAX_LEVEL dance: the source
+       view CANNOT reach the level being written. */
+    int            chainN;                  /* levels 1..chainN are reduced   */
+    int            chainDim;                /* level 0's square size          */
+    VkFramebuffer  chainFb[TAGPU_VK_MAXMIP];
+    VkDescriptorSet chainSet[TAGPU_VK_MAXMIP];
+    int            chainPainted;            /* `painted` at the last reduction*/
+    int            chainDone;               /* it has run at least once       */
     VkImage        palImg;                  /* the palette snapshot, ours     */
     VkDeviceMemory palMem;
     VkImageView    palView;
@@ -1873,6 +1960,106 @@ fail:
     return NULL;
 }
 
+int tagpu_vk_restore_job_chain(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j,
+                               int mips, int dim,
+                               const VkImageView* attach, const VkImageView* sample)
+{
+    VkDescriptorSetLayout lay[TAGPU_VK_MAXMIP];
+    VkDescriptorSetAllocateInfo dai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+    VkFramebufferCreateInfo fci = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
+    int L;
+
+    if (!d || !d->dev || !j || !j->core || !j->core->used) return 0;
+    if (mips < 1 || mips > TAGPU_VK_MAXMIP || dim <= 0 || !attach || !sample) return 0;
+    if (!s_built || !s_pipeMip || !s_rpMip || !s_dslMip || !s_dpool) return 0;
+    if (j->chainN) return 1;                  /* registered once, by contract */
+    /* AN ODD LEVEL WOULD NEED A WEIGHTED THREE-TAP, not a 2x2 average, and
+       this shader does not pretend to be one -- the GL lane refuses the same
+       chain for the same reason (tagpu_rglsl_mips). Refused WHOLE rather than
+       part-reduced: a chain half ours and half nobody's is the one outcome
+       neither lane can describe. */
+    for (L = 1; L <= mips; L++)
+        if ((dim >> L) < 1 || ((dim >> (L - 1)) & 1)) {
+            char b[160];
+            _snprintf(b, sizeof b, "%s: %s: a level of the %d-square chain is odd - "
+                      "no reduction here", LANE, j->core->tag, dim);
+            rlog(b);
+            return 0;
+        }
+    for (L = 0; L < mips; L++) {
+        if (!attach[L] || !sample[L]) return 0;
+        lay[L] = s_dslMip;
+    }
+    dai.descriptorPool = s_dpool;
+    dai.descriptorSetCount = (uint32_t)mips;
+    dai.pSetLayouts = lay;
+    if (vkAllocateDescriptorSets(d->dev, &dai, j->chainSet) != VK_SUCCESS) {
+        char b[160];
+        memset(j->chainSet, 0, sizeof j->chainSet);
+        _snprintf(b, sizeof b, "%s: %s: no descriptor sets for the mip chain - "
+                  "the twin keeps level 0 only", LANE, j->core->tag);
+        rlog(b);
+        return 0;
+    }
+    fci.renderPass = s_rpMip;
+    fci.attachmentCount = 1;
+    fci.layers = 1;
+    for (L = 0; L < mips; L++) {
+        int dst = dim >> (L + 1);
+        fci.pAttachments = &attach[L];
+        fci.width = (uint32_t)dst; fci.height = (uint32_t)dst;
+        if (vkCreateFramebuffer(d->dev, &fci, NULL, &j->chainFb[L]) != VK_SUCCESS) {
+            int k;
+            for (k = 0; k < L; k++) vkDestroyFramebuffer(d->dev, j->chainFb[k], NULL);
+            memset(j->chainFb, 0, sizeof j->chainFb);
+            vkFreeDescriptorSets(d->dev, s_dpool, (uint32_t)mips, j->chainSet);
+            memset(j->chainSet, 0, sizeof j->chainSet);
+            {   char b[160];
+                _snprintf(b, sizeof b, "%s: %s: no framebuffer for mip level %d - "
+                          "the twin keeps level 0 only", LANE, j->core->tag, L + 1);
+                rlog(b); }
+            return 0;
+        }
+    }
+    /* the sets are written ONCE, here: the source view of level L is fixed for
+       the life of the job, and the globals block is bound by dynamic offset at
+       record time rather than written into the set */
+    {
+        VkDescriptorBufferInfo bi;
+        VkDescriptorImageInfo  ii;
+        VkWriteDescriptorSet   wr[2];
+        memset(&bi, 0, sizeof bi); memset(&ii, 0, sizeof ii);
+        bi.buffer = s_gbuf; bi.offset = 0; bi.range = 16;
+        ii.sampler = s_samp;
+        ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        for (L = 0; L < mips; L++) {
+            memset(wr, 0, sizeof wr);
+            ii.imageView = sample[L];
+            wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wr[0].dstSet = j->chainSet[L]; wr[0].dstBinding = 32;
+            wr[0].descriptorCount = 1;
+            wr[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+            wr[0].pBufferInfo = &bi;
+            wr[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wr[1].dstSet = j->chainSet[L]; wr[1].dstBinding = 40;
+            wr[1].descriptorCount = 1;
+            wr[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            wr[1].pImageInfo = &ii;
+            vkUpdateDescriptorSets(d->dev, 2, wr, 0, NULL);
+        }
+    }
+    j->chainN = mips;
+    j->chainDim = dim;
+    j->chainPainted = 0;
+    j->chainDone = 0;
+    {   char b[180];
+        _snprintf(b, sizeof b, "%s: %s: the twin's %d mip level(s) are reduced HERE, "
+                  "by the same integer (sum+1)/4 the GL lane draws",
+                  LANE, j->core->tag, mips);
+        rlog(b); }
+    return 1;
+}
+
 void tagpu_vk_restore_job_repalette(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j,
                                     const unsigned char* pal)
 {
@@ -1938,13 +2125,26 @@ void tagpu_vk_restore_job_free(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j)
         r->buf = j->dumpBuf; r->bufMem = j->dumpMem;
         j->dumpBuf = VK_NULL_HANDLE; j->dumpMem = VK_NULL_HANDLE; j->dumpMap = NULL;
         if (j->palMap && j->palStageMem) vkUnmapMemory(d->dev, j->palStageMem);
-        r->fb = j->dstFb;
+        r->fb[0] = j->dstFb; r->nfb = 1;
         r->palImg = j->palImg; r->palMem = j->palMem; r->palView = j->palView;
         r->palStage = j->palStage; r->palStageMem = j->palStageMem;
         if (j->setFill && s_dpool) {
             r->set[0] = j->setFill; r->set[1] = j->setConv[0]; r->set[2] = j->setConv[1];
             r->set[3] = j->setOut[0]; r->set[4] = j->setOut[1];
             r->nset = 5;
+        }
+        /* AND THE CHAIN'S, which is why the retire carries arrays: a reduction
+           recorded into some slot's command buffer names both the framebuffer
+           and the set, and they die on the same mask as the rest. The VIEWS in
+           them are the consumer's and are not retired here -- the contract says
+           the consumer keeps them until after this call. */
+        {
+            int L;
+            for (L = 0; L < j->chainN && r->nfb < 1 + TAGPU_VK_MAXMIP; L++)
+                if (j->chainFb[L]) r->fb[r->nfb++] = j->chainFb[L];
+            if (s_dpool)
+                for (L = 0; L < j->chainN && r->nset < 5 + TAGPU_VK_MAXMIP; L++)
+                    if (j->chainSet[L]) r->set[r->nset++] = j->chainSet[L];
         }
         r->pending = d->slots >= 32 ? 0xFFFFFFFFu : ((1u << d->slots) - 1u);
     }
@@ -2103,6 +2303,51 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
    before any early return -- tagpu_vk_terr.c's rule, and the reason for it is
    that a bit which clears only on the paths that draw would stall the retire
    for ever on a lane that is paused. */
+/* ONE REDUCTION OF ONE JOB'S CHAIN, levels 1..chainN, each from the level
+   above it. Nothing here is staged per frame slot and written at record time --
+   the framebuffers and the descriptor sets were made once when the consumer
+   registered the chain, and the only per-draw datum is `uSrcDim`, which goes
+   through the globals RING, whose cursor advances per allocation. That is the
+   property 7c and 7d each had to learn the hard way. */
+static void chain_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, struct TAGPU_VKRJOB* g)
+{
+    int L, painted;
+    if (!g->core || !g->core->used || g->chainN <= 0 || !s_pipeMip) return;
+    painted = g->core->tframes;      /* what `job_painted` publishes */
+    /* NOTHING PAINTED SINCE THE LAST REDUCTION MEANS THE LEVELS ARE CURRENT,
+       with one exception that is the whole reason `chainDone` exists: the FIRST
+       reduction has to run even over an unpainted twin, because a Vulkan image's
+       levels begin UNDEFINED and the consumer samples the chain trilinearly.
+       The GL lane has the same rule for the same reason (tagpu_gaf.c's
+       twin_mips after the job's creation). */
+    if (g->chainDone && painted == g->chainPainted) return;
+    for (L = 1; L <= g->chainN; L++) {
+        VkRenderPassBeginInfo rbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+        VkViewport vp; VkRect2D sc;
+        int src = g->chainDim >> (L - 1), dst = g->chainDim >> L;
+        int32_t dimI = (int32_t)src;
+        uint32_t goff = g_alloc(&dimI, sizeof dimI);
+        if (goff == 0xFFFFFFFFu) return;       /* the ring said why */
+        rbi.renderPass = s_rpMip;
+        rbi.framebuffer = g->chainFb[L - 1];
+        rbi.renderArea.extent.width = (uint32_t)dst;
+        rbi.renderArea.extent.height = (uint32_t)dst;
+        vkCmdBeginRenderPass(cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+        memset(&vp, 0, sizeof vp); memset(&sc, 0, sizeof sc);
+        vp.width = (float)dst; vp.height = (float)dst; vp.maxDepth = 1.0f;
+        sc.extent.width = (uint32_t)dst; sc.extent.height = (uint32_t)dst;
+        vkCmdSetViewport(cb, 0, 1, &vp);
+        vkCmdSetScissor(cb, 0, 1, &sc);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeMip);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_ploMip, 0, 1,
+                                &g->chainSet[L - 1], 1, &goff);
+        vkCmdDraw(cb, 3, 1, 0, 0);
+        vkCmdEndRenderPass(cb);
+    }
+    g->chainPainted = painted;
+    g->chainDone = 1;
+}
+
 void tagpu_vk_restore_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
 {
     if (!d || !d->dev) return;
@@ -2124,6 +2369,18 @@ void tagpu_vk_restore_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
             if (s_vjob[i].core && dump_step(d, cb, slot, &s_vjob[i])) break;
     }
     tagpu_rcore_step(&s_sched);
+    /* AND THE MIP CHAIN AFTER THE SLICE, ONCE -- not once per batch. A slice
+       issues as many batches as its budget allows (which is the whole shape of
+       7c's and 7d's bugs), so a reduction per batch would be work per batch for
+       a picture that is only finished at the end of the slice; and the levels
+       have to be right before the frame that samples them, which is this one.
+       It runs outside every render pass the slice began, in the same command
+       buffer and after the last OUT, so the render pass dependency chain orders
+       level 0's write against level 1's read for us. */
+    {
+        int i;
+        for (i = 0; i < TAGPU_R_MAXJOBS; i++) chain_step(d, cb, &s_vjob[i]);
+    }
     s_cb = VK_NULL_HANDLE;
 }
 

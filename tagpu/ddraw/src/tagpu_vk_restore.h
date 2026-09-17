@@ -87,6 +87,38 @@ TAGPU_VKRJOB* tagpu_vk_restore_job_new(const TAGPU_VKPASS* d, const char* tag,
                                        const unsigned char* pal,
                                        VkImage dstImg, VkImageView dstView,
                                        int dstW, int dstH);
+/* THE DEEPEST MIP LEVEL A REGISTERED CHAIN MAY HAVE. 12 covers a 4096 twin
+   down to 1x1; the unit atlas, the only consumer with a chain, asks for 2. */
+#define TAGPU_VK_MAXMIP 12
+
+/* GIVE A JOB A MIP CHAIN, once, straight after `job_new` -- only a consumer
+   whose twin is mipped calls this, and a job without it behaves exactly as it
+   did before landing 7e-2.
+
+   `mips` is the deepest level (1..TAGPU_VK_MAXMIP) and `dim` level 0's square
+   size; `attach[i]` and `sample[i]`, for i in 0..mips-1, are views of level
+   i+1 and level i of `dstImg`, each naming EXACTLY ONE LEVEL. That is what
+   makes reducing level i into level i+1 sound with no copy and no second
+   image: the source view cannot reach the level being written, which is the
+   guarantee GL buys with GL_TEXTURE_BASE_LEVEL and this buys with
+   `levelCount = 1`. The destination image needs COLOR_ATTACHMENT usage, as it
+   already does for the OUT pass.
+
+   The levels are then reduced ONCE PER SLICE that painted -- and once over an
+   unpainted twin at the start, because a Vulkan image's levels begin UNDEFINED
+   and the consumer samples the whole chain. The arithmetic is the GL lane's
+   own: the exact integer (sum + 1) / 4 of gpu-status 2.45 and 2.46, from one
+   shader string compiled for both APIs, so the chains are identical by
+   construction rather than by two drivers agreeing.
+
+   1 when the chain was registered. 0 leaves the job chainless -- it still
+   restores level 0, and the consumer must then decide whether a twin with no
+   levels is a picture it can draw. The views stay the CONSUMER's to destroy,
+   and not before the job is freed. */
+int  tagpu_vk_restore_job_chain(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j,
+                                int mips, int dim,
+                                const VkImageView* attach, const VkImageView* sample);
+
 /* Re-point a live job at a new palette -- a lazy job outlives its atlas's
    entries, so it is re-palettable rather than replaceable. */
 void tagpu_vk_restore_job_repalette(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j,
