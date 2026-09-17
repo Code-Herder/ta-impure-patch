@@ -345,6 +345,29 @@ static VkImageView    s_actLay[2][MAXLAYER];        /* per layer, attachments  *
 static int            s_actSide, s_actLayers;
 static unsigned       s_actGen = 1;                 /* bumped on realloc       */
 
+/* ---- THE RETIRE, and the framebuffers go into it TOO -------------------
+   `tagpu_vk_terr.c`'s rule, applied to a bigger object: `pending` starts as
+   every slot, a bit clears at the top of that slot's own step UNCONDITIONALLY
+   (including on the paths that draw nothing -- clearing it only when the slot
+   drew would stall the retire for ever on a lane that pauses), and
+   `pending == 0` is what licenses the destroy.
+
+   THE FRAMEBUFFERS ARE PART OF IT because they NAME the retired layer views.
+   Destroying the images and keeping a framebuffer over them would be the same
+   use-after-free one step removed, and it is the sort of thing a validation
+   layer catches on someone else's machine rather than here. */
+typedef struct {
+    VkImage        img[2];
+    VkDeviceMemory mem[2];
+    VkImageView    arr[2];
+    VkImageView    lay[2][MAXLAYER];
+    int            layers;
+    VkFramebuffer  fb[FB_CACHE];
+    int            nfb;
+    uint32_t       pending;                         /* slots yet to turn over  */
+} RETIRE;
+static RETIRE s_ret;
+
 /* the framebuffer cache over (image, first layer, count) -- the combinations a
    run actually uses are few (one per conv group shape plus FILL's single
    layer), so a small linear cache beats computing them up front */
@@ -364,6 +387,12 @@ static int            s_tabInit;                    /* laid out GENERAL yet    *
 static VkBuffer       s_wbuf;                       /* the padded weights      */
 static VkDeviceMemory s_wmem;
 static VkDeviceSize   s_wrange;                     /* WMAX * 64, the bound range */
+static VkBuffer       s_wstage;                     /* ...and its one-time upload */
+static VkDeviceMemory s_wstageMem;
+static unsigned char* s_wstageMap;
+static VkDeviceSize   s_wbytes;
+static int            s_wUp;                        /* the copy has been recorded */
+static const TAGPU_RBACKEND s_be_fwd;               /* defined with the vtable   */
 
 static VkBuffer       s_gbuf;                       /* the scalar-uniform ring */
 static VkDeviceMemory s_gmem;
@@ -706,6 +735,240 @@ static VkPipelineLayout mk_plo(const TAGPU_VKPASS* d, VkDescriptorSetLayout dsl)
     ci.setLayoutCount = 1; ci.pSetLayouts = &dsl;
     if (vkCreatePipelineLayout(d->dev, &ci, NULL, &out) != VK_SUCCESS) return VK_NULL_HANDLE;
     return out;
+}
+
+/* ---- the retire's two halves ---- */
+static void retire_take(void)
+{
+    int i, l;
+    /* the current activations and every framebuffer over them become the
+       retire; the caller has already checked `pending == 0` */
+    memset(&s_ret, 0, sizeof s_ret);
+    for (i = 0; i < 2; i++) {
+        s_ret.img[i] = s_actImg[i]; s_ret.mem[i] = s_actMem[i]; s_ret.arr[i] = s_actArr[i];
+        for (l = 0; l < MAXLAYER; l++) s_ret.lay[i][l] = s_actLay[i][l];
+        s_actImg[i] = VK_NULL_HANDLE; s_actMem[i] = VK_NULL_HANDLE; s_actArr[i] = VK_NULL_HANDLE;
+        memset(s_actLay[i], 0, sizeof s_actLay[i]);
+    }
+    s_ret.layers = s_actLayers;
+    for (i = 0; i < s_nfb; i++) s_ret.fb[i] = s_fb[i].fb;
+    s_ret.nfb = s_nfb;
+    memset(s_fb, 0, sizeof s_fb);
+    s_nfb = 0;
+    s_ret.pending = 0xFFFFFFFFu;        /* set properly by the caller, which has `d` */
+}
+
+/* A SLOT HAS TURNED OVER: its last submit is complete, because the seam waited
+   on that slot's fence before handing us this command buffer. Called at the top
+   of every step, UNCONDITIONALLY. */
+static void retire_slot_done(const TAGPU_VKPASS* d, uint32_t slot)
+{
+    int i, l;
+    if (!s_ret.pending) return;
+    s_ret.pending &= ~(1u << slot);
+    if (s_ret.pending) return;
+    for (i = 0; i < s_ret.nfb; i++)
+        if (s_ret.fb[i]) vkDestroyFramebuffer(d->dev, s_ret.fb[i], NULL);
+    for (i = 0; i < 2; i++) {
+        for (l = 0; l < MAXLAYER; l++)
+            if (s_ret.lay[i][l]) vkDestroyImageView(d->dev, s_ret.lay[i][l], NULL);
+        if (s_ret.arr[i]) vkDestroyImageView(d->dev, s_ret.arr[i], NULL);
+        if (s_ret.img[i]) vkDestroyImage(d->dev, s_ret.img[i], NULL);
+        if (s_ret.mem[i]) vkFreeMemory(d->dev, s_ret.mem[i], NULL);
+    }
+    memset(&s_ret, 0, sizeof s_ret);
+}
+
+/* ---- the shared build, on the first job ---- */
+static int build_shared(const TAGPU_VKPASS* d)
+{
+    const TAGPU_RMODEL* w = tagpu_rcore_model();
+    const TAGPU_ROPT*   opt = tagpu_rcore_opt();
+    VkSamplerCreateInfo sci = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+    VkDescriptorPoolCreateInfo dpi = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
+    VkDescriptorPoolSize psz[2];
+    VkShaderModule vsFS = VK_NULL_HANDLE, vsOut = VK_NULL_HANDLE;
+    VkShaderModule fsFill = VK_NULL_HANDLE, fsConv = VK_NULL_HANDLE, fsOut = VK_NULL_HANDLE;
+    VkPipelineVertexInputStateCreateInfo vi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+    VkVertexInputBindingDescription vb;
+    VkVertexInputAttributeDescription va[3];
+    VkQueryPoolCreateInfo qi = { VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
+    const uint32_t* convWords;
+    size_t convN = 0;
+    char b[300];
+    int i, nk, ok = 0;
+
+    if (s_built) return 1;
+    if (!tagpu_vk_restore_up(d)) return 0;
+
+    /* NK, settled by the core (the power-of-two clamp and the `nk=N` override
+       are its rules, not ours), from the limits this device reported */
+    {
+        uint32_t att = s_dev.maxColour < s_dev.maxFragOut ? s_dev.maxColour : s_dev.maxFragOut;
+        s_sched.be = &s_be_fwd;
+        nk = tagpu_rcore_pick_nk(&s_sched, (int)s_dev.maxUniformRange, (int)att);
+    }
+    if (!nk) return 0;
+    s_wrange = (VkDeviceSize)s_sched.wmax * 64;
+
+    convWords = conv_spv(nk, w->kmax, &convN);
+    if (!convWords) {
+        _snprintf(b, sizeof b, LANE ": no conv shader for NK=%d kmax=%d -- this lane ships the two "
+                               "models only (tiny kmax 56, full kmax 148); a third needs its four "
+                               "variants generated and committed", nk, w->kmax);
+        rlog(b);
+        s_state = ST_REFUSED;
+        return 0;
+    }
+
+    /* the sampler: NEAREST and clamp, which is every sampler the GL lane uses */
+    sci.magFilter = sci.minFilter = VK_FILTER_NEAREST;
+    sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sci.maxLod = 0.0f;
+    if (vkCreateSampler(d->dev, &sci, NULL, &s_samp) != VK_SUCCESS) goto fail;
+
+    /* the three layouts -- see mk_dsl's comment for why they are three */
+    {
+        static const int          bF[6] = { 32, 40, 41, 42, 43, 44 };
+        static const VkDescriptorType tF[6] = {
+            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER };
+        static const VkShaderStageFlags sF[6] = {
+            VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_FRAGMENT_BIT,
+            VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_FRAGMENT_BIT };
+        static const int          bC[4] = { 32, 33, 40, 41 };
+        static const VkDescriptorType tC[4] = {
+            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER };
+        static const VkShaderStageFlags sC[4] = {
+            VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_FRAGMENT_BIT,
+            VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_FRAGMENT_BIT };
+        static const int          bO[7] = { 0, 32, 40, 41, 42, 43, 44 };
+        static const VkDescriptorType tO[7] = {
+            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER };
+        static const VkShaderStageFlags sO[7] = {
+            VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT,
+            VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_FRAGMENT_BIT,
+            VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_FRAGMENT_BIT };
+        s_dslFill = mk_dsl(d, bF, tF, sF, 6);
+        s_dslConv = mk_dsl(d, bC, tC, sC, 4);
+        s_dslOut  = mk_dsl(d, bO, tO, sO, 7);
+    }
+    if (!s_dslFill || !s_dslConv || !s_dslOut) goto fail;
+    s_ploFill = mk_plo(d, s_dslFill);
+    s_ploConv = mk_plo(d, s_dslConv);
+    s_ploOut  = mk_plo(d, s_dslOut);
+    if (!s_ploFill || !s_ploConv || !s_ploOut) goto fail;
+
+    for (i = 1; i <= nk; i++) if (!build_rp_act(d, i, nk)) goto fail;
+    if (!build_rp_out(d)) goto fail;
+
+    vsFS   = mk_mod(d, tagpu_spv_tagpu_restore_glsl_FS_VS,
+                    sizeof tagpu_spv_tagpu_restore_glsl_FS_VS / 4);
+    vsOut  = mk_mod(d, tagpu_spv_tagpu_restore_glsl_OUT_VS,
+                    sizeof tagpu_spv_tagpu_restore_glsl_OUT_VS / 4);
+    fsFill = mk_mod(d, tagpu_spv_tagpu_restore_glsl_FILL_FS,
+                    sizeof tagpu_spv_tagpu_restore_glsl_FILL_FS / 4);
+    fsConv = mk_mod(d, convWords, convN);
+    fsOut  = mk_mod(d, tagpu_spv_tagpu_restore_glsl_OUT_FS,
+                    sizeof tagpu_spv_tagpu_restore_glsl_OUT_FS / 4);
+    if (!vsFS || !vsOut || !fsFill || !fsConv || !fsOut) goto fail;
+
+    /* FILL goes through rpAct[1]: one layer, and the pipeline's blend state
+       still declares NK because that is the subpass's colour count */
+    s_pipeFill = mk_pipe(d, vsFS, fsFill, s_rpAct[1], nk, s_ploFill, NULL);
+    for (i = 1; i <= nk; i++)
+        s_pipeConv[i] = mk_pipe(d, vsFS, fsConv, s_rpAct[i], nk, s_ploConv, NULL);
+    /* OUT's vertices are the core's 8 floats: x,y | dx,dy,slotCol,slotRow | w,h,
+       which is the GL VAO's 2 + 4 + 2 at offsets 0, 8, 24 and stride 32 */
+    memset(&vb, 0, sizeof vb); memset(va, 0, sizeof va);
+    vb.binding = 0; vb.stride = 32; vb.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    va[0].location = 0; va[0].binding = 0; va[0].format = VK_FORMAT_R32G32_SFLOAT;       va[0].offset = 0;
+    va[1].location = 1; va[1].binding = 0; va[1].format = VK_FORMAT_R32G32B32A32_SFLOAT; va[1].offset = 8;
+    va[2].location = 2; va[2].binding = 0; va[2].format = VK_FORMAT_R32G32_SFLOAT;       va[2].offset = 24;
+    vi.vertexBindingDescriptionCount = 1; vi.pVertexBindingDescriptions = &vb;
+    vi.vertexAttributeDescriptionCount = 3; vi.pVertexAttributeDescriptions = va;
+    s_pipeOut = mk_pipe(d, vsOut, fsOut, s_rpOut, 1, s_ploOut, &vi);
+    if (!s_pipeFill || !s_pipeOut) goto fail;
+    for (i = 1; i <= nk; i++) if (!s_pipeConv[i]) goto fail;
+
+    /* the weights, device-local, padded to WMAX mat4s so the tail binds */
+    {
+        VkDeviceSize padded = (VkDeviceSize)((size_t)w->ntex + (size_t)s_sched.wmax * 4) * 16;
+        if (!mk_buffer(d, padded, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &s_wbuf, &s_wmem, NULL)) goto fail;
+        if (!mk_buffer(d, padded, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                       &s_wstage, &s_wstageMem, &s_wstageMap)) goto fail;
+        memset(s_wstageMap, 0, (size_t)padded);
+        memcpy(s_wstageMap, w->body, (size_t)w->ntex * 16);
+        s_wbytes = padded;
+        s_wUp = 0;                      /* copied on the first slice */
+    }
+
+    /* the scalar-uniform ring and the OUT vertices, PER SLOT: a slot's region
+       is reused only when that slot has turned over under its own fence, which
+       is what makes reuse safe without a second retire */
+    s_gstride = s_dev.uboAlign > 16 ? s_dev.uboAlign : 16;
+    if (!mk_buffer(d, s_gstride * GLOBALS_RING * TAGPU_VK_SLOTS,
+                   VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                   &s_gbuf, &s_gmem, &s_gmap)) goto fail;
+    if (!mk_buffer(d, (VkDeviceSize)sizeof s_sched.verts * TAGPU_VK_SLOTS,
+                   VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                   &s_vbuf, &s_vmem, &s_vmap)) goto fail;
+
+    /* the three slot tables and their staging */
+    for (i = 0; i < 3; i++)
+        if (!mk_image(d, TAGPU_R_SLOTCOLS, TAGPU_R_SLOTROWS, 1, VK_FORMAT_R32G32B32A32_SFLOAT,
+                      VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                      &s_tabImg[i], &s_tabMem[i], &s_tabView[i])) goto fail;
+    if (!mk_buffer(d, (VkDeviceSize)TAGPU_R_BATCH * 16 * 3 * TAGPU_VK_SLOTS,
+                   VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                   &s_tabStage, &s_tabStageMem, &s_tabMap)) goto fail;
+
+    /* a descriptor pool big enough for every job's five sets */
+    memset(psz, 0, sizeof psz);
+    psz[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    psz[0].descriptorCount = TAGPU_R_MAXJOBS * 8;
+    psz[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    psz[1].descriptorCount = TAGPU_R_MAXJOBS * 32;
+    dpi.maxSets = TAGPU_R_MAXJOBS * 8;
+    dpi.poolSizeCount = 2; dpi.pPoolSizes = psz;
+    dpi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    if (vkCreateDescriptorPool(d->dev, &dpi, NULL, &s_dpool) != VK_SUCCESS) goto fail;
+
+    if (s_dev.timestamps) {
+        qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        qi.queryCount = 4;                  /* two pairs, one per parity */
+        if (vkCreateQueryPool(d->dev, &qi, NULL, &s_qpool) != VK_SUCCESS) s_qpool = VK_NULL_HANDLE;
+    }
+    s_sched.timer = s_qpool ? 1 : 0;
+
+    _snprintf(b, sizeof b, LANE ": built: %dx%d %s NK=%d, WMAX %d (%u KB bound per conv draw), "
+                           "%d render passes, %s",
+              w->depth, w->ch, opt->fp16 ? "fp16" : "fp32", nk, s_sched.wmax,
+              (unsigned)(s_wrange >> 10), nk,
+              s_qpool ? "timestamp budget" : "fixed slices");
+    rlog(b);
+    s_built = 1;
+    ok = 1;
+fail:
+    if (vsFS)   vkDestroyShaderModule(d->dev, vsFS, NULL);
+    if (vsOut)  vkDestroyShaderModule(d->dev, vsOut, NULL);
+    if (fsFill) vkDestroyShaderModule(d->dev, fsFill, NULL);
+    if (fsConv) vkDestroyShaderModule(d->dev, fsConv, NULL);
+    if (fsOut)  vkDestroyShaderModule(d->dev, fsOut, NULL);
+    if (!ok) rlog(LANE ": the shared resources could not be built - the lane stays indexed");
+    return ok;
 }
 
 int tagpu_vk_restore_nk(void) { return s_sched.nk; }
