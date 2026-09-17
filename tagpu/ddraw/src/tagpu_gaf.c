@@ -143,9 +143,10 @@ static int rlist_room(TAGPU_GAFATLAS* a, int need)
         /* THE LIST GOES RATHER THAN LOSING A FRAME. A list with a hole in it
            leaves cells indexed on the other lane for ever and nothing says so;
            dropping it hands the consumer a generation change and no request,
-           which is the same stand-down as never arming. The buffer itself is
-           kept -- `realloc` failing leaves it valid -- and freed here because
-           nothing will ask for it again. */
+           and the consumer then STANDS THE PASS DOWN -- not "goes back to the
+           read-back", which it cannot do: the arm latches are one-way and the
+           mirror is already freed. The buffer itself is kept by a failed
+           `realloc` and is freed here because nothing will ask for it again. */
         free(a->rlist);
         a->rlist = NULL; a->rlistN = 0; a->rlistCap = 0;
         a->rlistWant = 0; a->rlistFailed = 1;
@@ -166,6 +167,11 @@ static void rlist_reset(TAGPU_GAFATLAS* a, int repaint)
     a->rlistN = 0;
     a->rlistRepaint = repaint;
     a->rlistGen++;
+    /* AND THE BLANK IS COUNTED, not just flagged (tagpu_gaf.h `rlistBlanks`):
+       a consumer sees only the LATEST generation, so a blanking reset followed
+       by a repainting one in the same frame would hand it "keep what you have"
+       over a destination this lane has cleared. */
+    if (!repaint) a->rlistBlanks++;
 }
 
 /* ...and re-seeded with every entry the atlas holds right now. This is both
@@ -205,7 +211,14 @@ static void rlist_add(TAGPU_GAFATLAS* a, const TAGPU_RGLSL_FRAME* f)
         b[sizeof b - 1] = 0;
         glog(b);
         rlist_restart(a, 0);
-        if (!a->rlistWant || !a->rlist) return;
+        /* AND THE FRAME THAT TRIGGERED THE RESTART IS ALREADY IN IT: this is
+           called from `atlas_paint`, which sets `e->ok` before it enqueues, so
+           the re-seed above included it. Appending it again would be harmless
+           (the same rect restored twice) but it would also be the one place
+           where the published list is not the list the GL lane was given,
+           which is the whole claim `restore_frame_of` exists to keep.
+           [FROM THE LANDING-7d REVIEW.] */
+        return;
     }
     if (!rlist_room(a, a->rlistN + 1)) return;
     a->rlist[a->rlistN++] = *f;
@@ -518,9 +531,16 @@ int tagpu_gaf_atlas_mirror_rgb(TAGPU_GAFATLAS* a)
     if (a->mirrorRgbFailed) return 0;
     /* THE LIST HAS TAKEN OVER: the restore is the other lane's to run, so
        there is nothing here to read back and a 16 MB buffer would be armed for
-       a consumer that no longer looks at it. Refused rather than latched --
-       the list can go away (an out-of-memory grow drops it) and the read-back
-       is then the fallback again. */
+       a consumer that no longer looks at it.
+       AND THE READ-BACK IS NOT A FALLBACK IF THE LIST LATER DIES, which this
+       comment claimed until the landing-7d review: both of the owning pass's
+       arm latches are ONE-WAY (`s_rlistAsked` and `s_mirrorRgbAsked` are only
+       ever set), and arming the list freed the mirror, so after the
+       out-of-memory drop below there is neither. The consumer stands down
+       instead -- `restore_want` clears its "this twin is a picture" flag when
+       the request disappears under a live job -- which is a stand-down rather
+       than a lane drawing a frozen twin against a GL lane that is still
+       restoring. Said here because this is where the fallback was promised. */
     if (a->rlistWant) return 0;
     fetch_gl();
     if (!x_glReadPixels || !glGenFramebuffers || !glBindFramebuffer ||

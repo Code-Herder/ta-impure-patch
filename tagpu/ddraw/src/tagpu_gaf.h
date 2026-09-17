@@ -238,9 +238,10 @@ typedef struct TAGPU_GAFATLAS {
 
        `rlistGen` IS THE DISCONTINUITY and the only thing a cursor cannot
        survive. It is bumped whenever the array stops being a continuation of
-       what a consumer already has: the arm, a recycle or a repack (both of
-       which drop the queue and blank the destination), a context loss, a
-       palette move, and the overflow restart below. A consumer that sees a new
+       what a consumer already has, and the list is SEVEN events long: the
+       arm, a recycle or a repack (both of which drop the queue and blank the
+       destination), a GL context loss, a palette move, a GL job created over a
+       fresh twin, and the overflow restart below. A consumer that sees a new
        generation drops its own job and starts from index 0.
        `rlistRepaint` is 1 only for the palette-move generation, where the
        destination already holds a restore and is recoloured in place.
@@ -258,6 +259,17 @@ typedef struct TAGPU_GAFATLAS {
     int           rlistN, rlistCap;
     unsigned      rlistGen;
     int           rlistRepaint;
+    /* HOW MANY TIMES THE DESTINATION HAS BEEN BLANKED, and it is a SEPARATE
+       counter because `rlistRepaint` is a property of the latest generation
+       while "you must blank" is a property of the INTERVAL since a consumer
+       last looked. Two resets between two looks collapse into one: a recycle
+       (repaint 0) followed in the same frame by a palette move (repaint 1) --
+       which `tagpu_feat.c` can do, because it recycles a full atlas and then
+       calls `tagpu_gaf_atlas_restore` on the next line -- would otherwise tell
+       the consumer to KEEP a destination this lane has just cleared. A
+       consumer blanks whenever this has moved, whatever the flag says.
+       [FROM THE LANDING-7d REVIEW.] */
+    unsigned      rlistBlanks;
     int           rlistWant;       /* armed; the read-back has stood down    */
     int           rlistFailed;     /* latched, and said once                 */
     /* open-addressed index over `ents`, keyed on the frame header address:

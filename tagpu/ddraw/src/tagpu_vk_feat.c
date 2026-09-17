@@ -250,6 +250,7 @@ static int            s_arHave;
                 and the same guard.] */
 static TAGPU_VKRJOB*  s_rjob;
 static unsigned       s_rjGen;
+static unsigned       s_rjBlanks;         /* the producer's blank count, seen */
 static int            s_rjTaken;
 static int            s_rjPainted;
 static int            s_rjTried;           /* the device refused; do not ask again */
@@ -951,6 +952,18 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
             tagpu_vk_restore_job_free(d, s_rjob);
             s_rjob = NULL; s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0;
             s_rjSrcView = VK_NULL_HANDLE;
+            /* AND WHAT IT PAINTED IS NO LONGER A PICTURE. The request going
+               away while a job existed means the producer's list DIED -- its
+               only such path is the out-of-memory drop -- and nothing will
+               feed this twin again: the read-back cannot take over, because
+               both arm latches are one-way and the mirror was freed when the
+               list armed. Leaving `s_arHave` set would have this pass draw a
+               frozen twin while the GL lane goes on restoring, which is a
+               silent divergence rather than a stand-down. Only inside the
+               `if` -- with the lever off there is no job and this branch runs
+               every frame, where clearing it would break the mirror path.
+               [FROM THE LANDING-7d REVIEW.] */
+            s_arHave = 0;
         }
         return;
     }
@@ -980,26 +993,53 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
                      painted, h->restoreGen);
         }
         if (tagpu_vk_restore_job_failed(s_rjob)) {
-            plog(d, "feat: the restore failed on this lane; what it painted stands "
-                    "and nothing more is queued");
+            /* "WHAT IT PAINTED STANDS" IS ONLY TRUE UNTIL THE RECTS MOVE, and
+               they will: the next generation re-lays the atlas and this twin
+               then holds the OLD layout's texels at every new rect. So the
+               twin stops being a picture at the moment the restore is
+               abandoned, not at the moment it looks wrong.
+               [FROM THE LANDING-7d REVIEW.] */
+            plog(d, "feat: the restore failed on this lane - the twin stops being "
+                    "drawn from, because the next atlas layout would sample it "
+                    "at rects it was never painted for");
             tagpu_vk_restore_job_free(d, s_rjob);
             s_rjob = NULL; s_rjGen = 0; s_rjTaken = 0;
             s_rjTried = 1;                 /* it will fail the same way again  */
+            s_arHave = 0;
             return;
         }
         /* THE STEADY STATE: whatever the producer has appended since. */
         n = h->restoreN - s_rjTaken;
         if (n > 0) {
             int took = tagpu_vk_restore_job_add(s_rjob, h->restoreFrames + s_rjTaken, n);
-            s_rjTaken += took;
-            if (took < n)
-                plog(d, "feat: %d of %d new restore frames would not queue - they "
-                        "stay indexed until the next generation", n - took, n);
+            /* THE CURSOR ADVANCES BY WHAT WAS OFFERED, NOT BY WHAT WAS TAKEN.
+               `tagpu_rcore_job_add` SKIPS a frame it can never queue -- a
+               degenerate rect, or one larger than the activation slot even
+               after the wrap demote -- and returns only the count it queued,
+               so advancing by that re-offers the tail of the list on every
+               frame for the life of the atlas: one duplicate restore per
+               refused frame, for ever. A refused frame stays indexed until the
+               next generation, which is what the log line says.
+               THE EXCEPTION IS A WHOLE-CALL FAILURE (`took` 0 with frames
+               offered): that is the queue's own realloc failing, which is
+               transient and already logged by the core, so the cursor stays
+               where it is and the next frame offers them again.
+               [FROM THE LANDING-7d REVIEW.] */
+            if (took > 0) {
+                s_rjTaken += n;
+                if (took < n)
+                    plog(d, "feat: %d of %d new restore frames were refused by the "
+                            "restorer (degenerate or larger than a slot) - they stay "
+                            "indexed until the next generation", n - took, n);
+            }
         }
         return;
     }
     if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; s_rjTaken = 0; }
-    if (s_rjTried) return;
+    /* A NEW GENERATION WITH THE RESTORE GIVEN UP ON: the rects have moved and
+       nothing will repaint this twin, so it is not a picture any more -- the
+       same fact the failed branch above records, reached by the other route. */
+    if (s_rjTried) { s_arHave = 0; return; }
     /* BOTH SURFACES HAVE TO BE THERE, and the source has to have contents: a
        FILL over an atlas no copy has reached yet would paint entry 0 over the
        art. Neither is an error -- the next frame asks again. */
@@ -1012,7 +1052,15 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
        flag says the GL twin's destination holds a restore; ours is a different
        image and may hold nothing, in which case a repaint would leave every
        cell it has not reached undefined. `s_arHave` is the local fact. */
-    repaint = h->restoreRepaint && s_arHave;
+    /* A REPAINT ONLY IF NOTHING WAS BLANKED SINCE THIS PASS LAST LOOKED.
+       `restoreRepaint` describes the LATEST generation and a consumer sees
+       only that one, so a recycle followed in the same producer frame by a
+       palette move (which `tagpu_feat.c` does: it recycles a full atlas and
+       calls `tagpu_gaf_atlas_restore` on the next line) would hand this pass
+       "keep what you have" over an atlas the other lane has just cleared.
+       The blank COUNT cannot be hidden that way. [FROM THE LANDING-7d
+       REVIEW.] */
+    repaint = h->restoreRepaint && s_arHave && h->restoreBlanks == s_rjBlanks;
     s_rjob = tagpu_vk_restore_job_new(d, "feat", 1, 0, repaint,
                                       s_atView, s_atDim, s_atDim,
                                       h->pal,
@@ -1020,6 +1068,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
     if (!s_rjob) { s_rjTried = 1; return; }   /* the reason is in the log      */
     s_rjTaken = tagpu_vk_restore_job_add(s_rjob, h->restoreFrames, h->restoreN);
     s_rjGen = h->restoreGen;
+    s_rjBlanks = h->restoreBlanks;
     s_rjSrcView = s_atView;
     s_rjPainted = 0;
     if (!repaint) s_arHave = 0;            /* it is being blanked and repainted */
@@ -1132,13 +1181,25 @@ rgb_only:
        barrier's first synchronisation scope covers everything already
        submitted to this queue. */
     if (doRgb) {
+        /* THE SOURCE SCOPE NAMES THE RESTORE'S WRITE AS WELL AS A SAMPLE.
+           `s_arHave` has two writers since landing 7d -- the mirror upload
+           below, whose last toucher is a fragment READ, and this lane's own
+           restore, whose last toucher is a RENDER PASS -- and this barrier
+           used to name only the read. It is unreachable today, because the
+           producer publishes a mirror or a frame list and never both, so
+           `doRgb` and the restore cannot both be live; that is safety by
+           exclusion, and the either/or was already got wrong once on this
+           plan. Naming both scopes costs nothing and does not depend on it.
+           [FROM THE LANDING-7d REVIEW, which flagged it as latent.] */
         img_barrier(cb, s_arImg,
                     s_arHave ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                              : VK_IMAGE_LAYOUT_UNDEFINED,
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    s_arHave ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                    s_arHave ? (VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)
                              : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                    s_arHave ? VK_ACCESS_SHADER_READ_BIT : 0,
+                    s_arHave ? (VK_ACCESS_SHADER_READ_BIT |
+                                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT) : 0,
                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
         copy_rect(cb, s->astage, bytes, s_arImg, h->atlasDim, rrows);
         img_barrier(cb, s_arImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -1249,9 +1310,15 @@ int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        gates the LOG LINE only, and it is cleared again below so a later genuine
        loss says so once more. */
     /* CAN THIS LANE DRAW A RESTORED FRAME? Either it holds a mirror of the GL
-       twin (gate 2), or it has painted the twin itself (landing 7d) -- and
-       `s_arHave` is the one fact that covers both, because both are writes to
-       the same image.
+       twin (gate 2) -- and then the MIRROR is what it has to have this frame,
+       because the producer zeroes it and drops its rows to 0 whenever the GL
+       twin is re-armed, and a pass drawing its own stale copy of a twin the
+       other lane has just blanked is two different pictures -- or the producer
+       published a frame LIST and this lane painted the twin itself, where
+       `s_arHave` is the local fact and the only one available.
+       `s_arHave` ALONE IS NOT THE TEST, and it was in this landing's first
+       draft: it is set by both writers, so accepting it on its own let the
+       mirror path draw through exactly the window the refusal exists for.
 
        AND A REFUSAL HERE IS NOT ALWAYS A `return`. When the restore is this
        lane's own it needs THIS frame's indexed atlas uploaded before it can
@@ -1261,14 +1328,15 @@ int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        arrived. `feed` is that case, and it runs the uploads and then returns
        without claiming the frame. */
     feed = 0;
-    if (h.restored && !(s_arImg && (s_arHave || (h.atlasRgb && h.atlasRgbRows > 0)))) {
+    if (h.restored && !(s_arImg && ((h.atlasRgb && h.atlasRgbRows > 0) ||
+                                    (h.restoreFrames && s_arHave)))) {
         if (h.restoreFrames && s_arImg && !s_rjTried) feed = 1;
         if (!s_saidRestored) {
             s_saidRestored = 1;
             plog(d, "feat: the GL twin is drawing through the Classic++ restored "
                     "atlas and this lane has no restored twin of it yet - nothing "
-                    "drawn until %%s", feed ? "this lane's own restore paints one"
-                                            : "the read-back produces rows");
+                    "drawn until %s", feed ? "this lane's own restore paints one"
+                                           : "the read-back produces rows");
         }
         if (!feed) return 0;
     } else s_saidRestored = 0;
@@ -1506,7 +1574,7 @@ void tagpu_vk_feat_down(const TAGPU_VKPASS* d)
        AND THE VERDICT DOES NOT SURVIVE THE DEVICE -- `s_rjTried` is a fact
        about a device that refused, so a new one is asked again. */
     if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; }
-    s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0; s_rjTried = 0;
+    s_rjGen = 0; s_rjBlanks = 0; s_rjTaken = 0; s_rjPainted = 0; s_rjTried = 0;
     s_rjSrcView = VK_NULL_HANDLE;
     kill_image(d, &s_atImg, &s_atMem, &s_atView);
     kill_image(d, &s_arImg, &s_arMem, &s_arView);

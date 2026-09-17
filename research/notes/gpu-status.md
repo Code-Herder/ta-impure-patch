@@ -8075,7 +8075,7 @@ measured in.
 
 ### 2.44 Two more consumers, and the parameter tables had the vertex bug too — landing 7d of the Vulkan-only plan
 
-Landing 7c left three of the restorer's four consumers on the CPU mirror. This one wires the two
+Landing 7c left three of the restorer's four consumers on the CPU mirror — four being the list the plan names; the UI atlas is a fifth and is not on it. This one wires the two
 sprite atlases — **features** and **effects** — and the oracle it needed found a bug in the code
 7c had already landed, in the sibling of the resource 7c fixed.
 
@@ -8169,17 +8169,52 @@ terrain byte-identical at **46 461 952 bytes**, features and effects identical b
 | 3 | `fx-mix`, after | identical | **identical** | **identical** |
 | 4 | `static-terrain`, after | **identical** (46 MB) | identical | identical |
 
-**And the terrain's clean result in landing 7c is NOT evidence that the tables were fine then.**
-7c's re-measurement was explicitly taken with batches 157 and 158 in one slice, so the table swap
-should have cost batch 157 its cells and the dump was `cmp` clean; why it survived is **not
-established, and was not chased** — the sprite evidence requires the fix on its own terms. What
-this landing did establish is that the condition is **not reproducible run to run**: the same
-fixture that put two batches in a slice for 7c gave terrain **158 batches and zero two-batch
-slices** today, while the sprite jobs hit 62. A clean terrain run is therefore not evidence that
-the hazard is absent; a consumer with heterogeneous frames and a colour key is what makes it
-visible, and that is the argument for wiring consumers rather than declaring the port finished.
+**And the terrain's clean result in landing 7c was never in danger, which took the landing review
+to see.** The paragraph here first recorded it as an unexplained survival — 7c's re-measurement was
+taken with batches 157 and 158 in one slice, so the swap should have cost batch 157 its cells — and
+that reading was wrong about what the log line says. **`batch %d … issued at slice %u` is printed
+in the OUT branch** (`tagpu_restore_core.c:474`, after `j->rbatches++`), so it timestamps a batch's
+LAST draw. The tables are uploaded at the **FILL** (`tagpu_vk_restore.c`, the `TAGPU_RDRAW_FILL`
+branch, its only call site), and the budget check sits between individual draws
+(`tagpu_restore_core.c:607`), so a batch's FILL is normally several slices before its OUT:
+
+| | what the log line shows | what the resource needs |
+|---|---|---|
+| the OUT vertices (7c's bug) | two batches' **OUTs** in one slice | exactly that — the vertices are written at OUT |
+| the parameter tables (7d's bug) | nothing | two batches' **FILLs** in one slice |
+
+So in 7c's run there was **no table collision at all** — batch 157 was a full 64-frame batch
+(`cols` 8, so `TW = TH = 8S` and tens of slices of fragments) while batch 158 had 6 frames
+(`cols` 3, about a seventh of the cost, cheap enough for its whole FILL→CONV→OUT chain to fit in
+what was left of the budget). Nothing survived the swap; the condition was never present. **And
+that is a stronger version of this section's own argument**: the sprite atlases' batches are small
+and numerous, so two whole batches — two FILLs — land in one slice routinely (the 62 two-batch
+slices measured here), while the terrain's big batches put at most one FILL in a slice. A clean
+terrain run says nothing about this hazard either way, and the recipe in
+[ta-drive](ta-drive.html) was telling the next operator to look at the wrong log line.
 
 #### What else this landing found
+
+**The sweep the fix asked for, since this is the second time.** Every other place in
+`tagpu_vk_restore.c` that writes device-visible bytes at RECORD time, checked rather than assumed:
+
+| what | when it is written | why it is safe |
+|---|---|---|
+| the globals ring (`g_alloc`) | once per draw | a **ring**: every allocation in a slice has its own offset, and the slot's fence is what licenses re-use across slices |
+| the OUT vertices | once per batch | in the command stream since landing 7c |
+| the three parameter tables | once per batch | in the command stream since this landing |
+| the palette staging (`upload_pal`) | per job, when `palDue` | per **job**, not per slot, and a second write before the first copy executes leaves the image holding the NEWER palette — a batch can sample a palette one frame early, which is a staleness and not a swap |
+| the dump staging | never written by the CPU | a copy DESTINATION, read after the slot's fence |
+
+**And two of the twelve interface entry points have no callers at all** — `job_repalette` and
+`job_clear`. Both consumers answer a palette move and a recycle by **rebuilding the job** on the
+new serial or generation, which is what makes `repaint` reachable at all, so neither entry point
+has ever run. That matters for the next consumer rather than for this one: `job_repalette` sets
+`palDue = 2`, whose barrier names `SHADER_READ_ONLY_OPTIMAL` as the palette image's current
+layout, and a caller that repalettes a job **before its first FILL** would transition from a
+layout the image is not in. Harmless in effect (the copy overwrites the whole image) and a spec
+violation regardless. Left as it is, named here, because inventing a caller to exercise it is not
+this landing's work.
 
 * **A bug in its own new code, found by reading the diff before the review.** `rlist_restart`
   seeded the list from the atlas's entries **bounded by the current allocation**, so an atlas
@@ -8197,6 +8232,43 @@ visible, and that is the argument for wiring consumers rather than declaring the
   against `tagpu_restore_<tag>_vk.rgba` from this one, and the terrain's GL dump was tagged to
   match. Re-armed on the **paint count** rather than on a serial, because a lazy queue keeps
   painting and a dump is owed again whenever the picture has moved.
+
+#### What the landing review found, and it was all lifetimes and one log line
+
+One HIGH, three MEDIUM, six LOW, all verified against the code before anything was changed, and
+**all of them on the lever path or in the notes** — nothing it found can reach a player, because
+the shipped path is the read-back and the lever is absent by default.
+
+* **HIGH — the dump's staging was destroyed outside the retire.** `job_free` freed it on the
+  argument that it is *"called from a consumer between frames"*, which is not the same as being
+  past the fence of the slot that recorded the copy: the window is up to `slots - 1` frames wide,
+  and a generation change on any of them destroys a buffer a submitted command buffer still names.
+  It goes into the `JRETIRE` that already exists for exactly this, beside the palette staging.
+  (Found independently while briefing the reviewer, and reported by it too.)
+* **MEDIUM — `rlistRepaint` was a property of the latest GENERATION, and "you must blank" is a
+  property of the INTERVAL.** Two resets between two of a consumer's looks collapse into one, and
+  `tagpu_feat.c` produces exactly that pair in a single frame: it recycles a full atlas (blank) and
+  calls `tagpu_gaf_atlas_restore` on the next line, which repaints if the palette moved. The
+  consumer would have been told to keep a destination the GL lane had just cleared. Fixed with a
+  monotone **blank counter** published beside the flag; no sequence of generations can hide a
+  blank from a consumer that compares it.
+* **MEDIUM — "the read-back is then the fallback again" was false.** Both arm latches are one-way
+  and arming the list frees the mirror, so after the list's out-of-memory drop there is neither —
+  and the consumer went on drawing a frozen twin while the GL lane kept restoring. The comment is
+  corrected and the stand-down is made real: the consumer clears its "this twin is a picture" flag
+  when the request disappears under a live job.
+* **MEDIUM — the same flag survived two permanent abandonments** (the job failing, and a new
+  generation arriving after the device had refused), so the pass would sample the old layout's
+  twin at the new layout's rects. *"What it painted stands"* is only true until the rects move.
+* **LOW ×6**: a `%%s` that printed itself in the one line saying what the lane is waiting for; a
+  cursor that advanced by frames *accepted* rather than *offered*, so a frame the restorer refuses
+  permanently was re-offered every frame for the life of the atlas; an overflow restart that
+  appended the frame it had just re-seeded; a generation-event list that was six events long when
+  the code has seven; a stale `tagpu_gaf.c:689` citation this landing's own insertion invalidated;
+  and a `cmp` loop in the skill that invites the reader to treat the unit atlas's missing Vulkan
+  half as a failure.
+* **And it explained the terrain paragraph above**, which is the finding that changed a note rather
+  than a line of code.
 
 #### What this does NOT cover
 

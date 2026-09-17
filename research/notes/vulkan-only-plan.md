@@ -772,7 +772,7 @@ Back to the filed list:
    **AND TWO MORE CONSUMERS, WHICH FOUND THE SAME BUG IN ITS SIBLING — 2026-09-17**
    ([gpu-status](gpu-status.html) §2.44). Features and effects are wired, and what crosses is a
    different shape from terrain's because the queue is: a GAF atlas is a **lazy queue**
-   (`tagpu_gaf.c:689`'s `restore_enqueue` adds one frame per miss for the life of the atlas), so
+   (`tagpu_gaf.c`'s `restore_enqueue` adds one frame per miss for the life of the atlas), so
    the hand-over is an **append-only list with a generation** and the consumer holds a **cursor**
    into it. A frame on which the consumer took nothing costs nothing; a recycle, a repack, a
    context loss or a palette move arrives as a new generation and rebuilds the job from index 0.
@@ -791,6 +791,13 @@ Back to the filed list:
    terrain could not have shown it: one tile size, no colour key, so a swapped table costs a source
    rect and nothing else. Fixed the way 7c fixed the vertices, re-measured with the collision
    exercised (62 two-batch slices), and all three atlases are byte-identical on two fixtures.
+
+   **AND THE TERRAIN NEVER HIT THIS BUG AT ALL, which the landing review established and the first
+   version of the write-up got wrong.** `batch N … issued at slice M` is logged at the batch's
+   **OUT**, so two of those lines sharing a slice is 7c's vertex condition; the tables ride the
+   **FILL**, and the budget check sits between individual draws, so a 64-frame batch's FILL is
+   slices earlier than its OUT. The sprite atlases' batches are small enough for two whole
+   FILL→OUT chains to fit in one slice, which is why they found it on the first run.
 
    **What is not done**: the UNITS, which are the fourth consumer and carry a seam of their own —
    their twin is mipped and trilinear, and a Vulkan restore paints level 0 only, so that landing

@@ -201,7 +201,8 @@ typedef struct TAGPU_FXHAND {
        index into `restoreFrames` and takes `[cursor, restoreN)`; a frame on
        which it takes nothing costs nothing, because the entries are still
        there on the next one. `restoreGen` is the discontinuity a cursor cannot
-       survive -- the arm, a recycle, a repack, a context loss, a palette move
+       survive -- the arm, a recycle, a repack, a GL context loss, a palette
+       move, a GL job made over a fresh twin
        -- and a consumer that sees a new one drops its job and starts at 0.
        `restoreRepaint` is 1 only for the palette-move generation, where the
        destination keeps what it holds and is recoloured in place.
@@ -214,6 +215,13 @@ typedef struct TAGPU_FXHAND {
     int                      restoreN;
     unsigned                 restoreGen;
     int                      restoreRepaint;
+    /* ...AND HOW MANY TIMES THE DESTINATION HAS BEEN BLANKED, which is what a
+       consumer must actually key its repaint decision on: `restoreRepaint`
+       describes the LATEST generation, and two resets between two of a
+       consumer's looks collapse into one, so a blank followed by a repaint
+       would read as "keep what you have" over an atlas the producer cleared.
+       Blank whenever this has moved. [FROM THE LANDING-7d REVIEW.] */
+    unsigned                 restoreBlanks;
     const unsigned char*  pal;        /* 256 x RGBA8, tagpu_pal_live()        */
     unsigned              palSerial;
     /* THE FLASH LIGHT TABLE, 32 x 1, THREE BYTES A TEXEL -- the buffer the GL

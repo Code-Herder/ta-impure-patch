@@ -1064,6 +1064,7 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
         s_pub.restoreN       = s_atlas.rlistN;
         s_pub.restoreGen     = s_atlas.rlistGen;
         s_pub.restoreRepaint = s_atlas.rlistRepaint;
+        s_pub.restoreBlanks  = s_atlas.rlistBlanks;
     }
     s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();
     /* the grid as the fragment shader will read it, and only when it will:

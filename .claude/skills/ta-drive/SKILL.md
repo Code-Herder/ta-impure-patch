@@ -964,9 +964,15 @@ done
   GAF atlas the same fault paints **the key's own palette colour, opaque (84, 84, 252), where the
   GL twin writes (0, 0, 0, 0)** — which is a signature worth recognising: if a `_vk` dump has
   opaque key-coloured texels the GL dump has transparent, a per-frame parameter reached the shader
-  from the wrong frame. Check `restorevk: <tag>: batch N … issued at slice M` for two batches
-  sharing a slice: that is the condition, it is **timing-dependent**, and a run where each slice
-  took one batch proves nothing about it.
+  from the wrong frame.
+- **AND THE LOG LINE DOES NOT SHOW THE CONDITION FOR IT**, which the landing review corrected.
+  `restorevk: <tag>: batch N … issued at slice M` is printed at the batch's **OUT**, so two of
+  those lines sharing a slice is the condition for the *vertex* collision (landing 7c), whose data
+  was written at OUT. The tables ride the **FILL**, and a batch's FILL is normally several slices
+  before its OUT, so two batches sharing a slice by that line says nothing about them. The table
+  collision needs two batches whose **FILLs** share a slice, which happens when the batches are
+  small — a sprite atlas, not the terrain, whose 64-frame batches put at most one FILL in a slice.
+  Both conditions are **timing-dependent**: a clean run proves nothing about either.
 
 **Classic++ lighting knobs go in `tagpu_classicpp.cfg`** (G14f), and unlike the restorer's
 they are **live**: the file is re-read on the switch's own twice-a-second poll whenever its

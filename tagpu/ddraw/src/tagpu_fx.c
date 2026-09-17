@@ -1082,6 +1082,7 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total, int scaf)
         s_pub.restoreN       = s_atlas.rlistN;
         s_pub.restoreGen     = s_atlas.rlistGen;
         s_pub.restoreRepaint = s_atlas.rlistRepaint;
+        s_pub.restoreBlanks  = s_atlas.rlistBlanks;
     }
     s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();
     /* THE LIGHT TABLE ONLY WHEN IT HAS BEEN BUILT. A frame with flash vertices

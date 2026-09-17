@@ -412,6 +412,15 @@ typedef struct {
     VkDeviceMemory  palStageMem;
     VkDescriptorSet set[5];
     int             nset;
+    /* THE DUMP'S STAGING, when a job is freed with a copy into it still in
+       flight. It is here for the same reason everything else is: the copy was
+       recorded into the command buffer of the slot that took the dump, and a
+       consumer frees its job when its generation moves -- which is any frame,
+       not that slot's next one. [landing 7d: the first version of `job_free`
+       destroyed it immediately, on the argument that it is "called between
+       frames". Between frames is not past the fence of the slot that recorded
+       the copy, and that is the whole distinction this retire exists for.] */
+    VkBuffer        buf;      VkDeviceMemory bufMem;
     uint32_t        pending;
 } JRETIRE;
 #define JRET_MAX (TAGPU_R_MAXJOBS * TAGPU_VK_SLOTS)
@@ -882,6 +891,8 @@ static void jret_kill(const TAGPU_VKPASS* d, JRETIRE* r)
     if (r->palMem) vkFreeMemory(d->dev, r->palMem, NULL);
     if (r->palStage) vkDestroyBuffer(d->dev, r->palStage, NULL);
     if (r->palStageMem) vkFreeMemory(d->dev, r->palStageMem, NULL);
+    if (r->buf) vkDestroyBuffer(d->dev, r->buf, NULL);
+    if (r->bufMem) vkFreeMemory(d->dev, r->bufMem, NULL);
     if (r->nset && s_dpool) vkFreeDescriptorSets(d->dev, s_dpool, (uint32_t)r->nset, r->set);
     memset(r, 0, sizeof *r);
 }
@@ -1917,13 +1928,15 @@ void tagpu_vk_restore_job_free(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j)
            operation and the memory it belongs to is kept until the mask
            clears. */
         JRETIRE* r = jret_take(d);
-        /* THE DUMP'S STAGING IS NOT IN THE RETIRE, and it does not need to be:
-           a copy into it is recorded at most once and collected at that slot's
-           next step, and this function is called from a consumer between
-           frames -- the same instant that collection happens in. `jret_take`
-           above has also just drained the device if the retire was full. The
-           buffer is this file's own and nothing else names it. */
-        dump_free(d, j);
+        /* THE DUMP'S STAGING GOES INTO THE RETIRE WITH EVERYTHING ELSE. A copy
+           into it may have been recorded into the command buffer of the slot
+           that took the dump, and this function runs whenever a consumer's
+           generation moves -- which is any frame, not that slot's next one.
+           Both MAPPINGS go now, because unmapping is not a device operation
+           and the memory they belong to is kept until the mask clears. */
+        if (j->dumpMap && j->dumpMem) vkUnmapMemory(d->dev, j->dumpMem);
+        r->buf = j->dumpBuf; r->bufMem = j->dumpMem;
+        j->dumpBuf = VK_NULL_HANDLE; j->dumpMem = VK_NULL_HANDLE; j->dumpMap = NULL;
         if (j->palMap && j->palStageMem) vkUnmapMemory(d->dev, j->palStageMem);
         r->fb = j->dstFb;
         r->palImg = j->palImg; r->palMem = j->palMem; r->palView = j->palView;
@@ -1936,6 +1949,8 @@ void tagpu_vk_restore_job_free(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j)
         r->pending = d->slots >= 32 ? 0xFFFFFFFFu : ((1u << d->slots) - 1u);
     }
     if (j->core) tagpu_rcore_job_free(&s_sched, j->core);
+    /* with no device there is nothing to destroy and nothing still executing:
+       the memset below forgets the handles, which is what `lost` does too */
     memset(j, 0, sizeof *j);
 }
 
@@ -2106,7 +2121,7 @@ void tagpu_vk_restore_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
     {
         int i;
         for (i = 0; i < TAGPU_R_MAXJOBS; i++)
-            if (s_vjob[i].core && dump_step(d, cb, s_slot, &s_vjob[i])) break;
+            if (s_vjob[i].core && dump_step(d, cb, slot, &s_vjob[i])) break;
     }
     tagpu_rcore_step(&s_sched);
     s_cb = VK_NULL_HANDLE;
