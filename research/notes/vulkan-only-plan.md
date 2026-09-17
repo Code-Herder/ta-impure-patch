@@ -220,10 +220,22 @@ of everything else. The order below is the corrected one.
      on screen and **16** on a 257-unit crowd.
 
      **Sized 2026-09-17, and it is smaller than it looks.** What the map needs is
-     `tagpu_hires_depth`, not the whole PBR body pass: positions and the per-vertex piece index
-     out of `tagpu_hires.c`'s static buffer, the per-group `first`/`count`/`base`/`cutoff` from
-     `TAGPU_HGROUP`, and the per-unit pose, anchor, yaw, enc and cast that `TAGPU_HUNIT` already
-     carries. The SPIR-V exists (`inc/spirv/tagpu_hires_draw.spv.h`, VS and FS).
+     `tagpu_hires_depth`, not the whole PBR body pass: positions and the per-vertex piece index,
+     the per-group `first`/`count`/`base`/`cutoff` from `TAGPU_HGROUP`, and the per-unit pose,
+     anchor, yaw, enc and cast that `TAGPU_HUNIT` already carries. The SPIR-V exists
+     (`inc/spirv/tagpu_hires_draw.spv.h`, VS and FS).
+
+     **CORRECTION, 2026-09-17: the vertices are NOT there to be read.** The sizing above said
+     they came "out of `tagpu_hires.c`'s static buffer". They do not —
+     `tagpu_hires.c:1396` does `free(m->v); m->v = NULL;` the moment the VBO is uploaded, with
+     the comment *"the vertex data is the GPU's now"*. A Vulkan pass cannot read a GL buffer, so
+     3b needs a **retained CPU copy**, armed the way the restored mirrors are, and that makes it
+     a producer change and not only a consumer one. It is the same shape for the third gate
+     running — landing 2 read atlases back, 3a read the unit atlas back, 3b keeps vertices — and
+     it is the cheapest of the three: `HVSTRIDE` is 9 floats a vertex and the depth path needs
+     only three of the four attributes (position, uv for the cutout, piece index; the normal is
+     the body pass's). **Checked, not assumed** — the free is on the line after the group loop's
+     texture uploads.
      **The albedo textures are the part that can be deferred.** The depth path samples the albedo
      only for the alpha cutout — `if (uCutoff >= 0.0 && tex.a * uBase.a < uCutoff) discard;` one
      line above the depth early-out — and every material of the shipped `armpw.glb` is
