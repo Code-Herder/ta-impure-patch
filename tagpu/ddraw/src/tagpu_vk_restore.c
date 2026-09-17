@@ -534,23 +534,31 @@ static void rp_deps(VkSubpassDependency dep[2], int out)
 {
     VkPipelineStageFlags fs = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     VkPipelineStageFlags co = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    /* TRANSFER IS IN BOTH SCOPES, and not speculatively: a consumer's
+       destination is read back by a copy -- that is how the byte oracle holds
+       this lane's atlas against the GL twin's -- and `dst_ready`'s own clear
+       writes it with one. A dependency that named only the sampling reader
+       would order the picture and not the measurement of it. */
+    VkPipelineStageFlags tr = VK_PIPELINE_STAGE_TRANSFER_BIT;
     memset(dep, 0, 2 * sizeof *dep);
     /* in: whatever was reading or writing these attachments, before we write */
     dep[0].srcSubpass = VK_SUBPASS_EXTERNAL;
     dep[0].dstSubpass = 0;
-    dep[0].srcStageMask = fs | co;
-    dep[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep[0].srcStageMask = fs | co | tr;
+    dep[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                           VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
     dep[0].dstStageMask = co;
     dep[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     /* ...and the OUT pass LOADS, so it reads the attachment as well as writes it */
     if (out) dep[0].dstAccessMask |= VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
-    /* out: our writes, before anything samples them or writes over them */
+    /* out: our writes, before anything samples them, copies them, or writes over them */
     dep[1].srcSubpass = 0;
     dep[1].dstSubpass = VK_SUBPASS_EXTERNAL;
     dep[1].srcStageMask = co;
     dep[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    dep[1].dstStageMask = fs | co;
-    dep[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep[1].dstStageMask = fs | co | tr;
+    dep[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                           VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
 }
 
 /* A RENDER PASS PER USED ATTACHMENT COUNT. The subpass always declares NK

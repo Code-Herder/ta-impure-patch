@@ -171,7 +171,8 @@
     X(vkAllocateMemory) X(vkFreeMemory) X(vkMapMemory) X(vkUnmapMemory) \
     X(vkCmdBindPipeline) X(vkCmdBindVertexBuffers) X(vkCmdBindDescriptorSets) \
     X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor) \
-    X(vkCmdCopyBufferToImage) X(vkCmdPipelineBarrier) X(vkCmdClearDepthStencilImage)
+    X(vkCmdCopyBufferToImage) X(vkCmdCopyImageToBuffer) \
+    X(vkCmdPipelineBarrier) X(vkCmdClearDepthStencilImage)
 
 #define DECL(n) static PFN_##n n;
 IFNS(DECL)
@@ -273,6 +274,32 @@ static TAGPU_VKRJOB* s_rjob;
 static unsigned      s_rjSerial;
 static int           s_rjTried;
 static int           s_rjPainted;          /* job_painted at the last report  */
+
+/* ---- THE BYTE ORACLE'S VULKAN HALF (tagpu_restoredump.on) ----------------
+   tagpu_terr.c writes `tagpu_restore.rgba` off its restored TEXTURE with
+   glGetTexImage; this writes `tagpu_restore_vk.rgba` off the image this lane
+   painted, and the two are then one `cmp` apart. Both lanes restore the same
+   rectangles in the same order from the same atlas IN THE SAME PROCESS and on
+   the same frames, so the comparison is of the two implementations and of
+   nothing else -- no second launch, no second palette, no settle heuristic.
+
+   AND IT DOES NOT BLOCK THE DEVICE TO GET THE BYTES. The copy is recorded into
+   this frame's command buffer and read at THIS SLOT'S NEXT `prepare`, which is
+   the one instant the seam's fence has proved the submit carrying it completed
+   -- the very argument `shared_slot_done` below already makes for the retire,
+   so it costs no new reasoning. A capture that called vkDeviceWaitIdle would
+   be measuring a stall as well as a picture.
+
+   `s_dumpState`: 0 nothing, 1 a copy is recorded and owed to `s_dumpSlot`,
+   2 written (once per map -- the atlas does not change again). */
+static VkBuffer       s_dumpBuf;
+static VkDeviceMemory s_dumpMem;
+static unsigned char* s_dumpMap;
+static VkDeviceSize   s_dumpBytes;
+static int            s_dumpW, s_dumpH;
+static uint32_t       s_dumpSlot;
+static int            s_dumpState;
+static unsigned       s_dumpSerial;        /* the job serial it was taken of  */
 
 /* what `record` was left to draw */
 static int s_ncell;
@@ -1278,6 +1305,101 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
          t->restoreSerial, repaint ? ", repaint" : "");
 }
 
+/* Give the dump's buffer back. Safe at any time the device is alive and the
+   copy is not in flight -- every caller is either past this slot's fence or
+   inside the pass's teardown, which the seam drains the device for. */
+static void dump_free(const TAGPU_VKPASS* d)
+{
+    if (s_dumpMap) { vkUnmapMemory(d->dev, s_dumpMem); s_dumpMap = NULL; }
+    if (s_dumpBuf) { vkDestroyBuffer(d->dev, s_dumpBuf, NULL); s_dumpBuf = VK_NULL_HANDLE; }
+    if (s_dumpMem) { vkFreeMemory(d->dev, s_dumpMem, NULL); s_dumpMem = VK_NULL_HANDLE; }
+    s_dumpBytes = 0; s_dumpW = s_dumpH = 0;
+}
+
+/* One half of the byte oracle, from `prepare`: collect a copy this slot owes
+   us, or record one. `cb` is recording and outside any render pass. */
+static void dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
+{
+    FILE* f;
+
+    /* THE COLLECTION FIRST, and under this slot's own fence. */
+    if (s_dumpState == 1 && slot == s_dumpSlot) {
+        size_t n = (size_t)s_dumpBytes;
+        f = s_dumpMap ? fopen("tagpu_restore_vk.rgba", "wb") : NULL;
+        if (f) {
+            size_t w = fwrite(s_dumpMap, 1, n, f);
+            fclose(f);
+            plog(d, "terr: restored atlas dumped to tagpu_restore_vk.rgba "
+                    "(%dx%d RGBA, %u bytes)%s", s_dumpW, s_dumpH, (unsigned)n,
+                 w == n ? "" : " - SHORT WRITE");
+        } else plog(d, "terr: tagpu_restore_vk.rgba would not open - nothing written");
+        s_dumpState = 2;
+        dump_free(d);
+        return;                            /* one action a frame, and it is done */
+    }
+    /* A NEW ATLAS IS A NEW DUMP. State 2 is "this restore has been written",
+       and `s_dumpSerial` is which restore that was -- so a map change, a GL
+       reset or a repaint re-arms it, and a settled map does not rewrite 22 MB
+       on every frame of it. */
+    if (s_dumpState == 2 && s_rjob && s_rjSerial != s_dumpSerial) s_dumpState = 0;
+    if (s_dumpState != 0) return;
+    if (GetFileAttributesA("tagpu_restoredump.on") == INVALID_FILE_ATTRIBUTES) return;
+    /* THE PICTURE HAS TO BE FINISHED. `idle` is the restorer's own word for
+       "every frame added is painted", and taking the dump before that would
+       compare a slice count rather than two restorers. A job that FAILED is
+       not dumped at all: what it painted is a fragment and calling that the
+       lane's answer is the kind of measurement that reads as a result. */
+    if (!s_rjob || !s_rgbAtlas.have || !s_rgbAtlas.img) return;
+    if (tagpu_vk_restore_job_failed(s_rjob)) return;
+    if (!tagpu_vk_restore_job_idle(s_rjob)) return;
+    if (tagpu_vk_restore_job_painted(s_rjob) < 1) return;
+
+    s_dumpW = s_rgbAtlas.w; s_dumpH = s_rgbAtlas.h;
+    s_dumpBytes = (VkDeviceSize)s_dumpW * (VkDeviceSize)s_dumpH * 4;
+    if (!mk_buffer(d, s_dumpBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                   &s_dumpBuf, &s_dumpMem, &s_dumpMap)) {
+        plog(d, "terr: no host-visible memory for a %u-byte restore dump",
+             (unsigned)s_dumpBytes);
+        dump_free(d);
+        s_dumpState = 2;                   /* do not ask again every frame     */
+        return;
+    }
+    {
+        VkBufferImageCopy rg;
+        memset(&rg, 0, sizeof rg);
+        rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        rg.imageSubresource.layerCount = 1;
+        rg.imageExtent.width = (uint32_t)s_dumpW;
+        rg.imageExtent.height = (uint32_t)s_dumpH;
+        rg.imageExtent.depth = 1;
+        /* SHADER_READ_ONLY in and SHADER_READ_ONLY out: the OUT render pass
+           leaves the image there and the terrain's own draw expects it there,
+           so the copy borrows the layout and gives it back. The source scope
+           names the colour write as well as the sample, because the last thing
+           to touch this image was a render pass and not a shader. */
+        img_barrier(cb, s_rgbAtlas.img, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                    VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+        vkCmdCopyImageToBuffer(cb, s_rgbAtlas.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               s_dumpBuf, 1, &rg);
+        img_barrier(cb, s_rgbAtlas.img, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+    }
+    s_dumpSlot = slot;
+    s_dumpSerial = s_rjSerial;
+    s_dumpState = 1;
+    plog(d, "terr: restore dump of %dx%d recorded on slot %u - written at this "
+            "slot's next frame", s_dumpW, s_dumpH, (unsigned)slot);
+}
+
 int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
 {
     TAGPU_TERRHAND t;
@@ -1554,6 +1676,7 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        after the uploads for the reason stated at `restore_want`, and before
        the refusal below, which is what its `have` feeds. */
     restore_want(d, &t);
+    dump_step(d, cb, slot);
 
     /* THE RESTORED REFUSAL SITS AFTER THE UPLOADS, NOT BEFORE THEM, and the
        order is the point. `prepare` returning 0 skips everything below it, so a
@@ -1828,6 +1951,13 @@ void tagpu_vk_terr_down(const TAGPU_VKPASS* d)
        both, so neither is still in a queue. */
     if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; }
     s_rjSerial = 0; s_rjPainted = 0;
+    /* THE DUMP'S BUFFER, AND ITS STATE WITH IT. A copy recorded into a command
+       buffer of the device that is going never completes, so the collection is
+       owed to nobody: state 0 rather than 2, so a new device's restore can be
+       dumped. The seam's vkDeviceWaitIdle is what makes freeing the buffer
+       safe rather than a race. */
+    dump_free(d);
+    s_dumpState = 0; s_dumpSerial = 0;
     /* ...AND THE VERDICT DOES NOT SURVIVE THE DEVICE. `s_rjTried` is a fact
        about a device that refused, so a new one gets asked again -- the same
        reasoning as ST_UNBUILT below, and the restorer's own `up` latch is
