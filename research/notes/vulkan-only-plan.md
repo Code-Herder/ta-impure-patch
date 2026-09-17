@@ -320,6 +320,21 @@ would not have shown up as a failure — it would have shown up as three landing
 5. **`tagpu_vk_mark.c`** — bars, cursor, band box, digits. The SPIR-V exists
    (`inc/spirv/tagpu_mark.spv.h`); the GL twin is the oracle and goes in the same landing.
    **After** 2 and 3, because until then it would draw over a world that is not there.
+
+   **AND IT MUST CARRY A REPLACEMENT FOR THE LEVER IT BREAKS [found 2026-09-17, before starting
+   it].** Every restored-art A/B on this plan arms `mark.on`, for a reason that has nothing to do
+   with marks: `tagpu_rglsl_step` runs from `tagpu_native.c` only when one of
+   `fx|sfx|feat|terr|mark` is armed, and **`mark` is the only one of the five with no Vulkan pass
+   of its own** — so it steps the restorer while leaving exactly one pass drawing, which is what
+   the capture requires. Porting mark makes all five drawing passes, and the recipe stops
+   working: the lane answers *"1 A/B levers claimed this frame and 2 passes drew into it"*.
+   The per-pass `tagpu_<x>.off` files are no help, because they disable a pass on BOTH lanes and
+   the oracle needs the GL half drawing.
+
+   So landing 5 owes a way to step the restorer that arms no pass — the same shape
+   `tagpu_gui_surf.c:2465` already uses to step it when nothing else did. Without it, landings 6
+   and 7 inherit a measurement they cannot take, and they are the two landings that most need it.
+   This is the *Nothing half-done left behind* rule applied to an instrument rather than to code.
 6. **The build ghost and the `otherDraws` stand-down** (`tagpu_vk_unit.c:1316`). Not reached
    today — the unit pass refuses on the atlas mirror several checks earlier — so its cost is
    still unknown.
