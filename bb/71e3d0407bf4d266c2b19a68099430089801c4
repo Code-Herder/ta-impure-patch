@@ -1,0 +1,17 @@
+landing-review: model=opus effort=medium range=main..bb71e3d findings=3 acted=3 rejected=0 date=2026-09-17
+1 CONFIRMED real: tagpu_rcore_job_new did not implement the header's
+  'or the model is unusable' NULL; tagpu_rcore_ready() was dead. With
+  depth==0 the sequencer falls into OUT and reads layer[-1]. Unreachable
+  on the GL lane (init_gl guards it); a trap for the second backend.
+  Fixed in 569c0f9 by making the header true.
+2 CONFIRMED cosmetic: two diagnostics reworded because the core may not
+  name GL terms ('timer query', MAX_UNIFORM_BLOCK_SIZE). Strings KEPT;
+  the docs' 'every log line' overclaim corrected instead. Every
+  DOCUMENTED line is byte-identical.
+3 CONFIRMED cleanup: s_modelTried and TAGPU_RDRAWREQ.cols were dead;
+  removed, and the draw request now states the slot tables' lifetime.
+Verified clean by the reviewer against the pre-split file: the sequencer's
+advance order in all three branches, the full-NK conv cost, the slot tables
+never describing another job's batch, state_push/pop balance across every
+early return, timer/s_query agreement across glreset and give-up, and that
+a failing draw cannot spin.
