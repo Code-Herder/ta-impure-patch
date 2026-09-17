@@ -6962,6 +6962,14 @@ pass compares the published ratio against its own and stands the frame down.
 
 The first row is what this landing changed: the same fixture drew *nothing* before it.
 
+**AND ALL THREE ROWS WERE RE-TAKEN AFTER THE RE-REVIEW'S FIXES, to the same numbers** — 2 128 and
+1 525 non-black a side, 0 and 0, and the same 566 at worst channel 9. That re-run is not a
+formality here: the `s_arReq` fix makes the partial-row upload REACHABLE for the first time, so
+every figure above it had been taken with the whole square going up every time. The picture is
+the same either way, which is what it should be, and now it is measured that way rather than
+assumed. The short-chain refusal is evidenced from the other side by the same run: the Vulkan
+column is 2 128 non-black, not 0, so the refusal did not fire on a healthy session.
+
 #### What the RE-REVIEW found, and the one it found in this page itself
 
 Six commits went to a dedicated reviewer after the fixes above, because the fixes were larger
@@ -7026,6 +7034,12 @@ content key converges after exactly one extra read-back rather than spinning. Wh
   needs the unit pass drawing for the census to close, and two drawing passes make the lane refuse
   the capture. The chain closing is evidenced by the absence of every refusal plus the guard's own
   message naming two passes; the pixels are one pass at a time.
+* **THE BANDWIDTH HALF OF THE `s_arReq` FIX IS ARGUED, NOT MEASURED.** What is measured is that
+  the picture is unchanged with the partial path reachable. That the pass now sends the shelf's
+  rows rather than the whole square on every serial change — 21 MB of memcpy and 21 MB of
+  host-visible staging per slot — is read off the code and off `tagpu_vk_feat.c`, which has done
+  it that way since gate 2. This pass logs no staging figure, and adding a counter to prove it
+  would be instrumentation to leave behind.
 * **THE SAME VIEW HAZARD IS STILL OPEN IN THE THREE SIBLING PASSES.** `tagpu_vk_feat.c:374`,
   `tagpu_vk_fx.c:344` and `tagpu_vk_terr.c:409` each `return 0` on a failed `vkCreateImageView`
   without nulling the out-param — and they leak the image and its memory besides, which the unit
