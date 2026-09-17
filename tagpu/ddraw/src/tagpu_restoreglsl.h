@@ -104,6 +104,15 @@ void tagpu_rglsl_step(void);
    to find out whether anything stepped the restorer, and steps it itself when
    nothing did; otherwise its queue is never drained. */
 unsigned tagpu_rglsl_calls(void);
+
+/* `tagpu_rglsl.step`: 1 when the restorer is to be stepped with no pass armed.
+   A MEASUREMENT LEVER. The A/B needs the restorer painting while exactly one
+   Vulkan pass draws, and until `tagpu_mark.c` was ported the way to get that
+   was to arm `mark` -- the only item on the restorer's arming list with no
+   Vulkan pass of its own. This replaces that trick with something that does not
+   depend on which passes happen to be unported. Polled on the 30-frame cadence
+   every other lever uses. */
+int tagpu_rglsl_step_forced(unsigned frame_counter);
 /* The GL context died with everything in it: forget the ids, no deletes, and
    every job with them -- call it BEFORE the jobs' owners forget theirs. */
 void tagpu_rglsl_glreset(void);

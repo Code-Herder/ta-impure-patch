@@ -3236,6 +3236,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* ---- effects gather (projectiles, explosions, debris, particles) ---- */
     TAGPU_FXVIEW fv;
     int nfx = 0, nfeat = 0, nterr = 0, nmark = 0;
+    unsigned rglslSeen = 0;      /* the restorer's call count before the gathers */
     /* THE VIEW IS FILLED WHATEVER IS ARMED, and only the GATHERS are gated.
        It used to be filled inside the `if` below — but `tagpu_shadow_begin`
        is handed this same struct further down, on the Classic++ shadow path,
@@ -3285,6 +3286,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         fv.r0 = r0; fv.rows = rows;
         fv.frame_counter = f->frame_counter;
     }
+    rglslSeen = tagpu_rglsl_calls();
     if (fxOn || sfxOn || featOn || terrOn || markOn) {
         /* terrain first (the frame's far plane), then features: they own the
            depth the units are tested against */
@@ -3297,6 +3299,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            (so what it paints is sampled this frame) */
         tagpu_rglsl_step();
     }
+    /* ...AND THE SAME SLICE WITH NO PASS ARMED, when the measurement lever asks
+       for it. `tagpu_rglsl.step` exists because the A/B needs the restorer
+       painting while exactly ONE Vulkan pass draws, and the block above ties
+       the step to arming a pass -- which used to be free only because `mark`
+       had no Vulkan twin. The call-count compare is `tagpu_gui_surf.c`'s, so a
+       frame the block above already stepped is not stepped twice and the slice
+       budget is spent once either way. */
+    if (tagpu_rglsl_step_forced(f->frame_counter) && tagpu_rglsl_calls() == rglslSeen)
+        tagpu_rglsl_step();
     /* NEVER return early while we own the terrain: the engine's frame is a
        flat key fill inside the viewport, and only the composite below turns it
        back into a picture. tagpu_terr_gather hands the draw back on any bail,

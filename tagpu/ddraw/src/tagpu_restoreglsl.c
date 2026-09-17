@@ -65,6 +65,7 @@
 #include "tagpu_restore_glsl.h"
 #include "tagpu_restoreglsl.h"
 #include "tagpu_classicpp.h"
+#include "tagpu_opt.h"   /* tagpu_rglsl.step, the measurement lever below */
 
 #define SLOT_COLS    8
 #define SLOT_ROWS    8
@@ -967,6 +968,42 @@ static void job_drained(struct TAGPU_RGLSL_JOB* j)
 }
 
 unsigned tagpu_rglsl_calls(void) { return s_calls; }
+
+/* `tagpu_rglsl.step` -- STEP THE RESTORER WITHOUT ARMING A PASS, and it exists
+   for the A/B rather than for play.
+
+   Why it has to exist at all. `tagpu_rglsl_step` runs from `tagpu_native.c`
+   only inside `if (fxOn || sfxOn || featOn || terrOn || markOn)`, so measuring
+   restored art has always meant arming one of those five -- and the capture
+   requires exactly ONE pass drawing into the Vulkan frame, so the only usable
+   choice was the one of the five with no Vulkan pass of its own. That was
+   `mark`, until the landing that ported it. With all five drawing, an A/B of
+   restored art would be unmeasurable: arm nothing and the twin stays alpha 0
+   and both lanes agree about a branch neither took (which is how gate 3a's
+   first figures came out wrong), arm anything and the lane refuses the capture
+   with *"2 passes drew into it"*.
+
+   So the lever steps the restorer and arms NOTHING. It is not a play knob and
+   should not become one: the restorer's own slice budget still bounds it, but
+   a session that steps it with no pass asking for a twin is doing work for
+   nobody. [The Vulkan-only plan's landing 5, which is what broke the old
+   recipe and therefore owed this.] */
+int tagpu_rglsl_step_forced(unsigned frame_counter)
+{
+    static int      s_force = -1;
+    static unsigned s_forceCheck;
+    char b[64];
+    if (s_force >= 0 && frame_counter - s_forceCheck < 30) return s_force > 0;
+    s_forceCheck = frame_counter;
+    {
+        int was = s_force;
+        s_force = tagpu_opt_read("tagpu_rglsl.step", b, sizeof b) >= 0;
+        if (s_force != was)
+            rlog(s_force ? "restoreglsl: tagpu_rglsl.step - the restorer is stepped with no pass armed (a measurement lever, not a play one)"
+                         : "restoreglsl: tagpu_rglsl.step gone - back to the pass arming");
+    }
+    return s_force > 0;
+}
 
 void tagpu_rglsl_step(void)
 {
