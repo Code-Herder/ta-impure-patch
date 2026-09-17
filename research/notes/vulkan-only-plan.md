@@ -335,6 +335,29 @@ would not have shown up as a failure — it would have shown up as three landing
    `tagpu_gui_surf.c:2465` already uses to step it when nothing else did. Without it, landings 6
    and 7 inherit a measurement they cannot take, and they are the two landings that most need it.
    This is the *Nothing half-done left behind* rule applied to an instrument rather than to code.
+   **Done 2026-09-17, before the port**: `tagpu_rglsl.step`, measured at 0 px with a twin that
+   painted (the GL lane's own picture moves 6 200 bytes between `assets=1` and `assets=0`).
+
+   **AND THE PORT ITSELF IS SMALLER THAN GATES 2 AND 3, because nothing needs a new mirror.**
+   Checked rather than assumed — every input this pass samples is already CPU-side:
+
+   * **the vertices** are `tagpu_mark.c`'s own arrays (`s_verts`, `s_ordt`, `s_ordl`, `s_ordx`),
+     7 floats a vertex — x,y, u,v, wx,wz, colour — uploaded to a stream VBO each frame;
+   * **the layer** arrives as `TAGPU_MARKLAYER` — `pix`, `pitch` and a rect — which is already
+     CPU bytes rather than a GL name;
+   * **the text atlas** is already crossed: `tagpu_text_atlas(&gen)` exists, added in G19d "for a
+     backend that is not GL", one coverage byte per texel with a generation that ticks when a
+     raster lands;
+   * **the palette, fog grid and fog LUT** are crossed already for the passes that sample them.
+
+   So landing 5 is a hand-over and a consumer, with no producer-side read-back to build — the
+   first of these gates where that is true. What it does need is the DRAW LIST, because this pass
+   is not one draw: order triangles, order lines (at `ss` line width), order labels, bars, digits,
+   the post-fog layer and the cursors, each with its own `uText`/`uFog` and the last two with fog
+   forced off, in the engine's own order (`0x469BFC` → `0x469CB9` → `0x469CF9` → the build cursor
+   after the fog overlay). The list crosses as records, for the same reason the caster record does
+   in 3b: a consumer that re-derives which buckets are non-empty can disagree with the pass that
+   drew them.
 6. **The build ghost and the `otherDraws` stand-down** (`tagpu_vk_unit.c:1316`). Not reached
    today — the unit pass refuses on the atlas mirror several checks earlier — so its cost is
    still unknown.
