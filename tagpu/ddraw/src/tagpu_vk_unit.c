@@ -279,6 +279,17 @@ static int            s_arDim, s_arReq, s_arMips;
    chain and is what the pass samples. */
 static VkImageView    s_arLvl[TAGPU_VK_MAXMIP + 1];
 static int            s_arLvlN;
+/* THE RESTORE THIS LANE RUNS FOR ITSELF, when the producer publishes the frame
+   LIST instead of the read-back. The cursor into that list is `s_rjTaken`; the
+   generation is the only thing a cursor cannot survive, so `s_rjGen` is
+   compared and a move restarts from 0. `s_rjChain` records that the twin's mip
+   levels are reduced here too -- without it the twin has one defined level and
+   a trilinear fetch reads the rest as whatever the driver left, which is why a
+   chainless job is not a picture this pass may draw. */
+static TAGPU_VKRJOB*  s_rjob;
+static unsigned       s_rjGen, s_rjBlanks;
+static int            s_rjTaken, s_rjPainted, s_rjTried, s_rjChain;
+static VkImageView    s_rjSrcView, s_rjDstView;
 static unsigned       s_arSerial;
 static int            s_arHave;
 
@@ -1126,6 +1137,151 @@ static int build_descriptors(const TAGPU_VKPASS* d)
    that will not give us 16 MB of RGBA8 loses restored frames rather than the
    pass. That is why it does not join the `goto refuse` family, whose label
    stops the pass for the session. */
+/* THE REQUEST, AND WHAT THIS LANE DOES WITH IT (the Vulkan-only plan's landing
+   7e-2). Landing 7d's `restore_want` in tagpu_vk_feat.c and tagpu_vk_fx.c is
+   the shape and every comment there applies here; what the UNITS add is the
+   mip chain, which is registered with the job and without which the twin is
+   not a picture this pass may draw.
+
+   Called from `prepare` AFTER the atlas upload, because the job reads the
+   indexed atlas's view and that is where it comes to exist. */
+static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
+{
+    int repaint, n;
+
+    if (!h->restoreFrames || h->restoreGen == 0) {
+        /* no request: the lever was never on, or the producer's list died. */
+        if (s_rjob) {
+            tagpu_vk_restore_job_free(d, s_rjob);
+            s_rjob = NULL; s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0;
+            s_rjChain = 0; s_rjSrcView = VK_NULL_HANDLE; s_rjDstView = VK_NULL_HANDLE;
+            /* AND WHAT IT PAINTED IS NO LONGER A PICTURE -- the list dying is
+               the producer's out-of-memory drop, and the read-back cannot take
+               over because both arm latches are one-way and the mirror was
+               freed when the list armed. [The landing-7d review's finding.] */
+            s_arHave = 0;
+        }
+        return;
+    }
+    /* the source moved under a live job: `atlas_upload` refuses a dimension
+       change and `atlas_build` re-creates the image, so this is the narrow case
+       -- and the one that reads from a destroyed view if nothing checks */
+    /* THE TWIN MOVING IS THE SAME HAZARD AS THE SOURCE MOVING, one image over:
+       `atlas_rgb_build` destroys the per-level views it hands the job, so a
+       rebuild under a live job leaves it painting through destroyed handles.
+       The rebuild is unreachable today -- the dimensions are compile-time and
+       the accessor refuses a depth that moves -- which is exactly why the check
+       is here rather than trusted. */
+    if (s_rjob && s_rjDstView && s_arLvlN > 0 && s_rjDstView != s_arLvl[0]) {
+        plog(d, "unit: the restored twin moved under a live restore - dropping it "
+                "and starting over on the new one");
+        tagpu_vk_restore_job_free(d, s_rjob);
+        s_rjob = NULL; s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0;
+        s_rjChain = 0; s_rjSrcView = VK_NULL_HANDLE; s_rjDstView = VK_NULL_HANDLE;
+        s_arHave = 0;
+    }
+    if (s_rjob && s_rjSrcView && s_atView && s_rjSrcView != s_atView) {
+        plog(d, "unit: the indexed atlas moved under a live restore - dropping it "
+                "and starting over on the new one");
+        tagpu_vk_restore_job_free(d, s_rjob);
+        s_rjob = NULL; s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0;
+        s_rjChain = 0; s_rjSrcView = VK_NULL_HANDLE; s_rjDstView = VK_NULL_HANDLE;
+        s_arHave = 0;
+    }
+    if (s_rjob && s_rjGen == h->restoreGen) {
+        int painted = tagpu_vk_restore_job_painted(s_rjob);
+        /* ONE PAINTED FRAME MAKES THIS A PICTURE -- but only with the chain,
+           because the pass samples the twin trilinearly and the levels below 0
+           are undefined until something reduces them. */
+        if (painted > 0 && s_rjChain) s_arHave = 1;
+        if (painted != s_rjPainted) {
+            s_rjPainted = painted;
+            if (tagpu_vk_restore_job_idle(s_rjob))
+                plog(d, "unit: restored twin painted here - %d frames of generation "
+                        "%u, %d mip level(s) reduced here too, no mirror and no "
+                        "read-back", painted, h->restoreGen, s_arMips);
+        }
+        if (tagpu_vk_restore_job_failed(s_rjob)) {
+            plog(d, "unit: the restore failed on this lane - the twin stops being "
+                    "drawn from, because the next atlas layout would sample it at "
+                    "rects it was never painted for");
+            tagpu_vk_restore_job_free(d, s_rjob);
+            s_rjob = NULL; s_rjGen = 0; s_rjTaken = 0; s_rjChain = 0;
+            s_rjTried = 1;
+            s_arHave = 0;
+            return;
+        }
+        n = h->restoreN - s_rjTaken;
+        if (n > 0) {
+            int took = tagpu_vk_restore_job_add(s_rjob, h->restoreFrames + s_rjTaken, n);
+            /* the cursor advances by what was OFFERED, not by what was taken:
+               a frame the core can never queue is skipped for good, and
+               advancing by `took` would re-offer the tail for ever. A whole-call
+               failure (`took` 0 with frames offered) is the queue's own realloc
+               and is transient, so the cursor stays. [Landing 7d's review.] */
+            if (took > 0) {
+                s_rjTaken += n;
+                if (took < n)
+                    plog(d, "unit: %d of %d new restore frames were refused by the "
+                            "restorer (degenerate or larger than a slot) - they stay "
+                            "indexed until the next generation", n - took, n);
+            }
+        }
+        return;
+    }
+    if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; s_rjTaken = 0; s_rjChain = 0; }
+    if (s_rjTried) { s_arHave = 0; return; }
+    if (!s_arImg || !s_arView || !s_atView || !s_atHave) return;
+    /* THE CHAIN IS A PREREQUISITE, NOT AN EXTRA. Without per-level views this
+       lane cannot reduce, and a twin whose levels 1.. are undefined is a wrong
+       picture wherever a unit is minified -- which is ordinary play. Standing
+       the restore down leaves the pass on the indexed atlas, which is the
+       shipped fallback and looks like Classic++ off rather than like a bug. */
+    if (s_arMips > 0 && s_arLvlN < s_arMips + 1) {
+        plog(d, "unit: the restored twin has no per-level views, so this lane "
+                "cannot reduce its own mip chain - staying indexed rather than "
+                "sampling levels nothing has written");
+        s_rjTried = 1;
+        return;
+    }
+    if (!tagpu_vk_restore_up(d)) { s_rjTried = 1; return; }
+    /* a repaint only over something this pass painted, and only if nothing was
+       blanked since it last looked -- the blank COUNT is what a single
+       `restoreRepaint` flag cannot hide. [Landing 7d's review.] */
+    repaint = h->restoreRepaint && s_arHave && h->restoreBlanks == s_rjBlanks;
+    s_rjob = tagpu_vk_restore_job_new(d, "unit", 3, 0, repaint,
+                                      s_atView, s_atDim, s_atDim,
+                                      h->pal,
+                                      s_arImg, s_arLvl[0], s_arDim, s_arDim);
+    if (!s_rjob) { s_rjTried = 1; return; }
+    /* THE OUT PASS PAINTS LEVEL 0 THROUGH `s_arLvl[0]`, not through the
+       whole-chain view: a framebuffer attachment must name exactly one level,
+       and the whole-chain view named three. */
+    s_rjChain = 1;
+    if (s_arMips > 0) {
+        s_rjChain = tagpu_vk_restore_job_chain(d, s_rjob, s_arMips, s_arDim,
+                                               &s_arLvl[1], &s_arLvl[0]);
+        if (!s_rjChain) {
+            /* the reason is in the log. A level-0-only twin is not a picture
+               this pass may sample, so the whole restore stands down rather
+               than draw from levels nothing wrote. */
+            tagpu_vk_restore_job_free(d, s_rjob);
+            s_rjob = NULL; s_rjTried = 1; s_arHave = 0;
+            return;
+        }
+    }
+    s_rjTaken = tagpu_vk_restore_job_add(s_rjob, h->restoreFrames, h->restoreN);
+    s_rjGen = h->restoreGen;
+    s_rjBlanks = h->restoreBlanks;
+    s_rjSrcView = s_atView;
+    s_rjDstView = s_arLvl[0];
+    s_rjPainted = 0;
+    if (!repaint) s_arHave = 0;
+    plog(d, "unit: restoring the twin HERE - %d of %d frames over %dx%d, "
+            "generation %u%s", s_rjTaken, h->restoreN, s_arDim, s_arDim,
+         h->restoreGen, repaint ? ", repaint" : "");
+}
+
 static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int mips)
 {
     int i;
@@ -1594,7 +1750,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     VkMemoryBarrier mb = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
     VkDeviceSize ustride, vglOff2, fglOff, pstride, stageOff, stageNeed, atlasNeed;
     VkDeviceSize rgbNeed = 0;
-    int rgbRows = 0;
+    int rgbRows = 0, feed = 0;
     int fogW = 1, fogH = 1, i, anyUpload = 0, fogWanted = 0;
 
     s_ndraw = 0; s_ncast = 0; s_drawThis = 0;
@@ -1757,7 +1913,12 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        a different picture wherever a unit is minified at an angle, which is
        ordinary play, so the frame stands down rather than draw one. Same rule,
        and the same shape, as `s_cmpLinear` above. */
-    if (h.restored && rgbRows > 0 && h.atlasRgbAniso != s_twinAniso) {
+    /* ON BOTH PATHS. `atlasRgbAniso` is the ratio GL applied to the TWIN, not a
+       fact about the read-back, and the producer publishes it whether it hands
+       over the picture or the list -- so a restore this lane runs for itself is
+       held to the same filter test as a mirror it uploaded. [Landing 7e-2.] */
+    if (h.restored && (rgbRows > 0 || h.restoreFrames) &&
+        h.atlasRgbAniso != s_twinAniso) {
         if (!s_saidAniso) {
             s_saidAniso = 1;
             plog(d, "unit: the GL twin filters the Classic++ restored atlas at %.1fx "
@@ -1769,17 +1930,24 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     }
     s_saidAniso = 0;
 
-    if (h.restored && !(s_arView && rgbRows > 0)) {
+    /* EITHER THE MIRROR OR A RESTORE THIS LANE RAN, and the refusal must not
+       always return: with the list armed there is no mirror and no painted
+       twin until a job exists, and the job is made below in `restore_want`. So
+       a frame that has the list, the image and no job yet FALLS THROUGH to make
+       one and then returns -- which is the deadlock landing 7d paid for in the
+       sprite passes and is written the same way here. [Landing 7e-2.] */
+    feed = 0;
+    if (h.restored && !(s_arView && (rgbRows > 0 || (h.restoreFrames && s_arHave)))) {
+        if (h.restoreFrames && s_arImg && !s_rjTried) feed = 1;
         if (!s_saidRestored) {
             s_saidRestored = 1;
             plog(d, "unit: the GL twin is drawing through the Classic++ restored "
-                    "atlas and this lane has no mirror of it yet - nothing drawn "
-                    "until the read-back produces rows, rather than a different "
-                    "picture from its own oracle");
+                    "atlas and this lane has neither a mirror of it nor a restore "
+                    "of its own yet - nothing drawn until one of them arrives, "
+                    "rather than a different picture from its own oracle");
         }
-        goto standdown;
-    }
-    s_saidRestored = 0;
+        if (!feed) goto standdown;
+    } else s_saidRestored = 0;
 
     /* THE FOG GRID, and the bound re-checked in this file's own terms. A unit
        with `uFog & 1` samples it, so a frame that wants one and has none is a
@@ -2079,6 +2247,18 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     if (!atlas_upload(d, cb, s, &h, stageOff)) goto refuse;
     if (!atlas_rgb_upload(d, cb, s, &h, stageOff + (atlasNeed - rgbNeed)))
         goto refuse;
+
+    /* THE REQUEST, AFTER THE ATLAS EXISTS. `restore_want` reads `s_atView`, and
+       this is the call that makes it -- so asking earlier would ask over an
+       image with no contents and paint entry 0 over the art. `feed` is the
+       frame that came here only to make the job: it has nothing to draw yet and
+       says so by returning 0, exactly as the refusal above would have. */
+    restore_want(d, &h);
+    /* ...AND OUT THROUGH `standdown`, NOT A BARE RETURN. This file's slots are
+       taken at the top of `prepare` and given back by that label; a frame that
+       came here only to make the job has drawn nothing and owes the slot back
+       exactly as every other stand-down does. */
+    if (feed) goto standdown;
 
     /* THE FOUR SMALL IMAGES, per slot, so the one-line invariant covers them:
        UNDEFINED in, because the whole of each is re-sent every frame and there
@@ -2523,6 +2703,21 @@ void tagpu_vk_unit_down(const TAGPU_VKPASS* d)
     for (k = 0; k < RET_MAX; k++)
         if (s_ret[k].buf) { kill_buffer(d, &s_ret[k].buf, &s_ret[k].mem, NULL);
                             s_ret[k].pending = 0; }
+    /* THE RESTORE JOB GOES BACK BEFORE THE IMAGES IT NAMES, and before the
+       per-level views: it holds a framebuffer over each of them, and a view
+       still named by a live framebuffer may not be destroyed. Every caller of
+       this function is past the seam's vkDeviceWaitIdle, so none of it is in a
+       queue. `s_rjTried` is a fact about a device that refused, so it does not
+       survive the device either. [Landing 7e-2; tagpu_vk_feat.c carries the
+       same block for the same reason.] */
+    if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; }
+    s_rjGen = 0; s_rjBlanks = 0; s_rjTaken = 0; s_rjPainted = 0;
+    s_rjTried = 0; s_rjChain = 0;
+    s_rjSrcView = VK_NULL_HANDLE; s_rjDstView = VK_NULL_HANDLE;
+    for (k = 0; k <= TAGPU_VK_MAXMIP; k++)
+        if (s_arLvl[k]) { vkDestroyImageView(d->dev, s_arLvl[k], NULL);
+                          s_arLvl[k] = VK_NULL_HANDLE; }
+    s_arLvlN = 0;
     kill_image(d, &s_atImg, &s_atMem, &s_atView);
     kill_image(d, &s_arImg, &s_arMem, &s_arView);
     kill_image(d, &s_dumImg, &s_dumMem, &s_dumView);
