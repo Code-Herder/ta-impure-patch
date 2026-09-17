@@ -187,10 +187,96 @@ PROGRAMS = [
     ("hires",        "tagpu_hires_draw::VS",    "tagpu_hires_draw::FS"),
 ]
 
+# ---------------------------------------------------------------- the restorer
+#
+# THE ONE VARIANT SHADER SET, and the only one read out of a HEADER rather than a
+# .c. `tagpu_restore_glsl.h` holds five shaders as macros, used at call sites in
+# `tagpu_restoreglsl.c` under a prefix the runtime builds:
+#
+#     #define NK   <n>    output channel-tiles per conv draw
+#     #define WMAX <m>    mat4s in the bound weight range = NK * kmax
+#
+# `NK` guards extra `out` locations with `#if`, so it is a shape of the fragment
+# interface and cannot be a specialisation constant. `WMAX` is only the declared
+# length of `uniform WBlock { mat4 w[WMAX]; }` -- but it CANNOT be compiled at the
+# largest kmax and shared, because `NK` is derived from the device limit that
+# block has to fit: nk = MAX_UNIFORM_BLOCK_SIZE / (kmax*64), clamped to
+# MAX_DRAW_BUFFERS and rounded down to a power of two. Inflating kmax declares a
+# block past the very limit that chose NK. So a variant is an (NK, kmax) PAIR.
+#
+# KMAX IS A PROPERTY OF THE SHIPPED WEIGHTS, read out of the binaries rather than
+# taken from a comment (`unditherer/models/{tiny,full}.w32.bin`, the layer table's
+# widest kstride / 4). THE CONSEQUENCE IS A CONSTRAINT ON THE PROJECT and is
+# stated in research/notes/vulkan-only-plan.md landing 7 rather than here: the
+# Vulkan lane restores with these two models and no others, and a third needs its
+# four variants generated and committed.
+# NOT WIRED IN YET, AND THE TWO REASONS ARE NAMED. Everything below -- the
+# variant manifest, `extract_restore` and `pp_expand` -- works: it reads the five
+# macros out of the header, builds the eight (NK, kmax) variants and drives them
+# all the way to glslang. `transform` is what is not ready, because CONV_FS is
+# the first shader in the tree to use two shapes it does not handle:
+#
+#   1. `uniform highp sampler2DArray uAct;` -- a precision qualifier AFTER the
+#      storage qualifier. `_VAR` allows `highp uniform ...` and not
+#      `uniform highp ...`, so the declaration does not match at all, falls
+#      through unchanged, and glslang refuses it: "sampler/texture/image
+#      requires layout(binding=X)".
+#   2. `layout(std140) uniform WBlock { mat4 w[WMAX]; };` -- a named block
+#      written on ONE line. `_BLOCK_OPEN` requires the `{` to end the line, so
+#      the block is never seen and never gets its set/binding.
+#
+# Both are legal GLSL that this tool simply has not met before, and both are the
+# tool's to learn rather than the shader's to reformat: `tagpu_restore_glsl.h` is
+# the ONE copy of that text, shared with tools/tascene's browser pack, and
+# reflowing it for a generator's convenience is the sort of thing its own header
+# forbids. Flip this to True in the same change that teaches `transform` the two
+# shapes; with it False the restorer is absent from SOURCES and PROGRAMS and the
+# build's shader gate is unaffected.
+RESTORE_READY = False
+
+RESTORE_HDR  = "tagpu_restore_glsl"
+RESTORE_NK   = (1, 2, 4, 8)
+RESTORE_KMAX = ((56, "tiny"), (148, "full"))
+
+# Which of the five actually reads NK or WMAX -- measured over the QUOTED shader
+# text of each macro, not over the macro's region in the file: the doc comment
+# that introduces CONV mentions NK and is not shader source, which is what makes
+# a careless scan say FILL_FS depends on it. Only CONV_FS does.
+RESTORE_VARIANT = ("CONV_FS",)
+
+
+def restore_keys(name):
+    """Every key one restorer shader contributes: one, or one per (NK, kmax)."""
+    if name not in RESTORE_VARIANT:
+        return [(name, None, None)]
+    return [("%s_NK%d_K%d" % (name, nk, kmax), nk, nk * kmax)
+            for nk in RESTORE_NK for kmax, _ in RESTORE_KMAX]
+
+
+def _restore_programs():
+    out = []
+    for prog, vs, fs in (("restore_fill", "FS_VS", "FILL_FS"),
+                         ("restore_conv", "FS_VS", "CONV_FS"),
+                         ("restore_out",  "OUT_VS", "OUT_FS")):
+        for fkey, _, _ in restore_keys(fs):
+            vkey = restore_keys(vs)[0][0]
+            out.append(("%s%s" % (prog, fkey[len(fs):]),
+                        "%s::%s" % (RESTORE_HDR, vkey),
+                        "%s::%s" % (RESTORE_HDR, fkey)))
+    return out
+
+
 # Every C source a shader is read out of, in the order the headers are emitted.
 SOURCES = ["tagpu_gui_surf", "tagpu_native", "tagpu_shadow", "tagpu_terr",
            "tagpu_posedraw", "tagpu_fps", "tagpu_mark", "tagpu_scaffold",
            "tagpu_fx", "tagpu_feat", "tagpu_hires_draw"]
+
+# The restorer's pairings are appended rather than written out: eight of the ten
+# are the same conv program at a different (NK, kmax), and spelling them by hand
+# is how the list and `restore_keys` would drift apart.
+if RESTORE_READY:
+    SOURCES.append(RESTORE_HDR)
+    PROGRAMS += _restore_programs()
 
 CC = os.environ.get("CC", "i686-w64-mingw32-gcc")
 
@@ -229,6 +315,102 @@ def unescape(s):
     return "".join(out)
 
 
+_MACRO = re.compile(r'^#define\s+(TAGPU_RESTORE_(\w+_(?:VS|FS)))\b')
+
+
+def extract_restore():
+    """The five shaders out of tagpu_restore_glsl.h, one entry per variant.
+
+    READ OUT OF THE HEADER AND NOT OUT OF A PREPROCESSED .c, because these are
+    macros pasted at call sites rather than `static const char*` initialisers --
+    there is no translation unit in which they appear as a literal with a
+    `#version` on the front. The prefix the runtime builds is reconstructed here
+    instead, one (NK, WMAX) at a time."""
+    path = DDRAW / "src" / ("%s.h" % RESTORE_HDR)
+    if not path.exists():
+        die("%s is not there" % path)
+    lines = path.read_text().split("\n")
+    bodies, i = {}, 0
+    while i < len(lines):
+        m = _MACRO.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        short, lits = m.group(2), []
+        while i < len(lines):
+            lits.extend(_LIT.findall(lines[i]))
+            if not lines[i].rstrip().endswith("\\"):
+                break
+            i += 1
+        bodies[short] = "".join(unescape(x) for x in lits)
+        i += 1
+    if not bodies:
+        die("%s has no TAGPU_RESTORE_*_{VS,FS} macros" % path)
+    out = {}
+    for short, body in bodies.items():
+        for key, nk, wmax in restore_keys(short):
+            pre = "#version 330 core\n"
+            if nk is not None:
+                pre += "#define NK %d\n#define WMAX %d\n" % (nk, wmax)
+            out[key] = pp_expand(pre + body, key)
+    return out
+
+
+_IFGT = re.compile(r'^\s*#if\s+(\w+)\s*>\s*(\d+)\s*$')
+_DEF = re.compile(r'^\s*#define\s+(\w+)\s+(\d+)\s*$')
+
+
+def pp_expand(src, key):
+    """Resolve `#define <ID> <int>` and `#if <ID> > <int>` / `#endif`, and
+    substitute the identifiers.
+
+    THE TOOL'S OWN PARSER HAS TO SEE THE FINAL INTERFACE. `transform` assigns
+    locations from the global `out` declarations it can see, and CONV_FS declares
+    a different number of them per NK -- so the conditionals cannot survive into
+    the text that is parsed, and pre-expanding them here is what makes each
+    variant ordinary GLSL from that point on.
+
+    IT REFUSES EVERYTHING IT DOES NOT UNDERSTAND. A hand-rolled preprocessor that
+    guesses is worse than none: `#else`, `#elif`, a nested `#if`, any other
+    directive or any surviving `#` line but `#version` is an error that names
+    itself, so a shader edit that reaches for one fails the build here instead of
+    silently compiling a different interface than GL does."""
+    defs, out, depth = {}, [], []
+    for ln in src.split("\n"):
+        m = _DEF.match(ln)
+        if m:
+            defs[m.group(1)] = int(m.group(2))
+            continue
+        m = _IFGT.match(ln)
+        if m:
+            if m.group(1) not in defs:
+                die("%s: `%s` tests %s, which is not defined" % (key, ln.strip(), m.group(1)))
+            if depth:
+                die("%s: nested `#if` is not supported: %s" % (key, ln.strip()))
+            depth.append(defs[m.group(1)] > int(m.group(2)))
+            continue
+        if re.match(r'^\s*#endif\b', ln):
+            if not depth:
+                die("%s: `#endif` with no `#if`" % key)
+            depth.pop()
+            continue
+        if re.match(r'^\s*#(else|elif|if|ifdef|ifndef|undef|define)\b', ln):
+            die("%s: this tool resolves only `#define <ID> <int>` and "
+                "`#if <ID> > <int>` / `#endif`, and got: %s" % (key, ln.strip()))
+        if depth and not depth[0]:
+            continue
+        out.append(ln)
+    if depth:
+        die("%s: an `#if` was not closed" % key)
+    text = "\n".join(out)
+    for name, val in defs.items():
+        text = re.sub(r'\b%s\b' % name, str(val), text)
+    for ln in text.split("\n"):
+        if ln.lstrip().startswith("#") and not ln.lstrip().startswith("#version"):
+            die("%s: a directive survived expansion: %s" % (key, ln.strip()))
+    return text
+
+
 def extract(cfile):
     """Every `static const char* X = "#version ..."` in one C source.
 
@@ -236,6 +418,8 @@ def extract(cfile):
     between the literals and their quoted FILE NAME would otherwise be spliced
     into the middle of a shader, which is exactly the kind of fault that would
     compile and then draw something wrong."""
+    if cfile == RESTORE_HDR:
+        return extract_restore()
     lines = preprocess(cfile)
     found, i = {}, 0
     while i < len(lines):

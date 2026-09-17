@@ -540,6 +540,34 @@ Back to the filed list:
    whose draw is MRT, so neither the seam's render pass nor any sibling's framebuffer shape covers
    it — unlike landing 5, which needed no new mirror, this one needs new *attachments*.
 
+   **STARTED 2026-09-17: the generator reads the header and builds every variant, and the
+   TRANSFORM is what is not ready.** `spirv-gen.py` now carries the variant manifest,
+   `extract_restore` (the five shaders come out of `tagpu_restore_glsl.h` directly, because they are
+   macros pasted at call sites and appear as a `#version` literal in no translation unit) and
+   `pp_expand`, a deliberately narrow preprocessor that resolves `#define <ID> <int>` and
+   `#if <ID> > <int>` / `#endif` and **refuses everything else** — the tool's own parser has to see
+   the final `out` set, so the conditionals cannot survive into the text it reads, and a hand-rolled
+   preprocessor that guesses would be worse than none. All eight `CONV_FS` variants reach glslang.
+
+   **Two shapes stop it there, both legal GLSL this tool had never met**, because `CONV_FS` is the
+   first shader in the tree to use either:
+
+   1. `uniform highp sampler2DArray uAct;` — a precision qualifier **after** the storage qualifier.
+      `_VAR` allows `highp uniform …` and not `uniform highp …`, so the declaration does not match
+      at all, passes through unchanged, and glslang refuses it: *"sampler/texture/image requires
+      layout(binding=X)"*.
+   2. `layout(std140) uniform WBlock { mat4 w[WMAX]; };` — a named block written on **one line**.
+      `_BLOCK_OPEN` requires the `{` to end the line, so the block is never seen and never gets its
+      set/binding.
+
+   Both are the **tool's to learn rather than the shader's to reformat**: that header is the one copy
+   of the text and is shared with `tools/tascene`'s browser pack, and reflowing it for a generator's
+   convenience is what its own header forbids. `RESTORE_READY = False` keeps the restorer out of
+   `SOURCES` and `PROGRAMS` until the same change teaches `transform` both shapes, so the build's
+   shader gate is unaffected meanwhile. `tools/glslang-fetch.sh` has been run (16.6.0, pinned by
+   hash), and regenerating with the edited tool moved **only the `transform` hash line** in all
+   eleven committed headers — no SPIR-V word changed, which is the proof the edit touched no shader.
+
    **It is not a blocker and nothing stands down for it today** — landing 2 mirrored the restored
    atlases, so the lane draws restored art with the restore itself still running on GL. Landing 7
    is owed to the END STATE rather than to any present refusal, which is why it sits behind 5 and 6
