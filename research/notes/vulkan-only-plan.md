@@ -486,6 +486,36 @@ Back to the filed list:
    (`tagpu_restoreglsl.c:472`). Spec constants cannot do it — `#if NK > 1` declares a different
    number of `out` locations and SPIR-V interface variables are static. Landing 2 makes the lane
    *usable* with Classic++ on; this is what moves the restore itself off GL.
+
+   **SIZED 2026-09-17, BEFORE STARTING, AND THE VARIANT COUNT IS RIGHT FOR A REASON THE ROW DID
+   NOT GIVE.** `tools/spirv-gen.py`'s own header refuses to guess at this: *"pre-compiling it means
+   enumerating that cross product, which is a decision about what the shipped weights are allowed
+   to be… stated in the roadmap rather than decided here."* The cross product is `NK` × `kmax`, and
+   `kmax` is read out of the **weights file at runtime** (`load_weights` takes the model by name,
+   and `s_w.kmax` is the widest k-block in its layer table) — so a naive reading is that the Vulkan
+   lane could only restore with models compiled in.
+
+   **The two axes are not alike, and that is what collapses it.** `NK` appears as `#if NK > 1` /
+   `#if NK > 2` / `#if NK > 4` guarding extra `out` locations, plus `vec4 acc[NK]` and its loop
+   bounds: it is a **shape of the fragment interface**, static in SPIR-V, and must be a variant.
+   `WMAX` appears in exactly one place — `layout(std140) uniform WBlock { mat4 w[WMAX]; };` — and
+   is an **upper bound on a uniform array**, not a shape the data has to match. Compile it at the
+   largest `kmax` across the shipped models and every smaller model is still correct; the cost is
+   that the bound range must then always be `WMAX × 64` bytes, padded for the smaller ones. So the
+   row's **four** variants are right, and the decision `spirv-gen.py` asked for is narrow: *the
+   Vulkan lane's weight range is sized for the largest shipped model.*
+
+   **What the port is, beyond the shaders**: 1 132 lines of `tagpu_restoreglsl.c`, three programs
+   (fill, conv, out) over five shaders, and its render targets are `GL_TEXTURE_2D_ARRAY` layers
+   (`glFramebufferTextureLayer`, `glDrawBuffers` with up to `NK` attachments) in `GL_RGBA32F`,
+   `GL_RGBA16F` and `GL_RGBA8`. That is the first ported pass whose target is an array texture and
+   whose draw is MRT, so neither the seam's render pass nor any sibling's framebuffer shape covers
+   it — unlike landing 5, which needed no new mirror, this one needs new *attachments*.
+
+   **It is not a blocker and nothing stands down for it today** — landing 2 mirrored the restored
+   atlases, so the lane draws restored art with the restore itself still running on GL. Landing 7
+   is owed to the END STATE rather than to any present refusal, which is why it sits behind 5 and 6
+   and ahead of 4.
 8. **`PK_PIXELS` closed.** `tagpu_gui_hook.c:330`'s op kinds `OP_LINE`, `OP_BAR`, `OP_RECT`,
    `OP_FRAME` and `OP_SCALE` publish through `pub_surface_bytes` at `:1489` — *the engine's
    surface bytes as they stand at the flip*. They become drawn geometry with their own packet
