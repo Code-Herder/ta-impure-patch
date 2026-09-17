@@ -907,6 +907,38 @@ tools/tacli scenario load <i> feat-forest --restart --res 1024x768 --maxfps 0
   the right pixels in the wrong cells, which the `.rgba` alone would also catch but the `.idx`
   localises in one line.
 
+**AND SINCE LANDING 7c IT IS A SAME-RUN TWO-LANE ORACLE, which is strictly stronger than the
+cross-build one above.** With `restorevk.on` the gather half stops mirroring its restored atlas for
+the Vulkan lane and publishes the frame LIST, so both restorers run in **one process** over the
+same atlas, the same palette and the same rectangles in the same order, and each writes its own
+dump:
+
+```bash
+tools/tacli arm <i> 'vk.on=color=0,0,0' terr.on classicpp.on 'restoreglsl.on=log' \
+                    restorevk.on restoredump.on
+tools/tacli launch <i> --res 1024x768 --maxfps 0
+tools/tacli scenario load <i> static-terrain --restart --res 1024x768 --maxfps 0
+# poll for BOTH files, then:
+cmp <gamedir>/tagpu_restore.rgba <gamedir>/tagpu_restore_vk.rgba
+```
+
+- **The GL lane's own log prefix is `restoreglsl:` and the Vulkan lane's is `restorevk:`**, both
+  through the shared core, and `restoreglsl.on=log` turns on *both* — the options are the core's,
+  read once per backend. Diffing the two lanes' `batch N (S.., CxC slots, K frames)` lines is how
+  a divergence gets localised to a batch.
+- **No second launch means no second machine-state**, so the only difference left is the two
+  implementations. This is what found landing 7c's six unpainted cells; a cross-build run would
+  have found them too, but it could not have told a scheduler difference from a draw difference.
+- **A difference that is a multiple of the CELL PITCH SQUARED is a dropped frame, not a wrong
+  pixel.** `34² = 1156` for terrain (32 px tile + 1 px border each side): divide the differing
+  texel count by it and you have the number of cells that were never painted. Cluster them by
+  `(y / 34, x / 34)` before theorising — six whole cells and every other cell identical is a
+  completely different bug from 6 936 scattered texels, and the count alone does not tell them
+  apart.
+- **The lever suppresses the read-back, so the two paths are exclusive by construction** — with
+  `restorevk.on` there is no `atlasRgb` in the hand-over at all. Turning it off is what puts the
+  shipped mirror path back.
+
 **Classic++ lighting knobs go in `tagpu_classicpp.cfg`** (G14f), and unlike the restorer's
 they are **live**: the file is re-read on the switch's own twice-a-second poll whenever its
 write time or size changes. `tacli arm <i> 'classicpp.cfg=sun=off'` writes it (tokens

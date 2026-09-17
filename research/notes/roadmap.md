@@ -2763,6 +2763,34 @@ and not `tagpu_restoreglsl.c`, which cannot survive the landing; the list is cor
 with the note that the way to check the rest of it is `git grep` on each file's exports rather than
 on its includes.
 
+**Its second half restores on Vulkan, and its consumer is what found the bug**
+([gpu-status](gpu-status.html) §2.43). `tagpu_vk_restore.c` was complete, warning-free and dead
+until the terrain atlas was wired to it: under `tagpu_restorevk.on` the gather half stops reading
+its own restored twin back for the Vulkan lane — gate 2's CPU mirror, retired rather than doubled —
+and publishes the **frame list** instead, because `wrap` and the centre-out order are engine-memory
+facts that belong on the gather side. The Vulkan lane then paints its own atlas, and both lanes
+restore the same rectangles in the same order in the same process on the same frames, which is what
+makes the two 46 MB dumps a comparison of two implementations and of nothing else.
+
+**The first run differed in 6 936 texels of 11 615 488 — 0.0597 % — and the number named its own
+cause**: 6 936 is exactly 6 × 34², the atlas cell pitch squared, and clustered by cell it was **six
+whole cells of 10 036 entirely unpainted with every other cell byte-identical**. A slice can issue
+more than one batch (the scheduler's loop re-picks at every batch boundary and runs until the time
+budget is spent; batches 157 and 158 were both issued at slice 917), and the OUT draw staged its
+vertices per **frame slot** — so the second batch's vertices landed on the first's before either
+draw ran. **A screenshot diff would have called that frame clean.** The fix is an ordering rather
+than a bigger arena, since batches per slice is a budget and not a count: `vkCmdUpdateBuffer` puts
+each batch's vertices in the command stream at its own draw. Re-measured **`cmp` clean, with the
+collision condition exercised again** (batches 157 and 158 both at slice 914), which also settles
+the no-flip derivation empirically.
+
+Wiring the consumer found two more ordering holes that the absence of one had hidden: **none of the
+restorer's render passes declared a subpass dependency at all** — the implicit one orders the layout
+transition and nothing else, so FILL, every CONV, OUT and the consumer's own sample were unordered
+against each other — and `dst_ready` transitioned a **repaint's** destination from `UNDEFINED`,
+licensing the driver to discard exactly the atlas the repaint exists to recolour in place. Three of
+the four consumers still take the mirror, and `repaint` is built but unexercised.
+
 **Its landing 1 ran the same day and is the reason the rest is ordered as it is**
 ([gpu-status](gpu-status.html) §2.35): started in the configuration the patch actually ships in
 — `--defaults`, `ss=2`, Classic++ on — the Vulkan lane draws **the UI and nothing else**, 630 589

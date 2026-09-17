@@ -110,7 +110,8 @@
     X(vkCmdBindPipeline) X(vkCmdBindVertexBuffers) \
     X(vkCmdBindDescriptorSets) X(vkCmdDraw) \
     X(vkCmdSetViewport) X(vkCmdSetScissor) \
-    X(vkCmdCopyBuffer) X(vkCmdCopyBufferToImage) X(vkCmdPipelineBarrier) \
+    X(vkCmdCopyBuffer) X(vkCmdCopyBufferToImage) X(vkCmdUpdateBuffer) \
+    X(vkCmdPipelineBarrier) \
     X(vkCmdClearColorImage)
 
 #define DECL(n) static PFN_##n n;
@@ -402,7 +403,6 @@ static uint32_t       s_gnext;
 
 static VkBuffer       s_vbuf;                       /* the OUT vertices        */
 static VkDeviceMemory s_vmem;
-static unsigned char* s_vmap;
 
 static VkQueryPool    s_qpool;                      /* 2 pairs, one per parity */
 
@@ -986,10 +986,15 @@ static int build_shared(const TAGPU_VKPASS* d)
                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                    &s_gbuf, &s_gmem, &s_gmap)) goto fail;
-    if (!mk_buffer(d, (VkDeviceSize)sizeof s_sched.verts * TAGPU_VK_SLOTS,
-                   VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                   &s_vbuf, &s_vmem, &s_vmap)) goto fail;
+    /* ONE BATCH'S WORTH, DEVICE-LOCAL AND NOT PER SLOT: the OUT vertices are
+       written with vkCmdUpdateBuffer at the point of the draw, so what orders
+       one batch's write against the previous batch's read is a barrier in the
+       stream rather than a region nobody else is using -- see the OUT branch of
+       `vk_draw`, and the six cells that paid for the paragraph there. */
+    if (!mk_buffer(d, (VkDeviceSize)sizeof s_sched.verts,
+                   VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                   &s_vbuf, &s_vmem, NULL)) goto fail;
 
     /* the three slot tables and their staging */
     for (i = 0; i < 3; i++)
@@ -1505,12 +1510,41 @@ static int vk_draw(const TAGPU_RDRAWREQ* r)
     /* OUT: straight into the consumer's atlas, in the consumer's cell layout */
     {
         float uDst[4];
-        VkDeviceSize vbase = (VkDeviceSize)s_slot * sizeof s_sched.verts;
-        VkDeviceSize voff = vbase;
+        VkDeviceSize voff = 0;
+        VkMemoryBarrier vb = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
         dst_ready(d, g);
         if (!g->dstFb) { rlog(LANE ": the job has no destination framebuffer"); return 0; }
         if (r->nv <= 0) return 1;                     /* an empty batch draws nothing */
-        memcpy(s_vmap + vbase, r->verts, (size_t)r->nv * 32);
+        /* THE VERTICES GO INTO THE COMMAND STREAM, and the first version of this
+           wrote them into a host-mapped region indexed by the FRAME SLOT. That
+           was wrong, and the byte oracle is what found it: A SLICE CAN ISSUE
+           MORE THAN ONE BATCH -- the loop in tagpu_rcore_step re-picks at every
+           batch boundary and runs until the GPU-time budget is spent, and the
+           terrain's own log shows batches 157 and 158 both issued at slice 917.
+           Two OUT draws in one slice wrote the same address, so the second
+           batch's 36 vertices landed on top of the first's before either draw
+           executed: the first batch's leading six cells were never painted and
+           the second's six were painted twice. Six cells of 10 036, every other
+           one byte-identical to the GL twin -- silent, and exactly the shape of
+           failure this stack produces.
+           A BIGGER ARENA WOULD NOT BE THE FIX. Batches per slice is bounded by
+           a time budget and not by a count, so any arena is a number that can
+           be exceeded, and the failure it buys is this one again. vkCmdUpdateBuffer
+           records the data AT THIS POINT IN THE STREAM, so each batch carries its
+           own copy and the ordering is the command buffer's own -- an ordering,
+           which is what CLAUDE.md asks a fix to rest on. 12 288 bytes at most,
+           well inside the 65 536 the command allows.
+           The barrier is BOTH WAYS on purpose: TRANSFER -> VERTEX_INPUT makes
+           this batch's vertices visible to this batch's draw, and
+           VERTEX_INPUT -> TRANSFER makes the PREVIOUS batch's read of the same
+           bytes a fact before this write lands on them. */
+        vkCmdUpdateBuffer(s_cb, s_vbuf, 0, (VkDeviceSize)r->nv * 32, r->verts);
+        vb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+        vb.dstAccessMask = vb.srcAccessMask;
+        vkCmdPipelineBarrier(s_cb,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+                             0, 1, &vb, 0, NULL, 0, NULL);
         uDst[0] = (float)g->dstW; uDst[1] = (float)g->dstH; uDst[2] = uDst[3] = 0.0f;
         dyn[0] = g_alloc(uDst, 8);                    /* binding 0, the vertex uDst */
         gi[0] = r->S;
@@ -1722,7 +1756,7 @@ void tagpu_vk_restore_lost(void)
     s_tabStage = VK_NULL_HANDLE; s_tabStageMem = VK_NULL_HANDLE; s_tabMap = NULL; s_tabInit = 0;
     s_wbuf = VK_NULL_HANDLE; s_wmem = VK_NULL_HANDLE;
     s_gbuf = VK_NULL_HANDLE; s_gmem = VK_NULL_HANDLE; s_gmap = NULL;
-    s_vbuf = VK_NULL_HANDLE; s_vmem = VK_NULL_HANDLE; s_vmap = NULL;
+    s_vbuf = VK_NULL_HANDLE; s_vmem = VK_NULL_HANDLE;
     s_qpool = VK_NULL_HANDLE;
     s_samp = VK_NULL_HANDLE; s_dpool = VK_NULL_HANDLE;
     s_dslFill = s_dslConv = s_dslOut = VK_NULL_HANDLE;

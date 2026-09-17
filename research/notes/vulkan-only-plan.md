@@ -735,11 +735,42 @@ Back to the filed list:
    no Route D, no settle heuristic, and a mirrored restore would show as every tile's rows reversed.
    The no-flip conclusion above is recorded rather than trusted: that dump is what settles it.
 
-   **Still to write**: `tagpu_vk_restore.c` against that interface — timestamp queries for
+   **WRITTEN, AND THEN GIVEN A CONSUMER — 2026-09-17** ([gpu-status](gpu-status.html) §2.43).
+   `tagpu_vk_restore.c` against that interface: timestamp queries for
    `slice_begin`/`slice_end`/`timer_poll`, the ping-pong activation array images with a view per
-   layer, a render pass and framebuffer per `NK` attachment count, the weight UBO with dynamic
-   offsets, and the descriptor sets. The device prerequisites above are what it must ask for and
-   refuse by name.
+   layer, a render pass per `NK` attachment count, the weight UBO bound at a dynamic offset whose
+   alignment is a **loader bound** rather than a check at the bind site, and the descriptor sets.
+   The device prerequisites are asked and refused by name; the reference setup answers
+   *"one k-block 9 KB of a 64 KB block (so NK up to 6), 8 colour attachments, uniform offset
+   alignment 64, 16 activation layers of 2048, timestamp budget"* and the lane settles at
+   **NK=4, WMAX 592, 37 KB bound per conv draw** — the same NK the GL lane picks for the same
+   model, which was the point of cross-checking the two limits against GL's banner above.
+
+   **The consumer is the terrain atlas, and the destination question answered itself exactly as
+   this entry predicted**: `COLOR_ATTACHMENT` added to the restored twin's usage and its view lent
+   per job, no new mirror and no read-back. What crosses the hand-over is the **frame list** — the
+   gather half keeps building it (`wrap` and the centre-out order are engine-memory facts) and the
+   `_vk` half draws it, which is the gather/pass line doing exactly what it was drawn for.
+
+   **AND THE BYTE ORACLE PAID FOR ITSELF ON ITS FIRST RUN.** Both lanes restore in the same
+   process on the same frames, so the two dumps are one `cmp` apart. Every code-determined count
+   matched — 10 036 frames, 4 142 wrap-padded, 158 batches, 7 426 draws, both lanes — and
+   **6 936 texels of 11 615 488 differed, which is exactly 6 × 34², the cell pitch squared**: six
+   whole cells of 10 036 entirely unpainted, every other cell byte-identical. Cause:
+   `tagpu_rcore_step` can issue **more than one batch in a slice** (the loop re-picks at every
+   batch boundary and runs until the time budget is spent — batches 157 and 158 both issued at
+   slice 917), and the OUT draw staged its vertices per **frame slot**, so the second batch
+   overwrote the first's vertices before either draw ran. A screenshot diff would have called this
+   clean; six transparent cells in a 46 MB atlas is what the instrument was chosen for.
+
+   The fix is an **ordering** and not a bigger arena — batches per slice is a time budget rather
+   than a count, so any arena is a number that can be exceeded and what it buys is this failure
+   again. `vkCmdUpdateBuffer` puts each batch's vertices in the command stream at the point of its
+   own draw. Wiring the consumer also found the restorer's render passes declaring **no subpass
+   dependencies at all** and `dst_ready` discarding a repaint's destination; both are in §2.43.
+
+   **What is not done**: three of the four consumers (features, effects, units) still take the CPU
+   mirror, and `repaint` is built but unexercised.
 8. **`PK_PIXELS` closed.** `tagpu_gui_hook.c:330`'s op kinds `OP_LINE`, `OP_BAR`, `OP_RECT`,
    `OP_FRAME` and `OP_SCALE` publish through `pub_surface_bytes` at `:1489` — *the engine's
    surface bytes as they stand at the flip*. They become drawn geometry with their own packet

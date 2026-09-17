@@ -7827,6 +7827,144 @@ re-init or the give-up path; and that a `draw` returning 0 cannot spin.
   path as the unit atlas, which is an argument and not a measurement.
 * two GPUs' worth of nothing: one GPU, one model, NK=4, fp32.
 
+### 2.43 The restorer restores on Vulkan, and two batches in one slice cost six cells — landing 7c of the Vulkan-only plan
+
+§2.42 split the restorer along the line that is not the API and left `tagpu_vk_restore.c` complete,
+warning-free and **with no consumer**, which is to say dead. This is the consumer, and it is the
+terrain's tile atlas.
+
+**What crosses the hand-over is the WORK, not the picture.** Under `tagpu_restorevk.on`
+`tagpu_terr.c` stops reading its own restored twin back for the Vulkan lane — the CPU mirror gate 2
+built — and publishes the **frame list** instead: the very array it built for its own GL job, in the
+order it built it (`TAGPU_TERRHAND::restoreFrames/restoreN/restoreSerial/restoreRepaint`). The
+Vulkan lane then paints its own restored atlas.
+
+The list rather than a "restore it" flag, because three of a frame's eleven numbers are
+engine-memory facts and belong on the gather side of the split: `wrap` is
+`tagpu_rglsl_tileable()` over the tile's own texels against the **art** palette, and the order is
+the centre-out rank over the live tile map (`restore_order`, `tagpu_terr.c`). What crosses is their
+result. That is also what makes the two lanes comparable byte-for-byte rather than merely
+both-plausible: both restore **the same rectangles in the same order from the same atlas with the
+same palette, in the same process, on the same frames**.
+
+**The reach into files this landing does not own is one usage flag.** `mk_image` and
+`shared_resize` in `tagpu_vk_terr.c` now take the caller's `VkImageUsageFlags`, because the restored
+atlas is rendered into and a colour attachment must say so at create time; the other four images
+there are only ever sampled and say so. `COLOR_ATTACHMENT` is unconditional on the restored atlas
+rather than lever-dependent — RGBA8 optimal-tiling colour-attachment support is required of every
+Vulkan device, and paying for it always keeps the image's identity independent of which path filled
+it.
+
+#### The measurement, and the bug it found
+
+**Both lanes restore in one run and the dumps are one `cmp` apart.** `tagpu_terr.c` writes
+`tagpu_restore.rgba` off its restored **texture** with `glGetTexImage`; `tagpu_vk_terr.c` now writes
+`tagpu_restore_vk.rgba` off the image the Vulkan restorer painted. The Vulkan half does not stall
+the device to get the bytes: the copy is recorded into the frame's command buffer and read at **that
+slot's next `prepare`**, the one instant the seam's fence has proved the submit carrying it
+completed — the argument `shared_slot_done` in the same file already makes for the retire.
+
+`static-terrain`, `full` model, NK=4, fp32, both dumps **46 461 952 bytes** (2176 × 5338 RGBA):
+
+| | GL lane | Vulkan lane |
+|---|---|---|
+| frames | 10 036 (4 142 wrap-padded) | **10 036 (4 142 wrap-padded)** |
+| batches | 158 | **158** |
+| draws | 7 426 | **7 426** |
+| slices | 853 of 5 319 frames | 918 of 1 276 frames |
+| GPU measured | 11 373 ms over 100 % of the work | 12 602 ms over 100 % of the work |
+
+Every code-determined count is identical. **And 6 936 texels of 11 615 488 — 0.0597 % — differed**,
+every one of them transparent black on the Vulkan side and coloured on GL's.
+
+**6 936 is exactly 6 × 34², and 34 is the atlas cell pitch.** Clustered by cell, the difference is
+**six whole cells of 10 036, each entirely unpainted, and every other cell byte-identical** — not
+noise, not a flip, not a rounding difference. That shape names its own cause.
+
+**THE CAUSE: a slice can issue more than one batch, and the OUT draw's vertices were staged per
+FRAME SLOT.** `tagpu_rcore_step`'s loop re-picks at every batch boundary and runs until the
+GPU-time budget is spent, so batches per slice is bounded by a **time budget and not by a count**;
+the terrain's own log shows **batches 157 and 158 both issued at slice 917**. Both OUT draws wrote
+their vertices to `s_vmap + s_slot * sizeof(verts)` — the same address — so batch 158's 36 vertices
+landed on top of batch 157's 384 before either draw executed. Batch 157's draw then painted batch
+158's six destinations with batch 157's slot content, batch 158's own draw repainted those six
+correctly, and **batch 157's leading six cells were never painted at all**. Six cells, silent, in a
+picture that is otherwise byte-perfect.
+
+**The GL lane has no such hazard and that is why the port did not inherit one.** A
+`glBufferSubData` followed by a draw is ordered by GL itself — the driver renames or copies. A host
+write to a mapped Vulkan buffer is ordered by nothing.
+
+**The fix is an ordering, and a bigger arena is explicitly NOT it.** Since batches per slice is a
+time budget rather than a count, *any* arena is a number that can be exceeded, and what it buys when
+it is exceeded is this same silent failure. `vkCmdUpdateBuffer` records the data **at that point in
+the command stream**, so each batch carries its own copy and the ordering is the command buffer's
+own; the buffer became one batch's worth (12 288 bytes, well inside the command's 65 536 limit) and
+device-local instead of eight host-mapped slot regions. The barrier around it is deliberately **both
+ways**: `TRANSFER → VERTEX_INPUT` makes this batch's vertices visible to its own draw, and
+`VERTEX_INPUT → TRANSFER` makes the previous batch's read of those bytes a fact before this write
+lands on them.
+
+**Re-measured after the fix: `cmp` CLEAN — both dumps 46 461 952 bytes, byte for byte identical**,
+and the counts still 10 036 frames / 4 142 wrap-padded / 158 batches / 7 426 draws on both lanes.
+**The collision condition was exercised again in that run** — batches 157 and 158 both issued at
+slice 914 — so this is the fix holding under the case that broke it, not the case failing to occur.
+That also settles §2.42's recorded-but-untrusted **no-flip derivation empirically**: a flip would
+show as every cell's rows reversed, and 46 MB agree.
+
+#### Two more ordering holes, found by the act of wiring a consumer rather than by a reviewer
+
+Both were invisible while the pass had no consumer, and both are the class this stack fails at
+silently.
+
+1. **None of the restorer's render passes declared a subpass dependency.** The implicit dependency
+   Vulkan adds at `dependencyCount == 0` has `dstStageMask = BOTTOM_OF_PIPE` and
+   `dstAccessMask = 0`: it orders the attachment's **layout transition** and nothing else. So FILL's
+   writes were unordered against the first CONV's sample of them, every CONV against the next, and
+   OUT's write of the consumer's atlas against the consumer's own sample of it one render pass
+   later. Drivers that flush at a render-pass boundary hide it, which is the problem and not the
+   fix. Each pass now states both ends, and because a `0 → EXTERNAL` dependency's destination scope
+   is **every subsequent command**, the two make the chain transitive across slices, submits and the
+   consumer's own render pass. `TRANSFER` is in both scopes because the dump's copy is exactly the
+   reader a dependency naming only the sampling consumer would have left out. Not `BY_REGION`: a
+   conv draw reads a 3×3 neighbourhood and OUT reads a different image entirely, so neither read is
+   framebuffer-local.
+2. **`dst_ready` transitioned the destination from `UNDEFINED` unconditionally, including on a
+   repaint** — which licenses the driver to discard every texel of the atlas the repaint exists to
+   recolour *in place*. It would have blanked exactly the world it was added to avoid blanking. The
+   job now carries `dstHas` and picks `SHADER_READ_ONLY_OPTIMAL` when there is something to keep.
+
+#### Where the slice sits in the frame, and what it is not counted in
+
+`tagpu_vk_restore_step` is called **last of the seam's `prepare`**, after every consumer. That is
+the reverse of the shadow map's ordering and the same argument: the shadow map must run *before* the
+passes that sample it, and the restorer must run *after* the passes that **feed** it, because a
+consumer hands it a job and a frame list in its own `prepare`. Its own render passes are begun
+inside `prepare`, which is legal there and nowhere else because render passes may not nest.
+
+**It is deliberately not added to `ndraw` or `nclaim`**, for the reason the shadow pass is not:
+those count the passes that put pixels in *this* frame, and counting one that puts none would refuse
+every A/B capture taken with Classic++ on — which is exactly the configuration restored art is
+measured in.
+
+#### What this does NOT cover, stated rather than implied
+
+* **One consumer of four.** The features, effects and unit atlases still take the CPU mirror. Their
+  wiring is the same shape (one usage flag plus a published frame list) and is not done.
+* **`repaint` is built and not exercised.** The palette-moved-under-a-live-job path needs a fixture
+  that moves the palette; `static-terrain` does not. `dstHas` is therefore a fix whose correctness is
+  argued from the spec's discard rule, not measured.
+* **The `g_alloc` ring is a bound that a fast enough device can reach.** 256 blocks per slot per
+  slice, two per draw, so a slice issuing more than 128 draws fails the job — *loudly*, with the
+  reason in `tagpu.log`, unlike the vertex bug above. Not reached on the reference setup (7 draws a
+  slice at a 12 ms budget) and not raised, because the correct number is not knowable from one
+  device.
+* **One GPU, one model, one fixture, one map.** `tiny`, `fp16`, and any other device's limits are
+  unmeasured on this lane.
+* **The failure paths** — `act_ensure` returning 0, a destination that is not a complete render
+  target, the out-of-memory returns — remain unreachable on a working device and unexercised, as
+  §2.42 already records.
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out
