@@ -495,30 +495,43 @@ Back to the filed list:
    and `s_w.kmax` is the widest k-block in its layer table) — so a naive reading is that the Vulkan
    lane could only restore with models compiled in.
 
-   **The two axes are not alike, and that is what collapses it.** `NK` appears as `#if NK > 1` /
-   `#if NK > 2` / `#if NK > 4` guarding extra `out` locations, plus `vec4 acc[NK]` and its loop
-   bounds: it is a **shape of the fragment interface**, static in SPIR-V, and must be a variant.
-   `WMAX` appears in exactly one place — `layout(std140) uniform WBlock { mat4 w[WMAX]; };` — and
-   is an **upper bound on a uniform array**, not a shape the data has to match. Compile it at the
-   largest `kmax` across the shipped models and every smaller model is still correct; the cost is
-   that the bound range must then always be `WMAX × 64` bytes, padded for the smaller ones. So the
-   row's **four** variants are right, and the decision `spirv-gen.py` asked for is narrow: *the
-   Vulkan lane's weight range is sized for the largest shipped model.*
+   **THE CROSS PRODUCT DOES NOT COLLAPSE, AND THE FIRST VERSION OF THIS PARAGRAPH SAID IT DID.**
+   [Written 2026-09-17 and corrected the same day, before any code was written.] The argument was
+   that `NK` guards extra `out` locations with `#if` and so must be a variant, while `WMAX` appears
+   in exactly one place — `layout(std140) uniform WBlock { mat4 w[WMAX]; };` — and is only an upper
+   bound, so it could be compiled at the largest shipped `kmax` and every smaller model would still
+   be correct. The first half holds. **The second does not**, because it ignores the limit `NK` is
+   derived from: `nk = MAX_UNIFORM_BLOCK_SIZE / (kmax × 64)`, clamped to `MAX_DRAW_BUFFERS` and
+   rounded down to a power of two — so the block is sized to *fit the device* and inflating `kmax`
+   makes it not fit. Concretely, with a 64 KiB limit the `tiny` model picks `NK = 8` at `kmax = 56`,
+   `WMAX = 448`, **28 672 bytes**; compiling that same variant at the largest `kmax` would declare
+   `WMAX = 8 × 148 = 1184`, **75 776 bytes**, past the limit that chose `NK = 8` in the first place.
 
-   **AND THE VARIANTS ARE FOUR OF ONE STAGE, NOT FOUR OF EVERYTHING.** Measured over the quoted
-   shader text of each macro in `tagpu_restore_glsl.h` (the doc comments mention `NK` and are not
-   shader source, which is what makes a naive grep say otherwise): `FS_VS`, `FILL_FS`, `OUT_VS` and
-   `OUT_FS` reference **neither** `NK` nor `WMAX`; only `CONV_FS` uses both. So the generator emits
+   **So a variant is an (`NK`, `kmax`) pair, and both shipped models are real.** Read out of the
+   binaries rather than taken from the header comment (`unditherer/models/{tiny,full}.w32.bin`, the
+   layer table's widest `kstride`): `tiny` is depth 6 × 24 ch with **kmax 56**, `full` is depth
+   12 × 64 with **kmax 148**, and `tagpu_restoreglsl.c:459` selects between exactly those two —
+   `load_weights(s_opt.tiny ? "tiny" : "full")`.
 
-   | module | variants |
-   |---|---|
-   | `FS_VS` (shared by fill and conv) | 1 |
-   | `FILL_FS` | 1 |
-   | `CONV_FS` | **4** — `NK ∈ {1, 2, 4, 8}` |
-   | `OUT_VS`, `OUT_FS` | 1 each |
+   | module | variants | |
+   |---|---|---|
+   | `FS_VS` (shared by fill and conv) | 1 | |
+   | `FILL_FS` | 1 | |
+   | `CONV_FS` | **8** | `NK ∈ {1,2,4,8}` × `kmax ∈ {56, 148}`, i.e. `WMAX ∈ {56,112,224,448}` and `{148,296,592,1184}` |
+   | `OUT_VS`, `OUT_FS` | 1 each | |
 
-   — **8 SPIR-V modules and 6 program pairings** (fill ×1, conv ×4, out ×1), against the "four
-   variants" the row implied for the whole set.
+   — **12 SPIR-V modules and 10 program pairings** (fill ×1, conv ×8, out ×1). The reference setup
+   uses two of the eight (`tiny`@`NK 8`, `full`@`NK 4`); the rest are for devices with other
+   limits, and the `full`@`NK 8` one is only ever selected where `MAX_UNIFORM_BLOCK_SIZE ≥ 75 776`.
+
+   **The decision `spirv-gen.py` asked for, stated:** *the Vulkan lane restores with the two shipped
+   models and no others; a new model's `kmax` needs its four variants generated and committed.*
+   That is a real constraint on the project and it is the owner's to revisit, not a session's.
+
+   **ONLY ONE STAGE IS VARIANT AT ALL.** Measured over the quoted shader text of each macro in
+   `tagpu_restore_glsl.h` rather than over the macro regions — the doc comments mention `NK` and are
+   not shader source, which is what makes a naive grep say `FILL_FS` depends on it: `FS_VS`,
+   `FILL_FS`, `OUT_VS` and `OUT_FS` reference **neither** `NK` nor `WMAX`. Only `CONV_FS` uses both.
 
    **What the port is, beyond the shaders**: 1 132 lines of `tagpu_restoreglsl.c`, three programs
    (fill, conv, out) over five shaders, and its render targets are `GL_TEXTURE_2D_ARRAY` layers
