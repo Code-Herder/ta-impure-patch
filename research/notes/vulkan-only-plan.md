@@ -429,9 +429,35 @@ were this flip and are gone.
 
 Back to the filed list:
 
-6. **The build ghost and the `otherDraws` stand-down** (`tagpu_vk_unit.c:1316`). Not reached
-   today — the unit pass refuses on the atlas mirror several checks earlier — so its cost is
-   still unknown.
+6. **The build ghost and the `otherDraws` stand-down** (`tagpu_vk_unit.c`'s `h.otherDraws > 0`).
+
+   **MEASURED 2026-09-17, BEFORE STARTING THE PORT, AND THE COST IS TOTAL.** The row said "not
+   reached today — the unit pass refuses on the atlas mirror several checks earlier — so its cost
+   is still unknown". Gates 3a and 3b removed that earlier refusal, so it is reached now. With one
+   ARMCOM selected and a solar placement open (`one-unit`, `native.on=all wrecks` + `ghost.on` +
+   `mark.on`, cursor mode `0x0E` confirmed by peeking `main+0x2CC3`):
+
+   ```
+   ghost: curs=6193 queue=0 drawn=6193 nobake=0 trunc=0 alpha=0.40
+   vk: unit: the GL twin drew 1 posed unit(s) this hand-over does not carry
+             (a build ghost, or past its cap) - nothing drawn while that is true
+   ```
+
+   So **for as long as a building placement is open, the Vulkan unit pass draws nothing at all** —
+   not the ghost, not the units. `tagpu_ghost.on` is a play default gated on `tagpu_native.on`
+   (`tagpu_opt.c`), and placing buildings is most of what a TA player does, so this is the ordinary
+   case rather than a corner. It is the largest remaining hole in the lane's world.
+
+   **The gate to know before reproducing this**: the ghost arms on `tagpu_mark_cursor_ours()`, so
+   it draws only with the MARKER pass armed — and `markown` installs its detours at DLL attach, so
+   `mark.on` written to a running instance opens nothing. Two probe runs were lost to that;
+   `ghost: curs=0 drawn=0` with cursor mode already 14 is the signature.
+
+   **What the port owes**: `tagpu_posedraw.c` excludes ghosts from the hand-over explicitly
+   (`if (!s_recording || u->ghost) { s_other++; return; }`), so the work is to carry them — with
+   their alpha, which is 0.40 and not a tint — and to draw them in `tagpu_vk_unit.c` with the
+   twin's own blend. The other two `s_other++` sites (an arena that would not grow, a unit with no
+   pieces) are refusals that should stay refusals.
 7. **The restorer**, `tagpu_vk_restore.c`. Ported **unchanged**, which needs `spirv-gen.py` to
    emit four variants: `NK ∈ {1, 2, 4, 8}` (`tagpu_restore_glsl.h:10`), `WMAX = NK × kmax`
    (`tagpu_restoreglsl.c:472`). Spec constants cannot do it — `#if NK > 1` declares a different
