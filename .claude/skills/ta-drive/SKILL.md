@@ -1366,8 +1366,17 @@ DISPLAY=:0 xwininfo -root -tree | grep 1024x768
 DISPLAY=:0 import -window 0x… out.png
 ```
 
-Three things will waste a run if you do not know them:
+Four things will waste a run if you do not know them, and the first one wasted several:
 
+- **ARM `vk.on` AT LAUNCH, NEVER AFTERWARDS.** The mirrors the lane samples are asked for on the
+  30-frame arm poll, and a lane that comes up mid-session never gets the ones established at
+  launch — it draws a partial frame and says nothing about why. Measured on `one-unit` with
+  `native.on` alone, nothing else moved: **382** non-black pixels in Route D with `vk.on` armed at
+  launch (the commander, matching that fixture's A/B exactly) against **89** armed late, the body
+  simply missing. That reads as a rendering bug and is not one. The obvious reason to arm late —
+  Route D covers the game window, so you want the game captured first — is the trap: use
+  **`tacli glshot`** for the GL side instead, which reads the GL lane rather than an obscured
+  window, and leave the lane armed throughout.
 - **Stop every other instance first.** `park.sh` puts every window at the same coordinates, so
   "the untitled sibling at that position" can belong to a *different* instance. This produced a
   pair showing two unrelated game states and read as a rendering bug.

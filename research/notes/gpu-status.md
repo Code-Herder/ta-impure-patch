@@ -7485,8 +7485,8 @@ shader says so" is the inference this landing exists to distrust:
 
 | measurement | result |
 |---|---|
-| game window vs Route D, every pass armed | **1 394 px of 786 432** |
-| the same pair, Route D mirrored | 624 824 px |
+| GL frame vs Route D, every pass armed | **311 px of 786 432** |
+| the same pair, Route D mirrored | 624 839 px |
 | `terr` A/B | **0 px** of 786 432 (630 708 non-black a side) |
 | `feat` A/B | **0 px** (103 638 a side) |
 | `unit` (`posedraw`) A/B | **0 px** (2 125 a side) |
@@ -7496,14 +7496,25 @@ shader says so" is the inference this landing exists to distrust:
 | `mark` A/B, the band box | **0 px** (2 456 a side) |
 | `mark` A/B, the post-fog layer | **0 px** (2 456 a side) |
 
-**The 1 394 px are attributed, and they are not a lane difference.** All of them lie inside the
-world viewport, in one band — x 295..732, y 348..398 — which is where the fixture's three ARMSTUMPs
-stand; **not one is in the panel or the bars**. 1 201 of them are non-terrain in *both* captures,
-i.e. the unit is present in each and shaded differently, which is a **pose that moved between two
-moments** rather than a lane drawing something else. The method cannot avoid that: Route D covers
-the game window completely, so the game has to be captured *before* the lane is armed, and the two
-frames are seconds apart. The same-frame check on the same fixture is the unit pass's own A/B, and
-it reads **0 px**.
+**[THE FIGURE ABOVE WAS 1 394 px UNTIL 2026-09-17 AND THE METHOD WAS WRONG.]** The first version of
+this comparison captured the game window *before* arming `vk.on`, because Route D covers the game
+window completely. **Arming the lane after launch starves it**: the mirrors it samples are asked for
+on the 30-frame arm poll, and a lane that comes up mid-session never gets the ones established at
+launch. Measured, on `one-unit` with `native.on` alone and nothing else moved: **382** non-black
+pixels in Route D with `vk.on` armed at launch — the commander, matching that fixture's A/B exactly
+— against **89** with it armed late, where the unit's body is simply absent. That artefact read as
+"the Vulkan lane draws a commander black", and it is not a rendering fault at all. The corrected
+method reads the GL side with `tacli glshot`, which goes to the GL lane rather than to an obscured
+window, and leaves `vk.on` armed from launch.
+
+**The 311 px are described rather than fully attributed**, which the 1 394 were not. They sit in
+four 64-px cells — x 516..732, y 363..398 — on two of the fixture's three parked ARMSTUMPs, at a
+worst channel of **75**: a shading difference on two units, not a missing or displaced object.
+**Nothing outside the world viewport differs at all**, so the GUI layer is pixel-identical. Two
+plausible contributors and neither is separated here: this run used the **play** anisotropy default
+rather than the `aniso=1` substitution §2.37 established for unit comparisons, and the two captures
+are still not the same instant. The same-frame check on this fixture is the unit pass's own A/B,
+which reads **0 px**.
 
 #### What it closed
 
