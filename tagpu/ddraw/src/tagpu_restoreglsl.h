@@ -40,8 +40,15 @@
    aligned atlas's cell slack, tagpu_gaf.h `align`; 0 elsewhere). `wrap` =
    tile it (tagpu_rglsl_tileable) -- the caller decides. `key` = the frame's
    colour key index, or -1 for an opaque frame: keyed texels are inpainted
-   before the model and written (0, 0, 0, 0) after (tagpu_restore_glsl.h). */
-typedef struct {
+   before the model and written (0, 0, 0, 0) after (tagpu_restore_glsl.h).
+
+   IT CARRIES A STRUCT TAG as well as the typedef, and the tag is load-bearing:
+   `inc/tagpu_posedraw.h` publishes a list of these to the unit consumer and
+   cannot include this file -- the build's only include directory is `inc`, so a
+   header there naming a header here does not resolve. A tag lets that hand-over
+   declare the pointer without the layout, and the consumer, which includes both,
+   gets the whole type. [The Vulkan-only plan's landing 7e-2.] */
+typedef struct TAGPU_RGLSL_FRAME_S {
     int ax, ay, w, h, wrap, dx, dy, border, key, padR, padB;
 } TAGPU_RGLSL_FRAME;
 

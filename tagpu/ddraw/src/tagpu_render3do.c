@@ -498,11 +498,22 @@ const unsigned char* tagpu_r3d_atlas_mirror(int* dim, int* rows, unsigned* seria
    `tagpu_gaf_atlas_mirror_rgb` is itself idempotent and latches its own
    failures, so this flag is only about not re-asking on every frame. */
 static int s_mirrorRgbAsked;
+/* ...OR THE LIST, WHICH IS THE OTHER ANSWER TO THE SAME QUESTION and is asked
+   FIRST (the Vulkan-only plan's landing 7e-2, the shape 7d gave features and
+   effects). With `tagpu_restorevk.on` beside TotalA.exe the other lane restores
+   for itself, so there is nothing to read back: the list is armed, the 16 MB
+   read-back is never asked for, and if it was already armed on an earlier beat
+   then arming the list frees it. Polled on every beat until it takes, exactly
+   as the mirror is, because the lever may appear mid-session. */
+static int s_rlistAsked;
 
 void tagpu_r3d_atlas_mirror_rgb_want(void)
 {
-    if (s_state == 1 && !s_mirrorRgbAsked && s_atlas.mirror && s_atlas.dim > 0 &&
-        tagpu_classicpp_assets())
+    if (s_state != 1 || !s_atlas.mirror || s_atlas.dim <= 0 ||
+        !tagpu_classicpp_assets())
+        return;
+    if (!s_rlistAsked) s_rlistAsked = tagpu_gaf_atlas_restore_vk(&s_atlas);
+    if (!s_rlistAsked && !s_mirrorRgbAsked)
         s_mirrorRgbAsked = tagpu_gaf_atlas_mirror_rgb(&s_atlas);
 }
 
@@ -512,7 +523,11 @@ void tagpu_r3d_atlas_mirror_rgb_want(void)
    stopped painting, so a settled scene pays one integer compare. */
 void tagpu_r3d_atlas_mirror_rgb_step(void)
 {
-    if (s_mirrorRgbAsked) tagpu_gaf_atlas_mirror_rgb_step(&s_atlas);
+    /* the list's arm frees the mirror, so the step below would find nothing to
+       do -- but it is gated here as well rather than left to that, because the
+       arm is a poll that can land on any frame and "mutually exclusive by
+       construction" was already wrong once on this plan for that reason */
+    if (s_mirrorRgbAsked && !s_rlistAsked) tagpu_gaf_atlas_mirror_rgb_step(&s_atlas);
 }
 
 /* THE ROWS ARE THE READ-BACK'S, NOT THE SHELF'S, and that is the difference
@@ -568,6 +583,35 @@ const unsigned char* tagpu_r3d_atlas_mirror_rgb(int* dim, int* rows, int* mips,
     if (aniso) *aniso = s_atlas.rgbAniso;
     if (serial) *serial = s_atlas.mirrorRgbSerial;
     return s_atlas.mirrorRgb;
+}
+
+/* THE LIST, AND THE TWIN'S SHAPE WITH IT. On this path there is no read-back
+   to carry the shape, so `dim` and `mips` come from the atlas -- and so does
+   `aniso`, which the mirror accessor also reports but which was never the
+   mirror's fact: it is the ratio GL applied to the TWIN, and a consumer that
+   cannot apply the same one draws different art wherever a unit is minified at
+   an angle. NULL until the list has been armed AND has entries; a consumer that
+   gets NULL falls back to whatever it did before, which is the indexed atlas. */
+const TAGPU_RGLSL_FRAME* tagpu_r3d_atlas_restore_list(int* dim, int* n, unsigned* gen,
+                                                      int* repaint, unsigned* blanks,
+                                                      int* mips, float* aniso)
+{
+    if (dim) *dim = 0;
+    if (n) *n = 0;
+    if (gen) *gen = 0;
+    if (repaint) *repaint = 0;
+    if (blanks) *blanks = 0;
+    if (mips) *mips = 0;
+    if (aniso) *aniso = 0.0f;
+    if (!s_atlas.rlistWant || !s_atlas.rlist || s_atlas.dim <= 0) return NULL;
+    if (dim) *dim = s_atlas.dim;
+    if (n) *n = s_atlas.rlistN;
+    if (gen) *gen = s_atlas.rlistGen;
+    if (repaint) *repaint = s_atlas.rlistRepaint;
+    if (blanks) *blanks = s_atlas.rlistBlanks;
+    if (mips) *mips = s_atlas.mip;
+    if (aniso) *aniso = s_atlas.rgbAniso;
+    return s_atlas.rlist;
 }
 
 const unsigned char* tagpu_r3d_lut_mirror(int* w, int* h, unsigned* serial)

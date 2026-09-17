@@ -726,6 +726,34 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
                                                 &s_pub.atlasRgbMips,
                                                 &s_pub.atlasRgbAniso,
                                                 &s_pub.atlasRgbSerial);
+    /* ...OR THE REQUEST INSTEAD OF THE PICTURE, and never both (landing 7e-2).
+       Written as an either/or here as well as guaranteed by the arm freeing the
+       mirror: the arm is a poll that can land on any frame, and "mutually
+       exclusive by construction" was already wrong once on this plan for
+       exactly that reason. `atlasRgbAniso` is published on BOTH paths -- it is
+       the twin's sampler ratio, not the mirror's -- so it is read from the list
+       accessor here rather than left at whatever the mirror call zeroed it to. */
+    {
+        float aniso = 0.0f;
+        const TAGPU_RGLSL_FRAME* fr =
+            tagpu_r3d_atlas_restore_list(&s_pub.restoreDim, &s_pub.restoreN,
+                                         &s_pub.restoreGen, &s_pub.restoreRepaint,
+                                         &s_pub.restoreBlanks, &s_pub.restoreMips,
+                                         &aniso);
+        if (fr) {
+            s_pub.atlasRgb       = NULL;
+            s_pub.atlasRgbRows   = 0;
+            s_pub.atlasRgbMips   = 0;
+            s_pub.atlasRgbSerial = 0;
+            s_pub.atlasRgbAniso  = aniso;
+            s_pub.restoreFrames  = fr;
+        } else {
+            s_pub.restoreFrames  = NULL;
+            s_pub.restoreN = 0; s_pub.restoreGen = 0;
+            s_pub.restoreRepaint = 0; s_pub.restoreBlanks = 0;
+            s_pub.restoreDim = 0; s_pub.restoreMips = 0;
+        }
+    }
     s_pub.lut = tagpu_r3d_lut_mirror(&s_pub.lutW, &s_pub.lutH, &s_pub.lutSerial);
     s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();
     s_pub.fogLut = tagpu_native_foglut();

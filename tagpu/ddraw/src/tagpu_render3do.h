@@ -1,6 +1,7 @@
 #ifndef TAGPU_RENDER3DO_H
 #define TAGPU_RENDER3DO_H
 #include "tagpu.h"
+#include "tagpu_restoreglsl.h"   /* TAGPU_RGLSL_FRAME, the restore list */
 /* The opt-in write-back (`tagpu_render3do()`, `tagpu_writeback.on`) was
    deleted by the frame packet exchange's landing 3: it walked an Object3do on
    the render thread and stored the result into engine memory from there. What
@@ -78,6 +79,15 @@ void tagpu_r3d_atlas_mirror_rgb_want(void);
 void tagpu_r3d_atlas_mirror_rgb_step(void);
 const unsigned char* tagpu_r3d_atlas_mirror_rgb(int* dim, int* rows, int* mips,
                                                 float* aniso, unsigned* serial);
+/* ...OR THE LIST OF FRAMES TO RESTORE, which `_want` above arms INSTEAD of the
+   read-back under `tagpu_restorevk.on` (the Vulkan-only plan's landing 7e-2).
+   The two are mutually exclusive: arming the list frees the mirror, and the
+   mirror accessor then returns NULL. `mips` and `aniso` describe the TWIN and
+   come from the atlas, because on this path no read-back carries them.
+   NULL until the list is armed and has entries. */
+const TAGPU_RGLSL_FRAME* tagpu_r3d_atlas_restore_list(int* dim, int* n, unsigned* gen,
+                                                      int* repaint, unsigned* blanks,
+                                                      int* mips, float* aniso);
 /* 256 x 32 R8, the bytes `shade_upload` last gave glTexSubImage2D. The serial
    moves when the table is rebuilt -- which happens once per context, and again
    the first time the engine's own PALETTE.SHD arrives after a frame with none. */

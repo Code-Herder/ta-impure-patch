@@ -366,6 +366,34 @@ typedef struct TAGPU_PDHAND {
        is minified at an angle, so this is compared and not assumed. */
     float atlasRgbAniso;
     unsigned atlasRgbSerial;
+    /* ...OR THE REQUEST INSTEAD OF THE PICTURE, and never both (the
+       Vulkan-only plan's landing 7e-2, the shape landing 7d gave the feature
+       and effects atlases). With `tagpu_restorevk.on` the gather half stops
+       reading the twin back and publishes the LIST OF FRAMES to restore
+       instead; the other lane paints them into its own twin, and this atlas's
+       `atlasRgb` above is NULL on those frames.
+
+       `restoreGen` is the only thing a cursor cannot survive: every
+       discontinuity in the list -- arm, recycle, repack, GL context loss,
+       palette move, a GL job made over a fresh twin, an overflow restart --
+       bumps it, and a consumer whose generation moved starts at 0 again.
+       `restoreRepaint` says the destination is to be recoloured in place
+       rather than blanked, and `restoreBlanks` counts the resets that DID
+       blank, which is how a consumer tells "recolour" from "start again"
+       across a frame it did not see. The struct is declared by tag here
+       because this header cannot include the one that defines it; the
+       consumer includes both. */
+    const struct TAGPU_RGLSL_FRAME_S* restoreFrames;
+    int                               restoreN;
+    unsigned                          restoreGen;
+    int                               restoreRepaint;
+    unsigned                          restoreBlanks;
+    /* THE TWIN'S SHAPE ON THE LIST PATH, because on that path there is no
+       read-back to carry it: `restoreDim` is the twin's square size and
+       `restoreMips` its top level, both from the atlas itself. `atlasRgbAniso`
+       above is published on BOTH paths for the same reason -- it is a property
+       of the twin's sampler, not of the mirror. */
+    int                               restoreDim, restoreMips;
     const unsigned char* lut;     int lutW, lutH;          unsigned lutSerial;
     const unsigned char* pal;     unsigned palSerial;
     /* COPIED, not aliased: the grid points into a frame packet the game thread
