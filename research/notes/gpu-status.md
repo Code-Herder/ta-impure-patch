@@ -7778,10 +7778,14 @@ runs, so the 180-slice release fires through the new `act_free` return-value con
   a timer query and never completes one.
 * `job_clear` and `repalette` — the palette-moved-under-a-live-job path. `tagpu_gaf.c` reaches
   both on a palette change, which neither fixture produces.
-* **the feature and effects queues armed but never drained.** Both logged `lazy restore armed` on
-  `feat-forest` and neither reached a dump inside the window, so the `feat` and `fx` jobs are
-  covered only as far as job creation. They run the same `tagpu_rcore_job_add` and the same batch
-  path as the unit atlas that *was* verified, which is an argument and not a measurement.
+* **the feature and effects queues were never FED, which is not the same as never drained.** Both
+  logged `lazy restore armed` on `feat-forest` and then produced **zero batch lines** with
+  `restoreglsl.on=log` on — so `tagpu_rcore_job_add` was never called for either and the `feat` and
+  `fx` jobs are covered only as far as `job_new`. The reason is the fixture: those two atlases hold
+  **GAF sprites**, and `feat-forest`'s trees are 3DO features, so what they populated was the
+  *unit* atlas — which is the one that did get verified. Closing this needs a fixture with real
+  2D sprite art in view (`fx-rockets` for the effects side). They run the same queue and batch
+  path as the unit atlas, which is an argument and not a measurement.
 * two GPUs' worth of nothing: one GPU, one model, NK=4, fp32.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
