@@ -1178,7 +1178,8 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex,
             s_abDone = 1;
             taking = 0;
         }
-        if (taking) tagpu_abshot_begin(&shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR);
+        if (taking) tagpu_abshot_begin(&shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR |
+                                              TAGPU_ABSHOT_TOPDOWN);
 
         /* only the under-layers can sit behind a stamped feature row: the
            scaffold fetch is paid by that draw alone */

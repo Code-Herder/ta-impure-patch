@@ -93,10 +93,20 @@
       more here than it did there: terrain covers the whole gather rect, which
       at zoom < 1 reaches well past the viewport and over the side panel.
 
-   7. THE Y FLIP IS PIPELINE STATE, as in every ported pass: a negative viewport
-      height (VK_KHR_maintenance1), never a source edit. Both halves of this
-      A/B are therefore upside-down pictures of the world, identically, which is
-      the only thing the comparison asks of them.
+   7. NO Y FLIP, AND THAT IS LANDING 5b's CORRECTION. This pass writes
+      `gl_Position.y = p.y/uGame.y*2 - 1` on the engine's screen-space y, which
+      grows DOWNWARD, so clip +1 is the BOTTOM of the game frame. GL's composite
+      quad turns the world FBO over on the way to the window, which is why the
+      game looks right. The Vulkan lane has no composite quad -- the ported
+      passes draw STRAIGHT INTO THE SWAPCHAIN IMAGE -- so a negative viewport
+      height, which this pass took until 2026-09-17, turned the frame over a
+      SECOND time and Route D presented the world upside down. The viewport is
+      positive now and clip -1 lands on row 0, the game's top row under both.
+      It was invisible for eight landings because `tagpu_abshot.c` turned the GL
+      half of every capture over by the same rule, so the two halves lined up and
+      the A/B -- which compares the lanes to each other -- is blind to a flip they
+      share. The capture takes TAGPU_ABSHOT_TOPDOWN now. VK_KHR_maintenance1 was
+      needed only for the negative height, so this pass no longer requires it.
 
    ---- WHAT IT DOES NOT DO ----
 
@@ -839,9 +849,12 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     vp.viewportCount = 1; vp.scissorCount = 1;     /* both dynamic, set per frame */
 
     rs.polygonMode = VK_POLYGON_MODE_FILL;
-    /* NO CULLING: the negative viewport height flips the winding of every
-       triangle, so a cull mode that was right under GL would throw the whole
-       frame away. The GL twin does not cull either. */
+    /* NO CULLING, and the reason is now the simple one: THE GL TWIN DOES NOT
+       CULL. It used to be stated the other way round -- a negative viewport
+       height flips the winding of every triangle, so a cull mode that was right
+       under GL would have thrown the whole frame away -- and that argument went
+       with the flip in landing 5b. Nothing here culls and nothing here should,
+       so the state is unchanged and only its justification is. */
     rs.cullMode = VK_CULL_MODE_NONE;
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rs.lineWidth = 1.0f;
@@ -1054,12 +1067,6 @@ static int build(const TAGPU_VKPASS* d)
              (unsigned)d->slots, TAGPU_VK_SLOTS);
         return 0;
     }
-    if (!d->flipok) {
-        plog(d, "terr: this device does not offer VK_KHR_maintenance1, so the "
-                "clip-space flip has no pipeline state to ride - the Vulkan "
-                "edition of the terrain pass stays down (the GL one is unaffected)");
-        return 0;
-    }
     /* TERRAIN IS THE FRAME'S FAR PLANE: it writes the depth everything above it
        is tested against, so it refuses rather than draws untested. */
     if (d->dfmt == VK_FORMAT_UNDEFINED) {
@@ -1123,7 +1130,7 @@ static void terr_scissor(uint32_t w, uint32_t h)
     int ww = (int)(s_hVw * sx + 0.5f);
     int ytop = (int)(s_hVpT * sy + 0.5f);
     int hh = (int)(s_hVh * sy + 0.5f);
-    int y0 = (int)h - (ytop + hh);          /* the mirror */
+    int y0 = ytop;                          /* NOT mirrored: landing 5b */
 
     /* NO CLIP WHERE THE GL LANE HAS NONE. `scissorOn` is what the native pass
        actually did, not what it would have liked to. */
@@ -1611,9 +1618,9 @@ void tagpu_vk_terr_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        depth VALUE here is twice GL's and the far plane terrain writes is not
        the one the passes above it are tested against. */
     vp.x = 0.0f;
-    vp.y = (float)h;
+    vp.y = 0.0f;
     vp.width = (float)w;
-    vp.height = -(float)h;
+    vp.height = (float)h;
     vp.minDepth = 0.5f;
     vp.maxDepth = 1.0f;
     vkCmdSetViewport(cb, 0, 1, &vp);

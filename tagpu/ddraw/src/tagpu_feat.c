@@ -1155,7 +1155,8 @@ void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex)
         s_abDone = 1;
         taking = 0;
     }
-    if (taking) tagpu_abshot_begin(&shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR);
+    if (taking) tagpu_abshot_begin(&shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR |
+                                          TAGPU_ABSHOT_TOPDOWN);
 
     /* shadows are ground decals: they test depth but never write it, so a
        feature's own body is not fighting its shadow and nothing is occluded

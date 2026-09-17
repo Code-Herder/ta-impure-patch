@@ -966,7 +966,7 @@ static void mk_scissor(const TAGPU_MKHAND* h, uint32_t w, uint32_t hh,
     int ww = (int)(h->vw * sx + 0.5f);
     int ytop = (int)(h->vpT * sy + 0.5f);
     int hgt = (int)(h->vh * sy + 0.5f);
-    int y0 = (int)hh - (ytop + hgt);          /* the mirror */
+    int y0 = ytop;                            /* NOT mirrored: landing 5b */
     if (!h->scissorOn || ww <= 0 || hgt <= 0) {
         out->offset.x = 0; out->offset.y = 0;
         out->extent.width = w; out->extent.height = hh;
@@ -1018,14 +1018,19 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        its draws correctly into nowhere: the log said "drew 1 list entr(ies), 90
        vertices" and the frame came back black, on the lane's own window as well
        as in the capture.
-       THE FLIP IS tagpu_vk_fx.c's, unchanged: y starts at the bottom and the
-       height is negative, so clip space turns over once and the ported shader
-       keeps GL's convention without a character changing. minDepth 0.5 /
-       maxDepth 1.0 maps clip z in [0, 1] onto GL's own (z+1)/2. */
+       NO Y FLIP, since landing 5b: this pass's vertices are the engine's
+       screen-space y, which grows DOWNWARD, so clip -1 is the game frame's TOP
+       row and a positive viewport height puts it on row 0 of the swapchain
+       image -- which is where the game's top row is. A negative height, which
+       this pass took until 2026-09-17, turned it over a second time and Route D
+       presented the markers upside down; `tagpu_vk_fx.c` item 6 has the whole
+       argument. minDepth 0.5 / maxDepth 1.0 still maps clip z in [0, 1] onto
+       GL's own (z+1)/2 -- the depth range is a separate question from the
+       flip. */
     vp.x = 0.0f;
-    vp.y = (float)h;
+    vp.y = 0.0f;
     vp.width = (float)w;
-    vp.height = -(float)h;
+    vp.height = (float)h;
     vp.minDepth = 0.5f;
     vp.maxDepth = 1.0f;
     vkCmdSetViewport(cb, 0, 1, &vp);

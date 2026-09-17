@@ -112,20 +112,26 @@ void tagpu_abshot_begin(TAGPU_ABSHOT* s, unsigned flags)
     if ((flags & TAGPU_ABSHOT_SCISSOR) && s->scissor) glEnable(GL_SCISSOR_TEST);
 }
 
-/* A binary PPM of an RGBA readback, rows turned over.
+/* A binary PPM of an RGBA readback.
 
-   glReadPixels hands back the BOTTOM row first and a PPM's first row is the
-   TOP one, so the rows are written backwards. Getting this wrong produces a
-   capture that differs from the Vulkan one in every drawn pixel and in nothing
-   else, which reads as a Y-flip bug in the port rather than in the oracle. */
+   glReadPixels hands back the BOTTOM row of the read framebuffer first and a
+   PPM's first row is the TOP one, so by default the rows are written backwards.
+   Getting this wrong produces a capture that differs from the Vulkan one in
+   every drawn pixel and in nothing else, which reads as a Y-flip bug in the
+   port rather than in the oracle.
+
+   `topdown` says the framebuffer already holds the game frame top row first, in
+   which case the reversal is what would turn it over -- TAGPU_ABSHOT_TOPDOWN in
+   the header has the argument, and which passes set it and why. */
 /* 1 only when the whole capture reached the disk. A caller that claims the
    Vulkan half of an A/B on a GL half that was never written would have
    tools/vk-ab.py diff against a missing -- or, worse, a STALE -- _gl.ppm and
    report a port failure that is really a capture failure. */
-static int write_ppm(const char* path, int w, int h, const unsigned char* rgba)
+static int write_ppm(const char* path, int w, int h, const unsigned char* rgba,
+                    int topdown)
 {
     FILE* fp;
-    int y, x;
+    int i, x;
     unsigned char* line;
     /* THE ROW BUFFER BEFORE THE FILE. A failed allocation after the header is
        written leaves a header-only PPM on disk, which reads as a broken writer
@@ -136,7 +142,8 @@ static int write_ppm(const char* path, int w, int h, const unsigned char* rgba)
     fprintf(fp, "P6\n%d %d\n255\n", w, h);
     /* ONE fwrite A ROW: this is the render thread and a stdio call per pixel is
        two million of them at 1080p. */
-    for (y = h - 1; y >= 0; y--) {
+    for (i = 0; i < h; i++) {
+        int y = topdown ? i : (h - 1 - i);
         const unsigned char* row = rgba + (size_t)y * w * 4;
         for (x = 0; x < w; x++) {
             line[x * 3 + 0] = row[(size_t)x * 4 + 0];
@@ -172,7 +179,8 @@ int tagpu_abshot_end(TAGPU_ABSHOT* s, const char* path, const char* tag)
     } else if ((buf = (unsigned char*)malloc((size_t)vp[2] * vp[3] * 4)) != NULL) {
         glPixelStorei(GL_PACK_ALIGNMENT, 1);
         x_glReadPixels(vp[0], vp[1], vp[2], vp[3], GL_RGBA, GL_UNSIGNED_BYTE, buf);
-        ok = write_ppm(path, vp[2], vp[3], buf);
+        ok = write_ppm(path, vp[2], vp[3], buf,
+                       (s->flags & TAGPU_ABSHOT_TOPDOWN) != 0);
         free(buf);
         if (ok)
             _snprintf(msg, sizeof msg, "%s: A/B wrote %s, %dx%d", tag, path, (int)vp[2], (int)vp[3]);

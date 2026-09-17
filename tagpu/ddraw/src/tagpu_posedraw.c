@@ -860,7 +860,8 @@ void tagpu_posedraw_begin(const TAGPU_PDVIEW* v)
            the world viewport and measuring them unclipped measures a pass the
            player never sees. */
         if (s_ab && !s_abDone)
-            tagpu_abshot_begin(&s_shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR);
+            tagpu_abshot_begin(&s_shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR |
+                                        TAGPU_ABSHOT_TOPDOWN);
     }
     glUseProgram(s_prog);
     x_glUniform2f(u_game, v->game[0], v->game[1]);

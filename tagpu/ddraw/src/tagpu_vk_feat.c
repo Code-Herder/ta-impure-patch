@@ -43,29 +43,33 @@
       VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE is Vulkan 1.3 or an extension and buys
       one object.
 
-   3. THE SCISSOR, AND IT IS THE ONE THING THAT IS NOT THE SAME NUMBER ON BOTH
-      SIDES. The native pass clips this draw to the world viewport, and a
-      scissor is expressed in FRAMEBUFFER coordinates, which the two APIs
-      disagree about. In the GL world FBO, framebuffer row 0 is clip-space
-      y = -1; with the negative viewport height this pass uses (item 4), row 0
-      of the Vulkan image is clip-space y = +1. The two images are therefore
-      stored the same way round -- which is exactly why the stored bytes can be
-      compared at all -- and a RECTANGLE in one is the vertical mirror of the
-      same rectangle in the other. `scissor.offset.y = H - (vpT + vh)`, and
-      getting it wrong shows up as the world clipped against the wrong edge
-      rather than as anything subtle.
-      (The scaffold's "the scissor is NOT flipped" is true of a FULL-FRAME
-      scissor and of a pass drawn into the default framebuffer, which is the
-      other y convention again. Neither is this.)
+   3. THE SCISSOR is the world viewport, and since landing 5b it is the SAME
+      rectangle on both sides. It used to be the vertical mirror
+      (`offset.y = H - (vpT + vh)`), which was the right arithmetic for as long
+      as the Vulkan image was stored upside down to match the GL world FBO --
+      item 4 is why it no longer is. With a positive viewport height row 0 of the
+      Vulkan image is the game frame's top row, the same row the GL FBO hands
+      back first, so `offset.y` is just the viewport top. Getting it wrong shows
+      up as the world clipped against the wrong edge rather than as anything
+      subtle.
 
-   4. THE Y FLIP IS PIPELINE STATE, as in every ported pass: a negative viewport
-      height (VK_KHR_maintenance1), never a source edit, because an edited
-      shader would disagree with the GL twin that is its oracle. One consequence
-      worth writing down for whoever opens the capture: this pass's GL twin
-      draws into the world FBO, whose clip-space +1 is the BOTTOM of the screen
-      (the composite quad turns it over), so BOTH halves of this A/B are
-      upside-down pictures of the world. They are upside down identically,
-      which is the only thing the comparison asks of them.
+   4.   NO Y FLIP, AND THAT IS LANDING 5b's CORRECTION. This pass writes
+      `gl_Position.y = p.y/uGame.y*2 - 1` on the engine's screen-space y, which
+      grows DOWNWARD, so clip +1 is the BOTTOM of the game frame. GL's composite
+      quad turns the world FBO over on the way to the window, which is why the
+      game looks right. The Vulkan lane has no composite quad -- the ported
+      passes draw STRAIGHT INTO THE SWAPCHAIN IMAGE -- so a negative viewport
+      height, which this pass took until 2026-09-17, turned the frame over a
+      SECOND time and Route D presented the world upside down. The viewport is
+      positive now and clip -1 lands on row 0, which is the game's top row under
+      both APIs.
+      It was invisible for eight landings because `tagpu_abshot.c` turned the GL
+      half of every capture over by the same rule, so the two halves lined up and
+      the A/B -- which compares the lanes to each other -- is structurally blind
+      to a flip they share. The capture takes TAGPU_ABSHOT_TOPDOWN now.
+      (VK_KHR_maintenance1 was needed only for the negative height, so this pass
+      no longer requires it; `tagpu_vk_gui.c`, `_fps.c` and `_scaffold.c` still
+      do, because their shaders are y-UP and their flip is correct.)
 
    5. BLENDING is glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA) -- the GL FBO is
       premultiplied -- and glBlendFunc sets the alpha factors as well as the
@@ -670,9 +674,12 @@ static int build_pipelines(const TAGPU_VKPASS* d)
     vp.viewportCount = 1; vp.scissorCount = 1;     /* both dynamic, set per frame */
 
     rs.polygonMode = VK_POLYGON_MODE_FILL;
-    /* NO CULLING: the negative viewport height flips the winding of every
-       triangle, so a cull mode that was right under GL would throw the whole
-       frame away. The GL twin does not cull either. */
+    /* NO CULLING, and the reason is now the simple one: THE GL TWIN DOES NOT
+       CULL. It used to be stated the other way round -- a negative viewport
+       height flips the winding of every triangle, so a cull mode that was right
+       under GL would have thrown the whole frame away -- and that argument went
+       with the flip in landing 5b. Nothing here culls and nothing here should,
+       so the state is unchanged and only its justification is. */
     rs.cullMode = VK_CULL_MODE_NONE;
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rs.lineWidth = 1.0f;
@@ -840,12 +847,6 @@ static int build(const TAGPU_VKPASS* d)
     if (d->slots == 0 || d->slots > TAGPU_VK_SLOTS) {
         plog(d, "feat: %u frame slots is outside what this pass carries (%d)",
              (unsigned)d->slots, TAGPU_VK_SLOTS);
-        return 0;
-    }
-    if (!d->flipok) {
-        plog(d, "feat: this device does not offer VK_KHR_maintenance1, so the "
-                "clip-space flip has no pipeline state to ride - the Vulkan "
-                "edition of the feature pass stays down (the GL one is unaffected)");
         return 0;
     }
     /* THE FIRST PASS THAT DEPTH-TESTS REFUSES RATHER THAN DRAWS UNTESTED. */
@@ -1027,7 +1028,7 @@ static void feat_scissor(uint32_t w, uint32_t h)
     int ww = (int)(s_hVw * sx + 0.5f);
     int ytop = (int)(s_hVpT * sy + 0.5f);
     int hh = (int)(s_hVh * sy + 0.5f);
-    int y0 = (int)h - (ytop + hh);          /* the mirror */
+    int y0 = ytop;                          /* NOT mirrored: landing 5b */
 
     /* NO CLIP WHERE THE GL LANE HAS NONE. `scissorOn` is what the native pass
        actually did, not what it would have liked to; a Vulkan lane that clipped
@@ -1266,9 +1267,9 @@ void tagpu_vk_feat_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        onto GL's own (z+1)/2 -- see item 1 of the file header; without it every
        depth VALUE here is twice GL's and a z-fight settles the other way. */
     vp.x = 0.0f;
-    vp.y = (float)h;
+    vp.y = 0.0f;
     vp.width = (float)w;
-    vp.height = -(float)h;
+    vp.height = (float)h;
     vp.minDepth = 0.5f;
     vp.maxDepth = 1.0f;
     vkCmdSetViewport(cb, 0, 1, &vp);

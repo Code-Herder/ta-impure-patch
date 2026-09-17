@@ -415,9 +415,14 @@ offscreen texture sampled by UV and its header already says NO Y FLIP. Nothing c
 justified by buys nothing.
 
 **Exit condition**: the Route D window is upright for every armed pass, AND every A/B on this
-plan is re-run and agrees with the figure already published. Landing 5's own pair is the
-worked example and is already measured both ways: 32 px through today's instrument,
-**0 px of 786 432** once both errors are corrected.
+plan is re-run and agrees with the figure already published.
+
+**DONE 2026-09-17** ([gpu-status](gpu-status.html) §2.40). The fix set turned out to be five passes
+and not eight: the tree has TWO y conventions and `gui`, `fps` and `scaffold` were already right —
+established on the screen, one pass at a time, not inferred from their shaders. Game window vs
+Route D: **1 394 px of 786 432**, against 624 824 mirrored. Every A/B re-taken and at parity —
+terrain, features, units, effects and the untouched GUI control all **0 px**. Landing 5's 32 px
+were this flip and are gone.
 
 Back to the filed list:
 

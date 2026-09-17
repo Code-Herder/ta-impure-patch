@@ -72,8 +72,28 @@ typedef struct {
    measured and what their 0-px results are results about. */
 #define TAGPU_ABSHOT_SCISSOR  2u
 
+/* THE FRAMEBUFFER BEING READ ALREADY HOLDS THE GAME FRAME TOP ROW FIRST, so do
+   not turn the rows over on the way out.
+
+   `glReadPixels` hands back the bottom row of the READ framebuffer first, and a
+   PPM's first row is the top one, so the default here is to reverse them. That
+   is right for a pass drawn into the DEFAULT framebuffer with GL's own
+   convention -- tagpu_gui_surf.c, tagpu_fps.c and tagpu_scaffold.c all write
+   `1 - y*2` or build their NDC rect y-up, so their content sits in the frame
+   the way GL expects.
+
+   It is wrong for the WORLD passes. They write `gl_Position.y = p.y/uGame.y*2 -
+   1` on the engine's screen-space y, which grows DOWNWARD, so clip +1 is the
+   BOTTOM of the game frame and the world FBO's first row IS the game's top row.
+   Reversing it produces an upside-down PPM -- which is what gpu-status §2.28
+   describes and accepted, because the Vulkan half was mirrored to match by a
+   negative-height viewport and the two lined up. They no longer are: the lane
+   presents its own picture now, so the world passes are drawn the right way up
+   and their captures have to be as well. [Landing 5b, 2026-09-17.] */
+#define TAGPU_ABSHOT_TOPDOWN  4u
+
 /* Black the whole frame, scissor off for the clear itself. Call immediately
-   before the pass draws. `flags` is 0 or the two above. */
+   before the pass draws. `flags` is 0 or any of the three above. */
 void tagpu_abshot_begin(TAGPU_ABSHOT* s, unsigned flags);
 
 /* Read the viewport back and write it as a binary PPM, then put every piece of

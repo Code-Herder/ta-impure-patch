@@ -1053,7 +1053,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
             taking = 0;
         }
         s_abTaking = taking;
-        if (taking) tagpu_abshot_begin(&s_abShot, TAGPU_ABSHOT_SCISSOR);
+        if (taking) tagpu_abshot_begin(&s_abShot, TAGPU_ABSHOT_SCISSOR | TAGPU_ABSHOT_TOPDOWN);
     }
 
     total = BARBASE + s_nbar;

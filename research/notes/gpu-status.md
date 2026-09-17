@@ -3762,10 +3762,10 @@ would buy one object.
 
 The native pass clips this draw to the world viewport, and a scissor is expressed in **framebuffer**
 coordinates, which the two APIs disagree about. In the GL world FBO, framebuffer row 0 is clip-space
-y = −1; with the negative viewport height every ported pass uses, row 0 of the Vulkan image is
-clip-space y = **+1**. The two images are stored the same way round — which is exactly what lets the
-bytes be compared at all — and a *rectangle* in one is the vertical mirror of the same rectangle in
-the other:
+y = −1; with the negative viewport height this pass used until 2026-09-17, row 0 of the Vulkan image
+was clip-space y = **+1**. The two images were stored the same way round — which is exactly what let
+the bytes be compared at all — and a *rectangle* in one was the vertical mirror of the same
+rectangle in the other:
 
     scissor.offset.y = H − (vpT + vh)
 
@@ -3779,9 +3779,15 @@ the clip is actually on (the native pass enables it only when it resolved `glSci
 lane that clipped while GL did not would differ in every feature the gather's margin reaches past
 the viewport, which on a forest map is a wide band down both edges.
 
-**Both halves of this A/B are upside-down pictures of the world**, and that is correct: the GL twin
-draws into the world FBO, whose clip-space +1 is the *bottom* of the screen (the composite quad
-turns it over). They are upside down identically, which is the only thing the comparison asks.
+**[CORRECTED BY LANDING 5b, 2026-09-17 — the paragraph below was true of the comparison and hid a
+defect in the lane.]** It read: *"Both halves of this A/B are upside-down pictures of the world, and
+that is correct: the GL twin draws into the world FBO, whose clip-space +1 is the bottom of the
+screen (the composite quad turns it over). They are upside down identically, which is the only thing
+the comparison asks."* Every clause is true. What none of it covers is that the Vulkan lane has **no
+composite quad** — the ported passes draw straight into the swapchain image — so making the Vulkan
+picture match the GL *FBO* is what made Route D present the world upside down. The scissor above is
+therefore no longer mirrored, this pass takes a **positive** viewport height, and the GL half of the
+capture is written top-down (`TAGPU_ABSHOT_TOPDOWN`). §2.40 has the whole of it.
 
 #### The atlas mirror — the mechanism the remaining world passes need
 
@@ -4049,8 +4055,9 @@ the dimensions are data and cannot be asserted away.
 * **The scissor is §2.29's**, mirrored as `offset.y = H − (vpT + vh)` with its enable travelling
   with it. It matters more here: terrain covers the whole *gather* rect, which at zoom < 1
   reaches well past the viewport and over the side panel.
-* **Both halves are upside-down pictures of the world**, identically, exactly as §2.29 — the GL
-  twin draws into the world FBO, whose clip-space +1 is the bottom of the screen.
+* **Both halves were upside-down pictures of the world — true until landing 5b and no longer**;
+  the flip that made the Vulkan half match the GL *FBO* also made Route D present the world upside
+  down, and both halves are now the right way up. §2.40.
 
 #### What it does not do
 
@@ -4535,8 +4542,11 @@ Proton 11 run recorded 247, and neither list carries the four ray-tracing ones a
 
 #### There is no Y flip here, and that is not an omission
 
-Every other ported pass flips — a negative viewport height, `VK_KHR_maintenance1` — because its
-target is **presented**, and the two APIs disagree about which row of a window is the top.
+Every pass that is **presented and writes GL's window convention** flips — a negative viewport
+height, `VK_KHR_maintenance1` — because the two APIs disagree about which row of a window is the
+top. Since landing 5b that is `gui`, `fps` and `scaffold` only: the world passes write the engine's
+screen-space y, which grows downward, so clip −1 is already the game frame's top row and they take a
+**positive** height. This pass was right for a third reason and still is.
 
 **This target is sampled.** In GL, clip y = −1 is window row 0, which is texel row 0, which is
 v = 0. In Vulkan with a *positive* viewport height, clip y = −1 is framebuffer row 0, which is
@@ -7373,6 +7383,128 @@ differences *between* rows' GL counts are not.
   *refused* rather than drawn, so it is a bound and not a gap; zoom is untested either way.
 * **The flip above is diagnosed and proven and NOT fixed** — it is nine files and every pass's A/B
   has to be re-run, which is a landing and not a rider on this one.
+
+### 2.40 The lane's frame was upside down, and no A/B could see it — landing 5b of the Vulkan-only plan
+
+**FOUND BY THE OWNER, LOOKING AT THE ROUTE D WINDOW, 2026-09-17**, while landing 5's labels were on
+screen for the first time. The text read mirrored. It was not the text: **every world pass drew the
+whole frame upside down**, and had since G19e.
+
+#### Two y conventions, and the flip is right for one of them
+
+This tree's GL shaders do not agree about which way y runs, and that is not sloppiness — they draw
+into different targets:
+
+| convention | passes | where the GL twin draws | Vulkan needs |
+|---|---|---|---|
+| `p.y/uGame.y*2 − 1` on the engine's screen-space y, which grows **downward** | `terr`, `feat`, `fx`, `unit`, `mark` | the **world FBO**, whose clip +1 is the bottom of the game frame; GL's composite quad turns it over on the way to the window | **no flip** — clip −1 is already the game's top row, which is row 0 under Vulkan |
+| `1 − y*2`, or an NDC rect built y-up | `gui`'s composite, `fps`, `scaffold` | GL's **window**, in GL's own convention | **the flip** — a negative viewport height, because the two APIs disagree about which row of a window is the top |
+
+The lane applied `tagpu_vk_fx.c`'s negative viewport height to **all** of them. For the first group
+that is a second turn, and the ported passes draw **straight into the swapchain image** — there is
+no composite quad on the Vulkan side to turn it back. So Route D presented the world upside down.
+
+`tagpu_vk_shadow.c` was never affected and its header already said why: its map is an offscreen
+texture sampled by UV, never presented, so it takes a positive height. That was the one pass whose
+author asked the question this section is the answer to.
+
+#### Why eight landings of A/Bs could not see it
+
+`tagpu_abshot.c` turned the GL half of every capture over by the same rule, because `glReadPixels`
+hands back the bottom row first and a PPM's first row is the top — which is correct for a
+default-framebuffer readback and wrong for the world FBO, whose first row IS the game's top row. So
+both halves were mirrored and they lined up exactly.
+
+**This was written down and accepted, in as many words.** §2.29: *"Both halves of this A/B are
+upside-down pictures of the world, and that is correct… They are upside down identically, which is
+the only thing the comparison asks."* Every clause is true **of the comparison**. What none of it
+covers is the lane's own presented picture — and until landing 5 the Vulkan lane had no picture a
+human ever looked at. Route D exists to be captured.
+
+**The general lesson, and it is the one worth carrying:** an A/B compares the two lanes **to each
+other**, so it is structurally blind to any error they share. Every figure on this plan stands as a
+*content* comparison — geometry, colour, coverage and ordering were all genuinely compared — but two
+classes fall outside it: the lane's presented picture, and any rasterisation rule whose answer
+depends on which way up the viewport is. **The screen is the oracle for those, not `vk-ab.py`.**
+
+#### What changed
+
+* **Five viewports**, `vp.y = h; height = −h` → `vp.y = 0; height = +h`.
+* **Five scissor rects** that were deliberately mirrored to compensate (`fx_scissor` and its four
+  copies): `y0 = h − (ytop + hh)` → `y0 = ytop`. They are the same rectangle on both sides now.
+* **`TAGPU_ABSHOT_TOPDOWN`**, set by exactly those five passes' GL halves. It is a flag and not a
+  blanket change because the reversal stays right for `gui`, `fps` and `scaffold`. With the flag
+  clear, `write_ppm` emits rows `h−1 … 0` — byte-identical to the loop it replaced, so the change
+  is a provable no-op for those three.
+* **Four `flipok` refusals deleted.** `VK_KHR_maintenance1` was needed *only* for the negative
+  height, so `terr`, `feat`, `fx` and `unit` no longer stand down without it. `gui`, `fps` and
+  `scaffold` still require it and still ask.
+* The prose that argued for the flip, in five pass headers, in `tagpu_vk_pass.h`'s `flipok`
+  contract, and in four places in this file — including three `NO CULLING` comments whose stated
+  reason was the winding the flip reversed. Nothing culls and nothing should; only the
+  justification moved.
+
+#### How it was verified — and the method is the point
+
+**The screen, not the A/B.** Both windows are captured by **window id** and diffed:
+
+```
+DISPLAY=:0 xwininfo -root -tree | grep 1024x768     # the TITLED window is the game;
+DISPLAY=:0 import -window <id> out.png              # its untitled sibling at the same +X+Y is Route D's
+```
+
+Two traps, each of which cost a run:
+
+* **Two instances park at the same coordinates.** `park.sh` puts every window in the same place, so
+  "the untitled sibling at that position" can belong to a *different* instance. Stop all but one.
+* **An obscured window's backing store is stale.** Route D covers the game completely, so an
+  `import` of the game window returns whatever it last held — in one run, the pre-scenario frame,
+  which read as a 534 730-px difference that was really two different moments. Capture the game
+  **before** the lane is armed, on a static fixture.
+
+| measurement | result |
+|---|---|
+| game window vs Route D, every pass armed | **1 394 px of 786 432** |
+| the same pair, Route D mirrored | 624 824 px |
+| `terr` A/B | **0 px** of 786 432 (630 708 non-black a side) |
+| `feat` A/B | **0 px** (103 638 a side) |
+| `unit` (`posedraw`) A/B | **0 px** (2 125 a side) |
+| `fx` A/B, `fx-rockets` | **0 px** (1 298 a side) |
+| `gui` A/B — **untouched control** | **0 px** of 307 200 (306 937 a side) |
+| `mark` A/B, six draw kinds | **0 px** (10 305 a side) — **was 32 px**, and those 32 were this |
+| `mark` A/B, the band box | **0 px** (2 456 a side) |
+| `mark` A/B, the post-fog layer | **0 px** (2 456 a side) |
+
+#### What it closed
+
+**Landing 5's 32 px were this, and the prediction was made before the measurement.** A horizontal
+line whose window y is an exact integer floors to one row under GL and the other under a mirrored
+viewport, because `floor(h − y)` and `h − 1 − floor(y)` agree for every y but an integer. With the
+flip gone, the same fixture with the same six draw kinds measures **0 px** — and the two marker
+fixtures that were already 0 with the flip in place (the band box, the captured layer) are still 0,
+which is the other half of the argument: both are AREA primitives, whose coverage is decided at
+sample points on the half-integer grid, and mirroring cannot move one of those.
+
+#### Two fixture defects found on the way, neither caused by this landing
+
+* **Gate 2's feature A/B recipe has been unusable since gate 3a.** `feat` needs `native.on` armed to
+  own its leaf, and gate 3a is what made the Vulkan **unit** pass draw — so the seam now refuses
+  with *"1 A/B levers claimed this frame and 2 passes drew into it"*. Gate 2 could take that
+  measurement only because the unit pass was still standing down on the atlas mirror. The workaround
+  is to pan the camera off every unit (`tacli eye`) until `native: 0 unit(s)`, which leaves `feat`
+  the only Vulkan pass drawing.
+* **`fx-lasers` does not reliably fire.** Two runs measured `proj=0 laser=0` at the capture frame, so
+  the GL half never reached the disk and the A/B produced nothing. `fx-rockets` holds model
+  projectiles in flight for minutes and is the fixture to use. This is the "a 0 px from a fixture
+  that never took the branch" trap in its better form: no result rather than a false pass.
+
+#### Not covered
+
+* **The `fx` figure above is model projectiles and sprites, not lines** (`lines=0` in that frame).
+  §2.31's 3–6 px tie-break residual was measured on a laser **bolt**, and the argument there is the
+  same mirroring this landing removed — so it should be closed too, but that is **reasoned, not
+  measured**, and it needs a laser fixture that actually fires.
+* **One map, one resolution, one GPU, one OS, `ss=1`, zoom 1.**
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 

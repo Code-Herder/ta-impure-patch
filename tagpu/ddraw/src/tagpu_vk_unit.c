@@ -67,12 +67,23 @@
       so `pending == 0` means "no submitted command buffer names it and no
       future one will" by construction rather than by a timer.
 
-   4. THE Y FLIP IS PIPELINE STATE FOR THE BODY AND ABSENT FOR THE CASTER, and
-      that is the shadow pass's rule applied rather than restated: a target that
-      is PRESENTED flips, a target that is SAMPLED does not. The body draws into
-      the frame, so it takes the negative viewport height every other frame pass
-      takes; the caster draws into the depth map, so its viewport is the shadow
-      pass's own and this file sets nothing.
+   4. NO Y FLIP ON EITHER, AND SINCE LANDING 5b THAT IS TRUE OF THE BODY TOO.
+      The caster never flipped -- it draws into the depth map, which is sampled
+      and not presented, and its viewport is the shadow pass's own. The body took
+      the negative viewport height every frame pass took, and that was the bug: this pass writes
+      `gl_Position.y = p.y/uGame.y*2 - 1` on the engine's screen-space y, which
+      grows DOWNWARD, so clip +1 is the BOTTOM of the game frame. GL's composite
+      quad turns the world FBO over on the way to the window, which is why the
+      game looks right. The Vulkan lane has no composite quad -- the ported
+      passes draw STRAIGHT INTO THE SWAPCHAIN IMAGE -- so a negative viewport
+      height, which this pass took until 2026-09-17, turned the frame over a
+      SECOND time and Route D presented the world upside down. The viewport is
+      positive now and clip -1 lands on row 0, the game's top row under both.
+      It was invisible for eight landings because `tagpu_abshot.c` turned the GL
+      half of every capture over by the same rule, so the two halves lined up and
+      the A/B -- which compares the lanes to each other -- is blind to a flip they
+      share. The capture takes TAGPU_ABSHOT_TOPDOWN now. VK_KHR_maintenance1 was
+      needed only for the negative height, so this pass no longer requires it.
 
    ---- WHAT IT DOES NOT DO ----
 
@@ -1186,12 +1197,6 @@ static int build(const TAGPU_VKPASS* d)
     }
     if (!resolve(d)) {
         plog(d, "unit: an entry point this pass needs did not resolve");
-        return 0;
-    }
-    if (!d->flipok) {
-        plog(d, "unit: this device does not offer VK_KHR_maintenance1, so the "
-                "clip-space flip has no pipeline state to ride - the Vulkan "
-                "edition of the unit pass stays down (the GL one is unaffected)");
         return 0;
     }
     /* UNITS DEPTH-TEST AND DEPTH-WRITE. Drawing them untested would put an
@@ -2314,7 +2319,7 @@ static void unit_scissor(uint32_t w, uint32_t h, VkRect2D* sc)
         x  = (int)((float)s_vpL * sx + 0.5f);
         cw = (int)((float)s_vw  * sx + 0.5f);
         ch = (int)((float)s_vh  * sy + 0.5f);
-        y  = (int)h - (ytop + ch);      /* the mirror, after the scale */
+        y  = ytop;                      /* NOT mirrored: landing 5b */
     }
     if (x < 0) { cw += x; x = 0; }
     if (y < 0) { ch += y; y = 0; }
@@ -2346,9 +2351,9 @@ void tagpu_vk_unit_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        `clamp(1.0 - enc/uDepthScale, 0, 1)`, which is already in [0, 1], so this
        needs no extension and must not use one. */
     vp.x = 0.0f;
-    vp.y = (float)h;
+    vp.y = 0.0f;
     vp.width = (float)w;
-    vp.height = -(float)h;
+    vp.height = (float)h;
     vp.minDepth = 0.5f;
     vp.maxDepth = 1.0f;
     vkCmdSetViewport(cb, 0, 1, &vp);

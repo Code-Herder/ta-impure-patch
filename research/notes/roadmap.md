@@ -2694,6 +2694,28 @@ are the flip too — a horizontal line on an exact pixel boundary floors the oth
 mirrored viewport. Every figure already published on this plan stands as a **content** comparison;
 the flip is nine files and its own landing, filed in the plan.
 
+**Landing 5b fixed it, and the fix is smaller than the finding** ([gpu-status](gpu-status.html)
+§2.40). The tree has **two** y conventions and the lane had applied one flip to both: the world
+passes (`terr`, `feat`, `fx`, `unit`, `mark`) write the engine's screen-space y, which grows
+downward, so clip −1 is already the game frame's top row and they must **not** flip; `gui`'s
+composite, `fps` and `scaffold` write `1 − y*2` in GL's window convention and must. Five viewports
+went positive, five scissor rects stopped being mirrored to compensate, the GL half of those five
+captures stopped being row-reversed (a flag, because the reversal stays right for the other three),
+and four `VK_KHR_maintenance1` refusals went with the flip that needed them.
+
+**Verified on the SCREEN, because that is the one oracle an A/B cannot be**: the game window against
+Route D's, both captured by window id, is **1 394 px of 786 432** — against 624 824 mirrored. Then
+every A/B re-taken and every one at parity: terrain **0 px**, features **0 px**, units **0 px**,
+effects **0 px**, and the GUI pass — untouched by the change, and provably so — **0 px**. Landing
+5's own 32 px were this flip and are gone with it.
+
+**Two fixture defects came out of it, neither caused by it.** Gate 2's feature-A/B recipe has been
+unusable since **gate 3a**: `feat` needs `native.on` to own its leaf, gate 3a is what made the
+Vulkan unit pass draw, and the seam now refuses two drawing passes in one capture — gate 2 could
+measure it only because the unit pass was still standing down. And `fx-lasers` measured `proj=0` at
+the capture frame twice, so the effects A/B silently produced nothing; `fx-rockets` holds model
+projectiles in flight and is the fixture to use.
+
 **Its landing 1 ran the same day and is the reason the rest is ordered as it is**
 ([gpu-status](gpu-status.html) §2.35): started in the configuration the patch actually ships in
 — `--defaults`, `ss=2`, Classic++ on — the Vulkan lane draws **the UI and nothing else**, 630 589

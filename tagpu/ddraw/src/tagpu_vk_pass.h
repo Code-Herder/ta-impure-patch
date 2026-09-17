@@ -59,12 +59,29 @@ typedef struct {
     VkFormat                  dfmt;
     uint32_t                  slots;    /* <= TAGPU_VK_SLOTS                   */
     /* VK_KHR_maintenance1, and so a NEGATIVE VIEWPORT HEIGHT. GL's clip space
-       has +Y up and Vulkan's has +Y down, so a shader ported unchanged draws
-       its frame upside down -- and the shaders are ported unchanged on purpose,
-       because a source edit would make each one disagree with the GL twin that
-       is its oracle. The flip is therefore pipeline state, and this is whether
-       the device will do it. 0 means a pass that needs it must not arm; it may
-       not fall back to flipping geometry, which would mirror every glyph. */
+       has +Y up and Vulkan's has +Y down, so a shader written in GL's window
+       convention draws its frame upside down -- and the shaders are ported
+       unchanged on purpose, because a source edit would make each one disagree
+       with the GL twin that is its oracle. The flip is therefore pipeline state,
+       and this is whether the device will do it. 0 means a pass that needs it
+       must not arm; it may not fall back to flipping geometry, which would
+       mirror every glyph.
+
+       WHICH PASSES NEED IT IS NOT "ALL OF THEM", and assuming it was cost the
+       lane an upside-down picture for eight landings [landing 5b, 2026-09-17].
+       It depends on the SHADER's y convention, and this tree has two:
+
+         * `1 - y*2`, or an NDC rect built y-up -- tagpu_vk_gui.c's composite,
+           tagpu_vk_fps.c, tagpu_vk_scaffold.c. These speak GL's WINDOW
+           convention, so they need the flip and still take it.
+         * `p.y/uGame.y*2 - 1` on the engine's screen-space y, which grows
+           DOWNWARD -- tagpu_vk_terr.c, _feat.c, _fx.c, _unit.c, _mark.c. Clip
+           -1 is the game frame's TOP row, which is row 0 under Vulkan already.
+           These must NOT flip, and no longer ask for this at all.
+
+       The two are distinguishable in one line of each pass's vertex shader, and
+       the A/B cannot tell them apart: it compares the lanes to each other, and a
+       flip they share cancels. The screen is the oracle for this one. */
     int                       flipok;
     /* VK_EXT_line_rasterization WITH `bresenhamLines`, ENABLED ON THE DEVICE.
        A pass that draws LINES needs it and may not draw without it.
