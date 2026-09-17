@@ -5,7 +5,7 @@ WHY THIS TOOL EXISTS AT ALL, AND WHY IT DOES NOT SIMPLY COMPILE A DIRECTORY OF
 `.vert` / `.frag` FILES. The GL renderer's shaders live where they are used --
 as C string literals inside the pass that owns them, next to the comment that
 explains the maths. That is the one copy. A Vulkan lane that carried its own
-edition of each shader would be a second copy of thirty-four programs that
+edition of each shader would be a second copy of the fork's programs that
 nothing forces to agree, and they would drift within a landing or two: the whole
 point of Phase G is that the GL lane is the ORACLE for the Vulkan one, and two
 shaders that disagree cannot be each other's oracle.
@@ -110,17 +110,19 @@ than source ones -- they belong to the pass being ported, not here:
     A flipped viewport puts it back, but a pass that reads it (the GUI sharp
     layer, the restorer) should say so where it sets its viewport up.
 
-THE RESTORER IS NOT HERE, and the reason is a fact about it rather than a
-shortcut. `tagpu_restore_glsl.h`'s five shaders are compiled at runtime under a
-prefix the DEVICE decides -- `NK` is `GL_MAX_UNIFORM_BLOCK_SIZE` and
-`GL_MAX_DRAW_BUFFERS` divided by the weights' widest k-block, and `WMAX` is
-`NK` times a number read out of the weights file. `NK` changes how many
-fragment outputs the conv pass declares, so it cannot be a specialisation
-constant, and the variants are a cross product of a device limit and a data
-file. Pre-compiling it means enumerating that cross product, which is a
-decision about what the shipped weights are allowed to be -- G19e's, when the
-restorer pass is actually ported, and stated in the roadmap rather than decided
-here. The other thirty-four are all of the fork's fixed shaders.
+THE RESTORER IS HERE SINCE LANDING 7, and it is the one VARIANT set. Its five
+shaders live in `tagpu_restore_glsl.h` and are compiled at runtime under a prefix
+the DEVICE decides -- `NK` is `GL_MAX_UNIFORM_BLOCK_SIZE` and
+`GL_MAX_DRAW_BUFFERS` divided by the weights' widest k-block, and `WMAX` is `NK`
+times that same number. `NK` changes how many fragment outputs the conv pass
+declares, so it cannot be a specialisation constant, and a variant is therefore
+an (`NK`, `kmax`) PAIR -- `WMAX` cannot be compiled once at the largest `kmax`
+and shared, because `NK` is derived from the very limit the block has to fit.
+`kmax` is READ OUT OF THE WEIGHT BINARIES (`restore_kmax`) rather than written
+down, so the weights are part of what these headers are generated from. The
+consequence is a constraint on the project and is stated in
+research/notes/vulkan-only-plan.md landing 7 rather than here: the Vulkan lane
+restores with the shipped models and no others.
 
 THE ONE INVARIANT THAT MAKES THIS SAFE, and it is checked on every run rather
 than argued: strip the global-scope `in` / `out` / `uniform` declarations out of
@@ -210,33 +212,71 @@ PROGRAMS = [
 # stated in research/notes/vulkan-only-plan.md landing 7 rather than here: the
 # Vulkan lane restores with these two models and no others, and a third needs its
 # four variants generated and committed.
-# NOT WIRED IN YET, AND THE TWO REASONS ARE NAMED. Everything below -- the
-# variant manifest, `extract_restore` and `pp_expand` -- works: it reads the five
-# macros out of the header, builds the eight (NK, kmax) variants and drives them
-# all the way to glslang. `transform` is what is not ready, because CONV_FS is
-# the first shader in the tree to use two shapes it does not handle:
+# THE SWITCH THAT WIRES THE RESTORER INTO SOURCES AND PROGRAMS, and it is True.
+# It exists because the two shapes CONV_FS needs had to be taught to `transform`
+# before the set could be generated at all, and a commit that leaves `make`
+# failing its own shader gate is a trap rather than a checkpoint -- so the
+# machinery landed gated and this went True in the change that taught them:
 #
 #   1. `uniform highp sampler2DArray uAct;` -- a precision qualifier AFTER the
-#      storage qualifier. `_VAR` allows `highp uniform ...` and not
-#      `uniform highp ...`, so the declaration does not match at all, falls
-#      through unchanged, and glslang refuses it: "sampler/texture/image
-#      requires layout(binding=X)".
+#      storage qualifier. `_VAR` took `highp uniform ...` and not
+#      `uniform highp ...`, so the declaration did not match, passed through
+#      unchanged, and glslang refused it: "sampler/texture/image requires
+#      layout(binding=X)". It is its own capture group now, re-emitted where it
+#      was read.
 #   2. `layout(std140) uniform WBlock { mat4 w[WMAX]; };` -- a named block
-#      written on ONE line. `_BLOCK_OPEN` requires the `{` to end the line, so
-#      the block is never seen and never gets its set/binding.
+#      written on ONE line, which `_BLOCK_OPEN` never saw. `normalise_blocks`
+#      splits it on the way in.
 #
-# Both are legal GLSL that this tool simply has not met before, and both are the
-# tool's to learn rather than the shader's to reformat: `tagpu_restore_glsl.h` is
-# the ONE copy of that text, shared with tools/tascene's browser pack, and
-# reflowing it for a generator's convenience is the sort of thing its own header
-# forbids. Flip this to True in the same change that teaches `transform` the two
-# shapes; with it False the restorer is absent from SOURCES and PROGRAMS and the
-# build's shader gate is unaffected.
+# Both were the tool's to learn rather than the shader's to reformat:
+# `tagpu_restore_glsl.h` is the ONE copy of that text, shared with
+# tools/tascene's browser pack, and reflowing it for a generator's convenience is
+# the sort of thing its own header forbids. Kept as a named switch because the
+# next variant set will want the same staging.
 RESTORE_READY = True
 
-RESTORE_HDR  = "tagpu_restore_glsl"
-RESTORE_NK   = (1, 2, 4, 8)
-RESTORE_KMAX = ((56, "tiny"), (148, "full"))
+RESTORE_HDR   = "tagpu_restore_glsl"
+RESTORE_NK    = (1, 2, 4, 8)
+RESTORE_MODELS = ("tiny", "full")
+
+
+def restore_kmax():
+    """`(kmax, model)` for each shipped model, READ OUT OF THE WEIGHT BINARY.
+
+    IT IS READ AND NOT WRITTEN DOWN, AND THAT IS THE WHOLE POINT. `kmax` decides
+    the declared length of `uniform WBlock { mat4 w[WMAX]; }`, so a literal here
+    would sit outside the freshness chain: retrain `full.w32.bin` with a
+    different widest k-block and neither the shader text nor this tool's hash
+    moves, `--check` stays green, and the committed SPIR-V declares a block of
+    the wrong length -- found on a device, months later. Reading the file makes
+    the weights part of what the headers are generated FROM, so changing them
+    fails the build until the headers are regenerated. [Landing 7's review,
+    2026-09-17, which found the literal and named exactly that failure.]
+
+    The format is `unditherer/weights.py`: u32 magic, then u32 depth, ch, ntex,
+    then `depth` x {offset, jin, kout, kstride} in vec4 texels. kmax is the
+    widest k-block in mat4s, `max(kstride) / 4` -- the same reduction
+    `tagpu_restoreglsl.c:268` does at load time.
+    """
+    import struct
+    out = []
+    for model in RESTORE_MODELS:
+        path = REPO / "unditherer" / "models" / ("%s.w32.bin" % model)
+        if not path.exists():
+            die("%s is not there, and the restorer's shaders are generated from "
+                "it -- its widest k-block is the length of WBlock" % path)
+        raw = path.read_bytes()
+        try:
+            depth, ch, ntex = struct.unpack_from("<III", raw, 4)
+            ks = [struct.unpack_from("<IIII", raw, 16 + 16 * l)[3]
+                  for l in range(depth)]
+        except struct.error:
+            die("%s is truncated" % path)
+        if not (1 <= depth <= 32) or not ks or min(ks) == 0 or max(ks) % 4:
+            die("%s: depth %d and k-strides %s are not a weight table"
+                % (path, depth, ks[:4]))
+        out.append((max(ks) // 4, model))
+    return tuple(out)
 
 # Which of the five actually reads NK or WMAX -- measured over the QUOTED shader
 # text of each macro, not over the macro's region in the file: the doc comment
@@ -250,7 +290,7 @@ def restore_keys(name):
     if name not in RESTORE_VARIANT:
         return [(name, None, None)]
     return [("%s_NK%d_K%d" % (name, nk, kmax), nk, nk * kmax)
-            for nk in RESTORE_NK for kmax, _ in RESTORE_KMAX]
+            for nk in RESTORE_NK for kmax, _ in restore_kmax()]
 
 
 def _restore_programs():
@@ -377,6 +417,18 @@ def pp_expand(src, key):
     silently compiling a different interface than GL does."""
     defs, out, depth = {}, [], []
     for ln in src.split("\n"):
+        # THE REGION TEST COMES FIRST, for every directive and not only for
+        # text. A `#define` inside a FALSE `#if` used to be honoured -- it was
+        # matched and consumed before the test below -- which is the one hole in
+        # this function's promise to refuse what it does not understand, and it
+        # would have been silent. Nothing in the header triggers it today.
+        # [Landing 7's review, 2026-09-17.]
+        if depth and not depth[0]:
+            if re.match(r'^\s*#if\b', ln):
+                die("%s: nested `#if` is not supported: %s" % (key, ln.strip()))
+            if re.match(r'^\s*#endif\b', ln):
+                depth.pop()
+            continue
         m = _DEF.match(ln)
         if m:
             defs[m.group(1)] = int(m.group(2))
@@ -397,8 +449,6 @@ def pp_expand(src, key):
         if re.match(r'^\s*#(else|elif|if|ifdef|ifndef|undef|define)\b', ln):
             die("%s: this tool resolves only `#define <ID> <int>` and "
                 "`#if <ID> > <int>` / `#endif`, and got: %s" % (key, ln.strip()))
-        if depth and not depth[0]:
-            continue
         out.append(ln)
     if depth:
         die("%s: an `#if` was not closed" % key)
@@ -505,6 +555,14 @@ _BLOCK_1LINE = re.compile(
     r'(.+?)'
     r'(\}\s*;)\s*$')
 
+# The same thing with an INSTANCE name -- `... { mat4 w[N]; } wb;`. No shader here
+# writes one, and the point of matching it is to REFUSE it: without this it slips
+# past `_BLOCK_1LINE`, past `_BLOCK_OPEN`, and out to glslang with no set/binding,
+# which is precisely the failure landing 7 spent a run diagnosing.
+# [Landing 7's review, 2026-09-17.]
+_BLOCK_1LINE_INST = re.compile(
+    r'^\s*layout\s*\(\s*(?:std140|std430)\s*\)\s*uniform\s+\w+\s*\{.+?\}\s*\w+\s*;\s*$')
+
 
 def normalise_blocks(src):
     """A one-line named uniform block, spread over three lines.
@@ -516,6 +574,9 @@ def normalise_blocks(src):
     so `residual()` still compares like with like."""
     out = []
     for ln in src.split("\n"):
+        if _BLOCK_1LINE_INST.match(ln):
+            die("a one-line uniform block with an instance name is not handled: "
+                "%s" % ln.strip())
         m = _BLOCK_1LINE.match(ln)
         if not m:
             out.append(ln)
@@ -657,7 +718,7 @@ def residual(text):
     FACT RATHER THAN A CLAIM. The transform is allowed to touch exactly those
     declarations and nothing else, so a shader and its translation must have
     byte-identical residuals -- every statement, every constant, every line of
-    every function body, unchanged. `build_all` asserts it for all thirty-four
+    every function body, unchanged. `build_all` asserts it for every one of them
     on every run, including `--check`, so a future edit to the transform that
     started rewriting a body would fail the build rather than draw something
     subtly wrong.
@@ -966,7 +1027,8 @@ def emit(cfile, shaders, words):
     guard = "TAGPU_SPIRV_%s_H" % cfile.upper()
     L = ["/* GENERATED by tools/spirv-gen.py -- do not edit.",
          " *",
-         " * The Vulkan (SPIR-V) edition of %s.c's shaders. The source of" % cfile,
+         " * The Vulkan (SPIR-V) edition of %s%s's shaders. The source of"
+         % (cfile, ".h" if cfile == RESTORE_HDR else ".c"),
          " * truth is the GLSL string in that file; this is its translation, and",
          " * `make` fails if the two have drifted (tools/spirv-check.sh).",
          " *",

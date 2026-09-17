@@ -540,8 +540,7 @@ Back to the filed list:
    whose draw is MRT, so neither the seam's render pass nor any sibling's framebuffer shape covers
    it — unlike landing 5, which needed no new mirror, this one needs new *attachments*.
 
-   **STARTED 2026-09-17: the generator reads the header and builds every variant, and the
-   TRANSFORM is what is not ready.** `spirv-gen.py` now carries the variant manifest,
+   **THE SHADER HALF IS DONE, 2026-09-17.** `spirv-gen.py` now carries the variant manifest,
    `extract_restore` (the five shaders come out of `tagpu_restore_glsl.h` directly, because they are
    macros pasted at call sites and appear as a `#version` literal in no translation unit) and
    `pp_expand`, a deliberately narrow preprocessor that resolves `#define <ID> <int>` and
@@ -583,8 +582,31 @@ Back to the filed list:
    but what it was for. `tools/glslang-fetch.sh` has been run (16.6.0, pinned by version and
    sha256).
 
-   **What is left is the pass itself** — `tagpu_vk_restore.c`, and the attachment shapes are the
-   work rather than the shaders.
+   **`kmax` IS READ OUT OF THE WEIGHT BINARIES, NOT WRITTEN DOWN** — `restore_kmax()` opens
+   `unditherer/models/{tiny,full}.w32.bin` and reduces the layer table. The first version held it in
+   a literal, and the landing's review named the failure that buys: retrain `full.w32.bin` with a
+   different widest k-block and neither the shader text nor the tool's hash moves, so `--check`
+   stays green while the committed SPIR-V declares a block of the wrong length — found on a device,
+   months later. Reading the file makes the weights part of what the headers are generated *from*,
+   so changing them fails the build until the headers are regenerated. The binaries are tracked, so
+   `--check` can do this in any checkout.
+
+   **AND WHAT IS LEFT IS NOT "PORT A PASS".** Surveyed before writing any of it:
+   `tagpu_restoreglsl.c` is not a draw sequence but an **incremental background scheduler** —
+   double-buffered GPU **timer queries** with a fallback for drivers that never return one, a
+   per-slice **time budget** driven by a smoothed cost-per-unit estimate, **job queues** with
+   `pick_job`/`repalette`/`clear` and idle/failed/painted states, and only then the draws (fill,
+   `depth ×` conv, out). So the split is not the one the row implies:
+
+   * **API-independent, and it should be shared rather than duplicated**: the queues, the
+     scheduler, the budget arithmetic, `tagpu_rglsl_tileable`, the weight-file reader.
+   * **What the Vulkan side actually owes**: timestamp queries in place of GL's timer queries, its
+     own render passes and framebuffers for `GL_TEXTURE_2D_ARRAY` layers, and MRT attachments per
+     `NK`. It is the first ported pass whose target is an array texture and whose draw is
+     multi-target, so no sibling's framebuffer shape covers it.
+
+   That is the estimate to plan the next landing against, and it is larger than the row's one line
+   suggests — the shaders were the small half.
 
    **It is not a blocker and nothing stands down for it today** — landing 2 mirrored the restored
    atlases, so the lane draws restored art with the restore itself still running on GL. Landing 7
