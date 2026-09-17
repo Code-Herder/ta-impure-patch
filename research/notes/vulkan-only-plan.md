@@ -710,6 +710,31 @@ Back to the filed list:
    through an otherwise unchanged pass, and it retires the CPU mirror gate 2 built rather than
    adding a second one beside it.
 
+   **THE FLIP QUESTION IS ASKED AND ANSWERED BEFORE THE DRAWS ARE WRITTEN, and the answer is a
+   THIRD case the `flipok` table did not have.** All three of the restorer's fragment shaders index
+   the slot grid with `ivec2(gl_FragCoord.xy)`, and GL measures that y from the framebuffer's BOTTOM
+   while Vulkan measures it from the TOP — `OriginLowerLeft` is not even permitted in Vulkan. That
+   is landing 5b's shape exactly, so it was worked through rather than assumed, and **the two
+   differences cancel**: in GL `gl_FragCoord.y ≈ 0` is framebuffer row 0, and for an FBO colour
+   attachment framebuffer row 0 *is* texel row 0, with NDC −1 mapping to that same row; in Vulkan
+   `gl_FragCoord.y ≈ 0` is framebuffer row 0, which is image row 0, with NDC −1 mapping to it too.
+   In both APIs the fragment y is the target's ROW INDEX and NDC −1 is row 0.
+
+   The conventions disagree only about which end of NDC is visually *up*, and that matters only to a
+   pass that speaks the SCREEN's y. This one never does: FILL and CONV cover the whole target with a
+   full-screen triangle and address it in texels, and OUT places each cell by
+   `aPos / uDst * 2 − 1` from atlas coordinates and then recovers the same cell from `gl_FragCoord`.
+   So `flipok`'s two rows — *"GL's window convention, must flip"* and *"the engine's y-DOWN screen
+   space, must not"* — gain a third: **image space, where the two APIs already agree**, and this
+   pass asks for `flipok` at all.
+
+   **AND THE ORACLE FOR THIS PORT IS BYTES RATHER THAN PIXELS**, which makes it the strongest
+   instrument on this plan. `tagpu_restoredump.on` writes each restored atlas to disk; the same dump
+   taken from the Vulkan lane can be `cmp`-ed against the GL lane's, so *"the Vulkan restore is the
+   GL restore"* is a byte comparison of a 46 MB surface rather than a screenshot diff — no window,
+   no Route D, no settle heuristic, and a mirrored restore would show as every tile's rows reversed.
+   The no-flip conclusion above is recorded rather than trusted: that dump is what settles it.
+
    **Still to write**: `tagpu_vk_restore.c` against that interface — timestamp queries for
    `slice_begin`/`slice_end`/`timer_poll`, the ping-pong activation array images with a view per
    layer, a render pass and framebuffer per `NK` attachment count, the weight UBO with dynamic

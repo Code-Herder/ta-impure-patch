@@ -34,6 +34,40 @@
        vkCmdWriteTimestamp calls per slot and the difference times the period.
        The core's double-buffering is unchanged, so nothing ever waits.
 
+   AND IT NEEDS NO FLIP, WHICH IS A THIRD CASE tagpu_vk_pass.h's `flipok` table
+   did not have. All three fragment shaders index the slot grid with
+   `ivec2(gl_FragCoord.xy)`, and GL measures that y from the framebuffer's
+   BOTTOM while Vulkan measures it from the TOP -- `OriginLowerLeft` is not even
+   permitted in Vulkan. That looks exactly like landing 5b waiting to happen,
+   and it is not, because the two differences cancel:
+
+     * GL:     gl_FragCoord.y ~ 0 is framebuffer row 0, and for an FBO colour
+               attachment framebuffer row 0 IS texel row 0. NDC y = -1 maps to
+               the viewport's bottom, which is that same row 0.
+     * Vulkan: gl_FragCoord.y ~ 0 is framebuffer row 0, which is image row 0.
+               NDC y = -1 maps to the viewport's top, which is that same row 0.
+
+   So in BOTH APIs `gl_FragCoord.y` is the target's row index and NDC -1 is row
+   0. The conventions differ only about which end of NDC is visually "up", and
+   that matters only to a pass that speaks the SCREEN's y. This one never does:
+   FILL and CONV cover the whole target with a full-screen triangle and address
+   it in texels, and OUT positions each cell by `aPos / uDst * 2 - 1` from atlas
+   coordinates and then recovers the same cell from gl_FragCoord. Nothing here
+   has an opinion about up.
+
+   The two rows of `flipok`'s table are "GL's window convention, must flip" and
+   "the engine's y-DOWN screen space, must not". This is a third: IMAGE SPACE,
+   where the two APIs already agree. It is recorded rather than trusted -- the
+   byte oracle below is what settles it, and a mirrored restore would show up
+   as every tile's rows reversed.
+
+   THE ORACLE FOR THIS PORT IS BYTES, NOT PIXELS, and it is the strongest one
+   this plan has had. `tagpu_restoredump.on` writes each restored atlas with
+   glGetTexImage; the same dump taken from this lane can be `cmp`-ed against the
+   GL lane's, so "the Vulkan restore is the GL restore" is a byte comparison of
+   a 46 MB surface rather than a screenshot diff. It needs no window, no Route D
+   and no settle heuristic.
+
    EVERYTHING ELSE -- the padding rule, the batch grid, the size-class ladder,
    the budget, every counter and every log line -- is the core's and is shared
    byte for byte with the lane that is its oracle. */
