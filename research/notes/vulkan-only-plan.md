@@ -608,6 +608,25 @@ Back to the filed list:
    That is the estimate to plan the next landing against, and it is larger than the row's one line
    suggests — the shaders were the small half.
 
+   **AND THE DEVICE PREREQUISITES ARE ESTABLISHED FIRST, because this plan has twice saved a landing
+   by measuring the refusal before porting the stream behind it.** The restorer needs four limits
+   and three formats, and every one holds on the reference setup:
+
+   | what the pass needs | it is for | measured |
+   |---|---|---|
+   | `maxColorAttachments`, `maxFragmentOutputAttachments` | `NK` MRT targets in one conv draw | **8** each — so `NK` up to 8, the same ceiling GL's `MAX_DRAW_BUFFERS` gives |
+   | `maxUniformBufferRange` | `WBlock`, `WMAX × 64` bytes | **65 536** — the same 64 KiB GL reports, so the lane picks the same `NK` per model: `tiny` 8, `full` 4 |
+   | `maxImageArrayLayers` | one array layer per channel tile, 16 for 64 channels | **2 048** |
+   | `timestampComputeAndGraphics` | the slice budget, in place of GL's timer queries | **true** |
+   | `R32G32B32A32_SFLOAT`, `R16G16B16A16_SFLOAT`, `R8G8B8A8_UNORM` | the activation, residual and output targets | all three **colour-attachment + sampled + linear-filter** in optimal tiling |
+
+   **The caveat, stated because it is the whole weight of the claim**: those come from `vulkaninfo`
+   against the **native** driver, not from the lane through **winevulkan**. Same GPU and same driver,
+   and this plan's own coexistence work records winevulkan as a thin passthrough rather than a
+   translation — which is why Vulkan was chosen over D3D12 — so they are expected to hold on the
+   real path. Expected is not measured: the first thing `tagpu_vk_restore.c` should do is ask the
+   device for these itself and refuse with a named reason, the way `lineok` and `flipok` already do.
+
    **It is not a blocker and nothing stands down for it today** — landing 2 mirrored the restored
    atlases, so the lane draws restored art with the restore itself still running on GL. Landing 7
    is owed to the END STATE rather than to any present refusal, which is why it sits behind 5 and 6
