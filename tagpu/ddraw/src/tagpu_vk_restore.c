@@ -430,7 +430,6 @@ static VkDeviceMemory s_tabMem[3];
 static VkImageView    s_tabView[3];
 static VkBuffer       s_tabStage;
 static VkDeviceMemory s_tabStageMem;
-static unsigned char* s_tabMap;
 static int            s_tabInit;                    /* laid out GENERAL yet    */
 
 static VkBuffer       s_wbuf;                       /* the padded weights      */
@@ -1103,10 +1102,16 @@ static int build_shared(const TAGPU_VKPASS* d)
         if (!mk_image(d, TAGPU_R_SLOTCOLS, TAGPU_R_SLOTROWS, 1, VK_FORMAT_R32G32B32A32_SFLOAT,
                       VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                       &s_tabImg[i], &s_tabMem[i], &s_tabView[i])) goto fail;
+    /* DEVICE-LOCAL AND UNMAPPED, for the reason the vertex buffer above is:
+       the bytes are written by vkCmdUpdateBuffer at the point of the batch's
+       own copy, so what orders one batch's write against the previous batch's
+       read is a barrier in the stream. The per-SLOT offset is kept -- it costs
+       3 KB a slot and it means the barrier only ever names this slot's region
+       -- but it is no longer what makes the write safe. [landing 7d] */
     if (!mk_buffer(d, (VkDeviceSize)TAGPU_R_BATCH * 16 * 3 * TAGPU_VK_SLOTS,
-                   VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                   &s_tabStage, &s_tabStageMem, &s_tabMap)) goto fail;
+                   VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                   &s_tabStage, &s_tabStageMem, NULL)) goto fail;
 
     /* a descriptor pool big enough for every job's five sets */
     memset(psz, 0, sizeof psz);
@@ -1398,21 +1403,72 @@ static int vk_timer_poll(int q, double* ns)
 
 static void vk_timer_off(void) { /* the pool stays; the core stops asking */ }
 
-/* the slot tables onto the device, at each batch's FILL. One batch is ever in
-   flight, so nothing else writes them in between; the cross-SLICE hazard -- a
-   new batch's upload against the previous batch's reads, which may still be
-   executing -- is what the slice-head barrier orders. */
+/* The three per-frame parameter tables onto the device, at each batch's FILL:
+   the destination rect, the source rect, and the KEY AND WRAP of every frame in
+   the batch.
+
+   THE BYTES GO INTO THE COMMAND STREAM, NOT INTO A PER-SLOT STAGING REGION,
+   and this is the SECOND resource to be corrected for the same reason --
+   landing 7c did the OUT vertices and left these, on a comment that said "one
+   batch is ever in flight, so nothing else writes them in between". That is
+   true of the DEVICE and false of the RECORDING: a slice can issue more than
+   one batch (tagpu_rcore_step re-picks at every batch boundary and runs until
+   the GPU-time budget is spent), and both batches' `memcpy` landed on the same
+   address before either `vkCmdCopyBufferToImage` had executed -- so the first
+   batch's frames were restored through the SECOND batch's tables: wrong source
+   rects, and wrong colour keys.
+
+   WHAT THAT LOOKS LIKE, because it is the whole reason this was found: a frame
+   whose key came from another frame's table has no keyed texel where it should
+   have one, so the OUT pass writes the key's own palette colour -- opaque
+   (84, 84, 252) -- where the GL twin writes (0, 0, 0, 0). 118 of 1304 feature
+   frames and 3 of 167 effects frames, every other frame byte-identical.
+   THE TERRAIN COULD NOT REVEAL IT: 10 036 tiles of one size with no colour key
+   at all, so a swapped table costs a source rect and nothing else, and the two
+   runs that measured it happened to give each slice one batch. It took a
+   consumer whose frames have DIFFERENT SIZES AND A KEY. [landing 7d, found by
+   the byte oracle on its first run against the sprite atlases.]
+
+   A BIGGER ARENA IS STILL NOT THE FIX, for landing 7c's reason: batches per
+   slice is a time budget rather than a count, so any arena is a number that
+   can be exceeded and what it buys is this failure again. 3 KB at most, well
+   inside the 65 536 vkCmdUpdateBuffer allows.
+
+   THE IMAGES THEMSELVES WERE ALREADY ORDERED -- the write-after-read barrier
+   below runs before each batch's copy and names the previous batch's shader
+   reads -- which is exactly why the bug was in the staging buffer and nowhere
+   else, and why it was invisible to reasoning about the images. The new buffer
+   barrier is the same shape for the buffer: TRANSFER -> TRANSFER, because the
+   previous batch's read of these bytes is a copy and not a draw. */
 static void upload_tables(const TAGPU_VKPASS* d, const TAGPU_RDRAWREQ* r)
 {
     const float* src[3];
     VkImageMemoryBarrier mb[3];
+    VkBufferMemoryBarrier bb = { VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
     VkBufferImageCopy bc;
     const size_t bytes = (size_t)TAGPU_R_BATCH * 16;
     VkDeviceSize base = (VkDeviceSize)s_slot * bytes * 3;
     int i;
 
+    /* the previous batch's copy out of this region is a fact before this
+       batch's bytes land on it */
+    bb.srcQueueFamilyIndex = bb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bb.buffer = s_tabStage;
+    bb.offset = base;
+    bb.size = (VkDeviceSize)bytes * 3;
+    bb.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    bb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(s_cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 0, NULL, 1, &bb, 0, NULL);
     src[0] = r->rect; src[1] = r->src; src[2] = r->key;
-    for (i = 0; i < 3; i++) if (src[i]) memcpy(s_tabMap + base + (size_t)i * bytes, src[i], bytes);
+    for (i = 0; i < 3; i++)
+        if (src[i]) vkCmdUpdateBuffer(s_cb, s_tabStage, base + (VkDeviceSize)i * bytes,
+                                      (VkDeviceSize)bytes, src[i]);
+    /* ...and this batch's write is a fact before its own copy reads it */
+    bb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    bb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(s_cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 0, NULL, 1, &bb, 0, NULL);
 
     memset(mb, 0, sizeof mb);
     for (i = 0; i < 3; i++) {
@@ -2084,7 +2140,7 @@ void tagpu_vk_restore_lost(void)
     }
     memset(s_tabImg, 0, sizeof s_tabImg); memset(s_tabMem, 0, sizeof s_tabMem);
     memset(s_tabView, 0, sizeof s_tabView);
-    s_tabStage = VK_NULL_HANDLE; s_tabStageMem = VK_NULL_HANDLE; s_tabMap = NULL; s_tabInit = 0;
+    s_tabStage = VK_NULL_HANDLE; s_tabStageMem = VK_NULL_HANDLE; s_tabInit = 0;
     s_wbuf = VK_NULL_HANDLE; s_wmem = VK_NULL_HANDLE;
     s_gbuf = VK_NULL_HANDLE; s_gmem = VK_NULL_HANDLE; s_gmap = NULL;
     s_vbuf = VK_NULL_HANDLE; s_vmem = VK_NULL_HANDLE;

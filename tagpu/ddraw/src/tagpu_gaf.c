@@ -116,6 +116,47 @@ static int rlist_cap(const TAGPU_GAFATLAS* a)
     return c < 1024 ? 1024 : c;
 }
 
+/* ROOM FOR `need` FRAMES, up to the bound and never past it. One function
+   because the alternative is the bug this had in its first draft: the seed
+   loop and the append each grew (or failed to grow) on their own, so an atlas
+   holding more entries than the current allocation lost the tail of its own
+   list -- silently, which on the other lane is cells that stay indexed for
+   ever with nothing in the log. 0 when the memory was refused OR when `need`
+   is past the bound, and the caller then has a list it must not write to. */
+static int rlist_room(TAGPU_GAFATLAS* a, int need)
+{
+    int cap = rlist_cap(a), want;
+    TAGPU_RGLSL_FRAME* g;
+    if (!a->rlist || need > cap) return 0;
+    if (need <= a->rlistCap) return 1;
+    want = a->rlistCap > 0 ? a->rlistCap : 256;
+    while (want < need) want *= 2;
+    if (want > cap) want = cap;
+    g = (TAGPU_RGLSL_FRAME*)realloc(a->rlist, (size_t)want * sizeof *g);
+    if (!g) {
+        char b[176];
+        _snprintf(b, sizeof b, "%s: no memory to grow the published restore list to %d"
+                  " frames - the other lane's restore stands down",
+                  a->tag ? a->tag : "gaf", want);
+        b[sizeof b - 1] = 0;
+        glog(b);
+        /* THE LIST GOES RATHER THAN LOSING A FRAME. A list with a hole in it
+           leaves cells indexed on the other lane for ever and nothing says so;
+           dropping it hands the consumer a generation change and no request,
+           which is the same stand-down as never arming. The buffer itself is
+           kept -- `realloc` failing leaves it valid -- and freed here because
+           nothing will ask for it again. */
+        free(a->rlist);
+        a->rlist = NULL; a->rlistN = 0; a->rlistCap = 0;
+        a->rlistWant = 0; a->rlistFailed = 1;
+        a->rlistGen++;
+        return 0;
+    }
+    a->rlist = g;
+    a->rlistCap = want;
+    return 1;
+}
+
 /* A new generation: the array stops being a continuation of what a consumer
    holds. `repaint` says the destination keeps what it has (the palette moved)
    rather than being blanked. */
@@ -132,14 +173,17 @@ static void rlist_reset(TAGPU_GAFATLAS* a, int repaint)
    "start from what is actually here" is the only state either can restart
    from, and having the recovery share the arm's code means the rare path is
    the one that has been exercised since the first frame of every session.
-   Bounded by the cap, and it cannot reach it: entries are at most `max`. */
+   The seed cannot reach the bound: entries are at most `max` and the bound is
+   four times that. */
 static void rlist_restart(TAGPU_GAFATLAS* a, int repaint)
 {
-    int i, cap = rlist_cap(a);
+    int i;
     rlist_reset(a, repaint);
     if (!a->rlistWant || !a->rlist) return;
-    for (i = 0; i < a->n && a->rlistN < cap && a->rlistN < a->rlistCap; i++) {
+    if (a->n > 0 && !rlist_room(a, a->n)) return;
+    for (i = 0; i < a->n; i++) {
         if (!a->ents[i].ok) continue;
+        if (a->rlistN >= a->rlistCap) break;      /* cannot happen; not assumed */
         if (restore_frame_of(a, &a->ents[i], &a->rlist[a->rlistN])) a->rlistN++;
     }
 }
@@ -147,46 +191,23 @@ static void rlist_restart(TAGPU_GAFATLAS* a, int repaint)
 static void rlist_add(TAGPU_GAFATLAS* a, const TAGPU_RGLSL_FRAME* f)
 {
     if (!a->rlistWant || !a->rlist) return;
-    /* THE CAP IS REACHED BY RESTARTING, NOT BY GROWING PAST IT. The list is
+    /* THE BOUND IS REACHED BY RESTARTING, NOT BY GROWING PAST IT. The list is
        fed for the atlas's life, so any ceiling is a number that can be
        exceeded; what cannot be exceeded is "the entries that are here", and
-       that is what the restart leaves behind. Said once per restart because it
-       is a real event a consumer sees as a blank-and-repaint. */
+       that is what the restart leaves behind. Said once per restart, because
+       it is a real event a consumer sees as a blank and a repaint. */
     if (a->rlistN >= rlist_cap(a)) {
-        char b[160];
-        _snprintf(b, sizeof b, "%s: the published restore list reached its %d-frame "
-                  "bound - restarting it from the %d entries in the atlas, so the "
-                  "other lane blanks its twin and repaints",
+        char b[192];
+        _snprintf(b, sizeof b, "%s: the published restore list reached its %d-frame"
+                  " bound - restarting it from the %d entries in the atlas, so the"
+                  " other lane blanks its twin and repaints",
                   a->tag ? a->tag : "gaf", rlist_cap(a), a->n);
         b[sizeof b - 1] = 0;
         glog(b);
         rlist_restart(a, 0);
+        if (!a->rlistWant || !a->rlist) return;
     }
-    if (a->rlistN >= a->rlistCap) {
-        /* grow, up to the cap; a refused grow drops the list rather than
-           silently skipping frames, because a list with a hole in it would
-           have the other lane leave cells indexed for ever and nothing would
-           say so. The consumer sees the generation move and starts over. */
-        int want = a->rlistCap * 2, cap = rlist_cap(a);
-        TAGPU_RGLSL_FRAME* g;
-        if (want > cap) want = cap;
-        g = (TAGPU_RGLSL_FRAME*)realloc(a->rlist, (size_t)want * sizeof *g);
-        if (!g) {
-            char b[160];
-            _snprintf(b, sizeof b, "%s: no memory to grow the published restore list "
-                      "to %d frames - the other lane's restore stands down",
-                      a->tag ? a->tag : "gaf", want);
-            b[sizeof b - 1] = 0;
-            glog(b);
-            free(a->rlist);
-            a->rlist = NULL; a->rlistN = 0; a->rlistCap = 0;
-            a->rlistWant = 0; a->rlistFailed = 1;
-            a->rlistGen++;
-            return;
-        }
-        a->rlist = g;
-        a->rlistCap = want;
-    }
+    if (!rlist_room(a, a->rlistN + 1)) return;
     a->rlist[a->rlistN++] = *f;
 }
 
@@ -786,6 +807,8 @@ int tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a)
     if (a->rlistWant) return 1;
     if (a->rlistFailed) return 0;
     if (GetFileAttributesA("tagpu_restorevk.on") == INVALID_FILE_ATTRIBUTES) return 0;
+    /* A FIRST ALLOCATION ONLY -- `rlist_room` is what sizes it from here, and
+       the seed below asks it for however many entries the atlas holds. */
     a->rlistCap = 256;
     if (a->rlistCap > rlist_cap(a)) a->rlistCap = rlist_cap(a);
     a->rlist = (TAGPU_RGLSL_FRAME*)malloc((size_t)a->rlistCap * sizeof *a->rlist);
