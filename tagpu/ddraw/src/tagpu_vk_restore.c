@@ -2418,9 +2418,23 @@ void tagpu_vk_restore_lost(void)
     s_vbuf = VK_NULL_HANDLE; s_vmem = VK_NULL_HANDLE;
     s_qpool = VK_NULL_HANDLE;
     s_samp = VK_NULL_HANDLE; s_dpool = VK_NULL_HANDLE;
-    s_dslFill = s_dslConv = s_dslOut = VK_NULL_HANDLE;
-    s_ploFill = s_ploConv = s_ploOut = VK_NULL_HANDLE;
-    s_pipeFill = s_pipeOut = VK_NULL_HANDLE;
+    s_dslFill = s_dslConv = s_dslOut = s_dslMip = VK_NULL_HANDLE;
+    s_ploFill = s_ploConv = s_ploOut = s_ploMip = VK_NULL_HANDLE;
+    s_pipeFill = s_pipeOut = s_pipeMip = VK_NULL_HANDLE;
+    s_rpMip = VK_NULL_HANDLE;
+    /* AND EVERY JOB'S CHAIN, forgotten rather than freed like everything else
+       here: the framebuffers and the sets died with the device, and the pool
+       they came from with them. A `chainN` left standing would have the next
+       reduction bind a set that belongs to nothing. */
+    {
+        int j;
+        for (j = 0; j < TAGPU_R_MAXJOBS; j++) {
+            memset(s_vjob[j].chainFb, 0, sizeof s_vjob[j].chainFb);
+            memset(s_vjob[j].chainSet, 0, sizeof s_vjob[j].chainSet);
+            s_vjob[j].chainN = 0; s_vjob[j].chainDim = 0;
+            s_vjob[j].chainPainted = 0; s_vjob[j].chainDone = 0;
+        }
+    }
     memset(s_pipeConv, 0, sizeof s_pipeConv);
     memset(s_rpAct, 0, sizeof s_rpAct); s_rpOut = VK_NULL_HANDLE;
     s_actSide = 0; s_actLayers = 0; s_actGen++;
@@ -2474,17 +2488,21 @@ void tagpu_vk_restore_down(const TAGPU_VKPASS* d)
     if (s_qpool) vkDestroyQueryPool(d->dev, s_qpool, NULL);
     if (s_pipeFill) vkDestroyPipeline(d->dev, s_pipeFill, NULL);
     if (s_pipeOut) vkDestroyPipeline(d->dev, s_pipeOut, NULL);
+    if (s_pipeMip) vkDestroyPipeline(d->dev, s_pipeMip, NULL);
     for (i = 0; i <= RP_MAX; i++) {
         if (s_pipeConv[i]) vkDestroyPipeline(d->dev, s_pipeConv[i], NULL);
         if (s_rpAct[i]) vkDestroyRenderPass(d->dev, s_rpAct[i], NULL);
     }
     if (s_rpOut) vkDestroyRenderPass(d->dev, s_rpOut, NULL);
+    if (s_rpMip) vkDestroyRenderPass(d->dev, s_rpMip, NULL);
     if (s_ploFill) vkDestroyPipelineLayout(d->dev, s_ploFill, NULL);
     if (s_ploConv) vkDestroyPipelineLayout(d->dev, s_ploConv, NULL);
     if (s_ploOut) vkDestroyPipelineLayout(d->dev, s_ploOut, NULL);
+    if (s_ploMip) vkDestroyPipelineLayout(d->dev, s_ploMip, NULL);
     if (s_dslFill) vkDestroyDescriptorSetLayout(d->dev, s_dslFill, NULL);
     if (s_dslConv) vkDestroyDescriptorSetLayout(d->dev, s_dslConv, NULL);
     if (s_dslOut) vkDestroyDescriptorSetLayout(d->dev, s_dslOut, NULL);
+    if (s_dslMip) vkDestroyDescriptorSetLayout(d->dev, s_dslMip, NULL);
     if (s_dpool) vkDestroyDescriptorPool(d->dev, s_dpool, NULL);
     if (s_samp) vkDestroySampler(d->dev, s_samp, NULL);
     tagpu_vk_restore_lost();

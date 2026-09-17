@@ -124,6 +124,7 @@
    hand-over, so this file is not on thread-split.allow and must never be. */
 
 #include "tagpu_vk_pass.h"
+#include "tagpu_vk_restore.h"   /* this lane restores the twin itself (landing 7e-2) */
 #include <windows.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -270,6 +271,14 @@ static VkImage        s_arImg;
 static VkDeviceMemory s_arMem;
 static VkImageView    s_arView;
 static int            s_arDim, s_arReq, s_arMips;
+/* THE TWIN'S PER-LEVEL VIEWS (the Vulkan-only plan's landing 7e-2), made only
+   when this lane restores for itself. `s_arLvl[L]` names level L alone, and the
+   restorer takes them in pairs -- level L as the attachment, level L-1 as the
+   source -- which is what makes a reduction with no copy sound: the source view
+   CANNOT reach the level being written. `s_arView` above still names the whole
+   chain and is what the pass samples. */
+static VkImageView    s_arLvl[TAGPU_VK_MAXMIP + 1];
+static int            s_arLvlN;
 static unsigned       s_arSerial;
 static int            s_arHave;
 
@@ -1119,11 +1128,21 @@ static int build_descriptors(const TAGPU_VKPASS* d)
    stops the pass for the session. */
 static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int mips)
 {
+    int i;
     if (s_arImg && s_arDim == dim && s_arMips == mips) return 1;
+    for (i = 0; i <= TAGPU_VK_MAXMIP; i++)
+        if (s_arLvl[i]) { vkDestroyImageView(d->dev, s_arLvl[i], NULL); s_arLvl[i] = VK_NULL_HANDLE; }
+    s_arLvlN = 0;
     kill_image(d, &s_arImg, &s_arMem, &s_arView);
     s_arDim = 0; s_arMips = 0; s_arReq = 0; s_arSerial = 0; s_arHave = 0;
+    /* COLOR_ATTACHMENT SINCE LANDING 7e-2, and it costs nothing when unused:
+       the restorer paints level 0 into this image through a render pass and
+       reduces the rest into it the same way, so every level is a colour
+       attachment at some point. The mirror path never uses it and the usage
+       flag does not change how the image is sampled. */
     if (!mk_image(d, dim, dim, mips + 1, VK_FORMAT_R8G8B8A8_UNORM,
-                  VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                  VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
                   VK_IMAGE_ASPECT_COLOR_BIT, &s_arImg, &s_arMem, &s_arView))
         /* every out-param is NULL on this path, from EVERY exit of `mk_image`
            and not merely because a `kill_image` ran before this call -- see its
@@ -1131,6 +1150,37 @@ static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int mips)
            view the failure label left behind. */
         return 0;
     s_arDim = dim; s_arMips = mips;
+    /* THE PER-LEVEL VIEWS, ALL OF THEM OR NONE. A chain the restorer can only
+       half address is not a chain it may reduce, so a failure here leaves
+       `s_arLvlN` 0 and the twin is restored at level 0 only -- which the
+       consumer then refuses to draw from, because a trilinear fetch into
+       undefined levels is a wrong picture rather than a missing one. The image
+       itself is kept: the mirror path uses the same one and does not need
+       these. */
+    if (mips >= 1 && mips <= TAGPU_VK_MAXMIP) {
+        for (i = 0; i <= mips; i++) {
+            VkImageViewCreateInfo vi = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+            vi.image = s_arImg;
+            vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vi.format = VK_FORMAT_R8G8B8A8_UNORM;
+            vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            vi.subresourceRange.baseMipLevel = (uint32_t)i;
+            vi.subresourceRange.levelCount = 1;
+            vi.subresourceRange.layerCount = 1;
+            if (vkCreateImageView(d->dev, &vi, NULL, &s_arLvl[i]) != VK_SUCCESS) {
+                int k;
+                for (k = 0; k < i; k++) {
+                    vkDestroyImageView(d->dev, s_arLvl[k], NULL);
+                    s_arLvl[k] = VK_NULL_HANDLE;
+                }
+                s_arLvl[i] = VK_NULL_HANDLE;
+                plog(d, "unit: no per-level view for the restored twin at level %d - "
+                        "this lane cannot reduce its own chain", i);
+                return 1;
+            }
+        }
+        s_arLvlN = mips + 1;
+    }
     return 1;
 }
 
