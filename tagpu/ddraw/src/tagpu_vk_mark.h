@@ -21,11 +21,14 @@
    Returns 1 when `record` has something to draw. */
 int  tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot);
 
-/* Draw, inside the caller's render pass, with the caller's viewport and scissor
-   already set. `rp` is that render pass, needed once to build the pipelines
-   against it; a second call with a different one rebuilds. */
+/* Draw, inside the caller's render pass. `w`/`h` are the target's extent: this
+   pass SETS ITS OWN viewport and scissor, as every world pass does, because its
+   pipelines declare both dynamic and dynamic state that is never set is
+   undefined -- which is exactly how the first build of this pass drew its
+   vertices into nowhere. `rp` is the render pass, needed once to build the
+   pipelines against it; a second call with a different one rebuilds. */
 void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
-                          VkRenderPass rp);
+                          VkRenderPass rp, uint32_t w, uint32_t h);
 
 /* The A/B: 1 when `tagpu_mark.ab` claimed this frame. */
 int  tagpu_vk_mark_ab_frame(void);

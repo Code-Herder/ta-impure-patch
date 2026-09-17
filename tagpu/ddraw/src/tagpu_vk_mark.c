@@ -49,7 +49,7 @@
     X(vkAllocateMemory) X(vkFreeMemory) X(vkMapMemory) X(vkUnmapMemory) \
     X(vkCmdBindPipeline) X(vkCmdBindVertexBuffers) X(vkCmdBindDescriptorSets) \
     X(vkCmdDraw) X(vkCmdPipelineBarrier) X(vkCmdCopyBufferToImage) \
-    X(vkCmdSetLineWidth)
+    X(vkCmdSetLineWidth) X(vkCmdSetViewport) X(vkCmdSetScissor)
 
 #define DECL(n) static PFN_##n n;
 IFNS(DECL)
@@ -121,7 +121,13 @@ static VkDeviceSize s_fsOff[TAGPU_MK_MAXDRAW];
 static VkDeviceSize s_ualign = 256;
 static uint32_t s_slot;
 static int s_abFrame;
-static int s_saidLine, s_saidFog, s_saidRoom;
+static int s_saidLine, s_saidFog, s_saidRoom, s_saidWhy, s_saidHand, s_saidDrew, s_saidIn;
+/* ONE LATCH PER SITE. A single `s_saidImg` shared by six upload sites hid every
+   failure after the first -- including a failure at a DIFFERENT site, which is
+   the case that matters. Two live diagnosis cycles were spent reading a masked
+   error because of it. */
+static int s_saidImgL, s_saidImgT, s_saidImgP, s_saidImgF, s_saidImgU, s_saidImgS;
+static int s_saidNoDraw, s_saidSlot;
 
 static void plog(const TAGPU_VKPASS* d, const char* fmt, ...)
 {
@@ -545,7 +551,16 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     s_slot = slot;
 
     if (s_state == ST_UNBUILT) {
-        if (!resolve(d)) { s_state = ST_REFUSED; s_downOwed = 1; return 0; }
+        if (!resolve(d)) {
+            /* WHICH ENTRY POINT is the question a bare refusal cannot answer,
+               and this pass asks for one the others do not -- vkCmdSetLineWidth,
+               for the order lines. Named so the next reader is not left
+               guessing at a pass that produced no log line at all. */
+            plog(d, "mark: an entry point would not resolve (this pass asks for "
+                    "vkCmdSetLineWidth, which its siblings do not) - the markers "
+                    "stay with GL");
+            s_state = ST_REFUSED; s_downOwed = 1; return 0;
+        }
         vkGetPhysicalDeviceProperties(d->pd, &props);
         s_ualign = props.limits.minUniformBufferOffsetAlignment;
         if (s_ualign == 0) s_ualign = 1;
@@ -554,16 +569,67 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
             s_state = ST_REFUSED; s_downOwed = 1; return 0;
         }
         s_state = ST_READY;
+        /* THE `up` LINE EVERY SIBLING PRINTS. Its absence was the whole
+           diagnosis on this pass's first live A/B: no refusal, no draw and no
+           voice at all, which says "never reached ready" and nothing else. */
+        plog(d, "mark: up - %u frame slots, uniform offset alignment %u, "
+                "wide lines %s", (unsigned)d->slots, (unsigned)s_ualign,
+             d->lineok ? "yes" : "NO (a frame with order lines will refuse)");
     }
 
-    if (!tagpu_mark_handover(&s_h, d->frame)) return 0;
+    if (!tagpu_mark_handover(&s_h, d->frame)) {
+        if (!s_saidHand) {
+            s_saidHand = 1;
+            plog(d, "mark: no hand-over for frame %u - the GL pass published "
+                    "nothing, or published it for another frame", d->frame);
+        }
+        return 0;
+    }
+    s_saidHand = 0;
     s_abFrame = s_h.ab;
-    if (s_h.ndraw <= 0 || s_h.nvert <= 0 || !s_h.verts || !s_h.draws) return 0;
-    if (s_h.ndraw > TAGPU_MK_MAXDRAW) return 0;
+    /* WHAT ACTUALLY CROSSED, once. A pass that draws the right vertices into
+       the right place and still shows black is failing on its INPUTS, and one
+       line naming all of them settles in a single run what narrowing one
+       suspect at a time costs a relaunch each. */
+    if (!s_saidIn) {
+        s_saidIn = 1;
+        plog(d, "mark: in: %d draw(s) %d verts | pal=%s fog=%s %dx%d lut=%s "
+                "text=%s %dx%d layer=%s | key=%d game=%.0fx%.0f zoom=%.2f ss=%.1f",
+             s_h.ndraw, s_h.nvert,
+             s_h.pal ? "yes" : "NULL",
+             s_h.fogGrid ? "yes" : "NULL", s_h.fogGridCols, s_h.fogGridRows,
+             s_h.fogLut ? "yes" : "NULL",
+             s_h.text ? "yes" : "NULL", s_h.textW, s_h.textH,
+             s_h.layer ? "yes" : "NULL",
+             s_h.key, s_h.gw, s_h.gh, s_h.zoom, s_h.ss);
+    }
+    /* EVERY BAIL-OUT FROM HERE DOWN SAYS WHY. They were silent in the first
+       draft, and the first A/B of this pass came back "GL 297 px, Vulkan 0"
+       with the log holding not one word about the cause -- which is the exact
+       shape of failure this project keeps paying for. `s_saidWhy` latches so a
+       refusal is said once and not at the frame rate. */
+    if (s_h.ndraw <= 0 || s_h.nvert <= 0 || !s_h.verts || !s_h.draws) {
+        if (!s_saidWhy) { s_saidWhy = 1;
+            plog(d, "mark: the hand-over is empty - ndraw=%d nvert=%d verts=%s "
+                    "draws=%s", s_h.ndraw, s_h.nvert,
+                    s_h.verts ? "yes" : "NULL", s_h.draws ? "yes" : "NULL"); }
+        return 0;
+    }
+    if (s_h.ndraw > TAGPU_MK_MAXDRAW) {
+        if (!s_saidWhy) { s_saidWhy = 1;
+            plog(d, "mark: %d draws is past the %d this pass carries",
+                 s_h.ndraw, TAGPU_MK_MAXDRAW); }
+        return 0;
+    }
 
     for (i = 0; i < s_h.ndraw; i++) {
         const TAGPU_MKDRAW* g = &s_h.draws[i];
-        if (g->first < 0 || g->count <= 0 || g->first + g->count > s_h.nvert) return 0;
+        if (g->first < 0 || g->count <= 0 || g->first + g->count > s_h.nvert) {
+            if (!s_saidWhy) { s_saidWhy = 1;
+                plog(d, "mark: draw %d is out of the vertex block - first=%d "
+                        "count=%d nvert=%d", i, g->first, g->count, s_h.nvert); }
+            return 0;
+        }
         if (g->lines) needLines = 1;
         /* A DRAW THAT WANTED FOG AND HAS NO GRID IS REFUSED, not drawn clear:
            the GL twin sampled a grid this lane would not have, and an unfogged
@@ -595,6 +661,13 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     ssz += 256 * 4;                                  /* the palette */
     if (s_h.fogGrid) ssz += (VkDeviceSize)s_h.fogGridCols * s_h.fogGridRows * 2;
     if (s_h.fogLut) ssz += 256;
+    /* AND THE 1x1 STAND-IN'S OWN BYTE. Reserving for the images the hand-over
+       carries and forgetting the one this pass makes for itself is how the
+       first live run of this pass drew nothing: the four real uploads land at
+       exactly `ssz`, the stand-in asks for one byte past it, `img_up`'s bound
+       refuses, and the whole frame bails. 16 rather than 1 so the next thing
+       added here is not a second off-by-one. */
+    ssz += 16;
     if (ssz < 4096) ssz = 4096;
 
     vsz = (VkDeviceSize)s_h.nvert * MK_VSTRIDE;
@@ -613,42 +686,69 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     off = 0;
     if (s_h.layer && s_h.layerW > 0 && s_h.layerH > 0) {
         if (!img_size(d, &s_img[IMG_LAYER], s_h.layerW, s_h.layerH, VK_FORMAT_R8_UNORM) ||
-            !img_up(d, cb, slot, &s_img[IMG_LAYER], s_h.layer, s_h.layerPitch, 1, off))
+            !img_up(d, cb, slot, &s_img[IMG_LAYER], s_h.layer, s_h.layerPitch, 1, off)) {
+            if (!s_saidImgL) { s_saidImgL = 1; plog(d, "mark: the captured layer would not upload (%dx%d)", s_h.layerW, s_h.layerH); }
             return 0;
+        }
         off += (VkDeviceSize)s_h.layerW * s_h.layerH;
     }
     if (s_h.text && s_h.textW > 0 && s_h.textH > 0) {
         int fresh = !s_img[IMG_TEXT].have || s_img[IMG_TEXT].gen != s_h.textGen;
-        if (!img_size(d, &s_img[IMG_TEXT], s_h.textW, s_h.textH, VK_FORMAT_R8_UNORM)) return 0;
+        if (!img_size(d, &s_img[IMG_TEXT], s_h.textW, s_h.textH, VK_FORMAT_R8_UNORM)) {
+            if (!s_saidImgT) { s_saidImgT = 1; plog(d, "mark: no image for the %dx%d text atlas", s_h.textW, s_h.textH); }
+            return 0;
+        }
         if (fresh) {
-            if (!img_up(d, cb, slot, &s_img[IMG_TEXT], s_h.text, s_h.textW, 1, off)) return 0;
+            if (!img_up(d, cb, slot, &s_img[IMG_TEXT], s_h.text, s_h.textW, 1, off)) {
+                if (!s_saidImgT) { s_saidImgT = 1; plog(d, "mark: the text atlas would not upload (%dx%d)", s_h.textW, s_h.textH); }
+                return 0;
+            }
             s_img[IMG_TEXT].gen = s_h.textGen;
         }
         off += (VkDeviceSize)s_h.textW * s_h.textH;
     }
     if (s_h.pal) {
         if (!img_size(d, &s_img[IMG_PAL], 256, 1, VK_FORMAT_R8G8B8A8_UNORM) ||
-            !img_up(d, cb, slot, &s_img[IMG_PAL], s_h.pal, 256 * 4, 4, off))
+            !img_up(d, cb, slot, &s_img[IMG_PAL], s_h.pal, 256 * 4, 4, off)) {
+            if (!s_saidImgP) { s_saidImgP = 1; plog(d, "mark: the palette would not upload"); }
             return 0;
+        }
         off += 256 * 4;
     }
     if (s_h.fogGrid && s_h.fogGridCols > 0 && s_h.fogGridRows > 0) {
         if (!img_size(d, &s_img[IMG_FOG], s_h.fogGridCols, s_h.fogGridRows, VK_FORMAT_R8G8_UNORM) ||
             !img_up(d, cb, slot, &s_img[IMG_FOG], (const unsigned char*)s_h.fogGrid,
-                    s_h.fogGridCols * 2, 2, off))
+                    s_h.fogGridCols * 2, 2, off)) {
+            if (!s_saidImgF) { s_saidImgF = 1; plog(d, "mark: the %dx%d fog grid would not upload (R8G8)", s_h.fogGridCols, s_h.fogGridRows); }
             return 0;
+        }
         off += (VkDeviceSize)s_h.fogGridCols * s_h.fogGridRows * 2;
     }
     if (s_h.fogLut) {
         if (!img_size(d, &s_img[IMG_LUT], 256, 1, VK_FORMAT_R8_UNORM) ||
-            !img_up(d, cb, slot, &s_img[IMG_LUT], s_h.fogLut, 256, 1, off))
+            !img_up(d, cb, slot, &s_img[IMG_LUT], s_h.fogLut, 256, 1, off)) {
+            if (!s_saidImgU) { s_saidImgU = 1; plog(d, "mark: the fog LUT would not upload"); }
             return 0;
+        }
         off += 256;
     }
-    /* the layer view is the fallback every unused binding names, so the pass
-       cannot draw before it exists */
-    if (!s_img[IMG_LAYER].view) {
-        if (!img_size(d, &s_img[IMG_LAYER], 1, 1, VK_FORMAT_R8_UNORM)) return 0;
+    /* THE FALLBACK EVERY UNUSED BINDING NAMES, AND IT HAS TO BE INITIALISED.
+       The first draft CREATED it and stopped there -- no clear, no transition --
+       so its descriptor claimed SHADER_READ_ONLY_OPTIMAL while the image sat in
+       UNDEFINED with undefined contents, and sampling that is undefined
+       behaviour. The pass drew its 90 vertices and the frame came back black.
+       `tagpu_vk_hires.c` carries a comment about this exact fault from gate 3a's
+       review -- "an image whose contents are UNDEFINED ... is not a mistake to
+       make twice" -- and this is it made twice. The upload is what puts it in
+       the layout the descriptor promises. */
+    if (!s_img[IMG_LAYER].have) {
+        static const unsigned char ONE = 0xFF;
+        if (!img_size(d, &s_img[IMG_LAYER], 1, 1, VK_FORMAT_R8_UNORM) ||
+            !img_up(d, cb, slot, &s_img[IMG_LAYER], &ONE, 1, 1, off)) {
+            if (!s_saidImgS) { s_saidImgS = 1; plog(d, "mark: no 1x1 stand-in for the unused sampler bindings"); }
+            return 0;
+        }
+        off += 1;
     }
 
     /* the vertex block first, then one fragment block per draw */
@@ -679,13 +779,55 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     return 1;
 }
 
+/* the scissor in the target's pixels, mirrored top-to-bottom. This is
+   `tagpu_vk_fx.c`'s `fx_scissor` line for line: the two passes clip to the same
+   rect and deriving it twice differently is how they would drift. */
+static void mk_scissor(const TAGPU_MKHAND* h, uint32_t w, uint32_t hh,
+                       VkRect2D* out)
+{
+    float sx = h->gw > 0.0f ? (float)w / h->gw : 1.0f;
+    float sy = h->gh > 0.0f ? (float)hh / h->gh : 1.0f;
+    int x0 = (int)(h->vpL * sx + 0.5f);
+    int ww = (int)(h->vw * sx + 0.5f);
+    int ytop = (int)(h->vpT * sy + 0.5f);
+    int hgt = (int)(h->vh * sy + 0.5f);
+    int y0 = (int)hh - (ytop + hgt);          /* the mirror */
+    if (!h->scissorOn || ww <= 0 || hgt <= 0) {
+        out->offset.x = 0; out->offset.y = 0;
+        out->extent.width = w; out->extent.height = hh;
+        return;
+    }
+    if (x0 < 0) { ww += x0; x0 = 0; }
+    if (y0 < 0) { hgt += y0; y0 = 0; }
+    if (x0 > (int)w) x0 = (int)w;
+    if (y0 > (int)hh) y0 = (int)hh;
+    if (ww < 0) ww = 0;
+    if (hgt < 0) hgt = 0;
+    if (x0 + ww > (int)w) ww = (int)w - x0;
+    if (y0 + hgt > (int)hh) hgt = (int)hh - y0;
+    out->offset.x = x0; out->offset.y = y0;
+    out->extent.width = (uint32_t)ww; out->extent.height = (uint32_t)hgt;
+}
+
 void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
-                          VkRenderPass rp)
+                          VkRenderPass rp, uint32_t w, uint32_t h)
 {
     VkDeviceSize zero = 0;
+    VkViewport vp;
+    VkRect2D sc;
     int i;
-    if (s_state != ST_READY || !s_drawThis) return;
-    if (slot != s_slot) return;
+    if (s_state != ST_READY || !s_drawThis) {
+        if (!s_saidNoDraw) { s_saidNoDraw = 1;
+            plog(d, "mark: record with nothing prepared (state=%d drawThis=%d)",
+                 s_state, s_drawThis); }
+        return;
+    }
+    if (slot != s_slot) {
+        if (!s_saidSlot) { s_saidSlot = 1;
+            plog(d, "mark: record on slot %u but prepare ran for %u",
+                 (unsigned)slot, (unsigned)s_slot); }
+        return;
+    }
     if (!s_pipeTri || s_pipeRp != rp) {
         if (s_pipeTri) { vkDestroyPipeline(d->dev, s_pipeTri, NULL); s_pipeTri = VK_NULL_HANDLE; }
         if (s_pipeLine) { vkDestroyPipeline(d->dev, s_pipeLine, NULL); s_pipeLine = VK_NULL_HANDLE; }
@@ -695,6 +837,26 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
             return;
         }
     }
+    /* THE VIEWPORT AND THE SCISSOR, SET HERE BECAUSE THIS PASS'S PIPELINES
+       DECLARE THEM DYNAMIC -- and dynamic state that is never set is undefined.
+       The first build of this pass declared both and set neither, so it issued
+       its draws correctly into nowhere: the log said "drew 1 list entr(ies), 90
+       vertices" and the frame came back black, on the lane's own window as well
+       as in the capture.
+       THE FLIP IS tagpu_vk_fx.c's, unchanged: y starts at the bottom and the
+       height is negative, so clip space turns over once and the ported shader
+       keeps GL's convention without a character changing. minDepth 0.5 /
+       maxDepth 1.0 maps clip z in [0, 1] onto GL's own (z+1)/2. */
+    vp.x = 0.0f;
+    vp.y = (float)h;
+    vp.width = (float)w;
+    vp.height = -(float)h;
+    vp.minDepth = 0.5f;
+    vp.maxDepth = 1.0f;
+    vkCmdSetViewport(cb, 0, 1, &vp);
+    mk_scissor(&s_h, w, h, &sc);
+    vkCmdSetScissor(cb, 0, 1, &sc);
+
     vkCmdBindVertexBuffers(cb, 0, 1, &s_vb[slot], &zero);
     for (i = 0; i < s_h.ndraw; i++) {
         const TAGPU_MKDRAW* g = &s_h.draws[i];
@@ -707,6 +869,14 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_plo,
                                 0, 1, &s_set[slot], 2, dyno);
         vkCmdDraw(cb, (uint32_t)g->count, 1, (uint32_t)g->first, 0);
+    }
+    if (!s_saidDrew) {
+        s_saidDrew = 1;
+        plog(d, "mark: drew %d list entr(ies), %d vertices; first entry "
+                "first=%d count=%d lines=%d text=%d fog=%d tex=%d",
+             s_h.ndraw, s_h.nvert, s_h.draws[0].first, s_h.draws[0].count,
+             s_h.draws[0].lines, s_h.draws[0].text, s_h.draws[0].fog,
+             s_h.draws[0].tex);
     }
 }
 
@@ -738,7 +908,10 @@ void tagpu_vk_mark_down(const TAGPU_VKPASS* d)
     s_state = ST_UNBUILT;
     s_drawThis = 0; s_abFrame = 0;
     s_downOwed = 0; s_downPaying = 0;
-    s_saidLine = s_saidFog = s_saidRoom = 0;
+    s_saidLine = s_saidFog = s_saidRoom = s_saidWhy = 0;
+    s_saidImgL = s_saidImgT = s_saidImgP = s_saidImgF = s_saidImgU = s_saidImgS = 0;
+    s_saidNoDraw = s_saidSlot = 0;
+    s_saidHand = s_saidDrew = s_saidIn = 0;
 }
 
 int  tagpu_vk_mark_down_owed(void) { return s_downOwed && !s_downPaying; }

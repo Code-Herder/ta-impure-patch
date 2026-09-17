@@ -1188,6 +1188,9 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
         s_mkPub.fogOrgX = (float)v->fogOrgX; s_mkPub.fogOrgY = (float)v->fogOrgY;
         s_mkPub.fogCols = (float)v->fogCols; s_mkPub.fogRows = (float)v->fogRows;
         s_mkPub.ss = v->ss > 0 ? v->ss : 1.0f;
+        s_mkPub.vpL = v->vpL; s_mkPub.vpT = v->vpT;
+        s_mkPub.vw = v->vw;   s_mkPub.vh = v->vh;
+        s_mkPub.scissorOn = tagpu_native_scissor_on();
         s_mkPub.ab = s_abFrame; s_abFrame = 0;
         s_mkHave = 1;
     }

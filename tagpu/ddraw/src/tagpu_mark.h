@@ -142,6 +142,12 @@ typedef struct TAGPU_MKHAND {
        The Vulkan half is claimed only on that, which is tagpu_abshot.h's rule:
        a pair where one side never wrote is worse than no pair. */
     int   ab;
+    /* THE VIEWPORT THE GL DRAW WAS CLIPPED TO, in game-frame pixels measured
+       from the TOP. The consumer needs it for its scissor, and `scissorOn` is
+       what the native pass ACTUALLY did rather than what it would have liked
+       to -- tagpu_vk_fx.c's rule, and its `fx_scissor` is the shape to follow. */
+    int   vpL, vpT, vw, vh;
+    int   scissorOn;
 } TAGPU_MKHAND;
 
 /* Exactly once per frame, and only for the frame it was published for -- `now`

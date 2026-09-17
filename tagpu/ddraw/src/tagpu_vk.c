@@ -2551,7 +2551,8 @@ static int vk_present(void)
             if (draw_fx)
                 tagpu_vk_fx_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_mark)
-                tagpu_vk_mark_record(&s_pass, cb, fi, s_vk.rp);
+                tagpu_vk_mark_record(&s_pass, cb, fi, s_vk.rp,
+                                     s_vk.ext.width, s_vk.ext.height);
             /* THE UI IS ABOVE THE WORLD and below the readout, which is
                where tagpu_overlay_draw puts it. */
             if (draw_gui)
