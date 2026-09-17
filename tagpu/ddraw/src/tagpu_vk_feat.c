@@ -116,12 +116,16 @@
 
    ---- WHAT IT DOES NOT DO ----
 
-   CLASSIC++'s RESTORED ATLAS IS NOT MIRRORED, so when the GL twin reports
-   `uRestored` 1 this pass draws NOTHING and says so once. Drawing with
-   `uRestored` 0 instead would be a different picture from the twin's and the
-   A/B would report it as a rasteriser difference, which is the one answer an
-   oracle must never give. The twin is tagpu_restoreglsl.c's RGBA8 surface; a
-   mirror of it is the same mechanism as the R8 one and is a later landing's.
+   CLASSIC++'s RESTORED ATLAS **IS** MIRRORED SINCE GATE 2 of the Vulkan-only
+   plan, so a frame whose twin reports `uRestored` 1 is DRAWN -- through the
+   twin's own colours, read back off tagpu_restoreglsl.c's RGBA8 surface by
+   tagpu_gaf.c's step and uploaded to binding 42 here. What is left of the old
+   refusal is "has the read-back produced rows YET": until it has, the GL twin
+   is sampling colours this lane does not have, so the frame is refused rather
+   than drawn with `uRestored` 0 -- that would be a different picture from the
+   twin's and the A/B would report it as a rasteriser difference, which is the
+   one answer an oracle must never give. The refusal is no longer latched: the
+   condition clears by itself within a few frames of the restorer starting.
 
    IT KNOWS NOTHING ABOUT A WINDOW. Everything arrives in TAGPU_VKPASS.
    A PASS READS NO ENGINE STATE: every value comes from the GL lane's
@@ -206,13 +210,20 @@ static int            s_atHave;            /* a copy has been recorded into it *
    built the binding falls back to the indexed view and the pass stands down on
    a restored frame exactly as it did before this existed -- a valid descriptor
    is required for the set to be bound at all, so the fallback is not optional.
-   `s_arRows` is what was last UPLOADED, which is how a mirror whose row count
-   SHRANK (a re-arm, a context loss) is caught: rows above it would otherwise
-   keep the previous twin's colours. */
+   `s_arReq` IS THE REQUESTED ROWS LAST UPLOADED FOR, NOT THE ROWS SENT. It held
+   the rows sent, which the whole-square rule had already forced to the atlas's
+   full height, so it could never equal the hand-over's shelf-bounded count:
+   `doRgb` was then true on EVERY frame and the pass re-sent 16 MB per frame for
+   the life of the session while never releasing its staging. The SERIAL alone
+   decides whether anything is due, exactly as it does for the indexed atlas
+   beside it; these rows are kept only to notice a SHRINK (a re-arm, a context
+   loss), which is the one case that needs the whole square re-sent because rows
+   above the new mark would otherwise keep the previous twin's colours.
+   [FOUND BY THE GATE-2 LANDING REVIEW, 2026-09-16.] */
 static VkImage        s_arImg;
 static VkDeviceMemory s_arMem;
 static VkImageView    s_arView;
-static int            s_arRows;
+static int            s_arReq;
 static unsigned       s_arSerial;
 static int            s_arHave;
 
@@ -781,12 +792,18 @@ static int atlas_build(const TAGPU_VKPASS* d, int dim)
        falls back to the indexed view below and the restored stand-down keeps
        its old meaning. 16 MB at the shipped 2048 square. */
     kill_image(d, &s_arImg, &s_arMem, &s_arView);
-    s_arRows = 0; s_arSerial = 0; s_arHave = 0;
+    s_arReq = 0; s_arSerial = 0; s_arHave = 0;
     if (!mk_image(d, dim, dim, VK_FORMAT_R8G8B8A8_UNORM, &s_arImg, &s_arMem, &s_arView)) {
+        /* `mk_image` CAN FAIL AFTER vkCreateImage AND vkAllocateMemory SUCCEEDED
+           -- no device-local memory type, a failed bind, a failed view. Nulling
+           the handles here lost the image while leaving `s_arMem` set, so the
+           next kill_image would vkFreeMemory memory that still had an image
+           bound to it. kill_image is what tagpu_vk_terr.c's shared_resize does
+           for the identical case. [FOUND BY THE GATE-2 LANDING REVIEW.] */
+        kill_image(d, &s_arImg, &s_arMem, &s_arView);
         plog(d, "feat: no %d MB device image for the Classic++ restored twin - "
                 "the pass keeps standing down on a restored frame",
              (dim * dim * 4) >> 20);
-        s_arImg = VK_NULL_HANDLE; s_arView = VK_NULL_HANDLE;
     }
     for (i = 0; i < TAGPU_VK_SLOTS; i++) {
         VkDescriptorImageInfo ii;
@@ -899,7 +916,7 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
        places) would otherwise leave the rows above the new mark holding the
        previous twin's colours, and the serial need not move for that. */
     doRgb = s_arImg && h->atlasRgb && h->atlasRgbRows > 0 &&
-            !(s_arHave && s_arSerial == h->atlasRgbSerial && s_arRows == h->atlasRgbRows);
+            !(s_arHave && s_arSerial == h->atlasRgbSerial);
     if (!doIdx && !doRgb) {
         /* NOTHING TO SEND, SO THE 4 MB GOES BACK. This is the "given back at
            that slot's next prepare" the file header promises, and it is the
@@ -926,7 +943,7 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
            the restorer has not painted read as alpha 0 -- which is what an
            unpainted cell means. Uploading only `rrows` when the image already
            holds more would leave the difference standing. */
-        if (!s_arHave || rrows < s_arRows) rrows = h->atlasDim;
+        if (!s_arHave || rrows < s_arReq) rrows = h->atlasDim;
         rbytes = (VkDeviceSize)h->atlasDim * rrows * 4;
     }
 
@@ -985,7 +1002,7 @@ rgb_only:
                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
         s_arSerial = h->atlasRgbSerial;
-        s_arRows = rrows;
+        s_arReq = h->atlasRgbRows;
         s_arHave = 1;
     }
     return 1;
@@ -1067,9 +1084,11 @@ int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         s_state = ST_READY;
     }
 
-    /* CLASSIC++'S RESTORED ATLAS IS NOT MIRRORED (see the file header): drawing
-       with uRestored 0 against a twin that drew with 1 would be a different
-       picture, and the A/B would call it a rasteriser difference. */
+    /* WHAT IS LEFT OF THE RESTORED REFUSAL (see the file header): the atlas IS
+       mirrored since gate 2, and drawing with uRestored 0 against a twin that
+       drew with 1 would still be a different picture that the A/B would call a
+       rasteriser difference -- so the frames without a mirror YET are refused
+       and the rest are drawn. */
     /* A RESTORED FRAME IS DRAWABLE SINCE GATE 2, but only once the mirror has
        actually been read back: `atlasRgb` is NULL until the restorer has
        painted something and the read-back has run, and until then the GL twin
@@ -1312,7 +1331,7 @@ void tagpu_vk_feat_down(const TAGPU_VKPASS* d)
     }
     kill_image(d, &s_atImg, &s_atMem, &s_atView);
     kill_image(d, &s_arImg, &s_arMem, &s_arView);
-    s_arRows = 0; s_arSerial = 0; s_arHave = 0;
+    s_arReq = 0; s_arSerial = 0; s_arHave = 0;
     s_atDim = 0; s_atSerial = 0; s_atHave = 0;
     if (s_pipeShadow) { vkDestroyPipeline(dev, s_pipeShadow, NULL); s_pipeShadow = VK_NULL_HANDLE; }
     if (s_pipeBody)   { vkDestroyPipeline(dev, s_pipeBody, NULL);   s_pipeBody = VK_NULL_HANDLE; }

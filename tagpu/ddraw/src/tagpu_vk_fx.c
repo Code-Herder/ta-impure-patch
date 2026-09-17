@@ -87,11 +87,14 @@
    unit pass and the hires path sample the same texture, so whichever landing
    ports those is the one that has to answer it.
 
-   CLASSIC++'s RESTORED ATLAS IS NOT MIRRORED, so when the GL twin reports
-   `uRestored` 1 this pass draws NOTHING and says so once. Drawing with
-   `uRestored` 0 instead would be a different picture from the twin's and the
-   A/B would report it as a rasteriser difference, which is the one answer an
-   oracle must never give.
+   CLASSIC++'s RESTORED ATLAS **IS** MIRRORED SINCE GATE 2 of the Vulkan-only
+   plan, so a frame whose twin reports `uRestored` 1 is DRAWN, through the
+   twin's own colours at binding 43 (tagpu_gaf.c reads them back off the RGBA8
+   surface; tagpu_vk_feat.c's header has the mechanism). What is left of the old
+   refusal is "has the read-back produced rows YET", and it is no longer
+   latched. Drawing with `uRestored` 0 instead would be a different picture from
+   the twin's and the A/B would report it as a rasteriser difference, which is
+   the one answer an oracle must never give.
 
    THE EFFECTS *MODELS* ARE NOT THIS PASS. RenderType 1/3/6 projectiles are
    emitted as 3DO nodes and drawn by tagpu_native.c's unit pipeline, not by
@@ -189,7 +192,9 @@ static int            s_atHave;            /* a copy has been recorded into it *
 static VkImage        s_arImg;
 static VkDeviceMemory s_arMem;
 static VkImageView    s_arView;
-static int            s_arRows;
+/* `s_arReq` is the REQUESTED rows last uploaded for, not the rows sent --
+   tagpu_vk_feat.c states why that distinction is load-bearing. */
+static int            s_arReq;
 static unsigned       s_arSerial;
 static int            s_arHave;
 
@@ -786,11 +791,17 @@ static int atlas_build(const TAGPU_VKPASS* d, int dim)
     if (!mk_image(d, dim, dim, VK_FORMAT_R8_UNORM, &s_atImg, &s_atMem, &s_atView)) return 0;
     s_atDim = dim;
     kill_image(d, &s_arImg, &s_arMem, &s_arView);
-    s_arRows = 0; s_arSerial = 0; s_arHave = 0;
+    s_arReq = 0; s_arSerial = 0; s_arHave = 0;
     if (!mk_image(d, dim, dim, VK_FORMAT_R8G8B8A8_UNORM, &s_arImg, &s_arMem, &s_arView)) {
+        /* `mk_image` CAN FAIL AFTER vkCreateImage AND vkAllocateMemory SUCCEEDED
+           -- no device-local memory type, a failed bind, a failed view. Nulling
+           the handles here lost the image while leaving `s_arMem` set, so the
+           next kill_image would vkFreeMemory memory that still had an image
+           bound to it. kill_image is what tagpu_vk_terr.c's shared_resize does
+           for the identical case. [FOUND BY THE GATE-2 LANDING REVIEW.] */
+        kill_image(d, &s_arImg, &s_arMem, &s_arView);
         plog(d, "fx: no %d MB device image for the Classic++ restored twin - the "
                 "pass keeps standing down on a restored frame", (dim * dim * 4) >> 20);
-        s_arImg = VK_NULL_HANDLE; s_arView = VK_NULL_HANDLE;
     }
     for (i = 0; i < TAGPU_VK_SLOTS; i++) {
         VkDescriptorImageInfo ii, irgb;
@@ -803,14 +814,18 @@ static int atlas_build(const TAGPU_VKPASS* d, int dim)
         wr[0].dstSet = s_slot[i].dset; wr[0].dstBinding = 40; wr[0].descriptorCount = 1;
         wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         wr[0].pImageInfo = &ii;
-        /* BINDINGS 43 AND 46 ARE uAtlasRGB AND uScaf, AND THEY ARE THE SAME
-           VIEW ON PURPOSE. This pass refuses any frame whose twin had either
-           of them live (see the file header), so nothing ever samples them --
-           but a descriptor still has to be VALID for the set to be bound, and
-           naming the image that is already here costs no memory and no second
-           object. If the Classic++ twin is ever mirrored, or the scaffold's
-           image ever shared, these are the bindings that stop being
-           placeholders. */
+        /* BINDING 43 IS uAtlasRGB AND SINCE GATE 2 IT NAMES THE RESTORED
+           TWIN'S OWN IMAGE; BINDING 46 IS uScaf AND IS STILL THE INDEXED VIEW
+           AS A PLACEHOLDER. The difference is which branch is reachable: this
+           pass draws restored frames now, so 43 has to be the real thing,
+           while it still refuses every frame whose twin had the scaffold live
+           (see the file header), so nothing ever samples 46. A placeholder is
+           legitimate only under a refusal -- a descriptor must be VALID for
+           the set to bind, and naming the image already here costs no memory
+           and no second object. 43 falls back to it when the restored image
+           could not be created, which is the same bargain for the frames the
+           restored stand-down then covers. The scaffold's image being shared
+           is what would make 46 stop being a placeholder. */
         irgb = ii;
         if (s_arView) irgb.imageView = s_arView;
         wr[1] = wr[0]; wr[1].dstBinding = 43; wr[1].pImageInfo = &irgb;
@@ -901,7 +916,7 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
        alone matter because a mirror that SHRANK would leave the rows above the
        new mark holding the previous twin's colours (tagpu_vk_feat.c). */
     doRgb = s_arImg && h->atlasRgb && h->atlasRgbRows > 0 &&
-            !(s_arHave && s_arSerial == h->atlasRgbSerial && s_arRows == h->atlasRgbRows);
+            !(s_arHave && s_arSerial == h->atlasRgbSerial);
     if (!doIdx && !doRgb) {
         /* NOTHING TO SEND, SO THE STAGING GOES BACK -- the feature pass's
            reasoning, and the same fence proves it. */
@@ -917,7 +932,7 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
         /* the whole square on the first upload and on a shrink; the mirror's
            allocation is the full square and was calloc'd, so every row is in
            bounds and unpainted rows read alpha 0 */
-        if (!s_arHave || rrows < s_arRows) rrows = h->atlasDim;
+        if (!s_arHave || rrows < s_arReq) rrows = h->atlasDim;
         rbytes = (VkDeviceSize)h->atlasDim * rrows * 4;
     }
 
@@ -973,7 +988,7 @@ rgb_only:
                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
         s_arSerial = h->atlasRgbSerial;
-        s_arRows = rrows;
+        s_arReq = h->atlasRgbRows;
         s_arHave = 1;
     }
     return 1;
@@ -1045,9 +1060,11 @@ int tagpu_vk_fx_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         s_state = ST_READY;
     }
 
-    /* CLASSIC++'S RESTORED ATLAS IS NOT MIRRORED (see the file header): drawing
-       with uRestored 0 against a twin that drew with 1 would be a different
-       picture, and the A/B would call it a rasteriser difference. */
+    /* WHAT IS LEFT OF THE RESTORED REFUSAL (see the file header): the atlas IS
+       mirrored since gate 2, and drawing with uRestored 0 against a twin that
+       drew with 1 would still be a different picture that the A/B would call a
+       rasteriser difference -- so the frames without a mirror YET are refused
+       and the rest are drawn. */
     /* DRAWABLE SINCE GATE 2, once the read-back has produced rows -- and the
        refusal is NO LONGER LATCHED, for the reason tagpu_vk_feat.c gives: the
        condition clears by itself a few frames after the restorer starts, and
@@ -1405,7 +1422,7 @@ void tagpu_vk_fx_down(const TAGPU_VKPASS* d)
     }
     kill_image(d, &s_atImg, &s_atMem, &s_atView);
     kill_image(d, &s_arImg, &s_arMem, &s_arView);
-    s_arRows = 0; s_arSerial = 0; s_arHave = 0;
+    s_arReq = 0; s_arSerial = 0; s_arHave = 0;
     s_atDim = 0; s_atSerial = 0; s_atHave = 0;
     if (s_pipeTri)   { vkDestroyPipeline(dev, s_pipeTri, NULL);   s_pipeTri = VK_NULL_HANDLE; }
     if (s_pipeLine)  { vkDestroyPipeline(dev, s_pipeLine, NULL);  s_pipeLine = VK_NULL_HANDLE; }

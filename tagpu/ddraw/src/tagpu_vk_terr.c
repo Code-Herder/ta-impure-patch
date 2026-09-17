@@ -998,17 +998,15 @@ static void shared_bind(const TAGPU_VKPASS* d, uint32_t slot)
     memset(ii, 0, sizeof ii); memset(wr, 0, sizeof wr);
     ii[0].sampler = s_samp; ii[0].imageView = s_atlas.view;
     ii[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    /* BINDING 42 IS uAtlasRGB, AND IT IS THE ATLAS'S OWN VIEW ON PURPOSE. The
-       fragment stage reads it only on the `uLit == 1 && uRestored == 1` branch,
-       and this pass refuses any frame whose twin reported `uRestored` 1 (see the
-       file header), so nothing ever samples it. A descriptor still has to be
-       VALID for the set to be bound, and naming the image that is already here
-       costs no memory and no second object. If the Classic++ restored atlas is
-       ever mirrored, this is the binding that stops being a placeholder. */
-    /* ...UNLESS THE RESTORED ATLAS HAS BEEN MIRRORED (gate 2), which is now the
-       ordinary case with Classic++ on. It falls back to the indexed view when
-       there is no restored image, which keeps the descriptor valid and leaves
-       the branch unreachable exactly as the refusal below arranges. */
+    /* BINDING 42 IS uAtlasRGB, AND SINCE GATE 2 IT NAMES THE MIRRORED RESTORED
+       ATLAS -- the ordinary case with Classic++ on. The fragment stage reads it
+       on the `uLit == 1 && uRestored == 1` branch, which this pass now draws.
+       IT FALLS BACK TO THE INDEXED VIEW when there is no restored image, and
+       that is not a picture: a descriptor has to be VALID for the set to be
+       bound, naming the image already here costs no memory and no second
+       object, and `prepare`'s restored refusal keeps the branch unreachable on
+       exactly the frames the fallback is in place. That fallback is all this
+       binding was before gate 2, on every frame. */
     ii[1] = ii[0];
     if (s_rgbAtlas.view) ii[1].imageView = s_rgbAtlas.view;
     ii[2].sampler = s_samp;
@@ -1190,24 +1188,13 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     }
     shadow_ready(cb);
 
-    /* CLASSIC++'S RESTORED ATLAS IS NOT MIRRORED, and neither is the cast-shadow
-       depth map (see the file header): drawing without either against a twin
-       that drew with it would be a different picture, and the A/B would call it
-       a rasteriser difference. */
-    /* DRAWABLE SINCE GATE 2 once the read-back has covered rows, and NO LONGER
-       LATCHED -- gpu-status 2.35 measured what latching such a condition costs,
-       and this one clears by itself as the restorer paints. */
-    /* THE RESTORED ATLAS'S IMAGE IS MADE BEFORE THE REFUSAL THAT TESTS IT, and
-       that order is the whole of it: the refusal returns 0, so a resize placed
-       after it never ran -- the pass could not build the image because it
-       refused, and refused because there was no image. Found by measurement,
-       with a perfect hand-over (rows=2720, serial=1) against img=0 view=0.
-
-       A failure here stays non-fatal: the view stays NULL, binding 42 keeps the
-       indexed view, and the refusal below keeps the branch unreachable. */
-    if (t.atlasRgb && t.atlasRgbRows > 0)
-        shared_resize(d, &s_rgbAtlas, t.atlasW, t.atlasRgbRows,
-                      VK_FORMAT_R8G8B8A8_UNORM);
+    /* THE CLASSIC++ RESTORED TILE ATLAS IS MIRRORED SINCE GATE 2, so a
+       restored frame is drawable; what is left of the refusal is "has this lane
+       got the mirror YET", it is no longer latched, and it sits with the
+       uploads rather than here -- see the three paragraphs above it. The
+       cast-shadow depth map is not mirrored, which is the refusal below.
+       Drawing without either against a twin that drew with it would be a
+       different picture, and the A/B would call it a rasteriser difference. */
     /* THE CAST-SHADOW MAP IS DRAWN BY tagpu_vk_shadow.c NOW (G19e's fifth
        pass), so this is no longer "there is no mirror" but "is there a map for
        THIS frame". It is asked with our own frame number, which is what stops a
@@ -1272,6 +1259,20 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
              t.atlasW, t.atlasH);
         return 0;
     }
+    /* THE RESTORED MIRROR'S ROWS, BOUNDED HERE AND NOT WHERE THEY WERE MADE.
+       tagpu_terr.c reads back `s_atlasH` rows into a buffer allocated for
+       `s_atlasH`, so the number is right at the producer -- and that is a bound
+       only while both files are read together, which is this block's stated
+       reason for existing. The atlas's own height is the ceiling because the
+       mirror IS the atlas's rows; over it, the mirror is treated as absent, so
+       a restored frame stands down (the refusal below) instead of sizing an
+       image and a memcpy from a number nothing checked. */
+    if (t.atlasRgb && (t.atlasRgbRows < 1 || t.atlasRgbRows > t.atlasH)) {
+        plog(d, "terr: a restored mirror of %d rows against a %d-row atlas is not "
+                "this atlas's - taken as no mirror", t.atlasRgbRows, t.atlasH);
+        t.atlasRgb = NULL;
+        t.atlasRgbRows = 0;
+    }
     if (t.height) {
         if (t.hW < 1 || t.hH < 1 || t.hW > HEIGHT_MAXDIM || t.hH > HEIGHT_MAXDIM) {
             plog(d, "terr: a %dx%d height grid is outside what this pass carries - nothing drawn",
@@ -1310,6 +1311,36 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         if (!s_height.img) goto refuse;
         return 0;
     }
+    /* THE RESTORED ATLAS IS THE THIRD SHARED IMAGE, and it is sized HERE: after
+       the bounds above, before `shared_bind` names its view, and before the
+       upload that fills it. Two orderings were measured wrong on the way to
+       this one and the third was found by the landing review:
+
+         * below the refusal that tests it -- the pass could not build the image
+           because it refused, and refused because there was no image (a perfect
+           hand-over, rows=2720 serial=1, against img=0 view=0);
+         * below the upload -- img and view fine, have=0, same shape;
+         * above the bounds, WITH THE RETURN IGNORED, which is this fix. A
+           resize deferred because a retire is still outstanding (one at a time,
+           by design) left the PREVIOUS image standing with `view && have` set,
+           so the refusal passed and the upload below memcpy'd
+           `s_rgbAtlas.w * s_rgbAtlas.h * 4` bytes out of a mirror holding
+           `atlasRgbRows` -- a read past the mirror whenever the deferred size
+           was the larger, and the wrong rows sampled whenever it was not. Two
+           map changes inside one turn of the slots is what it takes.
+
+       So the return is read like the other two images': an image still there
+       means a retire is clearing and the frame waits, no image means the device
+       refused and the branch stays unreachable -- the view is NULL, binding 42
+       keeps the indexed view, and the refusal below never passes. A device
+       refusal here is NOT fatal to the pass, which is why it does not
+       `goto refuse`: the indexed terrain is still the twin's picture on every
+       frame the twin drew indexed. */
+    if (t.atlasRgb &&
+        !shared_resize(d, &s_rgbAtlas, t.atlasW, t.atlasRgbRows,
+                       VK_FORMAT_R8G8B8A8_UNORM) &&
+        s_rgbAtlas.img)
+        return 0;                          /* a retire is still clearing       */
     if (!slot_build(d, s)) goto refuse;
     if (!slot_fog(d, s, fogW, fogH)) goto refuse;
     shared_bind(d, slot);
@@ -1328,9 +1359,15 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
                         : !s_height.have;
     /* THE RESTORED ATLAS RIDES THE SAME STAGING BUFFER as the other two, for
        the same reason: these are map-scoped uploads, so a settled map holds no
-       staging at all. Its rows are the read-back's, and the image was sized to
-       them just above, so the copy is always the whole image. */
+       staging at all.
+       AND THE IMAGE'S OWN SIZE IS WHAT SAYS THE COPY IS THE WHOLE OF IT -- not
+       the resize above having been asked for. `rgbBytes` is read off the image
+       and memcpy'd out of the mirror, so the two have to be the same rectangle
+       or the copy runs off the end of one of them; the resize can be deferred
+       (see there), and "I asked for this size" is not "the image is this size".
+       [FROM THE GATE-2 LANDING REVIEW, 2026-09-16.] */
     doRgb = s_rgbAtlas.img && t.atlasRgb && t.atlasRgbRows > 0 &&
+            s_rgbAtlas.w == t.atlasW && s_rgbAtlas.h == t.atlasRgbRows &&
             (!s_rgbAtlas.have || s_rgbAtlas.serial != t.atlasRgbSerial);
     if (doAtlas || doHeight || doRgb) {
         atlasBytes = doAtlas ? (VkDeviceSize)t.atlasW * t.atlasH : 0;
@@ -1374,13 +1411,25 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        contents because the pass refused. Measured twice on the way here --
        first img=0 (the resize was below it too), then have=0.
 
-       So the data lands first and THEN this frame is refused; the next frame
-       has `have` set and draws. One frame of the GL twin's restored terrain
-       missing from the Vulkan window, once per map, against a permanent
-       stand-down. It tests the VIEW AND ITS CONTENTS because those are what
-       binding 42 names and what the shader samples -- not the hand-over, which
-       only says a mirror exists somewhere. */
-    if (t.restored && !(s_rgbAtlas.view && s_rgbAtlas.have)) {
+       So the data lands first and THEN this is asked. `shared_upload` sets
+       `have` as it RECORDS the copy, into this frame's own command buffer and
+       ahead of this frame's draw with a barrier between them, so the frame that
+       uploads is also the frame that draws -- this refusal costs nothing once
+       the mirror exists. (An earlier version of this paragraph said the next
+       frame draws and this one is lost. It is not: the only frames refused are
+       the ones with no mirror to upload at all, which is the read-back's first
+       few, and the 0-px A/B was taken with the map settled either way.)
+       It tests the VIEW AND ITS CONTENTS because those are what
+       binding 42 names and what the shader samples -- the hand-over on its own
+       would only say a mirror exists somewhere.
+       IT ASKS FOR THIS FRAME'S MIRROR TOO, and that costs nothing: the producer
+       publishes one on every frame a read-back has covered rows, so the only
+       frames this adds are the ones where the mirror went away under a twin
+       that is still drawing restored -- the read-back latching off, above all.
+       `have` would still be set from the last map, and the lane would draw its
+       colours over this one. */
+    if (t.restored && !(s_rgbAtlas.view && s_rgbAtlas.have &&
+                        t.atlasRgb && t.atlasRgbRows > 0)) {
         if (!s_saidRestored) {
             s_saidRestored = 1;
             plog(d, "terr: the GL twin is drawing through the Classic++ restored "

@@ -419,11 +419,14 @@ int tagpu_gaf_atlas_mirror_rgb(TAGPU_GAFATLAS* a)
     return 1;
 }
 
-/* THE READ-BACK, FOR A TEXTURE THIS FILE DOES NOT OWN (the Vulkan-only plan's
-   gate 2). `tagpu_gaf_atlas_mirror_rgb_step` below is the atlas's own use of
-   exactly this; terrain's restored twin is a GL texture built by
-   tagpu_terr.c and painted by the restorer, so it needs the same read-back
-   without the atlas around it.
+/* THE READ-BACK, FOR ANY TEXTURE (the Vulkan-only plan's gate 2).
+   `tagpu_gaf_atlas_mirror_rgb_step` below CALLS THIS -- it is the atlas's own
+   use of exactly this and does not repeat it; terrain's restored twin is a GL
+   texture built by tagpu_terr.c and painted by the restorer, so it needs the
+   same read-back without the atlas around it. The two bodies were the same
+   thirty-five lines twice over until the gate-2 landing review said so, which
+   is a second place for the pack alignment, the saved binding or the dropped
+   attachment to be got wrong.
 
    IT LIVES HERE RATHER THAN IN A NEW FILE because this is where the entry
    points are already resolved -- `glReadPixels` is not in the fork's own
@@ -438,13 +441,21 @@ int tagpu_gaf_atlas_mirror_rgb(TAGPU_GAFATLAS* a)
 
    `fbo` is the caller's, created here on first use and owned by the caller:
    one FBO per client, made once, never per frame. Returns 1 when `dst` holds
-   `rows` rows of RGBA8 and 0 when it holds nothing new. */
+   `rows` rows of RGBA8 and 0 when it holds nothing new.
+
+   `status` (optional) is how a caller tells a PERMANENT refusal from a frame
+   that simply had nothing: it is the `glCheckFramebufferStatus` value when one
+   was taken, and 0 when this got no further than the entry points or the FBO
+   name. An incomplete framebuffer will be incomplete again next frame -- it is
+   a property of the texture, not of the moment -- so both callers latch on it
+   and stop asking, and neither could do that from the return value alone. */
 int tagpu_gl_rgba_readback(unsigned tex, int w, int rows, unsigned char* dst,
-                           unsigned* fbo)
+                           unsigned* fbo, unsigned* status)
 {
     GLint fbo0 = 0, pack = 4;
     GLenum st;
     int ok = 0;
+    if (status) *status = 0;
     if (!tex || !dst || !fbo || w <= 0 || rows <= 0) return 0;
     fetch_gl();
     if (!x_glReadPixels || !glGenFramebuffers || !glBindFramebuffer ||
@@ -458,6 +469,7 @@ int tagpu_gl_rgba_readback(unsigned tex, int w, int rows, unsigned char* dst,
     glBindFramebuffer(GL_FRAMEBUFFER, *fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
     st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status) *status = (unsigned)st;
     if (st == GL_FRAMEBUFFER_COMPLETE) {
         glPixelStorei(GL_PACK_ALIGNMENT, 1);
         x_glReadPixels(0, 0, w, rows, GL_RGBA, GL_UNSIGNED_BYTE, dst);
@@ -474,8 +486,7 @@ int tagpu_gl_rgba_readback(unsigned tex, int w, int rows, unsigned char* dst,
 
 void tagpu_gaf_atlas_mirror_rgb_step(TAGPU_GAFATLAS* a)
 {
-    GLint fbo0 = 0, pack = 4;
-    GLenum st;
+    unsigned st = 0;
     int rows, painted;
     if (!a || !a->mirrorRgb) return;
     if (!a->rgb || !a->job) {
@@ -506,35 +517,27 @@ void tagpu_gaf_atlas_mirror_rgb_step(TAGPU_GAFATLAS* a)
     if (painted == a->mirroredPainted && a->rgbGen == a->mirroredRgbGen &&
         rows <= a->mirrorRgbRows)
         return;
-    if (!a->mirrorRgbFbo) {
-        glGenFramebuffers(1, &a->mirrorRgbFbo);
-        if (!a->mirrorRgbFbo) return;
-    }
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo0);
-    glGetIntegerv(GL_PACK_ALIGNMENT, &pack);
-    glBindFramebuffer(GL_FRAMEBUFFER, a->mirrorRgbFbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, a->rgb, 0);
-    st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-    if (st == GL_FRAMEBUFFER_COMPLETE) {
-        /* ROW 0 FIRST, AND IT IS NOT THE SCREEN'S ROW 0. glReadPixels is
-           described bottom-up because the default framebuffer's y = 0 is the
-           bottom of the SCREEN; here the attachment is a texture, whose y = 0
-           is memory row 0 -- the row glTexSubImage2D and vkCmdCopyBufferToImage
-           both write first. So this fills the mirror in the order a second
-           backend uploads it, with no flip, which is what the whole module
-           already claims of itself (tagpu_gui_surf.c, above SHARP_FS). */
-        glPixelStorei(GL_PACK_ALIGNMENT, 1);
-        x_glReadPixels(0, 0, a->dim, rows, GL_RGBA, GL_UNSIGNED_BYTE, a->mirrorRgb);
-        glPixelStorei(GL_PACK_ALIGNMENT, pack);
+    /* THE READ-BACK ITSELF IS `tagpu_gl_rgba_readback` ABOVE -- the FBO, the
+       pack alignment, the saved binding, the dropped attachment and the fact
+       that row 0 is memory row 0 and not the screen's all live there, once. */
+    if (tagpu_gl_rgba_readback(a->rgb, a->dim, rows, a->mirrorRgb,
+                               &a->mirrorRgbFbo, &st)) {
         if (rows > a->mirrorRgbRows) a->mirrorRgbRows = rows;
         a->mirroredPainted = painted;
         a->mirroredRgbGen = a->rgbGen;
         a->mirrorRgbSerial++;
-    } else {
+        return;
+    }
+    /* NO STATUS MEANS NOTHING TO LATCH: the entry points were not resolved or
+       the FBO name could not be made, and neither says anything about this
+       texture. An INCOMPLETE framebuffer does, and it will say it again every
+       frame, so it is answered once and for good. */
+    if (!st || st == GL_FRAMEBUFFER_COMPLETE) return;
+    {
         char b[160];
         _snprintf(b, sizeof b, "%s: restored-twin read-back FBO incomplete (%x) - the"
                   " Vulkan edition of this pass stays indexed",
-                  a->tag ? a->tag : "gaf", (unsigned)st);
+                  a->tag ? a->tag : "gaf", st);
         b[sizeof b - 1] = 0;
         glog(b);
         free(a->mirrorRgb);
@@ -546,15 +549,12 @@ void tagpu_gaf_atlas_mirror_rgb_step(TAGPU_GAFATLAS* a)
            holding a name for the process's life buys nothing. Deleted while its
            context is still current, which is what separates this from
            `tagpu_gaf_atlas_lost` -- there the context is gone and a delete
-           would either do nothing or destroy a live object of the NEW one. */
-        glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)fbo0);
+           would either do nothing or destroy a live object of the NEW one.
+           The helper has already dropped the attachment and put the previous
+           binding back, so this is a name with nothing attached to it. */
         glDeleteFramebuffers(1, &a->mirrorRgbFbo);
         a->mirrorRgbFbo = 0;
-        glPixelStorei(GL_PACK_ALIGNMENT, pack);
-        return;
     }
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
-    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)fbo0);
 }
 
 void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)

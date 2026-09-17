@@ -169,6 +169,7 @@ static unsigned s_atlasMirrorSerial;
 static unsigned char* s_rgbMirror;     /* ATLAS_W x s_atlasH x 4, or NULL     */
 static unsigned s_rgbMirrorSerial;
 static int      s_rgbMirrorRows;       /* rows the read-back has covered      */
+static int      s_rgbMirrorCap;        /* rows the ALLOCATION holds           */
 static int      s_rgbMirrorPainted;    /* tagpu_rglsl_job_painted at that read */
 static unsigned s_rgbMirrorFbo;        /* ours, made once                     */
 static int      s_rgbMirrorFailed;
@@ -1399,6 +1400,7 @@ static int             s_fogCopyCells;
    restorer has stopped painting, so a settled map pays one integer compare. */
 static void rgb_mirror_step(void)
 {
+    unsigned st = 0;
     int rows, painted;
     if (!s_mirrorWant || s_rgbMirrorFailed) return;
     /* THE TWIN IS GONE (a glreset, a new map before the re-create). Say so
@@ -1415,22 +1417,33 @@ static void rgb_mirror_step(void)
        `s_rgbState`: 1 restoring, 2 complete, -1 failed, 0 not started. */
     if (!s_rgbTex || s_rgbState < 1 || s_atlasH <= 0) {
         if (s_rgbMirrorRows) {
-            memset(s_rgbMirror, 0, (size_t)ATLAS_W * s_rgbMirrorRows * 4);
+            memset(s_rgbMirror, 0, (size_t)ATLAS_W * s_rgbMirrorRows * 4);  /* <= cap: rows only ever grow to it */
             s_rgbMirrorRows = 0;
             s_rgbMirrorPainted = 0;
             s_rgbMirrorSerial++;
         }
         return;
     }
-    if (!s_rgbMirror || s_rgbMirrorRows > s_atlasH) {
-        free(s_rgbMirror);
-        s_rgbMirror = (unsigned char*)calloc((size_t)ATLAS_W * s_atlasH * 4, 1);
-        if (!s_rgbMirror) {
+    /* THE TEST IS THE ALLOCATED HEIGHT, AND IT HAS TO BE. This read `s_rgbMirrorRows
+       > s_atlasH` -- the rows last READ against the atlas's height -- which only
+       fires when the atlas SHRANK, and the zero path above sets those rows to 0
+       on the very map change that precedes a growth, so it could never fire at
+       all. The allocation then stayed at the first map's size while `rows =
+       s_atlasH` grew with the second, and `glReadPixels` wrote past the end:
+       a 1000-tile map into Two Continents is 4.7 MB allocated and 23.7 MB
+       written. [FOUND BY THE GATE-2 LANDING REVIEW, 2026-09-16; it was a heap
+       overflow, not a stale mirror.] */
+    if (!s_rgbMirror || s_rgbMirrorCap < s_atlasH) {
+        unsigned char* nb = (unsigned char*)calloc((size_t)ATLAS_W * s_atlasH * 4, 1);
+        if (!nb) {
             s_rgbMirrorFailed = 1;
             flog("terr: no memory for the restored tile mirror - the Vulkan "
                  "edition stays indexed");
             return;
         }
+        free(s_rgbMirror);
+        s_rgbMirror = nb;
+        s_rgbMirrorCap = s_atlasH;
         s_rgbMirrorRows = 0;
         s_rgbMirrorPainted = 0;
     }
@@ -1442,8 +1455,42 @@ static void rgb_mirror_step(void)
     rows = s_atlasH;
     if (painted == s_rgbMirrorPainted && rows <= s_rgbMirrorRows) return;
     if (!tagpu_gl_rgba_readback(s_rgbTex, ATLAS_W, rows, s_rgbMirror,
-                                &s_rgbMirrorFbo))
+                                &s_rgbMirrorFbo, &st)) {
+        /* AN INCOMPLETE FRAMEBUFFER IS ANSWERED ONCE, not asked again every
+           published frame. It is a property of the texture -- the device will
+           not attach an RGBA8 colour attachment -- so it will read the same
+           next frame, and the rows stay 0, which is exactly the condition that
+           brings this function back. A 0 with no status is the ordinary "not
+           yet": no entry point, no FBO name, nothing said about the texture. */
+        if (st && st != GL_FRAMEBUFFER_COMPLETE) {
+            s_rgbMirrorFailed = 1;
+            flog("terr: restored-tile read-back FBO incomplete - the Vulkan "
+                 "edition stays indexed");
+            /* AND THE MIRROR GOES WITH THE LATCH, rows first. A buffer nothing
+               will ever read again is up to 23 MB held for the process, and
+               leaving ROWS standing would be worse than the memory: the
+               hand-over publishes on `rows > 0`, so the consumer would go on
+               drawing the last read-back's colours while the restorer painted
+               past them. Rows at 0 publishes no mirror, and the consumer's own
+               refusal (tagpu_vk_terr.c) stands the frame down rather than draw
+               a stale restored atlas. */
+            free(s_rgbMirror);
+            s_rgbMirror = NULL;
+            s_rgbMirrorCap = 0;
+            s_rgbMirrorRows = 0;
+            s_rgbMirrorPainted = 0;
+            s_rgbMirrorSerial++;
+            if (s_rgbMirrorFbo) {
+                /* the helper put the previous binding back and dropped the
+                   attachment, so this is a name with nothing attached; deleted
+                   while the context is current, which is the whole difference
+                   from the GL-loss path */
+                glDeleteFramebuffers(1, &s_rgbMirrorFbo);
+                s_rgbMirrorFbo = 0;
+            }
+        }
         return;
+    }
     s_rgbMirrorRows = rows;
     s_rgbMirrorPainted = painted;
     s_rgbMirrorSerial++;

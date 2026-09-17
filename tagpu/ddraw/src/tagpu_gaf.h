@@ -308,9 +308,12 @@ void tagpu_gaf_atlas_mirror_rgb_step(TAGPU_GAFATLAS* a);
 
 /* Read an RGBA8 GL texture back into `dst`, `rows` rows of `w` texels, through
    a caller-owned FBO created on first use. Not about an atlas: it is here
-   because this is where glReadPixels is resolved. Render thread, context
-   current. 1 when `dst` was filled. (The Vulkan-only plan's gate 2, for
-   tagpu_terr.c's restored twin.) */
+   because this is where glReadPixels is resolved, and the step above CALLS it
+   rather than repeating it. Render thread, context current. 1 when `dst` was
+   filled. `status` (may be NULL) returns the glCheckFramebufferStatus value, or
+   0 if none was taken -- an incomplete framebuffer is a permanent property of
+   the texture and both callers latch on it, which the return value alone cannot
+   tell them. (The Vulkan-only plan's gate 2.) */
 int  tagpu_gl_rgba_readback(unsigned tex, int w, int rows, unsigned char* dst,
-                            unsigned* fbo);
+                            unsigned* fbo, unsigned* status);
 #endif
