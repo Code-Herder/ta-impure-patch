@@ -1350,6 +1350,46 @@ A band-box drag is also the reliable way to **select** several units for the bar
 not armed, so it is not the signal. Ask the engine instead — `tacli order <i> move pos X Y --sel`
 reports `N issued`, and N is the selection.
 
+### Comparing the two LANES on screen — and why an A/B cannot do it
+
+`tools/vk-ab.py` compares the GL capture against the Vulkan one, so it is blind to any error the
+two share. A whole-frame Y flip is exactly that, and it survived eight landings because the GL
+half of the capture was mirrored by the same rule (gpu-status §2.40). **When the question is "does
+the Vulkan lane draw the same picture as the game", the screen is the oracle.**
+
+Route D's window is a second top-level window over the game's. Find the pair and capture each:
+
+```bash
+DISPLAY=:0 xwininfo -root -tree | grep 1024x768
+#   the TITLED window is the game ("… | tacli:<instance>")
+#   its UNTITLED sibling at the same +X+Y is Route D's
+DISPLAY=:0 import -window 0x… out.png
+```
+
+Three things will waste a run if you do not know them:
+
+- **Stop every other instance first.** `park.sh` puts every window at the same coordinates, so
+  "the untitled sibling at that position" can belong to a *different* instance. This produced a
+  pair showing two unrelated game states and read as a rendering bug.
+- **An obscured window's backing store is stale.** Route D covers the game completely, so
+  `import -window` on the game returns whatever it last held — once, the pre-scenario frame, which
+  measured as a 534 730-px difference that was really two different moments. Capture the **game
+  first, before arming `vk.on` at all**, on a static fixture (parked units, pinned camera).
+- **Diff against the mirror as well.** `PIL.ImageChops.difference(a, b)` and again against
+  `b.transpose(FLIP_TOP_BOTTOM)`: if the mirrored one is the smaller, the lane is still flipped.
+  Reading "lots of pixels differ" without that check tells you nothing about which way.
+
+**One drawing Vulkan pass per capture.** The seam refuses with *"N A/B levers claimed this frame and
+M passes drew into it"*. Two live consequences:
+
+- **`feat` needs `native.on` to own its leaf**, and since gate 3a that makes the Vulkan **unit**
+  pass draw too — so the feature A/B cannot be taken the way gate 2 took it. Pan the camera off
+  every unit (`tacli eye <i> X Y`) until the `native:` line reads `0 unit(s)`, and `feat` is alone
+  again.
+- **`fx-lasers` does not reliably fire.** Two runs measured `fx: proj=0 laser=0` at the capture
+  frame, so the GL half never reached the disk. Use **`fx-rockets`** — model projectiles stay in
+  flight for minutes — and poll `fx: proj=` until it is non-zero before claiming the frame.
+
 **Zoom has two levers, and the file wins.**
 
 **`tagpu_zoom.txt` in the gamedir** — a bare float 0.25–8.0, re-read every frame; write it
