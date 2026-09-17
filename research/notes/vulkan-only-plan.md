@@ -560,13 +560,31 @@ Back to the filed list:
       `_BLOCK_OPEN` requires the `{` to end the line, so the block is never seen and never gets its
       set/binding.
 
-   Both are the **tool's to learn rather than the shader's to reformat**: that header is the one copy
+   Both were the **tool's to learn rather than the shader's to reformat**: that header is the one copy
    of the text and is shared with `tools/tascene`'s browser pack, and reflowing it for a generator's
-   convenience is what its own header forbids. `RESTORE_READY = False` keeps the restorer out of
-   `SOURCES` and `PROGRAMS` until the same change teaches `transform` both shapes, so the build's
-   shader gate is unaffected meanwhile. `tools/glslang-fetch.sh` has been run (16.6.0, pinned by
-   hash), and regenerating with the edited tool moved **only the `transform` hash line** in all
-   eleven committed headers — no SPIR-V word changed, which is the proof the edit touched no shader.
+   convenience is what its own header forbids.
+
+   **BOTH TAUGHT, AND THE SHADER HALF OF LANDING 7 IS DONE.** `_VAR` captures a precision qualifier
+   as its own group, on the other side of the storage qualifier, and the rewriter re-emits each
+   group **where it was read** — so `uniform highp sampler2DArray uAct` comes back out spelled the
+   same way rather than as `highp uniform …`, which is legal but is not what the shader says. The
+   one-line block is handled by `normalise_blocks`, a pre-pass that splits it across three lines on
+   the way IN to both the GL side and the translation, so every reader below keeps one code path
+   and `residual()` still compares like with like.
+
+   Generated: **46 shaders in 31 programs across 12 headers** — the 34 that were already there plus
+   the restorer's 12, paired as 21 + 10, exactly the count this entry predicted. `CONV_FS` at
+   `NK 4`, `kmax 148` comes out with `_Globals` at binding 32, `uAct` at 40 *with its `highp`*,
+   `uRect` at 41, `WBlock` at 33 holding `mat4 w[592]`, and four `out` locations.
+
+   **And the 34 existing shaders did not move.** `_VAR` and `normalise_blocks` are on every shader's
+   parse path, so the whole set was regenerated and diffed: the only change in those eleven headers
+   is the `transform` hash line. No SPIR-V word differs, which is the proof the edit touched nothing
+   but what it was for. `tools/glslang-fetch.sh` has been run (16.6.0, pinned by version and
+   sha256).
+
+   **What is left is the pass itself** — `tagpu_vk_restore.c`, and the attachment shapes are the
+   work rather than the shaders.
 
    **It is not a blocker and nothing stands down for it today** — landing 2 mirrored the restored
    atlases, so the lane draws restored art with the restore itself still running on GL. Landing 7

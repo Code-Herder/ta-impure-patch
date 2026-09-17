@@ -232,7 +232,7 @@ PROGRAMS = [
 # forbids. Flip this to True in the same change that teaches `transform` the two
 # shapes; with it False the restorer is absent from SOURCES and PROGRAMS and the
 # build's shader gate is unaffected.
-RESTORE_READY = False
+RESTORE_READY = True
 
 RESTORE_HDR  = "tagpu_restore_glsl"
 RESTORE_NK   = (1, 2, 4, 8)
@@ -471,15 +471,61 @@ def extract(cfile):
 OPAQUE = re.compile(r'^(sampler|isampler|usampler|image|iimage|uimage|texture|'
                     r'itexture|utexture|subpassInput)')
 
-# one declaration: qualifiers, type, name, optional array, optional initialiser
+# One declaration: qualifiers, storage qualifier, an optional PRECISION
+# qualifier, type, name, optional array.
+#
+# THE PRECISION QUALIFIER IS CAPTURED SEPARATELY BECAUSE IT SITS ON THE OTHER
+# SIDE OF THE STORAGE ONE. GLSL takes it either way round and this tree writes
+# both: the varyings use `flat out vec2`, and `tagpu_restore_glsl.h` writes
+# `uniform highp sampler2DArray uAct`. Folding the second into `quals` would put
+# it back in the FIRST position, which is legal but is not what the shader said,
+# and the rewriter below re-emits each group where it was read.
+# [Landing 7, 2026-09-17: CONV_FS is the first shader here to use this order, and
+# until now the declaration simply did not match, passed through untouched and
+# reached glslang with no binding on it.]
 _VAR = re.compile(r'^\s*((?:(?:flat|smooth|noperspective|centroid|highp|mediump|lowp)\s+)*)'
                   r'(in|out|uniform)\s+'
+                  r'((?:(?:highp|mediump|lowp)\s+)?)'
                   r'([A-Za-z_]\w*)\s+'
                   r'([A-Za-z_]\w*)\s*'
                   r'((?:\[[^\]]*\])?)\s*$')
 
 _LAYOUT_LOC = re.compile(r'layout\s*\(\s*location\s*=\s*(\d+)\s*\)')
 _BLOCK_OPEN = re.compile(r'^\s*layout\s*\(\s*(std140|std430)\s*\)\s*uniform\s+(\w+)\s*\{\s*$')
+
+# The same block written on ONE line, `{ members } ;` and all. Split rather than
+# parsed in place: every reader below already handles the multi-line spelling, and
+# one normalisation is a smaller thing to get right than a second code path in the
+# parser, the transform and the emitter.
+# [Landing 7, 2026-09-17. `tagpu_restore_glsl.h`'s `layout(std140) uniform WBlock
+# { mat4 w[WMAX]; };` is the first in this tree; before this the block was never
+# seen at all and so never got its set/binding.]
+_BLOCK_1LINE = re.compile(
+    r'^(\s*layout\s*\(\s*(?:std140|std430)\s*\)\s*uniform\s+\w+\s*\{)'
+    r'(.+?)'
+    r'(\}\s*;)\s*$')
+
+
+def normalise_blocks(src):
+    """A one-line named uniform block, spread over three lines.
+
+    THE SHADER TEXT IS NOT EDITED ON DISK, and that is the point: this header is
+    the one copy of it and is shared with tools/tascene's browser pack, so
+    reflowing it to suit a generator is what its own header forbids. The
+    normalisation happens on the way IN, to both the GL side and the translation,
+    so `residual()` still compares like with like."""
+    out = []
+    for ln in src.split("\n"):
+        m = _BLOCK_1LINE.match(ln)
+        if not m:
+            out.append(ln)
+            continue
+        out.append(m.group(1))
+        for st in m.group(2).split(";"):
+            if st.strip():
+                out.append("  %s;" % st.strip())
+        out.append(m.group(3))
+    return "\n".join(out)
 
 # std140: (size, alignment) for every type the fork's shaders use.
 _STD140 = {
@@ -558,7 +604,7 @@ def parse(sh):
                 m = _VAR.match(strip_layout(body))
                 if not m:
                     continue
-                quals, kind, ty, name, arr = m.groups()
+                quals, kind, _prec, ty, name, arr = m.groups()
                 n = arr_size(arr)
                 if kind == "uniform":
                     if OPAQUE.match(ty):
@@ -726,13 +772,14 @@ def transform(sh, varying_loc):
                 if not m:
                     pieces.append(st)
                     continue
-                quals, kind, ty, name, arr = m.groups()
+                quals, kind, prec, ty, name, arr = m.groups()
                 n = arr_size(arr)
                 # THE QUALIFIER ORDER IS NOT FREE: an interpolation qualifier
-                # comes before the storage one (`flat out vec2`), so the pieces
-                # are kept apart rather than pasted back together as they were
-                # read.
-                tail = "%s %s%s%s" % (ty, name, arr, ";" if semi else "")
+                # comes before the storage one (`flat out vec2`) and a precision
+                # qualifier after it (`uniform highp sampler2DArray`), so the
+                # pieces are kept apart rather than pasted back together as they
+                # were read, and each goes back where it came from.
+                tail = "%s%s %s%s%s" % (prec, ty, name, arr, ";" if semi else "")
                 if kind == "uniform" and OPAQUE.match(ty):
                     pieces.append("layout(set = 0, binding = %d) uniform %s%s"
                                   % (smp[name], quals, tail))
@@ -807,7 +854,7 @@ def build_all():
     texts = {}
     for cfile in SOURCES:
         for name, src in extract(cfile).items():
-            texts["%s::%s" % (cfile, name)] = src
+            texts["%s::%s" % (cfile, name)] = normalise_blocks(src)
 
     stage = {}
     for _, vs, fs in PROGRAMS:
