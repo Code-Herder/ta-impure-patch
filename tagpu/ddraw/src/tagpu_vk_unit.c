@@ -123,7 +123,8 @@
 #include "tagpu_vk_scaffold.h"
 #include "tagpu_posedraw.h"
 #include "tagpu_posebake.h"
-#include "tagpu_gaf.h"   /* tagpu_gaf_mip_off/_bytes: the restored twin's chain layout */
+#include "tagpu_gaf.h"
+#include "tagpu_classicpp.h" /* aniso=: the one knob both lanes filter by */   /* tagpu_gaf_mip_off/_bytes: the restored twin's chain layout */
 #include "spirv/tagpu_posedraw.spv.h"
 #include "spirv/tagpu_native.spv.h"
 
@@ -765,11 +766,22 @@ static int build_samplers(const TAGPU_VKPASS* d)
     si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
     si.minLod = 0.0f;
     si.maxLod = VK_LOD_CLAMP_NONE;
-    s_twinAniso = 0.0f;
-    if (d->anisook && d->maxAniso >= TAGPU_GAF_TWIN_ANISO) {
-        si.anisotropyEnable = VK_TRUE;
-        si.maxAnisotropy = TAGPU_GAF_TWIN_ANISO;
-        s_twinAniso = TAGPU_GAF_TWIN_ANISO;
+    {
+        /* THE SAME KNOB THE GL SIDE READS (`aniso=`, tagpu_classicpp.h), so the
+           two lanes cannot be configured apart by accident. It is read ONCE,
+           here, because a sampler cannot be rebuilt mid-frame for the reason
+           the shared images cannot -- every other slot's submit still names it.
+           A knob changed mid-session therefore makes the two disagree, and that
+           is caught rather than ignored: the hand-over carries the ratio GL
+           actually applied and `prepare` stands the frame down when it is not
+           this one. */
+        float want = tagpu_classicpp_light()->aniso;
+        s_twinAniso = 0.0f;
+        if (want > 1.0f && d->anisook && d->maxAniso >= want) {
+            si.anisotropyEnable = VK_TRUE;
+            si.maxAnisotropy = want;
+            s_twinAniso = want;
+        }
     }
     if (vkCreateSampler(d->dev, &si, NULL, &s_sampTwin) != VK_SUCCESS) return 0;
     return 1;

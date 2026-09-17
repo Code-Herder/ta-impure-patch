@@ -96,6 +96,7 @@ static void shadow_defaults(TAGPU_LIGHT* L)
        writes this key or can reach it (tagpu_menu.c `ours`). */
     L->terrainshadow = 0;
     L->shadowres = 2048;
+    L->aniso = 4.0f;             /* the lab's default; `aniso=1` is the A/B's */
     L->airshadow = TAGPU_AIRSHADOW_LEN;
 }
 
@@ -129,10 +130,11 @@ static void apply(float sunAz, float sunEl, float usunAz, float usunEl, float am
               s_light.level, s_light.unitLevel, how);
     cplog(b);
     _snprintf(b, sizeof b, "classicpp: shadows=%d(%s) shadowsun=%.1f,%.1f penumbra=%.3f shadowlen=%s%.1f,%.2f"
-              " shade=%.2f terrainshadow=%d shadowres=%d airshadow=%s",
+              " shade=%.2f terrainshadow=%d shadowres=%d airshadow=%s aniso=%.1f",
               s_light.shadows, shad[s_light.shadows], ssunAz, ssunEl, s_light.penumbra,
               s_light.shadowlenOn ? "" : "off:", s_light.shadowlen[0], s_light.shadowlen[1],
-              s_light.shade, s_light.terrainshadow, s_light.shadowres, air[s_light.airshadow]);
+              s_light.shade, s_light.terrainshadow, s_light.shadowres, air[s_light.airshadow],
+              (double)s_light.aniso);
     cplog(b);
 }
 
@@ -219,6 +221,11 @@ static void read_cfg(void)
                 if (r < 256) r = 256;
                 if (r > 4096) r = 4096;
                 s_light.shadowres = r;
+            } else if (!_strnicmp(p, "aniso=", 6)) {
+                float a = (float)atof(p + 6);
+                if (a < 1.0f) a = 1.0f;
+                if (a > 16.0f) a = 16.0f;
+                s_light.aniso = a;
             } else if (!_strnicmp(p, "airshadow=", 10)) {
                 if (!lstrcmpiA(p + 10, "len")) s_light.airshadow = TAGPU_AIRSHADOW_LEN;
                 else if (!lstrcmpiA(p + 10, "physical")) s_light.airshadow = TAGPU_AIRSHADOW_PHYSICAL;

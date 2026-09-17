@@ -14,6 +14,9 @@
                            subdivide the switch (G18a) -- they only ever
                            narrow it, so both at 1 with the .on file present
                            is exactly what the switch alone used to mean:
+                             aniso=N        restored-twin anisotropy, default 4
+                                            (1 = off, which is what the
+                                            Vulkan A/B is taken at);
                              assets=0|1     the restored atlases, default 1;
                                             0 draws Classic++ from the 8bpp
                                             indices, and pauses the restore
@@ -115,6 +118,17 @@ typedef struct {
     int   terrainshadow;
     int   shadowres;
     int   airshadow;        /* TAGPU_AIRSHADOW_*                          */
+    /* THE ANISOTROPY THE RESTORED TWINS ARE FILTERED WITH, `aniso=` (default 4,
+       1 = off). It is a knob rather than a constant because ANISOTROPIC SAMPLE
+       PLACEMENT IS IMPLEMENTATION-DEFINED and GL and Vulkan do it differently
+       on the same hardware: MEASURED 2026-09-16, restored unit art is 0 px
+       apart between the two lanes at `aniso=1` and up to 9 levels apart on 27 %
+       of unit pixels at 4x. The owner's decision is that PLAY keeps 4x on both
+       lanes and the A/B is taken at `aniso=1` as a stated substitution -- so
+       the oracle still catches every porting mistake and excludes only the one
+       thing the specs leave free. That is what this knob is for; it is not a
+       quality setting to reach for. [gpu-status 2.37.] */
+    float aniso;
 } TAGPU_LIGHT;
 const TAGPU_LIGHT* tagpu_classicpp_light(void);
 

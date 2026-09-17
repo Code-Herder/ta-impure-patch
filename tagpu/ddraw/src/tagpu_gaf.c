@@ -783,15 +783,30 @@ void tagpu_gaf_atlas_restore(TAGPU_GAFATLAS* a, const unsigned char* pal)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, a->mip);
             while (glGetError() != GL_NO_ERROR && pending < 16) pending++;
-            x_glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, TWIN_ANISO);
-            err = glGetError();
-            /* RECORDED, NOT JUST LOGGED. A second backend has to apply the
-               same ratio, and "the extension answered" is a per-driver fact it
-               cannot work out for itself. */
-            a->rgbAniso = (err == GL_NO_ERROR) ? TWIN_ANISO : 0.0f;
-            _snprintf(b, sizeof b, "%s: restored twin %dx%d, trilinear to mip level %d, %s",
+            {
+                /* `aniso=` (tagpu_classicpp.h): 4 in play, 1 when the Vulkan
+                   A/B is being taken, because the two APIs place anisotropic
+                   samples differently and that is the one difference the port
+                   cannot close. BOTH LANES READ THE SAME KNOB. */
+                float want = tagpu_classicpp_light()->aniso;
+                if (want < 1.0f) want = TWIN_ANISO;
+                x_glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, want);
+                err = glGetError();
+                a->rgbAniso = (err == GL_NO_ERROR && want > 1.0f) ? want : 0.0f;
+            }
+            /* RECORDED, NOT JUST LOGGED, above. A second backend has to apply
+               the same ratio, and both "the extension answered" and "the knob
+               said 1" are facts it cannot work out for itself. */
+            _snprintf(b, sizeof b, "%s: restored twin %dx%d, trilinear to mip level %d, %s%s",
                       a->tag, a->dim, a->dim, a->mip,
-                      err == GL_NO_ERROR ? "4x anisotropic" : "no anisotropic filtering (extension absent)");
+                      a->rgbAniso > 1.0f ? "anisotropic" : "no anisotropic filtering",
+                      err == GL_NO_ERROR ? "" : " (extension absent)");
+            if (a->rgbAniso > 1.0f) {
+                char r[16];
+                _snprintf(r, sizeof r, " %.0fx", (double)a->rgbAniso);
+                r[sizeof r - 1] = 0;
+                strncat(b, r, sizeof b - strlen(b) - 1);
+            }
             glog(b);
         } else {
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
