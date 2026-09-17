@@ -113,6 +113,22 @@ unsigned tagpu_rglsl_calls(void);
    depend on which passes happen to be unported. Polled on the 30-frame cadence
    every other lever uses. */
 int tagpu_rglsl_step_forced(unsigned frame_counter);
+
+/* LEVELS 1..mip OF A RESTORED TWIN, reduced HERE rather than by
+   glGenerateMipmap: the exact integer 2x2 box average, so that this lane's
+   levels and a second backend's are the same bytes on any driver. `tex` is the
+   RGBA8 twin, `dim` its square level-0 size, `mip` the deepest level to write.
+   1 when the whole chain was written; 0 when it was not -- and then the caller
+   MUST fall back to glGenerateMipmap, because a twin whose levels 1.. were
+   left alone filters to the previous picture's colours, which is worse than
+   the per-driver +/-1 this replaces.
+   0 without drawing when the reduction did not build, when the restorer is not
+   up, or when any level of the chain would be odd (GL's rule for an odd level
+   is a weighted three-tap, not a 2x2 average, and this does not pretend to be
+   one). Render thread, between frames, with the twin not currently sampled.
+   gpu-status 2.45 is the measurement that made this the shipped path. */
+int tagpu_rglsl_mips(unsigned tex, int dim, int mip);
+
 /* The GL context died with everything in it: forget the ids, no deletes, and
    every job with them -- call it BEFORE the jobs' owners forget theirs. */
 void tagpu_rglsl_glreset(void);

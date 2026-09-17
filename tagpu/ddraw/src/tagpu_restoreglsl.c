@@ -75,6 +75,7 @@ typedef void (APIENTRY *PFN_GETBOOLEANV)(GLenum,GLboolean*);
 typedef void (APIENTRY *PFN_CLEARCOLOR)(GLfloat,GLfloat,GLfloat,GLfloat);
 typedef void (APIENTRY *PFN_GETFLOATV)(GLenum,GLfloat*);
 typedef void (APIENTRY *PFN_GETINTEGERV)(GLenum,GLint*);
+typedef void (APIENTRY *PFN_GETTEXPARAMIV)(GLenum,GLenum,GLint*);
 static PFN_TEXIMAGE3D   x_glTexImage3D;
 static PFN_FBTEXLAYER   x_glFramebufferTextureLayer;
 static PFN_BINDBUFRANGE x_glBindBufferRange;
@@ -95,6 +96,12 @@ static PFN_GETBOOLEANV  x_glGetBooleanv;
 static PFN_CLEARCOLOR   x_glClearColor;
 static PFN_GETFLOATV    x_glGetFloatv;
 static PFN_GETINTEGERV  x_glGetIntegerv;
+/* the mip reduction's ONLY optional entry point, and it is optional because it
+   is what makes the reduction give the sampler back exactly as it found it: a
+   driver where this does not resolve gets glGenerateMipmap, not a twin left
+   clamped to one level. It is deliberately NOT on the mandatory list below --
+   nothing else here reads a texture parameter. */
+static PFN_GETTEXPARAMIV x_glGetTexParameteriv;
 /* opengl_utils.h declares glGetIntegerv but this build path does not resolve
    it (tagpu_terr.c fetches its own too), so this module resolves both */
 #define glGetFloatv x_glGetFloatv
@@ -133,6 +140,7 @@ static int resolve_gl(void)
     x_glClearColor = (PFN_CLEARCOLOR)getgl("glClearColor");
     x_glGetFloatv = (PFN_GETFLOATV)getgl("glGetFloatv");
     x_glGetIntegerv = (PFN_GETINTEGERV)getgl("glGetIntegerv");
+    x_glGetTexParameteriv = (PFN_GETTEXPARAMIV)getgl("glGetTexParameteriv");
     {
         const char* missing =
             !x_glTexImage3D ? "glTexImage3D" : !x_glFramebufferTextureLayer ? "glFramebufferTextureLayer" :
@@ -176,6 +184,9 @@ static int    s_glReady;               /* programs, tables, weights uploaded  */
 static int    s_glFailed;              /* and they cannot be: no more tries   */
 static int    s_actFailed;             /* float targets do not work here      */
 static GLuint s_progFill, s_progConv, s_progOut;
+static GLuint s_progMip;        /* the twin's own mip reduction (landing 7e) */
+static GLint  s_uMipSrc = -1, s_uMipDim = -1;
+static GLuint s_mipFBO;
 static GLint  s_uFill[7], s_uConv[6], s_uOut[7];
 static GLuint s_ubo, s_rectTex, s_srcTex, s_keyTex, s_act[2], s_vao, s_outVAO, s_outVBO, s_fbo, s_destFBO;
 static int    s_actSide, s_actLayers, s_attached;
@@ -278,6 +289,9 @@ static void free_gl(void)
     if (s_vao) glDeleteVertexArrays(1, &s_vao);
     if (s_outVAO) glDeleteVertexArrays(1, &s_outVAO);
     if (s_query[0] && x_glDeleteQueries) x_glDeleteQueries(2, s_query);
+    if (s_progMip) glDeleteProgram(s_progMip);
+    if (s_mipFBO) glDeleteFramebuffers(1, &s_mipFBO);
+    s_progMip = 0; s_mipFBO = 0; s_uMipSrc = s_uMipDim = -1;
     s_progFill = s_progConv = s_progOut = 0;
     s_ubo = s_outVBO = s_rectTex = s_srcTex = s_keyTex = s_fbo = s_destFBO = s_vao = s_outVAO = 0;
     s_query[0] = s_query[1] = 0;
@@ -289,7 +303,7 @@ static int init_gl(void)
 {
     char prefix[96], b[256];
     GLint maxUBO = 0, maxDraw = 0, maxAtt = 0, align = 0;
-    GLuint vsFS, vsOut, fsFill, fsConv, fsOut;
+    GLuint vsFS, vsOut, fsFill, fsConv, fsOut, fsMip;
     const TAGPU_RMODEL* w;
     const TAGPU_ROPT*   opt;
     size_t i;
@@ -314,6 +328,7 @@ static int init_gl(void)
 
     _snprintf(prefix, sizeof prefix, "#version 330 core\n#define NK %d\n#define WMAX %d\n", s_sched.nk, s_sched.wmax);
     vsFS   = mksh(GL_VERTEX_SHADER, prefix, TAGPU_RESTORE_FS_VS, "fs.vert");
+    fsMip  = mksh(GL_FRAGMENT_SHADER, prefix, TAGPU_RESTORE_MIP_FS, "mip.frag");
     fsFill = mksh(GL_FRAGMENT_SHADER, prefix, TAGPU_RESTORE_FILL_FS, "fill.frag");
     fsConv = mksh(GL_FRAGMENT_SHADER, prefix, TAGPU_RESTORE_CONV_FS, "conv.frag");
     vsOut  = mksh(GL_VERTEX_SHADER, prefix, TAGPU_RESTORE_OUT_VS, "out.vert");
@@ -321,11 +336,26 @@ static int init_gl(void)
     s_progFill = mkprog(vsFS, fsFill, "fill");
     s_progConv = mkprog(vsFS, fsConv, "conv");
     s_progOut  = mkprog(vsOut, fsOut, "out");
+    /* THE MIP REDUCTION IS NOT FATAL IF IT WILL NOT BUILD: `tagpu_rglsl_mips`
+       answers 0 and its caller falls back to glGenerateMipmap, which is what
+       shipped before landing 7e -- losing only the cross-driver identity of
+       the levels, which is the whole point of having it. */
+    s_progMip  = mkprog(vsFS, fsMip, "mip");
+    if (s_progMip) {
+        s_uMipSrc = glGetUniformLocation(s_progMip, "uSrc");
+        s_uMipDim = glGetUniformLocation(s_progMip, "uSrcDim");
+        glUseProgram(s_progMip);
+        if (s_uMipSrc >= 0) glUniform1i(s_uMipSrc, 0);
+        glUseProgram(0);
+        if (s_uMipDim < 0) { glDeleteProgram(s_progMip); s_progMip = 0;
+            rlog(LANE ": the mip reduction has no uSrcDim - falling back to glGenerateMipmap"); }
+    }
     if (vsFS) glDeleteShader(vsFS);
     if (fsFill) glDeleteShader(fsFill);
     if (fsConv) glDeleteShader(fsConv);
     if (vsOut) glDeleteShader(vsOut);
     if (fsOut) glDeleteShader(fsOut);
+    if (fsMip) glDeleteShader(fsMip);
     if (!s_progFill || !s_progConv || !s_progOut) { free_gl(); return 0; }
     {
         static const char* fillN[7] = { "uAtlas", "uPal", "uRect", "uSrc", "uKey", "uSlot", "uKeyR" };
@@ -762,9 +792,100 @@ int tagpu_rglsl_step_forced(unsigned frame_counter)
     return s_force > 0;
 }
 
+/* THE TWIN'S OWN MIP CHAIN -- levels 1..mip of `tex` from the level above
+   each, as the exact integer 2x2 box average, so that the levels this lane
+   sees and the ones a second backend paints are the SAME BYTES rather than
+   two drivers' idea of glGenerateMipmap (gpu-status 2.45, and the shader's own
+   header comment for why +/-1 was not good enough). 1 when the whole chain was
+   reduced; 0 when it was not, and then the caller must fall back -- a twin
+   whose levels 1.. were left as they were is a twin that filters to stale
+   colours, which is the one outcome worse than a per-driver +/-1.
+
+   IT IS NOT A SLICE and it is not budgeted like one: the whole chain of a 2048
+   twin is 1024x1024 + 512x512 fragments, once per batch of frames painted, and
+   it has to be complete before the frame that samples it. It borrows the
+   slice's state bracket rather than repeating it, so that a piece of state
+   added to gl_state_push is covered here too; the sentinel slice is what tells
+   that bracket this is not a numbered slice and owes no error bookkeeping.
+
+   THE FEEDBACK LOOP IS CLOSED BY THE SAMPLER, not by a copy: level L-1 is read
+   while level L is the colour attachment, both of them levels of one texture,
+   which is legal exactly because base = max = L-1 excludes the level being
+   written from everything the sampler can reach. A second attachment or a
+   staging copy would buy nothing and cost the chain. */
+int tagpu_rglsl_mips(unsigned tex, int dim, int mip)
+{
+    GLint base = 0, maxl = 0, minf = 0, magf = 0;
+    GLenum err;
+    int L, ok = 1, bad = 0, pending = 0;
+
+    if (!tex || dim <= 0 || mip <= 0) return 0;
+    if (!s_glReady || !s_progMip || !x_glGetTexParameteriv) return 0;
+    /* an odd level would need GL's weighted three-tap, not a 2x2 average, so
+       the chain is refused whole rather than reduced wrongly for part of it */
+    for (L = 1; L <= mip; L++)
+        if ((dim >> L) < 1 || ((dim >> (L - 1)) & 1)) return 0;
+    if (!s_mipFBO) {
+        glGenFramebuffers(1, &s_mipFBO);
+        if (!s_mipFBO) return 0;
+    }
+
+    /* the sentinel slice: gl_state_push/pop keep the whole list of state a
+       draw here disturbs, and this is not a numbered slice, so it owes none of
+       their per-slice error bookkeeping -- the error flag is drained and read
+       here instead, bounded the way every other drain in this file is */
+    gl_state_push(~0u);
+    while (glGetError() != GL_NO_ERROR && pending < 16) pending++;
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    x_glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, &base);
+    x_glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, &maxl);
+    x_glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &minf);
+    x_glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &magf);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glUseProgram(s_progMip);
+    glBindVertexArray(s_vao);
+    glBindFramebuffer(GL_FRAMEBUFFER, s_mipFBO);
+    for (L = 1; L <= mip && ok; L++) {
+        int src = dim >> (L - 1), dst = dim >> L;
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, L - 1);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, L - 1);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, L);
+        { GLenum bufs[1] = { GL_COLOR_ATTACHMENT0 }; glDrawBuffers(1, bufs); }
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) { ok = 0; bad = L; break; }
+        glViewport(0, 0, dst, dst);
+        glUniform1i(s_uMipDim, src);
+        x_glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+    /* the sampler goes back to what the consumer set it to -- this function
+       borrowed four parameters of somebody else's texture and owes all four */
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, base);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, maxl);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, minf);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, magf);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    err = glGetError();
+    gl_state_pop(~0u);
+    /* AN ERROR ANYWHERE IN THE CHAIN FAILS THE WHOLE CHAIN, and the caller then
+       regenerates all of it: glGenerateMipmap rebuilds every level from level 0,
+       so the fallback leaves one reduction's levels rather than a mixture of
+       two. That is the only reason a partial failure needs no unwinding. */
+    if (err != GL_NO_ERROR) { ok = 0; if (!bad) bad = mip; }
+    if (!ok) {
+        static int said;
+        if (!said) { char b[160]; said = 1;
+            _snprintf(b, sizeof b, LANE ": the mip reduction failed at level %d of %d (GL 0x%x) - falling back to glGenerateMipmap", bad, mip, (unsigned)err);
+            rlog(b); }
+    }
+    return ok;
+}
+
 void tagpu_rglsl_glreset(void)
 {
     /* every id died with the context: forget them without deleting */
+    s_progMip = 0; s_mipFBO = 0; s_uMipSrc = s_uMipDim = -1;
     s_progFill = s_progConv = s_progOut = 0;
     s_ubo = s_outVBO = s_rectTex = s_srcTex = s_keyTex = s_fbo = s_destFBO = s_vao = s_outVAO = 0;
     s_act[0] = s_act[1] = 0; s_query[0] = s_query[1] = 0; s_actSide = 0;

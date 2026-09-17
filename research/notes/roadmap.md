@@ -2804,6 +2804,20 @@ Fixed the same way, and re-measured byte-identical on two fixtures with 62 two-b
 exercised. The units are the one consumer left and they carry their own seam: their twin is mipped,
 and a Vulkan restore paints level 0 only. `repaint` is still unexercised.
 
+**That seam was measured rather than argued, and the answer was to own the reduction on both
+lanes** ([gpu-status](gpu-status.html) §2.45 and §2.46). The driver's `glGenerateMipmap` turned out
+to be an unweighted 2×2 box average of RGBA with a rounding rule no candidate reproduced exactly
+and every candidate reproduced to within one level — alpha-weighting and gamma-awareness ruled out
+by a **maximum** error of 57 and 54 levels while both still matched 97 % of texels, which is why a
+maximum was reported at all. A per-driver ±1 is not something a note can pin down, so landing 7e-1
+replaced the call with a pass of ours: the exact integer `(sum + 1) / 4`, and the dumped chain is
+now **100.00 % that formula at both levels, max |Δ| 0 on every channel including alpha**. The
+levels are arithmetic rather than a driver's rounding rule, which is what lets 7e-2's oracle stay a
+`cmp`. It also found, by reading rather than by measuring, that the twin allocated **level 0 only**
+— every other level existed because `glGenerateMipmap` created it, so the first reduction of every
+twin would have found an incomplete framebuffer and fallen back silently, for good on a twin
+painted once.
+
 **Its landing 1 ran the same day and is the reason the rest is ordered as it is**
 ([gpu-status](gpu-status.html) §2.35): started in the configuration the patch actually ships in
 — `--defaults`, `ss=2`, Classic++ on — the Vulkan lane draws **the UI and nothing else**, 630 589

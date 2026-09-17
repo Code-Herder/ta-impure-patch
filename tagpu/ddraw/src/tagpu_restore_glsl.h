@@ -55,6 +55,62 @@
     "  gl_Position = vec4(p, 0.0, 1.0);\n" \
     "}\n"
 
+/* MIP: one level of the restored twin from the level above it, as an EXACT
+   INTEGER 2x2 BOX AVERAGE (the Vulkan-only plan's landing 7e).
+
+   WHY THIS EXISTS AT ALL, when glGenerateMipmap is one call: the twin is
+   sampled GL_LINEAR_MIPMAP_LINEAR, so a second backend that paints level 0
+   must produce the same levels 1.. -- and gpu-status 2.45 measured what this
+   driver's glGenerateMipmap actually does. It is an unweighted 2x2 box average
+   (alpha-weighting and gamma are ruled out by maximum errors of 57 and 54
+   levels) with a rounding rule no candidate reproduced exactly, and every
+   candidate within +/-1 per RGB channel. A per-driver +/-1 is not something a
+   note can pin down, so BOTH LANES DO THE REDUCTION THEMSELVES and the levels
+   are identical by construction rather than by driver luck.
+
+   IT IS INTEGER ARITHMETIC ON EXACT VALUES, which is what makes that claim
+   hold on any conformant driver: a texel of an RGBA8 texture reads as exactly
+   k/255, so round(v * 255) recovers k with no tolerance, the average is
+   (sum + 1) / 4 in integers, and the result is written back through the same
+   (k + 0.25)/255 trick the OUT pass uses -- so a driver that truncates the
+   float-to-unorm conversion and one that rounds both store exactly k.
+
+   THREE THINGS THE CALLER OWES IT, and they are the whole reason the fetch is
+   exact rather than nearly exact:
+
+     * the SOURCE LEVEL, through GL_TEXTURE_BASE_LEVEL and GL_TEXTURE_MAX_LEVEL
+       both set to it. There is no level argument here because the destination
+       is another level of the SAME texture, and clamping the sampler to the one
+       level being read is what keeps that out of a feedback loop.
+     * the FILTER pinned to GL_NEAREST for the duration. With a non-mipmap
+       minification filter only the base level is ever sampled, so the fetch
+       cannot drift to a neighbouring level however the implementation computes
+       its level of detail -- and NEAREST returns the texel itself rather than a
+       bilinear blend that merely happens to weight one texel 1.0.
+     * the source's WIDTH in `uSrcDim` rather than textureSize(). Both would
+       work, but the uniform says in the C what the shader reads, and it is a
+       power of two here, so 1.0 / uSrcDim and every texel centre are exact in
+       float and the coordinate is not a rounding question at all.
+
+   `uSrcDim` is one int because these twins are square (tagpu_gaf_mip_chain
+   takes one dimension for the same reason), and the caller refuses the whole
+   chain rather than reducing an odd level: GL's own rule for an odd level is a
+   weighted three-tap, not a 2x2 average, and this shader must not pretend
+   otherwise. */
+#define TAGPU_RESTORE_MIP_FS \
+    "uniform sampler2D uSrc;\n" \
+    "uniform int uSrcDim;\n" \
+    "out vec4 oCol;\n" \
+    "void main(){\n" \
+    "  vec2 inv = vec2(1.0 / float(uSrcDim));\n" \
+    "  ivec2 p = ivec2(gl_FragCoord.xy) * 2;\n" \
+    "  ivec4 s = ivec4(round(texture(uSrc, (vec2(p) + 0.5) * inv) * 255.0));\n" \
+    "  s += ivec4(round(texture(uSrc, (vec2(p + ivec2(1, 0)) + 0.5) * inv) * 255.0));\n" \
+    "  s += ivec4(round(texture(uSrc, (vec2(p + ivec2(0, 1)) + 0.5) * inv) * 255.0));\n" \
+    "  s += ivec4(round(texture(uSrc, (vec2(p + ivec2(1, 1)) + 0.5) * inv) * 255.0));\n" \
+    "  oCol = (vec4((s + 1) / 4) + 0.25) / 255.0;\n" \
+    "}\n"
+
 /* FILL: the model's input. uSrc per slot = (ax, ay, sw, sh): the frame's
    first texel in the R8 atlas and its size; uRect per slot = the valid rect;
    uKey per slot = (key index or -1, 0, 0, 0). pad = (rect - size)/2 is the

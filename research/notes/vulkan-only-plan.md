@@ -820,6 +820,24 @@ Back to the filed list:
    pass**, which is byte-identical by construction on every driver for ≤1/255 on the shipped GL
    twin's minified texels. The third is the recommendation; the measurement is what makes it a
    small decision rather than a leap.
+
+   **7e-1 TOOK OPTION C, AND ITS GL HALF IS LANDED — 2026-09-17** ([gpu-status](gpu-status.html)
+   §2.46). `TAGPU_RESTORE_MIP_FS` is the exact integer 2×2 box average and `tagpu_rglsl_mips` draws
+   it per level; `twin_mips` calls it and keeps `glGenerateMipmap` as the fallback. **The chain is
+   now 100.00 % `(sum + 1) / 4` of the level above at both levels — 1 048 576 and 262 144 texels,
+   max |Δ| 0 on every channel including alpha** — so the GL lane's levels are a formula rather than
+   a driver's rounding rule, and the formula lives in one shader string both lanes compile. The
+   three sprite pairs stayed `IDENTICAL` on the same run. A defect found by reading the change
+   rather than by measuring it: the twin allocated **level 0 only** and every other level existed
+   because `glGenerateMipmap` created it, so a reduction drawing into level 1 would have found an
+   incomplete framebuffer, fallen back silently, and a twin painted once would have kept the
+   driver's chain for good — every level is allocated at creation now.
+
+   **7e-2 is the rest of it**: the unit consumer on the Vulkan lane, level 0 restored into the
+   mipped twin and levels 1..mip reduced by the same integer rule with per-level views, and the
+   oracle extended to `cmp` whole chains rather than level 0. The mip program's SPIR-V is already
+   generated and committed — the shader gate refuses a shader no program uses, which is what keeps
+   the two lanes from drifting while one of them is unwritten.
 8. **`PK_PIXELS` closed.** `tagpu_gui_hook.c:330`'s op kinds `OP_LINE`, `OP_BAR`, `OP_RECT`,
    `OP_FRAME` and `OP_SCALE` publish through `pub_surface_bytes` at `:1489` — *the engine's
    surface bytes as they stand at the flip*. They become drawn geometry with their own packet

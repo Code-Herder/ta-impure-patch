@@ -876,6 +876,17 @@ the same once-per-300-slices rule as the sprites', so a small burst that drains 
 terrain logs nothing — `restoreglsl.on=log` for its per-batch lines, or the dump line's entry
 count.
 
+**A MIPPED TWIN ALSO DUMPS ITS WHOLE CHAIN, to `tagpu_restore_<tag>.mips`** — every level end to
+end, `sum(max(1, dim >> L)^2 * 4)` bytes for `L` in `0..mip`, logged as `unit: the twin's mip chain
+dumped to tagpu_restore_unit.mips (3 levels of 2048, 21504 KB)`. It is the instrument for the one
+question a level-0 dump cannot ask: the unit twin is sampled trilinear, so its levels are part of
+the picture a second backend has to reproduce. **Since landing 7e-1 the levels are ours, not
+`glGenerateMipmap`'s** — the exact integer 2×2 box average `(sum + 1) / 4` — so reducing level
+`L-1` of the dump in Python and comparing with level `L` must come out **100.00 % exact, max |Δ| 0
+on every channel**. Anything less is a bug in the pass or in how the level was attached, and a
+result within ±1 specifically means the reduction stood down and `glGenerateMipmap` ran instead:
+grep `mip reduction` in `tagpu.log`, which says so once per context with the level and the GL error.
+
 **THE DUMPS ARE A CROSS-BUILD BYTE ORACLE, and it is the cheapest strong one this repo has.**
 `tagpu_restoredump.on` reads the finished atlas with `glGetTexImage` off a **texture**, not off the
 framebuffer — so unlike every capture-based A/B it needs no visible window, no Route D, no parked

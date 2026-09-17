@@ -273,12 +273,25 @@ static void job_clear_dest(TAGPU_GAFATLAS* a)
     rgb_mirror_zeroed(a);
 }
 
+/* OUR OWN REDUCTION FIRST, glGenerateMipmap ONLY AS THE FALLBACK. The twin is
+   sampled GL_LINEAR_MIPMAP_LINEAR, so its levels 1.. are part of the picture a
+   second backend has to reproduce -- and gpu-status 2.45 measured that this
+   driver's glGenerateMipmap is an unweighted 2x2 box average with a rounding
+   rule no candidate matched exactly, every candidate landing within +/-1 per
+   RGB channel. A per-driver +/-1 cannot be pinned down by a note, so both lanes
+   do the reduction themselves (`tagpu_rglsl_mips`) and the levels are identical
+   by construction. The fallback is still here because it is what shipped before
+   landing 7e: it loses the cross-driver identity of the levels, not the levels.
+   [The Vulkan-only plan's landing 7e.] */
 static void twin_mips(TAGPU_GAFATLAS* a)
 {
-    if (!a->mip || !a->rgb || !x_glGenerateMipmap) return;
-    glBindTexture(GL_TEXTURE_2D, a->rgb);
-    x_glGenerateMipmap(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    if (!a->mip || !a->rgb) return;
+    if (!tagpu_rglsl_mips(a->rgb, a->dim, a->mip)) {
+        if (!x_glGenerateMipmap) return;
+        glBindTexture(GL_TEXTURE_2D, a->rgb);
+        x_glGenerateMipmap(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
     a->mippedN = tagpu_rglsl_job_painted(a->job);
 }
 
@@ -1089,7 +1102,22 @@ void tagpu_gaf_atlas_restore(TAGPU_GAFATLAS* a, const unsigned char* pal)
         }
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, a->dim, a->dim, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        /* EVERY LEVEL IS ALLOCATED HERE, not left to glGenerateMipmap to
+           create. `twin_mips` reduces the chain itself as of landing 7e-1, and
+           a reduction draws INTO level L through a framebuffer -- which a level
+           with no storage makes incomplete, so the first chain of every twin
+           would silently fall back to the driver's reduction and a twin painted
+           once would keep it for good. The levels are undefined for exactly the
+           two statements between here and the `twin_mips` below, which is why
+           that call is not optional and says so. */
+        {
+            int L;
+            for (L = 0; L <= a->mip; L++) {
+                int d = a->dim >> L;
+                if (d < 1) d = 1;
+                glTexImage2D(GL_TEXTURE_2D, L, GL_RGBA8, d, d, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+            }
+        }
         glBindTexture(GL_TEXTURE_2D, 0);
         a->rgb = t;
         /* the content key's discontinuity: a fresh twin is alpha 0 everywhere
@@ -1109,7 +1137,11 @@ void tagpu_gaf_atlas_restore(TAGPU_GAFATLAS* a, const unsigned char* pal)
     }
     a->palSerial = tagpu_pal_serial();
     /* the job cleared level 0 to alpha 0: the mip levels must say the same
-       before anything samples them */
+       before anything samples them -- and since landing 7e-1 they are ALLOCATED
+       but undefined until this runs, rather than absent until it runs, so this
+       is the call that makes the twin samplable at all rather than merely
+       consistent. A twin whose chain this leaves undefined is one a trilinear
+       fetch reads garbage from; before, it was one GL reported incomplete. */
     twin_mips(a);
     /* what is already in the atlas was uploaded before the switch: queue it,
        in upload order, so nothing stays indexed for want of a miss */

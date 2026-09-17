@@ -295,9 +295,17 @@ def restore_keys(name):
 
 def _restore_programs():
     out = []
+    # `restore_mip` IS GENERATED BEFORE ITS VULKAN CONSUMER EXISTS, and that is
+    # this manifest's rule rather than an exception to it: the shader is real --
+    # the GL lane draws it as of landing 7e-1 -- and a shader in
+    # `tagpu_restore_glsl.h` that no program uses fails the gate, precisely so
+    # that the two lanes cannot drift apart while one of them is unwritten. The
+    # emitted header is text nothing #includes until landing 7e-2 wires it, at
+    # a cost of one small array in the tree and none at run time.
     for prog, vs, fs in (("restore_fill", "FS_VS", "FILL_FS"),
                          ("restore_conv", "FS_VS", "CONV_FS"),
-                         ("restore_out",  "OUT_VS", "OUT_FS")):
+                         ("restore_out",  "OUT_VS", "OUT_FS"),
+                         ("restore_mip",  "FS_VS", "MIP_FS")):
         for fkey, _, _ in restore_keys(fs):
             vkey = restore_keys(vs)[0][0]
             out.append(("%s%s" % (prog, fkey[len(fs):]),

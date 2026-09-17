@@ -8359,6 +8359,103 @@ have done by default, and it is the only one that leaves a read-back behind.
 exactly what option C stops mattering and what options A and B leave open — which is the argument
 for C stated as a property rather than as a preference.
 
+### 2.46 The twin's levels stop being a driver's rounding rule — landing 7e-1 of the Vulkan-only plan
+
+§2.45 measured what `glGenerateMipmap` does to the restored unit twin and put three options in
+front of this landing. **Option C landed, and this is its GL half**: the twin's levels 1.. are
+reduced by a pass of ours rather than by the driver, so that the levels the GL lane samples and the
+levels a second backend will paint are the same bytes *by arithmetic* instead of by driver luck.
+
+**The pass.** `TAGPU_RESTORE_MIP_FS` (`tagpu_restore_glsl.h`) is the exact integer 2×2 box average
+— four fetches, `round(v * 255)` per channel, `(sum + 1) / 4` in integers, written back through the
+same `(k + 0.25)/255` trick the OUT pass uses so that a driver which truncates the float-to-unorm
+conversion and one which rounds both store exactly `k`. `tagpu_rglsl_mips(tex, dim, mip)`
+(`tagpu_restoreglsl.c`) draws it per level into its own framebuffer, and `tagpu_gaf.c`'s
+`twin_mips` calls it with `glGenerateMipmap` as the fallback.
+
+**Three things the caller owes the shader, and they are why the fetch is exact rather than nearly
+exact:**
+
+* `GL_TEXTURE_BASE_LEVEL` **and** `GL_TEXTURE_MAX_LEVEL` both set to the source level. There is no
+  level argument in the shader because the destination is another level of the *same* texture:
+  clamping the sampler to the one level being read is what makes rendering into level `L` while
+  sampling level `L-1` legal rather than a feedback loop, and it needs no copy.
+* the filter pinned to `GL_NEAREST` for the duration. With a non-mipmap minification filter only
+  the base level is ever sampled, so the fetch cannot drift to a neighbouring level however the
+  implementation computes its level of detail — and NEAREST returns the texel itself rather than a
+  bilinear blend that merely happens to weight one texel 1.0.
+* the source width in `uSrcDim` rather than `textureSize()`. Both would work; the uniform says in
+  the C what the shader reads, and the dimension is a power of two here, so `1.0 / uSrcDim` and
+  every texel centre are exact in float.
+
+All four borrowed texture parameters are read back and restored, and the chain is refused whole —
+falling back — rather than reduced wrongly if any level of it would be odd: GL's own rule for an
+odd level is a weighted three-tap, not a 2×2 average.
+
+**The measurement, on §2.45's own fixture and instrument** (`crowd-static`, 155 entries, the whole
+chain dumped to `tagpu_restore_unit.mips` under `tagpu_restoredump.on`):
+
+| level | texels | equal to `(sum + 1) / 4` of the level above | max &#124;Δ&#124; R,G,B,A |
+|---|---|---|---|
+| 1 (1024²) | 1 048 576 | **1 048 576 — 100.00 %** | **0, 0, 0, 0** |
+| 2 (512²) | 262 144 | **262 144 — 100.00 %** | **0, 0, 0, 0** |
+
+For contrast, the same chain against the candidates §2.45 ranked: `floor(sum/4)` 96.24 %,
+round-half-up 94.20 %, alpha-weighted 96.61 % (max Δ 57), sRGB-aware 93.23 % (max Δ 54). Those
+percentages are now a statement about *our* chain rather than about the driver's, which is the
+point: the levels are a formula, and the formula is in one shader string both lanes compile.
+
+**The three sprite pairs stayed `IDENTICAL`** on the same run (terrain 23 674 880 bytes, features
+and effects 16 777 216 each), so landing 7d's oracle did not move, and the log carries no mip
+line at all — the reduction never stood down on any twin, on any frame of the run.
+
+**And the unit pass's own A/B still reads 0 px** — `selbox-facings` at 1024×768 with
+`classicpp.cfg=assets=1 shadows=1 terrainshadow=1`, **0 differing pixels of 786 432**, 2 125
+non-black on each lane. That measurement is the concrete reason option C was taken rather than B:
+reducing on the Vulkan side alone would have scattered ±1 through every minified unit texel and
+turned this gate from an exact 0 into a permanent small residual.
+
+**Be exact about what that 0 px does and does not prove.** The unit consumer on the Vulkan lane is
+still fed by the **mirror** — the whole chain read back off this twin, levels and all — so the two
+lanes sample the same bytes today because one copies them from the other, and this A/B would read 0
+under either reduction. What it establishes is that changing the reduction did not move the unit
+picture. The claim that the two lanes agree **without** the copy is 7e-2's to earn; what landed
+here is the arithmetic that makes it earnable.
+
+**A defect this found by reading rather than by measuring, and it was in the first version of the
+change.** The twin was created with `glTexImage2D` for **level 0 only**; every other level existed
+because `glGenerateMipmap` created it. A reduction draws *into* level `L` through a framebuffer,
+and a level with no storage makes that framebuffer incomplete — so the first chain of every twin
+would have failed the completeness check, fallen back silently, and a twin painted once and never
+again would have kept the driver's chain **for good**. The fix is at creation: every level 0..`mip`
+gets its own `glTexImage2D`. The levels are then undefined for exactly the two statements between
+the allocation and the `twin_mips` that follows the job's creation — which is why that call is not
+optional, and the comment there now says so. (Before this landing the same call was merely
+*consistency*; now it is what makes the twin samplable at all. Those are different failures by the
+GL specification rather than by measurement: a texture whose chain is incomplete samples as a
+defined `(0,0,0,1)`, while a level allocated with `NULL` and not yet written holds whatever the
+driver left there.)
+
+**The build gate demanded the Vulkan shader before the Vulkan consumer.**
+`tools/spirv-gen.py` refuses a shader in `tagpu_restore_glsl.h` that no program in its manifest
+uses, so `restore_mip` is paired and generated here — one small array in
+`inc/spirv/tagpu_restore_glsl.spv.h` that nothing `#include`s until landing 7e-2 wires it. That is
+the gate doing its job rather than something routed around: the two lanes cannot drift apart while
+one of them is unwritten. Adding the row re-hashed the `transform` line of all twelve generated
+headers, which is the freshness chain covering the tool's own source.
+
+**Not covered.**
+
+* **The Vulkan lane does not reduce yet.** This landing makes the GL side an arithmetic fact; the
+  claim that both lanes agree is 7e-2's to earn, with per-level views on the twin and the oracle
+  extended to `cmp` whole chains rather than level 0. The unit consumer on the Vulkan lane is
+  still unwired, which is why the unit pair does not appear above.
+* **The fallback is still the driver's**, with §2.45's bound: ±1 per RGB channel and 0 on alpha, on
+  the one driver that was measured. It is reached only when the reduction cannot build or a level
+  is odd, and it says so once in the log.
+* **Anisotropy is unchanged** and is still the one sampler difference the port cannot close
+  (`aniso=` is read by both lanes for exactly that reason).
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out
