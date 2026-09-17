@@ -505,6 +505,21 @@ Back to the filed list:
    row's **four** variants are right, and the decision `spirv-gen.py` asked for is narrow: *the
    Vulkan lane's weight range is sized for the largest shipped model.*
 
+   **AND THE VARIANTS ARE FOUR OF ONE STAGE, NOT FOUR OF EVERYTHING.** Measured over the quoted
+   shader text of each macro in `tagpu_restore_glsl.h` (the doc comments mention `NK` and are not
+   shader source, which is what makes a naive grep say otherwise): `FS_VS`, `FILL_FS`, `OUT_VS` and
+   `OUT_FS` reference **neither** `NK` nor `WMAX`; only `CONV_FS` uses both. So the generator emits
+
+   | module | variants |
+   |---|---|
+   | `FS_VS` (shared by fill and conv) | 1 |
+   | `FILL_FS` | 1 |
+   | `CONV_FS` | **4** — `NK ∈ {1, 2, 4, 8}` |
+   | `OUT_VS`, `OUT_FS` | 1 each |
+
+   — **8 SPIR-V modules and 6 program pairings** (fill ×1, conv ×4, out ×1), against the "four
+   variants" the row implied for the whole set.
+
    **What the port is, beyond the shaders**: 1 132 lines of `tagpu_restoreglsl.c`, three programs
    (fill, conv, out) over five shaders, and its render targets are `GL_TEXTURE_2D_ARRAY` layers
    (`glFramebufferTextureLayer`, `glDrawBuffers` with up to `NK` attachments) in `GL_RGBA32F`,
