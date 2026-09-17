@@ -378,9 +378,11 @@ would not have shown up as a failure — it would have shown up as three landing
    and came out a solid filled quad — **3 891 px**. Fixed, the pass measures **32 px of 786 432**
    with the non-black counts equal at 10 324 a side, and those 32 px are landing 5b's flip.
 
-   **Not covered**: the cursor bucket and the post-fog layer are written and not measured — both
-   need a held drag at the instant of capture and they are mutually exclusive by lever. `ss != 1`
-   is refused rather than drawn, so it is a bound; zoom is untested either way.
+   **All seven draw kinds are measured.** The band box (held open across the capture) and the
+   captured post-fog layer (`mark.on=nocursor`) are **0 px** each — area primitives, whose sample
+   points sit on the half-integer grid and so cannot tie the way a zero-width line does.
+   **Not covered**: `ss != 1` is refused rather than drawn, so it is a bound and not a gap; zoom
+   is untested either way.
 #### Landing 5b — THE LANE'S FRAME IS UPSIDE DOWN, and no A/B on this plan could see it
 
 [FOUND BY THE OWNER, LOOKING AT THE ROUTE D WINDOW, 2026-09-17.] Filed here, between 5 and 6,

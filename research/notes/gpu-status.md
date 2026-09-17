@@ -7318,9 +7318,14 @@ gives **0 differing pixels of 786 432**.
 That last number is why the flip is filed as its own landing rather than noted: **the 32 px this
 landing measures ARE the flip**, and they are the first thing on this plan that the matched
 upside-down pair could not absorb. A horizontal line whose window
-y is an exact integer — which every order marker's is, because the engine projects them with
-integer arithmetic — floors to one row under GL and to the other under a mirrored viewport, since
-`floor(h − y)` and `h − 1 − floor(y)` agree for every y except an integer. Vertical strokes are
+y is an exact integer floors to one row under GL and to the other under a mirrored viewport, since
+`floor(h − y)` and `h − 1 − floor(y)` agree for every y except an integer. **And the order
+markers' y lands on one half the time, for a reason worth writing down**: `tagpu_order.c`'s
+`project` computes `sy = wz − walt·0.5 − eyeY + 32`, and for an order target `rec_pos` hands it
+the 16.16 snapshot of an integer world coordinate — so `sy` is an exact integer when the target's
+terrain altitude is **even** and a half-integer when it is **odd**. That is why some crosshairs in
+the difference image tie and others do not, which "the engine projects them with integers" alone
+does not explain. Vertical strokes are
 unaffected (x is not flipped) and area primitives are unaffected (their sample points are at
 half-integers and never on a boundary), which is exactly the pattern the difference image shows.
 
@@ -7332,19 +7337,38 @@ The captured frame carries bars, route dots, route lines, range circles, nine la
 group digits — verified in the captured image itself, not from the `mark:` counter line, which
 prints every 120 frames and is therefore the fixture's state and not the frame's.
 
-| build | non-black GL | non-black Vulkan | differing of 786 432 |
+| fixture / build | non-black GL | non-black Vulkan | differing of 786 432 |
 |---|---|---|---|
-| bars only (the first fixture) | 297 | 297 | **0** |
+| bars only — the first fixture | 297 | 297 | **0** |
 | six kinds, as first built | 10 208 | 15 097 | 5 144 |
 | + Bresenham lines | 10 266 | 14 157 | 4 066 |
 | + the text atlas bound | 10 324 | 10 324 | **32** |
-| + the lane's flip corrected | 10 361 | 10 361 | **0** |
+| …the same pair, **both** the viewport flip and `tagpu_abshot.c`'s row order corrected | 10 361 | 10 361 | **0** |
+| the band box held open (`cursor=8`) | 2 456 | 2 456 | **0** |
+| the captured post-fog layer (`nocursor`, `postfog=captured`) | 2 456 | 2 456 | **0** |
+
+**Read that fifth row carefully: it takes TWO changes, not one.** Correcting the
+viewport alone leaves the A/B at **20 540 px** — the Vulkan half is then upright and the GL half
+is still reversed, which is a mirror and nothing else. 0 px is what the pair measures once
+`tagpu_abshot.c` stops turning the GL rows over as well. [Caught by the landing review, which read
+the table against the prose above it.]
+
+**And the GL column moves on every row, including rows whose only change was Vulkan-side**, because
+the fixture is live — three units on a patrol, a pointer hovering one of them — and is not
+frame-reproducible. Each row's own diff is a paired measurement of one frame and is evidence;
+differences *between* rows' GL counts are not.
 
 #### Not covered
 
-* **The cursor bucket and the post-fog layer are written and not measured.** Both need a held
-  drag at the moment of capture and they are mutually exclusive by lever (`nocursor` is what fills
-  the layer). Two of the seven draws, and the only two drawn with fog forced off.
+* **The cursor bucket and the post-fog layer are no longer open — both closed at 0 px**, as
+  the last two rows of the table. They take a band box held open across the capture
+  (`down:lbutton`, move, and no release until after), and they are mutually exclusive by lever
+  because `nocursor` is what fills the layer — so they are two captures, not one. **All seven draw
+  kinds are now measured.** Both come out 0 px even with the flip in place, and that is the
+  tie-break argument confirmed from the other side: the band box is built by `put_outline` →
+  `put_bar` → `put_barf`, which emits triangle quads, and the layer is a textured quad. An area
+  primitive's coverage is decided at sample points on the half-integer grid, which never land on a
+  pixel boundary, so mirroring cannot move one. Only a zero-width line can tie.
 * **One map, one resolution, one GPU, one OS, `ss=1`, zoom 1.** The `ss != 1` line width is
   *refused* rather than drawn, so it is a bound and not a gap; zoom is untested either way.
 * **The flip above is diagnosed and proven and NOT fixed** — it is nine files and every pass's A/B
