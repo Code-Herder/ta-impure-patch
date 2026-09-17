@@ -229,14 +229,15 @@ of everything else. The order below is the corrected one.
 
      **CORRECTION, 2026-09-17: the vertices are NOT there to be read.** The sizing above said
      they came "out of `tagpu_hires.c`'s static buffer". They do not —
-     `tagpu_hires.c:1396` does `free(m->v); m->v = NULL;` the moment the VBO is uploaded, with
-     the comment *"the vertex data is the GPU's now"*. A Vulkan pass cannot read a GL buffer, so
+     `tagpu_hires_vao` frees `m->v` the moment the VBO is uploaded, with the comment *"the vertex
+     data is the GPU's now"* (named by function rather than by line: gate 3b moved it). A Vulkan pass cannot read a GL buffer, so
      3b needs a **retained CPU copy**, armed the way the restored mirrors are, and that makes it
      a producer change and not only a consumer one. It is the same shape for the third gate
      running — landing 2 read atlases back, 3a read the unit atlas back, 3b keeps vertices — and
      it is the cheapest of the three: `HVSTRIDE` is 9 floats a vertex and the depth path needs
-     only three of the four attributes (position, uv for the cutout, piece index; the normal is
-     the body pass's). **Checked, not assumed** — the free is on the line after the group loop's
+     only three of the four attributes for its arithmetic (position, uv for the cutout, piece
+     index; the normal is the body pass's) — though the pipeline still binds all four, because the
+     vertex shader is the body's and reads `aNrm` on every path. **Checked, not assumed** — the free is on the line after the group loop's
      texture uploads.
      **The albedo textures are the part that can be deferred.** The depth path samples the albedo
      only for the alpha cutout — `if (uCutoff >= 0.0 && tex.a * uBase.a < uCutoff) discard;` one
@@ -250,8 +251,9 @@ of everything else. The order below is the corrected one.
 
      **DONE, and it found a defect that belongs to no gate on this list.** Measuring 3b on the
      fixture that could actually see a caster — `crowd-static`, 257 units — turned up **65 px of
-     209 814 differing with everything this plan has built turned OFF**: shadows off, the restored
-     atlas off, the replacement mesh parked. All 65 lie on a GL colour edge and 26 carry a
+     209 814 differing with everything this plan has built turned OFF**: shadows off and the
+     restored atlas off, so the caster pass is never reached at all. (Parking the mesh as well is
+     a separate control, 164 px at `assets=0`; §2.38 has every row.) All 65 lie on a GL colour edge and 26 carry a
      neighbouring GL pixel's exact value, so it is the two rasterisers disagreeing about which
      triangle owns a pixel an edge passes through. **It has been invisible since G19e because
      every A/B on this plan has been taken on a four-unit fixture**, where no edge lands on a

@@ -1725,7 +1725,7 @@ static void vk_down(void)
         tagpu_vk_fx_down(&s_pass);
         tagpu_vk_shadow_down(&s_pass);
         tagpu_vk_unit_down(&s_pass);
-    tagpu_vk_hires_down(&s_pass);
+        tagpu_vk_hires_down(&s_pass);
         tagpu_vk_gui_down(&s_pass);
         ab_drop("the lane coming down", idle);
         tagpu_vk_shot_down(&s_pass);

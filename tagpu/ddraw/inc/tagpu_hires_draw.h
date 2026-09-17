@@ -138,6 +138,13 @@ typedef struct TAGPU_HIHAND {
 } TAGPU_HIHAND;
 
 /* Exactly once per frame, and only for the frame it was published for --
-   `now` is the fork's render-thread counter. 0 = nothing to draw. */
+   `now` is the fork's render-thread counter, COMPARED against the frame the
+   record was made on. 0 = nothing to draw. */
 int  tagpu_hires_handover(TAGPU_HIHAND* out, unsigned now);
+
+/* This frame's counter, and the previous frame's record dropped with it. Called
+   unconditionally once per frame from `tagpu_native_frame`, beside
+   `tagpu_posedraw_frame`: `tagpu_hires_depth` runs only when there IS a
+   replacement mesh, so without this a record outlives the frame it describes. */
+void tagpu_hires_frame(unsigned frame_counter);
 #endif

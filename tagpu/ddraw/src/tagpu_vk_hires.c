@@ -533,6 +533,14 @@ static int vb_for(const TAGPU_VKPASS* d, const TAGPU_HIMESH* m)
         return -1;
     }
     if (free < 0) return -1;
+    /* THE STRIDE IS CARRIED SO THAT IT CAN BE CHECKED, and the first draft
+       carried it and ignored it. `HI_VSTRIDE` and `vertex_layout`'s offsets are
+       this file's copy of the producer's `HVSTRIDE`; if that ever changes, a
+       copy sized on ours reads past the producer's array by
+       `ntri * 3 * (36 - 4 * stride)` bytes and draws a wrong picture either
+       way. Refusing is the pass's own idiom and costs a branch.
+       [The gate-3b landing review's finding 2.] */
+    if (m->stride * 4 != HI_VSTRIDE) return -1;
     sz = (VkDeviceSize)m->ntri * 3 * HI_VSTRIDE;
     if (sz == 0) return -1;
     {
@@ -626,7 +634,7 @@ void tagpu_vk_hires_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
     s_slot = slot;
 
     if (s_state == ST_UNBUILT) {
-        if (!resolve(d)) { s_state = ST_REFUSED; return; }
+        if (!resolve(d)) { s_state = ST_REFUSED; s_downOwed = 1; return; }
         vkGetPhysicalDeviceProperties(d->pd, &props);
         s_ualign = props.limits.minUniformBufferOffsetAlignment;
         if (s_ualign == 0) s_ualign = 1;
@@ -634,11 +642,11 @@ void tagpu_vk_hires_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
             plog(d, "hires: maxUniformBufferRange is %u and the pose block needs "
                     "%d - the replacement meshes' casters stay with GL",
                  (unsigned)props.limits.maxUniformBufferRange, VS_SZ);
-            s_state = ST_REFUSED; return;
+            s_state = ST_REFUSED; s_downOwed = 1; return;
         }
         if (!build_descriptors(d)) {
             plog(d, "hires: no descriptors for the caster pass");
-            s_state = ST_REFUSED; return;
+            s_state = ST_REFUSED; s_downOwed = 1; return;
         }
         s_state = ST_READY;
     }
@@ -702,6 +710,13 @@ void tagpu_vk_hires_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
         const TAGPU_HIUREC* u = &s_h.units[i];
         unsigned char* p = s_uboMap[slot] + off;
         int np = u->npose;
+        /* AND THE DESTINATION, not only the source. `np` bounded the read out
+           of `rows` and nothing bounded the write into this unit's 2480-byte
+           block -- `uPiece` is 144 vec4, so `np > 48` walks off the end of it.
+           The producer clamps to TAGPU_HMAXPIECE today; this is a seam struct
+           and a value that crosses one is DATA until it has been bounded here.
+           [The gate-3b landing review's finding 3.] */
+        if (np < 0 || np > TAGPU_HMAXPIECE) return;
         memset(p, 0, VS_SZ);
         if (np > 0 && u->rowOff + (unsigned)np * 12 <= s_h.nrow)
             memcpy(p + VS_PIECE, s_h.rows + u->rowOff, (size_t)np * 12 * sizeof(float));

@@ -296,6 +296,7 @@ static TAGPU_HIGREC* s_hiG;   static int s_hiGn, s_hiGcap;
 static float*        s_hiRow; static int s_hiRown, s_hiRowcap;
 static TAGPU_HIHAND  s_hiPub;
 static int           s_hiHave;
+static unsigned      s_hiFrame;     /* the frame the record is FOR */
 static int           s_hiCutout;
 static int           s_hiDropped;   /* records that did not fit; refuses the frame */
 
@@ -777,6 +778,7 @@ void tagpu_hires_depth(const TAGPU_HVIEW* v, const TAGPU_HUNIT* u, int n,
        alternative is silent. */
     if (s_hiDropped || s_hiUn <= 0) { s_hiHave = 0; return; }
     memset(&s_hiPub, 0, sizeof s_hiPub);
+    s_hiPub.frame = s_hiFrame;
     s_hiPub.depthOn = 1;
     memcpy(s_hiPub.shadowMat, shadowMat, sizeof s_hiPub.shadowMat);
     s_hiPub.units = s_hiU;   s_hiPub.nunit = s_hiUn;
@@ -794,11 +796,35 @@ void tagpu_hires_depth(const TAGPU_HVIEW* v, const TAGPU_HUNIT* u, int n,
    answers 0 exactly as tagpu_posedraw.c's does. */
 int tagpu_hires_handover(TAGPU_HIHAND* out, unsigned now)
 {
-    if (!s_hiHave || !out) return 0;
-    s_hiPub.frame = now;
+    /* THE STAMP IS COMPARED, NOT WRITTEN, and the first draft of this wrote it.
+       That is not a tidiness point: `tagpu_hires_depth` is the only thing that
+       clears the record, and `tagpu_native.c` calls it behind `if (nhi)` -- so
+       a record published on a frame the seam did not consume (an acquire that
+       failed, a resize, the lane disarmed mid-session) SURVIVES into a later
+       frame with no replacement mesh on screen at all. The census would then
+       add a caster the GL map does not hold, and `otherCasters - ours` going
+       NEGATIVE sails through a `> 0` guard: the Vulkan map gets a phantom
+       shadow the oracle has not got, silently, with `drew == ours` so the short
+       -count check passes too. That is the exact direction tagpu_vk_shadow.c's
+       census comment asserts cannot happen.
+       [FOUND BY THE GATE-3b LANDING REVIEW. tagpu_posedraw.c has had the
+       compare since G19e; this pass copied its shape and not its guard.] */
+    if (!s_hiHave || !out || s_hiPub.frame != now) return 0;
     *out = s_hiPub;
     s_hiHave = 0;
     return 1;
+}
+
+/* THIS FRAME'S COUNTER, and the previous frame's record dropped with it --
+   called unconditionally from `tagpu_native_frame`, beside
+   `tagpu_posedraw_frame` and for the same two reasons. Dropping here is what
+   makes the stamp above a belt-and-braces check rather than the only one: it
+   closes the `nhi == 0` hole at the source, where the record simply ceases to
+   exist, instead of relying on a consumer to notice it is stale. */
+void tagpu_hires_frame(unsigned frame_counter)
+{
+    s_hiFrame = frame_counter;
+    s_hiHave = 0;
 }
 
 void tagpu_hires_draw_glreset(void)

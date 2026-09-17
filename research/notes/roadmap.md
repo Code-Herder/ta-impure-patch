@@ -2647,9 +2647,9 @@ control proves is the soft-shadow PCF's, because parking the mesh leaves it at t
 coordinates with the same two values.
 
 **And measuring it on a fixture big enough to see a caster found a defect that belongs to no gate
-on this plan.** On the 257-unit crowd, 65 px of 209 814 differ with shadows off, the restored
-atlas off and the replacement mesh parked — every one of them on a colour edge, 26 carrying a
-neighbouring pixel's exact value. It is the two rasterisers disagreeing about which triangle owns
+on this plan.** On the 257-unit crowd, 65 px of 209 814 differ with shadows off and the restored
+atlas off — every one of them on a colour edge, 26 carrying a neighbouring pixel's exact value.
+(Parking the mesh is a *separate* control and gives 164 px at `assets=0`; both are in the table.) It is the two rasterisers disagreeing about which triangle owns
 a pixel an edge passes through, it is 0.031 % of drawn pixels, and it has been invisible since
 G19e because every A/B on this plan was taken on a four-unit fixture. Characterised, not traced;
 it needs its own landing.
