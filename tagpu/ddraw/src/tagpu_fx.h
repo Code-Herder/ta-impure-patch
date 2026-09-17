@@ -179,6 +179,14 @@ typedef struct TAGPU_FXHAND {
     int                   atlasDim;
     int                   atlasRows;  /* the rows the shelf packer has used   */
     unsigned              atlasSerial;
+
+    /* CLASSIC++'s RESTORED TWIN, MIRRORED (the Vulkan-only plan's gate 2) --
+       tagpu_feat.h states the contract and this is the same one. NULL until the
+       restorer has painted and the read-back has run; `atlasRgbRows` is the
+       read-back's own high-water mark and lags the shelf cursor by design. */
+    const unsigned char*  atlasRgb;
+    int                   atlasRgbRows;
+    unsigned              atlasRgbSerial;
     const unsigned char*  pal;        /* 256 x RGBA8, tagpu_pal_live()        */
     unsigned              palSerial;
     /* THE FLASH LIGHT TABLE, 32 x 1, THREE BYTES A TEXEL -- the buffer the GL

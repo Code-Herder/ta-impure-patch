@@ -123,6 +123,7 @@ static int  s_ab, s_abDone, s_abFrame;
 static int  s_pubHave;                 /* this frame's hand-over is waiting   */
 static TAGPU_FXHAND s_pub;
 static int  s_mirrorAsked;             /* the atlas mirror has been asked for */
+static int  s_mirrorRgbAsked;          /* ...and its Classic++ restored twin  */
 static int  s_armed = -1;
 static int  s_log = 0, s_lines = 1, s_models = 1, s_sprites = 1, s_expl = 1, s_debris = 1;
 static int  s_passive = 0;             /* gather + log only; engine keeps drawing */
@@ -181,6 +182,10 @@ static void read_arm(unsigned frame_counter)
        before the atlas has its dimensions is retried. */
     if (!s_mirrorAsked && s_atlas.dim > 0 && tagpu_vk_armed())
         s_mirrorAsked = tagpu_gaf_atlas_mirror(&s_atlas);
+    /* AND THE RESTORED TWIN'S, behind the same latch and gated additionally on
+       Classic++ actually painting -- tagpu_feat.c states the reasoning. */
+    if (s_mirrorAsked && !s_mirrorRgbAsked && tagpu_classicpp_assets())
+        s_mirrorRgbAsked = tagpu_gaf_atlas_mirror_rgb(&s_atlas);
     /* the engine skip is armed by a successful gather (below), never by the
        file alone; passive turns it off here */
     if (s_passive) tagpu_fxown_set_skip(0);
@@ -391,6 +396,7 @@ void tagpu_fx_glreset(void)
        tagpu_fx.h has the distinction.) */
     s_pubHave = 0; s_abFrame = 0;
     s_mirrorAsked = 0;
+    s_mirrorRgbAsked = 0;
     tagpu_gaf_atlas_lost(&s_atlas);
 }
 
@@ -1014,6 +1020,9 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total, int scaf)
        same, which is the reason not to make this one file differ.
        [Stated accurately after the G19e effects review, 2026-09-15.] */
     if (!s_mirrorAsked) { s_pubHave = 0; s_abFrame = 0; return; }
+    /* ONE READ-BACK STEP PER PUBLISHED FRAME, on the render thread with the
+       context current, exactly as tagpu_feat.c does it. */
+    if (s_mirrorRgbAsked) tagpu_gaf_atlas_mirror_rgb_step(&s_atlas);
     memset(&s_pub, 0, sizeof s_pub);
     for (b = 0; b < NBUCKET; b++) { s_pub.vert[b] = s_verts[b]; s_pub.n[b] = s_nv[b]; }
     s_pub.gw = (float)v->gw; s_pub.gh = (float)v->gh;
@@ -1042,6 +1051,11 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total, int scaf)
         s_pub.atlasRows = rows;
     }
     s_pub.atlasSerial = s_atlas.mirrorSerial;
+    if (s_atlas.mirrorRgb && s_atlas.mirrorRgbRows > 0) {
+        s_pub.atlasRgb       = s_atlas.mirrorRgb;
+        s_pub.atlasRgbRows   = s_atlas.mirrorRgbRows;
+        s_pub.atlasRgbSerial = s_atlas.mirrorRgbSerial;
+    }
     s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();
     /* THE LIGHT TABLE ONLY WHEN IT HAS BEEN BUILT. A frame with flash vertices
        and no table is one the GL twin drew through an incomplete texture, and
