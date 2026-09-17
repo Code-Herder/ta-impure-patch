@@ -6872,6 +6872,1360 @@ thread; `tagpu_posedraw.c` publishes `atlasRgb` with **its own rows and its own 
 `tagpu_vk_unit.c` takes a second RGBA8 image at binding 43, which stops being the placeholder the
 G19e author left there.
 
+**Gate 2's five findings were applied here before they could be made again** — the serial ALONE
+decides the upload, the rows are bounded against the atlas's own square in the consumer, the image
+is built before the refusal that tests it, and a device refusal of the image is non-fatal. The
+refusal also stopped being a statement about the session: it said *"draws nothing this session"*
+and now says *"until the read-back produces rows"*, which is a few frames.
+
+#### THE MEASUREMENT WAS WRONG FIRST, AND EVERYTHING ELSE FOLLOWS FROM THAT
+
+The first version of this landing measured **0 px** and was wrong in four independent ways at
+once. The reason it could be is one line in `tagpu_native.c`:
+
+```c
+if (fxOn || sfxOn || featOn || terrOn || markOn) {
+    …
+    tagpu_rglsl_step();          /* the restorer paints HERE, and only here */
+}
+```
+
+**A unit A/B armed with `native.on` alone never steps the restorer.** The twin is created, the
+job is armed, `restoreglsl: unit: lazy restore armed` appears in the log — and nothing is ever
+painted. The `uRestored == 1` branch then samples alpha 0 on both lanes and both fall back to the
+palette per texel, so the two agree perfectly *about a branch neither of them exercised*.
+
+**`mark.on` is the lever that fixes it**: it is on that list and it is the only one with no
+Vulkan pass of its own, so the restorer paints and the unit pass is still the only pass drawing
+into the Vulkan frame — which the capture guard requires. With that one file added, the same
+fixture went from **0 px** to **2 126 of 2 132 unit pixels differing**.
+
+**The check that the twin actually painted costs nothing and there is no log line for it.**
+`tagpu_restoredump.on` writes the twin once the job goes idle; failing that, run the fixture twice
+with `assets=1` and `assets=0` and `cmp` the two **GL** captures. Byte-identical means the
+restorer painted nothing and the run says nothing about restored art. §2.36's feature and effects
+figures carry exactly this caveat, and now it is known why.
+
+#### Four filter faults, each hidden behind the one before
+
+With the fixture honest, the residual came apart in order. Every figure is `selbox-facings` on
+Two Continents, `ss=1`, the unit pass's own A/B (`tagpu_posedraw.ab`):
+
+| what was wrong | why | worst channel |
+|---|---|---|
+| the image was `dim × rows` | the UVs are normalised against the whole atlas (`tagpu_gaf.c`: `u0 = x / a->dim`) and the GL twin is `dim × dim`, with no scale uniform between them — so `v = 1.0` meant row `rows`, off by `dim/rows` | — |
+| binding 43 had the **indexed** sampler | the restored twin is the only texture this shader reads that holds true colour instead of palette indices, so it is the only one GL filters (`GL_LINEAR`) | 155 → 124 |
+| the image had **one mip level** | `tagpu_gaf.c` gives a mipped twin `GL_LINEAR_MIPMAP_LINEAR` to `GL_TEXTURE_MAX_LEVEL`; a 32-texel cell lands on a ~23 px sprite, so LOD ≈ 0.5 and GL blends levels 0 and 1 in ordinary play | 124 → 122 |
+| the mirror's levels 1+ were **one paint batch stale** | `twin_mips` runs at the top of a frame, `tagpu_rglsl_step` paints in the middle, the read-back runs at the end — so the read-back that first sees a new paint count sees level 0 fresh and the levels above it as they were *before*, then latches `mirroredPainted` and never looks again | 122 → **7** |
+
+**The mip levels are read back, not re-derived.** A blit chain on the Vulkan side would be this
+fork guessing at `glGenerateMipmap`'s reduction, and the guess would be a per-driver difference no
+note could pin down. Reading GL's own levels makes the two byte-identical by construction — the
+rule the whole seam runs on.
+
+**The fourth one was found by looking at *where* the residual was rather than trying another
+filter.** 422 of 581 differing pixels were more than 8 levels apart and the Vulkan side showed
+flat greys where GL had colour: the signature of sampling a mip built from different texels, not
+of a filter setting. Three filter guesses had moved the number by 33 levels between them; reading
+the difference image moved it by 115.
+
+#### Anisotropy: the one difference that is not a bug, and the owner's call
+
+With everything above carried across, the residual was **566 of 2 132 unit pixels at 1024×768 and
+413 of 1 528 at 640×480, worst channel 9**, ink identical. Setting the twin's anisotropy to 1 on
+**both** lanes gives **0 px of 786 432 at 1024×768 and 0 px of 307 200 at 640×480**.
+
+So the whole remainder is the anisotropic filter. Both APIs leave sample placement to the
+implementation and the same driver does it differently for each — there is no Vulkan sampler
+state that reproduces GL's, and none is coming.
+
+**The owner's decision (2026-09-16): play keeps 4× on both lanes; the A/B is taken at `aniso=1`
+as a stated substitution.** It is the same shape as G19f's walk, which compared the lanes rather
+than running `strict`: the oracle still catches every porting mistake and excludes only the one
+thing the specs leave free. `aniso=` is a `tagpu_classicpp.cfg` knob, default 4, and **both lanes
+read it** — `tagpu_gaf.c` applies it and publishes what it actually got, `tagpu_vk_unit.c` builds
+its sampler from the same number, and a knob changed mid-session makes the two disagree, which is
+caught: a sampler cannot be rebuilt mid-frame for the same reason a shared image cannot, so the
+pass compares the published ratio against its own and stands the frame down.
+
+`samplerAnisotropy` is enabled on the device for this, exposed as `anisook`/`maxAniso` beside
+`flipok` and `zclipok` — the first core feature bit the seam asks for rather than an extension.
+
+#### What was measured
+
+| configuration | result |
+|---|---|
+| pre-gate-3 DLL, Classic++ art on | **no picture at all** — the pass refused for the session |
+| `aniso=1`, 1024×768 | **0 px of 786 432**, 2 128 non-black a side |
+| `aniso=1`, 640×480 | **0 px of 307 200**, 1 525 non-black a side |
+| the 4× play default, 1024×768 | the pass **draws**: 566 of 2 132 unit px, worst channel 9, ink identical |
+
+The first row is what this landing changed: the same fixture drew *nothing* before it.
+
+#### Not covered
+
+* **The replacement meshes — gate 3b, and not an optional case.** A tacli instance ships
+  `hires/armpw.glb` **active** (`hires/off/` is a parking directory, not a lever), so the census
+  refuses **1** caster with one Peewee on screen and **16** on the 257-unit `crowd-static`. Every
+  world pass stands down on those frames.
+* **The 4× difference is bounded but not traced.** 9 levels on ~27 % of unit pixels is what two
+  fixtures at two resolutions showed; no attempt was made to derive it from either driver's
+  sample pattern, and none is planned.
+* **One map, one fixture, two resolutions, one GPU, one OS,** and `ss=1`, which the A/B requires
+  and the patch does not ship. The 0 px is at `shadows=0`; with the cast-shadow map on, the
+  soft-shadow PCF adds the 1 px §2.37 recorded before the fixture was fixed, and that pixel is on
+  both builds.
+* **The terrain and unit passes cannot be A/B'd in the same run** once shadows are on: terrain
+  needs the unit pass drawing for the census to close, and two drawing passes make the lane refuse
+  the capture. The chain closing is evidenced by the absence of every refusal plus the guard's own
+  message naming two passes; the pixels are one pass at a time.
+
+## 3. Known limits` header; this one dropped 128
+lines about the UI pass into the middle of the shadow map's, because the anchor it was inserted
+before — `#### Not covered` — occurs in three sections and the first match is not this one. Both
+were caught by the same thing and by nothing else: **regenerating the wiki and reading the headings
+of the page you just wrote.** A note that renders in the wrong section is not documentation, and
+`git diff` shows it as an addition in the right file.
+
+#### Landing 5 — the context switch, and the crash that was hiding behind it
+
+**THE SWITCH IS MEASURED IN ONE PROCESS, BOTH DIRECTIONS, AND IT IS 0 PX AT EVERY STOP.** Every
+figure above this was taken after a `--restart`, which starts a process, crosses the shell→game
+switch on the way in, and measures the far side. This one drives the menus by hand
+(`ui click SINGLE` → `Skirmish` → `Start`, and back out through `EXIT` → `MAINMENU` → `CHOICE1`)
+so that both sides of both crossings are the same process:
+
+| | |
+|---|---|
+| the shell, 640×480, Classic++ armed | **0 of 307 200** |
+| → the switch: lane down, window destroyed, new window, new swapchain, **up in 173 ms**, one fresh start | |
+| in game, 1920×1080 | **0 of 2 073 600** |
+| → the switch back: down, destroyed, created, swapchain at 640×480, **up in 145 ms** | |
+| the shell again, after the round trip | **0 of 307 200** |
+
+**THE WHOLE-LANE TEARDOWN IS CORRECT AND NOT A COST TO REMOVE.** `render_ogl.c`'s render loop calls
+`tagpu_vk_render_stop` on every exit, and its comment is the argument: a mode change invalidates the
+HWND the Vulkan surface was made on, so the lane comes down on the thread that owns it rather than
+being left to discover a dead window. This is also what the ta-drive skill measured for the world
+passes in G19e ("an in-process map change brings the WHOLE Vulkan lane down and back up").
+
+##### And the reverse crossing CRASHED, in the GL publisher, with nothing to do with this port
+
+Quitting a skirmish to the main menu at 1920×1080 took an access violation and the process then
+spun at 100 % CPU with no further output. The route is the one the skill documents as the way to do
+it, and `MAINMENU.GUI 640x480` is its own stated criterion for the level having really torn down.
+
+**IT REPRODUCES WITH `vk.on` REMOVED, and the fault is identical** — same instruction pointer, same
+call stack, same illegal-read shape. That is what makes it the fork's rather than the lane's, and it
+was worth an extra run to establish before touching anything.
+
+**Finding it took one step past what TA's own crash handler says.** The handler prints "in module
+TotalA.exe", but that image ends at `0x51FC00` and the IP was `0x7903BBA1`; `/proc/<pid>/maps` on
+the still-spinning process puts that page on **our own `ddraw.dll`**, so it is RVA `0x3BBA1`.
+Disassembling there gives `cmp BYTE PTR [edi+0x9], 0` — the exact bytes the ErrorLog printed — with
+`0x811C9DC5`, this function's own FNV basis, two instructions later.
+
+The function is `frame_key` in `tagpu_gui_hook.c`, and the defect is one line wide:
+
+```c
+if (!ptr_ok(px)) return NULL;      /* the PIXEL pointer is checked */
+if (fr[0x09] == 0) {               /* the FRAME HEADER is not, and never was */
+```
+
+`fr[0x09]` is `TAGPU_GF_COMP`, and the per-level GAF bank it lives in had just been freed by the
+teardown's cascade (`freed 279 block(s)`). Every other caller of the GAF resolvers in this tree —
+`tagpu_fx.c`, `tagpu_feat.c`, `tagpu_render3do.c`, `tagpu_gui_surf.c` — puts the header through
+`tagpu_gaf_frame_sane` first.
+
+##### The fix is an ordering, and the obvious cheaper key does not work
+
+A `frame_sane` on `fr` **would** have stopped this crash, because the page is unmapped. It is still
+not the fix: a freed-but-still-mapped page passes `IsBadReadPtr` and returns garbage, which is the
+same bug with better odds and wrong art instead of a stop. It is kept as a **bound**, and this page
+says plainly that it is not the safety argument.
+
+The safety argument is that the op carries **the level it was OBSERVED in**, and `publish` refuses
+to resolve a GAF frame while a teardown is in flight, from a level that has ended, or when nothing
+is tracking levels at all.
+
+**THE "ONE THREAD" PART IS ESTABLISHED BY THE CODE, AND A PREVIOUS REVISION OF THIS PARAGRAPH SAID
+IT WAS NOT.** It claimed `before_flip` checks `on_game_thread()` while "the blit observers that call
+`op_add` do not". They all do: `tagpu_gui_leaves.h` gates every entry point that can reach `op_add`
+— `before_gaf`/`gafa`/`gafb` (:102,103,106), text (:121), line (:177), `bar`/`frame`/`rect`/`focus`
+(:202,205,206,208), copy (:219), gafd (:249), scale (:270), fill (:292) — and `on_game_thread()` is
+`s_gameTid != 0 && GetCurrentThreadId() == s_gameTid` with `s_gameTid` set in `tagpu_gui_init`, so it
+is never vacuously true. `publish` itself runs only from `before_flip`, past the same check. The
+stamp and the bump are on one thread, by construction, and this is program order rather than a claim
+about visibility. [The false version was caught by BOTH reviewers of the third pass; a note that
+invents a hole is worse than a missing one, because the next session goes and "fixes" it.]
+
+**THE GENERATION IS `tagpu_packet_pub`'s, AND KEYING IT ON `tagpu_reclaim`'s WAS THE FIRST VERSION'S
+REAL DEFECT.** Reclaim's generation moves only while reclaim is ARMED — and `tagpu_reclaim.off`, one
+file, leaves it a constant `0` while the engine frees the GAF banks exactly as before, because the
+cascade is the ENGINE's and reclaim defers only `Object3do` and model templates. The gate was
+therefore inert in precisely the configuration that needs it, with `frame_sane` — the probe this
+section says is not the safety argument — left as the only thing between the shipped DLL and the
+crash. **Both landing-5 reviewers found it independently**, the ninth such pair on this lane.
+
+The tree had already ruled on this class and the fix used the counter that does not move.
+`tagpu_packet_pub` installs its **own** observer on the teardown `0x491B60` when reclaim is not
+armed, for the stated reason that the level-end packet must not depend on another module being
+armed, and `tagpu_packet_pub_level_gen`'s own header says it is what "a game-thread observer that
+latches per-level state" should stamp with. `tagpu_packet_pub_level_tracked()` is the first test:
+when no provider exists the generation never moves, and no ordering being available is a reason to
+**refuse** the read rather than to take it.
+
+**AND THAT PREDICATE WAS WRONG THE FIRST TIME, WHICH IS THE FOURTH LANDING RUNNING WHERE THE
+RE-REVIEW FOUND A DEFECT INSIDE A FIX.** It read `s_levelEndBy != 0`, which is assigned only when the
+PUBLISHER is armed — so under `tagpu_packet.off` it answered "nothing tracks levels" while the
+generation was moving perfectly well, because `tagpu_packet_pub_level_end` bumps it as its first
+statement, above every gate, and reclaim's wrap calls that from a hard-wired stub whether this
+module is armed or not. The gate would then have refused **every** GAF op for the whole session and
+degraded every UI sprite to a box upload — fail-safe, and a total silent loss of the sprite path on
+the one lane whose cost is about to be measured. It is `s_levelEndBy != 0 ||
+tagpu_reclaim_level_tracked()` now: either provider moving the counter is enough.
+
+One asymmetry between the two providers is worth knowing and is **not** closed: reclaim's wrap is an
+unconditional stub, so it bumps the generation on whatever thread the teardown runs on, while this
+module's own observer returns early off the game thread and the generation then does **not** move
+for that teardown — which fails OPEN at the gate. It is only reachable if `0x491B60` can run off the
+game thread, which the review could not establish either way.
+
+**AND THE WINDOW THIS SITE ACTUALLY SEES IS NOT THE ONE THE FIRST DRAFT DREW.** It argued that the
+teardown flag covers the frees and the generation covers what follows, so neither is sufficient
+alone. That is true of the flag and the generation in general and **false of this call site**:
+`publish` runs only from `before_flip`, and `s_teardown` is non-zero only while that same thread is
+inside `0x491B60`, which does not flip — so the closing test is unreachable from here today. The
+case that is real is the **opposite** order, and it is why the generation does the work: at
+`0x460635` the engine calls the teardown and pops the screen **afterwards**, flag already down, and
+those ops are refused because their generation is stale. The closing test stays as belt — a flip
+reached from inside a teardown would be caught by it — and is named as belt rather than as the
+argument. [The reviewer traced all six `call 0x491b60` sites to establish this.]
+
+The fallback when any test refuses is the op's own box out of **our mirror of the surface**, not out
+of the asset — so the picture is unchanged and only the sprite's identity is lost.
+
+**THE COUNTER IS THE SHAPE OF THE FIX; IT IS NOT EVIDENCE THAT THE FIX WORKS.** Two versions of this
+paragraph thought otherwise. The first argued from `lost=` being flat — but `lost=` is the CONSUMER's
+atlas miss, and a publisher-side refusal emits `PK_PIXELS` and never a `PK_SPRITE`, so it could not
+have moved whatever happened. The second argued from `gafstale=` alone, which says how often the gate
+fired and nothing about whether the crash it is aimed at would have happened. **The fault is
+intermittent, so on this route every run that does not crash looks like a fix**, and a clean run
+after a change is worth nothing until the rate of the thing being prevented is known. That rate was
+never measured, and that — not the counter — is the real defect in how this landing was first argued.
+
+**SO IT WAS MEASURED, ON THREE BINARIES.** The same route five times per arm — `SINGLE` → `Skirmish`
+→ `Start`, into the game, then `tab tab` → `EXIT` → `MAINMENU` → `y`, with the shell's 640×480 read
+back as the proof that the level really tore down — at 1920×1080 with the **Vulkan lane DOWN**, which
+is the configuration the crash was first seen in:
+
+| arm | the `frame_sane` bound | the ordering | crashed |
+|---|---|---|---|
+| **A** — neither, i.e. the landing-4 tip | out | out | **4 of 5** |
+| **B** — the ordering ALONE | out | **in** | **0 of 8** |
+| **C** — what ships | **in** | **in** | **0 of 5** |
+
+**Arm B is the one that carries the claim, and it is why the bound is not the argument**: with
+`frame_sane` compiled OUT and only the ordering standing, the gate refused the reads at the teardown
+and nothing crashed in **eight** runs, against a base rate of four in five — `0.2^8 ≈ 3×10⁻⁶` if the
+ordering did nothing. It was run to eight rather than five for a second reason: with no bound in the
+build, arm B is also the probe for the SCREEN-POP window below, which the gate provably does not
+cover.
+
+**Arm A's four crashes are one fault, not four.** Every one of them: `80 7f 09 00` at the
+instruction pointer — `cmp byte ptr [edi+9], 0`, which IS `fr[0x09] == 0` — at the same EIP, with
+the faulting address exactly `EDI+9` and reading `0x09A48D21` every time, because the per-level bank
+comes back at a fixed address and only the timing of the race varies.
+
+And the fifth arm-A run, the clean one, has an explanation rather than being noise: on arm C the
+counter reads `gafstale=0` on one run in five as well, and **a run with nothing straddling the
+boundary is a run that would not have crashed unfixed either.** Two fractions of one-in-five
+agreeing is n=1 against n=1 and is called a coincidence worth noting, NOT a positive control — the
+third review pass asked for that word back and was right to. What carries weight is arm B: 0 of 3
+against a base rate of 0.8 is p ≈ 0.008 on its own.
+
+The counts differ between arms — arm B refused 147 where arm C refuses 215 or 225 — and that is
+run-to-run spread, not a difference between the builds: arm C alone ranges 0 to 225 across its five.
+How many ops are straddling the boundary depends on where in the census window the teardown lands.
+
+The shape inside one arm-C run, which is what the counter is actually good for:
+
+| | |
+|---|---|
+| in play | **`gafstale=0`** on 30 heartbeats while `sprites=` climbs 9 831 → 534 525 |
+| `packet: level end -> gen 1 (reclaim's 1)` | 6462 in-play draws that level |
+| after the teardown | **`gafstale=215`** on 18 heartbeats — and **no other value all session** |
+
+Across the five arm-C runs: 215, 225, 0, 225, 215. It steps once, at the boundary, and those are
+reads that used to go into freed memory.
+
+**THE TRAP THAT COST A ROUND OF THIS: THE ARMS WERE FIRST RUN WITH THE VULKAN LANE UP, AND ARM A
+READ CLEAN 1 OF 1 THAT WAY.** Route D draws a second window's worth of work in the same iteration of
+`ogl_render`, so the publisher's queue drains on a different schedule and the race closes. A crash
+reproduction has to run in the configuration the crash was seen in, and "the lane is off" is part of
+that configuration even when the bug has nothing to do with the lane. On the strength of those clean
+runs this section had already withdrawn the `225` above as an artefact of the `s_levelEndBy` defect.
+**That withdrawal was wrong** — the number reproduces at 215/225 on the corrected predicate, because
+in the configuration it was measured in the publisher was armed and that disjunct never fired. The
+re-review's finding stands as a latent defect under `tagpu_packet.off`; the measurement it appeared
+to discredit was sound.
+
+**THE SAME GATE NOW STANDS IN FRONT OF THE FONT, AND IT SHIPS UNMEASURED ON THE PATH IT GUARDS.**
+`publish`'s `OP_TEXT` branch handed `op->frame` — the FONT object here, not a GAF frame — straight to
+`gfont_slot`, which reads `f[3]` and `f[0]` with no bound, no probe and no generation, on a pointer
+captured up to `CENSUS_MS` earlier. The identical recorded-before / published-after shape the rest of
+this function had just closed, twelve lines below it, and **both reviewers of the third pass found it
+independently** — the tenth such pair on this lane. The font is `[globals+0x204]` (`0x4B6220` is
+`mov eax,ds:0x51FBD0`), so it is probably not per-level; "probably" is not a lifetime. It is gated
+the same way rather than a different way, because a different rule would need an argument the font's
+lifetime does not give us, and a refusal falls through to the box's own bytes — what this path did
+before G17d, so the picture is unchanged. The refusal is counted as **`strstale=`** and NOT folded
+into `gafstale=`, because the A/B above is stated in that counter and a second reason inside it would
+make those numbers mean something else on the next run that reads them. **Both counters are gone
+since**: `gafstale` with landing 7 and `strstale` with landing 8, each when the gate it counted
+stopped existing — the figures quoted in this section belong to the builds they were measured on.
+
+**What could not be measured, and it is a gap that predates this gate.** The consumer's `str=`
+counter — strings actually drawn and mirrored — read **0/0 on every fixture driven for this landing**:
+in game at 1920×1080 under `gui.on=mmbase` and under landing 2's own `gui.on=nocursor nominimap
+norestore`, and in the shell on `SKIRMISH.GUI` at 640×480. The A/B reads 0 px in all of them, and **0
+px over content that is not there is not a measurement** — the lesson landing 1 already paid for. The
+gate is not the cause: the control build with it reverted reads the same `0/0`, and `strstale=0` says
+it refused nothing. So the change is established to make no difference and is NOT established to be
+correct on a live string.
+
+**A FIXTURE THAT DOES PUBLISH STRINGS EXISTS SINCE, and it is the walk** [MEASURED 2026-09-16,
+landing 8]: the in-game `--vk` walk reads **`str=` 6 281–6 532 strings / 30 291–31 537 glyph
+quads**, `miss=0`, `fonts=1`, 27 glyph cells. Launching a skirmish and letting it sit still reads
+`str=0/0` with the same levers and `cpp=1` either way, so it is **what the walk drives** and not
+the arming; which of the walk's actions reaches `DrawTextCustomFont 0x4C14F0` is not established
+and does not need to be for the figure to be usable.
+
+**AND `glyphs=` CLIMBING DOES NOT MEAN A STRING WAS DRAWN**, which is the trap that made the
+sitting fixture look like it had no strings at all. In that run `glyphs=` reached 16 cells while
+`str=` stayed 0 — and `glyph_raster` has exactly one caller, `tagpu_text_glyph_feed`, so the
+string ops *did* arrive. The feed sits in the drain loop **above** the skip gate and runs whatever
+the switch decides; the stamping is `case PK_STRING`, which needs `twin_find(o->surf)` to find a
+twin and needs the op not to have been skipped to a reset. `miss=`, `reseed=` and the
+"stamped nothing" line were all 0, so `twin_string` was never entered. Read `str=` for "text was
+drawn" and `glyphs=`/`fonts=` for "the records arrived"; they are different questions.
+
+**AND THAT PUTS A QUESTION MARK ON LANDING 2's OWN NON-VACUITY.** Landing 2 reports "0 of 786 432 at
+1024×768 and 0 of 2 073 600 at 1920×1080, with strings ON" on that same lever set, and the run here
+at 1080p on that lever set published no string at all. The map and the instance differ, so this is a
+question and not a refutation — but the next work on this pass needs a fixture that DEMONSTRABLY
+publishes one (`str=` climbing, not merely `nostring` being absent) before any string figure on this
+page is believed, this gate's included. The only session today that read a non-zero `str=` had walked
+`RENDER.GUI` and `VISUALS.GUI`, which are our OWN injected menus and a different text route.
+
+**This is the standing debt in `CLAUDE.md` coming due, once.** The roadmap already lists "the
+per-LEVEL ASSET class under `tagpu_reclaim`'s fence" as an open row of the frame-packet gate; this
+landing closes the one site of it that the UI publisher owns, by ordering rather than by waiting for
+the asset channel, and leaves the class itself open.
+
+#### Not covered
+
+* **The gate, which is the whole of G19f and not these landings.** `uiwalk`'s `strict` walk over
+  the **full screen inventory** at 1024×768 and 1080p, shell and in game; and **frame time no worse
+  than GL**, which nothing in Phase G has measured at all. The shell↔game context switch is closed
+  **for the crash that was measured** — the teardown cascade — and the SCREEN-POP window inside the
+  same route is open, covered only by the bound, and written up below. These are a handful of fixtures, not an inventory.
+* **THE PER-LEVEL ASSET CLASS ITSELF STAYS OPEN.** Landing 5 closes the one site of it the UI
+  publisher owns, by ordering. The class — model templates, FeatureDef and wreck records, the GAF
+  banks, all under `tagpu_reclaim`'s fence until the asset channel — is the frame-packet gate's own
+  row and nothing here touches it. The only reason this one was found is that a fixture happened to
+  quit a skirmish to the main menu. The landing-5 review swept the rest and **most are sound** — the
+  feature, unit, terrain, effects and packet-publisher readers all sit behind the level-end packet's
+  own `in_game` gate, which is published before the flag drops — but it named **two that are not**:
+* **THE SCREEN POP IS THREE INSTRUCTIONS INSIDE THE ROUTE THIS LANDING MEASURED, AND THE GATE DOES
+  NOT COVER IT.** This bullet used to file `GUI_Pop 0x4A9660` away as "the shell's route", which is
+  true and misleading. The disassembly of the site the landing itself cites:
+
+  ```
+  460630:  call 0x491b60     ; the teardown -- bumps gen N->N+1, lowers s_teardown
+  460635:  push 0x1
+  460637:  call 0x491d70     ; UpdateIngameGUI -- DRAWS, so op_add stamps lgen = N+1
+  460641:  add  eax, 0x519
+  460647:  call 0x4a9660     ; GUI_Pop -- frees that screen's art
+  ```
+
+  The pop happens **after** the bump, so ops recorded at `0x460637` carry the CURRENT generation.
+  At the next flip `level_tracked()` is 1, `level_closing()` is 0 and `op->lgen == gen()` — **the
+  gate passes**, and the only thing between `frame_key` and freed art is `frame_sane`, the probe
+  this section says twice is not the safety argument. `GUI_Pop` frees from **39** call sites with no
+  flag and no generation, and `frame_key`'s own comment has recorded for some time that the shell
+  hands those same addresses to the next screen. (The "21 event-handler call sites" this bullet
+  carried until the re-review is `UpdateIngameGUI 0x491D70`'s figure, borrowed for the wrong
+  function; `call 0x4a9660` appears 39 times in the pristine exe and `call 0x491d70` 21.)
+
+  **Arm B is the experiment that says whether it is live, and it says probably not — which is not
+  the same as no.** Arm B is the build with `frame_sane` compiled OUT and only the ordering standing,
+  so an unguarded read faults instead of being swallowed. **8 runs of the route, 0 crashes**, against
+  arm A's 4-in-5. If the ops recorded at `0x460637` named art the pop frees, arm B would have taken
+  the access violation. So on THIS route, with THIS fixture, those ops do not appear to name popped
+  art — evidence, not proof, and it says nothing about the shell's own screen-to-screen pops, which
+  no fixture here drives at all.
+
+  **The by-design fix exists and is not built.** The module already observes the engine's single
+  free — `before_memfree` on `MEM_Free 0x4D85A0`, which every one of the engine's 363 free sites
+  calls, on the game thread, at the entry before the allocator's own critical section — and already
+  uses it to retire surface-table entries by block. A block-keyed forget for queued ops would cover
+  the teardown cascade and the pop together and would not need a generation at all. What it needs
+  first is a size: `MEM_Free` is handed the block, not its length, so "is this op's frame inside
+  this block" is not answerable from the observer as it stands. [Raised by the third review pass,
+  2026-09-16. Named here rather than built because it is a mechanism, not a fix to this landing's
+  defect, and it wants its own measurement.]
+
+* **`tagpu_render3do.c`'s unit atlas is never dropped at a level boundary.** Its entries key on the
+  template's texture-frame ADDRESS, and the atlas resets only when full or on a context loss —
+  where `tagpu_fx.c` and `tagpu_feat.c` both call `tagpu_gaf_atlas_forget` for exactly the recycled-
+  address reason. A second level handed the same address would be served the first level's texels,
+  and nothing would detect it. Not this landing's to fix, and it is wrong art rather than a crash.
+  (The GL UI atlas is safe here: `publish` stores a CONTENT hash as the identity, so a recycled
+  address cannot alias.)
+* ~~The cursor, the minimap and the sharp layer~~ **CLOSED by landing 3.** `norestore` is the only
+  lever left.
+* **THE MINIMAP'S PICTURE PATH (`uPic`), and with it the only LINEAR sampler in this module.** The
+  GL texture is `MIN_FILTER = GL_LINEAR, MAG_FILTER = GL_NEAREST` and the Vulkan lane matches it
+  with a second sampler — **which took two attempts, the first being a no-op** (see above) — but no
+  fixture here reaches that branch of `MM_FS` (99.2 % fogged), so the match is **correct by
+  construction and unmeasured**. That combination is exactly how the first attempt survived: nothing
+  the pass measures would have changed had the sampler stayed wrong. It is the same category as §2.33's
+  Classic++ refusal. Closing it needs a fixture with an explored map.
+* **The sharp layer's THIRD client, the sharp string path**, is not exercised by any fixture here:
+  `SHARP_TEXT` draws at device resolution where `twin_string` stamps into the twin, and nothing in
+  `selbox-slope` takes it. The quads would cross like any other, but that is an argument and not a
+  measurement.
+* ~~Classic++ colour twins and the MRT sprite/copy programs~~ **CLOSED by landing 4**, and it was
+  **not** blocked on the restorer's five shaders: they go on running in the GL context and their
+  output crosses as bytes. **No lever is left on this pass.**
+* **THE RESTORE'S OWN COST, which this landing pays and does not measure.** The read-back is a
+  `glReadPixels` of `2048 × (shelfY + shelfH) × 4` bytes on every frame the restorer painted, and it
+  **synchronises** — it is issued right after the paint draws. A settled session pays nothing (the
+  UI atlas's queue drains and `painted` stops moving) and an unarmed one pays nothing at all, but
+  the frames DURING a fill are not counted anywhere and no figure here bounds them. It belongs to
+  landing 6 with the rest of the cost question.
+* **THE READ-BACK CHANGES THE ORACLE LANE'S TIMING, AND "THE GL LANE IS UNCHANGED" IS THEREFORE NOT
+  LITERALLY TRUE WHILE IT IS ARMED.** `glReadPixels` is synchronous, and the restorer slices its
+  work against a GPU-time budget (`tagpu_restoreglsl.c`, `budget=MS`) — so with the mirror armed the
+  GL lane paints a different number of batches per frame than without it. It changes no PIXEL, and
+  the lane is unarmed in every session that is not running this A/B, but the claim this page makes
+  everywhere else is about the lane's OUTPUT and this is the one place the distinction matters.
+  [The review's, and it is the honest form of the sentence.]
+* **THE UI ATLAS'S GENERATION GUARD IS UNFIRED HERE.** `mirlost=0` on every run above, and
+  `atlas=53/4096` — these fixtures never fill or recycle the sprite atlas, so the frame-loss path
+  the review opened is correct by construction and exercised by nothing. It is in the same category
+  as the glyph atlas's own repack guard, which landing 2 added and no fixture has ever taken either.
+* **A PALETTE RE-ARM IS NOT EXERCISED BY THESE FIXTURES BEYOND ITS FIRST.** `rearms=1` on every run
+  — the one the shell→game transition causes — so the sweep that invalidates every colour twin has
+  fired once and always with two twins in the store. The Gamma slider and `+gamma N` are what drive
+  it in play and neither is in a fixture here.
+* **The present itself** — landing 5. Route D still gives the Vulkan lane a window of its own.
+* **Frame time**, which is half the gate's own wording — landing 6, and nothing in Phase G has
+  measured cost at all.
+* **The glyph atlas at dimensions this pass will not carry.** `ATLAS_MAXDIM` bounds the upload, and
+  a glyph atlas outside it leaves `s_glHave` 0, which takes the replay to `standdown` and the store
+  to a fresh start on every frame that draws a string. `GA_W`/`GA_H` are compile-time **512 × 256**
+  in `tagpu_text.c` against an `ATLAS_MAXDIM` of **8192**, so this is a refusal that has never been
+  exercised and cannot be without editing the GL lane — the same category as the Classic++ one
+  in §2.33.
+* `ss` 2, the owed teardown, an in-process map change, and the validation layer still.
+
+### Landing 6 — the frame-time harness, and why its ratio does not answer the gate
+
+`tagpu_ftime.c/.h`, armed by `tagpu_ftime.on`, inert without it. Two GPU timestamps per lane per
+frame, a 256-frame ring each, p50 and p99 rather than a mean, nothing blocks: the GL side polls
+`GL_QUERY_RESULT_AVAILABLE` and carries a frame whose pair is not ready, the Vulkan side is read
+behind the fence the seam already waits on before it re-records that slot.
+
+**TIMESTAMPS ARE FORCED, NOT PREFERRED.** `GL_TIME_ELAPSED` is scoped, only one may be active per
+target, and `tagpu_restoreglsl.c` already runs one around every restorer slice — a frame bracket of
+that kind would either fail to begin or break the restorer's. `glQueryCounter` has no such rule and
+is what the Vulkan half does anyway (`vkCmdWriteTimestamp`).
+
+**THE HEADLINE THIS SECTION FIRST CARRIED — "the Vulkan lane's frame costs 0.56–0.66 of the GL
+lane's, the gate met with margin" — IS WITHDRAWN.** It was measured, it was reproducible within a
+run, and it was wrong about what it measured. What follows is what the harness actually establishes,
+which is less than the gate wants and more useful than nothing.
+
+#### What it measures: an ELAPSED SPAN, and the two spans are not the same
+
+`glQueryCounter` records when the GPU **reaches that point in the command stream**, so the delta is
+elapsed time on the GPU timeline and counts anything that stalls inside the bracket — the render
+thread's own `EnterCriticalSection` three lines after `gl_begin`, the restorer's synchronising
+`glReadPixels` — whether the GPU was working or idle. The two brackets then span different things:
+GL's runs the whole CPU frame (top of `ogl_render` to just before `tagpu_vk_frame`), Vulkan's only
+its own command buffer (`TOP_OF_PIPE` after `vkBeginCommandBuffer` to `BOTTOM_OF_PIPE` before
+`vkEndCommandBuffer`). That difference is survivable only on a frame where the GPU is saturated
+throughout. It is not survivable here.
+
+#### The measurement that withdrew the claim
+
+One binary, one fixture (`200v200`, `--maxfps 0`), the sim **paused at a fixed tick** (~950–975,
+`alive` 381–387), the pause verified by peeking `*0x511DE8+0x38A47:4` twice:
+
+| resolution | MP | `gl p50` | `vk p50` | **vk/gl p50** | fps |
+|---|---|---|---|---|---|
+| 640×480 | 0.31 | 5.501 ms | **0.052 ms** | **0.010** | 166.6 |
+| 1280×720 | 0.92 | 156.650 ms | 93.966 ms | **0.600** | 6.2 |
+| 1920×1080 | 2.07 | 118.840 ms | 105.281 ms | **0.886** | 7.8 |
+
+**THE RATIO IS NOT A PROPERTY OF THE LANES.** It moves 0.010 → 0.886 across resolutions on the same
+binary and the same paused scene, and it moved 0.556 → 0.886 at 1920×1080 between two builds that
+differ only by this landing's review fixes. A figure that swings by 90× is not "what a Vulkan frame
+costs relative to a GL frame".
+
+**`vk p50` CANNOT BE THE LANE'S OWN WORK.** 52 µs at 640×480 against 105 ms at 1920×1080 is a factor
+of ~2000 for 6.75× the pixels. 52 µs is a believable command-buffer cost for this scene on this GPU;
+105 ms is not. What the bracket picks up at the higher resolutions is the command buffer **waiting
+for a GPU the GL lane is saturating** — route D runs both lanes in one iteration of `ogl_render`, so
+they contend, and `TOP_OF_PIPE`→`BOTTOM_OF_PIPE` spans a queue stall exactly as it spans work.
+
+**AND THE COST IS NON-MONOTONIC IN RESOLUTION.** 1280×720 is about twice as slow as 1920×1080 with
+2.25× FEWER pixels, reproduced on one binary. This is an unexplained anomaly of the GL lane and is
+worth its own investigation; it is flagged here and not diagnosed. It also disposes of the argument
+an earlier revision of this section made — that 6.75× fewer pixels giving 10.7× the frame rate
+established a fill-bound frame. Those were two points on a curve that does not run that way, and the
+landing-6 review had already challenged the inference on principle (a resolution-DEPENDENT CPU cost
+produces the same scaling with the GPU idle) before the third point showed the premise was not
+merely unproven but false.
+
+#### What the harness is still good for
+
+* Within one paused scene it is precise: run A's absolute figures drifted 13 % between two
+  consecutive report windows while the ratio repeated to three decimals.
+* It is the first instrument on this lane that reports per-frame GPU-timeline cost at all, and it
+  found the 720p anomaly on its third run.
+* The GL half under-samples at high frame rates and this matters when reading it: at 166 fps it
+  harvested **296 of ~5300 frames** against the Vulkan half's 4850, because `GLQ` is 8 pairs and a
+  frame that finds none free is skipped. The two lanes' percentiles are then computed over very
+  different samples of one session, and the GL sample is selected for frames where the driver had
+  caught up.
+
+#### Not covered
+
+* **THE GATE'S FRAME-TIME CLAUSE IS NOT ANSWERED and goes back to OPEN.** Answering it needs a method
+  that does not put both lanes on one GPU in one iteration — each lane measured alone in its own run,
+  or per-pass timing rather than per-frame. That is a decision about what the measurement IS, not a
+  fix to this code.
+* **THE 1280×720 ANOMALY IS NOT DIAGNOSED.** ~2× slower than 1080p at 2.25× fewer pixels, on the GL
+  lane, on this fixture.
+* **THE RESTORE'S READ-BACK IS STILL NOT SEPARATELY MEASURED.** It is a synchronising `glReadPixels`
+  inside the GL bracket and a candidate for both the absolute figures and the anomaly.
+* One fixture, one map, one scene, paused.
+
+### Landing 7 — the two holes the landing-5 sweep named, closed by moving the read
+
+Landing 5's review swept the module for the per-level asset class and named two sites it could
+not close. This landing closes both. Neither is about Vulkan: they are defects in the shipped GL
+renderer that the port's fixtures found.
+
+#### The sprite: resolved where the engine proves it alive
+
+**The publisher took a sprite's identity hash AND its decoded plane out of engine memory at
+publish time**, up to `CENSUS_MS` after the blit that recorded the op. Two engine routes free
+that memory inside the window:
+
+* the level teardown's cascade — which landing 5 closed with a generation ordering, at the cost
+  of refusing 215 ops at a measured level end;
+* **`GUI_Pop 0x4A9660`**, which frees a popped screen's art from **39** call sites with no flag
+  and no generation, and which landing 5 could **not** close. The disassembly is why:
+
+  ```
+  460630:  call 0x491b60          ; the teardown -- bumps gen N->N+1, lowers s_teardown
+  460635:  push 0x1
+  460637:  call 0x491d70          ; UpdateIngameGUI -- DRAWS, so op_add stamps lgen = N+1
+  46063c:  mov  eax, ds:0x511de8
+  460641:  add  eax, 0x519
+  460646:  push eax
+  460647:  call 0x4a9660          ; GUI_Pop -- frees that screen's art
+  ```
+
+  The pop is **five** instructions after the bump, so ops recorded at `0x460637` carry the
+  current generation and the gate passes. Only `frame_sane` stood there, and a bound is not the
+  safety argument. (**This listing said "three instructions" and silently omitted `0x46063c` and
+  `0x460646` until both landing reviewers counted them, independently.** The count changes
+  nothing about the argument — the pop is after the bump either way — but a listing that reads
+  as contiguous and is not is exactly the kind of note that costs the next person an hour.
+  `call 0x4a9660` appears **39** times in the pristine `.text`, `0x460647` among them; re-counted
+  with the correction.)
+
+**Both reads moved into `gaf_box`, the `before_` detour on the blit leaf**, and the ordering is on
+the engine's timeline:
+
+> our read  <  the engine's blit  <  the engine's free
+
+Every free route that opened this window — the cascade, and all 39 pop sites — runs **after** the
+blit it follows, and the caller holds the art alive across the call it is making. Our read precedes
+that call. It needs no flag, no generation and no `MEM_Free` block size, and it covers free routes
+nobody has found yet, because it does not enumerate them: it is earlier than all of them. After it,
+`publish` dereferences **no engine asset memory on this path at all** — the `gui probe:` trace
+included, which was the last one left. `frame`/`pix` survive in the op as the consumer's atlas KEY,
+a value compared against a table and never followed.
+
+**It is NOT the claim that "the engine would fault if this were dead".** This section said that
+until the landing review; the detour runs *before* the engine's read, so if the memory were dead
+**we** would fault first. That was a counterfactual dressed as a proof, and it is not what makes
+the change safe.
+
+**AND IT BOUNDS LIFETIME, NOT EXTENT.** The engine reads the **clipped sub-rect**;
+`tagpu_gaf_decode` reads all `w*h`, or every RLE row. A header whose `w`/`h` exceed the plane the
+loader actually allocated is therefore covered by nothing above — only by `tagpu_gaf_frame_sane`,
+a SHAPE test (`w,h <= 512`), and the decoder's own `IsBadReadPtr`, which this note says everywhere
+is not a safety argument. **That residual is unchanged by this landing**: the same decode read the
+same bytes at publish before it, over memory that might *also* have been freed. Moving it removes
+the lifetime half and leaves the extent half exactly where it was. Bounding it needs the plane's
+allocated length, and the plane is not a block start, so `MEM_Size` cannot answer it either.
+
+**It also fixes a wrong-art case the generation could not see.** The key is a hash of the plane's
+first bytes precisely because the shell hands a freed screen's addresses to the next screen's art.
+Taken at publish time, that hash read whatever the address held *then* — so art freed and replaced
+inside one census window hashed the **new** content under the **old** op, and the consumer matched
+a key naming pixels the op never drew. Taken in the observer, it is a hash of the bytes the engine
+is about to blit, which is the only content the op ever meant. Nothing measures this case; it is
+an argument from what the two versions read, and it is stated as one.
+
+**The generation gate is removed from this path** rather than kept as belt. It guarded the two
+reads that moved, could never cover the pop, and was not free. `gafstale` went with it — the name
+changed with the meaning on purpose, because `gafstale=215` is the figure landing 5's A/B is
+stated in and a counter that keeps its name while measuring something else is how those numbers
+quietly stop meaning what these notes say they mean. **The `OP_TEXT` path kept its gate and its
+`strstale` through this landing**, `gfont_slot`, `glyph_block_size` and `glyph_block_fill` still
+reading the font object at publish, and `op->lgen` existing for them alone — **closed the same
+way one landing later; see Landing 8 below.**
+
+#### The UI atlas: dropped at the level boundary too
+
+**Found by the landing review — both reviewers, independently, the eleventh such pair on this
+lane.** `tagpu_gui_surf.c`'s UI atlas matches entries on `(o->frame, o->pix, fw, fh)` — the
+frame's **address** and its content hash — and its only resets are `twins_reset`, the atlas
+filling, and a GL context loss. **None of those is a level boundary.** The engine frees a level's
+GAF banks and the next level's loader may hand a new frame an old one's address; `frame_key`
+hashes only the plane's first 64 bytes plus the hotspot, so **UI art whose first RLE row is one
+transparent run can collide by CONSTRUCTION**, not by 2^-32 luck — and then `atlas_find` hits the
+old entry and the twin draws the previous level's texels, with no counter moving.
+
+**The gate this landing removed was never the cover for that**, which is worth saying plainly
+because it is the obvious thing to assume: `op->lgen != level_gen` refused ops **recorded** before
+a boundary and **resolved** after one — a ~5 ms window — and did nothing whatever about entries
+already sitting in the consumer's atlas from the previous level. Those survived it. So the hole
+predates this landing and the fix is a **drop**, not a refusal.
+
+The publisher raises a reseed when the level generation moves, and the machinery is already
+there: `PK_RESET` makes the consumer call `twins_reset`, which calls `tagpu_gaf_atlas_reset`, and
+the UI atlas never asks for a repack, so that goes straight to `atlas_drop` — every entry, every
+hash. Same shape as the unit atlas's, one level down the stack.
+
+#### The unit atlas: dropped at the level boundary
+
+`tagpu_render3do.c`'s atlas matches entries on the frame header's **address** and the pixel
+plane's (`tagpu_gaf_atlas_find`), so an entry is right only while that address means that art. The
+engine's teardown frees the model textures and the next level's loader may hand a new frame an old
+one's address — at which point the atlas serves the **previous level's texels** and nothing
+detects it: the entry is valid, the UV is in range, the picture is simply wrong. It reset only
+when FULL or on a GL context loss, and neither is a level boundary. `tagpu_fx.c` and
+`tagpu_feat.c` both already drop theirs here for exactly this reason.
+
+**This was live in ordinary play**, not only under a lever: `tagpu_native.on` is in
+`tagpu_opt.c`'s play-defaults table as `"all wrecks"`, so every play session has the unit atlas
+up, and any session that played a second level was exposed.
+
+`tagpu_r3d_atlas_level` is called from `tagpu_native_frame` beside `cache_gen_check` and **before**
+`tagpu_posebake_frame`, not from `tagpu_r3d_atlas_frame` lower down the file: posebake **latches**
+`tagpu_r3d_atlas_gen()` for the whole frame, so a drop after it would stamp this frame's bakes
+with the generation before the drop and cost a second, pointless drop on the next frame. Taken
+where it is, every consumer sees one generation per frame.
+
+#### What was measured
+
+| claim | how | result |
+|---|---|---|
+Everything below is from the binary that lands — the whole set was re-run after the review's
+fixes, because those fixes changed the DLL and a figure off an earlier build names a build that no
+longer exists.
+
+| claim | how | result |
+|---|---|---|
+| the picture does not move | the A/B walk, all three resolutions | **52 of 52 stops at 0 px**; the 1024×768 and 1080p walks are identical to the pre-change runs **stop for stop, to the byte** |
+| the crash route is clean | the landing-5 route, 5x at 1920×1080, **Vulkan lane DOWN** | **5 of 5 clean**, `teardowns=1` each |
+| the scratch bound holds | `gafscratch=high/lost/baddec` | high-water **860 849 bytes of 2 097 152 (41 %)**, **`lost` 0, `baddec` 0** |
+| nothing falls back for a real reason | `gafnoplane` | **0**, over every run |
+| **the UI atlas** drops at each boundary | two skirmishes in ONE process, `gui.on=...log` | **`gui: reset #3: level-changed` and `#6`** — exactly two, one per level end |
+| **the unit atlas** drops at each boundary | the same session | **2 resets**, logged `subject replaced` (our call, not a full-atlas recycle), each one line after the UI atlas's |
+| a dropped atlas re-decodes the RIGHT texels | `glshot` on level 2, after the drop | units render with their own textures and shadows; terrain, trees and HUD intact |
+
+**One stop of the 52 is not reproducible between runs and it is not this landing's.** `ARMMAIN2`
+at 640×480 — the first in-game stop, the one closest to the scenario load — read 103 153 px of
+ink in one run and 103 376 in the next, a 223 px difference. The same stop is **identical across
+all three 1024×768 runs** (118 946 every time), so it is not the review's fixes, and both lanes
+agreed exactly in both runs, so it says nothing about either. The cause is **not established**;
+it is recorded rather than explained, because the ink column is evidence about what the engine
+drew and an unexplained wobble in it is worth a line even when the diff it guards reads 0.
+**[SETTLED as far as it can be, 2026-09-16, landing 8]**: the same walk run TWICE on one binary
+reads 103 074 and then 103 376, so the wobble is the fixture and no binary difference produces
+it. The cause is still unknown; the question "is it the change?" is closed.
+
+`gafreseed` is counted apart from `gafnoplane` and is **not** a failure: a reset clears the seen
+table after an op has already decided it needs no plane. It is **cheap rather than free** — the
+word this section used until the review corrected it: each one costs a `PK_PIXELS` box in the
+arena and one window without its atlas identity, in a publish that is already re-seeding every
+surface whole, so nothing is on screen that would not have been, and it self-heals next window. It read **4 323** over the three
+walks. One counter for both would have read as 3923 failures on the first
+session that measured it — which is exactly what it did read before the split.
+
+#### Not covered
+
+* **THE FONT WINDOW WAS STILL OPEN AFTER THIS LANDING** — the `OP_TEXT` path still
+  dereferenced the font object at publish, covered by the level generation and by `ptr_ok`, neither
+  of which is a lifetime. It was named here as an open window rather than left to look closed by
+  the line above it in the source, and **Landing 8 closed it** by the same move.
+* **The wrong-art case the move fixes is an argument, not a measurement.** It needs a pop and a
+  reload inside one ~5 ms census window, and no fixture here forces that.
+* **The A/B cannot see this class at all**, and that is worth saying plainly: both lanes consume
+  the same published op stream, so a publisher that resolved the wrong art would hand both lanes
+  the same wrong art and score 0 px. The walk is the regression gate for this landing, never its
+  evidence.
+* **The unit atlas's drop is evidenced by the log line and a picture, not by a diff against the
+  bug.** Forcing the address reuse the fix exists for would need the second level's loader to be
+  handed a specific block, which nothing here can arrange.
+* `MEM_Size 0x4D8360` exists and would have made the block-keyed forget buildable; it was not
+  used because it reads the heap outside the allocator's own critical section. See
+  [exe-reverse-engineering](exe-reverse-engineering.html).
+
+### Landing 8 — the font window, closed the same way
+
+Landing 7 moved the sprite's two reads into the observer and said, in the source and here, that
+the `OP_TEXT` path still read the font object at publish and that a level generation was standing
+in for a lifetime it did not have. **This closes that**, by the same move, and it is the last
+per-level engine asset `publish` dereferenced. Like landing 7 it is not about Vulkan: it is a
+defect in the shipped GL renderer that the port's fixtures found.
+
+#### What moved
+
+`gfont_slot` and the walk that turns a string's unsent codes into glyph records now run in
+`before_text` — the detour at the head of `0x4CCF60`, the engine's glyph blitter — with the
+engine's own `font` and `str` arguments in hand. The op carries what the publisher needs and
+nothing it would have to follow: `fid` (the slot id the consumer's glyph cache keys on), `gboff`/
+`gblen` (the records, in a 128 KB window scratch beside the sprite's 2 MB one), `frows`/`fyoff`
+(the two header bytes the consumer stamps quads with) and `fgen` (below). `publish` copies our own
+bytes out of our own scratch.
+
+**Two publish-time walks became one observe-time walk.** `glyph_block_size` sized the block and
+`glyph_block_fill` wrote it; with a scratch that can be bounded per record, sizing first buys
+nothing. `glyph_block_capture` writes, and `glyph_block_mark` — which reads no font, only our own
+records — marks them sent at publish.
+
+#### The ordering, and why it is a stronger argument here than on the sprite
+
+The detour sits at the head of the blitter with its arguments, one instruction before it walks
+that string through that font, so
+
+> our read < the engine's read < any free of the font
+
+holds by the engine's own sequencing. **It is not "the engine would fault if this were dead"** —
+the detour runs first, so we would fault first; that phrasing was a counterfactual dressed as a
+proof when the landing-7 review found it on the sprite path and it is no better here. What makes
+the read safe is that the engine has already committed to making it.
+
+**And it bounds EXTENT as well as lifetime, which the sprite's move did not.** `0x4CCF60` has no
+clip and no destination bound at all — it writes `sum(widths) × font[0]` pixels wherever the
+caller said, and it cannot skip a glyph's bits because the destination would be off-screen. Our
+walk takes the blitter's own two skips (`sub ebx,first; jb` at `0x4CCFAA`, `or ebx,ebx; je` at
+`0x4CCFB9`) and reads the same bytes for a **subset** of the string's codes — the ones this font
+has not sent yet. So where landing 7 closed the lifetime half and left the extent half exactly
+where it found it (the engine blits a clipped sub-rect; `tagpu_gaf_decode` reads all `w×h`), this
+path has no extent half to leave. The instruction-level read set is in
+[exe-reverse-engineering](exe-reverse-engineering.html), "WHAT THE BLITTER READS, EXACTLY".
+
+#### What the gate cost, and what replaced it
+
+**Nothing replaced it.** `op->lgen` is gone from the op and from `op_add`, `strstale` is gone, and
+`tagpu_packet_pub_level_tracked` and `tagpu_reclaim_level_closing` now have **no caller in the
+tree** — kept rather than deleted, because they are the level-lifetime API those modules expose
+and removing them is not this landing's business.
+
+**What did have to be added is a generation, and it is not the level's.** The block omits the
+codes the font has already sent, and *that* decision is the only thing between the capture and the
+flip that can go stale. Two things clear a `sent[]` table: the render thread throwing its glyph
+atlas away (a shelf overflow or a ninth font, `gfont_check_gen`), and a publisher reseed skipping
+whole windows. Until this landing both were safe **by position** — the decision was taken inside
+`publish`, after either clear had already happened in the same call. Now both go through
+`gfont_sent_clear`, which bumps `s_sentGen`; the op stamps it at capture and `publish` publishes
+its box instead on a mismatch. Same shape, and the same reason, as the sprite path's `s_seenGen`,
+and counted apart as `strrearm=` for the same reason `gafreseed` is.
+
+A **slot recycle** needs no bump of its own, but **not** for the reason this section first gave
+("nothing in flight is invalidated"), which the cross-thread reviewer showed is backwards. Both
+tables are eight deep, so the ninth `(font, sig)` that makes the producer recycle is also the
+ninth id the consumer sees, and `tagpu_text.c`'s own `gfont_slot` answers that with
+`memset(s_gf)` + `memset(s_gatlas)` + `s_ggen++` — every cell under every old id, gone. A recycle
+therefore *reliably causes* a consumer clear. What makes it safe is the generation catching that
+`s_ggen++` like any other, and `gfont=` now prints recycles and resends side by side so the two
+moving together is a cross-check rather than a hope.
+
+**And the poll sits beside the decision, not at the top of `publish`.** The first version of this
+landing called `gfont_check_gen()` once on entry and claimed that made the test "a comparison
+against NOW". It made it a comparison against the top of the publish loop, and the render thread
+can drop its atlas in the middle of one: op *k*'s block omits a code because `sent[]` said it was
+published, the consumer overflows its shelf and clears, and op *k* is then committed without it —
+one window of a string drawn with that character dropped and the rest closed up, `miss=` counting
+it. Before G19f-8 the poll was inside `gfont_slot`, one statement before the decision it guards,
+so that first version had *widened* an existing window rather than closed one. It is now polled
+per op, which restores exactly the old width. [Found by the cross-thread reviewer, with the
+interleaving spelled out.]
+
+#### Marked at publish, not at capture — and no cross-op dedup
+
+`sent[]` is set by `glyph_block_mark`, after `pub_bytes` has taken the arena slot and the bytes are
+in it. Marking in the capture would mark glyphs that a queue overflow, an arena overflow, an
+untwinned surface or a `dedup()` drop then threw away — and a glyph marked sent but never sent is
+missing from every string for the rest of the session, which is the exact failure `gfont_check_gen`
+was added to prevent.
+
+That is also why **two ops in one window that need the same unsent code each carry it**. The
+sprite path can share one decode through `s_gcap` because its consumer keys on the frame and one
+copy serves every op; a glyph record is only ever read out of the op that carries it, and either op
+may be the one that does not get there. The duplicate is idempotent at the consumer
+(`glyph_raster` returns early on a known cell) and costs arena bytes in first-sight windows only.
+
+#### The cost, measured
+
+`OP` grew from **80 to 96 bytes**, so `s_ops[65536]` grew from 5.24 MB to 6.29 MB; with the 128 KB
+scratch the DLL's `.bss` goes from **42 163 060 to 43 343 252 bytes (+1 180 192, +2.8 %)** on a
+module that already reserves 42 MB of it. Read off `i686-w64-mingw32-objdump -h` on the two builds.
+
+#### What was measured
+
+Everything below is from the binary that lands — the whole set was re-run after the review's
+fixes, because those fixes changed the DLL and a figure off an earlier build names a build that no
+longer exists.
+
+| claim | how | result |
+|---|---|---|
+| the picture does not move | the A/B walk, three resolutions, the 640×480 one run TWICE | **78 of 78 stops at 0 px** (2 × 26 shell + in game at 640×480, 13 in game at 1024×768, 13 at 1920×1080) |
+| …and not merely at 0 px | the ink column against the pre-change binary | **1024×768 and 1080p identical STOP FOR STOP, TO THE BYTE**; the 640×480 exception is below and is the fixture |
+| the string path is actually live | `str=` | **26 788 string ops / 129 288 glyph quads** over the four walks, `fonts=1`, 27 glyph cells |
+| no glyph goes missing | `miss=`, `reseed=`, `repack=`, the "stamped nothing" log line | **0 of each**, over all of it |
+| **the re-arm guard fires, and costs nothing** | `strrearm=` | **6** at 1080p (0 on the other three): six text ops published their box because `sent[]` was re-armed between their capture and their flip — and `miss=` stayed **0**. The same six appeared on the pre-review binary, so it is the walk's own 1080p shelf pressure and not a flake |
+| the scratch bound holds | `glyscratch=high/lost` | high-water **7 632 bytes of 131 072 (5.8 %)**, `lost` **0** on every run |
+| nothing regressed in the sprite half | `gafnoplane` / `gaflost` / `gafbaddec` | **0 / 0 / 0** |
+| the arena takes the duplicates | `overflows=` | **0** — the per-op blocks a first-sight window now duplicates cost arena bytes and overflowed nothing |
+| the crash route is clean | the landing-5 route, 5× at 1920×1080, **Vulkan lane DOWN** | **5 of 5 clean**, `teardowns=1` each |
+| landing 7 still holds | two skirmishes in ONE process | `gui: reset #3: level-changed` and `#6`, and the unit atlas's **2** `subject replaced` resets (generations 4 and 9) |
+
+**`strrearm=6` is the line to read twice.** It is the only new failure mode this landing creates —
+a block that omits codes because they were "already sent", published after something cleared that
+table — and it is why the generation exists rather than being argued away. Six of those happened
+in each 1080p walk, all six published their box instead, and no glyph was missed. Without the
+stamp those six strings would have drawn with characters dropped and the rest closed up, which is
+the failure `gfont_check_gen` was added for in the first place.
+
+**THE 640×480 WOBBLE IS THE FIXTURE, AND THAT IS NOW ESTABLISHED RATHER THAN ASSUMED.** Landing 7
+recorded `ARMMAIN2` at 640×480 as varying between runs and could not say why. Running that walk
+**twice on this one binary** settles the question the only way it can be settled: `ARMMAIN2` read
+**103 074** in the first and **103 376** in the second — the same two values the pre-change and
+post-change runs had produced, so a figure that moves between two runs of one build cannot have
+been caused by the change. `ARMCOM1` reads 93 688 in three of the four runs on record and 94 312
+in one (on the pre-review binary), which is what `ARMCOM1-back` — the same screen visited again —
+reads in all four. Both lanes agree to the pixel at every one of them, and both stops are
+identical to the control at 1024×768. The CAUSE is still not established; what is established is
+that it is not this landing, and not landing 7's fixes either.
+
+#### Not covered
+
+* **The A/B cannot see this class at all**, exactly as in landing 7: both lanes consume the same
+  published ops, so a publisher that resolved the wrong glyphs would hand both the same wrong
+  glyphs and score 0 px. The walk is this landing's **regression gate**, never its evidence. What
+  is evidence here is `miss=` — a consumer-side count of glyphs the cache refused that the engine
+  would have drawn — and the ink column against the control.
+* **The wrong-font case the move fixes is an argument, not a measurement.** A font freed and
+  reloaded at the same address inside one ~5 ms census window would, before this, have had its
+  new header read under the old op; nothing here forces that, and the shell — where address
+  recycling is routine — draws no strings at all.
+* **THE SHELL DRAWS NO STRINGS**, which bounds what the 26 shell stops say about this landing:
+  `0x4CCF60` is reached only through `DrawTextCustomFont 0x4C14F0`, so `glyscratch` is 0 across
+  the whole shell half and those rows are a regression gate on the rest of the module. Everything
+  this landing changes is in game.
+* **A STRING LONGER THAN 256 BYTES IS TRUNCATED BY US AND NOT BY THE ENGINE** [named by the
+  landing review, 2026-09-16]. `0x4CCF60`'s walk has no counter — it draws to the NUL or the
+  `'\n'`, however long that is — while `before_text` measures the op's box from the first 256
+  widths and `twin_string` stamps at most 256 quads. So a longer string would draw short in the
+  twin AND have a box too narrow for the pixel fallback to cover. It predates this landing on
+  both sides and nothing here changes it; it is named because the note this landing adds to the
+  engine map originally attributed our 256 to the engine, which would have hidden it. No fixture
+  draws one: TA's HUD strings are short.
+* **THE WINDOW BETWEEN THE CHECK AND THE CONSUMER'S DRAW CANNOT BE CLOSED FROM THE PRODUCER, and
+  is not.** The generation makes the "already sent" half of a block true as of the moment the op
+  is committed; the render thread may still throw its glyph atlas away between that instant and
+  the drain, and then that one string draws with the missing characters dropped. It is bounded by
+  a window, self-heals on the next publish, and `miss=` counts it — 0 over 19 585 string ops here.
+  **The reviewer's proposed tightening was rejected after verification**: raising `g_guiq.reseed`
+  when `twin_string` records a miss would make the losing window the last one, but `miss` is not a
+  divergence signal — a string containing any code the font has no glyph for increments it while
+  the engine skips that code too, which `tagpu_gui_surf.c`'s own comment says at the counter. That
+  would re-seed every surface on an ordinary string.
+* **A font whose header lies is refused exactly as before and no better** — `f[3] != 0`,
+  `f[0] == 0` and `gfont_glyph`'s zero tests. A table entry pointing outside the loaded file
+  image, or a width byte that runs the bits past its end, is read by us and then by the engine one
+  instruction later; this landing neither adds nor removes that.
+* **The level gate that was removed had never fired on any measured fixture** (`strstale=0` over
+  the control's whole walk), because every string is in game where `level_tracked()` is 1. So the
+  change is established to move no pixel, and its value is the lifetime argument rather than a
+  behaviour it corrects.
+* **`tagpu_packet_pub_level_tracked` and `tagpu_reclaim_level_closing` now have no caller.** They
+  are kept as those modules' level API; deleting them is a separate decision.
+
+### The gate's walk — the Vulkan lane against the GL lane, over the whole inventory
+
+`tools/uiwalk.py --vk`.
+
+**WHAT THE GATE ASKED FOR IS NOT WHAT WAS RUN, and the substitution is the first thing to say.**
+The gate's wording is a **`strict`** walk over the full screen inventory at both resolutions, shell
+and in game, with the Vulkan lane matching what the GL lane scores. `strict` is `uiwalk`'s existing
+mode and it means something specific: it diffs **our** frame against the **engine's own surface**
+and counts the holes. That is a parity oracle against the engine, and **it is not a valid
+regression with Classic++ on** (see above — Classic++ is deliberately not the engine's output), so
+it cannot answer a question about the Vulkan lane at all. `uiwalk` also had no Vulkan support
+whatever before this landing.
+
+What was run instead is an **A/B of the two lanes against each other**: same process, same frame,
+same UI ops, GL writes one capture and Vulkan writes the other, and the two are diffed pixel for
+pixel. It answers *"does the Vulkan layer put the same pixels on the screen as the GL layer"*,
+which is the question the gate is about. It does **not** answer *"are those pixels right"* — that
+is `strict`'s question and both lanes could be wrong together and still score 0. The GL layer's own
+parity against the engine is G15's evidence (§2.3e), measured under `norestore` where the oracle is
+valid, and this walk inherits it rather than re-establishing it.
+
+`--vk` arms the lane in its own window — `gui.on=mmbase classicpp.on vk.on=color=0,0,0`, **no
+`norestore`**, so landing 4's restored UI atlas is live and is what the comparison runs through —
+and at every stop re-arms `tagpu_gui.ab`, waits for both lanes to write, and diffs the pair with
+`tools/vk-ab.py --pass gui`. The lever is one-shot per arming (`s_abDone`), so it is created and
+removed at every stop rather than left standing; it is removed **after** `vk-ab.py` has run, not
+before, because `vk-ab.py`'s own "these captures predate the lever" staleness check only runs while
+the lever is still on disk.
+
+| walk | stops at 0 px | non-black px a side, min–max | of |
+|---|---|---|---|
+| shell, 640×480 (what the shell runs at whatever the game res) | **13 / 13** | 297 477 – 307 200 | 307 200 |
+| in game, 640×480 | **13 / 13** | 93 688 – 145 437 | 307 200 |
+| in game, 1024×768 | **13 / 13** | 118 232 – 174 781 | 786 432 |
+| in game, 1920×1080 | **13 / 13** | 175 576 – 232 125 | 2 073 600 |
+
+**52 of 52**, and **the ink column is half the claim.** On every one of the 52 rows the GL lane's
+non-black count and the Vulkan lane's are the **same integer** — not merely both non-zero — so each
+0 px is a diff over a frame that had content, and had the same amount of it on both lanes. A row
+with 0 px and 0 ink is two blank frames agreeing and is refused, not counted; that is the fourth
+guard below, and it is the reason these figures are a re-measurement.
+
+The in-game walks include the four-deep stack `VISUALRT` over `PREFS` over `ARMOPT`
+over `ARMCOM1` over `ARMMAIN2`, both pages of the build menu, chat and F4; the shell walk includes
+`SELMAP` over `SKIRMISH` and our own injected `VISUALS.GUI` with its 50 gadgets.
+
+**It was 39 until the run that produced these figures, and the extra 13 are the 640×480 walk's
+in-game half.** The earlier set took the 640×480 row from a shell-only run, so the resolution the
+shell actually renders at had no in-game stops at all; this set walks both halves there. The other
+two rows are unchanged — the same stops, the same ink, to the byte — which is also what says the
+landing that prompted the re-run moved no pixel.
+
+The in-game ink is a **smaller fraction** of the frame than the shell's because the shell is UI
+edge to edge while in game the UI is the panel, the bars and the strings over a world the A/B
+blacks — 31–47 % of a 640×480 frame, 15–22 % of a 1024×768 one, 8–11 % of a 1080p one. The
+fraction falling as the frame grows is the expected shape: the panel is a fixed pixel size and the
+world around it is not. It is the count of pixels **this layer** put down, which is what the
+comparison is about.
+
+**A STOP WITH NO USABLE COMPARISON IS NOT A ZERO, and this is the part of the walker that matters
+most.** `vk_ab` returns `None`; the stop prints `NO COMPARISON` and the report renders it **NO
+COMPARISON** and counts it *out* of the pass tally. Four runs earned four separate guards, every
+one of them found by a walk that had already reported a pass:
+
+* **Neither lane wrote.** The first walk ran against an instance a killed run had left part-driven,
+  and the game exited a third of the way through. Twelve stops had no pair at all — against a dead
+  game. Rendered as `0 px` they would have read as twelve passes, and the walk would have claimed
+  17 of 17.
+* **A capture caught mid-write.** The first 1080p walk read `tagpu_gui_vk.ppm` at **5 509 120 of
+  6 220 800 bytes**, because "both files exist, sleep 0.4 s" is enough at 640×480 and not at 1080p.
+  It now polls until each file reports the same size twice running.
+* **The settle compared against the wrong number.** That poll then checked the settled size against
+  `--res`, i.e. the *game's* resolution — but **the shell runs at 640×480 whatever the game
+  resolution is**, so a 1024×768 shell walk waited for 2 359 296 bytes against a real 921 615, never
+  settled, and fell through on the 40 s deadline at **all 13 stops**. Every one of them was taken by
+  the timeout: by exactly the "both exist, then hope" behaviour the poll had been added to replace.
+  The expected size now comes from the **PPM header**, so it is the frame's own resolution.
+* **Both captures blank.** `vk-ab.py` prints `differing px 0 of N` *first* and only then decides
+  that `diff == 0 and ink_gl == 0` means "BOTH CAPTURES ARE BLANK — that is not a pass" and exits 1.
+  The walker read the count and never the exit status, so a stop where the layer composited nothing
+  scored **0 px and rendered as a pass**. The A/B blacks the frame and the layer's shader `discard`s
+  every fragment it does not own, so two all-black captures agree perfectly and prove nothing. The
+  exit status and the `non-black px` line are both read now, and **the ink is a column in the
+  report** — a 0 px row is only a pass with a non-zero ink beside it.
+
+* **The walk ran even when there was nothing to walk.** `tacli launch` and, worse, `tacli scenario
+  load` both had their exit status captured into `rc` and never looked at. A failed load sent the
+  walk into `game_walk` against whatever was on screen — the shell, most likely — where the stops
+  would find real content, diff it, and report 0 px with a healthy ink count. Every guard above is
+  about telling a hole from a pass at one stop; this was a hole upstream of all of them, and none
+  of them could see it. Both calls now pass `check=True` and raise with tacli's own output.
+  [FOUND 2026-09-16, reconciling why one walk had recorded no in-game stops at all.]
+
+The middle two were found by a review of the walker *after* it had produced a "39 of 39", which is why
+**all three walks were re-run from scratch** under the corrected guards and the numbers below are
+the second set. The first set is withdrawn: two of its stops' guards were weaker than the prose
+describing them.
+
+This is the failure mode this lane produces over and over — landing 1 stood down on every frame
+while every counter read zero, landing 4 measured 0 px on a run that had restored nothing — and the
+walk is the one place where a hole and a pass look identical unless the tool refuses to conflate
+them. **0 px over content that is not there is not a measurement.**
+
+#### Not covered by the walk
+
+* **IT IS NOT THE `strict` WALK THE GATE'S WORDING ASKS FOR.** It is a lane-against-lane A/B, for
+  the reason given at the top of this section. 0 px means the two lanes agree, not that either is
+  right; the GL lane's own correctness is G15's, measured elsewhere and inherited here.
+* **The blank-pair guard is a refusal, not coverage.** It can tell a stop where nothing was
+  composited from a stop where the two lanes agreed on real content. It cannot tell a stop where
+  *most* of the content was missing from both lanes: the ink column would be non-zero and the
+  diff would be 0. A partial hole common to both lanes still scores as a pass.
+* **The size-settle guard never engaged on the shell walk.** The shell runs at 640×480, where the
+  captures are 921 615 bytes and the writes have always completed inside one 0.4 s poll; the
+  mid-write case was only ever observed at 1080p. So the shell walk's 13 stops exercise the
+  *settle-on-equality* path but never the *wait* it exists for, and the guard is evidenced by the
+  in-game walks alone.
+* **The inventory is the screens, not every state of them.** 13 stops per walk. A build menu page
+  the walk does not turn, a dialog it does not open, an animation mid-frame: not covered.
+* **One map, one side (ARM), one scenario** — `tascene-parity`.
+* **The cursor and the minimap are at their landing-3 levers** (`mmbase`), not swept.
+
+### 2.35 What the Vulkan lane draws in the SHIPPED configuration — measured, and it is the UI alone
+
+**MEASURED 2026-09-16**, DLL `644ce2e`, instance launched with `--defaults` (the player's
+configuration, not a bench one), `one-unit` on Two Continents at 1024x768, the reference setup's
+4070, `tagpu_vk.on` armed live. This is landing 1 of [vulkan-only-plan](vulkan-only-plan.html) and
+it writes no code: the whole deliverable is this section.
+
+**Every Phase G figure was taken under `tagpu_defaults.off` + `ss=1` + `gui.on=mmbase`.** Nobody
+had started the lane in the configuration the patch ships in. The `opt:` line for this run is the
+shipped one —
+
+    opt: play defaults ON (no tagpu_defaults.off): native=all wrecks owndraw=all terr terrown
+    feat featown fx sfx fxown mark markown order ghost zoom vpwide gui classicpp weapons
+
+— all eighteen passes `ARMED`, `ghost: ARMED alpha=0.40`, no `tagpu_ss.off` so supersampling is
+at its shipped `2x`.
+
+**The result: the Vulkan window presents the UI and nothing else.** Of 786 432 px at 1024x768,
+**630 589 are the lane's clear colour** — the whole viewport. The side panel, the top and bottom
+bars, the minimap and the resource readouts are all there and correct; the world is not drawn at
+all. The lane is not broken and nothing crashed: every world pass **stood down on purpose**,
+which is the behaviour each of them documents.
+
+#### The two causes, and they are independent
+
+**1. The Classic++ restored atlases have no CPU mirror.** Four passes log the same refusal, once
+each, and then draw nothing:
+
+    vk: unit: the GL twin is drawing through the Classic++ restored atlas and that surface has no
+        CPU mirror - the Vulkan edition draws nothing this session rather than draw a different
+        picture from its own oracle
+    vk: terr: ... the Classic++ restored tile atlas ...
+    vk: feat: ... the Classic++ restored atlas ...
+    vk: fx:   ... the Classic++ restored atlas ...
+
+`classicpp` is a **play default**. So in the shipped build this refusal is the normal case, not
+an edge one. The GAF and tile atlases already have opt-in CPU mirrors for the indexed path
+(`tagpu_gaf.c`, `tagpu_terr.c`'s `s_mirrorWant`); the *restored* surfaces the restorer paints do
+not, and a Vulkan pass cannot read a GL texture.
+
+**2. The cast-shadow map has casters this lane cannot draw**, and it takes two more passes with
+it:
+
+    vk: shadow: the GL map holds 1 caster(s) this lane has no copy of (0 of them the unit pass
+        carries) - the native 3DO stream and the replacement meshes are still to port. Nothing
+        drawn while there are, and the passes that sample the map stand down with it
+    vk: unit: the GL twin drew these units against a cast-shadow map and the Vulkan lane has none
+        this frame - nothing drawn while that is true
+    vk: terr: the GL twin is reading the Classic++ cast-shadow map and this frame's Vulkan map was
+        not drawn (its casters are not all on this side of the seam yet) - nothing drawn rather
+        than a different picture from our own oracle
+
+**Cause 2 alone is enough to blank the world.** With `classicpp.off` armed live the FEATURES and
+their shadow splats appear — trees, rocks and their shadows over the clear colour — and the
+terrain and the commander still do not. So turning Classic++ off buys the feature pass and
+nothing else.
+
+#### The stand-downs are SESSION-LATCHED, and the word in the log is literal
+
+*"draws nothing **this session**"*. Each refusal sets a `s_said*`-style latch and the pass does
+not come back when the condition clears: after `classicpp.off` and then `classicpp.off=off`, the
+feature pass that had been drawing was dark again and stayed dark. A player who toggles Classic++
+mid-game does not get the world back; only a relaunch does. This is worth stating because it
+makes the lane's behaviour under a *live* lever different from its behaviour at launch, and every
+Phase G measurement armed its levers before the lane came up.
+
+#### What this does to the plan's landing order
+
+[vulkan-only-plan](vulkan-only-plan.html) had `tagpu_vk_mark.c` at landing 3 and the restorer at
+landing 5. That order is wrong: **a restored-atlas CPU mirror and the 3DO / replacement-mesh
+caster stream are prerequisites for any world pixel at all** in the shipped configuration, and
+the mark pass draws over a world that is not there. They move to the front.
+
+**The build ghost is moot for now.** `tagpu_vk_unit.c:1316`'s `otherDraws` stand-down — the one
+a build ghost or a frame past `TAGPU_PD_MAXHAND`'s 512 units trips — was never reached, because
+the unit pass refuses on the atlas mirror several checks earlier. It stays on the list; it is not
+the first thing in the way.
+
+#### Not covered
+
+* **One map, one scenario, one resolution, one GPU, one OS.** Two Continents, `one-unit`,
+  1024x768, the reference setup's 4070 under Wine. S3 has still never run.
+* **The shell was not walked** in this configuration — only in game.
+* **`ss=2` was on and is therefore untested as a difference**: with no world drawn there is
+  nothing for the supersample factor to change. The gap named in the plan (the lane has no
+  offscreen world target) is unaffected and still unmeasured.
+* **`tagpu_gui.off` was not tried** here; the plan's reading of `tagpu_vk_gui.h` stands
+  unmeasured.
+* **No pixel A/B was run.** This section is an inventory of what draws, not a parity figure.
+
+### 2.36 The Classic++ restored atlases, mirrored for Vulkan — gate 2 of the Vulkan-only plan
+
+**MEASURED 2026-09-16.** [gpu-status](gpu-status.html) §2.35 found that in the shipped
+configuration the Vulkan lane drew the UI and nothing else, because four world passes each stood
+down on the same refusal: *the GL twin is drawing through the Classic++ restored atlas and that
+surface has no CPU mirror*. This closes that for three of them — features, effects and terrain.
+The unit pass is not here; see *Not covered*.
+
+**A Vulkan pass cannot read a GL texture**, which is why the refusals existed at all. The fix is
+the mechanism `tagpu_gaf.c` already had for the UI atlas — `tagpu_gaf_atlas_mirror_rgb` and
+`_rgb_step`, whose only caller was `tagpu_gui_surf.c:2476` — extended to the world atlases.
+
+#### What each pass needed
+
+**Features and effects** are `TAGPU_GAFATLAS` instances, so they ask for the same mirror on the
+same arm beat as their indexed one, behind the same latch and gated additionally on
+`tagpu_classicpp_assets()` so a session with Classic++ off never pays the second 16 MB. One
+read-back step per published frame, in the publish rather than the arm beat, because it is a
+`glReadPixels` off an FBO and that is the render thread with the context current.
+
+**Terrain needed a different mechanism.** Its existing mirrors are *"the buffer the
+glTexImage2D was handed, kept instead of freed"*, which cannot work for `s_rgbTex` — the
+restorer paints that on the GPU. And `tagpu_terr.c` had none of the entry points, because
+`glReadPixels` is not among the fork's own globals and has to be fetched. So
+**`tagpu_gl_rgba_readback()`** was added to `tagpu_gaf.c`, where those entry points are already
+resolved: a caller-owned FBO made once, the attachment dropped on every path so a caller's
+texture is not kept alive past a delete, `GL_PACK_ALIGNMENT` and the bound framebuffer restored.
+It knows nothing about an atlas.
+
+**The content key is the part that decides whether this works at all.** `tagpu_gaf.c`'s own step
+records why, from a landing it cost two rounds: *a serial that is not the CONTENT's serial
+uploads once and then misses everything after it.* Terrain keys on the restorer's paint count
+**plus** the row count, because `ensure_atlas` can grow the atlas without a paint landing in
+between.
+
+#### Three ordering faults, all found by measurement
+
+The terrain half did not work when first written, and the A/B is what said so. Each fault was
+hidden behind the one before it, and all three are the same shape — **a refusal placed above the
+code that would satisfy it**:
+
+1. The read-back was gated on `s_job`, which `tagpu_terr.c:1109` frees the instant the restore
+   COMPLETES (*"the texture is ours"*). It therefore zeroed the mirror at exactly the moment the
+   twin became fully painted. The twin is `s_rgbTex` plus `s_rgbState` (1 restoring, 2 complete);
+   the job is only meaningful during state 1, and the key takes a `-1` sentinel once there is no
+   counter left to read.
+2. The restored image's **resize** sat after the refusal that tests it. `prepare` returning 0
+   skips everything below, so the image was never created — measured as `img=0 view=0` against a
+   perfect hand-over (`rows=2720 serial=1`).
+3. The **upload** sat after the refusal too. Image created, `have=0`, the same deadlock one level
+   down.
+
+The refusal now sits after the uploads, so the data lands and the test passes in the same frame.
+
+**AND THE REFUSAL TESTS THE VIEW, NOT THE HAND-OVER.** A first version tested `t.atlasRgb`,
+which meant a resize failure left binding 42 naming the **indexed R8** image while the refusal
+passed — the shader would have sampled R8 through an RGBA sampler and drawn a wrong picture
+instead of standing down. Testing the view and its contents makes a failure self-correcting: the
+binding falls back to the indexed view, which keeps the descriptor valid, and the branch goes
+unreachable again. The placeholder comments the G19e author left at each of these bindings
+(`tagpu_vk_feat.c:773`, `tagpu_vk_fx.c`'s 43, `tagpu_vk_terr.c`'s 42, and `tagpu_vk_unit.c`'s 43
+which is still one) say *"this is the binding that stops being a placeholder"*; three of them now
+have.
+
+**The refusals are also no longer latched.** §2.35 measured what *"draws nothing this session"*
+costs: a pass that refuses once stays dark for the process even after the condition clears. These
+conditions clear by themselves as the restorer paints, so the flag now gates the log line and not
+the refusal.
+
+#### What was measured
+
+One-unit and fx-lasers on Two Continents, 1024x768, `ss=1`, one pass armed at a time, the
+reference setup's 4070:
+
+| pass | fixture | result |
+|---|---|---|
+| features | feat-forest | **0 px of 786 432**, 243 695 non-black a side |
+| effects | fx-lasers | **0 px of 786 432**, 2 557 non-black a side (3 452 on the first run: the duel's ink moves with what is in flight) |
+| terrain, Classic++ **off** | one-unit | **0 px of 786 432**, 630 606 non-black a side |
+| terrain, Classic++ **on** | one-unit | **5 px of 786 432**, worst channel 1, 630 774 non-black a side |
+
+**Every row above was taken twice: once before the landing review and once after its fixes**, and
+the two agree — the same counts, and the terrain 5 at the same pixel with the same two values. The
+figures quoted are the post-fix ones. That is the point of re-measuring rather than carrying the
+first numbers forward: three of the five findings changed code on the path these captures go
+through.
+
+**The terrain 5 px are not a regression, and the previous-build A/B is what established that.**
+On `bfbe8b6`'s DLL the same fixture gives **0 px with Classic++ off** and **no picture at all**
+with it on — the pass stood down. So the indexed path is unchanged and the 5 px belong to the
+newly-enabled restored path, which previously produced nothing to compare against. They are
+deterministic: three runs, same count, same first pixel (721, 173), GL (60, 60, 60) against
+Vulkan (59, 59, 59). That rules out a stale or racing mirror, and the magnitude rules the mirror
+out anyway — a wrong read-back differs in thousands of pixels, not five. One level on all three
+channels, arising only when Classic++ turns `uRestored` and `uLit` on together, is float rounding
+in the lit path. 0.0006 % of pixels at one level is inside the bar already accepted for restored
+art ([renderers](renderers.html) 4c: max 1 level on 0.0012 % of bytes).
+
+**The features 0 px covers less than it looks.** `restoreglsl: feat: lazy restore armed` and
+nothing after it — the restorer had painted no feature frame in that fixture, so the twin was
+alpha 0 throughout and both lanes fell back to the palette per texel. It proves the upload
+corrupts nothing, that the `uRestored == 1` branch is reachable on both sides, and that the
+fallback through it is identical. It does not prove restored feature colours match.
+
+#### The landing review, and the two faults no picture would have shown
+
+Five findings at `medium` on the accumulated diff, all five verified against the code and acted
+on. **Two of them were invisible to every measurement above** — the pixels were already 0 px and
+the build was already clean — which is the case this gate is worth writing down:
+
+1. **A heap overflow in the terrain mirror's allocation, CONFIRMED.** The growth test read
+   `s_rgbMirrorRows > s_atlasH` — the rows last *read* against the atlas's height — so it fired
+   only when the atlas SHRANK, and the zero path sets those rows to 0 on the very map change that
+   precedes a growth, so it could never fire at all. The buffer then stayed at the first map's
+   size while `rows = s_atlasH` grew with the second and `glReadPixels` wrote past the end: a
+   1000-tile map followed by Two Continents is **4.7 MB allocated and 23.7 MB written**. The test
+   is now the ALLOCATED height (`s_rgbMirrorCap`), and the new buffer is allocated before the old
+   one is freed so a refused `calloc` leaves a working mirror rather than none.
+2. **A 16 MB-per-frame re-upload, for ever, CONFIRMED.** `doRgb` compared a stored row count
+   against the hand-over's, but what was stored was the rows *sent* — forced up to `atlasDim` —
+   which can never equal the shelf-bounded rows the producer publishes. So the comparison was
+   always unequal, the upload ran every frame on both the feature and the effects pass (**~32 MB
+   a frame between them**), the staging buffer was never given back, and a `mk_buffer` failure
+   would eventually take the pass down for the session. The serial alone decides now; the field
+   was renamed (`s_arReq`) because a name that says "rows" while holding "rows I asked for" is
+   how this happened.
+3. **An image lost with its memory still bound, CONFIRMED.** A partial `mk_image` failure nulled
+   the image and view but left the allocation, so the next `kill_image` would `vkFreeMemory`
+   memory with a live image bound to it. `kill_image` on that path, which is what
+   `tagpu_vk_terr.c`'s `shared_resize` already did for the identical case.
+4. **The restored resize ignored its return value, and ran before the bounds.** `shared_resize`
+   returns 0 when a retire is still outstanding — one at a time, by design — and the call site
+   dropped that, leaving the PREVIOUS image standing with `view && have` set. The refusal then
+   passed and the upload memcpy'd `s_rgbAtlas.w * s_rgbAtlas.h * 4` bytes out of a mirror holding
+   `atlasRgbRows`: a read past the mirror when the deferred size was the larger, the wrong rows
+   sampled when it was not. Two map changes inside one turn of the slots is what it takes. It now
+   sits with the other two shared images, after the bounds block, with its return read the same
+   way; `t.atlasRgbRows` is bounded against `t.atlasH` in that block (the producer's bound is a
+   bound only while both files are read together); and `doRgb` additionally requires the image's
+   own `w`/`h` to match, because *"I asked for this size"* is not *"the image is this size"*.
+5. **The helper duplicated the step it was extracted from.** `tagpu_gl_rgba_readback` re-stated
+   `tagpu_gaf_atlas_mirror_rgb_step`'s body line for line — ~35 lines, a second place for the
+   pack alignment, the saved binding and the dropped attachment to be got wrong. The step now
+   CALLS it. That needed one addition to the helper: an optional `status` out-parameter carrying
+   the `glCheckFramebufferStatus` value, because an **incomplete** framebuffer is a permanent
+   property of the texture and both callers latch on it, which a 0/1 return cannot tell them.
+   Terrain latches on it too now, and drops the mirror and its rows when it does — a mirror
+   nothing will read again is up to 23 MB held, and leaving the ROWS standing would be worse than
+   the memory, because the hand-over publishes on `rows > 0` and the consumer would go on drawing
+   the last read-back while the restorer painted past it.
+
+**And the prose was a finding of its own.** Each pass's *"WHAT IT DOES NOT DO"* header still
+opened *"CLASSIC++'s RESTORED ATLAS IS NOT MIRRORED"* with the new paragraph stacked underneath
+it, so a reader who stopped at the first sentence got the opposite of what the code does. The
+leading claim is rewritten in each of the three files rather than contradicted, on the rule this
+fork already applies to its counters (`gafstale` → `gafnoplane`): **the statement changes with the
+meaning.** `tagpu_vk_unit.c`'s copy is left alone and is still true.
+
+One statement in the code was wrong in the other direction and is also corrected: the terrain
+refusal's comment claimed the frame that uploads is lost and the next one draws. It is not —
+`shared_upload` sets `have` as it RECORDS the copy, into this frame's own command buffer ahead of
+this frame's draw with a barrier between them, so the upload and the draw are the same frame. The
+log bears it out: **zero refusal lines** in the post-fix runs, on a fixture whose twin restores to
+completion.
+
+#### Not covered
+
+* **The unit pass.** Its mirror is not in this landing: it cannot be verified until the caster
+  stream lands, because `tagpu_vk_unit.c` stands down on the cast-shadow map first — *"the native
+  3DO stream and the replacement meshes are still to port"* — so an unmeasured consumer would be
+  an unfinished unit of work. `tagpu_vk_unit.c`'s binding 43 stays a placeholder.
+* **Restored FEATURE and EFFECT colours**, for the reason above: the lazy queues had painted
+  nothing in either fixture. Terrain is the only pass here whose restore runs to completion.
+* **One map, one resolution, one GPU, one OS**, and `ss=1` — which the A/B requires and the patch
+  does not ship.
+* **The 5 px are attributed, not traced.** The argument is from magnitude and from which uniforms
+  turn on together, not from a line of shader arithmetic.
+* **Findings 1, 2 and 4 are fixed but not reproduced.** Each needs a map change (two of them in
+  quick succession, for 4), and the A/B fixtures are single-map by construction; the arguments are
+  from reading the code against the allocation and the serial. An in-process map change brings the
+  whole Vulkan lane down and back up, so the two-map test is a fresh lane rather than a resized
+  one and does not exercise the retire path the fourth finding is about.
+
+### 2.37 The caster census, measured before it was ported — gate 3a of the Vulkan-only plan
+
+**MEASURED 2026-09-16.** The Vulkan-only plan filed landing 3 as *"the caster stream — the native
+3DO stream and the replacement meshes, so the cast-shadow map can be drawn on this side of the
+seam and the passes that sample it stop standing down."* The exit condition was right and the
+mechanism named in it was wrong, in both directions: one of the two things it named cannot
+happen at all, and the thing that was actually blocking every world pass was not a caster.
+
+#### What the census actually holds
+
+`tagpu_shadow.c` counts, as `otherCasters`, every caster it drew into the GL map that the Vulkan
+hand-over carries no copy of. Four kinds were named. Reading the code against the numbers:
+
+| caster kind | status |
+|---|---|
+| the posed bodies | **covered** since G19e — `tagpu_vk_unit_cast`, subtracted as `tagpu_vk_unit_casters()` |
+| the native 3DO stream | **cannot occur** — dead code, below |
+| the replacement meshes | **live and uncovered** — gate 3b |
+| the heightfield with no mirror | uncovered by design; an out-of-memory path both G19e reviewers found |
+
+**THE NATIVE 3DO STREAM IS DEAD CODE.** `tagpu_shadow_unit` has exactly one call site
+(`tagpu_native.c`, the caster loop) and it sits behind `if (skip || firstv[i + 1] == firstv[i])
+continue;`. `nv` is 0 at the top of that unit loop and is not incremented anywhere inside it —
+the first increment is `emit_fx_model`, *after* `firstv[nu] = nv`. So `firstv[i+1] == firstv[i]`
+for every unit, the caster draw never runs, the body `glDrawArrays` beside it draws zero
+vertices, and `otherCasters` never counts a native-stream caster. The file says as much in its
+own words three hundred lines earlier — *"an ordinary unit contributes no vertices either now"* —
+since G16 step 8 made the posed program the path. **There is nothing to port.** The code is
+marked where it stands rather than deleted; deletion is the plan's landing 11.
+
+#### What was actually blocking every world pass
+
+With the restored atlas **off** and four posed units on screen under Classic++ soft shadows, the
+census closes on its own: `otherCasters - ours == 0`, no refusal on any pass, the shadow pass
+uploads its caster mesh and draws, and the terrain and unit passes both draw into the Vulkan
+frame. With the restored atlas **on**, the same fixture: *"the GL map holds 1 caster(s) this lane
+has no copy of (0 of them the unit pass carries)"*.
+
+The difference is not a caster. The unit pass stood down on **the Classic++ restored atlas**
+several checks before it reached its casters, so `tagpu_vk_unit_casters()` answered 0 whatever
+the casters were, and the census refused every frame with a unit on it — which stood the shadow
+map down, which stood the terrain down. §2.35's *"the lane draws the UI and nothing else"*, read
+from the other end: **one missing mirror, propagating through three passes.**
+
+So gate 3a is the half §2.36 deferred — the unit atlas's restored twin — and the caster stream
+proper is gate 3b.
+
+#### The mirror, a fourth time
+
+Gate 2's mechanism applied unchanged: `tagpu_render3do.c` gains `_mirror_rgb_want` / `_step` /
+`_mirror_rgb` beside the indexed trio, asked behind `tagpu_classicpp_assets()` so a session with
+Classic++ off never pays the second 16 MB and stepped once per published frame on the render
+thread; `tagpu_posedraw.c` publishes `atlasRgb` with **its own rows and its own serial**; and
+`tagpu_vk_unit.c` takes a second RGBA8 image at binding 43, which stops being the placeholder the
+G19e author left there.
+
 **Gate 2's five findings were applied here before they could be made again**, and that is the
 point of writing them down: the serial ALONE decides the upload (nothing stores a row count to
 compare against a published one — finding 2), the rows are bounded against the atlas's own square

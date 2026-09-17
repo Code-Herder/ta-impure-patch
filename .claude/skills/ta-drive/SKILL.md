@@ -2105,42 +2105,77 @@ rm -f $G/tagpu_fx.ab $G/tagpu_fx_*.ppm; sleep 2; touch $G/tagpu_fx.ab; sleep 9
 **The unit pass's A/B: the lever is `tagpu_posedraw.ab` and the pass name is `posedraw`.**
 
 ```bash
-tools/tacli arm <i> 'native.on=all wrecks' classicpp.on \
-      'classicpp.cfg=assets=1 shadows=1 terrainshadow=1' ss.off 'vk.on=color=0,0,0'
+tools/tacli arm <i> 'native.on=all wrecks' mark.on classicpp.on \
+      'classicpp.cfg=assets=1 shadows=0 aniso=1' ss.off 'vk.on=color=0,0,0'
 tools/tacli scenario load <i> selbox-facings --restart --res 1024x768 --maxfps 0
-sleep 20
+sleep 26
 G=<main checkout>/tagpu/instances/<i>/gamedir
 rm -f $G/tagpu_posedraw.ab $G/tagpu_posedraw_*.ppm; sleep 2; touch $G/tagpu_posedraw.ab; sleep 10
-<main checkout>/.venv-undither/bin/python tools/vk-ab.py $G --pass posedraw
+<main checkout>/.venv-undither/bin/python tools/vk-ab.py $G --pass posedraw   # 0 px
 ```
 
-- **Do NOT arm `terr.on` for it.** With Classic++ soft shadows on, the terrain pass needs the
-  unit pass *drawing* for the caster census to close — and two drawing passes make the lane refuse
-  the capture outright (`1 A/B levers claimed this frame and 2 passes drew into it`). So with
-  shadows on, terrain and units are two runs, always. That message is also the best evidence you
-  have that both passes really drew: the guard counts them.
-- **`shadows=1` is worth 1 px of 786 432 on this pass** at `selbox-facings`, at (517, 396), one
-  level on the blue channel — the soft-shadow PCF, measured on both the pre- and post-gate-3
-  builds. With `shadows=0` the same fixture is **0 px**. Do not go hunting for it as a new bug.
-- **THE UNIT RESTORER IS LAZY AND A STATIC FIXTURE PAINTS NOTHING.** `restoreglsl: unit: lazy
-  restore armed` is not "it restored"; there is no eager mode and no progress line. The check is
-  free and it is the only one that works: run the fixture twice, `assets=1` and `assets=0`, and
-  `cmp` the two **GL** captures. Byte-identical means the twin was alpha 0 throughout and both
-  lanes fell back to the palette per texel — so the run proves the plumbing and the fallback, and
-  says nothing about restored unit colours. (Terrain is the exception: its restore runs to
-  completion in seconds and logs `terr: restored atlas complete`.)
+- **`mark.on` IS NOT OPTIONAL AND IT IS NOT ABOUT MARKS.** `tagpu_rglsl_step()` — the only thing
+  that ever paints a Classic++ restored twin — is called from `tagpu_native.c` inside
+  `if (fxOn || sfxOn || featOn || terrOn || markOn)`. Armed with `native.on` alone, the twin is
+  created, the job is armed, `restoreglsl: unit: lazy restore armed` appears in the log, and
+  **nothing is ever painted**: the `uRestored == 1` branch reads alpha 0 on both lanes, both fall
+  back to the palette per texel, and the A/B reports **0 px about a branch neither lane took**.
+  `mark.on` is the one item on that list with no Vulkan pass of its own, so it steps the restorer
+  and still leaves the unit pass as the only pass drawing into the Vulkan frame. This cost gate 3a
+  a whole round of wrong conclusions: the fixture went from 0 px to 2 126 of 2 132 differing when
+  that one file was added, and four real faults were hiding behind the 0.
+- **CHECK THE TWIN ACTUALLY PAINTED before quoting any restored-art figure.** There is no log line
+  that says it did. Two ways, both cheap: `touch $G/tagpu_restoredump.on` writes
+  `tagpu_restore_<tag>.{r8,rgba,idx}` once the restore job goes idle (and logs `restored twin
+  dumped`); or run the fixture twice at `assets=1` and `assets=0` and `cmp` the two **GL**
+  captures — byte-identical means the restorer painted nothing.
+- **`aniso=1` is the A/B's, and 4 is what ships.** Anisotropic sample placement is
+  implementation-defined; GL and Vulkan do it differently on the same hardware, and that is the
+  whole of what is left between the lanes once everything else is carried across — 566 of 2 132
+  unit pixels at worst channel 9. `aniso=` is a `tagpu_classicpp.cfg` knob that **both lanes
+  read**, so setting it to 1 for the measurement is a stated substitution, not a lane being
+  configured differently from its oracle. At the 4× default the pass draws and the A/B is
+  expected to be non-zero; do not report that as a regression.
+- **`shadows=0` for this one**, unless you want the soft-shadow PCF's 1 px at (517, 396) in the
+  figure too. That pixel is on both builds and is the PCF, not the pass.
+- **Do NOT arm `terr.on` alongside it.** With shadows on, terrain needs the unit pass *drawing*
+  for the caster census to close — and two drawing passes make the lane refuse the capture
+  outright (`1 A/B levers claimed this frame and 2 passes drew into it`). So with shadows on,
+  terrain and units are two runs, always. That message is also the best evidence you have that
+  both passes really drew: the guard counts them.
 - **A tacli instance ships a REPLACEMENT MESH active.** `gamedir/hires/armpw.glb` is loaded for
-  every Peewee — `hires/off/` beside it is a *parking directory*, not a lever, so removing it
-  does nothing and `rm` says `Is a directory`. Until gate 3b lands, any fixture with an ARMPW in
-  it stands the whole Vulkan world down: the caster census refuses 1 with one Peewee on screen
-  and 16 on `crowd-static`. `grep -a 'hires\\' tagpu.log` names every unit that took a
-  replacement mesh.
+  every Peewee — `hires/off/` beside it is a *parking directory*, not a lever, so removing it does
+  nothing and `rm` says `Is a directory`. Until gate 3b lands, any fixture with an ARMPW in it
+  stands the whole Vulkan world down: the caster census refuses 1 with one Peewee on screen and 16
+  on `crowd-static`. `grep -a 'hires\\' tagpu.log` names every unit that took one.
 - **A scratch worktree cannot run tacli**: `tacli create` wants the wine prefix template, which is
   gitignored and lives only in the real checkouts (`tacli: template wine prefix missing`). To A/B
   a FOREIGN build, make the instance from a real worktree, `cp` the other tree's `ddraw.dll` over
   `<gamedir>/ddraw.dll`, and launch with **`--keep-dll`** so tacli does not refresh it back.
   `md5sum` the three DLLs in the script's own output; that line is what tells you the run tested
   what you think it did.
+
+**Putting the game window somewhere other than the main monitor.** `tile_for` lays its grid over
+the WHOLE X screen from (0,0), which spans every head, so no `--slot` number means "that monitor"
+and instances land wherever the grid falls — in practice on the primary. To park one elsewhere,
+read the layout and move the window after launch:
+
+```bash
+wid=$(tools/tacli ls --json | python3 -c "import json,sys;print([r for r in json.load(sys.stdin) if r['name']=='<i>'][0]['window'][0])")
+DISPLAY=:0 xdotool windowmove "$wid" <x> <y>
+```
+
+- **Take the window id from `tacli ls --json`, never from `xdotool search --name`.** Searching by
+  title matches ANY window carrying the string — including the terminal running the script, whose
+  title holds the command line. That is not hypothetical: it moved a 668×546 shell and reported
+  success.
+- **Derive the head from `xrandr --query`** rather than hard-coding one; reading the layout is a
+  read, which the desktop-is-the-user's rule allows (what it forbids is changing modes). Picking
+  the *smallest* connected non-primary output that fits is the polite default — a large secondary
+  is more likely to be something the human is reading.
+- **The window must stay fully on a VISIBLE head.** This is not cosmetic: `glReadPixels` outside
+  the visible region is undefined, and that is exactly what every A/B capture reads. `tile_for`'s
+  own docstring is about the same trap.
 
 **The shadow map's A/B (G19e), and it is the only pass whose oracle is another pass's pixels:**
 

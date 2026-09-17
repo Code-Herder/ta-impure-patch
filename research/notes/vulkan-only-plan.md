@@ -210,17 +210,27 @@ of everything else. The order below is the corrected one.
      were, the census refused every frame with a unit on it, and the shadow map and the terrain
      stood down behind it. **That is landing 3a**, and with it the census closes on its own for
      stock art: four posed units, soft shadows on, no refusal on any pass, the map drawn.
-     Measured: the build before it drew **no picture at all** on that fixture; this one is **0 px**
-     with shadows off and **1 px** with them on, and that 1 px is the shadow PCF's, established
-     against the previous build on the one configuration both can draw.
+     Measured: the build before it drew **no picture at all** on that fixture; this one is
+     **0 px of 786 432 at 1024×768 and 0 px of 307 200 at 640×480**, with the A/B taken at
+     `aniso=1` — the owner's stated substitution, because anisotropic sample placement is
+     implementation-defined and the two APIs differ there by up to 9 levels on 27 % of unit
+     pixels. Play keeps 4× on both lanes.
    * **3b is the replacement meshes**, and they are not a hires-install curiosity: a tacli
      instance ships `hires/armpw.glb` active, so the census refuses **1** caster with one Peewee
      on screen and **16** on a 257-unit crowd.
 
-   **The lesson worth carrying:** a gate's row names a mechanism, and the mechanism is a
-   hypothesis. Measuring the census first cost three runs and saved porting a stream that cannot
-   draw — while the thing that actually had to be built was sitting in the previous gate's
+   **Two lessons worth carrying.** A gate's row names a mechanism, and the mechanism is a
+   hypothesis: measuring the census first cost three runs and saved porting a stream that cannot
+   draw, while the thing that actually had to be built was sitting in the previous gate's
    *Not covered*.
+
+   And **a 0 px from a fixture that never took the branch is worse than no measurement, because
+   it is reported as a pass.** The restorer only paints when `fx|sfx|feat|terr|mark` is armed, so
+   a unit A/B armed with `native.on` alone measures the FALLBACK and calls it parity — landing
+   3a's first version did exactly that and was wrong in four independent ways behind it. Before
+   quoting a restored-art figure, check the twin actually painted: `tagpu_restoredump.on`, or
+   `cmp` the GL captures from `assets=1` and `assets=0`. Gate 2's feature and effects figures
+   carry this caveat and now it is known why.
 4. **`render_vk.c`** — the fourth backend, `renderer=vulkan`, present into `g_ddraw.hwnd`, the
    offscreen world target at `ss×` with its resolve, TA's surface uploaded by the backend instead
    of by the GUI pass. Route D's window, `tagpu_vk_wndproc`, `WM_TAGPU_VK` and the geometry

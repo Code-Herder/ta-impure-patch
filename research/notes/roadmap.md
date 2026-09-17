@@ -2611,12 +2611,28 @@ step 8, so no ordinary unit has native vertices. And what was actually standing 
 down was not a caster: the unit pass refused on **the Classic++ restored atlas** several checks
 before it reached its casters, so the caster census read 0 on every frame with a unit on it and
 the shadow map and the terrain stood down behind it. Landing 3a is that mirror — gate 2's
-mechanism a fourth time, with gate 2's five findings applied in advance. The build before it drew
-**no picture at all** on the unit pass's own A/B with Classic++ art on; this one is **0 px of
-786 432** with the cast-shadow map off and **1 px** with it on, and that 1 px is the soft-shadow
-PCF's, established against the previous build on the one configuration both can draw. What is
-left is **3b, the replacement meshes** — 1 refused caster with one Peewee on screen, 16 on a
-257-unit crowd, because a tacli instance ships `hires/armpw.glb` active.
+mechanism a fourth time, with gate 2's five findings applied in advance.
+
+**And its own review found that the measurement was wrong before the code was.** `tagpu_rglsl_step()`
+runs only when `fx|sfx|feat|terr|mark` is armed, so a unit A/B armed with `native.on` alone never
+paints the restorer: the twin stays alpha 0, both lanes fall back to the palette per texel, and
+the 0 px that measures is about a branch neither of them took. `mark.on` steps it and has no
+Vulkan pass to contend for the capture. With that one lever the same fixture went from 0 px to
+**2 126 of 2 132 unit pixels differing**, and four faults came apart in order behind it — a
+`dim × rows` image where the UVs are normalised against the whole square, the indexed sampler on
+the restored binding, a single-level image against a mipped twin, and the mirror's mip levels one
+paint batch stale for good. Worst channel 155 → 7.
+
+**What was left is anisotropy, and it is not a bug.** Both APIs leave anisotropic sample placement
+to the implementation and the same driver does it differently for each. The owner's decision:
+**play keeps 4× on both lanes, and the A/B is taken at `aniso=1` as a stated substitution** — the
+same shape as G19f's walk. Measured: **0 px of 786 432 at 1024×768 and 0 px of 307 200 at
+640×480** with the substitution, and at the 4× play default the pass **draws**, 566 of 2 132 unit
+pixels apart at worst channel 9 with the ink identical. The build before this landing drew nothing
+at all on that fixture.
+
+What is left is **3b, the replacement meshes** — 1 refused caster with one Peewee on screen, 16 on
+a 257-unit crowd, because a tacli instance ships `hires/armpw.glb` active.
 
 **Its landing 1 ran the same day and is the reason the rest is ordered as it is**
 ([gpu-status](gpu-status.html) §2.35): started in the configuration the patch actually ships in
