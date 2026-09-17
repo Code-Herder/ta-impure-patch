@@ -278,6 +278,28 @@ int tagpu_terr_armed(unsigned frame_counter)
         s_rvkWant = 1;
         flog("terr: restorevk -- the restored atlas is the other lane's to paint, "
              "so no read-back and the frame list is published instead");
+        /* AND THE MIRROR GOES WITH THE LATCH, ROWS FIRST -- which the first
+           version of this did not do, and the claim in tagpu_terr.h that the
+           two hand-over fields are mutually exclusive was false because of it.
+           [FROM THE LANDING-7c REVIEW; independently found the same hour.]
+           This lever is POLLED until it latches, so it can be created
+           mid-session -- and then `rgb_mirror_step`'s early return stops
+           updating the mirror while leaving `rows > 0` standing, so the
+           publisher below ran BOTH blocks. A consumer then resized its restored
+           image twice in one call and uploaded a frozen mirror into the very
+           image the other lane renders into; where the mirror's rows and the
+           atlas's height disagreed it refused every frame instead and the
+           terrain stopped drawing altogether.
+           Freeing it is the same argument the read-back's own failure path
+           makes a few hundred lines down: a buffer nothing will read again is
+           up to 23 MB held for the process, and leaving ROWS standing is worse
+           than the memory because the publish is gated on `rows > 0`. */
+        free(s_rgbMirror);
+        s_rgbMirror = NULL;
+        s_rgbMirrorCap = 0;
+        s_rgbMirrorRows = 0;
+        s_rgbMirrorPainted = 0;
+        s_rgbMirrorSerial++;
     }
     if (s_passive || s_over) tagpu_terrown_set_skip(0);
     if (was != 1) {
@@ -1614,15 +1636,19 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
     s_pub.atlasSerial = s_atlasMirrorSerial;
     /* published only when the read-back has covered rows -- a non-NULL pointer
        with 0 rows would hand a consumer an image with nothing to upload */
-    if (s_rgbMirror && s_rgbMirrorRows > 0) {
+    if (!s_rvkWant && s_rgbMirror && s_rgbMirrorRows > 0) {
         s_pub.atlasRgb       = s_rgbMirror;
         s_pub.atlasRgbRows   = s_rgbMirrorRows;
         s_pub.atlasRgbSerial = s_rgbMirrorSerial;
     }
-    /* ...OR THE REQUEST, never both -- `rgb_mirror_step` stands down under
-       `s_rvkWant`, so `s_rgbMirror` is NULL above whenever this publishes.
-       The serial goes out even with no list, because a DROP is news: it is
-       how a consumer learns the atlas it was painting is not this map's. */
+    /* ...OR THE REQUEST, NEVER BOTH, and the `!s_rvkWant` above is what makes
+       that structural rather than a consequence of the free at the latch. Two
+       guards for one invariant is deliberate: the free keeps the memory honest
+       and this keeps the HAND-OVER honest, and a consumer reading
+       tagpu_terr.h's "mutually exclusive" should not have to trace a lever's
+       latch order to believe it.
+       The serial goes out even with no list, because a DROP is news: it is how
+       a consumer learns the atlas it was painting is not this map's. */
     if (s_rvkWant) {
         s_pub.restoreFrames  = s_rFrames;
         s_pub.restoreN       = s_rFrames ? s_rFrameN : 0;

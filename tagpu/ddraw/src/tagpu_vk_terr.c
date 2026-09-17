@@ -274,6 +274,17 @@ static TAGPU_VKRJOB* s_rjob;
 static unsigned      s_rjSerial;
 static int           s_rjTried;
 static int           s_rjPainted;          /* job_painted at the last report  */
+/* THE SOURCE VIEW THE LIVE JOB NAMES, and it is a separate key from the serial
+   because the two move for different reasons. A job captures `s_atlas.view` at
+   creation and never re-reads it, so ANY resize of the indexed atlas leaves its
+   descriptors naming `s_atlas.oldView` -- which `shared_slot_done` destroys
+   `slots` frames later while the restorer is still drawing. `restore_want`
+   normally frees the job in the same frame, but it sits BELOW the resize and
+   every `return 0` and `goto refuse` between the two skips it. So the drop is
+   keyed here, immediately after the resize, where nothing can return first.
+   [FROM THE LANDING-7c REVIEW as a PLAUSIBLE finding; confirmed by reading the
+   early returns that sit between the two.] */
+static VkImageView   s_rjSrcView;
 
 /* ---- THE BYTE ORACLE'S VULKAN HALF (tagpu_restoredump.on) ----------------
    tagpu_terr.c writes `tagpu_restore.rgba` off its restored TEXTURE with
@@ -1235,6 +1246,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
         if (s_rjob) {
             tagpu_vk_restore_job_free(d, s_rjob);
             s_rjob = NULL;
+            s_rjSrcView = VK_NULL_HANDLE;
             s_rgbAtlas.have = 0;           /* what it holds is the old map's   */
         }
         return;
@@ -1298,6 +1310,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
         return;
     }
     s_rjSerial = t->restoreSerial;
+    s_rjSrcView = s_atlas.view;
     s_rjPainted = 0;
     if (!repaint) s_rgbAtlas.have = 0;     /* it is being blanked and repainted */
     plog(d, "terr: restoring the tile atlas HERE - %d frames over %dx%d, "
@@ -1558,6 +1571,14 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     /* THE SHARED IMAGES FIRST, because a resize that cannot be applied yet
        (one retire at a time) means this frame draws nothing at all rather than
        sampling the previous map's texels. */
+    if (s_rjob && s_rjSrcView && s_atlas.view && s_rjSrcView != s_atlas.view) {
+        /* see `s_rjSrcView`: the atlas the job reads from has been retired */
+        plog(d, "terr: the indexed atlas moved under a live restore - dropping it "
+                "and starting over on the new one");
+        tagpu_vk_restore_job_free(d, s_rjob);
+        s_rjob = NULL; s_rjSerial = 0; s_rjPainted = 0; s_rjSrcView = VK_NULL_HANDLE;
+        s_rgbAtlas.have = 0;
+    }
     if (!shared_resize(d, &s_atlas, t.atlasW, t.atlasH, VK_FORMAT_R8_UNORM, IMG_SAMPLED)) {
         if (!s_atlas.img) goto refuse;
         return 0;                          /* a retire is still clearing       */
@@ -1950,7 +1971,7 @@ void tagpu_vk_terr_down(const TAGPU_VKPASS* d)
        framebuffer may not be destroyed. The seam's vkDeviceWaitIdle is above
        both, so neither is still in a queue. */
     if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; }
-    s_rjSerial = 0; s_rjPainted = 0;
+    s_rjSerial = 0; s_rjPainted = 0; s_rjSrcView = VK_NULL_HANDLE;
     /* THE DUMP'S BUFFER, AND ITS STATE WITH IT. A copy recorded into a command
        buffer of the device that is going never completes, so the collection is
        owed to nobody: state 0 rather than 2, so a new device's restore can be

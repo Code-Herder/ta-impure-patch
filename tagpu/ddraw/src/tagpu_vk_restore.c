@@ -104,6 +104,7 @@
     X(vkBindImageMemory) X(vkCreateImageView) X(vkDestroyImageView) \
     X(vkCreateSampler) X(vkDestroySampler) \
     X(vkAllocateMemory) X(vkFreeMemory) X(vkMapMemory) X(vkUnmapMemory) \
+    X(vkDeviceWaitIdle) \
     X(vkCreateQueryPool) X(vkDestroyQueryPool) X(vkGetQueryPoolResults) \
     X(vkCmdResetQueryPool) X(vkCmdWriteTimestamp) \
     X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) \
@@ -369,6 +370,52 @@ typedef struct {
 } RETIRE;
 static RETIRE s_ret;
 
+/* ---- AND A JOB'S OWN RESOURCES NEED THE SAME THING, which the first version
+   of this file did not give them. [FROM THE LANDING-7c REVIEW.]
+   `job_free` destroyed the destination framebuffer, the palette image and the
+   five descriptor sets outright -- and three of its four callers are in a
+   consumer's `prepare`, where the seam has waited on THIS SLOT'S fence and no
+   other. The other `slots - 1` submits are still in the queue naming exactly
+   those objects: the OUT render pass named `dstFb`, its descriptor set was
+   `setOut[i]`, and FILL sampled `palView`. A map change, a GL reset or a
+   repaint within `slots - 1` frames of a draw is all it takes
+   (VUID-vkDestroyFramebuffer-framebuffer-00892,
+   VUID-vkFreeDescriptorSets-pDescriptorSets-00309) -- a crash on a strict
+   driver and corrupt paint on a lax one.
+
+   The activations got a whole retire for this hazard and the job's own
+   resources got none, which is the inconsistency that made it easy to miss.
+   So they get one too, with the same licence: `pending == 0` and not a frame
+   count. There is ONE PATH rather than a fast path for idle callers -- `down`
+   flushes these unconditionally because the seam has drained the device above
+   it, so nothing here depends on which caller knew what.
+
+   THE RING IS SIZED AT THE WORST CASE ITS CALLERS CAN PRODUCE, which is what
+   makes it a bound rather than a guess. A consumer frees at most one job per
+   frame -- the serial it keys on moves at most once per frame -- there are at
+   most `TAGPU_R_MAXJOBS` consumers, and an entry is given back after `slots`
+   frames, so no more than `TAGPU_R_MAXJOBS x TAGPU_VK_SLOTS` can be
+   outstanding at once even if every consumer churned its serial on every
+   frame. At 80-odd bytes an entry that is under 4 KB, so there is no reason to
+   be clever about it.
+   The full case is therefore unreachable, and it is still handled rather than
+   asserted: the device is DRAINED and every entry freed immediately. A stall
+   on a frame is honest; a destroy nobody has licensed is the bug this whole
+   structure exists to prevent. */
+typedef struct {
+    VkFramebuffer   fb;
+    VkImage         palImg;
+    VkDeviceMemory  palMem;
+    VkImageView     palView;
+    VkBuffer        palStage;
+    VkDeviceMemory  palStageMem;
+    VkDescriptorSet set[5];
+    int             nset;
+    uint32_t        pending;
+} JRETIRE;
+#define JRET_MAX (TAGPU_R_MAXJOBS * TAGPU_VK_SLOTS)
+static JRETIRE s_jret[JRET_MAX];
+
 /* the framebuffer cache over (image, first layer, count) -- the combinations a
    run actually uses are few (one per conv group shape plus FILL's single
    layer), so a small linear cache beats computing them up front */
@@ -400,6 +447,7 @@ static VkDeviceMemory s_gmem;
 static unsigned char* s_gmap;
 static VkDeviceSize   s_gstride;
 static uint32_t       s_gnext;
+static int            s_gSaid;             /* the ring-full line, once     */
 
 static VkBuffer       s_vbuf;                       /* the OUT vertices        */
 static VkDeviceMemory s_vmem;
@@ -824,15 +872,48 @@ static void retire_take(void)
     s_ret.pending = 0xFFFFFFFFu;        /* set properly by the caller, which has `d` */
 }
 
-/* A SLOT HAS TURNED OVER: its last submit is complete, because the seam waited
-   on that slot's fence before handing us this command buffer. Called at the top
-   of every step, UNCONDITIONALLY. */
-static void retire_slot_done(const TAGPU_VKPASS* d, uint32_t slot)
+/* Destroy one job retire's contents. The caller has established the licence:
+   either its `pending` reached 0, or the device has been drained. */
+static void jret_kill(const TAGPU_VKPASS* d, JRETIRE* r)
+{
+    if (r->fb) vkDestroyFramebuffer(d->dev, r->fb, NULL);
+    if (r->palView) vkDestroyImageView(d->dev, r->palView, NULL);
+    if (r->palImg) vkDestroyImage(d->dev, r->palImg, NULL);
+    if (r->palMem) vkFreeMemory(d->dev, r->palMem, NULL);
+    if (r->palStage) vkDestroyBuffer(d->dev, r->palStage, NULL);
+    if (r->palStageMem) vkFreeMemory(d->dev, r->palStageMem, NULL);
+    if (r->nset && s_dpool) vkFreeDescriptorSets(d->dev, s_dpool, (uint32_t)r->nset, r->set);
+    memset(r, 0, sizeof *r);
+}
+
+/* Give every job retire back, whatever its mask says. Only legal where the
+   device has been drained -- `down`, which the seam's vkDeviceWaitIdle is
+   above, and the ring-full path, which drains it first. */
+static void jret_flush(const TAGPU_VKPASS* d)
+{
+    int i;
+    if (!d || !d->dev) { memset(s_jret, 0, sizeof s_jret); return; }
+    for (i = 0; i < JRET_MAX; i++) if (s_jret[i].pending) jret_kill(d, &s_jret[i]);
+}
+
+/* A free slot of the ring, draining the device to make one if it is full. */
+static JRETIRE* jret_take(const TAGPU_VKPASS* d)
+{
+    int i;
+    for (i = 0; i < JRET_MAX; i++) if (!s_jret[i].pending) return &s_jret[i];
+    rlog(LANE ": the job retire is full, so the device is drained to empty it "
+               "-- a stall on this frame and nothing worse");
+    if (vkDeviceWaitIdle) vkDeviceWaitIdle(d->dev);
+    jret_flush(d);
+    return &s_jret[0];
+}
+
+/* The activation retire's contents, destroyed. Split out from the slot walk so
+   that `down` can use it under the seam's device drain, which is what the
+   review found missing. */
+static void retire_kill(const TAGPU_VKPASS* d)
 {
     int i, l;
-    if (!s_ret.pending) return;
-    s_ret.pending &= ~(1u << slot);
-    if (s_ret.pending) return;
     for (i = 0; i < s_ret.nfb; i++)
         if (s_ret.fb[i]) vkDestroyFramebuffer(d->dev, s_ret.fb[i], NULL);
     for (i = 0; i < 2; i++) {
@@ -843,6 +924,26 @@ static void retire_slot_done(const TAGPU_VKPASS* d, uint32_t slot)
         if (s_ret.mem[i]) vkFreeMemory(d->dev, s_ret.mem[i], NULL);
     }
     memset(&s_ret, 0, sizeof s_ret);
+}
+
+/* A SLOT HAS TURNED OVER: its last submit is complete, because the seam waited
+   on that slot's fence before handing us this command buffer. Called at the top
+   of every step, UNCONDITIONALLY. */
+static void retire_slot_done(const TAGPU_VKPASS* d, uint32_t slot)
+{
+    int i, l;
+    /* THE JOB RETIRES FIRST, and they are independent of the activation one --
+       several can be outstanding at once, each with its own mask, because a job
+       is freed whenever its consumer's serial moves and not on a schedule. */
+    for (i = 0; i < JRET_MAX; i++) {
+        if (!s_jret[i].pending) continue;
+        s_jret[i].pending &= ~(1u << slot);
+        if (!s_jret[i].pending) jret_kill(d, &s_jret[i]);
+    }
+    if (!s_ret.pending) return;
+    s_ret.pending &= ~(1u << slot);
+    if (s_ret.pending) return;
+    retire_kill(d);
 }
 
 /* ---- the shared build, on the first job ---- */
@@ -1078,7 +1179,29 @@ static struct TAGPU_VKRJOB s_vjob[TAGPU_R_MAXJOBS];
 static uint32_t g_alloc(const void* data, size_t bytes)
 {
     VkDeviceSize off;
-    if (s_gnext >= GLOBALS_RING || !s_gmap) return 0xFFFFFFFFu;
+    if (s_gnext >= GLOBALS_RING || !s_gmap) {
+        /* IT SAYS WHY, and it did not. [FROM THE LANDING-7c REVIEW.] The
+           callers return 0 from `draw`, which the core turns into
+           `failed = 1` and a drop -- and the consumer then logs that the
+           restore failed with no reason anywhere in the log. That is the same
+           silence this landing's own notes criticise the vertex bug for, on
+           the one bound those notes concede a fast enough device can reach:
+           GLOBALS_RING blocks per slot per slice, one for a FILL, one for a
+           CONV and two for an OUT, so a `full`-model batch spends 15 and a
+           slice of more than about seventeen batches exhausts it.
+           Said once per slice, because the slice that hit it will hit it
+           again on the next draw and a per-draw line would bury the rest. */
+        if (!s_gSaid) {
+            char b[200];
+            s_gSaid = 1;
+            _snprintf(b, sizeof b, "%s: the slice wanted more than %d uniform blocks, "
+                      "which is more batches in one slice than this ring carries - "
+                      "the job fails here rather than binding the wrong weights",
+                      LANE, GLOBALS_RING);
+            rlog(b);
+        }
+        return 0xFFFFFFFFu;
+    }
     off = ((VkDeviceSize)s_slot * GLOBALS_RING + s_gnext) * s_gstride;
     memset(s_gmap + off, 0, (size_t)s_gstride);
     memcpy(s_gmap + off, data, bytes);
@@ -1709,20 +1832,24 @@ int tagpu_vk_restore_job_painted(const TAGPU_VKRJOB* j)
 
 void tagpu_vk_restore_job_free(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j)
 {
-    VkDescriptorSet set[5];
     if (!j) return;
     if (d && d->dev) {
-        if (j->dstFb) vkDestroyFramebuffer(d->dev, j->dstFb, NULL);
-        if (j->palView) vkDestroyImageView(d->dev, j->palView, NULL);
-        if (j->palImg) vkDestroyImage(d->dev, j->palImg, NULL);
-        if (j->palMem) vkFreeMemory(d->dev, j->palMem, NULL);
-        if (j->palStage) vkDestroyBuffer(d->dev, j->palStage, NULL);
-        if (j->palStageMem) vkFreeMemory(d->dev, j->palStageMem, NULL);
+        /* INTO THE RETIRE, NOT DESTROYED HERE. Every one of these objects can
+           still be named by a submitted command buffer -- see JRETIRE. The
+           palette's MAPPING goes now, because unmapping is not a device
+           operation and the memory it belongs to is kept until the mask
+           clears. */
+        JRETIRE* r = jret_take(d);
+        if (j->palMap && j->palStageMem) vkUnmapMemory(d->dev, j->palStageMem);
+        r->fb = j->dstFb;
+        r->palImg = j->palImg; r->palMem = j->palMem; r->palView = j->palView;
+        r->palStage = j->palStage; r->palStageMem = j->palStageMem;
         if (j->setFill && s_dpool) {
-            set[0] = j->setFill; set[1] = j->setConv[0]; set[2] = j->setConv[1];
-            set[3] = j->setOut[0]; set[4] = j->setOut[1];
-            vkFreeDescriptorSets(d->dev, s_dpool, 5, set);
+            r->set[0] = j->setFill; r->set[1] = j->setConv[0]; r->set[2] = j->setConv[1];
+            r->set[3] = j->setOut[0]; r->set[4] = j->setOut[1];
+            r->nset = 5;
         }
+        r->pending = d->slots >= 32 ? 0xFFFFFFFFu : ((1u << d->slots) - 1u);
     }
     if (j->core) tagpu_rcore_job_free(&s_sched, j->core);
     memset(j, 0, sizeof *j);
@@ -1739,6 +1866,7 @@ void tagpu_vk_restore_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
     if (!s_built || s_state != ST_READY) return;
     s_d = d; s_cb = cb; s_slot = slot < TAGPU_VK_SLOTS ? slot : 0;
     s_gnext = 0;
+    s_gSaid = 0;
     s_sliceOpen = 0;
     tagpu_rcore_step(&s_sched);
     s_cb = VK_NULL_HANDLE;
@@ -1751,6 +1879,12 @@ void tagpu_vk_restore_lost(void)
     memset(s_actImg, 0, sizeof s_actImg); memset(s_actMem, 0, sizeof s_actMem);
     memset(s_actArr, 0, sizeof s_actArr); memset(s_actLay, 0, sizeof s_actLay);
     memset(s_fb, 0, sizeof s_fb); s_nfb = 0;
+    /* BOTH RETIRES FORGOTTEN RATHER THAN FREED -- every handle in them died
+       with the device, and a `pending` left standing would have a rebuilt
+       device's `retire_slot_done` destroy handles that belong to nothing.
+       [FROM THE LANDING-7c REVIEW.] */
+    memset(&s_ret, 0, sizeof s_ret);
+    memset(s_jret, 0, sizeof s_jret);
     memset(s_tabImg, 0, sizeof s_tabImg); memset(s_tabMem, 0, sizeof s_tabMem);
     memset(s_tabView, 0, sizeof s_tabView);
     s_tabStage = VK_NULL_HANDLE; s_tabStageMem = VK_NULL_HANDLE; s_tabMap = NULL; s_tabInit = 0;
@@ -1774,6 +1908,17 @@ void tagpu_vk_restore_down(const TAGPU_VKPASS* d)
 {
     int i, l;
     if (!d || !d->dev) { tagpu_vk_restore_lost(); return; }
+    /* THE TWO RETIRES GO FIRST, AND NEITHER WAS IN HERE. [FROM THE LANDING-7c
+       REVIEW.] A retire outstanding at teardown -- an activation grow, or the
+       idle release after 180 quiet slices -- held two array images, their
+       memory, every layer view and up to 32 framebuffers, around 100 MB, and
+       `vkDestroyDevice` then ran with all of it alive. The resize path happened
+       to be fine because the device survives it and a later
+       `retire_slot_done` cleaned up; `vk_down` had nothing that ever would.
+       The licence here is the seam's vkDeviceWaitIdle above this call, which is
+       stronger than any mask. */
+    jret_flush(d);
+    if (s_ret.pending) { s_ret.pending = 0; retire_kill(d); }
     fb_flush(d);
     for (i = 0; i < 2; i++) {
         for (l = 0; l < MAXLAYER; l++)

@@ -7905,7 +7905,9 @@ ways**: `TRANSFER → VERTEX_INPUT` makes this batch's vertices visible to its o
 `VERTEX_INPUT → TRANSFER` makes the previous batch's read of those bytes a fact before this write
 lands on them.
 
-**Re-measured after the fix: `cmp` CLEAN — both dumps 46 461 952 bytes, byte for byte identical**,
+**Re-measured after the fix, and again after the review's four fixes** (three runs in all, the last
+on the landing as it stands): **`cmp` CLEAN — both dumps 46 461 952 bytes, byte for byte
+identical**,
 and the counts still 10 036 frames / 4 142 wrap-padded / 158 batches / 7 426 draws on both lanes.
 **The collision condition was exercised again in that run** — batches 157 and 158 both issued at
 slice 914 — so this is the fix holding under the case that broke it, not the case failing to occur.
@@ -7934,6 +7936,73 @@ silently.
    recolour *in place*. It would have blanked exactly the world it was added to avoid blanking. The
    job now carries `dstHas` and picks `SHADER_READ_ONLY_OPTIMAL` when there is something to keep.
 
+#### What the landing review found, and it was all lifetimes
+
+Four findings, every one verified against the code before acting and every one real. Three are the
+same omission in different places: **the retire discipline was applied to the activations and to
+nothing else.**
+
+1. **`job_free` destroyed a live job's device objects outright.** It called
+   `vkDestroyFramebuffer` on `dstFb`, destroyed the palette image and view, and
+   `vkFreeDescriptorSets` on all five sets — with no fence and no retire. Three of its four callers
+   are in a consumer's `prepare`, where the seam has waited on **this slot's fence and no other**,
+   so the remaining `slots − 1` submits are still queued naming exactly those objects: the OUT
+   render pass named `dstFb`, its set was `setOut[i]`, FILL sampled `palView`. A map change, a GL
+   reset or a repaint within `slots − 1` frames of a draw is the whole trigger
+   (VUID-vkDestroyFramebuffer-framebuffer-00892, VUID-vkFreeDescriptorSets-pDescriptorSets-00309) —
+   a crash on a strict driver, corrupt paint on a lax one. The activations got a whole `RETIRE` for
+   this hazard; the job's own resources got none, which is what made it easy to miss. They have one
+   now, **sized at the worst case its callers can produce** (`TAGPU_R_MAXJOBS × TAGPU_VK_SLOTS`
+   entries, under 4 KB) so the full case is unreachable rather than unlikely — and still handled,
+   by draining the device, because a stall is honest and an unlicensed destroy is not.
+
+   **Which trigger is actually reachable today is worth being exact about, and it is narrower than
+   the finding says.** A *map change* is not one: §2.16's own measurement is that an in-process map
+   change brings the whole Vulkan lane down and back up, so `tagpu_vk_terr_down` frees the job on
+   the drained teardown path before any new `prepare` runs. The reachable trigger is the
+   **repaint** — `glsl_begin(ta, 1)` on a palette move bumps the serial with the lane still up and
+   the job still live — and that path is itself unexercised (below). So this was a real
+   use-after-free whose only live trigger is one no fixture produces. **That is not a reason to
+   have left it**: the teardown-first ordering is a coincidence of two modules' behaviour, which is
+   precisely the "it works because of when things happen" argument `CLAUDE.md` refuses. The fix is
+   a lifetime and does not care which path frees the job.
+2. **Neither retire was in the teardown.** `down()` destroyed the live activations and flushed the
+   framebuffer cache but never touched `s_ret`, so a retire outstanding at teardown — an activation
+   grow, or the idle release after 180 quiet slices — leaked two array images, their memory, every
+   layer view and up to 32 framebuffers, around **100 MB**, and `vkDestroyDevice` then ran with all
+   of it alive. The resize path was accidentally fine (the device survives it and a later
+   `retire_slot_done` cleaned up); `vk_down` had nothing that ever would. `lost()` now forgets both
+   retires, because a `pending` left standing would have a rebuilt device destroy dead handles.
+3. **A job captures `s_atlas.view` at creation and never re-reads it**, so any resize of the
+   indexed atlas left its descriptors naming `s_atlas.oldView`, which `shared_slot_done` destroys
+   `slots` frames later while the restorer draws on. `restore_want` normally frees the job in the
+   same frame, but it sits *below* the resize and every `return 0` and `goto refuse` between the two
+   skips it. The drop is now keyed on the view itself, immediately after the resize, where nothing
+   can return first. (Reported as PLAUSIBLE; confirmed by reading the early returns.)
+4. **The "mutually exclusive by construction" claim above was false**, and this section said it. The
+   lever is *polled* until it latches, so it can be created mid-session — and then
+   `rgb_mirror_step`'s early return stops updating the mirror while leaving `rows > 0` standing, so
+   the publisher ran **both** blocks. A consumer resized its restored image twice in one call and
+   uploaded a frozen mirror into the image the other lane renders into; where the mirror's rows and
+   the atlas's height disagreed it refused every frame instead and **terrain stopped drawing
+   altogether**. Fixed in two places on purpose: the latch frees the mirror (the memory is what the
+   lever exists to retire) and the publish is an either/or (so the hand-over's own claim does not
+   depend on a lever's latch order). Found independently by this session the same hour, which is
+   worth recording only because it is the one finding the review did not have to catch.
+
+**What the review verified clean** and is therefore worth not re-deriving: no SPIR-V word changed in
+the eleven pre-existing headers (only the `transform` hash and the new comment lines); `rp_deps`
+covers the whole chain including the dump's copy in both directions; `dst_ready`'s `dstHas`/
+`clearDue` layouts are right on first job, repaint, `job_clear` and post-`down`; the weight offset
+is a multiple of 256 given `offset & 15` and `kstride & 15`; `form_batch`'s two passes use an
+identical predicate; `fb_for`, `s_rpAct[]`, `s_pipeConv[]`, `conv_spv` and the class indices are in
+bounds; and `tagpu_restoreglsl.h` has no includes and no GL types, so `tagpu_terr.h` including it
+drags nothing into a `_vk` translation unit.
+
+**`tagpu_vk_restore_lost` still has no caller** outside `down` — the Vulkan seam has no
+device-loss path, unlike the GL lane. It is documented, dead, and kept deliberately; the day the
+seam grows one it is what that path needs.
+
 #### Where the slice sits in the frame, and what it is not counted in
 
 `tagpu_vk_restore_step` is called **last of the seam's `prepare`**, after every consumer. That is
@@ -7951,14 +8020,26 @@ measured in.
 
 * **One consumer of four.** The features, effects and unit atlases still take the CPU mirror. Their
   wiring is the same shape (one usage flag plus a published frame list) and is not done.
-* **`repaint` is built and not exercised.** The palette-moved-under-a-live-job path needs a fixture
-  that moves the palette; `static-terrain` does not. `dstHas` is therefore a fix whose correctness is
-  argued from the spec's discard rule, not measured.
+* **`repaint` is built and not exercised, and it takes two fixes down with it.** The
+  palette-moved-under-a-live-job path needs a fixture that moves the palette; `static-terrain` does
+  not, and an in-process map change tears the lane down instead of repainting. So `dstHas` is
+  argued from the spec's discard rule rather than measured, **and the job retire's licence is
+  unexercised for the same reason** — every path that frees a job while submits are in flight is a
+  repaint. Both are lifetimes rather than timings, which is what makes them defensible unmeasured;
+  neither is *shown*. Closing this needs a fixture that moves the palette under a live restore, and
+  that is the next thing worth building for this lane.
+* **The `restorevk` lever is measured in one configuration only**: created before launch, terrain
+  only, one map, no mid-session flip. The mid-session flip is now correct by construction (the
+  publish is an either/or) but has not been run.
 * **The `g_alloc` ring is a bound that a fast enough device can reach.** 256 blocks per slot per
-  slice, two per draw, so a slice issuing more than 128 draws fails the job — *loudly*, with the
-  reason in `tagpu.log`, unlike the vertex bug above. Not reached on the reference setup (7 draws a
-  slice at a 12 ms budget) and not raised, because the correct number is not knowable from one
-  device.
+  slice; a FILL takes one, a CONV one and an OUT two, so a `full`-model batch spends 15 and a slice
+  of more than about **seventeen batches** exhausts it and fails the job. Not reached on the
+  reference setup (7 draws a slice at a 12 ms budget) and not raised, because the correct number is
+  not knowable from one device. **An earlier version of this bullet said the failure was *loud* and
+  said "two per draw"; both were wrong** — the review disproved them. The draw returned 0 with no
+  log line at all, so the consumer reported "the restore failed" and nothing anywhere said why,
+  which is exactly the silence this section criticises the vertex bug for, on the one bound the
+  section concedes is reachable. `g_alloc` now names the reason once per slice.
 * **One GPU, one model, one fixture, one map.** `tiny`, `fp16`, and any other device's limits are
   unmeasured on this lane.
 * **The failure paths** — `act_ensure` returning 0, a destination that is not a complete render
