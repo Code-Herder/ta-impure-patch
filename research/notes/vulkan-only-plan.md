@@ -358,6 +358,28 @@ would not have shown up as a failure — it would have shown up as three landing
    after the fog overlay). The list crosses as records, for the same reason the caster record does
    in 3b: a consumer that re-derives which buckets are non-empty can disagree with the pass that
    drew them.
+
+   **BUILT 2026-09-17 AND NOT YET MEASURED — the blocker is the FIXTURE, not the port.** All of
+   landing 5 is written and builds: the lever, the hand-over, `tagpu_vk_mark.c`, both A/B halves
+   and the seam. What has not been found is a fixture in which the GL mark pass DRAWS ANYTHING.
+   Four runs, every one ending the same way: `tagpu_mark_render` reaches its own guard —
+   `if (!have[POSTFOG] && s_nbar == 0 && s_ncurs == 0 && s_nordt == 0 && s_nordl == 0 &&
+   s_nordx == 0) return;` — so the GL half of the A/B never reaches the disk and there is nothing
+   to diff. Tried: `mark.on` alone and with `native.on=all wrecks`; `selbox-facings` and
+   `bar-wobble` (whose description says its ARMCOM is SELECTED). The pass logs
+   `ARMED (log=1 passive=0 ... patched=1)` every time, so it is armed and owns the draw; the
+   gather produces nothing.
+
+   Ruled out by reading rather than by running: there is no early `return` in `tagpu_native.c`
+   between the gather at :3295 and the render at :4314, and `tagpu_mark_gather`'s only guard is
+   `if (!pk || !pk->in_game) return 0;` — so the pass IS reached and IS in game.
+
+   **What it probably needs is a live SELECTION**, which `scenario load --restart` may not leave
+   behind even when the scenario asks for one — the next session should drive a band-box drag or
+   a unit click with `tacli` input and watch for the `mark: bars=N cursor=N ...` line, which is
+   printed from the far side of that guard and is therefore the direct signal. Until that line
+   appears the A/B cannot be taken, and **landing 5 does not land**: a landing whose claim was
+   never run does not meet the bar, and the code being finished is not the same thing.
 6. **The build ghost and the `otherDraws` stand-down** (`tagpu_vk_unit.c:1316`). Not reached
    today — the unit pass refuses on the atlas mirror several checks earlier — so its cost is
    still unknown.
