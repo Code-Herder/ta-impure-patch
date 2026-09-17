@@ -74,10 +74,10 @@ The authorization is **scoped and expiring**:
    `kb t ls` has **no `--epic` flag** (verified 2026-09-15: its filters are `--project`,
    `--status`, `--type`, `--assignee`, `--label`, `--q`, `--archived`, `--only-archived`) —
    `kb epic show` is how you list an Epic's children.
-   The next landing is the **first row in table order** with no `landing:<n>` child — table
-   order, not lowest integer, because a gate that split mid-flight carries sub-numbered rows
-   (`3.1`, `3.2`, … — §7) that sort between `3` and `4` only by position. Bug children
-   (§9) carry **no** `landing:` label precisely so they do not corrupt this count.
+   The next landing is the lowest `n` in the table with no `landing:<n>` child. The list is
+   always `1..M` with no gaps — a re-cut renumbers only the rows that have no child yet (§7), so
+   the numbers below you never move. Bug children (§9) carry **no** `landing:` label precisely so
+   they do not corrupt this count.
 
 ## 3. Cut the child ticket
 
@@ -88,8 +88,8 @@ kb t pick <KEY>
 ```
 
 - **Title is the row's own name**, unchanged. The `landing:<n>` label is the machine key, so a
-  later retitle during a scope change cannot break the join. `<n>` is the row's `#` cell
-  verbatim, sub-number included (`landing:3.2`), and it is never reassigned afterwards — §7.
+  later retitle during a scope change cannot break the join. `<n>` is the row's `#` cell, and
+  once a row has a child neither its number nor its name may move again — §7.
 - **Description** states the landing's goal in one or two sentences and then, on its own line,
   copies the row's exit condition verbatim:
 
@@ -165,63 +165,114 @@ action** — self-contained, so a viewer with no context can follow it.
 a build change — do **not** film it. Attach the closest useful evidence (the measurement, the
 log, the rendered page) and add one line saying why a video would prove nothing.
 
-## 7. When the shape changes — record the split, don't re-plan
+## 7. When the shape changes — re-cut the tail, and tell the Epic
 
-A gate is filed as one row and usually stays one. But the work is how you find out what a gate is
-made of, and a landing sometimes shows that the row in front of you is really several: parts with
-their own seam, their own thing to run, their own result. **When that happens, say so where the
-plan lives — in the landing that revealed it, not in a tidy-up afterwards.** A row that still
-reads as one undivided thing, three landings in, is out of date in the way that costs the most:
-the next reader takes it for nearly done.
+A gate is planned as one list of landings, and the work is how you find out whether that list was
+right. When a landing shows it is not — a row is really three, two rows are one, the order has to
+change — **re-cut it in the landing that discovered it**, never in a tidy-up afterwards. A list
+that still reads as it was planned, three landings in, is out of date in the way that costs the
+most: the next reader takes it for the plan.
 
-Two surfaces, and they have to agree:
+### The canonical list is the plan note
 
-1. **`research/notes/roadmap.md`'s gate row** — `landing N of M`, one sentence per part, and a
-   closing *"Not covered by landings 1–N"* naming what is still open, **the gate's own exit
-   condition included** (a part's bar is not the gate's bar). This rides in the §8 documentation
-   pass — `/git_commit_merge_wt` Step 4 states the same rule and checks for it, so skipping it
-   here only moves the work to the gate.
-2. **The Epic's Landings table** — `kb t edit <EPIC> -f desc.md`, so a board reader and a roadmap
-   reader see the same plan, followed by a `decision` comment on the Epic saying what the work
-   showed and why the row became several. Without this half the board keeps counting the Epic
-   against a landing list that no longer exists.
+`research/notes/<gate>-plan.md`, section **`## The landings`** — the shape `g19f-plan.md` and
+`vulkan-only-plan.md` already use, one `**Landing N — <name>.**` block per landing. That file is
+the plan of record, and **a gate gets one before its first landing**: without it a re-cut has
+nowhere to go. Re-cutting it is an ordinary docs edit inside the landing's own commit;
+`95d23d5` — *"G19f: re-cut the remaining landings — the string op comes next, and it is cheap"*
+— is what one looks like.
 
-**Never renumber a row that already has a child.** The `landing:<n>` label is the join (§2), and
-renumbering desynchronises every child already open — the same reason `grill-to-kanban` refuses
-to rewrite an Epic's table wholesale. Split **in place** instead: row `n` becomes `n.1`, `n.2`, …
-with the work already done as `n.1`, rows after it keep their numbers, and the label follows the
-cell verbatim (`landing:3.2`). §2's "next landing" then means the first row in **table order**
-with no child, not the lowest integer.
+The other two surfaces follow it and never compete with it:
 
-**The split does not extend this invocation's authorization** (§0). When the row that split is
-the one you are working, it becomes `n.1` and you finish that; the parts you have just named are
-in the table for the next invocation, not started in this one.
+- **`roadmap.md`'s gate row stays a summary** — status, `landing N of M`, the gate's own exit
+  condition, *Not covered by landings 1–N*, and a link to the plan note. What each landing
+  measured does **not** go in the row (§8, and `/git_commit_merge_wt` Step 4 states the same).
+- **The Epic's Landings table mirrors the plan note's list**, and the Epic's description points
+  at it — below.
 
-### The bar for a part — the guard against over-splitting
+### Re-cut the tail, never a row that has a child
 
-A part is a landing, so it meets a landing's bar: **something you can run that shows a result**,
-with its own *Verified by* line in its row. Beyond that:
+Work goes in order, so everything after the row you are on is un-cut: renumbering the tail is
+free, renumbering behind you is not. The `landing:<n>` label is the join (§2), and a child bound
+to a row whose content moved is a ticket that lies.
+
+- **Never change the number or the name of a row that already has a child.** Those are history.
+- **Re-cut only the rows with no child.** Insert, reorder, merge or drop them freely — plain
+  integers, renumbered so the list stays `1..M` with no gaps.
+- **If the tail contains a row that already has a child** — a landing was worked out of order —
+  append the new rows at the end rather than inserting, and say so in the decision comment.
+- **A number is never reused for different work.** If row 4 was cut and the plan then changed,
+  row 4 stays what it was.
+
+### Always update the Epic — three triggers
+
+The child ticket carries the landing's own story (§5's four comments). The **Epic** carries only
+what outlives the landing, and exactly these three force a write to it:
+
+1. **A re-cut.** `kb t edit <EPIC> -f desc.md` for the Landings table, plus
+   `kb comment add <EPIC> --kind=decision -m "…"` saying what the work showed and why the list
+   changed — in the same landing as the plan-note edit, so the two cannot disagree.
+2. **An out-of-scope bug** (§9). The `bug` child under the Epic with **no** `landing:` label,
+   plus a one-line `kb comment add <EPIC> --kind=progress` naming it. Linking it only from the
+   current child leaves it invisible on the Epic, which is where the next landing is chosen from.
+3. **A finding that changes how a later landing will be done.**
+   `kb comment add <EPIC> --kind=decision`. **The test is: does a future landing have to know
+   this?** *"Landing 1 composited nothing in real play, so the string op comes next"* passes —
+   it reordered the plan. *"Five review findings, all acted on"* fails: that is the child's
+   comment and the `landing-review:` git note, and both already hold it.
+
+**Trigger 3's test is a bar, not an invitation.** Narrating every landing onto the Epic rebuilds
+a progress report on the board — the thing that made one roadmap cell 5 703 words — and moves the
+problem instead of solving it. Status is what the board is for; the permanent record is the
+commits and the `landing-review:` notes; the durable lesson goes into `gpu-status.md` or
+`exe-reverse-engineering.md` in §8's documentation pass. **"It is on the Epic" is never where a
+lesson comes to rest** — the board is local and disposable, and the notes are neither.
+
+### The Epic always points at the plan note
+
+One pointer, in the Epic's description under the Landings table:
+
+```
+**The plan:** research/notes/g19f-plan.md § "The landings"
+```
+
+Repo-relative, heading verbatim. **Not** a GitHub URL — origin routinely trails local `main` by a
+hundred commits, so a published link shows a plan predating most of the landings — and not the
+wiki HTML, since `research/site/` is gitignored. Write it, then **confirm it** in the same pass:
+
+```bash
+grep -n '^## The landings' research/notes/g19f-plan.md
+```
+
+Once an Epic points at a heading, that heading's text is an interface: it is not free to reword
+in a later docs pass without fixing the Epics that name it.
+
+**The link is one-way.** `_local/sanitize-scan.sh` makes ticket ids and the bare word `kanban`
+soft tells across tracked and untracked files, so a plan note naming its Epic key fails the
+content scan and blocks `/git_publish`. In the published direction the join is the landing
+*number*, which carries no identity.
+
+### The bar for a landing — the guard against over-splitting
+
+A row is a landing, so it meets a landing's bar: **something you can run that shows a result**,
+with its own *Verified by* line.
 
 - **Split along a seam the work already has** — a pass, an op, a layer, a surface, a thread
   hand-over. Not along a calendar, and not along "what I finished today".
-- **Never open a part for a fix, a review round, a re-measurement or a documentation pass.**
-  Those belong to the landing that produced them; that is what the landing's own gates are for.
-  G19f landing 2 absorbed six review findings, a re-review that disproved two of its own fixes,
-  and a re-measurement after each round, and it is still *one* landing.
-- **The calibration is the one already in the tree, and it is about right.** G19e ran one part
-  per world pass — six for the whole of it; G19f is six for the UI layer and the present. A gate
-  that comes out as ten-plus parts has been sliced rather than split. A gate that finishes in one
-  or two landings is not split at all, and writing "landing 1 of 2" on it buys nothing.
-- **`M` is allowed to move.** G19f was written up as "landing 1 of 5" when the UI op stream turned
-  out to hand over in pieces, then "landings 1–2 of 6" one landing later, when the string op
-  showed that landing 1 alone composited nothing in real play. A count that grew is the plan
-  catching up with the work. Do not keep a wrong number to look decisive, and do not re-split a
-  gate every landing to keep the shape tidy.
+- **Never open a row for a fix, a review round, a re-measurement or a documentation pass.** Those
+  belong to the landing that produced them. G19f landing 2 absorbed six review findings and a
+  re-review that disproved two of its own fixes, and it is still *one* landing.
+- **The calibration already in the tree is about right.** G19e ran one row per world pass — six;
+  G19f finished at eight for the UI layer and the present. Ten-plus is slicing rather than
+  splitting, and a gate that finishes in one or two landings needs no list at all.
+- **`M` is allowed to move.** G19f was written up as "landing 1 of 5", then "landings 1–2 of 6",
+  and finished at eight. A count that grew is the plan catching up with the work; do not keep a
+  wrong number to look decisive, and do not re-cut every landing to keep the shape tidy.
 
-**This records what the work showed; it does not re-plan the Epic.** Splitting a row into the
-parts the work turned out to have needs no turn. If the *exit condition* has to change — the gate
-is asking for the wrong thing, or the goal moved — stop: that is **escalation reason 1**, and the
-plan is the human's.
+**Re-cutting needs no turn, and it does not extend this invocation's authorization** (§0): finish
+the landing you are on and leave the new rows for the next invocation. But if the *gate's own
+exit condition* has to change — it is asking for the wrong thing, or the goal moved — stop. That
+is **escalation reason 1**, and the plan is the human's.
 
 ## 8. The landing
 
@@ -239,8 +290,10 @@ In order:
    source, never from memory.
 2. The module docs — `gpu-status.md`'s hook map and *fields we write* table, `roadmap.md`'s gate
    row, and the `ta-*` skills if how you drive or measure the game changed. Correct what the
-   work proved wrong; state the gaps it did **not** close. If this landing showed the gate to be
-   several, the row carries the split and the Epic's table matches it — §7, both surfaces.
+   work proved wrong; state the gaps it did **not** close. The gate row is a **summary plus a
+   link to the plan note**, never the landing log — what this landing measured belongs in
+   `gpu-status.md`, its commit message and its `landing-review:` note. If the work re-cut the
+   landing list, the plan note, the row and the Epic all move together — §7.
 3. Regenerate and look at it:
    ```bash
    .venv-undither/bin/python research/build_wiki.py
@@ -274,7 +327,7 @@ gate, and stop if the third fails or two in a row fail identically.
 | situation | what to do |
 | --- | --- |
 | **In-scope failure** — own build break, review findings on this diff, a docs claim the reviewer caught, the verification failing | ordinary work. The landing command owns the fix loop; you comment on what was found and what changed (§5.3). **Not** a block. Verify each finding against the code before acting on it; never apply findings blindly. |
-| **Out-of-scope defect found mid-work** | file one concise `bug` child under the same Epic with a repro or evidence, **no `landing:` label**, link it from a comment on the current ticket, and carry on. Do not derail this landing; do not swallow it either. |
+| **Out-of-scope defect found mid-work** | file one concise `bug` child under the same Epic with a repro or evidence, **no `landing:` label**, link it from a comment on the current ticket **and from a one-line `kb comment add <EPIC> --kind=progress`** (§7 trigger 2 — a bug named only on the child is invisible on the Epic, which is where the next landing is chosen from), and carry on. Do not derail this landing; do not swallow it either. |
 | **One of the six escalation reasons** | `kb t block <KEY> -m "Blocked on: <reason N — cause>. Unblocked when: <condition>."`, report in chat naming the number, **stop**. |
 
 **"Failing" is not "stuck".** A verification that runs and shows the wrong result is a bug you
@@ -313,12 +366,18 @@ follow-up ticket, and **the next landing's number and name** so re-invoking is o
 - **Don't `/git_publish`.** Landing is local; publishing is always the human's.
 - **Don't pick, work, or close the Epic.** You work its children.
 - **Don't label a bug child `landing:<n>`** — it corrupts the next-landing count.
-- **Don't renumber a landing row that already has a child.** Split it in place (§7); the label is
-  the join.
-- **Don't split a gate into a part per fix, per review round or per documentation pass** (§7).
-  Those belong to the landing that produced them, and a ten-part gate has been sliced, not split.
-- **Don't leave a split in the roadmap row and not on the board, or the reverse.** Both surfaces
-  or neither.
+- **Don't renumber a landing row that already has a child** (§7) — re-cut the tail only; the
+  label is the join.
+- **Don't open a landing for a fix, a review round, a re-measurement or a documentation pass**
+  (§7). Those belong to the landing that produced them, and a ten-plus-row gate has been sliced.
+- **Don't re-cut one surface and not the others.** Plan note, roadmap row and Epic table move in
+  the same landing, or none of them do.
+- **Don't write the landing log into the roadmap row.** The row is a summary and a link; the log
+  is the commits, the `landing-review:` notes and `gpu-status.md`.
+- **Don't let a lesson come to rest on the Epic.** The board is local and disposable — promote it
+  into the permanent note in the same landing.
+- **Don't name an Epic key, a ticket id or `kanban` in tracked content.** The content scan reads
+  them as soft tells and `/git_publish` fails.
 - **Don't inherit `default_project`.** Pass `ta_impure_patch` explicitly.
 - **Don't leave the documentation pass to Step 4.** Write it while you still know what the work
   learned.

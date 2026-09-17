@@ -211,11 +211,11 @@ main in). Decide from it:
   `research/notes/gpu-status.md` (hook map / *fields we write*) and `research/notes/roadmap.md`
   (capability row and gate entry). `.claude/skills/ta-*/SKILL.md` only if how you drive or
   measure the game changed.
-- **Is the gate row still shaped like the work?** If this landing is one part of a gate that has
-  turned out to be several, the row must say which part landed and what is still open — see
-  *When a gate turns out to be several landings* below. A gate row that still reads as one
-  undivided thing, three landings into it, is out of date in the way that costs the most: the
-  next session reads it as nearly done.
+- **Is the landing list still shaped like the work?** If this landing is one of several in a
+  gate, the plan note's `## The landings` must match what the work now knows, and the gate row
+  must say which landing this was and what is still open — see *When a gate turns out to be
+  several landings* below. A list that still reads as it was planned, three landings in, is out
+  of date in the way that costs the most: the next session takes it for the plan.
 - **Does the wiki build?**
   ```
   .venv-undither/bin/python research/build_wiki.py
@@ -249,47 +249,61 @@ patched:
   **"State we read, and the fields we write"** table. Anything newly written, or newly written
   *from a second thread*, belongs in that table.
 - `research/notes/roadmap.md` — the capability row and the gate entry, **including the gaps the
-  landing did not close**, and — when the gate has turned out to be several landings — the split
-  itself (next).
+  landing did not close**. For a multi-landing gate the row is a summary and a link to the plan
+  note, never the landing log (next).
 - `.claude/skills/ta-*/SKILL.md` — only if how you *drive or measure* the game changed. A
   procedure that cost you an hour to work out is the thing to write here.
 - And **correct whatever the work proved wrong.** A stale note is worse than a missing one.
 
 ### When a gate turns out to be several landings
 
-A gate is planned as one row and usually stays one. But the work is how you find out what a gate
-is made of, and a gate sometimes opens along seams nobody could see from outside it. **Once the
-work has shown those seams, the row carries them — written by the landing that revealed them, not
-by a tidy-up afterwards.** The row then reads:
+A gate is planned as one list of landings and the work is how you find out whether that list was
+right. **The list lives in `research/notes/<gate>-plan.md` under `## The landings`** — the shape
+`g19f-plan.md` and `vulkan-only-plan.md` use, one block per landing — and re-cutting it belongs
+to the landing that discovered the list was wrong, not to a tidy-up afterwards. A gate gets that
+note before its first landing; without it a re-cut has nowhere to go.
 
-- `landing N of M` in the status cell, one sentence per part saying what it is;
-- and a closing **"Not covered by landings 1–N"** naming what is still open — the gate's own exit
-  condition included, because a part's bar is not the gate's bar.
+**The gate row summarises; it does not log.** The row carries:
 
-**`M` is allowed to move.** G19f is the worked example: filed as one undivided row, written up as
-"landing 1 of 5" when the UI op stream turned out to hand over in pieces, and "landings 1–2 of 6"
-one landing later, when the string op showed that landing 1 alone composited nothing in real
-play. A count that grew is the plan catching up with the work; a stale count is the larger lie.
+- the status and `landing N of M`;
+- the gate's **own** exit condition, which is not any one landing's;
+- a closing **"Not covered by landings 1–N"** naming what is still open;
+- and **a link to the plan note** — `[g19f-plan](g19f-plan.html)`, written the way every other
+  cross-link in these notes is.
 
-**The bar for a part is the bar for a landing: something you can run that shows a result.** That
-is the whole guard against over-splitting, and it is worth being concrete about:
+What a landing measured, what its review found and what it taught goes to its module note
+(`gpu-status.md` §2.x), its commit message, and its `landing-review:` git note — there are 82 of
+those and they carry `findings` / `acted` / `rejected` / `date` in a form nothing else does.
+**None of it goes in the row.** G19f's row reached **5 703 words in a single table cell** and
+G19e's 3 413, which is how the table stopped being readable and how one story came to exist in
+three places at once. The row is what someone opening `roadmap.md` reads to find where the gate
+is; it is not the record. (Rows already oversized stay as they are — they are history, and
+rewriting banked measurements to satisfy a later rule is risk with no reader.)
 
-- **Split along a seam the work already has** — a pass, an op, a layer, a surface, a thread
+**`M` is allowed to move.** G19f was written up as "landing 1 of 5", then "landings 1–2 of 6",
+and finished at eight. A count that grew is the plan catching up with the work; a stale count is
+the larger lie.
+
+**The bar for a landing is the guard against over-splitting: something you can run that shows a
+result.**
+
+- Split along a seam the work already has — a pass, an op, a layer, a surface, a thread
   hand-over. Not along a calendar, and not along "what I finished today".
-- **Never open a part for a fix, a review round, a re-measurement or a documentation pass.**
-  Those belong to the landing that produced them; that is what the landing's own gates are for.
-  G19f landing 2 absorbed six review findings, a re-review that disproved two of its own fixes,
-  and a re-measurement after each round, and it is still *one* landing.
-- **The calibration is the one already in the tree, and it is about right.** G19e ran one part
-  per world pass — six for the whole of it; G19f is six for the UI layer and the present. A gate
-  that comes out as ten-plus parts has been sliced rather than split. A gate that finishes in one
-  or two landings is not split at all, and writing "landing 1 of 2" on it buys nothing.
+- **Never open a landing for a fix, a review round, a re-measurement or a documentation pass.**
+  Those belong to the landing that produced them. G19f landing 2 absorbed six review findings and
+  a re-review that disproved two of its own fixes, and it is still *one* landing.
+- **The calibration already in the tree is about right**: six for G19e's world passes, eight for
+  G19f's UI layer and present. Ten-plus is slicing rather than splitting, and a gate that
+  finishes in one or two landings needs no list at all.
 
-**This records what the work showed; it does not re-plan the gate.** If the *exit condition* is
-what has to change — the gate is asking for the wrong thing — that is **escalation reason 1** and
-it is the human's call, not a row edit. If the landing is being driven from a kanban Epic, its
-**Landings** table gets the same split; that half belongs to `/work-landing` §7, which owns the
-board and the label numbering.
+**This records what the work showed; it does not re-plan the gate.** If the gate's *exit
+condition* is what has to change, that is **escalation reason 1** and it is the human's.
+
+If the landing is driven from a kanban Epic, the Epic's Landings table and a `decision` comment
+get the same re-cut — `/work-landing` §7 owns that half. **The link between them is one-way:** a
+ticket id or the bare word `kanban` in tracked content is a soft tell
+(`_local/sanitize-scan.sh`), so the plan note never names its Epic, and the join in the published
+direction is the landing number.
 
 **The bar for the prose is the same as rule 2 above**: every claim traceable to disassembly or a
 live measurement, never to memory or to an agent's report you did not check. Mark guessed names
