@@ -2635,21 +2635,10 @@ same shape as G19f's walk. Measured: **0 px of 786 432 at 1024×768 and 0 px of 
 pixels apart at worst channel 9 with the ink identical. The build before this landing drew nothing
 at all on that fixture.
 
-**Then a re-review, because the fixes were larger than the landing they corrected** — and it
-found four more, three of them repeats of a fault this lane has already paid for. `s_arReq` held
-the rows *sent*, which is gate 2's finding 2 one atlas down: the partial-row upload was
-unreachable and 21 MB went up per serial change. A mip chain that came back short was to be
-handed over as a shallower one — a different picture, because GL still filters the twin to its
-own MAX_LEVEL — and getting there meant destroying a live image mid-frame, which is gate 2's
-confirmed use-after-free in a second place; the producer now reports no mirror at all, which makes
-the rebuild unreachable rather than rare. `mk_image`'s failure label left the image VIEW as it
-found it, against seven callers that destroy it on the strength of it being non-NULL. And
-[gpu-status](gpu-status.html) itself had been committed carrying §2.35, §2.36 and §2.37 **twice**,
-the second §2.37 being the draft the fixture discovery had already invalidated — a character-offset
-splice, visible in `git diff` as an insertion with zero deletions, which is impossible for a
-section that was rewritten. **Every figure above was re-taken on the fixed binary and is
-identical**, which matters because the `s_arReq` fix makes the partial upload path reachable for
-the first time.
+**Then a re-review, whose four findings are in [gpu-status](gpu-status.html) §2.37 with the
+`landing-review:` note on the commit** — three of them repeats of faults this lane has already
+paid for, one of them a second instance of gate 2's use-after-free. Every figure above was
+re-taken on the fixed binary and is identical.
 
 What is left is **3b, the replacement meshes** — 1 refused caster with one Peewee on screen, 16 on
 a 257-unit crowd, because a tacli instance ships `hires/armpw.glb` active.

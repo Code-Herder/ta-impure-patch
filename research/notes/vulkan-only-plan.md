@@ -234,6 +234,26 @@ of everything else. The order below is the corrected one.
      `cutoff >= 0` is drawn** — the same stand-down discipline as everywhere else, and the thing
      that makes the deferral honest rather than a hole.
 
+   **The lesson worth carrying, and every remaining landing in this plan is exposed to it.**
+   Landing 2's review said a serial is the class to read for each time; 3a's re-review says the
+   same about two more, because it found both again one atlas down:
+
+   * **What a "rows" number MEANS on each side of the seam.** 3a stored the rows it *sent* where
+     it needed the rows the mirror *covered* — the same mistake landing 2 made with the opposite
+     sign, and the symptom is the opposite too: landing 2 uploaded every frame for ever, 3a never
+     used its partial path. Neither shows in a capture. Every landing left hands rows across.
+   * **A DIMENSION THAT CAN MOVE IS AN IMAGE LIFETIME PROBLEM.** 3a would have rebuilt its image
+     when the published mip depth changed, which is `kill_image` on an image other slots'
+     submitted command buffers still name — gate 2's confirmed use-after-free in a second place.
+     The fix is the one to reach for again: make the moving value *refuse* at the producer so the
+     rebuild is unreachable, rather than making the rebuild safe. A pass that cannot reproduce a
+     frame draws nothing; it does not draw a smaller version of it.
+
+   And the third is not about the code: **the docs commit had to be rebuilt twice**, once because
+   a fixture was wrong before the code was, and once because a character-offset splice left
+   `gpu-status.md` carrying three sections twice — including a superseded copy of the very
+   section being corrected. The wiki build is what catches it, and it is one command.
+
    **Two lessons worth carrying.** A gate's row names a mechanism, and the mechanism is a
    hypothesis: measuring the census first cost three runs and saved porting a stream that cannot
    draw, while the thing that actually had to be built was sitting in the previous gate's
