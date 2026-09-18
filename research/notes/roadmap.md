@@ -2872,7 +2872,13 @@ no longer exists. All three fixed in the landing. **4d-2 LANDED 2026-09-18** (§
 in and 599 out, `tagpu_abshot.c` and its header among them — already unreachable on the surviving
 route, and every pass already carried the branch that survives. Verified on `renderer=vulkan`: a
 complete frame at 0 magenta of 786 432, and `tagpu_terr.ab` alone writing a 2048x1536 `_vk.ppm`.
-**Gate 4's deletions are done; what is left in the gate is the `s_curDrew` ordering gap alone.** Filed as one row — the fourth backend,
+**`s_curDrew` LANDED 2026-09-18** (§2.57): the cursor-ownership flag is published AFTER the frame it
+reports, with the seam's `tagpu_vk_ui_composited()` as the second half of the answer, so the
+engine's own cursor is no longer suppressed on a frame that composited nothing. Counted rather than
+claimed — `held=1` at the shell, `held=3` after a walk into a game. **GATE 4 IS COMPLETE.** The
+plan's next item is landing 6, the build ghost and the `otherDraws` stand-down, which is the largest
+remaining hole in the lane's world: while a building placement is open the Vulkan unit pass draws
+nothing at all. Filed as one row — the fourth backend,
 `renderer=vulkan`, the `ss` target, TA's surface, and route D's deletion — it comes apart along
 four seams the code already has: **4a** the thread and the present, **4b** the per-frame driver
 (the gathers run and the GL draws stand down), **4c** the `ss` target and TA's surface upload,

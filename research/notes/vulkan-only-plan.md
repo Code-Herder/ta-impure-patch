@@ -666,8 +666,17 @@ would not have shown up as a failure — it would have shown up as three landing
      1024x768 frame at 0 magenta of 786 432, and `tagpu_terr.ab` alone writes
      `tagpu_terr_vk.ppm` at 2048x1536.
 
-     **Gate 4's deletions are done. What remains in the gate is `s_curDrew`'s ordering** — the plan
-     assigns it to 4c and none of 4c-1..4c-3 or 4d-1..4d-2 closed it. `render_vk.c` publishes
+     **`s_curDrew`'s ordering LANDED 2026-09-18** ([gpu-status](gpu-status.html) §2.57), and with it
+     **GATE 4 IS COMPLETE**. The publish now happens AFTER the frame it reports, with
+     `cur_drew && tagpu_vk_ui_composited()` — an ordering rather than a move, because the take has to
+     stay where it is (taking is what clears the producer's flag) and the publish has to stay on the
+     path every iteration reaches. The frames it changes are counted rather than argued:
+     `held=1` at the shell and `held=3` after walking into a game, surfaced in the GUI heartbeat's
+     `cursown=` field. Three frames a session on which the engine's cursor was suppressed with
+     nothing of ours on screen. Not covered: which of the five refusal paths those frames took.
+
+     The original statement of the gap, for the record — the plan assigned it to 4c and none of
+     4c-1..4c-3 or 4d-1..4d-2 closed it. `render_vk.c` publishes
      `tagpu_cursown_publish(tagpu_gui_cursor_drew_take())` BEFORE `tagpu_vk_frame`, so it asserts
      "our cursor was drawn" while `tagpu_vk_gui_prepare` can still refuse the frame afterwards; the
      engine's own cursor is then suppressed on a frame that composited no UI. The fix is an

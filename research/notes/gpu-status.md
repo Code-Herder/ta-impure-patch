@@ -9953,6 +9953,68 @@ correctly; the fixture was wrong.
 
 ---
 
+### 2.57 `s_curDrew` publishes after the frame it reports — gate 4's last item
+
+**LANDED 2026-09-18.** Named by the 4b-3 landing review, assigned to 4c by the plan, and closed by
+none of 4c-1…4c-3 or 4d-1…4d-2. It is the last thing in gate 4.
+
+#### The gap
+
+`render_vk.c` published `tagpu_cursown_publish(tagpu_gui_cursor_drew_take())` **before**
+`tagpu_vk_frame`. That told the engine "our cursor was drawn" on the strength of the mirror
+*record* surviving to `draw_layer`'s tail — `tagpu_gui_surf.c:2551` is
+`if (s_sharpOn && s_curInLayer && (gl_draws || s_mirRec)) s_curDrew = 1;`, and on this lane
+`gl_draws` is 0, so the latch rests on `s_mirRec` alone. `tagpu_vk_gui_prepare`, inside the frame
+that had not run yet, can still refuse it (`s_behind`, `!s_engHave`, `!s_palHave`, a presented twin
+that stood down or resized, either shader-refusal path). On those frames nothing composited and the
+engine's own cursor had already been suppressed — **no cursor at all**, the fail-closed shape
+`tagpu_cursown` exists to avoid.
+
+#### It is an ordering, not a move, and the difference is the whole fix
+
+The publish's position is argued in place: *"the only point every path through the driver reaches,
+and a flag published inside the UI present would keep its last value across the driver's three
+early returns."* Relocating it would break what that argument protects. So:
+
+- the **take** stays where it was, because taking is what *clears* the producer's flag and that has
+  to happen once per iteration;
+- the seam reports whether the UI layer reached the command buffer — `tagpu_vk_ui_composited()`, a
+  latch cleared at the top of `tagpu_vk_frame` so every early return answers 0, set only where
+  `tagpu_vk_gui_record` is actually called;
+- the publish happens **after** the frame, on the loop path every iteration reaches, with
+  `cur_drew && composited`.
+
+#### A number, not a claim — and why the counter is permanent
+
+The frames this changes are invisible from outside: the refusal window could not be forced by hand
+and the GUI heartbeat is far too coarse to sample it. A first attempt at verifying by photographing
+the shell proved nothing — `cursown=4/4,**1**` showed the engine's blit *was* suppressed, so the
+cursor in the picture was ours and the GUI pass had already recovered. So the case is **counted**:
+`tagpu_cursown_note_held`, surfaced as `held=` in the heartbeat's `cursown=` field. It is a
+permanent instrument in the shape this tree uses everywhere, not scaffolding.
+
+| measured, `renderer=vulkan`, full play arm set | |
+|---|---|
+| at the shell | **`held=1`** |
+| after walking into a live game | **`held=3`** |
+| the in-game frame otherwise | 1024x768, **0 magenta of 786 432** |
+
+Three frames a session on which the engine's cursor was being suppressed with nothing of ours on
+screen.
+
+`render_ogl.c`'s own publish is untouched and needs nothing: there `draw_layer` sets `s_curDrew`
+after the composite has really run, and since 4d-1 that backend never drives this lane.
+
+#### Not covered
+
+- **Which of the five refusal paths those three frames took is not recorded** — the counter says
+  how often, not why. The two after the shell straddle the level load, so a twin reseed is the
+  likely cause, but that is inference rather than measurement.
+- **`s_curDrew` is still a latch the producer sets from a record**, not from a composite. This
+  landing makes the *consumer* honest about the frame; it does not change what the producer means.
+
+---
+
 ## 4. What the work taught us
 
 These are the transferable parts — the reasons things are shaped the way they are.
