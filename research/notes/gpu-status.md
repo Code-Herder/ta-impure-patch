@@ -1286,6 +1286,7 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | **`UnitOrders->Pos`, `unit+0x5C` → `+0x22`/`+0x26`/`+0x2A`** | **WRITTEN, and it is SIM state** — not by us directly but by `ORDERS_NewMainOrder2Unit 0x43AFC0`, which the scenario applier calls on the game thread from the tick site. Three 16.16 dwords, `{x, altitude, depth}`, copied verbatim by the constructor `0x43A0C0`. An order is a sim command and replicates in multiplayer, so a wrong value here is a wrong game, not a wrong picture; the applier is a fixture tool and is never armed in a played session |
 | **`*(0x51FBD0) + 0xC0`** | **the blend LUT pointer. WRITTEN, transiently, and this is the one field we write that is NOT in `main`.** Swapped to an identity table across the target sprite's draw and restored on return, so the star composites as a copy (§2.2). Game thread only, bracketed around one call that always returns, restored only if ours is still installed, with a belt-and-braces restore at hook 8. It must never be left installed across a frame: `0x4BA5C0` allocates that buffer, `0x4BA5F0` frees it and `0x4BAAD0` refills 64 KB through the pointer, so a stale one of ours would be clobbered or cross-heap-freed |
 | **the unit composite's planes** — `Object3do+0x10` → the GAFFrame's colour plane (`+0x10`) and depth plane (`+0x14`), `w×h` bytes each. **WRITTEN — the planes are overwritten with the ColorKey (index 1) and far depth, on the GAME THREAD, in two places.** `tagpu_owndraw_classify` does it when it skips the engine's rasterise for a unit `tagpu_native_owns_obj` accepts (G12b), and since 2026-09-13 `tagpu_owndraw_preshadow` does it again at the completed-unit shadow's own emit sites (`0x459338` / `0x45958C` / `0x4594DB`), before the replayed `0x45A470` copies the plane into the scratch — because the classifier's wipe does not survive to the shadow on every frame (none of 7047 wipes in a 60-frame window found the plane already empty; [roadmap](roadmap.html), "G13l follow-on"). A render-side scratch the engine rebuilds from the posed prims, not sim state: the blit and the shadow read it, nothing else does, and every value taken out of it is bounded by the unit walking |
+| **`panel+0xBC`, through the engine's own drawer** | **WRITTEN — the only entry here that is a CALL rather than a store, and the only engine draw function this stack invokes.** `GUI_StageUpdateDraw 0x4A81E0(gi, 0x40)` repaints the top screen's surface so its art reaches us as ops instead of as a `PK_SEED` of opaque bytes (§2.61). Game thread, at the flip's **return** with `s_inFlip` already cleared, non-reentrant by a flag. It is a **redraw**, the middle of the engine's own build/draw/teardown protocol: `0x4A82F0`'s build gate jumps past both allocations and the two frees are gated on the teardown bit, so it allocates nothing, frees nothing and changes no lifetime. Refused unless `gi->TheActive_GUIMEM`, its `ControlsAry` and `panel+0xBC` are all present — a NULL destination would resolve to the **primary surface** and paint the panel's wallpaper onto the frame. Off with the `norepaint` token |
 
 ### 2.6 Engine byte patches — no hook, no state (`tagpu_patches.c`)
 
@@ -10409,6 +10410,90 @@ prevent.
   axis-aligned special cases), not re-derived here.
 
 ---
+
+### 2.61 The engine can be asked to redraw, so the shell's art arrives as draws — landing 9
+
+**LANDED 2026-09-18.** The first thing in this tree that **calls** an engine draw function rather
+than watching one.
+
+#### The gap
+
+A surface whose contents we did not watch arrive can only be published as **`PK_SEED`** — its raw
+bytes — because nothing here knows how they got there
+(`tagpu_gui_hook.c`'s `pub_seed`). That is not an edge case: `publish()` seeds *any* surface on
+first touch, and a **reseed** clears `seeded` on every surface at once. Four things ask for one —
+the consumer stalling over, a lost sprite, an arena overflow, and a level boundary — so seeds are
+republished repeatedly through a session.
+
+Seeded bytes are flat. They carry no frame identity, so the GUI atlas never holds them, and
+neither the restorer nor the sharp layer has anything to work on. That is G15e's *"seeded art
+stays indexed until repainted"*, and it is what this closes.
+
+#### The mechanism
+
+`GUI_StageUpdateDraw 0x4A81E0(gi, 0x40)` is the engine's own redraw of the **top** screen. Every
+draw it makes runs through the leaves we already have, so the screen's art arrives as ops.
+
+| what makes it safe | why, and it is not a timing argument |
+|---|---|
+| **a bound on the flag** | `0x4A82F0` computes `flags & 1` and `0x4A82F7` jumps past *both* allocations (`0x4A907C`, `0x4A90B5`); the two frees (`0x4A9537`, `0x4A9549`) are gated on the `0x2` teardown bit. Those four are the only allocator and free calls in the whole function, so `0x40` allocates nothing, frees nothing, and changes no lifetime |
+| **a bound on the destination** | the redraw's first act writes `panel+0xBC`, and `0x4C6B70` with a NULL destination resolves to the **primary surface** — a redraw of an unbuilt screen would paint the wallpaper onto the frame. `repaint_service` refuses unless `TheActive_GUIMEM`, its `ControlsAry` and `panel+0xBC` are all present |
+| **an ordering** | it runs at the flip's **return**, on the game thread, with `s_inFlip` already cleared. The leaves drop every op while `s_inFlip` is set (the cursor is drawn inside the flip), so a repaint issued anywhere inside it would draw and publish nothing. `s_repainting` makes the call non-reentrant by construction |
+
+**The trigger is `g_guiq.resets`, not the level generation.** The plan said "after arm and after a
+level-change reset"; the level case is a *subset*. A seed happens when `publish` finds
+`!s->seeded`, and the only thing that clears that for every surface at once is a reseed —
+`publish`'s own level check is one of four things that asks for one. `g_guiq.resets` is bumped by
+`publish` on the same thread, so watching it needs no new cross-thread agreement and covers the
+level case for free. It also *works*: the packet's level generation advances in
+`tagpu_packet_pub_level_end`, i.e. when a level is **torn down**, so shadowing it fired once per
+session — at the arm — and never on entering a game. It did not need to: entering a game *builds*
+the in-game screen, and a build already draws every gadget through the leaves.
+
+#### What it is NOT, and the plan said otherwise
+
+*"Force one repaint and every pixel arrives as an op"* is **false**, and the disassembly says so
+before any measurement does. With `0x40` the path always reaches `0x4A90F4`, which repaints the
+**whole panel surface from a bitmap** before a single gadget is drawn —
+`0x4C6B70(panel+0xBC, GUIMEM+0x24, 0, 0)` when that field is set, else the picture handler
+`0x4B0230(gi, 0, panel+0xC4)`. The gadget **chrome** comes back as draws; the **wallpaper** comes
+back as a copy, and that copy is only a win while its source is a surface we hold a twin for.
+
+#### Measured
+
+`renderer=vulkan`, 1024×768 in game / 640×480 shell, the shipped arm set, three boots per arm:
+
+| | `norepaint` | shipped |
+|---|---|---|
+| GUI atlas frames held at the mirror-arm event | **19** | **28** |
+| repaints per boot to the shell | 0 | 3–4 |
+| shell frame | 148 colours, 0 magenta | 148 colours, 0 magenta |
+| in-game frame | — | 1024×768, 709 colours, 0 magenta |
+
+The ops one redraw produces, by kind:
+
+| top screen | ops | by kind |
+|---|---|---|
+| `MAINMENU.GUI` (at arm) | **115** | `gaf 105  line 4  focus 6` |
+| the shell one reset later | **40** | `gaf 29  line 4  copy 1  focus 6` |
+| `ARMMAIN2.GUI` (in game) | **1** | `gaf 1` |
+
+**+9 atlas frames** is the whole of the benefit and it is the shell's. The in-game figure is the
+more useful fact: `ARMMAIN2.GUI` is a **three-label screen** (`KILLS`, `LOSSES`, `TOTALUNITS`), not
+the HUD — the in-game panel art is drawn by the in-game draw path, not by this gadget tree, so a
+repaint there has nothing to re-issue. **A forced repaint is a shell mechanism.**
+
+#### Not covered
+
+* **`PK_SEED` is not closed and this landing does not close it.** A surface is still seeded on
+  first touch after every reseed; the repaint replays *over* that seed rather than instead of it.
+  What changes is that the art also exists as sprite ops, so the atlas holds it.
+* **The wallpaper.** `GUIMEM+0x24`'s surface is not itself established as one we twin; when it is
+  not, that copy falls back to bytes like any other.
+* **A first run showed 8 "lost sprite" events without the repaint and none with it, and it did
+  not reproduce** — a second control boot had 0. Not claimed.
+* **Whether the repaint measurably improves what the restorer or the sharp layer produces** was
+  not measured; only that the frames are in the atlas for them to reach.
 
 ## 4. What the work taught us
 

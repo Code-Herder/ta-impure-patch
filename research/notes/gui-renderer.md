@@ -194,6 +194,18 @@ measured inside the viewport, not on GAF art.
   same path is the **overflow policy**: a full ring stops recording, marks every surface for
   re-seed, and the next flip re-seeds them. And it is the **re-arm path**: the module toggled
   back on, or a new GL context, re-seeds rather than replaying history.
+- **…and, since landing 9 of the vulkan-only plan (2026-09-18), ASK THE ENGINE TO REDRAW as well.**
+  A seed is flat: it carries no frame identity, so the GUI atlas never holds it and neither the
+  restorer nor the sharp layer has anything to work on. Whenever the layer arms or the twins are
+  reseeded, `repaint_service` calls the engine's own `GUI_StageUpdateDraw 0x4A81E0(gi, 0x40)` on
+  the **top** screen, at the flip's **return** with `s_inFlip` already cleared, and the screen's
+  chrome arrives as ops through the leaves we already have. The seed still happens — this replays
+  *over* it, it does not replace it — but the art then exists as sprite ops too: the GUI atlas
+  holds **28** frames after boot against **19** under `norepaint`. It is a **shell** mechanism:
+  `MAINMENU.GUI` gives 115 ops, the in-game `ARMMAIN2.GUI` gives 1, because that screen is three
+  labels and the HUD is not a gadget tree. And it does **not** make every pixel a draw — the
+  redraw's own first act repaints the panel surface from a bitmap ([gpu-status](gpu-status.html)
+  §2.61, [engine map](exe-reverse-engineering.html) "what a `0x40` redraw actually draws").
 - **GAF pixels for atlas misses are copied into the ring on first sight**; later blits of the
   same frame carry only the atlas key. The sprite atlases read frame pixels on the render thread
   from the pointer, which the shell's constant pop-and-free would turn into a use-after-free

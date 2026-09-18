@@ -3209,7 +3209,7 @@ panel's gadgets:
 
 **THE ALLOCATIONS ARE GATED ON THE BUILD FLAG, WHICH IS THE ANSWER TO "IS IT SAFE TO CALL TWICE"
 — AND THIS SECTION SAID THE OPPOSITE UNTIL 2026-09-18.** It claimed the draw half allocates
-unconditionally. `0x4A82F7` computes `eax = ebx & 1` — the `0x1` **build** bit — and `je 0x4A90D1`
+unconditionally. `0x4A82F0` computes `eax = ebx & 1` — the `0x1` **build** bit — saves it at `[esp+0x18]`, and `0x4A82F7` `je 0x4A90D1`
 when it is clear; `0x4A90D1` is **past both allocations**, and `test bl,0x40` at `0x4A90DE` carries
 a redraw on into the gadget loop from there. **So `(gi, 0x40)` allocates nothing and frees nothing
 while still drawing every gadget**, and only a second *build* would leak. The first version looked
@@ -3229,8 +3229,53 @@ whole UI is pre-rendered into) and `panel+0xB8`, **overwriting the previous poin
 * **`0x4C6AC0(surf)`** — stdcall `ret 4` — is the free: null-checked, gated on `surf[+0x2C] & 1`
   (the "we own the pixels" bit `0x4C69F0` sets), then `0x4D85A0`.
 * **The only frees are in the `0x2` teardown path**, `0x4A9537` and `0x4A9549`, followed by both
-  pointers set NULL. The sole early return in the function is `gi->[0x18] == NULL` (`0x4A81F0`),
-  so every real call reaches the allocation.
+  pointers set NULL. The function's one early *return* is `gi->TheActive_GUIMEM == NULL`:
+  `0x4A81EA` loads `[gi+0x18]`, `0x4A81F3` `jne` past the epilogue, and `0x4A81FF` is `ret 8`.
+  ~~so every real call reaches the allocation~~ — **it does not**, per the paragraph above: the
+  build gate at `0x4A82F7` jumps past both. That clause was the same error stated twice.
+* `0x4A8202` is where the panel record is taken: `ebp = gi->TheActive_GUIMEM->ControlsAry`
+  (`[[gi+0x18]+0x04]`), and `ebp` is the base every `panel+0x…` offset in this section is
+  measured from. Arg 1 sits at `[esp+0x3D4]` and arg 2 at `[esp+0x3D8]` after the prologue's
+  `sub esp,0x3C0` and four pushes.
+
+**WHAT A `0x40` REDRAW ACTUALLY DRAWS, IN ORDER — AND IT IS NOT "EVERY PIXEL AS A DRAW"**
+[DISASSEMBLED + MEASURED 2026-09-18, this project, building the vulkan-only plan's landing 9].
+The redraw does **not** begin at the gadget loop. With `flags = 0x40` the path is forced: `0x4A90D1`
+`test bl,0x4` falls through, the saved build flag at `[esp+0x18]` is 0, `0x4A90DE` `test bl,0x40`
+is set, `0x4A90EF` `test bl,0x40` is set — so control always reaches **`0x4A90F4`**, and the
+`je 0x4A912E` that would skip the background is taken only when the `0x40` bit is *clear*.
+
+| at | what | arrives at our observer as |
+|---|---|---|
+| `0x4A90F4` | `esi = gi`; `eax = gi->TheActive_GUIMEM->[0x24]` | — |
+| `0x4A9105` | if that is non-NULL: `0x4C6B70(panel+0xBC, that, 0, 0)` — the **whole panel surface repainted from a bitmap** | a **copy** op, twin-to-twin only if that source is a surface we hold |
+| `0x4A911D` | if it is NULL (and `bl & 0x80` clear, which `0x40` is): `0x4B0230(gi, 0, panel+0xC4)`, the picture handler | whatever that handler blits |
+| `0x4A9135` | **then** the gadget loop | one op per gadget draw |
+
+So the gadget **chrome** comes back as describable draws and the **wallpaper** comes back as a
+bitmap copy. `GUIMEM+0x24` is a surface pointer and was not in `gui-gadgets.md`'s layout table
+before this landing.
+
+The build path is the matching pair and explains where that wallpaper came from:
+`0x4A9098` is `0x4C6B70(panel+0xBC, NULL, -panel.xpos, -panel.ypos)` — a **NULL source, which is
+the primary surface**, i.e. the new panel surface is seeded with a grab of the screen behind it —
+and `0x4A90CC` is `0x4C6B70(panel+0xB8, panel+0xBC, 0, 0)`, the save-under copy. A NULL
+*destination* would likewise resolve to the primary surface, so calling a redraw on a screen whose
+`panel+0xBC` is NULL would paint the wallpaper straight onto the frame; our caller refuses unless
+`TheActive_GUIMEM`, its `ControlsAry` and `panel+0xBC` are all present.
+
+**MEASURED, one op window each, `renderer=vulkan`, the shipped arm set** [2026-09-18]:
+
+| top screen | ops from one `(gi, 0x40)` | by kind |
+|---|---|---|
+| `MAINMENU.GUI` (the shell, at arm) | **115** | `gaf 105  line 4  focus 6` |
+| the shell one reset later | **40** | `gaf 29  line 4  copy 1  focus 6` |
+| `ARMMAIN2.GUI` (in game) | **1** | `gaf 1` |
+
+The in-game figure is not a failure and it is the more useful fact: **`ARMMAIN2.GUI` is a
+three-label screen** (`KILLS`, `LOSSES`, `TOTALUNITS` — `tacli ui --all`), not the HUD. The
+in-game panel art is drawn by the in-game draw path, not by this gadget tree, so there is nothing
+here for a redraw to re-issue. A forced repaint is a **shell** mechanism.
 
 **The game's protocol is build (`0x1`) / draw (`0x40`) / teardown (`0x2`)**, with `GUI_Pop
 0x4A968E` pushing `2`. A forced repaint is a `0x40` and joins the middle of that protocol without

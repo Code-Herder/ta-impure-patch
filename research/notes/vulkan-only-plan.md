@@ -1378,13 +1378,42 @@ Back to the filed list:
 
    **Not covered by 8a and 8b:** `PK_PIXELS` is not closed — `focus`, `line`, `scale` and `frame`
    still publish surface bytes at the flip.
-9. **Seeds carry art.** A `PK_SEED` is published lazily on first touch
-   (`tagpu_gui_hook.c:1289/1300/1332`) because we cannot know how a surface got its contents.
+9. **Seeds carry art.** — **LANDED 2026-09-18**, and read the three corrections below before
+   quoting anything else in this entry. A `PK_SEED` is published lazily on first touch
+   (`tagpu_gui_hook.c`'s `pub_seed`) because we cannot know how a surface got its contents.
    The fix is to make the engine redraw: `gui-renderer.md:55` has the panel as a pre-rendered
    surface at `panel+0xBC` whose gadget handlers sit behind the type dispatcher **`0x4A9176`**
-   with table **`0x4A962C`**. Force one repaint after arm and after a level-change reset
-   and every pixel arrives as an op — which closes G15e's *"seeded art stays indexed until
-   repainted"* as a consequence rather than as a special case.
+   with table **`0x4A962C`**. `GUI_StageUpdateDraw 0x4A81E0(gi, 0x40)` is issued at the flip's
+   **return**, on the game thread, with `s_inFlip` already cleared (the leaves drop every op
+   inside the flip), refused unless `TheActive_GUIMEM`, its `ControlsAry` and `panel+0xBC` are
+   all present, and non-reentrant by a flag. Off with the `norepaint` token.
+   **Measured: the GUI atlas holds 28 frames against `norepaint`'s 19**, three boots each,
+   `renderer=vulkan`. Full write-up: `gpu-status.md` §2.61.
+
+   **CORRECTION 1 — "every pixel arrives as an op" IS FALSE, and the disassembly said so before
+   the measurement did.** With `0x40` the path always reaches `0x4A90F4`, which repaints the
+   **whole panel surface from a bitmap** before a single gadget is drawn —
+   `0x4C6B70(panel+0xBC, GUIMEM+0x24, 0, 0)` when that field is set, else the picture handler
+   `0x4B0230(gi, 0, panel+0xC4)`. The gadget **chrome** comes back as draws; the **wallpaper**
+   comes back as a copy, and that copy is only a win while its source is a surface we twin.
+
+   **CORRECTION 2 — the trigger is `g_guiq.resets`, not a level change.** The packet's level
+   generation advances in `tagpu_packet_pub_level_end`, i.e. when a level is **torn down**, so
+   shadowing it fired exactly once per session — at the arm — and never on entering a game. It
+   did not need to: entering a game *builds* the in-game screen, and a build already draws every
+   gadget through the leaves. What actually causes a seed is a **reseed** clearing `seeded` on
+   every surface at once, and a level boundary is one of its four causes (with the consumer
+   stalling over, a lost sprite and an arena overflow).
+
+   **CORRECTION 3 — this is a SHELL mechanism.** One redraw of `MAINMENU.GUI` produces **115
+   ops** (`gaf 105  line 4  focus 6`). One of the in-game `ARMMAIN2.GUI` produces **1**, because
+   that screen is three labels (`KILLS`, `LOSSES`, `TOTALUNITS`) — the in-game panel art is drawn
+   by the in-game draw path, not by this gadget tree.
+
+   **NOT CLOSED BY 9:** `PK_SEED` itself. A surface is still seeded on first touch after every
+   reseed; the repaint replays *over* that seed rather than instead of it. What changes is that
+   the art also exists as sprite ops, so the atlas holds it — which is what G15e's *"seeded art
+   stays indexed until repainted"* actually needed.
 
    **BOTH OF THIS ENTRY'S OPEN QUESTIONS ARE ANSWERED [DISASSEMBLED 2026-09-18], and the second
    answer is NO.**
@@ -1438,8 +1467,11 @@ Back to the filed list:
    works: enumerate **every** branch and return before the point of interest and ask where each one
    lands.
 
-   **NOT MEASURED:** whether a repaint actually produces ops for every gadget, which is the thing
-   landing 9 is buying — `record+0x29` gates each one and nothing here establishes what sets it.
+   **MEASURED 2026-09-18, and this paragraph used to say NOT MEASURED:** a repaint does produce
+   ops, and `record+0x29` is not a dirty bit — it is the gadget's own `active` flag
+   (`gui-gadgets.md` §1.1), so a forced redraw re-issues the draws for every gadget the engine
+   would have drawn itself and for no others. 115 ops on `MAINMENU.GUI`, 1 on the in-game
+   `ARMMAIN2.GUI`; see CORRECTION 3 above for why those two numbers are not in tension.
    **Rejected:** submitting the seeded surface to the restorer as a job. Its contract
    (`tagpu_restoreglsl.h`) is *a frame of art from an R8 atlas with its colour key*; a seeded
    panel is a composite of art, glyphs and chrome with no key and no tileability, the model was

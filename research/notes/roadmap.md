@@ -3051,6 +3051,28 @@ is not the line — [gui-renderer](gui-renderer.html) §20's cyan squares are th
 belongs with `PK_SPRITE`. **Not covered by 8a:** `PK_PIXELS` is not closed — four of
 five kinds still publish surface bytes, and the gate's exit condition is unchanged.
 
+**9 LANDED 2026-09-18** ([gpu-status](gpu-status.html) §2.61), and it is the first thing in this
+tree that **calls** an engine draw function instead of watching one:
+`GUI_StageUpdateDraw 0x4A81E0(gi, 0x40)` at the flip's return, so the top screen's art reaches us
+as ops rather than as a `PK_SEED` of opaque bytes. Safe by three constructions, not by timing — the
+build gate at `0x4A82F0` jumps past both allocations and the two frees are gated on the teardown
+bit (so it allocates nothing, frees nothing, changes no lifetime); the call is refused unless
+`TheActive_GUIMEM`, its `ControlsAry` and `panel+0xBC` are all present, because a NULL destination
+resolves to the **primary surface**; and it runs with `s_inFlip` already cleared, since the leaves
+drop every op inside the flip. **Measured: the GUI atlas holds 28 frames where `norepaint` holds
+19**, three boots each, `renderer=vulkan`.
+
+**Two things the plan said about landing 9 were wrong and the row says so.** *"Every pixel arrives
+as an op"* is false: with `0x40` the path always reaches `0x4A90F4`, which repaints the whole panel
+surface **from a bitmap** before a single gadget is drawn, so the chrome comes back as draws and
+the wallpaper comes back as a copy. And the trigger is `g_guiq.resets`, not the level generation —
+the packet's level counter advances at level **end**, so shadowing it fired once per session and
+never on entering a game; a reseed is what clears `seeded` on every surface, and the level case is
+one of its four causes. **Not covered by 9:** `PK_SEED` is not closed — a surface is still seeded
+on first touch after every reseed and the repaint replays *over* it; and in game a repaint produces
+**1 op**, because `ARMMAIN2.GUI` is a three-label screen and the HUD is not a gadget tree. A forced
+repaint is a **shell** mechanism.
+
 ### Not in this phase
 
 **Ray tracing** (needs 64-bit — see the kill rule), **the out-of-process split**, and **a D3D12
