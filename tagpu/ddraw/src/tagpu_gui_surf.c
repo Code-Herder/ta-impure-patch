@@ -655,6 +655,26 @@ static GLuint mkprog(const char* vs, const char* fs)
     return p;
 }
 
+/* THE UI ATLAS IS NOT A GL OBJECT, and `init_gl` arming it at its tail is the
+   last place in this module where something the Vulkan twin needs was reachable
+   only through a GL bring-up. It is the CPU table every sprite op resolves
+   against -- with no atlas every sprite is `lost` and the surface re-seeds, and
+   the first vulkan-only run of landing 4b-3 measured exactly that: sprites=0,
+   atlas=0/0, lost=816878. `tagpu_gaf_atlas_create` has keyed on `made` rather
+   than on a GL name since 4b-2, so it is safe to ask for on either lane.
+   Idempotent, and the `made` test comes before the memset that would clear it.
+   [The vulkan-only plan, landing 4b-3.] */
+static int atlas_setup(void)
+{
+    if (s_atlas.made) return 1;
+    memset(&s_atlas, 0, sizeof s_atlas);
+    s_atlas.ents = s_ents; s_atlas.max = ATLAS_MAX; s_atlas.dim = ATLAS_DIM; s_atlas.tag = "gui";
+    s_atlas.pad = 0; s_atlas.align = 0; s_atlas.mip = 0;      /* 1:1, NEAREST, the 1-texel border */
+    s_atlas.prio = UI_RESTORE_PRIO;
+    s_atlas.restoreMinEdge = UI_RESTORE_MIN;
+    return tagpu_gaf_atlas_create(&s_atlas) ? 1 : 0;
+}
+
 static int init_gl(void)
 {
     if (s_gl) return s_gl == 1;
@@ -757,12 +777,7 @@ static int init_gl(void)
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 256, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     glBindTexture(GL_TEXTURE_2D, 0);
     s_palUpValid = 0;
-    memset(&s_atlas, 0, sizeof s_atlas);
-    s_atlas.ents = s_ents; s_atlas.max = ATLAS_MAX; s_atlas.dim = ATLAS_DIM; s_atlas.tag = "gui";
-    s_atlas.pad = 0; s_atlas.align = 0; s_atlas.mip = 0;      /* 1:1, NEAREST, the 1-texel border */
-    s_atlas.prio = UI_RESTORE_PRIO;
-    s_atlas.restoreMinEdge = UI_RESTORE_MIN;
-    if (!tagpu_gaf_atlas_create(&s_atlas)) { slog("gui: atlas FAILED"); s_gl = 2; return 0; }
+    if (!atlas_setup()) { slog("gui: atlas FAILED"); s_gl = 2; return 0; }
     s_gl = 1;
     slog("gui: GL ready (twins RG8, atlas 2048x2048, layer over the composite)");
     return 1;
@@ -1683,7 +1698,14 @@ void tagpu_gui_cursor_frame(const TAGPU_PACKET* pk)
        `strict`'s exemption) needs it on every path, including the ones below
        that decline to own the cursor */
     cursor_rect(pk, s_curEng);
-    if (!s_on || s_nocursor || s_gl != 1 || s_sharpFailed) return;
+    /* `s_atlas.made`, NOT `s_gl == 1`: the sentence two paragraphs up says
+       ownership is latched on the ATLAS, and `s_gl` is the GL bring-up's latch
+       -- a lane that brings no GL up left it at 0 and the cursor was never
+       claimed at all (measured: curs=0,0x0,drawn=0 on the first vulkan-only
+       run of landing 4b-3). On the GL lane the two are the same fact: the
+       atlas is armed at the tail of `init_gl` and only on the path that sets
+       `s_gl = 1`. [The vulkan-only plan, landing 4b-3.] */
+    if (!s_on || s_nocursor || !s_atlas.made || s_sharpFailed) return;
     if (!pk || !pk->cur_rec) return;
     /* the sprite record IS a GAF frame header -- size, hotspot, colour key and
        a pixel pointer at +0x10 -- and it comes out of the cursor TABLE, loaded
@@ -2608,7 +2630,13 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
        GL context makes none of them and must not be stopped by their absence
        -- everything below this line either gates itself or is the Vulkan
        twin's. [The vulkan-only plan, landing 4b-3.] */
-    if (!tagpu_vk_owns_present() && !init_gl()) return;
+    if (tagpu_vk_owns_present()) {
+        /* the atlas alone: the sprite table this module resolves against, which
+           is the Vulkan twin's as much as the GL lane's */
+        if (!atlas_setup()) return;
+    } else if (!init_gl()) {
+        return;
+    }
     upload_palette();       /* before restore_step, which compares against it */
     restore_step();         /* before the drain: its sprite ops ask whether colour is valid */
     /* STEP THE RESTORER WHEN NOTHING ELSE DID. tagpu_rglsl_step's only other
@@ -2720,7 +2748,15 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
                      what `nostring` is A/B'd on (13.4: ~40 bytes where a text op
                      carried ~968) and what §7's cadence note is about */
                   g_guiq.aHead, s_mirLost, s_mmDrawn,
-                  s_mmFogged, (unsigned)(s_mmEngW * s_mmEngH), s_mmNoEng,
+                  /* THE PAIR'S SIZE AS READ, not as uploaded. It was
+                     `s_mmEngW * s_mmEngH` -- the GL texture's -- which reads 0
+                     on a lane that makes no texture, so the line said "no
+                     engine pair" about a pair this module had just counted
+                     13227 fogged texels in. The packet is where both lanes get
+                     it. [The vulkan-only plan, landing 4b-3.] */
+                  s_mmFogged,
+                  f->packet ? (unsigned)(f->packet->mm_w * f->packet->mm_h) : 0u,
+                  s_mmNoEng,
                   cowArmed, cowOf, cowSkip, fps);
         b[sizeof b - 1] = '\0';
         slog(b);
