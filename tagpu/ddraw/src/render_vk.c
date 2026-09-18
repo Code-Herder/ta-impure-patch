@@ -87,6 +87,24 @@
 #include "tagpu_vk.h"
 
 
+/* THE FRAME NUMBER OUTLIVES THE THREAD, and it has to. `dd_SetDisplayMode`
+   joins this thread (`dd.c:747`, INFINITE) and `dd.c:1459` creates a new one on
+   the next mode change, so a counter in automatic storage would restart at 0 --
+   and every hand-over in the tree tests freshness by EXACT EQUALITY on this
+   number (`tagpu_terr.c`'s "THE STAMP IS WHAT MAKES THE POINTERS ABOVE SAFE",
+   and the same test in tagpu_fx.c and tagpu_posedraw.c). Equality against a
+   counter that restarts is not a freshness test: a record published on the
+   frame the old thread died, never consumed, would match again the same number
+   of frames into the new thread's life and hand a twin pointers into buffers
+   that were freed and rebuilt in between.
+
+   A FILE STATIC IS THE FIX AND IT MATCHES THE GL LANE, whose `g_tagpu_frames`
+   (`render_ogl.c:47`) is a file static for the same reason. One backend is
+   chosen per process and can only degrade to GDI, so the two counters can never
+   both be live and cannot diverge. [FROM THE 4b-1 LANDING REVIEW, 2026-09-18.]
+   */
+static unsigned s_frames = 0;
+
 DWORD WINAPI vk_render_main(void)
 {
     /* HOW MANY TIMES A LANE THAT HAD COME UP MAY FAIL AND BE BROUGHT BACK
@@ -96,7 +114,7 @@ DWORD WINAPI vk_render_main(void)
        one rebuild. See the loop for why the two cases are not the same case. */
 #define VK_RETRY_BUDGET 3
 
-    unsigned frames = 0, fc = 0;
+    unsigned fc = 0;
     int gave_up = 0, came_up = 0, retries = 0;
     DWORD timeout;
 
@@ -160,7 +178,7 @@ DWORD WINAPI vk_render_main(void)
            post-increment inside either call would silently differ by one. The
            GL lane gets the same ordering by filling the struct earlier in its
            loop and passing `g_tagpu_frames - 1u`. */
-        fc = frames++;
+        fc = s_frames++;
 
         /* THE DRIVER. `tagpu_overlay_draw` is the single per-frame entry point
            for everything this fork adds, and most of it is already

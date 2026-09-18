@@ -124,14 +124,26 @@ void tagpu_abshot_begin(TAGPU_ABSHOT* s, unsigned flags);
    function is never called, `_gl.ppm` is never written, and a Vulkan half that
    waited on it would never be claimed -- on the only lane that presents. The
    property the rule was protecting is instead made true by construction over
-   there: tagpu_vk.c unlinks the target `_vk.ppm` the instant a claim is seen,
-   so a file that exists was written by this arming and a refused capture leaves
-   nothing to diff. Where BOTH lanes run -- `renderer=opengl` with
-   `tagpu_vk.on` -- the rule above still holds and is still what a pass applies;
-   the unlink is belt and braces there, and covers the two refusals that used to
-   leave a stale `_vk.ppm` behind (a surface whose images do not carry
-   TRANSFER_SRC, and two levers armed in one frame). [The vulkan-only plan,
-   landing 4b.] */
+   there: `tagpu_vk_ab_arm` (tagpu_vk.h) unlinks the target `_vk.ppm`, and a
+   pass calls it AT THE INSTANT IT LATCHES A CLAIM -- in the same statement
+   sequence, on the same thread, with no frame boundary between the two. That
+   placement is the whole guarantee. Doing it where the capture is recorded
+   looked equivalent and was not: the claim latches whether or not the lane ever
+   collects it, and the lane's own frame function returns before the present all
+   through the bring-up, on a swapchain rebuild and at ST_FAILED -- so the
+   unlink would have been missed on exactly the frames where no capture happens.
+   [FOUND BY THE 4b-1 LANDING REVIEW, 2026-09-18.]
+
+   IT RETURNS WHETHER THE TARGET IS GONE, and a pass claims on that as well as
+   on `end`'s answer: a file that could not be removed is a file that may be
+   diffed as this arming's capture, so the arming is refused and logged instead.
+
+   Where BOTH lanes run -- `renderer=opengl` with `tagpu_vk.on` -- the rule
+   above still holds and is still what a pass applies; the unlink runs there too,
+   and covers the refusals that used to leave a stale `_vk.ppm` behind (a
+   surface whose images do not carry TRANSFER_SRC, two levers armed in one
+   frame, and every path on which the lane never presents at all).
+   [The vulkan-only plan, landing 4b.] */
 int tagpu_abshot_end(TAGPU_ABSHOT* s, const char* path, const char* tag);
 
 #endif

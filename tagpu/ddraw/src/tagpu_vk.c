@@ -198,6 +198,17 @@
 #define AB_MARK    "tagpu_mark_vk.ppm"
 #define AB_UNIT    "tagpu_posedraw_vk.ppm"
 #define AB_GUI     "tagpu_gui_vk.ppm"
+/* THE ONE LIST OF THEM, in the order `vk_present` selects in (which is the
+   order the nested ternary it replaced tested in). The `tag` is the SAME string
+   the pass's GL half passes to `tagpu_abshot_end`, so a pass names its file
+   once, here, and both the write and the arming's unlink read this row.
+   `posedraw`'s file is `AB_UNIT`: the pass is the unit pass and the lever is
+   `tagpu_posedraw.ab`, and that mismatch is exactly why this is a table and not
+   a `_snprintf` of the tag. */
+static const struct { const char* tag; const char* path; } s_abFiles[8] = {
+    { "terr", AB_TERR }, { "feat", AB_FEAT }, { "posedraw", AB_UNIT }, { "fx", AB_FX },
+    { "mark", AB_MARK }, { "scaffold", AB_SCAF }, { "gui", AB_GUI }, { "fps", AB_FPS },
+};
 #define GPUS_FILE  "tagpu_vk.gpus"      /* the cache the menu reads at attach */
 #define CFG_FILE   "tagpu_vk.cfg"       /* the player's choice, by name       */
 #define CFG_TMP    "tagpu_vk.cfg.tmp"
@@ -462,7 +473,8 @@ static void ab_drop(const char* why, int idle)
               "may still be running", why);
         return;
     }
-    vklog("the A/B capture was lost to %s - only the GL half was written", why);
+    vklog("the A/B capture was lost to %s - no tagpu_<pass>_vk.ppm this arming "
+          "(the arming unlinked it, so there is no stale one to mistake for it)", why);
     tagpu_vk_shot_down(&s_pass);
 }
 
@@ -760,6 +772,72 @@ static void read_lever(void)
             s_clear[2] = (float)(bl < 0 ? 0 : bl > 255 ? 255 : bl) / 255.0f;
         }
     }
+}
+
+/* UNLINK THIS PASS'S VULKAN CAPTURE, called by the pass at the instant it
+   latches a claim -- `if (taking) tagpu_vk_ab_arm("scaffold");` and nothing
+   else. That placement IS the guarantee, and it is why this is not done where
+   the capture is recorded.
+
+   WHAT IT BUYS. `tagpu_abshot.h`'s rule is that the Vulkan half of an A/B may
+   be claimed only on a GL capture that reached the disk, because a refused
+   write leaves the PREVIOUS run's file lying there and a half diffed against it
+   reports a capture of a different frame as a port failure. On the vulkan-only
+   lane there is no GL half to read, so the same property is established here
+   instead: after this call the target does not exist, and it comes back only if
+   `tagpu_vk_shot_finish` writes it. Absent means this arming produced no
+   capture; present means this arming's.
+
+   WHY HERE AND NOT IN `vk_present`. Because the claim is LATCHED on the gather
+   side (`s_abDone = 1`) whether or not the lane ever collects it, and
+   `vk_present` is not on the path from that latch: `tagpu_vk_frame` returns
+   before it all through the ~250 ms bring-up, on a swapchain rebuild, at
+   ST_FAILED and at ST_ZOMBIE, and `vk_present` itself returns early on an
+   out-of-date acquire and on a swapchain that hands back an impossible image.
+   An unlink there is reached on most frames and missed on precisely the frames
+   where the capture does not happen -- which is the case it exists for. Here it
+   is in the same statement sequence as the latch, on the same thread, with no
+   frame boundary between them, so there is no interleaving that separates them.
+   [FROM THE 4b-1 LANDING REVIEW, 2026-09-18.]
+
+   THE ONE RESIDUAL, NAMED. A capture recorded by an EARLIER arming is written
+   when its frame slot's fence comes round, up to `nimg` frames later, and that
+   write would land after this unlink. It cannot overlap a second arming of the
+   same pass: a pass re-arms only after its lever file has been taken away and
+   put back, and it notices that on a 30-frame poll, which is an order of
+   magnitude more frames than the swapchain has images. That is a bound, not a
+   race, but it is a bound in two files and so it is written down in both.
+
+   AND THE DELETE'S ANSWER IS THE RETURN VALUE, because "after this line the
+   file does not exist" is the whole argument and `DeleteFileA` can fail: a
+   reader holding it open, or a read-only file. Discarding that would leave the
+   property asserted rather than established, so 1 means the target is gone --
+   deleted now, or already absent -- and the caller must not claim the Vulkan
+   half on anything else. ERROR_FILE_NOT_FOUND and ERROR_PATH_NOT_FOUND are the
+   success cases that look like failures. [FROM THE 4b-1 LANDING REVIEW.]
+
+   An unknown tag is a programming error and says so rather than composing a
+   path: nothing should be unlinked on the strength of a string this file does
+   not recognise, and no claim is granted for one either. */
+int tagpu_vk_ab_arm(const char* tag)
+{
+    int i;
+    DWORD e;
+    if (!tag) return 0;
+    for (i = 0; i < 8; i++) {
+        if (strcmp(tag, s_abFiles[i].tag) != 0) continue;
+        if (DeleteFileA(s_abFiles[i].path)) return 1;
+        e = GetLastError();
+        if (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) return 1;
+        vklog("ab: %s could not be removed (error %lu) - this arming is REFUSED "
+              "rather than risk the file that is there being diffed as its "
+              "capture. Close whatever is holding it and re-arm.",
+              s_abFiles[i].path, (unsigned long)e);
+        return 0;
+    }
+    vklog("ab: \"%s\" is not one of the eight ported passes - nothing unlinked "
+          "and no claim granted", tag);
+    return 0;
 }
 
 /* THE RENDERER CHOICE IS THE ARMING when this backend owns the present. Called
@@ -2735,40 +2813,30 @@ static int vk_present(void)
         ndraw = draw_terr + draw_feat + draw_unit + draw_fx + draw_mark + draw_scaf +
                 draw_gui + draw_fps;
         nclaim = ab_terr + ab_feat + ab_unit + ab_fx + ab_mark + ab_scaf + ab_gui + ab_fps;
-        /* THE CLAIMED PASS'S FILE, AND THE STALENESS GUARD, out of one table so
-           that a pass added here cannot get the first and not the second. The
-           row order is the order the nested ternary this replaced tested in, so
-           which pass wins a (refused) multi-claim frame is unchanged.
+        /* THE CLAIMED PASS'S FILE, out of the one list of them in this file
+           (`s_abFiles`, above). The row order is the order the nested ternary
+           this replaced tested in, so which pass wins a (refused) multi-claim
+           frame is unchanged -- and `tagpu_vk_ab_arm` reads the same list, so
+           the name the capture is WRITTEN to and the name the arming UNLINKS
+           cannot drift apart.
 
-           EVERY CLAIMED TARGET IS UNLINKED THE INSTANT THE CLAIM IS SEEN, which
-           is what makes a capture on this side trustworthy WITHOUT reading the
-           GL half. tagpu_abshot.h's rule was that the Vulkan half may be
-           claimed only on a GL capture that reached the disk, because a refused
-           write leaves the PREVIOUS run's file lying there and a diff against
-           it reports a different frame as a port failure. On `renderer=vulkan`
-           there is no GL half to ask (the vulkan-only plan, landing 4b), so the
-           same property is established here instead and by construction: after
-           this line the file does not exist, and it comes back only if
-           `tagpu_vk_shot_finish` writes it. Absent means "this arming produced
-           no capture" -- which every refusal below then explains in the log --
-           and present means this arming's, on either lane.
-
-           DELETED FOR EVERY CLAIM, not only the one `abpath` names: a frame
-           with two levers armed captures nothing, and leaving the second pass's
-           file behind would hand the operator exactly the stale capture this
-           is here to prevent. */
+           THE UNLINK IS NOT DONE HERE, and that is the point of it. See
+           `tagpu_vk_ab_arm`: a claim is latched on the gather side and this
+           function is not on the path from that latch -- `tagpu_vk_frame`
+           returns before `vk_present` all through the bring-up, on a swapchain
+           rebuild, at ST_FAILED and at ST_ZOMBIE, and `vk_present` itself
+           returns early on an out-of-date acquire. An unlink here would
+           therefore be reached on most frames and missed on exactly the frames
+           where a stale capture is likeliest, which is a guarantee about timing
+           wearing the words of one about construction.
+           [FROM THE 4b-1 LANDING REVIEW, 2026-09-18.] */
         {
-            static const char* const abfile[8] = { AB_TERR, AB_FEAT, AB_UNIT, AB_FX,
-                                                   AB_MARK, AB_SCAF, AB_GUI, AB_FPS };
             const int abclaim[8] = { ab_terr, ab_feat, ab_unit, ab_fx,
                                      ab_mark, ab_scaf, ab_gui, ab_fps };
             int abi;
             abpath = NULL;
-            for (abi = 0; abi < 8; abi++) {
-                if (!abclaim[abi]) continue;
-                if (!abpath) abpath = abfile[abi];
-                DeleteFileA(abfile[abi]);
-            }
+            for (abi = 0; abi < 8 && !abpath; abi++)
+                if (abclaim[abi]) abpath = s_abFiles[abi].path;
         }
 
         if (s_vk.rp && s_vk.fb[idx]) {

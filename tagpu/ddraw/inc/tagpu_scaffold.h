@@ -43,8 +43,9 @@ int tagpu_scaffold_frameinfo(unsigned frame_counter, int* r0, int* nrows);
    The comparison that flag serves is a different one: not the two lanes of one
    frame, but this build's `_vk.ppm` against the previous build's
    (vulkan-only-plan.md, landing 4b). What the coupling was buying -- that a
-   file on the disk belongs to this arming -- tagpu_vk.c now establishes by
-   unlinking the target the instant a claim is seen. */
+   file on the disk belongs to this arming -- `tagpu_vk_ab_arm` now establishes,
+   called by this pass in the same statement sequence that latches the claim and
+   refusing the claim when the target could not be removed. */
 int tagpu_scaffold_overlay(const unsigned char** buf, int* w, int* h,
                            float rect[4], float* rows, int* ab);
 

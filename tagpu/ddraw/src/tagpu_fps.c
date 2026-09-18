@@ -387,8 +387,9 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
                capture failure a port failure. `s_abDone` latches either way:
                a lever that cannot capture must not retry every frame. */
             int wrote = tagpu_abshot_end(&shot, ABOUT, "fps");
+            int fresh = tagpu_vk_ab_arm("fps");
             s_abDone = 1;
-            s_abFrame = wrote;
+            s_abFrame = wrote && fresh;
         }
     } else if (taking) {
         /* AND ON THE LANE WITH NO GL HALF, THE INTENT IS THE CLAIM. The rule
@@ -398,7 +399,7 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
            to this arming -- tagpu_vk.c establishes by unlinking the target the
            instant a claim is seen. tagpu_abshot.h has the whole argument. */
         s_abDone = 1;
-        s_abFrame = 1;
+        s_abFrame = tagpu_vk_ab_arm("fps");
     }
 
     /* PUBLISHED AFTER THE DRAW WHERE THERE IS ONE, and after the build in

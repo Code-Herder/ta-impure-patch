@@ -570,10 +570,15 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
 
         if (taking) {
             /* the Vulkan half is claimed only on a GL half that reached the disk
-               -- see tagpu_abshot.h; `s_abDone` latches either way */
+               -- see tagpu_abshot.h; `s_abDone` latches either way.
+               AND ON THE TARGET HAVING BEEN UNLINKED, which is armed here even
+               when the GL half failed: leaving a stale `_vk.ppm` beside a stale
+               `_gl.ppm` is the worse of the two, and both halves have to be
+               this arming's for the pair to mean anything. */
             int wrote = tagpu_abshot_end(&shot, ABOUT, "scaffold");
+            int fresh = tagpu_vk_ab_arm("scaffold");
             s_abDone = 1;
-            s_abFrame = wrote;
+            s_abFrame = wrote && fresh;
         }
     } else if (taking) {
         /* THE ARMING, ON THE LANE WHERE THERE IS NO GL HALF TO ARM IT.
@@ -598,7 +603,7 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
            the old rule could be, once the half it was reading stopped
            existing. */
         s_abDone = 1;
-        s_abFrame = 1;
+        s_abFrame = tagpu_vk_ab_arm("scaffold");
     }
 
     /* PUBLISHED AFTER THE DRAW WHERE THERE IS ONE, and after the gather in
@@ -628,7 +633,16 @@ int tagpu_scaffold_overlay(const unsigned char** buf, int* w, int* h,
 GLuint tagpu_scaffold_texref(void) { return s_tex; }
 int tagpu_scaffold_frameinfo(unsigned frame_counter, int* r0, int* nrows)
 {
-    if (s_state != 1 || !s_armed) return 0;
+    /* NOT GATED ON GL READINESS, because these two numbers are the GATHER's and
+       the gather runs on either lane. `s_state` is the GL program's state and is
+       permanently 0 under `renderer=vulkan`, where `init_gl` is never called --
+       so testing it here handed every caller "no rows" on the one lane the rows
+       are needed for, silently. The freshness test below is the real one and it
+       is API-independent: `s_lastFrame` is stamped by the gather.
+       [FROM THE 4b-1 LANDING REVIEW, 2026-09-18 -- inert when found, because
+       the only caller was still gated, and a trap for the landing that ungates
+       it.] */
+    if (!s_armed) return 0;
     if (frame_counter - s_lastFrame > 2) return 0;   /* stale (not armed/in-game) */
     *r0 = s_lastR0; *nrows = s_lastRows;
     return 1;

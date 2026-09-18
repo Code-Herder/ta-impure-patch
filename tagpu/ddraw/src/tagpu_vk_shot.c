@@ -79,8 +79,21 @@ int tagpu_vk_shot_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, VkImage img,
     VkBufferImageCopy rg;
     uint32_t i, type = 0xFFFFFFFFu;
 
-    if (s_buf) return 0;                      /* one capture in flight, ever */
-    if (!w || !h || w > 8192 || h > 8192) return 0;
+    /* EVERY REFUSAL SAYS SO. These two returned 0 in silence, and since an
+       arming now unlinks its own target, the operator's only evidence that a
+       capture was asked for and not taken is this log -- an absent file with no
+       line beside it reads as "the lever never fired", which is a different
+       fault with a different fix. [FROM THE 4b-1 LANDING REVIEW, 2026-09-18.] */
+    if (s_buf) {
+        slog(d, "shot: a capture is already in flight - nothing captured for "
+                "this arming");
+        return 0;
+    }
+    if (!w || !h || w > 8192 || h > 8192) {
+        slog(d, "shot: the image is %ux%u, outside 1..8192 - nothing captured",
+             (unsigned)w, (unsigned)h);
+        return 0;
+    }
     if (fmt == VK_FORMAT_B8G8R8A8_UNORM || fmt == VK_FORMAT_B8G8R8A8_SRGB) s_bgr = 1;
     else if (fmt == VK_FORMAT_R8G8B8A8_UNORM || fmt == VK_FORMAT_R8G8B8A8_SRGB) s_bgr = 0;
     else {
@@ -93,7 +106,12 @@ int tagpu_vk_shot_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, VkImage img,
     bci.size = (VkDeviceSize)w * h * 4;
     bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    if (vkCreateBuffer(d->dev, &bci, NULL, &s_buf) != VK_SUCCESS) { s_buf = VK_NULL_HANDLE; return 0; }
+    if (vkCreateBuffer(d->dev, &bci, NULL, &s_buf) != VK_SUCCESS) {
+        s_buf = VK_NULL_HANDLE;
+        slog(d, "shot: the %u-byte staging buffer was refused - nothing captured",
+             (unsigned)bci.size);
+        return 0;
+    }
     vkGetBufferMemoryRequirements(d->dev, s_buf, &req);
     vkGetPhysicalDeviceMemoryProperties(d->pd, &mp);
     for (i = 0; i < mp.memoryTypeCount; i++)
