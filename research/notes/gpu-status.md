@@ -10668,7 +10668,7 @@ already decides per draw, against a word that only a live lane sets:
 | the pre-shadow composite wipe (`0x459338`, `0x45958C`, `0x4594DB`) | the same, plus the classifier's own target test | as above |
 | `buildfx` (`0x458DD0`) | `tagpu_native_owns_obj` | `s_armed == 1`, written **only** in `tagpu_native_frame` |
 | `terrown`, `featown`, `fxown`, `markown`, `cursown` | a `volatile unsigned char` the stub compares | `set_skip(ours-live)` from the pass that paints, with a watchdog |
-| **the structure-shadow pair** | **nothing** | **— (this landing)** |
+| **the structure-shadow pair** (`0x4592BF`, `0x459522`) | a `volatile unsigned char` (`g_ssSkip`) the stub compares | `set_structshadow(s_armed == 1 && gl_draws && s_ssPainter)` — **an observation published by the painters**, not a prediction from their levers — with an 8-frame watchdog |
 
 And **every one of those answers is produced inside `tagpu_overlay_draw`**, whose only callers
 are `render_ogl.c:1632` and `render_vk.c:232`. `render_gdi.c` contains no `tagpu_` call at all.
@@ -10719,8 +10719,21 @@ through another door. `render_ogl.c:1633` and `render_vk.c:233` both already say
 words, about the cursor, because the same class was found and fixed there.
 
 So `tagpu_owndraw_flush` lowers the gate after **eight** frames without a publish. It is called from
-`tagpu_overlay.c:365`, **above all four gates**, which is the whole reason it can: it still gets a
-frame when the publisher does not. `tagpu_fxown.c` solves the identical problem the identical way,
+`tagpu_overlay.c:365`, **above three of the four gates** — `tagpu_overlay.off`, the failed init and
+the teardown — which is the whole reason it can: it still gets a frame when the publisher does not.
+It is **not** above the frame-ABI check at `:306`, and an earlier version of this paragraph and of
+the comment in `tagpu_owndraw.c` both counted that one as covered. Nothing is owed for it: both
+call sites fill `f.abi` from the same header in the same DLL and pass `&f`, so it cannot fire — but
+the claim was the same species as the one this whole section exists to correct, so it is written
+down rather than quietly dropped. [Found by the re-review of 10b.]
+
+**The heartbeat is measured against the lane's own frame counter**, and the two lanes count
+separately — `render_ogl.c`'s `g_tagpu_frames` and `render_vk.c`'s `s_frames`. A lane switch can
+therefore make `frame_counter - g_ssBeat` large and fire the watchdog once. It fires in the safe
+direction (it lowers), and the publisher re-raises in the **same** frame, because the flush at
+`:365` runs before `tagpu_native_frame` at `:464`. Self-correcting and bounded at one frame; the
+unsigned subtraction is otherwise the standard modular idiom and is correct across a counter wrap
+(2³² frames is about 2.3 years at 60 fps). `tagpu_fxown.c` solves the identical problem the identical way,
 at 90 frames; eight is used here because a missing shadow is a picture the player sees rather than
 a counter.
 
@@ -10733,7 +10746,12 @@ the other does not, `restore_sshadow` puts the first one's bytes back — but ev
 `VirtualProtect` fails and a detour is stranded, `g_sshadow` is 0, so `set_structshadow` computes
 `ours && g_sshadow` = 0 and the gate can never be raised: a stranded stub is a pure pass-through.
 The old code's failed rollback left `EB` in place, which is permanent suppression. [Pointed out by
-the landing review as an improvement the landing had not claimed.]
+the landing review as an improvement the landing had not claimed.] **Both halves of the rollback's
+own leak are closed now**: `install_sshadow` frees its stub when the `VirtualProtect` on the engine
+bytes fails (the landing review), and it hands the stub back through a `stubOut` parameter so that
+undoing A after B refuses frees A's page too (the re-review). The restore puts the engine's bytes
+back *before* freeing, so the branch stops pointing at the stub first — free at `DllMain` where no
+thread has reached either, but the order costs nothing and a later caller would need it.
 
 **A flip is immune to an incoming branch and a detour is not**, so both stolen ranges were
 checked before the code was written. `objdump -d -M intel` over the whole image finds exactly one
@@ -10821,15 +10839,24 @@ branch's machine code against the pristine disassembly, the gate's six live tran
   the flag. Two earlier versions of this bullet were wrong about them and the second was wrong in
   the direction that matters, so what each one actually is:
     * **`:3811` is the Vulkan lane's normal exit, every frame** — it closes the
-      `if (!gl_draws) { … hand over …; return; }` block at `:3753`. A previous version said
-      *"the Vulkan unit pass paints the shadow"* there. **It does not.** No file under
-      `tagpu_vk*` contains the word `slant`, and `tagpu_posedraw_slant_set`
-      (`tagpu_posedraw.c:1230`) is pure GL with no `pd_record` call, so nothing of the posed slant
-      reaches the twin. What paints a structure's shadow on that lane is **Classic++'s
-      cast-shadow map** (`tagpu_vk_shadow.c`, through `tagpu_shadow_handover`) — which is a
-      different painter, is the shipped default, and is why the predicate now asks
-      `tagpu_classicpp_on()`. With Classic++ off, the Vulkan lane paints no slant shadow at all
-      and the gate is correctly left down.
+      `if (!gl_draws) { … hand over …; return; }` block at `:3753`. Two earlier versions of this
+      sub-bullet were wrong about it, in opposite directions, and the second cost a whole review
+      round:
+        * *"the Vulkan unit pass paints the shadow"* — **it does not.** No file under
+          `tagpu_vk*` contains the word `slant`, and `tagpu_posedraw_slant_set`
+          (`tagpu_posedraw.c:1230`) is pure GL with no `pd_record` call.
+        * *"Classic++'s cast-shadow map paints it there, through `tagpu_shadow_handover`, which
+          is why the predicate asks `tagpu_classicpp_on()`"* — **it does not paint it there
+          either**, and this one is provable in four steps rather than argued:
+          `tagpu_shadow_handover` needs `s_pubHave`; `s_pubHave = 1` is written in exactly one
+          place, `tagpu_shadow_end` (`tagpu_shadow.c:527`), which opens `if (!s_live) return;`;
+          `s_live = 1` is written in exactly one place, `tagpu_shadow_begin`
+          (`tagpu_shadow.c:403`); and `begin` and `end` have exactly one call site each
+          (`tagpu_native.c:4190`, `:4277`), **both below this return**. So under
+          `renderer=vulkan` the handover returns 0 at `tagpu_vk_shadow.c:788` and that pass
+          stands down. The Vulkan twin is exercised while the **GL** lane owns the present.
+      **Nothing paints a structure's slant shadow on the Vulkan lane today**, so the gate must
+      stay down there, and it does — `gl_draws` is a term of the predicate.
     * `:3441` is a genuine *nothing to draw* (`nu == 0 && nfx == 0 && …`).
     * **`:3713` is NOT**, and the bullet that said it was gave a construction argument for a
       configuration fact. It tests **emitted geometry** — `nv == 0 && nhi == 0 && npd == 0 && …` —
@@ -10845,12 +10872,47 @@ branch's machine code against the pristine disassembly, the gate's six live tran
 * **A unit whose `ModelId` will not bound** (`tagpu_native.c:941`) is refused by
   `tagpu_native_owns_unit`, drawn by the engine, and has no `n2` entry — while the gate, which is
   global, still suppresses its shadow branch.
-* **The Classic++ shadow map's own failure is not part of the predicate.** The gate asks whether
-  Classic++ is ON, not whether the map built: `tagpu_shadow_live()` would answer that, but it is
-  set at `tagpu_shadow.c:403` inside `tagpu_shadow_begin`, whose only call site (`:4155`) is BELOW
-  the hand-over return — so it is GL-only and reads 0 on the Vulkan lane every frame. Putting it
-  in the predicate would lower the gate on the shipped configuration and give every building two
-  shadows. Named rather than closed.
+* **The predicate is an OBSERVATION now, and both guessed versions of it were wrong.** This is
+  the single most expensive lesson of the landing, and it took two review rounds:
+
+  | version | what it asked | how it failed |
+  |---|---|---|
+  | `s_armed == 1` | *is the pass armed* | not the question at all; every other suppressor in `tagpu_owndraw.c` asks the first one |
+  | `tagpu_classicpp_on()` **or** `(gl_draws && tagpu_posedraw_live())` | *is a painter configured* | treats the two painters as alternatives, and they are not |
+  | `s_armed == 1 && gl_draws && s_ssPainter` | *did anything actually paint one last frame* | — |
+
+  **The two painters are not alternatives: both come out of `pdu[]`.** The cast-shadow map's unit
+  casters are the posed depth twin (`tagpu_native.c:4251`, `if (!pdu[k].castSkip)`) and the slant
+  range is `pdix[i] >= 0` (`:4145`, `:4472`). `pdu[]`/`pdix[]` are filled in one place and that
+  place bails first — `if (!pdReady) continue;` (`:3665`), `pdReady = tagpu_posedraw_ready()`.
+  So with the posed program refused (`s_state == 2`, a session latch: a missing entry point, a
+  shader that will not link, a uniform block over `PD_BLOCK`), `npd` is 0, **nothing casts into
+  the map and the slant range is empty** — and the middle version above raised the gate anyway,
+  because `tagpu_classicpp_on()` was true. Every building would have lost its shadow for the
+  session, **in the shipped default configuration**, with the engine still drawing the buildings.
+  `tagpu_posedraw_ready()` is a **precondition of both painters**, never an alternative to one.
+* **So the flag is published by the painters, at `tagpu_native.c`'s `s_ssPainter`**, and the
+  publisher at the top of the next frame reads *and clears* it:
+  `s_ssPainter = pdReady && (mapLive || !(cpp && !hard))`, sitting immediately after the
+  cast-shadow map block. `mapLive` is `cpp && tagpu_shadow_begin(…)` held in a variable instead of
+  tested inline, because the gate has to know whether the map **drew**, not whether it was
+  configured — `tagpu_shadow_begin` refuses on four grounds past `tagpu_classicpp_on()`
+  (`shadows != SOFT`, the engine's own Shadow bit, `amb >= 1.0`, and its GL init or FBO failing).
+  `!(cpp && !hard)` is the slant loop's own `continue` quoted from `:4143` so the two cannot drift.
+* **Every stale direction is now bounded at one frame by construction**, which is what neither
+  guessed version had. The clear-on-read is what does it: any path that does not reach the
+  painters — the nine early returns, the hand-over return, a lane switch, a refused map — leaves 0
+  behind and the next frame lowers the gate. Starting a painter costs one frame of double shadow;
+  stopping one costs one frame of none. `gl_draws` is ANDed in separately because it is read fresh
+  from `tagpu_vk_owns_present()` this frame while `s_ssPainter` is last frame's, so a GL→Vulkan
+  switch cannot carry a raised frame across the seam. This is the same *observe, don't predict*
+  shape `tagpu_cursown_publish` / `tagpu_gui_cursor_drew_take` already uses for the cursor.
+* **`Classic++ on with `shadows=OFF` leaves the gate down and the engine keeps its slant.** Both
+  terms are false there (the map wants SOFT; the slant loop's `cpp && !hard` skips it). That is
+  `main`'s behaviour, so it is no regression, and it is the safe direction — a shadow the engine
+  draws is visible, a shadow nobody draws is silent. It is *not* symmetric with the silhouette,
+  which the composite-wipe detours at `0x459338`/`0x45958C`/`0x4594DB` do suppress in that
+  configuration; the asymmetry is deliberate and is recorded here rather than smoothed over.
 * **The 1→0 transition costs one frame of no shadow**, symmetrically with the 0→1 frame of double
   shadow: the engine's surface for a frame was painted by the game thread before the render thread
   lowered the flag. Both are one frame wide; the asymmetry the design rests on is about *durable*

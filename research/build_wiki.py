@@ -481,6 +481,19 @@ def slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
 
+# A PIPE INSIDE A CODE SPAN INSIDE A TABLE CELL CANNOT BE WRITTEN.
+# `\|` is the tables extension's cell escape, and it splits the row on it
+# correctly -- but the backslashes survive into the code span, because inline
+# code preserves its literal text, so `a \|\| b` reaches the page as the five
+# characters `a \|\| b` instead of `a || b`. Caught 2026-09-18 by looking at the
+# rendered page, the same way the strikethrough below was, while documenting a
+# C predicate that contained `||`.
+#
+# NOT FIXED HERE ON PURPOSE. The fix would have to reach inside the tables
+# extension's escaping, which runs over all 63 pages and whose failure mode is
+# silent; the workaround costs an author nothing. Write the operator as a word
+# ("or"), or split it into two code spans around it. Outside a table, `||` in a
+# code span needs no escape and renders fine.
 class _Strikethrough(markdown.extensions.Extension):
     """`~~struck~~` -> <del>struck</del>.
 

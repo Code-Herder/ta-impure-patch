@@ -315,6 +315,19 @@ static int    s_state = 0;             /* 0=unloaded 1=ready 2=failed */
    reason s_selComplete is, so the publishing store below cannot be hoisted
    above the state it publishes. */
 static volatile int s_armed = -1;
+
+/* DID A STRUCTURE'S SLANT SHADOW ACTUALLY GET PAINTED THIS FRAME -- the
+   structure-shadow gate's input, written at the bottom of the unit pass by
+   whichever painter was running and read (and cleared) by the publisher at the
+   top of the NEXT frame. Render thread only, one writer, one reader, same
+   thread: `tagpu_native_frame` is the whole of both. Not volatile and not
+   published anywhere else, because the value that crosses to the game thread is
+   `tagpu_owndraw.c`'s `g_ssSkip`, which the publisher writes from this.
+
+   It is deliberately the painters' OWN conditions, quoted where they live
+   rather than restated up there -- that is the bug this variable exists to
+   stop repeating. */
+static int s_ssPainter = 0;
 static char   s_type[32] = "armcom";
 static int    s_wrecks = 0;            /* "wrecks" token present            */
 static int    s_ss     = 1;            /* 2x supersample (tagpu_ss.off)     */
@@ -2755,38 +2768,45 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        only 0, a drawing frame writes 1 and only 1, and the value changes only
        when the pass's own state does.
 
-       AND THE QUESTION IT ASKS IS "WILL ANYTHING PAINT IT", NOT "IS THE PASS
-       ARMED" [the landing review of 10b; the first version asked the second and
-       every other suppressor in `tagpu_owndraw.c` asks the first, twenty lines
-       from where this is read]. A structure's slant shadow has TWO painters and
-       they are not on the same lanes:
+       IT IS OBSERVED, NOT PREDICTED, and that is the whole of the second
+       re-review of 10b. The question is "did anything actually paint a
+       structure's slant", and the honest answer is a report from the painters
+       rather than a guess assembled up here from their levers. Two rounds were
+       spent guessing it wrong:
 
-         * Classic++'s cast-shadow map, whenever `tagpu_classicpp_on()` -- on
-           BOTH lanes (`tagpu_shadow.c` here, `tagpu_vk_shadow.c` there, through
-           `tagpu_shadow_handover`). This is the shipped default.
-         * otherwise the POSED SLANT range, `:4108`'s loop, which needs
-           `pdix[i] >= 0` and therefore `tagpu_posedraw_ready()` -- and which is
-           drawn below the `!gl_draws` return at `:3811`, so it is GL ONLY. No
-           file under `tagpu_vk*` mentions `slant` at all, and
-           `tagpu_posedraw_slant_set` makes no `pd_record` call, so nothing of it
-           reaches the twin.
+         * `s_armed == 1` alone asked "is the pass armed", which is not the
+           same question at all;
+         * `tagpu_classicpp_on() || tagpu_posedraw_live()` asked it as an
+           either/or, and the two painters are not alternatives. BOTH of them
+           come out of the `pdu[]` array, which is filled only when
+           `tagpu_posedraw_ready()` -- so on a driver where the posed program
+           will not link (`s_state == 2`, a session latch) `npd` is 0, nothing
+           casts into the cast-shadow map AND the slant range is empty, and the
+           gate stood raised over an empty frame for the session with Classic++
+           on, which is the shipped default. `tagpu_posedraw_ready()` is a
+           PRECONDITION OF BOTH, never an alternative to one.
 
-       So with Classic++ off the Vulkan lane paints no slant shadow whatsoever,
-       and on a driver where the posed program will not link (`s_state == 2`, a
-       session latch) neither does the GL lane. Raising the gate in either case
-       would suppress the engine's with nothing in its place, for the session.
+       `s_ssPainter` (below, next to the painters) carries the answer, and the
+       read here CLEARS it, so every frame must earn the gate again. That is
+       what makes the stale directions bounded by construction rather than by
+       argument: any path that does not reach the painters -- the nine returns
+       above, the hand-over return at `:3788`, a lane switch, a refused map --
+       leaves 0 behind and the next frame lowers the gate. `gl_draws` is ANDed
+       in because it is read fresh from `tagpu_vk_owns_present()` this frame
+       while `s_ssPainter` is last frame's: without it a GL -> Vulkan switch
+       would carry one raised frame across the seam.
 
-       WHAT IS DELIBERATELY *NOT* ASKED: `tagpu_shadow_live()`. It reads "the map
-       holds this frame's casters", and it is set at `tagpu_shadow.c:403` inside
-       `tagpu_shadow_begin`, whose only call site is `:4155` -- BELOW the
-       hand-over return. It is therefore GL-only and reads 0 on the Vulkan lane
-       every frame, so putting it here would lower the gate on the shipped
-       configuration and give every building two shadows. */
+       THE COST IS ONE FRAME, IN BOTH DIRECTIONS, and it is the same shape the
+       cursor hand-over already uses (`tagpu_cursown_publish` /
+       `tagpu_gui_cursor_drew_take`): when a painter starts, the engine and we
+       both draw for one frame; when it stops, one frame has no structure
+       shadow and then the gate falls. Neither can persist, which is the
+       property the two guessed versions did not have. */
     {
-        const int cppOn = tagpu_classicpp_on();
-        tagpu_owndraw_set_structshadow(
-            s_armed == 1 && (cppOn || (gl_draws && tagpu_posedraw_live())),
-            f->frame_counter);
+        const int painted = s_ssPainter;
+        s_ssPainter = 0;                  /* this frame must earn it again */
+        tagpu_owndraw_set_structshadow(s_armed == 1 && gl_draws && painted,
+                                       f->frame_counter);
     }
     int gw = f->game_width  > 0 ? f->game_width  : vpL + vw;
     int gh = f->game_height > 0 ? f->game_height : vpT + vh;
@@ -4187,7 +4207,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     glBufferData(GL_ARRAY_BUFFER, sizeof s_verts, NULL, GL_STREAM_DRAW);
     glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)nv * NVST * 4, s_verts);
     for (i = 0; i < nu; i++) { castv[i][0] = 0.0f; castv[i][1] = 0.0f; castv[i][2] = 1.0f; }
-    if (cpp && tagpu_shadow_begin(&fv, (gfx & 4) != 0)) {
+    /* held rather than tested inline because the structure-shadow gate below
+       has to know whether the map DREW, not whether it was configured: this
+       call is the only thing that answers `shadows=SOFT`, the engine's own
+       Shadow bit, `amb >= 1`, and the module's GL init or FBO refusing. */
+    const int mapLive = cpp && tagpu_shadow_begin(&fv, (gfx & 4) != 0);
+    if (mapLive) {
         for (i = 0; i < nu; i++) {
             float agl, throw_, sv, top = 0.0f, amn = 0.0f;
             int skip;
@@ -4276,6 +4301,34 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         tagpu_shadow_hills();
         tagpu_shadow_end();
     }
+
+    /* THE STRUCTURE-SHADOW GATE'S ONE INPUT, stated where the painters are.
+       Read and cleared by the publisher at the top of the next frame; see the
+       long comment there for why it is observed instead of predicted.
+
+         * `pdReady` is the PRECONDITION OF BOTH painters, not a term of one of
+           them. `pdix[i]` is -1 for every unit without it, so `npd` is 0, the
+           posed depth twin casts nothing into the map AND the slant loop above
+           counts nothing. This is the term the second re-review found missing.
+         * `mapLive` -- Classic++'s cast-shadow map is drawing this frame, which
+           is the only honest form of that question: `tagpu_classicpp_on()` is a
+           lever, and `tagpu_shadow_begin` refuses on four grounds past it.
+         * `!(cpp && !hard)` -- the posed SLANT range is enabled, quoted from the
+           `continue` that guards its own loop above so the two cannot drift.
+
+       With Classic++ on and `shadows=OFF` both terms are false and the gate
+       stays down, so the engine keeps drawing its cached slant. That is main's
+       behaviour and therefore no regression, and it is the safe direction: a
+       shadow the engine draws is visible, a shadow nobody draws is silent.
+
+       This line is BELOW the `!gl_draws` hand-over return, so it can only ever
+       be reached on the GL lane -- which is also the whole answer to "does the
+       Vulkan lane paint this". It does not: `tagpu_shadow_begin` and
+       `tagpu_shadow_end` are called only from this function below that return,
+       `s_pubHave` is set only by `_end`, and so `tagpu_shadow_handover` returns
+       0 at tagpu_vk_shadow.c:788 and that pass stands down. No `tagpu_vk*` file
+       mentions `slant` at all. */
+    s_ssPainter = pdReady && (mapLive || !(cpp && !hard));
 
     /* ---- render into the (optionally 2x supersampled) game-res FBO ---- */
     fbo_size(gw, gh, ss);

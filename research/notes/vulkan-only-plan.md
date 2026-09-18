@@ -1830,6 +1830,29 @@ byte patch in a diff dominated by deletions is where a wrong one hides; and **11
 it**, because 11's headline claim is that `renderer=gdi` becomes the documented stock reference
 and that claim is false by two bytes until 10b lands.
 
+**What the gate turned out to cost: two review rounds, both spent on the same mistake in
+different clothes.** Writing the gate was an afternoon; getting its *predicate* right took a
+review and a re-review, and both rounds found the predicate asking a question that was not the
+one that matters. The sequence is worth carrying into 10c and 11, because it is a reasoning
+failure and not a coding one:
+
+| round | predicate | what it asked | why it was wrong |
+|---|---|---|---|
+| written | `s_armed == 1` | is the pass armed | every other suppressor asks *will anything paint it*; this asks a different question |
+| review | `tagpu_classicpp_on()` **or** `(gl_draws && tagpu_posedraw_live())` | is a painter configured | the two painters are **not alternatives** — both draw out of `pdu[]`, which needs `tagpu_posedraw_ready()`, so with the posed program refused the either/or raised the gate over an empty frame **in the shipped default** |
+| re-review | `s_armed == 1 && gl_draws && s_ssPainter` | did anything actually paint one last frame | — |
+
+The fix was to stop predicting from levers and publish an observation from the painters
+themselves (`tagpu_native.c`'s `s_ssPainter`, cleared on read), which bounds every stale direction
+at one frame by construction. **Two claims this plan made were disproved on the way** and are
+corrected where they were written: the Vulkan lane does **not** paint a structure's slant through
+`tagpu_shadow_handover` — `tagpu_shadow_begin`/`_end` are called only below the `!gl_draws` return,
+so `s_pubHave` is never set on that lane and `tagpu_vk_shadow.c:788` stands down — and
+`tagpu_classicpp_on()` is a lever, not a statement that the cast-shadow map drew.
+
+**The transferable part for landings 10c and 11:** a lever tells you what a human asked for, not
+what the frame did. Where a suppressor's safety depends on a painter having run, ask the painter.
+
 The per-pass `tagpu_<x>.off` files, `tagpu_defaults.off`, `tagpu_reclaim.off` and
 `tagpu_curs.off` are unchanged.
 

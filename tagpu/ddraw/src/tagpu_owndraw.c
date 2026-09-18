@@ -166,28 +166,41 @@ static const unsigned char SSB_STOLEN[12] =
                                        the frames before the publish is seen.
      stale 1 while it does not      -> NO shadow.
 
-   The publisher is what keeps the second out: `tagpu_native_frame` publishes
-   every frame it runs, including 0 on the path where the GL program has
-   refused, and it runs on both lanes. It cannot stop publishing while a lane
-   still presents -- `tagpu_overlay_draw` calls it unconditionally -- so the
-   only way to be stuck at 1 is for the lane itself to stop, which stops the
-   frames too. */
+   TWO THINGS KEEP THE SECOND OUT, and neither is "the publisher always runs" --
+   the landing review disproved that claim, which an earlier version of this
+   comment made:
+
+     * `tagpu_native_frame` publishes on every frame it REACHES, including 0 on
+       each of the nine early returns and 0 whenever no painter reported one the
+       frame before (`s_ssPainter`, tagpu_native.c);
+     * and the heartbeat below, for the frames it does not reach at all.
+ */
 static volatile unsigned char g_ssSkip = 0;
 static unsigned               g_ssBeat = 0;   /* frame of the last publish  */
-static int                    g_ssBeatSeen = 0;
 
 /* HOW LONG THE GATE MAY STAND WITHOUT A PUBLISH before `tagpu_owndraw_flush`
-   lowers it. The publisher is NOT reached on every frame the lane presents --
-   the landing review found four gates above it in `tagpu_overlay_draw`
-   (`tagpu_overlay.off`, an overlay init that failed, a level teardown, a bad
-   frame ABI), and the first of those is a live lever a human can create
-   mid-session. Without this the flag would freeze raised across any of them and
-   the engine's structure shadow would stay suppressed with nothing painting it
-   -- the exact fault this landing exists to remove, reached by another door.
-   `tagpu_owndraw_flush` runs ABOVE all four (`tagpu_overlay.c:365`), which is
-   what makes it the right place; `tagpu_fxown.c` solves the same problem the
-   same way, at 90 frames. Eight is used here because a missing shadow is a
-   picture the player sees, not a counter. */
+   lowers it. The publisher is NOT reached on every frame the lane presents:
+   `tagpu_overlay_draw` gates it behind `tagpu_overlay.off`, an overlay init
+   that failed, and a level teardown, and the first of those is a live lever a
+   human can create mid-session. Without this the flag would freeze raised
+   across any of them and the engine's structure shadow would stay suppressed
+   with nothing painting it -- the exact fault this landing exists to remove,
+   reached by another door.
+
+   `tagpu_owndraw_flush` runs ABOVE those three (`tagpu_overlay.c:365`), which
+   is what makes it the right place. It does NOT cover the frame-ABI check at
+   `tagpu_overlay.c:306`, which sits above the flush -- an earlier version of
+   this comment counted that one too and was wrong. Nothing is owed for it:
+   both call sites fill `f.abi` from the same header in the same DLL and pass
+   `&f`, so it cannot fire.
+
+   `tagpu_fxown.c` solves the same problem the same way, at 90 frames. Eight is
+   used here because a missing shadow is a picture the player sees, not a
+   counter. It is measured against the lane's own frame counter, so a LANE
+   SWITCH (render_ogl.c counts `g_tagpu_frames`, render_vk.c counts `s_frames`,
+   two independent counters) can make the subtraction large and fire it once --
+   in the safe direction, and the publisher re-raises in the same frame because
+   the flush at `:365` runs before `tagpu_native_frame` at `:464`. */
 #define SS_BEAT_FRAMES 8
 
 static int               g_armed      = 0;
@@ -473,9 +486,17 @@ static int install_one(unsigned int va, unsigned int resume,
 /* One structure-shadow branch, stolen whole and replaced by a gated copy.
    `stolen` is the engine's `test` followed by its `je`; `n` is their total
    length; `target` is where the `je` goes and `resume` is its fallthrough.
-   0 = wrong build, and then NOTHING is written. */
+   0 = wrong build, and then NOTHING is written.
+
+   `stubOut` receives the stub so the ROLLBACK can give it back: installing A
+   and then failing on B has to undo A, and an undo that restores the engine's
+   bytes but keeps the page alive leaks it for the process. Written only on
+   success, so a caller may leave it initialised to NULL and free
+   unconditionally. [The landing review of 10b found the
+   `VirtualProtect`-failure half of this; the re-review found this half.] */
 static int install_sshadow(unsigned int va, const unsigned char* stolen, int n,
-                           unsigned int target, unsigned int resume)
+                           unsigned int target, unsigned int resume,
+                           unsigned char** stubOut)
 {
     unsigned char* t = (unsigned char*)va;
     unsigned char* s;
@@ -516,10 +537,18 @@ static int install_sshadow(unsigned int va, const unsigned char* stolen, int n,
     memset(t + 5, 0x90, (size_t)(n - 5));    /* the tail of the stolen range */
     VirtualProtect(t, (SIZE_T)n, old, &old);
     FlushInstructionCache(GetCurrentProcess(), t, (SIZE_T)n);
+    *stubOut = s;
     return 1;
 }
 
-static void restore_sshadow(unsigned int va, const unsigned char* stolen, int n)
+/* The engine's bytes back, and the stub's page with them. `stub` may be NULL.
+   The order matters: the branch has to stop pointing at the stub BEFORE the
+   stub is freed, or a game thread already inside it returns into an unmapped
+   page. Only ever called from `tagpu_owndraw_init` at DLL_PROCESS_ATTACH, so
+   no thread has reached either yet -- but the order is free and a later caller
+   would need it. */
+static void restore_sshadow(unsigned int va, const unsigned char* stolen, int n,
+                            unsigned char* stub)
 {
     unsigned char* t = (unsigned char*)va;
     DWORD old;
@@ -527,6 +556,7 @@ static void restore_sshadow(unsigned int va, const unsigned char* stolen, int n)
     memcpy(t, stolen, (size_t)n);
     VirtualProtect(t, (SIZE_T)n, old, &old);
     FlushInstructionCache(GetCurrentProcess(), t, (SIZE_T)n);
+    if (stub) VirtualFree(stub, 0, MEM_RELEASE);
 }
 
 /* THE PUBLISH. Render thread, once per frame, from `tagpu_native_frame` --
@@ -536,7 +566,6 @@ void tagpu_owndraw_set_structshadow(int ours, unsigned frame)
 {
     unsigned char v = (unsigned char)(ours && g_sshadow);
     g_ssBeat = frame;
-    g_ssBeatSeen = 1;
     if (v != g_ssSkip) {
         g_ssSkip = v;
         olog2(v ? "owndraw: the engine's cached slant shadow is SKIPPED (ours live)"
@@ -855,12 +884,16 @@ void tagpu_owndraw_init(void)
        Installing the detour does NOT suppress anything: `g_ssSkip` decides,
        and it is 0 until the native pass says otherwise. */
     if (g_armed && g_all) {
+        unsigned char* stubA = NULL;
+        unsigned char* stubB = NULL;
         int sa = install_sshadow(SSHADOW_A_VA, SSA_STOLEN, (int)sizeof SSA_STOLEN,
-                                 SSHADOW_A_TARGET, SSHADOW_A_RESUME);
+                                 SSHADOW_A_TARGET, SSHADOW_A_RESUME, &stubA);
         int sb = sa && install_sshadow(SSHADOW_B_VA, SSB_STOLEN, (int)sizeof SSB_STOLEN,
-                                       SSHADOW_B_TARGET, SSHADOW_B_RESUME);
-        if (sa && !sb) restore_sshadow(SSHADOW_A_VA, SSA_STOLEN, (int)sizeof SSA_STOLEN);
+                                       SSHADOW_B_TARGET, SSHADOW_B_RESUME, &stubB);
+        if (sa && !sb)
+            restore_sshadow(SSHADOW_A_VA, SSA_STOLEN, (int)sizeof SSA_STOLEN, stubA);
         g_sshadow = sa && sb;
+        (void)stubB;   /* B is never rolled back: nothing is installed after it */
     }
 
     _snprintf(b, sizeof b,
@@ -891,7 +924,7 @@ void tagpu_owndraw_flush(unsigned int frame_counter)
        publisher does not. A raised flag with no publish behind it means nobody
        is painting the shadow the engine is no longer drawing, so it comes
        down. Restoring the engine's own draw is always the safe direction. */
-    if (g_ssSkip && g_ssBeatSeen && frame_counter - g_ssBeat >= SS_BEAT_FRAMES) {
+    if (g_ssSkip && frame_counter - g_ssBeat >= SS_BEAT_FRAMES) {
         g_ssSkip = 0;
         olog2("owndraw: the engine's cached slant shadow is restored -- the unit "
               "pass stopped publishing (tagpu_overlay.off, a failed overlay init, "
