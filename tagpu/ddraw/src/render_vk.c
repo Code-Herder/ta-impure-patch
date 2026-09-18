@@ -116,6 +116,10 @@ DWORD WINAPI vk_render_main(void)
 #define VK_RETRY_BUDGET 3
 
     unsigned fc = 0;
+    /* OUR CURSOR REACHED THE MIRROR RECORD, taken inside the driver block and
+       published after the frame -- see both sites. Loop scope because the take
+       and the publish are on opposite sides of `tagpu_vk_frame`. */
+    int cur_drew = 0;
     int gave_up = 0, came_up = 0, retries = 0;
     DWORD timeout;
 
@@ -226,12 +230,18 @@ DWORD WINAPI vk_render_main(void)
             f.packet        = tagpu_packet_acquire(&f.packet_prev);
             tagpu_reclaim_pass_begin();
             tagpu_overlay_draw(&f);
-            /* Published HERE and nowhere else: this is the only point every
-               path through the driver reaches, and a flag published inside the
-               UI present would keep its last value across the driver's three
-               early returns -- leaving the engine's cursor suppressed while
-               ours was not drawn, which is no cursor at all. */
-            tagpu_cursown_publish(tagpu_gui_cursor_drew_take());
+            /* TAKEN HERE, PUBLISHED AFTER THE FRAME. The take is what CLEARS
+               the producer's flag, so it has to happen once per iteration and
+               at this point -- this is the only place every path through the
+               driver reaches, and a take inside the UI present would keep its
+               last value across the driver's three early returns. But the
+               ANSWER it gives is only half of one: it says our cursor reached
+               the mirror record, and `tagpu_vk_gui_prepare` can still refuse the
+               frame afterwards, in which case nothing composited and the
+               engine's own cursor has been suppressed for nothing. So the value
+               is held and published below, against what the frame actually did.
+               [The vulkan-only plan, gate 4's last item.] */
+            cur_drew = tagpu_gui_cursor_drew_take();
             tagpu_reclaim_pass_end(f.frame_counter);
             tagpu_packet_frame_end(f.frame_counter);
             /* The render-options screen's deferred cfg write, off the game
@@ -258,6 +268,21 @@ DWORD WINAPI vk_render_main(void)
         if (tagpu_vk_frame(g_ddraw.hwnd, g_ddraw.render.width, g_ddraw.render.height,
                            g_config.vsync, fc))
             came_up = 1;
+
+        /* AND NOW THE CURSOR, because now there is an answer. Both halves have
+           to be true: ours got as far as the mirror record (the take above) AND
+           the frame that record was for actually composited the UI
+           (`tagpu_vk_ui_composited`, which is 0 on every early return
+           `tagpu_vk_frame` has). Either alone suppresses the engine's cursor on
+           a frame that shows none of ours. This runs on every iteration, which
+           is the property the take's own placement was protecting. */
+        {
+            int composited = tagpu_vk_ui_composited();
+            /* COUNTED, so the fix is a number rather than a claim: these are the
+               frames that used to publish 1 with nothing of ours on screen. */
+            if (cur_drew && !composited) tagpu_cursown_note_held();
+            tagpu_cursown_publish(cur_drew && composited);
+        }
 
         /* THE LOOP'S OWN EXIT WINS OVER A FAILURE, and the order is free. A
            frame that both fails and finds `render.run` clear is a shutdown or a

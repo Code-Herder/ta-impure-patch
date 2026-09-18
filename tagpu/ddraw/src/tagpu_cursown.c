@@ -63,6 +63,9 @@
    cursor for a frame we also drew ours, or skip one we did not — and the first
    is what the composite's rect still covers. */
 static volatile unsigned char s_skip = 0;
+/* FRAMES OUR CURSOR WAS RECORDED BUT NOTHING COMPOSITED -- the frames gate 4's
+   last landing changed. See `tagpu_cursown_note_held`. */
+static unsigned s_held = 0;
 
 static int s_flipArmed = 0;
 static int s_pollArmed = 0;
@@ -126,9 +129,20 @@ void tagpu_cursown_publish(int oursDrawn)
     s_skip = (unsigned char)((s_installed && oursDrawn) ? 1 : 0);
 }
 
-void tagpu_cursown_stats(int* armed, int* ofN, int* skipping)
+void tagpu_cursown_stats(int* armed, int* ofN, int* skipping, unsigned* held)
 {
     if (armed)    *armed    = s_flipArmed + s_pollArmed + s_restArmed;
     if (ofN)      *ofN      = 4;
     if (skipping) *skipping = s_skip ? 1 : 0;
+    if (held)     *held     = s_held;
 }
+
+/* THE FRAMES THIS COUNTER EXISTS FOR ARE THE ONES THE BUG WAS. Called by the
+   render loop, which is the only place that knows both halves of the answer:
+   our cursor reached the mirror record AND the frame it was for composited
+   nothing. Before gate 4's last landing those frames published 1 -- the
+   engine's cursor suppressed with nothing of ours to replace it, which is no
+   cursor at all. They publish 0 now, and this is how many times that has
+   happened, so the fix is a number an operator can read rather than a claim.
+   [The vulkan-only plan, gate 4's last item.] */
+void tagpu_cursown_note_held(void) { s_held++; }

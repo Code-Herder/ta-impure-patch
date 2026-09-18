@@ -557,6 +557,26 @@ static volatile LONG s_ownWin;          /* this backend owns the present       *
    all after 4d-1. [FROM THE LANDING REVIEW, 2026-09-17.] */
 static volatile LONG s_ownGone;
 
+/* DID THE UI LAYER ACTUALLY COMPOSITE THIS FRAME? Cleared at the top of
+   `tagpu_vk_frame` -- so every one of its early returns (the lever off, a
+   bring-up, a rebuild, ST_FAILED, ST_ZOMBIE, an out-of-date acquire) leaves it
+   0, which is the truth -- and set only where `tagpu_vk_gui_record` is actually
+   called.
+
+   IT EXISTS FOR THE CURSOR, and the gap it closes is `s_curDrew`'s.
+   `render_vk.c` has to tell `tagpu_cursown` whether OUR cursor reached the
+   screen, because the engine's own cursor blit stands down on that. The answer
+   it had was `tagpu_gui_cursor_drew_take()`, which says the mirror RECORD
+   survived to `draw_layer`'s tail -- and `tagpu_vk_gui_prepare` can still refuse
+   the frame after that (`s_behind`, `!s_engHave`, `!s_palHave`, a presented twin
+   that stood down or resized, either shader-refusal path). On those frames
+   nothing composited and the engine's cursor had already been suppressed.
+
+   The fix is an ORDERING and not a move: the publish stays on the path every
+   iteration reaches, but happens AFTER the frame it reports, with this as the
+   second half of its answer. [The vulkan-only plan, gate 4's last item.] */
+static int s_uiDrew;
+
 /* Called from the fork's wndproc on the game window's thread. An OBSERVER: it
    never swallows a message the fork or the engine needs, and since landing 4d-1
    it watches exactly one thing -- the game window being destroyed. That is the
@@ -709,6 +729,8 @@ void tagpu_vk_own_present(void)
    process. THE PREDICATE LANDING 4b IS BUILT ON: every GL draw in the tree is
    gated on its negation, one pass per commit, while the gather half beside it
    runs unconditionally. Safe from any thread -- the latch is interlocked. */
+int tagpu_vk_ui_composited(void) { return s_uiDrew; }
+
 int tagpu_vk_owns_present(void)
 {
     return s_ownWin != 0;
@@ -2945,8 +2967,15 @@ static int vk_present(void)
                               draw_terr, draw_feat, draw_unit, draw_fx, draw_mark);
             /* THE UI IS ABOVE THE WORLD and below the readout, which is
                where tagpu_overlay_draw puts it. */
-            if (draw_gui)
+            if (draw_gui) {
                 tagpu_vk_gui_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
+                /* RECORDED, WHICH IS AS FAR AS THIS FILE CAN HONESTLY GO. The
+                   command buffer now carries the composite and the submit below
+                   is unconditional, so the only thing between here and the
+                   screen is the present -- and a present that fails takes the
+                   whole frame with it, cursor included. See `s_uiDrew`. */
+                s_uiDrew = 1;
+            }
             if (draw_scaf)
                 tagpu_vk_scaffold_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_fps)
@@ -3151,6 +3180,10 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
 {
     LONG st;
     DWORD now = GetTickCount();
+
+    /* NOTHING HAS COMPOSITED YET, and every early return below must leave this
+       saying so. See `s_uiDrew`. */
+    s_uiDrew = 0;
 
     /* THIS FRAME'S NUMBER, BEFORE ANY PASS CAN ASK FOR IT. Every `prepare`
        below reaches a GL module's hand-over through it, and refuses one that

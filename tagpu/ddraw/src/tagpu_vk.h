@@ -163,6 +163,20 @@ void tagpu_vk_own_present(void);
    capture on this path. Safe from any thread. */
 int tagpu_vk_owns_present(void);
 
+/* 1 when the UI LAYER composited on the frame `tagpu_vk_frame` has just
+   returned from, 0 on every path where it did not -- the lever off, a bring-up,
+   a rebuild, a failed lane, an out-of-date acquire, or the GUI pass refusing its
+   own hand-over.
+
+   ASK IT AFTER THE FRAME, NOT BEFORE. It is the second half of the answer
+   `tagpu_cursown_publish` needs: the producer's `tagpu_gui_cursor_drew_take()`
+   says our cursor got as far as the mirror record, and this says the frame that
+   record was for actually reached the command buffer. Publishing on the first
+   alone suppressed the engine's own cursor on frames that composited nothing --
+   no cursor at all, which is the fail-closed shape `tagpu_cursown` exists to
+   avoid. [The vulkan-only plan, gate 4's last item.] */
+int tagpu_vk_ui_composited(void);
+
 /* Unlink `tagpu_<tag>_vk.ppm`, where `tag` is one of "scaffold", "fps", "terr",
    "feat", "fx", "mark", "posedraw", "gui". A pass calls this AT THE INSTANT IT LATCHES A CLAIM and
    nowhere else -- the placement is the whole guarantee, and tagpu_vk.c states it

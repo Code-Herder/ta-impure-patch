@@ -48,5 +48,11 @@ void tagpu_cursown_publish(int oursDrawn);
    the suppression is doing is measured from the outside instead — the engine's
    +0x1B6/+0x1BA still TRACK the pointer under this design (the position writes
    are upstream of the blit), so the oracle is the screen, not a counter. */
-void tagpu_cursown_stats(int* armed, int* ofN, int* skipping);
+void tagpu_cursown_stats(int* armed, int* ofN, int* skipping, unsigned* held);
+
+/* Count one frame on which OUR cursor was recorded and the frame it was for
+   composited nothing -- the case that used to suppress the engine's cursor with
+   nothing to replace it. Called from the render loop, which is the only place
+   that holds both halves of the answer. [Gate 4's last item.] */
+void tagpu_cursown_note_held(void);
 #endif

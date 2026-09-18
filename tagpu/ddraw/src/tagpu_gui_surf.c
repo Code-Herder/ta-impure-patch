@@ -2770,8 +2770,8 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         unsigned pGlyphs = 0, pResends = 0, pRefused = 0, pRecycles = 0;
         /* the engine's own cursor blit: which sites are armed, and whether it
            is being skipped right now (tagpu_cursown.h) */
-        int cowArmed = 0, cowOf = 0, cowSkip = 0;
-        tagpu_cursown_stats(&cowArmed, &cowOf, &cowSkip);
+        int cowArmed = 0, cowOf = 0, cowSkip = 0; unsigned cowHeld = 0;
+        tagpu_cursown_stats(&cowArmed, &cowOf, &cowSkip, &cowHeld);
         tagpu_text_glyph_stats(&gCached, &gDrops, &gFonts);
         tagpu_gui_font_stats(&pGlyphs, &pResends, &pRefused, &pRecycles);
         if (!fq.QuadPart) QueryPerformanceFrequency(&fq);
@@ -2779,7 +2779,7 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u gafnoplane=%u gafreseed=%u gafscratch=%u/%u/%u strrearm=%u glyscratch=%u/%u gfont=%u/%u/%u/%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u cursown=%d/%d,%d fps=%.1f",
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u gafnoplane=%u gafreseed=%u gafscratch=%u/%u/%u strrearm=%u glyscratch=%u/%u gfont=%u/%u/%u/%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u cursown=%d/%d,%d,held=%u fps=%.1f",
                   s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.gafnoplane, g_guiq.gafreseed, g_guiq.gafhigh, g_guiq.gaflost, g_guiq.gafbaddec, g_guiq.strrearm, g_guiq.glyhigh, g_guiq.glylost, pGlyphs, pResends, pRefused, pRecycles, g_guiq.stalls,
                   s_skipped, tagpu_pal_changes(), palDiff, palDiffAt, tagpu_pal_presented(),
@@ -2803,7 +2803,7 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
                   s_mmFogged,
                   f->packet ? (unsigned)(f->packet->mm_w * f->packet->mm_h) : 0u,
                   s_mmNoEng,
-                  cowArmed, cowOf, cowSkip, fps);
+                  cowArmed, cowOf, cowSkip, cowHeld, fps);
         b[sizeof b - 1] = '\0';
         slog(b);
     }
