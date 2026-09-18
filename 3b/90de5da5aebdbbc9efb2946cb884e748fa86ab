@@ -1,0 +1,11 @@
+landing-review: 4d-1 (route D's window deleted)
+reviewer=dedicated read-only agent, effort=medium, range=main...HEAD at 3b90de5
+findings=7 high=0 medium=4 low=3 acted=7 recorded=0 rejected=0 fixes=71e78e7
+The deletion itself came back clean on every code question, including the one
+I flagged as my own suspicion (the reduced wndproc observer): fake_WndProc is
+subclassed onto exactly one HWND and fake_SetWindowLongA keeps it there, so no
+child or dialog can reach it. What the review found instead is that the landing
+verified its picture and never asked what else read route D -- three
+instruments were dead, all silently, the worst being tagpu_ftime, whose gate
+clause is still open. Re-measured after the fixes: vk p50 0.154 ms p99 0.370 ms
+at 1024x768, and 0 magenta of 786 432.
