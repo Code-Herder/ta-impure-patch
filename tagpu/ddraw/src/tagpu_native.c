@@ -3411,6 +3411,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            scaffold texture is 0 here: the effects twin refuses any frame whose
            twin had the scaffold live, so that is the value it wants. */
         if (nfx) tagpu_fx_render(&fv, 0, 0);
+        /* THE MARKERS ARE THE FRAME'S TOP LAYER, above the world and below the
+           UI -- where the composite draws them, and where tagpu_vk.c records
+           them. `markOn` rather than a vertex count, because this pass's own
+           heartbeat has to run even on a frame with no markers: without it the
+           watchdog reads a dead pass and hands the draw back to the engine. */
+        if (markOn) tagpu_mark_render(&fv, 0);
         return;
     }
 

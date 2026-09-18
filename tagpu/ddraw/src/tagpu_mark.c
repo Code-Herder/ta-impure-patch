@@ -105,7 +105,8 @@
 #include "tagpu_text.h"
 #include "tagpu_glsl.h"
 #include "tagpu_pal.h"
-#include "tagpu_abshot.h"  /* the GL half of the Phase G A/B */    /* tagpu_pal_live/serial, for the hand-over */
+#include "tagpu_abshot.h"
+#include "tagpu_vk.h"      /* tagpu_vk_owns_present, tagpu_vk_ab_arm */  /* the GL half of the Phase G A/B */    /* tagpu_pal_live/serial, for the hand-over */
 #include "tagpu_packet.h"   /* the frame packet: the view, the tables (landing 3) */
 
 /* ---- what the marker block reads, and where it comes from ----------------
@@ -945,6 +946,15 @@ int tagpu_mark_handover(TAGPU_MKHAND* out, unsigned now)
 
 static int upload_layer(int i, const TAGPU_MARKLAYER* L)
 {
+    /* THE LAYER IS AVAILABLE WHEN ITS BYTES ARE, NOT WHEN A TEXTURE NAME IS.
+       `TAGPU_MKHAND` carries `layer`/`layerPitch`/`layerX/Y/W/H` (tagpu_mark.h)
+       and the twin uploads them itself, so on a lane with no GL there is
+       nothing to upload and the answer is still yes. Left as it was, the
+       `glGenTextures` below leaves `s_tex[i]` at 0 with no context and this
+       returned 0 -- the GAF atlas's defect in miniature, and it would have
+       dropped the layer from the hand-over rather than from the draw.
+       [The vulkan-only plan, landing 4b-2.] */
+    if (tagpu_vk_owns_present()) return 1;
     if (!s_tex[i]) {
         glGenTextures(1, &s_tex[i]);
         if (!s_tex[i]) return 0;
@@ -1001,9 +1011,19 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     int i, total, textBase = 0;
     unsigned int textTex = 0;
 
+    /* WHETHER THIS PASS DRAWS, or only builds the record the twin draws from.
+       `mk_push` and `mk_draw` are the record and are pure CPU; the 22 GL calls
+       below are interleaved among them rather than producing them, so this gate
+       goes around each GL statement and never around a record append.
+       [The vulkan-only plan, landing 4b-2.] */
+    const int gl_draws = !tagpu_vk_owns_present();
+
     s_mkVn = 0; s_mkDn = 0; s_mkDropped = 0;
-    if (s_state == 0) init_gl();
-    if (s_state != 1 || s_armed != 1) return;
+    if (gl_draws) {
+        if (s_state == 0) init_gl();
+        if (s_state != 1) return;
+    }
+    if (s_armed != 1) return;
     /* The heartbeat says "this pass ran", NOT "this pass drew something": a
        frame with no bars and no markers is the ordinary case, and letting the
        watchdog read that as a dead pass would hand the draw back and take it
@@ -1017,7 +1037,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
         tagpu_markown_set_digits(s_digits);
     }
 
-    x_glActiveTexture(GL_TEXTURE0);
+    if (gl_draws) x_glActiveTexture(GL_TEXTURE0);
     for (i = 0; i < TAGPU_MARK_NLAYER; i++) {
         have[i] = (!s_passive && tagpu_markown_layer(i, &lay[i])) ? 1 : 0;
         if (have[i]) have[i] = upload_layer(i, &lay[i]);
@@ -1026,18 +1046,20 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     if (!have[TAGPU_MARK_POSTFOG] && s_nbar == 0 && s_ncurs == 0 &&
         s_nordt == 0 && s_nordl == 0 && s_nordx == 0) return;
 
-    glUseProgram(s_prog);
-    x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
-    x_glUniform1f(s_uZoom, v->zoom > 0.0f ? v->zoom : 1.0f);
-    x_glUniform2f(s_uZoomC, v->zoomCx, v->zoomCy);
-    if (s_uFogOrg >= 0) x_glUniform2f(s_uFogOrg, (float)v->fogOrgX, (float)v->fogOrgY);
-    if (s_uFogDim >= 0) x_glUniform2f(s_uFogDim, (float)v->fogCols, (float)v->fogRows);
-    glUniform1i(s_uKey, tagpu_markown_key());
-    glUniform1i(s_uTextM, 0);
-    x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, palTex);
-    x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, v->fogTex);
-    x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, v->fogLut);
-    x_glActiveTexture(GL_TEXTURE0);
+    if (gl_draws) {
+        glUseProgram(s_prog);
+        x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
+        x_glUniform1f(s_uZoom, v->zoom > 0.0f ? v->zoom : 1.0f);
+        x_glUniform2f(s_uZoomC, v->zoomCx, v->zoomCy);
+        if (s_uFogOrg >= 0) x_glUniform2f(s_uFogOrg, (float)v->fogOrgX, (float)v->fogOrgY);
+        if (s_uFogDim >= 0) x_glUniform2f(s_uFogDim, (float)v->fogCols, (float)v->fogRows);
+        glUniform1i(s_uKey, tagpu_markown_key());
+        glUniform1i(s_uTextM, 0);
+        x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, palTex);
+        x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, v->fogTex);
+        x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, v->fogLut);
+        x_glActiveTexture(GL_TEXTURE0);
+    }
 
     /* ---- the GL half of the Phase G A/B (tagpu_abshot.h) ----
        Black the frame, draw this pass alone, read it back, so what the Vulkan
@@ -1053,29 +1075,36 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
             taking = 0;
         }
         s_abTaking = taking;
-        if (taking) tagpu_abshot_begin(&s_abShot, TAGPU_ABSHOT_SCISSOR | TAGPU_ABSHOT_TOPDOWN);
+        /* `tagpu_abshot_begin` is GL too, though it is not spelled `gl*`: it
+           clears the frame and saves the state it moves. On the vulkan-only
+           lane it would refuse politely and log, which is noise about a capture
+           nobody asked for on that lane. */
+        if (taking && gl_draws)
+            tagpu_abshot_begin(&s_abShot, TAGPU_ABSHOT_SCISSOR | TAGPU_ABSHOT_TOPDOWN);
     }
 
     total = BARBASE + s_nbar;
-    glBindVertexArray(s_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-    /* one orphan, then each bucket at its own offset: the order buckets live
-       in their own arrays (see MAXORDT) and are packed in behind the
-       triangles, so their first vertex moves with the bar count */
-    glBufferData(GL_ARRAY_BUFFER,
-                 (GLsizeiptr)(total + s_nordt + s_nordl + s_nordx) * MVST * 4,
-                 NULL, GL_STREAM_DRAW);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)total * MVST * 4, s_verts);
-    if (s_nordt)
-        glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)total * MVST * 4,
-                        (GLsizeiptr)s_nordt * MVST * 4, s_ordt);
-    if (s_nordl)
-        glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)(total + s_nordt) * MVST * 4,
-                        (GLsizeiptr)s_nordl * MVST * 4, s_ordl);
-    if (s_nordx)
-        glBufferSubData(GL_ARRAY_BUFFER,
-                        (GLintptr)(total + s_nordt + s_nordl) * MVST * 4,
-                        (GLsizeiptr)s_nordx * MVST * 4, s_ordx);
+    if (gl_draws) {
+        glBindVertexArray(s_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
+        /* one orphan, then each bucket at its own offset: the order buckets live
+           in their own arrays (see MAXORDT) and are packed in behind the
+           triangles, so their first vertex moves with the bar count */
+        glBufferData(GL_ARRAY_BUFFER,
+                     (GLsizeiptr)(total + s_nordt + s_nordl + s_nordx) * MVST * 4,
+                     NULL, GL_STREAM_DRAW);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)total * MVST * 4, s_verts);
+        if (s_nordt)
+            glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)total * MVST * 4,
+                            (GLsizeiptr)s_nordt * MVST * 4, s_ordt);
+        if (s_nordl)
+            glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)(total + s_nordt) * MVST * 4,
+                            (GLsizeiptr)s_nordl * MVST * 4, s_ordl);
+        if (s_nordx)
+            glBufferSubData(GL_ARRAY_BUFFER,
+                            (GLintptr)(total + s_nordt + s_nordl) * MVST * 4,
+                            (GLsizeiptr)s_nordx * MVST * 4, s_ordx);
+    }
     textBase = total + s_nordt + s_nordl;
 
     /* THE SAME CONCATENATION THE VBO JUST GOT, so every `first` below is the
@@ -1097,64 +1126,89 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
            supersampled target — the same rule the effects pass uses, and what
            keeps a native-res marker a hairline at 4x instead of a 1997 pixel
            blown up to sixteen */
-        glUniform1i(s_uFog, v->fogMode & 1);
+        if (gl_draws) glUniform1i(s_uFog, v->fogMode & 1);
         if (s_nordt) {
-            x_glDrawArrays(GL_TRIANGLES, total, s_nordt);
+            if (gl_draws) x_glDrawArrays(GL_TRIANGLES, total, s_nordt);
             mk_draw(total, s_nordt, 0, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE);
         }
         if (s_nordl) {
-            if (x_glLineWidth) x_glLineWidth((GLfloat)(v->ss > 0 ? v->ss : 1));
-            x_glDrawArrays(GL_LINES, total + s_nordt, s_nordl);
+            if (gl_draws) {
+                if (gl_draws) if (x_glLineWidth) x_glLineWidth((GLfloat)(v->ss > 0 ? v->ss : 1));
+                if (gl_draws) x_glDrawArrays(GL_LINES, total + s_nordt, s_nordl);
+            }
             mk_draw(total + s_nordt, s_nordl, 1, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE);
         }
     }
     if (s_nordx) {
-        textTex = tagpu_text_tex();       /* binds it, and uploads if dirty */
-        if (textTex) {
-            glUniform1i(s_uFog, v->fogMode & 1);
-            glUniform1i(s_uTextM, 1);
+        /* GL BEHIND A NAME THAT IS NOT `gl*`: this resolves entry points and
+           creates/uploads the glyph atlas texture, nine GL calls deep, and with
+           no context those pointers are NULL -- an access violation at address 0,
+           which is how it announced itself. The twin gets the atlas BYTES through
+           the hand-over (`text`/`textGen`/`textW`/`textH`) and uploads its own.
+           [The vulkan-only plan, landing 4b-2.] */
+        if (gl_draws) textTex = tagpu_text_tex();       /* binds it, and uploads if dirty */
+        /* `textTex` IS A GL NAME AND CANNOT BE THE TEST FOR "there is text", or
+           this lane would drop the text markers from the RECORD and not merely
+           from the draw. The twin gets the atlas bytes through the hand-over
+           (`text`/`textGen`/`textW`/`textH`), so on the vulkan-only lane the
+           answer is yes without a texture. Third instance of the same shape in
+           this pass, after `upload_layer` and the atlas itself. */
+        if (textTex || !gl_draws) {
+            if (gl_draws) glUniform1i(s_uFog, v->fogMode & 1);
+            if (gl_draws) glUniform1i(s_uTextM, 1);
             if (s_nordxOrd) {
-                x_glDrawArrays(GL_TRIANGLES, textBase, s_nordxOrd);
+                if (gl_draws) x_glDrawArrays(GL_TRIANGLES, textBase, s_nordxOrd);
                 mk_draw(textBase, s_nordxOrd, 0, 1, v->fogMode & 1, TAGPU_MK_TEX_TEXT);
             }
         }
     }
     if (s_nbar) {
-        glUniform1i(s_uTextM, 0);
-        glUniform1i(s_uFog, v->fogMode & 1);
-        x_glDrawArrays(GL_TRIANGLES, BARBASE, s_nbar);
+        if (gl_draws) glUniform1i(s_uTextM, 0);
+        if (gl_draws) glUniform1i(s_uFog, v->fogMode & 1);
+        if (gl_draws) x_glDrawArrays(GL_TRIANGLES, BARBASE, s_nbar);
         mk_draw(BARBASE, s_nbar, 0, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE);
     }
-    if (textTex && s_nordx > s_nordxOrd) {
+    if ((textTex || !gl_draws) && s_nordx > s_nordxOrd) {
         /* the digits, over the bars, out of the same atlas — bound again
            because the bar draw above did not touch unit 0's binding but the
            mode uniform did */
-        glUniform1i(s_uTextM, 1);
-        glUniform1i(s_uFog, v->fogMode & 1);
-        x_glDrawArrays(GL_TRIANGLES, textBase + s_nordxOrd, s_nordx - s_nordxOrd);
+        if (gl_draws) glUniform1i(s_uTextM, 1);
+        if (gl_draws) glUniform1i(s_uFog, v->fogMode & 1);
+        if (gl_draws) x_glDrawArrays(GL_TRIANGLES, textBase + s_nordxOrd, s_nordx - s_nordxOrd);
         mk_draw(textBase + s_nordxOrd, s_nordx - s_nordxOrd, 0, 1,
                 v->fogMode & 1, TAGPU_MK_TEX_TEXT);
     }
-    glUniform1i(s_uTextM, 0);
+    if (gl_draws) glUniform1i(s_uTextM, 0);
     if (have[TAGPU_MARK_POSTFOG]) {
-        glUniform1i(s_uFog, 0);
-        glBindTexture(GL_TEXTURE_2D, s_tex[TAGPU_MARK_POSTFOG]);
-        x_glDrawArrays(GL_TRIANGLES, TAGPU_MARK_POSTFOG * QUADV, QUADV);
+        if (gl_draws) glUniform1i(s_uFog, 0);
+        if (gl_draws) glBindTexture(GL_TEXTURE_2D, s_tex[TAGPU_MARK_POSTFOG]);
+        if (gl_draws) x_glDrawArrays(GL_TRIANGLES, TAGPU_MARK_POSTFOG * QUADV, QUADV);
         mk_draw(TAGPU_MARK_POSTFOG * QUADV, QUADV, 0, 0, 0, TAGPU_MK_TEX_LAYER);
     }
     /* last, and with the fog off for the same reason the layer above has it
        off: the engine draws these two rects after its fog overlay and never
        darkens them */
     if (s_ncurs) {
-        glUniform1i(s_uFog, 0);
-        x_glDrawArrays(GL_TRIANGLES, CURSBASE, s_ncurs);
+        if (gl_draws) glUniform1i(s_uFog, 0);
+        if (gl_draws) x_glDrawArrays(GL_TRIANGLES, CURSBASE, s_ncurs);
         mk_draw(CURSBASE, s_ncurs, 0, 0, 0, TAGPU_MK_TEX_NONE);
     }
 
     if (s_abTaking) {
         /* the Vulkan half is claimed only on a GL half that reached the disk --
-           tagpu_abshot.h's rule; `s_abDone` latches either way */
-        s_abFrame = tagpu_abshot_end(&s_abShot, MK_ABOUT, "mark");
+           tagpu_abshot.h's rule; `s_abDone` latches either way. AND on the
+           target having been unlinked, which is armed on both lanes: a stale
+           `_vk.ppm` beside a stale `_gl.ppm` is the worse of the two.
+           WHERE THERE IS NO GL HALF THE INTENT IS THE CLAIM, as in every other
+           ported pass -- `tagpu_abshot_end` is not merely refused on that lane,
+           it is never called. */
+        if (gl_draws) {
+            int wrote = tagpu_abshot_end(&s_abShot, MK_ABOUT, "mark");
+            int fresh = tagpu_vk_ab_arm("mark");
+            s_abFrame = wrote && fresh;
+        } else {
+            s_abFrame = tagpu_vk_ab_arm("mark");
+        }
         s_abDone = 1;
         s_abTaking = 0;
     }
