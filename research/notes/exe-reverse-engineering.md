@@ -3207,9 +3207,17 @@ panel's gadgets:
 (`0x4A92C5`, `0x4A92E7`, `0x4A932B`, `0x4A934D`, `0x4A9398`, `0x4A93D8`, `0x4A93F3`). `0x1`
 (build) is tested *before* the draw half, `0x2` (teardown) *after* it.
 
-**AND THE DRAW HALF ALLOCATES UNCONDITIONALLY, WHICH IS THE ANSWER TO "IS IT SAFE TO CALL TWICE".**
+**THE ALLOCATIONS ARE GATED ON THE BUILD FLAG, WHICH IS THE ANSWER TO "IS IT SAFE TO CALL TWICE"
+— AND THIS SECTION SAID THE OPPOSITE UNTIL 2026-09-18.** It claimed the draw half allocates
+unconditionally. `0x4A82F7` computes `eax = ebx & 1` — the `0x1` **build** bit — and `je 0x4A90D1`
+when it is clear; `0x4A90D1` is **past both allocations**, and `test bl,0x40` at `0x4A90DE` carries
+a redraw on into the gadget loop from there. **So `(gi, 0x40)` allocates nothing and frees nothing
+while still drawing every gadget**, and only a second *build* would leak. The first version looked
+for early RETURNS before the allocation and not for JUMPS PAST it, of which there are three.
+
 `0x4A907C` and `0x4A90B5` call `0x4C69F0(name, w, h)` and store into `panel+0xBC` (the surface the
-whole UI is pre-rendered into) and `panel+0xB8`, **overwriting the previous pointers with no free**.
+whole UI is pre-rendered into) and `panel+0xB8`, **overwriting the previous pointers with no free**
+— under flag `0x1`.
 
 * **`0x4C69F0(name, w, h)`** — stdcall `ret 0xC` — is an **allocator, not a find-or-create**:
   `0x4D83B0(name, w*h + 0x30)`, then it writes a surface header (`+0x00`/`+0x08` = w, `+0x04` = h,
@@ -3224,9 +3232,13 @@ whole UI is pre-rendered into) and `panel+0xB8`, **overwriting the previous poin
   pointers set NULL. The sole early return in the function is `gi->[0x18] == NULL` (`0x4A81F0`),
   so every real call reaches the allocation.
 
-**The game does not leak because its own protocol pairs build/draw with `GUI_Pop 0x4A968E`'s
-teardown.** An unmatched extra call — which is exactly what a forced repaint would be — leaks
-`w*h + 0x30` bytes twice.
+**The game's protocol is build (`0x1`) / draw (`0x40`) / teardown (`0x2`)**, with `GUI_Pop
+0x4A968E` pushing `2`. A forced repaint is a `0x40` and joins the middle of that protocol without
+disturbing it. Mechanically confirmed over the whole function: **exactly two** calls to `0x4C69F0`
+and **exactly two** to `0x4C6AC0`, at the four addresses above and nowhere else. Two further
+branches skip the allocation and are not the redraw path — `0x4A8349` and `0x4A835A` abandon the
+call entirely when the panel is wider or taller than the screen (`0x4B6700`/`0x4B6710` against
+`panel+0x17`/`+0x19`).
 
 **The two rect sentinels, and why a hand-placed `xpos` is written BEFORE the build call**
 [VERIFIED 2026-09-09, Phase F G18, disassembly of the pristine build]. `0x4A820C` opens with

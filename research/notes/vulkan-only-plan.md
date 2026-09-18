@@ -1397,28 +1397,49 @@ Back to the filed list:
    redraw bit, tested per gadget type at seven sites inside the loop (`0x4A92C5`, `0x4A92E7`,
    `0x4A932B`, `0x4A934D`, `0x4A9398`, `0x4A93D8`, `0x4A93F3`).
 
-   *Is it safe to call twice?* **No — a second call LEAKS BOTH PANEL SURFACES.** The draw half
-   allocates unconditionally: `0x4A907C` and `0x4A90B5` call `0x4C69F0(name, w, h)` and store the
-   results into `panel+0xBC` and `panel+0xB8`, **overwriting the old pointers with no free**. And
-   `0x4C69F0` is an **allocator, not a find-or-create** — it calls `0x4D83B0(name, w*h + 0x30)`,
-   which **drops the name** (it reads only `[esp+0x8]`, the size, and tail-calls `0x4D83C0`), so
-   nothing is looked up. The only free is in the **`0x2` teardown** path at the very end
-   (`0x4A9537` and `0x4A9549` → `0x4C6AC0`, then both pointers NULLed). The sole early return is
-   `gi->[0x18] == NULL`, so every real call falls into the allocation.
+   *Is it safe to call twice?* **YES for a redraw-only call — and the first version of this entry
+   said the opposite.** [CORRECTED 2026-09-18, same day.] It claimed *"a second call LEAKS BOTH
+   PANEL SURFACES"* because *"the draw half allocates unconditionally"* and *"the sole early return
+   is `gi->[0x18] == NULL`, so every real call falls into the allocation"*. **The allocations are
+   gated on the BUILD flag.**
 
-   The game does not leak because its own protocol pairs build/draw with `GUI_Pop 0x4A968E`'s
-   teardown. **An extra repaint call inserted by us is exactly the unmatched one**: `w*h + 0x30`
-   bytes twice per invocation, in a 32-bit process where §2.48 measured the largest free block as
-   the figure that matters.
+   `0x4A82F7` computes `eax = ebx & 1` — the `0x1` **build** bit — stores it at `[esp+0x18]`, and
+   `je 0x4A90D1` when it is clear. `0x4A90D1` is **past both allocations** (`0x4A907C` and
+   `0x4A90B5`), and from there `test bl,0x40` at `0x4A90DE`/`0x4A90EF` carries a redraw on into
+   the gadget loop at `0x4A9135`. So:
 
-   So landing 9 cannot simply call it, and the options — none chosen — are: **(a)** free both
-   ourselves and then call with `0x40`, which is the teardown's own two lines without the gadget
-   destruction, but needs an ordering argument because the per-frame blit `0x4AB0B0` reads
-   `panel+0xBC`; **(b)** teardown + rebuild (`0x2` then `0x1|0x40`), the engine's own matched pair
-   and therefore no new invariant, but it destroys and recreates every gadget's state; **(c)** get
-   the art another way. **NOT MEASURED:** whether a repaint actually produces ops for every
-   gadget, which is the thing landing 9 is buying — `record+0x29` gates each one and nothing here
-   establishes what sets it.
+   * **`0x1` build** — allocates `panel+0xBC` and `panel+0xB8` through `0x4C69F0`, which is an
+     allocator and not a find-or-create (`0x4D83B0(name, w*h + 0x30)`, and `0x4D83B0` **drops the
+     name**, reading only `[esp+0x8]`). Calling *build* twice without a teardown is what would
+     leak.
+   * **`0x40` redraw** — **allocates nothing**, frees nothing, and reaches every gadget. This is
+     the call landing 9 wants.
+   * **`0x2` teardown** — the only frees, `0x4A9537` and `0x4A9549` → `0x4C6AC0`, then both
+     pointers NULLed.
+
+   Mechanically confirmed over the whole function: **exactly two** calls to the allocator and
+   **exactly two** to the free, at those four addresses and nowhere else.
+
+   **So landing 9's shape is the simple one after all: `GUI_StageUpdateDraw(gi, 0x40)` after arm
+   and after a level-change reset.** No free of ours, no rebuild, no new invariant — options (a)
+   "free both ourselves first" and (b) "teardown + rebuild", which the first version of this entry
+   listed as the only ways, are both unnecessary and (a) was actively dangerous.
+
+   **Two other paths skip the allocation and are NOT the redraw path**, found by the same
+   re-check: `0x4A8349` and `0x4A835A` jump to `0x4A95E3` when `0x4B6700()`/`0x4B6710()` — the
+   screen width and height — are smaller than the panel's own `+0x17`/`+0x19`. A panel bigger than
+   the screen abandons the whole call.
+
+   **HOW THE FIRST VERSION WENT WRONG, because it is the same error three other entries on this
+   gate carry.** It looked for early **returns** before the allocation and found one, and did not
+   look for **jumps past** it, of which there are three. A mechanical check that enumerates one
+   kind of control transfer and not the others is the same failure as counting `call` sites without
+   following the control flow, and as grepping a shader over a truncated range. The check that
+   works: enumerate **every** branch and return before the point of interest and ask where each one
+   lands.
+
+   **NOT MEASURED:** whether a repaint actually produces ops for every gadget, which is the thing
+   landing 9 is buying — `record+0x29` gates each one and nothing here establishes what sets it.
    **Rejected:** submitting the seeded surface to the restorer as a job. Its contract
    (`tagpu_restoreglsl.h`) is *a frame of art from an R8 atlas with its colour key*; a seeded
    panel is a composite of art, glyphs and chrome with no key and no tileability, the model was
