@@ -173,6 +173,21 @@ gate and runs whichever is missing** — commit, merge main in, build, the docum
 (Step 4), the dedicated review (Step 5), then the fast-forward. These lines exist so the rules
 still apply when landing by hand.
 
+## Build the gate in parallel
+
+`make -C tagpu/ddraw -j$(nproc)` — **43.6 s serial, 4.8 s parallel** on the reference setup
+(measured 2026-09-17). Use it; the serial form is a habit, not a requirement.
+
+It is parallel-safe by construction rather than by luck: `inc/git.h` is written at **parse**
+time by `$(shell …)` and not by a recipe, `thread-split-check.sh` and `spirv-check.sh` are
+**order-only** prerequisites of the link (`$(TARGET): $(OBJS) | thread-split spirv`), and no two
+targets share an intermediate. CI has been building this way since the workflow was added
+(`.github/workflows/build.yml`).
+
+**Byte-identity is not the test, and do not reach for it as one.** Two *serial* builds of the
+same tree already differ (a timestamp reaches the PE header), so a differing md5 says nothing
+about `-j`. The assurances are the two above.
+
 ## Python tooling: install what you need, into the shared venv
 
 **`.venv-undither/` at the main checkout root is the project's Python environment**, and you may

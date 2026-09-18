@@ -957,6 +957,49 @@ done
   settled — an effects atlas that is still adding frames can be caught at two different moments,
   which is a property of the measurement and not a bug in the lane.
 
+### Wait for the dump lines, never for a clock (measured 2026-09-17)
+
+**A fixed `sleep` in an oracle script is both slower and weaker than polling the log.** The
+harness that drove landing 7e-2 slept 150 s; every byte it compares is on disk about **9 s**
+after the world goes live, and the whole cycle came down from **~200 s to 46 s** by replacing
+the sleep with a poll — same figures, to the byte, on the same build.
+
+It is weaker as well as slower because the sleep asserts *nothing*. Both lanes already refuse
+to dump a half-finished picture — the GL side needs `tagpu_rglsl_job_idle` and a moved entry
+count (`tagpu_gaf.c` `dump_if_armed`), the Vulkan side needs `qn == 0`, `!inflight` and
+`painted >= 1` (`tagpu_vk_restore.c` `dump_step`) — so "every dump line present, then quiet"
+is a real precondition where a clock is a guess. A sleep that lands mid-paint `cmp`s a 154-entry
+GL dump against a 155-entry Vulkan one and reports a DIFFER that belongs to the instrument. The
+poll caught exactly that twice on the day it was written: a broken build reported
+`unit CHAIN: missing (gl ok, no vk)` instead of a plausible-looking byte count.
+
+Poll for **all** the expected `dumped to` lines, then require a quiescence window (10 s is
+plenty) in which no new one appears *and* the dump files' sizes stop moving. Keep the old
+settle value as the **timeout**, not as the wait. Do not gate on the two lanes' counts being
+equal to each other: GL prints `%d entries` (`a->n`) and Vulkan prints `%d frames`
+(`core->tframes`), which are different quantities that happen to agree when every entry is
+painted once. Require each lane's own count to be stable, and the two files to be the same size.
+
+### One launch, not two — and the second one destroys the window you parked
+
+`tacli scenario load <i> <fixture> --restart` **stops the instance and launches it again**
+(`cmd_scenario_load`). A script that calls `tacli launch` first, parks that window with
+`xdotool`, and then calls `scenario load --restart` has thrown away the window it parked and is
+showing the human the *second* one, placed from the instance's recorded tile. Drop the first
+launch: it costs ~20 s and it is not the run being measured.
+
+**Then park the window that actually survives, and fix the tile at the source.** The recorded
+tile in `tagpu/instances/<name>/instance.json` is what places it, and on the reference setup one
+instance was recording `[1064, 0]` against a primary head starting at x=1080 — so 1008 of a
+1024-wide window sat on the human's own screen for the whole of every run. Read the heads with
+`xrandr --query`, pick the smallest connected **non-primary** one, and write that tile into
+`instance.json`; `tile_is_onscreen` will keep it. **`--res` on the launch recomputes the tile and
+undoes this**, and it buys nothing when the instance already records that resolution, so leave it
+off (`--maxfps 0` alone rewrites `ddraw.ini` from the recorded tile).
+
+This is the mechanism behind the standing rule that the desktop is the human's: the rule is not
+satisfied by an `xdotool` park alone, because a later `--restart` silently un-parks it.
+
 - **The GL lane's own log prefix is `restoreglsl:` and the Vulkan lane's is `restorevk:`**, both
   through the shared core, and `restoreglsl.on=log` turns on *both* — the options are the core's,
   read once per backend. Diffing the two lanes' `batch N (S.., CxC slots, K frames)` lines is how
