@@ -577,6 +577,14 @@ int tagpu_vk_surf_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     if (sf.w < 1 || sf.h < 1 || sf.w > TAGPU_SURF_MAXDIM || sf.h > TAGPU_SURF_MAXDIM) {
         plog(d, "surf: a %dx%d surface is outside what this pass carries - nothing drawn",
              sf.w, sf.h);
+        /* AND THE SLOT STOPS BEING ADDRESSABLE. This return used to leave
+           `haveSerial` set, so `tagpu_vk_surf_engine_view` would hand this
+           slot's image -- TAGPU_VK_SLOTS frames old -- to the UI layer as the
+           current frame. Unreachable today (`tagpu_surf_take` refuses an
+           out-of-range surface before `s_have` is set, so `tagpu_surf_frame`
+           cannot return one), which is exactly why it would have survived
+           until an edit here made it live. [FOUND by landing 10's review.] */
+        if (s_state == ST_READY) s_slot[slot].haveSerial = 0;
         return 0;
     }
 

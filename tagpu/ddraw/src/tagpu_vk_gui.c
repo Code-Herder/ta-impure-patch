@@ -249,6 +249,7 @@ static VkImageView      s_atView, s_palView, s_dumView, s_glView;
 static int              s_atDim, s_glW, s_glH;
 static unsigned         s_atSerial, s_palSerial, s_glSerial;
 static int              s_atHave, s_palHave, s_dumReady, s_glHave;
+static int              s_saidBorrow;
 /* THE RESTORED UI ATLAS (landing 4). RGBA8, the same dim and the same shelf as
    the indexed one -- the restorer paints cell for cell into the twin. It is the
    one thing in this pass that the GL lane PRODUCES rather than reads, and the
@@ -1475,7 +1476,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     VkDeviceSize atOff = 0, palOff = 0;
     int atUp = 0, palUp = 0, arUp = 0;
     VkImageView  engView = VK_NULL_HANDLE;      /* borrowed from tagpu_vk_surf.c */
-    int          engW = 0, engH = 0;
+    int          engW = 0, engH = 0, engOk = 0;
     VkDeviceSize arOff = 0;
     TWIN* cur = NULL;
     int rpOpen = 0;
@@ -1671,13 +1672,43 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        fails HERE, where `tagpu_vk_surf.c:292` tests for it by name, instead of
        through a `mk_image` of our own that never checked. */
     engView = tagpu_vk_surf_engine_view(slot, &engW, &engH);
-    if (!engView || engW < 1 || engH < 1 ||
-        engW > SURF_MAXDIM || engH > SURF_MAXDIM) {
+    if (!h.eng) {
+        /* NO ENGINE FRAME AT ALL. Exactly the refusal this pass made before
+           landing 10, on the same question: `h.eng` and the surface pass read
+           one `tagpu_surf_frame` snapshot per frame, so this is the producer
+           saying there is nothing to guard against. */
         if (!s_saidEng) { s_saidEng = 1;
-            plog(d, "gui: no engine frame from the surface pass this slot - "
-                    "nothing composited while that is true"); }
+            plog(d, "gui: the hand-over carries no engine frame - nothing "
+                    "composited while that is true"); }
         compose = 0;
-    } else s_saidEng = 0;
+    } else if (!engView || engW < 1 || engH < 1 ||
+               engW > SURF_MAXDIM || engH > SURF_MAXDIM ||
+               engW < h.surfW || engH < h.surfH) {
+        /* THE PRODUCER HAS A FRAME AND THE SURFACE PASS CANNOT HAND ITS IMAGE
+           OVER. That is a different thing and it must not cost the whole UI.
+           `tagpu_vk_surf.c` latches `ST_REFUSED` when a slot's allocation fails
+           (`:584`) and `tagpu_vk_surf_down` deliberately preserves that latch
+           (`:796`), so it is PERMANENT for the process: under VRAM pressure a
+           single failed `vkCreateImage` would otherwise take the panels, the
+           minimap and the cursor with it for the rest of the session, where
+           before landing 10 only the bottom layer stopped. [FOUND by the
+           landing review; the first version of this landing had that
+           regression.] So composite anyway, with the guard and the strict
+           harness DISARMED -- both are gated on their uniforms in `LAY_FS`, so
+           a dummy view is never sampled -- and say so once.
+
+           The last pair of tests is a BOUND this pass did not have before and
+           now has the values for: `LAY_FS` clamps its fetch to `uSize - 1`,
+           the PRESENTED twin's size, and then `texelFetch`es `uSurf`, which is
+           sized by the PRIMARY. A primary smaller than the twin read out of
+           range. It could before this landing too -- the exposure is not new --
+           but dropping `engW`/`engH` unused when they answer it would be. */
+        if (!s_saidBorrow) { s_saidBorrow = 1;
+            plog(d, "gui: the surface pass has no image to lend (%dx%d vs twin "
+                    "%dx%d) - compositing with the stale-mirror guard off",
+                 engW, engH, h.surfW, h.surfH); }
+        engOk = 0;
+    } else { engOk = 1; s_saidEng = 0; s_saidBorrow = 0; }
     if (!h.pal || !h.presented || h.surfW < 1 || h.surfH < 1 ||
         h.surfW > SURF_MAXDIM || h.surfH > SURF_MAXDIM) compose = 0;
     if (h.atlas && (h.atlasDim < 1 || h.atlasDim > ATLAS_MAXDIM ||
@@ -2731,7 +2762,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         ip = (int*)(b + 16);  ip[0] = shOn ? h.sharpW : 1;
                               ip[1] = shOn ? h.sharpH : 1;   /* uSharpSize    */
         fp = (float*)(b + 24); fp[0] = h.scaleX; fp[1] = h.scaleY;   /* uScale */
-        ip = (int*)(b + 32);  *ip = h.strict;
+        ip = (int*)(b + 32);  *ip = engOk ? h.strict : 0;
         ip = (int*)(b + 36);  *ip = h.key;
         fp = (float*)(b + 48); fp[0] = h.vpL; fp[1] = h.vpT;
                                fp[2] = h.vpW; fp[3] = h.vpH;
@@ -2741,7 +2772,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         ip = (int*)(b + 84);  *ip = h.curOurs;
         fp = (float*)(b + 96); fp[0] = h.hud[0]; fp[1] = h.hud[1];
                                fp[2] = h.hud[2]; fp[3] = h.hud[3];
-        ip = (int*)(b + 112); *ip = h.guard;
+        ip = (int*)(b + 112); *ip = engOk ? h.guard : 0;
     }
     {
         VkDescriptorBufferInfo bi;
@@ -2756,7 +2787,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         wr[0].pBufferInfo = &bi;
         ii[0].imageView = pres->view;                /* 40 uTwin              */
         ii[1].imageView = s_palView;                 /* 41 uPal               */
-        ii[2].imageView = engView;                   /* 42 uSurf -- surf's image */
+        ii[2].imageView = engOk ? engView : s_dumView;   /* 42 uSurf -- surf's image */
         ii[3].imageView = pres->colImg ? pres->colView : s_dumView;   /* 43 uTwinCol */
         ii[4].imageView = shOn ? s->shView : s_dumView;   /* 44 uSharp        */
         for (j = 0; j < 5; j++) {

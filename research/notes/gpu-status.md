@@ -5455,10 +5455,18 @@ ask cap whose refund an ordinary session could never reach. Twice the evidence a
 was already written down on this page.
 
 **One PLAUSIBLE finding was kept rather than fixed.** GL's `uSurf` is POT-padded by the fork
-(1024×512 for a 640×480 mode) while `s_engImg` is exactly the mode rect, so a `texelFetch` outside
+(1024×512 for a 640×480 mode) while the Vulkan `uSurf` image is exactly the mode rect, so a `texelFetch` outside
 that rect reads a defined texel in GL and an undefined one here. It cannot reach the A/B — the
 composite samples inside the viewport — and closing it would mean padding our image to match a fork
 detail rather than an engine one. Named rather than silently carried.
+
+**BOUNDED, not padded, by landing 10 (§2.62).** The exposure was never the padding: it was that
+`LAY_FS` clamps its fetch to `uSize - 1` — the *presented twin's* size — and then `texelFetch`es
+`uSurf`, which is sized by the *primary*. A primary smaller than the twin reads out of range
+whatever the padding is. Landing 10 had both numbers in hand for the first time and now refuses
+the case: `engW < h.surfW || engH < h.surfH` composites with the guard disarmed instead of
+sampling. The GL half of this paragraph is history — that lane went in 4d-1/4d-2 — and the symbol
+it used to name (`s_engImg`) no longer exists; the image is borrowed from `tagpu_vk_surf.c`.
 
 #### Landing 4 — Classic++, and the question the plan could not answer from the plan
 
@@ -10525,8 +10533,9 @@ composite"*. That is not what the code turned out to need, and the row says so.
 #### What the survey actually found
 
 `tagpu_vk_surf.c` holds TA's 8-bit surface as an **R8 image** and draws it opaque as the frame's
-bottom layer — `:398` says so in place, and in the Vulkan lane nothing else draws it, so it is
-load-bearing and does **not** go. `tagpu_vk_gui.c` uploaded the **same bytes again** into its own
+bottom layer — `:399` *"This is the frame's BOTTOM layer"* and `:407` *"OPAQUE, AND IT MUST BE"*
+say so in place — and in the Vulkan lane nothing else draws it, so it is load-bearing and does
+**not** go. `tagpu_vk_gui.c` uploaded the **same bytes again** into its own
 `s_engImg`, purely to bind as the layer shader's `uSurf`:
 
 | | source | format | destination |
@@ -10535,7 +10544,12 @@ load-bearing and does **not** go. `tagpu_vk_gui.c` uploaded the **same bytes aga
 | `uSurf` | `tagpu_surf_frame()` → `tagpu_gui_surf.c:3100` → `tagpu_vk_gui.c:1990` | `R8_UNORM` | `s_engImg`, bound at binding 42 |
 
 Same source, same format, same dimensions. At 1024×768 that is **786 432 bytes memcpy'd
-host→staging and copied staging→image a second time**, on every frame the surface changes.
+host→staging and copied staging→image a second time, on EVERY frame** — not only on frames the
+surface changed. Only `tagpu_vk_surf.c` skipped on the serial (`:626-628`); the UI pass's gate was
+`if (h.eng) { engUp = 1; … }` under a comment saying *"the engine's frame moves every frame by
+definition, so it needs no serial"*. So on a paused or idle game, where surf's skip fires and this
+one did not, the saving is the full 786 432 bytes against zero. [The "on every frame the surface
+changes" this paragraph used to say under-stated it — found by the landing review.]
 
 **The reason the code gave for it had already died.** `tagpu_vk_gui.c:1656` read *"without it the
 GL lane's `uSurf` reads an image ours would not have"* — and the GL lane went in 4d-1/4d-2.
@@ -10554,15 +10568,24 @@ over the intro Smacker — and the **`uStrict` harness**. Deleting it would re-o
 already exists: the seam calls `tagpu_vk_surf_prepare` at `tagpu_vk.c:2771` **before**
 `tagpu_vk_gui_prepare` at `:2822`, same command buffer, same slot — so the image is uploaded and
 barriered into `SHADER_READ_ONLY_OPTIMAL` ahead of the descriptor that names it, and both passes
-already wanted that layout and one shared sampler. The accessor returns `VK_NULL_HANDLE` unless
+already wanted that layout. **They do not share a sampler** — each creates its own `s_samp`
+(`tagpu_vk_surf.c:303-314`, `tagpu_vk_gui.c:1176-1180`), and an earlier version of this sentence
+said they did. It does not matter, and the reason is the one worth keeping: `LAY_FS` reaches
+`uSurf` only through `texelFetch`, which **ignores the sampler entirely**, so the borrow is safe
+across any sampler configuration rather than by the two happening to agree. The accessor returns `VK_NULL_HANDLE` unless
 the slot holds a current frame (`haveSerial`, not merely a live view, because a slot can own a
 correctly sized image nothing has been uploaded into yet).
 
 **Deleted with it:** `s_engImg`/`s_engMem`/`s_engView` and their creation, the per-frame `memcpy`
-and `copy_rect`, two image barriers, `s_engHave` (the compose gate asks the same question one step
-earlier), and **the second bound on the engine frame's dimensions** — `SURF_MAXDIM` 8192 in the UI
-pass against `TAGPU_SURF_MAXDIM` 4096 at the producer, the looser one downstream, so it bounded
-nothing. That is the trap `tagpu_vk_surf.c:574` already names in place, in its second instance.
+and `copy_rect`, two image barriers, and `s_engHave` (the compose gate asks the same question one
+step earlier).
+
+**NOT deleted, and an earlier version of this paragraph said it was** [CORRECTED by the landing
+review, which found the same commit re-adding it]: the second bound on the engine frame's
+dimensions. `SURF_MAXDIM` 8192 still stands at `tagpu_vk_gui.c:1675`, still downstream of
+`TAGPU_SURF_MAXDIM` 4096 at the producer, and therefore still bounds nothing. What went is what it
+*protected* — the `mk_image(h.engW, h.engH)` and the `memcpy` sized by them. The relationship is
+the trap `tagpu_vk_surf.c:574` names in place, in its second instance, and it is still open.
 
 **And a failure mode moved to where it is tested.** A device that cannot sample `R8_UNORM` now
 fails at `tagpu_vk_surf.c:292`, which checks for it by name, instead of through a `mk_image` of
@@ -10581,7 +10604,35 @@ the UI pass's own that never did.
 
 **The shell is not a pixel oracle** and this landing is where that was measured: it varies against
 *itself* by **181–191 px** between consecutive captures, so a diff there cannot see anything
-smaller. The in-game frame is stable to 0 px and is the one to diff.
+smaller.
+
+**AND NEITHER IS A COLOUR COUNT ACROSS BOOTS** [re-measured 2026-09-18, while re-verifying the
+review's fixes]. The row above reads as though `709` were a figure a later run could be held to,
+and it is not: the same build, the same `feat-forest` fixture and the same camera to the digit gave
+**2 727** colours on one boot and **498** on another, and a bare in-game screen with no fixture gave
+**680** where the earlier run recorded 709. What varies is the scene, not the renderer — how much
+of the map has been revealed by the time of the capture, and which start position the skirmish
+drew. The two `709`s were the same *procedure* run twice, and that is all they are evidence of.
+**The count is a liveness check** — a three-digit count means a game is on screen rather than a
+lever colour — **and a pixel diff needs a deterministic scene.**
+
+#### Re-verified after the review's fixes
+
+The fixes themselves (the three-way borrow check, `haveSerial` on the re-checked dimension bound)
+are meant to be **inert in the normal case**, so the check is an A/B of the two builds over the one
+scene that repeats: the shell. Three captures per build, same instance, same window, one build
+then the other (not interleaved) — this branch's `ddraw.dll`, then `main`'s rebuilt from `HEAD`:
+
+| | within `main` | within this branch | across the two |
+|---|---|---|---|
+| differing pixels, shell frame | 182 / 182 / 186 | 183 / 186 / 187 | **180–188** (9 pairs) |
+| colours / magenta | 148 / 0 | 148 / 0 | — |
+
+**The cross-build spread sits inside each build's spread against itself**, which is what "inert"
+looks like through an instrument with a 181–191 px noise floor. Alongside it, live on the new
+build: `noeng=0`, `skipped=0`, `overflows=0`, `fps=60.0`, the in-game frame stable to **0** px, and
+**zero** `gui: the surface pass has no image to lend` lines — the new fallback branch is not being
+taken, which is the point of it.
 
 #### Not covered
 

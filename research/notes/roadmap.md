@@ -3088,15 +3088,23 @@ layer in the shader — and in the **Vulkan** lane `tagpu_vk_surf.c` draws it op
 where nothing else would, so it is load-bearing. `uSurf` does not go either: the stale-mirror guard
 reads it, and that guard is what stops the layer painting stale black over the intro Smacker.
 
-What the survey found instead is that **the lane uploaded TA's frame twice a frame** — once by
+What the survey found instead is that **the lane uploaded TA's frame twice a frame** — and this
+was not unnoticed: the plan's own 4c section said *"the machinery for the resolve already exists,
+in the wrong owner … the second half of 4c is largely an ownership move"*. 4c moved the producer
+and left the duplicate consumer behind, so landing 10 finishes a planned move rather than
+discovering an oversight — once by
 `tagpu_vk_surf.c` for the bottom layer and once by `tagpu_vk_gui.c` for `uSurf`, same
 `tagpu_surf_frame` source, same `R8_UNORM` format, same dimensions, 786 432 bytes at 1024×768 —
 and that the comment justifying the second copy reasoned from the **GL lane**, which went in
 4d-1/4d-2. So the UI pass borrows the image the surface pass already uploaded and barriered, on an
 ordering the seam already has (`tagpu_vk.c:2771` before `:2822`, same command buffer, same slot).
-Deleted with it: two image barriers, a memcpy and a copy per frame, an image and its memory, and
-the second bound on the engine frame's dimensions — `SURF_MAXDIM` 8192 downstream of
-`TAGPU_SURF_MAXDIM` 4096, which therefore bounded nothing.
+Deleted with it: two image barriers, a memcpy and a copy per frame, an image and its memory.
+**Not** the second bound on the engine frame's dimensions — `SURF_MAXDIM` 8192 downstream of
+`TAGPU_SURF_MAXDIM` 4096 — which an earlier version of this entry claimed and which the same
+commit re-adds at `tagpu_vk_gui.c:1675`; what went is what it protected, and the relationship is
+still open. What the landing DID close is a different bound the review surfaced: `LAY_FS` clamps
+its fetch to the presented twin's size and then samples an image sized by the primary, so a
+primary smaller than the twin read out of range — now refused.
 
 Verified by running it: shell and in-game frames **identical** to the figures measured before the
 change (148 colours / 0 magenta at 640×480; 709 / 0 at 1024×768), the in-game frame stable to 0

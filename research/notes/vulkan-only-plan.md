@@ -528,7 +528,7 @@ would not have shown up as a failure — it would have shown up as three landing
      `command -v glslang` says MISSING and means nothing. `tools/spirv-gen.py --check` reports
      *47 shaders, 32 programs, headers current*.
 
-     **WHERE 4c-1's PIECES HAVE TO LIVE, settled by the contracts rather than by preference
+     **WHERE 4c-1's PIECES HAVE TO LIVE, settled by the contracts rather than by preference:**
      [2026-09-18, after the shader landed]:**
 
      * **Not in the pass.** `tagpu_vk_pass.h` is explicit — *"A PASS READS NO ENGINE STATE. Every
@@ -1488,124 +1488,142 @@ Back to the filed list:
    panel is a composite of art, glyphs and chrome with no key and no tileability, the model was
    not trained for it, and `uidiff` has no cell to match it against.
 10. **The engine-frame fallback layer goes** — **LANDED 2026-09-18, AND NOT AS THIS ROW READS.**
-    Neither half of the title survived contact with the code: the *layer* does not go (in the
-    Vulkan lane `tagpu_vk_surf.c` draws TA's frame opaque as the bottom layer and nothing else
-    would), and `uSurf` does not go (the stale-mirror guard reads it). What went is a **duplicate
-    upload nobody had noticed**: the lane was copying TA's frame into *two* R8 images every frame,
-    `tagpu_vk_surf.c`'s for the bottom layer and `tagpu_vk_gui.c`'s `s_engImg` for `uSurf`, from
-    the same `tagpu_surf_frame` source — 786 432 bytes at 1024×768, twice. The UI pass now borrows
-    the surface pass's image through `tagpu_vk_surf_engine_view`, on an ordering the seam already
-    had. Full write-up and the measurements: `gpu-status.md` §2.62.
+   Neither half of the title survived contact with the code: the *layer* does not go (in the
+   Vulkan lane `tagpu_vk_surf.c` draws TA's frame opaque as the bottom layer and nothing else
+   would), and `uSurf` does not go (the stale-mirror guard reads it). What went is a **duplicate
+   upload left behind by 4c** — this plan's own 4c section called the resolve *"largely an
+   ownership move"* and named `s_engImg` as machinery *"in the wrong owner"* (:501); 4c moved the
+   producer and left the second consumer standing, so landing 10 finishes that move rather than
+   discovering an oversight. The lane was copying TA's frame into *two* R8 images every frame,
+   `tagpu_vk_surf.c`'s for the bottom layer and `tagpu_vk_gui.c`'s `s_engImg` for `uSurf`, from
+   the same `tagpu_surf_frame` source — 786 432 bytes at 1024×768, twice. The UI pass now borrows
+   the surface pass's image through `tagpu_vk_surf_engine_view`, on an ordering the seam already
+   had. Full write-up and the measurements: `gpu-status.md` §2.62.
 
-    **The comment that justified the second copy reasoned from the GL lane**, which went in
-    4d-1/4d-2 — a stale justification outliving the thing it named, which is the same failure as
-    landing 11's headline being a comment.
+   **The comment that justified the second copy reasoned from the GL lane**, which went in
+   4d-1/4d-2 — a stale justification outliving the thing it named, which is the same failure as
+   landing 11's headline being a comment.
 
-    The original text follows, and its own correction below it is still right about `uSurf`:
+   The original text follows. Its own correction below it is right about `uSurf` having two
+   consumers and wrong in its last two sentences, which are struck in place rather than left to
+   be read as current:
 
-    `tagpu_gui_surf.c:51` has it as
-    the bottom of three; G15b, G15c and G17d measured **0 holes** across 120 stops, so nothing
-    reads it.
+   `tagpu_gui_surf.c:51` has it as
+   the bottom of three; G15b, G15c and G17d measured **0 holes** across 120 stops, so nothing
+   reads it.
 
-    **THE PREMISE IS FALSE AS STATED, AND THE FIRST VERSION OF THIS PARAGRAPH — COMMITTED IN
-    `f5e4d33` — WAS WRONG.** It claimed that "over the whole of `LAY_FS` (`tagpu_gui_surf.c:465-590`)
-    the sampler `uSurf` occurs twice: the declaration and a comment. There is no `texelFetch` and no
-    `texture()` against it", and concluded that the landing was a saving. **`LAY_FS` runs to line
-    642, not 590**; the range was computed by a heuristic that stopped at the first line ending in
-    a semicolon and truncated the shader. Over its real extent `uSurf` occurs **five** times, and
-    **two of them are `texelFetch`**.
+   **THE PREMISE IS FALSE AS STATED, AND THE FIRST VERSION OF THIS PARAGRAPH — COMMITTED IN
+   `f5e4d33` — WAS WRONG.** It claimed that "over the whole of `LAY_FS` (`tagpu_gui_surf.c:465-590`)
+   the sampler `uSurf` occurs twice: the declaration and a comment. There is no `texelFetch` and no
+   `texture()` against it", and concluded that the landing was a saving. **`LAY_FS` runs to line
+   642, not 590**; the range was computed by a heuristic that stopped at the first line ending in
+   a semicolon and truncated the shader. Over its real extent `uSurf` occurs **five** times, and
+   **two of them are `texelFetch`**.
 
-    **The engine frame has TWO consumers in `LAY_FS`, and one of them ships:**
+   **The engine frame has TWO consumers in `LAY_FS`, and one of them ships:**
 
-    * **The stale-mirror guard** (`:630-635`, under `uGuard`, which `:2606` sets from
-      `f->surface_tex != 0` — so it is ON in the ordinary build). Where the twin reads index 0 and
-      the engine's surface reads something else, the fragment is **discarded**. This is what stops
-      the layer painting stale black over the intro Smacker, which writes the primary directly so
-      no op ever reaches the queue ([gui-renderer](gui-renderer.html) §21.2). **Deleting `uSurf`
-      would re-open that.**
-    * **The `uStrict` harness** (`:638-641`), the A/B's magenta marker. Armed only by
-      `gui.on=strict`.
+   * **The stale-mirror guard** (`:630-635`, under `uGuard`, which the hand-over sets at
+     `:2670` from `have_engine_frame` — `f->surface_tex != 0 || tagpu_vk_owns_present()` at `:809`,
+     so it is ON in the shipped Vulkan build; `:2606`, which an earlier version of this line cited,
+     is the GL lane's uniform and is dead here). Where the twin reads index 0 and
+     the engine's surface reads something else, the fragment is **discarded**. This is what stops
+     the layer painting stale black over the intro Smacker, which writes the primary directly so
+     no op ever reaches the queue ([gui-renderer](gui-renderer.html) §21.2). **Deleting `uSurf`
+     would re-open that.**
+   * **The `uStrict` harness** (`:638-641`), the A/B's magenta marker. Armed only by
+     `gui.on=strict`.
 
-    **So what is true is narrower than the row claims.** The engine frame is not composited as a
-    bottom LAYER — where the twin has no coverage the shader `discard`s rather than blending it —
-    and that is what the 120 stops measured. But it is **read**, as a reference, by a guard the
-    shipped build depends on. **The row's "nothing reads it" is about the layer role only**, and
-    landing 10 is therefore not a deletion of `uSurf` but a deletion of the *layer semantics*,
-    with the guard's read kept. That is a different and much smaller landing, and the 786 432
-    bytes a frame the Vulkan lane uploads are **not waste**: the guard needs them.
+   **So what is true is narrower than the row claims.** The engine frame is not composited as a
+   bottom LAYER — where the twin has no coverage the shader `discard`s rather than blending it —
+   and that is what the 120 stops measured. But it is **read**, as a reference, by a guard the
+   shipped build depends on. **The row's "nothing reads it" is about the layer role only**, and
+   what this
+   paragraph concluded from that is **STRUCK — the landing disproved it** [2026-09-18, found by
+   landing 10's own review, which caught the paragraph above blessing this one wholesale]:
 
-    **The trap that produced the wrong version is worth more than the finding.** A range computed
-    over a multi-line C string constant, then grepped, gives a confident answer about text it never
-    read. It is the same failure as counting `call` sites without following the control flow
-    (`0x4BF4D0`, `0x4BF7B0`): **a mechanical count over a boundary nobody checked.** Find the
-    string's real end before trusting a count inside it.
+   > *"landing 10 is therefore not a deletion of `uSurf` but a deletion of the layer semantics,
+   > with the guard's read kept. That is a different and much smaller landing, and the 786 432
+   > bytes a frame the Vulkan lane uploads are not waste: the guard needs them."*
 
-    **And `uEng` is NOT `uSurf`**: `MM_FS`'s `uEng` is the MINIMAP's engine picture
-    (`s_mmEngView`), sampled at `tagpu_gui_surf.c:382` and `:394` — the reason there is no
-    radar-arc replay. Nor is this 4c-1's bottom layer (§2.52). Three different things called "the
-    engine's frame", which is its own reason this entry went wrong.
+   Landing 10 deleted **neither** `uSurf` **nor** the layer semantics — it changed who owns the
+   image behind them. And the 786 432 bytes a frame **were** waste, though not the ones this
+   paragraph was looking at: the guard does need the first copy, and the lane was uploading a
+   **second** one from the same source, which this paragraph did not know existed. Everything
+   before the quote still stands: `uSurf` has two consumers and deleting it would re-open the
+   Smacker case.
+
+   **The trap that produced the wrong version is worth more than the finding.** A range computed
+   over a multi-line C string constant, then grepped, gives a confident answer about text it never
+   read. It is the same failure as counting `call` sites without following the control flow
+   (`0x4BF4D0`, `0x4BF7B0`): **a mechanical count over a boundary nobody checked.** Find the
+   string's real end before trusting a count inside it.
+
+   **And `uEng` is NOT `uSurf`**: `MM_FS`'s `uEng` is the MINIMAP's engine picture
+   (`s_mmEngView`), sampled at `tagpu_gui_surf.c:382` and `:394` — the reason there is no
+   radar-arc replay. Nor is this 4c-1's bottom layer (§2.52). Three different things called "the
+   engine's frame", which is its own reason this entry went wrong.
 11. **The deletion landing** — `render_ogl.c`, `render_d3d9.c`, `opengl_utils.c`,
-    `openglshader.h`, `render_ogl.h`, and **`tagpu_restoreglsl.c`**. `renderer=gdi` becomes the
-    documented stock reference.
+   `openglshader.h`, `render_ogl.h`, and **`tagpu_restoreglsl.c`**. `renderer=gdi` becomes the
+   documented stock reference.
 
-    **The restorer was missing from this list until 2026-09-17 and it is what proved the list was
-    a guess.** `tagpu_restoreglsl.c` includes `opengl_utils.h` and calls `glDeleteProgram`, so it
-    cannot survive this landing — but before landing 7 split it, deleting it would also have taken
-    `tagpu_rglsl_tileable` (called from `tagpu_terr.c:1034` and `tagpu_gaf.c:1130`), the weight
-    reader and every job queue, all of which the surviving gather halves need.
-    `tagpu_restore_core.{h,c}` is the half that stays and it is **not** in this list.
-    Worth checking the rest of the list the same way: a file named here for being GL may carry
-    something the gather halves call, and the way to find out is `git grep` on its exports rather
-    than on its includes.
+   **The restorer was missing from this list until 2026-09-17 and it is what proved the list was
+   a guess.** `tagpu_restoreglsl.c` includes `opengl_utils.h` and calls `glDeleteProgram`, so it
+   cannot survive this landing — but before landing 7 split it, deleting it would also have taken
+   `tagpu_rglsl_tileable` (called from `tagpu_terr.c:1034` and `tagpu_gaf.c:1130`), the weight
+   reader and every job queue, all of which the surviving gather halves need.
+   `tagpu_restore_core.{h,c}` is the half that stays and it is **not** in this list.
+   Worth checking the rest of the list the same way: a file named here for being GL may carry
+   something the gather halves call, and the way to find out is `git grep` on its exports rather
+   than on its includes.
 
-    **THE REST OF THE LIST, CHECKED THAT WAY [SURVEYED 2026-09-18, RE-DONE THE SAME DAY AFTER THE
-    FIRST PASS GOT ONE OF ITS HEADLINES WRONG]. It is four landings, not one.**
+   **THE REST OF THE LIST, CHECKED THAT WAY [SURVEYED 2026-09-18, RE-DONE THE SAME DAY AFTER THE
+   FIRST PASS GOT ONE OF ITS HEADLINES WRONG]. It is four landings, not one.**
 
-    **The method, because the first pass used a worse one.** `git grep <symbol>` counts hits in
-    comments, in string literals and in declarations, and this entry's own warning — *read the
-    hits, not the count* — was written and then not applied. The check that works is: strip block
-    comments, line comments and string literals from each `.c`, then match the **bare symbol**
-    (`\b<sym>\b`, not `<sym>\s*\(`) — the bare form because a function-POINTER use blocks a
-    deletion exactly as a call does, and `g_ddraw.renderer == ogl_render_main` is precisely that.
+   **The method, because the first pass used a worse one.** `git grep <symbol>` counts hits in
+   comments, in string literals and in declarations, and this entry's own warning — *read the
+   hits, not the count* — was written and then not applied. The check that works is: strip block
+   comments, line comments and string literals from each `.c`, then match the **bare symbol**
+   (`\b<sym>\b`, not `<sym>\s*\(`) — the bare form because a function-POINTER use blocks a
+   deletion exactly as a call does, and `g_ddraw.renderer == ogl_render_main` is precisely that.
 
-    * **`opengl_utils.c` — goes WITH `render_ogl.c`, and the first pass said something wrong and
-      more interesting.** It claimed the four shader helpers were "referenced only by
-      `opengl_utils.h` — already dead". They are not dead: `oglu_build_program`,
-      `oglu_build_program_from_file`, `oglu_ext_exists` and `oglu_init` are all used by
-      **`render_ogl.c`**, which the first pass had excluded as "not surviving" and then reported as
-      absence. Outside the deletion set only **`oglu_load_dll`** is used (`dd.c`). The practical
-      consequence is better than "dead" and different from it: **delete `opengl_utils.c` and
-      `render_ogl.c` together and nothing outside the set loses a helper**, with `oglu_load_dll`'s
-      one caller the only thing to resolve.
-    * **`render_d3d9.c` — four surviving files, not one.** Seven exports; real users in `dd.c`,
-      `utils.c`, `winapi_hooks.c` and `wndproc.c`. `d3d9_release_resources` has **no user outside
-      the file at all** (confirmed on the re-check). No lane involvement.
-    * **`render_ogl.c` — three surviving files, AND A NEGATIVE RESULT THAT A CARELESS GREP WOULD
-      HAVE INVERTED.** `ogl_create` (`dd.c`), `ogl_release` (`dd.c`, `winapi_hooks.c`) and
-      `ogl_render_main` (`dd.c`, `fps_limiter.c`, `winapi_hooks.c` — as a **function pointer**,
-      `g_ddraw.renderer == ogl_render_main`, which a call-shaped pattern misses entirely).
-      **`render_vk.c` and `tagpu_vk.c` both match a grep for those names and every hit is PROSE** —
-      comments describing what the GL backend does. **The Vulkan lane uses nothing in
-      `render_ogl.c`.** This one survived the re-check unchanged, because it was the one place the
-      first pass actually read its hits.
-    * **`tagpu_restoreglsl.c` — BLOCKED, for the ordinary reason. [THE FIRST PASS'S HEADLINE HERE
-      WAS FALSE AND IS WITHDRAWN.]** It said *"and `tagpu_vk_restore.c`, a VULKAN file, which calls
-      `tagpu_rglsl_mips` — so the dependency is not 'the surviving gather halves still need it';
-      the Vulkan restorer does."* **That hit is a COMMENT** (`tagpu_vk_restore.c:2046`, prose
-      explaining that the GL lane refuses an odd mip level *"for the same reason
-      (tagpu_rglsl_mips)"*). **No Vulkan file uses this module at all.**
+   * **`opengl_utils.c` — goes WITH `render_ogl.c`, and the first pass said something wrong and
+     more interesting.** It claimed the four shader helpers were "referenced only by
+     `opengl_utils.h` — already dead". They are not dead: `oglu_build_program`,
+     `oglu_build_program_from_file`, `oglu_ext_exists` and `oglu_init` are all used by
+     **`render_ogl.c`**, which the first pass had excluded as "not surviving" and then reported as
+     absence. Outside the deletion set only **`oglu_load_dll`** is used (`dd.c`). The practical
+     consequence is better than "dead" and different from it: **delete `opengl_utils.c` and
+     `render_ogl.c` together and nothing outside the set loses a helper**, with `oglu_load_dll`'s
+     one caller the only thing to resolve.
+   * **`render_d3d9.c` — four surviving files, not one.** Seven exports; real users in `dd.c`,
+     `utils.c`, `winapi_hooks.c` and `wndproc.c`. `d3d9_release_resources` has **no user outside
+     the file at all** (confirmed on the re-check). No lane involvement.
+   * **`render_ogl.c` — three surviving files, AND A NEGATIVE RESULT THAT A CARELESS GREP WOULD
+     HAVE INVERTED.** `ogl_create` (`dd.c`), `ogl_release` (`dd.c`, `winapi_hooks.c`) and
+     `ogl_render_main` (`dd.c`, `fps_limiter.c`, `winapi_hooks.c` — as a **function pointer**,
+     `g_ddraw.renderer == ogl_render_main`, which a call-shaped pattern misses entirely).
+     **`render_vk.c` and `tagpu_vk.c` both match a grep for those names and every hit is PROSE** —
+     comments describing what the GL backend does. **The Vulkan lane uses nothing in
+     `render_ogl.c`.** This one survived the re-check unchanged, because it was the one place the
+     first pass actually read its hits.
+   * **`tagpu_restoreglsl.c` — BLOCKED, for the ordinary reason. [THE FIRST PASS'S HEADLINE HERE
+     WAS FALSE AND IS WITHDRAWN.]** It said *"and `tagpu_vk_restore.c`, a VULKAN file, which calls
+     `tagpu_rglsl_mips` — so the dependency is not 'the surviving gather halves still need it';
+     the Vulkan restorer does."* **That hit is a COMMENT** (`tagpu_vk_restore.c:2046`, prose
+     explaining that the GL lane refuses an odd mip level *"for the same reason
+     (tagpu_rglsl_mips)"*). **No Vulkan file uses this module at all.**
 
-      Re-checked with comments and strings stripped: all **eleven** exports have real users, and
-      the users are **four** GL-side files — `tagpu_gaf.c`, `tagpu_terr.c`, `tagpu_native.c`,
-      `tagpu_gui_surf.c`. (`tagpu_render3do.c` and `tagpu_restore_core.c` were comment and
-      declaration hits.) The file is 291 `gl[A-Z]` sites deep and includes `opengl_utils.h`, so it
-      cannot survive as it stands. **Landing 7's split into `tagpu_restore_core.{h,c}` is not
-      finished**, and finishing it is a landing of its own that has to come before this one —
-      which is what this entry already suspected, and the suspicion needed no Vulkan file to be
-      true.
+     Re-checked with comments and strings stripped: all **eleven** exports have real users, and
+     the users are **four** GL-side files — `tagpu_gaf.c`, `tagpu_terr.c`, `tagpu_native.c`,
+     `tagpu_gui_surf.c`. (`tagpu_render3do.c` and `tagpu_restore_core.c` were comment and
+     declaration hits.) The file is 291 `gl[A-Z]` sites deep and includes `opengl_utils.h`, so it
+     cannot survive as it stands. **Landing 7's split into `tagpu_restore_core.{h,c}` is not
+     finished**, and finishing it is a landing of its own that has to come before this one —
+     which is what this entry already suspected, and the suspicion needed no Vulkan file to be
+     true.
 
-    **NOT CHECKED:** `openglshader.h` and `render_ogl.h` — headers, which can only be checked by
-    include, which is the check this entry warns against relying on.
+   **NOT CHECKED:** `openglshader.h` and `render_ogl.h` — headers, which can only be checked by
+   include, which is the check this entry warns against relying on.
 
 **A twelfth thing that is not a landing: the stand-downs are session-latched.** §2.35 measured it
 — a pass that has refused once stays dark for the process even after the condition clears. Every
