@@ -1,0 +1,48 @@
+landing-review: model=claude-opus-5 effort=high reviewers=1 range=main...fe84d05 findings=6 acted=6 recorded=0 rejected=0 fixes=c94849e docs=c94849e
+One reviewer at high, read-only, fresh context. Every finding verified against
+the code before acting; none rejected, none deferred.
+
+HIGH (acted): the upload-skip ate the palette upload. s_serial moves only when
+the index bytes move, and both copies sat inside `if (fresh)`, so the palette
+image was re-uploaded only on a frame where the INDICES changed -- freezing the
+bottom layer's colours for the whole of a fade, which is one picture held still
+while the table runs down. The palette now carries tagpu_pal_serial() and each
+image is asked its own question. Verified by the census the fix added: 84163
+frames, 40287 byte uploads, 12 palette uploads, independently gated.
+
+MEDIUM (acted): the pass refused to arm without VK_KHR_maintenance1, for a flip
+it does not take -- which would have put route E back on the flat clear, the
+exact blind spot the pass exists to close. Gate removed; the cullMode comment
+asserted the same absent flip and is rewritten.
+
+MEDIUM (acted): the orientation derivation was factually wrong about the GL
+lane. render_ogl.c builds TWO quads differing by a y negation -- the WINDOW one
+(:576-597) puts tex (0,0) at clip y = +1, the FBO one (:554-575, under
+`if (g_ogl.shader1_program)`) at y = -1. The landing cited :557 without noticing
+it sat in the shader1 branch and wrote that the GL lane presents (0,0) at
+y = -1. It does not. build()'s quad is the FBO one and Vulkan's y-down undoes
+its negation; the window quad WITH the flip is equally correct. The rule the
+landing had promoted from this -- "a literal-quad pass never flips", sharpened
+into a one-line test one commit earlier -- is WITHDRAWN. The quad and the flip
+are one choice, and 4c-2 was being sized against the wrong version.
+
+LOW (acted) x3: the plan inverted its own classification label for 4c-2's
+resolve; the palette copy's bufferOffset was not rounded to the 4-byte texel
+block (legal for every mode TA has, illegal for a bound this file admits); and
+record ignored the swapchain extent it is handed, so on a window shrink the
+scissor could leave the render area.
+
+The reviewer independently confirmed the critical-section and bound arguments
+against IDirectDrawSurface.c and ddsurface.c, the layout half of the upload
+skip across resize/teardown/first-frame, descriptor accounting, allocation
+unwinding, the staging offsets, ATTR_LOCATIONS against the pipeline's vertex
+layout, NOT_PROGRAMS's completeness, that thread-split.allow rightly went
+untouched, and that s_mHand.eng's new alias is sound and stronger than the
+per-frame realloc it replaced. It also noted, informationally, that the GL
+lane's palette texture carries A = 0 per entry while ours carries A = 255 --
+invisible today, a real divergence an RGBA-comparing A/B would surface.
+
+Re-measured after the fixes: shell 306937/307200 non-black, in game
+748768/786432 and pictured, GL lane in game clean (sprites 1038049, atlas
+36/4096, cursor drawn, mm 16110, fog 13227/13356, cursown 4/4,1), 0 faults on
+both lanes.
