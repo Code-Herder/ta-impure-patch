@@ -892,8 +892,11 @@ void tagpu_owndraw_init(void)
                                        SSHADOW_B_TARGET, SSHADOW_B_RESUME, &stubB);
         if (sa && !sb)
             restore_sshadow(SSHADOW_A_VA, SSA_STOLEN, (int)sizeof SSA_STOLEN, stubA);
+        /* B is never rolled back: nothing is installed after it, so nothing
+           can fail behind it. `stubB` is written and deliberately not freed --
+           the detour stays for the life of the process, like every other one
+           this file installs. */
         g_sshadow = sa && sb;
-        (void)stubB;   /* B is never rolled back: nothing is installed after it */
     }
 
     _snprintf(b, sizeof b,

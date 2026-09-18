@@ -10702,9 +10702,11 @@ the last of those guards, at the point the pass has committed to drawing, and ea
 lowers it on the way out. **One write per frame**, so there is no window a game-thread read can
 land in: a shell frame writes 0 and only 0, a drawing frame writes 1 and only 1, and the value
 changes only when the pass's own state does. (Nine, not eleven: an earlier version of this
-paragraph said eleven two sentences after saying nine. The returns are `tagpu_native.c:2506, 2657,
-2665, 2672, 2675, 2686, 2723, 2726, 2735` before the raise and `:3441, :3713, :3811` after it,
-twelve in all, no `goto`.)
+paragraph said eleven two sentences after saying nine. Nine carry `SSHADOW_NONE()` and sit before
+the publish; three more sit after it — the `nu == 0 && nfx == 0 && …` nothing-to-draw test, the
+`nv == 0 && nhi == 0 && npd == 0 && …` no-geometry test, and the `!gl_draws` hand-over — twelve in
+all, no `goto`. Counted by `grep -n 'SSHADOW_NONE\|return;' ` rather than quoted by line, because
+every line number in this section was stale one commit after it was written.)
 
 **AND A PUBLISH IS NOT GUARANTEED, WHICH IS WHY THERE IS A WATCHDOG** [the landing review of 10b
 found this claim false and pointed at two comments already in the tree that record the same lesson
@@ -10852,7 +10854,8 @@ branch's machine code against the pristine disassembly, the gate's six live tran
           place, `tagpu_shadow_end` (`tagpu_shadow.c:527`), which opens `if (!s_live) return;`;
           `s_live = 1` is written in exactly one place, `tagpu_shadow_begin`
           (`tagpu_shadow.c:403`); and `begin` and `end` have exactly one call site each
-          (`tagpu_native.c:4190`, `:4277`), **both below this return**. So under
+          (both in `tagpu_native.c`, at the `if (mapLive)` block's head and its
+          `tagpu_shadow_hills(); tagpu_shadow_end();` tail), **both below this return**. So under
           `renderer=vulkan` the handover returns 0 at `tagpu_vk_shadow.c:788` and that pass
           stands down. The Vulkan twin is exercised while the **GL** lane owns the present.
       **Nothing paints a structure's slant shadow on the Vulkan lane today**, so the gate must
@@ -10869,7 +10872,16 @@ branch's machine code against the pristine disassembly, the gate's six live tran
   unit count follows **native's** `s_type`. A hand-set `tagpu_owndraw.on=all` with
   `tagpu_native.on=armcom` gates on commanders while the detours cover every structure. Not
   reachable from the defaults, which pair the two (`tagpu_opt.c`'s `needs`), and not closed here.
-* **A unit whose `ModelId` will not bound** (`tagpu_native.c:941`) is refused by
+* **THE GATE IS GLOBAL AND THE PAINTING IS PER UNIT**, so every way a single unit can drop out of
+  the posed path is a structure that loses its shadow while the gate stays up for the frame. The
+  known members, none of them introduced by this landing and none closed by it: a `ModelId` that
+  will not bound (below); a type that will not bake (`s_poseNoBake`); a bake with no SLANT range
+  at all — the slant counting loop tests `pdix[i] >= 0` but not `count[TAGPU_PB_SLANT] > 0`, where
+  the wire loop immediately above it *does* test `count[TAGPU_PB_WIRE] > 0`, so `unit_ok` refuses
+  the draw and the unit is still counted; and anything past `MAXU == 2048`. A per-unit gate is not
+  possible in the stub — it would have to identify the unit from `ecx` — so this is a named limit
+  of the mechanism rather than a bug to fix. [The third review of 10b assembled this list.]
+* **A unit whose `ModelId` will not bound** (`tagpu_native.c`, `model_root`'s bound) is refused by
   `tagpu_native_owns_unit`, drawn by the engine, and has no `n2` entry — while the gate, which is
   global, still suppresses its shadow branch.
 * **The predicate is an OBSERVATION now, and both guessed versions of it were wrong.** This is
@@ -10882,9 +10894,13 @@ branch's machine code against the pristine disassembly, the gate's six live tran
   | `s_armed == 1 && gl_draws && s_ssPainter` | *did anything actually paint one last frame* | — |
 
   **The two painters are not alternatives: both come out of `pdu[]`.** The cast-shadow map's unit
-  casters are the posed depth twin (`tagpu_native.c:4251`, `if (!pdu[k].castSkip)`) and the slant
-  range is `pdix[i] >= 0` (`:4145`, `:4472`). `pdu[]`/`pdix[]` are filled in one place and that
-  place bails first — `if (!pdReady) continue;` (`:3665`), `pdReady = tagpu_posedraw_ready()`.
+  casters are the posed depth twin (`tagpu_native.c`, the `if (!pdu[k].castSkip)
+  tagpu_posedraw_depth_unit(&pdu[k])` loop) and the slant range is `pdix[i] >= 0` (its counting
+  loop and its draw loop). `pdu[]`/`pdix[]` are filled in one place and that place bails first —
+  `if (!pdReady) continue;`, where `pdReady = tagpu_posedraw_ready()`. **Cited by symbol rather
+  than by line on purpose**: the third review found that this landing's own commit had shifted six
+  line references that were correct in its parent, inside the bullets that commit rewrote, so the
+  headline proof could not be checked against the tree it shipped with.
   So with the posed program refused (`s_state == 2`, a session latch: a missing entry point, a
   shader that will not link, a uniform block over `PD_BLOCK`), `npd` is 0, **nothing casts into
   the map and the slant range is empty** — and the middle version above raised the gate anyway,
@@ -10893,26 +10909,60 @@ branch's machine code against the pristine disassembly, the gate's six live tran
   `tagpu_posedraw_ready()` is a **precondition of both painters**, never an alternative to one.
 * **So the flag is published by the painters, at `tagpu_native.c`'s `s_ssPainter`**, and the
   publisher at the top of the next frame reads *and clears* it:
-  `s_ssPainter = pdReady && (mapLive || !(cpp && !hard))`, sitting immediately after the
-  cast-shadow map block. `mapLive` is `cpp && tagpu_shadow_begin(…)` held in a variable instead of
+  `s_ssPainter = pdReady && ((mapLive && nterr > 0) || ((gfx & 4) && !(cpp && !hard)))`, sitting
+  immediately after the cast-shadow map block.
+* **`nterr > 0` is there because a CASTER pass running is not a RECEIVER sampling it** — the third
+  review's HIGH, and the last of the three rounds' worth of the same mistake. `tagpu_shadow_begin`
+  builds the cast-shadow map and never consults the terrain module; a structure's slant lands on
+  the *ground*, and the ground is `tagpu_terr`, whose `tagpu_shadow_apply` runs only from
+  `tagpu_terr_render`, which is called under `if (nterr)`. So `mapLive == 1 && nterr == 0` is
+  reachable — through the `tagpu_terr.off` lever, or any of `terr_bail`'s ~10 refusals, several of
+  them session-long — and in it the map is built, nothing samples it, and at the shipped
+  `shadows=SOFT` the slant range is force-skipped as well. Every structure would have lost its
+  shadow for as long as that held, while `terr_bail` had handed the ground back to the engine.
+  `nterr` is the composite's own predicate, quoted the same way §2.x's `if (nterr)` hand-over
+  already quotes it. `mapLive` is `cpp && tagpu_shadow_begin(…)` held in a variable instead of
   tested inline, because the gate has to know whether the map **drew**, not whether it was
   configured — `tagpu_shadow_begin` refuses on four grounds past `tagpu_classicpp_on()`
   (`shadows != SOFT`, the engine's own Shadow bit, `amb >= 1.0`, and its GL init or FBO failing).
   `!(cpp && !hard)` is the slant loop's own `continue` quoted from `:4143` so the two cannot drift.
-* **Every stale direction is now bounded at one frame by construction**, which is what neither
-  guessed version had. The clear-on-read is what does it: any path that does not reach the
-  painters — the nine early returns, the hand-over return, a lane switch, a refused map — leaves 0
-  behind and the next frame lowers the gate. Starting a painter costs one frame of double shadow;
-  stopping one costs one frame of none. `gl_draws` is ANDed in separately because it is read fresh
+* **Every stale direction is bounded at TWO of our publishes by construction**, which is what
+  neither guessed version had at any width. The clear-on-read is what bounds it: any path that
+  does not reach the painters — the nine early returns, the hand-over return, a lane switch, a
+  refused map — leaves 0 behind and the next publish lowers the gate. **Two, not one** [the third
+  review of 10b corrected this]: the publish sits at the TOP of `tagpu_native_frame`, which runs
+  at present time, i.e. *after* the game thread has already blitted that frame's units. So the
+  gate the game thread reads for its frame N is the painter observation from N−2. Starting a
+  painter costs two frames of double shadow; stopping one costs two frames of none. **The obvious
+  follow-up is to publish from below the painters instead** — which would halve it, make
+  `s_ssPainter` a local rather than a static, and drop the `gl_draws` term, because the hand-over
+  return would lower the gate by itself. It was *not* done in this landing: moving where a
+  cross-thread flag is written is the class this stack fails at silently, three review rounds had
+  already found a real defect in these twenty lines, and two frames is a transition flicker rather
+  than a durable fault. Named here so the next landing can take it deliberately.
+* **And the bound is in OUR publishes, not in engine frames.** If the render lane runs behind the
+  game thread, more than two game frames can pass between publishes, and the 8-frame watchdog
+  counts the lane's frames too. `gl_draws` is ANDed in separately because it is read fresh
   from `tagpu_vk_owns_present()` this frame while `s_ssPainter` is last frame's, so a GL→Vulkan
   switch cannot carry a raised frame across the seam. This is the same *observe, don't predict*
   shape `tagpu_cursown_publish` / `tagpu_gui_cursor_drew_take` already uses for the cursor.
-* **`Classic++ on with `shadows=OFF` leaves the gate down and the engine keeps its slant.** Both
-  terms are false there (the map wants SOFT; the slant loop's `cpp && !hard` skips it). That is
-  `main`'s behaviour, so it is no regression, and it is the safe direction — a shadow the engine
-  draws is visible, a shadow nobody draws is silent. It is *not* symmetric with the silhouette,
-  which the composite-wipe detours at `0x459338`/`0x45958C`/`0x4594DB` do suppress in that
-  configuration; the asymmetry is deliberate and is recorded here rather than smoothed over.
+* **Classic++ on with `shadows=OFF` leaves the gate down and the engine keeps its slant.** Both
+  terms are false there (the map wants SOFT; the slant loop's `cpp && !hard` skips it). It is the
+  safe direction — a shadow the engine draws is visible, a shadow nobody draws is silent. It is
+  *not* symmetric with the silhouette, which the composite-wipe detours at
+  `0x459338`/`0x45958C`/`0x4594DB` do suppress in that configuration; the asymmetry is deliberate
+  and is recorded here rather than smoothed over.
+* **Every gate-down state TRADES A SILENT FAULT FOR A VISIBLE ARTEFACT, and an earlier version of
+  the bullet above called it "no regression", which is false** [the third review of 10b]. `main`
+  flipped both `je`s to `jmp`s unconditionally at `DllMain`, so `main` drew **no** engine slant in
+  **any** configuration. This landing re-enables the engine's cached slant wherever the gate is
+  down — and inside a key-filled viewport (`tagpu_terrown.on` is a play default) the ALP blend at
+  `0x4B8500` darkens palette 254's cyan into **an opaque teal silhouette at the 1× position
+  whatever the zoom**, which `tagpu_owndraw.c`'s own header has described since G13k. The
+  reachable cases are `shadows=OFF`, `shadows=SOFT` with the posed program refused, Classic++ off
+  with the posed program refused, and both frames of every 0→1 transition. This is still the right
+  trade by this landing's own ranking — visible beats silent, and a player can report teal —
+  but it is a trade, not a preservation, and the note now says so.
 * **The 1→0 transition costs one frame of no shadow**, symmetrically with the 0→1 frame of double
   shadow: the engine's surface for a frame was painted by the game thread before the render thread
   lowered the flag. Both are one frame wide; the asymmetry the design rests on is about *durable*

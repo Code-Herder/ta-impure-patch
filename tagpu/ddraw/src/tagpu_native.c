@@ -4310,11 +4310,31 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            them. `pdix[i]` is -1 for every unit without it, so `npd` is 0, the
            posed depth twin casts nothing into the map AND the slant loop above
            counts nothing. This is the term the second re-review found missing.
-         * `mapLive` -- Classic++'s cast-shadow map is drawing this frame, which
-           is the only honest form of that question: `tagpu_classicpp_on()` is a
-           lever, and `tagpu_shadow_begin` refuses on four grounds past it.
-         * `!(cpp && !hard)` -- the posed SLANT range is enabled, quoted from the
-           `continue` that guards its own loop above so the two cannot drift.
+         * `mapLive && nterr > 0` -- Classic++'s cast-shadow map is drawing this
+           frame AND SOMETHING ON THE GROUND SAMPLES IT. `mapLive` alone was the
+           third review's HIGH: `tagpu_shadow_begin` builds the map and never
+           consults the terrain module, so it says a CASTER pass ran, not that a
+           RECEIVER did. A structure's slant lands on the ground, and the ground
+           is `tagpu_terr`, whose `tagpu_shadow_apply` (tagpu_terr.c:1873) only
+           runs from `tagpu_terr_render` -- called below under `if (nterr)`. With
+           `nterr == 0` (the `tagpu_terr.off` lever, or any of `terr_bail`'s ~10
+           refusals, which hand the ground back to the engine via
+           `tagpu_terrown_set_skip(0)`) the map is built, nothing samples it, and
+           at the shipped `shadows=SOFT` the slant range is force-skipped too --
+           so every structure lost its shadow for as long as that held. `nterr`
+           is the composite's own predicate, quoted the same way `:3795` already
+           quotes it, so the two sites cannot drift.
+         * `(gfx & 4) && !(cpp && !hard)` -- the posed SLANT range is enabled.
+           `!(cpp && !hard)` is quoted from the `continue` that guards its own
+           counting loop; `gfx & 4` is the engine's own Shadow option bit, which
+           wraps the whole silhouette-and-slant block below. `mapLive` does not
+           need it -- it IS `tagpu_shadow_begin`'s `engineShadowBit` argument, so
+           it already implies the bit. With the bit clear the engine reaches
+           neither stolen range (it tests the same bit upstream, at `0x459295`
+           and `0x4594A9`), so the gate's value is moot there; the term is
+           carried anyway because this variable's contract is "something
+           painted", and a contract the next reader cannot trust is what the
+           first two rounds of this landing were about.
 
        With Classic++ on and `shadows=OFF` both terms are false and the gate
        stays down, so the engine keeps drawing its cached slant. That is main's
@@ -4328,7 +4348,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        `s_pubHave` is set only by `_end`, and so `tagpu_shadow_handover` returns
        0 at tagpu_vk_shadow.c:788 and that pass stands down. No `tagpu_vk*` file
        mentions `slant` at all. */
-    s_ssPainter = pdReady && (mapLive || !(cpp && !hard));
+    s_ssPainter = pdReady &&
+                  ((mapLive && nterr > 0) || ((gfx & 4) && !(cpp && !hard)));
 
     /* ---- render into the (optionally 2x supersampled) game-res FBO ---- */
     fbo_size(gw, gh, ss);

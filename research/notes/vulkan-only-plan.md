@@ -1803,8 +1803,8 @@ effect]. `tacli ui` answers *"no UI snapshot appeared"* on that lane, and the ca
 shape as everything else on this page: the whole on-demand **trigger family** —
 `tagpu_ui_frame` (`tacli ui`), `tagpu_peek_frame` (`tacli peek`), `tagpu_cat_frame`
 (`tacli scenario`'s validation), `tagpu_weapons_frame`, the scenario applier's detection half —
-is called from **`tagpu_overlay_draw`** and from nowhere else (each has exactly two mentions in
-the tree: its own definition and that one call). `tagpu_overlay_draw` is called only from
+is called from **`tagpu_overlay_draw`** and from nowhere else (each has exactly three mentions in
+the tree: its prototype, its definition and that one call). `tagpu_overlay_draw` is called only from
 `render_ogl.c:1632` and `render_vk.c:232`.
 
 So on the gdi lane the shell cannot be driven past the main menu, no scenario can be applied, no
