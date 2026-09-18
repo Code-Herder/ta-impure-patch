@@ -316,6 +316,17 @@ int tagpu_terr_on(void) { return s_armed > 0; }
 /* ---- GL ---- */
 static int    s_state = 0;             /* 0 unloaded, 1 ready, 2 failed       */
 static GLuint s_prog, s_vao, s_vbo, s_qvbo, s_atlasTex;
+/* THE ATLAS IS BUILT WHEN THIS SAYS SO, NOT WHEN `s_atlasTex` IS NON-ZERO.
+   `s_atlasTex` is only its GL name and is 0 on a lane with no GL, so keying
+   `ensure_atlas`'s already-built test on it rebuilt the whole atlas EVERY
+   FRAME there -- a 5.9 MB calloc and free, the per-tile copy loop, an
+   `IsBadReadPtr` over the tile set, a log line a frame, and an
+   `s_atlasMirrorSerial++` that made the Vulkan twin re-upload the entire
+   atlas image every frame. Set and cleared exactly where `s_atlasTex` is on
+   the GL lane. [FROM THE 4b-2 LANDING REVIEW, 2026-09-18 -- the twelfth
+   instance of this landing's own shape, in a function §2.50 listed as fixed
+   when only its mirror was.] */
+static int    s_atlasBuilt;
 static GLint  s_uGame, s_uFog, s_uFogOrg, s_uFogDim, s_uZoom, s_uZoomC,
               s_uDepthScale, s_uEnc, s_uOrigin, s_uTile0, s_uTexel;
 static int    s_atlasH, s_atlasN;      /* atlas rows*CELL_PITCH, tiles held   */
@@ -663,7 +674,7 @@ static void init_gl(void)
     /* s_atlasTex = 0 is what forces the rebuild (ensure_atlas tests it first);
        the set identity must SURVIVE, or ensure_atlas cannot tell "same set, new
        context" from "new map" and throws the restore away -- see glreset */
-    s_atlasTex = 0;
+    s_atlasTex = 0; s_atlasBuilt = 0;
     s_state = 1;
     flog("terr: GL ready");
 }
@@ -676,7 +687,7 @@ void tagpu_terr_glreset(void)
        not, and the asymmetry was in the G19e diff. */
     s_pubHave = 0; s_abFrame = 0;
     s_state = 0;
-    s_atlasTex = 0;                     /* the id died with the context */
+    s_atlasTex = 0; s_atlasBuilt = 0;   /* the id died with the context */
     s_rgbTex = 0;
     s_hTex = 0;                         /* the id died; ensure_height rebuilds */
     s_hVao = s_hVbo = s_hIbo = 0;       /* ...and the caster mesh with it      */
@@ -956,7 +967,7 @@ static int ensure_atlas(const char* ta)
        so the only way to obtain one for an atlas that is already built is to
        build it again -- once, on the first frame after the lane arms. Every
        later frame takes the early return as before. */
-    if (s_atlasTex && s_setPtr == (const void*)set && s_setCount == count &&
+    if (s_atlasBuilt && s_setPtr == (const void*)set && s_setCount == count &&
         (!s_mirrorWant || s_atlasMirror)) return 1;
     if (!ptr_ok(pix) || IsBadReadPtr((void*)pix, (SIZE_T)count * TILE_BYTES)) return 0;
 
@@ -1041,6 +1052,7 @@ static int ensure_atlas(const char* ta)
         rlist_drop();
     }
     s_setPtr = (const void*)set; s_setCount = count; s_setPix = pix;
+    s_atlasBuilt = 1;
     _snprintf(b, sizeof b, "terr: atlas built %dx%d for %d tiles (set=%p pix=%p, %d KB)",
               ATLAS_W, h, count, (void*)set, (void*)pix, (count * TILE_BYTES) >> 10);
     flog(b);

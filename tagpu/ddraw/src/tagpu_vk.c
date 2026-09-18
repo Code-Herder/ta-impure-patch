@@ -1263,13 +1263,21 @@ static LONG lane_state(void)
    kept` was. [The vulkan-only plan, landing 4b-2.] */
 int tagpu_vk_max_image_dim(void)
 {
+    /* CACHED AGAINST THE DEVICE IT CAME FROM, not just cached. The GPU picker
+       tears the lane down and re-picks a physical device on a row change, and
+       it is live under `renderer=vulkan` -- so a bare `static int cached` would
+       keep the old device's limit for the life of the process and a smaller new
+       device would have work sized past what it accepts.
+       [FROM THE 4b-2 LANDING REVIEW, 2026-09-18.] */
     static int cached;
+    static VkPhysicalDevice cachedFor;
     VkPhysicalDeviceProperties p;
-    if (cached > 0) return cached;
     if (!s_vk.pd || lane_state() != ST_READY) return 0;
+    if (cached > 0 && cachedFor == s_vk.pd) return cached;
     vkGetPhysicalDeviceProperties(s_vk.pd, &p);
     if (p.limits.maxImageDimension2D > 0x7FFFFFFFu) return 0;
     cached = (int)p.limits.maxImageDimension2D;
+    cachedFor = s_vk.pd;
     return cached;
 }
 
@@ -1281,13 +1289,21 @@ int tagpu_vk_max_image_dim(void)
    "not yet" and asks again on a later frame. [The vulkan-only plan, 4b-2.] */
 int tagpu_vk_max_uniform_range(void)
 {
+    /* CACHED AGAINST THE DEVICE IT CAME FROM, not just cached. The GPU picker
+       tears the lane down and re-picks a physical device on a row change, and
+       it is live under `renderer=vulkan` -- so a bare `static int cached` would
+       keep the old device's limit for the life of the process and a smaller new
+       device would have work sized past what it accepts.
+       [FROM THE 4b-2 LANDING REVIEW, 2026-09-18.] */
     static int cached;
+    static VkPhysicalDevice cachedFor;
     VkPhysicalDeviceProperties p;
-    if (cached > 0) return cached;
     if (!s_vk.pd || lane_state() != ST_READY) return 0;
+    if (cached > 0 && cachedFor == s_vk.pd) return cached;
     vkGetPhysicalDeviceProperties(s_vk.pd, &p);
     if (p.limits.maxUniformBufferRange > 0x7FFFFFFFu) return 0;
     cached = (int)p.limits.maxUniformBufferRange;
+    cachedFor = s_vk.pd;
     return cached;
 }
 

@@ -1270,9 +1270,15 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex,
             if (taking) {
                 /* the Vulkan half is claimed only on a GL half that reached the
                    disk -- see tagpu_abshot.h; `s_abDone` latches either way */
+                /* AND ON THE TARGET HAVING BEEN UNLINKED, as every other ported
+                   pass claims. This one was missed, so on route D the fx Vulkan
+                   target was never unlinked and a fresh `_gl.ppm` could pair
+                   with a stale `_fx_vk.ppm` -- the exact failure the other four
+                   cite as their reason. [FROM THE 4b-2 LANDING REVIEW.] */
                 int wrote = tagpu_abshot_end(&shot, ABOUT, "fx");
+                int fresh = tagpu_vk_ab_arm("fx");
                 s_abDone = 1;
-                s_abFrame = wrote;
+                s_abFrame = wrote && fresh;
             }
         }
         x_glDepthMask(GL_TRUE);

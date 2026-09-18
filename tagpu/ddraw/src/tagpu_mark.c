@@ -1133,8 +1133,8 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
         }
         if (s_nordl) {
             if (gl_draws) {
-                if (gl_draws) if (x_glLineWidth) x_glLineWidth((GLfloat)(v->ss > 0 ? v->ss : 1));
-                if (gl_draws) x_glDrawArrays(GL_LINES, total + s_nordt, s_nordl);
+                if (x_glLineWidth) x_glLineWidth((GLfloat)(v->ss > 0 ? v->ss : 1));
+                x_glDrawArrays(GL_LINES, total + s_nordt, s_nordl);
             }
             mk_draw(total + s_nordt, s_nordl, 1, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE);
         }

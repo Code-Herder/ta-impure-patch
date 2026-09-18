@@ -229,7 +229,7 @@ static int          s_win;          /* windows opened this frame              */
 static int          s_recording;    /* inside a recording window              */
 static unsigned     s_nghost;       /* ghosts recorded this frame             */
 static int          s_abTaking;     /* THIS window opened the capture         */
-static int          s_saidNoPub, s_saidFrame;
+static int          s_saidFrame;
 static int          s_abClaim;      /* it reached the disk; frame-scoped      */
 static int          s_other;        /* draws the hand-over carries no copy of */
 
@@ -1399,7 +1399,7 @@ int tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now)
         b[sizeof b - 1] = 0;
         plog(b);
     }
-    if (s_pubHave && s_pub.frame == now) { s_saidNoPub = 0; s_saidFrame = 0; }
+    if (s_pubHave && s_pub.frame == now) s_saidFrame = 0;
     /* NOT THIS FRAME'S, SO NOT ALIVE. `units`, `rows`, `flags` and `vis` are
        arrays this file REALLOCATES the moment a frame needs more room than the
        last did, and the records name bake entries tagpu_posebake.c evicts. The

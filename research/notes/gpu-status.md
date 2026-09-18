@@ -8949,6 +8949,7 @@ as a different symptom. They are worth listing together, because the list is the
 | `tagpu_mark.c`'s `upload_layer` | `glGenTextures(…); if (!s_tex[i]) return 0` | are the layer's BYTES there (the hand-over carries them) |
 | `tagpu_mark_render` | `if (textTex)` | is there text to record |
 | `tagpu_terr.c`'s `ensure_atlas` | the upload gated the mirror | the mirror IS the buffer the upload was given |
+| …and the SAME function's already-built test | `if (s_atlasTex && …)` | is the atlas BUILT (now `s_atlasBuilt`) |
 | `tagpu_terr.c`'s gather | `s_maxTex` from `GL_MAX_TEXTURE_SIZE` | the bound of the device that will SAMPLE it |
 | `tagpu_render3do.c` | the LUT built only by `_texref` | the LUT is the pass's; the texture is the backend's |
 | …and four more of the same two forms | | |
@@ -9002,6 +9003,20 @@ lanes read one construction rather than two.
   draws itself into the swapchain from its own hand-over instead, which is why `tagpu_zoom_publish_view`
   does not run there and the input path stays 1:1.
 * **The 300-frame composite stats line** does not run on this lane. The lane has its own instead.
+* **Classic++'s restorer never starts on the vulkan-only lane, and nothing says so.**
+  `tagpu_terr.c`'s `restore_step` returns on `!s_atlasTex` and `tagpu_gaf.c`'s
+  `tagpu_gaf_atlas_restore` on `!a->tex`, both 0 with no GL — and the *published Vulkan* restore
+  request is fed from inside those, so the Vulkan lane's restore does not start either. With
+  `assets=` on, terrain and every GAF atlas would draw unrestored. **The 0 px figures above were
+  all taken with Classic++ OFF**, so they are valid for that configuration and say nothing about
+  this one. Two more instances of the same shape, left rather than fixed: the GL restore genuinely
+  needs its texture, and giving the Vulkan lane its own restore path is its own piece of work.
+* **A device limit re-read on a device change does not reach its consumers.** The two accessors
+  are now keyed to the `VkPhysicalDevice` they were read from, so they re-query when the GPU
+  picker re-picks. Their consumers still latch: `tagpu_terr.c`'s `s_maxTex` is set once, and
+  `tagpu_posedraw.c`'s `s_state` likewise. A row change to a *smaller* device would therefore keep
+  a bound taken from the larger one. Named rather than fixed, because the consumers' latches are
+  each their own argument about when a pass may re-arm.
 
 #### The instruments, and what they cost to learn
 
