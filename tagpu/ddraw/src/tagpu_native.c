@@ -2491,7 +2491,17 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        down. `s_state` is the GL program's state and is only asked where GL
        draws. [The vulkan-only plan, landing 4b-2.] */
     const int gl_draws = !tagpu_vk_owns_present();
-    if (gl_draws && s_state == 2) return;
+    if (gl_draws && s_state == 2) {
+        /* THE GL PROGRAM HAS REFUSED, so this pass paints nothing at all --
+           and that includes the structures' slant shadows the blit's two
+           branches are detoured for. Publish that BEFORE returning: the engine
+           then keeps drawing its own, which is the only correct picture when
+           we draw none. [The vulkan-only plan, landing 10b: until it, the
+           branches were flipped for the process at DllMain and this path left
+           every building without a shadow.] */
+        tagpu_owndraw_set_structshadow(0);
+        return;
+    }
     if (s_armed < 0 || (f->frame_counter % 30) == 0) {
         int was = s_armed;
         /* NEVER PUBLISH "DISARMED" WHILE RE-READING. `s_armed` used to be zeroed
@@ -2623,6 +2633,23 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        live in tagpu_zoom.c, because the input path needs exactly the same
        numbers and the two must never disagree. */
     s_zoom = tagpu_zoom_lever();
+
+    /* THE STRUCTURE-SHADOW GATE, published every frame this pass runs [the
+       vulkan-only plan, landing 10b]. The blit's two branches are detoured
+       rather than flipped now, and this is the word they read: while it is
+       set the engine draws no cached slant shadow and every structure's is
+       ours, which is only true while this pass is armed and drawing.
+
+       EVERY FRAME, not on the 30-frame arm poll: the poll settles `s_armed`,
+       and this publishes what `s_armed` MEANS for the branch, so disarming
+       through the lever reaches the engine's branch on the next frame instead
+       of up to thirty frames later. It is also the only publish there is --
+       no watchdog, unlike fxown's -- because `tagpu_overlay_draw` calls this
+       function unconditionally on both lanes, so it cannot go silent while a
+       lane still presents. A lane that never presents never calls it at all,
+       which is exactly the `renderer=gdi` case the gate exists for: the flag
+       stays 0 and the engine draws its own shadows. */
+    tagpu_owndraw_set_structshadow(s_armed == 1);
 
     /* the effects pass (tagpu_fx.on) rides this frame: it needs the view,
        fog and palette set up here and draws into this FBO */

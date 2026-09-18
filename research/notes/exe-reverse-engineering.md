@@ -824,8 +824,9 @@ process). Per husk, `0x46A721` fills it in and draws:
 `DrawUnit` reads `[scratch+0x9E]` at `0x45AE65` and calls `0x458810`, which reaches the blit
 `0x459200` at `0x458948` — **so a husk does reach the blit's three shadow emit sites.** Which one
 depends on us: the scratch's permanent `0x20000000` puts both silhouette sites on the *bit-clear*
-side of the `je`s at `0x4592C6` and `0x45952C`, and those are exactly the two `je`s
-`tagpu_owndraw.c` flips to `EB` under target `all`. **Unpatched, a husk reaches only `0x4594DB`**
+side of the `je`s at `0x4592C6` and `0x45952C`, and those are exactly the two branches
+`tagpu_owndraw.c` takes over under target `all` (flipped to `EB` until 2026-09-18, detoured from
+`0x4592BF`/`0x459522` behind a runtime flag since). **Unpatched, a husk reaches only `0x4594DB`**
 (itself gated at `0x4594D0` on `[[scratch+0x92]+0x241] & 0x40000000`, where `+0x92` is
 `[main+0x1439B]`, the UnitInfo array base — so that test reads `UnitInfo[0]`'s flags, an
 arbitrary loaded def with nothing to do with wrecks).
@@ -1567,8 +1568,9 @@ tree, drawn before the body. Every site in it:
 | --- | --- | --- |
 | `0x45928E` `mov ax,[ecx+0x37F06]` | `0x4594A2` | the graphics-option word; `test al,4` (Shadow) right after, `je` to the body |
 | `0x4592A0..0x4592AC` | `0x4594B4..0x4594C0` | `unit+0x92 → UnitDefStruct`, `+0x241` type mask, `test …,0x2000000` = `noshadow` → skip |
-| `0x4592BF` `test byte [ecx+0x113],0x20` | `0x459522` `test dword [ecx+0x110],0x20000000` | **the structure bit** of `unit+0x110` |
-| **`0x4592C6`** `74 5C` `je 0x459324` | **`0x45952C`** `74 4A` `je 0x459578` | not a structure → the COMPLETED branch. **`owndraw all` rewrites both to `EB` (`jmp`)** — `tagpu_owndraw.c`, verified byte-for-byte before the write, installed as a pair or not at all |
+| **`0x4592BF`** `test byte [ecx+0x113],0x20` | **`0x459522`** `test dword [ecx+0x110],0x20000000` | **the structure bit** of `unit+0x110` — and, since 2026-09-18, the two addresses `owndraw all` **detours** (5-byte `E9` + `nop` fill over the `test`+`je`: 9 bytes at A, 12 at B) |
+| `0x4592C6` `74 5C` `je 0x459324` | `0x45952C` `74 4A` `je 0x459578` | not a structure → the COMPLETED branch. Until 2026-09-18 `owndraw all` rewrote both to `EB` (`jmp`) for the life of the process; they are now inside the stolen range and the stub re-emits the `je` behind a runtime flag, so the suppression is per draw and stands down on a lane that never paints. Still verified byte-for-byte before the write, still installed as a pair or not at all |
+| `0x4594D6` `74 4A` `je 0x459522` | — | **the only branch in the image into either stolen range**, and it lands on the FIRST byte — our `E9` — so the detour is transparent to it. [MEASURED 2026-09-18: `objdump -d -M intel` over the whole image, every byte of `0x4592BF..0x4592C7` and `0x459522..0x45952D` searched for an incoming `j*`/`call`; and each of the four addresses searched through the raw image as a little-endian 32-bit datum, **0 occurrences**, so no jump table points at one either. A `je` flip is immune to an incoming branch and a detour is not, which is why this row exists] |
 | `0x4592C8` `test [esp+0x10],0x40000000` (after the structure test) | `0x4594D0` `shr edx,0x1E; test dl,1` (**before** the structure test) | `digger`. Path A sends it to the COMPLETED branch, TShadow and `canhover`/`floater` tests included. Path B takes an **inline** branch `0x4594D8..0x45951D` — `0x45A470` silhouette, `0x4BA1B0(scratch, 0x7D)` ground clip, then `jmp 0x4595E9` to the shared blit — and applies neither test. So a digger never reaches the cached branch in either path |
 | `0x4592D5` `cmp word [eax+0xA6],0` | `0x45952E` | `unit+0xA6` — the **model index** (`U_MODELID` in the native pass), not a unit id. Zero → |
 | `0x4592E4` `movzx cx,byte [eax+0x1427F]` | `0x45953D` | sea level; `cmp word [esp+0x42],cx ; jl` skips the shadow for a model-0 unit below it |

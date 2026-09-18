@@ -102,16 +102,82 @@ static const unsigned char OPQ_STOLEN[5]  = { 0xB8, 0x04, 0x5F, 0x00, 0x00 };
 static const unsigned char NANO_STOLEN[5] = { 0xB8, 0xD4, 0x59, 0x01, 0x00 };
 static const unsigned char BFX_STOLEN[6]  = { 0x53, 0x55, 0x8B, 0x6C, 0x24, 0x0C };
 
-/* the two structure-shadow `je`s (see the header comment): site, rel8 */
-#define SSHADOW_A_VA     0x004592C6u
-#define SSHADOW_A_REL    0x5C
-#define SSHADOW_B_VA     0x0045952Cu
-#define SSHADOW_B_REL    0x4A
+/* THE TWO STRUCTURE-SHADOW BRANCHES, AND WHY THEY ARE DETOURS AND NOT `je`
+   FLIPS ANY MORE [the vulkan-only plan, landing 10b].
+
+   Until 2026-09-18 these were two `74 rel8` -> `EB rel8` flips: the engine was
+   made to take its "no cached slant shadow" path unconditionally, for the whole
+   process, from `DllMain` onwards. That is the ONE suppression in this file
+   with no runtime gate to be inert through, and it is what made
+   `renderer=gdi` not stock: `tagpu_owndraw_init` runs whatever `renderer=`
+   says, `tagpu_owndraw.on` is a play default, and on a lane where
+   `tagpu_overlay_draw` is never called -- `render_gdi.c` contains no `tagpu_`
+   call at all -- nothing of ours ever draws the shadow the flip took away.
+   Every OTHER suppression here already asks a flag a live lane sets
+   (`tagpu_posedraw_live`, `tagpu_native_owns_obj`), so every other one stands
+   down on that lane by itself.
+
+   So the branch is stolen instead of rewritten, and the stub asks `g_ssSkip`
+   first: set, it takes the engine's skip path exactly as the flip did; clear,
+   it evaluates the engine's ORIGINAL test and does what the engine would have
+   done. `g_ssSkip` starts at 0 and is set only by `tagpu_native.c`, once per
+   frame, from the render thread -- so a lane that never runs leaves it at 0
+   and the engine keeps drawing, which is stock by construction rather than by
+   anybody remembering to switch it off.
+
+   THE BYTES, from the pristine build:
+
+     A  0x4592BF  F6 81 13 01 00 00 20   test byte [ecx+0x113],0x20
+        0x4592C6  74 5C                  je 0x459324      <- the old flip
+                  fallthrough 0x4592C8
+     B  0x459522  F7 81 10 01 00 00 ...  test dword [ecx+0x110],0x20000000
+        0x45952C  74 4A                  je 0x459578      <- the old flip
+                  fallthrough 0x45952E
+
+   A 5-byte detour needs more room than a 2-byte `je`, so it starts at the
+   `test` and swallows the branch: 9 bytes at A, 12 at B. BOTH RANGES WERE
+   CHECKED FOR INCOMING BRANCHES before this was written, because a flip is
+   immune to one and a detour is not: `objdump -d -M intel` over the whole
+   image finds exactly one branch into either range -- `0x4594D6 je 0x459522`,
+   which lands on the FIRST byte, our jump, and is therefore fine -- and a
+   search of the image for each address as a little-endian 32-bit datum finds
+   no jump-table entry pointing at any of them. */
+#define SSHADOW_A_VA     0x004592BFu
+#define SSHADOW_A_TARGET 0x00459324u
+#define SSHADOW_A_RESUME 0x004592C8u
+#define SSHADOW_B_VA     0x00459522u
+#define SSHADOW_B_TARGET 0x00459578u
+#define SSHADOW_B_RESUME 0x0045952Eu
+
+/* test + je, exactly as they stand; the `je` is re-emitted by the stub with
+   its own rel8, never copied. */
+static const unsigned char SSA_STOLEN[9] =
+    { 0xF6, 0x81, 0x13, 0x01, 0x00, 0x00, 0x20, 0x74, 0x5C };
+static const unsigned char SSB_STOLEN[12] =
+    { 0xF7, 0x81, 0x10, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x74, 0x4A };
+
+/* THE GATE ITSELF. Read by the two stubs on the GAME thread, written by
+   `tagpu_native_frame` on the render thread -- one aligned byte, so the store
+   is atomic on x86 and no interlock is owed. Its stale directions are not
+   symmetric and that is the whole of its safety argument:
+
+     stale 0 while the pass paints  -> the engine draws its cached shadow and
+                                       ours draws one too: a DOUBLE shadow, for
+                                       the frames before the publish is seen.
+     stale 1 while it does not      -> NO shadow.
+
+   The publisher is what keeps the second out: `tagpu_native_frame` publishes
+   every frame it runs, including 0 on the path where the GL program has
+   refused, and it runs on both lanes. It cannot stop publishing while a lane
+   still presents -- `tagpu_overlay_draw` calls it unconditionally -- so the
+   only way to be stuck at 1 is for the lane itself to stop, which stops the
+   frames too. */
+static volatile unsigned char g_ssSkip = 0;
 
 static int               g_armed      = 0;
 static char              g_target[32] = "armcom";
 static int               g_all        = 0;
-static int               g_sshadow    = 0;   /* both je->jmp patches in */
+static int               g_sshadow    = 0;   /* both branch detours in  */
 static int               g_buildfx    = 0;   /* 0x458DD0 detour in      */
 
 static volatile unsigned g_skipped    = 0;
@@ -388,20 +454,78 @@ static int install_one(unsigned int va, unsigned int resume,
     return 1;
 }
 
-/* `74 rel8` (je) -> `EB rel8` (jmp) at one verified site; 0 = wrong build */
-static int patch_je_to_jmp(unsigned int va, unsigned char rel)
+/* One structure-shadow branch, stolen whole and replaced by a gated copy.
+   `stolen` is the engine's `test` followed by its `je`; `n` is their total
+   length; `target` is where the `je` goes and `resume` is its fallthrough.
+   0 = wrong build, and then NOTHING is written. */
+static int install_sshadow(unsigned int va, const unsigned char* stolen, int n,
+                           unsigned int target, unsigned int resume)
 {
     unsigned char* t = (unsigned char*)va;
+    unsigned char* s;
+    unsigned char* p;
     DWORD old;
-    if (t[0] != 0x74 || t[1] != rel) return 0;
-    if (!VirtualProtect(t, 2, PAGE_EXECUTE_READWRITE, &old)) return 0;
-    t[0] = 0xEB;
-    VirtualProtect(t, 2, old, &old);
-    FlushInstructionCache(GetCurrentProcess(), t, 2);
+    int32_t rel;
+    const int tlen = n - 2;                  /* the `test`; the `je` is ours */
+
+    if (memcmp(t, stolen, (size_t)n) != 0) return 0;
+
+    s = (unsigned char*)VirtualAlloc(NULL, 0x80,
+            MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!s) return 0;
+    p = s;
+
+    /* cmp byte [g_ssSkip],0 -- before the engine's own test, so the engine's
+       flags are the ones its `je` reads */
+    *p++ = 0x80; *p++ = 0x3D;
+    { unsigned int a = (unsigned int)(size_t)&g_ssSkip; memcpy(p, &a, 4); p += 4; }
+    *p++ = 0x00;
+    *p++ = 0x75; *p++ = (unsigned char)(tlen + 2 + 5);      /* jne -> TAKE     */
+    memcpy(p, stolen, (size_t)tlen); p += tlen;             /* the engine's test */
+    *p++ = 0x74; *p++ = 0x05;                               /* je  -> TAKE     */
+    *p++ = 0xE9;                                            /* jmp resume      */
+    rel = (int32_t)(resume - ((unsigned int)p + 4));
+    memcpy(p, &rel, 4); p += 4;
+    *p++ = 0xE9;                                            /* TAKE: jmp target */
+    rel = (int32_t)(target - ((unsigned int)p + 4));
+    memcpy(p, &rel, 4); p += 4;
+
+    if (!VirtualProtect(t, (SIZE_T)n, PAGE_EXECUTE_READWRITE, &old)) return 0;
+    t[0] = 0xE9;
+    rel = (int32_t)((unsigned int)s - (va + 5));
+    memcpy(t + 1, &rel, 4);
+    memset(t + 5, 0x90, (size_t)(n - 5));    /* the tail of the stolen range */
+    VirtualProtect(t, (SIZE_T)n, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), t, (SIZE_T)n);
     return 1;
 }
 
-int tagpu_owndraw_structshadow_ours(void) { return g_sshadow; }
+static void restore_sshadow(unsigned int va, const unsigned char* stolen, int n)
+{
+    unsigned char* t = (unsigned char*)va;
+    DWORD old;
+    if (!VirtualProtect(t, (SIZE_T)n, PAGE_EXECUTE_READWRITE, &old)) return;
+    memcpy(t, stolen, (size_t)n);
+    VirtualProtect(t, (SIZE_T)n, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), t, (SIZE_T)n);
+}
+
+/* THE PUBLISH. Render thread, once per frame, from `tagpu_native_frame` --
+   including the frames on which it publishes 0. `g_sshadow` is the install,
+   which cannot change after DllMain; `ours` is whether the pass will paint. */
+void tagpu_owndraw_set_structshadow(int ours)
+{
+    unsigned char v = (unsigned char)(ours && g_sshadow);
+    if (v != g_ssSkip) {
+        g_ssSkip = v;
+        olog2(v ? "owndraw: the engine's cached slant shadow is SKIPPED (ours live)"
+                : "owndraw: the engine's cached slant shadow is restored");
+    }
+}
+
+/* What the ENGINE will do this frame, which is what the native pass has to
+   agree with -- the gate, not the install. */
+int tagpu_owndraw_structshadow_ours(void) { return g_ssSkip != 0; }
 
 static void read_target(void)
 {
@@ -658,10 +782,13 @@ static int install_shadow(unsigned int va, unsigned int resume,
 
 void tagpu_owndraw_init(void)
 {
-    /* worst case is 259 chars: the arm token is capped at 31 and every field
-       takes its longest value. _snprintf does NOT terminate a truncation, so
-       the tail is forced rather than assumed. */
-    char b[320];
+    /* worst case is 328 chars: the arm token is capped at 31 and every field
+       takes its longest value ("not armed", "SKIP" x4, "HOOKED"). It was 259
+       against a 320-byte buffer until landing 10b lengthened the trailing
+       clause, which is why this number is recomputed here rather than
+       inherited. _snprintf does NOT terminate a truncation, so the tail is
+       forced rather than assumed. */
+    char b[384];
     int a, c;
 
     if (!tagpu_opt_on("tagpu_owndraw.on")) return;
@@ -703,26 +830,23 @@ void tagpu_owndraw_init(void)
     }
     /* structure shadows: only with "all" (every composite blank), and only
        as a pair -- one path redirected and not the other would leave a
-       building's shadow depending on which composite it was given */
+       building's shadow depending on which composite it was given.
+       Installing the detour does NOT suppress anything: `g_ssSkip` decides,
+       and it is 0 until the native pass says otherwise. */
     if (g_armed && g_all) {
-        int sa = patch_je_to_jmp(SSHADOW_A_VA, SSHADOW_A_REL);
-        int sb = sa && patch_je_to_jmp(SSHADOW_B_VA, SSHADOW_B_REL);
-        if (sa && !sb) {
-            unsigned char* t = (unsigned char*)SSHADOW_A_VA;
-            DWORD old;
-            if (VirtualProtect(t, 2, PAGE_EXECUTE_READWRITE, &old)) {
-                t[0] = 0x74;
-                VirtualProtect(t, 2, old, &old);
-                FlushInstructionCache(GetCurrentProcess(), t, 2);
-            }
-        }
+        int sa = install_sshadow(SSHADOW_A_VA, SSA_STOLEN, (int)sizeof SSA_STOLEN,
+                                 SSHADOW_A_TARGET, SSHADOW_A_RESUME);
+        int sb = sa && install_sshadow(SSHADOW_B_VA, SSB_STOLEN, (int)sizeof SSB_STOLEN,
+                                       SSHADOW_B_TARGET, SSHADOW_B_RESUME);
+        if (sa && !sb) restore_sshadow(SSHADOW_A_VA, SSA_STOLEN, (int)sizeof SSA_STOLEN);
         g_sshadow = sa && sb;
     }
 
     _snprintf(b, sizeof b,
         "owndraw: %s target=\"%s\" opaque@0x459830=%s nano@0x459C70=%s "
-        "buildfx@0x458DD0=%s structshadow@0x4592C6+0x45952C=%s shadow@0x459338+0x45958C+0x4594DB=%s "
-        "(engine rasterise skipped for target; writeback must paint it)",
+        "buildfx@0x458DD0=%s structshadow@0x4592BF+0x459522=%s shadow@0x459338+0x45958C+0x4594DB=%s "
+        "(hooks INSTALLED; every skip is decided per draw against a flag a live "
+        "lane sets, so this line does not say anything was skipped)",
         g_armed ? "ARMED" : "not armed", g_target,
         a ? "OK" : "SKIP", c ? "OK" : "SKIP",
         g_buildfx ? "OK" : "SKIP",
@@ -731,7 +855,7 @@ void tagpu_owndraw_init(void)
            g_shadow is the three-site detour. They were passed the other way
            round from the landing until the 2026-09-14 review, so the one line
            that says whether the detour went in reported the other flag. */
-        g_sshadow ? "OURS" : (g_all ? "SKIP" : "engine"),
+        g_sshadow ? "HOOKED" : (g_all ? "SKIP" : "engine"),
         g_shadow ? "OURS" : "SKIP");
     b[sizeof b - 1] = 0;
     olog2(b);

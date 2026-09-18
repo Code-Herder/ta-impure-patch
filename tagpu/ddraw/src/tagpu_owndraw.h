@@ -6,8 +6,18 @@
    pixels. Armed by tagpu_owndraw.on (first token = type, or "all"). */
 void tagpu_owndraw_init(void);
 void tagpu_owndraw_flush(unsigned int frame_counter);
-/* 1 while target "all" has redirected the blit's structure-shadow branches
-   (0x4592C6 / 0x45952C je->jmp): the engine then draws NO cached slant shadow
-   and the native pass owes every structure one (tagpu_native.c). */
+/* THE STRUCTURE-SHADOW GATE (the vulkan-only plan, landing 10b).
+
+   `set` is the publish: the native pass says, once per frame from the render
+   thread, whether it will paint structures' cached slant shadows. While it
+   says yes the blit's two branches (detoured at 0x4592BF / 0x459522) take the
+   engine's "no cached shadow" path and the native pass owes every structure
+   one; while it says no -- and until it has ever said anything, which is the
+   whole of a lane that never runs -- the engine draws its own, as stock.
+
+   `ours` is what the ENGINE will do, read back so the pass's geometry agrees
+   with the branch. It is the GATE, not the install: the hooks can be in and
+   this still 0. */
+void tagpu_owndraw_set_structshadow(int ours);
 int  tagpu_owndraw_structshadow_ours(void);
 #endif

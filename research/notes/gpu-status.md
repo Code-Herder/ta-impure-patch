@@ -132,8 +132,8 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | `0x459830` | opaque 3DO rasteriser | `owndraw` (`owndraw.on`) | prologue detour, 5 stolen |
 | `0x459C70` | the Gouraud-lit 3DO rasteriser — **selected for STRUCTURES**, not for nanoframes (`0x45873C` tests `unit+0x110 & 0x20000000`, measured to be the structure bit; [build-state](build-state.html) §1) | `owndraw` | prologue detour, 5 stolen |
 | `0x458DD0` | the blit-time **build-state effect** (`thiscall(this, frame, obj)`, `ret 8`): the height-threshold recolour plus the nanoframe wireframe, applied to a scratch copy of the composite every frame. Wiping the composite does not stop it — with the rasterise skipped it recoloured nothing and stamped its wireframe alone, at the 1× position | `owndraw` | prologue detour, **6 stolen** (`53 55 8B 6C 24 0C`; a 5-byte steal splits the `mov`), skip path `xor eax,eax; ret 8` = the callee's own early-out. Taken only for units `tagpu_native_owns_obj` claims |
-| `0x4592C6` | `je 0x459324` in the blit `0x459200`, path A — the branch into the cached structure shadow (`Object3do+0x14`, blitted through the ALP blend, which turns the fill key teal) | `owndraw`, target `all` only | `74`→`EB`, one byte, verified `74 5C` first; installed with the next as a pair or not at all |
-| `0x45952C` | the same `je` in path B (`je 0x459578`) | `owndraw`, target `all` only | `74`→`EB`, verified `74 4A` |
+| `0x4592BF` (was `0x4592C6`) | the structure test and the `je 0x459324` after it, in the blit `0x459200`, path A — the branch into the cached structure shadow (`Object3do+0x14`, blitted through the ALP blend, which turns the fill key teal) | `owndraw`, target `all` only | **5-byte detour over the `test`+`je` (9 stolen, `nop` fill), verified byte-for-byte first; installed with the next as a pair or not at all.** Was a one-byte `74`→`EB` flip until 2026-09-18 — the flip had no runtime gate, so it suppressed for the life of the process on every lane, `renderer=gdi` included, where nothing of ours draws the shadow it took away (the vulkan-only plan, landing 10b). The stub re-emits the `je` behind `g_ssSkip` |
+| `0x459522` (was `0x45952C`) | the same pair in path B (`test dword [ecx+0x110],0x20000000`; `je 0x459578`) | `owndraw`, target `all` only | the same detour, **12 stolen**, verified first |
 | `0x459338` | `call 0x45A470` in the blit `0x459200`, path A — the completed-unit **silhouette shadow**: `0x45A470(this, composite)` fills the scratch with the unit's own composite blackened (every non-ColorKey texel → index 0, `0x4B96A0`) and the ALP blend `0x4B8500` writes it at `sx+0x85`. Inside `terrown`'s key-filled viewport its destination is palette 254, so a shadow built from a NON-empty composite lands as an OPAQUE TEAL `(0,128,128)` silhouette on the unit. Measured 2026-09-13: at map entry the commander keeps one until it first moves ([exe-reverse-engineering](exe-reverse-engineering.html) §"The completed-unit shadow") | `owndraw` | 5-stolen call-site detour, bytes matched first; the stub replays the call and empties the composite first when the unit is ours AND `tagpu_posedraw_live()` — and a husk is not ours unless `tagpu_native_wrecks_armed()`, the classifier's own first branch (defensive: on the `one-wreck` fixture with `native.on` = `all` and no `wrecks` token, disabling the clause changed nothing — the unit predicate does not answer yes to a husk there) |
 | `0x45958C` `0x4594DB` | the same three instructions in path B (colour+depth) and in its inline digger branch | `owndraw` | installed with the site above as a set of three or not at all |
 | `0x469B22` | `call 0x49BE60` — projectile pass | `fxown` (`fxown.on`) | call-site redirect |
@@ -10650,6 +10650,112 @@ taken, which is the point of it.
 * **`h.eng`, `h.engW`, `h.engH`, `h.engPitch` survive in the hand-over** and nothing downstream
   dereferences the pointer any more; it is now only what tells the producer whether to arm `guard`
   and `strict`. Deleting the fields touches the producer/lane seam and was left out of this landing.
+
+### 2.63 A byte flip has no runtime gate to be inert through — landing 10b
+
+**What it is.** `tagpu_owndraw.c` takes over the per-unit composite blit's two structure-shadow
+branches so that the native pass can draw a building's cached slant shadow itself. Until this
+landing it did that by flipping two `je`s to `jmp`s — `0x4592C6` and `0x45952C`, one byte each,
+at `DllMain`, for the life of the process. They are now **detoured** from `0x4592BF` and
+`0x459522`, over the `test` and the `je` together, onto a stub that asks a flag first.
+
+**Why it had to change, and it is not about Vulkan.** Every other suppression in this file
+already decides per draw, against a word that only a live lane sets:
+
+| suppression | what it asks | where the answer comes from |
+|---|---|---|
+| the opaque and nano rasterise (`0x459830`, `0x459C70`) | `tagpu_posedraw_live()` | the posed program has linked (`s_state == 1`) and Vulkan does not own the present |
+| the pre-shadow composite wipe (`0x459338`, `0x45958C`, `0x4594DB`) | the same, plus the classifier's own target test | as above |
+| `buildfx` (`0x458DD0`) | `tagpu_native_owns_obj` | `s_armed == 1`, written **only** in `tagpu_native_frame` |
+| `terrown`, `featown`, `fxown`, `markown`, `cursown` | a `volatile unsigned char` the stub compares | `set_skip(ours-live)` from the pass that paints, with a watchdog |
+| **the structure-shadow pair** | **nothing** | **— (this landing)** |
+
+And **every one of those answers is produced inside `tagpu_overlay_draw`**, whose only callers
+are `render_ogl.c:1632` and `render_vk.c:232`. `render_gdi.c` contains no `tagpu_` call at all.
+So on `renderer=gdi` every gated suppression stands down by itself, and the one flip did not:
+`tagpu_owndraw.on` is a play default (`tagpu_opt.c`, target `all`), so on the lane this project
+calls the stock reference, **every building lost its slant shadow and nothing drew one**.
+
+**The shape of the fix.** The stub is the same shape the other suppressors' stubs have:
+
+```
+cmp byte [g_ssSkip],0
+jne  TAKE                     ; ours: the engine's skip path, exactly as the flip did
+<the engine's own test>       ; copied verbatim, 7 bytes at A, 10 at B
+je   TAKE
+jmp  <fallthrough>            ; 0x4592C8 / 0x45952E
+TAKE:
+jmp  <the je's target>        ; 0x459324 / 0x459578
+```
+
+`g_ssSkip` is one byte, written by `tagpu_native_frame` on the render thread and read by the two
+stubs on the game thread — atomic on x86, no interlock owed. **Its stale directions are not
+symmetric**, and that is its safety argument: stale 0 while the pass paints is a DOUBLE shadow
+for a frame; stale 1 while it does not is NO shadow. The publisher is what keeps the second out —
+it publishes every frame it runs, 0 included on the path where the GL program has refused, and
+`tagpu_overlay_draw` calls it unconditionally, so it cannot go quiet while a lane still presents.
+A lane that never presents never calls it at all, which is the `gdi` case: the flag stays at its
+initial 0 and the engine draws its own shadows, **by construction rather than by anyone
+remembering to switch it off**.
+
+**A flip is immune to an incoming branch and a detour is not**, so both stolen ranges were
+checked before the code was written. `objdump -d -M intel` over the whole image finds exactly one
+branch into either — `0x4594D6 je 0x459522`, which lands on the first byte, our `E9` — and each
+of the four addresses searched through the raw image as a little-endian 32-bit datum returns
+**0 occurrences**, so no jump table points at one either. Neither branch target consumes incoming
+flags (`0x459324` and `0x459578` both open `shr al,0x3`), and neither stub touches `eax` or
+`ecx`, which are the registers live across both sites.
+
+**The log line that hid this for a year is corrected too.** `owndraw:`'s arming line ended
+*"(engine rasterise skipped for target; writeback must paint it)"* — a fixed string, printed
+whether or not anything is ever skipped — and the survey that opened this landing read it as a
+report of behaviour. It now says the hooks are installed and that every skip is decided per
+draw, and the structure-shadow field reads `HOOKED` rather than `OURS`.
+
+#### Measured
+
+`renderer=vulkan`, the shipped arm set, instance on the `exit-sort` fixture — a Kbot standing on
+an ARM lab's own tiles, so **a structure and its slant shadow are in frame**, camera reproduced to
+the digit (`[2000, 1200]`, eye `[1616, 806]`).
+
+| | this branch | `main` rebuilt from `HEAD` | cross-build |
+|---|---|---|---|
+| world frame, below the message log | 0 / 1 / 1 px | 0 / 1 / 1 px | **0–1 px** (9 pairs) |
+| whole frame including the log | — | — | 5 182–5 183 px, **all of it the message text** |
+| colours | 1 535 | 1 535 | — |
+
+**The cross-build difference over the world is the within-build floor**, so the gated detour
+renders exactly what the flip did while the flag is set — which is the regression this landing
+could most easily have caused.
+
+**The whole-frame number is a trap worth keeping.** `exit-sort` clears units to place its own,
+each death writes a line to the message log, and TA picks the wording at random — *"vermin have
+been exterminated"* against *"forces have been obliterated"* — so two boots differ by ~5 200 px of
+TEXT with an identical world beneath it. A paired A/B on any fixture that clears units has to
+exclude the log band or it is measuring TA's random number generator.
+
+And the gate was watched moving, live, in both directions: `owndraw: the engine's cached slant
+shadow is SKIPPED (ours live)` when the pass arms, and `… is restored` within one lever poll of
+`tagpu_native.on` being removed.
+
+#### Not covered
+
+* **The `renderer=gdi` picture.** The gate is argued from the code and from the flag never being
+  written on that lane; a boot that reaches a game there and shows a building's shadow was not
+  taken, because `tacli ui` returns *"no UI snapshot appeared"* under `gdi` and the shell cannot
+  be driven past the main menu. Getting that picture is its own piece of work.
+* **No picture shows the engine's structure shadow coming BACK**, which is the landing's whole
+  point, and two attempts at one failed for reasons worth recording. Disarming `tagpu_native.on`
+  to force the flag clear disarms far more than this gate — `terrown` keeps key-filling with no
+  painter, so the frame goes teal — and on `exit-sort` the two builds' disarmed frames differ by
+  only **63 px** in a strip at the lab (52 of them darker on this branch, which is consistent with
+  the engine's cached shadow returning, and is too small and too occluded to be called proof).
+  The purpose-built `shadow-struct` fixture could not be used for a cross-boot A/B at all: two
+  boots of it differ in **fog-of-war reveal and starting resources**, hundreds of thousands of
+  pixels, swamping anything a shadow could contribute.
+* **The double-shadow direction was not forced.** Stale 0 while the pass paints is accepted as
+  the safe direction and is one frame wide at most; no fixture makes it happen on purpose.
+
 
 ## 4. What the work taught us
 
