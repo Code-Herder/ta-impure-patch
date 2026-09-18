@@ -3251,9 +3251,36 @@ clip.
 | `0x4BF8C0` | `DrawTranspRectangle` | stdcall `0xC` | `(ctx, RECT*, colour)` | hollow rect; 12 callers incl. the minimap view box `0x466B5E`, the HUD `0x467F6C` | `83 EC 68 53 56 57` (6) |
 | `0x4BF7B0` | the focus rectangle | stdcall `0xC` | `(ctx, RECT*, colour)` | drawn last by `GUI_StageUpdateDraw` via `0x4A16F0(gi, idx, 8)` | `83 EC 30 53 55 56 57` (7) |
 | `0x4BF4D0` | framed box | stdcall `0xC` | `(ctx, RECT*, colour)` | three clipped fills (`0x4BF620` ×3, `0x4CCDEA` ×2); **what `DrawPopupF4Dialog 0x4948E0` draws its border with** (×3) | `83 EC 40 53 55 56 57` (7) |
+| `0x4BF620` | the rect CLIPPER the four above share | stdcall `8` | `(clip RECT*, RECT*)` | clamps the second rect into the first and returns 0 when they do not overlap — four `cmp`/early-out pairs, then four clamps. **Carries no colour.** | `8B 4C 24 04 83 EC 10` (7) |
+| `0x4CCDEA` | the solid-fill WRITER the four above share | cdecl, 3 args | `(surface, RECT*, colour)` | **uses only the LOW BYTE of `colour`** — see below | `55 8B EC 56 57 53 51 52` (8) |
 | `0x4C6890` | `SurfaceFill` | stdcall `8` | `(surface, colour)` | the whole surface | `83 EC 64 53 55 56 57` (7) |
 | `0x4C6B70` | surface → surface | stdcall `0x10` | `(dst, src, x, y)` | `0x4CBBE0(dst, src, x − (s16)src[+0x18], y − (s16)src[+0x1A])`; `dst == NULL` ⇒ the back buffer, `src == NULL` ⇒ the screen; 23 callers — the GUI blit `0x4AB158`, the build's snapshot `0x4A9098`, `0x4A90CC`, `0x4A9111`, the teardown `0x4A952B`, the picture tiler `0x4B02DF`, the minimap `0x466B44`, cursor save/restore | `83 EC 30 56 8B 74 24 38` (8) |
 | `0x4CBBE0` | `CopyScreenContext` | cdecl | `(dst, src, x, y)` | the whole `src` at `dst+0xC + y·pitch + x`, clipped by `dst+0/+4` only — **reads neither clip rect**; 17 callers: three in the flip, two in `0x4C6B70`, **ten in cursor code** (the `SAVEMOUSE` buffers are written through it directly) | `55 8B EC 83 C4 E4` (6) |
+
+**`0x4BF620` and `0x4CCDEA`, the pair every solid UI fill goes through** [DISASSEMBLED 2026-09-18,
+this project, `objdump -d -M intel` of the pristine build]. `DrawBar 0x4BF6F0`,
+`DrawTranspRectangle 0x4BF8C0`, the framed box `0x4BF4D0` and the focus rectangle `0x4BF7B0` all
+clip with the first and write with the second, so what the second does with its colour argument is
+what all four mean by "colour".
+
+**THE COLOUR ARGUMENT IS AN 8-BIT PALETTE INDEX, AND THE SIGN OF THE INT PASSED IS IRRELEVANT.**
+`0x4CCDEA` takes `(surface, RECT*, colour)` cdecl — `[ebp+0x8]` the surface (pitch at `+0x8`,
+pixels at `+0xC`), `[ebp+0xc]` the rect, `[ebp+0x10]` the colour — and has two paths, chosen by
+whether the rect's left edge and `right+1` are both 4-aligned (`and eax,3` / `and ebx,3`, summed,
+at `0x4CCDFE`). **Both read the colour as a BYTE:**
+
+* aligned (`0x4CCE2D`): `mov al,[ebp+0x10]` / `mov ah,al` / `bswap eax` / `mov al,[ebp+0x10]` /
+  `mov ah,al` builds a DWORD of four copies of the low byte, then `rep stos DWORD`;
+* unaligned (`0x4CCE73`): `mov eax,[ebp+0x10]` then `rep stos BYTE al` — again the low byte alone.
+
+**So a NEGATIVE colour is not a mode.** `0x4AA912` calls `0x4BF4D0(panel+0xBC, rect, -0x18)`, which
+looked like a special encoding and is not: `-0x18` is `0xFFFFFFE8`, the writer takes `0xE8`, and the
+fill is palette index **232**. A consumer may carry these colours in one `unsigned char` — which is
+what the engine itself keeps — and the same is already recorded for the glyph blitter's three
+colour arguments at `0x4CCFE2`.
+
+[Established because the vulkan-only plan's landing 8 turns these four ops from published SURFACE
+BYTES into drawn geometry, and needed to know the width of the colour field before choosing one.]
 
 Not drawers, checked because the popups call them: `0x47F1A0` (helpers `0x47F0C0`, `0x44FDB0`,
 `0x451DF0`, …, no pixel write), `0x4B6560` (`jmp [0x4FC0DC]`, an import thunk), `0x4A5030`
