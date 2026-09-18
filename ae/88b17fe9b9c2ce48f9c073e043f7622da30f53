@@ -1,0 +1,65 @@
+landing-review: vulkan-only plan, landing 10c-1 -- the trigger family moves to the game thread
+
+Range reviewed: main...HEAD (0b7c7ee..ae88b17, 4 commits).
+Reviewer: dedicated read-only agent, `high` (CLAUDE.md: "changes the
+synchronisation between the game thread and the render thread").
+Two rounds, because round 1's HIGH was fixed with new code in the same
+thread-crossing class the review exists for.
+
+WHAT LANDED. tagpu_peek_frame, tagpu_weapons_frame, tagpu_ui_frame,
+tagpu_cat_frame and tagpu_scenario_frame left tagpu_overlay_draw --
+reached only from render_ogl.c:1632 and render_vk.c:232 -- for a new
+tagpu_triggers_frame() called from tagpu_gui_hook.c's before_flip, on
+the game thread, above that function's three early returns. render_gdi.c
+contains no tagpu_ call at all, which is why `tacli ui` and `tacli peek`
+answered nothing on renderer=gdi until now. Verified by running: both
+verbs answer on the gdi lane for the first time.
+
+ROUND 1 -- one HIGH, real, mine.
+  H1  s_flips is not a frame counter. I handed the family the flip
+      count and their `% 5` throttles were written against the ~60/s
+      present rate; the shell flips ~12,000 times a second (measured on
+      MAINMENU). A ~100x rate increase on five file-writing observers.
+      The evidence was in CENSUS_MS's own comment, twenty lines above
+      where I inserted the call -- I read past it.
+      FIXED (45b3a5e): a TRIG_MS 16 QPC gate with its own counter.
+
+ROUND 2 -- no HIGH. Two MEDIUMs, both documentation, both applied (ae88b17).
+  It verified rather than assumed, and that is what it is for:
+    - the gate's arithmetic and lifecycle: 16 ms -> 62.5/s; the epoch is
+      not advanced past the deadline, so no drift accumulates; the
+      commit's claimed 1.27 file stats per flip is exact
+      (1/15 + 1/5 + 1/5 + 2/5 + 2/5 = 1.267).
+    - the counter is equivalent: no modulo can be skipped, a freeze is
+      not a hazard, and tacli never reads the "frame" field.
+    - THE HAZARD CLOSURE IS TRUE -- by independent sweep, not by reading
+      my row. Every file naming main+0x1439B / OFF_UNITDEFS, every deref
+      of unit+0x92, and an objdump of 0x491b60..0x491c60 showing none of
+      the teardown cascade's 22 calls reaches the flip at 0x4C63A0.
+  M1  cross-thread-engine-reads.md -- the 2026-09-11 audit, and the note
+      of record the closed row CITES -- still said in three places that
+      these six read engine memory on the render thread. Five of the six
+      no longer do.
+  M2  tagpu_reclaim.c's reader list was missing tagpu_packet_pub, and
+      the paragraph claimed every reader was on the game thread while
+      three were not. It is now true AND complete, with the sweep named.
+  LOW/NIT applied: the gate fails CLOSED where the census gate beside it
+  fails open (deliberate -- open is the 12,000 stats/s this removes) and
+  now says so; `now` shadowed the census's own, renamed tnow; TRIG_MS is
+  #undef'd; peek is % 15, not the % 5 the new header said.
+
+NOT CLOSED BY THIS LANDING.
+  - tagpu_input_frame stays on the render thread. It is the one that
+    dereferences f->packet, through do_eye. That is landing 10c-2.
+  - The tracer's sample_composites is the one surviving render-thread
+    engine read. It reads the unit array and Object3do+0x10, never the
+    UnitDef array, so it is outside the closed hazard.
+  - renderer=gdi is still not stock AS A LANE: tagpu_apply_patches()
+    applies three unconditional patches, and the tagpu_curs pair
+    (0x43E50C, 0x499041) changes input semantics gated only by a file.
+    Landing 11's exit condition depends on this.
+
+Build: 0 errors, both DLLs. Wiki: built 63 pages + index.
+Scan after committing: clean apart from the 16 known pre-existing soft
+tells in two tracked governance files (owner's call, reported, not
+worked around).
