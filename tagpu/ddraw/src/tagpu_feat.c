@@ -767,8 +767,15 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     float flatSpan;
     if (s_armed != 1) return feat_bail();
     if (!pk || !pk->in_game) return feat_bail();
-    if (s_state == 0) init_gl();
-    if (s_state != 1) return feat_bail();
+    /* GL ONLY, and asked only where GL draws: `init_gl` resolves entry points
+       and builds this pass's program, and on the vulkan-only lane it would log a
+       missing proc and latch `s_state = 2`, killing the gather with it -- which
+       is exactly what the terrain pass did before its own audit.
+       [The vulkan-only plan, landing 4b-2.] */
+    if (!tagpu_vk_owns_present()) {
+        if (s_state == 0) init_gl();
+        if (s_state != 1) return feat_bail();
+    }
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
     /* Classic++: the lazy restore of this atlas, armed once the switch is on
        (the palette the screen is SHOWN with, the same one the native pass
@@ -1123,56 +1130,30 @@ int tagpu_feat_handover(TAGPU_FEATHAND* out, unsigned now)
 
 void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex)
 {
+    /* WHETHER THIS PASS DRAWS, or only hands over. The vertices, the
+       numbers and the texels below are the GATHER's and reach the twin
+       either way; only the draw stands down. Unlike the terrain pass, this
+       one's gather needed nothing: a call-graph audit puts GL in `init_gl`,
+       this function and the shader helper, and nowhere else.
+       [The vulkan-only plan, landing 4b-2.] */
+    const int gl_draws = !tagpu_vk_owns_present();
     int total = s_nv[B_SHADOW] + s_nv[B_BODY];
+    int taking;
     /* A FRAME WITH NOTHING TO DRAW HANDS NOTHING OVER. Leaving the previous
        frame's hand-over standing would have the Vulkan lane draw last frame's
        features over this frame's -- and on the frame a level is torn down, over
-       nothing at all. */
-    if (s_state != 1 || total == 0) { s_pubHave = 0; s_abFrame = 0; return; }
-    glUseProgram(s_prog);
-    x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
-    glUniform1i(s_uFog, v->fogMode & 1);        /* features darken in grey */
-    if (s_uFogOrg >= 0) x_glUniform2f(s_uFogOrg, (float)v->fogOrgX, (float)v->fogOrgY);
-    if (s_uFogDim >= 0) x_glUniform2f(s_uFogDim, (float)v->fogCols, (float)v->fogRows);
-    x_glUniform1f(s_uZoom, v->zoom > 0.0f ? v->zoom : 1.0f);
-    x_glUniform2f(s_uZoomC, v->zoomCx, v->zoomCy);
-    x_glUniform1f(s_uDepthScale, v->depthScale > 1.0f ? v->depthScale : 512.0f);
-    x_glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, s_atlas.tex);
-    x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, palTex);
-    x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, v->fogTex);
-    x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, v->fogLut);
-    x_glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, s_atlas.rgb);
-    x_glActiveTexture(GL_TEXTURE0);
-    glUniform1i(s_uRestored, (s_atlas.rgb && tagpu_classicpp_assets()) ? 1 : 0);
-    glUniform1i(s_uLit, s_cpp ? 1 : 0);    /* the Classic++ colour branch     */
-    glBindVertexArray(s_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-    /* orphan and size to what this frame USES (shadow then body, contiguous),
-       not the two staging arrays' 7.9 MB -- as tagpu_terr.c does */
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)total * FVST * 4, NULL, GL_STREAM_DRAW);
-    if (s_nv[B_SHADOW])
-        glBufferSubData(GL_ARRAY_BUFFER, 0,
-                        (GLsizeiptr)s_nv[B_SHADOW] * FVST * 4, s_verts[B_SHADOW]);
-    if (s_nv[B_BODY])
-        glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)s_nv[B_SHADOW] * FVST * 4,
-                        (GLsizeiptr)s_nv[B_BODY] * FVST * 4, s_verts[B_BODY]);
-    glEnable(GL_BLEND);
-    x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);      /* premultiplied FBO */
+       nothing at all.
 
-    /* THE FRAME GOES BLACK FIRST WHEN THE A/B IS ARMED, and only then -- and
-       for this pass the DEPTH buffer goes with it. What is compared is THIS
-       pass's pixels: the terrain has already drawn under us on the GL side and
-       has already written the depth every body here is tested against, while
-       the Vulkan lane's render pass starts from a cleared depth buffer. Both
-       have to start from nothing or every fragment the two disagree about
-       reads as a port failure. The scissor is put back before the draw
-       (TAGPU_ABSHOT_SCISSOR), because a world pass CLIPPED to the viewport is
-       the pass and an unclipped one is something else.
-       One frame, and the player sees it: the terrain drawn before the clear is
-       missing from it. That is what a measuring lever costs. */
-    TAGPU_ABSHOT shot;
-    int taking = s_ab && !s_abDone;
-    shot.live = 0;
+       `s_state` IS THE GL PROGRAM'S and is only asked where GL draws: it is
+       permanently 0 where `init_gl` is never called, so testing it there would
+       refuse every hand-over on the one lane the hand-over is for. `total` is
+       the gather's own count and is the real refusal. */
+    if ((gl_draws && s_state != 1) || total == 0) { s_pubHave = 0; s_abFrame = 0; return; }
+
+    /* HOISTED OUT OF THE DRAW, because on the vulkan-only lane the A/B is
+       armed without one. Read once so the two arms cannot disagree about
+       which frame is the capture frame. */
+    taking = s_ab && !s_abDone;
     if (taking && v->ss != 1) {
         /* REFUSED RATHER THAN WRITTEN AT THE WRONG SIZE. The GL capture is this
            FBO's viewport, gw*ss x gh*ss, and the Vulkan one is the window's
@@ -1183,31 +1164,89 @@ void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex)
         s_abDone = 1;
         taking = 0;
     }
-    if (taking) tagpu_abshot_begin(&shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR |
-                                          TAGPU_ABSHOT_TOPDOWN);
 
-    /* shadows are ground decals: they test depth but never write it, so a
-       feature's own body is not fighting its shadow and nothing is occluded
-       by a shadow that the engine would have drawn under it */
-    if (s_nv[B_SHADOW]) {
-        x_glDepthMask(GL_FALSE);
-        x_glDrawArrays(GL_TRIANGLES, 0, s_nv[B_SHADOW]);
-        x_glDepthMask(GL_TRUE);
-    }
-    /* bodies write depth — this is what occludes units behind trees */
-    if (s_nv[B_BODY])
-        x_glDrawArrays(GL_TRIANGLES, s_nv[B_SHADOW], s_nv[B_BODY]);
+    if (gl_draws) {
+        TAGPU_ABSHOT shot;
+        shot.live = 0;
+        glUseProgram(s_prog);
+        x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
+        glUniform1i(s_uFog, v->fogMode & 1);        /* features darken in grey */
+        if (s_uFogOrg >= 0) x_glUniform2f(s_uFogOrg, (float)v->fogOrgX, (float)v->fogOrgY);
+        if (s_uFogDim >= 0) x_glUniform2f(s_uFogDim, (float)v->fogCols, (float)v->fogRows);
+        x_glUniform1f(s_uZoom, v->zoom > 0.0f ? v->zoom : 1.0f);
+        x_glUniform2f(s_uZoomC, v->zoomCx, v->zoomCy);
+        x_glUniform1f(s_uDepthScale, v->depthScale > 1.0f ? v->depthScale : 512.0f);
+        x_glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, s_atlas.tex);
+        x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, palTex);
+        x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, v->fogTex);
+        x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, v->fogLut);
+        x_glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, s_atlas.rgb);
+        x_glActiveTexture(GL_TEXTURE0);
+        glUniform1i(s_uRestored, (s_atlas.rgb && tagpu_classicpp_assets()) ? 1 : 0);
+        glUniform1i(s_uLit, s_cpp ? 1 : 0);    /* the Classic++ colour branch     */
+        glBindVertexArray(s_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
+        /* orphan and size to what this frame USES (shadow then body, contiguous),
+           not the two staging arrays' 7.9 MB -- as tagpu_terr.c does */
+        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)total * FVST * 4, NULL, GL_STREAM_DRAW);
+        if (s_nv[B_SHADOW])
+            glBufferSubData(GL_ARRAY_BUFFER, 0,
+                            (GLsizeiptr)s_nv[B_SHADOW] * FVST * 4, s_verts[B_SHADOW]);
+        if (s_nv[B_BODY])
+            glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)s_nv[B_SHADOW] * FVST * 4,
+                            (GLsizeiptr)s_nv[B_BODY] * FVST * 4, s_verts[B_BODY]);
+        glEnable(GL_BLEND);
+        x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);      /* premultiplied FBO */
 
-    if (taking) {
-        /* the Vulkan half is claimed only on a GL half that reached the disk
-           -- see tagpu_abshot.h; `s_abDone` latches either way */
-        int wrote = tagpu_abshot_end(&shot, ABOUT, "feat");
+        /* THE FRAME GOES BLACK FIRST WHEN THE A/B IS ARMED, and only then -- and
+           for this pass the DEPTH buffer goes with it. What is compared is THIS
+           pass's pixels: the terrain has already drawn under us on the GL side and
+           has already written the depth every body here is tested against, while
+           the Vulkan lane's render pass starts from a cleared depth buffer. Both
+           have to start from nothing or every fragment the two disagree about
+           reads as a port failure. The scissor is put back before the draw
+           (TAGPU_ABSHOT_SCISSOR), because a world pass CLIPPED to the viewport is
+           the pass and an unclipped one is something else.
+           One frame, and the player sees it: the terrain drawn before the clear is
+           missing from it. That is what a measuring lever costs. */
+        if (taking) tagpu_abshot_begin(&shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR |
+                                              TAGPU_ABSHOT_TOPDOWN);
+
+        /* shadows are ground decals: they test depth but never write it, so a
+           feature's own body is not fighting its shadow and nothing is occluded
+           by a shadow that the engine would have drawn under it */
+        if (s_nv[B_SHADOW]) {
+            x_glDepthMask(GL_FALSE);
+            x_glDrawArrays(GL_TRIANGLES, 0, s_nv[B_SHADOW]);
+            x_glDepthMask(GL_TRUE);
+        }
+        /* bodies write depth — this is what occludes units behind trees */
+        if (s_nv[B_BODY])
+            x_glDrawArrays(GL_TRIANGLES, s_nv[B_SHADOW], s_nv[B_BODY]);
+
+        if (taking) {
+            /* the Vulkan half is claimed only on a GL half that reached the disk
+               -- see tagpu_abshot.h; `s_abDone` latches either way.
+               AND on the target having been unlinked, which is armed here even
+               when the GL half failed: a stale `_vk.ppm` beside a stale
+               `_gl.ppm` is the worse of the two, and both halves have to be this
+               arming's for the pair to mean anything. */
+            int wrote = tagpu_abshot_end(&shot, ABOUT, "feat");
+            int fresh = tagpu_vk_ab_arm("feat");
+            s_abDone = 1;
+            s_abFrame = wrote && fresh;
+        }
+
+    } else if (taking) {
+        /* AND ON THE LANE WITH NO GL HALF, THE INTENT IS THE CLAIM --
+           tagpu_abshot.h has the whole argument, and `tagpu_vk_ab_arm` is what
+           makes a file on the disk this arming's. */
         s_abDone = 1;
-        s_abFrame = wrote;
+        s_abFrame = tagpu_vk_ab_arm("feat");
     }
 
-    /* PUBLISHED AFTER THE GL DRAW, not before: these are the vertices, the
-       numbers and the texels that were just drawn, and the Vulkan lane is about
-       to draw the same ones. */
+    /* PUBLISHED AFTER THE DRAW WHERE THERE IS ONE, and after the gather in
+       either case: these are the vertices, the numbers and the texels this
+       frame built, and the Vulkan lane is about to draw the same ones. */
     feat_publish(v, total);
 }

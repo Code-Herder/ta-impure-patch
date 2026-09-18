@@ -3399,7 +3399,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            and LOS-grey here, and all of them outside the 896x704 viewport this
            fixture logs as `zoomvp=`. Coverage, not colour. [Landing 4b-2.] */
         s_scissorOn = 1;
+        /* IN THE COMPOSITE'S OWN ORDER, and with the composite's own predicates:
+           terrain is the world's bottom layer and the features follow it, which
+           is the order below and the order tagpu_vk.c records the passes in.
+           `glEnable(GL_BLEND)` wraps the feature render down there; over here the
+           twin owns its own blend state, which is why there is nothing to set. */
         if (nterr) tagpu_terr_render(&fv, 0);
+        if (nfeat) tagpu_feat_render(&fv, 0);
         return;
     }
 
