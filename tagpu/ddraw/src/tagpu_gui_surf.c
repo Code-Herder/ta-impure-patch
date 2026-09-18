@@ -178,6 +178,9 @@ static unsigned s_drained = 0, s_sprites = 0, s_copies = 0, s_pixels = 0, s_seed
    can be read against each other: every one of these used to be a `PK_PIXELS`
    box of arena bytes. [The vulkan-only plan, landing 8a.] */
 static unsigned s_bars = 0;
+/* HOLLOW RECTANGLES replayed as geometry, beside `bars=` for the same reason.
+   [The vulkan-only plan, landing 8b.] */
+static unsigned s_rects = 0;
 static int    s_skipToReset = 0;        /* after a GL context change: the queue's ops up to the producer's next
                                            RESET were published against twins and an atlas that died with the
                                            context — take their arena bytes, apply nothing (see drain) */
@@ -1240,6 +1243,41 @@ static void twin_fill(TWIN* t, const TAGPU_PUBOP* o, unsigned char idx)
     x_glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
 }
 
+/* FOUR INCLUSIVE EDGES, ONE PALETTE INDEX, INTERIOR UNTOUCHED. `twin_fill`'s
+   shape four times over, one scissor per edge, because that is exactly what
+   `0x4BF8C0` does -- and doing it as one fill plus a smaller clear would be
+   wrong, not merely slower: the interior is whatever was already in the twin
+   and the op never wrote it. [The vulkan-only plan, landing 8b.] */
+static void twin_outline(TWIN* t, const TAGPU_PUBOP* o, unsigned char idx)
+{
+    int w = o->r - o->l + 1, h = o->b - o->t + 1;
+    int i;
+    /* PURE GL, for `twin_clear`'s reason. */
+    if (tagpu_vk_owns_present()) return;
+    if (w < 1 || h < 1) return;
+    glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
+    glViewport(0, 0, t->w, t->h);
+    glEnable(GL_SCISSOR_TEST);
+    x_glClearColor((float)idx / 255.0f, 1.0f, 0.0f, 0.0f);
+    /* top, bottom, left, right -- the corners are covered twice and that is
+       correct: the engine's own edges share them, and the write is idempotent
+       because it is a constant. A 1 px wide or 1 px tall box collapses to a
+       single edge drawn twice rather than to nothing, which is why the extents
+       are clamped rather than the edges skipped. */
+    for (i = 0; i < 4; i++) {
+        int x = o->l, y = o->t, ew = w, eh = h;
+        if (i == 0)      { eh = 1; }
+        else if (i == 1) { y = o->b; eh = 1; }
+        else if (i == 2) { ew = 1; }
+        else             { x = o->r; ew = 1; }
+        x_glScissor(x, y, ew, eh);
+        x_glClear(GL_COLOR_BUFFER_BIT);
+    }
+    x_glDisable(GL_SCISSOR_TEST);
+    /* the clear colour is context state and not ours -- see `twin_fill`. */
+    x_glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+}
+
 static void twins_reset(void)
 {
     while (s_ntwins) twin_drop(&s_twins[0]);
@@ -1606,6 +1644,19 @@ static void drain(void)
                 m = mir_op();
                 if (m) { m->kind = TAGPU_GUIOP_BAR; mir_box(m, o); m->fg = o->fg; }
                 s_bars++;
+            }
+            break;
+        case PK_RECT:
+            /* FOUR EDGES, no arena bytes. `0x4BF8C0` only; `0x4BF7B0` tints and
+               is `OP_FOCUS`, which still publishes pixels.
+               [The vulkan-only plan, landing 8b.] */
+            t = twin_find(o->surf);
+            if (t) {
+                TAGPU_GUIOP* m;
+                twin_outline(t, o, o->fg);
+                m = mir_op();
+                if (m) { m->kind = TAGPU_GUIOP_RECT; mir_box(m, o); m->fg = o->fg; }
+                s_rects++;
             }
             break;
         case PK_SPRITE: {
@@ -2810,8 +2861,14 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
            slots, and _snprintf does not NUL-terminate what it truncates --
            hence the explicit terminator below. The figures in this comment were
            318/52 and stale by two merges when the landing review counted them;
-           they are measured from the format string rather than remembered. */
-        char b[1152];
+           they are measured from the format string rather than remembered.
+           RE-MEASURED 2026-09-18 for landing 8b's `rects=`, by counting the
+           format string itself rather than by eye: 430 literal characters and
+           72 conversions, worst case 1181 with the terminator. 1152 would have
+           truncated -- and truncation here is silent and takes the TAIL, where
+           `fps=` lives. [The 1152 was 9 bytes of headroom when 8a's review
+           counted it; one more counter spent all of it.] */
+        char b[1280];
         int palDiffAt, palDiff = tagpu_pal_diff(&palDiffAt);
         static LARGE_INTEGER t0, fq;
         LARGE_INTEGER t1;
@@ -2829,8 +2886,8 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u bars=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u gafnoplane=%u gafreseed=%u gafscratch=%u/%u/%u strrearm=%u glyscratch=%u/%u gfont=%u/%u/%u/%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u cursown=%d/%d,%d,held=%u fps=%.1f",
-                  s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_bars, s_clears,
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u bars=%u rects=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u gafnoplane=%u gafreseed=%u gafscratch=%u/%u/%u strrearm=%u glyscratch=%u/%u gfont=%u/%u/%u/%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u cursown=%d/%d,%d,held=%u fps=%.1f",
+                  s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_bars, s_rects, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.gafnoplane, g_guiq.gafreseed, g_guiq.gafhigh, g_guiq.gaflost, g_guiq.gafbaddec, g_guiq.strrearm, g_guiq.glyhigh, g_guiq.glylost, pGlyphs, pResends, pRefused, pRecycles, g_guiq.stalls,
                   s_skipped, tagpu_pal_changes(), palDiff, palDiffAt, tagpu_pal_presented(),
                   tagpu_classicpp_on() ? 1 : 0, tagpu_classicpp_assets() ? 1 : 0,

@@ -188,8 +188,11 @@ enum {
     TAGPU_GUIOP_COPY,       /* twin -> twin, the source's box at (sl, st)     */
     TAGPU_GUIOP_RESET,      /* forget every twin                              */
     TAGPU_GUIOP_STRING,     /* TA's own glyphs, stamped into the twin         */
-    TAGPU_GUIOP_BAR         /* landing 8a: the box filled with palette index
+    TAGPU_GUIOP_BAR,        /* landing 8a: the box filled with palette index
                                `fg`, fully covered. No arena bytes.            */
+    TAGPU_GUIOP_RECT        /* landing 8b: the box's four INCLUSIVE EDGES in
+                               palette index `fg`, one pixel wide, interior
+                               untouched. No arena bytes.                      */
 };
 
 typedef struct TAGPU_GUIOP {

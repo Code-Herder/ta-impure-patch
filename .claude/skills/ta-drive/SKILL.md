@@ -1915,8 +1915,8 @@ tools/tacli gui <i> remove        # un-arm entirely at the next launch
 tools/tacli arm <i> gui.on=norestore   # G15e: the layer WITHOUT Classic++ art — the UI-only A/B
 tools/tacli arm <i> 'gui.on=sharptest log'   # G17a: the sharp layer filled with a known pattern
 tools/tacli gui <i>               # report
-tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds= sprites= pixels= bars= atlas= resets= overflows= k= sharp= fps=
-#   bars= (landing 8a) counts PK_BAR ops replayed as GEOMETRY; pixels= counts boxes of arena
+tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds= sprites= pixels= bars= rects= atlas= resets= overflows= k= sharp= fps=
+#   bars= (8a) and rects= (8b) count PK_BAR/PK_RECT replayed as GEOMETRY; pixels= counts boxes of arena
 #   bytes. Read them against each other: every bar used to be a pixels. Neither is a per-frame
 #   number -- both are running totals at the moment the line was printed.
 ../.venv-undither/bin/python tools/uiwalk.py --inst <i> --res 1024x768 --layer --out /tmp/uiwalk

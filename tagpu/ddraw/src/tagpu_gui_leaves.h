@@ -262,8 +262,11 @@ static int __cdecl before_bar(void* e)  { if (on_game_thread()) rect_box(e, OP_B
    its border with (×3 — three calls, not three fills). [CORRECTED 2026-09-18.] */
 static int __cdecl before_frame(void* e) { if (on_game_thread()) rect_box(e, OP_FRAME); return 0; }
 static int __cdecl before_rect(void* e) { if (on_game_thread()) rect_box(e, OP_RECT); return 0; }
-/* 0x4BF7B0: the focus rectangle GUI_StageUpdateDraw draws last, (ctx, RECT*, colour) */
-static int __cdecl before_focus(void* e) { if (on_game_thread()) rect_box(e, OP_RECT); return 0; }
+/* 0x4BF7B0: the focus rectangle GUI_StageUpdateDraw draws last, (ctx, RECT*, level).
+   ITS OWN KIND SINCE LANDING 8b, not OP_RECT: it is eight edges through 0x4BEC70,
+   whose writer 0x4CC8DF reads the destination and remaps it through globals+0xC8.
+   A tint, not a colour -- see the OP_FOCUS comment in tagpu_gui_hook.c. */
+static int __cdecl before_focus(void* e) { if (on_game_thread()) rect_box(e, OP_FOCUS); return 0; }
 
 /* ---- 0x4C6B70 surface->surface blit stdcall(dst ctx, src surface, x, y)
         ret 0x10 (the GUI panel reaching the frame; gui-renderer.md §2) -- */

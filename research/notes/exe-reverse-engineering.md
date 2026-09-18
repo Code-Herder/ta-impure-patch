@@ -952,8 +952,35 @@ the same line through one more frame. The two `test eax,eax / jne` on a `lea` of
 (`0x4BF905`, `0x4BF9CF`) are always taken, so the null-context arms below them are dead in
 this build.
 
+**`0x4BEC70` and `0x4CC8DF`, the TINTED line — and the focus rectangle is made of eight of them**
+[DISASSEMBLED 2026-09-18, this project, for the vulkan-only plan's landing 8b].
+`0x4BEC70(ctx, x0, y0, x1, y1, ?)` `ret 0x18` fetches the graphics globals through `0x4B6220`,
+**returns 0 immediately if `[globals+0xC8]` is NULL** (`0x4BEC7B`), clips through `0x4BEA20`, and
+hands `[globals+0xC8]` to `0x4CC8DF` as an argument. That is the **same lighten table `0x4BF4D0`
+selects from**, and `0x4CC8DF` uses it the same way — per pixel:
+
+```
+shl eax,0x8          ; row << 8
+mov al,BYTE PTR [edi]        ; the DESTINATION pixel, into the low byte
+mov al,BYTE PTR [eax+esi*1]  ; esi = the table base -> LUT[row*256 + dest]
+mov BYTE PTR [edi],al        ; write it back
+```
+
+**So a focus rectangle tints what is under it and has no colour of its own.** It cannot be
+published as a box and an index; the consumer has to be able to read the surface it writes.
+
+**And the index here is UNSIGNED where `0x4BF4D0`'s is SIGNED.** `0x4CC8DF` builds
+`(row << 8) | dest` by overwriting the low byte of a register, so `dest` is 0..255 unsigned;
+`0x4BF4D0` does `movsx ebx,BYTE PTR [ecx]` and indexes `[row_base + ebx]`, so its 0x80..0xFF land
+*before* the row base. Two functions, one table, two addressing conventions — a consumer that
+reimplements either must not copy the other's.
+
 **`0x4CC7AB`** is `cdecl(ctx, x0, y0, x1, y1, colour)` and it is a **store-only Bresenham**:
-`stos byte` with no read of the destination, so nothing here touches the blend LUT. Its two
+`stos byte` with no read of the destination, so nothing here touches the blend LUT. **Its colour
+argument is `[ebp+0x1C]`, loaded as a DWORD and stored `stos BYTE al` / `rep stos BYTE al`
+(`0x4CC85C`, `0x4CC879`, `0x4CC894`) — the low byte alone**, the same conclusion as `0x4CCDEA`
+reached by a different instruction, which is why `0x4BF8C0`'s colour is a palette index and fits
+in one `unsigned char` [DISASSEMBLED 2026-09-18 for landing 8b]. Its two
 axis-aligned special cases count **both endpoints** — `0x4CC83B` (dx == 0) does
 `sub ecx,eax / inc ecx`, `0x4CC866` (dy == 0) the same — so a rect edge is inclusive at every
 corner. `ctx+0x08` is the pitch and `ctx+0x0C` the pixel base, the same two fields
@@ -3249,7 +3276,7 @@ clip.
 | `0x4BE950` | `DrawLine` | stdcall `0x18` | `(ctx, x0, y0, x1, y1, colour)` | bbox after `0x4BEA20`; 83 callers | `83 EC 30 56 8B 74 24 38` (8) |
 | `0x4BF6F0` | `DrawBar` | stdcall `0xC` | `(ctx, RECT*, colour)` | the rect, inclusive, via `0x4BF620` + `0x4CCDEA`; 47 callers | `83 EC 40 8B 44 24 48` (7) |
 | `0x4BF8C0` | `DrawTranspRectangle` | stdcall `0xC` | `(ctx, RECT*, colour)` | hollow rect; 12 callers incl. the minimap view box `0x466B5E`, the HUD `0x467F6C` | `83 EC 68 53 56 57` (6) |
-| `0x4BF7B0` | the focus rectangle | stdcall `0xC` | `(ctx, RECT*, colour)` | drawn last by `GUI_StageUpdateDraw` via `0x4A16F0(gi, idx, 8)` | `83 EC 30 53 55 56 57` (7) |
+| `0x4BF7B0` | the focus rectangle — **a TINT, not a colour** | stdcall `0xC` | `(ctx, RECT*, level)` | **eight** edges — two concentric rects, `0x4BF7F3`..`0x4BF839` and `0x4BF86A`..`0x4BF8A4` — each through `0x4BEC70`, which READS THE DESTINATION; drawn last by `GUI_StageUpdateDraw` via `0x4A16F0(gi, idx, 8)` | `83 EC 30 53 55 56 57` (7) |
 | `0x4BF4D0` | **the box SHADER** — not a fill at all | stdcall `0xC` | `(ctx, RECT*, level)` — the third argument is a **signed shade level**, not a colour | one clip through `0x4BF620` (×**1**), **no `0x4CCDEA`**, then every pixel in the box remapped through a 256-byte LUT row; **what `DrawPopupF4Dialog 0x4948E0` draws its border with** (×3 — three *calls*, not three fills) | `83 EC 40 53 55 56 57` (7) |
 | `0x4BF620` | the rect CLIPPER the four above share | stdcall `8` | `(clip RECT*, RECT*)` | clamps the second rect into the first and returns 0 when they do not overlap — four `cmp`/early-out pairs, then four clamps. **Carries no colour.** | `8B 4C 24 04 83 EC 10` (7) |
 | `0x4CCDEA` | the solid-fill WRITER the four above share | cdecl, 3 args | `(surface, RECT*, colour)` | **uses only the LOW BYTE of `colour`** — see below | `55 8B EC 56 57 53 51 52` (8) |

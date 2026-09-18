@@ -10192,6 +10192,103 @@ So 8a proves the mechanism end to end at a volume that does not matter. **The vo
 
 ---
 
+### 2.59 A hollow rectangle is four edges — and the census says landing 8 is not what it looked like — landing 8b
+
+**LANDED 2026-09-18.** `OP_RECT` becomes `PK_RECT`. The larger result is what splitting it
+revealed about where the traffic actually is.
+
+#### `OP_RECT` was two engine functions and they are not the same operation
+
+The observer mapped **both** `0x4BF8C0` and `0x4BF7B0` to `OP_RECT`. Disassembled:
+
+| | `0x4BF8C0` `DrawTranspRectangle` | `0x4BF7B0` the focus rectangle |
+|---|---|---|
+| edges | 4, one box | **8**, two concentric boxes (`0x4BF7F3`…`0x4BF839`, `0x4BF86A`…`0x4BF8A4`) |
+| writer | `0x4CC7AB`, **store-only** Bresenham | `0x4BEC70` → `0x4CC8DF` |
+| reads the destination? | **no** | **yes** |
+| third argument | a **palette index** (`[ebp+0x1C]`, `stos BYTE al` — the low byte) | a **shade level** into `globals+0xC8` |
+| portable as geometry? | yes | **no** |
+
+`0x4CC8DF`'s inner loop is `shl eax,8` / `mov al,[edi]` / `mov al,[eax+esi]` / `mov [edi],al` —
+it builds `(row << 8) | destination` and looks the result up in the **same lighten table
+`0x4BF4D0` selects from** (§2.58). So the focus rectangle tints what is under it and has no
+colour of its own.
+
+**A negative result that will bite whoever ports the tints:** the LUT index is **unsigned** in
+`0x4CC8DF` and **signed** in `0x4BF4D0` (`movsx`). One table, two addressing conventions.
+
+So `before_focus` is its own op kind now — `OP_FOCUS` — and `OP_RECT` means exactly `0x4BF8C0`.
+That split is the whole of what made 8b portable, and it is also what produced the next section.
+
+#### What the census actually says, now that the two are counted apart
+
+One live game, `renderer=vulkan`, full play arm set, 1024x768:
+
+| op kind | engine function | count | status |
+|---|---|---|---|
+| **`focus`** | `0x4BF7B0` — **a tint** | **1 223 310** | **`PK_PIXELS`, and cannot leave it as a colour and a box** |
+| `line` | `0x4BE950` | 842 790 | `PK_PIXELS` — landing 8c |
+| `copy` | `0x4C6B70` | 414 729 | already `PK_COPY` |
+| `rect` | `0x4BF8C0` | **3 476** | **`PK_RECT` — this landing** |
+| `bar` | `0x4BF6F0` | 1 184 | `PK_BAR` — landing 8a |
+| `scale` | | 6 819 | `PK_PIXELS` |
+| `frame` | `0x4BF4D0` — a tint | 0 this run | `PK_PIXELS` |
+
+**The `rect 5 396 343` this plan has quoted since the survey was the two functions added
+together, and it is ~99.7 % the focus rectangle.** 8b was filed as "the volume"; it is 3 476 ops.
+The volume is a **tint**, and a tint is the one shape in landing 8 that cannot become "a
+description of a draw" without the consumer being able to read what it draws over.
+
+**This is the second time on this gate that counting something apart moved the plan** — §2.58 did
+it to `OP_FRAME`. Both times the cause was the same: an op kind named for what it looked like
+rather than for the engine function behind it.
+
+#### The port
+
+`PK_RECT` carries the outer box and one palette index, nothing in the arena. Both consumers draw
+**four edges and never the interior** — that is not an optimisation, it is the difference: the
+interior is whatever was already in the twin and the op never wrote it, so a fill would be wrong.
+
+* GL: `twin_outline`, four scissored clears, the clear colour restored afterwards (§2.58's fix,
+  applied here from the start rather than found by a review).
+* Vulkan: **one** `vkCmdClearAttachments` with `rectCount = 4`. It shares `TAGPU_GUIOP_CLEAR`'s
+  path, so it takes no draw slot, no quad and no descriptor set. Each of the four rects is clamped
+  to the twin independently and the ones that clamp away are dropped, with the survivors compacted
+  so `rectCount` stays meaningful — a bound, because a clear rect outside the render area is
+  undefined behaviour rather than a no-op.
+
+Corners are written twice, by the same constant, which is what the engine's own four edges do.
+
+#### Measured
+
+| `renderer=vulkan`, full play arm set, 1024x768 | |
+|---|---|
+| `rect` observed | **3 476** |
+| `rects=` replayed | **3 474** (a 2-op sampling gap — the two lines print on different cadences) |
+| the frame | **0 magenta of 786 432**, **2 477 distinct colours** |
+| by eye | terrain, trees, the HUD panel, the minimap, METAL/ENERGY bars, the commander's health bar |
+
+The colour count is asserted deliberately: §2.58's trap is that "0 magenta" passes on a black
+window too.
+
+#### Not covered
+
+- **`OP_FOCUS` still publishes surface bytes**, and it is 1.2 M ops a game — after 8a and 8b the
+  single largest consumer of `PK_PIXELS` among the leaves landing 8 was filed to close. Nothing
+  here changes that; the landing renames it accurately and measures it.
+- **The tints need a mechanism landing 8 does not have.** `OP_FOCUS` and `OP_FRAME` both read the
+  destination. On the Vulkan lane that means sampling the twin the pass is writing — a subpass
+  input or a second pass, not a clear. **Whether they port at all is open**, and leaving them as
+  `PK_PIXELS` remains a defensible answer for exactly the reason they are hard: publishing the
+  destination's bytes is what a destination-dependent op actually means.
+- **`twin_outline` is unexercised for the same reason `twin_fill` is** (§2.58): on the GL lane
+  these ops find no twin. Not re-measured per lane here.
+- **The 1 px box case is reasoned, not measured.** A box with `l == r` gives four degenerate edges
+  that collapse onto the same column; the code clamps extents rather than skipping edges so the
+  result is the single column the engine draws, but no fixture produced one.
+
+---
+
 ## 4. What the work taught us
 
 These are the transferable parts — the reasons things are shaped the way they are.

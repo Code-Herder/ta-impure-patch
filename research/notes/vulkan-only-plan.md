@@ -1320,9 +1320,27 @@ Back to the filed list:
      obviously the wrong answer. [The framed box's nature was established by landing 8a's review;
      before it this entry said "three fills", which is what the engine map had said since G15a.]
 
-   **Not covered by 8a:** `PK_PIXELS` is not closed — one kind of five left it, and the other four
-   still publish surface bytes at the flip. The gate's exit condition is unchanged and 8a does not
-   meet it.
+   **THE GATE'S SHAPE AFTER 8a AND 8b, WHICH IS NOT THE SHAPE IT WAS FILED IN.** Two landings in,
+   the ops split into two classes rather than five kinds, and only one class is what landing 8
+   assumed:
+
+   * **Replaceable by a description of a draw** — `bar` (done), `rect` (done), `line` (8c,
+     **842 790 ops**, the largest of these). These write a constant and read nothing.
+   * **Destination-dependent tints** — `focus` (`0x4BF7B0`, **1 223 310 ops**) and `frame`
+     (`0x4BF4D0`). Both read the pixels they overwrite and remap them through a LUT. **A colour
+     and a box cannot express either**, and on the Vulkan lane a consumer would need to sample the
+     twin the pass is writing — a subpass input or a second pass, not a clear.
+
+   **So the single largest consumer of `PK_PIXELS` among these leaves is the class the gate has no
+   mechanism for**, and it was invisible while `focus` and `rect` shared an op kind. **Whether the
+   tints port at all is now an open question rather than a queued task**, and leaving them as
+   `PK_PIXELS` is defensible for precisely the reason they are hard: publishing the destination's
+   bytes is what a destination-dependent op means. **That is a decision about the gate's exit
+   condition, and it is the owner's** — the exit condition as written ("`PK_PIXELS` closed") cannot
+   be met by 8c alone, and nothing here rewrites it.
+
+   **Not covered by 8a and 8b:** `PK_PIXELS` is not closed — `focus`, `line`, `scale` and `frame`
+   still publish surface bytes at the flip.
 9. **Seeds carry art.** A `PK_SEED` is published lazily on first touch
    (`tagpu_gui_hook.c:1289/1300/1332`) because we cannot know how a surface got its contents.
    The fix is to make the engine redraw: `gui-renderer.md:55` has the panel as a pre-rendered

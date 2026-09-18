@@ -327,9 +327,21 @@ static SURF* surf_of_ctx(const int* ctx)
 }
 
 /* ---- the ops recorded since the last flip ------------------------------ */
+/* `OP_FOCUS` IS SPLIT OFF `OP_RECT` BY LANDING 8b, and the split is the whole
+   reason 8b can port anything: the two leaves that were both `OP_RECT` are not
+   the same operation. `0x4BF8C0` draws four inclusive edges through the
+   STORE-ONLY Bresenham `0x4CC7AB` -- a hollow rectangle of one palette index,
+   which ports as geometry. `0x4BF7B0` draws EIGHT edges (two concentric rects,
+   `0x4BF7F3`..`0x4BF839` and `0x4BF86A`..`0x4BF8A4`) through `0x4BEC70`, whose
+   writer `0x4CC8DF` READS THE DESTINATION and remaps it through
+   `globals+0xC8` -- the same shade table `0x4BF4D0` uses. Publishing that as a
+   colour and a box would paint a solid rectangle where the engine tinted what
+   was under it. It keeps the `PK_PIXELS` path until something can carry a
+   read-modify-write across the seam.
+   [DISASSEMBLED 2026-09-18; exe-reverse-engineering.md has both.] */
 enum { OP_GAF = 1, OP_GAFA, OP_GAFB, OP_GAFD, OP_SCALE, OP_TEXT, OP_LINE, OP_BAR, OP_RECT, OP_FRAME, OP_FILL, OP_COPY,
-       OP_FLIP, OP_NKIND };
-static const char* const OP_NAME[OP_NKIND] = { "?", "gaf", "gafa", "gafb", "gafd", "scale", "text", "line", "bar", "rect", "frame", "fill", "copy", "flip" };
+       OP_FLIP, OP_FOCUS, OP_NKIND };
+static const char* const OP_NAME[OP_NKIND] = { "?", "gaf", "gafa", "gafb", "gafd", "scale", "text", "line", "bar", "rect", "frame", "fill", "copy", "flip", "focus" };
 typedef struct OP {
     unsigned base; short l, t, r, b; unsigned char kind;
     /* what the publisher needs beyond the box (gui-renderer.md 3.6) */
@@ -1507,6 +1519,23 @@ static void publish(unsigned flipSurf)
            engine was inside the call. */
         if (op->kind == OP_BAR) {
             o = pub_op(PK_BAR, s->base); if (!o) return;
+            o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
+            o->fg = op->col;
+            pub_commit();
+            continue;
+        }
+        /* A HOLLOW RECTANGLE IS FOUR EDGES AND A COLOUR. [The vulkan-only
+           plan, landing 8b.] `DrawTranspRectangle 0x4BF8C0` is named for its
+           hollow centre and NOT for translucency: its four edges go through
+           the store-only Bresenham `0x4CC7AB`, which reads nothing of the
+           destination and writes `stos BYTE al` from the low byte of its
+           colour argument. So the op is a box, a palette index, and the fact
+           that the MIDDLE IS UNTOUCHED -- which is what publishing the box's
+           bytes got wrong twice over: it copied the interior the op never
+           wrote, and it copied it at the flip.
+           `0x4BF7B0` is NOT here: it is `OP_FOCUS` now, and it tints. */
+        if (op->kind == OP_RECT) {
+            o = pub_op(PK_RECT, s->base); if (!o) return;
             o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
             o->fg = op->col;
             pub_commit();

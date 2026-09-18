@@ -2998,6 +2998,27 @@ is read for `OP_BAR` alone — but it moves 8d: a tint that READS its destinatio
 mechanism from the three op kinds that replace published bytes with a description of a draw, and
 whether `OP_FRAME` should port at all is now an open question rather than a queued task.
 
+**8b LANDED 2026-09-18 too** ([gpu-status](gpu-status.html) §2.59), **and disentangling it
+destroyed the reason it was filed first.** `OP_RECT` was two engine functions:
+`DrawTranspRectangle 0x4BF8C0` — four inclusive edges through the **store-only** Bresenham
+`0x4CC7AB`, colour = the low byte — and the focus rectangle `0x4BF7B0`, **eight** edges through
+`0x4BEC70`, whose writer `0x4CC8DF` **reads the destination** and remaps it through `globals+0xC8`,
+the same table `0x4BF4D0` uses. Counted apart for the first time: **`focus` 1 223 310 against
+`rect` 3 476**. The `rect 5 396 343` this plan quoted since the survey was the two added together,
+**~99.7 % of it the tint**. `0x4BF8C0` ported as `PK_RECT` — the outer box, one palette index, four
+edges as **one** `vkCmdClearAttachments` with `rectCount = 4`, each rect clamped independently
+because a clear rect outside the render area is undefined behaviour. Measured `rects=3474` against
+`rect 3476`, frame at **0 magenta of 786 432 and 2 477 distinct colours** (the colour count is
+asserted on purpose — 0 magenta passes on a black window too).
+
+**So the gate is not the shape it was filed in.** The ops are two classes, not five kinds:
+replaceable by a description of a draw (`bar` done, `rect` done, `line` 842 790 — 8c), and
+**destination-dependent tints** (`focus` 1 223 310, `frame`) that read the pixels they overwrite.
+A colour and a box cannot express a tint, and the largest consumer of `PK_PIXELS` among these
+leaves is the class the gate has no mechanism for — invisible while `focus` and `rect` shared an
+op kind. **Whether the tints port at all is the owner's call**: the exit condition as written
+("`PK_PIXELS` closed") cannot be met by 8c alone.
+
 **And 8a is 0.02 % of the traffic**, which the row says rather than leaves to be discovered: the
 live census is **`rect 5 396 343`, `line 3 614 453`, `bar 1 334`**. `OP_BAR` went first because it
 is the only one of the five kinds with an unambiguous shape — one engine function, one solid fill.

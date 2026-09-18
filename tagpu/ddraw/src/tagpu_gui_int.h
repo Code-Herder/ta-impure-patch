@@ -23,13 +23,20 @@ enum {
     PK_PIXELS,      /* the box's bytes follow in the arena (everything else)  */
     PK_STRING,      /* G17d: TA's own glyphs, stamped by us — the string        */
                     /* follows in the arena and the font/colours ride along     */
-    PK_BAR          /* landing 8a: a SOLID rectangle of one palette index --
+    PK_BAR,         /* landing 8a: a SOLID rectangle of one palette index --
                        `fg` is the index, the box is `l,t,r,b` inclusive, and
                        NOTHING follows in the arena. That last part is the point:
                        as `PK_PIXELS` this op copied its whole box out of the
                        surface, and did so AT THE FLIP, so anything drawn over it
                        in between was what got published. A colour and a box are
                        both smaller and correct. */
+    PK_RECT         /* landing 8b: a HOLLOW rectangle of one palette index --
+                       `fg` is the index, `l,t,r,b` are the OUTER box and every
+                       edge is inclusive, and the INTERIOR IS NOT TOUCHED. As
+                       `PK_PIXELS` this op published its whole box, interior
+                       included, read out of the surface at the flip: it carried
+                       pixels the op never wrote, from a moment after it ran.
+                       `0x4BF7B0` does NOT produce this -- it tints. */
 };
 
 typedef struct TAGPU_PUBOP {

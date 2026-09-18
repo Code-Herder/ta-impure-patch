@@ -1754,10 +1754,12 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             break;
         case TAGPU_GUIOP_CLEAR:
         case TAGPU_GUIOP_BAR:
-            /* NEITHER NEEDS A DRAW SLOT: both are `vkCmdClearAttachments` over
-               a rect, so they cost no quad and no descriptor set and are not
-               counted against DRAW_MAX/QUAD_MAX. [BAR: the vulkan-only plan,
-               landing 8a.] */
+        case TAGPU_GUIOP_RECT:
+            /* NONE NEEDS A DRAW SLOT: all three are `vkCmdClearAttachments`
+               over one or more rects, so they cost no quad and no descriptor
+               set and are not counted against DRAW_MAX/QUAD_MAX. RECT clears
+               four rects in ONE call rather than four, which is why it is here
+               and not with the quads. [BAR: landing 8a; RECT: landing 8b.] */
             if (bw < 1 || bh < 1) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
             break;
         case TAGPU_GUIOP_FREE:
@@ -2215,7 +2217,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
            recorded inside one) */
         if (o->kind == TAGPU_GUIOP_SPRITE || o->kind == TAGPU_GUIOP_COPY ||
             o->kind == TAGPU_GUIOP_STRING || o->kind == TAGPU_GUIOP_CLEAR ||
-            o->kind == TAGPU_GUIOP_BAR) {
+            o->kind == TAGPU_GUIOP_BAR    || o->kind == TAGPU_GUIOP_RECT) {
             TWIN* src = NULL;
             t = tw_find(o->surf);
             /* THE GL LANE HAD A TWIN AND WE DO NOT, WHICH IS THE DEFINITION OF
@@ -2289,8 +2291,12 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                glyphs the GL twin has. */
             if (o->kind == TAGPU_GUIOP_STRING) set_scissor(cb, 0, 0, t->w, t->h, t->w, t->h);
             else                               set_scissor(cb, o->l, o->t, bw, bh, t->w, t->h);
+            /* RECT's four edges are four CLEAR RECTS inside the op's own box,
+               so the scissor above already bounds them and each edge is clipped
+               by it for free. */
 
-            if (o->kind == TAGPU_GUIOP_CLEAR || o->kind == TAGPU_GUIOP_BAR) {
+            if (o->kind == TAGPU_GUIOP_CLEAR || o->kind == TAGPU_GUIOP_BAR ||
+                o->kind == TAGPU_GUIOP_RECT) {
                 /* CLEAR: THE GL LANE'S SCISSORED glClear TO COVERAGE 0 -- AND IT
                    CLEARS BOTH ATTACHMENTS ON A COLOUR TWIN, because
                    `glClear(GL_COLOR_BUFFER_BIT)` clears every buffer
@@ -2306,30 +2312,80 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                    the engine just painted over. The index is `o->fg`, one byte,
                    because that is all `0x4CCDEA` reads of the engine's own
                    colour argument (exe-reverse-engineering.md). */
+                /* RECT IS FOUR RECTS IN ONE CALL; CLEAR and BAR are one.
+                   `vkCmdClearAttachments` takes a rect ARRAY, so the four edges
+                   cost one command rather than four, and each is clamped to the
+                   twin separately below. [RECT: landing 8b.] */
                 VkClearAttachment ca[2];
-                VkClearRect cr;
+                VkClearRect cr[4];
                 int nca = t->colImg ? 2 : 1;
-                memset(ca, 0, sizeof ca); memset(&cr, 0, sizeof cr);
+                int ncr = 0, i;
+                memset(ca, 0, sizeof ca); memset(cr, 0, sizeof cr);
                 ca[0].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                 ca[0].colorAttachment = 0;
-                if (o->kind == TAGPU_GUIOP_BAR) {
+                if (o->kind == TAGPU_GUIOP_BAR || o->kind == TAGPU_GUIOP_RECT) {
                     ca[0].clearValue.color.float32[0] = (float)o->fg / 255.0f;
                     ca[0].clearValue.color.float32[1] = 1.0f;
                 }
                 ca[1].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                 ca[1].colorAttachment = 1;
-                cr.rect.offset.x = o->l; cr.rect.offset.y = o->t;
-                cr.rect.extent.width = (uint32_t)bw;
-                cr.rect.extent.height = (uint32_t)bh;
-                cr.layerCount = 1;
-                if (cr.rect.offset.x < 0) cr.rect.offset.x = 0;
-                if (cr.rect.offset.y < 0) cr.rect.offset.y = 0;
-                if (cr.rect.offset.x + (int)cr.rect.extent.width > t->w)
-                    cr.rect.extent.width = (uint32_t)(t->w - cr.rect.offset.x);
-                if (cr.rect.offset.y + (int)cr.rect.extent.height > t->h)
-                    cr.rect.extent.height = (uint32_t)(t->h - cr.rect.offset.y);
-                if (cr.rect.extent.width && cr.rect.extent.height)
-                    vkCmdClearAttachments(cb, (uint32_t)nca, ca, 1, &cr);
+                if (o->kind == TAGPU_GUIOP_RECT) {
+                    /* top, bottom, left, right -- the OUTER box's four edges,
+                       one pixel each, corners written twice with the same
+                       constant. `bw`/`bh` are the inclusive box's extents, so a
+                       1 px box gives four degenerate-but-valid edges rather
+                       than none. The interior is NOT cleared: that is the whole
+                       difference from BAR. */
+                    int ex[4], ey[4], ew[4], eh[4], k;
+                    ex[0] = o->l; ey[0] = o->t;      ew[0] = bw; eh[0] = 1;
+                    ex[1] = o->l; ey[1] = o->b;      ew[1] = bw; eh[1] = 1;
+                    ex[2] = o->l; ey[2] = o->t;      ew[2] = 1;  eh[2] = bh;
+                    ex[3] = o->r; ey[3] = o->t;      ew[3] = 1;  eh[3] = bh;
+                    for (k = 0; k < 4; k++) {
+                        cr[ncr].rect.offset.x = ex[k]; cr[ncr].rect.offset.y = ey[k];
+                        cr[ncr].rect.extent.width  = (uint32_t)ew[k];
+                        cr[ncr].rect.extent.height = (uint32_t)eh[k];
+                        cr[ncr].layerCount = 1;
+                        ncr++;
+                    }
+                } else {
+                    cr[0].rect.offset.x = o->l; cr[0].rect.offset.y = o->t;
+                    cr[0].rect.extent.width = (uint32_t)bw;
+                    cr[0].rect.extent.height = (uint32_t)bh;
+                    cr[0].layerCount = 1;
+                    ncr = 1;
+                }
+                /* CLAMP EVERY RECT TO THE TWIN, and drop the ones that clamp
+                   away -- `vkCmdClearAttachments` has undefined behaviour for a
+                   rect outside the render area, so this is a bound and not a
+                   tidy-up. Compacting in place keeps the survivors contiguous,
+                   which is what `rectCount` means. */
+                {
+                    int keep = 0;
+                    for (i = 0; i < ncr; i++) {
+                        VkClearRect r = cr[i];
+                        if (r.rect.offset.x < 0) {
+                            r.rect.extent.width = (r.rect.extent.width > (uint32_t)(-r.rect.offset.x))
+                                ? r.rect.extent.width - (uint32_t)(-r.rect.offset.x) : 0;
+                            r.rect.offset.x = 0;
+                        }
+                        if (r.rect.offset.y < 0) {
+                            r.rect.extent.height = (r.rect.extent.height > (uint32_t)(-r.rect.offset.y))
+                                ? r.rect.extent.height - (uint32_t)(-r.rect.offset.y) : 0;
+                            r.rect.offset.y = 0;
+                        }
+                        if (r.rect.offset.x >= t->w || r.rect.offset.y >= t->h) continue;
+                        if (r.rect.offset.x + (int)r.rect.extent.width > t->w)
+                            r.rect.extent.width = (uint32_t)(t->w - r.rect.offset.x);
+                        if (r.rect.offset.y + (int)r.rect.extent.height > t->h)
+                            r.rect.extent.height = (uint32_t)(t->h - r.rect.offset.y);
+                        if (!r.rect.extent.width || !r.rect.extent.height) continue;
+                        cr[keep++] = r;
+                    }
+                    ncr = keep;
+                }
+                if (ncr)
+                    vkCmdClearAttachments(cb, (uint32_t)nca, ca, (uint32_t)ncr, cr);
                 continue;
             }
 
