@@ -10691,12 +10691,22 @@ jmp  <the je's target>        ; 0x459324 / 0x459578
 `g_ssSkip` is one byte, written by `tagpu_native_frame` on the render thread and read by the two
 stubs on the game thread — atomic on x86, no interlock owed. **Its stale directions are not
 symmetric**, and that is its safety argument: stale 0 while the pass paints is a DOUBLE shadow
-for a frame; stale 1 while it does not is NO shadow. The publisher is what keeps the second out —
-it publishes every frame it runs, 0 included on the path where the GL program has refused, and
-`tagpu_overlay_draw` calls it unconditionally, so it cannot go quiet while a lane still presents.
-A lane that never presents never calls it at all, which is the `gdi` case: the flag stays at its
-initial 0 and the engine draws its own shadows, **by construction rather than by anyone
-remembering to switch it off**.
+for a frame; stale 1 while it does not is NO shadow.
+
+**So the flag is raised in exactly one place and lowered in nine**, and the first version of this
+landing got that backwards. It published from the top of `tagpu_native_frame`, before **eleven**
+early returns — a frame with no packet, which is the whole shell; a GL program still building; an
+atlas that would not allocate; a viewport that failed its sanity bound — so on every one of those
+the flag stayed raised with nothing painting, which is the bad direction. The raise now sits after
+the last of those guards, at the point the pass has committed to drawing, and each early return
+lowers it on the way out. **One write per frame**, so there is no window a game-thread read can
+land in: a shell frame writes 0 and only 0, a drawing frame writes 1 and only 1, and the value
+changes only when the pass's own state does.
+
+`tagpu_overlay_draw` calls the publisher unconditionally, so it cannot go quiet while a lane still
+presents. A lane that never presents never calls it at all, which is the `gdi` case: the flag
+stays at its initial 0 and the engine draws its own shadows, **by construction rather than by
+anyone remembering to switch it off**.
 
 **A flip is immune to an incoming branch and a detour is not**, so both stolen ranges were
 checked before the code was written. `objdump -d -M intel` over the whole image finds exactly one
@@ -10755,6 +10765,10 @@ shadow is SKIPPED (ours live)` when the pass arms, and `… is restored` within 
   pixels, swamping anything a shadow could contribute.
 * **The double-shadow direction was not forced.** Stale 0 while the pass paints is accepted as
   the safe direction and is one frame wide at most; no fixture makes it happen on purpose.
+* **Three returns sit after the raise** (`tagpu_native.c:3441`, `:3713`, `:3811`) and do not lower
+  the flag. They are reached after the gather has run and all say some variant of *nothing was
+  gathered*; the detours only install under target `all`, where owning no units means there are
+  none on screen, so there is no structure for the branch to matter to. Argued, not measured.
 
 
 ## 4. What the work taught us

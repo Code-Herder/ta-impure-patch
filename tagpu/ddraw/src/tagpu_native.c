@@ -84,6 +84,9 @@
 #include "tagpu_markown.h"
 #include "tagpu_order.h"
 #include "tagpu_owndraw.h"   /* tagpu_owndraw_structshadow_ours: who draws a building's shadow */
+/* Lower the structure-shadow gate on the way out of a frame this pass will not
+   draw. See the one place it is RAISED, below the viewport bound. */
+#define SSHADOW_NONE() tagpu_owndraw_set_structshadow(0)
 #include "tagpu_reclaim.h"   /* the teardown fence this file's template reads stand behind */
 #include "tagpu_posebake.h"
 #include "tagpu_vk.h"        /* tagpu_vk_owns_present: is there a GL lane at all? */
@@ -2634,23 +2637,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        numbers and the two must never disagree. */
     s_zoom = tagpu_zoom_lever();
 
-    /* THE STRUCTURE-SHADOW GATE, published every frame this pass runs [the
-       vulkan-only plan, landing 10b]. The blit's two branches are detoured
-       rather than flipped now, and this is the word they read: while it is
-       set the engine draws no cached slant shadow and every structure's is
-       ours, which is only true while this pass is armed and drawing.
-
-       EVERY FRAME, not on the 30-frame arm poll: the poll settles `s_armed`,
-       and this publishes what `s_armed` MEANS for the branch, so disarming
-       through the lever reaches the engine's branch on the next frame instead
-       of up to thirty frames later. It is also the only publish there is --
-       no watchdog, unlike fxown's -- because `tagpu_overlay_draw` calls this
-       function unconditionally on both lanes, so it cannot go silent while a
-       lane still presents. A lane that never presents never calls it at all,
-       which is exactly the `renderer=gdi` case the gate exists for: the flag
-       stays 0 and the engine draws its own shadows. */
-    tagpu_owndraw_set_structshadow(s_armed == 1);
-
     /* the effects pass (tagpu_fx.on) rides this frame: it needs the view,
        fog and palette set up here and draws into this FBO */
     int fxOn = tagpu_fx_armed(f->frame_counter);
@@ -2668,7 +2654,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        engine's driver back from its own disarm path, and it can only do that
        if it is still being asked */
     tagpu_order_armed(f->frame_counter);
-    if (!s_armed && !fxOn && !sfxOn && !featOn && !terrOn && !markOn) return;
+    if (!s_armed && !fxOn && !sfxOn && !featOn && !terrOn && !markOn) { SSHADOW_NONE(); return; }
     /* BOTH OF THESE ARE GL AND ONLY GL. `init_gl` builds this pass's programs
        and FBOs; `tagpu_r3d_ensure` builds the 3DO atlas and LUT textures ("init
        on demand (GL context current)", where it is defined). Asking either on
@@ -2676,17 +2662,17 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        one lane the hand-overs are for. */
     if (gl_draws) {
         if (s_state == 0) init_gl();
-        if (s_state != 1) return;
+        if (s_state != 1) { SSHADOW_NONE(); return; }
     }
     /* THE 3DO ATLAS AND THE SHADE LUT ARE THE PASS'S, not the backend's, so
        this is asked on both lanes -- the unit pass needs the atlas laid out and
        the LUT mirrored whichever rasteriser draws it, and since tagpu_gaf.h's
        change the atlas exists without a GL name. On the GL lane it is asked at
        exactly the point it always was, right after `init_gl`. */
-    if (!tagpu_r3d_ensure()) return;
+    if (!tagpu_r3d_ensure()) { SSHADOW_NONE(); return; }
 
     char* ta = *(char**)TA_MAINPP;
-    if (!ptr_ok(ta)) return;
+    if (!ptr_ok(ta)) { SSHADOW_NONE(); return; }
     /* The palette THE SCREEN IS SHOWN WITH, not the engine's own table: the
        engine gamma-scales every palette on the way to DirectDraw and never
        scales main+0x143A7, so a pass reading that table draws the world at
@@ -2697,7 +2683,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        ptr_ok(ta) above is what the engine-table fallback needs — but s_palTex
        is only given storage by the upload below, and a shader sampling a
        storageless texture is the all-black failure mode the fog LUT records. */
-    if (!pal) return;
+    if (!pal) { SSHADOW_NONE(); return; }
     /* the unit atlas's frame: recycle if full, arm and step its Classic++
        restore -- before any face asks it for a UV */
     tagpu_r3d_atlas_frame(pal);
@@ -2734,10 +2720,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        one, is no world to draw. The composite key rect (uVp), the zoom's
        published view and the effective gather below all mean this rect. */
     const TAGPU_PACKET* pk = f->packet;
-    if (!pk || !pk->in_game) return;
+    if (!pk || !pk->in_game) { SSHADOW_NONE(); return; }
     int vpL = pk->vp[0], vpT = pk->vp[1], vw = pk->vp[2], vh = pk->vp[3];
     int eyeX, eyeY;
-    if (!tagpu_zoom_predicted_eye(&eyeX, &eyeY)) return;
+    if (!tagpu_zoom_predicted_eye(&eyeX, &eyeY)) { SSHADOW_NONE(); return; }
     /* A SANITY BOUND ON ENGINE DATA, NOT A SUPPORTED-RESOLUTION LIMIT. The
        viewport is read out of engine memory and everything below sizes itself
        from it, so a garbage pair must not be believed — but nothing here
@@ -2746,7 +2732,27 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        viewport. 16384 is the largest 2D texture common hardware will hold,
        which is the real ceiling on the FBO the frame is drawn into; it used to
        read 4096, and a 5K or 8K desktop was refused the whole native pass. */
-    if (vw < 64 || vh < 64 || vw > 16384 || vh > 16384) return;
+    if (vw < 64 || vh < 64 || vw > 16384 || vh > 16384) { SSHADOW_NONE(); return; }
+
+    /* THE STRUCTURE-SHADOW GATE, AND THIS IS THE ONLY PLACE IT IS RAISED [the
+       vulkan-only plan, landing 10b]. The blit's two branches are detoured
+       rather than flipped now, and this is the word they read: set, the engine
+       draws no cached slant shadow and every structure's is ours.
+
+       IT SITS AFTER EVERY EARLY RETURN ABOVE ON PURPOSE, and the first version
+       of this landing had it before them. The flag's two stale directions are
+       not symmetric -- stale 0 is a double shadow for a frame, stale 1 is NO
+       shadow -- so it may only be raised at a point the pass has committed to
+       drawing. Published from the top of the function it stayed raised through
+       every `return` here: a frame with no packet (the whole shell), a GL
+       program still building, an atlas that would not allocate. Each of those
+       now lowers it on the way out, which is the `SSHADOW_NONE()` above them,
+       and this is the one line that raises it.
+
+       ONE WRITE PER FRAME, so there is no window: a shell frame writes 0 and
+       only 0, a drawing frame writes 1 and only 1, and the value changes only
+       when the pass's own state does. */
+    tagpu_owndraw_set_structshadow(s_armed == 1);
     int gw = f->game_width  > 0 ? f->game_width  : vpL + vw;
     int gh = f->game_height > 0 ? f->game_height : vpT + vh;
 
