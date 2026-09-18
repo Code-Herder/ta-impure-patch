@@ -95,13 +95,19 @@ DWORD WINAPI vk_render_main(void)
 
         fpsl_frame_start();
 
-        /* THE CLEAR REQUEST IS SATISFIED BY CONSTRUCTION HERE, so it is taken
-           rather than left latched. The other two backends consume it and then
-           fill the window black; the seam clears the whole swapchain image to
-           the lever colour on every frame it presents, so there is no frame in
-           which the request could still be outstanding. Leaving it set would
-           hand the first GDI fallback frame a clear it does not owe. */
-        InterlockedExchange(&g_ddraw.render.clear_screen, FALSE);
+        /* `g_ddraw.render.clear_screen` IS DELIBERATELY NOT TOUCHED, and the
+           reason is worth recording because the first version of this file did
+           consume it. Only `render_gdi.c` consumes that flag; `render_ogl.c`
+           never reads it, because a backend that clears its own target every
+           frame has nothing to do with it. This one is in the same position --
+           the seam clears the whole swapchain image on every frame it presents.
+
+           And consuming it would have been WRONG rather than merely idle: the
+           lane presents nothing while the bring-up runs (~420 ms measured), so
+           a mode change that set the flag in that window would have had its
+           clear eaten by a frame that painted nothing. Left standing, the flag
+           is still there for the GDI fallback below, which is the one path that
+           owes it. */
 
         /* `frames` is post-incremented so the number passed is this frame's,
            counting from 0. WHEN 4b WIRES THE GATHERS, the same number has to
