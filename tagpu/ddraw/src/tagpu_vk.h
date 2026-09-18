@@ -166,6 +166,10 @@ int tagpu_vk_ab_arm(const char* tag);
    again rather than treat 0 as a bound. */
 int tagpu_vk_max_image_dim(void);
 
+/* The bound device's `maxUniformBufferRange`, or 0 while no device is up --
+   GL_MAX_UNIFORM_BLOCK_SIZE's counterpart. 0 means "not yet", never a limit. */
+int tagpu_vk_max_uniform_range(void);
+
 /* 1 when the lane has given up (ST_FAILED) -- a fact the backend can act on
    rather than a frame count it has to guess.
 

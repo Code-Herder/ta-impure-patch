@@ -1273,6 +1273,24 @@ int tagpu_vk_max_image_dim(void)
     return cached;
 }
 
+/* THE DEVICE'S LARGEST UNIFORM BUFFER RANGE, or 0 while there is no device.
+   `GL_MAX_UNIFORM_BLOCK_SIZE`'s counterpart, and a ported pass wants it for the
+   same reason: the pose block is a COMPILE-TIME size and both lanes only ask
+   whether the device can hold it. Asked of the device we actually bound.
+   0 IS A REFUSAL AND NOT A DEFAULT, exactly as above -- a caller treats it as
+   "not yet" and asks again on a later frame. [The vulkan-only plan, 4b-2.] */
+int tagpu_vk_max_uniform_range(void)
+{
+    static int cached;
+    VkPhysicalDeviceProperties p;
+    if (cached > 0) return cached;
+    if (!s_vk.pd || lane_state() != ST_READY) return 0;
+    vkGetPhysicalDeviceProperties(s_vk.pd, &p);
+    if (p.limits.maxUniformBufferRange > 0x7FFFFFFFu) return 0;
+    cached = (int)p.limits.maxUniformBufferRange;
+    return cached;
+}
+
 
 /* PUT A LANE THAT FAILED BACK TO ST_OFF so the next frame brings it up again.
    The caller owns the policy -- how many times is worth trying -- because what
