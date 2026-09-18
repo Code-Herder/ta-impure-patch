@@ -1,0 +1,23 @@
+landing-review: model=claude-opus-5 effort=high reviewers=2 range=main...b6253a5 findings=9 acted=9 recorded=2 rejected=0 fixes=ed0febd,a304fdb docs=ed0febd,a304fdb
+Two independent reviewers at high, one on correctness and one solely on the
+game-thread/render-thread synchronisation (CLAUDE.md's cross-thread clause: this
+landing makes five world passes produce hand-overs on a lane that never did).
+Every finding verified against the code before acting.
+HIGH (correctness): tagpu_terr.c's ensure_atlas keyed its already-built test on
+s_atlasTex, a GL name that is 0 on the vulkan-only lane, so the whole tile atlas
+was rebuilt and re-uploaded EVERY FRAME there -- a 5.9 MB calloc/free and a
+serial bump that made the twin re-upload its image. Now s_atlasBuilt; measured
+once per run on both lanes.
+HIGH (cross-thread): tagpu_posedraw_live() is a promise the GAME thread acts on
+by skipping the engine's rasterise and wiping its composite, and arming without
+a GL program made it unkeepable -- the twin stands down on a missing mirror and
+the lane degrades to GDI with the latch still set. It answers no on that lane
+now, by construction.
+MEDIUM x4: Classic++'s restorer never starts there (left, and the doc overclaim
+corrected); the device accessors cached across a device change AND their
+consumers latched (both fixed); the effects pass alone did not claim on the
+unlink. LOW x2: a dead triple gate and a dead latch variable. PLAUSIBLE x1
+recorded not acted on: the lifted pose view reads the Classic++ light earlier
+than the composite's other consumers.
+Re-measured after every fix: terrain 0 px both lanes with the atlas built once,
+the unit pass 0 px both lanes, the composited GL frame 225 colours.
