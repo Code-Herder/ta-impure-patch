@@ -2189,8 +2189,10 @@ Four things that cost a session if they are not known:
   screen on this lane** — an armed instance showing only the clear colour is a fault now. The
   world and the UI layer are still 4b-2 and still stand down whole.
 
-**The per-pass A/Bs on the vulkan-only lane, as of landing 4b-3.** All five world passes and the
-UI layer draw there now. What each needs:
+**The per-pass A/Bs on the vulkan-only lane, as of landing 4c-3.** All five world passes and the
+UI layer draw there now, and the five world ones run at any `ss` — the ink counts in the table are
+`ss=1` figures, so at the shipped `ss=2` expect four times as many out of 3 145 728 rather than
+786 432. What each needs:
 
 | pass | fixture | arm set, and the trap |
 |---|---|---|
@@ -2372,11 +2374,24 @@ touch <gamedir>/tagpu_fps.ab                             # one frame, both lanes
     before a `--restart` it is consumed before the pass is ready and nothing is written: the GL
     half's "A/B wrote" line in the log is then the PREVIOUS run's, because the log appends across
     a restart. `rm` it, let the game reach the fixture, then `touch` it.
-  * **`ss.off` must be there at LAUNCH.** The A/B requires `ss=1` and says so — *"the A/B needs
-    ss=1 (the GL capture is the supersampled FBO) … relaunch with supersampling off"* — and
-    arming it live does not take, because the FBO is built where the lever is not re-read.
-    Which also means **the A/B can never run in the shipped configuration**: the patch ships
-    `ss=2`, so "does it draw for players" and "do the lanes agree" are always separate runs.
+  * **`ss.off` IS NO LONGER REQUIRED FOR A WORLD PASS, and since landing 4c-3 (2026-09-18) the
+    A/B runs in the shipped configuration.** It used to be mandatory at LAUNCH — the GL capture is
+    the world FBO's viewport at `gw*ss × gh*ss` and the Vulkan one was the window's client rect, so
+    at the default `ss` 2 the two files differed by a factor of two. The Vulkan half now comes from
+    the world target, which IS `gw*ss × gh*ss`, so both halves are that size at any `ss` and the
+    four *"the A/B needs ss=1"* refusals are gone. At 1024x768 with `ss=2` a capture is
+    **2048x1536, 3 145 728 px** — expect the px counts below to be four times the `ss=1` ones.
+    Still true: **arming `ss.off` LIVE does not take**, because the FBO is built where the lever is
+    not re-read, so whichever `ss` you want has to be settled before the launch.
+  * **The three UI passes (`gui`, `scaffold`, `fps`) still need `ss.off`** — nothing changed for
+    them. Their GL half is the default framebuffer and their Vulkan half is still the swapchain
+    image, so the two agree only at the window's own size.
+  * **On a frame with LINE vertices, expect ~100 px that are not a port fault.** The GL twin's
+    `glLineWidth(ss)` is clamped to 1 by the driver (measured, `tagpu_native.c:337`) while the
+    Vulkan lane has `wideLines` and draws the `ss` px it asked for. Every Vulkan column of the line
+    carries two ink pixels and every GL column one; **no pixel GL drew differs**. `vk-ab.py` reports
+    it as *"0 of the N pixels the GL capture DREW"*, which is the signature. It affects the effects
+    pass (lasers, lightning) and is predicted for the marker pass (order lines, range circles).
 
 - **A world pass's A/B needs the fixture to still be ALIVE.** `vk-ab.py` refuses two blank
   frames — *"agree perfectly and prove nothing"* — and on `fx-lasers` that is what you get a
@@ -2455,11 +2470,12 @@ rm -f $G/tagpu_feat.ab $G/tagpu_feat_*.ppm; sleep 2; touch $G/tagpu_feat.ab; sle
 ../.venv-undither/bin/python tools/vk-ab.py $G --pass feat        # 0 px apart
 ```
 
-- **`ss.off` is not optional and the pass says so if you forget.** The GL capture is the world
-  FBO's viewport, `gw*ss × gh*ss`; the Vulkan one is the window's client rect. At the default
-  `ss` 2 they differ by a factor of two, and rather than write a pair `vk-ab.py` would refuse
-  afterwards the twin logs `feat: the A/B needs ss=1 …` and captures nothing. Confirm with
-  `grep -a 'native: FBO' tagpu.log` → `ss=1`.
+- **`ss.off` is optional since 4c-3.** Both halves are the world target's size, `gw*ss × gh*ss`,
+  at any `ss` — the ink counts quoted here are `ss=1` figures, so multiply by `ss²` if you leave
+  supersampling on. What is still refused is a world claim on a frame with **no** world target, and
+  the lane says so by name: *"a world pass claimed the A/B and this frame has no world target"*.
+  Confirm the size you are measuring at with `grep -a 'vk: world:' tagpu.log` → `2048x1536 target
+  (1024x768 at ss=2)`.
 - **`native.on` must carry `wrecks`, or the feature pass emits nothing at all.** It only owns the
   draw when the native wreck pass owns `DrawUnit` (see *Features* below); without it the gather is
   muted, both halves are black and the A/B reads a meaningless 0. Measured 2026-09-18: with no
@@ -2502,7 +2518,8 @@ rm -f $G/tagpu_terr.ab $G/tagpu_terr_*.ppm; sleep 2; touch $G/tagpu_terr.ab; sle
 
 - **No `native.on` needed** — terrain takes the draw on `terrown.on` alone, which `tacli`
   auto-arms at launch when `terr.on` exists. (That is unlike the feature pass, which is muted
-  without `native.on … wrecks`.) `ss.off` is still required, as for every world pass.
+  without `native.on … wrecks`.) `ss.off` is optional since 4c-3, as for every world pass —
+  at `ss=2` this pass measures **0 px of 3 145 728 with 2 522 876 ink a side**.
 - **Terrain covers the WHOLE viewport, so the ink count is the viewport**: 630 719 of 630 784 at
   1024×768, 1 820 568 at 1080p. A pass that reads much less than the viewport has been scissored
   wrong or has drawn nothing; there is no "sparse fixture" failure mode here to worry about.

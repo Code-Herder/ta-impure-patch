@@ -9662,6 +9662,84 @@ files (§2.52). A landing that corrects a fact has to grep for the fact.
 
 ---
 
+### 2.54 The oracle moves to the world target, and finds the GL half wrong — landing 4c-3
+
+**LANDED 2026-09-18.** A world A/B now compares two `gw*ss` by `gh*ss` pictures, so it runs at the
+supersample factor the renderer actually ships with. It never has before.
+
+#### The two halves were never the same rect, and only one of them said so
+
+The GL half of a world capture is the **world FBO**: `tagpu_native.c` binds it and sets
+`glViewport(0, 0, gw*ss, gh*ss)`, and `tagpu_abshot.c` reads *the viewport* back. The Vulkan half
+was `s_vk.img[idx]` — the swapchain image, at the window's client rect. Those coincide only when
+`ss == 1` **and** nothing is letterboxed. `ss` is 2 unless `tagpu_ss.off` is there, so the shipped
+configuration was never measurable, and every 0-px result on this plan was taken at `ss = 1`.
+
+Four passes (`terr`, `feat`, `fx`, `mark`) knew and refused themselves — *"the A/B needs ss=1 (the
+GL capture is the supersampled FBO)"*. **`posedraw` did not**, and wrote a mismatched pair that
+`tools/vk-ab.py` then refused by size, one step further from the cause.
+
+§2.53 built a `gw*ss` by `gh*ss` colour image holding the world alone over a transparent clear,
+which is exactly what the GL FBO is. This points the capture at it:
+
+- the world colour image carries `TRANSFER_SRC` — **asked for at creation**, because
+  `vkCmdCopyImageToBuffer` requires the usage and no layout transition confers it. The same finding
+  was made against the swapchain images in the 2026-09-15 review, where the reference ICD copied
+  anyway and a whole 0-px result rested on undefined behaviour;
+- `tagpu_vk_world_shot(slot, …)` answers only for the slot the world render pass was actually
+  **opened** on this frame. `s_drawThis` cannot serve — `record` clears it, and `record` runs before
+  the capture is recorded. Every other slot still holds a real image of an *earlier* frame, which is
+  the worst thing an oracle can hand back;
+- the seam picks it whenever the claiming row is one of the first five of `s_abFiles` (the world
+  rows), out of the same array the path came from, so "which file" and "which image" cannot drift;
+- a world claim on a frame with **no** target is refused by name in the lane's own log instead of
+  being captured at the wrong size and diagnosed afterwards by the diff tool.
+
+The four `ss != 1` refusals are gone. The bound they were is now a property of the images.
+
+#### Measured at `ss = 2`, route D, 1024x768 game — 2048x1536 a side
+
+| pass | fixture | differing | non-black a side |
+|---|---|---|---|
+| terrain | `feat-forest` | **0 of 3 145 728** | 2 522 876 |
+| units (`posedraw`) | `selbox-facings` | **0 of 3 145 728** | 8 465 |
+| effects, no line vertices | `fx-lasers` | **0 of 3 145 728** | 10 396 |
+| effects, **with lasers** | `fx-lasers` | **~100 of 3 145 728** | 5 460 – 14 256 |
+
+#### And the laser difference is the GL half being wrong, which is a first
+
+Every differing pixel is one GL left black; **not one pixel GL drew differs**, and the extra pixels
+carry the same colour as the line. Printing the band shows why: every Vulkan column of the line
+holds **two** ink pixels and every GL column **one**.
+
+The cause was already in the tree, as a measurement, in `tagpu_native.c:337`: *"the driver clamps
+an aliased line's width to 1 — `glLineWidth(ss*3)` draws pixel-identically to `glLineWidth(ss)`"*.
+So the GL twin asks for `glLineWidth(2)` in the `ss` buffer and gets 1, and the note says what that
+costs: *"a half-lit smear, about half the engine's colour"*. That is the defect **`selgeom` was
+invented for** on the selection rects. The Vulkan lane has had `wideLines` since §2.53 and gets the
+2 px it asks for, which resolves to one **fully** lit game pixel — the engine's own rule (one
+whole coloured pixel per major-axis step, `0x4BE950`).
+
+**Left alone deliberately.** Making the two agree means changing a shipped picture, in one
+direction or the other, and that is the owner's call rather than a landing's. What changes here is
+only that the difference is now visible and explained instead of unmeasurable.
+
+#### Not covered by 4c-3
+
+- **The marker pass at `ss > 1` is predicted, not measured.** `tagpu_mark.c:1140` calls the same
+  `x_glLineWidth((GLfloat)v->ss)`, so order lines and range circles should show the same one-column
+  deficit. Its fixture needs six levers and a held drag (§2.39) and this landing did not run it.
+- **`ss = 1` was not re-measured on this build.** The three §2.53 figures stand from yesterday and
+  nothing in this diff touches a draw; the capture source is the only thing that moved.
+- **The three UI captures still read the swapchain image**, because their GL halves are the default
+  framebuffer. They are therefore still the reason the seam withholds TA's own frame on a claimed
+  frame — measured with this build: the GUI A/B is **0 px of 307 200** on the shell. The comment on
+  that line no longer claims the world captures depend on it, because they no longer do.
+- **`devres` and `k != 1` are untested either way.** Every figure above is a 1024x768 game in a
+  1024x768 window, where the composite rect is the whole frame.
+
+---
+
 ## 4. What the work taught us
 
 These are the transferable parts — the reasons things are shaped the way they are.

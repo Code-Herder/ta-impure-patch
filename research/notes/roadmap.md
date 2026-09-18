@@ -2838,18 +2838,26 @@ holds casters the lane cannot draw. Both block every world pixel. Every Phase G 
 taken under `tagpu_defaults.off` + `ss=1` + `gui.on=mmbase`, where neither arises.
 
 **Landing 4 is four landings; 4a landed 2026-09-17, and the whole of 4b and 4c on 2026-09-18**
-([gpu-status](gpu-status.html) §2.48 to §2.53). **4c was two landings and both are in**: *4c-1*
-TA's own surface — the frame's bottom layer, so `tagpu_gui.off` on `renderer=vulkan` renders the
-shell and a live game completely where it showed the lever's flat clear (§2.52) — and *4c-2*, the
+([gpu-status](gpu-status.html) §2.48 to §2.54). **4c was three landings and all three are in**:
+*4c-1* TA's own surface — the frame's bottom layer, so `tagpu_gui.off` on `renderer=vulkan` renders
+the shell and a live game completely where it showed the lever's flat clear (§2.52); *4c-2*, the
 `ss×` offscreen world target and its composite (§2.53), built on the GL lane's own generated
-`native_d` shader. **4c-2 closed more than `ss=2`**: the lane's effects and marker passes were
+`native_d` shader; and *4c-3*, the A/B capture moved onto that target (§2.54). **4c-2 closed more
+than `ss=2`**: the lane's effects and marker passes were
 refusing the WHOLE pass on any frame with line vertices, because the GL twin draws its lines `ss`
 px wide and there was no `ss` target to put them in — so on the shipped default the effects pass
 dropped every frame with a laser in it. Terrain agrees with its twin on **0 of the 630 719 pixels
-the GL FBO drew**. Still open there: `selAt1x`, the HUD-scale shift, GL's two-step resolve, and
-**the `s_curDrew` ordering gap 4b-3 named** — the plan assigns that one to 4c and neither 4c-1 nor
-4c-2 closed it, so 4c is done as a pair of landings without being done as a gate. **What is left is
-4d, the deletion, plus that gap and the A/B capture moving to the world target.** Filed as one row — the fourth backend,
+the GL FBO drew**. **4c-3 made that comparison expressible at the `ss` the renderer ships with** —
+both halves are now `gw*ss` by `gh*ss`, where the Vulkan half used to be the window's client rect,
+so terrain, units and effects each measure **0 px of 3 145 728** at `ss=2`. It also found the first
+difference on this plan whose wrong half is the **GL** one: on a frame with lasers the GL line is
+one column of ink where Vulkan's is two, because the driver clamps an aliased line's width to 1
+(`tagpu_native.c:337`) and the twin's laser resolves to half the engine's colour. Left alone —
+changing a shipped picture is the owner's call. Still open: `selAt1x`, the HUD-scale shift, GL's
+two-step resolve, the marker pass at `ss > 1` (predicted, not measured), and
+**the `s_curDrew` ordering gap 4b-3 named** — the plan assigns that one to 4c and none of the three
+closed it, so 4c is done as three landings without being done as a gate. **What is left is
+4d, the deletion, plus that gap.** Filed as one row — the fourth backend,
 `renderer=vulkan`, the `ss` target, TA's surface, and route D's deletion — it comes apart along
 four seams the code already has: **4a** the thread and the present, **4b** the per-frame driver
 (the gathers run and the GL draws stand down), **4c** the `ss` target and TA's surface upload,

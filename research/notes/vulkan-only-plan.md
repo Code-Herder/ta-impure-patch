@@ -602,20 +602,40 @@ would not have shown up as a failure — it would have shown up as three landing
      frame withheld on exactly the frames an A/B is claimed — and **both world A/Bs are 0 px of
      786 432 again**: terrain 630 719 non-black a side, effects 31 532.
 
-     **Still filed for later: move the Vulkan capture to the world target.** `tagpu_vk_shot.c`
-     reads `s_vk.img[idx]`; the offscreen image 4c-2 created is cleared to `{0,0,0,0}` and holds
-     the world alone, which is what GL's world FBO is. That is what would make a world A/B
-     runnable at `ss > 1` — which it has never been, because the GL capture is the supersampled
-     FBO and the Vulkan one the client rect, so the two are different sizes and `vk-ab.py` refuses
-     them.
+     *4c-3* the capture moves to that target — **LANDED 2026-09-18**
+     ([gpu-status](gpu-status.html) §2.54). `tagpu_vk_shot.c` read `s_vk.img[idx]`, the swapchain
+     image at the window's client rect, while the GL half has always been the world FBO at
+     `gw*ss, gh*ss` — the same size only at `ss = 1` with nothing letterboxed. Four passes refused
+     their own A/B whenever `ss != 1` and `posedraw` silently wrote a pair `vk-ab.py` then refused
+     by size, so **no figure on this plan had ever been taken at the `ss` the renderer ships with**.
+     The world colour image now carries `TRANSFER_SRC`, `tagpu_vk_world_shot` names the slot the
+     world render pass was opened on, and the seam reads it for the five world rows of `s_abFiles`.
+     **Measured at ss=2, 2048x1536 a side: terrain 0 of 3 145 728 (2 522 876 ink), units 0 of
+     3 145 728 (8 465 ink), effects 0 of 3 145 728 (10 396 ink).**
+
+     **AND IT FOUND THE GL HALF WRONG, WHICH IS A FIRST ON THIS PLAN.** On a frame carrying laser
+     lines the diff is ~100 px, every one of them a pixel GL left black and none of them a pixel GL
+     drew: each Vulkan column of the line holds two ink pixels and each GL column one. The cause is
+     already a measurement in `tagpu_native.c:337` — the driver clamps an aliased line's width to 1,
+     so `glLineWidth(ss)` draws pixel-identically to `glLineWidth(1)` and the twin's laser resolves
+     to *"a half-lit smear, about half the engine's colour"*, which is the defect `selgeom` exists
+     for. The Vulkan lane has `wideLines` since 4c-2 and gets its 2 px, which resolves to one fully
+     lit game pixel — the engine's own rule. **Left alone**: making them agree changes a shipped
+     picture and is the owner's call, not a landing's (this plan's escalation reason 1). Not
+     covered: the marker pass at `ss > 1` is predicted from the same `glLineWidth(ss)` call and not
+     measured; `devres` and `k != 1` are untested either way.
 
    * **4d — the deletion.** Route D's window, `tagpu_vk_wndproc`, `WM_TAGPU_VK` and the geometry
-     tracking, once 4b's figures are banked. **4a made route D unreachable rather than deleted on
+     tracking, once 4b's figures are banked. **4c-3 had to come first and did**: it is the last
+     landing that could widen what the two-lane oracle can express, and 4d is what removes the lane
+     it compares against. **4a made route D unreachable rather than deleted on
      purpose**, so the control above stays available until then: the same build answers both
      `renderer=vulkan` and `renderer=openglcore`, which is what makes 4b's A/B expressible at all.
 
    Four parts, not ten: the split is along the thread, the driver, the target and the deletion, and
-   each is something that can be run and shown. 4a's own bar is met by the table in §2.48.
+   each is something that can be run and shown. (4c came apart into three along its own seam — TA's
+   surface, the target, and the instrument that can finally read the target — which is the row
+   catching up with the work rather than a fourth part.) 4a's own bar is met by the table in §2.48.
 
    **And the deletion is one-way for the whole plan, not just for this landing.** After it, no
    absolute two-lane comparison is expressible; every later claim rests on a relative bar against a
