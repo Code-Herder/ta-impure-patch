@@ -162,6 +162,7 @@
 #include "tagpu_vk.h"
 #include "tagpu_vk_fps.h"
 #include "tagpu_vk_scaffold.h"
+#include "tagpu_vk_surf.h"
 #include "tagpu_vk_feat.h"
 #include "tagpu_vk_terr.h"
 #include "tagpu_vk_fx.h"
@@ -2040,6 +2041,7 @@ static void vk_down(void)
         tagpu_vk_hires_down(&s_pass);
         tagpu_vk_mark_down(&s_pass);
         tagpu_vk_gui_down(&s_pass);
+        tagpu_vk_surf_down(&s_pass);
         /* AFTER THE PASSES, because a pass owns the JOBS and the restorer owns
            what they are drawn with: each `_down` above gives its job back, and
            this then gives back the pipelines, the activations and the render
@@ -2657,7 +2659,7 @@ static int vk_present(void)
         tagpu_vk_fx_down_owed() || tagpu_vk_scaffold_down_owed() ||
         tagpu_vk_shadow_down_owed() || tagpu_vk_unit_down_owed() ||
         tagpu_vk_hires_down_owed() || tagpu_vk_mark_down_owed() ||
-        tagpu_vk_gui_down_owed()) {
+        tagpu_vk_gui_down_owed() || tagpu_vk_surf_down_owed()) {
         if (!vkDeviceWaitIdle || vkDeviceWaitIdle(s_vk.dev) != VK_SUCCESS) {
             vklog("vkDeviceWaitIdle refused before an owed pass teardown - down");
             return -2;
@@ -2676,6 +2678,7 @@ static int vk_present(void)
         if (tagpu_vk_hires_down_owed())    tagpu_vk_hires_down_paid(&s_pass);
         if (tagpu_vk_mark_down_owed())     tagpu_vk_mark_down_paid(&s_pass);
         if (tagpu_vk_gui_down_owed())      tagpu_vk_gui_down_paid(&s_pass);
+        if (tagpu_vk_surf_down_owed())     tagpu_vk_surf_down_paid(&s_pass);
     }
 
     r = vkAcquireNextImageKHR(s_vk.dev, s_vk.sc, 1000000000ull,
@@ -2757,6 +2760,7 @@ static int vk_present(void)
        is what proves the GPU has finished with that slot's buffers, and it is
        the only thing that does. */
     {
+        int draw_surf = 0;
         int draw_fps = 0, draw_scaf = 0, draw_feat = 0, draw_terr = 0, draw_fx = 0;
         int draw_mark = 0, ab_mark = 0;
         int draw_unit = 0, draw_gui = 0;
@@ -2795,7 +2799,15 @@ static int vk_present(void)
                forces, and the draws still happen in the GL lane's order inside
                the render pass further down. ---- */
 
-            /* THE SCAFFOLD'S UPLOAD IS FIRST, though its DRAW is nearly last.
+            /* TA'S OWN SCREEN IS UPLOADED BEFORE ANYTHING OF OURS, because it
+               is what everything of ours is drawn OVER. On the GL lane the fork
+               does this itself before any pass runs (render_ogl.c's
+               `g_ogl.main_program`), which is why `tagpu_gui.off` still shows a
+               game there and showed a flat clear here.
+               [The vulkan-only plan, landing 4c-1.] */
+            draw_surf = tagpu_vk_surf_prepare(&s_pass, cb, fi);
+
+            /* THE SCAFFOLD'S UPLOAD IS FIRST OF OURS, though its DRAW is nearly last.
                The G12a overlay is a texture the unit, hi-res and effects
                fragment shaders sample (`uScafOn`), so the pass that fills it
                has to have filled it before a consumer points a descriptor set
@@ -2914,6 +2926,12 @@ static int vk_present(void)
             rbi.clearValueCount = s_vk.dfmt != VK_FORMAT_UNDEFINED ? 2 : 0;
             rbi.pClearValues = cv;
             vkCmdBeginRenderPass(cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+            /* THE BOTTOM LAYER, FIRST AND OVER THE CLEAR. It is opaque and
+               depth-testless, so it neither reads nor writes anything the world
+               passes below it depend on; the clear that ran before the pass
+               still carries the letterbox and any frame this refused. */
+            if (draw_surf)
+                tagpu_vk_surf_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_terr)
                 tagpu_vk_terr_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_feat)
@@ -3067,6 +3085,7 @@ static int vk_resize(int w, int h)
     tagpu_vk_unit_down(&s_pass);
     tagpu_vk_hires_down(&s_pass);
     tagpu_vk_gui_down(&s_pass);
+    tagpu_vk_surf_down(&s_pass);
     /* AND ON A RESIZE TOO, though the device survives one: the restorer's
        staging and its timestamp pairs are sized by `d->slots`, which is
        `s_vk.nimg` and can change under a swapchain rebuild. The passes above
