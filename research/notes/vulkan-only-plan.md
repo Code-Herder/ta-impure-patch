@@ -317,6 +317,31 @@ would not have shown up as a failure — it would have shown up as three landing
    offscreen world target at `ss×` with its resolve, TA's surface uploaded by the backend instead
    of by the GUI pass. Route D's window, `tagpu_vk_wndproc`, `WM_TAGPU_VK` and the geometry
    tracking are deleted here.
+
+   **NEXT, AND ITS PREREQUISITES ARE MET [checked 2026-09-17, after 7e-2 landed].** The corrected
+   order is 5, 5b, 6, 7, then 4; landing 5 is done (§2.40), 6 is done (§2.41) and 7 closed with
+   7e-2, so every landing that needed the same-frame two-lane oracle has had it. Three facts worth
+   having before starting, because each took a session's reading to establish:
+
+   * **Its own oracle survives the deletion, and it is a comparison of two BUILDS rather than of
+     two lanes.** `tagpu_abshot.c` — the GL half — dies with GL, so the same-run pair does too;
+     what survives is `tagpu_vk_shot.c` writing `tagpu_<pass>_vk.ppm` and `vk-ab.py`'s file-to-file
+     mode, which "only diffs two files and does not care what made them". So landing 4 is measured
+     by capturing each pass's `_vk.ppm` from **`0b5e06d`** (this plan's reference build, `main` as
+     7e-2 landed it) and again from the new build, one pass armed at a time, and diffing the pair.
+     Both DLLs run in ONE instance under `tacli launch --keep-dll`. **No baseline needs hoarding
+     before the deletion** — the reference is a git ref.
+   * **`ss=1`, and one `tagpu_<pass>.ab` at a time.** The lane refuses to capture when more than
+     one pass drew into the frame and says so in the log, so a contaminated pair is never written.
+     The eight capture names are `tagpu_{fps,scaffold,feat,terr,fx,mark,posedraw,gui}_vk.ppm`.
+   * **The shipped configuration and the A/B can never be the same run** (measured 2026-09-16):
+     the A/B needs `ss=1` and one pass, the patch ships `ss=2` and eighteen. "Does it draw for
+     players" and "do the two agree" stay separate questions, and landing 4 owes an answer to both.
+
+   **And the deletion is one-way for the whole plan, not just for this landing.** After it, no
+   absolute two-lane comparison is expressible; every later claim rests on a relative bar against a
+   previous build, which is the "Drift" item below. Anything wanting an absolute figure should take
+   it while `0b5e06d` is still the tip.
 5. **`tagpu_vk_mark.c`** — bars, cursor, band box, digits. The SPIR-V exists
    (`inc/spirv/tagpu_mark.spv.h`); the GL twin is the oracle and goes in the same landing.
    **After** 2 and 3, because until then it would draw over a world that is not there.
@@ -946,9 +971,10 @@ false by that one byte, and stays false unless it is given a lever or the senten
 
 * **Whether the audit reorders all of it.** Three gaps came out of one blind spot while planning;
   a fourth and fifth would not be a surprise.
-* **What `otherDraws` actually costs in play** — how often a shipped configuration puts a ghost
-  or more than 512 posed units on screen, and therefore whether landing 4 is small or is the
-  whole unit pass reopened.
+* ~~**What `otherDraws` actually costs in play**~~ — **ANSWERED, and it was landing 6's to answer,
+  not landing 4's [2026-09-17].** The cost was measured as TOTAL (a building placement blanks every
+  posed unit) and landing 6 closed it ([gpu-status](gpu-status.html) §2.41). This bullet sized
+  landing 4 against a stand-down that no longer exists, so it no longer bears on landing 4's shape.
 * **Whether the restorer's frame-sliced budget survives the port.** 47 attachments' worth of
   state at `NK=4` (`tagpu_restoreglsl.c:47`), MRT over layers of a ping-ponged 2D-array texture,
   against a GPU-millisecond budget. The shaders are the easy half.
