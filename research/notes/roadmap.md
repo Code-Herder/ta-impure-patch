@@ -2814,7 +2814,17 @@ reported at all. A per-driver ±1 is not something a note can pin down, so landi
 replaced the call with a pass of ours: the exact integer `(sum + 1) / 4`, and the dumped chain is
 now **100.00 % that formula at both levels, max |Δ| 0 on every channel including alpha**. The
 levels are arithmetic rather than a driver's rounding rule, which is what lets 7e-2's oracle stay a
-`cmp`. It also found, by reading rather than by measuring, that the twin allocated **level 0 only**
+`cmp` — and **7e-2 landed 2026-09-17 with `unit CHAIN: IDENTICAL, 22 020 096 bytes`, level 0 and
+both mip levels, three consecutive runs, `terr`/`feat`/`fx` unchanged** ([gpu-status](gpu-status.html)
+§2.47), so all four consumers of the restorer now agree byte for byte on the Vulkan lane. Most of
+that landing went on a defect *outside* the restorer, and its shape is the carry-forward: `prepare`'s
+feed path freed the slot — and with it the staging buffer a `vkCmdCopyBufferToImage` recorded moments
+earlier still read — while `atlas_upload` had already latched "the device holds these rows" at
+**record** time, so the lane restored from an empty atlas image and `frag = c - net` with both terms
+at palette index 0 painted it black. Fixed as a lifetime. Two instruments earned their keep and one
+lied: the oracle's `unit SOURCE: IDENTICAL` compares both lanes' sources *after* everything settles
+and therefore cannot see a source that was empty during the restore, while making the OUT shader
+**report the index it had read** identified it in one run. It also found, by reading rather than by measuring, that the twin allocated **level 0 only**
 — every other level existed because `glGenerateMipmap` created it, so the first reduction of every
 twin would have found an incomplete framebuffer and fallen back silently, for good on a twin
 painted once.

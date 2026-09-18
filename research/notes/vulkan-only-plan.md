@@ -833,11 +833,39 @@ Back to the filed list:
    incomplete framebuffer, fallen back silently, and a twin painted once would have kept the
    driver's chain for good — every level is allocated at creation now.
 
-   **7e-2 is the rest of it**: the unit consumer on the Vulkan lane, level 0 restored into the
-   mipped twin and levels 1..mip reduced by the same integer rule with per-level views, and the
-   oracle extended to `cmp` whole chains rather than level 0. The mip program's SPIR-V is already
-   generated and committed — the shader gate refuses a shader no program uses, which is what keeps
-   the two lanes from drifting while one of them is unwritten.
+   **7e-2 IS LANDED — 2026-09-17** ([gpu-status](gpu-status.html) §2.47). The unit consumer paints
+   its own twin on the Vulkan lane: level 0 through the OUT pass, levels 1..mip through the same
+   integer `(sum + 1) / 4`, per-level views on the twin, and the oracle extended from level 0 to a
+   `cmp` of **whole chains**. **`unit CHAIN: IDENTICAL, 22 020 096 bytes` — level 0 and both mip
+   levels, three consecutive runs, with `terr`, `feat` and `fx` unchanged at IDENTICAL.** That is
+   all four consumers of the restorer agreeing byte for byte on the Vulkan lane.
+
+   Most of the landing's length went on one defect, and its shape is the part worth carrying
+   forward. The first one or two unit batches painted **black** and every later batch was exact.
+   The cause was outside the restorer: `prepare`'s **feed** path — the frame that exists only to
+   make the job — left through a stand-down that frees the slot, and that frees the staging buffer
+   a `vkCmdCopyBufferToImage` recorded moments earlier still reads. The lost copy is not the
+   damage; the damage is that `atlas_upload` latches `s_atHave`/`s_atSerial`/`s_atRows` at **record**
+   time, so the pass then believed the device held rows it had never received and handed the
+   restorer frames `covered_prefix` called covered. The lane restored from an empty image, and
+   `frag = c - net` with both terms at palette index 0 is black. Fixed as a lifetime: the feed path
+   destroys nothing, exactly as `refuse` already did not.
+
+   **Two things this cost that the next landing should not pay again.** The oracle's
+   `unit SOURCE: IDENTICAL` line compares both lanes' sources *after everything has settled*, so it
+   cannot see a source that was empty during the restore — it asserted "the same bytes, restored
+   differently" and the premise was false. And the thing that finally identified it was making the
+   OUT shader **report the index it had read** on both lanes; reading the device image back early
+   then showed 404 798 texels missing where the same read-back taken later is exact. When a
+   dependent lane's picture is wrong, measure its INPUT at the moment of use before reasoning about
+   its arithmetic.
+
+   **Still open after 7e-2:** the same record-time latch exists in `tagpu_vk_feat.c` and
+   `tagpu_vk_fx.c` and is unreachable there rather than absent — neither has a stand-down below its
+   staging allocation today, and one added would re-open it. `tagpu_vk_restore_job_repalette` still
+   has no caller while the GL side's does, so a palette that moves in play desynchronises the two
+   lanes. `repaint`, the blank counter, the cleared-picture flag, the out-of-memory list drop and
+   the dump's retire remain unexercised, and `job_clear` has no callers.
 8. **`PK_PIXELS` closed.** `tagpu_gui_hook.c:330`'s op kinds `OP_LINE`, `OP_BAR`, `OP_RECT`,
    `OP_FRAME` and `OP_SCALE` publish through `pub_surface_bytes` at `:1489` — *the engine's
    surface bytes as they stand at the flip*. They become drawn geometry with their own packet

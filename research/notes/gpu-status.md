@@ -8489,6 +8489,84 @@ whole point of not swallowing it.
 * **Anisotropy is unchanged** and is still the one sampler difference the port cannot close
   (`aniso=` is read by both lanes for exactly that reason).
 
+### 2.47 The unit twin's whole chain, and the record-time latch that hid an empty atlas — landing 7e-2
+
+§2.46 made the GL lane's levels arithmetic. This landing makes the **Vulkan** lane paint the unit
+twin end to end — level 0 through the OUT pass, levels 1..mip through the same integer
+`(sum + 1) / 4` — and extends the oracle from a `cmp` of level 0 to a `cmp` of **whole chains**.
+
+**Measured, three consecutive runs on `crowd-static` (2026-09-17):**
+
+| pair | result |
+|---|---|
+| `terr` | IDENTICAL, 23 674 880 bytes |
+| `feat` | IDENTICAL, 16 777 216 bytes |
+| `fx` | IDENTICAL, 16 777 216 bytes |
+| `unit` **chain** | **IDENTICAL, 22 020 096 bytes — level 0 and both mip levels** |
+
+The unit twin is 155 frames over a 2048 square with `ATLAS_MIP 2`, so the chain is
+2048² + 1024² + 512² texels and every one of them matches the GL lane's byte for byte.
+
+**The defect this landing spent most of its length on, because the shape is the lesson.** The
+Vulkan lane's first one or two unit batches came out **black** — every texel, alpha 1, eight
+near-black values — while every later batch was byte-perfect. The cause was not in the restorer at
+all:
+
+* `tagpu_vk_unit.c`'s `prepare` reached `standdown` on its **feed** path — the frame that comes
+  only to make the restore job and draws nothing — and `standdown` calls `slot_free`, which is
+  `kill_buffer(&s->vstage)`. By that point `atlas_upload` had memcpy'd the indexed mirror into
+  that buffer and recorded a `vkCmdCopyBufferToImage` out of it, and `cb` is submitted whether the
+  pass draws or not. The source buffer of a pending copy was destroyed under it.
+* **The damage is the latch, not the lost copy.** `atlas_upload` sets `s_atHave`, `s_atSerial` and
+  `s_atRows` at **record** time, so after the lost copy the pass believes the device holds rows it
+  never received, and it will not re-upload until the mirror's serial moves again. `restore_want`,
+  three lines below the upload, then hands the restorer frames `covered_prefix` calls covered.
+* The restore therefore ran against an **empty** atlas image. OUT computes `frag = c - net`, and
+  with the source reading 0 both `c` and `net` come from palette index 0, so the cell is black.
+* **Only the Vulkan lane can see it.** The GL lane samples `tex`, which was never missing the art.
+
+Fixed by construction — a **lifetime**, not a timing: the feed path leaves through `feedout`, which
+destroys nothing, exactly as `refuse` does and for the reason `refuse` already stated. Every other
+`goto standdown` is above `slot_vstage`; the label's comment said "safe here and only here", which
+reads as a property of the label rather than of its callers, and both comments now name the side of
+the staging they are safe on.
+
+**What the measurements ruled out first, recorded so nobody re-walks it.** Each of these was a
+plausible reading of "the two lanes restored the same bytes differently" and each is wrong:
+
+* the activation arrays' growth, the descriptor generations, the framebuffer cache and the retire —
+  pinning the arrays to 512 square so they are created once and never re-created reproduces the
+  failure **byte-identically**;
+* the CPU mirror — per-frame non-zero counts taken at upload time give `empty=0` of 25 listed
+  frames;
+* the staging memcpy — the staged bytes are byte-for-byte the mirror, 55 608 == 55 608;
+* the palette — it is set once, before the job exists, and never moves.
+
+**What identified it** was making the OUT shader report the index it had read, on *both* lanes: only
+the R channel differed, GL read the art and Vulkan read **0 everywhere**. Then reading the device
+image back **early** showed 404 798 texels missing where the same read-back taken later is exact.
+
+**The oracle line that hid it, and this is worth more than the fix.** `unit SOURCE: IDENTICAL`
+compares the GL texture against the Vulkan device image **after everything has settled**, so it
+cannot see a source that was empty while the lane was restoring. It reported "the two lanes restored
+the SAME bytes differently" and the premise was false. A dependent-lane oracle must compare the
+lanes' **inputs at the moment of use**, not at the end of the run; when a dependent lane's picture
+is wrong, make the shader report its input before theorising about its arithmetic.
+
+**Not covered.**
+
+* **The same record-time latch is still there in `tagpu_vk_feat.c` and `tagpu_vk_fx.c`.** Their
+  `atlas_upload` equivalents set their have/serial/rows the same way, and neither has a feed path
+  reaching a slot-freeing stand-down today — so the hazard is unreachable in those two rather than
+  absent, and their pairs are identical for that reason and not because the pattern is sound. Any
+  new stand-down added below their staging allocation re-opens it.
+* **`tagpu_vk_restore_job_repalette` still has no caller** while `tagpu_rglsl_job_repalette` is
+  called from `tagpu_gaf.c`. The palette does not move in the measured fixtures, so the two lanes
+  agree; the moment a player touches the gamma slider they will not.
+* **`repaint`, the blank counter, the cleared-picture flag and the out-of-memory list drop remain
+  unexercised**, as does the dump's retire. `job_clear` has no callers.
+* **Anisotropy is unchanged** and is still the one sampler difference the port cannot close.
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out

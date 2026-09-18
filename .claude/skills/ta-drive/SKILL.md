@@ -957,6 +957,24 @@ done
   settled — an effects atlas that is still adding frames can be caught at two different moments,
   which is a property of the measurement and not a bug in the lane.
 
+### The source-comparison line says nothing about what either lane READ
+
+`unit SOURCE: IDENTICAL` compares the GL texture against the Vulkan device image **after
+everything has settled**. It cannot see a source that was empty *while* a lane was restoring, and
+it will happily assert "the two lanes restored the SAME bytes differently" when the premise is
+false. Landing 7e-2 lost most of its length to reading that line as evidence.
+
+**When a dependent lane's picture is wrong, measure its INPUT at the moment of use before
+reasoning about its arithmetic.** The probe that settled 7e-2 in one run was a temporary edit to
+`TAGPU_RESTORE_OUT_FS` making it report the index it had read —
+`frag = vec4(pi/255, (key+1)/255, 0, 1)` — compiled into **both** lanes, so the dump became a
+direct two-lane comparison of what each lane sampled. Only the R channel differed: GL read the
+art, Vulkan read 0 everywhere. Reading the device image back **early** (snapshot the dump file
+while the run is still going, rather than after it) then showed 404 798 texels missing where the
+same read-back taken later is exact. Editing a shader string re-hashes the generated SPIR-V, so
+run `tools/spirv-gen.py` after the edit and `git checkout` both the header and `inc/spirv/`
+afterwards.
+
 ### Wait for the dump lines, never for a clock (measured 2026-09-17)
 
 **A fixed `sleep` in an oracle script is both slower and weaker than polling the log.** The
