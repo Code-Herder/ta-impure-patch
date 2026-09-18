@@ -397,14 +397,27 @@ would not have shown up as a failure — it would have shown up as three landing
        hoisted out of the GL block and nothing else changes. Both are measured on both lanes;
        [gpu-status](gpu-status.html) §2.49 is the write-up. It also carries the A/B's arming fix,
        which had to come first — see the next bullet.
-     * **4b-2 — the world and the UI layer.** Each world pass publishes its hand-over from
-       **inside** its GL render rather than from its gather (`terr_publish` is called from
-       `tagpu_terr_render`, and `tagpu_terr_gather` returns before it), so `terr`, `feat`, `fx`,
-       `mark` and `posedraw` each need the treatment individually, plus the native pass's own
-       composite. And `tagpu_gui_present` is the one whose *gather is the GL drain*: the Vulkan
-       mirror's ops are emitted conditionally on GL twin bookkeeping (`twin_make` and `twin_find`
-       gate `mir_op`), so its record cannot be produced without GL objects until the twin table is
-       separated from them. Five levers, one refactor, and each has a row of its own.
+     * **4b-2 — the world. LANDED 2026-09-18.** All five world passes gather on
+       `renderer=vulkan` and are drawn by their twins: terrain, features, markers and units all
+       **0 px and byte-identical** against their two-lane captures, effects 0 px on the same-frame
+       two-lane A/B (it draws transient projectiles, so a cross-run comparison is not available to
+       it, exactly as it is not to the frame-rate readout). [gpu-status](gpu-status.html) §2.50.
+     * **4b-3 — the UI layer**, which turned out to be its own landing rather than half of 4b-2.
+       `tagpu_gui_present`'s record is built INSIDE its GL drain -- `twin_make`/`twin_find` gate
+       `mir_op` -- and the record's colour flag is keyed on the GL colour twin
+       (`(restored && t->rgb)` reaching `TAGPU_GUICOL_ON`), so a missing handle changes what the
+       twin is TOLD rather than only what this lane draws. The bytes themselves need no porting:
+       they come from `g_guiq.arena` and the per-op colour is a value.
+     **WHAT THAT SPLIT LOOKED LIKE FROM THE OUTSIDE, AND WHERE IT WAS WRONG.** Filed as "each
+     world pass publishes its hand-over from **inside** its GL render, so terr, feat, fx, mark and
+     posedraw each need the treatment individually" -- true of the first four, and the reason each
+     took a commit. It was NOT true of the unit pass, and the mis-sizing cost several rounds:
+     `tagpu_posedraw.c`'s 150 GL calls needed **no gate at all**, because every
+     `tagpu_posedraw_*` entry point is reached through the composite, which the vulkan lane exits
+     before. What was missing there was the RECORD, and the fix was to move the exit BELOW the
+     unit gather and call three body-path functions from it. The lesson generalises past this
+     landing: before sizing a port by counting GL calls, ask which of them the lane can still
+     reach.
 
      **AND THE PER-PASS A/B HAD TO LEARN TO ARM ITSELF BEFORE ANY PASS COULD STAND DOWN
      [2026-09-18].** The oracle above is right and was not reachable: `tagpu_abshot.h`'s rule is

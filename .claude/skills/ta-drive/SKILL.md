@@ -2189,6 +2189,26 @@ Four things that cost a session if they are not known:
   screen on this lane** — an armed instance showing only the clear colour is a fault now. The
   world and the UI layer are still 4b-2 and still stand down whole.
 
+**The per-pass A/Bs on the vulkan-only lane, as of landing 4b-2.** All five world passes draw
+there now, and four are byte-identical to their two-lane captures. What each needs:
+
+| pass | fixture | arm set, and the trap |
+|---|---|---|
+| terrain | `feat-forest` | `terr.on` — 630 719 ink px |
+| features | `feat-forest` + `tacli eye <i> 1400 1600` | `'native.on=nosuchunit wrecks' feat.on` — the camera puts the map's one 3D wreck off screen, or the unit twin draws too and the lane refuses the frame. 132 274 ink px |
+| effects | `fx-lasers` | `'native.on=nosuchunit' fx.on`, and arm the `.ab` ~4 s after the apply. Two runs can NEVER agree — it draws transient projectiles |
+| markers | `selbox-facings` | `'native.on=nosuchunit' 'mark.on=log'`, then `tacli click <i> 312 362` to select a unit so the pass has content (`mark: bars=3`). 297 ink px |
+| units | `selbox-facings` | `native.on=all` and **`mark.on` OFF**, or two passes draw. 2 125 ink px |
+
+- **Read the lane's own periodic lines before believing a stand-down.** Four exist and all carry
+  the driver's frame number, so they line up: `native: vulkan lane handed over frame N: …`,
+  `vk: census: frame N: N drew, M claimed …`, `posedraw: nothing to hand over for frame N - …`,
+  and `vk: unit: frame N: the hand-over carries nunit= …`. `vk: census` is the first thing to
+  read when a capture does not appear: it says whether a pass drew at all.
+- **The shell walk is flaky when the machine is busy.** `scenario apply` timed out twice waiting
+  for a map that had not finished loading. Wait on the condition rather than the clock:
+  `until tools/tacli roster <i> | grep -q '^u1'; do sleep 3; done`.
+
 **Getting a LIVE WORLD under `renderer=vulkan`, which `scenario load` cannot do for you.**
 `scenario load --restart` goes through the launch path with a resolution, so it rewrites
 `ddraw.ini` — `renderer=openglcore`, and `posX`/`posY` from a freshly computed tile. Both of those

@@ -2844,7 +2844,22 @@ four seams the code already has: **4a** the thread and the present, **4b** the p
 (the gathers run and the GL draws stand down), **4c** the `ss` target and TA's surface upload,
 **4d** the deletion. The exit condition is unchanged.
 
-**4b is itself two landings**, and 4b-1 is the first: the driver, plus the two entry points whose
+**4b is THREE landings** — 4b-1 the driver and the two separable passes, **4b-2 the world
+(landed 2026-09-18)**, 4b-3 the UI layer. The world's five passes all gather on `renderer=vulkan`
+now and are drawn by their twins: terrain, features, markers and units **0 px and byte-identical**
+against their two-lane captures, effects 0 px on the same-frame pair. [gpu-status](gpu-status.html)
+§2.50 has the table and the finding — **eleven times a pass was keyed on GL rather than on what GL
+stands for**, in two forms: a handle used as a validity test, and a construction reachable only
+through one. Both are invisible while one backend exists.
+
+Two rules came out of it that are not about Vulkan at all. **A device limit belongs to the device
+that will consume it** — the two new accessors return 0 for "no device yet" rather than a default,
+because a pass that read 0 as a bound cached a ruined atlas for the life of the process. And
+**a one-shot log latch lies by omission**: three of them in sequence sent this landing to the wrong
+function twice and produced one flat contradiction, and the periodic lines that replaced them
+settled each question in a single run.
+
+**4b-1 was the first:** the driver, plus the two entry points whose
 gather was already separable from their draw. `tagpu_scaffold_frame` and `tagpu_fps_present` now
 run on both lanes and gate their own upload, draw and read-back; `tagpu_native_frame` and
 `tagpu_gui_present` still stand down whole, which is 4b-2. The split is a seam in the code: a

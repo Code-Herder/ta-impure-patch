@@ -8916,6 +8916,108 @@ have been there and `vk-ab.py` would have read it as this arming's capture.
   `markown`'s. Under `renderer=vulkan` that hook is installed at DLL attach as always, so the
   requirement is unchanged and not a property of the new backend.
 
+### 2.50 The world draws with no GL context — landing 4b-2 of the Vulkan-only plan
+
+**What this part is.** 4b-1 taught two passes to gather without drawing and fixed the A/B's arming
+(§2.49). This part does the other three of the driver's four entry points' worth of work: all five
+world passes — terrain, features, effects, markers and units — now run their gather on
+`renderer=vulkan`, hand over, and are drawn by their Vulkan twins. `tagpu_overlay.c`'s `gl_draws`
+guards one pass now, `tagpu_gui_present`, which is 4b-3.
+
+| pass | two-lane (route D) | vulkan-only (route E) |
+|---|---|---|
+| terrain | **0 px**, 630 719 ink px | **0 px**, byte-identical (same md5) |
+| features | **0 px**, 132 274 ink px | **0 px**, byte-identical |
+| effects | **0 px**, 3 327 ink px | draws; cross-run comparison not available |
+| markers | **0 px**, 297 ink px | **0 px**, byte-identical |
+| units | **0 px**, 2 125 ink px | **0 px**, byte-identical |
+
+One build, `ss=1`, one `.ab` at a time. Terrain and features on `feat-forest` at 1024×768;
+markers and units on `selbox-facings`; effects on `fx-lasers`. The effects pass draws transient
+projectiles, so two runs agree only if the same ones are alive — its oracle is the same-frame
+two-lane A/B, exactly as the frame-rate readout's is, and for the same reason.
+
+#### The shape this landing is made of
+
+**Eleven times, a pass was keyed on GL rather than on what GL stands for**, and each one presented
+as a different symptom. They are worth listing together, because the list is the finding:
+
+| where | the test | what it should have asked |
+|---|---|---|
+| `tagpu_gaf_atlas_create` | `if (a->tex) return 1` | is the atlas LAID OUT (now `a->made`) |
+| `tagpu_posedraw.c`'s `unit_ok` | `!m->vao` | does the material name this geometry and agree about the vertex count |
+| `tagpu_mark.c`'s `upload_layer` | `glGenTextures(…); if (!s_tex[i]) return 0` | are the layer's BYTES there (the hand-over carries them) |
+| `tagpu_mark_render` | `if (textTex)` | is there text to record |
+| `tagpu_terr.c`'s `ensure_atlas` | the upload gated the mirror | the mirror IS the buffer the upload was given |
+| `tagpu_terr.c`'s gather | `s_maxTex` from `GL_MAX_TEXTURE_SIZE` | the bound of the device that will SAMPLE it |
+| `tagpu_render3do.c` | the LUT built only by `_texref` | the LUT is the pass's; the texture is the backend's |
+| …and four more of the same two forms | | |
+
+Two forms, then: **a GL handle used as a validity test**, and **a construction reachable only
+through one**. Both are invisible while one backend exists, because the handle is always there.
+
+**The counterpart rule that came out of it**: a device limit belongs to the device that will
+consume it. `tagpu_vk_max_image_dim()` and `tagpu_vk_max_uniform_range()` read
+`maxImageDimension2D` and `maxUniformBufferRange` from the physical device actually bound, and
+both return **0 for "no device yet" rather than a default** — the lane takes ~200 ms to come up
+while the gathers run from the first frame, so a pass that read 0 as a bound would cache a ruined
+atlas for the life of the process. That is measured, not hypothetical: it is what
+`terr: atlas built 2176x0 … 0 kept` was.
+
+#### Where each pass's line falls
+
+Not at the pass. At the point where the pass stops being API-independent, and that point is
+different in each:
+
+* **terrain** — GL in FIVE places outside its draw, four of which the first reading missed:
+  `tagpu_terr_gather`'s own `init_gl`, `ensure_atlas`'s upload, `build_height`'s, and
+  `build_hills`' VAO. Each gated around the GL and never around the mirror beside it.
+* **features and effects** — the simplest: GL in `init_gl`, the render, and the shader helper. But
+  `init_gl`'s TAIL held the atlas's `dim`/`max`/`ents`, so gating it left the atlas unsized;
+  extracted as `atlas_setup()`, called from the gather on the other lane.
+* **markers** — the record and the draw are two PARALLEL statement streams: `mk_push` and
+  `mk_draw` are pure CPU at eight sites with the GL interleaved among them, so this one takes two
+  block gates and a gate per GL statement, never around a record append.
+* **units** — 150 GL calls in `tagpu_posedraw.c` and **none of them needed a gate**: every
+  `tagpu_posedraw_*` entry point is called from the composite the vulkan lane exits before. What
+  was missing was the RECORD, not a gate. Three body-path functions (`pd_begin`,
+  `tagpu_posedraw_unit`, `tagpu_posedraw_end`) gate their own GL in five contiguous runs, and the
+  lane calls them from its own exit.
+
+**And the exit itself moved.** It sat at the top of the composite, which meant the lane never
+reached the unit pass's gather — `pdu[]` and the vertex emission, three hundred lines below it.
+Audited before moving: there is not one GL call between the four world gathers and the "nothing to
+draw" return. The pose view moved with it, into the `s_pv` static that already existed, so both
+lanes read one construction rather than two.
+
+#### What is NOT covered by 4b-2
+
+* **`tagpu_gui_present` — the UI layer.** Still gated whole. Its record is built inside the GL
+  drain (`twin_make`/`twin_find` gate `mir_op`) and, worse, the record's COLOUR flag is keyed on
+  the GL colour twin (`(restored && t->rgb)` reaching `TAGPU_GUICOL_ON`), so a missing handle
+  would change the record rather than only the draw. That is 4b-3.
+* **`ss=2`** has no target on the Vulkan side; that is 4c, with TA's own surface.
+* **The composite** — the world FBO, the cast-shadow map, the shadow and slant redraws, the nano
+  wire pass, the key/fill inversion and the resolve — has no counterpart on this lane. Each pass
+  draws itself into the swapchain from its own hand-over instead, which is why `tagpu_zoom_publish_view`
+  does not run there and the input path stays 1:1.
+* **The 300-frame composite stats line** does not run on this lane. The lane has its own instead.
+
+#### The instruments, and what they cost to learn
+
+Four periodic reports now exist, all keyed on the driver's frame so they can be lined up:
+`native: vulkan lane handed over frame N: …`, `vk: census: frame N: N drew, M claimed …`,
+`posedraw: nothing to hand over for frame N - mirrorWant= win= recording= pubHave=`, and
+`vk: unit: frame N: the hand-over carries nunit= …`.
+
+They exist because **one-shot latches lied by omission three times in a row.** A latch reports the
+first occurrence and is then silent, so one spent on an ordinary case — the shell, where no posed
+unit exists and nothing to publish is normal — hides every frame that matters. Two of them in
+sequence sent this landing to the wrong function twice, and a third pair, keyed on two DIFFERENT
+counters, produced a flat contradiction (`posed=3` and `win=0`, apparently of one frame). The rule
+that came out of it: **prefer a periodic line reporting current state, and never spend a latch on
+a case that is ordinary.**
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out
