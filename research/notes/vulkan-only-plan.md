@@ -1478,29 +1478,51 @@ Back to the filed list:
     something the gather halves call, and the way to find out is `git grep` on its exports rather
     than on its includes.
 
-    **THE REST OF THE LIST, CHECKED THAT WAY [SURVEYED 2026-09-18]. It is four landings, not one.**
+    **THE REST OF THE LIST, CHECKED THAT WAY [SURVEYED 2026-09-18, RE-DONE THE SAME DAY AFTER THE
+    FIRST PASS GOT ONE OF ITS HEADLINES WRONG]. It is four landings, not one.**
 
-    * **`opengl_utils.c` — nearly free, which was not obvious.** Five exports; **only
-      `oglu_load_dll` has a surviving caller** (`dd.c`). `oglu_build_program`,
-      `oglu_build_program_from_file`, `oglu_ext_exists` and `oglu_init` are referenced **only by
-      `opengl_utils.h`** — the shader-building helper the whole GL stack looks like it should use
-      is already dead.
-    * **`render_d3d9.c` — four surviving files, not one.** Seven exports, called from `dd.c`,
-      `utils.c`, `winapi_hooks.c` and `wndproc.c`. No lane involvement.
+    **The method, because the first pass used a worse one.** `git grep <symbol>` counts hits in
+    comments, in string literals and in declarations, and this entry's own warning — *read the
+    hits, not the count* — was written and then not applied. The check that works is: strip block
+    comments, line comments and string literals from each `.c`, then match the **bare symbol**
+    (`\b<sym>\b`, not `<sym>\s*\(`) — the bare form because a function-POINTER use blocks a
+    deletion exactly as a call does, and `g_ddraw.renderer == ogl_render_main` is precisely that.
+
+    * **`opengl_utils.c` — goes WITH `render_ogl.c`, and the first pass said something wrong and
+      more interesting.** It claimed the four shader helpers were "referenced only by
+      `opengl_utils.h` — already dead". They are not dead: `oglu_build_program`,
+      `oglu_build_program_from_file`, `oglu_ext_exists` and `oglu_init` are all used by
+      **`render_ogl.c`**, which the first pass had excluded as "not surviving" and then reported as
+      absence. Outside the deletion set only **`oglu_load_dll`** is used (`dd.c`). The practical
+      consequence is better than "dead" and different from it: **delete `opengl_utils.c` and
+      `render_ogl.c` together and nothing outside the set loses a helper**, with `oglu_load_dll`'s
+      one caller the only thing to resolve.
+    * **`render_d3d9.c` — four surviving files, not one.** Seven exports; real users in `dd.c`,
+      `utils.c`, `winapi_hooks.c` and `wndproc.c`. `d3d9_release_resources` has **no user outside
+      the file at all** (confirmed on the re-check). No lane involvement.
     * **`render_ogl.c` — three surviving files, AND A NEGATIVE RESULT THAT A CARELESS GREP WOULD
-      HAVE INVERTED.** `ogl_create`, `ogl_release` and `ogl_render_main` are called from `dd.c`,
-      `fps_limiter.c` and `winapi_hooks.c`. **`render_vk.c` and `tagpu_vk.c` both match a grep for
-      those names and every hit is PROSE** — comments describing what the GL backend does. **The
-      Vulkan lane calls nothing in `render_ogl.c`.** Read the hits, not the count.
-    * **`tagpu_restoreglsl.c` — BLOCKED, and the file is worse placed than this entry thought.**
-      It defines **eleven** exports and **ten have surviving callers**, across six files not on
-      this list: `tagpu_gaf.c`, `tagpu_terr.c`, `tagpu_native.c`, `tagpu_render3do.c`,
-      `tagpu_gui_surf.c`, `tagpu_restore_core.c` — **and `tagpu_vk_restore.c`, a VULKAN file,
-      which calls `tagpu_rglsl_mips`**. So the dependency is not "the surviving gather halves
-      still need it"; the Vulkan restorer does. The file is 291 `gl[A-Z]` sites deep and includes
-      `opengl_utils.h`, so it cannot survive as it stands either. **Landing 7's split into
-      `tagpu_restore_core.{h,c}` is not finished**, and finishing it is a landing of its own that
-      has to come before this one.
+      HAVE INVERTED.** `ogl_create` (`dd.c`), `ogl_release` (`dd.c`, `winapi_hooks.c`) and
+      `ogl_render_main` (`dd.c`, `fps_limiter.c`, `winapi_hooks.c` — as a **function pointer**,
+      `g_ddraw.renderer == ogl_render_main`, which a call-shaped pattern misses entirely).
+      **`render_vk.c` and `tagpu_vk.c` both match a grep for those names and every hit is PROSE** —
+      comments describing what the GL backend does. **The Vulkan lane uses nothing in
+      `render_ogl.c`.** This one survived the re-check unchanged, because it was the one place the
+      first pass actually read its hits.
+    * **`tagpu_restoreglsl.c` — BLOCKED, for the ordinary reason. [THE FIRST PASS'S HEADLINE HERE
+      WAS FALSE AND IS WITHDRAWN.]** It said *"and `tagpu_vk_restore.c`, a VULKAN file, which calls
+      `tagpu_rglsl_mips` — so the dependency is not 'the surviving gather halves still need it';
+      the Vulkan restorer does."* **That hit is a COMMENT** (`tagpu_vk_restore.c:2046`, prose
+      explaining that the GL lane refuses an odd mip level *"for the same reason
+      (tagpu_rglsl_mips)"*). **No Vulkan file uses this module at all.**
+
+      Re-checked with comments and strings stripped: all **eleven** exports have real users, and
+      the users are **four** GL-side files — `tagpu_gaf.c`, `tagpu_terr.c`, `tagpu_native.c`,
+      `tagpu_gui_surf.c`. (`tagpu_render3do.c` and `tagpu_restore_core.c` were comment and
+      declaration hits.) The file is 291 `gl[A-Z]` sites deep and includes `opengl_utils.h`, so it
+      cannot survive as it stands. **Landing 7's split into `tagpu_restore_core.{h,c}` is not
+      finished**, and finishing it is a landing of its own that has to come before this one —
+      which is what this entry already suspected, and the suspicion needed no Vulkan file to be
+      true.
 
     **NOT CHECKED:** `openglshader.h` and `render_ogl.h` — headers, which can only be checked by
     include, which is the check this entry warns against relying on.
