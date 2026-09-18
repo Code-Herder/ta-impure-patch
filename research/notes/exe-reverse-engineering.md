@@ -3228,8 +3228,33 @@ whole UI is pre-rendered into) and `panel+0xB8`, **overwriting the previous poin
   heap tag at a higher level; **nothing here looks a surface up by it.**
 * **`0x4C6AC0(surf)`** — stdcall `ret 4` — is the free: null-checked, gated on `surf[+0x2C] & 1`
   (the "we own the pixels" bit `0x4C69F0` sets), then `0x4D85A0`.
-* **The only frees are in the `0x2` teardown path**, `0x4A9537` and `0x4A9549`, followed by both
-  pointers set NULL. The function's one early *return* is `gi->TheActive_GUIMEM == NULL`:
+* **The frees are SIX sites, not two, and this bullet said two** [CORRECTED 2026-09-18 by landing
+  9's review, and it is the session's sixth instance of the same error — a mechanical search
+  bounded by the symbols it expected]. The search was for `0x4C6AC0`. Besides `0x4A9537` and
+  `0x4A9549` the function calls the **raw** free `0x4D85A0` directly at **`0x4A9575`** and
+  **`0x4A95A7`**, walking the gadget array (`lea esi,[ebp+0x2b]`, stride `0x15B`) and freeing
+  each record's own pointers — `[esi]` behind `test [esi+0x89],1`, then `[esi+0xAB]` or
+  `[esi+0x95]` by gadget type. **All four are inside one block** gated by `0x4A950A
+  `test bl,0x2` / `je 0x4A95C2``, and `ebx` is reloaded from the flags argument `[esp+0x3D8]` at
+  `0x4A9434`, `0x4A94C0` and `0x4A94C9`, so `bl` really is the flags byte on every path into it.
+  **The conclusion is unchanged** — a `0x40` call frees nothing — but it now rests on the gate
+  rather than on a count that was wrong.
+* **What is verified about the whole body, and what is not.** Over `0x4A81E0..0x4A95F2`: **32
+  distinct direct call targets**, **no indirect calls at all**, and the only indirect jumps are
+  the two in-body switch tables (`0x4A95F4`, `0x4A962C`). So the function itself, under
+  `flags == 0x40`, executes no allocation and no free. **Not established, and deliberately not
+  claimed: that nothing it CALLS allocates.** `0x4BBC40` and `0x4BBE50` are among its callees and
+  both reach `0x4D85A0`; whether either is on the `0x40` path has not been shown either way. A
+  callee's own transient scratch is the engine's business — the panel surfaces are the lifetime
+  this section is about.
+* **THE EXIT SET IS THREE `ret 0x8`, and "one early return" was loose.** `0x4A81FF` returns 0 on
+  `gi->TheActive_GUIMEM == NULL` (loaded at `0x4A81EA`, `jne` at `0x4A81F3`); `0x4A95D1` is the
+  normal epilogue and returns 1; `0x4A95EF` returns 0 and is reached **only** from the two `jg`
+  at `0x4A8349`/`0x4A835A` below. Both of those are inside the `flags & 1` gate, so **with
+  `0x40` the only reachable exits are `0x4A81FF` and `0x4A95D1`**. `0x4A95D4` is *not* an exit:
+  the `bl & 0x20` path NULLs `panel+0xB8` and jumps back to `0x4A90D1`. The old wording is
+  preserved next so the correction is legible:
+* ~~The function's one early *return* is~~ `gi->TheActive_GUIMEM == NULL`:
   `0x4A81EA` loads `[gi+0x18]`, `0x4A81F3` `jne` past the epilogue, and `0x4A81FF` is `ret 8`.
   ~~so every real call reaches the allocation~~ — **it does not**, per the paragraph above: the
   build gate at `0x4A82F7` jumps past both. That clause was the same error stated twice.
@@ -3271,6 +3296,28 @@ and `0x4A90CC` is `0x4C6B70(panel+0xB8, panel+0xBC, 0, 0)`, the save-under copy.
 | `MAINMENU.GUI` (the shell, at arm) | **115** | `gaf 105  line 4  focus 6` |
 | the shell one reset later | **40** | `gaf 29  line 4  copy 1  focus 6` |
 | `ARMMAIN2.GUI` (in game) | **1** | `gaf 1` |
+
+**AND A `0x40` REDRAW WRITES MORE THAN PIXELS** [FOUND by landing 9's review, then MEASURED].
+`0x4A943B` reads the focus index at `GUIMEM+0x20`; if it is not −1 and `gi+0xA2` is set,
+`0x4A947B` calls **`0x4A16F0(gi, idx, 8)`** (and `0x4A9505` calls it again behind `record+0x29`).
+`0x4A16F0` writes, unconditionally at its top:
+
+| at | write | what |
+|---|---|---|
+| `0x4A1708` | `[gi+0xCCA] = 1` | **the GUI dirty flag** |
+| `0x4A1722` | `[record+0x1F] = 0` | on every type-3 gadget |
+| `0x4A1758` | `[record+0x1F] = 0x1E` | on the focused one (`colorf`, gui-gadgets §2.1) |
+
+`gi+0xCCA` is consumed by the GUI pump **`0x4A9FD0`**: `0x4AA0AF` tests it against 1, `0x4AA0BB`
+clears it, and `0x4AA0CD` issues **another** `0x4A81E0(gi, GUIMEM->flags | 0x40)`. So a redraw
+can provoke a redraw. **Whether that amplifies is NOT settled**, and the first version of this
+paragraph said it was. `builds=` — every entry to `0x4A81E0` — over three boots per arm came to
+means of **1.0, 72.0, 69.1** per census window with a forced repaint and **28.1, 21.8, 62.1**
+without: overlapping, dominated by how long a boot lingers on which screen, no direction. What
+holds in every window of every boot in both arms is `buildFlags` **0xC0** — the engine issues
+`0x40` redraws continuously by itself, from `0x41A8DA`, `0x4931B4` and `0x4A96BF` — and no
+runaway was observed (`dropped=0 overflows=0 stalls=0`, a complete frame at 0 magenta, and the
+forced repaint firing 2–4 times a boot on a reseed edge rather than per frame).
 
 The in-game figure is not a failure and it is the more useful fact: **`ARMMAIN2.GUI` is a
 three-label screen** (`KILLS`, `LOSSES`, `TOTALUNITS` — `tacli ui --all`), not the HUD. The

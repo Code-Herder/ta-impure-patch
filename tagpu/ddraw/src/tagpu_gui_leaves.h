@@ -463,6 +463,14 @@ static int __cdecl before_memfree(void* e)
 static int __cdecl before_build(void* e)
 {
     if (!on_game_thread()) return 0;
+    /* OUR OWN FORCED REPAINT IS NOT AN ENGINE BUILD. `builds=` is the one
+       diagnostic that could separate what the engine asked for from what we
+       did, so counting our synthetic call here would poison it. It is worth
+       keeping clean even though it did NOT settle the question it was reached
+       for -- three boots per arm gave overlapping means, gpu-status 2.61 --
+       because whatever settles that will be built on this counter or beside
+       it. [FOUND by landing 9's review.] */
+    if (s_repainting) return 0;
     s_builds++;
     s_buildFlags |= ARG(e, 2);
     if (s_trace && (ARG(e, 2) & 1)) s_gafDbg = 6;      /* a build: trace its first blits */

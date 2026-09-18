@@ -1286,7 +1286,7 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | **`UnitOrders->Pos`, `unit+0x5C` → `+0x22`/`+0x26`/`+0x2A`** | **WRITTEN, and it is SIM state** — not by us directly but by `ORDERS_NewMainOrder2Unit 0x43AFC0`, which the scenario applier calls on the game thread from the tick site. Three 16.16 dwords, `{x, altitude, depth}`, copied verbatim by the constructor `0x43A0C0`. An order is a sim command and replicates in multiplayer, so a wrong value here is a wrong game, not a wrong picture; the applier is a fixture tool and is never armed in a played session |
 | **`*(0x51FBD0) + 0xC0`** | **the blend LUT pointer. WRITTEN, transiently, and this is the one field we write that is NOT in `main`.** Swapped to an identity table across the target sprite's draw and restored on return, so the star composites as a copy (§2.2). Game thread only, bracketed around one call that always returns, restored only if ours is still installed, with a belt-and-braces restore at hook 8. It must never be left installed across a frame: `0x4BA5C0` allocates that buffer, `0x4BA5F0` frees it and `0x4BAAD0` refills 64 KB through the pointer, so a stale one of ours would be clobbered or cross-heap-freed |
 | **the unit composite's planes** — `Object3do+0x10` → the GAFFrame's colour plane (`+0x10`) and depth plane (`+0x14`), `w×h` bytes each. **WRITTEN — the planes are overwritten with the ColorKey (index 1) and far depth, on the GAME THREAD, in two places.** `tagpu_owndraw_classify` does it when it skips the engine's rasterise for a unit `tagpu_native_owns_obj` accepts (G12b), and since 2026-09-13 `tagpu_owndraw_preshadow` does it again at the completed-unit shadow's own emit sites (`0x459338` / `0x45958C` / `0x4594DB`), before the replayed `0x45A470` copies the plane into the scratch — because the classifier's wipe does not survive to the shadow on every frame (none of 7047 wipes in a 60-frame window found the plane already empty; [roadmap](roadmap.html), "G13l follow-on"). A render-side scratch the engine rebuilds from the posed prims, not sim state: the blit and the shadow read it, nothing else does, and every value taken out of it is bounded by the unit walking |
-| **`panel+0xBC`, through the engine's own drawer** | **WRITTEN — the only entry here that is a CALL rather than a store, and the only engine draw function this stack invokes.** `GUI_StageUpdateDraw 0x4A81E0(gi, 0x40)` repaints the top screen's surface so its art reaches us as ops instead of as a `PK_SEED` of opaque bytes (§2.61). Game thread, at the flip's **return** with `s_inFlip` already cleared, non-reentrant by a flag. It is a **redraw**, the middle of the engine's own build/draw/teardown protocol: `0x4A82F0`'s build gate jumps past both allocations and the two frees are gated on the teardown bit, so it allocates nothing, frees nothing and changes no lifetime. Refused unless `gi->TheActive_GUIMEM`, its `ControlsAry` and `panel+0xBC` are all present — a NULL destination would resolve to the **primary surface** and paint the panel's wallpaper onto the frame. Off with the `norepaint` token |
+| **`panel+0xBC`'s surface, `gi+0xCCA` and gadget `+0x1F`, through the engine's own drawer** | **WRITTEN — the only entry here that is a CALL rather than a store, and the only engine draw function this stack invokes.** Besides the surface's pixels, a `0x40` redraw reaches `0x4A16F0`, which sets the **GUI dirty flag `gi+0xCCA`** and stamps gadget `+0x1F`; the pump `0x4A9FD0` clears that flag at `0x4AA0AF` and issues a further redraw. **Whether that amplifies is not settled**: `builds=` over three boots per arm gave overlapping means (1.0/72.0/69.1 shipped, 28.1/21.8/62.1 under `norepaint`). `buildFlags` is 0xC0 in every window of both arms — the engine redraws continuously by itself — and no runaway was observed. `GUI_StageUpdateDraw 0x4A81E0(gi, 0x40)` repaints the top screen's surface so its art reaches us as ops instead of as a `PK_SEED` of opaque bytes (§2.61). Game thread, at the flip's **return** with `s_inFlip` already cleared, non-reentrant by a flag. It is a **redraw**, the middle of the engine's own build/draw/teardown protocol: `0x4A82F0`'s build gate jumps past both allocations and the two frees are gated on the teardown bit, so it allocates nothing, frees nothing and changes no lifetime. Refused unless `gi->TheActive_GUIMEM`, its `ControlsAry` and `panel+0xBC` are all present — a NULL destination would resolve to the **primary surface** and paint the panel's wallpaper onto the frame. Off with the `norepaint` token |
 
 ### 2.6 Engine byte patches — no hook, no state (`tagpu_patches.c`)
 
@@ -10436,7 +10436,7 @@ draw it makes runs through the leaves we already have, so the screen's art arriv
 
 | what makes it safe | why, and it is not a timing argument |
 |---|---|
-| **a bound on the flag** | `0x4A82F0` computes `flags & 1` and `0x4A82F7` jumps past *both* allocations (`0x4A907C`, `0x4A90B5`); the two frees (`0x4A9537`, `0x4A9549`) are gated on the `0x2` teardown bit. Those four are the only allocator and free calls in the whole function, so `0x40` allocates nothing, frees nothing, and changes no lifetime |
+| **a bound on the flag** | `0x4A82F0` computes `flags & 1` and `0x4A82F7` jumps past *both* allocations (`0x4A907C`, `0x4A90B5`). The frees are **six** sites, not the two this row first named [CORRECTED by the review]: `0x4C6AC0` at `0x4A9537`/`0x4A9549` **and the raw `0x4D85A0` at `0x4A9575`/`0x4A95A7`**, which free each gadget record's own pointers. All four sit inside one block gated by `0x4A950A test bl,0x2`, with `ebx` reloaded from the flags argument at `0x4A9434`/`0x4A94C0`/`0x4A94C9` — so the conclusion holds on the **gate**, not on a count. Verified over the whole body: 32 direct call targets, no indirect calls, the two indirect jumps are in-body switch tables. **Not claimed:** that nothing it *calls* allocates |
 | **a bound on the destination** | the redraw's first act writes `panel+0xBC`, and `0x4C6B70` with a NULL destination resolves to the **primary surface** — a redraw of an unbuilt screen would paint the wallpaper onto the frame. `repaint_service` refuses unless `TheActive_GUIMEM`, its `ControlsAry` and `panel+0xBC` are all present |
 | **an ordering** | it runs at the flip's **return**, on the game thread, with `s_inFlip` already cleared. The leaves drop every op while `s_inFlip` is set (the cursor is drawn inside the flip), so a repaint issued anywhere inside it would draw and publish nothing. `s_repainting` makes the call non-reentrant by construction |
 
@@ -10469,6 +10469,9 @@ back as a copy, and that copy is only a win while its source is a surface we hol
 | repaints per boot to the shell | 0 | 3–4 |
 | shell frame | 148 colours, 0 magenta | 148 colours, 0 magenta |
 | in-game frame | — | 1024×768, 709 colours, 0 magenta |
+| ops dropped / arena overflows / consumer stalls | **0 / 0 / 0** | **0 / 0 / 0** (three boots each) |
+| `builds=` per census window, 3 boots each | 28.1, 21.8, 62.1 | 1.0, 72.0, 69.1 — **overlapping; settles nothing** |
+| `buildFlags`, every window of every boot | `0xC0` | `0xC0` |
 
 The ops one redraw produces, by kind:
 
@@ -10494,6 +10497,25 @@ repaint there has nothing to re-issue. **A forced repaint is a shell mechanism.*
   not reproduce** — a second control boot had 0. Not claimed.
 * **Whether the repaint measurably improves what the restorer or the sharp layer produces** was
   not measured; only that the frames are in the atlas for them to reach.
+* **A repaint is DESTRUCTIVE to the panel surface by design, and nothing here bounds what that
+  costs on a screen we have not measured.** It repaints the whole surface from `GUIMEM+0x24`
+  (or the picture handler) before drawing a gadget, then redraws only the gadget tree — so
+  anything that reached that surface by another path is erased. This section's own sentence
+  *"the in-game panel art is drawn by the in-game draw path, not by this gadget tree"* is exactly
+  the condition under which that would bite, on an in-game screen that *does* have `GUIMEM+0x24`
+  set. Not observed — `ARMMAIN2.GUI` measured 1 op and no `copy`, so the field was NULL there —
+  but it is the residual. [Named by the landing review.]
+* **Whether a forced repaint AMPLIFIES the engine's own redraw rate.** A `0x40` redraw sets
+  `gi+0xCCA` and the pump answers it with another redraw, so the question is real. `builds=` was
+  the instrument and it does not resolve it: three boots per arm gave overlapping means with no
+  direction. What is known is that the engine already redraws continuously on its own
+  (`buildFlags` 0xC0 everywhere, three engine call sites passing `0x40`), that our repaint fires
+  2–4 times a boot on a reseed edge rather than per frame, and that no runaway was observed.
+  Settling it needs an instrument that separates the pump's redraws from the rest — `builds=`
+  counts every entry and cannot.
+* **The transitive allocation question.** The function itself allocates and frees nothing under
+  `0x40`; whether any of its 32 callees does is open. `0x4BBC40` and `0x4BBE50` both reach
+  `0x4D85A0`, and whether either is on the `0x40` path was not established.
 
 ## 4. What the work taught us
 

@@ -1410,6 +1410,17 @@ Back to the filed list:
    that screen is three labels (`KILLS`, `LOSSES`, `TOTALUNITS`) — the in-game panel art is drawn
    by the in-game draw path, not by this gadget tree.
 
+   **CORRECTION 4, FROM THE LANDING REVIEW — A REDRAW WRITES MORE THAN PIXELS.** `0x4A943B`'s
+   focus branch calls `0x4A16F0`, which sets the GUI dirty flag `gi+0xCCA` and stamps gadget
+   `+0x1F`; the pump `0x4A9FD0` clears that flag at `0x4AA0AF` and answers it with **another**
+   `0x4A81E0(gi, flags | 0x40)`. **Whether that amplifies is NOT settled**, and this entry said
+   it was until the sample was taken properly: `builds=` over three boots per arm gave overlapping
+   means with no direction (1.0/72.0/69.1 shipped, 28.1/21.8/62.1 under `norepaint`). `buildFlags`
+   is 0xC0 in every window of both arms — the engine redraws continuously by itself — and no
+   runaway was observed, which is the weaker thing the evidence supports. The review also corrected
+   "the two frees" to **six** (the raw `0x4D85A0` at `0x4A9575`/`0x4A95A7` as well), all inside
+   the same `test bl,0x2` gate, so the conclusion stands on the gate rather than on a count.
+
    **NOT CLOSED BY 9:** `PK_SEED` itself. A surface is still seeded on first touch after every
    reseed; the repaint replays *over* that seed rather than instead of it. What changes is that
    the art also exists as sprite ops, so the atlas holds it — which is what G15e's *"seeded art

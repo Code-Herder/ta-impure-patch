@@ -70,8 +70,8 @@ GUI0IDControl*  ctrl = top->ControlsAry;                 /* top + 0x04 */
 | `+0x04` | `ControlsAry` → panel record, gadgets follow | [BINARY-VERIFIED] `0x4AB06B`, `0x49FE7D` |
 | `+0x08` | `OnCommand` — `__stdcall void(GUIInfo*)`; reads the actuated index from `gi->UIChange_f`, **not** an argument, **and writes its answer back to the same field** (clear it to `-1` or the pump pops the screen — see §1.3) | [BINARY-VERIFIED] `0x4A967F`, `0x4AA790` |
 | `+0x10` | flags (bit `0x800` re-runs a stage on pop) | [BINARY-VERIFIED] `0x4A96B7` |
-| `+0x24` | **background surface** — `GUI_StageUpdateDraw`'s `0x40` redraw repaints the WHOLE panel surface from it, `0x4C6B70(panel+0xBC, this, 0, 0)`, before it draws a single gadget; NULL falls back to the picture handler `0x4B0230(gi, 0, panel+0xC4)` | [BINARY-VERIFIED 2026-09-18] `0x4A90FE`, `0x4A9105` |
 | `+0x14` | `Active_b` — set to 1 on the GUI newly exposed by a pop | [BINARY-VERIFIED] `0x4A96A7` |
+| `+0x24` | **background surface** — `GUI_StageUpdateDraw`'s `0x40` redraw repaints the WHOLE panel surface from it, `0x4C6B70(panel+0xBC, this, 0, 0)`, before it draws a single gadget; NULL falls back to the picture handler `0x4B0230(gi, 0, panel+0xC4)` | [BINARY-VERIFIED 2026-09-18] `0x4A90FE`, `0x4A9105` |
 | `+0x4F` | `GUIName[16]` | [CORPUS] |
 
 ### 1.2 `GUIInfo` (at `main+0x519`)
@@ -133,13 +133,13 @@ iteration, bounded by `[ControlsAry+0xB6] + 1`. [BINARY-VERIFIED]
 | `+0x27` | `u8` | `texturenumber` | [CORPUS] |
 | `+0x28` | `u8` | `fontnumber` — really an **index into the screen's `id 7` resource gadgets**, not an absolute font id (§3) | [BINARY-VERIFIED] |
 | `+0x29` | `u8` | **`active`** — zero ⇒ the draw loop skips the gadget entirely | [BINARY-VERIFIED] `0x4A915D` |
+| `+0x2A` | `u8` | `commonattribs` | [CORPUS] |
+| `+0x33` | `char[128]` | `help` — tooltip | [CORPUS] |
 
 **`+0x29` is the gadget's own `active` flag, not a dirty bit.** A forced `0x40` redraw honours it
 exactly as the engine's own redraws do, so a repaint re-issues the draws for every gadget the engine
 would have drawn itself and for no others. [MEASURED 2026-09-18: one `(gi, 0x40)` on `MAINMENU.GUI`
 produced 115 ops, 105 of them sprite blits; one on the in-game `ARMMAIN2.GUI` produced 1.]
-| `+0x2A` | `u8` | `commonattribs` | [CORPUS] |
-| `+0x33` | `char[128]` | `help` — tooltip | [CORPUS] |
 
 The TDF keys these come from are parsed by `GUI_ParseCommonFields 0x4AD350`
 (`COMMON` `0x509A8C`, `id` `0x509A88`, `assoc` `0x509A80`, `name` `0x503884`,
@@ -267,6 +267,12 @@ If the listbox's `itemheight` is 0 the scrollbar cannot move `top` at all (guard
 `0x4A2DB0`). `List_SetItems` forces it to at least `glyph('I').height + 3`
 (`0x4A3366`), so a text list always has one — but a list filled by the picture setters
 never does, and its scrollbar is inert. [BINARY-VERIFIED]
+
+One more writer, which belongs with the table above and had drifted two paragraphs away from it
+where it rendered as literal text [fixed 2026-09-18, in passing]:
+
+| VA | Moves `top` by | Trigger |
+|---|---|---|
 | `0x4A30F0`, `0x4A33C7`, `0x4A3637`, `0x4A372B` | to 0 | the list setters |
 
 **The scroll arrows are not in the `.GUI` file.** `GUI_StageUpdateDraw` synthesizes two

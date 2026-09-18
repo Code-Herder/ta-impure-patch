@@ -1927,7 +1927,6 @@ tools/tacli arm <i> 'mark.on=noselbox'      # the engine draws its OWN selection
 tools/tacli gui <i>               # report
 tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds= sprites= pixels= bars= rects= atlas= resets= overflows= k= sharp= fps=
 #   bars= (8a) and rects= (8b) count PK_BAR/PK_RECT replayed as GEOMETRY; pixels= counts boxes of arena
-#   repaints=<done>/<refused> ops=<last repaint's op count> (landing 9) is on the OTHER heartbeat, 'GUI flips='
 #   bytes. Read them against each other: every bar used to be a pixels. Neither is a per-frame
 #   number -- both are running totals at the moment the line was printed.
 ../.venv-undither/bin/python tools/uiwalk.py --inst <i> --res 1024x768 --layer --out /tmp/uiwalk
@@ -2114,7 +2113,10 @@ tools/tacli log <i> -g 'arena='         # the queue's MONOTONIC arena head: the 
   return whenever the layer arms or the twins are reseeded, so the shell's art arrives as sprite
   ops instead of only as a `PK_SEED` of flat bytes. `log` prints one line per repaint with its op
   count **by kind** — `gui: repaint #N … 115 op(s) [gaf 105 line 4 focus 6]` — and the heartbeat
-  carries `repaints=<done>/<refused> ops=<last>`. Two things to know before reading those numbers:
+  carries `repaints=<done>/<refused> rops=<last>` — `rops=` and not a second `ops=`, which is
+  what it was until the review pointed out the heartbeat then had two different keys spelled the
+  same. `<refused>` counts EPISODES, not flips: a guard failure leaves the repaint pending, so
+  counting every refusal counted ~5000 a second in the shell. Two things to know before reading those numbers:
   **in game it is 1 op**, because `ARMMAIN2.GUI` is a three-label screen and the HUD is not a
   gadget tree, so a repaint is a **shell** measurement; and the number that moves is the **GUI
   atlas**, `gui: atlas mirror armed, … N painted frame(s)` — **28 shipped against 19 under

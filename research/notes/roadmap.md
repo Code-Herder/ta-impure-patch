@@ -3055,8 +3055,10 @@ five kinds still publish surface bytes, and the gate's exit condition is unchang
 tree that **calls** an engine draw function instead of watching one:
 `GUI_StageUpdateDraw 0x4A81E0(gi, 0x40)` at the flip's return, so the top screen's art reaches us
 as ops rather than as a `PK_SEED` of opaque bytes. Safe by three constructions, not by timing — the
-build gate at `0x4A82F0` jumps past both allocations and the two frees are gated on the teardown
-bit (so it allocates nothing, frees nothing, changes no lifetime); the call is refused unless
+build gate at `0x4A82F0` jumps past both allocations and **all six** free sites are gated on the
+teardown bit (the review corrected "two": besides `0x4C6AC0` at `0x4A9537`/`0x4A9549` the
+function calls the raw `0x4D85A0` at `0x4A9575`/`0x4A95A7`, and the conclusion now rests on the
+`test bl,0x2` gate rather than on a count that was wrong); the call is refused unless
 `TheActive_GUIMEM`, its `ControlsAry` and `panel+0xBC` are all present, because a NULL destination
 resolves to the **primary surface**; and it runs with `s_inFlip` already cleared, since the leaves
 drop every op inside the flip. **Measured: the GUI atlas holds 28 frames where `norepaint` holds
@@ -3068,7 +3070,13 @@ surface **from a bitmap** before a single gadget is drawn, so the chrome comes b
 the wallpaper comes back as a copy. And the trigger is `g_guiq.resets`, not the level generation —
 the packet's level counter advances at level **end**, so shadowing it fired once per session and
 never on entering a game; a reseed is what clears `seeded` on every surface, and the level case is
-one of its four causes. **Not covered by 9:** `PK_SEED` is not closed — a surface is still seeded
+one of its four causes. A `0x40` redraw also WRITES engine state the first version did not name — `0x4A16F0` sets the GUI
+dirty flag `gi+0xCCA` and the pump `0x4A9FD0` answers it with a further redraw — and **whether that
+amplifies is not settled**: `builds=` over three boots per arm gave overlapping means with no
+direction (1.0/72.0/69.1 shipped against 28.1/21.8/62.1), so the instrument cannot answer it.
+`buildFlags` is 0xC0 in every window of both arms — the engine redraws continuously by itself —
+and no runaway was observed. It is in the gate's "not covered" list rather than claimed closed.
+**Not covered by 9:** `PK_SEED` is not closed — a surface is still seeded
 on first touch after every reseed and the repaint replays *over* it; and in game a repaint produces
 **1 op**, because `ARMMAIN2.GUI` is a three-label screen and the HUD is not a gadget tree. A forced
 repaint is a **shell** mechanism.

@@ -1896,15 +1896,32 @@ static int __cdecl before_flip(void* entry_esp)
    every one of them. `GUI_StageUpdateDraw 0x4A81E0(gi, 0x40)` is the engine's
    own redraw of the top screen, and every draw it makes runs through the
    leaves, so the panel's chrome arrives as ops that the twin can hold in
-   palette space instead.
+   palette space -- OVER the seed, not instead of it: `publish` still seeds
+   a surface on first touch and the repaint replays on top.
 
    WHY THE FLAG IS EXACTLY 0x40 AND NOTHING ELSE [DISASSEMBLED 2026-09-18]:
    `0x4A82F0` computes `eax = flags & 1` -- the BUILD bit -- and `0x4A82F7`
-   `je 0x4A90D1`, which is past BOTH allocations (`0x4A907C`, `0x4A90B5`);
-   the two frees (`0x4A9537`, `0x4A9549`) are gated on the `0x2` teardown
-   bit. Those four are the only allocator and free calls in the whole
-   function, so a 0x40 call allocates nothing, frees nothing, and changes no
-   lifetime. A `0x1` call twice without a teardown is what would leak.
+   `je 0x4A90D1`, which is past BOTH allocations (`0x4A907C`, `0x4A90B5`).
+   The frees are SIX sites and not the two this comment first named -- the
+   search was for `0x4C69F0`/`0x4C6AC0` and stopped at the symbols it
+   expected [CORRECTED by the landing review]: `0x4C6AC0` at `0x4A9537` and
+   `0x4A9549`, and the RAW free `0x4D85A0` at `0x4A9575` and `0x4A95A7`,
+   which walk the gadget array freeing each record's own pointers. All four
+   are inside one block gated by `0x4A950A test bl,0x2 / je 0x4A95C2`, and
+   `ebx` is reloaded from the flags argument at `0x4A9434`/`0x4A94C0`/
+   `0x4A94C9`, so `bl` is the flags byte on every path into it.
+
+   So the claim this rests on is the NARROW one, which is also the one it
+   needs: under `flags == 0x40` the function ITSELF executes no allocation
+   and no free, and therefore changes no lifetime of the panel surfaces.
+   Verified over the whole body (`0x4A81E0..0x4A95F2`): 32 distinct direct
+   call targets, NO indirect calls, and the only indirect jumps are the two
+   in-body switch tables (`0x4A95F4`, `0x4A962C`). NOT verified, and
+   deliberately not claimed: that nothing it CALLS allocates -- `0x4BBC40`
+   and `0x4BBE50` are among its callees and both reach `0x4D85A0`. A
+   callee's own transient scratch is the engine's business; the panel
+   surfaces are ours. A `0x1` call twice without a teardown is what would
+   leak.
 
    WHAT A 0x40 REDRAW ACTUALLY DOES, IN ORDER [DISASSEMBLED 2026-09-18], because
    "every pixel arrives as an op" is NOT the whole truth and the plan said it
@@ -1924,14 +1941,49 @@ static int __cdecl before_flip(void* entry_esp)
    call non-reentrant by construction rather than by an argument about what
    the engine's gadget handlers do not do.
 
+   WHAT THE REDRAW WRITES BESIDES PIXELS, AND WHY IT DOES NOT RUN AWAY
+   [FOUND by the landing review, then MEASURED 2026-09-18]. On the `0x40`
+   path `0x4A943B` reads the focus index at `GUIMEM+0x20`; if it is not -1
+   and `gi+0xA2` is set, `0x4A947B` calls `0x4A16F0(gi, idx, 8)`, which
+   writes `gi+0xCCA = 1` unconditionally at `0x4A1708` and stamps gadget
+   `+0x1F` (0 on every type-3 gadget at `0x4A1722`, `0x1E` on the target at
+   `0x4A1758`). `gi+0xCCA` is the GUI dirty flag: the pump `0x4A9FD0` tests
+   it at `0x4AA0AF`, clears it at `0x4AA0BB`, and issues ANOTHER
+   `0x4A81E0(gi, GUIMEM->flags | 0x40)` at `0x4AA0CD`. So each repaint can
+   provoke a further engine redraw.
+
+   `builds=` CANNOT ANSWER IT AT THIS SAMPLE SIZE, and the first version of this
+   paragraph quoted the one pair of boots that looked supportive. Three boots per
+   arm, `gui.on=census`, `renderer=vulkan`: shipped gave means of **1.0, 72.0,
+   69.1** redraws per census window and `norepaint` gave **28.1, 21.8, 62.1** --
+   overlapping, dominated by something other than the repaint (how long a boot
+   lingers on which screen), and no direction. So the amplification question is
+   **NOT settled by this measurement** and no number here should be read as
+   settling it.
+
+   What IS established, in both arms and every boot: `buildFlags` is **0xC0** in
+   every census window -- the engine is already issuing `0x40` redraws
+   continuously on its own, at three call sites of its own (`0x41A8DA`,
+   `0x4931B4`, `0x4A96BF`) -- and our repaint fires on a RESEED EDGE, 2-4 times
+   a boot, not per frame. Every measured boot in both arms ended `dropped=0
+   overflows=0 stalls=0` with a complete frame at 0 magenta. That is "no runaway
+   was observed", which is weaker than "it does not amplify" and is what the
+   evidence supports.
+
    AND THE DESTINATION IS CHECKED BEFORE THE CALL, not after: the redraw's
-   first act writes `panel+0xBC`, and `0x4C6B70` with a NULL destination
+   first act writes INTO the surface `panel+0xBC` points at (the pointer
+   itself is written by the BUILD, at `0x4A9092`), and `0x4C6B70` with a
+   NULL destination
    builds its own context over the PRIMARY surface (terrain-depth.md) -- a
    redraw of an unbuilt screen would paint the wallpaper straight onto the
    screen. `repaint_service` refuses unless `TheActive_GUIMEM`, its
    `ControlsAry` and `panel+0xBC` are all present.                        */
 #define OFF_GUIINFO   0x519           /* GUIInfo, inline in main (gui-gadgets.md 1.2)  */
 #define GI_ACTIVE     0x18            /* GUIInfo.TheActive_GUIMEM                      */
+/* the same field as OFF_GUI_TOP at the top of this file, reached the other way
+   round: 0x519 + 0x18 == 0x531. Checked here so a correction to one spelling
+   cannot silently leave the other behind. */
+typedef char gui_top_spelling_agrees[(OFF_GUIINFO + GI_ACTIVE == OFF_GUI_TOP) ? 1 : -1];
 #define STAGE_VA      0x004A81E0u     /* GUI_StageUpdateDraw(gi, flags) stdcall ret 8  */
 #define STAGE_REDRAW  0x40            /* the redraw bit; 0x1 builds, 0x2 tears down    */
 typedef void (__stdcall *gui_stage_fn)(void* gi, int flags);
@@ -1940,6 +1992,7 @@ static int      s_repaint = 1;        /* off with the `norepaint` token         
 static int      s_repaintPend = 0;    /* game thread only, from here down         */
 static int      s_repainting = 0;
 static unsigned s_repaints = 0, s_repaintSkips = 0, s_repaintOps = 0;
+static int      s_repaintCounted = 0;  /* this pending episode's refusal is counted */
 static int      s_drawShadow = 0;     /* our own last-seen value of g_gui_draw    */
 static unsigned s_resetShadow = 0;    /* ... and of g_guiq.resets                */
 
@@ -1967,10 +2020,22 @@ static void repaint_arm(void)
 {
     int draw = g_gui_draw;
     unsigned resets = g_guiq.resets;
-    if (draw && !s_drawShadow) s_repaintPend = 1;     /* the layer just armed      */
-    if (resets != s_resetShadow) s_repaintPend = 1;   /* the twins were thrown away */
+    if (draw && !s_drawShadow) { s_repaintPend = 1; s_repaintCounted = 0; }
+    if (resets != s_resetShadow) { s_repaintPend = 1; s_repaintCounted = 0; }
     s_drawShadow = draw;
     s_resetShadow = resets;
+}
+
+/* ONE PER EPISODE, NOT ONE PER FLIP. A guard failure leaves `s_repaintPend`
+   set -- the retry is the point -- so counting every refusal counted FLIPS: in
+   the shell, ~5000 a second while a screen is between push and build, which
+   made `repaints=3/4813992` unreadable and was half of what pushed the
+   heartbeat line past its buffer. [FOUND by the landing review.] */
+static void repaint_refused(void)
+{
+    if (s_repaintCounted) return;
+    s_repaintCounted = 1;
+    s_repaintSkips++;
 }
 
 static void repaint_service(void)
@@ -1985,13 +2050,13 @@ static void repaint_service(void)
     /* ptr_ok here is a range test on a VALUE, as everywhere else in this file;
        what makes the call safe is the three-link check below plus the flag */
     ta = *(const char* const*)TA_MAINPP;
-    if (!ptr_ok(ta)) { s_repaintSkips++; return; }
+    if (!ptr_ok(ta)) { repaint_refused(); return; }
     gi = (char*)(size_t)ta + OFF_GUIINFO;
     gm = *(const char* const*)(gi + GI_ACTIVE);
-    if (!ptr_ok(gm)) { s_repaintSkips++; return; }      /* 0x4A81EA's own early return */
+    if (!ptr_ok(gm)) { repaint_refused(); return; }     /* 0x4A81EA's own early return */
     ctrls = *(const char* const*)(gm + GM_CTRLS);
-    if (!ptr_ok(ctrls)) { s_repaintSkips++; return; }   /* ebp at 0x4A8202 */
-    if (!ptr_ok(*(const void* const*)(ctrls + P_SURFACE))) { s_repaintSkips++; return; }
+    if (!ptr_ok(ctrls)) { repaint_refused(); return; }  /* ebp at 0x4A8202 */
+    if (!ptr_ok(*(const void* const*)(ctrls + P_SURFACE))) { repaint_refused(); return; }
     s_repaintPend = 0;
     s_repainting = 1;
     n0 = s_nops;
@@ -2011,20 +2076,37 @@ static void repaint_service(void)
            truncation rather than the length it wanted, so `n += _snprintf(...)`
            would make `n` negative and `sizeof kinds - (size_t)n` wrap to a size
            that writes BEFORE the buffer. Checking the return keeps `n` a real
-           offset whatever the platform does. */
+           offset whatever the platform does, and `n` is clamped below because a
+           return of exactly the space left is a fit that msvcrt also leaves
+           unterminated — the one case "cannot go negative" does not cover.
+           [The clamp found by the landing review.]
+
+           TWO NUMBERS, TWO QUANTITIES. `s_repaintOps` is `s_nops - n0`: ops
+           RECORDED. The breakdown is the `s_kindTotal` delta, and `op_add` bumps
+           that BEFORE its `!s`, fully-clipped and `MAX_OPS` early returns — so it
+           is ops ATTEMPTED. They agree on every screen measured so far; where
+           they do not, the line says so rather than letting the reader assume.
+           [Also the review's.] */
         char b[448], kinds[288];
         int n = 0, w;
+        unsigned att = 0;
         for (k = 1; k < OP_NKIND; k++)
             if (s_kindTotal[k] != before[k]) {
+                att += s_kindTotal[k] - before[k];
                 w = _snprintf(kinds + n, sizeof kinds - (size_t)n, "%s%s %u",
                               n ? " " : "", OP_NAME[k], s_kindTotal[k] - before[k]);
                 if (w < 0) break;                 /* out of room: keep what fits */
                 n += w;
+                if (n >= (int)sizeof kinds) { n = (int)sizeof kinds - 1; break; }
             }
         kinds[n] = 0;
         if (!n) _snprintf(kinds, sizeof kinds, "none");
-        _snprintf(b, sizeof b, "gui: repaint #%u -- 0x4A81E0(gi, 0x40) on the top screen: %u op(s) [%s] (skips=%u)",
-                  s_repaints, s_repaintOps, kinds, s_repaintSkips);
+        if (att == s_repaintOps)
+            _snprintf(b, sizeof b, "gui: repaint #%u -- 0x4A81E0(gi, 0x40) on the top screen: %u op(s) [%s] (skips=%u)",
+                      s_repaints, s_repaintOps, kinds, s_repaintSkips);
+        else
+            _snprintf(b, sizeof b, "gui: repaint #%u -- 0x4A81E0(gi, 0x40) on the top screen: %u of %u op(s) recorded [%s] (skips=%u)",
+                      s_repaints, s_repaintOps, att, kinds, s_repaintSkips);
         b[sizeof b - 1] = 0;
         glog(b);
     }
@@ -2131,7 +2213,7 @@ void tagpu_gui_flush(unsigned int frame_counter)
     if (!s_installed) return;
     if (frame_counter - last >= 600) {
         last = frame_counter;
-        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u ops=%u",
+        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u",
                   s_flips, s_opsTotal, s_opsDropped, s_changedTotal, s_unexplTotal, s_nsurf,
                   s_pubOps, s_pubBytes, g_guiq.qHead - g_guiq.qTail, g_guiq.resets, g_guiq.overflows, g_guiq.stalls, g_gui_draw, s_freeqFlush, s_repaints, s_repaintSkips, s_repaintOps);
         glog(b);
