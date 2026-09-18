@@ -31,7 +31,7 @@
    dereferences `f->packet`, through `do_eye`.
 
    AND THE CALLER OWES A CLOCK, NOT A FLIP. These throttle themselves on
-   `frame_counter % 5`, written against the PRESENT rate of ~60/s; the engine's
+   `frame_counter % 5` (`% 15` for peek), written against the PRESENT rate of ~60/s; the engine's
    flip runs at thousands per second in the shell. The caller must gate on
    elapsed time and hand over a counter that advances with it. */
 

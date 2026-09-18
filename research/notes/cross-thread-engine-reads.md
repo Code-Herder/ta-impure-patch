@@ -72,11 +72,16 @@ wreck records), the model templates (`0x42DB90`), the projectile array (`0x499A8
 **What runs before the gate.** Eight `*_flush` calls — the tracer, suppressor, own-draw, effects,
 features, terrain, markers and GUI flushes. Checked 2026-09-11: they are stat loggers and
 90-frame skip watchdogs, and **none of them reads engine memory**, so their position before the gate
-is not an exposure. The on-demand tooling that also runs before it does read engine memory:
-`tagpu_peek_frame`, `tagpu_weapons_frame`, `tagpu_ui_frame`, `tagpu_cat_frame`, the scenario
-detection frame, and the tracer's `sample_composites`. All are trigger-file gated. A `tacli`
-catalogue, peek, UI snapshot or trace issued **during a level change** can therefore fault the render
-thread; that is a tooling hazard, not a play one. So can `writeback_paint`'s opt-in 3DO path on the
+is not an exposure. The on-demand tooling that also runs before it does read engine memory —
+though **since landing 10c-1 (2026-09-18) only one of the six still does so on the render
+thread.** `tagpu_peek_frame`, `tagpu_weapons_frame`, `tagpu_ui_frame`, `tagpu_cat_frame` and the
+scenario detection frame now run on the GAME thread, from the engine's own flip, so they cannot
+fault the render thread at all: they were moved to reach `renderer=gdi`, and this fell out of it.
+What is left is **the tracer's `sample_composites`** (`tagpu_tracer_flush`, still called from
+`tagpu_overlay.c` on the render thread, `g_armed`-gated). It reads the unit array and
+`Object3do+0x10`, never the UnitDef array. So a `tacli` **trace** issued **during a level change**
+can still fault the render thread; that is a tooling hazard, not a play one, and it is now one
+verb rather than four. So can `writeback_paint`'s opt-in 3DO path on the
 `tagpu_overlay.off` exit, which also precedes the gate.
 
 **Hole 1 — the timeout.** If the reader has not finished its pass within a second (a GL stall, or
@@ -273,7 +278,9 @@ a comment saying so.
    lifetime or a thread. A coordinate can: bound it where it is consumed.
 5. **`ptr_ok` and `IsBadReadPtr` are nets.** Keep them; say so in the comment; never cite them as the
    reason a read is safe.
-6. **Nothing that reads engine memory runs before the gate** unless it is trigger-gated tooling,
+6. **Nothing that reads engine memory runs before the gate** unless it is trigger-gated tooling
+   — since landing 10c-1 that means `tagpu_tracer.c` alone, the other five having moved to the
+   game thread —
    and then its `tacli` documentation should say "not during a level change".
 7. **A change to any of this is a `high` review** (`CLAUDE.md`, *Review engine changes*), and the
    second reviewer's brief is the sequence that breaks the claim, not an opinion on the design.
@@ -296,8 +303,13 @@ a comment saying so.
 - ~~**The projectile cap** — `8192` in `tagpu_fx.c` against an allocation of 300.~~ **CLOSED
   2026-09-12** by landing 4a. It is 300, in the publisher, and it is the allocation's own number:
   `0x499A30` allocates exactly 300 slots and both of the engine's append sites refuse past 300.
-- **Tooling before the gate** — document the level-change restriction in the `tacli` skill, or move
-  the trigger frames below the gate at the cost of not serving triggers during a teardown.
+- ~~**Tooling before the gate** — document the level-change restriction in the `tacli` skill, or move
+  the trigger frames below the gate at the cost of not serving triggers during a teardown.~~
+  **CLOSED for five of the six since 2026-09-18** (landing 10c-1), and by a third option this item
+  never listed: the trigger frames moved to the **game thread**, off the engine's own flip, so they
+  are not before the gate because they are not on that thread at all — and they serve triggers
+  during a teardown, which both of the options above would have cost. `tagpu_tracer.c`'s
+  `sample_composites` is the remaining one and still wants the `tacli` note.
 - ~~**The one-fault test for the fog guard** — plumb `cells` into `fog_alarm` so the next trip logs
   all four descriptor fields.~~ **MOOT since 2026-09-12** (landing 4b): both grids cross in the
   packet with their dimensions, and the acquire checks that the area's length is exactly

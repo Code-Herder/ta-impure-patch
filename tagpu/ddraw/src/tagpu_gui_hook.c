@@ -1771,7 +1771,7 @@ static int __cdecl before_flip(void* entry_esp)
        whether someone dropped a `.trigger` file.
 
        AND IT IS GATED ON A CLOCK, NOT ON THE FLIP. `s_flips` is not a frame
-       counter -- CENSUS_MS twenty lines above says the shell flips ~5000 times
+       counter -- CENSUS_MS above says the shell flips ~5000 times
        a second, and the op census measured ~12 000/s on MAINMENU. The family
        was written against the PRESENT (60/s): its `% 5` throttles and
        `SCN_ARM_FRAMES 600` are all in that unit. Handing it `s_flips` raised
@@ -1784,20 +1784,28 @@ static int __cdecl before_flip(void* entry_esp)
        about a renderer: the family sees ~60 frames a second on EVERY lane, so
        `% 5` is ~83 ms exactly as it was at 60 fps and the arm watchdog is ~9.6 s
        again. One QueryPerformanceCounter per flip is orders of magnitude
-       cheaper than the 1.27 GetFileAttributes calls per flip it replaces. */
+       cheaper than the 1.27 GetFileAttributes calls per flip it replaces.
+
+       IT FAILS CLOSED, DELIBERATELY. If QueryPerformanceFrequency ever refuses,
+       `s_trigFreq` stays 0 and the block never runs -- every trigger verb goes
+       quiet on every lane. The CENSUS_MS gate below fails OPEN in the same
+       case. Closed is the right way round here: open would be the ~12 000 file
+       stats a second this gate exists to remove, on the game thread, inside the
+       engine's flip. QPF cannot fail on Win2000+ or Wine, so neither branch is
+       reachable; the asymmetry is written down because it is deliberate. */
 #define TRIG_MS 16
     {
         static LARGE_INTEGER s_trigQpc, s_trigFreq;
         static unsigned      s_trigFrames = 0;
-        LARGE_INTEGER now;
+        LARGE_INTEGER tnow;   /* not `now`: the census below has its own */
         if (!s_trigFreq.QuadPart) QueryPerformanceFrequency(&s_trigFreq);
-        QueryPerformanceCounter(&now);
+        QueryPerformanceCounter(&tnow);
         if (s_trigFreq.QuadPart &&
             (!s_trigQpc.QuadPart ||
-             (now.QuadPart - s_trigQpc.QuadPart) * 1000 >=
+             (tnow.QuadPart - s_trigQpc.QuadPart) * 1000 >=
                  (LONGLONG)TRIG_MS * s_trigFreq.QuadPart)) {
             TAGPU_FRAME gf;
-            s_trigQpc = now;
+            s_trigQpc = tnow;
             memset(&gf, 0, sizeof gf);
             gf.struct_size   = sizeof gf;
             gf.abi           = TAGPU_ABI;
@@ -1821,6 +1829,7 @@ static int __cdecl before_flip(void* entry_esp)
             tagpu_triggers_frame(&gf);
         }
     }
+#undef TRIG_MS
     src = flip_source(entry_esp);
     s = surf_of_ctx(src);
     /* the marker: this flip's surface and the fill sequence as of now */

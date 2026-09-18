@@ -76,9 +76,18 @@
    body, not four; the three we leave alone are 0x42DC23 and 0x42DC52 (unit-def
    fields no pass of ours reads) and 0x42DCCB, which frees the whole UnitDef
    array at main+0x1439B and nulls it at 0x42DCE6. That array IS read by us --
-   tagpu_order, tagpu_cat, tagpu_weapons, tagpu_scenario -- but every one of
-   those readers is on the GAME thread, as is this cascade, so it needs no ring.
-   Stated because the list is what the next pass to want the defs will trust. */
+   tagpu_order, tagpu_cat, tagpu_weapons, tagpu_scenario, tagpu_packet_pub --
+   but every one of those readers is on the GAME thread, as is this cascade, so
+   it needs no ring. Stated because the list is what the next pass to want the
+   defs will trust, and it has to be COMPLETE to be worth trusting:
+   tagpu_packet_pub was missing from it until 2026-09-18, and until landing
+   10c-1 of the vulkan-only plan the claim itself was FALSE -- tagpu_cat,
+   tagpu_weapons and tagpu_scenario ran their trigger frames from
+   tagpu_overlay_draw, on the render thread. That landing moved them to the game
+   thread (for a different reason, to reach renderer=gdi) and so made this
+   paragraph true rather than aspirational. Swept 2026-09-18 across every file
+   naming main+0x1439B or dereferencing unit+0x92: no render-thread reader
+   remains. */
 #define TMPLFREE_VA   0x0042DC01u          /* MEM_Free(one Model3DONode block)            */
 #define TMPLTAB_VA    0x0042DCB6u          /* MEM_Free(the model-pointer table)           */
 #define MEMFREE_VA    0x004D85A0u          /* MEM_Free: cdecl, 1 arg, caller cleans       */

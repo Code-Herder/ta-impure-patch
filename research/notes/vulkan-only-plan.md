@@ -1863,9 +1863,12 @@ detection work; `click`, `keys` and anything built on injected input do not.
   record, documented as **valid only on the producer's own thread, and only until its next
   publish** — which is exactly the window `before_flip` sits in. No new lock, no new ordering, and
   nothing the render thread can observe.
-* The one thing to check when writing it: the shell publishes from `fill_shell`, whose publish
-  point is the flip's own cursor draw (`0x4C67C0`). That is very close to `before_flip`, so
-  establish which of the two runs first rather than assuming.
+* **Resolved rather than left as a caveat** [the review of 10c-1's fix]: `before_flip` observes the
+  flip's **entry**, and `0x4C67C0` is the cursor draw **inside** that same flip. So a
+  `tagpu_packet_pub_last()` read from `before_flip` returns the **previous** flip's shell packet,
+  not this one's. For `do_eye` — which wants `in_game` and the camera eye — one flip of staleness
+  is almost certainly fine, but it has to be *stated* rather than discovered: the alternative is to
+  call the family from `after_flip` instead, which the same observer already provides.
 
 **The paragraph below is what this replaced, kept because its reasoning is the record.**
 
