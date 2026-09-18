@@ -1572,6 +1572,63 @@ Back to the filed list:
    be inert through, so the gdi lane draws no structure shadows and nothing of ours draws them
    either. This item's headline claim is false until that is fixed.
 
+   **AND THE HEADERS, WHICH THIS ITEM LISTED AS "UNCHECKED", CHANGE ITS SIZE** [surveyed
+   2026-09-18; the survey's own first pass was wrong, see the method note below]. The six files
+   this item names are ~5 200 lines. They are not the job.
+
+   **`opengl_utils.h` is the whole GL entry-point surface** — 94 declared symbols, every `gl*`
+   the tree calls, `glcorearb.h` behind it — and **twenty `.c` files outside the deletion set
+   include it and use it**:
+
+   | file | lines carrying a GL symbol | uses |
+   |---|---|---|
+   | `tagpu_gui_surf.c` | 247 | 268 |
+   | `tagpu_native.c` | 215 | 241 |
+   | `tagpu_posedraw.c` | 110 | 121 |
+   | `tagpu_terr.c` | 107 | 121 |
+   | `tagpu_hires_draw.c` | 82 | 87 |
+   | `tagpu_mark.c` | 71 | 82 |
+   | `tagpu_fx.c` | 63 | 77 |
+   | `tagpu_shadow.c` | 54 | 61 |
+   | `tagpu_gaf.c` | 53 | 58 |
+   | `tagpu_feat.c` | 45 | 57 |
+   | `tagpu_scaffold.c` | 40 | 48 |
+   | `tagpu_posebake.c` | 31 | 31 |
+   | `tagpu_fps.c` | 30 | 38 |
+   | `tagpu_hires.c` | 30 | 31 |
+   | `tagpu_overlay.c` | 21 | 25 |
+   | `tagpu_text.c` | 20 | 20 |
+   | `tagpu_render3do.c` | 10 | 10 |
+   | `dd.c` | 2 | 2 |
+   | `tagpu_ftime.c` | 1 | 2 |
+   | `render_gdi.c` | 1 | 2 |
+   | **total** | **1 233** | **1 382** |
+
+   **So deleting `opengl_utils.c` and its header means deleting the GL half of seventeen passes**,
+   not resolving one caller of `oglu_load_dll`. Those halves are already inert under
+   `renderer=vulkan` — each sits behind its pass's own `gl_draws = !tagpu_vk_owns_present()` — so
+   this is deletion rather than porting, and the lane's behaviour does not change. But it is
+   **1 233 lines across seventeen files that each need their own before/after**, and it dwarfs the
+   ~5 200 lines of the six files the row names. The three one-line users are trivial by
+   comparison: `dd.c`'s `oglu_load_dll`, `render_gdi.c`'s `g_oglu_version`, `tagpu_ftime.c`'s
+   `xwglGetProcAddress`.
+
+   The other headers are cleaner than that: `openglshader.h` and `d3d9shader.h` have **no
+   includer outside the set at all**; `render_ogl.h` has four (`config.c`, `dd.c`,
+   `fps_limiter.c`, `winapi_hooks.c`) and `render_d3d9.h` five (those plus `utils.c`,
+   `wndproc.c`), all of them the renderer-selection surface rather than drawing.
+   `tagpu_restoreglsl.h` has thirteen, which is the split landing 7 already made.
+
+   **THE METHOD NOTE, because the first pass of this survey got it wrong twice.** Stripping string
+   literals before scanning for `#include` **deletes the include paths** — `"render_ogl.h"` is a
+   string literal — and the first run reported cheerfully that nothing includes any of these
+   headers. And a `\bgl[A-Z]\w*\b` pattern matches `glUp` and `glOff`, two local variables in
+   `tagpu_vk_gui.c`, which is how a file with no GL in it appeared in the table. The counts above
+   are matched against **the 94 symbols `opengl_utils.h` actually declares**, over sources with
+   comments and string literals removed. Same trap as the shader grep over a truncated range, and
+   as counting `call` sites without following the control flow: **a mechanical scan is only as
+   good as the boundary nobody checked.**
+
    **The restorer was missing from this list until 2026-09-17 and it is what proved the list was
    a guess.** `tagpu_restoreglsl.c` includes `opengl_utils.h` and calls `glDeleteProgram`, so it
    cannot survive this landing — but before landing 7 split it, deleting it would also have taken
