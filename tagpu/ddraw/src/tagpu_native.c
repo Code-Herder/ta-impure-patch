@@ -3406,6 +3406,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            twin owns its own blend state, which is why there is nothing to set. */
         if (nterr) tagpu_terr_render(&fv, 0);
         if (nfeat) tagpu_feat_render(&fv, 0);
+        /* the effects are the LAST of the world, after the features and the
+           units -- the order below, and the order tagpu_vk.c records in. The
+           scaffold texture is 0 here: the effects twin refuses any frame whose
+           twin had the scaffold live, so that is the value it wants. */
+        if (nfx) tagpu_fx_render(&fv, 0, 0);
         return;
     }
 

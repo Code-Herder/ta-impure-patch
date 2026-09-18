@@ -320,6 +320,21 @@ static GLuint mksh(GLenum t, const char* src)
     return sh;
 }
 
+/* THE ATLAS IS THE PASS, NOT THE BACKEND -- the feature pass's shape and the
+   same reason (tagpu_feat.c). Nothing in here is GL: `atlas_create` gates its
+   own texture and keys the atlas's existence on `made` rather than on a GL name
+   (tagpu_gaf.h). Left inside `init_gl` it would leave `dim` at 0 on a lane that
+   never calls it, and every sprite lookup would return NULL.
+   [The vulkan-only plan, landing 4b-2.] */
+static void atlas_setup(void)
+{
+    tagpu_gaf_atlas_lost(&s_atlas);      /* its texture is made on first use */
+    s_atlas.dim = ATLAS_DIM; s_atlas.max = ATLAS_MAX;
+    s_atlas.ents = s_atlasEnts; s_atlas.tag = "fx";
+    s_atlas.prio = 2;                   /* restored after terrain and features */
+    tagpu_gaf_atlas_create(&s_atlas);   /* never bind texture 0 to uAtlas */
+}
+
 static void init_gl(void)
 {
     x_glDrawArrays = (PFN_DRAWARRAYS)getgl("glDrawArrays");
@@ -381,11 +396,7 @@ static void init_gl(void)
     }
     glBindVertexArray(0);
 
-    tagpu_gaf_atlas_lost(&s_atlas);      /* its texture is made on first use */
-    s_atlas.dim = ATLAS_DIM; s_atlas.max = ATLAS_MAX;
-    s_atlas.ents = s_atlasEnts; s_atlas.tag = "fx";
-    s_atlas.prio = 2;                   /* restored after terrain and features */
-    tagpu_gaf_atlas_create(&s_atlas);   /* never bind texture 0 to uAtlas */
+    atlas_setup();
     glGenTextures(1, &s_lhtTex);
     glBindTexture(GL_TEXTURE_2D, s_lhtTex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -924,10 +935,15 @@ static void gather_fx(const TAGPU_FXVIEW* v)
                 rgb[L*3+1] = (unsigned char)(sg < 0 ? 0 : sg > 255 ? 255 : sg);
                 rgb[L*3+2] = (unsigned char)(sb < 0 ? 0 : sb > 255 ? 255 : sb);
             }
-            glBindTexture(GL_TEXTURE_2D, s_lhtTex);
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, 32, 1, 0, GL_RGB, GL_UNSIGNED_BYTE, rgb);
-            glBindTexture(GL_TEXTURE_2D, 0);
+            /* THE UPLOAD IS GL; THE TABLE IS THE PASS. `s_pub.lht` hands these
+               same bytes to the twin, which builds its own image from them, so
+               only the texture stands down. [Landing 4b-2.] */
+            if (!tagpu_vk_owns_present()) {
+                glBindTexture(GL_TEXTURE_2D, s_lhtTex);
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, 32, 1, 0, GL_RGB, GL_UNSIGNED_BYTE, rgb);
+                glBindTexture(GL_TEXTURE_2D, 0);
+            }
             s_lhtInit = 1; s_lhtStamp = v->frame_counter;
         }
     }
@@ -951,11 +967,19 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
 {
     int fxOn = (s_armed == 1), sfxOn = tagpu_sfx_on();
     if (!fxOn && !sfxOn) return 0;
-    if (s_state == 0) init_gl();
-    if (s_state != 1) {
-        static int said = 0;
-        if (sfxOn && !said) { said = 1; flog("fx: GL not ready — the particle pass (sfx) is idle too"); }
-        return 0;
+    /* GL ONLY, and asked only where GL draws -- `init_gl` resolves entry points
+       and builds this pass's program. The atlas it used to set up is set up
+       here instead on the other lane, once, since `made` latches. */
+    if (!tagpu_vk_owns_present()) {
+        if (s_state == 0) init_gl();
+        if (s_state != 1) {
+            static int said = 0;
+            if (sfxOn && !said) { said = 1; flog("fx: GL not ready — the particle pass (sfx) is idle too"); }
+            return 0;
+        }
+    } else if (!s_atlas.made) {
+        atlas_setup();
+        if (!s_atlas.made) return 0;
     }
     /* the frame's capability bits, from the packet: bit5 the ALP alpha table
        is built, bit7 the LHT one. Read by the publisher, on the game thread. */
@@ -1141,102 +1165,126 @@ int tagpu_fx_handover(TAGPU_FXHAND* out, unsigned now)
 void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex,
                      unsigned int scafTex)
 {
+    /* WHETHER THIS PASS DRAWS, or only hands over -- the feature pass's
+       shape (tagpu_feat.c) and the same argument. `scaf` comes up here with
+       the other locals because the hand-over carries it: on the vulkan-only
+       lane `scafTex` is 0, so it reads 0, and that is exactly what the twin
+       wants -- tagpu_vk_fx.c refuses any frame whose twin had the scaffold
+       live, so a 1 there would stand the pass down.
+       [The vulkan-only plan, landing 4b-2.] */
+    const int gl_draws = !tagpu_vk_owns_present();
     int total = s_nv[0] + s_nv[1] + s_nv[2] + s_nv[3];
+    int scaf = (v->scafOn && scafTex) ? 1 : 0;
+    int taking, first = 0;
     /* A FRAME WITH NOTHING TO DRAW HANDS NOTHING OVER. Leaving the previous
        frame's hand-over standing would have the Vulkan lane draw last frame's
        effects over this frame's -- and on the frame a level is torn down, over
-       nothing at all. [The G19e re-review's first finding, applied here.] */
-    if (s_state != 1 || total == 0) { s_pubHave = 0; s_abFrame = 0; return; }
-    glUseProgram(s_prog);
-    x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
-    glUniform1i(s_uFog, (v->fogMode & 1) | 2);   /* effects hide in grey */
-    if (s_uFogOrg >= 0) x_glUniform2f(s_uFogOrg, (float)v->fogOrgX, (float)v->fogOrgY);
-    if (s_uFogDim >= 0) x_glUniform2f(s_uFogDim, (float)v->fogCols, (float)v->fogRows);
-    int scaf = (v->scafOn && scafTex) ? 1 : 0;
-    if (s_uScafP >= 0) glUniform4f(s_uScafP, (float)v->vpL, (float)v->vpT, (float)v->vw, (float)v->vh);
-    x_glUniform1f(s_uSS, (float)(v->ss > 0 ? v->ss : 1));
-    x_glUniform1f(s_uZoomF, v->zoom > 0.0f ? v->zoom : 1.0f);
-    x_glUniform2f(s_uZoomCF, v->zoomCx, v->zoomCy);
-    x_glUniform1f(s_uZoom, v->zoom > 0.0f ? v->zoom : 1.0f);
-    x_glUniform2f(s_uZoomC, v->zoomCx, v->zoomCy);
-    x_glUniform1f(s_uDepthScale, v->depthScale > 1.0f ? v->depthScale : 512.0f);
-    x_glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, s_atlas.tex);
-    x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, palTex);
-    x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, v->fogTex);
-    x_glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, s_lhtTex);
-    x_glActiveTexture(GL_TEXTURE5); glBindTexture(GL_TEXTURE_2D, scafTex);
-    x_glActiveTexture(GL_TEXTURE6); glBindTexture(GL_TEXTURE_2D, s_atlas.rgb);
-    x_glActiveTexture(GL_TEXTURE0);
-    glUniform1i(s_uRestored, (s_atlas.rgb && tagpu_classicpp_assets()) ? 1 : 0);
-    glBindVertexArray(s_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof s_verts, NULL, GL_STREAM_DRAW);
-    {
-        int b, first = 0;
-        for (b = 0; b < NBUCKET; b++) {
-            if (s_nv[b])
-                glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)first * FXST * 4,
-                                (GLsizeiptr)s_nv[b] * FXST * 4, s_verts[b]);
-            first += s_nv[b];
-        }
-    }
-    glEnable(GL_BLEND);
-    x_glDepthMask(GL_FALSE);
-    if (x_glLineWidth) x_glLineWidth((GLfloat)v->ss);
-    x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+       nothing at all. [The G19e re-review's first finding, applied here.]
 
-    /* ---- the GL half of the Phase G A/B (tagpu_abshot.h) ----
-       Black the frame and the depth buffer, draw this pass alone, read it
-       back: what the Vulkan half is compared against is then one pass over
-       black against one pass over black. The scissor is put back before the
-       draw, because a world pass CLIPPED to the viewport is the pass and an
-       unclipped one is something else. One frame, and the player sees it. */
-    {
+       `s_state` IS THE GL PROGRAM'S and is only asked where GL draws: it is
+       permanently 0 where `init_gl` is never called, so testing it there would
+       refuse every hand-over on the one lane the hand-over is for. */
+    if ((gl_draws && s_state != 1) || total == 0) { s_pubHave = 0; s_abFrame = 0; return; }
+
+    /* HOISTED OUT OF THE DRAW, because on the vulkan-only lane the A/B is
+       armed without one. Read once so the two arms cannot disagree about
+       which frame is the capture frame. */
+    taking = s_ab && !s_abDone;
+    if (taking && v->ss != 1) {
+        /* REFUSED RATHER THAN WRITTEN AT THE WRONG SIZE: the GL capture is
+           this FBO's viewport, gw*ss x gh*ss, and the Vulkan one is the
+           window's client rect. tools/vk-ab.py would refuse the pair after
+           the fact; saying so here names the cause. */
+        flog("fx: the A/B needs ss=1 (the GL capture is the supersampled FBO) "
+             "- nothing captured; relaunch with supersampling off");
+        s_abDone = 1;
+        taking = 0;
+    }
+
+    if (gl_draws) {
         TAGPU_ABSHOT shot;
-        int taking = s_ab && !s_abDone;
-        int first = 0;
         shot.live = 0;
-        if (taking && v->ss != 1) {
-            /* REFUSED RATHER THAN WRITTEN AT THE WRONG SIZE: the GL capture is
-               this FBO's viewport, gw*ss x gh*ss, and the Vulkan one is the
-               window's client rect. tools/vk-ab.py would refuse the pair after
-               the fact; saying so here names the cause. */
-            flog("fx: the A/B needs ss=1 (the GL capture is the supersampled FBO) "
-                 "- nothing captured; relaunch with supersampling off");
-            s_abDone = 1;
-            taking = 0;
+        glUseProgram(s_prog);
+        x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
+        glUniform1i(s_uFog, (v->fogMode & 1) | 2);   /* effects hide in grey */
+        if (s_uFogOrg >= 0) x_glUniform2f(s_uFogOrg, (float)v->fogOrgX, (float)v->fogOrgY);
+        if (s_uFogDim >= 0) x_glUniform2f(s_uFogDim, (float)v->fogCols, (float)v->fogRows);
+        if (s_uScafP >= 0) glUniform4f(s_uScafP, (float)v->vpL, (float)v->vpT, (float)v->vw, (float)v->vh);
+        x_glUniform1f(s_uSS, (float)(v->ss > 0 ? v->ss : 1));
+        x_glUniform1f(s_uZoomF, v->zoom > 0.0f ? v->zoom : 1.0f);
+        x_glUniform2f(s_uZoomCF, v->zoomCx, v->zoomCy);
+        x_glUniform1f(s_uZoom, v->zoom > 0.0f ? v->zoom : 1.0f);
+        x_glUniform2f(s_uZoomC, v->zoomCx, v->zoomCy);
+        x_glUniform1f(s_uDepthScale, v->depthScale > 1.0f ? v->depthScale : 512.0f);
+        x_glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, s_atlas.tex);
+        x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, palTex);
+        x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, v->fogTex);
+        x_glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, s_lhtTex);
+        x_glActiveTexture(GL_TEXTURE5); glBindTexture(GL_TEXTURE_2D, scafTex);
+        x_glActiveTexture(GL_TEXTURE6); glBindTexture(GL_TEXTURE_2D, s_atlas.rgb);
+        x_glActiveTexture(GL_TEXTURE0);
+        glUniform1i(s_uRestored, (s_atlas.rgb && tagpu_classicpp_assets()) ? 1 : 0);
+        glBindVertexArray(s_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof s_verts, NULL, GL_STREAM_DRAW);
+        {
+            int b, first = 0;
+            for (b = 0; b < NBUCKET; b++) {
+                if (s_nv[b])
+                    glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)first * FXST * 4,
+                                    (GLsizeiptr)s_nv[b] * FXST * 4, s_verts[b]);
+                first += s_nv[b];
+            }
         }
-        if (taking) tagpu_abshot_begin(&shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR |
-                                              TAGPU_ABSHOT_TOPDOWN);
+        glEnable(GL_BLEND);
+        x_glDepthMask(GL_FALSE);
+        if (x_glLineWidth) x_glLineWidth((GLfloat)v->ss);
+        x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
-        /* only the under-layers can sit behind a stamped feature row: the
-           scaffold fetch is paid by that draw alone */
-        glUniform1i(s_uScafOn, scaf);
-        if (s_nv[B_UNDER]) x_glDrawArrays(GL_TRIANGLES, first, s_nv[B_UNDER]);
-        first += s_nv[B_UNDER];
-        glUniform1i(s_uScafOn, 0);
-        if (s_nv[B_LINES]) x_glDrawArrays(GL_LINES, first, s_nv[B_LINES]);
-        first += s_nv[B_LINES];
-        if (s_nv[B_FLASH]) {
-            x_glBlendFunc(GL_ONE, GL_ONE);
-            x_glDrawArrays(GL_TRIANGLES, first, s_nv[B_FLASH]);
-            x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-        }
-        first += s_nv[B_FLASH];
-        if (s_nv[B_SPRITES]) x_glDrawArrays(GL_TRIANGLES, first, s_nv[B_SPRITES]);
+        /* ---- the GL half of the Phase G A/B (tagpu_abshot.h) ----
+           Black the frame and the depth buffer, draw this pass alone, read it
+           back: what the Vulkan half is compared against is then one pass over
+           black against one pass over black. The scissor is put back before the
+           draw, because a world pass CLIPPED to the viewport is the pass and an
+           unclipped one is something else. One frame, and the player sees it. */
+        {
+            if (taking) tagpu_abshot_begin(&shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR |
+                                                  TAGPU_ABSHOT_TOPDOWN);
 
-        if (taking) {
-            /* the Vulkan half is claimed only on a GL half that reached the
-               disk -- see tagpu_abshot.h; `s_abDone` latches either way */
-            int wrote = tagpu_abshot_end(&shot, ABOUT, "fx");
-            s_abDone = 1;
-            s_abFrame = wrote;
+            /* only the under-layers can sit behind a stamped feature row: the
+               scaffold fetch is paid by that draw alone */
+            glUniform1i(s_uScafOn, scaf);
+            if (s_nv[B_UNDER]) x_glDrawArrays(GL_TRIANGLES, first, s_nv[B_UNDER]);
+            first += s_nv[B_UNDER];
+            glUniform1i(s_uScafOn, 0);
+            if (s_nv[B_LINES]) x_glDrawArrays(GL_LINES, first, s_nv[B_LINES]);
+            first += s_nv[B_LINES];
+            if (s_nv[B_FLASH]) {
+                x_glBlendFunc(GL_ONE, GL_ONE);
+                x_glDrawArrays(GL_TRIANGLES, first, s_nv[B_FLASH]);
+                x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+            }
+            first += s_nv[B_FLASH];
+            if (s_nv[B_SPRITES]) x_glDrawArrays(GL_TRIANGLES, first, s_nv[B_SPRITES]);
+
+            if (taking) {
+                /* the Vulkan half is claimed only on a GL half that reached the
+                   disk -- see tagpu_abshot.h; `s_abDone` latches either way */
+                int wrote = tagpu_abshot_end(&shot, ABOUT, "fx");
+                s_abDone = 1;
+                s_abFrame = wrote;
+            }
         }
+        x_glDepthMask(GL_TRUE);
+    } else if (taking) {
+        /* AND ON THE LANE WITH NO GL HALF, THE INTENT IS THE CLAIM --
+           tagpu_abshot.h has the whole argument. */
+        s_abDone = 1;
+        s_abFrame = tagpu_vk_ab_arm("fx");
     }
-    x_glDepthMask(GL_TRUE);
 
-    /* PUBLISHED AFTER THE GL DRAW, not before: these are the vertices, the
-       numbers and the texels that were just drawn, and the Vulkan lane is
-       about to draw the same ones. */
+    /* PUBLISHED AFTER THE DRAW WHERE THERE IS ONE, and after the gather in
+       either case: these are the vertices, the numbers and the texels this
+       frame built, and the Vulkan lane is about to draw the same ones. */
     fx_publish(v, total, scaf);
 }
