@@ -1,0 +1,43 @@
+landing-review: landing 10b (structure-shadow pair gated), FIVE dedicated read-only rounds at high, 2026-09-18.
+
+Reviewed range grew with the landing; round 4 read the whole of main...2b1e643 with fresh eyes.
+
+R1  10 findings. Gate raised before nine early returns; it asked 'is the pass
+    armed' not 'will anything paint it'; a VirtualProtect-failure stub leak; the
+    claim that tagpu_overlay_draw calls the publisher unconditionally (false --
+    four gates above it), which motivated the 8-frame watchdog.
+R2  HIGH x2. 'classicpp_on() || posedraw_live()' treats the two painters as
+    alternatives; both come out of pdu[] and need tagpu_posedraw_ready(), so with
+    the posed program refused the gate stood raised over an empty frame in the
+    SHIPPED DEFAULT. And the Vulkan lane does not paint the slant via
+    tagpu_shadow_handover -- begin/end are called only below the !gl_draws return.
+R3  HIGH. mapLive observes the CASTER pass, not a RECEIVER: with nterr == 0 the
+    map is built, nothing samples it, every structure loses its shadow. Fixed by
+    quoting the consumer's own predicate.
+R4  No HIGH in the code -- stubs decoded byte-for-byte against the pristine image,
+    incoming-branch scan re-run from scratch, install/rollback/watchdog all sound.
+    Two HIGH in the claims: 'no picture is possible' was false (the composite
+    DISCARDS our fragment where the surface is not the key, so the engine's pixels
+    reach the screen), and renderer=gdi is not stock -- tagpu_apply_patches applies
+    THREE unconditional patches, and the tagpu_curs pair changes input semantics.
+R5  No HIGH in the code. Two MEDIUM, both about the fix R4 prompted: the key-fill
+    term was published a frame late, giving up to two teal frames on every terrown
+    acquisition; and npdSlant > 0 was self-referential (units[i].shadow IS the
+    gate), a bistable latch. Both fixed: terrown now raises the gate itself,
+    before publishing its own skip byte.
+
+MEASURED, renderer=openglcore, shadow-struct, camera [1600,1600]:
+  engine's restored slant inside a key-filled viewport = 8779 px of (0,128,128),
+  four opaque teal blobs on four structures. After the fix: 0. After the rework: 0.
+  The gate's raise is an ordering (both stores render-thread, x86 store-store),
+  confirmed in the log: owndraw SKIPPED prints before terrown SKIPPED at entry.
+
+ALSO MEASURED, and it invalidates a method this repo was using: two captures of
+the SAME build, fixture, camera and configuration across two boots differ by
+421720 px (54% of frame, mean delta 3.5) because the Classic++ restorer's reveal
+is never at the same point twice. Cross-boot PIXEL counts measure nothing here;
+the exact colour count is what carries the result.
+
+Not covered: the renderer=gdi picture (landing 10c); gdi is stock with respect to
+structure shadows only, not as a lane; single fixture, one camera, one gate-down
+state.
