@@ -2862,9 +2862,19 @@ the digit columns because the readout draws the frame rate and the two runs ran 
 **And the per-pass A/B had to learn to arm itself before any pass could stand down.** The Vulkan
 half was claimed only on a GL capture that reached the disk — a guard against a stale `_gl.ppm`,
 and one that refuses every capture on a lane where the GL half is never attempted. It is kept
-where both lanes run; where only one does, `tagpu_vk.c` unlinks the target `_vk.ppm` the instant a
-claim is seen, so a file that exists belongs to this arming. Tested on the refusal path with a
-planted sentinel, which is the only path where an unlink shows.
+where both lanes run; where only one does, `tagpu_vk_ab_arm` unlinks the target `_vk.ppm` and the
+pass calls it in the same statement sequence that latches the claim, so a file that exists belongs
+to this arming. Tested on three refusal paths with a planted sentinel.
+
+**Its own review returned two HIGH findings and both were about a claim rather than a detail**,
+which is the return this gate keeps paying. The unlink was first placed beside the capture, in the
+lane's present — not on the path from the latch, so it ran on most frames and was missed on
+exactly the frames where no capture happens: a guarantee about timing wearing the words of one
+about construction, inside the landing whose subject is that distinction. And the new backend's
+frame counter was a local, so it restarted at 0 after every mode change, while every hand-over in
+the tree tests freshness by exact equality on that number — latent one commit out, because the
+passes carrying those stamps are the ones 4b-2 ungates. Both fixed and re-measured; the two-lane
+captures are byte-identical to the pre-fix ones, so no pixel moved.
 
 4a's result: `renderer=vulkan` brings the lane up on the **game's own window** — `our window
 00020058 over 00020058`, no route D window created — and an X grab of that window reads **307 200

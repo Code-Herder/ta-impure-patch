@@ -2335,11 +2335,18 @@ touch <gamedir>/tagpu_fps.ab                             # one frame, both lanes
   needs no relaunch — **`touch` on a file that is already there does NOT re-arm**, and the symptom
   is `vk-ab.py` reporting a missing half after you deleted the PPMs. `rm` it, sleep a second, then
   `touch`. `tagpu_<pass>_gl.ppm` / `_vk.ppm` are binary PPMs; `ffmpeg -i x.ppm x.png` to look.
-- **A MISSING `_vk.ppm` NOW MEANS "no capture", never "a stale one" (since 4b-1).** The lane
-  unlinks the target the instant a claim is seen, for every claim in the frame, so the file comes
-  back only if `vk: shot: wrote …` appears. The `rm -f $G/tagpu_<pass>_*.ppm` in every recipe above
-  is still worth keeping for the GL half, which has no such guard — but the Vulkan half no longer
-  depends on your remembering it.
+- **A MISSING `_vk.ppm` NOW MEANS "no capture", never "a stale one" (since 4b-1).** The pass
+  unlinks the target in the same breath as it latches the claim — so on every path, including the
+  ones where the lane never presents at all, the file comes back only if `vk: shot: wrote …`
+  appears. The `rm -f $G/tagpu_<pass>_*.ppm` in every recipe above is still worth keeping for the
+  GL half, which has no such guard; the Vulkan half no longer depends on your remembering it.
+- **ONE line means the arming was refused and the file you are looking at is NOT it:**
+  `vk: ab: tagpu_<pass>_vk.ppm could not be removed (error N) - this arming is REFUSED`. It fires
+  when something holds the target open or it is read-only — an image viewer left on the last
+  capture is the usual cause. Close it, `rm` the file, and re-arm. Every other refusal now names
+  itself too (`shot: a capture is already in flight`, `shot: the image is WxH, outside 1..8192`,
+  `shot: the N-byte staging buffer was refused`), so an absent file with no line beside it means
+  the lever genuinely never fired — a different fault with a different fix.
 - **Under `renderer=vulkan` the Vulkan half is claimed on the INTENT, and there is no `_gl.ppm`
   at all.** `vk-ab.py <gamedir> --pass <p>` therefore reports a missing half on that lane by
   design; use its **file-to-file** mode instead, against the same build's two-lane `_vk.ppm`:

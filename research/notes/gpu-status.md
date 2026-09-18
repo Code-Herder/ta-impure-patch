@@ -8768,6 +8768,20 @@ details in it would each have been a silent bug:
 non-8bpp frame, so it is in-contract rather than a sentinel. Its consumers have nothing until
 4c takes over TA's surface upload.
 
+**AND THE COUNTER HAS TO OUTLIVE THE THREAD, which the first version did not.** It was a local,
+so it restarted at 0 — and `dd_SetDisplayMode` joins the render thread (`dd.c:747`, INFINITE) and
+`dd.c:1459` creates a new one, so every mode change replayed the whole sequence of frame numbers.
+The GL lane's `g_tagpu_frames` is a file static (`render_ogl.c:47`) and never repeats. This
+matters because **every hand-over in the tree tests freshness by exact equality on that number**
+and says so in as many words — `tagpu_terr.c`'s *"THE STAMP IS WHAT MAKES THE POINTERS ABOVE
+SAFE"*, and the same test in `tagpu_fx.c` and `tagpu_posedraw.c`. Equality against a counter that
+restarts is not a freshness test: a record published on the frame the old thread died and never
+collected would match again that many frames into the new thread's life, and the twin would draw
+from pointers into buffers freed and rebuilt in between. Latent exactly one commit out, because
+the passes carrying those stamps are the ones 4b-2 ungates. [Found by this landing's review,
+2026-09-18; now a file static, as on the GL lane. One backend is chosen per process and can only
+degrade to GDI, so the two counters can never both be live.]
+
 **The GL calls are not left to no-op, and that is a decision rather than a tidiness.** With no
 context current most of them do nothing. The ones that do not are the ones that read GL state
 back: `tagpu_scaffold.c`'s `init_gl` branches on a `GL_COMPILE_STATUS` and a `GL_LINK_STATUS`, so
@@ -8800,7 +8814,7 @@ clothes, which is the worst answer an oracle can give.
 **On the vulkan-only lane there is no GL half to ask.** `tagpu_abshot_end` is not merely refused
 there — it is never called, because the pass that would call it has stood its draw down. So
 `wrote` is 0 on every frame and the rule refuses every capture **on the only lane that presents**.
-The chain, for the scaffold: `tagpu_scaffold.c:316` polls the trigger → `taking = s_ab &&
+The chain, for the scaffold: `tagpu_scaffold.c:324` polls the trigger → `taking = s_ab &&
 !s_abDone` → `s_abFrame = tagpu_abshot_end(...)` → `tagpu_scaffold_overlay(..., &ab)` →
 `tagpu_vk_scaffold.c`'s `prepare` → `s_abFrame = ab`. Landing 4's own oracle is a comparison of
 two **builds** and has no `_gl.ppm` in it at all, so the guard that makes the two-lane oracle
@@ -8808,18 +8822,38 @@ trustworthy is exactly what prevents the two-build one.
 
 **So the arming is claimed on the intent, and what the rule was buying is established by
 construction instead.** Where both lanes run the rule is unchanged and is still what a pass
-applies. Where only one does, `ab = taking`, and `tagpu_vk.c` unlinks the target `_vk.ppm` the
-instant a claim is seen — out of a table the path selection reads too, so a pass added later
-cannot get the selection and not the unlink, and for **every** claim in the frame rather than only
-the one `abpath` names. After that line the file does not exist; it comes back only if
-`tagpu_vk_shot_finish` writes it. **Absent means this arming produced no capture** — which every
-refusal states in the log — and **present means this arming's**, on either lane.
+applies. Where only one does, `ab = taking`, and the target `_vk.ppm` is unlinked — by
+`tagpu_vk_ab_arm(tag)`, which the pass calls **in the same statement sequence that latches the
+claim**. After that call the file does not exist; it comes back only if `tagpu_vk_shot_finish`
+writes it. **Absent means this arming produced no capture** and **present means this arming's**,
+on either lane. The eight names live in one table (`s_abFiles`) that both the write path and the
+arming read, keyed by the same tag the GL half already passes to `tagpu_abshot_end`, so the name a
+capture is written to and the name an arming unlinks cannot drift.
+
+**WHERE the unlink lives is the whole guarantee, and the first version had it in the wrong place.**
+It was in `vk_present`, beside the capture it protects, which looked equivalent and was not: the
+claim is latched on the gather side whether or not the lane ever collects it, and `vk_present` is
+not on the path from that latch. `tagpu_vk_frame` returns before it all through the ~250 ms
+bring-up, on a window or GPU-row rebuild, at `ST_FAILED` and at `ST_ZOMBIE`, and `vk_present`
+itself returns early on an out-of-date acquire. So the unlink ran on most frames and was missed on
+precisely the frames where no capture happens — which is the case it exists for. A guarantee about
+timing wearing the words of one about construction, in a landing whose whole subject was that
+distinction. [Found by this landing's own review, 2026-09-18; the fix is the placement above,
+where one thread reaches both in one basic block and no interleaving separates them.]
+
+**And the unlink's answer is the claim's answer.** `DeleteFileA` can fail — a reader holding the
+file open, or a read-only file — so discarding its result left "the file does not exist" asserted
+rather than established. `tagpu_vk_ab_arm` returns 1 only when the target is gone (already absent
+counts), the pass claims on that as well as on `end`'s, and a failure is named:
+`vk: ab: tagpu_scaffold_vk.ppm could not be removed (error 5) - this arming is REFUSED`. The
+stale file is then still there, which is the residual — but no claim was granted, no capture was
+written, and the log says so.
 
 That is a fact about the filesystem rather than an argument about ordering, which is all the old
-rule could have been once the half it read stopped existing. It also closes two refusals that used
+rule could have been once the half it read stopped existing. It also closes the refusals that used
 to leave a stale `_vk.ppm` behind where both lanes run: a surface whose images do not carry
-`TRANSFER_SRC`, and two levers armed in one frame. Until now those were handled by the operator's
-`rm` in the recipe, not by the code.
+`TRANSFER_SRC`, two levers armed in one frame, and every path on which the lane never presents.
+Until now those were handled by the operator's `rm` in the recipe, not by the code.
 
 #### Measured — one build, one fixture, three runs
 
@@ -8847,11 +8881,18 @@ leading digit, 57 ink pixels) agree **exactly**.
 would have latched `s_state = 2`, the pass would have published nothing, and the twin would have
 had no hand-over — so there would have been no `_vk.ppm` to diff.
 
-**The unlink is tested on the only path where it is visible.** A capture that succeeds overwrites
-the file anyway, so the positive path says nothing about it. A 15-byte sentinel was planted as
-`tagpu_scaffold_vk.ppm` and a frame arranged with two world passes drawing and one lever armed:
-the lane refused (`1 A/B levers claimed this frame and 2 passes drew into it - nothing captured`)
-and the file was **gone** rather than stale.
+**The unlink is tested on the paths where it is visible, and a succeeding capture is not one of
+them** — it overwrites the file anyway, so the positive path says nothing about it. Three
+refusals, each with a sentinel planted as `tagpu_scaffold_vk.ppm` first:
+
+| the path | what happened |
+|---|---|
+| two world passes drawing, one lever armed | the lane refused (`1 A/B levers claimed this frame and 2 passes drew into it - nothing captured`) and the sentinel was **gone** |
+| the lane down (`tagpu_vk.off`), so `vk_present` is **never reached** | the sentinel was **gone** — this is the path the first version missed, and it is deterministic rather than a race |
+| the target read-only, so the unlink fails | `vk: ab: … could not be removed (error 5) - this arming is REFUSED`, no `shot: wrote` followed, and the claim was not granted |
+
+The middle row is the one worth keeping: with the unlink in `vk_present` the sentinel would still
+have been there and `vk-ab.py` would have read it as this arming's capture.
 
 #### Not covered by 4b-1
 

@@ -413,10 +413,19 @@ would not have shown up as a failure — it would have shown up as three landing
      `wrote` is 0 on every frame and the rule refuses every capture on the only lane that presents.
      The rule exists to stop a Vulkan half being diffed against a STALE `_gl.ppm`, so 4b-1 keeps it
      where both lanes run and establishes the same property by construction where only one does:
-     `tagpu_vk.c` unlinks the target `_vk.ppm` the instant a claim is seen, for every claim in the
-     frame, so a file that exists belongs to this arming and a refused capture leaves nothing to
-     diff. Measured on the refusal path with a planted sentinel, which is the only path where an
-     unlink is visible.
+     `tagpu_vk_ab_arm` unlinks the target `_vk.ppm` and returns whether it is gone, and the pass
+     calls it **in the same statement sequence that latches the claim**. A file that exists
+     therefore belongs to this arming, and a target that could not be removed refuses the arming
+     rather than risking it.
+
+     **WHERE that unlink lives was 4b-1's own review finding, and it is the plan's lesson too.**
+     The first version had it beside the capture, in `vk_present` — which is not on the path from
+     the latch: the lane's frame function returns before the present all through the bring-up, on a
+     swapchain rebuild and at ST_FAILED. It ran on most frames and was missed on exactly the frames
+     where no capture happens. A landing whose subject is *safe by construction* shipped a
+     guarantee about timing in its own instrument; the review caught it, and the fix is the
+     placement. Measured on three refusal paths with a planted sentinel, including a deterministic
+     one where the lane is down and the present is never reached at all.
 
      **Its own oracle turned out to be better than a two-build one, and that is 4a's doing.**
      Because 4a left route D *unreachable rather than deleted*, one binary answers both
