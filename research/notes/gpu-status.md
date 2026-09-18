@@ -9773,6 +9773,81 @@ either; only `terr`, `feat`, `fx` and `mark` did, and this landing is what remov
 
 ---
 
+### 2.55 Route D's window goes, and with it the oracle — landing 4d-1
+
+**LANDED 2026-09-18.** 152 lines in, 370 out. The Vulkan lane no longer has a window of its own,
+and can no longer run beside the GL backend at all.
+
+#### What went, and why all of it was one thing
+
+Every line of it existed for the reason `tagpu_vk.h` states: *"two backends must not both present
+to one window in one frame"*. Route D answered that by giving the lane an **owned popup** over the
+game window's client area — `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`, `HTTRANSPARENT` to the mouse,
+created/moved/destroyed on the thread that pumps messages (because a window whose messages nobody
+dispatches deadlocks anything that sends it one), reached by posting `WM_TAGPU_VK` to the game
+window, and kept on the client rect by following the owner's `WM_WINDOWPOSCHANGED`. All of that
+is gone: the class, the window proc, `vkw_place`/`vkw_create`/`vkw_request_destroy`/
+`vkw_release_unless_worker`, `s_vkwnd`, `s_askedWin`, and the four teardown sites whose whole job
+was getting the destroy ORDER right against a live surface.
+
+**And `render_ogl.c`'s own call to `tagpu_vk_frame` went with it, which the plan's 4d entry did not
+mention.** That call was the GL backend's half of route D — it drove the Vulkan lane from inside
+the GL iteration and skipped `SwapBuffers` when the lane had presented. Removing it is what makes
+`s_ownWin` true on every frame that reaches the lane, because `render_vk.c` is now the only driver.
+**`tagpu_vk_enum_start()` stays** where it is in `render_ogl.c`: the GPU row is the player-facing
+half of Phase G and has to work under the GL backend too.
+
+#### What survives, and it is not tidiness
+
+`tagpu_vk_wndproc` keeps its name and its call from the fork's wndproc, reduced to the single arm
+that was never about a window of ours — **the game window being destroyed**. That is the only fact
+the window thread holds which the render thread cannot get for itself: `g_ddraw.hwnd` is nulled
+only by the IAT-hooked `DestroyWindow` (`winapi_hooks.c`), and only *after* the real destroy, so a
+destroy by any other route leaves `hwnd != s_owner` false and the lane presenting on a dead HWND
+until the driver raises `VK_ERROR_SURFACE_LOST_KHR`. `s_ownGone` bounds that at one frame. Deleting
+the observer with the rest would have traded an ordering for "wait for an error", which is the one
+shape this file is not allowed to ship.
+
+`s_ownWin` is also kept deliberately. After this the latch is always true and every
+`tagpu_vk_owns_present()` test in the tree is a constant — but that collapse reaches every GL draw
+site landing 4b stood down, and the plan scopes 4d to the window. A one-way landing that sprawls is
+how something nobody meant to lose gets lost.
+
+#### The cost, which is the point of the landing
+
+Route D **was the oracle**: both backends rendering the same frame, each capturing its own half,
+`tools/vk-ab.py` diffing the two. No absolute two-lane comparison is expressible after this, and
+every figure that wanted one was banked in 4c-3 first (§2.54) — all five world passes at the
+shipped `ss = 2`, the UI layer at 0 px of 307 200, and the `ss = 1` set before them. From here a
+claim is **relative**: this build against the previous one.
+
+#### Verified by running it, because there is nothing left to A/B with
+
+On `renderer=vulkan` with the full play arm set, and the clear colour left at its **magenta**
+default so that any pixel the lane failed to cover would be unmistakable:
+
+| what | result |
+|---|---|
+| 640x480, steady state | **one** real window (the game's own, no popup); census 6 passes drawing; world target 1280x960; terrain, trees, rocks, four units with health bars, HUD, minimap, cursor. **0 magenta of 307 200** |
+| a **mode change** — the path the window handshake used to live in | shell 640x480 → `render thread stopping - down` → clean re-bring-up at 1024x768 *on the same window*; 5 passes; world target 2048x1536; water, seven units, a solar collector, a nano effect. **0 magenta of 786 432** |
+| stop | clean in 0.44 s, nothing left behind |
+
+#### Not covered by 4d-1
+
+- **The GL capture half is still in the tree and now has nothing to pair with.** `tagpu_abshot.c`
+  still writes `tagpu_<pass>_gl.ppm` from eight call sites. Deleting it is **4d-2**, and the owner's
+  decision (2026-09-18) is that `tagpu_vk_shot.c` and the eight `.ab` levers **stay** — a
+  single-lane capture is still how a PPM of the Vulkan frame is taken for the cross-build
+  comparison this plan now depends on.
+- **`tagpu_vk.on` under `renderer=openglcore` no longer does anything at all**, because nothing
+  drives the lane from there. The file is still read for its `color=`. Nothing logs that it is inert
+  on that path.
+- **`tools/vkcoexist.c`'s route A and route D cases** describe an arrangement the DLL no longer has.
+  The harness is untouched and still measures what it always did; it is the interpretation that has
+  narrowed.
+
+---
+
 ## 4. What the work taught us
 
 These are the transferable parts — the reasons things are shaped the way they are.

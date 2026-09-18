@@ -2858,8 +2858,13 @@ rule is 1.0 — measured on the effects pass (~100 px) and on the marker pass (3
 Left alone — changing a shipped picture is the owner's call. Still open: `selAt1x`, the HUD-scale
 shift, GL's two-step resolve, and
 **the `s_curDrew` ordering gap 4b-3 named** — the plan assigns that one to 4c and none of the three
-closed it, so 4c is done as three landings without being done as a gate. **What is left is
-4d, the deletion, plus that gap.** Filed as one row — the fourth backend,
+closed it, so 4c is done as three landings without being done as a gate. **4d-1 LANDED
+2026-09-18** (§2.55): route D's window and all its machinery, plus `render_ogl.c`'s own call to
+`tagpu_vk_frame` — 152 lines in, 370 out, and the two-lane oracle deliberately gone with it, every
+absolute figure banked in 4c-3 first. Verified by running `renderer=vulkan` with the full arm set
+and the clear colour left at magenta: one window, a complete frame at 640x480 and at 1024x768
+across a mode change, 0 magenta pixels either time. **What is left is 4d-2 (the dead GL capture
+half) plus the `s_curDrew` gap.** Filed as one row — the fourth backend,
 `renderer=vulkan`, the `ss` target, TA's surface, and route D's deletion — it comes apart along
 four seams the code already has: **4a** the thread and the present, **4b** the per-frame driver
 (the gathers run and the GL draws stand down), **4c** the `ss` target and TA's surface upload,

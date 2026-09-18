@@ -630,10 +630,24 @@ would not have shown up as a failure — it would have shown up as three landing
      Not covered: `devres` and `k != 1` are untested either way, and the steady-state cost of the
      world target's unconditional `TRANSFER_SRC` (DCC) is named in the code and unmeasured.
 
-   * **4d — the deletion.** Route D's window, `tagpu_vk_wndproc`, `WM_TAGPU_VK` and the geometry
-     tracking, once 4b's figures are banked. **4c-3 had to come first and did**: it is the last
-     landing that could widen what the two-lane oracle can express, and 4d is what removes the lane
-     it compares against.
+   * **4d — the deletion. 4d-1 LANDED 2026-09-18** ([gpu-status](gpu-status.html) §2.55): 152 lines
+     in, 370 out. The window class, its window proc, the `WM_TAGPU_VK` create/destroy handshake, the
+     `WM_WINDOWPOSCHANGED` follow, `s_vkwnd`, `s_askedWin` and the four teardown sites that existed
+     only to order a destroy against a live surface — **and `render_ogl.c`'s own call to
+     `tagpu_vk_frame`, which this entry did not mention and which was the GL backend's half of route
+     D.** The lane is reached only through `renderer=vulkan` now, which is what makes `s_ownWin`
+     true on every frame that gets there. `tagpu_vk_enum_start()` stays in `render_ogl.c`: the GPU
+     row is player-facing and must work under the GL backend. `tagpu_vk_wndproc` survives reduced to
+     one arm — the OWNER being destroyed, the only fact the window thread has that the render thread
+     cannot get for itself, and deleting it would have traded an ordering for "wait for an error".
+     **Verified by running it, since nothing is left to A/B with**: `renderer=vulkan`, full play arm
+     set, the clear colour left at its magenta default — one window and no popup, a complete frame
+     at 640x480 and again at 1024x768 after a mode change (the path the window handshake used to
+     live in), **0 magenta pixels** either time, and a clean stop in 0.44 s.
+     **4c-3 had to come first and did**: it was the last landing that could widen what the two-lane
+     oracle can express, and this is what removed the lane it compared against.
+     **4d-2 is what is left**: `tagpu_abshot.c` still writes `_gl.ppm` from eight call sites with
+     nothing to pair against.
 
      **WHAT 4d TAKES AND WHAT IT LEAVES — decided by the owner 2026-09-18, because the plan scoped
      4d to the window and said nothing about the instrument that dies with it.** Keep

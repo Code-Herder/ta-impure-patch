@@ -2189,6 +2189,15 @@ Four things that cost a session if they are not known:
   screen on this lane** — an armed instance showing only the clear colour is a fault now. The
   world and the UI layer are still 4b-2 and still stand down whole.
 
+> **GONE SINCE LANDING 4d-1 (2026-09-18): the two-lane A/B no longer exists.** Route D — the
+> Vulkan lane presenting into a popup of its own beside the GL backend — was deleted, along with
+> `render_ogl.c`'s call to `tagpu_vk_frame`. `renderer=openglcore` + `tagpu_vk.on` now brings up no
+> Vulkan lane at all, so there is no second half to capture and every recipe below is **history**.
+> It is kept because the figures are the record of what was proved, and because the cross-BUILD
+> capture that replaces it still uses `tagpu_vk_shot.c` and the same eight `.ab` levers — arm one,
+> get a PPM of the Vulkan frame, diff it against one taken from an earlier build. What you cannot
+> do any more is diff the two backends against each other.
+
 **The per-pass A/Bs on the vulkan-only lane, as of landing 4c-3.** All five world passes and the
 UI layer draw there now, and the **five world** ones run at any `ss` — their ink counts below are
 `ss=1` figures, so at the shipped `ss=2` expect four times as many out of 3 145 728 rather than
