@@ -2305,9 +2305,23 @@ tools/tacli log <i> -g '^vk:'                 # the window, the device, the swap
 - **`tacli glshot` and `tacli shot` do NOT show the Vulkan frame, and that is correct.** Route D
   gives Vulkan its own top-level window over the game's client area; GL goes on rendering into
   the game window underneath, so `glshot` reads the GL frame and `shot` reads the engine surface
-  exactly as before. **To see what is on screen, grab the X window or the root**:
-  `import -window root out.png`, then crop to `xwininfo -id <win>`'s *Absolute* origin and size —
-  which is the client rect, and is **not** the position `tacli ls` reports (that is the frame).
+  exactly as before. **To see what is on screen, grab THE WINDOW BY ITS ID** —
+  `import -window <id> out.png`, at the client size, no cropping needed:
+
+  ```bash
+  import -window "$(tools/tacli ls --json | ...window[0]...)" out.png
+  ```
+
+  **`import -window root` DOES NOT WORK under `renderer=vulkan`, and it fails SILENTLY** [MEASURED
+  2026-09-18, landing 8a's re-verification]. The root capture comes back as a **solid black
+  rectangle** at the right size and position — the Vulkan surface is not in the root's redirected
+  pixmap. Nothing errors. The trap is that black **passes every "no lever colour on screen" test
+  vacuously**: the 8a check is "0 magenta of 786 432", and an all-black grab scores 0 magenta
+  while showing no game at all. The same grab through `-window <id>` on the same frame gave
+  **2 350 distinct colours** and the health bars. So a capture that is meant to prove a picture is
+  RIGHT must assert something POSITIVE about it — a colour count, an expected run of pixels —
+  never only the absence of a sentinel. (`xwininfo -id <win>`'s *Absolute* origin is still what a
+  root crop would need, and is **not** the position `tacli ls` reports, which is the frame.)
   Using `tacli ls`'s origin is how a 100 % magenta window reads as 87.8 %.
 - **The lever is two-way.** Clearing it puts the GL frame back on screen the same second. That is
   the whole reason the backend is on its own window: presenting on the game's `HWND` kills GL's

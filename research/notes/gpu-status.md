@@ -10151,10 +10151,29 @@ So 8a proves the mechanism end to end at a volume that does not matter. **The vo
 - **Four of the five op kinds still publish surface bytes.** `OP_LINE`, `OP_RECT`, `OP_FRAME` and
   `OP_SCALE` are unchanged, and with them the whole of the ~9 M ops a game that made landing 8
   worth filing. `PK_PIXELS` is not closed; one kind left it.
-- **The GL twin's half is untested on the shipped lane and always will be.** `twin_fill` returns
-  at its first statement under `renderer=vulkan`, and since 4d-1 there is no two-lane oracle to
-  compare the GL twin against. The 0-magenta figure above is the Vulkan path alone; the GL path is
-  argued from `twin_clear`'s shape, not measured against it.
+- **`twin_fill`'s GL body did not execute in EITHER measured configuration, and that is measured
+  rather than argued.** Under `renderer=vulkan` it returns at its first statement by design. Under
+  `renderer=openglcore`, a full game logged **`bars=0` against `bar 2348` observed** — every
+  `PK_BAR` was dropped by `drain`'s `twin_find(o->surf)` before reaching it. Side by side, one live
+  game each, both lanes at `twins=2`:
+
+  | | Vulkan | GL |
+  |---|---|---|
+  | `bar` observed | 1 218 | 2 348 |
+  | `bars=` replayed | **146** | **0** |
+  | `clears=` | **0** | **145 762** |
+  | `seeds=` | 20 | 15 |
+
+  **The inversion is pre-existing and not this landing's**: `PK_PIXELS` carries the *identical*
+  `twin_find` guard, so these ops were dropped on the GL lane before 8a exactly as they are now —
+  the landing did not change their fate, it added the counter that makes the fate visible. What it
+  means is that the two lanes twin *different* surfaces, and neither the bars' surface on GL nor
+  the clears' surface on Vulkan is among them. **Not traced.** It is the next thing to look at
+  before 8b, because 8b's ops take the same path and will meet the same guard.
+- **So the review's `glClearColor` finding was a latent fault, not a live one**, on the evidence
+  above — the fix still belongs in, because reachability is not the argument for leaving global GL
+  state modified, and `bars=0` is a fact about one configuration rather than a proof about all of
+  them.
 - **`bars=158` against `bar 1334` is not a defect, and the reason is the publisher's dedup.**
   Both are cumulative since process start — `s_kindTotal[OP_BAR]` in the observer, `s_bars` in the
   drain, neither ever reset — but they count different things either side of `publish()`. The
