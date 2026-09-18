@@ -3001,8 +3001,10 @@ whether `OP_FRAME` should port at all is now an open question rather than a queu
 **8b LANDED 2026-09-18 too** ([gpu-status](gpu-status.html) §2.59), **and disentangling it
 destroyed the reason it was filed first.** `OP_RECT` was two engine functions:
 `DrawTranspRectangle 0x4BF8C0` — four inclusive edges through the **store-only** Bresenham
-`0x4CC7AB`, colour = the low byte — and the focus rectangle `0x4BF7B0`, **eight** edges through
-`0x4BEC70`, whose writer `0x4CC8DF` **reads the destination** and remaps it through `globals+0xC8`,
+`0x4CC7AB`, colour = the low byte — and the focus rectangle `0x4BF7B0`, four edges through
+`0x4BEC70` (its **eight** `call` sites are two mutually exclusive arms on `ctx == NULL`, a static
+count this landing first misread as two concentric boxes), whose writer `0x4CC8DF` **reads the
+destination** and remaps it through `globals+0xC8`,
 the same table `0x4BF4D0` uses. Counted apart for the first time: **`focus` 1 223 310 against
 `rect` 3 476**. The `rect 5 396 343` this plan quoted since the survey was the two added together,
 **~99.7 % of it the tint**. `0x4BF8C0` ported as `PK_RECT` — the outer box, one palette index, four

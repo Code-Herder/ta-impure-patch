@@ -1305,7 +1305,7 @@ Back to the filed list:
      `DrawTranspRectangle 0x4BF8C0` is **hollow**, four edges through the store-only Bresenham
      `0x4CC7AB` and not one fill through `0x4CCDEA`, and the focus rectangle `0x4BF7B0` is a third
      shape again. Disentangling those three is 8b's first act.
-   * **8c — `OP_LINE`.** The other half of the volume. It needs the **direction bit**: the observer
+   * **8c — `OP_LINE`.** The largest portable kind (842 790 ops). It needs the **direction bit**: the observer
      records a line's axis-aligned bounding box, and a diagonal's bounding box is not the line —
      which is exactly the fault [gui-renderer](gui-renderer.html) §20 traced to cyan squares.
    * **8d — `OP_FRAME` (`0x4BF4D0`) and `OP_SCALE`, and 8d is now the ODD ONE OUT.** `0x4BF4D0` is

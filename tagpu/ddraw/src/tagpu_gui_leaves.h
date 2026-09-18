@@ -232,11 +232,13 @@ static void rect_box(void* e, int kind)
     if (s_inFlip) return;
     const int* rc  = (const int*)(size_t)ARG(e, 2);
     int l, t, r, b;
+    int ol, ot, orr, ob;
     SURF* s;
     if (!ptr_ok(rc)) { op_add(kind, NULL, 0, 0, 0, 0); return; }
     l = rc[0]; t = rc[1]; r = rc[2]; b = rc[3];
     if (l > r) { int q = l; l = r; r = q; }
     if (t > b) { int q = t; t = b; b = q; }
+    ol = l; ot = t; orr = r; ob = b;        /* before the clamp, for `clipped` */
     s = surf_of_ctx(ctx);
     if (s) clip_ctx(ctx, &l, &t, &r, &b);
     op_add(kind, s, l, t, r, b);
@@ -253,7 +255,12 @@ static void rect_box(void* e, int kind)
        have to decide what their own means before reading it.
        [The vulkan-only plan, landing 8a; the other three CORRECTED by its
        review.] */
-    if (s_lastOp) s_lastOp->col = (unsigned char)ARG(e, 3);
+    if (s_lastOp) {
+        s_lastOp->col = (unsigned char)ARG(e, 3);
+        /* AND WHETHER THE CLAMP ABOVE MOVED AN EDGE -- `OP::clipped` says why
+           `OP_RECT` must not be described as geometry when it did. */
+        s_lastOp->clipped = (unsigned char)(l != ol || t != ot || r != orr || b != ob);
+    }
 }
 static int __cdecl before_bar(void* e)  { if (on_game_thread()) rect_box(e, OP_BAR);  return 0; }
 /* 0x4BF4D0: NOT a fill — a SHADE of what is already in the box, (ctx, RECT*, level)
@@ -263,9 +270,11 @@ static int __cdecl before_bar(void* e)  { if (on_game_thread()) rect_box(e, OP_B
 static int __cdecl before_frame(void* e) { if (on_game_thread()) rect_box(e, OP_FRAME); return 0; }
 static int __cdecl before_rect(void* e) { if (on_game_thread()) rect_box(e, OP_RECT); return 0; }
 /* 0x4BF7B0: the focus rectangle GUI_StageUpdateDraw draws last, (ctx, RECT*, level).
-   ITS OWN KIND SINCE LANDING 8b, not OP_RECT: it is eight edges through 0x4BEC70,
-   whose writer 0x4CC8DF reads the destination and remaps it through globals+0xC8.
-   A tint, not a colour -- see the OP_FOCUS comment in tagpu_gui_hook.c. */
+   ITS OWN KIND SINCE LANDING 8b, not OP_RECT: four edges of one box through
+   0x4BEC70, whose writer 0x4CC8DF reads the destination and remaps it through
+   globals+0xC8. A tint, not a colour -- see the OP_FOCUS comment in
+   tagpu_gui_hook.c. [The "eight edges" this said at first were two mutually
+   exclusive arms on ctx == NULL; corrected by 8b's review.] */
 static int __cdecl before_focus(void* e) { if (on_game_thread()) rect_box(e, OP_FOCUS); return 0; }
 
 /* ---- 0x4C6B70 surface->surface blit stdcall(dst ctx, src surface, x, y)

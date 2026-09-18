@@ -2291,9 +2291,12 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                glyphs the GL twin has. */
             if (o->kind == TAGPU_GUIOP_STRING) set_scissor(cb, 0, 0, t->w, t->h, t->w, t->h);
             else                               set_scissor(cb, o->l, o->t, bw, bh, t->w, t->h);
-            /* RECT's four edges are four CLEAR RECTS inside the op's own box,
-               so the scissor above already bounds them and each edge is clipped
-               by it for free. */
+            /* THE SCISSOR ABOVE DOES NOT BOUND RECT'S EDGES, and the first
+               version of this comment said it did. `vkCmdClearAttachments` is
+               NOT affected by the dynamic scissor state -- only its own
+               `pRects` bounds it. The explicit per-rect clamp below is the
+               real bound and the only one, which is why it must not be removed
+               as redundant. [CORRECTED BY LANDING 8b'S REVIEW.] */
 
             if (o->kind == TAGPU_GUIOP_CLEAR || o->kind == TAGPU_GUIOP_BAR ||
                 o->kind == TAGPU_GUIOP_RECT) {

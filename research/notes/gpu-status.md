@@ -10203,7 +10203,7 @@ The observer mapped **both** `0x4BF8C0` and `0x4BF7B0` to `OP_RECT`. Disassemble
 
 | | `0x4BF8C0` `DrawTranspRectangle` | `0x4BF7B0` the focus rectangle |
 |---|---|---|
-| edges | 4, one box | **8**, two concentric boxes (`0x4BF7F3`…`0x4BF839`, `0x4BF86A`…`0x4BF8A4`) |
+| edges | 4, one box | **4, one box** — the eight `call 0x4BEC70` in its body are two *mutually exclusive arms* on `ctx == NULL` [corrected by this landing's review] |
 | writer | `0x4CC7AB`, **store-only** Bresenham | `0x4BEC70` → `0x4CC8DF` |
 | reads the destination? | **no** | **yes** |
 | third argument | a **palette index** (`[ebp+0x1C]`, `stos BYTE al` — the low byte) | a **shade level** into `globals+0xC8` |
@@ -10271,6 +10271,33 @@ Corners are written twice, by the same constant, which is what the engine's own 
 The colour count is asserted deliberately: §2.58's trap is that "0 magenta" passes on a black
 window too.
 
+#### A clipped hollow rectangle keeps the old path, and that is the landing's one real defect
+
+**Found by this landing's review, and it is specific to hollow figures.** `rect_box` clamps the
+**whole box** to the context's clip rect (`clip_ctx`). The engine does not: `0x4BF8C0` clips each
+of its four edges **separately** through `0x4BEA20`, which draws *nothing* for an edge wholly
+outside. So a rect crossing its clip rect is an **open** figure on screen, and replaying the
+clamped box would **close** it — with up to two edges painted along the clip boundary the engine
+never drew.
+
+**It was not a defect before 8b**: as `PK_PIXELS` the box's real bytes were copied, so whatever the
+engine did — including nothing — was what got published. Describing a shape is what introduced the
+chance to describe the wrong one. **`PK_BAR` is genuinely unaffected**, and the asymmetry is the
+proof the analysis is right: a clipped solid fill *is* the same fill restricted to the clip rect,
+while a clipped outline is a different outline.
+
+**Fixed by construction rather than by a coordinate correction:** `OP::clipped` records whether
+`clip_ctx` moved an edge, and `publish()` describes the rect as geometry only when it did not
+(`op->kind == OP_RECT && !op->clipped`). A clipped rect keeps `PK_PIXELS`, whose bytes come from
+the surface and are exact whatever the engine did. That is a fallback the op already had, chosen on
+data, not a guess at what the engine would have drawn.
+
+The reviewer could not prove a clip actually occurs at any of the twelve call sites (`0x466B5E`
+the minimap view box, `0x467F6C` the HUD, `0x468332`, `0x468457`, `0x46854A`, `0x4686CA`,
+`0x4688F2`, `0x469EC5`, `0x469F1E`, `0x46B94D`, `0x46BA67`, `0x4ACA03`) and neither did this
+landing — **so the fix is untested against a real clip**, and the honest statement is that it
+removes the possibility rather than that it repairs an observed picture.
+
 #### Not covered
 
 - **`OP_FOCUS` still publishes surface bytes**, and it is 1.2 M ops a game — after 8a and 8b the
@@ -10283,6 +10310,10 @@ window too.
   destination's bytes is what a destination-dependent op actually means.
 - **`twin_outline` is unexercised for the same reason `twin_fill` is** (§2.58): on the GL lane
   these ops find no twin. Not re-measured per lane here.
+- **No fixture produced a clipped `OP_RECT`**, so the `clipped` fallback above is exercised by
+  construction and not by measurement. A fixture that forces one — the minimap view box at a
+  zoom-out wide enough to exceed the minimap gadget is the reviewer's candidate — would be worth
+  more than another clean run.
 - **The 1 px box case is reasoned, not measured.** A box with `l == r` gives four degenerate edges
   that collapse onto the same column; the code clamps extents rather than skipping edges so the
   result is the single column the engine draws, but no fixture produced one.

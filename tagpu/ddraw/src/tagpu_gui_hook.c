@@ -331,8 +331,11 @@ static SURF* surf_of_ctx(const int* ctx)
    reason 8b can port anything: the two leaves that were both `OP_RECT` are not
    the same operation. `0x4BF8C0` draws four inclusive edges through the
    STORE-ONLY Bresenham `0x4CC7AB` -- a hollow rectangle of one palette index,
-   which ports as geometry. `0x4BF7B0` draws EIGHT edges (two concentric rects,
-   `0x4BF7F3`..`0x4BF839` and `0x4BF86A`..`0x4BF8A4`) through `0x4BEC70`, whose
+   which ports as geometry. `0x4BF7B0` draws FOUR edges of ONE box through
+   `0x4BEC70` -- the two groups of four calls at `0x4BF7F3`..`0x4BF839` and
+   `0x4BF86A`..`0x4BF8A4` are MUTUALLY EXCLUSIVE ARMS, selected by
+   `test edi,edi / jne 0x4BF854` on the ctx argument at `0x4BF7BD`, the first
+   acquiring a context through `0x4C5E70` and returning at `0x4BF851`. Whose
    writer `0x4CC8DF` READS THE DESTINATION and remaps it through
    `globals+0xC8` -- the same shade table `0x4BF4D0` uses. Publishing that as a
    colour and a box would paint a solid rectangle where the engine tinted what
@@ -392,15 +395,31 @@ typedef struct OP {
            of a 256-byte remap table -- `globals+0xC4` for negative, `+0xC8`
            for positive -- and every pixel already in the box is read and
            written back through that row. Truncating it to a byte is
-           meaningless, which is why `publish` reads `col` for `OP_BAR` alone.
+           meaningless, which is why `publish` never reads `col` for it.
            `0x4AA912`'s `0x4BF4D0(panel+0xBC, rect, -0x18)` is darken level 24,
            NOT palette index 232.
          - `OP_RECT` / `0x4BF8C0` writes four edges through the store-only
-           Bresenham `0x4CC7AB`, and `0x4BF7B0` writes through `0x4BEC70`.
-           Neither writer's colour width has been established here.
+           Bresenham `0x4CC7AB`, whose colour is `[ebp+0x1C]` stored
+           `stos BYTE al` -- the low byte, a palette index. ESTABLISHED by
+           landing 8b, which is why `publish` reads `col` for `OP_RECT` too.
+         - `OP_FOCUS` / `0x4BF7B0` writes through `0x4BEC70` and is a TINT: its
+           argument is a shade level into `globals+0xC8`, not a colour.
        [exe-reverse-engineering.md has all four, disassembled.
        The vulkan-only plan, landing 8a.] */
     unsigned char col;
+    /* DID `clip_ctx` MOVE AN EDGE? Only `OP_RECT` reads it, and it is the
+       difference between a hollow figure we may describe and one we may not.
+       `rect_box` clamps the WHOLE BOX to the context's clip rect; the engine
+       does not -- `0x4BF8C0` clips each of its four edges SEPARATELY through
+       `0x4BEA20`, which draws nothing at all for an edge wholly outside. So a
+       rect crossing its clip rect is an OPEN figure on screen, and replaying
+       the clamped box would CLOSE it, with edges painted along the clip
+       boundary the engine never drew. When this is set the op keeps the
+       `PK_PIXELS` path, whose bytes come from the surface and are therefore
+       exact whatever the engine did -- a fallback by construction, not a
+       heuristic. `OP_BAR` does not need it: a clipped solid fill is the same
+       fill restricted to the clip rect. [FOUND BY LANDING 8b'S REVIEW.] */
+    unsigned char clipped;
     /* AND THE FONT IS RESOLVED AT OBSERVE TIME TOO (G19f-8), for the reason
        the sprite's plane is: `publish` runs up to CENSUS_MS after the draw and
        the font object is engine memory whose lifetime nothing here can state.
@@ -1533,8 +1552,10 @@ static void publish(unsigned flipSurf)
            that the MIDDLE IS UNTOUCHED -- which is what publishing the box's
            bytes got wrong twice over: it copied the interior the op never
            wrote, and it copied it at the flip.
-           `0x4BF7B0` is NOT here: it is `OP_FOCUS` now, and it tints. */
-        if (op->kind == OP_RECT) {
+           `0x4BF7B0` is NOT here: it is `OP_FOCUS` now, and it tints.
+           A CLIPPED rect falls through to `as_pixels` instead -- see
+           `OP::clipped` for why, which is the `&& !op->clipped` below. */
+        if (op->kind == OP_RECT && !op->clipped) {
             o = pub_op(PK_RECT, s->base); if (!o) return;
             o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
             o->fg = op->col;
