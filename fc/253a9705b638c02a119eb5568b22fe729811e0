@@ -1,0 +1,10 @@
+landing-review: 4c-3 (the A/B capture reads the world target)
+reviewer=dedicated read-only agent, effort=medium, range=main...HEAD at fc253a9
+findings=8 high=0 medium=1 low=7 acted=8 recorded=0 rejected=0 fixes=9c2323a
+Every finding verified against the source before acting. The MEDIUM was a
+documentation claim I had written (the three UI passes are not ss-bound and
+never were). The most valuable LOW was a newly reachable silent-garbage
+capture: glReadPixels on an incomplete framebuffer leaves the buffer untouched
+and write_ppm shipped uninitialised memory at the correct size; it now refuses
+by name.
+Re-measured after the fixes: terrain ss=2 0 px of 3 145 728 (2 522 876 ink).
