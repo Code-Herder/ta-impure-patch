@@ -1613,17 +1613,45 @@ Back to the filed list:
    comparison: `dd.c`'s `oglu_load_dll`, `render_gdi.c`'s `g_oglu_version`, `tagpu_ftime.c`'s
    `xwglGetProcAddress`.
 
-   **And the seventeen are not one shape.** `tagpu_native.c:3753` opens
-   `if (!gl_draws) { …hand over…; return; }` and closes it at `:3812`, so **everything below that
-   line in the unit pass is GL-only by construction** — which is why `tagpu_shadow.c` (54 lines)
-   and `tagpu_hires_draw.c` (82) carry GL with no lane guard of their own: their only callers sit
-   below it (`:4155`, `:4463`, `:4522`). Those two go whole with the lane. But `tagpu_text.c` and
-   `tagpu_hires.c` are **shared producers with a GL upload half**, the `tagpu_restore_core.c`
-   pattern this plan already knows: `tagpu_text_atlas` is called from **`tagpu_vk_fps.c:535`**,
-   on the Vulkan lane, and `tagpu_hires_mesh` from the gather that runs on both. Deleting those
-   two files would take the Vulkan readout's glyphs and the replacement meshes with them. **Each
-   of the seventeen needs that question asked of it before a line is deleted**, and "it includes
-   `opengl_utils.h`" does not answer it.
+   **AND NOT ONE OF THEM IS A FILE TO DELETE.** [The first version of this paragraph said
+   `tagpu_shadow.c` and `tagpu_hires_draw.c` *"go whole with the lane"*. **Both are wrong**, and
+   the check that found it is the one this entry keeps having to relearn: ask who CALLS it, not
+   where its guard sits.] Every non-static function each pass defines was matched against every
+   `tagpu_vk*.c` and `render_vk.c`, and **sixteen of the seventeen are called by the Vulkan
+   lane**:
+
+   | pass | what the Vulkan lane calls |
+   |---|---|
+   | `tagpu_gui_surf.c` | `tagpu_gui_handover`, `tagpu_gui_mirror_want`, `tagpu_gui_mirror_reseed`, `tagpu_gui_cursor_drew_take`, `tagpu_classicpp_assets` |
+   | `tagpu_posedraw.c` | `tagpu_posedraw_handover` |
+   | `tagpu_terr.c` | `tagpu_terr_handover` |
+   | `tagpu_hires_draw.c` | `tagpu_hires_handover` |
+   | `tagpu_mark.c` | `tagpu_mark_handover` |
+   | `tagpu_fx.c` | `tagpu_fx_handover` |
+   | `tagpu_shadow.c` | `tagpu_shadow_handover` |
+   | `tagpu_feat.c` | `tagpu_feat_handover` |
+   | `tagpu_native.c` | `tagpu_native_worldtgt` |
+   | `tagpu_gaf.c` | `tagpu_gaf_mip_bytes`, `tagpu_gaf_mip_chain`, `tagpu_gaf_mip_off` |
+   | `tagpu_posebake.c` | `tagpu_posebake_geom_mirror`, `tagpu_posebake_mat_mirror` |
+   | `tagpu_scaffold.c` | `tagpu_scaffold_overlay` |
+   | `tagpu_hires.c` | `tagpu_hires_verts_want` |
+   | `tagpu_text.c` | `tagpu_text_atlas`, `tagpu_text_dims` |
+   | `tagpu_fps.c` | `tagpu_fps_quads` |
+   | `tagpu_overlay.c` | `tagpu_overlay_draw` |
+   | `tagpu_render3do.c` | **nothing** — the only one |
+
+   **So landing 11 is `tagpu_restore_core.c`'s split, sixteen times.** Each of those files is a
+   PRODUCER the Vulkan lane depends on with a GL DRAW half bolted to it, and the landing deletes
+   the half, in place, leaving the producer and its `_handover`. Not one of them is a file that
+   can be removed. The six files the row names are the only ones that go whole, and they are the
+   small part.
+
+   `tagpu_native.c:3753` opening `if (!gl_draws) { …hand over…; return; }` and closing at `:3812`
+   is what makes this tractable: **everything below that line in the unit pass is GL-only by
+   construction**, which is why `tagpu_shadow.c` and `tagpu_hires_draw.c` carry GL with no lane
+   guard of their own — their draw entry points are called from below it (`:4155`, `:4463`,
+   `:4522`) while their hand-over entry points are called from the Vulkan lane. The seam inside
+   each file is real and already drawn; it is just drawn sixteen times.
 
    The other headers are cleaner than that: `openglshader.h` and `d3d9shader.h` have **no
    includer outside the set at all**; `render_ogl.h` has four (`config.c`, `dd.c`,
