@@ -1907,11 +1907,23 @@ twins of its surfaces (`research/notes/gui-renderer.md` §10). The engine still 
 surface, which stays the fallback beneath; with the trigger absent the DLL is byte-identical
 to main's (parity md5 measured equal, §10). **`gui.on` is part of the default arm set** now.
 
+**`gui.on` DOES NOT GATE `tacli` ITSELF, and for one commit in the vulkan-only plan's landing 10c
+it did** — which is worth knowing because the failure was silent. The flip `0x4C63A0` is where the
+whole on-demand trigger family runs since that landing (peek, `ui`, the catalogues, scenario
+detection, and the key/click injection), so `tagpu_gui_hook.c` installs its observer of the flip
+**whenever the engine's bytes match**, and `tagpu_gui.on` gates only the layer, the census and the
+17 leaf detours. `tacli gui <i> remove`, `gui.off` and a bare `launch` (which writes
+`tagpu_defaults.off`, so no default applies) therefore leave the instance fully drivable. The
+boot line says which of the two happened: `gui: ARMED flip@0x4C63A0=1 leaves=17/17 …` with the
+layer, `gui: trigger host only (tagpu_gui.on is not on) …` without it. **If neither line is in
+`tagpu.log`, no `tacli` verb can answer** — the engine's bytes differ at the flip, and that is the
+one case left where the instance cannot be driven.
+
 ```bash
 tools/tacli gui <i> on            # arm BEFORE launch (the detours install at DLL attach); the draw follows the file live
 tools/tacli gui <i> off           # keep the detours, stop the draw — the live A/B, 500 ms poll
 tools/tacli gui <i> strict        # the harness's mode: fallback off, a miss painted magenta (never for a player)
-tools/tacli gui <i> remove        # un-arm entirely at the next launch
+tools/tacli gui <i> remove        # un-arm the LAYER at the next launch (see below)
 tools/tacli arm <i> gui.on=norestore   # G15e: the layer WITHOUT Classic++ art — the UI-only A/B
 tools/tacli arm <i> 'gui.on=sharptest log'   # G17a: the sharp layer filled with a known pattern
 tools/tacli arm <i> 'mark.on=noselbox'      # the engine draws its OWN selection box again

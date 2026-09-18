@@ -420,10 +420,20 @@ void tagpu_input_cmd(TAGPU_CMD* rec)
 
    NOTHING HERE REENTERS THE ENGINE. Every injection leaves by PostMessageA (a
    tagged WM_TAGPU_*) or by SendInput; there is no SendMessage on any path out
-   of do_keys. So a token processed inside the flip detour is DELIVERED by the
-   engine's own message pump afterwards, not dispatched into its wndproc
-   halfway through a present. That is the reason this is safe to call from
-   inside an engine call and not merely untested there. */
+   of do_keys, mouse_lock() included. So a token processed inside the flip
+   detour is DELIVERED by the engine's own message pump afterwards, not
+   dispatched into its wndproc halfway through a present. That is the reason
+   this is safe to call from inside an engine call and not merely untested
+   there.
+
+   ONE PATH COULD DISPATCH IT EARLIER, AND IT IS OFF ON THIS TARGET [landing
+   review]. dds_Blt and dds_Lock call util_pull_messages(), which does
+   PeekMessageA(PM_REMOVE) + DispatchMessageA, and the flip reaches ddraw
+   through them -- after this detour returns, still inside the flip. So a
+   WM_TAGPU_MOUSE posted here could be dispatched mid-flip. It is guarded by
+   `g_config.fix_not_responding && !IsWine()`, so it is unreachable where this
+   runs; that is a CONFIGURATION fact, not an invariant of the injection path,
+   which is why it is named rather than left implied. */
 void tagpu_input_frame(const TAGPU_FRAME* f)
 {
     static unsigned last = 0;
@@ -433,16 +443,26 @@ void tagpu_input_frame(const TAGPU_FRAME* f)
     tagpu_shield_frame((HWND)f->hwnd);
 
     if (f->frame_counter - last >= 15) {
+        const TAGPU_FRAME* prev = s_frame;
         last = f->frame_counter;
         /* s_frame is the injection's view of the game's own resolution and it
            points at the CALLER's frame — before_flip builds one on its stack,
-           so it is dead the moment this returns. Bracketing it makes that a
-           fact rather than a habit: every reader (si_mouse, and the park in
-           inject_click_at) is reached from do_keys below and from nowhere
-           else. */
+           so it is dead the moment this returns. Every reader (si_mouse, and
+           the park in inject_click_at) is reached from do_keys below and from
+           nowhere else, so bracketing it here is what makes the lifetime a
+           fact rather than a habit.
+
+           SAVE AND RESTORE, NOT CLEAR [landing review]. A clear-to-NULL is
+           correct only while this function has one caller and is never
+           re-entered, and neither is a property of the call site: `before_flip`
+           keeps a 32-deep LIFO of hijacked returns, i.e. the engine's flip is
+           anticipated to nest. Under nesting an inner clear would hand the
+           OUTER do_keys a NULL, and game_to_abs() dereferences it without a
+           test — a null dereference, not a quiet no-op. Restoring makes the
+           bracket true by construction instead of by caller count. */
         s_frame = f;
         if (f->hwnd) do_keys((HWND)f->hwnd);
-        s_frame = NULL;
+        s_frame = prev;
     }
 }
 

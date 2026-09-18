@@ -1583,10 +1583,17 @@ Back to the filed list:
    answer on that lane — the lane can be observed **and driven**.
 
    **BUT THE HEADLINE CLAIM IS STILL FALSE, FOR A DIFFERENT REASON, AND THIS ITEM OWNS IT.**
-   `renderer=gdi` is not *stock as a lane*: `tagpu_apply_patches()` applies three patches with no
-   runtime gate at all, and the `tagpu_curs` pair (`0x43E50C`, `0x499041`) changes input semantics
-   gated only by a file. Two further things do not reach gdi and are the **command channel**, not
-   the trigger family: the camera hold (`tacli eye`) and `tacli wheel` both ride the record
+   `renderer=gdi` is not *stock as a lane*: of `tagpu_apply_patches()`'s three patch sites,
+   **exactly one is ungated** — `0x4266A7`, the DirectX version warning, which has no lever at all
+   — and the other two **are** the `tagpu_curs` pair (`0x43E50C`, `0x499041`), both inside the
+   `else` of a `tagpu_curs.off` test, which changes input semantics behind a file.
+   [CORRECTED by the landing review of 10c-2: this said "three patches with no runtime gate at
+   all, **and** the `tagpu_curs` pair", which triples the ungated count and then counts the pair
+   twice on top. It also contradicted this same page's correct table two sections below. The
+   number matters because it is this item's exit-condition arithmetic, and an overcount is what
+   decides a landing is large.]
+   Two further things do not reach gdi and are the **command channel**, not
+   the trigger family: the camera hold (`tacli eye`) and `tacli wheel`. The hold rides the record
    `tagpu_cmd_post` publishes, and that is called only from `tagpu_zoom_frame_end`, inside
    `tagpu_overlay_draw`. Deciding what "stock" means against those four facts is this item's work,
    and it is the part 10b and 10c did not do for it.
@@ -1903,10 +1910,14 @@ frame counter in the overlay).
   after; every reader (`si_mouse`, and the park in `inject_click_at`) is reached from `do_keys` and
   from nowhere else.
 
-**What 10c does NOT close:** the camera hold, `tacli wheel` and anything else riding the command
-record still do not reach `renderer=gdi`, because `tagpu_cmd_post` is only called from the overlay
-frame. That is a property of the command channel, not of the trigger family, and it is landing
-11's business.
+**What 10c does NOT close:** the camera hold, `tacli wheel` and anything else riding the overlay
+frame still do not reach `renderer=gdi`. The two die at different points, and the review corrected
+this: the **hold** dies because `tagpu_cmd_post` is called only from `tagpu_zoom_frame_end`, so
+there is no record to carry it; the **wheel** never gets that far, because `tagpu_zoom_wheel`
+returns at `if (!s_live …)` and logs *"zoom: wheel ignored — no zoomed world on screen"*, and
+`s_live` is set by the render thread's publish. Same cause — no overlay frame — two mechanisms.
+Both are properties of the zoom subsystem, not of the trigger family, and they are landing 11's
+business.
 
 **10c-2's SUPERSEDED DESIGN, kept as the record** [written 2026-09-18, replaced the same day]:
 

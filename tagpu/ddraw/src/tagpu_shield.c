@@ -425,9 +425,21 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
 
 /* -------------------------------------------------------------- injection */
 
-/* s_release belongs to the injector (present-hook thread); s_down/s_toggle to the
-   wndproc (game thread). Keeping the two apart is what makes the timed release
-   race-free — set the deadline before posting, and never clear it from delivery. */
+/* s_release belongs to the injector; s_down/s_toggle to the wndproc. Keeping the
+   two apart is what makes the timed release race-free — set the deadline before
+   posting, and never clear it from delivery.
+
+   BOTH ARE THE GAME THREAD NOW, and this line used to say the injector was the
+   present-hook thread [corrected by the landing review of 10c-2]. The token
+   half of tagpu_input.c moved to the engine's flip, so tagpu_shield_frame and
+   every tagpu_shield_* injection run where the wndproc and the GetKeyState
+   hooks already run. The separation above is still the rule to keep -- it is
+   what makes the deadline unambiguous -- but it is no longer load-bearing as a
+   THREAD split, and it should not be cited as one.
+
+   It also closes a real unsynchronised cross-thread write that nobody had
+   filed: clear_state() memsets s_down/s_async/s_release, and those are the
+   wndproc's arrays. It used to run on the render thread. */
 void tagpu_shield_key(HWND hwnd, int vk, BOOL up)
 {
     if (!hwnd || vk <= 0 || vk >= 256)

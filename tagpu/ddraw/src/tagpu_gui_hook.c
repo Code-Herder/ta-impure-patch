@@ -2224,27 +2224,81 @@ static int read_tokens(void)
     return 1;
 }
 
+/* TWO INSTALLS, NOT ONE, AND ONLY THE SECOND IS THE UI LAYER'S [the landing
+   review of 10c-2 — it caught this as a HIGH and it was a real regression].
+
+   The flip observer is this file's hook, but since landing 10c it is no longer
+   this file's FEATURE: `before_flip` is the only host of `tagpu_triggers_frame`,
+   which is every `tacli` verb's way into the process and, since 10c-2, the
+   input injection `tacli keys` and `tacli click` go through. It used to sit
+   behind `read_tokens()` with everything else, so `tagpu_gui.on` being absent
+   took the tooling channel down with the UI layer.
+
+   THAT IS THE DEFAULT FOR A BARE INSTANCE. `tagpu_opt_read` answers -1 when the
+   file is absent AND no default applies, and no default applies while
+   `tagpu_defaults.off` exists — which `tacli launch` writes unless it is given
+   `--defaults`. So `tacli launch <i>` followed by `tacli click <i> …` wrote the
+   token file, printed `sent:`, and nothing read it, ON EVERY RENDERER: before
+   10c-2 `tagpu_input_frame` was called from `tagpu_overlay_draw` and did not
+   care about this trigger at all. `tacli` also arms `tagpu_shield.on` by
+   default, so hardware input was blocked on the same window: drivable by
+   nothing, with no line in the log, because the old early return was ABOVE the
+   only glog() this function had.
+
+   So the observer installs whenever its bytes match, and `tagpu_gui.on` now
+   gates the UI layer alone. Two further consequences, both wanted:
+     - a build whose LEAF prologues differ no longer costs us the flip as well;
+       the tooling survives where only the UI layer cannot install.
+     - `tagpu_gui.off` and `tacli gui remove` still remove the layer, the
+       census and the leaves — they no longer remove `tacli`'s ability to drive
+       the instance. That is a semantic change and the log line says which of
+       the two happened. */
 void tagpu_gui_init(void)
 {
     char b[200];
-    int n, ok;
-    if (!read_tokens()) return;
-    /* all-or-nothing: every site must carry the bytes we expect */
-    if (!tagpu_detour_bytes_ok(FLIP_VA, FLIP_STOLEN, sizeof FLIP_STOLEN) || !leaves_match()) {
-        glog("gui: NOT armed — engine bytes differ at a watched site");
-        return;
-    }
+    int n, ok, want;
+
+    want = read_tokens();
+
     /* DllMain runs on the process's first thread, which is the thread TA's
        game loop and every flip run on; taking it here rather than at the
        first flip means the splash screen's draws (before flip 1) are recorded */
     s_gameTid = GetCurrentThreadId();
+
+    if (!tagpu_detour_bytes_ok(FLIP_VA, FLIP_STOLEN, sizeof FLIP_STOLEN)) {
+        glog("gui: NOT armed — engine bytes differ at the flip 0x4C63A0; the "
+             "trigger family has no host on this build and no tacli verb can answer");
+        return;
+    }
+    ok = tagpu_detour_observe(FLIP_VA, FLIP_STOLEN, sizeof FLIP_STOLEN, before_flip, after_flip);
+    if (!ok) {
+        glog("gui: NOT armed — the flip observer refused to install; the trigger "
+             "family has no host and no tacli verb can answer");
+        return;
+    }
+    if (!want) {
+        glog("gui: trigger host only (tagpu_gui.on is not on) — the flip 0x4C63A0 "
+             "is observed, so tacli's triggers and input injection work; the UI "
+             "layer, the census and the 17 leaves are OFF");
+        return;
+    }
+
+    /* the UI layer proper: all-or-nothing over the leaves */
+    if (!leaves_match()) {
+        glog("gui: UI layer NOT armed — engine bytes differ at a watched leaf "
+             "(the flip observer is installed, so tacli still works)");
+        return;
+    }
     g_guiq.ops = s_qops;
     s_arena = (unsigned char*)VirtualAlloc(NULL, TAGPU_GUI_ASIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     g_guiq.arena = s_arena;
-    if (!s_arena) { glog("gui: NOT armed — no arena"); return; }
-    ok = tagpu_detour_observe(FLIP_VA, FLIP_STOLEN, sizeof FLIP_STOLEN, before_flip, after_flip);
+    if (!s_arena) {
+        glog("gui: UI layer NOT armed — no arena (the flip observer is installed, "
+             "so tacli still works)");
+        return;
+    }
     n = leaves_install();
-    s_installed = ok && n == LEAF_COUNT;
+    s_installed = n == LEAF_COUNT;
     _snprintf(b, sizeof b, "gui: %s flip@0x4C63A0=%d leaves=%d/%d census=%d log=%d pgm=%d key=%d (Phase E: observers on the game thread; the layer follows the trigger, tagpu_gui_surf.c)",
               s_installed ? "ARMED" : "FAILED", ok, n, LEAF_COUNT, s_census, s_log, s_pgm, s_key);
     glog(b);

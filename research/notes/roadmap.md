@@ -3152,9 +3152,12 @@ measured.
 * **10c-1** moved the five that need no frame packet onto the engine's own flip (`0x4C63A0`,
   already observed by `tagpu_gui_hook.c`), on the game thread. Its first review returned a HIGH
   worth the whole round: `s_flips` is not a frame counter — these throttle on `% 5` written
-  against the ~60/s present rate and **the shell flips ~12 000 times a second**, so five
-  file-writing observers had just been sped up ~100×. Fixed with a 16 ms QPC gate and its own
-  counter. The second round found no HIGH and verified the hazard row this landing closes by
+  against the ~60/s present rate and **the shell flips thousands of times a second**, so five
+  file-writing observers had just been sped up by about two orders of magnitude. Fixed with a
+  16 ms QPC gate and its own counter. (The rate itself: `CENSUS_MS`'s comment says ~5 000
+  flips/s measured 2026-09-07 and the op census ~12 000 **ops**/s on MAINMENU; other pages say
+  ~12 000 *flips*/s. The two readings have never been reconciled and this entry no longer picks
+  one — the gate is a 16 ms bound and holds at either.) The second round found no HIGH and verified the hazard row this landing closes by
   independent sweep rather than by reading the row.
 * **10c-2** split `tagpu_input.c` **on the packet**: its token half (keys, clicks, the shield's
   expiries) joined the family; its camera hold stayed on the render thread, where `f->packet`
@@ -3170,9 +3173,13 @@ measured.
 menus by click into a live game, and the camera hold is exact and releases cleanly.
 
 **What 10c did NOT close, and landing 11 owns it:** `renderer=gdi` is still not stock *as a lane*
-(three unconditional patches in `tagpu_apply_patches()`, plus the `tagpu_curs` pair at `0x43E50C`
-/ `0x499041`, which changes input semantics and is gated only by a file), and `tacli eye` /
-`tacli wheel` still do not reach it, because the command channel is posted from the overlay frame.
+— **one** ungated patch, `0x4266A7`, the DirectX version warning with no lever at all, plus the
+`tagpu_curs` pair at `0x43E50C` / `0x499041`, which changes input semantics behind a
+`tagpu_curs.off` file. (This entry said "three unconditional patches **plus** the pair" until the
+10c-2 review; the three sites in `tagpu_apply_patches()` **are** that one plus that pair.) And
+`tacli eye` / `tacli wheel` still do not reach the lane — the hold because there is no command
+record without an overlay frame, the wheel because `tagpu_zoom_wheel` refuses on `!s_live` before
+any record is involved.
 
 **What the survey corrected on the way**, and it is the more useful half: the first pass read
 `owndraw:`'s arming line — which ends *"(engine rasterise skipped for target; writeback must

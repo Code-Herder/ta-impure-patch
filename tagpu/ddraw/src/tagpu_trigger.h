@@ -20,6 +20,16 @@
    Now they hang off the engine's own flip (`0x4C63A0`, observed by
    tagpu_gui_hook.c), which every renderer reaches, on the GAME thread.
 
+   AND THE HOST INSTALLS UNCONDITIONALLY, WHICH IT DID NOT AT FIRST. The flip
+   is reached on every lane, but for one commit the OBSERVER of it was not
+   installed on every lane: `tagpu_gui_init` sat behind `tagpu_gui.on`, which
+   `tagpu_defaults.off` — written by a bare `tacli launch` — takes away. So
+   this family, and with it every `tacli` verb and all of the input injection,
+   went silently dead on an ordinary instance, on EVERY renderer. The landing
+   review of 10c-2 caught it. `tagpu_gui_init` now installs the observer
+   whenever the flip's bytes match and gates only the UI layer on the trigger;
+   the precondition that remains is the byte match itself, and it is logged.
+
    WHAT THE CALLER OWES: a TAGPU_FRAME whose geometry fields are real. They are
    all `g_ddraw` members the render thread's packet copies anyway, and they are
    read from the thread that WRITES them, so they cannot tear -- the render

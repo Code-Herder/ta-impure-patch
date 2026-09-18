@@ -55,8 +55,14 @@ enum {
 
 BOOL tagpu_shield_on(void);
 
-/* Re-read the trigger file and release keys whose hold has expired. Called from
-   the present hook (game thread not required — releases are posted). */
+/* Re-read the trigger file and release keys whose hold has expired. SINCE THE
+   VULKAN-ONLY PLAN'S LANDING 10c-2 this is called on the GAME thread, from the
+   engine's flip 0x4C63A0 through tagpu_triggers_frame -- it used to be the
+   render thread's present hook, and it no longer is. Nothing here requires
+   either thread (the releases are posted), but the contract line said "present
+   hook" and a reader reasoning about which arrays may be touched where would
+   have been reasoning from a false premise. See tagpu_shield.c's note above
+   tagpu_shield_key. */
 void tagpu_shield_frame(HWND hwnd);
 
 /* TRUE when the message was consumed: either a tagged injection (delivered to

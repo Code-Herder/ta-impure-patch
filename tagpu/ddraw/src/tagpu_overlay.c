@@ -511,8 +511,14 @@ void tagpu_triggers_frame(const TAGPU_FRAME* f)
     tagpu_scenario_frame(f);
     /* in-process input injection (tagpu_keys.txt) — the token half only, and
        the reason this whole family moved: a lane that can be OBSERVED but not
-       CLICKED is still not a drivable one. Last in the list because a token can
-       change what the others would report, and reporting this flip's state
-       before acting on it is the order every tacli verb assumes. */
+       CLICKED is still not a drivable one.
+
+       THE POSITION IN THIS LIST DOES NOT MATTER, and an earlier draft of this
+       comment claimed it did [landing review]. Every token leaves by
+       PostMessageA or SendInput and nothing is dispatched before `before_flip`
+       returns, so nothing this call emits can be observed by the other five in
+       the same tick: first and last are indistinguishable. Written down so the
+       next reader does not preserve an ordering constraint that does not
+       exist. */
     tagpu_input_frame(f);
 }
