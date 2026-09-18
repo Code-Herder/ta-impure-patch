@@ -316,10 +316,16 @@ static int    s_state = 0;             /* 0=unloaded 1=ready 2=failed */
    above the state it publishes. */
 static volatile int s_armed = -1;
 
-/* DID A STRUCTURE'S SLANT SHADOW ACTUALLY GET PAINTED THIS FRAME -- the
-   structure-shadow gate's input, written at the bottom of the unit pass by
-   whichever painter was running and read (and cleared) by the publisher at the
-   top of the NEXT frame. Render thread only, one writer, one reader, same
+/* MUST THE ENGINE'S CACHED SLANT BE SUPPRESSED THIS FRAME -- the
+   structure-shadow gate's input, written at the bottom of the unit pass and
+   read (and cleared) by the publisher at the top of the NEXT frame.
+
+   IT WAS CALLED `s_ssPainter` AND ASKED "DID ANYTHING PAINT ONE", which is a
+   different question and the fourth wrong one this gate has asked. Painting
+   decides whether a SHADOW appears; it does not decide whether GARBAGE does,
+   and inside a key-filled viewport the engine's cached slant is always
+   garbage -- MEASURED 2026-09-18, 8779 px of opaque teal on four structures.
+   So the first term is now the key-fill itself. Render thread only, one writer, one reader, same
    thread: `tagpu_native_frame` is the whole of both. Not volatile and not
    published anywhere else, because the value that crosses to the game thread is
    `tagpu_owndraw.c`'s `g_ssSkip`, which the publisher writes from this.
@@ -327,7 +333,7 @@ static volatile int s_armed = -1;
    It is deliberately the painters' OWN conditions, quoted where they live
    rather than restated up there -- that is the bug this variable exists to
    stop repeating. */
-static int s_ssPainter = 0;
+static int s_ssSuppress = 0;
 static char   s_type[32] = "armcom";
 static int    s_wrecks = 0;            /* "wrecks" token present            */
 static int    s_ss     = 1;            /* 2x supersample (tagpu_ss.off)     */
@@ -2789,14 +2795,14 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            on, which is the shipped default. `tagpu_posedraw_ready()` is a
            PRECONDITION OF BOTH, never an alternative to one.
 
-       `s_ssPainter` (below, next to the painters) carries the answer, and the
+       `s_ssSuppress` (below, next to the painters) carries the answer, and the
        read here CLEARS it, so every frame must earn the gate again. That is
        what makes the stale directions bounded by construction rather than by
        argument: any path that does not reach the painters -- the nine returns
        above, the hand-over return at `:3788`, a lane switch, a refused map --
        leaves 0 behind and the next frame lowers the gate. `gl_draws` is ANDed
        in because it is read fresh from `tagpu_vk_owns_present()` this frame
-       while `s_ssPainter` is last frame's: without it a GL -> Vulkan switch
+       while `s_ssSuppress` is last frame's: without it a GL -> Vulkan switch
        would carry one raised frame across the seam.
 
        THE COST IS ONE FRAME, IN BOTH DIRECTIONS, and it is the same shape the
@@ -2806,9 +2812,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        shadow and then the gate falls. Neither can persist, which is the
        property the two guessed versions did not have. */
     {
-        const int painted = s_ssPainter;
-        s_ssPainter = 0;                  /* this frame must earn it again */
-        tagpu_owndraw_set_structshadow(s_armed == 1 && gl_draws && painted,
+        const int suppress = s_ssSuppress;
+        s_ssSuppress = 0;                 /* this frame must earn it again */
+        tagpu_owndraw_set_structshadow(s_armed == 1 && gl_draws && suppress,
                                        f->frame_counter);
     }
     int gw = f->game_width  > 0 ? f->game_width  : vpL + vw;
@@ -4306,6 +4312,24 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     }
 
     /* THE STRUCTURE-SHADOW GATE'S ONE INPUT, stated where the painters are.
+
+         * `tagpu_terrown_filled()` FIRST, and it is the term the other three
+           rounds were missing. It is `g_terrown_skip && g_filled` -- the
+           viewport is ours and a filled frame has been through -- and it is
+           THE SAME WORD THE COMPOSITE TESTS to invert itself
+           (`uKey >= 0` / the `discard` in the fragment shader). So the gate is
+           raised in exactly the frames where the composite would turn the
+           engine's cached slant into teal, and the two agree BY CONSTRUCTION
+           rather than by argument: they read one flag, not two that have to be
+           kept in step. It is 0 on `renderer=gdi` for the same reason
+           everything else here is -- `render_gdi.c` makes no `tagpu_` call --
+           and 0 whenever `terr_bail()` hands the ground back through
+           `tagpu_terrown_set_skip(0)`, which is precisely when the engine is
+           drawing the world again and its own slant is correct.
+
+       The painter terms below still matter: with the terrain pass off but the
+       unit pass live, nothing key-fills and we may still be drawing the slant,
+       so the engine's would double it.
        Read and cleared by the publisher at the top of the next frame; see the
        long comment there for why it is observed instead of predicted.
 
@@ -4351,9 +4375,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        `s_pubHave` is set only by `_end`, and so `tagpu_shadow_handover` returns
        0 at tagpu_vk_shadow.c:788 and that pass stands down. No `tagpu_vk*` file
        mentions `slant` at all. */
-    s_ssPainter = pdReady &&
-                  ((mapLive && nterr > 0) ||
-                   ((gfx & 4) && !(cpp && !hard) && npdSlant > 0));
+    s_ssSuppress = tagpu_terrown_filled() ||
+                   (pdReady &&
+                    ((mapLive && nterr > 0) ||
+                     ((gfx & 4) && !(cpp && !hard) && npdSlant > 0)));
 
     /* ---- render into the (optionally 2x supersampled) game-res FBO ---- */
     fbo_size(gw, gh, ss);

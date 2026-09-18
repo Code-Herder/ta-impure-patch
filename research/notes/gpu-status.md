@@ -10858,15 +10858,40 @@ because `render_gdi.c` makes no `tagpu_` call, and is 0 whenever `terr_bail()` h
 back through `tagpu_terrown_set_skip(0)`. The shape that follows from the measurement is
 
 ```c
-s_ssPainter = tagpu_terrown_filled() || (pdReady && ( … ));
+s_ssSuppress = tagpu_terrown_filled() || (pdReady && ( … ));
 ```
 
 — suppress when the engine's output would be garbage, *or* when we are painting a shadow.
-**Not applied here**: it is the fourth redesign of this predicate, it is the safety-critical
-cross-thread flag, and it is a change of the question rather than a fix to the answer, so it is
-the owner's call. Named, measured, and left where the next session cannot miss it.
+**APPLIED, and then proved by re-running the same A/B.** The variable was renamed from
+`s_ssPainter` with it, because "did anything paint one" is no longer the question it answers.
 
-**Every gate-down state is therefore worse than `main`, not equal to it** — `main` flipped both
+| `shadows=OFF` on `renderer=openglcore` | teal (0,128,128) px |
+|---|---|
+| before the fix | **8 779** |
+| after the fix | **0** |
+
+The 8 741 pixels that still differ between `shadows=SOFT` and `shadows=OFF` after the fix are all
+greys — our own Classic++ shadows correctly disappearing, which is what the player asked for. The
+log shows the gate now *staying* raised across the transition: `classicpp: shadows=0(off)` with no
+`the engine's cached slant shadow is restored` after it.
+
+**The shipped default is unchanged, by construction and by measurement.** The new term is an `OR`,
+so it can only raise the gate in frames where it was already down, and in the shipped default the
+log shows it was already up on both sides. The 3 349 px that differ between a pre-fix and a
+post-fix capture of the default are spread over **154 separate clusters** across the whole frame
+with a mean delta of 9.5 — boot-to-boot variance of the kind §2.62 already documents, not a
+structural change.
+
+**Why this term is safe rather than merely better.** `tagpu_terrown_filled()` is
+`g_terrown_skip && g_filled`, and it is **the same word the composite tests** when it decides to
+invert and let the engine's pixels through. So the gate is raised in exactly the frames where the
+composite would turn the engine's cached slant into teal — the two agree because they read one
+flag, not because two predicates were kept in step. It is 0 on `renderer=gdi` for the same reason
+everything else here is (`render_gdi.c` makes no `tagpu_` call), and 0 whenever `terr_bail()`
+hands the ground back through `tagpu_terrown_set_skip(0)` — which is precisely when the engine is
+drawing the world again and its own slant is the correct thing to show.
+
+**Before the fix, every gate-down state was worse than `main`, not equal to it** — `main` flipped both
 `je`s unconditionally, so it never drew the engine's slant anywhere and never showed teal. The
 reachable gate-down states on the GL lane with `terrown` live are `shadows=OFF`, the posed program
 refused, Classic++ off with the posed program refused, `nterr == 0`, and both frames of every 0→1
