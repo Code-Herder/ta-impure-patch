@@ -2203,11 +2203,14 @@ UI layer draw there now. What each needs:
 
 **The UI layer's A/B has four traps of its own, all paid for in the 4b-3 landing.**
 
-- **`tagpu_gui.on` must exist BEFORE the launch.** The pass installs its producer hooks at DLL
-  attach, so a lever armed into a running game sets `s_on` and still leaves
-  `tagpu_gui_installed()` false — the present returns at its first line and there is no heartbeat
-  at all. `tacli arm <i> tagpu_gui.on` on a **stopped** instance does not create the file either.
-  Write it: `echo mmbase > $G/tagpu_gui.on`, then launch.
+- **`tagpu_gui.on` must exist BEFORE the launch, and `tacli arm` adds the `tagpu_` prefix
+  itself.** `tagpu_gui_init` runs from the attach path and its first line is
+  `if (!read_tokens()) return;` — no lever file, no producer hooks, so `tagpu_gui_installed()`
+  stays false, `tagpu_gui_present` returns at its first line and there is no heartbeat at all.
+  A lever armed into a running game cannot undo that. The spelling is **`tacli arm <i>
+  gui.on=mmbase`** (`tools/tacli:1474` builds `tagpu_{name}`): passing `tagpu_gui.on` produces
+  `tagpu_tagpu_gui.on`, which `tacli` reports as armed and nothing ever reads. `echo mmbase >
+  $G/tagpu_gui.on` before the launch does the same job with no spelling to get wrong.
 - **`native.on` OFF, or nothing is captured.** The unit pass and the UI pass both draw into the
   Vulkan frame and the seam refuses with *"1 A/B levers claimed this frame and 2 passes drew into
   it"*. `tacli launch` will also drop `owndraw.on` by itself when `native.on` is unset, and say so.
