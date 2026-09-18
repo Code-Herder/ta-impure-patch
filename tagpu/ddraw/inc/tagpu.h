@@ -3,9 +3,11 @@
    and calls tagpu.dll!TagpuPresent just before SwapBuffers.
    SINCE LANDING 10c-1 there is a SECOND filler, on the GAME thread with no GL
    context: tagpu_gui_hook.c's before_flip builds one for the trigger family, so
-   that family reaches renderer=gdi. It leaves surface_tex 0 and packet NULL --
-   which is why tagpu_input_frame, the one consumer that dereferences packet, is
-   not among its callees. */
+   that family reaches renderer=gdi. It leaves surface_tex 0 and packet NULL,
+   and that is the family's membership test: a consumer that dereferences packet
+   cannot be called from it. Landing 10c-2 split tagpu_input.c along exactly that
+   line rather than excluding it -- the token half takes this frame, the camera
+   hold keeps the render thread's. */
 #ifndef TAGPU_H
 #define TAGPU_H
 

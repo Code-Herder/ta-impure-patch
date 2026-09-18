@@ -306,18 +306,21 @@ static void oerr(const char* tag)
 void tagpu_overlay_draw(const TAGPU_FRAME* f)
 {
     if (!f || f->abi!=TAGPU_ABI) return;
-    /* in-process input injection (tagpu_keys.txt / tagpu_eye.txt) — must run
-       even at the menus and regardless of the overlay's enable state */
-    tagpu_input_frame(f);
+    /* the camera hold (tagpu_eye.txt) — must run even at the menus and
+       regardless of the overlay's enable state */
+    tagpu_input_eye_frame(f);
     /* THE ON-DEMAND TRIGGERS MOVED OUT OF HERE [landing 10c]. They are called
        from the engine's own flip now (tagpu_gui_hook.c's `before_flip`), on the
        game thread, so that they reach `renderer=gdi` -- which never enters this
        function at all, because `render_gdi.c` makes no `tagpu_` call. See
        `tagpu_triggers_frame` below.
 
-       `tagpu_input_frame` above is the exception and stays here: it is the only
-       one that dereferences `f->packet` (through `do_eye`), and the flip has no
-       packet to give it. Landing 10c's second half. */
+       INPUT WENT WITH THEM IN 10c-2, but only its token half: `tagpu_input_frame`
+       drives the game and needs no packet, so it is in the family now. What is
+       left above is `tagpu_input_eye_frame`, the half that dereferences
+       `f->packet` through `do_eye` and whose answer the render thread reads back
+       in `tagpu_zoom_frame_end`. The flip still has no packet to give it, and on
+       the gdi lane there is no `tagpu_cmd_post` to carry that answer anywhere. */
     /* DISPLAY-MODE CHANGES: the fork restarts its render thread with a NEW
        GL context — every GL object id we cached is dead. Detect the context
        change and re-init all GL-owning modules from scratch (without this a
@@ -506,4 +509,10 @@ void tagpu_triggers_frame(const TAGPU_FRAME* f)
        creation pass runs from that module's own Game_MainLoopTick detour, never
        mid-render. Switches must reach the menus too, like peek. */
     tagpu_scenario_frame(f);
+    /* in-process input injection (tagpu_keys.txt) — the token half only, and
+       the reason this whole family moved: a lane that can be OBSERVED but not
+       CLICKED is still not a drivable one. Last in the list because a token can
+       change what the others would report, and reporting this flip's state
+       before acting on it is the order every tacli verb assumes. */
+    tagpu_input_frame(f);
 }

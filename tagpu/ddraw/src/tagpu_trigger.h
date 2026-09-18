@@ -25,10 +25,14 @@
    read from the thread that WRITES them, so they cannot tear -- the render
    thread's old read was the cross-thread one.
 
-   `packet` stays NULL, and none of these five reads it at all; do not take that
-   as a null-check they perform, because they do not. `tagpu_input_frame` is
-   deliberately NOT in this set for exactly that reason -- it is the one that
-   dereferences `f->packet`, through `do_eye`.
+   `packet` stays NULL, and none of these six reads it at all; do not take that
+   as a null-check they perform, because they do not. That is the line the family
+   is drawn along, and landing 10c-2 SPLIT `tagpu_input.c` on it rather than
+   excluding the file: its token half (`tagpu_input_frame` -- keys, clicks, the
+   shield's expiries) reads no packet and joined the set, while the half that
+   dereferences `f->packet` through `do_eye` stayed on the render thread as
+   `tagpu_input_eye_frame`. Each half keeps its own poll counter, so each runs at
+   the cadence of the clock it is handed.
 
    AND THE CALLER OWES A CLOCK, NOT A FLIP. These throttle themselves on
    `frame_counter % 5` (`% 15` for peek), written against the PRESENT rate of ~60/s; the engine's

@@ -332,12 +332,21 @@ static void do_keys(HWND hwnd)
     ilog(lg);
 }
 
-/* eye hold: polled every 15 frames with the other tokens (a GetFileAttributes
-   probe first, because the absent case is the common one and an open-fail per
-   frame is not free). Render thread only: the point is read here and rides
-   the command record; the write is the game thread's (tagpu_zoom_apply),
-   clamped there into the camera's range — not into [0, map - view], which at
-   zoom > 1 would pull a scripted camera back off every map edge. */
+/* eye hold: polled every 15 render frames (a GetFileAttributes probe first,
+   because the absent case is the common one and an open-fail per frame is not
+   free). Render thread only: the point is read here and rides the command
+   record; the write is the game thread's (tagpu_zoom_apply), clamped there
+   into the camera's range — not into [0, map - view], which at zoom > 1 would
+   pull a scripted camera back off every map edge.
+
+   AND THIS HALF STAYED ON THE RENDER THREAD IN LANDING 10c-2, deliberately.
+   These four words are written here and read by tagpu_input_cmd(), which
+   tagpu_zoom_frame_end() calls — and that runs only inside tagpu_overlay_draw,
+   i.e. only on the lanes that draw the overlay. Moving the poll to the game
+   thread would make all four cross-thread to serve a consumer that is not on
+   the other side, and on renderer=gdi it would deliver nothing either way:
+   tagpu_cmd_post() is never reached there, so the hold could not be applied
+   even if it were read. Same thread as its only readers is the invariant. */
 static int s_eyeHold = 0;
 static int s_holdX, s_holdY, s_holdValid;
 
@@ -401,18 +410,54 @@ void tagpu_input_cmd(TAGPU_CMD* rec)
     rec->hold_y  = s_holdY;
 }
 
+/* THE DRIVING HALF — GAME THREAD, from the engine's flip [landing 10c-2].
+
+   This is `tacli keys` and `tacli click`: the token file, the shield's held
+   modifiers, the injected pointer. It touches no packet and no engine memory,
+   so it can run wherever the family runs — and it has to run from the flip,
+   because tagpu_overlay_draw is never reached on renderer=gdi and driving that
+   lane is the whole point of landing 10c.
+
+   NOTHING HERE REENTERS THE ENGINE. Every injection leaves by PostMessageA (a
+   tagged WM_TAGPU_*) or by SendInput; there is no SendMessage on any path out
+   of do_keys. So a token processed inside the flip detour is DELIVERED by the
+   engine's own message pump afterwards, not dispatched into its wndproc
+   halfway through a present. That is the reason this is safe to call from
+   inside an engine call and not merely untested there. */
 void tagpu_input_frame(const TAGPU_FRAME* f)
 {
     static unsigned last = 0;
 
-    /* every frame: held modifiers must be released on time, not on the next
+    /* every call: held modifiers must be released on time, not on the next
        15-frame token poll */
     tagpu_shield_frame((HWND)f->hwnd);
 
     if (f->frame_counter - last >= 15) {
         last = f->frame_counter;
+        /* s_frame is the injection's view of the game's own resolution and it
+           points at the CALLER's frame — before_flip builds one on its stack,
+           so it is dead the moment this returns. Bracketing it makes that a
+           fact rather than a habit: every reader (si_mouse, and the park in
+           inject_click_at) is reached from do_keys below and from nowhere
+           else. */
         s_frame = f;
         if (f->hwnd) do_keys((HWND)f->hwnd);
+        s_frame = NULL;
+    }
+}
+
+/* THE HOLD HALF — RENDER THREAD, from tagpu_overlay_draw, where it always was.
+
+   It stays because it is the only part of this module that dereferences
+   f->packet (through do_eye), and because its output is read on that thread:
+   see the note above s_eyeHold. The counter is the render frame counter, so
+   the poll cadence is exactly what it was before the split. */
+void tagpu_input_eye_frame(const TAGPU_FRAME* f)
+{
+    static unsigned last = 0;
+
+    if (f->frame_counter - last >= 15) {
+        last = f->frame_counter;
         s_eyeHold = (GetFileAttributesA("tagpu_eye.txt") != INVALID_FILE_ATTRIBUTES);
         if (!s_eyeHold) s_holdValid = 0;
     }
