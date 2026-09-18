@@ -1427,25 +1427,43 @@ Back to the filed list:
     the bottom of three; G15b, G15c and G17d measured **0 holes** across 120 stops, so nothing
     reads it.
 
-    **VERIFIED 2026-09-18, and the premise is stronger than the measurement — but it is not free.**
-    Over the whole of `LAY_FS` (`tagpu_gui_surf.c:465-590`) the sampler `uSurf` occurs **twice**:
-    the `uniform sampler2D uSurf` declaration and a comment. There is no `texelFetch` and no
-    `texture()` against it. The 120 stops measured a consequence; the shader text is the cause,
-    and it holds for every stop nobody walked.
+    **THE PREMISE IS FALSE AS STATED, AND THE FIRST VERSION OF THIS PARAGRAPH — COMMITTED IN
+    `f5e4d33` — WAS WRONG.** It claimed that "over the whole of `LAY_FS` (`tagpu_gui_surf.c:465-590`)
+    the sampler `uSurf` occurs twice: the declaration and a comment. There is no `texelFetch` and no
+    `texture()` against it", and concluded that the landing was a saving. **`LAY_FS` runs to line
+    642, not 590**; the range was computed by a heuristic that stopped at the first line ending in
+    a semicolon and truncated the shader. Over its real extent `uSurf` occurs **five** times, and
+    **two of them are `texelFetch`**.
 
-    **And the Vulkan lane pays for it every frame**: `tagpu_vk_gui.c:1825` reserves
-    `h.engW * h.engH` of staging, `:1990` `memcpy`s the whole engine frame in, `:2162` copies it
-    into `s_engImg`, `:2766` binds it as `uSurf` — and `:2587` **refuses the whole composite** on
-    `!s_engHave`. At 1024x768 that is **786 432 bytes per frame copied twice** for a sampler the
-    fragment shader never reads. **So this landing is a saving, not only a deletion**, which is
-    the opposite of how the row reads ("nothing reads it" invites "so it costs nothing").
+    **The engine frame has TWO consumers in `LAY_FS`, and one of them ships:**
 
-    **Two things not established, and one trap.** Whether the `!s_engHave` term at `:2587` can go
-    with the upload is not shown here (the other three terms are real). Only the Vulkan consumer
-    was read. **And `uEng` is NOT this**: `MM_FS`'s `uEng` is the MINIMAP's engine picture
-    (`s_mmEngView`), and it **is** sampled, at `tagpu_gui_surf.c:382` and `:394` — it is the reason
-    there is no radar-arc replay. Deleting the fallback must not touch it. Nor is this 4c-1's
-    bottom layer (§2.52), which is a different path and is load-bearing.
+    * **The stale-mirror guard** (`:630-635`, under `uGuard`, which `:2606` sets from
+      `f->surface_tex != 0` — so it is ON in the ordinary build). Where the twin reads index 0 and
+      the engine's surface reads something else, the fragment is **discarded**. This is what stops
+      the layer painting stale black over the intro Smacker, which writes the primary directly so
+      no op ever reaches the queue ([gui-renderer](gui-renderer.html) §21.2). **Deleting `uSurf`
+      would re-open that.**
+    * **The `uStrict` harness** (`:638-641`), the A/B's magenta marker. Armed only by
+      `gui.on=strict`.
+
+    **So what is true is narrower than the row claims.** The engine frame is not composited as a
+    bottom LAYER — where the twin has no coverage the shader `discard`s rather than blending it —
+    and that is what the 120 stops measured. But it is **read**, as a reference, by a guard the
+    shipped build depends on. **The row's "nothing reads it" is about the layer role only**, and
+    landing 10 is therefore not a deletion of `uSurf` but a deletion of the *layer semantics*,
+    with the guard's read kept. That is a different and much smaller landing, and the 786 432
+    bytes a frame the Vulkan lane uploads are **not waste**: the guard needs them.
+
+    **The trap that produced the wrong version is worth more than the finding.** A range computed
+    over a multi-line C string constant, then grepped, gives a confident answer about text it never
+    read. It is the same failure as counting `call` sites without following the control flow
+    (`0x4BF4D0`, `0x4BF7B0`): **a mechanical count over a boundary nobody checked.** Find the
+    string's real end before trusting a count inside it.
+
+    **And `uEng` is NOT `uSurf`**: `MM_FS`'s `uEng` is the MINIMAP's engine picture
+    (`s_mmEngView`), sampled at `tagpu_gui_surf.c:382` and `:394` — the reason there is no
+    radar-arc replay. Nor is this 4c-1's bottom layer (§2.52). Three different things called "the
+    engine's frame", which is its own reason this entry went wrong.
 11. **The deletion landing** — `render_ogl.c`, `render_d3d9.c`, `opengl_utils.c`,
     `openglshader.h`, `render_ogl.h`, and **`tagpu_restoreglsl.c`**. `renderer=gdi` becomes the
     documented stock reference.
