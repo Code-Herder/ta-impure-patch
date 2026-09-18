@@ -1358,12 +1358,20 @@ int tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now)
            every frame and a latch spent on it hides the state that matters.
            What is worth a line is a window that OPENED and published nothing,
            which is a pass standing down mid-frame. */
-        if (s_win > 0 && !s_saidNoPub) {
-            char b[160];
-            s_saidNoPub = 1;
-            _snprintf(b, sizeof b, "posedraw: %d window(s) opened for frame %u and "
-                      "nothing was published - the pass stood down inside the frame",
-                      s_win, now);
+        /* PERIODIC, AND IT REPORTS THE STATE RATHER THAN AN OPINION ABOUT IT.
+           The latched version of this line was spent on the shell's ordinary
+           "no posed units" case and then said nothing for the rest of the run,
+           which is the third time in this landing a one-shot latch has hidden
+           the thing it was added to show. These four values are the whole
+           decision: `mirrorWant` is whether a second backend asked for the
+           record at all, `win` whether a window opened this frame,
+           `recording` whether that window took it, and `pubHave` whether the
+           frame ended with something to give. */
+        if ((now % 300u) == 0u) {
+            char b[192];
+            _snprintf(b, sizeof b, "posedraw: nothing to hand over for frame %u - "
+                      "mirrorWant=%d win=%d recording=%d pubHave=%d other=%d",
+                      now, s_mirrorWant, s_win, s_recording, s_pubHave, s_other);
             b[sizeof b - 1] = 0;
             plog(b);
         }

@@ -2958,6 +2958,18 @@ static int vk_present(void)
            broken port, which is the worst answer an oracle can give. Both
            conditions are checked, not just the claim count -- a second pass
            that drew without claiming contaminates the frame just as much. */
+        /* THE LANE'S OWN PER-FRAME CENSUS, throttled. The refusals below say
+           why a capture was NOT taken when they fire, but say nothing at all
+           when the claim simply never arrived -- and a claim that never arrives
+           is indistinguishable, from outside, from a pass that drew nothing.
+           This line separates the two, and it is the third time in this landing
+           that a periodic report of the CURRENT state settled in one run what a
+           one-shot latch had hidden. */
+        if ((s_vk.frame % 300u) == 0u)
+            vklog("census: %d pass(es) drew and %d claimed (terr=%d feat=%d "
+                  "unit=%d fx=%d mark=%d scaf=%d gui=%d fps=%d)",
+                  ndraw, nclaim, draw_terr, draw_feat, draw_unit, draw_fx,
+                  draw_mark, draw_scaf, draw_gui, draw_fps);
         if (nclaim > 1 || (nclaim == 1 && ndraw > 1))
             vklog("%d A/B levers claimed this frame and %d passes drew into it - "
                   "nothing captured. A Vulkan frame carries every armed pass at "
