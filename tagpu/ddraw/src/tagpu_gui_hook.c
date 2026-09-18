@@ -2005,15 +2005,27 @@ static void repaint_service(void)
        the flat bytes a seed would have carried anyway */
     s_repaintOps = (unsigned)(s_nops - n0);
     if (s_log) {
-        char b[300], kinds[180];
-        int n = 0;
+        /* SIZED FOR THE WORST CASE AND THE ACCUMULATOR CANNOT GO NEGATIVE.
+           `OP_NKIND - 1` kinds, each at most "scale " (6) plus ten digits plus a
+           separator, is 255 — hence 288. And mingw's `_snprintf` returns −1 on
+           truncation rather than the length it wanted, so `n += _snprintf(...)`
+           would make `n` negative and `sizeof kinds - (size_t)n` wrap to a size
+           that writes BEFORE the buffer. Checking the return keeps `n` a real
+           offset whatever the platform does. */
+        char b[448], kinds[288];
+        int n = 0, w;
         for (k = 1; k < OP_NKIND; k++)
-            if (s_kindTotal[k] != before[k])
-                n += _snprintf(kinds + n, sizeof kinds - (size_t)n, "%s%s %u",
-                               n ? " " : "", OP_NAME[k], s_kindTotal[k] - before[k]);
+            if (s_kindTotal[k] != before[k]) {
+                w = _snprintf(kinds + n, sizeof kinds - (size_t)n, "%s%s %u",
+                              n ? " " : "", OP_NAME[k], s_kindTotal[k] - before[k]);
+                if (w < 0) break;                 /* out of room: keep what fits */
+                n += w;
+            }
+        kinds[n] = 0;
         if (!n) _snprintf(kinds, sizeof kinds, "none");
         _snprintf(b, sizeof b, "gui: repaint #%u -- 0x4A81E0(gi, 0x40) on the top screen: %u op(s) [%s] (skips=%u)",
                   s_repaints, s_repaintOps, kinds, s_repaintSkips);
+        b[sizeof b - 1] = 0;
         glog(b);
     }
 }
@@ -2106,7 +2118,15 @@ static void want_minimap_watchdog(unsigned int frame_counter)
 void tagpu_gui_flush(unsigned int frame_counter)
 {
     static unsigned last = 0;
-    char b[200];
+    /* 352 AND NOT 200, MEASURED RATHER THAN GUESSED. The heartbeat's format is
+       137 literal characters plus 15 `%u` and 2 `%d`; at ten and eleven digits
+       that is 309, and this buffer held 200. It was already over before landing
+       9 added three fields (263), and the line observed in a live session is
+       ~180 with `bytes=` at nine digits — so the margin was one order of
+       magnitude of one counter. mingw's `_snprintf` does not NUL-terminate on
+       truncation, and `glog` hands the result to `fprintf("%s")`, so the
+       failure would have been an out-of-bounds READ, not a tidy cut. */
+    char b[352];
     want_minimap_watchdog(frame_counter);
     if (!s_installed) return;
     if (frame_counter - last >= 600) {
