@@ -576,8 +576,22 @@ would not have shown up as a failure — it would have shown up as three landing
      **THE SPLIT IS CONFIRMED BY DOING IT: 4c is two landings.** *4c-1* TA's surface — **LANDED
      2026-09-18**, the bottom layer, and `tagpu_gui.off` on `renderer=vulkan` now renders the
      shell and a live game completely where it showed the lever's flat clear
-     ([gpu-status](gpu-status.html) §2.52). *4c-2* the `ss×` target and its resolve, which closes
-     `ss=2` and is still open. They are independent, as filed — one changes what is underneath
+     ([gpu-status](gpu-status.html) §2.52). *4c-2* the `ss×` target and its resolve — **LANDED
+     2026-09-18** ([gpu-status](gpu-status.html) §2.53): the world draws into an offscreen
+     colour+depth pair at `gw*ss, gh*ss` and one LINEAR draw composites it into the viewport rect.
+     **It closed more than `ss=2`.** The lane's effects and marker passes were refusing the WHOLE
+     pass on any frame with line vertices, because the twin draws its lines `ss` px wide and there
+     was no `ss` target to put them in — so on the shipped default (`ss` is 2 unless
+     `tagpu_ss.off` is there) the effects pass dropped every frame with a laser in it. The landing
+     asks the device for `wideLines` and turns both refusals into a range check.
+     **Measured:** the terrain A/B on route D at `ss=1` differs on **0 of the 630 719 pixels the
+     GL FBO drew**; live at `ss=2` the heartbeat reads `2048x1536 target (1024x768 at ss=2)`.
+     **And it found that the world A/Bs stopped being readable when 4c-1 landed** — the GL half is
+     the bare world FBO, the Vulkan half is the swapchain image and since 4c-1 that carries TA's
+     own frame underneath, so every uncovered pixel differs by construction. `tools/vk-ab.py` now
+     reports `on GL ink` / `on GL black` and exits 0 when a run differs only on GL-black pixels.
+     Not covered: `selAt1x`, the HUD-scale shift, and GL's two-step resolve (one step here, the
+     same filter at k = 1 and GL's own `devres` path otherwise). They are independent, as filed — one changes what is underneath
      the world, the other changes where the world draws. 4c also owns the `s_curDrew` ordering
      gap 4b-3 left named (§2.51), because the fix is `tagpu_cursown_publish` moving after the
      frame it reports.

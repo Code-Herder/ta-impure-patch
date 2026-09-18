@@ -9487,6 +9487,117 @@ means reimplementing selection, box-select, build placement and every cursor mod
   edge instead of the target. Undiagnosed; a direct right-click order works, so no fixture
   depends on it.
 
+### 2.53 The world gets a target of its own — landing 4c-2 of the Vulkan-only plan
+
+**LANDED 2026-09-18.** The five world passes no longer draw into the swapchain image. They draw
+into an offscreen colour+depth pair at the GAME's resolution times `ss`, and one LINEAR draw puts
+that block on the frame at the letterboxed viewport rect — which is what `tagpu_native.c` has
+always done on the GL side. `tagpu_vk_world.c` owns the target, its render pass and the composite.
+
+#### It was not a quality lever. Two passes were standing down on the shipped default
+
+`ss` is **2** unless `tagpu_ss.off` is there (`tagpu_native.c`: `s_ss` is set from the file's
+ABSENCE), the GL twin calls `glLineWidth(ss)` so a line one game pixel wide is `ss` pixels of the
+supersampled FBO, and the Vulkan lane had no such target — so a 2-px line had nowhere correct to
+go and `tagpu_vk_fx.c` and `tagpu_vk_mark.c` refused the **whole pass** on any frame carrying line
+vertices. Measured on the lane before the landing, in a live game on `renderer=vulkan` with
+`fx.on` and the `fx-lasers` fixture:
+
+```
+vk: fx: ss=2 makes the GL twin's lines 2 px wide and this device's pipelines are built
+        at 1.0 (wideLines is not enabled) - nothing drawn while there are line vertices
+```
+
+The census read `fx=1` on frames without lasers and the pass dropped every frame with one. **That
+is what "`ss=2` has no target on the Vulkan side" actually cost**, and reading the source would not
+have said it: both refusals look like device-capability guards, and the connection to `ss` being 2
+by default is three files away.
+
+So the landing also asks the device for **`wideLines`** — a CORE feature bit, so it sits beside
+`samplerAnisotropy` in `pEnabledFeatures` and is *not* on the extension retry ladder — publishes
+`wideok` / `maxLineWidth` on `TAGPU_VKPASS`, gives fx's line pipeline a dynamic width, and turns
+both refusals from `ss != 1` into a range check. **Refused, never clamped**: a clamped width is a
+line a different thickness from its own oracle, which is what that family of flags exists to stop.
+
+#### No pass file moved a pipeline, and that is by construction
+
+Vulkan render-pass **compatibility** compares attachment formats and sample counts and ignores
+load/store ops and layouts. An offscreen pass built with `d->fmt` and `d->dfmt` in the seam's own
+order therefore accepts every pipeline already built against `d->rp`. What the passes needed was
+the **extent**, and they were already written for it: `terr_scissor` computes `sx = w / uGame.x`,
+so handing it `gw * ss` yields exactly GL's `glScissor(vpL*ss, vpT*ss, vw*ss, vh*ss)`, and the
+vertex shaders divide by `uGame` rather than by the target. `tagpu_vk_pass.h`'s promise that a
+pass "could draw into an offscreen image, a swapchain image or another process's image without a
+line of it changing" was this landing's to keep, and it kept — the five world passes are
+unchanged apart from fx's line width.
+
+#### The orientation, settled without naming which way up anything is
+
+`tagpu_native::DVS` pairs `uv = 0` with clip `y = -1`. Under a **positive** viewport height that
+maps source row 0 to destination row 0 under *both* APIs, so the copy is orientation-preserving
+and the only question left is whether the two images agree — and they do, because the world passes
+write the engine's downward-growing screen y under a positive height (landing 5b). `tagpu_native.c`
+states the same fact from the GL side at the FBO bind: *"in this FBO window y == game frame py, so
+the rect maps directly"*. §2.52 has the three re-derivations this replaces.
+
+#### The `ss` decision is published, not recomputed
+
+`tagpu_native.c` settles `ss`/`devres` once above the effects gather — the paragraph there says
+why, and the first cut of `devres` put the scaffold test 1.5x out by raising `ss` too late. It now
+publishes that decision as `TAGPU_WORLDTGT` (`tagpu_native_worldtgt`) from **above** its own
+`!gl_draws` return, so it is this frame's on both lanes and the backend sizes its target from the
+same number rather than deriving `s_ss ? 2 : 1` for itself.
+
+#### What was measured
+
+| | |
+|---|---|
+| terrain A/B, route D, `ss=1` | **0 px of the 630 719 the GL FBO drew** |
+| the other 118 751 differing px | all pixels GL leaves **black** — see below |
+| live, `ss=2` | `vk: world: 2048x1536 target (1024x768 at ss=2) -> (0,0 1024x768), 57 697 frame(s), 8 build(s)` |
+| the fx stand-down | gone; `wideLines is not offered` never logged, so the device gave it |
+| the frame on screen | 4 901 distinct colours against 103 before — the supersample resolving |
+
+#### THE WORLD A/Bs STOPPED BEING READABLE WHEN 4c-1 LANDED, and this is where that is written down
+
+`vk-ab.py`'s headline said **NOT identical, 118 751 px** and a reader would have concluded 4c-2
+broke the world. It did not: **0** of the 630 719 pixels the GL capture actually drew differ. Every
+difference is a pixel GL leaves black, and the cause is the two halves no longer being the same
+kind of picture — the GL half is the **bare world FBO** and the Vulkan half is the **swapchain
+image**, which since §2.52 carries TA's own 8-bit frame underneath it. The UI panel, the minimap,
+the top bar and the fogged terrain outside LOS are all in one capture and none of them in the other.
+
+This is not a softer bar, it is a different question, and the tool now asks both: `vk-ab.py` prints
+`on GL ink` and `on GL black`, and when a run differs *only* on GL-black pixels it says so and
+exits 0. **A world pass's figure is the `on GL ink` line; the whole frame is the screen's job.**
+
+#### One bug the live run caught and reading did not
+
+`_down_owed` is a **request** that the seam tear a module down, not "there is something to free".
+Set on the success path it made the seam destroy and rebuild the entire target every frame behind a
+`vkDeviceWaitIdle` — **40 builds in one minute of play**, and the picture was still correct, which
+is exactly why no screenshot would have found it. It is now set only on the two refusal paths
+beside `ST_REFUSED`, which is `tagpu_vk_surf.c`'s shape. The heartbeat that made it visible
+(`N frame(s), M build(s)`) was added for this and stays.
+
+#### Not covered by 4c-2
+
+- **`selAt1x`.** GL draws the selection rects at 1x over the resolved frame, occluded by a
+  `GL_NEAREST` depth blit down from the `ss` buffer. This lane rasterises them at `ss` and
+  downsamples with the rest — which is GL's own `selgeom main` configuration, not an invention, but
+  it is a softer rect. Porting it needs a second 1x image, a depth resolve and the marker pass
+  recorded twice; the offscreen depth attachment is `STORE_OP_DONT_CARE` until then and the code
+  says so.
+- **The HUD-scale shift.** The GL composite offsets this draw by `tagpu_hud_shift` scaled into
+  frame pixels; the Vulkan composite does not, so `tagpu_hud.on` leaves the world where it is
+  today. The rect is published unshifted on purpose — a shifted rect only one consumer applies is
+  how two lanes drift.
+- **The two-step resolve.** GL resolves `ss -> 1x` and then composites 1x -> viewport with
+  `GL_NEAREST`; this draws the `ss` image straight into the viewport with `LINEAR`. At k = 1 those
+  are arithmetically the same filter (a destination centre lands on the corner of a 2x2 source
+  block, so bilinear IS the box filter — which is what GL's own `GL_LINEAR` on `s_colTex2` is for).
+  At k != 1 they differ, and this lane's behaviour is GL's `devres` path.
+
 ---
 
 ## 4. What the work taught us

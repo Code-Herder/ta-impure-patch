@@ -2338,6 +2338,20 @@ touch <gamedir>/tagpu_fps.ab                             # one frame, both lanes
   89 and 92 have all been recorded on passing runs. Do not chase it. **For the world passes the
   ink count IS worth reading**, because there it is the scene (terrain fills the viewport, the
   scaffold's is `tall=`), and a big change in it means the fixture moved.
+- **A WORLD PASS'S FIGURE IS THE `on GL ink` LINE, NOT THE HEADLINE — since landing 4c-1, and
+  found the hard way in 4c-2.** The two halves are no longer the same kind of picture. The GL half
+  of a world pass's A/B is the **bare world FBO**, black everywhere the pass did not draw; the
+  Vulkan half is the **swapchain image**, and since 4c-1 that carries TA's own 8-bit frame
+  underneath it (`tagpu_vk_surf.c`, the bottom layer that made `tagpu_gui.off` show a game). So the
+  UI panel, the minimap, the top bar and the fogged terrain outside LOS are in one capture and in
+  neither the other — and **every pixel the pass did not cover differs by construction**.
+  The terrain A/B on the 4c-2 build reads *NOT identical, 118 751 px of 786 432* and **0 of the
+  630 719 the GL capture drew**. The first number is the framings; the second is the pass.
+  `vk-ab.py` prints both now (`on GL ink` / `on GL black`), says so in words when a run differs
+  only on GL-black pixels, and exits 0 for that case — so a green exit still means "the pass
+  agrees with its twin". **Use the screen for what the whole frame looks like**; the A/B cannot
+  answer that question any more and never could answer it for a pass that does not fill the frame.
+
 - **THREE WAYS TO RUN AN A/B THAT LOOKS LIKE A RESULT AND IS NOT** [all three cost the gate-2
   landing a tick or worse, 2026-09-16]:
 
