@@ -1815,7 +1815,12 @@ world, and that is the one lane the instruments do not reach.
 **It is a landing of its own (10c) and it is tooling, not rendering.** The fix is to call the
 trigger family from a lane-independent point — the game-thread flip hook `0x4C63A0` already runs
 on every renderer (`gui: first flip on thread 652` appears in a gdi boot's log) and is the
-obvious host. Note for whoever takes it: `render_gdi.c` currently contains **no** `tagpu_` call at
+obvious host. **The design risk that looks biggest is not there**: the trigger functions take a
+`const TAGPU_FRAME*` only to throttle themselves — `if (f && (f->frame_counter % 5))` is the whole
+of their use of it, in both `tagpu_gui_snap.c:613` and `tagpu_cat.c:306` — and every one
+null-checks it, so a game-thread host can pass its own flip count or `NULL` with no frame packet
+in existence. What DOES need thought is that they would move from the render thread to the game
+thread, and they read engine memory. Note for whoever takes it: `render_gdi.c` currently contains **no** `tagpu_` call at
 all, and landing 10b's safety argument quotes that fact, so if the triggers are added there
 instead, 10b's note has to be re-read rather than assumed to still hold.
 
