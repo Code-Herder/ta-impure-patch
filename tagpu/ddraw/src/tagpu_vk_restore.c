@@ -2211,7 +2211,12 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
     /* THE COLLECTION FIRST, and under this slot's own fence. */
     if (g->dumpState == 1 && slot == g->dumpSlot) {
         FILE* f;
-        size_t n = (size_t)g->dumpBytes;
+        /* THE DESTINATION'S OWN BYTES, NOT THE WHOLE BUFFER. The source rides
+           in the same allocation after it, and writing `dumpBytes` here put it
+           on the end of the destination file -- every pair then differed on
+           SIZE, which is what the run that introduced this reported for all
+           four consumers. */
+        size_t n = (size_t)(g->dumpBytes - g->dumpSrcBytes);
         /* A CHAIN DUMPS AS `.mips`, LEVEL 0 ALONE AS `.rgba`, and the name is
            what tells them apart -- the GL lane writes exactly the same two
            names for exactly the same two cases (tagpu_gaf.c's dump_if_armed),
