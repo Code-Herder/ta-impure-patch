@@ -577,8 +577,16 @@ would not have shown up as a failure — it would have shown up as three landing
      GL's convention needs it, and a pass handed a literal quad already in clip space does not —
      flipping the second kind moves the quad and its texcoords together and mirrors the picture.
      4c-1's first build took the flip on the reasoning that a ported shader fed the GL lane's own
-     vertices reproduces the GL lane's image, and drew TA's shell upside down. The one-line test
-     is whether the shader computes its position or is handed one.
+     vertices reproduces the GL lane's image, and drew TA's shell upside down. The test is **does
+     turning clip space over change which texel a fragment reads** — it does whenever the varying
+     is derived from the same geometry as the position, and does not when the position comes from
+     world- or screen-space uniforms while the varying is independent of the flip.
+
+     **4c-2's resolve is the first kind, so it takes no flip.** `tagpu_native::DVS` is
+     `uv = p; gl_Position = vec4(p.x*2.0-1.0, p.y*2.0-1.0, 0.0, 1.0)` over a unit-square
+     attribute at location 0, and `DFS` is `frag = texture(uTex, uv)` with `uTex` at set 0
+     binding 40 and no uniform block in either stage. That is the whole interface 4c-2 has to
+     build a pipeline against.
    * **4d — the deletion.** Route D's window, `tagpu_vk_wndproc`, `WM_TAGPU_VK` and the geometry
      tracking, once 4b's figures are banked. **4a made route D unreachable rather than deleted on
      purpose**, so the control above stays available until then: the same build answers both

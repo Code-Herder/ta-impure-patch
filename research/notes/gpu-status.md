@@ -9212,8 +9212,20 @@ is bottom-up. Vulkan's clip `y = -1` is already the **top** of the viewport, so 
 with no flip put TA's top row at the top.
 
 **The lesson is not "derive it" and not "inherit it".** It is that the flip is a property of what
-the vertex stage DOES, not of the lane — and the one-line test for it is whether the shader
-computes its position or is handed one.
+the vertex stage DOES, not of the lane. The test is:
+
+> **does turning clip space over change which texel a fragment reads?**
+
+It does whenever the varying is derived from the SAME geometry as the position, because the flip
+moves both together — the quad still covers the viewport and the sampling is mirrored across it.
+It does not when the position comes from world- or screen-space uniforms written in GL's
+convention while the varying is independent of the flip, which is the case in every world pass
+and is what the flip is there for.
+
+[An earlier wording of this said the test was "whether the shader computes its position or is
+handed one". That is wrong, and 4c-2's own resolve is the counter-example: `tagpu_native::DVS`
+COMPUTES `gl_Position = vec4(p*2-1, 0, 1)` — but from the same `p` it passes through as `uv`, so
+it belongs with this pass and takes no flip either. Corrected before 4c-2 was built against it.]
 
 #### The shader came from the fork, which cost four changes to the generator
 
