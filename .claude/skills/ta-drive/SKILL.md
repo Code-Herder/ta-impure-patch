@@ -2352,6 +2352,18 @@ touch <gamedir>/tagpu_fps.ab                             # one frame, both lanes
   agrees with its twin". **Use the screen for what the whole frame looks like**; the A/B cannot
   answer that question any more and never could answer it for a pass that does not fill the frame.
 
+- **...AND FOR A PASS THAT BLENDS, `on GL ink` IS NOT ENOUGH EITHER.** Terrain comes out 0 on that
+  line because it is OPAQUE — it writes the same colour over any background. The effects pass
+  blends, so the Vulkan half is *the effect over TA's frame* and the GL half is *the effect over
+  black*: measured on the 4c-2 build, 226 of the 1 622 GL-ink pixels are identical with a median
+  max-channel of **237**, and the 1 396 that differ have a median of **19**. The opaque fragments
+  are byte-for-byte — `(255, 71, 0)` against `(255, 71, 0)` — and the translucent ones are two
+  backgrounds, not two rasterisers. So for effects, features and markers, read the A/B as *"the
+  opaque fragments agree"* and use the screen for the rest. **The real fix is to capture the
+  Vulkan half from the offscreen world target that landing 4c-2 created** (it is cleared to
+  transparent and holds the world alone, exactly like GL's world FBO); `tagpu_vk_shot.c` reads the
+  swapchain image today, and moving it is a landing of its own.
+
 - **THREE WAYS TO RUN AN A/B THAT LOOKS LIKE A RESULT AND IS NOT** [all three cost the gate-2
   landing a tick or worse, 2026-09-16]:
 

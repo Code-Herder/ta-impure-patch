@@ -591,7 +591,21 @@ would not have shown up as a failure — it would have shown up as three landing
      own frame underneath, so every uncovered pixel differs by construction. `tools/vk-ab.py` now
      reports `on GL ink` / `on GL black` and exits 0 when a run differs only on GL-black pixels.
      Not covered: `selAt1x`, the HUD-scale shift, and GL's two-step resolve (one step here, the
-     same filter at k = 1 and GL's own `devres` path otherwise). They are independent, as filed — one changes what is underneath
+     same filter at k = 1 and GL's own `devres` path otherwise).
+
+     **AND IT LEFT ONE LANDING BEHIND IT THAT IS WORTH DOING NEXT: move the Vulkan A/B capture to
+     the world target.** 4c-2 both exposed the harness problem and supplied the cure. The GL half
+     of a world pass's A/B is the bare world FBO; the Vulkan half is `s_vk.img[idx]`, the swapchain
+     image, which since 4c-1 carries TA's own frame underneath. For an OPAQUE pass that only makes
+     the uncovered pixels differ (terrain: 0 of the 630 719 it drew). For a pass that BLENDS it is
+     worse than cosmetic — the Vulkan half is *the effect over TA's frame* and the GL half is *the
+     effect over black*, so every translucent fragment differs. Measured on the effects pass: of
+     1 622 GL-ink pixels, 226 identical with a median max-channel of 237 (the opaque fragments,
+     byte-for-byte) and 1 396 differing with a median of 19 (the translucent ones). **The offscreen
+     world target 4c-2 created is exactly the right source** — cleared to `{0,0,0,0}`, holding the
+     world alone, the same thing GL's world FBO is. `tagpu_vk_shot.c` reads the swapchain image
+     today; pointing it at `tagpu_vk_world`'s colour image for a world pass would make every world
+     A/B expressible again, including at `ss > 1`, where it has never been runnable at all. They are independent, as filed — one changes what is underneath
      the world, the other changes where the world draws. 4c also owns the `s_curDrew` ordering
      gap 4b-3 left named (§2.51), because the fix is `tagpu_cursown_publish` moving after the
      frame it reports.

@@ -9569,7 +9569,30 @@ the top bar and the fogged terrain outside LOS are all in one capture and none o
 
 This is not a softer bar, it is a different question, and the tool now asks both: `vk-ab.py` prints
 `on GL ink` and `on GL black`, and when a run differs *only* on GL-black pixels it says so and
-exits 0. **A world pass's figure is the `on GL ink` line; the whole frame is the screen's job.**
+exits 0.
+
+**AND FOR A PASS THAT BLENDS, `on GL ink` IS NOT ENOUGH EITHER — measured, not reasoned.** The
+terrain A/B comes out clean on that line because terrain is OPAQUE: it writes the same colour over
+any background. The effects pass blends, so the Vulkan half is *the effect over TA's frame* and the
+GL half is *the effect over black*, and the two differ wherever the fragment is not opaque. The
+effects A/B on this build:
+
+| GL-ink pixels | count | median max-channel |
+|---|---|---|
+| identical | 226 | **237** — the opaque fragments |
+| differing | 1396 | **19** — the translucent ones |
+
+Of the fragments with a channel at 64 or above, **216 of 235 are identical**, and the bright ones
+are byte-for-byte: `(255, 71, 0)` against `(255, 71, 0)`. So the pass agrees with its twin exactly
+where the comparison means anything, and the 1396 are two different backgrounds rather than two
+different rasterisers. **`on GL ink` is a world pass's figure only while the pass is opaque.**
+
+**The cure exists now and 4c-2 is what created it.** The Vulkan half should be captured from the
+OFFSCREEN WORLD TARGET rather than from the swapchain image: that image is cleared to
+`{0,0,0,0}` and holds the world alone, which is precisely what GL's world FBO is. `tagpu_vk_shot.c`
+reads `s_vk.img[idx]` today. Moving it is a landing of its own and is filed as one — until then,
+**a blending world pass's A/B is read as "the opaque fragments agree", and the screen is the
+oracle for the rest.**
 
 #### One bug the live run caught and reading did not
 
