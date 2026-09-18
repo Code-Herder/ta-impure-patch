@@ -403,12 +403,18 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
     }
     g->nvert = c.nv;
     g->serial = s_serial++;
-    glGenBuffers(1, &g->vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, g->vbo);
-    glBufferData(GL_ARRAY_BUFFER,
-                 (GLsizeiptr)c.nv * TAGPU_PB_GEOMST * sizeof(float),
-                 s_scratchG, GL_STATIC_DRAW);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    /* THE BUFFER IS GL; THE BAKE IS THE PASS. The mirror below takes the very
+       memory this upload was given, and the Vulkan twin reads it through
+       `tagpu_posebake_geom_mirror` -- so on a lane with no GL there is nothing
+       to upload and the bake is unchanged. [The vulkan-only plan, 4b-2.] */
+    if (!tagpu_vk_owns_present()) {
+        glGenBuffers(1, &g->vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, g->vbo);
+        glBufferData(GL_ARRAY_BUFFER,
+                     (GLsizeiptr)c.nv * TAGPU_PB_GEOMST * sizeof(float),
+                     s_scratchG, GL_STATIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
     /* THE MIRROR IS THE BUFFER THE UPLOAD ABOVE WAS GIVEN, in the same call,
        so there is no second evaluation of the bake to drift from the first.
        A refused malloc leaves the slot NULL, which the accessor reports as
@@ -532,12 +538,14 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
     m->levelGen = lvl; m->glGen = s_glGen;
     m->nvert = c.nv; m->nskip = c.nskip; m->noMaterial = c.anom;
     m->serial = s_serial++;
-    glGenBuffers(1, &m->vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, m->vbo);
-    glBufferData(GL_ARRAY_BUFFER,
-                 (GLsizeiptr)c.nv * TAGPU_PB_MATST * sizeof(float),
-                 s_scratchM, GL_STATIC_DRAW);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    if (!tagpu_vk_owns_present()) {
+        glGenBuffers(1, &m->vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, m->vbo);
+        glBufferData(GL_ARRAY_BUFFER,
+                     (GLsizeiptr)c.nv * TAGPU_PB_MATST * sizeof(float),
+                     s_scratchM, GL_STATIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
     if (s_mirrorWant && c.nv > 0) {
         size_t nb = (size_t)c.nv * TAGPU_PB_MATST * sizeof(float);
         s_matMirror[slot] = (float*)malloc(nb);
@@ -548,26 +556,30 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
        one bind and one glDrawArrays. Locations 0-3 come off the geometry (the
        type's), 4-6 off this stream — the same split the two buffers have, so
        either can be re-baked without touching the other's pointers. */
-    glGenVertexArrays(1, &m->vao);
-    glBindVertexArray(m->vao);
-    glBindBuffer(GL_ARRAY_BUFFER, g->vbo);
-    glEnableVertexAttribArray(0);   /* rest position                        */
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, TAGPU_PB_GEOMST * 4, (void*)0);
-    glEnableVertexAttribArray(1);   /* rest normal of the vertex's face     */
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, TAGPU_PB_GEOMST * 4, (void*)12);
-    glEnableVertexAttribArray(2);   /* piece index                          */
-    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, TAGPU_PB_GEOMST * 4, (void*)24);
-    glEnableVertexAttribArray(3);   /* TAGPU_PBF_* flags                    */
-    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, TAGPU_PB_GEOMST * 4, (void*)28);
-    glBindBuffer(GL_ARRAY_BUFFER, m->vbo);
-    glEnableVertexAttribArray(4);   /* uv                                   */
-    glVertexAttribPointer(4, 2, GL_FLOAT, GL_FALSE, TAGPU_PB_MATST * 4, (void*)0);
-    glEnableVertexAttribArray(5);   /* flat colour, colour key              */
-    glVertexAttribPointer(5, 2, GL_FLOAT, GL_FALSE, TAGPU_PB_MATST * 4, (void*)8);
-    glEnableVertexAttribArray(6);   /* skip                                 */
-    glVertexAttribPointer(6, 1, GL_FLOAT, GL_FALSE, TAGPU_PB_MATST * 4, (void*)16);
-    glBindVertexArray(0);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    /* AND THE VERTEX ARRAY WITH THEM: it exists only to make a GL draw one
+       bind, and the twin builds its own binding from the mirrors. */
+    if (!tagpu_vk_owns_present()) {
+        glGenVertexArrays(1, &m->vao);
+        glBindVertexArray(m->vao);
+        glBindBuffer(GL_ARRAY_BUFFER, g->vbo);
+        glEnableVertexAttribArray(0);   /* rest position                        */
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, TAGPU_PB_GEOMST * 4, (void*)0);
+        glEnableVertexAttribArray(1);   /* rest normal of the vertex's face     */
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, TAGPU_PB_GEOMST * 4, (void*)12);
+        glEnableVertexAttribArray(2);   /* piece index                          */
+        glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, TAGPU_PB_GEOMST * 4, (void*)24);
+        glEnableVertexAttribArray(3);   /* TAGPU_PBF_* flags                    */
+        glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, TAGPU_PB_GEOMST * 4, (void*)28);
+        glBindBuffer(GL_ARRAY_BUFFER, m->vbo);
+        glEnableVertexAttribArray(4);   /* uv                                   */
+        glVertexAttribPointer(4, 2, GL_FLOAT, GL_FALSE, TAGPU_PB_MATST * 4, (void*)0);
+        glEnableVertexAttribArray(5);   /* flat colour, colour key              */
+        glVertexAttribPointer(5, 2, GL_FLOAT, GL_FALSE, TAGPU_PB_MATST * 4, (void*)8);
+        glEnableVertexAttribArray(6);   /* skip                                 */
+        glVertexAttribPointer(6, 1, GL_FLOAT, GL_FALSE, TAGPU_PB_MATST * 4, (void*)16);
+        glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
     s_matSkip[slot] = (unsigned char*)malloc((size_t)c.nv ? (size_t)c.nv : 1);
     if (s_matSkip[slot]) memcpy(s_matSkip[slot], s_scratchSkip, (size_t)c.nv);
     s_matBaked++;
