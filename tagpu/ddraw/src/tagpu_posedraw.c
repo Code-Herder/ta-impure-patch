@@ -137,7 +137,30 @@ static int    s_state;          /* 0 untried, 1 ready, 2 refused */
    `tagpu_posedraw_glreset()` BEFORE a new context is used. A stale "not ready"
    costs a double draw for a frame (the engine's 8bpp under our RGB); a stale
    "ready" is the unsafe direction and no write order produces it. */
-int tagpu_posedraw_live(void) { return s_state == 1; }
+/* "THIS PASS WILL DRAW THE UNIT, SO THE ENGINE NEED NOT" -- and that is a
+   promise to the GAME thread, which acts on it by skipping the engine's own
+   rasterise and wiping its composite (tagpu_owndraw.c's `classify`, then
+   `tagpu_r3dcache_wipe`). The comment there states the invariant this answer
+   has to keep: a stale read may only be stale in the direction of NOT skipping,
+   because "skipping when nothing will draw has no write order that produces
+   it".
+
+   ON THE VULKAN-ONLY LANE IT DOES. `ready()` arms there without a GL program,
+   so `s_state == 1` alone would promise a draw this pass cannot guarantee: the
+   twin stands down whenever a mirror is missing, the hand-over is short or the
+   lane is not READY, and after the retry budget `render_vk.c` degrades to GDI
+   while `tagpu_vk_owns_present()` stays latched -- so the game thread would go
+   on skipping and wiping for the life of the process and every covered unit
+   would be invisible.
+
+   SO THE ANSWER IS NO THERE, by construction rather than by checking whether
+   the twin happened to draw. The engine keeps its own rasterise and its own
+   composite; our twin draws the same units into the swapchain from the
+   hand-over, which is independent of this. The cost is the engine doing work
+   whose output that lane does not present, and the redundancy goes when 4c
+   gives the backend TA's surface.
+   [FROM THE 4b-2 LANDING REVIEW, 2026-09-18.] */
+int tagpu_posedraw_live(void) { return s_state == 1 && !tagpu_vk_owns_present(); }
 
 /* 1 only once the pass has TRIED and failed — a driver this build cannot run
    on. Distinct from `!live`, which is also true for the frame or two before
@@ -479,7 +502,25 @@ int tagpu_posedraw_ready(void)
     const char* unitFS;
     char b[256];
 
-    if (s_state) return s_state == 1;
+    if (s_state) {
+        /* RE-ASKED, NOT LATCHED, where the bound belongs to a device that can
+           change under us: the GPU picker tears the lane down and re-picks, and
+           a smaller device may not hold the pose block the larger one did. The
+           accessor caches per device, so this is one compare in the steady
+           state. [FROM THE 4b-2 LANDING REVIEW.] */
+        if (s_state == 1 && tagpu_vk_owns_present()) {
+            int lim = tagpu_vk_max_uniform_range();
+            if (lim > 0 && lim < PD_BLOCK) {
+                _snprintf(b, sizeof b,
+                          "posedraw: the device changed and its maxUniformBufferRange is "
+                          "%d, the pose block needs %d - standing down", lim, PD_BLOCK);
+                b[sizeof b - 1] = 0;
+                plog(b);
+                s_state = 2;
+            }
+        }
+        return s_state == 1;
+    }
     /* 3 = BUILDING, not 2 = refused. This blocks re-entry exactly as 2 did,
        but `tagpu_posedraw_refused()` stays false while we load entry points
        and query the block size — a window the GAME thread's owndraw classify

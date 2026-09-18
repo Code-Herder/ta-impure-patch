@@ -9011,12 +9011,18 @@ lanes read one construction rather than two.
   all taken with Classic++ OFF**, so they are valid for that configuration and say nothing about
   this one. Two more instances of the same shape, left rather than fixed: the GL restore genuinely
   needs its texture, and giving the Vulkan lane its own restore path is its own piece of work.
-* **A device limit re-read on a device change does not reach its consumers.** The two accessors
-  are now keyed to the `VkPhysicalDevice` they were read from, so they re-query when the GPU
-  picker re-picks. Their consumers still latch: `tagpu_terr.c`'s `s_maxTex` is set once, and
-  `tagpu_posedraw.c`'s `s_state` likewise. A row change to a *smaller* device would therefore keep
-  a bound taken from the larger one. Named rather than fixed, because the consumers' latches are
-  each their own argument about when a pass may re-arm.
+* **The engine keeps its own unit rasterise on this lane, and that is deliberate.**
+  `tagpu_posedraw_live()` is a PROMISE to the game thread — it acts on a yes by skipping the
+  engine's own draw and wiping its composite — and the invariant `tagpu_owndraw.c` states is that a
+  stale read may only be stale in the direction of *not* skipping, because "skipping when nothing
+  will draw has no write order that produces it". Arming the pass without a GL program produced
+  exactly that order: the twin stands down whenever a mirror is missing or the lane is not READY,
+  and after the retry budget `render_vk.c` degrades to GDI while `tagpu_vk_owns_present()` stays
+  latched — so the game thread would skip and wipe for the life of the process and every covered
+  unit would be invisible. `live()` therefore answers **no** on this lane, by construction rather
+  than by checking whether the twin happened to draw. The engine does work whose output this lane
+  does not present; the redundancy goes when 4c gives the backend TA's surface.
+  [Found by this landing's cross-thread review.]
 
 #### The instruments, and what they cost to learn
 

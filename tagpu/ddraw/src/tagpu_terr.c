@@ -1383,7 +1383,7 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     if (!tagpu_vk_owns_present()) {
         if (s_state == 0) init_gl();
         if (s_state != 1) return terr_bail();
-    } else if (s_maxTex <= 0) {
+    } else if (s_maxTex <= 0 || s_maxTex != tagpu_vk_max_image_dim()) {
         /* AND THE ATLAS BOUND IS A DEVICE LIMIT, so it is asked of the device
            that will sample it. `init_gl` reads GL_MAX_TEXTURE_SIZE into
            `s_maxTex`; with no GL context that never happened and `s_maxTex`
@@ -1396,6 +1396,13 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
            Measured 2026-09-18: `terr: atlas built 2176x0 ... 0 kept`. */
         int m = tagpu_vk_max_image_dim();
         if (m <= 0) return terr_bail();
+        /* AND A CHANGED BOUND INVALIDATES THE ATLAS. The accessor re-asks when
+           the GPU picker re-picks a physical device; if the new one is smaller,
+           an atlas laid out against the old bound is one the twin's image
+           creation will refuse, and `s_atlasBuilt` would otherwise keep it for
+           the session. Rebuilding is what the GL lane does on a context change
+           and costs the same. [FROM THE 4b-2 LANDING REVIEW.] */
+        if (s_maxTex > 0 && m != s_maxTex) s_atlasBuilt = 0;
         s_maxTex = m;
     }
     if (!ensure_atlas(ta)) return terr_bail();
