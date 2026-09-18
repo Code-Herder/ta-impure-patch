@@ -10766,9 +10766,19 @@ shadow is SKIPPED (ours live)` when the pass arms, and `… is restored` within 
 * **The double-shadow direction was not forced.** Stale 0 while the pass paints is accepted as
   the safe direction and is one frame wide at most; no fixture makes it happen on purpose.
 * **Three returns sit after the raise** (`tagpu_native.c:3441`, `:3713`, `:3811`) and do not lower
-  the flag. They are reached after the gather has run and all say some variant of *nothing was
-  gathered*; the detours only install under target `all`, where owning no units means there are
-  none on screen, so there is no structure for the branch to matter to. Argued, not measured.
+  the flag, and they are NOT the same case — an earlier version of this line said all three were
+  *"nothing was gathered"*, which is wrong about the third and wrong in the direction that
+  matters.
+    * `:3441` and `:3713` really are *nothing to draw* (`nu == 0 && nfx == 0 && nfeat == 0 &&
+      nterr == 0 && !markOn && !terrOwned`, and the same again after vertex emission). The
+      detours only install under target `all`, where owning no unit means there is none on
+      screen, so no structure is affected.
+    * **`:3811` is the Vulkan lane's NORMAL exit, every frame.** It closes the
+      `if (!gl_draws) { … return; }` block at `:3753` that hands the frame over to the twin — and
+      leaving the flag raised there is not an oversight but the point: on that lane the pass HAS
+      done its work and the Vulkan unit pass paints the shadow. Everything after `:3812` in that
+      file is GL-only by construction, which is also why `tagpu_shadow.c` and
+      `tagpu_hires_draw.c` carry GL with no lane guard of their own.
 
 
 ## 4. What the work taught us

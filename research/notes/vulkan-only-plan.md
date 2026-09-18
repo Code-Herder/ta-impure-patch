@@ -1613,6 +1613,18 @@ Back to the filed list:
    comparison: `dd.c`'s `oglu_load_dll`, `render_gdi.c`'s `g_oglu_version`, `tagpu_ftime.c`'s
    `xwglGetProcAddress`.
 
+   **And the seventeen are not one shape.** `tagpu_native.c:3753` opens
+   `if (!gl_draws) { …hand over…; return; }` and closes it at `:3812`, so **everything below that
+   line in the unit pass is GL-only by construction** — which is why `tagpu_shadow.c` (54 lines)
+   and `tagpu_hires_draw.c` (82) carry GL with no lane guard of their own: their only callers sit
+   below it (`:4155`, `:4463`, `:4522`). Those two go whole with the lane. But `tagpu_text.c` and
+   `tagpu_hires.c` are **shared producers with a GL upload half**, the `tagpu_restore_core.c`
+   pattern this plan already knows: `tagpu_text_atlas` is called from **`tagpu_vk_fps.c:535`**,
+   on the Vulkan lane, and `tagpu_hires_mesh` from the gather that runs on both. Deleting those
+   two files would take the Vulkan readout's glyphs and the replacement meshes with them. **Each
+   of the seventeen needs that question asked of it before a line is deleted**, and "it includes
+   `opengl_utils.h`" does not answer it.
+
    The other headers are cleaner than that: `openglshader.h` and `d3d9shader.h` have **no
    includer outside the set at all**; `render_ogl.h` has four (`config.c`, `dd.c`,
    `fps_limiter.c`, `winapi_hooks.c`) and `render_d3d9.h` five (those plus `utils.c`,
