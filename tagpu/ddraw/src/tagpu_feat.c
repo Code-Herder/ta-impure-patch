@@ -203,7 +203,6 @@ static TAGPU_GAFATLAS s_atlas;
    geometry rather than being polled twice on two cadences, so both lanes
    capture the same frame. See tagpu_feat.h and tagpu_vk_feat.c. */
 #define ABFILE   "tagpu_feat.ab"
-#define ABOUT    "tagpu_feat_gl.ppm"
 static int s_ab, s_abDone, s_abFrame;
 static int s_pubHave;                  /* this frame's hand-over is waiting   */
 static TAGPU_FEATHAND s_pub;
@@ -1221,18 +1220,6 @@ void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex)
                             (GLsizeiptr)s_nv[B_BODY] * FVST * 4, s_verts[B_BODY]);
         glEnable(GL_BLEND);
         x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);      /* premultiplied FBO */
-
-        /* THE FRAME GOES BLACK FIRST WHEN THE A/B IS ARMED, and only then -- and
-           for this pass the DEPTH buffer goes with it. What is compared is THIS
-           pass's pixels: the terrain has already drawn under us on the GL side and
-           has already written the depth every body here is tested against, while
-           the Vulkan lane's render pass starts from a cleared depth buffer. Both
-           have to start from nothing or every fragment the two disagree about
-           reads as a port failure. The scissor is put back before the draw
-           (TAGPU_ABSHOT_SCISSOR), because a world pass CLIPPED to the viewport is
-           the pass and an unclipped one is something else.
-           One frame, and the player sees it: the terrain drawn before the clear is
-           missing from it. That is what a measuring lever costs. */
 
         /* shadows are ground decals: they test depth but never write it, so a
            feature's own body is not fighting its shadow and nothing is occluded

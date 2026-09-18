@@ -30,9 +30,10 @@ void tagpu_fps_glreset(void);      /* the GL context changed: drop our objects *
    which is a readout one frame stale -- a digit, not a fault. Returns 0 when
    there is nothing to draw, and when they have already been taken.
 
-   `ab` comes back 1 on the ONE frame this pass captured `tagpu_fps_gl.ppm`, so
-   the Vulkan lane captures the same frame rather than whichever one its own
-   lever poll happened to land on. */
+   `ab` comes back 1 on the ONE frame `tagpu_fps.ab` latched its claim, so the
+   Vulkan lane captures THAT frame rather than whichever one its own lever poll
+   happened to land on. It does not mean a file was written: since landing 4d-2
+   there is no GL half. */
 int tagpu_fps_quads(const float** v, int* nv, int* fw, int* fh, int* ab);
 
 /* The most vertices `tagpu_fps_quads` can ever hand over -- MAXCH quads of

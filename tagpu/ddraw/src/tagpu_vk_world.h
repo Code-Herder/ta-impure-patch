@@ -130,9 +130,10 @@ void tagpu_vk_world_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
    Valid from `begin` until the next frame's `prepare`, and a teardown in between
    clears it.
 
-   WHY THE CAPTURE MOVED HERE. The GL half of a world A/B is the world FBO at
+   WHY THE CAPTURE MOVED HERE. The GL half of a world A/B was the world FBO at
    `gw*ss, gh*ss` (tagpu_native.c binds it and sets `glViewport(0, 0, gw*ss,
-   gh*ss)`; tagpu_abshot.c reads the viewport back). The Vulkan half was the
+   gh*ss)`; the now-deleted tagpu_abshot.c read that viewport back, and landing
+   4d-2 removed it with the rest of route D). The Vulkan half was the
    SWAPCHAIN image at the window's client rect, so the two were the same size
    only at `ss = 1` with no letterbox -- which is why four passes refused their
    own A/B outright whenever `ss != 1`, and `ss` is 2 unless `tagpu_ss.off` is

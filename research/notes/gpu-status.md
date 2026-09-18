@@ -9898,13 +9898,20 @@ pair with.
 #### Every pass already contained the code that survives
 
 That is what made the landing small, and it is worth recording as a shape. All eight carried **two**
-branches — the GL one that captured and claimed on `wrote && fresh`, and an `else if (taking)` that
-merely claimed — because landings 4b-1…4b-3 had already been forced to write the second one for the
-lane with no GL half. The deletion is each pass collapsing onto its own existing branch:
+branches — the GL one that captured and claimed on `wrote && fresh`, and a second that merely
+claimed — because landings 4b-1…4b-3 had already been forced to write the second one for the lane
+with no GL half. The deletion is each pass collapsing onto its own existing branch:
 
 ```c
 if (taking) { s_abDone = 1; s_abFrame = tagpu_vk_ab_arm("<tag>"); }
 ```
+
+**The spelling differs and it matters when you go looking.** Five of the eight — `terr`, `feat`,
+`fx`, `fps`, `scaffold` — had a literal `} else if (taking) {`. The other three had a plain `} else {`
+nested inside an already-open `if (taking)` (`mark`, `gui_surf`) or `if (s_abTaking)` (`posedraw`).
+And `posedraw`'s flag is **`s_abClaim`**, not `s_abFrame`, guarded by `s_abTaking` — its own
+`s_abFrame` turned out to be write-only in this tree *and* on `main`, so it went too.
+[BOTH CORRECTIONS FROM THE 4d-2 LANDING REVIEW, against my own over-generalised first draft.]
 
 #### What stays, and it is a decision rather than a default
 
@@ -9936,8 +9943,13 @@ correctly; the fixture was wrong.
   The fix is an ordering — hold the taken value, have the seam report whether
   `tagpu_vk_gui_record` actually ran, and publish `want && composited` after the frame, so every
   early return yields the truth instead of a stale latch.
-- **`tools/vk-ab.py` still reads a `_gl.ppm`** when given a gamedir and a `--pass`. Nothing writes
-  one any more, so that form now always refuses; the two-file form is the one that works.
+- **The two captures are still labelled "GL" and "Vulkan" throughout `tools/vk-ab.py`**, which is
+  what a cross-build pair is not. Its gamedir form now refuses by name and its over-draw diagnostic
+  reads in cross-build terms, but the column headings and variable names still say GL. Renaming
+  them is a change to a tool every session reads, and it can ride a later landing.
+- **`tools/uiwalk.py`'s `--vk` walk is gone entirely**, not just refused: `Walk.vk_ab` (119 lines),
+  the per-stop `vkdiff`/`vkink` plumbing and the report's Vulkan-against-GL table went with it.
+  The flag still refuses at argument-parse time and says what replaced it.
 
 ---
 

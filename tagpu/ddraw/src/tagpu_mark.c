@@ -194,7 +194,6 @@ static int s_cursor = 1, s_digits = 1;
 static unsigned s_armCheck = 0;
 
 #define MK_ABFILE  "tagpu_mark.ab"
-#define MK_ABOUT   "tagpu_mark_gl.ppm"
 static int s_ab, s_abDone, s_abFrame;
 static int s_abTaking;
 
@@ -1059,11 +1058,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
         x_glActiveTexture(GL_TEXTURE0);
     }
 
-    /* ---- the GL half of the Phase G A/B (tagpu_abshot.h) ----
-       Black the frame, draw this pass alone, read it back, so what the Vulkan
-       half is compared against is one pass over black against one pass over
-       black. No DEPTH flag: this pass neither tests nor writes depth, so
-       clearing it would be clearing something the draw does not touch. */
+    /* ---- the Phase G A/B's lever ---- */
     {
         int taking = s_ab && !s_abDone;
         /* NO `ss` BOUND ON THIS A/B ANY MORE. It used to refuse itself whenever

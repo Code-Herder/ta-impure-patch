@@ -27,10 +27,11 @@ int  tagpu_vk_fps_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
 void tagpu_vk_fps_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                          uint32_t w, uint32_t h);
 
-/* 1 on the one frame the GL twin captured `tagpu_fps_gl.ppm`, so that the seam
-   captures the SAME frame instead of whichever one its own lever poll landed
-   on -- the two lanes poll on different cadences and the readout changes its
-   number twice a second. Consumed by the call. Valid after `prepare`. */
+/* 1 on the ONE frame `tagpu_fps.ab` latched its claim, so that the seam
+   captures THAT frame instead of whichever one its own lever poll landed on --
+   the readout changes its number twice a second, so which frame is captured
+   matters here more than anywhere. It does not mean a file was written: since
+   landing 4d-2 there is no GL half. Consumed. Valid after `prepare`. */
 int  tagpu_vk_fps_ab_frame(void);
 
 /* Give everything back. Called by the seam from `vk_down`, after its

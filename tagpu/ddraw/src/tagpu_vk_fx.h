@@ -35,8 +35,12 @@ int  tagpu_vk_fx_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 void tagpu_vk_fx_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                         uint32_t w, uint32_t h);
 
-/* 1 on the one frame the GL twin captured `tagpu_fx_gl.ppm`, so that the seam
-   captures the SAME frame. Consumed by the call. Valid after `prepare`. */
+/* 1 on the ONE frame `tagpu_fx.ab` latched its claim and `tagpu_vk_ab_arm`
+   got the `_vk.ppm` target unlinked -- so the seam captures THAT frame rather
+   than whichever one its own lever poll landed on. It does NOT mean a file was
+   written: since landing 4d-2 there is no GL half, and the capture the seam
+   then records is this lane's own. Consumed by the call. Valid after
+   `prepare`. */
 int  tagpu_vk_fx_ab_frame(void);
 
 /* Give everything back. Called by the seam from `vk_down`, after its

@@ -117,7 +117,6 @@ static unsigned s_lastFrame = 0;
    with the scaffold below rather than being polled a second time. See
    inc/tagpu_scaffold.h. */
 #define ABFILE  "tagpu_scaffold.ab"
-#define ABOUT   "tagpu_scaffold_gl.ppm"
 static int s_ab, s_abDone, s_abFrame;
 
 /* Published AFTER the GL draw, taken exactly once, and every field of it is

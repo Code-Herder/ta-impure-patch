@@ -163,9 +163,8 @@ void tagpu_vk_own_present(void);
    capture on this path. Safe from any thread. */
 int tagpu_vk_owns_present(void);
 
-/* Unlink `tagpu_<tag>_vk.ppm`, where `tag` is the same string the pass's GL half
-   passes to `tagpu_abshot_end` ("scaffold", "fps", "terr", "feat", "fx", "mark",
-   "posedraw", "gui"). A pass calls this AT THE INSTANT IT LATCHES A CLAIM and
+/* Unlink `tagpu_<tag>_vk.ppm`, where `tag` is one of "scaffold", "fps", "terr",
+   "feat", "fx", "mark", "posedraw", "gui". A pass calls this AT THE INSTANT IT LATCHES A CLAIM and
    nowhere else -- the placement is the whole guarantee, and tagpu_vk.c states it
    at length. Safe on either lane and on a lane that is not up.
 

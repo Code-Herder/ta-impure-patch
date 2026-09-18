@@ -75,10 +75,23 @@ def main():
 
     lever = None
     if len(a.args) == 1:
-        d = pathlib.Path(a.args[0])
-        gl = d / ("tagpu_%s_gl.ppm" % a.which)
-        vk = d / ("tagpu_%s_vk.ppm" % a.which)
-        lever = d / ("tagpu_%s.ab" % a.which)
+        # THE GAMEDIR FORM IS DEAD, AND IT HAS TO SAY SO RATHER THAN SEND THE
+        # OPERATOR LOOKING FOR A FILE NOTHING WRITES. It paired
+        # `tagpu_<tag>_gl.ppm` with `tagpu_<tag>_vk.ppm` -- one capture from each
+        # lane of a single frame, which was route D. The vulkan-only plan's
+        # landing 4d-1 deleted route D and 4d-2 deleted the GL capture, so the
+        # `_gl.ppm` can never appear again and the old refusal message ("did the
+        # lever fire on both lanes?") names a lane that does not exist.
+        # [FOUND BY THE 4d-2 LANDING REVIEW.]
+        raise SystemExit("""vk-ab: the gamedir form is withdrawn.
+  It diffed the GL lane's capture against the Vulkan lane's, and the
+  vulkan-only plan's landings 4d-1/4d-2 deleted the GL half -- no
+  tagpu_<pass>_gl.ppm is written any more, by anything.
+  What replaced it: launch with renderer=vulkan, arm ONE pass's .ab (the seam
+  refuses a frame that several passes drew into), and diff the _vk.ppm against
+  one kept from an earlier BUILD:
+      vk-ab.py <old>/tagpu_<pass>_vk.ppm <new>/tagpu_<pass>_vk.ppm
+  The banked two-lane figures are in research/notes/gpu-status.md.""")
     elif len(a.args) == 2:
         gl, vk = pathlib.Path(a.args[0]), pathlib.Path(a.args[1])
     else:
@@ -86,8 +99,9 @@ def main():
 
     for p in (gl, vk):
         if not p.exists():
-            raise SystemExit("%s is not there -- did `tagpu_%s.ab` fire on both "
-                             "lanes? tagpu.log says." % (p, a.which))
+            raise SystemExit("%s is not there -- did `tagpu_<pass>.ab` fire? "
+                             "tagpu.log says: look for `vk: shot: wrote ...`, "
+                             "and for the refusal lines above it." % p)
 
     # THE CAPTURES MUST BE NEWER THAN THE LEVER THAT ASKED FOR THEM.
     # Existence is not freshness: every way a capture silently does not fire
@@ -206,16 +220,16 @@ def main():
     # or feature pass painting outside the scissor, or over fog its twin
     # refused. An over-draw would have exited 0 and printed the words "the pass
     # agrees with its twin".
-    # The split is still worth printing -- it is what tells an over-draw from
-    # the 4c-1 framing difference -- but it is a thing to READ, not a verdict.
-    # [FROM THE 4c-2 LANDING REVIEW.]
+    # The split is still worth printing -- it is what an over-draw looks like --
+    # but it is a thing to READ, not a verdict.
+    # [FROM THE 4c-2 LANDING REVIEW; the framing case it used to also cover went
+    # with route D in 4d-1, so the reading below is narrower and firmer now.]
     if diff and diff_ink == 0:
-        print("...but 0 of the %d pixels the GL capture DREW." % ink_gl)
-        print("Every difference is a pixel GL left black. Two things do that and")
-        print("they are not the same: the 4c-1 framing (the GL half is the bare")
-        print("world FBO, the Vulkan half is the swapchain image with TA's own")
-        print("frame underneath), and a pass that OVER-DRAWS its twin. This tool")
-        print("cannot tell them apart -- look at the difference image (--out).")
+        print("...but 0 of the %d pixels the FIRST capture DREW." % ink_gl)
+        print("Every difference is a pixel the first one left black, i.e. the")
+        print("second OVER-DRAWS it. On a cross-build diff that is a change in")
+        print("what the pass covers -- a wider line, a looser scissor, fog it no")
+        print("longer refuses. Look at the difference image (--out)." )
     return 0 if diff == 0 else 1
 
 

@@ -138,9 +138,11 @@ typedef struct TAGPU_MKHAND {
     float gw, gh, zoom, zoomCx, zoomCy;
     float fogOrgX, fogOrgY, fogCols, fogRows;
     float ss;                   /* the line width a one-screen-pixel line takes */
-    /* 1 = `tagpu_mark.ab` claimed this frame AND the GL half reached the disk.
-       The Vulkan half is claimed only on that, which is tagpu_abshot.h's rule:
-       a pair where one side never wrote is worse than no pair. */
+    /* 1 on the ONE frame `tagpu_mark.ab` latched its claim and
+       `tagpu_vk_ab_arm` got the `_vk.ppm` target unlinked, so the Vulkan lane
+       captures THAT frame rather than whichever one its own lever poll landed
+       on. It does NOT mean a capture file was written -- since landing 4d-2
+       there is no GL half to write one. */
     int   ab;
     /* THE VIEWPORT THE GL DRAW WAS CLIPPED TO, in game-frame pixels measured
        from the TOP. The consumer needs it for its scissor, and `scissorOn` is

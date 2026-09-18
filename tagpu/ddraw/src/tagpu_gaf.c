@@ -36,7 +36,7 @@ static void glog(const char* s)
 typedef void (APIENTRY* PFN_GENERATEMIPMAP)(GLenum);
 typedef void (APIENTRY* PFN_TEXPARAMETERF)(GLenum, GLenum, GLfloat);
 /* ...and GL 1.0's read-back, which opengl_utils.h does not export either
-   (tagpu_abshot.c and tagpu_overlay.c both fetch it the same way) */
+   (tagpu_overlay.c fetches it the same way) */
 typedef void (APIENTRY* PFN_READPIXELS)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*);
 static PFN_GENERATEMIPMAP x_glGenerateMipmap;
 static PFN_TEXPARAMETERF  x_glTexParameterf;

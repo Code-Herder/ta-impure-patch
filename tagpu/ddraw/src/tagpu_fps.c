@@ -48,20 +48,20 @@
    2026-09-15; making it true would need a frame stamp the two files share, and
    nothing yet needs one.]
 
-   THE A/B'S MACHINERY IS SHARED (tagpu_abshot.h), not this file's. G19e wanted
-   the same black-the-frame-and-read-it-back around a world pass and copying a
-   PPM writer, a state save and an entry-point resolve into a second file was
-   one copy too many -- three more world passes are owed the same. What is left
-   here is the two lines that say WHEN.
+   THE A/B (`tagpu_fps.ab`) IS AN ORACLE, NOT INSTRUMENTATION, and since landing
+   4d-2 what is left of it here is the two lines that say WHEN. The lever latches
+   a claim for one frame, once, until the file is removed; the seam then captures
+   THAT frame from the Vulkan image and `tagpu_vk_ab_arm` has already unlinked
+   the target so the file on the disk is this arming's. Diff it against a capture
+   from another BUILD.
 
-   THE A/B (`tagpu_fps.ab`) IS AN ORACLE, NOT INSTRUMENTATION. With the file
-   present this pass clears the frame to black before it draws, reads the result
-   back to `tagpu_fps_gl.ppm` and latches -- one frame, once, until the lever is
-   removed. Black because the Vulkan lane clears its own image to whatever
-   `color=` says and `color=0,0,0` makes the two backgrounds the same, which is
-   what turns two captures into a pixel comparison. It clears the WHOLE frame on
-   purpose: a readout drawn over the game cannot be compared against anything,
-   because the game is under it. */
+   THERE USED TO BE A GL HALF AND THIS FILE DESCRIBED IT AT LENGTH. Route D ran
+   both backends at once, so this pass cleared the frame to black, drew, read the
+   result back to `tagpu_fps_gl.ppm` through the shared `tagpu_abshot.c`, and the
+   two captures were diffed. 4d-1 deleted route D and 4d-2 deleted that machinery.
+   The one part of the old argument still worth knowing: the clear was BLACK, and
+   `tagpu_vk.on=color=0,0,0` still matters, because a capture is only comparable
+   when the pass sits alone over a known background. */
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -74,7 +74,6 @@
 #define TRIGGER   "tagpu_fps.on"
 #define PKSHOW    "tagpu_packet.show"
 #define ABFILE    "tagpu_fps.ab"      /* the G19d A/B: capture one frame       */
-#define ABOUT     "tagpu_fps_gl.ppm"
 #define POLL      30                  /* frames between trigger polls          */
 #define WINDOW_MS 500u                /* averaging window                      */
 #define MAXCH     48
@@ -176,10 +175,10 @@ static void init_gl(void)
         !x_glUniform2f || !x_glUniform3f || !x_glDisable) {
         flog("fps: missing GL proc"); s_state = 2; return;
     }
-    /* The A/B's entry points are NOT in that test and are not resolved here at
-       all: the readout is a play feature and the oracle is not, so a driver
-       that somehow lacked one of them loses the A/B and keeps the readout.
-       tagpu_abshot.c resolves its own and says which one was missing. */
+    /* (The A/B used to resolve entry points of its own, in tagpu_abshot.c, and
+       deliberately outside this test: the readout is a play feature and the
+       oracle is not. Landing 4d-2 deleted that file; nothing here is owed an
+       entry point for the lever any more.) */
     /* Both are created before either is tested so the cleanup below is one
        path -- mksh returns the shader even when it failed, and a leak here is
        permanent: s_state 2 is never retried inside one GL context. */
@@ -349,18 +348,6 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
        this is the capture frame. */
     int taking = s_ab && !s_abDone;
 
-    /* THE FRAME GOES BLACK FIRST WHEN THE A/B IS ARMED, and only then. The
-       comparison is of this pass's pixels, so everything that is not this pass
-       has to leave the frame -- scissor off, because a scissor left on from the
-       UI layer would clear a rectangle rather than the frame. One frame.
-
-       AND EVERY PIECE OF STATE IT TOUCHES GOES BACK. [FROM REVIEW 2026-09-15.]
-       The clear colour and the scissor enable were left where the capture put
-       them, for the rest of the session, by a lever that exists to measure the
-       renderer and must therefore not change it. They are small leaks -- the
-       other clear sites set their own colour and the scissor rests disabled --
-       and they are exactly the kind of "harmless today" that an A/B taken in
-       six months would be reading. */
     if (gl_draws) {
 
         glUseProgram(s_prog);

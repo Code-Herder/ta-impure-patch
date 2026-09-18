@@ -36,7 +36,9 @@ int  tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
 void tagpu_vk_gui_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                          uint32_t w, uint32_t h);
 
-/* 1 on the frame the GL half captured its own half of the A/B. Consumed. */
+/* 1 on the ONE frame `tagpu_gui.ab` latched its claim and the `_vk.ppm` target
+   was unlinked, so the seam captures THAT frame. It does not mean a file was
+   written -- since landing 4d-2 there is no GL half. Consumed. */
 int  tagpu_vk_gui_ab_frame(void);
 
 /* The owed-teardown protocol every pass on this lane uses: a refusal mid-frame

@@ -140,7 +140,6 @@ static unsigned s_armCheck = 0;
    instances rather than being polled twice on two cadences, so both lanes
    capture the same frame. See tagpu_terr.h and tagpu_vk_terr.c. */
 #define ABFILE   "tagpu_terr.ab"
-#define ABOUT    "tagpu_terr_gl.ppm"
 static int s_ab, s_abDone, s_abFrame;
 static int s_pubHave;                  /* this frame's hand-over is waiting   */
 static TAGPU_TERRHAND s_pub;
@@ -1893,16 +1892,6 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
             glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)s_ncell * ICOMP * 2, s_inst,
                          GL_STREAM_DRAW);
 
-            /* THE FRAME GOES BLACK FIRST WHEN THE A/B IS ARMED, and only then --
-               and the DEPTH buffer goes with it. Terrain happens to be the first
-               thing drawn into this FBO, so the depth clear finds a buffer the
-               native pass has just cleared anyway; asking for it regardless is what
-               makes "both halves start from nothing" a property of the oracle
-               rather than of the draw order. The scissor is put back before the
-               draw (TAGPU_ABSHOT_SCISSOR), because terrain CLIPPED to the viewport
-               is the pass and an unclipped one covers the side panel too.
-               One frame, and the player sees it: nothing is drawn before terrain,
-               so what is missing from it is the engine's own frame underneath. */
             {
 
                 /* opaque, and the far plane of the frame: depth writes ON, no

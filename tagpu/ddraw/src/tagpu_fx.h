@@ -240,9 +240,11 @@ typedef struct TAGPU_FXHAND {
     int   scissorOn;                  /* the GL lane actually enabled it      */
     int   ss;                         /* the FBO's supersample factor         */
 
-    /* 1 on the ONE frame this pass captured `tagpu_fx_gl.ppm` under
-       `tagpu_fx.ab`, so the Vulkan lane captures the SAME frame rather than
-       whichever one its own lever poll landed on. */
+    /* 1 on the ONE frame `tagpu_fx.ab` latched its claim and
+       `tagpu_vk_ab_arm` got the `_vk.ppm` target unlinked, so the Vulkan lane
+       captures THAT frame rather than whichever one its own lever poll landed
+       on. It does NOT mean a capture file was written -- since landing 4d-2
+       there is no GL half to write one. */
     int   ab;
 } TAGPU_FXHAND;
 

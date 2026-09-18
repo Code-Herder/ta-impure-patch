@@ -283,8 +283,7 @@ static int             s_fogCopyCells;
 
 /* the A/B lever, the same shape as every other ported pass's */
 #define PD_ABFILE "tagpu_posedraw.ab"
-#define PD_ABOUT  "tagpu_posedraw_gl.ppm"
-static int          s_ab, s_abDone, s_abFrame;
+static int          s_ab, s_abDone;
 
 /* Grow one of the three arenas. A failure is not an error: the frame simply
    hands nothing over and the Vulkan pass draws nothing, which is a pass that
@@ -997,15 +996,6 @@ static void pd_begin(const TAGPU_PDVIEW* v, int ghostWindow)
         s_recording = s_mirrorWant;
         if (first && s_recording) {
             pd_view_publish(v);
-        /* THE GL HALF OF THE PHASE G A/B (tagpu_abshot.h): black the frame
-           immediately before this pass draws, read it back immediately after.
-           DEPTH too, because these draws test it -- without the depth clear the
-           GL half would be tested against the terrain and the features this
-           frame already put down while the Vulkan half starts from a cleared
-           attachment, and every fragment the two disagree about would read as
-           a port failure. SCISSOR because the native pass clips these draws to
-           the world viewport and measuring them unclipped measures a pass the
-           player never sees. */
         }
         /* THE ARMING, and since landing 4d-2 that is the whole of it -- there
            is no GL half to black the frame for. */
@@ -1167,12 +1157,6 @@ void tagpu_posedraw_end(void)
     if (!s_recording) return;
     s_recording = 0;
 
-    /* THE GL HALF IS READ BACK IMMEDIATELY, before anything later in the frame
-       draws -- the wire, the replacement meshes and the effects are all still
-       to come. `tagpu_abshot_end` returns 1 only when the capture reached the
-       disk, and the Vulkan half may be claimed on nothing else: a stale
-       _gl.ppm from an earlier run would otherwise be diffed against a fresh
-       Vulkan capture of a different frame. */
     /* ONLY THE WINDOW THAT OPENED THE BRACKET CLOSES IT. `s_abDone` alone was
        the test until landing 6's review, and it stopped being enough the moment
        a frame could have more than one window. */
@@ -1436,14 +1420,14 @@ int tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now)
        arrays this file REALLOCATES the moment a frame needs more room than the
        last did, and the records name bake entries tagpu_posebake.c evicts. The
        stale hand-over is cleared as well, so the next frame starts honest. */
-    if (s_pub.frame != now) { s_pubHave = 0; s_abFrame = 0; return 0; }
+    if (s_pub.frame != now) { s_pubHave = 0; return 0; }
     /* THE COUNT IS TAKEN NOW, not when the window closed -- `_end` says why.
        Every GL draw of this frame is behind us at this point, because the
        whole native pass runs earlier in this iteration of render_ogl.c's loop
        than the tagpu_vk_frame that calls this. */
     s_pub.otherDraws = s_other;
     *out = s_pub;
-    s_pubHave = 0; s_abFrame = 0;
+    s_pubHave = 0;
     return 1;
 }
 

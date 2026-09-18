@@ -657,9 +657,11 @@ would not have shown up as a failure — it would have shown up as three landing
      **4d-2 LANDED 2026-09-18** ([gpu-status](gpu-status.html) §2.56): 101 lines in, 599 out,
      `tagpu_abshot.c` and its header among them. It was already unreachable — the captures sat
      behind `gl_draws`, false under `renderer=vulkan` — and 4d-1 is what made it pointless rather
-     than idle. **Every pass already contained the code that survives**: all eight had a second
-     `else if (taking)` branch that merely claims, written in 4b-1..4b-3 for the lane with no GL
-     half, so the deletion is each pass collapsing onto it. The Vulkan half and the eight `.ab`
+     than idle. **Every pass already contained the code that survives**: all eight had a second, claim-only
+     branch written in 4b-1..4b-3 for the lane with no GL half — spelled `else if (taking)` in five
+     and a nested `else` in `mark`, `posedraw` and `gui_surf` — so the deletion is each pass
+     collapsing onto it. (`posedraw`'s flag is `s_abClaim`, not `s_abFrame`; its `s_abFrame` was
+     write-only and went too.) The Vulkan half and the eight `.ab`
      levers stay, per the decision above. **Verified**: the full arm set renders a complete
      1024x768 frame at 0 magenta of 786 432, and `tagpu_terr.ab` alone writes
      `tagpu_terr_vk.ppm` at 2048x1536.

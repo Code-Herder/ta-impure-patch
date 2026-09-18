@@ -1298,18 +1298,14 @@ static int       s_mirWant = 0;        /* the Vulkan pass asked for one       */
 static int       s_mirRec  = 0;        /* ...and this frame is being recorded */
 static unsigned  s_mirLost = 0;        /* frames abandoned for want of room   */
 static int       s_mOther = 0;         /* ops this landing does not carry     */
-/* G19f: THE A/B'S GL HALF. `tagpu_gui.ab` makes this pass draw its composite
-   over a black frame and reads the viewport back, once, so the Vulkan lane can
-   be diffed against it -- tagpu_abshot.h has what an A/B is here.
-   NO DEPTH AND NO SCISSOR FLAG: the composite disables the depth test outright
-   and sets no scissor of its own, so clearing a buffer it never reads and
-   restoring a rectangle it never set would both be changes to the frame for no
-   gain. The clear itself barely matters either -- the composite is a
-   full-viewport quad with blending off, so it writes every pixel it covers --
-   but it is what removes whatever the world passes left under it, which the
-   Vulkan lane does not have. */
+/* G19f: THE A/B LEVER. `tagpu_gui.ab` latches a claim for one frame; the seam
+   captures the Vulkan image on that frame and `tagpu_vk_ab_arm` has already
+   unlinked the target, so the file on the disk is this arming's. Diff it against
+   a capture from another BUILD. (Until landing 4d-2 this lever also made the
+   pass draw its composite over a black frame and read the viewport back, so the
+   two lanes could be diffed against each other; route D went in 4d-1 and that
+   half went with it.) */
 #define AB_FILE  "tagpu_gui.ab"
-#define AB_OUT   "tagpu_gui_gl.ppm"
 static int       s_ab, s_abDone, s_abFrame;
 static int       s_mLayer = 0;         /* draw_layer actually composited      */
 

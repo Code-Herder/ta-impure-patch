@@ -117,7 +117,6 @@ static TAGPU_GAFATLAS s_atlas;
 /* THE A/B LEVER (Phase G / G19e). It re-arms when the file goes away and comes
    back, which is why `touch` on one that is already there does nothing. */
 #define ABFILE   "tagpu_fx.ab"
-#define ABOUT    "tagpu_fx_gl.ppm"
 static int  s_ab, s_abDone, s_abFrame;
 static int  s_pubHave;                 /* this frame's hand-over is waiting   */
 static TAGPU_FXHAND s_pub;
@@ -1246,12 +1245,6 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex,
         if (x_glLineWidth) x_glLineWidth((GLfloat)v->ss);
         x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
-        /* ---- the GL half of the Phase G A/B (tagpu_abshot.h) ----
-           Black the frame and the depth buffer, draw this pass alone, read it
-           back: what the Vulkan half is compared against is then one pass over
-           black against one pass over black. The scissor is put back before the
-           draw, because a world pass CLIPPED to the viewport is the pass and an
-           unclipped one is something else. One frame, and the player sees it. */
         {
 
             /* only the under-layers can sit behind a stamped feature row: the

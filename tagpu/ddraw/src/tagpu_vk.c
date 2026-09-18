@@ -208,8 +208,8 @@
 #define AB_GUI     "tagpu_gui_vk.ppm"
 /* THE ONE LIST OF THEM, in the order `vk_present` selects in (which is the
    order the nested ternary it replaced tested in). The `tag` is the SAME string
-   the pass's GL half passes to `tagpu_abshot_end`, so a pass names its file
-   once, here, and both the write and the arming's unlink read this row.
+   the pass passes to `tagpu_vk_ab_arm`, so a pass names its file once, here,
+   and both the write and the arming's unlink read this row.
    `posedraw`'s file is `AB_UNIT`: the pass is the unit pass and the lever is
    `tagpu_posedraw.ab`, and that mismatch is exactly why this is a table and not
    a `_snprintf` of the tag. */
@@ -627,14 +627,15 @@ static void read_lever(void)
    else. That placement IS the guarantee, and it is why this is not done where
    the capture is recorded.
 
-   WHAT IT BUYS. `tagpu_abshot.h`'s rule is that the Vulkan half of an A/B may
-   be claimed only on a GL capture that reached the disk, because a refused
-   write leaves the PREVIOUS run's file lying there and a half diffed against it
-   reports a capture of a different frame as a port failure. On the vulkan-only
-   lane there is no GL half to read, so the same property is established here
-   instead: after this call the target does not exist, and it comes back only if
-   `tagpu_vk_shot_finish` writes it. Absent means this arming produced no
-   capture; present means this arming's.
+   WHAT IT BUYS, AND IT IS NOW THE WHOLE OF THE GUARANTEE. While route D
+   existed the rule was that a capture may be claimed only on a GL half that
+   reached the disk, because a refused write leaves the PREVIOUS run's file
+   lying there and a half diffed against it reports a capture of a different
+   frame as a port failure. Landings 4d-1 and 4d-2 deleted the GL half, so that
+   property rests entirely on this call: after it the target does not exist, and
+   it comes back only if `tagpu_vk_shot_finish` writes it. Absent means this
+   arming produced no capture; present means this arming's -- which is exactly
+   what a cross-BUILD diff needs to be trustworthy.
 
    WHY HERE AND NOT IN `vk_present`. Because the claim is LATCHED on the gather
    side (`s_abDone = 1`) whether or not the lane ever collects it, and
@@ -2907,18 +2908,27 @@ static int vk_present(void)
                `color=0,0,0`, which exists so the two clears agree.
                [FROM THE 4c-2 LANDING REVIEW.]
 
-               WHAT STILL DEPENDS ON THIS, AFTER 4c-3: the THREE UI passes.
-               A world capture no longer reads this image at all -- it reads the
-               offscreen world target, which TA's frame never reaches -- so for
-               terr, feat, posedraw, fx and mark the line is now belt beside
-               braces. The scaffold, GUI and readout captures are still this
-               image, and their GL halves are still the default framebuffer
-               blacked by `tagpu_abshot_begin`, so for them it is the whole
-               argument and measured as such: the GUI A/B is 0 px of 307 200
-               with this line in (2026-09-18). Narrowing it to those three would
-               buy a more normal-looking picture on a frame nobody is watching,
-               at the cost of a second condition on the one statement that makes
-               a measured frame a measurement. */
+               WHAT STILL DEPENDS ON THIS, AFTER 4c-3 AND 4d-2 -- and the
+               reason changed under it, so read this rather than the shape.
+               A world capture no longer reads this image at all: it reads the
+               offscreen world target, which TA's frame never reaches. The
+               scaffold, GUI and readout captures DO still read this image, and
+               what a capture has to be is THE PASS ALONE OVER THE CLEAR
+               COLOUR -- that is what makes it comparable to anything, whether
+               the other side of the comparison is another lane or another
+               BUILD. TA's own frame underneath turns every uncovered pixel into
+               a difference and every blended fragment into a composite over the
+               game instead of over the clear, which is exactly the regression
+               4c-1 introduced and 4c-2's review caught.
+
+               THE OLD REASON IS GONE AND DID NOT MATTER. This used to argue
+               from the GL half -- "their GL halves are still the default
+               framebuffer blacked by `tagpu_abshot_begin`" -- and landing 4d-2
+               deleted that function with the rest of the GL capture. The line
+               stays because the argument above never needed a second lane:
+               a capture of one pass over a clear is the thing being measured.
+               [THE PREMISE WAS CAUGHT BY THE 4d-2 LANDING REVIEW.] Measured
+               with the line in: the GUI A/B is 0 px of 307 200 (2026-09-18). */
             if (draw_surf && nclaim == 0)
                 tagpu_vk_surf_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             /* THE WORLD. With a target it was drawn into it above and this is
