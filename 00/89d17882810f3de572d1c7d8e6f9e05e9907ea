@@ -1,0 +1,66 @@
+landing-review: landing 10 (the duplicate engine-frame upload), level medium, 2026-09-18
+
+Range main...HEAD at dcbe2bb..0089d17, main at 5896b1f; a dedicated read-only
+reviewer with the pristine build and objdump. NO HIGH findings. Three MEDIUM,
+five LOW, four NIT. All twelve verified against the code before acting.
+
+M1 -- "the second bound on the engine frame's dimensions went with it" wrong in
+the commit message and in two notes. SURF_MAXDIM 8192 still stands at
+tagpu_vk_gui.c:1675 and is still downstream of TAGPU_SURF_MAXDIM 4096, so it
+still bounds nothing. What went is what it protected: the mk_image and the
+memcpy sized by it. Corrected in gpu-status.md and roadmap.md.
+
+M2 -- the plan's own correction to item 10 ended in two sentences the landing
+disproved (that landing 10 would delete the layer semantics, and that the
+786 432 bytes a frame are not waste), and the paragraph I had written above it
+endorsed the whole correction wholesale. Verified against what landed: neither
+uSurf nor the layer semantics went, and the SECOND copy WAS waste. The two
+sentences are struck in place as a quotation with the correction under them,
+and the endorsement is narrowed to the part that still holds.
+
+M3 -- A REAL REGRESSION THIS LANDING INTRODUCED, and the most valuable finding
+of the twelve. Borrowing tagpu_vk_surf.c's image coupled the whole UI composite
+to that pass's ST_REFUSED latch (set :584 on a slot allocation failure,
+deliberately preserved by tagpu_vk_surf_down at :796, therefore permanent for
+the process). One failed vkCreateImage under VRAM pressure would have taken the
+panels, the minimap and the cursor for the session, where before the landing
+only the bottom layer stopped. Verified by reading both paths. My own survey had
+considered the build-time R8_UNORM refusal and NOT the runtime allocation path.
+Fixed with a three-way check: no engine frame (refuse, as before) / a frame the
+surface pass cannot lend (composite with the guard and the strict harness
+disarmed, said once) / a frame it can (borrow).
+
+LOW 4 -- the re-checked dimension bound in tagpu_vk_surf_prepare returned
+without clearing haveSerial, leaving a stale slot addressable through the new
+borrow and contradicting the header's own validity statement. It invalidates now.
+
+LOW 5 -- folded into M3's test: LAY_FS clamps its fetch to the twin's size and
+then texelFetches an image sized by the primary, so a primary smaller than the
+twin read out of range. Predates this landing; bounded by it now.
+
+LOW 6 -- "on every frame the surface changes" wrong: the upload ran on EVERY
+frame. LOW 7 -- the live hazard note at :5458 named the now-dead s_engImg, and
+the hazard is bounded by M3's new test. LOW 8 -- reframed from "a duplicate
+upload nobody had noticed" to finishing the ownership move the plan's own 4c
+section described and left half-done.
+
+NIT 9 (header block above the teardown comment), 10 (the passes do not share a
+sampler, and texelFetch ignores samplers anyway), 11 (cite :399/:407, not :398),
+12 (uGuard on this lane comes from the hand-over at tagpu_gui_surf.c:2670 via
+have_engine_frame at :807-810; the cited :2606 is the GL lane's uniform and is
+dead here -- the conclusion survived, the cite did not).
+
+Two rendering defects the wiki showed afterwards, neither of them findings of
+the review: plan items 10 and 11 indent continuations four spaces where 1-9 use
+three, which is python-markdown's code threshold, so 118 lines were shipping as
+literal source; and `~~` renders as tildes because the builder loads no
+strikethrough extension. Both fixed here. 80 other `~~` occurrences across 17
+notes are still rendering as tildes -- corpus-wide, pre-existing, not this
+landing's to fix.
+
+Re-verified after the fixes by running it: a build A/B over the shell, three
+captures each, cross-build 180-188 differing pixels against 182-186 within main
+and 183-187 within this branch. noeng=0, skipped=0, overflows=0, fps=60.0, the
+in-game frame stable to 0 px, zero "no image to lend" lines.
+
+Findings acted on in e99ff63.
