@@ -469,6 +469,36 @@ would not have shown up as a failure — it would have shown up as three landing
      two of the three blind spots landing 1 named: `ss=2` has no target on the Vulkan side, and
      `tagpu_gui.off` leaves no picture because TA's surface reaches the frame only through the GUI
      pass's hand-over.
+
+     **WHAT THE CODE SAYS 4c IS, read out of it after 4b-3 landed [2026-09-18]. Facts first:**
+
+     * **The GL lane's `ss` is two FBOs and a box-downsample.** `tagpu_native.c:807-808` makes
+       `s_fbo` (colour `s_colTex` + depth `s_depTex`) at `ss ×` the game size and `s_fbo2`
+       (`s_colTex2`/`s_depTex2`) at 1×; the resolve is a LINEAR quad, 2× → 1× (`:635`). `ss` is
+       `s_ss ? 2 : 1` (`:3266`) and `devres` can raise it to `ceil(k)` up to `TAGPU_SS_MAX`,
+       compositing straight out of the 2× target instead of resolving.
+     * **The Vulkan lane has no offscreen world target at all.** One render pass
+       (`tagpu_vk.c:1727`), attachments `[swapchain image, depth]`, one framebuffer per swapchain
+       image (`:1934`), and every ported pass draws straight into the swapchain image at client
+       resolution. The only `ss` on that side is a `uSS` uniform that scales line widths.
+     * **The swapchain image's colour attachment is `LOAD_OP_LOAD` from `TRANSFER_DST_OPTIMAL`**,
+       because `vkCmdClearColorImage` (`:2747`) fills it with the lever's colour immediately
+       before the pass begins. **That clear is the slot TA's surface belongs in** — it is the
+       backend's own pre-pass transfer and the exact analogue of the GL lane uploading and
+       compositing TA's surface before any pass runs.
+     * **The machinery for the resolve already exists, in the wrong owner.** `tagpu_vk_gui.c`
+       keeps `s_engImg` (the engine's indexed surface, `VK_FORMAT_R8_UNORM`, `:1977`) and
+       `s_palImg` (256×1 RGBA, `:1964`) and uploads both from the GUI hand-over every frame
+       (`:1818`, `:1983`). So the second half of 4c is largely an **ownership move**, not new
+       machinery: the surface and the palette become the backend's, uploaded before any pass and
+       independent of `tagpu_gui.on`, and the GUI twin reads what the backend already has.
+
+     **Proposed split, on the seam those facts have — not yet confirmed by doing it:** *4c-1*
+     TA's surface (the bottom layer; closes `tagpu_gui.off`), *4c-2* the `ss×` target and its
+     resolve (closes `ss=2`). They are independent — one changes what is underneath the world,
+     the other changes where the world draws — and each is something that can be run and shown.
+     4c also owns the `s_curDrew` ordering gap 4b-3 left named (gpu-status §2.51), because the
+     fix is `tagpu_cursown_publish` moving after the frame it reports.
    * **4d — the deletion.** Route D's window, `tagpu_vk_wndproc`, `WM_TAGPU_VK` and the geometry
      tracking, once 4b's figures are banked. **4a made route D unreachable rather than deleted on
      purpose**, so the control above stays available until then: the same build answers both
