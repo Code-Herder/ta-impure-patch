@@ -1329,12 +1329,31 @@ Back to the filed list:
      dependence on what is already in the box. Every other kind in landing 8 replaces *published
      bytes* with *a description of a draw*; this one's draw READS the surface it writes, so the
      Vulkan lane would have to sample its own twin and write it back — a different mechanism from
-     8a/8b/8c, not a fourth instance of the same one. `OP_SCALE` is a scaled blit and probably
-     belongs with `PK_SPRITE` rather than with any of these. **Whether 8d is one landing, two, or
+     8a/8b/8c, not a fourth instance of the same one. **`OP_SCALE` IS NOT A SCALED BLIT AND CANNOT GO
+     WITH `PK_SPRITE`** — this entry said it could until 2026-09-18, and the engine map already
+     disagreed. `before_scale` hooks **`0x4C7580 GAF_DrawTransformed(ctx, src, int xy[6],
+     int uv[6])`**, a **textured TRIANGLE**: three screen vertices and three texture coordinates
+     (measured `(214,94)(233,94)(233,113)` with uv `(1,1)(31,1)(31,31)`; it draws the option
+     screens' backdrop, *"which is why that region has slanted edges"*). `PK_SPRITE`'s contract is
+     *a plain keyed GAF blit* — an axis-aligned QUAD with a resolved atlas rect — and a triangle
+     with arbitrary UVs is not one. The op's recorded box is the vertices' bounding box, and a
+     triangle covers about half of it. **Not a bug today** (it publishes `PK_PIXELS`, whose bytes
+     are exact), but unportable by every mechanism landing 8 has: the clear path draws
+     axis-aligned constants and the sprite path draws quads. It needs a vertex buffer and a
+     pipeline the UI lane does not have. **6 967 ops** in the measured game. **Whether 8d is one landing, two, or
      a decision to leave `OP_FRAME` as `PK_PIXELS` is open**, and that last option is a real one:
      a tint of the destination is the one case where publishing the destination's bytes is not
      obviously the wrong answer. [The framed box's nature was established by landing 8a's review;
      before it this entry said "three fills", which is what the engine map had said since G15a.]
+
+   **AND THE PATTERN BEHIND ALL THREE CORRECTIONS, SO IT IS NOT REDISCOVERED A FOURTH TIME.**
+   `0x4BF4D0` was filed as "three fills" and is a shade; `OP_RECT` was filed as "the volume" and is
+   99.7 % a tint; `OP_SCALE` was filed as "a scaled blit" and is a textured triangle. **The op
+   kinds were named from the OBSERVER's point of view, and the observer sees a box** — every leaf
+   is recorded as a rectangle, because a rectangle is what the census needed. The name therefore
+   describes the RECORD and not the engine function, and the only cure is to read the function
+   before planning around its name. 8b's `focus`/`rect` split and 8c's `line`/`diag` split are the
+   same move twice: give the thing its own kind so the census counts it and the name stops lying.
 
    **THE GATE'S SHAPE AFTER 8a AND 8b, WHICH IS NOT THE SHAPE IT WAS FILED IN.** Two landings in,
    the ops split into two classes rather than five kinds, and only one class is what landing 8
