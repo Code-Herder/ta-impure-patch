@@ -493,6 +493,30 @@ would not have shown up as a failure — it would have shown up as three landing
        machinery: the surface and the palette become the backend's, uploaded before any pass and
        independent of `tagpu_gui.on`, and the GUI twin reads what the backend already has.
 
+     **AND BOTH HALVES ALREADY HAVE THEIR SHADER WRITTEN ON THE GL SIDE, which is the thing
+     that de-risks 4c most** — `tools/spirv-gen.py`'s whole rule is that the GL lane's GLSL is
+     the one copy and the Vulkan edition is generated from it, so neither half needs a shader
+     invented for it:
+
+     * **The `ss` resolve is already generated.** `PROGRAMS` in `tools/spirv-gen.py:160` carries
+       `("native_d", "tagpu_native::DVS", "tagpu_native::DFS")`, and `s_dprog` is declared beside
+       `s_fbo2`/`s_colTex2`/`s_depTex2` (`tagpu_native.c:357`) — it *is* the 2× → 1× downsample.
+       So `inc/spirv/tagpu_native.spv.h` already holds the resolve 4c-2 needs; the Vulkan work is
+       the target and the plumbing, not the maths.
+     * **TA's surface has one too, in the fork's own header.** `render_ogl.c:260` builds
+       `g_ogl.main_program` from `PASSTHROUGH_VERT_SHADER` + `PALETTE_FRAG_SHADER`
+       (`inc/openglshader.h:42`, `:60`) — sample the R8 index, then
+       `texture(PaletteTexture, vec2(pIndex.r * (255.0/256.0) + (0.5/256.0), 0))`. That pair IS
+       the base layer the GL lane draws before anything of ours, which is exactly what 4c-1 has
+       to reproduce. It is not in `SOURCES` yet, but `RESTORE_HDR` shows a header can be.
+       Known risk: those two are `#version 130` and the generator's transform is documented as
+       GL-330-to-Vulkan, so the attribute/binding handling is where this will first bite.
+
+     **The toolchain is present.** `tools/glslang/bin/glslang` is vendored at the pinned 16.6.0
+     (`tools/glslang-vendor.json`) in the MAIN checkout — it is gitignored and not on `PATH`, so
+     `command -v glslang` says MISSING and means nothing. `tools/spirv-gen.py --check` reports
+     *47 shaders, 32 programs, headers current*.
+
      **Proposed split, on the seam those facts have — not yet confirmed by doing it:** *4c-1*
      TA's surface (the bottom layer; closes `tagpu_gui.off`), *4c-2* the `ss×` target and its
      resolve (closes `ss=2`). They are independent — one changes what is underneath the world,
