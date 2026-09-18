@@ -1,0 +1,41 @@
+landing-review: model=claude-opus-5 effort=high reviewers=1 range=main...ef62396 findings=6 acted=5 recorded=1 rejected=0 fixes=f328b01 docs=f328b01
+One reviewer at high, read-only, fresh context. CLAUDE.md's cross-thread clause
+applies: this landing makes the render thread enter g_ddraw.cs and copy the
+engine's primary on a lane that never did. Every finding verified against the
+code before acting; none rejected.
+
+No HIGH findings. The reviewer independently confirmed, against
+`git show main:...`, that the three restructured functions reduce to their
+pre-landing expressions when gl_draws == 1; that all 48 gate sites do; that
+twin_make's `st` and twin_string's `gtex` are written on every path that reads
+them; and that no ungated GL is reachable on route E across 313 call sites in
+21 functions, plus the two modules the landing newly reaches (tagpu_gaf.c,
+tagpu_text.c). It also verified the primary copy's critical section on four
+counts -- IDirectDrawSurface.c NULLs g_ddraw.primary inside the section and
+frees after it; dds_Flip swaps This->surface inside it; the allocation bound
+covers (h-1)*pitch + w given the pitch >= w test; and there is no lock nesting
+or inversion on either route -- and that f->surface_tex was not load-bearing
+for anything the copy does not re-establish itself.
+
+MEDIUM (acted): s_hudS written only inside draw_layer's GL block, so the
+heartbeat's s= was false on route E for the life of the process. Hoisted above
+the gate and shared with the hand-over's hud[]; measured s=1.598 on both lanes
+with tagpu_hud.on=scale=200, where the vulkan lane read 1.000 before.
+MEDIUM (acted): gpu-status §2.51 miscounted the head-returns as twelve; seven
+return at the head and the other five are inert for two further reasons. The
+section now carries all four mechanisms and they sum to 21.
+LOW (acted): a duplicated comment fragment in draw_layer; the include comment
+for tagpu_abshot.h displaced onto tagpu_vk.h; atlas_setup()'s memset dropping
+s_atlas.mirror and .mirrorRgb, which tagpu_gaf_atlas_lost keeps across a
+context loss -- pre-existing, but the landing extracted the code and claimed
+idempotence, so tagpu_gaf_atlas_free_buffers() now hands them back.
+LOW (recorded, not patched): s_curDrew on route E means "the record survived to
+draw_layer's tail", not "the twin composited" -- tagpu_vk_gui_prepare can still
+refuse the frame and tagpu_cursown_publish runs before tagpu_vk_frame in the
+same iteration. Closing it by construction is the publish moving after the
+frame it reports, which changes what the two threads exchange; that is 4c's
+work with the rest of the present's ordering. Carried as a named gap in §2.51
+"What is NOT covered" and in the comment at the site.
+
+Re-measured after the fixes: shell whole-frame 0 px of 307 200 on all three
+comparisons; both lanes 0 faults in game.
