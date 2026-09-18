@@ -159,6 +159,13 @@ int tagpu_vk_owns_present(void);
    which is the exact failure the unlink exists to prevent. */
 int tagpu_vk_ab_arm(const char* tag);
 
+/* The bound device's `maxImageDimension2D`, or 0 while no device is up --
+   GL_MAX_TEXTURE_SIZE's counterpart for a ported pass sizing an atlas.
+   0 MEANS "NOT YET", NEVER A LIMIT: the lane takes ~200 ms to come up while the
+   gathers run from the first frame, so a caller must refuse the frame and ask
+   again rather than treat 0 as a bound. */
+int tagpu_vk_max_image_dim(void);
+
 /* 1 when the lane has given up (ST_FAILED) -- a fact the backend can act on
    rather than a frame count it has to guess.
 

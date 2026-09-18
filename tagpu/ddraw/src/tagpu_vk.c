@@ -1248,6 +1248,32 @@ static LONG lane_state(void)
     return InterlockedCompareExchange(&s_state, 0, 0);
 }
 
+/* THE DEVICE'S LARGEST 2D IMAGE, or 0 while there is no device yet.
+   `GL_MAX_TEXTURE_SIZE`'s counterpart, and a ported pass needs it for the same
+   reason the GL one did: an atlas is sized against the limit of the device that
+   will sample it, and a pass that guessed would either waste memory or build
+   something the driver refuses. Asked of the device we actually BOUND, not of
+   row 0 of the enumeration -- the player can pick another.
+
+   0 IS A REFUSAL AND NOT A DEFAULT. A caller must treat it as "not yet" and try
+   again on a later frame, never as a limit: the lane takes ~200 ms to come up
+   and the gathers run from the first frame, so a pass that read 0 as a bound
+   would build a zero-row atlas and cache it for the life of the process. That
+   is measured, not hypothetical -- it is what `terr: atlas built 2176x0 ... 0
+   kept` was. [The vulkan-only plan, landing 4b-2.] */
+int tagpu_vk_max_image_dim(void)
+{
+    static int cached;
+    VkPhysicalDeviceProperties p;
+    if (cached > 0) return cached;
+    if (!s_vk.pd || lane_state() != ST_READY) return 0;
+    vkGetPhysicalDeviceProperties(s_vk.pd, &p);
+    if (p.limits.maxImageDimension2D > 0x7FFFFFFFu) return 0;
+    cached = (int)p.limits.maxImageDimension2D;
+    return cached;
+}
+
+
 /* PUT A LANE THAT FAILED BACK TO ST_OFF so the next frame brings it up again.
    The caller owns the policy -- how many times is worth trying -- because what
    to do about a dead lane is a property of the backend and not of the seam.

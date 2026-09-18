@@ -742,17 +742,24 @@ static void build_height(const char* ta, unsigned frame)
         for (c = 0; c < w; c++)
             buf[(size_t)r * w + c] =
                 *(const unsigned char*)(grid + ((size_t)r * w + c) * FT_STRIDE + FT_HEIGHT);
-    if (!s_hTex) {
-        glGenTextures(1, &s_hTex);
-        glBindTexture(GL_TEXTURE_2D, s_hTex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    } else glBindTexture(GL_TEXTURE_2D, s_hTex);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, buf);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    /* THE TEXTURE IS GL; THE GRID IS THE PASS -- `buf` is the mirror the comment
+       below keeps, and `s_hW`/`s_hH` reach the twin through the hand-over's
+       `hDimW`/`hDimH`. Gated because with no context every `x_gl*` in this file
+       is NULL and the call is to address 0. [Landing 4b-2, measured: an access
+       violation at 0023:00000000 straight after `terr: atlas built`.] */
+    if (!tagpu_vk_owns_present()) {
+        if (!s_hTex) {
+            glGenTextures(1, &s_hTex);
+            glBindTexture(GL_TEXTURE_2D, s_hTex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        } else glBindTexture(GL_TEXTURE_2D, s_hTex);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, buf);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
     build_hills(buf, w, h);          /* TODO: unconditional -- 19 MB even when
                                         terrainshadow=0, which is the default.
                                         See build_hills' header. */
@@ -831,20 +838,26 @@ static void build_hills(const unsigned char* buf, int w, int h)
             ib[k++] = i00; ib[k++] = i10; ib[k++] = i01;
             ib[k++] = i11; ib[k++] = i01; ib[k++] = i10;
         }
-    if (!s_hVao) {
-        glGenVertexArrays(1, &s_hVao);
-        glGenBuffers(1, &s_hVbo);
-        glGenBuffers(1, &s_hIbo);
+    /* THE VAO AND THE TWO BUFFERS ARE GL; THE MESH IS THE PASS. `vb` and `ib`
+       are the mirror the comment below keeps for a second backend, and
+       `s_hMeshSerial` is what its consumer checks -- so the arrays are built on
+       either lane and only the upload stands down. [Landing 4b-2.] */
+    if (!tagpu_vk_owns_present()) {
+        if (!s_hVao) {
+            glGenVertexArrays(1, &s_hVao);
+            glGenBuffers(1, &s_hVbo);
+            glGenBuffers(1, &s_hIbo);
+        }
+        glBindVertexArray(s_hVao);
+        glBindBuffer(GL_ARRAY_BUFFER, s_hVbo);
+        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(nv * 3 * sizeof(float)), vb, GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 12, (void*)0);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, s_hIbo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(ni * sizeof(unsigned)), ib, GL_STATIC_DRAW);
+        glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
     }
-    glBindVertexArray(s_hVao);
-    glBindBuffer(GL_ARRAY_BUFFER, s_hVbo);
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(nv * 3 * sizeof(float)), vb, GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 12, (void*)0);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, s_hIbo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(ni * sizeof(unsigned)), ib, GL_STATIC_DRAW);
-    glBindVertexArray(0);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
     /* THE MIRROR IS THE BUFFER, exactly as the atlas's and the height grid's:
        the memory the two glBufferData calls above were handed, kept rather
        than freed, and only while the Vulkan lane is armed. Every exit above
@@ -974,22 +987,29 @@ static int ensure_atlas(const char* ta)
         memcpy(cell + (size_t)(CELL_PITCH - 1) * ATLAS_W,               /* bottom */
                dst + (size_t)(TILE_PX - 1) * ATLAS_W - CELL_BORDER, CELL_PITCH);
     }
-    if (!s_atlasTex) {
-        glGenTextures(1, &s_atlasTex);
-        glBindTexture(GL_TEXTURE_2D, s_atlasTex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    } else {
-        glBindTexture(GL_TEXTURE_2D, s_atlasTex);
+    /* THE TEXTURE IS GL; THE ATLAS IS THE PASS. Everything above built `buf`,
+       which the comment below explains is the mirror a second backend samples,
+       and it is built the same way on either lane. Only the upload stands down
+       under `renderer=vulkan`, where the Vulkan twin uploads the same bytes
+       into an image of its own. [The vulkan-only plan, landing 4b-2.] */
+    if (!tagpu_vk_owns_present()) {
+        if (!s_atlasTex) {
+            glGenTextures(1, &s_atlasTex);
+            glBindTexture(GL_TEXTURE_2D, s_atlasTex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        } else {
+            glBindTexture(GL_TEXTURE_2D, s_atlasTex);
+        }
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        /* always re-spec rather than sub-image: no init flag can then survive a
+           context reset and leave the texture storageless, which reads as 0 in
+           every sample (the failure that cost G13c an hour) */
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, ATLAS_W, h, 0, GL_RED, GL_UNSIGNED_BYTE, buf);
+        glBindTexture(GL_TEXTURE_2D, 0);
     }
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    /* always re-spec rather than sub-image: no init flag can then survive a
-       context reset and leave the texture storageless, which reads as 0 in
-       every sample (the failure that cost G13c an hour) */
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, ATLAS_W, h, 0, GL_RED, GL_UNSIGNED_BYTE, buf);
-    glBindTexture(GL_TEXTURE_2D, 0);
     /* THE MIRROR IS THE BUFFER, NOT A COPY OF IT. Keeping `buf` here rather
        than freeing it is the whole of this pass's answer to "how does a second
        backend get these texels" (tagpu_terr.h): it is correct from the instant
@@ -1340,8 +1360,32 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
 
     if (s_armed != 1) return terr_bail();
     if (!ptr_ok(ta)) return terr_bail();
-    if (s_state == 0) init_gl();
-    if (s_state != 1) return terr_bail();
+    /* THE GATHER IS NOT API-INDEPENDENT AND THIS IS WHERE IT SHOWED. It builds
+       its own GL program on first sight, and `init_gl` resolves entry points --
+       so on the vulkan-only lane it logged `terr: missing GL proc`, latched
+       `s_state = 2` and killed the pass for the process, gather included.
+       Measured 2026-09-18, by running it: the hand-over never fired and the
+       capture's target was not even unlinked. `ensure_atlas` stays on both
+       lanes -- it builds the tile mirror the hand-over carries, and gates its
+       own upload. [The vulkan-only plan, landing 4b-2.] */
+    if (!tagpu_vk_owns_present()) {
+        if (s_state == 0) init_gl();
+        if (s_state != 1) return terr_bail();
+    } else if (s_maxTex <= 0) {
+        /* AND THE ATLAS BOUND IS A DEVICE LIMIT, so it is asked of the device
+           that will sample it. `init_gl` reads GL_MAX_TEXTURE_SIZE into
+           `s_maxTex`; with no GL context that never happened and `s_maxTex`
+           stayed 0, so `ensure_atlas` kept `s_maxTex / CELL_PITCH` = 0 rows and
+           cached a zero-row atlas for the life of the process.
+           REFUSED RATHER THAN GUESSED while the lane is still coming up: 0 from
+           `tagpu_vk_max_image_dim` means "no device yet", the gather hands the
+           draw back for those few frames exactly as it does for any other
+           missing input, and the atlas is built once the real limit is known.
+           Measured 2026-09-18: `terr: atlas built 2176x0 ... 0 kept`. */
+        int m = tagpu_vk_max_image_dim();
+        if (m <= 0) return terr_bail();
+        s_maxTex = m;
+    }
     if (!ensure_atlas(ta)) return terr_bail();
     ensure_height(ta, v->frame_counter);
     restore_step(ta);

@@ -403,11 +403,11 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
 
        THE GATE MOVES INWARD, one commit per pass: once a pass can gather
        without drawing, its own draw block takes this test and the call here
-       loses it. `tagpu_scaffold_frame` and `tagpu_fps_present` have both made
-       that move -- they are called unconditionally below and gate their own
-       uploads and draws -- so this variable now guards two passes, not four,
-       and will guard none of them when 4b is finished. Read once per frame so
-       those that remain cannot disagree. [The vulkan-only plan, landing 4b.] */
+       loses it. `tagpu_scaffold_frame`, `tagpu_fps_present` and
+       `tagpu_native_frame` have all made that move -- they are called
+       unconditionally below and gate their own uploads and draws -- so this
+       variable guards ONE pass now, `tagpu_gui_present`, and will guard none
+       when 4b is finished. [The vulkan-only plan, landings 4b-1 and 4b-2.] */
     const int gl_draws = !tagpu_vk_owns_present();
 
     /* the palette the screen is shown with, once for every pass that resolves
@@ -444,8 +444,13 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        FRAME'S PACKET here, for the whole of the GL UI's render half. */
     tagpu_gui_cursor_frame(f->packet);
 
-    /* G12b: native unit pass (tagpu_native.on) — needs this frame's scaffold */
-    if (gl_draws) tagpu_native_frame(f);
+    /* G12b: native unit pass (tagpu_native.on) — needs this frame's scaffold.
+       CALLED ON BOTH LANES since 4b-2: its arm poll, view, fog and palette
+       copies, four world gathers and vertex emission are the pass, and it gates
+       its own GL. On the vulkan-only lane it stops after the gathers and calls
+       the renders that have been taught to hand over without drawing — the GL
+       world composite has no counterpart there until 4c. */
+    tagpu_native_frame(f);
     oerr("native");
 
     /* Phase E: the UI layer — the presented surface's twin, drawn over the

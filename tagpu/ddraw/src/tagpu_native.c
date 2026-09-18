@@ -86,6 +86,7 @@
 #include "tagpu_owndraw.h"   /* tagpu_owndraw_structshadow_ours: who draws a building's shadow */
 #include "tagpu_reclaim.h"   /* the teardown fence this file's template reads stand behind */
 #include "tagpu_posebake.h"
+#include "tagpu_vk.h"        /* tagpu_vk_owns_present: is there a GL lane at all? */
 #include "tagpu_posedraw.h"  /* G16 step 4: the per-type geometry bake and its caches */
 #include "tagpu_lerp.h"      /* smooth-motion.md option A: the pose between two sim ticks */
 #include "crc32.h"          /* the tagpu_posecrc.on gate oracle */
@@ -2480,7 +2481,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     tagpu_lerp_frame(f->frame_counter, f->packet, f->packet_prev);
     if ((f->frame_counter % 30) == 0)
         s_poseCrcOn = GetFileAttributesA("tagpu_posecrc.on") != INVALID_FILE_ATTRIBUTES;
-    if (s_state == 2) return;
+    /* WHETHER THIS PASS DRAWS, or only gathers and hands over. Under
+       `renderer=vulkan` there is no GL context in the process: the arm poll, the
+       view, the fog and palette COPIES, the four gathers and the vertex
+       emission are the pass and run either way, and the composite -- the world
+       FBO, the shadow map, the key/fill inversion and the resolve -- stands
+       down. `s_state` is the GL program's state and is only asked where GL
+       draws. [The vulkan-only plan, landing 4b-2.] */
+    const int gl_draws = !tagpu_vk_owns_present();
+    if (gl_draws && s_state == 2) return;
     if (s_armed < 0 || (f->frame_counter % 30) == 0) {
         int was = s_armed;
         /* NEVER PUBLISH "DISARMED" WHILE RE-READING. `s_armed` used to be zeroed
@@ -2631,8 +2640,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        if it is still being asked */
     tagpu_order_armed(f->frame_counter);
     if (!s_armed && !fxOn && !sfxOn && !featOn && !terrOn && !markOn) return;
-    if (s_state == 0) init_gl();
-    if (s_state != 1 || !tagpu_r3d_ensure()) return;
+    /* BOTH OF THESE ARE GL AND ONLY GL. `init_gl` builds this pass's programs
+       and FBOs; `tagpu_r3d_ensure` builds the 3DO atlas and LUT textures ("init
+       on demand (GL context current)", where it is defined). Asking either on
+       the vulkan-only lane would refuse the whole pass, gathers included, on the
+       one lane the hand-overs are for. */
+    if (gl_draws) {
+        if (s_state == 0) init_gl();
+        if (s_state != 1 || !tagpu_r3d_ensure()) return;
+    }
 
     char* ta = *(char**)TA_MAINPP;
     if (!ptr_ok(ta)) return;
@@ -2805,16 +2821,24 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             }
         }
         if (buf && cols > 0 && rows > 0) {
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            x_glActiveTexture(GL_TEXTURE4);
-            glBindTexture(GL_TEXTURE_2D, s_fogTex);
-            if (cols != s_fogCols || rows != s_fogRows)
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, cols, rows, 0,
-                             GL_RG, GL_UNSIGNED_BYTE, buf);
-            else
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cols, rows,
-                                GL_RG, GL_UNSIGNED_BYTE, buf);
-            x_glActiveTexture(GL_TEXTURE0);
+            /* THE UPLOAD IS GL; WHAT FOLLOWS IT IS THE PASS. The four statics
+               below are what `tagpu_terr_render`'s hand-over carries to the
+               Vulkan twin (`fogGrid`/`fogGridCols`/`fogGridRows` there), so the
+               gate is around the texture calls and not around the block.
+               The size test reads `s_fogCols`/`s_fogRows` BEFORE they are
+               updated, which is why it is inside the gate with them. */
+            if (gl_draws) {
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+                x_glActiveTexture(GL_TEXTURE4);
+                glBindTexture(GL_TEXTURE_2D, s_fogTex);
+                if (cols != s_fogCols || rows != s_fogRows)
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, cols, rows, 0,
+                                 GL_RG, GL_UNSIGNED_BYTE, buf);
+                else
+                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cols, rows,
+                                    GL_RG, GL_UNSIGNED_BYTE, buf);
+                x_glActiveTexture(GL_TEXTURE0);
+            }
             s_fogGrid = buf; s_fogCols = cols; s_fogRows = rows;
             s_fogCells = bufCells;
             s_fogOrgX = orgX;
@@ -2849,16 +2873,19 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 /* 256 bytes: always re-spec, so no init flag can survive a
                    context reset and leave the texture storageless (which has
                    the same all-black failure mode) */
-                x_glActiveTexture(GL_TEXTURE5);
-                glBindTexture(GL_TEXTURE_2D, s_fogLutTex);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, 256, 1, 0,
-                             GL_RED, GL_UNSIGNED_BYTE, t);
-                x_glActiveTexture(GL_TEXTURE0);
+                if (gl_draws) {
+                    x_glActiveTexture(GL_TEXTURE5);
+                    glBindTexture(GL_TEXTURE_2D, s_fogLutTex);
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, 256, 1, 0,
+                                 GL_RED, GL_UNSIGNED_BYTE, t);
+                    x_glActiveTexture(GL_TEXTURE0);
+                }
                 /* ...and the same 256 bytes kept where a second backend can
                    reach them (Phase G / G19e). The identity fallback above is
                    part of the pass's input, not a detail of the GL upload, so
                    what is published is what was uploaded and never a second
-                   construction of it. */
+                   construction of it -- and on the vulkan-only lane, where
+                   nothing was uploaded, it is still the one construction. */
                 memcpy(s_fogLutBytes, t, 256);
                 s_fogLutHave = 1;
             }
@@ -2868,7 +2895,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* ---- the live palette (re-read per frame; it does NOT cycle -- terr.c),
        and this is the ONLY palette texture the world has: terrain, features,
        effects, markers and the replacement meshes are all handed s_palTex. ---- */
-    {
+    /* GL THROUGHOUT, unlike the two above: the bytes a second backend needs are
+       `tagpu_pal_live()`'s, which `tagpu_pal_frame` fills from this frame's
+       packet before any pass runs, and each Vulkan twin uploads them itself. */
+    if (gl_draws) {
         x_glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, s_palTex);
         if (!s_palInit) { glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 256, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, pal); s_palInit = 1; }
@@ -3324,6 +3354,55 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        budget is spent once either way. */
     if (tagpu_rglsl_step_forced(f->frame_counter) && tagpu_rglsl_calls() == rglslSeen)
         tagpu_rglsl_step();
+    /* THE VULKAN-ONLY LANE'S FRAME ENDS HERE, and it ends here rather than
+       threading a gate through the composite because it is a DIFFERENT frame.
+       Everything below this line is the GL world composite -- 103 GL calls in
+       eighteen runs: the unit geometry upload, the cast-shadow depth map, the
+       `ss x` FBO, the shadow and slant redraws, the nano wire pass, the key/fill
+       inversion against the engine's own surface and the resolve to the
+       drawable. None of it has a counterpart on this lane yet; the `ss` target
+       and TA's surface are 4c, and until then each ported pass draws itself into
+       the swapchain from its own hand-over.
+
+       SO THE HONEST SHAPE IS TWO EXITS, not one body with gates in it. The GL
+       path below is left byte for byte as it was -- which is what the phase's
+       standing rule asks ("a Phase G landing that moves a GL pixel has failed")
+       -- and this lane calls the passes that have been taught to hand over
+       without drawing, in the composite's own order, and stops.
+
+       THE PREDICATE IS THE COMPOSITE'S OWN, deliberately: `if (nterr)` is what
+       gates `tagpu_terr_render` below, so the two sites agree about when a pass
+       runs by using the same test rather than by being read together. Each
+       `*_render` also refuses on its own count, so this is belt and braces.
+
+       WHAT IS NOT DONE HERE, stated rather than left to be discovered: the
+       300-frame stats line at the end of the composite (posebake, posedraw and
+       the fill sequence) does not run on this lane, and neither does
+       `tagpu_zoom_publish_view` -- but that one could not run anyway, because
+       it is gated on `keyOn >= 0` and `keyOn` needs `f->surface_tex`, which is
+       0 until 4c gives this backend TA's surface. The input path therefore
+       stays 1:1 here, which is correct while nothing zoomed reaches the screen.
+       [The vulkan-only plan, landing 4b-2.] */
+    if (!gl_draws) {
+        /* WHETHER TERRAIN IS CLIPPED TO THE VIEWPORT IS THE PASS'S DECISION AND
+           NOT GL'S, and this line is where that gets said on this lane. The
+           engine clips unit blits to the viewport rect and this pass matches it;
+           the hand-over carries that as `scissorOn` and the Vulkan twin's
+           `terr_scissor` honours it ("NO CLIP WHERE THE GL LANE HAS NONE").
+           Below, `s_scissorOn` is set from whether `x_glScissor` RESOLVED --
+           which is a fact about one context's entry points, and the reason the
+           GL path has a fallback at all. With no context every `x_gl*` is NULL,
+           so leaving the flag to that told the twin "no clip" and it drew
+           terrain over the whole frame instead of the viewport.
+           MEASURED before the fix: 33 088 px of 786 432 (4.21%) differing
+           against the two-lane capture, every one of them black in the GL half
+           and LOS-grey here, and all of them outside the 896x704 viewport this
+           fixture logs as `zoomvp=`. Coverage, not colour. [Landing 4b-2.] */
+        s_scissorOn = 1;
+        if (nterr) tagpu_terr_render(&fv, 0);
+        return;
+    }
+
     /* NEVER return early while we own the terrain: the engine's frame is a
        flat key fill inside the viewport, and only the composite below turns it
        back into a picture. tagpu_terr_gather hands the draw back on any bail,
