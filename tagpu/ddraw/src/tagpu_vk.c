@@ -729,12 +729,22 @@ void tagpu_vk_own_present(void)
    process. THE PREDICATE LANDING 4b IS BUILT ON: every GL draw in the tree is
    gated on its negation, one pass per commit, while the gather half beside it
    runs unconditionally. Safe from any thread -- the latch is interlocked. */
-int tagpu_vk_ui_composited(void) { return s_uiDrew; }
-
 int tagpu_vk_owns_present(void)
 {
     return s_ownWin != 0;
 }
+
+/* RENDER THREAD ONLY, and that is the whole of its safety. `s_uiDrew` is a
+   plain int with no interlock and no fence: it is written inside
+   `tagpu_vk_frame` and read by `render_vk.c` immediately after that call
+   returns, which is the same thread, so none is owed. It is NOT like
+   `s_ownWin` above -- whose "safe from any thread" is bought with
+   `InterlockedExchange` -- and this definition used to sit under that comment,
+   which told the next reader the opposite. A game-thread caller would be an
+   unsynchronised cross-thread read, which is the class CLAUDE.md says this
+   stack fails at silently. [FOUND BY THE LANDING REVIEW OF GATE 4's LAST
+   ITEM.] */
+int tagpu_vk_ui_composited(void) { return s_uiDrew; }
 
 int tagpu_vk_armed(void)
 {
@@ -2967,15 +2977,18 @@ static int vk_present(void)
                               draw_terr, draw_feat, draw_unit, draw_fx, draw_mark);
             /* THE UI IS ABOVE THE WORLD and below the readout, which is
                where tagpu_overlay_draw puts it. */
-            if (draw_gui) {
-                tagpu_vk_gui_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
-                /* RECORDED, WHICH IS AS FAR AS THIS FILE CAN HONESTLY GO. The
-                   command buffer now carries the composite and the submit below
-                   is unconditional, so the only thing between here and the
-                   screen is the present -- and a present that fails takes the
-                   whole frame with it, cursor included. See `s_uiDrew`. */
-                s_uiDrew = 1;
-            }
+            if (draw_gui)
+                /* TAKEN FROM THE DRAW, NOT FROM THE CALL. `record` answers 1
+                   only when the composite reached the command buffer; its
+                   pipeline-build refusal LATCHES, so setting this beside the
+                   call would have reported a composite for the rest of the
+                   session and left `held` reading 0 on the one case it exists
+                   to catch. [FOUND BY THIS LANDING'S REVIEW.] After this the
+                   submit is unconditional and only the present is left -- and a
+                   present that fails takes the whole frame with it, cursor
+                   included. See `s_uiDrew`. */
+                s_uiDrew = tagpu_vk_gui_record(&s_pass, cb, fi,
+                                               s_vk.ext.width, s_vk.ext.height);
             if (draw_scaf)
                 tagpu_vk_scaffold_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_fps)

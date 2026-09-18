@@ -3418,13 +3418,24 @@ Everything §24.0 broke stops being reachable rather than being fixed:
 - **all four** sites are covered, so "which one draws in play" — the question the first cut got
   wrong — stops being load-bearing.
 
-**AND IT FAILS OPEN BY CONSTRUCTION.** The answer is a latch in the GL UI module
+**AND IT FAILS OPEN BY CONSTRUCTION.** The answer is a latch in the UI module
 (`s_curDrew`, set only at the tail of a successful `sharp_cursor`) that is **taken and cleared**
-once per frame from the **frame bracket in `render_ogl.c`**, next to `tagpu_reclaim_pass_end` —
-the one point every path through `tagpu_overlay_draw` reaches. A frame that returns early, or
-never calls the GL UI at all, answers 0 through the same path as a frame that simply did not draw
-a cursor. The publication cannot be forgotten on a path its author did not know about, which is
-exactly how §24.0 failed.
+once per frame from the **frame bracket**, next to `tagpu_reclaim_pass_end` — the one point every
+path through `tagpu_overlay_draw` reaches. A frame that returns early, or never calls the UI at
+all, answers 0 through the same path as a frame that simply did not draw a cursor. The publication
+cannot be forgotten on a path its author did not know about, which is exactly how §24.0 failed.
+
+**ON THE VULKAN LANE THE TAKE AND THE PUBLISH ARE IN TWO PLACES, AND THERE IS A SECOND INPUT.**
+[The vulkan-only plan, gate 4's last item, 2026-09-18 — [gpu-status](gpu-status.html) §2.57.]
+`render_vk.c` is the frame bracket there, and the latch alone is not an answer: it says the mirror
+RECORD survived, while the consumer (`tagpu_vk_gui_prepare`, then `tagpu_vk_gui_record`) can still
+refuse the frame afterwards — in which case nothing composited and the engine's cursor would have
+been suppressed for nothing. So the **take** stays in the bracket, because taking is what clears
+the latch and that must happen once per iteration; the **publish** happens after `tagpu_vk_frame`,
+as `cur_drew && tagpu_vk_ui_composited()`. The seam's half is set from `tagpu_vk_gui_record`'s
+RETURN, not from having called it, because its pipeline-build refusal latches for the session. The
+frames on which the two halves disagree are counted as `held=` in the GUI heartbeat's `cursown=`
+field: **1** at the shell and **3** after walking into a game, measured 2026-09-18.
 
 The latch is still a latch, and that part of §24.0 was right: the engine draws its cursor from
 inside the flip, on another thread, while our present runs, so a flag cleared at the start of a

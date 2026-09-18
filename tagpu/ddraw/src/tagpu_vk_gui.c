@@ -2750,7 +2750,7 @@ refuse:
     return 0;
 }
 
-void tagpu_vk_gui_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+int tagpu_vk_gui_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                          uint32_t w, uint32_t h)
 {
     SLOT* s;
@@ -2758,9 +2758,9 @@ void tagpu_vk_gui_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     VkRect2D sc;
     int x, ytop, vw, vh;
 
-    if (s_state != ST_READY || !s_drawThis) return;
+    if (s_state != ST_READY || !s_drawThis) return 0;
     s_drawThis = 0;
-    if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return;
+    if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
     s = &s_slot[slot];
 
     /* THE PIPELINE IS BUILT AGAINST THE SEAM'S RENDER PASS, and rebuilt when
@@ -2771,7 +2771,7 @@ void tagpu_vk_gui_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             plog(d, "gui: the composite pipeline would not build against the "
                     "seam's render pass - nothing drawn");
             s_layRp = VK_NULL_HANDLE;
-            return;
+            return 0;
         }
         s_layRp = d->rp;
     }
@@ -2805,6 +2805,9 @@ void tagpu_vk_gui_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                             0, 1, &s->laySet, 0, NULL);
     vkCmdBindVertexBuffers(cb, 0, 1, &s->vb, &s_layQuad);
     vkCmdDraw(cb, 6, 1, 0, 0);
+    /* AND ONLY HERE. The draw is in the buffer; see the header for why the
+       caller must not infer this from having called us. */
+    return 1;
 }
 
 int tagpu_vk_gui_ab_frame(void)

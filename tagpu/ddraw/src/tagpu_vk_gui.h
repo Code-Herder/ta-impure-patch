@@ -32,8 +32,16 @@
    pass. 1 when `record` has something to draw. */
 int  tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot);
 
-/* The composite, inside the seam's render pass. */
-void tagpu_vk_gui_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
+/* The composite, inside the seam's render pass. RETURNS 1 ONLY WHEN THE DRAW
+   REACHED THE COMMAND BUFFER, and every early return answers 0 -- the two the
+   caller's `prepare` already excludes, and the one it cannot: a composite
+   pipeline that would not build. That one LATCHES (`s_layRp` is cleared, so the
+   next frame re-enters and fails identically), so a caller inferring "it was
+   called, therefore it drew" would be wrong for the rest of the session.
+   `tagpu_vk.c` sets `s_uiDrew` from this return for that reason, and the cursor
+   ownership the seam publishes rests on it.
+   [FOUND BY THE LANDING REVIEW OF GATE 4's LAST ITEM.] */
+int  tagpu_vk_gui_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                          uint32_t w, uint32_t h);
 
 /* 1 on the ONE frame `tagpu_gui.ab` latched its claim and the `_vk.ppm` target

@@ -2530,20 +2530,20 @@ static void draw_layer(const TAGPU_FRAME* f)
        the engine's own cursor blit stand down (tagpu_cursown.h). Every early
        return above leaves it 0 and the engine keeps its cursor.
 
-       ON ROUTE E THIS IS WEAKER THAN IT IS ON THE GL LANE, AND SAYS SO. There
-       is no composite here to have run; `s_mirRec` says the RECORD survived to
-       this point, which is not the same as the twin having drawn it.
-       `tagpu_vk_gui_prepare` still refuses a frame on `s_behind`, `!s_engHave`,
-       `!s_palHave`, a presented twin that stood down or resized, and its two
-       shader-refusal paths -- and `tagpu_cursown_publish` is called from
-       render_vk.c BEFORE `tagpu_vk_frame` in the same iteration, so nothing
-       here can know the outcome yet. On those frames the twin composites no UI
-       at all, so the symptom is the whole layer missing rather than the cursor,
-       and the engine's own cursor is suppressed for them. Closing it properly
-       means the publish moving after the frame it reports, which is a change to
-       what the two threads exchange and belongs to 4c with the rest of the
-       present's ordering. gpu-status.md §2.51 carries it as a named gap.
-       [FROM THE 4b-3 LANDING REVIEW.] */
+       ON ROUTE E THIS FLAG IS WEAKER THAN IT IS ON THE GL LANE, AND THE
+       CONSUMER IS WHERE THAT IS MADE GOOD NOW. There is no composite here to
+       have run: `s_mirRec` says the RECORD survived to this point, which is not
+       the same as the twin having drawn it, and `tagpu_vk_gui_prepare` and
+       `tagpu_vk_gui_record` between them can still refuse the frame afterwards.
+
+       SO THIS IS NO LONGER THE WHOLE ANSWER, and nothing here has to change.
+       Gate 4's last landing moved `tagpu_cursown_publish` to AFTER
+       `tagpu_vk_frame` in render_vk.c and made it
+       `cur_drew && tagpu_vk_ui_composited()` -- this flag is the first half and
+       the seam's own "the composite reached the command buffer" is the second.
+       The frames where the two disagree are counted, as `held=` in this
+       function's own heartbeat. [The gap was named by the 4b-3 landing review
+       and closed by gate 4's last item; gpu-status.md §2.57.] */
     if (s_sharpOn && s_curInLayer && (gl_draws || s_mirRec)) s_curDrew = 1;
 
     /* G19f: the uniforms this composite just ran with, for the Vulkan mirror.

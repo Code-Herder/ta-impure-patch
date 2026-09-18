@@ -145,4 +145,14 @@ void tagpu_cursown_stats(int* armed, int* ofN, int* skipping, unsigned* held)
    cursor at all. They publish 0 now, and this is how many times that has
    happened, so the fix is a number an operator can read rather than a claim.
    [The vulkan-only plan, gate 4's last item.] */
-void tagpu_cursown_note_held(void) { s_held++; }
+void tagpu_cursown_note_held(void)
+{
+    /* GATED THE SAME WAY THE PUBLISH IS. Without `s_installed` this climbs with
+       `tagpu_cursown.off`, or when no site byte-matched -- frames on which
+       nothing was being suppressed and nothing changed -- while the number is
+       read as "frames the engine's cursor was suppressed with nothing of ours
+       on screen". [FOUND BY THE LANDING REVIEW OF GATE 4's LAST ITEM; the
+       figures already published were taken at 4/4 and are unaffected.] */
+    if (!s_installed) return;
+    s_held++;
+}

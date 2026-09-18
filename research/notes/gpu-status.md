@@ -9142,19 +9142,16 @@ sends the next session to the wrong function.
   the twin composite at all today, and landing 4c is where the backend uploads TA's surface
   instead.
 - The in-game viewport, as above.
-- **`s_curDrew` is weaker on route E than on the GL lane.** It is what lets the engine's own
-  cursor blit stand down, and on the GL lane `draw_layer` sets it after the composite has
-  actually run. On route E there is no composite here: the condition is that the mirror RECORD
-  survived to `draw_layer`'s tail, and `tagpu_vk_gui_prepare` can still refuse the frame
-  afterwards (`s_behind`, `!s_engHave`, `!s_palHave`, a presented twin that stood down or
-  resized, either shader-refusal path). `tagpu_cursown_publish` is called from `render_vk.c`
-  **before** `tagpu_vk_frame` in the same iteration, so nothing at that point can know the
-  outcome. On exactly those frames the twin composites no UI at all, so the visible symptom is
-  the whole layer missing rather than the cursor — but the engine's cursor is suppressed for
-  them, which relaxes an invariant `sharp_cursor`'s own comment states in terms. Closing it by
-  construction means the publish moving after the frame it reports, which changes what the two
-  threads exchange; that belongs with the rest of the present's ordering in **4c**, not to a
-  patch here. [FROM THE 4b-3 LANDING REVIEW.]
+- **`s_curDrew` was weaker on route E than on the GL lane — CLOSED by gate 4's last item, §2.57.**
+  It is what lets the engine's own cursor blit stand down, and on the GL lane `draw_layer` sets it
+  after the composite has actually run. On route E there is no composite there: the condition is
+  that the mirror RECORD survived to `draw_layer`'s tail, while `tagpu_vk_gui_prepare` and
+  `tagpu_vk_gui_record` can still refuse the frame afterwards. `tagpu_cursown_publish` was called
+  from `render_vk.c` **before** `tagpu_vk_frame` in the same iteration, so nothing at that point
+  could know the outcome, and the engine's cursor was suppressed on frames that composited nothing.
+  **Closed by publishing after the frame instead**, as `cur_drew && tagpu_vk_ui_composited()`, with
+  the disagreeing frames counted as `held=`. [The gap was named here by the 4b-3 landing review;
+  read §2.57 for how it was closed and what is still not covered.]
 
 ### 2.52 TA's own frame reaches the Vulkan lane — landing 4c-1 of the Vulkan-only plan
 
@@ -9962,13 +9959,22 @@ none of 4c-1…4c-3 or 4d-1…4d-2. It is the last thing in gate 4.
 
 `render_vk.c` published `tagpu_cursown_publish(tagpu_gui_cursor_drew_take())` **before**
 `tagpu_vk_frame`. That told the engine "our cursor was drawn" on the strength of the mirror
-*record* surviving to `draw_layer`'s tail — `tagpu_gui_surf.c:2551` is
+*record* surviving to `draw_layer`'s tail — `tagpu_gui_surf.c:2547` is
 `if (s_sharpOn && s_curInLayer && (gl_draws || s_mirRec)) s_curDrew = 1;`, and on this lane
 `gl_draws` is 0, so the latch rests on `s_mirRec` alone. `tagpu_vk_gui_prepare`, inside the frame
-that had not run yet, can still refuse it (`s_behind`, `!s_engHave`, `!s_palHave`, a presented twin
-that stood down or resized, either shader-refusal path). On those frames nothing composited and the
-engine's own cursor had already been suppressed — **no cursor at all**, the fail-closed shape
-`tagpu_cursown` exists to avoid.
+that had not run yet, can still refuse it. On those frames nothing composited and the engine's own
+cursor had already been suppressed — **no cursor at all**, the fail-closed shape `tagpu_cursown`
+exists to avoid.
+
+**There are more refusal paths than the first draft of this section listed, and they are not the
+ones it named.** It said "`s_behind`, `!s_engHave`, `!s_palHave`, a presented twin that stood down
+or resized, either shader-refusal path" and then spoke of "the five". Those last two are
+**sharp-layer hand-over** refusals (`tagpu_vk_gui.c:1622-1626`, the cursor wanting an atlas nobody
+handed over, and `:1628-1643`, the minimap wanting its pair) — nothing to do with shader
+compilation, and a session sent looking for a shader refusal will not find one. Nor is the list
+exhaustive: `compose` is cleared at five more sites, `prepare` returns 0 outright at six, and
+`s_uiDrew` is also 0 when the seam has no render pass or framebuffer. Treat it as "many, and the
+counter says how often rather than which". [CORRECTED BY THIS LANDING'S REVIEW.]
 
 #### It is an ordering, not a move, and the difference is the whole fix
 
@@ -9979,8 +9985,14 @@ early returns."* Relocating it would break what that argument protects. So:
 - the **take** stays where it was, because taking is what *clears* the producer's flag and that has
   to happen once per iteration;
 - the seam reports whether the UI layer reached the command buffer — `tagpu_vk_ui_composited()`, a
-  latch cleared at the top of `tagpu_vk_frame` so every early return answers 0, set only where
-  `tagpu_vk_gui_record` is actually called;
+  latch cleared as the **first statement** of `tagpu_vk_frame` so every early return answers 0, and
+  set from **`tagpu_vk_gui_record`'s RETURN VALUE**. The first draft set it beside the call, and
+  this landing's own review found the hole: `record` has a refusal `prepare` cannot exclude — a
+  composite pipeline that would not build — and it **latches** (`s_layRp` is cleared, so every
+  later frame re-enters and fails identically). Setting the flag on "we called it" would have
+  reported a composite for the rest of the session on exactly the failure this landing exists to
+  remove, with `held` reading 0 throughout: the instrument blind to the one case it was added for.
+  `record` returns `int` now, 1 only after its `vkCmdDraw`;
 - the publish happens **after** the frame, on the loop path every iteration reaches, with
   `cur_drew && composited`.
 
@@ -10007,9 +10019,15 @@ after the composite has really run, and since 4d-1 that backend never drives thi
 
 #### Not covered
 
-- **Which of the five refusal paths those three frames took is not recorded** — the counter says
-  how often, not why. The two after the shell straddle the level load, so a twin reseed is the
-  likely cause, but that is inference rather than measurement.
+- **Which refusal path those three frames took is not recorded** — the counter says how often, not
+  why, and there are more than a dozen candidates (above). The two after the shell straddle the
+  level load, so a twin reseed is the likely cause, but that is inference rather than measurement.
+- **A frame whose submit or present fails still publishes 1**, because `s_uiDrew` is set once the
+  composite reaches the command buffer and the failure is after that. It is self-correcting — the
+  next frame clears the flag at the top of `tagpu_vk_frame` and returns early, and the loop's exit
+  publishes 0 — and the presentation engine keeps showing the last good frame, which carried our
+  cursor. It is the same shape as the pipeline-build hole this landing's review found, and the only
+  reason it is benign is that it does not latch. [RAISED BY THAT REVIEW.]
 - **`s_curDrew` is still a latch the producer sets from a record**, not from a composite. This
   landing makes the *consumer* honest about the frame; it does not change what the producer means.
 
