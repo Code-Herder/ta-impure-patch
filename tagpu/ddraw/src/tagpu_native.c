@@ -3719,6 +3719,19 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            the composite's and are not called here at all. `begin` opens the
            recording window and arms the A/B, `unit` records each pose, `end`
            publishes -- which is the whole of the hand-over. */
+        /* THIS LANE'S OWN HEARTBEAT, the composite's 300-frame stats line
+           being below the exit and so unreachable here. It reports what was
+           handed OVER rather than what was drawn, which is the only thing
+           this lane decides. */
+        if ((f->frame_counter % 300) == 0) {
+            char hb[176];
+            _snprintf(hb, sizeof hb,
+                      "native: vulkan lane handed over terr=%d feat=%d fx=%d "
+                      "mark=%d units=%d posed=%d", nterr, nfeat, nfx,
+                      markOn ? 1 : 0, nu, npd);
+            hb[sizeof hb - 1] = 0;
+            nlog(hb);
+        }
         if (npd) {
             int k;
             tagpu_posedraw_begin(&s_pv);
