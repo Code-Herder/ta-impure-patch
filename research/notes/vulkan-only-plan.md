@@ -1566,7 +1566,11 @@ Back to the filed list:
    `openglshader.h`, `render_ogl.h`, and **`tagpu_restoreglsl.c`**. `renderer=gdi` becomes the
    documented stock reference.
 
-   **BLOCKED ON LANDING 10b, the structure-shadow gate** (*What the seam has to grow* below).
+   **BLOCKED ON LANDINGS 10b AND 10c** (*What the seam has to grow* below): the structure-shadow
+   gate, and the fact that **no `tacli` verb works on the gdi lane at all** — the on-demand
+   trigger family is called only from `tagpu_overlay_draw`, which only the GL and Vulkan backends
+   call. Until 10c, this item's exit condition ("`renderer=gdi` becomes the documented stock
+   reference") cannot be checked by anything we have.
    `renderer=gdi` is not stock today, and the survey narrowed that from a class of suppressors to
    exactly two bytes: the `je`->`jmp` pair at `0x4592C6`/`0x45952C`, which has no runtime gate to
    be inert through, so the gdi lane draws no structure shadows and nothing of ours draws them
@@ -1792,6 +1796,28 @@ draws NO cached slant shadow and the native pass owes every structure one"*. Wit
 defaults (`tagpu_owndraw.on` = `all`) under `renderer=gdi`, nobody pays that debt, so **every
 building loses its slant shadow** and the lane is not stock. That, plus the DirectX-warning byte
 named as a residual below, is the whole of the gap.
+
+**AND `renderer=gdi` CANNOT BE DRIVEN OR MEASURED BY OUR OWN TOOLING AT ALL — landing 10c, and
+item 11's exit condition depends on it** [found 2026-09-18 while trying to photograph 10b's
+effect]. `tacli ui` answers *"no UI snapshot appeared"* on that lane, and the cause is the same
+shape as everything else on this page: the whole on-demand **trigger family** —
+`tagpu_ui_frame` (`tacli ui`), `tagpu_peek_frame` (`tacli peek`), `tagpu_cat_frame`
+(`tacli scenario`'s validation), `tagpu_weapons_frame`, the scenario applier's detection half —
+is called from **`tagpu_overlay_draw`** and from nowhere else (each has exactly two mentions in
+the tree: its own definition and that one call). `tagpu_overlay_draw` is called only from
+`render_ogl.c:1632` and `render_vk.c:232`.
+
+So on the gdi lane the shell cannot be driven past the main menu, no scenario can be applied, no
+memory can be peeked, and **no measurement of any kind can be taken**. That is why this gate has
+no picture of a structure shadow returning: the effect is visible only where the engine draws the
+world, and that is the one lane the instruments do not reach.
+
+**It is a landing of its own (10c) and it is tooling, not rendering.** The fix is to call the
+trigger family from a lane-independent point — the game-thread flip hook `0x4C63A0` already runs
+on every renderer (`gui: first flip on thread 652` appears in a gdi boot's log) and is the
+obvious host. Note for whoever takes it: `render_gdi.c` currently contains **no** `tagpu_` call at
+all, and landing 10b's safety argument quotes that fact, so if the triggers are added there
+instead, 10b's note has to be re-read rather than assumed to still hold.
 
 **So landing 10b is: give the structure-shadow pair the gate every other suppressor already
 has.** It moves a byte patch, so it reviews at `high`; it is its own landing because putting a
