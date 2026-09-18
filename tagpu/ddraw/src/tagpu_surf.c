@@ -24,6 +24,7 @@ static int            s_have;           /* this frame's snapshot is usable    */
 static unsigned       s_serial;         /* bumped only when the BYTES changed */
 static unsigned char  s_pal[1024];      /* R,G,B,x per entry                  */
 static int            s_palHave;
+static unsigned       s_palSerial;      /* moves when the TABLE moved         */
 static unsigned       s_refused;        /* geometry outside the bound         */
 static int            s_saidRefused;
 static int            s_dx, s_dy, s_dw, s_dh;   /* the frame's letterboxed rect */
@@ -52,7 +53,15 @@ void tagpu_surf_take(const TAGPU_FRAME* f)
        draw_layer already documents at length, in a place where it is harder to
        see. Taken before the bytes and in the same call. */
     pal = tagpu_pal_live();
-    if (pal) { memcpy(s_pal, pal, sizeof s_pal); s_palHave = 1; }
+    if (pal) {
+        /* THE TABLE'S OWN SERIAL, and it is not the bytes'. tagpu_pal.c already
+           counts changes of the presented palette, so this is that count
+           passed through rather than a second comparison of our own. */
+        unsigned ser = tagpu_pal_serial();
+        if (!s_palHave || ser != s_palSerial) { s_palSerial = ser; }
+        memcpy(s_pal, pal, sizeof s_pal);
+        s_palHave = 1;
+    }
     if (!s_palHave) return;             /* nothing readable yet; retry next frame */
 
     EnterCriticalSection(&g_ddraw.cs);
@@ -118,6 +127,7 @@ int tagpu_surf_frame(TAGPU_SURFFRAME* out)
     out->w = s_w; out->h = s_h;
     out->pal = s_pal;
     out->serial = s_serial;
+    out->palSerial = s_palSerial;
     out->dx = s_dx; out->dy = s_dy; out->dw = s_dw; out->dh = s_dh;
     return 1;
 }

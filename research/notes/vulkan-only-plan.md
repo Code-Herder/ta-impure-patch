@@ -505,7 +505,7 @@ would not have shown up as a failure — it would have shown up as three landing
        the target and the plumbing, not the maths.
      * **TA's surface has one too, in the fork's own header.** `render_ogl.c:260` builds
        `g_ogl.main_program` from `PASSTHROUGH_VERT_SHADER` + `PALETTE_FRAG_SHADER`
-       (`inc/openglshader.h:42`, `:60`) — sample the R8 index, then
+       (`inc/openglshader.h:43`, `:60`) — sample the R8 index, then
        `texture(PaletteTexture, vec2(pIndex.r * (255.0/256.0) + (0.5/256.0), 0))`. That pair IS
        the base layer the GL lane draws before anything of ours, which is exactly what 4c-1 has
        to reproduce. It is not in `SOURCES` yet, but `RESTORE_HDR` shows a header can be.
@@ -571,22 +571,22 @@ would not have shown up as a failure — it would have shown up as three landing
      gap 4b-3 left named (§2.51), because the fix is `tagpu_cursown_publish` moving after the
      frame it reports.
 
-     **AND 4c-1 SETTLED WHAT THE CLIP-SPACE FLIP IS FOR**, which is worth carrying into 4c-2
-     because the resolve is another literal-quad pass. The flip is a property of what the vertex
-     stage DOES, not of the lane: a pass that COMPUTES its clip position from uniforms written in
-     GL's convention needs it, and a pass handed a literal quad already in clip space does not —
-     flipping the second kind moves the quad and its texcoords together and mirrors the picture.
-     4c-1's first build took the flip on the reasoning that a ported shader fed the GL lane's own
-     vertices reproduces the GL lane's image, and drew TA's shell upside down. The test is **does
-     turning clip space over change which texel a fragment reads** — it does whenever the varying
-     is derived from the same geometry as the position, and does not when the position comes from
-     world- or screen-space uniforms while the varying is independent of the flip.
+     **AND 4c-1 SETTLED WHAT THE CLIP-SPACE FLIP IS PAIRED WITH**, which 4c-2 needs because its
+     resolve is the next literal-quad pass. **The quad and the flip are one choice.**
+     `render_ogl.c` builds two quads for the same blit, differing by exactly a y negation: the
+     WINDOW quad (`:576-597`) puts tex `(0,0)` at clip `y = +1`, the FBO quad (`:554-575`, under
+     `if (g_ogl.shader1_program)`) puts it at `y = -1`. Either can be ported; what cannot is
+     copying one lane's quad with the other's flip decision. 4c-1 uses the FBO quad and no flip.
+     [gpu-status](gpu-status.html) §2.52 has the two wrong derivations that preceded this one —
+     the second of which was committed here as a one-line rule and is withdrawn.
 
-     **4c-2's resolve is the first kind, so it takes no flip.** `tagpu_native::DVS` is
-     `uv = p; gl_Position = vec4(p.x*2.0-1.0, p.y*2.0-1.0, 0.0, 1.0)` over a unit-square
-     attribute at location 0, and `DFS` is `frag = texture(uTex, uv)` with `uTex` at set 0
-     binding 40 and no uniform block in either stage. That is the whole interface 4c-2 has to
-     build a pipeline against.
+     **For 4c-2 concretely:** `tagpu_native::DVS` is `uv = p; gl_Position = vec4(p.x*2.0-1.0,
+     p.y*2.0-1.0, 0.0, 1.0)` over a unit-square `vec2` at location 0, and `DFS` is
+     `frag = texture(uTex, uv)` with `uTex` at set 0 binding 40 and no uniform block in either
+     stage. Its pairing is `uv = 0` at clip `y = -1`, the FBO quad's. Which way up that lands
+     depends on how the `ss×` offscreen image was rendered, and that is 4c-2's to establish
+     rather than something to assume from here.
+
    * **4d — the deletion.** Route D's window, `tagpu_vk_wndproc`, `WM_TAGPU_VK` and the geometry
      tracking, once 4b's figures are banked. **4a made route D unreachable rather than deleted on
      purpose**, so the control above stays available until then: the same build answers both

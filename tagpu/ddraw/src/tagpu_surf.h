@@ -68,6 +68,12 @@ typedef struct {
        device and wants to skip an upload it already holds. TA redraws its whole
        screen far less often than we present. */
     unsigned             serial;
+    /* AND THE PALETTE HAS ITS OWN, because it moves INDEPENDENTLY of the bytes
+       and a consumer that gated both on `serial` would freeze the colours. A
+       fade is exactly that case -- one picture held still while the table runs
+       down to black -- and so is a gamma change over a static screen.
+       [FROM THE 4c-1 LANDING REVIEW.] */
+    unsigned             palSerial;
     /* WHERE IT GOES, in window pixels: the frame's letterboxed viewport, the
        same rect the fork gives its own upload on the GL lane. Carried here
        rather than re-derived by the consumer because a pass's `record` is handed

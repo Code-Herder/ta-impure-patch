@@ -9192,40 +9192,48 @@ unchanged: `IDirectDrawSurface.c` NULLs the primary inside `g_ddraw.cs` and free
 `dds_Flip` swaps `->surface` inside the same section, and the bound comes from the PRIMARY's own
 geometry rather than `g_ddraw.width/height`, which is the device mode.
 
-#### The orientation was wrong for one build, and the picture is what said so
+#### The orientation, and two wrong derivations before the right one
 
-The first build took the negative-height viewport every other ported pass takes, on the argument
-— written into the file header at the time — that **a ported shader fed the GL lane's own
-vertices reproduces the GL lane's image**. It drew TA's shell upside down.
+The conclusion — **this pass takes no viewport flip** — was reached twice by reasoning that did
+not hold, and both are written down because the second one nearly shipped as a rule for the next
+landing.
 
-The argument is sound for the other passes and wrong for this one, and the difference is worth
-stating because it decides what the flip is *for*: those passes **compute** a clip position from
-uniforms written in GL's convention, so turning clip space over is what makes the arithmetic land
-the same way. This one transforms nothing — `MVPMatrix` is the identity (`render_ogl.c:622`) and
-the quad is a literal already in clip space with its texture coordinates attached to its corners.
-Flipping moves the quad **and its texcoords** together: it still covers the viewport, but `v = 0`
-arrives at the other end, which is a vertical mirror.
+**The GL lane builds TWO quads for this blit, and they differ by exactly a y negation:**
 
-The mapping is stated directly now. GL puts tex `(0,0)` — TA's row 0, the top of its screen — at
-clip `y = -1`, which is the bottom in GL and reaches the window upright because GL's framebuffer
-is bottom-up. Vulkan's clip `y = -1` is already the **top** of the viewport, so the same vertices
-with no flip put TA's top row at the top.
+| quad | where | tex `(0,0)` at |
+|---|---|---|
+| the WINDOW quad | `render_ogl.c:576-597`, the `else` | clip `y = +1` |
+| the FBO quad | `render_ogl.c:554-575`, under `if (g_ogl.shader1_program)` | clip `y = -1` |
 
-**The lesson is not "derive it" and not "inherit it".** It is that the flip is a property of what
-the vertex stage DOES, not of the lane. The test is:
+The first is what the GL lane presents. The second feeds an offscreen target that a later pass
+turns back over, and it is reached only when a custom upscaling shader is configured.
 
-> **does turning clip space over change which texel a fragment reads?**
+**Attempt 1 — inherit the flip.** The pass took the negative-height viewport every other ported
+pass takes, on the argument that a ported shader fed the GL lane's own vertices reproduces the GL
+lane's image. It drew TA's shell upside down.
 
-It does whenever the varying is derived from the SAME geometry as the position, because the flip
-moves both together — the quad still covers the viewport and the sampling is mirrored across it.
-It does not when the position comes from world- or screen-space uniforms written in GL's
-convention while the varying is independent of the flip, which is the case in every world pass
-and is what the flip is there for.
+**Attempt 2 — a rule about literal quads.** The flip was removed, which fixed the picture, and
+the reason was written as: the other passes COMPUTE a clip position from GL-convention uniforms so
+the flip corrects their arithmetic, while this one is handed a literal quad whose texcoords move
+with it, so flipping only mirrors. That sounds right and is not a rule. `build()`'s `quad[]` is
+the **FBO** quad — the paper cited `:557` without noticing it sat inside the `shader1_program`
+branch — and Vulkan's y-down clip space undoes its negation, which is the whole of why the
+picture is upright. **The window quad WITH the negative-height flip is equally correct.**
 
-[An earlier wording of this said the test was "whether the shader computes its position or is
-handed one". That is wrong, and 4c-2's own resolve is the counter-example: `tagpu_native::DVS`
-COMPUTES `gl_Position = vec4(p*2-1, 0, 1)` — but from the same `p` it passes through as `uv`, so
-it belongs with this pass and takes no flip either. Corrected before 4c-2 was built against it.]
+**What is actually true: the quad and the flip are ONE choice and must be made together.** Either
+pairing works; what does not work is copying one lane's quad and the other lane's flip decision.
+A reader who takes `render_ogl.c:580-593` — the quad the GL lane actually presents — and drops the
+flip on attempt 2's authority gets the upside-down picture back.
+
+**Consequence for 4c-2, whose resolve is the next literal-quad pass.** `tagpu_native::DVS` is
+`uv = p; gl_Position = vec4(p.x*2.0-1.0, p.y*2.0-1.0, 0.0, 1.0)` over a unit-square attribute, so
+its pairing is `uv = 0` at clip `y = -1` — the FBO quad's pairing, not the window quad's. Under
+Vulkan's y-down that puts `uv = 0` at the TOP of the viewport. Whether that is the right way up
+depends on which way up the `ss×` offscreen image was rendered, which is 4c-2's to establish and
+is deliberately **not** asserted here.
+
+[Attempt 2 was the committed text for two commits, including a sharpened version that made it a
+one-line test. The 4c-1 landing review disproved it against `render_ogl.c`'s two branches.]
 
 #### The shader came from the fork, which cost four changes to the generator
 

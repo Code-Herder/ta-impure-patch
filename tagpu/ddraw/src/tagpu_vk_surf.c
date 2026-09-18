@@ -6,17 +6,25 @@
    `g_ogl.main_program`. The two lanes therefore run the same GLSL, which is the
    whole rule tools/spirv-gen.py exists to keep.
 
-   ORIENTATION: THIS PASS DOES NOT TAKE THE CLIP-SPACE FLIP, and it is the only
-   ported one that does not. The first build here did take it -- on the argument
-   that a ported shader fed the GL lane's own vertices reproduces the GL lane's
-   image -- and it drew TA's shell UPSIDE DOWN. The argument is sound for the
-   other passes and wrong for this one: theirs COMPUTE a clip position from
-   uniforms written in GL's convention, so turning clip space over is what makes
-   the arithmetic land the same way. This one transforms nothing -- MVPMatrix is
-   the identity and the quad is a literal already in clip space with its texture
-   coordinates attached to its corners -- so flipping moves the quad AND its
-   texcoords together and simply mirrors the picture.
-   `record` states the mapping directly instead, and says why.
+   ORIENTATION: THE QUAD AND THE FLIP ARE ONE CHOICE, AND THIS FILE MAKES IT
+   ONCE. `render_ogl.c` builds TWO quads for the same blit and the difference is
+   exactly a y negation:
+
+     the WINDOW quad   (`:576-597`, the `else`)  tex (0,0) at clip y = +1
+     the FBO quad      (`:554-575`, `shader1`)   tex (0,0) at clip y = -1
+
+   The first is what the GL lane presents; the second feeds an offscreen target
+   that a later pass turns back over. `build`'s `quad[]` below is the FBO one,
+   and Vulkan's y-down clip space undoes its negation -- so it lands upright
+   with NO viewport flip. The window quad WITH the negative-height flip is
+   equally correct and would have been just as good a choice.
+
+   WHAT IS NOT TRUE is that a literal-quad pass never flips. That was the first
+   version of this comment, after the first build here took the flip and drew
+   TA's shell upside down; it is a statement about WHICH OF THE FORK'S TWO QUADS
+   was copied, not about the pass. A reader who copies the window quad and drops
+   the flip on that authority gets the upside-down picture back.
+   [The pairing was established by the 4c-1 landing review.]
 
    [The vulkan-only plan, landing 4c-1.] */
 
@@ -64,6 +72,12 @@ static int s_downOwed;
 static int s_downPaying;
 static int s_drawThis;
 static int s_dx, s_dy, s_dw, s_dh;     /* where `record` puts it, this frame */
+/* WHAT THIS PASS HAS ACTUALLY DONE, reported periodically rather than latched
+   once: the two upload counts are the evidence that the surface and the palette
+   are gated SEPARATELY, which a one-shot line could not show and which the
+   landing review found this pass had wrong. A fade moves `pal` and not `bytes`;
+   a still frame moves neither. */
+static unsigned s_nBytes, s_nPal, s_nFrames, s_saidAt;
 
 static VkDescriptorSetLayout s_dsl;
 static VkPipelineLayout      s_plo;
@@ -85,7 +99,7 @@ typedef struct {
     unsigned char*  smap;
     VkDescriptorSet dset;
     int             w, h;              /* what this slot is sized for, 0 = nothing */
-    unsigned        serial;            /* the snapshot serial this slot holds      */
+    unsigned        serial, palSerial; /* the serials this slot's images hold      */
     int             haveSerial;
 } SLOT;
 static SLOT s_slot[TAGPU_VK_SLOTS];
@@ -241,7 +255,8 @@ static int slot_size(const TAGPU_VKPASS* d, SLOT* s, int w, int h)
     /* ONE STAGING BUFFER FOR BOTH, the surface first and the palette after it.
        They are uploaded in the same `prepare` and neither outlives it, so a
        second allocation would buy nothing but a second failure path. */
-    if (!mk_buffer(d, (VkDeviceSize)w * h + PAL_W * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+    if (!mk_buffer(d, ((((VkDeviceSize)w * h) + 3u) & ~(VkDeviceSize)3u) + PAL_W * 4,
+                   VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                    &s->stage, &s->smem, &s->smap)) return 0;
 
@@ -371,9 +386,7 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     vp.viewportCount = 1; vp.scissorCount = 1;   /* both dynamic, set in record */
 
     rs.polygonMode = VK_POLYGON_MODE_FILL;
-    /* NO CULLING. The negative-height viewport turns clip space over, which
-       turns the winding over with it; a cull mode here would have to be stated
-       against the flipped sense, and this is one quad. */
+    /* NO CULLING, and one quad is not worth a winding argument. */
     rs.cullMode = VK_CULL_MODE_NONE;
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rs.lineWidth = 1.0f;
@@ -469,9 +482,11 @@ static int build(const TAGPU_VKPASS* d)
     unsigned char* vmap = NULL;
     uint32_t i;
     /* THE GL LANE'S OWN QUAD (render_ogl.c:557 and :567), its four vertices
-       expanded through the 0,1,2 0,2,3 element order into a list, and its
-       tex coords at 1.0 rather than scale_w/scale_h because this image is
-       sized exactly w x h and needs no padding to address around.
+       THE FBO ONE (render_ogl.c:554-575), expanded through the 0,1,2 0,2,3
+       element order into a list, and its tex coords at 1.0 rather than
+       scale_w/scale_h because this image is sized exactly w x h and needs no
+       padding to address around. The header says why it is that quad and not
+       the window one at :576-597.
        COLOR is unused by PALETTE_FRAG_SHADER -- the vertex stage forwards it to
        a varying the fragment stage does not read -- but the attribute is
        DECLARED, so it is bound rather than left undefined. */
@@ -493,12 +508,13 @@ static int build(const TAGPU_VKPASS* d)
              (unsigned)d->slots, TAGPU_VK_SLOTS);
         return 0;
     }
-    if (!d->flipok) {
-        plog(d, "surf: this device does not offer VK_KHR_maintenance1, so the "
-                "clip-space flip has no pipeline state to ride - the bottom "
-                "layer stays down and the seam's clear carries the frame");
-        return 0;
-    }
+    /* NO `flipok` GATE HERE. This pass takes no clip-space flip, so
+       VK_KHR_maintenance1 buys it nothing, and refusing to arm without it would
+       leave route E on the seam's flat clear -- the exact blind spot this pass
+       exists to close -- while the log sent the next reader to look for a flip
+       that is not there. tagpu_vk_pass.h says it in terms: the passes that must
+       not flip "no longer ask for this at all".
+       [FROM THE 4c-1 LANDING REVIEW.] */
     if (!resolve(d)) { plog(d, "surf: an entry point is missing"); return 0; }
 
     vkGetPhysicalDeviceProperties(d->pd, &props);
@@ -533,7 +549,7 @@ int tagpu_vk_surf_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     SLOT* s;
     VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
     VkBufferImageCopy rg;
-    int fresh;
+    int fresh, freshPal;
 
     s_drawThis = 0;
     if (s_state == ST_REFUSED) return 0;
@@ -579,56 +595,93 @@ int tagpu_vk_surf_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        once and then not again until something changes. The image is left in
        SHADER_READ_ONLY_OPTIMAL by the barrier below and stays there, which is
        what makes the skip legal: the layout a skipped frame needs is the layout
-       the last upload into THIS slot left it in. */
-    fresh = !s->haveSerial || s->serial != sf.serial;
-    if (fresh) {
-        memcpy(s->smap, sf.bytes, (size_t)sf.w * sf.h);
-        memcpy(s->smap + (size_t)sf.w * sf.h, sf.pal, PAL_W * 4);
+       the last upload into THIS slot left it in.
 
-        /* UNDEFINED IN, because the whole image is re-sent: there are no
-           contents to preserve and therefore no layout to carry between
-           frames. */
+       THE PALETTE IS ASKED SEPARATELY, AND IT HAS TO BE. It moves independently
+       of the indices: a FADE is one picture held still while the table runs
+       down to black, and a gamma change rescales every entry under a static
+       screen. Gating it on the BYTES' serial froze the bottom layer's colours
+       for the whole of a fade -- no fade at all, then a snap when something
+       finally redrew. That was not a bound, it was the hope that the two move
+       together, and they do not. [FROM THE 4c-1 LANDING REVIEW.] */
+    fresh    = !s->haveSerial || s->serial != sf.serial;
+    freshPal = !s->haveSerial || s->palSerial != sf.palSerial;
+    if (fresh || freshPal) {
+        /* THE PALETTE'S OFFSET IS ROUNDED UP TO 4. `vkCmdCopyBufferToImage`
+           requires `bufferOffset` to be a multiple of the texel block size, and
+           the palette's is RGBA8 = 4 bytes. `w * h` is a multiple of 4 for
+           every display mode TA has, which is exactly the kind of fact that
+           stops being true one day -- and the bound this file re-checks admits
+           any 1..TAGPU_SURF_MAXDIM, so an odd-by-odd primary would produce an
+           illegal offset and a palette read out of phase by a channel. The
+           staging buffer is sized with the slack.
+           [FROM THE 4c-1 LANDING REVIEW.] */
+        VkDeviceSize palOff = (((VkDeviceSize)sf.w * sf.h) + 3u) & ~(VkDeviceSize)3u;
+
         b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         b.subresourceRange.levelCount = 1;
         b.subresourceRange.layerCount = 1;
-        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        b.srcAccessMask = 0;
-        b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        b.image = s->img;
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &b);
-        b.image = s->pimg;
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &b);
-
         memset(&rg, 0, sizeof rg);
         rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         rg.imageSubresource.layerCount = 1;
-        rg.imageExtent.width = (uint32_t)sf.w;
-        rg.imageExtent.height = (uint32_t)sf.h;
         rg.imageExtent.depth = 1;
-        vkCmdCopyBufferToImage(cb, s->stage, s->img,
-                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rg);
-        rg.bufferOffset = (VkDeviceSize)sf.w * sf.h;
-        rg.imageExtent.width = PAL_W;
-        rg.imageExtent.height = 1;
-        vkCmdCopyBufferToImage(cb, s->stage, s->pimg,
-                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rg);
 
-        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        b.image = s->img;
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0, NULL, 1, &b);
-        b.image = s->pimg;
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0, NULL, 1, &b);
+        /* EACH IMAGE IS ASKED ITS OWN QUESTION. An image whose serial has not
+           moved is left alone entirely -- no barrier, no copy -- and stays in
+           SHADER_READ_ONLY_OPTIMAL from its last upload into THIS slot, which
+           is the layout a skipped frame needs. UNDEFINED going in, because a
+           re-sent image preserves nothing. */
+        if (fresh) {
+            memcpy(s->smap, sf.bytes, (size_t)sf.w * sf.h);
+            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b.srcAccessMask = 0;
+            b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.image = s->img;
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &b);
+            rg.bufferOffset = 0;
+            rg.imageExtent.width = (uint32_t)sf.w;
+            rg.imageExtent.height = (uint32_t)sf.h;
+            vkCmdCopyBufferToImage(cb, s->stage, s->img,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rg);
+            b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0, NULL, 1, &b);
+            s->serial = sf.serial;
+            s_nBytes++;
+        }
+        if (freshPal) {
+            memcpy(s->smap + palOff, sf.pal, PAL_W * 4);
+            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b.srcAccessMask = 0;
+            b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.image = s->pimg;
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &b);
+            rg.bufferOffset = palOff;
+            rg.imageExtent.width = PAL_W;
+            rg.imageExtent.height = 1;
+            vkCmdCopyBufferToImage(cb, s->stage, s->pimg,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rg);
+            b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0, NULL, 1, &b);
+            s->palSerial = sf.palSerial;
+            s_nPal++;
+        }
 
-        s->serial = sf.serial;
+        /* BOTH IMAGES HOLD A FRAME NOW, which is what `haveSerial` means: it is
+           the two serials' validity, so it is set only once both have been
+           through an upload at this size. `slot_free` clears it. */
         s->haveSerial = 1;
     }
 
@@ -636,6 +689,15 @@ int tagpu_vk_surf_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        swapchain extent and nothing else. */
     s_dx = sf.dx; s_dy = sf.dy; s_dw = sf.dw; s_dh = sf.dh;
     s_drawThis = 1;
+
+    s_nFrames++;
+    if (d->frame - s_saidAt >= 300) {
+        s_saidAt = d->frame;
+        plog(d, "surf: frame %u: %dx%d -> (%d,%d %dx%d), %u frame(s) drawn, "
+                "%u byte upload(s) and %u palette upload(s)",
+             (unsigned)d->frame, sf.w, sf.h, sf.dx, sf.dy, sf.dw, sf.dh,
+             s_nFrames, s_nBytes, s_nPal);
+    }
     return 1;
 }
 
@@ -646,34 +708,39 @@ void tagpu_vk_surf_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     VkRect2D sc;
     VkDeviceSize off = 0;
 
-    (void)d; (void)w; (void)h;
+    int rx, ry, rw, rh;
+    (void)d;
     if (s_state != ST_READY || !s_drawThis) return;
     s_drawThis = 0;
 
-    /* NO FLIP HERE, AND THIS PASS IS THE EXCEPTION AMONG THE PORTED ONES.
-       MEASURED: the negative-height viewport every other pass uses drew TA's
-       shell upside down. The difference is in what the vertex stage does. Those
-       passes COMPUTE a clip position from uniforms written in GL's convention,
-       so turning clip space over is what makes the arithmetic land the same
-       way. This one transforms nothing -- MVPMatrix is the identity and the
-       quad below is a literal already in clip space, with its texture
-       coordinates attached to its corners. Flipping clip space moves the quad
-       AND its texcoords together: it still covers the viewport, but v = 0
-       arrives at the other end of it, which is a vertical mirror of the frame.
+    /* CLAMPED TO THE RENDER AREA WE ARE HANDED. `s_dx..s_dh` were captured by
+       tagpu_surf_take at the top of tagpu_overlay_draw, which runs BEFORE
+       tagpu_vk_frame may rebuild the swapchain -- so on the frame a window
+       shrinks, the rect is the old viewport and `w`/`h` are the new extent, and
+       an unclamped scissor would lie partly outside the render area, which the
+       spec leaves undefined. Every other ported pass uses the extent it is
+       handed and cannot get here; this one carries its own rect and so has to
+       say it. [FROM THE 4c-1 LANDING REVIEW.] */
+    rx = s_dx < 0 ? 0 : s_dx;
+    ry = s_dy < 0 ? 0 : s_dy;
+    if (rx >= (int)w || ry >= (int)h) return;
+    rw = s_dw; rh = s_dh;
+    if (rx + rw > (int)w) rw = (int)w - rx;
+    if (ry + rh > (int)h) rh = (int)h - ry;
+    if (rw < 1 || rh < 1) return;
 
-       So the mapping is stated directly instead. GL puts tex (0,0) -- TA's row
-       0, the TOP of its screen -- at clip y = -1, which is the bottom in GL and
-       reaches the window the right way up because GL's framebuffer is bottom-up.
-       Vulkan's clip y = -1 is already the TOP of the viewport, so the same
-       vertices with no flip put TA's row 0 at the top of the window, which is
-       where it belongs.
+    /* NO FLIP, BECAUSE THE QUAD IS THE FBO ONE -- see the file header, which
+       carries the pairing and the mistake that established it. In short: the
+       quad puts tex (0,0) at clip y = -1, Vulkan's clip y = -1 is the TOP of
+       the viewport, so TA's row 0 lands at the top. A negative-height viewport
+       on top of that would be a SECOND negation.
 
        THE RECT IS THE FRAME'S VIEWPORT, not the window: the letterbox is the
        seam's clear and this must not paint over it. */
-    vp.x = (float)s_dx;
-    vp.y = (float)s_dy;
-    vp.width = (float)s_dw;
-    vp.height = (float)s_dh;
+    vp.x = (float)rx;
+    vp.y = (float)ry;
+    vp.width = (float)rw;
+    vp.height = (float)rh;
     vp.minDepth = 0.0f;
     vp.maxDepth = 1.0f;
     vkCmdSetViewport(cb, 0, 1, &vp);
@@ -681,8 +748,8 @@ void tagpu_vk_surf_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     /* The scissor is NOT flipped: it is a framebuffer rectangle and has no clip
        space in it. It is the same rect, so a viewport whose flip put a fragment
        outside it is clipped rather than drawn somewhere unintended. */
-    sc.offset.x = s_dx; sc.offset.y = s_dy;
-    sc.extent.width = (uint32_t)s_dw; sc.extent.height = (uint32_t)s_dh;
+    sc.offset.x = rx; sc.offset.y = ry;
+    sc.extent.width = (uint32_t)rw; sc.extent.height = (uint32_t)rh;
     vkCmdSetScissor(cb, 0, 1, &sc);
 
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipe);

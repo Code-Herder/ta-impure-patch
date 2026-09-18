@@ -166,7 +166,7 @@ PROGRAMS = [
     ("gui_curs",     "tagpu_gui_surf::QVS",     "tagpu_gui_surf::CURS_FS"),
     ("gui_str",      "tagpu_gui_surf::QVS",     "tagpu_gui_surf::STR_FS"),
     ("gui_mm",       "tagpu_gui_surf::QVS",     "tagpu_gui_surf::MM_FS"),
-    # inc/openglshader.h:42,60 -- the fork's own base blit, built at
+    # inc/openglshader.h:43,60 -- the fork's own base blit, built at
     # render_ogl.c:260 as g_ogl.main_program: TA's 8-bit surface resolved
     # through the palette, the frame's bottom layer [vulkan-only plan, 4c-1]
     ("surf_pal",     "openglshader::PASSTHROUGH_VERT_SHADER",
