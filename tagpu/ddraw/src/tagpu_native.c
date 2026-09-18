@@ -2748,6 +2748,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        which is the real ceiling on the FBO the frame is drawn into; it used to
        read 4096, and a 5K or 8K desktop was refused the whole native pass. */
     if (vw < 64 || vh < 64 || vw > 16384 || vh > 16384) { SSHADOW_NONE(); return; }
+/* The macro captures `f` from its expansion site, so it is confined to the one
+   function that has an `f` to capture. This is its last use. */
+#undef SSHADOW_NONE
 
     /* THE STRUCTURE-SHADOW GATE, AND THIS IS THE ONLY PLACE IT IS RAISED [the
        vulkan-only plan, landing 10b]. The blit's two branches are detoured
@@ -4349,7 +4352,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        0 at tagpu_vk_shadow.c:788 and that pass stands down. No `tagpu_vk*` file
        mentions `slant` at all. */
     s_ssPainter = pdReady &&
-                  ((mapLive && nterr > 0) || ((gfx & 4) && !(cpp && !hard)));
+                  ((mapLive && nterr > 0) ||
+                   ((gfx & 4) && !(cpp && !hard) && npdSlant > 0));
 
     /* ---- render into the (optionally 2x supersampled) game-res FBO ---- */
     fbo_size(gw, gh, ss);

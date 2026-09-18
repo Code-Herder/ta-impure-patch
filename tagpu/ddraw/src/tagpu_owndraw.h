@@ -15,9 +15,12 @@ void tagpu_owndraw_flush(unsigned int frame_counter);
    one; while it says no -- and until it has ever said anything, which is the
    whole of a lane that never runs -- the engine draws its own, as stock.
 
-   `ours` is what the ENGINE will do, read back so the pass's geometry agrees
-   with the branch. It is the GATE, not the install: the hooks can be in and
-   this still 0.
+   `ours` reads back what WE said, not what the engine will do -- 1 means the
+   slant is ours and the engine is skipping it, 0 means the engine draws its
+   own. (An earlier version of this line said "what the ENGINE will do", which
+   is the same sentence with the sense reversed.) The pass reads it so its
+   geometry agrees with the branch. It is the GATE, not the install: the hooks
+   can be in and this still 0.
 
    `frame` is the publish's heartbeat. `tagpu_owndraw_flush` lowers the gate if
    it goes eight frames without one, because the publisher is NOT reached on

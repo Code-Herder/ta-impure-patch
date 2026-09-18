@@ -1794,8 +1794,30 @@ only a live lane sets:
 no runtime gate to be inert through**. `tagpu_owndraw.h` says what that costs: *"the engine then
 draws NO cached slant shadow and the native pass owes every structure one"*. With the shipped
 defaults (`tagpu_owndraw.on` = `all`) under `renderer=gdi`, nobody pays that debt, so **every
-building loses its slant shadow** and the lane is not stock. That, plus the DirectX-warning byte
-named as a residual below, is the whole of the gap.
+building loses its slant shadow** and the lane is not stock.
+
+**THAT IS NOT THE WHOLE OF THE GAP, and this sentence used to say it was** [the fourth review of
+10b]. `tagpu_apply_patches()` (`dllmain.c`, unconditional at `DLL_PROCESS_ATTACH`, before any
+renderer is chosen) applies **three** byte patches, not one:
+
+| VA | what | how it can be inert |
+|---|---|---|
+| `0x4266A7` | the DirectX version warning, `jne`→`jmp` | nothing — the residual named below |
+| `0x43E50C` | `je`→six `nop`s, so the contextual-cursor case always takes the classic branch | a `tagpu_curs.off` FILE only — no lane check, no runtime flag |
+| `0x499041` | a **27-byte rewrite** of the left-click dispatch, so a contextual click decides on Interface Type rather than cursor index | the same file |
+
+The `tagpu_curs` pair is on by default and **changes input semantics**, which is strictly larger
+than the structure-shadow flip this landing closed — that one only ever removed a shadow. Two
+softer items are also unnamed: `tagpu_menu_init()` writes `impure-patch.ufo` into the working
+directory and installs a `DrawGameScreen 0x468CF0` observer that adds a render-options screen, and
+`tagpu_hud_init()` writes the engine's viewport rect whenever the stored HUD scale is not stock.
+(`tagpu_reclaim` is benign there: with its counters stuck at 0 the drain condition is false, so
+entries free on the next `FreeObjectState` rather than leaking.)
+
+**Item 11's exit condition is checked against this sentence**, so it mattered that it was wrong:
+`renderer=gdi` is *not* stock once 10b lands, it is stock **with respect to structure shadows**.
+Closing the rest is either a `tagpu_curs` landing of the same shape 10b just had, or an explicit
+decision to document the cursor pair as a deliberate deviation.
 
 **AND `renderer=gdi` CANNOT BE DRIVEN OR MEASURED BY OUR OWN TOOLING AT ALL — landing 10c, and
 item 11's exit condition depends on it** [found 2026-09-18 while trying to photograph 10b's

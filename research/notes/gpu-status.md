@@ -10702,7 +10702,9 @@ the last of those guards, at the point the pass has committed to drawing, and ea
 lowers it on the way out. **One write per frame**, so there is no window a game-thread read can
 land in: a shell frame writes 0 and only 0, a drawing frame writes 1 and only 1, and the value
 changes only when the pass's own state does. (Nine, not eleven: an earlier version of this
-paragraph said eleven two sentences after saying nine. Nine carry `SSHADOW_NONE()` and sit before
+paragraph said eleven two sentences after saying nine. Nine publish 0 before the raise -- EIGHT
+through `SSHADOW_NONE()` and one, the `s_state == 2` return, through a literal
+`tagpu_owndraw_set_structshadow(0, ...)` call, which a `grep -c` of the macro does not see. Nine sit before
 the publish; three more sit after it — the `nu == 0 && nfx == 0 && …` nothing-to-draw test, the
 `nv == 0 && nhi == 0 && npd == 0 && …` no-geometry test, and the `!gl_draws` hand-over — twelve in
 all, no `goto`. Counted by `grep -n 'SSHADOW_NONE\|return;' ` rather than quoted by line, because
@@ -10805,29 +10807,79 @@ And the gate was watched moving, live, in every direction it has:
 That last row is the one the review's H1 asked for and the one no amount of reading would have
 settled: the publisher genuinely stops being called, and the gate genuinely comes down anyway.
 
-#### Why there is no PICTURE of a structure shadow coming back, and it is not for want of trying
+#### THE PICTURE, AND THE FOUR ROUNDS OF BEING WRONG ABOUT WHY THERE WASN'T ONE
 
-Four attempts, and the reason turns out to be structural rather than a gap in effort.
+**There is a picture. It was obtainable all along, on the shipped GL lane, and the argument that
+it was not is the single most expensive mistake of this landing** [the fourth review found the
+argument false; the A/B below was then run and it is decisive].
 
-The engine's Shadow option is **on** in the test instance — `main+0x37F06` reads `0x3F`, bit 2 set,
-peeked live — and the fixture's ARM lab is in frame with the camera reproduced to the digit. Yet
-lowering the gate changes **0 pixels**. It is not that the branch does not run; it is that
-**the engine blits its cached slant shadow into the engine's own 8-bit surface, and with
-`tagpu_terr.on` armed our terrain pass owns every pixel of the viewport**, so that surface only
-shows where our composite has no coverage. Inside the viewport there is none.
+**What this section used to say, and why it was wrong.** It claimed that *"the engine blits its
+cached slant shadow into the engine's own 8-bit surface, and with `tagpu_terr.on` armed our
+terrain pass owns every pixel of the viewport"*, so the restored shadow could only be seen on
+`renderer=gdi`, which no `tacli` verb can drive. **The composite does the opposite.** Its
+fragment shader is
+`if (!cur && int(texelFetch(uSurf, p, 0).r * 255.0 + 0.5) != uKey) discard;` — inside the
+viewport **our** fragment is discarded wherever the engine's surface is *not* the key index, so
+the engine's pixel wins. The comment thirty lines above it says so in as many words: *"every
+OTHER index there is by construction something the engine drew afterwards, so we discard OUR
+fragment at those pixels and its own already-drawn frame shows through."* The 0-px result that
+started the belief was taken on `renderer=vulkan`, where `keyOn` is −1 because `f->surface_tex`
+is 0 until landing 4c, so the engine's surface is not composited at all. It was a Vulkan result
+generalised to a lane it does not describe.
 
-So the restored shadow is visible exactly where the engine draws the world — which is
-`renderer=gdi`, the lane this landing is *for*, and the lane `tacli ui` cannot drive past the main
-menu. **The effect and the only instrument for seeing it are on opposite sides of the same
-wall.** What is verified instead is the mechanism at every point the picture would depend on: the
-branch's machine code against the pristine disassembly, the gate's six live transitions above, and
-0 differing pixels wherever the gate's state is not supposed to matter.
+**THE A/B, RUN 2026-09-18 ON `renderer=openglcore`.** Instance at 1024×768 with the shipped play
+defaults, `scenario load shadow-struct` (ARMCOM, ARMSOLAR, ARMMEX, CORMEX, CORWIN), camera
+`[1600, 1600]`, eye `[1216, 1203]`. One capture with the gate up, then `shadows=0` written into
+`tagpu_classicpp.cfg` and one with it down — the log records both transitions,
+`classicpp: shadows=0(off)` followed by `owndraw: the engine's cached slant shadow is restored`.
+
+| | result |
+|---|---|
+| differing pixels | **13 396** of 786 432, bounding box y 340–575, x 330–735 |
+| dominant colour introduced with the gate DOWN | **(0, 128, 128) — 8 779 px** |
+| what it looks like | **four opaque teal blobs stamped on the four structures**, at the 1× position |
+
+So the mechanism is now verified by picture as well as by disassembly, and the gate demonstrably
+works in both directions on a live game.
+
+**AND THE PICTURE INVERTS THIS LANDING'S SAFETY ARGUMENT.** The note said gate-down was "the safe
+direction — a shadow the engine draws is visible, a shadow nobody draws is silent". What the
+engine actually draws inside a key-filled viewport is **not a shadow**. It is the ALP blend at
+`0x4B8500` darkening palette 254's cyan into opaque teal — `tagpu_owndraw.c`'s header has said so
+since G13k, and this is the first time the two halves of that sentence were put side by side.
+A player would report teal blobs as a broken renderer, not as a missing shadow.
+
+**Which means the predicate is still asking the wrong question, for the fourth time.** "Did
+anything paint a structure's slant" decides whether a *shadow* appears. It does not decide
+whether *garbage* appears, and inside a key-filled viewport the engine's cached slant is always
+garbage. The question that decides that is **"is the viewport key-filled"** — which is exactly
+`tagpu_terrown_filled()` (`g_terrown_skip && g_filled`), is 0 on `renderer=gdi` by construction
+because `render_gdi.c` makes no `tagpu_` call, and is 0 whenever `terr_bail()` hands the ground
+back through `tagpu_terrown_set_skip(0)`. The shape that follows from the measurement is
+
+```c
+s_ssPainter = tagpu_terrown_filled() || (pdReady && ( … ));
+```
+
+— suppress when the engine's output would be garbage, *or* when we are painting a shadow.
+**Not applied here**: it is the fourth redesign of this predicate, it is the safety-critical
+cross-thread flag, and it is a change of the question rather than a fix to the answer, so it is
+the owner's call. Named, measured, and left where the next session cannot miss it.
+
+**Every gate-down state is therefore worse than `main`, not equal to it** — `main` flipped both
+`je`s unconditionally, so it never drew the engine's slant anywhere and never showed teal. The
+reachable gate-down states on the GL lane with `terrown` live are `shadows=OFF`, the posed program
+refused, Classic++ off with the posed program refused, `nterr == 0`, and both frames of every 0→1
+transition. **`shadows=OFF` is the one a player can reach on purpose, and it is the worst**: the
+player asked for no shadows and gets four teal blobs.
 
 #### Not covered
 
-* **The `renderer=gdi` picture** — see the section above for why, and it is worth being precise:
-  `tacli ui` returns *"no UI snapshot appeared"* on that lane, so the shell cannot be driven past
-  the main menu, and that is also the only lane where the restored shadow would be visible.
+* **The `renderer=gdi` picture.** Still not taken — `tacli ui` returns *"no UI snapshot
+  appeared"* on that lane, so the shell cannot be driven past the main menu (landing 10c). But it
+  is no longer the *only* lane where the restored shadow is visible, which is what the section
+  above got wrong for four rounds: the GL-lane A/B is the picture, and it was available the whole
+  time.
   Making `tacli` drive the gdi lane is its own piece of work and would close this.
 * **The two other routes to a picture, and why each failed.** Disarming `tagpu_native.on` to force
   the gate down disarms far more than this gate — `terrown` keeps key-filling with no painter, so

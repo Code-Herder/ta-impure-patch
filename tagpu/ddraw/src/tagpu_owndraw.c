@@ -38,19 +38,25 @@
    skip:
      C2 10 00                   ; ret 0x10 — unwind exactly like the callee
 
-   With target "all" two more bytes go in, both inside the blit 0x459200
-   (shadows-cloak.md "Shadow decision tree"): the `je` that sends a unit whose
-   state carries 0x20000000 (structures) to the CACHED SLANT SHADOW branch
-   becomes a `jmp`, so every unit takes the completed-unit silhouette branch
-   instead. That branch builds its shadow from the composite -- blank under
-   "all" -- and so blits nothing. Why: the cached shadow is drawn by the
-   ALP-blend blit 0x4B8500, and inside a key-filled viewport (terrown) the
-   blend darkens palette 254's cyan into an opaque teal silhouette that sits
-   at the 1x position whatever the zoom. The native pass draws the slant
-   shadow in its place (tagpu_native.c, `slant`).
-     0x4592C6: 74 5C  je 0x459324   (path A, colour-only composite)  -> EB 5C
-     0x45952C: 74 4A  je 0x459578   (path B, colour+depth)           -> EB 4A
-   Both leave eax (the graphics-option word the target tests) untouched.
+   With target "all" the blit's two STRUCTURE-SHADOW branches are taken over
+   too -- see the block at "THE STRUCTURE-SHADOW PAIR" below, which is the
+   current description. In short: 21 bytes are stolen at 0x4592BF and 0x459522
+   (each site's `test` plus its `je`) and replaced by a detour onto a stub that
+   asks `g_ssSkip` first, so the suppression is decided PER DRAW rather than
+   once at DllMain.
+   [Until 2026-09-18 this header described a blind `je`->`jmp` flip at 0x4592C6
+   and 0x45952C, which is the fault landing 10b removed -- a lane where nothing
+   of ours paints kept the flip and lost every structure's shadow. It is called
+   out rather than silently deleted because this is the block a maintainer
+   reads first, and it described the bug as current behaviour for four review
+   rounds after the bug was gone.]
+   Why it matters that the engine's branch is suppressed at all: the cached
+   shadow is drawn by the ALP-blend blit 0x4B8500, and inside a key-filled
+   viewport (terrown) the blend darkens palette 254's cyan into an opaque teal
+   silhouette that sits at the 1x position whatever the zoom. MEASURED
+   2026-09-18 on renderer=openglcore: with the gate down, four structures put
+   8779 px of exactly (0,128,128) on the screen. The native pass draws the
+   slant shadow in its place (tagpu_native.c, `slant`).
 
    A THIRD detour, on the BLIT-TIME BUILD-STATE EFFECT 0x458DD0, covers units
    under construction (build-state.md). That function is the whole nanoframe
@@ -474,7 +480,10 @@ static int install_one(unsigned int va, unsigned int resume,
     memcpy(p, &rel, 4); p += 4;
     *p++ = 0xC2; *p++ = 0x10; *p++ = 0x00;                  /* skip: ret 0x10     */
 
-    if (!VirtualProtect(t, 5, PAGE_EXECUTE_READWRITE, &old)) return 0;
+    if (!VirtualProtect(t, 5, PAGE_EXECUTE_READWRITE, &old)) {
+        VirtualFree(s, 0, MEM_RELEASE);  /* nothing was written; keep nothing */
+        return 0;
+    }
     t[0] = 0xE9;
     rel = (int32_t)((unsigned int)s - (va + 5));
     memcpy(t + 1, &rel, 4);
@@ -821,7 +830,10 @@ static int install_shadow(unsigned int va, unsigned int resume,
     rel = (int32_t)(resume - ((unsigned int)p + 4));
     memcpy(p, &rel, 4); p += 4;
 
-    if (!VirtualProtect(t, 5, PAGE_EXECUTE_READWRITE, &old)) return 0;
+    if (!VirtualProtect(t, 5, PAGE_EXECUTE_READWRITE, &old)) {
+        VirtualFree(s, 0, MEM_RELEASE);  /* nothing was written; keep nothing */
+        return 0;
+    }
     t[0] = 0xE9;
     rel = (int32_t)((unsigned int)s - (va + 5));
     memcpy(t + 1, &rel, 4);
