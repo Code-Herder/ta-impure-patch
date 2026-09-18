@@ -9881,6 +9881,66 @@ The landing verified its picture and did not ask what else had been reading rout
 
 ---
 
+### 2.56 The GL capture half goes, and gate 4's deletions are done — landing 4d-2
+
+**LANDED 2026-09-18.** 101 lines in, 599 out. `tagpu_abshot.c` and `tagpu_abshot.h` are deleted
+(392 lines of the total), and with them every `TAGPU_ABSHOT` declaration, `tagpu_abshot_begin` and
+`tagpu_abshot_end` across the eight ported passes.
+
+#### It was already unreachable, and 4d-1 is what made it pointless
+
+The captures sat behind `gl_draws`, which is `!tagpu_vk_owns_present()` — false under
+`renderer=vulkan`, where there is no GL context to read a framebuffer from. What made the file
+*pointless* rather than merely idle is §2.55: route D gave the two lanes a window each, so one frame
+could be photographed from both sides and diffed, and with route D gone the GL half had nothing to
+pair with.
+
+#### Every pass already contained the code that survives
+
+That is what made the landing small, and it is worth recording as a shape. All eight carried **two**
+branches — the GL one that captured and claimed on `wrote && fresh`, and an `else if (taking)` that
+merely claimed — because landings 4b-1…4b-3 had already been forced to write the second one for the
+lane with no GL half. The deletion is each pass collapsing onto its own existing branch:
+
+```c
+if (taking) { s_abDone = 1; s_abFrame = tagpu_vk_ab_arm("<tag>"); }
+```
+
+#### What stays, and it is a decision rather than a default
+
+The **Vulkan half and the eight `.ab` levers stay** — the owner's call, 2026-09-18. A single-lane
+capture is still how a PPM of the Vulkan frame is taken, and the cross-**build** comparison that
+replaced the two-lane oracle is what this plan leans on from here. `tagpu_vk_ab_arm` is untouched:
+it unlinks the target `_vk.ppm` at the instant the claim latches, which is what makes the file on
+the disk *this* arming's rather than an earlier run's.
+
+#### Verified by running it
+
+- The full play arm set renders a complete 1024x768 frame on `renderer=vulkan` — **0 magenta pixels
+  of 786 432**, with the clear colour left at its magenta default.
+- `tagpu_terr.ab` alone writes `tagpu_terr_vk.ppm` at **2048x1536** — `gw*ss` by `gh*ss`, the world
+  target's own size — and the lane logs `vk: shot: wrote tagpu_terr_vk.ppm, 2048x1536`.
+
+**A first attempt at that second check looked like a regression and was not**, which is worth
+writing down because the next session will repeat it. Arming the lever with the FULL arm set
+produced no file at all; the seam's answer was *"1 A/B levers claimed this frame and 5 passes drew
+into it - nothing captured"*. That is the "one pass per capture" rule from G19e. The claim fired
+correctly; the fixture was wrong.
+
+#### Not covered by 4d-2
+
+- **`s_curDrew`'s ordering is still open**, and it is now the only thing left in gate 4.
+  `render_vk.c` publishes `tagpu_cursown_publish(tagpu_gui_cursor_drew_take())` **before**
+  `tagpu_vk_frame`, so it asserts "our cursor was drawn" on the strength of the mirror record
+  reaching `draw_layer`'s tail while `tagpu_vk_gui_prepare` can still refuse the frame afterwards.
+  The fix is an ordering — hold the taken value, have the seam report whether
+  `tagpu_vk_gui_record` actually ran, and publish `want && composited` after the frame, so every
+  early return yields the truth instead of a stale latch.
+- **`tools/vk-ab.py` still reads a `_gl.ppm`** when given a gamedir and a `--pass`. Nothing writes
+  one any more, so that form now always refuses; the two-file form is the one that works.
+
+---
+
 ## 4. What the work taught us
 
 These are the transferable parts — the reasons things are shaped the way they are.

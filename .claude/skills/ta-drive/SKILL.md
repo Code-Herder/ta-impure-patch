@@ -2197,6 +2197,15 @@ Four things that cost a session if they are not known:
 > capture that replaces it still uses `tagpu_vk_shot.c` and the same eight `.ab` levers — arm one,
 > get a PPM of the Vulkan frame, diff it against one taken from an earlier build. What you cannot
 > do any more is diff the two backends against each other.
+>
+> **HOW THE SURVIVING CAPTURE IS TAKEN, measured 2026-09-18 on the 4d-2 build.** Launch with
+> `renderer=vulkan`; arm **one** pass and nothing else, because the seam still refuses a frame that
+> more than one pass drew into (*"N A/B levers claimed this frame and M passes drew into it"* — the
+> first attempt at this check armed the full play set and got no file, which looks exactly like a
+> broken build and is not); `rm` the `.ab` and the `.ppm`, let the fixture settle, then `touch` the
+> `.ab`. The lane logs `vk: shot: wrote tagpu_<tag>_vk.ppm, 2048x1536` and the file is
+> `gw*ss × gh*ss`. Then `tools/vk-ab.py <old.ppm> <new.ppm>` — the two-FILE form. **The
+> `--pass <tag> <gamedir>` form no longer works**: it looks for a `_gl.ppm` that nothing writes.
 
 **The per-pass A/Bs on the vulkan-only lane, as of landing 4c-3.** All five world passes and the
 UI layer draw there now, and the **five world** ones run at any `ss` — their ink counts below are

@@ -2868,8 +2868,11 @@ deletion had silently killed** — `tagpu_ftime` (inert on this lane, so the sti
 worse than GL" clause had nothing to measure with; after the fix, **vk p50 0.154 ms, p99 0.370 ms**
 at 1024x768), `tools/uiwalk.py --vk` (the walk the G19f UI clause was met with, now refusing by
 name), and six one-way gather mirrors still paid for under `renderer=openglcore` for a consumer that
-no longer exists. All three fixed in the landing. **What is left is 4d-2 (the dead GL capture
-half) plus the `s_curDrew` gap.** Filed as one row — the fourth backend,
+no longer exists. All three fixed in the landing. **4d-2 LANDED 2026-09-18** (§2.56): the GL capture half, 101 lines
+in and 599 out, `tagpu_abshot.c` and its header among them — already unreachable on the surviving
+route, and every pass already carried the branch that survives. Verified on `renderer=vulkan`: a
+complete frame at 0 magenta of 786 432, and `tagpu_terr.ab` alone writing a 2048x1536 `_vk.ppm`.
+**Gate 4's deletions are done; what is left in the gate is the `s_curDrew` ordering gap alone.** Filed as one row — the fourth backend,
 `renderer=vulkan`, the `ss` target, TA's surface, and route D's deletion — it comes apart along
 four seams the code already has: **4a** the thread and the present, **4b** the per-frame driver
 (the gathers run and the GL draws stand down), **4c** the `ss` target and TA's surface upload,

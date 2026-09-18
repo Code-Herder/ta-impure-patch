@@ -654,8 +654,25 @@ would not have shown up as a failure — it would have shown up as three landing
      clause was MET with, armed route D exactly and now refuses with a message; and `tagpu_vk.on`
      under `renderer=openglcore` was still latching six one-way gather mirrors (tens of MB) for a
      consumer that no longer exists, so those now ask `tagpu_vk_owns_present()` instead.
-     **4d-2 is what is left**: `tagpu_abshot.c` still writes `_gl.ppm` from eight call sites with
-     nothing to pair against.
+     **4d-2 LANDED 2026-09-18** ([gpu-status](gpu-status.html) §2.56): 101 lines in, 599 out,
+     `tagpu_abshot.c` and its header among them. It was already unreachable — the captures sat
+     behind `gl_draws`, false under `renderer=vulkan` — and 4d-1 is what made it pointless rather
+     than idle. **Every pass already contained the code that survives**: all eight had a second
+     `else if (taking)` branch that merely claims, written in 4b-1..4b-3 for the lane with no GL
+     half, so the deletion is each pass collapsing onto it. The Vulkan half and the eight `.ab`
+     levers stay, per the decision above. **Verified**: the full arm set renders a complete
+     1024x768 frame at 0 magenta of 786 432, and `tagpu_terr.ab` alone writes
+     `tagpu_terr_vk.ppm` at 2048x1536.
+
+     **Gate 4's deletions are done. What remains in the gate is `s_curDrew`'s ordering** — the plan
+     assigns it to 4c and none of 4c-1..4c-3 or 4d-1..4d-2 closed it. `render_vk.c` publishes
+     `tagpu_cursown_publish(tagpu_gui_cursor_drew_take())` BEFORE `tagpu_vk_frame`, so it asserts
+     "our cursor was drawn" while `tagpu_vk_gui_prepare` can still refuse the frame afterwards; the
+     engine's own cursor is then suppressed on a frame that composited no UI. The fix is an
+     ORDERING and not a move: the publish's position is argued in place (*"the only point every path
+     through the driver reaches"*), so hold the taken value, have the seam report whether
+     `tagpu_vk_gui_record` ran, and publish `want && composited` after the frame — every early
+     return then yields the truth rather than a stale latch.
 
      **WHAT 4d TAKES AND WHAT IT LEAVES — decided by the owner 2026-09-18, because the plan scoped
      4d to the window and said nothing about the instrument that dies with it.** Keep
