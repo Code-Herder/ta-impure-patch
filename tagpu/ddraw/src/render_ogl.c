@@ -1682,25 +1682,24 @@ static void ogl_render()
             }
         }
 
-        /* tagpu_vk (Phase G / G19a): the Vulkan lane. Returns 1 only when it
-           presented this frame itself, and then the GL swap is SKIPPED -- two
-           backends must not both present to one window in one frame. With
-           `tagpu_vk.on` absent it returns 0 on a cached lever read before it
-           touches anything, so the GL path is what it was before the file
-           existed. The GL context is neither released nor made non-current:
-           route A of tools/vkcoexist.c, measured 2026-09-15. */
-        /* `g_tagpu_frames - 1` is THIS iteration's frame: the counter is
-           post-incremented when TAGPU_FRAME is filled above, so the number our
-           GL passes stamped their hand-overs with is the one before it. That
-           equality is what lets a Vulkan pass refuse a hand-over from any
-           other frame (tagpu_vk_pass.h). */
-        /* CLOSED BEFORE THE VULKAN LANE RUNS, not after it: the two lanes are
-           being compared, so the GL bracket must not contain the Vulkan lane's
-           own submit. `tagpu_vk_frame` is where the other half is taken. */
+        /* THIS BACKEND PRESENTS ITS OWN FRAME AND NOTHING ELSE DOES.
+           [The vulkan-only plan, landing 4d-1.]
+
+           Until that landing the Vulkan lane also ran from HERE, beside this
+           backend -- `tagpu_vk_frame` returned 1 when it had presented and the
+           GL swap was skipped, because two backends must not both present to one
+           window in one frame. That arrangement was route D, and it was the
+           project's oracle: both backends rendering the same frame, each
+           capturing its own half, `tools/vk-ab.py` diffing the two. It is gone,
+           deliberately and one-way, with every absolute figure it could produce
+           banked first (gpu-status.md §2.54). The Vulkan lane is now reached
+           only through `renderer=vulkan`, i.e. through render_vk.c.
+
+           `tagpu_vk_enum_start()` up at the top of this function STAYS: the GPU
+           row is the player-facing half of Phase G and has to work under this
+           backend too. */
         tagpu_ftime_gl_end();
-        if (!tagpu_vk_frame(g_ddraw.hwnd, g_ddraw.render.width, g_ddraw.render.height,
-                            g_config.vsync, g_tagpu_frames - 1u))
-            SwapBuffers(g_ogl.hdc);
+        SwapBuffers(g_ogl.hdc);
 
         /* Force redraw for GDI games (ClueFinders) */
         if (!g_ddraw.primary)

@@ -62,10 +62,12 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     if (tagpu_menu_wndproc(hWnd, uMsg, wParam, lParam, &shielded))
         return shielded;
 
-    /* tagpu_vk (Phase G / G19a): the Vulkan lane's own window is created, moved
-       and destroyed here, on the thread that owns windows and pumps their
-       messages. An OBSERVER -- it claims nothing and returns nothing, so every
-       message below reaches the fork exactly as it did before. */
+    /* tagpu_vk (Phase G): the Vulkan lane is told here, on the thread that owns
+       windows, that the game window is being destroyed -- the one fact its
+       render thread cannot get for itself. An OBSERVER -- it claims nothing and
+       returns nothing, so every message below reaches the fork exactly as it did
+       before. (Until the vulkan-only plan's landing 4d-1 it also created, moved
+       and destroyed a window of the lane's own; there is no such window now.) */
     tagpu_vk_wndproc(hWnd, uMsg, wParam, lParam);
 
     switch (uMsg)

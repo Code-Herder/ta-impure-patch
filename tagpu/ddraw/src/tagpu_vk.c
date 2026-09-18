@@ -106,9 +106,11 @@
    own objects back, destroys its own window, and hands the lane to ST_OFF so a
    later render thread can bring it up again. Nothing waits and nothing leaks.
 
-   THE WINDOW BELONGS TO THE LANE while it is up or coming up and to nobody
-   otherwise -- `vkw_release_unless_worker` is the whole of that rule, and the
-   two states it exempts are the two in which a worker may hold a surface on it.
+   THE WINDOW IS THE GAME'S AND THE LANE NEVER OWNS ONE, since landing 4d-1.
+   What used to need a rule here -- who may destroy the lane's own popup, and in
+   which states a worker might still hold a surface on it -- has no subject any
+   more: the surface goes on the window the caller names and nothing in this file
+   creates, moves or destroys a window.
 
    IT READS NO ENGINE STATE. Every value arrives as an argument. This file is
    not on `thread-split.allow` and must never need to be.
@@ -488,251 +490,83 @@ static void ab_drop(const char* why, int idle)
    answered by looking rather than by measuring. */
 static float s_clear[3] = { 1.0f, 0.0f, 1.0f };
 
-/* ---- route D: the Vulkan window ------------------------------------------
-   ONE THREAD OWNS IT, AND IT IS THE THREAD THAT ALREADY PUMPS. A window whose
-   messages nobody dispatches deadlocks anything that sends it one -- the window
-   manager's broadcasts included -- so this window is created, moved, shown and
-   destroyed on the GAME's window thread, reached by posting to the game window
-   exactly as `tagpu_menu`'s WINDOW rows do. The render thread only presents to
-   it, which needs no message pump and no ownership.
+/* ---- the window the surface goes on ---------------------------------------
+   THERE IS ONE, AND IT IS THE GAME'S. [The vulkan-only plan, landing 4d-1.]
 
-   IT IS AN OWNED POPUP, NOT A CHILD. A child was route 2 and system wine
-   refuses a surface on one outright. An owned top-level window gets the
-   behaviour we would otherwise have to write: it stays above its owner, it
-   minimises and restores with it, and WS_EX_TOOLWINDOW keeps it out of the
-   taskbar and the alt-tab list. WS_EX_NOACTIVATE and SW_SHOWNOACTIVATE keep it
-   from ever taking focus.
+   ROUTE D IS GONE. Until this landing the lane could also run BESIDE the GL
+   backend, presenting into an owned popup of its own placed over the game
+   window's client area -- a whole apparatus (a window class, a window proc, a
+   create/destroy handshake posted to the thread that pumps, and a
+   `WM_WINDOWPOSCHANGED` follow to keep the popup on the client rect) that
+   existed for exactly one reason, stated in tagpu_vk.h: *"two backends must not
+   both present to one window in one frame"*.
 
-   IT IS TRANSPARENT TO THE MOUSE. `WM_NCHITTEST` answers `HTTRANSPARENT`, so a
-   click lands on the game window underneath as though this window were not
-   there. The fork's injected input posts to `g_ddraw.hwnd` directly and never
-   saw it either way; this is for the human's pointer.
+   THAT REASON NO LONGER EXISTS, because there is no longer a second backend to
+   present. `renderer=vulkan` reaches `render_vk.c`, which calls
+   `tagpu_vk_own_present()` before its loop, and nothing else drives this lane:
+   `render_ogl.c`'s own call to `tagpu_vk_frame` went with the popup. So the
+   surface goes on the window the caller names and `s_ownWin` is set on every
+   frame that gets here.
 
-   THE GEOMETRY IS EVENT-DRIVEN, NOT POLLED. `WM_WINDOWPOSCHANGED` is the one
-   message Windows guarantees for any move, size, z-order or show change of the
-   owner, so following it is following the geometry -- there is nothing to miss
-   and no per-frame `GetClientRect` on the render thread. */
+   WHAT THIS COST, AND IT WAS PAID DELIBERATELY. Route D was also the project's
+   ORACLE: both backends rendering the same frame, each capturing its own half,
+   `tools/vk-ab.py` diffing the two. No absolute two-lane comparison is
+   expressible after this, so every figure that wanted one was taken first --
+   all five world passes at the shipped `ss = 2` in landing 4c-3
+   ([gpu-status](gpu-status.html) §2.54), the UI layer at 0 px of 307 200, and
+   the `ss = 1` set before them. From here a claim is relative: this build
+   against the previous one.
 
-#define VKW_CLASS   "tagpu_vk_surface"
-enum { VKW_CREATE = 1, VKW_DESTROY = 2 };
+   WHAT SURVIVES. `tagpu_vk_wndproc` keeps its name and its call from the fork's
+   wndproc, reduced to the one arm that was never about a window of ours -- the
+   OWNER dying, which is the only thing the window thread can tell the render
+   thread that `hwnd != s_owner` cannot (see `s_ownGone`). */
 
-static HWND volatile s_vkwnd;           /* ours; published by the window thread */
 static HWND          s_owner;           /* the game window we are tracking     */
-static int           s_askedWin;        /* a create is already posted          */
 
-/* ROUTE D COLLAPSES WHEN THIS BACKEND IS THE ONLY ONE (the vulkan-only plan's
-   landing 4). Every line of the window machinery above exists for one reason,
-   stated in tagpu_vk.h: *"two backends must not both present to one window in
-   one frame"*. With `renderer=vulkan` there is no second backend, so the
-   surface goes on the window the caller names and no window of ours is ever
-   created.
+
+/* THIS BACKEND OWNS THE PRESENT, and since landing 4d-1 there is no other kind
+   of frame: `render_vk.c` sets this before its loop and it is the only driver
+   of this lane. The latch is kept rather than collapsed away -- the plan scopes
+   4d to the window, and turning every `tagpu_vk_owns_present()` test in the
+   tree into a constant is a far larger change than deleting a popup.
 
    IT IS A ONE-WAY LATCH, set once from `vk_render_main` before its loop and
    never cleared: which backend the process has is decided at `dd.c`'s dispatch
-   and cannot change afterwards. A flag that could go back would mean a live
-   surface on the game window and a Route D window both existing, which is the
-   state this file has spent three reviews making impossible.
-
-   THE INVARIANT THAT MAKES ROUTE D UNREACHABLE IS `s_vkwnd == NULL`, and it is
-   worth stating exactly, because the first version of this comment claimed
-   something weaker and something false. `s_vkwnd` is written non-NULL only in
-   `vkw_create`; `vkw_create` is reached only from `WM_TAGPU_VK`/`VKW_CREATE`;
-   the only poster is the ST_OFF branch below, whose `win` is `hwnd` when this
-   is set and `hwnd` is already known non-NULL — so **no `VKW_CREATE` is ever
-   posted**, `s_vkwnd` is NULL for the life of the process, and every `vkw_*`
-   path returns through its own guard. `tagpu_vk_wndproc`'s early return is
-   belt, not the argument. [THE OLD COMMENT SAID THE EARLY RETURN DEFEATED A
-   `VKW_CREATE` ALREADY IN THE QUEUE. That message cannot exist, so the claim
-   was vacuous — and a false safety argument is worse than none, because the
-   next edit trusts it. FROM THE LANDING REVIEW, 2026-09-17.]
+   and cannot change afterwards.
 
    INTERLOCKED BECAUSE THREE THREADS READ IT: the render thread writes it, the
    bring-up worker reads it for its two log lines, and the game/window thread
    reads it in `tagpu_vk_wndproc` and in `tagpu_vk_armed`. A plain `int` there
    is an unsynchronised cross-thread read, which is not an ordering however
-   early the write happens. [SAME REVIEW.] */
+   early the write happens. [FROM THE LANDING REVIEW, 2026-09-17.] */
 static volatile LONG s_ownWin;          /* this backend owns the present       */
 
-/* THE OWNER IS GONE, published by the window thread. Under route D the second
-   detector for "the window the surface is on has died" was `s_vkwnd` being
-   emptied by `WM_DESTROY`, which bounded the damage at ONE frame: the render
-   thread's next frame found its window missing and took the rebuild path. With
-   the present owned there is no `s_vkwnd` to empty, and `hwnd != s_owner`
-   does not cover it — `g_ddraw.hwnd` is nulled only by the IAT-hooked
-   `DestroyWindow` (winapi_hooks.c), and only AFTER the real destroy, so a
-   destroy by any other route leaves that test false and the lane presenting on
-   a dead HWND until the driver says `VK_ERROR_SURFACE_LOST_KHR`.
-
-   That would be trading an ordering for "wait for an error", which is the shape
-   this file is not allowed to ship. So the latch keeps the one-frame bound
-   without keeping any of route D's window code. [FROM THE LANDING REVIEW,
-   2026-09-17.] */
+/* THE OWNER IS GONE, published by the window thread, and it is the ONLY thing
+   that detector can be now. `hwnd != s_owner` does not cover it -- `g_ddraw.hwnd`
+   is nulled only by the IAT-hooked `DestroyWindow` (winapi_hooks.c), and only
+   AFTER the real destroy, so a destroy by any other route leaves that test false
+   and the lane presenting on a dead HWND until the driver says
+   `VK_ERROR_SURFACE_LOST_KHR`. That would be trading an ordering for "wait for
+   an error", which is the shape this file is not allowed to ship, so the latch
+   keeps a one-frame bound on it. It is why `tagpu_vk_wndproc` still exists at
+   all after 4d-1. [FROM THE LANDING REVIEW, 2026-09-17.] */
 static volatile LONG s_ownGone;
 
-/* `raise` only on the first placement. An OWNED window already stays above its
-   owner, so re-asserting HWND_TOP on every move of the owner would be pushing
-   our window up the desktop's z-order for no reason -- and the owner's move is
-   exactly when the player may be dragging something else over the game. */
-static void vkw_place(HWND win, HWND owner, int raise)
-{
-    RECT c;
-    POINT tl;
-    if (!win || !owner) return;
-    if (!GetClientRect(owner, &c)) return;
-    tl.x = c.left; tl.y = c.top;
-    if (!ClientToScreen(owner, &tl)) return;
-    real_SetWindowPos(win, raise ? HWND_TOP : NULL, tl.x, tl.y,
-                      c.right - c.left, c.bottom - c.top,
-                      SWP_NOACTIVATE | (raise ? 0 : SWP_NOZORDER));
-}
-
-static LRESULT CALLBACK vkw_proc(HWND h, UINT m, WPARAM w, LPARAM l)
-{
-    switch (m) {
-    /* the pointer goes through us to the game window underneath */
-    case WM_NCHITTEST:   return HTTRANSPARENT;
-    /* we paint every pixel from the present; GDI must not flash over it */
-    case WM_ERASEBKGND:  return 1;
-    }
-    return real_DefWindowProcA(h, m, w, l);
-}
-
-static void vkw_create(HWND owner)
-{
-    static int registered;
-    HWND win;
-    HINSTANCE inst = GetModuleHandleA(NULL);
-
-    if (s_vkwnd || !owner) return;
-    if (!registered) {
-        WNDCLASSA wc;
-        memset(&wc, 0, sizeof wc);
-        wc.lpfnWndProc = vkw_proc;
-        wc.hInstance = inst;
-        wc.lpszClassName = VKW_CLASS;
-        wc.hCursor = NULL;              /* the game owns the cursor */
-        if (!RegisterClassA(&wc)) { vklog("RegisterClass: %lu", GetLastError()); return; }
-        registered = 1;
-    }
-    win = real_CreateWindowExA(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
-                               VKW_CLASS, "", WS_POPUP,
-                               0, 0, 64, 64, owner, NULL, inst, NULL);
-    if (!win) { vklog("CreateWindowEx: %lu", GetLastError()); return; }
-    vkw_place(win, owner, 1);
-    real_ShowWindow(win, SW_SHOWNOACTIVATE);
-    /* PUBLISHED LAST, once the window is placed and shown: the render thread
-       starts the bring-up on a handle it reads here, and a half-built window
-       would give the swapchain the wrong extent. */
-    InterlockedExchangePointer((void* volatile*)&s_vkwnd, win);
-    vklog("window: created %p over %p (route D)", (void*)win, (void*)owner);
-}
-
-/* THE HANDLE IS TAKEN AWAY WHEN THE DESTROY IS REQUESTED, NOT WHEN IT IS
-   SERVICED, AND IT TRAVELS IN THE MESSAGE. [FROM REVIEW 2026-09-15.]
-
-   The previous shape posted `VKW_DESTROY` and left `s_vkwnd` standing until the
-   window thread got round to pumping. Between those two moments the lever could
-   be re-armed, or the render thread restarted after a mode change: `ST_OFF`
-   read `s_vkwnd`, found it non-NULL, skipped the create and started a worker
-   that put a surface on that window -- and the window thread then serviced the
-   queued destroy and pulled the window out from under a live surface, which is
-   the one thing this file forbids everywhere else. Clearing the handle first
-   makes the window invisible to the render thread the instant it is doomed,
-   which is the ordering the old comment claimed and did not have.
-
-   Callable from the render thread and from the bring-up worker; the window
-   thread does the destroying, unless the owner is already gone. */
-static void vkw_request_destroy(void)
-{
-    HWND win = (HWND)InterlockedExchangePointer((void* volatile*)&s_vkwnd, NULL);
-    HWND owner = s_owner;
-    if (!win) return;
-    /* ONLY THE THREAD THAT CREATED A WINDOW MAY DESTROY IT, so there is no
-       fallback here -- an earlier revision called `DestroyWindow` directly when
-       the owner was gone, from whichever thread happened to be asking, and that
-       call simply fails. It is unreachable anyway: `s_owner` is set before the
-       create is ever posted, so a window cannot exist without one. Said rather
-       than silently dropped, because the day it is reachable the log is the
-       only thing that will say so. */
-    if (owner) PostMessageA(owner, WM_TAGPU_VK, (WPARAM)VKW_DESTROY, (LPARAM)win);
-    else vklog("window %p has no owner to destroy it - it dies with the process",
-               (void*)win);
-}
-
-/* THE WINDOW BELONGS TO THE LANE WHILE IT IS UP OR COMING UP, AND TO NOBODY
-   OTHERWISE -- and this is the single place that says so. [FROM REVIEW
-   2026-09-15, second pass.] The rule was spelled out separately at four call
-   sites with three different guards, and two of them were wrong: `render_stop`
-   destroyed the window while a ZOMBIE worker was still putting a surface on it,
-   and an armed lane that FAILED kept a shown, never-painted popup over the
-   client area for the session.
-
-   A worker in ST_STARTING or ST_ZOMBIE may hold a surface on the window and
-   takes it down on its own way out, so those two states are the only ones that
-   leave it standing. Every other state must not. */
-static void vkw_release_unless_worker(LONG st)
-{
-    if (st == ST_STARTING || st == ST_ZOMBIE) return;
-    if (s_vkwnd) vkw_request_destroy();
-}
-
 /* Called from the fork's wndproc on the game window's thread. An OBSERVER: it
-   never swallows a message the fork or the engine needs. */
+   never swallows a message the fork or the engine needs, and since landing 4d-1
+   it watches exactly one thing -- the game window being destroyed. That is the
+   only fact the window thread has which the render thread cannot get for
+   itself; see `s_ownGone` for why asking `hwnd != s_owner` instead does not
+   work. Everything else this used to do created, placed or destroyed route D's
+   popup, and there is no popup. */
 void tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
-    /* ONE ARM SURVIVES when this backend owns the present, and it is the one
-       that is not about a window of ours: the owner dying is the only thing
-       this observer can tell the render thread that `hwnd != s_owner` cannot.
-       Everything else here creates, places or destroys route D's window and has
-       nothing to do -- see `s_ownWin` for why none of it can fire anyway, and
-       `s_ownGone` for why this arm must not be skipped with the rest. */
-    if (s_ownWin) {
-        if (msg == WM_DESTROY) {
-            InterlockedExchange(&s_ownGone, 1);
-            vklog("window: the game window is being destroyed - the lane comes "
-                  "down on the render thread's next frame");
-        }
-        return;
-    }
-
-    switch (msg) {
-    case WM_TAGPU_VK:
-        if (wparam == VKW_CREATE) vkw_create(hwnd);
-        if (wparam == VKW_DESTROY && lparam) {
-            real_DestroyWindow((HWND)lparam);
-            vklog("window: destroyed %p", (void*)lparam);
-        }
-        break;
-    case WM_WINDOWPOSCHANGED:
-        if (s_vkwnd) vkw_place(s_vkwnd, hwnd, 0);
-        break;
-    case WM_DESTROY:
-        /* THE OWNER IS GOING AND NOTHING WE CAN DO ORDERS THIS PROPERLY -- so
-           what happens here is the least-bad of the available orders, and the
-           residual is named rather than papered over.
-
-           The handle is taken out of `s_vkwnd` first, so the render thread's
-           very next frame sees its window gone and takes the rebuild path,
-           which tears the surface down. But the window is destroyed in this
-           handler, and that next frame has not happened yet: for up to one
-           frame a surface may name an HWND that no longer exists. Acquire then
-           returns VK_ERROR_SURFACE_LOST_KHR and the frame is skipped, which is
-           the safe answer.
-
-           WHY IT IS NOT FIXABLE FROM HERE. The only orders that close it are
-           blocking this thread on the render thread -- which in a lockstep game
-           is the deadlock this whole file is arranged around -- or letting our
-           window outlive its owner, which Windows does not allow for an owned
-           window anyway. The fork's own teardown normally stops the render
-           thread first (`ogl_release` refuses while `render.thread` is set), so
-           in practice this handler is a backstop that finds nothing up; the
-           residual is the process-exit case where it does. */
-        {
-            HWND win = (HWND)InterlockedExchangePointer((void* volatile*)&s_vkwnd, NULL);
-            if (win) { real_DestroyWindow(win); vklog("window: destroyed %p with its owner", (void*)win); }
-        }
-        break;
-    }
+    (void)hwnd; (void)wparam; (void)lparam;
+    if (msg != WM_DESTROY) return;
+    InterlockedExchange(&s_ownGone, 1);
+    vklog("window: the game window is being destroyed - the lane comes down on "
+          "the render thread's next frame");
 }
 
 /* ---- the lever ----------------------------------------------------------- */
@@ -857,8 +691,7 @@ void tagpu_vk_own_present(void)
        impossible. This function runs once at the top of each render thread,
        which is exactly the scope the latch wants. */
     InterlockedExchange(&s_ownGone, 0);
-    vklog("this backend owns the present - the surface goes on the game window "
-          "and route D's window is never created");
+    vklog("this backend owns the present - the surface goes on the game window");
 }
 
 /* 1 when this backend owns the present, i.e. there is no GL context in the
@@ -2162,18 +1995,17 @@ static DWORD WINAPI up_worker(LPVOID arg)
         sci.hwnd = s_vk.hwnd;
         r = vkCreateWin32SurfaceKHR(s_vk.inst, &sci, NULL, &s_vk.surf);
         if (r != VK_SUCCESS) {
-            /* NAMED RATHER THAN SWALLOWED, and it names WHICH window, because
-               the two cases have different answers. On a window of our own
-               (route D) a refusal is the case the phase's out-of-process pivot
-               exists for. On the GAME window it is route E being refused --
-               measured to work on wine 9.0 and Proton 11 (roadmap §G19a), so a
-               driver that refuses it is new information and the backend falls
-               back to GDI, which route F measured as still reaching the
-               screen after a surface has been attempted here. */
-            vklog("vkCreateWin32SurfaceKHR on %s: %s (%d) - the lane stays down",
-                  s_ownWin ? "the game window (route E)"
-                           : "our own top-level window (route D)",
-                  res_name(r), (int)r);
+            /* NAMED RATHER THAN SWALLOWED. There is one window now and it is
+               the game's, so a refusal here is a surface on the game window
+               being refused -- measured to work on wine 9.0 and Proton 11
+               (roadmap §G19a), which makes a driver that refuses it new
+               information. The backend then falls back to GDI, which route F
+               measured as still reaching the screen after a surface has been
+               attempted here. (Until landing 4d-1 this also named the other
+               case, a surface on a window of ours, which was the case the
+               phase's out-of-process pivot existed for.) */
+            vklog("vkCreateWin32SurfaceKHR on the game window: %s (%d) - the "
+                  "lane stays down", res_name(r), (int)r);
             goto fail;
         }
     }
@@ -2373,7 +2205,7 @@ static DWORD WINAPI up_worker(LPVOID arg)
             vklog("VK_KHR_maintenance1 is not offered - the lane will present, and "
                   "the WORLD passes will draw (since landing 5b they need no flip), "
                   "but the GUI layer, the FPS readout and the scaffold overlay stay "
-                  "down, so route D shows a world with no UI over it");
+                  "down, so the frame is a world with no UI over it");
         if (!s_vk.lineok)
             vklog("VK_EXT_line_rasterization is not offered - a ported pass that "
                   "draws LINES will stand down (its twin's rule is the diamond-exit "
@@ -2517,7 +2349,6 @@ static DWORD WINAPI up_worker(LPVOID arg)
         if (sc < 0) {
             vklog("the window has no extent yet - trying again");
             vk_down();
-            vkw_request_destroy();   /* nothing will present on it; see `fail:` */
             lane_release();
             return 0;
         }
@@ -2560,16 +2391,14 @@ static DWORD WINAPI up_worker(LPVOID arg)
     s_pass.log = passlog;
 
     va_log("with Vulkan up");
-    /* AND IT SAYS WHICH ROUTE IT CAME UP ON. The two handles are the same one
-       when this backend owns the present, so the line would otherwise read
-       "our window X over X" with nothing to say why -- and its old tail
-       ("route D: the GL lane's window is untouched") was a claim about a lane
-       that is not in the process on that path. */
-    vklog("up in %lu ms on \"%s\" (row %d), our window %p over %p, %ux%u, vsync %d - %s",
+    /* ONE HANDLE, NOT TWO. It used to print "our window %p over %p" because
+       there were two -- a popup of ours over the game window -- and after
+       landing 4d-1 both were the same handle and the line read "X over X" with
+       nothing to say why. There is one window and it is the game's. */
+    vklog("up in %lu ms on \"%s\" (row %d), the game window %p, %ux%u, vsync %d "
+          "- the surface is on the game window and there is no GL lane",
           GetTickCount() - t0, s_vk.devName, s_vk.devIndex, (void*)s_vk.hwnd,
-          (void*)s_owner, s_vk.ext.width, s_vk.ext.height, s_vk.vsync,
-          s_ownWin ? "route E: the surface is on the game window and there is no GL lane"
-                   : "route D: the GL lane's window is untouched");
+          s_vk.ext.width, s_vk.ext.height, s_vk.vsync);
 
     InterlockedExchange(&s_activeIndex, s_vk.devIndex);
     /* THE PUBLISH, AND IT IS A COMPARE-EXCHANGE RATHER THAN A STORE.
@@ -2587,20 +2416,14 @@ static DWORD WINAPI up_worker(LPVOID arg)
        them, and hand the lane on. */
     vklog("abandoned during bring-up - releasing what was built");
     vk_down();
-    vkw_request_destroy();
     lane_release();
     return 0;
 
 fail:
-    /* AND THE WINDOW GOES WITH IT. [FROM REVIEW 2026-09-15, second pass.] This
-       exit and the no-extent one above used to release the lane and leave the
-       popup standing -- and with the lane zombied there is no render thread
-       left to notice, so it stayed shown and unpainted over the client area for
-       the rest of the process. The window is destroyed HERE, on the thread that
-       is still the sole owner of the surface that was on it, which is the only
-       moment at which the order is not in question. */
+    /* Everything this built goes back, on the thread that is still its sole
+       owner. Before landing 4d-1 a window of ours went with it and the ORDER was
+       the delicate part; there is no window now, so this is just the release. */
     vk_down();
-    vkw_request_destroy();
     if (InterlockedCompareExchange(&s_state, ST_FAILED, ST_STARTING) != ST_STARTING)
         lane_release();          /* zombied: hand the lane back instead */
     return 0;
@@ -3323,11 +3146,7 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
        and the barrier it carries is only owed when something is actually going
        to be read behind it -- with the lever off and the lane at rest there is
        nothing, and this is the render thread's per-frame path. */
-    /* `s_askedWin` is cleared on the way past, not left latched: a
-       `CreateWindowEx` that failed leaves `s_vkwnd` NULL for ever, and a flag
-       that survived the disarm would stop the next arm ever asking again --
-       a lane that wedges in silence. [FROM REVIEW 2026-09-15, second pass.] */
-    if (!s_armed && s_state == ST_OFF && !s_vkwnd) { s_askedWin = 0; return 0; }
+    if (!s_armed && s_state == ST_OFF) return 0;
 
     st = lane_state();
 
@@ -3340,24 +3159,13 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
 
     if (!s_armed) {
         /* Disarmed: give the objects back, and let a FAILED lane retry the next
-           time the player arms it rather than once per launch. THE SURFACE GOES
-           BEFORE THE WINDOW, always: a window destroyed under a live surface is
-           a handle the driver still holds. `vk_down` is synchronous and the
-           handle leaves `s_vkwnd` before the destroy is posted, so the order
-           holds across the two threads. */
+           time the player arms it rather than once per launch. There is no
+           window to take down with them since landing 4d-1 -- the surface was on
+           the game's own window, which is not ours to destroy. */
         if (st == ST_READY || st == ST_FAILED) {
             if (st == ST_READY) { vk_down(); vklog("lever off - down"); }
             InterlockedExchange(&s_state, ST_OFF);
         }
-        /* AND THE WINDOW GOES WHATEVER THE STATE WAS. [FROM REVIEW 2026-09-15.]
-           This used to be inside the branch above, which left one shape behind:
-           arm the lever, have the window thread not pump (a map load, a modal),
-           clear the lever at the next 250 ms poll -- the state is still ST_OFF,
-           so nothing was posted -- and then the pump catches up and creates and
-           SHOWS the popup. Nothing ever took it down: an opaque dead window
-           over the client area for the rest of the session. */
-        vkw_release_unless_worker(st);
-        s_askedWin = 0;
         return 0;
     }
 
@@ -3377,24 +3185,13 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
            never blocks on the window thread, which in a lockstep game is the
            deadlock this whole file is arranged to avoid. */
         s_owner = hwnd;
-        /* OURS, OR THE CALLER'S. When this backend owns the present the
-           surface goes straight on the game window and the two-thread dance
-           below is skipped entirely -- there is no window to ask another
-           thread for, so there is nothing to wait a frame for either. */
-        win = s_ownWin ? hwnd : s_vkwnd;
-        if (!win) {
-            /* ASKED ONCE, NOT ONCE A FRAME. The window thread answers when it
-               next pumps; posting again every frame would put sixty requests a
-               second into a queue that, in the one case where this matters --
-               a pump that has stopped -- nobody is draining. The flag is
-               cleared when the window arrives or the lane comes down. */
-            if (!s_askedWin) {
-                s_askedWin = 1;
-                PostMessageA(hwnd, WM_TAGPU_VK, (WPARAM)VKW_CREATE, 0);
-            }
-            return 0;
-        }
-        s_askedWin = 0;
+        /* THE CALLER'S WINDOW, AND NOTHING ELSE. Before landing 4d-1 this chose
+           between the game window and a popup of ours, and asked another thread
+           to make the popup if it did not exist yet -- a create posted to the
+           thread that pumps, then a frame's wait for it to arrive. With no
+           second backend there is nothing to separate and nothing to wait for:
+           `hwnd` is already known non-NULL two lines above. */
+        win = hwnd;
         s_want.hwnd = win; s_want.w = w; s_want.h = h; s_want.vsync = vsync;
         s_choiceSeen = lane_gen();
         /* OFF -> STARTING before the thread exists, so two frames cannot start
@@ -3415,12 +3212,6 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
            to click every other row in the list and get nothing at all, for
            ever, until they found the lever file. The click is exactly the
            signal that the thing that failed is not what we would try now. */
-        /* A FAILED LANE PRESENTS NOTHING, so it owns no window either -- the
-           previous pass fixed only the UNARMED half of that, and a bring-up
-           that failed while the lever was on (a driver that refuses the
-           surface, say) left a shown, never-painted popup over the game for
-           the session. [FROM REVIEW 2026-09-15, second pass.] */
-        vkw_release_unless_worker(ST_FAILED);
         if (lane_gen() != s_choiceSeen) {
             vklog("the GPU row changed after a failed bring-up - trying again");
             InterlockedCompareExchange(&s_state, ST_OFF, ST_FAILED);
@@ -3443,27 +3234,16 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
        invalidates the surface or the device, and neither is patchable in
        place -- and going back through the worker is what keeps every bring-up
        off the render thread, not just the first. */
-    /* "OUR WINDOW WENT AWAY" IS NOT A CASE WHEN WE HAVE NO WINDOW. With the
-       present owned, `s_vkwnd` is NULL for the process's life while `s_vk.hwnd`
-       is the game window, so the middle test would be permanently true and the
-       lane would tear itself down and rebuild on every single frame. A window
-       change is then exactly an owner change, which the first test already is. */
-    if (hwnd != s_owner || (s_ownWin && s_ownGone) ||
-        (!s_ownWin && s_vkwnd != s_vk.hwnd) || lane_gen() != s_choiceSeen) {
-        int owner_changed = (hwnd != s_owner);
-        vklog(owner_changed       ? "the game window changed - rebuilding" :
-              (s_ownWin && s_ownGone) ? "the game window was destroyed under us - down" :
-              !s_ownWin && s_vkwnd != s_vk.hwnd ? "our window went away - rebuilding"
-                                  : "the GPU row changed - rebuilding");
+    /* "OUR WINDOW WENT AWAY" IS NOT A CASE WHEN WE HAVE NO WINDOW, and since
+       landing 4d-1 we never do. A window change is exactly an owner change,
+       which the first test is; the second is the owner dying under us, which
+       only the wndproc observer can see (`s_ownGone`). */
+    if (hwnd != s_owner || s_ownGone || lane_gen() != s_choiceSeen) {
+        vklog(hwnd != s_owner ? "the game window changed - rebuilding" :
+              s_ownGone       ? "the game window was destroyed under us - down"
+                              : "the GPU row changed - rebuilding");
         vk_down();
         InterlockedExchange(&s_state, ST_OFF);
-        /* AND THE WINDOW GOES TOO WHEN THE OWNER CHANGED, because ours is owned
-           by the window that just went away -- keeping it would put the next
-           bring-up on a window hanging off a dead owner. A GPU change keeps it:
-           the window is not what changed. The destroy is posted to the NEW
-           owner, whose thread is the one that pumps; the handler needs no hwnd. */
-        if (owner_changed) vkw_request_destroy();
-        s_askedWin = 0;
         return 0;
     }
 
@@ -3535,9 +3315,6 @@ void tagpu_vk_render_stop(void)
         if (InterlockedCompareExchange(&s_state, ST_ZOMBIE, ST_STARTING) == ST_STARTING) {
             vklog("render thread stopping mid bring-up - the worker will release it");
             if (s_worker) { CloseHandle(s_worker); s_worker = NULL; }
-            s_askedWin = 0;
-            /* THE WINDOW IS LEFT TO THE WORKER, which may have a surface on it.
-               It destroys it on its way out. */
             return;
         }
         st = lane_state();
@@ -3549,11 +3326,4 @@ void tagpu_vk_render_stop(void)
         if (st == ST_READY) { vk_down(); vklog("render thread stopping - down"); }
         InterlockedExchange(&s_state, ST_OFF);
     }
-    /* The window goes last, and only once nothing holds a surface on it.
-       REACHING HERE IN ST_ZOMBIE IS THE CASE THIS GUARD EXISTS FOR: a previous
-       render thread abandoned a worker, this one started and is now stopping
-       too, and that worker is still inside `vkCreateWin32SurfaceKHR`. The old
-       tail destroyed the window under it. */
-    vkw_release_unless_worker(st);
-    s_askedWin = 0;
 }

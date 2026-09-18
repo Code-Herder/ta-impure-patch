@@ -97,17 +97,25 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter);
    call when nothing is up. */
 void tagpu_vk_render_stop(void);
 
-/* ROUTE D's window, on the thread that owns windows. `tagpu_vk_frame` posts
-   WM_TAGPU_VK to the GAME window and this observer, called from the fork's
-   wndproc, creates, moves and destroys the Vulkan window there -- because a
-   window whose messages nobody pumps deadlocks anything that sends it one. It
-   also follows the owner's WM_WINDOWPOSCHANGED, which is how the Vulkan window
-   stays over the client area without the render thread polling geometry.
+/* THE GAME WINDOW IS BEING DESTROYED, told to the lane by the thread that owns
+   windows. Called from the fork's wndproc; it watches `WM_DESTROY` and nothing
+   else. That one fact cannot be had on the render thread: `g_ddraw.hwnd` is
+   nulled only by the IAT-hooked `DestroyWindow`, and only after the real
+   destroy, so a destroy by any other route would leave the lane presenting on a
+   dead HWND until the driver raised `VK_ERROR_SURFACE_LOST_KHR`. This bounds
+   that at one frame.
 
    AN OBSERVER: it returns nothing and swallows nothing. Unlike
    `tagpu_menu_wndproc` it cannot claim a message, so adding it to the chain
-   changes no other message's path. */
-#define WM_TAGPU_VK (WM_APP + 144)     /* wParam = create | destroy */
+   changes no other message's path.
+
+   IT USED TO DO MUCH MORE. Until landing 4d-1 it also created, placed and
+   destroyed route D's window -- an owned popup over the game's client area,
+   which existed so that two backends could each present without presenting to
+   one window in one frame. There is no second backend now, so the surface goes
+   on the game window and the popup, its class, its window proc, its
+   create/destroy message (`WM_TAGPU_VK`) and its `WM_WINDOWPOSCHANGED` follow
+   are all gone. */
 void tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
 
 /* Called once from the render thread's start-up. Kicks the enumeration worker
@@ -137,9 +145,12 @@ int tagpu_vk_armed(void);
      fallback. The ON file is still read for its `color=`.
 
    A ONE-WAY LATCH: which backend the process has is settled at `dd.c`'s
-   dispatch and cannot change, and a flag that could go back would allow a
-   surface on the game window and a route D window at once. There is
-   deliberately no way to clear it. */
+   dispatch and cannot change. There is deliberately no way to clear it. Until
+   the vulkan-only plan's landing 4d-1 a flag that could go back would have
+   allowed a surface on the game window and a window of the lane's own at once;
+   that window is gone, and the latch is kept because collapsing every
+   `tagpu_vk_owns_present()` test in the tree into a constant is a much larger
+   change than deleting it. */
 void tagpu_vk_own_present(void);
 
 /* 1 when the latch above is set. Read by every GL draw site that landing 4b
