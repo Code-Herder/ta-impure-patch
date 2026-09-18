@@ -1,0 +1,2 @@
+landing-review: model=opus effort=high range=main..2978e8b findings=5 acted=5 rejected=0 latent=1 date=2026-09-17
+latent: dump_step's multi-level barrier mis-states the layout only if g_alloc exhausts the 256-entry per-slot ring mid-chain (reviewer: narrow, PLAUSIBLE, low) -- not acted on.
