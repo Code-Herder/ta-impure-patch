@@ -173,6 +173,22 @@ static const unsigned char SSB_STOLEN[12] =
    only way to be stuck at 1 is for the lane itself to stop, which stops the
    frames too. */
 static volatile unsigned char g_ssSkip = 0;
+static unsigned               g_ssBeat = 0;   /* frame of the last publish  */
+static int                    g_ssBeatSeen = 0;
+
+/* HOW LONG THE GATE MAY STAND WITHOUT A PUBLISH before `tagpu_owndraw_flush`
+   lowers it. The publisher is NOT reached on every frame the lane presents --
+   the landing review found four gates above it in `tagpu_overlay_draw`
+   (`tagpu_overlay.off`, an overlay init that failed, a level teardown, a bad
+   frame ABI), and the first of those is a live lever a human can create
+   mid-session. Without this the flag would freeze raised across any of them and
+   the engine's structure shadow would stay suppressed with nothing painting it
+   -- the exact fault this landing exists to remove, reached by another door.
+   `tagpu_owndraw_flush` runs ABOVE all four (`tagpu_overlay.c:365`), which is
+   what makes it the right place; `tagpu_fxown.c` solves the same problem the
+   same way, at 90 frames. Eight is used here because a missing shadow is a
+   picture the player sees, not a counter. */
+#define SS_BEAT_FRAMES 8
 
 static int               g_armed      = 0;
 static char              g_target[32] = "armcom";
@@ -490,7 +506,10 @@ static int install_sshadow(unsigned int va, const unsigned char* stolen, int n,
     rel = (int32_t)(target - ((unsigned int)p + 4));
     memcpy(p, &rel, 4); p += 4;
 
-    if (!VirtualProtect(t, (SIZE_T)n, PAGE_EXECUTE_READWRITE, &old)) return 0;
+    if (!VirtualProtect(t, (SIZE_T)n, PAGE_EXECUTE_READWRITE, &old)) {
+        VirtualFree(s, 0, MEM_RELEASE);      /* nothing was written; keep nothing */
+        return 0;
+    }
     t[0] = 0xE9;
     rel = (int32_t)((unsigned int)s - (va + 5));
     memcpy(t + 1, &rel, 4);
@@ -513,9 +532,11 @@ static void restore_sshadow(unsigned int va, const unsigned char* stolen, int n)
 /* THE PUBLISH. Render thread, once per frame, from `tagpu_native_frame` --
    including the frames on which it publishes 0. `g_sshadow` is the install,
    which cannot change after DllMain; `ours` is whether the pass will paint. */
-void tagpu_owndraw_set_structshadow(int ours)
+void tagpu_owndraw_set_structshadow(int ours, unsigned frame)
 {
     unsigned char v = (unsigned char)(ours && g_sshadow);
+    g_ssBeat = frame;
+    g_ssBeatSeen = 1;
     if (v != g_ssSkip) {
         g_ssSkip = v;
         olog2(v ? "owndraw: the engine's cached slant shadow is SKIPPED (ours live)"
@@ -864,6 +885,19 @@ void tagpu_owndraw_init(void)
 void tagpu_owndraw_flush(unsigned int frame_counter)
 {
     if (!g_armed) return;
+    /* THE STRUCTURE-SHADOW WATCHDOG. This function is called from
+       `tagpu_overlay.c:365`, ABOVE every gate that can stop the publisher
+       running, so it is the one place that still gets a frame when the
+       publisher does not. A raised flag with no publish behind it means nobody
+       is painting the shadow the engine is no longer drawing, so it comes
+       down. Restoring the engine's own draw is always the safe direction. */
+    if (g_ssSkip && g_ssBeatSeen && frame_counter - g_ssBeat >= SS_BEAT_FRAMES) {
+        g_ssSkip = 0;
+        olog2("owndraw: the engine's cached slant shadow is restored -- the unit "
+              "pass stopped publishing (tagpu_overlay.off, a failed overlay init, "
+              "or a level teardown), and a raised gate with nobody painting is "
+              "the one state this gate exists to prevent");
+    }
     if (frame_counter - g_last >= 60) {
         unsigned s = g_skipped, pa = g_passed;
         char b[224];

@@ -10694,19 +10694,46 @@ symmetric**, and that is its safety argument: stale 0 while the pass paints is a
 for a frame; stale 1 while it does not is NO shadow.
 
 **So the flag is raised in exactly one place and lowered in nine**, and the first version of this
-landing got that backwards. It published from the top of `tagpu_native_frame`, before **eleven**
+landing got that backwards. It published from the top of `tagpu_native_frame`, before **nine**
 early returns — a frame with no packet, which is the whole shell; a GL program still building; an
 atlas that would not allocate; a viewport that failed its sanity bound — so on every one of those
 the flag stayed raised with nothing painting, which is the bad direction. The raise now sits after
 the last of those guards, at the point the pass has committed to drawing, and each early return
 lowers it on the way out. **One write per frame**, so there is no window a game-thread read can
 land in: a shell frame writes 0 and only 0, a drawing frame writes 1 and only 1, and the value
-changes only when the pass's own state does.
+changes only when the pass's own state does. (Nine, not eleven: an earlier version of this
+paragraph said eleven two sentences after saying nine. The returns are `tagpu_native.c:2506, 2657,
+2665, 2672, 2675, 2686, 2723, 2726, 2735` before the raise and `:3441, :3713, :3811` after it,
+twelve in all, no `goto`.)
 
-`tagpu_overlay_draw` calls the publisher unconditionally, so it cannot go quiet while a lane still
-presents. A lane that never presents never calls it at all, which is the `gdi` case: the flag
-stays at its initial 0 and the engine draws its own shadows, **by construction rather than by
-anyone remembering to switch it off**.
+**AND A PUBLISH IS NOT GUARANTEED, WHICH IS WHY THERE IS A WATCHDOG** [the landing review of 10b
+found this claim false and pointed at two comments already in the tree that record the same lesson
+for the cursor]. This section used to say *"`tagpu_overlay_draw` calls the publisher
+unconditionally, so it cannot go quiet while a lane still presents."* It does not: **four gates sit
+above the call** at `tagpu_overlay.c:464` — a bad frame ABI (`:306`), **`tagpu_overlay.off`
+(`:380`), which is a live lever polled every frame**, an overlay init that failed or was invalidated
+by a context change (`:383`), and a level teardown (`:390`). Create `tagpu_overlay.off` mid-session
+with the gate raised and the publisher is never called again: the flag freezes raised, the engine's
+branch stays suppressed, and nothing paints — the fault this landing exists to remove, reached
+through another door. `render_ogl.c:1633` and `render_vk.c:233` both already say this in as many
+words, about the cursor, because the same class was found and fixed there.
+
+So `tagpu_owndraw_flush` lowers the gate after **eight** frames without a publish. It is called from
+`tagpu_overlay.c:365`, **above all four gates**, which is the whole reason it can: it still gets a
+frame when the publisher does not. `tagpu_fxown.c` solves the identical problem the identical way,
+at 90 frames; eight is used here because a missing shadow is a picture the player sees rather than
+a counter.
+
+A lane that never presents never calls either of them, which is the `gdi` case: the flag stays at
+its initial 0 and the engine draws its own shadows, **by construction rather than by anyone
+remembering to switch it off**.
+
+**And a failed rollback is now harmless, which the flip's never was.** If one site installs and
+the other does not, `restore_sshadow` puts the first one's bytes back — but even if that
+`VirtualProtect` fails and a detour is stranded, `g_sshadow` is 0, so `set_structshadow` computes
+`ours && g_sshadow` = 0 and the gate can never be raised: a stranded stub is a pure pass-through.
+The old code's failed rollback left `EB` in place, which is permanent suppression. [Pointed out by
+the landing review as an improvement the landing had not claimed.]
 
 **A flip is immune to an incoming branch and a detour is not**, so both stolen ranges were
 checked before the code was written. `objdump -d -M intel` over the whole image finds exactly one
@@ -10744,41 +10771,90 @@ been exterminated"* against *"forces have been obliterated"* — so two boots di
 TEXT with an identical world beneath it. A paired A/B on any fixture that clears units has to
 exclude the log band or it is measuring TA's random number generator.
 
-And the gate was watched moving, live, in both directions: `owndraw: the engine's cached slant
-shadow is SKIPPED (ours live)` when the pass arms, and `… is restored` within one lever poll of
-`tagpu_native.on` being removed.
+And the gate was watched moving, live, in every direction it has:
+
+| what was done | what the log said |
+|---|---|
+| the pass arms in a game | `… is SKIPPED (ours live)` |
+| `tagpu_native.on` removed | `… is restored`, within one lever poll |
+| in the shell, before any game | **nothing** — the gate is never raised there, where the first version of this landing raised it before the first frame |
+| Classic++ off, `renderer=vulkan` | **nothing** — no slant painter on that lane, so the gate correctly stays down |
+| `tagpu_classicpp.on` armed, same lane | `… is SKIPPED (ours live)` |
+| `tagpu_overlay.off` created with the gate raised | `… is restored -- the unit pass stopped publishing`, from the watchdog |
+
+That last row is the one the review's H1 asked for and the one no amount of reading would have
+settled: the publisher genuinely stops being called, and the gate genuinely comes down anyway.
+
+#### Why there is no PICTURE of a structure shadow coming back, and it is not for want of trying
+
+Four attempts, and the reason turns out to be structural rather than a gap in effort.
+
+The engine's Shadow option is **on** in the test instance — `main+0x37F06` reads `0x3F`, bit 2 set,
+peeked live — and the fixture's ARM lab is in frame with the camera reproduced to the digit. Yet
+lowering the gate changes **0 pixels**. It is not that the branch does not run; it is that
+**the engine blits its cached slant shadow into the engine's own 8-bit surface, and with
+`tagpu_terr.on` armed our terrain pass owns every pixel of the viewport**, so that surface only
+shows where our composite has no coverage. Inside the viewport there is none.
+
+So the restored shadow is visible exactly where the engine draws the world — which is
+`renderer=gdi`, the lane this landing is *for*, and the lane `tacli ui` cannot drive past the main
+menu. **The effect and the only instrument for seeing it are on opposite sides of the same
+wall.** What is verified instead is the mechanism at every point the picture would depend on: the
+branch's machine code against the pristine disassembly, the gate's six live transitions above, and
+0 differing pixels wherever the gate's state is not supposed to matter.
 
 #### Not covered
 
-* **The `renderer=gdi` picture.** The gate is argued from the code and from the flag never being
-  written on that lane; a boot that reaches a game there and shows a building's shadow was not
-  taken, because `tacli ui` returns *"no UI snapshot appeared"* under `gdi` and the shell cannot
-  be driven past the main menu. Getting that picture is its own piece of work.
-* **No picture shows the engine's structure shadow coming BACK**, which is the landing's whole
-  point, and two attempts at one failed for reasons worth recording. Disarming `tagpu_native.on`
-  to force the flag clear disarms far more than this gate — `terrown` keeps key-filling with no
-  painter, so the frame goes teal — and on `exit-sort` the two builds' disarmed frames differ by
-  only **63 px** in a strip at the lab (52 of them darker on this branch, which is consistent with
-  the engine's cached shadow returning, and is too small and too occluded to be called proof).
-  The purpose-built `shadow-struct` fixture could not be used for a cross-boot A/B at all: two
-  boots of it differ in **fog-of-war reveal and starting resources**, hundreds of thousands of
-  pixels, swamping anything a shadow could contribute.
+* **The `renderer=gdi` picture** — see the section above for why, and it is worth being precise:
+  `tacli ui` returns *"no UI snapshot appeared"* on that lane, so the shell cannot be driven past
+  the main menu, and that is also the only lane where the restored shadow would be visible.
+  Making `tacli` drive the gdi lane is its own piece of work and would close this.
+* **The two other routes to a picture, and why each failed.** Disarming `tagpu_native.on` to force
+  the gate down disarms far more than this gate — `terrown` keeps key-filling with no painter, so
+  the frame goes teal — and it left only **63 px** of difference at the lab, too small and too
+  occluded to be called proof. The purpose-built `shadow-struct` fixture could not carry a
+  cross-boot A/B at all: two boots of it differ in **fog-of-war reveal and starting resources**,
+  hundreds of thousands of pixels, swamping anything a shadow could contribute.
 * **The double-shadow direction was not forced.** Stale 0 while the pass paints is accepted as
   the safe direction and is one frame wide at most; no fixture makes it happen on purpose.
 * **Three returns sit after the raise** (`tagpu_native.c:3441`, `:3713`, `:3811`) and do not lower
-  the flag, and they are NOT the same case — an earlier version of this line said all three were
-  *"nothing was gathered"*, which is wrong about the third and wrong in the direction that
-  matters.
-    * `:3441` and `:3713` really are *nothing to draw* (`nu == 0 && nfx == 0 && nfeat == 0 &&
-      nterr == 0 && !markOn && !terrOwned`, and the same again after vertex emission). The
-      detours only install under target `all`, where owning no unit means there is none on
-      screen, so no structure is affected.
-    * **`:3811` is the Vulkan lane's NORMAL exit, every frame.** It closes the
-      `if (!gl_draws) { … return; }` block at `:3753` that hands the frame over to the twin — and
-      leaving the flag raised there is not an oversight but the point: on that lane the pass HAS
-      done its work and the Vulkan unit pass paints the shadow. Everything after `:3812` in that
-      file is GL-only by construction, which is also why `tagpu_shadow.c` and
-      `tagpu_hires_draw.c` carry GL with no lane guard of their own.
+  the flag. Two earlier versions of this bullet were wrong about them and the second was wrong in
+  the direction that matters, so what each one actually is:
+    * **`:3811` is the Vulkan lane's normal exit, every frame** — it closes the
+      `if (!gl_draws) { … hand over …; return; }` block at `:3753`. A previous version said
+      *"the Vulkan unit pass paints the shadow"* there. **It does not.** No file under
+      `tagpu_vk*` contains the word `slant`, and `tagpu_posedraw_slant_set`
+      (`tagpu_posedraw.c:1230`) is pure GL with no `pd_record` call, so nothing of the posed slant
+      reaches the twin. What paints a structure's shadow on that lane is **Classic++'s
+      cast-shadow map** (`tagpu_vk_shadow.c`, through `tagpu_shadow_handover`) — which is a
+      different painter, is the shipped default, and is why the predicate now asks
+      `tagpu_classicpp_on()`. With Classic++ off, the Vulkan lane paints no slant shadow at all
+      and the gate is correctly left down.
+    * `:3441` is a genuine *nothing to draw* (`nu == 0 && nfx == 0 && …`).
+    * **`:3713` is NOT**, and the bullet that said it was gave a construction argument for a
+      configuration fact. It tests **emitted geometry** — `nv == 0 && nhi == 0 && npd == 0 && …` —
+      so with the posed program unready `nu` can be large, every structure on screen gathered,
+      while `npd` is 0. In the shipped set it is unreachable (`tagpu_mark.on` and `tagpu_terr.on`
+      are defaults, so `markOn`/`terrOwned` hold), which is a configuration argument and is stated
+      as one.
+* **The install's `all` and the gate's `s_armed` are different levers**, and nothing ties them:
+  the detours install under **owndraw's** `g_all`, the flag follows **native's** `s_armed`, and the
+  unit count follows **native's** `s_type`. A hand-set `tagpu_owndraw.on=all` with
+  `tagpu_native.on=armcom` gates on commanders while the detours cover every structure. Not
+  reachable from the defaults, which pair the two (`tagpu_opt.c`'s `needs`), and not closed here.
+* **A unit whose `ModelId` will not bound** (`tagpu_native.c:941`) is refused by
+  `tagpu_native_owns_unit`, drawn by the engine, and has no `n2` entry — while the gate, which is
+  global, still suppresses its shadow branch.
+* **The Classic++ shadow map's own failure is not part of the predicate.** The gate asks whether
+  Classic++ is ON, not whether the map built: `tagpu_shadow_live()` would answer that, but it is
+  set at `tagpu_shadow.c:403` inside `tagpu_shadow_begin`, whose only call site (`:4155`) is BELOW
+  the hand-over return — so it is GL-only and reads 0 on the Vulkan lane every frame. Putting it
+  in the predicate would lower the gate on the shipped configuration and give every building two
+  shadows. Named rather than closed.
+* **The 1→0 transition costs one frame of no shadow**, symmetrically with the 0→1 frame of double
+  shadow: the engine's surface for a frame was painted by the game thread before the render thread
+  lowered the flag. Both are one frame wide; the asymmetry the design rests on is about *durable*
+  states, not about single frames.
 
 
 ## 4. What the work taught us

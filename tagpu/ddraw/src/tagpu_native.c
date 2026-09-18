@@ -84,9 +84,6 @@
 #include "tagpu_markown.h"
 #include "tagpu_order.h"
 #include "tagpu_owndraw.h"   /* tagpu_owndraw_structshadow_ours: who draws a building's shadow */
-/* Lower the structure-shadow gate on the way out of a frame this pass will not
-   draw. See the one place it is RAISED, below the viewport bound. */
-#define SSHADOW_NONE() tagpu_owndraw_set_structshadow(0)
 #include "tagpu_reclaim.h"   /* the teardown fence this file's template reads stand behind */
 #include "tagpu_posebake.h"
 #include "tagpu_vk.h"        /* tagpu_vk_owns_present: is there a GL lane at all? */
@@ -2453,6 +2450,11 @@ static void ghost_pass(const TAGPU_PACKET* pk, unsigned frame_counter,
     x_glDepthMask(GL_TRUE);
 }
 
+/* Lower the structure-shadow gate on the way out of a frame this pass will not
+   draw, stamping the heartbeat as it goes. See the one place it is RAISED,
+   below the viewport bound. */
+#define SSHADOW_NONE() tagpu_owndraw_set_structshadow(0, f->frame_counter)
+
 void tagpu_native_frame(const TAGPU_FRAME* f)
 {
     /* before the early-out and before any gather: a level that ended while this
@@ -2502,7 +2504,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            we draw none. [The vulkan-only plan, landing 10b: until it, the
            branches were flipped for the process at DllMain and this path left
            every building without a shadow.] */
-        tagpu_owndraw_set_structshadow(0);
+        tagpu_owndraw_set_structshadow(0, f->frame_counter);
         return;
     }
     if (s_armed < 0 || (f->frame_counter % 30) == 0) {
@@ -2751,8 +2753,41 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
 
        ONE WRITE PER FRAME, so there is no window: a shell frame writes 0 and
        only 0, a drawing frame writes 1 and only 1, and the value changes only
-       when the pass's own state does. */
-    tagpu_owndraw_set_structshadow(s_armed == 1);
+       when the pass's own state does.
+
+       AND THE QUESTION IT ASKS IS "WILL ANYTHING PAINT IT", NOT "IS THE PASS
+       ARMED" [the landing review of 10b; the first version asked the second and
+       every other suppressor in `tagpu_owndraw.c` asks the first, twenty lines
+       from where this is read]. A structure's slant shadow has TWO painters and
+       they are not on the same lanes:
+
+         * Classic++'s cast-shadow map, whenever `tagpu_classicpp_on()` -- on
+           BOTH lanes (`tagpu_shadow.c` here, `tagpu_vk_shadow.c` there, through
+           `tagpu_shadow_handover`). This is the shipped default.
+         * otherwise the POSED SLANT range, `:4108`'s loop, which needs
+           `pdix[i] >= 0` and therefore `tagpu_posedraw_ready()` -- and which is
+           drawn below the `!gl_draws` return at `:3811`, so it is GL ONLY. No
+           file under `tagpu_vk*` mentions `slant` at all, and
+           `tagpu_posedraw_slant_set` makes no `pd_record` call, so nothing of it
+           reaches the twin.
+
+       So with Classic++ off the Vulkan lane paints no slant shadow whatsoever,
+       and on a driver where the posed program will not link (`s_state == 2`, a
+       session latch) neither does the GL lane. Raising the gate in either case
+       would suppress the engine's with nothing in its place, for the session.
+
+       WHAT IS DELIBERATELY *NOT* ASKED: `tagpu_shadow_live()`. It reads "the map
+       holds this frame's casters", and it is set at `tagpu_shadow.c:403` inside
+       `tagpu_shadow_begin`, whose only call site is `:4155` -- BELOW the
+       hand-over return. It is therefore GL-only and reads 0 on the Vulkan lane
+       every frame, so putting it here would lower the gate on the shipped
+       configuration and give every building two shadows. */
+    {
+        const int cppOn = tagpu_classicpp_on();
+        tagpu_owndraw_set_structshadow(
+            s_armed == 1 && (cppOn || (gl_draws && tagpu_posedraw_live())),
+            f->frame_counter);
+    }
     int gw = f->game_width  > 0 ? f->game_width  : vpL + vw;
     int gh = f->game_height > 0 ? f->game_height : vpT + vh;
 

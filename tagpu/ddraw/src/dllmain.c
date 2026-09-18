@@ -97,8 +97,15 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
 
         /* tagpu: Phase B own-the-draw — skip the engine's software rasterise of
            the per-unit composite for chosen types (GPU thread paints instead).
-           No-op unless "tagpu_owndraw.on" exists; byte-match guarded; touches
-           only 0x459830/0x459C70, disjoint from the suppress/tracer detours. */
+           No-op unless "tagpu_owndraw.on" exists; byte-match guarded. Six sites,
+           all disjoint from the suppress/tracer detours: the two rasterisers
+           0x459830/0x459C70, the build-state effect 0x458DD0, the three
+           composite-wipe sites 0x459338/0x45958C/0x4594DB, and the two
+           structure-shadow branches 0x4592BF/0x459522. This comment said "only
+           0x459830/0x459C70" until 2026-09-18, which was stale long before
+           landing 10b moved the last pair. EVERY ONE OF THEM DECIDES PER DRAW
+           against a flag a live lane sets — installing them suppresses
+           nothing. */
         tagpu_owndraw_init();
 
         /* tagpu: own the effects draw — redirect the two effects-pass call sites

@@ -17,7 +17,15 @@ void tagpu_owndraw_flush(unsigned int frame_counter);
 
    `ours` is what the ENGINE will do, read back so the pass's geometry agrees
    with the branch. It is the GATE, not the install: the hooks can be in and
-   this still 0. */
-void tagpu_owndraw_set_structshadow(int ours);
+   this still 0.
+
+   `frame` is the publish's heartbeat. `tagpu_owndraw_flush` lowers the gate if
+   it goes eight frames without one, because the publisher is NOT reached on
+   every frame a lane presents -- `tagpu_overlay_draw` gates it behind
+   `tagpu_overlay.off`, a failed overlay init and a level teardown, and the
+   flush runs above all three. [Found by the landing review of 10b, which also
+   pointed at the two comments in `render_ogl.c` and `render_vk.c` that record
+   the same lesson for the cursor.] */
+void tagpu_owndraw_set_structshadow(int ours, unsigned frame);
 int  tagpu_owndraw_structshadow_ours(void);
 #endif
