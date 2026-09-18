@@ -3114,7 +3114,18 @@ after) and is the wrong instrument anyway, since it times the GPU and the larger
 removed is a host memcpy. Also measured, and useful beyond this landing: **the shell varies against
 itself by 181–191 px between captures**, so it is not a pixel oracle; the in-game frame is.
 
-**10b LANDED 2026-09-18** ([gpu-status](gpu-status.html) §2.63) — **the one suppression in
+**10b BUILT, REVIEWED THREE TIMES, NOT LANDED as of 2026-09-18** ([gpu-status](gpu-status.html)
+§2.63) — it is on `worktree-perf_issue`, twelve commits ahead of `main`, and it is held at the
+review gate rather than by anything unfinished. **Three consecutive dedicated reviews each
+returned a real HIGH in the same twenty lines**, every one of them a genuine silent fault about to
+ship, every one fixed: the gate asked *is the pass armed*; then *is a painter configured*, with an
+either/or over two painters that both need `tagpu_posedraw_ready()`; then *did the cast-shadow map
+get built*, which is a caster pass and not a receiver. The bar in `CLAUDE.md` is three
+fix-and-re-run attempts per gate, and they are spent, so the fourth round is the owner's call
+rather than a session's. **This entry said "LANDED" for three review rounds before this correction
+— written by the landing's own documentation pass, which by design runs before the review. That is
+fine when the review passes the same day and wrong the moment it does not, which is the first time
+this workflow has been tested by a landing that took three rounds.** — **the one suppression in
 `tagpu_owndraw.c` that had no runtime gate**, and 11 was blocked on it. `renderer=gdi` is this
 project's documented stock reference, and it was not stock: `tagpu_owndraw.on` is a play default,
 and its two structure-shadow `je`s were flipped to `jmp`s at `DllMain` for the life of the
