@@ -2837,8 +2837,12 @@ independent reasons: the Classic++ restored atlases have no CPU mirror, and the 
 holds casters the lane cannot draw. Both block every world pixel. Every Phase G figure above was
 taken under `tagpu_defaults.off` + `ss=1` + `gui.on=mmbase`, where neither arises.
 
-**Landing 4 is four landings; 4a landed 2026-09-17 and the whole of 4b on 2026-09-18**
-([gpu-status](gpu-status.html) §2.48, §2.49, §2.50 and §2.51). Filed as one row — the fourth backend,
+**Landing 4 is four landings; 4a landed 2026-09-17, the whole of 4b on 2026-09-18, and 4c-1
+the same day** ([gpu-status](gpu-status.html) §2.48 to §2.52). **4c is two landings**: *4c-1*
+TA's own surface, LANDED — the frame's bottom layer, so `tagpu_gui.off` on `renderer=vulkan`
+renders the shell and a live game completely where it showed the lever's flat clear (§2.52) —
+and *4c-2*, the `ss×` offscreen world target with its resolve, still open. The Vulkan lane's
+shader for that resolve is already generated: `native_d`, the GL lane's own 2× → 1× downsample. Filed as one row — the fourth backend,
 `renderer=vulkan`, the `ss` target, TA's surface, and route D's deletion — it comes apart along
 four seams the code already has: **4a** the thread and the present, **4b** the per-frame driver
 (the gathers run and the GL draws stand down), **4c** the `ss` target and TA's surface upload,

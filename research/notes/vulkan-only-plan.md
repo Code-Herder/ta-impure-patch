@@ -562,12 +562,23 @@ would not have shown up as a failure — it would have shown up as three landing
        surface to draw. The blit is the first draw after `vkCmdBeginRenderPass`, which is where
        a pipeline can run at all.
 
-     **Proposed split, on the seam those facts have — not yet confirmed by doing it:** *4c-1*
-     TA's surface (the bottom layer; closes `tagpu_gui.off`), *4c-2* the `ss×` target and its
-     resolve (closes `ss=2`). They are independent — one changes what is underneath the world,
-     the other changes where the world draws — and each is something that can be run and shown.
-     4c also owns the `s_curDrew` ordering gap 4b-3 left named (gpu-status §2.51), because the
-     fix is `tagpu_cursown_publish` moving after the frame it reports.
+     **THE SPLIT IS CONFIRMED BY DOING IT: 4c is two landings.** *4c-1* TA's surface — **LANDED
+     2026-09-18**, the bottom layer, and `tagpu_gui.off` on `renderer=vulkan` now renders the
+     shell and a live game completely where it showed the lever's flat clear
+     ([gpu-status](gpu-status.html) §2.52). *4c-2* the `ss×` target and its resolve, which closes
+     `ss=2` and is still open. They are independent, as filed — one changes what is underneath
+     the world, the other changes where the world draws. 4c also owns the `s_curDrew` ordering
+     gap 4b-3 left named (§2.51), because the fix is `tagpu_cursown_publish` moving after the
+     frame it reports.
+
+     **AND 4c-1 SETTLED WHAT THE CLIP-SPACE FLIP IS FOR**, which is worth carrying into 4c-2
+     because the resolve is another literal-quad pass. The flip is a property of what the vertex
+     stage DOES, not of the lane: a pass that COMPUTES its clip position from uniforms written in
+     GL's convention needs it, and a pass handed a literal quad already in clip space does not —
+     flipping the second kind moves the quad and its texcoords together and mirrors the picture.
+     4c-1's first build took the flip on the reasoning that a ported shader fed the GL lane's own
+     vertices reproduces the GL lane's image, and drew TA's shell upside down. The one-line test
+     is whether the shader computes its position or is handed one.
    * **4d — the deletion.** Route D's window, `tagpu_vk_wndproc`, `WM_TAGPU_VK` and the geometry
      tracking, once 4b's figures are banked. **4a made route D unreachable rather than deleted on
      purpose**, so the control above stays available until then: the same build answers both

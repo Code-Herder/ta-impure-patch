@@ -9156,6 +9156,97 @@ sends the next session to the wrong function.
   threads exchange; that belongs with the rest of the present's ordering in **4c**, not to a
   patch here. [FROM THE 4b-3 LANDING REVIEW.]
 
+### 2.52 TA's own frame reaches the Vulkan lane — landing 4c-1 of the Vulkan-only plan
+
+**What this part is.** The frame's BOTTOM layer. Everything of ours is drawn over TA's own 8-bit
+screen, and what we do not draw is what the player still sees. On the GL lane the fork does that
+itself — `render_ogl.c:260` builds `g_ogl.main_program` from `PASSTHROUGH_VERT_SHADER` +
+`PALETTE_FRAG_SHADER` and draws it before any pass of ours runs, which is why `tagpu_gui.off`
+still shows a game there. On `renderer=vulkan` it did not exist: the seam cleared to the lever's
+colour and TA's surface reached the frame **only** through the GUI pass's mirror hand-over. That
+is one of the three blind spots landing 1 named, and it is closed.
+
+| fixture | before | after |
+|---|---|---|
+| shell, `renderer=vulkan`, `tagpu_gui.off` | the lever's flat clear | the shell, complete |
+| `feat-forest` in game, same levers | the lever's flat clear | the game, complete — minimap, bars, text, terrain, units, cursor |
+| in game, census | — | `unit=1`, 8 units posed: our unit pass still draws OVER the new base layer |
+| shell A/B, both configurations | 0 px of 307 200 | **0 px of 307 200**, unchanged |
+| GL lane in game | — | clean and pictured, 0 faults |
+
+#### Three pieces, and where each had to live
+
+- **`tagpu_surf.c`** owns the snapshot: one per frame, taken from `tagpu_overlay_draw` after
+  `tagpu_pal_frame` and before any pass gathers, so every consumer in the frame sees the same
+  bytes *and* the same palette. It moved out of `tagpu_gui_surf.c`'s `mir_finish`, which had
+  taken it for `s_mHand.eng` — that made the Vulkan lane's bottom layer exist only while the UI
+  pass ran, which is the coupling this landing undoes. `mir_finish` now reads it.
+- **`tagpu_vk_surf.c`** draws it, running the same GLSL as the GL lane.
+- **The seam** calls `prepare` before the render pass and `record` first inside it. The
+  `vkCmdClearColorImage` stays: it is what covers the letterbox and any frame this refuses.
+
+**It is not an engine read**, so nothing joined `thread-split.allow`: `g_ddraw.primary` is the
+FORK's DirectDraw object, not the game's memory at an absolute address — the standing
+`tagpu_gui_surf.c` already read it under. The lifetime argument is the critical section's and
+unchanged: `IDirectDrawSurface.c` NULLs the primary inside `g_ddraw.cs` and frees after,
+`dds_Flip` swaps `->surface` inside the same section, and the bound comes from the PRIMARY's own
+geometry rather than `g_ddraw.width/height`, which is the device mode.
+
+#### The orientation was wrong for one build, and the picture is what said so
+
+The first build took the negative-height viewport every other ported pass takes, on the argument
+— written into the file header at the time — that **a ported shader fed the GL lane's own
+vertices reproduces the GL lane's image**. It drew TA's shell upside down.
+
+The argument is sound for the other passes and wrong for this one, and the difference is worth
+stating because it decides what the flip is *for*: those passes **compute** a clip position from
+uniforms written in GL's convention, so turning clip space over is what makes the arithmetic land
+the same way. This one transforms nothing — `MVPMatrix` is the identity (`render_ogl.c:622`) and
+the quad is a literal already in clip space with its texture coordinates attached to its corners.
+Flipping moves the quad **and its texcoords** together: it still covers the viewport, but `v = 0`
+arrives at the other end, which is a vertical mirror.
+
+The mapping is stated directly now. GL puts tex `(0,0)` — TA's row 0, the top of its screen — at
+clip `y = -1`, which is the bottom in GL and reaches the window upright because GL's framebuffer
+is bottom-up. Vulkan's clip `y = -1` is already the **top** of the viewport, so the same vertices
+with no flip put TA's top row at the top.
+
+**The lesson is not "derive it" and not "inherit it".** It is that the flip is a property of what
+the vertex stage DOES, not of the lane — and the one-line test for it is whether the shader
+computes its position or is handed one.
+
+#### The shader came from the fork, which cost four changes to the generator
+
+`tools/spirv-gen.py`'s rule is that the GL lane's GLSL is the one copy and the Vulkan edition is
+generated from it. Honouring that for a shader in the fork's own `inc/openglshader.h` needed:
+
+| change | why |
+|---|---|
+| `HEADER_SOURCES` | the source is `inc/openglshader.h`, not `src/<name>.c`. Same shape as the already-special-cased `RESTORE_HDR`. |
+| `_DECL` widened | it matched only `static const char* NAME =`; the fork writes `static char NAME[] =`, so 11 literals were counted and 0 extracted. |
+| `ATTR_LOCATIONS` | the fork asks the LINKER where its attributes landed (`glGetAttribLocation`, `render_ogl.c:549`), so there is no `layout(location=)` and none derivable. In Vulkan a location is pipeline state, so whoever builds the pipeline chooses — the choice is made in the manifest beside `PROGRAMS`, and the pass binds to match. |
+| `NOT_PROGRAMS` | "a shader no program uses" guards OUR two lanes from drifting while one is unwritten; it should not force Vulkan editions of the fork's nine other shaders. The tool's own `die()` invited this: *"add it, or say here why it is not a program"*. |
+
+And one latent bug the new source exposed: `--check` tested `line.startswith("/* tagpu_")`, so a
+source not named that way had every hash attributed to no key and reported *"has no `words` hash
+— regenerate"* however freshly it had been generated.
+
+**Blast radius, verified rather than assumed:** exactly one line changed in each of the twelve
+existing headers — the transform's identity hash, which moves because the tool was edited. **Not
+one SPIR-V word moved.**
+
+#### What is NOT covered by landing 4c-1
+
+- **`ss` is still 1× on this lane.** There is no offscreen world target and no resolve; that is
+  4c-2, and its shader is already generated (`native_d`, the 2× → 1× downsample).
+- **The GUI twin still uploads its own copy** of the same bytes from the hand-over, so on a lane
+  with the UI pass on, TA's surface is uploaded twice and drawn twice. Harmless — the UI layer
+  covers the base — but it is redundant and belongs to whichever landing makes the twin read the
+  backend's image.
+- **`s_curDrew`'s ordering**, carried forward from §2.51 and still open.
+- The in-game picture above has `terr`/`feat` unarmed, so those layers come from TA's surface
+  rather than from our passes. That is the fixture, not a limit of the landing.
+
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out
 
 **Reproduced, root-caused and fixed** ([terrain & depth](terrain-depth.html) §7.6, the *fifth*
