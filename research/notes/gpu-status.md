@@ -9041,6 +9041,93 @@ a case that is ordinary.**
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 
+### 2.51 The UI layer draws with no GL context — landing 4b-3 of the Vulkan-only plan
+
+**What this part is.** The last of `tagpu_overlay.c`'s four entry points. `tagpu_gui_present` now
+gates its own GL objects, its own draws and its own state restore, gathers the drain's record on
+either lane, and hands the Vulkan twin a composite to run — so the `gl_draws` variable in
+`tagpu_overlay.c` is gone and all four passes are called unconditionally. Landing 4b is complete.
+
+| fixture | comparison | result |
+|---|---|---|
+| shell (static) | two-lane route D, GL vs Vulkan, same frame | **0 px** of 307 200 |
+| shell | vulkan-only vs route D's Vulkan half | **0 px** of 307 200 |
+| shell | vulkan-only vs route D's GL half | **0 px** of 307 200 |
+| `feat-forest` in game | UI chrome, outside the viewport | **0 px** of 155 648 |
+| `feat-forest` in game | inside the viewport | 315 071 of 630 784 |
+
+One build, one `.ab` at a time, `native.on` off so a single pass draws into the Vulkan frame.
+307 200 non-black px on all three shell captures.
+
+**The viewport half of the in-game row is not a defect and cannot be closed by this landing.**
+With `native.on` off the engine rasterises the world into its own primary and the UI layer
+composites whatever moment it finds there, so two separate runs are two separate moments. The
+chrome — the panel, the top bar, the side bar, everything this pass actually draws — is what the
+`0 px of 155 648` measures. The shell rows are the whole-frame test, and they are the ones that
+say the twin store, the sprite path, the string path and the copy path agree byte for byte.
+
+#### The same shape again, and a second one beside it
+
+§2.50 found eleven instances of *a pass keyed on GL rather than on what GL stands for*. The UI
+layer carried seven more, and the module's own comments had already written the right answer down
+in four of them:
+
+| where | the test | what it should have asked |
+|---|---|---|
+| `init_gl` | the UI atlas armed at its tail, reachable only through the GL bring-up | the atlas is a CPU table (now `atlas_setup()`, idempotent on `s_atlas.made`) |
+| `tagpu_gui_cursor_frame` | `s_gl != 1` | is the atlas armed — *its own comment says "ownership is latched on the ATLAS"* |
+| `twin_string` | `!s_strProg` → re-seed the whole surface | is there a string to stamp |
+| …and the same function | `tagpu_text_glyph_tex()`, a GL uploader | has the cache rasterised anything (now `tagpu_text_glyph_have()`, that uploader's own first line) |
+| `mir_finish` | `if (f->surface_tex)` gating the copy of TA's primary | does this frame carry TA's surface — *the bytes are `g_ddraw.primary->surface`, CPU memory the texture has nothing to do with* |
+| `sharp_minimap`'s bake | `!s_mmTex` | is this palette's resolve of this map in `s_mmPicRgb` (now `s_mmBaked`) |
+| `twin_make` | the entry and its texture made together | the TABLE says a twin exists; `tex`/`fbo` at 0 is a twin with no GL |
+
+**And a second shape, which is the one this landing nearly shipped.** Twelve of the module's
+twenty-one functions really are pure GL executors and return at the head. Three more look exactly
+like them — no return value, nothing but `gl*` calls to a first reading — and are not:
+
+| function | what a head-return would have dropped |
+|---|---|
+| `draw_layer` | `s_mHand`, the hand-over that TELLS the Vulkan twin what composite to run. The twin would have had no UI at all. |
+| `sharp_begin` | `s_sharpOn`/`s_sharpInk`, and the two clients whose `mir_sdraw` records are the twin's only copy of the sharp layer |
+| `sharp_minimap` | the CPU bake of the minimap through the presented palette — `s_mmPicRgb`, handed over as `mmPic` and uploaded by `tagpu_vk_gui.c` into an image of its own |
+
+All three were written as head-returns first and caught by reading the file for `mir_*` and
+`s_mHand` writes rather than for GL calls. **The audit that finds the first shape does not find
+this one**: grepping for `gl[A-Z]` tells you which lines are GL, never which of the remaining
+lines somebody else is waiting for. The question to ask of every candidate head-return is *what
+does this function publish*, and the two files to grep are the record's and the hand-over's.
+
+`tagpu_posedraw_live()` in 4b-2 was the first of these; this landing found three more in one file.
+
+#### The A/B, and two instruments
+
+**The UI pass claimed its Vulkan half on `wrote`** — the GL capture reaching the disk — which is
+precisely the trap 4b-1 moved the five world passes off, left standing in the sixth. It now claims
+through `tagpu_vk_ab_arm("gui")` (already in `s_abFiles`, so no table change), and the GL lane
+needs both its own write and that unlink.
+
+**The heartbeat reported the engine's minimap pair as the GL texture's texel count**
+(`s_mmEngW * s_mmEngH`), so it read `fog=13227/13356` on the GL lane and `fog=13227/0` on the
+vulkan one — *"no engine pair"* about a pair it had just counted 13 227 fogged texels in. It reads
+the size from the packet now, which is where both lanes get it. Same rule as §2.50's one-shot
+latches: an instrument that is only true on one lane is worse than no instrument, because it
+sends the next session to the wrong function.
+
+#### What is NOT covered by landing 4b-3
+
+- **Classic++'s restorer does not start on this lane** — `cpp=0 assets=0 colvalid=0 rgb=0` on both
+  lanes in every run here, so the colour-twin path (`TAGPU_GUICOL_DST`/`ON`, `twin_colour`,
+  `restore_step`) is honestly "indexed" on both and was never exercised. Both lanes agree because
+  neither has colour, not because the colour path was measured.
+- **`sharptest`'s quads** were not captured, and the minimap was exercised only with `mmbase`
+  armed: at k = 1 the engine's own minimap stands by design (§13.6), so the default path through
+  `sharp_minimap` returns early on both lanes.
+- **The hand-over still copies TA's primary every frame** into `s_mHand.eng` — that is what makes
+  the twin composite at all today, and landing 4c is where the backend uploads TA's surface
+  instead.
+- The in-game viewport, as above.
+
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out
 
 **Reproduced, root-caused and fixed** ([terrain & depth](terrain-depth.html) §7.6, the *fifth*

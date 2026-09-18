@@ -2837,15 +2837,17 @@ independent reasons: the Classic++ restored atlases have no CPU mirror, and the 
 holds casters the lane cannot draw. Both block every world pixel. Every Phase G figure above was
 taken under `tagpu_defaults.off` + `ss=1` + `gui.on=mmbase`, where neither arises.
 
-**Landing 4 is four landings; 4a landed 2026-09-17 and 4b-1 on 2026-09-18**
-([gpu-status](gpu-status.html) §2.48 and §2.49). Filed as one row — the fourth backend,
+**Landing 4 is four landings; 4a landed 2026-09-17 and the whole of 4b on 2026-09-18**
+([gpu-status](gpu-status.html) §2.48, §2.49, §2.50 and §2.51). Filed as one row — the fourth backend,
 `renderer=vulkan`, the `ss` target, TA's surface, and route D's deletion — it comes apart along
 four seams the code already has: **4a** the thread and the present, **4b** the per-frame driver
 (the gathers run and the GL draws stand down), **4c** the `ss` target and TA's surface upload,
 **4d** the deletion. The exit condition is unchanged.
 
-**4b is THREE landings** — 4b-1 the driver and the two separable passes, **4b-2 the world
-(landed 2026-09-18)**, 4b-3 the UI layer. The world's five passes all gather on `renderer=vulkan`
+**4b is THREE landings and all three landed 2026-09-18** — 4b-1 the driver and the two
+separable passes, 4b-2 the world, 4b-3 the UI layer. `tagpu_overlay.c` has no `gl_draws`
+variable any more: every one of the driver's four entry points is called unconditionally and
+each answers for its own GL. The world's five passes all gather on `renderer=vulkan`
 now and are drawn by their twins: terrain, features, markers and units **0 px and byte-identical**
 against their two-lane captures, effects 0 px on the same-frame pair. [gpu-status](gpu-status.html)
 §2.50 has the table and the finding — **eleven times a pass was keyed on GL rather than on what GL
@@ -2859,14 +2861,27 @@ because a pass that read 0 as a bound cached a ruined atlas for the life of the 
 function twice and produced one flat contradiction, and the periodic lines that replaced them
 settled each question in a single run.
 
+**4b-3 closed it: the UI layer.** Shell, whole frame, **0 px of 307 200** on all three
+comparisons — the same-frame two-lane pair, vulkan-only against that pair's Vulkan half, and
+vulkan-only against its GL half. In game the UI chrome outside the viewport is **0 px of
+155 648**; the viewport itself is not comparable across two runs, because with `native.on` off
+the engine rasterises the world into its own primary and two runs are two moments.
+[gpu-status](gpu-status.html) §2.51.
+
+It carried seven more of §2.50's shape, and **a second shape §2.50's audit cannot find**: three
+functions that read as pure GL executors and are not, because they publish what the Vulkan twin
+runs from — `draw_layer`'s `s_mHand`, `sharp_begin`'s coverage flags and its two clients'
+`mir_sdraw` records, and `sharp_minimap`'s CPU bake of the minimap through the presented palette.
+Head-returning them built cleanly, ran cleanly, and would have handed the twin no UI at all.
+Grepping for `gl[A-Z]` tells you which lines are GL and never which of the rest somebody is
+waiting for; the second grep is for what the function publishes.
+
 **4b-1 was the first:** the driver, plus the two entry points whose
-gather was already separable from their draw. `tagpu_scaffold_frame` and `tagpu_fps_present` now
-run on both lanes and gate their own upload, draw and read-back; `tagpu_native_frame` and
-`tagpu_gui_present` still stand down whole, which is 4b-2. The split is a seam in the code: a
-world pass publishes its hand-over from *inside* its GL render rather than from its gather, so the
-five with levers of their own need the treatment one at a time, and the UI layer's Vulkan record is
-emitted conditionally on GL twin bookkeeping, so it cannot be produced without GL objects at all
-yet.
+gather was already separable from their draw. `tagpu_scaffold_frame` and `tagpu_fps_present` gate
+their own upload, draw and read-back, because each publishes its hand-over *after* the GL draw and
+from the same function. The split was a seam in the code: a world pass publishes its hand-over
+from *inside* its GL render rather than from its gather, so the five with levers of their own
+needed the treatment one at a time.
 
 **4b-1's own result is three runs of one build**, at one fixture with the camera reproduced
 exactly: the two-lane A/B **0 px apart** for both passes (190 247 and 102 ink pixels a side), and

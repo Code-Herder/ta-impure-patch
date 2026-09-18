@@ -2189,8 +2189,8 @@ Four things that cost a session if they are not known:
   screen on this lane** — an armed instance showing only the clear colour is a fault now. The
   world and the UI layer are still 4b-2 and still stand down whole.
 
-**The per-pass A/Bs on the vulkan-only lane, as of landing 4b-2.** All five world passes draw
-there now, and four are byte-identical to their two-lane captures. What each needs:
+**The per-pass A/Bs on the vulkan-only lane, as of landing 4b-3.** All five world passes and the
+UI layer draw there now. What each needs:
 
 | pass | fixture | arm set, and the trap |
 |---|---|---|
@@ -2199,6 +2199,26 @@ there now, and four are byte-identical to their two-lane captures. What each nee
 | effects | `fx-lasers` | `'native.on=nosuchunit' fx.on`, and arm the `.ab` ~4 s after the apply. Two runs can NEVER agree — it draws transient projectiles |
 | markers | `selbox-facings` | `'native.on=nosuchunit' 'mark.on=log'`, then `tacli click <i> 312 362` to select a unit so the pass has content (`mark: bars=3`). 297 ink px |
 | units | `selbox-facings` | `native.on=all` and **`mark.on` OFF**, or two passes draw. 2 125 ink px |
+| UI layer | **the shell**, or `feat-forest` | `'tagpu_gui.on=mmbase'` and **`native.on` OFF**. Shell = 307 200 ink px, whole frame. In game only the CHROME is comparable — see below |
+
+**The UI layer's A/B has four traps of its own, all paid for in the 4b-3 landing.**
+
+- **`tagpu_gui.on` must exist BEFORE the launch.** The pass installs its producer hooks at DLL
+  attach, so a lever armed into a running game sets `s_on` and still leaves
+  `tagpu_gui_installed()` false — the present returns at its first line and there is no heartbeat
+  at all. `tacli arm <i> tagpu_gui.on` on a **stopped** instance does not create the file either.
+  Write it: `echo mmbase > $G/tagpu_gui.on`, then launch.
+- **`native.on` OFF, or nothing is captured.** The unit pass and the UI pass both draw into the
+  Vulkan frame and the seam refuses with *"1 A/B levers claimed this frame and 2 passes drew into
+  it"*. `tacli launch` will also drop `owndraw.on` by itself when `native.on` is unset, and say so.
+- **The shell is the fixture for a WHOLE-FRAME comparison.** In game the UI layer composites over
+  the engine's live primary, so with `native.on` off the world inside the viewport is whatever
+  moment that run reached — two runs are two moments and ~50 % of the viewport differs for
+  reasons that have nothing to do with the pass. Outside the viewport (the panel, the top bar,
+  the side bar) it is 0 px of 155 648. Compare the regions separately, or use the shell.
+- **`mmbase`, or `sharp_minimap` never runs.** At k = 1 the engine's own minimap stands by design
+  (§13.6), so the default path returns early on both lanes and the pass is not under test. With
+  `mmbase` the heartbeat's `mm=` climbs and `fog=` reports the fogged texel count.
 
 - **Read the lane's own periodic lines before believing a stand-down.** Four exist and all carry
   the driver's frame number, so they line up: `native: vulkan lane handed over frame N: …`,

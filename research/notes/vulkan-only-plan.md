@@ -380,15 +380,16 @@ would not have shown up as a failure — it would have shown up as three landing
      `tagpu_vk.on` control still creating route D's window and still rendering a 148-colour picture.
      It costs **23.4 MB** of committed peak in the real process against the probe's 2.2 MB, with the
      largest free block unchanged — which is the probe's own caveat holding rather than failing.
-   * **4b — the per-frame driver.** The gather halves run and the GL draws stand down.
+   * **4b — the per-frame driver. COMPLETE 2026-09-18 (4b-1, 4b-2, 4b-3).** The gather halves run
+     and the GL draws stand down.
      `tagpu_overlay_draw` is the single driver and most of it is API-independent; the four GL-owning
      entry points are `tagpu_scaffold_frame`, `tagpu_native_frame`, `tagpu_gui_present` and
      `tagpu_fps_present`. Two things 4a already knows about it: `TAGPU_FRAME` must be filled BEFORE
      `tagpu_vk_frame` with the same frame number, and `vp_y` takes `viewport.y` **without**
      `opengl_y_align`, which is GL's extra scanline and nothing else's.
 
-     **4b IS TWO LANDINGS, AND THE FOUR ENTRY POINTS ARE NOT FOUR EQUAL JOBS [2026-09-18, written
-     by 4b-1].** The seam is where a pass's HAND-OVER is published, and it is a property of the
+     **4b IS THREE LANDINGS, AND THE FOUR ENTRY POINTS ARE NOT FOUR EQUAL JOBS [2026-09-18,
+     written by 4b-1, count corrected by 4b-2].** The seam is where a pass's HAND-OVER is published, and it is a property of the
      code rather than of how much work each looks like:
 
      * **4b-1 — the driver and the two passes whose gather is already separable. LANDED
@@ -402,12 +403,28 @@ would not have shown up as a failure — it would have shown up as three landing
        **0 px and byte-identical** against their two-lane captures, effects 0 px on the same-frame
        two-lane A/B (it draws transient projectiles, so a cross-run comparison is not available to
        it, exactly as it is not to the frame-rate readout). [gpu-status](gpu-status.html) §2.50.
-     * **4b-3 — the UI layer**, which turned out to be its own landing rather than half of 4b-2.
-       `tagpu_gui_present`'s record is built INSIDE its GL drain -- `twin_make`/`twin_find` gate
-       `mir_op` -- and the record's colour flag is keyed on the GL colour twin
-       (`(restored && t->rgb)` reaching `TAGPU_GUICOL_ON`), so a missing handle changes what the
-       twin is TOLD rather than only what this lane draws. The bytes themselves need no porting:
-       they come from `g_guiq.arena` and the per-op colour is a value.
+     * **4b-3 — the UI layer. LANDED 2026-09-18.** `tagpu_gui_present` gates its own GL and the
+       `gl_draws` variable in `tagpu_overlay.c` is gone, so all four entry points are now called
+       unconditionally. Shell, whole frame: **0 px of 307 200** on all three comparisons — the
+       same-frame two-lane pair, vulkan-only against that pair's Vulkan half, and vulkan-only
+       against its GL half. In game the UI chrome outside the viewport is **0 px of 155 648**;
+       the viewport itself cannot be compared across two runs, because with `native.on` off the
+       engine rasterises the world into its own primary and two runs are two moments.
+       [gpu-status](gpu-status.html) §2.51.
+
+       **The filed description was right about the mechanism and wrong about the risk.** It said
+       the record's colour flag is keyed on the GL colour twin, and it is —
+       `(restored && t->rgb)` reaching `TAGPU_GUICOL_ON` — but that never mattered: Classic++'s
+       restorer does not start on this lane, so `t->rgb` is 0 and both lanes honestly record
+       "indexed". What actually cost the landing its rounds was a shape the filing did not
+       predict: **three functions that read as pure GL executors and are not**, because they
+       publish the hand-over the Vulkan twin runs from (`draw_layer`'s `s_mHand`,
+       `sharp_begin`'s `s_sharpOn`/`s_sharpInk` and its two clients' `mir_sdraw` records,
+       `sharp_minimap`'s CPU bake into `s_mmPicRgb`). Head-returning them built cleanly, ran
+       cleanly and would have handed the twin no UI at all. `tagpu_posedraw_live()` in 4b-2 was
+       the first of this shape; 4b-3 found three more in one file. **Grepping for `gl[A-Z]` finds
+       the first shape and is blind to this one** — the second grep is for what the function
+       publishes.
      **WHAT THAT SPLIT LOOKED LIKE FROM THE OUTSIDE, AND WHERE IT WAS WRONG.** Filed as "each
      world pass publishes its hand-over from **inside** its GL render, so terr, feat, fx, mark and
      posedraw each need the treatment individually" -- true of the first four, and the reason each
