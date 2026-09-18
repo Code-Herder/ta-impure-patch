@@ -79,7 +79,8 @@
 #include "tagpu_terr.h"
 #include "tagpu_terrown.h"           /* is the world viewport carrying our key fill right now? */
 #include "tagpu_overlay.h"
-#include "tagpu_pal.h"                    /* the one resolution of the presented palette */
+#include "tagpu_pal.h"
+#include "tagpu_surf.h"                    /* the one resolution of the presented palette */
 #include "tagpu_abshot.h"            /* G19f: the GL half of the Phase G A/B */
 #include "tagpu_vk.h"                 /* tagpu_vk_owns_present, tagpu_vk_ab_arm:
                                          which lane this is, and the A/B's arming */
@@ -1317,8 +1318,6 @@ static TAGPU_GUIOP* s_mOps;
 static unsigned  s_mNOps, s_mCapOps;
 static unsigned char* s_mArena;
 static unsigned  s_mALen, s_mACap;
-static unsigned char* s_mEng;          /* the engine's own frame, copied      */
-static unsigned  s_mEngCap;
 
 static TAGPU_GUIHAND s_mHand;
 static int       s_mHave = 0;          /* a hand-over stands                  */
@@ -2984,36 +2983,24 @@ static void mir_finish(const TAGPU_FRAME* f)
        the Vulkan lane runs two calls later. */
     s_mHand.eng = NULL; s_mHand.engW = s_mHand.engH = s_mHand.engPitch = 0;
     if (have_engine_frame(f)) {
-        EnterCriticalSection(&g_ddraw.cs);
-        /* THE BOUND COMES FROM THE OBJECT BEING READ, not from the device
-           mode. `g_ddraw.width/height` is the mode; the bytes and the pitch
-           belong to the PRIMARY, which carries its own geometry -- and between
-           a mode change and the primary being recreated the two disagree, so
-           `h * pitch` off the mode can run past the primary's allocation.
-           CLAUDE.md: a value is DATA until it has been validated as data.
-           [FOUND 2026-09-16, the landing review.] */
-        if (g_ddraw.primary && g_ddraw.primary->surface &&
-            g_ddraw.bpp == 8 &&
-            g_ddraw.primary->width > 0 && g_ddraw.primary->height > 0) {
-            int w = g_ddraw.primary->width, h = g_ddraw.primary->height;
-            int pitch = g_ddraw.primary->pitch ? (int)g_ddraw.primary->pitch : w;
-            unsigned need = (unsigned)w * (unsigned)h;
-            if (pitch >= w && need && need <= (64u << 20)) {
-                if (need > s_mEngCap) {
-                    unsigned char* nb = (unsigned char*)realloc(s_mEng, need);
-                    if (nb) { s_mEng = nb; s_mEngCap = need; }
-                }
-                if (s_mEngCap >= need) {
-                    const unsigned char* src = (const unsigned char*)g_ddraw.primary->surface;
-                    int y;
-                    for (y = 0; y < h; y++)
-                        memcpy(s_mEng + (unsigned)y * w, src + (size_t)y * pitch, (size_t)w);
-                    s_mHand.eng = s_mEng;
-                    s_mHand.engW = w; s_mHand.engH = h; s_mHand.engPitch = w;
-                }
-            }
+        /* TAKEN BY tagpu_surf.c, NOT COPIED AGAIN HERE. This block used to do
+           its own critical section and its own row loop; the snapshot moved out
+           when the Vulkan lane needed the same bytes as its BOTTOM layer,
+           because a base layer that exists only while the UI pass runs is the
+           coupling landing 4c-1 exists to undo. The lifetime is still a copy
+           rather than an alias of anything short-lived: the buffer is
+           tagpu_surf.c's, written once per frame at the top of
+           `tagpu_overlay_draw`, so it is stable for the whole window in which
+           this hand-over is valid -- which is a stronger statement than the
+           per-frame realloc it replaces, not a weaker one, because there is now
+           exactly one writer at exactly one point in the frame.
+           [The vulkan-only plan, landing 4c-1.] */
+        const unsigned char* eng = NULL;
+        int ew = 0, eh = 0;
+        if (tagpu_surf_frame(&eng, &ew, &eh, NULL, NULL)) {
+            s_mHand.eng = eng;
+            s_mHand.engW = ew; s_mHand.engH = eh; s_mHand.engPitch = ew;
         }
-        LeaveCriticalSection(&g_ddraw.cs);
     }
     /* the guard has nothing to compare against without those bytes */
     if (!s_mHand.eng) { s_mHand.guard = 0; s_mHand.strict = 0; }
@@ -3038,7 +3025,6 @@ void tagpu_gui_mirror_want(int on)
            the module owns after the twins themselves */
         free(s_mOps);   s_mOps = NULL;   s_mCapOps = 0;
         free(s_mArena); s_mArena = NULL; s_mACap = 0;
-        free(s_mEng);   s_mEng = NULL;   s_mEngCap = 0;
         s_mNOps = s_mALen = 0; s_mHave = 0;
         /* THE TWO ATLAS MIRRORS ARE NOT FREED HERE, and that is the atlas's
            rule rather than an oversight (tagpu_gaf.h): they are owned by a

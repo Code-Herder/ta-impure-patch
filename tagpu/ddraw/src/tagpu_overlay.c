@@ -34,6 +34,7 @@
 #include "tagpu_zoom.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_pal.h"
+#include "tagpu_surf.h"
 #include "tagpu_fps.h"
 #include "tagpu_packet.h"
 
@@ -417,6 +418,14 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        (tagpu_pal.h). The engine's half comes from this frame's packet; a flag
        otherwise: the first reader below does the work. */
     tagpu_pal_frame(f->packet);
+    /* TA'S OWN FRAME, ONCE, BEFORE ANY PASS GATHERS. It is the bottom layer of
+       the composite -- everything of ours is drawn over it and what we do not
+       draw is what the player still sees -- and taking it here means every
+       consumer in this frame gets the same bytes and the same palette. Two
+       passes reading the engine's surface at two instants is how the lanes end
+       up compositing different moments of one frame. Cheap and silent when
+       there is no 8-bit primary. [The vulkan-only plan, landing 4c-1.] */
+    tagpu_surf_take();
 
     /* THE VIEW FOR THIS FRAME, once, before any pass reads the eye: the zoom
        level (the levers, the wheel's ease), the cursor anchor's step against
