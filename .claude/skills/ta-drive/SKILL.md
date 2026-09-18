@@ -2399,7 +2399,19 @@ rm -f $G/tagpu_feat.ab $G/tagpu_feat_*.ppm; sleep 2; touch $G/tagpu_feat.ab; sle
   `grep -a 'native: FBO' tagpu.log` → `ss=1`.
 - **`native.on` must carry `wrecks`, or the feature pass emits nothing at all.** It only owns the
   draw when the native wreck pass owns `DrawUnit` (see *Features* below); without it the gather is
-  muted, both halves are black and the A/B reads a meaningless 0.
+  muted, both halves are black and the A/B reads a meaningless 0. Measured 2026-09-18: with no
+  `wrecks` no `_gl.ppm` is written at all and `vk-ab.py` reports the GL half missing.
+- **AND THE ARM SET ABOVE NO LONGER PRODUCES A PAIR BY ITSELF — USE `tacli eye <i> 1400 1600`**
+  [measured 2026-09-18]. `wrecks` makes the native husk pass draw the map's one 3D wreck, so the
+  UNIT twin draws too, and the lane refuses the frame: `1 A/B levers claimed this frame and 2
+  passes drew into it - nothing captured`. That is the guard working — a Vulkan frame carries every
+  armed pass while a GL capture carries one — and the recipe predates the unit pass having a Vulkan
+  twin. The fix is a camera where the wreck is off-screen: on `feat-forest` at 1024x768,
+  `tacli eye <i> 1400 1600` gives `3dwreck=0 body=101 shadow=76` with features still on screen,
+  and the pair comes back **0 px apart at 132 274 ink pixels a side**. Read
+  `grep -a 'feat: rect=' tagpu.log | tail -1` for `3dwreck=` before arming; `(2566,616)` and
+  `(2100,900)` both have the wreck in shot, and `(3400,2200)` has no features at all.
+  `native.on=<a type that matches nothing> wrecks` does NOT help: the wreck is not a unit.
 - **No `mark.on` needed** — the readout's font trap is the readout's alone.
 - **Both halves come out UPSIDE DOWN**, and that is correct: this pass draws into the world FBO,
   whose clip-space +1 is the bottom of the screen (the composite quad turns it over). They are
@@ -2463,6 +2475,21 @@ rm -f $G/tagpu_fx.ab $G/tagpu_fx_*.ppm; sleep 2; touch $G/tagpu_fx.ab; sleep 9
 
 - **`native.on` is required** — `tagpu_fx_render` is called from inside the native pass, so with
   only `fx.on` there is no gather and no capture, on either lane.
+- **...BUT GIVE IT A TYPE FILTER THAT MATCHES NOTHING** — `native.on=nosuchunit` [measured
+  2026-09-18]. A bare `native.on` draws every unit, so the unit twin draws beside the effects one
+  and the lane refuses the frame for two passes drawing. The filter keeps the call site (which is
+  what `fx` needs) without the unit draw; the lasers come from the engine's projectile list and do
+  not care which units the native pass paints.
+- **ARM THE `.ab` ABOUT FOUR SECONDS AFTER THE SITUATION IS APPLIED, not thirteen.** The
+  recipe's `sleep 13` then `sleep 9` lands after the fixture has gone quiet — measured
+  `lines=0 flashq=0`, and the pair then agrees about an empty frame. At `sleep 4` it reads
+  `flashq=6` and the pair is **0 px at 3 327 ink pixels**. `grep -a '^fx:' tagpu.log | tail -1` is
+  the check.
+- **THIS PASS CANNOT BE COMPARED ACROSS TWO RUNS, and no camera fixes that.** It draws transient
+  projectiles, so two captures agree only if the same ones happen to be alive: one run read
+  `flashq=6 lines=0` (3 327 ink px) and the next `lines=2 flashq=0` (730 ink px), in the same
+  region of the frame. Its valid oracle is the two-lane A/B, which compares ONE frame across both
+  lanes. Same shape as the frame-rate readout, and for the same reason.
 - **`fx.on` TAKES TOKENS, AND THEY ARE HOW YOU ISOLATE A BUCKET.** `nolines` leaves the sprites,
   flashes and explosions; `nosprites noexpl nodebris nomodels` leaves the lasers alone. Both lanes
   read the same tokens, so either one is a valid A/B — and isolating is the only way to tell a
