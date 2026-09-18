@@ -125,6 +125,10 @@ def main():
     worst = 0
     first = None
     ink_gl = ink_vk = 0
+    # WHERE THE GL CAPTURE ACTUALLY DREW, counted separately -- see the report
+    # below for why this is not a softer bar but a different question.
+    diff_ink = 0
+    first_ink = None
     for i in range(n):
         o = i * 3
         a3, b3 = gp[o:o + 3], vp[o:o + 3]
@@ -135,6 +139,10 @@ def main():
                 worst = d
             if first is None:
                 first = (i % gw, i // gw, tuple(a3), tuple(b3))
+            if a3 != BLACK:
+                diff_ink += 1
+                if first_ink is None:
+                    first_ink = (i % gw, i // gw, tuple(a3), tuple(b3))
         # BYTES AGAINST BYTES. `a3` is a slice of the file, so comparing it to a
         # tuple is always unequal and every pixel counts as ink -- which made the
         # first run of this report 786432 non-black pixels on an image that has
@@ -148,8 +156,12 @@ def main():
     print("\nnon-black px   GL %d   Vulkan %d" % (ink_gl, ink_vk))
     print("differing px   %d of %d" % (diff, n))
     if diff:
+        print("  on GL ink    %d of %d" % (diff_ink, ink_gl))
+        print("  on GL black  %d" % (diff - diff_ink))
         print("worst channel  %d" % worst)
         print("first at       (%d, %d)  GL %s  Vulkan %s" % first)
+        if first_ink:
+            print("first on ink   (%d, %d)  GL %s  Vulkan %s" % first_ink)
 
     if a.out and diff:
         out = bytearray(b"P6\n%d %d\n255\n" % (gw, gh))
@@ -168,6 +180,26 @@ def main():
         print("without it every string is refused and BOTH lanes draw nothing.")
         return 1
     print("\n%s" % ("0 px apart" if diff == 0 else "NOT identical"))
+    # THE TWO CAPTURES ARE NOT THE SAME KIND OF PICTURE SINCE LANDING 4c-1, and
+    # a reader who takes the headline number alone will conclude a world pass
+    # regressed when it did not. The GL half of a world pass's A/B is the bare
+    # world FBO -- black everywhere the pass did not draw -- while the Vulkan
+    # half is the SWAPCHAIN IMAGE, which since 4c-1 carries TA's own 8-bit frame
+    # underneath it (`tagpu_vk_surf.c`, the bottom layer that made
+    # `tagpu_gui.off` show a game). So every pixel the pass did not cover
+    # differs by construction, and the question that still has a yes/no answer
+    # is the one about the pixels the GL capture actually contains.
+    # MEASURED 2026-09-18 on the terrain pass: 118 751 px differ of 786 432, and
+    # 0 of the 630 719 the GL FBO drew. That is a pass in exact agreement with
+    # its twin and a harness comparing two different framings.
+    if diff and diff_ink == 0:
+        print("...but 0 of the %d pixels the GL capture DREW." % ink_gl)
+        print("Every difference is a pixel GL left black. For a WORLD pass that")
+        print("is expected since landing 4c-1: the GL half is the bare world FBO")
+        print("and the Vulkan half is the swapchain image, which carries TA's own")
+        print("frame underneath. Read `on GL ink` as the pass's figure, and use")
+        print("the screen for what the whole frame looks like.")
+        return 0
     return 0 if diff == 0 else 1
 
 

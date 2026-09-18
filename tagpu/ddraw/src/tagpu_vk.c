@@ -163,6 +163,7 @@
 #include "tagpu_vk_fps.h"
 #include "tagpu_vk_scaffold.h"
 #include "tagpu_vk_surf.h"
+#include "tagpu_vk_world.h"
 #include "tagpu_vk_feat.h"
 #include "tagpu_vk_terr.h"
 #include "tagpu_vk_fx.h"
@@ -402,6 +403,8 @@ typedef struct {
        differently from its own oracle. */
     int              anisook;
     float            maxAniso;
+    int              wideok;
+    float            maxLineWidth;
     int              rebuild;              /* the surface said its extent moved */
     int              cansrc;               /* the images carry TRANSFER_SRC     */
     unsigned         frame;
@@ -2042,6 +2045,7 @@ static void vk_down(void)
         tagpu_vk_mark_down(&s_pass);
         tagpu_vk_gui_down(&s_pass);
         tagpu_vk_surf_down(&s_pass);
+        tagpu_vk_world_down(&s_pass);
         /* AFTER THE PASSES, because a pass owns the JOBS and the restorer owns
            what they are drawn with: each `_down` above gives its job back, and
            this then gives back the pipelines, the activations and the render
@@ -2401,6 +2405,30 @@ static DWORD WINAPI up_worker(LPVOID arg)
                       "original is filtered 4x anisotropically and NOT doing "
                       "that is a different picture from our own oracle");
             }
+            /* `wideLines` IS A CORE FEATURE BIT TOO, so it sits beside
+               anisotropy for the same reason and is likewise NOT on the retry
+               ladder below -- the ladder drops EXTENSIONS, and this is asked
+               for only when the device has just said it has it.
+               WHY THE LANE WANTS IT: since 4c-2 the world is drawn into a
+               target `ss` times the game resolution, and the GL twin calls
+               `glLineWidth(ss)` so a line one game pixel wide is `ss` pixels
+               there. Without this the ported passes can only draw a 1.0 line,
+               which is `ss` times too thin -- so tagpu_vk_fx.c and
+               tagpu_vk_mark.c refused the whole pass instead, and on the
+               shipped default (`ss` = 2) the effects pass dropped every frame
+               that had a laser in it. [The vulkan-only plan, landing 4c-2.] */
+            if (have.wideLines) {
+                VkPhysicalDeviceProperties dp;
+                feat.wideLines = VK_TRUE;
+                s_vk.wideok = 1;
+                vkGetPhysicalDeviceProperties(s_vk.pd, &dp);
+                s_vk.maxLineWidth = dp.limits.lineWidthRange[1];
+            } else {
+                vklog("wideLines is not offered - a pass drawing lines into a "
+                      "supersampled world target will stand down, because its "
+                      "GL twin draws them ss pixels wide and a 1.0 line is a "
+                      "different picture from our own oracle");
+            }
             dci.pEnabledFeatures = &feat;
         }
         qci.queueFamilyIndex = s_vk.qfam; qci.queueCount = 1; qci.pQueuePriorities = &prio;
@@ -2524,6 +2552,8 @@ static DWORD WINAPI up_worker(LPVOID arg)
     s_pass.anisook = s_vk.anisook;
     s_pass.maxAniso = s_vk.maxAniso;
     s_pass.lineok = s_vk.lineok;
+    s_pass.wideok = s_vk.wideok;
+    s_pass.maxLineWidth = s_vk.maxLineWidth;
     s_pass.zclipok = s_vk.zclipok;
     s_pass.gipa = s_gipa;
     s_pass.gdpa = vkGetDeviceProcAddr;
@@ -2589,6 +2619,45 @@ fail:
    is what makes frame `n` wait for frame `n - nimg` and nothing sooner. (An
    earlier comment here said "one frame in flight", which `fi = frame % nimg`
    plainly is not.) Deepening this into a pass that paces itself is G19d's. */
+/* THE WORLD'S FIVE PASSES, IN THE GL LANE'S OWN ORDER, INTO WHATEVER TARGET IS
+   OPEN. One copy called from two places since 4c-2: the offscreen world pass
+   when there is a target, and the frame's own render pass when there is not.
+
+   IT IS ONE FUNCTION BECAUSE THE ORDER IS THE FRAGILE PART. tagpu_native.c
+   draws terrain, features, units, effects, ghosts, markers, and two passes that
+   blend are not commutative -- so an order that drifted between the two arms
+   would be a picture that changes when the offscreen target happens to fail.
+   Nothing here decides anything; the `draw_*` flags are their own `prepare`s'
+   answers and `w`/`h` are the caller's target.
+
+   `s_vk.rp` IS STILL WHAT THE MARKER PASS IS HANDED even when this is recording
+   into the offscreen one, and that is correct rather than an oversight: it
+   builds its pipelines against the render pass it is given, and render-pass
+   COMPATIBILITY -- matching attachment formats and sample counts, never the
+   load/store ops or the layouts -- is what lets those pipelines run in either.
+   Handing it the offscreen pass instead would build a second set for no gain
+   and would make the pass's own lifetime depend on a target it never sees. */
+static void world_records(VkCommandBuffer cb, uint32_t fi, uint32_t w, uint32_t h,
+                          int draw_terr, int draw_feat, int draw_unit,
+                          int draw_fx, int draw_mark)
+{
+    if (draw_terr) tagpu_vk_terr_record(&s_pass, cb, fi, w, h);
+    if (draw_feat) tagpu_vk_feat_record(&s_pass, cb, fi, w, h);
+    /* THE UNITS, between the features and the effects -- which is where
+       tagpu_native.c draws them, and two passes that blend are not
+       commutative. */
+    if (draw_unit) tagpu_vk_unit_record(&s_pass, cb, fi, w, h);
+    if (draw_fx)   tagpu_vk_fx_record(&s_pass, cb, fi, w, h);
+    /* AND THE BUILD GHOSTS AFTER THEM, which is the same rule applied a second
+       time: tagpu_native.c draws the units, then the effects, then ghost_pass.
+       Landing 6 first recorded the ghosts inside the body stage above, which
+       put them on the wrong side of an effect they overlap -- `over` is not
+       commutative and the difference is up to the ghost's own alpha share.
+       Both calls or neither: the second is what ends the unit pass's frame. */
+    if (draw_unit) tagpu_vk_unit_record_ghosts(&s_pass, cb, fi, w, h);
+    if (draw_mark) tagpu_vk_mark_record(&s_pass, cb, fi, s_vk.rp, w, h);
+}
+
 static int vk_present(void)
 {
     uint32_t idx = 0, fi = s_vk.frame % s_vk.nimg;
@@ -2659,7 +2728,8 @@ static int vk_present(void)
         tagpu_vk_fx_down_owed() || tagpu_vk_scaffold_down_owed() ||
         tagpu_vk_shadow_down_owed() || tagpu_vk_unit_down_owed() ||
         tagpu_vk_hires_down_owed() || tagpu_vk_mark_down_owed() ||
-        tagpu_vk_gui_down_owed() || tagpu_vk_surf_down_owed()) {
+        tagpu_vk_gui_down_owed() || tagpu_vk_surf_down_owed() ||
+        tagpu_vk_world_down_owed()) {
         if (!vkDeviceWaitIdle || vkDeviceWaitIdle(s_vk.dev) != VK_SUCCESS) {
             vklog("vkDeviceWaitIdle refused before an owed pass teardown - down");
             return -2;
@@ -2679,6 +2749,7 @@ static int vk_present(void)
         if (tagpu_vk_mark_down_owed())     tagpu_vk_mark_down_paid(&s_pass);
         if (tagpu_vk_gui_down_owed())      tagpu_vk_gui_down_paid(&s_pass);
         if (tagpu_vk_surf_down_owed())     tagpu_vk_surf_down_paid(&s_pass);
+        if (tagpu_vk_world_down_owed())    tagpu_vk_world_down_paid(&s_pass);
     }
 
     r = vkAcquireNextImageKHR(s_vk.dev, s_vk.sc, 1000000000ull,
@@ -2761,6 +2832,8 @@ static int vk_present(void)
        the only thing that does. */
     {
         int draw_surf = 0;
+        int draw_world = 0;
+        uint32_t tw = 0, th = 0;    /* the world target's extent, when there is one */
         int draw_fps = 0, draw_scaf = 0, draw_feat = 0, draw_terr = 0, draw_fx = 0;
         int draw_mark = 0, ab_mark = 0;
         int draw_unit = 0, draw_gui = 0;
@@ -2881,6 +2954,18 @@ static int vk_present(void)
                and this runs before vkCmdBeginRenderPass. It is a no-op until
                a consumer has asked the device for it. */
             tagpu_vk_restore_step(&s_pass, cb, fi);
+
+            /* AND THE WORLD TARGET LAST OF `prepare`, because it is not a
+               pass and depends on none of them: it reads the geometry
+               tagpu_native.c published from this frame's gather and builds
+               or resizes this slot's offscreen colour+depth pair. It puts
+               no pixel anywhere and so is not counted in `ndraw`/`nclaim`,
+               the shadow map's rule for the shadow map's reason.
+               0 means there is no target this frame and the world draws
+               into the swapchain image exactly as it did before 4c-2 --
+               a smaller picture, never a wrong one.
+               [The vulkan-only plan, landing 4c-2.] */
+            draw_world = tagpu_vk_world_prepare(&s_pass, cb, fi, &tw, &th);
         }
         ndraw = draw_terr + draw_feat + draw_unit + draw_fx + draw_mark + draw_scaf +
                 draw_gui + draw_fps;
@@ -2911,6 +2996,23 @@ static int vk_present(void)
                 if (abclaim[abi]) abpath = s_abFiles[abi].path;
         }
 
+        /* ---- THE WORLD, INTO ITS OWN TARGET AND BEFORE THE FRAME'S PASS ----
+           Render passes may not nest, so this has to open and close before
+           vkCmdBeginRenderPass below -- the shadow map's constraint, met the
+           same way. What it changes for the five passes inside it is the EXTENT
+           they are handed and nothing else: they scale the engine's game-space
+           rect into whatever target they get (`terr_scissor`'s `sx = w/uGame.x`
+           yields GL's own `glScissor(vpL*ss, ...)` at `tw = gw*ss`) and their
+           vertex shaders divide by `uGame` rather than by the target. The
+           offscreen render pass is format-compatible with `s_vk.rp`, so not one
+           of their pipelines moved. [The vulkan-only plan, landing 4c-2.] */
+        if (draw_world) {
+            tagpu_vk_world_begin(&s_pass, cb, fi);
+            world_records(cb, fi, tw, th,
+                          draw_terr, draw_feat, draw_unit, draw_fx, draw_mark);
+            tagpu_vk_world_end(&s_pass, cb);
+        }
+
         if (s_vk.rp && s_vk.fb[idx]) {
             VkClearValue cv[2];
             memset(cv, 0, sizeof cv);
@@ -2932,30 +3034,18 @@ static int vk_present(void)
                still carries the letterbox and any frame this refused. */
             if (draw_surf)
                 tagpu_vk_surf_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
-            if (draw_terr)
-                tagpu_vk_terr_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
-            if (draw_feat)
-                tagpu_vk_feat_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
-            /* THE UNITS, between the features and the effects -- which is where
-               tagpu_native.c draws them, and two passes that blend are not
-               commutative. */
-            if (draw_unit)
-                tagpu_vk_unit_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
-            if (draw_fx)
-                tagpu_vk_fx_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
-            /* AND THE BUILD GHOSTS AFTER THEM, which is the same rule applied a
-               second time: tagpu_native.c draws the units, then the effects,
-               then ghost_pass. Landing 6 first recorded the ghosts inside the
-               body stage above, which put them on the wrong side of an effect
-               they overlap -- `over` is not commutative and the difference is
-               up to the ghost's own alpha share. Both calls or neither: the
-               second is what ends the unit pass's frame. */
-            if (draw_unit)
-                tagpu_vk_unit_record_ghosts(&s_pass, cb, fi,
-                                            s_vk.ext.width, s_vk.ext.height);
-            if (draw_mark)
-                tagpu_vk_mark_record(&s_pass, cb, fi, s_vk.rp,
-                                     s_vk.ext.width, s_vk.ext.height);
+            /* THE WORLD. With a target it was drawn into it above and this is
+               the one draw that puts it on the frame, over TA's own surface and
+               under the UI -- which is exactly where tagpu_native.c's composite
+               sits. Without one the five passes draw straight into the
+               swapchain image at client resolution, which is what this lane did
+               before 4c-2. Both arms call `world_records`, so the GL lane's
+               ORDER is written down once and cannot drift between them. */
+            if (draw_world)
+                tagpu_vk_world_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
+            else
+                world_records(cb, fi, s_vk.ext.width, s_vk.ext.height,
+                              draw_terr, draw_feat, draw_unit, draw_fx, draw_mark);
             /* THE UI IS ABOVE THE WORLD and below the readout, which is
                where tagpu_overlay_draw puts it. */
             if (draw_gui)
@@ -3086,6 +3176,7 @@ static int vk_resize(int w, int h)
     tagpu_vk_hires_down(&s_pass);
     tagpu_vk_gui_down(&s_pass);
     tagpu_vk_surf_down(&s_pass);
+    tagpu_vk_world_down(&s_pass);
     /* AND ON A RESIZE TOO, though the device survives one: the restorer's
        staging and its timestamp pairs are sized by `d->slots`, which is
        `s_vk.nimg` and can change under a swapchain rebuild. The passes above

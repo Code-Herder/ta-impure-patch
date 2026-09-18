@@ -95,6 +95,24 @@ typedef struct {
        a pass whose device will not offer it stands down instead of drawing a
        picture four pixels away from its own oracle. */
     int                       lineok;
+    /* `wideLines` WAS ENABLED ON THE DEVICE, and the widest line it will
+       rasterise. A pass that draws lines into a SUPERSAMPLED target needs
+       it: the GL twin calls `glLineWidth(ss)` so that a line one game pixel
+       wide is `ss` pixels of the target, and a Vulkan pipeline fixed at 1.0
+       draws a line `ss` times too thin. Same shape as `flipok` and
+       `lineok`: a rule the GL twin already obeys, adopted as pipeline state.
+       UNTIL 4c-2 THERE WAS NO SUPERSAMPLED TARGET, so `ss` was a number the
+       lane could only refuse -- tagpu_vk_fx.c and tagpu_vk_mark.c stood the
+       WHOLE pass down on any frame carrying line vertices, which on the
+       shipped default (`ss` is 2 unless `tagpu_ss.off` is there) meant the
+       effects pass dropped every frame with a laser in it. Measured on the
+       lane 2026-09-18 before this was added.
+       `maxLineWidth` is `lineWidthRange[1]`, and a width past it is refused
+       rather than clamped: a clamped width is a line a different thickness
+       from its own oracle, which is the thing this family of flags exists
+       to prevent. 0 means the device does not offer it. */
+    int                       wideok;
+    float                     maxLineWidth;
     /* VK_EXT_depth_clip_control WITH `depthClipControl`, ENABLED ON THE DEVICE,
        and so a pipeline may ask for GL'S OWN CLIP-SPACE Z RANGE.
        GL maps clip z in [-1, 1] onto the depth range; Vulkan takes [0, 1] and

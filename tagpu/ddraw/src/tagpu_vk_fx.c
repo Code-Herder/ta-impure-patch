@@ -156,7 +156,7 @@
     X(vkCreateSampler) X(vkDestroySampler) \
     X(vkAllocateMemory) X(vkFreeMemory) X(vkMapMemory) X(vkUnmapMemory) \
     X(vkCmdBindPipeline) X(vkCmdBindVertexBuffers) X(vkCmdBindDescriptorSets) \
-    X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor) \
+    X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdSetLineWidth) \
     X(vkCmdCopyBufferToImage) X(vkCmdPipelineBarrier)
 
 #define DECL(n) static PFN_##n n;
@@ -175,7 +175,8 @@ static int s_saidRestored;                 /* the Classic++ refusal, said once  
 static int s_saidNoMirror;                 /* ...and the mirror's, likewise     */
 static int s_saidScaf;                     /* ...the scaffold's                 */
 static int s_saidLht;                      /* ...the light table's              */
-static int s_saidWide;                     /* ...the line width's               */
+static int s_saidWide;
+static float s_lineW = 1.0f;   /* glLineWidth(ss), this frame's */                     /* ...the line width's               */
 static int s_saidLine;                     /* ...and the line rasterisation mode */
 
 static VkDescriptorSetLayout s_dsl;
@@ -635,7 +636,8 @@ static int build_pipelines(const TAGPU_VKPASS* d)
     VkPipelineDepthStencilStateCreateInfo ds;
     VkPipelineColorBlendAttachmentState cba;
     VkPipelineColorBlendStateCreateInfo cb = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
-    VkDynamicState dyn[2] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkDynamicState dyn[3] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
+                              VK_DYNAMIC_STATE_LINE_WIDTH };
     VkPipelineDynamicStateCreateInfo dy = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
     VkGraphicsPipelineCreateInfo gp = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
     VkPipelineRasterizationLineStateCreateInfoEXT lr =
@@ -773,12 +775,20 @@ static int build_pipelines(const TAGPU_VKPASS* d)
        give us this, so the pipeline is only built when it did. */
     if (d->lineok) {
         ia.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+        /* AND THE WIDTH IS DYNAMIC SINCE 4c-2, on this pipeline alone. The twin
+           calls `glLineWidth(ss)` and the world is now drawn into a target `ss`
+           times the game resolution, so the width is a per-frame number rather
+           than the 1.0 this was fixed at. `dyn[2]` exists only here: the
+           triangle and flash pipelines have no line width to set and declaring
+           one for them would be state nothing writes. */
+        if (d->wideok) dy.dynamicStateCount = 3;
         lr.lineRasterizationMode = VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT;
         lr.stippledLineEnable = VK_FALSE;
         lr.pNext = rs.pNext;
         rs.pNext = &lr;
         r = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_pipeLine);
         rs.pNext = lr.pNext;
+        dy.dynamicStateCount = 2;
         if (r != VK_SUCCESS) { plog(d, "fx: the line pipeline was refused (%d)", (int)r); goto out; }
     }
 
@@ -1406,16 +1416,28 @@ int tagpu_vk_fx_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
        calls glLineWidth(ss); this pass's pipelines are built at 1.0 because
        anything else needs `wideLines` enabled on the DEVICE, which is the
        seam's to ask for and it does not. At ss 1 the two agree exactly. */
-    if (h.n[TAGPU_FXB_LINES] > 0 && h.ss != 1) {
+    /* THE LINE WIDTH, AND IT IS STILL A REAL BOUND RATHER THAN A CAUTION --
+       what changed in 4c-2 is that the bound can now usually be MET. The twin
+       calls `glLineWidth(ss)`; since the world is drawn into a target `ss`
+       times the game resolution, a 1.0 line here is `ss` times too thin, so a
+       width of exactly `ss` is what matches the oracle. `wideok` says the
+       device will rasterise one, `maxLineWidth` says how wide.
+       REFUSED, NEVER CLAMPED: a clamped width is a line a different thickness
+       from its own twin, which is the whole thing this check exists to stop.
+       Before this the test was `h.ss != 1` and the pass dropped every frame
+       with a laser in it on the shipped default. */
+    if (h.n[TAGPU_FXB_LINES] > 0 &&
+        (h.ss != 1 && (!d->wideok || (float)h.ss > d->maxLineWidth))) {
         if (!s_saidWide) {
             s_saidWide = 1;
             plog(d, "fx: ss=%d makes the GL twin's lines %d px wide and this "
-                    "device's pipelines are built at 1.0 (wideLines is not "
-                    "enabled) - nothing drawn while there are line vertices",
-                 h.ss, h.ss);
+                    "device offers %s - nothing drawn while there are line "
+                    "vertices", h.ss, h.ss,
+                 d->wideok ? "a narrower maximum" : "no wideLines at all");
         }
         return 0;
     }
+    s_lineW = (float)h.ss;
 
     if (h.fogGrid) {
         if (h.fogGridCols < 1 || h.fogGridRows < 1 ||
@@ -1637,6 +1659,10 @@ void tagpu_vk_fx_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         pipe = (b == TAGPU_FXB_LINES) ? s_pipeLine
              : (b == TAGPU_FXB_FLASH) ? s_pipeFlash : s_pipeTri;
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+        /* `glLineWidth(ss)`, on the one pipeline that declared the state.
+           `prepare` refused the frame unless this width is one the device will
+           take, so there is nothing to clamp here. */
+        if (b == TAGPU_FXB_LINES && s_lineW != 1.0f) vkCmdSetLineWidth(cb, s_lineW);
         vkCmdDraw(cb, (uint32_t)s_n[b], 1, first, 0);
         first += (uint32_t)s_n[b];
     }

@@ -330,6 +330,8 @@ static int    s_nano   = 1;            /* build-state look (tagpu_nano.off)  */
 static GLuint s_prog, s_vao, s_vbo, s_fbo, s_colTex, s_depTex, s_palTex;
 #define TAGPU_SS_MAX 4                 /* the most we will supersample by (G17b) */
 static int    s_devres = 0;            /* the world at device res — OPT IN, tagpu_devres.on */
+static TAGPU_WORLDTGT s_wt;            /* the world target, published per frame */
+static int    s_wtHave = 0;
 static int    s_devresFailed = 0;      /* the driver refused the supersampled target: stay down */
 /* ---- the selection rect as GEOMETRY, not GL_LINES (OPT IN, tagpu_selgeom.on) ----
    A GL line is one pixel wide IN THE BUFFER IT IS DRAWN INTO and the driver
@@ -3272,6 +3274,39 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             devres = 1;
         }
     }
+    /* ...AND PUBLISHED HERE, ONE LINE BELOW THE DECISION, so that the Vulkan
+       backend sizes its offscreen world target from the SAME number rather than
+       recomputing `s_ss ? 2 : 1` on its own side. The paragraph above is the
+       whole argument for why that matters and it applies verbatim to a second
+       backend: the first cut of `devres` raised `ss` after `fv.ss` was set and
+       the scaffold test addressed a texel 1.5x out. Two lanes disagreeing about
+       it would be the same bug with a wider blast radius.
+
+       ABOVE THE `!gl_draws` RETURN, so this runs on both lanes -- every value
+       here is arithmetic on the frame packet and the levers, and nothing in it
+       touches GL, which is what makes that placement legal.
+
+       THE RECT IS THE FRAME'S OWN VIEWPORT AND CARRIES NO HUD SHIFT. The GL
+       composite shifts this draw by `tagpu_hud_shift` scaled into frame pixels
+       (see the composite, far below); the Vulkan composite does not, so the
+       shift is deliberately NOT folded in here -- publishing a shifted rect
+       that only one consumer applies is how two lanes drift. `tagpu_hud.on` is
+       not a play default and the gap is stated in the plan.
+       [The vulkan-only plan, landing 4c-2.] */
+    {
+        TAGPU_WORLDTGT w;
+        w.gw = gw; w.gh = gh; w.ss = ss; w.devres = devres;
+        w.vx = f->vp_x; w.vy = f->vp_y; w.vw = f->vp_w; w.vh = f->vp_h;
+        w.serial = 0; w.frame = f->frame_counter;
+        if (s_wtHave && s_wt.gw == w.gw && s_wt.gh == w.gh && s_wt.ss == w.ss &&
+            s_wt.devres == w.devres && s_wt.vx == w.vx && s_wt.vy == w.vy &&
+            s_wt.vw == w.vw && s_wt.vh == w.vh) {
+            w.serial = s_wt.serial;        /* the same target, so the same name */
+        } else {
+            w.serial = s_wt.serial + 1;    /* a NEW one: a consumer must rebuild */
+        }
+        s_wt = w; s_wtHave = 1;
+    }
     /* the rect's own path, snapshotted beside ss for the same reason: the
        gather decides how many vertices an edge is worth and the draw decides
        what primitive to read them as, and the two must not disagree inside one
@@ -4870,6 +4905,14 @@ const unsigned short* tagpu_native_foggrid(int* cols, int* rows, int* cells)
 const unsigned char* tagpu_native_foglut(void)
 {
     return s_fogLutHave ? s_fogLutBytes : NULL;
+}
+
+int tagpu_native_worldtgt(TAGPU_WORLDTGT* out)
+{
+    if (!s_wtHave || !out) return 0;
+    if (s_wt.gw < 1 || s_wt.gh < 1 || s_wt.ss < 1) return 0;
+    *out = s_wt;
+    return 1;
 }
 
 int tagpu_native_scissor_on(void)

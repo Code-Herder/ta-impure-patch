@@ -817,12 +817,20 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         }
         return 0;
     }
-    if (needLines && s_h.ss != 1.0f) {
+    /* THE LINE WIDTH, AND SINCE 4c-2 THE BOUND CAN USUALLY BE MET. The twin
+       calls `glLineWidth(ss)` and the world is drawn into a target `ss` times
+       the game resolution, so `ss` is the width that matches the oracle and
+       `record` below sets exactly that. Refused rather than clamped, for
+       tagpu_vk_fx.c's reason: a clamped width is a line a different thickness
+       from its own twin. Before 4c-2 this read `s_h.ss != 1.0f` and there was
+       no supersampled target for a wide line to be correct in. */
+    if (needLines && s_h.ss != 1.0f &&
+        (!d->wideok || s_h.ss > d->maxLineWidth)) {
         if (!s_saidWide) {
             s_saidWide = 1;
             plog(d, "mark: the order lines are %.1f px wide in the GL twin and "
-                    "this device's pipelines are built at 1.0 (wideLines is not "
-                    "enabled at device creation) - nothing drawn", s_h.ss);
+                    "this device offers %s - nothing drawn", s_h.ss,
+                 d->wideok ? "a narrower maximum" : "no wideLines at all");
         }
         return 0;
     }

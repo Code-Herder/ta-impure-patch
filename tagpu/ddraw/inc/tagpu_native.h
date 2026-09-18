@@ -56,4 +56,36 @@ const unsigned short* tagpu_native_foggrid(int* cols, int* rows, int* cells);
    The world passes' Vulkan editions must clip exactly as their GL twins do, and
    "there is a rect" is not the same fact as "the clip is on". Render thread. */
 int tagpu_native_scissor_on(void);
+
+/* WHERE THE WORLD IS DRAWN AND WHERE THE FINISHED BLOCK LANDS, decided once a
+   frame and published for whoever draws it.
+
+   THIS IS THE ONE DECISION, NOT A SECOND COPY OF IT. `ss` is settled in
+   `tagpu_native_frame` above the effects gather, for the reason stated there:
+   every pass that draws into this frame has to agree how many samples a game
+   pixel is, and the first cut of `devres` raised `ss` after `fv.ss` was set and
+   put the scaffold test 1.5x out. The Vulkan backend needs the same number for
+   the same reason -- it sizes the offscreen world target with it -- so it reads
+   what was decided rather than recomputing `s_ss ? 2 : 1` on its own side.
+
+   IT IS PUBLISHED FROM THE GATHER, ABOVE THE `!gl_draws` RETURN, so it is this
+   frame's on both lanes. Everything in it is arithmetic on the frame packet and
+   the levers; nothing here touches GL, which is what makes that placement legal.
+
+   `serial` moves when any field moves, so a consumer holding device resources
+   sized by this can tell "the same target" from "a new one" without comparing
+   the fields itself. `frame` is the render-thread frame it was decided on, and
+   a consumer must refuse a hand-over that is not its own frame's -- the rule
+   every hand-over in this tree carries.
+
+   Render thread only. [The vulkan-only plan, landing 4c-2.] */
+typedef struct {
+    int      gw, gh;      /* the GAME's own resolution -- not the window's     */
+    int      ss;          /* samples per game pixel: the target is gw*ss,gh*ss */
+    int      devres;      /* the 1x resolve is skipped; read the ss buffer     */
+    int      vx, vy, vw, vh;  /* where the block lands, HUD shift applied      */
+    unsigned serial;
+    unsigned frame;
+} TAGPU_WORLDTGT;
+int tagpu_native_worldtgt(TAGPU_WORLDTGT* out);
 #endif
