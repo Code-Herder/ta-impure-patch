@@ -8,14 +8,25 @@
 # (`tacli glshot`: 168 distinct colours) that nothing ever saw.
 #
 # So this script asks the only question that decides the design. Per route it
-# runs `vkcoexist --route X --hold N`, which finishes by painting the GL window
-# a known GREEN and swapping for N seconds, grabs the X window, and reports how
-# much of it is that green. Route GL is the control: no Vulkan is touched at
-# all, so a run that reads no green there is measuring a broken harness rather
-# than a broken route.
+# runs `vkcoexist --route X --hold N`, which finishes by painting the window a
+# known colour for N seconds, grabs the X window, and reports how much of it is
+# that colour. Every route names the LANE whose survival it is asking about, and
+# that is which lane paints the hold:
+#
+#   A B C D  the GL lane, green -- "does GL still reach the screen?"
+#   GL       the control for those: no Vulkan is touched at all, so a run that
+#            reads no green there is measuring a broken harness, not a route.
+#   E        VULKAN's own frame, flat magenta -- on the vulkan-only route there
+#            is no second lane, so the question is whether Vulkan itself is seen
+#            on a window that never had a GL context or a pixel format.
+#   F        the GDI lane, the same green -- "after a surface has existed on this
+#            HWND, can `gdi_render_main`'s fallback still be SEEN?" That decides
+#            whether render_vk.c may fall back late or only before the surface.
+#   GD       the control for F: GDI alone, Vulkan never touched.
 #
 #   tools/vkcoexist-pixels.sh                      # every route, system wine
 #   tools/vkcoexist-pixels.sh A D                  # just these
+#   tools/vkcoexist-pixels.sh GD E F               # the vulkan-only pair + control
 #   WINE=/path/to/proton/files/bin/wine tools/vkcoexist-pixels.sh
 #
 # It uses a THROWAWAY WINEPREFIX under $TMPDIR, never the project's -- Proton's
@@ -31,7 +42,7 @@ WINE="${WINE:-wine}"
 HOLD="${HOLD:-4}"
 WORK="${TMPDIR:-/tmp}/vkcoexist-pixels.$$"
 ROUTES=("$@")
-[ ${#ROUTES[@]} -eq 0 ] && ROUTES=(GL A B C D)
+[ ${#ROUTES[@]} -eq 0 ] && ROUTES=(GL A B C D GD E F)
 
 command -v import >/dev/null 2>&1 || { echo "need ImageMagick's 'import'" >&2; exit 2; }
 command -v xdotool >/dev/null 2>&1 || { echo "need xdotool (to find the window)" >&2; exit 2; }
@@ -47,18 +58,28 @@ i686-w64-mingw32-gcc -std=c99 -O1 -Wall -I"$ROOT/tagpu/ddraw/inc" \
 export WINEPREFIX="$WORK/prefix" WINEDEBUG=-all
 "$WINE"boot -u >/dev/null 2>&1
 
-# The green gl_hold paints, as the X server will report it: HOLD_G 0.85 -> 217.
+# The green gl_hold and gdi_hold paint, as the X server will report it: HOLD_G
+# 0.85 in a UNORM framebuffer is 217, and gdi_hold uses RGB(0,217,0) to match.
 GREEN_R=0; GREEN_G=217; GREEN_B=0
+# Route E's hold is Vulkan's own flat magenta. It shares no channel with the
+# green, so no reading is ambiguous about which lane it came from.
+MAGENTA_R=255; MAGENTA_G=0; MAGENTA_B=255
 
-printf '\n%-5s %-10s %-9s %s\n' ROUTE "GL-PIXELS" "API" "VERDICT"
+printf '\n%-5s %-10s %-9s %-6s %s\n' ROUTE "PIXELS" "API" "LANE" "VERDICT"
 for r in "${ROUTES[@]}"; do
+    # Which lane paints this route's hold, and so which colour is expected.
+    case "$r" in
+        E)    lane=vulkan; want_r=$MAGENTA_R; want_g=$MAGENTA_G; want_b=$MAGENTA_B ;;
+        F|GD) lane=gdi;    want_r=$GREEN_R;   want_g=$GREEN_G;   want_b=$GREEN_B ;;
+        *)    lane=gl;     want_r=$GREEN_R;   want_g=$GREEN_G;   want_b=$GREEN_B ;;
+    esac
     ( "$WINE" "$WORK/vkcoexist32.exe" --route "$r" --hold "$HOLD" >"$WORK/out.$r" 2>&1 ) &
     runner=$!
 
     # Grab once the hold has started, and once it has had a frame or two.
     win=""
     for _ in $(seq 1 $((HOLD * 10 + 60))); do
-        grep -q 'holding GL green' "$WORK/out.$r" 2>/dev/null && break
+        grep -q '\.\.\. holding ' "$WORK/out.$r" 2>/dev/null && break
         sleep 0.2
     done
     sleep 1
@@ -73,28 +94,31 @@ for r in "${ROUTES[@]}"; do
 
     pct="(no window)"
     if [ -s "$WORK/shot.$r.png" ]; then
-        pct=$(python3 - "$WORK/shot.$r.png" "$GREEN_R" "$GREEN_G" "$GREEN_B" <<'PY'
+        pct=$(python3 - "$WORK/shot.$r.png" "$want_r" "$want_g" "$want_b" <<'PY'
 import sys
 from PIL import Image
 im = Image.open(sys.argv[1]).convert('RGB')
 r, g, b = (int(x) for x in sys.argv[2:5])
 px = list(im.getdata())
-# a generous tolerance: the question is "is this our green", not "which green"
+# a generous tolerance: the question is "is this our colour", not "which shade"
 hit = sum(1 for p in px if abs(p[0]-r) < 24 and abs(p[1]-g) < 24 and abs(p[2]-b) < 24)
 print("%.1f%%" % (100.0 * hit / len(px)))
 PY
 )
     fi
 
+    upper="$(echo "$lane" | tr '[:lower:]' '[:upper:]')"
     case "$pct" in
-        100.0%|9[0-9].*%) verdict="GL REACHES THE SCREEN" ;;
+        100.0%|9[0-9].*%) verdict="$upper REACHES THE SCREEN" ;;
         "(no window)")    verdict="could not grab -- route refused before the hold?" ;;
-        *)                verdict="GL DOES NOT REACH THE SCREEN" ;;
+        *)                verdict="$upper DOES NOT REACH THE SCREEN" ;;
     esac
-    printf '%-5s %-10s %-9s %s\n' "$r" "$pct" \
-        "$([ $api -eq 0 ] && echo ok || echo refused)" "$verdict"
+    printf '%-5s %-10s %-9s %-6s %s\n' "$r" "$pct" \
+        "$([ $api -eq 0 ] && echo ok || echo refused)" "$lane" "$verdict"
 done
 
 echo
-echo "GL-PIXELS is the fraction of the window showing the green GL painted AFTER"
-echo "the route finished. Route GL is the control and must read ~100%."
+echo "PIXELS is the fraction of the window showing the colour the route's own LANE"
+echo "painted after the Vulkan part finished. GL and GD are the controls for their"
+echo "lanes and must read ~100%; a route that reads low is a lane the window no"
+echo "longer shows."

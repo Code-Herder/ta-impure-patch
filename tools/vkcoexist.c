@@ -22,6 +22,22 @@
  *   D  ROUTE 3     two top-level windows, one GL, one Vulkan, swapping which is
  *                  visible.
  *
+ * AND TWO MORE, ADDED WHEN THE PLAN DECIDED TO DELETE GL [2026-09-17], which
+ * ask about a window no GL renderer owns at all:
+ *
+ *   E  VULKAN-ONLY  no GL context and no pixel format, ever. This is the state
+ *                  the game window is in when `renderer=vulkan` selects a
+ *                  backend that never calls `ogl_create`, and it is the route
+ *                  the vulkan-only plan's landing 4 presents through.
+ *   F  THE NET      route E, and then GDI on the same window -- because the
+ *                  backend needs to know whether `gdi_render_main` can still
+ *                  be SEEN after a surface has existed on the HWND, and that
+ *                  decides whether a fallback may be taken late or only ever
+ *                  before the surface is created.
+ *
+ * `--route GD` is F's control (GDI alone, Vulkan never touched), as `--route
+ * GL` is the control for A-D.
+ *
  * Every route reports GL_VENDOR/GL_RENDERER and the Vulkan deviceName, which is
  * G19b's oracle as well: the two lanes can name different GPUs and the menu has
  * to be able to say so rather than hope.
@@ -39,8 +55,11 @@
  *
  * So the pixel question is asked from OUTSIDE, by tools/vkcoexist-pixels.sh:
  * `--route X --hold N` runs one route and then spends N seconds painting the
- * GL window a known green and swapping, and the script grabs the X window and
- * counts. That is the number that decides the design; the table below only
+ * window a known colour and swapping, and the script grabs the X window and
+ * counts. Which lane paints the hold is what each route is ASKING about: A-D
+ * and GL hold with GL (green), F and GD hold with GDI (the same green, so the
+ * script needs no table), and E holds with VULKAN itself (flat magenta), since
+ * on that route there is no second lane to ask about. That is the number that decides the design; the table below only
  * says which routes are worth grabbing.
  *
  * Build (from the repository root):
@@ -240,6 +259,38 @@ static void gl_hold(Gl* g, int secs)
     }
 }
 
+/* THE SAME HOLD, PAINTED WITH GDI, for the fallback question route F asks. The
+ * green is the same value `gl_hold` paints (0.85 in a UNORM framebuffer is 217,
+ * which is what the X server reports), deliberately: one expected colour serves
+ * every route whose pixel question is "does the NON-Vulkan lane still reach the
+ * screen", and the script needs no per-route table for them.
+ *
+ * The fork's GDI backend blits with `StretchDIBits` on a DC it holds for the
+ * window's life rather than with `FillRect` on a fresh one. That difference is
+ * deliberate and it does not weaken the measurement: the question is whether
+ * the WINDOW still shows anything a non-Vulkan lane draws, and a window
+ * winevulkan has taken over shows neither. */
+static void gdi_hold(HWND hw, int secs)
+{
+    DWORD t0 = GetTickCount();
+    HBRUSH br = CreateSolidBrush(RGB(0, 217, 0));
+    printf("  ... holding GDI green for %d s (grab the window now)\n", secs);
+    fflush(stdout);
+    while ((DWORD)(GetTickCount() - t0) < (DWORD)secs * 1000) {
+        MSG m;
+        HDC dc = GetDC(hw);
+        if (dc) {
+            RECT rc;
+            GetClientRect(hw, &rc);
+            FillRect(dc, &rc, br);
+            ReleaseDC(hw, dc);
+        }
+        while (PeekMessageA(&m, NULL, 0, 0, PM_REMOVE)) { TranslateMessage(&m); DispatchMessageA(&m); }
+        Sleep(16);
+    }
+    DeleteObject(br);
+}
+
 /* `ogl_release` (render_ogl.c:1749): unbind, delete. The DC is the fork's and
  * outlives the context, so it is released separately. */
 static void gl_down(Gl* g, int release_dc)
@@ -285,6 +336,13 @@ static int vk_init(void)
     return p_enumPD && p_createSurf && p_createDev && p_GDPA;
 }
 
+/* Seconds of FLAT MAGENTA to keep presenting after the counted frames, for the
+ * routes whose pixel question is about Vulkan's own output (E). Zero for every
+ * route that holds with GL or GDI instead, which is every other one -- their
+ * hold happens after `vk_present_on` has returned and torn its swapchain down.
+ * Set around the call and cleared after it, never left armed. */
+static int g_vkhold;
+
 /* Present NFRAMES on `hwnd`, tearing everything down again. Returns the number
  * presented, and writes the failing step into `why` so a route that fails says
  * WHICH call refused rather than just "no". */
@@ -308,6 +366,8 @@ static unsigned vk_present_on(HWND hwnd, char* why, unsigned whycap, char* devna
     VkSemaphore acquired = VK_NULL_HANDLE, released = VK_NULL_HANDLE;
     VkFence fence = VK_NULL_HANDLE;
     int f;
+    DWORD hold_t0 = 0;
+    int holding = 0;
 
     PFN_vkCreateSwapchainKHR      d_CreateSwapchainKHR = NULL;
     PFN_vkDestroySwapchainKHR     d_DestroySwapchainKHR = NULL;
@@ -445,7 +505,8 @@ static unsigned vk_present_on(HWND hwnd, char* why, unsigned whycap, char* devna
         if (d_CreateFence(dev, &fci, NULL, &fence) != VK_SUCCESS) BAIL("fence");
     }
 
-    for (f = 0; f < NFRAMES; f++) {
+    for (f = 0; ; f++) {
+        int inhold = (f >= NFRAMES);
         uint32_t idx = 0;
         VkImageSubresourceRange rng = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
         VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
@@ -455,6 +516,26 @@ static unsigned vk_present_on(HWND hwnd, char* why, unsigned whycap, char* devna
         VkSubmitInfo si = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
         VkPresentInfoKHR pi = { VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
         MSG m;
+
+        /* THE HOLD, for the routes whose pixel question is about VULKAN's own
+         * frame rather than about a GL frame drawn afterwards (E below). It
+         * presents a FLAT magenta instead of the ramp, because the grab must be
+         * able to say "this is our frame" from one pixel: the ramp's value
+         * depends on which frame the grab caught, and a stale frame and a fresh
+         * one are then the same measurement. Magenta shares no channel with the
+         * green `gl_hold` and `gdi_hold` paint, so no colour is ambiguous
+         * across routes either. */
+        if (inhold) {
+            if (!g_vkhold) break;
+            if (!holding) {
+                holding = 1;
+                hold_t0 = GetTickCount();
+                printf("  ... holding VULKAN magenta for %d s (grab the window now)\n", g_vkhold);
+                fflush(stdout);
+            }
+            else if ((DWORD)(GetTickCount() - hold_t0) >= (DWORD)g_vkhold * 1000)
+                break;
+        }
 
         r = d_AcquireNextImageKHR(dev, sc, WAIT_NS, acquired, VK_NULL_HANDLE, &idx);
         if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) BAILR("acquire", r);
@@ -467,8 +548,14 @@ static unsigned vk_present_on(HWND hwnd, char* why, unsigned whycap, char* devna
         b.srcAccessMask = 0; b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         d_CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                   0, 0, NULL, 0, NULL, 1, &b);
-        col.float32[0] = (float)f / NFRAMES; col.float32[1] = 0.2f;
-        col.float32[2] = 1.0f - (float)f / NFRAMES; col.float32[3] = 1.0f;
+        if (inhold) {
+            col.float32[0] = 1.0f; col.float32[1] = 0.0f;
+            col.float32[2] = 1.0f; col.float32[3] = 1.0f;
+        }
+        else {
+            col.float32[0] = (float)f / NFRAMES; col.float32[1] = 0.2f;
+            col.float32[2] = 1.0f - (float)f / NFRAMES; col.float32[3] = 1.0f;
+        }
         d_CmdClearColorImage(cb, imgs[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &col, 1, &rng);
         b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; b.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
         b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; b.dstAccessMask = 0;
@@ -486,10 +573,14 @@ static unsigned vk_present_on(HWND hwnd, char* why, unsigned whycap, char* devna
         pi.swapchainCount = 1; pi.pSwapchains = &sc; pi.pImageIndices = &idx;
         r = d_QueuePresentKHR(queue, &pi);
         if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) BAILR("present", r);
-        presented++;
+        /* THE HOLD'S FRAMES ARE NOT THE MEASUREMENT. `presented` is compared
+         * against NFRAMES by every route's `ok` test, so counting the hold
+         * would make the verdict depend on how long the grab took. */
+        if (!inhold) presented++;
         if (d_WaitForFences(dev, 1, &fence, VK_TRUE, WAIT_NS) != VK_SUCCESS) BAIL("fence timed out");
         d_ResetFences(dev, 1, &fence);
         while (PeekMessageA(&m, NULL, 0, 0, PM_REMOVE)) { TranslateMessage(&m); DispatchMessageA(&m); }
+        if (inhold) Sleep(16);
     }
 
 done:
@@ -648,6 +739,99 @@ static void route_D(Route* out, int show)
     DestroyWindow(b);
 }
 
+/* ---- the vulkan-only routes (the vulkan-only plan's landing 4) ----------- *
+ *
+ * A, B, C and D all ask ONE question: can Vulkan present on a window the fork's
+ * GL renderer owns, and does GL survive it? E and F ask a different one, and it
+ * only became worth asking when the plan decided to delete GL: can Vulkan
+ * present on a window NOBODY owns -- and what can still be seen on that window
+ * afterwards when the Vulkan lane itself will not come up?
+ *
+ * They are separate routes rather than a conclusion drawn from A, and that is
+ * the point. Route A's verdict is "API ok, pixels dead", but the dead pixels
+ * were GL's: its Vulkan half presented 10 of 10 frames on the very HWND the
+ * game owns. Landing 4 deletes the half that failed, so on paper A already says
+ * yes. "The half that failed is the half we deleted" is an argument, though,
+ * and this file exists because arguments about this seam have been wrong twice
+ * -- the API said yes when the screen said no, and the roadmap ranked the only
+ * working route last. So the remaining half is measured on its own. */
+
+/* E -- THE VULKAN-ONLY PRESENTATION ROUTE. No GL context is ever created and no
+ * pixel format is ever set on the window. That is the whole difference from
+ * route A, and it is exactly the state the game window is in when
+ * `renderer=vulkan` picks a backend that never calls `ogl_create`: `dd.c`'s
+ * `SetPixelFormat` is already gated on `g_ddraw.renderer == ogl_render_main`
+ * (dd.c:1524), so nothing touches the HDC on the way past.
+ *
+ * THE LIMIT, STATED: `opengl32` is loaded in this process -- the exe links it
+ * -- it is simply never used on this window. A DLL with no GL import at all is
+ * a different binary, not a different route, and this probe cannot speak for
+ * it. */
+static void route_E(Route* out, int show)
+{
+    HWND hw = make_window("vkco_E", show, NULL, 40, 40, 320, 240);
+    out->tag = "E"; out->what = "Vulkan alone: no GL context, no pixel format";
+    out->ok = 0; out->frames = 0; out->why[0] = 0; out->dev[0] = 0;
+    if (!hw) { _snprintf(out->why, sizeof out->why, "CreateWindowEx"); return; }
+    /* The hold belongs to Vulkan here, so it happens INSIDE the present call --
+       there is no second lane to paint with once the swapchain is gone. */
+    g_vkhold = g_hold;
+    out->frames = vk_present_on(hw, out->why, sizeof out->why, out->dev, sizeof out->dev);
+    g_vkhold = 0;
+    va_report("Vulkan alone, no GL on the window");
+    out->ok = (out->frames == NFRAMES);
+    DestroyWindow(hw);
+}
+
+/* F -- CAN THE FALLBACK STILL BE SEEN? Route E, and then GDI on the same
+ * window. This is not curiosity: it decides what `render_vk.c` does when a
+ * bring-up fails HALFWAY. `ogl_render_main` hands the session to
+ * `gdi_render_main` when GL will not come up, and a vulkan-only backend wants
+ * the same net -- but route A measured that once winevulkan has put a surface
+ * on an HWND, that HWND is finished for GL for the life of the process. If GDI
+ * inherits that verdict, a late fallback paints into a drawable nobody shows:
+ * a black window and no diagnostic, which is the failure mode this plan has
+ * spent three landings finding in other clothes.
+ *
+ * AND THE ANSWER DECIDES AN ORDERING RATHER THAN A HEURISTIC, which is what
+ * CLAUDE.md asks a fix to be. If GDI does not survive, the fallback has to be
+ * taken BEFORE `vkCreateWin32SurfaceKHR` is ever called, and a failure after
+ * that point is terminal and must say so instead of drawing where nothing is
+ * shown. If GDI does survive, the backend may fall back at any point. Either
+ * way the backend is safe by construction; this measurement says which
+ * construction it has to be. */
+static void route_F(Route* out, int show)
+{
+    HWND hw = make_window("vkco_F", show, NULL, 40, 40, 320, 240);
+    out->tag = "F"; out->what = "Vulkan alone, then GDI on the same HWND";
+    out->ok = 0; out->frames = 0; out->why[0] = 0; out->dev[0] = 0;
+    if (!hw) { _snprintf(out->why, sizeof out->why, "CreateWindowEx"); return; }
+    out->frames = vk_present_on(hw, out->why, sizeof out->why, out->dev, sizeof out->dev);
+    va_report("Vulkan, then GDI");
+    out->ok = (out->frames == NFRAMES);
+    if (g_hold) gdi_hold(hw, g_hold);
+    DestroyWindow(hw);
+}
+
+/* THE GDI CONTROL, and it is needed for the same reason route GL is: a grab
+ * that reads no green after route F has to be distinguishable from a harness
+ * that cannot grab a GDI-painted window in the first place.
+ *
+ * "Vulkan never touched" means no SURFACE, no swapchain and no present on this
+ * window -- `main` creates the instance before any route runs, so an instance
+ * exists in every route including this one and route GL. That is not a loophole:
+ * an instance is not per-window, and what route F puts on its HWND and this one
+ * does not is exactly the surface. */
+static void route_GD(Route* out, int show)
+{
+    HWND hw = make_window("vkco_GD", show, NULL, 40, 40, 320, 240);
+    out->tag = "GD"; out->what = "control: GDI alone, Vulkan never touched";
+    out->ok = 1; out->frames = 0; out->why[0] = 0; out->dev[0] = 0;
+    if (!hw) { out->ok = 0; _snprintf(out->why, sizeof out->why, "CreateWindowEx"); return; }
+    if (g_hold) gdi_hold(hw, g_hold);
+    DestroyWindow(hw);
+}
+
 /* THE CONTROL. GL alone, never a Vulkan call, then the hold -- so a grab that
  * reads no green here is measuring the harness and not the routes. Without it
  * "route A kills the window" and "the grab does not work" are one result. */
@@ -660,6 +844,11 @@ static void route_GL(Route* out, int show)
     if (!hw) { _snprintf(out->why, sizeof out->why, "CreateWindowEx"); return; }
     if (!gl_up(&g, hw)) { _snprintf(out->why, sizeof out->why, "GL bring-up"); DestroyWindow(hw); return; }
     out->ok = gl_frame(&g, 0.0f);
+    /* THE CONTROL REPORTS ITS VA TOO, because "what does the GL lane cost in a
+       32-bit address space" has no other answer in this file: every other route
+       measures GL and Vulkan together and the two cannot be separated after the
+       fact. [ADDED 2026-09-17, for the vulkan-only plan's landing 4.] */
+    va_report("GL up, no Vulkan");
     if (g_hold) gl_hold(&g, g_hold);
     gl_down(&g, 1);
     DestroyWindow(hw);
@@ -667,7 +856,7 @@ static void route_GL(Route* out, int show)
 
 int main(int argc, char** argv)
 {
-    Route r[4];
+    Route r[6];
     int i, show = 0, any = 0;
     const char* only = NULL;
 
@@ -695,8 +884,11 @@ int main(int argc, char** argv)
         else if (!strcmp(only, "B"))  route_B(&one, show);
         else if (!strcmp(only, "C"))  route_C(&one, show);
         else if (!strcmp(only, "D"))  route_D(&one, show);
+        else if (!strcmp(only, "E"))  route_E(&one, show);
+        else if (!strcmp(only, "F"))  route_F(&one, show);
         else if (!strcmp(only, "GL")) route_GL(&one, show);
-        else { printf("unknown route \"%s\" (A, B, C, D or GL)\n", only); return 2; }
+        else if (!strcmp(only, "GD")) route_GD(&one, show);
+        else { printf("unknown route \"%s\" (A, B, C, D, E, F, GL or GD)\n", only); return 2; }
         printf("\n==== RESULT ====\n%s  %-4s %-58s %u/%d frames\n",
                one.ok ? "api-ok" : "api-NO", one.tag, one.what, one.frames, NFRAMES);
         if (one.why[0]) printf("           %s\n", one.why);
@@ -712,9 +904,15 @@ int main(int argc, char** argv)
     route_C(&r[2], show);
     printf("\n=== D: %s ===\n", "route 3 -- two windows");
     route_D(&r[3], show);
+    /* E and F are the vulkan-only pair and they answer a different question
+       from A-D; the controls (GL, GD) stay `--route`-only, as GL always has. */
+    printf("\n=== E: %s ===\n", "Vulkan alone, no GL context, no pixel format");
+    route_E(&r[4], show);
+    printf("\n=== F: %s ===\n", "Vulkan alone, then GDI on the same HWND");
+    route_F(&r[5], show);
 
     printf("\n==== RESULT ====\n");
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < 6; i++) {
         printf("%s  %-4s %-58s %u/%d frames\n",
                r[i].ok ? "api-ok" : "api-NO", r[i].tag, r[i].what, r[i].frames, NFRAMES);
         if (r[i].why[0]) printf("           %s\n", r[i].why);
