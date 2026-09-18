@@ -83,7 +83,8 @@ int  tagpu_vk_restore_nk(void);
    Render thread only, and only between the seam's frames. */
 TAGPU_VKRJOB* tagpu_vk_restore_job_new(const TAGPU_VKPASS* d, const char* tag,
                                        int prio, int oneshot, int repaint,
-                                       VkImageView srcView, int srcW, int srcH,
+                                       VkImage srcImg, VkImageView srcView,
+                                       int srcW, int srcH,
                                        const unsigned char* pal,
                                        VkImage dstImg, VkImageView dstView,
                                        int dstW, int dstH);
@@ -137,6 +138,15 @@ int  tagpu_vk_restore_job_failed(const TAGPU_VKRJOB* j);
    after each batch. Never reset by a clear; compare it for change. */
 int  tagpu_vk_restore_job_painted(const TAGPU_VKRJOB* j);
 void tagpu_vk_restore_job_free(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j);
+
+/* `srcImg` IS THE IMAGE `srcView` NAMES, and it is here for the oracle rather
+   than for the drawing: under `tagpu_restoredump.on` the source is written out
+   beside the destination, so a pair that differs can be read as "the two lanes
+   restored different bytes" or "the two lanes restored the same bytes
+   differently" without another run. The GL lane has always written its own
+   source (`tagpu_restore_<tag>.r8`), and this is the other half of that pair.
+   [Landing 7e-2, which spent three runs on a difference that was one of those
+   two and could not be told apart from the destination alone.] */
 
 /* THE BYTE ORACLE IS THIS FILE'S, and it needs no call of its own. Under
    `tagpu_restoredump.on` each job writes its finished destination to

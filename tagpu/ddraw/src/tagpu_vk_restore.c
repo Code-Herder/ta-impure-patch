@@ -1244,6 +1244,7 @@ fail:
 /* ============================= THE JOB ============================= */
 struct TAGPU_VKRJOB {
     TAGPU_RCORE*   core;
+    VkImage        srcImg;                  /* ...for the oracle, not the draw */
     VkImageView    srcView;                 /* the consumer's indexed atlas   */
     int            srcW, srcH;
     VkImage        dstImg;                  /* ...and its restored twin       */
@@ -1297,6 +1298,7 @@ struct TAGPU_VKRJOB {
     uint32_t       dumpSlot;
     int            dumpState;
     int            dumpPainted;
+    VkDeviceSize   dumpSrcOff, dumpSrcBytes;
 };
 static struct TAGPU_VKRJOB s_vjob[TAGPU_R_MAXJOBS];
 
@@ -1895,7 +1897,8 @@ static void pal_pack(unsigned char* out, const unsigned char* pal)
 
 TAGPU_VKRJOB* tagpu_vk_restore_job_new(const TAGPU_VKPASS* d, const char* tag,
                                        int prio, int oneshot, int repaint,
-                                       VkImageView srcView, int srcW, int srcH,
+                                       VkImage srcImg, VkImageView srcView,
+                                       int srcW, int srcH,
                                        const unsigned char* pal,
                                        VkImage dstImg, VkImageView dstView,
                                        int dstW, int dstH)
@@ -1916,7 +1919,7 @@ TAGPU_VKRJOB* tagpu_vk_restore_job_new(const TAGPU_VKPASS* d, const char* tag,
     g = &s_vjob[(int)(c - s_sched.jobs)];
     memset(g, 0, sizeof *g);
     c->owner = g; g->core = c;
-    g->srcView = srcView; g->srcW = srcW; g->srcH = srcH;
+    g->srcImg = srcImg; g->srcView = srcView; g->srcW = srcW; g->srcH = srcH;
     g->dstImg = dstImg; g->dstView = dstView; g->dstW = dstW; g->dstH = dstH;
     g->clearDue = repaint ? 0 : 1;
     g->dstHas   = repaint ? 1 : 0;
@@ -2232,6 +2235,17 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
         }
         b[sizeof b - 1] = 0;
         rlog(b);
+        if (g->dumpSrcBytes && g->dumpMap) {
+            char sn[64];
+            FILE* sf;
+            _snprintf(sn, sizeof sn, "tagpu_restore_%s_vk.r8", g->tag);
+            sn[sizeof sn - 1] = 0;
+            sf = fopen(sn, "wb");
+            if (sf) {
+                fwrite(g->dumpMap + (size_t)g->dumpSrcOff, 1, (size_t)g->dumpSrcBytes, sf);
+                fclose(sf);
+            }
+        }
         g->dumpState = 2;
         dump_free(d, g);
         return 1;                          /* one action a frame, and it is done */
@@ -2260,6 +2274,13 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
        arithmetic on both sides. */
     if (g->chainN > 0)
         g->dumpBytes = (VkDeviceSize)tagpu_gaf_mip_chain(g->chainDim, g->chainN);
+    /* AND THE SOURCE AFTER IT, in the same buffer and the same submission, so
+       the two halves of the pair are read at the same instant rather than a
+       frame apart. R8, so one byte a texel. */
+    g->dumpSrcOff = g->dumpBytes;
+    g->dumpSrcBytes = (g->srcImg && g->srcW > 0 && g->srcH > 0)
+                      ? (VkDeviceSize)g->srcW * (VkDeviceSize)g->srcH : 0;
+    g->dumpBytes += g->dumpSrcBytes;
     if (!mk_buffer(d, g->dumpBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                    &g->dumpBuf, &g->dumpMem, &g->dumpMap)) {
@@ -2318,6 +2339,40 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &mb);
         vkCmdCopyImageToBuffer(cb, g->dstImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                g->dumpBuf, nrg, rg);
+        /* THE SOURCE TOO, and with its own transition: it is the consumer's
+           image and the consumer left it SHADER_READ_ONLY, exactly as the
+           destination. Same submission, so the pair is one instant. */
+        if (g->dumpSrcBytes) {
+            VkBufferImageCopy sr;
+            VkImageMemoryBarrier sb = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+            memset(&sr, 0, sizeof sr);
+            sr.bufferOffset = g->dumpSrcOff;
+            sr.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            sr.imageSubresource.layerCount = 1;
+            sr.imageExtent.width = (uint32_t)g->srcW;
+            sr.imageExtent.height = (uint32_t)g->srcH;
+            sr.imageExtent.depth = 1;
+            sb.srcQueueFamilyIndex = sb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            sb.image = g->srcImg;
+            sb.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            sb.subresourceRange.levelCount = 1;
+            sb.subresourceRange.layerCount = 1;
+            sb.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            sb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            sb.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            sb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &sb);
+            vkCmdCopyImageToBuffer(cb, g->srcImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   g->dumpBuf, 1, &sr);
+            sb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            sb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            sb.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            sb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 0, 0, NULL, 0, NULL, 1, &sb);
+        }
         mb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         mb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         mb.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;

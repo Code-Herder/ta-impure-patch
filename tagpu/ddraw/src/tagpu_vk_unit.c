@@ -1282,7 +1282,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
        `restoreRepaint` flag cannot hide. [Landing 7d's review.] */
     repaint = h->restoreRepaint && s_arHave && h->restoreBlanks == s_rjBlanks;
     s_rjob = tagpu_vk_restore_job_new(d, "unit", 3, 0, repaint,
-                                      s_atView, s_atDim, s_atDim,
+                                      s_atImg, s_atView, s_atDim, s_atDim,
                                       h->pal,
                                       s_arImg, s_arLvl[0], s_arDim, s_arDim);
     if (!s_rjob) { s_rjTried = 1; return; }

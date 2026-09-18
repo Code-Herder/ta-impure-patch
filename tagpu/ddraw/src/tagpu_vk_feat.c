@@ -1062,7 +1062,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
        REVIEW.] */
     repaint = h->restoreRepaint && s_arHave && h->restoreBlanks == s_rjBlanks;
     s_rjob = tagpu_vk_restore_job_new(d, "feat", 1, 0, repaint,
-                                      s_atView, s_atDim, s_atDim,
+                                      s_atImg, s_atView, s_atDim, s_atDim,
                                       h->pal,
                                       s_arImg, s_arView, s_atDim, s_atDim);
     if (!s_rjob) { s_rjTried = 1; return; }   /* the reason is in the log      */

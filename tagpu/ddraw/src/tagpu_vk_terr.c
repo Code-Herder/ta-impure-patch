@@ -1268,7 +1268,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
        fact, so it is the one that decides. */
     repaint = t->restoreRepaint && s_rgbAtlas.have;
     s_rjob = tagpu_vk_restore_job_new(d, "terr", 0, 1, repaint,
-                                      s_atlas.view, s_atlas.w, s_atlas.h,
+                                      s_atlas.img, s_atlas.view, s_atlas.w, s_atlas.h,
                                       t->pal,
                                       s_rgbAtlas.img, s_rgbAtlas.view,
                                       s_rgbAtlas.w, s_rgbAtlas.h);
