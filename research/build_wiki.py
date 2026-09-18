@@ -481,8 +481,31 @@ def slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
 
+class _Strikethrough(markdown.extensions.Extension):
+    """`~~struck~~` -> <del>struck</del>.
+
+    Python-Markdown ships no strikethrough and loads none of the ones that do,
+    so until 2026-09-18 every `~~` in the notes reached the page as two literal
+    tildes -- 80 of them across 17 notes, every one of them a correction whose
+    author meant "this was wrong, and here is what replaced it". Written here
+    rather than pulled in as a dependency: pymdown-extensions would fix the
+    same 80 spots and make a fresh checkout's wiki build fail on an import
+    until someone installed it, which is a worse failure than a tilde.
+    """
+
+    def extendMarkdown(self, md):
+        # 175 puts it below `**strong**` (60) and `*em*` (70)? No -- priorities
+        # run HIGH first, and the emphasis processors sit at 60/70, so 75 runs
+        # before them and claims the tildes first. Emphasis inside the struck
+        # text still works: the tree processor recurses into the new element.
+        md.inlinePatterns.register(
+            markdown.inlinepatterns.SimpleTagInlineProcessor(r"(~{2})(.+?)~{2}", "del"),
+            "del", 75)
+
+
 def build_page(md_text: str):
-    md = markdown.Markdown(extensions=["tables", "fenced_code", "sane_lists", "attr_list", "toc"],
+    md = markdown.Markdown(extensions=["tables", "fenced_code", "sane_lists", "attr_list", "toc",
+                                       _Strikethrough()],
                            extension_configs={"toc": {"anchorlink": False, "permalink": False}})
     html = md.convert(md_text)
     # cross-links between notes are authored as `page.md` (correct in the repo);
