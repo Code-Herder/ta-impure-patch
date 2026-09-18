@@ -75,9 +75,16 @@
 #include "dd.h"
 #include "render_vk.h"
 #include "render_gdi.h"
-#include "tagpu_vk.h"
 #include "debug.h"
 #include "config.h"
+#include "tagpu.h"
+#include "tagpu_overlay.h"
+#include "tagpu_cursown.h"
+#include "tagpu_gui.h"
+#include "tagpu_packet.h"
+#include "tagpu_reclaim.h"
+#include "tagpu_menu.h"
+#include "tagpu_vk.h"
 
 
 DWORD WINAPI vk_render_main(void)
@@ -89,7 +96,7 @@ DWORD WINAPI vk_render_main(void)
        one rebuild. See the loop for why the two cases are not the same case. */
 #define VK_RETRY_BUDGET 3
 
-    unsigned frames = 0;
+    unsigned frames = 0, fc = 0;
     int gave_up = 0, came_up = 0, retries = 0;
     DWORD timeout;
 
@@ -145,17 +152,77 @@ DWORD WINAPI vk_render_main(void)
            is still there for the GDI fallback below, which is the one path that
            owes it. */
 
-        /* THE LANE HAVING PRESENTED ONCE IS WHAT SEPARATES THE TWO FAILURES,
-           and it is latched from the seam's own return value rather than
-           inferred. `frames` is post-incremented so the number passed is this frame's,
-           counting from 0. WHEN 4b WIRES THE GATHERS, the same number has to
-           reach `TAGPU_FRAME::frame_counter` FIRST and this call second: a
-           Vulkan pass refuses a hand-over stamped with any other frame, which
-           is a safety property and not tidiness (tagpu_vk_pass.h). The GL lane
-           gets that ordering by filling the struct earlier in its loop and
-           passing `g_tagpu_frames - 1u` here. */
+        /* ONE NUMBER FOR THE WHOLE FRAME, TAKEN BEFORE ANYTHING USES IT. Every
+           pass's hand-over is stamped with `TAGPU_FRAME::frame_counter` and the
+           Vulkan twin refuses one published on any other frame -- a safety
+           property and not tidiness (tagpu_vk_pass.h) -- so the driver below
+           and the present call must be given the SAME value, and a
+           post-increment inside either call would silently differ by one. The
+           GL lane gets the same ordering by filling the struct earlier in its
+           loop and passing `g_tagpu_frames - 1u`. */
+        fc = frames++;
+
+        /* THE DRIVER. `tagpu_overlay_draw` is the single per-frame entry point
+           for everything this fork adds, and most of it is already
+           API-independent: input injection, the trigger-file readers, the
+           own-draw flushes, the palette, the zoom's one read of the eye, the
+           roster logs. The four entry points inside it that draw with GL --
+           scaffold, native, GUI and fps -- stand down one per commit of this
+           landing, each with its own A/B row; until a pass has stood down it
+           simply draws nothing here, because there is no GL context for it to
+           draw into. */
+        {
+            TAGPU_FRAME f;
+            f.struct_size   = sizeof(f);
+            f.abi           = TAGPU_ABI;
+            f.game_width    = g_ddraw.width;
+            f.game_height   = g_ddraw.height;
+            f.vp_x          = g_ddraw.render.viewport.x;
+            /* AND NO `opengl_y_align`, which is the one field the GL lane adds
+               to and this one must not. It is the extra scanline `dd.c:1120`
+               gives WGL so the driver cannot take exclusive mode; a Vulkan
+               frame carrying it would be offset by a pixel. It is also why a
+               previous-build A/B is only valid where that align is 0 -- see
+               render_vk.h. */
+            f.vp_y          = g_ddraw.render.viewport.y;
+            f.vp_w          = g_ddraw.render.viewport.width;
+            f.vp_h          = g_ddraw.render.viewport.height;
+            f.win_width     = g_ddraw.render.width;
+            f.win_height    = g_ddraw.render.height;
+            f.hwnd          = g_ddraw.hwnd;
+            f.hdc           = g_ddraw.render.hdc;
+            f.frame_counter = fc;
+            f.bpp           = g_ddraw.bpp;
+            /* THERE IS NO GL TEXTURE, so this is 0 and every consumer of it
+               must stand down rather than sample name 0. It is the engine's own
+               8-bit frame as an R8 index texture, uploaded by the GL backend
+               before any pass runs; the backend taking that upload over is 4c,
+               and until then `tagpu_terrown.c` and anything else reading it has
+               nothing. 0 is what the fork already hands a non-8bpp frame, so
+               the value is in-contract rather than a sentinel of ours. */
+            f.surface_tex   = 0;
+            /* The frame packet, taken ONCE here and handed to every pass
+               through the struct; both pointers die at `frame_end`, which is
+               unconditional for the reason the reclaim bracket's is. */
+            f.packet        = tagpu_packet_acquire(&f.packet_prev);
+            tagpu_reclaim_pass_begin();
+            tagpu_overlay_draw(&f);
+            /* Published HERE and nowhere else: this is the only point every
+               path through the driver reaches, and a flag published inside the
+               UI present would keep its last value across the driver's three
+               early returns -- leaving the engine's cursor suppressed while
+               ours was not drawn, which is no cursor at all. */
+            tagpu_cursown_publish(tagpu_gui_cursor_drew_take());
+            tagpu_reclaim_pass_end(f.frame_counter);
+            tagpu_packet_frame_end(f.frame_counter);
+            /* The render-options screen's deferred cfg write, off the game
+               thread because TA is lockstep. Nothing happens on a frame with
+               no click. */
+            tagpu_menu_present();
+        }
+
         if (tagpu_vk_frame(g_ddraw.hwnd, g_ddraw.render.width, g_ddraw.render.height,
-                           g_config.vsync, frames++))
+                           g_config.vsync, fc))
             came_up = 1;
 
         /* THE LOOP'S OWN EXIT WINS OVER A FAILURE, and the order is free. A
@@ -196,6 +263,13 @@ DWORD WINAPI vk_render_main(void)
 
         fpsl_frame_end();
     }
+
+    /* THE PRODUCER'S OWN TEARDOWN CLEARS IT, by construction: the thread that
+       is the only writer of the cursor-ownership flag clears it as it stops
+       writing. Leaving it set would keep the engine's cursor blit skipped for a
+       session that has no cursor of ours to put in its place -- no pointer at
+       all, which is the fail-closed shape this design exists to avoid. */
+    tagpu_cursown_publish(0);
 
     /* Every exit from the loop is a mode change, a shutdown or a lane that
        failed, and all three invalidate what the surface was made on -- so the

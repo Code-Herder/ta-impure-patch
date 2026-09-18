@@ -779,6 +779,15 @@ void tagpu_vk_own_present(void)
           "and route D's window is never created");
 }
 
+/* 1 when this backend owns the present, i.e. there is no GL context in the
+   process. THE PREDICATE LANDING 4b IS BUILT ON: every GL draw in the tree is
+   gated on its negation, one pass per commit, while the gather half beside it
+   runs unconditionally. Safe from any thread -- the latch is interlocked. */
+int tagpu_vk_owns_present(void)
+{
+    return s_ownWin != 0;
+}
+
 int tagpu_vk_armed(void)
 {
     /* ASKED FROM THE GAME THREAD (`vrow_greyed`, when the options screen is

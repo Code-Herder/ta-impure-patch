@@ -14,6 +14,7 @@
 #include "opengl_utils.h"   /* the fork's extern GL function pointers   */
 #include "tagpu_model3do.h"   /* TAGPU_PBMAXPIECE: the piece-count bound */
 #include "tagpu_overlay.h"
+#include "tagpu_vk.h"       /* tagpu_vk_owns_present(): whether GL may be drawn */
 #include "tagpu_tracer.h"
 #include "tagpu_suppress.h"
 #include "tagpu_owndraw.h"
@@ -387,6 +388,25 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        The pass bracket's end stays in the caller (render_ogl.c). */
     if (tagpu_reclaim_teardown_active()) { tagpu_zoom_frame_end(); return; }
 
+    /* EVERYTHING ABOVE THIS POINT IS API-INDEPENDENT AND RUNS ON EVERY BACKEND.
+       The four entry points below that DRAW are the whole of landing 4b's work,
+       and until each has been taught to publish its hand-over without drawing,
+       none of them may be called on a backend with no GL context.
+
+       WHY NOT JUST LET THE GL CALLS BE NO-OPS. Because that is not a pass
+       standing down, it is a pass relying on undefined behaviour: any of these
+       that reads GL state back -- a shader compile status, an FBO completeness
+       check, `glGetIntegerv` -- would branch on whatever the loader returns
+       with no context current, and the failure would be a wrong picture rather
+       than an error. A pass that is not called publishes nothing, so its Vulkan
+       twin stands down and SAYS SO, which is a refusal that names itself.
+
+       THE GATE MOVES INWARD, one commit per pass: when `tagpu_scaffold_frame`
+       can gather without drawing, its own draw block takes this test and the
+       call here loses it. Read once per frame so the four cannot disagree.
+       [The vulkan-only plan, landing 4b.] */
+    const int gl_draws = !tagpu_vk_owns_present();
+
     /* the palette the screen is shown with, once for every pass that resolves
        an 8-bit index this frame -- the world's and the UI layer's alike
        (tagpu_pal.h). The engine's half comes from this frame's packet; a flag
@@ -407,7 +427,7 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     /* G12a: scene-depth scaffold debug overlay (tagpu_scaffold.on). Own GL
        state block; leaves program/VAO at 0. */
     oerr("pre-scaffold");
-    tagpu_scaffold_frame(f);
+    if (gl_draws) tagpu_scaffold_frame(f);
     oerr("scaffold");
 
     /* G17c: the cursor's ONE decision for this frame, before the world pass
@@ -418,21 +438,21 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     tagpu_gui_cursor_frame(f->packet);
 
     /* G12b: native unit pass (tagpu_native.on) — needs this frame's scaffold */
-    tagpu_native_frame(f);
+    if (gl_draws) tagpu_native_frame(f);
     oerr("native");
 
     /* Phase E: the UI layer — the presented surface's twin, drawn over the
        world's composite (UI above the world; the engine's own pixels stay
        the fallback beneath). Runs in the shell too: the native pass returns
        early there, this does not. */
-    tagpu_gui_present(f);
+    if (gl_draws) tagpu_gui_present(f);
     oerr("gui");
 
     /* The frame-rate readout, ABOVE the UI layer: it is a diagnostic drawn over
        the finished frame and must not be hidden by the side panel or a dialog.
        Off unless `tagpu_fps.on` is there, which the render-options screen's FPS
        row writes -- see tagpu_fps.c for why this is not cnc-ddraw's own OSD. */
-    tagpu_fps_present(f);
+    if (gl_draws) tagpu_fps_present(f);
     oerr("fps");
 
     /* If the native pass did not publish a view this frame, nothing zoomed was

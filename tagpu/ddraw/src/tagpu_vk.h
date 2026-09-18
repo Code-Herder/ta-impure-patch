@@ -142,6 +142,11 @@ int tagpu_vk_armed(void);
    deliberately no way to clear it. */
 void tagpu_vk_own_present(void);
 
+/* 1 when the latch above is set. Read by every GL draw site that landing 4b
+   stands down, and by the A/B arming, which cannot route through the GL
+   capture on this path. Safe from any thread. */
+int tagpu_vk_owns_present(void);
+
 /* 1 when the lane has given up (ST_FAILED) -- a fact the backend can act on
    rather than a frame count it has to guess.
 
