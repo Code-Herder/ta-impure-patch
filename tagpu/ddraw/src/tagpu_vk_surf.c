@@ -759,6 +759,23 @@ void tagpu_vk_surf_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     vkCmdDraw(cb, NV, 1, 0, 0);
 }
 
+VkImageView tagpu_vk_surf_engine_view(uint32_t slot, int* w, int* h)
+{
+    const SLOT* s;
+    if (w) *w = 0;
+    if (h) *h = 0;
+    if (s_state != ST_READY || slot >= TAGPU_VK_SLOTS) return VK_NULL_HANDLE;
+    s = &s_slot[slot];
+    /* `haveSerial` and not just `view`: a slot can own a correctly sized image
+       that nothing has been uploaded into yet, and its contents are then
+       whatever the allocation came with. `slot_free` clears all four together,
+       so this cannot see a stale view with a live size. */
+    if (!s->view || !s->haveSerial || s->w < 1 || s->h < 1) return VK_NULL_HANDLE;
+    if (w) *w = s->w;
+    if (h) *h = s->h;
+    return s->view;
+}
+
 void tagpu_vk_surf_down(const TAGPU_VKPASS* d)
 {
     uint32_t i;

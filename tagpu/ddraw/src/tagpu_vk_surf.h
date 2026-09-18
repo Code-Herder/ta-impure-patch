@@ -40,6 +40,24 @@ void tagpu_vk_surf_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
 
 /* The teardown handshake every pass has: the seam asks, waits for the device to
    go idle, then pays. */
+/* THE ENGINE'S FRAME, FOR A SECOND READER (the vulkan-only plan's landing 10).
+   This pass already holds TA's 8-bit surface as an R8 image, uploaded once per
+   frame and left in SHADER_READ_ONLY_OPTIMAL -- and the UI layer's shader wants
+   exactly that image for its stale-mirror guard (`uSurf`). It used to upload a
+   SECOND copy of the same bytes from the same source; this hands over the one
+   that already exists.
+
+   Returns VK_NULL_HANDLE when this slot holds no current frame -- the pass
+   refused at build, or `tagpu_surf_frame` failed and the slot was freed. The
+   caller must treat that as "no engine frame this frame" and not composite,
+   which is what it already did when the hand-over carried no bytes.
+
+   Valid only between this slot's `tagpu_vk_surf_prepare` and the end of the
+   frame that prepare recorded into: the seam calls surf's prepare BEFORE the
+   UI layer's (tagpu_vk.c), so the image is uploaded and barriered ahead of the
+   descriptor that names it. `w`/`h` may be NULL. */
+VkImageView tagpu_vk_surf_engine_view(uint32_t slot, int* w, int* h);
+
 void tagpu_vk_surf_down(const TAGPU_VKPASS* d);
 int  tagpu_vk_surf_down_owed(void);
 void tagpu_vk_surf_down_paid(const TAGPU_VKPASS* d);

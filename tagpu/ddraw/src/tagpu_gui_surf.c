@@ -3104,6 +3104,15 @@ static void mir_finish(const TAGPU_FRAME* f)
     }
     /* the guard has nothing to compare against without those bytes */
     if (!s_mHand.eng) { s_mHand.guard = 0; s_mHand.strict = 0; }
+    /* AND SINCE LANDING 10 THAT IS ALL `eng` IS: A FLAG. The Vulkan lane used
+       to memcpy these bytes into its own R8 image every frame -- a second copy
+       of what `tagpu_vk_surf.c` had already uploaded from the same
+       `tagpu_surf_frame`, 786 432 of them at 1024x768 -- and now borrows that
+       image instead (`tagpu_vk_surf_engine_view`). Nothing downstream
+       dereferences this pointer any more, so the lifetime paragraph above is
+       about a read that no longer happens; it is kept because the pointer is
+       still what says whether a frame exists at all, which is what the two
+       lines above turn into `guard` and `strict`. */
 
     s_mFrame = f->frame_counter;
     s_mHave = 1; s_mTaken = 0;

@@ -20,6 +20,7 @@
    it is a fact about the queue rather than a claim about timing. */
 
 #include "tagpu_vk_pass.h"
+#include "tagpu_vk_surf.h"   /* landing 10: the engine frame's one upload lives there */
 #include <windows.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -242,12 +243,12 @@ static VkDeviceSize     s_ualign;
 
 /* the shared texels: one of each, not one per slot (2.28's cheaper design --
    they are re-uploaded whole when their serial moves and read by every slot) */
-static VkImage          s_atImg, s_palImg, s_engImg, s_dumImg, s_glImg;
-static VkDeviceMemory   s_atMem, s_palMem, s_engMem, s_dumMem, s_glMem;
-static VkImageView      s_atView, s_palView, s_engView, s_dumView, s_glView;
-static int              s_atDim, s_engW, s_engH, s_glW, s_glH;
+static VkImage          s_atImg, s_palImg, s_dumImg, s_glImg;
+static VkDeviceMemory   s_atMem, s_palMem, s_dumMem, s_glMem;
+static VkImageView      s_atView, s_palView, s_dumView, s_glView;
+static int              s_atDim, s_glW, s_glH;
 static unsigned         s_atSerial, s_palSerial, s_glSerial;
-static int              s_atHave, s_palHave, s_engHave, s_dumReady, s_glHave;
+static int              s_atHave, s_palHave, s_dumReady, s_glHave;
 /* THE RESTORED UI ATLAS (landing 4). RGBA8, the same dim and the same shelf as
    the indexed one -- the restorer paints cell for cell into the twin. It is the
    one thing in this pass that the GL lane PRODUCES rather than reads, and the
@@ -1471,8 +1472,10 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     int nsd = 0;
     VkDeviceSize mmPicOff = 0, mmEngOff = 0, sStride = 0;
     VkDeviceSize stNeed = 0, stOff = 0, uStride, fStride;
-    VkDeviceSize atOff = 0, palOff = 0, engOff = 0;
-    int atUp = 0, palUp = 0, engUp = 0, arUp = 0;
+    VkDeviceSize atOff = 0, palOff = 0;
+    int atUp = 0, palUp = 0, arUp = 0;
+    VkImageView  engView = VK_NULL_HANDLE;      /* borrowed from tagpu_vk_surf.c */
+    int          engW = 0, engH = 0;
     VkDeviceSize arOff = 0;
     TWIN* cur = NULL;
     int rpOpen = 0;
@@ -1653,14 +1656,26 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
            the session. [FOUND 2026-09-16, the re-review.] */
         if (!shRefused) s_saidSharp = 0;
     }
-    /* THE ENGINE'S OWN FRAME IS THE COMPOSITE'S BOTTOM LAYER. Without it the
-       GL lane's `uSurf` reads an image ours would not have, so the two would
-       differ everywhere the twin has no coverage -- which is most of a frame. */
-    if (!h.eng || h.engW < 1 || h.engH < 1 ||
-        h.engW > SURF_MAXDIM || h.engH > SURF_MAXDIM) {
+    /* THE ENGINE'S OWN FRAME, WHICH THIS PASS NO LONGER UPLOADS (landing 10).
+       It is the shader's `uSurf` -- the stale-mirror guard's reference and the
+       `uStrict` harness's -- and `tagpu_vk_surf.c` already holds exactly those
+       bytes as an R8 image, from the same `tagpu_surf_frame` source, uploaded
+       and barriered into SHADER_READ_ONLY_OPTIMAL by a prepare the seam runs
+       BEFORE this one. So we borrow that image instead of copying 786 432
+       bytes a second time every frame.
+
+       The reason this block used to give -- "without it the GL lane's `uSurf`
+       reads an image ours would not have" -- died with the GL lane in 4d-1/4d-2
+       and is gone with it. What survives is the refusal: no engine frame, no
+       composite, exactly as before. A device that cannot sample R8_UNORM now
+       fails HERE, where `tagpu_vk_surf.c:292` tests for it by name, instead of
+       through a `mk_image` of our own that never checked. */
+    engView = tagpu_vk_surf_engine_view(slot, &engW, &engH);
+    if (!engView || engW < 1 || engH < 1 ||
+        engW > SURF_MAXDIM || engH > SURF_MAXDIM) {
         if (!s_saidEng) { s_saidEng = 1;
-            plog(d, "gui: the hand-over carries no copy of the engine's own "
-                    "frame - nothing composited while that is true"); }
+            plog(d, "gui: no engine frame from the surface pass this slot - "
+                    "nothing composited while that is true"); }
         compose = 0;
     } else s_saidEng = 0;
     if (!h.pal || !h.presented || h.surfW < 1 || h.surfH < 1 ||
@@ -1819,10 +1834,6 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                      s_glW != h.glyphW || s_glH != h.glyphH)) {
         glUp = 1; stNeed += (VkDeviceSize)h.glyphW * h.glyphH;
     }
-    /* the engine's frame moves every frame by definition, so it needs no
-       serial -- but it is only there on a frame the composite can be drawn on,
-       and this function now runs the replay on frames it cannot composite */
-    if (h.eng) { engUp = 1; stNeed += (VkDeviceSize)h.engW * h.engH; }
 
     /* ---- room ---- */
     uStride = align_up(QVS_SZ, s_ualign);
@@ -1975,20 +1986,6 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         palOff = stOff;
         memcpy(s->stMap + stOff, h.pal, 256 * 4);
         stOff += 256 * 4;
-    }
-    if (engUp) {
-        if (s_engW != h.engW || s_engH != h.engH) {
-            if (!ret_push(d, s_engImg, s_engMem, s_engView, VK_NULL_HANDLE)) goto refuse;
-            s_engImg = VK_NULL_HANDLE; s_engMem = VK_NULL_HANDLE; s_engView = VK_NULL_HANDLE;
-            s_engW = s_engH = 0; s_engHave = 0;
-            if (!mk_image(d, h.engW, h.engH, VK_FORMAT_R8_UNORM,
-                          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                          &s_engImg, &s_engMem, &s_engView)) goto refuse;
-            s_engW = h.engW; s_engH = h.engH;
-        }
-        engOff = stOff;
-        memcpy(s->stMap + stOff, h.eng, (size_t)h.engW * h.engH);
-        stOff += (VkDeviceSize)h.engW * h.engH;
     }
 
     if (atUp) {
@@ -2150,22 +2147,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
         s_palHave = 1; s_palSerial = h.palSerial;
     }
-    if (engUp) {
-    img_barrier(cb, s_engImg,
-                s_engHave ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                          : VK_IMAGE_LAYOUT_UNDEFINED,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                s_engHave ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                          : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                s_engHave ? VK_ACCESS_SHADER_READ_BIT : 0,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    copy_rect(cb, s->stage, engOff, s_engImg, 0, 0, h.engW, h.engH);
-    img_barrier(cb, s_engImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-    s_engHave = 1;
-    }
+    /* no barrier and no copy for the engine's frame: `tagpu_vk_surf_prepare`
+       recorded both into this same command buffer, for this same slot, before
+       this function was called (tagpu_vk.c). */
 
     /* ---- THE ORDERING THAT MAKES A SHARED TWIN STORE SAFE (the file header).
        Every earlier frame's composite read its twin in the fragment stage; this
@@ -2590,7 +2574,10 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     }
 
     /* ---- the composite's own set and block ---- */
-    if (s_behind || !compose || !s_engHave || !s_palHave) {
+    /* `s_engHave` is gone with the second upload: `compose` is cleared above when
+       the surface pass has no image for this slot, which is the same question
+       one step earlier and one copy cheaper. */
+    if (s_behind || !compose || !s_palHave) {
         s_drawThis = 0; s_abFrame = 0; return 0;
     }
     pres = tw_find(h.presented);
@@ -2769,7 +2756,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         wr[0].pBufferInfo = &bi;
         ii[0].imageView = pres->view;                /* 40 uTwin              */
         ii[1].imageView = s_palView;                 /* 41 uPal               */
-        ii[2].imageView = s_engView;                 /* 42 uSurf              */
+        ii[2].imageView = engView;                   /* 42 uSurf -- surf's image */
         ii[3].imageView = pres->colImg ? pres->colView : s_dumView;   /* 43 uTwinCol */
         ii[4].imageView = shOn ? s->shView : s_dumView;   /* 44 uSharp        */
         for (j = 0; j < 5; j++) {
@@ -2935,7 +2922,6 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     kill_image(d, &s_atImg,  &s_atMem,  &s_atView);
     kill_image(d, &s_arImg,  &s_arMem,  &s_arView);
     kill_image(d, &s_palImg, &s_palMem, &s_palView);
-    kill_image(d, &s_engImg, &s_engMem, &s_engView);
     kill_image(d, &s_glImg,  &s_glMem,  &s_glView);
     kill_image(d, &s_mmPicImg, &s_mmPicMem, &s_mmPicView);
     kill_image(d, &s_mmEngImg, &s_mmEngMem, &s_mmEngView);
@@ -2944,7 +2930,7 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     s_arDim = 0; s_arRows = 0; s_arHave = 0; s_arSerial = 0; s_arNeedClear = 0;
     s_colRearm = 0; s_colRearmSeen = 0;
     s_palHave = 0; s_palSerial = 0;
-    s_engW = s_engH = 0; s_engHave = 0; s_dumReady = 0;
+    s_dumReady = 0;
     s_glW = s_glH = 0; s_glHave = 0; s_glSerial = 0;
     s_mmPicW = s_mmPicH = 0; s_mmPicHave = 0; s_mmPicSerial = 0;
     s_mmEngW = s_mmEngH = 0; s_mmEngHave = 0;
