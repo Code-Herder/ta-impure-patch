@@ -2317,11 +2317,13 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        frame that came here only to make the job: it has nothing to draw yet and
        says so by returning 0, exactly as the refusal above would have. */
     restore_want(d, &h);
-    /* ...AND OUT THROUGH `standdown`, NOT A BARE RETURN. This file's slots are
-       taken at the top of `prepare` and given back by that label; a frame that
-       came here only to make the job has drawn nothing and owes the slot back
-       exactly as every other stand-down does. */
-    if (feed) goto standdown;
+    /* ...AND OUT THROUGH `feedout`, WHICH DESTROYS NOTHING. A feed frame has
+       drawn nothing, but it is not empty-handed: `atlas_upload` and
+       `atlas_rgb_upload` above have already recorded copies OUT OF
+       `s->vstage`, and `cb` is submitted whether this pass draws or not. It
+       took `standdown` until 2026-09-17 -- and `slot_free` there destroys that
+       very buffer. See the label. */
+    if (feed) goto feedout;
 
     /* THE FOUR SMALL IMAGES, per slot, so the one-line invariant covers them:
        UNDEFINED in, because the whole of each is re-sent every frame and there
@@ -2398,10 +2400,53 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     s_pStride = pstride;
     return 1;
 
+feedout:
+    /* A FEED FRAME KEEPS ITS SLOT, because it has already spent it. By the
+       time control reaches here `slot_vstage` has allocated `s->vstage`,
+       `atlas_upload` has memcpy'd the indexed mirror into it and recorded a
+       `vkCmdCopyBufferToImage` out of it, and `atlas_rgb_upload` has done the
+       same for the restored twin. `cb` is submitted whether this pass draws or
+       not, so those copies WILL run -- and `standdown` below frees the slot,
+       which is `slot_free` -> `kill_buffer(&s->vstage)`: the source buffer of a
+       copy the GPU has not executed yet.
+
+       WHAT IT LOOKED LIKE, because this is the shape to recognise rather than
+       the rule to recite. `atlas_upload` latches `s_atHave`, `s_atSerial` and
+       `s_atRows` at RECORD time, so after the lost copy the pass believes the
+       device holds rows it never received, and it does not re-upload until the
+       mirror's serial moves again. `restore_want`, three lines above, then
+       hands the restorer frames that `covered_prefix` says are covered, and the
+       Vulkan lane restores them from an EMPTY atlas image. The OUT pass reads
+       `frag = c - net` with `c` and `net` both taken from palette index 0, so
+       every one of those cells came out BLACK, alpha 1 -- and only on the
+       Vulkan lane, because the GL lane samples `tex`, which was never missing
+       the art.
+
+       Landing 7e-2's chain oracle is what found it, and the evidence is worth
+       keeping because every cheaper reading of it was wrong: the frames are
+       FULL in the mirror at upload time (per-frame non-zero counts, empty=0 of
+       25), the staged bytes are byte-for-byte the mirror (55 608 == 55 608),
+       and a read-back of the device image taken early shows 404 798 texels
+       missing while the same read-back taken later is exact. The end-of-run
+       source dump therefore says IDENTICAL and cannot see this at all.
+
+       So this path destroys NOTHING, exactly as `refuse` does and for exactly
+       the same reason -- it simply is not a refusal, so the pass stays READY
+       and the slot's buffers are reused or resized by whichever frame takes the
+       slot next, behind that slot's own fence. [FOUND 2026-09-17.] */
+    return 0;
+
 standdown:
     /* NOT A REFUSAL OF THE PASS: a frame this pass will not draw, and the slot
-       given back because the next one may not draw either. Safe here and only
-       here -- see the block at the top of the refusal list. */
+       given back because the next one may not draw either.
+
+       SAFE ONLY ABOVE THE STAGING. Every `goto standdown` is above
+       `slot_vstage`, so no copy out of `s->vstage` has been recorded when
+       control reaches here. That was the whole of the argument and it was
+       stated as "safe here and only here", which read as a property of the
+       label rather than of its callers -- and then the feed path was pointed at
+       it from BELOW the two atlas uploads. A new stand-down added under
+       `slot_vstage` belongs at `feedout`, not here. */
     if (s_state == ST_READY) slot_free(d, s);
     return 0;
 
