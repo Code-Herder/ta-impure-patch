@@ -472,11 +472,22 @@ would not have shown up as a failure — it would have shown up as three landing
 
      **WHAT THE CODE SAYS 4c IS, read out of it after 4b-3 landed [2026-09-18]. Facts first:**
 
-     * **The GL lane's `ss` is two FBOs and a box-downsample.** `tagpu_native.c:807-808` makes
-       `s_fbo` (colour `s_colTex` + depth `s_depTex`) at `ss ×` the game size and `s_fbo2`
-       (`s_colTex2`/`s_depTex2`) at 1×; the resolve is a LINEAR quad, 2× → 1× (`:635`). `ss` is
-       `s_ss ? 2 : 1` (`:3266`) and `devres` can raise it to `ceil(k)` up to `TAGPU_SS_MAX`,
-       compositing straight out of the 2× target instead of resolving.
+     * **The GL lane's `ss` is two FBOs and a box-downsample, and the numbering is the opposite
+       way round from what you would guess** [corrected 2026-09-18 — the first version of this
+       bullet had the two swapped, which is exactly the re-derivation it was written to prevent]:
+       `s_fbo` + `s_colTex`/`s_depTex` is the **1×** pair, and `s_fbo2` + `s_colTex2`/`s_depTex2`
+       is the **`ss×`** one, allocated at `w * ss, h * ss` (`tagpu_native.c:831-842`). The world
+       renders into `ss > 1 ? s_fbo2 : s_fbo` with the viewport at `gw * ss, gh * ss` (`:4186`),
+       and the resolve is a LINEAR quad from `s_colTex2` into `s_fbo` at `gw, gh` (`:4494-4502`).
+     * **The target is the GAME's resolution, not the window's** — "the FBO is game_width x
+       game_height (the game's requested mode, from the frame struct)" (`:59`), times `ss`.
+     * **`ss` is `s_ss ? 2 : 1`** (`:3266`), and `devres` can raise it to `ceil(k)` up to
+       `TAGPU_SS_MAX`, in which case **the resolve is skipped entirely** and the composite reads
+       the supersampled buffer directly (`:4493`).
+     * **There is a second resolve, of DEPTH**, when `selAt1x`: `x_glBlitFramebuffer` from
+       `s_fbo2` to `s_fbo`, `GL_DEPTH_BUFFER_BIT`, `GL_NEAREST` — the only filter a depth blit may
+       take — so the selection rects drawn at 1× are still occluded by their own units
+       (`:4507-4511`). A Vulkan port needs an answer for this or the rects stop being occluded.
      * **The Vulkan lane has no offscreen world target at all.** One render pass
        (`tagpu_vk.c:1727`), attachments `[swapchain image, depth]`, one framebuffer per swapchain
        image (`:1934`), and every ported pass draws straight into the swapchain image at client
