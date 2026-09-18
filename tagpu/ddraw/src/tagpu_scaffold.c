@@ -33,6 +33,7 @@
 #include "tagpu_zoom.h"      /* the predicted eye every pass draws from */
 #include "tagpu_packet.h"    /* the true viewport, from this frame's packet */
 #include "tagpu_abshot.h"   /* the GL half of the Phase G A/B */
+#include "tagpu_vk.h"        /* tagpu_vk_owns_present: is there a GL lane at all? */
 
 /* ---- engine layout (terrain-depth.md, binary-verified) ----
    SINCE THE FRAME PACKET'S LANDING 3 this file reads no engine field of its
@@ -306,9 +307,16 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
        scaffold, so the two captures would be of different frames -- the one
        thing the design exists to prevent. (The same defect was found in
        tagpu_fps.c by the G19d review; it is designed out here.) */
+    /* WHETHER THIS PASS DRAWS, or only gathers. Under `renderer=vulkan` the
+       Vulkan lane owns the present and there is no GL context anywhere in the
+       process, so everything below that touches GL stands down and the twin in
+       tagpu_vk_scaffold.c draws the same buffer out of the hand-over at the
+       bottom of this function. The gather is unconditional: it is the pass. */
+    const int gl_draws = !tagpu_vk_owns_present();
+
     s_pubBuf = NULL; s_abFrame = 0;
 
-    if (s_state == 2) return;
+    if (gl_draws && s_state == 2) return;
     if (s_armed < 0 || (f->frame_counter % 30) == 0) {
         s_armed = GetFileAttributesA("tagpu_scaffold.on") != INVALID_FILE_ATTRIBUTES;
         /* the A/B re-arms when the lever is taken away and put back, so a
@@ -317,9 +325,11 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
         if (!s_ab) s_abDone = 0;
     }
     if (!s_armed) return;
-    if (s_state == 0) init_gl();
-    if (s_state != 1) return;
-    serr("s-entry");
+    if (gl_draws) {
+        if (s_state == 0) init_gl();
+        if (s_state != 1) return;
+        serr("s-entry");
+    }
 
     /* live view geometry — the Phase D rule: no constants. EVERYTHING comes
        from the FRAME PACKET: the true 1x rect and the map and sweep dimensions
@@ -491,17 +501,22 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
         slog(b);
     }
 
-    /* ---- upload + draw the debug overlay quad over the viewport ---- */
-    x_glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, s_tex);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    if (vw != s_texW || vh != s_texH) {
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, vw, vh, 0, GL_RED, GL_UNSIGNED_BYTE, s_buf);
-        s_texW = vw; s_texH = vh;
-    } else
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, vw, vh, GL_RED, GL_UNSIGNED_BYTE, s_buf);
-    serr("s-upload");
+    /* ---- upload + draw the debug overlay quad over the viewport ----
+       AND THIS IS WHERE THE PASS STOPS BEING API-INDEPENDENT. Everything above
+       it is the GATHER: the packet's anchors walked over the engine's own sweep
+       rect into `s_buf`, the per-unit occlusion prediction read back out of it,
+       and the four NDC numbers just below. All of that runs on either lane and
+       is the pass; what follows is one backend's way of showing it.
 
+       THE VULKAN LANE STANDS THE DRAW DOWN RATHER THAN LETTING IT NO-OP. With
+       no context current most of these calls do nothing, and "most" is the
+       whole objection: `init_gl` branches on a GL_COMPILE_STATUS and a
+       GL_LINK_STATUS it reads back, so a lane with no context takes whichever
+       branch the loader's stubs produce -- and both of them are wrong, one
+       logging a shader failure that never happened and the other latching
+       `s_state = 2` so the pass is dead for the process. A pass that is not
+       called publishes nothing instead, and the twin then refuses out loud.
+       [Landing 4b.] */
     int gw = f->game_width  > 0 ? f->game_width  : vpL + vw;
     int gh = f->game_height > 0 ? f->game_height : vpT + vh;
     float x0 = (float)vpL        / gw * 2.f - 1.f;
@@ -509,44 +524,86 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
     float y0 = 1.f - (float)vpT        / gh * 2.f;   /* NDC top    */
     float y1 = 1.f - (float)(vpT + vh) / gh * 2.f;   /* NDC bottom */
 
-    /* THE FRAME GOES BLACK FIRST WHEN THE A/B IS ARMED, and only then. What is
-       being compared is THIS PASS's pixels, so everything that is not this pass
-       has to leave the frame -- and unlike the readout, which is the last thing
-       drawn, a world pass has the rest of the frame under it. The clear is
-       therefore here, immediately before the draw, and the readback is
-       immediately after it, before the native pass and the UI layer have run.
-       One frame, and the player sees it: the terrain drawn before the clear is
-       missing from it. That is what a measuring lever costs. */
-    TAGPU_ABSHOT shot;
+    /* HOISTED OUT OF THE DRAW, because on the vulkan-only lane the A/B is armed
+       without one. Read once per frame either way, so the two arms below cannot
+       disagree about whether this is the capture frame. */
     int taking = s_ab && !s_abDone;
-    shot.live = 0;
-    if (taking) tagpu_abshot_begin(&shot, 0u);
 
-    glUseProgram(s_prog);
-    glBindVertexArray(s_vao);
-    glEnable(GL_BLEND);
-    x_glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    /* quad vertex p: p.y=0 -> uv row 0 = buffer top -> screen top (y0) */
-    x_glUniform4f(s_uRect, x0, y0, x1, y1);
-    x_glUniform1f(s_uRows, (float)nRows);
-    x_glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    x_glDisable(GL_BLEND);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glBindVertexArray(0);
-    glUseProgram(0);
-    serr("s-quad");
+    if (gl_draws) {
+        TAGPU_ABSHOT shot;
 
-    if (taking) {
-        /* the Vulkan half is claimed only on a GL half that reached the disk
-           -- see tagpu_abshot.h; `s_abDone` latches either way */
-        int wrote = tagpu_abshot_end(&shot, ABOUT, "scaffold");
+        x_glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, s_tex);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        if (vw != s_texW || vh != s_texH) {
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, vw, vh, 0, GL_RED, GL_UNSIGNED_BYTE, s_buf);
+            s_texW = vw; s_texH = vh;
+        } else
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, vw, vh, GL_RED, GL_UNSIGNED_BYTE, s_buf);
+        serr("s-upload");
+
+        /* THE FRAME GOES BLACK FIRST WHEN THE A/B IS ARMED, and only then. What
+           is being compared is THIS PASS's pixels, so everything that is not
+           this pass has to leave the frame -- and unlike the readout, which is
+           the last thing drawn, a world pass has the rest of the frame under
+           it. The clear is therefore here, immediately before the draw, and the
+           readback is immediately after it, before the native pass and the UI
+           layer have run. One frame, and the player sees it: the terrain drawn
+           before the clear is missing from it. That is what a measuring lever
+           costs. */
+        shot.live = 0;
+        if (taking) tagpu_abshot_begin(&shot, 0u);
+
+        glUseProgram(s_prog);
+        glBindVertexArray(s_vao);
+        glEnable(GL_BLEND);
+        x_glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        /* quad vertex p: p.y=0 -> uv row 0 = buffer top -> screen top (y0) */
+        x_glUniform4f(s_uRect, x0, y0, x1, y1);
+        x_glUniform1f(s_uRows, (float)nRows);
+        x_glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        x_glDisable(GL_BLEND);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glBindVertexArray(0);
+        glUseProgram(0);
+        serr("s-quad");
+
+        if (taking) {
+            /* the Vulkan half is claimed only on a GL half that reached the disk
+               -- see tagpu_abshot.h; `s_abDone` latches either way */
+            int wrote = tagpu_abshot_end(&shot, ABOUT, "scaffold");
+            s_abDone = 1;
+            s_abFrame = wrote;
+        }
+    } else if (taking) {
+        /* THE ARMING, ON THE LANE WHERE THERE IS NO GL HALF TO ARM IT.
+           tagpu_abshot.h's rule -- claim the Vulkan half only on a GL capture
+           that reached the disk -- is there because a refused GL write leaves
+           the PREVIOUS run's `_gl.ppm` lying on the disk, and a Vulkan half
+           diffed against that is a capture of a different frame reported as a
+           port failure: an oracle failure wearing a port failure's clothes.
+
+           On `renderer=vulkan` there is no GL half at all, so `wrote` would be
+           0 every frame and that rule would refuse every capture on the only
+           lane this landing can measure. The oracle here is not the two lanes
+           of one frame; it is `_vk.ppm` from THIS build against `_vk.ppm` from
+           the build before it (vulkan-only-plan.md, landing 4), and no
+           `_gl.ppm` enters it.
+
+           WHAT THE RULE WAS BUYING IS KEPT BY CONSTRUCTION INSTEAD, and on both
+           lanes: tagpu_vk.c unlinks the target `_vk.ppm` the instant a claim is
+           seen, so a file that is there afterwards was written by this arming
+           and a refused capture leaves nothing to diff. That is a fact about
+           the filesystem rather than an argument about ordering -- which is all
+           the old rule could be, once the half it was reading stopped
+           existing. */
         s_abDone = 1;
-        s_abFrame = wrote;
+        s_abFrame = 1;
     }
 
-    /* PUBLISHED AFTER THE GL DRAW, not before: these are the bytes and the
-       numbers that were just drawn, and the Vulkan lane is about to draw the
-       same ones. */
+    /* PUBLISHED AFTER THE DRAW WHERE THERE IS ONE, and after the gather in
+       either case: these are the bytes and the numbers the frame was built
+       from, and the Vulkan lane is about to draw the same ones. */
     s_pubBuf = s_buf; s_pubW = vw; s_pubH = vh;
     s_pubRect[0] = x0; s_pubRect[1] = y0; s_pubRect[2] = x1; s_pubRect[3] = y1;
     s_pubRows = (float)nRows;

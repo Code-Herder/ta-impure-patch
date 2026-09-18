@@ -401,10 +401,13 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        than an error. A pass that is not called publishes nothing, so its Vulkan
        twin stands down and SAYS SO, which is a refusal that names itself.
 
-       THE GATE MOVES INWARD, one commit per pass: when `tagpu_scaffold_frame`
-       can gather without drawing, its own draw block takes this test and the
-       call here loses it. Read once per frame so the four cannot disagree.
-       [The vulkan-only plan, landing 4b.] */
+       THE GATE MOVES INWARD, one commit per pass: once a pass can gather
+       without drawing, its own draw block takes this test and the call here
+       loses it. `tagpu_scaffold_frame` is the first to have made that move --
+       it is called unconditionally below and gates its upload and its quad
+       itself -- so this variable now guards three passes, not four, and will
+       guard none of them when 4b is finished. Read once per frame so those
+       that remain cannot disagree. [The vulkan-only plan, landing 4b.] */
     const int gl_draws = !tagpu_vk_owns_present();
 
     /* the palette the screen is shown with, once for every pass that resolves
@@ -425,9 +428,13 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     log_units(f);
 
     /* G12a: scene-depth scaffold debug overlay (tagpu_scaffold.on). Own GL
-       state block; leaves program/VAO at 0. */
+       state block; leaves program/VAO at 0.
+       CALLED ON BOTH LANES: its gather is the pass and is API-independent, and
+       it gates its own upload and draw on `tagpu_vk_owns_present` -- so under
+       `renderer=vulkan` this builds the scaffold, publishes it and lets the
+       Vulkan twin draw it. */
     oerr("pre-scaffold");
-    if (gl_draws) tagpu_scaffold_frame(f);
+    tagpu_scaffold_frame(f);
     oerr("scaffold");
 
     /* G17c: the cursor's ONE decision for this frame, before the world pass

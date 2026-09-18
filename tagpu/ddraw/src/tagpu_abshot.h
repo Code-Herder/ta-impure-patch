@@ -116,7 +116,22 @@ void tagpu_abshot_begin(TAGPU_ABSHOT* s, unsigned flags);
    of the PREVIOUS run is still lying on the disk, so a Vulkan half claimed
    anyway would be diffed against a capture of a different frame and reported
    as a port failure. That guard is what tagpu_fps.c spelled `can` before G19e
-   moved this code here. */
+   moved this code here.
+
+   THE GUARD IS ABOUT A STALE FILE, NOT ABOUT THE GL LANE, and on the
+   vulkan-only lane it is established elsewhere. `renderer=vulkan` has no GL
+   context, so a ported pass gathers, publishes and draws nothing there: this
+   function is never called, `_gl.ppm` is never written, and a Vulkan half that
+   waited on it would never be claimed -- on the only lane that presents. The
+   property the rule was protecting is instead made true by construction over
+   there: tagpu_vk.c unlinks the target `_vk.ppm` the instant a claim is seen,
+   so a file that exists was written by this arming and a refused capture leaves
+   nothing to diff. Where BOTH lanes run -- `renderer=opengl` with
+   `tagpu_vk.on` -- the rule above still holds and is still what a pass applies;
+   the unlink is belt and braces there, and covers the two refusals that used to
+   leave a stale `_vk.ppm` behind (a surface whose images do not carry
+   TRANSFER_SRC, and two levers armed in one frame). [The vulkan-only plan,
+   landing 4b.] */
 int tagpu_abshot_end(TAGPU_ABSHOT* s, const char* path, const char* tag);
 
 #endif

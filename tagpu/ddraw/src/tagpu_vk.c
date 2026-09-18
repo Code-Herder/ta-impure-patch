@@ -2735,11 +2735,41 @@ static int vk_present(void)
         ndraw = draw_terr + draw_feat + draw_unit + draw_fx + draw_mark + draw_scaf +
                 draw_gui + draw_fps;
         nclaim = ab_terr + ab_feat + ab_unit + ab_fx + ab_mark + ab_scaf + ab_gui + ab_fps;
-        abpath = ab_terr ? AB_TERR
-               : (ab_feat ? AB_FEAT
-               : (ab_unit ? AB_UNIT
-               : (ab_fx ? AB_FX : (ab_mark ? AB_MARK : (ab_scaf ? AB_SCAF
-               : (ab_gui ? AB_GUI : (ab_fps ? AB_FPS : NULL)))))));
+        /* THE CLAIMED PASS'S FILE, AND THE STALENESS GUARD, out of one table so
+           that a pass added here cannot get the first and not the second. The
+           row order is the order the nested ternary this replaced tested in, so
+           which pass wins a (refused) multi-claim frame is unchanged.
+
+           EVERY CLAIMED TARGET IS UNLINKED THE INSTANT THE CLAIM IS SEEN, which
+           is what makes a capture on this side trustworthy WITHOUT reading the
+           GL half. tagpu_abshot.h's rule was that the Vulkan half may be
+           claimed only on a GL capture that reached the disk, because a refused
+           write leaves the PREVIOUS run's file lying there and a diff against
+           it reports a different frame as a port failure. On `renderer=vulkan`
+           there is no GL half to ask (the vulkan-only plan, landing 4b), so the
+           same property is established here instead and by construction: after
+           this line the file does not exist, and it comes back only if
+           `tagpu_vk_shot_finish` writes it. Absent means "this arming produced
+           no capture" -- which every refusal below then explains in the log --
+           and present means this arming's, on either lane.
+
+           DELETED FOR EVERY CLAIM, not only the one `abpath` names: a frame
+           with two levers armed captures nothing, and leaving the second pass's
+           file behind would hand the operator exactly the stale capture this
+           is here to prevent. */
+        {
+            static const char* const abfile[8] = { AB_TERR, AB_FEAT, AB_UNIT, AB_FX,
+                                                   AB_MARK, AB_SCAF, AB_GUI, AB_FPS };
+            const int abclaim[8] = { ab_terr, ab_feat, ab_unit, ab_fx,
+                                     ab_mark, ab_scaf, ab_gui, ab_fps };
+            int abi;
+            abpath = NULL;
+            for (abi = 0; abi < 8; abi++) {
+                if (!abclaim[abi]) continue;
+                if (!abpath) abpath = abfile[abi];
+                DeleteFileA(abfile[abi]);
+            }
+        }
 
         if (s_vk.rp && s_vk.fb[idx]) {
             VkClearValue cv[2];

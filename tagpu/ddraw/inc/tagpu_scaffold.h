@@ -33,7 +33,18 @@ int tagpu_scaffold_frameinfo(unsigned frame_counter, int* r0, int* nrows);
    than whichever one its own lever poll landed on. The two poll on different
    cadences (this pass every 30 frames, the lane every 250 ms) and the scaffold
    changes with the camera, so a flag each lane polled for itself would compare
-   two different frames and report every moved pixel as a port failure. */
+   two different frames and report every moved pixel as a port failure.
+
+   UNDER `renderer=vulkan` THERE IS NO `_gl.ppm` AND `ab` MEANS THE INTENT
+   INSTEAD -- 1 on the one frame the lever was seen with the latch clear. This
+   pass gathers and publishes there but draws nothing (tagpu_vk_owns_present),
+   so a GL capture is not merely refused, it is not attempted, and a flag that
+   waited for one would refuse every capture on the only lane that presents.
+   The comparison that flag serves is a different one: not the two lanes of one
+   frame, but this build's `_vk.ppm` against the previous build's
+   (vulkan-only-plan.md, landing 4b). What the coupling was buying -- that a
+   file on the disk belongs to this arming -- tagpu_vk.c now establishes by
+   unlinking the target the instant a claim is seen. */
 int tagpu_scaffold_overlay(const unsigned char** buf, int* w, int* h,
                            float rect[4], float* rows, int* ab);
 
