@@ -1636,7 +1636,12 @@ static void drain(void)
             /* A SOLID RECTANGLE, filled with one palette index and fully
                covered. No arena bytes to copy and none to run out of, which is
                the whole reason it is not `PK_PIXELS` any more.
-               [The vulkan-only plan, landing 8a.] */
+               TWO ENGINE LEAVES REACH THIS, and since landing 8c most of the
+               traffic is the second: `DrawBar 0x4BF6F0` (writer `0x4CCDEA`) and
+               an AXIS-ALIGNED `DrawLine 0x4BE950` (writer `0x4CC7AB`), whose
+               bounding box is the line, one pixel thick. Both writers take the
+               low byte of their colour and nothing wider, which is why one
+               packet describes both. [8a, then 8c.] */
             t = twin_find(o->surf);
             if (t) {
                 TAGPU_GUIOP* m;

@@ -2584,6 +2584,12 @@ key, and the only cyan entry in the live palette.**
 3. `publish()` has no `OP_LINE` case, so it falls through to `as_pixels:` -> `PK_PIXELS` +
    `pub_surface_bytes`, a plain `memcpy` of that box out of the live engine surface. Inside the
    viewport that surface **is** `tagpu_terrown`'s key fill.
+   **[NO LONGER TRUE OF THIS LINE SINCE the vulkan-only plan's landing 8c, 2026-09-18.** An
+   AXIS-ALIGNED line now publishes as `PK_BAR` — a box and a palette index, no surface bytes — and
+   only a DIAGONAL still takes the path above. The chain described here is exactly why: a
+   diagonal's bounding box is not the line, so it is the one kind that must keep publishing what
+   was really in the box. The fault and the bound below are unchanged; what changed is which ops
+   can reach them.]
 4. `twin_upload` stamps `s_rg[2*i+1] = 255` — coverage on **every** byte of the box, key included.
 5. `LAY_FS`'s `tap()` gated on coverage alone. The only `uKey` compare in that shader was inside
    the `uStrict` harness branch, which the shipped build never arms. So a covered 254 resolved
@@ -2633,8 +2639,13 @@ The evidence that settled it, against two plausible wrong answers:
   really is our fill, so with the terrain pass off — where the engine's own art fills the viewport
   and 254 would be a real colour — the rule is inert. `uKey` is left alone for `strict`.
   This is the **bound**: it closes the whole class, not just `OP_LINE`. Every other op kind that
-  falls through to `as_pixels` (`OP_BAR`, `OP_RECT`, `OP_FRAME`, `OP_GAF*`, `OP_SCALE`, an
-  untwinned `OP_COPY`) leaked the same way whenever its box overlapped the fill.
+  falls through to `as_pixels` (`OP_FRAME`, `OP_GAF*`, `OP_SCALE`, an untwinned `OP_COPY`) leaked
+  the same way whenever its box overlapped the fill. **[`OP_BAR`, `OP_RECT` and the axis-aligned
+  half of `OP_LINE` were on this list until the vulkan-only plan's landings 8a, 8b and 8c
+  (2026-09-18) gave each of them a packet that carries a colour and a box instead of bytes. They
+  no longer reach `as_pixels` at all — except when `OP::clipped` sends them back to it, which is
+  the one path on which this bound still covers them. `OP_FOCUS` and `OP_DIAG`, split off by 8b
+  and 8c, are new members of the list.]**
 - **`tagpu_native.c`, the arm block** — the state is computed into locals and published in **one
   store**; `s_armed` is never transiently zero. `s_type` is the other half of the same answer and
   is written only when it has actually changed, and only then is the pass disarmed across the

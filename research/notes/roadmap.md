@@ -3021,8 +3021,12 @@ enumeration sites** for either consumer, which is the surface 8b's review had to
 diagonal's box is the square the line crosses, i.e. [gui-renderer](gui-renderer.html) §20's cyan
 squares, so `OP_DIAG` keeps `PK_PIXELS`.
 
-**And under the shipped arm set there are no diagonal UI lines at all** — `markown.on` suppresses
-the engine's own selection box, so §20's producer never runs: `line 800 315 / diag 0` in play.
+**`diag` was 0 in every measured session** — `line 800 315 / diag 0` in play — **but the review
+corrected that from a property to a result.** `markown.on` suppresses the engine's own selection
+box **per unit**, and only while `tagpu_native_selbox_complete()`, which is 0 whenever the native
+pass comes up short; `tagpu_native.c:3795-3803` records a measured frame where one dying selected
+unit dropped it and *"the engine drew every one of"* ~460 boxes. So diagonals are reachable in the
+shipped configuration.
 Forcing one needs three things at once (`mark.on=noselbox`, a unit selected, **and a facing off a
 multiple of 90**), which gives `line 1 548 252 / diag 111 603`. Frame with diagonals present: **0
 magenta of 786 432, 2 003 distinct colours**, 60.0 fps, and **no cyan squares** — the specific

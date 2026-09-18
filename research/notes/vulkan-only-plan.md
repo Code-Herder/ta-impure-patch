@@ -1315,11 +1315,15 @@ Back to the filed list:
      twin fill, same clear, and **zero new enumeration sites** for either consumer. A diagonal's
      box is the square the line crosses, which is exactly [gui-renderer](gui-renderer.html) §20's
      cyan squares, so `OP_DIAG` keeps `PK_PIXELS`.
-     **And under the shipped arm set there are NO diagonal UI lines**: `markown.on` suppresses the
-     engine's own selection box, so §20's producer never runs. Measured `line 800 315 / diag 0` in
-     play; forcing a diagonal needs three things at once — `mark.on=noselbox`, a unit selected,
-     **and a facing off a multiple of 90** — which gives `line 1 548 252 / diag 111 603`. So 8c
-     closes essentially all of `line` in the configuration that ships.
+     **`diag` measured 0 in every session taken** (`line 800 315 / diag 0` in play), **but that
+     is a result and not a property** — 8c's review corrected the claim. `markown.on` suppresses
+     the engine's box **per unit** and only while `tagpu_native_selbox_complete()`, which drops
+     whenever the native pass comes up short; a measured frame (`tagpu_native.c:3795-3803`) had it
+     hand ~460 boxes back. Forcing a diagonal deliberately needs `mark.on=noselbox`, a unit
+     selected, and an **orientation** off the axis — not merely a heading, since the engine uses
+     all three angles — which gives `line 1 548 252 / diag 111 603`. So 8c closes essentially all
+     of `line` as measured, and `OP_DIAG`'s safety rests on its `PK_PIXELS` fallback rather than
+     on diagonals being absent.
    * **8d — `OP_FRAME` (`0x4BF4D0`) and `OP_SCALE`, and 8d is now the ODD ONE OUT.** `0x4BF4D0` is
      a **shade of the destination**, not a fill: there is no colour to publish, only a level and a
      dependence on what is already in the box. Every other kind in landing 8 replaces *published

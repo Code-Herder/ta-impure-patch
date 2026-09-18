@@ -1916,10 +1916,14 @@ tools/tacli arm <i> gui.on=norestore   # G15e: the layer WITHOUT Classic++ art â
 tools/tacli arm <i> 'gui.on=sharptest log'   # G17a: the sharp layer filled with a known pattern
 tools/tacli arm <i> 'mark.on=noselbox'      # the engine draws its OWN selection box again
 #   FORCING A DIAGONAL UI LINE (landing 8c) takes THREE things at once, and any two give zero:
-#   mark.on=noselbox, a unit SELECTED, and a facing OFF A MULTIPLE OF 90 -- so order a diagonal
-#   move first and re-select after it arrives. At a facing that IS a multiple of 90 the rotated
-#   selection square is axis-aligned and every edge comes through as an ordinary line.
-#   Read the result off `GUI kinds:` as `line` vs `diag`.
+#   mark.on=noselbox, a unit SELECTED, and an ORIENTATION OFF THE AXIS -- so order a diagonal move
+#   first and re-select after it arrives. Read the result off `GUI kinds:` as `line` vs `diag`.
+#   NOT "a heading off a multiple of 90": the engine hands 0x4B6CC0 all THREE angles (bank,
+#   heading, pitch at u+0x64, see tagpu_native.c:3815), so ON A SLOPE a heading of 0 or 90 still
+#   gives a rotated square. Flat ground is what makes heading alone predictive.
+#   And diagonals are NOT confined to mark.on=noselbox: markown suppresses PER UNIT and only while
+#   tagpu_native_selbox_complete(), so any frame where the native pass comes up short hands every
+#   box back to the engine (MEASURED 2026-09-09: ~460 of them).
 tools/tacli gui <i>               # report
 tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds= sprites= pixels= bars= rects= atlas= resets= overflows= k= sharp= fps=
 #   bars= (8a) and rects= (8b) count PK_BAR/PK_RECT replayed as GEOMETRY; pixels= counts boxes of arena

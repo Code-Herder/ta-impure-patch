@@ -2313,8 +2313,11 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                    same reason: a solid engine fill has no restored art, so
                    leaving the old colour standing would show it through a box
                    the engine just painted over. The index is `o->fg`, one byte,
-                   because that is all `0x4CCDEA` reads of the engine's own
-                   colour argument (exe-reverse-engineering.md). */
+                   because that is all EITHER writer reads of the engine's own
+                   colour argument: `0x4CCDEA` for `DrawBar 0x4BF6F0`, and
+                   `0x4CC7AB` for the axis-aligned `DrawLine 0x4BE950` that
+                   landing 8c routes through this same packet -- and which is
+                   now most of the traffic (exe-reverse-engineering.md). */
                 /* RECT IS FOUR RECTS IN ONE CALL; CLEAR and BAR are one.
                    `vkCmdClearAttachments` takes a rect ARRAY, so the four edges
                    cost one command rather than four, and each is clamped to the

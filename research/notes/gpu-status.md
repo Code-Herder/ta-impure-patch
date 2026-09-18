@@ -10361,12 +10361,28 @@ The `OP::clipped` fallback from 8b applies unchanged: a line whose box `clip_ctx
 | `mark.on=noselbox`, unit selected | 1 070 097 | **0** |
 | `mark.on=noselbox`, unit selected **after a diagonal move order** | 1 548 252 | **111 603** |
 
-**Under the shipped arm set there are no diagonal UI lines at all.** `markown.on` suppresses the
-engine's own selection box and our marker pass draws it, so §20's producer never runs. Forcing one
-takes **three** things together, and any two of them give zero: `mark.on=noselbox` so the engine
-draws its own box, a unit selected, and **a facing off a multiple of 90** — which is why the move
-order is in the recipe. At a facing that *is* a multiple of 90 the rotated square is axis-aligned
-and every edge comes through as `OP_LINE`.
+**`diag` was 0 in every measured session — but that is a RESULT, NOT A PROPERTY, and the first
+version of this section stated it as one.** [CORRECTED BY THIS LANDING'S REVIEW.] It said "under
+the shipped arm set there are no diagonal UI lines at all", on the reasoning that `markown.on`
+suppresses the engine's own selection box. **The suppression is conditional and can lapse.**
+`tagpu_markown.c:416-418` suppresses **per unit**, and only while
+`tagpu_native_selbox_complete()` — which `tagpu_native.c:4026` computes as
+`selDrawn + selNone == nsel && nu < MAXU`, i.e. **0 whenever the native pass came up short** on
+the gather cap, on `MAXU`, or on an unresolvable model AABB. `tagpu_native.c:3795-3803` records a
+**measured** instance of exactly that: one dying selected unit dropped `s_selComplete`, *"markown
+handed all ~460 rects back, and the engine drew every one of them"* [2026-09-09]. So diagonals are
+reachable in the shipped configuration, and the honest claim is **0 in the sessions measured; the
+engine's box returns whenever `s_selComplete` drops**.
+
+This changes nothing about the code — `OP_DIAG` keeps `PK_PIXELS` and is safe either way — but it
+was the stated reason not to hurry porting `OP_DIAG`, and that reason is weaker than it read.
+
+Forcing a diagonal deliberately takes three things together, and any two give zero:
+`mark.on=noselbox` so the engine draws its own box, a unit selected, and **an orientation off the
+axis** — which is why the move order is in the recipe. **Note "orientation", not "heading":**
+`tagpu_native.c:3815` records that the engine hands `0x4B6CC0` all **three** of the unit's angles
+(bank, heading, pitch at `u+0x64`), so on a slope a heading that *is* a multiple of 90 still
+produces a rotated square. [Also corrected by the review.]
 
 So 8c closes essentially all of `line` in the shipped configuration, and the ~7 % that is diagonal
 under the forced one is kept safe rather than ported.
@@ -10381,8 +10397,12 @@ prevent.
   a real draw, not a clear — and it has to match `0x4CC7AB`'s Bresenham exactly or the A/B moves.
   Nothing here starts that.
 - **`diag` was measured on one map with one unit.** 111 603 is what a forced fixture produced, not
-  a figure about play. Play's figure is the 0 above, and that is the one that matters for the
-  shipped picture.
+  a figure about play. And the 0 above is what the measured sessions produced, not a guarantee —
+  see the correction above.
+- **The `s_selComplete` lapse was never measured for its EFFECT on `diag`.** That it hands the
+  boxes back is measured (2026-09-09); that the handed-back boxes are diagonal often enough to
+  matter is inference. Forcing the lapse — a dying selected unit, or a selection past the gather
+  cap — and reading `diag` off `GUI kinds:` is the measurement nobody has taken.
 - **The 1-px-thick claim is about the BOX, not about `0x4CC7AB`'s raster.** An axis-aligned line's
   bounding box is one pixel thick by construction; that the engine's Bresenham fills exactly that
   box is inherited from the existing engine-map entry (both endpoints counted, `inc ecx` on both
