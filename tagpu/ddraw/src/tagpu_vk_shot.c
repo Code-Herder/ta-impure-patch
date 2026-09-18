@@ -8,8 +8,11 @@
    carries lodepng and the screenshot path uses it; this is not a screenshot.
    `ffmpeg -i x.ppm x.png` is one command when a human wants to look.
 
-   THE SWAPCHAIN'S FORMAT IS BGRA ON THE REFERENCE SETUP AND THE FILE IS RGB, so
-   the channels are swapped on the way out. Both orders are handled and anything
+   THE SOURCE'S FORMAT IS BGRA ON THE REFERENCE SETUP AND THE FILE IS RGB, so
+   the channels are swapped on the way out. (Source, not swapchain: since landing
+   4c-3 a world capture reads the offscreen world target instead, and it is built
+   with the same format, which is why the caller passes the format the image was
+   BUILT with rather than the one the surface reports.) Both orders are handled and anything
    else is refused by name rather than written in the wrong colour -- a capture
    that differs from its twin in every pixel because the channels were swapped
    reads as a broken port.
@@ -97,8 +100,8 @@ int tagpu_vk_shot_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, VkImage img,
     if (fmt == VK_FORMAT_B8G8R8A8_UNORM || fmt == VK_FORMAT_B8G8R8A8_SRGB) s_bgr = 1;
     else if (fmt == VK_FORMAT_R8G8B8A8_UNORM || fmt == VK_FORMAT_R8G8B8A8_SRGB) s_bgr = 0;
     else {
-        slog(d, "shot: swapchain format %d is not one of the four 8-bit RGBA "
-                "orders this can read - nothing captured", (int)fmt);
+        slog(d, "shot: the source image's format %d is not one of the four 8-bit "
+                "RGBA orders this can read - nothing captured", (int)fmt);
         return 0;
     }
     if (!resolve(d)) { slog(d, "shot: an entry point is missing"); return 0; }
@@ -135,10 +138,19 @@ int tagpu_vk_shot_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, VkImage img,
         return 0;
     }
 
-    /* INTO TRANSFER_SRC AND BACK. The image is the swapchain's and the seam
-       hands it over in whatever layout its render pass left it in; it must go
-       back in that same layout or the present is reading an image in a layout
-       it was not promised. */
+    /* INTO TRANSFER_SRC AND BACK. The seam hands the image over in whatever
+       layout its render pass left it in and it must go back in that same layout,
+       which is why `layout` is a parameter rather than a constant here.
+
+       THERE ARE TWO SOURCES SINCE LANDING 4c-3 and the restore matters for a
+       different reason in each. For the SWAPCHAIN image (PRESENT_SRC_KHR, the UI
+       captures) putting it back is load-bearing: the present that follows is
+       reading an image in a layout it was promised. For the WORLD TARGET
+       (SHADER_READ_ONLY_OPTIMAL, the five world captures) it is free rather than
+       load-bearing -- that pass declares `initialLayout = UNDEFINED` and does not
+       care what it finds next frame -- but it is done anyway, because a function
+       that restores what it moved on one path and not the other is one a reader
+       has to check twice. [THE TWO-SOURCE NOTE IS FROM THE 4c-3 REVIEW.] */
     b.oldLayout = layout;
     b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;

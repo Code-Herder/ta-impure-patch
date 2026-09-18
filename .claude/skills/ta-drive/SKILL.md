@@ -2190,9 +2190,10 @@ Four things that cost a session if they are not known:
   world and the UI layer are still 4b-2 and still stand down whole.
 
 **The per-pass A/Bs on the vulkan-only lane, as of landing 4c-3.** All five world passes and the
-UI layer draw there now, and the five world ones run at any `ss` — the ink counts in the table are
+UI layer draw there now, and the **five world** ones run at any `ss` — their ink counts below are
 `ss=1` figures, so at the shipped `ss=2` expect four times as many out of 3 145 728 rather than
-786 432. What each needs:
+786 432. **The UI-layer row does not scale**: it is a 640x480 shell capture of the window, which
+`ss` does not size. What each needs:
 
 | pass | fixture | arm set, and the trap |
 |---|---|---|
@@ -2383,15 +2384,27 @@ touch <gamedir>/tagpu_fps.ab                             # one frame, both lanes
     **2048x1536, 3 145 728 px** — expect the px counts below to be four times the `ss=1` ones.
     Still true: **arming `ss.off` LIVE does not take**, because the FBO is built where the lever is
     not re-read, so whichever `ss` you want has to be settled before the launch.
-  * **The three UI passes (`gui`, `scaffold`, `fps`) still need `ss.off`** — nothing changed for
-    them. Their GL half is the default framebuffer and their Vulkan half is still the swapchain
-    image, so the two agree only at the window's own size.
+  * **The three UI passes (`gui`, `scaffold`, `fps`) are not `ss`-bound and never were.** `ss`
+    sizes only the world FBO (`s_fbo2`) and none of the three ever binds it — `tagpu_scaffold.c`
+    and `tagpu_fps.c` contain no `glBindFramebuffer` at all, and `tagpu_gui_surf.c` binds only its
+    own mirror FBO and 0 — so their GL half is the default framebuffer at any `ss`. None of them
+    ever carried an `ss != 1` refusal either. What they DO need is the window's own size: their
+    Vulkan half is still the swapchain image, so the two agree only with no letterbox and `k = 1`.
+  * **A world capture at 1080p with `ss = 2` is 3840x2160 — 33.2 MB a side.** The GL half mallocs
+    that on the render thread and the Vulkan half allocates as much again in host-visible coherent
+    memory, in a 32-bit address space where `tagpu_vk_shot.c` calls 8.3 MB *"real money"*. Both
+    refuse and log rather than fault (`no memory for the A/B capture`, `%u bytes of readback would
+    not allocate`), but before 4c-3 four of the five passes could not get here at all. At 1024x768
+    it is 9.4 MB a side and nothing to think about.
   * **On a frame with LINE vertices, expect ~100 px that are not a port fault.** The GL twin's
     `glLineWidth(ss)` is clamped to 1 by the driver (measured, `tagpu_native.c:337`) while the
     Vulkan lane has `wideLines` and draws the `ss` px it asked for. Every Vulkan column of the line
     carries two ink pixels and every GL column one; **no pixel GL drew differs**. `vk-ab.py` reports
-    it as *"0 of the N pixels the GL capture DREW"*, which is the signature. It affects the effects
-    pass (lasers, lightning) and is predicted for the marker pass (order lines, range circles).
+    it as *"0 of the N pixels the GL capture DREW"*, which is the signature. **Measured on both**:
+    effects with lasers ~100 px of 3 145 728, markers with order lines **34 px** (vertical: GL inks
+    column 620, Vulkan 619-620; horizontal: GL row 739, Vulkan 739-740). In coverage terms GL lays
+    down 0.5 of a game pixel per step where the engine's rule is 1.0, and Vulkan lays down 1.0 —
+    so the GL half is the wrong one, and `ss.off` is how you get a 0-px baseline on a line pass.
 
 - **A world pass's A/B needs the fixture to still be ALIVE.** `vk-ab.py` refuses two blank
   frames — *"agree perfectly and prove nothing"* — and on `fx-lasers` that is what you get a

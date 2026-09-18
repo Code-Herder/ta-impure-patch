@@ -2845,6 +2845,7 @@ static int vk_present(void)
         int abworld = 0;                /* ...and the capture reads that target  */
         VkImage abimg = VK_NULL_HANDLE;
         VkImageLayout ablay = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        VkFormat abfmt = VK_FORMAT_UNDEFINED;
         uint32_t abw = 0, abh = 0;
         VkRenderPassBeginInfo rbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
         if (s_vk.rp && s_vk.fb[idx]) {
@@ -3183,7 +3184,15 @@ static int vk_present(void)
             ablay = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
             abw = s_vk.ext.width;
             abh = s_vk.ext.height;
-            if (abIsWorld && tagpu_vk_world_shot(fi, &abimg, &abw, &abh)) {
+            abfmt = s_vk.fmt;
+            /* THE FORMAT COMES BACK WITH THE IMAGE, and that is the point of
+               asking for it: the capture picks its channel order from a format,
+               and `s_pass.fmt` is copied from `s_vk.fmt` once at bring-up while
+               `vk_resize` re-picks `s_vk.fmt` and refreshes only `s_pass.slots`.
+               Taking it from the module that built the image makes the pairing
+               true by construction instead of by the two staying in step.
+               [FROM THE 4c-3 LANDING REVIEW.] */
+            if (abIsWorld && tagpu_vk_world_shot(fi, &abimg, &abw, &abh, &abfmt)) {
                 /* The offscreen pass's `finalLayout`, and `tagpu_vk_shot_record`
                    puts it back -- which costs nothing, because that pass declares
                    `initialLayout = UNDEFINED` and does not care what it finds. */
@@ -3210,7 +3219,7 @@ static int vk_present(void)
             vklog("the A/B asked for a capture and this surface's images do not "
                   "carry TRANSFER_SRC - only the GL half will be written");
         else if (nclaim == 1 && tagpu_vk_shot_record(&s_pass, cb, abimg, ablay,
-                                                     abw, abh, s_vk.fmt)) {
+                                                     abw, abh, abfmt)) {
             s_abSlot1 = (int)fi + 1;
             s_abPath = abpath;
         }

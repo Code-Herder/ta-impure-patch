@@ -172,8 +172,34 @@ int tagpu_abshot_end(TAGPU_ABSHOT* s, const char* path, const char* tag)
     s->live = 0;
 
     glGetIntegerv(GL_VIEWPORT, vp);
+    /* THE FRAMEBUFFER HAS TO BE COMPLETE, OR THE READ SILENTLY WRITES GARBAGE.
+       `glReadPixels` on an incomplete framebuffer fails with
+       GL_INVALID_FRAMEBUFFER_OPERATION and LEAVES THE BUFFER UNTOUCHED -- so the
+       malloc'd block goes to `write_ppm` as-is and a correctly sized PPM of
+       uninitialised memory lands on the disk. `vk-ab.py` then diffs it against a
+       good Vulkan half and reports a port failure, which is the worst answer an
+       oracle can give: a real-looking difference with no cause in the renderer.
+
+       IT IS REACHABLE. `tagpu_native.c`'s `fbo_size` handles a supersampled
+       target the driver refused by latching `s_devresFailed` and turning
+       `devres` off -- it does NOT lower `ss`, so the world passes still bind the
+       incomplete `s_fbo2` and this function still finds a `gw*ss` viewport on
+       it. Until the 4c-3 landing only `posedraw` could get here (the other four
+       refused themselves at `ss != 1`); now all five can, on the shipped
+       configuration. [FOUND BY THE 4c-3 LANDING REVIEW.]
+
+       ASKED OF THE FRAMEBUFFER, NOT OF glGetError. A `glGetError` after the read
+       would also catch it, but it drains an error queue this function does not
+       own and cannot say which error it swallowed. */
     if (vp[2] <= 0 || vp[3] <= 0 || vp[2] > 8192 || vp[3] > 8192) {
         _snprintf(msg, sizeof msg, "%s: the A/B found no sane viewport - nothing captured", tag);
+        msg[sizeof msg - 1] = 0;
+        alog(msg);
+    } else if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        _snprintf(msg, sizeof msg, "%s: the A/B's framebuffer is incomplete (0x%x) - nothing "
+                                   "captured, because the read would leave the file full of "
+                                   "uninitialised memory", tag,
+                  (unsigned)glCheckFramebufferStatus(GL_FRAMEBUFFER));
         msg[sizeof msg - 1] = 0;
         alog(msg);
     } else if ((buf = (unsigned char*)malloc((size_t)vp[2] * vp[3] * 4)) != NULL) {

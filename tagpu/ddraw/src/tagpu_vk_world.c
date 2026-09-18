@@ -76,6 +76,15 @@ static int s_vx, s_vy, s_vw, s_vh;      /* where the block lands, this frame  */
 static unsigned s_nFrames, s_nBuilds, s_saidAt;
 static int s_lastW, s_lastH, s_lastSS, s_lastDevres;
 
+/* THE FORMAT THE COLOUR IMAGES WERE ACTUALLY BUILT WITH, so that anything
+   reading one takes its format from the image rather than from a field that was
+   copied at bring-up. `d->fmt` is assigned once (`s_pass.fmt = s_vk.fmt`) while
+   `vk_resize` re-runs `vk_swapchain`, which re-picks `s_vk.fmt` and refreshes
+   only `s_pass.slots` -- so the two can in principle part company, and the A/B
+   capture decides its channel order from a format. Recording it here makes that
+   decision a question about THIS image. [FROM THE 4c-3 LANDING REVIEW.] */
+static VkFormat              s_colFmt = VK_FORMAT_UNDEFINED;
+
 static VkRenderPass          s_rp;      /* the OFFSCREEN pass, not the seam's */
 static VkDescriptorSetLayout s_dsl;
 static VkPipelineLayout      s_plo;
@@ -171,12 +180,23 @@ static int mk_att(const TAGPU_VKPASS* d, int w, int h, VkFormat fmt, int depth,
        reference ICD copied anyway and a whole 0-px result rested on undefined
        behaviour; asking here is that lesson applied rather than re-learned.
 
-       UNCONDITIONAL, on purpose. The alternative is a second build key so the
-       flag is only present while a lever is armed -- which trades a usage bit
-       for a rebuild on the measured frame and a rebuild path that only ever
-       runs while someone is measuring, i.e. the least-exercised code in the
-       module guarding the most-trusted number in it. The swapchain images make
-       the same trade (tagpu_vk.c: `if (s_vk.cansrc) swci.imageUsage |= ...`).
+       UNCONDITIONAL, on purpose, AND IT IS NOT FREE. The alternative is a second
+       build key so the flag is only present while a lever is armed -- which
+       trades a usage bit for a rebuild on the measured frame and a rebuild path
+       that only ever runs while someone is measuring, i.e. the least-exercised
+       code in the module guarding the most-trusted number in it.
+
+       THE COST, NAMED RATHER THAN WAVED AT: on several drivers -- AMD's DCC
+       above all -- TRANSFER_SRC on a colour attachment disables lossless
+       framebuffer compression for the life of the image, and this image is
+       written by five passes and sampled by the composite EVERY frame. So a
+       steady-state cost is being paid to serve a lever that fires on one frame.
+       It has not been measured. The swapchain images are a weaker precedent than
+       the first draft of this comment claimed (tagpu_vk.c: `if (s_vk.cansrc)
+       swci.imageUsage |= ...`) -- that flag is conditional on what the SURFACE
+       offers, not on a build key, so it is not the same trade.
+       [THE COST AND THE CORRECTION ARE FROM THE 4c-3 LANDING REVIEW.]
+
        A device that refuses the combination fails vkCreateImage, which this
        function reports as a refusal and the seam answers by leaving the world
        on the swapchain image -- a smaller picture and never a wrong one. */
@@ -244,6 +264,7 @@ static int slot_size(const TAGPU_VKPASS* d, SLOT* s, int w, int h)
     slot_free(d, s);
 
     if (!mk_att(d, w, h, d->fmt, 0, &s->col, &s->cmem, &s->cview)) { slot_free(d, s); return 0; }
+    s_colFmt = d->fmt;
     if (!mk_att(d, w, h, d->dfmt, 1, &s->dep, &s->dmem, &s->dview)) { slot_free(d, s); return 0; }
 
     att[0] = s->cview; att[1] = s->dview;
@@ -874,6 +895,13 @@ void tagpu_vk_world_down(const TAGPU_VKPASS* d)
     if (s_vmem)  { vkFreeMemory(d->dev, s_vmem, NULL); s_vmem = VK_NULL_HANDLE; }
     s_drawThis = 0;
     s_openSlot = -1;
+    /* AND THE CAPTURE LATCH, so the invariant holds on its own rather than
+       because `tagpu_vk_world_shot`'s image check happens to cover it. The
+       header promises `s_drewSlot` is valid from `begin` until the next frame's
+       `prepare`; a teardown between the two is exactly the gap that promise has
+       to survive. [FROM THE 4c-3 LANDING REVIEW.] */
+    s_drewSlot = -1;
+    s_colFmt = VK_FORMAT_UNDEFINED;
     if (s_state != ST_REFUSED) s_state = ST_UNBUILT;
     s_downOwed = 0;
     s_downPaying = 0;
@@ -881,9 +909,10 @@ void tagpu_vk_world_down(const TAGPU_VKPASS* d)
 
 int tagpu_vk_world_scale(void) { return s_drawThis ? s_lastSS : 1; }
 
-int tagpu_vk_world_shot(uint32_t slot, VkImage* img, uint32_t* w, uint32_t* h)
+int tagpu_vk_world_shot(uint32_t slot, VkImage* img, uint32_t* w, uint32_t* h,
+                        VkFormat* fmt)
 {
-    if (!img || !w || !h) return 0;
+    if (!img || !w || !h || !fmt) return 0;
     /* THE SLOT THE WORLD WENT INTO, AND NO OTHER. Every other slot's image is
        an earlier frame's picture, still allocated because the slots are
        long-lived -- so a capture read out of one would be a real image of the
@@ -891,10 +920,13 @@ int tagpu_vk_world_shot(uint32_t slot, VkImage* img, uint32_t* w, uint32_t* h)
        `s_drewSlot` is set where the render pass is opened, so this is a
        question about the command buffer. */
     if (s_drewSlot < 0 || (uint32_t)s_drewSlot != slot) return 0;
-    if (slot >= TAGPU_VK_SLOTS || !s_slot[slot].col || s_slot[slot].w <= 0) return 0;
+    if (slot >= TAGPU_VK_SLOTS || !s_slot[slot].col ||
+        s_slot[slot].w <= 0 || s_slot[slot].h <= 0) return 0;
+    if (s_colFmt == VK_FORMAT_UNDEFINED) return 0;
     *img = s_slot[slot].col;
     *w = (uint32_t)s_slot[slot].w;
     *h = (uint32_t)s_slot[slot].h;
+    *fmt = s_colFmt;
     return 1;
 }
 

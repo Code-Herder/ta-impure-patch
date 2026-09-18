@@ -2849,12 +2849,14 @@ px wide and there was no `ss` target to put them in — so on the shipped defaul
 dropped every frame with a laser in it. Terrain agrees with its twin on **0 of the 630 719 pixels
 the GL FBO drew**. **4c-3 made that comparison expressible at the `ss` the renderer ships with** —
 both halves are now `gw*ss` by `gh*ss`, where the Vulkan half used to be the window's client rect,
-so terrain, units and effects each measure **0 px of 3 145 728** at `ss=2`. It also found the first
+so terrain, features, units and effects each measure **0 px of 3 145 728** at `ss=2` (`ss=1`
+re-measured on the same build is the 4c-2 figure unchanged). It also found the first
 difference on this plan whose wrong half is the **GL** one: on a frame with lasers the GL line is
 one column of ink where Vulkan's is two, because the driver clamps an aliased line's width to 1
-(`tagpu_native.c:337`) and the twin's laser resolves to half the engine's colour. Left alone —
-changing a shipped picture is the owner's call. Still open: `selAt1x`, the HUD-scale shift, GL's
-two-step resolve, the marker pass at `ss > 1` (predicted, not measured), and
+(`tagpu_native.c:337`) so GL lays down 0.5 of a game pixel of coverage per step where the engine's
+rule is 1.0 — measured on the effects pass (~100 px) and on the marker pass (34 px, both axes).
+Left alone — changing a shipped picture is the owner's call. Still open: `selAt1x`, the HUD-scale
+shift, GL's two-step resolve, and
 **the `s_curDrew` ordering gap 4b-3 named** — the plan assigns that one to 4c and none of the three
 closed it, so 4c is done as three landings without being done as a gate. **What is left is
 4d, the deletion, plus that gap.** Filed as one row — the fourth backend,

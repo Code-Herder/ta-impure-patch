@@ -610,8 +610,10 @@ would not have shown up as a failure — it would have shown up as three landing
      by size, so **no figure on this plan had ever been taken at the `ss` the renderer ships with**.
      The world colour image now carries `TRANSFER_SRC`, `tagpu_vk_world_shot` names the slot the
      world render pass was opened on, and the seam reads it for the five world rows of `s_abFiles`.
-     **Measured at ss=2, 2048x1536 a side: terrain 0 of 3 145 728 (2 522 876 ink), units 0 of
-     3 145 728 (8 465 ink), effects 0 of 3 145 728 (10 396 ink).**
+     **Measured at ss=2, 2048x1536 a side — all five world passes: terrain 0 of 3 145 728
+     (2 522 876 ink), features 0 (529 096 ink), units 0 (8 465 ink), effects 0 (10 396 ink) on a
+     frame with no line vertices. `ss=1` re-measured on the same build is the 4c-2 figure
+     unchanged: terrain 0 of 786 432, 630 719 ink.**
 
      **AND IT FOUND THE GL HALF WRONG, WHICH IS A FIRST ON THIS PLAN.** On a frame carrying laser
      lines the diff is ~100 px, every one of them a pixel GL left black and none of them a pixel GL
@@ -620,15 +622,29 @@ would not have shown up as a failure — it would have shown up as three landing
      so `glLineWidth(ss)` draws pixel-identically to `glLineWidth(1)` and the twin's laser resolves
      to *"a half-lit smear, about half the engine's colour"*, which is the defect `selgeom` exists
      for. The Vulkan lane has `wideLines` since 4c-2 and gets its 2 px, which resolves to one fully
-     lit game pixel — the engine's own rule. **Left alone**: making them agree changes a shipped
-     picture and is the owner's call, not a landing's (this plan's escalation reason 1). Not
-     covered: the marker pass at `ss > 1` is predicted from the same `glLineWidth(ss)` call and not
-     measured; `devres` and `k != 1` are untested either way.
+     1.0 of a game pixel of coverage per step against GL's 0.5 — the engine's own rule, though
+     whether it lands in one game pixel or splits across two depends on the block grid. **Measured
+     on the marker pass too** (order lines, SHIFT held, a `patrol`): 34 px of 3 145 728, GL inking
+     one column where Vulkan inks two on both axes. **Left alone**: making them agree changes a
+     shipped picture and is the owner's call, not a landing's (this plan's escalation reason 1).
+     Not covered: `devres` and `k != 1` are untested either way, and the steady-state cost of the
+     world target's unconditional `TRANSFER_SRC` (DCC) is named in the code and unmeasured.
 
    * **4d — the deletion.** Route D's window, `tagpu_vk_wndproc`, `WM_TAGPU_VK` and the geometry
      tracking, once 4b's figures are banked. **4c-3 had to come first and did**: it is the last
      landing that could widen what the two-lane oracle can express, and 4d is what removes the lane
-     it compares against. **4a made route D unreachable rather than deleted on
+     it compares against.
+
+     **WHAT 4d TAKES AND WHAT IT LEAVES — decided by the owner 2026-09-18, because the plan scoped
+     4d to the window and said nothing about the instrument that dies with it.** Keep
+     `tagpu_vk_shot.c` and the eight `.ab` levers; delete only `tagpu_abshot.c`, the GL half. A
+     single-lane capture is still how a PPM of the Vulkan frame is taken for a cross-BUILD
+     comparison, which is exactly the "Drift" item this plan leans on once the two-lane oracle is
+     gone. And explicitly NOT in 4d, although the deletion makes it possible: after it
+     `tagpu_vk_own_present()` is unconditional, so the `s_ownWin` latch and every
+     `tagpu_vk_owns_present()` test behind landing 4b's stand-downs become constant-true. That is a
+     far larger simplification than removing a window, and a one-way landing that sprawls is how
+     something nobody meant to lose gets lost. **4a made route D unreachable rather than deleted on
      purpose**, so the control above stays available until then: the same build answers both
      `renderer=vulkan` and `renderer=openglcore`, which is what makes 4b's A/B expressible at all.
 

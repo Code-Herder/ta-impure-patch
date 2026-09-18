@@ -9702,9 +9702,15 @@ The four `ss != 1` refusals are gone. The bound they were is now a property of t
 | pass | fixture | differing | non-black a side |
 |---|---|---|---|
 | terrain | `feat-forest` | **0 of 3 145 728** | 2 522 876 |
+| features | `feat-forest` + `eye 1400 1600` | **0 of 3 145 728** | 529 096 |
 | units (`posedraw`) | `selbox-facings` | **0 of 3 145 728** | 8 465 |
 | effects, no line vertices | `fx-lasers` | **0 of 3 145 728** | 10 396 |
-| effects, **with lasers** | `fx-lasers` | **~100 of 3 145 728** | 5 460 – 14 256 |
+| effects, **with lasers** | `fx-lasers` | ~100 of 3 145 728 | 5 460 – 14 256 |
+| markers, **with order lines** | `selbox-facings` + held SHIFT + `patrol` | 34 of 3 145 728 | 2 448 |
+
+All five world passes, and the two non-zero rows are the same one thing (below). `ss = 1` was
+re-measured on this build for comparison: terrain **0 of 786 432** with 630 719 ink a side, which is
+the §2.53 figure unchanged.
 
 #### And the laser difference is the GL half being wrong, which is a first
 
@@ -9712,31 +9718,58 @@ Every differing pixel is one GL left black; **not one pixel GL drew differs**, a
 carry the same colour as the line. Printing the band shows why: every Vulkan column of the line
 holds **two** ink pixels and every GL column **one**.
 
+**Measured on the marker pass too, on both axes.** Order lines (`order.on`, SHIFT held, a `patrol`
+that never completes) give a vertical segment where GL inks column x = 620 and Vulkan inks 619–620,
+and a horizontal one where GL inks row y = 739 and Vulkan inks 739–740 — 34 px, all of them the
+line's own white (235, 235, 235), none of them a pixel GL drew. So it is the `glLineWidth(ss)` call
+and not anything particular to one pass.
+
 The cause was already in the tree, as a measurement, in `tagpu_native.c:337`: *"the driver clamps
 an aliased line's width to 1 — `glLineWidth(ss*3)` draws pixel-identically to `glLineWidth(ss)`"*.
 So the GL twin asks for `glLineWidth(2)` in the `ss` buffer and gets 1, and the note says what that
 costs: *"a half-lit smear, about half the engine's colour"*. That is the defect **`selgeom` was
 invented for** on the selection rects. The Vulkan lane has had `wideLines` since §2.53 and gets the
-2 px it asks for, which resolves to one **fully** lit game pixel — the engine's own rule (one
-whole coloured pixel per major-axis step, `0x4BE950`).
+2 px it asks for.
+
+**The right way to say what that buys is COVERAGE, not "one lit pixel".** At `ss = 2` a game pixel
+is a 2×2 block of target pixels, so per game-step along the line GL deposits 2 target pixels — 0.5
+game pixels of coverage, exactly the "half-lit smear" — and Vulkan deposits 4, i.e. **1.0**, which
+is the engine's own rule (one whole coloured pixel per major-axis step, `0x4BE950`). Whether that
+1.0 lands in one game pixel or splits 0.5/0.5 across two depends on where the line falls against
+the block grid, so the *energy* is the engine's and the *placement* is not guaranteed to be.
 
 **Left alone deliberately.** Making the two agree means changing a shipped picture, in one
 direction or the other, and that is the owner's call rather than a landing's. What changes here is
 only that the difference is now visible and explained instead of unmeasurable.
 
+#### The three UI captures, and what they are and are not bound by
+
+They still read the **swapchain** image, because their GL halves are the default framebuffer —
+`tagpu_scaffold.c` and `tagpu_fps.c` contain no `glBindFramebuffer` at all, and `tagpu_gui_surf.c`
+binds only its own mirror FBO and 0. So they are the reason the seam withholds TA's own frame on a
+claimed frame, and the comment on that line no longer claims the world captures depend on it.
+Measured on this build: the GUI A/B is **0 px of 307 200** on the shell.
+
+**They were never `ss`-bound, and a first draft of the `ta-drive` note said they were.** `ss` sizes
+only the world FBO (`s_fbo2`), which none of the three ever binds; what their halves need to agree
+about is the WINDOW's size — no letterbox, `k = 1`. None of them ever carried an `ss != 1` refusal
+either; only `terr`, `feat`, `fx` and `mark` did, and this landing is what removed those.
+[CAUGHT BY THE 4c-3 LANDING REVIEW.]
+
 #### Not covered by 4c-3
 
-- **The marker pass at `ss > 1` is predicted, not measured.** `tagpu_mark.c:1140` calls the same
-  `x_glLineWidth((GLfloat)v->ss)`, so order lines and range circles should show the same one-column
-  deficit. Its fixture needs six levers and a held drag (§2.39) and this landing did not run it.
-- **`ss = 1` was not re-measured on this build.** The three §2.53 figures stand from yesterday and
-  nothing in this diff touches a draw; the capture source is the only thing that moved.
-- **The three UI captures still read the swapchain image**, because their GL halves are the default
-  framebuffer. They are therefore still the reason the seam withholds TA's own frame on a claimed
-  frame — measured with this build: the GUI A/B is **0 px of 307 200** on the shell. The comment on
-  that line no longer claims the world captures depend on it, because they no longer do.
 - **`devres` and `k != 1` are untested either way.** Every figure above is a 1024x768 game in a
   1024x768 window, where the composite rect is the whole frame.
+- **The steady-state cost of `TRANSFER_SRC` on the world target is not measured.** On several
+  drivers — AMD's DCC above all — that usage disables lossless framebuffer compression for the life
+  of the image, and this image is written by five passes and sampled by the composite every frame.
+  It is an unconditional flag serving a lever that fires on one frame; the code says so where the
+  flag is set, and nobody has put a number on it. [RAISED BY THE 4c-3 LANDING REVIEW.]
+- **A capture at 1080p with `ss = 2` is 3840x2160**, which is 33.2 MB malloc'd on the render thread
+  for the GL half and another 33.2 MB of host-visible coherent memory for the Vulkan one — in a
+  32-bit address space whose budget `tagpu_vk_shot.c` calls 8.3 MB *"real money"*. Both failure
+  paths refuse and log, so it is a refusal rather than a fault, but the four passes could not reach
+  it before this landing. [RAISED BY THE 4c-3 LANDING REVIEW.]
 
 ---
 
