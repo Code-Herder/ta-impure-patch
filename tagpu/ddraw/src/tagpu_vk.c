@@ -517,13 +517,41 @@ static int           s_askedWin;        /* a create is already posted          *
    surface on the game window and a Route D window both existing, which is the
    state this file has spent three reviews making impossible.
 
-   AND IT IS ENFORCED AT TWO PLACES, not one. The ST_OFF branch below never
-   asks for a window, so `s_vkwnd` stays NULL and every `vkw_*` path is
-   already inert through its own `if (s_vkwnd)` guard. That is unreachability
-   by inspection; `tagpu_vk_wndproc`'s early return makes it a property of the
-   code, so a `VKW_CREATE` that was already in the queue when the latch was set
-   cannot create one behind us. */
-static int           s_ownWin;          /* this backend owns the present       */
+   THE INVARIANT THAT MAKES ROUTE D UNREACHABLE IS `s_vkwnd == NULL`, and it is
+   worth stating exactly, because the first version of this comment claimed
+   something weaker and something false. `s_vkwnd` is written non-NULL only in
+   `vkw_create`; `vkw_create` is reached only from `WM_TAGPU_VK`/`VKW_CREATE`;
+   the only poster is the ST_OFF branch below, whose `win` is `hwnd` when this
+   is set and `hwnd` is already known non-NULL — so **no `VKW_CREATE` is ever
+   posted**, `s_vkwnd` is NULL for the life of the process, and every `vkw_*`
+   path returns through its own guard. `tagpu_vk_wndproc`'s early return is
+   belt, not the argument. [THE OLD COMMENT SAID THE EARLY RETURN DEFEATED A
+   `VKW_CREATE` ALREADY IN THE QUEUE. That message cannot exist, so the claim
+   was vacuous — and a false safety argument is worse than none, because the
+   next edit trusts it. FROM THE LANDING REVIEW, 2026-09-17.]
+
+   INTERLOCKED BECAUSE THREE THREADS READ IT: the render thread writes it, the
+   bring-up worker reads it for its two log lines, and the game/window thread
+   reads it in `tagpu_vk_wndproc` and in `tagpu_vk_armed`. A plain `int` there
+   is an unsynchronised cross-thread read, which is not an ordering however
+   early the write happens. [SAME REVIEW.] */
+static volatile LONG s_ownWin;          /* this backend owns the present       */
+
+/* THE OWNER IS GONE, published by the window thread. Under route D the second
+   detector for "the window the surface is on has died" was `s_vkwnd` being
+   emptied by `WM_DESTROY`, which bounded the damage at ONE frame: the render
+   thread's next frame found its window missing and took the rebuild path. With
+   the present owned there is no `s_vkwnd` to empty, and `hwnd != s_owner`
+   does not cover it — `g_ddraw.hwnd` is nulled only by the IAT-hooked
+   `DestroyWindow` (winapi_hooks.c), and only AFTER the real destroy, so a
+   destroy by any other route leaves that test false and the lane presenting on
+   a dead HWND until the driver says `VK_ERROR_SURFACE_LOST_KHR`.
+
+   That would be trading an ordering for "wait for an error", which is the shape
+   this file is not allowed to ship. So the latch keeps the one-frame bound
+   without keeping any of route D's window code. [FROM THE LANDING REVIEW,
+   2026-09-17.] */
+static volatile LONG s_ownGone;
 
 /* `raise` only on the first placement. An OWNED window already stays above its
    owner, so re-asserting HWND_TOP on every move of the owner would be pushing
@@ -636,11 +664,20 @@ static void vkw_release_unless_worker(LONG st)
    never swallows a message the fork or the engine needs. */
 void tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
-    /* NOTHING HERE HAS ANYTHING TO DO when this backend owns the present: there
-       is no window of ours to create, place or destroy. Returning here rather
-       than relying on `s_vkwnd` being NULL is what makes that a property of the
-       code -- see `s_ownWin`. */
-    if (s_ownWin) return;
+    /* ONE ARM SURVIVES when this backend owns the present, and it is the one
+       that is not about a window of ours: the owner dying is the only thing
+       this observer can tell the render thread that `hwnd != s_owner` cannot.
+       Everything else here creates, places or destroys route D's window and has
+       nothing to do -- see `s_ownWin` for why none of it can fire anyway, and
+       `s_ownGone` for why this arm must not be skipped with the rest. */
+    if (s_ownWin) {
+        if (msg == WM_DESTROY) {
+            InterlockedExchange(&s_ownGone, 1);
+            vklog("window: the game window is being destroyed - the lane comes "
+                  "down on the render thread's next frame");
+        }
+        return;
+    }
 
     switch (msg) {
     case WM_TAGPU_VK:
@@ -729,7 +766,15 @@ static void read_lever(void)
    once, from the render thread, before the frame loop. See `s_ownWin`. */
 void tagpu_vk_own_present(void)
 {
-    s_ownWin = 1;
+    InterlockedExchange(&s_ownWin, 1);
+    /* AND THE "OWNER GONE" LATCH IS CLEARED HERE, once per render thread. It
+       must not outlive the thread that saw the destroy: `g_ddraw.hwnd` is
+       assigned again on a mode change (dd.c, utils.c), so a latch that stayed
+       set would refuse every bring-up for the rest of the process -- the lane
+       silently never coming up, which is the failure this file exists to make
+       impossible. This function runs once at the top of each render thread,
+       which is exactly the scope the latch wants. */
+    InterlockedExchange(&s_ownGone, 0);
     vklog("this backend owns the present - the surface goes on the game window "
           "and route D's window is never created");
 }
@@ -740,8 +785,22 @@ int tagpu_vk_armed(void)
        built) and therefore a PURE READ: it must not call `read_lever`, which
        writes `s_clear` -- the render thread's. A file attribute query costs
        nothing at the rate a screen is built, and sharing no mutable state is
-       worth more than the cached answer. */
-    return exists(ON_FILE) && !exists(OFF_FILE);
+       worth more than the cached answer.
+
+       AND IT ANSWERS FOR THE OWNING BACKEND TOO, which it did not until the
+       landing review found what that cost [2026-09-17]. `renderer=vulkan`
+       needs no lever file, so this returned 0 in exactly the configuration
+       where the lane is the ONLY renderer -- and `tagpu_menu.c`'s
+       `vrow_greyed(VD_GPU)` greys the GPU picker on it. The row whose whole
+       purpose is choosing the Vulkan device was dead in the only mode where
+       Vulkan draws, which inverts the rule that row is greyed by: it looked
+       dead while it was the one thing that could bite.
+
+       It also re-arms the GL halves' mirror latches (`tagpu_fx.c`,
+       `tagpu_feat.c`, `tagpu_terr.c`, `tagpu_posebake.c`, `tagpu_posedraw.c`),
+       which landing 4b needs and which are inert in 4a only because nothing
+       calls the gather halves yet. */
+    return s_ownWin || (exists(ON_FILE) && !exists(OFF_FILE));
 }
 
 /* ---- G19b: the cached name table -----------------------------------------
@@ -1102,6 +1161,29 @@ static LONG lane_state(void)
     return InterlockedCompareExchange(&s_state, 0, 0);
 }
 
+/* PUT A LANE THAT FAILED BACK TO ST_OFF so the next frame brings it up again.
+   The caller owns the policy -- how many times is worth trying -- because what
+   to do about a dead lane is a property of the backend and not of the seam.
+   Returns 1 when the lane was in ST_FAILED and is now ST_OFF.
+
+   WHY IT EXISTS [FROM THE LANDING REVIEW, 2026-09-17]. ST_FAILED is not only
+   reachable from a bring-up that could never work: `tagpu_vk_frame` also
+   publishes it when a swapchain REBUILD is refused and when `vk_present`
+   returns -2, whose causes include a one-second fence or acquire timeout and
+   `VK_ERROR_OUT_OF_HOST_MEMORY` -- "one second of no progress, or one
+   allocation refused". While this lane was a lever beside GL, that killed the
+   lane and GL kept the picture, and three separate things could bring it back.
+   With the present owned, all three are gone at once, so without this a live
+   lane that hiccups once after ten minutes would hand the session to software
+   rendering for good. */
+int tagpu_vk_retry(void)
+{
+    if (InterlockedCompareExchange(&s_state, ST_OFF, ST_FAILED) != ST_FAILED)
+        return 0;
+    vklog("the lane failed after it had come up - bringing it up again");
+    return 1;
+}
+
 /* HAS THE BRING-UP GIVEN UP? A FACT, NOT A TIMEOUT. The backend that owns the
    present needs an answer it can act on, because a lane that will not come up
    leaves the player with no picture at all -- and "wait N frames and assume the
@@ -1241,7 +1323,30 @@ static DWORD WINAPI enum_worker(LPVOID arg)
 void tagpu_vk_enum_start(void)
 {
     static LONG once;
-    if (exists(OFF_FILE)) { vklog("tagpu_vk.off - nothing in this module runs"); return; }
+    /* THE OFF FILE CANNOT CLAIM TO HAVE STOPPED A LANE IT DID NOT STOP. With
+       the present owned, `read_lever` arms the lane whatever this file says --
+       the renderer choice decides -- so the old unconditional line ("nothing in
+       this module runs") was simply false on that path, and a log that
+       misinforms is the same defect as one that says nothing. Its only real
+       effect there is the device list not being refreshed, which is worth its
+       own sentence rather than a wrong one. [FROM THE LANDING REVIEW,
+       2026-09-17.] */
+    if (exists(OFF_FILE)) {
+        if (s_ownWin) {
+            /* AND THE MESSAGE SAYS WHAT ACTUALLY HAPPENS. The first version of
+               this fix said "only the device list is left unrefreshed", and the
+               very next log line was the enumeration running -- a false line
+               written while fixing a false line. Nothing stands down here: the
+               GPU row needs the list whatever the OFF file says, because under
+               this backend the row is the only way to choose a device. */
+            vklog("tagpu_vk.off is present and IGNORED - `renderer=vulkan` "
+                  "overrides both levers; nothing in this module stands down");
+        }
+        else {
+            vklog("tagpu_vk.off - nothing in this module runs");
+            return;
+        }
+    }
     if (InterlockedExchange(&once, 1)) return;
     if (InterlockedCompareExchange(&s_state, ST_STARTING, ST_OFF) != ST_OFF) {
         vklog("something already holds the lane - the device list is not refreshed "
@@ -2856,6 +2961,12 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
     case ST_OFF: {
         HWND win;
         if (!hwnd || w <= 0 || h <= 0) return 0;
+        /* NOT BACK UP ON A WINDOW WE WATCHED DIE. Without this the rebuild the
+           `s_ownGone` test forces would fall straight into another bring-up on
+           the same dead HWND, once a frame. The render thread is being stopped
+           on every path that destroys the game window, so refusing here is a
+           stop rather than a wait. */
+        if (s_ownWin && s_ownGone) return 0;
         /* THE WINDOW FIRST, AND ON THE OTHER THREAD. Ours is created by the
            window thread from a posted message; this frame asks and the next
            one finds it. That is an ordering, not a wait -- the render thread
@@ -2933,9 +3044,11 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
        is the game window, so the middle test would be permanently true and the
        lane would tear itself down and rebuild on every single frame. A window
        change is then exactly an owner change, which the first test already is. */
-    if (hwnd != s_owner || (!s_ownWin && s_vkwnd != s_vk.hwnd) || lane_gen() != s_choiceSeen) {
+    if (hwnd != s_owner || (s_ownWin && s_ownGone) ||
+        (!s_ownWin && s_vkwnd != s_vk.hwnd) || lane_gen() != s_choiceSeen) {
         int owner_changed = (hwnd != s_owner);
         vklog(owner_changed       ? "the game window changed - rebuilding" :
+              (s_ownWin && s_ownGone) ? "the game window was destroyed under us - down" :
               !s_ownWin && s_vkwnd != s_vk.hwnd ? "our window went away - rebuilding"
                                   : "the GPU row changed - rebuilding");
         vk_down();

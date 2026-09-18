@@ -24,6 +24,13 @@
    control for any A/B against a DLL built before Phase G: the lane is gated on
    `tagpu_vk.on`, but the GPU enumeration is NOT (it outlives the lane), so
    without this there would be no way to ask for the old behaviour exactly.
+   **BOTH OF THOSE SENTENCES ARE ABOUT `renderer=opengl`.** Under
+   `renderer=vulkan` neither lever decides anything (see `tagpu_vk_own_present`
+   below): the lane runs because the renderer choice says so, and `tagpu_vk.off`
+   then only leaves the device list unrefreshed for that launch — which the log
+   says, rather than claiming to have stopped a lane it did not stop. So the
+   "exactly the old behaviour" control is `renderer=opengl` plus this file, not
+   this file alone.
 
    G19a -- the bring-up. `tagpu_vk_frame` is called from the render thread
    immediately before `SwapBuffers`. It returns 1 when it presented the frame
@@ -135,14 +142,27 @@ int tagpu_vk_armed(void);
    deliberately no way to clear it. */
 void tagpu_vk_own_present(void);
 
-/* 1 when the bring-up has given up (ST_FAILED) -- a fact the backend can act
-   on rather than a frame count it has to guess. The owning backend hands the
-   session to `gdi_render_main` on this, which route F measured as still
-   reaching the screen after a surface has been attempted on the window.
+/* 1 when the lane has given up (ST_FAILED) -- a fact the backend can act on
+   rather than a frame count it has to guess.
 
    NOT the same question as `tagpu_vk_gpu_active() < 0`, which reads -1 for a
-   lane that is still starting too. */
+   lane that is still starting too.
+
+   AND NOT THE SAME QUESTION AS "THE BRING-UP CANNOT WORK", which is the one a
+   fallback wants. ST_FAILED is also published when a swapchain REBUILD is
+   refused and when a present goes fatal -- a one-second fence or acquire
+   timeout, an allocation refused. The caller must therefore decide whether
+   this lane had ever come up, and use `tagpu_vk_retry` for the case where it
+   had. [FROM THE LANDING REVIEW, 2026-09-17: the first version handed the
+   session to GDI on any ST_FAILED, which turned one hiccup after ten minutes
+   of play into software rendering for the rest of the process.] */
 int tagpu_vk_failed(void);
+
+/* Put a lane that failed back to ST_OFF, so the next frame brings it up again;
+   1 when it did. The POLICY -- how many times that is worth doing before the
+   session gives up on Vulkan -- belongs to the backend, because what to do
+   about a dead lane is a property of the renderer and not of the seam. */
+int tagpu_vk_retry(void);
 
 /* ---- G19b: the menu ------------------------------------------------------ */
 

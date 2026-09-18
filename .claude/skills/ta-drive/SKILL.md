@@ -2170,12 +2170,19 @@ Four things that cost a session if they are not known:
 - **`tagpu_vk.on` is not needed and `tagpu_vk.off` no longer helps.** The renderer choice arms the
   lane, and disarming it would leave a black window rather than a GL fallback, so it cannot. The
   ON file is still READ for its `color=`, which is how the clear colour is changed for a grab.
-- **The ini's `posX`/`posY` place the window, not `instance.json`'s `tile`** — and a bare launch
-  does not rewrite the ini, which is exactly why a bare launch is what preserves `renderer=`. So
-  when a fresh instance records a tile on the human's primary, edit `posX`/`posY` in the ini
-  together with `renderer=`, in the same pass. (Measured 2026-09-17: the fork then placed the
-  window at 14,198 regardless, under BOTH renderers — so verify with `xdotool getwindowgeometry`
-  rather than trusting either file, and the check is the same one for the GL path.)
+- **A LAUNCH THAT REWRITES `ddraw.ini` SILENTLY PUTS YOU BACK ON GL.** `write_ddraw_ini`
+  hard-codes `renderer=openglcore` (`tools/tacli:546`), and the launch path rewrites the file
+  when `--maxfps`/`--res`/`--window` is passed **and also when the recorded tile is
+  off-screen** — the self-heal at `tools/tacli:1116`, whose whole purpose is never to open a
+  window somewhere `glshot` cannot read. So a tile `tile_is_onscreen` rejects turns a
+  `renderer=vulkan` run into a GL run, and **nothing says so** except the absence of `vk:` lines.
+  A bare launch is what preserves `renderer=`. After every launch meant to be Vulkan, check both:
+  `tools/tacli log <i> -g '^vk:'` **and** the ini's own `renderer=` line.
+- **The ini's `posX`/`posY` place the window, not `instance.json`'s `tile`** — so when a fresh
+  instance records a tile on the human's primary, edit `posX`/`posY` in the ini together with
+  `renderer=`, in one pass. (Measured 2026-09-17: the fork then placed the window at 14,198
+  regardless, under BOTH renderers — so verify with `xdotool getwindowgeometry` rather than
+  trusting either file. The check is the same one for the GL path.)
 - **A window that is 100 % one colour is the right answer for landing 4a and the wrong one after
   4b.** 4a calls no gather half, so no pass has a hand-over. Read §2.48's table before calling a
   flat window a fault.

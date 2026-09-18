@@ -8679,11 +8679,19 @@ must not inherit, and adding `|| renderer == vk_render_main` to any of them woul
 
 | site | what it does | why Vulkan must not have it |
 |---|---|---|
-| `dd.c:849`, `:994` | `nonexclusive = TRUE` | stops WGL taking fullscreen exclusive; a swapchain is windowed by construction |
-| `dd.c:1119` | `render.height++`, `opengl_y_align = 1` | a scanline added so the driver cannot take exclusive mode, plus the viewport shift paying for it. `opengl_y_align` is read in `render_ogl.c` and nowhere else — a Vulkan frame inheriting it would be one pixel too tall and offset |
-| `dd.c:1264`, `:1353` | `ogl_create()`, GDI on failure | the Vulkan bring-up is the render thread's own |
-| `dd.c:1524` | `SetPixelFormat` | already GL-gated, and route E is measured on a window without one |
-| `dd.c:1787` | `ogl_release()` | nothing to release; `tagpu_vk_render_stop` runs on the thread that owns the lane |
+| `dd.c:850`, `:995` | `nonexclusive = TRUE` | stops WGL taking fullscreen exclusive; its one consumer is `:1120`, so GL-only here means exactly "no extra scanline" |
+| `dd.c:1120` | `render.height++`, `opengl_y_align = 1` | a scanline added so the driver cannot take exclusive mode, plus the viewport shift paying for it. `opengl_y_align` is read in `render_ogl.c` and nowhere else — a Vulkan frame inheriting it would be one pixel too tall and offset |
+| `dd.c:1265`, `:1354` | `ogl_create()`, GDI on failure | the Vulkan bring-up is the render thread's own |
+| `dd.c:1525` | `SetPixelFormat` | already GL-gated, and route E is measured on a window without one. The HDC beside it is taken unconditionally, which is what leaves the GDI fallback a valid one |
+| `dd.c:1788` | `ogl_release()` | nothing to release, and `dd.c` joins the render thread before reaching it, so `tagpu_vk_render_stop` has already run |
+| `fps_limiter.c:153` | `fpsl_dwm_flush()` instead of the vblank wait alone | **outside `dd.c`, and on this backend's per-frame path.** A Windows-7 DWM workaround; `!IsWine()` makes it inert on the reference setup, and the Vulkan present does its own pacing |
+| `winapi_hooks.c:2039` | `ogl_release()` in `fake_DestroyWindow` | nothing to release — and that function is the **only** writer that nulls `g_ddraw.hwnd`, which is why the `s_ownGone` latch exists rather than trusting `hwnd != s_owner` |
+
+**The line numbers above are post-change, and the first version of this table had every one of
+them off by one** — adding `#include "render_vk.h"` at `dd.c:12` shifted the file under an audit
+recorded against the pre-change numbers, so four of the seven cited a `}` or a blank line. Caught
+by the landing review. The scope was wrong too: the audit said "in `dd.c`" while one of these
+sites is in `fps_limiter.c` and runs every frame.
 
 **Not covered by landing 4a:**
 
@@ -8705,6 +8713,32 @@ must not inherit, and adding `|| renderer == vk_render_main` to any of them woul
 * **One launch, one GPU, one driver.** Every figure above is the linux NVIDIA ICD under system
   wine at 640×480 in the shell. Nothing here speaks for Windows, for llvmpipe, or for a frame with
   a world in it.
+
+**Three residuals the landing review named and this landing deliberately did NOT fix**, each with
+the reason, because shipping a fix that cannot be measured is not a landing here:
+
+* **`WM_ERASEBKGND` is not claimed on the game window.** Route D's own window proc returned 1 for
+  it — *"we paint every pixel from the present; GDI must not flash over it"* — and
+  `g_ddraw.hwnd` has no such protection: the fork's `fake_WndProc` only sets `clear_screen` and
+  falls through, and `dd.c:1445` issues a `RDW_ERASE | RDW_INVALIDATE` on every mode set. So an
+  erase can paint over the swapchain's last presented image until the next present. **The GL
+  backend has the same exposure**, so this is inherited rather than introduced — and 4a's frame is
+  a flat clear, so a flash is not observable in it: an X grab of 307 200 identical pixels is
+  consistent with a window that flashes. **It belongs to 4c**, where the backend owns TA's surface
+  and there is content for a flash to interrupt, which is the first point at which the fix can be
+  shown to work.
+* **The GDI fallback's on-screen banner blames OpenGL.** `render_gdi.c` prints *"please update your
+  graphics card driver (%s)"* with `g_oglu_version`, which is the zero-initialised array on this
+  path because `dd.c` deliberately never calls `oglu_load_dll()` for `renderer=vulkan` — so it
+  reads *"…driver ()"* and names the wrong subsystem. Safe, and the `TRACE` beside it is correct.
+  Rewording a shared banner belongs with landing 11, which deletes GL and makes the OpenGL wording
+  wrong everywhere rather than only here.
+* **The zero-extent bring-up retry is now unconditional.** `up_worker`'s "the window has no extent
+  yet" path returns the lane to ST_OFF and the next frame tries again; with the lever gone that
+  spin is no longer gated on arming, so a span with a zero client rect costs one instance and
+  device creation per ~420 ms for as long as it lasts. **Left as it is on purpose**: the retry is
+  what gets the lane up once the window has an extent, and a bound that stopped retrying would
+  wedge the lane for the session — a worse failure than the waste.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 
