@@ -1599,10 +1599,15 @@ void tagpu_vk_fx_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     if (s_state != ST_READY || !s_drawThis) return;
     s_drawThis = 0;
 
-    /* THE FLIP, AND THE DEPTH RANGE, AND THEY ARE BOTH THE WHOLE OF THEMSELVES.
-       y starts at the bottom and the height is negative, so clip space is
-       turned over once and the ported shader keeps GL's convention without a
-       character changing. minDepth 0.5 / maxDepth 1.0 maps clip z in [0, 1]
+    /* NO Y FLIP, AND THE DEPTH RANGE, AND THEY ARE TWO SEPARATE QUESTIONS.
+       This pass writes `gl_Position.y = p.y/uGame.y*2 - 1` on the engine's
+       screen-space y, which grows DOWNWARD, so clip -1 is the game frame's top
+       row and a POSITIVE height puts it on row 0 -- where the game's top row is
+       under both APIs. It took a NEGATIVE height until landing 5b (2026-09-17),
+       which turned the frame over a second time; this comment went on saying so
+       for another four landings after the code stopped doing it, which is how
+       the orientation question had to be re-derived three times in 4c.
+       minDepth 0.5 / maxDepth 1.0 maps clip z in [0, 1]
        onto GL's own (z+1)/2 -- tagpu_vk_feat.c item 1. */
     vp.x = 0.0f;
     vp.y = 0.0f;

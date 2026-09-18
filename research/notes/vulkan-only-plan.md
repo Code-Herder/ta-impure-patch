@@ -594,9 +594,27 @@ would not have shown up as a failure — it would have shown up as three landing
      **For 4c-2 concretely:** `tagpu_native::DVS` is `uv = p; gl_Position = vec4(p.x*2.0-1.0,
      p.y*2.0-1.0, 0.0, 1.0)` over a unit-square `vec2` at location 0, and `DFS` is
      `frag = texture(uTex, uv)` with `uTex` at set 0 binding 40 and no uniform block in either
-     stage. Its pairing is `uv = 0` at clip `y = -1`, the FBO quad's. Which way up that lands
-     depends on how the `ss×` offscreen image was rendered, and that is 4c-2's to establish
-     rather than something to assume from here.
+     stage. Its pairing is `uv = 0` at clip `y = -1`, the FBO quad's.
+
+     **AND WHICH WAY UP IT LANDS IS SETTLED [2026-09-18]: the composite does not flip, and it
+     is landing 5b's own rule that says so** rather than a new derivation. The world passes
+     (`_terr`, `_feat`, `_unit`, `_fx`, `_mark`) write `gl_Position.y = p.y/uGame.y*2 - 1` on the
+     engine's screen-space y, which grows DOWNWARD, under a POSITIVE viewport height -- so clip
+     `-1` is the game's top row and it lands on **row 0 of whatever they draw into**. That is
+     true of the `ss×` offscreen image for exactly the reason it is true of the swapchain image
+     today. Both images therefore have the game's top row at row 0, so the copy between them is
+     orientation-PRESERVING, and `DVS` under a positive viewport height gives precisely that:
+     `uv.y = 0` samples source row 0 and clip `y = -1` writes destination row 0.
+
+     **What made this look open was three comments that said the opposite of their own code.**
+     `af82f45` (landing 5b) turned the five world viewports positive and rewrote the prose in the
+     five pass HEADERS, `tagpu_vk_pass.h`, `gpu-status.md` and three cull comments -- but left the
+     INLINE comment at the `vkCmdSetViewport` call site in `tagpu_vk_terr.c`, `_fx.c` and
+     `_feat.c` still reading *"y starts at the bottom and the height is negative, so clip space is
+     turned over once"*, directly above `vp.y = 0.0f; vp.height = (float)h;`. `_unit.c` and
+     `_mark.c` got the corrected wording; those three did not, and they are the files 4c-2 reads
+     first. Corrected 2026-09-18, in the landing that needed the answer -- the third re-derivation
+     of this question in 4c and the first one a stale comment would have sent the wrong way.
 
    * **4d — the deletion.** Route D's window, `tagpu_vk_wndproc`, `WM_TAGPU_VK` and the geometry
      tracking, once 4b's figures are banked. **4a made route D unreachable rather than deleted on

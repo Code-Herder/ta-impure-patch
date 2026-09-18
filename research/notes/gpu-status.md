@@ -9228,9 +9228,27 @@ flip on attempt 2's authority gets the upside-down picture back.
 **Consequence for 4c-2, whose resolve is the next literal-quad pass.** `tagpu_native::DVS` is
 `uv = p; gl_Position = vec4(p.x*2.0-1.0, p.y*2.0-1.0, 0.0, 1.0)` over a unit-square attribute, so
 its pairing is `uv = 0` at clip `y = -1` — the FBO quad's pairing, not the window quad's. Under
-Vulkan's y-down that puts `uv = 0` at the TOP of the viewport. Whether that is the right way up
-depends on which way up the `ss×` offscreen image was rendered, which is 4c-2's to establish and
-is deliberately **not** asserted here.
+Vulkan's y-down that puts `uv = 0` at the TOP of the viewport.
+
+**SETTLED 2026-09-18: that resolve takes no flip, and the argument does not need to know which way
+up either image is.** Under a POSITIVE viewport height, `DVS` maps source row 0 to destination row
+0 under *both* APIs — GL sends clip `y = -1` to framebuffer row 0 and samples `uv.y = 0` from texel
+row 0; Vulkan does the same. It is an orientation-PRESERVING copy either way, so the only thing
+left to check is that the two images agree, and they do: the world passes write the engine's
+downward-growing screen y under a positive viewport, so the game's top row lands on row 0 of the
+`ss×` offscreen image for exactly the reason it lands on row 0 of the swapchain image today
+(landing 5b). A negative height here would be the third turn, and would mirror.
+
+**And what kept this looking open was three comments contradicting their own code.** `af82f45`
+turned the five world viewports positive and rewrote the prose in the five pass headers,
+`tagpu_vk_pass.h`, four places in this file and three cull comments — but left the INLINE comment
+at the `vkCmdSetViewport` call site in `tagpu_vk_terr.c`, `tagpu_vk_fx.c` and `tagpu_vk_feat.c`
+reading *“y starts at the bottom and the height is negative, so clip space is turned over once”*,
+sitting directly above `vp.y = 0.0f; vp.height = (float)h;`. `_unit.c` and `_mark.c` got the
+corrected wording; those three did not — and they are the first files anyone porting the world
+target opens. Corrected 2026-09-18. **The lesson is narrower than “update your comments”: a
+landing that corrects a fact has to grep for the fact, not for the files it already knows it
+edited.** Five headers were found by walking the pass list; the call sites were not on that list.
 
 [Attempt 2 was the committed text for two commits, including a sharpened version that made it a
 one-line test. The 4c-1 landing review disproved it against `render_ogl.c`'s two branches.]

@@ -1778,10 +1778,15 @@ void tagpu_vk_terr_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         if (s_slot[slot].boundShadow != (sv ? sv : s_shView)) return;
     }
 
-    /* THE FLIP, AND THE DEPTH RANGE, AND THEY ARE BOTH THE WHOLE OF THEMSELVES.
-       y starts at the bottom and the height is negative, so clip space is
-       turned over once and the ported shader keeps GL's convention without a
-       character changing. minDepth 0.5 / maxDepth 1.0 maps clip z in [0, 1]
+    /* NO Y FLIP, AND THE DEPTH RANGE, AND THEY ARE TWO SEPARATE QUESTIONS.
+       This pass writes `gl_Position.y = p.y/uGame.y*2 - 1` on the engine's
+       screen-space y, which grows DOWNWARD, so clip -1 is the game frame's top
+       row and a POSITIVE height puts it on row 0 -- where the game's top row is
+       under both APIs. It took a NEGATIVE height until landing 5b (2026-09-17),
+       which turned the frame over a second time; this comment went on saying so
+       for another four landings after the code stopped doing it, which is how
+       the orientation question had to be re-derived three times in 4c.
+       minDepth 0.5 / maxDepth 1.0 maps clip z in [0, 1]
        onto GL's own (z+1)/2 -- see item 4 of the file header; without it every
        depth VALUE here is twice GL's and the far plane terrain writes is not
        the one the passes above it are tested against. */
