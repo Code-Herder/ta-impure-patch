@@ -112,6 +112,38 @@ void tagpu_vk_enum_start(void);
 /* 1 when `tagpu_vk.on` is present: the row's "can this bite?" test. */
 int tagpu_vk_armed(void);
 
+/* ---- landing 4: this backend owns the present ---------------------------- */
+
+/* Called ONCE from the render thread, before its frame loop, by the backend
+   that has no other backend beside it (`renderer=vulkan`, `render_vk.c`).
+   Two things change and nothing else does:
+
+   * the surface goes on the window `tagpu_vk_frame` is handed, and ROUTE D'S
+     WINDOW IS NEVER CREATED. Every line of that machinery exists because "two
+     backends must not both present to one window in one frame"; with one
+     backend there is nothing to separate. Measured as route E in
+     `tools/vkcoexist.c` -- a top-level window that never had a GL context or a
+     pixel format presents, on wine 9.0 and on Proton 11 (roadmap §G19a).
+   * `tagpu_vk.on` STOPS ARMING THE LANE, because the renderer choice already
+     did. `tagpu_vk.off` stops disarming it for the same reason: with no GL
+     lane behind it, a disarmed Vulkan lane is a black window rather than a
+     fallback. The ON file is still read for its `color=`.
+
+   A ONE-WAY LATCH: which backend the process has is settled at `dd.c`'s
+   dispatch and cannot change, and a flag that could go back would allow a
+   surface on the game window and a route D window at once. There is
+   deliberately no way to clear it. */
+void tagpu_vk_own_present(void);
+
+/* 1 when the bring-up has given up (ST_FAILED) -- a fact the backend can act
+   on rather than a frame count it has to guess. The owning backend hands the
+   session to `gdi_render_main` on this, which route F measured as still
+   reaching the screen after a surface has been attempted on the window.
+
+   NOT the same question as `tagpu_vk_gpu_active() < 0`, which reads -1 for a
+   lane that is still starting too. */
+int tagpu_vk_failed(void);
+
 /* ---- G19b: the menu ------------------------------------------------------ */
 
 /* Read `tagpu_vk.gpus` into the name table. Plain file I/O and nothing else --

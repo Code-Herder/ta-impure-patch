@@ -11,6 +11,7 @@
 #include "render_d3d9.h"
 #include "render_gdi.h"
 #include "render_ogl.h"
+#include "render_vk.h"
 #include "fps_limiter.h"
 #include "debug.h"
 #include "utils.h"
@@ -1986,6 +1987,18 @@ HRESULT dd_CreateEx(GUID* lpGuid, LPVOID* lplpDD, REFIID iid, IUnknown* pUnkOute
         else if (tolower(g_config.renderer[0]) == 's' || tolower(g_config.renderer[0]) == 'g') /* gdi */
         {
             g_ddraw.renderer = gdi_render_main;
+        }
+        else if (tolower(g_config.renderer[0]) == 'v') /* vulkan */
+        {
+            /* NOTHING IS PROBED HERE, unlike the 'o' case's `oglu_load_dll()`.
+               Loading an ICD is what `vkCreateInstance` does and it must not
+               happen on this path: this runs from the engine's DirectDraw
+               creation, under the loader lock on some paths, which is the
+               LoadLibrary-from-DllMain the companion-DLL rule forbids. The
+               bring-up is the render thread's own and `vk_render_main` hands
+               the session to GDI if it fails -- which route F measured as
+               still reaching the screen. See render_vk.c. */
+            g_ddraw.renderer = vk_render_main;
         }
         else if (tolower(g_config.renderer[0]) == 'o') /* opengl or openglcore */
         {

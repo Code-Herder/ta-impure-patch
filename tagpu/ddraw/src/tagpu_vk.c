@@ -504,6 +504,27 @@ static HWND volatile s_vkwnd;           /* ours; published by the window thread 
 static HWND          s_owner;           /* the game window we are tracking     */
 static int           s_askedWin;        /* a create is already posted          */
 
+/* ROUTE D COLLAPSES WHEN THIS BACKEND IS THE ONLY ONE (the vulkan-only plan's
+   landing 4). Every line of the window machinery above exists for one reason,
+   stated in tagpu_vk.h: *"two backends must not both present to one window in
+   one frame"*. With `renderer=vulkan` there is no second backend, so the
+   surface goes on the window the caller names and no window of ours is ever
+   created.
+
+   IT IS A ONE-WAY LATCH, set once from `vk_render_main` before its loop and
+   never cleared: which backend the process has is decided at `dd.c`'s dispatch
+   and cannot change afterwards. A flag that could go back would mean a live
+   surface on the game window and a Route D window both existing, which is the
+   state this file has spent three reviews making impossible.
+
+   AND IT IS ENFORCED AT TWO PLACES, not one. The ST_OFF branch below never
+   asks for a window, so `s_vkwnd` stays NULL and every `vkw_*` path is
+   already inert through its own `if (s_vkwnd)` guard. That is unreachability
+   by inspection; `tagpu_vk_wndproc`'s early return makes it a property of the
+   code, so a `VKW_CREATE` that was already in the queue when the latch was set
+   cannot create one behind us. */
+static int           s_ownWin;          /* this backend owns the present       */
+
 /* `raise` only on the first placement. An OWNED window already stays above its
    owner, so re-asserting HWND_TOP on every move of the owner would be pushing
    our window up the desktop's z-order for no reason -- and the owner's move is
@@ -615,6 +636,12 @@ static void vkw_release_unless_worker(LONG st)
    never swallows a message the fork or the engine needs. */
 void tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
+    /* NOTHING HERE HAS ANYTHING TO DO when this backend owns the present: there
+       is no window of ours to create, place or destroy. Returning here rather
+       than relying on `s_vkwnd` being NULL is what makes that a property of the
+       code -- see `s_ownWin`. */
+    if (s_ownWin) return;
+
     switch (msg) {
     case WM_TAGPU_VK:
         if (wparam == VKW_CREATE) vkw_create(hwnd);
@@ -670,7 +697,13 @@ static void read_lever(void)
     char b[128];
     HANDLE h;
     DWORD n = 0;
-    int on = exists(ON_FILE) && !exists(OFF_FILE);
+    /* THE LEVER RETIRES INTO `renderer=` when this backend owns the present:
+       `renderer=vulkan` that a stray `tagpu_vk.off` could disarm would leave
+       the process with NO renderer and a black window, which is a worse
+       failure than anything the lever was there to protect against. The ON
+       file is still READ below for its `color=`, which every A/B on this plan
+       uses; it just no longer decides whether the lane runs. */
+    int on = s_ownWin ? 1 : (exists(ON_FILE) && !exists(OFF_FILE));
 
     InterlockedExchange(&s_armed, on);
     if (!on) return;
@@ -690,6 +723,15 @@ static void read_lever(void)
             s_clear[2] = (float)(bl < 0 ? 0 : bl > 255 ? 255 : bl) / 255.0f;
         }
     }
+}
+
+/* THE RENDERER CHOICE IS THE ARMING when this backend owns the present. Called
+   once, from the render thread, before the frame loop. See `s_ownWin`. */
+void tagpu_vk_own_present(void)
+{
+    s_ownWin = 1;
+    vklog("this backend owns the present - the surface goes on the game window "
+          "and route D's window is never created");
 }
 
 int tagpu_vk_armed(void)
@@ -1058,6 +1100,21 @@ static void lane_release(void)
 static LONG lane_state(void)
 {
     return InterlockedCompareExchange(&s_state, 0, 0);
+}
+
+/* HAS THE BRING-UP GIVEN UP? A FACT, NOT A TIMEOUT. The backend that owns the
+   present needs an answer it can act on, because a lane that will not come up
+   leaves the player with no picture at all -- and "wait N frames and assume the
+   worst" is the kind of argument this project does not ship. ST_FAILED is
+   published by the worker after every path it could have succeeded on, so the
+   state IS the answer.
+
+   `tagpu_vk_gpu_active() < 0` is not this question: it reads -1 both for a lane
+   that has failed and for one that is still starting, and the two want
+   opposite behaviour. */
+int tagpu_vk_failed(void)
+{
+    return lane_state() == ST_FAILED;
 }
 
 /* The GPU row's generation, read the same way and for the same reason: the
@@ -1847,14 +1904,17 @@ static DWORD WINAPI up_worker(LPVOID arg)
         sci.hwnd = s_vk.hwnd;
         r = vkCreateWin32SurfaceKHR(s_vk.inst, &sci, NULL, &s_vk.surf);
         if (r != VK_SUCCESS) {
-            /* NAMED RATHER THAN SWALLOWED. Route D is the last of the
-               roadmap's three still standing, so a driver that refuses a
-               surface even on a window of our own is the case the phase's
-               out-of-process pivot exists for -- and the difference between
-               that and a lane that merely did not arm is this line. */
-            vklog("vkCreateWin32SurfaceKHR on our own top-level window: %s (%d) - "
-                  "route D is refused by this driver, and it is the only one of the "
-                  "roadmap's three that works on system wine; the lane stays down",
+            /* NAMED RATHER THAN SWALLOWED, and it names WHICH window, because
+               the two cases have different answers. On a window of our own
+               (route D) a refusal is the case the phase's out-of-process pivot
+               exists for. On the GAME window it is route E being refused --
+               measured to work on wine 9.0 and Proton 11 (roadmap §G19a), so a
+               driver that refuses it is new information and the backend falls
+               back to GDI, which route F measured as still reaching the
+               screen after a surface has been attempted here. */
+            vklog("vkCreateWin32SurfaceKHR on %s: %s (%d) - the lane stays down",
+                  s_ownWin ? "the game window (route E)"
+                           : "our own top-level window (route D)",
                   res_name(r), (int)r);
             goto fail;
         }
@@ -2216,10 +2276,16 @@ static DWORD WINAPI up_worker(LPVOID arg)
     s_pass.log = passlog;
 
     va_log("with Vulkan up");
-    vklog("up in %lu ms on \"%s\" (row %d), our window %p over %p, %ux%u, vsync %d "
-          "- route D: the GL lane's window is untouched",
+    /* AND IT SAYS WHICH ROUTE IT CAME UP ON. The two handles are the same one
+       when this backend owns the present, so the line would otherwise read
+       "our window X over X" with nothing to say why -- and its old tail
+       ("route D: the GL lane's window is untouched") was a claim about a lane
+       that is not in the process on that path. */
+    vklog("up in %lu ms on \"%s\" (row %d), our window %p over %p, %ux%u, vsync %d - %s",
           GetTickCount() - t0, s_vk.devName, s_vk.devIndex, (void*)s_vk.hwnd,
-          (void*)s_owner, s_vk.ext.width, s_vk.ext.height, s_vk.vsync);
+          (void*)s_owner, s_vk.ext.width, s_vk.ext.height, s_vk.vsync,
+          s_ownWin ? "route E: the surface is on the game window and there is no GL lane"
+                   : "route D: the GL lane's window is untouched");
 
     InterlockedExchange(&s_activeIndex, s_vk.devIndex);
     /* THE PUBLISH, AND IT IS A COMPARE-EXCHANGE RATHER THAN A STORE.
@@ -2796,7 +2862,11 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
            never blocks on the window thread, which in a lockstep game is the
            deadlock this whole file is arranged to avoid. */
         s_owner = hwnd;
-        win = s_vkwnd;
+        /* OURS, OR THE CALLER'S. When this backend owns the present the
+           surface goes straight on the game window and the two-thread dance
+           below is skipped entirely -- there is no window to ask another
+           thread for, so there is nothing to wait a frame for either. */
+        win = s_ownWin ? hwnd : s_vkwnd;
         if (!win) {
             /* ASKED ONCE, NOT ONCE A FRAME. The window thread answers when it
                next pumps; posting again every frame would put sixty requests a
@@ -2858,10 +2928,15 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
        invalidates the surface or the device, and neither is patchable in
        place -- and going back through the worker is what keeps every bring-up
        off the render thread, not just the first. */
-    if (hwnd != s_owner || s_vkwnd != s_vk.hwnd || lane_gen() != s_choiceSeen) {
+    /* "OUR WINDOW WENT AWAY" IS NOT A CASE WHEN WE HAVE NO WINDOW. With the
+       present owned, `s_vkwnd` is NULL for the process's life while `s_vk.hwnd`
+       is the game window, so the middle test would be permanently true and the
+       lane would tear itself down and rebuild on every single frame. A window
+       change is then exactly an owner change, which the first test already is. */
+    if (hwnd != s_owner || (!s_ownWin && s_vkwnd != s_vk.hwnd) || lane_gen() != s_choiceSeen) {
         int owner_changed = (hwnd != s_owner);
         vklog(owner_changed       ? "the game window changed - rebuilding" :
-              s_vkwnd != s_vk.hwnd ? "our window went away - rebuilding"
+              !s_ownWin && s_vkwnd != s_vk.hwnd ? "our window went away - rebuilding"
                                   : "the GPU row changed - rebuilding");
         vk_down();
         InterlockedExchange(&s_state, ST_OFF);
