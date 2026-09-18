@@ -403,11 +403,11 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
 
        THE GATE MOVES INWARD, one commit per pass: once a pass can gather
        without drawing, its own draw block takes this test and the call here
-       loses it. `tagpu_scaffold_frame` is the first to have made that move --
-       it is called unconditionally below and gates its upload and its quad
-       itself -- so this variable now guards three passes, not four, and will
-       guard none of them when 4b is finished. Read once per frame so those
-       that remain cannot disagree. [The vulkan-only plan, landing 4b.] */
+       loses it. `tagpu_scaffold_frame` and `tagpu_fps_present` have both made
+       that move -- they are called unconditionally below and gate their own
+       uploads and draws -- so this variable now guards two passes, not four,
+       and will guard none of them when 4b is finished. Read once per frame so
+       those that remain cannot disagree. [The vulkan-only plan, landing 4b.] */
     const int gl_draws = !tagpu_vk_owns_present();
 
     /* the palette the screen is shown with, once for every pass that resolves
@@ -458,8 +458,10 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     /* The frame-rate readout, ABOVE the UI layer: it is a diagnostic drawn over
        the finished frame and must not be hidden by the side panel or a dialog.
        Off unless `tagpu_fps.on` is there, which the render-options screen's FPS
-       row writes -- see tagpu_fps.c for why this is not cnc-ddraw's own OSD. */
-    if (gl_draws) tagpu_fps_present(f);
+       row writes -- see tagpu_fps.c for why this is not cnc-ddraw's own OSD.
+       CALLED ON BOTH LANES, like the scaffold: the averaging window, the font
+       latch and the quads are the pass, and it gates its own draw. */
+    tagpu_fps_present(f);
     oerr("fps");
 
     /* If the native pass did not publish a view this frame, nothing zoomed was

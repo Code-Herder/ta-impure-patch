@@ -70,6 +70,7 @@
 #include "tagpu_fps.h"
 #include "tagpu_text.h"
 #include "tagpu_abshot.h"
+#include "tagpu_vk.h"      /* tagpu_vk_owns_present: is there a GL lane at all? */
 
 #define TRIGGER   "tagpu_fps.on"
 #define PKSHOW    "tagpu_packet.show"
@@ -274,9 +275,16 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
        frame: set at the end of this function, read by the lane before the next
        present, gone here. A capture the lane never collected is simply not
        written, and `tools/vk-ab.py` says so. */
+    /* WHETHER THIS PASS DRAWS, or only builds the quads the Vulkan twin draws.
+       Under `renderer=vulkan` there is no GL context in the process: the poll,
+       the frame-rate window, the font latch and the vertex array are all this
+       pass either way, and only the upload, the draw and the read-back stand
+       down. [The vulkan-only plan, landing 4b.] */
+    const int gl_draws = !tagpu_vk_owns_present();
+
     s_nv = 0; s_abFrame = 0;
 
-    if (!f || s_state == 2) return;
+    if (!f || (gl_draws && s_state == 2)) return;
     if (s_on < 0 || (poll++ % POLL) == 0) {
         s_on = GetFileAttributesA(TRIGGER) != INVALID_FILE_ATTRIBUTES;
         s_pk = GetFileAttributesA(PKSHOW) != INVALID_FILE_ATTRIBUTES;
@@ -297,8 +305,10 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
     }
     if (s_fps < 0) return;                  /* nothing to say for the first window */
 
-    if (!s_state) init_gl();
-    if (s_state != 1) return;
+    if (gl_draws) {
+        if (!s_state) init_gl();
+        if (s_state != 1) return;
+    }
 
     /* The font the game thread published, latched for this frame exactly as the
        marker gather latches it -- so the atlas cannot repack under our quads. */
@@ -334,6 +344,12 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
     }
     if (!nv) return;
 
+    /* HOISTED OUT OF THE DRAW, because on the vulkan-only lane the A/B is armed
+       without one -- the scaffold's shape (tagpu_scaffold.c) and the same
+       reason. Read once so the two arms below cannot disagree about whether
+       this is the capture frame. */
+    int taking = s_ab && !s_abDone;
+
     /* THE FRAME GOES BLACK FIRST WHEN THE A/B IS ARMED, and only then. The
        comparison is of this pass's pixels, so everything that is not this pass
        has to leave the frame -- scissor off, because a scissor left on from the
@@ -346,27 +362,22 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
        other clear sites set their own colour and the scissor rests disabled --
        and they are exactly the kind of "harmless today" that an A/B taken in
        six months would be reading. */
-    {
+    if (gl_draws) {
         TAGPU_ABSHOT shot;
-        int taking = s_ab && !s_abDone;
         shot.live = 0;
         if (taking) tagpu_abshot_begin(&shot, 0u);
 
-    glUseProgram(s_prog);
-    x_glUniform2f(s_uFrame, (float)f->game_width, (float)f->game_height);
-    x_glUniform3f(s_uInk, 1.0f, 1.0f, 1.0f);
-    x_glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, tagpu_text_tex());
-    glBindVertexArray(s_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)nv * VST * sizeof(float), s_v);
-    x_glDisable(GL_DEPTH_TEST);
-    x_glDrawArrays(GL_TRIANGLES, 0, nv);
-    glBindVertexArray(0);
-
-    /* PUBLISHED AFTER THE GL DRAW, not before: `s_v` is what was just drawn,
-       and the Vulkan lane is about to draw the same array. */
-    s_nv = nv; s_fw = f->game_width; s_fh = f->game_height;
+        glUseProgram(s_prog);
+        x_glUniform2f(s_uFrame, (float)f->game_width, (float)f->game_height);
+        x_glUniform3f(s_uInk, 1.0f, 1.0f, 1.0f);
+        x_glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, tagpu_text_tex());
+        glBindVertexArray(s_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)nv * VST * sizeof(float), s_v);
+        x_glDisable(GL_DEPTH_TEST);
+        x_glDrawArrays(GL_TRIANGLES, 0, nv);
+        glBindVertexArray(0);
 
         if (taking) {
             /* THE VULKAN HALF IS CLAIMED ONLY ON A GL HALF THAT REACHED THE
@@ -379,7 +390,21 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
             s_abDone = 1;
             s_abFrame = wrote;
         }
+    } else if (taking) {
+        /* AND ON THE LANE WITH NO GL HALF, THE INTENT IS THE CLAIM. The rule
+           above reads a capture that is not merely refused there but never
+           attempted, so it would refuse every capture on the only lane that
+           presents. What it was buying -- that a `_vk.ppm` on the disk belongs
+           to this arming -- tagpu_vk.c establishes by unlinking the target the
+           instant a claim is seen. tagpu_abshot.h has the whole argument. */
+        s_abDone = 1;
+        s_abFrame = 1;
     }
+
+    /* PUBLISHED AFTER THE DRAW WHERE THERE IS ONE, and after the build in
+       either case: `s_v` holds what this frame put together, and the Vulkan
+       lane is about to draw the same array. */
+    s_nv = nv; s_fw = f->game_width; s_fh = f->game_height;
 }
 
 void tagpu_fps_glreset(void)
