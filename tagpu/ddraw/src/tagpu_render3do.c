@@ -129,11 +129,11 @@ static unsigned      s_lutSerial;
 
 static void shade_upload(const unsigned char* lut)
 {
-/* THE UPLOAD IS GL; THE LUT IS THE PASS. `s_lutMirror` below is what the
+    /* THE UPLOAD IS GL; THE LUT IS THE PASS. `s_lutMirror` below is what the
        Vulkan twin samples, so only the texture stands down.
        [The vulkan-only plan, landing 4b-2.] */
     if (!tagpu_vk_owns_present()) {
-            glBindTexture(GL_TEXTURE_2D, s_lutTex);
+        glBindTexture(GL_TEXTURE_2D, s_lutTex);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, SH_ROWS, GL_RED, GL_UNSIGNED_BYTE, lut);
         glBindTexture(GL_TEXTURE_2D, 0);
@@ -304,6 +304,23 @@ static void r3d_init(void)
         glBindTexture(GL_TEXTURE_2D, 0);
     }
     s_state = 1;
+    /* THE MIRROR IS ASKED FOR HERE, BEFORE THE FIRST PAINT, and that ordering is
+       the whole of it. It used to be asked for in `pd_view_publish`, which is
+       right on the GL lane: the atlas fills during the BAKE, the mirror is
+       allocated after it, and the frames already painted are marked to
+       re-decode "on their next use" -- which comes, because the GL lane keeps
+       drawing and re-asking. On the vulkan-only lane the bake is cached and
+       nothing asks the atlas again, so that next use never arrives and the
+       twin stands down on a mirror that never converges. Measured: 25 s of
+       settled play with the census still reading `unit=0`.
+       Asked at arm time instead, every paint from the first one lands in the
+       mirror and nothing needs re-decoding at all. `s_atlas.dim` is set a few
+       lines above, which is the precondition `_want` tests, and the call is
+       idempotent inside tagpu_gaf.c. The GL lane is unchanged in kind -- it
+       allocates the same mirror under the same `tagpu_vk_armed()` condition,
+       only sooner, which is strictly more of what the mirror is for.
+       [The vulkan-only plan, landing 4b-2.] */
+    if (tagpu_vk_armed()) tagpu_r3d_atlas_mirror_want();
     rlog("render3do: ready (unit atlas + shade LUT; the write-back path is gone)");
 }
 
@@ -466,11 +483,24 @@ void tagpu_r3d_atlas_frame(const unsigned char* pal)
 }
 /* `shd` is the packet's copy of PALETTE.SHD, or NULL: the LUT is built once
    per GL context out of whichever the caller has. */
-GLuint tagpu_r3d_lut_texref(const unsigned char* shd)
+/* BUILD THE LUT, WITHOUT ANYONE ASKING FOR ITS GL NAME. Until this split the
+   construction was a side effect of `_texref`, which only the GL composite
+   calls -- so on the vulkan-only lane `s_lutBuilt` stayed 0, `s_lutMirror` was
+   empty, and the unit twin stood down on a mirror that nothing was ever going
+   to fill. Measured: `mirrors atlas=1 dim=2048 lut=0 pal=1 fogLut=1`.
+   ELEVENTH INSTANCE in this landing of GL and the pass being entangled -- here
+   not a handle used as a test, but a CONSTRUCTION reachable only through one.
+   [The vulkan-only plan, landing 4b-2.] */
+void tagpu_r3d_lut_want(const unsigned char* shd)
 {
     /* build once — and REBUILD the first time the engine's own table arrives
        after a frame that had none */
     if (s_state == 1 && (!s_lutBuilt || (shd && !s_lutFromShd))) shade_build_lut(shd);
+}
+
+GLuint tagpu_r3d_lut_texref(const unsigned char* shd)
+{
+    tagpu_r3d_lut_want(shd);
     return s_lutBuilt ? s_lutTex : 0;
 }
 /* ---- the Vulkan lane's texels; tagpu_render3do.h has the contract ------- */

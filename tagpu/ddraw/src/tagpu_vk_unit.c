@@ -1969,6 +1969,14 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        session legitimately arrive without one. Said once. */
     if (!h.atlas || h.atlasDim < 1 || h.atlasDim > 8192 || !h.lut || !h.pal ||
         !h.fogLut) {
+        /* WHICH mirror, periodically. Six terms behind one message told me
+           only that one of them was missing, and a latch on top of that meant
+           it said so once. [The vulkan-only plan, landing 4b-2.] */
+        if ((d->frame % 300u) == 0u)
+            plog(d, "unit: frame %u: mirrors atlas=%d dim=%d lut=%d pal=%d "
+                    "fogLut=%d - nothing drawn until all are there",
+                 (unsigned)d->frame, h.atlas ? 1 : 0, h.atlasDim,
+                 h.lut ? 1 : 0, h.pal ? 1 : 0, h.fogLut ? 1 : 0);
         if (!s_saidNoMirror) {
             s_saidNoMirror = 1;
             plog(d, "unit: a texel mirror this pass needs is not there yet - "

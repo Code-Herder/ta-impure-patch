@@ -31,6 +31,10 @@ void tagpu_r3d_atlas_level(unsigned level_gen);
 /* The shade LUT, built once per GL context. `shd` is the frame packet's copy
    of the engine's PALETTE.SHD table (tagpu_pk_shd), or NULL to use our own
    computed ramp — this module no longer reads the graphics globals itself. */
+/* Build the shade LUT and its CPU mirror. `_texref` calls this and then hands
+   back the GL name; a lane with no GL calls this directly, because the LUT is
+   the pass's and only the texture is the backend's. */
+void tagpu_r3d_lut_want(const unsigned char* shd);
 unsigned int tagpu_r3d_lut_texref(const unsigned char* shd);
 int tagpu_r3d_shade_neutral(void);
 int tagpu_r3d_shade_dir(void);

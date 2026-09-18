@@ -2672,6 +2672,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* the unit atlas's frame: recycle if full, arm and step its Classic++
        restore -- before any face asks it for a UV */
     tagpu_r3d_atlas_frame(pal);
+    /* AND THE SHADE LUT, on the same beat and for the same reason: it is the
+       pass's, the hand-over carries its mirror, and until this line it was only
+       ever built by the GL composite asking for its texture name. */
+    /* `tagpu_pk_shd` DEREFERENCES ITS ARGUMENT -- it reads `p->shd_len` with no
+       null test of its own -- and a frame with no packet is ordinary (the shell
+       before the first publish). NULL is a legitimate argument to `_want`: it
+       builds the LUT from our own computed ramp, exactly as `_texref` does on
+       the GL lane when the engine's table has not arrived. */
+    tagpu_r3d_lut_want(f->packet ? tagpu_pk_shd(f->packet) : NULL);
     /* THE UNIT ARRAY IS NOT READ HERE ANY MORE, AND THAT IS WHAT LANDING 3 IS
        (cross-thread-engine-reads.md §5 row 2). This pass used to load `begin`
        and `end` as an unsynchronised pair: the level teardown 0x485980 frees
