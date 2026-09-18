@@ -81,7 +81,6 @@
 #include "tagpu_overlay.h"
 #include "tagpu_pal.h"
 #include "tagpu_surf.h"                    /* the one resolution of the presented palette */
-#include "tagpu_abshot.h"            /* G19f: the GL half of the Phase G A/B */
 #include "tagpu_vk.h"                 /* tagpu_vk_owns_present, tagpu_vk_ab_arm:
                                          which lane this is, and the A/B's arming */
 #include "opengl_utils.h"
@@ -2716,40 +2715,34 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
            roadmap's A/B shape). The Vulkan lane captures the frame this flag
            arrived on rather than whichever one its own poll landed on --
            `mir_finish` hands it over with the ops. */
-        TAGPU_ABSHOT shot;
         int taking = s_ab && !s_abDone;
-        /* THE VULKAN HALF IS ARMED BY ITS OWN UNLINK, NOT BY THE GL CAPTURE
-           REACHING THE DISK. The claim below used to be `wrote ? 1 : 0`, and
-           on a lane that draws no GL there is no capture to write -- so the
-           Vulkan half could never fire and this pass could not be measured at
-           all. `tagpu_vk_ab_arm` is the shape the five world passes took in
-           4b-1: it unlinks the target and grants the claim only when the file
-           is gone, so a stale capture is never paired with a fresh one. The GL
-           lane needs BOTH -- its own write and that unlink.
-           [The vulkan-only plan, landing 4b-3.] */
-        const int gl_draws = !tagpu_vk_owns_present();
-        if (taking && gl_draws) tagpu_abshot_begin(&shot, 0);
+        /* THE VULKAN HALF IS ARMED BY ITS OWN UNLINK. The claim below used to
+           be `wrote ? 1 : 0` -- true only when a GL capture had reached the
+           disk -- and on a lane that draws no GL there is no capture to write,
+           so the Vulkan half could never fire and this pass could not be
+           measured at all. `tagpu_vk_ab_arm` is the shape the five world passes
+           took in 4b-1: it unlinks the target and grants the claim only when the
+           file is gone, so a stale capture is never paired with a fresh one.
+           [The vulkan-only plan, landing 4b-3; the GL half it used to need as
+           well went in 4d-2, with route D.] */
         draw_layer(f);
         if (taking) {
-            /* the claim is made only when the capture reached the disk: on any
-               failure the PREVIOUS run's _gl.ppm is still lying there, and a
-               Vulkan half claimed anyway would be diffed against a capture of a
-               different frame -- tagpu_abshot.h */
             s_abDone = 1;
-            /* THE CLAIM IS THIS FRAME'S OR NOBODY'S. It used to be set here and
-               cleared only inside `mir_finish`, so a frame that published no
+            /* THE A/B CLAIM, which is all that is left of it. Until landing 4d-2
+               this pass also captured a GL half (`tagpu_abshot.c`) and, where the
+               GL lane drew, claimed the Vulkan one only if that half had reached
+               the disk. Route D went in 4d-1 and the GL half had nothing to pair
+               with. `tagpu_vk_ab_arm` unlinks the target `_vk.ppm` at the instant
+               the claim latches, which is what makes the file on the disk this
+               arming's; diff it against a capture from another BUILD.
+
+               THE CLAIM IS STILL THIS FRAME'S OR NOBODY'S. It used to be set here
+               and cleared only inside `mir_finish`, so a frame that published no
                record carried the flag forward and the two lanes captured
-               DIFFERENT frames -- which is the one thing the "one lever, one
-               frame" rule exists to prevent, and it is why several captures in
-               the first measuring session would not pair.
-               [FOUND 2026-09-16, the landing review.] */
-            if (gl_draws) {
-                int wrote = tagpu_abshot_end(&shot, AB_OUT, "gui");
-                int fresh = tagpu_vk_ab_arm("gui");
-                s_abFrame = wrote && fresh;
-            } else {
-                s_abFrame = tagpu_vk_ab_arm("gui");
-            }
+               DIFFERENT frames -- the one thing the "one lever, one frame" rule
+               exists to prevent, and why several captures in the first measuring
+               session would not pair. [FOUND 2026-09-16, the landing review.] */
+            s_abFrame = tagpu_vk_ab_arm("gui");
         }
     }
     mir_finish(f);          /* G19f: close and publish the frame's record */

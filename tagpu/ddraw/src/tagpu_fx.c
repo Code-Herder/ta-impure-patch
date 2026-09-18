@@ -61,7 +61,6 @@
 #include "tagpu_fogwide.h"
 #include "tagpu_packet.h"
 #include "tagpu_native.h"   /* tagpu_native_foglut/scissor_on, for the hand-over */
-#include "tagpu_abshot.h"   /* the GL half of the Phase G A/B */
 #include "tagpu_vk.h"       /* tagpu_vk_armed(): whether to pay for the mirror */
 
 
@@ -1210,8 +1209,6 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex,
        by name and captures nothing. [tagpu_vk_world.h.] */
 
     if (gl_draws) {
-        TAGPU_ABSHOT shot;
-        shot.live = 0;
         glUseProgram(s_prog);
         x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
         glUniform1i(s_uFog, (v->fogMode & 1) | 2);   /* effects hide in grey */
@@ -1256,8 +1253,6 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex,
            draw, because a world pass CLIPPED to the viewport is the pass and an
            unclipped one is something else. One frame, and the player sees it. */
         {
-            if (taking) tagpu_abshot_begin(&shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR |
-                                                  TAGPU_ABSHOT_TOPDOWN);
 
             /* only the under-layers can sit behind a stamped feature row: the
                scaffold fetch is paid by that draw alone */
@@ -1275,24 +1270,19 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex,
             first += s_nv[B_FLASH];
             if (s_nv[B_SPRITES]) x_glDrawArrays(GL_TRIANGLES, first, s_nv[B_SPRITES]);
 
-            if (taking) {
-                /* the Vulkan half is claimed only on a GL half that reached the
-                   disk -- see tagpu_abshot.h; `s_abDone` latches either way */
-                /* AND ON THE TARGET HAVING BEEN UNLINKED, as every other ported
-                   pass claims. This one was missed, so on route D the fx Vulkan
-                   target was never unlinked and a fresh `_gl.ppm` could pair
-                   with a stale `_fx_vk.ppm` -- the exact failure the other four
-                   cite as their reason. [FROM THE 4b-2 LANDING REVIEW.] */
-                int wrote = tagpu_abshot_end(&shot, ABOUT, "fx");
-                int fresh = tagpu_vk_ab_arm("fx");
-                s_abDone = 1;
-                s_abFrame = wrote && fresh;
-            }
         }
         x_glDepthMask(GL_TRUE);
-    } else if (taking) {
-        /* AND ON THE LANE WITH NO GL HALF, THE INTENT IS THE CLAIM --
-           tagpu_abshot.h has the whole argument. */
+    }
+    if (taking) {
+        /* THE A/B CLAIM, which is all that is left of it. Until landing 4d-2 this
+           pass also captured a GL half (`tagpu_abshot.c`) and claimed the Vulkan one
+           only when that half had reached the disk -- route D gave the two lanes a
+           window each, so one frame could be photographed from both sides and diffed.
+           Route D went in 4d-1, the GL half had nothing left to pair with, and it went
+           too. What the lever does now is claim the VULKAN capture: `tagpu_vk_ab_arm`
+           unlinks the target `_vk.ppm` at the instant the claim latches, which is what
+           makes the file on the disk this arming's rather than an earlier run's. Diff
+           it against a capture taken from another BUILD. */
         s_abDone = 1;
         s_abFrame = tagpu_vk_ab_arm("fx");
     }

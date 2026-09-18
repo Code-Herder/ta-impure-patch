@@ -86,7 +86,6 @@
 #include "tagpu_render3do.h"
 #include "tagpu_classicpp.h"
 #include "tagpu_shadow.h"
-#include "tagpu_abshot.h"  /* the GL half of the Phase G A/B */
 #include "tagpu_vk.h"      /* tagpu_vk_armed(): whether to publish at all */
 #include "tagpu_pal.h"
 #include "tagpu_posebake.h"
@@ -286,7 +285,6 @@ static int             s_fogCopyCells;
 #define PD_ABFILE "tagpu_posedraw.ab"
 #define PD_ABOUT  "tagpu_posedraw_gl.ppm"
 static int          s_ab, s_abDone, s_abFrame;
-static TAGPU_ABSHOT s_shot;
 
 /* Grow one of the three arenas. A failure is not an error: the frame simply
    hands nothing over and the Vulkan pass draws nothing, which is a pass that
@@ -1009,15 +1007,10 @@ static void pd_begin(const TAGPU_PDVIEW* v, int ghostWindow)
            the world viewport and measuring them unclipped measures a pass the
            player never sees. */
         }
-        if (!ghostWindow && s_recording && s_ab && !s_abDone) {
+        /* THE ARMING, and since landing 4d-2 that is the whole of it -- there
+           is no GL half to black the frame for. */
+        if (!ghostWindow && s_recording && s_ab && !s_abDone)
             s_abTaking = 1;
-            /* `tagpu_abshot_begin` is GL too, though it is not spelled `gl*`:
-               it clears the frame and saves the state it moves. On the
-               vulkan-only lane there is no GL half to take. */
-            if (gl_draws)
-                tagpu_abshot_begin(&s_shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR |
-                                            TAGPU_ABSHOT_TOPDOWN);
-        }
     }
     /* THE PROGRAM AND ITS UNIFORMS ARE GL. Everything above -- the
        recording window (`s_recording = s_mirrorWant`) and the A/B's arming --
@@ -1186,17 +1179,15 @@ void tagpu_posedraw_end(void)
     if (s_abTaking) {
         s_abTaking = 0;
         s_abDone = 1;
-        /* AND ON THE TARGET HAVING BEEN UNLINKED, armed on both lanes -- and
-           WHERE THERE IS NO GL HALF THE INTENT IS THE CLAIM, as in every other
-           ported pass: `tagpu_abshot_end` is not merely refused there, it is
-           never called. tagpu_abshot.h has the whole argument. */
-        if (gl_draws) {
-            int wrote = tagpu_abshot_end(&s_shot, PD_ABOUT, "posedraw");
-            int fresh = tagpu_vk_ab_arm("posedraw");
-            s_abClaim = wrote && fresh;
-        } else {
-            s_abClaim = tagpu_vk_ab_arm("posedraw");
-        }
+        /* THE A/B CLAIM, which is all that is left of it. Until landing 4d-2
+           this pass also captured a GL half (`tagpu_abshot.c`) and, where the GL
+           lane drew, claimed the Vulkan one only if that half had reached the
+           disk -- route D gave the two lanes a window each. Route D went in
+           4d-1 and the GL half had nothing to pair with. `tagpu_vk_ab_arm`
+           unlinks the target `_vk.ppm` at the instant the claim latches, which
+           is what makes the file on the disk this arming's rather than an
+           earlier run's; diff it against a capture from another BUILD. */
+        s_abClaim = tagpu_vk_ab_arm("posedraw");
     }
 
     /* PUBLISHED LAST, with the counts this window ended with. A frame that

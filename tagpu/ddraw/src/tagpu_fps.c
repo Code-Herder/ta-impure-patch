@@ -69,7 +69,6 @@
 #include "opengl_utils.h"
 #include "tagpu_fps.h"
 #include "tagpu_text.h"
-#include "tagpu_abshot.h"
 #include "tagpu_vk.h"      /* tagpu_vk_owns_present: is there a GL lane at all? */
 
 #define TRIGGER   "tagpu_fps.on"
@@ -363,9 +362,6 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
        and they are exactly the kind of "harmless today" that an A/B taken in
        six months would be reading. */
     if (gl_draws) {
-        TAGPU_ABSHOT shot;
-        shot.live = 0;
-        if (taking) tagpu_abshot_begin(&shot, 0u);
 
         glUseProgram(s_prog);
         x_glUniform2f(s_uFrame, (float)f->game_width, (float)f->game_height);
@@ -379,25 +375,17 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
         x_glDrawArrays(GL_TRIANGLES, 0, nv);
         glBindVertexArray(0);
 
-        if (taking) {
-            /* THE VULKAN HALF IS CLAIMED ONLY ON A GL HALF THAT REACHED THE
-               DISK. `end` returns 0 when `begin` never ran or the capture
-               failed, and the _gl.ppm of an earlier run is still there -- so
-               claiming anyway would diff two different frames and call a
-               capture failure a port failure. `s_abDone` latches either way:
-               a lever that cannot capture must not retry every frame. */
-            int wrote = tagpu_abshot_end(&shot, ABOUT, "fps");
-            int fresh = tagpu_vk_ab_arm("fps");
-            s_abDone = 1;
-            s_abFrame = wrote && fresh;
-        }
-    } else if (taking) {
-        /* AND ON THE LANE WITH NO GL HALF, THE INTENT IS THE CLAIM. The rule
-           above reads a capture that is not merely refused there but never
-           attempted, so it would refuse every capture on the only lane that
-           presents. What it was buying -- that a `_vk.ppm` on the disk belongs
-           to this arming -- tagpu_vk.c establishes by unlinking the target the
-           instant a claim is seen. tagpu_abshot.h has the whole argument. */
+    }
+    if (taking) {
+        /* THE A/B CLAIM, which is all that is left of it. Until landing 4d-2 this
+           pass also captured a GL half (`tagpu_abshot.c`) and claimed the Vulkan one
+           only when that half had reached the disk -- route D gave the two lanes a
+           window each, so one frame could be photographed from both sides and diffed.
+           Route D went in 4d-1, the GL half had nothing left to pair with, and it went
+           too. What the lever does now is claim the VULKAN capture: `tagpu_vk_ab_arm`
+           unlinks the target `_vk.ppm` at the instant the claim latches, which is what
+           makes the file on the disk this arming's rather than an earlier run's. Diff
+           it against a capture taken from another BUILD. */
         s_abDone = 1;
         s_abFrame = tagpu_vk_ab_arm("fps");
     }

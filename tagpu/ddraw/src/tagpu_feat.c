@@ -75,7 +75,6 @@
 #include "tagpu_classicpp.h"
 #include "tagpu_native.h"
 #include "tagpu_packet.h"   /* the frame packet: the view, the tables (landing 3) */
-#include "tagpu_abshot.h"   /* the GL half of the Phase G A/B */
 #include "tagpu_vk.h"       /* tagpu_vk_armed(): whether to pay for the mirror */
 
 /* ---- engine layout (terrain-depth.md appendix, byte-confirmed) ----
@@ -1193,8 +1192,6 @@ void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex)
        by name and captures nothing. [tagpu_vk_world.h.] */
 
     if (gl_draws) {
-        TAGPU_ABSHOT shot;
-        shot.live = 0;
         glUseProgram(s_prog);
         x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
         glUniform1i(s_uFog, v->fogMode & 1);        /* features darken in grey */
@@ -1236,8 +1233,6 @@ void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex)
            the pass and an unclipped one is something else.
            One frame, and the player sees it: the terrain drawn before the clear is
            missing from it. That is what a measuring lever costs. */
-        if (taking) tagpu_abshot_begin(&shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR |
-                                              TAGPU_ABSHOT_TOPDOWN);
 
         /* shadows are ground decals: they test depth but never write it, so a
            feature's own body is not fighting its shadow and nothing is occluded
@@ -1251,23 +1246,17 @@ void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex)
         if (s_nv[B_BODY])
             x_glDrawArrays(GL_TRIANGLES, s_nv[B_SHADOW], s_nv[B_BODY]);
 
-        if (taking) {
-            /* the Vulkan half is claimed only on a GL half that reached the disk
-               -- see tagpu_abshot.h; `s_abDone` latches either way.
-               AND on the target having been unlinked, which is armed here even
-               when the GL half failed: a stale `_vk.ppm` beside a stale
-               `_gl.ppm` is the worse of the two, and both halves have to be this
-               arming's for the pair to mean anything. */
-            int wrote = tagpu_abshot_end(&shot, ABOUT, "feat");
-            int fresh = tagpu_vk_ab_arm("feat");
-            s_abDone = 1;
-            s_abFrame = wrote && fresh;
-        }
-
-    } else if (taking) {
-        /* AND ON THE LANE WITH NO GL HALF, THE INTENT IS THE CLAIM --
-           tagpu_abshot.h has the whole argument, and `tagpu_vk_ab_arm` is what
-           makes a file on the disk this arming's. */
+    }
+    if (taking) {
+        /* THE A/B CLAIM, which is all that is left of it. Until landing 4d-2 this
+           pass also captured a GL half (`tagpu_abshot.c`) and claimed the Vulkan one
+           only if that half had reached the disk -- route D gave the two lanes a window
+           each, so a frame could be photographed from both sides and diffed. Route D
+           went in 4d-1 and the GL half had nothing to pair with, so it went too. What
+           the lever does now is claim the VULKAN capture: `tagpu_vk_ab_arm` unlinks the
+           target `_vk.ppm` at the instant the claim latches, which is what makes the
+           file on the disk this arming's and not an earlier run's. Diff it against a
+           capture from another BUILD. */
         s_abDone = 1;
         s_abFrame = tagpu_vk_ab_arm("feat");
     }

@@ -105,7 +105,6 @@
 #include "tagpu_text.h"
 #include "tagpu_glsl.h"
 #include "tagpu_pal.h"
-#include "tagpu_abshot.h"
 #include "tagpu_vk.h"      /* tagpu_vk_owns_present, tagpu_vk_ab_arm */  /* the GL half of the Phase G A/B */    /* tagpu_pal_live/serial, for the hand-over */
 #include "tagpu_packet.h"   /* the frame packet: the view, the tables (landing 3) */
 
@@ -197,7 +196,6 @@ static unsigned s_armCheck = 0;
 #define MK_ABFILE  "tagpu_mark.ab"
 #define MK_ABOUT   "tagpu_mark_gl.ppm"
 static int s_ab, s_abDone, s_abFrame;
-static TAGPU_ABSHOT s_abShot;
 static int s_abTaking;
 
 int tagpu_mark_armed(unsigned frame_counter)
@@ -1078,13 +1076,9 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
            the configuration it actually ships in. The refusal moved to the lane
            that can see the target: if there is none that frame, tagpu_vk.c says so
            by name and captures nothing. [tagpu_vk_world.h.] */
+        /* THE ARMING, and since landing 4d-2 that is the whole of it -- there
+           is no GL half to black the frame for. */
         s_abTaking = taking;
-        /* `tagpu_abshot_begin` is GL too, though it is not spelled `gl*`: it
-           clears the frame and saves the state it moves. On the vulkan-only
-           lane it would refuse politely and log, which is noise about a capture
-           nobody asked for on that lane. */
-        if (taking && gl_draws)
-            tagpu_abshot_begin(&s_abShot, TAGPU_ABSHOT_SCISSOR | TAGPU_ABSHOT_TOPDOWN);
     }
 
     total = BARBASE + s_nbar;
@@ -1199,20 +1193,15 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     }
 
     if (s_abTaking) {
-        /* the Vulkan half is claimed only on a GL half that reached the disk --
-           tagpu_abshot.h's rule; `s_abDone` latches either way. AND on the
-           target having been unlinked, which is armed on both lanes: a stale
-           `_vk.ppm` beside a stale `_gl.ppm` is the worse of the two.
-           WHERE THERE IS NO GL HALF THE INTENT IS THE CLAIM, as in every other
-           ported pass -- `tagpu_abshot_end` is not merely refused on that lane,
-           it is never called. */
-        if (gl_draws) {
-            int wrote = tagpu_abshot_end(&s_abShot, MK_ABOUT, "mark");
-            int fresh = tagpu_vk_ab_arm("mark");
-            s_abFrame = wrote && fresh;
-        } else {
-            s_abFrame = tagpu_vk_ab_arm("mark");
-        }
+        /* THE A/B CLAIM, which is all that is left of it. Until landing 4d-2
+           this pass also captured a GL half (`tagpu_abshot.c`) and, where the GL
+           lane drew, claimed the Vulkan one only if that half had reached the
+           disk -- route D gave the two lanes a window each. Route D went in
+           4d-1 and the GL half had nothing to pair with. `tagpu_vk_ab_arm`
+           unlinks the target `_vk.ppm` at the instant the claim latches, which
+           is what makes the file on the disk this arming's rather than an
+           earlier run's; diff it against a capture from another BUILD. */
+        s_abFrame = tagpu_vk_ab_arm("mark");
         s_abDone = 1;
         s_abTaking = 0;
     }

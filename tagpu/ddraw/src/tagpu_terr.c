@@ -53,7 +53,6 @@
 #include "tagpu_native.h"
 #include "tagpu_shadow.h"
 #include "tagpu_zoom.h"
-#include "tagpu_abshot.h"   /* the GL half of the Phase G A/B */
 #include "tagpu_vk.h"       /* tagpu_vk_armed(): whether to pay for the mirrors */
 
 /* ---- engine layout (terrain-depth.md 1, byte-confirmed) ---- */
@@ -1905,32 +1904,24 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
                One frame, and the player sees it: nothing is drawn before terrain,
                so what is missing from it is the engine's own frame underneath. */
             {
-                TAGPU_ABSHOT shot;
-                shot.live = 0;
-                if (taking) tagpu_abshot_begin(&shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR |
-                                                      TAGPU_ABSHOT_TOPDOWN);
 
                 /* opaque, and the far plane of the frame: depth writes ON, no
                    blending needed (the FBO is premultiplied and terrain's alpha is
                    1 everywhere) */
                 x_glDrawArraysInstanced(GL_TRIANGLES, 0, 6, s_ncell);
 
-                if (taking) {
-                    /* the Vulkan half is claimed only on a GL half that reached
-                       the disk -- see tagpu_abshot.h; `s_abDone` latches either
-                       way. AND on the target having been unlinked, which is armed
-                       here even when the GL half failed: a stale `_vk.ppm` beside
-                       a stale `_gl.ppm` is the worse of the two. */
-                    int wrote = tagpu_abshot_end(&shot, ABOUT, "terr");
-                    int fresh = tagpu_vk_ab_arm("terr");
-                    s_abDone = 1;
-                    s_abFrame = wrote && fresh;
-                }
             }
-        } else if (taking) {
-            /* AND ON THE LANE WITH NO GL HALF, THE INTENT IS THE CLAIM --
-               tagpu_abshot.h has the whole argument, and `tagpu_vk_ab_arm` is
-               what makes a file on the disk this arming's. */
+        }
+        if (taking) {
+            /* THE A/B CLAIM, which is all that is left of it. Until landing 4d-2 this
+               pass also captured a GL half (`tagpu_abshot.c`) and claimed the Vulkan one
+               only when that half had reached the disk -- route D gave the two lanes a
+               window each, so one frame could be photographed from both sides and diffed.
+               Route D went in 4d-1, the GL half had nothing left to pair with, and it went
+               too. What the lever does now is claim the VULKAN capture: `tagpu_vk_ab_arm`
+               unlinks the target `_vk.ppm` at the instant the claim latches, which is what
+               makes the file on the disk this arming's rather than an earlier run's. Diff
+               it against a capture taken from another BUILD. */
             s_abDone = 1;
             s_abFrame = tagpu_vk_ab_arm("terr");
         }

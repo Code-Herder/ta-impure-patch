@@ -32,7 +32,6 @@
 #include "tagpu_scaffold.h"
 #include "tagpu_zoom.h"      /* the predicted eye every pass draws from */
 #include "tagpu_packet.h"    /* the true viewport, from this frame's packet */
-#include "tagpu_abshot.h"   /* the GL half of the Phase G A/B */
 #include "tagpu_vk.h"        /* tagpu_vk_owns_present: is there a GL lane at all? */
 
 /* ---- engine layout (terrain-depth.md, binary-verified) ----
@@ -530,7 +529,6 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
     int taking = s_ab && !s_abDone;
 
     if (gl_draws) {
-        TAGPU_ABSHOT shot;
 
         x_glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, s_tex);
@@ -541,18 +539,6 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
         } else
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, vw, vh, GL_RED, GL_UNSIGNED_BYTE, s_buf);
         serr("s-upload");
-
-        /* THE FRAME GOES BLACK FIRST WHEN THE A/B IS ARMED, and only then. What
-           is being compared is THIS PASS's pixels, so everything that is not
-           this pass has to leave the frame -- and unlike the readout, which is
-           the last thing drawn, a world pass has the rest of the frame under
-           it. The clear is therefore here, immediately before the draw, and the
-           readback is immediately after it, before the native pass and the UI
-           layer have run. One frame, and the player sees it: the terrain drawn
-           before the clear is missing from it. That is what a measuring lever
-           costs. */
-        shot.live = 0;
-        if (taking) tagpu_abshot_begin(&shot, 0u);
 
         glUseProgram(s_prog);
         glBindVertexArray(s_vao);
@@ -568,40 +554,17 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
         glUseProgram(0);
         serr("s-quad");
 
-        if (taking) {
-            /* the Vulkan half is claimed only on a GL half that reached the disk
-               -- see tagpu_abshot.h; `s_abDone` latches either way.
-               AND ON THE TARGET HAVING BEEN UNLINKED, which is armed here even
-               when the GL half failed: leaving a stale `_vk.ppm` beside a stale
-               `_gl.ppm` is the worse of the two, and both halves have to be
-               this arming's for the pair to mean anything. */
-            int wrote = tagpu_abshot_end(&shot, ABOUT, "scaffold");
-            int fresh = tagpu_vk_ab_arm("scaffold");
-            s_abDone = 1;
-            s_abFrame = wrote && fresh;
-        }
-    } else if (taking) {
-        /* THE ARMING, ON THE LANE WHERE THERE IS NO GL HALF TO ARM IT.
-           tagpu_abshot.h's rule -- claim the Vulkan half only on a GL capture
-           that reached the disk -- is there because a refused GL write leaves
-           the PREVIOUS run's `_gl.ppm` lying on the disk, and a Vulkan half
-           diffed against that is a capture of a different frame reported as a
-           port failure: an oracle failure wearing a port failure's clothes.
-
-           On `renderer=vulkan` there is no GL half at all, so `wrote` would be
-           0 every frame and that rule would refuse every capture on the only
-           lane this landing can measure. The oracle here is not the two lanes
-           of one frame; it is `_vk.ppm` from THIS build against `_vk.ppm` from
-           the build before it (vulkan-only-plan.md, landing 4), and no
-           `_gl.ppm` enters it.
-
-           WHAT THE RULE WAS BUYING IS KEPT BY CONSTRUCTION INSTEAD, and on both
-           lanes: tagpu_vk.c unlinks the target `_vk.ppm` the instant a claim is
-           seen, so a file that is there afterwards was written by this arming
-           and a refused capture leaves nothing to diff. That is a fact about
-           the filesystem rather than an argument about ordering -- which is all
-           the old rule could be, once the half it was reading stopped
-           existing. */
+    }
+    if (taking) {
+        /* THE A/B CLAIM, which is all that is left of it. Until landing 4d-2 this
+           pass also captured a GL half (`tagpu_abshot.c`) and claimed the Vulkan one
+           only when that half had reached the disk -- route D gave the two lanes a
+           window each, so one frame could be photographed from both sides and diffed.
+           Route D went in 4d-1, the GL half had nothing left to pair with, and it went
+           too. What the lever does now is claim the VULKAN capture: `tagpu_vk_ab_arm`
+           unlinks the target `_vk.ppm` at the instant the claim latches, which is what
+           makes the file on the disk this arming's rather than an earlier run's. Diff
+           it against a capture taken from another BUILD. */
         s_abDone = 1;
         s_abFrame = tagpu_vk_ab_arm("scaffold");
     }
