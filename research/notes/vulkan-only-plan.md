@@ -517,6 +517,36 @@ would not have shown up as a failure — it would have shown up as three landing
      `command -v glslang` says MISSING and means nothing. `tools/spirv-gen.py --check` reports
      *47 shaders, 32 programs, headers current*.
 
+     **WHERE 4c-1's PIECES HAVE TO LIVE, settled by the contracts rather than by preference
+     [2026-09-18, after the shader landed]:**
+
+     * **Not in the pass.** `tagpu_vk_pass.h` is explicit — *"A PASS READS NO ENGINE STATE. Every
+       value it needs arrives as an argument"*, and no pass file may go on
+       `tagpu/ddraw/thread-split.allow`. Standing constraint 3 adds that surface, swapchain,
+       acquire and present live in `tagpu_vk.c` and nothing else may know a window exists.
+     * **But the read itself is not an engine read.** `g_ddraw.primary->surface` is the FORK's
+       DirectDraw object, not the game's memory at an absolute address — which is why
+       `tagpu_gui_surf.c` already reads it in `mir_finish` and is not on the allow-list. So this
+       needs no allow-list entry, and the list stays default-deny and shrinking.
+     * **`render_vk.c` is the home**, because it is the mirror of `render_ogl.c` — the file that
+       owns `g_ogl.surface_tex_ids` and does exactly this upload for the GL lane. Its own comment
+       at `:214-221` already says so: *"It is the engine's own 8-bit frame as an R8 index texture,
+       uploaded by the GL backend before any pass runs; the backend taking that upload over is
+       4c, and until then `tagpu_terrown.c` and anything else reading it has nothing."*
+     * **`f.surface_tex` cannot carry it.** That field is a GL texture NAME and stays 0 on route
+       E by contract (0 is what the fork already hands a non-8bpp frame). The Vulkan hand-over is
+       its own — bytes, width, height, pitch and the palette — from `render_vk.c` to the seam to
+       the pass, in the two-phase `prepare`/`record` shape every ported pass uses.
+     * **The descriptor layout is already fixed by the generated header:** vertex set 0 binding 0,
+       std140, 64 bytes (`mat4 MVPMatrix`); fragment set 0 binding 40 `sampler2D Texture` and
+       binding 41 `sampler2D PaletteTexture`; attributes at locations 0/1/2, the numbers
+       `ATTR_LOCATIONS` chose — **so the pass's vertex buffer must bind to match**, which is the
+       obligation that table's comment names.
+     * **The draw goes inside the render pass, not in place of the clear.**
+       `vkCmdClearColorImage` stays: it is what covers the letterbox and the frame that has no
+       surface to draw. The blit is the first draw after `vkCmdBeginRenderPass`, which is where
+       a pipeline can run at all.
+
      **Proposed split, on the seam those facts have — not yet confirmed by doing it:** *4c-1*
      TA's surface (the bottom layer; closes `tagpu_gui.off`), *4c-2* the `ss×` target and its
      resolve (closes `ss=2`). They are independent — one changes what is underneath the world,
