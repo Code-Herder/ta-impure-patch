@@ -240,6 +240,14 @@ static void rect_box(void* e, int kind)
     s = surf_of_ctx(ctx);
     if (s) clip_ctx(ctx, &l, &t, &r, &b);
     op_add(kind, s, l, t, r, b);
+    /* AND THE COLOUR, on the op `op_add` just recorded -- the same decoration
+       `gaf_box` and `before_copy` make. The third argument is the engine's
+       `colour`, and only its low byte reaches the surface (see `OP::col`), so
+       the cast is the engine's own truncation rather than a narrowing of ours.
+       Every early return above leaves `s_lastOp` NULL, so a clipped-away or
+       surface-less op cannot write this into the PREVIOUS one.
+       [The vulkan-only plan, landing 8a.] */
+    if (s_lastOp) s_lastOp->col = (unsigned char)ARG(e, 3);
 }
 static int __cdecl before_bar(void* e)  { if (on_game_thread()) rect_box(e, OP_BAR);  return 0; }
 /* 0x4BF4D0: a framed box (three clipped fills), (ctx, RECT*, colour) ret 0xC — what the

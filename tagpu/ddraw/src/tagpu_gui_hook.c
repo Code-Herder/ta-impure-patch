@@ -362,6 +362,16 @@ typedef struct OP {
        `frame` carries the font object and `dx`/`dy` the x/y it was given. */
     unsigned soff; unsigned short slen;
     unsigned char fg, bg, tr;                   /* text: 0x4CCF60's three colours */
+    /* THE FILL COLOUR, for the ops that are a solid rectangle of one palette
+       index rather than a box of bytes. ONE BYTE IS THE WHOLE OF IT, and that
+       is the engine's own width rather than a choice of ours: `DrawBar 0x4BF6F0`
+       and its three siblings hand their `colour` argument to `0x4CCDEA`, which
+       reads `BYTE PTR [ebp+0x10]` on both of its paths and nothing wider -- so
+       `0x4AA912`'s `0x4BF4D0(panel+0xBC, rect, -0x18)`, which looks like a
+       special encoding, is palette index 232 and no more.
+       [DISASSEMBLED 2026-09-18; exe-reverse-engineering.md has both paths.
+       The vulkan-only plan, landing 8a.] */
+    unsigned char col;
     /* AND THE FONT IS RESOLVED AT OBSERVE TIME TOO (G19f-8), for the reason
        the sprite's plane is: `publish` runs up to CENSUS_MS after the draw and
        the font object is engine memory whose lifetime nothing here can state.
@@ -1468,6 +1478,20 @@ static void publish(unsigned flipSurf)
                The count comes back from the same walk, which is what the
                consumer needs to find the string behind the records. */
             o->gcount = (unsigned short)glyph_block_mark(op->fid, s_glyBuf + op->gboff, op->gblen);
+            pub_commit();
+            continue;
+        }
+        /* A SOLID RECTANGLE IS A COLOUR AND A BOX. [The vulkan-only plan,
+           landing 8a.] `DrawBar 0x4BF6F0` fills its rect with one palette index
+           through `0x4CCDEA`, so publishing the box's BYTES -- which is what
+           `as_pixels` below does, read out of the surface at the FLIP -- was
+           both larger than the op and later than it: anything drawn over the
+           box in between is what those bytes held. `op->col` was taken while the
+           engine was inside the call. */
+        if (op->kind == OP_BAR) {
+            o = pub_op(PK_BAR, s->base); if (!o) return;
+            o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
+            o->fg = op->col;
             pub_commit();
             continue;
         }

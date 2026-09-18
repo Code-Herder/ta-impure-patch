@@ -174,6 +174,10 @@ static int    s_palUpValid;             /* ...and whether it holds one at all   
 static int    s_on = 0, s_strict = 0;
 static DWORD  s_lastPoll = 0;
 static unsigned s_drained = 0, s_sprites = 0, s_copies = 0, s_pixels = 0, s_seeds = 0, s_clears = 0, s_lostSprites = 0;
+/* SOLID RECTANGLES REPLAYED AS GEOMETRY, counted beside `pixels=` so the two
+   can be read against each other: every one of these used to be a `PK_PIXELS`
+   box of arena bytes. [The vulkan-only plan, landing 8a.] */
+static unsigned s_bars = 0;
 static int    s_skipToReset = 0;        /* after a GL context change: the queue's ops up to the producer's next
                                            RESET were published against twins and an atlas that died with the
                                            context — take their arena bytes, apply nothing (see drain) */
@@ -1204,6 +1208,25 @@ static void twin_clear(TWIN* t, const TAGPU_PUBOP* o)
     s_clears++;
 }
 
+/* THE BOX, ONE PALETTE INDEX, FULLY COVERED. `twin_clear`'s shape with two
+   differences: the index goes in the RED channel (the twin is RG -- index and
+   coverage, see `twin_upload`) and GREEN is 1, because this op COVERS what it
+   fills where a clear uncovers it. [The vulkan-only plan, landing 8a.] */
+static void twin_fill(TWIN* t, const TAGPU_PUBOP* o, unsigned char idx)
+{
+    /* PURE GL, for `twin_clear`'s reason: this puts pixels in a GL object and
+       feeds nothing the Vulkan twin is told, which is the mirror op beside the
+       call. On a lane with no GL context there is nothing here to do. */
+    if (tagpu_vk_owns_present()) return;
+    glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
+    glViewport(0, 0, t->w, t->h);
+    glEnable(GL_SCISSOR_TEST);
+    x_glScissor(o->l, o->t, o->r - o->l + 1, o->b - o->t + 1);
+    x_glClearColor((float)idx / 255.0f, 1.0f, 0.0f, 0.0f);
+    x_glClear(GL_COLOR_BUFFER_BIT);
+    x_glDisable(GL_SCISSOR_TEST);
+}
+
 static void twins_reset(void)
 {
     while (s_ntwins) twin_drop(&s_twins[0]);
@@ -1556,6 +1579,20 @@ static void drain(void)
                     if (!mir_bytes(g_guiq.arena + o->aoff, o->alen, &m->aoff)) s_mNOps--;
                 }
                 s_pixels++;
+            }
+            break;
+        case PK_BAR:
+            /* A SOLID RECTANGLE, filled with one palette index and fully
+               covered. No arena bytes to copy and none to run out of, which is
+               the whole reason it is not `PK_PIXELS` any more.
+               [The vulkan-only plan, landing 8a.] */
+            t = twin_find(o->surf);
+            if (t) {
+                TAGPU_GUIOP* m;
+                twin_fill(t, o, o->fg);
+                m = mir_op();
+                if (m) { m->kind = TAGPU_GUIOP_BAR; mir_box(m, o); m->fg = o->fg; }
+                s_bars++;
             }
             break;
         case PK_SPRITE: {
@@ -2779,8 +2816,8 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u gafnoplane=%u gafreseed=%u gafscratch=%u/%u/%u strrearm=%u glyscratch=%u/%u gfont=%u/%u/%u/%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u cursown=%d/%d,%d,held=%u fps=%.1f",
-                  s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_clears,
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u bars=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u gafnoplane=%u gafreseed=%u gafscratch=%u/%u/%u strrearm=%u glyscratch=%u/%u gfont=%u/%u/%u/%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u cursown=%d/%d,%d,held=%u fps=%.1f",
+                  s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_bars, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.gafnoplane, g_guiq.gafreseed, g_guiq.gafhigh, g_guiq.gaflost, g_guiq.gafbaddec, g_guiq.strrearm, g_guiq.glyhigh, g_guiq.glylost, pGlyphs, pResends, pRefused, pRecycles, g_guiq.stalls,
                   s_skipped, tagpu_pal_changes(), palDiff, palDiffAt, tagpu_pal_presented(),
                   tagpu_classicpp_on() ? 1 : 0, tagpu_classicpp_assets() ? 1 : 0,

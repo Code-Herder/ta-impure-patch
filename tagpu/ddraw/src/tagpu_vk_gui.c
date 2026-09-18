@@ -1753,6 +1753,11 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             ndraw++; nquad++;
             break;
         case TAGPU_GUIOP_CLEAR:
+        case TAGPU_GUIOP_BAR:
+            /* NEITHER NEEDS A DRAW SLOT: both are `vkCmdClearAttachments` over
+               a rect, so they cost no quad and no descriptor set and are not
+               counted against DRAW_MAX/QUAD_MAX. [BAR: the vulkan-only plan,
+               landing 8a.] */
             if (bw < 1 || bh < 1) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
             break;
         case TAGPU_GUIOP_FREE:
@@ -2209,7 +2214,8 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
            needs none open at all (a transfer and a layout change may not be
            recorded inside one) */
         if (o->kind == TAGPU_GUIOP_SPRITE || o->kind == TAGPU_GUIOP_COPY ||
-            o->kind == TAGPU_GUIOP_STRING || o->kind == TAGPU_GUIOP_CLEAR) {
+            o->kind == TAGPU_GUIOP_STRING || o->kind == TAGPU_GUIOP_CLEAR ||
+            o->kind == TAGPU_GUIOP_BAR) {
             TWIN* src = NULL;
             t = tw_find(o->surf);
             /* THE GL LANE HAD A TWIN AND WE DO NOT, WHICH IS THE DEFINITION OF
@@ -2284,19 +2290,32 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             if (o->kind == TAGPU_GUIOP_STRING) set_scissor(cb, 0, 0, t->w, t->h, t->w, t->h);
             else                               set_scissor(cb, o->l, o->t, bw, bh, t->w, t->h);
 
-            if (o->kind == TAGPU_GUIOP_CLEAR) {
-                /* THE GL LANE'S SCISSORED glClear TO COVERAGE 0 -- AND IT
+            if (o->kind == TAGPU_GUIOP_CLEAR || o->kind == TAGPU_GUIOP_BAR) {
+                /* CLEAR: THE GL LANE'S SCISSORED glClear TO COVERAGE 0 -- AND IT
                    CLEARS BOTH ATTACHMENTS ON A COLOUR TWIN, because
                    `glClear(GL_COLOR_BUFFER_BIT)` clears every buffer
                    `glDrawBuffers` named and `twin_colour` left that at two.
                    Clearing only the index here would leave restored colour
                    standing under a box the engine erased. */
+                /* BAR (landing 8a): the same rect, but the INDEX attachment
+                   takes the engine's palette index with coverage 1 instead of
+                   zeros -- `twin_fill` is the GL twin's half of exactly this.
+                   The colour attachment still goes to ZERO on both, and for the
+                   same reason: a solid engine fill has no restored art, so
+                   leaving the old colour standing would show it through a box
+                   the engine just painted over. The index is `o->fg`, one byte,
+                   because that is all `0x4CCDEA` reads of the engine's own
+                   colour argument (exe-reverse-engineering.md). */
                 VkClearAttachment ca[2];
                 VkClearRect cr;
                 int nca = t->colImg ? 2 : 1;
                 memset(ca, 0, sizeof ca); memset(&cr, 0, sizeof cr);
                 ca[0].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                 ca[0].colorAttachment = 0;
+                if (o->kind == TAGPU_GUIOP_BAR) {
+                    ca[0].clearValue.color.float32[0] = (float)o->fg / 255.0f;
+                    ca[0].clearValue.color.float32[1] = 1.0f;
+                }
                 ca[1].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                 ca[1].colorAttachment = 1;
                 cr.rect.offset.x = o->l; cr.rect.offset.y = o->t;

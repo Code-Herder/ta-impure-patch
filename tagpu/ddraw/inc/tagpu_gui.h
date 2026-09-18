@@ -187,7 +187,9 @@ enum {
     TAGPU_GUIOP_SPRITE,     /* a keyed GAF quad; the atlas rect is RESOLVED   */
     TAGPU_GUIOP_COPY,       /* twin -> twin, the source's box at (sl, st)     */
     TAGPU_GUIOP_RESET,      /* forget every twin                              */
-    TAGPU_GUIOP_STRING      /* TA's own glyphs, stamped into the twin         */
+    TAGPU_GUIOP_STRING,     /* TA's own glyphs, stamped into the twin         */
+    TAGPU_GUIOP_BAR         /* landing 8a: the box filled with palette index
+                               `fg`, fully covered. No arena bytes.            */
 };
 
 typedef struct TAGPU_GUIOP {

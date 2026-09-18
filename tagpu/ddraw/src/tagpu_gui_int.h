@@ -21,8 +21,15 @@ enum {
     PK_SPRITE,      /* a plain keyed GAF blit: frame identity, first sight carries its bytes */
     PK_COPY,        /* twin -> twin, the source's box at (l, t)               */
     PK_PIXELS,      /* the box's bytes follow in the arena (everything else)  */
-    PK_STRING       /* G17d: TA's own glyphs, stamped by us — the string        */
+    PK_STRING,      /* G17d: TA's own glyphs, stamped by us — the string        */
                     /* follows in the arena and the font/colours ride along     */
+    PK_BAR          /* landing 8a: a SOLID rectangle of one palette index --
+                       `fg` is the index, the box is `l,t,r,b` inclusive, and
+                       NOTHING follows in the arena. That last part is the point:
+                       as `PK_PIXELS` this op copied its whole box out of the
+                       surface, and did so AT THE FLIP, so anything drawn over it
+                       in between was what got published. A colour and a box are
+                       both smaller and correct. */
 };
 
 typedef struct TAGPU_PUBOP {
