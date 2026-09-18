@@ -1,0 +1,10 @@
+landing-review: 4d-2 (the GL capture half deleted)
+reviewer=dedicated read-only agent, effort=medium, range=main...HEAD at 700a203
+findings=8 high=0 medium=2 low=6 acted=8 recorded=0 rejected=0 fixes=edf85c4
+The deletion itself was clean on every mechanical question -- all eight passes'
+claim blocks verified reachable, correctly placed and latching as before, with
+-Wall -Wextra clean. What it found was contracts that outlived their subject:
+the published `ab` field's meaning in twelve headers, and the argument for
+`draw_surf && nclaim == 0` resting on a function this landing deleted. Both
+could have led a later session to drop a real guard. Re-verified: the capture
+still lands at 2048x1536.
