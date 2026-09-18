@@ -3370,80 +3370,44 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int terrOwned = tagpu_terrown_filled();
     if (nu == 0 && nfx == 0 && nfeat == 0 && nterr == 0 && !markOn && !terrOwned) return;
 
-    /* MOVED BELOW THE GATHER, not left at the top of the composite [4b-2]. The
-       per-unit array `pdu[]` and the vertex emission above are the UNIT pass's
-       gather, and they are pure CPU -- audited with the corrected regex: there
-       is not one GL call between the four world gathers and the early return
-       just above. Exiting before them left the unit pass no gather to hand
-       over; gating its 150 GL calls one by one would have been the wrong answer
-       to that, because its entry points are all called from the composite
-       BELOW, which this lane never reaches. They are already unreachable here.
-       What is missing is the RECORD, not a gate. */
-    /* THE VULKAN-ONLY LANE'S FRAME ENDS HERE, and it ends here rather than
-       threading a gate through the composite because it is a DIFFERENT frame.
-       Everything below this line is the GL world composite -- 103 GL calls in
-       eighteen runs: the unit geometry upload, the cast-shadow depth map, the
-       `ss x` FBO, the shadow and slant redraws, the nano wire pass, the key/fill
-       inversion against the engine's own surface and the resolve to the
-       drawable. None of it has a counterpart on this lane yet; the `ss` target
-       and TA's surface are 4c, and until then each ported pass draws itself into
-       the swapchain from its own hand-over.
-
-       SO THE HONEST SHAPE IS TWO EXITS, not one body with gates in it. The GL
-       path below is left byte for byte as it was -- which is what the phase's
-       standing rule asks ("a Phase G landing that moves a GL pixel has failed")
-       -- and this lane calls the passes that have been taught to hand over
-       without drawing, in the composite's own order, and stops.
-
-       THE PREDICATE IS THE COMPOSITE'S OWN, deliberately: `if (nterr)` is what
-       gates `tagpu_terr_render` below, so the two sites agree about when a pass
-       runs by using the same test rather than by being read together. Each
-       `*_render` also refuses on its own count, so this is belt and braces.
-
-       WHAT IS NOT DONE HERE, stated rather than left to be discovered: the
-       300-frame stats line at the end of the composite (posebake, posedraw and
-       the fill sequence) does not run on this lane, and neither does
-       `tagpu_zoom_publish_view` -- but that one could not run anyway, because
-       it is gated on `keyOn >= 0` and `keyOn` needs `f->surface_tex`, which is
-       0 until 4c gives this backend TA's surface. The input path therefore
-       stays 1:1 here, which is correct while nothing zoomed reaches the screen.
+    /* THE POSE VIEW IS THE GATHER'S, so it is built here and not inside the
+       composite where it used to sit. Every number in it comes from a local
+       assigned well above this line -- the viewport, `gw`/`gh`, `s_zoom`,
+       `depthScale`, `ss`, `scafOn`, the fog origin and the Classic++ light --
+       and none of it is GL. It is stored in `s_pv`, which already existed for
+       the build ghost's own dependency check, and BOTH lanes now read it from
+       there: this one to hand the unit pass over, the composite below to draw
+       it. Copying the twenty lines into the vulkan-only exit instead would
+       have been a second construction to drift from the first, which is the
+       failure this landing keeps finding elsewhere.
        [The vulkan-only plan, landing 4b-2.] */
-    if (!gl_draws) {
-        /* WHETHER TERRAIN IS CLIPPED TO THE VIEWPORT IS THE PASS'S DECISION AND
-           NOT GL'S, and this line is where that gets said on this lane. The
-           engine clips unit blits to the viewport rect and this pass matches it;
-           the hand-over carries that as `scissorOn` and the Vulkan twin's
-           `terr_scissor` honours it ("NO CLIP WHERE THE GL LANE HAS NONE").
-           Below, `s_scissorOn` is set from whether `x_glScissor` RESOLVED --
-           which is a fact about one context's entry points, and the reason the
-           GL path has a fallback at all. With no context every `x_gl*` is NULL,
-           so leaving the flag to that told the twin "no clip" and it drew
-           terrain over the whole frame instead of the viewport.
-           MEASURED before the fix: 33 088 px of 786 432 (4.21%) differing
-           against the two-lane capture, every one of them black in the GL half
-           and LOS-grey here, and all of them outside the 896x704 viewport this
-           fixture logs as `zoomvp=`. Coverage, not colour. [Landing 4b-2.] */
-        s_scissorOn = 1;
-        /* IN THE COMPOSITE'S OWN ORDER, and with the composite's own predicates:
-           terrain is the world's bottom layer and the features follow it, which
-           is the order below and the order tagpu_vk.c records the passes in.
-           `glEnable(GL_BLEND)` wraps the feature render down there; over here the
-           twin owns its own blend state, which is why there is nothing to set. */
-        if (nterr) tagpu_terr_render(&fv, 0);
-        if (nfeat) tagpu_feat_render(&fv, 0);
-        /* the effects are the LAST of the world, after the features and the
-           units -- the order below, and the order tagpu_vk.c records in. The
-           scaffold texture is 0 here: the effects twin refuses any frame whose
-           twin had the scaffold live, so that is the value it wants. */
-        if (nfx) tagpu_fx_render(&fv, 0, 0);
-        /* THE MARKERS ARE THE FRAME'S TOP LAYER, above the world and below the
-           UI -- where the composite draws them, and where tagpu_vk.c records
-           them. `markOn` rather than a vertex count, because this pass's own
-           heartbeat has to run even on a frame with no markers: without it the
-           watchdog reads a dead pass and hands the draw back to the engine. */
-        if (markOn) tagpu_mark_render(&fv, 0);
-        return;
+    {
+        TAGPU_PDVIEW pv;
+        const TAGPU_LIGHT* L = tagpu_classicpp_light();
+        memset(&pv, 0, sizeof pv);
+        pv.game[0] = (float)gw; pv.game[1] = (float)gh;
+        pv.zoom = s_zoom;
+        pv.zoomC[0] = (float)vpL + (float)vw * 0.5f;
+        pv.zoomC[1] = (float)vpT + (float)vh * 0.5f;
+        pv.depthScale = depthScale;
+        pv.ss = (float)ss;
+        pv.scafOn = scafOn ? 1 : 0;
+        pv.scafP[0] = (float)vpL; pv.scafP[1] = (float)vpT;
+        pv.scafP[2] = (float)vw;  pv.scafP[3] = (float)vh;
+        pv.fogOrg[0] = (float)s_fogOrgX; pv.fogOrg[1] = (float)s_fogOrgY;
+        pv.fogDim[0] = (float)s_fogCols; pv.fogDim[1] = (float)s_fogRows;
+        pv.lit = tagpu_classicpp_on() ? 1 : 0;
+        pv.sun[0] = L->unitSun[0]; pv.sun[1] = L->unitSun[1]; pv.sun[2] = L->unitSun[2];
+        pv.amb = L->amb;
+        pv.norm = 1.0f / L->unitLevel;
+        pv.shNeutral = tagpu_r3d_shade_neutral();
+        pv.shDir = tagpu_r3d_shade_dir();
+        s_pv = pv;
+        /* the build ghost's dependency, made checkable: its pass may only draw
+           in a frame this ran (see ghost_pass) */
+        s_pvFrame = f->frame_counter;
     }
+
 
     /* uFog bit1 = hide in grey rather than darken. Units the watched player
        cannot see are not drawn at all; wreckage is furniture and stays, and
@@ -3677,6 +3641,92 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        would return here having drawn none of them. */
     if (nv == 0 && nhi == 0 && npd == 0 && nfx == 0 && nfeat == 0 && nterr == 0 &&
         !markOn && !terrOwned) return;
+
+    /* MOVED BELOW THE GATHER, not left at the top of the composite [4b-2]. The
+       per-unit array `pdu[]` and the vertex emission above are the UNIT pass's
+       gather, and they are pure CPU -- audited with the corrected regex: there
+       is not one GL call between the four world gathers and the early return
+       just above. Exiting before them left the unit pass no gather to hand
+       over; gating its 150 GL calls one by one would have been the wrong answer
+       to that, because its entry points are all called from the composite
+       BELOW, which this lane never reaches. They are already unreachable here.
+       What is missing is the RECORD, not a gate. */
+    /* THE VULKAN-ONLY LANE'S FRAME ENDS HERE, and it ends here rather than
+       threading a gate through the composite because it is a DIFFERENT frame.
+       Everything below this line is the GL world composite -- 103 GL calls in
+       eighteen runs: the unit geometry upload, the cast-shadow depth map, the
+       `ss x` FBO, the shadow and slant redraws, the nano wire pass, the key/fill
+       inversion against the engine's own surface and the resolve to the
+       drawable. None of it has a counterpart on this lane yet; the `ss` target
+       and TA's surface are 4c, and until then each ported pass draws itself into
+       the swapchain from its own hand-over.
+
+       SO THE HONEST SHAPE IS TWO EXITS, not one body with gates in it. The GL
+       path below is left byte for byte as it was -- which is what the phase's
+       standing rule asks ("a Phase G landing that moves a GL pixel has failed")
+       -- and this lane calls the passes that have been taught to hand over
+       without drawing, in the composite's own order, and stops.
+
+       THE PREDICATE IS THE COMPOSITE'S OWN, deliberately: `if (nterr)` is what
+       gates `tagpu_terr_render` below, so the two sites agree about when a pass
+       runs by using the same test rather than by being read together. Each
+       `*_render` also refuses on its own count, so this is belt and braces.
+
+       WHAT IS NOT DONE HERE, stated rather than left to be discovered: the
+       300-frame stats line at the end of the composite (posebake, posedraw and
+       the fill sequence) does not run on this lane, and neither does
+       `tagpu_zoom_publish_view` -- but that one could not run anyway, because
+       it is gated on `keyOn >= 0` and `keyOn` needs `f->surface_tex`, which is
+       0 until 4c gives this backend TA's surface. The input path therefore
+       stays 1:1 here, which is correct while nothing zoomed reaches the screen.
+       [The vulkan-only plan, landing 4b-2.] */
+    if (!gl_draws) {
+        /* WHETHER TERRAIN IS CLIPPED TO THE VIEWPORT IS THE PASS'S DECISION AND
+           NOT GL'S, and this line is where that gets said on this lane. The
+           engine clips unit blits to the viewport rect and this pass matches it;
+           the hand-over carries that as `scissorOn` and the Vulkan twin's
+           `terr_scissor` honours it ("NO CLIP WHERE THE GL LANE HAS NONE").
+           Below, `s_scissorOn` is set from whether `x_glScissor` RESOLVED --
+           which is a fact about one context's entry points, and the reason the
+           GL path has a fallback at all. With no context every `x_gl*` is NULL,
+           so leaving the flag to that told the twin "no clip" and it drew
+           terrain over the whole frame instead of the viewport.
+           MEASURED before the fix: 33 088 px of 786 432 (4.21%) differing
+           against the two-lane capture, every one of them black in the GL half
+           and LOS-grey here, and all of them outside the 896x704 viewport this
+           fixture logs as `zoomvp=`. Coverage, not colour. [Landing 4b-2.] */
+        s_scissorOn = 1;
+        /* IN THE COMPOSITE'S OWN ORDER, and with the composite's own predicates:
+           terrain is the world's bottom layer and the features follow it, which
+           is the order below and the order tagpu_vk.c records the passes in.
+           `glEnable(GL_BLEND)` wraps the feature render down there; over here the
+           twin owns its own blend state, which is why there is nothing to set. */
+        if (nterr) tagpu_terr_render(&fv, 0);
+        if (nfeat) tagpu_feat_render(&fv, 0);
+        /* the effects are the LAST of the world, after the features and the
+           units -- the order below, and the order tagpu_vk.c records in. The
+           scaffold texture is 0 here: the effects twin refuses any frame whose
+           twin had the scaffold live, so that is the value it wants. */
+        if (nfx) tagpu_fx_render(&fv, 0, 0);
+        /* THE MARKERS ARE THE FRAME'S TOP LAYER, above the world and below the
+           UI -- where the composite draws them, and where tagpu_vk.c records
+           them. `markOn` rather than a vertex count, because this pass's own
+           heartbeat has to run even on a frame with no markers: without it the
+           watchdog reads a dead pass and hands the draw back to the engine. */
+        if (markOn) tagpu_mark_render(&fv, 0);
+        /* AND THE UNIT PASS, last of the world's five. Its three body-path entry
+           points gate their own GL; the shadow, slant, wire and depth ones are
+           the composite's and are not called here at all. `begin` opens the
+           recording window and arms the A/B, `unit` records each pose, `end`
+           publishes -- which is the whole of the hand-over. */
+        if (npd) {
+            int k;
+            tagpu_posedraw_begin(&s_pv);
+            for (k = 0; k < npd; k++) tagpu_posedraw_unit(&pdu[k]);
+            tagpu_posedraw_end();
+        }
+        return;
+    }
 
     /* ---- native selection rects (ui-markers: the ONLY marker interleaved
        with unit draws — the engine's is unreadable under our pixels, redraw
@@ -4361,33 +4411,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        a play setting until Gate B has run. */
     s_poseQueued = (unsigned)npd;
     {
-        TAGPU_PDVIEW pv;
-        const TAGPU_LIGHT* L = tagpu_classicpp_light();
-        memset(&pv, 0, sizeof pv);
-        pv.game[0] = (float)gw; pv.game[1] = (float)gh;
-        pv.zoom = s_zoom;
-        pv.zoomC[0] = (float)vpL + (float)vw * 0.5f;
-        pv.zoomC[1] = (float)vpT + (float)vh * 0.5f;
-        pv.depthScale = depthScale;
-        pv.ss = (float)ss;
-        pv.scafOn = scafOn ? 1 : 0;
-        pv.scafP[0] = (float)vpL; pv.scafP[1] = (float)vpT;
-        pv.scafP[2] = (float)vw;  pv.scafP[3] = (float)vh;
-        pv.fogOrg[0] = (float)s_fogOrgX; pv.fogOrg[1] = (float)s_fogOrgY;
-        pv.fogDim[0] = (float)s_fogCols; pv.fogDim[1] = (float)s_fogRows;
-        pv.lit = tagpu_classicpp_on() ? 1 : 0;
-        pv.sun[0] = L->unitSun[0]; pv.sun[1] = L->unitSun[1]; pv.sun[2] = L->unitSun[2];
-        pv.amb = L->amb;
-        pv.norm = 1.0f / L->unitLevel;
-        pv.shNeutral = tagpu_r3d_shade_neutral();
-        pv.shDir = tagpu_r3d_shade_dir();
-        s_pv = pv;
-        /* the build ghost's dependency, made checkable: its pass may only draw
-           in a frame this ran (see ghost_pass) */
-        s_pvFrame = f->frame_counter;
         if (npd) {
             int k;
-            tagpu_posedraw_begin(&pv);
+            tagpu_posedraw_begin(&s_pv);
             for (k = 0; k < npd; k++) tagpu_posedraw_unit(&pdu[k]);
             tagpu_posedraw_end();
         }

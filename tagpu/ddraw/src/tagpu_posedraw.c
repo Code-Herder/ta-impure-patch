@@ -969,8 +969,12 @@ static void pd_begin(const TAGPU_PDVIEW* v, int ghostWindow)
         }
         if (!ghostWindow && s_recording && s_ab && !s_abDone) {
             s_abTaking = 1;
-            tagpu_abshot_begin(&s_shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR |
-                                        TAGPU_ABSHOT_TOPDOWN);
+            /* `tagpu_abshot_begin` is GL too, though it is not spelled `gl*`:
+               it clears the frame and saves the state it moves. On the
+               vulkan-only lane there is no GL half to take. */
+            if (gl_draws)
+                tagpu_abshot_begin(&s_shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR |
+                                            TAGPU_ABSHOT_TOPDOWN);
         }
     }
     /* THE PROGRAM AND ITS UNIFORMS ARE GL. Everything above -- the
@@ -1126,7 +1130,17 @@ void tagpu_posedraw_end(void)
     if (s_abTaking) {
         s_abTaking = 0;
         s_abDone = 1;
-        s_abClaim = tagpu_abshot_end(&s_shot, PD_ABOUT, "posedraw");
+        /* AND ON THE TARGET HAVING BEEN UNLINKED, armed on both lanes -- and
+           WHERE THERE IS NO GL HALF THE INTENT IS THE CLAIM, as in every other
+           ported pass: `tagpu_abshot_end` is not merely refused there, it is
+           never called. tagpu_abshot.h has the whole argument. */
+        if (gl_draws) {
+            int wrote = tagpu_abshot_end(&s_shot, PD_ABOUT, "posedraw");
+            int fresh = tagpu_vk_ab_arm("posedraw");
+            s_abClaim = wrote && fresh;
+        } else {
+            s_abClaim = tagpu_vk_ab_arm("posedraw");
+        }
     }
 
     /* PUBLISHED LAST, with the counts this window ended with. A frame that
