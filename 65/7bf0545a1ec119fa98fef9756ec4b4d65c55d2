@@ -1,0 +1,18 @@
+landing-review: model=claude-opus-5 effort=high reviewers=2 range=main...657bf05 findings=8 acted=8 recorded=0 rejected=0 fixes=c28d5af docs=203b785
+Two independent reviewers at high, one on correctness and one solely on the
+game-thread/render-thread synchronisation (CLAUDE.md's cross-thread clause: this
+landing puts the fork's whole per-frame driver on the Vulkan render thread for
+the first time). Every finding verified against the code before acting.
+HIGH: the A/B arming's unlink sat in vk_present, which is not on the path from
+the gather-side latch, so it was missed on precisely the frames where no capture
+happens -- moved into tagpu_vk_ab_arm, called in the same statement sequence as
+the latch. HIGH: vk_render_main's frame counter was automatic storage and
+dd_SetDisplayMode recreates the render thread, so it replayed 0,1,2,... while
+every hand-over tests freshness by exact equality on it -- now a file static, as
+on the GL lane. MEDIUM x3: DeleteFileA's result discarded; three silent refusals
+in tagpu_vk_shot_record; tagpu_scaffold_frameinfo gated on the GL program's
+state. LOW x2: ab_drop's log wording on route E, and an unlink/pending-write
+ordering that the move dissolves. Plus the docs claim the first two invalidated.
+Re-measured after the fixes: the two-lane captures are byte-identical to the
+pre-fix ones (0 px, 190247 and 101 ink px), the vulkan-only scaffold capture is
+byte-identical to them, and the unlink is verified on three refusal paths.
