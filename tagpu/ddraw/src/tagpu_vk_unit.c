@@ -198,6 +198,7 @@ static int s_downPaying;                   /* ...and the seam is paying it NOW  
 static int s_drawThis;                     /* `prepare` left a draw for `record` */
 static int s_abFrame;
 static int s_saidRestored, s_saidNoMirror, s_saidShadow, s_saidOther;
+static int s_saidNoHand;                /* ...and the hand-over's own stand-down */
 static int s_saidShort, s_saidCmp;      /* a latch each: one message each */
 static int s_saidFog, s_saidScaf, s_saidVbFull;
 static int s_saidRgbImg;                /* the restored twin's image was refused */
@@ -1867,9 +1868,22 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        is the same instant, and the same ownership, that the rest of this
        function writes it in. */
     if (!tagpu_posedraw_handover(&h, d->frame)) {
+        /* AND IT SAYS SO, ONCE. This was the pass's only silent stand-down, and
+           on the vulkan-only lane it is the one that fires -- every other
+           refusal below carries a `plog` with a one-shot latch, so an absent
+           capture with an empty log could only be this. Throttled the same way
+           they are: the ordinary case is a frame the GL twin drew no posed unit
+           on, which is most frames in the shell. [The vulkan-only plan, 4b-2.] */
+        if (!s_saidNoHand) {
+            s_saidNoHand = 1;
+            plog(d, "unit: no hand-over for frame %u - the pass published "
+                    "nothing, or published it for another frame",
+                 (unsigned)d->frame);
+        }
         if (s_state == ST_READY) slot_free(d, s);
         return 0;
     }
+    s_saidNoHand = 0;
 
     if (s_state == ST_UNBUILT) {
         if (!build(d)) { tagpu_vk_unit_down(d); s_state = ST_REFUSED; return 0; }

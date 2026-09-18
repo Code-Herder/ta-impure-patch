@@ -229,6 +229,7 @@ static int          s_win;          /* windows opened this frame              */
 static int          s_recording;    /* inside a recording window              */
 static unsigned     s_nghost;       /* ghosts recorded this frame             */
 static int          s_abTaking;     /* THIS window opened the capture         */
+static int          s_saidNoPub, s_saidFrame;
 static int          s_abClaim;      /* it reached the disk; frame-scoped      */
 static int          s_other;        /* draws the hand-over carries no copy of */
 
@@ -1346,7 +1347,37 @@ float tagpu_posedraw_top(const TAGPU_PDUNIT* u)
 /* ---- the Vulkan lane's hand-over ---------------------------------------- */
 int tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now)
 {
-    if (!s_pubHave || !out) return 0;
+    /* WHICH HALF REFUSED, ONCE. The consumer can say "no hand-over" but only
+       this side knows whether there was nothing to give or it was stamped for
+       another frame, and those have different causes -- the first is the pass
+       standing down, the second is a counter disagreeing across the seam. One
+       latch, cleared on the first success. [The vulkan-only plan, 4b-2.] */
+    if (!s_pubHave || !out) {
+        /* A WINDOW THAT NEVER OPENED IS THE ORDINARY CASE and must not be
+           reported: the shell has no posed units, so `s_win` is 0 there on
+           every frame and a latch spent on it hides the state that matters.
+           What is worth a line is a window that OPENED and published nothing,
+           which is a pass standing down mid-frame. */
+        if (s_win > 0 && !s_saidNoPub) {
+            char b[160];
+            s_saidNoPub = 1;
+            _snprintf(b, sizeof b, "posedraw: %d window(s) opened for frame %u and "
+                      "nothing was published - the pass stood down inside the frame",
+                      s_win, now);
+            b[sizeof b - 1] = 0;
+            plog(b);
+        }
+        return 0;
+    }
+    if (s_pub.frame != now && !s_saidFrame) {
+        char b[160];
+        s_saidFrame = 1;
+        _snprintf(b, sizeof b, "posedraw: published frame %u, asked for %u - the "
+                  "two counters disagree across the seam", s_pub.frame, now);
+        b[sizeof b - 1] = 0;
+        plog(b);
+    }
+    if (s_pubHave && s_pub.frame == now) { s_saidNoPub = 0; s_saidFrame = 0; }
     /* NOT THIS FRAME'S, SO NOT ALIVE. `units`, `rows`, `flags` and `vis` are
        arrays this file REALLOCATES the moment a frame needs more room than the
        last did, and the records name bake entries tagpu_posebake.c evicts. The
