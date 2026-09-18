@@ -3360,6 +3360,25 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        budget is spent once either way. */
     if (tagpu_rglsl_step_forced(f->frame_counter) && tagpu_rglsl_calls() == rglslSeen)
         tagpu_rglsl_step();
+
+    /* NEVER return early while we own the terrain: the engine's frame is a
+       flat key fill inside the viewport, and only the composite below turns it
+       back into a picture. tagpu_terr_gather hands the draw back on any bail,
+       so nterr == 0 usually means the engine is painting terrain again — but a
+       hard bail (no atlas, bad map pointer) can leave a key-filled frame with
+       nothing of ours to cover it, and that frame still has to be composited. */
+    int terrOwned = tagpu_terrown_filled();
+    if (nu == 0 && nfx == 0 && nfeat == 0 && nterr == 0 && !markOn && !terrOwned) return;
+
+    /* MOVED BELOW THE GATHER, not left at the top of the composite [4b-2]. The
+       per-unit array `pdu[]` and the vertex emission above are the UNIT pass's
+       gather, and they are pure CPU -- audited with the corrected regex: there
+       is not one GL call between the four world gathers and the early return
+       just above. Exiting before them left the unit pass no gather to hand
+       over; gating its 150 GL calls one by one would have been the wrong answer
+       to that, because its entry points are all called from the composite
+       BELOW, which this lane never reaches. They are already unreachable here.
+       What is missing is the RECORD, not a gate. */
     /* THE VULKAN-ONLY LANE'S FRAME ENDS HERE, and it ends here rather than
        threading a gate through the composite because it is a DIFFERENT frame.
        Everything below this line is the GL world composite -- 103 GL calls in
@@ -3425,15 +3444,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (markOn) tagpu_mark_render(&fv, 0);
         return;
     }
-
-    /* NEVER return early while we own the terrain: the engine's frame is a
-       flat key fill inside the viewport, and only the composite below turns it
-       back into a picture. tagpu_terr_gather hands the draw back on any bail,
-       so nterr == 0 usually means the engine is painting terrain again — but a
-       hard bail (no atlas, bad map pointer) can leave a key-filled frame with
-       nothing of ours to cover it, and that frame still has to be composited. */
-    int terrOwned = tagpu_terrown_filled();
-    if (nu == 0 && nfx == 0 && nfeat == 0 && nterr == 0 && !markOn && !terrOwned) return;
 
     /* uFog bit1 = hide in grey rather than darken. Units the watched player
        cannot see are not drawn at all; wreckage is furniture and stays, and
