@@ -1846,6 +1846,37 @@ here were wrong about this** [verified read-only 2026-09-18, against the tree]:
   the overlay's enable state"*. It is also the one with the strongest claim to being moved, since
   injected input on the render thread is the odder of the two places to put it.
 
+**WHAT EACH OF THE SIX ACTUALLY NEEDS FROM THE FRAME PACKET** [verified read-only 2026-09-18,
+function by function]. This is the design risk this plan named as "the thread move", made concrete:
+
+* **No GL anywhere.** `tagpu_input.c`, `tagpu_peek.c`, `tagpu_weapons.c`, `tagpu_cat.c`,
+  `tagpu_gui_snap.c` and `tagpu_scenario.c` contain **zero** `gl*`/`x_gl*` calls between them. So
+  the move cannot strand a GL call on a thread with no context, which was the obvious way for this
+  to fail silently.
+* **Five of the six use `f` only to throttle themselves.** `tagpu_ui_frame` and `tagpu_cat_frame`
+  are exactly `if (f && (f->frame_counter % 5)) return;`; `tagpu_scenario_frame` adds
+  `g_frame = f ? f->frame_counter : 0;`. `tagpu_peek_frame` and `tagpu_weapons_frame` take a bare
+  `unsigned frame_counter` and never see a packet at all. On the flip these take `s_flips`, which
+  `before_flip` already maintains.
+* **`tagpu_input_frame` is the hard one, and it is also the one 10c exists for.** It has three real
+  dependencies, and — correcting this plan's earlier survey — **it does not null-check `f`**: its
+  first statement is `tagpu_shield_frame((HWND)f->hwnd);` with no guard.
+
+  | what it needs | where it comes from today | on the game thread |
+  |---|---|---|
+  | `f->hwnd` | `g_ddraw.hwnd`, copied into the packet at `render_ogl.c` / `render_vk.c` | read `g_ddraw.hwnd` directly — same global, one hop shorter |
+  | `s_frame->game_width` / `game_height`, for mapping mouse tokens | the same `g_ddraw` block that fills every other geometry field | same |
+  | `do_eye`'s `f->packet->in_game` and `->eye[]` | the published engine packet | **already a game-thread product** — `tagpu_packet_pub.c`'s header says the publish happens *"on the game thread, inside an engine call, at a site that owns what it reads"* |
+
+  So every field is available, and two of the three are *more* natural there than here.
+
+**AND MOVING ONLY THE EASY FIVE WOULD NOT ACHIEVE 10c.** The gate's stated purpose is that
+`renderer=gdi` can be driven and measured at all; `tacli` drives the game with **injected input**,
+so input is precisely the trigger whose absence makes the lane undrivable. A version of 10c that
+moved peek, ui, cat, weapons and scenario-detection and left input on the render thread would
+report progress and change nothing about the lane. Written down because the easy five are the
+tempting scope.
+
 **AND THIS IS WHY 10c NO LONGER THREATENS 10b'S SAFETY ARGUMENT.** The concern recorded here was
 that 10c might add a `tagpu_` call to `render_gdi.c`, which would falsify the *"`render_gdi.c`
 contains no `tagpu_` call at all"* fact that 10b's inertness rests on. Hosting in
