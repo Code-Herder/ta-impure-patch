@@ -14,6 +14,7 @@
 #include "opengl_utils.h"   /* the fork's extern GL function pointers   */
 #include "tagpu_model3do.h"   /* TAGPU_PBMAXPIECE: the piece-count bound */
 #include "tagpu_overlay.h"
+#include "tagpu_trigger.h"
 #include "tagpu_vk.h"       /* tagpu_vk_owns_present(): whether GL may be drawn */
 #include "tagpu_tracer.h"
 #include "tagpu_suppress.h"
@@ -307,24 +308,15 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     /* in-process input injection (tagpu_keys.txt / tagpu_eye.txt) — must run
        even at the menus and regardless of the overlay's enable state */
     tagpu_input_frame(f);
-    /* on-demand memory reads (tagpu_peek.trigger) — no-op unless triggered, and
-       must run at the menus too: switch effects land before the first game */
-    tagpu_peek_frame(f->frame_counter);
-    /* on-demand weapon-slot dump (tagpu_weapons.trigger) — the A/B oracle for
-       the extra-weapons module; read-only, runs armed or not. */
-    tagpu_weapons_frame(f->frame_counter);
-    /* on-demand GUI snapshot (tagpu_ui.trigger) — the read half of `tacli ui`.
-       The menus are exactly where it earns its keep, so like peek it must run
-       before any game exists. */
-    tagpu_ui_frame(f);
-    /* on-demand unit/feature catalogues (tagpu_units.trigger,
-       tagpu_features.trigger) — validation layer 2 for `tacli scenario`. */
-    tagpu_cat_frame(f);
-    /* on-demand situation applier (tagpu_scenario.trigger) and the engine
-       switches (tagpu_switches.trigger). Detection and reporting live here; the
-       creation pass runs from this module's own Game_MainLoopTick detour, never
-       mid-render. Switches must reach the menus too, like peek. */
-    tagpu_scenario_frame(f);
+    /* THE ON-DEMAND TRIGGERS MOVED OUT OF HERE [landing 10c]. They are called
+       from the engine's own flip now (tagpu_gui_hook.c's `before_flip`), on the
+       game thread, so that they reach `renderer=gdi` -- which never enters this
+       function at all, because `render_gdi.c` makes no `tagpu_` call. See
+       `tagpu_triggers_frame` below.
+
+       `tagpu_input_frame` above is the exception and stays here: it is the only
+       one that dereferences `f->packet` (through `do_eye`), and the flip has no
+       packet to give it. Landing 10c's second half. */
     /* DISPLAY-MODE CHANGES: the fork restarts its render thread with a NEW
        GL context — every GL object id we cached is dead. Detect the context
        change and re-init all GL-owning modules from scratch (without this a
@@ -484,4 +476,33 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        drawn, so the input path goes back to 1:1 (tagpu_zoom.h). Every early
        return above does the same. */
     tagpu_zoom_frame_end();
+}
+
+/* THE TRIGGER FAMILY'S ONE ENTRY POINT — contract in tagpu_trigger.h.
+   Called from the game thread, once per engine flip, on every renderer.
+   Each of these throttles itself (most on `frame_counter % 5`) and does
+   nothing at all until its `.trigger` file appears, so the steady-state cost
+   is a handful of GetFileAttributes calls per five flips — the same cost they
+   had on the render thread, moved. */
+void tagpu_triggers_frame(const TAGPU_FRAME* f)
+{
+    if (!f || f->abi != TAGPU_ABI) return;
+    /* on-demand memory reads (tagpu_peek.trigger) — no-op unless triggered, and
+       must run at the menus too: switch effects land before the first game */
+    tagpu_peek_frame(f->frame_counter);
+    /* on-demand weapon-slot dump (tagpu_weapons.trigger) — the A/B oracle for
+       the extra-weapons module; read-only, runs armed or not. */
+    tagpu_weapons_frame(f->frame_counter);
+    /* on-demand GUI snapshot (tagpu_ui.trigger) — the read half of `tacli ui`.
+       The menus are exactly where it earns its keep, so like peek it must run
+       before any game exists. */
+    tagpu_ui_frame(f);
+    /* on-demand unit/feature catalogues (tagpu_units.trigger,
+       tagpu_features.trigger) — validation layer 2 for `tacli scenario`. */
+    tagpu_cat_frame(f);
+    /* on-demand situation applier (tagpu_scenario.trigger) and the engine
+       switches (tagpu_switches.trigger). Detection and reporting live here; the
+       creation pass runs from that module's own Game_MainLoopTick detour, never
+       mid-render. Switches must reach the menus too, like peek. */
+    tagpu_scenario_frame(f);
 }

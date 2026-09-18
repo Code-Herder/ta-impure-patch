@@ -49,6 +49,9 @@
 #include "tagpu_terrown.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_packet_pub.h"
+#include "../inc/dd.h"
+#include "../inc/tagpu.h"
+#include "tagpu_trigger.h"
 
 #define TA_MAINPP     0x00511DE8u
 #define OFF_GUI_TOP   0x531           /* GUIInfo.TheActive_GUIMEM               */
@@ -1754,6 +1757,46 @@ static int __cdecl before_flip(void* entry_esp)
     if (s_flips == 1) {
         _snprintf(b, sizeof b, "gui: first flip on thread %u (init saw %u)", (unsigned)GetCurrentThreadId(), (unsigned)s_gameTid);
         glog(b);
+    }
+
+    /* THE ON-DEMAND TRIGGERS, ON THE GAME THREAD AND ON EVERY LANE [the
+       vulkan-only plan, landing 10c]. They used to be called from
+       `tagpu_overlay_draw`, whose only callers are render_ogl.c and
+       render_vk.c -- so on `renderer=gdi`, which makes no `tagpu_` call at all,
+       not one of them ever ran and no `tacli` verb could see the game. Here
+       they run wherever the engine flips, which is every lane.
+
+       IT SITS ABOVE THIS FUNCTION'S THREE EARLY RETURNS on purpose: those are
+       about the GUI census having nothing to do, which says nothing about
+       whether someone dropped a `.trigger` file.
+
+       The frame is built rather than borrowed. Every field these five read is
+       a `g_ddraw` member that the render thread's packet merely COPIES (see
+       TAGPU_FRAME in inc/tagpu.h, which documents each field's origin), so
+       taking them from the source is one hop shorter, not a reconstruction.
+       `surface_tex` is a GL id and stays 0 -- none of the five reads it, and it
+       would be meaningless off the render thread. `packet` stays NULL, which is
+       why `tagpu_input_frame` is NOT here: it is the one that dereferences it,
+       through `do_eye`, and there is no non-consuming packet accessor to give
+       it. That is landing 10c's second half. */
+    {
+        TAGPU_FRAME gf;
+        memset(&gf, 0, sizeof gf);
+        gf.struct_size   = sizeof gf;
+        gf.abi           = TAGPU_ABI;
+        gf.game_width    = g_ddraw.width;
+        gf.game_height   = g_ddraw.height;
+        gf.vp_x          = g_ddraw.render.viewport.x;
+        gf.vp_y          = g_ddraw.render.viewport.y;
+        gf.vp_w          = g_ddraw.render.viewport.width;
+        gf.vp_h          = g_ddraw.render.viewport.height;
+        gf.win_width     = g_ddraw.render.width;
+        gf.win_height    = g_ddraw.render.height;
+        gf.hwnd          = g_ddraw.hwnd;
+        gf.hdc           = g_ddraw.render.hdc;
+        gf.frame_counter = s_flips;
+        gf.bpp           = g_ddraw.bpp;
+        tagpu_triggers_frame(&gf);
     }
     src = flip_source(entry_esp);
     s = surf_of_ctx(src);

@@ -1819,6 +1819,34 @@ entries free on the next `FreeObjectState` rather than leaking.)
 Closing the rest is either a `tagpu_curs` landing of the same shape 10b just had, or an explicit
 decision to document the cursor pair as a deliberate deviation.
 
+**LANDING 10c-1 IS DONE AND THE OBSERVATION HALF OF THIS IS FIXED [2026-09-18].** The five
+trigger functions that do not need the frame packet — `tagpu_peek_frame`, `tagpu_weapons_frame`,
+`tagpu_ui_frame`, `tagpu_cat_frame` and `tagpu_scenario_frame` — are called from
+`tagpu_gui_hook.c`'s `before_flip` now, on the game thread, above that function's three early
+returns. `tagpu_overlay.c` keeps one entry point, `tagpu_triggers_frame`, which is what the flip
+calls. **VERIFIED BY RUNNING IT** on a `renderer=gdi` instance:
+
+```
+gui MAINMENU.GUI  640x480   under: -
+focus=SINGLE
+  1  button   SINGLE           187,403     ok             s
+  ...
+```
+
+— a snapshot with click coordinates, where the paragraph below predicted *"no UI snapshot
+appeared"*. `tacli units` answers there too, and the GL lane was re-checked for regression and is
+unchanged.
+
+**The driving half is landing 10c-2, and it is one function.** `tagpu_input_frame` stays on the
+render thread because it is the only one that dereferences `f->packet` — through `do_eye` — and
+the flip has no packet to hand it. `tagpu_packet_acquire` *consumes*, so giving it one means
+adding a read-only accessor to the packet exchange, which is a subsystem with its own invariants
+and deserves its own landing rather than a corner of this one. Until then `renderer=gdi` can be
+**observed** but not **driven**: `tacli ui`, `peek`, `units`, `features` and the scenario
+detection work; `click`, `keys` and anything built on injected input do not.
+
+**The paragraph below is what this replaced, kept because its reasoning is the record.**
+
 **AND `renderer=gdi` CANNOT BE DRIVEN OR MEASURED BY OUR OWN TOOLING AT ALL — landing 10c, and
 item 11's exit condition depends on it** [found 2026-09-18 while trying to photograph 10b's
 effect]. `tacli ui` answers *"no UI snapshot appeared"* on that lane, and the cause is the same
