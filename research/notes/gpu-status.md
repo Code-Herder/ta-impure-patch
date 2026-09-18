@@ -10060,16 +10060,34 @@ scooped up were the terrain key; here the box is right and the bytes are still t
 Landing 8a is a packet with a colour field in it, so the field's width had to be **established
 rather than assumed**, and that was done first and landed separately (`f8c1b6b`,
 [exe-reverse-engineering](exe-reverse-engineering.html)). `DrawBar` clips with `0x4BF620` and
-writes with `0x4CCDEA`; so do `DrawTranspRectangle 0x4BF8C0`, the framed box `0x4BF4D0` and the
-focus rectangle `0x4BF7B0`. `0x4CCDEA` has two paths and **both read `BYTE PTR [ebp+0x10]`** — the
-4-aligned one builds a DWORD of four copies of it for `rep stos DWORD`, the unaligned one does
-`rep stos BYTE al`.
+writes with `0x4CCDEA`, which takes **the low byte of its colour and nothing wider**: the 4-aligned
+path (`0x4CCE2D`) builds a DWORD of four copies of `BYTE PTR [ebp+0x10]` for `rep stos DWORD`, and
+the unaligned one (`0x4CCE73`) loads the argument as a DWORD and stores `rep stos BYTE al`. So
+`TAGPU_PUBOP::fg` is one `unsigned char` and that is exactly what the engine keeps for `OP_BAR`.
 
-**So a negative colour is not a mode.** `0x4AA912` calls `0x4BF4D0(panel+0xBC, rect, -0x18)`,
-which reads like a special encoding and is not: `0xFFFFFFE8` truncates to `0xE8`, palette index
-232. The survey that preceded this landing flagged that argument as a signed int that might carry
-a shade mode; the disassembly says it cannot. `TAGPU_PUBOP::fg` is one `unsigned char` and that is
-exactly what the engine keeps.
+**AND THAT IS A FACT ABOUT `DrawBar` ALONE — the version of this section that shipped with the
+code claimed it for four functions and was wrong about three of them.** [CORRECTED 2026-09-18 BY
+THIS LANDING'S REVIEW.] It said `DrawTranspRectangle 0x4BF8C0`, the framed box `0x4BF4D0` and the
+focus rectangle `0x4BF7B0` all wrote through `0x4CCDEA` too. Counting the calls in each body:
+`0x4BF8C0` makes ten to `0x4CC7AB` and none to `0x4CCDEA`; `0x4BF7B0` makes eight to `0x4BEC70`
+and none; `0x4BF4D0` makes none and does not fill at all.
+
+**`0x4BF4D0` is a SHADE, and its third argument IS a mode.** It clips once through `0x4BF620` and
+then runs a read-modify-write over the box: `movsx ebx,BYTE PTR [ecx]` / `mov bl,[row + ebx]` /
+`mov [ecx-1],bl`, where `row` is one of **32 rows of 256 bytes** — `globals+0xC4` for a negative
+level (row `level + 0x20`, clamped at `-0x20`) and `globals+0xC8` for a positive one (row `level`,
+clamped at `+0x1F`). A NULL table returns 0 and draws nothing.
+
+**So `0x4AA912`'s `0x4BF4D0(panel+0xBC, rect, -0x18)` is darken level 24, not palette index 232**,
+and the survey that preceded this landing — which flagged that argument as possibly a shade mode —
+**was right and was overruled on a false reading**. It was overruled by disassembling `0x4CCDEA`,
+a function `0x4BF4D0` does not call. The lesson is narrower than "check the disassembly", because
+the disassembly *was* checked: **the reading of one function was generalised to three others by
+their resemblance, and the resemblance was the whole of the evidence.**
+
+None of this reaches the shipped path — `publish()` reads `col` for `OP_BAR` only — but the
+observer now records the raw third argument for all four leaves, so the comments at `OP::col` and
+`rect_box` say per kind what it means.
 
 #### Five parts, because the consumer has two layers
 
@@ -10115,8 +10133,11 @@ of landing 8's five kinds with an unambiguous shape — one engine function, one
 - **`OP_RECT` conflates two engine functions**: `DrawTranspRectangle 0x4BF8C0` is *hollow*, four
   edges through `0x4CC7AB` rather than one fill through `0x4CCDEA`, and the focus rectangle
   `0x4BF7B0` is a third shape again.
-- **`OP_FRAME` (`0x4BF4D0`) is three fills** whose layout is not disassembled: the engine map has
-  the call counts (`0x4BF620` ×3, `0x4CCDEA` ×2) and not which rectangle each one covers.
+- **`OP_FRAME` (`0x4BF4D0`) is not a fill at all**, as above: it tints what is already in the box
+  through a 32-row LUT. It cannot become a solid rectangle with a colour in it, and the packet it
+  needs is a *level* plus whatever makes the destination readable — which on the Vulkan lane is a
+  twin it would have to sample and write back. That is a different landing from 8b and 8c, and
+  saying so is the most useful thing this landing produced for the ones after it.
 - **`OP_LINE` needs the direction bit**, because a diagonal's bounding box is not the line — which
   is precisely the fault §20 of [gui-renderer](gui-renderer.html) traced.
 - **`OP_SCALE` is a scaled blit** and probably belongs with `PK_SPRITE` rather than with these.

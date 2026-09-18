@@ -240,18 +240,26 @@ static void rect_box(void* e, int kind)
     s = surf_of_ctx(ctx);
     if (s) clip_ctx(ctx, &l, &t, &r, &b);
     op_add(kind, s, l, t, r, b);
-    /* AND THE COLOUR, on the op `op_add` just recorded -- the same decoration
-       `gaf_box` and `before_copy` make. The third argument is the engine's
-       `colour`, and only its low byte reaches the surface (see `OP::col`), so
-       the cast is the engine's own truncation rather than a narrowing of ours.
-       Every early return above leaves `s_lastOp` NULL, so a clipped-away or
-       surface-less op cannot write this into the PREVIOUS one.
-       [The vulkan-only plan, landing 8a.] */
+    /* AND THE THIRD ARGUMENT, on the op `op_add` just recorded -- the same
+       decoration `gaf_box` and `before_copy` make. Every early return above
+       leaves `s_lastOp` NULL, so a clipped-away or surface-less op cannot write
+       this into the PREVIOUS one.
+       IT IS A PALETTE INDEX ONLY FOR `OP_BAR` (`0x4BF6F0`, whose writer
+       `0x4CCDEA` takes the low byte and nothing wider). For `OP_FRAME` it is a
+       SIGNED SHADE LEVEL and for the two `OP_RECT` leaves it reaches a
+       different writer again -- `OP::col` in tagpu_gui_hook.c has all four.
+       Recorded for all four anyway because the raw argument is what the
+       observer saw; `publish` reads it for `OP_BAR` alone, and 8b/8c/8d each
+       have to decide what their own means before reading it.
+       [The vulkan-only plan, landing 8a; the other three CORRECTED by its
+       review.] */
     if (s_lastOp) s_lastOp->col = (unsigned char)ARG(e, 3);
 }
 static int __cdecl before_bar(void* e)  { if (on_game_thread()) rect_box(e, OP_BAR);  return 0; }
-/* 0x4BF4D0: a framed box (three clipped fills), (ctx, RECT*, colour) ret 0xC — what the
-   F4 popup 0x4948E0 draws its border with */
+/* 0x4BF4D0: NOT a fill — a SHADE of what is already in the box, (ctx, RECT*, level)
+   ret 0xC; one clip through 0x4BF620, then every pixel remapped through a 256-byte
+   row of globals+0xC4 (darken) or +0xC8 (lighten). What the F4 popup 0x4948E0 draws
+   its border with (×3 — three calls, not three fills). [CORRECTED 2026-09-18.] */
 static int __cdecl before_frame(void* e) { if (on_game_thread()) rect_box(e, OP_FRAME); return 0; }
 static int __cdecl before_rect(void* e) { if (on_game_thread()) rect_box(e, OP_RECT); return 0; }
 /* 0x4BF7B0: the focus rectangle GUI_StageUpdateDraw draws last, (ctx, RECT*, colour) */

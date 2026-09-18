@@ -1284,10 +1284,17 @@ Back to the filed list:
    each unit.
 
    **The colour field's width was established before the packet carried one** and landed separately
-   (`f8c1b6b`): `0x4CCDEA`, the writer all four solid-fill entry points share, reads
-   `BYTE PTR [ebp+0x10]` on both of its paths, so the colour is an 8-bit palette index and the sign
-   of the int passed is irrelevant — `0x4AA912`'s `0x4BF4D0(panel+0xBC, rect, -0x18)` is index 232,
-   not a shade mode as the survey had guessed.
+   (`f8c1b6b`): `DrawBar`'s writer `0x4CCDEA` takes the low byte of its colour and nothing wider,
+   so `PK_BAR::fg` is one `unsigned char` by the engine's own width.
+
+   **That landing also claimed the same of three sibling functions and was wrong about all three**
+   — corrected here by 8a's review. `0x4BF8C0` writes through `0x4CC7AB` (×10), `0x4BF7B0` through
+   `0x4BEC70` (×8), and **`0x4BF4D0` does not fill at all**: it clips once and then remaps every
+   pixel already in the box through one of 32 256-byte rows at `globals+0xC4` (darken) or `+0xC8`
+   (lighten), chosen by a *signed level* clamped to `[-0x20, +0x1F]`. So `0x4AA912`'s `-0x18` is
+   darken level 24, not palette index 232, and the survey that guessed "shade mode" was right. The
+   shipped path is unaffected — `publish()` reads the colour for `OP_BAR` alone — but the plan for
+   8d changes shape below.
 
    **8a is 0.02 % of the traffic and the plan should say so.** The live census is
    **`rect 5 396 343`, `line 3 614 453`, `bar 1 334`**. `OP_BAR` went first because it is the only
@@ -1301,10 +1308,17 @@ Back to the filed list:
    * **8c — `OP_LINE`.** The other half of the volume. It needs the **direction bit**: the observer
      records a line's axis-aligned bounding box, and a diagonal's bounding box is not the line —
      which is exactly the fault [gui-renderer](gui-renderer.html) §20 traced to cyan squares.
-   * **8d — `OP_FRAME` (`0x4BF4D0`) and `OP_SCALE`.** The framed box is three fills whose layout is
-     not disassembled (the engine map has `0x4BF620` ×3 and `0x4CCDEA` ×2 and not which rectangle
-     each covers). `OP_SCALE` is a scaled blit and probably belongs with `PK_SPRITE` rather than
-     with these — deciding that is part of 8d rather than assumed here.
+   * **8d — `OP_FRAME` (`0x4BF4D0`) and `OP_SCALE`, and 8d is now the ODD ONE OUT.** `0x4BF4D0` is
+     a **shade of the destination**, not a fill: there is no colour to publish, only a level and a
+     dependence on what is already in the box. Every other kind in landing 8 replaces *published
+     bytes* with *a description of a draw*; this one's draw READS the surface it writes, so the
+     Vulkan lane would have to sample its own twin and write it back — a different mechanism from
+     8a/8b/8c, not a fourth instance of the same one. `OP_SCALE` is a scaled blit and probably
+     belongs with `PK_SPRITE` rather than with any of these. **Whether 8d is one landing, two, or
+     a decision to leave `OP_FRAME` as `PK_PIXELS` is open**, and that last option is a real one:
+     a tint of the destination is the one case where publishing the destination's bytes is not
+     obviously the wrong answer. [The framed box's nature was established by landing 8a's review;
+     before it this entry said "three fills", which is what the engine map had said since G15a.]
 
    **Not covered by 8a:** `PK_PIXELS` is not closed — one kind of five left it, and the other four
    still publish surface bytes at the flip. The gate's exit condition is unchanged and 8a does not

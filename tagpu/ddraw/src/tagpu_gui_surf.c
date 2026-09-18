@@ -1225,6 +1225,19 @@ static void twin_fill(TWIN* t, const TAGPU_PUBOP* o, unsigned char idx)
     x_glClearColor((float)idx / 255.0f, 1.0f, 0.0f, 0.0f);
     x_glClear(GL_COLOR_BUFFER_BIT);
     x_glDisable(GL_SCISSOR_TEST);
+    /* AND PUT THE CLEAR COLOUR BACK, because it is CONTEXT state and not ours.
+       This is the only site in the tree that sets a non-zero one without
+       restoring it: `twin_clear`, `twin_make` and `sharp_begin` all set (0,0,0,0)
+       and leave it there, `tagpu_restoreglsl.c:513` saves and restores, and
+       `render_ogl.c`'s four `glClear(GL_COLOR_BUFFER_BIT)` calls and
+       `tagpu_overlay.c:142` set NO colour at all -- they are written against the
+       resting value. Leaving a health bar's palette index in it would paint
+       render_ogl's letterbox erase that colour.
+       Restoring here is an ORDERING we own rather than a reliance on whoever
+       runs next: the argument must not be "sharp_begin resets it anyway", since
+       that has early returns and its failure latches.
+       [FROM THIS LANDING'S REVIEW.] */
+    x_glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
 }
 
 static void twins_reset(void)

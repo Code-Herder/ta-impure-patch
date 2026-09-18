@@ -362,14 +362,31 @@ typedef struct OP {
        `frame` carries the font object and `dx`/`dy` the x/y it was given. */
     unsigned soff; unsigned short slen;
     unsigned char fg, bg, tr;                   /* text: 0x4CCF60's three colours */
-    /* THE FILL COLOUR, for the ops that are a solid rectangle of one palette
-       index rather than a box of bytes. ONE BYTE IS THE WHOLE OF IT, and that
-       is the engine's own width rather than a choice of ours: `DrawBar 0x4BF6F0`
-       and its three siblings hand their `colour` argument to `0x4CCDEA`, which
-       reads `BYTE PTR [ebp+0x10]` on both of its paths and nothing wider -- so
-       `0x4AA912`'s `0x4BF4D0(panel+0xBC, rect, -0x18)`, which looks like a
-       special encoding, is palette index 232 and no more.
-       [DISASSEMBLED 2026-09-18; exe-reverse-engineering.md has both paths.
+    /* THE THIRD ARGUMENT of the four `rect_box` leaves, WHICH IS A PALETTE
+       INDEX FOR `OP_BAR` AND IS NOT ONE FOR THE OTHER THREE.
+
+       `DrawBar 0x4BF6F0` is the only one of the four that fills: it writes
+       through `0x4CCDEA`, which takes the LOW BYTE of its colour and nothing
+       wider (the 4-aligned path builds a DWORD of four copies for
+       `rep stos DWORD`, the unaligned one `rep stos BYTE al`). One byte is
+       therefore the engine's own width for `OP_BAR`, not a narrowing of ours.
+
+       THE OTHER THREE MEAN SOMETHING ELSE AND THIS FIELD DOES NOT DESCRIBE
+       THEM [CORRECTED 2026-09-18 by landing 8a's review; the first version of
+       this comment claimed all four went through `0x4CCDEA`, and disassembly
+       of the pristine build says none of the other three does]:
+         - `OP_FRAME` / `0x4BF4D0` is a SHADE, not a fill. The argument is a
+           SIGNED level clamped to [-0x20, +0x1F] that selects one of 32 rows
+           of a 256-byte remap table -- `globals+0xC4` for negative, `+0xC8`
+           for positive -- and every pixel already in the box is read and
+           written back through that row. Truncating it to a byte is
+           meaningless, which is why `publish` reads `col` for `OP_BAR` alone.
+           `0x4AA912`'s `0x4BF4D0(panel+0xBC, rect, -0x18)` is darken level 24,
+           NOT palette index 232.
+         - `OP_RECT` / `0x4BF8C0` writes four edges through the store-only
+           Bresenham `0x4CC7AB`, and `0x4BF7B0` writes through `0x4BEC70`.
+           Neither writer's colour width has been established here.
+       [exe-reverse-engineering.md has all four, disassembled.
        The vulkan-only plan, landing 8a.] */
     unsigned char col;
     /* AND THE FONT IS RESOLVED AT OBSERVE TIME TOO (G19f-8), for the reason

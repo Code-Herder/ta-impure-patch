@@ -3250,18 +3250,31 @@ clip.
 | `0x4BF6F0` | `DrawBar` | stdcall `0xC` | `(ctx, RECT*, colour)` | the rect, inclusive, via `0x4BF620` + `0x4CCDEA`; 47 callers | `83 EC 40 8B 44 24 48` (7) |
 | `0x4BF8C0` | `DrawTranspRectangle` | stdcall `0xC` | `(ctx, RECT*, colour)` | hollow rect; 12 callers incl. the minimap view box `0x466B5E`, the HUD `0x467F6C` | `83 EC 68 53 56 57` (6) |
 | `0x4BF7B0` | the focus rectangle | stdcall `0xC` | `(ctx, RECT*, colour)` | drawn last by `GUI_StageUpdateDraw` via `0x4A16F0(gi, idx, 8)` | `83 EC 30 53 55 56 57` (7) |
-| `0x4BF4D0` | framed box | stdcall `0xC` | `(ctx, RECT*, colour)` | three clipped fills (`0x4BF620` ×3, `0x4CCDEA` ×2); **what `DrawPopupF4Dialog 0x4948E0` draws its border with** (×3) | `83 EC 40 53 55 56 57` (7) |
+| `0x4BF4D0` | **the box SHADER** — not a fill at all | stdcall `0xC` | `(ctx, RECT*, level)` — the third argument is a **signed shade level**, not a colour | one clip through `0x4BF620` (×**1**), **no `0x4CCDEA`**, then every pixel in the box remapped through a 256-byte LUT row; **what `DrawPopupF4Dialog 0x4948E0` draws its border with** (×3 — three *calls*, not three fills) | `83 EC 40 53 55 56 57` (7) |
 | `0x4BF620` | the rect CLIPPER the four above share | stdcall `8` | `(clip RECT*, RECT*)` | clamps the second rect into the first and returns 0 when they do not overlap — four `cmp`/early-out pairs, then four clamps. **Carries no colour.** | `8B 4C 24 04 83 EC 10` (7) |
 | `0x4CCDEA` | the solid-fill WRITER the four above share | cdecl, 3 args | `(surface, RECT*, colour)` | **uses only the LOW BYTE of `colour`** — see below | `55 8B EC 56 57 53 51 52` (8) |
 | `0x4C6890` | `SurfaceFill` | stdcall `8` | `(surface, colour)` | the whole surface | `83 EC 64 53 55 56 57` (7) |
 | `0x4C6B70` | surface → surface | stdcall `0x10` | `(dst, src, x, y)` | `0x4CBBE0(dst, src, x − (s16)src[+0x18], y − (s16)src[+0x1A])`; `dst == NULL` ⇒ the back buffer, `src == NULL` ⇒ the screen; 23 callers — the GUI blit `0x4AB158`, the build's snapshot `0x4A9098`, `0x4A90CC`, `0x4A9111`, the teardown `0x4A952B`, the picture tiler `0x4B02DF`, the minimap `0x466B44`, cursor save/restore | `83 EC 30 56 8B 74 24 38` (8) |
 | `0x4CBBE0` | `CopyScreenContext` | cdecl | `(dst, src, x, y)` | the whole `src` at `dst+0xC + y·pitch + x`, clipped by `dst+0/+4` only — **reads neither clip rect**; 17 callers: three in the flip, two in `0x4C6B70`, **ten in cursor code** (the `SAVEMOUSE` buffers are written through it directly) | `55 8B EC 83 C4 E4` (6) |
 
-**`0x4BF620` and `0x4CCDEA`, the pair every solid UI fill goes through** [DISASSEMBLED 2026-09-18,
-this project, `objdump -d -M intel` of the pristine build]. `DrawBar 0x4BF6F0`,
-`DrawTranspRectangle 0x4BF8C0`, the framed box `0x4BF4D0` and the focus rectangle `0x4BF7B0` all
-clip with the first and write with the second, so what the second does with its colour argument is
-what all four mean by "colour".
+**`0x4BF620` and `0x4CCDEA`, the pair `DrawBar` goes through — and it is the ONLY one of the four**
+[DISASSEMBLED 2026-09-18, this project, `objdump -d -M intel` of the pristine build].
+
+**This paragraph said the opposite until 2026-09-18 and the correction is the point of it.** It
+claimed `DrawBar 0x4BF6F0`, `DrawTranspRectangle 0x4BF8C0`, the framed box `0x4BF4D0` and the focus
+rectangle `0x4BF7B0` "all clip with the first and write with the second, so what the second does
+with its colour argument is what all four mean by colour". Counting the calls in each body says
+otherwise, and three of the four do not reach `0x4CCDEA` at all:
+
+| function | clips with | writes with |
+|---|---|---|
+| `0x4BF6F0` `DrawBar` | `0x4BF620` ×2 | **`0x4CCDEA` ×2** — the only one |
+| `0x4BF4D0` the box shader | `0x4BF620` ×1 | none — an inline per-pixel LUT remap (below) |
+| `0x4BF8C0` `DrawTranspRectangle` | `0x4BEA20` ×10 | `0x4CC7AB` ×10, plus `0x4BE950` ×2 |
+| `0x4BF7B0` the focus rectangle | — | `0x4BEC70` ×8 |
+
+So `0x4CCDEA`'s byte-wide colour is a fact about **`DrawBar` alone**, and every statement below
+about "the colour" is scoped to it. The three others' colour widths are **not established here**.
 
 **THE COLOUR ARGUMENT IS AN 8-BIT PALETTE INDEX, AND THE SIGN OF THE INT PASSED IS IRRELEVANT.**
 `0x4CCDEA` takes `(surface, RECT*, colour)` cdecl — `[ebp+0x8]` the surface (pitch at `+0x8`,
@@ -3273,14 +3286,49 @@ at `0x4CCDFE`). **Both read the colour as a BYTE:**
   `mov ah,al` builds a DWORD of four copies of the low byte, then `rep stos DWORD`;
 * unaligned (`0x4CCE73`): `mov eax,[ebp+0x10]` then `rep stos BYTE al` — again the low byte alone.
 
-**So a NEGATIVE colour is not a mode.** `0x4AA912` calls `0x4BF4D0(panel+0xBC, rect, -0x18)`, which
-looked like a special encoding and is not: `-0x18` is `0xFFFFFFE8`, the writer takes `0xE8`, and the
-fill is palette index **232**. A consumer may carry these colours in one `unsigned char` — which is
-what the engine itself keeps — and the same is already recorded for the glyph blitter's three
-colour arguments at `0x4CCFE2`.
+**A `DrawBar` colour therefore fits in one `unsigned char`** — which is what the engine itself
+keeps, and the same is already recorded for the glyph blitter's three colour arguments at
+`0x4CCFE2`.
 
-[Established because the vulkan-only plan's landing 8 turns these four ops from published SURFACE
-BYTES into drawn geometry, and needed to know the width of the colour field before choosing one.]
+#### `0x4BF4D0` is a SHADE, and its third argument IS a mode [DISASSEMBLED 2026-09-18]
+
+**The first version of this section drew the opposite conclusion from a function it never
+disassembled**, and said so emphatically: *"So a NEGATIVE colour is not a mode. `0x4AA912` calls
+`0x4BF4D0(panel+0xBC, rect, -0x18)`, which looked like a special encoding and is not: `-0x18` is
+`0xFFFFFFE8`, the writer takes `0xE8`, and the fill is palette index 232."* A survey had flagged
+that argument as possibly a shade mode and **the survey was right**; it was overruled on a reading
+of `0x4CCDEA`, a function `0x4BF4D0` does not call. Found by landing 8a's review.
+
+What it actually does, `(ctx, RECT*, int level)` stdcall `ret 0xC`, returning 1 on a draw and 0 on
+every refusal:
+
+* `0x4BF4D7` `0x4B6220()` → the graphics globals, kept in `ebp` for the whole body;
+* `0x4BF4DC` a NULL `ctx` is acquired through `0x4C5E70` (and released by `0x4C5FA0` at
+  `0x4BF608`); a non-NULL one is **copied**, `rep movs` of `0xC` dwords, so the context is 0x30
+  bytes and the caller's is not written;
+* `0x4BF50B` a NULL `RECT*` becomes the whole surface from `globals+0xD4` / `+0xD8`;
+* `0x4BF53B` **one** call to the clipper `0x4BF620`; a non-overlapping box returns 0;
+* `0x4BF569` the level: `cmp eax,0` decides the table. **Negative** — clamped to `>= -0x20`
+  (`0x4BF572`), table `[globals+0xC4]`, row `level + 0x20`. **Positive** — clamped to `<= 0x1F`
+  (`0x4BF595`), table `[globals+0xC8]`, row `level`. **A NULL table pointer returns 0 and draws
+  nothing**, which is a refusal by data rather than by argument;
+* `0x4BF5B5` `row = table + (n << 8)` — so each table is **32 rows of 256 bytes**;
+* `0x4BF5E8` the pixel loop, and it is a **read-modify-write of the destination**:
+  `movsx ebx,BYTE PTR [ecx]` / `mov bl,BYTE PTR [ebp+ebx*1]` / `mov BYTE PTR [ecx-1],bl`.
+
+**So `0x4AA912`'s `-0x18` is darken level 24 (row 8 of `globals+0xC4`), not palette index 232**, and
+the function tints what is already in the box rather than painting over it. `0x4BF620` is shared
+with `DrawBar` and carries no colour, so it is unaffected by this correction.
+
+**A negative result worth having: the LUT index is SIGNED.** `movsx` sign-extends the destination
+byte, so a palette index of `0x80`..`0xFF` addresses `row_base − 128`..`row_base − 1` — inside the
+*previous* row. Whether the tables are laid out to make that deliberate is **not established**; it
+is recorded because a consumer that reimplements the remap with an unsigned index will disagree
+with the engine on exactly half the palette.
+
+[Established because the vulkan-only plan's landing 8 turns these ops from published SURFACE BYTES
+into drawn geometry, and needed to know what each one's third argument means before choosing a
+packet field. Landing 8a shipped `OP_BAR` only, which is the one this section gets right.]
 
 Not drawers, checked because the popups call them: `0x47F1A0` (helpers `0x47F0C0`, `0x44FDB0`,
 `0x451DF0`, …, no pixel write), `0x4B6560` (`jmp [0x4FC0DC]`, an import thunk), `0x4A5030`

@@ -2985,10 +2985,18 @@ the full play arm set at 1024x768: **`bar 1334` observed, `bars=158` replayed, t
 magenta of 786 432**, health bars visibly under each unit.
 
 **The colour field's width was disassembled before the packet carried one** and landed separately
-(`f8c1b6b`): `0x4CCDEA`, the writer every solid UI fill goes through, reads `BYTE PTR [ebp+0x10]`
-on both its paths, so the colour is an 8-bit palette index and the *sign* of the int passed is
-irrelevant — `0x4AA912`'s `0x4BF4D0(panel+0xBC, rect, -0x18)` is index 232, not the shade mode the
-survey had guessed.
+(`f8c1b6b`): `DrawBar`'s writer `0x4CCDEA` takes the low byte of its colour and nothing wider, so
+`PK_BAR::fg` is one byte by the engine's own width.
+
+**And 8a's review found that the same commit generalised that to three sibling functions and was
+wrong about all three.** `0x4BF8C0` writes through `0x4CC7AB`, `0x4BF7B0` through `0x4BEC70`, and
+**`0x4BF4D0` does not fill at all** — it remaps every pixel already in the box through one of 32
+256-byte rows at `globals+0xC4`/`+0xC8`, selected by a *signed level*. So `0x4AA912`'s `-0x18` is
+darken level 24, not palette index 232, and the survey that guessed "shade mode" was right and had
+been overruled on a reading of a function `0x4BF4D0` does not call. No shipped defect — the colour
+is read for `OP_BAR` alone — but it moves 8d: a tint that READS its destination is a different
+mechanism from the three op kinds that replace published bytes with a description of a draw, and
+whether `OP_FRAME` should port at all is now an open question rather than a queued task.
 
 **And 8a is 0.02 % of the traffic**, which the row says rather than leaves to be discovered: the
 live census is **`rect 5 396 343`, `line 3 614 453`, `bar 1 334`**. `OP_BAR` went first because it
@@ -2997,8 +3005,8 @@ The rest come apart along their own unknowns: **8b `OP_RECT`** conflates the *ho
 `DrawTranspRectangle 0x4BF8C0` (written by the store-only Bresenham `0x4CC7AB`) with the focus
 rectangle `0x4BF7B0`; **8c `OP_LINE`** needs the direction bit, because a diagonal's bounding box
 is not the line — [gui-renderer](gui-renderer.html) §20's cyan squares are that fault; **8d**
-`OP_FRAME 0x4BF4D0`, three fills whose layout is not disassembled, and `OP_SCALE`, a scaled blit
-that probably belongs with `PK_SPRITE`. **Not covered by 8a:** `PK_PIXELS` is not closed — four of
+`OP_FRAME 0x4BF4D0`, the destination shade above, and `OP_SCALE`, a scaled blit that probably
+belongs with `PK_SPRITE`. **Not covered by 8a:** `PK_PIXELS` is not closed — four of
 five kinds still publish surface bytes, and the gate's exit condition is unchanged.
 
 ### Not in this phase
