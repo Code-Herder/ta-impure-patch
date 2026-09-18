@@ -116,6 +116,8 @@ void tagpu_text_glyph_dims(int* w, int* h);
    cleared and re-used. */
 unsigned tagpu_text_glyph_gen(void);
 unsigned int tagpu_text_glyph_tex(void);
+/* has the cache rasterised any glyph? asked without a GL context */
+int tagpu_text_glyph_have(void);
 /* THE GLYPH ATLAS AS BYTES (G19f landing 2). A second backend cannot read a GL
    texture, and this one needs no mechanism to expose: the module already keeps
    the atlas as a CPU array and uploads the texture FROM it, so this is the

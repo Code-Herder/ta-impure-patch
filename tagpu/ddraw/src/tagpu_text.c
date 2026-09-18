@@ -546,6 +546,13 @@ const unsigned char* tagpu_text_glyph_atlas(int* w, int* h)
     return s_gatlas;
 }
 
+/* WHETHER THE CACHE HAS RASTERISED ANYTHING, asked without a GL context --
+   the same first question tagpu_text_glyph_tex() asks before it touches GL.
+   The cells are CPU-side and survive a lost context, so this is the honest
+   test for a caller that only needs to know there is text to stamp.
+   [The vulkan-only plan, landing 4b-3.] */
+int tagpu_text_glyph_have(void) { return s_gglyphs != 0; }
+
 unsigned int tagpu_text_glyph_tex(void)
 {
     if (!s_gglyphs) return 0;

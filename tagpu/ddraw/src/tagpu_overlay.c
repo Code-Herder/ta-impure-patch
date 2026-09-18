@@ -401,14 +401,16 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        than an error. A pass that is not called publishes nothing, so its Vulkan
        twin stands down and SAYS SO, which is a refusal that names itself.
 
-       THE GATE MOVES INWARD, one commit per pass: once a pass can gather
-       without drawing, its own draw block takes this test and the call here
-       loses it. `tagpu_scaffold_frame`, `tagpu_fps_present` and
-       `tagpu_native_frame` have all made that move -- they are called
-       unconditionally below and gate their own uploads and draws -- so this
-       variable guards ONE pass now, `tagpu_gui_present`, and will guard none
-       when 4b is finished. [The vulkan-only plan, landings 4b-1 and 4b-2.] */
-    const int gl_draws = !tagpu_vk_owns_present();
+       THE GATE HAS FINISHED MOVING INWARD. It was one test here, taken away
+       one pass per commit as each learned to gather without drawing:
+       `tagpu_scaffold_frame`, `tagpu_fps_present` and `tagpu_native_frame` in
+       4b-1 and 4b-2, and `tagpu_gui_present` in 4b-3. All four are called
+       unconditionally below and each gates its own GL objects, uploads, draws
+       and state restore, so there is no variable here any more -- the reason
+       the paragraphs above are kept is that they are the argument for why the
+       gate is a gate at each of those sites rather than an absent context
+       quietly doing nothing.
+       [The vulkan-only plan, landings 4b-1, 4b-2 and 4b-3.] */
 
     /* the palette the screen is shown with, once for every pass that resolves
        an 8-bit index this frame -- the world's and the UI layer's alike
@@ -457,7 +459,7 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        world's composite (UI above the world; the engine's own pixels stay
        the fallback beneath). Runs in the shell too: the native pass returns
        early there, this does not. */
-    if (gl_draws) tagpu_gui_present(f);
+    tagpu_gui_present(f);
     oerr("gui");
 
     /* The frame-rate readout, ABOVE the UI layer: it is a diagnostic drawn over
