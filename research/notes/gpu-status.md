@@ -10517,6 +10517,89 @@ repaint there has nothing to re-issue. **A forced repaint is a shell mechanism.*
   `0x40`; whether any of its 32 callees does is open. `0x4BBC40` and `0x4BBE50` both reach
   `0x4D85A0`, and whether either is on the `0x40` path was not established.
 
+### 2.62 TA's frame was uploaded twice a frame, and one of them was ours — landing 10
+
+**LANDED 2026-09-18.** The plan filed this as *"the engine-frame fallback layer goes from the
+composite"*. That is not what the code turned out to need, and the row says so.
+
+#### What the survey actually found
+
+`tagpu_vk_surf.c` holds TA's 8-bit surface as an **R8 image** and draws it opaque as the frame's
+bottom layer — `:398` says so in place, and in the Vulkan lane nothing else draws it, so it is
+load-bearing and does **not** go. `tagpu_vk_gui.c` uploaded the **same bytes again** into its own
+`s_engImg`, purely to bind as the layer shader's `uSurf`:
+
+| | source | format | destination |
+|---|---|---|---|
+| the bottom layer | `tagpu_surf_frame()` → `tagpu_vk_surf.c:636` | `R8_UNORM` | that pass's per-slot image |
+| `uSurf` | `tagpu_surf_frame()` → `tagpu_gui_surf.c:3100` → `tagpu_vk_gui.c:1990` | `R8_UNORM` | `s_engImg`, bound at binding 42 |
+
+Same source, same format, same dimensions. At 1024×768 that is **786 432 bytes memcpy'd
+host→staging and copied staging→image a second time**, on every frame the surface changes.
+
+**The reason the code gave for it had already died.** `tagpu_vk_gui.c:1656` read *"without it the
+GL lane's `uSurf` reads an image ours would not have"* — and the GL lane went in 4d-1/4d-2.
+
+#### What `uSurf` is still for, and why it stays
+
+Not a layer. `LAY_FS` ends in `discard`, so where the twin has no coverage the shader paints
+nothing and whatever is underneath shows through. `uSurf` is **read as a reference** by two
+consumers: the **stale-mirror guard** (`:630-635`, under `uGuard`), which discards where the twin
+says index 0 and the engine says otherwise — this is what stops the layer painting stale black
+over the intro Smacker — and the **`uStrict` harness**. Deleting it would re-open the first.
+
+#### The change
+
+`tagpu_vk_surf_engine_view(slot, &w, &h)` hands the existing image over. The ordering it needs
+already exists: the seam calls `tagpu_vk_surf_prepare` at `tagpu_vk.c:2771` **before**
+`tagpu_vk_gui_prepare` at `:2822`, same command buffer, same slot — so the image is uploaded and
+barriered into `SHADER_READ_ONLY_OPTIMAL` ahead of the descriptor that names it, and both passes
+already wanted that layout and one shared sampler. The accessor returns `VK_NULL_HANDLE` unless
+the slot holds a current frame (`haveSerial`, not merely a live view, because a slot can own a
+correctly sized image nothing has been uploaded into yet).
+
+**Deleted with it:** `s_engImg`/`s_engMem`/`s_engView` and their creation, the per-frame `memcpy`
+and `copy_rect`, two image barriers, `s_engHave` (the compose gate asks the same question one step
+earlier), and **the second bound on the engine frame's dimensions** — `SURF_MAXDIM` 8192 in the UI
+pass against `TAGPU_SURF_MAXDIM` 4096 at the producer, the looser one downstream, so it bounded
+nothing. That is the trap `tagpu_vk_surf.c:574` already names in place, in its second instance.
+
+**And a failure mode moved to where it is tested.** A device that cannot sample `R8_UNORM` now
+fails at `tagpu_vk_surf.c:292`, which checks for it by name, instead of through a `mk_image` of
+the UI pass's own that never did.
+
+#### Measured
+
+`renderer=vulkan`, the shipped arm set:
+
+| | before (`main`) | after |
+|---|---|---|
+| shell frame | 640×480, 148 colours, 0 magenta | **identical** |
+| in-game frame | 1024×768, 709 colours, 0 magenta | **identical** |
+| in-game frame stability, 2 s apart | — | **0 differing pixels** |
+| `noeng=` / `skipped=` / fps | — | 0 / 0 / 60.0 |
+
+**The shell is not a pixel oracle** and this landing is where that was measured: it varies against
+*itself* by **181–191 px** between consecutive captures, so a diff there cannot see anything
+smaller. The in-game frame is stable to 0 px and is the one to diff.
+
+#### Not covered
+
+* **The saving is counted from the diff, not measured.** Per frame: one 786 432-byte host memcpy,
+  one staging→image copy of the same size, two image barriers, and per-slot staging smaller by the
+  same amount; plus one `VkImage` + `VkDeviceMemory` + `VkImageView` no longer allocated at all.
+* **`tagpu_ftime` does not resolve it, and it is the wrong instrument.** Four windows each: p50
+  **1.218–3.005 ms** before and **1.679–2.823 ms** after — overlapping, no direction. It measures
+  **GPU** timestamps, and the larger half of what was removed is a **host** memcpy, which could not
+  show there however much it cost. Sizing this properly needs a host-side timer around the upload,
+  which this landing did not add.
+* **The guard's own behaviour was not re-tested against the case it exists for** — the intro
+  Smacker unblanking. The frame being identical everywhere else is consistent with the guard
+  working, and is not the same as exercising it.
+* **`h.eng`, `h.engW`, `h.engH`, `h.engPitch` survive in the hand-over** and nothing downstream
+  dereferences the pointer any more; it is now only what tells the producer whether to arm `guard`
+  and `strict`. Deleting the fields touches the producer/lane seam and was left out of this landing.
+
 ## 4. What the work taught us
 
 These are the transferable parts — the reasons things are shaped the way they are.

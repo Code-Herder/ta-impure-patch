@@ -3081,6 +3081,31 @@ on first touch after every reseed and the repaint replays *over* it; and in game
 **1 op**, because `ARMMAIN2.GUI` is a three-label screen and the HUD is not a gadget tree. A forced
 repaint is a **shell** mechanism.
 
+**10 LANDED 2026-09-18** ([gpu-status](gpu-status.html) §2.62), **and it is not the landing the
+plan filed.** The row read *"the engine-frame fallback layer goes from the composite"*. The layer
+does not go: `LAY_FS` ends in `discard`, so the engine's frame was never composited as a bottom
+layer in the shader — and in the **Vulkan** lane `tagpu_vk_surf.c` draws it opaque as exactly that,
+where nothing else would, so it is load-bearing. `uSurf` does not go either: the stale-mirror guard
+reads it, and that guard is what stops the layer painting stale black over the intro Smacker.
+
+What the survey found instead is that **the lane uploaded TA's frame twice a frame** — once by
+`tagpu_vk_surf.c` for the bottom layer and once by `tagpu_vk_gui.c` for `uSurf`, same
+`tagpu_surf_frame` source, same `R8_UNORM` format, same dimensions, 786 432 bytes at 1024×768 —
+and that the comment justifying the second copy reasoned from the **GL lane**, which went in
+4d-1/4d-2. So the UI pass borrows the image the surface pass already uploaded and barriered, on an
+ordering the seam already has (`tagpu_vk.c:2771` before `:2822`, same command buffer, same slot).
+Deleted with it: two image barriers, a memcpy and a copy per frame, an image and its memory, and
+the second bound on the engine frame's dimensions — `SURF_MAXDIM` 8192 downstream of
+`TAGPU_SURF_MAXDIM` 4096, which therefore bounded nothing.
+
+Verified by running it: shell and in-game frames **identical** to the figures measured before the
+change (148 colours / 0 magenta at 640×480; 709 / 0 at 1024×768), the in-game frame stable to 0
+differing pixels, `noeng=0`, 60.0 fps. **Not covered:** the saving is counted from the diff and
+**not** measured — `tagpu_ftime` gave overlapping p50 ranges (1.218–3.005 ms before, 1.679–2.823
+after) and is the wrong instrument anyway, since it times the GPU and the larger half of what was
+removed is a host memcpy. Also measured, and useful beyond this landing: **the shell varies against
+itself by 181–191 px between captures**, so it is not a pixel oracle; the in-game frame is.
+
 ### Not in this phase
 
 **Ray tracing** (needs 64-bit — see the kill rule), **the out-of-process split**, and **a D3D12

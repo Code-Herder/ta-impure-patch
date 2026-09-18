@@ -1487,7 +1487,23 @@ Back to the filed list:
    (`tagpu_restoreglsl.h`) is *a frame of art from an R8 atlas with its colour key*; a seeded
    panel is a composite of art, glyphs and chrome with no key and no tileability, the model was
    not trained for it, and `uidiff` has no cell to match it against.
-10. **The engine-frame fallback layer goes** from the composite. `tagpu_gui_surf.c:51` has it as
+10. **The engine-frame fallback layer goes** — **LANDED 2026-09-18, AND NOT AS THIS ROW READS.**
+    Neither half of the title survived contact with the code: the *layer* does not go (in the
+    Vulkan lane `tagpu_vk_surf.c` draws TA's frame opaque as the bottom layer and nothing else
+    would), and `uSurf` does not go (the stale-mirror guard reads it). What went is a **duplicate
+    upload nobody had noticed**: the lane was copying TA's frame into *two* R8 images every frame,
+    `tagpu_vk_surf.c`'s for the bottom layer and `tagpu_vk_gui.c`'s `s_engImg` for `uSurf`, from
+    the same `tagpu_surf_frame` source — 786 432 bytes at 1024×768, twice. The UI pass now borrows
+    the surface pass's image through `tagpu_vk_surf_engine_view`, on an ordering the seam already
+    had. Full write-up and the measurements: `gpu-status.md` §2.62.
+
+    **The comment that justified the second copy reasoned from the GL lane**, which went in
+    4d-1/4d-2 — a stale justification outliving the thing it named, which is the same failure as
+    landing 11's headline being a comment.
+
+    The original text follows, and its own correction below it is still right about `uSurf`:
+
+    `tagpu_gui_surf.c:51` has it as
     the bottom of three; G15b, G15c and G17d measured **0 holes** across 120 stops, so nothing
     reads it.
 
