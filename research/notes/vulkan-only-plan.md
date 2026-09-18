@@ -534,9 +534,24 @@ would not have shown up as a failure — it would have shown up as three landing
        uploaded by the GL backend before any pass runs; the backend taking that upload over is
        4c, and until then `tagpu_terrown.c` and anything else reading it has nothing."*
      * **`f.surface_tex` cannot carry it.** That field is a GL texture NAME and stays 0 on route
-       E by contract (0 is what the fork already hands a non-8bpp frame). The Vulkan hand-over is
-       its own — bytes, width, height, pitch and the palette — from `render_vk.c` to the seam to
-       the pass, in the two-phase `prepare`/`record` shape every ported pass uses.
+       E by contract (0 is what the fork already hands a non-8bpp frame), so the bytes need a
+       route of their own.
+     * **AND THAT ROUTE IS A GETTER, NOT A HAND-OVER THROUGH THE SEAM.** [Corrected 2026-09-18,
+       having first written it the other way round.] Every ported pass has the identical
+       signature — `int tagpu_vk_<pass>_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb,
+       uint32_t slot)`, checked across fps, mark, feat, terr and scaffold — and carries **no
+       data arguments at all**. It PULLS, from a getter on the module that owns the answer:
+       `tagpu_scaffold_overlay(&buf, &w, &h, rect, &rows, &ab)`,
+       `tagpu_feat_handover(&h, d->frame)`. The seam passes a device, a command buffer and a
+       slot, and nothing else — which is what keeps `tagpu_vk_pass.h`'s promise that a pass
+       could draw into anyone's image without a line of it changing.
+     * **So 4c-1 needs a module that owns the snapshot**, not a parameter chain. `render_vk.c` is
+       the lane's loop rather than a data module, and `tagpu_gui_surf.c` owning it is the
+       coupling this landing exists to undo — so the snapshot of TA's primary and the palette it
+       is resolved through becomes its own small module, taken once per frame from
+       `tagpu_overlay_draw` (which both lanes reach, and which runs before `tagpu_vk_frame` in
+       the same iteration, so the bottom layer is ready before the passes draw). It needs no
+       `thread-split.allow` entry, for the reason two bullets up.
      * **The descriptor layout is already fixed by the generated header:** vertex set 0 binding 0,
        std140, 64 bytes (`mat4 MVPMatrix`); fragment set 0 binding 40 `sampler2D Texture` and
        binding 41 `sampler2D PaletteTexture`; attributes at locations 0/1/2, the numbers
