@@ -118,6 +118,27 @@ void tagpu_vk_world_end(const TAGPU_VKPASS* d, VkCommandBuffer cb);
 void tagpu_vk_world_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                            uint32_t w, uint32_t h);
 
+/* THE IMAGE THE WORLD WAS DRAWN INTO THIS FRAME, for the A/B capture and for
+   nothing else. Returns 1 and fills `img`/`w`/`h` when `slot` is the slot the
+   world render pass was opened on this frame; 0 when there is no target, when
+   the slot is a different one, or before `begin` has run. The image is in
+   SHADER_READ_ONLY_OPTIMAL -- the offscreen pass's `finalLayout` -- and its
+   format is the seam's own `d->fmt`, because that is what `slot_size` builds it
+   with. Valid from `begin` until the next frame's `prepare`.
+
+   WHY THE CAPTURE MOVED HERE. The GL half of a world A/B is the world FBO at
+   `gw*ss, gh*ss` (tagpu_native.c binds it and sets `glViewport(0, 0, gw*ss,
+   gh*ss)`; tagpu_abshot.c reads the viewport back). The Vulkan half was the
+   SWAPCHAIN image at the window's client rect, so the two were the same size
+   only at `ss = 1` with no letterbox -- which is why four passes refused their
+   own A/B outright whenever `ss != 1`, and `ss` is 2 unless `tagpu_ss.off` is
+   there. Since landing 4c-2 this lane HAS a `gw*ss, gh*ss` image holding the
+   world alone over a transparent clear, which is the same picture GL's FBO is,
+   so the two halves are the same size and the same content at every `ss`.
+   That is what makes a world A/B runnable on the SHIPPED configuration, which
+   it has never been. [The vulkan-only plan, landing 4c-3.] */
+int  tagpu_vk_world_shot(uint32_t slot, VkImage* img, uint32_t* w, uint32_t* h);
+
 /* The teardown handshake every module here has: the seam asks, waits for the
    device to go idle, then pays. */
 void tagpu_vk_world_down(const TAGPU_VKPASS* d);

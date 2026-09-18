@@ -61,6 +61,14 @@ static int s_state;
 static int s_downOwed;
 static int s_downPaying;
 static int s_openSlot = -1;             /* the slot `begin` opened, -1 = none */
+/* THE SLOT THIS FRAME'S WORLD WAS ACTUALLY RENDERED INTO, -1 = none, and the
+   only thing `tagpu_vk_world_shot` will read. `s_drawThis` cannot serve: it is
+   cleared by `record`, which runs BEFORE the capture is recorded, so a shot
+   asking it would always be told there is no target. This is set where the
+   render pass is opened and cleared where the frame's decision is taken, so it
+   is a statement about what the command buffer contains rather than about what
+   the module intended. [The vulkan-only plan, landing 4c-3.] */
+static int s_drewSlot = -1;
 static int s_drawThis;                  /* `record` may composite this frame  */
 static int s_saidBig;                   /* the per-factor bound said once  */
 static int s_saidBigProduct;            /* ...and the product's, its own   */
@@ -153,9 +161,29 @@ static int mk_att(const TAGPU_VKPASS* d, int w, int h, VkFormat fmt, int depth,
     /* THE COLOUR IMAGE IS SAMPLED AND THE DEPTH ONE IS NOT, which is the whole
        difference between them here. GL's `s_depTex2` is a texture because a GL
        FBO attachment is one; nothing reads it, and asking for SAMPLED on a
-       depth image narrows the formats a device will give us for no gain. */
+       depth image narrows the formats a device will give us for no gain.
+
+       AND THE COLOUR IMAGE CARRIES TRANSFER_SRC, WHICH IS THE A/B's. This is
+       the image a world capture reads (`tagpu_vk_world_shot`), and
+       `vkCmdCopyImageToBuffer` requires the usage to have been asked for AT
+       CREATION -- no layout transition confers it. The same finding was made
+       against the swapchain images in the 2026-09-15 review, where the
+       reference ICD copied anyway and a whole 0-px result rested on undefined
+       behaviour; asking here is that lesson applied rather than re-learned.
+
+       UNCONDITIONAL, on purpose. The alternative is a second build key so the
+       flag is only present while a lever is armed -- which trades a usage bit
+       for a rebuild on the measured frame and a rebuild path that only ever
+       runs while someone is measuring, i.e. the least-exercised code in the
+       module guarding the most-trusted number in it. The swapchain images make
+       the same trade (tagpu_vk.c: `if (s_vk.cansrc) swci.imageUsage |= ...`).
+       A device that refuses the combination fails vkCreateImage, which this
+       function reports as a refusal and the seam answers by leaving the world
+       on the swapchain image -- a smaller picture and never a wrong one. */
     ici.usage = depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
-                      : (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+                      : (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                         VK_IMAGE_USAGE_SAMPLED_BIT |
+                         VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     if (vkCreateImage(d->dev, &ici, NULL, img) != VK_SUCCESS) return 0;
@@ -635,6 +663,7 @@ int tagpu_vk_world_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
     (void)cb;
     s_drawThis = 0;
     s_openSlot = -1;
+    s_drewSlot = -1;
     if (s_state == ST_REFUSED) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
     if (!tw || !th) return 0;
@@ -761,6 +790,7 @@ void tagpu_vk_world_begin(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     rbi.pClearValues = cv;
     vkCmdBeginRenderPass(cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
     s_openSlot = (int)slot;
+    s_drewSlot = (int)slot;
     (void)d;
 }
 
@@ -850,6 +880,23 @@ void tagpu_vk_world_down(const TAGPU_VKPASS* d)
 }
 
 int tagpu_vk_world_scale(void) { return s_drawThis ? s_lastSS : 1; }
+
+int tagpu_vk_world_shot(uint32_t slot, VkImage* img, uint32_t* w, uint32_t* h)
+{
+    if (!img || !w || !h) return 0;
+    /* THE SLOT THE WORLD WENT INTO, AND NO OTHER. Every other slot's image is
+       an earlier frame's picture, still allocated because the slots are
+       long-lived -- so a capture read out of one would be a real image of the
+       wrong frame, which is the single worst thing an oracle can hand back.
+       `s_drewSlot` is set where the render pass is opened, so this is a
+       question about the command buffer. */
+    if (s_drewSlot < 0 || (uint32_t)s_drewSlot != slot) return 0;
+    if (slot >= TAGPU_VK_SLOTS || !s_slot[slot].col || s_slot[slot].w <= 0) return 0;
+    *img = s_slot[slot].col;
+    *w = (uint32_t)s_slot[slot].w;
+    *h = (uint32_t)s_slot[slot].h;
+    return 1;
+}
 
 int tagpu_vk_world_down_owed(void) { return s_downOwed; }
 

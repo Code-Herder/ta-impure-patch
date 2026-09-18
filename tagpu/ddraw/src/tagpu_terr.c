@@ -1829,20 +1829,16 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
            armed without one. Read once so the two arms cannot disagree about
            which frame is the capture frame. */
         int taking = s_ab && !s_abDone;
-        if (taking && v->ss != 1) {
-            /* REFUSED RATHER THAN WRITTEN AT THE WRONG SIZE, on either lane.
-               The GL capture is this FBO's viewport, gw*ss x gh*ss, and the
-               Vulkan one is the window's client rect; at ss 2 they differ by a
-               factor of two and tools/vk-ab.py would refuse the pair after the
-               fact. Saying so here names the cause. It is asked on the
-               vulkan-only lane too, where there is no supersampled FBO yet:
-               the reference this build is compared against was taken at ss=1,
-               and 4c is where an `ss` target on this side changes the answer. */
-            flog("terr: the A/B needs ss=1 (the GL capture is the supersampled FBO) "
-                 "- nothing captured; relaunch with supersampling off");
-            s_abDone = 1;
-            taking = 0;
-        }
+        /* NO `ss` BOUND ON THIS A/B ANY MORE. It used to refuse itself whenever
+           `ss != 1`, because the GL capture is this FBO's viewport -- gw*ss by
+           gh*ss -- and the Vulkan half was the window's client rect, so at the
+           shipped ss=2 the two files differed by a factor of two and
+           tools/vk-ab.py refused the pair. Landing 4c-2 gave the Vulkan lane a
+           gw*ss by gh*ss world target and 4c-3 pointed the capture at it, so both
+           halves are now the same size at every `ss` and this pass is measurable on
+           the configuration it actually ships in. The refusal moved to the lane
+           that can see the target: if there is none that frame, tagpu_vk.c says so
+           by name and captures nothing. [tagpu_vk_world.h.] */
         if (gl_draws) {
             glUseProgram(s_prog);
             x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);

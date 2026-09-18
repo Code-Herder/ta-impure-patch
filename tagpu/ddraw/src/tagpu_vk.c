@@ -2841,6 +2841,11 @@ static int vk_present(void)
         int ab_unit = 0, ab_gui = 0;
         int ndraw = 0, nclaim = 0;
         const char* abpath = NULL;
+        int abIsWorld = 0;              /* the claimed pass draws into the world */
+        int abworld = 0;                /* ...and the capture reads that target  */
+        VkImage abimg = VK_NULL_HANDLE;
+        VkImageLayout ablay = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        uint32_t abw = 0, abh = 0;
         VkRenderPassBeginInfo rbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
         if (s_vk.rp && s_vk.fb[idx]) {
             /* THE PORTED PASSES, IN THE GL LANE'S OWN ORDER. tagpu_overlay.c
@@ -3000,7 +3005,15 @@ static int vk_present(void)
             int abi;
             abpath = NULL;
             for (abi = 0; abi < 8 && !abpath; abi++)
-                if (abclaim[abi]) abpath = s_abFiles[abi].path;
+                if (abclaim[abi]) {
+                    abpath = s_abFiles[abi].path;
+                    /* THE FIRST FIVE ROWS ARE THE WORLD, and the row order is
+                       the one thing this list is FOR -- it is the same array the
+                       path came out of, so "which file" and "which target" can
+                       no more drift apart than the path and the unlink can.
+                       [The vulkan-only plan, landing 4c-3.] */
+                    abIsWorld = abi < 5;
+                }
         }
 
         /* ---- THE WORLD, INTO ITS OWN TARGET AND BEFORE THE FRAME'S PASS ----
@@ -3058,7 +3071,20 @@ static int vk_present(void)
                a measurement is being taken on and nothing else. It is the same
                kind of measurement-only divergence as `tagpu_vk.on`'s
                `color=0,0,0`, which exists so the two clears agree.
-               [FROM THE 4c-2 LANDING REVIEW.] */
+               [FROM THE 4c-2 LANDING REVIEW.]
+
+               WHAT STILL DEPENDS ON THIS, AFTER 4c-3: the THREE UI passes.
+               A world capture no longer reads this image at all -- it reads the
+               offscreen world target, which TA's frame never reaches -- so for
+               terr, feat, posedraw, fx and mark the line is now belt beside
+               braces. The scaffold, GUI and readout captures are still this
+               image, and their GL halves are still the default framebuffer
+               blacked by `tagpu_abshot_begin`, so for them it is the whole
+               argument and measured as such: the GUI A/B is 0 px of 307 200
+               with this line in (2026-09-18). Narrowing it to those three would
+               buy a more normal-looking picture on a frame nobody is watching,
+               at the cost of a second condition on the one statement that makes
+               a measured frame a measurement. */
             if (draw_surf && nclaim == 0)
                 tagpu_vk_surf_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             /* THE WORLD. With a target it was drawn into it above and this is
@@ -3125,17 +3151,66 @@ static int vk_present(void)
                   "feat=%d unit=%d fx=%d mark=%d scaf=%d gui=%d fps=%d)",
                   (unsigned)s_pass.frame, ndraw, nclaim, draw_terr, draw_feat,
                   draw_unit, draw_fx, draw_mark, draw_scaf, draw_gui, draw_fps);
+        /* WHICH IMAGE THE CAPTURE READS, AND IT IS NOT ALWAYS THE FRAME.
+           [The vulkan-only plan, landing 4c-3.]
+
+           A WORLD PASS'S GL HALF IS THE WORLD FBO, NOT THE WINDOW. tagpu_native.c
+           binds it and sets `glViewport(0, 0, gw*ss, gh*ss)`; tagpu_abshot.c
+           blacks it, lets the pass draw and reads THAT viewport back. So the GL
+           half is `gw*ss` by `gh*ss` -- the game's own resolution times the
+           supersample factor -- and it has never been the window's client rect.
+           Reading the swapchain image for the Vulkan half therefore produced two
+           files of the same size only at `ss = 1` with no letterbox, and `ss` is
+           2 unless `tagpu_ss.off` is there. Four passes answered that by
+           REFUSING their own A/B whenever `ss != 1`; posedraw did not, and wrote
+           a pair tools/vk-ab.py then refused by size.
+
+           Landing 4c-2 gave this lane a `gw*ss, gh*ss` image holding the world
+           alone over a transparent clear, which is what GL's FBO is. Reading it
+           makes the two halves the same size and the same kind of picture at
+           every `ss`, so a world A/B runs on the SHIPPED configuration for the
+           first time. It also makes the capture independent of everything the
+           swapchain image carries -- TA's own frame included -- which is the
+           divergence the `nclaim == 0` line above exists for.
+
+           `tagpu_vk_world_shot` answers about THIS frame's command buffer: it
+           names the slot the world render pass was actually opened on, so a
+           frame with no target (the world on the swapchain image, the fallback
+           path) returns 0 here and is refused BY NAME below rather than captured
+           at the wrong size and diagnosed afterwards by the diff tool. */
+        if (nclaim == 1) {
+            abimg = s_vk.img[idx];
+            ablay = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            abw = s_vk.ext.width;
+            abh = s_vk.ext.height;
+            if (abIsWorld && tagpu_vk_world_shot(fi, &abimg, &abw, &abh)) {
+                /* The offscreen pass's `finalLayout`, and `tagpu_vk_shot_record`
+                   puts it back -- which costs nothing, because that pass declares
+                   `initialLayout = UNDEFINED` and does not care what it finds. */
+                ablay = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                abworld = 1;
+            }
+        }
         if (nclaim > 1 || (nclaim == 1 && ndraw > 1))
             vklog("%d A/B levers claimed this frame and %d passes drew into it - "
                   "nothing captured. A Vulkan frame carries every armed pass at "
                   "once while each GL capture carries one, so arm one pass's .ab "
                   "at a time (and turn the other pass's .on off).", nclaim, ndraw);
-        else if (nclaim == 1 && !s_vk.cansrc)
+        else if (nclaim == 1 && abIsWorld && !abworld)
+            vklog("a world pass claimed the A/B and this frame has no world "
+                  "target - its GL half is the gw*ss FBO and the only image here "
+                  "is the window's client rect, which tools/vk-ab.py refuses as "
+                  "two sizes. Nothing captured; the line above says why the "
+                  "target stood down.");
+        /* TRANSFER_SRC IS THE SURFACE'S PROBLEM, so it is only asked about the
+           surface's image. The world target is ours and is CREATED with the
+           usage (tagpu_vk_world.c: `mk_att`), so a device that would not give us
+           one has already failed vkCreateImage and stood the target down. */
+        else if (nclaim == 1 && !abworld && !s_vk.cansrc)
             vklog("the A/B asked for a capture and this surface's images do not "
                   "carry TRANSFER_SRC - only the GL half will be written");
-        else if (nclaim == 1 && tagpu_vk_shot_record(&s_pass, cb, s_vk.img[idx],
-                                                     VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                                                     s_vk.ext.width, s_vk.ext.height, s_vk.fmt)) {
+        else if (nclaim == 1 && tagpu_vk_shot_record(&s_pass, cb, abimg, ablay,
+                                                     abw, abh, s_vk.fmt)) {
             s_abSlot1 = (int)fi + 1;
             s_abPath = abpath;
         }

@@ -1068,12 +1068,16 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
        clearing it would be clearing something the draw does not touch. */
     {
         int taking = s_ab && !s_abDone;
-        if (taking && v->ss != 1) {
-            flog("mark: the A/B needs ss=1 (the GL capture is the supersampled "
-                 "FBO) - nothing captured; relaunch with supersampling off");
-            s_abDone = 1;
-            taking = 0;
-        }
+        /* NO `ss` BOUND ON THIS A/B ANY MORE. It used to refuse itself whenever
+           `ss != 1`, because the GL capture is this FBO's viewport -- gw*ss by
+           gh*ss -- and the Vulkan half was the window's client rect, so at the
+           shipped ss=2 the two files differed by a factor of two and
+           tools/vk-ab.py refused the pair. Landing 4c-2 gave the Vulkan lane a
+           gw*ss by gh*ss world target and 4c-3 pointed the capture at it, so both
+           halves are now the same size at every `ss` and this pass is measurable on
+           the configuration it actually ships in. The refusal moved to the lane
+           that can see the target: if there is none that frame, tagpu_vk.c says so
+           by name and captures nothing. [tagpu_vk_world.h.] */
         s_abTaking = taking;
         /* `tagpu_abshot_begin` is GL too, though it is not spelled `gl*`: it
            clears the frame and saves the state it moves. On the vulkan-only
