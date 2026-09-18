@@ -1,0 +1,20 @@
+landing-review: 4c-2, the offscreen ss world target
+reviewed=main...c863424 model=opus level=high
+findings=8 acted=8 recorded=0 rejected=0 fixes=1bac157
+HIGH 1: vk-ab.py exited 0 when every difference fell on a GL-black pixel, which is
+blind to an OVER-DRAW (G19e's line rasterisation was exactly that). Root cause was
+4c-1's bottom layer, not 4c-2: fixed in the seam with 'draw_surf && nclaim == 0'.
+Both world A/Bs back to 0 px of 786432 (terrain 630719 ink, effects 31532).
+MED 2: dep[0] source scope omitted the colour/depth WRITE masks -- WAW on LOAD_OP_CLEAR.
+MED 3: fx/mark set the line width from the hand-over's ss, not the target's; the
+fallback arm would have drawn ss-wide lines into a 1:1 target. World target now
+prepared FIRST and both passes read tagpu_vk_world_scale().
+MED 4: five comments the landing falsified, two above the code contradicting them.
+MED 5: roadmap said 'only 4d is left' while the plan still assigned s_curDrew to 4c.
+LOW 6/7/8: dead TAGPU_WORLDTGT.serial removed and devres now reported; the two
+dimension refusals shared one say-once latch; an sRGB swapchain format is refused.
+Three further defects were found by the implementer while the review ran and fixed
+in 0879feb/52212d0 (unset dynamic line width, BY_REGION dependency, overflow bound);
+the reviewer independently confirmed all three fixes correct.
+20 facts checked and confirmed, incl. per-slot lifetimes, render-pass compatibility,
+begin/end balance, the frame-counter identity, and every GL-side prose claim.
