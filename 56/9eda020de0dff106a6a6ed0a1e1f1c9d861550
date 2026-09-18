@@ -1,0 +1,34 @@
+landing-review: landing 9 (the forced GUI repaint), level high, 2026-09-18
+
+Range main...HEAD at 42cf921..569eda0; a dedicated read-only reviewer with the
+pristine build and objdump. NO HIGH findings. Three MEDIUM, eight LOW/NIT.
+
+MEDIUM 1 — "those four are the only allocator and free calls" false: 0x4A81E0
+also calls the raw free 0x4D85A0 at 0x4A9575 and 0x4A95A7. Verified. All four
+free sites sit inside the 0x4A950A `test bl,0x2` gate with ebx reloaded from
+the flags argument at 0x4A9434/0x4A94C0/0x4A94C9, so the conclusion survives on
+the gate. Fixed in five places.
+
+MEDIUM 2 — a 0x40 redraw writes gi+0xCCA (the GUI dirty flag) and gadget +0x1F
+through 0x4A16F0, and the pump 0x4A9FD0 answers that flag with another redraw.
+Verified at 0x4A1708/0x4AA0AF/0x4AA0CD. Added to the fields-we-write table.
+The reviewer's suggested falsification (builds= under both arms) was run and
+came back INCONCLUSIVE at three boots per arm — overlapping means — so the
+amplification question is recorded as open, not closed.
+
+MEDIUM 3 — the +0x29 paragraph broke a Markdown table and dropped two rows from
+the rendered page. Verified by rendering. Fixed, and re-verified by a check that
+can actually see it (prose absorbed as table CELLS, not as literal pipe text).
+
+LOW/NIT all verified and all fixed: the skip counter counted flips not episodes;
+two heartbeat keys spelled ops=; recorded-vs-attempted op counts; our synthetic
+call polluting builds=; the exact-fit terminator in kinds[]; two spellings of
+0x531; three doc phrasings; a split sentence in the skill.
+
+One reviewer claim NOT adopted: a transitive "103 functions, none reach an
+allocator". My own coarser scan reaches 0x4BBC40 and 0x4BBE50, which do call
+0x4D85A0, so the transitive question is documented as open rather than asserted
+either way.
+
+Findings acted on in 5896b1f (and 2325aa2, which landed independently during the
+review and fixed exactly what its buffer findings would have been).
