@@ -842,7 +842,7 @@ Back to the filed list:
 
    Most of the landing's length went on one defect, and its shape is the part worth carrying
    forward. The first one or two unit batches painted **black** and every later batch was exact.
-   The cause was outside the restorer: `prepare`'s **feed** path — the frame that exists only to
+   The cause was outside the restorer: `tagpu_vk_unit_upload`'s **feed** path — the frame that exists only to
    make the job — left through a stand-down that frees the slot, and that frees the staging buffer
    a `vkCmdCopyBufferToImage` recorded moments earlier still reads. The lost copy is not the
    damage; the damage is that `atlas_upload` latches `s_atHave`/`s_atSerial`/`s_atRows` at **record**
@@ -859,6 +859,17 @@ Back to the filed list:
    then showed 404 798 texels missing where the same read-back taken later is exact. When a
    dependent lane's picture is wrong, measure its INPUT at the moment of use before reasoning about
    its arithmetic.
+
+   **The review returned four code findings and one doc error, all verified against the source and
+   all acted on** — and three of the four are about paths the reference setup's driver never takes,
+   which is the argument for a reader rather than another run: a level-0-only twin (reachable
+   whenever `glGenerateMipmap` does not resolve) drew **no units at all for the session** because
+   the OUT pass paints through a level-0 view that was only created for `mips >= 1` and `job_new`
+   refuses a null view silently; the "twin moved under a live restore" guard could not fire in two
+   of the cases it exists for and ran later in the frame than the destruction it guarded; the
+   forced first mip reduction sampled level 0 while it was still `UNDEFINED`, on the ordinary first
+   frame; and a degenerate list frame turned into a permanent coverage boundary. The chain
+   re-measured `IDENTICAL` on both fixtures afterwards.
 
    **Still open after 7e-2:** the same record-time latch exists in `tagpu_vk_feat.c` and
    `tagpu_vk_fx.c` and is unreachable there rather than absent — neither has a stand-down below its

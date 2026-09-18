@@ -1171,8 +1171,17 @@ static int covered_prefix(const TAGPU_RGLSL_FRAME* f, int n, int rows)
 {
     int i;
     for (i = 0; i < n; i++)
-        if (f[i].ay < 0 || f[i].h <= 0 || f[i].ay + f[i].h > rows) return i;
+        if (f[i].ay < 0 || f[i].ay + f[i].h > rows) return i;
     return n;
+    /* A DEGENERATE FRAME IS NOT AN UNCOVERED ONE, and testing `h <= 0` here
+       conflated them: one such entry became a permanent coverage boundary, so
+       every frame behind it stayed unpainted for the life of the generation
+       while `s_arHave` still said the twin was a picture. The restorer already
+       refuses a degenerate frame by name and `restore_want` advances the cursor
+       by what was OFFERED, which is what makes "a frame the core can never
+       queue is skipped for good" true -- so this function answers the coverage
+       question alone and lets `job_add` answer the other one.
+       [Landing 7e-2's review, finding 4.] */
 }
 
 static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
@@ -1202,7 +1211,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
        The rebuild is unreachable today -- the dimensions are compile-time and
        the accessor refuses a depth that moves -- which is exactly why the check
        is here rather than trusted. */
-    if (s_rjob && s_rjDstView && s_arLvlN > 0 && s_rjDstView != s_arLvl[0]) {
+    if (s_rjob && s_rjDstView && (!s_arImg || s_rjDstView != s_arLvl[0])) {
         plog(d, "unit: the restored twin moved under a live restore - dropping it "
                 "and starting over on the new one");
         tagpu_vk_restore_job_free(d, s_rjob);
@@ -1269,7 +1278,11 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
        picture wherever a unit is minified -- which is ordinary play. Standing
        the restore down leaves the pass on the indexed atlas, which is the
        shipped fallback and looks like Classic++ off rather than like a bug. */
-    if (s_arMips > 0 && s_arLvlN < s_arMips + 1) {
+    /* UNCONDITIONALLY, so a gap stands down LOUDLY instead of falling into
+       `job_new`'s silent refusal of a null view. `s_arMips + 1` is the whole
+       chain including level 0, which is the one every twin has.
+       [Landing 7e-2's review, finding 2.] */
+    if (s_arLvlN < s_arMips + 1) {
         plog(d, "unit: the restored twin has no per-level views, so this lane "
                 "cannot reduce its own mip chain - staying indexed rather than "
                 "sampling levels nothing has written");
@@ -1285,7 +1298,18 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
                                       s_atImg, s_atView, s_atDim, s_atDim,
                                       h->pal,
                                       s_arImg, s_arLvl[0], s_arDim, s_arDim);
-    if (!s_rjob) { s_rjTried = 1; return; }
+    if (!s_rjob) {
+        /* IT SAYS SO. `job_new` refuses a bad argument without a word of its
+           own, and `s_rjTried` is cleared only by a teardown, so a silent
+           refusal here is a pass that draws nothing for the rest of the
+           session and never explains why. [Landing 7e-2's review, finding 2.] */
+        plog(d, "unit: the restorer would not take a job for the twin "
+                "(%dx%d, %d mip level(s), %d per-level view(s)) - staying "
+                "indexed for this session",
+             s_arDim, s_arDim, s_arMips, s_arLvlN);
+        s_rjTried = 1;
+        return;
+    }
     /* THE OUT PASS PAINTS LEVEL 0 THROUGH `s_arLvl[0]`, not through the
        whole-chain view: a framebuffer attachment must name exactly one level,
        and the whole-chain view named three. */
@@ -1326,6 +1350,28 @@ static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int mips)
 {
     int i;
     if (s_arImg && s_arDim == dim && s_arMips == mips) return 1;
+    /* A LIVE JOB NAMES WHAT THE NEXT FOUR LINES DESTROY, so it goes FIRST and
+       it goes from here rather than from `restore_want`. The job holds `dstFb`,
+       `dstView` and every `chainFb[]` over this image and these views, and
+       `job_free` retires them on the mask a submitted command buffer is bound
+       by; `kill_image` below does not defer. `restore_want`'s "the twin moved"
+       check is the backstop and cannot be the fix: it runs LATER in the frame,
+       so by the time it looked the handles were already dead -- and it could
+       not fire at all for a level-0-only twin, because it tested `s_arLvlN > 0`
+       and this function leaves that 0 on exactly the paths that destroy the
+       most. Reachable because `tagpu_gaf.c` demotes the atlas's `mip` to 0 at
+       runtime when `glGenerateMipmap` does not resolve, and the producer
+       publishes that unfiltered. [Landing 7e-2's review, finding 1.] */
+    if (s_arImg && s_rjob) {
+        plog(d, "unit: the restored twin is being rebuilt (%dx%d mip %d -> %dx%d "
+                "mip %d) and a restore is live on the old one - dropping the job "
+                "before the image it paints into goes away",
+             s_arDim, s_arDim, s_arMips, dim, dim, mips);
+        tagpu_vk_restore_job_free(d, s_rjob);
+        s_rjob = NULL; s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0;
+        s_rjChain = 0; s_rjSrcView = VK_NULL_HANDLE; s_rjDstView = VK_NULL_HANDLE;
+        s_arHave = 0;
+    }
     for (i = 0; i <= TAGPU_VK_MAXMIP; i++)
         if (s_arLvl[i]) { vkDestroyImageView(d->dev, s_arLvl[i], NULL); s_arLvl[i] = VK_NULL_HANDLE; }
     s_arLvlN = 0;
@@ -1353,7 +1399,16 @@ static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int mips)
        undefined levels is a wrong picture rather than a missing one. The image
        itself is kept: the mirror path uses the same one and does not need
        these. */
-    if (mips >= 1 && mips <= TAGPU_VK_MAXMIP) {
+    /* `mips >= 0`, NOT `>= 1`. The caller admits `restoreMips == 0` by name
+       (`h.restoreMips >= 0` at the build site) and that is a real
+       configuration: the atlas demotes `mip` to 0 whenever `glGenerateMipmap`
+       did not resolve. A level-0-only twin needs no chain, but the OUT pass
+       still paints THROUGH `s_arLvl[0]`, so it needs that one view -- and with
+       this loop starting at 1 there was none, `job_new` refused the null
+       `dstView` silently, `s_rjTried` latched for the session and the unit pass
+       stood down on EVERY frame. No units drawn at all, on any driver missing
+       those two GL entry points. [Landing 7e-2's review, finding 2.] */
+    if (mips >= 0 && mips <= TAGPU_VK_MAXMIP) {
         for (i = 0; i <= mips; i++) {
             VkImageViewCreateInfo vi = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
             vi.image = s_arImg;

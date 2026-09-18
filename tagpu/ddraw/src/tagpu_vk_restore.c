@@ -2471,12 +2471,24 @@ static void chain_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, struct TAGPU_V
     int L, painted;
     if (!g->core || !g->core->used || g->chainN <= 0 || !s_pipeMip) return;
     painted = g->core->tframes;      /* what `job_painted` publishes */
-    /* NOTHING PAINTED SINCE THE LAST REDUCTION MEANS THE LEVELS ARE CURRENT,
-       with one exception that is the whole reason `chainDone` exists: the FIRST
-       reduction has to run even over an unpainted twin, because a Vulkan image's
-       levels begin UNDEFINED and the consumer samples the chain trilinearly.
-       The GL lane has the same rule for the same reason (tagpu_gaf.c's
-       twin_mips after the job's creation). */
+    /* NOTHING PAINTED MEANS NOTHING TO REDUCE, AND THAT INCLUDES THE FIRST
+       PASS. This used to force one reduction over an unpainted twin, on the
+       stated grounds that a Vulkan image's levels begin UNDEFINED and the
+       consumer samples the chain trilinearly. Both halves were wrong. The
+       consumer cannot sample the chain until `job_painted` moves -- the unit
+       pass sets `s_arHave` only on `painted > 0` -- so there is nothing to
+       protect; and level 0 is exactly as UNDEFINED as the rest until
+       `dst_ready` transitions it, which happens in the OUT path and therefore
+       has NOT happened on a slice that painted nothing. The forced pass
+       sampled level 0 through a descriptor declaring
+       SHADER_READ_ONLY_OPTIMAL while the image was still UNDEFINED: a layout
+       mismatch, undefined behaviour, and a validation error on the ordinary
+       first frame, because the unit job is priority 3 and `covered_prefix`
+       deliberately returns 0 while the atlas upload lags.
+       `chainDone` still earns its keep -- it is what makes a reduction run
+       again when the paint count has NOT moved but the levels are stale.
+       [Landing 7e-2's review, finding 3.] */
+    if (painted <= 0) return;
     if (g->chainDone && painted == g->chainPainted) return;
     for (L = 1; L <= g->chainN; L++) {
         VkRenderPassBeginInfo rbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };

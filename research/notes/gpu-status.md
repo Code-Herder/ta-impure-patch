@@ -8512,8 +8512,8 @@ Vulkan lane's first one or two unit batches came out **black** — every texel, 
 near-black values — while every later batch was byte-perfect. The cause was not in the restorer at
 all:
 
-* `tagpu_vk_unit.c`'s `prepare` reached `standdown` on its **feed** path — the frame that comes
-  only to make the restore job and draws nothing — and `standdown` calls `slot_free`, which is
+* `tagpu_vk_unit_upload` reached `standdown` on its **feed** path — the frame that comes only to
+  make the restore job and draws nothing — and `standdown` calls `slot_free`, which is
   `kill_buffer(&s->vstage)`. By that point `atlas_upload` had memcpy'd the indexed mirror into
   that buffer and recorded a `vkCmdCopyBufferToImage` out of it, and `cb` is submitted whether the
   pass draws or not. The source buffer of a pending copy was destroyed under it.
@@ -8552,6 +8552,38 @@ cannot see a source that was empty while the lane was restoring. It reported "th
 the SAME bytes differently" and the premise was false. A dependent-lane oracle must compare the
 lanes' **inputs at the moment of use**, not at the end of the run; when a dependent lane's picture
 is wrong, make the shader report its input before theorising about its arithmetic.
+
+
+**The review's four code findings, all verified against the source and all acted on.** Three of
+them are about paths this driver never takes, which is exactly why they needed a reader rather than
+a run:
+
+1. **A level-0-only twin drew no units at all, for the session.** `atlas_rgb_build` created the
+   per-level views only for `mips >= 1`, but the OUT pass paints *through* `s_arLvl[0]`, so with
+   `restoreMips == 0` the job was created with a null `dstView`; `job_new` refuses that **without a
+   word**, `s_rjTried` is cleared only by a teardown, and the pass then stood down on every frame.
+   `restoreMips == 0` is not hypothetical — `tagpu_gaf.c` demotes the atlas's `mip` to 0 whenever
+   `glGenerateMipmap`/`glTexParameterf` do not resolve, and the build site admits `>= 0` by name. So
+   the views start at level 0, the prerequisite gate is unconditional, and the refusal says so.
+2. **The "twin moved under a live restore" guard could not fire in two of the cases it exists for**
+   — it tested `s_arLvlN > 0`, and `atlas_rgb_build` leaves that 0 on precisely the paths that
+   destroy the image and every view over it. It was also in the wrong place: it runs later in the
+   frame than the destruction it guards against. The job is now dropped by `atlas_rgb_build` itself,
+   before `kill_image`, so its framebuffers retire on the mask a submitted command buffer is bound
+   by; the check in `restore_want` stays as a backstop and can now actually fire.
+3. **The forced first mip reduction sampled level 0 while it was still `UNDEFINED`.** `chain_step`
+   ran one pass over an unpainted twin, on the stated grounds that the levels begin undefined and
+   the consumer samples trilinearly — and both halves were wrong: the consumer does not sample the
+   chain until `painted > 0`, and level 0 is undefined too until `dst_ready` transitions it in the
+   OUT path. A descriptor declaring `SHADER_READ_ONLY_OPTIMAL` over an `UNDEFINED` image is
+   undefined behaviour, and it fired on the *ordinary* first frame.
+4. **A degenerate list frame stalled the cursor for good.** `covered_prefix` returned at `h <= 0`
+   as well as at "not yet uploaded", conflating a frame the restorer will refuse with a coverage
+   boundary — so every frame behind it stayed unpainted while `s_arHave` still called the twin a
+   picture. It answers the coverage question alone now, which is what makes `restore_want`'s own
+   "a frame the core can never queue is skipped for good" true.
+
+The chain re-measured `IDENTICAL` after the fixes, on both fixtures.
 
 **Not covered.**
 
