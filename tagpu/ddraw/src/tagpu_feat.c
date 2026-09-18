@@ -422,6 +422,33 @@ static GLuint mksh(GLenum t, const char* src)
     return sh;
 }
 
+/* THE ATLAS IS THE PASS, NOT THE BACKEND, so its layout is set up here and not
+   in `init_gl`. It used to be `init_gl`'s last block, which meant that gating
+   `init_gl` on the vulkan-only lane left `dim` at 0 -- and then
+   `tagpu_gaf_atlas_create` refused for that reason, `tagpu_gaf_atlas_mirror`
+   was never asked for, every sprite lookup returned NULL, and the pass gathered
+   101 bodies into `atlas=0` and handed over nothing. Nothing in here is GL: the
+   only call that was, `atlas_create`, gates its own texture and keys the
+   atlas's existence on `made` rather than on a GL name (tagpu_gaf.h).
+   [The vulkan-only plan, landing 4b-2.] */
+static void atlas_setup(void)
+{
+    tagpu_gaf_atlas_lost(&s_atlas);          /* its texture is made on first use */
+    s_atlas.dim = ATLAS_DIM; s_atlas.max = ATLAS_MAX;
+    s_atlas.ents = s_atlasEnts; s_atlas.tag = "feat";
+    s_atlas.prio = 1;                        /* restored after the terrain, before effects */
+    /* Every frame in here is a feature standing on the map, so nothing in it
+       ever stops being wanted: when it fills, re-lay it tallest-first and
+       keep it rather than drop it (tagpu_gaf.h `repack`). Before this the
+       atlas hit `full` at 48% occupancy and was rebuilt from nothing on the
+       next frame -- and on the frame after that, for as long as the view
+       stayed wide enough to want more frames than arrival order could pack:
+       37,140 rebuilds in one 4K session, each of them re-decoding ~200 GAF
+       frames and clearing the Classic++ restore queue before it could land. */
+    s_atlas.repack = 1;
+    tagpu_gaf_atlas_create(&s_atlas);   /* never bind texture 0 to uAtlas */
+}
+
 static void init_gl(void)
 {
     GLuint vs, fs;
@@ -480,20 +507,7 @@ static void init_gl(void)
     }
     glBindVertexArray(0);
 
-    tagpu_gaf_atlas_lost(&s_atlas);          /* its texture is made on first use */
-    s_atlas.dim = ATLAS_DIM; s_atlas.max = ATLAS_MAX;
-    s_atlas.ents = s_atlasEnts; s_atlas.tag = "feat";
-    s_atlas.prio = 1;                        /* restored after the terrain, before effects */
-    /* Every frame in here is a feature standing on the map, so nothing in it
-       ever stops being wanted: when it fills, re-lay it tallest-first and
-       keep it rather than drop it (tagpu_gaf.h `repack`). Before this the
-       atlas hit `full` at 48% occupancy and was rebuilt from nothing on the
-       next frame -- and on the frame after that, for as long as the view
-       stayed wide enough to want more frames than arrival order could pack:
-       37,140 rebuilds in one 4K session, each of them re-decoding ~200 GAF
-       frames and clearing the Classic++ restore queue before it could land. */
-    s_atlas.repack = 1;
-    tagpu_gaf_atlas_create(&s_atlas);   /* never bind texture 0 to uAtlas */
+    atlas_setup();
     s_state = 1;
     flog("feat: GL ready");
 }
@@ -775,6 +789,11 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     if (!tagpu_vk_owns_present()) {
         if (s_state == 0) init_gl();
         if (s_state != 1) return feat_bail();
+    } else if (!s_atlas.made) {
+        /* `init_gl` is not called on this lane, so the atlas it used to set up
+           is set up here instead -- once, since `made` latches. */
+        atlas_setup();
+        if (!s_atlas.made) return feat_bail();
     }
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
     /* Classic++: the lazy restore of this atlas, armed once the switch is on

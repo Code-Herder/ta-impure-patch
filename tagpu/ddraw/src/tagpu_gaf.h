@@ -80,7 +80,16 @@ struct TAGPU_RGLSL_JOB;
 #define TAGPU_GAF_HASH 8192     /* power of two, > 2x any atlas's max      */
 
 typedef struct TAGPU_GAFATLAS {
-    unsigned int  tex;          /* GL_R8 texture, created on first use       */
+    /* THE ATLAS EXISTS WHEN `made` SAYS SO, NOT WHEN `tex` IS NON-ZERO. `tex`
+       is only its GL NAME and is 0 on a lane that has no GL at all: under
+       `renderer=vulkan` the entries, the shelf packer and the CPU mirror are
+       all still built and a second backend uploads the mirror itself. Keying
+       existence on the handle is what made every sprite pass gather geometry
+       and find `atlas=0` there -- `glGenTextures` is a direct opengl32 import,
+       so with no context it does not fail loudly, it leaves the name at 0 and
+       `tagpu_gaf_atlas_create` refused. [The vulkan-only plan, landing 4b-2.] */
+    int           made;         /* the atlas is laid out and usable          */
+    unsigned int  tex;          /* its GL_R8 name, or 0 where there is no GL */
     int           dim;          /* square edge in texels                     */
     int           max;          /* entries in `ents`                         */
     TAGPU_GAFENT* ents;

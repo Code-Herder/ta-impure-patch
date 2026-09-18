@@ -20,6 +20,7 @@
 #include "tagpu_pal.h"
 #include "tagpu_restoreglsl.h"
 #include "tagpu_classicpp.h"
+#include "tagpu_vk.h"      /* tagpu_vk_owns_present: is there a GL lane at all? */
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
 
@@ -887,7 +888,10 @@ int tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a)
 
 void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
 {
-    a->tex = 0; a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
+    /* `made` goes with the name: the layout described a texture that no longer
+       exists, so the next create must lay it out again. */
+    a->tex = 0; a->made = 0;
+    a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
     a->gen++;                   /* ...and again: the texture itself is gone */
     /* and so is everything it held, so the mirror of it says nothing. (The
        re-create zeroes it again; doing it here as well means a mirror is never
@@ -1176,17 +1180,26 @@ static unsigned gaf_hash(const void* p)
 int tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a)
 {
     GLuint t = 0;
-    if (a->tex) return 1;
+    if (a->made) return 1;
     if (a->dim <= 0 || a->max <= 0 || !a->ents) return 0;
-    glGenTextures(1, &t);
-    if (!t) return 0;
-    glBindTexture(GL_TEXTURE_2D, t);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, a->dim, a->dim, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    /* THE GL NAME IS OPTIONAL; THE LAYOUT IS NOT. On a lane with no GL there is
+       no texture to create and none is needed -- the shelf packer, the entry
+       table and the CPU mirror below are the atlas, and the twin uploads the
+       mirror. `if (a->tex) return 1` used to stand where `a->made` does, and
+       `glGenTextures` leaving `t` at 0 with no context turned this into a
+       refusal that read downstream as `atlas=0` and no sprite texels at all.
+       [The vulkan-only plan, landing 4b-2.] */
+    if (!tagpu_vk_owns_present()) {
+        glGenTextures(1, &t);
+        if (!t) return 0;
+        glBindTexture(GL_TEXTURE_2D, t);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, a->dim, a->dim, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
     /* A FRESH TEXTURE IS A FRESH MIRROR. The storage above is unwritten (index
        0, the assumption the border comment below rests on) and a mirror that
        kept the previous texture's texels would be a copy of something that no
@@ -1195,6 +1208,7 @@ int tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a)
        exactly because it follows the paints. */
     if (a->mirror) { memset(a->mirror, 0, (size_t)a->dim * a->dim); a->mirrorSerial++; }
     a->tex = t;
+    a->made = 1;
     a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
     memset(a->hash, 0, sizeof a->hash);
     /* the layout parameters: unset is the sprite atlases' one-texel border */
@@ -1235,7 +1249,9 @@ static int atlas_repack(TAGPU_GAFATLAS* a)
     int i, hb, x = 0, y = 0, sh = 0, kept = 0, w;
     int wanted = 0, wanted_skip = 0;
 
-    if (before <= 0 || before > ORD_MAX || !a->tex || !a->ents) return 0;
+    /* `made`, not `tex`: a repack re-lays the ENTRIES and the paints that follow
+       it feed the CPU mirror, both of which a lane with no GL name still needs. */
+    if (before <= 0 || before > ORD_MAX || !a->made || !a->ents) return 0;
 
     /* Only what is still being ASKED FOR is re-laid. An entry nothing has
        touched since the last repack is not part of the set the atlas is short
@@ -1370,8 +1386,15 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
     const int x = e->x, y = e->y;
     int i;
 
-    glBindTexture(GL_TEXTURE_2D, a->tex);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    /* THE UPLOAD IS GL; THE PAINT IS THE ATLAS. Every GL call in this function
+       is gated and the CPU mirror writes are not: the mirror takes the same
+       bytes from the same buffer (see below), so on a lane with no GL name the
+       art still reaches a second backend. [The vulkan-only plan, landing 4b-2.] */
+    const int gl_draws = !tagpu_vk_owns_present();
+    if (gl_draws) {
+        glBindTexture(GL_TEXTURE_2D, a->tex);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    }
     /* Re-emit the frame with its outermost row and column repeated all
        round, `pad` deep. The border is what any sampler that reaches past
        the frame must land on: under GL_NEAREST that is the fragment whose
@@ -1404,8 +1427,9 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
             memcpy(s_pad + (size_t)(p - k) * pw, s_pad + (size_t)p * pw, (size_t)pw);
         for (k = 0; k < pb; k++)
             memcpy(s_pad + (size_t)(p + h + k) * pw, s_pad + (size_t)(p + h - 1) * pw, (size_t)pw);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, x - p, y - p, cw, ch,
-                        GL_RED, GL_UNSIGNED_BYTE, s_pad);
+        if (gl_draws)
+            glTexSubImage2D(GL_TEXTURE_2D, 0, x - p, y - p, cw, ch,
+                            GL_RED, GL_UNSIGNED_BYTE, s_pad);
         /* THE CPU MIRROR TAKES THE SAME BYTES, FROM THE SAME BUFFER, IN THE
            SAME CALL (Phase G / G19e). Not a second copy of the art: the very
            rows the line above hands GL, so a backend that uploads the mirror
@@ -1421,7 +1445,7 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
             a->mirrorSerial++;
         }
     }
-    glBindTexture(GL_TEXTURE_2D, 0);
+    if (gl_draws) glBindTexture(GL_TEXTURE_2D, 0);
 
     e->u0 = (float)x / (float)a->dim;         e->v0 = (float)y / (float)a->dim;
     e->u1 = (float)(x + w) / (float)a->dim;   e->v1 = (float)(y + h) / (float)a->dim;
