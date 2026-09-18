@@ -9082,9 +9082,24 @@ in four of them:
 | `sharp_minimap`'s bake | `!s_mmTex` | is this palette's resolve of this map in `s_mmPicRgb` (now `s_mmBaked`) |
 | `twin_make` | the entry and its texture made together | the TABLE says a twin exists; `tex`/`fbo` at 0 is a twin with no GL |
 
-**And a second shape, which is the one this landing nearly shipped.** Twelve of the module's
-twenty-one functions really are pure GL executors and return at the head. Three more look exactly
-like them — no return value, nothing but `gl*` calls to a first reading — and are not:
+**And a second shape, which is the one this landing nearly shipped.** Twenty-one functions in
+`tagpu_gui_surf.c` contain a `gl*`/`x_gl*` call, and on `renderer=vulkan` they are inert for
+**three different reasons** — which matters, because a reader auditing "the head-returns" will
+find seven and will not know what protects the other five:
+
+| how it is inert on route E | count | which |
+|---|---|---|
+| returns at the head | 7 | `twin_colour`, `twin_col_drop`, `twin_upload`, `twin_clear`, `restore_step`, `upload_palette`, `unbind_all` |
+| unreachable — the CALLER gates | 3 | `mksh`, `mkprog`, `init_gl` (76 calls, all behind `tagpu_gui_present`'s one test) |
+| its GL calls are keyed on handles that are 0 | 2 | `twin_drop`, `sharp_drop` — `twin_make` never fills `tex`/`fbo` and `twin_colour` never fills `rgb`, so every `if (t->…)` is false |
+| gates inside itself | 9 | the four record-bearing ones (`twin_make`, `twin_sprite`, `twin_string`, `twin_copy`), the four sharp-layer/composite ones (`draw_layer`, `sharp_begin`, `sharp_cursor`, `sharp_minimap`), and `tagpu_gui_present` |
+
+[The count and the three mechanisms were corrected by the 4b-3 landing review; the first draft of
+this section said "twelve return at the head", which was the total of the first two rows plus
+guesswork.]
+
+Three of that last row look exactly like the head-return seven — no return value, nothing but
+`gl*` calls to a first reading — and are not:
 
 | function | what a head-return would have dropped |
 |---|---|
@@ -9127,6 +9142,19 @@ sends the next session to the wrong function.
   the twin composite at all today, and landing 4c is where the backend uploads TA's surface
   instead.
 - The in-game viewport, as above.
+- **`s_curDrew` is weaker on route E than on the GL lane.** It is what lets the engine's own
+  cursor blit stand down, and on the GL lane `draw_layer` sets it after the composite has
+  actually run. On route E there is no composite here: the condition is that the mirror RECORD
+  survived to `draw_layer`'s tail, and `tagpu_vk_gui_prepare` can still refuse the frame
+  afterwards (`s_behind`, `!s_engHave`, `!s_palHave`, a presented twin that stood down or
+  resized, either shader-refusal path). `tagpu_cursown_publish` is called from `render_vk.c`
+  **before** `tagpu_vk_frame` in the same iteration, so nothing at that point can know the
+  outcome. On exactly those frames the twin composites no UI at all, so the visible symptom is
+  the whole layer missing rather than the cursor — but the engine's cursor is suppressed for
+  them, which relaxes an invariant `sharp_cursor`'s own comment states in terms. Closing it by
+  construction means the publish moving after the frame it reports, which changes what the two
+  threads exchange; that belongs with the rest of the present's ordering in **4c**, not to a
+  patch here. [FROM THE 4b-3 LANDING REVIEW.]
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out
 

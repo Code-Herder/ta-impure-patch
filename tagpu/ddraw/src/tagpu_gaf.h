@@ -343,7 +343,10 @@ void tagpu_gaf_atlas_reset(TAGPU_GAFATLAS* a);
    subject changes underneath -- `tagpu_feat.c` on a map change. Cheap, and
    correct to call when nothing has changed. */
 void tagpu_gaf_atlas_forget(TAGPU_GAFATLAS* a);
-void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a);       /* GL context replaced   */
+void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a);
+/* give back the atlas's two heap buffers; for a caller about to re-lay the
+   struct out from zero, which would otherwise drop the pointers */
+void tagpu_gaf_atlas_free_buffers(TAGPU_GAFATLAS* a);       /* GL context replaced   */
 /* create the GL texture now rather than on the first frame that atlases a
    sprite — a pass whose shader samples the atlas must never bind texture 0 */
 int  tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a);

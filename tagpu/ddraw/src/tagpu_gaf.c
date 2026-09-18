@@ -886,6 +886,23 @@ int tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a)
     return 1;
 }
 
+/* GIVE BACK THE TWO HEAP BUFFERS AN ATLAS OWNS, for a caller that is about to
+   lay the struct out again from zero. `mirror` (dim*dim) and `mirrorRgb` (the
+   mip chain) are the only allocations in a TAGPU_GAFATLAS, and neither is
+   freed by `_lost` -- it keeps them deliberately, so that a mirror is never
+   stale for the frames between a context loss and the next create. A caller
+   that re-arms by zeroing the struct therefore drops both pointers and leaks
+   them; every writer already guards on the pointer, and `_mirror`/`_mirror_rgb`
+   re-arm on demand, so handing them back here costs nothing that the memset
+   was not already costing functionally.
+   [FROM THE 4b-3 LANDING REVIEW.] */
+void tagpu_gaf_atlas_free_buffers(TAGPU_GAFATLAS* a)
+{
+    if (!a) return;
+    free(a->mirror);    a->mirror = NULL;
+    free(a->mirrorRgb); a->mirrorRgb = NULL;
+}
+
 void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
 {
     /* `made` goes with the name: the layout described a texture that no longer

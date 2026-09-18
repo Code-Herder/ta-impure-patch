@@ -80,8 +80,9 @@
 #include "tagpu_terrown.h"           /* is the world viewport carrying our key fill right now? */
 #include "tagpu_overlay.h"
 #include "tagpu_pal.h"                    /* the one resolution of the presented palette */
-#include "tagpu_abshot.h"
-#include "tagpu_vk.h"                 /* G19f: the GL half of the Phase G A/B */
+#include "tagpu_abshot.h"            /* G19f: the GL half of the Phase G A/B */
+#include "tagpu_vk.h"                 /* tagpu_vk_owns_present, tagpu_vk_ab_arm:
+                                         which lane this is, and the A/B's arming */
 #include "opengl_utils.h"
 #include "dd.h"                         /* g_ddraw.cursor: the pointer the fork last saw (13.5) */
 #include "ddsurface.h"                  /* G19f: g_ddraw.primary->surface/pitch, the composite's
@@ -662,11 +663,17 @@ static GLuint mkprog(const char* vs, const char* fs)
    the first vulkan-only run of landing 4b-3 measured exactly that: sprites=0,
    atlas=0/0, lost=816878. `tagpu_gaf_atlas_create` has keyed on `made` rather
    than on a GL name since 4b-2, so it is safe to ask for on either lane.
-   Idempotent, and the `made` test comes before the memset that would clear it.
+   Idempotent: the `made` test comes before the memset that would clear it, and
+   the memset's other casualties -- the two heap buffers -- are handed back
+   rather than dropped.
    [The vulkan-only plan, landing 4b-3.] */
 static int atlas_setup(void)
 {
     if (s_atlas.made) return 1;
+    /* the memset drops `mirror` and `mirrorRgb`, which `_lost` keeps across a
+       context loss -- so hand them back first or each loss leaks the pair
+       [FROM THE 4b-3 LANDING REVIEW] */
+    tagpu_gaf_atlas_free_buffers(&s_atlas);
     memset(&s_atlas, 0, sizeof s_atlas);
     s_atlas.ents = s_ents; s_atlas.max = ATLAS_MAX; s_atlas.dim = ATLAS_DIM; s_atlas.tag = "gui";
     s_atlas.pad = 0; s_atlas.align = 0; s_atlas.mip = 0;      /* 1:1, NEAREST, the 1-texel border */
@@ -2411,6 +2418,7 @@ static void draw_layer(const TAGPU_FRAME* f)
     float v[24], ky;
     GLint sz[2], sh[2];
     int L = 0, T = 0, W = 0, H = 0, key;
+    int hudPw = 0, hudBh = 0, hudQ8 = 256;
     const int gl_draws = !tagpu_vk_owns_present();
     if (!t || t->w != f->game_width || t->h != f->game_height) return;
     /* the palette was uploaded in tagpu_gui_present, BEFORE restore_step
@@ -2449,6 +2457,24 @@ static void draw_layer(const TAGPU_FRAME* f)
     if (s_k < 1.0f) s_k = 1.0f;
     ky = (t->h > 0 && f->vp_h > 0) ? (float)f->vp_h / (float)t->h : 1.0f;
     if (ky < 1.0f) ky = 1.0f;
+    /* HUD scale (20): the two reserved integers and s, resolved against the
+       surface being presented -- so the shell, whose surface is 640x480
+       whatever the Screen Size row says, resolves to stock and the map is the
+       identity there without a signal of its own.
+
+       DERIVED ONCE, HERE, AND OUTSIDE THE GL BLOCK. It is a property of the
+       FRAME, and two things want it: the layer's uniform and the hand-over's
+       `hud[]`. Leaving it inside the draw left `s_hudS` unwritten on a lane
+       that does not draw, so the 300-frame heartbeat printed `s=1.000` for the
+       life of the process however the HUD was scaled -- the same defect this
+       landing fixed one screen away in `fog=`, and the same rule: an
+       instrument that is only true on one lane sends the next session to the
+       wrong function. It also ends the second derivation the mirror block used
+       to make, which this function's own comment calls "a second thing that
+       can drift from the draw it is supposed to describe".
+       [FROM THE 4b-3 LANDING REVIEW.] */
+    if (!tagpu_hud_live(&hudPw, &hudBh, &hudQ8)) { hudPw = hudBh = 0; hudQ8 = 256; }
+    s_hudS = (float)hudQ8 / 256.0f;
     /* THE COMPOSITE IS GL; THE HAND-OVER BELOW IS THE VULKAN TWIN'S, and it
        is the whole reason this function may not simply return on a lane with
        no GL. `s_mHand` describes the composite the twin is to run, derived
@@ -2480,15 +2506,8 @@ static void draw_layer(const TAGPU_FRAME* f)
         glUniform1i(s_uLayGuard, f->surface_tex ? 1 : 0);
         x_glUniform2f(s_uLayScale, s_k, ky);
         /* HUD scale (20): the two reserved integers and s, resolved against the
-           surface being presented — so the shell, whose surface is 640x480
-           whatever the Screen Size row says, resolves to stock and the map is the
-           identity there without a signal of its own. */
-        {
-            int hpw = 0, hbh = 0, hq8 = 256;
-            if (!tagpu_hud_live(&hpw, &hbh, &hq8)) { hpw = hbh = 0; hq8 = 256; }
-            s_hudS = (float)hq8 / 256.0f;
-            x_glUniform4f(s_uLayHud, (float)hpw, (float)hbh, 256.0f / (float)hq8, s_hudS);
-        }
+           surface being presented -- resolved above, before this block. */
+        x_glUniform4f(s_uLayHud, (float)hudPw, (float)hudBh, 256.0f / (float)hudQ8, s_hudS);
         /* the sharp layer, above everything, at the device resolution */
         glUniform1i(s_uLaySharpOn, s_sharpOn ? 1 : 0);
         sh[0] = s_sharpW; sh[1] = s_sharpH;
@@ -2515,10 +2534,22 @@ static void draw_layer(const TAGPU_FRAME* f)
     /* THE COMPOSITE HAS RUN, so anything the sharp layer carried is now on the
        frame the player sees. This — not the draw into the layer — is what lets
        the engine's own cursor blit stand down (tagpu_cursown.h). Every early
-       Every early return above leaves it 0 and the engine keeps its cursor.
-       On a lane with no GL the twin's composite is the one that runs, and
-       the hand-over below is what makes it run -- so the condition is that
-       hand-over rather than a draw that did not happen here. */
+       return above leaves it 0 and the engine keeps its cursor.
+
+       ON ROUTE E THIS IS WEAKER THAN IT IS ON THE GL LANE, AND SAYS SO. There
+       is no composite here to have run; `s_mirRec` says the RECORD survived to
+       this point, which is not the same as the twin having drawn it.
+       `tagpu_vk_gui_prepare` still refuses a frame on `s_behind`, `!s_engHave`,
+       `!s_palHave`, a presented twin that stood down or resized, and its two
+       shader-refusal paths -- and `tagpu_cursown_publish` is called from
+       render_vk.c BEFORE `tagpu_vk_frame` in the same iteration, so nothing
+       here can know the outcome yet. On those frames the twin composites no UI
+       at all, so the symptom is the whole layer missing rather than the cursor,
+       and the engine's own cursor is suppressed for them. Closing it properly
+       means the publish moving after the frame it reports, which is a change to
+       what the two threads exchange and belongs to 4c with the rest of the
+       present's ordering. gpu-status.md §2.51 carries it as a named gap.
+       [FROM THE 4b-3 LANDING REVIEW.] */
     if (s_sharpOn && s_curInLayer && (gl_draws || s_mirRec)) s_curDrew = 1;
 
     /* G19f: the uniforms this composite just ran with, for the Vulkan mirror.
@@ -2542,12 +2573,10 @@ static void draw_layer(const TAGPU_FRAME* f)
         s_mHand.colourTwins = (s_colValid && t->rgb) ? 1 : 0;
         s_mHand.vpX = f->vp_x; s_mHand.vpY = f->vp_y;
         s_mHand.vpW_gl = f->vp_w; s_mHand.vpH_gl = f->vp_h;
-        {
-            int hpw = 0, hbh = 0, hq8 = 256;
-            if (!tagpu_hud_live(&hpw, &hbh, &hq8)) { hpw = hbh = 0; hq8 = 256; }
-            s_mHand.hud[0] = (float)hpw; s_mHand.hud[1] = (float)hbh;
-            s_mHand.hud[2] = 256.0f / (float)hq8; s_mHand.hud[3] = (float)hq8 / 256.0f;
-        }
+        /* the same four numbers the uniform above ran with, not a second
+           reading of tagpu_hud_live() */
+        s_mHand.hud[0] = (float)hudPw; s_mHand.hud[1] = (float)hudBh;
+        s_mHand.hud[2] = 256.0f / (float)hudQ8; s_mHand.hud[3] = s_hudS;
         s_mLayer = 1;
     }
 }
