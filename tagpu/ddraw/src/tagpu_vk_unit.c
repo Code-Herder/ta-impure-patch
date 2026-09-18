@@ -1949,9 +1949,20 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     }
     s_saidOther = 0;
 
-    if (h.nunit < 1) goto standdown;
-    if (h.nunit > TAGPU_PD_MAXHAND) goto standdown;       /* the producer's own cap  */
-    if (!h.units || !h.rows || !h.flags || !h.vis) goto standdown;
+    /* THE THREE THAT USED TO BE SILENT. Every other stand-down in this function
+       carries a message; these did not, and a hand-over that succeeds and then
+       stands down here is indistinguishable from one that never arrived.
+       Periodic rather than latched: this landing has been sent to the wrong
+       function twice by a one-shot spent on an ordinary frame. */
+    if (h.nunit < 1 || h.nunit > TAGPU_PD_MAXHAND ||
+        !h.units || !h.rows || !h.flags || !h.vis) {
+        if ((d->frame % 300u) == 0u)
+            plog(d, "unit: frame %u: the hand-over carries nunit=%d (cap %d) "
+                    "units=%d rows=%d flags=%d vis=%d - nothing drawn",
+                 (unsigned)d->frame, h.nunit, TAGPU_PD_MAXHAND,
+                 h.units ? 1 : 0, h.rows ? 1 : 0, h.flags ? 1 : 0, h.vis ? 1 : 0);
+        goto standdown;
+    }
 
     /* THE TEXELS. The mirrors are asked for on the twin's own beat and cannot
        be there before the atlas has its dimensions, so the first frames of a

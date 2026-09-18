@@ -2965,11 +2965,15 @@ static int vk_present(void)
            This line separates the two, and it is the third time in this landing
            that a periodic report of the CURRENT state settled in one run what a
            one-shot latch had hidden. */
-        if ((s_vk.frame % 300u) == 0u)
-            vklog("census: %d pass(es) drew and %d claimed (terr=%d feat=%d "
-                  "unit=%d fx=%d mark=%d scaf=%d gui=%d fps=%d)",
-                  ndraw, nclaim, draw_terr, draw_feat, draw_unit, draw_fx,
-                  draw_mark, draw_scaf, draw_gui, draw_fps);
+        /* KEYED ON THE DRIVER'S FRAME, not the lane's own present counter, so
+           this line can be lined up against the passes' -- two censuses on two
+           counters print on different frames and cannot be compared, which cost
+           this landing a round. */
+        if ((s_pass.frame % 300u) == 0u)
+            vklog("census: frame %u: %d pass(es) drew and %d claimed (terr=%d "
+                  "feat=%d unit=%d fx=%d mark=%d scaf=%d gui=%d fps=%d)",
+                  (unsigned)s_pass.frame, ndraw, nclaim, draw_terr, draw_feat,
+                  draw_unit, draw_fx, draw_mark, draw_scaf, draw_gui, draw_fps);
         if (nclaim > 1 || (nclaim == 1 && ndraw > 1))
             vklog("%d A/B levers claimed this frame and %d passes drew into it - "
                   "nothing captured. A Vulkan frame carries every armed pass at "

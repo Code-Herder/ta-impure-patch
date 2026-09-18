@@ -3726,9 +3726,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if ((f->frame_counter % 300) == 0) {
             char hb[176];
             _snprintf(hb, sizeof hb,
-                      "native: vulkan lane handed over terr=%d feat=%d fx=%d "
-                      "mark=%d units=%d posed=%d", nterr, nfeat, nfx,
-                      markOn ? 1 : 0, nu, npd);
+                      "native: vulkan lane handed over frame %u: terr=%d feat=%d "
+                      "fx=%d mark=%d units=%d posed=%d", f->frame_counter,
+                      nterr, nfeat, nfx, markOn ? 1 : 0, nu, npd);
             hb[sizeof hb - 1] = 0;
             nlog(hb);
         }

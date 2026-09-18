@@ -1021,7 +1021,21 @@ static const TAGPU_PBGEOM* unit_ok(const TAGPU_PDUNIT* u, const TAGPU_PBMAT** mo
     const TAGPU_PBGEOM* g = (const TAGPU_PBGEOM*)u->geom;
     const TAGPU_PBMAT*  m = (const TAGPU_PBMAT*)u->mat;
     if (s_state != 1 || !g || !m || !u->pose) return NULL;
-    if (m->geom != g || !m->vao || m->nvert != g->nvert) return NULL;
+    /* `m->vao` IS A GL NAME, NOT A VALIDITY TEST, and asking it here rejected
+       every unit on the vulkan-only lane -- `mat_bake` creates no vertex array
+       there, so the hand-over came out `nunit=0` and the twin stood down with
+       nothing to say. The integrity the line is for is the other two terms:
+       the material entry names THIS geometry and agrees with it about the
+       vertex count. Where GL draws, a missing array is still a refusal,
+       because the draw below binds it.
+
+       TENTH INSTANCE IN THIS LANDING of a pass keyed on a GL handle rather
+       than on what the handle stands for -- after the GAF atlas's `tex`, the
+       marker layer's `s_tex[i]`, the readout's `textTex`, the terrain atlas's
+       bound and the rest. It is the shape this landing is made of.
+       [The vulkan-only plan, landing 4b-2.] */
+    if (m->geom != g || m->nvert != g->nvert) return NULL;
+    if (!tagpu_vk_owns_present() && !m->vao) return NULL;
     if (u->npose < g->nparts) return NULL;
     if (g->nparts > TAGPU_PBMAXPIECE) { s_overPiece++; return NULL; }
     if (g->count[range] <= 0) return NULL;
