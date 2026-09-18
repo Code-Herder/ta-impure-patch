@@ -165,24 +165,74 @@ static const unsigned char SSB_STOLEN[12] =
 /* THE GATE ITSELF. Read by the two stubs on the GAME thread, written by
    `tagpu_native_frame` on the render thread -- one aligned byte, so the store
    is atomic on x86 and no interlock is owed. Its stale directions are not
-   symmetric and that is the whole of its safety argument:
+   symmetric, and WHICH ONE IS WORSE DEPENDS ON THE VIEWPORT -- an earlier
+   version of this comment got that backwards and the whole landing was built on
+   it for four rounds:
 
-     stale 0 while the pass paints  -> the engine draws its cached shadow and
-                                       ours draws one too: a DOUBLE shadow, for
-                                       the frames before the publish is seen.
-     stale 1 while it does not      -> NO shadow.
+     stale 1 while nothing paints   -> NO shadow. Silent, and durable if the
+                                       cause is durable.
+     stale 0 while the viewport is  -> the engine blits its cached slant into a
+     KEY-FILLED                        surface the composite then inverts, and
+                                       the ALP blend at 0x4B8500 turns palette
+                                       254's cyan into an OPAQUE TEAL SILHOUETTE
+                                       over the building. MEASURED 2026-09-18:
+                                       8779 px on four structures. This is the
+                                       worse of the two -- a player reads it as
+                                       a broken renderer, not a missing shadow.
+     stale 0 while it is NOT        -> a double shadow for a frame. Benign, and
+     key-filled                        the only case the old argument described.
 
-   TWO THINGS KEEP THE SECOND OUT, and neither is "the publisher always runs" --
-   the landing review disproved that claim, which an earlier version of this
-   comment made:
+   THE TWO INPUTS ARE SHAPED AROUND THAT. `g_ssTerr` is raised by terrown
+   BEFORE it publishes its own skip, so no draw can key-fill under a lowered
+   gate -- an ordering, not a window. `g_ssPass` carries the slower question of
+   whether the unit pass will paint, one frame behind, because there its errors
+   are the benign pair above.
+
+   Three things keep a stuck `g_ssSkip` out, and none is "the publisher always
+   runs" -- the landing review disproved that claim, which an earlier version of
+   this comment also made:
 
      * `tagpu_native_frame` publishes on every frame it REACHES, including 0 on
        each of the nine early returns and 0 whenever no painter reported one the
-       frame before (`s_ssPainter`, tagpu_native.c);
-     * and the heartbeat below, for the frames it does not reach at all.
+       frame before (`s_ssSuppress`, tagpu_native.c);
+     * terrown lowers `g_ssTerr` when it hands the ground back;
+     * and the heartbeat below, for the frames the pass does not reach at all --
+       which releases `g_ssPass` only, because releasing `g_ssTerr` there would
+       hand the engine a draw the composite is still inverting.
  */
 static volatile unsigned char g_ssSkip = 0;
 static unsigned               g_ssBeat = 0;   /* frame of the last publish  */
+
+/* THE GATE HAS TWO INPUTS, OR'ED, AND THEY ARE NOT THE SAME KIND OF THING.
+
+     g_ssPass  the unit pass will paint a structure's slant this frame. Published
+               once per frame from `tagpu_native_frame`, one frame behind the
+               painters by construction, and the 8-frame heartbeat below lowers
+               THIS one when the pass stops publishing.
+     g_ssTerr  the viewport is key-filled, so whatever the engine draws into its
+               own surface arrives on screen as teal rather than as a shadow.
+
+   WHY `g_ssTerr` IS NOT PART OF THE PER-FRAME PUBLISH [the fifth review of 10b].
+   It was, for one commit, as `tagpu_terrown_filled()` inside the pass's
+   predicate -- and that is a frame too late. The composite reads the same state
+   and acts on it in the SAME frame, while a value the pass publishes is not read
+   by the game thread until the next one. On every 0->1 terrown acquisition --
+   level entry, and recovery from any of `terr_bail`'s refusals -- the game
+   thread key-filled and blitted its cached slant under a gate that was still
+   down, and the composite then inverted over it: up to two frames of exactly the
+   teal this landing exists to remove.
+
+   So terrown raises it DIRECTLY, from `tagpu_terrown_set_skip`, before that
+   function publishes its own skip byte. Both are render-thread stores, x86 does
+   not reorder stores with stores, and the game thread reaches the key fill only
+   after observing `g_terrown_skip`; its unit blits come after its own terrain
+   blit. A draw that key-fills therefore cannot see a lowered gate. That is an
+   ordering, not a window, which is what the previous version only claimed to be.
+   The fall (1->0) is published AFTER the skip byte, so it is late rather than
+   early -- one frame of a missing shadow, the benign direction. */
+static volatile unsigned char g_ssTerr = 0;
+static unsigned char          g_ssPass = 0;
+
 
 /* HOW LONG THE GATE MAY STAND WITHOUT A PUBLISH before `tagpu_owndraw_flush`
    lowers it. The publisher is NOT reached on every frame the lane presents:
@@ -213,6 +263,8 @@ static int               g_armed      = 0;
 static char              g_target[32] = "armcom";
 static int               g_all        = 0;
 static int               g_sshadow    = 0;   /* both branch detours in  */
+
+static void ss_recompute(void);   /* defined below olog2 */
 static int               g_buildfx    = 0;   /* 0x458DD0 detour in      */
 
 static volatile unsigned g_skipped    = 0;
@@ -223,6 +275,18 @@ static void olog2(const char* s)
 {
     FILE* f = fopen("tagpu.log", "a");
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
+}
+/* The one writer of `g_ssSkip`. `g_sshadow` is the install and cannot change
+   after DllMain, so a stranded stub can never be reached with a raised gate.
+   Render thread only -- both inputs are written there. */
+static void ss_recompute(void)
+{
+    unsigned char v = (unsigned char)((g_ssTerr || g_ssPass) && g_sshadow);
+    if (v != g_ssSkip) {
+        g_ssSkip = v;
+        olog2(v ? "owndraw: the engine's cached slant shadow is SKIPPED (ours live)"
+                : "owndraw: the engine's cached slant shadow is restored");
+    }
 }
 
 static int ptr_ok(unsigned int p) { return p > 0x00600000u && p < 0x7FFF0000u; }
@@ -573,17 +637,25 @@ static void restore_sshadow(unsigned int va, const unsigned char* stolen, int n,
    which cannot change after DllMain; `ours` is whether the pass will paint. */
 void tagpu_owndraw_set_structshadow(int ours, unsigned frame)
 {
-    unsigned char v = (unsigned char)(ours && g_sshadow);
     g_ssBeat = frame;
-    if (v != g_ssSkip) {
-        g_ssSkip = v;
-        olog2(v ? "owndraw: the engine's cached slant shadow is SKIPPED (ours live)"
-                : "owndraw: the engine's cached slant shadow is restored");
-    }
+    g_ssPass = (unsigned char)(ours != 0);
+    ss_recompute();
 }
 
-/* What the ENGINE will do this frame, which is what the native pass has to
-   agree with -- the gate, not the install. */
+/* THE KEY-FILL INPUT, raised by `tagpu_terrown_set_skip` and by nothing else.
+   It must be raised BEFORE that function stores `g_terrown_skip`, and lowered
+   AFTER -- see the long note at `g_ssTerr`. */
+void tagpu_owndraw_set_structshadow_terr(int on)
+{
+    g_ssTerr = (unsigned char)(on != 0);
+    ss_recompute();
+}
+
+/* What WE will do this frame -- 1 means the slant is ours and the engine is
+   skipping it. The native pass reads it so its geometry agrees with the branch.
+   The gate, not the install. (This comment said "what the ENGINE will do" until
+   2026-09-18, the same sentence with its sense reversed; the header's copy was
+   corrected a commit earlier and this one was missed.) */
 int tagpu_owndraw_structshadow_ours(void) { return g_ssSkip != 0; }
 
 static void read_target(void)
@@ -938,13 +1010,19 @@ void tagpu_owndraw_flush(unsigned int frame_counter)
        running, so it is the one place that still gets a frame when the
        publisher does not. A raised flag with no publish behind it means nobody
        is painting the shadow the engine is no longer drawing, so it comes
-       down. Restoring the engine's own draw is always the safe direction. */
-    if (g_ssSkip && frame_counter - g_ssBeat >= SS_BEAT_FRAMES) {
-        g_ssSkip = 0;
-        olog2("owndraw: the engine's cached slant shadow is restored -- the unit "
-              "pass stopped publishing (tagpu_overlay.off, a failed overlay init, "
-              "or a level teardown), and a raised gate with nobody painting is "
-              "the one state this gate exists to prevent");
+       down. Restoring the engine's own draw is the safe direction OUTSIDE a
+       key-filled viewport; inside one it is teal, which is why terrown holds
+       its own input to the gate (see the note at `g_ssSkip`). */
+    if (g_ssPass && frame_counter - g_ssBeat >= SS_BEAT_FRAMES) {
+        /* the PASS input only: `g_ssTerr` has terrown's own 90-frame watchdog
+           behind it, and lowering it here would hand the engine a draw that the
+           composite is still inverting -- teal, which is the worse direction. */
+        g_ssPass = 0;
+        ss_recompute();
+        olog2("owndraw: the unit pass stopped publishing (tagpu_overlay.off, a "
+              "failed overlay init, or a level teardown), so its half of the "
+              "structure-shadow gate is released -- a raised gate with nobody "
+              "painting is the one state this gate exists to prevent");
     }
     if (frame_counter - g_last >= 60) {
         unsigned s = g_skipped, pa = g_passed;

@@ -1907,8 +1907,8 @@ the engine's own function, which the gdi lane reaches by itself. The two landing
 again. **The design risk that looks biggest is not there**: the trigger functions take a
 `const TAGPU_FRAME*` only to throttle themselves — `if (f && (f->frame_counter % 5))` is the whole
 of their use of it, in both `tagpu_gui_snap.c:613` and `tagpu_cat.c:306` — and every one
-null-checks it, so a game-thread host can pass its own flip count or `NULL` with no frame packet
-in existence. What DOES need thought is that they would move from the render thread to the game
+null-checks it EXCEPT `tagpu_input_frame` (see the per-function table below, which corrects
+this clause), so a game-thread host can pass its own flip count or `NULL` for the other five. What DOES need thought is that they would move from the render thread to the game
 thread, and they read engine memory. Note for whoever takes it: `render_gdi.c` currently contains **no** `tagpu_` call at
 all, and landing 10b's safety argument quotes that fact, so if the triggers are added there
 instead, 10b's note has to be re-read rather than assumed to still hold.

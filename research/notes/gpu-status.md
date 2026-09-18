@@ -10668,7 +10668,7 @@ already decides per draw, against a word that only a live lane sets:
 | the pre-shadow composite wipe (`0x459338`, `0x45958C`, `0x4594DB`) | the same, plus the classifier's own target test | as above |
 | `buildfx` (`0x458DD0`) | `tagpu_native_owns_obj` | `s_armed == 1`, written **only** in `tagpu_native_frame` |
 | `terrown`, `featown`, `fxown`, `markown`, `cursown` | a `volatile unsigned char` the stub compares | `set_skip(ours-live)` from the pass that paints, with a watchdog |
-| **the structure-shadow pair** (`0x4592BF`, `0x459522`) | a `volatile unsigned char` (`g_ssSkip`) the stub compares | `set_structshadow(s_armed == 1 && gl_draws && s_ssPainter)` — **an observation published by the painters**, not a prediction from their levers — with an 8-frame watchdog |
+| **the structure-shadow pair** (`0x4592BF`, `0x459522`) | a `volatile unsigned char` (`g_ssSkip`) the stub compares | `g_ssSkip = (g_ssTerr \|\| g_ssPass) && g_sshadow`. **`g_ssTerr`** is raised by `tagpu_terrown_set_skip` *before* it publishes its own skip byte — an ordering, so no draw can key-fill under a lowered gate. **`g_ssPass`** is `s_armed == 1 && gl_draws && s_ssSuppress`, published once per frame by the unit pass, and is the half the 8-frame watchdog releases |
 
 And **every one of those answers is produced inside `tagpu_overlay_draw`**, whose only callers
 are `render_ogl.c:1632` and `render_vk.c:232`. `render_gdi.c` contains no `tagpu_` call at all.
@@ -10857,30 +10857,58 @@ garbage. The question that decides that is **"is the viewport key-filled"** — 
 because `render_gdi.c` makes no `tagpu_` call, and is 0 whenever `terr_bail()` hands the ground
 back through `tagpu_terrown_set_skip(0)`. The shape that follows from the measurement is
 
-```c
-s_ssSuppress = tagpu_terrown_filled() || (pdReady && ( … ));
-```
+**THE GATE HAS TWO INPUTS NOW, AND THE FIRST ATTEMPT AT THIS PUT THE KEY-FILL ONE A FRAME LATE.**
+The first fix was `s_ssSuppress = tagpu_terrown_filled() || (pdReady && …)` — the right question,
+asked from the wrong place. The composite reads that same state and acts on it **this** frame,
+while anything the unit pass publishes is not read by the game thread until the **next** one. So
+on every 0→1 terrown acquisition — level entry, and recovery from any of `terr_bail`'s refusals —
+the game thread key-filled and blitted its cached slant under a gate that was still down, and the
+composite inverted over it: **up to two frames of exactly the teal the fix was for** [the fifth
+review of 10b; the single-frame A/B could not see it].
 
-— suppress when the engine's output would be garbage, *or* when we are painting a shadow.
-**APPLIED, and then proved by re-running the same A/B.** The variable was renamed from
-`s_ssPainter` with it, because "did anything paint one" is no longer the question it answers.
+The gate is therefore two OR'ed inputs, written by different owners:
+
+| input | who writes it | when | its errors |
+|---|---|---|---|
+| `g_ssTerr` | `tagpu_terrown_set_skip` | **before** it publishes its own skip byte; lowered **after** | none on the raise, by ordering |
+| `g_ssPass` | the unit pass, once per frame | one frame behind the painters | a double shadow, or a missing one |
+
+**The raise is an ordering, not a window.** Both stores are on the render thread, x86 does not
+reorder stores with stores, so a game thread that sees `g_terrown_skip` set has already seen the
+gate raised — and its unit blits come after its own terrain blit. Confirmed in the log, which now
+prints `owndraw: … SKIPPED (ours live)` **before** `terrown: engine terrain + fog overlay SKIPPED`
+at level entry. The fall is published after the skip, so it is late rather than early: one frame
+of a missing shadow, the benign direction. The 8-frame watchdog releases `g_ssPass` only —
+releasing `g_ssTerr` would hand the engine a draw the composite is still inverting.
 
 | `shadows=OFF` on `renderer=openglcore` | teal (0,128,128) px |
 |---|---|
 | before the fix | **8 779** |
-| after the fix | **0** |
+| after the first fix | **0** |
+| after the two-input rework | **0** |
 
 The 8 741 pixels that still differ between `shadows=SOFT` and `shadows=OFF` after the fix are all
 greys — our own Classic++ shadows correctly disappearing, which is what the player asked for. The
 log shows the gate now *staying* raised across the transition: `classicpp: shadows=0(off)` with no
 `the engine's cached slant shadow is restored` after it.
 
-**The shipped default is unchanged, by construction and by measurement.** The new term is an `OR`,
-so it can only raise the gate in frames where it was already down, and in the shipped default the
-log shows it was already up on both sides. The 3 349 px that differ between a pre-fix and a
-post-fix capture of the default are spread over **154 separate clusters** across the whole frame
-with a mean delta of 9.5 — boot-to-boot variance of the kind §2.62 already documents, not a
-structural change.
+**The shipped default is unchanged by CONSTRUCTION — and the pixel figure once cited beside that
+claim is worthless, which is worth more than the claim it was supporting.** The construction half
+holds: the terrown input is an `OR`, so it can only raise the gate where it was already down, and
+the log shows it already up on both sides of the shipped default.
+
+The measurement half was cited as *"3 349 px over 154 clusters, mean delta 9.5 — boot-to-boot
+variance"*, against a noise floor **nobody had ever measured**. Measuring it: two captures of the
+**same build, same fixture, same camera, same configuration**, across two boots, differ by
+**421 720 px** — 54 % of the frame — at a mean delta of 3.5, with only 2.5 % of pixels differing
+by more than 8. The cause is the Classic++ restorer's centre-out progressive reveal, which is
+never at the same point two boots running. **A cross-boot pixel count on this stack therefore
+measures nothing**, and the 3 349 figure was luck rather than evidence.
+
+What survives is the **exact colour count**, immune to that noise because it counts one
+palette-derived RGB triple and the answer is zero: 8 779 teal pixels before, 0 after, 0 after the
+rework. §2.62's cross-boot warning was about colour counts; this is the pixel-count half of the
+same trap.
 
 **Why this term is safe rather than merely better.** `tagpu_terrown_filled()` is
 `g_terrown_skip && g_filled`, and it is **the same word the composite tests** when it decides to
@@ -10984,10 +11012,11 @@ player asked for no shadows and gets four teal blobs.
   because `tagpu_classicpp_on()` was true. Every building would have lost its shadow for the
   session, **in the shipped default configuration**, with the engine still drawing the buildings.
   `tagpu_posedraw_ready()` is a **precondition of both painters**, never an alternative to one.
-* **So the flag is published by the painters, at `tagpu_native.c`'s `s_ssPainter`**, and the
-  publisher at the top of the next frame reads *and clears* it:
-  `s_ssPainter = pdReady && ((mapLive && nterr > 0) || ((gfx & 4) && !(cpp && !hard)))`, sitting
-  immediately after the cast-shadow map block.
+* **So the pass's half of the gate is published by the painters, at `tagpu_native.c`'s
+  `s_ssSuppress`**, and the publisher at the top of the next frame reads *and clears* it:
+  `s_ssSuppress = pdReady && ((mapLive && nterr > 0) || ((gfx & 4) && !(cpp && !hard)))`, sitting
+  immediately after the cast-shadow map block. The key-fill half does **not** go through here —
+  see "the gate has two inputs" below, which is the fifth review's finding.
 * **`nterr > 0` is there because a CASTER pass running is not a RECEIVER sampling it** — the third
   review's HIGH, and the last of the three rounds' worth of the same mistake. `tagpu_shadow_begin`
   builds the cast-shadow map and never consults the terrain module; a structure's slant lands on
@@ -11012,7 +11041,7 @@ player asked for no shadows and gets four teal blobs.
   gate the game thread reads for its frame N is the painter observation from N−2. Starting a
   painter costs two frames of double shadow; stopping one costs two frames of none. **The obvious
   follow-up is to publish from below the painters instead** — which would halve it, make
-  `s_ssPainter` a local rather than a static, and drop the `gl_draws` term, because the hand-over
+  `s_ssSuppress` a local rather than a static, and drop the `gl_draws` term, because the hand-over
   return would lower the gate by itself. It was *not* done in this landing: moving where a
   cross-thread flag is written is the class this stack fails at silently, three review rounds had
   already found a real defect in these twenty lines, and two frames is a transition flicker rather
@@ -11020,16 +11049,18 @@ player asked for no shadows and gets four teal blobs.
 * **And the bound is in OUR publishes, not in engine frames.** If the render lane runs behind the
   game thread, more than two game frames can pass between publishes, and the 8-frame watchdog
   counts the lane's frames too. `gl_draws` is ANDed in separately because it is read fresh
-  from `tagpu_vk_owns_present()` this frame while `s_ssPainter` is last frame's, so a GL→Vulkan
+  from `tagpu_vk_owns_present()` this frame while `s_ssSuppress` is last frame's, so a GL→Vulkan
   switch cannot carry a raised frame across the seam. This is the same *observe, don't predict*
   shape `tagpu_cursown_publish` / `tagpu_gui_cursor_drew_take` already uses for the cursor.
-* **Classic++ on with `shadows=OFF` leaves the gate down and the engine keeps its slant.** Both
+* **[HISTORY — overturned by the measurement above; kept because the reasoning is the record.]
+  Classic++ on with `shadows=OFF` used to leave the gate down and the engine to keep its slant.** Both
   terms are false there (the map wants SOFT; the slant loop's `cpp && !hard` skips it). It is the
   safe direction — a shadow the engine draws is visible, a shadow nobody draws is silent. It is
   *not* symmetric with the silhouette, which the composite-wipe detours at
   `0x459338`/`0x45958C`/`0x4594DB` do suppress in that configuration; the asymmetry is deliberate
   and is recorded here rather than smoothed over.
-* **Every gate-down state TRADES A SILENT FAULT FOR A VISIBLE ARTEFACT, and an earlier version of
+* **[HISTORY — the trade described here is no longer taken; the gate is raised in these states
+  now.] Every gate-down state TRADES A SILENT FAULT FOR A VISIBLE ARTEFACT, and an earlier version of
   the bullet above called it "no regression", which is false** [the third review of 10b]. `main`
   flipped both `je`s to `jmp`s unconditionally at `DllMain`, so `main` drew **no** engine slant in
   **any** configuration. This landing re-enables the engine's cached slant wherever the gate is

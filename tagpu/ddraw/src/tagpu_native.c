@@ -4375,10 +4375,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        `s_pubHave` is set only by `_end`, and so `tagpu_shadow_handover` returns
        0 at tagpu_vk_shadow.c:788 and that pass stands down. No `tagpu_vk*` file
        mentions `slant` at all. */
-    s_ssSuppress = tagpu_terrown_filled() ||
-                   (pdReady &&
-                    ((mapLive && nterr > 0) ||
-                     ((gfx & 4) && !(cpp && !hard) && npdSlant > 0)));
+    s_ssSuppress = pdReady &&
+                   ((mapLive && nterr > 0) || ((gfx & 4) && !(cpp && !hard)));
 
     /* ---- render into the (optionally 2x supersampled) game-res FBO ---- */
     fbo_size(gw, gh, ss);

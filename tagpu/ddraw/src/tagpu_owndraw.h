@@ -30,5 +30,12 @@ void tagpu_owndraw_flush(unsigned int frame_counter);
    pointed at the two comments in `render_ogl.c` and `render_vk.c` that record
    the same lesson for the cursor.] */
 void tagpu_owndraw_set_structshadow(int ours, unsigned frame);
+
+/* The gate's OTHER input: the viewport is key-filled, so anything the engine
+   draws into its own surface reaches the screen as teal rather than as a
+   shadow. Called only by `tagpu_terrown_set_skip`, which must raise it BEFORE
+   it publishes its own skip byte and lower it AFTER -- the ordering is the
+   safety argument, and tagpu_owndraw.c's `g_ssTerr` note has the reasoning. */
+void tagpu_owndraw_set_structshadow_terr(int on);
 int  tagpu_owndraw_structshadow_ours(void);
 #endif
