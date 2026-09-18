@@ -1889,10 +1889,144 @@ static int __cdecl before_flip(void* entry_esp)
     return hijack;
 }
 
+/* ---- landing 9: the engine redraws, instead of us seeding its bytes -----
+   A surface whose contents we did not watch arrive can only be published as
+   `PK_SEED` -- its raw bytes -- because nothing here knows how they got
+   there, and a reseed (a level boundary, an arena overflow) re-publishes
+   every one of them. `GUI_StageUpdateDraw 0x4A81E0(gi, 0x40)` is the engine's
+   own redraw of the top screen, and every draw it makes runs through the
+   leaves, so the panel's chrome arrives as ops that the twin can hold in
+   palette space instead.
+
+   WHY THE FLAG IS EXACTLY 0x40 AND NOTHING ELSE [DISASSEMBLED 2026-09-18]:
+   `0x4A82F0` computes `eax = flags & 1` -- the BUILD bit -- and `0x4A82F7`
+   `je 0x4A90D1`, which is past BOTH allocations (`0x4A907C`, `0x4A90B5`);
+   the two frees (`0x4A9537`, `0x4A9549`) are gated on the `0x2` teardown
+   bit. Those four are the only allocator and free calls in the whole
+   function, so a 0x40 call allocates nothing, frees nothing, and changes no
+   lifetime. A `0x1` call twice without a teardown is what would leak.
+
+   WHAT A 0x40 REDRAW ACTUALLY DOES, IN ORDER [DISASSEMBLED 2026-09-18], because
+   "every pixel arrives as an op" is NOT the whole truth and the plan said it
+   was: `0x4A90F4` reads `gi->TheActive_GUIMEM->[0x24]` and, when it is set,
+   repaints the WHOLE panel surface from it with `0x4C6B70(panel+0xBC, that,
+   0, 0)` -- a surface-to-surface copy, not a description of a draw. When it
+   is NULL the fallback at `0x4A911D` is `0x4B0230(gi, 0, panel+0xC4)`, the
+   picture handler, which is a bitmap too. Only THEN does the gadget loop at
+   `0x4A9135` run. So the chrome arrives as ops and the WALLPAPER arrives as a
+   copy, which is a win only while that copy's source is a surface we twin.
+
+   WHERE IT IS CALLED FROM, AND WHY THAT IS AN ORDERING AND NOT A HOPE: at
+   the flip's RETURN, on the game thread, with `s_inFlip` already cleared --
+   the leaves drop every op while `s_inFlip` is set (the cursor is drawn
+   inside the flip and nothing in there is UI), so a repaint issued anywhere
+   inside the flip would draw and publish nothing. `s_repainting` makes the
+   call non-reentrant by construction rather than by an argument about what
+   the engine's gadget handlers do not do.
+
+   AND THE DESTINATION IS CHECKED BEFORE THE CALL, not after: the redraw's
+   first act writes `panel+0xBC`, and `0x4C6B70` with a NULL destination
+   builds its own context over the PRIMARY surface (terrain-depth.md) -- a
+   redraw of an unbuilt screen would paint the wallpaper straight onto the
+   screen. `repaint_service` refuses unless `TheActive_GUIMEM`, its
+   `ControlsAry` and `panel+0xBC` are all present.                        */
+#define OFF_GUIINFO   0x519           /* GUIInfo, inline in main (gui-gadgets.md 1.2)  */
+#define GI_ACTIVE     0x18            /* GUIInfo.TheActive_GUIMEM                      */
+#define STAGE_VA      0x004A81E0u     /* GUI_StageUpdateDraw(gi, flags) stdcall ret 8  */
+#define STAGE_REDRAW  0x40            /* the redraw bit; 0x1 builds, 0x2 tears down    */
+typedef void (__stdcall *gui_stage_fn)(void* gi, int flags);
+
+static int      s_repaint = 1;        /* off with the `norepaint` token            */
+static int      s_repaintPend = 0;    /* game thread only, from here down         */
+static int      s_repainting = 0;
+static unsigned s_repaints = 0, s_repaintSkips = 0, s_repaintOps = 0;
+static int      s_drawShadow = 0;     /* our own last-seen value of g_gui_draw    */
+static unsigned s_resetShadow = 0;    /* ... and of g_guiq.resets                */
+
+/* WHEN A REPAINT IS WORTH ISSUING. The plan named two moments -- the layer
+   arming, and a level boundary -- and the second one is a SUBSET of the right
+   trigger, not a trigger of its own. A surface is seeded whenever `publish`
+   finds `!s->seeded`, and the only thing that clears that flag for every
+   surface at once is a RESEED; `publish`'s own level check is one of the four
+   things that asks for one (the others are the consumer's stall-over, a lost
+   sprite and an arena overflow). So the edge to watch is `g_guiq.resets`,
+   which publish bumps on this same thread -- no new cross-thread agreement,
+   and it covers the level case for free.
+
+   [MEASURED 2026-09-18, and this is why the trigger moved:] the packet's level
+   generation advances in `tagpu_packet_pub_level_end`, i.e. when a level is
+   TORN DOWN, so a shell-to-game transition never moves it. Shadowing it fired
+   exactly once per session -- at the arm -- and never on entering a game. It
+   did not need to: entering a game BUILDS the in-game screen, and a build
+   draws every gadget through the leaves already.
+
+   `g_gui_draw` is read once into a local and compared with a shadow this
+   thread owns, so the render thread flipping it mid-check cannot be seen
+   twice differently. */
+static void repaint_arm(void)
+{
+    int draw = g_gui_draw;
+    unsigned resets = g_guiq.resets;
+    if (draw && !s_drawShadow) s_repaintPend = 1;     /* the layer just armed      */
+    if (resets != s_resetShadow) s_repaintPend = 1;   /* the twins were thrown away */
+    s_drawShadow = draw;
+    s_resetShadow = resets;
+}
+
+static void repaint_service(void)
+{
+    const char* ta;
+    char* gi;
+    const char* gm;
+    const char* ctrls;
+    int n0, k;
+    unsigned before[OP_NKIND];
+    if (!s_repaint || !s_repaintPend || s_repainting || !g_gui_draw) return;
+    /* ptr_ok here is a range test on a VALUE, as everywhere else in this file;
+       what makes the call safe is the three-link check below plus the flag */
+    ta = *(const char* const*)TA_MAINPP;
+    if (!ptr_ok(ta)) { s_repaintSkips++; return; }
+    gi = (char*)(size_t)ta + OFF_GUIINFO;
+    gm = *(const char* const*)(gi + GI_ACTIVE);
+    if (!ptr_ok(gm)) { s_repaintSkips++; return; }      /* 0x4A81EA's own early return */
+    ctrls = *(const char* const*)(gm + GM_CTRLS);
+    if (!ptr_ok(ctrls)) { s_repaintSkips++; return; }   /* ebp at 0x4A8202 */
+    if (!ptr_ok(*(const void* const*)(ctrls + P_SURFACE))) { s_repaintSkips++; return; }
+    s_repaintPend = 0;
+    s_repainting = 1;
+    n0 = s_nops;
+    memcpy(before, s_kindTotal, sizeof before);
+    ((gui_stage_fn)(size_t)STAGE_VA)(gi, STAGE_REDRAW);
+    s_repainting = 0;
+    s_repaints++;
+    /* the ops the redraw itself produced, by kind: the whole point of the call,
+       and the only number that says whether a screen came back as DRAWS -- the
+       sprite and glyph ops the atlas and the font path can hold -- or only as
+       the flat bytes a seed would have carried anyway */
+    s_repaintOps = (unsigned)(s_nops - n0);
+    if (s_log) {
+        char b[300], kinds[180];
+        int n = 0;
+        for (k = 1; k < OP_NKIND; k++)
+            if (s_kindTotal[k] != before[k])
+                n += _snprintf(kinds + n, sizeof kinds - (size_t)n, "%s%s %u",
+                               n ? " " : "", OP_NAME[k], s_kindTotal[k] - before[k]);
+        if (!n) _snprintf(kinds, sizeof kinds, "none");
+        _snprintf(b, sizeof b, "gui: repaint #%u -- 0x4A81E0(gi, 0x40) on the top screen: %u op(s) [%s] (skips=%u)",
+                  s_repaints, s_repaintOps, kinds, s_repaintSkips);
+        glog(b);
+    }
+}
+
 static void* __cdecl after_flip(unsigned int* regs)
 {
     (void)regs;
     s_inFlip = 0;
+    /* the repaint runs with the flip's hijacked return still on s_retStack:
+       depth is unchanged across it, and a nested alloc (a 0x40 makes none)
+       would push and pop above it */
+    repaint_arm();
+    repaint_service();
     return s_retDepth > 0 ? s_retStack[--s_retDepth] : NULL;
 }
 
@@ -1915,6 +2049,7 @@ static int read_tokens(void)
     s_pgm    = strstr(buf, "pgm") != NULL;
     s_trace  = strstr(buf, "trace") != NULL;
     s_nostring = strstr(buf, "nostring") != NULL;
+    s_repaint  = strstr(buf, "norepaint") == NULL;   /* opt-OUT: the redraw is the shipped path */
     { const char* k = strstr(buf, "key="); if (k) s_key = atoi(k + 4) & 255; }
     { const char* k = strstr(buf, "probe="); if (k) sscanf(k + 6, "%d,%d", &s_probeX, &s_probeY); }
     return 1;
@@ -1976,9 +2111,9 @@ void tagpu_gui_flush(unsigned int frame_counter)
     if (!s_installed) return;
     if (frame_counter - last >= 600) {
         last = frame_counter;
-        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u",
+        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u ops=%u",
                   s_flips, s_opsTotal, s_opsDropped, s_changedTotal, s_unexplTotal, s_nsurf,
-                  s_pubOps, s_pubBytes, g_guiq.qHead - g_guiq.qTail, g_guiq.resets, g_guiq.overflows, g_guiq.stalls, g_gui_draw, s_freeqFlush);
+                  s_pubOps, s_pubBytes, g_guiq.qHead - g_guiq.qTail, g_guiq.resets, g_guiq.overflows, g_guiq.stalls, g_gui_draw, s_freeqFlush, s_repaints, s_repaintSkips, s_repaintOps);
         glog(b);
         {
             int k, n = 0;
