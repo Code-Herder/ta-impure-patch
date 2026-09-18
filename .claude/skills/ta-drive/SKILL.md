@@ -2280,6 +2280,31 @@ UI layer draw there now, and the **five world** ones run at any `ss` — their i
   for a map that had not finished loading. Wait on the condition rather than the clock:
   `until tools/tacli roster <i> | grep -q '^u1'; do sleep 3; done`.
 
+**THE ONE SCENE THAT REPRODUCES ACROSS BOOTS, and the two things that ruin a paired A/B**
+[MEASURED 2026-09-18, landing 10b]. Cross-boot comparison is what a build-vs-build A/B needs and
+most fixtures cannot give it. `scenario apply exit-sort` under `renderer=vulkan` does: same camera
+to the digit, **1 535 colours**, and **0–1 differing pixels** between boots AND between builds —
+but only over the frame **below y = 130**, and only if you ignore colour counts.
+
+* **The message band lies.** `exit-sort` clears units to place its own, every death writes a line
+  to the log, and TA picks the wording at random — *"vermin have been exterminated"* against
+  *"forces have been obliterated"*. Two boots therefore differ by **~5 200 px of text** with a
+  pixel-identical world underneath. Any fixture with `clear_existing` has this. Crop it off.
+* **A colour count is not an oracle across boots.** The same build, the same fixture and the same
+  camera gave **2 727** colours on one boot and **498** on another, because the map had revealed
+  more by the time of the capture; a bare in-game screen gave 680 where an earlier run recorded
+  709. Use it to tell a game from a lever colour, never to compare two runs.
+* **And `shadow-struct` cannot carry a cross-boot A/B at all** — two boots differ in fog-of-war
+  reveal and starting resources, hundreds of thousands of pixels.
+
+**NO `tacli` VERB WORKS UNDER `renderer=gdi`** [MEASURED 2026-09-18]. `tacli ui` answers *"no UI
+snapshot appeared"*, and it is not a timing problem: the whole on-demand trigger family —
+`tagpu_ui_frame`, `tagpu_peek_frame`, `tagpu_cat_frame`, `tagpu_weapons_frame`, the scenario
+applier's detection half — is called from `tagpu_overlay_draw` and nowhere else, and that has
+exactly two callers, `render_ogl.c:1632` and `render_vk.c:232`. So on the gdi lane the shell
+cannot be driven past the main menu, no scenario can be applied and nothing can be peeked. Do not
+spend time on it; it is landing 10c of the vulkan-only plan.
+
 **Getting a LIVE WORLD under `renderer=vulkan`, which `scenario load` cannot do for you.**
 `scenario load --restart` goes through the launch path with a resolution, so it rewrites
 `ddraw.ini` — `renderer=openglcore`, and `posX`/`posY` from a freshly computed tile. Both of those

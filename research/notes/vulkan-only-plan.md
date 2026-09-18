@@ -1874,6 +1874,21 @@ false by that one byte, and stays false unless it is given a lever or the senten
   warning (`dd.c:1998`); the same shape is the obvious answer, but a player then gets stock TA
   with no patch, and nothing decides today whether that is silent.
 * **Drift.** The previous-build A/B is a relative bar by construction; nothing in this plan
-  catches ten landings of 0 px that together moved the frame.
+  catches ten landings of 0 px that together moved the frame. **What landing 10b did establish is
+  the instrument this would need**, which nothing here had: a scene that reproduces ACROSS BOOTS,
+  not merely within one. `scenario apply exit-sort` on `renderer=vulkan` places its five units at
+  a camera reproduced to the digit and gives **1 535 colours and 0–1 differing pixels** between
+  boots and between builds, over the frame **below y = 130**. Two conditions make it work, and
+  both were learned the hard way here:
+    * **exclude the message band.** The fixture clears units, each death writes a log line, and TA
+      words each one at random — *"vermin have been exterminated"* against *"forces have been
+      obliterated"* — so the whole frame differs by ~5 200 px of pure text with an identical world
+      beneath it.
+    * **do not use a colour count, and do not use the shell.** The same build, fixture and camera
+      gave 2 727 colours on one boot and 498 on another as the map revealed; the shell varies
+      against *itself* by 181–191 px.
+
+  So an absolute baseline is now takeable — a stored frame of that scene, re-diffed each landing —
+  where before this it was not clear any scene was stable enough to store. Nobody has taken one.
 * **S3 has still never run.** `roadmap.md`: *"the `_local` test VM is being built; nothing
   measured yet"*. Every figure in Phase G is one GPU, under Wine, at one `ss`.
