@@ -25,6 +25,7 @@
 #include "tagpu_render3do.h"
 #include "tagpu_pal.h"
 #include "tagpu_gaf.h"
+#include "tagpu_vk.h"         /* tagpu_vk_owns_present: is there a GL lane at all? */
 #include "tagpu_classicpp.h"  /* tagpu_classicpp_assets: the restored twin is only worth mirroring while it is what the twin samples */
 #include "tagpu_r3dcache.h"
 #include "tagpu_overlay.h"   /* tagpu_overlay_target_fbo: the frame's default draw target */
@@ -128,10 +129,15 @@ static unsigned      s_lutSerial;
 
 static void shade_upload(const unsigned char* lut)
 {
-    glBindTexture(GL_TEXTURE_2D, s_lutTex);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, SH_ROWS, GL_RED, GL_UNSIGNED_BYTE, lut);
-    glBindTexture(GL_TEXTURE_2D, 0);
+/* THE UPLOAD IS GL; THE LUT IS THE PASS. `s_lutMirror` below is what the
+       Vulkan twin samples, so only the texture stands down.
+       [The vulkan-only plan, landing 4b-2.] */
+    if (!tagpu_vk_owns_present()) {
+            glBindTexture(GL_TEXTURE_2D, s_lutTex);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, SH_ROWS, GL_RED, GL_UNSIGNED_BYTE, lut);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
     memcpy(s_lutMirror, lut, sizeof s_lutMirror);
     s_lutSerial++;
     s_lutBuilt = 1;
@@ -281,14 +287,22 @@ static void r3d_init(void)
     s_atlas.prio = 3;                 /* restored after terrain, features, effects */
     if (!tagpu_gaf_atlas_create(&s_atlas)) { rlog("render3do: atlas texture FAILED"); s_state = 2; return; }
 
-    /* shade LUT texture (built lazily from the packet's table on first use) */
-    glGenTextures(1, &s_lutTex);
-    glBindTexture(GL_TEXTURE_2D, s_lutTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, 256, SH_ROWS, 0,
-                 GL_RED, GL_UNSIGNED_BYTE, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    /* shade LUT texture (built lazily from the packet's table on first use).
+       THE TEXTURE IS GL; EVERYTHING ELSE IN THIS FUNCTION IS THE PASS -- the
+       atlas above is laid out on either lane (its existence is `made`, not a GL
+       name, since tagpu_gaf.h's change) and `s_state = 1` means "the atlas and
+       the shade LUT are ready", which is what `tagpu_r3d_ensure` answers for
+       the unit pass. Seventh instance in this landing of GL object creation
+       entangled with CPU setup a pass needs. [The vulkan-only plan, 4b-2.] */
+    if (!tagpu_vk_owns_present()) {
+        glGenTextures(1, &s_lutTex);
+        glBindTexture(GL_TEXTURE_2D, s_lutTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, 256, SH_ROWS, 0,
+                     GL_RED, GL_UNSIGNED_BYTE, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
     s_state = 1;
     rlog("render3do: ready (unit atlas + shade LUT; the write-back path is gone)");
 }

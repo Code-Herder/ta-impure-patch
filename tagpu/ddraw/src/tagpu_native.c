@@ -2647,8 +2647,14 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        one lane the hand-overs are for. */
     if (gl_draws) {
         if (s_state == 0) init_gl();
-        if (s_state != 1 || !tagpu_r3d_ensure()) return;
+        if (s_state != 1) return;
     }
+    /* THE 3DO ATLAS AND THE SHADE LUT ARE THE PASS'S, not the backend's, so
+       this is asked on both lanes -- the unit pass needs the atlas laid out and
+       the LUT mirrored whichever rasteriser draws it, and since tagpu_gaf.h's
+       change the atlas exists without a GL name. On the GL lane it is asked at
+       exactly the point it always was, right after `init_gl`. */
+    if (!tagpu_r3d_ensure()) return;
 
     char* ta = *(char**)TA_MAINPP;
     if (!ptr_ok(ta)) return;
