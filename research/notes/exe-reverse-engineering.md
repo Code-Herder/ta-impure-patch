@@ -3189,6 +3189,45 @@ variants, `0x20` skip the snapshot, `0x100/0x1000` recentre. Observed callers: `
 `GUI_Pop 0x4A968E`, `push 1` in `TA_DialogBox_fn 0x4ABD90` (`0x4AC01B`, `0x4AC198`),
 `esi|0x40` at `0x494210` (the in-game panel loader). 76 sites, **none in DrawGameScreen**.
 
+**THE GADGET DRAW LOOP, AND WHY A SECOND CALL LEAKS** [DISASSEMBLED 2026-09-18, this project, for
+the vulkan-only plan's landing 9]. The dispatcher `0x4A9176` sits at the top of a loop over the
+panel's gadgets:
+
+| at | what |
+|---|---|
+| `0x4A9135` | `movsx eax, WORD PTR [panel+0xB6]` — the gadget count, a **signed** word; `jle 0x4A943B` at `0x4A9148`, so a count ≤ 0 draws nothing |
+| `0x4A914E` | the cursor starts at `panel+0x21F`, which is **record + 0xC4** |
+| `0x4A9154` | `ebx = 0x15B` — **the gadget record stride**, 347 bytes; the array starts at `panel+0x15B` |
+| `0x4A915D` | `[cursor-0x9B]` = **record+0x29**, the "draw me" byte; zero skips the gadget |
+| `0x4A916D` | `[cursor-0xC4]` = **record+0x00**, the type byte (1..13) |
+| `0x4A9176` | `cmp eax,0xC / ja default / jmp [eax*4+0x4A962C]` |
+| `0x4A940C` | `edi++`, cursor and `ebx` both `+= 0x15B`, loop while `edi < count+1` |
+
+`0x40` is the **redraw** bit and is tested per gadget type at seven sites inside the loop
+(`0x4A92C5`, `0x4A92E7`, `0x4A932B`, `0x4A934D`, `0x4A9398`, `0x4A93D8`, `0x4A93F3`). `0x1`
+(build) is tested *before* the draw half, `0x2` (teardown) *after* it.
+
+**AND THE DRAW HALF ALLOCATES UNCONDITIONALLY, WHICH IS THE ANSWER TO "IS IT SAFE TO CALL TWICE".**
+`0x4A907C` and `0x4A90B5` call `0x4C69F0(name, w, h)` and store into `panel+0xBC` (the surface the
+whole UI is pre-rendered into) and `panel+0xB8`, **overwriting the previous pointers with no free**.
+
+* **`0x4C69F0(name, w, h)`** — stdcall `ret 0xC` — is an **allocator, not a find-or-create**:
+  `0x4D83B0(name, w*h + 0x30)`, then it writes a surface header (`+0x00`/`+0x08` = w, `+0x04` = h,
+  `+0x0C` = base+0x30 the pixels, `+0x1C..+0x2C` the clip rect `(0,0,w-1,h-1)`, `+0x10` = `0x2710`,
+  `+0x14` = −1, `+0x2C |= 1` with bit 1 cleared).
+* **`0x4D83B0` DROPS THE NAME.** It reads only `[esp+0x8]` — the size — and tail-calls
+  `0x4D83C0(size)`, which takes the allocator's critical section at `ds:0x4FC198`. The name is a
+  heap tag at a higher level; **nothing here looks a surface up by it.**
+* **`0x4C6AC0(surf)`** — stdcall `ret 4` — is the free: null-checked, gated on `surf[+0x2C] & 1`
+  (the "we own the pixels" bit `0x4C69F0` sets), then `0x4D85A0`.
+* **The only frees are in the `0x2` teardown path**, `0x4A9537` and `0x4A9549`, followed by both
+  pointers set NULL. The sole early return in the function is `gi->[0x18] == NULL` (`0x4A81F0`),
+  so every real call reaches the allocation.
+
+**The game does not leak because its own protocol pairs build/draw with `GUI_Pop 0x4A968E`'s
+teardown.** An unmatched extra call — which is exactly what a forced repaint would be — leaks
+`w*h + 0x30` bytes twice.
+
 **The two rect sentinels, and why a hand-placed `xpos` is written BEFORE the build call**
 [VERIFIED 2026-09-09, Phase F G18, disassembly of the pristine build]. `0x4A820C` opens with
 `or eax,0xffffffff`, so `eax` is **−1** for the whole function, and `0x4A8224` sets `esi` to

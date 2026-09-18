@@ -1265,7 +1265,10 @@ Back to the filed list:
    `tagpu_vk_fx.c` and is unreachable there rather than absent — neither has a stand-down below its
    staging allocation today, and one added would re-open it. `tagpu_vk_restore_job_repalette` still
    has no caller while the GL side's does, so a palette that moves in play desynchronises the two
-   lanes. `repaint`, the blank counter, the cleared-picture flag, the out-of-memory list drop and
+   lanes. [RE-CHECKED 2026-09-18 and both halves hold: `tagpu_vk_restore_job_repalette` and
+   `tagpu_vk_restore_job_clear` have a definition and a declaration and **no callers at all**,
+   while the GL counterparts are called at `tagpu_gaf.c:1050` and `:272`. So on `renderer=vulkan`
+   neither the atlas clear nor the palette follow happens.] `repaint`, the blank counter, the cleared-picture flag, the out-of-memory list drop and
    the dump's retire remain unexercised, and `job_clear` has no callers.
 8. **`PK_PIXELS` closed.** `tagpu_gui_hook.c:330`'s op kinds `OP_LINE`, `OP_BAR`, `OP_RECT`,
    `OP_FRAME` and `OP_SCALE` publish through `pub_surface_bytes` at `:1489` — *the engine's
@@ -1345,10 +1348,43 @@ Back to the filed list:
    (`tagpu_gui_hook.c:1289/1300/1332`) because we cannot know how a surface got its contents.
    The fix is to make the engine redraw: `gui-renderer.md:55` has the panel as a pre-rendered
    surface at `panel+0xBC` whose gadget handlers sit behind the type dispatcher **`0x4A9176`**
-   with table **`0x4A962C`**. What is missing is the per-screen "render every gadget" entry and
-   whether it is safe to call twice. Force one repaint after arm and after a level-change reset
+   with table **`0x4A962C`**. Force one repaint after arm and after a level-change reset
    and every pixel arrives as an op — which closes G15e's *"seeded art stays indexed until
    repainted"* as a consequence rather than as a special case.
+
+   **BOTH OF THIS ENTRY'S OPEN QUESTIONS ARE ANSWERED [DISASSEMBLED 2026-09-18], and the second
+   answer is NO.**
+
+   *The entry point* is `GUI_StageUpdateDraw 0x4A81E0` itself — the dispatcher sits inside its
+   draw loop. The loop reads the gadget count from `panel+0xB6` (a **signed WORD**; `jle` at
+   `0x4A9148` means a count ≤ 0 draws nothing), walks records from `panel+0x15B` at a stride of
+   **`0x15B`**, skips any whose byte at **record+0x29** is zero, and dispatches on the type byte
+   at **record+0x00** (`0x4A9176`: `cmp eax,0xC / ja / jmp [eax*4+0x4A962C]`). `0x40` is the
+   redraw bit, tested per gadget type at seven sites inside the loop (`0x4A92C5`, `0x4A92E7`,
+   `0x4A932B`, `0x4A934D`, `0x4A9398`, `0x4A93D8`, `0x4A93F3`).
+
+   *Is it safe to call twice?* **No — a second call LEAKS BOTH PANEL SURFACES.** The draw half
+   allocates unconditionally: `0x4A907C` and `0x4A90B5` call `0x4C69F0(name, w, h)` and store the
+   results into `panel+0xBC` and `panel+0xB8`, **overwriting the old pointers with no free**. And
+   `0x4C69F0` is an **allocator, not a find-or-create** — it calls `0x4D83B0(name, w*h + 0x30)`,
+   which **drops the name** (it reads only `[esp+0x8]`, the size, and tail-calls `0x4D83C0`), so
+   nothing is looked up. The only free is in the **`0x2` teardown** path at the very end
+   (`0x4A9537` and `0x4A9549` → `0x4C6AC0`, then both pointers NULLed). The sole early return is
+   `gi->[0x18] == NULL`, so every real call falls into the allocation.
+
+   The game does not leak because its own protocol pairs build/draw with `GUI_Pop 0x4A968E`'s
+   teardown. **An extra repaint call inserted by us is exactly the unmatched one**: `w*h + 0x30`
+   bytes twice per invocation, in a 32-bit process where §2.48 measured the largest free block as
+   the figure that matters.
+
+   So landing 9 cannot simply call it, and the options — none chosen — are: **(a)** free both
+   ourselves and then call with `0x40`, which is the teardown's own two lines without the gadget
+   destruction, but needs an ordering argument because the per-frame blit `0x4AB0B0` reads
+   `panel+0xBC`; **(b)** teardown + rebuild (`0x2` then `0x1|0x40`), the engine's own matched pair
+   and therefore no new invariant, but it destroys and recreates every gadget's state; **(c)** get
+   the art another way. **NOT MEASURED:** whether a repaint actually produces ops for every
+   gadget, which is the thing landing 9 is buying — `record+0x29` gates each one and nothing here
+   establishes what sets it.
    **Rejected:** submitting the seeded surface to the restorer as a job. Its contract
    (`tagpu_restoreglsl.h`) is *a frame of art from an R8 atlas with its colour key*; a seeded
    panel is a composite of art, glyphs and chrome with no key and no tileability, the model was
@@ -1356,6 +1392,26 @@ Back to the filed list:
 10. **The engine-frame fallback layer goes** from the composite. `tagpu_gui_surf.c:51` has it as
     the bottom of three; G15b, G15c and G17d measured **0 holes** across 120 stops, so nothing
     reads it.
+
+    **VERIFIED 2026-09-18, and the premise is stronger than the measurement — but it is not free.**
+    Over the whole of `LAY_FS` (`tagpu_gui_surf.c:465-590`) the sampler `uSurf` occurs **twice**:
+    the `uniform sampler2D uSurf` declaration and a comment. There is no `texelFetch` and no
+    `texture()` against it. The 120 stops measured a consequence; the shader text is the cause,
+    and it holds for every stop nobody walked.
+
+    **And the Vulkan lane pays for it every frame**: `tagpu_vk_gui.c:1825` reserves
+    `h.engW * h.engH` of staging, `:1990` `memcpy`s the whole engine frame in, `:2162` copies it
+    into `s_engImg`, `:2766` binds it as `uSurf` — and `:2587` **refuses the whole composite** on
+    `!s_engHave`. At 1024x768 that is **786 432 bytes per frame copied twice** for a sampler the
+    fragment shader never reads. **So this landing is a saving, not only a deletion**, which is
+    the opposite of how the row reads ("nothing reads it" invites "so it costs nothing").
+
+    **Two things not established, and one trap.** Whether the `!s_engHave` term at `:2587` can go
+    with the upload is not shown here (the other three terms are real). Only the Vulkan consumer
+    was read. **And `uEng` is NOT this**: `MM_FS`'s `uEng` is the MINIMAP's engine picture
+    (`s_mmEngView`), and it **is** sampled, at `tagpu_gui_surf.c:382` and `:394` — it is the reason
+    there is no radar-arc replay. Deleting the fallback must not touch it. Nor is this 4c-1's
+    bottom layer (§2.52), which is a different path and is load-bearing.
 11. **The deletion landing** — `render_ogl.c`, `render_d3d9.c`, `opengl_utils.c`,
     `openglshader.h`, `render_ogl.h`, and **`tagpu_restoreglsl.c`**. `renderer=gdi` becomes the
     documented stock reference.
@@ -1369,6 +1425,33 @@ Back to the filed list:
     Worth checking the rest of the list the same way: a file named here for being GL may carry
     something the gather halves call, and the way to find out is `git grep` on its exports rather
     than on its includes.
+
+    **THE REST OF THE LIST, CHECKED THAT WAY [SURVEYED 2026-09-18]. It is four landings, not one.**
+
+    * **`opengl_utils.c` — nearly free, which was not obvious.** Five exports; **only
+      `oglu_load_dll` has a surviving caller** (`dd.c`). `oglu_build_program`,
+      `oglu_build_program_from_file`, `oglu_ext_exists` and `oglu_init` are referenced **only by
+      `opengl_utils.h`** — the shader-building helper the whole GL stack looks like it should use
+      is already dead.
+    * **`render_d3d9.c` — four surviving files, not one.** Seven exports, called from `dd.c`,
+      `utils.c`, `winapi_hooks.c` and `wndproc.c`. No lane involvement.
+    * **`render_ogl.c` — three surviving files, AND A NEGATIVE RESULT THAT A CARELESS GREP WOULD
+      HAVE INVERTED.** `ogl_create`, `ogl_release` and `ogl_render_main` are called from `dd.c`,
+      `fps_limiter.c` and `winapi_hooks.c`. **`render_vk.c` and `tagpu_vk.c` both match a grep for
+      those names and every hit is PROSE** — comments describing what the GL backend does. **The
+      Vulkan lane calls nothing in `render_ogl.c`.** Read the hits, not the count.
+    * **`tagpu_restoreglsl.c` — BLOCKED, and the file is worse placed than this entry thought.**
+      It defines **eleven** exports and **ten have surviving callers**, across six files not on
+      this list: `tagpu_gaf.c`, `tagpu_terr.c`, `tagpu_native.c`, `tagpu_render3do.c`,
+      `tagpu_gui_surf.c`, `tagpu_restore_core.c` — **and `tagpu_vk_restore.c`, a VULKAN file,
+      which calls `tagpu_rglsl_mips`**. So the dependency is not "the surviving gather halves
+      still need it"; the Vulkan restorer does. The file is 291 `gl[A-Z]` sites deep and includes
+      `opengl_utils.h`, so it cannot survive as it stands either. **Landing 7's split into
+      `tagpu_restore_core.{h,c}` is not finished**, and finishing it is a landing of its own that
+      has to come before this one.
+
+    **NOT CHECKED:** `openglshader.h` and `render_ogl.h` — headers, which can only be checked by
+    include, which is the check this entry warns against relying on.
 
 **A twelfth thing that is not a landing: the stand-downs are session-latched.** §2.35 measured it
 — a pass that has refused once stays dark for the process even after the condition clears. Every
