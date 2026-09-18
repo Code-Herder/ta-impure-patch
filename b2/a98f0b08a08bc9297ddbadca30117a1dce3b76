@@ -1,0 +1,12 @@
+landing-review: gate 4's last item (s_curDrew publishes after the frame)
+reviewer=dedicated read-only agent, effort=high, range=main...HEAD at b2a98f0
+findings=8 high=0 medium=3 low=5 acted=8 recorded=1 rejected=0 fixes=b66b9a2
+The ordering, cur_drew's lifetime, the double-cursor question, the signature
+change, the counter's threading and the render_ogl claim were all clean. The
+finding that mattered: s_uiDrew was set BESIDE tagpu_vk_gui_record rather than
+from its return, so a composite-pipeline refusal -- which latches for the
+session -- would have published 1 with nothing drawn, and held would have read
+0 on the one case it exists to catch. record returns int now. One informational
+finding (a failed submit/present still publishes 1) recorded in the
+not-covered list rather than fixed: self-correcting, and benign only because it
+does not latch.
