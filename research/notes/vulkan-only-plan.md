@@ -1892,6 +1892,39 @@ function by function]. This is the design risk this plan named as "the thread mo
 
   So every field is available, and two of the three are *more* natural there than here.
 
+**AND THE "FIVE ONLY THROTTLE" CLAIM WAS WRONG TOO — IT IS FOUR OF SIX THAT PASS `f` DEEPER**
+[brace-matched every function body 2026-09-18, rather than grepping for `f->` as the earlier pass
+did]. The throttle is the first line; it is not the only use:
+
+| trigger | passes `f` to | what that needs |
+|---|---|---|
+| `tagpu_ui_frame` | `write_snapshot(f)` | `frame_counter`, `game_width/height`, `vp_x/y/w/h` — all metadata in the JSON |
+| `tagpu_cat_frame` | `write_units(f)`, `write_features(f)` | `frame_counter` — metadata |
+| `tagpu_scenario_frame` | `place_camera(f)` | `game_width/height`, and this one is **load-bearing**: the fallback is `640x480` and a wrong value misplaces the camera |
+| `tagpu_input_frame` | `do_eye(f)`, `do_keys`, `s_frame` | `hwnd`, `game_width/height`, and `f->packet->in_game` / `->eye[]` |
+
+Every one of those derefs is already null-safe (`f ? f->x : default`), which is why the earlier
+grep-level reading survived as long as it did.
+
+**SO 10c IS SMALLER THAN "CHANGE SIX SIGNATURES" — IT IS "BUILD A `TAGPU_FRAME` ON THE GAME
+THREAD".** `tagpu.h`'s struct documents each field's origin in its own comment, and almost every
+one of them is a `g_ddraw` field the render thread merely copies:
+`game_width/height`, `vp_*`, `win_*`, `hwnd`, `hdc`, `bpp`. `frame_counter` becomes `s_flips`,
+which `before_flip` already maintains. That is roughly fifteen lines in `tagpu_gui_hook.c`, and it
+changes **no signature and no callee** — so nothing downstream has to be re-reviewed for a
+signature it did not ask for.
+
+**Two fields cannot be filled there, and only one of them costs anything:**
+
+* `surface_tex` — a GL object id, meaningless off the render thread. **Read by none of the six**
+  (checked), so it stays 0.
+* `packet` / `packet_prev` — read only by `tagpu_input.c`'s `do_eye`, which null-checks it. There
+  is **no non-consuming accessor**: `tagpu_packet_acquire(&prev)` takes the packet, and taking it
+  on the game thread would steal it from the render thread's own consumer. So either 10c adds a
+  read-only "what is currently published" accessor, or **`tagpu_eye.txt` eye-hold stops working on
+  the game-thread path** — an opt-in measurement lever, not a play feature, and the only named
+  casualty of the move. Decide it when writing 10c rather than discovering it.
+
 **AND MOVING ONLY THE EASY FIVE WOULD NOT ACHIEVE 10c.** The gate's stated purpose is that
 `renderer=gdi` can be driven and measured at all; `tacli` drives the game with **injected input**,
 so input is precisely the trigger whose absence makes the lane undrivable. A version of 10c that
