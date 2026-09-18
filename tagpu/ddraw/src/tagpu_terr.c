@@ -1737,107 +1737,140 @@ int tagpu_terr_handover(TAGPU_TERRHAND* out, unsigned now)
 
 void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
 {
+    /* WHETHER THIS PASS DRAWS, or only hands over. Under `renderer=vulkan` the
+       Vulkan lane owns the present and there is no GL context in the process:
+       the instances, the numbers and the texels below are the GATHER's and are
+       handed to the twin either way, and only the draw stands down. The
+       scaffold's shape (tagpu_scaffold.c) and the same argument.
+       [The vulkan-only plan, landing 4b-2.] */
+    const int gl_draws = !tagpu_vk_owns_present();
     int restored;
     /* A FRAME WITH NOTHING TO DRAW HANDS NOTHING OVER. Leaving the previous
        frame's hand-over standing would have the Vulkan lane draw last frame's
        terrain over this frame's -- and on the frame a level is torn down, over
-       nothing at all. */
-    if (s_state != 1 || s_ncell == 0) { s_pubHave = 0; s_abFrame = 0; return; }
-    glUseProgram(s_prog);
-    x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
-    glUniform1i(s_uFog, v->fogMode & 1);   /* terrain darkens in grey, never hides */
-    if (s_uFogOrg >= 0) x_glUniform2f(s_uFogOrg, (float)v->fogOrgX, (float)v->fogOrgY);
-    if (s_uFogDim >= 0) x_glUniform2f(s_uFogDim, (float)v->fogCols, (float)v->fogRows);
-    x_glUniform1f(s_uZoom, v->zoom > 0.0f ? v->zoom : 1.0f);
-    x_glUniform2f(s_uZoomC, v->zoomCx, v->zoomCy);
-    x_glUniform1f(s_uDepthScale, v->depthScale > 1.0f ? v->depthScale : 512.0f);
-    x_glUniform1f(s_uEnc, TERR_ENC);
-    /* the three the vertex shader rebuilds each cell's quad from */
-    x_glUniform2f(s_uOrigin, s_origX, s_origY);
-    x_glUniform2f(s_uTile0, (float)s_rectTx0, (float)s_rectTy0);
-    x_glUniform2f(s_uTexel, s_iw, s_ih);
-    x_glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, s_atlasTex);
-    x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, palTex);
-    x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, v->fogTex);
-    x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, v->fogLut);
-    x_glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, s_rgbTex);
-    x_glActiveTexture(GL_TEXTURE5); glBindTexture(GL_TEXTURE_2D, s_hTex);
-    x_glActiveTexture(GL_TEXTURE0);
-    /* running OR complete: while the job runs the alpha test in the shader
-       reveals each cell as its out pass lands (and stays indexed elsewhere);
-       a failed or absent job never samples the texture */
+       nothing at all.
+
+       `s_state` IS THE GL PROGRAM'S and is only asked where GL draws: it is
+       permanently 0 on the vulkan-only lane, where `init_gl` is never called,
+       so testing it there would refuse every hand-over. `s_ncell` is the real
+       refusal and it is the gather's own. */
+    if ((gl_draws && s_state != 1) || s_ncell == 0) { s_pubHave = 0; s_abFrame = 0; return; }
+
+    /* COMPUTED BEFORE THE GATE, because the hand-over carries it: the RGB
+       mirror's state and `assets=` are both CPU-side, so this is the gather's
+       answer rather than the draw's. */
     restored = ((s_rgbState == 1 || s_rgbState == 2) && tagpu_classicpp_assets()) ? 1 : 0;
-    glUniform1i(s_uRestored, restored);
-    tagpu_shadow_apply(&s_shU);            /* this frame's map, or uShadowOn 0 */
-    /* the lighting: the terrain's sun. uLit is the MASTER ARM (the Classic++
-       colour path, which `assets=`/`light=` only subdivide) and uLambert the
-       `light=` half; uHDim is 0 while there is no usable grid, and the shader
-       then skips the lambert rather than sample a dead or stale texture */
     {
         const TAGPU_LIGHT* L = tagpu_classicpp_light();
-        glUniform1i(s_uLit, tagpu_classicpp_on() ? 1 : 0);
-        glUniform1i(s_uLambert, tagpu_classicpp_lit() ? 1 : 0);
-        x_glUniform3f(s_uSun, L->sun[0], L->sun[1], L->sun[2]);
-        x_glUniform1f(s_uAmb, L->amb);
-        x_glUniform1f(s_uNorm, 1.0f / L->level);
-        x_glUniform2f(s_uHDim, (float)s_hW, (float)s_hH);
+        /* HOISTED OUT OF THE DRAW, because on the vulkan-only lane the A/B is
+           armed without one. Read once so the two arms cannot disagree about
+           which frame is the capture frame. */
+        int taking = s_ab && !s_abDone;
+        if (taking && v->ss != 1) {
+            /* REFUSED RATHER THAN WRITTEN AT THE WRONG SIZE, on either lane.
+               The GL capture is this FBO's viewport, gw*ss x gh*ss, and the
+               Vulkan one is the window's client rect; at ss 2 they differ by a
+               factor of two and tools/vk-ab.py would refuse the pair after the
+               fact. Saying so here names the cause. It is asked on the
+               vulkan-only lane too, where there is no supersampled FBO yet:
+               the reference this build is compared against was taken at ss=1,
+               and 4c is where an `ss` target on this side changes the answer. */
+            flog("terr: the A/B needs ss=1 (the GL capture is the supersampled FBO) "
+                 "- nothing captured; relaunch with supersampling off");
+            s_abDone = 1;
+            taking = 0;
+        }
+        if (gl_draws) {
+            glUseProgram(s_prog);
+            x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
+            glUniform1i(s_uFog, v->fogMode & 1);   /* terrain darkens in grey, never hides */
+            if (s_uFogOrg >= 0) x_glUniform2f(s_uFogOrg, (float)v->fogOrgX, (float)v->fogOrgY);
+            if (s_uFogDim >= 0) x_glUniform2f(s_uFogDim, (float)v->fogCols, (float)v->fogRows);
+            x_glUniform1f(s_uZoom, v->zoom > 0.0f ? v->zoom : 1.0f);
+            x_glUniform2f(s_uZoomC, v->zoomCx, v->zoomCy);
+            x_glUniform1f(s_uDepthScale, v->depthScale > 1.0f ? v->depthScale : 512.0f);
+            x_glUniform1f(s_uEnc, TERR_ENC);
+            /* the three the vertex shader rebuilds each cell's quad from */
+            x_glUniform2f(s_uOrigin, s_origX, s_origY);
+            x_glUniform2f(s_uTile0, (float)s_rectTx0, (float)s_rectTy0);
+            x_glUniform2f(s_uTexel, s_iw, s_ih);
+            x_glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, s_atlasTex);
+            x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, palTex);
+            x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, v->fogTex);
+            x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, v->fogLut);
+            x_glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, s_rgbTex);
+            x_glActiveTexture(GL_TEXTURE5); glBindTexture(GL_TEXTURE_2D, s_hTex);
+            x_glActiveTexture(GL_TEXTURE0);
+            /* running OR complete: while the job runs the alpha test in the shader
+               reveals each cell as its out pass lands (and stays indexed elsewhere);
+               a failed or absent job never samples the texture */
+            glUniform1i(s_uRestored, restored);
+            tagpu_shadow_apply(&s_shU);            /* this frame's map, or uShadowOn 0 */
+            /* the lighting: the terrain's sun. uLit is the MASTER ARM (the Classic++
+               colour path, which `assets=`/`light=` only subdivide) and uLambert the
+               `light=` half; uHDim is 0 while there is no usable grid, and the shader
+               then skips the lambert rather than sample a dead or stale texture */
+            glUniform1i(s_uLit, tagpu_classicpp_on() ? 1 : 0);
+            glUniform1i(s_uLambert, tagpu_classicpp_lit() ? 1 : 0);
+            x_glUniform3f(s_uSun, L->sun[0], L->sun[1], L->sun[2]);
+            x_glUniform1f(s_uAmb, L->amb);
+            x_glUniform1f(s_uNorm, 1.0f / L->level);
+            x_glUniform2f(s_uHDim, (float)s_hW, (float)s_hH);
 
-        glBindVertexArray(s_vao);
-        glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-        /* orphan and upload in one call, sized to what this frame USES. Even the
-           whole array is only 2 MB now, but a 1x view needs ~2.5k cells of it and
-           re-specifying the rest every frame would churn driver memory for nothing.
-           (GL_ARRAY_BUFFER's binding is not VAO state, so binding it to re-specify
-           the storage leaves the attribute's own buffer binding alone.) */
-        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)s_ncell * ICOMP * 2, s_inst,
-                     GL_STREAM_DRAW);
+            glBindVertexArray(s_vao);
+            glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
+            /* orphan and upload in one call, sized to what this frame USES. Even the
+               whole array is only 2 MB now, but a 1x view needs ~2.5k cells of it and
+               re-specifying the rest every frame would churn driver memory for nothing.
+               (GL_ARRAY_BUFFER's binding is not VAO state, so binding it to re-specify
+               the storage leaves the attribute's own buffer binding alone.) */
+            glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)s_ncell * ICOMP * 2, s_inst,
+                         GL_STREAM_DRAW);
 
-        /* THE FRAME GOES BLACK FIRST WHEN THE A/B IS ARMED, and only then --
-           and the DEPTH buffer goes with it. Terrain happens to be the first
-           thing drawn into this FBO, so the depth clear finds a buffer the
-           native pass has just cleared anyway; asking for it regardless is what
-           makes "both halves start from nothing" a property of the oracle
-           rather than of the draw order. The scissor is put back before the
-           draw (TAGPU_ABSHOT_SCISSOR), because terrain CLIPPED to the viewport
-           is the pass and an unclipped one covers the side panel too.
-           One frame, and the player sees it: nothing is drawn before terrain,
-           so what is missing from it is the engine's own frame underneath. */
-        {
-            TAGPU_ABSHOT shot;
-            int taking = s_ab && !s_abDone;
-            shot.live = 0;
-            if (taking && v->ss != 1) {
-                /* REFUSED RATHER THAN WRITTEN AT THE WRONG SIZE. The GL capture
-                   is this FBO's viewport, gw*ss x gh*ss, and the Vulkan one is
-                   the window's client rect; at ss 2 they differ by a factor of
-                   two and tools/vk-ab.py would refuse the pair after the fact.
-                   Saying so here names the cause. */
-                flog("terr: the A/B needs ss=1 (the GL capture is the supersampled FBO) "
-                     "- nothing captured; relaunch with supersampling off");
-                s_abDone = 1;
-                taking = 0;
+            /* THE FRAME GOES BLACK FIRST WHEN THE A/B IS ARMED, and only then --
+               and the DEPTH buffer goes with it. Terrain happens to be the first
+               thing drawn into this FBO, so the depth clear finds a buffer the
+               native pass has just cleared anyway; asking for it regardless is what
+               makes "both halves start from nothing" a property of the oracle
+               rather than of the draw order. The scissor is put back before the
+               draw (TAGPU_ABSHOT_SCISSOR), because terrain CLIPPED to the viewport
+               is the pass and an unclipped one covers the side panel too.
+               One frame, and the player sees it: nothing is drawn before terrain,
+               so what is missing from it is the engine's own frame underneath. */
+            {
+                TAGPU_ABSHOT shot;
+                shot.live = 0;
+                if (taking) tagpu_abshot_begin(&shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR |
+                                                      TAGPU_ABSHOT_TOPDOWN);
+
+                /* opaque, and the far plane of the frame: depth writes ON, no
+                   blending needed (the FBO is premultiplied and terrain's alpha is
+                   1 everywhere) */
+                x_glDrawArraysInstanced(GL_TRIANGLES, 0, 6, s_ncell);
+
+                if (taking) {
+                    /* the Vulkan half is claimed only on a GL half that reached
+                       the disk -- see tagpu_abshot.h; `s_abDone` latches either
+                       way. AND on the target having been unlinked, which is armed
+                       here even when the GL half failed: a stale `_vk.ppm` beside
+                       a stale `_gl.ppm` is the worse of the two. */
+                    int wrote = tagpu_abshot_end(&shot, ABOUT, "terr");
+                    int fresh = tagpu_vk_ab_arm("terr");
+                    s_abDone = 1;
+                    s_abFrame = wrote && fresh;
+                }
             }
-            if (taking) tagpu_abshot_begin(&shot, TAGPU_ABSHOT_DEPTH | TAGPU_ABSHOT_SCISSOR |
-                                                  TAGPU_ABSHOT_TOPDOWN);
-
-            /* opaque, and the far plane of the frame: depth writes ON, no
-               blending needed (the FBO is premultiplied and terrain's alpha is
-               1 everywhere) */
-            x_glDrawArraysInstanced(GL_TRIANGLES, 0, 6, s_ncell);
-
-            if (taking) {
-                /* the Vulkan half is claimed only on a GL half that reached
-                   the disk -- see tagpu_abshot.h; `s_abDone` latches either
-                   way */
-                int wrote = tagpu_abshot_end(&shot, ABOUT, "terr");
-                s_abDone = 1;
-                s_abFrame = wrote;
-            }
+        } else if (taking) {
+            /* AND ON THE LANE WITH NO GL HALF, THE INTENT IS THE CLAIM --
+               tagpu_abshot.h has the whole argument, and `tagpu_vk_ab_arm` is
+               what makes a file on the disk this arming's. */
+            s_abDone = 1;
+            s_abFrame = tagpu_vk_ab_arm("terr");
         }
 
-        /* PUBLISHED AFTER THE GL DRAW, not before: these are the instances, the
-           numbers and the texels that were just drawn, and the Vulkan lane is
-           about to draw the same ones. */
+        /* PUBLISHED AFTER THE DRAW WHERE THERE IS ONE, and after the gather in
+           either case: these are the instances, the numbers and the texels this
+           frame built, and the Vulkan lane is about to draw the same ones. */
         terr_publish(v, restored, L);
     }
 }
