@@ -1,7 +1,8 @@
 /* tagpu_overlay.c — per-present entry point of the GPU pass, compiled INTO our
    cnc-ddraw fork (no separate module => no runtime LoadLibrary, which is what
    destabilised TA under wine). Called from render_ogl.c just before SwapBuffers.
-   Runs the file-triggered services (input, peek, ui, catalogues, scenario),
+   Runs the file-triggered INPUT service (the other five moved to the game
+   thread in landing 10c-1 -- see tagpu_triggers_frame at the end of this file),
    detects GL context changes, flushes the engine detours, logs the live roster
    tacli reads, then dispatches the GL passes (scaffold, native).
    tagpu_overlay.off is the kill switch for everything we draw in GL.

@@ -17,9 +17,14 @@
 #   fenced            render thread, per-LEVEL assets (model templates, the tile set)
 #                     under tagpu_reclaim's teardown fence; retired by the asset channel,
 #                     the decision after landing 5
-#   tooling           trigger-gated readers on the render thread (peek, catalogues, the
-#                     GUI snapshot, the weapon dump, scenario detection) with their
-#                     documented caveat; out of the exchange's scope
+#   tooling           trigger-gated readers (peek, catalogues, the GUI snapshot, the
+#                     weapon dump, scenario detection); out of the exchange's scope.
+#                     SINCE LANDING 10c-1 THEY RUN ON THE GAME THREAD, from the engine's
+#                     own flip (tagpu_gui_hook.c's before_flip) rather than from
+#                     tagpu_overlay_draw -- which is what let them reach renderer=gdi at
+#                     all. The documented caveat that went with the old placement is
+#                     therefore discharged, not merely tolerated: they read engine memory
+#                     from the thread that owns it.
 #   pure-engine-code  render thread executes an engine FUNCTION over our buffers, with
 #                     the disassembly range that shows it reads only its arguments and
 #                     writes only its destination
@@ -49,7 +54,7 @@ src/tagpu_suppress.c     publisher           # the DrawUnit detour's classifier 
 src/tagpu_tracer.c       publisher           # the G4 draw tracer's detours on the game thread
 src/tagpu_cobtrace.c     publisher           # the COB oracle's five sites inside the script engine, game thread
 src/tagpu_weapons.c      publisher           # the extra-weapons module: sim-side sites on the game thread; the weapon dump is tooling
-src/tagpu_scenario.c     tooling             # the applier runs on the tick detour (game thread); its detection and reporting half runs in the overlay
+src/tagpu_scenario.c     tooling             # both halves on the game thread since 10c-1: the applier on the tick detour, detection on the flip
 src/tagpu_cat.c          tooling             # unit/feature catalogues behind tagpu_units.trigger / tagpu_features.trigger
 src/tagpu_gui_snap.c     tooling             # the gadget-tree snapshot behind tagpu_ui.trigger
 src/tagpu_zoom.c         publisher           # the camera clamp 0x41C3C0, the follow clamp 0x41CAF7, the minimap-rect and ScrollSpeed-save redirects, and the command apply at the top of every in-play draw: every engine word here is read and written on the game thread; the render half (the levers, the anchor arithmetic, the predicted eye) reads only the packet

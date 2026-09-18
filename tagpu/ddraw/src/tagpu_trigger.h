@@ -21,10 +21,19 @@
    tagpu_gui_hook.c), which every renderer reaches, on the GAME thread.
 
    WHAT THE CALLER OWES: a TAGPU_FRAME whose geometry fields are real. They are
-   all `g_ddraw` members the render thread's packet copies anyway. `packet` may
-   be NULL -- every one of these null-checks it -- but note that
-   `tagpu_input_frame` is deliberately NOT in this set for exactly that reason;
-   see the note at its call site. */
+   all `g_ddraw` members the render thread's packet copies anyway, and they are
+   read from the thread that WRITES them, so they cannot tear -- the render
+   thread's old read was the cross-thread one.
+
+   `packet` stays NULL, and none of these five reads it at all; do not take that
+   as a null-check they perform, because they do not. `tagpu_input_frame` is
+   deliberately NOT in this set for exactly that reason -- it is the one that
+   dereferences `f->packet`, through `do_eye`.
+
+   AND THE CALLER OWES A CLOCK, NOT A FLIP. These throttle themselves on
+   `frame_counter % 5`, written against the PRESENT rate of ~60/s; the engine's
+   flip runs at thousands per second in the shell. The caller must gate on
+   elapsed time and hand over a counter that advances with it. */
 
 struct TAGPU_FRAME;
 

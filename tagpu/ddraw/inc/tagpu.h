@@ -1,6 +1,11 @@
 /* tagpu.h — shared contract between our cnc-ddraw fork and tagpu.dll.
    The fork fills a TAGPU_FRAME each frame (on its render thread, GL context current)
-   and calls tagpu.dll!TagpuPresent just before SwapBuffers. */
+   and calls tagpu.dll!TagpuPresent just before SwapBuffers.
+   SINCE LANDING 10c-1 there is a SECOND filler, on the GAME thread with no GL
+   context: tagpu_gui_hook.c's before_flip builds one for the trigger family, so
+   that family reaches renderer=gdi. It leaves surface_tex 0 and packet NULL --
+   which is why tagpu_input_frame, the one consumer that dereferences packet, is
+   not among its callees. */
 #ifndef TAGPU_H
 #define TAGPU_H
 

@@ -1770,33 +1770,56 @@ static int __cdecl before_flip(void* entry_esp)
        about the GUI census having nothing to do, which says nothing about
        whether someone dropped a `.trigger` file.
 
-       The frame is built rather than borrowed. Every field these five read is
-       a `g_ddraw` member that the render thread's packet merely COPIES (see
-       TAGPU_FRAME in inc/tagpu.h, which documents each field's origin), so
-       taking them from the source is one hop shorter, not a reconstruction.
-       `surface_tex` is a GL id and stays 0 -- none of the five reads it, and it
-       would be meaningless off the render thread. `packet` stays NULL, which is
-       why `tagpu_input_frame` is NOT here: it is the one that dereferences it,
-       through `do_eye`, and there is no non-consuming packet accessor to give
-       it. That is landing 10c's second half. */
+       AND IT IS GATED ON A CLOCK, NOT ON THE FLIP. `s_flips` is not a frame
+       counter -- CENSUS_MS twenty lines above says the shell flips ~5000 times
+       a second, and the op census measured ~12 000/s on MAINMENU. The family
+       was written against the PRESENT (60/s): its `% 5` throttles and
+       `SCN_ARM_FRAMES 600` are all in that unit. Handing it `s_flips` raised
+       its file-stat rate about a hundredfold, on the game thread, inside the
+       engine's flip, under Wine -- and turned the scenario applier's ten-second
+       arm watchdog into about a tenth of a second. [The landing review of 10c-1
+       found this; the number it needed was three lines above the block.]
+
+       TRIG_MS is the bound, and it is a clock rather than a rate assumption
+       about a renderer: the family sees ~60 frames a second on EVERY lane, so
+       `% 5` is ~83 ms exactly as it was at 60 fps and the arm watchdog is ~9.6 s
+       again. One QueryPerformanceCounter per flip is orders of magnitude
+       cheaper than the 1.27 GetFileAttributes calls per flip it replaces. */
+#define TRIG_MS 16
     {
-        TAGPU_FRAME gf;
-        memset(&gf, 0, sizeof gf);
-        gf.struct_size   = sizeof gf;
-        gf.abi           = TAGPU_ABI;
-        gf.game_width    = g_ddraw.width;
-        gf.game_height   = g_ddraw.height;
-        gf.vp_x          = g_ddraw.render.viewport.x;
-        gf.vp_y          = g_ddraw.render.viewport.y;
-        gf.vp_w          = g_ddraw.render.viewport.width;
-        gf.vp_h          = g_ddraw.render.viewport.height;
-        gf.win_width     = g_ddraw.render.width;
-        gf.win_height    = g_ddraw.render.height;
-        gf.hwnd          = g_ddraw.hwnd;
-        gf.hdc           = g_ddraw.render.hdc;
-        gf.frame_counter = s_flips;
-        gf.bpp           = g_ddraw.bpp;
-        tagpu_triggers_frame(&gf);
+        static LARGE_INTEGER s_trigQpc, s_trigFreq;
+        static unsigned      s_trigFrames = 0;
+        LARGE_INTEGER now;
+        if (!s_trigFreq.QuadPart) QueryPerformanceFrequency(&s_trigFreq);
+        QueryPerformanceCounter(&now);
+        if (s_trigFreq.QuadPart &&
+            (!s_trigQpc.QuadPart ||
+             (now.QuadPart - s_trigQpc.QuadPart) * 1000 >=
+                 (LONGLONG)TRIG_MS * s_trigFreq.QuadPart)) {
+            TAGPU_FRAME gf;
+            s_trigQpc = now;
+            memset(&gf, 0, sizeof gf);
+            gf.struct_size   = sizeof gf;
+            gf.abi           = TAGPU_ABI;
+            gf.game_width    = g_ddraw.width;
+            gf.game_height   = g_ddraw.height;
+            gf.vp_x          = g_ddraw.render.viewport.x;
+            /* the GL lane draws one row down when `nonexclusive`; render_ogl.c
+               adds this and the snapshot's "viewport" is what `tacli ui click
+               --device` maps through, so dropping it costs a pixel there */
+            gf.vp_y          = g_ddraw.render.viewport.y + g_ddraw.render.opengl_y_align;
+            gf.vp_w          = g_ddraw.render.viewport.width;
+            gf.vp_h          = g_ddraw.render.viewport.height;
+            gf.win_width     = g_ddraw.render.width;
+            gf.win_height    = g_ddraw.render.height;
+            gf.hwnd          = g_ddraw.hwnd;
+            /* copied for completeness; none of the five reads it, and a DC is
+               not meaningful off the thread that made it */
+            gf.hdc           = g_ddraw.render.hdc;
+            gf.frame_counter = s_trigFrames++;
+            gf.bpp           = g_ddraw.bpp;
+            tagpu_triggers_frame(&gf);
+        }
     }
     src = flip_source(entry_esp);
     s = surf_of_ctx(src);
