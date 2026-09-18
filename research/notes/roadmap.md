@@ -2846,8 +2846,10 @@ shell and a live game completely where it showed the lever's flat clear (§2.52)
 refusing the WHOLE pass on any frame with line vertices, because the GL twin draws its lines `ss`
 px wide and there was no `ss` target to put them in — so on the shipped default the effects pass
 dropped every frame with a laser in it. Terrain agrees with its twin on **0 of the 630 719 pixels
-the GL FBO drew**. Still open there: `selAt1x`, the HUD-scale shift, and GL's two-step resolve.
-**Only 4d, the deletion, is left.** Filed as one row — the fourth backend,
+the GL FBO drew**. Still open there: `selAt1x`, the HUD-scale shift, GL's two-step resolve, and
+**the `s_curDrew` ordering gap 4b-3 named** — the plan assigns that one to 4c and neither 4c-1 nor
+4c-2 closed it, so 4c is done as a pair of landings without being done as a gate. **What is left is
+4d, the deletion, plus that gap and the A/B capture moving to the world target.** Filed as one row — the fourth backend,
 `renderer=vulkan`, the `ss` target, TA's surface, and route D's deletion — it comes apart along
 four seams the code already has: **4a** the thread and the present, **4b** the per-frame driver
 (the gathers run and the GL draws stand down), **4c** the `ss` target and TA's surface upload,

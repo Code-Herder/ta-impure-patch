@@ -3297,14 +3297,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         TAGPU_WORLDTGT w;
         w.gw = gw; w.gh = gh; w.ss = ss; w.devres = devres;
         w.vx = f->vp_x; w.vy = f->vp_y; w.vw = f->vp_w; w.vh = f->vp_h;
-        w.serial = 0; w.frame = f->frame_counter;
-        if (s_wtHave && s_wt.gw == w.gw && s_wt.gh == w.gh && s_wt.ss == w.ss &&
-            s_wt.devres == w.devres && s_wt.vx == w.vx && s_wt.vy == w.vy &&
-            s_wt.vw == w.vw && s_wt.vh == w.vh) {
-            w.serial = s_wt.serial;        /* the same target, so the same name */
-        } else {
-            w.serial = s_wt.serial + 1;    /* a NEW one: a consumer must rebuild */
-        }
+        w.frame = f->frame_counter;
         s_wt = w; s_wtHave = 1;
     }
     /* the rect's own path, snapshotted beside ss for the same reason: the

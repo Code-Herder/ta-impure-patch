@@ -99,6 +99,16 @@
 int  tagpu_vk_world_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                             uint32_t* tw, uint32_t* th);
 
+/* HOW MANY SAMPLES PER GAME PIXEL THIS FRAME'S TARGET ACTUALLY HAS, or 1 when
+   there is none and the world is going into the swapchain image at client
+   resolution. A pass whose GL twin scales something by `ss` -- the line width
+   is the only one today -- must ask THIS rather than read `ss` out of its own
+   hand-over, because the hand-over says what the GL lane did and this says what
+   this frame's target is, and on the fallback path those differ. Valid only
+   after `tagpu_vk_world_prepare` has run for this frame, which is why the seam
+   calls it before any pass's `prepare`. [FROM THE 4c-2 LANDING REVIEW.] */
+int  tagpu_vk_world_scale(void);
+
 /* Open and close the world render pass around the world passes' `record`s. */
 void tagpu_vk_world_begin(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot);
 void tagpu_vk_world_end(const TAGPU_VKPASS* d, VkCommandBuffer cb);

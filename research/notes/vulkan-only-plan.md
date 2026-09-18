@@ -593,56 +593,21 @@ would not have shown up as a failure — it would have shown up as three landing
      Not covered: `selAt1x`, the HUD-scale shift, and GL's two-step resolve (one step here, the
      same filter at k = 1 and GL's own `devres` path otherwise).
 
-     **AND IT LEFT ONE LANDING BEHIND IT THAT IS WORTH DOING NEXT: move the Vulkan A/B capture to
-     the world target.** 4c-2 both exposed the harness problem and supplied the cure. The GL half
-     of a world pass's A/B is the bare world FBO; the Vulkan half is `s_vk.img[idx]`, the swapchain
-     image, which since 4c-1 carries TA's own frame underneath. For an OPAQUE pass that only makes
-     the uncovered pixels differ (terrain: 0 of the 630 719 it drew). For a pass that BLENDS it is
-     worse than cosmetic — the Vulkan half is *the effect over TA's frame* and the GL half is *the
-     effect over black*, so every translucent fragment differs. Measured on the effects pass: of
-     1 622 GL-ink pixels, 226 identical with a median max-channel of 237 (the opaque fragments,
-     byte-for-byte) and 1 396 differing with a median of 19 (the translucent ones). **The offscreen
-     world target 4c-2 created is exactly the right source** — cleared to `{0,0,0,0}`, holding the
-     world alone, the same thing GL's world FBO is. `tagpu_vk_shot.c` reads the swapchain image
-     today; pointing it at `tagpu_vk_world`'s colour image for a world pass would make every world
-     A/B expressible again, including at `ss > 1`, where it has never been runnable at all. They are independent, as filed — one changes what is underneath
-     the world, the other changes where the world draws. 4c also owns the `s_curDrew` ordering
-     gap 4b-3 left named (§2.51), because the fix is `tagpu_cursown_publish` moving after the
-     frame it reports.
+     **AND IT FOUND AND FIXED A BREAK 4c-1 HAD LEFT IN THE A/B ITSELF.** Since 4c-1 the Vulkan
+     half of a world capture was the swapchain image WITH TA's own frame underneath, while the GL
+     half is the bare world FBO — so every uncovered pixel differed, and for a pass that BLENDS so
+     did every translucent fragment (the effects pass: 1 396 of its 1 622 GL-ink pixels, median
+     max-channel 19, against 226 identical at median 237). 4c-1 verified itself on the screen, so
+     nothing caught it. The fix is one line in the seam — `if (draw_surf && nclaim == 0)`, TA's
+     frame withheld on exactly the frames an A/B is claimed — and **both world A/Bs are 0 px of
+     786 432 again**: terrain 630 719 non-black a side, effects 31 532.
 
-     **AND 4c-1 SETTLED WHAT THE CLIP-SPACE FLIP IS PAIRED WITH**, which 4c-2 needs because its
-     resolve is the next literal-quad pass. **The quad and the flip are one choice.**
-     `render_ogl.c` builds two quads for the same blit, differing by exactly a y negation: the
-     WINDOW quad (`:576-597`) puts tex `(0,0)` at clip `y = +1`, the FBO quad (`:554-575`, under
-     `if (g_ogl.shader1_program)`) puts it at `y = -1`. Either can be ported; what cannot is
-     copying one lane's quad with the other's flip decision. 4c-1 uses the FBO quad and no flip.
-     [gpu-status](gpu-status.html) §2.52 has the two wrong derivations that preceded this one —
-     the second of which was committed here as a one-line rule and is withdrawn.
-
-     **For 4c-2 concretely:** `tagpu_native::DVS` is `uv = p; gl_Position = vec4(p.x*2.0-1.0,
-     p.y*2.0-1.0, 0.0, 1.0)` over a unit-square `vec2` at location 0, and `DFS` is
-     `frag = texture(uTex, uv)` with `uTex` at set 0 binding 40 and no uniform block in either
-     stage. Its pairing is `uv = 0` at clip `y = -1`, the FBO quad's.
-
-     **AND WHICH WAY UP IT LANDS IS SETTLED [2026-09-18]: the composite does not flip, and it
-     is landing 5b's own rule that says so** rather than a new derivation. The world passes
-     (`_terr`, `_feat`, `_unit`, `_fx`, `_mark`) write `gl_Position.y = p.y/uGame.y*2 - 1` on the
-     engine's screen-space y, which grows DOWNWARD, under a POSITIVE viewport height -- so clip
-     `-1` is the game's top row and it lands on **row 0 of whatever they draw into**. That is
-     true of the `ss×` offscreen image for exactly the reason it is true of the swapchain image
-     today. Both images therefore have the game's top row at row 0, so the copy between them is
-     orientation-PRESERVING, and `DVS` under a positive viewport height gives precisely that:
-     `uv.y = 0` samples source row 0 and clip `y = -1` writes destination row 0.
-
-     **What made this look open was three comments that said the opposite of their own code.**
-     `af82f45` (landing 5b) turned the five world viewports positive and rewrote the prose in the
-     five pass HEADERS, `tagpu_vk_pass.h`, `gpu-status.md` and three cull comments -- but left the
-     INLINE comment at the `vkCmdSetViewport` call site in `tagpu_vk_terr.c`, `_fx.c` and
-     `_feat.c` still reading *"y starts at the bottom and the height is negative, so clip space is
-     turned over once"*, directly above `vp.y = 0.0f; vp.height = (float)h;`. `_unit.c` and
-     `_mark.c` got the corrected wording; those three did not, and they are the files 4c-2 reads
-     first. Corrected 2026-09-18, in the landing that needed the answer -- the third re-derivation
-     of this question in 4c and the first one a stale comment would have sent the wrong way.
+     **Still filed for later: move the Vulkan capture to the world target.** `tagpu_vk_shot.c`
+     reads `s_vk.img[idx]`; the offscreen image 4c-2 created is cleared to `{0,0,0,0}` and holds
+     the world alone, which is what GL's world FBO is. That is what would make a world A/B
+     runnable at `ss > 1` — which it has never been, because the GL capture is the supersampled
+     FBO and the Vulkan one the client rect, so the two are different sizes and `vk-ab.py` refuses
+     them.
 
    * **4d — the deletion.** Route D's window, `tagpu_vk_wndproc`, `WM_TAGPU_VK` and the geometry
      tracking, once 4b's figures are banked. **4a made route D unreachable rather than deleted on

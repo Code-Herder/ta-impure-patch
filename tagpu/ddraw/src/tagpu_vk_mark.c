@@ -28,6 +28,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include "tagpu_vk_mark.h"
+#include "tagpu_vk_world.h"   /* the target's ss: the line width follows it */
 #include "tagpu_mark.h"
 #include "spirv/tagpu_mark.spv.h"
 
@@ -164,6 +165,7 @@ static VkDeviceSize s_ualign = 256;
 static uint32_t s_slot;
 static int s_abFrame;
 static int s_saidLine, s_saidWide, s_saidFog, s_saidLut, s_saidRoom, s_saidHand, s_saidDrew, s_saidIn;
+static float s_lineW = 1.0f;   /* glLineWidth(ss) for THIS frame's target */
 static int s_saidPal;
 /* ONE LATCH PER SITE HERE TOO. `s_saidWhy` covered three distinct refusals
    and `s_saidTex` two, so the first to fire silenced a DIFFERENT one for the
@@ -803,10 +805,14 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        The WIDTH is the other one. The GL twin calls `glLineWidth(ss)`, and a
        Vulkan `lineWidth` other than 1.0 needs the `wideLines` device feature
        enabled at device creation -- which is the seam's business, not a
-       pass's, and the seam does not ask for it. So a frame that has line
-       vertices at ss != 1 is refused rather than drawn one pixel wide where
-       the twin drew `ss`. This is `tagpu_vk_fx.c`'s rule, item 2 of its
-       header, and the same two sentences apply here word for word. */
+       pass's. SINCE 4c-2 THE SEAM DOES ASK FOR IT, because the world is drawn
+       into a target `ss` times the game resolution and a 1.0 line there is `ss`
+       times too thin. The width comes from `tagpu_vk_world_scale()` -- the
+       supersample factor of THIS frame's target, which is 1 when the target
+       refused and the world is going into the swapchain image at 1:1 -- and a
+       width the device will not rasterise is still refused rather than clamped.
+       This is `tagpu_vk_fx.c`'s rule, item 2 of its header, and it applies here
+       word for word. [Corrected by the 4c-2 landing review.] */
     if (needLines && !d->lineok) {
         if (!s_saidLine) {
             s_saidLine = 1;
@@ -824,12 +830,19 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        tagpu_vk_fx.c's reason: a clamped width is a line a different thickness
        from its own twin. Before 4c-2 this read `s_h.ss != 1.0f` and there was
        no supersampled target for a wide line to be correct in. */
-    if (needLines && s_h.ss != 1.0f &&
-        (!d->wideok || s_h.ss > d->maxLineWidth)) {
+    /* THE WIDTH FOLLOWS THE TARGET, NOT THE HAND-OVER -- tagpu_vk_fx.c carries
+       the argument. `s_h.ss` says what the GL lane did; this says what this
+       frame's target is, and on the fallback path (no offscreen target, the
+       world going into the swapchain image at 1:1) they differ.
+       [FROM THE 4c-2 LANDING REVIEW.] */
+    s_lineW = (float)tagpu_vk_world_scale();
+    if (needLines && s_lineW != 1.0f &&
+        (!d->wideok || s_lineW > d->maxLineWidth)) {
         if (!s_saidWide) {
             s_saidWide = 1;
-            plog(d, "mark: the order lines are %.1f px wide in the GL twin and "
-                    "this device offers %s - nothing drawn", s_h.ss,
+            plog(d, "mark: the target is %.0fx supersampled, so the order lines "
+                    "are that many px wide in the GL twin, and this device "
+                    "offers %s - nothing drawn", s_lineW,
                  d->wideok ? "a narrower maximum" : "no wideLines at all");
         }
         return 0;
@@ -1057,11 +1070,12 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         if (g->lines && !s_pipeLine) continue;
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           g->lines ? s_pipeLine : s_pipeTri);
-        /* Always 1.0 in practice: `prepare` refuses a line frame at ss != 1
-           because `wideLines` is not enabled on the device. Written as `ss`
-           rather than as a literal so the day the seam does enable it, this
-           line is already the twin's. */
-        if (g->lines) vkCmdSetLineWidth(cb, s_h.ss);
+        /* `glLineWidth(ss)`, and since 4c-2 it is genuinely `ss` rather than
+           always 1.0: the seam enables `wideLines` and the world is drawn into
+           a target that many times the game resolution. `s_lineW` is the
+           TARGET's scale, settled in `prepare`, not the hand-over's -- the two
+           differ on the frame the target refused. */
+        if (g->lines) vkCmdSetLineWidth(cb, s_lineW);
         dyno[0] = 0;
         dyno[1] = (uint32_t)s_fsOff[i];
         /* UNIT 0 IS PER DRAW, exactly as it is in the GL twin: the text

@@ -72,11 +72,16 @@ int tagpu_native_scissor_on(void);
    frame's on both lanes. Everything in it is arithmetic on the frame packet and
    the levers; nothing here touches GL, which is what makes that placement legal.
 
-   `serial` moves when any field moves, so a consumer holding device resources
-   sized by this can tell "the same target" from "a new one" without comparing
-   the fields itself. `frame` is the render-thread frame it was decided on, and
-   a consumer must refuse a hand-over that is not its own frame's -- the rule
-   every hand-over in this tree carries.
+   `frame` is the render-thread frame it was decided on, and a consumer must
+   refuse a hand-over that is not its own frame's -- the rule every hand-over in
+   this tree carries.
+
+   THERE IS NO `serial` HERE, and there was one for a day. It was documented as
+   letting a consumer tell "the same target" from "a new one" without comparing
+   the fields -- and no consumer ever did: tagpu_vk_world.c compares the extent
+   it is about to build, which is the fact it actually needs. A published field
+   whose comment claims work nothing does is worse than an absent one, because
+   the next reader budgets for it. [FROM THE 4c-2 LANDING REVIEW.]
 
    Render thread only. [The vulkan-only plan, landing 4c-2.] */
 typedef struct {
@@ -84,7 +89,6 @@ typedef struct {
     int      ss;          /* samples per game pixel: the target is gw*ss,gh*ss */
     int      devres;      /* the 1x resolve is skipped; read the ss buffer     */
     int      vx, vy, vw, vh;  /* where the block lands, HUD shift applied      */
-    unsigned serial;
     unsigned frame;
 } TAGPU_WORLDTGT;
 int tagpu_native_worldtgt(TAGPU_WORLDTGT* out);

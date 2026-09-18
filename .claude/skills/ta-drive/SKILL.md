@@ -2338,31 +2338,25 @@ touch <gamedir>/tagpu_fps.ab                             # one frame, both lanes
   89 and 92 have all been recorded on passing runs. Do not chase it. **For the world passes the
   ink count IS worth reading**, because there it is the scene (terrain fills the viewport, the
   scaffold's is `tall=`), and a big change in it means the fixture moved.
-- **A WORLD PASS'S FIGURE IS THE `on GL ink` LINE, NOT THE HEADLINE — since landing 4c-1, and
-  found the hard way in 4c-2.** The two halves are no longer the same kind of picture. The GL half
-  of a world pass's A/B is the **bare world FBO**, black everywhere the pass did not draw; the
-  Vulkan half is the **swapchain image**, and since 4c-1 that carries TA's own 8-bit frame
-  underneath it (`tagpu_vk_surf.c`, the bottom layer that made `tagpu_gui.off` show a game). So the
-  UI panel, the minimap, the top bar and the fogged terrain outside LOS are in one capture and in
-  neither the other — and **every pixel the pass did not cover differs by construction**.
-  The terrain A/B on the 4c-2 build reads *NOT identical, 118 751 px of 786 432* and **0 of the
-  630 719 the GL capture drew**. The first number is the framings; the second is the pass.
-  `vk-ab.py` prints both now (`on GL ink` / `on GL black`), says so in words when a run differs
-  only on GL-black pixels, and exits 0 for that case — so a green exit still means "the pass
-  agrees with its twin". **Use the screen for what the whole frame looks like**; the A/B cannot
-  answer that question any more and never could answer it for a pass that does not fill the frame.
+- **TA'S OWN FRAME IS WITHHELD ON A CLAIMED FRAME, and if you ever see it in a world capture the
+  build predates 2026-09-18.** Landing 4c-1 put TA's 8-bit frame under everything on the Vulkan
+  lane, which silently broke every world pass's A/B: the GL half is the bare world FBO (black
+  wherever the pass did not draw) and the Vulkan half is the swapchain image, so every uncovered
+  pixel differed — and for a pass that BLENDS, so did every translucent fragment, because one lane
+  composites the effect over the game and the other over black. The terrain A/B read *NOT
+  identical, 118 751 px* for a pass that was exactly right; the effects pass differed on 1 396 of
+  its 1 622 GL-ink pixels. **4c-2 fixed it in the seam** — `if (draw_surf && nclaim == 0)`, so the
+  bottom layer is skipped on exactly the frames a measurement is claimed — and both are 0 px again
+  (terrain 630 719 non-black a side, effects 31 532). Nothing about the recipe changed; this is
+  here so the numbers in the old notes are readable.
 
-- **...AND FOR A PASS THAT BLENDS, `on GL ink` IS NOT ENOUGH EITHER.** Terrain comes out 0 on that
-  line because it is OPAQUE — it writes the same colour over any background. The effects pass
-  blends, so the Vulkan half is *the effect over TA's frame* and the GL half is *the effect over
-  black*: measured on the 4c-2 build, 226 of the 1 622 GL-ink pixels are identical with a median
-  max-channel of **237**, and the 1 396 that differ have a median of **19**. The opaque fragments
-  are byte-for-byte — `(255, 71, 0)` against `(255, 71, 0)` — and the translucent ones are two
-  backgrounds, not two rasterisers. So for effects, features and markers, read the A/B as *"the
-  opaque fragments agree"* and use the screen for the rest. **The real fix is to capture the
-  Vulkan half from the offscreen world target that landing 4c-2 created** (it is cleared to
-  transparent and holds the world alone, exactly like GL's world FBO); `tagpu_vk_shot.c` reads the
-  swapchain image today, and moving it is a landing of its own.
+- **`vk-ab.py` PRINTS `on GL ink` / `on GL black` — read it, do not take it for a verdict.** The
+  split is what tells an OVER-DRAW from a framing difference: a pass that paints where its twin
+  painted nothing differs only on GL-black pixels, which is exactly G19e's line-rasterisation
+  defect (*"all 126 of the twin's pixels plus exactly one extra fragment at the end of each line
+  segment"*). An earlier cut of the tool exited **0** whenever every difference fell there, under
+  the words "the pass agrees with its twin" — it does not any more. **The exit status is 0 only
+  when every pixel agrees.**
 
 - **THREE WAYS TO RUN AN A/B THAT LOOKS LIKE A RESULT AND IS NOT** [all three cost the gate-2
   landing a tick or worse, 2026-09-16]:

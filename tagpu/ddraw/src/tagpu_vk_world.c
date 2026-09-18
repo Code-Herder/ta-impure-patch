@@ -62,10 +62,11 @@ static int s_downOwed;
 static int s_downPaying;
 static int s_openSlot = -1;             /* the slot `begin` opened, -1 = none */
 static int s_drawThis;                  /* `record` may composite this frame  */
-static int s_saidBig;
+static int s_saidBig;                   /* the per-factor bound said once  */
+static int s_saidBigProduct;            /* ...and the product's, its own   */
 static int s_vx, s_vy, s_vw, s_vh;      /* where the block lands, this frame  */
 static unsigned s_nFrames, s_nBuilds, s_saidAt;
-static int s_lastW, s_lastH, s_lastSS;
+static int s_lastW, s_lastH, s_lastSS, s_lastDevres;
 
 static VkRenderPass          s_rp;      /* the OFFSCREEN pass, not the seam's */
 static VkDescriptorSetLayout s_dsl;
@@ -306,8 +307,24 @@ static int build_renderpass(const TAGPU_VKPASS* d)
     memset(dep, 0, sizeof dep);
     dep[0].srcSubpass = VK_SUBPASS_EXTERNAL;
     dep[0].dstSubpass = 0;
-    dep[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    dep[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    /* THE SOURCE SCOPE IS EVERY WAY THIS SLOT'S IMAGES WERE LAST USED, not
+       just the sampling. The previous frame in this slot ended its colour
+       writes at COLOR_ATTACHMENT_OUTPUT and its depth writes at
+       LATE_FRAGMENT_TESTS, and this frame's LOAD_OP_CLEAR -- which the
+       destination scope below DOES name -- is a write-after-write against both.
+       Between two submits on one queue the ordering is submission order, but
+       the ACCESS still has to be made visible. tagpu_vk.c's own render pass
+       states this argument in terms and carries these masks; leaving them off
+       here is the class of omission a validation layer catches and a correct
+       picture does not -- and the fence wait making it work in practice is
+       safety by timing, which CLAUDE.md refuses as an argument.
+       [FROM THE 4c-2 LANDING REVIEW.] */
+    dep[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                          VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dep[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
+                           VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     dep[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                           VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
     dep[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
@@ -328,8 +345,13 @@ static int build_renderpass(const TAGPU_VKPASS* d)
 
     dep[1].srcSubpass = 0;
     dep[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-    dep[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dep[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    /* AND THE DEPTH HALF HERE TOO, for the final-layout transition: the pass
+       wrote depth as well as colour and both have to be made available before
+       the attachments leave it. tagpu_vk.c does the same on its own dep[1]. */
+    dep[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                          VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dep[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     dep[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     dep[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     dep[1].dependencyFlags = 0;
@@ -348,6 +370,22 @@ static int build_sampler(const TAGPU_VKPASS* d)
     VkSamplerCreateInfo sci = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
     VkFormatProperties fp;
 
+    /* AN sRGB SWAPCHAIN FORMAT IS REFUSED RATHER THAN RENDERED INTO. The seam
+       PREFERS VK_FORMAT_B8G8R8A8_UNORM but falls back to `fmts[0]`, so `d->fmt`
+       is not guaranteed linear. Drawing the world into an sRGB intermediate
+       would make the passes blend against a DECODED value and the composite
+       decode again on sample, where the GL twin's world FBO is GL_RGBA8 and
+       linear -- a different picture, arrived at silently. Refusing leaves the
+       world on the swapchain image, which is the same one round trip the lane
+       has always had. [FROM THE 4c-2 LANDING REVIEW.] */
+    if (d->fmt == VK_FORMAT_B8G8R8A8_SRGB || d->fmt == VK_FORMAT_R8G8B8A8_SRGB ||
+        d->fmt == VK_FORMAT_A8B8G8R8_SRGB_PACK32) {
+        plog(d, "world: the surface gave us an sRGB format (%d) and the GL twin's "
+                "world FBO is linear GL_RGBA8 - an sRGB intermediate would blend "
+                "against decoded values, so the world stays on the swapchain image",
+             (int)d->fmt);
+        return 0;
+    }
     vkGetPhysicalDeviceFormatProperties(d->pd, d->fmt, &fp);
     if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) ||
         !(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) {
@@ -635,8 +673,11 @@ int tagpu_vk_world_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
     w = t.gw * t.ss;
     h = t.gh * t.ss;
     if (w > WORLD_MAXDIM || h > WORLD_MAXDIM) {
-        if (!s_saidBig) {
-            s_saidBig = 1;
+        /* ITS OWN LATCH. Sharing one with the check above would let whichever
+           refusal fired first silence the other for the life of the process,
+           and they mean different things. [FROM THE 4c-2 LANDING REVIEW.] */
+        if (!s_saidBigProduct) {
+            s_saidBigProduct = 1;
             plog(d, "world: a %dx%d target (%dx%d at ss=%d) is outside what this "
                     "module carries (%d) - the world stays on the swapchain image",
                  w, h, t.gw, t.gh, t.ss, WORLD_MAXDIM);
@@ -678,13 +719,20 @@ int tagpu_vk_world_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
     *tw = (uint32_t)w; *th = (uint32_t)h;
     s_drawThis = 1;
     s_nFrames++;
-    s_lastW = w; s_lastH = h; s_lastSS = t.ss;
+    s_lastW = w; s_lastH = h; s_lastSS = t.ss; s_lastDevres = t.devres;
 
     if (d->frame - s_saidAt >= 300) {
         s_saidAt = d->frame;
-        plog(d, "world: frame %u: %dx%d target (%dx%d at ss=%d) -> (%d,%d %dx%d), "
+        /* `devres` IS REPORTED BECAUSE IT CHANGES WHAT THIS DRAW IS. Under it
+           the GL lane skips its 1x resolve entirely and composites straight out
+           of the supersampled buffer -- which is what this module does on every
+           path -- so a reader comparing the two lanes needs to know which of
+           GL's two shapes is in force. It was published and never shown until
+           the 4c-2 review asked what read it. */
+        plog(d, "world: frame %u: %dx%d target (%dx%d at ss=%d%s) -> (%d,%d %dx%d), "
                 "%u frame(s), %u build(s)", d->frame, s_lastW, s_lastH,
-             t.gw, t.gh, s_lastSS, s_vx, s_vy, s_vw, s_vh, s_nFrames, s_nBuilds);
+             t.gw, t.gh, s_lastSS, s_lastDevres ? " devres" : "",
+             s_vx, s_vy, s_vw, s_vh, s_nFrames, s_nBuilds);
     }
     return 1;
 }
@@ -800,6 +848,8 @@ void tagpu_vk_world_down(const TAGPU_VKPASS* d)
     s_downOwed = 0;
     s_downPaying = 0;
 }
+
+int tagpu_vk_world_scale(void) { return s_drawThis ? s_lastSS : 1; }
 
 int tagpu_vk_world_down_owed(void) { return s_downOwed; }
 

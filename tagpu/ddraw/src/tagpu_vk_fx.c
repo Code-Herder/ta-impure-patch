@@ -44,9 +44,17 @@
       THE WIDTH IS THE PART THAT IS BOUNDED. The GL twin calls
       `glLineWidth(ss)`, and a Vulkan `lineWidth` other than 1.0 needs the
       `wideLines` device feature ENABLED AT DEVICE CREATION -- which is the
-      seam's business, not a pass's, and the seam does not ask for it. So this
-      pass draws at 1.0 and REFUSES a frame that has line vertices at ss != 1,
-      rather than drawing the twin's 2-px lasers one pixel wide.
+      seam's business, not a pass's. SINCE 4c-2 THE SEAM DOES ASK FOR IT, because
+      the world is drawn into a target `ss` times the game resolution and a 1.0
+      line there is `ss` times too thin. The width is dynamic on the line
+      pipeline when `d->wideok`, set to `tagpu_vk_world_scale()` -- the
+      supersample factor of the target this frame, which is 1 when the target
+      refused and the world is going into the swapchain image at 1:1. A width
+      the device will not rasterise is still REFUSED rather than clamped, which
+      is what the rest of this item is about. Before 4c-2 there was no `ss`
+      target at all, so this pass drew at 1.0 and refused every frame with line
+      vertices at ss != 1 -- which on the shipped default (`ss` = 2) meant it
+      dropped every frame with a laser in it.
 
    3. THE FLASH LIGHT TABLE IS A THREE-BYTE FORMAT, AND VULKAN DOES NOT HAVE
       ONE. The GL twin uploads it as `GL_RGB8`, 32 x 1; `VK_FORMAT_R8G8B8_UNORM`
@@ -128,6 +136,7 @@
 #include <string.h>
 
 #include "tagpu_vk_fx.h"
+#include "tagpu_vk_world.h"   /* the target's ss: the line width follows it */
 #include "tagpu_fx.h"
 #include "spirv/tagpu_fx.spv.h"
 
@@ -713,9 +722,13 @@ static int build_pipelines(const TAGPU_VKPASS* d)
        so the state is unchanged and only its justification is. */
     rs.cullMode = VK_CULL_MODE_NONE;
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    /* 1.0 AND NOT `ss`: anything else needs the `wideLines` device feature,
-       which the SEAM would have to enable at device creation. A frame with
-       line vertices at ss != 1 is refused in `prepare` instead -- item 2. */
+    /* THE STATIC WIDTH, WHICH THE LINE PIPELINE THEN OVERRIDES. Since 4c-2 the
+       seam enables `wideLines` and the line pipeline below declares
+       VK_DYNAMIC_STATE_LINE_WIDTH, so for THAT pipeline this value is ignored
+       and `record` supplies the target's scale. It still applies to the
+       triangle and flash pipelines, which declare no such state and draw no
+       lines. A width the device will not take is refused in `prepare` -- item
+       2. */
     rs.lineWidth = 1.0f;
 
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -1255,6 +1268,7 @@ int tagpu_vk_fx_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     TAGPU_FXHAND h;
     SLOT* s;
     VkDeviceSize vbytes;
+    int ss;                    /* samples per game pixel in THIS frame's target */
     /* A UNION, NOT A CAST. Both blocks mix `int` and `float` members and
        writing an int through a float array is the aliasing rule broken at -O2,
        which is not a place to find out that the fog branch took a garbage
@@ -1412,10 +1426,6 @@ int tagpu_vk_fx_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         return 0;
     }
 
-    /* THE LINE WIDTH, AND IT IS A REAL BOUND RATHER THAN A CAUTION. The twin
-       calls glLineWidth(ss); this pass's pipelines are built at 1.0 because
-       anything else needs `wideLines` enabled on the DEVICE, which is the
-       seam's to ask for and it does not. At ss 1 the two agree exactly. */
     /* THE LINE WIDTH, AND IT IS STILL A REAL BOUND RATHER THAN A CAUTION --
        what changed in 4c-2 is that the bound can now usually be MET. The twin
        calls `glLineWidth(ss)`; since the world is drawn into a target `ss`
@@ -1426,18 +1436,27 @@ int tagpu_vk_fx_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
        from its own twin, which is the whole thing this check exists to stop.
        Before this the test was `h.ss != 1` and the pass dropped every frame
        with a laser in it on the shipped default. */
+    /* ...AND THE WIDTH FOLLOWS THE TARGET WE WILL ACTUALLY DRAW INTO, not the
+       `ss` the GL lane used. They are the same number whenever the offscreen
+       world target exists, and they are NOT when it refused -- in which case
+       the seam records this pass into the swapchain image at client resolution,
+       where one game pixel is one device pixel and an `ss`-wide line is `ss`
+       times too thick. Reading `h.ss` here asserted an invariant nothing
+       established. `tagpu_vk_world_prepare` runs before every pass's `prepare`
+       so that this answer exists. [FROM THE 4c-2 LANDING REVIEW.] */
+    ss = tagpu_vk_world_scale();
     if (h.n[TAGPU_FXB_LINES] > 0 &&
-        (h.ss != 1 && (!d->wideok || (float)h.ss > d->maxLineWidth))) {
+        (ss != 1 && (!d->wideok || (float)ss > d->maxLineWidth))) {
         if (!s_saidWide) {
             s_saidWide = 1;
-            plog(d, "fx: ss=%d makes the GL twin's lines %d px wide and this "
-                    "device offers %s - nothing drawn while there are line "
-                    "vertices", h.ss, h.ss,
+            plog(d, "fx: the target is %dx supersampled, which makes the GL "
+                    "twin's lines %d px wide, and this device offers %s - "
+                    "nothing drawn while there are line vertices", ss, ss,
                  d->wideok ? "a narrower maximum" : "no wideLines at all");
         }
         return 0;
     }
-    s_lineW = (float)h.ss;
+    s_lineW = (float)ss;
 
     if (h.fogGrid) {
         if (h.fogGridCols < 1 || h.fogGridRows < 1 ||

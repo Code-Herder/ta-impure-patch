@@ -22,7 +22,10 @@ when more than one pass drew into the frame it was asked for, and says so in
 tagpu.log, so a contaminated pair is not written rather than being written and
 believed.
 
-The exit status is 0 only when every pixel agrees.
+The exit status is 0 only when every pixel agrees -- including the pixels the
+GL capture left black, because a pass that draws MORE than its twin differs
+only there. `on GL ink` / `on GL black` split the difference up for reading;
+neither of them softens the verdict.
 """
 
 import argparse
@@ -192,14 +195,27 @@ def main():
     # MEASURED 2026-09-18 on the terrain pass: 118 751 px differ of 786 432, and
     # 0 of the 630 719 the GL FBO drew. That is a pass in exact agreement with
     # its twin and a harness comparing two different framings.
+    # THE EXIT CODE NEVER SAYS "PASS" ON A RUN THAT DIFFERS, and the first cut
+    # of this report did. It returned 0 whenever every difference fell on a
+    # GL-black pixel -- which sounds like "the pass agrees" and is not, because
+    # `diff_ink` is blind to the one failure mode this project has already
+    # shipped once: a pass that draws MORE than its twin. G19e's line
+    # rasterisation was "all 126 of the twin's pixels plus exactly one extra
+    # fragment at the END of each line segment" (tagpu_vk_pass.h), and every one
+    # of those extra fragments lands on a pixel GL left black. So does a terrain
+    # or feature pass painting outside the scissor, or over fog its twin
+    # refused. An over-draw would have exited 0 and printed the words "the pass
+    # agrees with its twin".
+    # The split is still worth printing -- it is what tells an over-draw from
+    # the 4c-1 framing difference -- but it is a thing to READ, not a verdict.
+    # [FROM THE 4c-2 LANDING REVIEW.]
     if diff and diff_ink == 0:
         print("...but 0 of the %d pixels the GL capture DREW." % ink_gl)
-        print("Every difference is a pixel GL left black. For a WORLD pass that")
-        print("is expected since landing 4c-1: the GL half is the bare world FBO")
-        print("and the Vulkan half is the swapchain image, which carries TA's own")
-        print("frame underneath. Read `on GL ink` as the pass's figure, and use")
-        print("the screen for what the whole frame looks like.")
-        return 0
+        print("Every difference is a pixel GL left black. Two things do that and")
+        print("they are not the same: the 4c-1 framing (the GL half is the bare")
+        print("world FBO, the Vulkan half is the swapchain image with TA's own")
+        print("frame underneath), and a pass that OVER-DRAWS its twin. This tool")
+        print("cannot tell them apart -- look at the difference image (--out).")
     return 0 if diff == 0 else 1
 
 

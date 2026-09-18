@@ -2878,6 +2878,24 @@ static int vk_present(void)
                `g_ogl.main_program`), which is why `tagpu_gui.off` still shows a
                game there and showed a flat clear here.
                [The vulkan-only plan, landing 4c-1.] */
+            /* THE WORLD TARGET IS BUILT FIRST OF ALL, and the order is a
+                contract rather than a preference. It is not a pass and depends
+                on none of them -- it reads the geometry tagpu_native.c
+                published from this frame's gather -- but the passes depend on
+                IT: any pass whose GL twin scales something by `ss` asks
+                `tagpu_vk_world_scale()` during its own `prepare`, and that
+                answer does not exist until this has run. It was last of
+                `prepare` when 4c-2 was written, which left the effects and
+                marker passes setting an `ss`-wide line from their hand-over
+                while the target might have refused and the world be going into
+                the swapchain image at 1:1. [FROM THE 4c-2 LANDING REVIEW.]
+                It puts no pixel anywhere, so it is not counted in
+                `ndraw`/`nclaim` -- the shadow map's rule for its reason. 0 means
+                there is no target this frame and the world draws into the
+                swapchain image exactly as it did before 4c-2: a smaller
+                picture, never a wrong one. */
+            draw_world = tagpu_vk_world_prepare(&s_pass, cb, fi, &tw, &th);
+
             draw_surf = tagpu_vk_surf_prepare(&s_pass, cb, fi);
 
             /* THE SCAFFOLD'S UPLOAD IS FIRST OF OURS, though its DRAW is nearly last.
@@ -2955,17 +2973,6 @@ static int vk_present(void)
                a consumer has asked the device for it. */
             tagpu_vk_restore_step(&s_pass, cb, fi);
 
-            /* AND THE WORLD TARGET LAST OF `prepare`, because it is not a
-               pass and depends on none of them: it reads the geometry
-               tagpu_native.c published from this frame's gather and builds
-               or resizes this slot's offscreen colour+depth pair. It puts
-               no pixel anywhere and so is not counted in `ndraw`/`nclaim`,
-               the shadow map's rule for the shadow map's reason.
-               0 means there is no target this frame and the world draws
-               into the swapchain image exactly as it did before 4c-2 --
-               a smaller picture, never a wrong one.
-               [The vulkan-only plan, landing 4c-2.] */
-            draw_world = tagpu_vk_world_prepare(&s_pass, cb, fi, &tw, &th);
         }
         ndraw = draw_terr + draw_feat + draw_unit + draw_fx + draw_mark + draw_scaf +
                 draw_gui + draw_fps;
@@ -3031,8 +3038,28 @@ static int vk_present(void)
             /* THE BOTTOM LAYER, FIRST AND OVER THE CLEAR. It is opaque and
                depth-testless, so it neither reads nor writes anything the world
                passes below it depend on; the clear that ran before the pass
-               still carries the letterbox and any frame this refused. */
-            if (draw_surf)
+               still carries the letterbox and any frame this refused.
+
+               ...AND NOT ON A FRAME AN A/B HAS CLAIMED, which is the one thing
+               that makes a world pass's A/B mean anything again. The GL half of
+               such a capture is the bare world FBO -- black wherever the pass
+               did not draw. Since 4c-1 the Vulkan half is the swapchain image
+               with TA's own frame UNDERNEATH, so the two stopped being the same
+               kind of picture: for an opaque pass every uncovered pixel
+               differed, and for a pass that BLENDS every translucent fragment
+               differed too, because one lane composites the effect over the
+               game and the other over black. Measured on the effects pass
+               before this line existed: of 1 622 pixels the GL capture drew,
+               226 agreed (the opaque fragments, byte-for-byte) and 1 396 did
+               not (median max-channel 19 -- the translucent ones).
+
+               `nclaim` is this frame's armed A/B levers, counted above and
+               before the render pass begins, so this costs exactly the frames
+               a measurement is being taken on and nothing else. It is the same
+               kind of measurement-only divergence as `tagpu_vk.on`'s
+               `color=0,0,0`, which exists so the two clears agree.
+               [FROM THE 4c-2 LANDING REVIEW.] */
+            if (draw_surf && nclaim == 0)
                 tagpu_vk_surf_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             /* THE WORLD. With a target it was drawn into it above and this is
                the one draw that puts it on the frame, over TA's own surface and

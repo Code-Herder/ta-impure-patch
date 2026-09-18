@@ -9558,41 +9558,52 @@ same number rather than deriving `s_ss ? 2 : 1` for itself.
 | the fx stand-down | gone; `wideLines is not offered` never logged, so the device gave it |
 | the frame on screen | 4 901 distinct colours against 103 before — the supersample resolving |
 
-#### THE WORLD A/Bs STOPPED BEING READABLE WHEN 4c-1 LANDED, and this is where that is written down
+#### 4c-1 SILENTLY BROKE EVERY WORLD PASS'S A/B, and 4c-2's review is what found it
 
-`vk-ab.py`'s headline said **NOT identical, 118 751 px** and a reader would have concluded 4c-2
-broke the world. It did not: **0** of the 630 719 pixels the GL capture actually drew differ. Every
-difference is a pixel GL leaves black, and the cause is the two halves no longer being the same
-kind of picture — the GL half is the **bare world FBO** and the Vulkan half is the **swapchain
-image**, which since §2.52 carries TA's own 8-bit frame underneath it. The UI panel, the minimap,
-the top bar and the fogged terrain outside LOS are all in one capture and none of them in the other.
+The terrain A/B on the first cut of this landing read **NOT identical, 118 751 px of 786 432** —
+and 0 of the 630 719 the GL capture drew. The cause was not 4c-2. **The two halves had stopped
+being the same kind of picture when 4c-1 landed the day before:** the GL half is the bare world
+FBO, black wherever the pass did not draw, and the Vulkan half is the **swapchain image**, which
+since §2.52 carries TA's own 8-bit frame underneath. 4c-1 verified itself on the screen rather
+than through a world A/B, so nothing caught it.
 
-This is not a softer bar, it is a different question, and the tool now asks both: `vk-ab.py` prints
-`on GL ink` and `on GL black`, and when a run differs *only* on GL-black pixels it says so and
-exits 0.
+**For a pass that BLENDS it was worse than cosmetic.** The effects pass's Vulkan half is *the
+effect over TA's frame* and its GL half is *the effect over black*, so every translucent fragment
+differed too. Measured, of its 1 622 GL-ink pixels: 226 identical with a median max-channel of
+**237** (the opaque fragments, byte-for-byte) and 1 396 differing with a median of **19**. The pass
+was correct; the harness could not say so.
 
-**AND FOR A PASS THAT BLENDS, `on GL ink` IS NOT ENOUGH EITHER — measured, not reasoned.** The
-terrain A/B comes out clean on that line because terrain is OPAQUE: it writes the same colour over
-any background. The effects pass blends, so the Vulkan half is *the effect over TA's frame* and the
-GL half is *the effect over black*, and the two differ wherever the fragment is not opaque. The
-effects A/B on this build:
+**THE FIX IS ONE LINE IN THE SEAM, and it came out of the landing review.** `tagpu_vk.c`:
 
-| GL-ink pixels | count | median max-channel |
+```c
+if (draw_surf && nclaim == 0)          /* not on a frame an A/B has claimed */
+    tagpu_vk_surf_record(...);
+```
+
+`nclaim` is this frame's armed A/B levers, already counted before the render pass begins, so TA's
+frame is withheld on exactly the frames a measurement is being taken on and on no others. It is
+the same kind of measurement-only divergence as `tagpu_vk.on`'s `color=0,0,0`, which exists so the
+two clears agree. **Both world A/Bs are 0 px again:**
+
+| pass | fixture | result |
 |---|---|---|
-| identical | 226 | **237** — the opaque fragments |
-| differing | 1396 | **19** — the translucent ones |
+| terrain | `feat-forest` | **0 px of 786 432**, 630 719 non-black a side |
+| effects | `fx-lasers` | **0 px of 786 432**, 31 532 non-black a side |
 
-Of the fragments with a channel at 64 or above, **216 of 235 are identical**, and the bright ones
-are byte-for-byte: `(255, 71, 0)` against `(255, 71, 0)`. So the pass agrees with its twin exactly
-where the comparison means anything, and the 1396 are two different backgrounds rather than two
-different rasterisers. **`on GL ink` is a world pass's figure only while the pass is opaque.**
+**`vk-ab.py` kept the diagnostic and lost the escape.** It still prints `on GL ink` / `on GL black`,
+because that split is what tells an over-draw from a framing difference — but it no longer **exits
+0** when every difference falls on a GL-black pixel, which the first cut of it did. That escape was
+blind to the one failure this project has already shipped once: G19e's line rasterisation drew
+*"all 126 of the twin's pixels plus exactly one extra fragment at the end of each line segment"*
+(`tagpu_vk_pass.h`), and every one of those extra fragments lands on a pixel GL left black. An
+over-draw would have exited 0 under the words *"the pass agrees with its twin"*. **The split is a
+thing to read, not a verdict** — and the docstring that said *"the exit status is 0 only when every
+pixel agrees"* is true again.
 
-**The cure exists now and 4c-2 is what created it.** The Vulkan half should be captured from the
-OFFSCREEN WORLD TARGET rather than from the swapchain image: that image is cleared to
-`{0,0,0,0}` and holds the world alone, which is precisely what GL's world FBO is. `tagpu_vk_shot.c`
-reads `s_vk.img[idx]` today. Moving it is a landing of its own and is filed as one — until then,
-**a blending world pass's A/B is read as "the opaque fragments agree", and the screen is the
-oracle for the rest.**
+**The fuller fix is still filed**: capture the Vulkan half from the offscreen world target itself,
+which is cleared to `{0,0,0,0}` and holds the world alone. That is what would make a world A/B
+runnable at `ss > 1`, which it has never been — the GL capture is the supersampled FBO and the
+Vulkan one is the client rect, so the two are different sizes and `vk-ab.py` refuses them.
 
 #### One bug the live run caught and reading did not
 
@@ -9602,6 +9613,34 @@ Set on the success path it made the seam destroy and rebuild the entire target e
 is exactly why no screenshot would have found it. It is now set only on the two refusal paths
 beside `ST_REFUSED`, which is `tagpu_vk_surf.c`'s shape. The heartbeat that made it visible
 (`N frame(s), M build(s)`) was added for this and stays.
+
+#### What the landing review found, beyond the A/B
+
+Eight findings, all acted on. Three are worth carrying past this landing:
+
+- **A pass that scales something by `ss` must ask the TARGET, not its hand-over.** The effects and
+  marker passes set their line width from `h.ss` — what the GL lane did — while whether there IS
+  an `ss` target this frame is `tagpu_vk_world_prepare`'s answer, and on its refusal paths the seam
+  records the same passes into the swapchain image at 1:1. That would have drawn `ss`-wide lines
+  over a 1:1 world for the rest of a session, silently: the refusal this landing removed, with the
+  sign flipped. The target is now built **first of all `prepare`s** and the passes read
+  `tagpu_vk_world_scale()`. The general shape: *the code asserted an invariant it never
+  established, and the comment stated the premise as fact.*
+- **A subpass dependency's SOURCE scope is every way the image was last used, not the interesting
+  one.** `dep[0]` named only `FRAGMENT_SHADER`/`SHADER_READ`, so this frame's `LOAD_OP_CLEAR` was a
+  write-after-write against the previous frame's colour and depth writes with no availability
+  operation. `tagpu_vk.c`'s own render pass carries exactly those masks and states the argument in
+  terms; the fence wait is what made it work, which is safety by timing.
+- **Published state that nothing reads is worse than absent state.** `TAGPU_WORLDTGT.serial` was
+  documented as letting a consumer tell "the same target" from "a new one" without comparing
+  fields — and no consumer ever did. It is gone. `devres` stayed and is now *reported*, because it
+  changes which of GL's two shapes the composite is reproducing.
+
+And one that is simply embarrassing and worth naming as a habit: **five comments this landing
+falsified were left standing, two of them directly above the code that contradicts them** —
+including a whole block in `tagpu_vk_fx.c` that a search-and-replace inserted a correction *beneath*
+rather than over. This is the same defect the landing's own first commit fixed in three other
+files (§2.52). A landing that corrects a fact has to grep for the fact.
 
 #### Not covered by 4c-2
 
