@@ -2142,6 +2142,44 @@ tools/tacli scenario load <i> <scn> --mapping 0    # THE fixture: an unmapped ga
 - The dots, arcs and points are the engine's own pixels, not a replay: `+0x142DB` differs from
   `+0x142DF` exactly where one landed.
 
+### Driving `renderer=vulkan` (the vulkan-only plan, landing 4a onward)
+
+**Since landing 4a the lane is also a RENDERER BACKEND, and then the lever below does not arm
+it — the renderer choice does.** The two configurations are different runs and one build answers
+both:
+
+```bash
+# the vulkan-only backend: the surface goes on the GAME window, no route D window
+sed -i 's/^renderer=.*/renderer=vulkan/' tagpu/instances/<i>/gamedir/ddraw.ini
+tools/tacli launch <i>                        # BARE: a bare launch does not rewrite ddraw.ini
+tools/tacli log <i> -g '^vk:'                 # expect "route E: the surface is on the game window"
+
+# the control, same build: GL presents and route D's window comes back
+sed -i 's/^renderer=.*/renderer=openglcore/' tagpu/instances/<i>/gamedir/ddraw.ini
+tools/tacli arm <i> vk.on
+```
+
+Four things that cost a session if they are not known:
+
+- **`tacli glshot` CANNOT WORK under `renderer=vulkan`**, and it does not fail loudly. It reads a
+  GL framebuffer through `tagpu_overlay_capture_*`, and there is no GL context in the process on
+  that path. **The oracle is an X grab by window id** — `import -window <id>` on the id `tacli
+  launch` prints — and `tacli shot` still reads the engine's own surface as always. Keep `glshot`
+  for the `renderer=openglcore` control, where it is what proves the GL picture is still whole
+  (a healthy shell frame reads ~148 distinct colours; one colour means GL drew nothing).
+- **`tagpu_vk.on` is not needed and `tagpu_vk.off` no longer helps.** The renderer choice arms the
+  lane, and disarming it would leave a black window rather than a GL fallback, so it cannot. The
+  ON file is still READ for its `color=`, which is how the clear colour is changed for a grab.
+- **The ini's `posX`/`posY` place the window, not `instance.json`'s `tile`** — and a bare launch
+  does not rewrite the ini, which is exactly why a bare launch is what preserves `renderer=`. So
+  when a fresh instance records a tile on the human's primary, edit `posX`/`posY` in the ini
+  together with `renderer=`, in the same pass. (Measured 2026-09-17: the fork then placed the
+  window at 14,198 regardless, under BOTH renderers — so verify with `xdotool getwindowgeometry`
+  rather than trusting either file, and the check is the same one for the GL path.)
+- **A window that is 100 % one colour is the right answer for landing 4a and the wrong one after
+  4b.** 4a calls no gather half, so no pass has a hand-over. Read §2.48's table before calling a
+  flat window a fault.
+
 ### The Vulkan lane and the GPU row (Phase G, `tagpu_vk.on`)
 
 Since G19a a second backend can present the frame. It is **off unless armed** — GL stays the

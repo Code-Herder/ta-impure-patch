@@ -8599,6 +8599,113 @@ The chain re-measured `IDENTICAL` after the fixes, on both fixtures.
   unexercised**, as does the dump's retire. `job_clear` has no callers.
 * **Anisotropy is unchanged** and is still the one sampler difference the port cannot close.
 
+### 2.48 The lane becomes a backend, and its surface goes on the game window — landing 4a of the Vulkan-only plan
+
+**What this part is, and what it is not.** `render_vk.c` gives the Vulkan lane a render thread of
+its own — `vk_render_main`, dispatched from `dd.c` on `tolower(g_config.renderer[0]) == 'v'` — and
+`tagpu_vk_own_present()` puts the surface on the window `tagpu_vk_frame` is handed instead of on a
+window of route D's. It calls **no gather half**, so no pass has a hand-over and the frame is the
+seam's clear colour and nothing else. That is the part's whole claim, and it is measurable on its
+own: whether a swapchain lives on the game's own window *inside the game*, which nothing had run.
+
+| what ran | result |
+|---|---|
+| `renderer=vulkan`, **no lever file present** | `up in 418 ms … our window 00020058 over 00020058, 640x480 … route E: the surface is on the game window and there is no GL lane` |
+| an X grab of that game window | **307 200 of 307 200 px** at the lane's clear colour (255, 0, 255) |
+| `renderer=openglcore` + `tagpu_vk.on` (the control) | `window: created 00010074 over 00030054 (route D)` — unchanged |
+| that control's `tacli glshot` | **148 distinct colours** — the GL lane's picture is whole |
+
+**100 % of the window being ONE colour is the correct result here and not a defect**, and this
+note says so because §2.35's lesson is the opposite shape: *"0 px over content that is not there
+is not a measurement"*. The reading that would have been wrong is a *partial* one — some of the
+window the lane's clear and some of it stale desktop or the engine's own blit. What the two
+handles being equal (`00020058 over 00020058`) adds is that it is the **game's** window rather
+than one of ours, which is the only thing route D could not do.
+
+**Route E is now measured in the game as well as in the probe**, and the difference matters
+because this seam has already had an API say yes while the screen said no. `tools/vkcoexist.c`
+route E (§G19a in [roadmap](roadmap.html)) answers it on a bare top-level window; this answers it
+on TA's own window, with the fork's window management, the input shield and the engine's message
+pump all in play.
+
+**What the lane costs in the real process, which the probe understates by ten times.**
+
+| | committed peak | largest free block |
+|---|---|---|
+| before bring-up | 36.1 MB | 255.5 MB |
+| with Vulkan up | 59.5 MB | 255.5 MB |
+
+So **23.4 MB**, against the **2.2 MB** the 320×240 clear-only probe reads. Both figures are
+right about different questions and the probe's own caveat said which: it bounds the *bring-up*
+footprint, not the running one. The invariant survives the move — **the largest free block does
+not change**, in the game as in the probe, which is the number that matters in a 32-bit process
+because TA fails by failing to allocate rather than by saying anything.
+
+**Route D is unreachable rather than disabled, at two places, and the second one is the point.**
+The `ST_OFF` branch never asks for a window when the present is owned, so `s_vkwnd` stays NULL
+and every `vkw_*` path is already inert through its own `if (s_vkwnd)` guard. That is
+unreachability *by inspection*, which is the kind of argument this lane has been wrong about
+before — so `tagpu_vk_wndproc` returns early as well, and a `VKW_CREATE` that was already in the
+queue when the latch was set cannot create one behind us. The latch is one-way: which backend the
+process has is settled at `dd.c`'s dispatch and cannot change, and a flag that could go back
+would permit a surface on the game window and a route D window at once.
+
+**Three things the seam had to be told, each of which would have been a live bug:**
+
+* **"Our window went away" is not a case when we have no window.** The rebuild trigger tested
+  `s_vkwnd != s_vk.hwnd`; with the present owned, `s_vkwnd` is NULL for the process's life while
+  `s_vk.hwnd` is the game window, so that test would have been **permanently true** — the lane
+  tearing itself down and rebuilding on every single frame, for ever. The same class as the
+  comment two lines below it, which records the earlier version comparing the caller's `w`/`h`
+  against the swapchain extent and rebuilding every frame because the two are different numbers.
+* **The lever has to retire, in both directions.** `tagpu_vk.on` must stop arming the lane
+  because `renderer=vulkan` already did; `tagpu_vk.off` must stop *disarming* it, because with no
+  GL lane behind it a disarmed Vulkan lane is a black window rather than a fallback. The ON file
+  is still read for its `color=`, which every A/B on this plan uses.
+* **A log line that claimed something about a lane that is not in the process.** The bring-up
+  ended `- route D: the GL lane's window is untouched` unconditionally. It now names the route it
+  came up on, which is also the only thing distinguishing `our window X over X` from a mistake.
+
+**The GDI fallback is allowed to be late, and that is a measurement rather than a preference.**
+`tagpu_vk_failed()` reads the lane's own `ST_FAILED`, published after every path the bring-up
+could have succeeded on — a fact, not a frame count. Handing the session to `gdi_render_main`
+after a surface has been attempted on the HWND is sound only because route F measured GDI as
+still reaching the screen there; had it not, the fallback would have had to be taken *before*
+`vkCreateWin32SurfaceKHR` and any later failure would have been terminal.
+
+**`dd.c` gets the dispatch and nothing else, checked site by site rather than assumed.** Every
+other `g_ddraw.renderer == ogl_render_main` test in that file is a WGL workaround a swapchain
+must not inherit, and adding `|| renderer == vk_render_main` to any of them would be silent:
+
+| site | what it does | why Vulkan must not have it |
+|---|---|---|
+| `dd.c:849`, `:994` | `nonexclusive = TRUE` | stops WGL taking fullscreen exclusive; a swapchain is windowed by construction |
+| `dd.c:1119` | `render.height++`, `opengl_y_align = 1` | a scanline added so the driver cannot take exclusive mode, plus the viewport shift paying for it. `opengl_y_align` is read in `render_ogl.c` and nowhere else — a Vulkan frame inheriting it would be one pixel too tall and offset |
+| `dd.c:1264`, `:1353` | `ogl_create()`, GDI on failure | the Vulkan bring-up is the render thread's own |
+| `dd.c:1524` | `SetPixelFormat` | already GL-gated, and route E is measured on a window without one |
+| `dd.c:1787` | `ogl_release()` | nothing to release; `tagpu_vk_render_stop` runs on the thread that owns the lane |
+
+**Not covered by landing 4a:**
+
+* **No gather half runs**, so no pass draws — that is 4b, and it is where the per-pass previous-build
+  A/B against `0b5e06d` gets taken. `tagpu_overlay_draw` is the single driver and most of it is
+  API-independent; the GL-owning entry points are `tagpu_scaffold_frame`, `tagpu_native_frame`,
+  `tagpu_gui_present` and `tagpu_fps_present`.
+* **`TAGPU_FRAME` is not filled**, and 4b must fill it *before* calling `tagpu_vk_frame` with the
+  same frame number — a pass refuses a hand-over stamped with any other frame. Note `vp_y` takes
+  `viewport.y` **without** `opengl_y_align` on this path.
+* **`ss` has no target and TA's surface is not uploaded by the backend** — 4c.
+* **Route D's window, `tagpu_vk_wndproc`, `WM_TAGPU_VK` and the geometry tracking still exist** —
+  4d deletes them, and only after 4b's figures are banked.
+* **The GPU row cannot retry after the GDI fallback**, and this is a real loss rather than an
+  oversight. While the lane was a lever beside GL, a failed bring-up retried when the player
+  picked another device (`lane_gen() != s_choiceSeen`). Once the session is on GDI the thread is
+  GDI's for the process's life. The alternative — sitting in the loop presenting nothing while the
+  player hunts for a device that works — leaves them with no picture at all.
+* **One launch, one GPU, one driver.** Every figure above is the linux NVIDIA ICD under system
+  wine at 640×480 in the shell. Nothing here speaks for Windows, for llvmpipe, or for a frame with
+  a world in it.
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out

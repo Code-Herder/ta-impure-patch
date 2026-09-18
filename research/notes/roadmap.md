@@ -2837,6 +2837,38 @@ independent reasons: the Classic++ restored atlases have no CPU mirror, and the 
 holds casters the lane cannot draw. Both block every world pixel. Every Phase G figure above was
 taken under `tagpu_defaults.off` + `ss=1` + `gui.on=mmbase`, where neither arises.
 
+**Landing 4 is four landings, and 4a landed 2026-09-17** ([gpu-status](gpu-status.html) §2.48).
+Filed as one row — the fourth backend, `renderer=vulkan`, the `ss` target, TA's surface, and route
+D's deletion — it comes apart along four seams the code already has: **4a** the thread and the
+present, **4b** the per-frame driver (the gathers run, the GL draws stand down, and the per-pass
+A/B against `0b5e06d` is taken), **4c** the `ss` target and TA's surface upload, **4d** the
+deletion. The exit condition is unchanged.
+
+4a's result: `renderer=vulkan` brings the lane up on the **game's own window** — `our window
+00020058 over 00020058`, no route D window created — and an X grab of that window reads **307 200
+of 307 200 px** at the lane's clear colour, with no lever file present, because the renderer choice
+is the arming. The control, `renderer=openglcore` + `tagpu_vk.on` on the same build, still creates
+route D's window and still renders a **148-colour** picture. Route D is left *unreachable rather
+than deleted* on purpose: the control is what makes 4b's A/B expressible.
+
+**It also put a real number on what the coexistence probe could not.** The lane costs **23.4 MB**
+of committed peak in the game (36.1 → 59.5 MB) against the probe's 2.2 MB on a 320×240 clear-only
+window — the probe's own stated caveat holding rather than failing — while the **largest free
+block does not move**, in the game as in the probe, which is the figure that matters in a 32-bit
+process.
+
+**Three defects the port had to be told about, none of which a capture would reach.** *"Our window
+went away"* is not a case when we have no window, and that rebuild test would have been
+permanently true — the lane tearing itself down and rebuilding every single frame. The lever has
+to retire in **both** directions: with no GL lane behind it, a `tagpu_vk.off` that still disarmed
+would leave a black window rather than a fallback. And the bring-up's log ended with a claim about
+a lane that is not in the process on that path. Against that, **`dd.c` needed the dispatch and
+nothing else**: every other `renderer == ogl_render_main` test there is a WGL workaround a
+swapchain must not inherit — the exclusive-mode dodge, the extra scanline and `opengl_y_align`,
+`ogl_create`, `SetPixelFormat`, `ogl_release` — and the obvious guess of widening them would have
+given the new backend a phantom scanline and an offset viewport. Checked site by site; the table
+is in §2.48.
+
 ### Not in this phase
 
 **Ray tracing** (needs 64-bit — see the kill rule), **the out-of-process split**, and **a D3D12

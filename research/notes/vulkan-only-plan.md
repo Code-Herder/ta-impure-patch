@@ -367,6 +367,39 @@ would not have shown up as a failure — it would have shown up as three landing
      the repeat. And it is a 320x240 clear-only window: these bound the BRING-UP footprint, not
      the running one.
 
+   **IT IS FOUR LANDINGS, AND THE WORK FOUND THE SEAMS [2026-09-17, written by 4a].** Filed as one
+   row; reading the tree for it showed four parts, each along a seam the code already has and each
+   with a measurement of its own. The gate's exit condition is untouched — what follows is what the
+   work showed about its shape.
+
+   * **4a — the backend exists and presents. LANDED 2026-09-17.** `render_vk.c`, `vk_render_main`,
+     the `dd.c` dispatch, and `tagpu_vk_own_present()` putting the surface on the window the caller
+     names. Route D still standing. [gpu-status](gpu-status.html) §2.48 is the write-up;
+     the result is `our window 00020058 over 00020058 … route E`, an X grab of the **game's** window
+     reading 307 200 of 307 200 px at the lane's clear colour, and a `renderer=openglcore` +
+     `tagpu_vk.on` control still creating route D's window and still rendering a 148-colour picture.
+     It costs **23.4 MB** of committed peak in the real process against the probe's 2.2 MB, with the
+     largest free block unchanged — which is the probe's own caveat holding rather than failing.
+   * **4b — the per-frame driver.** The gather halves run and the GL draws stand down.
+     `tagpu_overlay_draw` is the single driver and most of it is API-independent; the four GL-owning
+     entry points are `tagpu_scaffold_frame`, `tagpu_native_frame`, `tagpu_gui_present` and
+     `tagpu_fps_present`. **This is where the per-pass previous-build A/B against `0b5e06d` gets
+     taken**, one `.ab` at a time at `ss=1`. Two things 4a already knows about it: `TAGPU_FRAME`
+     must be filled BEFORE `tagpu_vk_frame` with the same frame number, and `vp_y` takes
+     `viewport.y` **without** `opengl_y_align`, which is GL's extra scanline and nothing else's.
+   * **4c — `ss` and TA's surface.** The offscreen world target at `ss×` with its resolve, and TA's
+     own surface uploaded by the backend instead of by the GUI pass. This is the part that closes
+     two of the three blind spots landing 1 named: `ss=2` has no target on the Vulkan side, and
+     `tagpu_gui.off` leaves no picture because TA's surface reaches the frame only through the GUI
+     pass's hand-over.
+   * **4d — the deletion.** Route D's window, `tagpu_vk_wndproc`, `WM_TAGPU_VK` and the geometry
+     tracking, once 4b's figures are banked. **4a made route D unreachable rather than deleted on
+     purpose**, so the control above stays available until then: the same build answers both
+     `renderer=vulkan` and `renderer=openglcore`, which is what makes 4b's A/B expressible at all.
+
+   Four parts, not ten: the split is along the thread, the driver, the target and the deletion, and
+   each is something that can be run and shown. 4a's own bar is met by the table in §2.48.
+
    **And the deletion is one-way for the whole plan, not just for this landing.** After it, no
    absolute two-lane comparison is expressible; every later claim rests on a relative bar against a
    previous build, which is the "Drift" item below. Anything wanting an absolute figure should take
