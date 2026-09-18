@@ -1566,10 +1566,11 @@ Back to the filed list:
    `openglshader.h`, `render_ogl.h`, and **`tagpu_restoreglsl.c`**. `renderer=gdi` becomes the
    documented stock reference.
 
-   **BLOCKED ON LANDING 10b, the suppressor handshake** (*What the seam has to grow* below).
-   `renderer=gdi` is not stock today: `tagpu_owndraw_init()` arms from `dllmain.c:102` whatever
-   `renderer=` says, so this item's own headline claim is false until that is fixed, and it is
-   fixed at the suppressor's call site rather than in any file this item deletes.
+   **BLOCKED ON LANDING 10b, the structure-shadow gate** (*What the seam has to grow* below).
+   `renderer=gdi` is not stock today, and the survey narrowed that from a class of suppressors to
+   exactly two bytes: the `je`->`jmp` pair at `0x4592C6`/`0x45952C`, which has no runtime gate to
+   be inert through, so the gdi lane draws no structure shadows and nothing of ours draws them
+   either. This item's headline claim is false until that is fixed.
 
    **The restorer was missing from this list until 2026-09-17 and it is what proved the list was
    a guess.** `tagpu_restoreglsl.c` includes `opengl_utils.h` and calls `glDeleteProgram`, so it
@@ -1644,27 +1645,62 @@ worth of targets rather than one.
 
 **`renderer=` becomes the master opt-out** and `tagpu_overlay.off` retires. It cannot mean what
 its name says: `tagpu_overlay.c:7` calls it *"the kill switch for everything we draw in GL"*, but
-the own-the-draw suppressors install from `dllmain.c:102` on their own levers and never ask
-whether a lane is alive, so the switch leaves the engine's rasterise skipped with nothing
-replacing it.
+the own-the-draw suppressors install from `dllmain.c:102` on their own levers, so the switch
+cannot uninstall them. What it CAN leave behind is narrower than this paragraph used to say —
+see the survey below: the per-draw skips all ask a lane-published flag and go inert on their own,
+and what survives `tagpu_overlay.off` is the pair of `je`->`jmp` flips, which have no flag to
+answer.
 
-**That trap is not GL-specific, it is CONFIRMED, and it is landing 10b — a landing of its own,
-before 11.** [Confirmed 2026-09-18 by landing 11's survey.] `tagpu_owndraw_init()` is called from
-`dllmain.c:102` **regardless of `renderer=`**, and a live `renderer=gdi` boot logs
-`owndraw: ARMED target="all" opaque@0x459830=OK nano@0x459C70=OK buildfx@0x458DD0=OK
-structshadow@0x4592C6+0x45952C=OURS shadow@0x459338+0x45958C+0x4594DB=OURS` with
-*"engine rasterise skipped for target; writeback must paint it"* — so the "stock reference" lane
-is **not stock**, today, with the shipped defaults. A suppressor must not arm unless something is
-going to draw what it suppresses, by a handshake rather than by ordering luck.
+**That trap is real, it is landing 10b, and it is ONE PATCH rather than the class this paragraph
+first claimed** [surveyed 2026-09-18; the first version of this paragraph is corrected below
+rather than deleted, because the way it went wrong is the reusable part].
 
-**Why it is its own landing and not part of 11.** The fix belongs at the *suppressor's* call
-site, not in the files 11 deletes: `tagpu_owndraw_init` has to ask whether a lane will paint
-what it is about to skip, which is a new handshake between `dllmain.c` and the renderer
-selection — new state between two subsystems, in the class `CLAUDE.md` says review at `high`.
-Deleting the GL files in the same landing would put that handshake in a diff dominated by
-deletions, which is where a wrong one hides. **11 is blocked on it**, because 11's own headline
-claim is that `renderer=gdi` becomes the documented stock reference, and that claim is false
-until 10b lands.
+**What the first version said, and why it was wrong.** It read the arming line a `renderer=gdi`
+boot prints —
+
+```
+owndraw: ARMED target="all" opaque@0x459830=OK nano@0x459C70=OK buildfx@0x458DD0=OK
+structshadow@0x4592C6+0x45952C=OURS shadow@0x459338+0x45958C+0x4594DB=OURS
+(engine rasterise skipped for target; writeback must paint it)
+```
+
+— and concluded that the engine's rasterise *is* being skipped on that lane. **That trailing
+clause is a fixed string in the format, not a report of behaviour**, and "ARMED" means the
+detours are installed, not that they skip. Reading a label as a measurement is the same failure
+as counting `call` sites without following the control flow, and it is the third time this gate
+has recorded it.
+
+**What is actually true.** The detour is installed at `DllMain` — that is the arming rule, and it
+does not change — but almost every one of these suppressors decides *per draw*, against a flag
+only a live lane sets:
+
+* **The opaque and nano rasterise** (`0x459830`, `0x459C70`) and the **pre-shadow composite wipe**
+  ask `tagpu_posedraw_live()`, which is `s_state == 1 && !tagpu_vk_owns_present()` — true only
+  after the posed program has linked. `tagpu_owndraw.c` already argues its own safety by
+  DIRECTION: *"a stale read can only be stale in the direction of NOT skipping"*.
+* **`buildfx` `0x458DD0`** asks `tagpu_native_owns_obj`, which returns 0 unless `s_armed == 1`,
+  and `s_armed` is written **only** in `tagpu_native_frame`.
+* **`terrown`, `featown`, `fxown`, `markown`, `cursown`** each hold a `volatile unsigned char`
+  the stub compares, set to 1 only by a `set_skip(ours-live)` call from the pass that paints,
+  with a frame heartbeat that restores the engine's draw if the pass stops.
+* And **every one of those flags is set from `tagpu_overlay_draw`**, which has exactly two
+  callers: `render_ogl.c:1632` and `render_vk.c:232`. **`render_gdi.c` contains no `tagpu_` call
+  at all.** So on the gdi lane no flag is ever set, `s_armed` stays at its initial `-1`, and
+  every one of those suppressions is inert by construction rather than by luck.
+
+**The one that is not.** `tagpu_owndraw_init` flips two `je`s to `jmp`s —
+`patch_je_to_jmp(0x4592C6)` and `(0x45952C)` — whenever `g_armed && g_all`, and **a byte flip has
+no runtime gate to be inert through**. `tagpu_owndraw.h` says what that costs: *"the engine then
+draws NO cached slant shadow and the native pass owes every structure one"*. With the shipped
+defaults (`tagpu_owndraw.on` = `all`) under `renderer=gdi`, nobody pays that debt, so **every
+building loses its slant shadow** and the lane is not stock. That, plus the DirectX-warning byte
+named as a residual below, is the whole of the gap.
+
+**So landing 10b is: give the structure-shadow pair the gate every other suppressor already
+has.** It moves a byte patch, so it reviews at `high`; it is its own landing because putting a
+byte patch in a diff dominated by deletions is where a wrong one hides; and **11 is blocked on
+it**, because 11's headline claim is that `renderer=gdi` becomes the documented stock reference
+and that claim is false by two bytes until 10b lands.
 
 The per-pass `tagpu_<x>.off` files, `tagpu_defaults.off`, `tagpu_reclaim.off` and
 `tagpu_curs.off` are unchanged.
