@@ -166,6 +166,11 @@ PROGRAMS = [
     ("gui_curs",     "tagpu_gui_surf::QVS",     "tagpu_gui_surf::CURS_FS"),
     ("gui_str",      "tagpu_gui_surf::QVS",     "tagpu_gui_surf::STR_FS"),
     ("gui_mm",       "tagpu_gui_surf::QVS",     "tagpu_gui_surf::MM_FS"),
+    # inc/openglshader.h:42,60 -- the fork's own base blit, built at
+    # render_ogl.c:260 as g_ogl.main_program: TA's 8-bit surface resolved
+    # through the palette, the frame's bottom layer [vulkan-only plan, 4c-1]
+    ("surf_pal",     "openglshader::PASSTHROUGH_VERT_SHADER",
+                     "openglshader::PALETTE_FRAG_SHADER"),
     # tagpu_native.c:686,734,754
     ("native_unit",  "tagpu_native::VS",        "tagpu_native::FS"),
     ("native_c",     "tagpu_native::CVS",       "tagpu_native::CFS"),
@@ -317,7 +322,42 @@ def _restore_programs():
 # Every C source a shader is read out of, in the order the headers are emitted.
 SOURCES = ["tagpu_gui_surf", "tagpu_native", "tagpu_shadow", "tagpu_terr",
            "tagpu_posedraw", "tagpu_fps", "tagpu_mark", "tagpu_scaffold",
-           "tagpu_fx", "tagpu_feat", "tagpu_hires_draw"]
+           "tagpu_fx", "tagpu_feat", "tagpu_hires_draw", "openglshader"]
+
+# WHERE A VERTEX ATTRIBUTE'S LOCATION COMES FROM WHEN THE GLSL DOES NOT SAY.
+# Our passes all write `layout(location = N) in ...` and need nothing here. The
+# upstream fork does not: `PASSTHROUGH_VERT_SHADER` is `#version 130` and
+# `render_ogl.c:549` asks the LINKER where each attribute landed
+# (`glGetAttribLocation`), so there is no location in the source and none this
+# tool can derive -- declaration order is not a rule GLSL makes.
+#
+# That is not a gap to paper over, it is a real difference between the APIs. In
+# GL the linker chooses and the C side queries; in Vulkan a location is part of
+# the pipeline's vertex input state, so whoever builds the pipeline chooses. So
+# the choice is MADE here, beside PROGRAMS, which is already "the one thing here
+# that is not derived" -- and the Vulkan pass that draws this shader must bind
+# its vertex buffer to match. Adding `layout(location=)` to the fork's header
+# instead would edit a vendored file AND change what the GL lane compiles, on a
+# `#version 130` profile that does not take the qualifier without an extension.
+# [The vulkan-only plan, landing 4c-1.]
+ATTR_LOCATIONS = {
+    "openglshader::PASSTHROUGH_VERT_SHADER": {
+        "VertexCoord": 0, "COLOR": 1, "TexCoord": 2,
+    },
+}
+
+# Sources that are not `src/<name>.c`. `tagpu_restore_glsl` is a header because
+# its shaders are macros (see extract_restore); `openglshader` is the UPSTREAM
+# fork's own shader collection in `inc/`, and it is here because the Vulkan lane
+# draws one pair out of it -- the base blit that puts TA's 8-bit surface on the
+# frame through the palette, which `render_ogl.c:260` builds as
+# `g_ogl.main_program`. That blit is the frame's bottom layer on the GL lane and
+# runs before any pass of ours, which is why `tagpu_gui.off` still shows a
+# picture there; the vulkan-only plan's landing 4c gives the Vulkan lane the
+# same thing, and the rule this whole tool exists for says it gets the GL
+# lane's shader rather than an edition of its own.
+# [The vulkan-only plan, landing 4c-1.]
+HEADER_SOURCES = {"openglshader": "inc/openglshader.h"}
 
 # The restorer's pairings are appended rather than written out: eight of the ten
 # are the same conv program at a different (NK, kmax), and spelling them by hand
@@ -333,7 +373,8 @@ CC = os.environ.get("CC", "i686-w64-mingw32-gcc")
 
 def preprocess(cfile):
     """The C source, macro-expanded, as the compiler would see it."""
-    r = subprocess.run([CC, "-E", "-Iinc", "src/%s.c" % cfile],
+    r = subprocess.run([CC, "-E", "-Iinc",
+                        HEADER_SOURCES.get(cfile, "src/%s.c" % cfile)],
                        cwd=DDRAW, capture_output=True, text=True)
     if r.returncode != 0:
         die("%s: the preprocessor refused it\n%s" % (cfile, r.stderr))
@@ -345,7 +386,14 @@ def preprocess(cfile):
 # SKIPS a shader is worse than one that refuses it, and the "a shader no program
 # uses" guard below is what forces every new shader through the pipeline: a
 # shader the extractor cannot see escapes that guard too.
-_DECL = re.compile(r'static\s+const\s+char\s*\*\s*(\w+)\s*=\s*(.*)$')
+# BOTH SPELLINGS OF "a string literal at file scope". Our passes write
+# `static const char* NAME =`; the upstream fork's `inc/openglshader.h` writes
+# `static char NAME[] =`. This only ever matches MORE declarations, and a
+# declaration that is not a shader is still ignored -- the caller requires a
+# `#version` literal on the line or the next one, and the census counts exactly
+# those. [Widened for the vulkan-only plan's landing 4c-1.]
+_DECL = re.compile(r'static\s+(?:const\s+)?char\s*(?:\*\s*)?(\w+)\s*'
+                   r'(?:\[\s*\]\s*)?=\s*(.*)$')
 _LIT = re.compile(r'"((?:[^"\\]|\\.)*)"')
 _VERSION_LIT = re.compile(r'"#version')
 
@@ -875,9 +923,15 @@ def transform(sh, varying_loc):
                     changed = True
                 elif kind == "in" and sh.stage == "vert":
                     if not _LAYOUT_LOC.search(st):
-                        die("%s: vertex attribute '%s' has no layout(location=)"
-                            % (sh.key, name))
-                    pieces.append(st)
+                        loc = ATTR_LOCATIONS.get(sh.key, {}).get(name)
+                        if loc is None:
+                            die("%s: vertex attribute '%s' has no layout(location=)"
+                                " and ATTR_LOCATIONS does not give it one"
+                                % (sh.key, name))
+                        pieces.append("layout(location = %d) %s" % (loc, st))
+                        changed = True
+                    else:
+                        pieces.append(st)
                 else:
                     pieces.append(st)
             if changed:
@@ -917,6 +971,26 @@ def tool_hash():
     return hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:16]
 
 
+# SAYING HERE WHY THESE ARE NOT PROGRAMS, which is what the guard below asks
+# for. The rule -- a shader with no program fails the gate -- exists so that our
+# two lanes cannot drift apart while one of them is unwritten, and every shader
+# it was written for is one WE own. `inc/openglshader.h` is different: it is the
+# upstream fork's collection, and the Vulkan lane draws exactly one pair out of
+# it (PASSTHROUGH_VERT_SHADER + PALETTE_FRAG_SHADER, `render_ogl.c:260`). The
+# rest are the GL-110 editions of that same blit, kept for the 1.1 profile the
+# Vulkan lane does not have, and the upscaling filters the fork offers as
+# options that no Vulkan path reaches. Generating Vulkan editions of those would
+# be nine translations nothing draws, each with its own hash to keep current.
+# There is no drift risk in leaving them: a lane that never draws a shader
+# cannot disagree with the lane that does.
+# [The vulkan-only plan, landing 4c-1.]
+NOT_PROGRAMS = frozenset("openglshader::" + n for n in (
+    "PASSTHROUGH_VERT_SHADER_110", "PALETTE_FRAG_SHADER_110",
+    "PASSTHROUGH_FRAG_SHADER_110", "PASSTHROUGH_FRAG_SHADER",
+    "RGB555_FRAG_SHADER", "CATMULL_ROM_FRAG_SHADER", "LANCZOS2_FRAG_SHADER",
+    "XBR_LV2_VERT_SHADER", "XBR_LV2_FRAG_SHADER"))
+
+
 def build_all():
     """Every shader, parsed, paired and transformed. Returns an ordered list of
     Shader with `.vk` filled in."""
@@ -934,7 +1008,7 @@ def build_all():
                 die("%s is used as both a vertex and a fragment stage" % key)
             stage[key] = st
     for key in texts:
-        if key not in stage:
+        if key not in stage and key not in NOT_PROGRAMS:
             die("%s is a shader no program in the manifest uses -- add it, or "
                 "say here why it is not a program" % key)
 
@@ -1035,8 +1109,9 @@ def emit(cfile, shaders, words):
     guard = "TAGPU_SPIRV_%s_H" % cfile.upper()
     L = ["/* GENERATED by tools/spirv-gen.py -- do not edit.",
          " *",
-         " * The Vulkan (SPIR-V) edition of %s%s's shaders. The source of"
-         % (cfile, ".h" if cfile == RESTORE_HDR else ".c"),
+         " * The Vulkan (SPIR-V) edition of %s's shaders. The source of"
+         % (HEADER_SOURCES.get(cfile,
+                               "%s%s" % (cfile, ".h" if cfile == RESTORE_HDR else ".c"))),
          " * truth is the GLSL string in that file; this is its translation, and",
          " * `make` fails if the two have drifted (tools/spirv-check.sh).",
          " *",
@@ -1124,7 +1199,14 @@ def committed_hashes():
             if m:
                 tool[cfile] = m.group(1)
                 continue
-            if line.startswith("/* tagpu_"):
+            # THE SHADER'S OWN COMMENT LINE, `/* <file>::<NAME> -- <stage>...`.
+            # This used to test for the `tagpu_` prefix, which quietly made the
+            # reader blind to any source not named that way: every hash in the
+            # header was then attributed to no key, and the shader reported as
+            # "has no `words` hash -- regenerate" however freshly it had been
+            # generated. Found when `openglshader` joined SOURCES.
+            # [The vulkan-only plan, landing 4c-1.]
+            if line.startswith("/* ") and "::" in line and " -- " in line:
                 key = line[3:].split(" --")[0]
                 continue
             m = _HASHLINE.match(line)
