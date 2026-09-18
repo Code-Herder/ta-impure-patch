@@ -1895,12 +1895,34 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        measured failing in exactly that shape twice on the way to gate 2, with
        a perfect hand-over against img=0 view=0. A failure is non-fatal: the
        view stays NULL and the refusal below then holds. */
-    if (rgbRows > 0 && !atlas_rgb_build(d, h.atlasDim, h.atlasRgbMips)) {
-        if (!s_saidRgbImg) {
-            s_saidRgbImg = 1;
-            plog(d, "unit: no %d MB device image for the Classic++ restored twin "
-                    "- restored frames stand down while that is true",
-                 (h.atlasDim * h.atlasDim * 4) >> 20);
+    /* ...OR BECAUSE A LIST WAS PUBLISHED. The rows are the MIRROR's, and on the
+       list path there is no mirror -- the twin is the thing this lane paints
+       into, so it has to exist BEFORE there is anything to put in it. Gating
+       its creation on the read-back's rows left `restore_want` with no
+       destination, so it made no job, so nothing ever painted, so the pass
+       stood down for the session with the list sitting there full: measured on
+       the first run of landing 7e-2's oracle, which dumped three sprite atlases
+       and no unit chain at all. The shape comes from the producer
+       (`restoreDim`/`restoreMips`) for the same reason the aniso does: on this
+       path no read-back carries it. */
+    if (rgbRows > 0) {
+        if (!atlas_rgb_build(d, h.atlasDim, h.atlasRgbMips)) {
+            if (!s_saidRgbImg) {
+                s_saidRgbImg = 1;
+                plog(d, "unit: no %d MB device image for the Classic++ restored twin "
+                        "- restored frames stand down while that is true",
+                     (h.atlasDim * h.atlasDim * 4) >> 20);
+            }
+        }
+    } else if (h.restoreFrames && h.restoreDim > 0 &&
+               h.restoreMips >= 0 && h.restoreMips <= TAGPU_VK_MAXMIP) {
+        if (!atlas_rgb_build(d, h.restoreDim, h.restoreMips)) {
+            if (!s_saidRgbImg) {
+                s_saidRgbImg = 1;
+                plog(d, "unit: no %d MB device image to restore the Classic++ twin "
+                        "into - restored frames stand down while that is true",
+                     (h.restoreDim * h.restoreDim * 4) >> 20);
+            }
         }
     }
     /* AND THE FILTER HAS TO BE THE TWIN'S, not merely a filter. The restored
