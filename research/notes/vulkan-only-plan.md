@@ -1813,9 +1813,45 @@ no picture of a structure shadow returning: the effect is visible only where the
 world, and that is the one lane the instruments do not reach.
 
 **It is a landing of its own (10c) and it is tooling, not rendering.** The fix is to call the
-trigger family from a lane-independent point — the game-thread flip hook `0x4C63A0` already runs
-on every renderer (`gui: first flip on thread 652` appears in a gdi boot's log) and is the
-obvious host. **The design risk that looks biggest is not there**: the trigger functions take a
+trigger family from a lane-independent point — the game-thread flip `0x4C63A0` runs on every
+renderer (`gui: first flip on thread 652` appears in a gdi boot's log) and is the right host.
+
+**THE HOST IS THE OBSERVER THAT IS ALREADY THERE, NOT A NEW DETOUR — and two earlier sentences
+here were wrong about this** [verified read-only 2026-09-18, against the tree]:
+
+* **`0x4C63A0` is already hooked.** `tagpu_gui_hook.c` installs
+  `tagpu_detour_observe(FLIP_VA, FLIP_STOLEN, …, before_flip, after_flip)`, and
+  `tagpu_packet_pub.c` already records the consequence in a log line it prints at boot: *"the
+  shell's only publish point: the flip `0x4C63A0` cannot be observed a second time,
+  `tagpu_gui_hook`'s hijacks it"*. So 10c does not install anything. It calls the family from
+  `before_flip`, which is a two-line change to a function that already runs exactly where 10c
+  needs to be.
+* **`before_flip` is already the game thread, already guarded, and already does real work.** It
+  latches `s_gameTid` on its first call and returns immediately from any other thread
+  (`else if (!on_game_thread()) return 0;`), and below that it drains a cross-thread free queue,
+  walks a surface census and publishes. It is not a constrained context — unlike the scenario
+  applier's creation pass, whose header says *"No file I/O, no CRT"* — so the family's `.trigger`
+  polls are in the same class as work the function already does.
+* **`Game_MainLoopTick 0x4969D2` is NOT a candidate, though it looks like the obvious one** — it
+  is already used for exactly this shape of deferral (`tagpu_scenario.c`, the creation pass, *"never
+  mid-render"*). It fails on the one requirement that defines this family: **it stops outside a
+  live game.** `tagpu_scenario.c` says so in as many words about ENDMSN.GUI, and the family's own
+  comments are explicit that the menus are the point — peek *"must run at the menus too: switch
+  effects land before the first game"*, `tagpu_ui_frame` *"the menus are exactly where it earns
+  its keep"*. A host that only runs in-game would silently drop the half of `tacli` that drives
+  the shell.
+* **The family is SIX functions, not the five surveyed above.** `tagpu_input_frame`
+  (`tagpu_input.c`, called only from `tagpu_overlay.c`) was missed, and it is in the same class —
+  in-process input injection that the comment says *"must run even at the menus and regardless of
+  the overlay's enable state"*. It is also the one with the strongest claim to being moved, since
+  injected input on the render thread is the odder of the two places to put it.
+
+**AND THIS IS WHY 10c NO LONGER THREATENS 10b'S SAFETY ARGUMENT.** The concern recorded here was
+that 10c might add a `tagpu_` call to `render_gdi.c`, which would falsify the *"`render_gdi.c`
+contains no `tagpu_` call at all"* fact that 10b's inertness rests on. Hosting in
+`tagpu_gui_hook`'s existing flip observer touches `render_gdi.c` **not at all** — the detour is on
+the engine's own function, which the gdi lane reaches by itself. The two landings are independent
+again. **The design risk that looks biggest is not there**: the trigger functions take a
 `const TAGPU_FRAME*` only to throttle themselves — `if (f && (f->frame_counter % 5))` is the whole
 of their use of it, in both `tagpu_gui_snap.c:613` and `tagpu_cat.c:306` — and every one
 null-checks it, so a game-thread host can pass its own flip count or `NULL` with no frame packet
