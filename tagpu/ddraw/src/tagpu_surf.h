@@ -1,6 +1,8 @@
 #ifndef TAGPU_SURF_H
 #define TAGPU_SURF_H
 
+#include "tagpu_overlay.h"      /* TAGPU_FRAME: the frame this snapshot belongs to */
+
 /* TA'S OWN FRAME, AS THE BOTTOM LAYER OF THE COMPOSITE — one snapshot a frame,
    owned here rather than by whichever pass happened to want it first.
 
@@ -50,23 +52,38 @@
    trusted across a file boundary. */
 #define TAGPU_SURF_MAXDIM 4096
 
+/* WHAT WAS TAKEN, and where it goes. One struct rather than seven out-params,
+   which is the shape `tagpu_feat_handover` settled on for the same reason. */
+typedef struct {
+    /* `w * h` 8-bit indices, TIGHTLY PACKED: the copy removes the primary's
+       pitch, so a consumer uploads `w * h` and has no row stride of its own to
+       get wrong. */
+    const unsigned char* bytes;
+    int                  w, h;
+    /* 256 four-byte entries, R,G,B at [0],[1],[2] — the palette the screen is
+       being shown with, snapshotted in the SAME call as the bytes so the two
+       cannot be a frame apart. */
+    const unsigned char* pal;
+    /* Bumped only when the bytes CHANGED, for a consumer that uploads to a
+       device and wants to skip an upload it already holds. TA redraws its whole
+       screen far less often than we present. */
+    unsigned             serial;
+    /* WHERE IT GOES, in window pixels: the frame's letterboxed viewport, the
+       same rect the fork gives its own upload on the GL lane. Carried here
+       rather than re-derived by the consumer because a pass's `record` is handed
+       the swapchain extent and nothing else, and a bottom layer drawn to the
+       whole window instead of the viewport would paint over the letterbox. */
+    int                  dx, dy, dw, dh;
+} TAGPU_SURFFRAME;
+
 /* Take this frame's snapshot. Render thread, once per frame, from
    `tagpu_overlay_draw` AFTER `tagpu_pal_frame` (the palette is what the indices
    are resolved through, and a surface with no palette is not drawable) and
    before any pass gathers. Cheap and silent on a frame with no 8-bit primary. */
-void tagpu_surf_take(void);
+void tagpu_surf_take(const TAGPU_FRAME* f);
 
 /* This frame's surface, or 0 when there is none — a non-8bpp mode, no primary,
-   a palette not readable yet, or a geometry outside the bound above.
-   `bytes` is `w * h` 8-bit indices, TIGHTLY PACKED: the copy removes the
-   primary's pitch, so a consumer uploads `w * h` and needs no row stride.
-   `pal` is 256 four-byte entries, R,G,B at [0],[1],[2] — the palette the screen
-   is being shown with, snapshotted in the same call as the bytes so the two
-   cannot be a frame apart.
-   `serial` counts snapshots that CHANGED the bytes, for a consumer that
-   uploads to a device and wants to skip an upload it already has.
-   Any pointer may be NULL if the caller does not want it. */
-int tagpu_surf_frame(const unsigned char** bytes, int* w, int* h,
-                     const unsigned char** pal, unsigned* serial);
+   a palette not readable yet, or a geometry outside the bound above. */
+int tagpu_surf_frame(TAGPU_SURFFRAME* out);
 
 #endif

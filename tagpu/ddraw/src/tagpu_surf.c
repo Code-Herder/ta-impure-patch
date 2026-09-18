@@ -26,8 +26,9 @@ static unsigned char  s_pal[1024];      /* R,G,B,x per entry                  */
 static int            s_palHave;
 static unsigned       s_refused;        /* geometry outside the bound         */
 static int            s_saidRefused;
+static int            s_dx, s_dy, s_dw, s_dh;   /* the frame's letterboxed rect */
 
-void tagpu_surf_take(void)
+void tagpu_surf_take(const TAGPU_FRAME* f)
 {
     const unsigned char* pal;
 
@@ -37,6 +38,11 @@ void tagpu_surf_take(void)
        frame's world, and it would look like a pass drawing in the wrong place
        rather than like a surface that was not read. */
     s_have = 0;
+    if (!f) return;
+    /* WHERE IT GOES IS THIS FRAME'S, taken beside the bytes: the viewport moves
+       with a mode change and a consumer that read it a frame later would put
+       the bottom layer where the last frame's letterbox was. */
+    s_dx = f->vp_x; s_dy = f->vp_y; s_dw = f->vp_w; s_dh = f->vp_h;
 
     /* THE PALETTE IS PART OF THE SNAPSHOT, not a separate lookup the consumer
        makes later. The indices mean nothing without the table they resolve
@@ -104,14 +110,14 @@ void tagpu_surf_take(void)
     }
 }
 
-int tagpu_surf_frame(const unsigned char** bytes, int* w, int* h,
-                     const unsigned char** pal, unsigned* serial)
+int tagpu_surf_frame(TAGPU_SURFFRAME* out)
 {
-    if (!s_have) return 0;
-    if (bytes)  *bytes  = s_buf;
-    if (w)      *w      = s_w;
-    if (h)      *h      = s_h;
-    if (pal)    *pal    = s_pal;
-    if (serial) *serial = s_serial;
+    if (!s_have || !out) return 0;
+    if (s_dw < 1 || s_dh < 1) return 0;     /* nowhere to put it */
+    out->bytes = s_buf;
+    out->w = s_w; out->h = s_h;
+    out->pal = s_pal;
+    out->serial = s_serial;
+    out->dx = s_dx; out->dy = s_dy; out->dw = s_dw; out->dh = s_dh;
     return 1;
 }

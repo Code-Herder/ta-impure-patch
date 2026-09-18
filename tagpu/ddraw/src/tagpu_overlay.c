@@ -425,7 +425,7 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        passes reading the engine's surface at two instants is how the lanes end
        up compositing different moments of one frame. Cheap and silent when
        there is no 8-bit primary. [The vulkan-only plan, landing 4c-1.] */
-    tagpu_surf_take();
+    tagpu_surf_take(f);
 
     /* THE VIEW FOR THIS FRAME, once, before any pass reads the eye: the zoom
        level (the levers, the wheel's ease), the cursor anchor's step against

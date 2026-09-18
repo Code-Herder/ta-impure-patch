@@ -2995,11 +2995,10 @@ static void mir_finish(const TAGPU_FRAME* f)
            per-frame realloc it replaces, not a weaker one, because there is now
            exactly one writer at exactly one point in the frame.
            [The vulkan-only plan, landing 4c-1.] */
-        const unsigned char* eng = NULL;
-        int ew = 0, eh = 0;
-        if (tagpu_surf_frame(&eng, &ew, &eh, NULL, NULL)) {
-            s_mHand.eng = eng;
-            s_mHand.engW = ew; s_mHand.engH = eh; s_mHand.engPitch = ew;
+        TAGPU_SURFFRAME sf;
+        if (tagpu_surf_frame(&sf)) {
+            s_mHand.eng = sf.bytes;
+            s_mHand.engW = sf.w; s_mHand.engH = sf.h; s_mHand.engPitch = sf.w;
         }
     }
     /* the guard has nothing to compare against without those bytes */
