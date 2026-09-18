@@ -305,7 +305,19 @@ static int build_renderpass(const TAGPU_VKPASS* d)
                           VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
     dep[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    dep[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+    /* NEITHER OF THESE IS BY-REGION, AND THAT IS THE WHOLE POINT OF THE
+       COMPOSITE. `VK_DEPENDENCY_BY_REGION_BIT` promises that a destination
+       fragment at (x, y) depends only on (x, y) of the source -- which is what
+       lets a tiled device keep a tile on chip. This pass's consumer is the
+       composite, in a DIFFERENT render pass with a DIFFERENT framebuffer, and
+       it samples at SCALED coordinates: at ss = 2 one destination pixel reads a
+       2x2 source block, and at k != 1 an arbitrary neighbourhood. A by-region
+       dependency would therefore under-synchronise exactly the reads that cross
+       a tile edge -- a hazard that produces a seam on some devices and nothing
+       at all on others, which is the failure mode CLAUDE.md's synchronisation
+       rule exists for. Both dependencies are global.
+       [Found before the 4c-2 review, having been written by-region first.] */
+    dep[0].dependencyFlags = 0;
 
     dep[1].srcSubpass = 0;
     dep[1].dstSubpass = VK_SUBPASS_EXTERNAL;
@@ -313,7 +325,7 @@ static int build_renderpass(const TAGPU_VKPASS* d)
     dep[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     dep[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     dep[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    dep[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+    dep[1].dependencyFlags = 0;
 
     rpi.attachmentCount = 2;
     rpi.pAttachments = at;

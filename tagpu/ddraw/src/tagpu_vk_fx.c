@@ -1659,10 +1659,18 @@ void tagpu_vk_fx_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         pipe = (b == TAGPU_FXB_LINES) ? s_pipeLine
              : (b == TAGPU_FXB_FLASH) ? s_pipeFlash : s_pipeTri;
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
-        /* `glLineWidth(ss)`, on the one pipeline that declared the state.
-           `prepare` refused the frame unless this width is one the device will
-           take, so there is nothing to clamp here. */
-        if (b == TAGPU_FXB_LINES && s_lineW != 1.0f) vkCmdSetLineWidth(cb, s_lineW);
+        /* `glLineWidth(ss)`, on the one pipeline that declared the state --
+           AND WHENEVER IT DECLARED IT, not only when the width is interesting.
+           A pipeline that lists a dynamic state and is drawn without the
+           command that supplies it has an UNDEFINED value for it: the static
+           `rs.lineWidth` is ignored precisely because the state is dynamic. The
+           first cut of this read `s_lineW != 1.0f`, which left the width
+           undefined on every ss=1 frame -- the A/B's own configuration, on any
+           device with `wideLines`, which is to say the one this is measured on.
+           `prepare` refused the frame unless the width is one the device will
+           take, so there is nothing to clamp here. tagpu_vk_mark.c had it right
+           from the start: `if (g->lines) vkCmdSetLineWidth(cb, s_h.ss)`. */
+        if (b == TAGPU_FXB_LINES && d->wideok) vkCmdSetLineWidth(cb, s_lineW);
         vkCmdDraw(cb, (uint32_t)s_n[b], 1, first, 0);
         first += (uint32_t)s_n[b];
     }
