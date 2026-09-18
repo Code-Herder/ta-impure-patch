@@ -2893,6 +2893,60 @@ has run it, and on Windows route A may well be fine — winevulkan's `HWND` take
 mechanism. Route D is correct on both regardless, which is why there is no per-platform branch.
 The cell that would close it is the `_local` test VM.
 
+**AND THE QUESTION CHANGED WHEN THE PLAN DECIDED TO DELETE GL [MEASURED 2026-09-17].** Every row
+of the table above asks one thing — *can Vulkan present on a window the GL renderer owns, and does
+GL survive it* — and the vulkan-only plan's landing 4 asks neither half. It presents into
+`g_ddraw.hwnd` from a backend that never creates a GL context at all. Two routes were added to
+`vkcoexist.c` for it, and they are separate routes rather than a deduction from route A on purpose:
+route A's *"API ok, pixels dead"* is a verdict about **GL**, and its Vulkan half presented 10 of 10
+frames on the game's own `HWND`. "The half that failed is the half we deleted" is an argument, and
+this seam has had two arguments turn out wrong already — the API said yes when the screen said no,
+and the roadmap ranked the only working route last.
+
+| route | what it is | API | pixels (wine 9.0) |
+|---|---|---|---|
+| **E** — Vulkan alone | no GL context and no pixel format, ever | ok, 10/10 frames | **98.5 % magenta — VULKAN REACHES THE SCREEN** |
+| **F** — the fallback net | route E, then GDI on the same `HWND` | ok, 10/10 frames | **98.5 % green — GDI REACHES THE SCREEN** |
+| **GD** — F's control | GDI alone, no surface on the window | — | 98.5 % green |
+
+Both re-run and identical. 98.5 % rather than 100 % is the `WS_BORDER` frame, and every control
+reads the same 98.5 %, so it is the window's edge and not a partial paint.
+
+**Route E is the route landing 4 presents through, and the fork already arrives in its
+configuration**: `dd.c:1524` gates `SetPixelFormat` on `g_ddraw.renderer == ogl_render_main`, so a
+`renderer=vulkan` backend reaches the game window with an untouched HDC. Note what E measures and
+what it does not: the hold is *inside* the present loop, so it says "Vulkan is presenting and being
+seen", not "the last frame persists after teardown".
+
+**Route F is the one that decides code shape, and the answer is the permissive one.** GDI survives
+a surface having existed on the `HWND`; GL does not. So winevulkan's takeover is specific to GL's
+drawable rather than to the window, and `render_vk.c` may hand the session to `gdi_render_main` at
+any point — a bring-up that fails before the surface and one that fails after it can take the same
+path. Had F read low, the fallback would have had to be taken *before*
+`vkCreateWin32SurfaceKHR` was ever called and a later failure would have been terminal; that is an
+ordering either way, which is what `CLAUDE.md` asks a fix to be, and the measurement says which
+ordering rather than leaving it to be guessed.
+
+**What each lane costs the 32-bit address space** (`--route` headless, committed peak, four runs
+of each):
+
+| configuration | committed peak | largest free block |
+|---|---|---|
+| baseline — instance created, nothing else | 35.5 MB | 490.9 MB |
+| GL alone (route GL) | **39.2 MB, all four runs** | 490.9 MB |
+| Vulkan alone (route E) | 37.7, 37.7, 37.7, 39.5 MB | 490.9 MB |
+| GL **and** Vulkan (route A) | 40.6, 40.7, 42.0, 43.1 MB | 490.9 MB |
+
+**One lane is measurably cheaper than two** — the two-lane minimum (40.6) is above the one-lane
+maximum (39.5) — and the largest free block is 490.9 MB in all twelve runs, so neither lane
+fragments the 2 GB space measurably here. **"Vulkan is cheaper than GL" is NOT supported**: the
+ranges overlap, and the one-run pair that suggested it (37.7 against 39.2) does not survive the
+repeat. The repeat is the only reason that claim is not in this note.
+
+**The limit, and it is a real one**: a 320×240 window and a clear-only workload. These numbers bound
+the *bring-up* footprint, not the running one — the driver's heaps grow with the atlases and targets
+a real frame allocates, and nothing here speaks for that.
+
 **The pivot is still there and is unchanged**: if a driver is ever found that refuses route D as
 well, Phase G goes out of process to a 64-bit renderer, where the renderer owns its own window
 and the question does not arise — which is where the RT goal leads anyway. The packet is already

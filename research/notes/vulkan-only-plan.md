@@ -338,6 +338,35 @@ would not have shown up as a failure — it would have shown up as three landing
      the A/B needs `ss=1` and one pass, the patch ships `ss=2` and eighteen. "Does it draw for
      players" and "do the two agree" stay separate questions, and landing 4 owes an answer to both.
 
+   **AND ITS PRESENTATION ROUTE IS MEASURED, NOT ASSUMED [2026-09-17].** Landing 4 presents into
+   `g_ddraw.hwnd`, which is the window `vkcoexist.c` route A calls *"API ok, pixels dead"* — so the
+   route this landing needs looked, on the face of it, like the one the phase already rejected. It
+   is not: route A's dead pixels were **GL's**, and its Vulkan half presented 10 of 10 frames on
+   that very window. Landing 4 deletes the half that failed. Rather than argue that, two routes
+   were added to the probe and run (roadmap §G19a has the tables):
+
+   * **Route E — Vulkan alone, no GL context and no pixel format ever.** `98.5 % magenta, VULKAN
+     REACHES THE SCREEN`, re-run and identical, against a GL control and a GDI control at the same
+     98.5 % (the rest is the window border). The fork already arrives in this configuration:
+     `dd.c:1524` gates `SetPixelFormat` on `g_ddraw.renderer == ogl_render_main`, so a
+     `renderer=vulkan` backend reaches the game window with an untouched HDC and needs no change
+     there.
+   * **Route F — and then GDI on the same window.** `98.5 % green, GDI REACHES THE SCREEN`. **So
+     the fallback survives the surface**, and `render_vk.c` may hand the session to
+     `gdi_render_main` at any point, exactly as `ogl_render_main` does when GL will not come up.
+     Had this read low, the fallback would have had to be taken *before*
+     `vkCreateWin32SurfaceKHR` was ever called and any failure after it would have been terminal
+     and had to say so. Either shape is an ordering rather than a heuristic; the measurement says
+     which one, and it is the permissive one. **winevulkan's `HWND` takeover is specific to GL's
+     drawable, not to the window.**
+   * **One lane is cheaper than two, and that is all the VA numbers support.** GL alone 39.2 MB
+     committed peak (all four runs), Vulkan alone 37.7-39.5, both 40.6-43.1; largest free block
+     490.9 MB in all twelve runs. The two-lane minimum is above the one-lane maximum, so the
+     saving is real — but the ranges for the two single lanes overlap, so *"Vulkan is cheaper than
+     GL"* is **not** a claim this supports, and the single run that suggested it did not survive
+     the repeat. And it is a 320x240 clear-only window: these bound the BRING-UP footprint, not
+     the running one.
+
    **And the deletion is one-way for the whole plan, not just for this landing.** After it, no
    absolute two-lane comparison is expressible; every later claim rests on a relative bar against a
    previous build, which is the "Drift" item below. Anything wanting an absolute figure should take
