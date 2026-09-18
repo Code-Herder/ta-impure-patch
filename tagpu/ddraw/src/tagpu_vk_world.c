@@ -49,6 +49,13 @@ enum { ST_UNBUILT = 0, ST_READY = 1, ST_REFUSED = 2 };
    resolution the fork offers is well inside this, so a target past it is a
    value that is not what it claims to be -- refused, and said once. */
 #define WORLD_MAXDIM 8192
+/* AND A BOUND ON THE FACTOR TOO, so that `gw * ss` cannot overflow before the
+   bound above is applied to it. TAGPU_SS_MAX is 4 on the GL side; this is
+   deliberately its own number rather than that one, because it guards a
+   DIFFERENT thing -- what this module will allocate -- and coupling the two
+   would make a change to the supersample ceiling silently change an
+   allocation bound. */
+#define WORLD_SSMAX  8
 
 static int s_state;
 static int s_downOwed;
@@ -605,9 +612,28 @@ int tagpu_vk_world_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
        geometry that has since moved. */
     if (t.frame != d->frame) return 0;
 
+    /* BOUNDED BEFORE THE MULTIPLY, NOT AFTER IT. `t.gw` is `f->game_width`,
+       which tagpu_native.c takes as `> 0 ? it : vpL + vw` and never bounds
+       above -- it is the device MODE, so it is data until something validates
+       it as data. Checking `gw * ss` against WORLD_MAXDIM afterwards is the
+       classic version of this mistake: a large enough `gw` makes the product
+       overflow a signed int, and an overflowed product can land back inside the
+       bound and be handed to vkCreateImage. So each factor is bounded on its
+       own first, and only then multiplied -- after which the product cannot
+       exceed WORLD_MAXDIM * WORLD_SSMAX and cannot overflow.
+       CLAUDE.md: a value is DATA until it has been validated as data. */
+    if (t.gw < 1 || t.gw > WORLD_MAXDIM || t.gh < 1 || t.gh > WORLD_MAXDIM ||
+        t.ss < 1 || t.ss > WORLD_SSMAX) {
+        if (!s_saidBig) {
+            s_saidBig = 1;
+            plog(d, "world: %dx%d at ss=%d is outside what this module carries "
+                    "(%d per edge, ss %d) - the world stays on the swapchain image",
+                 t.gw, t.gh, t.ss, WORLD_MAXDIM, WORLD_SSMAX);
+        }
+        return 0;
+    }
     w = t.gw * t.ss;
     h = t.gh * t.ss;
-    if (w < 1 || h < 1) return 0;
     if (w > WORLD_MAXDIM || h > WORLD_MAXDIM) {
         if (!s_saidBig) {
             s_saidBig = 1;
