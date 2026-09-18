@@ -1566,6 +1566,11 @@ Back to the filed list:
    `openglshader.h`, `render_ogl.h`, and **`tagpu_restoreglsl.c`**. `renderer=gdi` becomes the
    documented stock reference.
 
+   **BLOCKED ON LANDING 10b, the suppressor handshake** (*What the seam has to grow* below).
+   `renderer=gdi` is not stock today: `tagpu_owndraw_init()` arms from `dllmain.c:102` whatever
+   `renderer=` says, so this item's own headline claim is false until that is fixed, and it is
+   fixed at the suppressor's call site rather than in any file this item deletes.
+
    **The restorer was missing from this list until 2026-09-17 and it is what proved the list was
    a guess.** `tagpu_restoreglsl.c` includes `opengl_utils.h` and calls `glDeleteProgram`, so it
    cannot survive this landing — but before landing 7 split it, deleting it would also have taken
@@ -1643,11 +1648,23 @@ the own-the-draw suppressors install from `dllmain.c:102` on their own levers an
 whether a lane is alive, so the switch leaves the engine's rasterise skipped with nothing
 replacing it.
 
-**That trap is not GL-specific and must be fixed first.** Set `renderer=gdi` today with the
-shipped defaults and `tagpu_owndraw_init` still detours `0x459830` / `0x459C70` — the "stock
-reference" lane is not stock. A suppressor must not arm unless something is going to draw what
-it suppresses, by a handshake rather than by ordering luck. Without that, no opt-out in this plan
-is honest.
+**That trap is not GL-specific, it is CONFIRMED, and it is landing 10b — a landing of its own,
+before 11.** [Confirmed 2026-09-18 by landing 11's survey.] `tagpu_owndraw_init()` is called from
+`dllmain.c:102` **regardless of `renderer=`**, and a live `renderer=gdi` boot logs
+`owndraw: ARMED target="all" opaque@0x459830=OK nano@0x459C70=OK buildfx@0x458DD0=OK
+structshadow@0x4592C6+0x45952C=OURS shadow@0x459338+0x45958C+0x4594DB=OURS` with
+*"engine rasterise skipped for target; writeback must paint it"* — so the "stock reference" lane
+is **not stock**, today, with the shipped defaults. A suppressor must not arm unless something is
+going to draw what it suppresses, by a handshake rather than by ordering luck.
+
+**Why it is its own landing and not part of 11.** The fix belongs at the *suppressor's* call
+site, not in the files 11 deletes: `tagpu_owndraw_init` has to ask whether a lane will paint
+what it is about to skip, which is a new handshake between `dllmain.c` and the renderer
+selection — new state between two subsystems, in the class `CLAUDE.md` says review at `high`.
+Deleting the GL files in the same landing would put that handshake in a diff dominated by
+deletions, which is where a wrong one hides. **11 is blocked on it**, because 11's own headline
+claim is that `renderer=gdi` becomes the documented stock reference, and that claim is false
+until 10b lands.
 
 The per-pass `tagpu_<x>.off` files, `tagpu_defaults.off`, `tagpu_reclaim.off` and
 `tagpu_curs.off` are unchanged.
@@ -1668,9 +1685,27 @@ false by that one byte, and stays false unless it is given a lever or the senten
 * **Whether the restorer's frame-sliced budget survives the port.** 47 attachments' worth of
   state at `NK=4` (`tagpu_restoreglsl.c:47`), MRT over layers of a ping-ponged 2D-array texture,
   against a GPU-millisecond budget. The shaders are the easy half.
-* **Whether the gadget dispatcher can be re-entered safely.** `0x4A9176` and `0x4A962C` are
-  documented; the entry that re-renders a whole screen is not, and calling a 1997 UI builder
-  twice is the kind of thing that works for eight screens and corrupts the ninth.
+* **Whether the gadget dispatcher can be re-entered safely** — **ANSWERED FOR ONE ENTRY, AND
+  ONLY OVER TWO SCREENS [landing 9, 2026-09-18].** The entry that re-renders a whole screen is
+  `GUI_StageUpdateDraw 0x4A81E0(gi, 0x40)`, and it is now documented
+  ([exe-reverse-engineering](exe-reverse-engineering.html), [gui-gadgets](gui-gadgets.html)).
+  Three facts make the re-entry safe by construction rather than by luck, and they are the
+  answer to "calling a 1997 UI builder twice":
+  * **The `0x40` path allocates nothing and frees nothing.** Both allocators sit behind
+    `0x4A82F0 and eax,1` / `0x4A82F7 je 0x4A90D1`, which jumps past them; all **six** free sites
+    sit inside `0x4A950A test bl,0x2 / je 0x4A95C2`. A redraw cannot leak and cannot double-free
+    because it reaches neither.
+  * **The engine issues our exact call itself.** `GUI_Pop 0x4A9660` calls `0x4A81E0(gi, 0x40)` at
+    `0x4A96BF` whenever the popped screen's flags carry `0x800`, and the dirty-flag pump
+    `0x4A9FD0` issues one at `0x4AA0CD`. We are not inventing a re-entry; we are making one the
+    engine already makes.
+  * **It is guarded at its own head.** `0x4A81EA` loads `TheActive_GUIMEM` and returns at
+    `0x4A81FF` when it is NULL, and we check `panel+0xBC` before calling because a NULL
+    destination resolves to the PRIMARY surface inside `0x4C6B70`.
+
+  **What is still not known is the eight-screens-and-the-ninth part.** Two screens were
+  exercised — `MAINMENU.GUI` (115 ops) and the in-game `ARMMAIN2.GUI` (1 op). The shell's other
+  screens, and any screen whose gadgets own engine state, are untested.
 * **What a failed Vulkan bring-up should show.** The GL path falls back to `gdi` with a driver
   warning (`dd.c:1998`); the same shape is the obvious answer, but a player then gets stock TA
   with no patch, and nothing decides today whether that is silent.
