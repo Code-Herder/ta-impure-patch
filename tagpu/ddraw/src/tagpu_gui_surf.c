@@ -783,6 +783,20 @@ static int init_gl(void)
     return 1;
 }
 
+/* WHETHER THIS FRAME CARRIES TA's OWN SURFACE, which is what the mirror's
+   `eng` copy, the strict guard and the layer's guard all really ask. On the GL
+   lane the fork has uploaded it and `f->surface_tex` names that upload; on a
+   lane with no GL there is no texture to name, but the BYTES are where they
+   always were -- `g_ddraw.primary->surface`, which `mir_finish` copies out
+   under g_ddraw.cs and validates against the primary's own geometry. Keying on
+   the texture left the Vulkan twin with no engine frame and it composited
+   nothing at all on the vulkan-only lane, saying so every time: "the hand-over
+   carries no copy of the engine's own frame". [Vulkan-only plan, 4b-3.] */
+static int have_engine_frame(const TAGPU_FRAME* f)
+{
+    return f->surface_tex != 0 || tagpu_vk_owns_present();
+}
+
 /* ------------------------------------------------------------------ twins */
 static TWIN* twin_find(unsigned surf)
 {
@@ -2514,7 +2528,7 @@ static void draw_layer(const TAGPU_FRAME* f)
     if (s_mirRec) {
         s_mHand.presented = s_presented;
         s_mHand.surfW = t->w; s_mHand.surfH = t->h;
-        s_mHand.strict = (s_strict && f->surface_tex) ? 1 : 0;
+        s_mHand.strict = (s_strict && have_engine_frame(f)) ? 1 : 0;
         s_mHand.key = key;
         s_mHand.vpKey = tagpu_terrown_filled() ? key : -1;
         s_mHand.vpL = (float)L; s_mHand.vpT = (float)T;
@@ -2522,7 +2536,7 @@ static void draw_layer(const TAGPU_FRAME* f)
         s_mHand.curEng[0] = s_curEng[0]; s_mHand.curEng[1] = s_curEng[1];
         s_mHand.curEng[2] = s_curEng[2]; s_mHand.curEng[3] = s_curEng[3];
         s_mHand.curOurs = s_curOwn ? 1 : 0;
-        s_mHand.guard = f->surface_tex ? 1 : 0;
+        s_mHand.guard = have_engine_frame(f) ? 1 : 0;
         s_mHand.scaleX = s_k; s_mHand.scaleY = ky;
         s_mHand.sharpOn = s_sharpInk ? 1 : 0;   /* COVERAGE, not existence */
         s_mHand.colourTwins = (s_colValid && t->rgb) ? 1 : 0;
@@ -2676,14 +2690,23 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
            `mir_finish` hands it over with the ops. */
         TAGPU_ABSHOT shot;
         int taking = s_ab && !s_abDone;
-        if (taking) tagpu_abshot_begin(&shot, 0);
+        /* THE VULKAN HALF IS ARMED BY ITS OWN UNLINK, NOT BY THE GL CAPTURE
+           REACHING THE DISK. The claim below used to be `wrote ? 1 : 0`, and
+           on a lane that draws no GL there is no capture to write -- so the
+           Vulkan half could never fire and this pass could not be measured at
+           all. `tagpu_vk_ab_arm` is the shape the five world passes took in
+           4b-1: it unlinks the target and grants the claim only when the file
+           is gone, so a stale capture is never paired with a fresh one. The GL
+           lane needs BOTH -- its own write and that unlink.
+           [The vulkan-only plan, landing 4b-3.] */
+        const int gl_draws = !tagpu_vk_owns_present();
+        if (taking && gl_draws) tagpu_abshot_begin(&shot, 0);
         draw_layer(f);
         if (taking) {
             /* the claim is made only when the capture reached the disk: on any
                failure the PREVIOUS run's _gl.ppm is still lying there, and a
                Vulkan half claimed anyway would be diffed against a capture of a
                different frame -- tagpu_abshot.h */
-            int wrote = tagpu_abshot_end(&shot, AB_OUT, "gui");
             s_abDone = 1;
             /* THE CLAIM IS THIS FRAME'S OR NOBODY'S. It used to be set here and
                cleared only inside `mir_finish`, so a frame that published no
@@ -2692,7 +2715,13 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
                frame" rule exists to prevent, and it is why several captures in
                the first measuring session would not pair.
                [FOUND 2026-09-16, the landing review.] */
-            s_abFrame = wrote ? 1 : 0;
+            if (gl_draws) {
+                int wrote = tagpu_abshot_end(&shot, AB_OUT, "gui");
+                int fresh = tagpu_vk_ab_arm("gui");
+                s_abFrame = wrote && fresh;
+            } else {
+                s_abFrame = tagpu_vk_ab_arm("gui");
+            }
         }
     }
     mir_finish(f);          /* G19f: close and publish the frame's record */
@@ -2925,7 +2954,7 @@ static void mir_finish(const TAGPU_FRAME* f)
        object or NULL, never a freed one. Copied rather than aliased, because
        the Vulkan lane runs two calls later. */
     s_mHand.eng = NULL; s_mHand.engW = s_mHand.engH = s_mHand.engPitch = 0;
-    if (f->surface_tex) {
+    if (have_engine_frame(f)) {
         EnterCriticalSection(&g_ddraw.cs);
         /* THE BOUND COMES FROM THE OBJECT BEING READ, not from the device
            mode. `g_ddraw.width/height` is the mode; the bytes and the pitch
