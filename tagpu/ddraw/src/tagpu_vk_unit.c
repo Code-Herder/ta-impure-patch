@@ -225,6 +225,10 @@ static VkImageView    s_atView;
 static int            s_atDim;
 static unsigned       s_atSerial;
 static int            s_atHave;
+/* THE ROWS OF THE INDEXED ATLAS THIS LANE HAS ACTUALLY UPLOADED, which is not
+   the same thing as "the atlas has been uploaded at least once" -- and the
+   difference is a whole shelf of black art. See `restore_want`. */
+static int            s_atRows;
 /* CLASSIC++'s RESTORED TWIN, RGBA8 (the Vulkan-only plan's gate 3).
 
    IT IS THE ATLAS'S FULL SQUARE, `dim x dim`, AND NOT THE ROWS THE READ-BACK
@@ -1145,6 +1149,32 @@ static int build_descriptors(const TAGPU_VKPASS* d)
 
    Called from `prepare` AFTER the atlas upload, because the job reads the
    indexed atlas's view and that is where it comes to exist. */
+/* HOW MANY OF THE LIST'S FRAMES THIS LANE'S SOURCE ACTUALLY HOLDS, counted
+   from `first`. A frame names a rect of the INDEXED atlas, and this lane reads
+   that atlas out of an image IT uploaded -- `s_atRows` rows of it. A frame
+   below that line is read as zeros, and palette index 0 is opaque black, so the
+   restore paints a black cell over art that is perfectly fine on the GL lane,
+   whose source is the live texture `atlas_paint` writes as entries are added.
+
+   MEASURED, and it is the whole reason this function exists: landing 7e-2's
+   first working oracle run had the unit chain differing in rows 0..71 -- the
+   first shelf -- with the Vulkan side holding (0,0,0,255) in 55 213 texels and
+   the GL side holding art. Those were the 25 frames of the first batch, queued
+   in the same frame as an upload that had covered fewer rows than they sit in.
+
+   The count is a PREFIX because the producer appends in shelf order, so the
+   first uncovered frame bounds every frame after it. Stopping there rather than
+   skipping past it is what keeps the cursor meaning "everything before this is
+   queued": the frames left behind are offered again on the next frame, by which
+   time the atlas upload has caught up. */
+static int covered_prefix(const TAGPU_RGLSL_FRAME* f, int n, int rows)
+{
+    int i;
+    for (i = 0; i < n; i++)
+        if (f[i].ay < 0 || f[i].h <= 0 || f[i].ay + f[i].h > rows) return i;
+    return n;
+}
+
 static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
 {
     int repaint, n;
@@ -1212,6 +1242,8 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
             return;
         }
         n = h->restoreN - s_rjTaken;
+        /* ...AND ONLY WHAT THIS LANE'S SOURCE HOLDS */
+        if (n > 0) n = covered_prefix(h->restoreFrames + s_rjTaken, n, s_atRows);
         if (n > 0) {
             int took = tagpu_vk_restore_job_add(s_rjob, h->restoreFrames + s_rjTaken, n);
             /* the cursor advances by what was OFFERED, not by what was taken:
@@ -1270,7 +1302,15 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
             return;
         }
     }
-    s_rjTaken = tagpu_vk_restore_job_add(s_rjob, h->restoreFrames, h->restoreN);
+    {
+        int want = covered_prefix(h->restoreFrames, h->restoreN, s_atRows);
+        s_rjTaken = want > 0 ? tagpu_vk_restore_job_add(s_rjob, h->restoreFrames, want) : 0;
+        if (want < h->restoreN)
+            plog(d, "unit: %d of %d listed frames sit below the %d atlas rows this "
+                    "lane has uploaded - they are queued when the upload reaches them, "
+                    "rather than restored from texels it does not have yet",
+                 h->restoreN - want, h->restoreN, s_atRows);
+    }
     s_rjGen = h->restoreGen;
     s_rjBlanks = h->restoreBlanks;
     s_rjSrcView = s_atView;
@@ -1344,7 +1384,7 @@ static int atlas_build(const TAGPU_VKPASS* d, int dim)
 {
     if (s_atImg && s_atDim == dim) return 1;
     kill_image(d, &s_atImg, &s_atMem, &s_atView);
-    s_atDim = 0; s_atSerial = 0; s_atHave = 0;
+    s_atDim = 0; s_atSerial = 0; s_atHave = 0; s_atRows = 0;
     if (!mk_image(d, dim, dim, 1, VK_FORMAT_R8_UNORM,
                   VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                   VK_IMAGE_ASPECT_COLOR_BIT, &s_atImg, &s_atMem, &s_atView))
@@ -1503,6 +1543,7 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
     s_atSerial = h->atlasSerial;
+    s_atRows = rows;
     s_atHave = 1;
     return 1;
 }
@@ -2744,7 +2785,7 @@ void tagpu_vk_unit_down(const TAGPU_VKPASS* d)
     kill_image(d, &s_arImg, &s_arMem, &s_arView);
     kill_image(d, &s_dumImg, &s_dumMem, &s_dumView);
     kill_image(d, &s_dumDepth, &s_dumDepthMem, &s_dumDepthView);
-    s_atDim = 0; s_atSerial = 0; s_atHave = 0; s_dumReady = 0;
+    s_atDim = 0; s_atSerial = 0; s_atHave = 0; s_atRows = 0; s_dumReady = 0;
     s_arDim = 0; s_arMips = 0; s_arReq = 0; s_arSerial = 0; s_arHave = 0;
     if (s_dpool) { vkDestroyDescriptorPool(d->dev, s_dpool, NULL); s_dpool = VK_NULL_HANDLE; }
     if (s_pipeBody) { vkDestroyPipeline(d->dev, s_pipeBody, NULL); s_pipeBody = VK_NULL_HANDLE; }
