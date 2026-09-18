@@ -215,11 +215,31 @@ static int __cdecl before_line(void* e)
     int x0 = SARG(e, 2), y0 = SARG(e, 3), x1 = SARG(e, 4), y1 = SARG(e, 5);
     int l = x0 < x1 ? x0 : x1, r = x0 < x1 ? x1 : x0;
     int t = y0 < y1 ? y0 : y1, b = y0 < y1 ? y1 : y0;
+    int ol, ot, orr, ob;
+    /* AXIS-ALIGNED OR DIAGONAL, DECIDED HERE AND KEPT AS TWO OP KINDS
+       [landing 8c]. For an axis-aligned line the bounding box IS the line --
+       one pixel thick -- so it is a solid fill and ports exactly as `OP_BAR`
+       does. For a diagonal the box is emphatically NOT the line: it is the
+       square the line crosses, and replaying it would paint the whole square.
+       That is the fault gui-renderer.md 20 traced to cyan squares, and this
+       split is what stops landing 8c committing it again.
+       Two kinds rather than a flag, because the CENSUS then counts them apart
+       and the next session reads the ratio off `GUI kinds:` instead of
+       guessing it -- the same move that made landing 8b honest about `focus`. */
+    int diag = (x0 != x1 && y0 != y1);
     SURF* s;
     if (!on_game_thread()) return 0;
+    ol = l; ot = t; orr = r; ob = b;
     s = surf_of_ctx(ctx);
     if (s) clip_ctx(ctx, &l, &t, &r, &b);
-    op_add(OP_LINE, s, l, t, r, b);
+    op_add(diag ? OP_DIAG : OP_LINE, s, l, t, r, b);
+    if (s_lastOp) {
+        /* THE COLOUR IS THE SIXTH ARGUMENT and one byte of it reaches the
+           surface: `0x4BE950` writes through `0x4CC7AB`, whose colour is
+           `[ebp+0x1C]` stored `stos BYTE al` (exe-reverse-engineering.md). */
+        s_lastOp->col = (unsigned char)ARG(e, 6);
+        s_lastOp->clipped = (unsigned char)(l != ol || t != ot || r != orr || b != ob);
+    }
     return 0;
 }
 

@@ -1308,9 +1308,18 @@ Back to the filed list:
      `DrawTranspRectangle 0x4BF8C0` is **hollow**, four edges through the store-only Bresenham
      `0x4CC7AB` and not one fill through `0x4CCDEA`, and the focus rectangle `0x4BF7B0` is a third
      shape again. Disentangling those three is 8b's first act.
-   * **8c — `OP_LINE`.** The largest portable kind (842 790 ops). It needs the **direction bit**: the observer
-     records a line's axis-aligned bounding box, and a diagonal's bounding box is not the line —
-     which is exactly the fault [gui-renderer](gui-renderer.html) §20 traced to cyan squares.
+   * **8c — `OP_LINE`. LANDED 2026-09-18** ([gpu-status](gpu-status.html) §2.60). The largest
+     portable kind. It did **not** need a direction bit: it needed the axis-aligned/diagonal
+     **split**, decided from the endpoints before the box exists. An axis-aligned line's bounding
+     box **is** the line, one pixel thick, so it publishes as **`PK_BAR`** — same packet, same
+     twin fill, same clear, and **zero new enumeration sites** for either consumer. A diagonal's
+     box is the square the line crosses, which is exactly [gui-renderer](gui-renderer.html) §20's
+     cyan squares, so `OP_DIAG` keeps `PK_PIXELS`.
+     **And under the shipped arm set there are NO diagonal UI lines**: `markown.on` suppresses the
+     engine's own selection box, so §20's producer never runs. Measured `line 800 315 / diag 0` in
+     play; forcing a diagonal needs three things at once — `mark.on=noselbox`, a unit selected,
+     **and a facing off a multiple of 90** — which gives `line 1 548 252 / diag 111 603`. So 8c
+     closes essentially all of `line` in the configuration that ships.
    * **8d — `OP_FRAME` (`0x4BF4D0`) and `OP_SCALE`, and 8d is now the ODD ONE OUT.** `0x4BF4D0` is
      a **shade of the destination**, not a fill: there is no colour to publish, only a level and a
      dependence on what is already in the box. Every other kind in landing 8 replaces *published
@@ -1327,8 +1336,10 @@ Back to the filed list:
    the ops split into two classes rather than five kinds, and only one class is what landing 8
    assumed:
 
-   * **Replaceable by a description of a draw** — `bar` (done), `rect` (done), `line` (8c,
-     **842 790 ops**, the largest of these). These write a constant and read nothing.
+   * **Replaceable by a description of a draw** — `bar`, `rect` and `line`, **all three now done**.
+     These write a constant and read nothing. What is left of this class is `OP_DIAG` (needs a
+     line rasteriser in the twin, and 0 ops under the shipped arm set) and `OP_SCALE` (a scaled
+     blit, which belongs with `PK_SPRITE`).
    * **Destination-dependent tints** — `focus` (`0x4BF7B0`, **1 223 310 ops**) and `frame`
      (`0x4BF4D0`). Both read the pixels they overwrite and remap them through a LUT. **A colour
      and a box cannot express either**, and on the Vulkan lane a consumer would need to sample the

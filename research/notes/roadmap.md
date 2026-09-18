@@ -3013,6 +3013,21 @@ because a clear rect outside the render area is undefined behaviour. Measured `r
 `rect 3476`, frame at **0 magenta of 786 432 and 2 477 distinct colours** (the colour count is
 asserted on purpose — 0 magenta passes on a black window too).
 
+**8c LANDED 2026-09-18 too** ([gpu-status](gpu-status.html) §2.60), and it did **not** need the
+direction bit the plan expected. It needed the axis-aligned/diagonal **split**, decided from the
+endpoints before the bounding box exists: an axis-aligned line's box **is** the line, one pixel
+thick, so it publishes as **`PK_BAR`** — same packet, same twin fill, same clear, and **zero new
+enumeration sites** for either consumer, which is the surface 8b's review had to search. A
+diagonal's box is the square the line crosses, i.e. [gui-renderer](gui-renderer.html) §20's cyan
+squares, so `OP_DIAG` keeps `PK_PIXELS`.
+
+**And under the shipped arm set there are no diagonal UI lines at all** — `markown.on` suppresses
+the engine's own selection box, so §20's producer never runs: `line 800 315 / diag 0` in play.
+Forcing one needs three things at once (`mark.on=noselbox`, a unit selected, **and a facing off a
+multiple of 90**), which gives `line 1 548 252 / diag 111 603`. Frame with diagonals present: **0
+magenta of 786 432, 2 003 distinct colours**, 60.0 fps, and **no cyan squares** — the specific
+regression the split exists to prevent.
+
 **So the gate is not the shape it was filed in.** The ops are two classes, not five kinds:
 replaceable by a description of a draw (`bar` done, `rect` done, `line` 842 790 — 8c), and
 **destination-dependent tints** (`focus` 1 223 310, `frame`) that read the pixels they overwrite.

@@ -10320,6 +10320,76 @@ removes the possibility rather than that it repairs an observed picture.
 
 ---
 
+### 2.60 An axis-aligned line is a bar, and a diagonal is not a box — landing 8c
+
+**LANDED 2026-09-18.** The last of landing 8's portable kinds, and the one the plan warned about:
+*"a diagonal's bounding box is not the line"*.
+
+#### The split is the design and it is also the measurement
+
+`before_line` recorded `OP_LINE` as the axis-aligned **bounding box** of the engine's
+`DrawLine 0x4BE950`. For a horizontal or vertical line that box **is** the line, one pixel thick.
+For a diagonal it is the square the line crosses — and replaying *that* is precisely
+[gui-renderer](gui-renderer.html) §20's cyan squares, where four such boxes tiled a rotated
+selection square solid and published the terrain key underneath.
+
+So the observer decides from the **endpoints**, before the box exists, and keeps two op kinds:
+
+| kind | when | published as |
+|---|---|---|
+| `OP_LINE` | `x0 == x1 \|\| y0 == y1` | **`PK_BAR`** |
+| `OP_DIAG` | otherwise | `PK_PIXELS`, unchanged |
+
+**Two kinds rather than a flag, because the census then counts them apart** — the same move that
+made 8b honest about `focus`, and the reason the ratio below is read rather than guessed.
+
+**An axis-aligned line is published as `PK_BAR`, not as a kind of its own.** It is a solid fill of
+a one-pixel box: same packet, same `twin_fill`, same `vkCmdClearAttachments`. That adds **zero new
+enumeration sites** to either consumer — and a kind missing from one enumeration is this
+codebase's characteristic silent bug, the thing 8b's review had to go looking for. Two draws that
+are the same draw should not be two kinds.
+
+The `OP::clipped` fallback from 8b applies unchanged: a line whose box `clip_ctx` moved keeps
+`PK_PIXELS`.
+
+#### Measured, and the diagonal only appears when you force it
+
+| `renderer=vulkan`, full play arm set, 1024x768 | `line` | `diag` |
+|---|---|---|
+| shell, then a live game | 800 315 | **0** |
+| a unit selected | 836 429 | **0** |
+| `mark.on=noselbox`, unit selected | 1 070 097 | **0** |
+| `mark.on=noselbox`, unit selected **after a diagonal move order** | 1 548 252 | **111 603** |
+
+**Under the shipped arm set there are no diagonal UI lines at all.** `markown.on` suppresses the
+engine's own selection box and our marker pass draws it, so §20's producer never runs. Forcing one
+takes **three** things together, and any two of them give zero: `mark.on=noselbox` so the engine
+draws its own box, a unit selected, and **a facing off a multiple of 90** — which is why the move
+order is in the recipe. At a facing that *is* a multiple of 90 the rotated square is axis-aligned
+and every edge comes through as `OP_LINE`.
+
+So 8c closes essentially all of `line` in the shipped configuration, and the ~7 % that is diagonal
+under the forced one is kept safe rather than ported.
+
+The frame with diagonals present: **0 magenta of 786 432, 2 003 distinct colours**, 60.0 fps,
+`bars=69 316` — and **no cyan squares**, which is the specific regression this split exists to
+prevent.
+
+#### Not covered
+
+- **Diagonals still publish surface bytes.** Porting them needs a line rasteriser in the twin —
+  a real draw, not a clear — and it has to match `0x4CC7AB`'s Bresenham exactly or the A/B moves.
+  Nothing here starts that.
+- **`diag` was measured on one map with one unit.** 111 603 is what a forced fixture produced, not
+  a figure about play. Play's figure is the 0 above, and that is the one that matters for the
+  shipped picture.
+- **The 1-px-thick claim is about the BOX, not about `0x4CC7AB`'s raster.** An axis-aligned line's
+  bounding box is one pixel thick by construction; that the engine's Bresenham fills exactly that
+  box is inherited from the existing engine-map entry (both endpoints counted, `inc ecx` on both
+  axis-aligned special cases), not re-derived here.
+
+---
+
 ## 4. What the work taught us
 
 These are the transferable parts — the reasons things are shaped the way they are.

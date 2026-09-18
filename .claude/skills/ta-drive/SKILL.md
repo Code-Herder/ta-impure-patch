@@ -1914,6 +1914,12 @@ tools/tacli gui <i> strict        # the harness's mode: fallback off, a miss pai
 tools/tacli gui <i> remove        # un-arm entirely at the next launch
 tools/tacli arm <i> gui.on=norestore   # G15e: the layer WITHOUT Classic++ art — the UI-only A/B
 tools/tacli arm <i> 'gui.on=sharptest log'   # G17a: the sharp layer filled with a known pattern
+tools/tacli arm <i> 'mark.on=noselbox'      # the engine draws its OWN selection box again
+#   FORCING A DIAGONAL UI LINE (landing 8c) takes THREE things at once, and any two give zero:
+#   mark.on=noselbox, a unit SELECTED, and a facing OFF A MULTIPLE OF 90 -- so order a diagonal
+#   move first and re-select after it arrives. At a facing that IS a multiple of 90 the rotated
+#   selection square is axis-aligned and every edge comes through as an ordinary line.
+#   Read the result off `GUI kinds:` as `line` vs `diag`.
 tools/tacli gui <i>               # report
 tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds= sprites= pixels= bars= rects= atlas= resets= overflows= k= sharp= fps=
 #   bars= (8a) and rects= (8b) count PK_BAR/PK_RECT replayed as GEOMETRY; pixels= counts boxes of arena

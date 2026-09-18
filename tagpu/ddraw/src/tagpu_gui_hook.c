@@ -342,9 +342,15 @@ static SURF* surf_of_ctx(const int* ctx)
    was under it. It keeps the `PK_PIXELS` path until something can carry a
    read-modify-write across the seam.
    [DISASSEMBLED 2026-09-18; exe-reverse-engineering.md has both.] */
+/* `OP_DIAG` IS SPLIT OFF `OP_LINE` BY LANDING 8c, for `OP_FOCUS`'s reason one
+   kind along: an AXIS-ALIGNED line's bounding box IS the line, one pixel thick,
+   so it is a solid fill and ports exactly as `OP_BAR` does; a DIAGONAL's
+   bounding box is the square the line crosses, and replaying it would paint the
+   whole square. Keeping them as two kinds means `GUI kinds:` counts them apart,
+   so the ratio is read rather than guessed. */
 enum { OP_GAF = 1, OP_GAFA, OP_GAFB, OP_GAFD, OP_SCALE, OP_TEXT, OP_LINE, OP_BAR, OP_RECT, OP_FRAME, OP_FILL, OP_COPY,
-       OP_FLIP, OP_FOCUS, OP_NKIND };
-static const char* const OP_NAME[OP_NKIND] = { "?", "gaf", "gafa", "gafb", "gafd", "scale", "text", "line", "bar", "rect", "frame", "fill", "copy", "flip", "focus" };
+       OP_FLIP, OP_FOCUS, OP_DIAG, OP_NKIND };
+static const char* const OP_NAME[OP_NKIND] = { "?", "gaf", "gafa", "gafb", "gafd", "scale", "text", "line", "bar", "rect", "frame", "fill", "copy", "flip", "focus", "diag" };
 typedef struct OP {
     unsigned base; short l, t, r, b; unsigned char kind;
     /* what the publisher needs beyond the box (gui-renderer.md 3.6) */
@@ -1557,6 +1563,23 @@ static void publish(unsigned flipSurf)
            `OP::clipped` for why, which is the `&& !op->clipped` below. */
         if (op->kind == OP_RECT && !op->clipped) {
             o = pub_op(PK_RECT, s->base); if (!o) return;
+            o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
+            o->fg = op->col;
+            pub_commit();
+            continue;
+        }
+        /* AN AXIS-ALIGNED LINE IS A SOLID FILL ONE PIXEL THICK. [The
+           vulkan-only plan, landing 8c.] `before_line` has already decided
+           axis-aligned from the ENDPOINTS, so the box here is the line itself
+           and `PK_BAR` describes it exactly -- same packet, same twin fill,
+           same `vkCmdClearAttachments`, and NO new op kind for either consumer
+           to miss. That last part is deliberate: a kind missing from one
+           enumeration is this file's characteristic silent bug, and an
+           axis-aligned line and a bar are the same draw.
+           `OP_DIAG` is NOT here and keeps `as_pixels`: its box is the square
+           the line crosses, not the line. */
+        if (op->kind == OP_LINE && !op->clipped) {
+            o = pub_op(PK_BAR, s->base); if (!o) return;
             o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
             o->fg = op->col;
             pub_commit();
