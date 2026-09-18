@@ -2876,9 +2876,12 @@ complete frame at 0 magenta of 786 432, and `tagpu_terr.ab` alone writing a 2048
 reports, with the seam's `tagpu_vk_ui_composited()` as the second half of the answer, so the
 engine's own cursor is no longer suppressed on a frame that composited nothing. Counted rather than
 claimed — `held=1` at the shell, `held=3` after a walk into a game. **GATE 4 IS COMPLETE.** The
-plan's next item is landing 6, the build ghost and the `otherDraws` stand-down, which is the largest
-remaining hole in the lane's world: while a building placement is open the Vulkan unit pass draws
-nothing at all. Filed as one row — the fourth backend,
+plan's next item is landing 8. [A previous version of this paragraph named landing 6, the build
+ghost and the `otherDraws` stand-down, as the next item and as "the largest remaining hole in the
+lane's world". **That was wrong twice**: landing 6 is marked done 2026-09-17 in the plan's own
+entry, and `tagpu_vk_unit.c` says in place that the `otherDraws` stand-down is *"NOT THE BUILD
+GHOST since landing 6: it is carried, and drawn by `tagpu_vk_unit_record_ghosts`"*. Corrected
+2026-09-18 — read a plan entry to its end before reporting its state.] Filed as one row — the fourth backend,
 `renderer=vulkan`, the `ss` target, TA's surface, and route D's deletion — it comes apart along
 four seams the code already has: **4a** the thread and the present, **4b** the per-frame driver
 (the gathers run and the GL draws stand down), **4c** the `ss` target and TA's surface upload,
@@ -2970,6 +2973,33 @@ swapchain must not inherit — the exclusive-mode dodge, the extra scanline and 
 `ogl_create`, `SetPixelFormat`, `ogl_release` — and the obvious guess of widening them would have
 given the new backend a phantom scanline and an offset viewport. Checked site by site; the table
 is in §2.48.
+
+**Landing 8 is four landings; 8a landed 2026-09-18** ([gpu-status](gpu-status.html) §2.58).
+`OP_BAR` — the engine's `DrawBar 0x4BF6F0`, 47 callers, the unit health bars among them — stops
+publishing as `PK_PIXELS`, which copies the op's box out of the live engine surface **at the
+flip**, and becomes `PK_BAR`: the box, one palette index, and nothing in the arena. The bytes were
+wrong in two ways and only one of them was size — anything drawn over that box between the op and
+the flip is what they held. The Vulkan half is `vkCmdClearAttachments` on `TAGPU_GUIOP_CLEAR`'s
+path, so it costs no draw slot, no quad and no descriptor set. Measured on `renderer=vulkan` with
+the full play arm set at 1024x768: **`bar 1334` observed, `bars=158` replayed, the frame at 0
+magenta of 786 432**, health bars visibly under each unit.
+
+**The colour field's width was disassembled before the packet carried one** and landed separately
+(`f8c1b6b`): `0x4CCDEA`, the writer every solid UI fill goes through, reads `BYTE PTR [ebp+0x10]`
+on both its paths, so the colour is an 8-bit palette index and the *sign* of the int passed is
+irrelevant — `0x4AA912`'s `0x4BF4D0(panel+0xBC, rect, -0x18)` is index 232, not the shade mode the
+survey had guessed.
+
+**And 8a is 0.02 % of the traffic**, which the row says rather than leaves to be discovered: the
+live census is **`rect 5 396 343`, `line 3 614 453`, `bar 1 334`**. `OP_BAR` went first because it
+is the only one of the five kinds with an unambiguous shape — one engine function, one solid fill.
+The rest come apart along their own unknowns: **8b `OP_RECT`** conflates the *hollow* four-edge
+`DrawTranspRectangle 0x4BF8C0` (written by the store-only Bresenham `0x4CC7AB`) with the focus
+rectangle `0x4BF7B0`; **8c `OP_LINE`** needs the direction bit, because a diagonal's bounding box
+is not the line — [gui-renderer](gui-renderer.html) §20's cyan squares are that fault; **8d**
+`OP_FRAME 0x4BF4D0`, three fills whose layout is not disassembled, and `OP_SCALE`, a scaled blit
+that probably belongs with `PK_SPRITE`. **Not covered by 8a:** `PK_PIXELS` is not closed — four of
+five kinds still publish surface bytes, and the gate's exit condition is unchanged.
 
 ### Not in this phase
 

@@ -10033,6 +10033,125 @@ after the composite has really run, and since 4d-1 that backend never drives thi
 
 ---
 
+### 2.58 A solid rectangle is a colour and a box — landing 8a of the Vulkan-only plan
+
+**LANDED 2026-09-18.** The first part of landing 8, and the only one of its five op kinds whose
+shape is unambiguous.
+
+#### The gap: the bytes were both larger than the op and later than it
+
+`tagpu_gui_hook.c`'s observer records `OP_BAR` from `DrawBar 0x4BF6F0` — a clipped solid fill,
+edges inclusive, 47 callers, the unit health bars among them. `publish()` had no case for it, so
+it fell through `as_pixels:` to `PK_PIXELS` + `pub_surface_bytes`: **a `memcpy` of the op's box
+out of the live engine surface, taken at the FLIP.** Two things are wrong with that and only one
+of them is size.
+
+- **Later than the op.** The op happened inside `DrawBar`; the copy happens when the engine flips.
+  Anything drawn over that box in between is what the bytes hold, so the twin receives a picture
+  of the *final* surface cropped to an *earlier* op's rectangle.
+- **Larger than the op.** A 35×5 health bar is 175 bytes of arena for a fill that is one index.
+
+This is §20 of [gui-renderer](gui-renderer.html)'s chain — the cyan squares — with the same first
+three links and a different fourth. There the box was a line's bounding box and the bytes it
+scooped up were the terrain key; here the box is right and the bytes are still the wrong ones.
+
+#### One byte is the whole colour, and that is the engine's width, not a choice
+
+Landing 8a is a packet with a colour field in it, so the field's width had to be **established
+rather than assumed**, and that was done first and landed separately (`f8c1b6b`,
+[exe-reverse-engineering](exe-reverse-engineering.html)). `DrawBar` clips with `0x4BF620` and
+writes with `0x4CCDEA`; so do `DrawTranspRectangle 0x4BF8C0`, the framed box `0x4BF4D0` and the
+focus rectangle `0x4BF7B0`. `0x4CCDEA` has two paths and **both read `BYTE PTR [ebp+0x10]`** — the
+4-aligned one builds a DWORD of four copies of it for `rep stos DWORD`, the unaligned one does
+`rep stos BYTE al`.
+
+**So a negative colour is not a mode.** `0x4AA912` calls `0x4BF4D0(panel+0xBC, rect, -0x18)`,
+which reads like a special encoding and is not: `0xFFFFFFE8` truncates to `0xE8`, palette index
+232. The survey that preceded this landing flagged that argument as a signed int that might carry
+a shade mode; the disassembly says it cannot. `TAGPU_PUBOP::fg` is one `unsigned char` and that is
+exactly what the engine keeps.
+
+#### Five parts, because the consumer has two layers
+
+| part | file | what it is |
+|---|---|---|
+| capture | `tagpu_gui_leaves.h` `rect_box` | `s_lastOp->col = (unsigned char)ARG(e, 3)`, taken while the engine is inside the call |
+| packet | `tagpu_gui_int.h`, `tagpu_gui_hook.c` | `PK_BAR` — the box in `l,t,r,b`, the index in `fg`, **nothing in the arena** |
+| GL twin | `tagpu_gui_surf.c` `twin_fill` | scissored `glClear` to (index, coverage 1) in the RG pair |
+| mirror op | `tagpu_gui_surf.c` `drain` | `TAGPU_GUIOP_BAR`, recorded where the op is APPLIED |
+| Vulkan draw | `tagpu_vk_gui.c` `prepare` | `vkCmdClearAttachments` over the rect |
+
+**The capture uses the decoration `gaf_box` and `before_copy` already make**, and its safety is the
+one those rest on: every early return in `op_add` leaves `s_lastOp` NULL, so a clipped-away or
+surface-less op cannot write its colour into the *previous* op. That is an ordering the producer
+already guarantees, not a new one.
+
+**`twin_fill` is `twin_clear`'s shape with two differences**, both stated in place: the index goes
+in RED (the twin is RG — index and coverage) and GREEN is **1**, because this op *covers* what it
+fills where a clear *uncovers* it. It is pure GL and returns immediately under
+`tagpu_vk_owns_present()`, for `twin_clear`'s reason — it feeds nothing the Vulkan twin is told;
+the mirror op beside the call is what does that.
+
+**The Vulkan half shares `TAGPU_GUIOP_CLEAR`'s path, and that is the cheap part.** Both are
+`vkCmdClearAttachments` over a rect, so neither takes a draw slot: **no quad, no descriptor set,
+and not counted against `DRAW_MAX`/`QUAD_MAX`.** The index attachment is `VK_FORMAT_R8G8_UNORM`,
+so `clearValue.color.float32[0]` and `[1]` are index and coverage — `fg/255` and `1.0`. The
+**colour attachment still goes to zero on both kinds**, for CLEAR's own stated reason: a solid
+engine fill has no restored art under it, and leaving old colour standing would show it through a
+box the engine has just painted over.
+
+#### Measured, and then the honest part
+
+| measured, `renderer=vulkan`, full play arm set, 1024x768 | |
+|---|---|
+| ops observed in one live game (census) | **`bar 1334`** |
+| replayed as geometry (`bars=` in the GUI heartbeat) | **158** |
+| the frame | **0 magenta of 786 432** — the health bars visibly under each unit |
+
+**And this is 0.02 % of the traffic.** The same census reads **`rect 5 396 343`** and
+**`line 3 614 453`** against that `bar 1 334`. `OP_BAR` was taken first because it is the only one
+of landing 8's five kinds with an unambiguous shape — one engine function, one solid fill — where:
+
+- **`OP_RECT` conflates two engine functions**: `DrawTranspRectangle 0x4BF8C0` is *hollow*, four
+  edges through `0x4CC7AB` rather than one fill through `0x4CCDEA`, and the focus rectangle
+  `0x4BF7B0` is a third shape again.
+- **`OP_FRAME` (`0x4BF4D0`) is three fills** whose layout is not disassembled: the engine map has
+  the call counts (`0x4BF620` ×3, `0x4CCDEA` ×2) and not which rectangle each one covers.
+- **`OP_LINE` needs the direction bit**, because a diagonal's bounding box is not the line — which
+  is precisely the fault §20 of [gui-renderer](gui-renderer.html) traced.
+- **`OP_SCALE` is a scaled blit** and probably belongs with `PK_SPRITE` rather than with these.
+
+So 8a proves the mechanism end to end at a volume that does not matter. **The volume is in 8b
+(rect) and 8c (line)**, and this section exists partly so the next session does not read "landing
+8 has started" as "landing 8 is nearly done".
+
+#### Not covered
+
+- **Four of the five op kinds still publish surface bytes.** `OP_LINE`, `OP_RECT`, `OP_FRAME` and
+  `OP_SCALE` are unchanged, and with them the whole of the ~9 M ops a game that made landing 8
+  worth filing. `PK_PIXELS` is not closed; one kind left it.
+- **The GL twin's half is untested on the shipped lane and always will be.** `twin_fill` returns
+  at its first statement under `renderer=vulkan`, and since 4d-1 there is no two-lane oracle to
+  compare the GL twin against. The 0-magenta figure above is the Vulkan path alone; the GL path is
+  argued from `twin_clear`'s shape, not measured against it.
+- **`bars=158` against `bar 1334` is not a defect, and the reason is the publisher's dedup.**
+  Both are cumulative since process start — `s_kindTotal[OP_BAR]` in the observer, `s_bars` in the
+  drain, neither ever reset — but they count different things either side of `publish()`. The
+  observer counts every `DrawBar` the engine makes; `publish()` **keeps only the LAST of any run of
+  identical ops** in a batch (`tagpu_gui_hook.c:1089`, measured at ~41 redraws a flip in the
+  shell), and a stationary unit at unchanged health redraws the same bar every flip. `bars=`
+  further counts only ops whose surface still has a twin. The two lines also print on different
+  cadences — `gui:` every 300 frames, `GUI kinds:` every 600 — so they are not read at the same
+  instant either. Nothing in this landing needs them to agree; the ratio is stated so the next
+  reader does not take it for a loss.
+- **`gui.on=strict` renders the units as the lane's clear colour on this build.** Observed while
+  measuring 8a, **pre-existing and untouched by it** — plain `gui.on` on the same binary is 0
+  magenta. It is recorded here because it was first misread as a regression of this landing: two
+  variables had been changed at once. Unexplained, and it belongs to whichever landing next has a
+  reason to arm `strict` as its oracle — which landing 8's plan entry does.
+
+---
+
 ## 4. What the work taught us
 
 These are the transferable parts — the reasons things are shaped the way they are.

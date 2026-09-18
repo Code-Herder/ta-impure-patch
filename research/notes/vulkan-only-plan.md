@@ -1271,6 +1271,44 @@ Back to the filed list:
    `OP_FRAME` and `OP_SCALE` publish through `pub_surface_bytes` at `:1489` — *the engine's
    surface bytes as they stand at the flip*. They become drawn geometry with their own packet
    kinds. Oracle: `strict`.
+
+   **This is LANDING 8a OF FOUR, and the split is the op kinds' own** — each is a different engine
+   function with a different shape, and one packet kind per landing is the smallest thing that can
+   be run and measured. **8a LANDED 2026-09-18** ([gpu-status](gpu-status.html) §2.58): `OP_BAR`,
+   the engine's `DrawBar 0x4BF6F0`, becomes `PK_BAR` — a box and one palette index, nothing in the
+   arena — replayed by `vkCmdClearAttachments` on `TAGPU_GUIOP_CLEAR`'s path, so it takes no draw
+   slot, no quad and no descriptor set. Five parts, because the consumer has two layers: the
+   observer's colour capture, the packet kind, the GL twin's `twin_fill`, the mirror op, and the
+   Vulkan draw. Measured on `renderer=vulkan` with the full play arm set at 1024x768: **`bar 1334`
+   observed, `bars=158` replayed, the frame at 0 magenta of 786 432** with the health bars under
+   each unit.
+
+   **The colour field's width was established before the packet carried one** and landed separately
+   (`f8c1b6b`): `0x4CCDEA`, the writer all four solid-fill entry points share, reads
+   `BYTE PTR [ebp+0x10]` on both of its paths, so the colour is an 8-bit palette index and the sign
+   of the int passed is irrelevant — `0x4AA912`'s `0x4BF4D0(panel+0xBC, rect, -0x18)` is index 232,
+   not a shade mode as the survey had guessed.
+
+   **8a is 0.02 % of the traffic and the plan should say so.** The live census is
+   **`rect 5 396 343`, `line 3 614 453`, `bar 1 334`**. `OP_BAR` went first because it is the only
+   one of the five with an unambiguous shape — one engine function, one solid fill. The rest, in
+   the order their unknowns have to be answered:
+
+   * **8b — `OP_RECT`.** The volume, and it conflates two engine functions:
+     `DrawTranspRectangle 0x4BF8C0` is **hollow**, four edges through the store-only Bresenham
+     `0x4CC7AB` and not one fill through `0x4CCDEA`, and the focus rectangle `0x4BF7B0` is a third
+     shape again. Disentangling those three is 8b's first act.
+   * **8c — `OP_LINE`.** The other half of the volume. It needs the **direction bit**: the observer
+     records a line's axis-aligned bounding box, and a diagonal's bounding box is not the line —
+     which is exactly the fault [gui-renderer](gui-renderer.html) §20 traced to cyan squares.
+   * **8d — `OP_FRAME` (`0x4BF4D0`) and `OP_SCALE`.** The framed box is three fills whose layout is
+     not disassembled (the engine map has `0x4BF620` ×3 and `0x4CCDEA` ×2 and not which rectangle
+     each covers). `OP_SCALE` is a scaled blit and probably belongs with `PK_SPRITE` rather than
+     with these — deciding that is part of 8d rather than assumed here.
+
+   **Not covered by 8a:** `PK_PIXELS` is not closed — one kind of five left it, and the other four
+   still publish surface bytes at the flip. The gate's exit condition is unchanged and 8a does not
+   meet it.
 9. **Seeds carry art.** A `PK_SEED` is published lazily on first touch
    (`tagpu_gui_hook.c:1289/1300/1332`) because we cannot know how a surface got its contents.
    The fix is to make the engine redraw: `gui-renderer.md:55` has the panel as a pre-rendered
