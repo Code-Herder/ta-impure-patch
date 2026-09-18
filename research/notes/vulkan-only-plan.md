@@ -1566,15 +1566,30 @@ Back to the filed list:
    `openglshader.h`, `render_ogl.h`, and **`tagpu_restoreglsl.c`**. `renderer=gdi` becomes the
    documented stock reference.
 
-   **BLOCKED ON LANDINGS 10b AND 10c** (*What the seam has to grow* below): the structure-shadow
-   gate, and the fact that **no `tacli` verb works on the gdi lane at all** — the on-demand
-   trigger family is called only from `tagpu_overlay_draw`, which only the GL and Vulkan backends
-   call. Until 10c, this item's exit condition ("`renderer=gdi` becomes the documented stock
-   reference") cannot be checked by anything we have.
-   `renderer=gdi` is not stock today, and the survey narrowed that from a class of suppressors to
-   exactly two bytes: the `je`->`jmp` pair at `0x4592C6`/`0x45952C`, which has no runtime gate to
-   be inert through, so the gdi lane draws no structure shadows and nothing of ours draws them
-   either. This item's headline claim is false until that is fixed.
+   ~~**BLOCKED ON LANDINGS 10b AND 10c**~~ — **BOTH LANDED 2026-09-18, and this item's exit
+   condition can now be CHECKED for the first time.** What the block said:
+
+   > *(the structure-shadow gate, and the fact that no `tacli` verb works on the gdi lane at all —
+   > the on-demand trigger family is called only from `tagpu_overlay_draw`, which only the GL and
+   > Vulkan backends call. Until 10c, this item's exit condition cannot be checked by anything we
+   > have. `renderer=gdi` is not stock today, and the survey narrowed that from a class of
+   > suppressors to exactly two bytes: the `je`->`jmp` pair at `0x4592C6`/`0x45952C`, which has no
+   > runtime gate to be inert through, so the gdi lane draws no structure shadows and nothing of
+   > ours draws them either.)*
+
+   **10b** made the two `je`s gated detours, so the gdi lane draws the engine's structure shadows
+   again and the pair is inert there. **10c** put the trigger family and input's token half on the
+   engine's flip, so `tacli ui`, `peek`, `units`, `features`, `scenario`, `click` and `keys` all
+   answer on that lane — the lane can be observed **and driven**.
+
+   **BUT THE HEADLINE CLAIM IS STILL FALSE, FOR A DIFFERENT REASON, AND THIS ITEM OWNS IT.**
+   `renderer=gdi` is not *stock as a lane*: `tagpu_apply_patches()` applies three patches with no
+   runtime gate at all, and the `tagpu_curs` pair (`0x43E50C`, `0x499041`) changes input semantics
+   gated only by a file. Two further things do not reach gdi and are the **command channel**, not
+   the trigger family: the camera hold (`tacli eye`) and `tacli wheel` both ride the record
+   `tagpu_cmd_post` publishes, and that is called only from `tagpu_zoom_frame_end`, inside
+   `tagpu_overlay_draw`. Deciding what "stock" means against those four facts is this item's work,
+   and it is the part 10b and 10c did not do for it.
 
    **AND THE HEADERS, WHICH THIS ITEM LISTED AS "UNCHECKED", CHANGE ITS SIZE** [surveyed
    2026-09-18; the survey's own first pass was wrong, see the method note below]. The six files
@@ -1837,16 +1852,63 @@ focus=SINGLE
 appeared"*. `tacli units` answers there too, and the GL lane was re-checked for regression and is
 unchanged.
 
-**The driving half is landing 10c-2, and it is one function.** `tagpu_input_frame` stays on the
-render thread because it is the only one that dereferences `f->packet` — through `do_eye` — and
-the flip has no packet to hand it. `tagpu_packet_acquire` *consumes*, so giving it one means
-adding a read-only accessor to the packet exchange, which is a subsystem with its own invariants
-and deserves its own landing rather than a corner of this one. Until then `renderer=gdi` can be
-**observed** but not **driven**: `tacli ui`, `peek`, `units`, `features` and the scenario
-detection work; `click`, `keys` and anything built on injected input do not.
+**LANDING 10c-2 IS DONE AND THE GATE IS CLOSED [2026-09-18]: `renderer=gdi` CAN BE DRIVEN.**
+`tagpu_input.c` was **split on the packet**, not moved. Its token half — `tagpu_input_frame`:
+`tagpu_keys.txt`, the injected pointer, the shield's held-modifier expiries — reads no packet, so
+it joined the family and runs from the flip on the game thread. Its camera hold became
+`tagpu_input_eye_frame` and stayed in `tagpu_overlay_draw` on the render thread, where `f->packet`
+exists and where its answer is read.
 
-**10c-2's DESIGN, and it is smaller than "add an accessor to the packet exchange" sounds**
-[verified read-only 2026-09-18]:
+**Measured on both lanes.**
+
+| lane | what was run | result |
+|---|---|---|
+| gdi | `tacli ui` → `click 187 403` → `keys esc` → `keys s` | `MAINMENU.GUI` → `SINGLE.GUI` → `MAINMENU.GUI` → `SINGLE.GUI`. Before this, clicks and keys did nothing at all there |
+| vulkan | `tacli scenario load … --restart` | drove the menus **by click** into a live *Two Continents* game, `applied 5 of 5` |
+| vulkan | `tacli eye 2400 2400`, then `1200 1200`, then `--release` | eye is **exactly** the point asked for, both times; after the release the camera edge-scrolled 1200 → 1904 → 6704 and stopped when the pointer left the edge |
+
+`viol=0 pviol=0 foreign=0`, no `ErrorLog.txt`.
+
+**THE DESIGN BELOW WAS WRONG AND THE LANDING DOES NOT IMPLEMENT IT.** It is kept because the
+reasoning that replaced it is only legible against it. `tagpu_packet_pub_last()` was to give
+`do_eye` a packet on the game thread — and the accessor's own analysis is still correct as far as
+it goes. What it never asked is **who reads `do_eye`'s output**:
+
+* `do_eye` writes `s_eyeHold`, `s_holdX`, `s_holdY`, `s_holdValid`. The only readers are
+  `tagpu_input_cmd()` and `tagpu_input_eye_held()`, and the only caller of the first is
+  `tagpu_zoom_frame_end()` — which is called from four places, **all inside `tagpu_overlay_draw`**.
+* So moving the poll to the game thread would have made four words cross-thread in order to serve
+  a consumer that is not on the other side. That is the exact class `CLAUDE.md` singles out, paid
+  for nothing.
+* And on the gdi lane it would still have delivered **nothing**: the hold reaches the game thread
+  only through `tagpu_cmd_post`, which `tagpu_zoom_frame_end` calls — so on a lane with no overlay
+  frame there is no command record, and a hold that were read could not be applied. The camera
+  hold cannot work on gdi until the *command channel* moves, and that is not this gate.
+
+**The line the split actually follows is the one the family was already drawn on**: a consumer
+that dereferences `f->packet` cannot be called from `before_flip`, because that frame has none.
+`tagpu_input.c` had one function on each side of that line and was being treated as if it had one.
+No accessor, no lock, no new cross-thread state — and each half keeps its own poll counter, so
+each runs at the cadence of the clock it is handed (62.5/s from the flip's time gate, the render
+frame counter in the overlay).
+
+**Two safety arguments the landing rests on, both by construction:**
+
+* **No reentrancy.** Every injection leaves `do_keys` by `PostMessageA` (a tagged `WM_TAGPU_*`) or
+  by `SendInput`; there is no `SendMessage` on any path out of it. A token handled inside the flip
+  detour is therefore *delivered* by the engine's own message pump afterwards — it cannot be
+  dispatched into the wndproc halfway through a present.
+* **A lifetime.** `s_frame` points at the caller's `TAGPU_FRAME`, and on the game thread that is
+  `before_flip`'s **stack**. It is now set immediately before `do_keys` and cleared immediately
+  after; every reader (`si_mouse`, and the park in `inject_click_at`) is reached from `do_keys` and
+  from nowhere else.
+
+**What 10c does NOT close:** the camera hold, `tacli wheel` and anything else riding the command
+record still do not reach `renderer=gdi`, because `tagpu_cmd_post` is only called from the overlay
+frame. That is a property of the command channel, not of the trigger family, and it is landing
+11's business.
+
+**10c-2's SUPERSEDED DESIGN, kept as the record** [written 2026-09-18, replaced the same day]:
 
 * **`tagpu_packet_acquire` must never be called from the game thread**, and not merely because it
   consumes. It records `m->consTid` and logs a *"consumer thread N -> M (thread restarted)"* line
@@ -1869,6 +1931,13 @@ detection work; `click`, `keys` and anything built on injected input do not.
   not this one's. For `do_eye` — which wants `in_game` and the camera eye — one flip of staleness
   is almost certainly fine, but it has to be *stated* rather than discovered: the alternative is to
   call the family from `after_flip` instead, which the same observer already provides.
+
+**The transferable lesson, and it is not "the accessor was hard".** Every bullet above is *true*.
+The design failed on a question it never asked: **where is this value consumed?** Four of the five
+bullets reason about the producer — the exchange's bookkeeping, the publisher's thread, the
+staleness window — and none of them follows `s_eyeHold` forward to `tagpu_input_cmd`, which is one
+`grep` away and settles it in a line. A move is not decided by what the code being moved reads; it
+is decided by what reads the code being moved.
 
 **The paragraph below is what this replaced, kept because its reasoning is the record.**
 

@@ -3114,18 +3114,24 @@ after) and is the wrong instrument anyway, since it times the GPU and the larger
 removed is a host memcpy. Also measured, and useful beyond this landing: **the shell varies against
 itself by 181–191 px between captures**, so it is not a pixel oracle; the in-game frame is.
 
-**10b BUILT, REVIEWED THREE TIMES, NOT LANDED as of 2026-09-18** ([gpu-status](gpu-status.html)
-§2.63) — it is on `worktree-perf_issue`, twelve commits ahead of `main`, and it is held at the
-review gate rather than by anything unfinished. **Three consecutive dedicated reviews each
-returned a real HIGH in the same twenty lines**, every one of them a genuine silent fault about to
-ship, every one fixed: the gate asked *is the pass armed*; then *is a painter configured*, with an
-either/or over two painters that both need `tagpu_posedraw_ready()`; then *did the cast-shadow map
-get built*, which is a caster pass and not a receiver. The bar in `CLAUDE.md` is three
-fix-and-re-run attempts per gate, and they are spent, so the fourth round is the owner's call
-rather than a session's. **This entry said "LANDED" for three review rounds before this correction
-— written by the landing's own documentation pass, which by design runs before the review. That is
-fine when the review passes the same day and wrong the moment it does not, which is the first time
-this workflow has been tested by a landing that took three rounds.** — **the one suppression in
+**10b LANDED 2026-09-18 on local `main` (`a305e08`, 18 commits), after FIVE review rounds**
+([gpu-status](gpu-status.html) §2.63). **Three consecutive dedicated reviews each returned a real
+HIGH in the same twenty lines**, every one a genuine silent fault about to ship, every one fixed:
+the gate asked *is the pass armed*; then *is a painter configured*, with an either/or over two
+painters that both need `tagpu_posedraw_ready()`; then *did the cast-shadow map get built*, which
+is a caster pass and not a receiver. The bar in `CLAUDE.md` is three fix-and-re-run attempts per
+gate and they were spent, so the fourth round went to the owner, who authorised it. **Rounds 4 and
+5 found no HIGH in the code** — round 4 disproved one of my own claims (*"no picture is possible"*
+was backwards: the composite discards **our** fragment where the engine's surface is not the key
+index, so the engine's pixel wins) and that led to the A/B that finally photographed the fault:
+**8 779 px of opaque teal (0,128,128)** inside a key-filled viewport before the gate, **0 after**,
+and 0 again after the two-input rework. Round 5 caught the rework publishing one term a frame
+late, worth up to two teal frames per terrown acquisition.
+
+**This entry said "LANDED" for three review rounds before that correction** — written by the
+landing's own documentation pass, which by design runs before the review. That is fine when the
+review passes the same day and wrong the moment it does not, which is the first time this workflow
+was tested by a landing that took three rounds. — **the one suppression in
 `tagpu_owndraw.c` that had no runtime gate**, and 11 was blocked on it. `renderer=gdi` is this
 project's documented stock reference, and it was not stock: `tagpu_owndraw.on` is a play default,
 and its two structure-shadow `je`s were flipped to `jmp`s at `DllMain` for the life of the
@@ -3135,6 +3141,38 @@ flag `tagpu_native_frame` publishes every frame it runs — and since `tagpu_ove
 called only from `render_ogl.c:1632` and `render_vk.c:232`, and `render_gdi.c` contains no
 `tagpu_` call at all, the flag stays 0 on the gdi lane and the engine draws its own shadows by
 construction.
+
+**10c LANDED THE SAME DAY, in two parts, and it is the reason 10b could be photographed on the
+lane it is about.** No `tacli` verb worked on `renderer=gdi` at all: the whole on-demand trigger
+family — peek, the weapon dump, the GUI snapshot, the unit/feature catalogues, scenario detection
+— was called from `tagpu_overlay_draw` and nowhere else, and that is reached only from
+`render_ogl.c` and `render_vk.c`. So the stock reference lane could not be observed, driven, or
+measured.
+
+* **10c-1** moved the five that need no frame packet onto the engine's own flip (`0x4C63A0`,
+  already observed by `tagpu_gui_hook.c`), on the game thread. Its first review returned a HIGH
+  worth the whole round: `s_flips` is not a frame counter — these throttle on `% 5` written
+  against the ~60/s present rate and **the shell flips ~12 000 times a second**, so five
+  file-writing observers had just been sped up ~100×. Fixed with a 16 ms QPC gate and its own
+  counter. The second round found no HIGH and verified the hazard row this landing closes by
+  independent sweep rather than by reading the row.
+* **10c-2** split `tagpu_input.c` **on the packet**: its token half (keys, clicks, the shield's
+  expiries) joined the family; its camera hold stayed on the render thread, where `f->packet`
+  exists and where its answer is read back. The plan had prescribed a new `tagpu_packet_pub_last()`
+  accessor instead — which would have made four words cross-thread to serve a consumer that is not
+  on the other side, and still delivered nothing on gdi, since the hold reaches the game thread
+  only through `tagpu_cmd_post` and that is called from the overlay frame too. **A move is decided
+  by what reads the code being moved, not by what the code being moved reads**, and the superseded
+  design never asked that question.
+
+**Measured:** on gdi, `tacli click` takes `MAINMENU.GUI` to `SINGLE.GUI` and `keys esc` comes back
+— before this, neither did anything there. On Vulkan, no regression: `scenario load` drove the
+menus by click into a live game, and the camera hold is exact and releases cleanly.
+
+**What 10c did NOT close, and landing 11 owns it:** `renderer=gdi` is still not stock *as a lane*
+(three unconditional patches in `tagpu_apply_patches()`, plus the `tagpu_curs` pair at `0x43E50C`
+/ `0x499041`, which changes input semantics and is gated only by a file), and `tacli eye` /
+`tacli wheel` still do not reach it, because the command channel is posted from the overlay frame.
 
 **What the survey corrected on the way**, and it is the more useful half: the first pass read
 `owndraw:`'s arming line — which ends *"(engine rasterise skipped for target; writeback must
