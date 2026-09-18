@@ -1845,6 +1845,28 @@ and deserves its own landing rather than a corner of this one. Until then `rende
 **observed** but not **driven**: `tacli ui`, `peek`, `units`, `features` and the scenario
 detection work; `click`, `keys` and anything built on injected input do not.
 
+**10c-2's DESIGN, and it is smaller than "add an accessor to the packet exchange" sounds**
+[verified read-only 2026-09-18]:
+
+* **`tagpu_packet_acquire` must never be called from the game thread**, and not merely because it
+  consumes. It records `m->consTid` and logs a *"consumer thread N -> M (thread restarted)"* line
+  when it changes; it raises the `"acquire twice in one frame"` violation through `m->inFrame`;
+  and it `XCHG`s a slot out of the cell, taking it from the render thread. Any one of those three
+  is a corruption of the exchange's own bookkeeping, so the accessor has to be a new one.
+* **But the accessor needs no synchronisation at all, because the publisher is already the game
+  thread.** All three publish sites are in `tagpu_packet_pub.c`, whose header says the publish
+  happens *"on the game thread, inside an engine call, at a site that owns what it reads"* — and
+  `before_flip` is the same thread. So "the slot I last published" is an **intra-thread ordering**
+  question, not a race: the flip comes after that frame's publish and before the next one, so the
+  slot cannot have been reclaimed and rewritten underneath the reader.
+* So 10c-2 is a read-only `tagpu_packet_pub_last()` returning the producer's last committed
+  record, documented as **valid only on the producer's own thread, and only until its next
+  publish** — which is exactly the window `before_flip` sits in. No new lock, no new ordering, and
+  nothing the render thread can observe.
+* The one thing to check when writing it: the shell publishes from `fill_shell`, whose publish
+  point is the flip's own cursor draw (`0x4C67C0`). That is very close to `before_flip`, so
+  establish which of the two runs first rather than assuming.
+
 **The paragraph below is what this replaced, kept because its reasoning is the record.**
 
 **AND `renderer=gdi` CANNOT BE DRIVEN OR MEASURED BY OUR OWN TOOLING AT ALL — landing 10c, and
