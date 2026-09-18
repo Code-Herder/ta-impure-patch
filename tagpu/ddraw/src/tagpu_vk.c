@@ -20,8 +20,17 @@
      D  route 3: Vulkan on its OWN            ok                    ok
         top-level window
 
-   So THIS FILE TAKES ROUTE D, and the other two are not fallbacks -- they are
-   broken on the wine the dev loop builds prefixes with.
+   THAT TABLE IS THE RECORD OF A CHOICE THIS FILE NO LONGER MAKES. It took
+   route D -- Vulkan on a top-level window of its own -- for as long as a GL
+   backend could be in the same process, and the vulkan-only plan's landing 4d-1
+   deleted that arrangement. What it takes now is the surface straight on the
+   GAME window, which is the table's route A, and the row above marks route A
+   PIXELS DEAD on wine. THE REASON THAT IS SAFE HERE IS NOT IN THE TABLE: route
+   A's failure is winevulkan taking an HWND over so that GL can never draw to it
+   again, and on this path THERE IS NEVER A GL CONTEXT IN THE PROCESS to lose.
+   `renderer=vulkan` is dispatched at `dd.c` and cannot change afterwards. The
+   table is kept because it is what was measured, and because the out-of-process
+   64-bit renderer will own a window again.
 
    THE API LIED, AND THAT IS THE POINT OF THE SECOND SCRIPT. Routes A and B
    return VK_SUCCESS for every call, present 10 of 10 frames, and then accept
@@ -34,24 +43,19 @@
    with it. Once winevulkan has put a surface on an HWND, that HWND is finished
    for GL for the life of the process.
 
-   WHAT ROUTE D COSTS, and why it is worth it anyway. Vulkan gets a window of
-   its own, owned by the game's, sized to its client area and kept there -- so
-   there is a second HWND to create, track, show, hide and destroy, and that is
-   real machinery where route A was none. In exchange:
-
-     - THE GL LANE IS NEVER TOUCHED, so the lever is two-way and the menu keeps
-       its invariant that no row needs a relaunch. On route A, arming Vulkan
-       once would have killed the GL renderer for the session.
-     - it is the shape the phase is heading for anyway. The out-of-process
-       64-bit renderer owns its own window by definition, so the tracking below
-       is the work that move needs, written early rather than twice.
+   WHAT ROUTE D COST WHILE IT LASTED, and why it was worth it then: a second
+   HWND to create, track, show, hide and destroy -- real machinery where route A
+   was none -- in exchange for never touching the GL lane, so the lever was
+   two-way and the menu kept its invariant that no row needs a relaunch. That
+   trade ended when the GL lane stopped being in the process at all, and landing
+   4d-1 removed the machinery (152 lines in, 370 out). The one thing it bought
+   that still matters: the out-of-process 64-bit renderer will own its own window
+   by definition, so the tracking was written once rather than twice, and it is
+   in the history when that move needs it.
 
    WHAT IS NOT ESTABLISHED, and it is the honest limit: every row of that table
-   is the linux NVIDIA ICD under wine. No Windows box has run it, and on Windows
-   route A may well be fine -- winevulkan's HWND takeover is a wine-side
-   mechanism. Route D is correct on both regardless, which is why it is not
-   worth a per-platform branch. The cell that would close it is the `_local`
-   test VM.
+   is the linux NVIDIA ICD under wine. No Windows box has run it. The cell that
+   would close it is the `_local` test VM.
 
    ------------------------------------------------------ WHERE IT RUNS, AND WHY
    THE BRING-UP IS ON A WORKER THREAD OF ITS OWN, AND NOT NEGOTIABLE.
@@ -563,7 +567,13 @@ static volatile LONG s_ownGone;
 void tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
     (void)hwnd; (void)wparam; (void)lparam;
-    if (msg != WM_DESTROY) return;
+    /* AND ONLY WHEN THERE IS A LANE TO BRING DOWN. [FROM THE 4d-1 LANDING
+       REVIEW.] The `s_ownWin` test used to sit in front of the whole switch and
+       went with it; without it this appended a line naming a lane and a render
+       thread that do not exist to every `tagpu.log` on the DEFAULT renderer,
+       with no Vulkan lever present at all. It also restores the symmetry the
+       two readers of `s_ownGone` already have. */
+    if (msg != WM_DESTROY || !s_ownWin) return;
     InterlockedExchange(&s_ownGone, 1);
     vklog("window: the game window is being destroyed - the lane comes down on "
           "the render thread's next frame");
@@ -3179,11 +3189,6 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
            on every path that destroys the game window, so refusing here is a
            stop rather than a wait. */
         if (s_ownWin && s_ownGone) return 0;
-        /* THE WINDOW FIRST, AND ON THE OTHER THREAD. Ours is created by the
-           window thread from a posted message; this frame asks and the next
-           one finds it. That is an ordering, not a wait -- the render thread
-           never blocks on the window thread, which in a lockstep game is the
-           deadlock this whole file is arranged to avoid. */
         s_owner = hwnd;
         /* THE CALLER'S WINDOW, AND NOTHING ELSE. Before landing 4d-1 this chose
            between the game window and a popup of ours, and asked another thread
@@ -3229,15 +3234,14 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
     }
 
     /* Three things force the whole lane down and back up through the worker:
-       the game window changed (a mode switch), OUR window went away (the
-       owner's WM_DESTROY takes it), or the player picked another GPU. Each
-       invalidates the surface or the device, and neither is patchable in
-       place -- and going back through the worker is what keeps every bring-up
-       off the render thread, not just the first. */
-    /* "OUR WINDOW WENT AWAY" IS NOT A CASE WHEN WE HAVE NO WINDOW, and since
-       landing 4d-1 we never do. A window change is exactly an owner change,
-       which the first test is; the second is the owner dying under us, which
-       only the wndproc observer can see (`s_ownGone`). */
+       the game window CHANGED (a mode switch), the game window was DESTROYED
+       under us (only the wndproc observer can see that -- `s_ownGone`), or the
+       player picked another GPU. Each invalidates the surface or the device and
+       neither is patchable in place; going back through the worker is what keeps
+       every bring-up off the render thread, not just the first.
+
+       THERE USED TO BE A FOURTH -- "our window went away" -- and it is not a
+       case when we have no window. Landing 4d-1 deleted the window. */
     if (hwnd != s_owner || s_ownGone || lane_gen() != s_choiceSeen) {
         vklog(hwnd != s_owner ? "the game window changed - rebuilding" :
               s_ownGone       ? "the game window was destroyed under us - down"

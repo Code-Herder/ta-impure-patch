@@ -3,12 +3,23 @@
 /* tagpu_ftime.h -- WHAT A FRAME COSTS ON EACH LANE, in GPU time (Phase G, G19f
    landing 6).
 
-   THE GATE'S OWN WORDING IS "frame time no worse than GL", AND ROUTE D CANNOT
-   ANSWER IT BY WALL CLOCK. The Vulkan lane draws into a window of ITS OWN,
-   beside the GL lane, in the same iteration of render_ogl.c's loop -- so a
-   frame with the lane armed does BOTH lanes' work and the wall time of one
-   iteration is the sum, never a comparison. What is comparable is the GPU time
-   each lane spends on its own passes, measured on the device by the device.
+   THE GATE'S OWN WORDING IS "frame time no worse than GL", AND WALL CLOCK
+   CANNOT ANSWER IT. What is comparable is the GPU time a lane spends on its own
+   passes, measured on the device by the device.
+
+   IT USED TO BE A ONE-PROCESS COMPARISON AND IT IS NOT ANY MORE. Under route D
+   the Vulkan lane drew into a window of its own beside the GL lane, in the same
+   iteration of render_ogl.c's loop: a frame with the lane armed did BOTH lanes'
+   work, so the wall time of one iteration was their sum while the two GPU
+   brackets were separable and comparable. Landing 4d-1 deleted route D. The two
+   halves can no longer be live in one process -- `report()`'s `vk/gl` ratio,
+   which needs `s_glN > 0 && s_vkN > 0`, is therefore unreachable -- and each
+   lane is now polled from its own backend: GL from render_ogl.c, Vulkan from
+   render_vk.c. **What the numbers support now is a CROSS-BUILD comparison**:
+   this build's Vulkan GPU time against a previous build's, or against a GL
+   figure taken from a build that still had the GL renderer.
+   [THE DELETION OF THE RATIO AND THE SECOND POLL SITE ARE FROM THE 4d-1
+   LANDING REVIEW, which found this module inert on the only surviving lane.]
 
    TIMESTAMPS, NOT SCOPED QUERIES, and that is forced rather than chosen:
    GL_TIME_ELAPSED is a scoped query and only ONE may be active per target, and

@@ -85,6 +85,7 @@
 #include "tagpu_reclaim.h"
 #include "tagpu_menu.h"
 #include "tagpu_vk.h"
+#include "tagpu_ftime.h"
 
 
 /* THE FRAME NUMBER OUTLIVES THE THREAD, and it has to. `dd_SetDisplayMode`
@@ -239,6 +240,21 @@ DWORD WINAPI vk_render_main(void)
             tagpu_menu_present();
         }
 
+        /* THE FRAME-TIME LEVER IS POLLED HERE OR NOWHERE. [FOUND BY THE 4d-1
+           LANDING REVIEW.] `tagpu_ftime_poll` is what sets the module's `s_on`,
+           and until this line it was called from exactly one place --
+           `render_ogl.c` -- which after 4d-1 never drives this lane. So under
+           `renderer=vulkan` the whole instrument was inert for the session: no
+           Vulkan timestamps written (`tagpu_vk.c` gates them on
+           `tagpu_ftime_armed()`), every sample discarded, and not one line in
+           the log. The gate clause it exists for, "frame time no worse than
+           GL", is still open, so the landing that deleted the other lane must
+           not also delete the only way to measure this one.
+
+           WHAT IT CAN AND CANNOT ANSWER NOW is in tagpu_ftime.h: the two-lane
+           ratio is gone with route D, and what is left is this build's GPU time
+           against a previous build's. */
+        tagpu_ftime_poll();
         if (tagpu_vk_frame(g_ddraw.hwnd, g_ddraw.render.width, g_ddraw.render.height,
                            g_config.vsync, fc))
             came_up = 1;

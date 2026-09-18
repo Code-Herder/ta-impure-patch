@@ -269,7 +269,15 @@ int tagpu_terr_armed(unsigned frame_counter)
        it stays asked for the process's life: the flag is what keeps the buffers
        off an ordinary play session, and un-asking it mid-session would only buy
        back memory a re-arm would immediately spend again. */
-    if (!s_mirrorWant && tagpu_vk_armed()) s_mirrorWant = 1;
+    /* ASKED OF THE CONSUMER, NOT OF THE LEVER. [FROM THE 4d-1 LANDING REVIEW.]
+    This used to test `tagpu_vk_armed()`, which is true whenever `tagpu_vk.on`
+    exists -- and these latches are one-way, so once asked the memory is held
+    for the process's life. Until 4d-1 that was right: `tagpu_vk.on` under
+    `renderer=openglcore` brought up route D, which consumed the mirror. Route
+    D is gone, so on that path the lever now arms nothing and the mirror would
+    be paid for with no consumer at all. `tagpu_vk_owns_present()` is exactly
+    "a Vulkan pass will run in this process", which is the question. */
+    if (!s_mirrorWant && tagpu_vk_owns_present()) s_mirrorWant = 1;
     /* AND THE OTHER WAY OF FEEDING THAT LANE: hand it the frame list and let
        it restore, rather than reading our own restore back for it. Latched on
        the same beat and read only when there is a lane to feed. */

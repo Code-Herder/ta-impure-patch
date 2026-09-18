@@ -1479,7 +1479,15 @@ void tagpu_posedraw_frame(unsigned frame_counter)
        re-bakes the inventory once when it does. */
     if ((frame_counter % 30) == 0 || !s_polled) {
         s_polled = 1;
-        if (!s_mirrorWant && tagpu_vk_armed()) s_mirrorWant = 1;
+        /* ASKED OF THE CONSUMER, NOT OF THE LEVER. [FROM THE 4d-1 LANDING REVIEW.]
+        This used to test `tagpu_vk_armed()`, which is true whenever `tagpu_vk.on`
+        exists -- and these latches are one-way, so once asked the memory is held
+        for the process's life. Until 4d-1 that was right: `tagpu_vk.on` under
+        `renderer=openglcore` brought up route D, which consumed the mirror. Route
+        D is gone, so on that path the lever now arms nothing and the mirror would
+        be paid for with no consumer at all. `tagpu_vk_owns_present()` is exactly
+        "a Vulkan pass will run in this process", which is the question. */
+        if (!s_mirrorWant && tagpu_vk_owns_present()) s_mirrorWant = 1;
         s_ab = GetFileAttributesA(PD_ABFILE) != INVALID_FILE_ATTRIBUTES;
         if (!s_ab) s_abDone = 0;
     }

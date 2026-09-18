@@ -9,7 +9,8 @@
    this file is what is replaced; nothing above it changes.
 
    IT READS NO ENGINE STATE AT ALL (standing constraint 1). Every value it needs
-   arrives as an argument from `ogl_render`. It is not on `thread-split.allow`
+   arrives as an argument from `vk_render_main` (render_vk.c), which since the
+   vulkan-only plan's landing 4d-1 is its only caller. It is not on `thread-split.allow`
    and must never need to be.
 
    NEVER CAST A VULKAN HANDLE TO A POINTER (standing constraint 2), store one in
@@ -21,24 +22,24 @@
    THE TWO HALVES.
 
    `tagpu_vk.off` TURNS THE WHOLE FILE OFF, enumeration included, and is the
-   control for any A/B against a DLL built before Phase G: the lane is gated on
-   `tagpu_vk.on`, but the GPU enumeration is NOT (it outlives the lane), so
-   without this there would be no way to ask for the old behaviour exactly.
-   **BOTH OF THOSE SENTENCES ARE ABOUT `renderer=opengl`.** Under
-   `renderer=vulkan` neither lever decides anything (see `tagpu_vk_own_present`
-   below): the lane runs because the renderer choice says so, and `tagpu_vk.off`
-   then only leaves the device list unrefreshed for that launch — which the log
-   says, rather than claiming to have stopped a lane it did not stop. So the
-   "exactly the old behaviour" control is `renderer=opengl` plus this file, not
-   this file alone.
+   control for any A/B against a DLL built before Phase G. **NEITHER LEVER ARMS
+   A LANE ANY MORE.** Landing 4d-1 deleted route D, so `tagpu_vk.on` under
+   `renderer=openglcore` no longer brings anything up: what the lever still does
+   on that path is make `tagpu_vk_armed()` true, which ungreys the menu's GPU
+   row (the choice applies to a launch that picks `renderer=vulkan`). It does
+   NOT get read for its `color=` there -- `read_lever` is only reached from
+   `tagpu_vk_frame` -- and it no longer latches the gather mirrors either, which
+   now ask `tagpu_vk_owns_present()` instead. Under `renderer=vulkan` the lane
+   runs because the renderer choice says so, and `tagpu_vk.off` only leaves the
+   device list unrefreshed for that launch, which the log says.
 
-   G19a -- the bring-up. `tagpu_vk_frame` is called from the render thread
-   immediately before `SwapBuffers`. It returns 1 when it presented the frame
-   itself, and the caller then does NOT swap: the two backends must not both
-   present to one window in one frame. Armed by `tagpu_vk.on` beside the exe; it
-   is NOT on the play-defaults table, because GL stays the default through
-   Phase G. With the lever absent the first statement returns 0 and the GL path
-   is byte-identical to the build without this file.
+   G19a -- the bring-up. `tagpu_vk_frame` is called once per iteration from
+   `vk_render_main`, which is the only backend that drives it. It returns 1 when
+   it presented the frame itself. **It used to be called from `ogl_render` too,
+   immediately before `SwapBuffers`, and a 1 meant the caller must NOT swap
+   because two backends must not both present to one window in one frame; that
+   call and that rule went with route D in landing 4d-1.** The return value is
+   still what `vk_render_main` uses to know a frame reached the screen.
 
    G19b -- the GPU picker. The device list is enumerated once per launch by a
    worker thread and CACHED to `tagpu_vk.gpus`; the menu reads that cache at
@@ -101,8 +102,10 @@ void tagpu_vk_render_stop(void);
    windows. Called from the fork's wndproc; it watches `WM_DESTROY` and nothing
    else. That one fact cannot be had on the render thread: `g_ddraw.hwnd` is
    nulled only by the IAT-hooked `DestroyWindow`, and only after the real
-   destroy, so a destroy by any other route would leave the lane presenting on a
-   dead HWND until the driver raised `VK_ERROR_SURFACE_LOST_KHR`. This bounds
+   destroy. (`dd_Release`'s `memset` of `g_ddraw` clears it too, but that path
+   stops and joins the render thread first, so it cannot beat a real destroy.)
+   A destroy by any other route would leave the lane presenting on a dead HWND
+   until the driver raised `VK_ERROR_SURFACE_LOST_KHR`. This bounds
    that at one frame.
 
    AN OBSERVER: it returns nothing and swallows nothing. Unlike
@@ -133,12 +136,13 @@ int tagpu_vk_armed(void);
    that has no other backend beside it (`renderer=vulkan`, `render_vk.c`).
    Two things change and nothing else does:
 
-   * the surface goes on the window `tagpu_vk_frame` is handed, and ROUTE D'S
-     WINDOW IS NEVER CREATED. Every line of that machinery exists because "two
-     backends must not both present to one window in one frame"; with one
-     backend there is nothing to separate. Measured as route E in
-     `tools/vkcoexist.c` -- a top-level window that never had a GL context or a
-     pixel format presents, on wine 9.0 and on Proton 11 (roadmap §G19a).
+   * the surface goes on the window `tagpu_vk_frame` is handed. Every line of
+     the machinery that used to put it on a window of the lane's own existed
+     because "two backends must not both present to one window in one frame";
+     with one backend there was nothing to separate, and landing 4d-1 deleted
+     it. Measured as route E in `tools/vkcoexist.c` -- a top-level window that
+     never had a GL context or a pixel format presents, on wine 9.0 and on
+     Proton 11 (roadmap §G19a).
    * `tagpu_vk.on` STOPS ARMING THE LANE, because the renderer choice already
      did. `tagpu_vk.off` stops disarming it for the same reason: with no GL
      lane behind it, a disarmed Vulkan lane is a black window rather than a
@@ -150,7 +154,8 @@ int tagpu_vk_armed(void);
    allowed a surface on the game window and a window of the lane's own at once;
    that window is gone, and the latch is kept because collapsing every
    `tagpu_vk_owns_present()` test in the tree into a constant is a much larger
-   change than deleting it. */
+   change than deleting it -- and because those tests are now what the gather
+   mirrors ask to decide whether a consumer exists at all. */
 void tagpu_vk_own_present(void);
 
 /* 1 when the latch above is set. Read by every GL draw site that landing 4b

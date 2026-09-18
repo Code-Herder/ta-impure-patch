@@ -646,6 +646,14 @@ would not have shown up as a failure — it would have shown up as three landing
      live in), **0 magenta pixels** either time, and a clean stop in 0.44 s.
      **4c-3 had to come first and did**: it was the last landing that could widen what the two-lane
      oracle can express, and this is what removed the lane it compared against.
+     **Its own review found three instruments the deletion had silently killed** and all three are
+     fixed in the landing: `tagpu_ftime` was inert for the whole session on this lane (its poll had
+     one caller, in `render_ogl.c`) so the still-open "frame time no worse than GL" clause had no
+     instrument at all — after the fix it measures **`vk p50 0.154 ms  p99 0.370 ms`** at 1024x768,
+     the first such figure this lane has produced; `tools/uiwalk.py --vk`, the walk the G19f UI
+     clause was MET with, armed route D exactly and now refuses with a message; and `tagpu_vk.on`
+     under `renderer=openglcore` was still latching six one-way gather mirrors (tens of MB) for a
+     consumer that no longer exists, so those now ask `tagpu_vk_owns_present()` instead.
      **4d-2 is what is left**: `tagpu_abshot.c` still writes `_gl.ppm` from eight call sites with
      nothing to pair against.
 

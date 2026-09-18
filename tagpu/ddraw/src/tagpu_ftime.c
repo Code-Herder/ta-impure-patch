@@ -36,6 +36,17 @@ static PFN_QCTR     x_glQueryCounter;
 static PFN_QOBJIV   x_glGetQueryObjectiv;
 static PFN_QOBJUI64 x_glGetQueryObjectui64v;
 static int          s_glFetched, s_glOk, s_glSaid;
+/* WHICH LANE DRIVES THE REPORT, so that exactly one does and it is whichever is
+   actually running. `report()` used to be reachable only from the GL bracket --
+   `gl_end`, and `gl_begin`'s `!s_glOk` branch that the 2026-09-16 review added
+   for the same reason -- and BOTH are called only by render_ogl.c. After the
+   vulkan-only plan's landing 4d-1 that backend never drives the Vulkan lane, so
+   under `renderer=vulkan` the samples accumulated and nothing ever printed them.
+   This is set by the GL bracket when it runs; the Vulkan sample path reports
+   only when it is clear, which cannot double-report even on a build where both
+   lanes are live. [FOUND BY THE 4d-1 LANDING REVIEW, whose first fix -- restoring
+   the poll -- armed the module without giving it a way to speak.] */
+static int          s_glDrives;
 
 #ifndef GL_TIMESTAMP
 #define GL_TIMESTAMP 0x8E28
@@ -105,19 +116,44 @@ static void report(void)
     double v50 = pct(s_vkRing, s_vkN, 0.50), v99 = pct(s_vkRing, s_vkN, 0.99);
     /* THE RATIO IS ONLY PRINTED WHEN BOTH LANES HAVE SAMPLES, and it is the
        gate's own question: below 1.00 the Vulkan lane's frame is cheaper. With
-       one lane silent it is not a small ratio, it is no comparison at all. */
+       one lane silent it is not a small ratio, it is no comparison at all.
+
+       SINCE LANDING 4d-1 IT IS UNREACHABLE, and that is the deletion's price
+       rather than a bug. GL samples come only from render_ogl.c and Vulkan ones
+       only from tagpu_vk.c, and with route D gone the two backends can never be
+       live in one process. The branch is kept because a build from before 4d-1
+       still produces both, and because the arithmetic is the record of what the
+       comparison WAS. What a current build supports is one lane's figure against
+       an earlier build's -- see tagpu_ftime.h.
+       [FROM THE 4d-1 LANDING REVIEW.] */
     if (s_glN > 0 && s_vkN > 0 && g50 > 0.0)
         _snprintf(b, sizeof b,
                   "ftime: gl p50 %.3f ms p99 %.3f ms (n=%d/%u) | vk p50 %.3f ms p99 %.3f ms (n=%d/%u)"
                   " | vk/gl p50 %.3f p99 %.3f",
                   g50, g99, s_glN, s_glTotal, v50, v99, s_vkN, s_vkTotal,
                   v50 / g50, g99 > 0.0 ? v99 / g99 : 0.0);
+    else if (s_vkN > 0)
+        /* THE LANE THAT HAS SAMPLES PRINTS ITS NUMBERS. This branch used to say
+           only "vk sampling", because it was written for the case where the
+           VULKAN half was the silent one and GL's figures were the ones worth
+           having. Since landing 4d-1 it is the other way round on every live
+           build, and a line that reports `gl p50 0.000 (n=0/0)` and withholds
+           the figure the gate clause asks for is an instrument that runs and
+           says nothing -- the exact failure this module's own history is made
+           of. [FROM THE 4d-1 LANDING REVIEW'S FIX, corrected after reading what
+           it actually printed.] */
+        _snprintf(b, sizeof b,
+                  "ftime: vk p50 %.3f ms p99 %.3f ms (n=%d/%u) | gl %s"
+                  " - no ratio in one process since landing 4d-1: compare this"
+                  " against an earlier build's figure",
+                  v50, v99, s_vkN, s_vkTotal,
+                  s_glN > 0 ? "sampling" : "silent (no GL backend in this process)");
     else
         _snprintf(b, sizeof b,
-                  "ftime: gl p50 %.3f ms p99 %.3f ms (n=%d/%u) | vk %s"
-                  " - no ratio: one lane has no samples",
-                  g50, g99, s_glN, s_glTotal,
-                  s_vkN > 0 ? "sampling" : "SILENT (lane not armed, or no timestamps)");
+                  "ftime: gl p50 %.3f ms p99 %.3f ms (n=%d/%u) | vk SILENT"
+                  " (no timestamp pool, or this backend is not the Vulkan one)"
+                  " - no ratio",
+                  g50, g99, s_glN, s_glTotal);
     b[sizeof b - 1] = 0;
     flog(b);
 }
@@ -157,6 +193,7 @@ void tagpu_ftime_gl_begin(void)
 {
     int i;
     if (!s_on) return;
+    s_glDrives = 1;
     if (!s_glFetched) {
         s_glFetched = 1;
         x_glGenQueries          = (PFN_GENQ)getgl("glGenQueries");
@@ -248,6 +285,8 @@ void tagpu_ftime_vk_sample(double ns)
     if (!s_on || ns <= 0.0) return;
     push(s_vkRing, &s_vkN, &s_vkAt, ns / 1.0e6);
     s_vkTotal++;
+    /* AND THIS LANE REPORTS WHEN NOTHING ELSE WILL. See `s_glDrives`. */
+    if (!s_glDrives && ++s_frames >= REPORT_FRAMES) { s_frames = 0; report(); }
 }
 
 void tagpu_ftime_vk_reset(void)

@@ -1012,9 +1012,11 @@ def main():
                          "the pointer unscale instead of handing the engine logical coordinates. "
                          "The hit check below runs either way")
     ap.add_argument("--vk", action="store_true",
-                    help="G19f: arm the Vulkan lane (route D, its own window) and diff it against the GL lane "
-                         "at EVERY stop through `tagpu_gui.ab` + tools/vk-ab.py. The gate's walk. Implies the "
-                         "layer: the A/B compares the two lanes' composites, so there has to be one")
+                    help="WITHDRAWN by the vulkan-only plan's landing 4d-1 and now refused. It armed the "
+                         "Vulkan lane beside the GL one (route D, its own window) and diffed the two at every "
+                         "stop through `tagpu_gui.ab` + tools/vk-ab.py -- the walk the G19f gate was met with. "
+                         "Route D is deleted, so that configuration brings up no lane and no _vk.ppm is ever "
+                         "written")
     ap.add_argument("--cycles", type=int, default=0,
                     help="G15d: after the in-game stops, this many game -> shell -> game cycles in one process "
                          "(the exit dialogs, the shell inventory again, the loading screen held, the fixture re-applied)")
@@ -1024,6 +1026,25 @@ def main():
     scenario = a.scenario or ("tascene-parity-core" if a.side == "core" else "tascene-parity")
     if a.restore and a.layer:
         sys.exit("uiwalk: --restore and --layer are different measurements: pick one")
+    if a.vk:
+        # REFUSED RATHER THAN RUN EMPTY. [FOUND BY THE 4d-1 LANDING REVIEW.]
+        # This flag armed `vk.on` WITHOUT `renderer=vulkan`, which was route D:
+        # both backends live, each capturing its own half of one frame. Landing
+        # 4d-1 deleted route D, so that arm set now brings up no Vulkan lane at
+        # all and `tagpu_gui_vk.ppm` is never written. The walk failed closed --
+        # `Walk.vk_ab` returned None and refused to score it -- but it also burnt
+        # the PPM settle deadline at all 13 stops while doing nothing, and the
+        # flag's documented purpose had become impossible. Say so instead.
+        sys.exit(
+            "uiwalk: --vk is withdrawn. It diffed the Vulkan lane against the GL lane in\n"
+            "  one process (route D), and the vulkan-only plan's landing 4d-1 deleted\n"
+            "  route D -- `vk.on` without `renderer=vulkan` now brings up no lane, so\n"
+            "  there is no second half to capture and no absolute two-lane comparison is\n"
+            "  expressible any more. The banked two-lane figures are in\n"
+            "  research/notes/gpu-status.md, up to section 2.54.\n"
+            "  What replaced it: launch with `renderer=vulkan`, arm one pass's `.ab`, and\n"
+            "  diff the `_vk.ppm` against one taken from an earlier BUILD (tools/vk-ab.py\n"
+            "  takes two file paths). Run this walk without --vk for the UI stops." )
     w = Walk(a.inst, a.out, a.res, parity=a.layer, scenario=scenario, restore=a.restore)
     w.vk = a.vk
 

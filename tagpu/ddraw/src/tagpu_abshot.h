@@ -3,11 +3,20 @@
 /* The GL half of a Phase G A/B, once, for every ported pass. Implementation:
    tagpu_abshot.c. The Vulkan half is tagpu_vk_shot.c.
 
-   WHAT AN A/B IS HERE. Route D gives the Vulkan lane a window of its own, so
-   nothing on the GL side can see what Vulkan drew -- `tacli glshot` reads the
-   GL framebuffer and the Vulkan frame is not in it. Each lane therefore
-   captures its own half of ONE frame and tools/vk-ab.py diffs the two files.
-   This is the GL half: black the frame, let the pass draw, read it back.
+   WHAT AN A/B WAS HERE, AND IT IS PAST TENSE SINCE LANDING 4d-1. Route D gave
+   the Vulkan lane a window of its own, so nothing on the GL side could see what
+   Vulkan drew -- `tacli glshot` reads the GL framebuffer and the Vulkan frame
+   was not in it. Each lane therefore captured its own half of ONE frame and
+   tools/vk-ab.py diffed the two files. This is the GL half: black the frame, let
+   the pass draw, read it back.
+
+   **ROUTE D IS GONE AND THIS FILE HAS NOTHING LEFT TO PAIR WITH.** On the only
+   surviving route there is no GL context, so `gl_draws` is false everywhere and
+   not one call below is reached. Deleting it is the vulkan-only plan's landing
+   4d-2; the Vulkan half (`tagpu_vk_shot.c`) and the eight `.ab` levers stay,
+   because a single-lane capture is still how a PPM of the Vulkan frame is taken
+   for the cross-BUILD comparison that replaced the two-lane one. Everything
+   below is therefore the record of how the oracle worked, not live contract.
 
    THE BACKGROUND IS THE HARD PART OF A WORLD PASS, and this is the answer
    G19e settled on. `tagpu_fps.c` could clear the whole frame because the

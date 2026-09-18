@@ -9832,6 +9832,39 @@ default so that any pixel the lane failed to cover would be unmistakable:
 | a **mode change** — the path the window handshake used to live in | shell 640x480 → `render thread stopping - down` → clean re-bring-up at 1024x768 *on the same window*; 5 passes; world target 2048x1536; water, seven units, a solar collector, a nano effect. **0 magenta of 786 432** |
 | stop | clean in 0.44 s, nothing left behind |
 
+#### Three instruments the deletion killed, found by its own review
+
+The landing verified its picture and did not ask what else had been reading route D. All three were
+**silent** failures, which is the shape this stack's own history is made of.
+
+- **`tagpu_ftime` was inert for the entire session under `renderer=vulkan`.** `tagpu_ftime_poll()`
+  — the only thing that sets the module's `s_on` — was called from exactly one place, `render_ogl.c`,
+  which after 4d-1 never drives this lane. So no Vulkan timestamps were written (`tagpu_vk.c` gates
+  them on `tagpu_ftime_armed()`), every sample was discarded, and not one line reached the log. The
+  gate clause it exists for, **"frame time no worse than GL", is still open** — the landing that
+  deleted the other lane nearly deleted the only way to measure this one. Fixed in two halves,
+  because the first was not enough: the poll now runs from `vk_render_main`, **and** `report()` got
+  a caller on this lane (both its call sites were inside the GL bracket, so the samples accumulated
+  and nothing printed them). `s_glDrives` makes exactly one lane drive the report, whichever is
+  running. Measured after the fix, 1024x768, full arm set: **`vk p50 0.154 ms  p99 0.370 ms`
+  (n=256/48838)** — the first frame-time figure this lane has ever produced, and the baseline the
+  cross-build comparison starts from. The `vk/gl` ratio is gone with route D and cannot be computed
+  in one process again.
+- **`tools/uiwalk.py --vk` is permanently broken** — the walk the G19f UI-layer clause was *met*
+  with. It armed `vk.on` **without** `renderer=vulkan`, which was route D exactly; that arm set now
+  brings up no lane, so `tagpu_gui_vk.ppm` is never written. It failed closed (`Walk.vk_ab` returned
+  `None` and refused to score it) but burnt the PPM settle deadline at all 13 stops while doing
+  nothing. `--vk` now refuses with a message saying what replaced it.
+- **`tagpu_vk.on` under `renderer=openglcore` was NOT inert, and a first draft of this section said
+  it was.** `tagpu_vk_armed()` is not on the frame path and still returns 1 from the file, which
+  latched six one-way gather mirrors — `tagpu_fx.c` and `tagpu_feat.c` (4 MB atlas mirrors),
+  `tagpu_terr.c` (`s_rgbMirror`, "up to 23 MB held for the process"), `tagpu_posedraw.c`,
+  `tagpu_posebake.c`, `tagpu_render3do.c` — for a consumer that no longer exists. Those latches now
+  ask **`tagpu_vk_owns_present()`**, which is the real question ("will a Vulkan pass run in this
+  process?"). What the lever still legitimately does on that path is ungrey the menu's GPU row,
+  whose choice applies to a launch that picks `renderer=vulkan`. It is **not** read for its `color=`
+  there — `read_lever` is reached only from `tagpu_vk_frame`.
+
 #### Not covered by 4d-1
 
 - **The GL capture half is still in the tree and now has nothing to pair with.** `tagpu_abshot.c`
@@ -9839,12 +9872,12 @@ default so that any pixel the lane failed to cover would be unmistakable:
   decision (2026-09-18) is that `tagpu_vk_shot.c` and the eight `.ab` levers **stay** — a
   single-lane capture is still how a PPM of the Vulkan frame is taken for the cross-build
   comparison this plan now depends on.
-- **`tagpu_vk.on` under `renderer=openglcore` no longer does anything at all**, because nothing
-  drives the lane from there. The file is still read for its `color=`. Nothing logs that it is inert
-  on that path.
 - **`tools/vkcoexist.c`'s route A and route D cases** describe an arrangement the DLL no longer has.
   The harness is untouched and still measures what it always did; it is the interpretation that has
   narrowed.
+- **The GL half of a frame-time comparison can only come from an older build now.** Nothing in the
+  tree can produce one, so the "no worse than GL" clause is answered by comparing against a figure
+  taken before 4d-1 rather than by a measurement this build can repeat.
 
 ---
 

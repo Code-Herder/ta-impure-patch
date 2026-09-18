@@ -273,7 +273,15 @@ int tagpu_feat_armed(unsigned frame_counter)
        4 MB, so it is paid for only while the Vulkan lane is armed -- and
        `s_mirrorAsked` is set only on SUCCESS, so a request made before the
        atlas has its dimensions (the first frames of a session) is retried. */
-    if (!s_mirrorAsked && s_atlas.dim > 0 && tagpu_vk_armed())
+    /* ASKED OF THE CONSUMER, NOT OF THE LEVER. [FROM THE 4d-1 LANDING REVIEW.]
+    This used to test `tagpu_vk_armed()`, which is true whenever `tagpu_vk.on`
+    exists -- and these latches are one-way, so once asked the memory is held
+    for the process's life. Until 4d-1 that was right: `tagpu_vk.on` under
+    `renderer=openglcore` brought up route D, which consumed the mirror. Route
+    D is gone, so on that path the lever now arms nothing and the mirror would
+    be paid for with no consumer at all. `tagpu_vk_owns_present()` is exactly
+    "a Vulkan pass will run in this process", which is the question. */
+    if (!s_mirrorAsked && s_atlas.dim > 0 && tagpu_vk_owns_present())
         s_mirrorAsked = tagpu_gaf_atlas_mirror(&s_atlas);
     /* AND THE RESTORED TWIN'S MIRROR, on the same beat, behind the same latch
        and asked for SEPARATELY. It is a second 16 MB and it is only worth

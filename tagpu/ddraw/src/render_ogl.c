@@ -37,13 +37,16 @@ static void ogl_check_error(const char* stmt);
 
 static OGLRENDERER g_ogl;
 
-/* THE RENDER THREAD'S OWN FRAME NUMBER, at file scope because TWO places in
-   ogl_render need it: the TAGPU_FRAME handed to our passes, and the
-   tagpu_vk_frame that runs after them in the same iteration. The Vulkan lane
-   refuses a GL hand-over that is not this frame's, and it can only do that if
-   both halves of the iteration agree on which frame it is. It was a static
-   inside the tagpu block until the G19e re-review, where that block's scope
-   ends before the Vulkan call. */
+/* THE RENDER THREAD'S OWN FRAME NUMBER. It stamps the TAGPU_FRAME handed to our
+   passes, so a consumer can refuse a hand-over that is not this frame's.
+
+   IT IS AT FILE SCOPE FOR A REASON THAT HAS EXPIRED, and is left there because
+   moving it back buys nothing. There used to be a SECOND reader in ogl_render --
+   the `tagpu_vk_frame` call that ran after our passes in the same iteration, so
+   that both halves of the iteration agreed on which frame it was. It was a
+   static inside the tagpu block until the G19e re-review moved it out, that
+   block's scope ending before the Vulkan call. The vulkan-only plan's landing
+   4d-1 deleted the call; this backend no longer drives that lane. */
 static unsigned int g_tagpu_frames = 0;
 
 BOOL ogl_create()

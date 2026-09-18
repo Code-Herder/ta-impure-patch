@@ -2863,7 +2863,12 @@ closed it, so 4c is done as three landings without being done as a gate. **4d-1 
 `tagpu_vk_frame` — 152 lines in, 370 out, and the two-lane oracle deliberately gone with it, every
 absolute figure banked in 4c-3 first. Verified by running `renderer=vulkan` with the full arm set
 and the clear colour left at magenta: one window, a complete frame at 640x480 and at 1024x768
-across a mode change, 0 magenta pixels either time. **What is left is 4d-2 (the dead GL capture
+across a mode change, 0 magenta pixels either time. Its review then found **three instruments the
+deletion had silently killed** — `tagpu_ftime` (inert on this lane, so the still-open "frame time no
+worse than GL" clause had nothing to measure with; after the fix, **vk p50 0.154 ms, p99 0.370 ms**
+at 1024x768), `tools/uiwalk.py --vk` (the walk the G19f UI clause was met with, now refusing by
+name), and six one-way gather mirrors still paid for under `renderer=openglcore` for a consumer that
+no longer exists. All three fixed in the landing. **What is left is 4d-2 (the dead GL capture
 half) plus the `s_curDrew` gap.** Filed as one row — the fourth backend,
 `renderer=vulkan`, the `ss` target, TA's surface, and route D's deletion — it comes apart along
 four seams the code already has: **4a** the thread and the present, **4b** the per-frame driver
