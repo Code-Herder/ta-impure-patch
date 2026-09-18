@@ -1336,6 +1336,55 @@ static uint32_t g_alloc(const void* data, size_t bytes)
     return (uint32_t)off;
 }
 
+/* A FRESH GROUP OF FIVE, AND THE OLD ONES RETIRED -- never a rewrite in place.
+   `vkUpdateDescriptorSets` on a set that a submitted command buffer has bound
+   is undefined behaviour, and this one is bound by every frame still in flight:
+   the activations are re-created whenever a batch needs a bigger slot geometry
+   (five times in one measured run, 94 to 512 square), and each of those bumps
+   `s_actGen` and sent every live job's five sets back through `write_sets`
+   while earlier frames were still executing against them.
+
+   WHAT IT LOOKED LIKE, because this is the shape to recognise rather than the
+   API rule to recite: the OUT pass reads `frag = c - net`, the palette colour
+   minus the network's output, so a set whose `uAct` still named the array the
+   FILL wrote gives net == c and paints the cell BLACK. Landing 7e-2's chain
+   oracle found exactly that -- every texel of the earliest frames black, the
+   source byte-identical, and the count varying run to run (165 136, then
+   54 912, then 165 136 differing bytes) because it depends on which batches
+   happen to straddle a grow. The GL lane cannot show it: it binds textures by
+   name at draw time and has no descriptor to go stale.
+
+   0 when no fresh group can be had, and the caller then leaves the job's sets
+   naming the old generation -- which is wrong but stable, and the alternative
+   is a set naming a destroyed image. The pool is sized for it: five per job
+   plus the chain's, and a job holds at most one group at a time. */
+static int set_group_new(const TAGPU_VKPASS* d, struct TAGPU_VKRJOB* g)
+{
+    VkDescriptorSetLayout lay[5];
+    VkDescriptorSetAllocateInfo dai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+    VkDescriptorSet got[5];
+    lay[0] = s_dslFill;
+    lay[1] = s_dslConv; lay[2] = s_dslConv;
+    lay[3] = s_dslOut;  lay[4] = s_dslOut;
+    dai.descriptorPool = s_dpool;
+    dai.descriptorSetCount = 5;
+    dai.pSetLayouts = lay;
+    if (vkAllocateDescriptorSets(d->dev, &dai, got) != VK_SUCCESS) return 0;
+    /* the group it replaces goes into the job retire, on the same mask as
+       everything else a submitted command buffer can name */
+    if (g->setFill) {
+        JRETIRE* r = jret_take(d);
+        r->set[0] = g->setFill; r->set[1] = g->setConv[0]; r->set[2] = g->setConv[1];
+        r->set[3] = g->setOut[0]; r->set[4] = g->setOut[1];
+        r->nset = 5;
+        r->pending = d->slots >= 32 ? 0xFFFFFFFFu : ((1u << d->slots) - 1u);
+    }
+    g->setFill = got[0];
+    g->setConv[0] = got[1]; g->setConv[1] = got[2];
+    g->setOut[0] = got[3];  g->setOut[1] = got[4];
+    return 1;
+}
+
 static void write_sets(const TAGPU_VKPASS* d, struct TAGPU_VKRJOB* g)
 {
     VkDescriptorBufferInfo bi[2];
@@ -1756,7 +1805,17 @@ static int vk_draw(const TAGPU_RDRAWREQ* r)
 
     if (!d || !s_cb || !g || !s_built) return 0;
     if (!s_sliceOpen) { slice_head(); s_sliceOpen = 1; }
-    if (g->setGen != s_actGen) write_sets(d, g);
+    /* A GENERATION CHANGE MEANS NEW SETS, not a rewrite of the bound ones --
+       see `set_group_new`. `setGen` 0 is the first draw, where the sets were
+       allocated by `job_new` and have never been bound. */
+    if (g->setGen != s_actGen) {
+        if (g->setGen != 0 && !set_group_new(d, g)) {
+            rlog(LANE ": no descriptor sets for a re-created activation array - "
+                       "this batch is dropped rather than bound to the old one");
+            return 0;
+        }
+        write_sets(d, g);
+    }
 
     if (r->kind == TAGPU_RDRAW_FILL) {
         VkFramebuffer fb;
