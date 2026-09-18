@@ -383,10 +383,48 @@ would not have shown up as a failure — it would have shown up as three landing
    * **4b — the per-frame driver.** The gather halves run and the GL draws stand down.
      `tagpu_overlay_draw` is the single driver and most of it is API-independent; the four GL-owning
      entry points are `tagpu_scaffold_frame`, `tagpu_native_frame`, `tagpu_gui_present` and
-     `tagpu_fps_present`. **This is where the per-pass previous-build A/B against `0b5e06d` gets
-     taken**, one `.ab` at a time at `ss=1`. Two things 4a already knows about it: `TAGPU_FRAME`
-     must be filled BEFORE `tagpu_vk_frame` with the same frame number, and `vp_y` takes
-     `viewport.y` **without** `opengl_y_align`, which is GL's extra scanline and nothing else's.
+     `tagpu_fps_present`. Two things 4a already knows about it: `TAGPU_FRAME` must be filled BEFORE
+     `tagpu_vk_frame` with the same frame number, and `vp_y` takes `viewport.y` **without**
+     `opengl_y_align`, which is GL's extra scanline and nothing else's.
+
+     **4b IS TWO LANDINGS, AND THE FOUR ENTRY POINTS ARE NOT FOUR EQUAL JOBS [2026-09-18, written
+     by 4b-1].** The seam is where a pass's HAND-OVER is published, and it is a property of the
+     code rather than of how much work each looks like:
+
+     * **4b-1 — the driver and the two passes whose gather is already separable. LANDED
+       2026-09-18.** `tagpu_scaffold_frame` and `tagpu_fps_present` each publish their hand-over
+       *after* the GL draw and from the same function, so the gate moves inward with the publish
+       hoisted out of the GL block and nothing else changes. Both are measured on both lanes;
+       [gpu-status](gpu-status.html) §2.49 is the write-up. It also carries the A/B's arming fix,
+       which had to come first — see the next bullet.
+     * **4b-2 — the world and the UI layer.** Each world pass publishes its hand-over from
+       **inside** its GL render rather than from its gather (`terr_publish` is called from
+       `tagpu_terr_render`, and `tagpu_terr_gather` returns before it), so `terr`, `feat`, `fx`,
+       `mark` and `posedraw` each need the treatment individually, plus the native pass's own
+       composite. And `tagpu_gui_present` is the one whose *gather is the GL drain*: the Vulkan
+       mirror's ops are emitted conditionally on GL twin bookkeeping (`twin_make` and `twin_find`
+       gate `mir_op`), so its record cannot be produced without GL objects until the twin table is
+       separated from them. Five levers, one refactor, and each has a row of its own.
+
+     **AND THE PER-PASS A/B HAD TO LEARN TO ARM ITSELF BEFORE ANY PASS COULD STAND DOWN
+     [2026-09-18].** The oracle above is right and was not reachable: `tagpu_abshot.h`'s rule is
+     that the Vulkan half of an A/B may be claimed only on a GL capture that **reached the disk**,
+     and on the vulkan-only lane `tagpu_abshot_end` is not merely refused, it is never called — so
+     `wrote` is 0 on every frame and the rule refuses every capture on the only lane that presents.
+     The rule exists to stop a Vulkan half being diffed against a STALE `_gl.ppm`, so 4b-1 keeps it
+     where both lanes run and establishes the same property by construction where only one does:
+     `tagpu_vk.c` unlinks the target `_vk.ppm` the instant a claim is seen, for every claim in the
+     frame, so a file that exists belongs to this arming and a refused capture leaves nothing to
+     diff. Measured on the refusal path with a planted sentinel, which is the only path where an
+     unlink is visible.
+
+     **Its own oracle turned out to be better than a two-build one, and that is 4a's doing.**
+     Because 4a left route D *unreachable rather than deleted*, one binary answers both
+     `renderer=vulkan` and `renderer=openglcore` + `tagpu_vk.on` — so a pass can be measured as a
+     **same-build, two-configuration** pair (the two-lane A/B at 0 px, then the vulkan-only
+     `_vk.ppm` against that pair's Vulkan half) instead of against `0b5e06d`. That isolates exactly
+     what the commit changed, where a two-build diff also carries every other change since the
+     reference. The previous-build A/B stays the fallback for anything this shape cannot express.
    * **4c — `ss` and TA's surface.** The offscreen world target at `ss×` with its resolve, and TA's
      own surface uploaded by the backend instead of by the GUI pass. This is the part that closes
      two of the three blind spots landing 1 named: `ss=2` has no target on the Vulkan side, and

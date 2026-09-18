@@ -2185,7 +2185,40 @@ Four things that cost a session if they are not known:
   trusting either file. The check is the same one for the GL path.)
 - **A window that is 100 % one colour is the right answer for landing 4a and the wrong one after
   4b.** 4a calls no gather half, so no pass has a hand-over. Read §2.48's table before calling a
-  flat window a fault.
+  flat window a fault. **Since 4b-1 (§2.49) `tagpu_scaffold.on` and `tagpu_fps.on` DO reach the
+  screen on this lane** — an armed instance showing only the clear colour is a fault now. The
+  world and the UI layer are still 4b-2 and still stand down whole.
+
+**Getting a LIVE WORLD under `renderer=vulkan`, which `scenario load` cannot do for you.**
+`scenario load --restart` goes through the launch path with a resolution, so it rewrites
+`ddraw.ini` — `renderer=openglcore`, and `posX`/`posY` from a freshly computed tile. Both of those
+are silent. So the world is reached by hand, and the whole recipe is four steps:
+
+```bash
+G=<main checkout>/tagpu/instances/<i>/gamedir
+tools/tacli stop <i>
+tools/tacli arm <i> mark.on <the pass under test>      # levers that hook at DLL attach go first
+sed -i -e 's/^renderer=.*/renderer=vulkan/' -e 's/^posX=.*/posX=4936/' -e 's/^posY=.*/posY=16/' $G/ddraw.ini
+tools/tacli launch <i>                                 # BARE: the only launch that preserves the ini
+tools/tacli ui <i> click SINGLE; tools/tacli ui <i> click Skirmish
+tools/tacli ui <i> click Start --no-wait; sleep 25     # `Start` tears the shell down: no gadget to settle on
+tools/tacli scenario apply <i> feat-forest             # `apply` stacks onto a live game; `load` would relaunch
+```
+
+- **`tacli ui` works with nothing on the screen**, which is what makes this possible at all: it
+  reads the engine's own gadget tree and injects a token, so the menus are driven normally while
+  the window shows the lane's clear colour. The skirmish screen also *remembers the last map* in
+  the engine's own settings, so `Two Continents` is still selected from the previous `load` — check
+  it in the `ui` snapshot's `text:` line rather than assuming, because a scenario's coordinates are
+  map-specific.
+- **`scenario apply` reproduces the camera exactly.** Three runs of the same fixture logged
+  `camera: [2950, 1010] (eye [2566, 616])` to the digit, which is what makes a cross-configuration
+  A/B of a world pass meaningful at all.
+- **The window can land on the human's monitor after any launch that rewrote the ini.** Check it —
+  `tacli ls --json` carries `[id, x, y, w, h]` in `window` — and move it with `xdotool windowmove
+  <id> <x> <y>` on the instance's OWN id. That touches no pointer and steals no focus, and the A/B
+  does not care where the window is: the GL half reads an FBO we own and the Vulkan half copies a
+  swapchain image, so neither is subject to the ownership test.
 
 ### The Vulkan lane and the GPU row (Phase G, `tagpu_vk.on`)
 
@@ -2237,7 +2270,13 @@ touch <gamedir>/tagpu_fps.ab                             # one frame, both lanes
 ../.venv-undither/bin/python tools/vk-ab.py <gamedir>    # 0 px apart, or it names the first
 ```
 
-- **`mark.on` is not optional, and this costs half an hour if you miss it.** The readout draws
+- **`mark.on` is not optional ON EITHER LANE, and this costs half an hour if you miss it.** Under
+  `renderer=vulkan` too: the hook is installed at DLL attach, so the requirement is unchanged and
+  is not a property of the new backend. And because `mark.on` makes the marker pass DRAW in a
+  fixture with anything selected, two passes then draw into one Vulkan frame and the lane refuses
+  the capture (`1 A/B levers claimed this frame and 2 passes drew into it`). Launch with `mark.on`
+  for the font, then `tacli arm <i> mark.on=off` and wait a few seconds before arming the `.ab`:
+  `tagpu_text_frame` keeps its own copy of the font, so the readout survives the disarm. The readout draws
   TA's own glyphs, and the font reaches the render thread in the frame packet, published at
   **hook 8** — which is `markown`'s. With only `fps.on` armed the packet reads `font=0/0B`,
   `tagpu_text_place` refuses every string, and the readout silently draws nothing on EITHER lane:
@@ -2296,6 +2335,18 @@ touch <gamedir>/tagpu_fps.ab                             # one frame, both lanes
   needs no relaunch — **`touch` on a file that is already there does NOT re-arm**, and the symptom
   is `vk-ab.py` reporting a missing half after you deleted the PPMs. `rm` it, sleep a second, then
   `touch`. `tagpu_<pass>_gl.ppm` / `_vk.ppm` are binary PPMs; `ffmpeg -i x.ppm x.png` to look.
+- **A MISSING `_vk.ppm` NOW MEANS "no capture", never "a stale one" (since 4b-1).** The lane
+  unlinks the target the instant a claim is seen, for every claim in the frame, so the file comes
+  back only if `vk: shot: wrote …` appears. The `rm -f $G/tagpu_<pass>_*.ppm` in every recipe above
+  is still worth keeping for the GL half, which has no such guard — but the Vulkan half no longer
+  depends on your remembering it.
+- **Under `renderer=vulkan` the Vulkan half is claimed on the INTENT, and there is no `_gl.ppm`
+  at all.** `vk-ab.py <gamedir> --pass <p>` therefore reports a missing half on that lane by
+  design; use its **file-to-file** mode instead, against the same build's two-lane `_vk.ppm`:
+  `vk-ab.py two-lane_vk.ppm vulkan-only_vk.ppm`. For a pass whose picture is a pure function of
+  the camera that is byte-identical (the scaffold was); for one that draws its own measurement it
+  cannot be, and the honest reading is WHERE the differing pixels are — the readout's 17 px all sit
+  in the digit columns while the label agrees exactly.
 - **ARM ONE PASS'S `.ab` AT A TIME, and turn the other ported passes' `.on` off** (`fps`,
   `scaffold`, `feat`). Each GL capture
   holds one pass (its twin blacks the frame around its own draw); the Vulkan capture is one frame

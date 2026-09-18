@@ -2837,12 +2837,34 @@ independent reasons: the Classic++ restored atlases have no CPU mirror, and the 
 holds casters the lane cannot draw. Both block every world pixel. Every Phase G figure above was
 taken under `tagpu_defaults.off` + `ss=1` + `gui.on=mmbase`, where neither arises.
 
-**Landing 4 is four landings, and 4a landed 2026-09-17** ([gpu-status](gpu-status.html) §2.48).
-Filed as one row — the fourth backend, `renderer=vulkan`, the `ss` target, TA's surface, and route
-D's deletion — it comes apart along four seams the code already has: **4a** the thread and the
-present, **4b** the per-frame driver (the gathers run, the GL draws stand down, and the per-pass
-A/B against `0b5e06d` is taken), **4c** the `ss` target and TA's surface upload, **4d** the
-deletion. The exit condition is unchanged.
+**Landing 4 is four landings; 4a landed 2026-09-17 and 4b-1 on 2026-09-18**
+([gpu-status](gpu-status.html) §2.48 and §2.49). Filed as one row — the fourth backend,
+`renderer=vulkan`, the `ss` target, TA's surface, and route D's deletion — it comes apart along
+four seams the code already has: **4a** the thread and the present, **4b** the per-frame driver
+(the gathers run and the GL draws stand down), **4c** the `ss` target and TA's surface upload,
+**4d** the deletion. The exit condition is unchanged.
+
+**4b is itself two landings**, and 4b-1 is the first: the driver, plus the two entry points whose
+gather was already separable from their draw. `tagpu_scaffold_frame` and `tagpu_fps_present` now
+run on both lanes and gate their own upload, draw and read-back; `tagpu_native_frame` and
+`tagpu_gui_present` still stand down whole, which is 4b-2. The split is a seam in the code: a
+world pass publishes its hand-over from *inside* its GL render rather than from its gather, so the
+five with levers of their own need the treatment one at a time, and the UI layer's Vulkan record is
+emitted conditionally on GL twin bookkeeping, so it cannot be produced without GL objects at all
+yet.
+
+**4b-1's own result is three runs of one build**, at one fixture with the camera reproduced
+exactly: the two-lane A/B **0 px apart** for both passes (190 247 and 102 ink pixels a side), and
+then the vulkan-only capture — which no build before it could write — **byte-identical** to the
+two-lane run's Vulkan half for the scaffold, and 17 px of 786 432 for the readout, all of them in
+the digit columns because the readout draws the frame rate and the two runs ran at different ones.
+
+**And the per-pass A/B had to learn to arm itself before any pass could stand down.** The Vulkan
+half was claimed only on a GL capture that reached the disk — a guard against a stale `_gl.ppm`,
+and one that refuses every capture on a lane where the GL half is never attempted. It is kept
+where both lanes run; where only one does, `tagpu_vk.c` unlinks the target `_vk.ppm` the instant a
+claim is seen, so a file that exists belongs to this arming. Tested on the refusal path with a
+planted sentinel, which is the only path where an unlink shows.
 
 4a's result: `renderer=vulkan` brings the lane up on the **game's own window** — `our window
 00020058 over 00020058`, no route D window created — and an X grab of that window reads **307 200

@@ -8740,6 +8740,141 @@ the reason, because shipping a fix that cannot be measured is not a landing here
   what gets the lane up once the window has an extent, and a bound that stopped retrying would
   wedge the lane for the session — a worse failure than the waste.
 
+### 2.49 The gather halves run with no context, and the A/B learns to arm itself — landing 4b-1 of the Vulkan-only plan
+
+**What this part is.** 4a's backend called no gather half, so no pass had a hand-over and the
+frame was the seam's clear colour (§2.48). This part wires `tagpu_overlay_draw` into
+`vk_render_main` and then teaches two of the driver's four GL-owning entry points to run their
+gather and stand their draw down: `tagpu_scaffold_frame` and `tagpu_fps_present`. It also fixes
+the thing that made *any* of this unmeasurable — the Vulkan capture was armed by the GL capture
+having reached the disk.
+
+**The driver first, and one frame number for the whole frame.** `vk_render_main` fills a
+`TAGPU_FRAME` and calls `tagpu_overlay_draw` before `tagpu_vk_frame`, so everything the fork adds
+that is not a GL draw is live under `renderer=vulkan`: the input injection, the trigger readers,
+the own-draw flushes, the palette, the zoom, the packet exchange and the reclaim bracket. Two
+details in it would each have been a silent bug:
+
+* **The frame counter is taken once, before anything uses it.** A post-increment inside either
+  the driver call or the present call would have differed by one, and a Vulkan pass refuses a
+  hand-over stamped with any other frame — so the symptom would have been every pass standing
+  down, not an error.
+* **`vp_y` takes `render.viewport.y` WITHOUT `opengl_y_align`.** That is the extra scanline WGL is
+  given so the driver cannot take exclusive mode (`dd.c`, and §2.48's audit); carrying it would
+  offset every Vulkan frame by one pixel, and no capture would catch it because both halves of a
+  two-lane A/B would carry it equally.
+
+`surface_tex` is 0: there is no GL texture to name, and 0 is what the fork already hands a
+non-8bpp frame, so it is in-contract rather than a sentinel. Its consumers have nothing until
+4c takes over TA's surface upload.
+
+**The GL calls are not left to no-op, and that is a decision rather than a tidiness.** With no
+context current most of them do nothing. The ones that do not are the ones that read GL state
+back: `tagpu_scaffold.c`'s `init_gl` branches on a `GL_COMPILE_STATUS` and a `GL_LINK_STATUS`, so
+a lane with no context takes whichever branch the loader's stubs produce, and *both* are wrong —
+one logs a shader failure that never happened, the other latches `s_state = 2` and the pass is
+dead for the life of the process. A pass that is not called publishes nothing instead, and its
+Vulkan twin then refuses out loud (`no hand-over for frame N — the GL pass published nothing`).
+The gate went in at the driver in 4b-1's first commit and moves inward one pass at a time.
+
+**Where the line falls inside a pass.** Not at the pass, at the point where the pass stops being
+API-independent:
+
+| pass | runs on both lanes | stands down under `renderer=vulkan` |
+|---|---|---|
+| `tagpu_scaffold_frame` | the packet's anchors walked over the engine's sweep rect into `s_buf`, the per-unit occlusion prediction read back out of it, the four NDC numbers | `init_gl`, the `GL_R8` upload, the blended quad, `tagpu_abshot_*` |
+| `tagpu_fps_present` | the lever poll, the 500 ms averaging window, `tagpu_text_frame`'s font latch, the `emit` loop packing eleven cached strings into `s_v` | `init_gl`, the `glBufferSubData`, the triangles, `tagpu_abshot_*` |
+
+Both publish their hand-over **once**, outside the GL block, because the hand-over belongs to
+both lanes; in the GL-only code it sat inside the draw.
+
+#### The A/B's arming, and why it had to move first
+
+**The Vulkan capture was armed by the GL capture reaching the disk.** The coupling is deliberate
+and documented (`tagpu_abshot.h`): `tagpu_abshot_end` returns 1 only when the PPM was written, and
+the caller must not claim the Vulkan half on anything else — because a refused GL write leaves the
+PREVIOUS run's `_gl.ppm` lying on the disk, and a Vulkan half diffed against that reports a
+capture of a different frame as a port failure. An oracle failure wearing a port failure's
+clothes, which is the worst answer an oracle can give.
+
+**On the vulkan-only lane there is no GL half to ask.** `tagpu_abshot_end` is not merely refused
+there — it is never called, because the pass that would call it has stood its draw down. So
+`wrote` is 0 on every frame and the rule refuses every capture **on the only lane that presents**.
+The chain, for the scaffold: `tagpu_scaffold.c:316` polls the trigger → `taking = s_ab &&
+!s_abDone` → `s_abFrame = tagpu_abshot_end(...)` → `tagpu_scaffold_overlay(..., &ab)` →
+`tagpu_vk_scaffold.c`'s `prepare` → `s_abFrame = ab`. Landing 4's own oracle is a comparison of
+two **builds** and has no `_gl.ppm` in it at all, so the guard that makes the two-lane oracle
+trustworthy is exactly what prevents the two-build one.
+
+**So the arming is claimed on the intent, and what the rule was buying is established by
+construction instead.** Where both lanes run the rule is unchanged and is still what a pass
+applies. Where only one does, `ab = taking`, and `tagpu_vk.c` unlinks the target `_vk.ppm` the
+instant a claim is seen — out of a table the path selection reads too, so a pass added later
+cannot get the selection and not the unlink, and for **every** claim in the frame rather than only
+the one `abpath` names. After that line the file does not exist; it comes back only if
+`tagpu_vk_shot_finish` writes it. **Absent means this arming produced no capture** — which every
+refusal states in the log — and **present means this arming's**, on either lane.
+
+That is a fact about the filesystem rather than an argument about ordering, which is all the old
+rule could have been once the half it read stopped existing. It also closes two refusals that used
+to leave a stale `_vk.ppm` behind where both lanes run: a surface whose images do not carry
+`TRANSFER_SRC`, and two levers armed in one frame. Until now those were handled by the operator's
+`rm` in the recipe, not by the code.
+
+#### Measured — one build, one fixture, three runs
+
+`feat-forest` on Two Continents at 1024×768, `ss=1`, one `.ab` at a time. The camera is
+`[2950, 1010]` / eye `(2566, 616)` in **all three** runs, and the scaffold's own gather figures are
+identical in each: `swept 68x76 tall=151 flat=30 gafFallback=1 junk=0`.
+
+| pass | run | result |
+|---|---|---|
+| scaffold | `renderer=openglcore` + `tagpu_vk.on` (route D) | **0 px apart**, 190 247 ink px a side |
+| scaffold | `renderer=vulkan` (route E) | `tagpu_scaffold_vk.ppm` **written**, and **byte-identical** to the two-lane run's Vulkan half (same md5, 0 px, 190 247 ink px) |
+| fps | `renderer=openglcore` + `tagpu_vk.on` (route D) | **0 px apart**, 102 ink px a side |
+| fps | `renderer=vulkan` (route E) | `vk: fps: the Vulkan edition is up — 512x256 atlas`, `tagpu_fps_vk.ppm` written; 17 px of 786 432 against the two-lane run's Vulkan half |
+
+**The scaffold's byte-identity is the strong result, and the fps readout's 17 px is not a
+weaker one.** The scaffold is a pure function of the eye, the viewport and the map's features, so
+two runs at the same camera must agree exactly, and they do. The readout draws **its own
+measurement**: the two runs ran at different frame rates, so the digits differ and nothing can
+make them agree without measuring the clock instead of the renderer. What makes that a result
+rather than an excuse is *where* the 17 pixels are — the ink bounding box is `x 6..50, y 8..14` in
+both, the differences are confined to `x 32..43`, and columns 0..31 (the `FPS` label and the
+leading digit, 57 ink pixels) agree **exactly**.
+
+**The capture existing is also what proves the gate held.** Had `init_gl` run without a context it
+would have latched `s_state = 2`, the pass would have published nothing, and the twin would have
+had no hand-over — so there would have been no `_vk.ppm` to diff.
+
+**The unlink is tested on the only path where it is visible.** A capture that succeeds overwrites
+the file anyway, so the positive path says nothing about it. A 15-byte sentinel was planted as
+`tagpu_scaffold_vk.ppm` and a frame arranged with two world passes drawing and one lever armed:
+the lane refused (`1 A/B levers claimed this frame and 2 passes drew into it - nothing captured`)
+and the file was **gone** rather than stale.
+
+#### Not covered by 4b-1
+
+* **`tagpu_native_frame` and `tagpu_gui_present` still stand down whole**, so under
+  `renderer=vulkan` there is still no world and no UI layer — the window is the clear colour with
+  the scaffold's overlay or the readout on it when those levers are armed. §2.48's *"100 % one
+  colour is the correct result"* therefore still holds for an unarmed instance and no longer holds
+  for an armed one.
+* **The two remaining entry points are not two more of the same job**, which is what pushed 4b
+  into two landings — see [vulkan-only-plan](vulkan-only-plan.html) landing 4b for the seam. In
+  short: each world pass publishes its hand-over from **inside** its GL render
+  (`terr_publish` is called from `tagpu_terr_render`, not from `tagpu_terr_gather`), so the five
+  world passes with a lever of their own — `terr`, `feat`, `fx`, `mark`, `posedraw` — each need the
+  scaffold's treatment individually, and the native pass's own composite besides; and the UI
+  layer's Vulkan record is emitted
+  conditionally on GL twin bookkeeping (`twin_make` / `twin_find` gate `mir_op`), so its record
+  cannot be produced at all until the twin table is separated from its GL objects.
+* **`ss=1` only**, as everywhere in this plan: `ss=2` has no target on the Vulkan side until 4c.
+* **The fps readout needs `mark.on` at launch for the font** on this lane exactly as on the GL one
+  — the font reaches the render thread in the frame packet, published at hook 8, which is
+  `markown`'s. Under `renderer=vulkan` that hook is installed at DLL attach as always, so the
+  requirement is unchanged and not a property of the new backend.
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out
