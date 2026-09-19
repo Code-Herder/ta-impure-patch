@@ -1735,6 +1735,20 @@ Back to the filed list:
    | `tagpu_overlay.c` | `tagpu_overlay_draw` |
    | `tagpu_render3do.c` | **nothing** — the only one |
 
+   **AND `tagpu_render3do.c`'s "nothing" DOES NOT MEAN IT GOES WHOLE** [checked 2026-09-18].
+   The table above answers one question — *does the Vulkan lane call this file directly?* — and
+   for this one file the answer is no, which reads like a file that can be deleted. It cannot.
+   Four other passes call it: `tagpu_native.c`, `tagpu_posebake.c`, `tagpu_overlay.c` and
+   `tagpu_posedraw.c`, and the last of those calls `tagpu_r3d_atlas_mirror`,
+   `tagpu_r3d_atlas_mirror_rgb`, `tagpu_r3d_atlas_mirror_want`, `tagpu_r3d_atlas_mirror_rgb_want`,
+   `tagpu_r3d_atlas_mirror_rgb_step`, `tagpu_r3d_atlas_restore_list` and `tagpu_r3d_lut_mirror`
+   from inside **`pd_view_publish`** (`tagpu_posedraw.c:744`) — the function that fills the
+   hand-over payload the Vulkan lane reads. Those mirrors ARE the CPU-side twins landing 2 built
+   for that lane. So `tagpu_render3do.c` is a **producer for Vulkan by one hop**, and what 11-2
+   takes out of it is its ten GL calls — one LUT texture, created at `:298`–`:304` and updated
+   at `:136`–`:139` — and nothing else. The same one-hop question is owed to every other file
+   in the table before a line of it is deleted.
+
    **Re-checked 2026-09-18, for the eight files landing 11-2 owns, and the table holds.** Worth
    recording is HOW it failed first: deriving each file's exported symbols from its own header
    and testing those against the Vulkan sources reported `tagpu_terr.c`, `tagpu_feat.c`,
