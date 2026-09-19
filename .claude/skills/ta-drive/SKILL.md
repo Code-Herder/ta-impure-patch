@@ -881,6 +881,22 @@ cannot be swapped between runs.
   of the viewport — so with `gui.on` the rule is **mask the minimap and the cursor hotspot**, and
   three grabs 4 s apart will NOT be identical without that.
 
+- **CLEAN-BUILD BOTH SIDES OF AN A/B, OR YOU MAY NOT BE MEASURING THE TREE YOU NAMED**
+  (2026-09-19). `make -C tagpu/ddraw` is incremental and the Makefile does generate header
+  dependencies (`-MMD -MP`, `-include $(DEPS)`), so an incremental build is *usually* right —
+  but it is not guaranteed, and the failure is silent. Caught building a control: an incremental
+  build of the main checkout at a given commit produced **1 580 032 bytes, `.text 0xdc7d4`**, and
+  `make clean && make` on the *byte-identical* tree produced **1 547 776, `.text 0xd8274`** — 16 736
+  bytes of code difference between two builds of the same sources. The clean build was the correct
+  one; it matched a worktree that had built the same code from scratch.
+
+  A stale control is worse than no control: it quietly turns "this landing changed nothing" into
+  a comparison against a binary from some earlier commit. **`make -C tagpu/ddraw clean` before
+  building either DLL of an A/B**, and record `stat -c%s` and `objdump -h | grep .text` for both —
+  two builds of the same tree differ in the PE timestamp but must agree on `.text`. A `.text` that
+  moves between two builds you believe are the same tree is the signal; the file size alone can be
+  explained away as padding and will be.
+
 - **CHECK THE LOG SAYS THE LAYER IS ON BEFORE BELIEVING A UI MEASUREMENT.** `gui:` lines appear
   either way. The one that matters is `gui: ARMED flip@0x4C63A0=1 leaves=17/17`; its opposite is
   `gui: trigger host only (tagpu_gui.on is not on) — the UI layer, the census and the 17 leaves
