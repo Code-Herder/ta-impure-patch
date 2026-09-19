@@ -3322,11 +3322,18 @@ landing removes. Measured over
 px outside the minimap in all 20 cross-build pairs**, and four of those **0 px over the whole
 frame**. The fixture is bimodal — two images 48 px apart, one unit's off-screen dot — and
 `main`'s build produced BOTH, so **a batched control cannot separate the build from drift**;
-**`11-5e-2c` restore the feed safely** — a bound (`rlist_cap` allocated once, `rlist_room` a
-pure bounds test), an ordering (take the unit list at the handover, not at `pd_begin`), and the
-two pins that would otherwise make it invisible or fatal: `restored`, gated in all three
-producers on the now-permanently-0 `s_atlas.rgb`, and `rgbAniso`, which reports 0 against a
-`s_twinAniso` that defaults to 4 and stands the unit pass down;
+**`11-5e-2c` restore the feed safely — LANDED 2026-09-19** — a bound (`rlist_cap` allocated
+once, `rlist_room` a pure bounds test), an ordering (take the unit list at the handover, not at
+`pd_begin`), and the two pins that would otherwise make it invisible or fatal: `restored`, gated
+in all three producers on the now-permanently-0 `s_atlas.rgb`, and `rgbAniso`. The hazard turned
+out to be **intra-thread ordering, not a race** — every paint of an armed atlas and every
+consumer run on the render thread inside one loop iteration, so a fence would have fixed nothing
+while reading as though it had. `restored` reaches the fragment shader as `uRestored`, so its pin
+meant the restored unit twin was built, painted and bound and **never sampled**: unpinning it
+moves **258 px of 786 432** on the one static unit, identical across all four cross-build
+pairings against a **0 px** same-build control. `rgbAniso` reversed 11-5e-2's review
+prescription — `s_twinAniso` is the knob *clamped by the device* and is `0.0f` where anisotropy
+is absent, so the constant that review asked for would have drawn no units at all there;
 `11-5e-3` the include residue (**landed 2026-09-19**: `tagpu_fps.c`, `tagpu_scaffold.c` and
 `tagpu_render3do.c` — **not** the three this row used to name. `render_gdi.c` is not residue, it
 reads `g_oglu_version`; and 11-5e-1 never took `tagpu_render3do.c`'s include, it took a

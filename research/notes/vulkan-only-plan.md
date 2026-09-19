@@ -2470,7 +2470,7 @@ that a count which grows is the plan catching up with the work.) The row was
          over it. Not fixed in part 2 on purpose — `rlist`'s lifetime is this landing's subject,
          and a half-fix (free the buffer, leave `rlistWant`/`rlistFailed` latched) is the exact
          shape of bug this gate keeps finding.
-       - **11-5e-2c — restore the feed, safely.** The defect above, fixed by construction
+       - **11-5e-2c — restore the feed, safely. LANDED 2026-09-19.** The defect above, fixed by construction
          rather than by a guard, in a landing that can measure it: a **bound** (allocate
          `rlist_cap(a)` once in `tagpu_gaf_atlas_restore_vk`, make `rlist_room` a pure bounds
          test — 0.36 MB unit, 0.72 MB feat, against a mirror this file already declines to
@@ -2480,10 +2480,32 @@ that a count which grows is the plan catching up with the work.) The row was
          fatal: **`restored`**, published by all three of `tagpu_feat.c`, `tagpu_fx.c` and
          `tagpu_posedraw.c` and gated in each on `s_atlas.rgb`, whose only remaining write is
          `= 0`; and **`rgbAniso`**, which lost its writer here and reports 0 while
-         `tagpu_vk_unit.c` stands the frame down on `h.atlasRgbAniso != s_twinAniso` with
-         `s_twinAniso` defaulting to **4**. Unpin the feed without those and the unit pass
-         draws nothing. All three are labelled `[PINNED]` at their declarations in
-         `tagpu_gaf.h`, and `atlas_paint` carries the whole argument at the site.
+         `tagpu_vk_unit.c` stands the frame down on `h.atlasRgbAniso != s_twinAniso`. Unpin
+         the feed without those and the unit pass draws nothing. All three are labelled
+         `[PINNED]` at their declarations in `tagpu_gaf.h`, and `atlas_paint` carries the whole
+         argument at the site.
+
+         **THIS ROW SAID `s_twinAniso` DEFAULTS TO 4. IT DOES NOT, AND THE LANDING REVERSED THE
+         PRESCRIPTION BECAUSE OF IT.** `s_twinAniso` is the knob **clamped by the device**:
+         `tagpu_vk_unit.c` sets it to `0.0f` unless the anisotropy extension is present *and*
+         `d->maxAniso >= want`. So publishing the documented constant `TAGPU_GAF_TWIN_ANISO`
+         would have stood the unit pass down on every machine without anisotropic filtering —
+         this row's own predicted failure, arriving from the other side. The producer publishes
+         the **knob**; the consumer compares against `s_twinAnisoWant`, the unclamped value it
+         read. Both prescriptions in `tagpu_gaf.h` are corrected in place rather than left
+         standing.
+
+         **AND THE FLAG REACHES THE SHADER, so "invisible" was literal.** `restored` is copied
+         into the unit uniform block at `tagpu_vk_unit.c:1696` and read by the fragment shader
+         as `uRestored` (`tagpu_native.c:442`), which does
+         `if (uRestored == 1) t = texture(uAtlasRGB, vUV);` at `:470`. At 0 the sample never
+         happens and the fragment takes the palette path — so every session since 11-5e-2 built,
+         painted, mipped and **bound** a restored twin that no shader read. Measured: an
+         interleaved four-run A/B against `515714c` moves **258 px of 786 432**, in the identical
+         box `(502,355)-(516,388)` in all four cross-build pairings, with a **0 px** same-build
+         control on both builds. That box is the scenario's one placed unit. Full method,
+         including a fixture correction that cost the measurement a round,
+         [gpu-status](gpu-status.html) §2.79.
 
          Deferred to **11-5e-2b**: the RGB read-back, the `mirrorRgb*` fields and the
          `atlasRgb*` publications — plus `tagpu_posedraw.c`'s `restored` flag, which `a->rgb`

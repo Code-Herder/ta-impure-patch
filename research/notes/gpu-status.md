@@ -13425,3 +13425,196 @@ shaders, 33 programs, headers current`. The function inventory against `main` sh
 six intended removals in `tagpu_gaf.c` and **no function added or removed** in `tagpu_vk_gui.c`
 or `tagpu_gui_surf.c` — the check that a scripted cut did not swallow a neighbour, which is a
 trap this gate has paid for before.
+
+### 2.79 The restore feed, put back between a bound and an ordering — landing 11-5e-2c
+
+The published restore list is the other lane's only input, and it has been
+**seeded once per session and never fed since landing 11-4c**. `atlas_paint` ended
+in `if (a->job) restore_enqueue(a, e);` — the GL restorer's job — and `a->job` went
+NULL when 11-4c took the `glGenTextures` out of `tagpu_gaf_atlas_create`. A predicate
+that read as *"the GL restorer is running"* had quietly become *"the GL restorer can
+never run"*, and it was gating the **other backend's** feed. 11-5e-2 found the one-line
+fix, proved it was a use-after-free, and took it back out. This is that fix with the
+two guarantees it needed.
+
+#### THE HAZARD WAS NEVER A RACE, AND THE PROSE THAT SAID SO INVITED THE WRONG FIX
+
+`tagpu_gaf.c` described *"the buffer the render thread is about to read"*, and the plan
+agreed. That phrasing asks for a lock or a fence, and **a fence here would have fixed
+nothing while reading as though it had**. Established by call graph instead:
+
+| step | where | thread |
+|---|---|---|
+| `render_vk.c:232` | `tagpu_overlay_draw` — the whole gather and paint half | render |
+| ↳ `tagpu_overlay.c:264` | `tagpu_native_frame` (its only caller) | render |
+| ↳ `:2150`, `:3291`, and `ghost_record` → `ghost_one:1887` | `tagpu_posebake_*` → `mat_emit` → `tagpu_r3d_atlas_uv` → `atlas_paint` | render |
+| `render_vk.c:268` | `tagpu_vk_frame` → `tagpu_vk_unit:1778` → `tagpu_posedraw_handover` | render |
+
+Every paint of an armed atlas and every consumer are the **same thread**, in one
+iteration of one loop. The unit atlas is reachable only through `tagpu_native.c:940`
+and `tagpu_posebake.c:467`, both inside `tagpu_native_frame`, which has exactly one
+caller, which has exactly one. The GUI atlas is painted from the game thread and is
+**not in scope** — it never arms a list. So this is an **intra-thread ordering**
+defect: a pointer captured early in `overlay_draw`, a paint later in the same call,
+and a read later still.
+
+#### THE BOUND — the address cannot move
+
+`tagpu_gaf_atlas_restore_vk` allocates `rlist_cap(a)` frames in **one `malloc`**
+instead of 256-and-grow, and `rlist_room` becomes a pure comparison. `a->rlist` now has
+exactly one writer in the file and there is **no `realloc` and no `free`** anywhere in
+it, so the address is fixed for the atlas's life. The cost is stated rather than hidden:
+
+| atlas | `ATLAS_MAX` | `rlist_cap` (`max × 4`) | bound at 44 B/frame |
+|---|---|---|---|
+| unit (`tagpu_render3do.c`) | 2048 | 8192 | **360 448 B** |
+| effects (`tagpu_fx.c`) | 2048 | 8192 | **360 448 B** |
+| feature (`tagpu_feat.c`) | 4096 | 16384 | **720 896 B** |
+
+Against a read-back mirror this same file declined to free at 16 MB.
+
+#### THE ORDERING — the in-place rewrite cannot reach a reader
+
+The bound does not cover `rlist_restart`, which zeroes the count and refills the array
+**in place**. So the unit list moves from `pd_view_publish` to
+`tagpu_posedraw_handover`. The old site is the *first* posedraw window of the frame,
+with `ghost_record` still to run and still able to paint through
+`tagpu_r3d_atlas_uv` → `atlas_get` on a build ghost not yet atlased. The new site sits
+inside `tagpu_vk_frame`, which the loop reaches only after `tagpu_overlay_draw` has
+returned — so every paint of the frame is behind the capture **by the loop's shape**.
+
+It joins `s_pub.otherDraws`, which is taken at that same beat for the same reason, and
+whose comment had said `render_ogl.c` since before the Vulkan lane existed. Corrected:
+the property is the loop's shape and both loops have it, but the file named was the one
+that no longer runs.
+
+**Two hazards, two different guarantees, and neither is a timing argument.**
+
+#### OVERFLOW RESTARTS RATHER THAN DROPS
+
+`rlist_restart`'s own definition already called itself *"both the arm path and the
+overflow recovery"*, so the append uses it. The bound is `max × 4`, so reaching it means
+a repack storm re-laid the atlas three times over; the restart reseeds from what the
+atlas actually holds, cannot itself overflow (at most `max` entries against `max × 4`),
+and says so in the log. The bounds test is re-checked afterwards anyway, because
+*"cannot happen"* is not an argument for writing past an array.
+
+#### THE TWO PINS, AND THE SECOND IS NOT WHAT THE PLAN EXPECTED
+
+**`restored` asked a GL question.** All three producers gated it on the atlas's GL
+texture name — `tagpu_posedraw.c` through `tagpu_r3d_atlas_rgbref()`, `tagpu_feat.c`
+and `tagpu_fx.c` on `s_atlas.rgb` — and that name has exactly **one writer in the tree**,
+`tagpu_gaf.c:643 a->rgb = 0`. It published 0 on every frame since 11-5e-2 deleted the
+restorer. It now asks whether the published list is armed, which is the route that
+exists. In `tagpu_posedraw.c` the assignment also **moved below the arm it asks about**;
+it had sat sixty lines above `tagpu_r3d_atlas_restore_want()`, harmless only while it
+read a pinned 0.
+
+**`rgbAniso` carries the knob, not the documented constant, and that reverses a
+review's instruction.** 11-5e-2's review left a warning at the field calling it a loaded
+gun: the consumer stands the whole frame down on `h.atlasRgbAniso != s_twinAniso`, so a
+field reporting 0 against a sampler built at 4 draws no unit at all. Right about the
+danger — and one detail of it was wrong, and the detail is the whole decision.
+
+> **`s_twinAniso` is not `aniso=`. It is `aniso=` CLAMPED BY THE DEVICE**, and
+> `tagpu_vk_unit.c` sets it to `0.0f` unless the extension is present *and*
+> `d->maxAniso >= want`.
+
+So publishing `TAGPU_GAF_TWIN_ANISO` — the fix the warning asked for — would have
+swapped one silent stand-down for another, on every machine without anisotropic
+filtering, over a feature it can do nothing about. That is the plan's own predicted
+failure arriving from the other side.
+
+The producer publishes `tagpu_classicpp_light()->aniso` on every arm beat — **every
+beat, not at the arm**, because the case worth catching is a knob edited *after* the
+latch. The consumer keeps `s_twinAnisoWant`, the value it read, separately from
+`s_twinAniso`, the value the device allowed, and compares against the former. The test
+then means *"the two ends are configured apart"* — exactly what the sampler's own
+comment says it is for, a knob changed mid-session when the sampler cannot be rebuilt
+because every other slot's submit still names it — and stops meaning *"this machine
+lacks a feature"*. Publishing what the consumer actually applies was the third option
+and is worse than both: the test would compare a value against itself.
+
+Both prescriptions in `tagpu_gaf.h` are corrected rather than left standing — the
+loaded-gun comment now says why the fix is not the one it asked for, and
+`TAGPU_GAF_TWIN_ANISO` records that the landing which brought the feed back decided
+against carrying it.
+
+#### AND THE LAST LANDING'S F4 IS NOW WHOLE
+
+`tagpu_gaf_atlas_free_buffers` frees `rlist` as well as `mirror`, and clears
+`rlistWant`/`rlistFailed` with it — an atlas with the latch set over a NULL buffer is
+precisely the half-state that review named. 11-5e-2b part 2 declined the fix on purpose,
+because a half-fix was worse than the gap and `rlist`'s lifetime belonged here. **The
+bound is what made it a complete statement**: one allocation site, no other free, so
+"give it back and clear the state that described it" is the whole of the lifetime rather
+than one end of one nobody owned. The header's declaration comment is corrected in the
+same commit — the `.h` half of a `.c` fix is the miss the last review caught twice.
+
+#### WHAT IT CHANGES ON SCREEN — and it is not nothing
+
+The two pins above are described as flags, which makes them sound like bookkeeping.
+`restored` is not bookkeeping: it reaches the **fragment shader**.
+
+| step | file:line |
+|---|---|
+| producer publishes the flag | `tagpu_posedraw.c` (below the arm, since this landing) |
+| consumer copies it into the uniform block | `tagpu_vk_unit.c:1696` — `b.i[0] = h->restored;` |
+| shader declares it | `tagpu_native.c:442` — `uniform int uRestored;` |
+| shader acts on it | `tagpu_native.c:470` — `if (uRestored == 1) t = texture(uAtlasRGB, vUV);` |
+
+With the flag at 0, `t` stays `vec4(0.0)` and the fragment falls through to the
+palette-indexed path. So the restored twin was **built, painted, mipped and bound** —
+`tagpu_vk_unit.c:2579-2580` binds `s_arView`/`s_sampTwin` at slot 3 on the strength of
+the view existing, not of the flag — and then **never read**. Every session since
+11-5e-2 has paid for a restore whose output no shader sampled.
+
+#### THE MEASUREMENT
+
+Interleaved A/B, `mainA, brA, mainB, brB`, both DLLs **clean-built** (the incremental
+staleness this landing's predecessor was caught by), 75 s settle, three grabs 4 s apart
+per run. Control: `515714c` — local `main`'s tip, the previous landing.
+
+**Gate 1 — settled.** Grabs 2 and 3 are **0 px** apart in every one of the four runs.
+Grab 1 differs from them by exactly **1 px, at (512, 384)**, on both builds — the cursor
+oscillator §2.78 names, arriving exactly where §2.78 said it would. Grab 2 is the
+settled frame throughout.
+
+**Gate 3/4 — the control, interleaved.** `mainA` vs `mainB`: **0 px**. `brA` vs `brB`:
+**0 px**. Two independent runs of each build, separated by a run of the other, agree to
+the pixel over the whole 1024×768 frame.
+
+**The result.** All **four** cross-build pairings — `mainA×brA`, `mainB×brB`, and both
+diagonals — give **258 px of 786 432**, in the identical bounding box **(502, 355) to
+(516, 388)**. That box is the scenario's one placed unit, whose roster line reads
+`world=(1600,1600,91) screen=(512,384)` in all four runs. Mean channel delta 11.5, max
+188: the same unit, slightly smoother, sampled from the restored twin instead of the
+palette path.
+
+**What the log oracle says.** Both builds: one restore, `25 of 25 frames over
+2048×2048, generation 1`, two mip levels reduced, twin painted, **zero**
+`VK_ERROR`/`DEVICE_LOST`/`VUID`/validation lines, and the bound never restarted. The
+restore histories are equivalent line for line. One line is branch-only, latched once:
+`unit: the other lane is drawing through the Classic++ restored atlas and this lane has
+no restore of its own yet`. That notice can only fire when `restored` is true, so on
+`main` it is unreachable — which is the same fact the pixels show, stated by the code
+about itself.
+
+#### A FIXTURE CORRECTION THAT COST THIS MEASUREMENT A ROUND
+
+**`one-unit` is not a static scene.** It loads into a live skirmish with three AI
+opponents: 15 to 17 units alive, commanders walking, `corsolar` and `corwin` under
+construction, `nano=` non-zero. Only the *placed* unit is still. A further 44 px
+differed inside the top-left panel, and they are **our own commander's minimap blip**,
+at `world=(9283,5088)` in the `main` runs and `world=(3552,1008)` in the branch runs.
+
+Those 44 px are excluded **by construction, not by statistics**: a renderer cannot move
+a unit, so a blip at two different map positions is sim state at grab time. The
+statistical route was not available and it is worth saying why — two runs per build
+cannot separate "the build did it" from "a wandering commander happened to split along
+the build", and the control's 0 px says only that each build's two runs agreed, which a
+commander with two resting places would also produce.
+
+**The rule this adds** (carried into the `ta-drive` skill): a pixel A/B on this fixture
+compares the placed unit's box, or masks the minimap panel. The four gates bound drift
+between and within runs; none of them bounds a second player.

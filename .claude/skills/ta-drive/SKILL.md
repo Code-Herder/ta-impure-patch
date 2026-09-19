@@ -906,6 +906,26 @@ cannot be swapped between runs.
   <inst> gui.on=1`** — and `twins=`, `sprites=` and `col=n/m` in the counter dump are how you
   confirm the ops actually flowed.
 
+- **`one-unit` IS A LIVE SKIRMISH, AND ONLY THE PLACED UNIT IS STILL** (2026-09-19). The
+  scenario's name says one unit; the roster says 15 to 17, across three AI opponents, with
+  commanders walking, `corsolar`/`corwin` going up and `nano=` non-zero. A pixel A/B on it
+  compares **the placed unit's box** (`world=(1600,1600,91) screen=(512,384)` at the standard
+  camera) or masks the top-left panel, because our own commander's **minimap blip** moves with
+  the sim and lands in a different place from run to run. Caught 2026-09-19 on 11-5e-2c: 44 px
+  of a 302 px diff were that blip, at `world=(9283,5088)` in one build's runs and
+  `world=(3552,1008)` in the other's.
+
+  **The four gates do not cover this and cannot be made to.** They bound drift *between* runs
+  and jitter *within* one; a second player is neither. Two runs per build also cannot separate
+  "the build did it" from "a wandering commander split along the build" — and the same-build
+  control reading 0 px does not help, because a commander with two resting places produces
+  exactly that. The exclusion has to be **by construction**: a renderer cannot move a unit, so a
+  blip at two map positions is sim state, full stop.
+
+  **The fix is the rule that already exists thirty lines below — pause the sim first**
+  (`tacli keys <i> tab`, then peek the tick twice). It is filed under frame-time A/Bs and it is
+  just as binding on a pixel one.
+
 **A log line beats a picture whenever the thing under test has a log line.** The same landing's
 real oracle was `unit: restorevk -- (N entries seeded …)` plus `vk: unit: restoring the twin HERE
 - N of N`: their absence is what a broken restore arm looks like, and no pixel would have moved,
