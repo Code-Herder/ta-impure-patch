@@ -100,17 +100,42 @@ void tagpu_ftime_poll(void)
            the only thing anyone reads. */
         s_vkN = 0; s_vkAt = 0; s_frames = 0;
         s_vkTotal = 0;
-        /* THERE IS NOTHING LEFT IN FLIGHT TO CLEAR, and that is a property of
-           the lane rather than an omission. The GL bracket kept up to GLQ
-           query pairs pending across a toggle and the landing-6 review found
-           them being harvested into the freshly cleared ring -- samples from
-           an arbitrarily old scene inside a window that says it threw
-           everything away. The Vulkan lane carries no such pool here: the seam
-           resolves a slot behind the fence it already waits on and hands the
-           figure over as a number, so a sample either arrived before this
-           reset or is produced after it. [The GL pool went with the GL half in
-           11-5e-1; the finding it fixed is recorded because the shape can
-           come back with any future pool.] */
+        /* THE VULKAN LANE HAS A POOL TOO, AND THIS FUNCTION CANNOT REACH IT.
+           An earlier version of this comment said the lane "carries no such
+           pool here". It does: `tagpu_vk.c` keeps `tsPool` and
+           `tsPend[MAXIMG]`, the write is gated on `tagpu_ftime_armed()` and
+           sets `tsPend[fi] = 1`, and the drain -- which is NOT gated -- reads
+           any slot whose flag is set and calls `tagpu_ftime_vk_sample`.
+           Nothing here clears `tsPend`; only the swapchain's creation and
+           `vk_perimage_free` do. [THE 11-5e-1 REVIEW'S MEDIUM-1b, and it was
+           right: the deleted GL half kept `s_qPend` for exactly this reason
+           and the landing-6 review caught stale pairs being harvested into a
+           freshly cleared ring.]
+
+           WHAT ACTUALLY PROTECTS THE RING IS `s_on`, tested at the top of
+           `tagpu_ftime_vk_sample`: a pair resolved while the lever is off is
+           dropped there rather than stopped at the source. That is a real
+           guard and it is why the ring is honest in the steady state -- but it
+           is one test in another function, so say it here rather than leave
+           the next reader to rediscover it.
+
+           THE RESIDUAL HOLE, NAMED RATHER THAN WAVED AT. This poll runs at
+           render_vk.c, BEFORE `tagpu_vk_frame` in the same loop iteration, so
+           on the iteration that flips the lever off->on `s_on` is already 1
+           when the drain runs. A pair stamped in the PREVIOUS armed window can
+           therefore still be accepted into the freshly cleared ring. Pending
+           slots drain one per present and two polls are at least POLL_MS
+           apart, so it needs fewer than MAXIMG presents in half a second --
+           under about five frames a second: a map load, a stalled device, or
+           the owed-teardown `vkDeviceWaitIdle`. Measured here at full frame
+           rate, an off/on cycle reported `n=256/300` on the next report, i.e.
+           the counter restarted cleanly and nothing leaked; that exercises the
+           common case and NOT the stall.
+           THE BY-CONSTRUCTION FIX IS AN IDENTITY, NOT A TIMING ARGUMENT: stamp
+           each pending slot with the arm generation this poll bumps, and have
+           the drain accept a pair only when the generation still matches.
+           Deliberately not done here -- it belongs to `tagpu_vk.c`'s seam and
+           this landing is three GL-free leaf files. */
         flog(on ? "ftime: ON - GPU frame time on the Vulkan lane, two timestamps"
                   " a frame, nothing blocks"
                 : "ftime: off");
@@ -132,7 +157,15 @@ void tagpu_ftime_vk_sample(double ns)
     if (++s_frames >= REPORT_FRAMES) { s_frames = 0; report(); }
 }
 
+/* The seam calls this when it brings the lane down. `s_frames` goes with the
+   ring: it used to be left alone, so a lane that came down at frame 299 of the
+   300-frame cadence made the NEXT sample after the re-bring-up trip the report
+   and print a p50/p99 "over 256 frames" computed from one. The window and the
+   counter over it are one piece of state and are cleared as one.
+   [THE 11-5e-1 REVIEW'S LOW-1a; pre-existing, and the collapse of `report()`
+   to a single branch is what made the wrong line plausible rather than
+   obviously empty.] */
 void tagpu_ftime_vk_reset(void)
 {
-    s_vkN = 0; s_vkAt = 0; s_vkTotal = 0;
+    s_vkN = 0; s_vkAt = 0; s_vkTotal = 0; s_frames = 0;
 }

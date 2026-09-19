@@ -195,7 +195,9 @@ of `tagpu_gldbg.on` anywhere in the tree was a five-site `glGetError` probe in
 creates. Nothing polls the lever now, so **a `tagpu_gldbg.on` file does nothing**.
 
 The trap it was written around outlives it and is why this paragraph stays: **GL 1.1 entry
-points are resolved via `GetProcAddress(opengl32)`, never `wglGetProcAddress`** — the
+points must not be resolved through `wglGetProcAddress` ALONE — every lookup needs the
+`GetProcAddress(opengl32)` fallback** (the surviving `getgl` helpers try
+`xwglGetProcAddress` first and then fall back, which is the shape to copy) — the
 fork's `wglGetProcAddress` returns NULL for them under wine, and calling the NULL pointer
 crashes TA (it cost one run; the crash surfaces as the usual secondary fault at
 `0x4d94e0`). Every `getgl`-shaped helper still in the tree has that fallback for this

@@ -510,6 +510,11 @@ int tagpu_scaffold_frameinfo(unsigned frame_counter, int* r0, int* nrows)
    state and the uploaded texture's dimensions -- went with the draw they
    described; what remains is the published buffer, which names memory this
    pass owns and no API. `tagpu_overlay.c:291` is the caller. */
+/* NOTHING CALLS THIS SINCE 11-5e-1. Its one call site was the GL-context
+   change watch in tagpu_overlay.c, deleted because no source of this build
+   makes a context current for it to see change (`oglu_load_dll` has no
+   caller). Kept because this module's GL objects outlive the watch; it goes
+   with them. */
 void tagpu_scaffold_glreset(void)
 {
     s_pubBuf = NULL; s_abFrame = 0;

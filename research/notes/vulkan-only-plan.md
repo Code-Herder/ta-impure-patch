@@ -2220,8 +2220,9 @@ that a count which grows is the plan catching up with the work.) The row was
      is ordinary, and its own caller runs every frame. It is dead because **`oglu_load_dll()`,
      the only code that resolves `wglCreateContext` and `wglMakeCurrent`, has no caller** --
      a fact about what is NOT in the tree, which no amount of reading that file can establish.
-     Deleting the watch orphaned sixteen functions at once, across ten files, none of which a
-     caller scan had flagged, because each of them did have a caller: the one above it.
+     Deleting the watch orphaned sixteen functions at once, **across sixteen files — one
+     `*_glreset` per file** — none of which a caller scan had flagged, because each of them did
+     have a caller: the one above it.
 
      **AND THE FIRST STATEMENT OF THIS COROLLARY GOT ITS OWN INVARIANT WRONG, which is worth
      more than the corollary.** It said the names `wglCreateContext` and `wglMakeCurrent`
@@ -2401,7 +2402,8 @@ that a count which grows is the plan catching up with the work.) The row was
          different numbers of off-screen units (`alive=14` against `alive=9`, `onscreen=1`
          in both).
        - **11-5e-2 — `tagpu_gaf.c` (39) and `tagpu_restoreglsl.c` (249)**, the live path, plus
-         the ten-function reset cascade 11-5e-1 orphaned and deliberately left standing
+         the sixteen-function reset cascade 11-5e-1 orphaned, fourteen of which it deliberately
+         left standing
          (`tagpu_native_glreset` and five siblings; through native, the restorer's, the shadow
          pass's, the hires pass's and the two posedraw resets). The cascade can only be
          deleted once the objects it resets are gone, so its tail is behind the escalation
@@ -2436,8 +2438,11 @@ that a count which grows is the plan catching up with the work.) The row was
      **No world pass and no unit pass is on that list any more**: `tagpu_native.c`,
      `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c`, `tagpu_scaffold.c`, `tagpu_posedraw.c`,
      `tagpu_overlay.c`, `tagpu_text.c` and `tagpu_ftime.c` are all GL-free. 11-5e-2 takes 288;
-     the remaining 252 are `opengl_utils.c` and the two files below, all three of which are
-     behind the escalation.
+     the remaining 252 are `opengl_utils.c` (31), `tagpu_hires_draw.c` (104),
+     `tagpu_shadow.c` (87) and `tagpu_hires.c` (30). The first draft of this line said "the two
+     files below" and left the arithmetic one file short: `tagpu_hires.c` is the fourth, and it
+     is named here because 30 sites that nobody has listed are how a gate's exit condition
+     slips. [The 11-5e-1 review's LOW.]
 
      **Not covered by 11-5a–e:** `tagpu_shadow.c` and `tagpu_hires_draw.c` (escalation reason
      1) — and, since 11-5e-1 found the dependency, `opengl_utils.c` with them, because it

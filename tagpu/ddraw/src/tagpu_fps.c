@@ -285,6 +285,8 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
     s_nv = nv; s_fw = f->game_width; s_fh = f->game_height;
 }
 
+/* NOTHING CALLS THIS SINCE 11-5e-1 -- see tagpu_native.c's `*_glreset` banner
+   for the whole cascade and why it is left standing. */
 void tagpu_fps_glreset(void)
 {
     /* `s_state`, `s_prog`, `s_vao` and `s_vbo` were zeroed here; all four went

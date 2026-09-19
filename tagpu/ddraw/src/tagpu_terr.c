@@ -574,7 +574,7 @@ void tagpu_terr_glreset(void)
        NOTHING CALLS THIS ON THE SURVIVING LANE, and the name is the reason it
        is worth saying. Its one caller is `tagpu_native_glreset`
        (tagpu_native.c), which tests nothing itself; THAT function's one caller
-       is tagpu_overlay.c:290, inside `if (cur != s_ctx)` where `cur` is
+       is tagpu_overlay.c's GL-context-change watch, DELETED in 11-5e-1 (so this whole chain is unreachable), inside `if (cur != s_ctx)` where `cur` is
        `wglGetCurrentContext()` -- NULL for the life of a process with no GL
        context, so the branch never fires (and `if (s_ctx)` inside it is a
        second pin). Naming the far end of the chain as "its one caller" sends a

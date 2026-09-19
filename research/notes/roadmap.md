@@ -3275,8 +3275,9 @@ something rather than by a value — `oglu_load_dll()`, the only code that resol
 GL-context-change watch could never fire — and when it is, the root of a dead TREE is that
 predicate, not any function in it. (The first write-up stated that invariant as a name scan
 instead of a caller, which the landing review caught: a name scan proves a spelling, not an
-absence.) Deleting that one branch orphaned sixteen functions across ten files, none of
-which a caller scan had flagged, because each of them did have a caller: the one above it.
+absence.) Deleting that one branch orphaned sixteen functions across sixteen files — one `*_glreset`
+each — none of which a caller scan had flagged, because each of them did have a caller: the
+one above it.
 **So the search is "which tests can never be true", not "which functions have no callers";
 the latter finds leaves.** **Not covered by 11-5a–e**: `tagpu_shadow.c` and `tagpu_hires_draw.c`, still escalation
 reason 1, and now known to be more than a preference — `tagpu_shadow_begin` has no caller

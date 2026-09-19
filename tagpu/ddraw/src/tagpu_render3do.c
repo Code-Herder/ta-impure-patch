@@ -680,12 +680,14 @@ int tagpu_r3d_ensure(void)             /* init on demand (GL context current) */
 const char* tagpu_r3d_face_texframe(const char* fa, int owner) { return face_texframe(fa, owner); }
 int tagpu_r3d_face_colour(const char* fa) { return face_colour(fa); }
 
+/* NOTHING CALLS THIS SINCE 11-5e-1 -- see tagpu_native.c's `*_glreset` banner
+   for the whole cascade and why it is left standing. */
 void tagpu_r3d_glreset(void)
 {
     /* fresh GL context: the new atlas/LUT textures are EMPTY — the CPU-side
        caches must forget what was uploaded or everything samples black. The
        atlas's twin and job died with the context too (tagpu_native_glreset
-       has already run tagpu_rglsl_glreset: tagpu_overlay.c orders them) */
+       has already run tagpu_rglsl_glreset: tagpu_overlay.c ordered them until 11-5e-1 deleted the watch that called the cascade; nothing orders them now because nothing calls them) */
     s_state = 0;
     s_lutBuilt = 0;
     s_lutFromShd = 0;

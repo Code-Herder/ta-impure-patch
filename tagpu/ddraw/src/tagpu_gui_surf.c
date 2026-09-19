@@ -2469,6 +2469,13 @@ int tagpu_gui_handover(TAGPU_GUIHAND* out, unsigned now)
     return 1;
 }
 
+/* NOTHING CALLS THIS SINCE 11-5e-1 -- its one call site was tagpu_overlay.c's
+   GL-context-change watch, which could never fire. WORTH A SECOND LOOK WHEN
+   THE GL OBJECTS GO, because not everything below is GL teardown: the reseed
+   request, `TAGPU_GUI_WHY_GLCTX` and `s_skipToReset` are "forget everything
+   derived from this device", and with `tagpu_native_glreset`'s fog-grid drop
+   they are the only such path in the build -- with nothing on the Vulkan side
+   wired to them. [The 11-5e-1 review's observation, for 11-5e-2.] */
 void tagpu_gui_glreset(void)
 {
     /* the context is gone: forget every id, start over from fresh seeds —

@@ -387,8 +387,8 @@ static volatile unsigned s_ggen;
    a fresh shelf, which changes the atlas's BYTES and leaves every cell valid.
    The GL lane re-uploaded on a dirty flag and so never noticed the difference
    (that flag went with it in 11-5e-1); a second backend keying its own upload
-   on `s_ggen` would upload once and then miss every glyph seen afterwards -- invisible text, permanently, for the
-   session. [FOUND 2026-09-16, the G19f landing-2 review: BOTH reviewers led
+   on `s_ggen` would upload once and then miss every glyph seen afterwards --
+   invisible text, permanently, for the session. [FOUND 2026-09-16, the G19f landing-2 review: BOTH reviewers led
    with it independently.] Bumped wherever `s_gatlas`'s bytes change and
    nowhere else -- not when the GL TEXTURE is recreated, which is liveness
    rather than content. */

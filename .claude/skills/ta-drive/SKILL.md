@@ -1589,8 +1589,22 @@ done
 # NOTHING measured against it means anything yet.
 ```
 
-On a settled `one-unit` fixture those three are **0 differing pixels**, so the fixture is
-deterministic and a cross-build difference is real. Then:
+On a settled `one-unit` fixture those three are **0 differing pixels**.
+
+**BUT 0 px MEANS STATIC, NOT SETTLED, AND YOU NEED BOTH.** This bit twice in one landing. A
+scene that has stopped moving at `3 pass(es) drew` gives a rock-solid 0-px control and is
+still greyscale, because the terrain pass and the palette are not up; compared against a
+6-pass capture it reads **202 695 differing pixels**, which looks exactly like a catastrophic
+regression. The control answers "is the scene moving"; only the census answers "is the scene
+finished". Gate on both:
+
+```bash
+# SETTLED: the census must say 6, not merely the same number twice
+C=$(grep -E "vk: census" "$G/tagpu.log" | tail -1 | grep -oE ': [0-9]+ pass' | grep -oE '[0-9]+')
+# STATIC: three captures, 0 px apart
+```
+
+Then:
 
 - **Wait for the census, not for a clock.** `vk: census: frame N: 6 pass(es) drew` (terr, feat,
   unit, fx, mark, gui) is the settled state with the standard arm set. At `3 pass(es)` the
@@ -1599,8 +1613,11 @@ deterministic and a cross-build difference is real. Then:
   the same moment; a capture before it is a capture of a different program.
 - **Match the game state, not the frame number.** `units: alive=N onscreen=M` is the handle.
   Off-screen units still show as **minimap blips**, so two runs whose AI built different numbers
-  of units differ in the minimap panel and nowhere else. Mask the minimap rect (roughly
-  `[0:125, 0:128]` at 1024x768) and report inside/outside separately — "0 px outside the
+  of units differ in the minimap panel and nowhere else. Mask the minimap rect —
+  **`[0:126, 0:128]` at 1024x768**, 126 because that is the engine's own surface height
+  (gpu-status records "the three 126-px surfaces"); `[0:125, …]` leaves a one-pixel row that
+  reports as "outside the minimap" and costs an investigation — and report inside/outside
+  separately — "0 px outside the
   minimap" is the sentence that proves the landing, and it is much easier to obtain than
   identical unit counts.
 - **Build both DLLs in the real worktree, not in a `git archive` copy.** `spirv-check.sh` fails
@@ -1615,6 +1632,15 @@ deterministic and a cross-build difference is real. Then:
   reached the gamedir, never for checking the source.
 - **Instances live in the MAIN checkout's `tagpu/instances/`, never in the worktree.** Read the
   gamedir path out of `tacli ls --json` rather than assuming it is under the tree you are in.
+- **A pixel diff cannot cover an instrument.** Anything that writes to `tagpu.log` rather than
+  to the framebuffer — `tagpu_ftime.on`, the census, the packet line — is invisible to this
+  whole method, and a landing that changed one has not verified it by capturing frames. Arm
+  the lever, let it report, and paste the line.
+- **Two instances armed identically can still settle differently.** Levers like
+  `tagpu_owndraw.on` / `tagpu_terrown.on` appear in the gamedir once the passes take the draw
+  over, and a fresh instance may sit at `3 pass(es)` indefinitely while another reaches 6.
+  Compare a build against itself in the SAME instance — swap the DLL and `scenario load`
+  again — rather than standing up a second instance and hoping the two converge.
 
 ### A masked-comment scan tells you WHETHER, never WHERE (2026-09-19)
 
