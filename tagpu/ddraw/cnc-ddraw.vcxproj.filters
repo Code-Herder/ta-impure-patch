@@ -36,7 +36,6 @@
     <ClCompile Include="src\screenshot.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="src\render_d3d9.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\lodepng.c">
@@ -179,7 +178,6 @@
     <ClInclude Include="inc\openglshader.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="inc\render_d3d9.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="inc\glcorearb.h">
@@ -236,7 +234,6 @@
     <ClInclude Include="inc\winapi_hooks.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="inc\d3d9shader.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="inc\dllmain.h">

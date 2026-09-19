@@ -31,7 +31,8 @@ this project may eventually want arrived in 1.2.162, so they are already declare
 CI installs `gcc-mingw-w64-i686`, `make` and `zip` and nothing else
 (`.github/workflows/build.yml`). A `libvulkan-dev` build dependency would break the release
 build, and an unpinned system header would make the DLL's contents depend on the machine that
-built it. This is the same reason `glcorearb.h`, `ddraw.h` and `d3d9shader.h` are already here.
+built it. This is the same reason `glcorearb.h` and `ddraw.h` are already here. (`d3d9shader.h` was a
+third example until landing 11-1 deleted the Direct3D9 lane.)
 
 ## Licence — Apache-2.0, and it is NOT this repository's MIT
 

@@ -21,7 +21,8 @@ no longer true.
     renderer=vulkan   the patch                (default, shipped)
     renderer=gdi      the original game        (the reference)
 
-Deleted: `render_ogl.c` (2 013 lines), `render_d3d9.c` (742), `opengl_utils.c`,
+Deleted (`render_d3d9.c` ✓ gone 2026-09-18, the rest still standing): `render_ogl.c`
+(2 013 lines), `render_d3d9.c` (742), `opengl_utils.c`,
 `openglshader.h`, `render_ogl.h`, `tagpu_abshot.c`, every `tagpu_*` GL draw, and
 `tagpu_overlay.off`.
 
@@ -1575,8 +1576,9 @@ Back to the filed list:
 
    * **11-1 — the renderer-selection surface.** ✓ **DONE 2026-09-18.** `render_d3d9.c` (742
      lines), `render_d3d9.h`, `d3d9shader.h`, and every `d3d9_*` site in `dd.c`, `config.c`,
-     `debug.c`, `dllmain.c`, `utils.c`, `winapi_hooks.c`, `wndproc.c` — **2 539 lines deleted
-     against 93 added**, across fifteen files. It is the one member of the deletion set with
+     `debug.c`, `dllmain.c`, `utils.c`, `winapi_hooks.c`, `wndproc.c` — **2 538 lines deleted
+     against 34 added, across thirteen files** (the commit's own totals, 2 539/119 over sixteen
+     files, include the three notes; an earlier draft of this bullet mixed the two). It is the one member of the deletion set with
      **no producer half** — nothing in `tagpu_*` calls into it and no Vulkan entry point depends
      on it — so it went whole, and going first shrank the set before the hard part starts. It
      carries this item's DEFINITIONAL half as its documentation: what "stock" is taken to mean
@@ -1588,6 +1590,16 @@ Back to the filed list:
      no longer built -- using gdi` — rather than a null renderer, because `renderer=` is read
      from a file the player owns and old ini files outlive the code that read them.
 
+     **THE GAP THIS LANDING DID NOT CLOSE, AND COULD NOT HAVE** [the landing review, MEDIUM].
+     `renderer=auto` is the value the generated ini writes, so it is what a player who never
+     edits the file gets. Its old body read `if (!IsWine() && d3d9_is_available())` first: on
+     **native Windows with a working D3D9 it selected Direct3D9**, and it now selects OpenGL.
+     Under Wine `!IsWine()` was already false, so the reference setup's auto path is unchanged —
+     which is exactly why none of this landing's measurements touch it, and why they must not be
+     read as covering it. **The shipped default therefore changes lane for Windows players and
+     has not been run on Windows**; `_local/vm/` is the kit for that and is still waiting on the
+     owner. A release that carries this says so in its notes, in the player's terms.
+
      **Two simplifications that are identities, not judgement calls**, and both are commented at
      the site: `dd.c`'s `BOOL d3d9_active` could only ever become TRUE on the deleted lane, so
      `if (!d3d9_active || g_config.nonexclusive)` is now unconditional and `if (d3d9_active &&
@@ -1596,8 +1608,16 @@ Back to the filed list:
 
      **What was deliberately left**: `hook.c:582`'s `_strcmpi(mod_filename, "d3d9")`, which is
      the "don't hook reshade/swiftshader/mesa3d" module blacklist and is about the SYSTEM
-     `d3d9.dll` a third-party layer may load, not about our renderer; and `ddraw.h`'s four
-     `D3D9Ex` mentions, which are the vendored DirectDraw header's own structures.
+     `d3d9.dll` a third-party layer may load, not about our renderer; `ddraw.h`'s four `D3D9Ex`
+     mentions, which are the vendored DirectDraw header's own structures; `inc/dd.h`'s
+     `FILTER_NEAREST`/`LINEAR`/`CUBIC`/`LANCZOS`, which now have no user in `src/` or `inc/` at
+     all; and **`config/ConfigFormUnit.cpp`, the upstream C++ Builder settings GUI**, which is
+     not built by the Makefile, still offers "Direct3D 9" in its renderer list and still reads
+     and writes the `d3d9_filter` key nothing reads any more. It was already stale against this
+     fork before the deletion — its list has no `vulkan` entry either — and if anyone does run
+     it, the `renderer=direct3d9` it can write now lands in the fallback above. [The review
+     found all four; the first three are one-line facts, the last is a tracked file this fork
+     does not build and has not maintained.]
    * **11-2 — the world passes' GL draw halves.** `tagpu_native.c`, `tagpu_terr.c`,
      `tagpu_feat.c`, `tagpu_fx.c`, `tagpu_shadow.c`, `tagpu_posedraw.c`, `tagpu_hires_draw.c`,
      `tagpu_render3do.c` — ~700 of the 1 233 lines. Every one keeps its producer and its
@@ -1803,10 +1823,12 @@ Back to the filed list:
    definition. Re-derived 2026-09-18.] The seam inside
    each file is real and already drawn; it is just drawn sixteen times.
 
-   The other headers are cleaner than that: `openglshader.h` and `d3d9shader.h` have **no
-   includer outside the set at all**; `render_ogl.h` has four (`config.c`, `dd.c`,
-   `fps_limiter.c`, `winapi_hooks.c`) and `render_d3d9.h` five (those plus `utils.c`,
-   `wndproc.c`), all of them the renderer-selection surface rather than drawing.
+   The other headers are cleaner than that — **this paragraph is the survey taken BEFORE
+   landing 11-1, and its `d3d9` half has since been carried out**: `openglshader.h` and
+   `d3d9shader.h` had **no includer outside the set at all**; `render_ogl.h` has four
+   (`config.c`, `dd.c`, `fps_limiter.c`, `winapi_hooks.c`) and `render_d3d9.h` had five (those
+   plus `utils.c`, `wndproc.c`), all of them the renderer-selection surface rather than drawing.
+   `d3d9shader.h` and `render_d3d9.h` are gone; the `render_ogl.h` figure is 11-4's.
    `tagpu_restoreglsl.h` has thirteen, which is the split landing 7 already made.
 
    **THE METHOD NOTE, because the first pass of this survey got it wrong twice.** Stripping string
@@ -1848,9 +1870,11 @@ Back to the filed list:
      consequence is better than "dead" and different from it: **delete `opengl_utils.c` and
      `render_ogl.c` together and nothing outside the set loses a helper**, with `oglu_load_dll`'s
      one caller the only thing to resolve.
-   * **`render_d3d9.c` — four surviving files, not one.** Seven exports; real users in `dd.c`,
-     `utils.c`, `winapi_hooks.c` and `wndproc.c`. `d3d9_release_resources` has **no user outside
-     the file at all** (confirmed on the re-check). No lane involvement.
+   * ~~**`render_d3d9.c` — four surviving files, not one.**~~ **✓ CARRIED OUT by landing 11-1**;
+     kept as the shape of the work the other rows still face. Seven exports; real users in
+     `dd.c`, `utils.c`, `winapi_hooks.c` and `wndproc.c`. `d3d9_release_resources` had **no user
+     outside the file at all**. No lane involvement — and that is why this one went whole while
+     the sixteen passes will not.
    * **`render_ogl.c` — three surviving files, AND A NEGATIVE RESULT THAT A CARELESS GREP WOULD
      HAVE INVERTED.** `ogl_create` (`dd.c`), `ogl_release` (`dd.c`, `winapi_hooks.c`) and
      `ogl_render_main` (`dd.c`, `fps_limiter.c`, `winapi_hooks.c` — as a **function pointer**,
@@ -2059,14 +2083,15 @@ actually read** — self-limiting, because on a lane whose renderer takes packet
 the landing review's second round: that was the first cut's rule, and the paragraph below explains
 why it changed, twenty lines after a reader would have hit the stale claim.)
 
-**Measured on both lanes, after a `scenario load` and ~45 s of play (run A), and again on gdi
-after the review's second round (run B, `fx-lasers`, ~90 s):**
+**Measured on both lanes, after a `scenario load` and ~45 s of play:**
 
-| run | lane | `units:` (500 ms) | `mouse:` | roster | exchange counters |
-|---|---|---|---|---|---|
-| A | gdi | 92 | 92 | 97 lines over ~9 blocks, `tacli roster` answers | **not observable** — see below |
-| A | vulkan | 91 | 178 | answers | `overrun=2` `gap=2` of `pub=3582`, `taken=3579` |
-| B | gdi | 192 | 376 | 58 lines over 13 blocks, `tacli roster` answers, 0 failed opens | **not observable** |
+| lane | `units:` (500 ms) | `mouse:` | roster | exchange counters |
+|---|---|---|---|---|
+| gdi | 92 | 92 | 97 lines over ~9 blocks, `tacli roster` answers | **not observable** — see below |
+| vulkan | 91 | 178 | answers | `overrun=2` `gap=2` of `pub=3582`, `taken=3579` |
+
+A second run was added here as "run B, gdi, 192/376" and **it was not gdi** — see the retraction
+below. Its figures were a GL lane behaving exactly as this table's vulkan row does.
 
 The Vulkan row is the no-regression half: `overrun=2` is the two pre-existing forces (the
 level-end packet and the level's first in-play one), so **the keepalive never fired on a lane
@@ -2087,17 +2112,23 @@ was never "the check that matters" — and it was also **not true on both lanes*
 recorded were gdi 62/124 and vulkan 77/151, and 2 × 77 is 154. The force now asks the HEADER's
 cadence instead, which halves the forced-publish rate — the one new risk this landing carries.
 
-**AND THE gdi FILL CADENCE IS NOT PINNED BY THAT FORCE, WHICH THIS SECTION ASSERTED UNTIL RUN B
-DISPROVED IT.** The claim was that where nothing consumes, the only fills are the forced ones, so
-`mouse:` would drop to the header's 500 ms and read 1:1 against `units:` — and run A's 92/92
-agreed. Run B, the same build plus the review's second round, read **192/376**, a clean 2:1, with
-`mouse, mouse, units` repeating through the log: fills between 250 and 500 ms apart, which the
-force alone does not account for. **The force is a floor on the fill rate, not a ceiling.** The
-extra fills are unforced publishes the FRESH gate let through — `pkx_publish` skips only when the
-cell it is about to write is FRESH (`tagpu_packet.c:315`), and which cell that is depends on the
-XCHG rotation, not on whether anyone consumed. **How many get through is not derived here**, and
-the counters that would settle it are exactly the ones gdi does not print. What is measured is
-the range: 1:1 in run A, 2:1 in run B.
+**RETRACTED, ONE COMMIT LATER: "the gdi fill cadence is not pinned by that force".** This
+section briefly carried a paragraph saying a second run's 2:1 `mouse:`/`units:` ratio showed the
+keepalive's force was only a *floor* on the fill rate. **That run was not on gdi.** `tacli
+scenario load` calls `write_ddraw_ini` whenever the scenario carries a `setup.res` — `fx-lasers`
+carries `1024x768` — and that function writes `renderer=openglcore` unconditionally, so the
+instance's hand-set `renderer=gdi` did not survive the load. The tell was on screen and went
+unread: the ini said `openglcore` the next time it was opened. A GL lane HAS a consumer, fills
+every ~16 ms, and therefore prints `mouse:` on its own 250 ms gate and `units:` on its 500 ms
+one — a 2:1 ratio that is the documented behaviour and says nothing about gdi.
+
+So the original statement stands and is what this page says: **where nothing consumes, the only
+fills are the forced ones**, one per `ROSTER_HDR_MS`, and `mouse:` reads 1:1 against `units:`
+because the mouse gate can fire at most once per fill. The gdi row above is the measurement.
+
+The lesson is the plainer one, and it is in [ta-drive](ta-drive.html) now so the next session
+does not pay for it: **a measurement is not of the lane you set, it is of the lane the process
+actually ran**, and on this harness the second is written by the tool.
 
 **AND `tacli roster` WAS LABELLING THE BLOCK WITH THE WRONG HEADER** [the landing review, LOW].
 `roster_log` emits, in one call, the `mouse:` line, then the dump block, then its `units:`

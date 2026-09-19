@@ -256,10 +256,9 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
 
             while (s)
             {
-                /* Workaround for bug in Windows 11 (Steam RA2 crash) */
-                if (_strcmpi(s, "Win7RTM") == 0)
-                {
-                }
+                /* The Windows 11 "Steam RA2 crash" workaround was here: it set
+                   g_config.d3d9on12, and nothing else, so it went with the
+                   Direct3D9 lane [landing 11-1]. */
 
                 if (_strcmpi(s, "WIN95") == 0 || _strcmpi(s, "WIN98") == 0 || _strcmpi(s, "NT4SP5") == 0)
                 {

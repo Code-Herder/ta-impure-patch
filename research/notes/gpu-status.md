@@ -13,9 +13,13 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5
 
 ## 1. Status — what is ours, what is still the engine's
 
-**THERE ARE THREE RENDERER BACKENDS SINCE 2026-09-18, NOT FOUR.** `renderer=` takes
-`opengl`/`openglcore`, `vulkan` and `gdi`; **`direct3d9` and `direct3d9on12` are deleted** (the
-vulkan-only plan's landing 11-1 — `render_d3d9.c` and its two headers, 2 539 lines). The lane
+**THERE ARE THREE RENDERER BACKENDS SINCE 2026-09-18, NOT FOUR.** `renderer=` takes `auto`
+(the default, and what the generated ini writes), `opengl`/`openglcore`, `vulkan` and `gdi`;
+**`direct3d9` and `direct3d9on12` are deleted** (the vulkan-only plan's landing 11-1 —
+`render_d3d9.c` and its two headers, **2 387 lines**, plus ~150 more at their call sites).
+**`auto` changed lane with them**: it tried Direct3D9 first on native Windows and now goes
+straight to OpenGL. Under Wine it never took that branch, so nothing on the reference setup
+moved — and nothing on the reference setup can show that it did. The lane
 was the fork's, never ours: nothing under `tagpu_` ever called into it and no pass of ours had a
 D3D9 half, which is why it is the one member of that plan's deletion set that went whole. An ini
 that still asks for it gets GDI and says so once in `tagpu.log`. The GL lane is next to go, in

@@ -1909,6 +1909,22 @@ to main's (parity md5 measured equal, §10 — but see the note below: "trigger 
 meaning in landing 10c-2 and that row has not been re-measured since).
 **`gui.on` is part of the default arm set** now.
 
+**`tacli scenario load` REWRITES `ddraw.ini`, `renderer=` INCLUDED — a hand-set lane does not
+survive it.** `write_ddraw_ini` writes `renderer=openglcore` unconditionally, and `load` calls it
+whenever the scenario carries a `setup.res` (most do; `fx-lasers` is `1024x768`), whenever
+`--res`/`--maxfps`/`--window` is passed, and whenever the recorded tile would put the window
+off-screen. So the sequence *"edit the ini to `renderer=gdi`, then `scenario load`"* measures the
+**GL** lane, silently, and the only tell is the ini reading `openglcore` afterwards. This cost
+the vulkan-only plan's landing 10c-3 a wrong paragraph: a 2:1 `mouse:`/`units:` ratio was
+recorded as a gdi result and it was an OpenGL one, where a consumer takes every packet and the
+two lines simply run at their own 250 ms and 500 ms gates.
+
+To measure a chosen lane in game: run `scenario load` first and let it write what it wants, then
+`tacli stop`, then set `renderer=` in the instance's `ddraw.ini`, then a **bare `tacli launch`**
+with no `--res`/`--maxfps`/`--window` — that path writes no ini — and drive in with `tacli
+click`/`keys`, or `tacli scenario apply` once a game is live. **Check the ini after the run, not
+before**: it is the file the DLL actually read.
+
 **Everything `tacli` reads now comes from the GAME thread, so every verb works on every renderer
 including `renderer=gdi`** (the vulkan-only plan's gate 10c, three landings). The triggers and the
 key/click injection run from the engine's flip; the live-state log — `units:`, the roster dump and

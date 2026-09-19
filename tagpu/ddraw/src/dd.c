@@ -1723,13 +1723,8 @@ ULONG dd_Release()
 
         if (!g_config.windowed)
         {
-            if (0) /* was the Direct3D9 reset; the lane is gone [landing 11-1] */
-            {
-            }
-            else
-            {
-                ChangeDisplaySettings(NULL, 0);
-            }
+            ChangeDisplaySettings(NULL, 0);   /* the Direct3D9 reset stood in
+                                                 front of this [landing 11-1] */
         }
 
         if (g_ddraw.renderer == ogl_render_main)
