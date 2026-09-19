@@ -1,0 +1,143 @@
+landing-review: vulkan-only plan, landing 10c-2 -- the input module splits on the packet
+
+Range reviewed: main...HEAD (1e576f6..0470c2b, 5 commits).
+Reviewer: dedicated read-only agent, `high` (CLAUDE.md: "changes the
+synchronisation between the game thread and the render thread").
+THREE rounds -- the budget CLAUDE.md allows -- because round 1's HIGH and
+round 2's findings were each fixed with NEW code in the same class.
+
+WHAT LANDED. tagpu_input.c was SPLIT, not moved. Its token half
+(tagpu_input_frame: tagpu_keys.txt, the injected pointer, the shield's
+held-modifier expiries) reads no frame packet, so it joined the trigger
+family on the game thread. Its camera hold became tagpu_input_eye_frame
+and stayed in tagpu_overlay_draw on the render thread, where f->packet
+exists and where its answer is read back.
+
+THE PLAN PRESCRIBED A DIFFERENT FIX AND IT WAS WRONG. It called for a
+read-only tagpu_packet_pub_last() so do_eye could run on the game
+thread. Every bullet of that design is true; the conclusion is not. It
+reasons entirely about the PRODUCER and never asks who reads do_eye's
+OUTPUT: s_eyeHold/s_holdX/s_holdY/s_holdValid are read by
+tagpu_input_cmd, whose only caller is tagpu_zoom_frame_end, which runs
+only inside tagpu_overlay_draw. The accessor would have made four words
+cross-thread to serve a consumer that is not on the other side -- and
+delivered nothing on gdi anyway, since the hold reaches the game thread
+through tagpu_cmd_post, also called only from the overlay frame.
+A move is decided by what reads the code being moved, not by what the
+code being moved reads.
+
+VERIFIED BY RUNNING IT, three configurations:
+  gdi, bare (tagpu_defaults.off, no tagpu_gui.on):
+      "gui: trigger host only ..."; ui answers; click 187 403 takes
+      MAINMENU.GUI -> SINGLE.GUI; keys esc comes back.
+  vulkan, armed: "gui: ARMED flip@0x4C63A0=1 leaves=17/17"; click drives.
+  vulkan, armed, live game: scenario load drove the menus BY CLICK into
+      Two Continents and applied 5 of 5; the camera hold is exact
+      (eye == the point asked for, twice) and --release genuinely frees
+      it (the camera edge-scrolled 1200 -> 1904 -> 6704 and stopped when
+      the pointer left the edge); the UI layer is working end to end
+      (gui: mm=0x0/0 refused=0 pic=252x252/0, cursor: owned=207797).
+  viol=0 pviol=0 foreign=0 throughout; no ErrorLog.txt.
+
+ROUND 1 -- one HIGH, real, mine, and SILENT.
+  H1  The trigger host was gated on a play default. before_flip has one
+      installer, tagpu_gui_init, whose first line was
+      `if (!read_tokens()) return;` -- tagpu_gui.on. tagpu_opt_read
+      answers -1 for an absent file once tagpu_defaults.off exists, and
+      `tacli launch` writes that unless given --defaults. So on an
+      ordinary instance `tacli click` wrote the token file, printed
+      "sent:", and nothing read it -- ON EVERY RENDERER, because the
+      render-thread call this landing deleted did not consult that
+      trigger. tacli also arms the shield by default, so hardware input
+      was blocked on the same window: drivable by nothing, with no line
+      in the log, the early return being above the only glog().
+      My own verification had passed because it used --defaults. The
+      dependency is invisible in the passing case.
+      FIXED (3120504): the observer installs whenever the flip's bytes
+      match; tagpu_gui.on gates the UI layer, the census and the 17
+      leaves alone. Two wins fall out -- a build whose LEAF prologues
+      differ no longer costs us the flip, and `tacli gui remove` stops
+      removing the ability to drive the instance. Every exit logs now.
+  M1  "tagpu_apply_patches() applies three patches with no runtime gate,
+      and the tagpu_curs pair" triples the ungated count and counts the
+      pair twice: 0x4266A7 is ungated, 0x43E50C and 0x499041 are both
+      inside the else of a tagpu_curs.off test. It also contradicted the
+      same page's correct table two sections below. That number is
+      landing 11's exit-condition arithmetic.
+  Four LOWs and two NITs, all applied.
+
+ROUND 2 -- no new HIGH. It verified the fix is complete (still the only
+installer; DllMain calls it unconditionally; the chain rule means nobody
+else can take 0x4C63A0) and that the newly-hooked configuration cannot
+change the rendered frame.
+  Four findings, ONE cause: installing the observer without the leaves
+  left the UI layer's op machinery running with nothing to feed it.
+  surf_of_ctx REGISTERS a surface and only before_memfree (leaf #15)
+  RETIRES one -- a registrar split from its destructor. ops_window_reset
+  memsets 4 KB on EVERY flip there. surf_of_ctx dereferences four dwords
+  behind ptr_ok ALONE, and what underwrote that was the 17-site byte
+  match, not the flip's six generic prologue bytes -- CLAUDE.md is
+  explicit that ptr_ok is never the safety argument. And gui.on=census
+  on a build with mismatching leaves would have written tagpu.log at up
+  to 200 Hz for the life of the process.
+  FIXED (07eb652) with one line: `if (!s_opsLive) return 0;` after the
+  trigger block. s_opsLive rather than s_installed on purpose -- a
+  PARTIAL leaf install leaves s_installed 0 with detours live.
+  M1  The skill's own new diagnostic rule would have cost someone a
+      working instance: it said "if neither line is in tagpu.log, no
+      tacli verb can answer", but two of the three exits it ignored are
+      DRIVABLE. It is a table now, keyed on the phrase both undrivable
+      lines carry.
+  M2  tagpu_shield.h asserted "nothing here requires either thread"
+      while pointing at the .c note that refutes it: tagpu_shield_frame
+      calls clear_state() on the disarm edge, memsetting the wndproc's
+      per-key arrays.
+
+ROUND 3 -- NO HIGH, NO MEDIUM. It cleared the control flow in detail:
+`return 0` and `return hijack` are the same expression at that point;
+the detour stub's codegen (test eax,eax / jz +8) is what makes
+after_flip never run for a declined flip; and objdump shows DDRAW.dll
+first in TotalA.exe's import table, so attach runs under the loader lock
+before the EXE entry point and the install window is provably flip-free.
+  Eight findings, every one prose. Zero added lines with a semicolon or
+  brace. Two were my own new text and both would have misled: I claimed
+  the ARMED configuration does not pay the per-flip memset (it does,
+  under gui.on=off and on armed+gdi, where g_gui_draw is never set), and
+  I called util_pull_messages' rate limit inert because the assignment
+  inside that function is commented out -- last_msg_pull_tick is stamped
+  on nearly every message the game pulls, so that conjunct is the
+  STRONGEST of the five. Same error shape as the do_eye one: reading the
+  code in front of me instead of grepping for who else writes it.
+
+NOT CLOSED BY THIS LANDING.
+  - tacli roster and tacli scenario load still do not work on gdi. The
+    live-map signal is `units: alive=`, emitted by log_units, which is
+    in tagpu_overlay_draw. Only the DETECTOR fails: the game really does
+    load, proven by running `scenario apply` against an instance that
+    `scenario load` had just declared dead -- applied 5 of 5. That is
+    landing 10c-3, so gate 10c is three landings.
+  - AND 10c-3 CANNOT RIDE ON THE PACKET. tagpu_packet_acquire has two
+    call sites, render_vk.c and render_ogl.c; gdi has no consumer, so
+    the FRESH gate blocks every non-forced publish and fill_frame runs
+    about once per level. A roster hung off fill_frame or a pub_last()
+    accessor would produce nothing on the one lane it is for. It has to
+    walk the unit array on the game thread, inside a publisher file.
+  - tacli eye and tacli wheel still do not reach gdi, for two different
+    mechanisms with one cause (no overlay frame): the hold has no
+    command record, the wheel refuses earlier at !s_live.
+  - renderer=gdi is still not stock AS A LANE: one ungated patch
+    (0x4266A7) plus the tagpu_curs pair behind a file. Landing 11's.
+  - The 4 KB per-flip memset is still paid by armed+gdi and by
+    gui.on=off. Pre-existing; newly interesting now that gdi is the
+    stock lane.
+  - gui-renderer.md's parity md5 row was measured when "trigger absent"
+    meant NO detour on 0x4C63A0. It now means an observer plus the
+    trigger family every 16 ms. With 07eb652's early return that
+    configuration touches nothing below the trigger block, so the
+    argument is stronger than before -- but it is an argument, not a
+    re-measurement.
+
+Build: 0 errors, thread-split clean (34 listed files). Wiki: 63 pages.
+Scan after committing: clean apart from the 16 known pre-existing soft
+tells in two tracked governance files (the owner's call, reported, never
+worked around).
