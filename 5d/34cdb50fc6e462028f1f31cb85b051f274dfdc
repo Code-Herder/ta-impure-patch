@@ -1,0 +1,6 @@
+landing-review: SKIPPED effort=n/a range=main..5d34cdb findings=0 acted=0 rejected=0 date=2026-09-19
+CLAUDE.md's skip clause: the diff touches tools/gl-sites.py (one regex plus its comment) and
+research/notes/*.md. none of the review-gate paths -- tagpu/ddraw/src, tagpu/ddraw/inc,
+tagpu/src, tools/tacli -- is in it. no engine state, no byte patch, no GL object, no
+cross-thread change. verified instead by running the tool: narrow unchanged at 252 over the
+same four files, wide 366 -> 323, --list/--json/exit-status all still correct.
