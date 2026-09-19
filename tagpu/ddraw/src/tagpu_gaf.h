@@ -147,24 +147,32 @@ typedef struct TAGPU_GAFATLAS {
        where the extension answers) and its levels are regenerated after
        every batch the restorer paints; 0 keeps it NEAREST, 1:1. */
     int           pad, align, mip;
-    int           mippedN;      /* frames painted when the mips were last built */
-    int           mirroredMippedN; /* ...and when the mirror last read them back */
+    /* `mippedN` -- frames painted when the mips were last built -- went with
+       the GL restorer in 11-5e-2; nothing rebuilds a twin's levels here now.
+       `mirroredMippedN` is written to 0 and never read: it is part of the
+       mirror, which goes in 11-5e-2b with the `atlasRgb*` publications. */
+    int           mirroredMippedN;
     /* Classic++ (renderers.md 4b Option 4): the RESTORED TWIN -- same dim,
-       same shelf, GL_RGBA8 -- painted lazily by tagpu_restoreglsl.c from a
-       queue that every miss feeds, so a frame draws indexed for the frame or
-       two before its restore lands. A sprite shader samples the twin where its
-       alpha is 1 and stays on the index elsewhere; a recycle clears it. `prio`
-       orders the queue against the other jobs (the terrain's is 0). Created by
-       tagpu_gaf_atlas_restore, and `rgb` is non-zero exactly while `job` is:
-       both are made together, and both go when the job cannot be made or the
-       context is lost -- a pass gates its restored branch on `rgb`. */
+       same shelf, GL_RGBA8 -- painted lazily from a queue that every miss
+       feeds, so a frame draws indexed for the frame or two before its restore
+       lands. A sprite shader samples the twin where its alpha is 1 and stays
+       on the index elsewhere; a recycle clears it. `prio` orders the queue
+       against the other jobs (the terrain's is 0).
+
+       `rgb` IS 0 FOR THE LIFE OF THE PROCESS AS OF 11-5e-2. Its one non-zero
+       writer was `tagpu_gaf_atlas_restore`, which is gone, and it could not
+       have run in any case: it returned at `!a->tex`, and `tex` has been 0
+       since 11-4c (see `tagpu_gaf_atlas_create`). So a pass that gates its
+       restored branch on `rgb` -- `tagpu_posedraw.c`'s `s_pub.restored` is
+       the one left -- publishes 0 every frame. That branch and the mirror
+       below go together in 11-5e-2b; the field is kept until then so the
+       consumers can be unwound with their producer in view. */
     unsigned int  rgb;
     /* BUMPED EVERY TIME `rgb` IS CREATED, and never otherwise: a re-arm frees
        the texture and the job and makes both again, which resets
        `tagpu_rglsl_job_painted` to 0 -- so the painted count alone is not a
        content key across that seam. This is the discontinuity it cannot see. */
     unsigned      rgbGen;
-    struct TAGPU_RGLSL_JOB* job;
     int           prio;
     /* frames whose shorter edge is under this are never queued for restore:
        below the model's receptive field there is nothing to restore, so the
@@ -274,7 +282,7 @@ typedef struct TAGPU_GAFATLAS {
        last looked. Two resets between two looks collapse into one: a recycle
        (repaint 0) followed in the same frame by a palette move (repaint 1) --
        which `tagpu_feat.c` can do, because it recycles a full atlas and then
-       calls `tagpu_gaf_atlas_restore` on the next line -- would otherwise tell
+       re-arms it on the next line -- would otherwise tell
        the consumer to KEEP a destination this lane has just cleared. A
        consumer blanks whenever this has moved, whatever the flag says.
        [FROM THE LANDING-7d REVIEW.] */
@@ -350,11 +358,6 @@ void tagpu_gaf_atlas_free_buffers(TAGPU_GAFATLAS* a);       /* GL context replac
 /* create the GL texture now rather than on the first frame that atlases a
    sprite — a pass whose shader samples the atlas must never bind texture 0 */
 int  tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a);
-/* Once per frame from the owning pass, before its atlas_get calls, with the
-   live palette (main+0x143A7). Arms the lazy restore the first time the
-   Classic++ switch is seen on: creates the twin and the queue and queues
-   every frame already in the atlas. A no-op after that; render thread only. */
-void tagpu_gaf_atlas_restore(TAGPU_GAFATLAS* a, const unsigned char* pal);
 
 /* Ask for the CPU mirror above, and make it CORRECT FROM THE INSTANT IT
    EXISTS. A mirror allocated after the atlas has already painted frames would
@@ -410,16 +413,10 @@ void tagpu_gaf_atlas_mirror_rgb_step(TAGPU_GAFATLAS* a);
    reading back as before. Render thread only. */
 int  tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a);
 
-/* Read an RGBA8 GL texture back into `dst`, `rows` rows of `w` texels, through
-   a caller-owned FBO created on first use. Not about an atlas: it is here
-   because this is where glReadPixels is resolved, and the step above CALLS it
-   rather than repeating it. Render thread, context current. 1 when `dst` was
-   filled. `status` (may be NULL) returns the glCheckFramebufferStatus value, or
-   0 if none was taken -- an incomplete framebuffer is a permanent property of
-   the texture and both callers latch on it, which the return value alone cannot
-   tell them. (The Vulkan-only plan's gate 2.) */
-int  tagpu_gl_rgba_readback(unsigned tex, int level, int w, int rows,
-                            unsigned char* dst, unsigned* fbo, unsigned* status);
+/* `tagpu_gl_rgba_readback` was declared here -- an RGBA8 GL texture read back
+   through a caller-owned FBO -- and went in 11-5e-2 with its only two callers,
+   which were the level-0 and mip halves of the step above. There is no texture
+   left for it to read: `rgb` is 0 for the life of the process. */
 
 /* THE RESTORED TWIN'S MIRROR IS THE WHOLE MIP CHAIN when the atlas is mipped,
    because its GL original is sampled GL_LINEAR_MIPMAP_LINEAR and a consumer

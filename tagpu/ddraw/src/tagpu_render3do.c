@@ -431,7 +431,6 @@ static const char* face_texframe(const char* fa, int owner)
 
 /* ---- exports for the native pass (G12b, tagpu_native.c): share the atlas,
    shade LUT and calibration so both paths draw identical materials ---- */
-GLuint tagpu_r3d_atlas_texref(void) { return s_atlas.tex; }
 GLuint tagpu_r3d_atlas_rgbref(void) { return s_atlas.rgb; }
 unsigned tagpu_r3d_atlas_gen(void)  { return s_atlas.gen; }
 /* ---- THE LEVEL BOUNDARY (G19f-7) ---------------------------------------
@@ -469,11 +468,16 @@ void tagpu_r3d_atlas_level(unsigned level_gen)
     s_atlasGen = g;
 }
 
-void tagpu_r3d_atlas_frame(const unsigned char* pal)
+void tagpu_r3d_atlas_frame(void)
 {
     if (s_state != 1) return;
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
-    tagpu_gaf_atlas_restore(&s_atlas, pal);
+    /* AND THE PALETTE ARGUMENT WENT WITH THE RESTORE IT FED. This took
+       `const unsigned char* pal` and handed it to `tagpu_gaf_atlas_restore`,
+       which 11-5e-2 deleted with the GL restorer; the recycle above is all
+       that is left and it reads no palette. This atlas's restore is the other
+       lane's: `tagpu_gaf_atlas_restore_vk` publishes the frame list and
+       `tagpu_vk_restore.c` paints it, each reading the palette for itself. */
 }
 /* `shd` is the packet's copy of PALETTE.SHD, or NULL: the LUT is built once
    per GL context out of whichever the caller has. */
@@ -686,10 +690,12 @@ void tagpu_r3d_glreset(void)
 {
     /* fresh GL context: the new atlas/LUT textures are EMPTY — the CPU-side
        caches must forget what was uploaded or everything samples black. The
-       atlas's twin and job died with the context too (tagpu_native_glreset
-       has already run tagpu_rglsl_glreset: tagpu_overlay.c ordered them until
-       11-5e-1 deleted the watch that drove the cascade. Nothing orders them
-       now, because nothing calls them.) */
+       atlas's twin died with the context too. THERE IS NOTHING LEFT TO ORDER
+       THIS AGAINST: this comment named `tagpu_rglsl_glreset`, which
+       tagpu_native_glreset ran first so the restorer forgot its job before
+       the atlas forgot the twin -- 11-5e-1 deleted the watch that drove the
+       cascade and 11-5e-2 deleted the restorer itself, so the ordering
+       constraint is gone rather than merely unenforced. */
     s_state = 0;
     s_lutBuilt = 0;
     s_lutFromShd = 0;

@@ -160,7 +160,6 @@ static int    s_norestore = 0;          /* `norestore` in the trigger: the A/B l
    so it is out of this landing's scope and named here instead of done quietly. */
 static int    s_colValid = 0;           /* no colour twins on this lane; see above     */
 static unsigned s_rearms = 0, s_colTwins = 0;
-static unsigned s_rglslSeen = 0;        /* tagpu_rglsl_calls() at the last present */
 /* Phase 2's seam (G17a) */
 static int    s_sharpW, s_sharpH;       /* its size, = the frame's viewport in window px               */
 static int    s_sharpOn = 0;            /* it exists and may be sampled this frame                     */
@@ -893,9 +892,12 @@ static void twins_reset(void)
 /* Once per present, BEFORE the drain (the sprite ops it replays ask whether
    colour is valid) and after upload_palette (this compares against it).
 
-   THE VALIDITY RULE, gui-renderer.md 3.4. tagpu_rglsl_job_new snapshots the
-   palette into a texture of its own, so the restored twin's colours are a
-   function of the palette that was live when the job was made. While that is
+   THE VALIDITY RULE, gui-renderer.md 3.4. A restore job snapshots the palette
+   into a texture of its own, so the restored twin's colours are a function of
+   the palette that was live when the job was made. (Until 11-5e-2 this named
+   `tagpu_rglsl_job_new`, the GL backend's constructor; the rule is the
+   restorer's rather than that backend's, and `tagpu_vk_restore_job_new`
+   snapshots the same way.) While that is
    still the palette the frame is PRESENTED with, colour is used; while it is
    not, every colour twin is ignored and the frame is indexed — dithered art
    for the duration of a fade, never wrong art. Once the palette has held
@@ -2107,11 +2109,12 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
        whether the native pass stepped it this frame; when it did, we do
        nothing, so the budget is sliced once either way. Before the drain, so
        what it paints this frame is what the drain's sprites sample. */
-    if (s_atlas.job) {
-        unsigned n = tagpu_rglsl_calls();
-        if (n == s_rglslSeen) tagpu_rglsl_step();
-        s_rglslSeen = tagpu_rglsl_calls();
-    }
+    /* THE STEP THAT STOOD HERE WAS THE GL RESTORER'S and it went in 11-5e-2
+       with the backend it stepped. It was already unreachable: the block was
+       gated on `s_atlas.job`, which is the GL job, and no atlas has had one
+       since landing 11-4c stopped filling `a->tex`. The Vulkan restorer is
+       stepped from `tagpu_vk.c` inside the frame's command buffer and needs
+       nothing from here. */
     /* G19f landing 4: AND THE RESTORED TWIN IS MIRRORED HERE, between the step
        that painted it and the drain whose sprites sample it. The comment three
        lines up is the argument -- "what it paints this frame is what the

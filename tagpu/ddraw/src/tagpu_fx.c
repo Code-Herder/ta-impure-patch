@@ -898,9 +898,8 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
         if (g && g != s_atlasGen) { tagpu_gaf_atlas_forget(&s_atlas); s_atlasGen = g; }
     }
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
-    /* Classic++: the lazy restore of this atlas (the palette the screen is
-       SHOWN with -- tagpu_pal.h) */
-    tagpu_gaf_atlas_restore(&s_atlas, tagpu_pal_live());
+    /* the GL lazy restore went in 11-5e-2; `tagpu_gaf_atlas_restore_vk` above
+       publishes this atlas's frame list for the Vulkan restorer instead. */
     memset(s_nv, 0, sizeof s_nv); s_nm = 0;
     s_cLines = s_cSprites = s_cFlash = s_cAtlasFail = s_cOverflow = s_cQuads = 0;
     memset(&s_c, 0, sizeof s_c);

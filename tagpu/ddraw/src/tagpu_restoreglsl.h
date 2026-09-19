@@ -1,12 +1,18 @@
 #ifndef TAGPU_RESTOREGLSL_H
 #define TAGPU_RESTOREGLSL_H
-/* The Classic++ restorer as fragment passes in the game's own GL context
-   (research/notes/renderers.md 4c). The shaders are tagpu_restore_glsl.h's;
-   this is the driver: it batches frames into slots, runs FILL, the conv layers
-   and OUT for each batch, and paints the result straight into the caller's
-   RGBA8 atlas in its bordered cell layout. The work is SLICED: one call per
-   frame issues draws until a GPU-time budget is spent, so a map's restore is a
-   few seconds of ordinary frames, not a stall.
+/* THE SHARED CONTRACT OF THE CLASSIC++ RESTORER -- the frame struct both
+   backends and tools/tascene are written against, and the tileability test.
+   The GL backend this header was named for is gone (11-5e-2); the tombstone
+   below says what it was and why it could not run. The restorer that runs is
+   `tagpu_vk_restore.c` under `tagpu_restore_core.c`.
+
+   WHAT THE RESTORER IS, for a reader arriving here first: the unditherer's
+   residual CNN as fragment passes (research/notes/renderers.md 4c), shaders in
+   tagpu_restore_glsl.h. It batches frames into slots, runs FILL, the conv
+   layers and OUT for each batch, and paints the result straight into the
+   caller's RGBA8 atlas in its bordered cell layout. The work is SLICED: one
+   call per frame issues draws until a GPU-time budget is spent, so a map's
+   restore is a few seconds of ordinary frames, not a stall.
 
    JOBS. A job is a destination atlas fed from a source atlas: the terrain's
    is a fixed list of every tile, added once; a GAF atlas's is an open QUEUE
@@ -52,108 +58,29 @@ typedef struct TAGPU_RGLSL_FRAME_S {
     int ax, ay, w, h, wrap, dx, dy, border, key, padR, padB;
 } TAGPU_RGLSL_FRAME;
 
-typedef struct TAGPU_RGLSL_JOB TAGPU_RGLSL_JOB;
+/* THE GL JOB API WAS HERE AND IT WENT WITH ITS BACKEND IN 11-5e-2.
+   `tagpu_rglsl_job_new/_repaint/_repalette/_add/_clear/_idle/_failed/_painted/
+   _free`, `tagpu_rglsl_step`, `_calls`, `_step_forced`, `_mips` and
+   `_glreset` were the surface of `tagpu_restoreglsl.c`, which compiled
+   tagpu_restore_glsl.h's shaders in the game's own GL context. That file is
+   deleted; the Vulkan restorer (`tagpu_vk_restore.c`, the other backend of
+   `tagpu_restore_core.c`) is the one this build runs, stepped from
+   `tagpu_vk.c` inside the frame's command buffer.
 
-/* A job: frames read from `atlasTex` (GL_R8, atlasW x atlasH) with the
-   palette `pal` (256 x R,G,B,pad; snapshotted now), painted into `destTex`
-   (GL_RGBA8, destW x destH; cleared to 0 now). `tag` prefixes its log lines,
-   `prio` orders it against the other jobs, `oneshot` = a fixed list whose
-   completion is logged as the restore's "done" line (the terrain). NULL,
-   with the reason in tagpu.log, when the model or the GL cannot be set up.
-   Render thread only, GL context current -- every call here. */
-TAGPU_RGLSL_JOB* tagpu_rglsl_job_new(const char* tag, int prio, int oneshot,
-                                     unsigned int atlasTex, int atlasW, int atlasH,
-                                     const unsigned char* pal,
-                                     unsigned int destTex, int destW, int destH);
-/* The same, for a destination that already holds a restore and is being
-   repainted in place because the palette moved under it: the frames queued
-   behind it overwrite what is there, so the world recolours cell by cell
-   instead of blanking for the length of the job. */
-TAGPU_RGLSL_JOB* tagpu_rglsl_job_repaint(const char* tag, int prio, int oneshot,
-                                         unsigned int atlasTex, int atlasW, int atlasH,
-                                         const unsigned char* pal,
-                                         unsigned int destTex, int destW, int destH);
-/* Re-point a live job at a new palette (a lazy job outlives its atlas's
-   entries, so it is re-palettable rather than replaceable). */
-void tagpu_rglsl_job_repalette(TAGPU_RGLSL_JOB* j, const unsigned char* pal);
-/* Queue `frames` (copied) behind what is already queued; they restore in this
-   order. 0 if out of memory. */
-int  tagpu_rglsl_job_add(TAGPU_RGLSL_JOB* j, const TAGPU_RGLSL_FRAME* frames, int count);
-/* Drop everything queued or in flight and clear the destination to 0 again
-   (the caller's atlas was recycled: every rect will be re-added on its miss). */
-void tagpu_rglsl_job_clear(TAGPU_RGLSL_JOB* j);
-/* 1 when nothing is queued or in flight: every frame added so far is painted
-   (once the GPU drains, i.e. before any later draw samples the destination). */
-int  tagpu_rglsl_job_idle(const TAGPU_RGLSL_JOB* j);
-/* 1 when the job can do no more (a GL failure): its destination stays as it is */
-int  tagpu_rglsl_job_failed(const TAGPU_RGLSL_JOB* j);
-/* Frames painted so far -- the OUT draw issued -- over the job's life: a
-   counter for a consumer that must do something to the destination after
-   each batch (the unit atlas rebuilds its mip levels). Never reset by a
-   clear; compare it for change, not for a value. */
-int  tagpu_rglsl_job_painted(const TAGPU_RGLSL_JOB* j);
-/* Forget the job; the destination is the caller's. */
-void tagpu_rglsl_job_free(TAGPU_RGLSL_JOB* j);
+   The API could not have done anything before it went. Its entry into GL was
+   `tagpu_rglsl_job_new`, whose ONE call site was `tagpu_gaf.c`'s
+   `tagpu_gaf_atlas_restore`, below a `!a->tex` return -- and `a->tex` has
+   been 0 for the life of the process since landing 11-4c took the
+   `glGenTextures` that filled it out of `tagpu_gaf_atlas_create`. No job was
+   ever made, so `gl_ready()` never turned on and `tagpu_rcore_step` returned
+   on its second line every frame.
 
-/* Once per frame, after the passes have gathered (so this frame's misses are
-   queued) and before they render: issue draws for the active job until the
-   budget is spent. Leaves the framebuffer, viewport, enables and write masks
-   as it found them; program 0, VAO 0, no array buffer, texture unit 0
-   active. Left DIRTY, as every tagpu pass leaves them and every pass rebinds
-   before drawing: the 2D bindings of units 0-3 and 5, unit 4's 2D-array
-   binding, uniform binding point 0, GL_UNPACK_ALIGNMENT = 1. Does nothing
-   while the switch is off. */
-void tagpu_rglsl_step(void);
-/* How many times tagpu_rglsl_step has been CALLED (not how much it painted).
-   Its only caller is the native pass, which returns early when there is no
-   unit array -- in the shell, and in game with the world passes disarmed. A
-   pass whose atlas exists there (the UI's does) compares this across presents
-   to find out whether anything stepped the restorer, and steps it itself when
-   nothing did; otherwise its queue is never drained. */
-unsigned tagpu_rglsl_calls(void);
-
-/* `tagpu_rglsl.step`: 1 when the restorer is to be stepped with no pass armed.
-   A MEASUREMENT LEVER. The A/B needs the restorer painting while exactly one
-   Vulkan pass draws, and until `tagpu_mark.c` was ported the way to get that
-   was to arm `mark` -- the only item on the restorer's arming list with no
-   Vulkan pass of its own. This replaces that trick with something that does not
-   depend on which passes happen to be unported. Polled on the 30-frame cadence
-   every other lever uses. */
-int tagpu_rglsl_step_forced(unsigned frame_counter);
-
-/* LEVELS 1..mip OF A RESTORED TWIN, reduced HERE rather than by
-   glGenerateMipmap: the exact integer 2x2 box average, so that this lane's
-   levels and a second backend's are the same bytes on any driver. `tex` is the
-   RGBA8 twin, `dim` its square level-0 size, `mip` the deepest level to write.
-   1 when the whole chain was written; 0 when it was not -- and then the caller
-   MUST fall back to glGenerateMipmap, because a twin whose levels 1.. were
-   left alone filters to the previous picture's colours, which is worse than
-   the per-driver +/-1 this replaces.
-   0 without drawing when the reduction did not build, when the restorer is not
-   up, when `glGetTexParameteriv` did not resolve, or when any level of the chain
-   would be odd (GL's rule for an odd level is a weighted three-tap, not a 2x2
-   average, and this does not pretend to be one). EVERY ONE OF THOSE SAYS SO IN
-   THE LOG, once per context, with the reason -- `the mip reduction stood down
-   (<why>)` or `the mip reduction failed at level N` -- because an instrument
-   whose "it did not run" is indistinguishable from "it ran" makes the chain
-   check report the driver's +/-1 as a bug in the shader.
-
-   Render thread, between frames, with the twin not currently sampled.
-
-   IT LEAVES THE SAME STATE DIRTY AS `tagpu_rglsl_step` (above): program 0, VAO
-   0, unit-0 GL_TEXTURE_2D binding 0, active unit 0, unit-4 array binding 0 and
-   GL_UNPACK_ALIGNMENT 1. The framebuffer binding, the viewport, blend, depth
-   test, scissor, cull, the depth mask and the colour mask are saved and put
-   back; so are all four of the twin's own sampler parameters (base level, max
-   level, min and mag filter), on the success path, the break path and the error
-   path alike.
-   gpu-status 2.45 is the measurement that made this the shipped path, and 2.46
-   is what this one is. */
-int tagpu_rglsl_mips(unsigned tex, int dim, int mip);
-
-/* The GL context died with everything in it: forget the ids, no deletes, and
-   every job with them -- call it BEFORE the jobs' owners forget theirs. */
-void tagpu_rglsl_glreset(void);
+   WHAT THIS HEADER IS NOW. `TAGPU_RGLSL_FRAME` above -- a plain CPU struct
+   with no GL in it -- and `tagpu_rglsl_tileable` below. Twelve files include
+   this header and almost all of them want only those two; the name is kept
+   because the struct's name is the contract both restorer backends and
+   tools/tascene are written against.
+   [The vulkan-only plan, 11-5e-2.] */
 /* classical.is_tileable on palette colours: opposite edges agree within 12
    levels on average, over the three channels. A frame with its colour key
    `key` on an edge is never tileable (tagpu_restore_glsl.h says why);

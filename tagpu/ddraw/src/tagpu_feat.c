@@ -710,10 +710,9 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
         if (!s_atlas.made) return feat_bail();
     }
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
-    /* Classic++: the lazy restore of this atlas, armed once the switch is on
-       (the palette the screen is SHOWN with, the same one the native pass
-       uploads to uPal -- tagpu_pal.h) */
-    tagpu_gaf_atlas_restore(&s_atlas, tagpu_pal_live());
+    /* THE LAZY RESTORE THAT STOOD HERE WAS THE GL ONE and it went in 11-5e-2.
+       This atlas's restore is the other lane's now: `tagpu_gaf_atlas_restore_vk`
+       above publishes the frame list and `tagpu_vk_restore.c` paints it. */
 
     memset(s_nv, 0, sizeof s_nv);
     memset(&s_c, 0, sizeof s_c);

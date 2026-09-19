@@ -2326,13 +2326,19 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        resolve serves the atlas restore here and uPal below. */
     const unsigned char* pal = tagpu_pal_live();
     /* No frame is drawn with an unspecified palette. Unreachable in practice --
-       ptr_ok(ta) above is what the engine-table fallback needs -- and the
-       reason to keep the guard is now the line below rather than a texture:
-       `tagpu_r3d_atlas_frame` would restore the atlas against a null palette. */
+       ptr_ok(ta) above is what the engine-table fallback needs.
+       THE REASON NAMED HERE UNTIL 11-5e-2 WAS THE LINE BELOW -- that
+       `tagpu_r3d_atlas_frame` would restore the atlas against a null palette --
+       and that is no longer true: the restore went with the GL backend and the
+       call takes no palette now. What is left is the early-out itself, which
+       is a real behaviour (the whole native pass is skipped) and older than
+       the reason that was attached to it. Whether a frame with no live palette
+       should still be skipped is a question about the pass, not about the
+       restorer, so this landing leaves the guard exactly as it found it and
+       says so rather than removing it on the strength of a deleted caller. */
     if (!pal) { SSHADOW_NONE(); return; }
-    /* the unit atlas's frame: recycle if full, arm and step its Classic++
-       restore -- before any face asks it for a UV */
-    tagpu_r3d_atlas_frame(pal);
+    /* the unit atlas's frame: recycle if full -- before any face asks it for a UV */
+    tagpu_r3d_atlas_frame();
     /* AND THE SHADE LUT, on the same beat and for the same reason: it is the
        pass's, the hand-over carries its mirror, and until this line it was only
        ever built by the GL composite asking for its texture name. */
@@ -2638,11 +2644,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        `tagpu_pal_frame` fills from this frame's packet before any pass runs,
        and each Vulkan twin uploads them itself.
 
-       `pal` ABOVE IS STILL LOAD-BEARING AND MUST NOT GO WITH THIS UPLOAD: it
-       is the argument to `tagpu_r3d_atlas_frame(pal)` a few lines up, which
-       recycles the 3DO atlas when it is full and steps its Classic++ restore
-       against the live palette. Deleting it would leave units rendering from
-       an unrestored or stale atlas -- wrong colours, nothing thrown. */
+       `pal` ABOVE OUTLIVED THAT UPLOAD AND HAS NOW OUTLIVED ITS SECOND
+       READER TOO. This paragraph used to say it was load-bearing as the
+       argument to `tagpu_r3d_atlas_frame(pal)`; 11-5e-2 deleted the GL restore
+       that argument fed, so the call takes none and the only thing left
+       reading `pal` in this function is the `if (!pal)` early-out a few lines
+       up. That early-out is kept deliberately and its own comment says why.
+       A reader deciding whether `pal` can go should start there, not here. */
 
     /* ---- gather native-owned on-screen units ---- */
     /* ONE GATHERED DRAWABLE. `pu`/`pw` point into THIS FRAME'S PACKET — our
@@ -3030,7 +3038,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* ---- effects gather (projectiles, explosions, debris, particles) ---- */
     TAGPU_FXVIEW fv;
     int nfx = 0, nfeat = 0, nterr = 0;
-    unsigned rglslSeen = 0;      /* the restorer's call count before the gathers */
     /* THE VIEW IS FILLED WHATEVER IS ARMED, and only the GATHERS are gated.
        It used to be filled inside the `if` below — but `tagpu_shadow_begin`
        is handed this same struct further down, on the Classic++ shadow path,
@@ -3079,7 +3086,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         fv.r0 = r0; fv.rows = rows;
         fv.frame_counter = f->frame_counter;
     }
-    rglslSeen = tagpu_rglsl_calls();
     if (fxOn || sfxOn || featOn || terrOn || markOn) {
         /* terrain first (the frame's far plane), then features: they own the
            depth the units are tested against */
@@ -3088,21 +3094,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (fxOn || sfxOn) nfx = tagpu_fx_gather(&fv);
         if (markOn) tagpu_mark_gather(&fv);   /* the count fed a deleted GL draw;
                                                  the CALL fills the hand-over */
-        /* Classic++: one slice of the restorer, after the gathers (so the
-           frames they missed this frame are queued) and before the renders
-           (so what it paints is sampled this frame) */
-        tagpu_rglsl_step();
+        /* THE RESTORER'S SLICE WAS ISSUED HERE and went in 11-5e-2 with the GL
+           backend that ran it. The Vulkan restorer is sliced inside the frame's
+           command buffer from `tagpu_vk.c`, after every pass's prepare, so
+           there is nothing for the gather order to protect any more. */
     }
-    /* ...AND THE SAME SLICE WITH NO PASS ARMED, when the measurement lever asks
-       for it. `tagpu_rglsl.step` exists because the A/B needs the restorer
-       painting while exactly ONE Vulkan pass draws, and the block above ties
-       the step to arming a pass -- which used to be free only because `mark`
-       had no Vulkan twin. The call-count compare is `tagpu_gui_surf.c`'s, so a
-       frame the block above already stepped is not stepped twice and the slice
-       budget is spent once either way. */
-    if (tagpu_rglsl_step_forced(f->frame_counter) && tagpu_rglsl_calls() == rglslSeen)
-        tagpu_rglsl_step();
-
     /* NEVER return early while we own the terrain: the engine's frame is a
        flat key fill inside the viewport, and only the composite below turns it
        back into a picture. tagpu_terr_gather hands the draw back on any bail,
@@ -3619,7 +3615,6 @@ static void pose_dump(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* u,
 void tagpu_native_glreset(void)
 {
     s_fogCols = s_fogRows = 0; s_fogCells = 0; s_fogGrid = NULL; s_fogLut = 0;
-    tagpu_rglsl_glreset();      /* first: the passes below forget their jobs */
     tagpu_fx_glreset();
     tagpu_feat_glreset();
     tagpu_terr_glreset();

@@ -8,7 +8,6 @@
    the file keeps is the material layer the native and posed passes share. */
 
 /* shared material resources for the native pass (G12b) */
-unsigned int tagpu_r3d_atlas_texref(void);
 /* Classic++ (G14g): the unit atlas's restored RGBA8 twin, mipmapped to
    level 2 -- 0 until the switch has been seen on and the restorer's job
    made; a shader samples it only where its alpha says the texel is painted */
@@ -18,11 +17,11 @@ unsigned int tagpu_r3d_atlas_rgbref(void);
    each frame has to be keyed on this. The geometry bake's material stream is
    (tagpu_posebake.c). */
 unsigned int tagpu_r3d_atlas_gen(void);
-/* Once per frame from the native pass, before its first tagpu_r3d_atlas_uv,
-   with the live palette (main+0x143A7): recycles a full atlas (never between
-   an emit and its draw) and drives the lazy restore -- arming it the first
-   time the switch is on, rebuilding the twin's mips after each painted batch */
-void tagpu_r3d_atlas_frame(const unsigned char* pal);
+/* Once per frame from the native pass, before its first tagpu_r3d_atlas_uv:
+   recycles a full atlas, never between an emit and its draw. It also drove the
+   GL lazy restore until 11-5e-2 -- that is what its `pal` argument was for --
+   and the restore is now published as a frame list for the Vulkan lane. */
+void tagpu_r3d_atlas_frame(void);
 /* Once per frame from the native pass, beside the other level-keyed caches and
    BEFORE tagpu_posebake_frame latches the atlas generation: drops every entry
    when the level changes, because the atlas keys on frame addresses the next

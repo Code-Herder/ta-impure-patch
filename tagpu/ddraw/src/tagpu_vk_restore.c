@@ -2042,8 +2042,10 @@ int tagpu_vk_restore_job_chain(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j,
     if (!s_built || !s_pipeMip || !s_rpMip || !s_dslMip || !s_dpool) return 0;
     if (j->chainN) return 1;                  /* registered once, by contract */
     /* AN ODD LEVEL WOULD NEED A WEIGHTED THREE-TAP, not a 2x2 average, and
-       this shader does not pretend to be one -- the GL lane refuses the same
-       chain for the same reason (tagpu_rglsl_mips). Refused WHOLE rather than
+       this shader does not pretend to be one. The GL lane refused the same
+       chain for the same reason, in `tagpu_rglsl_mips`, until 11-5e-2 deleted
+       that lane -- the rule is kept here because it is a property of the 2x2
+       reduction and not of either backend. Refused WHOLE rather than
        part-reduced: a chain half ours and half nobody's is the one outcome
        neither lane can describe. */
     for (L = 1; L <= mips; L++)

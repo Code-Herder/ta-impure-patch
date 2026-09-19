@@ -38,8 +38,6 @@ typedef void (APIENTRY* PFN_TEXPARAMETERF)(GLenum, GLenum, GLfloat);
 /* ...and GL 1.0's read-back, which opengl_utils.h does not export either
    (tagpu_overlay.c fetches it the same way) */
 typedef void (APIENTRY* PFN_READPIXELS)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*);
-static PFN_GENERATEMIPMAP x_glGenerateMipmap;
-static PFN_TEXPARAMETERF  x_glTexParameterf;
 static PFN_READPIXELS     x_glReadPixels;
 static int s_glFetched;
 #ifndef GL_TEXTURE_MAX_LEVEL
@@ -66,8 +64,9 @@ static void fetch_gl(void)
 {
     if (s_glFetched) return;
     s_glFetched = 1;
-    x_glGenerateMipmap = (PFN_GENERATEMIPMAP)getgl("glGenerateMipmap");
-    x_glTexParameterf  = (PFN_TEXPARAMETERF)getgl("glTexParameterf");
+    /* glGenerateMipmap and glTexParameterf went with `twin_mips` and
+       `tagpu_gaf_atlas_restore` in 11-5e-2; glReadPixels is still asked for
+       because `tagpu_gaf_atlas_mirror_rgb` names it in the refusal it logs. */
     x_glReadPixels     = (PFN_READPIXELS)getgl("glReadPixels");
 }
 
@@ -242,7 +241,6 @@ static void rlist_add(TAGPU_GAFATLAS* a, const TAGPU_RGLSL_FRAME* f)
    This is the third time on this pass that a key which was not the CONTENT's
    key has been wrong, so the zeroing lives HERE, in one function beside the
    call it mirrors, rather than at each site. */
-static void twin_mips(TAGPU_GAFATLAS* a);   /* below; job_clear_dest wants it */
 
 static void rgb_mirror_zeroed(TAGPU_GAFATLAS* a)
 {
@@ -268,9 +266,13 @@ static void job_clear_dest(TAGPU_GAFATLAS* a)
        is what tells it, and dropping the list is what stops it painting the
        old layout over the new one. */
     rlist_reset(a, 0);
-    if (!a->job) return;
-    tagpu_rglsl_job_clear(a->job);
-    twin_mips(a);
+    /* AND THE MIRROR IS NOT BEHIND A GL PREDICATE ANY MORE. Until 11-5e-2 the
+       three lines below sat under `if (!a->job) return;` -- the GL restorer's
+       job -- so a build with no GL restorer cleared the published list and left
+       the mirror holding the old layout's colours. `rgb_mirror_zeroed` guards
+       on `a->mirrorRgb` itself, which is the pointer that actually governs the
+       work, so calling it unconditionally is a no-op when there is no mirror
+       and correct when there is. */
     rgb_mirror_zeroed(a);
 }
 
@@ -284,18 +286,6 @@ static void job_clear_dest(TAGPU_GAFATLAS* a)
    by construction. The fallback is still here because it is what shipped before
    landing 7e: it loses the cross-driver identity of the levels, not the levels.
    [The Vulkan-only plan's landing 7e.] */
-static void twin_mips(TAGPU_GAFATLAS* a)
-{
-    if (!a->mip || !a->rgb) return;
-    if (!tagpu_rglsl_mips(a->rgb, a->dim, a->mip)) {
-        if (!x_glGenerateMipmap) return;
-        glBindTexture(GL_TEXTURE_2D, a->rgb);
-        x_glGenerateMipmap(GL_TEXTURE_2D);
-        glBindTexture(GL_TEXTURE_2D, 0);
-    }
-    a->mippedN = tagpu_rglsl_job_painted(a->job);
-}
-
 /* ORDER IS THE WHOLE FIX. A shelf packer wastes the difference between the
    cell that opened a shelf and every shorter cell that then sat on it, and
    the feature atlas is fed in map order -- a 320-tall tree, then a row of
@@ -529,14 +519,6 @@ int tagpu_gaf_atlas_mirror(TAGPU_GAFATLAS* a)
    up, so nothing is painted at or below `shelfY + shelfH` and reading further
    would be reading memory no entry can ever name -- the same bound
    tagpu_gui_surf.c already publishes as `atlasRows` for the indexed mirror. */
-static int rgb_rows(const TAGPU_GAFATLAS* a)
-{
-    int rows = a->shelfY + a->shelfH;
-    if (rows < 1) rows = 1;
-    if (rows > a->dim) rows = a->dim;
-    return rows;
-}
-
 int tagpu_gaf_atlas_mirror_rgb(TAGPU_GAFATLAS* a)
 {
     char b[160];
@@ -670,161 +652,46 @@ size_t tagpu_gaf_mip_chain(int dim, int mip)
    name. An incomplete framebuffer will be incomplete again next frame -- it is
    a property of the texture, not of the moment -- so both callers latch on it
    and stop asking, and neither could do that from the return value alone. */
-int tagpu_gl_rgba_readback(unsigned tex, int level, int w, int rows,
-                           unsigned char* dst, unsigned* fbo, unsigned* status)
-{
-    GLint fbo0 = 0, pack = 4;
-    GLenum st;
-    int ok = 0;
-    if (status) *status = 0;
-    if (!tex || !dst || !fbo || w <= 0 || rows <= 0) return 0;
-    fetch_gl();
-    if (!x_glReadPixels || !glGenFramebuffers || !glBindFramebuffer ||
-        !glFramebufferTexture2D || !glCheckFramebufferStatus) return 0;
-    if (!*fbo) {
-        glGenFramebuffers(1, fbo);
-        if (!*fbo) return 0;
-    }
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo0);
-    glGetIntegerv(GL_PACK_ALIGNMENT, &pack);
-    glBindFramebuffer(GL_FRAMEBUFFER, *fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, level);
-    st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-    if (status) *status = (unsigned)st;
-    if (st == GL_FRAMEBUFFER_COMPLETE) {
-        glPixelStorei(GL_PACK_ALIGNMENT, 1);
-        x_glReadPixels(0, 0, w, rows, GL_RGBA, GL_UNSIGNED_BYTE, dst);
-        glPixelStorei(GL_PACK_ALIGNMENT, pack);
-        ok = 1;
-    }
-    /* THE ATTACHMENT IS DROPPED WHATEVER HAPPENED: leaving someone else's
-       texture attached to our FBO would keep it alive past a delete and make
-       the next status check answer about the wrong image. */
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
-    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)fbo0);
-    return ok;
-}
-
 void tagpu_gaf_atlas_mirror_rgb_step(TAGPU_GAFATLAS* a)
 {
-    unsigned st = 0;
-    int rows, painted;
+    /* THE READ-BACK THIS USED TO DRIVE WENT WITH THE GL RESTORER IN 11-5e-2,
+       and what is left is the branch that was already the only reachable one.
+       `a->rgb` -- the RGBA8 twin -- had exactly one non-zero writer,
+       `tagpu_gaf_atlas_restore`, and that function could not run at all: it
+       returns at `!a->tex`, and `a->tex` has been 0 for the life of the
+       process since landing 11-4c took the `glGenTextures` out of
+       `tagpu_gaf_atlas_create` (the comment there says so). So the old body
+       tested `!a->rgb || !a->job`, took this branch every time, and the
+       forty lines under it -- the paint-count content key, the level-0 and
+       mip read-backs, the FBO-incomplete latch -- never ran once. Deleting
+       them is exact rather than approximate: the reachable behaviour is
+       this block, unchanged.
+
+       AND IT IS NOW DEAD AT LINE ONE AS WELL, one step earlier still:
+       `a->mirrorRgb` is allocated only by `tagpu_gaf_atlas_mirror_rgb`,
+       which refuses before it allocates (no GL entry points resolve, because
+       nothing in this build calls `oglu_load_dll` to put `opengl32.dll` in
+       the process). This function and its arm therefore go together, with
+       the `mirrorRgb*` fields and the `atlasRgb*` publications that read
+       them -- and that is a landing of its own, because those publications
+       reach five Vulkan passes and the terrain. Labelled here rather than
+       deleted for the same reason 11-5e-1 left fourteen `*_glreset`
+       functions standing: a consumer tree deleted ahead of its consumers is
+       worse than one that is merely unreachable.
+       [The vulkan-only plan, 11-5e-2; the rest is 11-5e-2b.] */
     if (!a || !a->mirrorRgb) return;
-    /* AND THE BUFFER STILL HAS TO BE THIS ATLAS'S SHAPE. It is never freed, so
-       a `mip` that moved under it (the demote on a GL with no glGenerateMipmap,
-       against the owner's re-init on a context reset) would have this read-back
-       write levels the allocation has no room for. Refused for the frame and
-       NOT latched: the demote is re-applied at the top of the next restore, so
-       the window closes on its own and a latch would cost the mirror for ever
-       over a frame. [The gate-3a verification pass named the pair; the chain is
-       this landing's, so this hazard is too.] */
     if (a->dim != a->mirrorRgbDim || a->mip != a->mirrorRgbMip) return;
-    if (!a->rgb || !a->job) {
-        /* the twin is gone (a re-arm, or a context loss before the re-create).
-           Say so rather than leaving the last twin's colours standing: a
-           consumer that kept them would restore art the GL lane no longer
-           does. The `rgbGen` bump on the re-create brings the next step in. */
-        if (a->mirrorRgbRows) {
-            memset(a->mirrorRgb, 0, tagpu_gaf_mip_chain(a->mirrorRgbDim, a->mirrorRgbMip));
-            a->mirrorRgbRows = 0;
-            a->mirrorRgbSerial++;
-        }
-        a->mirroredPainted = 0;
-        a->mirroredRgbGen = 0;
-        return;
-    }
-    painted = tagpu_rglsl_job_painted(a->job);
-    rows = rgb_rows(a);
-    /* THE CONTENT KEY IS THE PAINT COUNT, `rgbGen` FOR ITS DISCONTINUITY, AND
-       THE ROW BOUND FOR THE SHELF GROWING UNDER IT. Every one of the three is
-       a thing that changes what a consumer would read and nothing else is:
-       keying on the paint count alone misses the re-arm (it restarts at 0) and
-       keying on it plus the generation misses a shelf that grew without a
-       paint landing yet -- which leaves rows in the mirror that were never
-       read. [This is landing 2's lesson, which cost that landing two rounds: a
-       serial that is not the CONTENT's serial uploads once and then misses
-       everything after it.] */
-    /* AND THE MIP GENERATION IS PART OF THE KEY, which is the fourth thing
-       this content key has had to learn. `twin_mips` runs at the TOP of a frame
-       out of `tagpu_gaf_atlas_restore`, `tagpu_rglsl_step` paints in the
-       MIDDLE of it, and this read-back runs at the END -- so the read-back that
-       first sees a new paint count sees level 0 freshly painted and levels 1+
-       as they were BEFORE it, and then latches `mirroredPainted` and never
-       looks again. The mirror's level 0 was right and its levels 1+ were one
-       batch stale, for good.
-       MEASURED: 581 of 1 528 unit pixels differing at 640x480 with every filter
-       setting already matched, 422 of them by more than 8 levels, and the
-       Vulkan side showing flat greys where the GL side had colour -- the
-       signature of sampling a mip that was built from different texels.
-       [FOUND 2026-09-16, gate 3a, by looking at WHERE the residual was rather
-       than trying one more filter.] */
-    if (painted == a->mirroredPainted && a->rgbGen == a->mirroredRgbGen &&
-        a->mippedN == a->mirroredMippedN && rows <= a->mirrorRgbRows)
-        return;
-    /* THE READ-BACK ITSELF IS `tagpu_gl_rgba_readback` ABOVE -- the FBO, the
-       pack alignment, the saved binding, the dropped attachment and the fact
-       that row 0 is memory row 0 and not the screen's all live there, once. */
-    if (tagpu_gl_rgba_readback(a->rgb, 0, a->dim, rows, a->mirrorRgb,
-                               &a->mirrorRgbFbo, &st)) {
-        /* AND EVERY OTHER LEVEL, WHOLE. Only level 0 is worth bounding by the
-           shelf: level 1 of a 2048 twin is 4 MB and level 2 is 1 MB, the
-           arithmetic to bound them would have to round the shelf cursor down
-           per level, and a level read short is a level whose tail keeps the
-           previous twin's colours. They are also written by glGenerateMipmap
-           in one go, so there is no partial state to track.
-           A LEVEL THAT FAILS COSTS THE WHOLE MIRROR, and the first draft of
-           this comment said the opposite -- that the chain is only as deep as
-           the levels that came back and a consumer builds the shallower image.
-           It cannot: GL still filters this twin to its own MAX_LEVEL, so a
-           shallower chain on the other side is a different picture wherever
-           the art is minified. `mirrorRgbMips` still records how deep the read
-           got, and `tagpu_render3do.c`'s accessor turns anything short of
-           `mip` into NO MIRROR. [Corrected by the gate-3a re-review.] */
-        int L;
-        a->mirrorRgbMips = 0;
-        for (L = 1; L <= a->mip; L++) {
-            int d = a->dim >> L;
-            if (d < 1) d = 1;
-            if (!tagpu_gl_rgba_readback(a->rgb, L, d, d,
-                                        a->mirrorRgb + tagpu_gaf_mip_off(a->dim, L),
-                                        &a->mirrorRgbFbo, &st))
-                break;
-            a->mirrorRgbMips = L;
-        }
-        if (rows > a->mirrorRgbRows) a->mirrorRgbRows = rows;
-        a->mirroredPainted = painted;
-        a->mirroredRgbGen = a->rgbGen;
-        a->mirroredMippedN = a->mippedN;
-        a->mirrorRgbSerial++;
-        return;
-    }
-    /* NO STATUS MEANS NOTHING TO LATCH: the entry points were not resolved or
-       the FBO name could not be made, and neither says anything about this
-       texture. An INCOMPLETE framebuffer does, and it will say it again every
-       frame, so it is answered once and for good. */
-    if (!st || st == GL_FRAMEBUFFER_COMPLETE) return;
-    {
-        char b[160];
-        _snprintf(b, sizeof b, "%s: restored-twin read-back FBO incomplete (%x) - the"
-                  " Vulkan edition of this pass stays indexed",
-                  a->tag ? a->tag : "gaf", st);
-        b[sizeof b - 1] = 0;
-        glog(b);
-        free(a->mirrorRgb);
-        a->mirrorRgb = NULL;
+    /* the twin is gone (a re-arm, or a context loss before the re-create).
+       Say so rather than leaving the last twin's colours standing: a
+       consumer that kept them would restore art the GL lane no longer
+       does. The `rgbGen` bump on the re-create brings the next step in. */
+    if (a->mirrorRgbRows) {
+        memset(a->mirrorRgb, 0, tagpu_gaf_mip_chain(a->mirrorRgbDim, a->mirrorRgbMip));
         a->mirrorRgbRows = 0;
-        a->mirrorRgbFailed = 1;
         a->mirrorRgbSerial++;
-        /* and the FBO with it: the latch means nothing will ever ask again, so
-           holding a name for the process's life buys nothing. Deleted while its
-           context is still current, which is what separates this from
-           `tagpu_gaf_atlas_lost` -- there the context is gone and a delete
-           would either do nothing or destroy a live object of the NEW one.
-           The helper has already dropped the attachment and put the previous
-           binding back, so this is a name with nothing attached to it. */
-        glDeleteFramebuffers(1, &a->mirrorRgbFbo);
-        a->mirrorRgbFbo = 0;
     }
+    a->mirroredPainted = 0;
+    a->mirroredRgbGen = 0;
 }
 
 /* Arm the published restore list and stand the read-back down (tagpu_gaf.h).
@@ -915,9 +782,13 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
        stale for the frames between a loss and the next create.) */
     if (a->mirror) { memset(a->mirror, 0, (size_t)a->dim * a->dim); a->mirrorSerial++; }
     memset(a->hash, 0, sizeof a->hash);
-    /* the twin and the job died with the context (tagpu_rglsl_glreset has
-       already forgotten the job: it runs first); re-armed on the next frame */
-    a->rgb = 0; a->job = NULL; a->restoreFailed = 0; a->mippedN = 0;
+    /* `rgb` and `restoreFailed` outlived the GL restorer that set them: both
+       are 0 for the life of the process since 11-5e-2 deleted the only writer
+       (`tagpu_gaf_atlas_restore`). Cleared here anyway, because this function's
+       contract is "the struct describes nothing that exists" and a field left
+       alone on the strength of an argument made elsewhere is how the next
+       landing gets a stale value. */
+    a->rgb = 0; a->restoreFailed = 0;
     /* THE OTHER LANE'S DESTINATION DID NOT DIE -- ITS SOURCE DID. Nothing here
        is a Vulkan object, so a consumer's twin still holds the colours of an
        atlas whose every entry has just been dropped. The generation is what
@@ -948,7 +819,6 @@ static void restore_enqueue(TAGPU_GAFATLAS* a, const TAGPU_GAFENT* e)
 {
     TAGPU_RGLSL_FRAME f;
     if (!restore_frame_of(a, e, &f)) return;
-    tagpu_rglsl_job_add(a->job, &f, 1);
     rlist_add(a, &f);
 }
 
@@ -958,233 +828,6 @@ static void restore_enqueue(TAGPU_GAFATLAS* a, const TAGPU_GAFENT* e)
    tagpu_restore_<tag>.r8 (the source, dim x dim), .rgba (the twin, dim x dim
    x 4) and .idx (a line per entry: x y w h key wrap), so `tascene featdiff`
    can find each frame in both and hold the twin to the lab's bar. */
-static void dump_if_armed(TAGPU_GAFATLAS* a)
-{
-    static unsigned s_check;
-    char name[64], b[160];
-    unsigned char* buf;
-    FILE* f;
-    int i;
-    if (!a->job || a->n == 0 || a->n == a->dumpedN) return;
-    if (!tagpu_rglsl_job_idle(a->job)) return;
-    if (++s_check % 60) return;                    /* one attribute read a second */
-    if (GetFileAttributesA("tagpu_restoredump.on") == INVALID_FILE_ATTRIBUTES) return;
-    buf = (unsigned char*)malloc((size_t)a->dim * a->dim * 4);
-    if (!buf) return;
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    _snprintf(name, sizeof name, "tagpu_restore_%s.r8", a->tag);
-    glBindTexture(GL_TEXTURE_2D, a->tex);
-    glGetTexImage(GL_TEXTURE_2D, 0, GL_RED, GL_UNSIGNED_BYTE, buf);
-    f = fopen(name, "wb");
-    if (f) { fwrite(buf, 1, (size_t)a->dim * a->dim, f); fclose(f); }
-    _snprintf(name, sizeof name, "tagpu_restore_%s.rgba", a->tag);
-    glBindTexture(GL_TEXTURE_2D, a->rgb);
-    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, buf);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    f = fopen(name, "wb");
-    if (f) { fwrite(buf, 1, (size_t)a->dim * a->dim * 4, f); fclose(f); }
-    free(buf);
-    /* ...AND EVERY MIP LEVEL OF A MIPPED TWIN, as one file, level 0 first and
-       each level `dim >> L` square (the layout `tagpu_gaf_mip_off` describes).
-       Only the unit atlas is mipped, and it is the last consumer this lane has
-       to wire: a Vulkan restore paints level 0 and the twin is sampled
-       GL_LINEAR_MIPMAP_LINEAR, so the levels have to come from somewhere, and
-       the choice is between reading GL's back (what the mirror does today) and
-       reducing them here. That choice is a question about what
-       glGenerateMipmap ACTUALLY DID, and this file is the only place that can
-       answer it -- hence the dump. [landing 7e's measurement.] */
-    if (a->mip > 0 && a->rgb) {
-        size_t chain = tagpu_gaf_mip_chain(a->dim, a->mip);
-        unsigned char* mbuf = (unsigned char*)malloc(chain);
-        if (mbuf) {
-            int L, got = 0;
-            glBindTexture(GL_TEXTURE_2D, a->rgb);
-            for (L = 0; L <= a->mip; L++) {
-                int d = a->dim >> L;
-                if (d < 1) d = 1;
-                glGetTexImage(GL_TEXTURE_2D, L, GL_RGBA, GL_UNSIGNED_BYTE,
-                              mbuf + tagpu_gaf_mip_off(a->dim, L));
-                got = L;
-            }
-            glBindTexture(GL_TEXTURE_2D, 0);
-            _snprintf(name, sizeof name, "tagpu_restore_%s.mips", a->tag);
-            f = fopen(name, "wb");
-            if (f) { fwrite(mbuf, 1, chain, f); fclose(f); }
-            free(mbuf);
-            _snprintf(b, sizeof b, "%s: the twin's mip chain dumped to tagpu_restore_%s.mips"
-                      " (%d levels of %d, %u KB)", a->tag, a->tag, got + 1, a->dim,
-                      (unsigned)(chain >> 10));
-            b[sizeof b - 1] = 0;
-            glog(b);
-        }
-    }
-    _snprintf(name, sizeof name, "tagpu_restore_%s.idx", a->tag);
-    f = fopen(name, "w");
-    if (f) {
-        for (i = 0; i < a->n; i++) if (a->ents[i].ok)
-            fprintf(f, "%d %d %d %d %d %d\n", a->ents[i].x, a->ents[i].y, a->ents[i].w, a->ents[i].h,
-                    a->ents[i].ck, a->ents[i].wrap);
-        fclose(f);
-    }
-    a->dumpedN = a->n;
-    _snprintf(b, sizeof b, "%s: restored twin dumped to tagpu_restore_%s.{r8,rgba,idx} (%dx%d, %d entries)%s",
-              a->tag, a->tag, a->dim, a->dim, a->n, f ? "" : " -- WRITE FAILED");
-    glog(b);
-}
-
-void tagpu_gaf_atlas_restore(TAGPU_GAFATLAS* a, const unsigned char* pal)
-{
-    int i;
-    a->pal = pal;
-    if (a->job) {
-        /* The palette moved under the twin — the Gamma slider, or `+gamma N`
-           in chat: every texel in it was restored through the old one and is
-           now the wrong brightness beside the engine's own pixels. Re-point
-           the job and queue every entry again, WITHOUT clearing, so the atlas
-           recolours cell by cell instead of vanishing for the length of the
-           repaint. Gated on the job being idle, which bounds this to one
-           repaint of this atlas in flight however often the palette moves. */
-        if (pal && a->palSerial != tagpu_pal_serial() && tagpu_rglsl_job_idle(a->job)) {
-            char b[128];
-            a->palSerial = tagpu_pal_serial();
-            tagpu_rglsl_job_repalette(a->job, pal);
-            /* AND THE PUBLISHED LIST IS A REPAINT GENERATION, opened before
-               the loop below so that the loop's own `restore_enqueue` fills
-               it. A consumer rebuilds its job with `repaint` set and keeps
-               what its destination holds, exactly as this lane does. */
-            rlist_reset(a, 1);
-            for (i = 0; i < a->n; i++) if (a->ents[i].ok) restore_enqueue(a, &a->ents[i]);
-            _snprintf(b, sizeof b, "%s: palette changed (serial=%u): %d entries queued for repaint",
-                      a->tag, a->palSerial, a->n);
-            glog(b);
-        }
-        /* a mipped twin: its levels follow level 0 one frame behind the
-           batch that painted it (the OUT draw is issued after this call,
-           in tagpu_rglsl_step; the next frame's call sees the count move) */
-        if (a->mip && tagpu_rglsl_job_painted(a->job) != a->mippedN) twin_mips(a);
-        dump_if_armed(a);
-        return;
-    }
-    if (a->restoreFailed || !a->tex || !pal) return;
-    if (!tagpu_classicpp_assets()) return;
-    fetch_gl();
-    if (a->mip && (!x_glGenerateMipmap || !x_glTexParameterf)) {
-        char b[128];
-        _snprintf(b, sizeof b, "%s: no glGenerateMipmap/glTexParameterf: twin left unmipped, NEAREST", a->tag);
-        glog(b);
-        a->mip = 0;
-    }
-    if (!a->rgb) {
-        GLuint t = 0;
-        glGenTextures(1, &t);
-        if (!t) { a->restoreFailed = 1; return; }
-        glBindTexture(GL_TEXTURE_2D, t);
-        if (a->mip) {
-            /* renderers.md 1: trilinear to level `mip`, anisotropic where the
-               extension answers -- a driver without it raises INVALID_ENUM
-               on the parameter and is otherwise unaffected, so try it and
-               read the error flag, drained first because it is process-wide */
-            char b[160];
-            int pending = 0;
-            GLenum err;
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, a->mip);
-            while (glGetError() != GL_NO_ERROR && pending < 16) pending++;
-            {
-                /* `aniso=` (tagpu_classicpp.h): 4 in play, 1 when the Vulkan
-                   A/B is being taken, because the two APIs place anisotropic
-                   samples differently and that is the one difference the port
-                   cannot close. BOTH LANES READ THE SAME KNOB. */
-                float want = tagpu_classicpp_light()->aniso;
-                if (want < 1.0f) want = TWIN_ANISO;
-                x_glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, want);
-                err = glGetError();
-                a->rgbAniso = (err == GL_NO_ERROR && want > 1.0f) ? want : 0.0f;
-            }
-            /* RECORDED, NOT JUST LOGGED, above. A second backend has to apply
-               the same ratio, and both "the extension answered" and "the knob
-               said 1" are facts it cannot work out for itself. */
-            _snprintf(b, sizeof b, "%s: restored twin %dx%d, trilinear to mip level %d, %s%s",
-                      a->tag, a->dim, a->dim, a->mip,
-                      a->rgbAniso > 1.0f ? "anisotropic" : "no anisotropic filtering",
-                      err == GL_NO_ERROR ? "" : " (extension absent)");
-            if (a->rgbAniso > 1.0f) {
-                char r[16];
-                _snprintf(r, sizeof r, " %.0fx", (double)a->rgbAniso);
-                r[sizeof r - 1] = 0;
-                strncat(b, r, sizeof b - strlen(b) - 1);
-            }
-            glog(b);
-        } else {
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            a->rgbAniso = 0.0f;
-        }
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        /* EVERY LEVEL IS ALLOCATED HERE, not left to glGenerateMipmap to
-           create. `twin_mips` reduces the chain itself as of landing 7e-1, and
-           a reduction draws INTO level L through a framebuffer -- which a level
-           with no storage makes incomplete, so the first chain of every twin
-           would silently fall back to the driver's reduction and a twin painted
-           once would keep it for good.
-
-           THE LEVELS ARE UNDEFINED UNTIL THE `twin_mips` BELOW, and what makes
-           that safe is an invariant rather than the shortness of the window --
-           which is what the first version of this comment argued, wrongly, and
-           it was six statements including a call:
-
-             * nothing between here and there SAMPLES the twin. The only thing
-               that touches it is `tagpu_rglsl_job_new`, which renders into
-               level 0 to clear it;
-             * the one path that abandons the twin DELETES it (`a->rgb = 0`
-               below), so no twin with an undefined chain is ever published;
-             * and `twin_mips` always writes the chain when `a->mip` is set,
-               because the branch above demotes `a->mip` to 0 whenever
-               `glGenerateMipmap` did not resolve -- so the fallback is
-               guaranteed to be there when it is needed. */
-        {
-            int L;
-            for (L = 0; L <= a->mip; L++) {
-                int d = a->dim >> L;
-                if (d < 1) d = 1;
-                glTexImage2D(GL_TEXTURE_2D, L, GL_RGBA8, d, d, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-            }
-        }
-        glBindTexture(GL_TEXTURE_2D, 0);
-        a->rgb = t;
-        /* the content key's discontinuity: a fresh twin is alpha 0 everywhere
-           and the job that fills it counts from 0 again (tagpu_gaf.h) */
-        a->rgbGen++;
-    }
-    a->job = tagpu_rglsl_job_new(a->tag ? a->tag : "gaf", a->prio, 0,
-                                 a->tex, a->dim, a->dim, pal, a->rgb, a->dim, a->dim);
-    if (!a->job) {
-        /* the reason is in tagpu.log. The twin goes with the job: the passes
-           gate their restored branch on `rgb`, and a twin nothing has cleared
-           is 16 MB of whatever the driver left there, alpha included */
-        glDeleteTextures(1, &a->rgb);
-        a->rgb = 0;
-        a->restoreFailed = 1;
-        return;
-    }
-    a->palSerial = tagpu_pal_serial();
-    /* the job cleared level 0 to alpha 0: the mip levels must say the same
-       before anything samples them -- and since landing 7e-1 they are ALLOCATED
-       but undefined until this runs, rather than absent until it runs, so this
-       is the call that makes the twin samplable at all rather than merely
-       consistent. It cannot fail to write them: `a->mip` is 0 unless
-       `glGenerateMipmap` resolved, so either our reduction runs or that does.
-       A twin whose chain this left undefined is one a trilinear fetch reads
-       garbage from; before, it was one GL reported incomplete. */
-    twin_mips(a);
-    /* what is already in the atlas was uploaded before the switch: queue it,
-       in upload order, so nothing stays indexed for want of a miss */
-    rlist_reset(a, 0);          /* a new twin here is a new one over there    */
-    for (i = 0; i < a->n; i++) if (a->ents[i].ok) restore_enqueue(a, &a->ents[i]);
-}
-
 /* frame headers are heap pointers: mix the high bits down so the low-order
    allocator alignment does not cluster every key into one bucket */
 static unsigned gaf_hash(const void* p)
@@ -1465,7 +1108,22 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
         e->wrap = art ? (char)tagpu_rglsl_tileable(pixels, w, h, art, e->ck) : 0;
     }
     e->ok = 1; e->resv = 0;
-    if (a->job) restore_enqueue(a, e);
+    /* THE PUBLISHED LIST IS FED HERE, AND UNTIL 11-5e-2 IT WAS NOT. This line
+       read `if (a->job) restore_enqueue(a, e);` -- the GL restorer's job --
+       and `a->job` has been NULL for the life of the process since landing
+       11-4c took the `glGenTextures` that filled `a->tex` out of
+       `tagpu_gaf_atlas_create`: with no source texture `tagpu_gaf_atlas_restore`
+       returned before it could make a job, so this call never ran. The other
+       lane's list was therefore SEEDED ONCE by `tagpu_gaf_atlas_restore_vk`
+       and never fed again -- and worse, `job_clear_dest` (a recycle, a repack)
+       empties it, so after the first reset it stayed empty and every frame
+       inserted afterwards stayed indexed for the session.
+       The guard now belongs to the list: `rlist_add` returns at the top unless
+       `rlistWant` and `rlist` are both set, so an unarmed list costs one
+       `restore_frame_of` and nothing else, and an armed one is fed exactly
+       where its own comment says it is fed ("called from `atlas_paint`, which
+       sets `e->ok` before it enqueues"). [The vulkan-only plan, 11-5e-2.] */
+    restore_enqueue(a, e);
 }
 
 /* the insertion shared by atlas_get (which decodes into s_dec first) and
