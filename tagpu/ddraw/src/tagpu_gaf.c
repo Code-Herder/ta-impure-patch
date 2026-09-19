@@ -174,21 +174,18 @@ static void rlist_restart(TAGPU_GAFATLAS* a, int repaint)
     }
 }
 
-/* THE DESTINATION HAS JUST BEEN ZEROED AND THE MIRROR HAS TO SAY SO.
-   `job_clear_dest` empties the published list and drops the destination, and
-   a CLEAR IS NOT A PAINT: the twin's generation does not move for it and the
-   shelf gets SMALLER rather than larger -- so not one of the things
-   `tagpu_gaf_atlas_mirror_rgb_step` keys on can see it, and a mirror left
-   alone would hold the previous fill's colours over a destination that is now
-   empty. The next entry re-laid into those rects then draws restored in one
-   lane and indexed in the other until its repaint lands.
-   This is the third time on this pass that a key which was not the CONTENT's
-   key has been wrong, so the zeroing lives HERE, in one function beside the
-   call it mirrors, rather than at each site.
-   [The GL job this used to name went in 11-5e-2; the caller did not, which is
-   why the rule still holds and only the mechanism was reworded.] */
+/* [`rgb_mirror_zeroed` and the thirteen lines that documented it went in
+   11-5e-2b part 2, with the read-back mirror they were about. The rule they
+   stated -- A CLEAR IS NOT A PAINT, so neither the twin's generation nor the
+   shelf can carry one, and a consumer keyed on either would miss it -- is the
+   reason `job_clear_dest` drops the LIST, and that function's own comment
+   below is where it now lives. This comment had already been reworded once,
+   in 11-5e-2, when the GL job it named went; the second time the subject
+   itself was gone. A block whose function is deleted does not become
+   documentation for the next function down.
+   [11-5e-2b part 2's review, finding 2.] */
 
-/* the job's destination back to unpainted, and every mirror of it with it */
+/* the job's destination back to unpainted, and the published list with it */
 static void job_clear_dest(TAGPU_GAFATLAS* a)
 {
     /* THE PUBLISHED LIST GOES WHATEVER THE GL JOB IS, and that is deliberately

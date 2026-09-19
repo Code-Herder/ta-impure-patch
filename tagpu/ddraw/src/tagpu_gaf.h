@@ -245,9 +245,11 @@ typedef struct TAGPU_GAFATLAS {
        comparison, or the unit pass draws nothing. [11-5e-2's review.] */
     float          rgbAniso;
     /* THE PUBLISHED RESTORE LIST (the Vulkan-only plan's landing 7d), which is
-       the OTHER answer to the same question the two mirrors above answer: a
-       second backend can either read this lane's restored texels back, or run
-       the restore itself. This is the second, and it is the cheaper one by a
+       the OTHER answer to the same question the mirror above answers -- and
+       since 11-5e-2b part 2 it is the ONLY answer left in the tree. A second
+       backend could either read this lane's restored texels back or run the
+       restore itself; the read-back is gone, so this is it. It is also the
+       cheaper one by a
        whole read-back -- what crosses is the REQUEST rather than the picture.
 
        It holds the very frames this atlas queued for the GL restorer, in the
@@ -281,9 +283,10 @@ typedef struct TAGPU_GAFATLAS {
        repaint 0) rather than growing, so the memory is a function of `max`
        and the recovery is the same path as the arm. Armed by
        tagpu_gaf_atlas_restore_vk and NULL otherwise, so an atlas nobody asks
-       pays nothing -- and while it is armed the read-back mirror above stands
-       down, because the two are answers to one question and doing both would
-       pay for the mirror to be ignored. */
+       pays nothing. (While it was armed the read-back mirror stood down,
+       because the two were answers to one question and doing both paid for the
+       mirror to be ignored. There is no read-back to stand down since
+       11-5e-2b part 2, so the arm now competes with nothing.) */
     TAGPU_RGLSL_FRAME* rlist;
     int           rlistN, rlistCap;
     unsigned      rlistGen;
@@ -299,7 +302,8 @@ typedef struct TAGPU_GAFATLAS {
        consumer blanks whenever this has moved, whatever the flag says.
        [FROM THE LANDING-7d REVIEW.] */
     unsigned      rlistBlanks;
-    int           rlistWant;       /* armed; the read-back has stood down    */
+    int           rlistWant;       /* armed. (It also stood the read-back
+                                      down, until 11-5e-2b part 2 removed it) */
     int           rlistFailed;     /* latched, and said once                 */
     /* open-addressed index over `ents`, keyed on the frame header address:
        the lookup runs once per emitted sprite and the feature pass emits
@@ -364,8 +368,10 @@ void tagpu_gaf_atlas_reset(TAGPU_GAFATLAS* a);
    correct to call when nothing has changed. */
 void tagpu_gaf_atlas_forget(TAGPU_GAFATLAS* a);
 void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a);
-/* give back the atlas's two heap buffers; for a caller about to re-lay the
-   struct out from zero, which would otherwise drop the pointers */
+/* give back the one heap buffer this call owns (`mirror`); for a caller about
+   to re-lay the struct out from zero, which would otherwise drop the pointer.
+   It was two until 11-5e-2b part 2, and `rlist` is a third it does NOT free --
+   the definition carries why, and who owns fixing it */
 void tagpu_gaf_atlas_free_buffers(TAGPU_GAFATLAS* a);       /* GL context replaced   */
 /* create the GL texture now rather than on the first frame that atlases a
    sprite — a pass whose shader samples the atlas must never bind texture 0 */

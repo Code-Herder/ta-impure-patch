@@ -1104,11 +1104,14 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
     doIdx = !(s_atHave && s_atSerial == h->atlasSerial);
     /* THE RESTORED TWIN'S MIRROR UPLOAD WENT IN 11-5e-2b, with the read-back
        that fed it. It tested `h->atlasRgb && h->atlasRgbRows > 0`, and the
-       producer has published NULL/0 there for the life of the process: the
-       only allocator of `mirrorRgb` refuses at its GL entry-point guard,
+       producer had published NULL/0 there for the life of the process: the
+       only allocator of `mirrorRgb` refused at its GL entry-point guard,
        because nothing calls `oglu_load_dll` and so opengl32.dll is never in
-       the process -- and `mirrorRgbRows` has four writers in tagpu_gaf.c, all
-       four assigning 0. `s_arImg` and `s_arHave` STAY: they are this lane's
+       the process -- and `mirrorRgbRows` had four writers in tagpu_gaf.c, all
+       four assigning 0. Past tense since 11-5e-2b part 2: the allocator, the
+       field and the spelling are all gone from the tree, so this paragraph is
+       history rather than a description of something still standing.
+       `s_arImg` and `s_arHave` STAY: they are this lane's
        own restored twin and the list path's, not the mirror's. */
     if (!doIdx) {
         /* NOTHING TO SEND, SO THE 4 MB GOES BACK. This is the "given back at

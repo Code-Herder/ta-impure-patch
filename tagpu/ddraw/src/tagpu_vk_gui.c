@@ -1762,13 +1762,16 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             if (!h.atlas) { if (!behind(d, "a sprite with no atlas")) goto refuse; return 0; }
             /* THE GL LANE SAMPLED THE RESTORED ATLAS AND WE HAVE NONE. Drawing
                anyway writes alpha 0 where it wrote restored colour, into a twin
-               that keeps it -- so it is a `behind` and not a `compose = 0`. It
-               is reachable for exactly one frame: the Vulkan pass asks for the
-               mirror from inside its own prepare, so the present that ARMS the
-               restore can run before anything has asked, and the read-back
-               lands on the next one. A fresh start is the cure and not a
-               formality -- a reseed re-publishes every surface's bytes, whose
-               `twin_col_drop` clears the colour on both sides. */
+               that keeps it -- so it is a `behind` and not a `compose = 0`.
+               IT IS NOW UNREACHABLE FOR THE LIFE OF THE PROCESS, and this
+               paragraph used to say the opposite: "reachable for exactly one
+               frame", because the Vulkan pass asked for the mirror from inside
+               its own prepare and the read-back landed on the next present.
+               There is no mirror and no read-back since 11-5e-2b part 2, and
+               `o->col` cannot carry ON at all -- `twin_sprite` and `twin_copy`
+               have both returned 0 unconditionally since 11-4b. The test
+               stays as the one place that says so.
+               [11-5e-2b part 2's review, finding 2.] */
             if (o->col & TAGPU_GUICOL_ON) {
                 if (!behind(d, "a restored sprite and no restored atlas on this lane")) goto refuse;
                 return 0;
