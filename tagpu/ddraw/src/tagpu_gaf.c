@@ -490,10 +490,11 @@ int tagpu_gaf_atlas_mirror_rgb(TAGPU_GAFATLAS* a)
        there is nothing here to read back and a 16 MB buffer would be armed for
        a consumer that no longer looks at it.
        AND THE READ-BACK IS NOT A FALLBACK IF THE LIST LATER DIES, which this
-       comment claimed until the landing-7d review: both of the owning pass's
-       arm latches are ONE-WAY (`s_rlistAsked` and `s_mirrorRgbAsked` are only
-       ever set), and arming the list freed the mirror, so after the
-       out-of-memory drop below there is neither. The consumer stands down
+       comment claimed until the landing-7d review: the owning pass's arm
+       latches are ONE-WAY (`s_rlistAsked` is only ever set, and so was the
+       read-back's own latch before 11-5e-2b removed it), and arming the list
+       freed the mirror, so after the out-of-memory drop below there is
+       neither. The consumer stands down
        instead -- `restore_want` clears its "this twin is a picture" flag when
        the request disappears under a live job -- which is a stand-down rather
        than a lane drawing a frozen twin against a GL lane that is still
