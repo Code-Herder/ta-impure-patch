@@ -622,15 +622,19 @@ static const char* LAY_FS =
    atlas=0/0, lost=816878. `tagpu_gaf_atlas_create` has keyed on `made` rather
    than on a GL name since 4b-2, so it is safe to ask for on either lane.
    Idempotent: the `made` test comes before the memset that would clear it, and
-   the memset's other casualties -- the two heap buffers -- are handed back
-   rather than dropped.
+   the memset's other casualty -- the one heap buffer `free_buffers` owns -- is
+   handed back rather than dropped. It was two until 11-5e-2b part 2 took
+   `mirrorRgb`; see that function's own comment for the one it does NOT own.
    [The vulkan-only plan, landing 4b-3.] */
 static int atlas_setup(void)
 {
     if (s_atlas.made) return 1;
-    /* the memset drops `mirror` and `mirrorRgb`, which `_lost` keeps across a
-       context loss -- so hand them back first or each loss leaks the pair
-       [FROM THE 4b-3 LANDING REVIEW] */
+    /* the memset drops `mirror`, which `_lost` keeps across a context loss --
+       so hand it back first or each loss leaks it. (It was `mirror` AND
+       `mirrorRgb` until 11-5e-2b part 2; `rlist` is a third allocation this
+       call does NOT free, safe only because the GUI never arms a list --
+       `tagpu_gaf_atlas_free_buffers` carries the argument.)
+       [FROM THE 4b-3 LANDING REVIEW; the rlist note from 11-5e-2b part 2's] */
     tagpu_gaf_atlas_free_buffers(&s_atlas);
     memset(&s_atlas, 0, sizeof s_atlas);
     s_atlas.ents = s_ents; s_atlas.max = ATLAS_MAX; s_atlas.dim = ATLAS_DIM; s_atlas.tag = "gui";
@@ -2311,10 +2315,14 @@ static void mir_finish(const TAGPU_FRAME* f)
        any op samples": `tagpu_gaf_atlas_put` runs inside the DRAIN, after the
        read-back, so a cell lands above `atlasRgbRows` on the very next frame --
        which is how 166 827 px of undefined memory reached the screen at 1080p
-       and 0 px at 1024x768 on the same build. And the read-back CAN shrink what
-       it has filled: `rgb_mirror_zeroed` keeps the row count and zeroes the
-       content, and a context loss drops the count to 0. The consumer's own
-       image is cleared on a shrink for exactly that reason.
+       and 0 px at 1024x768 on the same build. And the read-back could shrink
+       what it had filled -- `rgb_mirror_zeroed` kept the row count and zeroed
+       the content, a context loss dropped the count to 0, and the consumer
+       cleared its own image on a shrink for exactly that reason. Both of those
+       went with the read-back in 11-5e-2b part 2, along with the consumer's
+       shrink clear; the paragraph is kept because the 1080p fault above is why
+       a row count is published at all, and the next lane to publish one will
+       want it.
        IT IS NOT GATED ON `colValid`. Withholding it on an invalid frame would
        make the image come and go under the consumer for a reason that has
        nothing to do with the image, and nothing would be gained: whether a
@@ -2445,12 +2453,13 @@ void tagpu_gui_mirror_want(int on)
         free(s_mOps);   s_mOps = NULL;   s_mCapOps = 0;
         free(s_mArena); s_mArena = NULL; s_mACap = 0;
         s_mNOps = s_mALen = 0; s_mHave = 0;
-        /* THE TWO ATLAS MIRRORS ARE NOT FREED HERE, and that is the atlas's
-           rule rather than an oversight (tagpu_gaf.h): they are owned by a
-           static atlas with no destructor, the indexed one costs a re-decode of
-           every frame on screen to re-arm, and the restored one would be read
-           back again from scratch. A lane that disarms and re-arms -- which is
-           every `gui.on` edit -- finds both already correct. */
+        /* THE ATLAS MIRROR IS NOT FREED HERE, and that is the atlas's rule
+           rather than an oversight (tagpu_gaf.h): it is owned by a static atlas
+           with no destructor and costs a re-decode of every frame on screen to
+           re-arm. A lane that disarms and re-arms -- which is every `gui.on`
+           edit -- finds it already correct. (There were TWO until 11-5e-2b
+           part 2: the restored one would have been read back from scratch, and
+           there is no read-back any more.) */
     }
     s_mirWant = on ? 1 : 0;
 }

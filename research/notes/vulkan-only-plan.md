@@ -2460,6 +2460,16 @@ that a count which grows is the plan catching up with the work.) The row was
          is now reachable only from `rlist_restart`, and that only from the one-shot arm, so
          `a->rlist` is assigned once and never moved or freed. A lifetime the code enforces,
          where before it rested on `a->job` being NULL for a reason stated three files away.
+       - **AND IT INHERITS ONE MORE THING, from 11-5e-2b part 2's review (F4).**
+         `tagpu_gaf_atlas_free_buffers` frees `mirror` and not `rlist`, and that is safe only
+         because its single caller is `tagpu_gui_surf.c`'s `atlas_setup` — the **GUI** atlas,
+         whose `rlist` is NULL for the life of the process because the GUI never arms a list.
+         `atlas_setup` then memsets the struct. So the day the UI is given a published list, that
+         memset drops a live pointer on every re-arm. Whoever arms it owns the fix: free `rlist`
+         and its three fields in `free_buffers`, or give `atlas_setup` a path that does not zero
+         over it. Not fixed in part 2 on purpose — `rlist`'s lifetime is this landing's subject,
+         and a half-fix (free the buffer, leave `rlistWant`/`rlistFailed` latched) is the exact
+         shape of bug this gate keeps finding.
        - **11-5e-2c — restore the feed, safely.** The defect above, fixed by construction
          rather than by a guard, in a landing that can measure it: a **bound** (allocate
          `rlist_cap(a)` once in `tagpu_gaf_atlas_restore_vk`, make `rlist_room` a pure bounds

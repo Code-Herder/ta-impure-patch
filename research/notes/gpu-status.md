@@ -13238,7 +13238,7 @@ earlier.
 |---|---|
 | `tagpu_vk_gui.c` | the `s_ar*` RGBA8 image (`s_arImg`/`s_arMem`/`s_arView`/`s_arDim`/`s_arRows`/`s_arHave`/`s_arNeedClear`/`s_arSerial`), its creation clear, its shrink clear, its share of the staging reservation, both `if (arUp)` blocks — staging fill, and barrier/clear/copy — and the `atlasRgb` bounds check. Binding 41 now takes `VK_NULL_HANDLE` where it took `on ? s_arView : VK_NULL_HANDLE` |
 | `tagpu_gui.h` | `atlasRgb`, `atlasRgbRows`, `atlasRgbSerial` out of the thread hand-over |
-| `tagpu_gui_surf.c` | the arm/step pair (`tagpu_gaf_atlas_mirror_rgb` at `:2123`) and the publication (`:2325`, with its else-branch zeroing at `:2329`) — line numbers as `main` has them |
+| `tagpu_gui_surf.c` | the arm/step pair (`tagpu_gaf_atlas_mirror_rgb` at `:2123`) and the publication block that begins at `:2322` with its else branch — line numbers as `main` has them |
 | `tagpu_gaf.c` | `tagpu_gaf_atlas_mirror_rgb`, `_step`, `rgb_mirror_zeroed`, `getgl`, `fetch_gl`, `x_glReadPixels`, the `PFN_READPIXELS` typedef, the three `mirrorRgb*` clear sites, and `#include "opengl_utils.h"` |
 | `tagpu_gaf.h` | every `mirrorRgb*` field and both function declarations. `rgbAniso` stays — it is the other lane's sampler ratio, `[PINNED 0.0f]`, and unpinning it is 11-5e-2c's |
 

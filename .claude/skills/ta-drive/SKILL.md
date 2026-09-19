@@ -1140,11 +1140,16 @@ satisfied by an `xdotool` park alone, because a later `--restart` silently un-pa
   mirror path back". Turning it off now puts **nothing** back for the terrain, feature, effects
   and unit atlases: `atlasRgb` and its rows and serial are gone from all four hand-overs, the
   read-back was `glReadPixels` and `opengl32.dll` is never in the process. With the lever off
-  those lanes simply have no restored twin. **The GUI atlas still has the mirror CODE**, because
-  `tagpu_gui_surf.c` never arms the list and so has nothing to replace it with — but it gets no
-  restored twins either: its mirror never arms (same `glReadPixels` premise), `s_colValid` is 0
-  with no writer, and `twin_sprite`/`twin_copy` both return 0, so no UI op ever asks to sample
-  one. Do not expect colour in the UI from any lever.
+  those lanes simply have no restored twin. **And since part 2 the GUI has none of it either**:
+  the mirror code is gone from `tagpu_vk_gui.c`, `tagpu_gui.h` and `tagpu_gaf.c`, so `atlasRgb`
+  is gone from **all five** hand-overs and no lane in the tree has a read-back. The UI is the one
+  that has nothing to fall back on — `tagpu_gui_surf.c` never arms
+  `tagpu_gaf_atlas_restore_vk`, so it has **no read-back and no list**. It was already getting no
+  restored twins before part 2, for two reasons that predate it: `s_colValid` is 0 with no writer
+  and `twin_sprite`/`twin_copy` both return 0 unconditionally, so no UI op ever asks to sample
+  one. **Do not expect colour in the UI from any lever, and do not read its absence as a fault
+  to chase** — it is a named gap ([gpu-status](gpu-status.html) §2.78), and closing it means
+  arming a list for the UI, which is work rather than a setting.
 - **A SPRITE ATLAS IS WHAT MAKES A SWAPPED PER-BATCH TABLE VISIBLE, and the terrain is blind to
   it** (landing 7d, [gpu-status](gpu-status.html) §2.44). The restorer's per-frame tables carry
   each frame's rect, source rect and **colour key**; the terrain's frames are one size with no key,

@@ -553,10 +553,26 @@ int tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a)
     return 1;
 }
 
-/* GIVE BACK THE HEAP BUFFER AN ATLAS OWNS, for a caller that is about to lay
-   the struct out again from zero. `mirror` (dim*dim) is the only allocation
-   left in a TAGPU_GAFATLAS -- `mirrorRgb`, the restored twin's mip chain, was
-   the other until 11-5e-2b -- and it is not freed by `_lost`, which keeps it
+/* GIVE BACK THE HEAP BUFFER THIS FUNCTION OWNS, for a caller that is about to
+   lay the struct out again from zero. `mirror` (dim*dim) is the one it frees.
+   `mirrorRgb`, the restored twin's mip chain, was the second until 11-5e-2b.
+
+   IT IS NOT THE ONLY ALLOCATION IN A TAGPU_GAFATLAS, AND SAYING SO WOULD BE
+   THE TRAP. `rlist` is malloc'd at the arm (`:526`) and grown by `rlist_room`,
+   and this function does not touch it -- which is safe TODAY for a reason that
+   is a property of the CALLER, not of this function: the only caller is
+   `tagpu_gui_surf.c`'s `atlas_setup`, that is the GUI atlas, and the GUI never
+   calls `tagpu_gaf_atlas_restore_vk`, so its `rlist` is NULL for the life of
+   the process. `atlas_setup` then memsets the struct, so the day the UI is
+   given a published list -- the gap 11-5e-2b part 2 names and 11-5e-2c owns --
+   that memset drops a live pointer on every re-arm. WHOEVER ARMS A LIST FOR
+   THE UI OWNS THIS: either free `rlist` here with its three fields, or give
+   `atlas_setup` a path that does not zero over it. Written down rather than
+   fixed in passing, because `rlist`'s lifetime is 11-5e-2c's subject and a
+   half-fix here (free the buffer, leave `rlistWant`/`rlistFailed` latched)
+   is the shape of bug this gate keeps finding. [11-5e-2b part 2's review, F4.]
+
+   `mirror` is not freed by `_lost`, which keeps it
    deliberately so that a mirror is never stale for the frames between a
    context loss and the next create. A caller that re-arms by zeroing the
    struct would therefore drop the pointer and leak it; every writer already

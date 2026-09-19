@@ -2362,9 +2362,6 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                    dummy image as though it were art. */
                 if (o->kind == TAGPU_GUIOP_SPRITE) {
                     int on = (o->col & TAGPU_GUICOL_ON) != 0;
-                    /* the image behind the flag, checked rather than assumed:
-                       drawing with `uRestored` and the DUMMY at binding 41
-                       would sample a 1x1 image as though it were the atlas */
                     /* THERE IS NO RESTORED ATLAS ON THIS LANE SINCE 11-5e-2b,
                        so an op that asks to sample one cannot be drawn at all.
                        This was `on && !s_arHave`, and it is the same test: the
