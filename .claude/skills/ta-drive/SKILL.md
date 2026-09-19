@@ -1985,41 +1985,54 @@ counters are not printed on gdi at all.
 genuinely disagree.** It captures the **engine's own surface** — TA's 8bpp frame — and that
 frame is only the BOTTOM LAYER of what gets presented (`tagpu_vk_world.c`: our world is drawn
 into a target cleared to `{0,0,0,0}` and blended premultiplied over it). So "it is in the shot"
-does not mean "it is on the screen". For the presented frame, capture the window:
+does not mean "it is on the screen". For the presented frame, capture the **window** — and use
+the id out of `tacli ls --json`, not a title search, for the reason under *Capture* below
+(`tacli:play1` is a substring of `tacli:play10`, and `head -1` then picks one silently).
 
-```bash
-W=$(DISPLAY=:NN xdotool search --name "tacli:<i>" | head -1)
-DISPLAY=:NN xwd -id $W -silent > frame.xwd && convert frame.xwd frame.png
-```
-
-**The recipe for "does what the engine draws actually reach the screen?" is two controls, and
-one alone is not enough.** Measured this way 2026-09-19 for the vulkan-only plan's 11-5d, on
-`one-unit` with the roster giving the subject's screen position:
+**THE RECIPE FOR "does what the engine draws actually reach the screen?" IS THREE CONTROLS, and
+the third is the one that makes the answer mean anything.** Measured this way 2026-09-19 for the
+vulkan-only plan's 11-5d, on `one-unit` with the roster giving the subject's screen position:
 
 1. disarm the pass of ours that draws the same thing (here `native.on`, for units) and relaunch.
    If the subject is now missing from the window, the engine's copy is not reaching the screen.
 2. **then disarm our TERRAIN pass too** (`terr.on`, and `terrown.on` with it) and relaunch again.
-   Without this control the first result is unreadable: our terrain is opaque over the whole
-   viewport, so "missing" could just mean "covered". With `terr.on` off, TA's own terrain is what
-   the window shows — it comes up in colour — and anything still missing is genuinely lost
-   somewhere between TA's surface and the present.
+   Without this the first result is unreadable: our terrain is opaque over the whole viewport, so
+   "missing" could just mean "covered". With `terr.on` off, TA's own terrain is what the window
+   shows — it comes up in colour — and anything still missing is genuinely lost somewhere
+   between TA's surface and the present.
+3. **then run the identical fixture on `renderer=gdi`.** This is the control that separates "the
+   engine's output is inherently invisible" from "OUR pipeline drops it", and without it the
+   first two invite exactly the wrong conclusion — which is the mistake 11-5d made and its review
+   caught. The engine detours install at DLL attach on every lane, so the engine rasterises the
+   same either way, but none of the Vulkan composite exists on gdi. **Subject visible on gdi ⇒
+   the loss is ours and fixable. Subject absent on both ⇒ it is in the engine or the detour
+   path.** On 11-5d's fixture it was visible on gdi, which reversed the landing's conclusion.
+
+To drive a chosen lane: `scenario load` first and let it write what it wants, then `tacli stop`,
+then set `renderer=` in the instance's `ddraw.ini`, then load again **without `--res`** — that
+path leaves the ini alone. **Check the ini after the run, not before.**
 
 Take a `tacli shot` in each configuration as the positive control: it is the proof the engine
-drew the thing at all, and it kept being true in every configuration above.
+drew the thing at all, and it stayed true in every configuration above.
 
 **A private display answers presence, not colour.** On Xvfb the world OUR passes draw comes up
-monochrome while TA's own frame comes through in colour — both visible in control 2 above. That
+monochrome while TA's own frame comes through in colour — both visible in controls 2 and 3. That
 is the standing software-GL caveat (`research/notes/tacli-design.md`: *"Not Xvfb/Xephyr (software
 GL, unwatchable)"*), so take presence/absence readings there and leave colour to the live
 display, which is the human's.
 
-Levers are removed by deleting the file — there is no `tacli disarm`:
+**Levers are removed with `tacli arm`, not with `rm`.** `cmd_arm` treats `off` / `0` / `false` /
+`-` as "unlink the trigger file" and reports `removed` (`tools/tacli:1484-1487`; the subparser
+help says *"set/clear trigger files"*):
 
 ```bash
-rm -f $G/tagpu_native.on $G/tagpu_terr.on $G/tagpu_terrown.on
+tools/tacli arm <i> native.on=off terr.on=off terrown.on=off
 ```
 
-and `scenario load --restart` does **not** re-create them, so the removal survives the relaunch.
+Go through the tool rather than building `$G` by hand: `rm -f` on a wrong path succeeds silently
+and you then measure with the lever still armed, which is the instrument artefact this whole
+section exists to avoid. The removal **does** survive a relaunch — `tools/tacli:419` skips every
+`tagpu*` entry when it repopulates a gamedir, so `scenario load --restart` does not re-create it.
 
 **`gui.on` DOES NOT GATE `tacli` ITSELF, and for one commit in the vulkan-only plan's landing 10c
 it did** — which is worth knowing because the failure was silent. The flip `0x4C63A0` is where the

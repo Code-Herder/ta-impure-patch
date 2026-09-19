@@ -404,18 +404,25 @@ int __cdecl tagpu_owndraw_classify(unsigned int obj3do, unsigned int frame)
        NO UNITS AT ALL, because these detours are installed at DLL attach and
        cannot be uninstalled.
 
-       AND THE FALLBACK IS NOT WHAT THIS PARAGRAPH ASSUMES, on the lane the
-       build ships. `tagpu_posedraw_live()` is 0 there, so this branch is the
-       one every unit takes and the engine rasterises all of them -- measured
-       `OWND target=all skipped=0 passed=55991` on `one-unit`, 2026-09-19. But
-       NONE of that reaches the presented frame: the commander is on TA's own
-       surface (`tacli shot`, in colour) and absent from the window, with our
-       unit pass disarmed AND with our terrain pass disarmed too, so nothing of
-       ours is covering it. So "the engine draws a unit we also draw" is the
-       8bpp-under-RGB double draw only in cost; on screen the engine's copy is
-       not there. The failure this guard exists to avoid -- no units at all --
-       is therefore what a Vulkan-lane stand-down already produces. The
-       mechanism is not established and is NOT assumed here; the write-up is at
+       AND THE FALLBACK IS CURRENTLY BROKEN ON ONE LANE, which is worth having
+       here because this paragraph is where the next reader will look for it.
+       `tagpu_posedraw_live()` is 0, so this branch is the one every unit takes
+       and the engine rasterises all of them -- measured `OWND target=all
+       skipped=0 passed=55991` on `one-unit`, 2026-09-19, and the detours are
+       armed on gdi too. On `renderer=gdi` that engine copy REACHES THE PLAYER:
+       the window capture and `tacli shot` are the same picture. On
+       `renderer=vulkan` it does not -- the commander is on TA's own surface in
+       colour and absent from the presented frame, with our unit pass disarmed
+       and with our terrain pass disarmed as well, so nothing of ours is
+       covering it.
+
+       SO THE GUARD'S PREMISE IS SOUND AND OUR COMPOSITE IS NOT. An earlier
+       version of this note said the premise was void; the gdi control, asked
+       for by 11-5d's review, disproved that. The engine is a real fallback and
+       one lane already shows it working. While the Vulkan composite drops TA's
+       units, this branch is doing MORE work than it looks -- it is the only
+       reason a stood-down frame still has an engine copy to recover once that
+       is fixed. Mechanism not established; the lead is written up at
        `tagpu_posedraw_live()`'s definition. [The vulkan-only plan, 11-5d.]
 
        So the classifier asks first. This runs on the GAME thread and reads a
@@ -438,8 +445,11 @@ int __cdecl tagpu_owndraw_classify(unsigned int obj3do, unsigned int frame)
             if (!said && tagpu_posedraw_refused()) {
                 said = 1;
                 olog2("owndraw: the posed unit program REFUSED to arm — the engine's "
-                      "own unit rasterise is NOT being skipped, so units are drawn by "
-                      "the engine at 8bpp. The posedraw: line above says why.");
+                      "own unit rasterise is NOT being skipped. On renderer=gdi that "
+                      "means units are drawn by the engine at 8bpp; on renderer=vulkan "
+                      "the engine's copy does not currently reach the presented frame, "
+                      "so expect NO units rather than 8bpp ones. The posedraw: line "
+                      "above says why the program refused.");
             }
             g_passed++;
             return 0;

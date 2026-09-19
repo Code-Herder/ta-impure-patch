@@ -209,8 +209,8 @@ void tagpu_posedraw_end(void);
      -> TAGPU_PDHAND.depthOn      always 0        (:688)
      -> TAGPU_PDHAND.castMat      the memset zero matrix (:689 never runs)
      -> tagpu_vk_unit.c:2350      w->casts always 0, so s_ncast never increments
-     -> tagpu_vk_unit_cast        returns at `!s_ncast` (:2571) every frame
-     -> build_cast_pipeline       its ONLY caller is :2579, inside that function
+     -> tagpu_vk_unit_cast        returns at `!s_ncast` (:2579) every frame
+     -> build_cast_pipeline       its ONLY caller is :2587, inside that function
 
    So the pipeline is never built and no posed unit casts into the Vulkan
    cast-shadow map. THIS IS NOT NEW IN 11-5d -- `_depth_begin` was already
@@ -218,11 +218,22 @@ void tagpu_posedraw_end(void);
    changed here. What 11-5d did was delete the last code that could ever set it,
    which turns a dormant path into a dead one, and then briefly call it ported.
 
-   AND THE CENSUS THAT EXISTS TO CATCH THIS CANNOT. `tagpu_vk_shadow.c:847`
-   asks `h.otherCasters - ours > 0`, and `otherCasters`'s only two incrementers
-   -- `tagpu_shadow_unit` and `tagpu_shadow_note_casters` -- have no callers
-   either, so it is 0 - 0 and the map is published as complete. Units cast no
-   shadow, nothing logs it, and the guard reports success. */
+   AND THE CENSUS CANNOT SEE IT, though not for the reason a first version of
+   this paragraph gave. `tagpu_vk_shadow.c:847` asks `h.otherCasters - ours >
+   0`. `otherCasters` has THREE writers, not two: `tagpu_shadow_unit` (:432)
+   and `tagpu_shadow_note_casters` (:438), both callerless, AND the
+   heightfield-mirror-missing path at :473, which both G19e shadow reviewers
+   added precisely so the census covers all four kinds of caster. That third
+   one is live and reachable, so "0 - 0" is not true in general -- when
+   `build_hills` takes its out-of-memory exit the census fires and refuses the
+   whole map loudly, which is the design working.
+
+   WHAT IS TRUE IS NARROWER AND STILL THE POINT: a missing UNIT caster can
+   never reach `otherCasters`, because the GL lane that counted them is gone
+   and its two incrementers went with it. So on an ordinary frame the term is
+   0 - 0, the map is published as complete, units cast no shadow and nothing
+   logs it. [The third writer was found by 11-5d's landing review; the first
+   version of this paragraph overclaimed.] */
 
 /* the highest posed model y of one unit's BODY range, from each piece's rest
    AABB through its pose matrix — what `s_emitTop` was taken from before the

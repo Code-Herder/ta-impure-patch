@@ -3231,14 +3231,18 @@ could only publish 0; both fixed, and the default path provably unchanged becaus
 lever the driver returns on its first line), `11-5d` `tagpu_posedraw.c` (**landed**; all 122
 sites out, 483 lines out and 122 in, and TEN of its fourteen deleted functions had no caller
 anywhere in the tree before the landing began — landing 11-3 removed the calls and left the
-callees. Its find is not a deletion at all but a **disproof**: `tagpu_posedraw_live()` is 0 on
-this lane by the 4b-2 review's deliberate choice, and the comfort attached to that choice —
-"the engine keeps its own rasterise", so a unit we fail to draw is still on screen in 8bpp — is
-FALSE. Measured: the engine rasterises every unit (`OWND … skipped=0 passed=55991`), the
-commander is on TA's own surface in colour, and it is **absent from the presented frame** both
-with our unit pass disarmed and with our terrain pass disarmed as well. The engine's per-unit
-rasterise is invisible work, and a Vulkan-lane stand-down is blank rather than degraded. The
-mechanism is NOT established and is the prerequisite for ever flipping that predicate —
+callees. Its find is not a deletion at all but a **disproof, and the landing got it wrong once
+before getting it right**: `tagpu_posedraw_live()` is 0 on this lane by the 4b-2 review's
+deliberate choice, and the comfort attached to that choice — "the engine keeps its own
+rasterise", so a unit we fail to draw is still on screen in 8bpp — does not hold on Vulkan.
+Measured: the engine rasterises every unit on both lanes (`OWND … skipped=0 passed=55991`), the
+commander is on TA's own surface in colour, and on `renderer=vulkan` it is **absent from the
+presented frame** with our unit pass disarmed and with our terrain pass disarmed as well. **On
+`renderer=gdi` it is PRESENT** — the control the review asked for, which reversed round 1's
+conclusion that the engine's rasterise was inherently invisible work. **The loss is ours, in the
+Vulkan composite path, and fixable**; the predicate returning 0 is load-bearing while it stands,
+because a 1 would take the engine's copy away too. Mechanism not established; the lead is a
+render-thread snapshot of TA's primary with a lifetime argument and no content ordering —
 gpu-status §2.72), and
 `11-5e` the entry-point surface the row names — `opengl_utils.{c,h}`, `tagpu_restoreglsl.c`, the
 orphaned GL-object accessors, and the include residue in the four files that still include

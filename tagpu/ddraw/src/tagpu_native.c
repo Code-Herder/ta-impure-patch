@@ -1961,11 +1961,14 @@ static int ghost_offscreen(float ax, float ay, int evpL, int evpT, int evw, int 
    `ghost_bind_textures` and the `glDepthMask(FALSE/TRUE)` bracket were the GL
    draw's own state -- the Vulkan consumer takes depth-off with a second
    pipeline instead (`tagpu_vk_unit.c`'s ghost stage), so there is nothing to
-   replace them with. And the prerequisite `tagpu_posedraw_live()` is
-   `s_state == 1 && !tagpu_vk_owns_present()`, i.e. "the GL posed program is
-   live", which is false on the only lane that now exists; recording needs no
-   program, so what is left of that guard is the half that is still true --
-   the view must belong to THIS frame.
+   replace them with. And the prerequisite `tagpu_posedraw_live()` was
+   `s_state == 1 && !tagpu_vk_owns_present()` when this was written, i.e. "the
+   GL posed program is live", which is false on the only lane that now exists;
+   recording needs no program, so what is left of that guard is the half that
+   is still true -- the view must belong to THIS frame. (Landing 11-5d made
+   that predicate a plain `return 0` and wrote the reason at its definition;
+   the quoted expression no longer exists anywhere, so a grep for it finds only
+   notes like this one.)
 
    Everything else is untouched, because none of it was ever GL: `ghost_pieces`
    walks the 3DO tree, `ghost_offscreen` is a cull in screen space, and

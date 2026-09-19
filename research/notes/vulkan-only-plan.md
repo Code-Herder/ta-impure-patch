@@ -2306,37 +2306,52 @@ that a count which grows is the plan catching up with the work.) The row was
        lane test in front of it. `VS` and `DFS` stay behind a probed pragma; they are
        `spirv-gen.py:186-187`'s source for the `pose_unit` and `pose_depth` pipelines.
 
-       **WHAT THE MEASUREMENT ACTUALLY FOUND — and it is the opposite of the sentence above
-       it.** The question was *"whether our fragments cover the engine's opaquely everywhere"*.
-       The answer is that **the engine's fragments are not on the screen at all**, so there is
-       nothing to cover. `one-unit` on Two Continents, `renderer=vulkan`, 1024×768, one ARMCOM
+       **WHAT THE MEASUREMENT FOUND — in two rounds, because the first round's conclusion was
+       wrong and the landing review caught it.** The question was *"whether our fragments cover
+       the engine's opaquely everywhere"*. `one-unit` on Two Continents, 1024×768, one ARMCOM
        at screen (512,384):
 
        * `OWND target=all skipped=0 passed=55991` — the engine really does rasterise every
-         unit, every frame, which is this predicate's doing;
-       * `tacli shot` (TA's own surface) carries that commander in colour with its drop shadow;
-       * with `native.on` off so nothing of ours draws a unit, the commander is **absent from
-         the presented frame** — our marker cross and health bar hang over empty ground;
-       * with `terr.on` off as well, TA's own terrain **does** reach the presented frame (it
-         comes up green) and the commander is **still absent**. That control is the one that
-         matters: our terrain is not what hides it.
+         unit, every frame, which is this predicate's doing; on gdi the detours are armed too
+         and `live()` is a literal `return 0`, so `classify` cannot skip on either lane;
+       * `tacli shot` (TA's own surface) carries that commander in colour with its drop shadow,
+         in every configuration tried on both lanes;
+       * `renderer=vulkan`, `native.on` off so nothing of ours draws a unit: the commander is
+         **absent from the presented frame** — our marker cross and health bar hang over empty
+         ground. With `terr.on` off as well, TA's own terrain **does** reach the frame (it comes
+         up green) and the commander is **still absent**, so our terrain is not what hides it.
+       * **`renderer=gdi`, same fixture, same two levers off: the commander IS THERE.** The
+         window capture and the engine-surface capture are the same picture.
 
-       **So the 4b-2 comfort — "the engine keeps its own rasterise", read as "so the unit is
-       still on screen in 8bpp" — is false, and `tagpu_owndraw.c:414`'s own paragraph says
-       it too.** The engine's per-unit rasterise is invisible work; and a frame the Vulkan unit
-       pass stands down on (short hand-over, missing mirror, `TAGPU_PD_MAXHAND`) shows **no
-       unit**, not a degraded one. That is the failure `classify`'s question exists to prevent,
-       reachable by another route.
+       **ROUND 1 CONCLUDED "the engine's per-unit rasterise is invisible work" AND THAT IS
+       FALSE.** The review asked for the gdi control precisely because the first three readings
+       localise the loss to our own pipeline just as well as to the engine, and it is one
+       relaunch. The same engine output reaches the player perfectly well one lane over, so
+       **the loss is OURS and it is in the Vulkan composite path** — not a property of the
+       engine, and fixable.
 
-       **THE FIX SHAPE PROPOSED ABOVE IS WITHDRAWN FOR NOW.** `tagpu_posedraw_live()` is
-       `return 0` with the measurement written at it — value-identical to what it had always
-       returned, so no consumer runs for the first time. Flipping it to `s_state == 1` would
-       save the invisible work, but its safety argument would rest on a composite nobody has
-       explained: **by what mechanism TA's unit pixels fail to reach the presented frame is NOT
-       established.** They are in TA's surface; they are not in ours; our world image is cleared
-       to `{0,0,0,0}` and blended premultiplied over TA's frame; and in the second control
-       nothing of ours drew at those pixels. Establishing that is the prerequisite, not the
-       follow-up. `preshadow` still wants its own question when that day comes.
+       **What that does to the 4b-2 comfort.** *"The engine keeps its own rasterise"*, read as
+       "so a unit we fail to draw is still on screen in 8bpp", is **TRUE on gdi and FALSE on
+       Vulkan**, and false because of a defect of ours rather than a wrong design. So
+       `tagpu_posedraw_live()` returning 0 is not merely safe, it is **load-bearing and more so
+       than 4b-2 knew**: while the composite drops TA's units, a `live()` of 1 would take the
+       engine's copy away as well and a stood-down frame would have nothing on it at all. Once
+       the composite is fixed the fallback is real, as gdi already shows.
+
+       **THE FIX SHAPE PROPOSED ABOVE IS WITHDRAWN.** `tagpu_posedraw_live()` is `return 0` with
+       the measurement written at it — value-identical to what it had always returned, so no
+       consumer runs for the first time.
+
+       **AND THE MECHANISM IS A LEAD, NOT A FINDING.** `tagpu_surf_take` (`tagpu_surf.c:32`, from
+       `tagpu_overlay_draw`) copies `g_ddraw.primary->surface` on the RENDER thread;
+       `ss_shot_service` reads the same object at the entry of the engine's flip on the GAME
+       thread, where its comment says it holds *"the frame the PREVIOUS flip presented"*.
+       `tagpu_surf.h`'s argument is explicitly a LIFETIME one and says nothing about the buffer
+       holding a FINISHED frame, and TA writes those bytes without entering `g_ddraw.cs`. Settle
+       it by dumping the snapshot's bytes in the frame `tacli shot` fires and diffing; if it
+       holds, the fix is an ORDERING and never a timing mitigation. **Not 11-5d's to make** —
+       a cross-thread change belongs in a landing whose review is briefed on it. `preshadow`
+       still wants its own question when that day comes.
      - **11-5e — the entry-point surface this row names**, last, once every caller has left:
        `opengl_utils.{c,h}`, `tagpu_restoreglsl.c`, the orphaned GL-object accessors, and the
        include residue in the four files that still include `opengl_utils.h` and make no GL

@@ -106,10 +106,11 @@
 #define PD_VISOFF  TAGPU_PD_VISOFF
 #define PD_BLOCK   TAGPU_PD_BLOCK
 
-/* uRange */
-#define PD_R_BODY  0
-#define PD_R_SLANT 1
-#define PD_R_WIRE  2
+/* `uRange`'s three values (BODY 0, SLANT 1, WIRE 2) were #defined here for the
+   draws that passed them. All three draws went with landing 11-5d, and the
+   Vulkan consumer writes the number itself (tagpu_vk_unit.c's `b.i[40]`), so
+   the macros had no use left and are not kept as documentation: the shader
+   below is where `uRange` is defined and the only place it can be read. */
 
 static void plog(const char* s)
 {
@@ -156,40 +157,54 @@ static int    s_state;          /* 0 untried, 1 ready, 2 refused */
    composite; our twin draws the same units into the world target from the
    hand-over, which is independent of this.
 
-   AND THE ENGINE IS NOT A FALLBACK, WHICH IS WHAT LANDING 11-5d MEASURED AND
-   IS THE REASON THIS COMMENT CHANGED. The 4b-2 text above rests on "the engine
-   keeps its own rasterise", and read on that as though a unit our lane failed
-   to draw would still be on the screen in 8bpp. IT WOULD NOT.
+   AND THE FALLBACK IT PROMISES IS CURRENTLY BROKEN ON THIS LANE -- not wrong
+   as a design, BROKEN AS AN IMPLEMENTATION, which landing 11-5d measured and
+   is the reason this comment changed. The 4b-2 text above rests on "the engine
+   keeps its own rasterise", read as "so a unit our lane failed to draw is
+   still on the screen in 8bpp". On `renderer=vulkan` today it is not.
 
-   MEASURED 2026-09-19, `one-unit` on Two Continents, renderer=vulkan, 1024x768
-   on a private display, one ARMCOM at screen (512,384):
+   MEASURED 2026-09-19, `one-unit` on Two Continents, 1024x768 on a private
+   display, one ARMCOM at screen (512,384), on BOTH lanes:
 
-     * the engine rasterises every unit, every frame: `OWND target=all
-       skipped=0 passed=55991` and climbing -- this predicate being false is
-       what makes it do that, so the work is really happening;
-     * `tacli shot` (TA's own surface) has that commander on it, in colour,
-       with its drop shadow, in every configuration tried;
-     * the PRESENTED frame does not. With `native.on` off so that nothing of
-       ours draws a unit, the commander is simply absent from the window --
-       our marker and health bar hang over empty ground.
-     * and it is not our terrain covering it: with `terr.on` off as well, TA's
-       own terrain IS on the presented frame (it comes up green, our passes
-       having drawn none of it) and the commander is STILL absent.
+     * the engine rasterises every unit, every frame. `OWND target=all
+       skipped=0 passed=55991` and climbing on the Vulkan lane; on gdi the
+       detours are armed too (`owndraw: ARMED target="all"`) and this predicate
+       is a literal `return 0`, so `classify` cannot skip on either.
+     * `tacli shot` -- TA's own surface -- carries that commander in colour,
+       with its drop shadow, in every configuration tried on both lanes.
+     * `renderer=gdi`: THE PRESENTED FRAME HAS IT. The window capture and the
+       engine-surface capture are the same picture. The fallback works.
+     * `renderer=vulkan`: THE PRESENTED FRAME DOES NOT. With `native.on` off so
+       nothing of ours draws a unit, the commander is absent from the window;
+       with `terr.on` off as well, TA's own terrain DOES reach the frame (it
+       comes up green) and the commander is still absent.
 
-   SO THE ENGINE'S PER-UNIT RASTERISE IS INVISIBLE WORK. Every frame it costs
-   what it costs and none of it reaches the player. The consequence that
-   matters is the other direction: a frame our unit pass stands down on -- a
-   short hand-over, a missing mirror, TAGPU_PD_MAXHAND -- shows NO UNIT, not an
-   8bpp one. The stand-down is not degraded, it is blank.
+   SO THE LOSS IS OURS AND IT IS IN THE VULKAN COMPOSITE PATH. The gdi control
+   is what settles that, and it was asked for by this landing's review after
+   the first write-up concluded -- wrongly -- that the engine's rasterise was
+   inherently invisible work. It is not: the same engine output reaches the
+   player perfectly well one lane over.
 
-   BY WHAT MECHANISM TA'S UNIT PIXELS ARE LOST IS NOT ESTABLISHED, and this
-   landing does not guess: they are in TA's surface when `tacli shot` reads it
-   and not in the frame we present, with our world image cleared to {0,0,0,0}
-   and blended premultiplied over it (tagpu_vk_world.c) and nothing of ours
-   drawn at those pixels. That is the next thing to find out, and it has to be
-   found out before this predicate is flipped -- turning it true would save the
-   invisible work, but its safety argument would then rest on a composite
-   whose behaviour nobody has explained.
+   WHAT THAT MEANS FOR THIS PREDICATE. Returning 0 is not just safe, it is
+   LOAD-BEARING, and more so than 4b-2 knew: while the composite drops TA's
+   units, a `live()` of 1 would take away the engine's copy as well and a
+   stood-down frame would have nothing at all on it. And once the composite
+   bug is fixed the 4b-2 comfort comes back intact -- the engine really is the
+   fallback, as it already is on gdi.
+
+   THE MECHANISM IS NOT ESTABLISHED AND THIS LANDING DOES NOT GUESS. The lead,
+   from reading rather than measuring: `tagpu_surf_take` (tagpu_surf.c:32,
+   called from `tagpu_overlay_draw`) copies `g_ddraw.primary->surface` on the
+   RENDER thread, while `tacli shot` reads the same object at the entry of the
+   engine's flip on the GAME thread, where it is by construction the frame the
+   previous flip presented. tagpu_surf.h's argument is explicitly a LIFETIME
+   one -- `g_ddraw.cs` keeps the pointer live and `dds_Flip` swaps inside it --
+   and says nothing about the buffer holding a FINISHED frame; TA writes those
+   bytes without entering that section. If the snapshot lands mid-draw it gets
+   what TA has drawn so far, which fits every observation above. Test it by
+   dumping the snapshot's own bytes in the frame `tacli shot` fires and
+   diffing. If it holds, the fix is an ORDERING -- snapshot where the shot
+   does -- never a timing mitigation.
 
    WHICH IS WHY THIS IS `return 0` AND NOT A LANE TEST. The expression was
    `s_state == 1 && !tagpu_vk_owns_present()`, whose second term is pinned
@@ -296,7 +311,10 @@ static int arena_room(void** p, unsigned* cap, unsigned need, size_t elem)
 /* units the pass actually drew this frame, for the caller to hold its own
    queued count against — a queued unit that is not drawn is a missing one */
 unsigned tagpu_posedraw_drawn(void) { return s_units; }
-static unsigned s_slantU, s_slantT, s_wireU, s_wireL;
+/* `s_slantU/s_slantT/s_wireU/s_wireL` counted the slant and wire draws and
+   went with them in landing 11-5d: their only increments were inside
+   `_slant_redraw` and `_wire_unit`, so keeping them would have left
+   `tagpu_posedraw_stats` with two branches that can never be taken. */
 
 /* ---- the shader ---------------------------------------------------------
    NEITHER OF THE TWO BELOW HAS A C REFERENCE LEFT, and neither is dead code.
@@ -786,9 +804,12 @@ static void pd_record(const TAGPU_PDUNIT* u, const TAGPU_PBGEOM* g,
     r->nanoC[0] = s_lastNanoC[0];
     r->nanoC[1] = s_lastNanoC[1];
     r->nanoC[2] = s_lastNanoC[2];
-    /* THE DEPTH LOOP DREW EXACTLY THESE UNITS WITH `castSkip` CLEAR, earlier in
-       the same frame and over the same array with the same `unit_ok` gate, so
-       this reproduces which casters are in the map rather than guessing at it. */
+    /* THIS REPRODUCED WHICH CASTERS WERE IN THE MAP, back when a depth loop
+       drew them earlier in the same frame over the same array with the same
+       `unit_ok` gate. There is no such loop: `s_depthOn` lost its only writer
+       when landing 11-5d deleted `tagpu_posedraw_depth_begin`, so `casts` is
+       0 for every record and `s_ncast` never leaves 0. The consumer's chain
+       and what it costs are in tagpu_posedraw.h's tombstone. */
     r->ghost = u->ghost ? 1 : 0;
     r->casts = (s_depthOn && !u->castSkip) ? 1 : 0;
     if (r->casts) s_ncast++;
@@ -858,7 +879,13 @@ static const TAGPU_PBGEOM* unit_ok(const TAGPU_PDUNIT* u, const TAGPU_PBMAT** mo
        bound and the rest. It is the shape this landing is made of.
        [The vulkan-only plan, landing 4b-2.] */
     if (m->geom != g || m->nvert != g->nvert) return NULL;
-    if (!tagpu_vk_owns_present() && !m->vao) return NULL;
+    /* AND THE `!m->vao` HALF IS GONE TOO [landing 11-5d]. 4b-2 left it as
+       `!tagpu_vk_owns_present() && !m->vao` so that a GL draw still refused a
+       unit whose vertex array was missing; there is no GL draw and the first
+       term is pinned false, so the line could never reject and was itself the
+       shape this landing removes -- a lane test in a file whose own rule says
+       gate on the thing, not on the backend that built it. Value-identical to
+       delete: the condition was unreachable. */
     if (u->npose < g->nparts) return NULL;
     if (g->nparts > TAGPU_PBMAXPIECE) { s_overPiece++; return NULL; }
     if (g->count[range] <= 0) return NULL;
@@ -893,7 +920,9 @@ void tagpu_posedraw_unit(const TAGPU_PDUNIT* u)
     }
 }
 
-/* ---- the Classic silhouette shadow -------------------------------------- */
+/* ---- closing the window --------------------------------------------------
+   THE BANNER HERE READ "the Classic silhouette shadow" until landing 11-5d
+   deleted that section out from under it. */
 /* CLOSES THE RECORDING WINDOW AND PUBLISHES IT. The comment that stood here
    described `_redraw`, the silhouette's second half, which went with landing
    11-5d -- it had drifted one function away from what it documented. */
@@ -1068,7 +1097,6 @@ int tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now)
 void tagpu_posedraw_frame(unsigned frame_counter)
 {
     s_units = s_tris = 0;
-    s_slantU = s_slantT = s_wireU = s_wireL = 0;
     /* THE HAND-OVER'S FRAME, and everything that is per-frame about it. The
        previous frame's publish is dropped here rather than left standing: the
        stamp would refuse it anyway, and clearing it is what makes that a
@@ -1117,15 +1145,12 @@ int tagpu_posedraw_stats(char* out, int n)
     if (s_state != 1 || n <= 0) { if (out && n > 0) out[0] = 0; return 0; }
     k = _snprintf(out, n, " posed=%u/%utri", s_units, s_tris);
     if (k < 0 || k >= n) return k;
-    /* the two step-6 ranges, and only when a scene actually has them: a screen
-       with no structure casting and nothing under construction should not carry
-       two zeroes that read as a pass that ran and found nothing */
-    if (s_slantU)
-        k += _snprintf(out + k, n - k, " slant=%u/%utri", s_slantU, s_slantT);
-    if (k < 0 || k >= n) return k;
-    if (s_wireU)
-        k += _snprintf(out + k, n - k, " wire=%u/%uln", s_wireU, s_wireL);
-    if (k < 0 || k >= n) return k;
+    /* ` slant=` AND ` wire=` STOOD HERE and went with their counters in landing
+       11-5d. NOTE THAT NOTHING CALLS THIS FUNCTION EITHER, and has not since
+       landing 11-3 took `tagpu_native.c`'s GL composite: the only tree-wide
+       references are its declaration and this definition, so ` posed=` has not
+       been printed for several landings. `ta-drive` was still telling sessions
+       to read all three out of the log; corrected 2026-09-19. */
     if (s_overPiece)
         k += _snprintf(out + k, n - k, " OVER-PIECE");
     return k;

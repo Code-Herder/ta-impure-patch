@@ -11923,8 +11923,14 @@ behind a pragma whose `pop` was **proved** by planting an unused static after it
 `tagpu_posedraw.c` is GL-free: **122 call sites at HEAD, 0 now** (masked count, comments and
 string literals blanked first), 483 lines out and 122 in. Gone: `getgl`, `mksh`, `link_block`,
 `upload_pose`, nine `PFN_*` typedefs and nine `x_gl*` pointers, three GL object names
-(`s_prog`, `s_dprog`, `s_ubo`), all twenty-five uniform locations across the body and depth
-programs (11 depth, 14 body), `s_shU`, and `opengl_utils.h`.
+(`s_prog`, `s_dprog`, `s_ubo`), **all forty-four uniform locations** (33 body, 11 depth),
+`s_shU`, and `opengl_utils.h`.
+
+**Forty-four is the SOURCE count and twenty-five is the OBJECT count; this paragraph said
+twenty-five for one commit and was mixing the two.** Only 14 of the 33 body locations survived
+to the symbol table, because landing 11-3 deleted the per-unit uniform sets and gcc had already
+dropped the other 19 as write-only. The *Verification* section below uses the object figure and
+is right to — but a source inventory has to count the source.
 
 **The commit message says 123 and the number is 122.** 123 is the raw grep; the masked count —
 comments and string literals blanked before counting, which is the count this section quotes
@@ -11964,8 +11970,8 @@ write of `s_depthMat` in the tree, so with it gone:
 | `TAGPU_PDUREC.casts` | always 0 (`:793`) |
 | `TAGPU_PDHAND.depthOn` / `.castMat` | always 0 / the `memset` zero matrix (`:688`, `:689` never runs) |
 | `tagpu_vk_unit.c:2350` | `w->casts` always 0, so `s_ncast` never increments |
-| `tagpu_vk_unit_cast` | returns at `!s_ncast` (`:2571`) every frame |
-| `build_cast_pipeline` | its **only** caller is `:2579`, inside that function |
+| `tagpu_vk_unit_cast` | returns at `!s_ncast` (`:2579`) every frame |
+| `build_cast_pipeline` | its **only** caller is `:2587`, inside that function |
 
 So the pipeline is never built and **no posed unit casts into the Vulkan cast-shadow map**.
 
@@ -11974,11 +11980,19 @@ So the pipeline is never built and **no posed unit casts into the Vulkan cast-sh
 the last code that could ever set it — turning a dormant path into a dead one — and then briefly
 call it ported.
 
-**And the census that exists to catch exactly this cannot fire.** `tagpu_vk_shadow.c:847` asks
-`h.otherCasters - ours > 0`, and `otherCasters`'s only two incrementers — `tagpu_shadow_unit`
-and `tagpu_shadow_note_casters` — have no callers either (verified tree-wide: the sole
-references are their declarations in `tagpu_shadow.h`). So it is `0 - 0`, the map is published
-as complete, units cast no shadow, and the guard reports success.
+**And the census cannot see it** — though not for the reason this paragraph first gave.
+`tagpu_vk_shadow.c:847` asks `h.otherCasters - ours > 0`. `otherCasters` has **three** writers,
+not two: `tagpu_shadow_unit` (`:432`) and `tagpu_shadow_note_casters` (`:438`), both callerless,
+**and the heightfield-mirror-missing path at `:473`**, which both G19e shadow reviewers added
+precisely so the census covers all four kinds of caster. That third one is live and reachable,
+so "0 − 0" is not true in general: when `build_hills` takes its out-of-memory exit the census
+fires and refuses the whole map with a log line, which is the design working.
+
+What is true is narrower and is still the point: **a missing UNIT caster can never reach
+`otherCasters`**, because the GL lane that counted them is gone and its two incrementers went
+with it. So on an ordinary frame the term is `0 − 0`, the map is published as complete, units
+cast no shadow and nothing logs it. [The third writer was found by this landing's review; the
+first version of this paragraph overclaimed.]
 
 #### The finding: the engine is not a fallback
 
@@ -11993,32 +12007,62 @@ What did **not** stand is the comfort attached to it — *"the engine keeps its 
 read by every later reader, and written into `tagpu_owndraw.c`'s own paragraph, as "so the unit
 is still on the screen in 8bpp".
 
-**MEASURED 2026-09-19** — `one-unit` on Two Continents, `renderer=vulkan`, 1024×768 on a private
-display, one ARMCOM at screen (512,384), instance DLL md5-matched to the build:
+**MEASURED 2026-09-19** — `one-unit` on Two Continents, 1024×768 on a private display, one
+ARMCOM at screen (512,384), instance DLL md5-matched to the build, **on both lanes**:
 
-| what | result |
-|---|---|
-| the engine rasterises every unit | `OWND target=all skipped=0 passed=55991` and climbing |
-| TA's own surface has it | `tacli shot`: the commander in colour, with its drop shadow |
-| the presented frame, unit pass off | **absent** — our marker cross and health bar over empty ground |
-| the presented frame, unit pass **and** terrain pass off | **still absent**, while TA's own terrain *does* reach the frame (it comes up green) |
+| configuration | TA's own surface (`tacli shot`) | the PRESENTED frame (window capture) |
+|---|---|---|
+| `renderer=vulkan`, everything armed | commander, in colour, with its drop shadow | ours (the posed body), not the engine's |
+| `renderer=vulkan`, `native.on` off | the same | **absent** — our marker cross and health bar over empty ground |
+| `renderer=vulkan`, `native.on` **and** `terr.on` off | the same | **still absent**, while TA's own terrain *does* reach the frame (it comes up green) |
+| **`renderer=gdi`**, `native.on` + `terr.on` off | the same | **PRESENT** — the window capture and the engine surface are the same picture |
 
-The second control is the one that matters: it rules out our terrain covering TA's units, because
-with `terr.on` off TA's terrain is what the player sees and the unit is still not in it.
+The engine rasterises every unit in all four: `OWND target=all skipped=0 passed=55991` and
+climbing on the Vulkan lane, and on gdi the detours are armed too (`owndraw: ARMED target="all"`)
+while `tagpu_posedraw_live()` is a literal `return 0`, so `classify` cannot skip on either.
+(Rows 1 and 2–4 are different configurations, not one run: with `native.on` off, `g_passed`
+increments at `tagpu_owndraw.c:398` on `!target_covers` rather than at the `!live()` branch. The
+engine rasterises either way, which is the part the table is for.)
 
-**So the engine's per-unit rasterise is invisible work**, and the consequence runs the other way
-from the one the guard was written for: **a frame the Vulkan unit pass stands down on shows no
-unit at all, not an 8bpp one.** The stand-down is blank, not degraded — which is exactly the
-failure `tagpu_owndraw_classify`'s question exists to prevent, already reachable by another route.
+#### THE LAST ROW IS THE FINDING, AND IT REVERSES THE FIRST WRITE-UP
 
-**By what mechanism TA's unit pixels are lost is NOT established and this landing does not
-guess.** They are in TA's surface when `tacli shot` reads it; they are not in the frame we
-present; our world image is cleared to `{0,0,0,0}` and blended premultiplied over TA's frame
-(`tagpu_vk_world.c`, whose own comment says that blend is *"half of why TA's frame still
-shows"*); and in the second control nothing of ours drew at those pixels. Finding that out is the
-**prerequisite** for flipping the predicate, not a follow-up to it: turning `live()` true would
-save the invisible work, but its safety argument would then rest on a composite nobody has
-explained.
+This section concluded, for one commit, that *"the engine's per-unit rasterise is invisible
+work"* — that the engine's output was inherently unable to reach the player. **The gdi control
+disproves that**, and it was asked for by this landing's review after the first three rows had
+been written up alone. The same engine output reaches the player perfectly well one lane over.
+
+**So the loss is OURS and it is in the Vulkan composite path.** Not a property of the engine, not
+a property of the design, and fixable. Restated:
+
+* the 4b-2 comfort — "the engine keeps its own rasterise", so a unit we fail to draw is still on
+  screen — is **TRUE on gdi and FALSE on Vulkan**, and false because of a defect of ours;
+* `tagpu_posedraw_live()` returning 0 is therefore not merely safe, it is **load-bearing, and
+  more so than 4b-2 knew**: while the composite drops TA's units, a `live()` of 1 would take away
+  the engine's copy too and a stood-down frame would have nothing on it at all;
+* once the composite is fixed, the fallback is real, as gdi already shows.
+
+#### The mechanism: a lead, not a finding
+
+Not established, and this landing does not guess. The lead comes from reading rather than
+measuring, and it fits every row above:
+
+`tagpu_surf_take` (`tagpu_surf.c:32`, called from `tagpu_overlay_draw`) copies
+`g_ddraw.primary->surface` **on the render thread**. `tacli shot` reads the same object via
+`ss_shot_service(g_ddraw.primary)` (`tagpu_overlay.c:499`) at the **entry of the engine's flip,
+on the game thread**, where its own comment says *"the primary here holds the frame the PREVIOUS
+flip presented"* — a finished frame. `tagpu_surf.h`'s argument is explicitly a **lifetime** one
+(`g_ddraw.cs` keeps the pointer live; `dds_Flip` swaps inside it so the row loop never splices
+two buffers) and says nothing about the buffer holding a finished frame — and TA writes those
+bytes from the game thread without entering that section. A snapshot landing mid-draw gets what
+TA has drawn so far. The UI surviving is consistent rather than contradictory: on the presented
+frame it does not come from this snapshot at all but from the GUI pass's mirror hand-over, which
+`tagpu_surf.h` says was the only route TA's surface had before 4c.
+
+**How to settle it:** dump the snapshot's own bytes in the frame `tacli shot` fires and diff
+them. **If it holds, the fix is an ORDERING** — snapshot where the shot does, at the flip on the
+game thread, where the frame is finished by construction — never a timing mitigation
+(`CLAUDE.md`, *Fixes must be safe by construction*). This is not 11-5d's to fix: it is a
+cross-thread change and belongs in a landing whose review is briefed on it.
 
 **So the predicate keeps its value and loses its disguise.** It is `return 0` with the
 measurement written at it, rather than a lane test that reads as something which comes back when
@@ -12072,6 +12116,17 @@ compiling.
 * **`tagpu_posedraw_stats()` and its four counters.** No caller since landing 11-3, and 11-5d
   removed the last increments of the slant and wire pair. `ta-drive` was telling sessions to
   read all three fields out of the log; corrected in the same commit as this note.
+* **The composite defect the gdi control exposed**, and the snapshot lead above. A cross-thread
+  fix belongs in a landing whose review is briefed on it, not folded into this one.
+* **A stale line citation in `tools/spirv-gen.py`** (`tagpu_posedraw.c:432-434` for VS/DFS,
+  which moved with this landing). **Left deliberately.** `tool_hash()` is
+  `sha256(pathlib.Path(__file__).read_bytes())` — the SHA-256 of the WHOLE FILE — and it is one
+  of the three hashes every generated header carries, so editing even a comment there fails
+  `spirv-check` on all thirteen headers with *"generated by a different spirv-gen.py"* and
+  requires regenerating them through glslang. Measured by doing it: the comment fix broke the
+  build gate and was reverted. Note the docstring says the hash exists *"so a change to the
+  TRANSFORM invalidates every committed header"* — the implementation is stricter than that
+  sentence, and a comment is not a transform.
 * `tagpu_posedraw_glreset()` still exists and still clears `s_state`; retiring the `*_glreset`
   surface is 11-5e.
 
