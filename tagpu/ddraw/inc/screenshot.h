@@ -30,8 +30,8 @@ BOOL ss_take_screenshot(struct IDirectDrawSurfaceImpl* src);
 
    AND THE FRAME EXISTS BECAUSE OF THE DIRECTDRAW ARM. The flip has two: the
    arm at 0x4C6475 writes our primary, and the one at 0x4C63C0 does
-   GetDC/BitBlt/ReleaseDC and touches no DirectDraw surface. This host runs at
-   the flip's entry either way, so the FAMILY is arm-independent -- but the
+   GetDC/BitBlt/ReleaseDC and touches no DirectDraw surface. The trigger family
+   runs at the flip's entry either way, so the FAMILY is arm-independent -- but the
    picture is only fresh on the DirectDraw arm, and on a build that took the
    other one nothing in this fork would see a frame at all.
 
