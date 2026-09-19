@@ -3649,7 +3649,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            them. `markOn` rather than a vertex count, because this pass's own
            heartbeat has to run even on a frame with no markers: without it the
            watchdog reads a dead pass and hands the draw back to the engine. */
-        if (markOn) tagpu_mark_render(&fv, 0);
+        if (markOn) tagpu_mark_render(&fv);
         /* AND THE UNIT PASS, last of the world's five. Its three body-path entry
            points gate their own GL; the shadow, slant, wire and depth ones are
            the composite's and are not called here at all. `begin` opens the

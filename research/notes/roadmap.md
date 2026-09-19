@@ -3197,9 +3197,10 @@ had dropped it, which that landing named at the time -- by lifting the record ha
 as `ghost_record()`; measured at `drawn=2405` with the placement cursor live. `tagpu_shadow.c`
 and `tagpu_hires_draw.c` are held back: for those two the producer *is* the half being deleted,
 and whether to delete it is escalation reason 1, written up in the plan. **11-4a has landed**
-(gpu-status §2.66): `tagpu_mark.c`'s GL draw half, 222 lines, with the marker gather and its
-hand-over untouched — measured as **0 differing pixels of 786 432** between builds on a fixture
-whose frame is static enough that two grabs of the SAME build also differ by 0. It corrected a
+(gpu-status §2.66): `tagpu_mark.c`'s GL draw half, with the marker gather and its hand-over
+untouched — measured as **0 differing pixels of 786 432** across all 16 cross-build grab pairs,
+outside a one-pixel animation set that is TA's own cursor pulsing at the pointer's rest
+position and that differs between two grabs of the SAME build. It corrected a
 premise the plan was carrying: each pass's GLSL strings are the source of truth for its *Vulkan*
 shader, read at build time by `tools/spirv-gen.py`, so they are a build input rather than dead
 GL apparatus and are not deletable in 11-5 or anywhere else. See the plan's

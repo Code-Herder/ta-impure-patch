@@ -1819,7 +1819,10 @@ that a count which grows is the plan catching up with the work.) The row was
 
      They are not spread evenly, which is what makes the split obvious rather than arbitrary:
 
-     * **11-4a — `tagpu_mark.c`** (24 sites, 23 of them the uniform `gl_draws` shape). The
+     * **11-4a — `tagpu_mark.c`** (**25** sites: 23 of the uniform `if (gl_draws)` shape and
+       two compound `(textTex || !gl_draws)` conditions — 26 `gl_draws` tokens at `315e496`,
+       one of them the declaration. The survey said 24 and the landing's review counted; the
+       65-site total above is assembled from these per-file counts, so it is 66). The
        marker layer: health bars, the cursor, the band box, group digits. `tagpu_vk_mark.c` is
        a live twin — the census reports `mark=1` — so the halves are separable the way 11-3's
        were. This is the one to do first, because it is 11-3's shape at a larger scale.
@@ -1827,17 +1830,41 @@ that a count which grows is the plan catching up with the work.) The row was
        **DONE [2026-09-18].** 222 lines out, 68 in. `getgl`, `mksh`, `init_gl` and
        `upload_layer` are gone, with the five `x_gl*` entry points, the program/VAO/VBO/texture
        statics and the eight uniform locations; `tagpu_mark_glreset` stays on the context-lost
-       cascade for `tagpu_text.c`, which still holds a GL object, and `s_state` stays with it.
+       cascade purely to forward to `tagpu_text.c`, which still holds a GL object.
+
+       **`s_state` went too, and only because the review pushed back.** The landing first kept
+       the readiness flag, reasoning that `glreset` still clears it. That reason does not hold:
+       with `init_gl` gone nothing can ever set it to 1, so it was write-only — and no warning
+       fires, because `-Wunused-but-set-variable` does not apply to file-scope statics. The
+       danger is not the dead `int`, it is the plausible NAME. A later landing re-introducing
+       `if (s_state != 1) return;` — the exact guard 11-4a deleted — would return on every
+       frame, `mk_push`/`mk_draw` would never run, `s_mkHave` would never reach 1, and
+       `tagpu_mark_handover` would return 0 forever: markers silently absent, discovered days
+       later from a screenshot. **A flag no code can raise is not state, it is a trap with a
+       plausible name**, and every remaining part of 11-4/11-5 will be offered the same trade.
        The gather is untouched: `mk_push` and `mk_draw` still record every bucket and
        `tagpu_mark_handover` still publishes them.
 
-       **Measured — a cross-build frame diff, which this fixture makes exact.** `selbox-slope`
-       pins the camera and holds three Stumpys, so the presented frame is *static*: two grabs
-       of the same build differ by **0 px of 786 432**. Against that noise floor, HEAD
-       (`315e496`) and this landing differ by **0 px of 786 432, max channel delta 0** at
-       1024x768 — the whole window, not one pass. Also `mark: bars=3` on both builds, `census:
-       6 pass(es) drew (terr=1 feat=1 unit=1 fx=1 mark=1 scaf=0 gui=1 fps=0)`, and the three
-       green health bars visible under the three tanks in the composited window.
+       **Measured — a cross-build frame diff, which this fixture makes nearly exact.**
+       `selbox-slope` pins the camera and holds three Stumpys, so the presented frame is
+       *static* but for one pixel. Over **8 grabs of one build** the animation set — every
+       pixel that differs between any two of them — is exactly **1 px, at (512, 384)**: the
+       window centre, where the pointer rests, and TA's own cursor pulses there between
+       `[11,11,0]` and `[251,251,251]`. It is drawn by the engine, not by us, and `-draw_mouse 0`
+       does not touch it because it is in the frame rather than in X's overlay.
+
+       Excluding that one pixel, **all 16 cross-build pairs** (2 grabs of `315e496` x 8 of this
+       landing) differ by **0 px of 786 432** — the whole window, not one pass. Also
+       `mark: bars=3` on both builds, `census: 6 pass(es) drew (terr=1 feat=1 unit=1 fx=1
+       mark=1 scaf=0 gui=1 fps=0)`, and three green health bars under the three tanks in the
+       composited window.
+
+       **The first run of this measurement reported a 0-px noise floor and that was luck**, not
+       a floor: two grabs taken seconds apart caught the cursor in the same phase. It only
+       surfaced because the post-review rebuild was re-measured and came back **1 px, max
+       channel delta 251** — a number large enough to chase rather than round off. Two grabs
+       are not a noise floor for anything that pulses; take enough to see the period, and
+       report the varying set rather than a single pair's agreement.
 
        **Not covered by the measurement, and said plainly:** the fixture produced records for
        the BARS bucket only — `cursor=0 ordtri=0 ordline=0 text=0(lab=0)` throughout, on HEAD's
@@ -1883,17 +1910,38 @@ that a count which grows is the plan catching up with the work.) The row was
      spirv-gen: the manifest names tagpu_mark::VS and the source does not have it
      ```
 
-     That gate — `tools/spirv-check.sh`, an order-only prerequisite of the link — is the only
-     thing standing between "delete the unreachable GL apparatus" and silently retargeting
-     every ported pass's shader. Note what it means for the *shape* of 11-5: a file can be a
+     That gate — `tools/spirv-check.sh`, an order-only prerequisite of the link — is what stands
+     between "delete the unreachable GL apparatus" and silently retargeting every ported pass's
+     shader. **Bound it correctly, though:** it compares `sha256` of the **post-transform**
+     Vulkan GLSL (`spirv-gen.py:1166`), not of the C string, so it catches a deletion or any
+     edit that changes the translated shader — it does not promise to catch an edit that
+     `transform` normalises away. For a DELETION, which is this plan's whole failure mode, it is
+     exact. Do not lean on it as a general "the string cannot change" guarantee; where a landing
+     restores a shader, diff it against the previous commit as well. Note what it means for the *shape* of 11-5: a file can be a
      GL-free pass and still have to keep two `static const char*` at file scope forever.
 
      **The idiom that leaves, written once here because every remaining part will need it.**
-     With no GL consumer the strings warn as `-Wunused-variable`, and the obvious silencer does
-     not work: `spirv-gen.py`'s `_DECL` regex wants the `=` immediately after the name, so an
-     `__attribute__((unused))` makes the extractor skip the shader — which the manifest then
-     reports as missing, i.e. it fails loudly rather than quietly, but it still fails. What
-     works is a local pragma around the pair, with a comment saying why they are there:
+     With no GL consumer the strings warn as `-Wunused-variable`. `__attribute__((unused))` is
+     the obvious silencer and it is **position-sensitive**, which is the part to get right —
+     `_DECL` is applied with `re.search` on the stripped line (`spirv-gen.py:532`), so it
+     tolerates a prefix but not an infix:
+
+     | placement | extracted? |
+     |---|---|
+     | `static const char* VS = …` | yes |
+     | `__attribute__((unused)) static const char* VS = …` | **yes** |
+     | `static const char* VS __attribute__((unused)) = …` | no |
+     | `static const char* __attribute__((unused)) VS = …` | no |
+
+     [Corrected 2026-09-19 by 11-4a's review, which ran the regex rather than reading it: this
+     paragraph first said the attribute could not work at all, and two of the four placements
+     do.] A wrong placement fails LOUDLY — the manifest reports the shader missing — so it
+     cannot ship silently either way. The pragma below is still what 11-4a used, chosen because
+     it brackets the pair visibly and carries the comment explaining why two unreferenced
+     strings are in the file at all; the prefix attribute is equally correct if a file's layout
+     suits it better. What must NOT happen is reaching for the wide tool — a `#pragma` with no
+     `pop`, or `-Wno-unused-variable` in `CFLAGS` — which would stop that file, or the build,
+     reporting genuinely orphaned statics:
 
      ```c
      #pragma GCC diagnostic push

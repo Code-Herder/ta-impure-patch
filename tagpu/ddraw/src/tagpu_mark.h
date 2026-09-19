@@ -73,10 +73,13 @@ int  tagpu_mark_emit_tri(float x0, float y0, float x1, float y1,
    SCREEN size. 0 = the atlas refused the string or the bucket is full. */
 int  tagpu_mark_emit_text(float x, float y, const char* s, int colidx,
                           float wx, float wz);
-/* draw into the currently bound FBO. Expects depth test and blending OFF (the
-   markers are the frame's top layer and every fragment is opaque); own
-   program/VAO, leaves program, VAO and texture bindings dirty. */
-void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex);
+/* Gather the marker layer and publish it through `tagpu_mark_handover`. Since
+   [landing 11-4a] this issues NO draw and touches NO GL state -- the FBO, the
+   depth/blend expectations and the dirty program/VAO/texture bindings this
+   comment used to promise all went with the GL half. The markers are still the
+   frame's top layer with every fragment opaque; it is the twin that honours
+   that now. */
+void tagpu_mark_render(const TAGPU_FXVIEW* v);
 void tagpu_mark_glreset(void);
 
 /* ---- the hand-over to the Vulkan lane (the Vulkan-only plan's landing 5) ----
@@ -122,9 +125,10 @@ typedef struct TAGPU_MKHAND {
     /* tagpu_text.c's atlas: one coverage byte a texel. `textGen` moves when a
        raster lands, which is how a backend holding its own copy is told. */
     const unsigned char* text; unsigned textGen; int textW, textH;
-    /* THE THREE SHARED TEXTURES, AS BYTES. `tagpu_mark_render` takes `palTex`
-       and binds `v->fogTex` / `v->fogLut` -- three GL names, which is exactly
-       what may not cross. They come over in the shapes `tagpu_fx.h` already
+    /* THE THREE SHARED TEXTURES, AS BYTES. `tagpu_mark_render` USED to take a
+       `palTex` and bind `v->fogTex` / `v->fogLut` -- three GL names, which is
+       exactly what may not cross; the parameter went with the draw
+       [landing 11-4a] rather than linger as one a caller could believe in. They come over in the shapes `tagpu_fx.h` already
        uses for the same three, so the two consumers agree about what they are:
        the palette is 256 RGBA8 texels of `tagpu_pal_live()`, the fog grid is
        cols x rows of RG8, and the LUT is 256 R8. A frame whose GL draw sampled

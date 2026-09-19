@@ -160,7 +160,6 @@
    that can reach the cap, and it costs the digits first. */
 #define MAXORDX      4800                    /* text verts (6 per quad)      */
 
-
 static void flog(const char* s)
 {
     FILE* f = fopen("tagpu.log", "a");
@@ -254,11 +253,15 @@ int tagpu_mark_armed(unsigned frame_counter)
     return 1;
 }
 
-/* ---- GL ---- */
-static int    s_state = 0;             /* 0 unloaded, 1 ready, 2 failed       */
-/* the program, the VAO/VBO, the per-layer textures and the eight uniform
-   locations went with the draw [landing 11-4a]; `s_state` stays because
-   `tagpu_mark_glreset` is still on the context-lost cascade. */
+/* ---- the gather's buckets ----
+   The program, the VAO/VBO, the per-layer textures, the eight uniform
+   locations AND the `s_state` readiness flag all went with the draw
+   [landing 11-4a]. `s_state` is named here because keeping it was the
+   landing's first instinct and the review disproved it: nothing could set it
+   to 1 once `init_gl` was gone, so a later `if (s_state != 1) return;` -- the
+   exact guard that was just deleted -- would have returned on every frame and
+   silently published no markers at all. A flag no code can raise is not
+   state; it is a trap with a plausible name. */
 
 static float s_verts[MAXMV * MVST];
 static float s_ordt[MAXORDT * MVST];   /* order markers: filled triangles     */
@@ -368,8 +371,8 @@ void tagpu_mark_glreset(void)
 {
     /* the per-layer texture ids and their sizes were reset here too; they went
        with the draw [landing 11-4a] and this pass now holds no GL object of its
-       own. It stays on the cascade for the text module, which does. */
-    s_state = 0;
+       own, so there is nothing of ours to drop. It stays on the cascade purely
+       to forward to the text module, which still holds one. */
     tagpu_text_glreset();
 }
 
@@ -820,13 +823,12 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
 
 /* ---- render ---- */
 
-/* upload one captured layer into its texture; 0 if it cannot be shown */
 /* ---- THE HAND-OVER (the Vulkan-only plan's landing 5) --------------------
-   Built by `tagpu_mark_render` as it issues its draws. The vertex block is a
-   BYTE-FOR-BYTE mirror of the VBO that draw uploads -- the same concatenation
-   in the same order -- so every `first` recorded here is the first the GL draw
-   used, rather than a number re-derived from the counts and free to disagree
-   with it. */
+   Built by `tagpu_mark_render` as it walks the buckets. The vertex block is
+   ONE concatenation in one order, so every `first` recorded here indexes that
+   block directly rather than being re-derived from the counts and left free to
+   disagree with it. It mirrored a GL VBO until [landing 11-4a] took the draw;
+   the invariant survived the VBO because it was never about GL. */
 static float*        s_mkV;    static int s_mkVn, s_mkVcap;
 static TAGPU_MKDRAW  s_mkD[TAGPU_MK_MAXDRAW]; static int s_mkDn;
 static TAGPU_MKHAND  s_mkPub;
@@ -847,7 +849,7 @@ static int mk_room(int need)
 }
 
 /* append `n` vertices of MVST floats, returning the FIRST vertex index -- which
-   is what the GL draw beside it is about to use as its own `first` */
+   is what the matching `mk_draw` records as its own `first` */
 static int mk_push(const float* v, int n)
 {
     int at = s_mkVn;
@@ -911,7 +913,7 @@ static void layer_quad(const TAGPU_FXVIEW* v, int base, const TAGPU_MARKLAYER* L
     put_vert(base + 5, x0, y1, 0.0f, 1.0f, wx0, wz1, 0.0f);
 }
 
-void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
+void tagpu_mark_render(const TAGPU_FXVIEW* v)
 {
     TAGPU_MARKLAYER lay[TAGPU_MARK_NLAYER];
     int have[TAGPU_MARK_NLAYER];
@@ -947,7 +949,6 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     if (!have[TAGPU_MARK_POSTFOG] && s_nbar == 0 && s_ncurs == 0 &&
         s_nordt == 0 && s_nordl == 0 && s_nordx == 0) return;
 
-
     /* ---- the Phase G A/B's lever ---- */
     {
         int taking = s_ab && !s_abDone;
@@ -969,10 +970,12 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     total = BARBASE + s_nbar;
     textBase = total + s_nordt + s_nordl;
 
-    /* THE SAME CONCATENATION THE VBO JUST GOT, so every `first` below is the
-       one GL is about to use. Pushed here rather than per draw because the
-       buckets are contiguous and re-slicing them per draw is how the two
-       would drift apart. */
+    /* ONE CONCATENATION, PUSHED ONCE, so every `first` below indexes the block
+       the twin receives. Pushed here rather than per draw because the buckets
+       are contiguous and re-slicing them per draw is how the offsets and the
+       geometry drift apart. (Until [landing 11-4a] this mirrored a GL VBO
+       filled a few lines above; there is no VBO now and nothing to mirror --
+       the record IS the vertex block.) */
     mk_push(s_verts, total);
     if (s_nordt) mk_push(s_ordt, s_nordt);
     if (s_nordl) mk_push(s_ordl, s_nordl);
@@ -1007,19 +1010,19 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
            gets the atlas bytes through the hand-over
            (`text`/`textGen`/`textW`/`textH`) and uploads its own, so the answer
            here is yes without a texture -- which is now unconditional. */
-        {
-            if (s_nordxOrd) {
-                mk_draw(textBase, s_nordxOrd, 0, 1, v->fogMode & 1, TAGPU_MK_TEX_TEXT);
-            }
+        if (s_nordxOrd) {
+            mk_draw(textBase, s_nordxOrd, 0, 1, v->fogMode & 1, TAGPU_MK_TEX_TEXT);
         }
     }
     if (s_nbar) {
         mk_draw(BARBASE, s_nbar, 0, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE);
     }
     if (s_nordx > s_nordxOrd) {
-        /* the digits, over the bars, out of the same atlas — bound again
-           because the bar draw above did not touch unit 0's binding but the
-           mode uniform did */
+        /* the digits, over the bars, out of the same atlas — a SECOND record
+           rather than one widened range because the bars are drawn between the
+           two, which is the engine's own order (the labels come out of the
+           order driver at 0x469BFC and the digit at 0x469CF9). It was also a
+           second GL draw, for a binding reason that went with the draw. */
         mk_draw(textBase + s_nordxOrd, s_nordx - s_nordxOrd, 0, 1,
                 v->fogMode & 1, TAGPU_MK_TEX_TEXT);
     }

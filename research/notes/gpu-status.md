@@ -11294,21 +11294,47 @@ retargets the Vulkan pass's shader. It did not get that far only because the bui
 spirv-gen: the manifest names tagpu_mark::VS and the source does not have it
 ```
 
-`tools/spirv-check.sh` is an order-only prerequisite of the link (`$(TARGET): $(OBJS) | thread-split
-spirv`), so it runs on every build and cannot be skipped by building one object. **A pass can be
+`tools/spirv-check.sh` is an order-only prerequisite of the LINK (`$(TARGET): $(OBJS) |
+thread-split spirv`, with `spirv` `.PHONY`), so every build that produces `ddraw.dll` runs it,
+including an incremental one that recompiles a single object. It is the link that carries the
+guarantee, not the object: `make src/tagpu_mark.o` goes through the implicit `%.o: %.c` rule,
+never considers `$(TARGET)`, and checks nothing — which is worth knowing when spot-compiling
+one file to chase a warning, as 11-4a did. **A pass can be
 entirely GL-free and still have to keep two `static const char*` at file scope forever** — they
 are unreferenced by C and live as a build input, which is a distinction no search for callers
-can see. With no GL consumer they warn as `-Wunused-variable`, and the obvious silencer is
-wrong: `spirv-gen.py`'s `_DECL` regex wants the `=` immediately after the name, so an
-`__attribute__((unused))` makes the extractor skip the shader. A local
-`#pragma GCC diagnostic ignored "-Wunused-variable"` around the pair is what works, and the
-comment beside it is the point of the pragma.
+can see. With no GL consumer they warn as `-Wunused-variable`, and the silencer is
+position-sensitive: `_DECL` is applied with `re.search` on the stripped line
+(`spirv-gen.py:532`), so `__attribute__((unused))` works as a **prefix** and is skipped as an
+infix, either after the name or before it. A wrong placement fails loudly — the manifest
+reports the shader missing — so neither form can ship silently. 11-4a used a local
+`#pragma GCC diagnostic ignored "-Wunused-variable"` around the pair, for the comment it lets
+you attach rather than because the attribute cannot work.
 
-**Measured.** `scenarios/selbox-slope.json` pins the camera over three held Stumpys, which makes
-the presented frame static: two window grabs of the same build differ by **0 px of 786 432**.
-Against that floor, `315e496` and this landing differ by **0 px of 786 432, max channel delta
-0** at 1024x768 — the whole window. `mark: bars=3` on both builds, `census: 6 pass(es) drew
-(terr=1 feat=1 unit=1 fx=1 mark=1 scaf=0 gui=1 fps=0)`, three green health bars on screen.
+**And the dead-flag trap this pass walked into is waiting in four more files.** 11-4a first
+kept `s_state`, the pass's GL readiness latch, on the reasoning that `tagpu_mark_glreset` still
+clears it; the review showed it had become write-only, since nothing could set it to 1 once
+`init_gl` was gone. File-scope statics get no `-Wunused-but-set-variable`, so the build is
+silent. `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c` and `tagpu_posedraw.c` still carry theirs
+(§2.65 records that each is separately confirmed to stay 0 on this lane), and they become the
+same write-only flag the moment their `init_gl` goes. Delete the flag with the thing that
+raised it: re-introducing `if (s_state != 1) return;` over a flag nothing raises returns on
+every frame and publishes nothing, which reads as a pass that was never armed.
+
+**Measured, and the method is the part worth reusing.** `scenarios/selbox-slope.json` pins the
+camera over three held Stumpys, so the presented frame is static but for one pixel. Over **8
+grabs of a single build** the animation set — every pixel differing between any two of them — is
+exactly **1 px at (512, 384)**, the window centre where the pointer rests: TA's own cursor,
+pulsing between `[11,11,0]` and `[251,251,251]`. It is in the frame, not in X's overlay, so
+`ffmpeg -draw_mouse 0` does not remove it. Excluding it, **all 16 cross-build pairs** (2 grabs
+of `315e496` x 8 of this landing) differ by **0 px of 786 432**. `mark: bars=3` on both builds,
+`census: 6 pass(es) drew (terr=1 feat=1 unit=1 fx=1 mark=1 scaf=0 gui=1 fps=0)`, three green
+health bars on screen.
+
+**This landing first reported a 0-px noise floor from a single pair, and that was phase luck.**
+The post-review rebuild re-measured at **1 px, max channel delta 251** — a delta far too large
+to be rounding, which is what forced the eight-grab characterisation that found the cursor. The
+rule for any cross-build frame diff here: **two grabs are not a noise floor for anything that
+pulses.** Take enough grabs to cover the period, publish the varying SET, and diff outside it.
 
 **What the fixture did not exercise.** Only the bars bucket produced records:
 `cursor=0 ordtri=0 ordline=0 text=0(lab=0)`, on the HEAD build as much as on this one, so it is
