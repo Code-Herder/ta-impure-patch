@@ -865,9 +865,8 @@ Knobs go in **`tagpu_restoreglsl.on`**, read **once per GL context** (since G14e
 programs are shared by every job), so arm them before the launch you are measuring — the
 startup GL reset re-reads them once, a map change does not: `tacli arm <i> 'restoreglsl.on=log tiny'` — `tiny`
 (the 6×24 model), `fp16`, `nk=N` (output tiles per conv draw), `budget=MS` (GPU ms per frame,
-default 12), `log` (a line per batch). **`tagpu_restoredump.on`** makes the DLL write the finished
-terrain atlas once to `gamedir/tagpu_restore.rgba`, and each lazy atlas's restored twin once its
-queue drains — `tagpu_restore_feat.{r8,rgba,idx}`, `tagpu_restore_fx.{...}`, and since G14g
+default 12), `log` (a line per batch). **`tagpu_restoredump.on`** makes the DLL write each lazy
+atlas's restored twin once its queue drains — `tagpu_restore_feat.{r8,rgba,idx}`, `tagpu_restore_fx.{...}`, and since G14g
 `tagpu_restore_unit.{...}` (re-written when the atlas has grown; the `.idx` lists every entry) —
 the only files the GLSL restorer ever writes. The unit atlas's lines are `unit: restored twin
 2048x2048, trilinear to mip level 2, 4x anisotropic` (or `no anisotropic filtering (extension
@@ -895,7 +894,14 @@ error. Four of them were silent before that, so on an older build an empty grep 
 (`mip` 0), and `twin_mips` returns before the reduction for them.
 
 **THE DUMPS ARE A CROSS-BUILD BYTE ORACLE, and it is the cheapest strong one this repo has.**
-`tagpu_restoredump.on` reads the finished atlas with `glGetTexImage` off a **texture**, not off the
+**TERRAIN'S HALF OF THIS IS GONE since landing 11-5c** (the vulkan-only plan): `tagpu_restore.rgba`
+had exactly one producer, `dump_if_armed` in `tagpu_terr.c`, and it read a GL texture back with
+`glGetTexImage`, so it could not survive the lane. The feat/fx/unit dumps are `tagpu_gaf.c`'s and
+**still work** — which is the trap: the loop below looks like it still covers four passes and now
+covers three, silently, because `cmp` on a missing file is easy to skim past. There is no
+replacement yet; a Vulkan-side one would have to read the consumer's own image back.
+
+`tagpu_restoredump.on` reads a finished atlas with `glGetTexImage` off a **texture**, not off the
 framebuffer — so unlike every capture-based A/B it needs no visible window, no Route D, no parked
 pointer and no settle heuristics, and it answers a much harder question than a screenshot does:
 whether two builds produce the *same pixels* for the whole restore rather than for one frame of it.
@@ -937,8 +943,10 @@ tools/tacli arm <i> 'vk.on=color=0,0,0' 'native.on=all wrecks' terr.on feat.on f
                     classicpp.on 'restoreglsl.on=log' restorevk.on restoredump.on
 tools/tacli launch <i> --res 1024x768 --maxfps 0
 tools/tacli scenario load <i> fx-mix --restart --res 1024x768 --maxfps 0
-# let it settle, then one cmp per atlas that came up:
-for t in terr feat fx unit; do
+# let it settle, then one cmp per atlas that came up.
+# terr is NOT in this list any more -- its GL half went with landing 11-5c and
+# only the _vk side is written, so a `cmp` for it compares against nothing:
+for t in feat fx unit; do
     cmp <gamedir>/tagpu_restore_$t.rgba <gamedir>/tagpu_restore_${t}_vk.rgba
 done
 ```
@@ -948,6 +956,10 @@ done
   7d, so each job dumps its own destination and a new consumer gets the oracle for nothing. The
   terrain's GL dump was renamed `tagpu_restore_terr.rgba` to match; **`tagpu_restore.rgba` and
   `tagpu_restore_vk.rgba` are the pre-7d names and no longer written.**
+- **Terrain no longer has a GL half to compare against** (landing 11-5c): `tagpu_restore_terr.rgba`
+  is not written by anything, while `tagpu_restore_terr_vk.rgba` still is. The pair is
+  one-sided, so the comparison for terrain is not "passing", it is **absent**. Nothing has
+  replaced it.
 - **`feat.on` alone does not make a feature atlas exist.** Without `native.on=all wrecks` the
   feature pass never owns the leaf, emits nothing and atlases nothing: the log says `atlas=0` and
   `(nothing emitted: native.on needs "wrecks" before we can own the leaf)`, and the run measures a

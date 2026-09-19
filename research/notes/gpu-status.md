@@ -11618,9 +11618,10 @@ landings. `glsl_begin` did **two** jobs:
 Its only two call sites were inside `restore_step`, whose **first statement** is
 `if (!tagpu_classicpp_assets() || !s_atlasTex || !s_setPix) return;`. And `s_atlasTex`'s sole
 non-zero assignment is `glGenTextures(1, &s_atlasTex)` inside `ensure_atlas`'s
-`if (!tagpu_vk_owns_present())`. Traced at HEAD, not remembered: `glsl_begin` occurs three times
-in the file (one definition, two calls at `:1221` and `:1249`); `s_atlasTex` is assigned at
-`:1014` under the gate at `:1012`; `restore_step`'s return is `:1217`;
+`if (!tagpu_vk_owns_present())`. Traced at HEAD, not remembered: `glsl_begin` occurs **four**
+times in the file — one definition, two calls at `:1221` and `:1249`, **and a mention in prose
+at `:182`**; `s_atlasTex` is assigned at `:1014` under the gate at `:1012`; `restore_step`'s
+return is `:1217`;
 `tagpu_vk_owns_present()` is `return s_ownWin != 0`, set once before the frame loop
 (`render_vk.c:145`) and never cleared.
 
@@ -11662,10 +11663,29 @@ reaching it. The two remaining terms are the mesh's own and are the ones that ma
 map change whose rebuild failed, the old mesh is still what the arrays hold and the new grid's
 size would index past it.
 
-**`ensure_atlas`'s device bound.** The lane gate's GL arm brought up the program and read
-`GL_MAX_TEXTURE_SIZE` into `s_maxTex`; its `else if` asked the same of
-`tagpu_vk_max_image_dim()`. With the GL arm gone the bound is asked unconditionally, of the
-device that will sample the atlas.
+**But the route is NOT open, and saying "instance 3" without this is half the story.** Removing
+this term changes nothing observable today, because the pin above it is still in place:
+`tagpu_terr_hills_draw`'s only call site is `tagpu_shadow_hills`, which is itself **called from
+nowhere in the tree**, and which would in any case return at `!s_live` — and `s_live` is set
+only past `tagpu_shadow.c`'s *own* GL bring-up, which latches failed on a lane with no context.
+So this is a pin removed on a route with another pin in front of it. It is still worth removing
+— a future producer would otherwise hit it after clearing the first — but the landing did not
+open the route and neither the commit message nor the first version of this section said so.
+Whether `tagpu_shadow.c`'s GL draw half is scaffolding or debris is exactly the question the
+plan holds at **escalation reason 1**. [FROM THE 11-5c REVIEW.]
+
+**The device bound, in `tagpu_terr_gather`** (not in `ensure_atlas`, which only reads
+`s_maxTex` — a reader grepping the wrong function will not find it). The lane gate's GL arm
+brought up the program and read `GL_MAX_TEXTURE_SIZE` into `s_maxTex`; its `else if` asked the
+same of `tagpu_vk_max_image_dim()`. With the GL arm gone the bound is asked unconditionally, of
+the device that will sample the atlas.
+
+**A check went with the GL arm and had to be put back.** `init_gl` also refused a device whose
+limit was under `ATLAS_W` (2176), once, with a log line. Without it `ensure_atlas` clamps `rows`
+to `m / CELL_PITCH` and builds an atlas the consumer's own image creation then refuses every
+frame with nothing saying why. Restored in the gather, against the device's own 2D limit. No
+conformant device takes that arm — Vulkan floors `maxImageDimension2D` at 4096 — which is why
+it is a **bound** rather than a prediction about which devices exist. [FROM THE 11-5c REVIEW.]
 
 #### The read-back mirror goes with the texture it read
 
@@ -11682,6 +11702,110 @@ Nothing moved. Ten GL names left the file and none of them was a hand-over field
 loses two fields to permanent zero (`atlasRgb`, `atlasRgbRows`, with `atlasRgbSerial` following
 them) and gains no new one; `restoreFrames`/`restoreN`/`restoreSerial`/`restoreRepaint` are
 unchanged in shape and reachable for the first time.
+
+#### What the review found: making the producer honest fired the consumer's parity rule
+
+Two dedicated reviewers, twenty-three findings, all verified against the source before acting.
+The two HIGHs are one defect, and **this landing introduced it**.
+
+`tagpu_vk_terr.c` stood the whole terrain pass down whenever a restore request stood that this
+lane had not painted:
+
+```c
+if (t.restored && !(s_rgbAtlas.view && s_rgbAtlas.have && (… || t.restoreFrames))) return 0;
+```
+
+That was right while a GL twin drew the restored atlas beside us — drawing indexed then would
+have put a different picture on the screen from the one the twin drew, and holding the two lanes
+to the same picture is what the A/B is for. **There is no twin.** And every way the restorer can
+decline — `tagpu_vk_restore_up` refusing a format or failing to load the model file, `job_new`
+returning NULL, `job_add` refusing, a job that failed before its first slice — latches
+`s_rjTried`, which is **one-way for the device's life** (cleared only in `tagpu_vk_terr_down`).
+After that `s_rgbAtlas.have` can never become 1. So the stand-down was **permanent: no terrain
+at all for the session**, announced once and silent after that. `tagpu_vk_restore.h` promises
+that such a refusal leaves "Classic++ indexed on this lane — the shipped fallback, not a fault";
+this had turned it into a black world.
+
+Before this landing `restored` was pinned at 0, so the branch was unreachable. **The rule this
+gate named cuts both ways: unpinning a predicate makes every consumer of it run for the first
+time, and a consumer written for two lanes may have a rule that only made sense with a twin.**
+
+Fixed where the fact lives. `uRestored` is now the consumer's own
+`t.restored && s_rgbAtlas.view && s_rgbAtlas.have`, so a request this lane cannot service, or
+has not serviced yet, draws **indexed**. The flag and binding 42's descriptor now derive from
+the same two facts and cannot disagree — which is a stronger guarantee than the stand-down gave,
+and local to the line that needs it. During a restore it is also exactly the centre-out reveal:
+the fragment shader's alpha test picks restored or indexed **per cell**.
+
+Three more, each verified:
+
+* **The stale atlas.** Past a serial change, every path that gives up now drops `have`. What the
+  image holds was painted for the *previous* request — the previous palette, or the previous
+  map's rectangles — and leaving it set is a silently wrong picture rather than a missing one.
+  Dropped at the give-up sites and not up front, because `repaint` reads it: clearing it early
+  would turn every palette change into a full blank-and-repaint, which is the one thing the
+  repaint path exists to avoid.
+* **The repaint throttle, found by both reviewers independently.** HEAD gated the repaint on
+  `s_rgbState == 2` — "the job is idle" — a completion this side can no longer see, because the
+  painting is the consumer's. Collapsing the state machine made it fire on every palette change,
+  and `tagpu_pal_serial()` bumps once a frame during a fade: the whole frame list republished
+  per frame, `restore_order`'s full tile-map scan (up to 4.19 M cells) and a
+  `tagpu_rglsl_tileable` over every tile each time, and the consumer restarting its job with its
+  paint count back at zero — so the restore made **no progress for the length of the fade**. Now
+  gated on the palette having SETTLED: two consecutive frames reading the same serial, which is
+  an ordering on the palette's own serial and **not a timer**. Residual, stated in the code
+  rather than hidden: a palette that settles, moves and settles again *during* a restore still
+  restarts it, and closing that needs a completion signal back from the consumer.
+* **Two bounds.** `restore_publish` refuses `n < 1` — `malloc(0)` may return non-NULL, so a
+  zero-tile atlas would have published "a restore stands" with a list of zero frames while the
+  consumer's own test is `restoreFrames && restoreN >= 1`, the two sides disagreeing across the
+  seam about one fact. And the atlas-width refusal above.
+
+#### There is no thread split in this pass, and the brief that said so was wrong
+
+Worth recording because it is load-bearing and it was asserted confidently in the wrong
+direction. **Producer and consumer are the same thread**, in one iteration of the render loop:
+`render_vk.c:232 tagpu_overlay_draw()` → `tagpu_overlay.c:401 tagpu_native_frame()` →
+`tagpu_terr_gather()` / `tagpu_terr_render()` — where `restore_step`, `restore_publish`,
+`rlist_drop` and `terr_publish` all run — **then** `render_vk.c:268 tagpu_vk_frame()` →
+`tagpu_vk_terr_prepare()` → `tagpu_terr_handover()` → `tagpu_vk_restore_job_add`.
+
+So `s_rFrames` is not a cross-thread hand-over, and neither are `atlas` and `height`: the bound
+is the sequential ordering inside one iteration, not the frame stamp in `tagpu_terr_handover`
+(which still earns its keep for the *bail* case — a gather that returns early leaves `s_pubHave`
+set while `ensure_atlas` frees the mirror). `tagpu_vk_restore_job_add` **copies** the frames, so
+the only dereference is inside that one call. **`tagpu_reclaim` is not applicable**: it defers
+*engine* frees made by the *game* thread; this is our own heap on the render thread.
+
+#### What the landing cost: terrain's half of the byte oracle
+
+`dump_if_armed` was the only producer of terrain's `tagpu_restoredump.on` dump, the two-lane
+byte comparison `ta-drive` calls "strictly stronger than the cross-build one"
+(`.claude/skills/ta-drive/SKILL.md`, `tascene-design.md`, `renderers.md` §4c Q8). It read a GL
+texture back with `glGetTexImage`, so it could not survive the lane. `tagpu_gaf.c` still writes
+the feat/fx/unit halves, so **those pairs survive and terrain's alone is gone** — which is the
+least obvious way for an oracle to break. Nothing replaces it yet; the Vulkan-side equivalent
+would have to read the consumer's image back, and that belongs with whoever next needs the
+comparison rather than with this landing.
+
+#### Two things this section first got wrong, and what they cost
+
+**"Three occurrences" was a count of `glsl_begin` read as "one definition, two calls".** The
+fourth was prose — and the miscount and the stale comment it hid are the *same* defect: that
+prose was at the declaration of `s_rFrames`, saying "the list is the one `glsl_begin` built for
+the GL job", which is the very list this landing made reachable. A grep whose result is read as
+a conclusion rather than as a list is how a rewritten-comment pass misses the one comment that
+matters. [FROM THE 11-5c REVIEW.]
+
+**"Every GL site sat under `if (!tagpu_vk_owns_present())`" — false for 17 of the 107,** and the
+landing's own headline finding is the counterexample. Only `ensure_atlas` (10), `build_height`
+(10) and `build_hills` (12) sat under it literally, and `init_gl` + `mksh` (58) were reached
+through the gather's arm — 90. The other **17** were unreachable through a *second* step, a
+guard on a GL object name: `glsl_begin` (9) and `dump_if_armed` (4) behind `restore_step`'s
+`!s_atlasTex`, `tagpu_terr_hills_draw` (3) behind `!s_hVao`, `rgb_mirror_step` (1) behind
+`!s_rgbTex`. That two-step shape is the rule this gate named, so flattening it into "one gate"
+erases the thing worth reading. The commit message carries the flat version; this is the
+correction, and the commit stands as written because history is not rewritten here.
 
 #### Verification
 

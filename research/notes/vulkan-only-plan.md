@@ -2168,7 +2168,10 @@ that a count which grows is the plan catching up with the work.) The row was
      2. **11-5b** — `tagpu_owndraw_set_structshadow(s_armed == 1 && gl_draws && suppress, …)`.
         Would have pinned the structure-shadow gate at 0 for any FUTURE painter.
      3. **11-5c** — `tagpu_terr_hills_draw`'s `!s_hVao`, sitting above the publication of the
-        CPU caster mesh the Vulkan shadow pass exists to receive.
+        CPU caster mesh the Vulkan shadow pass exists to receive. (A pin removed on a route
+        that has ANOTHER pin in front of it: `tagpu_shadow_hills` is called from nowhere and
+        would return at `!s_live` anyway. Worth removing, but the route is not open and the
+        first version of this line read as though it were.)
      4. **11-5c** — `restore_step`'s `!s_atlasTex`, which made the ONLY publisher of the restore
         frame list unreachable, and `restored`'s `s_rgbState`, which pinned the consumer's
         `uRestored` at 0. Between them, `tagpu_restorevk.on` armed a fully implemented consumer
@@ -2181,6 +2184,19 @@ that a count which grows is the plan catching up with the work.) The row was
      rate to expect. The positive form is the fix in every case: gate on the thing itself —
      `s_atlasBuilt`, `s_hMeshW`, `s_rFrames`, `s_ncell` — not on the name of the object some
      backend built out of it.
+
+     **AND THE COROLLARY, WHICH 11-5c PAID FOR: unpinning a predicate runs every consumer of
+     it for the first time, and a consumer written for two lanes may hold a rule that only
+     made sense with a twin.** 11-5c made `restored` honest and thereby fired
+     `tagpu_vk_terr.c`'s parity refusal — "the twin is drawing restored and we have not, so
+     draw NOTHING" — which with no twin, and with the restorer's refusal latched one-way for
+     the device's life, meant **no terrain at all for the session** on any device that
+     declined the restorer. It was caught by the landing review, not by the landing.
+     So: after removing a pin, **go and read every reader of the predicate**, not just the
+     producer. The question to ask each one is "what did this do when the other lane existed,
+     and is that still what it should do?" Parity rules are the ones to suspect: they are
+     written as refusals, refusals are silent, and a refusal that used to be unreachable has
+     never been seen to fire.
 
    * **11-5 — what is left of the GL entry-point surface. FIVE PARTS, and the split follows
      the passes rather than a calendar** (written 2026-09-19, by the landing that measured it;
