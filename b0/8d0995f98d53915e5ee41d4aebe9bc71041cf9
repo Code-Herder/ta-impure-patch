@@ -1,0 +1,53 @@
+landing-review: landing 11-5a (the feature and effects passes' GL bring-up), level medium, 2026-09-19
+
+Range main...HEAD at db31335..b08d099, main at db31335; a dedicated read-only
+reviewer with the mingw toolchain and objdump, 44 tool uses. NO functional
+defect. Two LOW findings, both documentation counting errors. Both verified
+against the source before acting.
+
+THE ORDERING, re-derived independently and by a stronger route than the brief
+gave it: tagpu_vk_owns_present() is s_ownWin != 0 (tagpu_vk.c:732), written
+only by InterlockedExchange in tagpu_vk_own_present() (tagpu_vk.c:714), never
+cleared; its one call site is render_vk.c:145, above the while loop. Both
+gathers are called from tagpu_native_frame (tagpu_native.c:3295-3296), whose
+one call site is tagpu_overlay.c:401 inside tagpu_overlay_draw, whose one call
+site is render_vk.c:232 inside that loop. render_ogl.c no longer exists and
+render_gdi.c calls nothing tagpu_. So the old else-branch was the only one ever
+taken and the new unconditional form is exactly it -- exact, not nearly exact.
+
+THE SHADER TRAP: clean. All four VS/FS literals byte-identical to main, checked
+by extraction as well as by the build's own spirv gate, which re-extracts
+through the preprocessor and compares three SHA-256s per shader.
+
+THE PRAGMA TRAP: clean, and probed in BOTH directions -- a planted static after
+the pop warns in both files, one inside the bracket warns in neither, and the
+bare files compile with zero warnings. The brackets are at tagpu_feat.c
+344/345/402 and tagpu_fx.c 237/238/299, real directives outside comments.
+
+L1 -- gpu-status §2.69 read "lose 22 GL symbols in feat and 28 in fx, PLUS
+getgl's three", which asserts 25 and 31. The totals INCLUDE those three: 19 and
+25 gl* entry points, undefined symbols 61 -> 39 and 67 -> 39. It matters
+because 11-5d's argument for deleting opengl_utils.{c,h} is "no caller is
+left", and an audit with `nm -u` against this note would have found three
+fewer than stated and concluded they had been re-added. Corrected.
+
+L2 -- "the include residue in the FIVE files that already make no GL call" is
+four (render_gdi.c, tagpu_fps.c, tagpu_render3do.c, tagpu_scaffold.c). The
+phantom fifth was tagpu_gui_surf.c: my script tested `"opengl_utils.h" in
+source` as a SUBSTRING and matched the comment 11-4b left saying the include
+had been REMOVED. The call count in the same script was masked; the include
+test was not. And the naive fix is also wrong -- `#include "x.h"` is itself a
+string literal, so masking the include test finds zero includers. Both notes
+now name the files rather than counting them.
+
+The reviewer's own risky-spot checks, all clean: atlas_setup still has its
+caller on every path that needs it and nothing else init_gl did was
+gather-relevant; the flash light table is still built, stamped, published in
+s_pub.lht and cleared by glreset, with tagpu_vk_fx.c:1516-1520 copying the same
+bytes; s_state had no second meaning anywhere; no neighbours were swallowed
+(checked by symbol table, not grep -- the only defined symbols lost are _getgl,
+_mksh, the deleted statics and fx's `said.4` log flag, and _init_gl had already
+been inlined so had no symbol); and the include removal is inert, reproduced
+with -include rather than a inserted line so that nothing shifts.
+
+Fixes: ad9b605.
