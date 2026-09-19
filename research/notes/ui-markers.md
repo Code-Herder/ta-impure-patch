@@ -200,8 +200,8 @@ difference:
 > **the Vulkan lane inherited NEITHER: it draws no selection rect at all.** The rect lived only
 > inside the GL unit draw, and no `tagpu_vk_*` file has replaced it — so on that lane the ENGINE
 > draws every selection box, at its unzoomed projection, which at zoom ≠ 1 scatters. That gap
-> dates from landing 4b, not from the deletion, and it is UNMEASURED. An earlier draft of this
-> box said the lane "draws the rect as geometry always" and quoted the 1320-pixel figure below as
+> dates from landing 4b, not from the deletion. An earlier draft of the note you are reading
+> said the lane "draws the rect as geometry always" and quoted the 1320-pixel figure below as
 > the cost of the move; landing 11-3's review disproved both. The numbers below measure the GL
 > path against the engine and are kept for that. See gpu-status §2.65.
 
