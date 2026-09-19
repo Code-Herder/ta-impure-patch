@@ -3220,8 +3220,9 @@ files now GL-free, no call, type, constant or `opengl_utils.h`, and the gates re
 positive `if (!s_atlas.made)` form), `11-5b` `tagpu_native.c` (139 GL call sites, the largest and
 most dangerous file in the fork), `11-5c` `tagpu_terr.c` (107, spread over nine functions), and
 `11-5d` the entry-point surface the row names — `opengl_utils.{c,h}`, `tagpu_restoreglsl.c`, the
-orphaned GL-object accessors, and the include residue in the five files that already make no GL
-call. **Not covered by 11-5a–d**: `tagpu_shadow.c` and `tagpu_hires_draw.c`, still escalation
+orphaned GL-object accessors, and the include residue in the four files that still include
+`opengl_utils.h` and make no GL call (`render_gdi.c`, `tagpu_fps.c`, `tagpu_render3do.c`,
+`tagpu_scaffold.c`) — twelve files still include it and call GL. **Not covered by 11-5a–d**: `tagpu_shadow.c` and `tagpu_hires_draw.c`, still escalation
 reason 1, and now known to be more than a preference — `tagpu_shadow_begin` has no caller
 anywhere in the tree, so that pass is already dead and the question is whether the two files are
 scaffolding for a Vulkan-side producer or debris. See the plan's

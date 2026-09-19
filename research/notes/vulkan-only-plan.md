@@ -2173,7 +2173,16 @@ that a count which grows is the plan catching up with the work.) The row was
        than one shared gate.
      - **11-5d — the entry-point surface this row names**, last, once every caller has left:
        `opengl_utils.{c,h}`, `tagpu_restoreglsl.c`, the orphaned GL-object accessors, and the
-       include residue in the five files that already make no GL call.
+       include residue in the four files that still include `opengl_utils.h` and make no GL
+       call: **`render_gdi.c`, `tagpu_fps.c`, `tagpu_render3do.c`, `tagpu_scaffold.c`** —
+       named rather than counted, because a count goes stale the moment a landing empties
+       another file, and because the first version of this line said *five*. That fifth was
+       `tagpu_gui_surf.c`, and it was an artefact of the measurement: the script tested
+       `"opengl_utils.h" in source` as a SUBSTRING and matched the comment 11-4b left behind
+       saying the include had been removed. Mask comments and string literals for the include
+       test as well as for the call count — `#include "x.h"` is itself a string literal, so a
+       mask applied naively deletes every include instead. After 11-5a, twelve files still
+       include it and call GL.
 
      **Not covered by 11-5a–d:** `tagpu_shadow.c` and `tagpu_hires_draw.c` (escalation reason
      1), and the gate's own exit condition, which is 11-6's.

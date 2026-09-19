@@ -11490,9 +11490,12 @@ the bytes, the buffer and the serial are the same.
 `getgl`, `init_gl` and `mksh` removed from each, nothing added. Then the objects against `main`,
 per function: 7 of 11 in feat and 20 of 24 in fx are instruction-identical; `init_gl` had been
 INLINED into each gather, which is the whole of the shrink; each `glreset` differs by exactly one
-removed store to the deleted `s_state`. **External references lose 22 GL symbols in feat and 28
-in fx, plus `getgl`'s GetModuleHandleA, GetProcAddress and xwglGetProcAddress — and gain
-nothing.** The include removal was proved separately, byte-identical, because an include is the
+removed store to the deleted `s_state`. **External references lose 22 in feat and 28 in fx — 19
+and 25 `gl*` entry points, plus in each case `getgl`'s GetModuleHandleA, GetProcAddress and
+xwglGetProcAddress — and gain nothing.** (Undefined-symbol counts 61 → 39 and 67 → 39. The
+three non-`gl*` names are INSIDE those totals, not on top of them; the first wording of this
+line read as 25 and 31, which would have told a later audit that three references had been
+silently re-added.) The include removal was proved separately, byte-identical, because an include is the
 one edit that can change a macro silently.
 
 Both VS/FS pairs are kept behind a `-Wunused-variable` pragma and **both brackets were probed
