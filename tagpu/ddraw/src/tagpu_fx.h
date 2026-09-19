@@ -38,6 +38,12 @@ typedef struct TAGPU_FXVIEW {
     int fogCols, fogRows;           /* its dims (view-anchored 32-px cells)    */
     int fogCells;                   /* cells the BUFFER holds — the real bound */
     int fogOrgX, fogOrgY;           /* world x, projected z of its cell (0,0)  */
+    /* NO WRITER AND NO READER since landing 11-5b, which deleted the two GL
+       names that fed them. Left in place rather than removed because changing
+       this struct's shape is 11-5e's, not a review fix's -- but do not plumb
+       anything into them believing there is a consumer: there is not, and the
+       review that found that also found `tagpu_hires_draw.c`'s `v->fogTex` is
+       a TAGPU_HVIEW field, a different struct with a similar name. */
     unsigned int fogTex, fogLut;    /* RG8 grid; 256x1 grey palette remap      */
     unsigned int frame_counter;
 } TAGPU_FXVIEW;

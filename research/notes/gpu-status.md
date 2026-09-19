@@ -11507,10 +11507,15 @@ genuinely ends there. `spirv: 49 shaders, 33 programs, headers current` througho
 `tagpu_native.c`, the largest file in the fork, is now GL-free: 367 lines out, no call, no
 type, no constant, no `opengl_utils.h`. Gone: `init_gl` (112 of the file's 139 GL call sites),
 `tex2d`, `mksh`, `getgl`, seventeen `PFN_*` typedefs and seventeen `x_gl*` pointers, `s_state`,
-seven program/FBO/texture names, **all 31 uniform locations**, `s_fboW/H/SS`, `s_palInit`,
-`s_uCast`, `s_shU`, and the three lane-gated upload blocks (the fog grid, the fog shade table,
-the palette). Each of those three published its CPU-side bytes OUTSIDE the gate, so what remains
-is the publication that was always the point.
+**fourteen GL object names** (`s_prog/s_vao/s_vbo/s_fbo/s_colTex/s_depTex/s_palTex`,
+`s_cprog/s_cvao/s_cvbo`, `s_fbo2/s_colTex2/s_depTex2/s_dprog`), **all 31 uniform locations**,
+`s_fboW/H/SS`, `s_palInit`, `s_uCast`, `s_shU`, and the three lane-gated upload blocks.
+
+**Two of those three published CPU-side bytes outside the gate; the palette did not.** The fog
+grid and the fog shade table each left their publication behind — which is why the blocks stayed
+and only the texture calls went. The palette block was GL end to end and left nothing, because
+the bytes a second backend needs are `tagpu_pal_live()`'s and each Vulkan twin uploads them
+itself. Saying "each of those three" flattened a distinction the code makes explicitly.
 
 **THE STRUCTURE-SHADOW GATE WAS PINNED SHUT, AND THAT IS THE FINDING.** It read
 `tagpu_owndraw_set_structshadow(s_armed == 1 && gl_draws && suppress, …)`. The `gl_draws` term
@@ -11542,16 +11547,25 @@ stands down. No `tagpu_vk*` file mentions `slant` at all."* That is independent 
 what a fresh grep also shows — `tagpu_shadow_begin` has no caller anywhere — and it sharpens
 escalation reason 1 rather than resolving it.
 
-**Fields we write.** `fv.fogTex` / `fv.fogLut` still carry `s_fogTex` / `s_fogLutTex`, which are
-now permanent 0s: nothing creates them. They stay because the fields are read by
-`tagpu_hires_draw.c`, and reshaping `TAGPU_FXVIEW` reaches into a file that is escalation reason
-1. They are declared `unsigned int` rather than `GLuint` now, matching the field they feed, which
-is what lets the file drop the GL header. **`s_palTex` did not survive the same test** — it had
-no reader at all once the palette upload went. A comment written during the landing claimed it
-was published; the compiler disproved it. *"It is published"* is a claim to check, not to infer
-from the neighbours. Note also the collision worth knowing: `TAGPU_FXVIEW.fogLut` is an
-`unsigned int` GL name, while the frame packet's `fogLut` is a `const unsigned char*` to the
-256 bytes the Vulkan twins actually read through `tagpu_native_foglut()`.
+**Fields we write: nothing moved, and three GL names went.** `s_palTex` had no reader once the
+palette upload went, and **`s_fogTex`/`s_fogLutTex` turned out to have none either** — along
+with the `fv.fogTex`/`fv.fogLut` write that was supposed to be their reason to stay.
+
+That second one is worth the space, because it is the same mistake twice in one landing. The
+two fog names were kept on the grounds that `tagpu_hires_draw.c` reads `v->fogTex` and
+`v->fogLutTex`. It does — but those are **`TAGPU_HVIEW`** fields
+(`inc/tagpu_hires_draw.h`), a different struct. `TAGPU_FXVIEW.fogTex`/`.fogLut` had no reader
+anywhere in the tree. The first instance was `s_palTex`, where a comment claimed publication and
+the compiler disproved it; the second was these two, where the claim survived the compiler
+because the write existed and only the READ was missing, and it took the landing's review to
+catch. **The rule both produce: trace the field, not the word.** The `TAGPU_FXVIEW` fields are
+left in place with a tombstone — changing that struct's shape belongs to 11-5e — but nothing
+should be plumbed into them believing there is a consumer.
+
+The name collision that caused it is worth knowing on its own: `TAGPU_FXVIEW.fogLut` was an
+`unsigned int` GL name, while the frame packet's `fogLut` is a `const unsigned char*` to the 256
+bytes the Vulkan twins actually read through `tagpu_native_foglut()`. Same word, different
+field, different type, different lane.
 
 **Two smaller shapes.** `if (!gl_draws) { …hand over…; return; }` wrapped the entire remainder of
 the function once 11-3 removed the draw half below it — so the test and the `return` went and the
@@ -11559,12 +11573,17 @@ hand-over is simply the end of the function. `tagpu_native_wrecks_armed` loses `
 ("the GL program has not refused"), there being no program to refuse.
 
 **Verification, same method as 11-5a.** Inventory against HEAD: exactly `getgl`, `init_gl`,
-`mksh`, `tex2d` removed, nothing added. Against `main`, per function: **21 of 28
-instruction-identical**, and the only three that changed are the three edited. External
-references lose 32 and gain nothing — 29 GL entry points, `getgl`'s two imports and
-`xwglGetProcAddress`, plus `tagpu_vk_owns_present` (no `gl_draws` left to compute) and
+`mksh`, `tex2d` removed, nothing added — `main` defines 28 functions, this tree 24. Against
+`main`, per function: **21 of the 24 SURVIVING functions are instruction-identical**, and the
+three that differ are the three edited. (Four functions were deleted and cannot be compared;
+"21 of 28" would read as seven changed, which is why the surviving count is the one to quote.)
+External references lose **32 and gain nothing**, and the breakdown sums to 32 rather than past
+it: **27** `gl*` entry points, `getgl`'s `GetModuleHandleA` and `GetProcAddress`,
+`xwglGetProcAddress`, `tagpu_vk_owns_present` (no `gl_draws` left to compute) and
 `tagpu_shadow_locate`, which `init_gl` called to name uniforms in the deleted program and which
-still has two callers elsewhere. Include removal proved inert separately. Five of the six shaders
+still has two callers elsewhere. **Quote a total and a breakdown that adds up to it** — this note
+first said "29 … plus three", which is 32 written as 34, the same double-count the 11-5a review
+caught in §2.69. Include removal proved inert separately. Five of the six shaders
 sit behind a probed pragma; `FS` is the exception with a live C caller,
 `tagpu_native_unit_fs()`, which is why the posed and unposed units cannot drift apart.
 

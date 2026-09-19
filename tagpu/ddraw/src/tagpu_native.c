@@ -319,23 +319,19 @@ static int    s_wtHave = 0;
    file a session can arm and then measure nothing from. The widths it could
    set, and the 2026-09-11 coverage measurement behind them, are in
    ui-markers.md. */
-/* TWO GL NAMES THAT ARE CONSTANT 0 AND STILL PUBLISHED. Nothing creates
-   either since landing 11-5b took the bring-up, but `fv.fogTex`/`fv.fogLut`
-   below still carry them, and the one thing that reads those fields is
-   `tagpu_hires_draw.c` -- a file whose producer is already dead and whose fate
-   is the owner's (escalation reason 1). Deleting them means reshaping
-   `TAGPU_FXVIEW` and editing that file, so they stay, pinned, documented.
-   `s_palTex` sat beside them until this landing and did NOT survive the same
-   test: it had no reader at all, published or otherwise, once the palette
-   upload went. The lesson is that "it is published" has to be checked rather
-   than assumed from the neighbours -- the compiler is what caught it.
-   The BYTES the Vulkan twins actually read are `tagpu_native_foglut()`'s, the
-   256-byte CPU mirror. Note the collision: `TAGPU_FXVIEW.fogLut` is THIS, an
-   `unsigned int` GL name, while the frame packet's `fogLut` is a
-   `const unsigned char*` to those bytes. Different fields, same word.
-   Declared `unsigned int` rather than `GLuint` to match the field they feed --
-   which is what lets this file stop including the GL header at all. */
-static unsigned int s_fogTex, s_fogLutTex;
+/* `s_fogTex` AND `s_fogLutTex` STOOD HERE AND WERE DELETED -- with the write
+   to `fv.fogTex`/`fv.fogLut` that was supposedly their reason to stay. They
+   survived the first pass of this landing because `tagpu_hires_draw.c` reads
+   `v->fogTex` and `v->fogLutTex`, which looked like a live consumer. IT IS NOT
+   THE SAME STRUCT: those are `TAGPU_HVIEW` fields (`inc/tagpu_hires_draw.h`),
+   and `TAGPU_FXVIEW.fogTex`/`.fogLut` had no reader anywhere in the tree.
+   Caught by this landing's review, and it is the second time in two landings
+   that "it is published" turned out to be inferred from a name rather than
+   checked -- the first was `s_palTex`, caught by the compiler. THE RULE: trace
+   the field, not the word. The bytes the Vulkan twins actually read are
+   `tagpu_native_foglut()`'s 256-byte CPU mirror, reached through the frame
+   packet's `fogLut`, which is a `const unsigned char*` -- a different field
+   that happens to share the name. */
 /* the 256-byte fog shade table as it was last uploaded to s_fogLutTex, for a
    backend that cannot read a GL texture (Phase G / G19e, tagpu_native.h) */
 static unsigned char s_fogLutBytes[256];
@@ -1707,8 +1703,7 @@ void tagpu_native_set_want_builds(int want, unsigned int frame_counter)
    was the one case it could not see. tagpu_fxown does it properly and this now
    copies that: the decay runs from tagpu_overlay.c's unconditional flush run,
    which sits in front of the `tagpu_overlay.off` early-return, so a render
-   thread that is STILL RUNNING but has stopped polling — a driver that refused
-   (`s_state == 2` returns ahead of the 30-frame poll), a context loss,
+   thread that is STILL RUNNING but has stopped polling — a context loss,
    `tagpu_overlay.off` — stops charging the publisher for a table nothing will
    read. What it does NOT cover, because it cannot: a render thread that has
    EXITED stops calling this flush too, so the flag keeps its last value. That
@@ -2176,9 +2171,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        left the engine drawing its own slant shadows rather than leaving every
        building without one -- the defect landing 10b fixed. It is gone with the
        program that could refuse, and the property survives in a better form:
-       every other return from this function reaches the same publication
-       through `SSHADOW_NONE()`, and the gate below is read-and-clear, so a
-       frame that never reaches the painters lowers it anyway. */
+       every return from this function that precedes the publication reaches it
+       through `SSHADOW_NONE()` (seven of them), the two that follow it cannot
+       strand a raised gate because it has already been published, and the gate
+       is read-and-clear besides -- so a frame that never reaches the painters
+       lowers it anyway. */
     if (s_armed < 0 || (f->frame_counter % 30) == 0) {
         int was = s_armed;
         /* NEVER PUBLISH "DISARMED" WHILE RE-READING. `s_armed` used to be zeroed
@@ -2326,10 +2323,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        the wrong brightness at any Gamma but the default (tagpu_pal.h). One
        resolve serves the atlas restore here and uPal below. */
     const unsigned char* pal = tagpu_pal_live();
-    /* No frame is drawn with an unspecified palette. Unreachable in practice —
-       ptr_ok(ta) above is what the engine-table fallback needs — but s_palTex
-       is only given storage by the upload below, and a shader sampling a
-       storageless texture is the all-black failure mode the fog LUT records. */
+    /* No frame is drawn with an unspecified palette. Unreachable in practice --
+       ptr_ok(ta) above is what the engine-table fallback needs -- and the
+       reason to keep the guard is now the line below rather than a texture:
+       `tagpu_r3d_atlas_frame` would restore the atlas against a null palette. */
     if (!pal) { SSHADOW_NONE(); return; }
     /* the unit atlas's frame: recycle if full, arm and step its Classic++
        restore -- before any face asks it for a UV */
@@ -2394,8 +2391,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        not symmetric -- stale 0 is a double shadow for a frame, stale 1 is NO
        shadow -- so it may only be raised at a point the pass has committed to
        drawing. Published from the top of the function it stayed raised through
-       every `return` here: a frame with no packet (the whole shell), a GL
-       program still building, an atlas that would not allocate. Each of those
+       every `return` here: a frame with no packet (the whole shell), an atlas
+       that would not allocate, a map the probes refused. Each of those
        now lowers it on the way out, which is the `SSHADOW_NONE()` above them,
        and this is the one line that raises it.
 
@@ -2424,12 +2421,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        `s_ssSuppress` (below, next to the painters) carries the answer, and the
        read here CLEARS it, so every frame must earn the gate again. That is
        what makes the stale directions bounded by construction rather than by
-       argument: any path that does not reach the painters -- the nine returns
-       above, the hand-over return at `:3788`, a lane switch, a refused map --
-       leaves 0 behind and the next frame lowers the gate. `gl_draws` is ANDed
-       in because it is read fresh from `tagpu_vk_owns_present()` this frame
-       while `s_ssSuppress` is last frame's: without it a GL -> Vulkan switch
-       would carry one raised frame across the seam.
+       argument: any path that does not reach the painters -- the seven
+       `SSHADOW_NONE(); return;` sites above, a refused map -- leaves 0 behind
+       and the next frame lowers the gate.
+
+       A `gl_draws` TERM USED TO BE ANDed IN HERE, read fresh from
+       `tagpu_vk_owns_present()` each frame while `s_ssSuppress` was last
+       frame's, so that a GL -> Vulkan switch could not carry one raised frame
+       across the seam. There is one lane and no seam, and the term is gone --
+       see the paragraph below, which is the authority on this expression.
 
        THE COST IS ONE FRAME, IN BOTH DIRECTIONS, and it is the same shape the
        cursor hand-over already uses (`tagpu_cursown_publish` /
@@ -2627,14 +2627,20 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     }
 
     /* ---- the live palette (re-read per frame; it does NOT cycle -- terr.c),
-       and this is the ONLY palette texture the world has: terrain, features,
-       effects, markers and the replacement meshes are all handed s_palTex. ---- */
+       and it was the ONLY palette texture the world had: terrain, features,
+       effects, markers and the replacement meshes were all handed the same
+       name, which went with the upload in landing 11-5b. ---- */
     /* THIS UPLOAD WAS GL THROUGHOUT, unlike the fog grid and the shade table
        above, and so it left NOTHING behind when it went in landing 11-5b: the
        bytes a second backend needs are `tagpu_pal_live()`'s, which
        `tagpu_pal_frame` fills from this frame's packet before any pass runs,
-       and each Vulkan twin uploads them itself. `pal` above is read for the
-       log line and for that reason only. */
+       and each Vulkan twin uploads them itself.
+
+       `pal` ABOVE IS STILL LOAD-BEARING AND MUST NOT GO WITH THIS UPLOAD: it
+       is the argument to `tagpu_r3d_atlas_frame(pal)` a few lines up, which
+       recycles the 3DO atlas when it is full and steps its Classic++ restore
+       against the live palette. Deleting it would leave units rendering from
+       an unrestored or stale atlas -- wrong colours, nothing thrown. */
 
     /* ---- gather native-owned on-screen units ---- */
     /* ONE GATHERED DRAWABLE. `pu`/`pw` point into THIS FRAME'S PACKET — our
@@ -3068,7 +3074,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         fv.fogCols = s_fogCols; fv.fogRows = s_fogRows;
         fv.fogCells = s_fogCells;
         fv.fogOrgX = s_fogOrgX; fv.fogOrgY = s_fogOrgY;
-        fv.fogTex = s_fogTex; fv.fogLut = s_fogLutTex;
         fv.r0 = r0; fv.rows = rows;
         fv.frame_counter = f->frame_counter;
     }
@@ -3412,7 +3417,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        engine clips unit blits to the viewport rect and this pass matches it;
        the hand-over carries that as `scissorOn` and the Vulkan twin's
        `terr_scissor` honours it ("NO CLIP WHERE THE GL LANE HAS NONE").
-       Below, `s_scissorOn` is set from whether `x_glScissor` RESOLVED --
+       `s_scissorOn` used to be set from whether `x_glScissor` RESOLVED --
        which is a fact about one context's entry points, and the reason the
        GL path has a fallback at all. With no context every `x_gl*` is NULL,
        so leaving the flag to that told the twin "no clip" and it drew
@@ -3623,9 +3628,9 @@ int tagpu_native_wrecks_armed(void)
     return s_armed > 0 && s_wrecks;
 }
 
-/* THE FOG GRID AS THE NATIVE PASS UPLOADED IT (Phase G / G19e, the unit pass).
-   The very buffer glTexImage2D/glTexSubImage2D above was given, with the
-   dimensions it was given and the CELL COUNT the packet's own allocation
+/* THE FOG GRID AS THE NATIVE PASS BUILT IT (Phase G / G19e, the unit pass).
+   The very buffer the pass published, with the dimensions it published and the
+   CELL COUNT the packet's own allocation
    holds -- the bound a copy of it has to be made against. That count is
    `cols * rows` at every one of its assignments today (`bufCells`, and the
    wide grid re-derives it from its own pair); it is published separately
