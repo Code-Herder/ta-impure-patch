@@ -48,7 +48,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "opengl_utils.h"
 #include "tagpu_opt.h"
 #include "tagpu_fx.h"
 #include "tagpu_pal.h"
@@ -82,29 +81,6 @@ static void flog(const char* s)
 {
     FILE* f = fopen("tagpu.log", "a");
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
-}
-
-typedef void (APIENTRY *PFN_DRAWARRAYS)(GLenum,GLint,GLsizei);
-typedef void (APIENTRY *PFN_BLENDFUNC)(GLenum,GLenum);
-typedef void (APIENTRY *PFN_UNIFORM1F)(GLint,GLfloat);
-typedef void (APIENTRY *PFN_UNIFORM2F)(GLint,GLfloat,GLfloat);
-typedef void (APIENTRY *PFN_ACTIVETEX)(GLenum);
-typedef void (APIENTRY *PFN_DEPTHMASK)(GLboolean);
-typedef void (APIENTRY *PFN_LINEWIDTH)(GLfloat);
-static PFN_DRAWARRAYS x_glDrawArrays;
-static PFN_BLENDFUNC  x_glBlendFunc;
-static PFN_UNIFORM1F  x_glUniform1f;
-static PFN_UNIFORM2F  x_glUniform2f;
-static PFN_ACTIVETEX  x_glActiveTexture;
-static PFN_DEPTHMASK  x_glDepthMask;
-static PFN_LINEWIDTH  x_glLineWidth;
-
-static void* getgl(const char* n)
-{
-    void* p = xwglGetProcAddress ? (void*)xwglGetProcAddress(n) : NULL;
-    if (!p) { HMODULE gl = GetModuleHandleA("opengl32.dll");
-              if (gl) p = (void*)GetProcAddress(gl, n); }
-    return p;
 }
 
 /* the shared shelf atlas (tagpu_gaf.c). Its entries are keyed on the frame
@@ -219,12 +195,6 @@ int tagpu_fx_armed(unsigned frame_counter)
     return s_armed > 0;
 }
 
-/* ---- GL ---- */
-static int    s_state = 0;              /* 0 unloaded, 1 ready, 2 failed     */
-static GLuint s_prog, s_vao, s_vbo, s_lhtTex;
-static GLint  s_uGame, s_uFog, s_uFogOrg, s_uFogDim, s_uZoom, s_uZoomC, s_uDepthScale;
-static GLint  s_uScafOn, s_uScafP, s_uSS, s_uZoomF, s_uZoomCF;
-static GLint  s_uRestored;
 /* four buckets, drawn in this order: the particle layers the engine draws
    BEFORE its projectile pass (0..6: wake foam, feature smoke, trail puffs,
    nanolathe), lines, flashes (additive), sprites (weapon sprites, explosions,
@@ -249,12 +219,23 @@ static int    s_nm = 0;
 
 static int s_lhtInit = 0;
 static unsigned s_lhtStamp = 0;
-/* THE FLASH LIGHT TABLE'S OWN BYTES, at file scope since Phase G / G19e: the
-   GL lane uploads them with glTexImage2D and the Vulkan lane needs the same
-   buffer, because a second backend cannot read a GL texture. 32 x 1 RGB, and
-   `s_lhtInit` is what says whether it has ever been built. */
+/* THE FLASH LIGHT TABLE'S OWN BYTES, at file scope since Phase G / G19e. They
+   were put here because a second backend cannot read a GL texture and the twin
+   needs the same buffer the GL lane uploaded; since landing 11-5a the upload is
+   gone and this array is the table outright. 32 x 1 RGB, and `s_lhtInit` is
+   what says whether it has ever been built. */
 static unsigned char s_lhtRGB[32 * 3];
 
+/* THE SHADER PAIR IS A BUILD INPUT, NOT DEAD GL CODE, and no C in this file
+   references it since landing 11-5a -- `tools/spirv-gen.py` reads both strings
+   out of the PREPROCESSED translation unit and generates the SPIR-V that
+   `tagpu_vk_fx.c` draws with, so deleting them fails the build with "the
+   manifest names tagpu_fx::VS and the source does not have it". The pragma
+   below is paired, and its `pop` is PROVED with a planted probe rather than
+   read: landing 11-4b put one inside a comment, where it is text and not a
+   directive. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-variable"
 static const char* VS =
     "#version 330 core\n"
     "layout(location=0) in vec3 aPos;\n"
@@ -315,16 +296,7 @@ static const char* FS =
     /* premultiplied FBO: flashes are pure additive light (alpha 0) */
     "  if (mode == 3) frag = vec4(rgb, 0.0); else frag = vec4(rgb * a, a);\n"
     "}\n";
-
-static GLuint mksh(GLenum t, const char* src)
-{
-    GLuint sh = glCreateShader(t);
-    glShaderSource(sh, 1, &src, NULL); glCompileShader(sh);
-    GLint ok = 0; glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
-    if (!ok) { char lg[512]; glGetShaderInfoLog(sh, sizeof lg, NULL, lg);
-               flog("fx: shader FAILED:"); flog(lg); s_state = 2; }
-    return sh;
-}
+#pragma GCC diagnostic pop
 
 /* THE ATLAS IS THE PASS, NOT THE BACKEND -- the feature pass's shape and the
    same reason (tagpu_feat.c). Nothing in here is GL: `atlas_create` gates its
@@ -341,81 +313,9 @@ static void atlas_setup(void)
     tagpu_gaf_atlas_create(&s_atlas);   /* never bind texture 0 to uAtlas */
 }
 
-static void init_gl(void)
-{
-    x_glDrawArrays = (PFN_DRAWARRAYS)getgl("glDrawArrays");
-    x_glBlendFunc  = (PFN_BLENDFUNC) getgl("glBlendFunc");
-    x_glUniform1f  = (PFN_UNIFORM1F) getgl("glUniform1f");
-    x_glUniform2f  = (PFN_UNIFORM2F) getgl("glUniform2f");
-    x_glActiveTexture = (PFN_ACTIVETEX)getgl("glActiveTexture");
-    x_glDepthMask  = (PFN_DEPTHMASK) getgl("glDepthMask");
-    x_glLineWidth  = (PFN_LINEWIDTH) getgl("glLineWidth");
-    if (!x_glDrawArrays || !x_glBlendFunc || !x_glUniform1f || !x_glUniform2f ||
-        !x_glActiveTexture || !x_glDepthMask) { flog("fx: missing GL proc"); s_state = 2; return; }
-
-    GLuint vs = mksh(GL_VERTEX_SHADER, VS), fs = mksh(GL_FRAGMENT_SHADER, FS);
-    if (s_state == 2) return;
-    s_prog = glCreateProgram();
-    glAttachShader(s_prog, vs); glAttachShader(s_prog, fs); glLinkProgram(s_prog);
-    GLint ok = 0; glGetProgramiv(s_prog, GL_LINK_STATUS, &ok);
-    if (!ok) { flog("fx: link FAILED"); s_state = 2; return; }
-    glDeleteShader(vs); glDeleteShader(fs);
-    s_uGame = glGetUniformLocation(s_prog, "uGame");
-    s_uFog  = glGetUniformLocation(s_prog, "uFog");
-    s_uFogOrg = glGetUniformLocation(s_prog, "uFogOrg");
-    s_uFogDim = glGetUniformLocation(s_prog, "uFogDim");
-    s_uZoom = glGetUniformLocation(s_prog, "uZoom");
-    s_uZoomC = glGetUniformLocation(s_prog, "uZoomC");
-    s_uDepthScale = glGetUniformLocation(s_prog, "uDepthScale");
-    s_uScafOn = glGetUniformLocation(s_prog, "uScafOn");
-    s_uScafP  = glGetUniformLocation(s_prog, "uScafP");
-    s_uSS     = glGetUniformLocation(s_prog, "uSS");
-    s_uZoomF  = glGetUniformLocation(s_prog, "uZoomF");
-    s_uZoomCF = glGetUniformLocation(s_prog, "uZoomCF");
-    glUseProgram(s_prog);
-    glUniform1i(glGetUniformLocation(s_prog, "uAtlas"), 0);
-    glUniform1i(glGetUniformLocation(s_prog, "uPal"),   1);
-    glUniform1i(glGetUniformLocation(s_prog, "uFogGrid"), 2);
-    glUniform1i(glGetUniformLocation(s_prog, "uFogLUT"),  3);   /* unused here:
-        effects hide in grey rather than shading, but binding it keeps a future
-        FOG_SHADE in this pass off unit 0 (the atlas) */
-    glUniform1i(glGetUniformLocation(s_prog, "uLht"),   4);
-    glUniform1i(glGetUniformLocation(s_prog, "uScaf"),  5);
-    glUniform1i(glGetUniformLocation(s_prog, "uAtlasRGB"), 6);
-    s_uRestored = glGetUniformLocation(s_prog, "uRestored");
-    glUseProgram(0);
-
-    glGenVertexArrays(1, &s_vao); glBindVertexArray(s_vao);
-    glGenBuffers(1, &s_vbo); glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof s_verts, NULL, GL_STREAM_DRAW);
-    {   /* ONE TABLE, TWO LANES: tagpu_fx.h's TAGPU_FX_ATTRS is what the Vulkan
-           attribute array is built from too, so a layout change cannot reach
-           one lane and miss the other -- which would make the A/B compare two
-           different meshes and call it a rasteriser difference. */
-        static const struct { int loc, n, off; } at[TAGPU_FX_NATTR] = TAGPU_FX_ATTRS;
-        int i;
-        for (i = 0; i < TAGPU_FX_NATTR; i++) {
-            glEnableVertexAttribArray((GLuint)at[i].loc);
-            glVertexAttribPointer((GLuint)at[i].loc, at[i].n, GL_FLOAT, GL_FALSE,
-                                  FXST * 4, (void*)(size_t)at[i].off);
-        }
-    }
-    glBindVertexArray(0);
-
-    atlas_setup();
-    glGenTextures(1, &s_lhtTex);
-    glBindTexture(GL_TEXTURE_2D, s_lhtTex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    s_lhtInit = 0;
-    s_state = 1;
-    flog("fx: GL ready");
-}
-
 void tagpu_fx_glreset(void)
 {
-    s_state = 0; s_lhtInit = 0;
+    s_lhtInit = 0;
     /* AND THE HAND-OVER GOES WITH IT. This is the context-loss path: the atlas
        is dropped on the very next line and its mirror is re-requested from
        scratch, so a hand-over left standing here would be read against texels
@@ -941,15 +841,11 @@ static void gather_fx(const TAGPU_FXVIEW* v)
                 rgb[L*3+1] = (unsigned char)(sg < 0 ? 0 : sg > 255 ? 255 : sg);
                 rgb[L*3+2] = (unsigned char)(sb < 0 ? 0 : sb > 255 ? 255 : sb);
             }
-            /* THE UPLOAD IS GL; THE TABLE IS THE PASS. `s_pub.lht` hands these
-               same bytes to the twin, which builds its own image from them, so
-               only the texture stands down. [Landing 4b-2.] */
-            if (!tagpu_vk_owns_present()) {
-                glBindTexture(GL_TEXTURE_2D, s_lhtTex);
-                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, 32, 1, 0, GL_RGB, GL_UNSIGNED_BYTE, rgb);
-                glBindTexture(GL_TEXTURE_2D, 0);
-            }
+            /* THE TABLE IS THE PASS. A GL upload of these same bytes stood
+               here and stood down under `renderer=vulkan`; it went in landing
+               11-5a. `s_pub.lht` hands the bytes to the twin, which builds its
+               own image from them, so the table reaching `rgb` IS the work.
+               [Landings 4b-2 and 11-5a.] */
             s_lhtInit = 1; s_lhtStamp = v->frame_counter;
         }
     }
@@ -973,17 +869,13 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
 {
     int fxOn = (s_armed == 1), sfxOn = tagpu_sfx_on();
     if (!fxOn && !sfxOn) return 0;
-    /* GL ONLY, and asked only where GL draws -- `init_gl` resolves entry points
-       and builds this pass's program. The atlas it used to set up is set up
-       here instead on the other lane, once, since `made` latches. */
-    if (!tagpu_vk_owns_present()) {
-        if (s_state == 0) init_gl();
-        if (s_state != 1) {
-            static int said = 0;
-            if (sfxOn && !said) { said = 1; flog("fx: GL not ready — the particle pass (sfx) is idle too"); }
-            return 0;
-        }
-    } else if (!s_atlas.made) {
+    /* THE ATLAS IS WHAT THIS PASS NEEDS BEFORE IT CAN GATHER. A GL bring-up
+       used to stand beside it, resolving entry points and building a program,
+       and a failure there took the PARTICLE pass (sfx) down with it -- which is
+       why the refusal below used to say so. Neither can happen now: the
+       bring-up went in landing 11-5a and what is left is the positive form,
+       once, since `made` latches. [Landings 4b-2 and 11-5a.] */
+    if (!s_atlas.made) {
         atlas_setup();
         if (!s_atlas.made) return 0;
     }
@@ -1187,10 +1079,11 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex,
        effects over this frame's -- and on the frame a level is torn down, over
        nothing at all. [The G19e re-review's first finding, applied here.]
 
-       `s_state` WAS THE GL PROGRAM'S and was only asked where GL drew: it is
-       permanently 0 where `init_gl` is never called, so testing it would refuse
-       every hand-over on the one lane the hand-over is for. The draw went in
-       landing 11-3 and the term with it; `total` is the whole refusal. */
+       A GL PROGRAM'S READY-STATE was once a term in this refusal, and only ever
+       asked where GL drew: permanently 0 where the bring-up is never called, so
+       testing it refused every hand-over on the one lane the hand-over is for.
+       The draw went in landing 11-3, the state in 11-5a, and the term with
+       them; `total` is the whole refusal. */
     if (total == 0) { s_pubHave = 0; s_abFrame = 0; return; }
 
     /* HOISTED OUT OF THE DRAW, because on the vulkan-only lane the A/B is

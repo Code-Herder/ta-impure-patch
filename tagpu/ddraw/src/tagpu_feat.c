@@ -64,7 +64,6 @@
 #include <stdarg.h>
 #include <string.h>
 #include <math.h>
-#include "opengl_utils.h"
 #include "tagpu_opt.h"
 #include "tagpu_feat.h"
 #include "tagpu_pal.h"
@@ -162,27 +161,6 @@ static void sappend(char* b, int cap, int* p, const char* fmt, ...)
     va_end(ap);
     if (n < 0 || n > cap - 1 - *p) *p = cap - 1; else *p += n;
     b[*p] = 0;
-}
-
-typedef void (APIENTRY *PFN_DRAWARRAYS)(GLenum,GLint,GLsizei);
-typedef void (APIENTRY *PFN_BLENDFUNC)(GLenum,GLenum);
-typedef void (APIENTRY *PFN_UNIFORM1F)(GLint,GLfloat);
-typedef void (APIENTRY *PFN_UNIFORM2F)(GLint,GLfloat,GLfloat);
-typedef void (APIENTRY *PFN_ACTIVETEX)(GLenum);
-typedef void (APIENTRY *PFN_DEPTHMASK)(GLboolean);
-static PFN_DRAWARRAYS x_glDrawArrays;
-static PFN_BLENDFUNC  x_glBlendFunc;
-static PFN_UNIFORM1F  x_glUniform1f;
-static PFN_UNIFORM2F  x_glUniform2f;
-static PFN_ACTIVETEX  x_glActiveTexture;
-static PFN_DEPTHMASK  x_glDepthMask;
-
-static void* getgl(const char* n)
-{
-    void* p = xwglGetProcAddress ? (void*)xwglGetProcAddress(n) : NULL;
-    if (!p) { HMODULE gl = GetModuleHandleA("opengl32.dll");
-              if (gl) p = (void*)GetProcAddress(gl, n); }
-    return p;
 }
 
 /* ---- arming ---- */
@@ -312,11 +290,6 @@ int tagpu_feat_armed(unsigned frame_counter)
 
 int tagpu_feat_on(void) { return s_armed > 0; }
 
-/* ---- GL ---- */
-static int    s_state = 0;             /* 0 unloaded, 1 ready, 2 failed       */
-static GLuint s_prog, s_vao, s_vbo;
-static GLint  s_uGame, s_uFog, s_uFogOrg, s_uFogDim, s_uZoom, s_uZoomC, s_uDepthScale,
-              s_uRestored, s_uLit;
 /* the map the atlas's entries belong to (see tagpu_feat_gather) */
 static const char* s_mapGrid;
 static int         s_mapW, s_mapH;
@@ -360,6 +333,16 @@ static int feat_room(int b, int need)
     return 1;
 }
 
+/* THE SHADER PAIR IS A BUILD INPUT, NOT DEAD GL CODE, and no C in this file
+   references it since landing 11-5a -- `tools/spirv-gen.py` reads both strings
+   out of the PREPROCESSED translation unit and generates the SPIR-V that
+   `tagpu_vk_feat.c` draws with, so deleting them fails the build with "the
+   manifest names tagpu_feat::VS and the source does not have it". The pragma
+   below is paired, and its `pop` is PROVED with a planted probe rather than
+   read: landing 11-4b put one inside a comment, where it is text and not a
+   directive, and it silently disabled the warning for 2200 lines. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-variable"
 static const char* VS =
     "#version 330 core\n"
     "layout(location=0) in vec3 aPos;\n"
@@ -416,21 +399,11 @@ static const char* FS =
     "  vec3 rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n"
     "  frag = vec4(rgb * a, a);\n"           /* premultiplied, like the FBO */
     "}\n";
+#pragma GCC diagnostic pop
 
-static GLuint mksh(GLenum t, const char* src)
-{
-    GLuint sh = glCreateShader(t);
-    GLint ok = 0;
-    glShaderSource(sh, 1, &src, NULL); glCompileShader(sh);
-    glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
-    if (!ok) { char lg[512]; glGetShaderInfoLog(sh, sizeof lg, NULL, lg);
-               flog("feat: shader FAILED:"); flog(lg); s_state = 2; }
-    return sh;
-}
-
-/* THE ATLAS IS THE PASS, NOT THE BACKEND, so its layout is set up here and not
-   in `init_gl`. It used to be `init_gl`'s last block, which meant that gating
-   `init_gl` on the vulkan-only lane left `dim` at 0 -- and then
+/* THE ATLAS IS THE PASS, NOT THE BACKEND, so its layout is set up here rather
+   than in a backend bring-up. It used to be the GL bring-up's last block, which
+   meant that gating that bring-up on the vulkan-only lane left `dim` at 0 -- and then
    `tagpu_gaf_atlas_create` refused for that reason, `tagpu_gaf_atlas_mirror`
    was never asked for, every sprite lookup returned NULL, and the pass gathered
    101 bodies into `atlas=0` and handed over nothing. Nothing in here is GL: the
@@ -455,72 +428,8 @@ static void atlas_setup(void)
     tagpu_gaf_atlas_create(&s_atlas);   /* never bind texture 0 to uAtlas */
 }
 
-static void init_gl(void)
-{
-    GLuint vs, fs;
-    GLint ok = 0;
-    x_glDrawArrays = (PFN_DRAWARRAYS)getgl("glDrawArrays");
-    x_glBlendFunc  = (PFN_BLENDFUNC) getgl("glBlendFunc");
-    x_glUniform1f  = (PFN_UNIFORM1F) getgl("glUniform1f");
-    x_glUniform2f  = (PFN_UNIFORM2F) getgl("glUniform2f");
-    x_glActiveTexture = (PFN_ACTIVETEX)getgl("glActiveTexture");
-    x_glDepthMask  = (PFN_DEPTHMASK) getgl("glDepthMask");
-    if (!x_glDrawArrays || !x_glBlendFunc || !x_glUniform1f || !x_glUniform2f ||
-        !x_glActiveTexture || !x_glDepthMask) {
-        flog("feat: missing GL proc"); s_state = 2; return;
-    }
-    vs = mksh(GL_VERTEX_SHADER, VS); fs = mksh(GL_FRAGMENT_SHADER, FS);
-    if (s_state == 2) return;
-    s_prog = glCreateProgram();
-    glAttachShader(s_prog, vs); glAttachShader(s_prog, fs); glLinkProgram(s_prog);
-    glGetProgramiv(s_prog, GL_LINK_STATUS, &ok);
-    if (!ok) { flog("feat: link FAILED"); s_state = 2; return; }
-    glDeleteShader(vs); glDeleteShader(fs);
-    s_uGame = glGetUniformLocation(s_prog, "uGame");
-    s_uFog  = glGetUniformLocation(s_prog, "uFog");
-    s_uFogOrg = glGetUniformLocation(s_prog, "uFogOrg");
-    s_uFogDim = glGetUniformLocation(s_prog, "uFogDim");
-    s_uZoom = glGetUniformLocation(s_prog, "uZoom");
-    s_uZoomC = glGetUniformLocation(s_prog, "uZoomC");
-    s_uDepthScale = glGetUniformLocation(s_prog, "uDepthScale");
-    glUseProgram(s_prog);
-    glUniform1i(glGetUniformLocation(s_prog, "uAtlas"), 0);
-    glUniform1i(glGetUniformLocation(s_prog, "uPal"),   1);
-    glUniform1i(glGetUniformLocation(s_prog, "uFogGrid"), 2);
-    glUniform1i(glGetUniformLocation(s_prog, "uFogLUT"),  3);
-    glUniform1i(glGetUniformLocation(s_prog, "uAtlasRGB"), 4);
-    s_uRestored = glGetUniformLocation(s_prog, "uRestored");
-    s_uLit = glGetUniformLocation(s_prog, "uLit");
-    glUseProgram(0);
-
-    glGenVertexArrays(1, &s_vao); glBindVertexArray(s_vao);
-    glGenBuffers(1, &s_vbo); glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-    /* no storage yet: the draw re-specifies it at this frame's size, and the
-       attributes below only record the binding */
-    {
-        /* ONE TABLE, TWO LANES (tagpu_feat.h TAGPU_FEAT_ATTRS): this loop and
-           tagpu_vk_feat.c's VkVertexInputAttributeDescription array are built
-           from the same literal, so a layout change cannot reach one and miss
-           the other -- which would make the A/B compare two different meshes
-           and call it a rasteriser difference. */
-        static const struct { int loc, n, off; } at[TAGPU_FEAT_NATTR] = TAGPU_FEAT_ATTRS;
-        int i;
-        for (i = 0; i < TAGPU_FEAT_NATTR; i++) {
-            glEnableVertexAttribArray((GLuint)at[i].loc);
-            glVertexAttribPointer((GLuint)at[i].loc, at[i].n, GL_FLOAT, GL_FALSE,
-                                  FVST * 4, (void*)(size_t)at[i].off);
-        }
-    }
-    glBindVertexArray(0);
-
-    atlas_setup();
-    s_state = 1;
-    flog("feat: GL ready");
-}
-
 void tagpu_feat_glreset(void)
 {
-    s_state = 0;
     tagpu_gaf_atlas_lost(&s_atlas);
     s_mapGrid = NULL;           /* the entries went with the context */
     /* and so did the hand-over: its texel pointers name an atlas that no longer
@@ -787,17 +696,16 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     float flatSpan;
     if (s_armed != 1) return feat_bail();
     if (!pk || !pk->in_game) return feat_bail();
-    /* GL ONLY, and asked only where GL draws: `init_gl` resolves entry points
-       and builds this pass's program, and on the vulkan-only lane it would log a
-       missing proc and latch `s_state = 2`, killing the gather with it -- which
-       is exactly what the terrain pass did before its own audit.
-       [The vulkan-only plan, landing 4b-2.] */
-    if (!tagpu_vk_owns_present()) {
-        if (s_state == 0) init_gl();
-        if (s_state != 1) return feat_bail();
-    } else if (!s_atlas.made) {
-        /* `init_gl` is not called on this lane, so the atlas it used to set up
-           is set up here instead -- once, since `made` latches. */
+    /* THE ATLAS IS WHAT THIS PASS NEEDS BEFORE IT CAN GATHER, and it is the
+       only thing it needs. A GL bring-up used to stand beside this, resolving
+       entry points and building a program; asking for it on the vulkan-only
+       lane logged a missing proc and latched a failed state that killed the
+       GATHER with it, which is exactly what the terrain pass did before its
+       own audit -- so it was gated, and in landing 11-5a it was deleted. What
+       is left is the POSITIVE form: set the layout up once, since `made`
+       latches, and refuse only if that fails.
+       [The vulkan-only plan, landings 4b-2 and 11-5a.] */
+    if (!s_atlas.made) {
         atlas_setup();
         if (!s_atlas.made) return feat_bail();
     }
@@ -1168,10 +1076,12 @@ void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex)
        features over this frame's -- and on the frame a level is torn down, over
        nothing at all.
 
-       `s_state` WAS THE GL PROGRAM'S and was only asked where GL drew: it is
-       permanently 0 where `init_gl` is never called, so testing it would refuse
-       every hand-over on the one lane the hand-over is for. The draw is gone and
-       the term with it; `total`, the gather's own count, is the whole refusal. */
+       A GL PROGRAM'S READY-STATE was once a term in this refusal, and it was
+       only ever asked where GL drew: permanently 0 where the bring-up is never
+       called, so testing it refused every hand-over on the one lane the
+       hand-over is for. The draw went in 11-3, the state in 11-5a, and the
+       term with them; `total`, the gather's own count, is the whole refusal
+       and there is no longer any readiness to ask about. */
     if (total == 0) { s_pubHave = 0; s_abFrame = 0; return; }
 
     /* HOISTED OUT OF THE DRAW, because on the vulkan-only lane the A/B is
