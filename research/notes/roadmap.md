@@ -3303,7 +3303,14 @@ part 2 opens and names**: the UI atlas now has neither a read-back nor a list, s
 has no route to a UI sprite at all — free today (the first two pins predate it) and new work,
 not a deletion, to give back. Left standing deliberately with it: the colour-twin SUBSYSTEM
 (`colourTwins`, `colImg`, the `TAGPU_GUICOL_*` bits, the second pass, the four `*2` pipelines),
-dead by the same pins and holding no GL. Measured over
+dead by the same pins and holding no GL. **Part 2 measured in FOUR runs, interleaved**
+(`main, branch, main, branch`): the two adjacent-in-time cross-build pairs are **byte-identical
+PNGs**, the fixture flipped mode between the pairs so both builds visited both, and the
+same-build control across the flip shows exactly the same 44 px (all inside the minimap) as the
+cross-build pairs spanning it — the build accounts for **0 pixels**. Zero
+`VK_ERROR`/`DEVICE_LOST`/`VUID`/validation lines on any run, which is the check binding 41's
+unconditional `VK_NULL_HANDLE` needed; restore lines an identical 16-line multiset in all four.
+DLL 1 558 016 → 1 547 776 bytes. Measured over
 **nine runs**, five of `main`'s DLL and four of the branch's: 0 px within a run (27 pairs), **0
 px outside the minimap in all 20 cross-build pairs**, and four of those **0 px over the whole
 frame**. The fixture is bimodal — two images 48 px apart, one unit's off-screen dot — and

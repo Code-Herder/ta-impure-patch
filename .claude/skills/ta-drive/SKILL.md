@@ -862,6 +862,16 @@ the control enough times to see the mode flip; a fifth run of the control is wha
 The world viewport was 0 px in all twenty cross-build pairs, which is why **diffing the viewport
 alone is the rule and the whole window is the trap.**
 
+**AND IT WORKS — first use, same day, part 2 of the same landing.** Four runs `main, branch,
+main, branch` settled what nine batched runs could not. The fixture flipped mode between the
+first pair and the second, so **both builds visited both modes by construction**: the two
+adjacent-in-time cross-build pairs came out **byte-identical PNGs**, and the same-build control
+across the flip differed by exactly the 44 px the cross-build pairs spanning the flip showed.
+Alternating is not a way of getting a control as well — it is the control, read down the other
+diagonal of the same four runs, which is why it costs four and not nine. **Prefer alternating
+over "run the control enough times"**; the latter is what you fall back to when the two builds
+cannot be swapped between runs.
+
 **A log line beats a picture whenever the thing under test has a log line.** The same landing's
 real oracle was `unit: restorevk -- (N entries seeded …)` plus `vk: unit: restoring the twin HERE
 - N of N`: their absence is what a broken restore arm looks like, and no pixel would have moved,

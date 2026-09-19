@@ -2568,7 +2568,20 @@ that a count which grows is the plan catching up with the work.) The row was
          the four `*2` pipelines. Dead by the same pins, holds **no GL**, and so belongs to
          whoever decides the colour question rather than to this gate.
 
-         **MEASURED over nine runs** (`e5a`, `one-unit`, 1024×768, `restorevk.on`): five of
+         **PART 2 MEASURED IN FOUR RUNS, INTERLEAVED** (`e5a`, `one-unit`, 1024×768, `restorevk.on` +
+         `classicpp.on`, `--maxfps 0`), order `main, branch, main, branch`: the two
+         **adjacent-in-time cross-build pairs are byte-identical PNGs**, 0 px over the whole
+         frame. The fixture flipped mode between the first pair and the second, so both builds
+         visited both modes, and the **same-build control across the flip differs by exactly the
+         same 44 px** as the cross-build pairs that span it — all of it inside the minimap. The
+         build accounts for 0 pixels. Logs: **zero** `VK_ERROR`/`DEVICE_LOST`/`VUID`/validation
+         lines across all four runs (the check that matters, because binding 41 now takes
+         `VK_NULL_HANDLE` unconditionally), every violation counter 0, and the restore lines an
+         identical 16-line multiset in all four. DLL 1 558 016 → **1 547 776** bytes.
+         **Four interleaved runs settled what nine batched ones could not**
+         ([gpu-status](gpu-status.html) §2.78).
+
+         **PART 1 MEASURED over nine runs** (`e5a`, `one-unit`, 1024×768, `restorevk.on`): five of
          `main`'s `ddraw.dll` and four of this branch's, at `--maxfps 0` and `--maxfps 30`.
          Within a run, 27 pairs, **0 px**. Across builds, all 20 pairs, **0 px outside the
          minimap** — and four of them **0 px over the whole frame**, `main`'s own fifth run

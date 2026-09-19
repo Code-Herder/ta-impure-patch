@@ -13306,6 +13306,53 @@ dead by the first two pins, it holds **no GL**, and it is a different question f
 this gate is about GL, and a subsystem that answers to the colour decision above should be
 removed by whoever makes that decision. Filed as its own item rather than swept in here.
 
+#### MEASURED — four runs, INTERLEAVED, and the interleaving is the whole design
+
+`e5a`, scenario `one-unit`, 1024x768, `restorevk.on` + `classicpp.on`, `--maxfps 0`, two DLLs
+built once and never rebuilt during the run: `main` at 1 558 016 bytes, this branch at
+**1 547 776** (10 240 smaller). Order **main, branch, main, branch** — alternating, not
+three-and-three.
+
+| pair | kind | whole frame | outside the minimap |
+|---|---|---|---|
+| grabs 1/2/3 within each of the four runs (12 pairs) | static check | **0 px** | 0 px |
+| `mainA` v `brA` — adjacent in time | **cross-build** | **0 px** | 0 px |
+| `mainB` v `brB` — adjacent in time | **cross-build** | **0 px** | 0 px |
+| `mainA` v `mainB` — same build, across the flip | **control** | 44 px | **0 px** |
+| `brA` v `brB` — same build, across the flip | **control** | 44 px | **0 px** |
+| `mainA` v `brB`, `brA` v `mainB` — across the flip | cross-build | 44 px | **0 px** |
+
+Both adjacent-in-time cross-build pairs are **byte-identical PNGs**. The fixture changed mode
+between the first pair and the second — the same bimodality §2.76 found, one off-camera unit's
+minimap dot — and **both builds followed the fixture rather than each other**: the same-build
+control across the flip differs by exactly the same 44 px as the cross-build pairs that span it.
+So the build accounts for **0 pixels**, and the 44 are the fixture's, entirely inside the
+minimap rect.
+
+**That is what interleaving buys, and it is worth stating as the method rather than the result.**
+§2.76's measurement was batched three-and-three; it read as a clean build difference and took a
+fifth run of `main`'s own DLL to expose as drift. Alternating puts **both builds in both modes by
+construction**, so four runs settle what nine could not — the control is not a separate
+experiment run afterwards, it is the same experiment read down the other diagonal.
+
+**The log is the sharper oracle here, because part 2's one new risk has one.** Binding 41 now
+takes `VK_NULL_HANDLE` unconditionally, and a null descriptor the shader still sampled would be a
+validation error or a device loss — loud in the log, nearly invisible in a screenshot. Across all
+four runs: **zero** `VK_ERROR`, `DEVICE_LOST`, `VUID` or validation-layer lines, and every
+`viol`/`pviol` counter 0. The restore lines come out as an **identical multiset in all four**,
+16 lines each, including the ones that say the live route ran —
+
+```
+unit: restorevk -- ... no read-back and the frame list is published instead (25 entries seeded, 8192-frame bound)
+vk: unit: restoring the twin HERE - 25 of 25 frames over 2048x2048, generation 1
+vk: terr: restoring the tile atlas HERE - 5062 frames over 4096x4096
+vk: unit: restored twin painted here - ... no mirror and no read-back
+```
+
+The fork's own log has been saying *"no mirror and no read-back"* since the list path landed.
+This landing is the point at which that sentence stops being a description of one lane's choice
+and becomes a property of the tree.
+
 #### GATES
 
 `make -C tagpu/ddraw -j$(nproc)` clean; `thread-split: clean — 34 listed file(s)`; `spirv: 49
