@@ -7290,9 +7290,16 @@ Every restored-art A/B on this plan arms `mark.on`, for a reason that has nothin
 markers: `tagpu_rglsl_step` runs from `tagpu_native.c` only when one of `fx|sfx|feat|terr|mark` is
 armed, and `mark` was the only one of the five with no Vulkan pass of its own — so it stepped the
 restorer while leaving exactly one pass drawing, which is what the capture requires. Porting it
-made all five drawing passes and the recipe stops working. `tagpu_rglsl.step` is the replacement:
-`tagpu_rglsl_step_forced()` polls it on a 30-frame cache and steps the restorer while arming no
-pass at all, with a call-count compare so a frame already stepped is not stepped twice.
+made all five drawing passes and the recipe stops working. `tagpu_rglsl.step` was the
+replacement: `tagpu_rglsl_step_forced()` polled it on a 30-frame cache and stepped the restorer
+while arming no pass at all, with a call-count compare so a frame already stepped was not stepped
+twice.
+
+**BOTH LEVERS ARE RETIRED as of 11-5e-2 (§2.74)** — `tagpu_rglsl_step`, `_step_forced` and
+`_calls` went with the GL restorer, so `tagpu_rglsl.step` is an inert file that logs nothing when
+touched. The Vulkan restorer is stepped from `tagpu_vk.c` inside the frame's command buffer and
+needs no lever. The paragraphs above are kept because the TRAP they describe outlives the
+mechanism: a restored-art A/B must prove the twin was painted, and a clean run does not.
 
 #### The fixture is the expensive part, and the four earlier runs failed on it
 
@@ -12588,9 +12595,22 @@ The helper now preserves newlines, and any line number quoted from a masked scan
 
 `tagpu_restoreglsl.c` is deleted entire: 39 functions, **249 of the tree's 540 masked GL call
 sites**, the whole GLSL backend of the Classic++ restorer. With it go the `tagpu_gaf.c` code
-that fed it, the two blocks that stepped it, and one dead accessor. The surface goes
-**540 → 252** and the GL-bearing file count **six → four**, with `tagpu_gaf.c` leaving the set
-entirely.
+that fed it, the **three** blocks that stepped it — two in `tagpu_native.c` (the in-gather step
+and the `tagpu_rglsl_step_forced` block) and one in `tagpu_gui_surf.c` — and one dead accessor.
+The surface goes **540 → 252** and the file count **six → four**.
+
+**`tagpu_gaf.c` leaves the CALL set, which is not the same as being GL-free** (R2 LOW-4, and the
+distinction is the reason this page reports two numbers). Its narrow count is 0 and its **wide
+count is 12**: it still includes `tagpu_restoreglsl.h`, still resolves `glReadPixels` through
+`wglGetProcAddress`, and still names GL entry points in the refusal `tagpu_gaf_atlas_mirror_rgb`
+logs. Those 12 go with the mirror in 11-5e-2b, not here.
+
+**The counts are reproducible now, which they were not before.** `tools/gl-sites.py` is this
+landing's, and it exists because the gate's exit condition is a number that three landings had
+each produced with a different throwaway script. It fixes the three things that were never
+written down — the pattern, comment/string masking, and the file set — and reproduces both ends
+of this landing's claim: `540 / 689` over six files on `main`, `252 / 366` over four here. It
+exits 0 only when the narrow total is 0, so 11-5's exit condition can be gated on directly.
 
 | file | before | after |
 |---|---|---|
@@ -12667,11 +12687,68 @@ arm and from an overflow inside `rlist_add`, which cannot happen if `rlist_add` 
 could only shrink: seeded once, emptied by the first reset, never refilled. Every frame inserted
 afterwards stays indexed for the session.
 
-**The fix is safe by construction, and it is the removal of a guard rather than the addition of
-one.** `rlist_add` already returns at the top unless `rlistWant` and `rlist` are both set, so an
-unarmed list costs one `restore_frame_of` and nothing else. The gate now belongs to the list
-itself — the state that owns the work — instead of to an object belonging to a backend that no
-longer exists.
+#### THE ONE-LINE FIX WAS NOT SAFE, AND THE REVIEW CAUGHT IT BEFORE IT LANDED
+
+The change above — `if (a->job) restore_enqueue(a, e);` → `restore_enqueue(a, e);` — reads as the
+removal of a guard, and it was written up here as one. **It is a use-after-free**, and the
+landing's second reviewer found it. Every link was then checked against the source:
+
+| link | evidence |
+|---|---|
+| the published pointer is RAW | `tagpu_render3do.c` `tagpu_r3d_atlas_restore_list` ends `return s_atlas.rlist;` |
+| it is captured at publish | `tagpu_posedraw.c` `pd_view_publish`: `s_pub.restoreFrames = fr;` |
+| on the FIRST window of the frame | its one caller, `pd_begin`: `int first = (s_win++ == 0); … if (first && s_recording)` |
+| the build ghost paints AFTER that | `tagpu_native.c`: `tagpu_posedraw_begin(&s_pv)` … then `ghost_record(…)`, whose comment reads *"in its own window after the units'… It is AFTER on purpose"* |
+| and a ghost can reach the paint | `tagpu_r3d_atlas_uv` → `atlas_get` → `tagpu_gaf_atlas_get`, which inserts and paints on a miss |
+| where the buffer moves | `restore_enqueue` → `rlist_add` → `rlist_room` → `realloc` — or, out of memory, `free` |
+
+So on any frame where a build ghost needs a texture not yet atlased, the unit atlas's list can be
+reallocated **after** its address was published, and the render thread dereferences the old one
+in the same iteration. The feature and effects atlases escape only because their publication
+happens to be the last write of their frame; the unit atlas does not, and nothing enforces it.
+
+**The feed is therefore NOT restored by this landing.** Not calling `restore_enqueue` is exactly
+today's behaviour — `a->job` has been NULL for the life of the process — so the deletion stays
+behaviour-preserving, and the defect is documented rather than half-fixed. Opening a live
+data path is a different landing from deleting a backend, and it needs its own measurement and
+its own review: it is **11-5e-2c**, and the code carries the whole argument at `atlas_paint`.
+
+**What the deletion leaves behind is stronger than what it found.** `restore_enqueue` and
+`rlist_add` were callerless once the backend went, so both are deleted too — and with them the
+only path by which a published buffer could move:
+
+> `rlist_room` (the `realloc`/`free`) is now reachable only from `rlist_restart`, and
+> `rlist_restart` only from `tagpu_gaf_atlas_restore_vk`, which latches on `a->rlistWant` and
+> runs **once per atlas per session**, before anything has published a non-NULL pointer. So
+> `a->rlist` is assigned exactly once and is neither moved nor freed for the life of the atlas.
+
+That is a lifetime the code enforces. Before this landing the same property held, but it rested
+on `a->job` being NULL for a reason stated three files away — which is precisely the kind of
+predicate THE NAMED RULE is about.
+
+**And there is a second pin underneath, which 11-5e-2c must clear as well.** Feeding the list is
+not sufficient to make the other lane's restore *visible*: `restored` is published by three
+producers and all three are gated on `s_atlas.rgb`, which has exactly one write left in the tree
+(`a->rgb = 0` in `tagpu_gaf_atlas_lost`) —
+
+| producer | expression |
+|---|---|
+| `tagpu_feat.c` | `s_pub.restored = (s_atlas.rgb && tagpu_classicpp_assets())` |
+| `tagpu_fx.c` | `s_pub.restored = (s_atlas.rgb && tagpu_classicpp_assets())` |
+| `tagpu_posedraw.c` | `s_pub.restored = (tagpu_r3d_atlas_rgbref() && …)`, and that accessor returns `s_atlas.rgb` |
+
+— so the measurement above shows the **restorer** running (15 of 15, 5 of 5, 162 drains) and says
+nothing about the drawing passes, which take their "no restore" arm before they look at the list.
+That is consistent with the pixel A/B below finding no change outside the minimap, and it is why
+that A/B is not evidence either way. `tagpu_terr.c` also publishes `restored`, from its own
+fixed-list restore; it is not gated on this field and is the one that is actually live.
+
+**A third thing is armed and waiting for whoever does 11-5e-2c**: `rgbAniso` also lost its only
+writer here, so it reports 0 while `tagpu_vk_unit.c` stands the whole frame down on
+`h.atlasRgbAniso != s_twinAniso` — and `s_twinAniso` is `tagpu_classicpp_light()->aniso`, which
+**defaults to 4**. The test is unreachable only while `restored` is 0. Unpin one without the
+other and the unit pass draws nothing. All three are labelled at their declarations in
+`tagpu_gaf.h`.
 
 **Why no pixel A/B could have caught it.** 11-4c's gate was `0 px of 786432 across all 64
 cross-build pairs`, and it was honestly run. The feed only exists when `tagpu_restorevk.on` is
@@ -12689,8 +12766,9 @@ here a lever file.
 | `dump_if_armed` | same, plus it reads `a->tex` and `a->rgb`, both pinned 0 |
 | `tagpu_gl_rgba_readback`, `rgb_rows` | only callers were `mirror_rgb_step`'s unreachable half |
 | `tagpu_r3d_atlas_texref` | **zero call sites**, and it returned the pinned `s_atlas.tex` |
+| `restore_enqueue`, `rlist_add` | callerless once the backend went — see the review subsection: deleting them is what makes `a->rlist`'s address constant by construction |
 
-Inventory diffed per translation unit against `HEAD`: **45 functions gone, nothing else taken,
+Inventory diffed per translation unit against `HEAD`: **47 functions gone, nothing else taken,
 nothing new**. Every deleted non-static is absent from every object file; `tagpu_rglsl_tileable`
 — which lives in `tagpu_restore_core.c`, not in the deleted backend, and is called from
 `tagpu_terr.c:961` and `tagpu_gaf.c` — still links.
@@ -12706,14 +12784,24 @@ and the terrain's use of it is a different path that this landing did not trace.
 deleted ahead of its consumers is worse than one that is merely unreachable — the same reason
 11-5e-1 left fourteen `*_glreset` functions standing.
 
-Consequently `a->rgb` is now 0 for the life of the process, which pins one more consumer:
-`tagpu_posedraw.c:601` publishes `s_pub.restored = (tagpu_r3d_atlas_rgbref() && ...)`, i.e.
-**always 0**. Labelled in `tagpu_gaf.h`, not acted on here.
+Consequently `a->rgb` is now 0 for the life of the process, which pins **all three** producers of
+`restored` (`tagpu_feat.c`, `tagpu_fx.c`, `tagpu_posedraw.c` — the table in the review subsection
+above), and with them `dumpedN`, `pal`, `palSerial` and `rgbAniso`, none of which has a writer or
+a reader left in the tree. `pal` was already write-only before this landing: the tileability test
+it is named for takes its palette from its caller. All are labelled `[PINNED]` at their
+declarations in `tagpu_gaf.h` and none is acted on here — the struct's restore half unwinds as
+one piece in 11-5e-2b, and a field deleted ahead of that is one whose consumers get found by the
+compiler one at a time.
 
 #### Verification
 
+**The GL-site count, reproducibly.** `tools/gl-sites.py` (new here) on this tree:
+`252 / 366 · 4 file(s)`; on `main`, `540 / 689 · 6 file(s)`. Both match what this section claims.
+
 **Build gate.** `thread-split: clean — 34 listed file(s)`, `spirv: 49 shaders, 33 programs,
-headers current`, exit 0, no new warnings. The SPIR-V gate is untouched because
+headers current`, exit 0, no new warnings. Editing `tools/spirv-gen.py` re-hashes the freshness
+chain, so 13 `inc/spirv/*.spv.h` are regenerated: **one `transform` provenance line each and
+zero SPIR-V payload words changed**, verified by diff. The SPIR-V gate is untouched because
 `tools/spirv-gen.py:extract_restore()` reads the five restore shaders out of
 `tagpu_restore_glsl.h` — the header, note the underscore — and not out of the deleted `.c`;
 `tagpu_restore_glsl.h` also feeds `tools/tascene`'s browser pack and is **not** part of the GL
@@ -12765,5 +12853,14 @@ above are the measurement for that half.
   pre-landing; the quantity depends on how many frames the scene inserts after the arm, and
   this fixture varies a great deal between launches (the feature atlas held 15 entries in one
   run and 1162 in another). A fixture that pins that down is what 11-5e-2b needs.
+- **11-5e-2c — the restore feed, which this landing proved broken and did NOT fix.** The
+  one-line change is a use-after-free (the review subsection above). Restoring the feed needs,
+  in this order: a **bound** — allocate `rlist_cap(a)` frames once in the arm and make
+  `rlist_room` a pure bounds test, 0.36 MB for the unit atlas and 0.72 MB for feat, against a
+  read-back mirror this file already declines to free at 16 MB; an **ordering** for
+  `rlist_restart`, which rewrites the array in place and so is not covered by the bound — take
+  the unit list in `tagpu_posedraw_handover`, after every paint of the frame, rather than at
+  `pd_begin`; and then the two pins above, `restored` and `rgbAniso`, or the unit pass stands
+  down on every frame that would have sampled the restored atlas.
 - **No engine address was touched or read**: the diff's added lines carry no `0x4…`/`0x5…`
   constant, so `exe-reverse-engineering.md` takes nothing from this landing.

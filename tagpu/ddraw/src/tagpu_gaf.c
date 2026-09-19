@@ -30,25 +30,18 @@ static void glog(const char* s)
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
 
-/* GL 3.0's mip generation and GL 1.1's float texture parameter are not in
-   opengl_utils.h; fetched once, the way every tagpu module fetches what the
-   fork does not export (wglGetProcAddress first, then opengl32 itself) */
-typedef void (APIENTRY* PFN_GENERATEMIPMAP)(GLenum);
-typedef void (APIENTRY* PFN_TEXPARAMETERF)(GLenum, GLenum, GLfloat);
-/* ...and GL 1.0's read-back, which opengl_utils.h does not export either
-   (tagpu_overlay.c fetches it the same way) */
+/* GL 1.0's read-back, which opengl_utils.h does not export; fetched once, the
+   way every tagpu module fetches what the fork does not export
+   (wglGetProcAddress first, then opengl32 itself -- tagpu_overlay.c does the
+   same). It is the last GL entry point this file names, and it is named only
+   so that `tagpu_gaf_atlas_mirror_rgb` can say in its refusal which call it
+   would have needed. [The mip-generation and float-parameter typedefs that
+   stood here went in 11-5e-2 with `twin_mips`, and the GL_TEXTURE_MAX_LEVEL /
+   GL_TEXTURE_MAX_ANISOTROPY_EXT fallbacks and the TWIN_ANISO alias with the
+   `glTexParameter` calls that were their only users.] */
 typedef void (APIENTRY* PFN_READPIXELS)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*);
 static PFN_READPIXELS     x_glReadPixels;
 static int s_glFetched;
-#ifndef GL_TEXTURE_MAX_LEVEL
-#define GL_TEXTURE_MAX_LEVEL 0x813D
-#endif
-#ifndef GL_TEXTURE_MAX_ANISOTROPY_EXT
-#define GL_TEXTURE_MAX_ANISOTROPY_EXT 0x84FE
-#endif
-/* the lab's default (tascene-view.html aniso); in the header because a
-   second backend has to apply the SAME ratio or draw different art */
-#define TWIN_ANISO TAGPU_GAF_TWIN_ANISO
 
 static void* getgl(const char* n)
 {
@@ -64,9 +57,8 @@ static void fetch_gl(void)
 {
     if (s_glFetched) return;
     s_glFetched = 1;
-    /* glGenerateMipmap and glTexParameterf went with `twin_mips` and
-       `tagpu_gaf_atlas_restore` in 11-5e-2; glReadPixels is still asked for
-       because `tagpu_gaf_atlas_mirror_rgb` names it in the refusal it logs. */
+    /* glReadPixels alone: `tagpu_gaf_atlas_mirror_rgb` names it in the
+       refusal it logs, and nothing in this file calls it. */
     x_glReadPixels     = (PFN_READPIXELS)getgl("glReadPixels");
 }
 
@@ -91,9 +83,12 @@ static int cell_up(const TAGPU_GAFATLAS* a, int v)
    -- and the cell's alignment slack past it -- painted as a copy of the edge,
    as the R8 upload painted them. 0 when this frame is below the model's floor
    and is never restored at all.
-   SHARED BY THE QUEUE AND THE LIST ON PURPOSE: the whole claim of the list is
-   that it is the frames the GL lane was given, so the two must be built by
-   one piece of code rather than by two that agree today. */
+   ONE BUILDER ON PURPOSE: the whole claim of the published list is that its
+   frames are exactly the frames this atlas painted, so they are built here
+   rather than by a second piece of code that agrees today. (Until 11-5e-2
+   the second reader was the GL restorer's queue, which is what "shared" meant
+   here; the list is now the only one, and the rule is why it stays one
+   function.) */
 static int restore_frame_of(const TAGPU_GAFATLAS* a, const TAGPU_GAFENT* e,
                             TAGPU_RGLSL_FRAME* f)
 {
@@ -194,53 +189,19 @@ static void rlist_restart(TAGPU_GAFATLAS* a, int repaint)
     }
 }
 
-static void rlist_add(TAGPU_GAFATLAS* a, const TAGPU_RGLSL_FRAME* f)
-{
-    if (!a->rlistWant || !a->rlist) return;
-    /* THE BOUND IS REACHED BY RESTARTING, NOT BY GROWING PAST IT. The list is
-       fed for the atlas's life, so any ceiling is a number that can be
-       exceeded; what cannot be exceeded is "the entries that are here", and
-       that is what the restart leaves behind. Said once per restart, because
-       it is a real event a consumer sees as a blank and a repaint. */
-    if (a->rlistN >= rlist_cap(a)) {
-        char b[192];
-        _snprintf(b, sizeof b, "%s: the published restore list reached its %d-frame"
-                  " bound - restarting it from the %d entries in the atlas, so the"
-                  " other lane blanks its twin and repaints",
-                  a->tag ? a->tag : "gaf", rlist_cap(a), a->n);
-        b[sizeof b - 1] = 0;
-        glog(b);
-        rlist_restart(a, 0);
-        /* AND THE FRAME THAT TRIGGERED THE RESTART IS ALREADY IN IT: this is
-           called from `atlas_paint`, which sets `e->ok` before it enqueues, so
-           the re-seed above included it. Appending it again would be harmless
-           (the same rect restored twice) but it would also be the one place
-           where the published list is not the list the GL lane was given,
-           which is the whole claim `restore_frame_of` exists to keep.
-           [FROM THE LANDING-7d REVIEW.] */
-        return;
-    }
-    if (!rlist_room(a, a->rlistN + 1)) return;
-    a->rlist[a->rlistN++] = *f;
-}
-
-/* Rebuild the twin's mip levels 1..mip from level 0 -- after every batch the
-   restorer painted, after a recycle cleared level 0 (the restorer clears
-   only that level: tagpu_restoreglsl.c clear_dest), and once when the twin
-   is made, so it is never sampled incomplete (an incomplete texture reads
-   as opaque black, which the shader would take for a restored texel). */
-/* THE RESTORED TWIN HAS JUST BEEN ZEROED AND THE MIRROR HAS TO SAY SO.
-   `tagpu_rglsl_job_clear` clears the destination atlas to alpha 0 as well as
-   dropping the queue, and a CLEAR IS NOT A PAINT: `tagpu_rglsl_job_painted`
-   does not move for it, the twin's generation does not move, and the shelf
-   gets SMALLER rather than larger -- so not one of the three things
+/* THE DESTINATION HAS JUST BEEN ZEROED AND THE MIRROR HAS TO SAY SO.
+   `job_clear_dest` empties the published list and drops the destination, and
+   a CLEAR IS NOT A PAINT: the twin's generation does not move for it and the
+   shelf gets SMALLER rather than larger -- so not one of the things
    `tagpu_gaf_atlas_mirror_rgb_step` keys on can see it, and a mirror left
-   alone would hold the previous fill's colours over a texture that is now
+   alone would hold the previous fill's colours over a destination that is now
    empty. The next entry re-laid into those rects then draws restored in one
    lane and indexed in the other until its repaint lands.
    This is the third time on this pass that a key which was not the CONTENT's
    key has been wrong, so the zeroing lives HERE, in one function beside the
-   call it mirrors, rather than at each site. */
+   call it mirrors, rather than at each site.
+   [The GL job this used to name went in 11-5e-2; the caller did not, which is
+   why the rule still holds and only the mechanism was reworded.] */
 
 static void rgb_mirror_zeroed(TAGPU_GAFATLAS* a)
 {
@@ -581,9 +542,12 @@ int tagpu_gaf_atlas_mirror_rgb(TAGPU_GAFATLAS* a)
 }
 
 /* THE RESTORED TWIN'S MIRROR IS THE WHOLE MIP CHAIN, not level 0 alone, and
-   the reason is measurable: `tagpu_gaf_atlas_restore` gives a mipped twin
-   GL_LINEAR_MIPMAP_LINEAR to GL_TEXTURE_MAX_LEVEL, so a consumer holding only
-   level 0 draws a different picture wherever the art is minified. On the unit
+   the reason is measurable: the restored twin is mipped and sampled
+   LINEAR_MIPMAP_LINEAR to its top level, so a consumer holding only level 0
+   draws a different picture wherever the art is minified. (The GL producer
+   that made it that way, `tagpu_gaf_atlas_restore`, went in 11-5e-2 -- the
+   MEASUREMENT below is a fact about mip chains and is unaffected, and the
+   shape it argues for is what the Vulkan lane must reproduce.) On the unit
    atlas a 32-texel cell lands on a ~23 px sprite at 1024x768 -- LOD around 0.5,
    which is a blend of levels 0 and 1 -- so "wherever it is minified" is
    ordinary play. MEASURED before this existed: 2 126 of 2 132 unit pixels
@@ -811,15 +775,6 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
     /* the entries went with the texture, so the wall the last fill hit says
        nothing about the next one */
     a->repackWall = 0;
-}
-
-/* one frame onto the restore queue -- and onto the published list, which is
-   the same frame and must stay so: `restore_frame_of` is shared. */
-static void restore_enqueue(TAGPU_GAFATLAS* a, const TAGPU_GAFENT* e)
-{
-    TAGPU_RGLSL_FRAME f;
-    if (!restore_frame_of(a, e, &f)) return;
-    rlist_add(a, &f);
 }
 
 /* tagpu_restoredump.on: the twin as the shader samples it, once per fill of
@@ -1060,8 +1015,9 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
        far-edge sample of a frame whose width is 3 mod 4 takes a quarter
        of its weight from the level-2 texel that covers the slack, so
        unwritten slack would darken that column by a sixteenth. The whole
-       cell is uploaded, and restore_enqueue has the OUT pass paint the
-       twin's slack the same way. */
+       cell is uploaded, and the frame published for the other lane's
+       restore covers the same rect, so its OUT pass paints the slack the
+       same way. */
     {
         const int pw = cw, pr = cw - p - w, pb = ch - p - h;   /* right/bottom: p + slack */
         int k;
@@ -1108,22 +1064,52 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
         e->wrap = art ? (char)tagpu_rglsl_tileable(pixels, w, h, art, e->ck) : 0;
     }
     e->ok = 1; e->resv = 0;
-    /* THE PUBLISHED LIST IS FED HERE, AND UNTIL 11-5e-2 IT WAS NOT. This line
-       read `if (a->job) restore_enqueue(a, e);` -- the GL restorer's job --
-       and `a->job` has been NULL for the life of the process since landing
-       11-4c took the `glGenTextures` that filled `a->tex` out of
-       `tagpu_gaf_atlas_create`: with no source texture `tagpu_gaf_atlas_restore`
-       returned before it could make a job, so this call never ran. The other
-       lane's list was therefore SEEDED ONCE by `tagpu_gaf_atlas_restore_vk`
-       and never fed again -- and worse, `job_clear_dest` (a recycle, a repack)
-       empties it, so after the first reset it stayed empty and every frame
-       inserted afterwards stayed indexed for the session.
-       The guard now belongs to the list: `rlist_add` returns at the top unless
-       `rlistWant` and `rlist` are both set, so an unarmed list costs one
-       `restore_frame_of` and nothing else, and an armed one is fed exactly
-       where its own comment says it is fed ("called from `atlas_paint`, which
-       sets `e->ok` before it enqueues"). [The vulkan-only plan, 11-5e-2.] */
-    restore_enqueue(a, e);
+    /* THE PUBLISHED LIST IS NOT FED HERE, AND THAT IS A KNOWN DEFECT RATHER
+       THAN A DESIGN. This line read `if (a->job) restore_enqueue(a, e);` --
+       the GL restorer's job -- and `a->job` has been NULL for the life of the
+       process since landing 11-4c took the `glGenTextures` that filled
+       `a->tex` out of `tagpu_gaf_atlas_create`: the predicate that read as
+       "the GL restorer is running" had already become "the GL restorer can
+       never run". So the other lane's list is SEEDED ONCE by
+       `tagpu_gaf_atlas_restore_vk` and never fed again, and `job_clear_dest`
+       empties it on any recycle or repack: after the first reset it stays
+       empty and every frame inserted afterwards stays indexed on the consumer
+       for the rest of the session. Measured 2026-09-19 with a probe on
+       `a->rlistWant`: with `tagpu_restorevk.on` armed, feat and fx both report
+       `restoring the atlas HERE - 0 of 0 frames` and zero queue drains.
+
+       THE ONE-LINE FIX IS NOT SAFE AND WAS TAKEN BACK OUT. Enqueueing here
+       makes `a->rlist` mutable during a paint, and `tagpu_posedraw.c`'s
+       `pd_view_publish` captures the RAW POINTER on the FIRST posedraw window
+       of the frame, while `tagpu_native.c`'s `ghost_record` runs AFTER it and
+       reaches this function through `tagpu_r3d_atlas_uv` -> `atlas_get` on a
+       build ghost whose texture is not yet atlased. `rlist_room` would then
+       `realloc` -- or, out of memory, `free` -- the buffer the render thread
+       is about to read. The feat and fx atlases escape only because their
+       publication happens to be the last write of their frame; the unit atlas
+       does not, and nothing enforces that ordering.
+
+       WHAT THE DELETION LEAVES IS STRONGER THAN WHAT IT FOUND. With the feed
+       gone, `rlist_room` is reachable only from `rlist_restart`, and
+       `rlist_restart` only from `tagpu_gaf_atlas_restore_vk`, which latches on
+       `a->rlistWant` and runs once per atlas per session -- before anything
+       has published a non-NULL pointer. So `a->rlist` is assigned exactly
+       once and is neither moved nor freed for the life of the atlas: a
+       lifetime the code enforces, where before it rested on `a->job` being
+       NULL for a reason stated three files away.
+
+       RESTORING THE FEED THEREFORE COSTS A BOUND FIRST, and that is a landing
+       with its own measurement and its own review, not a line here:
+         - the BOUND: allocate `rlist_cap(a)` frames once in the arm and make
+           `rlist_room` a pure bounds test, so the address stays constant with
+           the list live. At `sizeof(TAGPU_RGLSL_FRAME)` that is 0.36 MB for
+           the unit atlas and 0.72 MB for feat, against a read-back mirror
+           this file already declines to free at 16 MB.
+         - and an ORDERING for the restart, which rewrites the array in place
+           and so is not covered by the bound: take the unit list in
+           `tagpu_posedraw_handover`, after every paint of the frame, rather
+           than at `pd_begin`.
+       [The vulkan-only plan, 11-5e-2's review; the feed is 11-5e-2c.] */
 }
 
 /* the insertion shared by atlas_get (which decodes into s_dec first) and

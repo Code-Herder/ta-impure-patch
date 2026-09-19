@@ -3267,8 +3267,18 @@ so since 11-4c that list was seeded once and emptied by the first recycle. Probe
 pre-landing `PAINT AFTER ARM n=15 job=NULL rlistN=0 (will NOT enqueue)` and `0 of 0 frames`,
 0 queue drains; post-landing `rlistN 0 → 1`, `feat 15 of 15`, `fx 5 of 5`, 162 drains. **No
 pixel A/B could have caught it** — the feed exists only under `tagpu_restorevk.on`, which
-11-4c's fixture did not arm. The RGB read-back, its 111 `atlasRgb*` sites across five Vulkan
-passes and the terrain, and `tagpu_posedraw.c`'s `restored` flag are deferred to `11-5e-2b`);
+11-4c's fixture did not arm. **The one-line fix was a use-after-free and the review caught it
+before it landed**: the published list's pointer is captured raw on the frame's FIRST posedraw
+window, and the build ghost paints into the same atlas afterwards, so the `realloc` can move it
+under the render thread — so the feed stays shut, which is exactly today's behaviour, and
+`restore_enqueue` and `rlist_add` go with it, leaving `a->rlist` assigned once and never moved
+by construction. The RGB read-back, its 111 `atlasRgb*` sites across five Vulkan passes and the
+terrain, and all three producers of the `restored` flag are deferred to `11-5e-2b`);
+**`11-5e-2c` restore the feed safely** — a bound (`rlist_cap` allocated once, `rlist_room` a
+pure bounds test), an ordering (take the unit list at the handover, not at `pd_begin`), and the
+two pins that would otherwise make it invisible or fatal: `restored`, gated in all three
+producers on the now-permanently-0 `s_atlas.rgb`, and `rgbAniso`, which reports 0 against a
+`s_twinAniso` that defaults to 4 and stands the unit pass down;
 `11-5e-3` the include residue in `render_gdi.c`, `tagpu_fps.c` and `tagpu_scaffold.c`
 (11-5e-1 took `tagpu_render3do.c`'s).
 **After 11-5e-2 no world pass, no unit pass, no leaf module and no asset module is left on the
@@ -3278,7 +3288,11 @@ run on both trees: `tagpu_hires_draw.c` 104, `tagpu_shadow.c` 87, `opengl_utils.
 unchanged), **and every one of the four is behind escalation reason 1 or waiting on it**, so
 11-5e cannot finish the gate. `tagpu_native.c`, `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c`,
 `tagpu_scaffold.c`, `tagpu_posedraw.c`, `tagpu_overlay.c`, `tagpu_text.c`, `tagpu_ftime.c` and
-`tagpu_gaf.c` are GL-free. (11-5e-1 had left it at 540 in six files, 592 less its own 52.)
+`tagpu_gaf.c` make no GL call — though `tagpu_gaf.c` is not GL-*free*: 0 narrow, **12 wide**,
+which go with the RGB mirror in 11-5e-2b. (11-5e-1 had left it at 540 in six files, 592 less its
+own 52.) **The figures are reproducible on any tree with `tools/gl-sites.py`**, committed by
+11-5e-2 because an exit condition that each landing re-derives with its own script is an
+assertion rather than a gate.
 **The rule the gate found, now named in the plan: deleting a backend is not mostly about
 deleting calls, it is about finding the predicates that encode "the backend is ready" as "the
 work is possible."** Five landings, five instances; the compiler cannot see them, because the

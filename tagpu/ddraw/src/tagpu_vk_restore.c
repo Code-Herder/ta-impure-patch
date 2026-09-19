@@ -2243,14 +2243,21 @@ static void dump_free(const TAGPU_VKPASS* d, struct TAGPU_VKRJOB* g)
 /* One half of the byte oracle, from `step` and outside any render pass:
    collect a copy this slot owes us, or record one.
 
-   THE GL LANE WRITES THE OTHER HALF IN THE SAME PROCESS ON THE SAME FRAMES --
-   tagpu_gaf.c's `dump_twin` and tagpu_terr.c's own dump, both under the same
-   `tagpu_restoredump.on` -- so the two files are one `cmp` apart and the
-   comparison is of the two implementations and of nothing else: no second
-   launch, no second palette, no settle heuristic. A mirrored restore would
-   show as every cell's rows reversed, and a dropped batch as whole cells of
-   alpha 0: on this landing's first run the difference was 6 x 34 x 34 texels,
-   which is what named the bug.
+   THE GL LANE USED TO WRITE THE OTHER HALF IN THE SAME PROCESS ON THE SAME
+   FRAMES, and 11-5e-2 deleted it: `tagpu_gaf.c`'s `dump_if_armed` went with
+   the GL restorer, so THIS DUMP NOW HAS NOTHING TO BE COMPARED AGAINST within
+   a run. What it writes is still the Vulkan lane's own bytes and still useful
+   against a file kept from an older build -- it is no longer a two-lane
+   oracle, and a landing that reads it as one is comparing this lane with
+   itself. (`tagpu_terr.c`'s dump is under the same `tagpu_restoredump.on` and
+   does survive, because the terrain's restore was never the GL restorer's.)
+   While it worked it was worth the lines: no second launch, no second
+   palette, no settle heuristic; a mirrored restore showed as every cell's
+   rows reversed and a dropped batch as whole cells of alpha 0, and on landing
+   7d's first run the difference was 6 x 34 x 34 texels, which is what named
+   the bug. [The name `dump_twin` stood here from 7d until 11-5e-2's review:
+   it was never a function in any revision, only ever a comment's word for
+   `dump_if_armed`.]
 
    AND IT DOES NOT BLOCK THE DEVICE. The copy is recorded into this frame's
    command buffer and read at THIS SLOT'S NEXT step, which is the one instant
@@ -2279,11 +2286,13 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
            four consumers. */
         size_t n = (size_t)(g->dumpBytes - g->dumpSrcBytes);
         /* A CHAIN DUMPS AS `.mips`, LEVEL 0 ALONE AS `.rgba`, and the name is
-           what tells them apart -- the GL lane writes exactly the same two
-           names for exactly the same two cases (tagpu_gaf.c's dump_if_armed),
-           so a mipped consumer's pair is one `cmp` of two whole chains rather
-           than of two level-0 images. That is the whole of landing 7e-2's
-           oracle: the levels are the thing this landing claims to reproduce. */
+           what tells them apart. The GL lane wrote exactly the same two names
+           for exactly the same two cases (`tagpu_gaf.c`'s `dump_if_armed`,
+           deleted in 11-5e-2), which made a mipped consumer's pair one `cmp`
+           of two whole chains rather than of two level-0 images -- the whole
+           of landing 7e-2's oracle, since the levels are what it claimed to
+           reproduce. The naming is kept so that a chain dumped now still
+           compares against one kept from a build that had both lanes. */
         _snprintf(name, sizeof name, "tagpu_restore_%s_vk.%s", g->tag,
                   g->chainN > 0 ? "mips" : "rgba");
         name[sizeof name - 1] = 0;

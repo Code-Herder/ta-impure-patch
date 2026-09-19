@@ -630,9 +630,13 @@ const unsigned char* tagpu_r3d_atlas_mirror_rgb(int* dim, int* rows, int* mips,
 /* THE LIST, AND THE TWIN'S SHAPE WITH IT. On this path there is no read-back
    to carry the shape, so `dim` and `mips` come from the atlas -- and so does
    `aniso`, which the mirror accessor also reports but which was never the
-   mirror's fact: it is the ratio GL applied to the TWIN, and a consumer that
-   cannot apply the same one draws different art wherever a unit is minified at
-   an angle. NULL until the list has been armed AND has entries; a consumer that
+   mirror's fact: it is the ratio the twin was filtered with, and a consumer
+   that cannot apply the same one draws different art wherever a unit is
+   minified at an angle. IT IS 0 ON EVERY PATH SINCE 11-5e-2 -- the GL
+   restorer was the only writer -- so this reports "no anisotropy" while the
+   consumer's own sampler is built at `aniso=`, default 4. See
+   `tagpu_gaf.h` `rgbAniso`: unpinning the list without fixing this stands the
+   unit pass down. NULL until the list has been armed AND has entries; a consumer that
    gets NULL falls back to whatever it did before, which is the indexed atlas. */
 const TAGPU_RGLSL_FRAME* tagpu_r3d_atlas_restore_list(int* dim, int* n, unsigned* gen,
                                                       int* repaint, unsigned* blanks,

@@ -1765,7 +1765,7 @@ def cmd_unitdiff(args):
 # back to palette.pal is right only where the presented factor is 1.0.
 
 def _tileable(px, w, h, key, palette, thr=12.0):
-    """tagpu_restoreglsl.c `tagpu_rglsl_tileable`, in Python: a key anywhere on
+    """tagpu_restore_core.c `tagpu_rglsl_tileable`, in Python: a key anywhere on
     an edge says no, otherwise the mean per-channel distance between the two
     columns and the two rows must both be under the threshold."""
     edges = [px[j * w] for j in range(h)] + [px[j * w + w - 1] for j in range(h)] \

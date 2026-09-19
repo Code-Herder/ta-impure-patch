@@ -1497,14 +1497,21 @@ G15b already built.
   model's receptive field — G15-0's verdict, "nothing under 12×12". `norestore` in
   `tagpu_gui.on` is the A/B: the layer without Classic++ art, so the UI half can be toggled live
   without touching the world's restorer.
-- **The UI steps the restorer when nothing else does** [the landing review found this]. The only
-  other caller of `tagpu_rglsl_step` is the native pass, and it returns early when there is no
-  unit array — **in the shell, and in game with the world passes disarmed**. The UI atlas is the
+- **The UI steps the restorer when nothing else does** [the landing review found this; the GL
+  half of it was deleted in 11-5e-2 — see below]. The only other caller of `tagpu_rglsl_step` was
+  the native pass, and it returns early when there is no unit array — **in the shell, and in game with the world passes disarmed**. The UI atlas is the
   one atlas that exists there, so without this its queue is never drained: every sprite would
   read alpha 0 from an unpainted twin and the UI would stay indexed for ever, silently and with
   nothing in the log to say why. `tagpu_rglsl_calls()` (a call count, new) compared across
   presents says whether the native pass stepped this frame; when it did, the UI does nothing, so
   the 12 ms budget is sliced once either way.
+
+  **11-5e-2 deleted all three of those** — `tagpu_rglsl_step`, `tagpu_rglsl_calls` and this
+  block — with the GL restorer they belonged to, so the paragraph above describes a mechanism
+  that is gone rather than one that is running. **The RULE it established is still the rule for
+  whoever steps a restorer here**, and `tagpu_gui_surf.c` carries it at the site: step before the
+  drain, so that what is painted this frame is what the drain's sprites sample; and the shell,
+  with no unit array, is the case that makes it necessary at all.
 
 ### Measured
 

@@ -162,16 +162,28 @@ typedef struct TAGPU_GAFATLAS {
        `rgb` IS 0 FOR THE LIFE OF THE PROCESS AS OF 11-5e-2. Its one non-zero
        writer was `tagpu_gaf_atlas_restore`, which is gone, and it could not
        have run in any case: it returned at `!a->tex`, and `tex` has been 0
-       since 11-4c (see `tagpu_gaf_atlas_create`). So a pass that gates its
-       restored branch on `rgb` -- `tagpu_posedraw.c`'s `s_pub.restored` is
-       the one left -- publishes 0 every frame. That branch and the mirror
-       below go together in 11-5e-2b; the field is kept until then so the
-       consumers can be unwound with their producer in view. */
+       since 11-4c (see `tagpu_gaf_atlas_create`). So EVERY pass that gates
+       its restored branch on `rgb` publishes 0 every frame, and there are
+       THREE of them, not one:
+           tagpu_feat.c      `s_pub.restored = (s_atlas.rgb && ...)`
+           tagpu_fx.c        `s_pub.restored = (s_atlas.rgb && ...)`
+           tagpu_posedraw.c  `s_pub.restored = (tagpu_r3d_atlas_rgbref() && ...)`
+                             -- and that accessor returns `s_atlas.rgb` too.
+       (`tagpu_terr.c` also publishes `restored`, from its own local and its
+       own fixed-list restore; it is not gated on this field and is the one
+       that is actually live.)
+       THIS IS THE PIN UNDER THE PIN. Feeding the published restore list is
+       not enough to make the other lane's restore run: with `restored` 0 its
+       consumers take the "no restore" arm before they ever look at the list.
+       That branch and the mirror below go together in 11-5e-2b; the field is
+       kept until then so the consumers can be unwound with their producer in
+       view. */
     unsigned int  rgb;
-    /* BUMPED EVERY TIME `rgb` IS CREATED, and never otherwise: a re-arm frees
-       the texture and the job and makes both again, which resets
-       `tagpu_rglsl_job_painted` to 0 -- so the painted count alone is not a
-       content key across that seam. This is the discontinuity it cannot see. */
+    /* BUMPED EVERY TIME `rgb` IS CREATED, and never otherwise: a re-arm freed
+       the texture and made it again, resetting the restorer's painted count
+       to 0 -- so a painted count alone is not a content key across that seam.
+       This is the discontinuity such a count cannot see. Pinned with `rgb`
+       since 11-5e-2 took the only creator; kept for the same reason. */
     unsigned      rgbGen;
     int           prio;
     /* frames whose shorter edge is under this are never queued for restore:
@@ -180,9 +192,17 @@ typedef struct TAGPU_GAFATLAS {
        3.9). 0 = no floor, which is every atlas but the UI's. */
     int           restoreMinEdge;
     int           restoreFailed;
-    int           dumpedN;      /* entries when tagpu_restoredump.on last wrote */
-    const unsigned char* pal;   /* the live palette, for the tileability test */
-    unsigned      palSerial;    /* tagpu_pal serial the TWIN was restored through */
+    /* THE NEXT THREE HAVE NO WRITER AND NO READER LEFT IN THE TREE -- 11-5e-2
+       deleted the GL restorer that was the only one of either. They are 0 and
+       NULL for the life of the process. Kept, not deleted, because 11-5e-2b
+       unwinds this struct's restore half as one piece and a field removed
+       early is a field whose consumers are found by the compiler one at a
+       time. `pal` in particular was already WRITE-ONLY before that: the
+       tileability test it names takes its palette from its caller
+       (`tagpu_rglsl_tileable(px, w, h, pal, key)`), never from here. */
+    int           dumpedN;      /* [PINNED 0] entries when the dump last wrote */
+    const unsigned char* pal;   /* [PINNED NULL] was the tileability palette   */
+    unsigned      palSerial;    /* [PINNED 0] pal serial the twin was made at  */
     /* THE CPU MIRROR (Phase G / G19e, the Vulkan lane). `dim` x `dim` bytes
        holding exactly what has been uploaded to `tex`, written by the same
        atlas_paint that writes GL and by nothing else, so a second backend can
@@ -222,7 +242,17 @@ typedef struct TAGPU_GAFATLAS {
     int            mirrorRgbDim;
     int            mirrorRgbMip;
     int            mirrorRgbMips;   /* top level index read back; 0 = level 0 alone */
-    float          rgbAniso;        /* anisotropy actually applied to the twin, 0 = none */
+    /* [PINNED 0.0f] THE ANISOTROPY APPLIED TO THE TWIN -- and 11-5e-2 deleted
+       the only writer with the GL restorer, so it now reports "none" whatever
+       `aniso=` says. THAT IS A LOADED GUN FOR WHOEVER RESTORES THE FEED:
+       `tagpu_vk_unit.c` stands the whole frame down on
+       `h.atlasRgbAniso != s_twinAniso`, deliberately, so that the two lanes
+       cannot draw differently-filtered art -- and `s_twinAniso` is
+       `tagpu_classicpp_light()->aniso`, which DEFAULTS TO 4. The test is
+       unreachable today only because `restored` is pinned 0 above; the
+       landing that unpins it must give this field a writer, or retire the
+       comparison, or the unit pass draws nothing. [11-5e-2's review.] */
+    float          rgbAniso;
     unsigned      mirrorRgbSerial;
     int           mirrorRgbRows;   /* rows of it that have been read back    */
     unsigned int  mirrorRgbFbo;    /* the read-back's own FBO, made once     */
@@ -385,9 +415,12 @@ int  tagpu_gaf_atlas_mirror(TAGPU_GAFATLAS* a);
    behind, and the step closes that on the frame the paint happened.
 
    STEP IT WHERE THE PAINT IS ALREADY VISIBLE TO THIS FRAME'S DRAWS -- after
-   `tagpu_rglsl_step` and before the ops that sample the twin. tagpu_gui_surf.c
-   does exactly that, for exactly that stated reason, and the mirror is then
-   byte-identical to what those ops sampled rather than a frame behind them.
+   the restorer has run and before the ops that sample the twin, so that the
+   mirror is byte-identical to what those ops sampled rather than a frame
+   behind them. (The GL restorer that was stepped there, and the
+   tagpu_gui_surf.c block that stepped it, both went in 11-5e-2. The rule is
+   the constraint on whoever steps it next, not a description of a call site
+   that still exists.)
 
    Render thread only, GL context current. Arming returns 0 if the memory or
    the FBO was refused and the atlas goes on without one; the step is a no-op
@@ -429,8 +462,15 @@ int  tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a);
 /* THE ANISOTROPY A RESTORED TWIN IS FILTERED WITH, where the extension answers.
    A second backend must apply the same ratio or draw different art wherever the
    texture is minified at an angle -- so this is a shared constant rather than
-   each lane's own choice, and `rgbAniso` below says what was actually applied
-   on the GL side, which is what a consumer compares itself against. */
+   each lane's own choice, and `rgbAniso` below says what was actually applied,
+   which is what a consumer compares itself against. Since 11-5e-2 nothing
+   writes it -- see the field for why that matters more than it looks. */
+/* [NO CONSUMER SINCE 11-5e-2] The ratio the two lanes must agree on. Its only
+   user was `tagpu_gaf.c`'s GL `glTexParameterf`, deleted with the restorer;
+   the Vulkan lane reads `tagpu_classicpp_light()->aniso` instead, which has
+   the same default and is a knob rather than a constant. Kept because the
+   agreement it names is still required -- see `rgbAniso` above, which is the
+   field that must carry it once the restore feed is back. */
 #define TAGPU_GAF_TWIN_ANISO 4.0f
 
 size_t tagpu_gaf_mip_bytes(int dim, int level);

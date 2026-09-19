@@ -2997,17 +2997,26 @@ rm -f $G/tagpu_posedraw.ab $G/tagpu_posedraw_*.ppm; sleep 2; touch $G/tagpu_pose
 <main checkout>/.venv-undither/bin/python tools/vk-ab.py $G --pass posedraw   # 0 px
 ```
 
-- **USE `tagpu_rglsl.step`, NOT `mark.on`, TO MAKE THE RESTORER PAINT.** `touch
-  $G/tagpu_rglsl.step` steps the restorer while arming NO pass, which is what an A/B of restored
-  art needs: the capture refuses when two passes draw, so the stepper must not be one.
+- **RETIRED 2026-09-19 (11-5e-2): `tagpu_rglsl.step` DOES NOTHING NOW.** The lever, its poller
+  `tagpu_rglsl_step_forced`, the call counter `tagpu_rglsl_calls` and `tagpu_rglsl_step` itself
+  were all deleted with the GL restorer. **Touching the file has no effect and produces no log
+  line**, which is the failure mode to recognise: a fixture built on this recipe will run clean
+  and measure an unpainted twin. There is nothing to replace it with and nothing is needed — the
+  Vulkan restorer is stepped from `tagpu_vk.c` inside the frame's own command buffer, on every
+  frame, with no pass armed and no lever. **What survives from the two bullets below is the
+  TRAP, not the recipe**: a restored-art A/B has to establish that the twin was actually painted,
+  and neither arming a pass nor the absence of an error proves it.
+- **[HISTORY — the lever while it existed.]** `touch $G/tagpu_rglsl.step` stepped the restorer
+  while arming NO pass, which is what an A/B of restored art needs: the capture refuses when two
+  passes draw, so the stepper must not be one.
   **Measured 2026-09-17** on `selbox-facings` at 1024×768, `native.on` alone plus the lever:
   **0 px of 786 432** with Classic++ art on, 2 128 non-black a side — identical to what `mark.on`
   gave — and the GL lane's own picture moves by **6 200 bytes** between `assets=1` and `assets=0`,
   which is the proof the twin painted rather than the branch being untaken.
   The bullet below is the history and the trap it replaces; read it before trusting any older
   recipe you find.
-- **`mark.on` WAS the lever, and why it stopped being one.** `tagpu_rglsl_step()` — the only thing
-  that ever paints a Classic++ restored twin — has **two** callers. The one that matters for a
+- **[HISTORY] `mark.on` WAS the lever, and why it stopped being one.** `tagpu_rglsl_step()` — at
+  the time the only thing that ever painted a Classic++ restored twin — had **two** callers. The one that matters for a
   world A/B is `tagpu_native.c:3297`, inside `if (fxOn || sfxOn || featOn || terrOn || markOn)`;
   the other is `tagpu_gui_surf.c:2465`, which steps it when the UI atlas has a restore job of its
   own and nothing else stepped it this frame. Armed with `native.on` alone the first never runs —

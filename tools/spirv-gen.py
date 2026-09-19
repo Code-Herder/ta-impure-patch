@@ -197,8 +197,12 @@ PROGRAMS = [
 # ---------------------------------------------------------------- the restorer
 #
 # THE ONE VARIANT SHADER SET, and the only one read out of a HEADER rather than a
-# .c. `tagpu_restore_glsl.h` holds five shaders as macros, used at call sites in
-# `tagpu_restoreglsl.c` under a prefix the runtime builds:
+# .c. `tagpu_restore_glsl.h` holds five shaders as macros under a prefix the
+# consumer builds. SINCE 11-5e-2 NO C FILE INCLUDES IT: the GLSL backend that
+# compiled these was deleted, so the macros' only readers are this tool (which
+# turns them into the SPIR-V the Vulkan restorer runs) and `tools/tascene`
+# (which extracts the same macros for the browser lab). The GLSL is the
+# SOURCE OF TRUTH for both, and neither lane compiles it as GLSL any more:
 #
 #     #define NK   <n>    output channel-tiles per conv draw
 #     #define WMAX <m>    mat4s in the bound weight range = NK * kmax
@@ -261,7 +265,9 @@ def restore_kmax():
     The format is `unditherer/weights.py`: u32 magic, then u32 depth, ch, ntex,
     then `depth` x {offset, jin, kout, kstride} in vec4 texels. kmax is the
     widest k-block in mat4s, `max(kstride) / 4` -- the same reduction
-    `tagpu_restoreglsl.c:268` does at load time.
+    `tagpu_restore_core.c:139` does at load time. (It was cited as
+    `tagpu_restoreglsl.c:268` until 11-5e-2 deleted that file; the loader is
+    backend-neutral and never moved.)
     """
     import struct
     out = []
@@ -567,9 +573,11 @@ def extract(cfile):
     # THE CENSUS, AND IT IS WHY THE SHAPE ABOVE DOES NOT HAVE TO BE EXHAUSTIVE.
     # Every `"#version` in the preprocessed text is the start of a shader's first
     # literal (the preprocessor has already removed the comments, and none of
-    # these files builds a version line at run time -- tagpu_restoreglsl.c does,
-    # and is deliberately not in SOURCES). So the count must equal the number of
-    # shaders extracted, and a shader written in a shape this tool cannot read
+    # these files ASSEMBLES a version line at run time -- they all carry it in
+    # the literal. `tagpu_restoreglsl.c` did assemble one, which is why it was
+    # deliberately kept out of SOURCES; 11-5e-2 deleted it, so the exclusion is
+    # history rather than a live exception). So the count must equal the number
+    # of shaders extracted, and a shader written in a shape this tool cannot read
     # is an ERROR rather than a silent omission.
     seen = sum(len(_VERSION_LIT.findall(l)) for l in lines if not l.startswith("#"))
     if seen != len(found):

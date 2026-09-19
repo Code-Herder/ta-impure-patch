@@ -2404,7 +2404,8 @@ that a count which grows is the plan catching up with the work.) The row was
        - **11-5e-2 — `tagpu_gaf.c` (39) and `tagpu_restoreglsl.c` (249). LANDED 2026-09-19.**
          `tagpu_restoreglsl.c` deleted entire (39 functions), `tagpu_gaf.c` down to zero GL
          sites, the surface **540 → 252** and the GL-bearing files **six → four**. 45 functions
-         gone, inventory diffed per TU, every deleted non-static absent from every object.
+         gone (47 with the two the review's fix removed), inventory diffed per TU, every
+         deleted non-static absent from every object.
          Measured: within a run 0 px over six pairs, the same build across two RUNS 48 px, and
          cross-build **45 px of 786 432 — 44 in the minimap and one at the mouse pointer**,
          i.e. BELOW the same-build run-to-run noise floor.
@@ -2427,12 +2428,40 @@ that a count which grows is the plan catching up with the work.) The row was
          from an overflow inside the call that never ran. Probed in-process, pre-landing:
          `PAINT AFTER ARM n=15 job=NULL rlistN=0 (this paint will NOT enqueue)` and
          `restoring the atlas HERE - 0 of 0 frames`, 0 queue drains. Post-landing:
-         `rlistN 0 → 1`, `feat 15 of 15`, `fx 5 of 5`, 162 drains. The guard is REMOVED rather
-         than replaced: `rlist_add` already returns unless the list is armed, so the gate
-         belongs to the list — the state that owns the work — instead of to a deleted
-         backend's object. **No pixel A/B could have caught it**: the feed exists only under
-         `tagpu_restorevk.on`, which 11-4c's fixture did not arm. 11-5e-1's HIGH generalised —
-         *a pixel diff cannot cover a lever the fixture does not arm*.
+         `rlistN 0 → 1`, `feat 15 of 15`, `fx 5 of 5`, 162 drains. **No pixel A/B could have
+         caught it**: the feed exists only under `tagpu_restorevk.on`, which 11-4c's fixture
+         did not arm. 11-5e-1's HIGH generalised — *a pixel diff cannot cover a lever the
+         fixture does not arm*.
+
+         **BUT THE ONE-LINE FIX WAS A USE-AFTER-FREE AND IS NOT IN THIS LANDING.** The second
+         reviewer caught it and every link was then checked against the source:
+         `tagpu_posedraw.c`'s `pd_view_publish` captures `s_atlas.rlist` as a RAW pointer on
+         the FIRST posedraw window of the frame, and `tagpu_native.c`'s `ghost_record` runs
+         after it — deliberately, its comment says so — and can reach `atlas_paint` through
+         `tagpu_r3d_atlas_uv` → `atlas_get` on a build ghost whose texture is not yet atlased.
+         `rlist_add` → `rlist_room` then `realloc`s the buffer the render thread is about to
+         read. Feature and effects escape only because their publication happens to be the
+         last write of their frame; the unit atlas does not, and nothing enforces it. So the
+         call stays out, which is **exactly today's behaviour** (`a->job` was always NULL) and
+         keeps the deletion behaviour-preserving, and **`restore_enqueue` and `rlist_add` are
+         deleted with it** — which leaves the property STRONGER than it found it: `rlist_room`
+         is now reachable only from `rlist_restart`, and that only from the one-shot arm, so
+         `a->rlist` is assigned once and never moved or freed. A lifetime the code enforces,
+         where before it rested on `a->job` being NULL for a reason stated three files away.
+       - **11-5e-2c — restore the feed, safely.** The defect above, fixed by construction
+         rather than by a guard, in a landing that can measure it: a **bound** (allocate
+         `rlist_cap(a)` once in `tagpu_gaf_atlas_restore_vk`, make `rlist_room` a pure bounds
+         test — 0.36 MB unit, 0.72 MB feat, against a mirror this file already declines to
+         free at 16 MB), an **ordering** for `rlist_restart`, which rewrites in place and so is
+         not covered by the bound (take the unit list in `tagpu_posedraw_handover`, after every
+         paint of the frame), and then the two pins that would otherwise make it invisible or
+         fatal: **`restored`**, published by all three of `tagpu_feat.c`, `tagpu_fx.c` and
+         `tagpu_posedraw.c` and gated in each on `s_atlas.rgb`, whose only remaining write is
+         `= 0`; and **`rgbAniso`**, which lost its writer here and reports 0 while
+         `tagpu_vk_unit.c` stands the frame down on `h.atlasRgbAniso != s_twinAniso` with
+         `s_twinAniso` defaulting to **4**. Unpin the feed without those and the unit pass
+         draws nothing. All three are labelled `[PINNED]` at their declarations in
+         `tagpu_gaf.h`, and `atlas_paint` carries the whole argument at the site.
 
          Deferred to **11-5e-2b**: the RGB read-back, the `mirrorRgb*` fields and the
          `atlasRgb*` publications — 111 sites across five Vulkan passes, the terrain and the
@@ -2477,13 +2506,22 @@ that a count which grows is the plan catching up with the work.) The row was
      count is taken on both trees with ONE regex in one script rather than quoted from an
      earlier note: a wider pattern (allowing a lower-case letter after the `gl` prefix) reads
      689 on the same tree, because it counts `glyph_raster` and `glreset`, and a number
-     compared against one measured differently is not a comparison. The established pattern is
-     `\b(?:gl|x_gl)[A-Z][A-Za-z0-9]*\s*\(`, over comment-masked source.
+     compared against one measured differently is not a comparison. **Since 11-5e-2 the count
+     is a committed tool rather than a described regex: `tools/gl-sites.py`**, which fixes the
+     pattern (`\b(?:gl|x_gl)[A-Z][A-Za-z0-9]*\s*\(`, plus `--wide` for `oglu_|wgl|xwgl`), the
+     comment- and string-masking, and the file set (`tagpu/ddraw/src/*.c`, never headers), and
+     exits 0 only when the narrow total is 0 — so this row's exit condition can be gated on
+     directly instead of re-derived. It reproduces every figure below, on any tree.
+     [11-5e-2's review: an exit condition nobody else can reproduce is an assertion.]
 
      **No world pass and no unit pass is on that list any more**: `tagpu_native.c`,
      `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c`, `tagpu_scaffold.c`, `tagpu_posedraw.c`,
      `tagpu_overlay.c`, `tagpu_text.c`, `tagpu_ftime.c` and — since 11-5e-2 — `tagpu_gaf.c`
-     are all GL-free. **11-5e-2 took its 288; the remaining 252 are `opengl_utils.c` (31),
+     make no GL call. **That is not the same as GL-free, and `tagpu_gaf.c` is the file where
+     the difference matters**: its narrow count is 0 and its WIDE count is 12 — it still
+     includes `tagpu_restoreglsl.h`, still resolves `glReadPixels` through `wglGetProcAddress`,
+     and still names entry points in a refusal message. Those go with the RGB mirror in
+     11-5e-2b. [11-5e-2's review.] **11-5e-2 took its 288; the remaining 252 are `opengl_utils.c` (31),
      `tagpu_hires_draw.c` (104), `tagpu_shadow.c` (87) and `tagpu_hires.c` (30)**, and every
      one of the four is behind escalation reason 1 or waiting on it. The first draft of this
      line said "the two files below" and left the arithmetic one file short: `tagpu_hires.c`
@@ -2514,8 +2552,11 @@ that a count which grows is the plan catching up with the work.) The row was
         is never made, and `twin_mips` and `dump_if_armed` are unreachable behind the same
         gate. The terrain path bails at `tagpu_terr.c`'s `restore_step`, on `!s_atlasTex`, and
         `s_atlasTex` is created only inside `if (!tagpu_vk_owns_present())`. The remaining
-        `tagpu_rglsl_step()` calls in `tagpu_native.c` and `tagpu_gui_surf.c` step a scheduler
-        with no jobs in it. **This is what makes the deletion statable**: not "nothing seems to
+        `tagpu_rglsl_step()` calls — **three blocks in two files**, two in `tagpu_native.c`
+        (the in-gather step and the `tagpu_rglsl_step_forced` poll) and one in
+        `tagpu_gui_surf.c` — step a scheduler with no jobs in it. (All three went with the
+        backend in 11-5e-2, and with them the `tagpu_rglsl.step` lever the ta-drive skill used
+        to recommend.) **This is what makes the deletion statable**: not "nothing seems to
         call it", but "every producer of its inputs has already stood down, and here is the
         gate each one stops at". It also means the file's 249 calls are not 249 units of work.
      2. **Five files already make no GL call at all** — counted with comments and string

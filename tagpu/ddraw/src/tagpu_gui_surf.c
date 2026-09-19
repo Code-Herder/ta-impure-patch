@@ -2100,26 +2100,24 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
        PURE GL, feeding the twin nothing. `restore_step` leaving `s_colValid` at 0 is
        not a loss: that is what the record's `restored` term reads, and "indexed" is
        the honest answer for a lane with no restored GL twin to sample. */
-    /* STEP THE RESTORER WHEN NOTHING ELSE DID. tagpu_rglsl_step's only other
-       caller is the native pass, which returns early with no unit array — so
-       in the shell, and in game with the world passes disarmed, it never runs
-       and the UI atlas's queue is never drained: every sprite would then read
-       alpha 0 from an unpainted twin and the UI would stay indexed for ever,
-       silently. Comparing the restorer's call count across presents says
-       whether the native pass stepped it this frame; when it did, we do
-       nothing, so the budget is sliced once either way. Before the drain, so
-       what it paints this frame is what the drain's sprites sample. */
     /* THE STEP THAT STOOD HERE WAS THE GL RESTORER'S and it went in 11-5e-2
        with the backend it stepped. It was already unreachable: the block was
        gated on `s_atlas.job`, which is the GL job, and no atlas has had one
        since landing 11-4c stopped filling `a->tex`. The Vulkan restorer is
        stepped from `tagpu_vk.c` inside the frame's command buffer and needs
-       nothing from here. */
+       nothing from here.
+
+       WHAT IT WAS FOR IS STILL THE RULE FOR WHOEVER STEPS A RESTORER HERE:
+       step it BEFORE THE DRAIN, so that what it paints this frame is what the
+       drain's sprites sample. The shell, and the game with the world passes
+       disarmed, is the case that made it necessary -- the native pass returns
+       early with no unit array, so nothing else would drain this atlas's
+       queue and every sprite would read alpha 0 from an unpainted twin, the
+       UI staying indexed for ever and silently. */
     /* G19f landing 4: AND THE RESTORED TWIN IS MIRRORED HERE, between the step
-       that painted it and the drain whose sprites sample it. The comment three
-       lines up is the argument -- "what it paints this frame is what the
-       drain's sprites sample" -- and this read-back is on the same side of that
-       line, so the bytes a second backend is handed are the bytes the GL lane's
+       that painted it and the drain whose sprites sample it. The comment above
+       is the argument -- "what it paints this frame is what the drain's
+       sprites sample" -- and this read-back is on the same side of that line, so the bytes a second backend is handed are the bytes the GL lane's
        own draws read, on the same frame, and not a frame behind them. A no-op
        unless a lane has armed it AND the restorer painted (tagpu_gaf.h). */
     if (s_mirWant && tagpu_gaf_atlas_mirror_rgb(&s_atlas))
