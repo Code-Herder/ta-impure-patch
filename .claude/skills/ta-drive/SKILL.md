@@ -3185,14 +3185,15 @@ tools/tacli ui <i> click SINGLE --device                   # aim where the gadge
   `devres=` beside `ss=`. It is not the default because a selection rect drawn in an `ss` buffer
   is one *supersample* wide (the driver clamps aliased line width to 1), which under `devres`
   reaches the screen thinner and dimmer than the engine's.
-- **`tagpu_selgeom.on` is the answer to that, and the second lever to arm under `devres`.** It
-  draws the rect as two triangles per edge instead of `GL_LINES`, a band of `w` GAME pixels
-  (`arm <i> 'selgeom.on=w=2'`, default 1; `wdev=` states it in device pixels). At `k = 1.5` the
-  rect then reaches full colour — 1019 device pixels at ≥ 0.9 coverage against the line path's 5
-  — and at 1:1 it is **bit-identical**, so the parity md5 does not move (measured 2026-09-11 at
-  `ss = 1`, `ss = 2`, zoom 0.5 and 2.0). The native log line carries
-  `selgeom=<w>gpx@1x|@ss` whenever it is armed, and `selgeom.on=main` turns the 1x detour off
-  (the A/B for whether that apparatus is still owed — it is: 1320 px at `ss = 2`).
+- **`tagpu_selgeom.on` NO LONGER EXISTS — do not reach for it.** It answered the problem above
+  by drawing the rect as two triangles per edge instead of `GL_LINES`, and it went with the GL
+  unit pass in the vulkan-only plan's landing 11-3, together with the `selAt1x` 1x detour it
+  toggled. Arming the file now does nothing at all, which is why it was deleted rather than left
+  to look available. **The Vulkan lane behaves as the `selgeom main` configuration did**: the
+  rect is drawn as geometry and resolved with the rest of the world, never deferred into a 1x
+  buffer. The cost of that, measured before the deletion, is 1320 differing pixels at `ss = 2`
+  against the engine's Bresenham rect; the full table is in
+  [ui-markers](ui-markers.html#drawing-it-as-geometry-instead).
 - **A/B-ing the rect needs a fixture that is frozen without pausing.** `tacli keys <i> tab` opens
   the in-game menu and writes PAUSED across the middle of the viewport, over whatever is there.
   Still tanks on `Two Continents` settle by themselves: `scenarios/selbox-facings.json` and

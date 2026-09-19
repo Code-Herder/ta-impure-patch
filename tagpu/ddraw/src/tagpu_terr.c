@@ -1806,24 +1806,24 @@ int tagpu_terr_handover(TAGPU_TERRHAND* out, unsigned now)
 
 void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
 {
-    /* WHETHER THIS PASS DRAWS, or only hands over. Under `renderer=vulkan` the
-       Vulkan lane owns the present and there is no GL context in the process:
-       the instances, the numbers and the texels below are the GATHER's and are
-       handed to the twin either way, and only the draw stands down. The
-       scaffold's shape (tagpu_scaffold.c) and the same argument.
-       [The vulkan-only plan, landing 4b-2.] */
-    const int gl_draws = !tagpu_vk_owns_present();
+    /* THIS PASS NO LONGER DRAWS; IT GATHERS AND HANDS OVER. It used to do both,
+       picking with `gl_draws = !tagpu_vk_owns_present()` [landing 4b-2]. The GL
+       lane went in landing 11-2 and its draw half here went in 11-3, so the
+       question has one answer and is not asked any more. The instances, the
+       numbers and the texels below are the gather's; the Vulkan twin draws them.
+       The scaffold (tagpu_scaffold.c) has the same shape. */
     int restored;
     /* A FRAME WITH NOTHING TO DRAW HANDS NOTHING OVER. Leaving the previous
        frame's hand-over standing would have the Vulkan lane draw last frame's
        terrain over this frame's -- and on the frame a level is torn down, over
        nothing at all.
 
-       `s_state` IS THE GL PROGRAM'S and is only asked where GL draws: it is
-       permanently 0 on the vulkan-only lane, where `init_gl` is never called,
-       so testing it there would refuse every hand-over. `s_ncell` is the real
-       refusal and it is the gather's own. */
-    if ((gl_draws && s_state != 1) || s_ncell == 0) { s_pubHave = 0; s_abFrame = 0; return; }
+       `s_state` WAS THE GL PROGRAM'S and was only asked where GL drew: it is
+       permanently 0 on this lane, where `init_gl` is never called, so testing it
+       would refuse every hand-over. With the draw gone the term is gone with it,
+       and `s_ncell` -- the gather's own -- is the whole refusal, which is what it
+       always really was. */
+    if (s_ncell == 0) { s_pubHave = 0; s_abFrame = 0; return; }
 
     /* COMPUTED BEFORE THE GATE, because the hand-over carries it: the RGB
        mirror's state and `assets=` are both CPU-side, so this is the gather's
@@ -1845,62 +1845,12 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
            the configuration it actually ships in. The refusal moved to the lane
            that can see the target: if there is none that frame, tagpu_vk.c says so
            by name and captures nothing. [tagpu_vk_world.h.] */
-        if (gl_draws) {
-            glUseProgram(s_prog);
-            x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
-            glUniform1i(s_uFog, v->fogMode & 1);   /* terrain darkens in grey, never hides */
-            if (s_uFogOrg >= 0) x_glUniform2f(s_uFogOrg, (float)v->fogOrgX, (float)v->fogOrgY);
-            if (s_uFogDim >= 0) x_glUniform2f(s_uFogDim, (float)v->fogCols, (float)v->fogRows);
-            x_glUniform1f(s_uZoom, v->zoom > 0.0f ? v->zoom : 1.0f);
-            x_glUniform2f(s_uZoomC, v->zoomCx, v->zoomCy);
-            x_glUniform1f(s_uDepthScale, v->depthScale > 1.0f ? v->depthScale : 512.0f);
-            x_glUniform1f(s_uEnc, TERR_ENC);
-            /* the three the vertex shader rebuilds each cell's quad from */
-            x_glUniform2f(s_uOrigin, s_origX, s_origY);
-            x_glUniform2f(s_uTile0, (float)s_rectTx0, (float)s_rectTy0);
-            x_glUniform2f(s_uTexel, s_iw, s_ih);
-            x_glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, s_atlasTex);
-            x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, palTex);
-            x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, v->fogTex);
-            x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, v->fogLut);
-            x_glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, s_rgbTex);
-            x_glActiveTexture(GL_TEXTURE5); glBindTexture(GL_TEXTURE_2D, s_hTex);
-            x_glActiveTexture(GL_TEXTURE0);
-            /* running OR complete: while the job runs the alpha test in the shader
-               reveals each cell as its out pass lands (and stays indexed elsewhere);
-               a failed or absent job never samples the texture */
-            glUniform1i(s_uRestored, restored);
-            tagpu_shadow_apply(&s_shU);            /* this frame's map, or uShadowOn 0 */
-            /* the lighting: the terrain's sun. uLit is the MASTER ARM (the Classic++
-               colour path, which `assets=`/`light=` only subdivide) and uLambert the
-               `light=` half; uHDim is 0 while there is no usable grid, and the shader
-               then skips the lambert rather than sample a dead or stale texture */
-            glUniform1i(s_uLit, tagpu_classicpp_on() ? 1 : 0);
-            glUniform1i(s_uLambert, tagpu_classicpp_lit() ? 1 : 0);
-            x_glUniform3f(s_uSun, L->sun[0], L->sun[1], L->sun[2]);
-            x_glUniform1f(s_uAmb, L->amb);
-            x_glUniform1f(s_uNorm, 1.0f / L->level);
-            x_glUniform2f(s_uHDim, (float)s_hW, (float)s_hH);
-
-            glBindVertexArray(s_vao);
-            glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-            /* orphan and upload in one call, sized to what this frame USES. Even the
-               whole array is only 2 MB now, but a 1x view needs ~2.5k cells of it and
-               re-specifying the rest every frame would churn driver memory for nothing.
-               (GL_ARRAY_BUFFER's binding is not VAO state, so binding it to re-specify
-               the storage leaves the attribute's own buffer binding alone.) */
-            glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)s_ncell * ICOMP * 2, s_inst,
-                         GL_STREAM_DRAW);
-
-            {
-
-                /* opaque, and the far plane of the frame: depth writes ON, no
-                   blending needed (the FBO is premultiplied and terrain's alpha is
-                   1 everywhere) */
-                x_glDrawArraysInstanced(GL_TRIANGLES, 0, 6, s_ncell);
-
-            }
-        }
+        /* THE GL DRAW STOOD HERE -- the program, its eighteen uniforms, the six
+           texture units, the instance upload and one glDrawArraysInstanced.
+           Deleted by the vulkan-only plan's landing 11-3. Everything above is
+           the GATHER and still runs: the instances, the numbers and the texels
+           are built the same way and `terr_publish` below hands them to the
+           Vulkan twin, which is what draws them. */
         if (taking) {
             /* THE A/B CLAIM, which is all that is left of it. Until landing 4d-2 this
                pass also captured a GL half (`tagpu_abshot.c`) and claimed the Vulkan one

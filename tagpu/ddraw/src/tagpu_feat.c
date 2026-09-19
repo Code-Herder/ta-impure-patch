@@ -1155,13 +1155,12 @@ int tagpu_feat_handover(TAGPU_FEATHAND* out, unsigned now)
 
 void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex)
 {
-    /* WHETHER THIS PASS DRAWS, or only hands over. The vertices, the
-       numbers and the texels below are the GATHER's and reach the twin
-       either way; only the draw stands down. Unlike the terrain pass, this
-       one's gather needed nothing: a call-graph audit puts GL in `init_gl`,
-       this function and the shader helper, and nowhere else.
-       [The vulkan-only plan, landing 4b-2.] */
-    const int gl_draws = !tagpu_vk_owns_present();
+    /* THIS PASS NO LONGER DRAWS; IT GATHERS AND HANDS OVER. It used to do both,
+       picking with `gl_draws = !tagpu_vk_owns_present()` [landing 4b-2]; the GL
+       lane went in 11-2 and this draw half in 11-3. The gather needed nothing
+       from GL in the first place -- a call-graph audit put GL in `init_gl`, this
+       function and the shader helper, and nowhere else -- so what is left here
+       is the whole of what this pass was doing for the surviving lane. */
     int total = s_nv[B_SHADOW] + s_nv[B_BODY];
     int taking;
     /* A FRAME WITH NOTHING TO DRAW HANDS NOTHING OVER. Leaving the previous
@@ -1169,11 +1168,11 @@ void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex)
        features over this frame's -- and on the frame a level is torn down, over
        nothing at all.
 
-       `s_state` IS THE GL PROGRAM'S and is only asked where GL draws: it is
-       permanently 0 where `init_gl` is never called, so testing it there would
-       refuse every hand-over on the one lane the hand-over is for. `total` is
-       the gather's own count and is the real refusal. */
-    if ((gl_draws && s_state != 1) || total == 0) { s_pubHave = 0; s_abFrame = 0; return; }
+       `s_state` WAS THE GL PROGRAM'S and was only asked where GL drew: it is
+       permanently 0 where `init_gl` is never called, so testing it would refuse
+       every hand-over on the one lane the hand-over is for. The draw is gone and
+       the term with it; `total`, the gather's own count, is the whole refusal. */
+    if (total == 0) { s_pubHave = 0; s_abFrame = 0; return; }
 
     /* HOISTED OUT OF THE DRAW, because on the vulkan-only lane the A/B is
        armed without one. Read once so the two arms cannot disagree about
@@ -1190,50 +1189,11 @@ void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex)
        that can see the target: if there is none that frame, tagpu_vk.c says so
        by name and captures nothing. [tagpu_vk_world.h.] */
 
-    if (gl_draws) {
-        glUseProgram(s_prog);
-        x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
-        glUniform1i(s_uFog, v->fogMode & 1);        /* features darken in grey */
-        if (s_uFogOrg >= 0) x_glUniform2f(s_uFogOrg, (float)v->fogOrgX, (float)v->fogOrgY);
-        if (s_uFogDim >= 0) x_glUniform2f(s_uFogDim, (float)v->fogCols, (float)v->fogRows);
-        x_glUniform1f(s_uZoom, v->zoom > 0.0f ? v->zoom : 1.0f);
-        x_glUniform2f(s_uZoomC, v->zoomCx, v->zoomCy);
-        x_glUniform1f(s_uDepthScale, v->depthScale > 1.0f ? v->depthScale : 512.0f);
-        x_glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, s_atlas.tex);
-        x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, palTex);
-        x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, v->fogTex);
-        x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, v->fogLut);
-        x_glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, s_atlas.rgb);
-        x_glActiveTexture(GL_TEXTURE0);
-        glUniform1i(s_uRestored, (s_atlas.rgb && tagpu_classicpp_assets()) ? 1 : 0);
-        glUniform1i(s_uLit, s_cpp ? 1 : 0);    /* the Classic++ colour branch     */
-        glBindVertexArray(s_vao);
-        glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-        /* orphan and size to what this frame USES (shadow then body, contiguous),
-           not the two staging arrays' 7.9 MB -- as tagpu_terr.c does */
-        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)total * FVST * 4, NULL, GL_STREAM_DRAW);
-        if (s_nv[B_SHADOW])
-            glBufferSubData(GL_ARRAY_BUFFER, 0,
-                            (GLsizeiptr)s_nv[B_SHADOW] * FVST * 4, s_verts[B_SHADOW]);
-        if (s_nv[B_BODY])
-            glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)s_nv[B_SHADOW] * FVST * 4,
-                            (GLsizeiptr)s_nv[B_BODY] * FVST * 4, s_verts[B_BODY]);
-        glEnable(GL_BLEND);
-        x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);      /* premultiplied FBO */
-
-        /* shadows are ground decals: they test depth but never write it, so a
-           feature's own body is not fighting its shadow and nothing is occluded
-           by a shadow that the engine would have drawn under it */
-        if (s_nv[B_SHADOW]) {
-            x_glDepthMask(GL_FALSE);
-            x_glDrawArrays(GL_TRIANGLES, 0, s_nv[B_SHADOW]);
-            x_glDepthMask(GL_TRUE);
-        }
-        /* bodies write depth — this is what occludes units behind trees */
-        if (s_nv[B_BODY])
-            x_glDrawArrays(GL_TRIANGLES, s_nv[B_SHADOW], s_nv[B_BODY]);
-
-    }
+    /* THE GL DRAW STOOD HERE -- the program, its uniforms, the texture units,
+       the shadow pass with depth writes off and the body pass with them on.
+       Deleted by the vulkan-only plan's landing 11-3. Everything above is the
+       GATHER and still runs; `feat_publish` below hands the vertices, the
+       numbers and the texels to the Vulkan twin, which draws them. */
     if (taking) {
         /* THE A/B CLAIM, which is all that is left of it. Until landing 4d-2 this
            pass also captured a GL half (`tagpu_abshot.c`) and claimed the Vulkan one

@@ -193,6 +193,16 @@ difference:
 
 ### Drawing it as geometry instead — `tagpu_selgeom.on` (2026-09-11)
 
+> **THE LEVER IS GONE; THE MEASUREMENTS ARE WHY THIS SECTION STAYS.** `tagpu_selgeom.on` and
+> the `selAt1x` detour it toggled were both halves of the GL unit pass, deleted with it in the
+> vulkan-only plan's landing 11-3. Nothing below is a knob any more. It is kept because the
+> numbers are the only record of what a one-pixel rect costs under each strategy, and because
+> the Vulkan lane inherited one of the two: it draws the rect as geometry **always** and has no
+> 1x resolve to defer into, so it sits permanently in what GL called `selgeom main` — the
+> configuration measured at the end of this section, 1320 differing pixels at `ss = 2`. That is
+> a known, stated cost of the vulkan-only move, not a regression discovered later
+> (`tagpu_vk_world.h`, and the plan's landing 11-3).
+
 The 1x detour above only exists because a GL line's width is not ours to set. It
 needs a buffer at the game's own resolution to draw into, so under
 `tagpu_devres.on` — where the composite reads the supersampled buffer and there

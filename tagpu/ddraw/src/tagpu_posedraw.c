@@ -975,7 +975,6 @@ void tagpu_posedraw_begin_ghost(const TAGPU_PDVIEW* v) { pd_begin(v, 1); }
 
 static void pd_begin(const TAGPU_PDVIEW* v, int ghostWindow)
 {
-    const int gl_draws = !tagpu_vk_owns_present();
     if (s_state != 1) return;
     /* THE PUBLISH WINDOW. EVERY window of a frame records, since landing 6 --
        the build ghost draws in a SECOND one (ghost_pass opens its own, after
@@ -1002,37 +1001,10 @@ static void pd_begin(const TAGPU_PDVIEW* v, int ghostWindow)
         if (!ghostWindow && s_recording && s_ab && !s_abDone)
             s_abTaking = 1;
     }
-    /* THE PROGRAM AND ITS UNIFORMS ARE GL. Everything above -- the
-       recording window (`s_recording = s_mirrorWant`) and the A/B's arming --
-       is the pass, and is what makes a hand-over happen at all.
-       [The vulkan-only plan, landing 4b-2.] */
-    if (gl_draws) {
-        glUseProgram(s_prog);
-        x_glUniform2f(u_game, v->game[0], v->game[1]);
-        x_glUniform2f(u_off, 0.0f, 0.0f);
-        glUniform1f(u_zoom, v->zoom);
-        x_glUniform2f(u_zoomC, v->zoomC[0], v->zoomC[1]);
-        if (u_zoomF >= 0)  glUniform1f(u_zoomF, v->zoom);
-        if (u_zoomCF >= 0) x_glUniform2f(u_zoomCF, v->zoomC[0], v->zoomC[1]);
-        glUniform1f(u_depthScale, v->depthScale);
-        if (u_ss >= 0) glUniform1f(u_ss, v->ss);
-        x_glUniform2f(u_fogOrg, v->fogOrg[0], v->fogOrg[1]);
-        x_glUniform2f(u_fogDim, v->fogDim[0], v->fogDim[1]);
-        glUniform1i(u_scafOn, v->scafOn ? 1 : 0);
-        x_glUniform4f(u_scafP, v->scafP[0], v->scafP[1], v->scafP[2], v->scafP[3]);
-        glUniform1i(u_lit, v->lit ? 1 : 0);
-        x_glUniform3f(u_sun, v->sun[0], v->sun[1], v->sun[2]);
-        glUniform1f(u_amb, v->amb);
-        glUniform1f(u_norm, v->norm);
-        glUniform1i(u_shadow, 0);
-        glUniform1i(u_depthPass, 0);
-        glUniform1i(u_range, PD_R_BODY);
-        glUniform1i(u_restored,
-                    (tagpu_r3d_atlas_rgbref() && tagpu_classicpp_on()) ? 1 : 0);
-        x_glUniform2f(u_shd, (float)v->shNeutral, (float)v->shDir);
-        tagpu_shadow_apply(&s_shU);
-        x_glBindBufferBase(GL_UNIFORM_BUFFER, 0, s_ubo);
-    }
+    /* THE PROGRAM AND ITS UNIFORMS STOOD HERE, deleted by landing 11-3.
+       Everything above -- the recording window (`s_recording = s_mirrorWant`)
+       and the A/B's arming -- is the pass, and is what makes a hand-over
+       happen at all. */
 }
 
 /* the geometry, the material stream and the pose all have to be present and
@@ -1069,31 +1041,13 @@ static const TAGPU_PBGEOM* unit_ok(const TAGPU_PDUNIT* u, const TAGPU_PBMAT** mo
 
 void tagpu_posedraw_unit(const TAGPU_PDUNIT* u)
 {
-    const int gl_draws = !tagpu_vk_owns_present();
     const TAGPU_PBMAT* m;
     const TAGPU_PBGEOM* g = unit_ok(u, &m, TAGPU_PB_BODY);
     if (!g) return;
     upload_pose(u);
-    /* THE UNIFORMS AND THE DRAW ARE GL; `upload_pose` above and
-       `pd_record` below are the pass, and the twin draws from the record.
-       [The vulkan-only plan, landing 4b-2.] */
-    if (gl_draws) {
-        x_glUniform4f(u_anchor, u->ax, u->ay, u->wx0, u->wz0);
-        glUniform1f(u_enc, u->enc);
-        glUniform1i(u_fog, u->fog);
-        glUniform1f(u_alpha, u->alpha);
-        glUniform1f(u_waterT, u->waterT);
-        glUniform1f(u_digT, u->digT);
-        glUniform1i(u_waterMode, u->waterMode);
-        glUniform1i(u_nanoOn, u->nanoOn);
-        if (u->nanoOn) {
-            glUniform1f(u_nanoT, u->nanoT);
-            x_glUniform3f(u_nanoC, u->nanoC[0], u->nanoC[1], u->nanoC[2]);
-        }
-        x_glUniform3f(u_cast, u->cast[0], u->cast[1], u->cast[2]);
-        glBindVertexArray(m->vao);
-        x_glDrawArrays(GL_TRIANGLES, g->first[TAGPU_PB_BODY], g->count[TAGPU_PB_BODY]);
-    }
+    /* THE PER-UNIT UNIFORMS AND THE DRAW STOOD HERE, deleted by landing 11-3.
+       `upload_pose` above and `pd_record` below are the pass, and the Vulkan
+       twin draws from the record. */
     pd_record(u, g, m);
     /* A GHOST IS NOT A UNIT. It rides this same entry point on purpose — that
        is the whole of its draw — but the two counters below feed the `posed=N`
@@ -1147,13 +1101,9 @@ void tagpu_posedraw_redraw(const TAGPU_PDUNIT* u)
 
 void tagpu_posedraw_end(void)
 {
-    const int gl_draws = !tagpu_vk_owns_present();
     if (s_state != 1) return;
-    /* THE PUBLISH IS THE PASS; this one call is the draw's.
-       [The vulkan-only plan, landing 4b-2.] */
-    if (gl_draws) {
-        glBindVertexArray(0);
-    }
+    /* the one GL call this function made -- glBindVertexArray(0) -- went with
+       the draw halves [landing 11-3]. The publish below IS the pass. */
     if (!s_recording) return;
     s_recording = 0;
 

@@ -298,8 +298,9 @@ else stays ours, so both boxes land in one `glshot`):
    Bresenham step landing on the other neighbour, or a pixel where ours is correctly occluded
    and the A/B's engine box (which composites over our whole world) is not.
 
-**And since 2026-09-11 it can be drawn as GEOMETRY instead, behind
-`tagpu_selgeom.on`** — each edge two triangles, a band of `w` game pixels
+**From 2026-09-11 it could be drawn as GEOMETRY instead, behind `tagpu_selgeom.on`; since
+landing 11-3 of the vulkan-only plan that lever is GONE and the Vulkan lane draws the rect as
+geometry unconditionally** — each edge two triangles, a band of `w` game pixels
 (`w=`, or `wdev=` in device pixels) expanded along the edge's *minor* axis,
 because Bresenham's own rule is one pixel per major-axis step. That is the width
 the driver would not give us, and it is the thing `devres` was waiting on: at
@@ -307,8 +308,12 @@ the driver would not give us, and it is the thing `devres` was waiting on: at
 peak 1.000) where the GL line reaches 5 and peaks at 0.928. It is **bit-identical
 at 1:1** — 0 differing pixels and an unmoved md5 at `ss = 2` with the resolve, at
 `ss = 1`, at zoom 0.5 and 2.0, and on the slope fixture — and off by default.
-`selgeom main` turns `selAt1x` off for the A/B; that costs 1320 pixels at
-`ss = 2`, so the 1x detour is still what makes the default exact.
+`selgeom main` turned `selAt1x` off for the A/B; that cost 1320 pixels at
+`ss = 2`, so on GL the 1x detour was what made the default exact. **That detour is not
+expressible on the Vulkan lane** (`tagpu_vk_world.h`: the world resolves in one draw, so there
+is no 1x buffer to defer the rect into), which is why both halves were deleted together rather
+than one being ported: the surviving lane is permanently the `selgeom main` measurement, and
+that 1320-pixel figure is the stated cost of the move.
 [UI markers](ui-markers.html) §1 has the numbers and the two construction traps
 (the cap must run along the segment; the band is nudged 1/256 px off the tie).
 
