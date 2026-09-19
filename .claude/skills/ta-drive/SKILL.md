@@ -3189,11 +3189,13 @@ tools/tacli ui <i> click SINGLE --device                   # aim where the gadge
   by drawing the rect as two triangles per edge instead of `GL_LINES`, and it went with the GL
   unit pass in the vulkan-only plan's landing 11-3, together with the `selAt1x` 1x detour it
   toggled. Arming the file now does nothing at all, which is why it was deleted rather than left
-  to look available. **The Vulkan lane behaves as the `selgeom main` configuration did**: the
-  rect is drawn as geometry and resolved with the rest of the world, never deferred into a 1x
-  buffer. The cost of that, measured before the deletion, is 1320 differing pixels at `ss = 2`
-  against the engine's Bresenham rect; the full table is in
-  [ui-markers](ui-markers.html#drawing-it-as-geometry-instead).
+  to look available. **And do not expect a selection rect of ours on this lane at all** — the
+  rect was emitted only inside the deleted GL draw and nothing replaced it, so the ENGINE draws
+  every selection box, at its unzoomed projection. At zoom ≠ 1 that scatters, and it is
+  UNMEASURED; if you are looking at selection boxes in a capture, that is what you are looking
+  at. The gap dates from landing 4b. The GL path's numbers (1320 differing pixels at `ss = 2` for
+  `selgeom main`) are in [ui-markers](ui-markers.html#drawing-it-as-geometry-instead) as a record
+  of that path, not of this one.
 - **A/B-ing the rect needs a fixture that is frozen without pausing.** `tacli keys <i> tab` opens
   the in-game menu and writes PAUSED across the middle of the viewport, over whatever is there.
   Still tanks on `Two Continents` settle by themselves: `scenarios/selbox-facings.json` and

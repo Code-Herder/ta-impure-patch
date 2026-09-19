@@ -299,8 +299,9 @@ else stays ours, so both boxes land in one `glshot`):
    and the A/B's engine box (which composites over our whole world) is not.
 
 **From 2026-09-11 it could be drawn as GEOMETRY instead, behind `tagpu_selgeom.on`; since
-landing 11-3 of the vulkan-only plan that lever is GONE and the Vulkan lane draws the rect as
-geometry unconditionally** — each edge two triangles, a band of `w` game pixels
+landing 11-3 of the vulkan-only plan that lever is GONE — and so is the rect. THE VULKAN LANE
+DRAWS NO SELECTION RECT AT ALL** (§2.65's correction); everything in this entry describes the GL
+path, which is the only one that ever had it. On GL it was — each edge two triangles, a band of `w` game pixels
 (`w=`, or `wdev=` in device pixels) expanded along the edge's *minor* axis,
 because Bresenham's own rule is one pixel per major-axis step. That is the width
 the driver would not give us, and it is the thing `devres` was waiting on: at
@@ -312,8 +313,9 @@ at 1:1** — 0 differing pixels and an unmoved md5 at `ss = 2` with the resolve,
 `ss = 2`, so on GL the 1x detour was what made the default exact. **That detour is not
 expressible on the Vulkan lane** (`tagpu_vk_world.h`: the world resolves in one draw, so there
 is no 1x buffer to defer the rect into), which is why both halves were deleted together rather
-than one being ported: the surviving lane is permanently the `selgeom main` measurement, and
-that 1320-pixel figure is the stated cost of the move.
+than one being ported. **But do not read the 1320 figure as the cost of the move** — that would
+be the cost if this lane drew the rect at `ss`, and it does not draw one at all. The real
+deviation is in §2.65 and it is unmeasured.
 [UI markers](ui-markers.html) §1 has the numbers and the two construction traps
 (the cap must run along the segment; the band is nudged 1/256 px off the tie).
 
@@ -11226,10 +11228,40 @@ same `ghost_one` path but stayed at `queue=0` in every run.
 
 **`tagpu_selgeom.on` is gone rather than left inert.** Its only reader was `selAt1x` inside the
 deleted draw, so arming the file would have done nothing while still looking available — a lever
-that lies. The Vulkan lane behaves as GL's `selgeom main` did (the rect rasterised at `ss` and
-downsampled, never deferred into a 1x buffer), which `tagpu_vk_world.h` records as not
-expressible otherwise. The cost measured before the deletion — 1 320 differing pixels at `ss=2`
-against the engine's Bresenham rect — is kept in [UI markers](ui-markers.html).
+that lies.
+
+**AND THE SELECTION RECT ITSELF IS NOT OURS ON THIS LANE. This landing's review caught the plan,
+this page, `ui-markers.md`, the `ta-drive` skill and three code comments all saying otherwise**,
+so it is worth stating flatly:
+
+* The rect was emitted **only** inside the GL unit draw, below the `!gl_draws` hand-over return.
+  No `tagpu_vk_*` file contains selection-rect code.
+* `s_selComplete` — the flag `tagpu_markown.c` reads through
+  `tagpu_native_selbox_complete()` to suppress the **engine's** own box draw — had its only store
+  in that same block. It has therefore been permanently 0 on this lane since landing 4b, so the
+  suppression never fires and **the engine draws every selection box itself**.
+* The engine draws them at its **unzoomed** projection, which at zoom ≠ 1 is the visible scatter
+  the GL pass existed to avoid.
+
+**None of that is a regression from this landing** — the store was already unreachable and
+deleting it changed nothing. It is a gap that has been open since 4b and was being described
+backwards.
+
+**And it is not currently VISIBLE, for a reason worth writing down: the scatter needs zoom ≠ 1,
+and zoom ≠ 1 is itself unreachable on this lane.** Measured 2026-09-18 by trying it: `tacli wheel`
+delivers the command (`input: keys wheel:-3`) and `tagpu_zoom.c` answers `zoom: wheel ignored — no
+zoomed world on screen`, because `s_live` is set only where the GL zoom path ran; the packet's
+`z=` stays `1.000`. At zoom 1 the engine's box is in the right place, so today the engine simply
+draws a correct-looking selection box and nothing looks wrong. **The deviation is latent, not
+absent** — it appears the moment the zoom lever reaches this lane, which is a separate known gap
+in the same plan. Whoever closes that one inherits this one on the same day.
+
+The seam for a fix is left in place deliberately: a Vulkan pass that emits the boxes writes
+`s_selComplete` and the engine stands down exactly as it did on GL.
+
+The GL path's own numbers — 1 320 differing pixels at `ss=2` for `selgeom main` against the
+engine's Bresenham rect — are kept in [UI markers](ui-markers.html) as the record of that path,
+not as the cost of this one.
 
 **Two of the eight files the plan names are NOT in this landing.** `tagpu_shadow.c` and
 `tagpu_hires_draw.c` are the ones where the producer *is* the half being deleted: `s_pubHave = 1`

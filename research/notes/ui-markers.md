@@ -197,11 +197,13 @@ difference:
 > the `selAt1x` detour it toggled were both halves of the GL unit pass, deleted with it in the
 > vulkan-only plan's landing 11-3. Nothing below is a knob any more. It is kept because the
 > numbers are the only record of what a one-pixel rect costs under each strategy, and because
-> the Vulkan lane inherited one of the two: it draws the rect as geometry **always** and has no
-> 1x resolve to defer into, so it sits permanently in what GL called `selgeom main` — the
-> configuration measured at the end of this section, 1320 differing pixels at `ss = 2`. That is
-> a known, stated cost of the vulkan-only move, not a regression discovered later
-> (`tagpu_vk_world.h`, and the plan's landing 11-3).
+> **the Vulkan lane inherited NEITHER: it draws no selection rect at all.** The rect lived only
+> inside the GL unit draw, and no `tagpu_vk_*` file has replaced it — so on that lane the ENGINE
+> draws every selection box, at its unzoomed projection, which at zoom ≠ 1 scatters. That gap
+> dates from landing 4b, not from the deletion, and it is UNMEASURED. An earlier draft of this
+> box said the lane "draws the rect as geometry always" and quoted the 1320-pixel figure below as
+> the cost of the move; landing 11-3's review disproved both. The numbers below measure the GL
+> path against the engine and are kept for that. See gpu-status §2.65.
 
 The 1x detour above only exists because a GL line's width is not ours to set. It
 needs a buffer at the game's own resolution to draw into, so under

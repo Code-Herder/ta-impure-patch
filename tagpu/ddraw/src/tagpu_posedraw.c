@@ -249,7 +249,6 @@ static int          s_pubHave;
    with no posed unit on screen the ghost's window IS the first. */
 static int          s_win;          /* windows opened this frame              */
 static int          s_recording;    /* inside a recording window              */
-static unsigned     s_nghost;       /* ghosts recorded this frame             */
 static int          s_abTaking;     /* THIS window opened the capture         */
 static int          s_saidFrame;
 static int          s_abClaim;      /* it reached the disk; frame-scoped      */
@@ -962,7 +961,6 @@ static void pd_record(const TAGPU_PDUNIT* u, const TAGPU_PBGEOM* g,
        the same frame and over the same array with the same `unit_ok` gate, so
        this reproduces which casters are in the map rather than guessing at it. */
     r->ghost = u->ghost ? 1 : 0;
-    if (r->ghost) s_nghost++;
     r->casts = (s_depthOn && !u->castSkip) ? 1 : 0;
     if (r->casts) s_ncast++;
 }
@@ -1139,15 +1137,22 @@ void tagpu_posedraw_end(void)
        the draws the refusal exists to catch. It is read at the moment the
        hand-over is taken, which is later in this same iteration of
        render_ogl.c's loop than every GL draw in the frame. */
-    /* AND A FRAME THAT DREW A BUILD GHOST CANNOT CLAIM THE PAIR. The GL half is
-       blacked and read back around the FIRST window, a few lines above, and the
-       ghost draws in a SECOND one -- so the GL capture cannot contain a ghost
-       while the Vulkan frame, which is the whole presented image, can. Landing 6
-       carries the ghost, so on exactly the frames that have one the A/B stops
-       being a valid oracle, and it says so by NOT CLAIMING rather than by
-       reporting a difference that is the instrument's own. Landing 6's oracle
-       is the two-window comparison instead (gpu-status §2.40), which needs
-       neither a bracket nor a single drawing pass. */
+    /* THE GHOST SUPPRESSION IS GONE, BECAUSE THE PAIR IT PROTECTED IS [landing
+       11-3]. It read `s_nghost ? 0 : ...` because the A/B was a SAME-RUN pair:
+       the GL half was blacked and read back around the FIRST window while the
+       ghost drew in a SECOND, so the GL capture could not contain a ghost that
+       the Vulkan frame did, and a frame with one was not a valid oracle. The GL
+       capture half went in landing 4d-2; what the lever claims now is the
+       VULKAN capture alone, diffed file-to-file against another BUILD, and both
+       sides of that comparison carry whatever the frame had. A ghost frame is
+       therefore an ordinary frame for this instrument.
+
+       KEEPING THE TERM WOULD HAVE COST A CAPTURE PER SESSION once landing 11-3
+       made the ghost record on this lane: the unit window latches `s_abDone` and
+       `tagpu_vk_ab_arm` unlinks the target, then the ghost window republishes
+       `ab = 0`, and `s_abDone` only clears when the lever file is deleted -- so
+       the one-shot is spent and nothing is written. Found by this landing's
+       review. */
     /* `s_abClaim` IS FRAME-SCOPED AND THIS LINE IS IDEMPOTENT, which the first
        version was not: it read `s_pub.ab = s_nghost ? 0 : s_abFrame` and then
        zeroed `s_abFrame`, so a SECOND window's `_end` re-ran it with the value
@@ -1158,7 +1163,7 @@ void tagpu_posedraw_end(void)
        `s_abDone` latched so the one-shot never retried and the instrument read
        as a port failure for the rest of the session.
        [Landing 6's review, 2026-09-17.] */
-    s_pub.ab = s_nghost ? 0 : s_abClaim;
+    s_pub.ab = s_abClaim;
     s_pubHave = 1;
 }
 
@@ -1392,7 +1397,7 @@ void tagpu_posedraw_frame(unsigned frame_counter)
        belt-and-braces check instead of the only one. */
     s_frame = frame_counter;
     s_pubHave = 0;
-    s_win = 0; s_recording = 0; s_other = 0; s_nghost = 0;
+    s_win = 0; s_recording = 0; s_other = 0;
     s_abTaking = 0; s_abClaim = 0;
     s_depthOn = 0; s_ncast = 0;
     s_lastNanoT = 0.0f;

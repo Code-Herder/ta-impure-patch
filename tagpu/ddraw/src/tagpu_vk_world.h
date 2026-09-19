@@ -70,9 +70,16 @@
    bilinear IS the 2:1 box filter, which is what GL's own `GL_LINEAR` on
    `s_colTex2` is for ("LINEAR = the 2:1 box filter", tagpu_native.c) -- and at
    k != 1 it is GL's `devres` path. The gap that buys: `selAt1x` is not
-   expressible, so the selection rects are rasterised at `ss` and downsampled
-   rather than drawn at 1x over a resolved frame. That is GL's own `selgeom
-   main` configuration, and it is stated in the plan rather than papered over.
+   expressible, so a selection rect drawn here would be rasterised at `ss` and
+   downsampled rather than drawn at 1x over a resolved frame -- GL's own
+   `selgeom main` configuration.
+
+   THAT IS HYPOTHETICAL AND THIS COMMENT USED TO STATE IT AS FACT [corrected by
+   landing 11-3's review]. No pass on this lane draws a selection rect at all:
+   the rect lived only inside the GL unit draw and nothing replaced it, so the
+   ENGINE draws every selection box, at its unzoomed projection. Read
+   `s_selComplete` in tagpu_native.c for the seam and gpu-status §2.65 for the
+   consequence, which is unmeasured.
 
    THE CLEAR IS TRANSPARENT AND THE COMPOSITE IS PREMULTIPLIED, which together
    are what leave TA's own frame showing where the world drew nothing. GL clears

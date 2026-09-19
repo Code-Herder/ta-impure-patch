@@ -310,9 +310,10 @@ static void* getgl(const char* n)
 
 static int    s_state = 0;             /* 0=unloaded 1=ready 2=failed */
 /* READ FROM THE GAME THREAD (tagpu_native_owns_unit, via tagpu_markown.c's
-   mark_selbox), written here on the render thread — volatile for the same
-   reason s_selComplete is, so the publishing store below cannot be hoisted
-   above the state it publishes. */
+   mark_selbox), written here on the render thread — volatile so the publishing
+   store below cannot be hoisted above the state it publishes. (It used to cite
+   s_selComplete for the same reason; that one has no writer left, see its own
+   comment.) */
 static volatile int s_armed = -1;
 
 /* MUST THE ENGINE'S CACHED SLANT BE SUPPRESSED THIS FRAME -- the
@@ -350,7 +351,6 @@ static GLuint s_prog, s_vao, s_vbo, s_fbo, s_colTex, s_depTex, s_palTex;
 static int    s_devres = 0;            /* the world at device res — OPT IN, tagpu_devres.on */
 static TAGPU_WORLDTGT s_wt;            /* the world target, published per frame */
 static int    s_wtHave = 0;
-static int    s_devresFailed = 0;      /* the driver refused the supersampled target: stay down */
 /* ---- `tagpu_selgeom.on` IS GONE, AND THE VULKAN LANE IS ITS `main` SETTING ----
    The lever existed because a GL line is one pixel wide IN THE BUFFER IT IS
    DRAWN INTO and the driver clamps an aliased line's width to 1 (measured:
@@ -409,14 +409,26 @@ static int    s_fogLut = 0;   /* grey remap uploaded this frame (logged) */
 static GLint  s_uCast;                 /* the caster's three numbers (G14i) */
 static TAGPU_SHADOWU s_shU;            /* the shadow read-back uniforms      */
 static float  s_verts[MAXNV * NVST];
-/* set by the frame, read by tagpu_markown.c on the game thread: 1 while every
-   selection box this frame owed was actually emitted */
+/* NOTHING WRITES THIS ON THE SURVIVING LANE, AND THAT IS A REAL GAP -- read it
+   before believing any note that says the selection rect is ours.
+
+   It was written once, at the bottom of the GL unit pass, meaning "every
+   selection box this frame owed was actually emitted"; `tagpu_markown.c`'s
+   mark_selbox reads it through `tagpu_native_selbox_complete()` and suppresses
+   the ENGINE's own box draw only when it is 1. That store sat below the
+   `!gl_draws` hand-over return, so on the Vulkan lane it never ran and this has
+   been permanently 0 since landing 4b; landing 11-3 deleted the store with the
+   rest of that pass, which changed nothing.
+
+   THE CONSEQUENCE: on this lane we draw no selection rect at all and never
+   suppress, so the engine draws every box itself -- at its UNZOOMED projection,
+   which at zoom != 1 is the visible scatter the GL pass existed to avoid. No
+   `tagpu_vk_*` file contains selection-rect code. This deviation is UNMEASURED.
+
+   The variable and its accessor are kept rather than deleted because they are
+   the seam a Vulkan selection rect would fill: write this from the pass that
+   emits the boxes and the engine stands down exactly as it did on GL. */
 static volatile int s_selComplete = 0;
-/* The GL selection-rect handback counters went with that pass [landing 11-3].
-   The ENGINE BEHAVIOUR they existed to catch is unchanged and still matters to
-   the Vulkan twin: when the whole selection-rect set is handed back, the engine
-   draws every box at its UNZOOMED projection for that frame, which at zoom < 1
-   is a visible scatter. `tagpu_vk_mark.c` owns that accounting now. */
 
 /* material constants copied per frame from render3do's calibration */
 static const float SH_V[3] = { 0.0f, 0.8944f, -0.4472f };
@@ -2179,9 +2191,12 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
        the lever-level half of this out loud, once. */
     if (s_pvFrame != frame_counter) {
         if (!s_ghostNoDraw) {
-            nlog(s_pvFrame != frame_counter
-                 ? "ghost: armed, but the unit pass is not drawing this frame — nothing to draw in"
-                 : "ghost: armed, but the posed program is not live on this driver");
+            /* one arm only since landing 11-3: the other read "the posed
+               program is not live on this driver", which was the
+               `tagpu_posedraw_live()` prerequisite. That predicate is false on
+               this lane by definition, so keeping it as a reason would report a
+               driver fault for the normal case. */
+            nlog("ghost: armed, but the unit pass is not drawing this frame — nothing to draw in");
             s_ghostNoDraw = 1;
         }
         return;
@@ -2438,12 +2453,18 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            engine's (about 0.75 of a device pixel at k = 1.5) while everything
            else got sharper. Two landing reviewers found this independently.
            `tagpu_devres.on` is how it was measured. The rect-as-geometry lever
-           that answered it went with the GL draw half [landing 11-3]; the
-           Vulkan lane draws the rect as geometry unconditionally, so what was
-           opt-in there is simply how this lane works. ui-markers.md keeps the
-           2026-09-11 coverage numbers. */
-        s_devres = !s_devresFailed &&
-                   (GetFileAttributesA("tagpu_devres.on") != INVALID_FILE_ATTRIBUTES);
+           that answered it went with the GL draw half [landing 11-3] -- AND SO
+           DID THE RECT: this lane draws no selection rect at all and the engine
+           draws the boxes itself (see `s_selComplete`). The thin-rect problem
+           described above is therefore not the one this lane has. ui-markers.md
+           keeps the 2026-09-11 coverage numbers as the record of the GL path.
+
+           `s_devresFailed` WENT WITH `fbo_size`, which was its only writer, so
+           the "the driver refused the supersampled target, stay down" latch no
+           longer exists here. It is not replaced by a local one because the
+           refusal moved to the lane that can see the target: tagpu_vk.c names
+           it in the log and captures nothing. */
+        s_devres = (GetFileAttributesA("tagpu_devres.on") != INVALID_FILE_ATTRIBUTES);
         s_subpix = (GetFileAttributesA("tagpu_subpix.off") == INVALID_FILE_ATTRIBUTES);
         s_spxlog = (GetFileAttributesA("tagpu_spxlog.on")  != INVALID_FILE_ATTRIBUTES);
         s_nano   = (GetFileAttributesA("tagpu_nano.off")   == INVALID_FILE_ATTRIBUTES);
