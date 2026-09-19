@@ -175,10 +175,16 @@ void tagpu_posedraw_end(void);
    search found no other. Deleting them is therefore inert. What replaces them
    is NOT uniform, and the honest split is:
 
-     _depth_begin / _depth_unit   PORTED. `tagpu_vk_unit.c:1043-1046` builds
+     _depth_begin / _depth_unit   NOT DRAWING EITHER, and this line said
+                                  "PORTED" for one commit. The Vulkan code
+                                  exists -- `tagpu_vk_unit.c:1043-1046` builds
                                   the `pose_depth` pipeline from the VS + DFS
-                                  that stay in tagpu_posedraw.c, and draws it
-                                  with uDepthPass 1 (:1769).
+                                  that stay in tagpu_posedraw.c, and :1769 sets
+                                  uDepthPass 1 -- but NOTHING REACHES IT. See
+                                  the chain below; found by this landing's
+                                  review, which was right that "PORTED" is the
+                                  sentence most likely to stop the next session
+                                  looking.
      the other eight              NOT PORTED. `tagpu_vk_unit.c` draws the BODY
                                   range only, and says so under "WHAT IT DOES
                                   NOT DO" (:90): the wire, the silhouette and
@@ -189,10 +195,34 @@ void tagpu_posedraw_end(void);
                                   down; on a Classic++ soft-shadow frame none
                                   of them draws at all.
 
-   SO THIS IS A TOMBSTONE, NOT A MIGRATION, for those eight. The gap is the
-   Vulkan unit pass's, not this header's — whoever closes it ports the ranges
-   into tagpu_vk_unit.c rather than restoring these entry points, which had no
-   caller left to serve. */
+   SO THIS IS A TOMBSTONE, NOT A MIGRATION, for all ten. The gap is the Vulkan
+   unit pass's, not this header's — whoever closes it ports the ranges into
+   tagpu_vk_unit.c rather than restoring these entry points, which had no
+   caller left to serve.
+
+   THE DEPTH TWIN'S CHAIN, BECAUSE IT IS THE ONE THAT LOOKS DONE. `_depth_begin`
+   held the only `s_depthOn = 1` and the only write of `s_depthMat` in the tree.
+   With it gone:
+
+     s_depthOn                    only ever assigned 0 (tagpu_posedraw.c:1080)
+     -> TAGPU_PDUREC.casts        always 0        (:793)
+     -> TAGPU_PDHAND.depthOn      always 0        (:688)
+     -> TAGPU_PDHAND.castMat      the memset zero matrix (:689 never runs)
+     -> tagpu_vk_unit.c:2350      w->casts always 0, so s_ncast never increments
+     -> tagpu_vk_unit_cast        returns at `!s_ncast` (:2571) every frame
+     -> build_cast_pipeline       its ONLY caller is :2579, inside that function
+
+   So the pipeline is never built and no posed unit casts into the Vulkan
+   cast-shadow map. THIS IS NOT NEW IN 11-5d -- `_depth_begin` was already
+   uncalled at 11-3, so `depthOn` has been pinned 0 since then and no behaviour
+   changed here. What 11-5d did was delete the last code that could ever set it,
+   which turns a dormant path into a dead one, and then briefly call it ported.
+
+   AND THE CENSUS THAT EXISTS TO CATCH THIS CANNOT. `tagpu_vk_shadow.c:847`
+   asks `h.otherCasters - ours > 0`, and `otherCasters`'s only two incrementers
+   -- `tagpu_shadow_unit` and `tagpu_shadow_note_casters` -- have no callers
+   either, so it is 0 - 0 and the map is published as complete. Units cast no
+   shadow, nothing logs it, and the guard reports success. */
 
 /* the highest posed model y of one unit's BODY range, from each piece's rest
    AABB through its pose matrix — what `s_emitTop` was taken from before the
@@ -207,11 +237,13 @@ float tagpu_posedraw_top(const TAGPU_PDUNIT* u);
    bake, so that the frame the Vulkan lane presents has units in it. This is
    everything it is handed; it reads no engine state and re-derives nothing.
 
-   NOTHING HERE IS A SECOND EVALUATION OF ANYTHING. The vertices are the two
-   streams `glBufferData` was handed, reached through tagpu_posebake.h's
-   mirrors; the ranges are the `first`/`count` this pass's own glDrawArrays
-   used; the pose block is the bytes `upload_pose` wrote, through the same
-   conversion; and the uniforms are the numbers these draws passed. What a 0-px
+   NOTHING HERE IS A SECOND EVALUATION OF ANYTHING, and this paragraph used to
+   say so by naming the GL calls that consumed each field — `glBufferData`,
+   this pass's own `glDrawArrays`, `upload_pose`. All three went with landing
+   11-5d, so the description is now of the data alone: the vertices are the two
+   streams tagpu_posebake.h's mirrors carry; the ranges are the `first`/`count`
+   pairs the bake lays down per range; the pose block is what `pose_words`
+   converts, which is still the single conversion both sides share. What a 0-px
    comparison then compares is two rasterisers.
 
    THE POSE ROWS LIVE IN AN ARENA, not in the record. A unit's block is 14 336
@@ -238,17 +270,21 @@ float tagpu_posedraw_top(const TAGPU_PDUNIT* u);
    that set until landing 6 and is now CARRIED**: it was measured costing the
    whole pass, because `ghost.on` is a play default and an open building
    placement made this non-zero every frame. That is
-   the set the A/B brackets: the GL half is blacked immediately before this
-   window and read back immediately after it, so a unit drawn there and not
-   here is the one thing that makes the two halves differ.
+   the set the A/B brackets. THE SENTENCE THAT STOOD HERE DESCRIBED A SECOND
+   LANE -- "the GL half is blacked immediately before this window and read back
+   immediately after it" -- and there has been no GL half since landing 4d-2.
+   What the lever claims now is the VULKAN capture alone, for a cross-BUILD
+   comparison.
 
    IT DOES NOT COUNT THE REST OF THE FRAME, and that is not an oversight. The
    nanoframe wire, the Classic silhouette, the slant, the replacement meshes
-   and the native 3DO stream all draw OUTSIDE this window -- they are not in
-   the GL capture, so they cannot make this comparison disagree -- and the one
-   place where the rest of the frame really does make a wrong picture rather
-   than a partial one is the cast-shadow MAP, which has its own exact census in
-   tagpu_shadow.h's `otherCasters` and needs no second one here.
+   and the native 3DO stream all draw OUTSIDE this window. THREE OF THOSE FIVE
+   NO LONGER DRAW AT ALL -- the wire, the silhouette and the slant, per the
+   tombstone above -- which makes the term narrower still rather than wrong.
+   And the one place where the rest of the frame really does make a wrong
+   picture rather than a partial one is the cast-shadow MAP, whose census in
+   tagpu_shadow.h's `otherCasters` CANNOT CURRENTLY FIRE: see the depth twin's
+   chain in the tombstone above.
 
    RENDER THREAD ONLY, and published later in the same iteration of
    render_ogl.c's loop than the tagpu_vk_frame that consumes it. */
@@ -334,12 +370,21 @@ typedef struct TAGPU_PDHAND {
        name, and the SPIR-V translation gives each stage its own copy. */
     float shadowMat[16], shadowSun[3], shScale[3], penumbra, shade;
 
-    /* THE DEPTH TWIN. `depthOn` is 1 when the twin drew its posed casters into
-       the cast-shadow map this frame; `castMat` is the matrix it used, which
-       is tagpu_shadow_mat() and NOT `shadowMat` above by accident -- they are
-       the same numbers, published twice because one is the map's projection
-       and the other is the read-back's, and a frame could have one without the
-       other. `ncast` is how many records carry `casts`. */
+    /* THE DEPTH TWIN. `depthOn` MEANS "the twin drew its posed casters into
+       the cast-shadow map this frame", `castMat` is the matrix it used, and
+       `ncast` is how many records carry `casts`.
+
+       ALL THREE ARE PERMANENTLY ZERO AND HAVE NO PRODUCER, since landing 11-3
+       left `tagpu_posedraw_depth_begin` uncalled and 11-5d deleted it. The
+       full chain, and why the census does not catch it, is in the tombstone
+       that replaced those entry points. Read this field as "not yet", never as
+       "no casters this frame" -- the two are indistinguishable here and only
+       the first is true.
+
+       `castMat` is tagpu_shadow_mat() and NOT `shadowMat` above by accident --
+       they are the same numbers, published twice because one is the map's
+       projection and the other is the read-back's, and a frame could have one
+       without the other. */
     int   depthOn, ncast;
     float castMat[16];
 

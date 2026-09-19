@@ -10997,8 +10997,11 @@ player asked for no shadows and gets four teal blobs.
       sub-bullet were wrong about it, in opposite directions, and the second cost a whole review
       round:
         * *"the Vulkan unit pass paints the shadow"* — **it does not.** No file under
-          `tagpu_vk*` contains the word `slant`, and `tagpu_posedraw_slant_set`
-          (`tagpu_posedraw.c:1230`) is pure GL with no `pd_record` call.
+          `tagpu_vk*` contains the word `slant`, and `tagpu_posedraw_slant_set` was pure GL
+          with no `pd_record` call. [The line citation that stood here,
+          `tagpu_posedraw.c:1230`, was correct when written and points past EOF since landing
+          11-5d deleted that function; the file is now 1132 lines. The conclusion is unchanged
+          and is now stronger — the function does not exist, so it certainly does not record.]
         * *"Classic++'s cast-shadow map paints it there, through `tagpu_shadow_handover`, which
           is why the predicate asks `tagpu_classicpp_on()`"* — **it does not paint it there
           either**, and this one is provable in four steps rather than argued:
@@ -11943,13 +11946,39 @@ called it, and `pd_record` calls it again — the same answer computed twice, no
 sequence. What `upload_pose` then did with the answer was write it into a uniform buffer nothing
 binds.
 
-**What the Vulkan lane does and does not replace, because the header now says so rather than
-implying a migration.** The depth twin IS ported: `tagpu_vk_unit.c:1043-1046` builds the
-`pose_depth` pipeline from the `VS` + `DFS` that stay in `tagpu_posedraw.c`, and draws it with
-`uDepthPass` 1 (`:1769`). The wire, the Classic silhouette and the structure slant are NOT —
-that pass draws the body range only and says so under its own *WHAT IT DOES NOT DO*
-(`tagpu_vk_unit.c:90`). Eight of the ten entry points are therefore a **tombstone, not a move**,
-and the gap belongs to `tagpu_vk_unit.c`.
+**What the Vulkan lane does and does not replace.** The wire, the Classic silhouette and the
+structure slant are not ported — that pass draws the body range only and says so under its own
+*WHAT IT DOES NOT DO* (`tagpu_vk_unit.c:90`). **All ten entry points are a tombstone, not a
+move**, and the gap belongs to `tagpu_vk_unit.c`.
+
+**THIS SECTION SAID "The depth twin IS ported" FOR ONE COMMIT AND THAT WAS WRONG** — caught by
+this landing's review, which was right that it is the sentence most likely to stop the next
+session looking. The Vulkan code exists: `tagpu_vk_unit.c:1043-1046` builds the `pose_depth`
+pipeline from the `VS` + `DFS` that stay in `tagpu_posedraw.c`, and `:1769` sets `uDepthPass` 1.
+**Nothing reaches it.** `tagpu_posedraw_depth_begin` held the only `s_depthOn = 1` and the only
+write of `s_depthMat` in the tree, so with it gone:
+
+| link | result |
+|---|---|
+| `s_depthOn` | only ever assigned 0 (`tagpu_posedraw.c:1080`) |
+| `TAGPU_PDUREC.casts` | always 0 (`:793`) |
+| `TAGPU_PDHAND.depthOn` / `.castMat` | always 0 / the `memset` zero matrix (`:688`, `:689` never runs) |
+| `tagpu_vk_unit.c:2350` | `w->casts` always 0, so `s_ncast` never increments |
+| `tagpu_vk_unit_cast` | returns at `!s_ncast` (`:2571`) every frame |
+| `build_cast_pipeline` | its **only** caller is `:2579`, inside that function |
+
+So the pipeline is never built and **no posed unit casts into the Vulkan cast-shadow map**.
+
+**This is not a regression from 11-5d.** `_depth_begin` was already uncalled at landing 11-3, so
+`depthOn` has been pinned 0 since then and no behaviour changed here. What 11-5d did was delete
+the last code that could ever set it — turning a dormant path into a dead one — and then briefly
+call it ported.
+
+**And the census that exists to catch exactly this cannot fire.** `tagpu_vk_shadow.c:847` asks
+`h.otherCasters - ours > 0`, and `otherCasters`'s only two incrementers — `tagpu_shadow_unit`
+and `tagpu_shadow_note_casters` — have no callers either (verified tree-wide: the sole
+references are their declarations in `tagpu_shadow.h`). So it is `0 - 0`, the map is published
+as complete, units cast no shadow, and the guard reports success.
 
 #### The finding: the engine is not a fallback
 
@@ -12026,8 +12055,42 @@ compiling.
   GL, unwatchable)"*), so no colour conclusion is drawn from it and the monochrome is recorded as
   an observation rather than a finding. Every claim above is a presence/absence one, which that
   display does answer — and answers twice, since TA's own frame comes through it in colour.
+* **The posed cast-shadow path itself.** The chain above says nothing reaches the `pose_depth`
+  pipeline; giving `depthOn` a producer is new work on `tagpu_vk_unit.c`, not a deletion, and it
+  is not in this landing. Nor is the `otherCasters` census, which cannot fire for the same
+  reason on its own side.
+* **Three symbols this landing orphaned**, none deleted, all still compiled into the DLL. A
+  non-static that loses its last caller compiles clean under `-Wall`, which is the inverse of
+  the trap in *Verify deletions by inventory*, so they are named here rather than counted:
+  `tagpu_native_unit_fs()` (`tagpu_native.c:555`, declared `inc/tagpu_native.h:12`) — its only
+  call was the deleted GL bring-up, and `tools/spirv-gen.py` reads `tagpu_native::FS` out of the
+  preprocessed source rather than through this accessor, so nothing needs it; and
+  `tagpu_shadow_locate()` with the `TAGPU_SHADOWU` struct (`tagpu_shadow.c:593`,
+  `tagpu_shadow.h:50-51`) — the deleted bring-up was its only caller in the tree. Its sibling
+  `tagpu_shadow_apply()` was already orphaned. `tagpu_shadow.c` is escalation reason 1, so
+  nothing there is touched here.
+* **`tagpu_posedraw_stats()` and its four counters.** No caller since landing 11-3, and 11-5d
+  removed the last increments of the slant and wire pair. `ta-drive` was telling sessions to
+  read all three fields out of the log; corrected in the same commit as this note.
 * `tagpu_posedraw_glreset()` still exists and still clears `s_state`; retiring the `*_glreset`
   surface is 11-5e.
+
+#### One review finding checked and NOT upheld
+
+The review flagged, as PLAUSIBLE, that dropping the `if (tagpu_vk_owns_present())` wrapper from
+`tagpu_posedraw_ready()` changes behaviour where the Vulkan lane is `ST_READY` but does not own
+present — `ready()` would answer 1 there, while the mirror latch in `_frame` is still gated on
+`tagpu_vk_owns_present()`, so every record would fall to `s_other++`. Cost, not corruption.
+
+**That configuration is not reachable, and the argument is in the source rather than in this
+landing's head.** `tagpu_vk.c:509-512`, written by the landing that removed route D, states it:
+*"`renderer=vulkan` reaches `render_vk.c`, which calls `tagpu_vk_own_present()` before its loop,
+and nothing else drives this lane: `render_ogl.c`'s own call to `tagpu_vk_frame` went with the
+popup."* `tagpu_vk_own_present()` has exactly one caller (`render_vk.c:145`), it precedes the
+frame loop, `s_ownWin` is never cleared, and `tagpu_vk_max_uniform_range()` returns 0 unless
+`lane_state() == ST_READY` — which only happens inside that loop. So at every point where the
+accessor can answer non-zero, line 145 has already run. Recorded rather than dismissed: the next
+person to remove a lane test deserves the citation and not a second search for it.
 * The `glReadPixels` the restored-atlas step still runs (`tagpu_gaf.c`, via
   `tagpu_r3d_atlas_mirror_rgb_step`) — the comment in `tagpu_posedraw.c` that cites it is still
   true today and 11-5e is what makes it stale.

@@ -2270,9 +2270,12 @@ that a count which grows is the plan catching up with the work.) The row was
 
        **AND IT ALREADY HAS ITS INSTANCE OF THE RULE, MEASURED 2026-09-19 — this one is on the
        SHIPPED lane and it is not a trap for a future producer, it is live today.**
-       `tagpu_posedraw_live()` is `s_state == 1 && !tagpu_vk_owns_present()` (`:162`), so it is
+       `tagpu_posedraw_live()` was `s_state == 1 && !tagpu_vk_owns_present()` (`:162` as this
+       paragraph was written; `return 0;` at `:202` since the landing), so it is
        **0 on this lane by construction** — while `s_state` is genuinely 1, set by that same
-       Vulkan arm, which logs `posedraw: armed for the Vulkan lane — no GL program`. Landing
+       Vulkan arm, which logged `posedraw: armed for the Vulkan lane — no GL program` and now
+       logs `posedraw: armed — no rasteriser of its own, …`. Neither old string exists in the
+       tree any more, so a grep for one finds only this note. Landing
        11-3 met the predicate in `tagpu_native.c` and removed a dependent on it ("that
        predicate is false on this lane by definition", `:1996`); it did not sweep the other two
        readers, both in `tagpu_owndraw.c`:

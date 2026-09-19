@@ -1015,9 +1015,18 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
 
     /* THE POSED CASTERS, drawn by the unit pass into OUR render pass with our
        viewport and our scissor (G19e). It owns the geometry and the pose; this
-       pass owns the target, the matrix and the clear -- which is exactly the
-       split the GL lane has, where `tagpu_shadow_begin` binds the FBO and
-       `tagpu_posedraw_depth_unit` draws into it.
+       pass owns the target, the matrix and the clear -- which is the split the
+       GL lane HAD, where `tagpu_shadow_begin` bound the FBO and
+       `tagpu_posedraw_depth_unit` drew into it. That function was deleted by
+       landing 11-5d, so this is the shape's origin and not a live oracle to
+       compare against.
+
+       AND `ours` IS CURRENTLY ALWAYS 0 FROM THE UNIT PASS, which makes the
+       test below `0 - 0` rather than a comparison: `TAGPU_PDHAND.depthOn` lost
+       its only producer with that same function, so no posed unit is ever a
+       caster here. The chain is in tagpu_posedraw.h's tombstone. It has been
+       true since landing 11-3 and this map has been published as complete
+       throughout. [Found by 11-5d's landing review, 2026-09-19.]
 
        A SHORT COUNT IS A REFUSAL, not a partial map. `ours` was taken before
        the render pass began and is what the census above was reconciled

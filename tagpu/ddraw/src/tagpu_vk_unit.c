@@ -19,9 +19,11 @@
       map in its own fragment shader. So it has four hooks rather than two and
       the seam calls three of them at three different points in the frame --
       tagpu_vk_unit.h lists them and the seam repeats the ordering at the call
-      sites. The GL twin has exactly the same shape for exactly the same
-      reason: `tagpu_posedraw_depth_unit` runs at tagpu_native.c:3936 and
-      `tagpu_posedraw_unit` at :4238.
+      sites. The GL twin HAD exactly the same shape for exactly the same
+      reason, with `tagpu_posedraw_depth_unit` and `tagpu_posedraw_unit` called
+      from tagpu_native.c's composite. Both that composite (landing 11-3) and
+      `_depth_unit` itself (landing 11-5d) are gone, so the shape is this
+      file's own now and there is nothing to read it against.
 
       AND THE CASTER DRAW BINDS A SET OF ITS OWN. A descriptor set may only be
       written during its own slot's `prepare`, which is after the map is drawn;
@@ -1753,9 +1755,15 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
     memcpy(ub, b.f, VGL_SZ);
 
     /* ---- the vertex stage, the CASTER draw ----
-       tagpu_posedraw_depth_begin's own uniforms: the shadow matrix, uDepthPass
-       1, uRange BODY, and the projection pair pinned at something finite
-       because the vertex shader still evaluates the discarded branch. */
+       What `tagpu_posedraw_depth_begin` set before landing 11-5d deleted it:
+       the shadow matrix, uDepthPass 1, uRange BODY, and the projection pair
+       pinned at something finite because the vertex shader still evaluates the
+       discarded branch.
+
+       NOTHING REACHES THIS TODAY. `tagpu_vk_unit_cast` returns at `!s_ncast`
+       every frame, because `h.castMat`'s and `w->casts`'s producer went with
+       that same function -- see tagpu_posedraw.h's tombstone for the chain.
+       The uniforms below are correct and unexercised. */
     memset(&b, 0, sizeof b);
     b.f[0] = 1.0f; b.f[1] = 1.0f;                      /* uGame                */
     b.f[4] = 1.0f;                                     /* uZoom                */

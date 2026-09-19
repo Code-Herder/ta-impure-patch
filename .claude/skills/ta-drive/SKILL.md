@@ -765,8 +765,19 @@ reconstruction and `posewatch` — the only things `tagpu_posefix.off`, `tagpu_p
 renderer**: there is nothing to A/B it against in one build, and creating those files does nothing.
 The `native:` line lost `posefix=`, `guard=`, `rest=`, `norecon=` and `errmax=` with them.
 
-**What to read instead.** `posed=<units>/<tris>` — with ` slant=<units>/<tris>` and
-` wire=<units>/<lines>` when the scene has them — is the pass, and **`verts=` should read 0 for
+**None of `posed=`, `slant=` or `wire=` PRINTS ANY MORE — do not go looking for them.**
+`tagpu_posedraw_stats()`, which formats all three, has had no caller anywhere in the tree since
+landing 11-3 deleted `tagpu_native.c`'s GL composite; the only tree-wide hits are its
+declaration and its definition. On top of that, landing 11-5d removed the last increments of
+the slant and wire counters with `_slant_redraw` and `_wire_unit`, so two of the four fields
+could not be non-zero even if something called it. The paragraph below is kept because it
+describes what the fields MEANT and what still produces the underlying work — `tagpu_posebake.c`
+still bakes `TAGPU_PB_SLANT` and `TAGPU_PB_WIRE` every bake, for a consumer that exists on
+neither lane. **A session that greps a log for ` slant=` and finds nothing has learnt nothing
+about the bake.** [Found by 11-5d's landing review, 2026-09-19.]
+
+**What it used to say.** `posed=<units>/<tris>` — with ` slant=<units>/<tris>` and
+` wire=<units>/<lines>` when the scene had them — was the pass, and **`verts=` should read 0 for
 units**: anything else means something was built on the CPU, which now only the selection lines and
 the effects models do. Four more fields appear **only when they have caught something**, and in a
 healthy game none of them ever does:
