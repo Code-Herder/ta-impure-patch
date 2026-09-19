@@ -574,11 +574,15 @@ void tagpu_terr_glreset(void)
        NOTHING CALLS THIS ON THE SURVIVING LANE, and the name is the reason it
        is worth saying. Its one caller is `tagpu_native_glreset`
        (tagpu_native.c), which tests nothing itself; THAT function's one caller
-       is tagpu_overlay.c's GL-context-change watch, DELETED in 11-5e-1 (so this whole chain is unreachable), inside `if (cur != s_ctx)` where `cur` is
-       `wglGetCurrentContext()` -- NULL for the life of a process with no GL
-       context, so the branch never fires (and `if (s_ctx)` inside it is a
-       second pin). Naming the far end of the chain as "its one caller" sends a
-       reader grepping to the wrong file. [FROM THE 11-5c RE-REVIEW.] The
+       was tagpu_overlay.c's GL-context-change watch -- `if (cur != s_ctx)`,
+       with `cur` from `wglGetCurrentContext()`, NULL for the life of a process
+       that makes no GL context, so the branch never fired and `if (s_ctx)`
+       inside it was a second pin. **11-5e-1 DELETED THAT WATCH**, so the chain
+       has no root at all now and every link in it, this one included, is
+       unreachable. Naming the far end of the chain as "its one caller" sends a
+       reader grepping to the wrong file, which is why the chain is spelled out
+       rather than summarised. [FROM THE 11-5c RE-REVIEW; the deletion and this
+       correction are 11-5e-1's.] The
        body is kept because none of it is GL any more: it is this pass's "drop
        everything derived from the map" and a Vulkan device loss wants exactly
        that. Retiring the entry point belongs with the rest of the GL entry-point

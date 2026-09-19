@@ -146,7 +146,8 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        is the caller fact: **`oglu_load_dll()` is the only code that resolves
        those two pointers, and it has no caller anywhere in the tree**
        (`dd.c:1898` and `:1912` say so in prose; `dd.c`'s renderer selection
-       has exactly two arms, gdi and Vulkan). Neither pointer is ever invoked
+       has four arms resolving to two destinations, gdi and Vulkan, and none of
+       them probes GL). Neither pointer is ever invoked
        -- `opengl_utils.c:133` is a truthiness test, not a call -- so both are
        NULL, no context is ever made current on this thread, `cur` is 0 on
        every call, `s_ctx` starts 0, and the inner `if (s_ctx)` has no first

@@ -1614,9 +1614,11 @@ Then:
 - **Match the game state, not the frame number.** `units: alive=N onscreen=M` is the handle.
   Off-screen units still show as **minimap blips**, so two runs whose AI built different numbers
   of units differ in the minimap panel and nowhere else. Mask the minimap rect —
-  **`[0:126, 0:128]` at 1024x768**, 126 because that is the engine's own surface height
-  (gpu-status records "the three 126-px surfaces"); `[0:125, …]` leaves a one-pixel row that
-  reports as "outside the minimap" and costs an investigation — and report inside/outside
+  **`[0:126, 0:128]` at 1024x768**. 126 IS the engine's surface height (gpu-status records
+  "the three 126-px surfaces" and the packet reports `mm=106x126`); **128 is the panel the
+  surface sits in, picked to cover it, not a measured width** — so the rect has ~22 columns of
+  slack and a claim of "0 px outside" is weaker than it sounds. `[0:125, …]` leaves a
+  one-pixel row that reports as "outside the minimap" and costs an investigation — and report inside/outside
   separately — "0 px outside the
   minimap" is the sentence that proves the landing, and it is much easier to obtain than
   identical unit counts.
@@ -1636,11 +1638,15 @@ Then:
   to the framebuffer — `tagpu_ftime.on`, the census, the packet line — is invisible to this
   whole method, and a landing that changed one has not verified it by capturing frames. Arm
   the lever, let it report, and paste the line.
-- **Two instances armed identically can still settle differently.** Levers like
-  `tagpu_owndraw.on` / `tagpu_terrown.on` appear in the gamedir once the passes take the draw
-  over, and a fresh instance may sit at `3 pass(es)` indefinitely while another reaches 6.
-  Compare a build against itself in the SAME instance — swap the DLL and `scenario load`
-  again — rather than standing up a second instance and hoping the two converge.
+- **Two instances given the same `tacli arm` line can still settle differently.** Observed:
+  one instance's gamedir held `tagpu_owndraw.on`, `tagpu_terrown.on`, `tagpu_featown.on`,
+  `tagpu_fxown.on` and `tagpu_markown.on` and reached `6 pass(es)`; a second, armed with the
+  same command, held none of them and sat at `3 pass(es)` indefinitely. **The mechanism is
+  not established** — nothing in `tagpu/ddraw/src` writes those files, so they arrive some
+  other way and a first draft of this note guessed wrong by saying the passes create them.
+  What is reliable is the remedy: compare a build against itself in the SAME instance — swap
+  the DLL and `scenario load` again — rather than standing up a second instance and hoping
+  the two converge.
 
 ### A masked-comment scan tells you WHETHER, never WHERE (2026-09-19)
 

@@ -687,7 +687,9 @@ void tagpu_r3d_glreset(void)
     /* fresh GL context: the new atlas/LUT textures are EMPTY — the CPU-side
        caches must forget what was uploaded or everything samples black. The
        atlas's twin and job died with the context too (tagpu_native_glreset
-       has already run tagpu_rglsl_glreset: tagpu_overlay.c ordered them until 11-5e-1 deleted the watch that called the cascade; nothing orders them now because nothing calls them) */
+       has already run tagpu_rglsl_glreset: tagpu_overlay.c ordered them until
+       11-5e-1 deleted the watch that drove the cascade. Nothing orders them
+       now, because nothing calls them.) */
     s_state = 0;
     s_lutBuilt = 0;
     s_lutFromShd = 0;

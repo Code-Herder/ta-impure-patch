@@ -12309,8 +12309,12 @@ during the 1024x768 resolution test). **It cannot fire in this build**, and the 
 a CALLER rather than a name: **`oglu_load_dll()` -- the only
 code in the tree that resolves `wglCreateContext` and `wglMakeCurrent` -- HAS NO CALLER**,
 and neither resulting pointer is ever invoked (`opengl_utils.c:133` is a truthiness test).
-`dd.c`'s renderer selection has exactly two arms, gdi and Vulkan, and the game's own import
-table names no `opengl32`.
+`dd.c`'s renderer selection has four arms resolving to two destinations — `'d'` and `'s'`/`'g'`
+to `gdi_render_main`, `'v'` and everything else (including `'o'`, auto and unrecognised) to
+`vk_render_main` — and **none of them probes GL or calls `oglu_load_dll`**. (An earlier draft
+said "exactly two arms". The conclusion is what matters and it holds for all four, but a count
+that is wrong invites the reader to check whether a fifth was missed. Round 3's LOW.) The
+game's own import table names no `opengl32`.
 
 The first draft of this paragraph said instead that `wglCreateContext` and `wglMakeCurrent`
 "appear in no source of this build". They do — `opengl_utils.c:107` and `:110` — and a name
@@ -12332,16 +12336,16 @@ correction. [The second half is the 11-5e-1 review's MEDIUM-2a.])
 ```
 tagpu_overlay.c's context watch                  DELETED -- could never fire
   |- tagpu_overlay_glreset                       DELETED (its state went with the capture)
-  |- tagpu_native_glreset            (:3620)     callerless
-  |    |- tagpu_rglsl_glreset        (:3623)     reachable only through it
-  |    |- tagpu_fx_glreset           (:3624)          "
-  |    |- tagpu_feat_glreset         (:3625)          "
-  |    |- tagpu_terr_glreset         (:3626)          "
-  |    |- tagpu_shadow_glreset       (:3627)          "     [escalation reason 1]
-  |    |- tagpu_hires_draw_glreset   (:3631)          "     [escalation reason 1]
+  |- tagpu_native_glreset            (:3619)     callerless
+  |    |- tagpu_rglsl_glreset        (:3622)     reachable only through it
+  |    |- tagpu_fx_glreset           (:3623)          "
+  |    |- tagpu_feat_glreset         (:3624)          "
+  |    |- tagpu_terr_glreset         (:3625)          "
+  |    |- tagpu_shadow_glreset       (:3626)          "     [escalation reason 1]
+  |    |- tagpu_hires_draw_glreset   (:3630)          "     [escalation reason 1]
   |    |     `- tagpu_hires_glreset  (tagpu_hires_draw.c:834)  one level further down
-  |    |- tagpu_posebake_glreset     (:3632)          "
-  |    `- tagpu_posedraw_glreset     (:3633)          "
+  |    |- tagpu_posebake_glreset     (:3631)          "
+  |    `- tagpu_posedraw_glreset     (:3632)          "
   |         (tagpu_mark_glreset was between shadow and hires and forwarded to
   |          tagpu_text_glreset; both DELETED, their whole bodies being that forward)
   |- tagpu_scaffold_glreset                      callerless
@@ -12362,6 +12366,14 @@ were wrong in exactly the way the subsection below describes**, having been read
 masked scan whose comments had eaten their own newlines. The section refuted itself three
 paragraphs apart and neither half noticed. [THE 11-5e-1 REVIEW'S MEDIUM-2, and the sharpest
 thing it found: writing down a trap does not protect the page you write it on.]
+
+**AND THEN THEY WERE WRONG AGAIN, BY ONE, FOR A COMPLETELY DIFFERENT REASON.** The corrected
+numbers were read before the review round removed a stale `#include` from `tagpu_native.c:95`,
+which shifted everything below it up a line — 3620 became 3619, and the rest with it. This
+section had already compensated for exactly that shift in one place (the
+`-Wmisleading-indentation` line, `:997` on `main` and `:996` here) and not in the diagram.
+**A line number is a fact with a version**, so a page that corrects line numbers has to
+re-read them after its own LAST edit rather than its first. [Round 3's MEDIUM.]
 
 **Only the two whose entire body was a forward are deleted here.** The rest are left standing
 and labelled in place — `tagpu_native_glreset` with the full banner and
@@ -12442,12 +12454,17 @@ units by the time each settled (`alive=14` against `alive=9`, `onscreen=1` in bo
 dots differ and nothing in the viewport, the side panel, the resource bars or any glyph does.
 The whole presented frame is otherwise identical.
 
-The minimap rect used to attribute those 44 is **`[0:126, 0:128]`**, which is the engine's own
-geometry — this page records the minimap as "the three 126-px surfaces". The first write-up
-said `[0:125, …]` and the off-by-one showed up on the second comparison below, where 4 of 48
-pixels landed on row 125 and read as "outside the minimap". The rect is not load-bearing for
-the 44 — the total over the whole frame is 44, so no rect can hide anything — but it is
-load-bearing for the sentence, and the sentence is what anyone reads.
+The rect used to attribute those 44 is **`[0:126, 0:128]`**, and only its HEIGHT is engine
+geometry: this page records the minimap as "the three 126-px surfaces" and the packet reports
+`mm=106x126`, so 126 rows is the surface and **128 columns is the PANEL the surface sits in,
+chosen to cover it, not a measured width**. Saying "which is the engine's own geometry" of the
+whole pair was wrong [round 3's LOW], and the distinction matters where the rect IS
+load-bearing — the second comparison below reports "0 outside", so 22 columns of slack could
+in principle absorb a difference and report it as inside the minimap. For the 44 it cannot:
+the total over the whole frame is 44, so no rect hides anything.
+
+The first write-up said `[0:125, …]`, and that off-by-one showed up on the second comparison
+below, where 4 of 48 pixels landed on row 125 and read as "outside the minimap".
 
 **THE SAME-BUILD CONTROL IS THE PART THAT MAKES THIS A MEASUREMENT — AND IT IS NOT
 SUFFICIENT ON ITS OWN.** The first attempt compared one capture from each build and reported
@@ -12485,8 +12502,10 @@ That exercises all three changed-and-still-reachable functions: `report()`'s sin
 branch prints (`n=256/300` is `RING` full over `REPORT_FRAMES`, so the cadence is right),
 `tagpu_ftime_vk_sample` accumulates, and `tagpu_ftime_poll`'s toggle path clears the ring —
 the counter restarts at `/300` rather than continuing to `/1200`. Nothing leaked across the
-off/on cycle **at full frame rate**; the sub-5-fps window named in `tagpu_ftime.c`'s poll
-comment is not exercised by this and is not claimed to be.
+off/on cycle **at full frame rate**; the window named in `tagpu_ftime.c`'s poll comment —
+single figures to the low tens of frames a second, the swapchain's `nimg` presents inside
+`POLL_MS` — is not exercised by this and is not claimed to be. Nor could the measurement have
+detected a leak if one had happened: a stale pair is simply one of the 300.
 
 `tagpu_ftime_vk_reset` also gained `s_frames = 0` in the review round, so that a lane brought
 down at frame 299 of the 300-frame cadence cannot make the first sample after the next
@@ -12550,8 +12569,8 @@ alters no pixel.
 The comment-masking helper every reachability scan in 11-5 has used replaced **every**
 character of a comment with a space — **including the newlines inside it**. A masked line
 number is therefore not a source line number: a multi-line comment collapses to one line and
-everything after it shifts earlier. On `tagpu_native.c` the gap is 1 622 lines
-(`tagpu_native_glreset` reads as 1998 masked and is at 3620). The CALL COUNTS and the
+everything after it shifts earlier. On `tagpu_native.c` the gap is 1 621 lines
+(`tagpu_native_glreset` reads as 1998 masked and is at 3619). The CALL COUNTS and the
 caller/no-caller answers are unaffected — they never depended on position — so nothing 11-5a
 through 11-5e-1 deleted was deleted for a wrong reason. **The line numbers quoted in prose
 were affected**, and five of the seven in landing 11-5d's depth-twin chain were wrong:

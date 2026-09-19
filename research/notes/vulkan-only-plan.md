@@ -2404,8 +2404,12 @@ that a count which grows is the plan catching up with the work.) The row was
        - **11-5e-2 — `tagpu_gaf.c` (39) and `tagpu_restoreglsl.c` (249)**, the live path, plus
          the sixteen-function reset cascade 11-5e-1 orphaned, fourteen of which it deliberately
          left standing
-         (`tagpu_native_glreset` and five siblings; through native, the restorer's, the shadow
-         pass's, the hires pass's and the two posedraw resets). The cascade can only be
+         (`tagpu_native_glreset` and four surviving siblings — `scaffold`, `r3d`, `gui`, `fps`;
+         the fifth, `tagpu_overlay_glreset`, went with the capture. Through native: the
+         restorer's, the effects', the feature pass's, the terrain pass's, the shadow pass's,
+         the hires pass's — and `tagpu_hires_glreset` one level below that — and the two
+         posedraw resets. The first draft of this parenthetical said five siblings and left
+         four of the children out; round 3 counted it.) The cascade can only be
          deleted once the objects it resets are gone, so its tail is behind the escalation
          with them. Carry 11-5e-1's survey finding into it: `tagpu_gaf_atlas_mirror_rgb` can
          only ever refuse — lever on, it is never asked; lever off, there are no GL entry

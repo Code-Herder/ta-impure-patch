@@ -509,12 +509,23 @@ int tagpu_scaffold_frameinfo(unsigned frame_counter, int* r0, int* nrows)
    does here. The three GL-shaped statics this used to clear -- the program's
    state and the uploaded texture's dimensions -- went with the draw they
    described; what remains is the published buffer, which names memory this
-   pass owns and no API. `tagpu_overlay.c:291` is the caller. */
-/* NOTHING CALLS THIS SINCE 11-5e-1. Its one call site was the GL-context
-   change watch in tagpu_overlay.c, deleted because no source of this build
-   makes a context current for it to see change (`oglu_load_dll` has no
-   caller). Kept because this module's GL objects outlive the watch; it goes
-   with them. */
+   pass owns and no API.
+
+   AND NOTHING CALLS IT SINCE 11-5e-1. Its one call site was the
+   GL-context-change watch in tagpu_overlay.c, deleted because no source of
+   this build makes a context current for it to see change (`oglu_load_dll`
+   has no caller). The sentence that stood here -- "`tagpu_overlay.c:291` is
+   the caller" -- named a line that is now inside an unrelated function.
+
+   THIS MODULE IS NOT ONE OF THE ONES WAITING ON THE ESCALATION, and the first
+   version of this banner said it was by borrowing tagpu_native.c's wording.
+   `tagpu_scaffold.c` carries ZERO GL call sites and the body below touches no
+   API at all, so unlike `tagpu_shadow.c`'s and `tagpu_hires_draw.c`'s resets
+   this one is not held up by objects that still have to go: it is deletable
+   as soon as someone decides the hand-over needs no reset entry point of its
+   own. Left standing only so the cascade goes in one piece. [ROUND 3'S
+   MEDIUM: a banner that borrows a justification for a module the
+   justification does not fit is a reason to keep dead code for ever.] */
 void tagpu_scaffold_glreset(void)
 {
     s_pubBuf = NULL; s_abFrame = 0;

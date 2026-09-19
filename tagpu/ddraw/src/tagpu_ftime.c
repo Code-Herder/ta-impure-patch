@@ -106,11 +106,18 @@ void tagpu_ftime_poll(void)
            `tsPend[MAXIMG]`, the write is gated on `tagpu_ftime_armed()` and
            sets `tsPend[fi] = 1`, and the drain -- which is NOT gated -- reads
            any slot whose flag is set and calls `tagpu_ftime_vk_sample`.
-           Nothing here clears `tsPend`; only the swapchain's creation and
-           `vk_perimage_free` do. [THE 11-5e-1 REVIEW'S MEDIUM-1b, and it was
-           right: the deleted GL half kept `s_qPend` for exactly this reason
-           and the landing-6 review caught stale pairs being harvested into a
-           freshly cleared ring.]
+           Nothing in THIS file can clear `tsPend`. What does: `vk_perimage`
+           zeroes the whole array when the per-image state is built,
+           `vk_perimage_free` zeroes it slot by slot on the way down, and the
+           drain clears its OWN slot as it reads it -- which is the mechanism
+           the "one per present" below depends on, so it belongs in this list
+           rather than a paragraph away. [ROUND 3'S LOW: the first draft
+           named the swapchain's creation, which is not where the memset is.]
+
+           [THE 11-5e-1 REVIEW'S MEDIUM-1b, and it was right: the deleted GL
+           half kept `s_qPend` for exactly this reason, and the landing-6
+           review caught stale pairs being harvested into a freshly cleared
+           ring.]
 
            WHAT ACTUALLY PROTECTS THE RING IS `s_on`, tested at the top of
            `tagpu_ftime_vk_sample`: a pair resolved while the lever is off is
@@ -125,12 +132,26 @@ void tagpu_ftime_poll(void)
            when the drain runs. A pair stamped in the PREVIOUS armed window can
            therefore still be accepted into the freshly cleared ring. Pending
            slots drain one per present and two polls are at least POLL_MS
-           apart, so it needs fewer than MAXIMG presents in half a second --
-           under about five frames a second: a map load, a stalled device, or
-           the owed-teardown `vkDeviceWaitIdle`. Measured here at full frame
-           rate, an off/on cycle reported `n=256/300` on the next report, i.e.
-           the counter restarted cleanly and nothing leaked; that exercises the
-           common case and NOT the stall.
+           apart, so the window is open only while fewer than `s_vk.nimg`
+           presents fit in POLL_MS. **`s_vk.nimg`, NOT MAXIMG**: the slot index
+           is `s_vk.frame % s_vk.nimg`, and `nimg` is whatever the swapchain
+           reports, merely CLAMPED to MAXIMG (8). At three or four images that
+           is six to eight frames a second, and at the clamp sixteen -- so the
+           honest statement is "single figures to the low tens". An earlier
+           draft said "about five" by reading the bound for the value, which
+           understated the window two- to three-fold, and that is the number a
+           reader uses to decide whether the deferred fix is urgent. [ROUND 3'S
+           MEDIUM.] Reachable at: a map load, a stalled device, the
+           owed-teardown `vkDeviceWaitIdle`.
+
+           MEASURED AT FULL FRAME RATE, an off/on cycle reported `n=256/300` on
+           the next report, so `s_frames` and `s_vkTotal` were cleared -- a
+           counter that had not restarted would report at some k < 300. **That
+           is all it shows.** It does NOT show that nothing leaked: a stale
+           pair would simply be one of the 300 and the line would read the
+           same. The measurement is structurally blind to the leak, which is
+           why this window is named here rather than treated as covered.
+           [ROUND 3'S LOW.]
            THE BY-CONSTRUCTION FIX IS AN IDENTITY, NOT A TIMING ARGUMENT: stamp
            each pending slot with the arm generation this poll bumps, and have
            the drain accept a pair only when the generation still matches.
