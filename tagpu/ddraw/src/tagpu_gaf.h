@@ -252,7 +252,7 @@ typedef struct TAGPU_GAFATLAS {
        (`s_twinAnisoWant`). The test then means "the two ends are configured
        apart", which is the one thing that can still go wrong -- a knob edited
        mid-session, after a sampler that cannot be rebuilt mid-frame -- and
-       stops meaning "this machine lacks a feature". [11-5e-2's review left the
+       stops meaning "the device lacks a feature". [11-5e-2's review left the
        warning; 11-5e-2c discharged it.] */
     float          rgbAniso;
     /* THE PUBLISHED RESTORE LIST (the Vulkan-only plan's landing 7d), which is

@@ -13531,7 +13531,7 @@ latch. The consumer keeps `s_twinAnisoWant`, the value it read, separately from
 `s_twinAniso`, the value the device allowed, and compares against the former. The test
 then means *"the two ends are configured apart"* — exactly what the sampler's own
 comment says it is for, a knob changed mid-session when the sampler cannot be rebuilt
-because every other slot's submit still names it — and stops meaning *"this machine
+because every other slot's submit still names it — and stops meaning *"the device
 lacks a feature"*. Publishing what the consumer actually applies was the third option
 and is worse than both: the test would compare a value against itself.
 
