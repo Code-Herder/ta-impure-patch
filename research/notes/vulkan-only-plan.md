@@ -1765,6 +1765,42 @@ that a count which grows is the plan catching up with the work.) The row was
      `tagpu_render3do.c` — ~700 of the 1 233 lines. Every one keeps its producer and its
      `_handover`; only the half below `tagpu_native.c:3753`'s `if (!gl_draws)` goes. Shown by:
      the world A/B at `ss=2` still reads 0 px per pass.
+
+     **SIX OF THE EIGHT ARE DONE AND THE OTHER TWO BREAK THE RULE THIS LINE STATES
+     [2026-09-18].** `tagpu_native.c`, `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c`,
+     `tagpu_posedraw.c` and `tagpu_render3do.c` all have the shape the plan assumed: a gather
+     that survives, a `_publish`/`_handover` that survives, and a draw half that goes. For
+     **`tagpu_shadow.c` and `tagpu_hires_draw.c` the producer IS the half being deleted**, so
+     "keeps its producer" cannot be satisfied:
+
+     * `s_pubHave = 1` is set **only** in `tagpu_shadow_end`, and `tagpu_shadow_begin` /
+       `_hills` / `_end` were called only from `tagpu_native.c` **below** the `!gl_draws`
+       hand-over return (4223, 4310, 4311 against the return at 3817, measured at the 11-2
+       landing `22e6e4e`).
+     * `s_hiHave = 1` is set **only** in `tagpu_hires_depth`, called at 4287 — below the same
+       return — and `tagpu_hires_draw` at 4599 and 4658 likewise.
+
+     **The consequence is not new and is not this landing's doing**: both were already
+     unreachable on the Vulkan lane from landing 4b onward, which is why `tagpu_vk_shadow.c:788`
+     stands down on `tagpu_shadow_handover` returning 0 — already recorded above for the shadow
+     half, and true of the hires half for the same structural reason. Deleting the GL halves
+     changes no behaviour. What it changes is the **status** of two Vulkan modules: it makes
+     `tagpu_vk_shadow.c` and the caster half of `tagpu_vk_hires.c` unreachable *by construction*
+     rather than by an accident nobody has fixed, and it makes the absence of Classic++ soft
+     shadows and of replacement-mesh casters on the shipped lane permanent until someone writes
+     a Vulkan-side producer.
+
+     **That is a decision about what the program does, not about which lines are dead, so it is
+     the owner's** (CLAUDE.md, *Land it yourself*, escalation reason 1). The two readings:
+
+     | | delete the two GL halves now | leave them for a producer landing |
+     |---|---|---|
+     | behaviour today | unchanged — both are already unreachable | unchanged |
+     | what it says | the features are gone until rebuilt on Vulkan | the features are coming back |
+     | what follows | `tagpu_vk_shadow.c` and part of `tagpu_vk_hires.c` become deletable too | both stay, waiting for a producer |
+
+     **11-3 lands with the six that fit the rule.** The two are untouched and named here rather
+     than decided quietly.
    * **11-4 — the UI and support passes' GL draw halves.** `tagpu_gui_surf.c`, `tagpu_mark.c`,
      `tagpu_text.c`, `tagpu_fps.c`, `tagpu_gaf.c`, `tagpu_posebake.c`, `tagpu_scaffold.c`,
      `tagpu_hires.c`, `tagpu_overlay.c` — the rest of the 1 233. Shown by: the UI A/B, and

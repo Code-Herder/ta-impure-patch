@@ -35,7 +35,6 @@ void tagpu_r3d_atlas_level(unsigned level_gen);
    back the GL name; a lane with no GL calls this directly, because the LUT is
    the pass's and only the texture is the backend's. */
 void tagpu_r3d_lut_want(const unsigned char* shd);
-unsigned int tagpu_r3d_lut_texref(const unsigned char* shd);
 int tagpu_r3d_shade_neutral(void);
 int tagpu_r3d_shade_dir(void);
 int tagpu_r3d_atlas_uv(const char* gafframe, float uv[4], float* ck);

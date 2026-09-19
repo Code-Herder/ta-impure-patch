@@ -62,7 +62,6 @@ static void rlog(const char* s)
 
 static int    s_state = 0;         /* 0=unloaded 1=ready 2=failed */
 void tagpu_r3d_glreset(void);
-static GLuint s_lutTex;
 static int    s_lutBuilt = 0;
 /* 1 when the LUT that is up came from the ENGINE's own PALETTE.SHD rather than
    our computed ramp. Without it a single frame that arrived with no table —
@@ -129,15 +128,10 @@ static unsigned      s_lutSerial;
 
 static void shade_upload(const unsigned char* lut)
 {
-    /* THE UPLOAD IS GL; THE LUT IS THE PASS. `s_lutMirror` below is what the
-       Vulkan twin samples, so only the texture stands down.
-       [The vulkan-only plan, landing 4b-2.] */
-    if (!tagpu_vk_owns_present()) {
-        glBindTexture(GL_TEXTURE_2D, s_lutTex);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, SH_ROWS, GL_RED, GL_UNSIGNED_BYTE, lut);
-        glBindTexture(GL_TEXTURE_2D, 0);
-    }
+    /* THE GL UPLOAD STOOD HERE; THE LUT IS THE PASS [landing 11-3]. The texture
+       it filled had one consumer, the GL unit shader, which went with the draw
+       halves. `s_lutMirror` below is what the Vulkan twin samples and is the
+       whole of what this function does now. */
     memcpy(s_lutMirror, lut, sizeof s_lutMirror);
     s_lutSerial++;
     s_lutBuilt = 1;
@@ -294,15 +288,8 @@ static void r3d_init(void)
        the shade LUT are ready", which is what `tagpu_r3d_ensure` answers for
        the unit pass. Seventh instance in this landing of GL object creation
        entangled with CPU setup a pass needs. [The vulkan-only plan, 4b-2.] */
-    if (!tagpu_vk_owns_present()) {
-        glGenTextures(1, &s_lutTex);
-        glBindTexture(GL_TEXTURE_2D, s_lutTex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, 256, SH_ROWS, 0,
-                     GL_RED, GL_UNSIGNED_BYTE, NULL);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glBindTexture(GL_TEXTURE_2D, 0);
-    }
+    /* the LUT texture's creation stood here and went with its only consumer
+       [landing 11-3]; the CPU half below is what `tagpu_r3d_ensure` answers. */
     s_state = 1;
     /* THE MIRROR IS ASKED FOR HERE, BEFORE THE FIRST PAINT, and that ordering is
        the whole of it. It used to be asked for in `pd_view_publish`, which is
@@ -506,11 +493,11 @@ void tagpu_r3d_lut_want(const unsigned char* shd)
     if (s_state == 1 && (!s_lutBuilt || (shd && !s_lutFromShd))) shade_build_lut(shd);
 }
 
-GLuint tagpu_r3d_lut_texref(const unsigned char* shd)
-{
-    tagpu_r3d_lut_want(shd);
-    return s_lutBuilt ? s_lutTex : 0;
-}
+/* `tagpu_r3d_lut_texref` stood here: it returned the GL shade-LUT texture to
+   whoever was about to bind it. Its consumers were the GL unit and terrain
+   shaders, so it went with them [landing 11-3]. `tagpu_r3d_lut_want` -- the
+   CPU half it wrapped -- is still called every frame from tagpu_native.c and
+   is what keeps `s_lutMirror` current for the Vulkan twin. */
 /* ---- the Vulkan lane's texels; tagpu_render3do.h has the contract ------- */
 void tagpu_r3d_atlas_mirror_want(void)
 {
