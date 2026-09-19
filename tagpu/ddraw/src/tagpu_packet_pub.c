@@ -80,6 +80,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
+#include "../inc/dd.h"     /* g_ddraw: the game's own screen, for the roster's on-screen test */
 #include "tagpu_engine.h"
 #include "tagpu_packet.h"
 #include "tagpu_packet_pub.h"
@@ -319,6 +320,11 @@ typedef char pk_wreck_size [(sizeof(TAGPU_PK_WRECK)  ==  44) ? 1 : -1];
 typedef char pk_anchor_size[(sizeof(TAGPU_PK_ANCHOR) ==  16) ? 1 : -1];
 
 static TAGPU_PK_UNIT   s_uScratch[TAGPU_PK_MAX_UNITS];
+/* what fill_frame last wrote. Read back by roster_log immediately after the
+   publish, on the producer's own thread: the slot's only WRITER is this
+   producer on its next fill, consumers only read, so between the publish and
+   that next fill the bytes cannot move under us. Never read anywhere else. */
+static const TAGPU_PACKET* s_lastFilled;
 static TAGPU_PK_WRECK  s_wScratch[TAGPU_PK_MAX_WRECKS];
 static TAGPU_PK_ANCHOR s_aScratch[TAGPU_PK_MAX_ANCHORS];
 /* slot -> index in the units table, for the cargo links; 0xFFFF = not carried
@@ -1713,7 +1719,147 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
         if (e > need) need = e;
     }
     p->used_bytes = cursor;
+    s_lastFilled = p;      /* the roster reads it back; see roster_log below */
     return need;
+}
+
+/* ===================== THE LIVE-STATE LOG tacli READS =====================
+   [the vulkan-only plan, landing 10c-3]
+
+   Three lines, and with `peek:` they are the whole of what `tacli` greps out
+   of tagpu.log:
+
+     `units: alive=N onscreen=N eye=(x,y) me=N`  -- `tacli roster`'s header,
+        and the signal `tacli scenario load` waits on to decide a map is live;
+     `  uNNN <name> own=N idx=N world=(...) screen=(...) nano=...` -- the
+        roster itself, which is how a headless harness steers to a unit;
+     `mouse: screen=(x,y)` -- TA's own pointer, read without touching the
+        user's.
+
+   They were emitted by `log_units` in tagpu_overlay.c, which only
+   render_ogl.c and render_vk.c reach. On `renderer=gdi` none of them ever
+   appeared, so `tacli roster` answered nothing and `tacli scenario load`
+   TIMED OUT -- with the game behind it running perfectly well. That was
+   measured rather than assumed: `tacli scenario apply` against an instance
+   `load` had just declared dead applied 5 of 5. Only the detector was
+   missing, which is why this is one function and not a subsystem.
+
+   GATED IN MILLISECONDS, NOT IN FRAMES, and that is the whole of the care
+   this needs. The old throttles counted RENDER frames at ~60/s -- `% 300`
+   for the roster, `>= 30` for the header, `>= 15` for the mouse. This runs
+   from the in-play draw, measured at 13 361 draws/s on the reference setup,
+   so carrying those modulos across would have raised the file-write rate
+   about two hundredfold on the game thread inside an engine call. That is
+   precisely the fault the landing review of 10c-1 found when this family
+   first moved, and the cadences below are the old ones restated as time.
+
+   (The old comment claimed "every ~10s" for the roster dump; 300 frames at
+   60/s is 5 s, and 5 s is what it has always done.) */
+#define ROSTER_HDR_MS    500u   /* `units:`  <- was >= 30 render frames  */
+#define ROSTER_DUMP_MS  5000u   /* the dump  <- was  % 300 render frames */
+#define ROSTER_MOUSE_MS  250u   /* `mouse:`  <- was >= 15 render frames  */
+
+static LARGE_INTEGER s_rosFreq, s_rosNow, s_rosFill, s_rosHdr, s_rosDump, s_rosMouse;
+
+static int ros_due(const LARGE_INTEGER* last, unsigned ms)
+{
+    if (!last->QuadPart) return 1;
+    return (s_rosNow.QuadPart - last->QuadPart) * 1000 >=
+           (LONGLONG)ms * s_rosFreq.QuadPart;
+}
+
+/* WHY THE PUBLISH BELOW IS SOMETIMES FORCED. `fill_frame` runs only when a
+   publish is not skipped, and the FRESH gate skips whenever the renderer has
+   not taken the last packet. `tagpu_packet_acquire` has exactly two call
+   sites -- render_vk.c and render_ogl.c -- so on `renderer=gdi` NOTHING
+   takes, every unforced publish is skipped, and `fill_frame` runs about once
+   per level. Hanging the roster off the packet without this would have
+   produced nothing on the one lane landing 10c-3 exists for, and produced it
+   silently.
+
+   IT ASKS WHEN THE LAST FILL WAS, not when a particular line is next due,
+   and the difference is measurable. Asking the HEADER's 500 ms gate (the
+   first cut) made the fill rate on a consumerless lane exactly the header's
+   rate, so `mouse:` -- whose own gate is 250 ms -- could only ever fire at
+   500 ms there. Measured on a gdi instance: 22 `units:` lines and 22
+   `mouse:` lines over the same run, where the mouse should have had twice
+   as many. Against the last FILL it is self-limiting for the right reason:
+   on a lane whose renderer takes packets the fills are ~16 ms apart, so this
+   is never due and never forces; on one with no consumer it forces at the
+   shortest cadence any of the three lines needs, and each line then keeps
+   its own. It stamps the shared clock, so the whole draw costs one
+   QueryPerformanceCounter. */
+static int roster_wants_fill(void)
+{
+    if (!s_rosFreq.QuadPart) QueryPerformanceFrequency(&s_rosFreq);
+    if (!s_rosFreq.QuadPart) return 0;            /* fail closed, as the trigger gate does */
+    QueryPerformanceCounter(&s_rosNow);
+    return ros_due(&s_rosFill, ROSTER_MOUSE_MS);  /* the shortest of the three */
+}
+
+static void roster_log(const TAGPU_PACKET* pk)
+{
+    const TAGPU_PK_UNIT* uu;
+    unsigned i;
+    int alive = 0, onscreen = 0, eyeX, eyeY, gw, gh, me, wantHdr, wantDump;
+
+    if (!s_rosFreq.QuadPart || !s_rosNow.QuadPart) return;
+    s_rosFill = s_rosNow;    /* a fill just happened: that is what the force asks about */
+    if (!pk || !pk->in_game) return;
+
+    /* the eye the world was drawn with: the roster's screen= is the 1x
+       projection about it */
+    eyeX = pk->eye[0]; eyeY = pk->eye[1];
+    /* `me=` is main+0x2A42, the order driver's player -- the byte this log has
+       always printed, NOT the bar loop's main+0x2A43. The packet carries both
+       and they are written independently (the exe note's marker-block
+       section), so the wrong one would change what tacli reads. */
+    me = pk->watched;
+    gw = g_ddraw.width  > 0 ? (int)g_ddraw.width  : 640;
+    gh = g_ddraw.height > 0 ? (int)g_ddraw.height : 480;
+
+    if (ros_due(&s_rosMouse, ROSTER_MOUSE_MS)) {
+        int mx = pk->mouse[0], my = pk->mouse[1];
+        s_rosMouse = s_rosNow;
+        if (mx >= -50 && mx <= 4000 && my >= -50 && my <= 4000) {
+            char b[96]; _snprintf(b, sizeof b, "mouse: screen=(%d,%d)", mx, my); plog(b);
+        }
+    }
+
+    wantHdr  = ros_due(&s_rosHdr,  ROSTER_HDR_MS);
+    wantDump = ros_due(&s_rosDump, ROSTER_DUMP_MS);
+    if (!wantHdr && !wantDump) return;   /* the walk is only for these two */
+    if (wantHdr)  s_rosHdr  = s_rosNow;
+    if (wantDump) s_rosDump = s_rosNow;
+
+    uu = tagpu_pk_units(pk);
+    for (i = 0; i < pk->n_units; i++) {
+        const TAGPU_PK_UNIT* u = &uu[i];
+        int wx = (int)(short)(u->pos[0] >> 16);
+        int wz = (int)(short)(u->pos[1] >> 16);
+        int wy = (int)(short)(u->pos[2] >> 16);
+        int sx = wx - eyeX + 128;
+        int sy = wy - (wz / 2) - eyeY + 32;
+        alive++;
+        /* the full dump: index, type, owner, position. idx = UnitInGameIndex
+           (+0xA8), the engine's own slot. It is RECYCLED on death, so it is
+           never a public identity -- but it is what `tacli scenario` reports
+           per spawned entity, so the roster has to speak the same number for
+           the two to be comparable. */
+        if (wantDump) {
+            char db[192]; _snprintf(db, sizeof db,
+                "  u%03d %-12.12s own=%d idx=%d world=(%d,%d,%d) screen=(%d,%d) nano=%.2f",
+                alive, u->name[0] ? u->name : "?", (int)u->owner, (int)u->id,
+                wx, wy, wz, sx, sy, u->nano);
+            plog(db);
+        }
+        if (sx >= -gw / 40 && sx <= gw + gw / 40 && sy >= -gh / 40 && sy <= gh + gh / 40)
+            onscreen++;
+    }
+    if (wantHdr) {
+        char b[160]; _snprintf(b, sizeof b, "units: alive=%d onscreen=%d eye=(%d,%d) me=%d",
+                               alive, onscreen, eyeX, eyeY, (int)me); plog(b);
+    }
 }
 
 /* the level end: header only, in_game = 0, the new generation (and the
@@ -1835,7 +1981,10 @@ static void* __cdecl after_draw(unsigned int* regs)
        the renderer on an in_game = 0 packet, with no world, until the render
        thread happened to take one in between. One forced publish per level,
        counted as an overrun exactly like the level-end packet's. */
-    if (tagpu_packet_publish(fill_frame, NULL, !s_levelOpen) && !s_levelOpen) {
+    {
+    const int pub = tagpu_packet_publish(fill_frame, NULL,
+                                         !s_levelOpen || roster_wants_fill());
+    if (pub && !s_levelOpen) {
         char b[260];
         s_levelOpen = 1;
         _snprintf(b, sizeof b,
@@ -1843,6 +1992,9 @@ static void* __cdecl after_draw(unsigned int* regs)
                   s_levelGen, s_cDraws, s_lastTick, load_flags(), s_shellFlags,
                   (unsigned)s_loaderTid, s_loaderEntries, (unsigned)s_gameTid);
         b[sizeof b - 1] = 0; plog(b);
+    }
+    /* the live-state log tacli reads, from the packet just filled */
+    if (pub) roster_log(s_lastFilled);
     }
     return ret;
 }

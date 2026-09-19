@@ -1859,7 +1859,7 @@ focus=SINGLE
 appeared"*. `tacli units` answers there too, and the GL lane was re-checked for regression and is
 unchanged.
 
-**LANDING 10c-2 IS DONE AND THE GATE IS CLOSED [2026-09-18]: `renderer=gdi` CAN BE DRIVEN.**
+**LANDING 10c-2 IS DONE [2026-09-18]: `renderer=gdi` CAN BE DRIVEN.**
 `tagpu_input.c` was **split on the packet**, not moved. Its token half — `tagpu_input_frame`:
 `tagpu_keys.txt`, the injected pointer, the shield's held-modifier expiries — reads no packet, so
 it joined the family and runs from the flip on the game thread. Its camera hold became
@@ -1909,6 +1909,46 @@ frame counter in the overlay).
   `before_flip`'s **stack**. It is now set immediately before `do_keys` and cleared immediately
   after; every reader (`si_mouse`, and the park in `inject_click_at`) is reached from `do_keys` and
   from nowhere else.
+
+**LANDING 10c-3 IS DONE AND THE GATE IS CLOSED [2026-09-18]: `renderer=gdi` CAN BE MEASURED.**
+Driving it was not enough, and the thing that showed that was a `tacli scenario load` on the gdi
+lane failing with *"no game after 180s — the shell never reached a live map"* **while the game
+behind it had loaded perfectly well**. Only the DETECTOR was missing: `scenario load` waits for
+`units: alive=N` in `tagpu.log`, and that line — with the roster dump and `mouse:`, the whole of
+what `tacli` greps for besides `peek:` — came from `log_units` in `tagpu_overlay.c`, which the gdi
+lane never enters. Proven rather than assumed by running `tacli scenario apply` against the
+instance `load` had just declared dead: **applied 5 of 5**.
+
+`log_units` is `roster_log` in `tagpu_packet_pub.c` now, on the game thread, fed by the packet
+that file has just filled.
+
+**AND IT CANNOT RIDE ON THE PACKET NAIVELY — this is the trap, and it is the same shape as the
+one 10c-2 walked into.** `fill_frame` runs only when a publish is not skipped, and the FRESH gate
+skips whenever the renderer has not taken the last packet. `tagpu_packet_acquire` has exactly two
+call sites, `render_vk.c` and `render_ogl.c` — **so on `renderer=gdi` nothing takes, every
+unforced publish is skipped, and `fill_frame` runs about once per level.** A roster hung off
+`fill_frame`, or off the `tagpu_packet_pub_last()` accessor this plan once prescribed, would have
+produced nothing at all on the one lane it exists for, and produced it silently. So the publish is
+forced when no fill has happened for the shortest of the three cadences — self-limiting, because
+on a lane whose renderer takes packets the fills are ~16 ms apart and it never fires.
+
+**Measured on both lanes, after a `scenario load` and ~30 s of play:**
+
+| lane | `units:` (500 ms) | `mouse:` (250 ms) | forced publishes | roster |
+|---|---|---|---|---|
+| gdi | 62 | 124 | as designed | answers, 11 units + eye |
+| vulkan | 77 | 151 | `overrun=2` of `pub=2982`, `taken=2979` | answers |
+
+`mouse:` is exactly twice `units:` on both, which is the check that matters: **the first cut of
+the force asked the HEADER's 500 ms gate, and that pinned every line on gdi to 500 ms** — 22 and
+22 where the mouse should have had twice as many. Asking when the last FILL was instead is what
+lets each line keep its own cadence.
+
+**GATED IN MILLISECONDS, NOT IN FRAMES.** The old throttles counted render frames at ~60/s
+(`% 300`, `>= 30`, `>= 15`). This runs from the in-play draw, measured at **13 361 draws/s**, so
+carrying those modulos across would have raised the file-write rate about two hundredfold on the
+game thread inside an engine call — exactly the fault the review of 10c-1 caught when this family
+first moved.
 
 **What 10c does NOT close:** the camera hold, `tacli wheel` and anything else riding the overlay
 frame still do not reach `renderer=gdi`. The two die at different points, and the review corrected

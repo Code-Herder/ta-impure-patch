@@ -223,68 +223,13 @@ void tagpu_overlay_capture_end(const TAGPU_FRAME* f)
    it) and the full roster block every 300 frames (`tacli roster`). Screen
    coords use the engine's rule sx = wx - eyeX + vpL, sy = wy - alt/2 - eyeY
    + vpT at the engine's own viewport origin. */
-static unsigned s_lastMouseLog;
 
-static void log_units(const TAGPU_FRAME* f)
-{
-    const TAGPU_PACKET* pk = f->packet;
-    const TAGPU_PK_UNIT* uu;
-    unsigned i;
-    int alive = 0, onscreen = 0, eyeX, eyeY, gw, gh, me;
-    static unsigned last = 0;
-
-    if (!pk || !pk->in_game) return;
-    /* the eye the world was drawn with, from the packet: the roster's screen=
-       is the 1x projection about it */
-    eyeX = pk->eye[0]; eyeY = pk->eye[1];
-    /* `me=` on the roster line is main+0x2A42, the order driver's player — the
-       byte this log has always printed, NOT the bar loop's main+0x2A43. The
-       packet carries both and they are written independently (the exe note's
-       marker-block section), so the wrong one would change what tacli reads. */
-    me   = pk->watched;
-    gw = f->game_width  > 0 ? f->game_width  : 640;
-    gh = f->game_height > 0 ? f->game_height : 480;
-
-    /* TA's own mouse position (SCREEN space) — no longer drawn, but still the
-       way to read the engine's cursor without touching the user's pointer
-       (input-firewall.md). It rides in the packet header now. */
-    if (f->frame_counter - s_lastMouseLog >= 15) {
-        int mx = pk->mouse[0], my = pk->mouse[1];
-        s_lastMouseLog = f->frame_counter;
-        if (mx >= -50 && mx <= 4000 && my >= -50 && my <= 4000) {
-            char b[96]; _snprintf(b, sizeof b, "mouse: screen=(%d,%d)", mx, my); olog(b);
-        }
-    }
-
-    uu = tagpu_pk_units(pk);
-    for (i = 0; i < pk->n_units; i++) {
-        const TAGPU_PK_UNIT* u = &uu[i];
-        int wx = (int)(short)(u->pos[0] >> 16);
-        int wz = (int)(short)(u->pos[1] >> 16);
-        int wy = (int)(short)(u->pos[2] >> 16);
-        int sx = wx - eyeX + 128;
-        int sy = wy - (wz / 2) - eyeY + 32;
-        alive++;
-        /* full roster dump every ~10s: index, type, owner, position — makes
-           headless camera steering to any specific unit possible.
-           idx = UnitInGameIndex (+0xA8), the engine's own slot. It is
-           RECYCLED on death, so it is never a public identity — but it is
-           what `tacli scenario` reports per spawned entity, so the roster
-           has to speak the same number for the two to be comparable. */
-        if ((f->frame_counter % 300) == 0) {
-            char db[192]; _snprintf(db, sizeof db,
-                "  u%03d %-12.12s own=%d idx=%d world=(%d,%d,%d) screen=(%d,%d) nano=%.2f",
-                alive, u->name[0] ? u->name : "?", (int)u->owner, (int)u->id,
-                wx, wy, wz, sx, sy, u->nano);
-            olog(db);
-        }
-        if (sx >= -gw / 40 && sx <= gw + gw / 40 && sy >= -gh / 40 && sy <= gh + gh / 40)
-            onscreen++;
-    }
-    if (f->frame_counter - last >= 30) { last = f->frame_counter;
-        char b[160]; _snprintf(b, sizeof b, "units: alive=%d onscreen=%d eye=(%d,%d) me=%d",
-                               alive, onscreen, eyeX, eyeY, (int)me); olog(b); }
-}
+/* THE LIVE-STATE LOG MOVED OUT OF HERE [the vulkan-only plan, landing 10c-3].
+   `log_units` emitted the three lines `tacli` greps for -- `units:`, the
+   roster dump and `mouse:` -- and it lived here, which render_gdi.c never
+   reaches. It is `roster_log` in tagpu_packet_pub.c now, on the game thread,
+   fed by the packet that file has just filled and gated in milliseconds
+   rather than in render frames. */
 
 static void oerr(const char* tag)
 {
@@ -429,10 +374,6 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        and the native pass alike — draws from (tagpu_zoom.h). Called here and
        nowhere else, so no two passes can draw one frame from two eyes. */
     tagpu_zoom_read_lever(f->packet);
-
-    /* live-state logs tacli depends on (roster, units:, mouse:), from the
-       packet's units table and header */
-    log_units(f);
 
     /* G12a: scene-depth scaffold debug overlay (tagpu_scaffold.on). Own GL
        state block; leaves program/VAO at 0.

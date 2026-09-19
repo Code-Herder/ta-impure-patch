@@ -3168,9 +3168,19 @@ measured.
   by what reads the code being moved, not by what the code being moved reads**, and the superseded
   design never asked that question.
 
+* **10c-3** moved the live-state log — `units:`, the roster dump and `mouse:`, which with `peek:`
+  are the whole of what `tacli` reads out of `tagpu.log` — off `tagpu_overlay.c` and onto the game
+  thread. Driving the lane had not been enough: `scenario load` still timed out on gdi *while the
+  game behind it had loaded*, because its live-map signal was one of those lines. The trap it
+  avoided is worth carrying: the packet is **not** a source of truth on a lane with no renderer
+  taking it — `tagpu_packet_acquire` has two call sites, both in the GL and Vulkan backends, so on
+  gdi the FRESH gate skips every unforced publish and `fill_frame` runs about once per level.
+
 **Measured:** on gdi, `tacli click` takes `MAINMENU.GUI` to `SINGLE.GUI` and `keys esc` comes back
-— before this, neither did anything there. On Vulkan, no regression: `scenario load` drove the
-menus by click into a live game, and the camera hold is exact and releases cleanly.
+— before this, neither did anything there; `scenario load` now completes ("live with 4 units",
+5 of 5 applied) and `tacli roster` answers with the unit list and the camera eye. On Vulkan, no
+regression through any of it, and the added keepalive never fires there: `overrun=2` of
+`pub=2982` with `taken=2979`.
 
 **What 10c did NOT close, and landing 11 owns it:** `renderer=gdi` is still not stock *as a lane*
 — **one** ungated patch, `0x4266A7`, the DirectX version warning with no lever at all, plus the

@@ -1909,6 +1909,13 @@ to main's (parity md5 measured equal, §10 — but see the note below: "trigger 
 meaning in landing 10c-2 and that row has not been re-measured since).
 **`gui.on` is part of the default arm set** now.
 
+**Everything `tacli` reads now comes from the GAME thread, so every verb works on every renderer
+including `renderer=gdi`** (the vulkan-only plan's gate 10c, three landings). The triggers and the
+key/click injection run from the engine's flip; the live-state log — `units:`, the roster dump and
+`mouse:`, which with `peek:` are the whole of what `tacli` greps out of `tagpu.log` — is written
+by `tagpu_packet_pub.c` beside the frame packet. What still does NOT reach gdi is `tacli eye` and
+`tacli wheel`: both need the overlay frame, which only the GL and Vulkan backends run.
+
 **`gui.on` DOES NOT GATE `tacli` ITSELF, and for one commit in the vulkan-only plan's landing 10c
 it did** — which is worth knowing because the failure was silent. The flip `0x4C63A0` is where the
 whole on-demand trigger family runs since that landing (peek, `ui`, the catalogues, scenario

@@ -228,7 +228,9 @@ The sequence, from the binary:
 
 For the length of that memset the pair is (new `begin`, last game's `end`). **Six render-thread
 readers had it, and landing 3 is what removed all six** — `tagpu_native_frame` and
-`tagpu_scaffold_frame` read the packet's units table, `log_units` reads it too,
+`tagpu_scaffold_frame` read the packet's units table, `log_units` read it too (and since the
+vulkan-only plan's landing 10c-3 it is not on the render thread at all — it is `roster_log` in
+`tagpu_packet_pub.c`, on the game thread, so that `renderer=gdi` has a roster),
 `probe_unit_model` and `writeback_paint` are deleted, and `tagpu_mark_gather` walks the table. A
 seventh, `tagpu_order.c`'s `sane_unit`, bounded a record's unit pointer against the same pair on
 the present thread and is now a binary search over the packet's own table by array slot. **The

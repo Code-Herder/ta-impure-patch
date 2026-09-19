@@ -213,8 +213,10 @@ then `native: level 0 -> 1, dropping the template caches`, which did not happen 
 
 **It must not be bumped in the pre hook, and this is a trap rather than a preference.** The render
 thread is not stopped by `pass_begin` — `render_ogl.c` ignores its return — it is stopped by
-`tagpu_overlay.c`'s `teardown_active()` gate, and `tagpu_native_frame` is thirteen
-lines further on, past `log_units` (file I/O) and the scaffold. **Since G13t (2026-09-11) that gate
+`tagpu_overlay.c`'s `teardown_active()` gate, and `tagpu_native_frame` is a little further on,
+past the scaffold. (It used to pass `log_units` and its file I/O on the way; that moved to the
+game thread in the vulkan-only plan's landing 10c-3 and is `roster_log` in
+`tagpu_packet_pub.c` now.) **Since G13t (2026-09-11) that gate
 replays the flag as `pass_begin` latched it rather than re-reading `s_teardown`**, so the boundary
 is `pass_begin` and not the gate: the two used to be able to disagree, and a pass that answered
 "teardown" at `pass_begin` — publishing `s_completed = s_started`, i.e. declaring itself finished —
