@@ -22,7 +22,7 @@ no longer true.
     renderer=gdi      the original game        (the reference)
 
 Deleted (`render_d3d9.c` and `render_ogl.c` ✓ gone 2026-09-18, the rest still standing):
-`render_ogl.c` (2 013 lines), `render_d3d9.c` (742), `opengl_utils.c`,
+`render_ogl.c` (2 015 lines), `render_d3d9.c` (742), `opengl_utils.c`,
 `openglshader.h`, `render_ogl.h`, `tagpu_abshot.c`, every `tagpu_*` GL draw, and
 `tagpu_overlay.off`.
 
@@ -1664,7 +1664,7 @@ that a count which grows is the plan catching up with the work.) The row was
      become unreachable by an ordering rather than by a hope, and 11-3/11-4 then delete provably
      dead code instead of live code.
 
-     What went: `render_ogl.c` (2 013 lines), `render_ogl.h`, and the GL lane's call sites in
+     What went: `render_ogl.c` (2 015 lines), `render_ogl.h`, and the GL lane's call sites in
      `dd.c`, `config.c`, `fps_limiter.c` and `winapi_hooks.c`. `renderer=opengl`/`openglcore`
      now reaches the **Vulkan** lane with a log line, and so does `auto` — which makes the
      plan's "default, shipped" true in the code rather than only in this page. Nothing is probed
@@ -1683,10 +1683,39 @@ that a count which grows is the plan catching up with the work.) The row was
      **`tacli shot` MOVED FIRST, so the verb never had a gap** (11-2a). The engine-surface
      screenshot was polled in `render_ogl.c`'s present loop and nowhere else, so it answered on
      the GL lane only — measured failing on gdi and Vulkan by 10c-3's review. It is not a GL
-     capture: `ss_take_screenshot(g_ddraw.primary)` reads the fork's own DirectDraw primary. It
-     joined `tagpu_triggers_frame`, and the thread was already proven for it — `keyboard.c:96`
-     and `:102` take the same screenshot from the game thread on PrintScreen. Measured: a correct
-     main-menu PNG on `renderer=gdi` and on `renderer=vulkan`, where the verb had never worked.
+     capture: `ss_take_screenshot(g_ddraw.primary)` reads the fork's own DirectDraw primary, and
+     the thread was already proven for it — `keyboard.c:96` and `:102` take the same screenshot
+     from the game thread on PrintScreen.
+
+     **The first rehost captured one frame stale, and this landing's review caught it**
+     (MEDIUM-1). 11-2a put the whole verb — the trigger poll *and* the capture — into
+     `tagpu_triggers_frame`, which `tagpu_gui_hook.c` hosts from `before_flip`, i.e. at the
+     **entry** of the flip `0x4C63A0`. The engine's DirectDraw arm at `0x4C6475` locks the
+     primary, draws the cursor, **copies the back buffer onto the primary** with `0x4CBBE0`,
+     restores the cursor background and unlocks — all *inside* that call
+     ([exe-reverse-engineering](exe-reverse-engineering.html), VERIFIED). So at `before_flip` the
+     primary still holds the previous frame, and every `tacli shot` was answering with frame
+     N−1. On a still menu nothing shows it; on anything that moves, the PNG is a frame behind the
+     state the caller had just set up, which is exactly the class of wrong answer a harness verb
+     must not give.
+
+     **The fix splits arming from capturing, so it is an ordering and not a timing.** The trigger
+     family keeps only the arm — `ss_shot_arm()` deletes `tagpu_shot.trigger` and sets a flag.
+     The capture, `ss_shot_service(primary)`, runs from `dds_Unlock`'s `DDSCAPS_PRIMARYSURFACE`
+     branch (`ddsurface.c`), which is the fork's own *this frame is finished* point: the game
+     thread, every renderer, and by construction after the copy rather than before it. No window
+     is being bet on.
+
+     **`after_flip` was considered as the host and rejected.** It is gated on `s_opsLive`, which
+     is set only where the 17 GUI leaves install — that is, behind `tagpu_gui.on`. Hosting the
+     shot there would have reproduced the 10c-2 HIGH: a verb that works in a driven session and
+     silently does nothing on a bare `tacli launch`.
+
+     **Measured after the split**: a correct main-menu PNG on `renderer=gdi` (136 198 B) and on
+     `renderer=vulkan` (136 162 B), where the verb had never worked at all. **Not measured**: the
+     single-present case — a 120-shot sweep through a `scenario load` returned 71 PNGs and 9
+     distinct frames without once catching the loading screen, so whether a screen that presents
+     once is reachable by this verb is open, not answered.
 
      **`tacli glshot` IS RETIRED**, because a GL framebuffer no longer exists in the process. The
      verb is kept and now **fails loudly** with what to use instead, rather than timing out

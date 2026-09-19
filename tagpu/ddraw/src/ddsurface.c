@@ -4,6 +4,7 @@
 #include "dd.h"
 #include "hook.h"
 #include "ddsurface.h"
+#include "screenshot.h"
 #include "mouse.h"
 #include "IDirectDrawSurface.h"
 #include "winapi_hooks.h"
@@ -1238,6 +1239,13 @@ HRESULT dds_Unlock(IDirectDrawSurfaceImpl* This, LPRECT lpRect)
 
     if ((This->caps & DDSCAPS_PRIMARYSURFACE) && g_ddraw.ref && g_ddraw.render.run)
     {
+        /* `tacli shot`, served where the frame provably exists [the
+           vulkan-only plan, landing 11-2]. The trigger is polled on the
+           engine's flip, and that detour runs at 0x4C63A0's ENTRY -- before it
+           copies back buffer -> primary -- so the poll only ARMS, and this
+           unlock, which is the fork's own "the frame is finished", takes the
+           picture. Both halves are the game thread. See screenshot.h. */
+        ss_shot_service(This);
         InterlockedExchange(&g_ddraw.render.surface_updated, TRUE);
         InterlockedExchange(&g_ddraw.render.screen_updated, TRUE);
 

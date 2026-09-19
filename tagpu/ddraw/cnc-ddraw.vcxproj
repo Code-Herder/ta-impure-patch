@@ -64,7 +64,6 @@
     <ClCompile Include="src\mouse.c" />
     <ClCompile Include="src\opengl_utils.c" />
     <ClCompile Include="src\ddpalette.c" />
-    <ClCompile Include="src\render_ogl.c" />
     <ClCompile Include="src\render_gdi.c" />
     <ClCompile Include="src\screenshot.c" />
     <ClCompile Include="src\config.c" />
@@ -106,7 +105,6 @@
     <ClInclude Include="inc\opengl_utils.h" />
     <ClInclude Include="inc\ddpalette.h" />
     <ClInclude Include="inc\openglshader.h" />
-    <ClInclude Include="inc\render_ogl.h" />
     <ClInclude Include="inc\render_gdi.h" />
     <ClInclude Include="inc\screenshot.h" />
     <ClInclude Include="inc\config.h" />

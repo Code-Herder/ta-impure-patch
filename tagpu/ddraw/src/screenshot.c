@@ -125,6 +125,20 @@ static BOOL ss_screenshot_32bit(char* filename, IDirectDrawSurfaceImpl* src)
     return !error;
 }
 
+static int s_shotArmed;
+
+void ss_shot_arm(void)
+{
+    s_shotArmed = 1;
+}
+
+void ss_shot_service(IDirectDrawSurfaceImpl* primary)
+{
+    if (!s_shotArmed) return;
+    s_shotArmed = 0;
+    ss_take_screenshot(primary);
+}
+
 BOOL ss_take_screenshot(IDirectDrawSurfaceImpl* src)
 {
     if (!src || !dds_GetBuffer(src) || !src->width || !src->height)

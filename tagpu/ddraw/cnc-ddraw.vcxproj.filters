@@ -89,7 +89,6 @@
     <ClCompile Include="src\utils.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="src\render_ogl.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\dd.c">
@@ -207,7 +206,6 @@
     <ClInclude Include="inc\screenshot.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="inc\render_ogl.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="inc\dd.h">

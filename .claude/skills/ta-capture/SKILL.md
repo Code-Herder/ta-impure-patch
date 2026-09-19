@@ -22,8 +22,15 @@ windowed mode, silence, keys, clicks, camera, skirmish presets. This file covers
 > * **`tacli shot`** — the engine's own 8bpp surface. It was GL-only too and is not any more:
 >   since landing 11-2a it is polled from the engine's flip and answers on **every** renderer,
 >   gdi and Vulkan included. It shows the engine's frame — UI, and the flat key fill inside the
->   world viewport — so it is the right tool for reading the UI, the shell, a dialog or a
->   loading screen, and the wrong one for judging what a pass drew.
+>   world viewport — so it is the right tool for reading the UI, the shell or a dialog, and the
+>   wrong one for judging what a pass drew.
+>
+>   **On a screen presented exactly ONCE — a loading screen — treat it as unproven.** The
+>   trigger is polled at the flip's ENTRY, before the engine copies back buffer → primary, so
+>   the poll only arms and the capture is taken at the primary's unlock inside that same flip
+>   (`dds_Unlock`, `screenshot.h`). That ordering is right by the engine map, but the
+>   single-present case has **not been measured**: a 120-shot sweep through a `scenario load`
+>   caught nine distinct live frames and never the loading screen itself.
 > * **recording the live window** (ffmpeg x11grab, below) — the only way to see the composited
 >   frame now, on either lane. This is what the "pictures come from the live display" rule in
 >   the visual-verification notes already said.

@@ -16,12 +16,15 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5
 **THERE ARE TWO RENDERER BACKENDS SINCE 2026-09-18, AND THE PROCESS CREATES NO GL CONTEXT ON
 ANY PATH.** `renderer=vulkan` is the patch and `renderer=gdi` the reference; `auto`,
 `opengl` and `openglcore` all reach the Vulkan lane, which hands the session to GDI late if it
-will not come up. `render_ogl.c` (2 013 lines) and `render_ogl.h` went in the vulkan-only plan's
+will not come up. `render_ogl.c` (2 015 lines) and `render_ogl.h` went in the vulkan-only plan's
 landing 11-2, ahead of the sixteen passes' GL draw halves rather than behind them -- with the
 lane's only other `tagpu_overlay_draw` caller gone, `gl_draws = !tagpu_vk_owns_present()` is
 false at every surviving call, so those halves are now unreachable by an ordering and 11-3/11-4
-delete dead code. **`tacli shot` moved to the flip with it** and answers on every lane for the
-first time; **`tacli glshot` is retired** and fails loudly.
+delete dead code. **`tacli shot` moved off the GL present loop with it** and answers on every
+lane for the first time -- **armed** from the flip's trigger family and **captured** from
+`dds_Unlock`'s primary branch, which is after the engine has copied the back buffer onto the
+primary rather than before it (the first rehost put both halves at the flip's entry and returned
+frame N-1; §2.64). **`tacli glshot` is retired** and fails loudly.
 
 The paragraph this replaced, kept for its own record: three backends since the Direct3D9
 deletion. `renderer=` took `auto`
@@ -940,7 +943,7 @@ sees only the blits that really draw. Full argument lists, boxes and evidence: t
 
 | VA | What it is | Stolen | Observer records |
 |---|---|---|---|
-| `0x4C63A0` | `FlipOffscreenToPrimary` — the engine's "this frame is complete"; the census runs here, **and since the vulkan-only plan's landing 10c so does the whole on-demand trigger family** | 6 | the frame marker; diffs `*(globals+0xBC)` and every surface an op named. **Also `tagpu_triggers_frame`** (`tagpu_trigger.h`): peek, the weapon dump, the GUI snapshot, the unit/feature catalogues, scenario detection, and — since 10c-2 — `tagpu_input.c`'s token half. It runs from `before_flip`, above that function's three early returns, behind a **16 ms QPC gate** with its own counter: these throttle on `frame_counter % 5` (`% 15` for peek) written against the ~60/s *present* rate, and the shell flips **thousands of times a second** — `CENSUS_MS`'s comment beside it reads ~5 000 flips/s (measured 2026-09-07) with the op census at ~12 000 *ops*/s on MAINMENU, while §5352 and the GUI-renderer page say ~12 000 *flips*/s; **the two readings are not reconciled** and the gate does not depend on which is right, being a bound rather than a rate assumption. This is the only reason any `tacli` verb works on `renderer=gdi`, which reaches `tagpu_overlay_draw` never — **and therefore the observer installs whenever the flip's bytes match, NOT behind `tagpu_gui.on`**. For one commit it was behind that trigger, which `tagpu_defaults.off` (written by a bare `tacli launch`) takes away, so an ordinary instance had every `tacli` verb and all input injection silently dead **on every renderer**, with no line in the log because the early return was above the only one. The landing review of 10c-2 caught it. `tagpu_gui.on` now gates the UI layer, the census and the 17 leaves alone; `tacli gui remove` removes those and no longer removes the ability to drive the instance. The one trigger NOT here is `tagpu_input_eye_frame`, the camera hold: it dereferences `f->packet` and this frame has none |
+| `0x4C63A0` | `FlipOffscreenToPrimary` — the engine's "this frame is complete"; the census runs here, **and since the vulkan-only plan's landing 10c so does the whole on-demand trigger family** | 6 | the frame marker; diffs `*(globals+0xBC)` and every surface an op named. **Also `tagpu_triggers_frame`** (`tagpu_trigger.h`): peek, the weapon dump, the GUI snapshot, the unit/feature catalogues, scenario detection, — since 10c-2 — `tagpu_input.c`'s token half, and — since 11-2 — the engine-surface screenshot's **arm** alone (`ss_shot_arm`; the capture cannot run here, see §2.64). It runs from `before_flip`, above that function's three early returns, behind a **16 ms QPC gate** with its own counter: these throttle on `frame_counter % 5` (`% 15` for peek) written against the ~60/s *present* rate, and the shell flips **thousands of times a second** — `CENSUS_MS`'s comment beside it reads ~5 000 flips/s (measured 2026-09-07) with the op census at ~12 000 *ops*/s on MAINMENU, while §5352 and the GUI-renderer page say ~12 000 *flips*/s; **the two readings are not reconciled** and the gate does not depend on which is right, being a bound rather than a rate assumption. This is the only reason any `tacli` verb works on `renderer=gdi`, which reaches `tagpu_overlay_draw` never — **and therefore the observer installs whenever the flip's bytes match, NOT behind `tagpu_gui.on`**. For one commit it was behind that trigger, which `tagpu_defaults.off` (written by a bare `tacli launch`) takes away, so an ordinary instance had every `tacli` verb and all input injection silently dead **on every renderer**, with no line in the log because the early return was above the only one. The landing review of 10c-2 caught it. `tagpu_gui.on` now gates the UI layer, the census and the 17 leaves alone; `tacli gui remove` removes those and no longer removes the ability to drive the instance. The one trigger NOT here is `tagpu_input_eye_frame`, the camera hold: it dereferences `f->packet` and this frame has none |
 | `0x4C67C0` | the cursor draw **inside** the flip (`stdcall(globals, surface)`, `ret 8`), the shell's publish point since landing 6 — **its own observer, in `tagpu_packet_pub.c`**, not this census. The function itself is UNPATCHED: since 2026-09-14 `tagpu_cursown.c` skips only the `call` at `0x4C687D` that blits the sprite, so the observer, the background save at `0x4C6862` and the `+0x1B6/+0x1BA` writes all still run (a leaf on the whole function was tried on 2026-09-13 and withdrawn — GUI renderer §24.0) | 11 | the drawn cursor: `+0x1B2` the record, `+0x1B6/+0x1BA` the position it just wrote. Publishes a header-only `in_game = 0` packet with `cursor_live = 1` when the three early-out words hold, and `cursor_live = 0` when they do not — gated on **two** tests, `s_retDepth == 0` **and** `!s_levelOpen`. `s_retDepth == 0` alone is NOT the complement of the in-play gate: `0x495E66` calls `DrawGameScreen` and returns to `0x495E6B`, not the in-play `0x4969D2`, so a screenshot draw is in-play with `s_retDepth == 0`; `!s_levelOpen` is what keeps this channel out of a level. This row said "i.e. not inside an in-play draw" until the 2026-09-14 review — the code has always had both tests |
 | `0x4C25E0` | the body of the engine's **mouse thread** (`0x4C2990` is its entry, started by `_beginthread` at `0x4C2A9A` — which is why no `call 0x4C2990` exists); `stdcall(mouseObj)`, `ret 4`. Unpatched as a function; its cursor blit `0x4C2732` is one of the four `tagpu_cursown.c` skips | 8 | nothing — no observer, it is not a channel site. It writes `+0x196/+0x19A` and `+0x1B6/+0x1BA`, the latter as position **minus the hotspot**, exactly as `0x4C67C0` does [CORRECTED 2026-09-14: this row claimed the opposite and called it a fingerprint] |
 | `0x4B7F90` | `CopyGafToContext(ctx, frame, x, y)` — **chained onto fxown's stub** | 6 | a sprite box at `(x−HotX, y−HotY)`, clipped |
@@ -11113,6 +11116,44 @@ player asked for no shadows and gets four teal blobs.
   lowered the flag. Both are one frame wide; the asymmetry the design rests on is about *durable*
   states, not about single frames.
 
+
+### 2.64 The screenshot arms at the flip and fires at the unlock — landing 11-2 of the Vulkan-only plan
+
+`tacli shot` is the harness's engine-surface capture: `ss_take_screenshot(primary)` reads the
+fork's own DirectDraw primary and writes a PNG. It is **not** a GL capture and never was — but
+until landing 11-2 it was *polled* in `render_ogl.c`'s present loop and nowhere else, so it
+answered on the GL lane alone and was measured failing on gdi and Vulkan by 10c-3's review.
+
+**The first rehost (11-2a) put the whole verb at the wrong end of the frame.** It joined
+`tagpu_triggers_frame`, which `tagpu_gui_hook.c` hosts from `before_flip` — the **entry** of
+`FlipOffscreenToPrimary` `0x4C63A0`. The engine's DirectDraw arm at `0x4C6475` locks the primary,
+draws the cursor, copies the back buffer onto the primary with `0x4CBBE0(&ctx, edi, 0, 0)`,
+restores the cursor background and unlocks, **all inside that call** (exe map, VERIFIED). So at
+`before_flip` the primary holds the *previous* frame, and every shot answered with frame N−1.
+This landing's review caught it as MEDIUM-1.
+
+**The fix is a split, and its argument is an ordering rather than a window.** Two halves now:
+
+| half | where it runs | what it does |
+|---|---|---|
+| `ss_shot_arm()` | `tagpu_triggers_frame`, from `before_flip` | deletes `tagpu_shot.trigger`, sets `s_shotArmed` |
+| `ss_shot_service(primary)` | `dds_Unlock`, the `DDSCAPS_PRIMARYSURFACE` branch (`ddsurface.c`) | clears the flag and captures |
+
+`dds_Unlock`'s primary branch is the fork's own *this frame is finished* point: game thread,
+every renderer, and **by construction** after the copy rather than before it. Nothing here rests
+on the other half having finished — the flag is written and read on the one thread, and the only
+ordering claimed is the engine's own, between its copy and its unlock.
+
+**`after_flip` was considered as the host and rejected.** It is gated on `s_opsLive`, set only
+where the 17 GUI leaves install — i.e. behind `tagpu_gui.on`. Hosting the shot there would have
+rebuilt the 10c-2 HIGH exactly: a verb that works in a driven session and silently does nothing
+on a bare `tacli launch`.
+
+**Measured** after the split: a correct main-menu PNG on `renderer=gdi` (136 198 B) and on
+`renderer=vulkan` (136 162 B), a lane where the verb had never worked. **Not measured**: a screen
+that presents only once. A 120-shot sweep through a `scenario load` returned 71 PNGs and 9
+distinct frames and never caught the loading screen, so whether this verb can reach a
+single-present screen is open.
 
 ## 4. What the work taught us
 

@@ -5,10 +5,18 @@
    plan, landing 10c].
 
    These are the `.trigger`-file observers -- peek, the weapon dump, the GUI
-   snapshot `tacli ui` reads, the unit and feature catalogues, and the scenario
-   applier's DETECTION half. They are not rendering. They read engine memory
-   and write a file when a trigger appears, and they must run at the MENUS as
-   well as in a game, because that is where half of `tacli` works.
+   snapshot `tacli ui` reads, the unit and feature catalogues, the scenario
+   applier's DETECTION half, and since landing 11-2a the engine-surface
+   screenshot behind `tacli shot`. They are not rendering. They read engine
+   memory and write a file when a trigger appears, and they must run at the
+   MENUS as well as in a game, because that is where half of `tacli` works.
+
+   THE SCREENSHOT IS THE ONE MEMBER THAT ONLY ARMS. The others answer in place;
+   it cannot, because this host runs at the flip's ENTRY and the engine copies
+   back buffer -> primary INSIDE that call, so the primary still holds the
+   previous frame here. It sets a flag and `dds_Unlock`'s primary branch takes
+   the picture -- see screenshot.h. It is also the one member with no counter
+   of its own: it costs one GetFileAttributes per pass of this family.
 
    They used to be called one by one from `tagpu_overlay_draw`, which is
    reached only from render_ogl.c and render_vk.c. `render_gdi.c` contains no

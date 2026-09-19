@@ -1913,11 +1913,16 @@ meaning in landing 10c-2 and that row has not been re-measured since).
 survive it.** `write_ddraw_ini` writes `renderer=openglcore` unconditionally, and `load` calls it
 whenever the scenario carries a `setup.res` (most do; `fx-lasers` is `1024x768`), whenever
 `--res`/`--maxfps`/`--window` is passed, and whenever the recorded tile would put the window
-off-screen. So the sequence *"edit the ini to `renderer=gdi`, then `scenario load`"* measures the
-**GL** lane, silently, and the only tell is the ini reading `openglcore` afterwards. This cost
-the vulkan-only plan's landing 10c-3 a wrong paragraph: a 2:1 `mouse:`/`units:` ratio was
-recorded as a gdi result and it was an OpenGL one, where a consumer takes every packet and the
-two lines simply run at their own 250 ms and 500 ms gates.
+off-screen. So the sequence *"edit the ini to `renderer=gdi`, then `scenario load`"* does not
+measure gdi — silently — and the only tell is the ini reading `openglcore` afterwards.
+
+**What that spelling now SELECTS changed under this paragraph**: since landing 11-2 there is no
+OpenGL backend, so `openglcore` reaches the **Vulkan** lane (with one line in `tagpu.log` saying
+so). Before 11-2 it reached the GL one, and that is what cost landing 10c-3 a retracted
+paragraph — a 2:1 `mouse:`/`units:` ratio was recorded as a gdi result when it was an OpenGL
+one, where a consumer takes every packet and the two lines simply run at their own 250 ms and
+500 ms gates. The trap is the same either way and so is the fix; only the name of the lane you
+get by accident has changed.
 
 To measure a chosen lane in game: run `scenario load` first and let it write what it wants, then
 `tacli stop`, then set `renderer=` in the instance's `ddraw.ini`, then a **bare `tacli launch`**
@@ -1930,8 +1935,9 @@ including `renderer=gdi`** (the vulkan-only plan's gate 10c, three landings). Th
 key/click injection run from the engine's flip; the live-state log — `units:`, the roster dump and
 `mouse:`, which with `peek:` are the whole of what `tacli` greps out of `tagpu.log` — is written
 by `tagpu_packet_pub.c` beside the frame packet. What still does NOT reach gdi: `tacli eye` and
-`tacli wheel`, which both need the overlay frame that only the GL and Vulkan backends run;
-`tacli gui`, which writes a lever with no effect on that lane; and **both capture verbs**.
+`tacli wheel`, which both need the overlay frame that only the Vulkan backend runs, and
+`tacli gui`, which writes a lever with no effect on that lane. **`tacli shot` DOES reach it**
+since landing 11-2a — next paragraph.
 
 **`tacli shot` NOW WORKS ON EVERY LANE, AND `tacli glshot` IS GONE** (the vulkan-only plan,
 landings 11-2a and 11-2). Both used to be OpenGL-only, and not because of which surface they

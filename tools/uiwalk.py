@@ -905,6 +905,19 @@ def main():
             "  What replaced it: launch with `renderer=vulkan`, arm one pass's `.ab`, and\n"
             "  diff the `_vk.ppm` against one taken from an earlier BUILD (tools/vk-ab.py\n"
             "  takes two file paths). Run this walk without --vk for the UI stops." )
+    if a.layer:
+        # THE LANE THIS MODE COMPARED AGAINST IS GONE (the vulkan-only plan,
+        # landing 11-2). `--layer` captured the GL framebuffer with
+        # `tacli glshot` and diffed it against the engine's own surface; there
+        # is no GL framebuffer in the process any more, and the verb is
+        # retired. Refusing is the point: the failure it replaces was silent --
+        # the walk waited out its 150 s timeout per screen and wrote
+        # `{"differing": -1, "bbox": "no capture"}` for every row, which reads
+        # like a measurement.
+        sys.exit("uiwalk: --layer compared our GL frame against the engine's surface, and the\n"
+                 "OpenGL lane was deleted in the vulkan-only plan's landing 11-2. There is no\n"
+                 "second frame to diff. Run without --layer for the census walk, which is\n"
+                 "unaffected; a Vulkan-vs-engine parity mode would be new work.")
     w = Walk(a.inst, a.out, a.res, parity=a.layer, scenario=scenario, restore=a.restore)
 
     tacli("stop", a.inst)

@@ -477,6 +477,6 @@ void tagpu_triggers_frame(const TAGPU_FRAME* f)
        in, not a new one it has to be made safe for. */
     if (GetFileAttributesA("tagpu_shot.trigger") != INVALID_FILE_ATTRIBUTES) {
         DeleteFileA("tagpu_shot.trigger");
-        ss_take_screenshot(g_ddraw.primary);
+        ss_shot_arm();
     }
 }
