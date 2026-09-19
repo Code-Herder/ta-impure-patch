@@ -2053,6 +2053,29 @@ that a count which grows is the plan catching up with the work.) The row was
        part of the diff, not documentation debt** — it is what stops the next landing deleting
        the half that is load-bearing.
 
+       **RE-VERIFIED AFTER THE FIXES BY OBJECT IDENTITY, WHICH IS STRONGER HERE THAN ANOTHER
+       A/B.** The landing discipline asks for a re-measurement when the code moves, and the
+       code did. But a pixel A/B samples a few frames of a few fixtures, whereas comparing the
+       EMITTED OBJECT is exhaustive: if the compiler produces the same bytes, no input can
+       produce a different pixel. Each file was compiled from both revisions at identical
+       paths (the path matters — `__FILE__`-shaped differences perturb the object on their
+       own, which is what a first attempt at this measured instead of the change):
+
+       * `tagpu_scaffold.o`, `tagpu_gaf.o`, `tagpu_fps.o` — **byte-identical**. Deleting three
+         write-only statics, writing `a->tex = 0` where `a->tex = t` stood with `t` a
+         never-reassigned zero, and every comment rewrite, emitted the same machine code.
+       * `tagpu_posebake.o` — differs, and only as intended. The object's external references
+         lose exactly `_glDeleteBuffers` and `_glDeleteVertexArrays` and **gain nothing**; the
+         defined-symbol set is identical; `tagpu_posebake_glreset` goes from 33 instructions to
+         3, which is the generation bump and the return. `tagpu_posebake_frame` grew by 31
+         instructions while referencing no symbol it did not reference before — GCC re-laying
+         out an inline decision once the translation unit shrank, which cannot introduce a call
+         that was not already there.
+       * The `#include "opengl_utils.h"` removal was checked on its own: the same source with
+         the include restored compiles to a **byte-identical** object, so the removal is inert
+         rather than merely harmless-looking. An include is the one edit in this set that could
+         have changed a macro silently, so it is the one worth proving separately.
+
      **`tagpu_text.c` and `tagpu_hires.c` are NOT in 11-4 after all.** They have zero lane
      gates, which is the shape that made `tagpu_shadow.c` and `tagpu_hires_draw.c` an
      escalation — but checked directly, they are the opposite case: every entry point still has
