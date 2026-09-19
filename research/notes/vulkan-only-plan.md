@@ -1688,34 +1688,58 @@ that a count which grows is the plan catching up with the work.) The row was
      from the game thread on PrintScreen.
 
      **The first rehost captured one frame stale, and this landing's review caught it**
-     (MEDIUM-1). 11-2a put the whole verb — the trigger poll *and* the capture — into
+     (MEDIUM-1). 11-2a put the trigger poll *and* the capture in the same pass of
      `tagpu_triggers_frame`, which `tagpu_gui_hook.c` hosts from `before_flip`, i.e. at the
      **entry** of the flip `0x4C63A0`. The engine's DirectDraw arm at `0x4C6475` locks the
      primary, draws the cursor, **copies the back buffer onto the primary** with `0x4CBBE0`,
      restores the cursor background and unlocks — all *inside* that call
-     ([exe-reverse-engineering](exe-reverse-engineering.html), VERIFIED). So at `before_flip` the
-     primary still holds the previous frame, and every `tacli shot` was answering with frame
-     N−1. On a still menu nothing shows it; on anything that moves, the PNG is a frame behind the
-     state the caller had just set up, which is exactly the class of wrong answer a harness verb
-     must not give.
+     ([exe-reverse-engineering](exe-reverse-engineering.html), VERIFIED, and re-checked against
+     the disassembly by this landing's review). So at the poll the primary still holds the
+     previous frame, and every `tacli shot` was answering with frame N−1.
 
-     **The fix splits arming from capturing, so it is an ordering and not a timing.** The trigger
-     family keeps only the arm — `ss_shot_arm()` deletes `tagpu_shot.trigger` and sets a flag.
-     The capture, `ss_shot_service(primary)`, runs from `dds_Unlock`'s `DDSCAPS_PRIMARYSURFACE`
-     branch (`ddsurface.c`), which is the fork's own *this frame is finished* point: the game
-     thread, every renderer, and by construction after the copy rather than before it. No window
-     is being bet on.
+     **The fix that shipped makes that fact the clock instead of the bug.** The family now
+     SERVICES a pending arm before it polls for a new one, so a trigger seen on pass P is
+     answered on pass P+1 with a frame the engine presented in between. Both calls are the same
+     detour on the game thread, one flip apart: no interlock, no fence, and the only ordering
+     claimed is the engine's own copy. The cost is one pass of latency, bounded by the family's
+     own 16 ms gate.
 
-     **`after_flip` was considered as the host and rejected.** It is gated on `s_opsLive`, which
-     is set only where the 17 GUI leaves install — that is, behind `tagpu_gui.on`. Hosting the
-     shot there would have reproduced the 10c-2 HIGH: a verb that works in a driven session and
-     silently does nothing on a bare `tacli launch`.
+     **Two other hosts were tried, and the round-2 review killed both.** They are worth recording
+     because both read as correct:
 
-     **Measured after the split**: a correct main-menu PNG on `renderer=gdi` (136 198 B) and on
-     `renderer=vulkan` (136 162 B), where the verb had never worked at all. **Not measured**: the
-     single-present case — a 120-shot sweep through a `scenario load` returned 71 PNGs and 9
-     distinct frames without once catching the loading screen, so whether a screen that presents
-     once is reachable by this verb is open, not answered.
+     * **`dds_Unlock`'s `DDSCAPS_PRIMARYSURFACE` branch** shipped for one commit. It *is* after
+       the copy — but the branch is gated on `g_ddraw.render.run`, which the **window thread**
+       clears on deactivate, minimise, a fullscreen toggle and a mode change, and it is reached
+       only when the flip takes its DirectDraw arm (the GDI BitBlt arm at `0x4C63C0` never
+       enters it). An arm could wait for an arbitrary later frame, answer with an unrelated
+       picture stamped with the wrong time, or never be serviced at all. The safety argument had
+       become *the next unlock that happens to pass a flag another thread owns*, which is
+       precisely the fix-by-timing CLAUDE.md forbids. **This is the landing's own lesson: the
+       first fix for a frame-ordering bug introduced a worse frame-ordering bug, and only a
+       reviewer told to attack the synchronisation found it.**
+     * **`after_flip`** was rejected, and the reason first written down was **wrong**. It is not
+       gated by an `s_opsLive` test — it contains none. The gate is the detour itself:
+       `tagpu_detour_observe` emits `test eax,eax; jz` and hijacks the return only when
+       `before_flip` returns non-zero, and `before_flip` returns 0 at `if (!s_opsLive)`. So
+       `after_flip` never runs without `tagpu_gui.on`, which is the 10c-2 HIGH's shape — the
+       right conclusion reached, for one commit, by the wrong mechanism.
+
+     **Measured after the move**: a correct main-menu PNG on `renderer=gdi` (136 215 B, with the
+     cursor in it — itself evidence the capture is after the engine's cursor draw) and on
+     `renderer=vulkan` (136 143 B). Two shots inside one wall-clock second now produce two files:
+     `ss_take_screenshot` disambiguates with a `_2` suffix instead of returning FALSE, which used
+     to eat the arm and time the verb out silently. **Not measured**: the single-present case — a
+     120-shot sweep through a `scenario load` returned 71 PNGs and 9 distinct frames without once
+     catching the loading screen, so whether a screen that presents once is reachable is open.
+
+     **`tascene ab` LOST ITS ENGINE-SIDE CAPTURE and now says so.** It called `tacli glshot`,
+     which retired with the lane. `tacli shot` cannot stand in: it captures TA's own DirectDraw
+     primary, which on the Vulkan lane holds the engine's frame **without our passes**, so an
+     `ab` built on it would compare the browser renderer against a picture our renderer never
+     touched. The verb stops with that explanation rather than comparing the wrong images. The
+     surviving engine-side capture is the Vulkan one (`tagpu_vk_shot.c` writing
+     `tagpu_<pass>_vk.ppm`, compared file-to-file by `vk-ab.py`); **wiring `ab` to it is open
+     work this landing did not do.**
 
      **`tacli glshot` IS RETIRED**, because a GL framebuffer no longer exists in the process. The
      verb is kept and now **fails loudly** with what to use instead, rather than timing out

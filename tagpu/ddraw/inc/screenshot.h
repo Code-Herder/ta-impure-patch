@@ -7,23 +7,32 @@
 
 BOOL ss_take_screenshot(struct IDirectDrawSurfaceImpl* src);
 
-/* THE TRIGGER'S TWO HALVES, AND WHY THEY ARE TWO [the vulkan-only plan, 11-2].
-   `tacli shot` used to be polled in render_ogl.c's present loop, which ran
-   AFTER the engine had finished writing the primary. Its new host is the
-   trigger family on the engine's flip -- but `before_flip` runs at the ENTRY of
-   0x4C63A0, and the engine map (exe-reverse-engineering.md, the 0x4C63A0 entry,
-   VERIFIED) says that function locks the primary, copies back buffer -> primary
-   with 0x4CBBE0, and only then unlocks. So at the trigger's poll the primary
-   still holds the PREVIOUS frame, and capturing there is one frame stale --
-   invisible on a screen that presents continuously, wrong on one presented
-   exactly once, which is the loading screen `tools/uiwalk.py` is built on.
+/* THE TRIGGER'S TWO HALVES, AND WHY THEY ARE ONE PASS APART [the vulkan-only
+   plan, 11-2]. `tacli shot` used to be polled in render_ogl.c's present loop,
+   which ran AFTER the engine had finished writing the primary, so it answered
+   on the GL lane only. Its host is now the trigger family on the engine's
+   flip -- but `before_flip` runs at the ENTRY of 0x4C63A0, and the engine map
+   (the 0x4C63A0 entry, VERIFIED) says that function locks the primary, copies
+   back buffer -> primary with 0x4CBBE0, and only then unlocks. So at the poll
+   the primary holds the frame the PREVIOUS flip presented.
 
-   So the poll ARMS and the unlock CAPTURES. `ss_shot_service` is called from
-   dds_Unlock's `DDSCAPS_PRIMARYSURFACE` branch -- the point at which the fork
-   itself declares the frame finished -- so the picture is the frame that flip
-   presented, by ordering rather than by timing. Both halves run on the game
-   thread (the flip detour and the game's own DirectDraw call), so the flag
-   needs no interlock. */
+   That is not a reason to capture somewhere else; it is the clock. The family
+   SERVICES a pending arm before it polls for a new one, so a trigger seen on
+   pass P is answered on pass P+1 with a frame the engine presented in between.
+   Both calls are the same detour on the game thread, one flip apart, so the
+   flag needs no interlock and no fence -- and the ordering is the engine's own
+   copy, not a window anyone is betting on.
+
+   `dds_Unlock`'s primary branch was tried as the capture site and reverted:
+   it is gated on `g_ddraw.render.run` (cleared by the window thread on
+   deactivate, minimise, fullscreen toggle and mode change) and it is reached
+   only when the flip takes its DirectDraw arm at 0x4C6475, never on the GDI
+   BitBlt arm at 0x4C63C0. An arm could sit there indefinitely, then answer
+   with an unrelated frame stamped with the wrong time. `after_flip` was
+   rejected too: the detour only hijacks the return when `before_flip` returns
+   NON-ZERO (tagpu_detour.c's `test eax,eax; jz`), and `before_flip` returns 0
+   at `if (!s_opsLive)` -- i.e. `after_flip` does not run without
+   `tagpu_gui.on`, which is the shape of the 10c-2 HIGH. */
 void ss_shot_arm(void);
 void ss_shot_service(struct IDirectDrawSurfaceImpl* primary);
 

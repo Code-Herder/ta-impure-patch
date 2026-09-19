@@ -1,6 +1,7 @@
 /* tagpu_overlay.c — per-present entry point of the GPU pass, compiled INTO our
    cnc-ddraw fork (no separate module => no runtime LoadLibrary, which is what
-   destabilised TA under wine). Called from render_ogl.c just before SwapBuffers.
+   destabilised TA under wine). Called from render_vk.c before the present
+   (render_ogl.c was its other caller until landing 11-2 deleted that lane).
    Runs the file-triggered INPUT service (the other five moved to the game
    thread in landing 10c-1 -- see tagpu_triggers_frame at the end of this file),
    detects GL context changes, flushes the engine detours, then dispatches the
@@ -475,6 +476,23 @@ void tagpu_triggers_frame(const TAGPU_FRAME* f)
        this thread: `before_flip` runs on the game thread inside the engine's
        flip. So this is the context ss_take_screenshot already has a caller
        in, not a new one it has to be made safe for. */
+    /* SERVICE BEFORE ARM, AND THAT ORDER IS THE WHOLE MECHANISM. This runs at
+       the ENTRY of the engine's flip, so the primary here holds the frame the
+       PREVIOUS flip presented -- which is why capturing in the same pass that
+       saw the trigger returned frame N-1 (landing 11-2's review, MEDIUM-1).
+       Servicing first and arming second puts one flip between the two, so the
+       picture is a frame the engine presented AFTER the trigger was seen.
+
+       The host is this function and not `dds_Unlock` (tried, and reverted by
+       the same review's round 2): that branch is gated on `g_ddraw.render.run`,
+       which the WINDOW thread clears on deactivate, minimise, a fullscreen
+       toggle and a mode change, and it is reached only when the flip takes its
+       DirectDraw arm at 0x4C6475 -- the GDI BitBlt arm at 0x4C63C0 never enters
+       it. An arm could therefore wait for an arbitrary later frame, or for
+       none. Here there is no such gate: this family runs on every flip that
+       passes its 16 ms window, whichever arm the flip takes, and it is above
+       `before_flip`'s `s_opsLive` return so a bare `tacli launch` has it too. */
+    ss_shot_service(g_ddraw.primary);
     if (GetFileAttributesA("tagpu_shot.trigger") != INVALID_FILE_ATTRIBUTES) {
         DeleteFileA("tagpu_shot.trigger");
         ss_shot_arm();

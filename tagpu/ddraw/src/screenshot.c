@@ -175,7 +175,23 @@ BOOL ss_take_screenshot(IDirectDrawSurfaceImpl* src)
     _snprintf(filename, sizeof(filename) - 1, "%s%s_%s.png", g_config.screenshot_dir, title, str_time);
 
     if (FILE_EXISTS(filename))
-        return FALSE;
+    {
+        /* ONE FILE PER SECOND IS NOT ENOUGH and returning FALSE here consumed
+           the caller's arm for nothing: two `tacli shot`s in the same wall-clock
+           second (uiwalk.py takes `surf` and `surf2` back to back) produced one
+           file and one silent timeout. Disambiguate instead -- the reader picks
+           the newest *.png by mtime, so the suffix costs it nothing. */
+        int n;
+        for (n = 2; n <= 99; n++)
+        {
+            _snprintf(filename, sizeof(filename) - 1, "%s%s_%s_%d.png",
+                      g_config.screenshot_dir, title, str_time, n);
+            if (!FILE_EXISTS(filename))
+                break;
+        }
+        if (n > 99)
+            return FALSE;
+    }
 
     if (src->bpp == 8 && src->palette)
     {

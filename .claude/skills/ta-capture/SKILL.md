@@ -27,10 +27,12 @@ windowed mode, silence, keys, clicks, camera, skirmish presets. This file covers
 >
 >   **On a screen presented exactly ONCE — a loading screen — treat it as unproven.** The
 >   trigger is polled at the flip's ENTRY, before the engine copies back buffer → primary, so
->   the poll only arms and the capture is taken at the primary's unlock inside that same flip
->   (`dds_Unlock`, `screenshot.h`). That ordering is right by the engine map, but the
->   single-present case has **not been measured**: a 120-shot sweep through a `scenario load`
->   caught nine distinct live frames and never the loading screen itself.
+>   the poll only ARMS and the capture happens on the trigger family's NEXT pass, one flip
+>   later (`screenshot.h` has the two hosts that were tried for it and why both were worse).
+>   That costs one pass of latency, bounded by the family's 16 ms gate — and it means a screen
+>   that never gets a second flip may never be captured. The single-present case has **not been
+>   measured**: a 120-shot sweep through a `scenario load` caught nine distinct live frames and
+>   never the loading screen itself.
 > * **recording the live window** (ffmpeg x11grab, below) — the only way to see the composited
 >   frame now, on either lane. This is what the "pictures come from the live display" rule in
 >   the visual-verification notes already said.

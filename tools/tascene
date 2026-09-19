@@ -1883,10 +1883,13 @@ def cmd_uidiff(args):
 
 # --------------------------------------------------------------------------- ab
 
-# The parity claim, made checkable. Everything here already exists — tacli
-# drives the game, glshot captures the GL framebuffer top-down, roster reports
-# the live eye — so `ab` is glue, and being glue is the point: a comparison
-# that only happens when someone remembers does not happen.
+# The parity claim, made checkable. `ab` was glue over three things that
+# already existed — tacli drives the game, `glshot` captured the GL framebuffer
+# top-down, roster reports the live eye — and being glue was the point: a
+# comparison that only happens when someone remembers does not happen.
+# ONE OF THE THREE IS GONE: the GL framebuffer went with the OpenGL lane in the
+# vulkan-only plan's landing 11-2, so `ab` stops at the capture and says so.
+# See the block in cmd_ab for what replaces it and what is still owed.
 
 TACLI = HERE / "tacli"
 
@@ -2002,9 +2005,25 @@ def cmd_ab(args):
             "the roster still reads the boot frame, so any diff would be noise")
     print(f"tascene: live eye {eye[0]},{eye[1]}, {len(roster['units'])} units")
 
-    ppm = out / "engine.ppm"
-    run_tacli(["glshot", args.name, "-o", str(ppm)])
-    ew, eh, engine = read_ppm(ppm)
+    # THE ENGINE-SIDE CAPTURE THIS COMPARISON NEEDS NO LONGER EXISTS ON THIS
+    # LANE [the vulkan-only plan, landing 11-2]. `tacli glshot` read the GL
+    # framebuffer, which is where our passes had drawn; the OpenGL lane and
+    # that framebuffer are both gone. `tacli shot` is NOT a substitute: it
+    # captures TA's own DirectDraw primary, which on the Vulkan lane holds the
+    # engine's frame WITHOUT our passes -- so an `ab` built on it would compare
+    # the browser renderer against a picture our renderer never touched and
+    # report a difference that means nothing.
+    #
+    # Failing here, loudly, is deliberate: a parity harness that silently
+    # compares the wrong images is worse than one that stops. The surviving
+    # engine-side capture is the Vulkan one (`tagpu_vk_shot.c` writing
+    # `tagpu_<pass>_vk.ppm`, compared file-to-file by `vk-ab.py`); wiring `ab`
+    # to it is its own piece of work and is recorded as an open gap in the plan.
+    die("tascene ab has no engine-side capture on the vulkan-only lane: it was "
+        "`tacli glshot`, which retired with the OpenGL lane in landing 11-2. "
+        "`tacli shot` cannot stand in -- it captures TA's own surface without "
+        "our passes. Use the Vulkan A/B (tagpu_vk_shot.c + tools/vk-ab.py) "
+        "until `ab` is wired to it.")
 
     pack = out / "pack"
     build_argv = [str(scenario_path), "-o", str(pack), "--eye", f"{eye[0]},{eye[1]}",

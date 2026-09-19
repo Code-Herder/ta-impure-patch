@@ -11,15 +11,19 @@
    memory and write a file when a trigger appears, and they must run at the
    MENUS as well as in a game, because that is where half of `tacli` works.
 
-   THE SCREENSHOT IS THE ONE MEMBER THAT ONLY ARMS. The others answer in place;
-   it cannot, because the family runs at the flip's ENTRY and the engine copies
-   back buffer -> primary INSIDE that call, so the primary still holds the
-   previous frame here. It sets a flag and `dds_Unlock`'s primary branch takes
-   the picture -- see screenshot.h. It is also the one member with no counter
-   of its own: it costs one GetFileAttributes per pass of this family.
+   THE SCREENSHOT IS THE ONE MEMBER THAT ANSWERS A PASS LATE, on purpose. The
+   others answer in place; it cannot, because the family runs at the flip's
+   ENTRY and the engine copies back buffer -> primary INSIDE that call, so the
+   primary here holds the frame the previous flip presented. So it services a
+   pending arm BEFORE it polls for a new one: a trigger seen on one pass is
+   answered on the next, with a frame presented in between. See screenshot.h
+   for the two hosts that were tried for the capture and why both were worse.
+   It is also the one member with no counter of its own: it costs one
+   GetFileAttributes per pass of this family.
 
-   They used to be called one by one from `tagpu_overlay_draw`, which is
-   reached only from render_ogl.c and render_vk.c. `render_gdi.c` contains no
+   They used to be called one by one from `tagpu_overlay_draw`, which was
+   reached only from render_ogl.c and render_vk.c (and since landing 11-2,
+   which deleted the GL lane, from render_vk.c alone). `render_gdi.c` contains no
    `tagpu_` call at all, so on that lane none of them ran: `tacli ui` returned
    "no UI snapshot appeared" and the shell could not be driven past the main
    menu. Landing 10b's whole claim is that `renderer=gdi` is this project's

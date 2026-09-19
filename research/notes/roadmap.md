@@ -3197,10 +3197,12 @@ selectable and drawing nothing for two landings, and because lane-first makes th
 unreachable by an ordering: `tagpu_overlay_draw` had exactly two callers and the surviving one
 runs with `gl_draws` false. `ddraw.dll` now creates no GL context on any path, `auto` is the
 Vulkan lane, `tacli shot` answers on every renderer for the first time and `tacli glshot` is
-retired. The shot's rehost took two goes: the first put it at the flip's *entry*, where the
-primary still holds the previous frame, and the landing review caught the off-by-one-frame — it
-is now armed at the flip and captured from `dds_Unlock`'s primary branch, after the engine's own
-copy (gpu-status §2.64). (This entry said "three unconditional patches **plus** the pair" until the
+retired. The shot's rehost took three goes and the review caught both wrong ones:
+capturing at the flip's *entry* returns the previous frame, and capturing from `dds_Unlock`'s
+primary branch depends on a flag the window thread clears and on which arm the flip took. What
+shipped services the arm on the *next* trigger pass, so the engine's own copy is the ordering
+(gpu-status §2.64). `tascene ab` lost its engine-side capture with the lane and now stops with
+that explanation instead of comparing the wrong images — wiring it to the Vulkan A/B is open. (This entry said "three unconditional patches **plus** the pair" until the
 10c-2 review; the three sites in `tagpu_apply_patches()` **are** that one plus that pair.) And
 `tacli eye` / `tacli wheel` still do not reach the lane — the hold because there is no command
 record without an overlay frame, the wheel because `tagpu_zoom_wheel` refuses on `!s_live` before
