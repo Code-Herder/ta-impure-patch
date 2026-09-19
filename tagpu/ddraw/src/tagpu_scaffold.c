@@ -28,7 +28,6 @@
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "opengl_utils.h"
 #include "tagpu_scaffold.h"
 #include "tagpu_zoom.h"      /* the predicted eye every pass draws from */
 #include "tagpu_packet.h"    /* the true viewport, from this frame's packet */
@@ -363,8 +362,13 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
                 int hgt = *(const unsigned char*)(def + FD_HEIGHT);
                 int ya = py1 - hgt / 2 - fz * 16, yb = py1 + fz * 16;
                 int xa = px0, xb = px0 + fx * 16;
-                if (ya < 0) ya = 0; if (yb > s_bh) yb = s_bh;   /* clip BEFORE looping */
-                if (xa < 0) xa = 0; if (xb > s_bw) xb = s_bw;
+                /* clip BEFORE looping. One clamp per line: the four used to
+                   share two lines, which is correct C and which -Wall reads as
+                   a misleading indentation every time this file is rebuilt. */
+                if (ya < 0) ya = 0;
+                if (yb > s_bh) yb = s_bh;
+                if (xa < 0) xa = 0;
+                if (xb > s_bw) xb = s_bw;
                 for (int y = ya; y < yb; y++)
                     for (int x = xa; x < xb; x++)
                         stamp_px(x, y, depth);

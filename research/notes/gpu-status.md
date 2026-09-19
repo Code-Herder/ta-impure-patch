@@ -12591,6 +12591,77 @@ The helper now preserves newlines, and any line number quoted from a masked scan
 2026-09-19 should be re-read from the source before it is relied on.
 
 
+
+### 2.75 The include residue, and a type that was the last thing holding a header in — landing 11-5e-3
+
+Three files included `opengl_utils.h` while making no GL call. The include is gone from all
+three, and the count of files that include the header at all goes **nine → six**. The GL *call*
+surface is unchanged at **252 / 366 over four files** (`tools/gl-sites.py`), which is the point:
+this landing removes a dependency, not a call.
+
+| file | narrow / wide | what it named from the header | action |
+|---|---|---|---|
+| `tagpu_fps.c` | 0 / 0 | **nothing** | include deleted |
+| `tagpu_scaffold.c` | 0 / 0 | **nothing** | include deleted |
+| `tagpu_render3do.c` | 0 / 0 | `GLuint`, once | spelling changed, then include deleted |
+| `render_gdi.c` | 0 / 0 | `g_oglu_version` | **kept** — goes with `opengl_utils.c` |
+| `tagpu_gaf.c` | 0 / **12** | `GLenum`, `GLint`, `GLsizei`, `xwglGetProcAddress`, `APIENTRY` | **kept** — goes with 11-5e-2b |
+
+**A CALL COUNT OF ZERO DOES NOT MEAN A FILE IS FREE OF THE HEADER**, and this landing is where
+that stops being a slogan. Of the five files with no GL call, only two name nothing from it at
+all. `render_gdi.c` reads a *variable*; `tagpu_gaf.c` takes three types, an entry-point resolver
+and a calling convention; `tagpu_render3do.c` took exactly one *type*, in one place:
+
+```c
+GLuint tagpu_r3d_atlas_rgbref(void) { return s_atlas.rgb; }
+```
+
+`GLuint` is `typedef unsigned int` (`inc/glcorearb.h:87`), `tagpu_render3do.h:14` **already**
+declared the function `unsigned int`, and the field it returns is `unsigned int`
+(`tagpu_gaf.h`). So the definition was the odd spelling out, the change is type-identical, and
+the object file proves it: `_tagpu_r3d_atlas_rgbref` is still `T` in `tagpu_render3do.o` and
+still `U` in its one caller `tagpu_posedraw.o`. **The tool that counts calls would have called
+this file clean, and the include would not have compiled away** — which is why the
+include test is a separate question from the call count, and is run on the RAW text (an
+`#include` is itself a string literal, so a comment/string mask deletes every include).
+
+**Two corrections to the plan's own row, which named the wrong three files.** It listed
+`render_gdi.c` as residue — it is not, and the same page's "files it ends at" list says so two
+paragraphs later, naming `render_gdi.c`'s `g_oglu_version` among the surviving plumbing users;
+the row and the list contradicted each other. And it said 11-5e-1 had already taken
+`tagpu_render3do.c`'s include — it had not; 11-5e-1 removed a `tagpu_overlay.h` include from
+`tagpu_native.c`, a different file and a different header.
+
+**Every remaining includer now has a stated reason**, which is this landing's exit condition:
+`opengl_utils.c` defines the entry points; `render_gdi.c` reads `g_oglu_version`; `tagpu_gaf.c`
+is 11-5e-2b; and `tagpu_hires.c`, `tagpu_shadow.c` and `tagpu_hires_draw.c` are escalation
+reason 1.
+
+#### Verification
+
+**Build gate.** `thread-split: clean — 34 listed file(s)`, `spirv: 49 shaders, 33 programs,
+headers current`, exit 0, and **zero warnings**.
+
+**Nothing moved.** Function inventory diffed per translation unit against `main`: **0 gone, 0
+added**. No engine address appears on any added line, so `exe-reverse-engineering.md` takes
+nothing from this landing.
+
+**A pre-existing warning is fixed rather than left visible.** `tagpu_scaffold.c` had four clamps
+sharing two lines — correct C, which `-Wall` reads as `-Wmisleading-indentation`. It is
+pre-existing, **verified by compiling `main`'s own copy of the file**, and was invisible only
+because the object was cached; this landing is the first thing to rebuild that file in a while.
+One clamp per line now, which is the same code.
+
+#### Gaps this landing did not close
+
+- **`opengl_utils.h` itself stays**, with six includers, four of them behind escalation reason 1
+  (`tagpu_shadow.c` 87, `tagpu_hires_draw.c` 104, `tagpu_hires.c` 30, `opengl_utils.c` 31).
+- **`tagpu_gaf.c`'s twelve wide sites** — the `getgl`/`xwglGetProcAddress` arm and the
+  `glReadPixels` the refusal message names — go with the RGB mirror in **11-5e-2b**, not here.
+- **`tagpu_r3d_atlas_rgbref` is still a dead-ish accessor**: it returns `s_atlas.rgb`, which
+  11-5e-2 pinned to 0, and its one caller publishes `restored` from it. Retiring it is
+  11-5e-2b's; this landing only corrected its spelling.
+
 ### 2.74 The GL restorer goes whole, and the predicate that pinned it was set on purpose — landing 11-5e-2
 
 `tagpu_restoreglsl.c` is deleted entire: 39 functions, **249 of the tree's 540 masked GL call

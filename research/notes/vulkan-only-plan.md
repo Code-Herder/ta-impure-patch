@@ -2487,10 +2487,27 @@ that a count which grows is the plan catching up with the work.) The row was
          only ever refuse — lever on, it is never asked; lever off, there are no GL entry
          points, so it latches `mirrorRgbFailed` and logs a line that reads as a driver fault
          on a perfectly normal run.
-       - **11-5e-3 — the include residue**, in the files that include `opengl_utils.h` and
-         make no GL call: **`render_gdi.c`, `tagpu_fps.c`, `tagpu_scaffold.c`** (11-5e-1 took
-         `tagpu_render3do.c`'s, whose comment claimed it was there for
-         `tagpu_overlay_target_fbo` — a function that file never called) —
+       - **11-5e-3 — the include residue. LANDED 2026-09-19**, and it is
+         **`tagpu_fps.c`, `tagpu_scaffold.c` and `tagpu_render3do.c`** — not the three this
+         row named. Files including `opengl_utils.h` go **nine → six**; the GL *call* surface
+         is unchanged at 252/366, which is the point of the landing.
+
+         **THIS ROW WAS WRONG IN BOTH HALVES AND THE WORK IS WHAT SHOWED IT.** It named
+         `render_gdi.c` as residue: it is not — `render_gdi.c` reads `g_oglu_version`, and the
+         "files it ends at" list below says exactly that, so the row and the list contradicted
+         each other. And it said 11-5e-1 had taken `tagpu_render3do.c`'s include; 11-5e-1 took
+         a `tagpu_overlay.h` include out of `tagpu_native.c` — a different file and a different
+         header.
+
+         **A CALL COUNT OF ZERO IS NOT "FREE OF THE HEADER".** Of the five files with no GL
+         call, only two named nothing from it. `tagpu_render3do.c` took one TYPE, once —
+         `GLuint tagpu_r3d_atlas_rgbref(void)` — and `GLuint` is `typedef unsigned int`
+         (`inc/glcorearb.h:87`) while `tagpu_render3do.h:14` already declared the function
+         `unsigned int`. The definition was the odd spelling out; the change is type-identical
+         and the object file proves it (`T` in its own object, `U` in its one caller). Every
+         remaining includer now has a stated reason: `opengl_utils.c` defines the entry points,
+         `render_gdi.c` reads `g_oglu_version`, `tagpu_gaf.c` is 11-5e-2b's, and the other
+         three are escalation reason 1. —
        named rather than counted, because a count goes stale the moment a landing empties
        another file, and because the first version of this line said *five*. That fifth was
        `tagpu_gui_surf.c`, and it was an artefact of the measurement: the script tested

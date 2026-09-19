@@ -20,7 +20,6 @@
 #include <windows.h>
 #include <stdio.h>
 #include <math.h>
-#include "opengl_utils.h"
 #include "tagpu_model3do.h"   /* TAGPU_PBMAXPIECE: the piece-count bound */
 #include "tagpu_render3do.h"
 #include "tagpu_pal.h"
@@ -431,7 +430,7 @@ static const char* face_texframe(const char* fa, int owner)
 
 /* ---- exports for the native pass (G12b, tagpu_native.c): share the atlas,
    shade LUT and calibration so both paths draw identical materials ---- */
-GLuint tagpu_r3d_atlas_rgbref(void) { return s_atlas.rgb; }
+unsigned int tagpu_r3d_atlas_rgbref(void) { return s_atlas.rgb; }
 unsigned tagpu_r3d_atlas_gen(void)  { return s_atlas.gen; }
 /* ---- THE LEVEL BOUNDARY (G19f-7) ---------------------------------------
    THIS ATLAS KEYS ON AN ADDRESS AND THE ADDRESSES ARE RECYCLED.

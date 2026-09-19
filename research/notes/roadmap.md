@@ -3281,8 +3281,14 @@ pure bounds test), an ordering (take the unit list at the handover, not at `pd_b
 two pins that would otherwise make it invisible or fatal: `restored`, gated in all three
 producers on the now-permanently-0 `s_atlas.rgb`, and `rgbAniso`, which reports 0 against a
 `s_twinAniso` that defaults to 4 and stands the unit pass down;
-`11-5e-3` the include residue in `render_gdi.c`, `tagpu_fps.c` and `tagpu_scaffold.c`
-(11-5e-1 took `tagpu_render3do.c`'s).
+`11-5e-3` the include residue (**landed 2026-09-19**: `tagpu_fps.c`, `tagpu_scaffold.c` and
+`tagpu_render3do.c` — **not** the three this row used to name. `render_gdi.c` is not residue, it
+reads `g_oglu_version`; and 11-5e-1 never took `tagpu_render3do.c`'s include, it took a
+`tagpu_overlay.h` one out of `tagpu_native.c`. Files including `opengl_utils.h` go nine → six,
+the GL call surface unchanged at 252 — a dependency removed, not a call. The find: **a call
+count of zero does not mean a file is free of the header** — `tagpu_render3do.c` held it with a
+single TYPE, `GLuint`, which is `typedef unsigned int` and which the function's own declaration
+already spelled `unsigned int`; the object file is symbol-identical across the change).
 **After 11-5e-2 no world pass, no unit pass, no leaf module and no asset module is left on the
 GL surface**: **252 call sites remain in FOUR files** (one regex over comment-masked source,
 run on both trees: `tagpu_hires_draw.c` 104, `tagpu_shadow.c` 87, `opengl_utils.c` 31,

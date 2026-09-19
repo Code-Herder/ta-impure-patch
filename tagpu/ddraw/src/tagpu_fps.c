@@ -66,7 +66,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "opengl_utils.h"
 #include "tagpu_fps.h"
 #include "tagpu_text.h"
 #include "tagpu_vk.h"      /* tagpu_vk_owns_present: is there a GL lane at all? */
