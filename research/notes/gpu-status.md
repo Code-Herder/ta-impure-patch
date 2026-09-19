@@ -11467,6 +11467,38 @@ file hashes identical to the pre-landing revision (`tagpu_scaffold_overlay`,
 this landing changed most put no pixels into the only pixel-exact measurement. The armed run was
 eyeballed, not diffed. A regression confined to the armed path would have passed every gate.
 
+### 2.69 The feature and effects passes lose their bring-up — landing 11-5a
+
+`tagpu_feat.c` and `tagpu_fx.c` had no GL draw left (11-3 took both) and no `x_gl*` CALL SITE at
+all — only the bring-up that resolved entry points and built a program nothing drew with. Both
+files are now GL-free: no call, no type, no constant, no `opengl_utils.h` include. Gone from
+each: `init_gl`, `mksh`, `getgl`, the `PFN_*` typedefs and `x_gl*` pointers (six and seven),
+`s_state`, the program/VAO/VBO names and every uniform location; and from `tagpu_fx.c` also
+`s_lhtTex` and the gated `glTexImage2D` behind it, leaving `s_lhtRGB` as the flash light table
+outright — `s_pub.lht` is what the twin builds its image from.
+
+**Both gates are rewritten into the POSITIVE form**, which is the shape 11-4c established.
+`if (!tagpu_vk_owns_present()) { init_gl(); … } else if (!s_atlas.made) { atlas_setup(); … }`
+becomes `if (!s_atlas.made) { atlas_setup(); … }`. The else-branch was always the one taken on
+this lane, so this is exact rather than nearly exact.
+
+**Fields we write: unchanged.** Nothing in the hand-over moved. The one field whose PRODUCER
+changed shape is `s_pub.lht` in `tagpu_fx.c`, and only in that the GL texture beside it is gone;
+the bytes, the buffer and the serial are the same.
+
+**How it was verified, and why not by an A/B.** Function inventory against HEAD first — exactly
+`getgl`, `init_gl` and `mksh` removed from each, nothing added. Then the objects against `main`,
+per function: 7 of 11 in feat and 20 of 24 in fx are instruction-identical; `init_gl` had been
+INLINED into each gather, which is the whole of the shrink; each `glreset` differs by exactly one
+removed store to the deleted `s_state`. **External references lose 22 GL symbols in feat and 28
+in fx, plus `getgl`'s GetModuleHandleA, GetProcAddress and xwglGetProcAddress — and gain
+nothing.** The include removal was proved separately, byte-identical, because an include is the
+one edit that can change a macro silently.
+
+Both VS/FS pairs are kept behind a `-Wunused-variable` pragma and **both brackets were probed
+with a planted unused static**, not read: the probe warns after the `pop`, so the suppression
+genuinely ends there. `spirv: 49 shaders, 33 programs, headers current` throughout.
+
 ## 4. What the work taught us
 
 These are the transferable parts — the reasons things are shaped the way they are.

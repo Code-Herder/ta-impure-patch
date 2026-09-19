@@ -2152,7 +2152,33 @@ that a count which grows is the plan catching up with the work.) The row was
      static const char* FS = ...
      #pragma GCC diagnostic pop
      ```
-   * **11-5 — what is left of the GL entry-point surface.** `opengl_utils.c`,
+   * **11-5 — what is left of the GL entry-point surface. FOUR PARTS, and the split follows
+     the passes rather than a calendar** (written 2026-09-19, by the landing that measured it;
+     `M` may still move, per the rule on splitting a gate). The row was filed as one thing
+     because it reads as "delete some headers"; the work showed the headers cannot go until
+     their callers do, and the callers are passes.
+
+     - **11-5a — the feature and effects passes' GL bring-up. LANDED.** `tagpu_feat.c` and
+       `tagpu_fx.c`, 98 GL call sites between them, all of it in `init_gl`/`mksh` because 11-3
+       had already taken both draw halves and neither file had an `x_gl*` CALL SITE left. Both
+       are now GL-free — no call, no type, no constant, no `opengl_utils.h` — and both gates
+       are rewritten into the positive `if (!s_atlas.made) { atlas_setup(); … }` form.
+     - **11-5b — `tagpu_native.c`.** 139 GL call sites: 112 in `init_gl`, 15 in
+       `tagpu_native_frame`'s three `if (gl_draws)` blocks, 7 in the `tex2d` helper, 5 in
+       `mksh`. The largest and most dangerous file in the fork, so it is its own landing.
+     - **11-5c — `tagpu_terr.c`.** 107 sites spread over nine functions — `init_gl` (53),
+       `build_hills` (12), `build_height` (10), `ensure_atlas` (10), `glsl_begin` (9), `mksh`
+       (5), `dump_if_armed` (4), `tagpu_terr_hills_draw` (3), `rgb_mirror_step` (1). The spread
+       is why it is separate from 11-5b: each one needs its own reachability argument rather
+       than one shared gate.
+     - **11-5d — the entry-point surface this row names**, last, once every caller has left:
+       `opengl_utils.{c,h}`, `tagpu_restoreglsl.c`, the orphaned GL-object accessors, and the
+       include residue in the five files that already make no GL call.
+
+     **Not covered by 11-5a–d:** `tagpu_shadow.c` and `tagpu_hires_draw.c` (escalation reason
+     1), and the gate's own exit condition, which is 11-6's.
+
+     The files it ends at: `opengl_utils.c`,
      `opengl_utils.h`, `openglshader.h`, `tagpu_restoreglsl.c`, and the plumbing users that
      remain (`opengl_utils.c`'s own `oglu_load_dll`, now called by nothing; `render_gdi.c`'s
      `g_oglu_version`; `tagpu_ftime.c`'s `xwglGetProcAddress`). `render_ogl.c`, `render_ogl.h`

@@ -3211,7 +3211,20 @@ all 64 cross-build pairs. **11-4c completes 11-4** (gpu-status §2.68): the fps,
 and posebake halves, measured with both overlays armed so the census reaches `7 pass(es)
 drew`. Two of those four were NOT the uniform "unreachable" case — `tagpu_gaf.c` is reachable
 on this lane and survives because 4b-2 made its GL texture optional, and `tagpu_posebake.c`
-carries a `tagpu_vk_owns_present()` in the POSITIVE sense that arms the Vulkan mirror. See the plan's
+carries a `tagpu_vk_owns_present()` in the POSITIVE sense that arms the Vulkan mirror. Its review
+found the shape worth carrying forward: a uniform sweep had deleted `s_state` from `tagpu_fps.c`
+and left the identical write-only static in `tagpu_scaffold.c`, inside a function a previous
+review had already fixed once for testing it. **11-5 is under way and is FOUR parts, split along
+the passes themselves** — `11-5a` the feature and effects passes' GL bring-up (**landed**; both
+files now GL-free, no call, type, constant or `opengl_utils.h`, and the gates rewritten into the
+positive `if (!s_atlas.made)` form), `11-5b` `tagpu_native.c` (139 GL call sites, the largest and
+most dangerous file in the fork), `11-5c` `tagpu_terr.c` (107, spread over nine functions), and
+`11-5d` the entry-point surface the row names — `opengl_utils.{c,h}`, `tagpu_restoreglsl.c`, the
+orphaned GL-object accessors, and the include residue in the five files that already make no GL
+call. **Not covered by 11-5a–d**: `tagpu_shadow.c` and `tagpu_hires_draw.c`, still escalation
+reason 1, and now known to be more than a preference — `tagpu_shadow_begin` has no caller
+anywhere in the tree, so that pass is already dead and the question is whether the two files are
+scaffolding for a Vulkan-side producer or debris. See the plan's
 item 11 for the parts; 11-1 is the D3D9 renderer, the one member of the deletion set with no
 producer half, and **11-2 is the OpenGL lane itself** — moved in front of the sixteen passes'
 GL draw halves rather than behind them, because lane-last leaves `renderer=openglcore`
