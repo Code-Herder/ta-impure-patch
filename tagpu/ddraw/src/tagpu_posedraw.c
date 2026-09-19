@@ -60,12 +60,12 @@
    THE POSE LIVES IN A std140 UNIFORM BLOCK, which is what takes the piece cap
    out of the design (gpu-posing.md decision 7). The block is
    TAGPU_PBMAXPIECE (256) pieces of 3 rows plus two packed flag arrays — 14336
-   bytes, inside the 16 KB GL 3.1 guarantees, with headroom rather than sitting
-   exactly on the limit. The guarantee is not assumed: GL_MAX_UNIFORM_BLOCK_SIZE
-   is read at build time and the pass refuses to arm below it. Since G16 step 8
-   there is no CPU emitter to leave those units to, so the refusal is published
-   instead (`tagpu_posedraw_live`) and `owndraw` stops skipping the engine's own
-   unit rasterise — the engine draws them, rather than nothing drawing them.
+   bytes, with headroom rather than sitting exactly on any limit. The headroom
+   is not assumed: the device's `maxUniformBufferRange` is read at bring-up and
+   the pass refuses to arm below it. Since G16 step 8 there is no CPU emitter to
+   leave those units to, so the refusal is published instead
+   (`tagpu_posedraw_live`) and `owndraw` stops skipping the engine's own unit
+   rasterise — the engine draws them, rather than nothing drawing them.
 
    A HIDDEN PIECE ARRIVES AS AN ALL-ZERO MATRIX and collapses its triangles onto
    the model origin; a face the material stream has nothing for carries the skip
@@ -78,7 +78,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
-#include "opengl_utils.h"
 #include "tagpu_model3do.h"
 #include "tagpu_posebake.h"
 #include "tagpu_posedraw.h"
@@ -165,60 +164,6 @@ int tagpu_posedraw_live(void) { return s_state == 1 && !tagpu_vk_owns_present();
    on. Distinct from `!live`, which is also true for the frame or two before
    the render thread has built anything, and which is not a problem. */
 int tagpu_posedraw_refused(void) { return s_state == 2; }
-
-/* ---- GL ---------------------------------------------------------------- */
-typedef void (APIENTRY *PFN_DRAWARRAYS)(GLenum, GLint, GLsizei);
-typedef void (APIENTRY *PFN_UNIFORM2F)(GLint, GLfloat, GLfloat);
-typedef void (APIENTRY *PFN_UNIFORM3F)(GLint, GLfloat, GLfloat, GLfloat);
-typedef void (APIENTRY *PFN_UNIFORM4F)(GLint, GLfloat, GLfloat, GLfloat, GLfloat);
-typedef void (APIENTRY *PFN_BINDBUFBASE)(GLenum, GLuint, GLuint);
-typedef GLuint (APIENTRY *PFN_GETUBIDX)(GLuint, const GLchar*);
-typedef void (APIENTRY *PFN_UBBIND)(GLuint, GLuint, GLuint);
-typedef void (APIENTRY *PFN_PROGLOG)(GLuint, GLsizei, GLsizei*, GLchar*);
-/* GL 1.1 core, and therefore NOT the global one: xwglGetProcAddress returns
-   NULL for the 1.1 entry points under wine, so opengl_utils' `glGetIntegerv`
-   is a null pointer and it guards its own use of it (render_ogl.c says so at
-   the GL_NUM_EXTENSIONS read). Every module that wants it loads its own
-   through a getgl() that falls back to opengl32.dll — calling the global one
-   is a jump to address 0, which is what it did here. */
-typedef void (APIENTRY *PFN_GETINTEGERV)(GLenum, GLint*);
-
-static PFN_DRAWARRAYS   x_glDrawArrays;
-static PFN_UNIFORM2F    x_glUniform2f;
-static PFN_UNIFORM3F    x_glUniform3f;
-static PFN_UNIFORM4F    x_glUniform4f;
-static PFN_BINDBUFBASE  x_glBindBufferBase;
-static PFN_GETUBIDX     x_glGetUniformBlockIndex;
-static PFN_UBBIND       x_glUniformBlockBinding;
-static PFN_PROGLOG      x_glGetProgramInfoLog;   /* not in opengl_utils.h */
-static PFN_GETINTEGERV  x_glGetIntegerv;
-
-static void* getgl(const char* n)
-{
-    void* p = xwglGetProcAddress ? (void*)xwglGetProcAddress(n) : NULL;
-    if (!p) { HMODULE gl = GetModuleHandleA("opengl32.dll");
-              if (gl) p = (void*)GetProcAddress(gl, n); }
-    return p;
-}
-
-
-static GLuint s_prog, s_dprog, s_ubo;
-
-/* body program */
-static GLint u_game, u_off, u_zoom, u_zoomC, u_depthScale, u_ss;
-/* the fog macro carries its OWN zoom pair in the fragment stage
-   (tagpu_glsl.h): the same two numbers, and the fog samples at the wrong
-   place without them */
-static GLint u_zoomF, u_zoomCF;
-static GLint u_anchor, u_enc, u_shd, u_cast, u_alpha;
-static GLint u_fog, u_fogOrg, u_fogDim, u_scafOn, u_scafP;
-static GLint u_waterT, u_waterMode, u_digT, u_nanoOn, u_nanoT, u_nanoC;
-static GLint u_lit, u_sun, u_amb, u_norm, u_shadow, u_restored, u_depthPass;
-static GLint u_range, u_wire;
-static TAGPU_SHADOWU s_shU;
-/* depth program */
-static GLint d_anchor, d_enc, d_cast, d_shadowMat, d_depthPass, d_range;
-static GLint d_game, d_off, d_zoom, d_zoomC, d_depthScale;
 
 static unsigned s_units, s_tris, s_overPiece;
 
@@ -312,7 +257,21 @@ static int arena_room(void** p, unsigned* cap, unsigned need, size_t elem)
 unsigned tagpu_posedraw_drawn(void) { return s_units; }
 static unsigned s_slantU, s_slantT, s_wireU, s_wireL;
 
-/* ---- the shader --------------------------------------------------------- */
+/* ---- the shader ---------------------------------------------------------
+   NEITHER OF THE TWO BELOW HAS A C REFERENCE LEFT, and neither is dead code.
+   They are a BUILD INPUT: `tools/spirv-gen.py` reads them out of the
+   PREPROCESSED translation unit under the manifest names tagpu_posedraw::VS
+   and tagpu_posedraw::DFS, and generates the SPIR-V the two posed pipelines
+   are built from -- `pose_unit` pairs this vertex stage with
+   tagpu_native::FS, `pose_depth` with the DFS below (spirv-gen.py:186-187).
+   Deleting either fails the build, and editing one edits the units the player
+   sees. `tools/spirv-check.sh` re-extracts them through the preprocessor on
+   every link and compares the hashes.
+   The pragma below is paired and its `pop` is PROVED with a planted probe
+   rather than read -- landing 11-4b put one at column 0 inside a comment,
+   where it is text and not a directive. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-variable"
 static const char* VS =
     "#version 330 core\n"
     "layout(location=0) in vec3 aPos;\n"     /* rest position, model units    */
@@ -465,37 +424,11 @@ static const char* VS =
 static const char* DFS =
     "#version 330 core\n"
     "void main(){}\n";
-
-static GLuint mksh(GLenum t, const char* src)
-{
-    GLuint s = glCreateShader(t);
-    GLint ok = 0;
-    glShaderSource(s, 1, (const GLchar**)&src, NULL);
-    glCompileShader(s);
-    glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
-    if (!ok) {
-        char log[1024] = { 0 }, b[1100];
-        glGetShaderInfoLog(s, sizeof log - 1, NULL, log);
-        _snprintf(b, sizeof b, "posedraw: shader FAILED: %s", log);
-        plog(b);
-        s_state = 2;
-    }
-    return s;
-}
-
-static int link_block(GLuint prog)
-{
-    GLuint idx = x_glGetUniformBlockIndex(prog, "Pose");
-    if (idx == GL_INVALID_INDEX) return 0;
-    x_glUniformBlockBinding(prog, idx, 0);
-    return 1;
-}
+#pragma GCC diagnostic pop
 
 int tagpu_posedraw_ready(void)
 {
-    GLuint vs, fs, dfs;
-    GLint ok = 0, maxBlock = 0;
-    const char* unitFS;
+    int lim;
     char b[256];
 
     if (s_state) {
@@ -504,8 +437,8 @@ int tagpu_posedraw_ready(void)
            a smaller device may not hold the pose block the larger one did. The
            accessor caches per device, so this is one compare in the steady
            state. [FROM THE 4b-2 LANDING REVIEW.] */
-        if (s_state == 1 && tagpu_vk_owns_present()) {
-            int lim = tagpu_vk_max_uniform_range();
+        if (s_state == 1) {
+            lim = tagpu_vk_max_uniform_range();
             if (lim > 0 && lim < PD_BLOCK) {
                 _snprintf(b, sizeof b,
                           "posedraw: the device changed and its maxUniformBufferRange is "
@@ -525,176 +458,55 @@ int tagpu_posedraw_ready(void)
        run. Every real refusal below sets 2 before returning. */
     s_state = 3;
 
-    /* THE VULKAN-ONLY LANE ARMS WITHOUT A PROGRAM, because on that lane this
-       pass never draws: every `tagpu_posedraw_*` entry point below is called
-       from tagpu_native.c's GL composite, which that lane exits before. What it
-       DOES need is for this function to answer yes, because the per-unit gather
-       is gated on it (`if (!pdReady) continue;`) and the gather is what feeds
-       the hand-over.
+    /* THIS PASS ARMS WITHOUT A PROGRAM OF ITS OWN. It never rasterises
+       anything: it fills the pose block that `tagpu_vk_pose.c` binds, and the
+       SPIR-V for that draw is compiled from `VS`/`DFS` above at build time.
+       What the callers need from this function is a yes, because the per-unit
+       gather is gated on it (`if (!pdReady) continue;`) and the gather is what
+       feeds the hand-over.
 
-       THE ONE REAL QUESTION IS THE SAME ONE, ASKED OF THE OTHER DEVICE. The
-       pose block is a compile-time size (`PD_BLOCK`); both lanes only ask
-       whether the device can hold it, so the GL path's
-       GL_MAX_UNIFORM_BLOCK_SIZE check becomes `maxUniformBufferRange` here.
-       A 0 there means no device yet, not a device that cannot: `s_state` goes
-       back to 0 so the next frame asks again, rather than latching a refusal
-       during the lane's ~200 ms bring-up. [The vulkan-only plan, 4b-2.] */
-    if (tagpu_vk_owns_present()) {
-        int lim = tagpu_vk_max_uniform_range();
-        if (lim <= 0) { s_state = 0; return 0; }
-        if (lim < PD_BLOCK) {
-            _snprintf(b, sizeof b,
-                      "posedraw: refused — the device's maxUniformBufferRange is %d, "
-                      "the pose block needs %d", lim, PD_BLOCK);
-            b[sizeof b - 1] = 0;
-            plog(b);
-            s_state = 2;
-            return 0;
-        }
-        s_state = 1;
+       THE ONE REAL QUESTION IS WHETHER THE DEVICE CAN HOLD THE BLOCK. The pose
+       block is a compile-time size (`PD_BLOCK`), so the whole of bring-up is
+       one `maxUniformBufferRange` compare. A 0 there means no device YET, not a
+       device that cannot: `s_state` goes back to 0 so the next frame asks
+       again, rather than latching a refusal during the lane's ~200 ms
+       bring-up. [The vulkan-only plan, 4b-2 and 11-5d.] */
+    lim = tagpu_vk_max_uniform_range();
+    if (lim <= 0) { s_state = 0; return 0; }
+    if (lim < PD_BLOCK) {
         _snprintf(b, sizeof b,
-                  "posedraw: armed for the Vulkan lane — no GL program, pose block "
-                  "%d bytes (%d pieces), device limit %d", PD_BLOCK, TAGPU_PBMAXPIECE, lim);
+                  "posedraw: refused — the device's maxUniformBufferRange is %d, "
+                  "the pose block needs %d", lim, PD_BLOCK);
         b[sizeof b - 1] = 0;
         plog(b);
-        return 1;
+        s_state = 2;
+        return 0;
     }
-
-    x_glDrawArrays = (PFN_DRAWARRAYS)getgl("glDrawArrays");
-    x_glUniform2f  = (PFN_UNIFORM2F) getgl("glUniform2f");
-    x_glUniform3f  = (PFN_UNIFORM3F) getgl("glUniform3f");
-    x_glUniform4f  = (PFN_UNIFORM4F) getgl("glUniform4f");
-    x_glBindBufferBase = (PFN_BINDBUFBASE)getgl("glBindBufferBase");
-    x_glGetUniformBlockIndex = (PFN_GETUBIDX)getgl("glGetUniformBlockIndex");
-    x_glUniformBlockBinding  = (PFN_UBBIND) getgl("glUniformBlockBinding");
-    x_glGetProgramInfoLog    = (PFN_PROGLOG)getgl("glGetProgramInfoLog");
-    x_glGetIntegerv          = (PFN_GETINTEGERV)getgl("glGetIntegerv");
-    if (!x_glDrawArrays || !x_glUniform2f || !x_glUniform3f || !x_glUniform4f ||
-        !x_glBindBufferBase || !x_glGetUniformBlockIndex ||
-        !x_glUniformBlockBinding || !x_glGetIntegerv ||
-        !glCreateShader || !glGenBuffers) {
-        plog("posedraw: refused — the GL entry points this pass needs are missing");
-        s_state = 2; return 0;
-    }
-    /* THE BOUND IS CHECKED, NOT ASSUMED. GL 3.1 guarantees 16 KB and we need
-       PD_BLOCK (14336 since step 6's second per-piece word), but a driver that
-       reports less would silently give every unit the wrong pose. Since step 8
-       deleted the CPU emitters there is nothing to fall back TO: refusing here
-       means owndraw stops skipping the engine's own unit rasterise, so the
-       units are drawn by the engine at 8bpp rather than by us. */
-    x_glGetIntegerv(GL_MAX_UNIFORM_BLOCK_SIZE, &maxBlock);
-    if (maxBlock < PD_BLOCK) {
-        _snprintf(b, sizeof b,
-                  "posedraw: refused — GL_MAX_UNIFORM_BLOCK_SIZE is %d, the pose block needs %d",
-                  (int)maxBlock, PD_BLOCK);
-        plog(b);
-        s_state = 2; return 0;
-    }
-    unitFS = tagpu_native_unit_fs();
-    if (!unitFS) { plog("posedraw: refused — the native pass has no fragment shader to share");
-                   s_state = 2; return 0; }
-
-    s_state = 0;
-    vs  = mksh(GL_VERTEX_SHADER, VS);
-    fs  = mksh(GL_FRAGMENT_SHADER, unitFS);
-    dfs = mksh(GL_FRAGMENT_SHADER, DFS);
-    if (s_state == 2) return 0;
-
-    s_prog = glCreateProgram();
-    glAttachShader(s_prog, vs); glAttachShader(s_prog, fs);
-    glLinkProgram(s_prog);
-    glGetProgramiv(s_prog, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char log[1024] = { 0 };
-        if (x_glGetProgramInfoLog) x_glGetProgramInfoLog(s_prog, sizeof log - 1, NULL, log);
-        _snprintf(b, sizeof b, "posedraw: link FAILED: %s", log);
-        plog(b); s_state = 2; return 0;
-    }
-    s_dprog = glCreateProgram();
-    glAttachShader(s_dprog, vs); glAttachShader(s_dprog, dfs);
-    glLinkProgram(s_dprog);
-    glGetProgramiv(s_dprog, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char log[1024] = { 0 };
-        if (x_glGetProgramInfoLog) x_glGetProgramInfoLog(s_dprog, sizeof log - 1, NULL, log);
-        _snprintf(b, sizeof b, "posedraw: depth link FAILED: %s", log);
-        plog(b); s_state = 2; return 0;
-    }
-    if (!link_block(s_prog) || !link_block(s_dprog)) {
-        plog("posedraw: refused — the Pose block did not survive linking");
-        s_state = 2; return 0;
-    }
-
-#define PU(v, n) v = glGetUniformLocation(s_prog, n)
-    PU(u_game, "uGame");        PU(u_off, "uOffset");
-    PU(u_zoom, "uZoom");        PU(u_zoomC, "uZoomC");
-    PU(u_depthScale, "uDepthScale"); PU(u_ss, "uSS");
-    PU(u_zoomF, "uZoomF");      PU(u_zoomCF, "uZoomCF");
-    PU(u_anchor, "uAnchor");    PU(u_enc, "uEnc");
-    PU(u_shd, "uShd");          PU(u_cast, "uCast");
-    PU(u_alpha, "uAlpha");      PU(u_fog, "uFog");
-    PU(u_fogOrg, "uFogOrg");    PU(u_fogDim, "uFogDim");
-    PU(u_scafOn, "uScafOn");    PU(u_scafP, "uScafP");
-    PU(u_waterT, "uWaterT");    PU(u_waterMode, "uWaterMode");
-    PU(u_digT, "uDigT");        PU(u_nanoOn, "uNanoOn");
-    PU(u_nanoT, "uNanoT");      PU(u_nanoC, "uNanoC");
-    PU(u_lit, "uLit");          PU(u_sun, "uSun");
-    PU(u_amb, "uAmb");          PU(u_norm, "uNorm");
-    PU(u_shadow, "uShadow");    PU(u_restored, "uRestored");
-    PU(u_depthPass, "uDepthPass");
-    PU(u_range, "uRange");      PU(u_wire, "uWire");
-#undef PU
-    /* the samplers name the same units the native pass binds its textures on,
-       so this pass never re-binds them: it draws between that pass's own binds */
-    glUseProgram(s_prog);
-    glUniform1i(glGetUniformLocation(s_prog, "uAtlas"), 0);
-    glUniform1i(glGetUniformLocation(s_prog, "uLUT"),   1);
-    glUniform1i(glGetUniformLocation(s_prog, "uPal"),   2);
-    glUniform1i(glGetUniformLocation(s_prog, "uScaf"),  3);
-    glUniform1i(glGetUniformLocation(s_prog, "uFogGrid"), 4);
-    glUniform1i(glGetUniformLocation(s_prog, "uFogLUT"),  5);
-    glUniform1i(glGetUniformLocation(s_prog, "uAtlasRGB"), 8);
-    tagpu_shadow_locate(s_prog, &s_shU);         /* names the map's two units */
-    glUniform1i(u_depthPass, 0);
-    glUniform1i(u_range, PD_R_BODY);
-    glUseProgram(0);
-
-    d_game = glGetUniformLocation(s_dprog, "uGame");
-    d_off  = glGetUniformLocation(s_dprog, "uOffset");
-    d_zoom = glGetUniformLocation(s_dprog, "uZoom");
-    d_zoomC = glGetUniformLocation(s_dprog, "uZoomC");
-    d_depthScale = glGetUniformLocation(s_dprog, "uDepthScale");
-    d_anchor = glGetUniformLocation(s_dprog, "uAnchor");
-    d_enc    = glGetUniformLocation(s_dprog, "uEnc");
-    d_cast   = glGetUniformLocation(s_dprog, "uCast");
-    d_shadowMat = glGetUniformLocation(s_dprog, "uShadowMat");
-    d_depthPass = glGetUniformLocation(s_dprog, "uDepthPass");
-    d_range     = glGetUniformLocation(s_dprog, "uRange");
-
-    glGenBuffers(1, &s_ubo);
-    glBindBuffer(GL_UNIFORM_BUFFER, s_ubo);
-    glBufferData(GL_UNIFORM_BUFFER, PD_BLOCK, NULL, GL_STREAM_DRAW);
-    x_glBindBufferBase(GL_UNIFORM_BUFFER, 0, s_ubo);
-    glBindBuffer(GL_UNIFORM_BUFFER, 0);
-
-    _snprintf(b, sizeof b,
-              "posedraw: armed — the posed program and its depth twin, pose block %d bytes "
-              "(%d pieces, driver max %d)",
-              PD_BLOCK, TAGPU_PBMAXPIECE, (int)maxBlock);
-    plog(b);
     s_state = 1;
+    _snprintf(b, sizeof b,
+              "posedraw: armed — no rasteriser of its own, pose block "
+              "%d bytes (%d pieces), device limit %d", PD_BLOCK, TAGPU_PBMAXPIECE, lim);
+    b[sizeof b - 1] = 0;
+    plog(b);
     return 1;
 }
 
-/* ---- the pose upload ---------------------------------------------------- */
-/* One unit's pose into the block: the rows contiguous from 0, the packed piece
-   flags at their own offset. Only the bytes this model uses are written. */
-/* The two packed per-piece words, one float a piece, zero-filled out to the
-   vec4 the block stores them in. FACTORED OUT so that the hand-over carries
-   the bytes this upload writes rather than a second conversion of the same two
-   arrays -- the Vulkan pass writes `nf * 16` bytes at PD_FLAGOFF and PD_VISOFF
-   exactly as the two glBufferSubData below do. Returns the piece count it
-   wrote, clamped, or 0 for a unit with no pose. */
+/* ---- the pose words ------------------------------------------------------
+   THE UPLOAD THIS SECTION WAS NAMED FOR WENT WITH LANDING 11-5d; what is left
+   is the conversion it shared with the hand-over.
+
+   The two packed per-piece words, one float a piece, zero-filled out to the
+   vec4 the block stores them in. It was FACTORED OUT so that the hand-over
+   carried exactly the bytes the upload wrote rather than a second conversion
+   of the same two arrays, and with the upload gone that is now the only
+   description left: the Vulkan pass writes `nf * 16` bytes at PD_FLAGOFF and
+   PD_VISOFF, and this is where those bytes are made.
+
+   IT IS PURE, and the landing relied on that to delete the upload: it fills
+   two caller-provided arrays and returns a count, holding nothing between
+   calls, so the upload's call and `pd_record`'s call were the same answer
+   computed twice rather than two halves of one sequence. Returns the piece
+   count it wrote, clamped, or 0 for a unit with no pose. */
 static int pose_words(const TAGPU_PDUNIT* u, float* flags, float* vis)
 {
     int np = u->npose, i, nf;
@@ -708,30 +520,6 @@ static int pose_words(const TAGPU_PDUNIT* u, float* flags, float* vis)
         vis[i]   = u->pvis ? (float)u->pvis[i] : 1.0f;
     }
     return np;
-}
-
-static void upload_pose(const TAGPU_PDUNIT* u)
-{
-    /* THE BLOCK UPLOAD IS GL; `pose_words` is the pass. `pd_record` re-derives
-       the same words from the same function for the hand-over, so on a lane
-       with no GL there is nothing to upload and nothing is lost.
-       [The vulkan-only plan, landing 4b-2.] */
-    static float flags[PD_FLAGV * 4], vis[PD_FLAGV * 4];
-    int np = pose_words(u, flags, vis), nf;
-    if (np <= 0) return;
-    if (tagpu_vk_owns_present()) return;
-    nf = (np + 3) / 4;
-    glBindBuffer(GL_UNIFORM_BUFFER, s_ubo);
-    glBufferSubData(GL_UNIFORM_BUFFER, 0,
-                    (GLsizeiptr)np * 3 * 16, u->pose);
-    glBufferSubData(GL_UNIFORM_BUFFER, PD_FLAGOFF,
-                    (GLsizeiptr)nf * 16, flags);
-    /* uploaded for every range, not only the two that read it: the block is
-       one buffer and one unit's draws (body, then its silhouette, then its
-       slant) share whatever the last upload left in it */
-    glBufferSubData(GL_UNIFORM_BUFFER, PD_VISOFF,
-                    (GLsizeiptr)nf * 16, vis);
-    glBindBuffer(GL_UNIFORM_BUFFER, 0);
 }
 
 /* ---- the Vulkan lane's record ------------------------------------------- */
@@ -1042,10 +830,14 @@ void tagpu_posedraw_unit(const TAGPU_PDUNIT* u)
     const TAGPU_PBMAT* m;
     const TAGPU_PBGEOM* g = unit_ok(u, &m, TAGPU_PB_BODY);
     if (!g) return;
-    upload_pose(u);
-    /* THE PER-UNIT UNIFORMS AND THE DRAW STOOD HERE, deleted by landing 11-3.
-       `upload_pose` above and `pd_record` below are the pass, and the Vulkan
-       twin draws from the record. */
+    /* THE PER-UNIT UNIFORMS AND THE DRAW STOOD HERE, deleted by landing 11-3;
+       the uniform-block upload that fed them went with landing 11-5d. What is
+       left is the record, and the Vulkan twin draws from it. The upload was
+       inert to remove because it shared no state with the record: it called
+       `pose_words` for itself, and `pd_record` calls it again for the arenas.
+       `pose_words` is pure -- it fills two caller-provided arrays and returns a
+       clamped count -- so the second call is the same answer, not a
+       continuation of the first. */
     pd_record(u, g, m);
     /* A GHOST IS NOT A UNIT. It rides this same entry point on purpose — that
        is the whole of its draw — but the two counters below feed the `posed=N`
@@ -1061,42 +853,9 @@ void tagpu_posedraw_unit(const TAGPU_PDUNIT* u)
 }
 
 /* ---- the Classic silhouette shadow -------------------------------------- */
-void tagpu_posedraw_shadow_begin(void)
-{
-    if (s_state != 1) return;
-    glUseProgram(s_prog);
-    glUniform1i(u_shadow, 1);
-    glUniform1i(u_depthPass, 0);
-    glUniform1i(u_range, PD_R_BODY);
-    x_glBindBufferBase(GL_UNIFORM_BUFFER, 0, s_ubo);
-}
-
-void tagpu_posedraw_shadow_set(const TAGPU_PDUNIT* u, float offX, float offY,
-                               float waterT, float digT)
-{
-    const TAGPU_PBMAT* m;
-    if (!unit_ok(u, &m, TAGPU_PB_BODY)) return;
-    upload_pose(u);
-    x_glUniform4f(u_anchor, u->ax, u->ay, u->wx0, u->wz0);
-    glUniform1f(u_enc, u->enc);
-    glUniform1i(u_fog, u->fog);
-    x_glUniform2f(u_off, offX, offY);
-    glUniform1f(u_waterT, waterT);
-    glUniform1f(u_digT, digT);
-    x_glUniform3f(u_cast, u->cast[0], u->cast[1], u->cast[2]);
-    glBindVertexArray(m->vao);
-}
-
-/* the draw alone, against whatever `_shadow_set` left bound: the stencil pass
-   needs the identical geometry twice and must not re-upload between them */
-void tagpu_posedraw_redraw(const TAGPU_PDUNIT* u)
-{
-    const TAGPU_PBMAT* m;
-    const TAGPU_PBGEOM* g = unit_ok(u, &m, TAGPU_PB_BODY);
-    if (!g) return;
-    x_glDrawArrays(GL_TRIANGLES, g->first[TAGPU_PB_BODY], g->count[TAGPU_PB_BODY]);
-}
-
+/* CLOSES THE RECORDING WINDOW AND PUBLISHES IT. The comment that stood here
+   described `_redraw`, the silhouette's second half, which went with landing
+   11-5d -- it had drifted one function away from what it documented. */
 void tagpu_posedraw_end(void)
 {
     if (s_state != 1) return;
@@ -1171,130 +930,8 @@ void tagpu_posedraw_end(void)
 /* `emit_slant`'s range. The uniforms it does NOT set are as deliberate as the
    ones it does: uAlpha and uWaterMode are never read on this path, because the
    fragment shader's `uShadow == 1` branch returns before either. */
-void tagpu_posedraw_slant_begin(void)
-{
-    if (s_state != 1) return;
-    glUseProgram(s_prog);
-    glUniform1i(u_shadow, 1);
-    glUniform1i(u_depthPass, 0);
-    glUniform1i(u_nanoOn, 0);
-    glUniform1i(u_range, PD_R_SLANT);
-    x_glBindBufferBase(GL_UNIFORM_BUFFER, 0, s_ubo);
-}
-
-void tagpu_posedraw_slant_set(const TAGPU_PDUNIT* u, float offX, float offY)
-{
-    const TAGPU_PBMAT* m;
-    const TAGPU_PBGEOM* g = unit_ok(u, &m, TAGPU_PB_SLANT);
-    if (!g) return;
-    upload_pose(u);
-    x_glUniform4f(u_anchor, u->ax, u->ay, u->wx0, u->wz0);
-    glUniform1f(u_enc, u->enc);
-    glUniform1i(u_fog, u->fog);
-    x_glUniform2f(u_off, offX, offY);
-    /* THE STRUCTURE BRANCH BLITS ITS CACHED SPRITE AS BUILT (0x459319,
-       0x4595E9 straight after 0x45A790): the waterline erase 0x4BA1B0 belongs
-       to the COMPLETED branch and the digger's inline branch only, so a
-       building on the shore keeps the whole slant. Getting this wrong is what
-       erased the Kbot lab's shadow below the waterline until G14j, so it is
-       pinned here rather than passed in. */
-    glUniform1f(u_waterT, -1e9f);
-    glUniform1f(u_digT,   -1e9f);
-    x_glUniform3f(u_cast, u->cast[0], u->cast[1], u->cast[2]);
-    glBindVertexArray(m->vao);
-    /* counted here rather than in _slant_redraw: the stencil dance draws the
-       same geometry twice and the count is of casters, not of draws */
-    s_slantU++;
-    s_slantT += (unsigned)g->count[TAGPU_PB_SLANT] / 3;
-}
-
-void tagpu_posedraw_slant_redraw(const TAGPU_PDUNIT* u)
-{
-    const TAGPU_PBMAT* m;
-    const TAGPU_PBGEOM* g = unit_ok(u, &m, TAGPU_PB_SLANT);
-    if (!g) return;
-    x_glDrawArrays(GL_TRIANGLES, g->first[TAGPU_PB_SLANT], g->count[TAGPU_PB_SLANT]);
-}
-
 /* ---- the nanoframe wireframe (G16 step 6) ------------------------------- */
-void tagpu_posedraw_wire_begin(void)
-{
-    if (s_state != 1) return;
-    glUseProgram(s_prog);
-    glUniform1i(u_shadow, 0);
-    glUniform1i(u_depthPass, 0);
-    /* the wireframe carries its own colour and must not be re-classified by
-       the build-state recolour it is drawn beside (the CPU path clears the
-       same uniform before its own line draws) */
-    glUniform1i(u_nanoOn, 0);
-    glUniform1i(u_waterMode, 0);
-    glUniform1f(u_alpha, 1.0f);
-    x_glUniform2f(u_off, 0.0f, 0.0f);
-    x_glUniform3f(u_cast, 0.0f, 0.0f, 1.0f);
-    glUniform1i(u_range, PD_R_WIRE);
-    x_glBindBufferBase(GL_UNIFORM_BUFFER, 0, s_ubo);
-}
-
-void tagpu_posedraw_wire_unit(const TAGPU_PDUNIT* u, float wire)
-{
-    const TAGPU_PBMAT* m;
-    const TAGPU_PBGEOM* g = unit_ok(u, &m, TAGPU_PB_WIRE);
-    if (!g) return;
-    upload_pose(u);
-    x_glUniform4f(u_anchor, u->ax, u->ay, u->wx0, u->wz0);
-    glUniform1f(u_enc, u->enc);
-    glUniform1i(u_fog, u->fog);
-    glUniform1f(u_wire, wire);
-    glUniform1f(u_waterT, u->waterT);
-    glUniform1f(u_digT, u->digT);
-    glBindVertexArray(m->vao);
-    x_glDrawArrays(GL_LINES, g->first[TAGPU_PB_WIRE], g->count[TAGPU_PB_WIRE]);
-    s_wireU++;
-    s_wireL += (unsigned)g->count[TAGPU_PB_WIRE] / 2;
-}
-
 /* ---- the shadow-depth twin ---------------------------------------------- */
-void tagpu_posedraw_depth_begin(const float* shadowMat)
-{
-    if (s_state != 1 || !shadowMat) return;
-    /* THE FRAME'S DEPTH TWIN RAN, and with this matrix. Recorded rather than
-       inferred, because `casts` on a hand-over record means "this unit is IN
-       the map the twin drew" -- which is false on any frame where
-       tagpu_shadow_begin refused and this block never ran, even though every
-       unit's `castSkip` still reads the same. It is set here rather than in
-       `_depth_unit` so that a frame whose casters were all skipped still says
-       the map was drawn. */
-    s_depthOn = 1;
-    memcpy(s_depthMat, shadowMat, sizeof s_depthMat);
-    glUseProgram(s_dprog);
-    glUniformMatrix4fv(d_shadowMat, 1, GL_FALSE, shadowMat);
-    glUniform1i(d_depthPass, 1);
-    glUniform1i(d_range, PD_R_BODY);
-    /* the depth pass takes gl_Position from uShadowMat alone, but the vertex
-       shader is the body's, so the projection uniforms it also evaluates must
-       hold something finite — a zero uGame would make the discarded branch NaN
-       on a strict driver */
-    x_glUniform2f(d_game, 1.0f, 1.0f);
-    x_glUniform2f(d_off, 0.0f, 0.0f);
-    glUniform1f(d_zoom, 1.0f);
-    x_glUniform2f(d_zoomC, 0.0f, 0.0f);
-    glUniform1f(d_depthScale, 1.0f);
-    x_glBindBufferBase(GL_UNIFORM_BUFFER, 0, s_ubo);
-}
-
-void tagpu_posedraw_depth_unit(const TAGPU_PDUNIT* u)
-{
-    const TAGPU_PBMAT* m;
-    const TAGPU_PBGEOM* g = unit_ok(u, &m, TAGPU_PB_BODY);
-    if (!g) return;
-    upload_pose(u);
-    x_glUniform4f(d_anchor, u->ax, u->ay, u->wx0, u->wz0);
-    glUniform1f(d_enc, u->enc);
-    x_glUniform3f(d_cast, u->cast[0], u->cast[1], u->cast[2]);
-    glBindVertexArray(m->vao);
-    x_glDrawArrays(GL_TRIANGLES, g->first[TAGPU_PB_BODY], g->count[TAGPU_PB_BODY]);
-}
-
 /* ---- the model top ------------------------------------------------------ */
 /* `s_emitTop` was the highest posed y emit_node saw while it wrote the
    vertices; nothing writes them here, so it comes off each piece's baked rest
@@ -1425,9 +1062,11 @@ void tagpu_posedraw_frame(unsigned frame_counter)
 
 void tagpu_posedraw_glreset(void)
 {
-    /* the context is gone: the ids are already invalid and must not be deleted
-       against the new one. The next ready() rebuilds. */
-    s_prog = s_dprog = s_ubo = 0;
+    /* THREE GL OBJECT NAMES WERE FORGOTTEN HERE, and they went with landing
+       11-5d along with the program they named. What is left is the arm state,
+       and it still belongs here: the fork restarts its render thread on every
+       display-mode change, and the device the next `ready()` asks about its
+       `maxUniformBufferRange` may not be the device this one answered for. */
     s_state = 0;
 }
 

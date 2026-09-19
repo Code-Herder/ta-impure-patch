@@ -128,15 +128,18 @@ unsigned tagpu_posedraw_drawn(void);  /* units drawn this frame */
    monotonic render-thread counter and stamps this frame's hand-over. */
 void tagpu_posedraw_frame(unsigned frame_counter);
 
-/* 0 when the pass cannot draw (no GL, a driver whose uniform block is too
-   small). Since step 8 there is no CPU emitter to leave those units to: the
-   caller instead stops skipping the engine's own unit rasterise, so they are
-   drawn by the engine at 8bpp. Builds the program on the first call — CALL
-   ONLY WITH A CURRENT GL CONTEXT. */
+/* 0 when the pass cannot arm: a device whose `maxUniformBufferRange` will not
+   hold the pose block, which since landing 11-5d is the whole of bring-up.
+   Since step 8 there is no CPU emitter to leave those units to, so the caller
+   instead stops skipping the engine's own unit rasterise and they are drawn by
+   the engine at 8bpp. A 0 ALSO MEANS "NO DEVICE YET" for the first frames —
+   the state goes back to untried rather than latching a refusal — so a caller
+   that latches on the first answer latches the wrong one. */
 int  tagpu_posedraw_ready(void);
 
-/* bodies: begin, then one call per unit, then end. Leaves the program and the
-   VAO dirty — the caller puts its own back. */
+/* bodies: begin, then one call per unit, then end. It binds nothing and leaves
+   nothing dirty — what the window does is open the RECORDING that becomes this
+   frame's hand-over, so the bracket still has to be balanced. */
 void tagpu_posedraw_begin(const TAGPU_PDVIEW* v);
 
 /* THE GHOST'S OWN WINDOW, and it is a different entry point for two reasons the
@@ -151,40 +154,37 @@ void tagpu_posedraw_begin_ghost(const TAGPU_PDVIEW* v);
 void tagpu_posedraw_unit(const TAGPU_PDUNIT* u);
 void tagpu_posedraw_end(void);
 
-/* THE CLASSIC SILHOUETTE SHADOW, which reuses the body geometry with uShadow
-   = 1 and the pass's offset. Without this a posed unit would simply lose its
-   shadow whenever Classic++ is off, since the CPU stream it was drawn from no
-   longer holds its vertices. The caller owns the stencil dance that keeps one
-   blend per pixel, so the pose upload and the uniforms are `_shadow_set` and
-   the draw is `_redraw`, called twice against the same state. */
-void tagpu_posedraw_shadow_begin(void);
-void tagpu_posedraw_shadow_set(const TAGPU_PDUNIT* u, float offX, float offY,
-                               float waterT, float digT);
-void tagpu_posedraw_redraw(const TAGPU_PDUNIT* u);
+/* TEN ENTRY POINTS STOOD HERE AND WENT WITH LANDING 11-5d, together with the
+   62 GL calls behind them:
 
-/* THE STRUCTURE-SHADOW SLANT (G16 step 6), the range `emit_slant` built. Same
-   stencil dance as the silhouette above and the same reason for the split: the
-   two draws must see identical geometry with nothing re-uploaded between them.
-   `_slant_set` pins the waterline and digger thresholds at -1e9 itself — the
-   erases belong to the COMPLETED branch, never the structure branch, which is
-   the G14j fix and not a per-caller choice. */
-void tagpu_posedraw_slant_begin(void);
-void tagpu_posedraw_slant_set(const TAGPU_PDUNIT* u, float offX, float offY);
-void tagpu_posedraw_slant_redraw(const TAGPU_PDUNIT* u);
+     _shadow_begin / _shadow_set / _redraw      the Classic silhouette shadow
+     _slant_begin  / _slant_set  / _slant_redraw   the structure-shadow slant
+     _wire_begin   / _wire_unit                 the nanoframe wireframe
+     _depth_begin  / _depth_unit                the shadow-depth twin
 
-/* THE NANOFRAME WIREFRAME (G16 step 6), the range `emit_wire` built: GL_LINES,
-   the body projection, one notch nearer than the surface it traces, and the
-   animated blue as a per-unit uniform rather than a per-vertex colour (the
-   material stream is per type and owner; this colour is neither). */
-void tagpu_posedraw_wire_begin(void);
-void tagpu_posedraw_wire_unit(const TAGPU_PDUNIT* u, float wire);
+   THEY WERE ALREADY UNCALLED BEFORE THIS LANDING — the caller that used them
+   was tagpu_native.c's GL composite, deleted by landing 11-3, and a tree-wide
+   search found no other. Deleting them is therefore inert. What replaces them
+   is NOT uniform, and the honest split is:
 
-/* the shadow-depth twin: the same posed vertices through tagpu_shadow.c's
-   light matrix, with no fragment work at all — the native stream's own depth
-   program discards nothing either, so a colour-keyed texel casts on both
-   paths. The caller has the shadow FBO bound and takes its program back. */
-void tagpu_posedraw_depth_begin(const float* shadowMat);
-void tagpu_posedraw_depth_unit(const TAGPU_PDUNIT* u);
+     _depth_begin / _depth_unit   PORTED. `tagpu_vk_unit.c:1043-1046` builds
+                                  the `pose_depth` pipeline from the VS + DFS
+                                  that stay in tagpu_posedraw.c, and draws it
+                                  with uDepthPass 1 (:1769).
+     the other eight              NOT PORTED. `tagpu_vk_unit.c` draws the BODY
+                                  range only, and says so under "WHAT IT DOES
+                                  NOT DO" (:90): the wire, the silhouette and
+                                  the slant are the same program and the same
+                                  bake, and this lane does not draw them. The
+                                  hand-over counts any of them that drew inside
+                                  the published window and the pass stands
+                                  down; on a Classic++ soft-shadow frame none
+                                  of them draws at all.
+
+   SO THIS IS A TOMBSTONE, NOT A MIGRATION, for those eight. The gap is the
+   Vulkan unit pass's, not this header's — whoever closes it ports the ranges
+   into tagpu_vk_unit.c rather than restoring these entry points, which had no
+   caller left to serve. */
 
 /* the highest posed model y of one unit's BODY range, from each piece's rest
    AABB through its pose matrix — what `s_emitTop` was taken from before the
