@@ -1,0 +1,85 @@
+landing-review: vulkan-only plan, landing 11-1 -- the Direct3D9 renderer goes
+
+Range reviewed: main...HEAD at 6de89fb (0470c2b..6de89fb after the 10c-3
+landing; the code half is 3f71759 alone, 13 files). The branch moved
+under the reviewer and it said so: 6de89fb was docs-only and it read
+both. Commits added AFTER the review: 816fb2b and 5cb58c3 (docs, landing
+11-2's forward survey) and ec41026 (this landing's own fix commit).
+Reviewer: dedicated read-only agent, `medium` (CLAUDE.md: touches
+tagpu/ddraw/**; it writes no engine state, moves no byte patch and
+changes no game-thread/render-thread synchronisation, so not `high`).
+ONE round. No HIGH.
+
+WHAT LANDED. The Direct3D9 backend, whole: render_d3d9.c (742),
+render_d3d9.h (50), d3d9shader.h (1595), and every d3d9_* call site in
+dd.c, config.c, debug.c, dllmain.c, utils.c, winapi_hooks.c and
+wndproc.c. 2 538 lines out, 34 in, 13 files. It is the one member of the
+plan's deletion set with no producer half -- `git grep -i d3d9 main --
+'tagpu/ddraw/src/tagpu_*' 'tagpu/ddraw/inc/tagpu_*'` is empty, so no pass
+of ours and no Vulkan entry point ever touched it.
+
+Landing 11 also split into five parts here, which the row had needed
+since the surveys: 11-1 the renderer-selection surface, 11-2 the world
+passes' GL draw halves, 11-3 the UI and support passes', 11-4 the GL
+entry-point surface itself (and with it `tacli shot`/`glshot`, wired only
+into render_ogl.c), 11-5 the exit condition. The definitional call the
+row was told to make is made: the exit condition is stock as a LANE.
+
+WHAT THE REVIEWER VERIFIED, and this was the risk in the change. The two
+"identity" simplifications hold on every arm, checked against main and
+not against the post-deletion tree. `BOOL d3d9_active` was assigned in
+exactly two places, each inside `if (renderer == d3d9_render_main)`, and
+initialised FALSE in each -- so for gdi, ogl and vk it was invariably
+FALSE, `!d3d9_active || nonexclusive` was always true, and the block that
+now runs unconditionally is the one all three already took. The deleted
+`d3d9_active && nonexclusive` reset was unreachable on a surviving lane;
+the windowed branch's copy was assigned and never read. wndproc.c's two
+`renderer != d3d9_render_main || nonexclusive` tests are exactly `if (1)`
+now, at both the activate and deactivate sites, so window placement,
+mouse locking and display-mode restore are unchanged. Also verified: the
+new inline fopen is not under the loader lock (dd_CreateEx is reached
+from the exported DirectDrawCreate* and the CoCreateInstance hook, never
+DllMain), g_config.renderer is a bounded char[256] and is the argument
+rather than the format, and <stdio.h> was genuinely absent before.
+
+FINDINGS, ALL ACTED ON IN ec41026.
+ - MEDIUM: three wrong figures in one sentence. The code half is 13
+   files / 34 added / 2 538 deleted; 2 539, 119 and sixteen are the whole
+   commit including the notes.
+ - MEDIUM: gpu-status attributed 2 539 lines to the three deleted files,
+   which are 2 387.
+ - MEDIUM: `renderer=auto` -- what the generated ini writes, so the
+   default a release-zip player gets -- read `!IsWine() &&
+   d3d9_is_available()` first and selected Direct3D9 on native Windows.
+   It now goes straight to OpenGL. Under Wine that branch was never
+   taken, so nothing on the reference setup moved and no measurement here
+   touches it. Recorded as the gap it is.
+ - LOW: pre-deletion survey paragraphs left reading as present tense in
+   the same document that marks 11-1 done; now marked as the survey they
+   are. inc/vulkan/README.md no longer cites d3d9shader.h.
+ - LOW: config/ConfigFormUnit.cpp, the upstream C++ Builder settings GUI,
+   is the one surviving writer of the d3d9_filter key and still offers
+   "Direct3D 9". Not built by the Makefile and already stale against this
+   fork (no vulkan entry either), so it is named in "what was
+   deliberately left" rather than edited.
+ - LOW/NIT: the vcxproj and its filters named deleted files (both
+   unmaintained here -- the Makefile globs and needed no change); two
+   sites left half-simplified are collapsed the way the other four were;
+   inc/dd.h's four FILTER_* defines now have no user and are named.
+
+MEASURED. openglcore, vulkan and gdi each launch, draw and answer
+`tacli ui`; an instance whose ini still asks for the deleted lane gets
+GDI and one log line. The GL lane was additionally taken in-game through
+a scenario load with the world drawing and `tacli roster` answering.
+
+WHAT IS NOT COVERED. The `auto` path on native Windows, which cannot be
+exercised here at all -- _local/vm/ is the kit for it and is waiting on
+the owner. A release carrying this change says so in its notes.
+
+AND A RETRACTION THIS LANDING CARRIES FOR THE PREVIOUS ONE. 10c-3's note
+on 76077e4 recorded a second run as gdi and concluded the roster
+keepalive's force is only a floor on the fill rate. That run was on
+OpenGL: `tacli scenario load` calls write_ddraw_ini whenever the scenario
+carries a setup.res, and it writes renderer=openglcore unconditionally,
+so the hand-set renderer=gdi did not survive. 76077e4's note now carries
+the retraction and the harness trap is written up in the ta-drive skill.
