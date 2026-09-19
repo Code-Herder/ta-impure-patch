@@ -1897,6 +1897,43 @@ that a count which grows is the plan catching up with the work.) The row was
        method item 11's survey settled on — reports it as a hit. Read the signature, not the
        name.
 
+       **DONE [2026-09-19].** 796 lines out, 99 in; the file goes 3 179 -> 2 457. The nine
+       stand-downs are gone with their call sites, every `if (gl_draws)` and
+       `if (!tagpu_vk_owns_present())` block with them, and behind them `init_gl` (68 GL
+       calls), `mksh`, `mkprog`, `quad`, `getgl`, `sharp_drop`, the 13 `PFN_*` typedefs, the
+       13 `x_gl*` pointers and ~30 `s_u*` uniform locations. **The nine shader strings stay**,
+       wrapped in the pragma — they are `tagpu_vk_gui.c`'s shaders, all seven `gui_*` programs
+       of the PROGRAMS table.
+
+       **The premise, established rather than assumed.** Every gated site in the file sits in a
+       `static`, and a call-graph walk from all nine exports shows **only `tagpu_gui_present`
+       reaches any of them**. That one export has a single caller, `tagpu_overlay.c:408` inside
+       `tagpu_overlay_draw`, which has a single caller, `render_vk.c:232` — inside the frame
+       loop that `render_vk.c:145` opens by calling `tagpu_vk_own_present()`, i.e.
+       `InterlockedExchange(&s_ownWin, 1)`, once before the loop. So `gl_draws` is false at all
+       30 sites **by an ordering**, not by a hope. `renderer=gdi` reaches `tagpu_overlay_draw`
+       never, so it does not reach this file at all.
+
+       **Measured**: `census: … gui=1` on every sampled frame, `tacli ui` still answers
+       (`gui ARMMAIN2.GUI 1024x768`), and the cross-build frame diff is **0 px of 786 432 across
+       all 64 pairs** (8 grabs x 8 grabs), outside the same one-pixel cursor animation set
+       11-4a characterised. The GUI *is* the side panels and the top bar, so a whole-window diff
+       is a direct test of this pass rather than a proxy.
+
+       **Four pieces of dead state went with the draw, and one deliberately did not.** Once the
+       GL ids stop being created, `twin_sprite` and `twin_copy` return bytes computed from
+       `t->rgb`/`src->rgb`/`s_colValid` that can no longer be anything but 0 — 4b-3 had already
+       said this lane records "indexed". Those are folded to a literal 0 with the reasoning
+       kept, because computing 0 from three flags nothing can raise is landing 11-4a's `s_state`
+       trap at record scale: the value is right and the next reader believes the inputs still
+       move. `TWIN` loses `tex`, `fbo` and `rgb` (the bookkeeping `surf`/`w`/`h` is what
+       `twin_find` and the mirror ops need), and `twin_drop`'s three `glDelete*` calls go with
+       them. **`s_colValid` stays**, pinned at 0 and documented on its declaration: unlike
+       `s_state` it is not a readiness gate but a VALUE that is published as
+       `s_mHand.colourTwins`, and 0 is correct. Removing it would reshape the hand-over, which
+       is a protocol change for `tagpu_vk_gui.c` rather than a deletion — out of scope, and
+       named here instead of done quietly.
+
        **And landing 4b-3 already did the hard half.** Each of the nine opens with the
        stand-down as its FIRST statement under a comment saying *"PURE GL: this puts pixels in a
        GL object and feeds nothing the Vulkan twin is told"*, so there is no CPU work to rescue

@@ -11345,6 +11345,46 @@ Vulkan frame carries every armed pass at once, so `vk: 1 A/B levers claimed this
 passes drew into it - nothing captured`. Standing five passes down would change the frame the
 capture is meant to certify; the full-window cross-build diff answers the same question.
 
+### 2.67 The UI layer stops drawing — landing 11-4b of the Vulkan-only plan
+
+`tagpu_gui_surf.c` is the GUI layer: the engine's own surfaces mirrored into "twins", the sprite
+/ string / fill / outline / copy ops recorded against them, the sharp device-resolution layer,
+the cursor and the minimap. Landing 11-4b removed its OpenGL half — **796 lines out, 99 in, the
+file 3 179 -> 2 457**. Nine whole-function stand-downs go with their call sites (`twin_colour`,
+`twin_col_drop`, `twin_upload`, `twin_clear`, `twin_fill`, `twin_outline`, `restore_step`,
+`upload_palette`, `unbind_all`), every lane-gated block with them, and behind those `init_gl`
+(68 GL calls), `mksh`, `mkprog`, `quad`, `getgl`, `sharp_drop`, 13 `PFN_*` typedefs, 13 `x_gl*`
+pointers and ~30 `s_u*` uniform locations. The mirror op stream — what `tagpu_vk_gui.c` actually
+draws — is untouched.
+
+**The lane premise was established, not assumed, and it is an ORDERING.** Every gated site in the
+file is inside a `static`, and a call-graph walk from all nine exports shows only
+`tagpu_gui_present` reaches any of them. That export has exactly one caller
+(`tagpu_overlay.c:408`, inside `tagpu_overlay_draw`), which has exactly one caller
+(`render_vk.c:232`), inside the frame loop that `render_vk.c:145` opens by calling
+`tagpu_vk_own_present()` — `InterlockedExchange(&s_ownWin, 1)` — once, before the loop. So
+`tagpu_vk_owns_present()` is true at all 30 sites by construction. `renderer=gdi` reaches
+`tagpu_overlay_draw` never and therefore never reaches this file.
+
+**Measured**: `census: … gui=1` on every sampled frame, `tacli ui` answers
+(`gui ARMMAIN2.GUI 1024x768`), and the cross-build window diff is **0 px of 786 432 across all
+64 pairs**, outside §2.66's one-pixel cursor animation set. The GUI *is* the side panels and the
+top bar, so the whole-window diff tests this pass directly.
+
+**The dead-state rule from §2.66, applied and then applied against itself.** With the GL ids
+uncreated, `twin_sprite` and `twin_copy` returned record bytes over `t->rgb`, `src->rgb` and
+`s_colValid` that could no longer be anything but 0 — which is what landing 4b-3 already said
+this lane records ("indexed"). Folding them to a literal 0 with the reasoning kept is the same
+call as deleting `s_state`: a value computed from flags nothing can raise reads like a live
+decision. `TWIN` loses `tex`/`fbo`/`rgb`, keeping the `surf`/`w`/`h` bookkeeping `twin_find` and
+the mirror ops need, and `twin_drop`'s three `glDelete*` calls go with them. **`s_colValid` was
+kept**, pinned at 0 with the reason on its declaration — and the distinction is the useful part:
+`s_state` was a READINESS GATE, where a re-introduced `if (!ready) return;` silently publishes
+nothing; `s_colValid` is a VALUE that is published as `s_mHand.colourTwins`, where 0 is the
+correct answer. Deleting it would reshape the hand-over — a protocol change for
+`tagpu_vk_gui.c`, not a deletion. **Dead state that feeds a guard is a trap; dead state that
+feeds a published value is a constant, and the two are not removed the same way.**
+
 ## 4. What the work taught us
 
 These are the transferable parts — the reasons things are shaped the way they are.

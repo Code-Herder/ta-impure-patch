@@ -3203,7 +3203,11 @@ outside a one-pixel animation set that is TA's own cursor pulsing at the pointer
 position and that differs between two grabs of the SAME build. It corrected a
 premise the plan was carrying: each pass's GLSL strings are the source of truth for its *Vulkan*
 shader, read at build time by `tools/spirv-gen.py`, so they are a build input rather than dead
-GL apparatus and are not deletable in 11-5 or anywhere else. See the plan's
+GL apparatus and are not deletable in 11-5 or anywhere else — `openglshader.h` was on the
+deletion list and has been struck off for that reason. **11-4b has landed too** (gpu-status
+§2.67): `tagpu_gui_surf.c`'s GL half, 796 lines, the file 3 179 -> 2 457, with the mirror op
+stream untouched — `gui=1`, `tacli ui` still answering, and 0 differing pixels of 786 432 across
+all 64 cross-build pairs. See the plan's
 item 11 for the parts; 11-1 is the D3D9 renderer, the one member of the deletion set with no
 producer half, and **11-2 is the OpenGL lane itself** — moved in front of the sixteen passes'
 GL draw halves rather than behind them, because lane-last leaves `renderer=openglcore`
