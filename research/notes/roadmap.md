@@ -3189,7 +3189,14 @@ regression through any of it, and the added keepalive never fires there: `overru
 decision**: the exit condition is stock *as a lane* — nothing of ours reaches the screen — and
 stock *as a process* is recorded as false, because the warning patch suppresses a modal startup
 dialog rather than a pixel and stays ungated, while the cursor pair is real input behaviour, is
-on by default, and needs `tagpu_curs.off` for a run that wants stock input too. See the plan's
+on by default, and needs `tagpu_curs.off` for a run that wants stock input too. **11-3 has landed six of the eight files it names** (gpu-status §2.65): the world passes' GL
+draw halves in `tagpu_native.c`, `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c`, `tagpu_posedraw.c`
+and `tagpu_render3do.c`, each keeping its gather and its hand-over, with the census still showing
+six passes drawing at `ss=2`. It also put the **build ghost** back on the default lane -- 11-2
+had dropped it, which that landing named at the time -- by lifting the record half above the seam
+as `ghost_record()`; measured at `drawn=2405` with the placement cursor live. `tagpu_shadow.c`
+and `tagpu_hires_draw.c` are held back: for those two the producer *is* the half being deleted,
+and whether to delete it is escalation reason 1, written up in the plan. See the plan's
 item 11 for the parts; 11-1 is the D3D9 renderer, the one member of the deletion set with no
 producer half, and **11-2 is the OpenGL lane itself** — moved in front of the sixteen passes'
 GL draw halves rather than behind them, because lane-last leaves `renderer=openglcore`

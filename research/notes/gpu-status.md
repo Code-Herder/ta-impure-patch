@@ -11180,6 +11180,67 @@ error anywhere.
 returned 71 PNGs and 9 distinct frames and never caught the loading screen, so whether this verb
 can reach a single-present screen is open.
 
+### 2.65 The world passes stop drawing — landing 11-3 of the Vulkan-only plan
+
+Landing 11-2 deleted the OpenGL lane. That left `tagpu_overlay_draw` with exactly one caller,
+`render_vk.c:232`, inside a loop that begins **after** `tagpu_vk_own_present()` at
+`render_vk.c:145` sets the latch — so `gl_draws = !tagpu_vk_owns_present()` is false at every
+surviving site and the GL draw halves were unreachable **by an ordering** rather than by
+inspection. This landing deletes them. Because they could not run, deleting them changes no
+behaviour, and that is the whole reason the lane went first.
+
+| file | what came out |
+|---|---|
+| `tagpu_native.c` | the unit pass's GL draw, 1 054 lines; the two model-AABB caches (`s_aabb`, `s_sbox`, `aabb_walk`, the `MAABB` type); the whole `tagpu_selgeom.on` apparatus |
+| `tagpu_terr.c` | the program, eighteen uniforms, six texture units, the instance upload, one `glDrawArraysInstanced` |
+| `tagpu_feat.c` | the program, the uniforms, the shadow pass (depth writes off) and the body pass (on) |
+| `tagpu_fx.c` | the program, the uniforms, the four layer draws |
+| `tagpu_posedraw.c` | three blocks — `pd_begin`'s program and uniforms, the per-unit uniforms and draw, `_end`'s `glBindVertexArray(0)` |
+| `tagpu_render3do.c` | the shade-LUT texture upload and creation, and `tagpu_r3d_lut_texref` |
+
+**Every pass keeps its gather and its hand-over.** The gathers still read engine memory and build
+the instances, vertices, counts and texels; the `*_publish` / `*_handover` pairs still carry them
+to the Vulkan twins, which is what draws. Verified by running it: `vk: census: 6 pass(es) drew
+(terr=1 feat=1 unit=1 fx=1 mark=1 gui=1)` at `ss=2`, with every `refused=`, `viol=` and
+`foreign=` counter at 0.
+
+**Three guards lost a term, and the identity is why.** `tagpu_terr.c`, `tagpu_feat.c` and
+`tagpu_fx.c` all read `if ((gl_draws && s_state != 1) || total == 0)`. With `gl_draws` false the
+first disjunct is false whatever `s_state` holds, so the guard **is** `total == 0` — the gather's
+own count, which is what it always really was. `s_state` is separately confirmed to stay 0 here:
+each pass calls `init_gl()` only inside `if (!tagpu_vk_owns_present())`, so the program is never
+built on this lane and `s_state = 1` is never reached.
+
+**The one part that is not a deletion: the build ghost.** `tagpu_ghost.on` is a play default, and
+11-2 moved the default lane to Vulkan, which dropped the ghost with the GL unit pass — named at
+the time rather than discovered later. `ghost_record()` is `ghost_pass` minus
+`ghost_bind_textures`, minus both `x_glDepthMask` and minus the `tagpu_posedraw_live()`
+prerequisite. Dropping that predicate is sound because it reads `s_state == 1 &&
+!tagpu_vk_owns_present()` — "the GL posed program is live", false on the only lane there is;
+the half that survives is the one still true, that the view must belong to **this** frame. It is
+called from inside the Vulkan hand-over branch, after the posed units' window, because ghosts
+blend with what they sit on and were drawn last on GL too. **Measured on `renderer=vulkan`**:
+`ghost: drawn=2405` with the placement cursor live, and a window grab shows the translucent solar
+collector inside the placement square. **Not measured**: the queued-site half, which rides the
+same `ghost_one` path but stayed at `queue=0` in every run.
+
+**`tagpu_selgeom.on` is gone rather than left inert.** Its only reader was `selAt1x` inside the
+deleted draw, so arming the file would have done nothing while still looking available — a lever
+that lies. The Vulkan lane behaves as GL's `selgeom main` did (the rect rasterised at `ss` and
+downsampled, never deferred into a 1x buffer), which `tagpu_vk_world.h` records as not
+expressible otherwise. The cost measured before the deletion — 1 320 differing pixels at `ss=2`
+against the engine's Bresenham rect — is kept in [UI markers](ui-markers.html).
+
+**Two of the eight files the plan names are NOT in this landing.** `tagpu_shadow.c` and
+`tagpu_hires_draw.c` are the ones where the producer *is* the half being deleted: `s_pubHave = 1`
+is set only in `tagpu_shadow_end` and `s_hiHave = 1` only in `tagpu_hires_depth`, and both were
+called only *below* `tagpu_native.c`'s `!gl_draws` hand-over return. They have been unreachable
+on this lane since landing 4b, so deleting them would change nothing today — but it would make
+`tagpu_vk_shadow.c` and the caster half of `tagpu_vk_hires.c` unreachable by construction, and
+the absence of Classic++ soft shadows and replacement-mesh casters permanent until a Vulkan-side
+producer exists. That is a decision about the program rather than about dead lines, so it is the
+owner's; the plan's landing 11-3 entry has both readings.
+
 ## 4. What the work taught us
 
 These are the transferable parts — the reasons things are shaped the way they are.
