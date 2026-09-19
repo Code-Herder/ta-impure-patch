@@ -11417,6 +11417,44 @@ correct answer. Deleting it would reshape the hand-over — a protocol change fo
 `tagpu_vk_gui.c`, not a deletion. **Dead state that feeds a guard is a trap; dead state that
 feeds a published value is a constant, and the two are not removed the same way.**
 
+### 2.68 The support passes stop drawing — landing 11-4c of the Vulkan-only plan
+
+`tagpu_fps.c` (the frame-rate overlay), `tagpu_scaffold.c` (the G12a blocking-map overlay),
+`tagpu_gaf.c` (the sprite atlas) and `tagpu_posebake.c` (pose baking) lose their GL halves —
+`init_gl`, `getgl`, `mksh`, `serr`, `flog`, the `PFN_*`/`x_gl*` blocks, the uniform locations,
+and `tagpu_fps.c`'s `s_state`, which was §2.66's trap again: nothing could raise it once
+`init_gl` went. `tagpu_scaffold.c` also loses **`tagpu_scaffold_texref`**, an exported accessor
+returning its GL texture id that had no caller anywhere in the tree even before the landing.
+Both shader-carrying files keep their pair behind a pragma whose `pop` was probed, per §2.67.
+
+**Two of the four are not the uniform case, and that is the transferable part.**
+
+`tagpu_gaf.c` is **reachable on this lane** — `tagpu_gaf_atlas_create` has six call sites in
+five files, one of them `tagpu_gui_surf.c`'s `atlas_setup`, which §2.67 deliberately kept
+alive. Every other file in 11-4 was unreachable; this one is not. It survives the deletion for
+a different reason: landing 4b-2 had already made the GL texture name optional there, so the
+`glGenTextures`/`glTexImage2D` block goes and the shelf packer, entry table and CPU mirror
+stay. Likewise in `atlas_paint`, where the `glTexSubImage2D` upload goes and **the `memcpy`
+into `a->mirror` beside it stays** — that mirror is what the Vulkan passes sample. Deleting
+this file's GL for "it is unreachable" would have produced the right diff from a false premise.
+
+`tagpu_posebake.c` carries a site that is **not a draw gate at all**:
+`if (!s_mirrorWant && tagpu_vk_owns_present())` is the POSITIVE form — it ARMS the pose mirror
+*for* the Vulkan lane. It simplifies to `if (!s_mirrorWant)`; deleting it would have removed
+the lane's own bring-up. **Not every `tagpu_vk_owns_present()` is a GL gate**, and a sweep that
+greps for the call rather than reading its sense will get this exactly backwards.
+
+**Measured**: 0 px of 786 432 across all 64 cross-build pairs, with the atlas healthy
+(`feat: … atlas=24`, `fx: … atlas=10`; a broken GAF mirror shows as missing sprites
+everywhere). The default fixture leaves `scaf=0 fps=0`, so both were armed to exercise them:
+the census goes to `7 pass(es) drew … scaf=1 … fps=1`, and a grab shows `FPS59` top-left and
+the scaffold's blue→red ramp over the blocked cells — its fragment shader's exact gradient.
+
+**Observed, not attributed**: with the scaffold armed the census also reports `unit=0` and the
+tank bodies are absent while their health bars remain; disarming returns `unit=1`. The scaffold
+is an occlusion input to the unit shader (`tagpu_native.c:508`), `tagpu_native.c` is untouched
+by this landing, and the `tagpu_scaffold.c` diff contains no non-GL change.
+
 ## 4. What the work taught us
 
 These are the transferable parts — the reasons things are shaped the way they are.

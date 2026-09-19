@@ -3207,7 +3207,11 @@ GL apparatus and are not deletable in 11-5 or anywhere else — `openglshader.h`
 deletion list and has been struck off for that reason. **11-4b has landed too** (gpu-status
 §2.67): `tagpu_gui_surf.c`'s GL half, 796 lines, the file 3 179 -> 2 457, with the mirror op
 stream untouched — `gui=1`, `tacli ui` still answering, and 0 differing pixels of 786 432 across
-all 64 cross-build pairs. See the plan's
+all 64 cross-build pairs. **11-4c completes 11-4** (gpu-status §2.68): the fps, scaffold, GAF
+and posebake halves, measured with both overlays armed so the census reaches `7 pass(es)
+drew`. Two of those four were NOT the uniform "unreachable" case — `tagpu_gaf.c` is reachable
+on this lane and survives because 4b-2 made its GL texture optional, and `tagpu_posebake.c`
+carries a `tagpu_vk_owns_present()` in the POSITIVE sense that arms the Vulkan mirror. See the plan's
 item 11 for the parts; 11-1 is the D3D9 renderer, the one member of the deletion set with no
 producer half, and **11-2 is the OpenGL lane itself** — moved in front of the sixteen passes'
 GL draw halves rather than behind them, because lane-last leaves `renderer=openglcore`
