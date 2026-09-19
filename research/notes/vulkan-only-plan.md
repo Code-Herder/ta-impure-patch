@@ -1920,6 +1920,17 @@ that a count which grows is the plan catching up with the work.) The row was
        11-4a characterised. The GUI *is* the side panels and the top bar, so a whole-window diff
        is a direct test of this pass rather than a proxy.
 
+       **The review's findings, all acted on.** The pragma bracket above; a dead `float v[24]`
+       and an unused `gh` that it had hidden; **`s_clears`**, which the landing had left as a
+       counter nothing could increment while `case PK_CLEAR` kept mirroring ops — moved into the
+       drain beside its four siblings, and the heartbeat went from a permanent `clears=0` to
+       `clears=52351` in one run; and **nineteen write-only statics** (the six programs, VAO/VBO,
+       palette texture, the sharp layer's texture and FBO, the minimap's pair, `s_gl`,
+       `s_palUpValid`, `s_sharpFailed`), all assigned only `= 0` in `tagpu_gui_glreset` and read
+       nowhere. With those gone the file has **no GL dependency at all**, so its
+       `opengl_utils.h` include went too — the first of that header's nineteen includers to
+       leave it.
+
        **Four pieces of dead state went with the draw, and one deliberately did not.** Once the
        GL ids stop being created, `twin_sprite` and `twin_copy` return bytes computed from
        `t->rgb`/`src->rgb`/`s_colValid` that can no longer be anything but 0 — 4b-3 had already
@@ -1985,6 +1996,15 @@ that a count which grows is the plan catching up with the work.) The row was
      exact. Do not lean on it as a general "the string cannot change" guarantee; where a landing
      restores a shader, diff it against the previous commit as well. Note what it means for the *shape* of 11-5: a file can be a
      GL-free pass and still have to keep two `static const char*` at file scope forever.
+
+     **PROVE THE BRACKET; READING IT IS NOT ENOUGH [added 2026-09-19 after 11-4b].** Landing
+     11-4b put its `pop` **inside a `/* … */` block**, where it is comment text and not a
+     directive, so `-Wunused-variable` stayed off for the rest of the file and hid two of that
+     landing's own leftovers. The first fix repeated the bug — a regex for the last shader's
+     terminating `;` stopped at a `;` ending a line *inside that same comment*. Find the
+     terminator with comments and strings MASKED, then plant an unused static immediately after
+     the `pop` and confirm the compiler reports it. Both broken placements read correctly; only
+     the probe distinguishes them. (11-4a's bracket was probed afterwards and is sound.)
 
      **The idiom that leaves, written once here because every remaining part will need it.**
      With no GL consumer the strings warn as `-Wunused-variable`. `__attribute__((unused))` is

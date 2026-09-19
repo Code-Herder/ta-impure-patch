@@ -83,7 +83,12 @@
 #include "tagpu_surf.h"                    /* the one resolution of the presented palette */
 #include "tagpu_vk.h"                 /* tagpu_vk_owns_present, tagpu_vk_ab_arm:
                                          which lane this is, and the A/B's arming */
-#include "opengl_utils.h"
+/* `opengl_utils.h` was included here until [landing 11-4b]. This file now has no
+   GL dependency at all -- no `gl*` call, no `GL*` type, no `GL_*` macro, no
+   `oglu_*` or `xwgl*` -- which makes it the FIRST of the nineteen includers to
+   leave that header. That matters for 11-5, whose plan is to delete
+   `opengl_utils.{c,h}`: the other eighteen still use it (5 to 44 `gl*` calls
+   each), so the header cannot go until their GL bring-up does. */
 #include "dd.h"                         /* g_ddraw.cursor: the pointer the fork last saw (13.5) */
 #include "ddsurface.h"                  /* G19f: g_ddraw.primary->surface/pitch, the composite's
                                            bottom layer as BYTES (dd.h only forward-declares it) */
@@ -125,11 +130,8 @@ static TWIN   s_twins[MAX_TWINS];
 static int    s_ntwins = 0;
 static unsigned s_presented = 0;        /* the last PK_FRAME's surface         */
 
-static int    s_gl = 0;                 /* 0 none, 1 ready, 2 failed           */
-static GLuint s_sprProg, s_cpyProg, s_layProg, s_vao, s_vbo, s_palTex;
 static TAGPU_GAFATLAS s_atlas;
 static TAGPU_GAFENT   s_ents[ATLAS_MAX];
-static int    s_palUpValid;             /* ...and whether it holds one at all          */
 
 static int    s_on = 0, s_strict = 0;
 static DWORD  s_lastPoll = 0;
@@ -160,7 +162,6 @@ static int    s_colValid = 0;           /* no colour twins on this lane; see abo
 static unsigned s_rearms = 0, s_colTwins = 0;
 static unsigned s_rglslSeen = 0;        /* tagpu_rglsl_calls() at the last present */
 /* Phase 2's seam (G17a) */
-static GLuint s_sharpTex, s_sharpFbo;   /* the sharp layer: device res, RGBA8, row 0 the viewport's TOP */
 static int    s_sharpW, s_sharpH;       /* its size, = the frame's viewport in window px               */
 static int    s_sharpOn = 0;            /* it exists and may be sampled this frame                     */
 /* G19f: ...AND WHETHER ANYTHING IS ACTUALLY IN IT. `s_sharpOn` says the layer
@@ -174,9 +175,6 @@ static int    s_sharpOn = 0;            /* it exists and may be sampled this fra
    the counters all read 0.] */
 static int    s_sharpInk = 0;
 static int    s_sharptest = 0;          /* the harness lever that proves the layer is wired            */
-static int    s_sharpFailed = 0;        /* the target could not be made: stay off rather than retry     */
-static GLuint s_sharpProg;              /* QVS + SHARP_FS: a client's flat-coloured quad in the layer   */
-static GLuint s_cursProg;               /* QVS + CURS_FS: the cursor's frame out of the UI atlas        */
 /* OUR CURSOR'S ANSWER FOR THIS PRESENT, latched here and taken once per frame
    by the render_ogl.c bracket (tagpu_gui.h has the whole argument). Set only
    at the tail of a successful sharp_cursor; cleared by the take, so a frame
@@ -190,14 +188,12 @@ int tagpu_gui_cursor_drew_take(void)
     s_curDrew = s_curInLayer = 0;
     return v;
 }
-static GLuint s_strProg;                /* QVS + STR_FS: a string op's glyphs into a twin (G17d)        */
 static unsigned s_strings = 0;          /* string ops stamped                                          */
 static unsigned s_glyphs = 0;           /* glyph quads drawn                                           */
 static unsigned s_strMiss = 0;          /* glyphs the cache would not give (the engine drew them)      */
 static unsigned s_strReseed = 0;        /* strings that stamped NOTHING and asked for a fresh seed     */
 static unsigned s_strRepack = 0;        /* gathers restarted because the glyph atlas repacked under them */
 /* G17e: the TNT's own 252-px minimap picture, uploaded once per map load */
-static GLuint   s_mmTex;
 static unsigned s_mmGenSeen;            /* the generation s_mmTex holds; 0 = nothing        */
 /* THE BAKE HAPPENED, which is not the same as the GL texture existing: the
    resolve lands in `s_mmPicRgb` for the Vulkan twin whether or not there is a
@@ -210,8 +206,6 @@ static int      s_mmbase = 0;           /* the minimap is ours (see the k rule i
 static int      s_mmforce = 0;          /* token `mmbase`: draw it at k = 1 too, for the harness */
 static unsigned s_mmDrawn = 0;
 static unsigned s_mmLogged;
-static GLuint   s_mmProg, s_mmEngTex;   /* the masked draw, and the engine's two bases as RG8 */
-static int      s_mmEngW, s_mmEngH;
 static unsigned s_mmNoEng;              /* frames the engine's pair could not be read          */
 static unsigned char* s_mmPicRgb;       /* the picture resolved through the presented palette  */
 static unsigned s_mmPicCap;
@@ -567,7 +561,6 @@ static const char* LAY_FS =
        kept out of and the space the HUD art is blown up into cannot disagree.
        The panel owns its full column height (its art is a 128x480 block that
        does not stretch, resolution.md 3.4a) and magnifies about its top-left;
-#pragma GCC diagnostic pop
        the top bar about its top-left; the bottom bar about its BOTTOM-left,
        which is where the engine anchors it (screenH - 0x20). The world region
        is the identity and has no coverage in the twin anyway — the viewport's
@@ -620,6 +613,7 @@ static const char* LAY_FS =
     "    if (!inVp || e != uKey) { frag = vec4(1.0, 0.0, 1.0, 1.0); return; }\n"
     "  }\n"
     "  discard; }\n";
+#pragma GCC diagnostic pop
 
 /* THE UI ATLAS IS NOT A GL OBJECT, and `init_gl` arming it at its tail is the
    last place in this module where something the Vulkan twin needs was reachable
@@ -831,7 +825,7 @@ static void twin_string(TWIN* t, const TAGPU_PUBOP* o)
     x = (int)o->sl;
     top = (int)o->st - yoff;
     for (i = 0; i < n; i++) {
-        int gw = cell[i][2], gh = cell[i][3];
+        int gw = cell[i][2];
         /* the per-glyph `quad(v, ...)` STOOD HERE and filled a vertex buffer for
            the GL upload two lines below it; both went together [landing 11-4b].
            The loop still walks the glyphs, because `x` is the running pen
@@ -865,7 +859,6 @@ reseed:
 
 static unsigned char twin_copy(TWIN* t, const TWIN* src, const TAGPU_PUBOP* o)
 {
-    float v[24];
     /* THE COPY IS WHY COLOUR IS PER SURFACE (gui-renderer.md 13.2): the panel
        is painted into panel+0xBC and only later blitted to the frame, so
        restored art reaches the screen through here or not at all. A source
@@ -1171,7 +1164,15 @@ static void drain(void)
         case PK_CLEAR:
             t = twin_find(o->surf);
             if (t) { TAGPU_GUIOP* m;
-                     m = mir_op(); if (m) { m->kind = TAGPU_GUIOP_CLEAR; mir_box(m, o); } }
+                     m = mir_op(); if (m) { m->kind = TAGPU_GUIOP_CLEAR; mir_box(m, o); }
+                     /* COUNTED HERE, beside the mirror op, as `s_bars`/`s_rects`/
+                        `s_pixels`/`s_seeds` already are. It used to be counted inside
+                        `twin_clear`, below that function's lane gate -- so when the
+                        draw half went [landing 11-4b] the heartbeat kept printing
+                        `clears=0` while CLEAR ops were being mirrored every frame.
+                        An instrument that is pinned at 0 beside live traffic sends
+                        the next session to the wrong function. */
+                     s_clears++; }
             break;
         case PK_PIXELS:
             t = twin_find(o->surf);
@@ -1360,7 +1361,7 @@ void tagpu_gui_cursor_frame(const TAGPU_PACKET* pk)
        run of landing 4b-3). On the GL lane the two are the same fact: the
        atlas is armed at the tail of `init_gl` and only on the path that sets
        `s_gl = 1`. [The vulkan-only plan, landing 4b-3.] */
-    if (!s_on || s_nocursor || !s_atlas.made || s_sharpFailed) return;
+    if (!s_on || s_nocursor || !s_atlas.made) return;
     if (!pk || !pk->cur_rec) return;
     /* the sprite record IS a GAF frame header -- size, hotspot, colour key and
        a pixel pointer at +0x10 -- and it comes out of the cursor TABLE, loaded
@@ -1831,7 +1832,7 @@ static void sharp_begin(const TAGPU_FRAME* f)
        compositing for the session. Re-decided from the two clients' own
        counters at the tail. [FOUND 2026-09-16, the landing-3 review.] */
     s_sharpInk = 0;
-    /* A FAILURE LATCHES, like init_gl's s_gl = 2. sharp_drop() zeroes the ids,
+    /* A FAILURE LATCHED here, in `init_gl`'s `s_gl = 2` shape; `sharp_drop()`
        so without this every present would re-enter the allocation below --
        generating, sizing and deleting a vp_w x vp_h texture and appending a log
        line 60 times a second for the rest of the session, which buries the
@@ -2465,16 +2466,21 @@ void tagpu_gui_glreset(void)
 {
     /* the context is gone: forget every id, start over from fresh seeds —
        and take nothing from the queue until the producer's RESET arrives */
+    /* EIGHTEEN GL OBJECT NAMES WERE ZEROED HERE and went with the draw half
+       [landing 11-4b]: the six programs, the VAO/VBO, the palette texture, the
+       sharp layer's texture and FBO, the minimap's pair, `s_gl`, `s_palUpValid`
+       and `s_sharpFailed`. Nothing creates any of them, so every one was a
+       write-only static -- invisible to `-Wall`, which does not warn for a
+       file-scope static that is only assigned. What is left is the state that
+       genuinely dies with a context: the twin table, the sharp layer's SIZE
+       (its space is the viewport, which a new context re-establishes), the
+       cursor's ownership and the minimap's generation. */
     s_ntwins = 0; s_presented = 0;
-    s_gl = 0; s_sprProg = s_cpyProg = s_layProg = s_vao = s_vbo = s_palTex = 0;
-    s_sharpTex = s_sharpFbo = 0; s_sharpW = s_sharpH = 0; s_sharpOn = 0;   /* the sharp layer died with it */
-    s_sharpProg = 0; s_sharpFailed = 0;      /* a new context deserves a fresh try */
-    s_cursProg = 0; s_curOwn = 0; s_curFrame = NULL;   /* and the cursor is nobody's until it is re-atlased */
-    s_strProg = 0; s_mmProg = 0; s_mmEngTex = 0; s_mmEngW = s_mmEngH = 0;
-    s_mmTex = 0; s_mmGenSeen = 0;       /* the picture's texture died; the BYTES are the hook's */
+    s_sharpW = s_sharpH = 0; s_sharpOn = 0;            /* the sharp layer died with it */
+    s_curOwn = 0; s_curFrame = NULL;   /* and the cursor is nobody's until it is re-atlased */
+    s_mmGenSeen = 0;                    /* the picture's texture died; the BYTES are the hook's */
     tagpu_text_glreset();               /* the glyph atlas's texture id died too; its CELLS are CPU-side */
     tagpu_gaf_atlas_lost(&s_atlas);
-    s_palUpValid = 0;                                 /* the palette texture died too: re-upload */
     s_skipToReset = 1;
     g_guiq.reseed = 1; g_guiq.why = TAGPU_GUI_WHY_GLCTX;
 }

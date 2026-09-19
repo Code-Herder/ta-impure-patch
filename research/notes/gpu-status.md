@@ -11368,7 +11368,39 @@ file is inside a `static`, and a call-graph walk from all nine exports shows onl
 
 **Measured**: `census: … gui=1` on every sampled frame, `tacli ui` answers
 (`gui ARMMAIN2.GUI 1024x768`), and the cross-build window diff is **0 px of 786 432 across all
-64 pairs**, outside §2.66's one-pixel cursor animation set. The GUI *is* the side panels and the
+64 pairs**, outside §2.66's one-pixel cursor animation set.
+
+**The review found the one thing the build could not, and the reason generalises.** The nine
+shader strings are bracketed by `#pragma GCC diagnostic push` / `pop`, and the `pop` landed
+**inside a `/* … */` block**, where it is comment text rather than a directive — so
+`-Wunused-variable` stayed off for the remaining ~2 200 lines and the "zero warnings" build was
+partly an artifact. It had already hidden two of this landing's own leftovers (a dead
+`float v[24]` and an unused `gh`). Worse, the first fix repeated the bug: placing the `pop`
+after `LAY_FS`'s terminator with a plain regex stopped at a `;` that ends a line *inside* that
+same comment. **The fix is to find the terminator with comments and string literals masked, and
+then to PROVE the bracket** — plant an unused static immediately after the `pop` and confirm the
+compiler reports it. Reading the file says nothing: both broken placements look right. Landing
+11-4a's bracket was probed the same way afterwards and is sound.
+
+**And an instrument that could no longer move.** `s_clears` was incremented inside `twin_clear`,
+below that function's lane gate, so it already read 0 — the diff looked safe because the
+*reading* did not change. But the landing deleted the only statement that could ever move it,
+while `case PK_CLEAR` keeps draining and keeps emitting `TAGPU_GUIOP_CLEAR`. The counter is now
+incremented in the drain beside `mir_op()`, where `s_bars`/`s_rects`/`s_pixels`/`s_seeds`
+already are, and the heartbeat went from a permanent `clears=0` to **`clears=52351`** in one
+run — fifty thousand mirrored ops the instrument was not reporting. The sibling counters that
+are *also* pinned at 0 (`col=`, `rearms=`, `rgb=`, `colvalid=`) were left alone, because for
+those 0 is the true answer on this lane. **A counter pinned at 0 beside live traffic is a bug;
+a counter pinned at 0 beside no traffic is a fact.**
+
+**Nineteen write-only statics went too** — the six programs, the VAO/VBO, the palette texture,
+the sharp layer's texture and FBO, the minimap's pair, `s_gl`, `s_palUpValid` and
+`s_sharpFailed` — all assigned only `= 0` in `tagpu_gui_glreset` and read nowhere, which `-Wall`
+cannot see because it does not warn for a file-scope static that is merely assigned. With those
+gone the file has **no GL dependency at all** (no `gl*` call, no `GL*` type, no `GL_*` macro, no
+`oglu_*`), so its `opengl_utils.h` include went as well — **the first of that header's nineteen
+includers to leave it.** The other eighteen still carry 5 to 44 `gl*` calls each, which is the
+real shape of 11-5: the header cannot be deleted until their GL bring-up is. The GUI *is* the side panels and the
 top bar, so the whole-window diff tests this pass directly.
 
 **The dead-state rule from §2.66, applied and then applied against itself.** With the GL ids
