@@ -2114,14 +2114,15 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
        early with no unit array, so nothing else would drain this atlas's
        queue and every sprite would read alpha 0 from an unpainted twin, the
        UI staying indexed for ever and silently. */
-    /* G19f landing 4: AND THE RESTORED TWIN IS MIRRORED HERE, between the step
-       that painted it and the drain whose sprites sample it. The comment above
-       is the argument -- "what it paints this frame is what the drain's
-       sprites sample" -- and this read-back is on the same side of that line, so the bytes a second backend is handed are the bytes the GL lane's
-       own draws read, on the same frame, and not a frame behind them. A no-op
-       unless a lane has armed it AND the restorer painted (tagpu_gaf.h). */
-    if (s_mirWant && tagpu_gaf_atlas_mirror_rgb(&s_atlas))
-        tagpu_gaf_atlas_mirror_rgb_step(&s_atlas);
+    /* G19f landing 4 MIRRORED THE RESTORED TWIN HERE, between the step that
+       painted it and the drain whose sprites sample it, so that the bytes a
+       second backend was handed were the bytes this lane's own draws read on
+       the same frame rather than a frame behind. The mirror was
+       `tagpu_gaf_atlas_mirror_rgb` + `_step`, which is `glReadPixels` off an
+       FBO; `oglu_load_dll` has no caller, so it never produced a row and the
+       hand-over's `atlasRgb` was NULL on every frame. Removed in 11-5e-2b
+       along with the fields it fed. The ORDERING argument above is unaffected
+       and still governs the indexed mirror, which is written by the paint. */
     mir_begin();            /* G19f: the Vulkan mirror records this drain */
     drain();
     /* AFTER the drain, which binds twin FBOs and leaves one bound, and before
@@ -2318,16 +2319,13 @@ static void mir_finish(const TAGPU_FRAME* f)
        make the image come and go under the consumer for a reason that has
        nothing to do with the image, and nothing would be gained: whether a
        texel of it is ever SAMPLED is `TAGPU_GUICOL_ON`, carried per op, and no
-       op carries it while `s_colValid` is 0. */
-    if (s_atlas.mirrorRgb && s_atlas.mirrorRgbRows > 0) {
-        s_mHand.atlasRgb = s_atlas.mirrorRgb;
-        s_mHand.atlasRgbRows = s_atlas.mirrorRgbRows;
-        s_mHand.atlasRgbSerial = s_atlas.mirrorRgbSerial;
-    } else {
-        s_mHand.atlasRgb = NULL;
-        s_mHand.atlasRgbRows = 0;
-        s_mHand.atlasRgbSerial = 0;
-    }
+       op carries it while `s_colValid` is 0 -- nor at all, since `twin_sprite`
+       and `twin_copy` both return 0 unconditionally.
+       THE PUBLICATION ITSELF WENT IN 11-5e-2b. `atlasRgb`/`atlasRgbRows`/
+       `atlasRgbSerial` were filled from `s_atlas.mirrorRgb` here; that mirror
+       is `glReadPixels` and is never armed, so all three were NULL/0 on every
+       frame. Nothing replaces them: this lane arms no restore list, so there
+       is no route to Classic++ colour in the UI until one is built. */
     s_mHand.colRearm = s_rearms;
 
     /* ---- THE SHARP LAYER. `sharpOn` above already says whether anything has

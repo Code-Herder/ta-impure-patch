@@ -217,31 +217,22 @@ typedef struct TAGPU_GAFATLAS {
        for the re-decode again. */
     unsigned char* mirror;
     unsigned      mirrorSerial;
-    /* THE RESTORED TWIN'S MIRROR (G19f landing 4), opt-in in the same way and
-       for the same reason -- and it is NOT the same mechanism. `mirror` above
-       is written by the paint that writes GL, because the CPU holds the source
-       bytes; the restored twin's texels are the RESTORER'S OUTPUT and exist
-       only on the GPU, so the only way to them is a read-back. It is bounded
-       three ways: it happens at all only while a lane has asked for it, only
-       on a frame `tagpu_rglsl_job_painted` moved (which is the restorer's own
-       content counter, and is still through the whole fill and every steady
-       frame after it), and only over the rows the shelf has actually used.
-       `mirrorRgbSerial` is what a backend holding a copy tests, exactly as for
-       the indexed mirror. */
-    unsigned char* mirrorRgb;
-    /* THE SHAPE THE BUFFER WAS ALLOCATED WITH, and it is not `dim`/`mip` read
-       again later. This mirror is deliberately never freed, so it outlives
-       every change to the atlas it mirrors -- and `mip` DOES change: the twin
-       is demoted to 0 on a GL with no glGenerateMipmap, and the owner's own
-       init raises it back to its compile-time value on the next context reset.
-       Sizing a memset or a read-back off the CURRENT pair can therefore write
-       a 21 MB chain into a 16 MB allocation. Every write to this buffer is
-       bounded by the pair below instead. [Gate 3a; the mip chain is what made
-       this expressible at all -- before it, every one of those sites was the
-       same constant `dim * dim * 4`.] */
-    int            mirrorRgbDim;
-    int            mirrorRgbMip;
-    int            mirrorRgbMips;   /* top level index read back; 0 = level 0 alone */
+    /* THE RESTORED TWIN'S MIRROR WENT IN 11-5e-2b, and with it `mirrorRgb`,
+       `mirrorRgbDim`/`Mip`/`Mips`, `mirrorRgbSerial`, `mirrorRgbRows`,
+       `mirrorRgbFbo`, `mirrorRgbFailed`, `mirroredPainted` and
+       `mirroredRgbGen`. It was not the same mechanism as `mirror` above:
+       `mirror` is written by the paint, because the CPU holds the source
+       bytes, while the restored twin's texels were the RESTORER'S OUTPUT and
+       existed only on the GPU -- so the only way to them was a `glReadPixels`
+       read-back. `oglu_load_dll` has no caller, so opengl32.dll is never in
+       the process, so the arm refused before its own calloc and the buffer was
+       NULL for the life of every process. What a second backend gets instead
+       is the published restore list below, and it paints its own twin from it.
+       [The allocated-shape pair `mirrorRgbDim`/`Mip` existed because this
+       buffer was deliberately never freed while `mip` DOES change -- a demote
+       on a GL with no glGenerateMipmap, raised back on the next context reset
+       -- so sizing a memset off the CURRENT pair could write a 21 MB chain
+       into a 16 MB allocation. That hazard goes with the buffer.] */
     /* [PINNED 0.0f] THE ANISOTROPY APPLIED TO THE TWIN -- and 11-5e-2 deleted
        the only writer with the GL restorer, so it now reports "none" whatever
        `aniso=` says. THAT IS A LOADED GUN FOR WHOEVER RESTORES THE FEED:
@@ -253,15 +244,6 @@ typedef struct TAGPU_GAFATLAS {
        landing that unpins it must give this field a writer, or retire the
        comparison, or the unit pass draws nothing. [11-5e-2's review.] */
     float          rgbAniso;
-    unsigned      mirrorRgbSerial;
-    int           mirrorRgbRows;   /* rows of it that have been read back    */
-    unsigned int  mirrorRgbFbo;    /* the read-back's own FBO, made once     */
-    int           mirroredPainted; /* job_painted() at the last read-back    */
-    unsigned      mirroredRgbGen;  /* `rgbGen` at the last read-back         */
-    /* LATCHED, so a refusal is said once. Without it the owner's per-frame
-       `mirror_rgb()` re-allocates and re-fails every present and writes a line
-       to tagpu.log at the frame rate. */
-    int           mirrorRgbFailed;
     /* THE PUBLISHED RESTORE LIST (the Vulkan-only plan's landing 7d), which is
        the OTHER answer to the same question the two mirrors above answer: a
        second backend can either read this lane's restored texels back, or run
@@ -403,33 +385,19 @@ int  tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a);
    was refused, and the atlas then goes on working without one. Idempotent. */
 int  tagpu_gaf_atlas_mirror(TAGPU_GAFATLAS* a);
 
-/* Ask for the RESTORED twin's mirror, and step it.
+/* `tagpu_gaf_atlas_mirror_rgb` AND `_step` WENT IN 11-5e-2b, with the buffer
+   they filled. They armed and drove a `glReadPixels` read-back of the restored
+   twin so that a second backend could be handed its texels. The rule that
+   governed WHERE the step had to go is worth keeping, because it is the
+   constraint on anything that hands restored texels across a thread: step it
+   where the paint is already visible to this frame's draws -- after the
+   restorer has run and before the ops that sample the twin -- so that what
+   crosses is byte-identical to what those ops sampled rather than a frame
+   behind them. The route a second backend uses now is the list below, which
+   it paints for itself and so needs no such rule. */
 
-   ARMING IS CORRECT FROM THE INSTANT IT EXISTS with no re-decode dance,
-   unlike the indexed mirror above: the destination the restorer paints into is
-   cleared to alpha 0 when the job is made and every texel it has painted since
-   is one `mirrorRgbStep` reads back, so a mirror allocated at any moment
-   converges on the next step and holds alpha 0 -- "not restored here" -- until
-   it does. That is the same answer a consumer would get from an unpainted
-   cell, so there is no window in which it is WRONG, only one in which it is
-   behind, and the step closes that on the frame the paint happened.
-
-   STEP IT WHERE THE PAINT IS ALREADY VISIBLE TO THIS FRAME'S DRAWS -- after
-   the restorer has run and before the ops that sample the twin, so that the
-   mirror is byte-identical to what those ops sampled rather than a frame
-   behind them. (The GL restorer that was stepped there, and the
-   tagpu_gui_surf.c block that stepped it, both went in 11-5e-2. The rule is
-   the constraint on whoever steps it next, not a description of a call site
-   that still exists.)
-
-   Render thread only, GL context current. Arming returns 0 if the memory or
-   the FBO was refused and the atlas goes on without one; the step is a no-op
-   when nothing is armed or nothing has been painted since the last one. */
-int  tagpu_gaf_atlas_mirror_rgb(TAGPU_GAFATLAS* a);
-void tagpu_gaf_atlas_mirror_rgb_step(TAGPU_GAFATLAS* a);
-
-/* Ask for the PUBLISHED RESTORE LIST instead of the read-back above (the
-   Vulkan-only plan's landing 7d), and stand the read-back down.
+/* Ask for the PUBLISHED RESTORE LIST (the Vulkan-only plan's landing 7d). It
+   used to be an alternative to the read-back above and to stand it down;
 
    It arms only while `tagpu_restorevk.on` is beside TotalA.exe: the second
    backend restoring for itself is the end state, but until its bytes have been
@@ -451,14 +419,15 @@ int  tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a);
    which were the level-0 and mip halves of the step above. There is no texture
    left for it to read: `rgb` is 0 for the life of the process. */
 
-/* THE RESTORED TWIN'S MIRROR IS THE WHOLE MIP CHAIN when the atlas is mipped,
-   because its GL original is sampled GL_LINEAR_MIPMAP_LINEAR and a consumer
-   holding level 0 alone draws a different picture wherever the art is minified
-   -- which on the unit atlas is ordinary play. Level L is `dim >> L` square,
-   RGBA8, at `tagpu_gaf_mip_off`; the whole chain is `tagpu_gaf_mip_chain`
-   bytes. `mirrorRgbMips` is the TOP LEVEL INDEX actually read back (0 means
-   level 0 alone), so a consumer builds an image with the levels that exist
-   rather than one with holes in it. */
+/* A RESTORED TWIN IS THE WHOLE MIP CHAIN when the atlas is mipped, because it
+   is sampled LINEAR_MIPMAP_LINEAR and a consumer holding level 0 alone draws a
+   different picture wherever the art is minified -- which on the unit atlas is
+   ordinary play. Level L is `dim >> L` square, RGBA8, at `tagpu_gaf_mip_off`;
+   the whole chain is `tagpu_gaf_mip_chain` bytes. These two are still the
+   layout contract after 11-5e-2b took the mirror they were written for:
+   `tagpu_vk_restore.c` sizes its dump with them. (`mirrorRgbMips`, the top
+   level actually read back, went with the read-back; the consuming lane knows
+   its own chain depth from `restoreMips`.) */
 /* THE ANISOTROPY A RESTORED TWIN IS FILTERED WITH, where the extension answers.
    A second backend must apply the same ratio or draw different art wherever the
    texture is minified at an angle -- so this is a shared constant rather than

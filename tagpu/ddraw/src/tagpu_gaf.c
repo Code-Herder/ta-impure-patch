@@ -15,7 +15,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "opengl_utils.h"
+/* `opengl_utils.h` was here until 11-5e-2b. This file named `glReadPixels`
+   through it and nothing else; with the restored twin's read-back gone it
+   names no GL type, constant or entry point at all. `tagpu_restoreglsl.h`
+   below is NOT GL -- it declares `TAGPU_RGLSL_FRAME` and
+   `tagpu_rglsl_tileable`, both of which this file still uses. */
 #include "tagpu_gaf.h"
 #include "tagpu_pal.h"
 #include "tagpu_restoreglsl.h"
@@ -30,37 +34,18 @@ static void glog(const char* s)
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
 
-/* GL 1.0's read-back, which opengl_utils.h does not export; fetched once, the
-   way every tagpu module fetches what the fork does not export
-   (wglGetProcAddress first, then opengl32 itself -- tagpu_overlay.c does the
-   same). It is the last GL entry point this file names, and it is named only
-   so that `tagpu_gaf_atlas_mirror_rgb` can say in its refusal which call it
-   would have needed. [The mip-generation and float-parameter typedefs that
-   stood here went in 11-5e-2 with `twin_mips`, and the GL_TEXTURE_MAX_LEVEL /
+/* THIS FILE NAMES NO GL ENTRY POINT AND MAKES NO GL CALL (11-5e-2b). It held
+   the last one: `glReadPixels`, typedef'd `PFN_READPIXELS` and resolved by
+   `getgl` -- `xwglGetProcAddress` first, then `GetModuleHandleA("opengl32.dll")`
+   -- behind a `fetch_gl` that ran once. Its only consumer was
+   `tagpu_gaf_atlas_mirror_rgb`, the restored twin's read-back, which went with
+   the last lane that published its texels. That `xwglGetProcAddress` was this
+   file's single remaining GL call site, so the file is GL-free now on the
+   narrow AND the wide count (`tools/gl-sites.py`).
+   [The mip-generation and float-parameter typedefs that stood here went in
+   11-5e-2 with `twin_mips`, and the GL_TEXTURE_MAX_LEVEL /
    GL_TEXTURE_MAX_ANISOTROPY_EXT fallbacks and the TWIN_ANISO alias with the
    `glTexParameter` calls that were their only users.] */
-typedef void (APIENTRY* PFN_READPIXELS)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*);
-static PFN_READPIXELS     x_glReadPixels;
-static int s_glFetched;
-
-static void* getgl(const char* n)
-{
-    void* p = xwglGetProcAddress ? (void*)xwglGetProcAddress(n) : NULL;
-    if (!p) {
-        HMODULE gl = GetModuleHandleA("opengl32.dll");
-        if (gl) p = (void*)GetProcAddress(gl, n);
-    }
-    return p;
-}
-
-static void fetch_gl(void)
-{
-    if (s_glFetched) return;
-    s_glFetched = 1;
-    /* glReadPixels alone: `tagpu_gaf_atlas_mirror_rgb` names it in the
-       refusal it logs, and nothing in this file calls it. */
-    x_glReadPixels     = (PFN_READPIXELS)getgl("glReadPixels");
-}
 
 /* one scratch plane for every atlas: decoding happens only inside
    tagpu_gaf_atlas_get, on the render thread, and the bytes are consumed by
@@ -203,20 +188,6 @@ static void rlist_restart(TAGPU_GAFATLAS* a, int repaint)
    [The GL job this used to name went in 11-5e-2; the caller did not, which is
    why the rule still holds and only the mechanism was reworded.] */
 
-static void rgb_mirror_zeroed(TAGPU_GAFATLAS* a)
-{
-    if (!a->mirrorRgb) return;
-    /* AND IT RUNS WHETHER OR NOT A LANE IS CURRENTLY ASKING, which is 16 MB on
-       a recycle for nobody. That is not waste to be optimised away: the mirror
-       is deliberately never freed (tagpu_gaf.h), so a lane that re-arms later
-       finds it already correct -- and it can only do that if the zeroing
-       happened when the twin was zeroed, not when someone next looked. */
-    memset(a->mirrorRgb, 0, tagpu_gaf_mip_chain(a->mirrorRgbDim, a->mirrorRgbMip));
-    /* the ROWS are kept: they are the high-water mark of what a consumer has
-       been handed, and it has to be handed the zeros over exactly those */
-    a->mirrorRgbSerial++;
-}
-
 /* the job's destination back to unpainted, and every mirror of it with it */
 static void job_clear_dest(TAGPU_GAFATLAS* a)
 {
@@ -227,14 +198,14 @@ static void job_clear_dest(TAGPU_GAFATLAS* a)
        is what tells it, and dropping the list is what stops it painting the
        old layout over the new one. */
     rlist_reset(a, 0);
-    /* AND THE MIRROR IS NOT BEHIND A GL PREDICATE ANY MORE. Until 11-5e-2 the
-       three lines below sat under `if (!a->job) return;` -- the GL restorer's
-       job -- so a build with no GL restorer cleared the published list and left
-       the mirror holding the old layout's colours. `rgb_mirror_zeroed` guards
-       on `a->mirrorRgb` itself, which is the pointer that actually governs the
-       work, so calling it unconditionally is a no-op when there is no mirror
-       and correct when there is. */
-    rgb_mirror_zeroed(a);
+    /* THE MIRROR THAT ALSO HAD TO BE ZEROED HERE IS GONE (11-5e-2b), and the
+       list is the whole of this function now. Until 11-5e-2 the zeroing sat
+       under `if (!a->job) return;` -- the GL restorer's job -- so a build with
+       no GL restorer cleared the published list and left the read-back mirror
+       holding the old layout's colours; 11-5e-2 unpinned it and 11-5e-2b
+       removed the mirror itself. The rule the function was written to state is
+       untouched: the rects this atlas hands out have just moved, so a
+       consumer's own destination is wrong whatever any GL object is doing. */
 }
 
 /* OUR OWN REDUCTION FIRST, glGenerateMipmap ONLY AS THE FALLBACK. The twin is
@@ -474,76 +445,24 @@ int tagpu_gaf_atlas_mirror(TAGPU_GAFATLAS* a)
     return 1;
 }
 
-/* ---- the RESTORED twin's mirror (tagpu_gaf.h, G19f landing 4) ---- */
+/* ---- THE RESTORED TWIN'S MIRROR IS GONE (11-5e-2b) ----------------------
+   `tagpu_gaf_atlas_mirror_rgb` armed it -- a `dim x dim` RGBA8 calloc and an
+   FBO -- and `tagpu_gaf_atlas_mirror_rgb_step` filled it with `glReadPixels`
+   off that FBO once per published frame, so a second backend could be handed
+   the texels the GL restorer had painted. `oglu_load_dll` has no caller, so
+   opengl32.dll is never in the process and the arm refused at its entry-point
+   guard BEFORE its own calloc: `a->mirrorRgb` was NULL for the life of every
+   process, and every consumer's `atlasRgb` with it. The four world lanes that
+   read it moved to the published frame LIST in 11-5e-2b part 1; the UI, the
+   fifth, had no list to move to and lost the route entirely (tagpu_gui.h).
+   The `mirrorRgb*` fields went with these two functions. */
 
-/* The rows the shelf has actually used. Cells are laid in shelves from row 0
-   up, so nothing is painted at or below `shelfY + shelfH` and reading further
-   would be reading memory no entry can ever name -- the same bound
-   tagpu_gui_surf.c already publishes as `atlasRows` for the indexed mirror. */
-int tagpu_gaf_atlas_mirror_rgb(TAGPU_GAFATLAS* a)
-{
-    char b[160];
-    if (!a || a->dim <= 0) return 0;
-    if (a->mirrorRgb) return 1;
-    if (a->mirrorRgbFailed) return 0;
-    /* THE LIST HAS TAKEN OVER: the restore is the other lane's to run, so
-       there is nothing here to read back and a 16 MB buffer would be armed for
-       a consumer that no longer looks at it.
-       AND THE READ-BACK IS NOT A FALLBACK IF THE LIST LATER DIES, which this
-       comment claimed until the landing-7d review: the owning pass's arm
-       latches are ONE-WAY (`s_rlistAsked` is only ever set, and so was the
-       read-back's own latch before 11-5e-2b removed it), and arming the list
-       freed the mirror, so after the out-of-memory drop below there is
-       neither. The consumer stands down
-       instead -- `restore_want` clears its "this twin is a picture" flag when
-       the request disappears under a live job -- which is a stand-down rather
-       than a lane drawing a frozen twin against a GL lane that is still
-       restoring. Said here because this is where the fallback was promised. */
-    if (a->rlistWant) return 0;
-    fetch_gl();
-    if (!x_glReadPixels || !glGenFramebuffers || !glBindFramebuffer ||
-        !glFramebufferTexture2D || !glCheckFramebufferStatus) {
-        a->mirrorRgbFailed = 1;
-        _snprintf(b, sizeof b, "%s: no glReadPixels/FBO entry points - the restored"
-                  " twin cannot be mirrored and the Vulkan edition stays indexed",
-                  a->tag ? a->tag : "gaf");
-        b[sizeof b - 1] = 0;
-        glog(b);
-        return 0;
-    }
-    a->mirrorRgbDim = a->dim; a->mirrorRgbMip = a->mip;
-    a->mirrorRgb = (unsigned char*)calloc(tagpu_gaf_mip_chain(a->dim, a->mip), 1);
-    if (!a->mirrorRgb) {
-        a->mirrorRgbFailed = 1;
-        _snprintf(b, sizeof b, "%s: no memory for a %d KB restored-twin mirror - the"
-                  " Vulkan edition of this pass stays indexed",
-                  a->tag ? a->tag : "gaf",
-                  (unsigned)(tagpu_gaf_mip_chain(a->dim, a->mip) >> 10));
-        b[sizeof b - 1] = 0;
-        glog(b);
-        return 0;
-    }
-    /* NOTHING IS MARKED FOR REPAINT HERE, and that is the difference from the
-       indexed mirror's arming (tagpu_gaf.h): calloc's alpha 0 IS the restorer's
-       own "not painted here yet", so a consumer reading this mirror before the
-       first step gets the answer an unpainted cell would give it -- indexed
-       art -- rather than a wrong one. The first step reads the whole used
-       region back and it is level from there. */
-    a->mirrorRgbRows = 0;
-    a->mirrorRgbSerial = 0;
-    a->mirroredPainted = 0;
-    a->mirroredRgbGen = 0;
-    _snprintf(b, sizeof b, "%s: restored-twin mirror armed, %u KB (%d mip level(s))"
-              " - read back when the restorer paints and not otherwise",
-              a->tag ? a->tag : "gaf",
-              (unsigned)(tagpu_gaf_mip_chain(a->dim, a->mip) >> 10), a->mip + 1);
-    b[sizeof b - 1] = 0;
-    glog(b);
-    return 1;
-}
-
-/* THE RESTORED TWIN'S MIRROR IS THE WHOLE MIP CHAIN, not level 0 alone, and
-   the reason is measurable: the restored twin is mipped and sampled
+/* THE RESTORED TWIN IS THE WHOLE MIP CHAIN, not level 0 alone, and the reason
+   is measurable. (The MIRROR this argued for is gone with the read-back in
+   11-5e-2b; the three functions below stay, because the LAYOUT is still the
+   contract between the producer's chain and the Vulkan restorer's dump --
+   `tagpu_vk_restore.c` calls `_off` and `_chain`.) The restored twin is mipped
+   and sampled
    LINEAR_MIPMAP_LINEAR to its top level, so a consumer holding only level 0
    draws a different picture wherever the art is minified. (The GL producer
    that made it that way, `tagpu_gaf_atlas_restore`, went in 11-5e-2 -- the
@@ -584,82 +503,9 @@ size_t tagpu_gaf_mip_chain(int dim, int mip)
     return tagpu_gaf_mip_off(dim, mip) + tagpu_gaf_mip_bytes(dim, mip);
 }
 
-/* THE READ-BACK, FOR ANY TEXTURE (the Vulkan-only plan's gate 2).
-   `tagpu_gaf_atlas_mirror_rgb_step` below CALLS THIS -- it is the atlas's own
-   use of exactly this and does not repeat it; terrain's restored twin is a GL
-   texture built by tagpu_terr.c and painted by the restorer, so it needs the
-   same read-back without the atlas around it. The two bodies were the same
-   thirty-five lines twice over until the gate-2 landing review said so, which
-   is a second place for the pack alignment, the saved binding or the dropped
-   attachment to be got wrong.
-
-   IT LIVES HERE RATHER THAN IN A NEW FILE because this is where the entry
-   points are already resolved -- `glReadPixels` is not in the fork's own
-   globals and has to be fetched (see `fetch_gl`), and a second file resolving
-   it again is a second place to get wrong. Nothing about the atlas is touched.
-
-   ROW 0 IS MEMORY ROW 0, NOT THE SCREEN'S. glReadPixels is described bottom-up
-   because the default framebuffer's y = 0 is the bottom of the screen; the
-   attachment here is a TEXTURE, whose y = 0 is the row glTexSubImage2D and
-   vkCmdCopyBufferToImage both write first. So this fills `dst` in the order a
-   second backend uploads it, with no flip.
-
-   `level` is the mip level to attach -- 0 for an unmipped texture, and the
-   whole chain read one call at a time for a mipped one.
-
-   `fbo` is the caller's, created here on first use and owned by the caller:
-   one FBO per client, made once, never per frame. Returns 1 when `dst` holds
-   `rows` rows of RGBA8 and 0 when it holds nothing new.
-
-   `status` (optional) is how a caller tells a PERMANENT refusal from a frame
-   that simply had nothing: it is the `glCheckFramebufferStatus` value when one
-   was taken, and 0 when this got no further than the entry points or the FBO
-   name. An incomplete framebuffer will be incomplete again next frame -- it is
-   a property of the texture, not of the moment -- so both callers latch on it
-   and stop asking, and neither could do that from the return value alone. */
-void tagpu_gaf_atlas_mirror_rgb_step(TAGPU_GAFATLAS* a)
-{
-    /* THE READ-BACK THIS USED TO DRIVE WENT WITH THE GL RESTORER IN 11-5e-2,
-       and what is left is the branch that was already the only reachable one.
-       `a->rgb` -- the RGBA8 twin -- had exactly one non-zero writer,
-       `tagpu_gaf_atlas_restore`, and that function could not run at all: it
-       returns at `!a->tex`, and `a->tex` has been 0 for the life of the
-       process since landing 11-4c took the `glGenTextures` out of
-       `tagpu_gaf_atlas_create` (the comment there says so). So the old body
-       tested `!a->rgb || !a->job`, took this branch every time, and the
-       forty lines under it -- the paint-count content key, the level-0 and
-       mip read-backs, the FBO-incomplete latch -- never ran once. Deleting
-       them is exact rather than approximate: the reachable behaviour is
-       this block, unchanged.
-
-       AND IT IS NOW DEAD AT LINE ONE AS WELL, one step earlier still:
-       `a->mirrorRgb` is allocated only by `tagpu_gaf_atlas_mirror_rgb`,
-       which refuses before it allocates (no GL entry points resolve, because
-       nothing in this build calls `oglu_load_dll` to put `opengl32.dll` in
-       the process). This function and its arm therefore go together, with
-       the `mirrorRgb*` fields and the `atlasRgb*` publications that read
-       them -- and that is a landing of its own, because those publications
-       reach five Vulkan passes and the terrain. Labelled here rather than
-       deleted for the same reason 11-5e-1 left fourteen `*_glreset`
-       functions standing: a consumer tree deleted ahead of its consumers is
-       worse than one that is merely unreachable.
-       [The vulkan-only plan, 11-5e-2; the rest is 11-5e-2b.] */
-    if (!a || !a->mirrorRgb) return;
-    if (a->dim != a->mirrorRgbDim || a->mip != a->mirrorRgbMip) return;
-    /* the twin is gone (a re-arm, or a context loss before the re-create).
-       Say so rather than leaving the last twin's colours standing: a
-       consumer that kept them would restore art the GL lane no longer
-       does. The `rgbGen` bump on the re-create brings the next step in. */
-    if (a->mirrorRgbRows) {
-        memset(a->mirrorRgb, 0, tagpu_gaf_mip_chain(a->mirrorRgbDim, a->mirrorRgbMip));
-        a->mirrorRgbRows = 0;
-        a->mirrorRgbSerial++;
-    }
-    a->mirroredPainted = 0;
-    a->mirroredRgbGen = 0;
-}
-
-/* Arm the published restore list and stand the read-back down (tagpu_gaf.h).
+/* Arm the published restore list (tagpu_gaf.h). It used to ALSO stand the
+   read-back down, which is what "and never both" meant; there is no read-back
+   to stand down since 11-5e-2b, so this arms the only route there is.
    Polled on the owner's arm beat, so the lever is allowed to appear
    mid-session -- which is the case that has already been got wrong once on
    this plan: a latch that is only ever tested at start-up reads as "off" for
@@ -693,22 +539,12 @@ int tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a)
        instant it exists: whatever this lane has already restored, a consumer
        starting at index 0 restores the same rectangles for itself. */
     rlist_restart(a, 0);
-    /* AND THE READ-BACK'S 16 MB GOES BACK. The mirror is documented as never
-       freed -- because an atlas has no destructor and a re-arm should find it
-       already correct -- and this is the one exception, with its own reason:
-       the list is not a second consumer of the mirror, it is the mirror's
-       replacement, and nothing will read it again while the list is armed.
-       Every write to it is already guarded on the pointer (`mirror_rgb_step`
-       returns at the top when it is NULL), so freeing it here is not a new
-       lifetime to reason about. */
-    if (a->mirrorRgb) {
-        free(a->mirrorRgb);
-        a->mirrorRgb = NULL;
-        a->mirrorRgbRows = 0;
-        a->mirroredPainted = 0;
-        a->mirroredRgbGen = 0;
-        a->mirrorRgbSerial++;       /* what a consumer holds is no longer fed  */
-    }
+    /* THE READ-BACK'S 16 MB WAS GIVEN BACK HERE, and there is no read-back to
+       give back since 11-5e-2b. The mirror was documented as never freed --
+       an atlas has no destructor and a re-arm should find it already correct
+       -- and this was the one exception, because the list is not a second
+       consumer of the mirror but its replacement. Now it is the only thing
+       there ever was. */
     _snprintf(b, sizeof b, "%s: restorevk -- the restore is the other lane's to run, so"
               " no read-back and the frame list is published instead (%d entries seeded,"
               " %d-frame bound)", a->tag ? a->tag : "gaf", a->rlistN, rlist_cap(a));
@@ -717,21 +553,20 @@ int tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a)
     return 1;
 }
 
-/* GIVE BACK THE TWO HEAP BUFFERS AN ATLAS OWNS, for a caller that is about to
-   lay the struct out again from zero. `mirror` (dim*dim) and `mirrorRgb` (the
-   mip chain) are the only allocations in a TAGPU_GAFATLAS, and neither is
-   freed by `_lost` -- it keeps them deliberately, so that a mirror is never
-   stale for the frames between a context loss and the next create. A caller
-   that re-arms by zeroing the struct therefore drops both pointers and leaks
-   them; every writer already guards on the pointer, and `_mirror`/`_mirror_rgb`
-   re-arm on demand, so handing them back here costs nothing that the memset
-   was not already costing functionally.
+/* GIVE BACK THE HEAP BUFFER AN ATLAS OWNS, for a caller that is about to lay
+   the struct out again from zero. `mirror` (dim*dim) is the only allocation
+   left in a TAGPU_GAFATLAS -- `mirrorRgb`, the restored twin's mip chain, was
+   the other until 11-5e-2b -- and it is not freed by `_lost`, which keeps it
+   deliberately so that a mirror is never stale for the frames between a
+   context loss and the next create. A caller that re-arms by zeroing the
+   struct would therefore drop the pointer and leak it; every writer already
+   guards on the pointer and `_mirror` re-arms on demand, so handing it back
+   here costs nothing the memset was not already costing functionally.
    [FROM THE 4b-3 LANDING REVIEW.] */
 void tagpu_gaf_atlas_free_buffers(TAGPU_GAFATLAS* a)
 {
     if (!a) return;
     free(a->mirror);    a->mirror = NULL;
-    free(a->mirrorRgb); a->mirrorRgb = NULL;
 }
 
 void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
@@ -759,18 +594,12 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
        tells it to blank and start over; without this it would keep painting
        the old layout's rects for the rest of the session. */
     rlist_reset(a, 0);
-    /* THE FBO DIED WITH THE CONTEXT TOO -- forgotten, never deleted, exactly
-       as `tex` is above: deleting a name from a context that is gone either
-       does nothing or destroys a live object of the NEW one that has been
-       handed the same number. The mirror's bytes survive, and are zeroed with
-       the twin they mirror because that twin no longer exists. */
-    a->mirrorRgbFbo = 0;
-    a->mirroredPainted = 0; a->mirroredRgbGen = 0;
-    if (a->mirrorRgb) {
-        memset(a->mirrorRgb, 0, tagpu_gaf_mip_chain(a->mirrorRgbDim, a->mirrorRgbMip));
-        a->mirrorRgbRows = 0;
-        a->mirrorRgbSerial++;
-    }
+    /* THE READ-BACK'S FBO AND ITS BYTES WENT IN 11-5e-2b. The FBO was
+       forgotten here rather than deleted, exactly as `tex` is above -- deleting
+       a name from a context that is gone either does nothing or destroys a
+       live object of the NEW one handed the same number -- and the mirror's
+       bytes were zeroed with the twin they mirrored. There is no twin, no FBO
+       and no mirror now. */
     /* the entries went with the texture, so the wall the last fill hit says
        nothing about the next one */
     a->repackWall = 0;

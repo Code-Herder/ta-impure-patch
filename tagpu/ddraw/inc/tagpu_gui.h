@@ -293,26 +293,29 @@ typedef struct TAGPU_GUIHAND {
     int                  atlasDim, atlasRows;
     unsigned             atlasSerial;
 
-    /* ---- THE RESTORED UI ATLAS (landing 4), RGBA8, same dim and same shelf.
-       IT IS THE RESTORER'S OUTPUT AND NOT AN INPUT ANYONE CAN RE-DERIVE: the
-       five shaders that produce it are the one thing G19c did not translate,
-       so the port does not run them -- it is handed the texels the GL lane's
-       job already painted, read back out of the twin on the frames that job
-       painted on and on no others (`tagpu_gaf_atlas_mirror_rgb`). That is what
-       unblocks this landing: a second backend needs the TEXELS, never the
-       producer. Alpha is "this texel has restored colour", exactly as it is to
-       `SPR_FS` and `LAY_FS`; NULL while nothing is restored. */
-    const unsigned char* atlasRgb;
-    int                  atlasRgbRows;
-    unsigned             atlasRgbSerial;
+    /* ---- THE RESTORED UI ATLAS IS NOT CARRIED (landing 11-5e-2b). `atlasRgb`,
+       `atlasRgbRows` and `atlasRgbSerial` stood here from landing 4: the texels
+       the GL lane's restorer had painted, read back out of its twin, because
+       the five shaders that produce them are the one thing G19c did not
+       translate and the port does not run them. The read-back was
+       `tagpu_gaf_atlas_mirror_rgb`, which is `glReadPixels` and nothing else,
+       and `oglu_load_dll` has no caller -- so it never produced a row in any
+       process and this pointer was NULL on every frame it was ever published.
+       NOTHING REPLACES IT. The world atlases moved to a published frame LIST
+       that the consuming lane paints for itself; this one has no such list,
+       because `tagpu_gui_surf.c` never arms `tagpu_gaf_atlas_restore_vk`. So
+       the UI has no route to Classic++ colour, and giving it one is new work
+       rather than a deletion -- see the Vulkan-only plan, 11-5e-2b. */
 
     /* EVERY COLOUR TWIN WAS INVALIDATED SINCE THE LAST FRAME THIS MOVED. The
        presented palette moved out from under the restored art and settled
        somewhere else, so `restore_step` frees the job, re-arms it against the
        new palette and clears every colour twin whole. It happens BEFORE the
-       drain, so a consumer applies it before this frame's ops -- and it cannot
-       be inferred from `atlasRgbSerial`, which also moves for an ordinary
-       paint. Monotone, never reset. */
+       drain, so a consumer applies it before this frame's ops. It used to be
+       stated as "cannot be inferred from `atlasRgbSerial`, which also moves
+       for an ordinary paint"; that serial is gone with the read-back, so this
+       is now the only thing that says a colour twin was invalidated.
+       Monotone, never reset. */
     unsigned             colRearm;
 
     /* ---- the sharp layer's draws, BY VALUE. 16 x 60 bytes is small enough

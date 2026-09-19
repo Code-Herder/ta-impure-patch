@@ -250,16 +250,23 @@ static int              s_atDim, s_glW, s_glH;
 static unsigned         s_atSerial, s_palSerial, s_glSerial;
 static int              s_atHave, s_palHave, s_dumReady, s_glHave;
 static int              s_saidBorrow;
-/* THE RESTORED UI ATLAS (landing 4). RGBA8, the same dim and the same shelf as
-   the indexed one -- the restorer paints cell for cell into the twin. It is the
-   one thing in this pass that the GL lane PRODUCES rather than reads, and the
-   port does not reproduce it: the five restorer shaders are G19c's uncovered
-   case, so the texels cross as bytes and the producer stays where it is. */
-static VkImage          s_arImg;
-static VkDeviceMemory   s_arMem;
-static VkImageView      s_arView;
-static int              s_arDim, s_arRows, s_arHave, s_arNeedClear;
-static unsigned         s_arSerial;
+/* THE RESTORED UI ATLAS IS NOT HERE ANY MORE (landing 11-5e-2b). It was an
+   RGBA8 image of the same dim and the same shelf as the indexed one, uploaded
+   from `atlasRgb` -- the texels the GL lane's restorer had painted, read back
+   out of its twin because the five restorer shaders are G19c's uncovered case
+   and the port does not run them. The read-back was `glReadPixels` and nothing
+   else, and `oglu_load_dll` has no caller, so opengl32.dll is never in the
+   process: `atlasRgb` was NULL on every frame this pass ever received. The
+   image, its clear, its staging share and `s_arSerial`/`s_arRows` went with it.
+
+   THE UI THEREFORE HAS NO RESTORED ATLAS AT ALL, and unlike the world lanes it
+   has no frame LIST to paint one from -- `tagpu_gui_surf.c` never arms
+   `tagpu_gaf_atlas_restore_vk`. Giving the UI Classic++ colour again means
+   arming that list here and consuming it, which is new work and not a
+   deletion; the plan records it as such. Until then `TAGPU_GUICOL_ON` cannot
+   be honoured and the ops that carry it stand down -- which changes nothing,
+   because `twin_sprite` and `twin_copy` both return 0 unconditionally, so no
+   op has carried it since 11-4b. */
 /* the last `colRearm` seen: when it moves, every colour twin was invalidated */
 static unsigned         s_colRearm;
 static int              s_colRearmSeen;
@@ -1474,10 +1481,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     VkDeviceSize mmPicOff = 0, mmEngOff = 0, sStride = 0;
     VkDeviceSize stNeed = 0, stOff = 0, uStride, fStride;
     VkDeviceSize atOff = 0, palOff = 0;
-    int atUp = 0, palUp = 0, arUp = 0;
+    int atUp = 0, palUp = 0;
     VkImageView  engView = VK_NULL_HANDLE;      /* borrowed from tagpu_vk_surf.c */
     int          engW = 0, engH = 0, engOk = 0;
-    VkDeviceSize arOff = 0;
     TWIN* cur = NULL;
     int rpOpen = 0;
     int drawn = 0;
@@ -1572,11 +1578,11 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        here is a frame whose colour twins the GL lane can sample and whose
        restored atlas never reached us -- the replay would then write alpha 0
        where the GL lane wrote restored colour, silently and cumulatively. */
-    if (h.colourTwins && !h.atlasRgb) {
+    if (h.colourTwins) {
         if (!s_saidColour) { s_saidColour = 1;
-            plog(d, "gui: the GL twin is compositing Classic++ colour and the "
-                    "hand-over carries no restored atlas - nothing composited "
-                    "while that is true"); }
+            plog(d, "gui: the other lane is compositing Classic++ colour and "
+                    "this one has no restored atlas to composite from - nothing "
+                    "composited while that is true"); }
         compose = 0;
     } else s_saidColour = 0;
     /* EVERY COLOUR TWIN WAS INVALIDATED, and it happened BEFORE this frame's
@@ -1718,14 +1724,6 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         if (!behind(d, "an atlas outside what this pass carries")) goto refuse;
         return 0;
     }
-    /* AND THE RESTORED ONE, IN THIS FILE'S OWN TERMS TOO. It shares `atlasDim`
-       with the indexed atlas because they share a shelf, and its rows are
-       bounded by that dim for the same reason the indexed rows are. */
-    if (h.atlasRgb && (h.atlasDim < 1 || h.atlasDim > ATLAS_MAXDIM ||
-                       h.atlasRgbRows < 1 || h.atlasRgbRows > h.atlasDim)) {
-        if (!behind(d, "a restored atlas outside what this pass carries")) goto refuse;
-        return 0;
-    }
     /* THE GLYPH ATLAS'S DIMENSIONS, BOUNDED IN THIS FILE'S OWN TERMS. They are
        compile-time constants in `tagpu_text.c` and cannot move today, which is
        exactly why the bound belongs here rather than being inherited from
@@ -1771,8 +1769,8 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                lands on the next one. A fresh start is the cure and not a
                formality -- a reseed re-publishes every surface's bytes, whose
                `twin_col_drop` clears the colour on both sides. */
-            if ((o->col & TAGPU_GUICOL_ON) && !h.atlasRgb) {
-                if (!behind(d, "a restored sprite before the restored atlas crossed")) goto refuse;
+            if (o->col & TAGPU_GUICOL_ON) {
+                if (!behind(d, "a restored sprite and no restored atlas on this lane")) goto refuse;
                 return 0;
             }
             ndraw++; nquad++;
@@ -1832,17 +1830,6 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     /* the shared texels, and the staging they need */
     if (h.atlas && (!s_atHave || s_atSerial != h.atlasSerial || s_atDim != h.atlasDim)) {
         atUp = 1; stNeed += (VkDeviceSize)h.atlasDim * h.atlasRows;
-    }
-    /* THE RESTORED ATLAS, ON ITS OWN SERIAL. It moves only on a frame the
-       restorer painted -- which is the whole fill and no frame after it -- so
-       in a settled session this uploads nothing at all, exactly as the indexed
-       atlas beside it does. `atlasRgbRows` is the mirror's high-water mark:
-       rows past the shelf name no entry and cost only their bandwidth. */
-    if (h.atlasRgb && h.atlasDim > 0 &&
-        (!s_arHave || s_arSerial != h.atlasRgbSerial ||
-         s_arDim != h.atlasDim || s_arRows != h.atlasRgbRows)) {
-        /* +4 for the alignment `arOff` takes below */
-        arUp = 1; stNeed += (VkDeviceSize)h.atlasDim * h.atlasRgbRows * 4 + 4;
     }
     if (h.pal && (!s_palHave || s_palSerial != h.palSerial)) { palUp = 1; stNeed += 256 * 4; }
     /* THE MINIMAP'S TWO, WIDENED RGB8 -> RGBA8 ON THE WAY IN, so what they
@@ -1929,48 +1916,6 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         memcpy(s->stMap + stOff, h.atlas, (size_t)h.atlasDim * h.atlasRows);
         stOff += (VkDeviceSize)h.atlasDim * h.atlasRows;
     }
-    if (arUp) {
-        if (s_arDim != h.atlasDim) {
-            if (!ret_push(d, s_arImg, s_arMem, s_arView, VK_NULL_HANDLE)) goto refuse;
-            s_arImg = VK_NULL_HANDLE; s_arMem = VK_NULL_HANDLE; s_arView = VK_NULL_HANDLE;
-            s_arDim = 0; s_arRows = 0; s_arHave = 0;
-            /* THE WHOLE SQUARE, NOT `atlasRgbRows` OF IT. The mirror's rows
-               grow as the shelf does and a shorter image would have to be
-               re-made on every growth -- and every re-make retires an image
-               every in-flight composite may still be sampling. The rows above
-               the high-water mark are never uploaded and never sampled. */
-            if (!mk_image(d, h.atlasDim, h.atlasDim, VK_FORMAT_R8G8B8A8_UNORM,
-                          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                          &s_arImg, &s_arMem, &s_arView)) goto refuse;
-            s_arDim = h.atlasDim;
-            s_arNeedClear = 1;
-        } else if (h.atlasRgbRows < s_arRows) {
-            /* THE MIRROR'S ROWS WENT BACKWARDS, so the rows above the new count
-               are the PREVIOUS fill's colours in an image nothing is about to
-               overwrite -- and `prepare_dest` has cleared the GL twin whole, so
-               over there they are alpha 0. It is the same defect the creation
-               clear closed for UNDEFINED memory, still open for STALE memory,
-               and the 166 827 px that fix measured is itself the evidence that
-               rows above the count get sampled: `tagpu_gaf_atlas_put` runs
-               inside the drain, AFTER the read-back, so a cell can legitimately
-               land above `atlasRgbRows` on the very next frame.
-               `mirrorRgbRows` drops to 0 in exactly two places -- a GL context
-               loss and the step's own "the twin is gone" branch -- and neither
-               changes `atlasDim`, so the re-make above cannot catch it.
-               [FOUND 2026-09-16, the landing-4 review.] */
-            s_arNeedClear = 1;
-        }
-        /* FOUR-BYTE ALIGNED, because this one is an RGBA8 destination and
-           `VkBufferImageCopy::bufferOffset` must be a multiple of the texel
-           size. It is a multiple today only because `ATLAS_DIM` is 2048 and the
-           block before it copies one byte a texel; the bound this file applies
-           admits any `atlasDim` up to `ATLAS_MAXDIM`, so the alignment belongs
-           here rather than in that coincidence. */
-        arOff = align_up(stOff, 4);
-        stOff = arOff;
-        memcpy(s->stMap + stOff, h.atlasRgb, (size_t)h.atlasDim * h.atlasRgbRows * 4);
-        stOff += (VkDeviceSize)h.atlasDim * h.atlasRgbRows * 4;
-    }
     if (glUp) {
         if (s_glW != h.glyphW || s_glH != h.glyphH) {
             if (!ret_push(d, s_glImg, s_glMem, s_glView, VK_NULL_HANDLE)) goto refuse;
@@ -2034,67 +1979,6 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
         s_atHave = 1; s_atSerial = h.atlasSerial;
-    }
-    if (arUp) {
-        img_barrier(cb, s_arImg,
-                    s_arHave ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                             : VK_IMAGE_LAYOUT_UNDEFINED,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    s_arHave ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                             : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                    s_arHave ? VK_ACCESS_SHADER_READ_BIT : 0,
-                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-        /* THE WHOLE SQUARE GOES TO ALPHA 0 FIRST, and this is not tidiness --
-           it is the difference between matching the GL lane and not.
-           `tagpu_rglsl_job_new` CLEARS its destination at job creation
-           (`prepare_dest`), so every texel of the GL twin above the shelf is
-           alpha 0: "nothing restored here". Ours is only ever written for
-           `atlasRgbRows` rows, and the rest of a 2048 square is whatever the
-           allocator handed us -- which `SPR_FS` reads as restored colour
-           wherever a byte of it happens to exceed 0.5 alpha, writes into a
-           colour twin, and the composite then shows.
-           [MEASURED 2026-09-16: 166 827 px of 2 073 600 at 1920x1080 with the
-           restore armed, and 0 at 1024x768 on the same build -- the divergence
-           only appears where the garbage happens to be read. The A/B at one
-           resolution would have called this landing done.] */
-        if (s_arNeedClear) {
-            VkClearColorValue cv;
-            VkImageSubresourceRange rg;
-            s_arNeedClear = 0;
-            memset(&cv, 0, sizeof cv); memset(&rg, 0, sizeof rg);
-            rg.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            rg.levelCount = 1; rg.layerCount = 1;
-            vkCmdClearColorImage(cb, s_arImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                 &cv, 1, &rg);
-            /* AND THE CLEAR IS ORDERED BEFORE THE COPY, which is not implied by
-               recording it first. Both are TRANSFER writes to overlapping
-               memory and Vulkan orders them only if something says so -- so
-               without this the driver may land the whole-image clear AFTER the
-               rows the copy just wrote, and every restored sprite then draws
-               indexed against a `uRestored` that says otherwise, for as long as
-               `atlasRgbSerial` stands still. Silent, driver-dependent, and it
-               poisons the colour twins cumulatively.
-               `ab864e0` is what made this reachable in the ordinary way: the
-               clear used to run once per image and now runs on every shrink.
-               [FOUND 2026-09-16, the re-review of the landing-4 fixes -- the
-               third round on this pass to find a defect inside a fix.] */
-            img_barrier(cb, s_arImg,
-                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-        }
-        copy_rect(cb, s->stage, arOff, s_arImg, 0, 0, h.atlasDim, h.atlasRgbRows);
-        img_barrier(cb, s_arImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-        s_arHave = 1; s_arSerial = h.atlasRgbSerial;
-        /* EXACTLY WHAT IS VALID IN THE IMAGE, not a high-water mark. A
-           high-water is what let the stale rows above sit there unnoticed:
-           it recorded that the rows had ONCE been written and never that they
-           still said the right thing. */
-        s_arRows = h.atlasRgbRows;
     }
     if (glUp) {
         img_barrier(cb, s_glImg,
@@ -2481,14 +2365,23 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     /* the image behind the flag, checked rather than assumed:
                        drawing with `uRestored` and the DUMMY at binding 41
                        would sample a 1x1 image as though it were the atlas */
-                    if (on && !s_arHave) {
-                        sdWhy = "a restored sprite and no restored atlas uploaded";
+                    /* THERE IS NO RESTORED ATLAS ON THIS LANE SINCE 11-5e-2b,
+                       so an op that asks to sample one cannot be drawn at all.
+                       This was `on && !s_arHave`, and it is the same test: the
+                       only writer of `s_arHave` was the mirror upload, which
+                       never ran. `prepare` refuses such a frame above; this is
+                       belt to that brace. */
+                    if (on) {
+                        sdWhy = "a restored sprite and no restored atlas on this lane";
                         goto standdown; }
                     fq[0] = (int)o->ck; fq[1] = on;     /* uCK, uRestored      */
                     quadv(qv, (float)o->sl, (float)o->st,
                           (float)(o->sl + o->fw), (float)(o->st + o->fh),
                           o->u0, o->v0, o->u1, o->v1);
-                    if (!set_claim(d, s, s_atView, on ? s_arView : VK_NULL_HANDLE,
+                    /* `on` is 0 here by the stand-down above, so binding 41
+                       takes no second image -- the same value it took whenever
+                       the op was indexed. */
+                    if (!set_claim(d, s, s_atView, VK_NULL_HANDLE,
                                    QVS_SZ, TWF_SZ, &si_)) {
                         sdWhy = "this frame claimed more distinct images than there are sets";
                         goto standdown; }
@@ -2951,14 +2844,12 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
         memset(s_slot[i].sets, 0, sizeof s_slot[i].sets);  /* back with the pool */
     }
     kill_image(d, &s_atImg,  &s_atMem,  &s_atView);
-    kill_image(d, &s_arImg,  &s_arMem,  &s_arView);
     kill_image(d, &s_palImg, &s_palMem, &s_palView);
     kill_image(d, &s_glImg,  &s_glMem,  &s_glView);
     kill_image(d, &s_mmPicImg, &s_mmPicMem, &s_mmPicView);
     kill_image(d, &s_mmEngImg, &s_mmEngMem, &s_mmEngView);
     kill_image(d, &s_dumImg, &s_dumMem, &s_dumView);
     s_atDim = 0; s_atHave = 0; s_atSerial = 0;
-    s_arDim = 0; s_arRows = 0; s_arHave = 0; s_arSerial = 0; s_arNeedClear = 0;
     s_colRearm = 0; s_colRearmSeen = 0;
     s_palHave = 0; s_palSerial = 0;
     s_dumReady = 0;
