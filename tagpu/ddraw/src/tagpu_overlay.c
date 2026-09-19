@@ -17,6 +17,8 @@
 #include "tagpu_model3do.h"   /* TAGPU_PBMAXPIECE: the piece-count bound */
 #include "tagpu_overlay.h"
 #include "tagpu_trigger.h"
+#include "dd.h"          /* g_ddraw.primary, the fork's own surface        */
+#include "screenshot.h"  /* ss_take_screenshot: `tacli shot`, now on the flip */
 #include "tagpu_vk.h"       /* tagpu_vk_owns_present(): whether GL may be drawn */
 #include "tagpu_tracer.h"
 #include "tagpu_suppress.h"
@@ -459,4 +461,22 @@ void tagpu_triggers_frame(const TAGPU_FRAME* f)
        next reader does not preserve an ordering constraint that does not
        exist. */
     tagpu_input_frame(f);
+    /* THE ENGINE-SURFACE SCREENSHOT (tagpu_shot.trigger) -- `tacli shot`.
+       It lived in render_ogl.c's present loop, so it answered on the GL lane
+       and NOWHERE else: gdi reaches no tagpu_ call at all and render_vk.c
+       polls no trigger file, which is why the verb was measured failing on
+       both (the vulkan-only plan, landing 10c-3's review). It is not a GL
+       capture -- `ss_take_screenshot(g_ddraw.primary)` reads the fork's own
+       DirectDraw primary -- so nothing tied it to that lane but where it was
+       written.
+
+       THE THREAD IS ALREADY PROVEN FOR IT. keyboard.c:96 and :102 call the
+       same function from the game thread on the PrintScreen path, which is
+       this thread: `before_flip` runs on the game thread inside the engine's
+       flip. So this is the context ss_take_screenshot already has a caller
+       in, not a new one it has to be made safe for. */
+    if (GetFileAttributesA("tagpu_shot.trigger") != INVALID_FILE_ATTRIBUTES) {
+        DeleteFileA("tagpu_shot.trigger");
+        ss_take_screenshot(g_ddraw.primary);
+    }
 }
