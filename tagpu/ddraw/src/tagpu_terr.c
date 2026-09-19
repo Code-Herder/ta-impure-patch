@@ -149,13 +149,17 @@ static unsigned s_atlasMirrorSerial;
 
    The list is `restore_publish`'s, retained rather than freed: see
    tagpu_terr.h, `restoreFrames`. Retaining it costs
-   `s_atlasN * sizeof(TAGPU_RGLSL_FRAME)` -- 44 bytes a tile, so 222 KB for
-   Two Continents' 5062 tiles and 508 KB for the largest stock map's 11,561 --
-   and it is the only copy of two facts a `_vk` file cannot re-derive, the
-   tileability flags and the centre-out order. (This read "under 90 KB for a
-   full atlas", which is about 2045 tiles and was never a full one; the number
+   `s_atlasN * sizeof(TAGPU_RGLSL_FRAME)` -- 44 bytes a tile, so 217 KiB for
+   Two Continents' 5062 tiles, and 331 KiB at the 7680-tile ceiling a device
+   with the Vulkan floor of 4096 allows (`s_maxTex / CELL_PITCH` rows of
+   ATLAS_COLS). The largest stock map's 11,561 tiles cost 497 KiB, but only on
+   a device whose 2D limit is at least 6154 -- below that `ensure_atlas` clamps
+   and the rest of the map draws black, which is its own problem and not this
+   allocation's. It is the only copy of two facts a `_vk` file cannot re-derive,
+   the tileability flags and the centre-out order. (This read "under 90 KB for
+   a full atlas", which is about 2045 tiles and was never a full one; the number
    mattered less while nothing consumed the list. [FROM THE 11-5c LANDING
-   REVIEW.]) */
+   REVIEW; the units and the device caveat from its re-review.]) */
 static int                s_rvkWant;   /* tagpu_restorevk.on, latched         */
 static TAGPU_RGLSL_FRAME* s_rFrames;   /* s_rFrameN entries, restore order    */
 static int                s_rFrameN;
@@ -301,6 +305,17 @@ static int    s_atlasH, s_atlasN;      /* atlas rows*CELL_PITCH, tiles held   */
 static const void* s_setPtr;           /* the TILE_SET we built from          */
 static int    s_setCount;
 static int    s_maxTex;
+/* THE 2D IMAGE LIMIT THIS PASS HAS ALREADY REFUSED, or 0. Latched on the VALUE
+   rather than as a flag, so a device swap (the GPU picker re-picks) is asked
+   again on its own merits and a re-picked identical limit is still refused
+   without a second log line. See the refusal in tagpu_terr_gather.
+   [FROM THE 11-5c RE-REVIEW: the first version of that check assigned
+   `s_maxTex` and bailed, which made the enclosing
+   `s_maxTex != tagpu_vk_max_image_dim()` false on the very next frame -- so the
+   whole block was skipped, `ensure_atlas` built an atlas the consumer refuses
+   every frame, and the one log line saying "terrain stays the engine's" was
+   true for exactly one frame. A bound that does not bind is still a defect.] */
+static int    s_dimBad;
 /* Classic++ (tagpu_classicpp.on): the RESTORED copy of the atlas -- the same
    cells on the same pitch, true colour from the unditherer's model -- so the
    one set of UVs serves both looks. THE IMAGE IS NOT OURS. Since landing 11-5c
@@ -557,9 +572,13 @@ void tagpu_terr_glreset(void)
        consumer is handed a new serial rather than one it has already seen.
 
        NOTHING CALLS THIS ON THE SURVIVING LANE, and the name is the reason it
-       is worth saying. Its one caller is tagpu_overlay.c:290, inside
-       `if (cur != s_ctx)` where `cur` is `wglGetCurrentContext()` -- NULL for
-       the life of a process with no GL context, so the branch never fires. The
+       is worth saying. Its one caller is `tagpu_native_glreset`
+       (tagpu_native.c), which tests nothing itself; THAT function's one caller
+       is tagpu_overlay.c:290, inside `if (cur != s_ctx)` where `cur` is
+       `wglGetCurrentContext()` -- NULL for the life of a process with no GL
+       context, so the branch never fires (and `if (s_ctx)` inside it is a
+       second pin). Naming the far end of the chain as "its one caller" sends a
+       reader grepping to the wrong file. [FROM THE 11-5c RE-REVIEW.] The
        body is kept because none of it is GL any more: it is this pass's "drop
        everything derived from the map" and a Vulkan device loss wants exactly
        that. Retiring the entry point belongs with the rest of the GL entry-point
@@ -1002,24 +1021,33 @@ static void restore_step(const char* ta)
        while the engine's own pixels beside them moved. Queue them all again
        over the image that is there.
 
-       ONLY ONCE THE PALETTE HAS STOPPED MOVING, and that is an ordering on the
-       palette's own serial rather than a timer: `tagpu_pal_serial()` bumps on
-       every frame whose 1024 bytes differ (tagpu_pal.c), so a FADE bumps it
-       once a frame for as long as it lasts. Two consecutive frames reading the
-       SAME serial is the palette having settled, and it is a fact about the
-       palette, not about elapsed time.
-       Without it a fade republished the request every frame, and the consumer
-       rebuilds its job on a serial change with its paint count back at zero --
-       so the restore made no progress for the length of the fade and paid
-       `restore_order`'s whole tile-map scan and a `tagpu_rglsl_tileable` per
-       tile for each frame of it. The GL lane never met this because its repaint
-       ran only from state 2, "the job is idle", a completion this side cannot
-       see: the painting is the consumer's. [FROM THE 11-5c LANDING REVIEW.]
-       RESIDUAL, stated rather than hidden: a palette that settles, moves and
-       settles again DURING a restore still restarts it each time. That is
-       correct -- those tiles do need the new palette -- but it is slower than
-       the GL lane's "finish first, then repaint", and the way to close it is a
-       completion signal back from the consumer. */
+       NOT WHILE THE PALETTE IS STILL MOVING, and it is worth being exact about
+       what this does and does not buy, because the first version of this
+       comment overclaimed it. `s_rgbPalSerial != s_palSeen` is "the palette has
+       moved since the request went out"; `palWas == s_palSeen` is "the last two
+       CALLS TO THIS FUNCTION read the same serial". That second term is a fact
+       about the palette only in so far as this function is called as often as
+       the palette changes -- and it is not: the render loop wakes on every
+       primary Blt/Flip/Unlock as well as on a palette change, so it usually
+       runs more than one iteration per palette step. A slow fade can therefore
+       still get one republish per step.
+       WHAT IT DOES CLOSE is the worst case, a palette moving on every
+       iteration, where the pre-fix code republished the whole list every single
+       frame -- `restore_order`'s full tile-map scan plus a
+       `tagpu_rglsl_tileable` per tile, and the consumer tearing its job down
+       and rebuilding it with its paint count back at zero, so the restore made
+       no progress at all for the length of the fade. It narrows the window; it
+       does not close it. [FROM THE 11-5c LANDING REVIEW AND ITS RE-REVIEW.]
+       THE REAL FIX IS A COMPLETION SIGNAL BACK FROM THE CONSUMER, which this
+       hand-over does not carry. The GL lane never needed one: its repaint ran
+       only from state 2, "the job is idle", and it owned the job so it could
+       see that. The painting is the consumer's now, so "is the previous request
+       still being painted" is a question only it can answer, and until
+       tagpu_terr.h carries the answer this side is guessing from the palette.
+       RESIDUAL BEYOND THAT: a palette that settles, moves and settles again
+       DURING a restore restarts it each time. That much is correct -- those
+       tiles do need the new palette -- but it is slower than "finish first,
+       then repaint". */
     if (s_rgbState == 1 && s_rgbPalSerial != s_palSeen && palWas == s_palSeen) {
         char b[128];
         if (!s_rectValid) return;          /* restore_order wants a viewport: next frame */
@@ -1195,14 +1223,21 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
            prediction about which devices exist.
            [FROM THE 11-5c LANDING REVIEW.] */
         if (m < ATLAS_W) {
-            char mb[128];
-            _snprintf(mb, sizeof mb, "terr: the device's 2D image limit %d is under "
-                                     "the atlas width %d - terrain stays the engine's",
-                      m, ATLAS_W);
-            flog(mb);
-            s_maxTex = m;
+            if (s_dimBad != m) {
+                char mb[128];
+                s_dimBad = m;
+                _snprintf(mb, sizeof mb, "terr: the device's 2D image limit %d is under "
+                                         "the atlas width %d - terrain stays the engine's",
+                          m, ATLAS_W);
+                flog(mb);
+            }
+            /* `s_maxTex` is deliberately NOT set: leaving it as it was keeps
+               this block's own condition true, so the refusal is re-asked and
+               re-applied on every frame instead of being skipped from the next
+               one onward. The log is what latches, not the refusal. */
             return terr_bail();
         }
+        s_dimBad = 0;
         s_maxTex = m;
     }
     if (!ensure_atlas(ta)) return terr_bail();

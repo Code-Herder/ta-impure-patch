@@ -200,13 +200,24 @@ typedef struct TAGPU_TERRHAND {
        bit.
 
        `restored` SAYS A RESTORE REQUEST IS STANDING FOR THIS ATLAS -- it is
-       the producer's `s_rFrames`, the published field itself, and it sets
-       `uRestored` in the consumer's fragment shader. Until landing 11-5c it
-       read the GL restorer's `s_rgbState` instead, which on a lane with no GL
-       context never left 0, so a consumer that had painted its own restored
-       atlas was told to sample the indexed one. WHETHER THE PAINT HAS LANDED
-       IS THE CONSUMER'S OWN FACT and it must still keep it: this flag is the
-       request, not the result. */
+       the producer's `s_rFrames`, the published field itself. Until landing
+       11-5c it read the GL restorer's `s_rgbState` instead, which on a lane
+       with no GL context never left 0, so a consumer that had painted its own
+       restored atlas was told to sample the indexed one.
+
+       IT DOES NOT SET `uRestored` BY ITSELF, and a consumer author should read
+       that here rather than assume otherwise. `tagpu_vk_terr.c` ANDs it with
+       its OWN `s_rgbAtlas.view && .have` -- "this lane has an image, and
+       something has painted at least one cell of it" -- and that pair decides
+       both the uniform AND which view binding 42 names, so the flag and the
+       descriptor cannot disagree.
+       WHETHER THE PAINT HAS LANDED IS THE CONSUMER'S OWN FACT, it must keep
+       it, and it must GATE ON IT: this flag is the request, not the result. A
+       consumer that took it for the result would sample an image nothing has
+       written and that has never left VK_IMAGE_LAYOUT_UNDEFINED -- which for
+       one review round it did, and before that it was made to draw NOTHING
+       rather than fall back to the indexed atlas.
+       [The vulkan-only plan, landing 11-5c and its two reviews.] */
     int   restored, lit, lambert, fog, shadowOn;
     /* THE REST OF THE CAST-SHADOW BLOCK, and it is only meaningful while
        `shadowOn` is 1 -- tagpu_shadow_apply writes uShadowOn and then RETURNS
