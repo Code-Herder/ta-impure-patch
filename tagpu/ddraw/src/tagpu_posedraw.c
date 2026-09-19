@@ -598,7 +598,13 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
     s_pub.depthScale = v->depthScale;
     s_pub.shd[0] = (float)v->shNeutral; s_pub.shd[1] = (float)v->shDir;
 
-    s_pub.restored = (tagpu_r3d_atlas_rgbref() && tagpu_classicpp_on()) ? 1 : 0;
+    /* `restored` IS SET BELOW, AFTER THE ARM (11-5e-2c). It used to sit here
+       and read `tagpu_r3d_atlas_rgbref()`, a GL texture name whose only writer
+       in the tree assigns 0 -- so it published 0 on every frame of every
+       process since 11-5e-2, and every consumer of the restored twin stood
+       down. It now asks whether the published list is armed, and asking that
+       before the arm on the same beat would cost the first frame of a session
+       for no reason. */
     s_pub.scafOn = v->scafOn ? 1 : 0;
     s_pub.scafP[0] = v->scafP[0]; s_pub.scafP[1] = v->scafP[1];
     s_pub.scafP[2] = v->scafP[2]; s_pub.scafP[3] = v->scafP[3];
@@ -656,6 +662,8 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
        lane with nothing to restore from. Silently, because a lane with no list
        stands down rather than complains. */
     tagpu_r3d_atlas_restore_want();
+    /* AND NOW THE FLAG, because the arm above is what it asks about. */
+    s_pub.restored = (tagpu_r3d_atlas_restore_armed() && tagpu_classicpp_on()) ? 1 : 0;
     /* THE ARM IS TAKEN HERE AND THE LIST IS NOT (11-5e-2c). Arming is an ASK
        and belongs on this beat; capturing the list is a READ of a buffer this
        frame is still painting into, and it has moved to

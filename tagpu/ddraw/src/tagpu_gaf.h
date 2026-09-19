@@ -233,16 +233,27 @@ typedef struct TAGPU_GAFATLAS {
        on a GL with no glGenerateMipmap, raised back on the next context reset
        -- so sizing a memset off the CURRENT pair could write a 21 MB chain
        into a 16 MB allocation. That hazard goes with the buffer.] */
-    /* [PINNED 0.0f] THE ANISOTROPY APPLIED TO THE TWIN -- and 11-5e-2 deleted
-       the only writer with the GL restorer, so it now reports "none" whatever
-       `aniso=` says. THAT IS A LOADED GUN FOR WHOEVER RESTORES THE FEED:
-       `tagpu_vk_unit.c` stands the whole frame down on
-       `h.atlasRgbAniso != s_twinAniso`, deliberately, so that the two lanes
-       cannot draw differently-filtered art -- and `s_twinAniso` is
-       `tagpu_classicpp_light()->aniso`, which DEFAULTS TO 4. The test is
-       unreachable today only because `restored` is pinned 0 above; the
-       landing that unpins it must give this field a writer, or retire the
-       comparison, or the unit pass draws nothing. [11-5e-2's review.] */
+    /* THE ANISOTROPY THE TWIN IS CONFIGURED FOR. Written every arm beat by
+       `tagpu_r3d_atlas_restore_want` from `tagpu_classicpp_light()->aniso`.
+
+       IT WAS [PINNED 0.0f] UNTIL 11-5e-2c, and 11-5e-2's review left a warning
+       here calling it a loaded gun for whoever restored the feed: the consumer
+       stands the whole frame down on `h.atlasRgbAniso != s_twinAniso`, so a
+       field reporting 0 against a sampler built at 4 draws nothing. That was
+       right, and one detail of it was not, which is why the fix is not the one
+       this comment asked for. `s_twinAniso` is NOT `aniso=`; it is `aniso=`
+       CLAMPED BY THE DEVICE, and it is 0.0f wherever the extension is absent
+       or the ceiling is lower. So publishing the constant this file documents
+       would have swapped one silent stand-down for another, on exactly the
+       machines that can do least about it.
+
+       WHAT IT CARRIES INSTEAD IS THE KNOB, and the consumer compares it
+       against the knob it read rather than against what the device allowed
+       (`s_twinAnisoWant`). The test then means "the two ends are configured
+       apart", which is the one thing that can still go wrong -- a knob edited
+       mid-session, after a sampler that cannot be rebuilt mid-frame -- and
+       stops meaning "this machine lacks a feature". [11-5e-2's review left the
+       warning; 11-5e-2c discharged it.] */
     float          rgbAniso;
     /* THE PUBLISHED RESTORE LIST (the Vulkan-only plan's landing 7d), which is
        the OTHER answer to the same question the mirror above answers -- and
@@ -434,18 +445,31 @@ int  tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a);
    `tagpu_vk_restore.c` sizes its dump with them. (`mirrorRgbMips`, the top
    level actually read back, went with the read-back; the consuming lane knows
    its own chain depth from `restoreMips`.) */
-/* THE ANISOTROPY A RESTORED TWIN IS FILTERED WITH, where the extension answers.
-   A second backend must apply the same ratio or draw different art wherever the
-   texture is minified at an angle -- so this is a shared constant rather than
-   each lane's own choice, and `rgbAniso` below says what was actually applied,
-   which is what a consumer compares itself against. Since 11-5e-2 nothing
-   writes it -- see the field for why that matters more than it looks. */
-/* [NO CONSUMER SINCE 11-5e-2] The ratio the two lanes must agree on. Its only
-   user was `tagpu_gaf.c`'s GL `glTexParameterf`, deleted with the restorer;
-   the Vulkan lane reads `tagpu_classicpp_light()->aniso` instead, which has
-   the same default and is a knob rather than a constant. Kept because the
-   agreement it names is still required -- see `rgbAniso` above, which is the
-   field that must carry it once the restore feed is back. */
+/* THE ANISOTROPY A RESTORED TWIN IS FILTERED WITH. `rgbAniso` below carries it
+   and, since 11-5e-2c, carries the CONFIGURED ratio rather than an applied one:
+   `tagpu_classicpp_light()->aniso`, the same knob the consumer's own sampler is
+   built from. Written every arm beat, so a knob edited mid-session is seen.
+
+   WHY NOT THE APPLIED VALUE, which is what this said until 11-5e-2c. There is
+   no second backend to disagree with any more -- the lane that reads this list
+   paints the twin itself, with its own sampler -- so "what was actually
+   applied" is the consumer's own value and the test would compare it against
+   itself. What can still go wrong is the two ends being CONFIGURED apart, and
+   the knob is what catches that. */
+/* [NO CONSUMER, AND 11-5e-2c DECIDED AGAINST GIVING IT ONE] The ratio the two
+   lanes had to agree on. Its only user was `tagpu_gaf.c`'s GL
+   `glTexParameterf`, deleted with the restorer; the Vulkan lane reads
+   `tagpu_classicpp_light()->aniso`, which has the same default and is a knob
+   rather than a constant.
+
+   THIS COMMENT USED TO SAY `rgbAniso` MUST CARRY THIS CONSTANT once the feed
+   was back, and the landing that brought the feed back did not do that, on
+   purpose. Publishing a constant means standing the unit pass down on every
+   device without anisotropic filtering, where the consumer's applied value is
+   0.0f and can be nothing else -- drawing no unit at all rather than an
+   unfiltered one, over a feature the machine does not have. The knob is
+   published instead. Kept as the documented default and as the number the
+   two ends agree on when nobody has touched the knob. */
 #define TAGPU_GAF_TWIN_ANISO 4.0f
 
 size_t tagpu_gaf_mip_bytes(int dim, int level);

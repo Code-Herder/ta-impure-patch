@@ -947,7 +947,12 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
     s_pub.zoom = v->zoom > 0.0f ? v->zoom : 1.0f;
     s_pub.zoomCx = v->zoomCx; s_pub.zoomCy = v->zoomCy;
     s_pub.depthScale = v->depthScale > 1.0f ? v->depthScale : 512.0f;
-    s_pub.restored = (s_atlas.rgb && tagpu_classicpp_assets()) ? 1 : 0;
+    /* THE ROUTE IS THE PUBLISHED LIST, NOT A GL TEXTURE NAME (11-5e-2c).
+       `s_atlas.rgb` has one writer in the tree -- `tagpu_gaf.c:643 a->rgb = 0`
+       -- so this published 0 on every frame since 11-5e-2 took the restorer,
+       and the consumer stood every restored frame down. `rlistWant` is what
+       says a restore route exists now; it is latched by the arm. */
+    s_pub.restored = (s_atlas.rlistWant && tagpu_classicpp_assets()) ? 1 : 0;
     s_pub.lit = s_cpp ? 1 : 0;
     s_pub.fog = v->fogMode & 1;
     s_pub.fogOrgX = (float)v->fogOrgX; s_pub.fogOrgY = (float)v->fogOrgY;

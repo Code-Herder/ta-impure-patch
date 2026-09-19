@@ -431,6 +431,12 @@ static const char* face_texframe(const char* fa, int owner)
 /* ---- exports for the native pass (G12b, tagpu_native.c): share the atlas,
    shade LUT and calibration so both paths draw identical materials ---- */
 unsigned int tagpu_r3d_atlas_rgbref(void) { return s_atlas.rgb; }
+/* IS THERE A RESTORE ROUTE AT ALL (11-5e-2c). `rgbref` above was the old
+   answer -- a GL texture name -- and `tagpu_gaf.c:643 a->rgb = 0` is its only
+   writer in the tree, so it has answered "no" on every frame of every process
+   since 11-5e-2 deleted the restorer. The route is the published list now, and
+   this is what says it exists. Latched by the arm, so it does not flicker. */
+int tagpu_r3d_atlas_restore_armed(void) { return s_atlas.rlistWant ? 1 : 0; }
 unsigned tagpu_r3d_atlas_gen(void)  { return s_atlas.gen; }
 /* ---- THE LEVEL BOUNDARY (G19f-7) ---------------------------------------
    THIS ATLAS KEYS ON AN ADDRESS AND THE ADDRESSES ARE RECYCLED.
@@ -547,6 +553,25 @@ void tagpu_r3d_atlas_restore_want(void)
         !tagpu_classicpp_assets())
         return;
     if (!s_rlistAsked) s_rlistAsked = tagpu_gaf_atlas_restore_vk(&s_atlas);
+    /* AND THE RATIO THE TWIN IS TO BE FILTERED AT (11-5e-2c). `rgbAniso` had
+       no writer at all after 11-5e-2 deleted the GL `glTexParameterf` that set
+       it, so it reported 0.0f while the consumer's sampler was built at 4, and
+       the consumer stands a frame down when the two disagree -- which is how
+       unpinning the feed alone would have drawn nothing.
+
+       IT IS THE KNOB, NOT THE CONSTANT, AND NOT THE CLAMP. Publishing
+       `TAGPU_GAF_TWIN_ANISO` would stand the pass down on any device without
+       anisotropic filtering, because there `s_twinAniso` is 0.0f -- the plan's
+       own failure arriving from the other side. Publishing what the consumer
+       actually applies would make the test compare a value against itself. The
+       knob is the one thing both ends read independently
+       (`tagpu_classicpp_light()->aniso`, the same field the Vulkan sampler is
+       built from), so comparing them still catches the case the sampler's own
+       comment names -- a knob edited mid-session, when the sampler cannot be
+       rebuilt because every slot's submit still names it -- and catches
+       nothing else. Written every beat rather than at the arm, because that
+       case is exactly a value that changes after the arm has latched. */
+    s_atlas.rgbAniso = tagpu_classicpp_light()->aniso;
 }
 
 /* THE LIST, AND THE TWIN'S SHAPE WITH IT. On this path there is no read-back

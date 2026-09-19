@@ -12,6 +12,7 @@
    level 2 -- 0 until the switch has been seen on and the restorer's job
    made; a shader samples it only where its alpha says the texel is painted */
 unsigned int tagpu_r3d_atlas_rgbref(void);
+int          tagpu_r3d_atlas_restore_armed(void);
 /* The unit atlas's generation (tagpu_gaf.h): every recycle and every context
    loss moves every UV, so anything that BAKES a UV rather than re-reading it
    each frame has to be keyed on this. The geometry bake's material stream is

@@ -216,7 +216,8 @@ static VkDescriptorPool      s_dpool;
 static VkSampler             s_samp, s_sampCmp, s_sampTwin;
 /* the anisotropy `s_sampTwin` actually applies, compared against what the GL
    twin got rather than assumed to agree with it */
-static float                 s_twinAniso;
+static float                 s_twinAniso;      /* what the device applied   */
+static float                 s_twinAnisoWant;  /* what the knob asked for   */
 static int                   s_cmpLinear;  /* the compare sampler is the twin's */
 static VkDeviceSize          s_ualign;
 
@@ -844,6 +845,16 @@ static int build_samplers(const TAGPU_VKPASS* d)
            this one. */
         float want = tagpu_classicpp_light()->aniso;
         s_twinAniso = 0.0f;
+        /* THE KNOB AS READ, KEPT SEPARATELY FROM WHAT THE DEVICE ALLOWED
+           (11-5e-2c). `s_twinAniso` below is the applied value and is 0.0f
+           wherever the extension is absent or the device's ceiling is lower;
+           `s_twinAnisoWant` is what the configuration asked for. The producer
+           publishes the same knob, so the agreement test compares the two
+           CONFIGURATIONS and stands a frame down only when they have been
+           edited apart -- never because a machine lacks a feature, which it
+           can do nothing about and for which standing down means drawing no
+           unit at all. */
+        s_twinAnisoWant = want;
         if (want > 1.0f && d->anisook && d->maxAniso >= want) {
             si.anisotropyEnable = VK_TRUE;
             si.maxAnisotropy = want;
@@ -1962,13 +1973,16 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        -- so a restore this lane runs for itself is held to the filter test that
        a mirror used to be held to. [Landing 7e-2; the field is what 11-5e-2
        labelled `[PINNED 0]`, and 11-5e-2b kept it for this test.] */
-    if (h.restored && h.restoreFrames && h.atlasRgbAniso != s_twinAniso) {
+    if (h.restored && h.restoreFrames && h.atlasRgbAniso != s_twinAnisoWant) {
         if (!s_saidAniso) {
             s_saidAniso = 1;
-            plog(d, "unit: the GL twin filters the Classic++ restored atlas at %.1fx "
-                    "anisotropic and this lane can only do %.1fx - nothing drawn on a "
-                    "frame that samples it, rather than differently filtered art",
-                 (double)h.atlasRgbAniso, (double)s_twinAniso);
+            plog(d, "unit: the Classic++ restored atlas is published for %.1fx "
+                    "anisotropic and this lane's sampler was built for %.1fx - the "
+                    "knob changed after the sampler was made, and a sampler cannot "
+                    "be rebuilt mid-frame, so nothing is drawn on a frame that "
+                    "samples it rather than differently filtered art "
+                    "(the device applied %.1fx)",
+                 (double)h.atlasRgbAniso, (double)s_twinAnisoWant, (double)s_twinAniso);
         }
         goto standdown;
     }
