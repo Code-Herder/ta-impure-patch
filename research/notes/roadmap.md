@@ -3292,7 +3292,7 @@ keeps its mirror**: three independent pins already make its colour twins unreach
 (`s_colValid` has no writer, `twin_sprite`/`twin_copy` both `return 0` unconditionally, and
 `atlasRgb` is NULL), so removing them changes no behaviour — but `tagpu_gui_surf.c` never arms
 the list, so it is a **protocol change** for 16 live sites with nothing to put in their place.
-With it wait `tagpu_gaf.c`'s 40 sites and its 12 wide GL ones. Measured over
+With it waits `tagpu_gaf.c`'s 40 sites and its ONE real GL site. Measured over
 **nine runs**, five of `main`'s DLL and four of the branch's: 0 px within a run (27 pairs), **0
 px outside the minimap in all 20 cross-build pairs**, and four of those **0 px over the whole
 frame**. The fixture is bimodal — two images 48 px apart, one unit's off-screen dot — and
@@ -3317,8 +3317,12 @@ run on both trees: `tagpu_hires_draw.c` 104, `tagpu_shadow.c` 87, `opengl_utils.
 unchanged), **and every one of the four is behind escalation reason 1 or waiting on it**, so
 11-5e cannot finish the gate. `tagpu_native.c`, `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c`,
 `tagpu_scaffold.c`, `tagpu_posedraw.c`, `tagpu_overlay.c`, `tagpu_text.c`, `tagpu_ftime.c` and
-`tagpu_gaf.c` make no GL call — though `tagpu_gaf.c` is not GL-*free*: 0 narrow, **12 wide**,
-which go with the RGB mirror, and so wait on 11-5e-2b's GUI part rather than on its first. (11-5e-1 had left it at 540 in six files, 592 less its
+`tagpu_gaf.c` make no GL call — though `tagpu_gaf.c` is not GL-*free*: 0 narrow, **1 wide**
+(`xwglGetProcAddress` in `getgl`), which goes with the RGB mirror and so waits on 11-5e-2b's GUI
+part rather than on its first. **That figure was 12 until 2026-09-19**, when eleven of the twelve
+turned out to be `glog`, this fork's own logger, matched because the tool's wide pattern relaxed
+NARROW's capital for the bare `gl` prefix; the tree-wide wide total goes 366 → 323 and the narrow
+one is unchanged at 252 ([gpu-status](gpu-status.html) §2.77). (11-5e-1 had left it at 540 in six files, 592 less its
 own 52.) **The figures are reproducible on any tree with `tools/gl-sites.py`**, committed by
 11-5e-2 because an exit condition that each landing re-derives with its own script is an
 assertion rather than a gate.

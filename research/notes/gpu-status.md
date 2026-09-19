@@ -13122,8 +13122,9 @@ wall clock, and which varies between runs of `main` by more than it varies betwe
 
 **Build:** `ddraw.dll` clean, `thread-split: clean — 34 listed file(s)`, `spirv: 49 shaders, 33
 programs, headers current`. The DLL is **1 550 336 bytes against `main`'s 1 558 016** — 7 680
-smaller. **GL call surface unchanged at 252 narrow / 366 wide** (`tools/gl-sites.py`): this
-landing removes no GL call, only the plumbing above one.
+smaller. **GL call surface unchanged at 252 narrow / 323 wide** (`tools/gl-sites.py`): this
+landing removes no GL call, only the plumbing above one. (The wide figure read 366 when this
+section was written; §2.77 below is why it does not now, and the narrow one is untouched.)
 
 #### Gaps this landing did not close
 
@@ -13132,8 +13133,9 @@ landing removes no GL call, only the plumbing above one.
 - **The GUI's protocol change**, above: `colourTwins`, `s_colValid`, the two unconditional
   `return 0`s, and `atlasRgb*` out of `tagpu_gui.h`'s hand-over. It is the last consumer of the
   RGB mirror, and until it goes so do `tagpu_gaf.c`'s 40 sites, `tagpu_gaf.h`'s 10, and
-  **`tagpu_gaf.c`'s 12 wide GL sites** — which are the only part of 11-5e-2b that moves the
-  gate's own count.
+  **`tagpu_gaf.c`'s ONE remaining GL site** — `xwglGetProcAddress` inside `getgl`, which is the
+  only part of 11-5e-2b that moves the gate's own count. This read "12 wide GL sites" until
+  §2.77 found that eleven of the twelve were `glog`, this file's own logger.
 - **The producer half proper** — `tagpu_gaf_atlas_mirror_rgb`, `_step`, the `mirrorRgb*` fields
   and `tagpu_r3d_atlas_mirror_rgb`'s remaining siblings — waits on the GUI for the same reason.
 - **`tools/spirv-gen.py` raises `NameError: name 'die' is not defined`** when
@@ -13143,3 +13145,61 @@ landing removes no GL call, only the plumbing above one.
   so the next person building outside a full checkout does not re-diagnose it.
 - **No engine address was touched or read**: the diff's added lines carry no `0x4…`/`0x5…`
   constant, so `exe-reverse-engineering.md` takes nothing from this landing.
+
+
+### 2.77 The gate's own tally was counting this fork's logger — landing 11-5e-2b (the measure)
+
+`tools/gl-sites.py` was committed by 11-5e-2 so that gate 11-5's exit condition could be gated on
+directly instead of re-derived by each landing, on the principle that *an exit condition nobody
+else can reproduce is an assertion*. It reproduces — and one of its two columns was wrong.
+
+**THE DEFECT IS ONE CHARACTER CLASS.** The two patterns were:
+
+```python
+NARROW = re.compile(r"\b(?:gl|x_gl)[A-Z][A-Za-z0-9]*\s*\(")
+WIDE   = re.compile(r"\b(?:gl|x_gl|oglu_|wgl|xwgl)[A-Za-z_][A-Za-z0-9_]*\s*\(")
+```
+
+WIDE is meant to be NARROW plus the three families that are GL without being spelled
+`glSomething` — `oglu_*`, `wgl*`, `xwgl*`. But it relaxed `[A-Z]` to `[A-Za-z_]` for the **bare
+`gl` prefix as well**, so `gl` followed by a lower-case letter matched, and three of this fork's
+own identifiers walked in:
+
+| token | what it actually is | calls |
+|---|---|---|
+| `glog` | the per-module logger — `fopen("tagpu.log", "a")`, four lines, in `tagpu_gaf.c:27` and `tagpu_gui_hook.c:103` | **32** |
+| `glyph_obj`, `glyph_raster`, `glyph_block_capture`, `glyph_block_mark` | the text pass's glyph bitmap helpers | **9** |
+| `gl_probe` | a local helper in `tagpu_hires.c` | **2** |
+
+**WHAT IT COST, and it was not cosmetic.** Three files were tracked as carrying GL while carrying
+none of it, and one of them was load-bearing for this gate's plan:
+
+| file | was | is | what the difference was |
+|---|---|---|---|
+| `tagpu_gaf.c` | 0 / **12** | 0 / **1** | 11 × `glog`. The one real site is `xwglGetProcAddress` inside `getgl` |
+| `tagpu_gui_hook.c` | 0 / **25** | — | 21 × `glog`, 4 × `glyph_block_*`. It has no GL at all and now does not appear |
+| `tagpu_text.c` | 0 / **5** | — | 3 × `glyph_obj`, 2 × `glyph_raster`. Likewise |
+| `tagpu_hires.c` | 30 / 33 | 30 / **31** | 2 × `gl_probe` |
+| **TOTAL** | 252 / **366** | 252 / **323** | |
+
+**THE NARROW COLUMN — the one the exit condition is stated on — IS UNAFFECTED**, at 252 over the
+same four files, because it always required the capital. Nothing about gate 11-5's exit moves.
+
+**THE CLAIM THIS FALSIFIES IS THIS GATE'S OWN.** The plan and the roadmap both said
+`tagpu_gaf.c` "is not GL-free: 0 narrow, **12 wide**", and that those 12 "go with the RGB mirror
+in 11-5e-2b". Eleven of them are the logger and were never GL. **One** goes with the mirror, and
+`tagpu_gaf.c` reaches 0 when it does. Corrected in both notes.
+
+**Every wide figure written in these notes before this landing is overstated by the same three
+tokens** — 43 across the tree. The narrow figures are all correct as written. Rather than restate
+six historical rows measured on the day with the old pattern, the correction is recorded once,
+here, and the forward-looking claims are fixed in place.
+
+**Why this is worth a landing of its own.** A tool committed so that a gate can be gated on is
+only worth that if its numbers are right; and this is the second time this gate has been bitten
+by a pattern rather than by the code. 11-5e-1 counted `glyph_raster` and `glreset` into a *689*
+that should have been 592 — the same family of false positive, caught then by comparing two
+patterns and fixed by narrowing one of them. The lesson the first time was "name the pattern".
+The lesson this time is **look at what the pattern matched**: `tools/gl-sites.py --list <file>`
+prints every site it counts, and one run of it against `tagpu_gaf.c` would have shown eleven
+`glog` calls at any point in the last three landings.

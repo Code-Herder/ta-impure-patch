@@ -2535,8 +2535,10 @@ that a count which grows is the plan catching up with the work.) The row was
          **protocol change**, not a feature removal and not a plain deletion, because 16 live
          sites read fields whose shape moves and there is no list to put in their place. Until
          it goes, so do `tagpu_gaf.c`'s 40 `mirrorRgb*` sites, `tagpu_gaf.h`'s 10, and
-         **`tagpu_gaf.c`'s 12 wide GL sites** — the only part of 11-5e-2b that moves this
-         gate's own count.
+         **`tagpu_gaf.c`'s ONE remaining GL site** — `xwglGetProcAddress` inside `getgl`, the
+         only part of 11-5e-2b that moves this gate's own count. This row said "12 wide GL
+         sites" until the tool's wide pattern was corrected: eleven of them were `glog`, the
+         file's own logger ([gpu-status](gpu-status.html) §2.77).
 
          **MEASURED over nine runs** (`e5a`, `one-unit`, 1024×768, `restorevk.on`): five of
          `main`'s `ddraw.dll` and four of this branch's, at `--maxfps 0` and `--maxfps 30`.
@@ -2548,7 +2550,8 @@ that a count which grows is the plan catching up with the work.) The row was
          lines identical as a multiset in all nine. **A batched control cannot separate the
          build from drift**: the first six runs were three-and-three and read exactly like a
          build difference; it took a fifth run of `main` to see the flip. GL surface unchanged
-         at 252/366; the DLL is 7 680 bytes smaller.
+         at 252/323 (it read 252/366 until the tool's wide pattern was corrected — see
+         [gpu-status](gpu-status.html) §2.77); the DLL is 7 680 bytes smaller.
        - **11-5e-3 — the include residue. LANDED 2026-09-19**, and it is
          **`tagpu_fps.c`, `tagpu_scaffold.c` and `tagpu_render3do.c`** — not the three this
          row named. Files including `opengl_utils.h` go **nine → six**; the GL *call* surface
@@ -2602,7 +2605,7 @@ that a count which grows is the plan catching up with the work.) The row was
      `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c`, `tagpu_scaffold.c`, `tagpu_posedraw.c`,
      `tagpu_overlay.c`, `tagpu_text.c`, `tagpu_ftime.c` and — since 11-5e-2 — `tagpu_gaf.c`
      make no GL call. **That is not the same as GL-free, and `tagpu_gaf.c` is the file where
-     the difference matters**: its narrow count is 0 and its WIDE count is 12 — it still
+     the difference matters**: its narrow count is 0 and its WIDE count is 1 — it still
      includes `tagpu_restoreglsl.h`, still resolves `glReadPixels` through `wglGetProcAddress`,
      and still names entry points in a refusal message. Those go with the RGB mirror — and
      11-5e-2b part 1 did **not** move them, because the mirror's last consumer is the GUI
