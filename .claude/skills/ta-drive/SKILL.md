@@ -914,6 +914,23 @@ cannot be swapped between runs.
   <inst> gui.on=1`** — and `twins=`, `sprites=` and `col=n/m` in the counter dump are how you
   confirm the ops actually flowed.
 
+- **`crowd-static` IS STATIC AS A SITUATION, NOT AS PIXELS** (2026-09-19). Its description —
+  "the large scene that stays identical between runs, so a paired A/B is valid at scale" — is
+  true of the *situation it applies* and not of the frame: its 256 units run their idle COB
+  scripts, and three grabs 4 s apart differ by **~12 000 px** on every build. It fails gate 1
+  outright and **cannot carry a pixel A/B**.
+
+  What it is excellent for is a **log oracle at scale**, and that is what to use it for: 16 unit
+  types means textures reach the atlas long after any arm, which is exactly what a feed, an
+  append or a repack needs in order to be visible at all. On 11-5e-2c it was decisive —
+  `restored twin painted here - 25 frames` on one build against **158** on the other, identical
+  across two independent runs each, where the `one-unit` fixture had shown both builds painting
+  the same 25 and therefore proved nothing about the feed.
+
+  **So pick the fixture per oracle, not per landing.** `one-unit` passes gate 1 and carries the
+  pixels; `crowd-static` carries the counters. Wanting one fixture to do both is how a landing
+  ends up with a measurement that does not touch the code it is named for.
+
 - **`one-unit` IS A LIVE SKIRMISH, AND ONLY THE PLACED UNIT IS STILL** (2026-09-19). The
   scenario's name says one unit; the roster says 15 to 17, across three AI opponents, with
   commanders walking, `corsolar`/`corwin` going up and `nano=` non-zero. A pixel A/B on it

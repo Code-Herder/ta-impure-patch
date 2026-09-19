@@ -13600,52 +13600,102 @@ palette-indexed path. So the restored twin was **built, painted, mipped and boun
 the view existing, not of the flag — and then **never read**. Every session since
 11-5e-2 has paid for a restore whose output no shader sampled.
 
-#### THE MEASUREMENT
+#### WHAT THE REVIEW CHANGED, BECAUSE IT IS THE LARGER HALF OF THIS LANDING
 
-Interleaved A/B, `mainA, brA, mainB, brB`, both DLLs **clean-built** (the incremental
-staleness this landing's predecessor was caught by), 75 s settle, three grabs 4 s apart
-per run. Control: `515714c` — local `main`'s tip, the previous landing.
+Two independent reviewers found the same defect and one filed it HIGH: **unpinning `restored`
+made a stand-down reachable that had been dead code, and it does not stand down for a frame, it
+stands down for the session.** `atlas_rgb_build`'s own header had already written the contract
+the unpin broke —
 
-**Gate 1 — settled.** Grabs 2 and 3 are **0 px** apart in every one of the four runs.
-Grab 1 differs from them by exactly **1 px, at (512, 384)**, on both builds — the cursor
-oscillator §2.78 names, arriving exactly where §2.78 said it would. Grab 2 is the
-settled frame throughout.
+> *"A FAILURE HERE IS NOT FATAL AND MUST NOT BE. The view stays NULL, binding 43 falls back to
+> the indexed view exactly as it did before gate 3 … so a device that will not give us 16 MB of
+> RGBA8 loses restored frames rather than the pass."*
 
-**Gate 3/4 — the control, interleaved.** `mainA` vs `mainB`: **0 px**. `brA` vs `brB`:
-**0 px**. Two independent runs of each build, separated by a run of the other, agree to
-the pixel over the whole 1024×768 frame.
+— and that guarantee rested entirely on the flag being 0.
 
-**The result.** All **four** cross-build pairings — `mainA×brA`, `mainB×brB`, and both
-diagonals — give **258 px of 786 432**, in the identical bounding box **(502, 355) to
-(516, 388)**. That box is the scenario's one placed unit, whose roster line reads
-`world=(1600,1600,91) screen=(512,384)` in all four runs. Mean channel delta 11.5, max
-188: the same unit, slightly smoother, sampled from the restored twin instead of the
-palette path.
+| case | mechanism | effect |
+|---|---|---|
+| **failure** | `s_rjTried` latches at five sites in `restore_want`, cleared only by teardown; `:1292` then forces `s_arHave = 0` | one Vulkan resource refusal ⇒ **no unit drawn at all for the session** |
+| **routine** | `rlistRepaint` has one assignment and **both** call sites pass 0, so `if (!repaint) s_arHave = 0;` fires on every generation change | every level boundary, atlas recycle and map change blanks **all** units, features and effects for the length of a repaint |
 
-**What the log oracle says.** Both builds: one restore, `25 of 25 frames over
-2048×2048, generation 1`, two mip levels reduced, twin painted, **zero**
-`VK_ERROR`/`DEVICE_LOST`/`VUID`/validation lines, and the bound never restarted. The
-restore histories are equivalent line for line. One line is branch-only, latched once:
-`unit: the other lane is drawing through the Classic++ restored atlas and this lane has
-no restore of its own yet`. That notice can only fire when `restored` is true, so on
-`main` it is unreachable — which is the same fact the pixels show, stated by the code
-about itself.
+The routine case is the worse one because nothing has to fail for it.
 
-#### A FIXTURE CORRECTION THAT COST THIS MEASUREMENT A ROUND
+**The fix is this landing's own argument carried through, not a new one.** The stand-down existed
+to avoid showing *"a different picture from its own oracle"* — art filtered unlike the other
+lane's. There is no other lane, and `tagpu_gaf.h` says so in this same landing. Indexed art is
+not a disagreement with anybody; it is Classic++ restore off for one frame, and binding 43
+already falls back to `s_atView`/`s_samp` for precisely that. So a missing twin now clears
+`h.restored` — `uRestored` goes 0 and the shader takes the palette path — in all three passes
+and in the aniso gate, whose penalty was likewise the whole pass for an edited cfg file. **A
+bound on what the flag may promise, not a timing mitigation.**
 
-**`one-unit` is not a static scene.** It loads into a live skirmish with three AI
-opponents: 15 to 17 units alive, commanders walking, `corsolar` and `corwin` under
-construction, `nano=` non-zero. Only the *placed* unit is still. A further 44 px
-differed inside the top-left panel, and they are **our own commander's minimap blip**,
-at `world=(9283,5088)` in the `main` runs and `world=(3552,1008)` in the branch runs.
+Three more the reviews caught, each verified against the source before it was acted on:
+`tagpu_posedraw.c` asked `tagpu_classicpp_on()` where feat, fx and terr ask
+`tagpu_classicpp_assets()`, so turning assets off mid-session left units on the twin while
+everything else reverted — mixed art, silently, until restart; the hand-over now clears
+`restored` alongside the list it promises, making "flag set, list absent" unrepresentable rather
+than merely unreached; and `tagpu_gui_surf.c:633`, the **one** caller of
+`tagpu_gaf_atlas_free_buffers`, still said that call does not free `rlist`.
 
-Those 44 px are excluded **by construction, not by statistics**: a renderer cannot move
-a unit, so a blip at two different map positions is sim state at grab time. The
-statistical route was not available and it is worth saying why — two runs per build
-cannot separate "the build did it" from "a wandering commander happened to split along
-the build", and the control's 0 px says only that each build's two runs agreed, which a
-commander with two resting places would also produce.
+#### THE MEASUREMENT — TWO FIXTURES, BECAUSE NEITHER CAN DO BOTH HALVES
 
-**The rule this adds** (carried into the `ta-drive` skill): a pixel A/B on this fixture
-compares the placed unit's box, or masks the minimap panel. The four gates bound drift
-between and within runs; none of them bounds a second player.
+**The first attempt proved nothing about the feed, and the review is what established that.**
+Both builds showed identical restore histories — `25 of 25 frames`, one generation, the bound
+never restarted. Equivalent histories mean **no frame was ever appended**, so the pixel
+difference was attributable to the `restored` unpin alone and the bound, the ordering and the
+append — the landing's title — had no positive evidence at all. `one-unit` places one unit; its
+textures are all in the atlas before the arm, so the append has nothing to do.
+
+**Fixture A — `crowd-static`, for the counters.** 256 units of **16 types**, one owner, no
+orders. The types atlas their textures long after the arm, which is what makes a feed visible.
+Clean-built DLLs, interleaved, two runs each:
+
+| run | arm seeds | restore starts | **twin painted** |
+|---|---|---|---|
+| `main` A | 25 | 25 of 25, generation 1 | **25 frames** |
+| branch A | 25 | 25 of 25, generation 1 | **158 frames** |
+| `main` B | 25 | 25 of 25, generation 1 | **25 frames** |
+| branch B | 25 | 25 of 25, generation 1 | **158 frames** |
+
+`main` paints exactly what the arm seeded and never another frame, because on `main` there is no
+append at all — `restore_frame_of`'s only caller is `rlist_restart`'s sweep of `a->ents`. The
+branch appends **133 more**, identically in two independent runs. Zero VK errors, zero bound
+restarts, on both. **That is the feed, measured.**
+
+**Fixture B — `one-unit`, for the pixels**, because `crowd-static` fails gate 1 outright: its
+units run their idle COB scripts and three grabs 4 s apart differ by ~12 000 px on every build.
+
+| | total | minimap | unit box | elsewhere |
+|---|---|---|---|---|
+| gate 1, settled pair, worst of four runs | 1 | 0 | 1 (the cursor) | 0 |
+| **control** — `main` A vs `main` B | 49 | **48** | 1 | **0** |
+| **control** — branch A vs branch B | 0 | 0 | 0 | 0 |
+| cross-build, **all four** pairings | 302–303 | 44 | **258–259** | **0** |
+
+**258 px of 786 432, in the box of the one placed unit** (`world=(1600,1600,91)
+screen=(512,384)`), identical across all four cross-build pairings, and **0 px everywhere
+outside the minimap and that box**. The figure is unchanged by the H1 fix, which is the expected
+result: the fix only alters what happens when the twin is *absent*, and at steady state both
+builds have one.
+
+#### THE FIXTURE LESSON, WHICH COST THIS LANDING TWO ROUNDS
+
+**`one-unit` is a live skirmish.** It loads with three AI opponents — 15 to 17 units alive,
+commanders walking, `corsolar` and `corwin` under construction. Only the *placed* unit is still.
+The 44 px inside the minimap are our own commander's blip, and the control now shows 48 px of
+the same drift **between two runs of `main` itself**, so excluding that region is supported by
+measurement and not only by the construction argument (a renderer cannot move a unit).
+
+The first write-up had to exclude it by construction alone, because two runs per build cannot
+separate "the build did it" from "a wandering commander split along the build" — and a 0 px
+control does not help, since a commander with two resting places produces exactly that. **This
+run's control is the honest version of that claim.**
+
+**`crowd-static` is static as a situation, not as pixels**, and its own description says the
+first thing without the second. It is the right fixture for a counter at scale and the wrong one
+for a frame.
+
+**So pick the fixture per oracle, not per landing.** Wanting one fixture to do both halves is how
+the first attempt ended up with a measurement that never touched the code the landing is named
+for. The four gates bound drift between and within runs; none of them bounds a second player, and
+none of them notices that the thing under test was never exercised.

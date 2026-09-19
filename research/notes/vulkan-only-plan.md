@@ -2502,10 +2502,20 @@ that a count which grows is the plan catching up with the work.) The row was
          happens and the fragment takes the palette path — so every session since 11-5e-2 built,
          painted, mipped and **bound** a restored twin that no shader read. Measured: an
          interleaved four-run A/B against `515714c` moves **258 px of 786 432**, in the identical
-         box `(502,355)-(516,388)` in all four cross-build pairings, with a **0 px** same-build
-         control on both builds. That box is the scenario's one placed unit. Full method,
-         including a fixture correction that cost the measurement a round,
-         [gpu-status](gpu-status.html) §2.79.
+         box of the one placed unit in all four cross-build pairings, and 0 px outside that box
+         and the minimap panel. The FEED is measured separately, on `crowd-static` — 16 unit
+         types atlas their textures after the arm, and `main` paints the **25** frames the arm
+         seeded while the branch paints **158**, twice each. Two fixtures because neither does
+         both halves: `crowd-static` fails the static-frame gate by ~12 000 px, and `one-unit`
+         has nothing to append.
+
+         **AND THE REVIEW FOUND THE LARGER HALF.** Unpinning `restored` made a stand-down
+         reachable that blanks the whole pass for a SESSION — five one-way `s_rjTried` latches,
+         plus `rlistRepaint` being a constant 0 so every generation change blanks it routinely —
+         against a contract `atlas_rgb_build` had already written down: a restored-twin failure
+         loses restored frames, never the pass. A missing twin now clears the flag and draws the
+         indexed atlas, which is this row's own "no second backend" argument carried through.
+         Full method and findings, [gpu-status](gpu-status.html) §2.79.
 
          Deferred to **11-5e-2b**: the RGB read-back, the `mirrorRgb*` fields and the
          `atlasRgb*` publications — plus `tagpu_posedraw.c`'s `restored` flag, which `a->rgb`

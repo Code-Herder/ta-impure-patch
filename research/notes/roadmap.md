@@ -3331,7 +3331,14 @@ consumer run on the render thread inside one loop iteration, so a fence would ha
 while reading as though it had. `restored` reaches the fragment shader as `uRestored`, so its pin
 meant the restored unit twin was built, painted and bound and **never sampled**: unpinning it
 moves **258 px of 786 432** on the one static unit, identical across all four cross-build
-pairings against a **0 px** same-build control. `rgbAniso` reversed 11-5e-2's review
+pairings and 0 px outside that box and the minimap. The feed itself is measured on
+`crowd-static`, 16 unit types atlasing after the arm — `main` paints the **25** frames the arm
+seeded and never another, the branch paints **158**, twice each. The review's HIGH finding is
+the larger half of the landing: unpinning `restored` made a session-long total stand-down
+reachable (five one-way `s_rjTried` latches, and `rlistRepaint` a constant 0 so every generation
+change blanked the pass), against a contract `atlas_rgb_build` had already written down — a
+restored-twin failure loses restored frames, never the pass. A missing twin now clears the flag
+and draws indexed. `rgbAniso` reversed 11-5e-2's review
 prescription — `s_twinAniso` is the knob *clamped by the device* and is `0.0f` where anisotropy
 is absent, so the constant that review asked for would have drawn no units at all there;
 `11-5e-3` the include residue (**landed 2026-09-19**: `tagpu_fps.c`, `tagpu_scaffold.c` and
