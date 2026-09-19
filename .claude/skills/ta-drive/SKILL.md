@@ -72,6 +72,41 @@ for a monitor. An explicit `TACLI_DISPLAY` still wins, so an agent that genuinel
 wants a virtual display can ask for one. Read back the `display` field with
 `tacli ls --json` before telling the human it is ready.
 
+**THE DISPLAY IS PINNED AT CREATE AND `--display` DOES NOT MOVE IT** (measured
+2026-09-19, after it cost three runs and an afternoon). `Instance.env()` sets
+`DISPLAY` from `meta.get("display")`, and **nothing writes `--display` into the meta
+at launch** — `tacli scenario load --display :0` passes the flag to `_launch`, which
+then builds its environment from `env()` and ignores it. `--display` is honoured
+**only by `tacli create`**. So an instance whose recorded display has since died —
+and they do die, because they are frequently an Xvfb a parallel session left behind
+— is bricked, and the failure does not look like one:
+
+> the game launches, **our DLL loads and writes its ~18 hook and patch log lines**
+> (none of which need X), and then it stops at window creation showing TA's modal
+> **"Error: Environment Initialization Failed! Check your DirectX setup"**. There is
+> **no `ErrorLog.txt`**, the process neither renders nor exits, and `tacli` reports
+> only *"exited during launch before showing a window"*.
+
+**It reproduces with any DLL, including `main`'s — that is the tell that the build
+under test is innocent.** When a launch dies this way, check
+`tagpu/instances/<i>/instance.json`'s `display` against a live server FIRST
+(`xdpyinfo -display <d>`), before suspecting the renderer, the GPU, the prefix or
+the registry. The way through is a NEW instance — `tacli create <n> --display <live>`
+— not an edit of the stored display: `instance.json` is shared state another session
+may own.
+
+**And do not try to reproduce a launch by hand without the DLL override.** A bare
+`wine TotalA.exe` loads wine's *builtin* ddraw, never ours, and fails with the same
+dialog — so it proves nothing. `tacli` sets `WINEDLLOVERRIDES=ddraw=n,b`; any manual
+repro must too.
+
+**A related trap, real but separate**: every instance prefix shares ONE `user.reg`
+inode (300 hardlinks, the template `wineprefix/` included — `stat` them). The
+`cp -al` clone is never broken because the temp+rename assumption in
+`tacli-design.md` does not hold for this write path, so the prefixes are isolated in
+everything *except* the registry and one instance's settings write lands in all of
+them. Never "fix" a launch by writing registry values.
+
 **The tile.** Instances are laid out in a grid so parallel windows do not stack.
 `tile_for()` wraps within the screen and pulls the last row and column back inside
 it — before 2026-09-02 it did neither, so the twelfth instance drew slot 10 and its

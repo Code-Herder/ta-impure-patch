@@ -3272,7 +3272,9 @@ before it landed**: the published list's pointer is captured raw on the frame's 
 window, and the build ghost paints into the same atlas afterwards, so the `realloc` can move it
 under the render thread — so the feed stays shut, which is exactly today's behaviour, and
 `restore_enqueue` and `rlist_add` go with it, leaving `a->rlist` assigned once and never moved
-by construction. The RGB read-back, its 111 `atlasRgb*` sites across five Vulkan passes and the
+by construction. Re-measured on three runs after that fix: within a run 0 px over nine pairs,
+the same-build cross-run noise floor 44 px, and `main` vs this build **44 px with zero outside
+the minimap** — the noise floor to the pixel, with the restore log lines byte-identical. The RGB read-back, its 111 `atlasRgb*` sites across five Vulkan passes and the
 terrain, and all three producers of the `restored` flag are deferred to `11-5e-2b`);
 **`11-5e-2c` restore the feed safely** — a bound (`rlist_cap` allocated once, `rlist_room` a
 pure bounds test), an ordering (take the unit list at the handover, not at `pd_begin`), and the

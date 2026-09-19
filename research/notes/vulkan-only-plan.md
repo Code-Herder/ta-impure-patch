@@ -2406,9 +2406,14 @@ that a count which grows is the plan catching up with the work.) The row was
          sites, the surface **540 → 252** and the GL-bearing files **six → four**. 45 functions
          gone (47 with the two the review's fix removed), inventory diffed per TU, every
          deleted non-static absent from every object.
-         Measured: within a run 0 px over six pairs, the same build across two RUNS 48 px, and
-         cross-build **45 px of 786 432 — 44 in the minimap and one at the mouse pointer**,
-         i.e. BELOW the same-build run-to-run noise floor.
+         Measured (re-run after the review's fix, three full runs on a fresh instance):
+         within a run **0 px** over nine pairs; the same build across two RUNS **44 px**, all
+         in the minimap — that is the noise floor; and `main` vs this build **44 px of
+         786 432, with ZERO outside the minimap rect**. The cross-build figure IS the noise
+         floor, to the pixel. The direct evidence is the log rather than the pixels, the claim
+         being behaviour-preservation: `fx`/`feat` `0 entries seeded`, `unit` `25 entries
+         seeded`, `vk: unit: restoring the twin HERE - 25 of 25 frames` — byte-identical
+         between the two DLLs.
 
          **The root predicate was `a->tex`, and landing 11-4c set it to 0 on purpose hours
          earlier.** `tagpu_rglsl_job_new`'s one call site sits below `!a->tex` in

@@ -12807,33 +12807,51 @@ zero SPIR-V payload words changed**, verified by diff. The SPIR-V gate is untouc
 `tagpu_restore_glsl.h` also feeds `tools/tascene`'s browser pack and is **not** part of the GL
 lane's fate.
 
-**Verified by running it.** `one-unit`, Two Continents, 1024x768, `renderer=vulkan` confirmed in
-the ini after the run, both builds settled to `vk: census: 6 pass(es) drew` (terr, feat, unit,
-fx, mark, gui):
+**Verified by running it — RE-MEASURED after the review's fix.** Instance `e5a`, `one-unit`,
+Two Continents, 1024x768, `renderer=vulkan`, a private display, three full runs, each settled to
+a steady `vk: census: … 2 pass(es) drew (terr=1 unit=1)`:
 
 | comparison | differing pixels of 786 432 |
 |---|---|
-| within one run, three grabs, both builds (six pairs) | **0** — the scene is STATIC |
-| **the same build, two separate RUNS** | **48**, every one inside the minimap |
-| previous build vs this build | **45** — 44 inside the minimap, 1 outside |
+| within one run, three grabs, all three runs (nine pairs) | **0** — the scene is STATIC |
+| **the same build, two separate RUNS** — the noise floor | **44**, every one inside the minimap |
+| **`main`'s build vs this build** | **44** — and **0 outside the minimap rect** |
 
-The one pixel outside is at **(512, 384)**, the exact centre of the frame, with all eight
-neighbours identical: the mouse pointer. The 44 inside are two 5x5 blobs.
+**THE CROSS-BUILD FIGURE IS THE NOISE FLOOR, TO THE PIXEL**, and not one pixel outside the
+minimap differs. The minimap is where both figures live: its blobs are greyscale in one run and
+player-coloured in another, at different positions, so it varies run to run on its own. This is
+the method finding the gate keeps re-learning — three grabs inside one run prove the scene is
+static and bound NOTHING about run-to-run variation; that is a different question needing a
+different control. 11-5e-1 reported "44 px, 0 outside" without that control and so had no bound
+on its own noise.
 
-**AND THE SAME-BUILD CROSS-RUN CONTROL IS WHAT MAKES THE 44 READABLE**, which is this landing's
-method finding. Two runs of the *same* build differ by 48 px — all in the minimap, in blobs of
-the same character (greyscale in one run, player-coloured in the other) at *different* map
-positions. So the minimap's blob colouring varies run to run on its own, the cross-build figure
-of 45 is **below the same-build noise floor of 48**, and reading the 44 as a change this landing
-caused would have been wrong. Three grabs inside one run prove the scene is static; they bound
-nothing about run-to-run variation, and that is a different question with a different control.
-11-5e-1 reported "44 px, 0 outside" without this control and so had no bound on its own noise —
-its attribution (differing AI unit counts) is consistent with what is seen here, but it was not
-measured.
+**AND THE LOG IS THE DIRECT EVIDENCE, not the pixels.** The claim is now *behaviour-preserving*,
+so the lines that could have changed are the reading that matters — and they are byte-identical
+between `main`'s `ddraw.dll` and this one:
 
-**The behaviour this landing actually changes is in the log, not in the pixels**, and the A/B
-fixture is blind to it by construction: it does not arm `tagpu_restorevk.on`. The probe runs
-above are the measurement for that half.
+```
+fx:   restorevk -- ... (0 entries seeded, 8192-frame bound)
+feat: restorevk -- ... (0 entries seeded, 16384-frame bound)
+unit: restorevk -- ... (25 entries seeded, 8192-frame bound)
+vk: unit: restoring the twin HERE - 25 of 25 frames over 2048x2048, generation 1
+```
+
+That is what "the feed stays shut" means at run time: the published list is seeded once and never
+fed, exactly as before the landing. The pixel A/B is blind to this half by construction — the
+earlier probe runs are its measurement — which is *a pixel diff cannot cover a lever the fixture
+does not arm*, stated once more.
+
+**THE FIXTURE ITSELF COST MORE THAN THE MEASUREMENT, and the cause is worth writing down.** Three
+runs failed before these three, all identically: the game loaded our DLL, wrote its ~18 hook and
+patch log lines, and then stopped at window creation on TA's modal *"Error: Environment
+Initialization Failed! Check your DirectX setup"* with no `ErrorLog.txt`. **It reproduced with
+`main`'s DLL, which is the tell that it is not the build under test.** The cause is
+`tools/tacli`: `--display` is honoured only by `tacli create`, because `_launch` builds its
+environment from `Instance.env()`, which reads `meta["display"]` — and nothing persists the flag
+into the meta. The instances were pinned to a display left behind by a parallel session, which
+had since died, so every launch was aiming at a dead X server. A new instance created with
+`tacli create --display <live>` is the way through; editing the stored display is not, because
+`instance.json` is shared state another session may own.
 
 #### Gaps this landing did not close
 
