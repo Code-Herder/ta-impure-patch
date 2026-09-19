@@ -91,3 +91,27 @@ one-open bound is why it does not need to be. No third review round was
 run: what changed after round 2 is one moved assignment in the DLL, a
 three-line reorder in tools/tacli verified by running it, two buffer
 guards, comments and prose.
+
+--------------------------------------------------------------------
+RETRACTION, added 2026-09-18 while landing 11-1.
+
+The section above headed "WHAT RE-MEASURING DISPROVED, AFTER ROUND 2"
+is itself wrong, and nothing in this landing's code depends on it.
+
+Run B was NOT on gdi. `tacli scenario load` calls write_ddraw_ini
+whenever the scenario carries a setup.res -- fx-lasers carries
+1024x768 -- and that function writes `renderer=openglcore`
+unconditionally, so the instance's hand-set `renderer=gdi` did not
+survive the load. The 192/376 figures are an OpenGL lane, where a
+consumer takes every packet, fills run at ~16 ms, and `mouse:` and
+`units:` therefore run at their own 250 ms and 500 ms gates -- the 2:1
+that was read as evidence about gdi is the documented behaviour of a
+lane with a consumer.
+
+So the claim that "the force is a floor on the fill rate, not a
+ceiling" is withdrawn. The original statement stands: where nothing
+consumes, the only fills are the forced ones, one per ROSTER_HDR_MS,
+and run A's gdi 92/92 is the measurement. The notes are corrected and
+the harness trap is now written up in the ta-drive skill, which is
+where it will be looked for: a measurement is not of the lane you set,
+it is of the lane the process actually ran.
