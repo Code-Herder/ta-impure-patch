@@ -1,0 +1,38 @@
+landing-review: model=claude-opus-5 effort=high range=22e6e4e..315e4967b3da1db986a7a92956f41ac97551e945 findings=4 acted=4 rejected=0 date=2026-09-18 rounds=1
+
+One reviewer at high on the six files landing 11-3 completed. NO CODE
+REGRESSION survived verification: every deletion was already dead on the
+surviving lane, and ghost_record is correct as written (s_pv filled on every
+path reaching it, pk null/in_game checked, the model id bounded by
+pk->udef_count and re-checked by model_root, the second publish window correct
+because pd_view_publish resets the arenas only on the first).
+
+CONFIRMED, and the reason this review paid for itself: the diff's central claim
+about the selection rect was FALSE in six places -- three code comments,
+gpu-status twice, ui-markers and the ta-drive skill all said this lane 'draws
+the rect as geometry unconditionally' and quoted 1320 px at ss=2 as the cost of
+the move. The rect was emitted only inside the deleted GL block; no tagpu_vk_*
+file has selection-rect code; s_selComplete's only store was in that block, so
+tagpu_markown.c's suppression never fires and the ENGINE draws every box, at
+its unzoomed projection. Behaviour unchanged (the store was unreachable since
+4b) -- a documentation defect, and corrected in all six, plus tagpu_vk_world.h
+which carried the same assumption outside the reviewed diff.
+
+MEASURED while fixing it, which sharpened the finding: the scatter needs
+zoom != 1, and zoom != 1 is unreachable here -- tacli wheel delivers the
+command and tagpu_zoom.c answers 'wheel ignored - no zoomed world on screen',
+the packet's z= staying 1.000. The deviation is LATENT, not absent.
+
+PLAUSIBLE, both acted on: s_devresFailed lost its only writer with fbo_size and
+was a constant-false safety latch (deleted, with the Vulkan-side refusal named);
+and s_pub.ab = s_nghost ? 0 : s_abClaim would have eaten an A/B capture per
+session now the ghost records here -- the suppression protected the GL-vs-Vulkan
+same-run pair whose GL half went in 4d-2, so the term went and s_nghost with it.
+
+Cosmetic: a stale cross-reference and a ternary with one reachable arm.
+
+Verified by running the committed build: census 6 pass(es) drew
+(terr=1 feat=1 unit=1 fx=1 mark=1 gui=1) at ss=2, ghost drawn=177 with the
+placement cursor live. NOT measured: the ghost's queued-site half (queue=0 in
+every run). NOT IN THIS LANDING: tagpu_shadow.c and tagpu_hires_draw.c, held as
+escalation reason 1.
