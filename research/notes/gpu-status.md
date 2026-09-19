@@ -2197,9 +2197,13 @@ fontcopies=<copies>/<refused> levelend=reclaim|own|none`.
 working; `overrun`/`gap` are 0 in play **on a lane whose renderer takes packets**, and count
 under `stress`, across a level end, **or from the roster keepalive** — the vulkan-only plan's
 landing 10c-3 forces a fill when none has happened for 500 ms, so on `renderer=gdi`, where
-nothing calls `tagpu_packet_acquire` at all, every one of those (~2/s) lands on a FRESH cell and
-counts as an overrun, with `gap` climbing beside it; the same happens intermittently on a GL or
-Vulkan lane rendering below ~2 fps. **Before that landing this line read "`overrun`/`gap` are 0
+nothing calls `tagpu_packet_acquire` at all, every one of those (≥ ~2/s — the force sets a
+floor on the fill rate, not a ceiling) lands on a FRESH cell and counts as an overrun. **`gap` does NOT move with it on that lane** — `gap` is incremented only
+inside `tagpu_packet_acquire`, so where nothing acquires, `acq`, `taken` and `gap` all stay 0 and
+only `overrun` climbs. `gap` moves with `overrun` on the other case: a GL or Vulkan lane rendering
+below ~2 fps, where the consumer does acquire and does miss sequences (the vulkan-only plan's
+10c-3 row reads `overrun=2 gap=2`). Reading `overrun > 0, gap = 0` as "not the keepalive" is
+therefore wrong, and this sentence said so until the landing review caught it. **Before that landing this line read "`overrun`/`gap` are 0
 in play" full stop**, and on gdi it would now send you chasing a phantom. Note also that this
 whole heartbeat is emitted from `tagpu_packet_frame_end`, whose only callers are
 `render_ogl.c` and `render_vk.c` — so **on gdi the line is never printed and these counters

@@ -1793,11 +1793,22 @@ def cmd_roster(args):
                           "height": int(m.group(7)),
                           "screen": [int(m.group(8)), int(m.group(9))]})
         elif line.startswith("units:"):
+            # TAKE THE HEADER ON THE BLOCK'S OWN SIDE, NOT THE ONE PAST IT
+            # [landing review, 10c-3 r2]. roster_log() emits the dump lines
+            # first and its `units:` header second, so the header belonging to
+            # a block sits immediately AFTER it in the file and is the last one
+            # this reverse scan sees BEFORE the block. Headers run at
+            # ROSTER_HDR_MS (500 ms) and dumps at ROSTER_DUMP_MS (5 s), so ten
+            # headers separate two blocks; overwriting unconditionally walked
+            # back through all of them, kept the right one for exactly one
+            # iteration, and then replaced it with the header from the PREVIOUS
+            # roster_log call -- 500 ms older than the screen= values it labels,
+            # and computed from a different eye than the projection they carry.
+            if units:
+                break
             e = re.search(r"eye=?\(?(-?\d+)[, ]+(-?\d+)", line)
             if e:
                 eye = [int(e.group(1)), int(e.group(2))]
-            if units:
-                break
     units.reverse()
     out({"name": args.name, "eye": eye, "units": units}, args.json,
         human="\n".join(f"u{u['id']:<4} {u['type']:<10} own={u['owner']} "

@@ -1915,9 +1915,20 @@ key/click injection run from the engine's flip; the live-state log — `units:`,
 `mouse:`, which with `peek:` are the whole of what `tacli` greps out of `tagpu.log` — is written
 by `tagpu_packet_pub.c` beside the frame packet. What still does NOT reach gdi: `tacli eye` and
 `tacli wheel`, which both need the overlay frame that only the GL and Vulkan backends run;
-`tacli glshot`, which captures a GL framebuffer and cannot mean anything there; and `tacli gui`,
-which writes a lever with no effect on that lane. `tacli shot` — the engine's own surface — does
-work. Note too that the `packet:` heartbeat is emitted from the render thread, so the exchange's
+`tacli gui`, which writes a lever with no effect on that lane; and **both capture verbs**.
+
+**`tacli shot` AND `tacli glshot` REACH THE OPENGL LANE ONLY — measured on both gdi and
+Vulkan, and this paragraph claimed otherwise for one commit.** It is not about which surface
+each one reads; it is about who polls the trigger. `tagpu_shot.trigger` is consumed at exactly
+one site, in `render_ogl.c`, and `tagpu_glshot.trigger` in that file and in `tagpu_scaffold.c`,
+itself a GL pass. Neither `render_gdi.c` nor `render_vk.c` polls either file, so on those lanes
+the trigger is written and never read, and the verb times out with *"no surface screenshot
+appeared"* — for `shot` exactly as for `glshot`. Pictures of the gdi or Vulkan lane come from
+the live display (see the capture skill), not from these verbs. Rewiring them is on landing 11,
+which deletes `render_ogl.c`: whatever polls the two triggers afterwards has to be code every
+lane reaches.
+
+Note too that the `packet:` heartbeat is emitted from the render thread, so the exchange's
 counters are not printed on gdi at all.
 
 **`gui.on` DOES NOT GATE `tacli` ITSELF, and for one commit in the vulkan-only plan's landing 10c

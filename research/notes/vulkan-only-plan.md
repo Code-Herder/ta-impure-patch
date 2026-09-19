@@ -1929,15 +1929,20 @@ call sites, `render_vk.c` and `render_ogl.c` — **so on `renderer=gdi` nothing 
 unforced publish is skipped, and `fill_frame` runs about once per level.** A roster hung off
 `fill_frame`, or off the `tagpu_packet_pub_last()` accessor this plan once prescribed, would have
 produced nothing at all on the one lane it exists for, and produced it silently. So the publish is
-forced when no fill has happened for the shortest of the three cadences — self-limiting, because
-on a lane whose renderer takes packets the fills are ~16 ms apart and it never fires.
+forced when no fill has happened for **`ROSTER_HDR_MS`, the cadence of the slowest line that is
+actually read** — self-limiting, because on a lane whose renderer takes packets the fills are
+~16 ms apart and it never fires. (This sentence said *"the shortest of the three cadences"* until
+the landing review's second round: that was the first cut's rule, and the paragraph below explains
+why it changed, twenty lines after a reader would have hit the stale claim.)
 
-**Measured on both lanes, after a `scenario load` and ~45 s of play:**
+**Measured on both lanes, after a `scenario load` and ~45 s of play (run A), and again on gdi
+after the review's second round (run B, `fx-lasers`, ~90 s):**
 
-| lane | `units:` (500 ms) | `mouse:` | roster | exchange counters |
-|---|---|---|---|---|
-| gdi | 92 | 92 | 97 lines, and `tacli roster` answers | **not observable** — see below |
-| vulkan | 91 | 178 | answers | `overrun=2` `gap=2` of `pub=3582`, `taken=3579` |
+| run | lane | `units:` (500 ms) | `mouse:` | roster | exchange counters |
+|---|---|---|---|---|---|
+| A | gdi | 92 | 92 | 97 lines over ~9 blocks, `tacli roster` answers | **not observable** — see below |
+| A | vulkan | 91 | 178 | answers | `overrun=2` `gap=2` of `pub=3582`, `taken=3579` |
+| B | gdi | 192 | 376 | 58 lines over 13 blocks, `tacli roster` answers, 0 failed opens | **not observable** |
 
 The Vulkan row is the no-regression half: `overrun=2` is the two pre-existing forces (the
 level-end packet and the level's first in-play one), so **the keepalive never fired on a lane
@@ -1946,7 +1951,9 @@ with a consumer**, which is the property it is built on.
 **THE gdi COUNTERS CANNOT BE READ, and that is worth knowing before anyone goes looking.** The
 `packet:` heartbeat is emitted by `tagpu_packet_frame_end`, whose only callers are
 `render_ogl.c` and `render_vk.c`. On gdi it is never printed. The forced-fill rate there is
-therefore stated from the code — one per `ROSTER_HDR_MS`, ~2/s — and not from a counter.
+therefore stated from the code — at LEAST one per `ROSTER_HDR_MS`, ~2/s — and not from a
+counter, and "at least" is doing real work in that sentence: run B below measured a fill rate
+above the forced one and there is no counter on this lane to say by how much.
 
 **`mouse:` IS NOT A MACHINE-READ LINE, and an earlier draft of this section built its whole
 verification argument on it** [the landing review]. `tacli`'s structured readers are the peek
@@ -1954,9 +1961,37 @@ line, the roster line and `units:`; the only other reference to `mouse: screen=`
 sentence of prose in [input-firewall](input-firewall.html). So the ratio `mouse:` = 2 × `units:`
 was never "the check that matters" — and it was also **not true on both lanes**: the figures
 recorded were gdi 62/124 and vulkan 77/151, and 2 × 77 is 154. The force now asks the HEADER's
-cadence instead, which halves the forced-publish rate — the one new risk this landing carries —
-and costs only that `mouse:` runs at 500 ms rather than 250 ms on a lane with no consumer, which
-is why the gdi row above reads 92/92 and the vulkan row 91/178.
+cadence instead, which halves the forced-publish rate — the one new risk this landing carries.
+
+**AND THE gdi FILL CADENCE IS NOT PINNED BY THAT FORCE, WHICH THIS SECTION ASSERTED UNTIL RUN B
+DISPROVED IT.** The claim was that where nothing consumes, the only fills are the forced ones, so
+`mouse:` would drop to the header's 500 ms and read 1:1 against `units:` — and run A's 92/92
+agreed. Run B, the same build plus the review's second round, read **192/376**, a clean 2:1, with
+`mouse, mouse, units` repeating through the log: fills between 250 and 500 ms apart, which the
+force alone does not account for. **The force is a floor on the fill rate, not a ceiling.** The
+extra fills are unforced publishes the FRESH gate let through — `pkx_publish` skips only when the
+cell it is about to write is FRESH (`tagpu_packet.c:315`), and which cell that is depends on the
+XCHG rotation, not on whether anyone consumed. **How many get through is not derived here**, and
+the counters that would settle it are exactly the ones gdi does not print. What is measured is
+the range: 1:1 in run A, 2:1 in run B.
+
+**AND `tacli roster` WAS LABELLING THE BLOCK WITH THE WRONG HEADER** [the landing review, LOW].
+`roster_log` emits, in one call, the `mouse:` line, then the dump block, then its `units:`
+header — so a block's own header is the first `units:` line BELOW it in the file. `cmd_roster`
+scans the log backwards, and it overwrote `eye` on every header it passed and broke on the first
+one it met after collecting units: it held the right value for exactly one iteration and then
+replaced it with the header from the PREVIOUS call, 500 ms older than the `screen=` values it
+labels and taken from a different eye than the projection they carry. The reader now stops
+before that overwrite. Verified on a real gdi log by rewriting every header's eye to its own line
+number: the old reader returned line 1200, the new one line 1206, and 1206 is the block's own
+(1201..1202); the unit list is identical either way. This was not introduced by the move —
+`log_units` had the same shape on the render thread — but it is the reader for a line this
+landing rewrote, so it is fixed here rather than left.
+
+That is a cost question rather than a correctness one, because `mouse:` is the line nothing
+reads. `units:`, the roster block and `peek:` each hold their own clock inside `roster_log`, so
+they keep their cadences whatever the fill rate does — which is the property the force exists
+for, and the one both runs confirm.
 
 **GATED IN MILLISECONDS, NOT IN FRAMES.** The old throttles counted render frames at ~60/s
 (`% 300`, `>= 30`, `>= 15`). This runs from the in-play draw instead, and the draw rate is far
@@ -1972,7 +2007,9 @@ family first moved.
 **ONE BURST BOUND, ADDED BY THE REVIEW.** `plog` is one `fopen`/`fprintf`/`fclose` per line, and
 the roster dump emits one line per unit with `n_units` bounded only by `TAGPU_PK_MAX_UNITS`
 (16384). On the render thread a stall cost a dropped frame; on the game thread it costs sim time,
-and the fixture used here has eleven units, which does not exercise it. The dump now takes **one
+and the fixture used here carries ~11 units, which does not exercise it (97 dump
+lines across the run's nine blocks — they do not divide evenly because the alive count moves
+while the scenario's units arrive and die). The dump now takes **one
 open for the whole block**. The per-unit cost at a realistic unit count was never measured, and
 this bound is why it does not need to be.
 

@@ -1841,7 +1841,13 @@ static void roster_log(const TAGPU_PACKET* pk)
     FILE* dump;
 
     if (!s_rosFreq.QuadPart || !s_rosNow.QuadPart) return;
-    s_rosFill = s_rosNow;    /* a fill just happened: that is what the force asks about */
+    /* STAMPED BEFORE THE in_game GUARD, AND THAT ORDER IS LOAD-BEARING [landing
+       review, round 2]. It records that a FILL happened, which is the only
+       question roster_wants_fill asks. Move it below the guard and a persistent
+       !in_game fill would leave s_rosFill frozen, so the force would be due on
+       EVERY in-play draw -- a forced publish at the full draw rate, on the game
+       thread inside an engine call. That is the 10c-1 fault exactly. */
+    s_rosFill = s_rosNow;
     if (!pk || !pk->in_game) return;
 
     /* the eye the world was drawn with: the roster's screen= is the 1x
@@ -1859,7 +1865,8 @@ static void roster_log(const TAGPU_PACKET* pk)
         int mx = pk->mouse[0], my = pk->mouse[1];
         s_rosMouse = s_rosNow;
         if (mx >= -50 && mx <= 4000 && my >= -50 && my <= 4000) {
-            char b[96]; _snprintf(b, sizeof b, "mouse: screen=(%d,%d)", mx, my); plog(b);
+            char b[96]; _snprintf(b, sizeof b, "mouse: screen=(%d,%d)", mx, my);
+            b[sizeof b - 1] = 0; plog(b);
         }
     }
 
@@ -1867,7 +1874,6 @@ static void roster_log(const TAGPU_PACKET* pk)
     wantDump = ros_due(&s_rosDump, ROSTER_DUMP_MS);
     if (!wantHdr && !wantDump) return;   /* the walk is only for these two */
     if (wantHdr)  s_rosHdr  = s_rosNow;
-    if (wantDump) s_rosDump = s_rosNow;
 
     /* ONE OPEN FOR THE WHOLE DUMP, not one per unit [landing review]. plog()
        is fopen/fprintf/fclose, and this loop is bounded only by
@@ -1877,6 +1883,20 @@ static void roster_log(const TAGPU_PACKET* pk)
        it at 11 units, which does not exercise it. Closed before the `units:`
        line below so the two never hold the file at once. */
     dump = wantDump ? fopen("tagpu.log", "a") : NULL;
+    /* THE CLOCK IS STAMPED BY THE OPEN, NOT BY THE INTENT [landing review].
+       Stamping before the fopen meant a failed open dropped a whole block
+       silently and put the next attempt 5 s away, while the `units:` line
+       below still printed -- so `tacli roster` saw a header with no roster
+       lines and reported "no roster lines yet (needs a running game)" for a
+       game that is running. Now a failure simply leaves the gate due and the
+       next fill retries, and it says once that it happened. */
+    if (wantDump) {
+        if (dump) s_rosDump = s_rosNow;
+        else {
+            static int moaned;
+            if (!moaned) { moaned = 1; plog("roster: cannot open tagpu.log for the unit dump"); }
+        }
+    }
     uu = tagpu_pk_units(pk);
     for (i = 0; i < pk->n_units; i++) {
         const TAGPU_PK_UNIT* u = &uu[i];
@@ -1905,7 +1925,8 @@ static void roster_log(const TAGPU_PACKET* pk)
     if (dump) fclose(dump);
     if (wantHdr) {
         char b[160]; _snprintf(b, sizeof b, "units: alive=%d onscreen=%d eye=(%d,%d) me=%d",
-                               alive, onscreen, eyeX, eyeY, (int)me); plog(b);
+                               alive, onscreen, eyeX, eyeY, (int)me);
+        b[sizeof b - 1] = 0; plog(b);
     }
 }
 

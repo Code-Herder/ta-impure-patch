@@ -160,8 +160,10 @@ Surface trigger fires at most once per 8 frames (~0.26 s) — burst loops need
 ## Closed-loop camera steering (converges in ~3 rounds)
 
 The `units:` log line carries a fresh `eye=(x,y)` every 500 ms (landing 10c-3; it was every 30 render frames, which is 0.5 s at 60 fps — this line used to say ~1 s and was wrong before the move too) — use
-it as feedback instead of the 300-frame roster/swept lines (10 s stale = blind
-overshoot). Loop: read eye → scroll toward target with a duration computed from
+it as feedback instead of the roster/swept lines (up to 5 s stale = blind
+overshoot: that block runs on `ROSTER_DUMP_MS` = 5 s since the same landing, and
+the “10 s” this said was not right under the old 300-frame gate either — 300
+frames at 60 fps is 5 s). Loop: read eye → scroll toward target with a duration computed from
 the delta (`~1400 px/s`, clamp 0.15–3 s) → park → re-read. Break when within
 200 px. See the memory log for the exact bash loop (2026-09-01 entry).
 
