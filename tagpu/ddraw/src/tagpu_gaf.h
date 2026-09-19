@@ -368,10 +368,10 @@ void tagpu_gaf_atlas_reset(TAGPU_GAFATLAS* a);
    correct to call when nothing has changed. */
 void tagpu_gaf_atlas_forget(TAGPU_GAFATLAS* a);
 void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a);
-/* give back the one heap buffer this call owns (`mirror`); for a caller about
-   to re-lay the struct out from zero, which would otherwise drop the pointer.
-   It was two until 11-5e-2b part 2, and `rlist` is a third it does NOT free --
-   the definition carries why, and who owns fixing it */
+/* give back BOTH heap buffers an atlas owns (`mirror` and `rlist`) and clear
+   the latches that described them; for a caller about to re-lay the struct out
+   from zero, which would otherwise drop the pointers. `rlist` joined in
+   11-5e-2c, once the bound gave it a single allocation site and no other free */
 void tagpu_gaf_atlas_free_buffers(TAGPU_GAFATLAS* a);       /* GL context replaced   */
 /* create the GL texture now rather than on the first frame that atlases a
    sprite — a pass whose shader samples the atlas must never bind texture 0 */

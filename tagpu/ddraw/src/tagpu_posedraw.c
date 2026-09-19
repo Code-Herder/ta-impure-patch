@@ -656,28 +656,16 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
        lane with nothing to restore from. Silently, because a lane with no list
        stands down rather than complains. */
     tagpu_r3d_atlas_restore_want();
-    {
-        float aniso = 0.0f;
-        const TAGPU_RGLSL_FRAME* fr =
-            tagpu_r3d_atlas_restore_list(&s_pub.restoreDim, &s_pub.restoreN,
-                                         &s_pub.restoreGen, &s_pub.restoreRepaint,
-                                         &s_pub.restoreBlanks, &s_pub.restoreMips,
-                                         &aniso);
-        if (fr) {
-            s_pub.atlasRgbAniso  = aniso;
-            s_pub.restoreFrames  = fr;
-        } else {
-            s_pub.restoreFrames  = NULL;
-            s_pub.restoreN = 0; s_pub.restoreGen = 0;
-            s_pub.restoreRepaint = 0; s_pub.restoreBlanks = 0;
-            s_pub.restoreDim = 0; s_pub.restoreMips = 0;
-            /* WRITTEN ON BOTH PATHS, not left to the memset seventy lines up.
-               It is the only field of this block that would otherwise be set on
-               one path only, and a reader here cannot see what zeroed it.
-               [The 11-5e-2b cross-thread review.] */
-            s_pub.atlasRgbAniso  = 0.0f;
-        }
-    }
+    /* THE ARM IS TAKEN HERE AND THE LIST IS NOT (11-5e-2c). Arming is an ASK
+       and belongs on this beat; capturing the list is a READ of a buffer this
+       frame is still painting into, and it has moved to
+       `tagpu_posedraw_handover`. The reason is `ghost_record`: it runs after
+       this function, inside the same `tagpu_native_frame`, and reaches
+       `atlas_paint` through `tagpu_r3d_atlas_uv` -> `atlas_get` on a build
+       ghost whose texture is not yet atlased. With the feed restored that
+       appends to the very list a capture here would have published, so a
+       capture here is a snapshot taken before the frame has finished writing
+       it. See the handover for the ordering that replaces it. */
     s_pub.lut = tagpu_r3d_lut_mirror(&s_pub.lutW, &s_pub.lutH, &s_pub.lutSerial);
     s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();
     s_pub.fogLut = tagpu_native_foglut();
@@ -1083,10 +1071,56 @@ int tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now)
        stale hand-over is cleared as well, so the next frame starts honest. */
     if (s_pub.frame != now) { s_pubHave = 0; return 0; }
     /* THE COUNT IS TAKEN NOW, not when the window closed -- `_end` says why.
-       Every GL draw of this frame is behind us at this point, because the
-       whole native pass runs earlier in this iteration of render_ogl.c's loop
-       than the tagpu_vk_frame that calls this. */
+       Every draw of this frame is behind us at this point, because the whole
+       native pass runs earlier in this iteration of the render loop than the
+       `tagpu_vk_frame` that calls this. On the Vulkan lane that is
+       `render_vk.c`: `tagpu_overlay_draw` at `:232`, then `tagpu_vk_frame` at
+       `:268`, in one iteration on one thread. (This said `render_ogl.c` until
+       11-5e-2c; the property is the loop's shape and both loops have it, but
+       the file named was the one that no longer runs.) */
     s_pub.otherDraws = s_other;
+    /* AND SO IS THE RESTORE LIST, FOR THE SAME REASON AND A SHARPER ONE
+       (11-5e-2c). It was taken in `pd_view_publish`, on the FIRST posedraw
+       window of the frame -- and `tagpu_native.c`'s `ghost_record` runs after
+       that, in the same `tagpu_native_frame`, and can paint the unit atlas
+       through `tagpu_r3d_atlas_uv` -> `atlas_get`. Now that `atlas_paint`
+       feeds the published list again, a capture at `pd_begin` would hand the
+       consumer a count taken before the frame finished appending to it.
+
+       WHAT MAKES HERE CORRECT IS THE LOOP, NOT A LOCK. `tagpu_overlay_draw`
+       has returned by the time `tagpu_vk_frame` calls us, so every paint of
+       this frame -- the native pass's and the bake's alike -- is behind this
+       line. `rlist_restart`, the only thing that rewrites list entries in
+       place rather than appending past them, therefore cannot run between this
+       capture and the consumer's read of it.
+
+       The pointer itself is safe by the BOUND rather than by this ordering:
+       the arm allocates the whole `rlist_cap(a)` in one go and nothing
+       reallocs or frees it, so the address is fixed for the atlas's life. Two
+       different guarantees for two different hazards, and neither is a
+       timing argument. [The vulkan-only plan, 11-5e-2c.] */
+    {
+        float aniso = 0.0f;
+        const TAGPU_RGLSL_FRAME* fr =
+            tagpu_r3d_atlas_restore_list(&s_pub.restoreDim, &s_pub.restoreN,
+                                         &s_pub.restoreGen, &s_pub.restoreRepaint,
+                                         &s_pub.restoreBlanks, &s_pub.restoreMips,
+                                         &aniso);
+        if (fr) {
+            s_pub.atlasRgbAniso  = aniso;
+            s_pub.restoreFrames  = fr;
+        } else {
+            s_pub.restoreFrames  = NULL;
+            s_pub.restoreN = 0; s_pub.restoreGen = 0;
+            s_pub.restoreRepaint = 0; s_pub.restoreBlanks = 0;
+            s_pub.restoreDim = 0; s_pub.restoreMips = 0;
+            /* WRITTEN ON BOTH PATHS, not left to the memset in the publisher.
+               It is the only field of this block that would otherwise be set on
+               one path only, and a reader here cannot see what zeroed it.
+               [The 11-5e-2b cross-thread review.] */
+            s_pub.atlasRgbAniso  = 0.0f;
+        }
+    }
     *out = s_pub;
     s_pubHave = 0;
     return 1;
