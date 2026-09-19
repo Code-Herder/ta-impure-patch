@@ -1905,7 +1905,9 @@ Since G15b the UI — the in-game panel, build pages, bars, option screens, chat
 and the whole shell — is drawn by our GL layer from the engine's own draw calls, replayed into
 twins of its surfaces (`research/notes/gui-renderer.md` §10). The engine still draws its
 surface, which stays the fallback beneath; with the trigger absent the DLL is byte-identical
-to main's (parity md5 measured equal, §10). **`gui.on` is part of the default arm set** now.
+to main's (parity md5 measured equal, §10 — but see the note below: "trigger absent" changed
+meaning in landing 10c-2 and that row has not been re-measured since).
+**`gui.on` is part of the default arm set** now.
 
 **`gui.on` DOES NOT GATE `tacli` ITSELF, and for one commit in the vulkan-only plan's landing 10c
 it did** — which is worth knowing because the failure was silent. The flip `0x4C63A0` is where the
@@ -1913,11 +1915,31 @@ whole on-demand trigger family runs since that landing (peek, `ui`, the catalogu
 detection, and the key/click injection), so `tagpu_gui_hook.c` installs its observer of the flip
 **whenever the engine's bytes match**, and `tagpu_gui.on` gates only the layer, the census and the
 17 leaf detours. `tacli gui <i> remove`, `gui.off` and a bare `launch` (which writes
-`tagpu_defaults.off`, so no default applies) therefore leave the instance fully drivable. The
-boot line says which of the two happened: `gui: ARMED flip@0x4C63A0=1 leaves=17/17 …` with the
-layer, `gui: trigger host only (tagpu_gui.on is not on) …` without it. **If neither line is in
-`tagpu.log`, no `tacli` verb can answer** — the engine's bytes differ at the flip, and that is the
-one case left where the instance cannot be driven.
+`tagpu_defaults.off`, so no default applies) therefore leave the instance fully drivable.
+
+**The diagnostic is a phrase, not the absence of a line.** `tagpu_gui_init` has **five** exits and
+every one of them logs; only the first two mean the instance cannot be driven, and both say so in
+those words:
+
+| boot line in `tagpu.log` | layer | drivable |
+|---|---|---|
+| `gui: NOT armed — engine bytes differ at the flip 0x4C63A0 … no tacli verb can answer` | no | **NO** |
+| `gui: NOT armed — the flip observer refused to install … no tacli verb can answer` | no | **NO** |
+| `gui: trigger host only (tagpu_gui.on is not on) …` | no | yes |
+| `gui: UI layer NOT armed — engine bytes differ at a watched leaf …` | no | yes |
+| `gui: UI layer NOT armed — no arena …` | no | yes |
+| `gui: ARMED flip@0x4C63A0=1 leaves=17/17 …` (or `FAILED` on a partial leaf install) | yes | yes |
+
+So: **grep for `no tacli verb can answer`.** [An earlier draft of this section said "if neither
+line is in `tagpu.log`, no `tacli` verb can answer", naming only the first and last rows — which
+would have had an agent abandon a perfectly drivable instance on either of the two middle rows,
+the exact case the landing exists to protect.]
+
+**And `tacli gui <i> remove` does not always remove the layer.** It only unlinks `tagpu_gui.on`,
+and `tagpu_gui.on` is in the defaults table — so on an instance launched with `--defaults` the
+default re-applies and the layer stays fully armed. `gui.off` and a bare launch (which writes
+`tagpu_defaults.off`) are what actually take it away. `tacli gui`'s own status string calls the
+missing file "absent (module not armed)", which has the same error in it.
 
 ```bash
 tools/tacli gui <i> on            # arm BEFORE launch (the detours install at DLL attach); the draw follows the file live

@@ -430,10 +430,13 @@ void tagpu_input_cmd(TAGPU_CMD* rec)
    review]. dds_Blt and dds_Lock call util_pull_messages(), which does
    PeekMessageA(PM_REMOVE) + DispatchMessageA, and the flip reaches ddraw
    through them -- after this detour returns, still inside the flip. So a
-   WM_TAGPU_MOUSE posted here could be dispatched mid-flip. It is guarded by
-   `g_config.fix_not_responding && !IsWine()`, so it is unreachable where this
-   runs; that is a CONFIGURATION fact, not an invariant of the injection path,
-   which is why it is named rather than left implied. */
+   WM_TAGPU_MOUSE posted here could be dispatched mid-flip. Its guard is five
+   conjuncts, of which `g_config.fix_not_responding` and `!IsWine()` are the
+   load-bearing two, and `!IsWine()` is decisive where this runs -- the other
+   three are the hwnd, the gui thread id, and a once-a-second rate limit whose
+   update is commented out, so it gates nothing. Unreachable here, then, but by
+   a CONFIGURATION fact rather than by an invariant of the injection path,
+   which is why it is named instead of left implied. */
 void tagpu_input_frame(const TAGPU_FRAME* f)
 {
     static unsigned last = 0;
@@ -454,12 +457,18 @@ void tagpu_input_frame(const TAGPU_FRAME* f)
 
            SAVE AND RESTORE, NOT CLEAR [landing review]. A clear-to-NULL is
            correct only while this function has one caller and is never
-           re-entered, and neither is a property of the call site: `before_flip`
-           keeps a 32-deep LIFO of hijacked returns, i.e. the engine's flip is
-           anticipated to nest. Under nesting an inner clear would hand the
-           OUTER do_keys a NULL, and game_to_abs() dereferences it without a
-           test — a null dereference, not a quiet no-op. Restoring makes the
-           bracket true by construction instead of by caller count. */
+           re-entered, and neither of those is a property this file can state.
+           Under re-entry an inner clear would hand the OUTER do_keys a NULL,
+           and game_to_abs() dereferences it on its first statement — a null
+           dereference, not a quiet no-op. Restoring makes the bracket true by
+           construction instead of by caller count, and it costs one word.
+
+           (Round 2 of the review corrected the reason first given here: the
+           32-deep LIFO in before_flip is about SurfaceCreateNamed nesting
+           INSIDE a flip, not about flips nesting, and a nested flip could not
+           re-enter this anyway -- the outer call stamped the 16 ms gate's QPC,
+           so an inner one inside that window skips the whole block. The change
+           stands on its own; the evidence for it did not.) */
         s_frame = f;
         if (f->hwnd) do_keys((HWND)f->hwnd);
         s_frame = prev;

@@ -27,8 +27,10 @@
    this family, and with it every `tacli` verb and all of the input injection,
    went silently dead on an ordinary instance, on EVERY renderer. The landing
    review of 10c-2 caught it. `tagpu_gui_init` now installs the observer
-   whenever the flip's bytes match and gates only the UI layer on the trigger;
-   the precondition that remains is the byte match itself, and it is logged.
+   whenever the flip's bytes match and gates only the UI layer on the trigger.
+   Two preconditions remain -- the byte match, and tagpu_detour_observe itself
+   succeeding (it can refuse on its allocation or on the chain rule) -- and
+   each has its own log line saying `no tacli verb can answer`.
 
    WHAT THE CALLER OWES: a TAGPU_FRAME whose geometry fields are real. They are
    all `g_ddraw` members the render thread's packet copies anyway, and they are

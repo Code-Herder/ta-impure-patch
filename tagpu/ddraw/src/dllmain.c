@@ -150,12 +150,18 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            caller's restore all still run. Off with "tagpu_cursown.off". */
         tagpu_cursown_init();
 
-        /* tagpu: the GL UI renderer's observers (Phase E, tagpu_gui.h). No-op
-           unless "tagpu_gui.on" exists; byte-matched, all-or-nothing; every
-           detour calls the original, so the engine draws exactly as before —
-           we only watch. Disjoint from every detour above (the leaves it
-           watches are the GAF blits, the glyph blitter, the line drawers, the
-           surface copy and the flip). */
+        /* tagpu: the flip observer AND the GL UI renderer's leaves (Phase E,
+           tagpu_gui.h). TWO INSTALLS SINCE THE VULKAN-ONLY PLAN'S LANDING
+           10c-2, and this comment described only the second until the review
+           of that landing: the observer of the flip 0x4C63A0 goes in whenever
+           the engine's bytes match there, with NO trigger, because it is the
+           only host of the on-demand trigger family and therefore of every
+           `tacli` verb and of the key/click injection. "tagpu_gui.on" gates
+           the 17 LEAVES, the arena and the census, and those are still
+           byte-matched all-or-nothing. Every detour calls the original, so the
+           engine draws exactly as before — we only watch. Disjoint from every
+           detour above (the leaves it watches are the GAF blits, the glyph
+           blitter, the line drawers, the surface copy and the flip). */
         tagpu_gui_init();
 
         /* zoom: the minimap's view rectangle, computed from the 1x view and so a

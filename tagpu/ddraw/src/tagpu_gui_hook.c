@@ -785,7 +785,10 @@ static int on_game_thread(void)
 /* The flip counter, for the frame packet to echo (tagpu_packet_pub.c): the
    twin travels on this module's queue and the packet on the exchange, at
    different cadences, and the heartbeat counts the skew between them. Game
-   thread reads only; 0 for ever when the layer is not armed. */
+   thread reads only. It counts wherever the flip OBSERVER installed, which
+   since landing 10c-2 is not the same thing as the layer being armed -- this
+   line said "0 for ever when the layer is not armed" and that is no longer
+   true (landing review, round 2). Nothing reads it but the packet dump. */
 unsigned tagpu_gui_flips(void) { return s_flips; }
 
 /* ---- the publisher (game thread -> tagpu_gui_surf.c) ------------------- */
@@ -1732,6 +1735,10 @@ static unsigned s_builds, s_buildFlags;     /* GUI_StageUpdateDraw calls since t
                             the diff runs at most this often, ops accumulate between */
 #define LOG_EVERY 50     /* `log`: one line per this many censuses, or any unexplained */
 
+/* 1 once leaves_install() has been reached, i.e. the op machinery and the
+   surface table have their detours. NOT s_installed, which a partial install
+   leaves 0 while detours are live (landing review, round 2). */
+static int s_opsLive = 0;
 static volatile int s_inFlip = 0;      /* between the flip's entry and its return */
 static void* s_retStack[32];           /* hijacked returns, LIFO (alloc, flip)    */
 static int   s_retDepth = 0;
@@ -1830,6 +1837,38 @@ static int __cdecl before_flip(void* entry_esp)
         }
     }
 #undef TRIG_MS
+
+    /* AND NOTHING BELOW THIS LINE RUNS WITHOUT THE LEAVES [landing review of
+       10c-2, round 2]. Everything from here on is the UI layer's op machinery,
+       and all of it is paired with a leaf detour:
+
+         - `surf_of_ctx` REGISTERS a surface in s_surf, and the only thing that
+           RETIRES one is `before_memfree`, leaf #15. Installing the registrar
+           without its destructor is an invariant the leaves' own header states
+           ("rides the same table so it takes the same all-or-nothing byte
+           match") and splitting it silently is how a table grows stale.
+         - `ops_window_reset()` on the early return below memsets 4 KB on EVERY
+           flip, and the shell flips thousands of times a second. The ARMED
+           configuration does not pay that -- it resets once per census -- so
+           only a bare instance would have, which is precisely the instance
+           that gets nothing back for it.
+         - the return hijack exists for `s_inFlip`, which only the leaf sites
+           read, and for `before_alloc_push`, which is a leaf.
+         - `surf_of_ctx` dereferences four dwords behind `ptr_ok` ALONE, and
+           CLAUDE.md is explicit that ptr_ok is a value filter and never a
+           safety argument. What underwrote that read was the 17-site byte
+           match; the flip's own prologue is six generic bytes (`sub esp,0xF4`)
+           and cannot carry it.
+         - and with `gui.on=census` on a build whose leaves do not match,
+           s_census is 1 while no leaf records an op, so every changed pixel
+           counts as unexplained and the census writes tagpu.log at up to
+           200 Hz for the life of the process.
+
+       `s_opsLive` is set where the leaves are actually installed, not from
+       `s_installed`: a PARTIAL leaf install leaves s_installed 0 with detours
+       live, and those detours push ops that would then never be reset. */
+    if (!s_opsLive) return 0;
+
     src = flip_source(entry_esp);
     s = surf_of_ctx(src);
     /* the marker: this flip's surface and the fill sequence as of now */
@@ -2249,10 +2288,16 @@ static int read_tokens(void)
    gates the UI layer alone. Two further consequences, both wanted:
      - a build whose LEAF prologues differ no longer costs us the flip as well;
        the tooling survives where only the UI layer cannot install.
-     - `tagpu_gui.off` and `tacli gui remove` still remove the layer, the
-       census and the leaves — they no longer remove `tacli`'s ability to drive
-       the instance. That is a semantic change and the log line says which of
-       the two happened. */
+     - `tagpu_gui.off` and a bare launch still take the layer, the census and
+       the leaves away — they no longer take `tacli`'s ability to drive the
+       instance with them. (`tacli gui remove` only unlinks the file, so with
+       the play defaults on the table entry still applies and the layer stays:
+       that is tacli's wording to fix, not this function's behaviour.)
+
+   EVERY EXIT LOGS, AND THERE ARE FIVE, not the two an earlier draft of this
+   comment implied. Only the first two mean the instance cannot be driven, and
+   both of those say so in the words `no tacli verb can answer` — that phrase
+   is the diagnostic, not the absence of a line. */
 void tagpu_gui_init(void)
 {
     char b[200];
@@ -2297,6 +2342,7 @@ void tagpu_gui_init(void)
              "so tacli still works)");
         return;
     }
+    s_opsLive = 1;            /* before the install: a partial one still pushes ops */
     n = leaves_install();
     s_installed = n == LEAF_COUNT;
     _snprintf(b, sizeof b, "gui: %s flip@0x4C63A0=%d leaves=%d/%d census=%d log=%d pgm=%d key=%d (Phase E: observers on the game thread; the layer follows the trigger, tagpu_gui_surf.c)",

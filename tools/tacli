@@ -1446,7 +1446,12 @@ def cmd_gui(args):
         inst.gamedir.mkdir(parents=True, exist_ok=True)
         if args.state == "off":
             # `off` INSIDE the file keeps the detours installed at the next launch while
-            # the layer is not drawn; removing the file would un-arm the module entirely
+            # the layer is not drawn. Removing the file is NOT the same as un-arming:
+            # tagpu_gui.on is in the DLL's defaults table, so on an instance launched
+            # with --defaults the default re-applies and the layer stays armed. Only
+            # `off`, or a bare launch (which writes tagpu_defaults.off), takes it away.
+            # Either way the flip observer stays -- it is tacli's own way into the
+            # process since the vulkan-only plan's landing 10c.
             path.write_text("off\n")
         elif args.state == "remove":
             path.unlink(missing_ok=True)
@@ -1456,7 +1461,8 @@ def cmd_gui(args):
             path.write_text((tokens + " " + extra).strip() + "\n")
     present = path.exists()
     content = path.read_text().strip() if present else ""
-    state = "absent (module not armed)" if not present else ("armed, draw OFF" if "off" in content.split() else
+    state = ("absent (the DLL's default applies unless the instance has "
+             "tagpu_defaults.off)") if not present else ("armed, draw OFF" if "off" in content.split() else
             f"armed, draw ON{' STRICT' if 'strict' in content else ''}{' + census' if 'census' in content else ''}")
     out({"name": args.name, "gui": present, "tokens": content}, args.json,
         human=f"{args.name}: tagpu_gui.on {state}" + (f" [{content}]" if content else ""))
