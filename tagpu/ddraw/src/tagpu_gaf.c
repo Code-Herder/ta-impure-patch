@@ -1196,24 +1196,25 @@ static unsigned gaf_hash(const void* p)
 
 int tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a)
 {
-    GLuint t = 0;
     if (a->made) return 1;
     if (a->dim <= 0 || a->max <= 0 || !a->ents) return 0;
-    /* THE GL NAME IS OPTIONAL; THE LAYOUT IS NOT. On a lane with no GL there is
-       no texture to create and none is needed -- the shelf packer, the entry
-       table and the CPU mirror below are the atlas, and the twin uploads the
-       mirror. `if (a->tex) return 1` used to stand where `a->made` does, and
-       `glGenTextures` leaving `t` at 0 with no context turned this into a
-       refusal that read downstream as `atlas=0` and no sprite texels at all.
-       [The vulkan-only plan, landing 4b-2.] */
-    /* A FRESH TEXTURE IS A FRESH MIRROR. The storage above is unwritten (index
-       0, the assumption the border comment below rests on) and a mirror that
-       kept the previous texture's texels would be a copy of something that no
-       longer exists. atlas_drop is deliberately NOT here: it leaves the texels
-       alone and lets re-inserted entries overwrite them, and the mirror follows
-       exactly because it follows the paints. */
+    /* THERE IS NO TEXTURE HERE; THE LAYOUT IS THE ATLAS. The shelf packer, the
+       entry table and the CPU mirror below are what an atlas is in this build,
+       and the Vulkan twin uploads the mirror. `a->tex` is set to 0 rather than
+       left alone so that a re-created atlas cannot carry a stale name, and it
+       is 0 for the life of the process: the `glGenTextures` that used to fill
+       it went in landing 11-4c. `a->made`, not `a->tex`, is what says the
+       layout exists -- keying it on the name once produced a refusal that read
+       downstream as `atlas=0` and no sprite texels at all.
+       [The vulkan-only plan, landings 4b-2 and 11-4c.] */
+    /* A FRESH ATLAS IS A FRESH MIRROR, AND THE MEMSET IS WHAT MAKES IT INDEX 0
+       -- the assumption the border comment in `atlas_paint` rests on. A mirror
+       that kept the previous atlas's texels would be a copy of something that
+       no longer exists. atlas_drop is deliberately NOT here: it leaves the
+       texels alone and lets re-inserted entries overwrite them, and the mirror
+       follows exactly because it follows the paints. */
     if (a->mirror) { memset(a->mirror, 0, (size_t)a->dim * a->dim); a->mirrorSerial++; }
-    a->tex = t;
+    a->tex = 0;
     a->made = 1;
     a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
     memset(a->hash, 0, sizeof a->hash);
@@ -1392,10 +1393,13 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
     const int x = e->x, y = e->y;
     int i;
 
-    /* THE UPLOAD IS GL; THE PAINT IS THE ATLAS. Every GL call in this function
-       is gated and the CPU mirror writes are not: the mirror takes the same
-       bytes from the same buffer (see below), so on a lane with no GL name the
-       art still reaches a second backend. [The vulkan-only plan, landing 4b-2.] */
+    /* THE PAINT IS THE ATLAS, AND THE MIRROR IS THE PAINT. This function used
+       to upload each cell to a GL texture beside the mirror write below; the
+       upload went in landing 11-4c and the mirror write is now the only
+       destination the art has. Nothing here is gated on a backend, and nothing
+       may become so: a cell that is packed but not mirrored is a hole the
+       Vulkan twin samples as index 0.
+       [The vulkan-only plan, landings 4b-2 and 11-4c.] */
     /* Re-emit the frame with its outermost row and column repeated all
        round, `pad` deep. The border is what any sampler that reaches past
        the frame must land on: under GL_NEAREST that is the fragment whose
@@ -1428,13 +1432,15 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
             memcpy(s_pad + (size_t)(p - k) * pw, s_pad + (size_t)p * pw, (size_t)pw);
         for (k = 0; k < pb; k++)
             memcpy(s_pad + (size_t)(p + h + k) * pw, s_pad + (size_t)(p + h - 1) * pw, (size_t)pw);
-        /* THE CPU MIRROR TAKES THE SAME BYTES, FROM THE SAME BUFFER, IN THE
-           SAME CALL (Phase G / G19e). Not a second copy of the art: the very
-           rows the line above hands GL, so a backend that uploads the mirror
-           and a backend that samples `tex` cannot disagree about a texel. The
-           rect is the cell's, border and alignment slack included, exactly as
-           above -- and it is inside the atlas by construction, because the
-           shelf packer refused the cell otherwise. */
+        /* THE CPU MIRROR TAKES THE BYTES THE PADDING LOOPS ABOVE JUST BUILT,
+           OUT OF `s_pad` ITSELF (Phase G / G19e). Not a second evaluation of
+           the art: the very rows those loops wrote, so there is nothing for a
+           second pass over the source to drift from. It was written beside a
+           GL upload of the same buffer, which is why it is phrased as a mirror;
+           since landing 11-4c it is the only copy, and DELETING IT DELETES THE
+           SPRITE. The rect is the cell's, border and alignment slack included,
+           exactly as above -- and it is inside the atlas by construction,
+           because the shelf packer refused the cell otherwise. */
         if (a->mirror) {
             const int x0 = x - p, y0 = y - p;
             for (k = 0; k < ch; k++)

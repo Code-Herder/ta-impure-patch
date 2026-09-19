@@ -82,11 +82,6 @@
 typedef char tagpu_fps_maxv_agrees[(MAXCH * QUADV == TAGPU_FPS_MAXV) ? 1 : -1];
 #define VST       4                   /* x, y, u, v                            */
 
-
-/* The fork declares only the entry points its own passes use, so the core-1.1
-   ones this needs are resolved by hand -- wglGetProcAddress first, then
-   opengl32 itself, which is where a 1.1 symbol actually lives. Same helper as
-   tagpu_feat.c's. */
 static int    s_on = -1, s_pk, s_ab, s_abDone, s_abFrame;
 static int    s_nv;                   /* this frame's vertices, handed over once */
 static int    s_fw, s_fh;             /* ...and the frame size they are in     */
@@ -199,11 +194,13 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
        frame: set at the end of this function, read by the lane before the next
        present, gone here. A capture the lane never collected is simply not
        written, and `tools/vk-ab.py` says so. */
-    /* WHETHER THIS PASS DRAWS, or only builds the quads the Vulkan twin draws.
-       Under `renderer=vulkan` there is no GL context in the process: the poll,
-       the frame-rate window, the font latch and the vertex array are all this
-       pass either way, and only the upload, the draw and the read-back stand
-       down. [The vulkan-only plan, landing 4b.] */
+    /* THIS PASS BUILDS QUADS; THE VULKAN TWIN DRAWS THEM. The poll, the
+       frame-rate window, the font latch and the vertex array are the pass, and
+       they run unconditionally. The upload, the draw and the read-back that
+       used to sit beside them stood down under `renderer=vulkan` in landing 4b
+       and were deleted in landing 11-4c, so there is no longer a second way
+       through this function.
+       [The vulkan-only plan, landings 4b and 11-4c.] */
 
     s_nv = 0; s_abFrame = 0;
 

@@ -30,7 +30,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "opengl_utils.h"
 #include "tagpu_model3do.h"
 #include "tagpu_posebake.h"
 #include "tagpu_render3do.h"
@@ -309,10 +308,13 @@ static void bake_topology(TAGPU_PBGEOM* g, const char* const* nd, int nparts)
     for (i = 0; i < nparts; i++) if (!g->done[i]) g->orphan++;
 }
 
+/* NO GL NAME IS DROPPED HERE BECAUSE NONE IS EVER MADE. The two deletes that
+   stood at the top of this function guarded `vao`/`vbo`, and the only code that
+   ever set those was the bring-up landing 11-4c removed -- so both guards were
+   permanently false. The FIELDS stay: `tagpu_posedraw.c` still reads `m->vao`,
+   and they are zero for it, which is the honest answer. [11-4c's own review.] */
 static void mat_drop(int i)
 {
-    if (s_mat[i].vao) glDeleteVertexArrays(1, &s_mat[i].vao);
-    if (s_mat[i].vbo) glDeleteBuffers(1, &s_mat[i].vbo);
     if (s_matSkip[i]) { free(s_matSkip[i]); s_matSkip[i] = NULL; }
     if (s_matMirror[i]) { free(s_matMirror[i]); s_matMirror[i] = NULL; }
     memset(&s_mat[i], 0, sizeof s_mat[i]);
@@ -329,7 +331,6 @@ static void geom_drop(TAGPU_PBGEOM* g)
     int i;
     for (i = 0; i < s_nmat; i++)
         if (s_mat[i].geom == g) { mat_drop(i); s_dropCascade++; }
-    if (g->vbo) glDeleteBuffers(1, &g->vbo);
     /* the mirror goes with the entry, and the serial in it is what stops a
        hand-over published before this from reading the next model's bytes */
     {
@@ -403,15 +404,15 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
     }
     g->nvert = c.nv;
     g->serial = s_serial++;
-    /* THE BUFFER IS GL; THE BAKE IS THE PASS. The mirror below takes the very
-       memory this upload was given, and the Vulkan twin reads it through
-       `tagpu_posebake_geom_mirror` -- so on a lane with no GL there is nothing
-       to upload and the bake is unchanged. [The vulkan-only plan, 4b-2.] */
-    /* THE MIRROR IS THE BUFFER THE UPLOAD ABOVE WAS GIVEN, in the same call,
-       so there is no second evaluation of the bake to drift from the first.
-       A refused malloc leaves the slot NULL, which the accessor reports as
-       "no mirror" and the Vulkan pass stands down on -- the GL lane is
-       untouched either way. */
+    /* THE BAKE IS THE PASS, AND THE MIRROR IS WHERE IT LANDS. `c` above is the
+       walk's own scratch; the mirror takes it verbatim, in the same call, so
+       there is no second evaluation of the bake to drift from the first. It was
+       written beside a GL buffer upload of the same memory -- hence "mirror" --
+       and since landing 11-4c it is the only destination the bake has: the
+       Vulkan twin reads it through `tagpu_posebake_geom_mirror`. A refused
+       malloc leaves the slot NULL, which the accessor reports as "no mirror"
+       and the Vulkan pass stands down on, visibly.
+       [The vulkan-only plan, landings 4b-2 and 11-4c.] */
     if (s_mirrorWant && c.nv > 0) {
         size_t nb = (size_t)c.nv * TAGPU_PB_GEOMST * sizeof(float);
         s_geomMirror[slot] = (float*)malloc(nb);
@@ -535,13 +536,13 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
         s_matMirror[slot] = (float*)malloc(nb);
         if (s_matMirror[slot]) memcpy(s_matMirror[slot], s_scratchM, nb);
     }
-    /* THE POSED PASS'S VAO (G16 step 5). The two buffers are bound together
-       once, here, rather than re-pointed per unit per frame: a draw is then
-       one bind and one glDrawArrays. Locations 0-3 come off the geometry (the
-       type's), 4-6 off this stream — the same split the two buffers have, so
-       either can be re-baked without touching the other's pointers. */
-    /* AND THE VERTEX ARRAY WITH THEM: it exists only to make a GL draw one
-       bind, and the twin builds its own binding from the mirrors. */
+    /* WHAT THE VERTEX LAYOUT IS, recorded because the twin has to reproduce it
+       and nothing in this file states it any more. Locations 0-3 come off the
+       geometry stream (the type's), 4-6 off this material stream -- the same
+       split the two mirrors have, so either can be re-baked without touching
+       the other. A GL vertex array used to bind the pair once here, which is
+       what made a draw one bind and one call; it went in landing 11-4c and the
+       twin builds its own binding from the two mirrors. [G16 step 5.] */
     s_matSkip[slot] = (unsigned char*)malloc((size_t)c.nv ? (size_t)c.nv : 1);
     if (s_matSkip[slot]) memcpy(s_matSkip[slot], s_scratchSkip, (size_t)c.nv);
     s_matBaked++;
@@ -678,12 +679,12 @@ const float* tagpu_posebake_mat_mirror(const TAGPU_PBMAT* m, unsigned serial,
 
 void tagpu_posebake_glreset(void)
 {
-    /* The context is gone, so the ids are already invalid and must NOT be
-       deleted against the new one — forget them. The next frame's generation
-       check drops the entries. */
-    int i;
-    for (i = 0; i < s_ngeom; i++) s_geom[i].vbo = 0;
-    for (i = 0; i < s_nmat; i++)  { s_mat[i].vbo = 0; s_mat[i].vao = 0; }
+    /* A GENERATION BUMP IS ALL THIS IS NOW. It used to forget the buffer ids as
+       well -- they had to be forgotten rather than deleted, since deleting an
+       id against a new context deletes some other object's -- but nothing in
+       this build makes one, so the two loops zeroed fields that were already
+       zero. The bump stays: the next frame's generation check is what drops the
+       entries, and that is about the BAKE, not about any API. [11-4c review.] */
     s_glGen++;
 }
 

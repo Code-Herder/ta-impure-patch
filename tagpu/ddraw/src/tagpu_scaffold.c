@@ -75,14 +75,10 @@ static void slog(const char* s)
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
 
-/* GL entries (G1 lesson: GL1.1 via opengl32, the rest via wgl) */
-
-static int    s_state = 0;         /* 0=unloaded 1=ready 2=failed         */
 void tagpu_scaffold_glreset(void);
 static int    s_armed = -1;        /* re-checked every 30 frames          */
 static unsigned char* s_buf = 0;   /* viewport-sized scaffold, malloc'd   */
 static int    s_bw = 0, s_bh = 0;  /* current buffer dims                 */
-static int    s_texW = 0, s_texH = 0;
 static int    s_lastR0 = 0, s_lastRows = 0;
 static unsigned s_lastFrame = 0;
 
@@ -236,11 +232,12 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
        scaffold, so the two captures would be of different frames -- the one
        thing the design exists to prevent. (The same defect was found in
        tagpu_fps.c by the G19d review; it is designed out here.) */
-    /* WHETHER THIS PASS DRAWS, or only gathers. Under `renderer=vulkan` the
-       Vulkan lane owns the present and there is no GL context anywhere in the
-       process, so everything below that touches GL stands down and the twin in
-       tagpu_vk_scaffold.c draws the same buffer out of the hand-over at the
-       bottom of this function. The gather is unconditional: it is the pass. */
+    /* THIS PASS GATHERS; THE TWIN DRAWS. The Vulkan lane owns the present and
+       there is no GL context anywhere in the process, so the upload and the
+       quad that used to sit below stood down in landing 4b and were deleted in
+       11-4c; tagpu_vk_scaffold.c draws the same buffer out of the hand-over at
+       the bottom of this function. The gather is unconditional: it is the pass,
+       and there is no longer a second way through here. */
 
     s_pubBuf = NULL; s_abFrame = 0;
 
@@ -429,15 +426,15 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
        and the four NDC numbers just below. All of that runs on either lane and
        is the pass; what follows is one backend's way of showing it.
 
-       THE VULKAN LANE STANDS THE DRAW DOWN RATHER THAN LETTING IT NO-OP. With
-       no context current most of these calls do nothing, and "most" is the
-       whole objection: `init_gl` branches on a GL_COMPILE_STATUS and a
-       GL_LINK_STATUS it reads back, so a lane with no context takes whichever
-       branch the loader's stubs produce -- and both of them are wrong, one
-       logging a shader failure that never happened and the other latching
-       `s_state = 2` so the pass is dead for the process. A pass that is not
-       called publishes nothing instead, and the twin then refuses out loud.
-       [Landing 4b.] */
+       THE DRAW WAS STOOD DOWN RATHER THAN LEFT TO NO-OP, and then deleted.
+       The reason is worth keeping because it is the rule the rest of this plan
+       follows: with no context current most GL calls do nothing, and "most" is
+       the whole objection -- a bring-up that branches on a compile or link
+       status it reads back takes whichever branch the loader's stubs produce,
+       and both are wrong, one logging a failure that never happened and the
+       other latching a failed state that kills the pass for the process. A
+       pass that is not called publishes nothing instead, and the twin then
+       refuses out loud. [Landing 4b; the draw itself went in landing 11-4c.] */
     int gw = f->game_width  > 0 ? f->game_width  : vpL + vw;
     int gh = f->game_height > 0 ? f->game_height : vpT + vh;
     float x0 = (float)vpL        / gw * 2.f - 1.f;
@@ -490,23 +487,30 @@ int tagpu_scaffold_overlay(const unsigned char** buf, int* w, int* h,
 /* exports for the native pass: this frame's scaffold texture + row encoding */
 int tagpu_scaffold_frameinfo(unsigned frame_counter, int* r0, int* nrows)
 {
-    /* NOT GATED ON GL READINESS, because these two numbers are the GATHER's and
-       the gather runs on either lane. `s_state` is the GL program's state and is
-       permanently 0 under `renderer=vulkan`, where `init_gl` is never called --
-       so testing it here handed every caller "no rows" on the one lane the rows
-       are needed for, silently. The freshness test below is the real one and it
-       is API-independent: `s_lastFrame` is stamped by the gather.
+    /* NOT GATED ON ANY BACKEND'S READINESS, because these two numbers are the
+       GATHER's and the gather runs whatever draws. This function once tested
+       the GL program's state, which was permanently 0 under `renderer=vulkan`
+       because its bring-up was never called -- so it handed every caller "no
+       rows" on the one lane the rows are needed for, silently. The freshness
+       test below is the real one and it is API-independent: `s_lastFrame` is
+       stamped by the gather. Do not re-add a readiness test here: there is no
+       longer any state it could ask, and the caller it feeds is the unit
+       shader's occlusion input.
        [FROM THE 4b-1 LANDING REVIEW, 2026-09-18 -- inert when found, because
-       the only caller was still gated, and a trap for the landing that ungates
-       it.] */
+       the only caller was still gated. The state itself went in 11-4c's own
+       review, so the trap is closed rather than merely documented.] */
     if (!s_armed) return 0;
     if (frame_counter - s_lastFrame > 2) return 0;   /* stale (not armed/in-game) */
     *r0 = s_lastR0; *nrows = s_lastRows;
     return 1;
 }
 
+/* A CONTEXT RESET STILL DROPS THIS FRAME'S HAND-OVER, and that is now all it
+   does here. The three GL-shaped statics this used to clear -- the program's
+   state and the uploaded texture's dimensions -- went with the draw they
+   described; what remains is the published buffer, which names memory this
+   pass owns and no API. `tagpu_overlay.c:291` is the caller. */
 void tagpu_scaffold_glreset(void)
 {
-    s_state = 0; s_texW = s_texH = 0;
     s_pubBuf = NULL; s_abFrame = 0;
 }
