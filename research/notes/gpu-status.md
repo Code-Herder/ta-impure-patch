@@ -11801,6 +11801,64 @@ Three more, each verified:
   consumer's own test is `restoreFrames && restoreN >= 1`, the two sides disagreeing across the
   seam about one fact. And the atlas-width refusal above.
 
+#### And what the RE-review found: the fixes had two defects of their own
+
+A second round on the fix commit alone. No HIGH, the main fix confirmed sound — and two
+real defects introduced by the fixes themselves, which is why a fix round gets reviewed
+rather than assumed.
+
+**The bound did not bind.** The atlas-width refusal set `s_maxTex = m` and then bailed — but it
+lives inside `if (s_maxTex <= 0 || s_maxTex != tagpu_vk_max_image_dim())`, so from the very next
+frame that condition was false, the block was skipped entirely, and `ensure_atlas` went on to
+build the atlas the check exists to prevent. The log line reading *"terrain stays the engine's"*
+was true for exactly one frame. `terr_bail()` latches nothing; the pre-11-5c original latched
+`s_state = 2`, and I replaced a latching refusal with a non-latching one without noticing the
+difference. Now the refusal leaves `s_maxTex` alone, so its own condition stays true and it is
+re-applied every frame, and **the log is what latches** — on the device's reported value
+(`s_dimBad`), so a re-picked device is asked again on its own merits. **A bound that does not
+bind is still a defect**, even where no conformant device reaches it.
+
+**A layout nobody had set.** Removing the stand-down let the pass draw on a frame where binding
+42 named an image that has never left `VK_IMAGE_LAYOUT_UNDEFINED`. `shared_resize` creates it
+UNDEFINED and only the restorer's own job transitions it (`UNDEFINED → TRANSFER_DST →
+SHADER_READ_ONLY`), so on the **declined-restorer path — the exact path the stand-down fix exists
+for** — the image is created, no job is ever built, and it sits UNDEFINED for the session while
+the pass now draws every frame. The shader guards the read, so nothing wrong is displayed, but it
+is a descriptor-layout mismatch on a statically-used binding: the validation layers report it,
+and the spec leaves it undefined if `uRestored == 1 ? texture(…) : vec4(0.0)` compiles to a
+select rather than a branch.
+
+Binding 42 now names the restored view only when `.have` — which cannot be set before the job's
+clear has run, so **testing it is exactly "this image has left UNDEFINED"**. That also makes true
+a sentence the fix round had already written and this round caught as overstated: the flag and
+the descriptor now genuinely come from the same two facts, rather than from one fact and a
+refusal placed elsewhere.
+
+**The debounce claim was too strong.** `palWas == s_palSeen` is "the last two *calls* read the
+same serial", and the render loop wakes on every primary Blt/Flip/Unlock as well as on a palette
+change — so it usually runs more than one iteration per palette step, and a slow fade can still
+get one republish per step. What it closes is the worst case, a palette moving on every
+iteration. **The real fix is a completion signal back from the consumer**, which `tagpu_terr.h`
+does not carry: the GL lane never needed one because it owned the job and could see it go idle.
+The comment now says what it buys and names what would close it.
+
+**Comment truth, second pass.** Six cross-references in `tagpu_vk_terr.c` still reasoned about
+"the refusal below" that the fix deleted, two of them load-bearing. `tagpu_terr.h`'s `restored`
+contract still claimed it sets `uRestored` — it does not, and a consumer that believed it would
+sample an image nothing has written. The `glreset` unreachability note named the far end of the
+caller chain (`tagpu_overlay.c`) as "its one caller", when the actual caller is
+`tagpu_native_glreset`, which tests nothing. The failure log promised *"what it painted stands"*,
+which the new `have`-drop makes true only until the request changes. And the retained-list cost
+was decimal KB in a file that reports KiB, with a largest-stock-map figure that needs a device
+limit most cards do not have (217 KiB on Two Continents; 331 KiB at the ceiling a 4096-limit
+device allows).
+
+**Re-verified by running it after the fixes**, same fixture: `restore request published — 5062
+frames`, `job started`, `restoring the tile atlas HERE`, `restored atlas painted here — 5062
+frames, no mirror and no read-back`, `terr=1`, and an `.ab` capture identical to the pre-fix one
+(24.6 % saturated colour — restored inside the line of sight, grey fog outside). Gating binding
+42 on `.have` did not break sampling.
+
 #### There is no thread split in this pass, and the brief that said so was wrong
 
 Worth recording because it is load-bearing and it was asserted confidently in the wrong
