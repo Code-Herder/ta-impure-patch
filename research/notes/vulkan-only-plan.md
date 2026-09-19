@@ -2589,7 +2589,18 @@ that a count which grows is the plan catching up with the work.) The row was
          `VK_NULL_HANDLE` unconditionally), every violation counter 0, and the restore lines an
          identical 16-line multiset in all four. DLL 1 558 016 → **1 547 776** bytes.
          **Four interleaved runs settled what nine batched ones could not**
-         ([gpu-status](gpu-status.html) §2.78).
+         ([gpu-status](gpu-status.html) §2.78). **THOSE FOUR RAN WITH THE UI LAYER OFF**, which
+         their own logs say, so they covered the world passes and not this landing's subject; a
+         second interleaved four with `gui.on=1` covers it. There the layer is armed
+         (`leaves=17/17`, `twins=3`, ~580 000 `twin_sprite` and ~4 400 `twin_copy` calls per
+         run), twelve grabs factor into TWO oscillators — the minimap's 48-px cluster and the
+         cursor's single pixel at (512, 384) — and with both masked **all twelve are one hash**
+         over 733 323 compared pixels. The counter dump states two of the three pins as numbers
+         on both builds: `colvalid=0` and `col=0/3`, across over half a million calls to the two
+         functions that would have armed the colour twin. **And "nothing observable changes" is
+         overstated by exactly one log line**: `main` writes `gui: no glReadPixels/FBO entry
+         points …` once per process and this branch writes it never — the only line the landing
+         removes, and an improvement, but named rather than left to be discovered.
 
          **PART 1 MEASURED over nine runs** (`e5a`, `one-unit`, 1024×768, `restorevk.on`): five of
          `main`'s `ddraw.dll` and four of this branch's, at `--maxfps 0` and `--maxfps 30`.

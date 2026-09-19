@@ -872,6 +872,24 @@ diagonal of the same four runs, which is why it costs four and not nine. **Prefe
 over "run the control enough times"**; the latter is what you fall back to when the two builds
 cannot be swapped between runs.
 
+- **AND THE FIXTURE HAS A DIFFERENT SHAPE WITH `gui.on` — TWO OSCILLATORS, NOT ONE**
+  (2026-09-19). With the UI layer up, `one-unit` on `e5a` settles into **four** distinct frames,
+  not two, and they factor: the minimap's 48-px cluster (x[63..104] y[47..125]) crossed with
+  **the cursor's own pixel at exactly (512, 384)**, the hotspot, which pulses. Mask the minimap
+  rect `[0:126, 0:128]` *and* that single pixel and twelve grabs across four runs come out as one
+  hash. Diffing the world viewport alone does not cover it, because the cursor sits in the middle
+  of the viewport — so with `gui.on` the rule is **mask the minimap and the cursor hotspot**, and
+  three grabs 4 s apart will NOT be identical without that.
+
+- **CHECK THE LOG SAYS THE LAYER IS ON BEFORE BELIEVING A UI MEASUREMENT.** `gui:` lines appear
+  either way. The one that matters is `gui: ARMED flip@0x4C63A0=1 leaves=17/17`; its opposite is
+  `gui: trigger host only (tagpu_gui.on is not on) — the UI layer, the census and the 17 leaves
+  are OFF`, and a run with that line has measured the world passes and nothing of the UI. A whole
+  A/B of the GUI lane was once run, labelled and written up without `gui.on=1` in the arm
+  (11-5e-2b part 2); the frames were fine and covered none of the code under test. **`tacli arm
+  <inst> gui.on=1`** — and `twins=`, `sprites=` and `col=n/m` in the counter dump are how you
+  confirm the ops actually flowed.
+
 **A log line beats a picture whenever the thing under test has a log line.** The same landing's
 real oracle was `unit: restorevk -- (N entries seeded …)` plus `vk: unit: restoring the twin HERE
 - N of N`: their absence is what a broken restore arm looks like, and no pixel would have moved,

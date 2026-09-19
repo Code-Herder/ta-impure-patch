@@ -3310,7 +3310,14 @@ same-build control across the flip shows exactly the same 44 px (all inside the 
 cross-build pairs spanning it — the build accounts for **0 pixels**. Zero
 `VK_ERROR`/`DEVICE_LOST`/`VUID`/validation lines on any run, which is the check binding 41's
 unconditional `VK_NULL_HANDLE` needed; restore lines an identical 16-line multiset in all four.
-DLL 1 558 016 → 1 547 776 bytes. Measured over
+DLL 1 558 016 → 1 547 776 bytes. **Those four ran with the UI layer OFF** and so covered the
+world passes rather than this landing's subject; a second interleaved four with `gui.on=1` covers
+it — layer armed, ~580 000 `twin_sprite` calls per run, twelve grabs factoring into two
+oscillators (the minimap cluster and the cursor's single pixel at 512,384) and **one hash with
+both masked**. The GUI's own counters state two of the three pins as numbers on both builds
+(`colvalid=0`, `col=0/3`). **One observable DOES change**: `main` writes `gui: no
+glReadPixels/FBO entry points …` once per process and the branch never — the only line the
+landing removes. Measured over
 **nine runs**, five of `main`'s DLL and four of the branch's: 0 px within a run (27 pairs), **0
 px outside the minimap in all 20 cross-build pairs**, and four of those **0 px over the whole
 frame**. The fixture is bimodal — two images 48 px apart, one unit's off-screen dot — and
