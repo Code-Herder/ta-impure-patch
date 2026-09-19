@@ -1749,6 +1749,29 @@ Back to the filed list:
    at `:136`–`:139` — and nothing else. The same one-hop question is owed to every other file
    in the table before a line of it is deleted.
 
+   **THE SYMBOL-BY-SYMBOL SURVEY FOR 11-2** [2026-09-18]. Every non-static `tagpu_*` function
+   the eight files define was matched against every other source, with comments and string
+   literals stripped. The shape is the same in all eight: **exactly ONE symbol per file is called
+   by the Vulkan lane** — its `_handover`, or `tagpu_native_worldtgt` — and everything else that
+   survives is called by a pass on the GL side. What makes the deletion surgical rather than
+   mechanical is that several of those callers **run on every lane**, so their callees are
+   keepers even though no `tagpu_vk*.c` names them:
+
+   | kept because … | the symbols, and who calls them |
+   |---|---|
+   | the frame packet's publisher runs on every lane | `tagpu_native_owns_unit`, `tagpu_native_want_builds` ← `tagpu_packet_pub.c` |
+   | the engine-suppression layer runs on every lane | `tagpu_native_owns_obj`, `tagpu_native_wrecks_armed`, `tagpu_posedraw_live`, `tagpu_posedraw_refused` ← `tagpu_owndraw.c` |
+   | the marker/order passes read unit state | `tagpu_native_unit_pos` ← `tagpu_mark.c`, `tagpu_order.c`; `tagpu_native_selbox_complete` ← `tagpu_markown.c` |
+   | the sound pass drives the effect emitters | `tagpu_fx_caps`, `tagpu_fx_emit_dot`, `tagpu_fx_emit_frame`, `tagpu_fx_set_mute`, `tagpu_fx_tile_visible` ← `tagpu_sfx.c` |
+   | the terrain key is the composite's own constant | `tagpu_terr_key` ← `tagpu_gui_surf.c`, `tagpu_markown.c`, `tagpu_terrown.c` |
+   | the fog LUT and the scissor are asked by five passes each | `tagpu_native_foglut`, `tagpu_native_scissor_on` ← `tagpu_feat.c`, `tagpu_fx.c`, `tagpu_mark.c`, `tagpu_posedraw.c`, `tagpu_terr.c` |
+
+   What is left over after those is the delete set, and it has a shape too: the `_render`,
+   `_glreset` and draw entry points (`tagpu_posedraw_begin`/`_unit`/`_end` and their ghost,
+   shadow, slant and wire variants; `tagpu_hires_depth`/`_draw`; `tagpu_shadow_begin`/`_caster`/
+   `_unit`/`_end`/`_hills`), every one of them reached only from below `tagpu_native.c:3817`.
+   `tagpu_native.c` itself keeps fourteen exported symbols and loses its draw body.
+
    **Re-checked 2026-09-18, for the eight files landing 11-2 owns, and the table holds.** Worth
    recording is HOW it failed first: deriving each file's exported symbols from its own header
    and testing those against the Vulkan sources reported `tagpu_terr.c`, `tagpu_feat.c`,
