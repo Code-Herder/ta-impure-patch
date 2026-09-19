@@ -3228,15 +3228,28 @@ starting a GL job, and it sat below a guard on a GL texture name, so `tagpu_rest
 a fully built Vulkan consumer and never sent it anything, while `restored` — the flag that sets
 `uRestored` in that consumer's shader — was computed from the GL restorer's state machine and
 could only publish 0; both fixed, and the default path provably unchanged because without the
-lever the driver returns on its first line), `11-5d` `tagpu_posedraw.c` (122, all of them dead
-behind one ordering — `tagpu_posedraw_ready` returns early at `tagpu_vk_owns_present()`), and
+lever the driver returns on its first line), `11-5d` `tagpu_posedraw.c` (**landed**; all 122
+sites out, 483 lines out and 122 in, and TEN of its fourteen deleted functions had no caller
+anywhere in the tree before the landing began — landing 11-3 removed the calls and left the
+callees. Its find is not a deletion at all but a **disproof**: `tagpu_posedraw_live()` is 0 on
+this lane by the 4b-2 review's deliberate choice, and the comfort attached to that choice —
+"the engine keeps its own rasterise", so a unit we fail to draw is still on screen in 8bpp — is
+FALSE. Measured: the engine rasterises every unit (`OWND … skipped=0 passed=55991`), the
+commander is on TA's own surface in colour, and it is **absent from the presented frame** both
+with our unit pass disarmed and with our terrain pass disarmed as well. The engine's per-unit
+rasterise is invisible work, and a Vulkan-lane stand-down is blank rather than degraded. The
+mechanism is NOT established and is the prerequisite for ever flipping that predicate —
+gpu-status §2.72), and
 `11-5e` the entry-point surface the row names — `opengl_utils.{c,h}`, `tagpu_restoreglsl.c`, the
 orphaned GL-object accessors, and the include residue in the four files that still include
 `opengl_utils.h` and make no GL call (`render_gdi.c`, `tagpu_fps.c`, `tagpu_render3do.c`,
-`tagpu_scaffold.c`) — ten files still include it and call GL, down from twelve after 11-5a.
-**After 11-5c no world pass
-is left on the GL surface at all**: 714 call sites remain in ten files, and
-`tagpu_native.c`, `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c` and `tagpu_scaffold.c` are GL-free.
+`tagpu_scaffold.c`) — **nine** files still include it and call GL, down from twelve after 11-5a.
+**After 11-5d no world pass and no unit pass is left on the GL surface at all**: **592 call
+sites remain in nine files** (re-measured on the same masked pattern: `tagpu_restoreglsl.c` 249,
+`tagpu_hires_draw.c` 104, `tagpu_shadow.c` 87, `tagpu_gaf.c` 39, `opengl_utils.c` 31,
+`tagpu_hires.c` 30, `tagpu_overlay.c` 22, `tagpu_text.c` 20, `tagpu_ftime.c` 10 — 714 less
+11-5d's 122), and `tagpu_native.c`, `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c`,
+`tagpu_scaffold.c` and `tagpu_posedraw.c` are GL-free.
 **The rule the gate found, now named in the plan: deleting a backend is not mostly about
 deleting calls, it is about finding the predicates that encode "the backend is ready" as "the
 work is possible."** Four landings, four instances; the compiler cannot see them, because the

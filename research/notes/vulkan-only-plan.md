@@ -2198,6 +2198,20 @@ that a count which grows is the plan catching up with the work.) The row was
      written as refusals, refusals are silent, and a refusal that used to be unreachable has
      never been seen to fire.
 
+     **AND THE SECOND COROLLARY, WHICH 11-5d PAID FOR: not every pinned predicate is an
+     accident, and the ones that are deliberate hide their cost in the JUSTIFICATION rather
+     than in the value.** `tagpu_posedraw_live()` looks exactly like the four above —
+     `s_state == 1 && !tagpu_vk_owns_present()`, a lane term pinned false — but the 4b-2
+     landing review wrote it that way on purpose, with an argument: this pass hands over rather
+     than draws, so it cannot promise the consumer ran. That argument is still sound. What was
+     NOT sound was the sentence attached to it to make the cost acceptable — *"the engine
+     keeps its own rasterise"*, which every later reader, and `tagpu_owndraw.c`'s own
+     paragraph, took to mean "so a unit we fail to draw is still on screen in 8bpp". Measured:
+     it is not on screen at all. **So when a pin turns out to be deliberate, do not stop at
+     "the value is correct" — go and measure the sentence that made the value acceptable.**
+     A pin that is wrong shows up as a bug; a justification that is wrong shows up as a design
+     everyone trusts, and it will not be the compiler that finds it either.
+
    * **11-5 — what is left of the GL entry-point surface. FIVE PARTS, and the split follows
      the passes rather than a calendar** (written 2026-09-19, by the landing that measured it;
      `M` moved from four to five when 11-5c re-measured the surface and `tagpu_posedraw.c`'s
@@ -2282,12 +2296,44 @@ that a count which grows is the plan catching up with the work.) The row was
        screen underneath ours, every frame, for the session — the "near-invisible 8bpp-under-RGB
        double draw" that `tagpu_owndraw.c:414` describes as the transient case.
 
-       Not yet established: what it costs the player visually — whether our fragments cover the
-       engine's opaquely everywhere, and what happens at edges and on blended fragments. That
-       is 11-5d's first measurement. The fix shape is the rule's positive form
-       (`tagpu_posedraw_live()` should mean "something will draw posed units", which here is
-       `s_state == 1`), but `preshadow` may want a different question and both readers need
-       reading before either is changed.
+       **LANDED 2026-09-19, AND THE PARAGRAPH ABOVE IS PART OF WHAT IT DISPROVED**
+       ([gpu-status](gpu-status.html) §2.72). All 122 sites out, 483 lines out and 122 in;
+       fourteen functions deleted, ten of them already callerless. `tagpu_posedraw_ready` is in
+       the rule's positive form — one `maxUniformBufferRange` compare against `PD_BLOCK`, no
+       lane test in front of it. `VS` and `DFS` stay behind a probed pragma; they are
+       `spirv-gen.py:186-187`'s source for the `pose_unit` and `pose_depth` pipelines.
+
+       **WHAT THE MEASUREMENT ACTUALLY FOUND — and it is the opposite of the sentence above
+       it.** The question was *"whether our fragments cover the engine's opaquely everywhere"*.
+       The answer is that **the engine's fragments are not on the screen at all**, so there is
+       nothing to cover. `one-unit` on Two Continents, `renderer=vulkan`, 1024×768, one ARMCOM
+       at screen (512,384):
+
+       * `OWND target=all skipped=0 passed=55991` — the engine really does rasterise every
+         unit, every frame, which is this predicate's doing;
+       * `tacli shot` (TA's own surface) carries that commander in colour with its drop shadow;
+       * with `native.on` off so nothing of ours draws a unit, the commander is **absent from
+         the presented frame** — our marker cross and health bar hang over empty ground;
+       * with `terr.on` off as well, TA's own terrain **does** reach the presented frame (it
+         comes up green) and the commander is **still absent**. That control is the one that
+         matters: our terrain is not what hides it.
+
+       **So the 4b-2 comfort — "the engine keeps its own rasterise", read as "so the unit is
+       still on screen in 8bpp" — is false, and `tagpu_owndraw.c:414`'s own paragraph says
+       it too.** The engine's per-unit rasterise is invisible work; and a frame the Vulkan unit
+       pass stands down on (short hand-over, missing mirror, `TAGPU_PD_MAXHAND`) shows **no
+       unit**, not a degraded one. That is the failure `classify`'s question exists to prevent,
+       reachable by another route.
+
+       **THE FIX SHAPE PROPOSED ABOVE IS WITHDRAWN FOR NOW.** `tagpu_posedraw_live()` is
+       `return 0` with the measurement written at it — value-identical to what it had always
+       returned, so no consumer runs for the first time. Flipping it to `s_state == 1` would
+       save the invisible work, but its safety argument would rest on a composite nobody has
+       explained: **by what mechanism TA's unit pixels fail to reach the presented frame is NOT
+       established.** They are in TA's surface; they are not in ours; our world image is cleared
+       to `{0,0,0,0}` and blended premultiplied over TA's frame; and in the second control
+       nothing of ours drew at those pixels. Establishing that is the prerequisite, not the
+       follow-up. `preshadow` still wants its own question when that day comes.
      - **11-5e — the entry-point surface this row names**, last, once every caller has left:
        `opengl_utils.{c,h}`, `tagpu_restoreglsl.c`, the orphaned GL-object accessors, and the
        include residue in the four files that still include `opengl_utils.h` and make no GL
@@ -2301,13 +2347,14 @@ that a count which grows is the plan catching up with the work.) The row was
        mask applied naively deletes every include instead. After 11-5a, twelve files still
        include it and call GL.
 
-     **The surface as 11-5c leaves it, re-measured with comments and string literals masked:
-     714 GL call sites in ten files** — `tagpu_restoreglsl.c` 249, `tagpu_hires_draw.c` 104,
-     `tagpu_posedraw.c` 122, `tagpu_shadow.c` 87, `tagpu_gaf.c` 39, `opengl_utils.c` 31,
-     `tagpu_hires.c` 30, `tagpu_overlay.c` 22, `tagpu_text.c` 20, `tagpu_ftime.c` 10. **No
-     world pass is on that list any more**: `tagpu_native.c`, `tagpu_terr.c`, `tagpu_feat.c`,
-     `tagpu_fx.c` and `tagpu_scaffold.c` are all GL-free. 11-5d takes 122 of the 714 and
-     11-5e takes 401; the remaining 191 are the two files below.
+     **The surface as 11-5d leaves it, re-measured on the same masked pattern: 592 GL call
+     sites in nine files** — `tagpu_restoreglsl.c` 249, `tagpu_hires_draw.c` 104,
+     `tagpu_shadow.c` 87, `tagpu_gaf.c` 39, `opengl_utils.c` 31, `tagpu_hires.c` 30,
+     `tagpu_overlay.c` 22, `tagpu_text.c` 20, `tagpu_ftime.c` 10. That is 714 less 11-5d's 122,
+     and the per-file rows are unchanged, which is the check that the landing touched only its
+     own file. **No world pass and no unit pass is on that list any more**: `tagpu_native.c`,
+     `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c`, `tagpu_scaffold.c` and `tagpu_posedraw.c`
+     are all GL-free. 11-5e takes 401; the remaining 191 are the two files below.
 
      **Not covered by 11-5a–e:** `tagpu_shadow.c` and `tagpu_hires_draw.c` (escalation reason
      1), and the gate's own exit condition, which is 11-6's.

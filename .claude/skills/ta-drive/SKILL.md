@@ -1970,6 +1970,46 @@ never read it. A comment counted as a call site.]
 Note too that the `packet:` heartbeat is emitted from the render thread, so the exchange's
 counters are not printed on gdi at all.
 
+**`tacli shot` IS NOT A SCREENSHOT OF WHAT THE PLAYER SEES, and on the Vulkan lane the two
+genuinely disagree.** It captures the **engine's own surface** — TA's 8bpp frame — and that
+frame is only the BOTTOM LAYER of what gets presented (`tagpu_vk_world.c`: our world is drawn
+into a target cleared to `{0,0,0,0}` and blended premultiplied over it). So "it is in the shot"
+does not mean "it is on the screen". For the presented frame, capture the window:
+
+```bash
+W=$(DISPLAY=:NN xdotool search --name "tacli:<i>" | head -1)
+DISPLAY=:NN xwd -id $W -silent > frame.xwd && convert frame.xwd frame.png
+```
+
+**The recipe for "does what the engine draws actually reach the screen?" is two controls, and
+one alone is not enough.** Measured this way 2026-09-19 for the vulkan-only plan's 11-5d, on
+`one-unit` with the roster giving the subject's screen position:
+
+1. disarm the pass of ours that draws the same thing (here `native.on`, for units) and relaunch.
+   If the subject is now missing from the window, the engine's copy is not reaching the screen.
+2. **then disarm our TERRAIN pass too** (`terr.on`, and `terrown.on` with it) and relaunch again.
+   Without this control the first result is unreadable: our terrain is opaque over the whole
+   viewport, so "missing" could just mean "covered". With `terr.on` off, TA's own terrain is what
+   the window shows — it comes up in colour — and anything still missing is genuinely lost
+   somewhere between TA's surface and the present.
+
+Take a `tacli shot` in each configuration as the positive control: it is the proof the engine
+drew the thing at all, and it kept being true in every configuration above.
+
+**A private display answers presence, not colour.** On Xvfb the world OUR passes draw comes up
+monochrome while TA's own frame comes through in colour — both visible in control 2 above. That
+is the standing software-GL caveat (`research/notes/tacli-design.md`: *"Not Xvfb/Xephyr (software
+GL, unwatchable)"*), so take presence/absence readings there and leave colour to the live
+display, which is the human's.
+
+Levers are removed by deleting the file — there is no `tacli disarm`:
+
+```bash
+rm -f $G/tagpu_native.on $G/tagpu_terr.on $G/tagpu_terrown.on
+```
+
+and `scenario load --restart` does **not** re-create them, so the removal survives the relaunch.
+
 **`gui.on` DOES NOT GATE `tacli` ITSELF, and for one commit in the vulkan-only plan's landing 10c
 it did** — which is worth knowing because the failure was silent. The flip `0x4C63A0` is where the
 whole on-demand trigger family runs since that landing (peek, `ui`, the catalogues, scenario

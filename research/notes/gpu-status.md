@@ -11915,6 +11915,123 @@ the **Vulkan** terrain shaders' source of truth — `tools/spirv-gen.py` manifes
 behind a pragma whose `pop` was **proved** by planting an unused static after it and compiling
 (a `-fsyntax-only` run does not surface `-Wunused-variable`; a real compile is required).
 
+### 2.72 The posed program loses its GL, and its readiness answer stops flattering the engine — landing 11-5d
+
+`tagpu_posedraw.c` is GL-free: **122 call sites at HEAD, 0 now** (masked count, comments and
+string literals blanked first), 483 lines out and 122 in. Gone: `getgl`, `mksh`, `link_block`,
+`upload_pose`, nine `PFN_*` typedefs and nine `x_gl*` pointers, three GL object names
+(`s_prog`, `s_dprog`, `s_ubo`), all twenty-five uniform locations across the body and depth
+programs (11 depth, 14 body), `s_shU`, and `opengl_utils.h`.
+
+**The commit message says 123 and the number is 122.** 123 is the raw grep; the masked count —
+comments and string literals blanked before counting, which is the count this section quotes
+throughout — is 122, and the one difference is a `glBindVertexArray(0)` named inside a comment
+in `tagpu_posedraw_end`. History is not rewritten here, so the commit stands and this is the
+correction.
+
+**Ten of the fourteen functions had no caller anywhere in the tree before this landing began** —
+`tagpu_posedraw_{shadow_begin,shadow_set,redraw,slant_begin,slant_set,slant_redraw,wire_begin,wire_unit,depth_begin,depth_unit}`,
+62 GL calls between them. Their caller was `tagpu_native.c`'s GL composite, deleted by landing
+11-3; landing 11-3 removed the calls and left the callees. Their declarations went from
+`inc/tagpu_posedraw.h` with them.
+
+**The one deletion that needed an argument was `upload_pose`,** because unlike the rest it sat on
+a live path (`tagpu_posedraw_unit`) with its GL behind a *second* guard — the two-step shape
+§2.71 named. It is inert to remove because `pose_words` is **pure**: it fills two
+caller-provided arrays and returns a clamped count and holds nothing between calls. `upload_pose`
+called it, and `pd_record` calls it again — the same answer computed twice, not two halves of one
+sequence. What `upload_pose` then did with the answer was write it into a uniform buffer nothing
+binds.
+
+**What the Vulkan lane does and does not replace, because the header now says so rather than
+implying a migration.** The depth twin IS ported: `tagpu_vk_unit.c:1043-1046` builds the
+`pose_depth` pipeline from the `VS` + `DFS` that stay in `tagpu_posedraw.c`, and draws it with
+`uDepthPass` 1 (`:1769`). The wire, the Classic silhouette and the structure slant are NOT —
+that pass draws the body range only and says so under its own *WHAT IT DOES NOT DO*
+(`tagpu_vk_unit.c:90`). Eight of the ten entry points are therefore a **tombstone, not a move**,
+and the gap belongs to `tagpu_vk_unit.c`.
+
+#### The finding: the engine is not a fallback
+
+`tagpu_posedraw_live()` was `s_state == 1 && !tagpu_vk_owns_present()`. The second term is pinned
+false (`tagpu_vk.c:732`), so it has always returned 0. **The 4b-2 landing review put it that way
+on purpose and its argument stands**: this pass hands over rather than draws, so `s_state == 1`
+alone would promise a draw the consumer can decline — the twin stands down on a short hand-over,
+a missing mirror or `TAGPU_PD_MAXHAND`, and every such frame would be a unit the game thread had
+already told the engine not to draw.
+
+What did **not** stand is the comfort attached to it — *"the engine keeps its own rasterise"*,
+read by every later reader, and written into `tagpu_owndraw.c`'s own paragraph, as "so the unit
+is still on the screen in 8bpp".
+
+**MEASURED 2026-09-19** — `one-unit` on Two Continents, `renderer=vulkan`, 1024×768 on a private
+display, one ARMCOM at screen (512,384), instance DLL md5-matched to the build:
+
+| what | result |
+|---|---|
+| the engine rasterises every unit | `OWND target=all skipped=0 passed=55991` and climbing |
+| TA's own surface has it | `tacli shot`: the commander in colour, with its drop shadow |
+| the presented frame, unit pass off | **absent** — our marker cross and health bar over empty ground |
+| the presented frame, unit pass **and** terrain pass off | **still absent**, while TA's own terrain *does* reach the frame (it comes up green) |
+
+The second control is the one that matters: it rules out our terrain covering TA's units, because
+with `terr.on` off TA's terrain is what the player sees and the unit is still not in it.
+
+**So the engine's per-unit rasterise is invisible work**, and the consequence runs the other way
+from the one the guard was written for: **a frame the Vulkan unit pass stands down on shows no
+unit at all, not an 8bpp one.** The stand-down is blank, not degraded — which is exactly the
+failure `tagpu_owndraw_classify`'s question exists to prevent, already reachable by another route.
+
+**By what mechanism TA's unit pixels are lost is NOT established and this landing does not
+guess.** They are in TA's surface when `tacli shot` reads it; they are not in the frame we
+present; our world image is cleared to `{0,0,0,0}` and blended premultiplied over TA's frame
+(`tagpu_vk_world.c`, whose own comment says that blend is *"half of why TA's frame still
+shows"*); and in the second control nothing of ours drew at those pixels. Finding that out is the
+**prerequisite** for flipping the predicate, not a follow-up to it: turning `live()` true would
+save the invisible work, but its safety argument would then rest on a composite nobody has
+explained.
+
+**So the predicate keeps its value and loses its disguise.** It is `return 0` with the
+measurement written at it, rather than a lane test that reads as something which comes back when
+the lanes do. Value-identical by construction — the term removed was pinned false — so no
+consumer runs for the first time, which is the trap §2.71's corollary names. `s_state` is
+deliberately not consulted: the pass arming has never been the question this answers.
+
+#### Verification
+
+Build clean; `thread-split: clean — 34 listed file(s)`; `spirv: 49 shaders, 33 programs, headers
+current`. Function inventory against HEAD removes exactly those fourteen and adds nothing.
+`i686-w64-mingw32-nm --defined-only`, on the same TU compiled at an identical path, goes **119
+defined symbols to 65**, and the 54 sum: 11 depth-program locations, 14 body-program locations, 8
+loaded entry-point pointers — **eight, not the nine in the source**, because `x_glGetIntegerv`
+was already unused at HEAD and gcc had dropped it there too — `s_prog`/`s_dprog`/`s_ubo`/`s_shU`, the ten entry points, `getgl`,
+`mksh`, `upload_pose` and its two function-scope statics. **Two of the 54 are not deletions** —
+`pose_words` and `unit_ok` are gcc inlining them at their now-single call site, and both are
+still in the source; `link_block` was already inlined at HEAD and so never appears. `VS` and
+`DFS` are the **Vulkan** posed shaders' source of truth (`tools/spirv-gen.py:186-187`,
+`pose_unit` = `tagpu_posedraw::VS` + `tagpu_native::FS`, `pose_depth` = `::VS` + `::DFS`) and sit
+behind a pragma whose `pop` was **proved** by planting an unused static after the include and
+compiling.
+
+#### Not covered by 11-5d
+
+* The mechanism above.
+* The **cloaked** case. `frag = vec4(rgb * uAlpha, uAlpha)` with `TAGPU_PDUNIT.alpha` 0.5 while
+  cloaked means our body writes alpha 0.5, so whatever is under it survives at 50 %. What that
+  looks like was not measured; the fixture used no cloak.
+* **Colour was not read off the presented frame.** On the private display the world our passes
+  draw comes up monochrome while TA's own frame is in colour — both halves of that are visible in
+  the second control. A private display is software GL and the project's standing rule is that
+  it is for numbers, not pictures ([tacli design](tacli-design.html): *"Not Xvfb/Xephyr (software
+  GL, unwatchable)"*), so no colour conclusion is drawn from it and the monochrome is recorded as
+  an observation rather than a finding. Every claim above is a presence/absence one, which that
+  display does answer — and answers twice, since TA's own frame comes through it in colour.
+* `tagpu_posedraw_glreset()` still exists and still clears `s_state`; retiring the `*_glreset`
+  surface is 11-5e.
+* The `glReadPixels` the restored-atlas step still runs (`tagpu_gaf.c`, via
+  `tagpu_r3d_atlas_mirror_rgb_step`) — the comment in `tagpu_posedraw.c` that cites it is still
+  true today and 11-5e is what makes it stale.
+
 ## 4. What the work taught us
 
 These are the transferable parts — the reasons things are shaped the way they are.
