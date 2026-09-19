@@ -1,6 +1,6 @@
 ---
 name: ta-capture
-description: Capture screenshots and video of Total Annihilation on the tagpu stack — surface shots, GL-framebuffer shots, ffmpeg x11grab video for flicker/animation debugging, frame-by-frame analysis, marker-verified engine-vs-ours pairs. Use when asked to record, capture, film, screenshot, or frame-analyze the game. Launching and driving the game is the ta-drive skill.
+description: Capture screenshots and video of Total Annihilation on the tagpu stack — engine-surface shots, ffmpeg x11grab video for flicker/animation debugging, frame-by-frame analysis, marker-verified engine-vs-ours pairs. Use when asked to record, capture, film, screenshot, or frame-analyze the game. Launching and driving the game is the ta-drive skill.
 ---
 
 # TA capture (tagpu project)
@@ -11,6 +11,26 @@ sessions. **Fold new lessons back into this file.**
 **Launching and driving the game is the `ta-drive` skill** (`tools/tacli`): instances,
 windowed mode, silence, keys, clicks, camera, skirmish presets. This file covers only
 *observing* what a running instance draws.
+
+> **`tacli glshot` IS RETIRED — read this before following any procedure below.** The OpenGL
+> lane was deleted (the vulkan-only plan, landing 11-2), so there is no GL framebuffer in the
+> process and the verb now fails loudly instead of timing out. **Every `glshot` step in this
+> file is a historical record of how a measurement was taken, not an instruction you can run.**
+>
+> What to use instead, in order of preference:
+>
+> * **`tacli shot`** — the engine's own 8bpp surface. It was GL-only too and is not any more:
+>   since landing 11-2a it is polled from the engine's flip and answers on **every** renderer,
+>   gdi and Vulkan included. It shows the engine's frame — UI, and the flat key fill inside the
+>   world viewport — so it is the right tool for reading the UI, the shell, a dialog or a
+>   loading screen, and the wrong one for judging what a pass drew.
+> * **recording the live window** (ffmpeg x11grab, below) — the only way to see the composited
+>   frame now, on either lane. This is what the "pictures come from the live display" rule in
+>   the visual-verification notes already said.
+>
+> A measurement that needs "what was actually presented" therefore goes through the display,
+> and the A/B harness paths inside the Vulkan backend (`tagpu_vk_shot.c`), which no `tacli`
+> verb reaches.
 
 Game dir: an instance's `tagpu/instances/<name>/gamedir/` (cwd of that game; the older
 single-gamedir path `tagpu/gamedir/` still works for a hand-launched run). Trigger files

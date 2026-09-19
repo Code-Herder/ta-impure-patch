@@ -10,7 +10,6 @@
 #include "keyboard.h"
 #include "wndproc.h"
 #include "render_gdi.h"
-#include "render_ogl.h"
 #include "render_vk.h"
 #include "fps_limiter.h"
 #include "debug.h"
@@ -799,7 +798,6 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
     InterlockedExchange((LONG*)&g_ddraw.cursor.y, dwHeight / 2);
 
     BOOL border = g_config.border;
-    BOOL nonexclusive = FALSE;
 
     if (g_config.fullscreen)
     {
@@ -837,10 +835,6 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
             {
                 g_ddraw.render.height -= real_GetSystemMetrics(SM_CYMENU);
             }
-
-            /* prevent OpenGL from going automatically into fullscreen exclusive mode */
-            if (g_ddraw.renderer == ogl_render_main)
-                nonexclusive = TRUE;
 
         }
     }
@@ -983,10 +977,6 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
                             g_config.toggle_borderless = TRUE;
                             border = FALSE;
 
-                            /* prevent OpenGL from going automatically into fullscreen exclusive mode */
-                            if (g_ddraw.renderer == ogl_render_main)
-                                nonexclusive = TRUE;
-                            
                         }
                     }
                 }
@@ -1109,15 +1099,14 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
         g_ddraw.mouse.rc.bottom = g_ddraw.render.viewport.height + g_ddraw.mouse.y_adjust;
     }
 
-    if (nonexclusive || (g_config.nonexclusive && !g_config.windowed && g_ddraw.renderer == ogl_render_main))
-    {
-        g_ddraw.render.height++;
-        g_ddraw.render.opengl_y_align = 1;
-    }
-    else
-    {
-        g_ddraw.render.opengl_y_align = 0;
-    }
+    /* ALWAYS 0 NOW, AND THAT IS AN IDENTITY [landing 11-2]. The extra scanline
+       existed so WGL could not take fullscreen-exclusive mode. The local
+       `nonexclusive` above was assigned in exactly two places, both under
+       `renderer == ogl_render_main`, and the third term of the old condition
+       was that same test -- so on gdi and on Vulkan this branch was already
+       never taken and the field was already 0. render_vk.h says a Vulkan frame
+       carrying the align would be off by a pixel; now nothing can set it. */
+    g_ddraw.render.opengl_y_align = 0;
 
     //dbg_dump_wnd_styles(real_GetWindowLongA(g_ddraw.hwnd, GWL_STYLE), real_GetWindowLongA(g_ddraw.hwnd, GWL_EXSTYLE));
     if (g_config.windowed)
@@ -1241,16 +1230,6 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
             SWP_SHOWWINDOW | SWP_FRAMECHANGED);
 
 
-        if (g_ddraw.renderer == ogl_render_main)
-        {
-            if (!ogl_create())
-            {
-                ogl_release();
-                g_ddraw.show_driver_warning = TRUE;
-                g_ddraw.renderer = gdi_render_main;
-            }
-        }
-
         if (lock_mouse || (g_config.fullscreen && real_GetForegroundWindow() == g_ddraw.hwnd))
             mouse_lock();
     }
@@ -1298,16 +1277,6 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
             swp_flags |= SWP_FRAMECHANGED;
 
             real_SetWindowLongA(g_ddraw.hwnd, GWL_EXSTYLE, exstyle & ~(WS_EX_CLIENTEDGE));
-        }
-
-        if (g_ddraw.renderer == ogl_render_main)
-        {
-            if (!ogl_create())
-            {
-                ogl_release();
-                g_ddraw.show_driver_warning = TRUE;
-                g_ddraw.renderer = gdi_render_main;
-            }
         }
 
         /* WAS `if (!d3d9_active || g_config.nonexclusive)` [landing 11-1].
@@ -1471,20 +1440,11 @@ HRESULT dd_SetCooperativeLevel(HWND hwnd, DWORD dwFlags)
         {
             g_ddraw.render.hdc = GetDC(g_ddraw.hwnd);
 
-            if (g_ddraw.renderer == ogl_render_main)
-            {
-                PIXELFORMATDESCRIPTOR pfd;
-                memset(&pfd, 0, sizeof(PIXELFORMATDESCRIPTOR));
-                pfd.nSize = sizeof(PIXELFORMATDESCRIPTOR);
-
-                pfd.nVersion = 1;
-                pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_DOUBLEBUFFER | PFD_SUPPORT_OPENGL;
-                pfd.iPixelType = PFD_TYPE_RGBA;
-                pfd.cColorBits = g_ddraw.mode.dmBitsPerPel;
-                pfd.iLayerType = PFD_MAIN_PLANE;
-
-                SetPixelFormat(g_ddraw.render.hdc, ChoosePixelFormat(g_ddraw.render.hdc, &pfd), &pfd);
-            }
+            /* THE WGL PIXEL FORMAT WENT WITH THE LANE [landing 11-2]. Neither
+               surviving backend wants one: GDI blits through the DC and Vulkan
+               brings its own surface. Setting one here is also what route A
+               measured as poisoning the drawable for Vulkan, so its absence is
+               a property this fork now has by construction. */
         }
 
         if (!g_config.devmode)
@@ -1727,11 +1687,6 @@ ULONG dd_Release()
                                                  front of this [landing 11-1] */
         }
 
-        if (g_ddraw.renderer == ogl_render_main)
-        {
-            ogl_release();
-        }
-
         if (g_ddraw.render.hdc)
         {
             ReleaseDC(g_ddraw.hwnd, g_ddraw.render.hdc);
@@ -1950,29 +1905,30 @@ HRESULT dd_CreateEx(GUID* lpGuid, LPVOID* lplpDD, REFIID iid, IUnknown* pUnkOute
                still reaching the screen. See render_vk.c. */
             g_ddraw.renderer = vk_render_main;
         }
-        else if (tolower(g_config.renderer[0]) == 'o') /* opengl or openglcore */
+        else /* 'o' (opengl, openglcore), auto, and anything unrecognised */
         {
-            if (oglu_load_dll())
-            {
-                g_ddraw.renderer = ogl_render_main;
+            /* THE OPENGL LANE IS GONE AND `auto` IS THE VULKAN ONE [the
+               vulkan-only plan, landing 11-2]. Both spellings used to call
+               oglu_load_dll() here and fall back to GDI; there is no GL
+               backend to load for any more.
+
+               NOTHING IS PROBED, for the reason the 'v' arm above gives at
+               length: bringing up an ICD is vkCreateInstance's job and this
+               path runs from the engine's DirectDraw creation, under the
+               loader lock on some routes. vk_render_main hands the session to
+               gdi_render_main if the lane will not come up, and route F
+               measured that GDI still reaches the screen afterwards -- so the
+               fallback GL took eagerly here is taken late there instead, and
+               an unrecognised `renderer=` still ends at a working picture. */
+            if (tolower(g_config.renderer[0]) == 'o') {
+                FILE* f = fopen("tagpu.log", "a");
+                if (f) {
+                    fprintf(f, "ddraw: renderer=%s is no longer built -- using vulkan\n",
+                            g_config.renderer);
+                    fclose(f);
+                }
             }
-            else
-            {
-                g_ddraw.show_driver_warning = TRUE;
-                g_ddraw.renderer = gdi_render_main;
-            }
-        }
-        else /* auto */
-        {
-            if (oglu_load_dll())
-            {
-                g_ddraw.renderer = ogl_render_main;
-            }
-            else
-            {
-                g_ddraw.show_driver_warning = TRUE;
-                g_ddraw.renderer = gdi_render_main;
-            }
+            g_ddraw.renderer = vk_render_main;
         }
 
         LONG ref = InterlockedDecrement(&g_ddraw.ref);

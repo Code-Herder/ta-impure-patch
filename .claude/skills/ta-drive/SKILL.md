@@ -1933,16 +1933,21 @@ by `tagpu_packet_pub.c` beside the frame packet. What still does NOT reach gdi: 
 `tacli wheel`, which both need the overlay frame that only the GL and Vulkan backends run;
 `tacli gui`, which writes a lever with no effect on that lane; and **both capture verbs**.
 
-**`tacli shot` AND `tacli glshot` REACH THE OPENGL LANE ONLY — measured on both gdi and
-Vulkan, and this paragraph claimed otherwise for one commit.** It is not about which surface
-each one reads; it is about who polls the trigger. `tagpu_shot.trigger` is consumed at exactly
-one site, in `render_ogl.c`, and `tagpu_glshot.trigger` in that file and in `tagpu_scaffold.c`,
-itself a GL pass. Neither `render_gdi.c` nor `render_vk.c` polls either file, so on those lanes
-the trigger is written and never read, and the verb times out with *"no surface screenshot
-appeared"* — for `shot` exactly as for `glshot`. Pictures of the gdi or Vulkan lane come from
-the live display (see the capture skill), not from these verbs. Rewiring them is on landing 11,
-which deletes `render_ogl.c`: whatever polls the two triggers afterwards has to be code every
-lane reaches.
+**`tacli shot` NOW WORKS ON EVERY LANE, AND `tacli glshot` IS GONE** (the vulkan-only plan,
+landings 11-2a and 11-2). Both used to be OpenGL-only, and not because of which surface they
+read — because of who polled the trigger: both files were consumed in `render_ogl.c` and
+nowhere else, so on gdi and Vulkan the trigger was written and never read and the verb timed out
+with *"no surface screenshot appeared"*. `tagpu_shot.trigger` is now polled by
+`tagpu_triggers_frame`, from the engine's flip, on the game thread — the same thread
+`keyboard.c` has always taken the PrintScreen shot from — so it answers wherever the flip is
+reached, which is every renderer. Measured on `renderer=gdi` and `renderer=vulkan`, both
+writing a correct PNG of the engine's surface.
+
+`tacli glshot` is **retired**: there is no GL framebuffer in the process any more. The verb
+still exists and now **fails loudly** telling you to use `tacli shot` or to record the live
+window, rather than timing out. [For one commit this paragraph said `tagpu_glshot.trigger` was
+also polled in `tagpu_scaffold.c`. It was not — that file mentions the trigger in a comment and
+never read it. A comment counted as a call site.]
 
 Note too that the `packet:` heartbeat is emitted from the render thread, so the exchange's
 counters are not printed on gdi at all.

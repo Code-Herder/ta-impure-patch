@@ -13,7 +13,18 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5
 
 ## 1. Status — what is ours, what is still the engine's
 
-**THERE ARE THREE RENDERER BACKENDS SINCE 2026-09-18, NOT FOUR.** `renderer=` takes `auto`
+**THERE ARE TWO RENDERER BACKENDS SINCE 2026-09-18, AND THE PROCESS CREATES NO GL CONTEXT ON
+ANY PATH.** `renderer=vulkan` is the patch and `renderer=gdi` the reference; `auto`,
+`opengl` and `openglcore` all reach the Vulkan lane, which hands the session to GDI late if it
+will not come up. `render_ogl.c` (2 013 lines) and `render_ogl.h` went in the vulkan-only plan's
+landing 11-2, ahead of the sixteen passes' GL draw halves rather than behind them -- with the
+lane's only other `tagpu_overlay_draw` caller gone, `gl_draws = !tagpu_vk_owns_present()` is
+false at every surviving call, so those halves are now unreachable by an ordering and 11-3/11-4
+delete dead code. **`tacli shot` moved to the flip with it** and answers on every lane for the
+first time; **`tacli glshot` is retired** and fails loudly.
+
+The paragraph this replaced, kept for its own record: three backends since the Direct3D9
+deletion. `renderer=` took `auto`
 (the default, and what the generated ini writes), `opengl`/`openglcore`, `vulkan` and `gdi`;
 **`direct3d9` and `direct3d9on12` are deleted** (the vulkan-only plan's landing 11-1 —
 `render_d3d9.c` and its two headers, **2 387 lines**, plus ~150 more at their call sites).

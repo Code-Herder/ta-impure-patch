@@ -4,7 +4,6 @@
 #include "debug.h"
 #include "hook.h"
 #include "config.h"
-#include "render_ogl.h"
 #include "versionhelpers.h"
 
 
@@ -149,13 +148,9 @@ void fpsl_frame_end()
     if (g_config.maxfps < 0 || 
         (g_config.vsync && (!g_config.maxfps || g_config.maxfps >= g_ddraw.mode.dmDisplayFrequency)))
     {
-        /* Workaround for DwmFlush() freeze (e.g. slow alt+tab) issue on windows 7 SP1 */
-        if (g_ddraw.renderer == ogl_render_main && !IsWine() && !IsWindows8OrGreater())
-        {
-            if (fpsl_wait_for_vblank())
-                return;
-        }
-        else
+        /* The Windows 7 SP1 DwmFlush() freeze workaround was here and was
+           gated on the OpenGL lane, which is gone [landing 11-2]. Neither
+           surviving backend ever took it. */
         {
             if (fpsl_dwm_flush() || fpsl_wait_for_vblank())
                 return;

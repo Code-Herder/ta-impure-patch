@@ -1740,17 +1740,20 @@ def cmd_shot(args):
 
 
 def cmd_glshot(args):
-    """GL framebuffer capture: what is actually presented, including our passes."""
-    inst = Instance(args.name)
-    ppm = inst.gamedir / "tagpu_gl.ppm"
-    before = time.time()
-    (inst.gamedir / "tagpu_glshot.trigger").write_text("")
-    if not _wait_file(ppm, args.timeout, before):
-        die("no GL screenshot appeared (is the instance running?)")
-    dest = Path(args.output).expanduser() if args.output else ppm
-    if args.output:
-        shutil.copy2(ppm, dest)
-    out({"name": args.name, "path": str(dest)}, args.json, human=str(dest))
+    """RETIRED with the OpenGL lane (the vulkan-only plan, landing 11-2)."""
+    # The trigger was polled in render_ogl.c and nowhere else -- a comment in
+    # tagpu_scaffold.c mentions it but never read it -- so the verb died with
+    # that file. It captured the GL framebuffer, which no longer exists in the
+    # process: `ddraw.dll` creates no GL context on any path.
+    #
+    # It is kept as a verb, and fails loudly, because scripts and notes in this
+    # tree still call it and a silent timeout is exactly the failure this repo
+    # keeps paying for. `tacli shot` is the replacement for most uses: since
+    # landing 11-2a it runs from the engine's flip and answers on every lane.
+    die("tacli glshot is retired: the OpenGL lane was deleted in landing 11-2 "
+        "and there is no GL framebuffer to capture. Use `tacli shot` for the "
+        "engine's own surface (it works on every renderer now), or record the "
+        "live window -- see the ta-capture skill.")
 
 
 def cmd_log(args):

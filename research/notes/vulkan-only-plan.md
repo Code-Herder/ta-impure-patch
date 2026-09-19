@@ -21,8 +21,8 @@ no longer true.
     renderer=vulkan   the patch                (default, shipped)
     renderer=gdi      the original game        (the reference)
 
-Deleted (`render_d3d9.c` ✓ gone 2026-09-18, the rest still standing): `render_ogl.c`
-(2 013 lines), `render_d3d9.c` (742), `opengl_utils.c`,
+Deleted (`render_d3d9.c` and `render_ogl.c` ✓ gone 2026-09-18, the rest still standing):
+`render_ogl.c` (2 013 lines), `render_d3d9.c` (742), `opengl_utils.c`,
 `openglshader.h`, `render_ogl.h`, `tagpu_abshot.c`, every `tagpu_*` GL draw, and
 `tagpu_overlay.off`.
 
@@ -1567,7 +1567,10 @@ Back to the filed list:
    `openglshader.h`, `render_ogl.h`, and **`tagpu_restoreglsl.c`**. `renderer=gdi` becomes the
    documented stock reference.
 
-   **SPLIT INTO FIVE PARTS, 2026-09-18, BY THE SURVEYS BELOW — `landing 11-1 of 5`.** The row was
+   **SPLIT INTO SIX PARTS, 2026-09-18, BY THE SURVEYS BELOW — `landings 11-1 and 11-2 of 6`.**
+(Five when it was first written; the sixth appeared the same day when deleting the lane turned
+out to belong in front of the pass halves rather than behind them, and `CLAUDE.md` is explicit
+that a count which grows is the plan catching up with the work.) The row was
    filed as one item and the work has shown it is not one: the six files it names are ~5 200
    lines, and the GL halves bolted to sixteen passes the Vulkan lane still depends on are
    1 233 more, across sixteen files that each need their own before/after. Per `CLAUDE.md`
@@ -1618,23 +1621,77 @@ Back to the filed list:
      it, the `renderer=direct3d9` it can write now lands in the fallback above. [The review
      found all four; the first three are one-line facts, the last is a tracked file this fork
      does not build and has not maintained.]
-   * **11-2 — the world passes' GL draw halves.** `tagpu_native.c`, `tagpu_terr.c`,
+   * **11-2 — the GL LANE, ahead of the pass halves. ✓ DONE 2026-09-18, and this is a
+     REORDER of the four bullets below.** They were written lane-last: delete the sixteen passes'
+     GL halves first, `render_ogl.c` at the end. That order leaves `renderer=openglcore`
+     selectable and drawing nothing for two whole landings — half-done work left behind, which
+     the landing bar forbids. Lane-first is also **safe by construction, which lane-last is
+     not**: every GL draw is gated on `gl_draws = !tagpu_vk_owns_present()`, the passes run only
+     from `tagpu_overlay_draw`, and that has exactly two callers — `render_ogl.c:1632` and
+     `render_vk.c:232`. Delete the first and the only caller left is the Vulkan one, where
+     `tagpu_vk_own_present()` has already set `s_ownWin` **once at the top of the render thread,
+     before the frame loop**, so `gl_draws` is false at every surviving call. The pass halves
+     become unreachable by an ordering rather than by a hope, and 11-3/11-4 then delete provably
+     dead code instead of live code.
+
+     What went: `render_ogl.c` (2 013 lines), `render_ogl.h`, and the GL lane's call sites in
+     `dd.c`, `config.c`, `fps_limiter.c` and `winapi_hooks.c`. `renderer=opengl`/`openglcore`
+     now reaches the **Vulkan** lane with a log line, and so does `auto` — which makes the
+     plan's "default, shipped" true in the code rather than only in this page. Nothing is probed
+     on that path, for the reason the `'v'` arm already gives: `vk_render_main` hands the session
+     to GDI late if the lane will not come up, which route F measured as still reaching the
+     screen.
+
+     **THE IDENTITIES, each commented at the site.** `dd.c`'s local `nonexclusive` was assigned
+     in exactly two places, both under `renderer == ogl_render_main`, and the third term of the
+     `opengl_y_align` condition was that same test — so on gdi and Vulkan the extra scanline was
+     already never taken and the field already 0; it is now 0 unconditionally, which `render_vk.h`
+     wanted. The WGL `SetPixelFormat` block, the two `ogl_create` blocks, the `ogl_release` in
+     `dd.c` and in `fake_DestroyWindow`, and `fps_limiter.c`'s Windows-7 `DwmFlush` workaround
+     were all inside `renderer == ogl_render_main` tests that no surviving lane satisfied.
+
+     **`tacli shot` MOVED FIRST, so the verb never had a gap** (11-2a). The engine-surface
+     screenshot was polled in `render_ogl.c`'s present loop and nowhere else, so it answered on
+     the GL lane only — measured failing on gdi and Vulkan by 10c-3's review. It is not a GL
+     capture: `ss_take_screenshot(g_ddraw.primary)` reads the fork's own DirectDraw primary. It
+     joined `tagpu_triggers_frame`, and the thread was already proven for it — `keyboard.c:96`
+     and `:102` take the same screenshot from the game thread on PrintScreen. Measured: a correct
+     main-menu PNG on `renderer=gdi` and on `renderer=vulkan`, where the verb had never worked.
+
+     **`tacli glshot` IS RETIRED**, because a GL framebuffer no longer exists in the process. The
+     verb is kept and now **fails loudly** with what to use instead, rather than timing out
+     silently the way a deleted trigger would. [Its poll was in `render_ogl.c` alone. This page
+     and the ta-drive skill said "and in `tagpu_scaffold.c`" for one commit — that file only ever
+     *mentioned* the trigger in a comment. A comment counted as a call site: the same boundary
+     error the method note below is about, made while writing up the method note.]
+
+     **Measured**: `renderer=gdi` launches, answers `tacli ui` and writes a `tacli shot` with no
+     `vk:` line in its log; `renderer=vulkan`, `openglcore` and `auto` all come up on the Vulkan
+     lane in ~210 ms; and a full `scenario load` through the harness's own default path
+     (`openglcore` → Vulkan) drives the menus, starts the skirmish, applies 8 of 8 units and
+     draws the world at `ss=2` — `vk: world: 2048x1536 target (1024x768 at ss=2)`, 1 501 world
+     frames, `census: 6 pass(es) drew (terr=1 feat=1 unit=1 fx=1 mark=1 gui=1)`.
+
+     **Observed and NOT attributed to this landing**: `vk: mark/unit: no hand-over for frame N`
+     appears 5 times in a ~2 500-frame run, at frames 17, 927 and 2488 — the first frames, a map
+     transition and the last. Nothing here touches the passes that publish those hand-overs, and
+     the census shows both drawing on every sampled frame. Named rather than explained.
+
+   * **11-3 — the world passes' GL draw halves.** `tagpu_native.c`, `tagpu_terr.c`,
      `tagpu_feat.c`, `tagpu_fx.c`, `tagpu_shadow.c`, `tagpu_posedraw.c`, `tagpu_hires_draw.c`,
      `tagpu_render3do.c` — ~700 of the 1 233 lines. Every one keeps its producer and its
      `_handover`; only the half below `tagpu_native.c:3753`'s `if (!gl_draws)` goes. Shown by:
      the world A/B at `ss=2` still reads 0 px per pass.
-   * **11-3 — the UI and support passes' GL draw halves.** `tagpu_gui_surf.c`, `tagpu_mark.c`,
+   * **11-4 — the UI and support passes' GL draw halves.** `tagpu_gui_surf.c`, `tagpu_mark.c`,
      `tagpu_text.c`, `tagpu_fps.c`, `tagpu_gaf.c`, `tagpu_posebake.c`, `tagpu_scaffold.c`,
      `tagpu_hires.c`, `tagpu_overlay.c` — the rest of the 1 233. Shown by: the UI A/B, and
      `tacli ui` still answering on every lane.
-   * **11-4 — the GL entry-point surface itself.** `render_ogl.c`, `render_ogl.h`,
-     `opengl_utils.c`, `opengl_utils.h`, `openglshader.h`, `tagpu_restoreglsl.c`, and the three
-     one-line plumbing users (`dd.c`'s `oglu_load_dll`, `render_gdi.c`'s `g_oglu_version`,
-     `tagpu_ftime.c`'s `xwglGetProcAddress`). **It also owns `tacli shot` and `tacli glshot`,
-     which are wired ONLY into `render_ogl.c` and therefore die with it** — landing 10c-3's
-     review measured both verbs failing on gdi and on Vulkan already, so this part decides
-     whether they are rehosted on the flip like the trigger family or retired.
-   * **11-5 — the exit condition.** `renderer=gdi` documented and MEASURED as the stock
+   * **11-5 — what is left of the GL entry-point surface.** `opengl_utils.c`,
+     `opengl_utils.h`, `openglshader.h`, `tagpu_restoreglsl.c`, and the plumbing users that
+     remain (`opengl_utils.c`'s own `oglu_load_dll`, now called by nothing; `render_gdi.c`'s
+     `g_oglu_version`; `tagpu_ftime.c`'s `xwglGetProcAddress`). `render_ogl.c`, `render_ogl.h`
+     and the two capture verbs left this set in 11-2.
+   * **11-6 — the exit condition.** `renderer=gdi` documented and MEASURED as the stock
      reference, with the residue named rather than waved at.
 
    **WHAT "STOCK" IS TAKEN TO MEAN — the decision this item was told to make.** The candidate

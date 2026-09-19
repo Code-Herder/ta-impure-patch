@@ -4,7 +4,6 @@
 #include "config.h"
 #include "dd.h"
 #include "render_gdi.h"
-#include "render_ogl.h"
 #include "hook.h"
 #include "debug.h"
 #include "dllmain.h"

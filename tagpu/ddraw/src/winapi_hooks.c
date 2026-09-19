@@ -14,7 +14,6 @@
 #include "keyboard.h"
 #include "wndproc.h"
 #include "render_gdi.h"
-#include "render_ogl.h"
 #include "directinput.h"
 #include "ddsurface.h"
 #include "tagpu_zoom.h"
@@ -2030,11 +2029,8 @@ BOOL WINAPI fake_DestroyWindow(HWND hWnd)
     if (g_ddraw.ref && hWnd && hWnd == g_ddraw.hwnd)
     {
         dd_RestoreDisplayMode();
-
-        if (g_ddraw.renderer == ogl_render_main)
-        {
-            ogl_release();
-        }
+        /* `ogl_release()` stood here [landing 11-2]; render_vk.c's header
+           already recorded that the Vulkan lane owes nothing at this site. */
     }
 
     BOOL result = real_DestroyWindow(hWnd);
