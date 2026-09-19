@@ -59,8 +59,11 @@ static void report(void)
     double v50 = pct(s_vkRing, s_vkN, 0.50), v99 = pct(s_vkRing, s_vkN, 0.99);
     /* ONE LANE, SO ONE FIGURE AND NO RATIO. The `vk/gl` arithmetic this
        function used to print needed samples from both rings; the GL ring was
-       filled only by a bracket render_ogl.c called, and landing 4d-1 deleted
-       that backend. From then the branch could not be reached, and from THIS
+       filled only by a bracket render_ogl.c called, and landing 11-2 deleted
+       that file. (4d-1 deleted route D, which is what made the two lanes stop
+       being live in one process; 11-2 took the backend itself. An earlier
+       draft of this sentence conflated them -- the 11-5e-1 review's MEDIUM-3.)
+       From then the branch could not be reached, and from THIS
        landing there is no second ring for it to read -- so the comparison the
        gate asks for is a CROSS-BUILD one, this build's figure against an
        earlier build's. tagpu_ftime.h says so at length and is the place to

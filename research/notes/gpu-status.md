@@ -12293,10 +12293,21 @@ if (cur != s_ctx) {
 
 It was written for a real failure — the fork restarts its render thread with a new GL context
 on a display-mode change, and a stale FBO bind then cleared the real backbuffer black (found
-during the 1024x768 resolution test). **It cannot fire in this build.** A masked scan of every
-source finds no call to `wglCreateContext`, `wglMakeCurrent`, `SetPixelFormat` or
-`ChoosePixelFormat`: the only creator was `render_ogl.c`, deleted in 11-2. So `cur` is 0 on
-every call, `s_ctx` starts 0, and the inner `if (s_ctx)` has no first time.
+during the 1024x768 resolution test). **It cannot fire in this build**, and the invariant is
+a CALLER rather than a name: **`oglu_load_dll()` -- the only
+code in the tree that resolves `wglCreateContext` and `wglMakeCurrent` -- HAS NO CALLER**,
+and neither resulting pointer is ever invoked (`opengl_utils.c:133` is a truthiness test).
+`dd.c`'s renderer selection has exactly two arms, gdi and Vulkan, and the game's own import
+table names no `opengl32`.
+
+The first draft of this paragraph said instead that `wglCreateContext` and `wglMakeCurrent`
+"appear in no source of this build". They do — `opengl_utils.c:107` and `:110` — and a name
+scan missed them only because they are string literals there and the identifiers carry an
+`x` prefix. That matters beyond pedantry: a future landing that called `oglu_load_dll()` and
+then `xwglCreateContext` would pass the name scan unchanged and silently restore the exact
+failure the watch existed for. [THE 11-5e-1 REVIEW'S MEDIUM-1.] With the caller fact
+established, `cur` is 0 on every call, `s_ctx` starts 0, and the inner `if (s_ctx)` has no
+first time.
 
 **Deleting that one branch left a SIXTEEN-function cascade with no root** — fourteen of them
 still compiled in — across ten files. (The commit message for this landing says *ten*; the
@@ -12308,18 +12319,18 @@ correction.)
 ```
 tagpu_overlay.c's context watch                  DELETED -- could never fire
   |- tagpu_overlay_glreset                       DELETED (its state went with the capture)
-  |- tagpu_native_glreset            (:2000)     callerless
-  |    |- tagpu_rglsl_glreset        (:2002)     reachable only through it
-  |    |- tagpu_fx_glreset           (:2003)          "
-  |    |- tagpu_feat_glreset         (:2004)          "
-  |    |- tagpu_terr_glreset         (:2005)          "
-  |    |- tagpu_shadow_glreset       (:2006)          "     [escalation reason 1]
-  |    |- tagpu_hires_draw_glreset   (:2009)          "     [escalation reason 1]
-  |    |     `- tagpu_hires_glreset  (tagpu_hires_draw.c:669)  one level further down
-  |    |- tagpu_posebake_glreset     (:2010)          "
-  |    `- tagpu_posedraw_glreset     (:2011)          "
-  |         (tagpu_mark_glreset was :2007 and forwarded to tagpu_text_glreset;
-  |          both DELETED, their whole bodies being that forward)
+  |- tagpu_native_glreset            (:3620)     callerless
+  |    |- tagpu_rglsl_glreset        (:3623)     reachable only through it
+  |    |- tagpu_fx_glreset           (:3624)          "
+  |    |- tagpu_feat_glreset         (:3625)          "
+  |    |- tagpu_terr_glreset         (:3626)          "
+  |    |- tagpu_shadow_glreset       (:3627)          "     [escalation reason 1]
+  |    |- tagpu_hires_draw_glreset   (:3631)          "     [escalation reason 1]
+  |    |     `- tagpu_hires_glreset  (tagpu_hires_draw.c:834)  one level further down
+  |    |- tagpu_posebake_glreset     (:3632)          "
+  |    `- tagpu_posedraw_glreset     (:3633)          "
+  |         (tagpu_mark_glreset was between shadow and hires and forwarded to
+  |          tagpu_text_glreset; both DELETED, their whole bodies being that forward)
   |- tagpu_scaffold_glreset                      callerless
   |- tagpu_r3d_glreset                           callerless
   |- tagpu_gui_glreset                           callerless -- KEPT, it still resets the twin
@@ -12328,7 +12339,12 @@ tagpu_overlay.c's context watch                  DELETED -- could never fire
   `- tagpu_fps_glreset                           callerless
 ```
 
-Line numbers are `tagpu_native.c`'s, after this landing removed `:2007`.
+Line numbers are `tagpu_native.c`'s at the end of this landing. **THEY WERE WRONG IN THE
+FIRST WRITE-UP OF THIS SECTION — 2000 through 2011, and `tagpu_hires_draw.c:669` — and they
+were wrong in exactly the way the subsection below describes**, having been read off a
+masked scan whose comments had eaten their own newlines. The section refuted itself three
+paragraphs apart and neither half noticed. [THE 11-5e-1 REVIEW'S MEDIUM-2, and the sharpest
+thing it found: writing down a trap does not protect the page you write it on.]
 
 **Only the two whose entire body was a forward are deleted here.** The rest are left standing
 and labelled in place, because their modules still hold live GL state — `tagpu_shadow.c` and
@@ -12373,7 +12389,9 @@ fault at `0x4d94e0`).
 
 **Symbol table, per translation unit**, HEAD's revision compiled from a `git archive` at the
 same include paths, `i686-w64-mingw32-nm --defined-only`, diffed: exactly the 13 functions and
-19 statics above disappeared and **nothing else**. Two entries changed shape rather than
+34 statics above disappeared and **nothing else** (an earlier draft said 19 here and 34 in
+the deletion list; 34 is right, and 19 is `tagpu_ftime.c`'s subtotal — the 11-5e-1 review's
+LOW-9). Two entries changed shape rather than
 vanishing — `_pct.part.0` became `_pct.part.0.constprop.0` and `_fprintf` became
 `_fprintf.constprop.0` — which is gcc specialising a helper that now has one caller shape, not
 a deletion. `tagpu_native.o` and `tagpu_gui_surf.o` show **no symbol change at all**, which is
@@ -12419,8 +12437,19 @@ control the 28.5 % reads as a regression this landing caused, and it was not one
 - **`tagpu_hires_draw_frame` has no caller** either — the main entry of a 104-site file — and
   `tagpu_hires_draw_glreset` is reached only from `tagpu_native_glreset`, which is itself
   callerless now. Both facts are for the owner, with the escalation.
-- **`tagpu_native.c:997` still trips `-Wmisleading-indentation`**, and `tagpu_scaffold.c:366`
-  and `:367` trip the same. Pre-existing, on `main`, untouched here.
+- **`tagpu_native.c:996` still trips `-Wmisleading-indentation`**, and `tagpu_scaffold.c:366`
+  and `:367` trip the same. Pre-existing and on `main`; it reads as `:997` there and moved up
+  one line when this landing removed a stale `#include` above it.
+- **`tools/uiwalk.py` has a wait that can never be satisfied**, and this landing explains it
+  rather than causing it. `:598` detects the game's mode switch by waiting for the log line
+  `GL CONTEXT CHANGED`, whose only emitter was the block deleted here — but that block was
+  already unfireable on `main`, so the line has not printed since 11-2 and
+  `stop_loading()` has been burning its full 150 s timeout per screen ever since. The same
+  file still calls the retired `tacli glshot` (`:509`), arms `tagpu_glshot.trigger`
+  (`:574`, `:614`) and waits on `tagpu_gl.ppm` (`:571`), whose producer this landing has now
+  deleted outright. **Not repaired here**: uiwalk needs a different switch signal, which is
+  its own piece of work and not this landing's three files. Recorded so the next person to
+  run it knows why it is slow. [THE 11-5e-1 REVIEW'S LOW-10.]
 
 #### THE TOOL BUG THIS LANDING FOUND IN ITS OWN METHOD, and what it invalidated
 

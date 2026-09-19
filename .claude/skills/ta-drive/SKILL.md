@@ -1312,8 +1312,10 @@ instead: `tacli arm <i> classicpp.on=off`.
   **`tagpu_fogwide`'s own line lost `bare=`, `ret=`, `held=` and `strand=`** — it hands nothing
   over any more, so there is nothing to retire and nothing to strand. It is
   `fogwide: CxR cells=N cap=CxR rebuilds=N in S = R/s ticks=N build=…/… us (mean/max)`.
-- The instrumentation triggers (`suppress.on`, `tracer.on`, `gldbg.on`, `posedump.on`,
-  `cobtrace.on`, `spxlog.on`, `fpsosd.on`) — debugging, not features.
+- The instrumentation triggers (`suppress.on`, `tracer.on`, `posedump.on`, `cobtrace.on`,
+  `spxlog.on`, `fpsosd.on`) — debugging, not features. **`gldbg.on` is NOT among them any
+  more**: its last reader in the tree was a `glGetError` probe deleted in 11-5e-1, so the
+  file now does nothing at all.
 - `hires.on` only carries the hires renderer's *tweaks* (`anchor=`, sun, ambient,
   normal maps). What turns hires models on is a `gamedir/hires/<unit>.glb` existing.
 

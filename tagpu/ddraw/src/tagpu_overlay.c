@@ -45,7 +45,7 @@
 #include "tagpu_surf.h"
 #include "tagpu_fps.h"
 
-static int   s_state = 0;   /* 0=unloaded 1=ready */
+static int   s_said;        /* the one-shot below has logged */
 
 static void olog(const char* s)
 {
@@ -53,16 +53,25 @@ static void olog(const char* s)
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
 
-/* THERE IS NOTHING LEFT TO LOAD, and that is what this function now says. It
-   used to fetch `glReadPixels`, `glBlitFramebuffer` and `glReadBuffer` for the
-   glshot capture below it; the capture is gone (11-5e-1) and no other line in
-   this file reaches a GL entry point. It still exists because `s_state` is the
-   module's ready latch and `tagpu_overlay_draw` reads it -- a one-line function
-   whose one line is the latch, rather than a latch set inline in the middle of
-   the dispatch. */
-static void init_overlay(void)
+/* THERE IS NOTHING LEFT TO BRING UP, SO THIS IS A ONE-SHOT LOG AND NOT A
+   READINESS LATCH -- and saying so is the point of the rewrite. `init_overlay`
+   fetched `glReadPixels`, `glBlitFramebuffer` and `glReadBuffer` for the
+   glshot capture and then set `s_state = 1`; `tagpu_overlay_draw` called it on
+   `s_state == 0` and returned on `s_state != 1` below.
+
+   THAT SECOND TEST COULD NEVER BE FALSE, AND NOT ONLY SINCE THIS LANDING: the
+   old `init_overlay` set `s_state = 1` on every path, including the one that
+   logged "glReadPixels missing", so the guard was already inert on main. What
+   this landing removed was its last WRITER OF ZERO, the GL-context-change
+   watch, which left a variable with one value and a test that reads as a
+   check. That is exactly the shape this landing deletes elsewhere
+   (`s_glDrives`, `report()`'s silent-lane branches), so it goes the same way:
+   the state is a `static int` that says whether the line has been logged, and
+   there is no gate.
+   [THE 11-5e-1 REVIEW'S LOW-11, which called it a consistency point.] */
+static void say_ready(void)
 {
-    s_state = 1;
+    s_said = 1;
     olog("tagpu: overlay ready (built into fork)");
 }
 
@@ -124,11 +133,26 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        1024x768 resolution test, and the reason the block was written).
 
        The handle it watched was the fork's own, created by render_ogl.c, which
-       landing 11-2 deleted. `wglCreateContext`, `wglMakeCurrent` and
-       `SetPixelFormat` appear in no source of this build [masked scan,
-       11-5e-1], so `cur` is 0 on every call, `s_ctx` starts 0 and the inner
-       `if (s_ctx)` has no first time. Keeping it would be keeping a watchman
-       for a door that is not in the building.
+       landing 11-2 deleted.
+
+       AND THE INVARIANT IS A CALLER, NOT A NAME. An earlier draft of this
+       paragraph said `wglCreateContext` and `wglMakeCurrent` "appear in no
+       source of this build". They do: `opengl_utils.c:107` and `:110` resolve
+       both into `xwglCreateContext` / `xwglMakeCurrent`, which
+       `opengl_utils.h` exports tree-wide. A name scan missed them because they
+       are string literals there and the identifiers carry an `x` prefix -- and
+       a future landing that called them would pass that scan unchanged while
+       silently restoring the very failure this block existed for. What holds
+       is the caller fact: **`oglu_load_dll()` is the only code that resolves
+       those two pointers, and it has no caller anywhere in the tree**
+       (`dd.c:1898` and `:1912` say so in prose; `dd.c`'s renderer selection
+       has exactly two arms, gdi and Vulkan). Neither pointer is ever invoked
+       -- `opengl_utils.c:133` is a truthiness test, not a call -- so both are
+       NULL, no context is ever made current on this thread, `cur` is 0 on
+       every call, `s_ctx` starts 0, and the inner `if (s_ctx)` has no first
+       time. Keeping the watch would be keeping a watchman for a door that is
+       not in the building.
+       [THE NAME-SCAN WORDING WAS THE 11-5e-1 REVIEW'S MEDIUM-1.]
 
        WHAT THIS MAKES CALLERLESS is the point of recording it: the five other
        resets it named -- `tagpu_native_glreset`, `tagpu_scaffold_glreset`,
@@ -155,18 +179,19 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     tagpu_gui_flush(f->frame_counter);
     /* On EVERY path out of here, including these two: a frame that drew nothing
        zoomed must take the input transform back to 1:1, or `tagpu_overlay.off`
-       (or a GL context change) would leave it bending clicks against the last
-       viewport it saw — menu clicks included (tagpu_zoom.h). */
+       would leave it bending clicks against the last viewport it saw — menu
+       clicks included (tagpu_zoom.h). (A GL context change was the other way
+       in until 11-5e-1; that watch is gone, so the lever is the whole list.) */
     if (GetFileAttributesA("tagpu_overlay.off")!=INVALID_FILE_ATTRIBUTES)
         { tagpu_zoom_frame_end(); return; }
-    if (s_state==0) init_overlay();
-    if (s_state!=1) { tagpu_zoom_frame_end(); return; }
+    if (!s_said) say_ready();
     /* tagpu_reclaim: a level teardown is freeing the MODEL TEMPLATES and the
        per-map arrays the fenced passes still index; sit the rest of this frame
        out. The units themselves come from the packet since landing 3, so this
        is no longer what keeps a unit read safe — it is the fence for the
        assets, which the packet does not carry.
-       The pass bracket's end stays in the caller (render_ogl.c). */
+       The pass bracket's end was the caller's, in render_ogl.c, which 11-2
+       deleted; render_vk.c is the caller now. */
     if (tagpu_reclaim_teardown_active()) { tagpu_zoom_frame_end(); return; }
 
     /* EVERYTHING ABOVE THIS POINT IS API-INDEPENDENT AND RUNS ON EVERY BACKEND.

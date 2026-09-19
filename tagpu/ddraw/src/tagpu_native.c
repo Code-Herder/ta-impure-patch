@@ -92,7 +92,6 @@
 #include "tagpu_glsl.h"
 #include "tagpu_zoom.h"
 #include "tagpu_packet.h"  /* the view every pass draws from (landing 2) */
-#include "tagpu_overlay.h"   /* tagpu_overlay_target_fbo: the frame's default draw target */
 #include "tagpu_gui.h"       /* tagpu_gui_cursor_own: whose cursor is on screen (G17c) */
 #include "tagpu_pal.h"       /* the palette the screen is SHOWN with, not main+0x143A7 */
 #include "tagpu_vpwide.h"

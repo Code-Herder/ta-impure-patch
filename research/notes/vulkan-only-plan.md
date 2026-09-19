@@ -2217,11 +2217,20 @@ that a count which grows is the plan catching up with the work.) The row was
      that predicate and not any function in the tree.** `tagpu_overlay.c` polled
      `wglGetCurrentContext` once a frame and ran six modules' `*_glreset` when the handle
      changed. Nothing about that code says "GL is gone": every variable is live, every branch
-     is ordinary, and its own caller runs every frame. It is dead because **no source of this
-     build calls `wglCreateContext`, `wglMakeCurrent` or `SetPixelFormat`** -- a fact about
-     what is NOT in the tree, which no amount of reading that file can establish. Deleting the
-     watch orphaned ten functions at once, across nine files, none of which a caller scan had
-     flagged, because each of them did have a caller: the one above it in the tree.
+     is ordinary, and its own caller runs every frame. It is dead because **`oglu_load_dll()`,
+     the only code that resolves `wglCreateContext` and `wglMakeCurrent`, has no caller** --
+     a fact about what is NOT in the tree, which no amount of reading that file can establish.
+     Deleting the watch orphaned sixteen functions at once, across ten files, none of which a
+     caller scan had flagged, because each of them did have a caller: the one above it.
+
+     **AND THE FIRST STATEMENT OF THIS COROLLARY GOT ITS OWN INVARIANT WRONG, which is worth
+     more than the corollary.** It said the names `wglCreateContext` and `wglMakeCurrent`
+     "appear in no source of this build". They appear in `opengl_utils.c`, as the strings a
+     `GetProcAddress` resolves into `xwgl*` pointers; a word-bounded scan missed them. A name
+     scan is not an absence proof -- it is a proof about spelling, and it stays true while a
+     future landing calls `oglu_load_dll()` and restores the failure the watch existed for.
+     **When a predicate is pinned by an absence, the invariant to write down is the CALLER
+     that is missing, never the name.** [The 11-5e-1 review's MEDIUM-1.]
 
      **So the search is not "which functions have no callers" -- that finds leaves. It is
      "which tests can never be true", and what falls out is everything reachable only through

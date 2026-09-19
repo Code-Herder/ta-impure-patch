@@ -811,10 +811,13 @@ static void twin_string(TWIN* t, const TAGPU_PUBOP* o)
     if (tagpu_text_glyph_gen() != gen0) goto reseed;
     s_strMiss += (unsigned)miss;
     if (!n) goto reseed;
-    /* THE QUESTION IS WHETHER THE GLYPH CACHE HAS RASTERISED ANYTHING --
-       tagpu_text_glyph_tex()'s own first line -- and the texture name is the
-       wrapper the GL lane needs that answer in. Asking for the name on a lane
-       that makes none would send every string down the re-seed path.
+    /* THE QUESTION IS WHETHER THE GLYPH CACHE HAS RASTERISED ANYTHING, and
+       `tagpu_text_glyph_have` is how it is asked. It was written in 4b-3 as
+       the context-free twin of `tagpu_text_glyph_tex`'s own first line, back
+       when the answer arrived wrapped in a GL texture name and asking for the
+       name on a lane that makes none would have sent every string down the
+       re-seed path. That function is deleted (11-5e-1) and the plain question
+       is all there is now.
        [The vulkan-only plan, landing 4b-3.] */
     if (!tagpu_text_glyph_have()) goto reseed;
     tagpu_text_glyph_dims(&aw, &ah);
@@ -1870,13 +1873,16 @@ static void sharp_begin(const TAGPU_FRAME* f)
         s_sharpInk = (s_sharptest || s_curDrawn != c0 || s_mmDrawn != m0) ? 1 : 0;
     }
     /* THE CLEAR COLOUR IS MODULE-WIDE STATE AND WE OWN IT AT (0,0,0,0).
-       render_ogl.c repaints the letterbox bars with a bare glClear on EVERY
-       frame whose viewport is offset (`if (viewport.x || viewport.y)`), and
-       the glshot capture did the same (tagpu_overlay.c, deleted in 11-5e-1
-       with its lane) — neither set a
-       colour of its own, so whatever we leave here is what they paint. The
-       clear above already ends at (0,0,0,0) on the normal path; this is the
-       statement of the invariant, not a second setter.
+       BOTH PAINTERS THIS PROTECTED ARE GONE and the invariant is kept anyway:
+       render_ogl.c repainted the letterbox bars with a bare glClear on every
+       frame whose viewport was offset (`if (viewport.x || viewport.y)`), and
+       the glshot capture did the same — neither set a colour of its own, so
+       whatever was left here is what they painted. render_ogl.c went in 11-2
+       and the capture in 11-5e-1, so nothing reads this state today. It stays
+       stated because the property is about THIS module's exit condition, not
+       about who consumed it: any future painter inherits whatever we leave.
+       The clear above already ends at (0,0,0,0) on the normal path; this is
+       the statement of the invariant, not a second setter.
        `sharp_begin` also leaves the VIEWPORT at (0,0,w,h) with the scissor
        test off and the default framebuffer bound. That is safe only because
        tagpu_gui_present rebinds the target FBO and the frame's viewport after

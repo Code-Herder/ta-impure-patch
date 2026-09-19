@@ -17,11 +17,21 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f);
    when the fork's GL context changed.
 
    All four had NO CALLER in this build [masked scan, 11-5e-1]: their caller was
-   render_ogl.c's present loop, deleted in 11-2. THE OWNERSHIP-TEST LESSON IS
-   THE PART WORTH KEEPING -- a capture must read a target we own, never the
-   window -- and it is not this lane's problem to re-solve: `tacli glshot`'s
-   Vulkan answer reads the offscreen game-res target the world already draws
-   into (gate 4), which is an owned image for the same reason.
+   render_ogl.c's present loop, deleted in 11-2.
+
+   THE VERB WENT WITH THEM AND IS NOT COMING BACK. `tacli glshot` is a retired
+   stub that fails loudly (`tools/tacli`, `cmd_glshot`), retired by 11-2 for
+   the same reason: it captured a GL framebuffer this process no longer has.
+   An earlier draft of this tombstone said it had "a Vulkan answer" -- it does
+   not, and a reader acting on that sentence gets a hard error [the 11-5e-1
+   review's MEDIUM-4]. What DOES read the offscreen game-res target is
+   `tagpu_vk_shot_record` / `_finish`, driven by the A/B capture
+   (`tagpu_vk.c`), and that is an oracle rather than a screenshot verb.
+
+   THE OWNERSHIP-TEST LESSON IS THE PART WORTH KEEPING: a capture must read a
+   target we own, never the window, because glReadPixels on the default
+   framebuffer is defined only for pixels that pass the ownership test. The
+   A/B capture satisfies it for the same reason, by construction.
 
    `tacli shot` is a different verb and is untouched: it reads the fork's
    DirectDraw primary from the game thread at the flip (`ss_shot_service`, at

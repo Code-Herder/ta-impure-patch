@@ -7,34 +7,39 @@
    CANNOT ANSWER IT. What is comparable is the GPU time a lane spends on its own
    passes, measured on the device by the device.
 
-   IT USED TO BE A ONE-PROCESS COMPARISON AND IT IS NOT ANY MORE. Under route D
-   the Vulkan lane drew into a window of its own beside the GL lane, in the same
-   iteration of render_ogl.c's loop: a frame with the lane armed did BOTH lanes'
-   work, so the wall time of one iteration was their sum while the two GPU
-   brackets were separable and comparable. Landing 4d-1 deleted route D. The two
-   halves can no longer be live in one process -- `report()`'s `vk/gl` ratio,
-   which needs `s_glN > 0 && s_vkN > 0`, is therefore unreachable -- and each
-   lane is now polled from its own backend: GL from render_ogl.c, Vulkan from
-   render_vk.c. **What the numbers support now is a CROSS-BUILD comparison**:
-   this build's Vulkan GPU time against a previous build's, or against a GL
-   figure taken from a build that still had the GL renderer.
-   [THE DELETION OF THE RATIO AND THE SECOND POLL SITE ARE FROM THE 4d-1
-   LANDING REVIEW, which found this module inert on the only surviving lane.]
+   IT USED TO BE A ONE-PROCESS COMPARISON AND THERE IS NOW ONLY ONE LANE AT
+   ALL. Under route D the Vulkan lane drew into a window of its own beside the
+   GL lane, in the same iteration of render_ogl.c's loop: a frame with the lane
+   armed did BOTH lanes' work, so the wall time of one iteration was their sum
+   while the two GPU brackets were separable and comparable. **Landing 4d-1
+   deleted route D**, which ended the one-process comparison; **landing 11-2
+   deleted render_ogl.c itself**, which ended the GL lane. (Those are two
+   different landings and this file has conflated them before -- the 11-5e-1
+   review's MEDIUM-3. 4d-1 = route D, 11-2 = the backend.) Since 11-2 the only
+   lane polled here is the Vulkan one, from render_vk.c.
+   **What the numbers support is a CROSS-BUILD comparison**: this build's
+   Vulkan GPU time against a previous build's, or against a GL figure taken
+   from a build that still had the GL renderer.
+   [THE RATIO AND THE SECOND POLL SITE WERE FOUND INERT BY THE 4d-1 LANDING
+   REVIEW; the GL half they belonged to was deleted in 11-5e-1.]
 
-   TIMESTAMPS, NOT SCOPED QUERIES, and that is forced rather than chosen:
+   TIMESTAMPS, NOT SCOPED QUERIES, and that was forced rather than chosen.
+   Kept because it is the reason the surviving lane looks the way it does:
    GL_TIME_ELAPSED is a scoped query and only ONE may be active per target, and
-   tagpu_restoreglsl.c already runs one around every restorer slice. A frame
+   tagpu_restoreglsl.c runs one around every restorer slice, so a GL frame
    bracket of that kind would either fail to begin or break the restorer's. Two
-   TIMESTAMP counters have no such rule, and they are also exactly what the
-   Vulkan half does (`vkCmdWriteTimestamp`), so the two lanes are measured the
-   same way rather than two ways that have to be argued equivalent.
+   TIMESTAMP counters have no such rule, and they are exactly what the Vulkan
+   half does (`vkCmdWriteTimestamp`) -- which is why the two lanes were
+   measured the same way rather than two ways that had to be argued
+   equivalent, and why this lane's shape needs no revisiting now it is alone.
 
-   NOTHING EVER BLOCKS. The GL side polls GL_QUERY_RESULT_AVAILABLE and reads a
-   frame's pair only once the driver says it is there; the Vulkan side is read
-   behind the fence the seam ALREADY waits on before it re-records that slot, so
-   its results cost no wait at all. A frame whose result is not ready yet is
-   carried, never waited for -- a harness that stalls the thread it is measuring
-   measures the stall.
+   NOTHING EVER BLOCKS. The result is read behind the fence the seam ALREADY
+   waits on before it re-records that slot, so it costs no wait at all. A frame
+   whose result is not ready yet is carried, never waited for -- a harness that
+   stalls the thread it is measuring measures the stall. (The deleted GL half
+   honoured the same rule a different way, by polling
+   GL_QUERY_RESULT_AVAILABLE and reading a pair only once the driver said it
+   was there. The rule is the design; that was one implementation of it.)
 
    THE LEVER IS `tagpu_ftime.on` and nothing here runs without it: two queries a
    frame is cheap but it is not free, and a cost harness that is always on is a
@@ -45,8 +50,9 @@
    advance the counter, so a report is "300 sampled frames" rather than "300
    armed frames".
 
-   The reported figure is a percentile over the last `TAGPU_FTIME_RING` frames
-   and NOT a mean: a GPU frame time distribution has a tail (a shader compile, a
+   The reported figure is a percentile over the last `RING` frames (256, in
+   tagpu_ftime.c -- this line said `TAGPU_FTIME_RING`, a macro that has never
+   existed anywhere in the tree) and NOT a mean: a GPU frame time distribution has a tail (a shader compile, a
    restorer slice, the compositor) and a mean over a few hundred frames is
    whichever tail happened to land in the window. p50 is what "a frame costs"
    means; p99 is what says whether the two lanes have the same SHAPE and not

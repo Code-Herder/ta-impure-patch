@@ -89,8 +89,10 @@ static VkDescriptorPool      s_pool;
 /* TWO SETS PER SLOT, AND THE REASON IS THE GL TWIN'S OWN SHADER. `uLayer` is
    ONE sampler that the twin feeds from TWO textures: the captured post-fog
    layer for the layer draw, and tagpu_text.c's coverage atlas for the label
-   and digit draws -- `tagpu_text_tex()` simply binds the atlas to unit 0 and
-   the layer draw binds the layer back. Vulkan has no per-draw texture bind, so
+   and digit draws. The GL lane simply bound the atlas to unit 0 and the layer
+   draw bound the layer back (`tagpu_text_tex`, deleted in 11-5e-1 -- that
+   module holds no GPU object now and hands out the atlas as bytes).
+   Vulkan has no per-draw texture bind, so
    the choice moves into the descriptor set: `s_setL` carries the layer at
    binding 40 and `s_setT` the atlas, and `record` picks one per draw.
 

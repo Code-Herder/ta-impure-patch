@@ -3270,10 +3270,12 @@ deleting calls, it is about finding the predicates that encode "the backend is r
 work is possible."** Five landings, five instances; the compiler cannot see them, because the
 state is written, read and consistent and only its value is pinned. **11-5e-1 added the third
 corollary and it changes how the search is run**: a predicate can be pinned by the ABSENCE of
-something rather than by a value — nothing in this build calls `wglCreateContext`,
-`wglMakeCurrent` or `SetPixelFormat`, so `tagpu_overlay.c`'s once-a-frame GL-context-change
-watch could never fire — and when it is, the root of a dead TREE is that predicate, not any
-function in it. Deleting that one branch orphaned sixteen functions across ten files, none of
+something rather than by a value — `oglu_load_dll()`, the only code that resolves
+`wglCreateContext` and `wglMakeCurrent`, has no caller, so `tagpu_overlay.c`'s once-a-frame
+GL-context-change watch could never fire — and when it is, the root of a dead TREE is that
+predicate, not any function in it. (The first write-up stated that invariant as a name scan
+instead of a caller, which the landing review caught: a name scan proves a spelling, not an
+absence.) Deleting that one branch orphaned sixteen functions across ten files, none of
 which a caller scan had flagged, because each of them did have a caller: the one above it.
 **So the search is "which tests can never be true", not "which functions have no callers";
 the latter finds leaves.** **Not covered by 11-5a–e**: `tagpu_shadow.c` and `tagpu_hires_draw.c`, still escalation
