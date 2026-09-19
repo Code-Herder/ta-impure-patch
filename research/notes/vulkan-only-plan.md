@@ -2244,15 +2244,50 @@ that a count which grows is the plan catching up with the work.) The row was
        end for the first time since 4b-2. See gpu-status §2.71.
      - **11-5d — `tagpu_posedraw.c`.** 122 sites, and its own row for the same reason
        `tagpu_terr.c` had one: the reachability argument is per function, not per file, and the
-       file is 1400+ lines. What is already known: the bring-up `tagpu_posedraw_ready` takes a
-       Vulkan arm at `:542` that asks `tagpu_vk_max_uniform_range()` and returns before the GL
-       program below it; `tagpu_posedraw_live()` is `s_state == 1 && !tagpu_vk_owns_present()`
-       (`:162`), so it is 0 on this lane; a second gate stands at `:722`. **Do not assume from
-       that that the file is dead** — `:1032` is `if (!tagpu_vk_owns_present() && !m->vao)
-       return NULL;`, which is a live path with a GL name in it, and `:1420` carries the same
-       `s_mirrorWant` latch terrain has. **Expect an instance of the rule above here**: this is
-       the last world pass, it publishes a mirror, and `tagpu_posedraw_live()` is exactly the
-       shape — a published predicate whose name says "live" and whose value is pinned at 0.
+       file is 1400+ lines. **Ten of its eleven GL-bearing entry points have NO CALLER anywhere
+       in the tree** (`wire_begin`, `depth_begin`, `shadow_set`, `slant_set`, `wire_unit`,
+       `slant_begin`, `shadow_begin`, `depth_unit`, `redraw`, `slant_redraw` — 62 of the 122
+       sites). The eleventh, `tagpu_posedraw_ready`, is live: `tagpu_native.c:3188` reads it as
+       `pdReady`, and it takes a Vulkan arm at `:542` that asks `tagpu_vk_max_uniform_range()`
+       and returns 1 before the 48-call GL bring-up below it. **Do not assume from that that
+       the file is dead** — `:1032` is `if (!tagpu_vk_owns_present() && !m->vao) return NULL;`,
+       a live path with a GL name in it, and `:1420` carries the same `s_mirrorWant` latch
+       terrain has.
+
+       **AND IT ALREADY HAS ITS INSTANCE OF THE RULE, MEASURED 2026-09-19 — this one is on the
+       SHIPPED lane and it is not a trap for a future producer, it is live today.**
+       `tagpu_posedraw_live()` is `s_state == 1 && !tagpu_vk_owns_present()` (`:162`), so it is
+       **0 on this lane by construction** — while `s_state` is genuinely 1, set by that same
+       Vulkan arm, which logs `posedraw: armed for the Vulkan lane — no GL program`. Landing
+       11-3 met the predicate in `tagpu_native.c` and removed a dependent on it ("that
+       predicate is false on this lane by definition", `:1996`); it did not sweep the other two
+       readers, both in `tagpu_owndraw.c`:
+
+       * `:418` — `tagpu_owndraw_classify` returns 0 ("do not skip") for every unit
+         `target_covers()` matches, so **the engine's own 8bpp unit rasterise is never
+         skipped**, and the `tagpu_r3dcache_wipe`/`_restore` branch under it never runs.
+       * `:839` — `tagpu_owndraw_preshadow` returns before emptying the engine's unit-shadow
+         composite.
+
+       **It is silent**: the warning at `:421` is gated on `tagpu_posedraw_refused()`, which is
+       `s_state == 2` (`:167`) and therefore false.
+
+       Measured by running it (Two Continents, `renderer=vulkan`, `native.on=all`):
+       `OWND target=all skipped=0 passed=1062` — and 1003, and 1075 — in consecutive windows
+       while a commander walked, with **`skipped=0` throughout and a session total of
+       `skipped=0 passed=1954+`**. An engine-surface capture in those frames shows the
+       commander drawn at 8bpp with its health bar and shadow. That surface is presented: the
+       Vulkan world is drawn into an offscreen target cleared to TRANSPARENT and "the composite
+       blends it over TA's frame" (`tagpu_vk_world.c:317`, `:540`). So the engine's unit is on
+       screen underneath ours, every frame, for the session — the "near-invisible 8bpp-under-RGB
+       double draw" that `tagpu_owndraw.c:414` describes as the transient case.
+
+       Not yet established: what it costs the player visually — whether our fragments cover the
+       engine's opaquely everywhere, and what happens at edges and on blended fragments. That
+       is 11-5d's first measurement. The fix shape is the rule's positive form
+       (`tagpu_posedraw_live()` should mean "something will draw posed units", which here is
+       `s_state == 1`), but `preshadow` may want a different question and both readers need
+       reading before either is changed.
      - **11-5e — the entry-point surface this row names**, last, once every caller has left:
        `opengl_utils.{c,h}`, `tagpu_restoreglsl.c`, the orphaned GL-object accessors, and the
        include residue in the four files that still include `opengl_utils.h` and make no GL
