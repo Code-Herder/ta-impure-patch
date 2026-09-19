@@ -9,6 +9,7 @@
 #include "lodepng.h"
 #include "blt.h"
 #include "config.h"
+#include "screenshot.h"
 
 static BOOL ss_screenshot_bmp(char* filename, IDirectDrawSurfaceImpl* src);
 

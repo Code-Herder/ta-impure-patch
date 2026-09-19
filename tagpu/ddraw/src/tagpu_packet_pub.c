@@ -2321,7 +2321,6 @@ static void* volatile s_cursorRet;         /* the hijacked return, depth 1     *
    the previous level's areas readable through offsets a slot still holds. */
 static unsigned fill_shell(TAGPU_PACKET* p, void* ctx)
 {
-    const char* ta = ta_main();
     int live = *(const int*)ctx;
     unsigned lf = load_flags();
     tagpu_pk_fill((unsigned char*)p + offsetof(TAGPU_PACKET, used_bytes), 0,
