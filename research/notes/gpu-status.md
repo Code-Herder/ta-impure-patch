@@ -12995,10 +12995,16 @@ tombstone prose does not inflate either figure:
 | `tagpu_vk_gui.c` / `tagpu_gui_surf.c` / `tagpu_gui.h` | 16 / 6 / 3 | unchanged | **the GUI, deliberately** |
 
 The 29 that remain are **25 GUI** and **4 `atlasRgbAniso`**. On the producer side,
-`mirrorRgb*`/`mirror_rgb*` goes 68 → 51: `tagpu_render3do.c` loses 7, `tagpu_feat.c` and
-`tagpu_fx.c` 5 each, and what is left is `tagpu_gaf.c` (38) + `tagpu_gaf.h` (8) held alive by
-`tagpu_gui_surf.c`'s **5**. That is the whole remaining mirror, and it now has exactly one
-consumer.
+`mirrorRgb`-or-`mirror_rgb` as a SUBSTRING — both spellings, so the `tagpu_*_mirror_rgb*`
+function names and `s_mirrorRgbAsked` are counted and not only the struct fields — goes
+**102 → 57**: `tagpu_render3do.c` loses 16, `tagpu_fx.c` 12, `tagpu_feat.c` 11 and
+`tagpu_posedraw.c` and `tagpu_render3do.h` 3 each, and what is left is `tagpu_gaf.c` (40) +
+`tagpu_gaf.h` (10) held alive by `tagpu_gui_surf.c`'s **7**. That is the whole remaining mirror,
+and it now has exactly one consumer. **The first draft of this line said 68 → 51 and labelled it
+`mirrorRgb*`/`mirror_rgb*`** — those are the figures for a pattern anchored with `\b`, which
+matches neither spelling inside an identifier, so the label named a surface the number did not
+count. `atlasRgb` is unaffected: it reads 112 → 29 under either pattern, because nothing embeds
+it after a word character. [The 11-5e-2b landing review, finding 4.]
 
 Also gone: **`mirroredMippedN`**, which had two writers in `tagpu_gaf.c` and no reader anywhere —
 `tagpu_gaf.h` had already written down that it goes with this landing.
@@ -13007,7 +13013,8 @@ Also gone: **`mirroredMippedN`**, which had two writers in `tagpu_gaf.c` and no 
 
 `tagpu_r3d_atlas_mirror_rgb_want` reads as the read-back's arm and is named as one. It is also
 **the only caller of `tagpu_gaf_atlas_restore_vk` for the unit atlas** — the feature and effects
-atlases arm their own lists in `tagpu_feat.c:277` and `tagpu_fx.c:178`, and the unit atlas's arm
+atlases arm their own lists in `tagpu_feat.c:267` and `tagpu_fx.c:173` (at this landing's tip),
+and the unit atlas's arm
 lives inside this function, three lines above the mirror's:
 
 ```c
@@ -13038,12 +13045,17 @@ the same one either way: before removing a call, ask what else it does — not w
 - **`s_arImg` / `s_arView` / `s_arHave` and the whole published-list path** in all four passes.
   The restorer paints that image on the device and, after this landing, is its **only** writer —
   which is a smaller surface than it had, not a larger one.
-- **The GUI atlas's mirror.** `tagpu_gui_surf.c` never calls `tagpu_gaf_atlas_restore_vk`, so
-  `tagpu_vk_gui.c` has **no list path to fall back to**: `h.colourTwins` is gated on
-  `s_colValid`, which is declared `static int s_colValid = 0;` and has no other writer, so the
-  GUI's own colour gate never fires either. Removing its `atlasRgb` would be a **feature
-  removal** rather than a deletion, and it needs its own note and its own measurement. That is
-  a separate landing.
+- **The GUI atlas's mirror**, and the reason is a protocol rather than a behaviour. Its colour
+  twins are already unreachable through **three independent pins**: `s_colValid`
+  (`tagpu_gui_surf.c:161`, declared `= 0`, no other writer) makes `colourTwins` always 0;
+  `twin_sprite` and `twin_copy` both `return 0` **unconditionally**, so no op ever carries
+  `TAGPU_GUICOL_ON` and `tagpu_vk_gui.c` tests a bit nothing sets; and `atlasRgb` is NULL for
+  the same `glReadPixels` reason as everywhere else. Removing it would therefore change no
+  behaviour — but `tagpu_gui_surf.c` never calls `tagpu_gaf_atlas_restore_vk`, so
+  `tagpu_vk_gui.c` has **no list path to fall back to** and 16 live sites reading the fields.
+  The hand-over's SHAPE moves for a consumer that still has working code, and afterwards the UI
+  cannot express a colour twin until someone designs a route. That is a **protocol change**, in
+  the words `tagpu_gui_surf.c:150` has used since 11-4b, and it is a separate landing.
 
 #### MEASURED
 
@@ -13117,10 +13129,11 @@ landing removes no GL call, only the plumbing above one.
 
 - **`tagpu_shadow.c` (87), `tagpu_hires_draw.c` (104), `tagpu_hires.c` (30), `opengl_utils.c`
   (31)** — **escalation reason 1**, unchanged. They are why gate 11-5e cannot finish on its own.
-- **The GUI's protocol change**, above: `colourTwins`, `s_colValid`, and `atlasRgb*` out of
-  `tagpu_gui.h`'s hand-over. It is the last consumer of the RGB mirror, and until it goes so do
-  `tagpu_gaf.c`'s 38 sites, `tagpu_gaf.h`'s 8, and **`tagpu_gaf.c`'s 12 wide GL sites** — which
-  are the only part of 11-5e-2b that moves the gate's own count.
+- **The GUI's protocol change**, above: `colourTwins`, `s_colValid`, the two unconditional
+  `return 0`s, and `atlasRgb*` out of `tagpu_gui.h`'s hand-over. It is the last consumer of the
+  RGB mirror, and until it goes so do `tagpu_gaf.c`'s 40 sites, `tagpu_gaf.h`'s 10, and
+  **`tagpu_gaf.c`'s 12 wide GL sites** — which are the only part of 11-5e-2b that moves the
+  gate's own count.
 - **The producer half proper** — `tagpu_gaf_atlas_mirror_rgb`, `_step`, the `mirrorRgb*` fields
   and `tagpu_r3d_atlas_mirror_rgb`'s remaining siblings — waits on the GUI for the same reason.
 - **`tools/spirv-gen.py` raises `NameError: name 'die' is not defined`** when

@@ -255,8 +255,12 @@ static SHARED s_height;                    /* the height grid, R8             */
 /* CLASSIC++'s RESTORED TILE ATLAS, RGBA8 (the Vulkan-only plan's gate 2). A
    third shared image with the same retire discipline as the other two; binding
    42 names it instead of being the placeholder `shared_bind` described. It is
-   only resized when the hand-over carries a read-back, so a session with
-   Classic++ off never creates it. */
+   only resized when the hand-over carries a restore list, so a session with
+   Classic++ off never creates it.
+   `SHARED::serial` IS UNUSED FOR THIS ONE. It is the mirror serial an upload
+   latches, and `s_atlas`/`s_height` still latch theirs; this image has had no
+   upload since 11-5e-2b took the mirror, and what says it holds a picture is
+   `have`, written by the restore job alone. */
 static SHARED s_rgbAtlas;
 /* ---- ...AND THE RESTORE THAT FILLS IT WITHOUT A MIRROR (landing 7) -------
    The first consumer of tagpu_vk_restore.c. Under `tagpu_restorevk.on` the
@@ -1453,11 +1457,6 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
              t.atlasW, t.atlasH);
         return 0;
     }
-    /* THE RESTORED MIRROR'S ROWS, BOUNDED HERE AND NOT WHERE THEY WERE MADE.
-       tagpu_terr.c reads back `s_atlasH` rows into a buffer allocated for
-       `s_atlasH`, so the number is right at the producer -- and that is a bound
-       only while both files are read together, which is this block's stated
-       reason for existing. */
     if (t.height) {
         if (t.hW < 1 || t.hH < 1 || t.hW > HEIGHT_MAXDIM || t.hH > HEIGHT_MAXDIM) {
             plog(d, "terr: a %dx%d height grid is outside what this pass carries - nothing drawn",
@@ -1505,45 +1504,35 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         return 0;
     }
     /* THE RESTORED ATLAS IS THE THIRD SHARED IMAGE, and it is sized HERE: after
-       the bounds above, before `shared_bind` names its view, and before the
-       upload that fills it. Two orderings were measured wrong on the way to
-       this one and the third was found by the landing review:
+       the bounds above and before `shared_bind` names its view. Since 11-5e-2b
+       the frame LIST is the only thing that asks for it -- the mirror's own
+       resize stood beside this one, gated on `t.atlasRgb`, which tagpu_terr.c
+       has published NULL on every frame since 11-5c deleted the read-back that
+       filled it, and both went together. The size is the ATLAS's, because
+       terrain restores all of it.
 
-         * below the refusal that tested it -- the pass could not build the
-           image because it refused, and refused because there was no image (a
-           perfect hand-over, rows=2720 serial=1, against img=0 view=0). That
-           refusal is gone since 11-5c, but the ordering it forced is still the
-           right one and the story is why;
-         * below the upload -- img and view fine, have=0, same shape;
-         * above the bounds, WITH THE RETURN IGNORED, which is this fix. A
-           resize deferred because a retire is still outstanding (one at a time,
-           by design) left the PREVIOUS image standing with `view && have` set,
-           so the refusal passed and the upload below memcpy'd
-           `s_rgbAtlas.w * s_rgbAtlas.h * 4` bytes out of a mirror holding
-           `atlasRgbRows` -- a read past the mirror whenever the deferred size
-           was the larger, and the wrong rows sampled whenever it was not. Two
-           map changes inside one turn of the slots is what it takes.
-
-       So the return is read like the other two images': an image still there
-       means a retire is clearing and the frame waits, no image means the device
-       refused and the branch stays unreachable -- the view is NULL, so binding
-       42 keeps the indexed view and `uRestored` is 0. A device refusal here is
-       NOT fatal to the pass, which is why it does not `goto refuse`: the
-       terrain draws INDEXED, which is what tagpu_vk_restore.h calls the shipped
-       fallback. (That was true when this was written, false for one landing
-       review's length while a refusal stood above it, and is true again --
-       see the `restored` computation near the uniform writes.) */
-    /* THE REQUEST, and this lane paints the atlas itself. Since 11-5e-2b this
-       is the ONLY route: the mirror's own resize stood above, gated on
-       `t.atlasRgb`, which tagpu_terr.c has published NULL on every frame since
-       landing 11-5c deleted the read-back that filled it.
-       The return is read like the other two images' -- an image still there
-       means a retire is clearing and the frame waits, no image means the
-       device refused and `restore_want` below finds no destination. The size
-       is the ATLAS's, because terrain restores all of it. A device refusal
-       here is NOT fatal to the pass, which is why it does not `goto refuse`:
+       THE RETURN IS READ LIKE THE OTHER TWO IMAGES': an image still there means
+       a retire is clearing and the frame waits; no image means the device
+       refused, the view stays NULL, binding 42 keeps the indexed view,
+       `uRestored` is 0 and `restore_want` below finds no destination. A device
+       refusal is NOT fatal to the pass, which is why it does not `goto refuse`:
        the terrain draws INDEXED, which is what tagpu_vk_restore.h calls the
-       shipped fallback. */
+       shipped fallback.
+
+       THE ORDERING COST THREE ATTEMPTS AND THE HISTORY IS WHY IT IS HERE. It
+       was once below the refusal that tested it -- the pass could not build the
+       image because it refused, and refused because there was no image (a
+       perfect hand-over, rows=2720 serial=1, against img=0 view=0); then below
+       the upload, img and view fine, have=0, the same shape; then above the
+       bounds WITH THE RETURN IGNORED, which the landing review found. That last
+       one mattered because a resize deferred behind an outstanding retire (one
+       at a time, by design) left the PREVIOUS image standing with `view &&
+       have` set, so the refusal passed and the mirror upload then memcpy'd
+       `s_rgbAtlas.w * s_rgbAtlas.h * 4` bytes out of a buffer holding
+       `atlasRgbRows` -- a read past the mirror whenever the deferred size was
+       the larger. That upload is gone with the mirror; the ordering it forced
+       is still the right one, because `restore_want` needs the destination to
+       exist before it can make a job. */
     if (t.restoreFrames &&
         !shared_resize(d, &s_rgbAtlas, t.atlasW, t.atlasH,
                        VK_FORMAT_R8G8B8A8_UNORM, IMG_RESTORED) &&

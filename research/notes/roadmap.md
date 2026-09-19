@@ -3280,15 +3280,19 @@ all three producers of the `restored` flag were deferred to `11-5e-2b`);
 only route and `oglu_load_dll` has no caller, so `a->mirrorRgb` was NULL and `atlasRgb` NULL on
 every published frame of every atlas. The consumers in `tagpu_vk_unit.c`, `tagpu_vk_feat.c`,
 `tagpu_vk_fx.c` and `tagpu_vk_terr.c`, the publications, the arm/step pairs and the hand-over
-fields in all four headers go — **`atlasRgb*` 112 code sites → 29, `mirrorRgb*` 68 → 51**, the
+fields in all four headers go — **`atlasRgb*` 112 code sites → 29, `mirrorRgb`-or-`mirror_rgb`
+102 → 57** (both substring-counted over comment-masked source), the
 remainder being 25 GUI sites and 4 `atlasRgbAniso` (kept: it is the other lane's sampler ratio
 and the unit pass's filter test). **The find is a near miss and it is THE NAMED RULE's mirror
 image**: `tagpu_r3d_atlas_mirror_rgb_want` is named for the read-back and was also the only
 caller of `tagpu_gaf_atlas_restore_vk` for the unit atlas, so deleting it with the thing it is
 named for would have left that atlas with no list and every restored frame standing down —
 silently, and invisibly to a pixel A/B. It survives as `tagpu_r3d_atlas_restore_want`. **The GUI
-keeps its mirror**: `tagpu_gui_surf.c` never arms the list, so removing its `atlasRgb` is a
-feature removal, and with it wait `tagpu_gaf.c`'s 38 sites and its 12 wide GL ones. Measured over
+keeps its mirror**: three independent pins already make its colour twins unreachable
+(`s_colValid` has no writer, `twin_sprite`/`twin_copy` both `return 0` unconditionally, and
+`atlasRgb` is NULL), so removing them changes no behaviour — but `tagpu_gui_surf.c` never arms
+the list, so it is a **protocol change** for 16 live sites with nothing to put in their place.
+With it wait `tagpu_gaf.c`'s 40 sites and its 12 wide GL ones. Measured over
 **nine runs**, five of `main`'s DLL and four of the branch's: 0 px within a run (27 pairs), **0
 px outside the minimap in all 20 cross-build pairs**, and four of those **0 px over the whole
 frame**. The fixture is bimodal — two images 48 px apart, one unit's off-screen dot — and

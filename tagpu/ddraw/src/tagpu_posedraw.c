@@ -671,6 +671,11 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
             s_pub.restoreN = 0; s_pub.restoreGen = 0;
             s_pub.restoreRepaint = 0; s_pub.restoreBlanks = 0;
             s_pub.restoreDim = 0; s_pub.restoreMips = 0;
+            /* WRITTEN ON BOTH PATHS, not left to the memset seventy lines up.
+               It is the only field of this block that would otherwise be set on
+               one path only, and a reader here cannot see what zeroed it.
+               [The 11-5e-2b cross-thread review.] */
+            s_pub.atlasRgbAniso  = 0.0f;
         }
     }
     s_pub.lut = tagpu_r3d_lut_mirror(&s_pub.lutW, &s_pub.lutH, &s_pub.lutSerial);

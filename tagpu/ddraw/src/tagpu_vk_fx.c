@@ -210,7 +210,7 @@ static unsigned       s_atSerial;          /* the mirror serial it holds       *
 static int            s_atHave;            /* a copy has been recorded into it */
 
 /* CLASSIC++'s RESTORED TWIN (the Vulkan-only plan's gate 2) -- tagpu_vk_feat.c
-   carries the same pair and states the reasoning. Binding 43 names this image
+   carries the same image and states the reasoning. Binding 43 names this image
    instead of being the placeholder the comment in `atlas_build` described; when
    it cannot be built the binding falls back to the indexed view, which keeps
    the descriptor valid, and the restored refusal keeps the branch unreachable
@@ -218,8 +218,9 @@ static int            s_atHave;            /* a copy has been recorded into it *
 static VkImage        s_arImg;
 static VkDeviceMemory s_arMem;
 static VkImageView    s_arView;
-/* `s_arReq` is the REQUESTED rows last uploaded for, not the rows sent --
-   tagpu_vk_feat.c states why that distinction is load-bearing. */
+/* the restore job is its only writer since 11-5e-2b, which took the read-back
+   mirror this image was also uploaded from, and `s_arReq`/`s_arSerial` with it
+   -- tagpu_vk_feat.c carries the account. */
 static int            s_arHave;
 /* ---- THE RESTORE THIS LANE RUNS FOR ITSELF (landing 7d) ------------------
    `s_rjob` paints `s_arImg` from `s_atImg` when the producer publishes a frame

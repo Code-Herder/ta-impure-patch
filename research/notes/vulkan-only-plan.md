@@ -2498,9 +2498,13 @@ that a count which grows is the plan catching up with the work.) The row was
          guard **before its own `calloc`**, so `a->mirrorRgb` is NULL; `a->mirrorRgbRows` is 0
          independently, with four writers in `tagpu_gaf.c` and every one assigning 0; so every
          producer's publish guard is false and `atlasRgb` was NULL on every published frame of
-         every atlas. **`atlasRgb*` goes 112 code sites → 29** and **`mirrorRgb*` 68 → 51**,
-         both comment- and string-masked so tombstone prose inflates neither. What remains is
-         **25 GUI sites and 4 `atlasRgbAniso`**.
+         every atlas. **`atlasRgb*` goes 112 code sites → 29** and **`mirrorRgb`-or-`mirror_rgb`
+         102 → 57**, both comment- and string-masked so tombstone prose inflates neither, and
+         the second counted as a SUBSTRING so the `tagpu_*_mirror_rgb*` function names are in
+         it. (The first draft said 68 → 51 under a `\b`-anchored pattern, which does not match
+         either spelling inside an identifier — the label named more than the number counted.
+         [The landing review, finding 4.]) What remains is **25 GUI sites and 4
+         `atlasRgbAniso`**.
 
          **THE FIND IS A NEAR MISS, and it is THE NAMED RULE's mirror image.**
          `tagpu_r3d_atlas_mirror_rgb_want` is named for the read-back and is also **the only
@@ -2525,10 +2529,14 @@ that a count which grows is the plan catching up with the work.) The row was
          `tagpu_gui_surf.c` never calls `tagpu_gaf_atlas_restore_vk`, so `tagpu_vk_gui.c` has
          **no list path to fall back to**; its `h.colourTwins` is gated on `s_colValid`, which
          is declared `static int s_colValid = 0;` and has no other writer, so that gate never
-         fires either. Removing its `atlasRgb` is a **feature removal**, not a deletion, and
-         needs its own note and its own measurement. Until it goes, so do `tagpu_gaf.c`'s 38
-         `mirrorRgb*` sites, `tagpu_gaf.h`'s 8, and **`tagpu_gaf.c`'s 12 wide GL sites** — the
-         only part of 11-5e-2b that moves this gate's own count.
+         fires either — and `twin_sprite` and `twin_copy` both `return 0` UNCONDITIONALLY, so
+         no op ever carries `TAGPU_GUICOL_ON` and `tagpu_vk_gui.c` tests a bit nothing sets.
+         Three independent pins, so removing its `atlasRgb` changes no behaviour: it is a
+         **protocol change**, not a feature removal and not a plain deletion, because 16 live
+         sites read fields whose shape moves and there is no list to put in their place. Until
+         it goes, so do `tagpu_gaf.c`'s 40 `mirrorRgb*` sites, `tagpu_gaf.h`'s 10, and
+         **`tagpu_gaf.c`'s 12 wide GL sites** — the only part of 11-5e-2b that moves this
+         gate's own count.
 
          **MEASURED over nine runs** (`e5a`, `one-unit`, 1024×768, `restorevk.on`): five of
          `main`'s `ddraw.dll` and four of this branch's, at `--maxfps 0` and `--maxfps 30`.

@@ -209,22 +209,23 @@ static unsigned       s_atSerial;          /* the mirror serial it holds       *
 static int            s_atHave;            /* a copy has been recorded into it */
 
 /* CLASSIC++'s RESTORED TWIN (the Vulkan-only plan's gate 2). A second image of
-   the same square in RGBA8, fed from `tagpu_gaf.c`'s read-back mirror. It is
-   built beside the indexed one and binding 42 names it instead of being the
-   placeholder the comment in `atlas_build` used to describe. When it cannot be
-   built the binding falls back to the indexed view and the pass stands down on
-   a restored frame exactly as it did before this existed -- a valid descriptor
-   is required for the set to be bound at all, so the fallback is not optional.
-   `s_arReq` IS THE REQUESTED ROWS LAST UPLOADED FOR, NOT THE ROWS SENT. It held
-   the rows sent, which the whole-square rule had already forced to the atlas's
-   full height, so it could never equal the hand-over's shelf-bounded count:
-   `doRgb` was then true on EVERY frame and the pass re-sent 16 MB per frame for
-   the life of the session while never releasing its staging. The SERIAL alone
-   decides whether anything is due, exactly as it does for the indexed atlas
-   beside it; these rows are kept only to notice a SHRINK (a re-arm, a context
-   loss), which is the one case that needs the whole square re-sent because rows
-   above the new mark would otherwise keep the previous twin's colours.
-   [FOUND BY THE GATE-2 LANDING REVIEW, 2026-09-16.] */
+   the same square in RGBA8, built beside the indexed one; binding 42 names it
+   instead of being the placeholder the comment in `atlas_build` used to
+   describe. When it cannot be built the binding falls back to the indexed view
+   and the pass stands down on a restored frame exactly as it did before this
+   existed -- a valid descriptor is required for the set to be bound at all, so
+   the fallback is not optional.
+
+   THE RESTORE JOB IS ITS ONLY WRITER SINCE 11-5e-2b. It was fed from
+   `tagpu_gaf.c`'s read-back mirror as well, staged and copied in behind
+   `doRgb`, with `s_arReq`/`s_arSerial` deciding what a frame owed; the gate-2
+   review found `s_arReq` holding the rows SENT rather than the rows the mirror
+   covered, so the whole-square rule forced it to the full height, `doRgb` was
+   true on EVERY frame and the pass re-sent 16 MB per frame for the life of the
+   session while never releasing its staging. That mirror could only ever come
+   from `glReadPixels`, and `oglu_load_dll` has no caller, so it produced
+   nothing in any process -- the upload, both counters and the hand-over fields
+   went together. `s_arHave` alone now says whether this is a picture. */
 static VkImage        s_arImg;
 static VkDeviceMemory s_arMem;
 static VkImageView    s_arView;
