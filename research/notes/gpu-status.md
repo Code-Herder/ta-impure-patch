@@ -12953,3 +12953,180 @@ had since died, so every launch was aiming at a dead X server. A new instance cr
   down on every frame that would have sampled the restored atlas.
 - **No engine address was touched or read**: the diff's added lines carry no `0x4…`/`0x5…`
   constant, so `exe-reverse-engineering.md` takes nothing from this landing.
+
+### 2.76 The restored twin's read-back, and the arm that was quietly doing two jobs — landing 11-5e-2b (part 1)
+
+The Classic++ restored twin reached a Vulkan pass two ways: as **texels**, read back off the GL
+twin with `glReadPixels` and handed over as `atlasRgb`; or as the **frame list**, which the other
+lane paints into its own twin on the device. 11-5e-2 established that the first of those cannot
+happen in any process. This landing removes it — the consumers, the publications, the hand-over
+fields and the arm — for the unit, feature, effects and terrain atlases. The GUI atlas keeps its
+mirror, for a reason given below that is not "it was harder".
+
+#### THE PREMISE, re-derived here rather than inherited
+
+Every link re-checked against the tree at `67271d9`, with a comment/string mask so a mention in
+prose does not read as a call:
+
+| link | evidence |
+|---|---|
+| `opengl32.dll` is never loaded | `oglu_load_dll` has **no caller** — the only two occurrences are its own definition (`opengl_utils.c:100`) and its declaration (`opengl_utils.h:36`), and it holds the tree's only `LoadLibraryA("opengl32.dll")` |
+| so every GL entry point is NULL | `getgl` is `GetModuleHandleA("opengl32.dll")` then `GetProcAddress`; with the module absent it resolves nothing |
+| so the mirror is never armed | `tagpu_gaf_atlas_mirror_rgb` returns at `if (!x_glReadPixels \|\| !glGenFramebuffers \|\| …)` — **before** its own `calloc`, so `a->mirrorRgb` stays NULL for the life of the process |
+| and its row count is 0 independently | `a->mirrorRgbRows` has **four** writers in `tagpu_gaf.c` (`:532, :655, :707, :771` at this landing's tip) and every one assigns 0. There is no non-zero writer in the tree |
+| so every publish guard is false | `tagpu_feat.c` and `tagpu_fx.c` both gate on `if (s_atlas.mirrorRgb && s_atlas.mirrorRgbRows > 0)`; `tagpu_posedraw.c` took it from an accessor that returns NULL on `!s_atlas.mirrorRgb` |
+| so `atlasRgb` was NULL and `atlasRgbRows` 0 | on **every** published frame of **every** atlas, since 11-4c pinned the GL bring-up |
+
+#### WHAT WENT
+
+`atlasRgb*` at **112 code sites** on `main`, **29** after — counted with the mask above, so
+tombstone prose does not inflate either figure:
+
+| file | main | after | what left |
+|---|---|---|---|
+| `tagpu_vk_unit.c` | 19 | 2 | `rgb_stage_bytes`, `rgb_rows_due`, `atlas_rgb_upload` whole; the staging share they reserved; `s_arSerial`/`s_arReq` |
+| `tagpu_vk_terr.c` | 14 | 0 | the `shared_resize` + `memcpy` upload path 11-5c left behind when it took the producer |
+| `tagpu_vk_feat.c` | 9 | 0 | `doRgb`, `rrows`, `rbytes`, the second half of the atlas staging, the `rgb_only:` label |
+| `tagpu_vk_fx.c` | 9 | 0 | the same shape |
+| `tagpu_posedraw.c` | 10 | 1 | the arm, the step, the accessor call, the either/or zeroing |
+| `tagpu_feat.c` / `tagpu_fx.c` | 6 / 6 | 0 / 0 | the arm, the step, `s_mirrorRgbAsked`, the publish block |
+| `tagpu_posedraw.h` | 5 | 1 | `atlasRgb`, `atlasRgbRows`, `atlasRgbMips`, `atlasRgbSerial` |
+| `tagpu_feat.h` / `tagpu_fx.h` / `tagpu_terr.h` | 3 each | 0 | the same three fields each |
+| `tagpu_vk_gui.c` / `tagpu_gui_surf.c` / `tagpu_gui.h` | 16 / 6 / 3 | unchanged | **the GUI, deliberately** |
+
+The 29 that remain are **25 GUI** and **4 `atlasRgbAniso`**. On the producer side,
+`mirrorRgb*`/`mirror_rgb*` goes 68 → 51: `tagpu_render3do.c` loses 7, `tagpu_feat.c` and
+`tagpu_fx.c` 5 each, and what is left is `tagpu_gaf.c` (38) + `tagpu_gaf.h` (8) held alive by
+`tagpu_gui_surf.c`'s **5**. That is the whole remaining mirror, and it now has exactly one
+consumer.
+
+Also gone: **`mirroredMippedN`**, which had two writers in `tagpu_gaf.c` and no reader anywhere —
+`tagpu_gaf.h` had already written down that it goes with this landing.
+
+#### THE NEAR MISS: an arm named for one thing was arming two
+
+`tagpu_r3d_atlas_mirror_rgb_want` reads as the read-back's arm and is named as one. It is also
+**the only caller of `tagpu_gaf_atlas_restore_vk` for the unit atlas** — the feature and effects
+atlases arm their own lists in `tagpu_feat.c:277` and `tagpu_fx.c:178`, and the unit atlas's arm
+lives inside this function, three lines above the mirror's:
+
+```c
+if (!s_rlistAsked) s_rlistAsked = tagpu_gaf_atlas_restore_vk(&s_atlas);
+if (!s_rlistAsked && !s_mirrorRgbAsked)
+    s_mirrorRgbAsked = tagpu_gaf_atlas_mirror_rgb(&s_atlas);
+```
+
+Removing the call along with the read-back it is named for leaves the unit atlas with **no list
+armed**, so `tagpu_vk_unit.c`'s `restore_want` never makes a job, so the twin is never painted,
+so every restored frame stands down — silently, because a lane with no list stands down rather
+than complains. It survives as `tagpu_r3d_atlas_restore_want`, which arms the list and nothing
+else; `_mirror_rgb_step` and the `_mirror_rgb` accessor are gone.
+
+**This is THE NAMED RULE's mirror image and it belongs beside it.** The rule is about predicates
+that quietly encode "the backend is ready" as "the work is possible". This is a *name* that
+quietly encodes two jobs as one, and the deletion pass reads names. The check that catches it is
+the same one either way: before removing a call, ask what else it does — not what it is called.
+
+#### WHAT STAYED, AND WHY EACH ONE
+
+- **`atlasRgbAniso`.** It is the ratio the *other* lane's twin is filtered at, a property of that
+  sampler rather than of the mirror, and the list accessor publishes it on the list path for
+  exactly that reason. `tagpu_vk_unit.c` stands a frame down on
+  `h.atlasRgbAniso != s_twinAniso`, which is the only thing between a restored frame and
+  differently filtered art. It is the field 11-5e-2 labelled `[PINNED 0]`, and unpinning it is
+  11-5e-2c's, not this landing's.
+- **`s_arImg` / `s_arView` / `s_arHave` and the whole published-list path** in all four passes.
+  The restorer paints that image on the device and, after this landing, is its **only** writer —
+  which is a smaller surface than it had, not a larger one.
+- **The GUI atlas's mirror.** `tagpu_gui_surf.c` never calls `tagpu_gaf_atlas_restore_vk`, so
+  `tagpu_vk_gui.c` has **no list path to fall back to**: `h.colourTwins` is gated on
+  `s_colValid`, which is declared `static int s_colValid = 0;` and has no other writer, so the
+  GUI's own colour gate never fires either. Removing its `atlasRgb` would be a **feature
+  removal** rather than a deletion, and it needs its own note and its own measurement. That is
+  a separate landing.
+
+#### MEASURED
+
+Nine runs on instance `e5a`, scenario `one-unit` at 1024×768 with `restorevk.on` and
+`classicpp.on` armed, three grabs four seconds apart in each: **five of `main`'s `ddraw.dll`**
+(`--keep-dll`, so `tacli` does not overwrite it) and **four of this branch's**, at `--maxfps 0`
+and again at `--maxfps 30`.
+
+| comparison | differing pixels of 786 432 |
+|---|---|
+| within one run — three grabs, all nine runs (27 pairs) | **0** — the scene is STATIC |
+| **`main`'s build against itself, two separate RUNS** — the noise floor | **48**, every one inside the minimap |
+| `main`'s build vs this build — all **20** cross-build pairs | **48 or 0**, and **0 outside the minimap in every one** |
+| four of those 20 — `main`'s fifth run against each branch run | **0 over the whole frame**, byte-identical PNGs |
+
+**THE FIXTURE IS BIMODAL AND THE BUILD DOES NOT PICK THE MODE.** The nine runs land in one of
+exactly two images, 48 px apart. Four of `main`'s five runs produced state A and the fifth
+produced state B — the same state all four branch runs produced, **byte for byte**. A build that
+produces the other build's output exactly is the strongest form this comparison can take, and it
+is only available because the control was run five times instead of once.
+
+**What the 48 px are**: one unit's dot on the minimap, at a different map position. `units:
+alive=12..16 onscreen=1` in every run — the unit is off the camera, so it exists only on the
+minimap, which is why **nothing outside that rect moves in any of the twenty pairs**. And the
+dots are not ours to draw: `tagpu_gui_surf.c`'s minimap rule compares the engine's `+0x142DB`
+composite against its `+0x142DF` fog base and passes the ENGINE's pixel through wherever they
+differ, so the unit dots, the radar arcs and DrawPoint's points all arrive as engine pixels. A
+landing that writes no engine memory cannot move one.
+
+**A BATCHED CONTROL CANNOT SEPARATE THE BUILD FROM DRIFT.** The first six runs were three of the
+branch's build and then three of `main`'s, and they came out three-and-three on the two states —
+which reads exactly like a build difference and is not one. Consecutive runs land in the same
+state because whatever drifts is slow. 11-5e-2 learned that three grabs inside one run bound
+nothing about run-to-run variation; the same sentence one level up is that **a run of N controls
+taken back-to-back bounds nothing about drift across the session**. Interleave the control with
+the subject, or run enough of it to see the mode flip. Here it took a fifth run of `main` to see
+it, and the pacing cap that was supposed to test frame timing is what produced that fifth run.
+
+**AND THE LOG IS THE DIRECT EVIDENCE, not the pixels**, because the claim is that the deleted
+path never ran. All nine runs produce the identical set of restore lines — the same multiset in
+every one, with only the order of the `fx`/`feat` arms varying, and that ordering varies inside
+`main`'s runs too:
+
+```
+terr: restorevk -- the restored atlas is the other lane's to paint, so no read-back …
+fx:   restorevk -- … (0 entries seeded, 8192-frame bound)
+feat: restorevk -- … (0 entries seeded, 16384-frame bound)
+unit: restorevk -- … (25 entries seeded, 8192-frame bound)
+restorevk: unit: lazy restore armed (2048x2048 twin of the 2048x2048 atlas)
+restorevk: unit: the twin's 2 mip level(s) are reduced HERE, by the same integer (sum+1)/4 …
+vk: unit: restoring the twin HERE - 25 of 25 frames over 2048x2048, generation 1
+```
+
+**That last pair of lines is what the near miss above would have deleted.** `unit: restorevk --
+… (25 entries seeded …)` is `tagpu_gaf_atlas_restore_vk` latching, and it is reached only
+through the renamed arm; `vk: unit: restoring the twin HERE - 25 of 25` is the consumer finding
+the list. Had the arm gone with the read-back, both lines would simply be absent and every other
+line — and every pixel, since the restored unit is one commander at ordinary zoom — would have
+looked the same. The oracle for this landing is a log line, not a picture.
+
+The only cross-build difference anywhere in the logs is the terrain restorer's own timing line
+(`134 of 139 frames = 3408 ms … GPU 1599 ms` against `133 of 138 = 3371 ms … 1589 ms`), which is
+wall clock, and which varies between runs of `main` by more than it varies between the builds.
+
+**Build:** `ddraw.dll` clean, `thread-split: clean — 34 listed file(s)`, `spirv: 49 shaders, 33
+programs, headers current`. The DLL is **1 550 336 bytes against `main`'s 1 558 016** — 7 680
+smaller. **GL call surface unchanged at 252 narrow / 366 wide** (`tools/gl-sites.py`): this
+landing removes no GL call, only the plumbing above one.
+
+#### Gaps this landing did not close
+
+- **`tagpu_shadow.c` (87), `tagpu_hires_draw.c` (104), `tagpu_hires.c` (30), `opengl_utils.c`
+  (31)** — **escalation reason 1**, unchanged. They are why gate 11-5e cannot finish on its own.
+- **The GUI's protocol change**, above: `colourTwins`, `s_colValid`, and `atlasRgb*` out of
+  `tagpu_gui.h`'s hand-over. It is the last consumer of the RGB mirror, and until it goes so do
+  `tagpu_gaf.c`'s 38 sites, `tagpu_gaf.h`'s 8, and **`tagpu_gaf.c`'s 12 wide GL sites** — which
+  are the only part of 11-5e-2b that moves the gate's own count.
+- **The producer half proper** — `tagpu_gaf_atlas_mirror_rgb`, `_step`, the `mirrorRgb*` fields
+  and `tagpu_r3d_atlas_mirror_rgb`'s remaining siblings — waits on the GUI for the same reason.
+- **`tools/spirv-gen.py` raises `NameError: name 'die' is not defined`** when
+  `unditherer/models/*.w32.bin` is absent: `die` is defined below its first use in
+  `restore_kmax`. It surfaced building `main`'s DLL from a `git archive` (the weight tables are
+  gitignored) and turns a clear diagnostic into a traceback. Not this landing's file; recorded
+  so the next person building outside a full checkout does not re-diagnose it.
+- **No engine address was touched or read**: the diff's added lines carry no `0x4…`/`0x5…`
+  constant, so `exe-reverse-engineering.md` takes nothing from this landing.

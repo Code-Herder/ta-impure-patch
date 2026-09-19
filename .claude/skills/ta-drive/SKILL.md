@@ -849,8 +849,24 @@ angle, so `shadow-struct` diffs **9616 px** against *itself* and `shadow-lab` 10
 floor by running the SAME dll twice before believing any number (ta-capture rule 7). What works:
 pause at a fixed sim tick (poll `*0x511DE8+0x38A47:4`, then `keys <i> tab`), diff the world viewport
 only (the minimap and resource bar move on their own), and pick a fixture with nothing animating —
-`one-unit` and a few static structures both measure **0**. A battle cannot be paired at all: two
-loads of `200v200` diverge to different survivors.
+`one-unit` and a few static structures both measure **0 in the world viewport**. A battle cannot be
+paired at all: two loads of `200v200` diverge to different survivors.
+
+**AND THE CONTROL HAS TO BE INTERLEAVED, NOT BATCHED** (2026-09-19, landing 11-5e-2b). Running the
+subject three times and then the control three times does **not** bound drift: consecutive runs
+land in the same state because whatever drifts is slow, so a three-and-three split reads exactly
+like a build difference and is not one. `one-unit` on `e5a` is **bimodal over the whole window**:
+two images 48 px apart — one unit's dot at a different place on the minimap — and `main`'s own dll
+produced BOTH, four runs in one state and the fifth in the other. Alternate the two builds, or run
+the control enough times to see the mode flip; a fifth run of the control is what caught it here.
+The world viewport was 0 px in all twenty cross-build pairs, which is why **diffing the viewport
+alone is the rule and the whole window is the trap.**
+
+**A log line beats a picture whenever the thing under test has a log line.** The same landing's
+real oracle was `unit: restorevk -- (N entries seeded …)` plus `vk: unit: restoring the twin HERE
+- N of N`: their absence is what a broken restore arm looks like, and no pixel would have moved,
+because a lane with no list stands down silently and one commander at ordinary zoom samples the
+indexed atlas either way.
 
 **A frame-time A/B needs `--maxfps 0`, and without it it measures nothing.** `write_ddraw_ini`
 rewrites the cap into the instance's `ddraw.ini` whenever `--maxfps`, `--res` or `--window` is given, or the tile is off-screen — **not on a bare `tacli launch <inst>`, which writes the file at all** (corrected 2026-09-09; the docstring used to claim every launch path). Pass `--maxfps` explicitly to be sure of the value. The DLL reads
@@ -1108,11 +1124,14 @@ satisfied by an `xdotool` park alone, because a later `--restart` silently un-pa
   `(y / 34, x / 34)` before theorising — six whole cells and every other cell identical is a
   completely different bug from 6 936 scattered texels, and the count alone does not tell them
   apart.
-- **The lever suppresses the read-back, and the producer publishes one or the other and never
-  both** — with `restorevk.on` there is no `atlasRgb` in the hand-over at all. Turning it off is
-  what puts the shipped mirror path back. (It is an either/or written as one, not an exclusivity
-  that follows from the arm: the lever is a poll that can land on any frame, and the first version
-  of this claim was wrong for exactly that reason.)
+- **There is no read-back to suppress any more, and the lever no longer chooses** (11-5e-2b,
+  2026-09-19). This used to read "the producer publishes one or the other and never both — with
+  `restorevk.on` there is no `atlasRgb` in the hand-over, and turning it off puts the shipped
+  mirror path back". Turning it off now puts **nothing** back for the terrain, feature, effects
+  and unit atlases: `atlasRgb` and its rows and serial are gone from all four hand-overs, the
+  read-back was `glReadPixels` and `opengl32.dll` is never in the process. With the lever off
+  those lanes simply have no restored twin. **The GUI atlas is the exception** and still has the
+  mirror, because `tagpu_gui_surf.c` never arms the list.
 - **A SPRITE ATLAS IS WHAT MAKES A SWAPPED PER-BATCH TABLE VISIBLE, and the terrain is blind to
   it** (landing 7d, [gpu-status](gpu-status.html) §2.44). The restorer's per-frame tables carry
   each frame's rect, source rect and **colour key**; the terrain's frames are one size with no key,
