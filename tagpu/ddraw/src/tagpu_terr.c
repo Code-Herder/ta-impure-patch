@@ -41,11 +41,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "opengl_utils.h"
 #include "tagpu_opt.h"
 #include "tagpu_terr.h"
 #include "tagpu_pal.h"
-#include "tagpu_gaf.h"      /* tagpu_gl_rgba_readback: the restored twin (gate 2) */
 #include "tagpu_restoreglsl.h"
 #include "tagpu_classicpp.h"
 #include "tagpu_glsl.h"
@@ -106,29 +104,6 @@ static void flog(const char* s)
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
 
-typedef void (APIENTRY *PFN_DRAWARRAYSINST)(GLenum,GLint,GLsizei,GLsizei);
-typedef void (APIENTRY *PFN_ATTRIBDIVISOR)(GLuint,GLuint);
-typedef void (APIENTRY *PFN_UNIFORM1F)(GLint,GLfloat);
-typedef void (APIENTRY *PFN_UNIFORM2F)(GLint,GLfloat,GLfloat);
-typedef void (APIENTRY *PFN_UNIFORM3F)(GLint,GLfloat,GLfloat,GLfloat);
-typedef void (APIENTRY *PFN_ACTIVETEX)(GLenum);
-typedef void (APIENTRY *PFN_GETINTEGERV)(GLenum,GLint*);
-static PFN_DRAWARRAYSINST x_glDrawArraysInstanced;
-static PFN_ATTRIBDIVISOR  x_glVertexAttribDivisor;
-static PFN_UNIFORM1F  x_glUniform1f;
-static PFN_UNIFORM2F  x_glUniform2f;
-static PFN_UNIFORM3F  x_glUniform3f;
-static PFN_ACTIVETEX  x_glActiveTexture;
-static PFN_GETINTEGERV x_glGetIntegerv;
-
-static void* getgl(const char* n)
-{
-    void* p = xwglGetProcAddress ? (void*)xwglGetProcAddress(n) : NULL;
-    if (!p) { HMODULE gl = GetModuleHandleA("opengl32.dll");
-              if (gl) p = (void*)GetProcAddress(gl, n); }
-    return p;
-}
-
 /* ---- arming ---- */
 static int s_armed = -1;
 static int s_log = 0, s_passive = 0, s_over = 0, s_key = DEFAULT_KEY;
@@ -155,22 +130,14 @@ static TAGPU_TERRHAND s_pub;
 static int s_mirrorWant;               /* the Vulkan lane asked for mirrors   */
 static unsigned char* s_atlasMirror;   /* ATLAS_W x s_atlasH, or NULL         */
 static unsigned s_atlasMirrorSerial;
-/* ...and the RESTORED twin's mirror (gate 2). The indexed one above is the
-   buffer an upload was handed; this one cannot be, because `s_rgbTex` is
-   painted by tagpu_restoreglsl.c on the GPU -- so it is a read-back through
-   tagpu_gaf.c's helper, stepped once per published frame.
-   `s_rgbMirrorPainted` is the CONTENT key: the restorer's paint count, which
-   is what tagpu_gaf.c's own step keys on and for the reason recorded there --
-   a serial that is not the content's serial uploads once and misses
-   everything after it. Terrain adds the row count to it because the atlas can
-   grow (ensure_atlas) without a paint landing in between. */
-static unsigned char* s_rgbMirror;     /* ATLAS_W x s_atlasH x 4, or NULL     */
-static unsigned s_rgbMirrorSerial;
-static int      s_rgbMirrorRows;       /* rows the read-back has covered      */
-static int      s_rgbMirrorCap;        /* rows the ALLOCATION holds           */
-static int      s_rgbMirrorPainted;    /* tagpu_rglsl_job_painted at that read */
-static unsigned s_rgbMirrorFbo;        /* ours, made once                     */
-static int      s_rgbMirrorFailed;
+/* THE RESTORED TWIN'S MIRROR WAS THE OTHER WAY OF FEEDING THE SAME LANE, and
+   it went in landing 11-5c with the GL half it read back from. It could only
+   ever be a read-back: the indexed atlas above is the buffer an upload was
+   handed, but the restored one was painted on the GPU by tagpu_restoreglsl.c,
+   so a CPU copy meant pulling it back down every published frame. What is left
+   is the other route, below -- hand the CONSUMER the work instead of the
+   pixels -- and tagpu_terr.h's `atlasRgb`/`atlasRgbRows` are now always NULL/0.
+   [The vulkan-only plan, landing 11-5c.] */
 
 /* ---- THE RESTORE REQUEST, for a lane that restores on its own -----------
    The other half of gate 2's mirror, and its replacement: instead of reading
@@ -289,23 +256,18 @@ int tagpu_terr_armed(unsigned frame_counter)
            two hand-over fields are mutually exclusive was false because of it.
            [FROM THE LANDING-7c REVIEW; independently found the same hour.]
            This lever is POLLED until it latches, so it can be created
-           mid-session -- and then `rgb_mirror_step`'s early return stops
+           mid-session -- and then the read-back's early return stopped
            updating the mirror while leaving `rows > 0` standing, so the
            publisher below ran BOTH blocks. A consumer then resized its restored
            image twice in one call and uploaded a frozen mirror into the very
            image the other lane renders into; where the mirror's rows and the
            atlas's height disagreed it refused every frame instead and the
            terrain stopped drawing altogether.
-           Freeing it is the same argument the read-back's own failure path
-           makes a few hundred lines down: a buffer nothing will read again is
-           up to 23 MB held for the process, and leaving ROWS standing is worse
-           than the memory because the publish is gated on `rows > 0`. */
-        free(s_rgbMirror);
-        s_rgbMirror = NULL;
-        s_rgbMirrorCap = 0;
-        s_rgbMirrorRows = 0;
-        s_rgbMirrorPainted = 0;
-        s_rgbMirrorSerial++;
+           Freeing it was the same argument the read-back's own failure path
+           made: a buffer nothing will read again is up to 23 MB held for the
+           process, and leaving ROWS standing is worse than the memory because
+           the publish was gated on `rows > 0`. Both halves went with the
+           read-back in landing 11-5c and there is nothing left to free. */
     }
     if (s_passive || s_over) tagpu_terrown_set_skip(0);
     if (was != 1) {
@@ -319,22 +281,17 @@ int tagpu_terr_armed(unsigned frame_counter)
 
 int tagpu_terr_on(void) { return s_armed > 0; }
 
-/* ---- GL ---- */
-static int    s_state = 0;             /* 0 unloaded, 1 ready, 2 failed       */
-static GLuint s_prog, s_vao, s_vbo, s_qvbo, s_atlasTex;
-/* THE ATLAS IS BUILT WHEN THIS SAYS SO, NOT WHEN `s_atlasTex` IS NON-ZERO.
-   `s_atlasTex` is only its GL name and is 0 on a lane with no GL, so keying
-   `ensure_atlas`'s already-built test on it rebuilt the whole atlas EVERY
-   FRAME there -- a 5.9 MB calloc and free, the per-tile copy loop, an
-   `IsBadReadPtr` over the tile set, a log line a frame, and an
-   `s_atlasMirrorSerial++` that made the Vulkan twin re-upload the entire
-   atlas image every frame. Set and cleared exactly where `s_atlasTex` is on
-   the GL lane. [FROM THE 4b-2 LANDING REVIEW, 2026-09-18 -- the twelfth
-   instance of this landing's own shape, in a function §2.50 listed as fixed
-   when only its mirror was.] */
+/* ---- the atlas -----------------------------------------------------------
+   THE ATLAS IS BUILT WHEN THIS SAYS SO. `s_atlasBuilt` used to share the job
+   with a GL texture name, and keying `ensure_atlas`'s already-built test on
+   that name rebuilt the whole atlas EVERY FRAME on a lane with no GL -- a
+   5.9 MB calloc and free, the per-tile copy loop, an `IsBadReadPtr` over the
+   tile set, a log line a frame, and an `s_atlasMirrorSerial++` that made the
+   Vulkan twin re-upload the entire atlas image every frame. The name went in
+   landing 11-5c and the flag is the whole answer. [FROM THE 4b-2 LANDING
+   REVIEW, 2026-09-18 -- the twelfth instance of that landing's own shape, in
+   a function gpu-status.md 2.50 listed as fixed when only its mirror was.] */
 static int    s_atlasBuilt;
-static GLint  s_uGame, s_uFog, s_uFogOrg, s_uFogDim, s_uZoom, s_uZoomC,
-              s_uDepthScale, s_uEnc, s_uOrigin, s_uTile0, s_uTexel;
 static int    s_atlasH, s_atlasN;      /* atlas rows*CELL_PITCH, tiles held   */
 static const void* s_setPtr;           /* the TILE_SET we built from          */
 static int    s_setCount;
@@ -350,11 +307,8 @@ static int    s_maxTex;
    are all-or-nothing because one quad paints its interior and its ring.
    Draws issued in the same frame are in order, so a cell whose out pass was
    issued by this frame's slice is restored in this frame's terrain draw. */
-static GLuint s_rgbTex;
-static int    s_rgbState = 0;      /* 0 none, 1 restoring, 2 complete, -1 failed */
-static unsigned s_rgbPalSerial;    /* tagpu_pal serial s_rgbTex was restored through */
-static TAGPU_RGLSL_JOB* s_job;     /* the restorer's job while state is 1     */
-static GLint  s_uRestored;
+static int    s_rgbState = 0;      /* 0 none, 1 request published, -1 failed  */
+static unsigned s_rgbPalSerial;    /* tagpu_pal serial the request was built through */
 static const unsigned char* s_setPix;   /* the current set's tile pixels     */
 /* the last gathered rect, in 32-px cells: the GLSL job restores the tiles
    under it first (renderers.md 4c Q6), so it starts one frame after the atlas */
@@ -366,13 +320,10 @@ static int    s_rectTx0, s_rectTy0, s_rectCols, s_rectRows, s_rectValid;
    heightfield normal is per fragment here, from the grid, where the lab
    computes it per vertex on 16-px sub-quads -- 4x the terrain vertices,
    29 MB a frame at the zoom floor, for the same field. Unit 5. */
-static GLuint s_hTex;
 static int    s_hW, s_hH;              /* 0 while there is no usable grid    */
 static const void* s_hGrid;            /* the inputs the texture was built  */
 static const void* s_hSet;             /* from, or last attempted from      */
 static unsigned s_hFrame;              /* the frame of that attempt          */
-static GLint  s_uHDim, s_uLit, s_uLambert, s_uSun, s_uAmb, s_uNorm;
-static GLuint s_hVao, s_hVbo, s_hIbo;  /* the heightfield caster mesh (G14i)  */
 static int    s_hMeshW, s_hMeshH;      /* the grid it was built from: a failed
                                           rebuild leaves the old mesh, and this
                                           is what keeps it undrawn (review) */
@@ -394,7 +345,6 @@ static unsigned  s_hMeshSerial;
    ensure_height's mirror term from asking for the same rebuild every frame for
    the life of the map; cleared wherever the mesh itself is. */
 static int       s_hMeshNoMirror;
-static TAGPU_SHADOWU s_shU;            /* the shadow read-back uniforms      */
 
 /* THIS FRAME'S CELLS, one record each: the cell's column and row in the
    gather's own grid, then its tile's column and row in the atlas. Everything
@@ -433,6 +383,18 @@ typedef char terr_atlas_consts_unchanged[
    of the same two operands. What changes is only the cost — four shorts a
    cell against six vertices of six floats — and that is what lets one frame's
    budget cover a 3840x2160 view at the zoom floor. */
+/* THIS PASS'S TWO SHADERS, AND NEITHER HAS A C REFERENCE LEFT. They are a
+   BUILD INPUT, not dead GL code: `tools/spirv-gen.py` reads them out of the
+   PREPROCESSED translation unit under the manifest names tagpu_terr::VS and
+   tagpu_terr::FS, and generates the SPIR-V `tagpu_vk_terr.c` draws the terrain
+   with -- so deleting either fails the build, and editing one edits the
+   terrain the player sees. `tools/spirv-check.sh` re-extracts them through the
+   preprocessor on every link and compares the hashes.
+   The pragma below is paired and its `pop` is PROVED with a planted probe
+   rather than read -- landing 11-4b put one at column 0 inside a comment,
+   where it is text and not a directive. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-variable"
 static const char* VS =
     "#version 330 core\n"
     "layout(location=0) in vec2 aCorner;\n"   /* per vertex: 0/1 x 0/1        */
@@ -562,128 +524,7 @@ static const char* FS =
     TAGPU_GLSL_FOG_SHADE("pi")
     "  frag = vec4(texelFetch(uPal, ivec2(pi, 0), 0).rgb, 1.0);\n"
     "}\n";
-
-static GLuint mksh(GLenum t, const char* src)
-{
-    GLuint sh = glCreateShader(t);
-    GLint ok = 0;
-    glShaderSource(sh, 1, &src, NULL); glCompileShader(sh);
-    glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
-    if (!ok) { char lg[512]; glGetShaderInfoLog(sh, sizeof lg, NULL, lg);
-               flog("terr: shader FAILED:"); flog(lg); s_state = 2; }
-    return sh;
-}
-
-static void init_gl(void)
-{
-    GLuint vs, fs;
-    GLint ok = 0;
-    /* Instanced drawing is GL 3.1 and the divisor GL 3.3, both core in any
-       context that can compile the `#version 330 core` shaders below — so a
-       device missing them cannot run this pass at all, and the same refusal
-       the missing-proc test already applies is the right answer. */
-    x_glDrawArraysInstanced = (PFN_DRAWARRAYSINST)getgl("glDrawArraysInstanced");
-    x_glVertexAttribDivisor = (PFN_ATTRIBDIVISOR)getgl("glVertexAttribDivisor");
-    x_glUniform1f  = (PFN_UNIFORM1F) getgl("glUniform1f");
-    x_glUniform2f  = (PFN_UNIFORM2F) getgl("glUniform2f");
-    x_glUniform3f  = (PFN_UNIFORM3F) getgl("glUniform3f");
-    x_glActiveTexture = (PFN_ACTIVETEX)getgl("glActiveTexture");
-    x_glGetIntegerv = (PFN_GETINTEGERV)getgl("glGetIntegerv");
-    if (!x_glUniform1f || !x_glUniform2f || !x_glUniform3f ||
-        !x_glActiveTexture || !x_glDrawArraysInstanced || !x_glVertexAttribDivisor) {
-        flog("terr: missing GL proc"); s_state = 2; return;
-    }
-    vs = mksh(GL_VERTEX_SHADER, VS); fs = mksh(GL_FRAGMENT_SHADER, FS);
-    if (s_state == 2) return;
-    s_prog = glCreateProgram();
-    glAttachShader(s_prog, vs); glAttachShader(s_prog, fs); glLinkProgram(s_prog);
-    glGetProgramiv(s_prog, GL_LINK_STATUS, &ok);
-    if (!ok) { flog("terr: link FAILED"); s_state = 2; return; }
-    glDeleteShader(vs); glDeleteShader(fs);
-    s_uGame = glGetUniformLocation(s_prog, "uGame");
-    s_uFog  = glGetUniformLocation(s_prog, "uFog");
-    s_uFogOrg = glGetUniformLocation(s_prog, "uFogOrg");
-    s_uFogDim = glGetUniformLocation(s_prog, "uFogDim");
-    s_uZoom = glGetUniformLocation(s_prog, "uZoom");
-    s_uZoomC = glGetUniformLocation(s_prog, "uZoomC");
-    s_uDepthScale = glGetUniformLocation(s_prog, "uDepthScale");
-    s_uEnc = glGetUniformLocation(s_prog, "uEnc");
-    s_uOrigin = glGetUniformLocation(s_prog, "uOrigin");
-    s_uTile0 = glGetUniformLocation(s_prog, "uTile0");
-    s_uTexel = glGetUniformLocation(s_prog, "uTexel");
-    glUseProgram(s_prog);
-    glUniform1i(glGetUniformLocation(s_prog, "uAtlas"), 0);
-    glUniform1i(glGetUniformLocation(s_prog, "uPal"),   1);
-    glUniform1i(glGetUniformLocation(s_prog, "uFogGrid"), 2);
-    glUniform1i(glGetUniformLocation(s_prog, "uAtlasRGB"), 4);
-    s_uRestored = glGetUniformLocation(s_prog, "uRestored");
-    glUniform1i(glGetUniformLocation(s_prog, "uFogLUT"),  3);
-    glUniform1i(glGetUniformLocation(s_prog, "uHeight"),  5);
-    s_uHDim = glGetUniformLocation(s_prog, "uHDim");
-    s_uLit  = glGetUniformLocation(s_prog, "uLit");
-    s_uLambert = glGetUniformLocation(s_prog, "uLambert");
-    s_uSun  = glGetUniformLocation(s_prog, "uSun");
-    s_uAmb  = glGetUniformLocation(s_prog, "uAmb");
-    s_uNorm = glGetUniformLocation(s_prog, "uNorm");
-    tagpu_shadow_locate(s_prog, &s_shU);
-    glUseProgram(0);
-
-    glGenVertexArrays(1, &s_vao); glBindVertexArray(s_vao);
-    /* the unit quad, in the engine's own vertex order: two triangles whose
-       shared edge runs (1,0)-(0,1), exactly the six corners the per-vertex
-       gather used to write out per cell. ONE LITERAL, IN tagpu_terr.h, that
-       both lanes build their per-vertex buffer from (Phase G / G19e). */
-    {
-        static const GLfloat corners[TAGPU_TERR_QUADV * 2] = TAGPU_TERR_QUAD;
-        glGenBuffers(1, &s_qvbo); glBindBuffer(GL_ARRAY_BUFFER, s_qvbo);
-        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)sizeof corners, corners,
-                     GL_STATIC_DRAW);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8, (void*)0);
-    }
-    glGenBuffers(1, &s_vbo); glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-    /* no storage yet: the per-frame upload in tagpu_terr_render re-specifies it
-       at this frame's size, and the attribute below only records the binding */
-    glEnableVertexAttribArray(1);
-    /* GL_SHORT, UNNORMALISED: every field is a small integer, so the fixed
-       conversion to float is exact and the shader gets the same numbers the
-       gather wrote. Normalising here would divide them all by 32767. */
-    glVertexAttribPointer(1, 4, GL_SHORT, GL_FALSE, ICOMP * 2, (void*)0);
-    x_glVertexAttribDivisor(1, 1);
-    glBindVertexArray(0);
-
-    s_maxTex = 0;
-    if (x_glGetIntegerv) {
-        GLint m = 0;
-        x_glGetIntegerv(GL_MAX_TEXTURE_SIZE, &m);
-        s_maxTex = (int)m;
-    }
-    /* Only a FAILED query gets the fallback. 4096 is the conservative floor GL
-       3.3 hardware always beats — 120 atlas rows on the 34-texel pitch, 7680
-       tiles. This used to read `< ATLAS_W`, which was harmless while ATLAS_W
-       was 2048 and a device answering exactly 2048 passed; at 2176 that same
-       honest answer would be overwritten with 4096 and we would then hand
-       glTexImage2D a width the driver rejects, leaving the atlas storageless —
-       and with the composite inverted that is a BLACK viewport, not a missing
-       texture. So a device that genuinely cannot hold the atlas is refused
-       here instead, once, and the engine keeps its own terrain pass. */
-    if (s_maxTex <= 0) s_maxTex = 4096;
-    if (s_maxTex < ATLAS_W) {
-        char b[128];
-        _snprintf(b, sizeof b, "terr: GL_MAX_TEXTURE_SIZE %d < atlas width %d —"
-                               " terrain stays the engine's", s_maxTex, ATLAS_W);
-        flog(b);
-        s_state = 2;
-        return;
-    }
-
-    /* s_atlasTex = 0 is what forces the rebuild (ensure_atlas tests it first);
-       the set identity must SURVIVE, or ensure_atlas cannot tell "same set, new
-       context" from "new map" and throws the restore away -- see glreset */
-    s_atlasTex = 0; s_atlasBuilt = 0;
-    s_state = 1;
-    flog("terr: GL ready");
-}
+#pragma GCC diagnostic pop
 
 void tagpu_terr_glreset(void)
 {
@@ -692,14 +533,10 @@ void tagpu_terr_glreset(void)
        feature pass has carried this line since it was written; this one did
        not, and the asymmetry was in the G19e diff. */
     s_pubHave = 0; s_abFrame = 0;
-    s_state = 0;
-    s_atlasTex = 0; s_atlasBuilt = 0;   /* the id died with the context */
-    s_rgbTex = 0;
-    s_hTex = 0;                         /* the id died; ensure_height rebuilds */
-    s_hVao = s_hVbo = s_hIbo = 0;       /* ...and the caster mesh with it      */
+    s_atlasBuilt = 0;                   /* rebuilt on the next gather          */
     s_hMeshW = s_hMeshH = 0;
     /* the mirror goes with the mesh it mirrors: keeping it would hand the
-       Vulkan lane vertices for a grid the GL side is about to rebuild */
+       Vulkan lane vertices for a grid this pass is about to rebuild */
     free(s_hMeshV); s_hMeshV = NULL;
     free(s_hMeshI); s_hMeshI = NULL;
     s_hMeshVN = s_hMeshIN = 0;
@@ -707,14 +544,12 @@ void tagpu_terr_glreset(void)
     s_hW = s_hH = 0; s_hGrid = NULL; s_hFrame = 0;
     s_rectValid = 0;
     /* The set identity (s_setPtr/s_setCount/s_setPix) is LEFT ALONE: zeroing
-       s_atlasTex is what forces the atlas rebuild, and the identity's job is to
-       tell a NEW MAP from the same set (ensure_atlas aborts a running restore
-       on a new map). The restore itself does not survive a reset: its result
-       lived only in s_rgbTex, which died with the context, so it is run again
-       (two seconds, on the GPU) rather than kept as a 23 MB copy. Until
-       2026-09-05 the ONNX path kept its CPU result here and re-uploaded it.
-       The job is already gone: tagpu_native_glreset resets the restorer first. */
-    s_job = NULL;
+       s_atlasBuilt is what forces the atlas rebuild, and the identity's job is
+       to tell a NEW MAP from the same set (ensure_atlas drops a standing
+       restore request on a new map). The request does not survive the reset
+       either -- the image it was painted into was the consumer's and went with
+       the device -- so it is published again and the consumer restores from
+       scratch rather than being handed a serial it has already seen. */
     s_rgbState = 0;
     rlist_drop();
 }
@@ -759,32 +594,16 @@ static void build_height(const char* ta, unsigned frame)
         for (c = 0; c < w; c++)
             buf[(size_t)r * w + c] =
                 *(const unsigned char*)(grid + ((size_t)r * w + c) * FT_STRIDE + FT_HEIGHT);
-    /* THE TEXTURE IS GL; THE GRID IS THE PASS -- `buf` is the mirror the comment
-       below keeps, and `s_hW`/`s_hH` reach the twin through the hand-over's
-       `hDimW`/`hDimH`. Gated because with no context every `x_gl*` in this file
-       is NULL and the call is to address 0. [Landing 4b-2, measured: an access
-       violation at 0023:00000000 straight after `terr: atlas built`.] */
-    if (!tagpu_vk_owns_present()) {
-        if (!s_hTex) {
-            glGenTextures(1, &s_hTex);
-            glBindTexture(GL_TEXTURE_2D, s_hTex);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        } else glBindTexture(GL_TEXTURE_2D, s_hTex);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, buf);
-        glBindTexture(GL_TEXTURE_2D, 0);
-    }
     build_hills(buf, w, h);          /* TODO: unconditional -- 19 MB even when
                                         terrainshadow=0, which is the default.
                                         See build_hills' header. */
     /* THE MIRROR IS THE BUFFER (Phase G / G19e), exactly as the atlas's: the
-       memory the glTexImage2D above was handed, kept instead of freed, so the
-       Vulkan lane's uHeight is the same texels rather than a second read of the
-       engine's grid. 0.5 MB at 512x512 cells, 16 MB at the 4096 ceiling, and
-       paid for only while the Vulkan lane is armed. */
+       memory the loop above filled, kept instead of freed, so the Vulkan lane's
+       uHeight is those texels rather than a second read of the engine's grid.
+       0.5 MB at 512x512 cells, 16 MB at the 4096 ceiling, and paid for only
+       while the Vulkan lane is armed. `s_hW`/`s_hH` reach the consumer through
+       the hand-over's `hDimW`/`hDimH`, and build_height keeps those in step
+       with the mirror -- see the free at the top of this function. */
     if (s_mirrorWant) {
         free(s_hMirror);
         s_hMirror = buf;
@@ -855,31 +674,12 @@ static void build_hills(const unsigned char* buf, int w, int h)
             ib[k++] = i00; ib[k++] = i10; ib[k++] = i01;
             ib[k++] = i11; ib[k++] = i01; ib[k++] = i10;
         }
-    /* THE VAO AND THE TWO BUFFERS ARE GL; THE MESH IS THE PASS. `vb` and `ib`
-       are the mirror the comment below keeps for a second backend, and
-       `s_hMeshSerial` is what its consumer checks -- so the arrays are built on
-       either lane and only the upload stands down. [Landing 4b-2.] */
-    if (!tagpu_vk_owns_present()) {
-        if (!s_hVao) {
-            glGenVertexArrays(1, &s_hVao);
-            glGenBuffers(1, &s_hVbo);
-            glGenBuffers(1, &s_hIbo);
-        }
-        glBindVertexArray(s_hVao);
-        glBindBuffer(GL_ARRAY_BUFFER, s_hVbo);
-        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(nv * 3 * sizeof(float)), vb, GL_STATIC_DRAW);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 12, (void*)0);
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, s_hIbo);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(ni * sizeof(unsigned)), ib, GL_STATIC_DRAW);
-        glBindVertexArray(0);
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-    }
-    /* THE MIRROR IS THE BUFFER, exactly as the atlas's and the height grid's:
-       the memory the two glBufferData calls above were handed, kept rather
-       than freed, and only while the Vulkan lane is armed. Every exit above
-       this point has already returned, so "the pointers are non-NULL" and
-       "they are s_hMeshVN/s_hMeshIN long" are one fact rather than two. */
+    /* THE MESH IS THE PASS, exactly as the atlas and the height grid are: `vb`
+       and `ib` are what the consumer draws, and `s_hMeshSerial` is what it
+       checks, so they are kept rather than freed and only while the Vulkan lane
+       is armed. Every exit above this point has already returned, so "the
+       pointers are non-NULL" and "they are s_hMeshVN/s_hMeshIN long" are one
+       fact rather than two. */
     free(s_hMeshV); free(s_hMeshI);
     if (s_mirrorWant) {
         s_hMeshV = vb; s_hMeshI = ib;
@@ -902,23 +702,26 @@ int tagpu_terr_hills_draw(int r0, int r1, TAGPU_TERRHILLS* out)
     int cells = s_hMeshW - 1, rows = s_hMeshH - 1;
     size_t first, count;
     if (out) memset(out, 0, sizeof *out);
-    /* only the mesh built from THIS grid: after a map change whose rebuild
-       failed (too small, out of memory) the old mesh is still bound and
-       the new grid's size would index past it */
-    if (!s_hVao || s_hMeshW < 2 || s_hMeshH < 2) return 0;
+    /* ONLY THE MESH BUILT FROM THIS GRID: after a map change whose rebuild
+       failed (too small, out of memory) the old mesh is still what the arrays
+       hold, and the new grid's size would index past it. Both terms are the
+       MESH's own.
+       There used to be a third, `!s_hVao` -- a GL vertex-array name, created
+       only on a lane that had a GL context. It sat above the publication of
+       the very mirror this function exists to hand over, so on a lane with no
+       GL this returned 0 before reaching it and the Vulkan shadow pass was
+       handed nothing, for a reason that had nothing to do with the mesh.
+       [The vulkan-only plan, landing 11-5c.] */
+    if (s_hMeshW < 2 || s_hMeshH < 2) return 0;
     if (s_hMeshW != s_hW || s_hMeshH != s_hH) return 0;
     if (r0 < 0) r0 = 0;
     if (r1 > rows - 1) r1 = rows - 1;
     if (r1 < r0) return 0;
     first = (size_t)r0 * (size_t)cells * 6u;
     count = (size_t)(r1 - r0 + 1) * (size_t)cells * 6u;
-    glBindVertexArray(s_hVao);
-    glDrawElements(GL_TRIANGLES, (GLsizei)count, GL_UNSIGNED_INT,
-                   (const void*)(first * 4u));
-    glBindVertexArray(0);
-    /* THE RANGE THE DRAW ABOVE USED, not a second evaluation of it: the Vulkan
-       shadow pass draws this and nothing else, so the clamp is done once, here,
-       by the code that owns the mesh. Only published with the mirror the range
+    /* THE RANGE, computed once, here, by the code that owns the mesh: the
+       Vulkan shadow pass draws this and nothing else, so the clamp is not
+       evaluated a second time at the far end. Only published with the mirror the range
        indexes into, and only when the range is inside it -- `first + count`
        is at most `rows * cells * 6` by the clamp above, and the bound is
        re-checked rather than argued because the two are separate mallocs. */
@@ -1004,35 +807,12 @@ static int ensure_atlas(const char* ta)
         memcpy(cell + (size_t)(CELL_PITCH - 1) * ATLAS_W,               /* bottom */
                dst + (size_t)(TILE_PX - 1) * ATLAS_W - CELL_BORDER, CELL_PITCH);
     }
-    /* THE TEXTURE IS GL; THE ATLAS IS THE PASS. Everything above built `buf`,
-       which the comment below explains is the mirror a second backend samples,
-       and it is built the same way on either lane. Only the upload stands down
-       under `renderer=vulkan`, where the Vulkan twin uploads the same bytes
-       into an image of its own. [The vulkan-only plan, landing 4b-2.] */
-    if (!tagpu_vk_owns_present()) {
-        if (!s_atlasTex) {
-            glGenTextures(1, &s_atlasTex);
-            glBindTexture(GL_TEXTURE_2D, s_atlasTex);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        } else {
-            glBindTexture(GL_TEXTURE_2D, s_atlasTex);
-        }
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        /* always re-spec rather than sub-image: no init flag can then survive a
-           context reset and leave the texture storageless, which reads as 0 in
-           every sample (the failure that cost G13c an hour) */
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, ATLAS_W, h, 0, GL_RED, GL_UNSIGNED_BYTE, buf);
-        glBindTexture(GL_TEXTURE_2D, 0);
-    }
     /* THE MIRROR IS THE BUFFER, NOT A COPY OF IT. Keeping `buf` here rather
-       than freeing it is the whole of this pass's answer to "how does a second
-       backend get these texels" (tagpu_terr.h): it is correct from the instant
-       it exists, because it is the very memory the glTexImage2D above was
-       handed, and it cannot drift from the texture because nothing writes
-       either one again -- the tile set is built by LoadMap and never changes.
+       than freeing it is the whole of this pass's answer to "how does the
+       consumer get these texels" (tagpu_terr.h): it is correct from the instant
+       it exists, because it is the very memory the loop above filled, and
+       nothing writes it again -- the tile set is built by LoadMap and never
+       changes.
        ~5.9 MB on Two Continents, paid for only while the Vulkan lane is armed.
        The serial is bumped whether or not the bytes differ from the last
        build's: a rebuild means a new allocation, and the Vulkan lane's upload
@@ -1053,7 +833,6 @@ static int ensure_atlas(const char* ta)
        one and start over. (A GL reset reaches here with the SAME set, after
        glreset has already reset the restore, so both calls are no-ops then.) */
     if (s_setPtr != (const void*)set || s_setCount != count || s_setPix != pix) {
-        if (s_job) { tagpu_rglsl_job_free(s_job); s_job = NULL; }
         s_rgbState = 0;
         rlist_drop();
     }
@@ -1108,19 +887,18 @@ static int* restore_order(const char* ta, int count)
 }
 
 /* `repaint`: the atlas is already restored and only the palette moved, so the
-   destination keeps what it holds and every tile is queued again over it —
-   the terrain recolours centre-out instead of blanking for the 2+ seconds the
-   job takes. */
-static int glsl_begin(const char* ta, int repaint)
+   destination keeps what it holds and every tile is queued again over it --
+   the terrain recolours centre-out instead of blanking for the seconds a
+   whole restore takes. Which of the two it is is the consumer's to act on;
+   this side only says which. */
+static int restore_publish(const char* ta, int repaint)
 {
-    const unsigned char* pal = tagpu_pal_live();
-    /* the ART's palette for the tileability test, the SCREEN's for the restore
-       itself -- tagpu_pal.h, and tagpu_gaf.c's atlas_insert has the numbers */
+    /* the ART's palette for the tileability test; the SCREEN's goes out
+       separately as `s_pub.pal` and is the restore's own input */
     const unsigned char* art = tagpu_pal_engine();
-    int rows = s_atlasH / CELL_PITCH, n = s_atlasN, i, ok;
+    int n = s_atlasN, i;
     int* order;
     TAGPU_RGLSL_FRAME* frames;
-    (void)rows;
     order = restore_order(ta, n);
     frames = (TAGPU_RGLSL_FRAME*)malloc((size_t)n * sizeof *frames);
     if (!order || !frames) { free(order); free(frames); flog("terr: restore order alloc failed"); return 0; }
@@ -1134,124 +912,70 @@ static int glsl_begin(const char* ta, int repaint)
         f->wrap = art ? tagpu_rglsl_tileable(s_setPix + (size_t)t * TILE_BYTES, TILE_PX, TILE_PX, art, -1) : 0;
     }
     free(order);
-    /* the destination, re-specified per map: the same layout as s_atlasTex */
-    if (!s_rgbTex) {
-        glGenTextures(1, &s_rgbTex);
-        glBindTexture(GL_TEXTURE_2D, s_rgbTex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    } else glBindTexture(GL_TEXTURE_2D, s_rgbTex);
-    if (!repaint)
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, ATLAS_W, s_atlasH, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    /* a one-shot job at the head of the queue: the terrain restores before
-       any GAF atlas, and its done line is the restore's measurement */
-    s_job = repaint
-        ? tagpu_rglsl_job_repaint("terr", 0, 1, s_atlasTex, ATLAS_W, s_atlasH, pal, s_rgbTex, ATLAS_W, s_atlasH)
-        : tagpu_rglsl_job_new    ("terr", 0, 1, s_atlasTex, ATLAS_W, s_atlasH, pal, s_rgbTex, ATLAS_W, s_atlasH);
+    /* THE LIST IS THE HAND-OVER, so it is retained rather than freed and the
+       serial is bumped by the drop -- a DROP IS NEWS, it is how a consumer
+       learns the atlas it was painting is not this map's. Ownership stays
+       ours; the consumer copies what it needs. */
+    rlist_drop();                      /* whatever was there is the old list */
+    s_rFrames = frames;
+    s_rFrameN = n;
+    s_rRepaint = repaint;
     s_rgbPalSerial = tagpu_pal_serial();
-    ok = s_job && tagpu_rglsl_job_add(s_job, frames, n) > 0;
-    if (!ok && s_job) { tagpu_rglsl_job_free(s_job); s_job = NULL; }
-    /* THE LIST IS RETAINED, NOT FREED, when a second lane is to restore from
-       it -- and only then, so an ordinary session frees it here as it always
-       did. `job_add` above has already COPIED it, so ownership is ours either
-       way and this is a keep rather than a hand-off.
-       Retained even when the GL job failed: the two lanes fail independently,
-       and standing the request down because OUR GL could not set up would make
-       one lane's fault the other's. */
-    if (s_rvkWant) {
-        rlist_drop();                      /* whatever was there is the old list */
-        s_rFrames = frames;
-        s_rFrameN = n;
-        s_rRepaint = repaint;
-        if (s_log) {
-            char b[160];
-            _snprintf(b, sizeof b, "terr: restore request published -- %d frames, "
-                      "%dx%d atlas, serial %u%s",
-                      n, ATLAS_W, s_atlasH, s_rSerial, repaint ? ", repaint" : "");
-            flog(b);
-        }
-    } else free(frames);
-    return ok;
+    if (s_log) {
+        char b[160];
+        _snprintf(b, sizeof b, "terr: restore request published -- %d frames, "
+                  "%dx%d atlas, serial %u%s",
+                  n, ATLAS_W, s_atlasH, s_rSerial, repaint ? ", repaint" : "");
+        flog(b);
+    }
+    return 1;
 }
 
-/* tagpu_restoredump.on: the finished atlas, as the shader samples it, once, as
-   raw RGBA -- the restorer's only disk write, and only under the trigger.
-   `tascene restorediff` holds it to the pack's atlas (renderers.md 4c Q8). */
-static void dump_if_armed(void)
-{
-    unsigned char* buf;
-    FILE* f;
-    char b[160];
-    size_t n = (size_t)ATLAS_W * (size_t)s_atlasH * 4;
-    if (GetFileAttributesA("tagpu_restoredump.on") == INVALID_FILE_ATTRIBUTES) return;
-    buf = (unsigned char*)malloc(n);
-    if (!buf) return;
-    glBindTexture(GL_TEXTURE_2D, s_rgbTex);
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, buf);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    /* NAMED FOR THE PASS, so that every lane's pair of dumps is
-       `tagpu_restore_<tag>.rgba` against `tagpu_restore_<tag>_vk.rgba` -- the
-       GAF atlases were already tagged (tagpu_gaf.c `dump_twin`) and this one
-       was not, which made the terrain's `cmp` the one the recipe had to spell
-       differently. [landing 7d] */
-    f = fopen("tagpu_restore_terr.rgba", "wb");
-    if (f) { fwrite(buf, 1, n, f); fclose(f); }
-    free(buf);
-    _snprintf(b, sizeof b, "terr: restored atlas dumped to tagpu_restore_terr.rgba (%dx%d RGBA, %d tiles)%s",
-              ATLAS_W, s_atlasH, s_atlasN, f ? "" : " -- WRITE FAILED");
-    flog(b);
-}
+/* Once per frame after the atlas is known: publish the restore request when
+   Classic++ is on and none stands for this tile set, then publish it again
+   when the palette moves under it.
 
-/* Once per frame after the atlas is known: start the restore when the switch
-   is on and none exists for this set, then watch the job the frame driver
-   slices (tagpu_native.c calls tagpu_rglsl_step after the gathers) until it
-   drains; the cells already painted are sampled from the first slice on. The
-   switch going off mid-restore pauses the job (its scratch stays allocated)
-   and leaves the texture in place, unsampled, restored as far as it got. */
+   THE PAINTING IS THE CONSUMER'S; THE ORDER IS OURS. This side owns
+   `restore_order` above -- the centre-out reveal the player watches -- and the
+   frame list; the Vulkan pass owns the image, the job and the progress
+   (tagpu_vk_terr.c). Until landing 11-5c this whole route was UNREACHABLE and
+   had been since 4b-2: the list was published from inside the GL bring-up's
+   `glsl_begin`, and the driver in front of it returned at `!s_atlasTex` -- a
+   GL texture name that is only ever created on a lane with a GL context. So
+   `tagpu_restorevk.on` armed a consumer that was never sent anything, and
+   `restored` below -- keyed on the GL restore's own state machine -- could
+   only ever publish 0. One guard on a GL name, and a Vulkan-lane feature that
+   read as "off". [The vulkan-only plan, landing 11-5c.] */
 static void restore_step(const char* ta)
 {
-    if (!tagpu_classicpp_assets() || !s_atlasTex || !s_setPix) return;
+    /* the request is only worth building when something asked for it: without
+       `tagpu_restorevk.on` there is no painter on this lane and the terrain
+       draws indexed, which is the default and stays it */
+    if (!s_rvkWant) return;
+    if (!tagpu_classicpp_assets() || !s_atlasBuilt || !s_setPix) return;
     if (s_rgbState == 0) {
         if (!s_rectValid) return;          /* the order wants a viewport: next frame */
         if (!tagpu_pal_live()) return;     /* ...and a palette: next frame  */
-        if (!glsl_begin(ta, 0)) { s_rgbState = -1; flog("terr: GLSL restore could not start; Classic++ terrain stays indexed"); return; }
+        if (!restore_publish(ta, 0)) {
+            s_rgbState = -1;
+            flog("terr: the restore request could not be built; Classic++ terrain stays indexed");
+            return;
+        }
         s_rgbState = 1;
         return;
     }
-    if (s_rgbState == 1) {
-        if (tagpu_rglsl_job_failed(s_job)) {
-            s_rgbState = -1; flog("terr: GLSL restore failed; Classic++ terrain stays indexed");
-            tagpu_rglsl_job_free(s_job); s_job = NULL;
-            return;
-        }
-        if (tagpu_rglsl_job_idle(s_job)) {
-            char b[128];
-            s_rgbState = 2;
-            tagpu_rglsl_job_free(s_job); s_job = NULL;     /* the texture is ours */
-            _snprintf(b, sizeof b, "terr: restored atlas complete (GLSL) %dx%d for %d tiles", ATLAS_W, s_atlasH, s_atlasN);
-            flog(b);
-            dump_if_armed();
-        }
-        return;
-    }
-    /* Complete, and then the palette moved under it (the Gamma option, or
+    /* Published, and then the palette moved under it (the Gamma option, or
        `+gamma N`): the tiles hold the brightness the old palette gave them
        while the engine's own pixels beside them moved. Queue them all again
-       over the texture that is there — one repaint at a time, because this
-       only runs from state 2. */
-    if (s_rgbState == 2 && s_rgbPalSerial != tagpu_pal_serial()) {
+       over the image that is there. */
+    if (s_rgbState == 1 && s_rgbPalSerial != tagpu_pal_serial()) {
         char b[128];
         if (!s_rectValid) return;          /* restore_order wants a viewport: next frame */
-        if (!glsl_begin(ta, 1)) {
+        if (!restore_publish(ta, 1)) {
             s_rgbPalSerial = tagpu_pal_serial();   /* do not retry every frame */
-            flog("terr: palette changed but the repaint could not start; the atlas keeps the old colours");
+            flog("terr: palette changed but the repaint request could not be built; the atlas keeps the old colours");
             return;
         }
-        s_rgbState = 1;
         _snprintf(b, sizeof b, "terr: palette changed (serial=%u): %d tiles queued for repaint",
                   s_rgbPalSerial, s_atlasN);
         flog(b);
@@ -1378,23 +1102,21 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
 
     if (s_armed != 1) return terr_bail();
     if (!ptr_ok(ta)) return terr_bail();
-    /* THE GATHER IS NOT API-INDEPENDENT AND THIS IS WHERE IT SHOWED. It builds
-       its own GL program on first sight, and `init_gl` resolves entry points --
-       so on the vulkan-only lane it logged `terr: missing GL proc`, latched
-       `s_state = 2` and killed the pass for the process, gather included.
-       Measured 2026-09-18, by running it: the hand-over never fired and the
-       capture's target was not even unlinked. `ensure_atlas` stays on both
-       lanes -- it builds the tile mirror the hand-over carries, and gates its
-       own upload. [The vulkan-only plan, landing 4b-2.] */
-    if (!tagpu_vk_owns_present()) {
-        if (s_state == 0) init_gl();
-        if (s_state != 1) return terr_bail();
-    } else if (s_maxTex <= 0 || s_maxTex != tagpu_vk_max_image_dim()) {
-        /* AND THE ATLAS BOUND IS A DEVICE LIMIT, so it is asked of the device
-           that will sample it. `init_gl` reads GL_MAX_TEXTURE_SIZE into
-           `s_maxTex`; with no GL context that never happened and `s_maxTex`
-           stayed 0, so `ensure_atlas` kept `s_maxTex / CELL_PITCH` = 0 rows and
-           cached a zero-row atlas for the life of the process.
+    /* THE ATLAS BOUND IS A DEVICE LIMIT, so it is asked of the device that will
+       sample it. A GL bring-up stood in front of this and had to be gated: it
+       built this pass's program on first sight and resolved entry points, so on
+       the vulkan-only lane it logged `terr: missing GL proc`, latched a failed
+       state and killed the pass for the process, GATHER INCLUDED -- measured
+       2026-09-18 by running it, the hand-over never fired and the capture's
+       target was not even unlinked. It went in landing 11-5c and what is left
+       is the bound. `ensure_atlas` was never the gated part: it builds the tile
+       mirror the hand-over carries and gated only its own upload.
+       [The vulkan-only plan, landings 4b-2 and 11-5c.] */
+    if (s_maxTex <= 0 || s_maxTex != tagpu_vk_max_image_dim()) {
+        /* The bring-up read GL_MAX_TEXTURE_SIZE into `s_maxTex`; with no GL
+           context that never happened and `s_maxTex` stayed 0, so
+           `ensure_atlas` kept `s_maxTex / CELL_PITCH` = 0 rows and cached a
+           zero-row atlas for the life of the process.
            REFUSED RATHER THAN GUESSED while the lane is still coming up: 0 from
            `tagpu_vk_max_image_dim` means "no device yet", the gather hands the
            draw back for those few frames exactly as it does for any other
@@ -1553,110 +1275,6 @@ static int             s_fogCopyCells;
 /* ONE STEP OF THE RESTORED READ-BACK, on the render thread with the context
    current. A no-op unless the Vulkan lane asked for mirrors, and again once the
    restorer has stopped painting, so a settled map pays one integer compare. */
-static void rgb_mirror_step(void)
-{
-    unsigned st = 0;
-    int rows, painted;
-    if (!s_mirrorWant || s_rgbMirrorFailed) return;
-    /* THE WHOLE POINT OF THE REQUEST: under `restorevk` the other lane paints
-       its own restored atlas, so reading ours back for it is the cost the
-       request exists to retire. Standing down here is also what makes the two
-       fields of tagpu_terr.h mutually exclusive -- with no read-back there is
-       never a mirror to publish. */
-    if (s_rvkWant) return;
-    /* THE TWIN IS GONE (a glreset, a new map before the re-create). Say so
-       rather than leaving the last map's colours standing, exactly as
-       tagpu_gaf.c's step does: a consumer that kept them would draw restored
-       tiles the GL lane no longer draws. */
-    /* THE TWIN IS THE TEXTURE AND THE STATE, NOT THE JOB. `s_job` is freed the
-       instant the restore COMPLETES -- `s_rgbState` goes to 2 and the comment
-       there says "the texture is ours" -- so testing `s_job` here zeroed this
-       mirror at exactly the moment the twin became fully painted. That is how
-       the first version of this failed its own A/B: the GL half wrote, the
-       Vulkan half refused, and the log said the read-back had covered no rows
-       on a map whose restore had just reported 5062 frames done.
-       `s_rgbState`: 1 restoring, 2 complete, -1 failed, 0 not started. */
-    if (!s_rgbTex || s_rgbState < 1 || s_atlasH <= 0) {
-        if (s_rgbMirrorRows) {
-            memset(s_rgbMirror, 0, (size_t)ATLAS_W * s_rgbMirrorRows * 4);  /* <= cap: rows only ever grow to it */
-            s_rgbMirrorRows = 0;
-            s_rgbMirrorPainted = 0;
-            s_rgbMirrorSerial++;
-        }
-        return;
-    }
-    /* THE TEST IS THE ALLOCATED HEIGHT, AND IT HAS TO BE. This read `s_rgbMirrorRows
-       > s_atlasH` -- the rows last READ against the atlas's height -- which only
-       fires when the atlas SHRANK, and the zero path above sets those rows to 0
-       on the very map change that precedes a growth, so it could never fire at
-       all. The allocation then stayed at the first map's size while `rows =
-       s_atlasH` grew with the second, and `glReadPixels` wrote past the end:
-       a 1000-tile map into Two Continents is 4.7 MB allocated and 23.7 MB
-       written. [FOUND BY THE GATE-2 LANDING REVIEW, 2026-09-16; it was a heap
-       overflow, not a stale mirror.] */
-    if (!s_rgbMirror || s_rgbMirrorCap < s_atlasH) {
-        unsigned char* nb = (unsigned char*)calloc((size_t)ATLAS_W * s_atlasH * 4, 1);
-        if (!nb) {
-            s_rgbMirrorFailed = 1;
-            flog("terr: no memory for the restored tile mirror - the Vulkan "
-                 "edition stays indexed");
-            return;
-        }
-        free(s_rgbMirror);
-        s_rgbMirror = nb;
-        s_rgbMirrorCap = s_atlasH;
-        s_rgbMirrorRows = 0;
-        s_rgbMirrorPainted = 0;
-    }
-    /* THE CONTENT KEY: the restorer's paint count while a job is live, and a
-       sentinel once it is complete -- a finished restore has a fixed content
-       and no counter left to read, and -1 cannot collide with a real count, so
-       the last read-back happens once and then settles. */
-    painted = (s_rgbState == 2 || !s_job) ? -1 : tagpu_rglsl_job_painted(s_job);
-    rows = s_atlasH;
-    if (painted == s_rgbMirrorPainted && rows <= s_rgbMirrorRows) return;
-    if (!tagpu_gl_rgba_readback(s_rgbTex, 0, ATLAS_W, rows, s_rgbMirror,
-                                &s_rgbMirrorFbo, &st)) {
-        /* AN INCOMPLETE FRAMEBUFFER IS ANSWERED ONCE, not asked again every
-           published frame. It is a property of the texture -- the device will
-           not attach an RGBA8 colour attachment -- so it will read the same
-           next frame, and the rows stay 0, which is exactly the condition that
-           brings this function back. A 0 with no status is the ordinary "not
-           yet": no entry point, no FBO name, nothing said about the texture. */
-        if (st && st != GL_FRAMEBUFFER_COMPLETE) {
-            s_rgbMirrorFailed = 1;
-            flog("terr: restored-tile read-back FBO incomplete - the Vulkan "
-                 "edition stays indexed");
-            /* AND THE MIRROR GOES WITH THE LATCH, rows first. A buffer nothing
-               will ever read again is up to 23 MB held for the process, and
-               leaving ROWS standing would be worse than the memory: the
-               hand-over publishes on `rows > 0`, so the consumer would go on
-               drawing the last read-back's colours while the restorer painted
-               past them. Rows at 0 publishes no mirror, and the consumer's own
-               refusal (tagpu_vk_terr.c) stands the frame down rather than draw
-               a stale restored atlas. */
-            free(s_rgbMirror);
-            s_rgbMirror = NULL;
-            s_rgbMirrorCap = 0;
-            s_rgbMirrorRows = 0;
-            s_rgbMirrorPainted = 0;
-            s_rgbMirrorSerial++;
-            if (s_rgbMirrorFbo) {
-                /* the helper put the previous binding back and dropped the
-                   attachment, so this is a name with nothing attached; deleted
-                   while the context is current, which is the whole difference
-                   from the GL-loss path */
-                glDeleteFramebuffers(1, &s_rgbMirrorFbo);
-                s_rgbMirrorFbo = 0;
-            }
-        }
-        return;
-    }
-    s_rgbMirrorRows = rows;
-    s_rgbMirrorPainted = painted;
-    s_rgbMirrorSerial++;
-}
-
 static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT* L)
 {
     int fogBad = 0;                    /* fog wanted, no grid: publish nothing */
@@ -1667,7 +1285,6 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
        `s_pubHave` is cleared with it so no earlier frame's hand-over can be
        taken later. [FROM THE G19e LANDING REVIEW, 2026-09-15.] */
     if (!s_mirrorWant) { s_pubHave = 0; s_abFrame = 0; return; }
-    rgb_mirror_step();
     memset(&s_pub, 0, sizeof s_pub);
     s_pub.cells = s_inst; s_pub.ncell = s_ncell;
     s_pub.gw = (float)v->gw; s_pub.gh = (float)v->gh;
@@ -1710,17 +1327,11 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
     s_pub.atlasSerial = s_atlasMirrorSerial;
     /* published only when the read-back has covered rows -- a non-NULL pointer
        with 0 rows would hand a consumer an image with nothing to upload */
-    if (!s_rvkWant && s_rgbMirror && s_rgbMirrorRows > 0) {
-        s_pub.atlasRgb       = s_rgbMirror;
-        s_pub.atlasRgbRows   = s_rgbMirrorRows;
-        s_pub.atlasRgbSerial = s_rgbMirrorSerial;
-    }
-    /* ...OR THE REQUEST, NEVER BOTH, and the `!s_rvkWant` above is what makes
-       that structural rather than a consequence of the free at the latch. Two
-       guards for one invariant is deliberate: the free keeps the memory honest
-       and this keeps the HAND-OVER honest, and a consumer reading
-       tagpu_terr.h's "mutually exclusive" should not have to trace a lever's
-       latch order to believe it.
+    /* THE REQUEST, AND NOTHING ELSE. `atlasRgb`/`atlasRgbRows` were the other
+       half of tagpu_terr.h's "mutually exclusive" pair -- the GL twin's
+       restored atlas, read back so this lane could upload it -- and they went
+       with the GL half in landing 11-5c, so they are now always NULL/0 and the
+       pair is exclusive by construction rather than by a latch order.
        The serial goes out even with no list, because a DROP is news: it is how
        a consumer learns the atlas it was painting is not this map's. */
     if (s_rvkWant) {
@@ -1828,7 +1439,14 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     /* COMPUTED BEFORE THE GATE, because the hand-over carries it: the RGB
        mirror's state and `assets=` are both CPU-side, so this is the gather's
        answer rather than the draw's. */
-    restored = ((s_rgbState == 1 || s_rgbState == 2) && tagpu_classicpp_assets()) ? 1 : 0;
+    /* THE FIELD, NOT A STATE MACHINE'S WORD FOR IT: `restored` is what sets
+       `uRestored` in the consumer's shader (tagpu_vk_terr.c), so it says
+       exactly "there is a restore request standing for this atlas". It used to
+       read the GL restorer's `s_rgbState`, which on a lane with no GL context
+       never left 0 -- so the consumer painted the atlas it had been handed and
+       was then told to sample the indexed one. [The vulkan-only plan, landing
+       11-5c.] */
+    restored = (s_rFrames && tagpu_classicpp_assets()) ? 1 : 0;
     {
         const TAGPU_LIGHT* L = tagpu_classicpp_light();
         /* HOISTED OUT OF THE DRAW, because on the vulkan-only lane the A/B is
