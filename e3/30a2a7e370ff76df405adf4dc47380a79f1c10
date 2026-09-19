@@ -1,0 +1,39 @@
+landing-review: 11-4b (tagpu_gui_surf.c's GL half), medium+, dedicated read-only reviewer on 1d829cf..e330a2a.
+
+No HIGH. No correctness regression. Verified by the reviewer:
+
+* THE LANE PREMISE, link by link and independently: render_gdi.c contains zero
+  tagpu_ references, so renderer=gdi cannot reach this file; render_vk.c:145 is
+  before the while at :154 and tagpu_overlay_draw is at :232 inside it; s_ownWin
+  is written in exactly one place and never cleared; tagpu_gui_present has one
+  caller and tagpu_overlay_draw one, with no function-pointer take or callback
+  registration anywhere in the tree.
+* THE MIRROR OP STREAM intact by MULTISET DIFF against 1d829cf: every mir_* call
+  site identical, every s_mHand.<field> assignment identical, twin_string's
+  mir_string/reseed label/reseed body correct after it was damaged and restored
+  mid-surgery, drain() differing by exactly five removed calls each of which
+  early-returned on this lane.
+* Counter-increment multiset: exactly four losses, all provably after a VK early
+  return or inside if (gl_draws).
+* All nine shaders byte-identical by md5. Every control-flow rewrite exact under
+  gl_draws == 0, including have_engine_frame -> return 1 publishing the same
+  s_mHand.guard as before.
+* The s_state / s_colValid asymmetry judged SOUND: s_colValid appears in no
+  conditional that can return, skip or gate, so it is a published value and not
+  a second readiness trap. The folds to literal 0 are sound too -- twin_make
+  memsets before every fill, so slot reuse cannot smuggle a non-zero in.
+
+5 findings, all verified then acted on in the follow-up commit:
+  F1 MED  the pragma pop was INSIDE a comment, so -Wunused-variable was off for
+          ~2200 lines; it had hidden F2 and F3. Fixed with masked matching and
+          PROVED with planted probes. The reviewer's further claim that the
+          pragma is unnecessary here is WRONG -- removing it makes all nine
+          shaders warn.
+  F2/F3 LOW  dead float v[24]; unused gh.
+  F4 MED  s_clears could no longer move while PK_CLEAR kept mirroring ops.
+          Moved into the drain: clears=0 -> clears=52351 in one run.
+  F5 LOW  nineteen write-only statics; with them gone the file has no GL
+          dependency and opengl_utils.h went too.
+
+Re-measured after the fixes: gui=1, tacli ui answers, 0 px of 786432 across all
+64 cross-build pairs outside the known 1-px cursor animation pixel.
