@@ -1,0 +1,138 @@
+landing-review: vulkan-only plan, landing 11-5e-1 -- three leaf files go GL-free
+
+Range reviewed: main...HEAD (bedd790..6ff81e2, 5 commits: 481ee81 code,
+569c650 docs, 0f19c27 + 5e19276 + 6ff81e2 review fixes).
+Reviewer: dedicated read-only agents, `medium` (tagpu/ddraw/** touched;
+no engine or user state written, no byte patch added or moved, not
+sim-adjacent).
+THREE rounds: two independent reviewers on the landing, then one focused
+round on the fix commits that neither of the first two ever saw.
+
+ON THE SYNCHRONISATION CLAUSE, stated rather than waved at, because it is
+the clause that would force `high`. Round 1's fix added `s_frames = 0` to
+tagpu_ftime_vk_reset, which tagpu_vk.c's vk_down calls on the render
+thread in ST_READY, or on the bring-up worker unwinding its own failure
+in ST_STARTING. That function ALREADY wrote three plain statics from
+those same call sites (s_vkN, s_vkAt, s_vkTotal); this adds a fourth of
+the same kind, in the same function, from the same callers. No new
+thread, no new sharing relationship, no lock, handshake, published
+counter or lifetime touched -- the synchronisation is not CHANGED, it is
+extended by one variable of a kind already there. The pre-existing shape
+(plain statics in an instrument, reachable from two threads) was raised
+by round 2 as LOW/PLAUSIBLE and is recorded in gpu-status 2.73, not fixed
+here: in ST_STARTING no present has happened so no sample can be in
+flight, which is an argument rather than a construction, and the worst
+outcome is a report line firing one window early.
+
+WHAT IT DOES. Deletes the GL half of tagpu_ftime.c, tagpu_overlay.c and
+tagpu_text.c plus two forwarding functions in tagpu_mark.c and
+tagpu_text.c: 13 functions, 34 file-scope statics, 52 of the tree's 592
+masked GL call sites, nine GL-bearing files down to six. Its real output
+is a structural find: tagpu_overlay.c polled wglGetCurrentContext once a
+frame and ran six modules' *_glreset on a change; oglu_load_dll() -- the
+only code that resolves wglCreateContext / wglMakeCurrent -- has no
+caller, so the handle is always 0 and the branch had no first iteration.
+Deleting it orphaned sixteen *_glreset functions across sixteen files.
+Only the two whose whole body was a forward are deleted; the other
+fourteen are left standing and labelled, because their modules still hold
+live GL state behind escalation reason 1.
+
+THE COROLLARY THIS LANDING PAID FOR (11-5e-1, now in the plan): a
+predicate can be pinned by the ABSENCE of a thing rather than by a value,
+and when it is, the root of a dead TREE is that predicate and not any
+function in the tree. So the search is "which tests can never be true",
+not "which functions have no callers" -- the latter finds leaves. And
+when a predicate is pinned by an absence, write down the missing CALLER,
+never the missing name: a name scan proves a spelling, not an absence.
+
+ROUND 1 (reachability + per-function deletions) -- 11 findings, no
+runtime defect. Verified the pin four independent ways (no caller of
+oglu_load_dll, no invocation of the wgl pointers, no GL renderer arm in
+dd.c, no opengl32 import in the game binary), confirmed all 13 deletions
+callerless and absent from the built DLL, confirmed the s_dirty/s_gdirty
+removal lossless (every raster path that set a flag also bumped the
+serial), and reproduced 592->540 per file.
+  MEDIUM-1 was the landing's own central sentence: "wglCreateContext ...
+  appear in no source of this build" is FALSE -- they are at
+  opengl_utils.c:107 and :110, string literals behind an x prefix. The
+  conclusion stands; the invariant is restated as the missing caller.
+  MEDIUM-2: the cascade diagram quoted MASKED line numbers, in the
+  section that documents that very bug. MEDIUM-3: render_ogl.c died in
+  11-2, not 4d-1. MEDIUM-4: the tombstone pointed at `tacli glshot`, a
+  retired stub. MEDIUM-5: tagpu_ftime.h's head was still present-tense
+  about deleted code. LOW 6-11 fixed; LOW-11 (s_state a constant with a
+  dead guard) taken as a finding and collapsed to a one-shot.
+
+ROUND 2 (changed-but-live code + the measurement) -- 16 findings, no
+runtime defect.
+  HIGH: the only live code this landing changed sits behind
+  tagpu_ftime.on, which the fixture never armed -- and a pixel diff is
+  structurally incapable of covering an instrument that writes to
+  tagpu.log. Armed and re-run: all three changed functions exercised,
+  report() prints, the toggle clears the ring.
+  MEDIUM-1b: tagpu_ftime_poll's comment DENIED a pool that exists
+  (tagpu_vk.c's tsPool / tsPend[MAXIMG]; the write gated on
+  tagpu_ftime_armed(), the drain not gated). Corrected, with the residual
+  window named and its by-construction fix (an arm-generation identity)
+  left to tagpu_vk.c's seam, where the pool lives.
+  Also: sixteen FILES not ten; "labelled in place" was false for four of
+  five; two comments asserting the opposite of the truth; nm cannot see a
+  removed CALL; five dirty-flag assignments not four;
+  tagpu_hires_draw_frame does not exist.
+
+ROUND 3 (the two fix commits alone, 569c650..5e19276) -- 7 findings, and
+ALL FOUR live-code areas came back clean: the s_state branch is provably
+unreachable on main too, no tagpu_zoom_frame_end() exit was lost in the
+collapse, s_frames parity with the toggle path is exact, the banners are
+attached to the right functions, and both string substitutions matched
+once. The seven were documentation, every one verified against the source
+before it was applied:
+  MEDIUM: nine cascade line numbers one too high, because round 1's own
+  #include removal shifted tagpu_native.c below :95 -- in the section
+  that exists to correct line numbers, which had already compensated for
+  that shift in one place and not in the diagram. A line number is a fact
+  with a version.
+  MEDIUM: the residual-hole window understated two to three times over.
+  The slot index is `s_vk.frame % s_vk.nimg`, not MAXIMG, so it is six to
+  eight frames a second at three or four images and sixteen at the clamp,
+  not "about five". The bound is not the value.
+  MEDIUM: tagpu_scaffold.c's banner borrowed tagpu_native.c's
+  justification -- that module has ZERO GL sites and is not held by the
+  escalation at all.
+  LOW: the tsPend clearers misnamed; `n=256/300` shows the counter
+  restarted and NOT that nothing leaked (a stale pair is one of the 300);
+  "dd.c has exactly two arms" is four arms to two destinations; and the
+  minimap rect's 126 is engine geometry while its 128 is the panel, so
+  "0 px outside" carries ~22 columns of slack.
+
+VERIFIED BY RUNNING IT. one-unit, Two Continents, 1024x768,
+renderer=vulkan confirmed in the ini after the run, the DLL md5-matched
+into the gamedir, both builds settled to `vk: census: 6 pass(es) drew`.
+  Cross-build: 44 differing pixels of 786432, 0 outside the minimap rect
+  [0:126,0:128] -- the 44 are minimap blips for off-screen units the two
+  runs' AI built in different numbers (alive=14 against alive=9,
+  onscreen=1 in both).
+  Same-build control: 0 px.
+  The review rounds' own fixes re-measured: 48 px, 0 outside.
+  Instrument: ftime: vk p50 0.383 ms p99 0.620 ms (n=256/300), and /300
+  again after an off/on toggle.
+
+TWO METHOD DEFECTS THIS LANDING FOUND IN ITSELF, both now in ta-drive:
+  1. The comment-masking helper blanked comment NEWLINES, so masked line
+     numbers were not source line numbers (1621 lines out on
+     tagpu_native.c). Counts and caller answers were unaffected; five of
+     seven quoted line numbers in 11-5d's depth-twin chain were wrong and
+     are corrected.
+  2. A same-build control at 0 px proves the scene is STATIC, not
+     SETTLED. A stable 3-pass state is greyscale and differs from a
+     6-pass capture by 202695 pixels -- the same gap, dressed as a
+     regression. Both gates are now required: three captures at 0 px, and
+     `6 pass(es) drew` in the census.
+
+NOT COVERED. tagpu_shadow.c and tagpu_hires_draw.c (escalation reason 1)
+and, since this landing found the dependency, opengl_utils.c with them --
+it defines the GL entry points those two call. The fixture did not arm
+tagpu_fps.on, did not reach the string-atlas raster path (its only
+remaining consumer is tagpu_mark_emit_text, which needs a squad-tagged
+unit), and covered neither the shell, a second resolution, renderer=gdi,
+nor a display-mode change -- the one event the deleted watch existed for.
