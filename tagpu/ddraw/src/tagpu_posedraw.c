@@ -663,7 +663,15 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
        stands down rather than complains. */
     tagpu_r3d_atlas_restore_want();
     /* AND NOW THE FLAG, because the arm above is what it asks about. */
-    s_pub.restored = (tagpu_r3d_atlas_restore_armed() && tagpu_classicpp_on()) ? 1 : 0;
+    /* `_assets()`, NOT `_on()` (11-5e-2c review). `tagpu_feat.c`, `tagpu_fx.c`
+       and `tagpu_terr.c` all ask `tagpu_classicpp_assets()` -- `s_on && s_assets`
+       -- and this asked `tagpu_classicpp_on()`, which is `s_on` alone. `assets=`
+       is live cfg the render-options menu writes back, so turning assets off
+       mid-session reverted terrain, features and effects to the palette path
+       while units kept sampling the restored twin: mixed art, silently, until
+       restart. Unreachable while this was pinned 0; reachable the moment it
+       was not. */
+    s_pub.restored = (tagpu_r3d_atlas_restore_armed() && tagpu_classicpp_assets()) ? 1 : 0;
     /* THE ARM IS TAKEN HERE AND THE LIST IS NOT (11-5e-2c). Arming is an ASK
        and belongs on this beat; capturing the list is a READ of a buffer this
        frame is still painting into, and it has moved to
@@ -1127,6 +1135,16 @@ int tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now)
                one path only, and a reader here cannot see what zeroed it.
                [The 11-5e-2b cross-thread review.] */
             s_pub.atlasRgbAniso  = 0.0f;
+            /* AND THE FLAG CANNOT OUTLIVE THE LIST IT PROMISES (11-5e-2c
+               review, L1). `restored` is published ~440 lines above from
+               `tagpu_r3d_atlas_restore_armed()`, one term; `restoreFrames`
+               comes from `tagpu_r3d_atlas_restore_list()`, three. They agree
+               today only because `rlistWant` and `rlist` are set and cleared
+               together and `dim` is never zeroed after `r3d_init` -- which is
+               an argument about three other places. Clearing it here makes
+               "flag set, list absent" unrepresentable in the hand-over instead
+               of merely unreached. */
+            s_pub.restored = 0;
         }
     }
     *out = s_pub;

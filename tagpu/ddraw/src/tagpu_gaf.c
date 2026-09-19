@@ -202,7 +202,7 @@ static void rlist_add(TAGPU_GAFATLAS* a, const TAGPU_GAFENT* e)
         char b[176];
         _snprintf(b, sizeof b, "%s: the published restore list reached its %d-frame"
                   " bound - restarting it from the %d entries the atlas holds now",
-                  a->tag ? a->tag : "gaf", rlist_cap(a), a->n);
+                  a->tag ? a->tag : "gaf", a->rlistCap, a->n);
         b[sizeof b - 1] = 0;
         glog(b);
         rlist_restart(a, 0);

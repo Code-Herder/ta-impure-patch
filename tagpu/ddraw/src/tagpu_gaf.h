@@ -289,6 +289,18 @@ typedef struct TAGPU_GAFATLAS {
        `rlistRepaint` is 1 only for the palette-move generation, where the
        destination already holds a restore and is recoloured in place.
 
+       AND IT HAS NO WRITER THAT PASSES 1 (found by the 11-5e-2c review). The
+       only assignment is `rlist_restart`'s parameter, and both call sites pass
+       0 -- the arm and the overflow restart. So the palette-move generation
+       this paragraph describes does not exist yet, `rlistRepaint` is a
+       constant 0, and every consumer's `repaint` term is dead. The consequence
+       is real rather than cosmetic: `if (!repaint) s_arHave = 0;` means every
+       generation change blanks the destination, which is why the consumers had
+       to stop treating "no twin" as "draw nothing" (see `tagpu_vk_unit.c`'s
+       restored gate). Either give it the palette-move writer it describes, or
+       delete the term; it is documented as live here so the next reader does
+       not re-derive that it is not.
+
        BOUNDED, because an append-only list fed for a session's length is not.
        The cap is four times the atlas's entry ceiling; reaching it RESTARTS
        the list from the entries the atlas holds right now (a new generation,

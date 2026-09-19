@@ -1281,12 +1281,19 @@ int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         if (h.restoreFrames && s_arImg && !s_rjTried) feed = 1;
         if (!s_saidRestored) {
             s_saidRestored = 1;
-            plog(d, "feat: the GL twin is drawing through the Classic++ restored "
-                    "atlas and this lane has no restored twin of it yet - nothing "
-                    "drawn until %s", feed ? "this lane's own restore paints one"
-                                           : "the read-back produces rows");
+            plog(d, "feat: a Classic++ restore is armed and this lane has no "
+                    "restored twin of it yet - %s", feed
+                        ? "this frame makes the job and draws nothing"
+                        : "drawing the indexed atlas until one is painted");
         }
-        if (!feed) return 0;
+        /* NO TWIN AND NO FEED DRAWS INDEXED, NOT NOTHING (11-5e-2c review, H1).
+           This was `return 0`, unreachable while `restored` was pinned 0 and
+           reachable the moment it was unpinned -- and this atlas changes
+           generation on every map or level change, so it is the routine path
+           and not only the failure one. Same argument as the unit pass: there
+           is no second lane to disagree with, and the binding already falls
+           back to the indexed view. */
+        if (!feed) h.restored = 0;
     } else s_saidRestored = 0;
 
     /* THE BOUNDS, RE-CHECKED. Every one of these sizes an allocation or a

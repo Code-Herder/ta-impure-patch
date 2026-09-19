@@ -1996,7 +1996,16 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     "(the device applied %.1fx)",
                  (double)h.atlasRgbAniso, (double)s_twinAnisoWant, (double)s_twinAniso);
         }
-        goto standdown;
+        /* AND THE PENALTY IS THE TWIN, NOT THE PASS (11-5e-2c review, H1/M2).
+           This stood the whole frame down, which was survivable only while
+           `restored` was pinned 0 and the branch was unreachable. Unpinning it
+           made a knob edited mid-session -- `tagpu_classicpp.cfg` is re-read
+           whenever its mtime moves -- draw NO UNIT AT ALL for the rest of the
+           session. Dropping to the indexed atlas is the shipped fallback and
+           is what `atlas_rgb_build`'s own header promises: "a device that will
+           not give us 16 MB of RGBA8 loses restored frames rather than the
+           pass". */
+        h.restored = 0;
     }
     s_saidAniso = 0;
 
@@ -2016,7 +2025,21 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     "drawn until one arrives, rather than a different picture from "
                     "its own oracle");
         }
-        if (!feed) goto standdown;
+        /* NO TWIN AND NO FEED IS "DRAW IT INDEXED", NOT "DRAW NOTHING"
+           (11-5e-2c review, H1). This was `goto standdown`, and unpinning
+           `restored` is what made it reachable -- with five one-way `s_rjTried`
+           latches above and `rlistRepaint` a constant 0, it blanked every unit
+           for the rest of the session on any restorer refusal, and for the
+           length of a repaint on every ordinary generation change.
+
+           THE STAND-DOWN'S PREMISE IS GONE. It existed to avoid showing "a
+           different picture from its own oracle" -- art filtered unlike the
+           other lane's. There is no other lane: `render_vk.c:232` is the only
+           caller of `tagpu_overlay_draw`. Indexed art is not a disagreement
+           with anybody, it is simply Classic++ restore off for this frame, and
+           binding 43 already falls back to `s_atView`/`s_samp` for exactly
+           that. A bound on what the flag may promise, not a timing fix. */
+        if (!feed) h.restored = 0;
     } else s_saidRestored = 0;
 
     /* THE FOG GRID, and the bound re-checked in this file's own terms. A unit

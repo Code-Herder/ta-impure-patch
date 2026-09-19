@@ -631,10 +631,15 @@ static int atlas_setup(void)
     if (s_atlas.made) return 1;
     /* the memset drops `mirror`, which `_lost` keeps across a context loss --
        so hand it back first or each loss leaks it. (It was `mirror` AND
-       `mirrorRgb` until 11-5e-2b part 2; `rlist` is a third allocation this
-       call does NOT free, safe only because the GUI never arms a list --
-       `tagpu_gaf_atlas_free_buffers` carries the argument.)
-       [FROM THE 4b-3 LANDING REVIEW; the rlist note from 11-5e-2b part 2's] */
+       `mirrorRgb` until 11-5e-2b part 2. `rlist` was a third allocation this
+       call did NOT free until 11-5e-2c, which made it free that too -- so this
+       hands back BOTH heap buffers now and clears `rlistWant`/`rlistFailed`
+       with them. The fact that still matters here is the other one: the GUI
+       atlas never arms a list, so `rlist` is NULL on this path either way, and
+       this is the only call site -- `tagpu_gaf_atlas_restore_vk` has three
+       callers and none is in this file. `tagpu_gaf_atlas_free_buffers` and
+       `rlist_add` carry the argument and name the residual.)
+       [FROM THE 4b-3 LANDING REVIEW; the rlist half corrected by 11-5e-2c's] */
     tagpu_gaf_atlas_free_buffers(&s_atlas);
     memset(&s_atlas, 0, sizeof s_atlas);
     s_atlas.ents = s_ents; s_atlas.max = ATLAS_MAX; s_atlas.dim = ATLAS_DIM; s_atlas.tag = "gui";

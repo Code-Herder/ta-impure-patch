@@ -886,8 +886,16 @@ cannot be swapped between runs.
   dependencies (`-MMD -MP`, `-include $(DEPS)`), so an incremental build is *usually* right —
   but it is not guaranteed, and the failure is silent. Caught building a control: an incremental
   build of the main checkout at a given commit produced **1 580 032 bytes, `.text 0xdc7d4`**, and
-  `make clean && make` on the *byte-identical* tree produced **1 547 776, `.text 0xd8274`** — 16 736
-  bytes of code difference between two builds of the same sources. The clean build was the correct
+  `make clean && make` on the *byte-identical* tree produced **1 547 776, `.text 0xd8274`** — **17 760
+  bytes** (`0x4560`) of code difference between two builds of the same sources, and 32 256 bytes of
+  file. (This said 16 736, which is neither figure; corrected by the 11-5e-2c review, which is the
+  right outcome for a rule whose whole point is that a number you cannot re-derive is not evidence.)
+
+  **THE DIAGNOSIS IS NOT ESTABLISHED, and the rule does not depend on it.** The Makefile does emit
+  header dependencies (`-MMD -MP`, `-include $(DEPS)`) and `inc/git.h` is rewritten at parse time,
+  so the ordinary explanation does not fit. Either the tree was not identical, or a generated
+  header — `inc/spirv/*.h` is the candidate — sits outside the dep graph. Nobody has established
+  which. What is established is the observation and the prescription. The clean build was the correct
   one; it matched a worktree that had built the same code from scratch.
 
   A stale control is worse than no control: it quietly turns "this landing changed nothing" into
