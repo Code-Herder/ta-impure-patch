@@ -1,0 +1,69 @@
+landing-review: vulkan-only plan, landing 11-5e-3 -- the include residue
+
+Range: main...HEAD (3f28f47..67271d9, 1 commit).
+
+REVIEW DELIBERATELY SKIPPED, under CLAUDE.md *Review engine changes before they
+land*: "Skip it for docs, scenarios, comments, or a few lines with no new state,
+no new engine patch and no new GL object." This landing is the whole of that
+clause and nothing else, and the reasons are checkable rather than asserted:
+
+  - NO NEW STATE. Nothing is added. The code half of the diff is
+    8 insertions / 6 deletions across three files, and six of those insertions
+    are a comment and a whitespace split.
+  - NO NEW ENGINE PATCH. No engine address appears on any added line
+    (`git diff main...HEAD -- tagpu tools | grep '^+' | grep -oE '0x0*[45][0-9A-Fa-f]{5}'`
+    is empty), so exe-reverse-engineering.md takes nothing either.
+  - NO NEW GL OBJECT. The landing REMOVES a GL header dependency from three
+    files; it creates nothing.
+  - NOTHING MOVED. Function inventory diffed per translation unit against main:
+    0 gone, 0 added.
+
+WHAT IT DOES. `tagpu_fps.c`, `tagpu_scaffold.c` and `tagpu_render3do.c` included
+`opengl_utils.h` while making no GL call. The include is gone from all three;
+files including the header go nine -> six. The GL CALL surface is unchanged at
+252/366 over four files (`tools/gl-sites.py`) -- a dependency removed, not a call.
+
+THE ONE CHANGE THAT IS NOT A DELETION, and why it is safe by inspection rather
+than by review: `tagpu_render3do.c` held the header with a single TYPE,
+
+    GLuint tagpu_r3d_atlas_rgbref(void) { return s_atlas.rgb; }
+
+`GLuint` is `typedef unsigned int` (inc/glcorearb.h:87); `tagpu_render3do.h:14`
+ALREADY declared the function `unsigned int`; and the field returned is
+`unsigned int` (tagpu_gaf.h). The definition was the odd spelling out. The object
+file is the proof, not the argument: `_tagpu_r3d_atlas_rgbref` is still `T` in
+tagpu_render3do.o and still `U` in its one caller tagpu_posedraw.o.
+
+THE FIND, which is why this was not the trivial landing the row implied: A CALL
+COUNT OF ZERO DOES NOT MEAN A FILE IS FREE OF THE HEADER. Of the five files with
+no GL call, only two named nothing from it. `render_gdi.c` reads a VARIABLE
+(`g_oglu_version`); `tagpu_gaf.c` takes three types, an entry-point resolver and
+a calling convention; `tagpu_render3do.c` took one type in one place. The include
+test therefore has to be a separate question from the call count, and it has to
+be run on the RAW text -- an `#include` is itself a string literal, so a
+comment/string mask deletes every include in the file.
+
+AND THE PLAN'S OWN ROW WAS WRONG IN BOTH HALVES. It named `render_gdi.c` as
+residue -- it is not, and the same page's "files it ends at" list already said so,
+naming `render_gdi.c`'s `g_oglu_version` among the surviving plumbing users, so
+the row and the list contradicted each other. And it said 11-5e-1 had taken
+`tagpu_render3do.c`'s include; 11-5e-1 took a `tagpu_overlay.h` include out of
+`tagpu_native.c`, a different file and a different header. Both corrected in the
+plan and the roadmap by this landing.
+
+A PRE-EXISTING WARNING FIXED, and established as pre-existing rather than assumed:
+`tagpu_scaffold.c` had four clamps sharing two lines -- correct C, which -Wall
+reads as -Wmisleading-indentation. Compiling MAIN's own copy of the file
+reproduces both warnings, so they are not this landing's; they were invisible only
+because the object was cached and this is the first landing to rebuild that file
+in a while. One clamp per line now, which is the same code.
+
+VERIFIED. Build gate: `thread-split: clean -- 34 listed file(s)`,
+`spirv: 49 shaders, 33 programs, headers current`, exit 0, ZERO warnings.
+Inventory 0/0. Wiki 63 pages + index.
+
+NOT CLOSED. `opengl_utils.h` itself stays, with six includers -- four behind
+escalation reason 1 (tagpu_hires_draw.c 104, tagpu_shadow.c 87, opengl_utils.c 31,
+tagpu_hires.c 30). `tagpu_gaf.c`'s twelve wide sites go with 11-5e-2b. And
+`tagpu_r3d_atlas_rgbref` is still an accessor over a field 11-5e-2 pinned to 0 --
+retiring it is 11-5e-2b's; this landing only corrected its spelling.
