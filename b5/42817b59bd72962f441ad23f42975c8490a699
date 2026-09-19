@@ -1,0 +1,70 @@
+landing-review: landing 11-4c (the fps, scaffold, GAF and posebake GL halves), level medium, 2026-09-19
+
+Range main...HEAD at c62270a..b542817, main at c62270a; a dedicated read-only
+reviewer with the pristine build and objdump, xhigh effort, 59 tool uses.
+NO HIGH findings and no correctness defect. Two MEDIUM, four LOW. All six
+verified against the code before acting.
+
+The reviewer re-derived the landing's whole premise from the bottom up rather
+than taking it: tagpu_vk_owns_present() is s_ownWin != 0, set once from
+render_vk.c:145 before the frame loop; render_ogl.c no longer exists; dd.c
+assigns only gdi_render_main and vk_render_main; render_gdi.c makes zero
+tagpu_ calls; tagpu_overlay_draw has one live call site. It also proved both
+pragma brackets with a planted unused static rather than reading them, and
+recorded that -fsyntax-only does not surface -Wunused-variable, so the probe
+needs a real compile.
+
+M1 -- THE FINDING THAT EARNS THE REVIEW. 11-4c deleted tagpu_fps.c's s_state
+because nothing could raise it once the bring-up went, and in the same landing
+left tagpu_scaffold.c's s_state, plus s_texW/s_texH, write-only in exactly the
+same way -- with two comments still presenting s_state as live, one inside
+tagpu_scaffold_frameinfo, the function the 4b-1 review had already fixed once
+for testing it. Confirmed by grep: assigned at :80 and :510, read nowhere.
+All three deleted; both comments rewritten to say there is no state left to
+ask. Fixed in 4ba9ad2.
+
+M2 -- the 64 cross-build pairs were taken on a fixture that leaves
+`scaf=0 fps=0`, so the two passes this landing changed most contributed no
+pixels to the only pixel-exact measurement; the armed run was eyeballed. The
+reviewer offered the closure and it holds: every construct removed from
+tagpu_scaffold_frame is inside `if (gl_draws)`, or is
+`if (gl_draws && s_state == 2) return;`, or is the gl_draws declaration, and
+gl_draws is 0 by the ordering -- so the transformation is EXACT, not nearly
+so. Verified independently by extracting tagpu_scaffold_overlay,
+tagpu_scaffold_frameinfo, stamp_gaf and stamp_px from both revisions with a
+masked brace matcher: identical hashes. unit=0 therefore reproduces before
+the landing. Both notes now say so, and say what the 64 pairs did not cover.
+
+L1 -- tagpu_posebake.c's last three GL calls guarded vao/vbo whose only writer
+was the deleted bring-up: permanently false, unreachable. Removed; glreset
+reduced to the generation bump; opengl_utils.h dropped with them. The FIELDS
+stay because tagpu_posedraw.c still reads m->vao -- and its own guard
+`if (!tagpu_vk_owns_present() && !m->vao) return NULL;` now has BOTH terms
+dead, which is 11-5's to take.
+
+L2 -- tagpu_text_tex() lost its last caller when 11-4c removed tagpu_fps.c's
+glBindTexture. Nothing was lost with it (the Vulkan-facing counter is s_agen,
+bumped by the atlas writer). Already scoped to 11-5; recorded there.
+
+L3 -- the finding with the real downside, and it is about prose: deleting the
+GL half orphaned the comments that explain why the CPU mirror memcpy is not a
+redundant second copy. Read today they assert a property of nothing, which
+makes the only copy of the art look like dead weight to remove. Each rewritten
+to state what the mirror IS and to say that deleting it deletes the sprite.
+
+L4 -- `GLuint t = 0; ... a->tex = t;` was a constant dressed as a texture that
+might have been created. Now `a->tex = 0`.
+
+Three -Wmisleading-indentation warnings the reviewer surfaced are PRE-EXISTING:
+byte-identical at main (tagpu_scaffold.c's at :446 before the landing deleted
+129 lines above them), and each is two complete one-line ifs. Not acted on.
+
+RE-VERIFICATION after the fixes was by OBJECT IDENTITY rather than another
+A/B, because it is exhaustive where an A/B samples: tagpu_scaffold.o,
+tagpu_gaf.o and tagpu_fps.o compile byte-identical across the fix commit;
+tagpu_posebake.o loses exactly _glDeleteBuffers and _glDeleteVertexArrays from
+its external references and gains nothing, with an unchanged defined-symbol
+set; and the include removal was proved separately, byte-identical. Compile
+both revisions at IDENTICAL paths or the filename is what you measure.
+
+Fixes: 4ba9ad2. Docs: 41a009d, db31335.
