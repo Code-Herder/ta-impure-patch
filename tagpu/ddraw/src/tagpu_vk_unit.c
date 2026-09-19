@@ -214,8 +214,12 @@ static VkPipeline            s_pipeBody, s_pipeGhost, s_pipeCast;
 static VkRenderPass          s_castRp;     /* what s_pipeCast was built against */
 static VkDescriptorPool      s_dpool;
 static VkSampler             s_samp, s_sampCmp, s_sampTwin;
-/* the anisotropy `s_sampTwin` actually applies, compared against what the GL
-   twin got rather than assumed to agree with it */
+/* what `s_sampTwin` asked for and what the device allowed, kept apart on
+   purpose (11-5e-2c): the agreement test compares the two CONFIGURATIONS --
+   `s_twinAnisoWant` against the producer's published knob -- and deliberately
+   does NOT catch a device that cannot offer the feature, because standing
+   down for that draws no unit at all on a machine that can do nothing about
+   it. The comment here used to say "compared against what the GL twin got". */
 static float                 s_twinAniso;      /* what the device applied   */
 static float                 s_twinAnisoWant;  /* what the knob asked for   */
 static int                   s_cmpLinear;  /* the compare sampler is the twin's */
@@ -823,11 +827,12 @@ static int build_samplers(const TAGPU_VKPASS* d)
        would be silent.
 
        ANISOTROPY IS ASKED FOR AT THE TWIN'S OWN RATIO, and what this sampler
-       actually got is remembered rather than assumed: `prepare` compares it
-       against the ratio the GL side reports having applied, and stands the
-       frame down when they differ. Both halves of that can fail independently
-       -- this device may not offer `samplerAnisotropy`, and GL's extension may
-       not have answered -- so neither can be inferred from the other. */
+       actually got is remembered SEPARATELY from what was asked for. `prepare`
+       compares the producer's published knob against `s_twinAnisoWant`, the
+       value read here -- not against `s_twinAniso`, the value the device
+       allowed. The difference is the whole of 11-5e-2c's reversal: a device
+       without `samplerAnisotropy` clamps the applied value to 0.0f, and a test
+       against that stands every frame down on such a machine. */
     si.compareEnable = VK_FALSE;
     si.magFilter = VK_FILTER_LINEAR;
     si.minFilter = VK_FILTER_LINEAR;
@@ -840,9 +845,9 @@ static int build_samplers(const TAGPU_VKPASS* d)
            here, because a sampler cannot be rebuilt mid-frame for the reason
            the shared images cannot -- every other slot's submit still names it.
            A knob changed mid-session therefore makes the two disagree, and that
-           is caught rather than ignored: the hand-over carries the ratio GL
-           actually applied and `prepare` stands the frame down when it is not
-           this one. */
+           is caught rather than ignored: the hand-over carries the knob the
+           producer read, and `prepare` stands the frame down when it is not
+           the one read here. */
         float want = tagpu_classicpp_light()->aniso;
         s_twinAniso = 0.0f;
         /* THE KNOB AS READ, KEPT SEPARATELY FROM WHAT THE DEVICE ALLOWED
@@ -1962,17 +1967,24 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        than palette indices, so it is the only one GL filters -- trilinear to
        its MAX_LEVEL with anisotropy where the extension answered. The mip
        levels are carried across as bytes, so those match by construction; the
-       ANISOTROPY cannot be, because it is a device feature on one side and an
-       extension on the other and either can be absent. A ratio that differs is
+       ANISOTROPY is carried as the CONFIGURED ratio on both ends, so it
+       matches unless the two have been edited apart. A ratio that differs is
        a different picture wherever a unit is minified at an angle, which is
        ordinary play, so the frame stands down rather than draw one. Same rule,
-       and the same shape, as `s_cmpLinear` above. */
+       and the same shape, as `s_cmpLinear` above.
+
+       WHAT THIS TEST DOES NOT CATCH, said plainly (11-5e-2c): a device whose
+       ceiling is below the knob. That was the old test's subject and it was
+       the wrong one -- the producer cannot know this device's ceiling, and
+       standing down for it means drawing no units at all rather than slightly
+       differently filtered ones. */
     /* `atlasRgbAniso` IS THE RATIO, AND IT SURVIVED THE MIRROR. It is a fact
        about what the OTHER lane's twin was filtered at, not about the read-back
        that used to carry it, and the producer publishes it on the list path too
        -- so a restore this lane runs for itself is held to the filter test that
-       a mirror used to be held to. [Landing 7e-2; the field is what 11-5e-2
-       labelled `[PINNED 0]`, and 11-5e-2b kept it for this test.] */
+       a mirror used to be held to. [Landing 7e-2; 11-5e-2 labelled the field
+       `[PINNED 0]`, 11-5e-2b kept it for this test, and 11-5e-2c gave it a
+       writer and changed what it is compared against.] */
     if (h.restored && h.restoreFrames && h.atlasRgbAniso != s_twinAnisoWant) {
         if (!s_saidAniso) {
             s_saidAniso = 1;

@@ -13447,23 +13447,29 @@ nothing while reading as though it had**. Established by call graph instead:
 |---|---|---|
 | `render_vk.c:232` | `tagpu_overlay_draw` — the whole gather and paint half | render |
 | ↳ `tagpu_overlay.c:264` | `tagpu_native_frame` (its only caller) | render |
-| ↳ `:2150`, `:3291`, and `ghost_record` → `ghost_one:1887` | `tagpu_posebake_*` → `mat_emit` → `tagpu_r3d_atlas_uv` → `atlas_paint` | render |
-| `render_vk.c:268` | `tagpu_vk_frame` → `tagpu_vk_unit:1778` → `tagpu_posedraw_handover` | render |
+| ↳ `:3291`, and `ghost_record` → `ghost_one:1887` | `tagpu_posebake_unit` → `mat_bake` → `pb_walk` → `mat_emit:467` → `tagpu_r3d_atlas_uv` → `atlas_paint` | render |
+| ↳ `:3357` | `emit_fx_model` → `emit_node` → `tagpu_native.c:940` → `tagpu_r3d_atlas_uv` → `atlas_paint` | render |
+| `render_vk.c:268` | `tagpu_vk_frame` → `vk_present` → `tagpu_vk_unit.c:1789` → `tagpu_posedraw_handover` | render |
 
 Every paint of an armed atlas and every consumer are the **same thread**, in one
 iteration of one loop. The unit atlas is reachable only through `tagpu_native.c:940`
 and `tagpu_posebake.c:467`, both inside `tagpu_native_frame`, which has exactly one
-caller, which has exactly one. The GUI atlas is painted from the game thread and is
-**not in scope** — it never arms a list. So this is an **intra-thread ordering**
+caller, which has exactly one. The GUI atlas is **not in scope**, and the reason is that
+it never arms a list — `tagpu_gaf_atlas_restore_vk` has exactly three callers
+(`tagpu_fx.c:173`, `tagpu_feat.c:267`, `tagpu_render3do.c:555`) and none is in
+`tagpu_gui_surf.c`. It is *not* because it is painted from the game thread: the review
+disproved that, and both of its paint sites are on the render thread too
+(`tagpu_gui_surf.c:1233` via `drain`, `:1452` via `sharp_begin`, both inside
+`tagpu_gui_present`, called from `tagpu_overlay.c:270`). The game thread only queues ops. So this is an **intra-thread ordering**
 defect: a pointer captured early in `overlay_draw`, a paint later in the same call,
 and a read later still.
 
 #### THE BOUND — the address cannot move
 
 `tagpu_gaf_atlas_restore_vk` allocates `rlist_cap(a)` frames in **one `malloc`**
-instead of 256-and-grow, and `rlist_room` becomes a pure comparison. `a->rlist` now has
-exactly one writer in the file and there is **no `realloc` and no `free`** anywhere in
-it, so the address is fixed for the atlas's life. The cost is stated rather than hidden:
+instead of 256-and-grow, and `rlist_room` becomes a pure comparison. There is **no
+`realloc` anywhere in the file**, so the address never moves while the atlas holds it.
+The cost is stated rather than hidden:
 
 | atlas | `ATLAS_MAX` | `rlist_cap` (`max × 4`) | bound at 44 B/frame |
 |---|---|---|---|
@@ -13471,7 +13477,27 @@ it, so the address is fixed for the atlas's life. The cost is stated rather than
 | effects (`tagpu_fx.c`) | 2048 | 8192 | **360 448 B** |
 | feature (`tagpu_feat.c`) | 4096 | 16384 | **720 896 B** |
 
-Against a read-back mirror this same file declined to free at 16 MB.
+Against the 16 MB RGBA read-back mirror this same file declined to free in the ordinary
+case — that buffer is gone entirely since 11-5e-2b, and the 8-bit `mirror` the file still
+owns is `dim × dim` = 4 MB.
+
+**AND THE ONE `free`, which the review caught this section denying.** The first draft said
+`a->rlist` had "exactly one writer in the file and no `realloc` and no `free` anywhere in
+it" — and this same landing added `free(a->rlist)` to `tagpu_gaf_atlas_free_buffers`
+(`tagpu_gaf.c:620`), which the section itself describes forty lines further down. Three
+comments in the shipped code repeated the same false absolute; only one worded it
+correctly. What is true is narrower:
+
+- there is no `realloc`, so the address never moves while the atlas holds it;
+- the single `free` is the atlas's own teardown, and it clears `rlist`, `rlistWant`,
+  `rlistFailed` and both counts together, so no later append can reach a stale pointer.
+
+**What it does not bound is a consumer that captured the pointer before that `free` ran**,
+and that is unreachable today only because `tagpu_gaf_atlas_free_buffers` has exactly one
+call site — `tagpu_gui_surf.c:638`, the GUI atlas, which never arms a list. That is an
+argument about the *caller*, which is the shape this landing set out to replace. It is
+written down rather than left to be re-derived, in the note and at `rlist_add`'s own
+header: **a second caller, on an armed atlas, re-opens the hazard.**
 
 #### THE ORDERING — the in-place rewrite cannot reach a reader
 
@@ -13507,8 +13533,8 @@ and `tagpu_fx.c` on `s_atlas.rgb` — and that name has exactly **one writer in 
 `tagpu_gaf.c:643 a->rgb = 0`. It published 0 on every frame since 11-5e-2 deleted the
 restorer. It now asks whether the published list is armed, which is the route that
 exists. In `tagpu_posedraw.c` the assignment also **moved below the arm it asks about**;
-it had sat sixty lines above `tagpu_r3d_atlas_restore_want()`, harmless only while it
-read a pinned 0.
+it had sat 57 lines above `tagpu_r3d_atlas_restore_want()` (`main`'s
+`tagpu_posedraw.c:601` and `:658`), harmless only while it read a pinned 0.
 
 **`rgbAniso` carries the knob, not the documented constant, and that reverses a
 review's instruction.** 11-5e-2's review left a warning at the field calling it a loaded
@@ -13521,8 +13547,12 @@ danger — and one detail of it was wrong, and the detail is the whole decision.
 > `d->maxAniso >= want`.
 
 So publishing `TAGPU_GAF_TWIN_ANISO` — the fix the warning asked for — would have
-swapped one silent stand-down for another, on every machine without anisotropic
-filtering, over a feature it can do nothing about. That is the plan's own predicted
+swapped one silent stand-down for another, on every device without anisotropic
+filtering, over a feature it can do nothing about. The guard has a **third** term the
+first draft of this section left out, and it is the one that bites soonest:
+`want > 1.0f` (`tagpu_vk_unit.c:858`). `aniso=1` is the documented A/B setting, and at
+`aniso=1` the applied value is `0.0f` on *every* device, not only on one without the
+extension. That is the plan's own predicted
 failure arriving from the other side.
 
 The producer publishes `tagpu_classicpp_light()->aniso` on every arm beat — **every
@@ -13546,9 +13576,10 @@ against carrying it.
 `rlistWant`/`rlistFailed` with it — an atlas with the latch set over a NULL buffer is
 precisely the half-state that review named. 11-5e-2b part 2 declined the fix on purpose,
 because a half-fix was worse than the gap and `rlist`'s lifetime belonged here. **The
-bound is what made it a complete statement**: one allocation site, no other free, so
-"give it back and clear the state that described it" is the whole of the lifetime rather
-than one end of one nobody owned. The header's declaration comment is corrected in the
+bound is what made it a complete statement**: one allocation site, no `realloc`, and this
+the only free, so "give it back and clear the state that described it" is the whole of the
+lifetime rather than one end of one nobody owned — with the caller-side residual named
+under the bound above. The header's declaration comment is corrected in the
 same commit — the `.h` half of a `.c` fix is the miss the last review caught twice.
 
 #### WHAT IT CHANGES ON SCREEN — and it is not nothing

@@ -579,11 +579,15 @@ void tagpu_r3d_atlas_restore_want(void)
    `aniso`, which the mirror accessor also reports but which was never the
    mirror's fact: it is the ratio the twin was filtered with, and a consumer
    that cannot apply the same one draws different art wherever a unit is
-   minified at an angle. IT IS 0 ON EVERY PATH SINCE 11-5e-2 -- the GL
-   restorer was the only writer -- so this reports "no anisotropy" while the
-   consumer's own sampler is built at `aniso=`, default 4. See
-   `tagpu_gaf.h` `rgbAniso`: unpinning the list without fixing this stands the
-   unit pass down. Since 11-5e-2b this is the ONLY reporter of it -- the mirror
+   minified at an angle. IT WAS 0 ON EVERY PATH FROM 11-5e-2 TO 11-5e-2c --
+   the GL restorer was its only writer, and deleting the restorer left the
+   field with no writer at all -- so it reported "no anisotropy" while the
+   consumer's sampler was built at `aniso=`. 11-5e-2c gave it a writer, `:574`
+   above, twelve lines from this comment; this paragraph kept prescribing the
+   fix after the fix had landed, which the landing review caught. What it
+   publishes now is the KNOB, not the constant `tagpu_gaf.h` once prescribed
+   and not the value the device allowed -- see `rgbAniso` there for why those
+   are three different numbers. Since 11-5e-2b this is the ONLY reporter of it -- the mirror
    accessor that also carried it is gone with the mirror. NULL until the list has been armed AND has entries; a consumer that
    gets NULL falls back to whatever it did before, which is the indexed atlas. */
 const TAGPU_RGLSL_FRAME* tagpu_r3d_atlas_restore_list(int* dim, int* n, unsigned* gen,

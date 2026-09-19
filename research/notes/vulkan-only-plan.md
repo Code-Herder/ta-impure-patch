@@ -2779,7 +2779,8 @@ that a count which grows is the plan catching up with the work.) The row was
 
      **THE LEAD, from reading and NOT yet measured.** `tagpu_surf_take` (`tagpu_surf.c:32`,
      called from `tagpu_overlay_draw`) copies `g_ddraw.primary->surface` on the RENDER thread.
-     `ss_shot_service` (`tagpu_overlay.c:499`) reads the same object at the ENTRY of the engine's
+     `ss_shot_service` (defined `screenshot.c:157`, called from `tagpu_overlay.c:360` — this said
+     `tagpu_overlay.c:499`, and that file is 365 lines long) reads the same object at the ENTRY of the engine's
      flip on the GAME thread, where its own comment says it holds *"the frame the PREVIOUS flip
      presented"*. `tagpu_surf.h`'s argument is explicitly a LIFETIME one — `g_ddraw.cs` keeps
      the pointer live, `dds_Flip` swaps inside it so the row loop never splices two buffers —

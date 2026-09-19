@@ -160,9 +160,27 @@ static void rlist_restart(TAGPU_GAFATLAS* a, int repaint)
    "appended here" and "painted" are the same event and cannot drift apart.
 
    THE ADDRESS CANNOT MOVE UNDER A READER, which is what the bound bought:
-   `rlist_room` is a comparison, the arm's `malloc` is the only writer of
-   `a->rlist`, and there is no `realloc` and no `free` in this file. A consumer
-   holding the pointer across the frame is holding a fixed address.
+   `rlist_room` is a comparison, the arm's `malloc` is the only allocation, and
+   there is no `realloc` in this file at all. A consumer holding the pointer
+   across the frame is holding a fixed address.
+
+   THE ONE `free` IS NAMED RATHER THAN DENIED. This comment said "no `realloc`
+   and no `free` in this file" until the landing review caught it: the same
+   landing added `free(a->rlist)` to `tagpu_gaf_atlas_free_buffers` (`:620`),
+   forty lines after claiming it did not exist. What is true is narrower and
+   has to be stated as such -- there is no `realloc`, and the single `free` is
+   the atlas's own teardown, which clears `rlist`, `rlistWant` and the counts
+   together so no later append can reach a stale pointer.
+
+   AND THE RESIDUAL, because it is a caller's property and not this file's.
+   That `free` does NOT bound a consumer that captured the pointer before it
+   ran. It is unreachable for an armed atlas today only because
+   `tagpu_gaf_atlas_free_buffers` has exactly one call site --
+   `tagpu_gui_surf.c:638`, the GUI atlas, which never arms a list (it is not
+   one of `tagpu_gaf_atlas_restore_vk`'s three callers). That is an argument
+   about the caller, which is the shape this landing set out to replace, so it
+   is written down rather than left to be re-derived. A second caller on an
+   armed atlas re-opens the hazard.
 
    AND THE APPEND ITSELF CANNOT TEAR ONE. The frame is written at `[rlistN]`
    and only then is `rlistN` incremented, so a consumer that reads a stale
@@ -968,9 +986,10 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
        by a guard, and there are two halves to it because the hazard had two:
 
          - THE BOUND kills the moving address. The arm allocates `rlist_cap(a)`
-           frames in one `malloc` and `rlist_room` is a comparison, so `a->rlist`
-           has exactly one writer in this file and no `realloc` and no `free`.
-           The address is fixed for the atlas's life.
+           frames in one `malloc`, `rlist_room` is a comparison, and there is no
+           `realloc` anywhere in this file, so the address is fixed for as long
+           as the atlas holds it. The one `free` is the teardown at `:620` and
+           `rlist_add`'s own header says what it does and does not bound.
          - THE ORDERING keeps `rlist_restart`'s in-place rewrite away from a
            reader. The unit atlas's list is taken in `tagpu_posedraw_handover`,
            which `render_vk.c` reaches at `:268` through `tagpu_vk_frame`, after

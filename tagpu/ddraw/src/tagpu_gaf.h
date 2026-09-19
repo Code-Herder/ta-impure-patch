@@ -150,7 +150,8 @@ typedef struct TAGPU_GAFATLAS {
        every batch the restorer painted, and there is no such twin since
        11-5e-2. What reads it is `tagpu_r3d_atlas_restore_list`, which publishes
        it as `restoreMips` so the OTHER lane builds a chain of the same depth
-       -- see `rgbAniso` below for the half of that contract which is pinned. */
+       -- see `rgbAniso` below for the other half of that contract, which was
+       pinned until 11-5e-2c gave it a writer. */
     int           pad, align, mip;
     /* Classic++ (renderers.md 4b Option 4): the RESTORED TWIN -- same dim,
        same shelf, GL_RGBA8 -- painted lazily from a queue that every miss
