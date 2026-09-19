@@ -79,31 +79,61 @@ That set is exactly what constraint 3 protects.
 The audit in landing 1 is what settles this; the following is what reading the tree says, and it
 is already more than the gate rows imply.
 
-**Passes with a Vulkan twin:** scaffold, unit, shadow, terrain, features, effects, GUI, fps.
+**THIS SECTION WAS WRITTEN BEFORE GATE 4 AND IS STALE IN BOTH DIRECTIONS — re-checked
+2026-09-18 while scoping 11-3.** Both passes it lists as having no twin now have one, and the
+one real gap it describes is described wrongly. Corrected below; the original text is kept
+underneath because the reasoning in it is still how the question gets asked.
 
-**Passes with none:**
+**Passes with a Vulkan twin (re-checked):** scaffold, unit, shadow, terrain, features, effects,
+GUI, fps, **and `tagpu_mark.c` (`tagpu_vk_mark.c`, which calls `tagpu_mark_handover`) and the
+Classic++ restorer (`tagpu_vk_restore.c`, 136 KB)**. Fourteen `tagpu_vk_*.c` files exist.
 
-* **`tagpu_mark.c`** — health bars, cursor, band box, group digits. 19 GL binds, drawn at
-  `tagpu_native.c:4294`. **Its shaders are already translated** — `inc/spirv/tagpu_mark.spv.h`
-  exists; G19c did it and only the pass file was never written.
-* **`tagpu_restoreglsl.c`** — the Classic++ restorer. The one module with no SPIR-V, excluded
-  from G19c because its GLSL is not fixed at build time.
+**THE REAL GAP IS THE BUILD GHOST, AND IT IS A PRODUCER GAP RATHER THAN A PASS GAP.**
+`tagpu_vk_unit_record_ghosts` exists and is called (`tagpu_vk.c:2523`); `tagpu_posedraw.c:964`
+carries `r->ghost` through the hand-over; `tagpu_posedraw.c:887` says in as many words that
+*"THE BUILD GHOST IS RECORDED SINCE LANDING 6 and no longer counted"* as an `otherDraws`
+refusal. **But nothing ever records one on the Vulkan lane.** `q.ghost = 1` is assigned in
+exactly one place in the tree — `ghost_one` — which is reached only from `ghost_pass`, which was
+called from `tagpu_native.c:4676` on `main`: **below** that function's `if (!gl_draws) { …hand
+over…; return; }` at `:3875`. So the ghost pipeline on the Vulkan side is a consumer with no
+producer, and **the build ghost has never appeared on that lane**.
+
+**AND LANDING 11-2 IS WHERE THAT STOPPED BEING ACADEMIC.** `auto` and `openglcore` selected the
+GL lane until then, so the build ghost — `tagpu_ghost.on` is a play default — worked in the
+shipped configuration. 11-2 pointed those spellings at Vulkan, so **the default experience lost
+the build ghost, and this is the landing that did it.** It is named here rather than discovered
+later: the fix is to lift the ghost's RECORD half above the seam (`ghost_one` is pure — it
+fills a `TAGPU_PDUNIT` and calls `tagpu_posedraw_unit`; only `ghost_pass`'s wrapper is GL), which
+is landing 11-3's work and the reason that landing is not a pure deletion.
+
+The stale text, kept for its reasoning:
+
+> **Passes with a Vulkan twin:** scaffold, unit, shadow, terrain, features, effects, GUI, fps.
+>
+> **Passes with none:**
+>
+> * **`tagpu_mark.c`** — health bars, cursor, band box, group digits. 19 GL binds, drawn at
+>   `tagpu_native.c:4294`. **Its shaders are already translated** — `inc/spirv/tagpu_mark.spv.h`
+>   exists; G19c did it and only the pass file was never written.
+> * **`tagpu_restoreglsl.c`** — the Classic++ restorer. The one module with no SPIR-V, excluded
+>   from G19c because its GLSL is not fixed at build time.
 
 **And two stand-downs that make the gap wider than "two passes".** `tagpu_vk_unit.c:1316`:
 
     if (h.otherDraws > 0) { ... goto standdown; }
 
-`otherDraws` counts units the GL twin drew that the hand-over does not carry — *"a build ghost,
-a unit past `TAGPU_PD_MAXHAND`"* (`inc/tagpu_posedraw.h:216`). When it is non-zero the unit pass
-draws **nothing at all**. So on the Vulkan lane today:
+`otherDraws` counts units the GL twin drew that the hand-over does not carry. When it is
+non-zero the unit pass draws **nothing at all**.
 
-* placing a building (a play default: `tagpu_ghost.on` needs `tagpu_native.on`) blanks every
-  posed unit on screen;
-* so does any frame with more than **512** posed units — `TAGPU_PD_MAXHAND`, a deliberate
-  ceiling under `MAXU`'s 2048, chosen because each unit costs a 14 336-byte uniform window per
-  frame slot.
+**The build-ghost half of this is FIXED and the text above was stale** [re-checked 2026-09-18]:
+`tagpu_posedraw.c:887` records ghosts instead of counting them since landing 6, and in any case
+`ghost_pass` never ran on the Vulkan lane to count anything. What remains true is the ceiling:
 
-Neither is visible from the configuration Phase G was measured in.
+* any frame with more than **512** posed units — `TAGPU_PD_MAXHAND`, a deliberate ceiling under
+  `MAXU`'s 2048, chosen because each unit costs a 14 336-byte uniform window per frame slot —
+  and the two other counted cases, an arena that would not grow and a unit with no pieces.
+
+Not visible from the configuration Phase G was measured in.
 
 ## The blind spot, which is the reason landing 1 is not code
 
