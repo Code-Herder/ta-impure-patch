@@ -2235,8 +2235,13 @@ that a count which grows is the plan catching up with the work.) The row was
        sets `uRestored` in that consumer's shader, was computed from the GL restorer's own state
        machine and could only publish 0. The order and the list are now `restore_publish`, with
        no GL and no local job; `restored` reads `s_rFrames`. Default behaviour is unchanged and
-       provably so: without the lever, `restore_step` returns on its first line. See gpu-status
-       §2.71.
+       provably so: without the lever, `restore_step` returns on its first line.
+       **MEASURED BY RUNNING IT, 2026-09-19** (Two Continents, `renderer=vulkan`,
+       `restorevk.on`): `terr: restore request published -- 5062 frames` — a line no build
+       before this one could print — then the consumer's `job started`, `restoring the tile
+       atlas HERE`, and `restored atlas painted here - 5062 frames, no mirror and no
+       read-back`, with `terr=1` on every census after the map loads. The route works end to
+       end for the first time since 4b-2. See gpu-status §2.71.
      - **11-5d — `tagpu_posedraw.c`.** 122 sites, and its own row for the same reason
        `tagpu_terr.c` had one: the reachability argument is per function, not per file, and the
        file is 1400+ lines. What is already known: the bring-up `tagpu_posedraw_ready` takes a

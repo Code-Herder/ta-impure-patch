@@ -11703,6 +11703,46 @@ loses two fields to permanent zero (`atlasRgb`, `atlasRgbRows`, with `atlasRgbSe
 them) and gains no new one; `restoreFrames`/`restoreN`/`restoreSerial`/`restoreRepaint` are
 unchanged in shape and reachable for the first time.
 
+#### Measured by running it, 2026-09-19 — the route works end to end
+
+Not an object-identity check: 11-5a and 11-5b were inert and could be settled by comparing
+emitted code, but this landing changes behaviour on the lever path, so it was run. Two Continents
+at 1024×768 on a private Xvfb display (`TACLI_DISPLAY`), `renderer=vulkan`, armed
+`terr.on=log classicpp.on restorevk.on`. The log, in order:
+
+```
+terr: restorevk -- the restored atlas is the other lane's to paint, …
+terr: atlas built 2176x2720 for 5062 tiles
+terr: restore request published -- 5062 frames, 2176x2720 atlas, serial 2
+restorevk: the device can restore: 12x64 fp32, one k-block 9 KB of a 64 KB block …
+restorevk: terr: job started: 5062 frames (400 wrap-padded), model 12x64
+vk: terr: restoring the tile atlas HERE - 5062 frames over 2176x2720, serial 2
+vk: terr: restored atlas painted here - 5062 frames, no mirror and no read-back
+vk: census: frame 900:  1 pass(es) drew … terr=1
+vk: census: frame 1200: 1 pass(es) drew … terr=1
+vk: census: frame 1500: 1 pass(es) drew … terr=1
+```
+
+**That third line has never been printed by any build before this one.** It is the producer that
+landing 4b-2 shut behind `!s_atlasTex`, and the four lines under it are the consumer that has
+been armed and unfed ever since. The whole atlas — all 5062 tiles — is restored on the Vulkan
+lane with no read-back and no mirror, which is what `tagpu_restorevk.on` was built to do.
+
+And `terr=1` on every census after the map loads is the other half: **the terrain draws.** That
+is the check the review's HIGH would have failed — before the fix, a lane that declined the
+restorer drew no terrain at all, and a lane that had not yet painted drew none either.
+
+The pass's own A/B capture (`tagpu_terr.ab`, `tagpu_terr_vk.ppm`, 2048×1536 at `ss=2`) shows the
+expected picture: restored colour inside the unit's line of sight, and the engine's grey fog rule
+outside it, over the whole heightfield. 82 % of the frame is non-black; the black is the letterbox
+and the unexplored border.
+
+**A note on what `tacli shot` shows here, because it reads as a failure and is not.** The engine
+surface comes back CYAN across the viewport: `terrown: engine terrain + fog overlay SKIPPED (ours
+live)` means the engine's terrain is replaced by the key fill, which the Vulkan lane then
+composites over. `tacli shot` captures the engine surface, and `glshot` is retired with the GL
+lane, so the pass's own `.ab` capture is the way to see what this lane actually drew.
+
 #### What the review found: making the producer honest fired the consumer's parity rule
 
 Two dedicated reviewers, twenty-three findings, all verified against the source before acting.
