@@ -23,8 +23,9 @@ no longer true.
 
 Deleted (`render_d3d9.c` and `render_ogl.c` ✓ gone 2026-09-18, the rest still standing):
 `render_ogl.c` (2 015 lines), `render_d3d9.c` (742), `opengl_utils.c`,
-`openglshader.h`, `render_ogl.h`, `tagpu_abshot.c`, every `tagpu_*` GL draw, and
-`tagpu_overlay.off`.
+~~`openglshader.h`~~, `render_ogl.h`, `tagpu_abshot.c`, every `tagpu_*` GL draw, and
+`tagpu_overlay.off`. **`openglshader.h` is struck out and STAYS** — its two shaders are the
+build-time source for `tagpu_vk_surf.c`'s bottom-layer program (item 11's survey says why).
 
 **`src/IDirect3D*.c` STAY.** They are DirectDraw's COM interface surface — what TA gets from
 `QueryInterface` on the DirectDraw object — and nothing in them references `d3d9_render_main`.
@@ -1594,8 +1595,9 @@ Back to the filed list:
    radar-arc replay. Nor is this 4c-1's bottom layer (§2.52). Three different things called "the
    engine's frame", which is its own reason this entry went wrong.
 11. **The deletion landing** — `render_ogl.c`, `render_d3d9.c`, `opengl_utils.c`,
-   `openglshader.h`, `render_ogl.h`, and **`tagpu_restoreglsl.c`**. `renderer=gdi` becomes the
-   documented stock reference.
+   `render_ogl.h`, and **`tagpu_restoreglsl.c`**. `renderer=gdi` becomes the
+   documented stock reference. (`openglshader.h` was on this line until 2026-09-19 and is not
+   deletable — see the survey below.)
 
    **SPLIT INTO SIX PARTS, 2026-09-18, BY THE SURVEYS BELOW — `landings 11-1 and 11-2 of 6`.**
 (Five when it was first written; the sixth appeared the same day when deleting the lane turned
@@ -1880,8 +1882,35 @@ that a count which grows is the plan catching up with the work.) The row was
        cross-build diff above answers the same question and is strictly stronger.
      * **11-4b — `tagpu_gui_surf.c`** (30 sites, all three shapes, 9 of the 10 whole-function
        stand-downs). The hard one, and the only part where deletion cascades into callers.
+
+       **SURVEYED 2026-09-19 AND IT IS EASIER THAN THIS ROW SAYS.** The cascade is real but
+       **entirely file-local**: all nine stand-downs are `static` and every caller is in
+       `tagpu_gui_surf.c` itself — `twin_colour` (3 callers), `twin_col_drop` (2),
+       `twin_upload` (2), `twin_clear` (1), `twin_fill` (1), `twin_outline` (1),
+       `restore_step` (1), `upload_palette` (1), `unbind_all` (1). Nothing outside the file
+       names any of them and no header declares them.
+
+       **One name looks like a cross-file caller and is not**: `tagpu_terr.c:1416` calls a
+       `restore_step`, but that is an unrelated file-local static with a different signature
+       (`static void restore_step(const char* ta)` at `tagpu_terr.c:1215`, against
+       `static void restore_step(void)` at `tagpu_gui_surf.c:1301`). A bare-symbol search — the
+       method item 11's survey settled on — reports it as a hit. Read the signature, not the
+       name.
+
+       **And landing 4b-3 already did the hard half.** Each of the nine opens with the
+       stand-down as its FIRST statement under a comment saying *"PURE GL: this puts pixels in a
+       GL object and feeds nothing the Vulkan twin is told"*, so there is no CPU work to rescue
+       from above the gate. `restore_step` carries the one nuance worth keeping: its comment
+       records that `s_colValid` stays 0 on this lane, which is what the record's `restored`
+       term reads — so the call sites guarded by `if (restored)` are already never taken, and
+       deleting them changes nothing. **Its nine shader strings stay** (see the SPIR-V note
+       below); `tagpu_gui_surf.c` holds more of them than any other file.
      * **11-4c — `tagpu_fps.c`, `tagpu_gaf.c`, `tagpu_posebake.c`, `tagpu_scaffold.c`**
-       (11 sites between them).
+       (11 sites between them). **Surveyed 2026-09-19: no whole-function stand-downs at all** —
+       `tagpu_fps.c` 2 `if (gl_draws)`, `tagpu_gaf.c` 3 plus one `!tagpu_vk_owns_present()`,
+       `tagpu_posebake.c` 3 of the latter, `tagpu_scaffold.c` 2 of the former. `tagpu_fps.c` and
+       `tagpu_scaffold.c` carry 2 manifest shaders each and must keep them; the other two carry
+       none.
 
      **`tagpu_text.c` and `tagpu_hires.c` are NOT in 11-4 after all.** They have zero lane
      gates, which is the shape that made `tagpu_shadow.c` and `tagpu_hires_draw.c` an
@@ -2181,6 +2210,34 @@ that a count which grows is the plan catching up with the work.) The row was
    comments, line comments and string literals from each `.c`, then match the **bare symbol**
    (`\b<sym>\b`, not `<sym>\s*\(`) — the bare form because a function-POINTER use blocks a
    deletion exactly as a call does, and `g_ddraw.renderer == ogl_render_main` is precisely that.
+
+   **AND THE METHOD HAS A BLIND SPOT THAT THIS LIST WALKS STRAIGHT INTO
+   [found 2026-09-19, by landing 11-4a's build gate].** Stripping string literals is the right
+   move for finding *callers* and the wrong one here: some of this repo's string literals **are
+   consumed at build time**, so a symbol with no C user can still be load-bearing. Concretely —
+
+   **`openglshader.h` MUST NOT BE DELETED, and it is on the list at the top of this plan and in
+   item 11's own sentence.** Its two shaders, `PASSTHROUGH_VERT_SHADER` and
+   `PALETTE_FRAG_SHADER`, are the source of truth for the `surf_pal` program in
+   `tools/spirv-gen.py`'s PROGRAMS table. The build translates them into
+   `inc/spirv/openglshader.spv.h`, and **`tagpu_vk_surf.c:36` includes that** — it is TA's 8-bit
+   surface resolved through the palette, *the frame's bottom layer* (§2.52, landing 4c-1). Delete
+   the header and the Vulkan lane loses the shader it composites everything else on top of. No
+   symbol search could have caught this: the consumer is `spirv-gen.py`, which is not a `.c` file
+   and does not call anything.
+
+   The same applies to `tagpu_restore_glsl.h` — note the underscore; it is **not** the
+   `tagpu_restoreglsl.c` this item lists. `spirv-gen.py`'s `RESTORE_HDR` reads its
+   `TAGPU_RESTORE_*_{VS,FS}` macros and `tagpu_vk_restore.c:88` includes the result. The `.c` is
+   in scope for deletion; the `.h` is not.
+
+   **The rule for the rest of 11-5: before deleting any file, check it against the PROGRAMS
+   table and `RESTORE_HDR`.** Twelve source files carry manifest-named shaders — `openglshader.h`
+   (2), `tagpu_gui_surf.c` (9), `tagpu_native.c` (6), `tagpu_shadow.c` (3), and `tagpu_feat.c`,
+   `tagpu_fps.c`, `tagpu_fx.c`, `tagpu_hires_draw.c`, `tagpu_mark.c`, `tagpu_posedraw.c`,
+   `tagpu_scaffold.c`, `tagpu_terr.c` (2 each). The build refuses rather than corrupts, so this
+   is a warning about wasted work and a wrong plan, not about a silent bug — but a plan that
+   lists a file it cannot delete is a plan that will be abandoned mid-landing.
 
    * **`opengl_utils.c` — goes WITH `render_ogl.c`, and the first pass said something wrong and
      more interesting.** It claimed the four shader helpers were "referenced only by
