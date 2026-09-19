@@ -6,7 +6,9 @@
    tagpu_scaffold.on trigger file; safe no-op otherwise. Leaves program/VAO
    bindings at 0. */
 void tagpu_scaffold_frame(const TAGPU_FRAME* f);
-unsigned int tagpu_scaffold_texref(void);
+/* `tagpu_scaffold_texref` stood here and returned this pass's GL texture id.
+   It had NO caller anywhere in the tree even before the GL half went, and the
+   texture it named is gone with it [the vulkan-only plan, landing 11-4c]. */
 int tagpu_scaffold_frameinfo(unsigned frame_counter, int* r0, int* nrows);
 
 /* ---- the Vulkan edition of this pass (Phase G / G19e) ----

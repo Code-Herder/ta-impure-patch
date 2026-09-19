@@ -76,35 +76,10 @@ static void slog(const char* s)
 }
 
 /* GL entries (G1 lesson: GL1.1 via opengl32, the rest via wgl) */
-typedef void (APIENTRY *PFN_DRAWARRAYS)(GLenum,GLint,GLsizei);
-typedef void (APIENTRY *PFN_DISABLE)(GLenum);
-typedef void (APIENTRY *PFN_BLENDFUNC)(GLenum,GLenum);
-typedef void (APIENTRY *PFN_UNIFORM4F)(GLint,GLfloat,GLfloat,GLfloat,GLfloat);
-typedef void (APIENTRY *PFN_UNIFORM1F)(GLint,GLfloat);
-typedef void (APIENTRY *PFN_UNIFORM1I)(GLint,GLint);
-typedef void (APIENTRY *PFN_ACTIVETEX)(GLenum);
-static PFN_DRAWARRAYS x_glDrawArrays;
-static PFN_DISABLE    x_glDisable;
-static PFN_BLENDFUNC  x_glBlendFunc;
-static PFN_UNIFORM4F  x_glUniform4f;
-static PFN_UNIFORM1F  x_glUniform1f;
-static PFN_UNIFORM1I  x_glUniform1i;
-static PFN_ACTIVETEX  x_glActiveTexture;
-
-static void* getgl(const char* n)
-{
-    void* p = xwglGetProcAddress ? (void*)xwglGetProcAddress(n) : NULL;
-    if (!p) { HMODULE gl = GetModuleHandleA("opengl32.dll");
-              if (gl) p = (void*)GetProcAddress(gl, n); }
-    return p;
-}
 
 static int    s_state = 0;         /* 0=unloaded 1=ready 2=failed         */
 void tagpu_scaffold_glreset(void);
-static void serr(const char* tag);
 static int    s_armed = -1;        /* re-checked every 30 frames          */
-static GLuint s_prog, s_vao, s_vbo, s_tex;
-static GLint  s_uRect, s_uRows;
 static unsigned char* s_buf = 0;   /* viewport-sized scaffold, malloc'd   */
 static int    s_bw = 0, s_bh = 0;  /* current buffer dims                 */
 static int    s_texW = 0, s_texH = 0;
@@ -126,6 +101,15 @@ static const unsigned char* s_pubBuf;
 static int   s_pubW, s_pubH;
 static float s_pubRect[4], s_pubRows;
 
+/* THE SHADER PAIR IS A BUILD INPUT, NOT CODE THIS FILE RUNS. Nothing here
+   references them since [the vulkan-only plan, landing 11-4c] -- tools/spirv-gen.py
+   reads them out of the PREPROCESSED translation unit and generates the SPIR-V the
+   Vulkan twin draws with, so deleting them fails the build with "the manifest names
+   <pass>::VS and the source does not have it". The pragma below is paired and its
+   `pop` was PROVED with a planted probe rather than read: landing 11-4b put one
+   inside a comment, where it is text and not a directive. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-variable"
 static const char* VS =
     "#version 330 core\n"
     "layout(location=0) in vec2 p;\n"           /* unit quad 0..1 */
@@ -143,60 +127,7 @@ static const char* FS =
     "  float t = clamp(rel / max(uRows - 1.0, 1.0), 0.0, 1.0);\n"
     "  vec3 c = mix(vec3(0.10,0.35,1.00), vec3(1.00,0.15,0.10), t);\n"
     "  frag = vec4(c, 0.55); }\n";
-
-static void init_gl(void)
-{
-    x_glDrawArrays    = (PFN_DRAWARRAYS)getgl("glDrawArrays");
-    x_glDisable       = (PFN_DISABLE)   getgl("glDisable");
-    x_glBlendFunc     = (PFN_BLENDFUNC) getgl("glBlendFunc");
-    x_glUniform4f     = (PFN_UNIFORM4F) getgl("glUniform4f");
-    x_glUniform1f     = (PFN_UNIFORM1F) getgl("glUniform1f");
-    x_glUniform1i     = (PFN_UNIFORM1I) getgl("glUniform1i");
-    x_glActiveTexture = (PFN_ACTIVETEX) getgl("glActiveTexture");
-    if (!x_glDrawArrays || !x_glDisable || !x_glBlendFunc || !x_glUniform4f ||
-        !x_glUniform1f || !x_glUniform1i || !x_glActiveTexture)
-    { slog("scaffold: missing GL proc"); s_state = 2; return; }
-
-    GLuint vs = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vs, 1, &VS, NULL); glCompileShader(vs);
-    GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fs, 1, &FS, NULL); glCompileShader(fs);
-    GLint ok = 0;
-    glGetShaderiv(vs, GL_COMPILE_STATUS, &ok);
-    if (ok) glGetShaderiv(fs, GL_COMPILE_STATUS, &ok);
-    if (!ok) { char lg[512]; glGetShaderInfoLog(fs, sizeof lg, NULL, lg);
-               slog("scaffold: shader FAILED:"); slog(lg); s_state = 2; return; }
-    s_prog = glCreateProgram();
-    glAttachShader(s_prog, vs); glAttachShader(s_prog, fs); glLinkProgram(s_prog);
-    glGetProgramiv(s_prog, GL_LINK_STATUS, &ok);
-    if (!ok) { slog("scaffold: link FAILED"); s_state = 2; return; }
-    glDeleteShader(vs); glDeleteShader(fs);
-    s_uRect = glGetUniformLocation(s_prog, "uRect");
-    s_uRows = glGetUniformLocation(s_prog, "uRows");
-    GLint uScaf = glGetUniformLocation(s_prog, "uScaf");
-
-    const float quad[] = TAGPU_SCAF_QUAD;
-    glGenVertexArrays(1, &s_vao); glBindVertexArray(s_vao);
-    glGenBuffers(1, &s_vbo); glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof quad, quad, GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
-    glBindVertexArray(0);
-
-    glGenTextures(1, &s_tex);
-    glBindTexture(GL_TEXTURE_2D, s_tex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, 0);
-
-    glUseProgram(s_prog);
-    x_glUniform1i(uScaf, 0);
-    glUseProgram(0);
-    s_state = 1;
-    slog("scaffold: GL ready");
-}
+#pragma GCC diagnostic pop
 
 /* Stamp one opaque-mask pixel run helper */
 static void stamp_px(int bx, int by, unsigned char depth)
@@ -310,11 +241,9 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
        process, so everything below that touches GL stands down and the twin in
        tagpu_vk_scaffold.c draws the same buffer out of the hand-over at the
        bottom of this function. The gather is unconditional: it is the pass. */
-    const int gl_draws = !tagpu_vk_owns_present();
 
     s_pubBuf = NULL; s_abFrame = 0;
 
-    if (gl_draws && s_state == 2) return;
     if (s_armed < 0 || (f->frame_counter % 30) == 0) {
         s_armed = GetFileAttributesA("tagpu_scaffold.on") != INVALID_FILE_ATTRIBUTES;
         /* the A/B re-arms when the lever is taken away and put back, so a
@@ -323,12 +252,6 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
         if (!s_ab) s_abDone = 0;
     }
     if (!s_armed) return;
-    if (gl_draws) {
-        if (s_state == 0) init_gl();
-        if (s_state != 1) return;
-        serr("s-entry");
-    }
-
     /* live view geometry — the Phase D rule: no constants. EVERYTHING comes
        from the FRAME PACKET: the true 1x rect and the map and sweep dimensions
        the game thread published, the same predicted eye the native pass draws
@@ -527,33 +450,6 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
        disagree about whether this is the capture frame. */
     int taking = s_ab && !s_abDone;
 
-    if (gl_draws) {
-
-        x_glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, s_tex);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        if (vw != s_texW || vh != s_texH) {
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, vw, vh, 0, GL_RED, GL_UNSIGNED_BYTE, s_buf);
-            s_texW = vw; s_texH = vh;
-        } else
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, vw, vh, GL_RED, GL_UNSIGNED_BYTE, s_buf);
-        serr("s-upload");
-
-        glUseProgram(s_prog);
-        glBindVertexArray(s_vao);
-        glEnable(GL_BLEND);
-        x_glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        /* quad vertex p: p.y=0 -> uv row 0 = buffer top -> screen top (y0) */
-        x_glUniform4f(s_uRect, x0, y0, x1, y1);
-        x_glUniform1f(s_uRows, (float)nRows);
-        x_glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        x_glDisable(GL_BLEND);
-        glBindTexture(GL_TEXTURE_2D, 0);
-        glBindVertexArray(0);
-        glUseProgram(0);
-        serr("s-quad");
-
-    }
     if (taking) {
         /* THE A/B CLAIM, which is all that is left of it. Until landing 4d-2 this
            pass also captured a GL half (`tagpu_abshot.c`) and claimed the Vulkan one
@@ -592,7 +488,6 @@ int tagpu_scaffold_overlay(const unsigned char** buf, int* w, int* h,
 }
 
 /* exports for the native pass: this frame's scaffold texture + row encoding */
-GLuint tagpu_scaffold_texref(void) { return s_tex; }
 int tagpu_scaffold_frameinfo(unsigned frame_counter, int* r0, int* nrows)
 {
     /* NOT GATED ON GL READINESS, because these two numbers are the GATHER's and
@@ -610,20 +505,6 @@ int tagpu_scaffold_frameinfo(unsigned frame_counter, int* r0, int* nrows)
     return 1;
 }
 
-static void serr(const char* tag)
-{
-    typedef unsigned (WINAPI* PFNGE)(void);
-    static PFNGE pge;
-    if (GetFileAttributesA("tagpu_gldbg.on") == INVALID_FILE_ATTRIBUTES) return;
-    if (!pge) {
-        HMODULE gl = GetModuleHandleA("opengl32.dll");
-        if (gl) pge = (PFNGE)GetProcAddress(gl, "glGetError");
-    }
-    if (!pge) return;
-    unsigned e = pge();
-    if (e) { FILE* fp = fopen("tagpu.log", "a");
-             if (fp) { fprintf(fp, "serr %s=%x\n", tag, e); fclose(fp); } }
-}
 void tagpu_scaffold_glreset(void)
 {
     s_state = 0; s_texW = s_texH = 0;

@@ -407,14 +407,6 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
        memory this upload was given, and the Vulkan twin reads it through
        `tagpu_posebake_geom_mirror` -- so on a lane with no GL there is nothing
        to upload and the bake is unchanged. [The vulkan-only plan, 4b-2.] */
-    if (!tagpu_vk_owns_present()) {
-        glGenBuffers(1, &g->vbo);
-        glBindBuffer(GL_ARRAY_BUFFER, g->vbo);
-        glBufferData(GL_ARRAY_BUFFER,
-                     (GLsizeiptr)c.nv * TAGPU_PB_GEOMST * sizeof(float),
-                     s_scratchG, GL_STATIC_DRAW);
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-    }
     /* THE MIRROR IS THE BUFFER THE UPLOAD ABOVE WAS GIVEN, in the same call,
        so there is no second evaluation of the bake to drift from the first.
        A refused malloc leaves the slot NULL, which the accessor reports as
@@ -538,14 +530,6 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
     m->levelGen = lvl; m->glGen = s_glGen;
     m->nvert = c.nv; m->nskip = c.nskip; m->noMaterial = c.anom;
     m->serial = s_serial++;
-    if (!tagpu_vk_owns_present()) {
-        glGenBuffers(1, &m->vbo);
-        glBindBuffer(GL_ARRAY_BUFFER, m->vbo);
-        glBufferData(GL_ARRAY_BUFFER,
-                     (GLsizeiptr)c.nv * TAGPU_PB_MATST * sizeof(float),
-                     s_scratchM, GL_STATIC_DRAW);
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-    }
     if (s_mirrorWant && c.nv > 0) {
         size_t nb = (size_t)c.nv * TAGPU_PB_MATST * sizeof(float);
         s_matMirror[slot] = (float*)malloc(nb);
@@ -558,28 +542,6 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
        either can be re-baked without touching the other's pointers. */
     /* AND THE VERTEX ARRAY WITH THEM: it exists only to make a GL draw one
        bind, and the twin builds its own binding from the mirrors. */
-    if (!tagpu_vk_owns_present()) {
-        glGenVertexArrays(1, &m->vao);
-        glBindVertexArray(m->vao);
-        glBindBuffer(GL_ARRAY_BUFFER, g->vbo);
-        glEnableVertexAttribArray(0);   /* rest position                        */
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, TAGPU_PB_GEOMST * 4, (void*)0);
-        glEnableVertexAttribArray(1);   /* rest normal of the vertex's face     */
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, TAGPU_PB_GEOMST * 4, (void*)12);
-        glEnableVertexAttribArray(2);   /* piece index                          */
-        glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, TAGPU_PB_GEOMST * 4, (void*)24);
-        glEnableVertexAttribArray(3);   /* TAGPU_PBF_* flags                    */
-        glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, TAGPU_PB_GEOMST * 4, (void*)28);
-        glBindBuffer(GL_ARRAY_BUFFER, m->vbo);
-        glEnableVertexAttribArray(4);   /* uv                                   */
-        glVertexAttribPointer(4, 2, GL_FLOAT, GL_FALSE, TAGPU_PB_MATST * 4, (void*)0);
-        glEnableVertexAttribArray(5);   /* flat colour, colour key              */
-        glVertexAttribPointer(5, 2, GL_FLOAT, GL_FALSE, TAGPU_PB_MATST * 4, (void*)8);
-        glEnableVertexAttribArray(6);   /* skip                                 */
-        glVertexAttribPointer(6, 1, GL_FLOAT, GL_FALSE, TAGPU_PB_MATST * 4, (void*)16);
-        glBindVertexArray(0);
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-    }
     s_matSkip[slot] = (unsigned char*)malloc((size_t)c.nv ? (size_t)c.nv : 1);
     if (s_matSkip[slot]) memcpy(s_matSkip[slot], s_scratchSkip, (size_t)c.nv);
     s_matBaked++;
@@ -639,7 +601,11 @@ void tagpu_posebake_frame(unsigned frame_counter, unsigned level_gen)
         D is gone, so on that path the lever now arms nothing and the mirror would
         be paid for with no consumer at all. `tagpu_vk_owns_present()` is exactly
         "a Vulkan pass will run in this process", which is the question. */
-        if (!s_mirrorWant && tagpu_vk_owns_present()) {
+        /* `&& tagpu_vk_owns_present()` was the second term and is now always
+           true [landing 11-4c]; this is the POSITIVE form -- it ARMS the mirror
+           for the Vulkan lane rather than gating a GL draw, so it is live code
+           that simplified, not a draw half that went. */
+        if (!s_mirrorWant) {
             s_mirrorWant = 1;
             for (i = 0; i < s_ngeom; i++)
                 if (s_geom[i].root) { geom_drop(&s_geom[i]); dg++; }

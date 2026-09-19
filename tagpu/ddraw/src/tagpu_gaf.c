@@ -1206,17 +1206,6 @@ int tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a)
        `glGenTextures` leaving `t` at 0 with no context turned this into a
        refusal that read downstream as `atlas=0` and no sprite texels at all.
        [The vulkan-only plan, landing 4b-2.] */
-    if (!tagpu_vk_owns_present()) {
-        glGenTextures(1, &t);
-        if (!t) return 0;
-        glBindTexture(GL_TEXTURE_2D, t);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, a->dim, a->dim, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
-        glBindTexture(GL_TEXTURE_2D, 0);
-    }
     /* A FRESH TEXTURE IS A FRESH MIRROR. The storage above is unwritten (index
        0, the assumption the border comment below rests on) and a mirror that
        kept the previous texture's texels would be a copy of something that no
@@ -1407,11 +1396,6 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
        is gated and the CPU mirror writes are not: the mirror takes the same
        bytes from the same buffer (see below), so on a lane with no GL name the
        art still reaches a second backend. [The vulkan-only plan, landing 4b-2.] */
-    const int gl_draws = !tagpu_vk_owns_present();
-    if (gl_draws) {
-        glBindTexture(GL_TEXTURE_2D, a->tex);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    }
     /* Re-emit the frame with its outermost row and column repeated all
        round, `pad` deep. The border is what any sampler that reaches past
        the frame must land on: under GL_NEAREST that is the fragment whose
@@ -1444,9 +1428,6 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
             memcpy(s_pad + (size_t)(p - k) * pw, s_pad + (size_t)p * pw, (size_t)pw);
         for (k = 0; k < pb; k++)
             memcpy(s_pad + (size_t)(p + h + k) * pw, s_pad + (size_t)(p + h - 1) * pw, (size_t)pw);
-        if (gl_draws)
-            glTexSubImage2D(GL_TEXTURE_2D, 0, x - p, y - p, cw, ch,
-                            GL_RED, GL_UNSIGNED_BYTE, s_pad);
         /* THE CPU MIRROR TAKES THE SAME BYTES, FROM THE SAME BUFFER, IN THE
            SAME CALL (Phase G / G19e). Not a second copy of the art: the very
            rows the line above hands GL, so a backend that uploads the mirror
@@ -1462,7 +1443,6 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
             a->mirrorSerial++;
         }
     }
-    if (gl_draws) glBindTexture(GL_TEXTURE_2D, 0);
 
     e->u0 = (float)x / (float)a->dim;         e->v0 = (float)y / (float)a->dim;
     e->u1 = (float)(x + w) / (float)a->dim;   e->v1 = (float)(y + h) / (float)a->dim;

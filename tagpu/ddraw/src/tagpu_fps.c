@@ -82,35 +82,14 @@
 typedef char tagpu_fps_maxv_agrees[(MAXCH * QUADV == TAGPU_FPS_MAXV) ? 1 : -1];
 #define VST       4                   /* x, y, u, v                            */
 
-typedef void (APIENTRY *PFN_DRAWARRAYS)(GLenum, GLint, GLsizei);
-typedef void (APIENTRY *PFN_ACTIVETEX)(GLenum);
-typedef void (APIENTRY *PFN_UNIFORM2F)(GLint, GLfloat, GLfloat);
-typedef void (APIENTRY *PFN_UNIFORM3F)(GLint, GLfloat, GLfloat, GLfloat);
-typedef void (APIENTRY *PFN_DISABLE)(GLenum);
-static PFN_DRAWARRAYS x_glDrawArrays;
-static PFN_ACTIVETEX  x_glActiveTexture;
-static PFN_UNIFORM2F  x_glUniform2f;
-static PFN_UNIFORM3F  x_glUniform3f;
-static PFN_DISABLE    x_glDisable;
 
 /* The fork declares only the entry points its own passes use, so the core-1.1
    ones this needs are resolved by hand -- wglGetProcAddress first, then
    opengl32 itself, which is where a 1.1 symbol actually lives. Same helper as
    tagpu_feat.c's. */
-static void* getgl(const char* n)
-{
-    void* p = xwglGetProcAddress ? (void*)xwglGetProcAddress(n) : NULL;
-    if (!p) { HMODULE gl = GetModuleHandleA("opengl32.dll");
-              if (gl) p = (void*)GetProcAddress(gl, n); }
-    return p;
-}
-
-static int    s_state;                /* 0 unbuilt, 1 ready, 2 refused         */
 static int    s_on = -1, s_pk, s_ab, s_abDone, s_abFrame;
 static int    s_nv;                   /* this frame's vertices, handed over once */
 static int    s_fw, s_fh;             /* ...and the frame size they are in     */
-static GLuint s_prog, s_vao, s_vbo;
-static GLint  s_uFrame, s_uInk;
 static float  s_v[MAXCH * QUADV * VST];
 
 /* the averaging window */
@@ -118,12 +97,15 @@ static DWORD    s_t0;
 static unsigned s_frames;
 static int      s_fps = -1;
 
-static void flog(const char* s)
-{
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
-}
-
+/* THE SHADER PAIR IS A BUILD INPUT, NOT CODE THIS FILE RUNS. Nothing here
+   references them since [the vulkan-only plan, landing 11-4c] -- tools/spirv-gen.py
+   reads them out of the PREPROCESSED translation unit and generates the SPIR-V the
+   Vulkan twin draws with, so deleting them fails the build with "the manifest names
+   <pass>::VS and the source does not have it". The pragma below is paired and its
+   `pop` was PROVED with a planted probe rather than read: landing 11-4b put one
+   inside a comment, where it is text and not a directive. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-variable"
 static const char* VS =
     "#version 330 core\n"
     "layout(location=0) in vec2 aPos;\n"      /* game-frame pixels, y down */
@@ -150,63 +132,7 @@ static const char* FS =
     "  if (a < 0.5) discard;\n"
     "  oCol = vec4(uInk, 1.0);\n"
     "}\n";
-
-static GLuint mksh(GLenum t, const char* src)
-{
-    GLuint sh = glCreateShader(t);
-    GLint ok = 0;
-    glShaderSource(sh, 1, &src, NULL); glCompileShader(sh);
-    glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
-    if (!ok) { char lg[512]; glGetShaderInfoLog(sh, sizeof lg, NULL, lg);
-               flog("fps: shader FAILED:"); flog(lg); s_state = 2; }
-    return sh;
-}
-
-static void init_gl(void)
-{
-    GLuint vs, fs;
-    GLint ok = 0;
-    x_glDrawArrays    = (PFN_DRAWARRAYS)getgl("glDrawArrays");
-    x_glActiveTexture = (PFN_ACTIVETEX) getgl("glActiveTexture");
-    x_glUniform2f     = (PFN_UNIFORM2F) getgl("glUniform2f");
-    x_glUniform3f     = (PFN_UNIFORM3F) getgl("glUniform3f");
-    x_glDisable       = (PFN_DISABLE)   getgl("glDisable");
-    if (!x_glDrawArrays || !x_glActiveTexture ||
-        !x_glUniform2f || !x_glUniform3f || !x_glDisable) {
-        flog("fps: missing GL proc"); s_state = 2; return;
-    }
-    /* (The A/B used to resolve entry points of its own, in tagpu_abshot.c, and
-       deliberately outside this test: the readout is a play feature and the
-       oracle is not. Landing 4d-2 deleted that file; nothing here is owed an
-       entry point for the lever any more.) */
-    /* Both are created before either is tested so the cleanup below is one
-       path -- mksh returns the shader even when it failed, and a leak here is
-       permanent: s_state 2 is never retried inside one GL context. */
-    vs = mksh(GL_VERTEX_SHADER, VS); fs = mksh(GL_FRAGMENT_SHADER, FS);
-    if (s_state == 2) { glDeleteShader(vs); glDeleteShader(fs); return; }
-    s_prog = glCreateProgram();
-    glAttachShader(s_prog, vs); glAttachShader(s_prog, fs); glLinkProgram(s_prog);
-    glGetProgramiv(s_prog, GL_LINK_STATUS, &ok);
-    glDeleteShader(vs); glDeleteShader(fs);
-    if (!ok) { flog("fps: link FAILED"); glDeleteProgram(s_prog); s_prog = 0;
-               s_state = 2; return; }
-    s_uFrame = glGetUniformLocation(s_prog, "uFrame");
-    s_uInk   = glGetUniformLocation(s_prog, "uInk");
-    glUseProgram(s_prog);
-    glUniform1i(glGetUniformLocation(s_prog, "uAtlas"), 0);
-    glGenVertexArrays(1, &s_vao);
-    glGenBuffers(1, &s_vbo);
-    glBindVertexArray(s_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof s_v, NULL, GL_DYNAMIC_DRAW);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, VST * sizeof(float), (void*)0);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, VST * sizeof(float),
-                          (void*)(2 * sizeof(float)));
-    glEnableVertexAttribArray(0); glEnableVertexAttribArray(1);
-    glBindVertexArray(0);
-    s_state = 1;
-    flog("fps: armed - the frame-rate readout (tagpu_fps.on, or the Render menu)");
-}
+#pragma GCC diagnostic pop
 
 /* one cached string -> one quad at (x, y), advancing x. 0 = the atlas refused */
 static int emit(const char* s, float* x, float y, int* nv)
@@ -278,11 +204,10 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
        the frame-rate window, the font latch and the vertex array are all this
        pass either way, and only the upload, the draw and the read-back stand
        down. [The vulkan-only plan, landing 4b.] */
-    const int gl_draws = !tagpu_vk_owns_present();
 
     s_nv = 0; s_abFrame = 0;
 
-    if (!f || (gl_draws && s_state == 2)) return;
+    if (!f) return;
     if (s_on < 0 || (poll++ % POLL) == 0) {
         s_on = GetFileAttributesA(TRIGGER) != INVALID_FILE_ATTRIBUTES;
         s_pk = GetFileAttributesA(PKSHOW) != INVALID_FILE_ATTRIBUTES;
@@ -302,11 +227,6 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
         s_frames = 0; s_t0 = now;
     }
     if (s_fps < 0) return;                  /* nothing to say for the first window */
-
-    if (gl_draws) {
-        if (!s_state) init_gl();
-        if (s_state != 1) return;
-    }
 
     /* The font the game thread published, latched for this frame exactly as the
        marker gather latches it -- so the atlas cannot repack under our quads. */
@@ -348,21 +268,6 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
        this is the capture frame. */
     int taking = s_ab && !s_abDone;
 
-    if (gl_draws) {
-
-        glUseProgram(s_prog);
-        x_glUniform2f(s_uFrame, (float)f->game_width, (float)f->game_height);
-        x_glUniform3f(s_uInk, 1.0f, 1.0f, 1.0f);
-        x_glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, tagpu_text_tex());
-        glBindVertexArray(s_vao);
-        glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)nv * VST * sizeof(float), s_v);
-        x_glDisable(GL_DEPTH_TEST);
-        x_glDrawArrays(GL_TRIANGLES, 0, nv);
-        glBindVertexArray(0);
-
-    }
     if (taking) {
         /* THE A/B CLAIM, which is all that is left of it. Until landing 4d-2 this
            pass also captured a GL half (`tagpu_abshot.c`) and claimed the Vulkan one
@@ -385,7 +290,10 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
 
 void tagpu_fps_glreset(void)
 {
-    s_state = 0; s_prog = 0; s_vao = 0; s_vbo = 0;
+    /* `s_state`, `s_prog`, `s_vao` and `s_vbo` were zeroed here; all four went
+       with the draw [landing 11-4c]. Nothing could raise `s_state` to 1 once
+       `init_gl` was gone -- landing 11-4a's trap -- and the other three named
+       GL objects nothing creates. */
     s_fps = -1; s_frames = 0; s_t0 = 0;
     s_nv = 0; s_abFrame = 0;
 }
