@@ -1224,6 +1224,13 @@ Back to the filed list:
    **What is not done**: the UNITS, which are the fourth consumer and carry a seam of their own —
    their twin is mipped and trilinear, and a Vulkan restore paints level 0 only.
    The UI atlas is a fifth consumer and keeps its read-back. `repaint` is still unexercised.
+   **THE READ-BACK HALF OF THAT SENTENCE IS DISPROVED — 11-5e-2b, 2026-09-19.** It cannot run:
+   `oglu_load_dll` has no caller, so `glReadPixels` never resolves and the mirror refuses at its
+   entry guard. Part 2 removed it, and the UI atlas now has **no feed at all** — no read-back and
+   no list, because `tagpu_gui_surf.c` never arms `tagpu_gaf_atlas_restore_vk`. Nothing regresses
+   (two older pins already made its colour twins unreachable), but the fifth consumer is now a
+   consumer of nothing, and restoring it is new work rather than a deletion. See
+   [gpu-status](gpu-status.html) §2.78.
 
    **AND THAT SEAM IS MEASURED RATHER THAN ARGUED — 2026-09-17** ([gpu-status](gpu-status.html)
    §2.45). This entry said the landing "has to answer where the levels come from without guessing
@@ -2488,7 +2495,7 @@ that a count which grows is the plan catching up with the work.) The row was
          only ever refuse — lever on, it is never asked; lever off, there are no GL entry
          points, so it latches `mirrorRgbFailed` and logs a line that reads as a driver fault
          on a perfectly normal run.
-       - **11-5e-2b — the restored twin's read-back. PART 1 LANDED 2026-09-19.** The twin
+       - **11-5e-2b — the restored twin's read-back. BOTH PARTS LANDED 2026-09-19.** The twin
          reached a Vulkan pass two ways — as TEXELS read back with `glReadPixels` and handed
          over as `atlasRgb`, or as the frame LIST the other lane paints for itself — and the
          first cannot happen in any process. Every link re-derived here rather than inherited:
@@ -2498,13 +2505,15 @@ that a count which grows is the plan catching up with the work.) The row was
          guard **before its own `calloc`**, so `a->mirrorRgb` is NULL; `a->mirrorRgbRows` is 0
          independently, with four writers in `tagpu_gaf.c` and every one assigning 0; so every
          producer's publish guard is false and `atlasRgb` was NULL on every published frame of
-         every atlas. **`atlasRgb*` goes 112 code sites → 29** and **`mirrorRgb`-or-`mirror_rgb`
-         102 → 57**, both comment- and string-masked so tombstone prose inflates neither, and
+         every atlas. Over **both parts**, **`atlasRgb*` goes 112 code sites → 5** — every survivor
+         `atlasRgbAniso` — and **`mirrorRgb`-or-`mirror_rgb` 102 → 0**, the spelling leaving the
+         tree; part 1 alone took them to 29 (30 after its own review's fix) and 57. Both are
+         comment- and string-masked so tombstone prose inflates neither, and
          the second counted as a SUBSTRING so the `tagpu_*_mirror_rgb*` function names are in
          it. (The first draft said 68 → 51 under a `\b`-anchored pattern, which does not match
          either spelling inside an identifier — the label named more than the number counted.
-         [The landing review, finding 4.]) What remains is **25 GUI sites and 4
-         `atlasRgbAniso`**.
+         [The landing review, finding 4.]) After part 1 what remained was **25 GUI sites and
+         4 `atlasRgbAniso`**; after part 2, **five `atlasRgbAniso` and nothing else**.
 
          **THE FIND IS A NEAR MISS, and it is THE NAMED RULE's mirror image.**
          `tagpu_r3d_atlas_mirror_rgb_want` is named for the read-back and is also **the only
@@ -2525,20 +2534,39 @@ that a count which grows is the plan catching up with the work.) The row was
          `tagpu_vk_unit.c` stands a frame down on `h.atlasRgbAniso != s_twinAniso`. It is the
          field 11-5e-2 labelled `[PINNED 0]` and unpinning it is 11-5e-2c's.
 
-         **THE GUI KEEPS ITS MIRROR, and that is a decision rather than a remainder.**
+         **THE GUI KEPT ITS MIRROR THROUGH PART 1, and that was a decision rather than a
+         remainder.**
          `tagpu_gui_surf.c` never calls `tagpu_gaf_atlas_restore_vk`, so `tagpu_vk_gui.c` has
          **no list path to fall back to**; its `h.colourTwins` is gated on `s_colValid`, which
          is declared `static int s_colValid = 0;` and has no other writer, so that gate never
          fires either — and `twin_sprite` and `twin_copy` both `return 0` UNCONDITIONALLY, so
          no op ever carries `TAGPU_GUICOL_ON` and `tagpu_vk_gui.c` tests a bit nothing sets.
-         Three independent pins, so removing its `atlasRgb` changes no behaviour: it is a
+         Three independent pins, so removing its `atlasRgb` changed no behaviour: it is a
          **protocol change**, not a feature removal and not a plain deletion, because 16 live
-         sites read fields whose shape moves and there is no list to put in their place. Until
-         it goes, so do `tagpu_gaf.c`'s 40 `mirrorRgb*` sites, `tagpu_gaf.h`'s 10, and
-         **`tagpu_gaf.c`'s ONE remaining GL site** — `xwglGetProcAddress` inside `getgl`, the
-         only part of 11-5e-2b that moves this gate's own count. This row said "12 wide GL
-         sites" until the tool's wide pattern was corrected: eleven of them were `glog`, the
-         file's own logger ([gpu-status](gpu-status.html) §2.77).
+         sites read fields whose shape moves and there was no list to put in their place.
+
+         **PART 2 DID IT — 2026-09-19** ([gpu-status](gpu-status.html) §2.78). The consumer
+         (`tagpu_vk_gui.c`'s whole `s_ar*` image and its two upload blocks), the hand-over fields
+         (`tagpu_gui.h`), the arm and the publication (`tagpu_gui_surf.c`), and then the producer
+         itself: `tagpu_gaf.c`'s 40 `mirrorRgb*` sites, `tagpu_gaf.h`'s 10, and **`tagpu_gaf.c`'s
+         ONE remaining GL site** — `xwglGetProcAddress` inside `getgl` — which is the only part
+         of 11-5e-2b that moves this gate's own count: wide **323 → 322**, narrow unchanged at
+         252. This row said "12 wide GL sites" until the tool's wide pattern was corrected:
+         eleven of them were `glog`, the file's own logger
+         ([gpu-status](gpu-status.html) §2.77). With the last GL name out, `tagpu_gaf.c` drops
+         `#include "opengl_utils.h"` and includers go **six → five**, every survivor being
+         `opengl_utils.c` itself, `render_gdi.c`'s `g_oglu_version` read, or one of the three
+         files behind escalation reason 1.
+
+         **AND THE UI ATLAS IS NOW A CONSUMER OF NOTHING.** It has no read-back and no list,
+         because `tagpu_gui_surf.c` never arms `tagpu_gaf_atlas_restore_vk`; restored art cannot
+         reach a UI sprite by any route in the tree. That costs nothing today — `twin_sprite` and
+         `twin_copy` have returned 0 unconditionally since 11-4b — but it is a gap this gate
+         opened and cannot close, because arming a list for the UI is new work, not a deletion.
+         **Left standing with it, deliberately:** the colour-twin SUBSYSTEM — `colourTwins`, the
+         per-twin `colImg`/`colView`/`fb2`, the `TAGPU_GUICOL_*` bits, the second render pass and
+         the four `*2` pipelines. Dead by the same pins, holds **no GL**, and so belongs to
+         whoever decides the colour question rather than to this gate.
 
          **MEASURED over nine runs** (`e5a`, `one-unit`, 1024×768, `restorevk.on`): five of
          `main`'s `ddraw.dll` and four of this branch's, at `--maxfps 0` and `--maxfps 30`.
@@ -2571,8 +2599,9 @@ that a count which grows is the plan catching up with the work.) The row was
          `unsigned int`. The definition was the odd spelling out; the change is type-identical
          and the object file proves it (`T` in its own object, `U` in its one caller). Every
          remaining includer now has a stated reason: `opengl_utils.c` defines the entry points,
-         `render_gdi.c` reads `g_oglu_version`, `tagpu_gaf.c` is 11-5e-2b's, and the other
-         three are escalation reason 1. —
+         `render_gdi.c` reads `g_oglu_version`, `tagpu_gaf.c` is 11-5e-2b's — **taken by its
+         part 2 on 2026-09-19, so the list is five** — and the other three are escalation
+         reason 1. —
        named rather than counted, because a count goes stale the moment a landing empties
        another file, and because the first version of this line said *five*. That fifth was
        `tagpu_gui_surf.c`, and it was an artefact of the measurement: the script tested
@@ -2609,7 +2638,12 @@ that a count which grows is the plan catching up with the work.) The row was
      includes `tagpu_restoreglsl.h`, still resolves `glReadPixels` through `wglGetProcAddress`,
      and still names entry points in a refusal message. Those go with the RGB mirror — and
      11-5e-2b part 1 did **not** move them, because the mirror's last consumer is the GUI
-     atlas and that is a protocol change rather than a deletion. [11-5e-2's review.] **11-5e-2 took its 288; the remaining 252 are `opengl_utils.c` (31),
+     atlas and that is a protocol change rather than a deletion. [11-5e-2's review.]
+     **PART 2 MOVED THEM, 2026-09-19**: `tagpu_gaf.c`'s wide count is now 0 as well as its
+     narrow one, the file includes neither `opengl_utils.h` nor any GL name, and the tree-wide
+     wide total is **322**. `tagpu_restoreglsl.h` it still includes, and that is correct — the
+     name reads as GL and the header is not, supplying `TAGPU_RGLSL_FRAME` and
+     `tagpu_rglsl_tileable`, both live and neither GL. **11-5e-2 took its 288; the remaining 252 are `opengl_utils.c` (31),
      `tagpu_hires_draw.c` (104), `tagpu_shadow.c` (87) and `tagpu_hires.c` (30)**, and every
      one of the four is behind escalation reason 1 or waiting on it. The first draft of this
      line said "the two files below" and left the arithmetic one file short: `tagpu_hires.c`

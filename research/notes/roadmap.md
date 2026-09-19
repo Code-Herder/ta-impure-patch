@@ -3276,23 +3276,34 @@ by construction. Re-measured on three runs after that fix: within a run 0 px ove
 the same-build cross-run noise floor 44 px, and `main` vs this build **44 px with zero outside
 the minimap** — the noise floor to the pixel, with the restore log lines byte-identical. The RGB read-back and
 all three producers of the `restored` flag were deferred to `11-5e-2b`);
-**`11-5e-2b` the restored twin's read-back — part 1 landed 2026-09-19**: `glReadPixels` was its
+**`11-5e-2b` the restored twin's read-back — BOTH PARTS landed 2026-09-19**: `glReadPixels` was its
 only route and `oglu_load_dll` has no caller, so `a->mirrorRgb` was NULL and `atlasRgb` NULL on
 every published frame of every atlas. The consumers in `tagpu_vk_unit.c`, `tagpu_vk_feat.c`,
 `tagpu_vk_fx.c` and `tagpu_vk_terr.c`, the publications, the arm/step pairs and the hand-over
-fields in all four headers go — **`atlasRgb*` 112 code sites → 29, `mirrorRgb`-or-`mirror_rgb`
-102 → 57** (both substring-counted over comment-masked source), the
-remainder being 25 GUI sites and 4 `atlasRgbAniso` (kept: it is the other lane's sampler ratio
-and the unit pass's filter test). **The find is a near miss and it is THE NAMED RULE's mirror
+fields in all four headers go in **part 1** — `atlasRgb*` 112 code sites → 29, 30 after its own
+review's fix, `mirrorRgb`-or-`mirror_rgb` 102 → 57 (both substring-counted over comment-masked
+source), the remainder being 25 GUI sites and 4 `atlasRgbAniso` (kept: it is the other lane's
+sampler ratio and the unit pass's filter test). **Part 2 finishes it: `atlasRgb*` → 5, every one
+`atlasRgbAniso`, and `mirrorRgb`-or-`mirror_rgb` → 0.** **The find is a near miss and it is THE NAMED RULE's mirror
 image**: `tagpu_r3d_atlas_mirror_rgb_want` is named for the read-back and was also the only
 caller of `tagpu_gaf_atlas_restore_vk` for the unit atlas, so deleting it with the thing it is
 named for would have left that atlas with no list and every restored frame standing down —
 silently, and invisibly to a pixel A/B. It survives as `tagpu_r3d_atlas_restore_want`. **The GUI
-keeps its mirror**: three independent pins already make its colour twins unreachable
-(`s_colValid` has no writer, `twin_sprite`/`twin_copy` both `return 0` unconditionally, and
-`atlasRgb` is NULL), so removing them changes no behaviour — but `tagpu_gui_surf.c` never arms
-the list, so it is a **protocol change** for 16 live sites with nothing to put in their place.
-With it waits `tagpu_gaf.c`'s 40 sites and its ONE real GL site. Measured over
+kept its mirror through part 1**: three independent pins already make its colour twins
+unreachable (`s_colValid` has no writer, `twin_sprite`/`twin_copy` both `return 0`
+unconditionally, and `atlasRgb` is NULL), so removing them changes no behaviour — but
+`tagpu_gui_surf.c` never arms the list, so it is a **protocol change** for 16 live sites with
+nothing to put in their place, which is why it got its own part. **Part 2 took it** — the
+`s_ar*` image and both upload blocks in `tagpu_vk_gui.c`, the hand-over fields, the arm and the
+publication — **and the producer with it**: `tagpu_gaf.c`'s 40 `mirrorRgb*` sites, `tagpu_gaf.h`'s
+10, and the file's **ONE real GL site** (`xwglGetProcAddress` inside `getgl`), so
+**`tagpu_gaf.c` is now GL-free on both counts**, drops `#include "opengl_utils.h"` (includers
+six → five) and the tree-wide wide total goes **323 → 322**, narrow unchanged at 252. **The gap
+part 2 opens and names**: the UI atlas now has neither a read-back nor a list, so restored art
+has no route to a UI sprite at all — free today (the first two pins predate it) and new work,
+not a deletion, to give back. Left standing deliberately with it: the colour-twin SUBSYSTEM
+(`colourTwins`, `colImg`, the `TAGPU_GUICOL_*` bits, the second pass, the four `*2` pipelines),
+dead by the same pins and holding no GL. Measured over
 **nine runs**, five of `main`'s DLL and four of the branch's: 0 px within a run (27 pairs), **0
 px outside the minimap in all 20 cross-build pairs**, and four of those **0 px over the whole
 frame**. The fixture is bimodal — two images 48 px apart, one unit's off-screen dot — and
@@ -3317,12 +3328,13 @@ run on both trees: `tagpu_hires_draw.c` 104, `tagpu_shadow.c` 87, `opengl_utils.
 unchanged), **and every one of the four is behind escalation reason 1 or waiting on it**, so
 11-5e cannot finish the gate. `tagpu_native.c`, `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c`,
 `tagpu_scaffold.c`, `tagpu_posedraw.c`, `tagpu_overlay.c`, `tagpu_text.c`, `tagpu_ftime.c` and
-`tagpu_gaf.c` make no GL call — though `tagpu_gaf.c` is not GL-*free*: 0 narrow, **1 wide**
-(`xwglGetProcAddress` in `getgl`), which goes with the RGB mirror and so waits on 11-5e-2b's GUI
-part rather than on its first. **That figure was 12 until 2026-09-19**, when eleven of the twelve
-turned out to be `glog`, this fork's own logger, matched because the tool's wide pattern relaxed
-NARROW's capital for the bare `gl` prefix; the tree-wide wide total goes 366 → 323 and the narrow
-one is unchanged at 252 ([gpu-status](gpu-status.html) §2.77). (11-5e-1 had left it at 540 in six files, 592 less its
+`tagpu_gaf.c` make no GL call — and **since 11-5e-2b part 2, `tagpu_gaf.c` is GL-*free* as well**:
+its wide count went 1 → 0 with the RGB mirror's `xwglGetProcAddress`, so the tree-wide wide total
+is **322** and the four files above are the whole surface on both counts. **That wide figure for
+`tagpu_gaf.c` was 12 until 2026-09-19**, when eleven of the twelve turned out to be `glog`, this
+fork's own logger, matched because the tool's wide pattern relaxed NARROW's capital for the bare
+`gl` prefix; the tree-wide wide total went 366 → 323 → 322 and the narrow one is unchanged at 252
+([gpu-status](gpu-status.html) §2.77, §2.78). (11-5e-1 had left it at 540 in six files, 592 less its
 own 52.) **The figures are reproducible on any tree with `tools/gl-sites.py`**, committed by
 11-5e-2 because an exit condition that each landing re-derives with its own script is an
 assertion rather than a gate.

@@ -12994,7 +12994,10 @@ tombstone prose does not inflate either figure:
 | `tagpu_feat.h` / `tagpu_fx.h` / `tagpu_terr.h` | 3 each | 0 | the same three fields each |
 | `tagpu_vk_gui.c` / `tagpu_gui_surf.c` / `tagpu_gui.h` | 16 / 6 / 3 | unchanged | **the GUI, deliberately** |
 
-The 29 that remain are **25 GUI** and **4 `atlasRgbAniso`**. On the producer side,
+The 29 that remain are **25 GUI** and **4 `atlasRgbAniso`**, counted at this docs commit —
+**this landing's own review then added a fifth `atlasRgbAniso` site** (`s_pub.atlasRgbAniso =
+0.0f;` in `tagpu_posedraw.c`'s else branch, its latent-clarity finding), so the figure on `main`
+is **30**, and §2.78 carries the count forward from there. On the producer side,
 `mirrorRgb`-or-`mirror_rgb` as a SUBSTRING — both spellings, so the `tagpu_*_mirror_rgb*`
 function names and `s_mirrorRgbAsked` are counted and not only the struct fields — goes
 **102 → 57**: `tagpu_render3do.c` loses 16, `tagpu_fx.c` 12, `tagpu_feat.c` 11 and
@@ -13203,3 +13206,110 @@ patterns and fixed by narrowing one of them. The lesson the first time was "name
 The lesson this time is **look at what the pattern matched**: `tools/gl-sites.py --list <file>`
 prints every site it counts, and one run of it against `tagpu_gaf.c` would have shown eleven
 `glog` calls at any point in the last three landings.
+
+### 2.78 The UI's read-back, the producer behind it, and a file that goes GL-free on both counts — landing 11-5e-2b (part 2)
+
+§2.76 took the restored twin's `glReadPixels` mirror out of the four **world** atlases, each of
+which had a live published-list replacement to fall back on. It left the **UI** atlas standing
+and said so in terms: that one has no list, so removing its mirror moves a protocol rather than
+a feature, and it deserved its own landing. This is that landing, and it takes the producer and
+`tagpu_gaf.c`'s last GL call with it.
+
+#### THREE PINS, NOT ONE — why nothing observable changes
+
+The world lanes stood down for one reason (`atlasRgb` was NULL). The UI lane stands down for
+**three independent** ones, each re-checked against the tree at `c76b56d`:
+
+| pin | evidence |
+|---|---|
+| `colourTwins` is always 0 | `s_colValid` is declared `static int s_colValid = 0;` at `tagpu_gui_surf.c:161` and that declaration is its **only writer** — the file's other nine occurrences are one read (`:2007`, `s_mHand.colourTwins = s_colValid ? 1 : 0;`), one counter dump (`:2213`) and seven lines of prose |
+| no op ever carries `TAGPU_GUICOL_ON` | `twin_sprite` (`:715`) and `twin_copy` (`:862`) both `return 0` **unconditionally** — since 11-4b, when the terms they computed (`t->rgb`, `s_atlas.rgb`) became GL object names that no longer exist. So `tagpu_vk_gui.c` has been testing a bit nothing sets |
+| `atlasRgb` was NULL on every frame | §2.76's premise chain, unchanged: `oglu_load_dll` has no caller → opengl32.dll is never in the process → `getgl` resolves nothing → `tagpu_gaf_atlas_mirror_rgb` returns at its entry guard before its own `calloc` |
+
+Any **one** of those makes the removed code unreachable. That is worth stating precisely because
+it is the difference between this landing and a feature removal, and part 1's first draft got it
+wrong in the other direction — it called the GUI's mirror "a feature" on the strength of the
+third pin alone, when the first two had already made the whole colour route dead two landings
+earlier.
+
+#### WHAT WENT
+
+| file | what left |
+|---|---|
+| `tagpu_vk_gui.c` | the `s_ar*` RGBA8 image (`s_arImg`/`s_arMem`/`s_arView`/`s_arDim`/`s_arRows`/`s_arHave`/`s_arNeedClear`/`s_arSerial`), its creation clear, its shrink clear, its share of the staging reservation, both `if (arUp)` blocks — staging fill, and barrier/clear/copy — and the `atlasRgb` bounds check. Binding 41 now takes `VK_NULL_HANDLE` where it took `on ? s_arView : VK_NULL_HANDLE` |
+| `tagpu_gui.h` | `atlasRgb`, `atlasRgbRows`, `atlasRgbSerial` out of the thread hand-over |
+| `tagpu_gui_surf.c` | the arm/step pair (`tagpu_gaf_atlas_mirror_rgb` at `:2123`) and the publication (`:2325`, with its else-branch zeroing at `:2329`) — line numbers as `main` has them |
+| `tagpu_gaf.c` | `tagpu_gaf_atlas_mirror_rgb`, `_step`, `rgb_mirror_zeroed`, `getgl`, `fetch_gl`, `x_glReadPixels`, the `PFN_READPIXELS` typedef, the three `mirrorRgb*` clear sites, and `#include "opengl_utils.h"` |
+| `tagpu_gaf.h` | every `mirrorRgb*` field and both function declarations. `rgbAniso` stays — it is the other lane's sampler ratio, `[PINNED 0.0f]`, and unpinning it is 11-5e-2c's |
+
+Two refusals lost a term rather than a branch, which is the shape to check twice: `if
+(h.colourTwins && !h.atlasRgb)` became `if (h.colourTwins)`, and `(o->col & TAGPU_GUICOL_ON) &&
+!h.atlasRgb` became `(o->col & TAGPU_GUICOL_ON)`. Both are type-identical to what they evaluated
+to, because the dropped term was constant-true; the first pin says the surviving term is
+constant-false anyway.
+
+#### THE COUNTS, comment- and string-masked as before
+
+| pattern | main (`5d34cdb`) | after | where the remainder is |
+|---|---|---|---|
+| `mirrorRgb`-or-`mirror_rgb`, substring | **57** — `tagpu_gaf.c` 40, `tagpu_gaf.h` 10, `tagpu_gui_surf.c` 7 | **0** | nothing. The spelling leaves the tree |
+| `atlasRgb`, substring **and** `\b`-anchored | **30** — `tagpu_vk_gui.c` 16, `tagpu_gui_surf.c` 6, `tagpu_gui.h` 3, `tagpu_posedraw.c` 2, `tagpu_vk_unit.c` 2, `tagpu_posedraw.h` 1 | **5** | all five are `atlasRgbAniso`: `tagpu_posedraw.h:425`, `tagpu_posedraw.c:667` and `:678`, `tagpu_vk_unit.c:1965` and `:1971` |
+| `tools/gl-sites.py` narrow / wide | 252 / **323** | 252 / **322** | the four files of escalation reason 1 |
+
+The `atlasRgb` row starts at 30 where §2.76 reported **29**, and the extra site is one §2.76's
+own review put there: the fix for its latent-clarity finding added `s_pub.atlasRgbAniso = 0.0f;`
+to `tagpu_posedraw.c`'s else branch, so the count moved between the docs commit (`1c4dced`, 29)
+and the review commit (`6a00b8d`, 30). Both figures are right about their own tree; this one is
+right about `main`. Counted at every tip of the landing so the arithmetic can be checked:
+`67271d9` 112, `1f329d0` 29, `1c4dced` 29, `6a00b8d` 30, `5d34cdb` 30, `c76b56d` 5.
+
+#### `tagpu_gaf.c` IS NOW GL-FREE ON BOTH COUNTS, WHICH IS A DIFFERENT CLAIM FROM ZERO CALLS
+
+The plan has said since 11-5e-2 that this file is where "makes no GL call" and "free of GL" come
+apart: its narrow count was already 0, and its wide count was 1 — the `xwglGetProcAddress` inside
+`getgl`, resolving `glReadPixels` through WGL. That one is gone with the mirror, so the file now
+names **no GL type, constant or entry point**, and `opengl_utils.h` goes with it: includers
+**6 → 5**, and every survivor has a stated reason —
+
+| includer | why it still includes it |
+|---|---|
+| `opengl_utils.c` | it defines the entry points |
+| `render_gdi.c` | it reads `g_oglu_version` |
+| `tagpu_hires.c` (30 sites), `tagpu_hires_draw.c` (104), `tagpu_shadow.c` (87) | **escalation reason 1** — these three plus `opengl_utils.c` are why 11-5e cannot finish on its own |
+
+**`tagpu_restoreglsl.h` is NOT one of them and the include stayed.** It reads as a GL header from
+its name and it is not: what `tagpu_gaf.c` takes from it is `TAGPU_RGLSL_FRAME` and
+`tagpu_rglsl_tileable`, both still live, neither GL. A deletion pass that reads names would have
+taken it — which is part 1's near miss (§2.76) in its other form, a name that suggests a
+dependency the file does not have, rather than a name that hides one it does.
+
+#### AND THE UI NOW HAS NO ROUTE TO CLASSIC++ COLOUR AT ALL — a named gap, not a silent one
+
+Every world atlas that lost its read-back had somewhere to go: `tagpu_gaf_atlas_restore_vk` is
+armed for the unit, feature and effects atlases, and the other lane paints their twins on the
+device from the published list. **`tagpu_gui_surf.c` never arms it.** So after this landing the
+UI atlas has no read-back and no list, and restored art cannot reach a UI sprite by any route in
+the tree.
+
+Nothing regresses today, because the first two pins above already made that art unreachable back
+at 11-4b. But the plan said *"the UI atlas is a fifth consumer and keeps its read-back"*, and
+after this landing that sentence has no referent — the fifth consumer has no feed at all. Giving
+the UI colour again means **arming the list for it and consuming it**, which is new work of the
+same shape as 11-5e-2c rather than anything a deletion pass can leave behind. Stated here so the
+next reader finds the gap written down instead of inferring it from an empty branch.
+
+#### LEFT STANDING DELIBERATELY
+
+The UI's colour-twin **subsystem** — `colourTwins`, the per-twin `colImg`/`colView`/`fb2`, the
+`TAGPU_GUICOL_*` bits, the second render pass and the four `*2` pipelines — is untouched. It is
+dead by the first two pins, it holds **no GL**, and it is a different question from the read-back:
+this gate is about GL, and a subsystem that answers to the colour decision above should be
+removed by whoever makes that decision. Filed as its own item rather than swept in here.
+
+#### GATES
+
+`make -C tagpu/ddraw -j$(nproc)` clean; `thread-split: clean — 34 listed file(s)`; `spirv: 49
+shaders, 33 programs, headers current`. The function inventory against `main` shows exactly the
+six intended removals in `tagpu_gaf.c` and **no function added or removed** in `tagpu_vk_gui.c`
+or `tagpu_gui_surf.c` — the check that a scripted cut did not swallow a neighbour, which is a
+trap this gate has paid for before.
