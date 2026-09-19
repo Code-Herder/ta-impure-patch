@@ -1993,12 +1993,65 @@ that a count which grows is the plan catching up with the work.) The row was
        shows `FPS59` top-left and the scaffold's blue→red ramp on the blocked cells, which is
        its fragment shader's exact gradient.
 
-       **Observed and NOT attributed to this landing**: with the scaffold armed the census also
-       reports `unit=0`, and the tank bodies are absent from that grab while their health bars
-       remain. Disarming it returns `unit=1`. The scaffold is an occlusion input to the unit
-       shader (`tagpu_native.c:508`, *"scaffold occlusion: nearer stamped rows hide this
-       fragment"*), `tagpu_native.c` is untouched by 11-4c, and the diff to `tagpu_scaffold.c`
-       contains no non-GL change. Named rather than explained.
+       **Observed, and now ATTRIBUTED — to something older than this landing.** With the
+       scaffold armed the census also reports `unit=0`, and the tank bodies are absent from
+       that grab while their health bars remain; disarming it returns `unit=1`. The scaffold is
+       an occlusion input to the unit shader (`tagpu_native.c:508`, *"scaffold occlusion:
+       nearer stamped rows hide this fragment"*), and `tagpu_native.c` is untouched by 11-4c.
+
+       The landing's own review closed the rest, **by construction rather than by one more
+       run**. Every construct 11-4c removed from `tagpu_scaffold_frame` sits inside
+       `if (gl_draws)`, or is `if (gl_draws && s_state == 2) return;`, or is the
+       `const int gl_draws = !tagpu_vk_owns_present();` declaration itself — and `gl_draws` is
+       0 at this site by the ordering at the top of this plan. Under `gl_draws == 0` deleting a
+       never-entered block and a never-taken early return is an EXACT transformation, not a
+       nearly-exact one. Everything else in the file is byte-identical to the pre-landing
+       version: `tagpu_scaffold_overlay`, `tagpu_scaffold_frameinfo`, `stamp_gaf` and
+       `stamp_px` were extracted from both revisions with a masked brace matcher and hash to
+       the same value, and `tagpu_scaffold_frame`'s gather, its `s_pubBuf`/`s_pubW`/`s_pubH`/
+       `s_pubRect`/`s_pubRows` publication and its A/B capture are unchanged. **So `unit=0`
+       with the scaffold armed reproduces at the pre-landing tree, and 11-4c cannot be its
+       cause.** What it actually is remains open and belongs to whoever next arms the scaffold.
+
+       **What the 64 pairs did and did not cover, said plainly.** They were taken on the usual
+       fixture, which leaves `scaf=0 fps=0` — so the two passes this landing changed most
+       contributed no pixels to the only pixel-exact measurement in it. The armed run was
+       checked by eye (`FPS59`, the ramp) and not by diff. A regression confined to the armed
+       path would have passed every gate here; the argument above is what stands in for that,
+       and it is an argument about the shape of the diff rather than about a picture.
+
+       **THE REVIEW'S OTHER FINDING IS THE ONE WORTH CARRYING FORWARD: a uniform sweep can
+       remove a trap from one file and leave the identical trap in the next.** 11-4c deleted
+       `tagpu_fps.c`'s `s_state` for the exact reason the taxonomy gives — dead state that
+       feeds a GUARD is a trap, because nothing could raise it once the bring-up went — and in
+       the same landing left `tagpu_scaffold.c`'s `s_state`, plus `s_texW`/`s_texH`, write-only
+       in precisely the same way. Two surviving comments still presented it as live state, one
+       of them inside `tagpu_scaffold_frameinfo`, **the function the 4b-1 review had already
+       fixed once for testing it**. The failure that was one edit away: a later reader sees the
+       static still declared and still assigned, reads it as live state that merely happens to
+       be 0, and re-adds the readiness guard; `s_state` can never reach 1, so `frameinfo`
+       returns 0 forever and the unit shader's occlusion input silently loses its rows. All
+       three statics are gone and the comments now say there is no state left to ask.
+
+       The same sweep left `tagpu_posebake.c`'s last three GL calls —
+       `glDeleteVertexArrays` and two `glDeleteBuffers`, each guarded by a `vao`/`vbo` whose
+       only writer was the bring-up the landing deleted, hence permanently false. Removed;
+       `tagpu_posebake_glreset` is the generation bump that was always the API-independent part
+       of it, and the file now has no GL call, type, constant or include. The FIELDS stay,
+       because `tagpu_posedraw.c` still reads `m->vao` — and its own guard,
+       `if (!tagpu_vk_owns_present() && !m->vao) return NULL;`, now has BOTH terms dead. That
+       one is 11-5's, and it is exactly the kind of thing 11-5 has to look for rather than
+       inherit.
+
+       **And the finding with the real downside was about prose.** Deleting the GL half orphans
+       the comments that explain the CPU mirror — "the very rows the line above hands GL", with
+       no line above and nothing sampling `tex` any more. Read today they assert a property of
+       nothing, which makes the mirror `memcpy` look like redundancy to remove; it is the only
+       copy the art has. Each now states what the mirror IS rather than what it mirrored, and
+       says outright that deleting it deletes the sprite. **The general rule for the rest of
+       this plan: when a landing deletes one half of a pair, the surviving half's comment is
+       part of the diff, not documentation debt** — it is what stops the next landing deleting
+       the half that is load-bearing.
 
      **`tagpu_text.c` and `tagpu_hires.c` are NOT in 11-4 after all.** They have zero lane
      gates, which is the shape that made `tagpu_shadow.c` and `tagpu_hires_draw.c` an
@@ -2081,6 +2134,46 @@ that a count which grows is the plan catching up with the work.) The row was
      remain (`opengl_utils.c`'s own `oglu_load_dll`, now called by nothing; `render_gdi.c`'s
      `g_oglu_version`; `tagpu_ftime.c`'s `xwglGetProcAddress`). `render_ogl.c`, `render_ogl.h`
      and the two capture verbs left this set in 11-2.
+
+     **SURVEYED 2026-09-19, while 11-4c's review ran, and the shape is better than the row
+     assumed. Three facts, each measured rather than estimated:**
+
+     1. **`tagpu_restoreglsl.c` — 249 GL call sites, the largest GL file left — is ALREADY
+        unreachable on this lane, by an ordering, and both of its producers say so.** The GAF
+        path bails at `tagpu_gaf.c`'s `if (a->restoreFailed || !a->tex || !pal) return;`, and
+        `a->tex` is 0 for the life of the process since 11-4c; so no job is created, `a->rgb`
+        is never made, and `twin_mips` and `dump_if_armed` are unreachable behind the same
+        gate. The terrain path bails at `tagpu_terr.c`'s `restore_step`, on `!s_atlasTex`, and
+        `s_atlasTex` is created only inside `if (!tagpu_vk_owns_present())`. The remaining
+        `tagpu_rglsl_step()` calls in `tagpu_native.c` and `tagpu_gui_surf.c` step a scheduler
+        with no jobs in it. **This is what makes the deletion statable**: not "nothing seems to
+        call it", but "every producer of its inputs has already stood down, and here is the
+        gate each one stops at". It also means the file's 249 calls are not 249 units of work.
+     2. **Five files already make no GL call at all** — counted with comments and string
+        literals masked, because the raw grep is wrong in both directions here (`glyph*` in
+        `tagpu_gui_surf.c` matches, `x_glGenQueries(` in `tagpu_ftime.c` does not).
+        `tagpu_scaffold.c`, `tagpu_fps.c`, `render_gdi.c` and `tagpu_gui_surf.c` have no GL
+        call, no GL type and no GL constant left, so their `opengl_utils.h` include is pure
+        residue; `tagpu_render3do.c` has none either except `GLuint` on two accessors, and one
+        of those — **`tagpu_r3d_atlas_texref`, with no caller anywhere** — is the same shape as
+        the `tagpu_scaffold_texref` 11-4c deleted. (`tagpu_posebake.c` was the sixth and its
+        include went with 11-4c's review fix.) That is a small, purely subtractive first step
+        with a build gate on it, and it makes the remaining includer list an honest measure of
+        the GL surface instead of an overstatement.
+     3. **The four surviving world-pass `init_gl` calls are each inside a lane gate their own
+        comments quote** — `tagpu_feat.c`, `tagpu_fx.c` and `tagpu_terr.c` under
+        `if (!tagpu_vk_owns_present())`, `tagpu_native.c` under `if (gl_draws)`. The fifth,
+        `tagpu_restoreglsl.c`'s, is covered by (1). The sixth is `tagpu_shadow.c`'s, which is
+        NOT lane-gated — and does not need to be, because **`tagpu_shadow_begin` has no caller
+        anywhere in the tree**: every remaining hit is prose or its own declaration. See the
+        escalation note on that file; this is the measurement behind it.
+
+     **Also inherited from 11-4c's review:** `tagpu_text_tex()` (`tagpu_text.c:590`, nine GL
+     calls) lost its last caller in 11-4c, when the `glBindTexture` that used it went out of
+     `tagpu_fps.c`. Nothing was lost with it — the Vulkan-facing counter is `s_agen`, bumped by
+     the atlas writer, not by the accessor — and this row already scopes the GL-object
+     accessors here; recording it only because the sentence predates the landing that orphaned
+     it.
    * **11-6 — the exit condition.** `renderer=gdi` documented and MEASURED as the stock
      reference, with the residue named rather than waved at.
 

@@ -11450,10 +11450,22 @@ everywhere). The default fixture leaves `scaf=0 fps=0`, so both were armed to ex
 the census goes to `7 pass(es) drew … scaf=1 … fps=1`, and a grab shows `FPS59` top-left and
 the scaffold's blue→red ramp over the blocked cells — its fragment shader's exact gradient.
 
-**Observed, not attributed**: with the scaffold armed the census also reports `unit=0` and the
-tank bodies are absent while their health bars remain; disarming returns `unit=1`. The scaffold
-is an occlusion input to the unit shader (`tagpu_native.c:508`), `tagpu_native.c` is untouched
-by this landing, and the `tagpu_scaffold.c` diff contains no non-GL change.
+**Observed, and attributed to something older than this landing.** With the scaffold armed the
+census also reports `unit=0` and the tank bodies are absent while their health bars remain;
+disarming returns `unit=1`. The scaffold is an occlusion input to the unit shader
+(`tagpu_native.c:508`), and `tagpu_native.c` is untouched by this landing.
+
+The landing's review closed the rest **by construction**: every construct removed from
+`tagpu_scaffold_frame` is inside `if (gl_draws)`, or is `if (gl_draws && s_state == 2) return;`,
+or is the `gl_draws` declaration — and `gl_draws` is 0 here by the ordering, so deleting a
+never-entered block and a never-taken early return is an exact transformation. The rest of the
+file hashes identical to the pre-landing revision (`tagpu_scaffold_overlay`,
+`tagpu_scaffold_frameinfo`, `stamp_gaf`, `stamp_px`, extracted with a masked brace matcher).
+`unit=0` therefore reproduces before the landing too.
+
+**And what the 64 pairs did not cover:** the fixture leaves `scaf=0 fps=0`, so the two passes
+this landing changed most put no pixels into the only pixel-exact measurement. The armed run was
+eyeballed, not diffed. A regression confined to the armed path would have passed every gate.
 
 ## 4. What the work taught us
 
