@@ -1805,6 +1805,103 @@ that a count which grows is the plan catching up with the work.) The row was
      `tagpu_text.c`, `tagpu_fps.c`, `tagpu_gaf.c`, `tagpu_posebake.c`, `tagpu_scaffold.c`,
      `tagpu_hires.c`, `tagpu_overlay.c` — the rest of the 1 233. Shown by: the UI A/B, and
      `tacli ui` still answering on every lane.
+
+     **IT IS NOT ONE LANDING AND IT IS NOT ONE SHAPE [surveyed 2026-09-18, after 11-3].**
+     Landing 11-3 had one seam per file — a `gl_draws` latch and a draw block under it. This
+     one has **65 sites in three different shapes**, and the shapes matter because they cost
+     different things to remove:
+
+     | shape | what it is | what removing it costs | count |
+     |---|---|---|---|
+     | `if (gl_draws) { … }` | 11-3's shape: a draw half inside a function that also gathers | delete the block, drop the latch | 45 |
+     | `if (!tagpu_vk_owns_present()) { … }` | a GL block inside a function doing CPU work too | delete the block, keep the function | 10 |
+     | `if (tagpu_vk_owns_present()) return;` | a whole function that is now a no-op | delete the function **and audit every caller**, which cascades | 10 |
+
+     They are not spread evenly, which is what makes the split obvious rather than arbitrary:
+
+     * **11-4a — `tagpu_mark.c`** (24 sites, 23 of them the uniform `gl_draws` shape). The
+       marker layer: health bars, the cursor, the band box, group digits. `tagpu_vk_mark.c` is
+       a live twin — the census reports `mark=1` — so the halves are separable the way 11-3's
+       were. This is the one to do first, because it is 11-3's shape at a larger scale.
+
+       **DONE [2026-09-18].** 222 lines out, 68 in. `getgl`, `mksh`, `init_gl` and
+       `upload_layer` are gone, with the five `x_gl*` entry points, the program/VAO/VBO/texture
+       statics and the eight uniform locations; `tagpu_mark_glreset` stays on the context-lost
+       cascade for `tagpu_text.c`, which still holds a GL object, and `s_state` stays with it.
+       The gather is untouched: `mk_push` and `mk_draw` still record every bucket and
+       `tagpu_mark_handover` still publishes them.
+
+       **Measured — a cross-build frame diff, which this fixture makes exact.** `selbox-slope`
+       pins the camera and holds three Stumpys, so the presented frame is *static*: two grabs
+       of the same build differ by **0 px of 786 432**. Against that noise floor, HEAD
+       (`315e496`) and this landing differ by **0 px of 786 432, max channel delta 0** at
+       1024x768 — the whole window, not one pass. Also `mark: bars=3` on both builds, `census:
+       6 pass(es) drew (terr=1 feat=1 unit=1 fx=1 mark=1 scaf=0 gui=1 fps=0)`, and the three
+       green health bars visible under the three tanks in the composited window.
+
+       **Not covered by the measurement, and said plainly:** the fixture produced records for
+       the BARS bucket only — `cursor=0 ordtri=0 ordline=0 text=0(lab=0)` throughout, on HEAD's
+       build as much as on this one, so it is the fixture and not the change. What makes that
+       safe to land rather than merely unobserved is that every write to those counters lives
+       in `tagpu_mark_emit_line` / `_emit_tri` / `_emit_text`, and `git diff -U0` shows not one
+       of those lines in the change set: the buckets are filled upstream of everything removed.
+
+       **The single-pass `.ab` lever could not be used and that is by design**, not a fault:
+       `vk: 1 A/B levers claimed this frame and 6 passes drew into it - nothing captured`. A
+       Vulkan frame carries every armed pass at once, so a per-pass capture needs the other
+       five stood down — which changes the frame it is meant to certify. The full-window
+       cross-build diff above answers the same question and is strictly stronger.
+     * **11-4b — `tagpu_gui_surf.c`** (30 sites, all three shapes, 9 of the 10 whole-function
+       stand-downs). The hard one, and the only part where deletion cascades into callers.
+     * **11-4c — `tagpu_fps.c`, `tagpu_gaf.c`, `tagpu_posebake.c`, `tagpu_scaffold.c`**
+       (11 sites between them).
+
+     **`tagpu_text.c` and `tagpu_hires.c` are NOT in 11-4 after all.** They have zero lane
+     gates, which is the shape that made `tagpu_shadow.c` and `tagpu_hires_draw.c` an
+     escalation — but checked directly, they are the opposite case: every entry point still has
+     live external callers, because both are CPU-side **producers** (the glyph feed, the mesh
+     loader) that both lanes consume. Only their GL-object accessors (`_tex`, `_atlas`, `_vao`,
+     `_glreset`) are dead, and those belong to 11-5 with the rest of the GL surface.
+
+     **And a set nobody has scoped yet:** with the draw halves gone, each world pass still
+     carries its GLSL source strings and its `init_gl` — **~800 lines across `tagpu_native.c`,
+     `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c` and `tagpu_posedraw.c`**. The `init_gl` half
+     of that IS unreachable, because `init_gl` is called only inside
+     `if (!tagpu_vk_owns_present())`, and it is neither a draw half (11-3) nor the shared GL
+     entry-point surface as 11-5 words it; its home is 11-5.
+
+     **THE GLSL STRINGS ARE NOT IN THAT SET AND MUST NEVER BE DELETED [corrected 2026-09-18,
+     by 11-4a's build gate].** This paragraph said "all unreachable" and that half of it was
+     wrong. `VS` and `FS` in each pass are the **source of truth for the Vulkan shaders**:
+     `tools/spirv-gen.py` reads them out of the PREPROCESSED translation unit, translates them,
+     and commits the result as `inc/spirv/<pass>.spv.h`, which is what `tagpu_vk_<pass>.c`
+     `#include`s and draws with. They are unreferenced *by C code* and live *as a build input*,
+     which is a distinction no grep for callers can see. 11-4a deleted `tagpu_mark`'s pair
+     along with `mksh` and `init_gl` and the build stopped at once:
+
+     ```
+     spirv-gen: the manifest names tagpu_mark::VS and the source does not have it
+     ```
+
+     That gate — `tools/spirv-check.sh`, an order-only prerequisite of the link — is the only
+     thing standing between "delete the unreachable GL apparatus" and silently retargeting
+     every ported pass's shader. Note what it means for the *shape* of 11-5: a file can be a
+     GL-free pass and still have to keep two `static const char*` at file scope forever.
+
+     **The idiom that leaves, written once here because every remaining part will need it.**
+     With no GL consumer the strings warn as `-Wunused-variable`, and the obvious silencer does
+     not work: `spirv-gen.py`'s `_DECL` regex wants the `=` immediately after the name, so an
+     `__attribute__((unused))` makes the extractor skip the shader — which the manifest then
+     reports as missing, i.e. it fails loudly rather than quietly, but it still fails. What
+     works is a local pragma around the pair, with a comment saying why they are there:
+
+     ```c
+     #pragma GCC diagnostic push
+     #pragma GCC diagnostic ignored "-Wunused-variable"
+     static const char* VS = ...
+     static const char* FS = ...
+     #pragma GCC diagnostic pop
+     ```
    * **11-5 — what is left of the GL entry-point surface.** `opengl_utils.c`,
      `opengl_utils.h`, `openglshader.h`, `tagpu_restoreglsl.c`, and the plumbing users that
      remain (`opengl_utils.c`'s own `oglu_load_dll`, now called by nothing; `render_gdi.c`'s

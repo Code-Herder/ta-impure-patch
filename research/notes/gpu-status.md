@@ -11273,6 +11273,52 @@ the absence of Classic++ soft shadows and replacement-mesh casters permanent unt
 producer exists. That is a decision about the program rather than about dead lines, so it is the
 owner's; the plan's landing 11-3 entry has both readings.
 
+### 2.66 A GL-free pass still owns its GLSL — landing 11-4a of the Vulkan-only plan
+
+`tagpu_mark.c` is the marker layer: health bars, the build cursor, the band box, the order
+markers and the group digits. Landing 11-4a removed its GL draw half — `getgl`, `mksh`,
+`init_gl`, `upload_layer`, the five `x_gl*` entry points, the program/VAO/VBO/texture statics
+and the eight uniform locations — 222 lines out. The gather is untouched: `mk_push` and
+`mk_draw` still record every bucket and `tagpu_mark_handover` still publishes them to
+`tagpu_vk_mark.c`, which draws them. `tagpu_mark_glreset` stays on the context-lost cascade
+because `tagpu_text.c` still holds a GL object; this pass no longer holds one of its own.
+
+**The fact worth carrying out of it: the per-pass GLSL strings are a BUILD INPUT, not dead
+code.** Each ported pass's `VS` and `FS` are the source of truth for its *Vulkan* shader.
+`tools/spirv-gen.py` reads them out of the preprocessed translation unit, translates them, and
+the committed `inc/spirv/<pass>.spv.h` is what `tagpu_vk_<pass>.c` includes and draws with.
+Deleting them alongside the GL compile helpers — which is what "remove the GL half" reads as —
+retargets the Vulkan pass's shader. It did not get that far only because the build refuses:
+
+```
+spirv-gen: the manifest names tagpu_mark::VS and the source does not have it
+```
+
+`tools/spirv-check.sh` is an order-only prerequisite of the link (`$(TARGET): $(OBJS) | thread-split
+spirv`), so it runs on every build and cannot be skipped by building one object. **A pass can be
+entirely GL-free and still have to keep two `static const char*` at file scope forever** — they
+are unreferenced by C and live as a build input, which is a distinction no search for callers
+can see. With no GL consumer they warn as `-Wunused-variable`, and the obvious silencer is
+wrong: `spirv-gen.py`'s `_DECL` regex wants the `=` immediately after the name, so an
+`__attribute__((unused))` makes the extractor skip the shader. A local
+`#pragma GCC diagnostic ignored "-Wunused-variable"` around the pair is what works, and the
+comment beside it is the point of the pragma.
+
+**Measured.** `scenarios/selbox-slope.json` pins the camera over three held Stumpys, which makes
+the presented frame static: two window grabs of the same build differ by **0 px of 786 432**.
+Against that floor, `315e496` and this landing differ by **0 px of 786 432, max channel delta
+0** at 1024x768 — the whole window. `mark: bars=3` on both builds, `census: 6 pass(es) drew
+(terr=1 feat=1 unit=1 fx=1 mark=1 scaf=0 gui=1 fps=0)`, three green health bars on screen.
+
+**What the fixture did not exercise.** Only the bars bucket produced records:
+`cursor=0 ordtri=0 ordline=0 text=0(lab=0)`, on the HEAD build as much as on this one, so it is
+the fixture and not the change. Every write to those counters is in `tagpu_mark_emit_line` /
+`_emit_tri` / `_emit_text`, none of which appears in the diff — they are filled upstream of
+everything removed. **And the per-pass `.ab` lever cannot certify one pass here by design**: a
+Vulkan frame carries every armed pass at once, so `vk: 1 A/B levers claimed this frame and 6
+passes drew into it - nothing captured`. Standing five passes down would change the frame the
+capture is meant to certify; the full-window cross-build diff answers the same question.
+
 ## 4. What the work taught us
 
 These are the transferable parts — the reasons things are shaped the way they are.

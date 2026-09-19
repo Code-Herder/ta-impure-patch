@@ -3196,7 +3196,13 @@ six passes drawing at `ss=2`. It also put the **build ghost** back on the defaul
 had dropped it, which that landing named at the time -- by lifting the record half above the seam
 as `ghost_record()`; measured at `drawn=2405` with the placement cursor live. `tagpu_shadow.c`
 and `tagpu_hires_draw.c` are held back: for those two the producer *is* the half being deleted,
-and whether to delete it is escalation reason 1, written up in the plan. See the plan's
+and whether to delete it is escalation reason 1, written up in the plan. **11-4a has landed**
+(gpu-status §2.66): `tagpu_mark.c`'s GL draw half, 222 lines, with the marker gather and its
+hand-over untouched — measured as **0 differing pixels of 786 432** between builds on a fixture
+whose frame is static enough that two grabs of the SAME build also differ by 0. It corrected a
+premise the plan was carrying: each pass's GLSL strings are the source of truth for its *Vulkan*
+shader, read at build time by `tools/spirv-gen.py`, so they are a build input rather than dead
+GL apparatus and are not deletable in 11-5 or anywhere else. See the plan's
 item 11 for the parts; 11-1 is the D3D9 renderer, the one member of the deletion set with no
 producer half, and **11-2 is the OpenGL lane itself** — moved in front of the sixteen passes'
 GL draw halves rather than behind them, because lane-last leaves `renderer=openglcore`
