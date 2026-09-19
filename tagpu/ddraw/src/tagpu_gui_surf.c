@@ -105,39 +105,7 @@
 
 extern volatile int g_gui_draw;         /* tagpu_gui_hook.c: the publisher's gate */
 
-typedef void (APIENTRY *PFN_DRAWARRAYS)(GLenum, GLint, GLsizei);
-typedef void (APIENTRY *PFN_FBTEX2D)(GLenum, GLenum, GLenum, GLuint, GLint);
-typedef void (APIENTRY *PFN_UNIFORM4F)(GLint, GLfloat, GLfloat, GLfloat, GLfloat);
-typedef void (APIENTRY *PFN_UNIFORM2F)(GLint, GLfloat, GLfloat);
-typedef void (APIENTRY *PFN_UNIFORM2IV)(GLint, GLsizei, const GLint*);
-typedef void (APIENTRY *PFN_SCISSOR)(GLint, GLint, GLsizei, GLsizei);
-typedef void (APIENTRY *PFN_DISABLE)(GLenum);
-typedef void (APIENTRY *PFN_BLENDFUNC)(GLenum, GLenum);
-typedef void (APIENTRY *PFN_ACTIVETEX)(GLenum);
-typedef void (APIENTRY *PFN_CLEARCOLOR)(GLfloat, GLfloat, GLfloat, GLfloat);
-typedef void (APIENTRY *PFN_CLEAR)(GLbitfield);
-typedef void (APIENTRY *PFN_CLEARBUFFERFV)(GLenum, GLint, const GLfloat*);
-typedef void (APIENTRY *PFN_DRAWBUFFERS)(GLsizei, const GLenum*);
-static PFN_CLEARBUFFERFV x_glClearBufferfv;
-static PFN_DRAWBUFFERS   x_glDrawBuffers;
-static PFN_CLEARCOLOR x_glClearColor;
-static PFN_CLEAR      x_glClear;
-static PFN_DRAWARRAYS x_glDrawArrays;
-static PFN_FBTEX2D    x_glFramebufferTexture2D;
-static PFN_UNIFORM4F  x_glUniform4f;
-static PFN_UNIFORM2F  x_glUniform2f;
-static PFN_UNIFORM2IV x_glUniform2iv;
-static PFN_SCISSOR    x_glScissor;
-static PFN_DISABLE    x_glDisable;
-static PFN_BLENDFUNC  x_glBlendFunc;
-static PFN_ACTIVETEX  x_glActiveTexture;
 
-static void* getgl(const char* n)
-{
-    void* p = xwglGetProcAddress ? (void*)xwglGetProcAddress(n) : NULL;
-    if (!p) { HMODULE gl = GetModuleHandleA("opengl32.dll"); if (gl) p = (void*)GetProcAddress(gl, n); }
-    return p;
-}
 static void slog(const char* s)
 {
     FILE* f = fopen("tagpu.log", "a");
@@ -145,11 +113,13 @@ static void slog(const char* s)
 }
 
 /* ------------------------------------------------------------------ state */
+/* THE GL IDS (`tex`, `fbo`, `rgb`) WENT WITH THE DRAW [landing 11-4b]. What is
+   left is the BOOKKEEPING the mirror op stream needs: which engine surface this
+   twin stands for and how big it is, so `twin_find` can resolve a surface
+   pointer to a slot and the ops can name it. */
 typedef struct TWIN {
     unsigned surf;                      /* the engine surface's pixel base     */
     int w, h;
-    GLuint tex, fbo;
-    GLuint rgb;                         /* Classic++: the colour twin, or 0    */
 } TWIN;
 static TWIN   s_twins[MAX_TWINS];
 static int    s_ntwins = 0;
@@ -157,18 +127,8 @@ static unsigned s_presented = 0;        /* the last PK_FRAME's surface         *
 
 static int    s_gl = 0;                 /* 0 none, 1 ready, 2 failed           */
 static GLuint s_sprProg, s_cpyProg, s_layProg, s_vao, s_vbo, s_palTex;
-static GLint  s_uSprSize, s_uSprCK, s_uSprRestored;
-static GLint  s_uCpySize, s_uCpyOff, s_uCpyHasCol;
-static GLint  s_uLaySize, s_uLayStrict, s_uLayKey, s_uLayVp, s_uLayCursor, s_uLayColOn;
-static GLint  s_uLayVpKey = -1;         /* the key to REFUSE inside the viewport, or -1 */
-static GLint  s_uLayCursOurs;
-static GLint  s_uLayScale, s_uLaySharpSize, s_uLaySharpOn, s_uLayHud;
-static GLint  s_uLayGuard;              /* the stale-mirror guard, below        */
 static TAGPU_GAFATLAS s_atlas;
 static TAGPU_GAFENT   s_ents[ATLAS_MAX];
-static unsigned char* s_rg;             /* interleave scratch, 2 bytes per texel */
-static unsigned s_rgCap = 0;
-static unsigned s_palUp;                /* tagpu_pal serial the palette TEXTURE holds  */
 static int    s_palUpValid;             /* ...and whether it holds one at all          */
 
 static int    s_on = 0, s_strict = 0;
@@ -187,10 +147,16 @@ static int    s_skipToReset = 0;        /* after a GL context change: the queue'
 static unsigned s_skipped = 0;
 /* Classic++ (G15e) */
 static int    s_norestore = 0;          /* `norestore` in the trigger: the A/B lever   */
-static int    s_colValid = 0;           /* the colour twins may be sampled this frame  */
-static unsigned char s_restorePal[1024];/* the palette the atlas's restore snapshotted */
-static unsigned s_palSeen = 0;          /* tagpu_pal_changes() when the settle count last moved */
-static int    s_palSettle = 0;
+/* PINNED AT 0 SINCE [landing 11-4b], AND KEPT DELIBERATELY. `restore_step`, which
+   was the only thing that raised it, went with the draw half. That makes it the
+   same shape as landing 11-4a's `s_state` -- with one difference that decides it:
+   `s_state` was a READINESS GATE, so a future `if (s_state != 1) return;` would
+   have silently stopped the pass publishing anything. This is a VALUE that is
+   published (`s_mHand.colourTwins`) and logged, and 0 is the correct value --
+   there are no colour twins on this lane. Removing it would change the hand-over's
+   shape, which is a protocol change for `tagpu_vk_gui.c` rather than a deletion,
+   so it is out of this landing's scope and named here instead of done quietly. */
+static int    s_colValid = 0;           /* no colour twins on this lane; see above     */
 static unsigned s_rearms = 0, s_colTwins = 0;
 static unsigned s_rglslSeen = 0;        /* tagpu_rglsl_calls() at the last present */
 /* Phase 2's seam (G17a) */
@@ -210,9 +176,7 @@ static int    s_sharpInk = 0;
 static int    s_sharptest = 0;          /* the harness lever that proves the layer is wired            */
 static int    s_sharpFailed = 0;        /* the target could not be made: stay off rather than retry     */
 static GLuint s_sharpProg;              /* QVS + SHARP_FS: a client's flat-coloured quad in the layer   */
-static GLint  s_uSharpProgSize, s_uSharpProgCol;
 static GLuint s_cursProg;               /* QVS + CURS_FS: the cursor's frame out of the UI atlas        */
-static GLint  s_uCursSize, s_uCursCK, s_uCursRestored;
 /* OUR CURSOR'S ANSWER FOR THIS PRESENT, latched here and taken once per frame
    by the render_ogl.c bracket (tagpu_gui.h has the whole argument). Set only
    at the tail of a successful sharp_cursor; cleared by the take, so a frame
@@ -227,7 +191,6 @@ int tagpu_gui_cursor_drew_take(void)
     return v;
 }
 static GLuint s_strProg;                /* QVS + STR_FS: a string op's glyphs into a twin (G17d)        */
-static GLint  s_uStrSize, s_uStrFg, s_uStrBg, s_uStrTr;
 static unsigned s_strings = 0;          /* string ops stamped                                          */
 static unsigned s_glyphs = 0;           /* glyph quads drawn                                           */
 static unsigned s_strMiss = 0;          /* glyphs the cache would not give (the engine drew them)      */
@@ -248,7 +211,6 @@ static int      s_mmforce = 0;          /* token `mmbase`: draw it at k = 1 too,
 static unsigned s_mmDrawn = 0;
 static unsigned s_mmLogged;
 static GLuint   s_mmProg, s_mmEngTex;   /* the masked draw, and the engine's two bases as RG8 */
-static GLint    s_uMmEngSize;
 static int      s_mmEngW, s_mmEngH;
 static unsigned s_mmNoEng;              /* frames the engine's pair could not be read          */
 static unsigned char* s_mmPicRgb;       /* the picture resolved through the presented palette  */
@@ -280,8 +242,25 @@ static int    s_curDev = 0;             /* the last draw used the true client po
 static float  s_k = 1.0f;               /* device px per twin texel: 13.1's k, and the ramp's width    */
 static float  s_hudS = 1.0f;            /* HUD scale in force this frame (20); 1.0 is the feature off */
 
-/* ----------------------------------------------------------------- shaders */
+/* The GL entry-point block (13 `PFN_*` typedefs, 13 `x_gl*` pointers, `getgl`),
+   `mkprog`, `quad` and the 30-odd `s_u*` uniform locations STOOD HERE and went
+   with the draw [the vulkan-only plan, landing 11-4b]. Nothing in this file
+   resolves a GL entry point or holds a GL object any more.
+
+   ----------------------------------------------------------------- shaders */
 /* a quad in surface pixels -> the twin's FBO (row 0 = surface row 0) */
+/* THESE NINE ARE A BUILD INPUT, NOT CODE THIS FILE RUNS. With the GL half gone
+   [landing 11-4b] nothing here references them -- but `tools/spirv-gen.py` reads
+   them out of the PREPROCESSED translation unit and generates
+   `inc/spirv/tagpu_gui_surf.spv.h`, which `tagpu_vk_gui.c` includes and draws
+   with. This file holds more of them than any other: all seven `gui_*` programs
+   of the PROGRAMS table are built from this pair-set. Deleting them fails the
+   build loudly ("the manifest names tagpu_gui_surf::QVS and the source does not
+   have it") rather than silently, but they must not be deleted at all. The
+   pragma is local and paired; `__attribute__((unused))` also works, as a PREFIX
+   only -- see the vulkan-only plan's 11-4a entry for the placement table. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-variable"
 static const char* QVS =
     "#version 330 core\n"
     "layout(location=0) in vec4 a;\n"          /* x, y, u, v */
@@ -588,6 +567,7 @@ static const char* LAY_FS =
        kept out of and the space the HUD art is blown up into cannot disagree.
        The panel owns its full column height (its art is a 128x480 block that
        does not stretch, resolution.md 3.4a) and magnifies about its top-left;
+#pragma GCC diagnostic pop
        the top bar about its top-left; the bottom bar about its BOTTOM-left,
        which is where the engine anchors it (screenH - 0x20). The world region
        is the identity and has no coverage in the twin anyway — the viewport's
@@ -641,28 +621,6 @@ static const char* LAY_FS =
     "  }\n"
     "  discard; }\n";
 
-static GLuint mksh(GLenum t, const char* src)
-{
-    GLuint sh = glCreateShader(t);
-    GLint ok = 0;
-    glShaderSource(sh, 1, &src, NULL); glCompileShader(sh);
-    glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
-    if (!ok) { char lg[512]; glGetShaderInfoLog(sh, sizeof lg, NULL, lg); slog("gui: shader FAILED:"); slog(lg); s_gl = 2; }
-    return sh;
-}
-static GLuint mkprog(const char* vs, const char* fs)
-{
-    GLuint v = mksh(GL_VERTEX_SHADER, vs), f = mksh(GL_FRAGMENT_SHADER, fs), p;
-    GLint ok = 0;
-    if (s_gl == 2) return 0;
-    p = glCreateProgram();
-    glAttachShader(p, v); glAttachShader(p, f); glLinkProgram(p);
-    glGetProgramiv(p, GL_LINK_STATUS, &ok);
-    glDeleteShader(v); glDeleteShader(f);
-    if (!ok) { slog("gui: program link FAILED"); s_gl = 2; return 0; }
-    return p;
-}
-
 /* THE UI ATLAS IS NOT A GL OBJECT, and `init_gl` arming it at its tail is the
    last place in this module where something the Vulkan twin needs was reachable
    only through a GL bring-up. It is the CPU table every sprite op resolves
@@ -689,114 +647,6 @@ static int atlas_setup(void)
     return tagpu_gaf_atlas_create(&s_atlas) ? 1 : 0;
 }
 
-static int init_gl(void)
-{
-    if (s_gl) return s_gl == 1;
-    x_glDrawArrays = (PFN_DRAWARRAYS)getgl("glDrawArrays");
-    x_glFramebufferTexture2D = (PFN_FBTEX2D)getgl("glFramebufferTexture2D");
-    x_glUniform4f  = (PFN_UNIFORM4F)getgl("glUniform4f");
-    x_glUniform2f  = (PFN_UNIFORM2F)getgl("glUniform2f");
-    x_glUniform2iv = (PFN_UNIFORM2IV)getgl("glUniform2iv");
-    x_glScissor    = (PFN_SCISSOR)getgl("glScissor");
-    x_glDisable    = (PFN_DISABLE)getgl("glDisable");
-    x_glBlendFunc  = (PFN_BLENDFUNC)getgl("glBlendFunc");
-    x_glActiveTexture = (PFN_ACTIVETEX)getgl("glActiveTexture");
-    x_glClearColor = (PFN_CLEARCOLOR)getgl("glClearColor");
-    x_glClear      = (PFN_CLEAR)getgl("glClear");
-    x_glClearBufferfv = (PFN_CLEARBUFFERFV)getgl("glClearBufferfv");
-    x_glDrawBuffers   = (PFN_DRAWBUFFERS)getgl("glDrawBuffers");
-    if (!x_glDrawArrays || !x_glFramebufferTexture2D || !x_glUniform4f || !x_glUniform2f ||
-        !x_glUniform2iv || !x_glScissor || !x_glDisable || !x_glBlendFunc || !x_glActiveTexture ||
-        !x_glClearColor || !x_glClear) {
-        slog("gui: GL entry points missing"); s_gl = 2; return 0;
-    }
-    /* the colour twins need these two; without them the module still runs,
-       indexed, exactly as it did before G15e */
-    if (!x_glClearBufferfv || !x_glDrawBuffers)
-        slog("gui: no glClearBufferfv/glDrawBuffers — Classic++ UI unavailable, the layer stays indexed");
-    s_sprProg = mkprog(QVS, SPR_FS);
-    s_cpyProg = mkprog(QVS, CPY_FS);
-    s_layProg = mkprog(LAY_VS, LAY_FS);
-    s_sharpProg = mkprog(QVS, SHARP_FS);
-    s_cursProg  = mkprog(QVS, CURS_FS);
-    s_strProg   = mkprog(QVS, STR_FS);
-    s_mmProg    = mkprog(QVS, MM_FS);
-    if (s_gl == 2) return 0;
-    glUseProgram(s_mmProg);
-    glUniform1i(glGetUniformLocation(s_mmProg, "uPic"), 0);
-    glUniform1i(glGetUniformLocation(s_mmProg, "uEng"), 1);
-    glUniform1i(glGetUniformLocation(s_mmProg, "uPal"), 2);
-    s_uMmEngSize = glGetUniformLocation(s_mmProg, "uEngSize");
-    glUseProgram(s_strProg);
-    glUniform1i(glGetUniformLocation(s_strProg, "uGlyph"), 0);
-    s_uStrSize = glGetUniformLocation(s_strProg, "uSize");
-    s_uStrFg   = glGetUniformLocation(s_strProg, "uFg");
-    s_uStrBg   = glGetUniformLocation(s_strProg, "uBg");
-    s_uStrTr   = glGetUniformLocation(s_strProg, "uTr");
-    s_uSharpProgSize = glGetUniformLocation(s_sharpProg, "uSize");
-    s_uSharpProgCol  = glGetUniformLocation(s_sharpProg, "uCol");
-    glUseProgram(s_cursProg);
-    glUniform1i(glGetUniformLocation(s_cursProg, "uAtlas"), 0);
-    glUniform1i(glGetUniformLocation(s_cursProg, "uAtlasRGB"), 1);
-    glUniform1i(glGetUniformLocation(s_cursProg, "uPal"), 2);
-    s_uCursSize = glGetUniformLocation(s_cursProg, "uSize");
-    s_uCursCK   = glGetUniformLocation(s_cursProg, "uCK");
-    s_uCursRestored = glGetUniformLocation(s_cursProg, "uRestored");
-    glUseProgram(s_sprProg);
-    glUniform1i(glGetUniformLocation(s_sprProg, "uAtlas"), 0);
-    glUniform1i(glGetUniformLocation(s_sprProg, "uAtlasRGB"), 1);
-    s_uSprSize = glGetUniformLocation(s_sprProg, "uSize");
-    s_uSprCK   = glGetUniformLocation(s_sprProg, "uCK");
-    s_uSprRestored = glGetUniformLocation(s_sprProg, "uRestored");
-    glUseProgram(s_cpyProg);
-    glUniform1i(glGetUniformLocation(s_cpyProg, "uSrc"), 0);
-    glUniform1i(glGetUniformLocation(s_cpyProg, "uSrcCol"), 1);
-    s_uCpySize = glGetUniformLocation(s_cpyProg, "uSize");
-    s_uCpyOff  = glGetUniformLocation(s_cpyProg, "uOff");
-    s_uCpyHasCol = glGetUniformLocation(s_cpyProg, "uSrcHasCol");
-    glUseProgram(s_layProg);
-    glUniform1i(glGetUniformLocation(s_layProg, "uTwin"), 0);
-    glUniform1i(glGetUniformLocation(s_layProg, "uPal"),  1);
-    glUniform1i(glGetUniformLocation(s_layProg, "uSurf"), 2);
-    glUniform1i(glGetUniformLocation(s_layProg, "uTwinCol"), 3);
-    glUniform1i(glGetUniformLocation(s_layProg, "uSharp"),   4);
-    s_uLaySize   = glGetUniformLocation(s_layProg, "uSize");
-    s_uLayStrict = glGetUniformLocation(s_layProg, "uStrict");
-    s_uLayKey    = glGetUniformLocation(s_layProg, "uKey");
-    s_uLayVp     = glGetUniformLocation(s_layProg, "uVp");
-    s_uLayVpKey  = glGetUniformLocation(s_layProg, "uVpKey");
-    s_uLayCursor = glGetUniformLocation(s_layProg, "uCursor");
-    s_uLayColOn  = glGetUniformLocation(s_layProg, "uColOn");
-    s_uLayScale     = glGetUniformLocation(s_layProg, "uScale");
-    s_uLayHud       = glGetUniformLocation(s_layProg, "uHud");
-    s_uLaySharpSize = glGetUniformLocation(s_layProg, "uSharpSize");
-    s_uLaySharpOn   = glGetUniformLocation(s_layProg, "uSharpOn");
-    s_uLayCursOurs  = glGetUniformLocation(s_layProg, "uCursOurs");
-    s_uLayGuard     = glGetUniformLocation(s_layProg, "uGuard");
-    glUseProgram(0);
-    glGenVertexArrays(1, &s_vao);
-    glGenBuffers(1, &s_vbo);
-    glBindVertexArray(s_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-    glBufferData(GL_ARRAY_BUFFER, 6 * 4 * sizeof(float) * 256, NULL, GL_STREAM_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, (void*)0);
-    glBindVertexArray(0);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glGenTextures(1, &s_palTex);
-    glBindTexture(GL_TEXTURE_2D, s_palTex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 256, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    s_palUpValid = 0;
-    if (!atlas_setup()) { slog("gui: atlas FAILED"); s_gl = 2; return 0; }
-    s_gl = 1;
-    slog("gui: GL ready (twins RG8, atlas 2048x2048, layer over the composite)");
-    return 1;
-}
-
 /* WHETHER THIS FRAME CARRIES TA's OWN SURFACE, which is what the mirror's
    `eng` copy, the strict guard and the layer's guard all really ask. On the GL
    lane the fork has uploaded it and `f->surface_tex` names that upload; on a
@@ -808,7 +658,15 @@ static int init_gl(void)
    carries no copy of the engine's own frame". [Vulkan-only plan, 4b-3.] */
 static int have_engine_frame(const TAGPU_FRAME* f)
 {
-    return f->surface_tex != 0 || tagpu_vk_owns_present();
+    /* The `|| tagpu_vk_owns_present()` term was the whole point of 4b-3's fix and
+       it is now the whole function: this file is reached only through
+       `tagpu_overlay_draw`, which runs only from `render_vk.c` after the present
+       latch is set [landing 11-4b]. `f->surface_tex` is kept as the first term
+       because it is the honest question -- a caller that DOES carry an engine
+       frame answers yes for the original reason -- but nothing can make this
+       return 0 today. */
+    (void)f;
+    return 1;
 }
 
 /* ------------------------------------------------------------------ twins */
@@ -820,9 +678,13 @@ static TWIN* twin_find(unsigned surf)
 }
 static void twin_drop(TWIN* t)
 {
-    if (t->fbo) glDeleteFramebuffers(1, &t->fbo);
-    if (t->tex) glDeleteTextures(1, &t->tex);
-    if (t->rgb) glDeleteTextures(1, &t->rgb);
+    /* the three `glDelete*` calls STOOD HERE and freed this twin's texture, its
+       FBO and its colour attachment [landing 11-4b]. All three ids are 0 on this
+       lane -- nothing creates them since the draw half went -- so the guards
+       never fired; they are gone rather than left as GL calls one restored
+       `if` away from running without a context. The RECORD below is the whole
+       function now: the twin's slot is recycled so `twin_find` stops resolving
+       this surface, which is what the mirror's FREE op pairs with. */
     *t = s_twins[--s_ntwins];
 }
 
@@ -830,68 +692,11 @@ static void twin_drop(TWIN* t)
    at COLOR_ATTACHMENT1 of the same FBO, so one MRT draw writes the index and
    the colour together and they can never disagree about what a texel holds.
    Cleared to alpha 0 — nothing is restored until an op says so. */
-static void twin_colour(TWIN* t)
-{
-    /* PURE GL: this puts pixels in a GL object and feeds nothing the Vulkan
-       twin is told. On a lane with no GL context there is nothing here to do
-       and nothing lost. [The vulkan-only plan, landing 4b-3.] */
-    if (tagpu_vk_owns_present()) return;
-    static const GLenum two[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
-    static const GLfloat zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-    GLenum st;
-    if (t->rgb || !x_glDrawBuffers || !x_glClearBufferfv || !t->fbo) return;
-    glGenTextures(1, &t->rgb);
-    if (!t->rgb) return;
-    glBindTexture(GL_TEXTURE_2D, t->rgb);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, t->w, t->h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
-    x_glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, t->rgb, 0);
-    x_glDrawBuffers(2, two);
-    st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-    if (st != GL_FRAMEBUFFER_COMPLETE) {
-        /* back to indexed rather than into an incomplete FBO, which would
-           drop the INDEX draws too and blank the surface */
-        char b[140];
-        _snprintf(b, sizeof b, "gui: colour twin %08X %dx%d FBO incomplete (%x) — indexed", t->surf, t->w, t->h, (unsigned)st);
-        slog(b);
-        x_glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, 0, 0);
-        x_glDrawBuffers(1, two);
-        glDeleteTextures(1, &t->rgb);
-        t->rgb = 0;
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        return;
-    }
-    x_glClearBufferfv(GL_COLOR, 1, zero);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    s_colTwins++;
-}
-
 /* Indices arrived for the box and they say nothing about colour: drop the
    colour there so the layer falls back to the palette. */
-static void twin_col_drop(TWIN* t, int l, int tp, int w, int h)
-{
-    /* PURE GL: this puts pixels in a GL object and feeds nothing the Vulkan
-       twin is told. On a lane with no GL context there is nothing here to do
-       and nothing lost. [The vulkan-only plan, landing 4b-3.] */
-    if (tagpu_vk_owns_present()) return;
-    static const GLfloat zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-    if (!t->rgb || !x_glClearBufferfv || w <= 0 || h <= 0) return;
-    glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
-    glViewport(0, 0, t->w, t->h);
-    glEnable(GL_SCISSOR_TEST);
-    x_glScissor(l, tp, w, h);
-    x_glClearBufferfv(GL_COLOR, 1, zero);
-    x_glDisable(GL_SCISSOR_TEST);
-}
 static TWIN* twin_make(unsigned surf, int w, int h)
 {
     TWIN* t = twin_find(surf);
-    GLenum st;
     if (t && (t->w != w || t->h != h)) { twin_drop(t); t = NULL; }
     if (t) return t;
     if (s_ntwins >= MAX_TWINS) twin_drop(&s_twins[0]);        /* the oldest goes */
@@ -905,59 +710,10 @@ static TWIN* twin_make(unsigned surf, int w, int h)
        is the shape landing 4b-2 found twelve times, in the module that
        has the most of it.
        [The vulkan-only plan, landing 4b-3.] */
-    if (!tagpu_vk_owns_present()) {
-        glGenTextures(1, &t->tex);
-        glBindTexture(GL_TEXTURE_2D, t->tex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, w, h, 0, GL_RG, GL_UNSIGNED_BYTE, NULL);
-        glBindTexture(GL_TEXTURE_2D, 0);
-        glGenFramebuffers(1, &t->fbo);
-        glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
-        x_glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t->tex, 0);
-        st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-        /* a fresh twin covers nothing until its seed lands */
-        x_glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-        x_glClear(GL_COLOR_BUFFER_BIT);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        /* an FBO that was never created cannot be incomplete, and `st` is only
-           a fact inside this block */
-        if (st != GL_FRAMEBUFFER_COMPLETE) {
-            char b[120]; _snprintf(b, sizeof b, "gui: twin %08X %dx%d FBO incomplete (%x)", surf, w, h, (unsigned)st); slog(b);
-        }
-    }
     return t;
 }
 
 /* rows of indices -> (index, 255) pairs -> the twin's box */
-static void twin_upload(TWIN* t, int l, int tp, int w, int h, const unsigned char* idx)
-{
-    /* PURE GL: this puts pixels in a GL object and feeds nothing the Vulkan
-       twin is told. On a lane with no GL context there is nothing here to do
-       and nothing lost. [The vulkan-only plan, landing 4b-3.] */
-    if (tagpu_vk_owns_present()) return;
-    unsigned n = (unsigned)w * (unsigned)h, i;
-    if (l < 0 || tp < 0 || l + w > t->w || tp + h > t->h || w <= 0 || h <= 0) return;
-    if (n * 2 > s_rgCap) {
-        free(s_rg); s_rgCap = n * 2 + 65536; s_rg = (unsigned char*)malloc(s_rgCap);
-        if (!s_rg) { s_rgCap = 0; return; }
-    }
-    for (i = 0; i < n; i++) { s_rg[2 * i] = idx[i]; s_rg[2 * i + 1] = 255; }
-    glBindTexture(GL_TEXTURE_2D, t->tex);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, l, tp, w, h, GL_RG, GL_UNSIGNED_BYTE, s_rg);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    twin_col_drop(t, l, tp, w, h);
-}
-
-static void quad(float* v, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1)
-{
-    float q[24] = { x0,y0,u0,v0,  x1,y0,u1,v0,  x0,y1,u0,v1,   x0,y1,u0,v1,  x1,y0,u1,v0,  x1,y1,u1,v1 };
-    memcpy(v, q, sizeof q);
-}
-
 /* G19f landing 4: the return is this op's TAGPU_GUIOP::col -- what this
    function decided about colour, for the mirror to carry rather than decide
    again. `twin_colour` can refuse (no MRT entry points, an incomplete FBO), so
@@ -965,35 +721,19 @@ static void quad(float* v, float x0, float y0, float x1, float y1, float u0, flo
    and both are recorded. */
 static unsigned char twin_sprite(TWIN* t, const TAGPU_GAFENT* e, const TAGPU_PUBOP* o)
 {
-    float v[24];
-    int restored = s_colValid && s_atlas.rgb != 0;
-    if (restored) twin_colour(t);
-    /* THE SPRITE DRAW IS GL; the `col` byte below is the RECORD's.
-       [The vulkan-only plan, landing 4b-3.] */
-    if (!tagpu_vk_owns_present()) {
-        glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
-        glViewport(0, 0, t->w, t->h);
-        glEnable(GL_SCISSOR_TEST);
-        x_glScissor(o->l, o->t, o->r - o->l + 1, o->b - o->t + 1);
-        glUseProgram(s_sprProg);
-        x_glUniform2f(s_uSprSize, (float)t->w, (float)t->h);
-        glUniform1i(s_uSprCK, (int)o->ck);
-        glUniform1i(s_uSprRestored, (restored && t->rgb) ? 1 : 0);
-        /* unit 1 must hold a real texture even when the branch is off */
-        x_glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, s_atlas.rgb ? s_atlas.rgb : s_palTex);
-        x_glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, s_atlas.tex);
-        quad(v, (float)o->sl, (float)o->st, (float)(o->sl + o->fw), (float)(o->st + o->fh), e->u0, e->v0, e->u1, e->v1);
-        glBindVertexArray(s_vao);
-        glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
-        x_glDrawArrays(GL_TRIANGLES, 0, 6);
-        x_glDisable(GL_SCISSOR_TEST);
-    }
+    /* ALWAYS 0, AND THAT IS 4b-3's ANSWER MADE EXPLICIT [landing 11-4b]. The two
+       bits were `t->rgb ? DST : 0` and `(restored && t->rgb) ? ON : 0`, over
+       `restored = s_colValid && s_atlas.rgb != 0`. Every term is a GL object name
+       or a latch only the GL bring-up could raise, and all of them went with the
+       draw -- so the expression could no longer evaluate to anything but 0, while
+       still reading like a decision. 4b-3 already said what this lane records:
+       "the ops this lane records say indexed, which is what its twin will draw."
+       Computing that from three flags nothing can set would be the `s_state` trap
+       of landing 11-4a at record scale -- the value is right, and the next reader
+       would believe the inputs still moved. */
+    (void)t; (void)e; (void)o;
     s_sprites++;
-    return (unsigned char)((t->rgb ? TAGPU_GUICOL_DST : 0) |
-                           ((restored && t->rgb) ? TAGPU_GUICOL_ON : 0));
+    return 0;
 }
 
 /* A STRING OP INTO ITS TWIN, glyph by glyph (13.4, G17d).
@@ -1031,11 +771,9 @@ static void twin_string(TWIN* t, const TAGPU_PUBOP* o)
     goff = tagpu_text_glyph_block_bytes(g_guiq.arena + o->aoff, o->gcount, o->alen);
     str = (const char*)(g_guiq.arena + o->aoff + goff);
     short cell[256][4];                 /* ax, ay, w, h per drawn glyph        */
-    int n = 0, i, x, top, yoff = 0, aw = 0, ah = 0, restored;
+    int n = 0, i, x, top, yoff = 0, aw = 0, ah = 0;
     int attempt, miss = 0;
     unsigned gen0;
-    GLuint gtex;
-    float v[24];
 
     /* THE QUESTION IS WHETHER THERE IS A STRING TO STAMP, and on the GL lane
        also whether the program that stamps it came up. A GL program name is 0
@@ -1043,7 +781,6 @@ static void twin_string(TWIN* t, const TAGPU_PUBOP* o)
        string because of that is the shape landing 4b-2 found twelve times.
        [The vulkan-only plan, landing 4b-3.] */
     if (!o->alen) goto reseed;
-    if (!tagpu_vk_owns_present() && !s_strProg) goto reseed;
     /* PASS ONE: rasterise every glyph this string needs, so the atlas texture
        is uploaded ONCE for the string rather than once per new glyph.
 
@@ -1085,58 +822,28 @@ static void twin_string(TWIN* t, const TAGPU_PUBOP* o)
        wrapper the GL lane needs that answer in. Asking for the name on a lane
        that makes none would send every string down the re-seed path.
        [The vulkan-only plan, landing 4b-3.] */
-    if (tagpu_vk_owns_present()) {
-        if (!tagpu_text_glyph_have()) goto reseed;
-        gtex = 0;
-    } else {
-        x_glActiveTexture(GL_TEXTURE0);
-        gtex = tagpu_text_glyph_tex();
-        if (!gtex) goto reseed;
-    }
+    if (!tagpu_text_glyph_have()) goto reseed;
     tagpu_text_glyph_dims(&aw, &ah);
     if (aw <= 0 || ah <= 0) goto reseed;
 
-    restored = s_colValid && s_atlas.rgb != 0;
-    if (restored) twin_colour(t);
-    /* GL: the glyph quads. The mirror op this function records is
-       built from the same placement and is untouched.
-       [The vulkan-only plan, landing 4b-3.] */
-    if (!tagpu_vk_owns_present()) {
-        glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
-        glViewport(0, 0, t->w, t->h);
-        x_glDisable(GL_BLEND);
-        x_glDisable(GL_DEPTH_TEST);
-        x_glDisable(GL_SCISSOR_TEST);
-        glUseProgram(s_strProg);
-        x_glUniform2f(s_uStrSize, (float)t->w, (float)t->h);
-        glUniform1i(s_uStrFg, (int)o->fg);
-        glUniform1i(s_uStrBg, (int)o->bg);
-        glUniform1i(s_uStrTr, (int)o->tr);
-        glBindTexture(GL_TEXTURE_2D, gtex);
-        glBindVertexArray(s_vao);
-        glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-    }
     /* the blitter's destination is base + (y - (s8)font[2]) * pitch + x, so the
        string's first pixel row is at y - yoff and NOT at the y it was given */
     x = (int)o->sl;
     top = (int)o->st - yoff;
     for (i = 0; i < n; i++) {
         int gw = cell[i][2], gh = cell[i][3];
-        quad(v, (float)x, (float)top, (float)(x + gw), (float)(top + gh),
-             (float)cell[i][0] / (float)aw,            (float)cell[i][1] / (float)ah,
-             (float)(cell[i][0] + gw) / (float)aw,     (float)(cell[i][1] + gh) / (float)ah);
-        /* GL
-           [The vulkan-only plan, landing 4b-3.] */
-        if (!tagpu_vk_owns_present()) {
-            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
-            x_glDrawArrays(GL_TRIANGLES, 0, 6);
-        }
+        /* the per-glyph `quad(v, ...)` STOOD HERE and filled a vertex buffer for
+           the GL upload two lines below it; both went together [landing 11-4b].
+           The loop still walks the glyphs, because `x` is the running pen
+           position `mir_string` publishes as the string's placement and
+           `s_glyphs` is the counter the log reports. */
         x += gw;
         s_glyphs++;
     }
     s_strings++;
-    mir_string(o, cell, n, (int)o->sl, top,
-               (unsigned char)(t->rgb ? TAGPU_GUICOL_DST : 0));
+    /* 0 for the reason `twin_sprite` gives: `t->rgb` is a GL texture name and
+       nothing creates one here any more [landing 11-4b]. */
+    mir_string(o, cell, n, (int)o->sl, top, 0);
     return;
 
 reseed:
@@ -1159,125 +866,26 @@ reseed:
 static unsigned char twin_copy(TWIN* t, const TWIN* src, const TAGPU_PUBOP* o)
 {
     float v[24];
-    GLint off[2];
     /* THE COPY IS WHY COLOUR IS PER SURFACE (gui-renderer.md 13.2): the panel
        is painted into panel+0xBC and only later blitted to the frame, so
        restored art reaches the screen through here or not at all. A source
        with no colour twin writes zero, which invalidates the destination's
        colour over the box — a copy from indexed art means indexed art. */
-    if (src->rgb) twin_colour(t);
-    /* THE COPY IS GL; the `col` byte below it is the RECORD's, and the
-       twin performs the same copy from the same op.
-       [The vulkan-only plan, landing 4b-3.] */
-    if (!tagpu_vk_owns_present()) {
-        glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
-        glViewport(0, 0, t->w, t->h);
-        glEnable(GL_SCISSOR_TEST);
-        x_glScissor(o->l, o->t, o->r - o->l + 1, o->b - o->t + 1);
-        glUseProgram(s_cpyProg);
-        x_glUniform2f(s_uCpySize, (float)t->w, (float)t->h);
-        off[0] = o->l - o->sl; off[1] = o->t - o->st;      /* dst pixel - src pixel */
-        x_glUniform2iv(s_uCpyOff, 1, off);
-        glUniform1i(s_uCpyHasCol, (src->rgb && t->rgb) ? 1 : 0);
-        x_glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, src->rgb ? src->rgb : s_palTex);
-        x_glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, src->tex);
-        quad(v, (float)o->l, (float)o->t, (float)(o->r + 1), (float)(o->b + 1), 0, 0, 0, 0);
-        glBindVertexArray(s_vao);
-        glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
-        x_glDrawArrays(GL_TRIANGLES, 0, 6);
-        x_glDisable(GL_SCISSOR_TEST);
-    }
+    /* 0, for `twin_sprite`'s reason: both terms were GL texture names and the
+       twin performs the same copy from the same op. [landing 11-4b] */
     s_copies++;
-    return (unsigned char)((t->rgb ? TAGPU_GUICOL_DST : 0) |
-                           ((src->rgb && t->rgb) ? TAGPU_GUICOL_ON : 0));
-}
-
-static void twin_clear(TWIN* t, const TAGPU_PUBOP* o)
-{
-    /* PURE GL: this puts pixels in a GL object and feeds nothing the Vulkan
-       twin is told. On a lane with no GL context there is nothing here to do
-       and nothing lost. [The vulkan-only plan, landing 4b-3.] */
-    if (tagpu_vk_owns_present()) return;
-    glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
-    glViewport(0, 0, t->w, t->h);
-    glEnable(GL_SCISSOR_TEST);
-    x_glScissor(o->l, o->t, o->r - o->l + 1, o->b - o->t + 1);
-    x_glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-    x_glClear(GL_COLOR_BUFFER_BIT);
-    x_glDisable(GL_SCISSOR_TEST);
-    s_clears++;
+    return 0;
 }
 
 /* THE BOX, ONE PALETTE INDEX, FULLY COVERED. `twin_clear`'s shape with two
    differences: the index goes in the RED channel (the twin is RG -- index and
    coverage, see `twin_upload`) and GREEN is 1, because this op COVERS what it
    fills where a clear uncovers it. [The vulkan-only plan, landing 8a.] */
-static void twin_fill(TWIN* t, const TAGPU_PUBOP* o, unsigned char idx)
-{
-    /* PURE GL, for `twin_clear`'s reason: this puts pixels in a GL object and
-       feeds nothing the Vulkan twin is told, which is the mirror op beside the
-       call. On a lane with no GL context there is nothing here to do. */
-    if (tagpu_vk_owns_present()) return;
-    glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
-    glViewport(0, 0, t->w, t->h);
-    glEnable(GL_SCISSOR_TEST);
-    x_glScissor(o->l, o->t, o->r - o->l + 1, o->b - o->t + 1);
-    x_glClearColor((float)idx / 255.0f, 1.0f, 0.0f, 0.0f);
-    x_glClear(GL_COLOR_BUFFER_BIT);
-    x_glDisable(GL_SCISSOR_TEST);
-    /* AND PUT THE CLEAR COLOUR BACK, because it is CONTEXT state and not ours.
-       This is the only site in the tree that sets a non-zero one without
-       restoring it: `twin_clear`, `twin_make` and `sharp_begin` all set (0,0,0,0)
-       and leave it there, `tagpu_restoreglsl.c:513` saves and restores, and
-       `render_ogl.c`'s four `glClear(GL_COLOR_BUFFER_BIT)` calls and
-       `tagpu_overlay.c:142` set NO colour at all -- they are written against the
-       resting value. Leaving a health bar's palette index in it would paint
-       render_ogl's letterbox erase that colour.
-       Restoring here is an ORDERING we own rather than a reliance on whoever
-       runs next: the argument must not be "sharp_begin resets it anyway", since
-       that has early returns and its failure latches.
-       [FROM THIS LANDING'S REVIEW.] */
-    x_glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-}
-
 /* FOUR INCLUSIVE EDGES, ONE PALETTE INDEX, INTERIOR UNTOUCHED. `twin_fill`'s
    shape four times over, one scissor per edge, because that is exactly what
    `0x4BF8C0` does -- and doing it as one fill plus a smaller clear would be
    wrong, not merely slower: the interior is whatever was already in the twin
    and the op never wrote it. [The vulkan-only plan, landing 8b.] */
-static void twin_outline(TWIN* t, const TAGPU_PUBOP* o, unsigned char idx)
-{
-    int w = o->r - o->l + 1, h = o->b - o->t + 1;
-    int i;
-    /* PURE GL, for `twin_clear`'s reason. */
-    if (tagpu_vk_owns_present()) return;
-    if (w < 1 || h < 1) return;
-    glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
-    glViewport(0, 0, t->w, t->h);
-    glEnable(GL_SCISSOR_TEST);
-    x_glClearColor((float)idx / 255.0f, 1.0f, 0.0f, 0.0f);
-    /* top, bottom, left, right -- the corners are covered twice and that is
-       correct: the engine's own edges share them, and the write is idempotent
-       because it is a constant. A 1 px wide or 1 px tall box collapses to a
-       single edge drawn twice rather than to nothing, which is why the extents
-       are clamped rather than the edges skipped. */
-    for (i = 0; i < 4; i++) {
-        int x = o->l, y = o->t, ew = w, eh = h;
-        if (i == 0)      { eh = 1; }
-        else if (i == 1) { y = o->b; eh = 1; }
-        else if (i == 2) { ew = 1; }
-        else             { x = o->r; ew = 1; }
-        x_glScissor(x, y, ew, eh);
-        x_glClear(GL_COLOR_BUFFER_BIT);
-    }
-    x_glDisable(GL_SCISSOR_TEST);
-    /* the clear colour is context state and not ours -- see `twin_fill`. */
-    x_glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-}
-
 static void twins_reset(void)
 {
     while (s_ntwins) twin_drop(&s_twins[0]);
@@ -1298,59 +906,6 @@ static void twins_reset(void)
    still for PAL_SETTLE frames the job is rebuilt against the new one and
    every colour twin is invalidated, so the art comes back restored as the
    engine redraws it. */
-static void restore_step(void)
-{
-    /* PURE GL, AND `s_colValid` STAYS 0 HERE, WHICH IS THE HONEST ANSWER. That
-       flag is what the record's `restored` term reads, and a lane with no GL has
-       no restored twin to sample -- Classic++'s restorer does not start there at
-       all (gpu-status §2.50). So the ops this lane records say "indexed", which
-       is what its twin will draw. [The vulkan-only plan, landing 4b-3.] */
-    if (tagpu_vk_owns_present()) return;
-    int i;
-    const unsigned char* pal = tagpu_pal_live();   /* 256 x {R,G,B,255}, ours, render thread */
-    unsigned chg = tagpu_pal_changes();
-    /* the ASSETS half, not the master arm (G18a): restored atlases are what
-       `assets=` owns, and `light=` must be able to run without them */
-    if (s_norestore || !tagpu_classicpp_assets() || !x_glDrawBuffers || !x_glClearBufferfv) {
-        s_colValid = 0;
-        return;
-    }
-    /* Nothing presentable yet. Never arm against a palette we do not have:
-       the snapshot is baked into the atlas and only a re-arm takes it back
-       out again. Retried at the next present. */
-    if (!pal) { s_colValid = 0; return; }
-    if (!s_atlas.rgb) {                         /* first arm, and after a context loss */
-        memcpy(s_restorePal, pal, sizeof s_restorePal);
-        tagpu_gaf_atlas_restore(&s_atlas, s_restorePal);
-        s_palSeen = chg; s_palSettle = 0;
-        s_colValid = s_atlas.rgb != 0;
-        if (s_colValid)
-            slog("gui: Classic++ UI armed — the UI atlas's restored twin at priority 4, nothing under 12x12");
-        return;
-    }
-    tagpu_gaf_atlas_restore(&s_atlas, s_restorePal);   /* the per-frame call: a no-op once armed */
-    if (memcmp(s_restorePal, pal, sizeof s_restorePal) == 0) { s_colValid = 1; s_palSettle = 0; return; }
-    s_colValid = 0;
-    if (chg != s_palSeen) { s_palSeen = chg; s_palSettle = 0; return; }
-    if (++s_palSettle < PAL_SETTLE) return;
-    {
-        char b[220];
-        int ncol = 0;
-        if (s_atlas.job) { tagpu_rglsl_job_free(s_atlas.job); s_atlas.job = NULL; }
-        if (s_atlas.rgb) { glDeleteTextures(1, &s_atlas.rgb); s_atlas.rgb = 0; }
-        s_atlas.restoreFailed = 0;
-        memcpy(s_restorePal, pal, sizeof s_restorePal);
-        tagpu_gaf_atlas_restore(&s_atlas, s_restorePal);
-        for (i = 0; i < s_ntwins; i++)
-            if (s_twins[i].rgb) { twin_col_drop(&s_twins[i], 0, 0, s_twins[i].w, s_twins[i].h); ncol++; }
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        s_rearms++; s_palSettle = 0;
-        _snprintf(b, sizeof b, "gui: the presented palette moved — restored twin re-armed (#%u), %d of %d twin(s) had colour and were invalidated",
-                  s_rearms, ncol, s_ntwins);
-        slog(b);
-    }
-}
-
 /* ------------------------------------------------------------------ drain */
 /* ==================================================================== G19f ==
    THE VULKAN LANE'S MIRROR of this present's op stream. tagpu_gui.h carries
@@ -1597,7 +1152,6 @@ static void drain(void)
             break;
         case PK_SEED:
             t = twin_make(o->surf, o->w, o->h);
-            if (t && o->alen) twin_upload(t, 0, 0, o->w, o->h, g_guiq.arena + o->aoff);
             if (t) {
                 TAGPU_GUIOP* m = mir_op();
                 if (m) {
@@ -1616,14 +1170,13 @@ static void drain(void)
             break;
         case PK_CLEAR:
             t = twin_find(o->surf);
-            if (t) { TAGPU_GUIOP* m; twin_clear(t, o);
+            if (t) { TAGPU_GUIOP* m;
                      m = mir_op(); if (m) { m->kind = TAGPU_GUIOP_CLEAR; mir_box(m, o); } }
             break;
         case PK_PIXELS:
             t = twin_find(o->surf);
             if (t && o->alen) {
                 TAGPU_GUIOP* m;
-                twin_upload(t, o->l, o->t, o->r - o->l + 1, o->b - o->t + 1, g_guiq.arena + o->aoff);
                 m = mir_op();
                 if (m) {
                     m->kind = TAGPU_GUIOP_PIXELS; mir_box(m, o); m->alen = o->alen;
@@ -1645,7 +1198,6 @@ static void drain(void)
             t = twin_find(o->surf);
             if (t) {
                 TAGPU_GUIOP* m;
-                twin_fill(t, o, o->fg);
                 m = mir_op();
                 if (m) { m->kind = TAGPU_GUIOP_BAR; mir_box(m, o); m->fg = o->fg; }
                 s_bars++;
@@ -1658,7 +1210,6 @@ static void drain(void)
             t = twin_find(o->surf);
             if (t) {
                 TAGPU_GUIOP* m;
-                twin_outline(t, o, o->fg);
                 m = mir_op();
                 if (m) { m->kind = TAGPU_GUIOP_RECT; mir_box(m, o); m->fg = o->fg; }
                 s_rects++;
@@ -1735,23 +1286,6 @@ static void drain(void)
    tagpu_pal.h has the engine facts and does the resolving, for the world's
    passes and this one alike. Here it is only uploaded, and only when it has
    actually moved: the serial says so. */
-static void upload_palette(void)
-{
-    /* PURE GL: this puts pixels in a GL object and feeds nothing the Vulkan
-       twin is told. On a lane with no GL context there is nothing here to do
-       and nothing lost. [The vulkan-only plan, landing 4b-3.] */
-    if (tagpu_vk_owns_present()) return;
-    const unsigned char* pal = tagpu_pal_live();
-    unsigned serial = tagpu_pal_serial();
-    if (!pal) return;
-    if (s_palUpValid && s_palUp == serial) return;
-    s_palUp = serial;
-    s_palUpValid = 1;
-    glBindTexture(GL_TEXTURE_2D, s_palTex);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_RGBA, GL_UNSIGNED_BYTE, pal);
-    glBindTexture(GL_TEXTURE_2D, 0);
-}
-
 /* THE GL UI's RENDER HALF READS THE PACKET (landing 4c). It took the cursor's
    position and sprite out of the graphics globals, and the minimap's box, its
    surfaces and its view box out of the TAdynmem block, on THIS thread, every
@@ -1877,15 +1411,6 @@ int tagpu_gui_cursor_own(float* r)
    Empty in G17a by design: its clients are the cursor (13.5, G17c) and the
    string op (13.4, G17d). `sharptest` is what makes an empty layer testable —
    without it the gate cannot tell a wired layer from a dead one. */
-static void sharp_drop(void)
-{
-    if (s_sharpFbo) glDeleteFramebuffers(1, &s_sharpFbo);
-    if (s_sharpTex) glDeleteTextures(1, &s_sharpTex);
-    s_sharpFbo = s_sharpTex = 0;
-    s_sharpW = s_sharpH = 0;
-    s_sharpOn = 0;
-}
-
 /* THE CURSOR INTO THE SHARP LAYER, at 1x DEVICE size whatever k is (13.5).
    That is the convention every scaled desktop UI follows and it is always
    crisp; `cursorscale=` is the escape for a 3x UI at 4K, where TA's cursors
@@ -1906,16 +1431,14 @@ static void sharp_drop(void)
 static void sharp_cursor(const TAGPU_FRAME* f)
 {
     const TAGPU_GAFENT* e;
-    float v[24], kx, ky;
+    float kx, ky;
     int cx = 0, cy = 0, dx, dy, x0, y0, w, h;
     /* THIS IS A CLIENT OF THE SHARP LAYER, NOT A PURE GL FUNCTION: it resolves
        the cursor's rect from a mouse position read on THIS thread at THIS
        instant and records it with `mir_sdraw` for the Vulkan twin, which is
        the only copy of that answer anyone gets. The quad is GL; the rect, the
        record and `s_curInLayer` are the lane's. [Vulkan-only plan, 4b-3.] */
-    const int gl_draws = !tagpu_vk_owns_present();
     if (!s_curFrame || !s_sharpW || !s_sharpH) return;
-    if (gl_draws && !s_cursProg) return;
     e = tagpu_gaf_atlas_get(&s_atlas, s_curFrame);
     if (!e) {
         /* Unreachable in practice -- tagpu_gui_cursor_frame only owns a frame
@@ -1956,13 +1479,6 @@ static void sharp_cursor(const TAGPU_FRAME* f)
        the frame's origin either way */
     x0 = dx - (int)((float)s_curHX * s_cursorScale);
     y0 = dy - (int)((float)s_curHY * s_cursorScale);
-    if (gl_draws) {
-        x_glDisable(GL_BLEND);
-        x_glDisable(GL_DEPTH_TEST);
-        glUseProgram(s_cursProg);
-        x_glUniform2f(s_uCursSize, (float)s_sharpW, (float)s_sharpH);
-        glUniform1i(s_uCursCK, (int)e->ck);
-    }
     /* THE CURSOR IS RESOLVED THROUGH THE PRESENTED PALETTE AND NEVER THROUGH
        THE RESTORED TWIN, whatever `s_colValid` says about the rest of the
        frame. [MEASURED 2026-09-13, from the owner's report: "the Move cursor,
@@ -1982,21 +1498,6 @@ static void sharp_cursor(const TAGPU_FRAME* f)
        is always looking at stops depending on that job at all. What is NOT
        closed here: the same window exists for any other sprite whose cell is
        new, which no cursor-local change can reach (gui-renderer.md 24). */
-    if (gl_draws) {
-        glUniform1i(s_uCursRestored, 0);
-        /* units 1 and 2 must hold real textures even when the branch is off */
-        x_glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, s_palTex);
-        x_glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, s_atlas.rgb ? s_atlas.rgb : s_palTex);
-        x_glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, s_atlas.tex);
-        glBindVertexArray(s_vao);
-        glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-        quad(v, (float)x0, (float)y0, (float)(x0 + w), (float)(y0 + h), e->u0, e->v0, e->u1, e->v1);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
-        x_glDrawArrays(GL_TRIANGLES, 0, 6);
-    }
     /* THE RESOLVED RECT, and this is the one that could not be re-derived:
        `dx`/`dy` above came from `mouse_last_client()` on THIS thread at THIS
        instant, and the Vulkan lane runs later in the same iteration. */
@@ -2114,15 +1615,13 @@ static void sharp_minimap(const TAGPU_FRAME* f)
        tagpu_vk_gui.c uploads into an image of its own. Baking it only when a
        GL texture exists would hand the twin a picture it never gets.
        [The vulkan-only plan, landing 4b-3.] */
-    const int gl_draws = !tagpu_vk_owns_present();
     const TAGPU_PACKET* pk = f->packet;
     const unsigned char* pic = NULL;
     unsigned gen = 0;
     int pw = 0, ph = 0, mx, my, mw, mh;
-    float kx, ky, v[24];
+    float kx, ky;
 
     if ((!s_mmbase && !s_mmforce) || !pk) return;
-    if (gl_draws && !s_mmProg) return;
     /* NOT `+0x142F1 & 2`, which is what DrawMinimap 0x466B00 tests: that is a
        DIRTY flag and 0x466B16 CLEARS it in the same breath, so it reads 0 on
        almost every frame [MEASURED 2026-09-09 — the first build of this gated
@@ -2196,17 +1695,6 @@ static void sharp_minimap(const TAGPU_FRAME* f)
            readable, and then there is nothing to bake — retry next frame. */
         const unsigned char* pal = tagpu_pal_live();
         if (!pal) return;
-        if (gl_draws) {
-            if (!s_mmTex) glGenTextures(1, &s_mmTex);
-            if (!s_mmTex) return;
-            glBindTexture(GL_TEXTURE_2D, s_mmTex);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-        }
         /* resolved HERE, once per map load and once per palette change, rather
            than per fragment: the sampler has to see colour for the filter above
            to mean anything, and a fade is a run of palette changes that costs a
@@ -2223,10 +1711,6 @@ static void sharp_minimap(const TAGPU_FRAME* f)
                 const unsigned char* e = pal + 4 * (unsigned)pic[i];
                 s_mmPicRgb[3 * i] = e[0]; s_mmPicRgb[3 * i + 1] = e[1]; s_mmPicRgb[3 * i + 2] = e[2];
             }
-            if (gl_draws) {
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, pw, ph, 0, GL_RGB, GL_UNSIGNED_BYTE, s_mmPicRgb);
-                glBindTexture(GL_TEXTURE_2D, 0);
-            }
             s_mmPicSerial++;
         }
         s_mmGenSeen = gen; s_mmPalSeen = tagpu_pal_serial(); s_mmTW = pw; s_mmTH = ph;
@@ -2235,12 +1719,6 @@ static void sharp_minimap(const TAGPU_FRAME* f)
     /* the program, its uniforms and every texture unit are set by whichever
        block below actually draws -- `s_mmProg` for the picture, `s_sharpProg`
        for the box. Only the array bindings are shared. */
-    if (gl_draws) {
-        x_glDisable(GL_BLEND);
-        x_glDisable(GL_DEPTH_TEST);
-        glBindVertexArray(s_vao);
-        glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-    }
     /* THE WHOLE PICTURE INTO THE WHOLE BOX, and that is the engine's own
        mapping rather than a guess: 0x466845 builds a context for the box-sized
        surface and 0x46685F hands the picture straight to the stretch
@@ -2271,24 +1749,6 @@ static void sharp_minimap(const TAGPU_FRAME* f)
         /* `mir_finish` re-reads this pair from the packet for the twin, so the
            GL texture below is the GL lane's copy and nothing else depends on
            it. [Vulkan-only plan, 4b-3.] */
-        if (gl_draws) {
-            if (!s_mmEngTex) glGenTextures(1, &s_mmEngTex);
-            if (!s_mmEngTex) { s_mmNoEng++; return; }
-            x_glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, s_mmEngTex);
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-            if (ew != s_mmEngW || eh != s_mmEngH) {
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, ew, eh, 0, GL_RGB, GL_UNSIGNED_BYTE, rg);
-                s_mmEngW = ew; s_mmEngH = eh;
-            } else {
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, ew, eh, GL_RGB, GL_UNSIGNED_BYTE, rg);
-            }
-        }
         /* how much of the map the engine is hiding right now, in its own
            texels — the number that says whether a run had any fog to mask at
            all. A fully-mapped skirmish reads 0 and proves nothing about the
@@ -2297,17 +1757,6 @@ static void sharp_minimap(const TAGPU_FRAME* f)
             int d = 0, n = ew * eh, i;
             for (i = 0; i < n; i++) if (rg[3 * i] != rg[3 * i + 1]) d++;
             s_mmFogged = (unsigned)d;
-        }
-        if (gl_draws) {
-            glUseProgram(s_mmProg);
-            x_glUniform2f(glGetUniformLocation(s_mmProg, "uSize"), (float)s_sharpW, (float)s_sharpH);
-            { GLint es[2]; es[0] = ew; es[1] = eh; x_glUniform2iv(s_uMmEngSize, 1, es); }
-            x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, s_palTex);
-            x_glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, s_mmTex);
-            quad(v, (float)mx * kx, (float)my * ky,
-                    (float)(mx + mw) * kx, (float)(my + mh) * ky, 0.0f, 0.0f, 1.0f, 1.0f);
-            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
-            x_glDrawArrays(GL_TRIANGLES, 0, 6);
         }
         mir_sdraw(TAGPU_GUISK_MM, (float)mx * kx, (float)my * ky,
                   (float)(mx + mw) * kx, (float)(my + mh) * ky,
@@ -2344,13 +1793,6 @@ static void sharp_minimap(const TAGPU_FRAME* f)
         }
         if (pal && R >= L && B >= T) {
             int e;
-            if (gl_draws) {
-                glUseProgram(s_sharpProg);
-                x_glUniform2f(s_uSharpProgSize, (float)s_sharpW, (float)s_sharpH);
-                x_glUniform4f(s_uSharpProgCol, r, g2, b2, 1.0f);
-                glBindVertexArray(s_vao);
-                glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-            }
             /* four one-GAME-pixel edges, so the box keeps the weight the engine
                gives it rather than thinning to a device pixel as k grows */
             for (e = 0; e < 4; e++) {
@@ -2359,11 +1801,6 @@ static void sharp_minimap(const TAGPU_FRAME* f)
                 else if (e == 1) { x0 = (float)L;     y0 = (float)B;     x1 = (float)(R + 1); y1 = (float)(B + 1); }
                 else if (e == 2) { x0 = (float)L;     y0 = (float)T;     x1 = (float)(L + 1); y1 = (float)(B + 1); }
                 else             { x0 = (float)R;     y0 = (float)T;     x1 = (float)(R + 1); y1 = (float)(B + 1); }
-                if (gl_draws) {
-                    quad(v, x0 * kx, y0 * ky, x1 * kx, y1 * ky, 0, 0, 0, 0);
-                    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
-                    x_glDrawArrays(GL_TRIANGLES, 0, 6);
-                }
                 {   /* the colour is already through the presented palette */
                     float bc[4]; bc[0] = r; bc[1] = g2; bc[2] = b2; bc[3] = 1.0f;
                     mir_sdraw(TAGPU_GUISK_FLAT, x0 * kx, y0 * ky, x1 * kx, y1 * ky,
@@ -2384,7 +1821,6 @@ static void sharp_begin(const TAGPU_FRAME* f)
        `s_sharpOn`/`s_sharpInk` -- which draw_layer hands the Vulkan twin -- and
        it runs the two clients whose `mir_sdraw` records ARE the twin's copy of
        the layer. Only the FBO and the clear are GL. [Vulkan-only plan, 4b-3.] */
-    const int gl_draws = !tagpu_vk_owns_present();
     int w = f->vp_w, h = f->vp_h;
     s_sharpOn = 0;
     /* ...AND THE INK WITH IT. `s_sharpOn` was reset on every call and this was
@@ -2400,55 +1836,12 @@ static void sharp_begin(const TAGPU_FRAME* f)
        generating, sizing and deleting a vp_w x vp_h texture and appending a log
        line 60 times a second for the rest of the session, which buries the
        heartbeat. The layer is additive, so staying off costs sharpness only. */
-    if (gl_draws && s_sharpFailed) return;
     if (w <= 0 || h <= 0 || w > 8192 || h > 8192) return;
-    if (!gl_draws) {
-        /* the layer's SPACE is the frame's viewport, and that is true with no
-           target to hold it: the clients clamp to it and record device-pixel
-           rects, and `mir_finish` publishes it as sharpW/sharpH. */
-        s_sharpW = w; s_sharpH = h;
-    }
-    if (gl_draws && s_sharpTex && (s_sharpW != w || s_sharpH != h)) sharp_drop();
-    if (gl_draws && !s_sharpTex) {
-        GLenum st;
-        glGenTextures(1, &s_sharpTex);
-        glGenFramebuffers(1, &s_sharpFbo);
-        if (!s_sharpTex || !s_sharpFbo) {
-            slog("gui: sharp layer — no texture/framebuffer id, the mirror alone");
-            sharp_drop(); s_sharpFailed = 1; return;
-        }
-        glBindTexture(GL_TEXTURE_2D, s_sharpTex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-        glBindTexture(GL_TEXTURE_2D, 0);
-        glBindFramebuffer(GL_FRAMEBUFFER, s_sharpFbo);
-        x_glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_sharpTex, 0);
-        st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        if (st != GL_FRAMEBUFFER_COMPLETE) {
-            /* the mirror alone is a complete picture — the layer is additive
-               (13.2), so a target we cannot make costs sharpness, never a hole */
-            char b[140];
-            _snprintf(b, sizeof b, "gui: sharp layer %dx%d FBO incomplete (%x) — the mirror alone", w, h, (unsigned)st);
-            b[sizeof b - 1] = '\0';
-            slog(b);
-            sharp_drop();
-            s_sharpFailed = 1;
-            return;
-        }
-        s_sharpW = w; s_sharpH = h;
-    }
-    if (gl_draws) {
-        glBindFramebuffer(GL_FRAMEBUFFER, s_sharpFbo);
-        glViewport(0, 0, w, h);
-        x_glDisable(GL_SCISSOR_TEST);
-        x_glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-        x_glClear(GL_COLOR_BUFFER_BIT);
-    }
-    if (s_sharptest && (!gl_draws || s_sharpProg)) {
+    /* the layer's SPACE is the frame's viewport, and that is true with no
+       target to hold it: the clients clamp to it and record device-pixel
+       rects, and `mir_finish` publishes it as sharpW/sharpH. */
+    s_sharpW = w; s_sharpH = h;
+    if (s_sharptest) {
         /* THE HARNESS LEVER, never for a player, and the only thing in G17a
            that puts a texel in this layer: a 64x64 opaque green square at the
            viewport's TOP-LEFT and a one-DEVICE-pixel white column at device
@@ -2460,31 +1853,10 @@ static void sharp_begin(const TAGPU_FRAME* f)
            geometry is what G17c and G17d will use, and a scissor box would
            have proved the convention for the one client kind that never
            needs it. */
-        float v[24];
-        if (gl_draws) {
-            x_glDisable(GL_BLEND);
-            x_glDisable(GL_DEPTH_TEST);
-            glUseProgram(s_sharpProg);
-            x_glUniform2f(s_uSharpProgSize, (float)w, (float)h);
-            glBindVertexArray(s_vao);
-            glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-        }
         {
             static const float green[4] = { 0.0f, 1.0f, 0.0f, 1.0f };
             static const float white[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
-            if (gl_draws) {
-                x_glUniform4f(s_uSharpProgCol, 0.0f, 1.0f, 0.0f, 1.0f);
-                quad(v, 0.0f, 0.0f, 64.0f, 64.0f, 0, 0, 0, 0);
-                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
-                x_glDrawArrays(GL_TRIANGLES, 0, 6);
-            }
             mir_sdraw(TAGPU_GUISK_FLAT, 0.0f, 0.0f, 64.0f, 64.0f, 0, 0, 0, 0, green, 0);
-            if (gl_draws) {
-                x_glUniform4f(s_uSharpProgCol, 1.0f, 1.0f, 1.0f, 1.0f);
-                quad(v, 100.0f, 0.0f, 101.0f, (float)h, 0, 0, 0, 0);
-                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
-                x_glDrawArrays(GL_TRIANGLES, 0, 6);
-            }
             mir_sdraw(TAGPU_GUISK_FLAT, 100.0f, 0.0f, 101.0f, (float)h, 0, 0, 0, 0, white, 0);
         }
     }
@@ -2508,18 +1880,15 @@ static void sharp_begin(const TAGPU_FRAME* f)
        tagpu_gui_present rebinds the target FBO and the frame's viewport after
        draw_layer -- which can return early -- so a future client drawing here
        must not assume draw_layer ran. */
-    if (gl_draws) glBindFramebuffer(GL_FRAMEBUFFER, 0);
     s_sharpOn = 1;
 }
 
 static void draw_layer(const TAGPU_FRAME* f)
 {
     TWIN* t = s_presented ? twin_find(s_presented) : NULL;
-    float v[24], ky;
-    GLint sz[2], sh[2];
+    float ky;
     int L = 0, T = 0, W = 0, H = 0, key;
     int hudPw = 0, hudBh = 0, hudQ8 = 256;
-    const int gl_draws = !tagpu_vk_owns_present();
     if (!t || t->w != f->game_width || t->h != f->game_height) return;
     /* the palette was uploaded in tagpu_gui_present, BEFORE restore_step
        decided s_colValid. Uploading it again here -- after a drain that can be
@@ -2582,55 +1951,6 @@ static void draw_layer(const TAGPU_FRAME* f)
        no UI at all. Landing 4b-2 met this shape in tagpu_posedraw_live();
        this is the same one, in the function that hands the UI over.
        [The vulkan-only plan, landing 4b-3.] */
-    if (gl_draws) {
-        glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
-        glViewport(f->vp_x, f->vp_y, f->vp_w, f->vp_h);
-        x_glDisable(GL_BLEND);
-        x_glDisable(GL_DEPTH_TEST);
-        glUseProgram(s_layProg);
-        sz[0] = t->w; sz[1] = t->h;
-        x_glUniform2iv(s_uLaySize, 1, sz);
-        glUniform1i(s_uLayStrict, s_strict && f->surface_tex ? 1 : 0);
-        glUniform1i(s_uLayKey, key);
-        /* only while the viewport really is our key fill -- see tap() */
-        glUniform1i(s_uLayVpKey, tagpu_terrown_filled() ? key : -1);
-        x_glUniform4f(s_uLayVp, (float)L, (float)T, (float)W, (float)H);
-        /* THE RECT tagpu_gui_cursor_frame READ, not a second read of the globals:
-           the world composite was given that one before the native pass ran, and
-           a cursor that moved in between would leave the two halves erasing
-           different rectangles. */
-        x_glUniform4f(s_uLayCursor, s_curEng[0], s_curEng[1], s_curEng[2], s_curEng[3]);
-        glUniform1i(s_uLayCursOurs, s_curOwn ? 1 : 0);
-        /* the guard needs the engine's surface to compare against; without one
-           (no surface_tex this frame) it stays off and the layer behaves as before */
-        glUniform1i(s_uLayGuard, f->surface_tex ? 1 : 0);
-        x_glUniform2f(s_uLayScale, s_k, ky);
-        /* HUD scale (20): the two reserved integers and s, resolved against the
-           surface being presented -- resolved above, before this block. */
-        x_glUniform4f(s_uLayHud, (float)hudPw, (float)hudBh, 256.0f / (float)hudQ8, s_hudS);
-        /* the sharp layer, above everything, at the device resolution */
-        glUniform1i(s_uLaySharpOn, s_sharpOn ? 1 : 0);
-        sh[0] = s_sharpW; sh[1] = s_sharpH;
-        x_glUniform2iv(s_uLaySharpSize, 1, sh);
-        x_glActiveTexture(GL_TEXTURE4);
-        glBindTexture(GL_TEXTURE_2D, s_sharpOn ? s_sharpTex : s_palTex);
-        /* Classic++: the presented surface's colour twin, and whether it may be
-           read at all this frame (the palette-validity rule, restore_step) */
-        glUniform1i(s_uLayColOn, (s_colValid && t->rgb) ? 1 : 0);
-        x_glActiveTexture(GL_TEXTURE3);
-        glBindTexture(GL_TEXTURE_2D, t->rgb ? t->rgb : s_palTex);
-        x_glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, (GLuint)f->surface_tex);
-        x_glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, s_palTex);
-        x_glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, t->tex);
-        quad(v, 0, 0, 1, 1, 0, 0, 0, 0);
-        glBindVertexArray(s_vao);
-        glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
-        x_glDrawArrays(GL_TRIANGLES, 0, 6);
-    }
     /* THE COMPOSITE HAS RUN, so anything the sharp layer carried is now on the
        frame the player sees. This — not the draw into the layer — is what lets
        the engine's own cursor blit stand down (tagpu_cursown.h). Every early
@@ -2650,7 +1970,7 @@ static void draw_layer(const TAGPU_FRAME* f)
        The frames where the two disagree are counted, as `held=` in this
        function's own heartbeat. [The gap was named by the 4b-3 landing review
        and closed by gate 4's last item; gpu-status.md §2.57.] */
-    if (s_sharpOn && s_curInLayer && (gl_draws || s_mirRec)) s_curDrew = 1;
+    if (s_sharpOn && s_curInLayer && s_mirRec) s_curDrew = 1;
 
     /* G19f: the uniforms this composite just ran with, for the Vulkan mirror.
        Taken HERE rather than recomputed in the publish: every one of them is a
@@ -2670,7 +1990,11 @@ static void draw_layer(const TAGPU_FRAME* f)
         s_mHand.guard = have_engine_frame(f) ? 1 : 0;
         s_mHand.scaleX = s_k; s_mHand.scaleY = ky;
         s_mHand.sharpOn = s_sharpInk ? 1 : 0;   /* COVERAGE, not existence */
-        s_mHand.colourTwins = (s_colValid && t->rgb) ? 1 : 0;
+        /* `t->rgb` was the second term until [landing 11-4b] took the GL ids off
+           TWIN; `s_colValid` alone says the same thing and is pinned at 0 (see its
+           declaration), so this publishes 0 -- correctly: this lane has no colour
+           twins for `tagpu_vk_gui.c` to sample. */
+        s_mHand.colourTwins = s_colValid ? 1 : 0;
         s_mHand.vpX = f->vp_x; s_mHand.vpY = f->vp_y;
         s_mHand.vpW_gl = f->vp_w; s_mHand.vpH_gl = f->vp_h;
         /* the same four numbers the uniform above ran with, not a second
@@ -2683,22 +2007,6 @@ static void draw_layer(const TAGPU_FRAME* f)
 
 /* leave nothing of ours bound: the drain binds twin FBOs, the atlas, the
    copy source and our VAO/program, and draw_layer may not have run */
-static void unbind_all(void)
-{
-    /* PURE GL: this puts pixels in a GL object and feeds nothing the Vulkan
-       twin is told. On a lane with no GL context there is nothing here to do
-       and nothing lost. [The vulkan-only plan, landing 4b-3.] */
-    if (tagpu_vk_owns_present()) return;
-    glBindVertexArray(0);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    x_glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, 0);
-    x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, 0);
-    x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, 0);
-    x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, 0);
-    x_glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, 0);
-    glUseProgram(0);
-}
-
 /* ---------------------------------------------------------------- present */
 static void poll(void)
 {
@@ -2773,15 +2081,15 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
        GL context makes none of them and must not be stopped by their absence
        -- everything below this line either gates itself or is the Vulkan
        twin's. [The vulkan-only plan, landing 4b-3.] */
-    if (tagpu_vk_owns_present()) {
-        /* the atlas alone: the sprite table this module resolves against, which
-           is the Vulkan twin's as much as the GL lane's */
-        if (!atlas_setup()) return;
-    } else if (!init_gl()) {
-        return;
-    }
-    upload_palette();       /* before restore_step, which compares against it */
-    restore_step();         /* before the drain: its sprite ops ask whether colour is valid */
+    /* the atlas alone: the sprite table this module resolves against, which
+       is the Vulkan twin's as much as the GL lane's */
+    if (!atlas_setup()) return;
+    /* `upload_palette()` and `restore_step()` STOOD HERE, the present's first two
+       statements [the vulkan-only plan, landing 11-4b]. Both opened with
+       `if (tagpu_vk_owns_present()) return;` -- landing 4b-3 had already found them
+       PURE GL, feeding the twin nothing. `restore_step` leaving `s_colValid` at 0 is
+       not a loss: that is what the record's `restored` term reads, and "indexed" is
+       the honest answer for a lane with no restored GL twin to sample. */
     /* STEP THE RESTORER WHEN NOTHING ELSE DID. tagpu_rglsl_step's only other
        caller is the native pass, which returns early with no unit array — so
        in the shell, and in game with the world passes disarmed, it never runs
@@ -2848,15 +2156,10 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         }
     }
     mir_finish(f);          /* G19f: close and publish the frame's record */
-    unbind_all();
     /* sharp_begin left the default framebuffer bound and the viewport at the
        layer's size; this puts the frame's target and viewport back for
        whatever draws after us. Both are GL state and there is none to restore
        on a lane with no context. [The vulkan-only plan, landing 4b-3.] */
-    if (!tagpu_vk_owns_present()) {
-        glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
-        glViewport(f->vp_x, f->vp_y, f->vp_w, f->vp_h);
-    }
     if (f->frame_counter - last >= 300) {
         /* 411 literal chars + 69 conversions: the worst case is ~1120, so the
            buffer is 1152 and is now close enough that the next group needs a
