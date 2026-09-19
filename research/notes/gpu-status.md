@@ -11502,6 +11502,72 @@ Both VS/FS pairs are kept behind a `-Wunused-variable` pragma and **both bracket
 with a planted unused static**, not read: the probe warns after the `pop`, so the suppression
 genuinely ends there. `spirv: 49 shaders, 33 programs, headers current` throughout.
 
+### 2.70 The unit pass loses its bring-up, and a gate comes unpinned — landing 11-5b
+
+`tagpu_native.c`, the largest file in the fork, is now GL-free: 367 lines out, no call, no
+type, no constant, no `opengl_utils.h`. Gone: `init_gl` (112 of the file's 139 GL call sites),
+`tex2d`, `mksh`, `getgl`, seventeen `PFN_*` typedefs and seventeen `x_gl*` pointers, `s_state`,
+seven program/FBO/texture names, **all 31 uniform locations**, `s_fboW/H/SS`, `s_palInit`,
+`s_uCast`, `s_shU`, and the three lane-gated upload blocks (the fog grid, the fog shade table,
+the palette). Each of those three published its CPU-side bytes OUTSIDE the gate, so what remains
+is the publication that was always the point.
+
+**THE STRUCTURE-SHADOW GATE WAS PINNED SHUT, AND THAT IS THE FINDING.** It read
+`tagpu_owndraw_set_structshadow(s_armed == 1 && gl_draws && suppress, …)`. The `gl_draws` term
+existed so that a GL → Vulkan switch could not carry one raised frame across the seam. With one
+lane there is no seam — and leaving the term in would have pinned the gate at 0 **for any future
+painter**, so the engine would go on drawing its slant shadows underneath ours, silently. The
+term is gone.
+
+**And the gap that exposes, dated rather than guessed: nothing sets `s_ssSuppress` to 1 any
+more.** Its writer was
+
+```c
+s_ssSuppress = tagpu_terrown_filled() ||
+               (pdReady && ((mapLive && nterr > 0) ||
+                            ((gfx & 4) && !(cpp && !hard) && npdSlant > 0)));
+```
+
+which stood in the GL draw half. Verified by reading two revisions rather than by memory:
+present at `31c700d` (landing 10b), absent at `3771ec4` (landing 11-3). So the gate has
+published 0 every frame since 11-3, the engine draws every structure shadow itself, and that is
+the correct picture while we paint none. **A Vulkan-side structure-shadow painter must set
+`s_ssSuppress` where the GL one did.** The read-and-clear keeps it bounded either way: a frame
+that does not reach a painter lowers the gate on its own.
+
+That same deleted region also answers, in its own words, a question the plan has been holding
+open: *"`tagpu_shadow_begin` and `tagpu_shadow_end` are called only from this function below
+that return … and so `tagpu_shadow_handover` returns 0 at `tagpu_vk_shadow.c:788` and that pass
+stands down. No `tagpu_vk*` file mentions `slant` at all."* That is independent confirmation of
+what a fresh grep also shows — `tagpu_shadow_begin` has no caller anywhere — and it sharpens
+escalation reason 1 rather than resolving it.
+
+**Fields we write.** `fv.fogTex` / `fv.fogLut` still carry `s_fogTex` / `s_fogLutTex`, which are
+now permanent 0s: nothing creates them. They stay because the fields are read by
+`tagpu_hires_draw.c`, and reshaping `TAGPU_FXVIEW` reaches into a file that is escalation reason
+1. They are declared `unsigned int` rather than `GLuint` now, matching the field they feed, which
+is what lets the file drop the GL header. **`s_palTex` did not survive the same test** — it had
+no reader at all once the palette upload went. A comment written during the landing claimed it
+was published; the compiler disproved it. *"It is published"* is a claim to check, not to infer
+from the neighbours. Note also the collision worth knowing: `TAGPU_FXVIEW.fogLut` is an
+`unsigned int` GL name, while the frame packet's `fogLut` is a `const unsigned char*` to the
+256 bytes the Vulkan twins actually read through `tagpu_native_foglut()`.
+
+**Two smaller shapes.** `if (!gl_draws) { …hand over…; return; }` wrapped the entire remainder of
+the function once 11-3 removed the draw half below it — so the test and the `return` went and the
+hand-over is simply the end of the function. `tagpu_native_wrecks_armed` loses `s_state != 2`
+("the GL program has not refused"), there being no program to refuse.
+
+**Verification, same method as 11-5a.** Inventory against HEAD: exactly `getgl`, `init_gl`,
+`mksh`, `tex2d` removed, nothing added. Against `main`, per function: **21 of 28
+instruction-identical**, and the only three that changed are the three edited. External
+references lose 32 and gain nothing — 29 GL entry points, `getgl`'s two imports and
+`xwglGetProcAddress`, plus `tagpu_vk_owns_present` (no `gl_draws` left to compute) and
+`tagpu_shadow_locate`, which `init_gl` called to name uniforms in the deleted program and which
+still has two callers elsewhere. Include removal proved inert separately. Five of the six shaders
+sit behind a probed pragma; `FS` is the exception with a live C caller,
+`tagpu_native_unit_fs()`, which is why the posed and unposed units cannot drift apart.
+
 ## 4. What the work taught us
 
 These are the transferable parts — the reasons things are shaped the way they are.

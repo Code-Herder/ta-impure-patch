@@ -3217,8 +3217,11 @@ and left the identical write-only static in `tagpu_scaffold.c`, inside a functio
 review had already fixed once for testing it. **11-5 is under way and is FOUR parts, split along
 the passes themselves** — `11-5a` the feature and effects passes' GL bring-up (**landed**; both
 files now GL-free, no call, type, constant or `opengl_utils.h`, and the gates rewritten into the
-positive `if (!s_atlas.made)` form), `11-5b` `tagpu_native.c` (139 GL call sites, the largest and
-most dangerous file in the fork), `11-5c` `tagpu_terr.c` (107, spread over nine functions), and
+positive `if (!s_atlas.made)` form), `11-5b` `tagpu_native.c` (**landed**; 367 lines out, the file GL-free, and
+the landing's real find was a GATE rather than a call — the structure-shadow publication ANDed
+in `gl_draws`, which would have pinned it at 0 for any future painter, and `s_ssSuppress` has
+had no writer since 11-3, so the engine draws every structure shadow itself today), `11-5c`
+`tagpu_terr.c` (107, spread over nine functions), and
 `11-5d` the entry-point surface the row names — `opengl_utils.{c,h}`, `tagpu_restoreglsl.c`, the
 orphaned GL-object accessors, and the include residue in the four files that still include
 `opengl_utils.h` and make no GL call (`render_gdi.c`, `tagpu_fps.c`, `tagpu_render3do.c`,

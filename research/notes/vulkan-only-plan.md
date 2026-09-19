@@ -2163,9 +2163,16 @@ that a count which grows is the plan catching up with the work.) The row was
        had already taken both draw halves and neither file had an `x_gl*` CALL SITE left. Both
        are now GL-free — no call, no type, no constant, no `opengl_utils.h` — and both gates
        are rewritten into the positive `if (!s_atlas.made) { atlas_setup(); … }` form.
-     - **11-5b — `tagpu_native.c`.** 139 GL call sites: 112 in `init_gl`, 15 in
-       `tagpu_native_frame`'s three `if (gl_draws)` blocks, 7 in the `tex2d` helper, 5 in
-       `mksh`. The largest and most dangerous file in the fork, so it is its own landing.
+     - **11-5b — `tagpu_native.c`. LANDED**, and it earned its separate row. 139 GL call
+       sites: 112 in `init_gl`, 15 in `tagpu_native_frame`'s three `if (gl_draws)` blocks, 7 in
+       `tex2d`, 5 in `mksh`; 367 lines out and the file is GL-free. **The thing it found was
+       not a GL call but a GATE: `tagpu_owndraw_set_structshadow(s_armed == 1 && gl_draws &&
+       suppress, …)`.** The `gl_draws` term guarded a lane switch that no longer exists, and
+       leaving it would have pinned the gate at 0 for any future painter — the engine drawing
+       its slant shadows underneath ours, with nothing to report it. It also exposed that
+       `s_ssSuppress` has had no writer since 11-3 took the GL draw half (verified across
+       `31c700d` and `3771ec4`), so the gate publishes 0 every frame today; a Vulkan-side
+       painter must set it. See gpu-status §2.70.
      - **11-5c — `tagpu_terr.c`.** 107 sites spread over nine functions — `init_gl` (53),
        `build_hills` (12), `build_height` (10), `ensure_atlas` (10), `glsl_begin` (9), `mksh`
        (5), `dump_if_armed` (4), `tagpu_terr_hills_draw` (3), `rgb_mirror_step` (1). The spread
