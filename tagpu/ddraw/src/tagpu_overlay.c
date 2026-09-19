@@ -480,8 +480,10 @@ void tagpu_triggers_frame(const TAGPU_FRAME* f)
        the ENTRY of the engine's flip, so the primary here holds the frame the
        PREVIOUS flip presented -- which is why capturing in the same pass that
        saw the trigger returned frame N-1 (landing 11-2's review, MEDIUM-1).
-       Servicing first and arming second puts one flip between the two, so the
-       picture is a frame the engine presented AFTER the trigger was seen.
+       Servicing first and arming second puts at least one flip between the
+       two, so the picture is a frame the engine presented AFTER the trigger was seen. The
+       gap is one pass of this family, NOT one flip: the 16 ms gate above means
+       P and P+1 can be many flips apart.
 
        The host is this function and not `dds_Unlock` (tried, and reverted by
        the same review's round 2): that branch is gated on `g_ddraw.render.run`,
@@ -491,7 +493,10 @@ void tagpu_triggers_frame(const TAGPU_FRAME* f)
        it. An arm could therefore wait for an arbitrary later frame, or for
        none. Here there is no such gate: this family runs on every flip that
        passes its 16 ms window, whichever arm the flip takes, and it is above
-       `before_flip`'s `s_opsLive` return so a bare `tacli launch` has it too. */
+       `before_flip`'s `s_opsLive` return so a bare `tacli launch` has it too.
+       That is arm-independence of the FAMILY, not of the frame -- only the
+       DirectDraw arm writes our primary -- but a build taking the other arm
+       would show this fork no frame anywhere, so it is not this verb's gap. */
     ss_shot_service(g_ddraw.primary);
     if (GetFileAttributesA("tagpu_shot.trigger") != INVALID_FILE_ATTRIBUTES) {
         DeleteFileA("tagpu_shot.trigger");

@@ -126,6 +126,27 @@ static BOOL ss_screenshot_32bit(char* filename, IDirectDrawSurfaceImpl* src)
     return !error;
 }
 
+/* `_snprintf` does NOT terminate the buffer when the text is exactly `cap`
+   long, and MSVCRT returns a negative count when it truncates. Both matter
+   here: `title` is up to 127 chars on its own (it is the window title, which
+   tacli fills with the worktree and instance names), so a long one truncates
+   the name and every suffix below would then format the SAME bytes -- one path
+   stat'ed 99 times, then a give-up. That is the silent timeout the suffix
+   exists to remove, rebuilt by the fix for it. Refuse the name instead; the
+   caller's own timeout is the signal, and it says what it was waiting for. */
+static int ss_name(char* out, size_t cap, const char* title,
+                   const char* str_time, int n)
+{
+    int len = n ? _snprintf(out, cap, "%s%s_%s_%d.png",
+                            g_config.screenshot_dir, title, str_time, n)
+                : _snprintf(out, cap, "%s%s_%s.png",
+                            g_config.screenshot_dir, title, str_time);
+    if (len < 0 || (size_t)len >= cap)
+        return 1;
+    out[len] = 0;
+    return 0;
+}
+
 static int s_shotArmed;
 
 void ss_shot_arm(void)
@@ -172,7 +193,8 @@ BOOL ss_take_screenshot(IDirectDrawSurfaceImpl* src)
     CreateDirectoryA(g_config.screenshot_dir, NULL);
 
     strftime(str_time, sizeof(str_time), "%Y-%m-%d_%H-%M-%S", localtime(&t));
-    _snprintf(filename, sizeof(filename) - 1, "%s%s_%s.png", g_config.screenshot_dir, title, str_time);
+    if (ss_name(filename, sizeof(filename), title, str_time, 0))
+        return FALSE;
 
     if (FILE_EXISTS(filename))
     {
@@ -180,12 +202,14 @@ BOOL ss_take_screenshot(IDirectDrawSurfaceImpl* src)
            the caller's arm for nothing: two `tacli shot`s in the same wall-clock
            second (uiwalk.py takes `surf` and `surf2` back to back) produced one
            file and one silent timeout. Disambiguate instead -- the reader picks
-           the newest *.png by mtime, so the suffix costs it nothing. */
+           the newest *.png by mtime, so the suffix costs it nothing. This is
+           not a flood risk on the PrintScreen path: keyboard.c fires on the key
+           EDGE (`!(lParam & (1 << 30))`), never on auto-repeat. */
         int n;
         for (n = 2; n <= 99; n++)
         {
-            _snprintf(filename, sizeof(filename) - 1, "%s%s_%s_%d.png",
-                      g_config.screenshot_dir, title, str_time, n);
+            if (ss_name(filename, sizeof(filename), title, str_time, n))
+                return FALSE;
             if (!FILE_EXISTS(filename))
                 break;
         }

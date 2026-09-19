@@ -19,9 +19,21 @@ BOOL ss_take_screenshot(struct IDirectDrawSurfaceImpl* src);
    That is not a reason to capture somewhere else; it is the clock. The family
    SERVICES a pending arm before it polls for a new one, so a trigger seen on
    pass P is answered on pass P+1 with a frame the engine presented in between.
-   Both calls are the same detour on the game thread, one flip apart, so the
-   flag needs no interlock and no fence -- and the ordering is the engine's own
-   copy, not a window anyone is betting on.
+   Both calls are the same detour on the game thread, so the flag needs no
+   interlock and no fence, and the ordering is the engine's own copy.
+
+   THE GAP IS ONE FAMILY PASS, NOT ONE FLIP -- the family is behind a 16 ms QPC
+   gate and the shell flips thousands of times a second, so P and P+1 can be
+   ~80 flips apart. The property that matters survives (the picture is never
+   older than the trigger), but the bound is a pass, and saying "one flip" was
+   an overclaim this landing's third review caught.
+
+   AND THE FRAME EXISTS BECAUSE OF THE DIRECTDRAW ARM. The flip has two: the
+   arm at 0x4C6475 writes our primary, and the one at 0x4C63C0 does
+   GetDC/BitBlt/ReleaseDC and touches no DirectDraw surface. This host runs at
+   the flip's entry either way, so the FAMILY is arm-independent -- but the
+   picture is only fresh on the DirectDraw arm, and on a build that took the
+   other one nothing in this fork would see a frame at all.
 
    `dds_Unlock`'s primary branch was tried as the capture site and reverted:
    it is gated on `g_ddraw.render.run` (cleared by the window thread on

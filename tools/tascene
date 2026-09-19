@@ -1909,6 +1909,9 @@ def run_tacli(argv, timeout=600.0, want_json=False):
     return text
 
 
+# UNUSED SINCE landing 11-2 took `ab`'s engine-side capture, and kept on
+# purpose: the capture that replaces it, `tagpu_vk_shot.c`, writes PPM too, so
+# this is the reader `ab` needs back rather than dead weight to delete.
 def read_ppm(path: Path):
     blob = path.read_bytes()
     if not blob.startswith(b"P6"):
@@ -2025,31 +2028,14 @@ def cmd_ab(args):
         "our passes. Use the Vulkan A/B (tagpu_vk_shot.c + tools/vk-ab.py) "
         "until `ab` is wired to it.")
 
-    pack = out / "pack"
-    build_argv = [str(scenario_path), "-o", str(pack), "--eye", f"{eye[0]},{eye[1]}",
-                  "--res", f"{ew}x{eh}"]
-    main(["build"] + build_argv)
-
-    ours_png = out / "browser.png"
-    main(["shot", str(pack), "-o", str(ours_png)] + (["--opts", args.opts] if args.opts else []))
-    ow, oh, _ch, ours = ta3do.read_png(ours_png.read_bytes())
-    if _ch == 4:
-        ours = bytes(b for i, b in enumerate(ours) if i % 4 != 3)
-
-    if (ow, oh) != (ew, eh):
-        die(f"size mismatch: engine {ew}x{eh}, browser {ow}x{oh}")
-
-    vpL, vpT, vw, vh = viewport([ew, eh])
-    n, mae, px = diff_rgb(engine, ours, ew, eh, (vpL, vpT, vw, vh))
-    panel([("engine", engine, ew, eh), ("tascene", ours, ow, oh)], out / "ab.png")
-
-    result = {"eye": eye, "res": [ew, eh], "viewport": [vpL, vpT, vw, vh],
-              "differing": n, "viewport_px": px, "pct": round(100.0 * n / px, 3),
-              "mean_abs": round(mae, 3), "panel": str(out / "ab.png")}
-    ta3do.out(result, args.json,
-              human=(f"engine vs tascene inside the viewport: {n}/{px} px differ "
-                     f"({100.0 * n / px:.2f}%), mean abs {mae:.2f}/255\n"
-                     f"panel: {out / 'ab.png'}"))
+    # WHAT STOOD HERE went with the capture [landing 11-2]: the browser-side
+    # build and shot, the size check, the viewport diff and the side-by-side
+    # panel. All of it consumed `engine`, `ew` and `eh`, which the line above no
+    # longer produces, so leaving it would have been unreachable code naming
+    # variables that do not exist -- the shape of "still works" that a reader
+    # trusts and an interpreter never reaches. The browser half is unchanged and
+    # still driven by `tascene build` and `tascene shot`; only the pairing is
+    # gone, and it comes back when `ab` is wired to the Vulkan capture.
 
 
 # --------------------------------------------------------------------------- CLI
