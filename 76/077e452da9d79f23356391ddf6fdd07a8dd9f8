@@ -1,0 +1,93 @@
+landing-review: vulkan-only plan, landing 10c-3 -- the live-state log moves to the game thread
+
+Range reviewed: main...HEAD (0470c2b..76077e4, 3 commits).
+Reviewer: dedicated read-only agent, `high` (CLAUDE.md: "changes the
+synchronisation between the game thread and the render thread" -- this
+moves the roster/header/mouse logging off the render thread and onto the
+game thread's publish path).
+TWO rounds. Round 1 returned findings that were fixed with new code;
+round 2 returned NO HIGH, confirmed all four of round 1's fixes, and
+called the s_lastFilled stamp "correct and provably complete".
+
+WHAT LANDED. log_units left tagpu_overlay.c -- the render thread, reached
+only by render_ogl.c and render_vk.c, so on renderer=gdi it never ran and
+`tacli roster` could not answer. It is now roster_log() in
+tagpu_packet_pub.c, called from the game thread off the packet that was
+just filled, behind three independent QPC gates: ROSTER_HDR_MS 500 for
+`units:`, ROSTER_DUMP_MS 5000 for the unit block, ROSTER_MOUSE_MS 250 for
+`mouse:`. A keepalive forces a publish when no fill has happened for
+ROSTER_HDR_MS, because on a lane with no consumer the FRESH gate skips
+every unforced publish and fill_frame would otherwise run about once per
+level -- the gdi starvation trap.
+
+ROUND 1's FINDINGS, ALL FIXED IN CODE.
+ - The force asked the MOUSE cadence (the shortest), which published
+   twice as often as anything needs. It asks ROSTER_HDR_MS now: the
+   cadence of the slowest line that is actually read.
+ - `mouse:` was the verification argument and nothing parses it. tacli's
+   structured readers are PEEK_RX, ROSTER_RX and SCN_LIVE_RX; the only
+   other mention of `mouse: screen=` in the tree is prose.
+ - One fopen per unit on the game thread, bounded only by
+   TAGPU_PK_MAX_UNITS (16384). The dump takes one open for the block.
+ - The `!ta` early return skipped the s_lastFilled stash, so roster_log
+   could read a packet other than the one just filled. The stamp moved to
+   the top of fill_frame. Round 2 re-derived this and found it complete.
+ - An unreplicated "13 361 draws/s" (the next run read 7 388) and a
+   "twice on both lanes" that the recorded figures contradict (77/151).
+
+ROUND 2's FINDINGS, ALL ACTED ON IN 76077e4.
+ - MEDIUM, ta-drive: "`tacli shot` -- the engine's own surface -- does
+   work" on gdi is false. NEITHER capture verb leaves the GL lane:
+   tagpu_shot.trigger is polled only in render_ogl.c and
+   tagpu_glshot.trigger only there and in tagpu_scaffold.c, itself a GL
+   pass. Measured failing on gdi AND on Vulkan. Landing 11 deletes
+   render_ogl.c and has to rewire both.
+ - MEDIUM, the plan: an unchanged context line still described the force
+   as asking "the shortest of the three cadences" -- it asks the longest,
+   and the corrected paragraph sat twenty lines below it.
+ - MEDIUM, gpu-status: "with `gap` climbing beside it" is false for gdi.
+   cGap's sole increment is in tagpu_packet_acquire (tagpu_packet.c:735),
+   which nothing on that lane calls, so only overrun moves there.
+ - LOW: `tacli roster` labelled each block with the header from the
+   PREVIOUS roster_log call -- 500 ms older than the screen= values it
+   labels and from a different eye than their projection. roster_log
+   emits the dump then its header, so the block's own header is the first
+   one below it; the reverse scan overwrote eye on every header it passed.
+   Fixed in tools/tacli and verified on a real gdi log with every header's
+   eye rewritten to its own line number: old reader 1200, new 1206, block
+   1201..1202, unit list identical. Pre-existing in shape (log_units had
+   it too) but fixed here because this landing rewrote the line it reads.
+ - LOW: s_rosDump was stamped before the fopen, so a failed open dropped a
+   whole block silently, left `tacli roster` reporting "no roster lines
+   yet (needs a running game)" for a running game, and put the retry 5 s
+   out. Stamped by the open now, and it says once if the open fails.
+ - LOW/NIT: ta-capture's surviving "300-frame roster/swept lines (10 s
+   stale)" clause; two _snprintf buffers without the termination guard the
+   third had; and a "97 lines"/"eleven units" pair that does not divide.
+ - Plus a comment for the s_rosFill stamp, whose position ABOVE the
+   in_game guard is load-bearing: below it, a persistent !in_game fill
+   would freeze the clock and make the force due on every in-play draw.
+
+WHAT RE-MEASURING DISPROVED, AFTER ROUND 2. The plan asserted that where
+nothing consumes, the only fills are the forced ones, so `mouse:` would
+run at 500 ms and read 1:1 against `units:`. Run A read 92/92 and agreed.
+Run B (fx-lasers, ~90 s, gdi, the same build plus round 2's fixes) read
+192/376 -- a clean 2:1, with `mouse, mouse, units` repeating through the
+log, so fills are 250-500 ms apart. The force is a FLOOR on the fill
+rate, not a ceiling: pkx_publish skips only when the cell it is about to
+write is FRESH (tagpu_packet.c:315), and which cell that is depends on
+the XCHG rotation rather than on whether anyone consumed. How many get
+through is NOT derived, and gdi prints no counter that would settle it.
+The notes now carry the range and say it is underived. It costs nothing
+in correctness: `mouse:` is the line nothing reads, and the other two
+hold their own clocks inside roster_log.
+
+WHAT IS NOT COVERED. The gdi exchange counters cannot be read at all --
+the `packet:` heartbeat comes from tagpu_packet_frame_end, whose only
+callers are render_ogl.c and render_vk.c -- so every statement about the
+gdi fill rate is from the code or from line counts, never from a counter.
+The per-unit dump cost at a realistic unit count was never measured; the
+one-open bound is why it does not need to be. No third review round was
+run: what changed after round 2 is one moved assignment in the DLL, a
+three-line reorder in tools/tacli verified by running it, two buffer
+guards, comments and prose.
