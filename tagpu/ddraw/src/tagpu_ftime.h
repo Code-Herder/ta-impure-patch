@@ -57,25 +57,28 @@
 void tagpu_ftime_poll(void);
 int  tagpu_ftime_armed(void);
 
-/* The GL lane's bracket. Render thread, GL context current. `begin` is the
-   first thing the frame issues; `end` is immediately before `tagpu_vk_frame`,
-   NOT before the buffer swap -- with the lane armed the Vulkan lane runs
-   between the two, and the whole point is that the GL bracket must not contain
-   the other lane's submit. What lies between them is every GL command this
-   iteration produced: the fork's own upload and composite as well as every
-   tagpu pass, which is what a replacement backend would have to do instead.
-   [The "before the buffer swap" wording was loose and the landing-6 review
-   caught it; render_ogl.c's own comment had it right.]
+/* THE GL LANE'S BRACKET IS GONE (11-5e-1), and with it the second ring, the
+   query pool and the `s_glDrives` arbitration. `tagpu_ftime_gl_begin` and
+   `_gl_end` had exactly one caller between them -- render_ogl.c -- and landing
+   4d-1 deleted that backend, so from 4d-1 onward they were code no build could
+   reach and a ring no frame could fill. What they recorded is worth keeping
+   even though the code is not:
 
-   IT IS AN ELAPSED SPAN ON THE GPU TIMELINE, NOT A BUSY COUNTER. `glQueryCounter`
-   records when the GPU reaches that point in the command stream, so anything
-   that stalls INSIDE the bracket -- the render thread's own critical section,
-   the restorer's synchronising read-back -- is counted whether the GPU was
-   working or idle. On a frame where the GPU is saturated the two coincide; on
-   one where it is not, this number is the frame, not the work. Say which of
-   those a fixture is before quoting a ratio from it. */
-void tagpu_ftime_gl_begin(void);
-void tagpu_ftime_gl_end(void);
+     - `glQueryCounter` made it an ELAPSED SPAN ON THE GPU TIMELINE, not a busy
+       counter: anything that stalled inside the bracket (the render thread's
+       own critical section, the restorer's synchronising read-back) counted
+       whether the GPU was working or idle. On a saturated frame the two
+       coincide; on an idle one that number was the frame, not the work. The
+       Vulkan lane's timestamps have the same property, so say which a fixture
+       is before quoting a figure from it -- that caveat did not go away with
+       the bracket, it moved lanes.
+     - It ended immediately before `tagpu_vk_frame` and NOT before the buffer
+       swap, so that the GL bracket never contained the other lane's submit.
+       [The looser "before the buffer swap" wording was caught by the landing-6
+       review; render_ogl.c's own comment had it right.]
+
+   Nothing is ported: a bracket needs two lanes to be worth having, and a build
+   now has one. */
 
 /* The Vulkan lane's figure, handed in by the seam once it has resolved a
    slot's two timestamps behind its own fence wait. Nanoseconds, already

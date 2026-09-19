@@ -115,8 +115,7 @@ void tagpu_text_glyph_dims(int* w, int* h);
    it moved -- the cells would otherwise name texels that have just been
    cleared and re-used. */
 unsigned tagpu_text_glyph_gen(void);
-unsigned int tagpu_text_glyph_tex(void);
-/* has the cache rasterised any glyph? asked without a GL context */
+/* has the cache rasterised any glyph? */
 int tagpu_text_glyph_have(void);
 /* THE GLYPH ATLAS AS BYTES (G19f landing 2). A second backend cannot read a GL
    texture, and this one needs no mechanism to expose: the module already keeps
@@ -131,18 +130,28 @@ const unsigned char* tagpu_text_glyph_atlas(int* w, int* h);
 unsigned tagpu_text_glyph_serial(void);
 int  tagpu_text_glyph_stats(unsigned* glyphs, unsigned* drops, int* fonts);
 
-/* ---- GL (present thread, context current) ---- */
-/* The atlas texture, uploading it first if a raster has landed since the last
-   call. 0 when there is nothing to draw. */
-unsigned int tagpu_text_tex(void);
+/* THIS MODULE HOLDS NO GPU OBJECT (11-5e-1). It rasterises with TA's own
+   blitter into two CPU arrays and hands them out as bytes; a backend uploads
+   them itself. `tagpu_text_tex` and `tagpu_text_glyph_tex` used to own a GL
+   texture each, creating it lazily and re-uploading the whole array when a
+   raster landed, and `tagpu_text_glreset` dropped both ids when the fork's GL
+   context changed. All three were callerless [masked scan, 11-5e-1] -- their
+   callers went with the GL draws in 11-4a and 11-4b -- and the reset cascade
+   that reached the last of them could not fire at all (tagpu_overlay.c).
+
+   WHAT REPLACED THEM IS ALREADY HERE AND IS BETTER: the two serials below.
+   A texture-owning accessor can serve only one backend, because the upload
+   consumes the dirty flag that told it to run; a counter can serve any number,
+   because each consumer keeps its own last-seen value. That was found the hard
+   way (the G19f landing-2 review, both reviewers) and it is the reason nothing
+   is ported back. */
 void tagpu_text_dims(int* w, int* h);
 
-/* ---- the bytes, for a backend that is not GL (Phase G / G19d) ----
+/* ---- the bytes a backend uploads (Phase G / G19d) ----
    The CPU-side string atlas -- ATLAS_W x ATLAS_H, one coverage byte per texel,
-   the same 128 KB `tagpu_text_tex` uploads -- and a counter that ticks whenever
-   a raster lands in it. A second backend holds its own texture and refills it
-   when the counter moves. Valid for the process's life; render thread. */
+   128 KB -- and a counter that ticks whenever a raster lands in it. A backend
+   holds its own texture and refills it when the counter moves. Valid for the
+   process's life; render thread. */
 const unsigned char* tagpu_text_atlas(unsigned* gen);
-void tagpu_text_glreset(void);
 int  tagpu_text_stats(int* strings, int* dropped);
 #endif

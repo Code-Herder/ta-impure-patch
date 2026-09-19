@@ -80,7 +80,9 @@ int  tagpu_mark_emit_text(float x, float y, const char* s, int colidx,
    frame's top layer with every fragment opaque; it is the twin that honours
    that now. */
 void tagpu_mark_render(const TAGPU_FXVIEW* v);
-void tagpu_mark_glreset(void);
+/* `tagpu_mark_glreset` is gone (11-5e-1). Its body had been reduced to one
+   forward -- to tagpu_text.c, the last module on this branch of the cascade
+   still holding a GL id -- and that module holds none either now. */
 
 /* ---- the hand-over to the Vulkan lane (the Vulkan-only plan's landing 5) ----
 

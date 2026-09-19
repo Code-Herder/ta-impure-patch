@@ -3608,6 +3608,15 @@ static void pose_dump(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* u,
    own: drop the fog grid, whose pointer names a buffer the next frame rebuilds,
    and then the dispatch in order -- the restorer first, so the passes below
    forget their jobs before their atlases go. */
+/* NOTHING CALLS THIS, AND NOTHING HAS SINCE 11-5e-1. Its one call site was the
+   GL-context-change watch in tagpu_overlay.c, deleted there because no source
+   of this build makes a context current for it to see change. Every function
+   below is reachable only through this one, so the whole cascade is dead with
+   it; it is left standing because several of those modules still hold live GL
+   state this landing does not touch, and a reset tree deleted ahead of the
+   objects it resets is worse than one that is merely unreachable.
+   [The vulkan-only plan, 11-5e-1. The deletion belongs to whichever landing
+   takes the last GL object out of tagpu_shadow.c and tagpu_hires_draw.c.] */
 void tagpu_native_glreset(void)
 {
     s_fogCols = s_fogRows = 0; s_fogCells = 0; s_fogGrid = NULL; s_fogLut = 0;
@@ -3617,7 +3626,8 @@ void tagpu_native_glreset(void)
     tagpu_terr_glreset();
     tagpu_shadow_glreset();
     s_castLogged = 0;
-    tagpu_mark_glreset();
+    /* the marker pass left this cascade in 11-5e-1: its own ids went with the
+       draw in 11-4a and the text module it forwarded to owns no GL object. */
     tagpu_hires_draw_glreset();
     tagpu_posebake_glreset();
     tagpu_posedraw_glreset();

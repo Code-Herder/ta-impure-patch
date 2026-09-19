@@ -51,7 +51,6 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
-#include "opengl_utils.h"
 #include "tagpu_text.h"
 
 #define BLIT_VA         0x004CCF60u   /* pure engine code, 0x4CCF60..0x4CD00E */
@@ -111,17 +110,19 @@ static int   s_nremem;                     /* ...of which we remember the text *
 static unsigned s_builtGen;                /* the font generation the atlas holds */
 static unsigned s_fontGen;                 /* bumped whenever the copy changes */
 static unsigned char s_atlas[ATLAS_W * ATLAS_H];
-static int   s_dirty;
-/* THE ATLAS CONTENT'S OWN COUNTER, AND IT IS NOT `s_dirty`. Since G19d there
-   are two consumers of the same 128 KB -- the GL texture here and a Vulkan one
-   in tagpu_vk_fps.c -- and `s_dirty` is CONSUMED by the upload that reads it,
-   so whichever consumer ran second would never see a raster land. This ticks
-   when the PIXELS change and is never cleared; a consumer keeps the value it
-   last uploaded and compares. It deliberately does NOT tick in
-   `tagpu_text_glreset`: a lost GL context does not change a byte of the
-   atlas, and re-uploading a Vulkan texture for it would be work for nothing. */
+/* THE ATLAS CONTENT'S COUNTER, AND IT IS THE ONLY ONE NOW. Since G19d there
+   were two consumers of the same 128 KB -- a GL texture here and a Vulkan one
+   in tagpu_vk_fps.c -- and the GL half kept a `s_dirty` flag that its own
+   upload CONSUMED, so whichever consumer ran second would never see a raster
+   land. This ticks when the PIXELS change and is never cleared; a consumer
+   keeps the value it last uploaded and compares.
+
+   THE FLAG IS GONE WITH THE GL UPLOAD IT FED (11-5e-1) and the counter is what
+   a second backend was already told to use, so nothing here changes for the
+   Vulkan lane. The consumed-flag trap is written down because it is a property
+   of flags and not of GL: the next upload that keys on one, for any backend,
+   breaks the same way the moment a second reader appears. */
 static unsigned s_agen = 1;
-static GLuint s_tex;
 
 void tagpu_text_frame(const TAGPU_PACKET* pk)
 {
@@ -263,7 +264,7 @@ int tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff)
         s_ndrop = 0; s_nremem = 0;
         memset(s_atlas, 0, sizeof s_atlas);
         s_builtGen = s_fontGen;
-        s_dirty = 1; s_agen++;
+        s_agen++;
         flog("text: atlas reset (font changed)");
     }
     *yoff = (int)s_fontYoff;
@@ -297,7 +298,7 @@ int tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff)
     s_nent++;
     s_shelfX += sw;
     if (sh > s_shelfH) s_shelfH = sh;
-    s_dirty = 1; s_agen++;
+    s_agen++;
     return 1;
 }
 
@@ -367,8 +368,6 @@ static GFONT s_gf[GA_FONTS];
 static int   s_ngf;
 static int   s_gshelfX, s_gshelfY, s_gshelfH;
 static unsigned char s_gatlas[GA_W * GA_H];
-static int   s_gdirty;
-static GLuint s_gtex;
 static unsigned s_gglyphs, s_gdrops;
 /* Bumped whenever the shelves restart, i.e. whenever every cell handed out so
    far stops being valid. A caller that gathers a run of cells before it draws
@@ -386,9 +385,9 @@ static volatile unsigned s_ggen;
    resets below -- because that is what a caller holding a fistful of cells
    needs to know. It says NOTHING about an ordinary glyph being rasterised into
    a fresh shelf, which changes the atlas's BYTES and leaves every cell valid.
-   The GL lane re-uploads on `s_gdirty` and so never noticed the difference; a
-   second backend keying its own upload on `s_ggen` would upload once and then
-   miss every glyph seen afterwards -- invisible text, permanently, for the
+   The GL lane re-uploaded on a dirty flag and so never noticed the difference
+   (that flag went with it in 11-5e-1); a second backend keying its own upload
+   on `s_ggen` would upload once and then miss every glyph seen afterwards -- invisible text, permanently, for the
    session. [FOUND 2026-09-16, the G19f landing-2 review: BOTH reviewers led
    with it independently.] Bumped wherever `s_gatlas`'s bytes change and
    nowhere else -- not when the GL TEXTURE is recreated, which is liveness
@@ -408,7 +407,7 @@ static GFONT* gfont_slot(unsigned id)
         memset(s_gf, 0, sizeof s_gf);
         memset(s_gatlas, 0, sizeof s_gatlas);
         s_gshelfX = s_gshelfY = s_gshelfH = 0;
-        s_gdirty = 1; s_gserial++;
+        s_gserial++;
         s_ngf = 1; g = &s_gf[0];
         s_ggen++;
         flog("text: glyph atlas reset (more than 8 fonts seen)");
@@ -445,7 +444,7 @@ static void glyph_raster(GFONT* g, int ch, int gw, const unsigned char* bits, un
         memset(s_gf, 0, sizeof s_gf);
         memset(s_gatlas, 0, sizeof s_gatlas);
         s_gshelfX = s_gshelfY = s_gshelfH = 0;
-        s_ngf = 1; s_gdirty = 1; s_gdrops++; s_ggen++; s_gserial++;
+        s_ngf = 1; s_gdrops++; s_ggen++; s_gserial++;
         g = &s_gf[0]; g->id = keep; g->rows = kr; g->yoff = ky;
         flog("text: glyph atlas full — reset");
         if (s_gshelfY + (int)rows > GA_H) { g->known[idx] = 2; return; }
@@ -472,7 +471,7 @@ static void glyph_raster(GFONT* g, int ch, int gw, const unsigned char* bits, un
     g->known[idx] = 1;
     s_gshelfX += gw;
     if ((int)rows > s_gshelfH) s_gshelfH = (int)rows;
-    s_gdirty = 1; s_gserial++;
+    s_gserial++;
     s_gglyphs++;
 }
 
@@ -546,37 +545,12 @@ const unsigned char* tagpu_text_glyph_atlas(int* w, int* h)
     return s_gatlas;
 }
 
-/* WHETHER THE CACHE HAS RASTERISED ANYTHING, asked without a GL context --
-   the same first question tagpu_text_glyph_tex() asks before it touches GL.
-   The cells are CPU-side and survive a lost context, so this is the honest
-   test for a caller that only needs to know there is text to stamp.
-   [The vulkan-only plan, landing 4b-3.] */
+/* WHETHER THE CACHE HAS RASTERISED ANYTHING. It was written in 4b-3 as the
+   context-free twin of `tagpu_text_glyph_tex`'s first line, for a caller that
+   only needs to know there is text to stamp; with that function deleted in
+   11-5e-1 it is simply the question, asked the only way it can now be asked.
+   The cells are CPU-side and always were. */
 int tagpu_text_glyph_have(void) { return s_gglyphs != 0; }
-
-unsigned int tagpu_text_glyph_tex(void)
-{
-    if (!s_gglyphs) return 0;
-    if (!s_gtex) {
-        glGenTextures(1, &s_gtex);
-        if (!s_gtex) return 0;
-        glBindTexture(GL_TEXTURE_2D, s_gtex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        s_gdirty = 1;
-    } else {
-        glBindTexture(GL_TEXTURE_2D, s_gtex);
-    }
-    if (s_gdirty) {
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, GA_W, GA_H, 0,
-                     GL_RED, GL_UNSIGNED_BYTE, s_gatlas);
-        s_gdirty = 0;
-    }
-    return s_gtex;
-}
 
 int tagpu_text_glyph_stats(unsigned* glyphs, unsigned* drops, int* fonts)
 {
@@ -586,43 +560,6 @@ int tagpu_text_glyph_stats(unsigned* glyphs, unsigned* drops, int* fonts)
     return (int)s_gglyphs;
 }
 
-
-unsigned int tagpu_text_tex(void)
-{
-    if (!s_nent) return 0;
-    if (!s_tex) {
-        glGenTextures(1, &s_tex);
-        if (!s_tex) return 0;
-        glBindTexture(GL_TEXTURE_2D, s_tex);
-        /* NEAREST for the same reason the captured layer uses it: the texel is
-           a coverage bit, and a filtered half of one is neither */
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        s_dirty = 1;
-    } else {
-        glBindTexture(GL_TEXTURE_2D, s_tex);
-    }
-    if (s_dirty) {
-        /* the whole 128 KB, because it only ever changes when a string appears
-           for the first time — around twenty times in a session */
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, ATLAS_W, ATLAS_H, 0,
-                     GL_RED, GL_UNSIGNED_BYTE, s_atlas);
-        s_dirty = 0;
-    }
-    return s_tex;
-}
-
-void tagpu_text_glreset(void)
-{
-    s_tex = 0;            /* the id died with the context */
-    s_dirty = 1;
-    s_gtex = 0;           /* ...and the glyph atlas's; the CELLS survive, they are CPU-side */
-    s_gdirty = 1;
-}
 
 int tagpu_text_stats(int* strings, int* dropped)
 {

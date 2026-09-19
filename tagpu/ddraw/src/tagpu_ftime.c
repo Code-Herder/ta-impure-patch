@@ -4,14 +4,9 @@
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include "opengl_utils.h"
 #include "tagpu_ftime.h"
 
-#define RING     256            /* frames kept per lane for the percentiles   */
-#define GLQ      8              /* GL query pairs in flight: the driver is a
-                                   few frames deep and a pair is only read
-                                   once it says it is available               */
+#define RING     256            /* frames kept for the percentiles            */
 #define REPORT_FRAMES 300       /* one line per this many ARMED frames        */
 #define POLL_MS  500
 
@@ -24,62 +19,11 @@ static void flog(const char* s)
 static int      s_on;
 static DWORD    s_lastPoll;
 
-/* ---- the GL half -------------------------------------------------------- */
-typedef void (APIENTRY* PFN_GENQ)(GLsizei, GLuint*);
-typedef void (APIENTRY* PFN_DELQ)(GLsizei, const GLuint*);
-typedef void (APIENTRY* PFN_QCTR)(GLuint, GLenum);
-typedef void (APIENTRY* PFN_QOBJIV)(GLuint, GLenum, GLint*);
-typedef void (APIENTRY* PFN_QOBJUI64)(GLuint, GLenum, GLuint64*);
-static PFN_GENQ     x_glGenQueries;
-static PFN_DELQ     x_glDeleteQueries;
-static PFN_QCTR     x_glQueryCounter;
-static PFN_QOBJIV   x_glGetQueryObjectiv;
-static PFN_QOBJUI64 x_glGetQueryObjectui64v;
-static int          s_glFetched, s_glOk, s_glSaid;
-/* WHICH LANE DRIVES THE REPORT, so that exactly one does and it is whichever is
-   actually running. `report()` used to be reachable only from the GL bracket --
-   `gl_end`, and `gl_begin`'s `!s_glOk` branch that the 2026-09-16 review added
-   for the same reason -- and BOTH are called only by render_ogl.c. After the
-   vulkan-only plan's landing 4d-1 that backend never drives the Vulkan lane, so
-   under `renderer=vulkan` the samples accumulated and nothing ever printed them.
-   This is set by the GL bracket when it runs; the Vulkan sample path reports
-   only when it is clear, which cannot double-report even on a build where both
-   lanes are live. [FOUND BY THE 4d-1 LANDING REVIEW, whose first fix -- restoring
-   the poll -- armed the module without giving it a way to speak.] */
-static int          s_glDrives;
-
-#ifndef GL_TIMESTAMP
-#define GL_TIMESTAMP 0x8E28
-#endif
-#ifndef GL_QUERY_RESULT
-#define GL_QUERY_RESULT 0x8866
-#endif
-#ifndef GL_QUERY_RESULT_AVAILABLE
-#define GL_QUERY_RESULT_AVAILABLE 0x8867
-#endif
-
-static void* getgl(const char* n)
-{
-    void* p = xwglGetProcAddress ? (void*)xwglGetProcAddress(n) : NULL;
-    if (!p) {
-        HMODULE gl = GetModuleHandleA("opengl32.dll");
-        if (gl) p = (void*)GetProcAddress(gl, n);
-    }
-    return p;
-}
-
-/* a pair of counters, and whether it is waiting to be read */
-static GLuint   s_qBeg[GLQ], s_qEnd[GLQ];
-static char     s_qPend[GLQ];
-static int      s_qSlot;            /* the pair this frame is writing         */
-static int      s_qMade;
-static int      s_glOpen;           /* `begin` wrote a counter this frame     */
-
 /* ---- the samples -------------------------------------------------------- */
-static double   s_glRing[RING], s_vkRing[RING];
-static int      s_glN, s_vkN;       /* how many of the ring are filled        */
-static unsigned s_glAt, s_vkAt;     /* write cursor, free-running             */
-static unsigned s_glTotal, s_vkTotal;
+static double   s_vkRing[RING];
+static int      s_vkN;              /* how many of the ring are filled        */
+static unsigned s_vkAt;             /* write cursor, free-running             */
+static unsigned s_vkTotal;
 static unsigned s_frames;
 
 static void push(double* ring, int* n, unsigned* at, double v)
@@ -112,48 +56,28 @@ static double pct(const double* ring, int n, double p)
 static void report(void)
 {
     char b[300];
-    double g50 = pct(s_glRing, s_glN, 0.50), g99 = pct(s_glRing, s_glN, 0.99);
     double v50 = pct(s_vkRing, s_vkN, 0.50), v99 = pct(s_vkRing, s_vkN, 0.99);
-    /* THE RATIO IS ONLY PRINTED WHEN BOTH LANES HAVE SAMPLES, and it is the
-       gate's own question: below 1.00 the Vulkan lane's frame is cheaper. With
-       one lane silent it is not a small ratio, it is no comparison at all.
+    /* ONE LANE, SO ONE FIGURE AND NO RATIO. The `vk/gl` arithmetic this
+       function used to print needed samples from both rings; the GL ring was
+       filled only by a bracket render_ogl.c called, and landing 4d-1 deleted
+       that backend. From then the branch could not be reached, and from THIS
+       landing there is no second ring for it to read -- so the comparison the
+       gate asks for is a CROSS-BUILD one, this build's figure against an
+       earlier build's. tagpu_ftime.h says so at length and is the place to
+       look; repeating the history here would be the second copy that goes
+       stale. [11-5e-1: the GL half deleted; 4d-1 had already made it inert.]
 
-       SINCE LANDING 4d-1 IT IS UNREACHABLE, and that is the deletion's price
-       rather than a bug. GL samples come only from render_ogl.c and Vulkan ones
-       only from tagpu_vk.c, and with route D gone the two backends can never be
-       live in one process. The branch is kept because a build from before 4d-1
-       still produces both, and because the arithmetic is the record of what the
-       comparison WAS. What a current build supports is one lane's figure against
-       an earlier build's -- see tagpu_ftime.h.
-       [FROM THE 4d-1 LANDING REVIEW.] */
-    if (s_glN > 0 && s_vkN > 0 && g50 > 0.0)
-        _snprintf(b, sizeof b,
-                  "ftime: gl p50 %.3f ms p99 %.3f ms (n=%d/%u) | vk p50 %.3f ms p99 %.3f ms (n=%d/%u)"
-                  " | vk/gl p50 %.3f p99 %.3f",
-                  g50, g99, s_glN, s_glTotal, v50, v99, s_vkN, s_vkTotal,
-                  v50 / g50, g99 > 0.0 ? v99 / g99 : 0.0);
-    else if (s_vkN > 0)
-        /* THE LANE THAT HAS SAMPLES PRINTS ITS NUMBERS. This branch used to say
-           only "vk sampling", because it was written for the case where the
-           VULKAN half was the silent one and GL's figures were the ones worth
-           having. Since landing 4d-1 it is the other way round on every live
-           build, and a line that reports `gl p50 0.000 (n=0/0)` and withholds
-           the figure the gate clause asks for is an instrument that runs and
-           says nothing -- the exact failure this module's own history is made
-           of. [FROM THE 4d-1 LANDING REVIEW'S FIX, corrected after reading what
-           it actually printed.] */
-        _snprintf(b, sizeof b,
-                  "ftime: vk p50 %.3f ms p99 %.3f ms (n=%d/%u) | gl %s"
-                  " - no ratio in one process since landing 4d-1: compare this"
-                  " against an earlier build's figure",
-                  v50, v99, s_vkN, s_vkTotal,
-                  s_glN > 0 ? "sampling" : "silent (no GL backend in this process)");
-    else
-        _snprintf(b, sizeof b,
-                  "ftime: gl p50 %.3f ms p99 %.3f ms (n=%d/%u) | vk SILENT"
-                  " (no timestamp pool, or this backend is not the Vulkan one)"
-                  " - no ratio",
-                  g50, g99, s_glN, s_glTotal);
+       `s_vkN` IS AT LEAST 1 HERE, so `pct` is never asked for the percentile
+       of an empty ring: the sole caller is `tagpu_ftime_vk_sample`, which
+       pushes this frame's sample before it counts the frame. The empty case
+       has no branch because it has no path -- the two branches that used to
+       stand here were for a silent lane, and a silent lane now means this
+       function is not called at all. */
+    _snprintf(b, sizeof b,
+              "ftime: vk p50 %.3f ms p99 %.3f ms (n=%d/%u)"
+              " - one lane in this build, so no ratio: compare this against"
+              " an earlier build's figure",
+              v50, v99, s_vkN, s_vkTotal);
     b[sizeof b - 1] = 0;
     flog(b);
 }
@@ -171,122 +95,38 @@ void tagpu_ftime_poll(void)
         /* A CHANGE OF LEVER THROWS THE SAMPLES AWAY. Percentiles over a window
            that spans "armed" and "not armed" describe neither, and the ring is
            the only thing anyone reads. */
-        s_glN = s_vkN = 0; s_glAt = s_vkAt = 0; s_frames = 0;
-        s_glTotal = s_vkTotal = 0;
-        /* AND THE PAIRS STILL IN FLIGHT, which the first version left pending:
-           `gl_begin` returns above the harvest while the lever is off, so up to
-           GLQ pairs survived the toggle and the first frames after a re-arm
-           harvested them into the freshly cleared ring -- samples from an
-           arbitrarily old scene, at an arbitrarily old resolution, inside a
-           window that says it threw everything away.
-           [FOUND 2026-09-16, the landing-6 review.] */
-        memset(s_qPend, 0, sizeof s_qPend);
-        s_glOpen = 0;
-        flog(on ? "ftime: ON - GPU frame time per lane, two timestamps each, nothing blocks"
+        s_vkN = 0; s_vkAt = 0; s_frames = 0;
+        s_vkTotal = 0;
+        /* THERE IS NOTHING LEFT IN FLIGHT TO CLEAR, and that is a property of
+           the lane rather than an omission. The GL bracket kept up to GLQ
+           query pairs pending across a toggle and the landing-6 review found
+           them being harvested into the freshly cleared ring -- samples from
+           an arbitrarily old scene inside a window that says it threw
+           everything away. The Vulkan lane carries no such pool here: the seam
+           resolves a slot behind the fence it already waits on and hands the
+           figure over as a number, so a sample either arrived before this
+           reset or is produced after it. [The GL pool went with the GL half in
+           11-5e-1; the finding it fixed is recorded because the shape can
+           come back with any future pool.] */
+        flog(on ? "ftime: ON - GPU frame time on the Vulkan lane, two timestamps"
+                  " a frame, nothing blocks"
                 : "ftime: off");
     }
 }
 
 int tagpu_ftime_armed(void) { return s_on; }
 
-void tagpu_ftime_gl_begin(void)
-{
-    int i;
-    if (!s_on) return;
-    s_glDrives = 1;
-    if (!s_glFetched) {
-        s_glFetched = 1;
-        x_glGenQueries          = (PFN_GENQ)getgl("glGenQueries");
-        x_glDeleteQueries       = (PFN_DELQ)getgl("glDeleteQueries");
-        x_glQueryCounter        = (PFN_QCTR)getgl("glQueryCounter");
-        x_glGetQueryObjectiv    = (PFN_QOBJIV)getgl("glGetQueryObjectiv");
-        x_glGetQueryObjectui64v = (PFN_QOBJUI64)getgl("glGetQueryObjectui64v");
-        s_glOk = x_glGenQueries && x_glQueryCounter &&
-                 x_glGetQueryObjectiv && x_glGetQueryObjectui64v;
-        if (!s_glOk && !s_glSaid) {
-            s_glSaid = 1;
-            /* ARB_timer_query is an EXTENSION on the 3.2 context this fork
-               creates, not core -- tagpu_restoreglsl.c says the same of
-               GL_TIME_ELAPSED. Without it there is no GL figure and therefore
-               no ratio, which the report says rather than printing a half. */
-            flog("ftime: no glQueryCounter/glGetQueryObjectui64v - ARB_timer_query is absent, "
-                 "so the GL lane cannot be timed and no comparison is possible");
-        }
-    }
-    if (!s_glOk) {
-        /* THE REPORT STILL HAS TO COME OUT. It is called from `gl_end`, which
-           returns on `!s_glOk` -- so the "no ratio: one lane has no samples"
-           line the comment above promises could never be printed in exactly the
-           case it was written for, and a session without ARB_timer_query said
-           nothing at all after its one-shot line. The Vulkan half goes on
-           sampling, so there IS something to report; it is just not a ratio.
-           [FOUND 2026-09-16, the landing-6 review.] */
-        if (++s_frames >= REPORT_FRAMES) { s_frames = 0; report(); }
-        return;
-    }
-    if (!s_qMade) {
-        x_glGenQueries(GLQ, s_qBeg);
-        x_glGenQueries(GLQ, s_qEnd);
-        for (i = 0; i < GLQ; i++) if (!s_qBeg[i] || !s_qEnd[i]) break;
-        if (i != GLQ) {
-            /* GIVE THE NAMES BACK AND STOP ASKING. The first version returned
-               with `s_qMade` still 0, so the next frame generated 2*GLQ more
-               names over the top of these and leaked 16 a frame for ever. One
-               failure here means the driver will not give us queries; say so
-               once and stand down for the session rather than retry per frame.
-               [FOUND 2026-09-16, the landing-6 review.] */
-            if (x_glDeleteQueries) {
-                x_glDeleteQueries(GLQ, s_qBeg);
-                x_glDeleteQueries(GLQ, s_qEnd);
-            }
-            memset(s_qBeg, 0, sizeof s_qBeg);
-            memset(s_qEnd, 0, sizeof s_qEnd);
-            s_glOk = 0;
-            if (!s_glSaid) { s_glSaid = 1; flog("ftime: glGenQueries gave no usable names - the GL lane cannot be timed"); }
-            return;
-        }
-        s_qMade = 1;
-    }
-    /* HARVEST FIRST, AND ONLY WHAT THE DRIVER SAYS IS THERE. Every pending pair
-       is offered, not just the oldest: a driver may finish them out of the
-       order we issued them and a strict queue would stall behind one. */
-    for (i = 0; i < GLQ; i++) {
-        GLint ready = 0;
-        GLuint64 t0 = 0, t1 = 0;
-        if (!s_qPend[i]) continue;
-        x_glGetQueryObjectiv(s_qEnd[i], GL_QUERY_RESULT_AVAILABLE, &ready);
-        if (!ready) continue;
-        x_glGetQueryObjectiv(s_qBeg[i], GL_QUERY_RESULT_AVAILABLE, &ready);
-        if (!ready) continue;
-        x_glGetQueryObjectui64v(s_qBeg[i], GL_QUERY_RESULT, &t0);
-        x_glGetQueryObjectui64v(s_qEnd[i], GL_QUERY_RESULT, &t1);
-        s_qPend[i] = 0;
-        if (t1 > t0) { push(s_glRing, &s_glN, &s_glAt, (double)(t1 - t0) / 1.0e6); s_glTotal++; }
-    }
-    /* a free pair for this frame, or skip the frame rather than wait for one */
-    for (i = 0; i < GLQ; i++) if (!s_qPend[i]) break;
-    if (i == GLQ) { s_glOpen = 0; return; }
-    s_qSlot = i;
-    x_glQueryCounter(s_qBeg[i], GL_TIMESTAMP);
-    s_glOpen = 1;
-}
-
-void tagpu_ftime_gl_end(void)
-{
-    if (!s_on || !s_glOk || !s_qMade || !s_glOpen) return;
-    s_glOpen = 0;
-    x_glQueryCounter(s_qEnd[s_qSlot], GL_TIMESTAMP);
-    s_qPend[s_qSlot] = 1;
-    if (++s_frames >= REPORT_FRAMES) { s_frames = 0; report(); }
-}
-
 void tagpu_ftime_vk_sample(double ns)
 {
     if (!s_on || ns <= 0.0) return;
     push(s_vkRing, &s_vkN, &s_vkAt, ns / 1.0e6);
     s_vkTotal++;
-    /* AND THIS LANE REPORTS WHEN NOTHING ELSE WILL. See `s_glDrives`. */
-    if (!s_glDrives && ++s_frames >= REPORT_FRAMES) { s_frames = 0; report(); }
+    /* AND THIS LANE DRIVES THE REPORT, because it is the only lane there is.
+       It used to ask `!s_glDrives` first, a flag the GL bracket set when it
+       ran, so that exactly one of two live lanes printed. With the bracket
+       deleted the flag could only ever be 0 and the term only ever true --
+       a test that reads as a choice and is not one. [11-5e-1.] */
+    if (++s_frames >= REPORT_FRAMES) { s_frames = 0; report(); }
 }
 
 void tagpu_ftime_vk_reset(void)

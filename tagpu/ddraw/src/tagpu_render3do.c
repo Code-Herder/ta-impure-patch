@@ -28,7 +28,6 @@
 #include "tagpu_vk.h"         /* tagpu_vk_owns_present: is there a GL lane at all? */
 #include "tagpu_classicpp.h"  /* tagpu_classicpp_assets: the restored twin is only worth mirroring while it is what the twin samples */
 #include "tagpu_r3dcache.h"
-#include "tagpu_overlay.h"   /* tagpu_overlay_target_fbo: the frame's default draw target */
 
 /* NO ENGINE LAYOUT HERE ANY MORE. This file carried nine offsets — the
    Object3do piece array, PrimitiveStruct and Model3DONode — for the write-back

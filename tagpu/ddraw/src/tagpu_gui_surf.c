@@ -1872,7 +1872,8 @@ static void sharp_begin(const TAGPU_FRAME* f)
     /* THE CLEAR COLOUR IS MODULE-WIDE STATE AND WE OWN IT AT (0,0,0,0).
        render_ogl.c repaints the letterbox bars with a bare glClear on EVERY
        frame whose viewport is offset (`if (viewport.x || viewport.y)`), and
-       tagpu_overlay_capture_begin does the same for a glshot — neither sets a
+       the glshot capture did the same (tagpu_overlay.c, deleted in 11-5e-1
+       with its lane) — neither set a
        colour of its own, so whatever we leave here is what they paint. The
        clear above already ends at (0,0,0,0) on the normal path; this is the
        statement of the invariant, not a second setter.
@@ -2479,7 +2480,10 @@ void tagpu_gui_glreset(void)
     s_sharpW = s_sharpH = 0; s_sharpOn = 0;            /* the sharp layer died with it */
     s_curOwn = 0; s_curFrame = NULL;   /* and the cursor is nobody's until it is re-atlased */
     s_mmGenSeen = 0;                    /* the picture's texture died; the BYTES are the hook's */
-    tagpu_text_glreset();               /* the glyph atlas's texture id died too; its CELLS are CPU-side */
+    /* the text module used to be forwarded to here, for the glyph atlas's
+       texture id. It owns no GPU object since 11-5e-1 -- its cells and its
+       atlas bytes are CPU-side and a context change never touched them, so
+       there was never anything for it to lose but the id. */
     tagpu_gaf_atlas_lost(&s_atlas);
     s_skipToReset = 1;
     g_guiq.reseed = 1; g_guiq.why = TAGPU_GUI_WHY_GLCTX;

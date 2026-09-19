@@ -186,13 +186,20 @@ belt-and-braces route for fullscreen runs.
 
 ## Debug tooling left in the tree
 
-`render_ogl.c` now carries `gldbg_state()` (geometry/program dump) and `gldbg_pixel()`
-(post-draw pixel + CPU-side surface/palette checksums + FBO/program/texture bindings),
-both gated by `tagpu_gldbg.on` and rate-limited to every 64th frame. **`glGetIntegerv`
-and `glReadPixels` are resolved via `GetProcAddress(opengl32)`** — the fork's
-`wglGetProcAddress` returns NULL for GL 1.1 entry points under wine, and calling the NULL
-pointer crashes TA (it cost one run here; the crash surfaces as the usual secondary fault
-at `0x4d94e0`).
+**GONE, AND THE LEVER WITH IT.** `render_ogl.c` carried `gldbg_state()` (geometry/program
+dump) and `gldbg_pixel()` (post-draw pixel + CPU-side surface/palette checksums +
+FBO/program/texture bindings), both gated by `tagpu_gldbg.on` and rate-limited to every
+64th frame; that file was deleted by the vulkan-only plan's landing 11-2. The last reader
+of `tagpu_gldbg.on` anywhere in the tree was a five-site `glGetError` probe in
+`tagpu_overlay.c`, deleted in 11-5e-1 — it was probing a context no source of this build
+creates. Nothing polls the lever now, so **a `tagpu_gldbg.on` file does nothing**.
+
+The trap it was written around outlives it and is why this paragraph stays: **GL 1.1 entry
+points are resolved via `GetProcAddress(opengl32)`, never `wglGetProcAddress`** — the
+fork's `wglGetProcAddress` returns NULL for them under wine, and calling the NULL pointer
+crashes TA (it cost one run; the crash surfaces as the usual secondary fault at
+`0x4d94e0`). Every `getgl`-shaped helper still in the tree has that fallback for this
+reason.
 
 ## Gotcha re-confirmed the hard way
 

@@ -367,15 +367,6 @@ static const char* FS =
    the same vertex arrays and `mk_push` / `mk_draw` publish them to
    `tagpu_vk_mark.c`, which is what draws them with exactly these shaders. */
 
-void tagpu_mark_glreset(void)
-{
-    /* the per-layer texture ids and their sizes were reset here too; they went
-       with the draw [landing 11-4a] and this pass now holds no GL object of its
-       own, so there is nothing of ours to drop. It stays on the cascade purely
-       to forward to the text module, which still holds one. */
-    tagpu_text_glreset();
-}
-
 /* ---- the health-bar gather ---- */
 
 static void put_vert(int i, float x, float y, float u, float v, float wx, float wz,

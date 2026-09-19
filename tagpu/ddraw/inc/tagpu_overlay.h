@@ -1,23 +1,29 @@
 #ifndef TAGPU_OVERLAY_H
 #define TAGPU_OVERLAY_H
 #include "tagpu.h"
-/* Draw our GPU overlay for this frame. Called from the render thread, GL context
-   current, after the game quad and before SwapBuffers. Compiled into the fork —
-   no separate DLL, no runtime LoadLibrary. */
+/* Draw our GPU overlay for this frame. Called from the render thread, once per
+   present, from render_vk.c -- render_ogl.c was its other caller until landing
+   11-2 deleted that lane, and render_gdi.c makes no tagpu_ call at all, so on
+   `renderer=gdi` this function is never entered. Compiled into the fork -- no
+   separate DLL, no runtime LoadLibrary. */
 void tagpu_overlay_draw(const TAGPU_FRAME* f);
 
-/* Capture the finished frame to tagpu_gl.ppm.  The frame is rendered into an FBO
-   we own so the read never touches the window's back buffer: pixels outside the
-   visible desktop region fail the pixel-ownership test and read back undefined,
-   which is what made every glshot of an off-screen or obscured window garbage.
-   capture_begin() runs before anything is drawn (returns 1 when armed and bound);
-   capture_end() reads the FBO and blits it to the window so the frame still
-   presents.  target_fbo() is "the default draw target for this frame": 0 normally,
-   the capture FBO while armed -- every "bind framebuffer 0" on the frame path goes
-   through it, so intermediate passes return to the capture target, not the window. */
-int          tagpu_overlay_capture_begin(int w, int h);
-void         tagpu_overlay_capture_end(const TAGPU_FRAME* f);
-unsigned int tagpu_overlay_target_fbo(void);
-/* the GL context changed: our capture ids are dead, forget them */
-void         tagpu_overlay_glreset(void);
+/* THE GL CAPTURE IS GONE (11-5e-1) and nothing replaces it here.
+   `tagpu_overlay_capture_begin` / `_capture_end` / `_target_fbo` rendered the
+   frame into an FBO we owned and read it back to tagpu_gl.ppm, so that a
+   glshot of an off-screen or obscured window was correct: glReadPixels on the
+   default framebuffer is defined only for pixels that pass the ownership test,
+   which is what made every earlier glshot garbage. `_glreset` forgot those ids
+   when the fork's GL context changed.
+
+   All four had NO CALLER in this build [masked scan, 11-5e-1]: their caller was
+   render_ogl.c's present loop, deleted in 11-2. THE OWNERSHIP-TEST LESSON IS
+   THE PART WORTH KEEPING -- a capture must read a target we own, never the
+   window -- and it is not this lane's problem to re-solve: `tacli glshot`'s
+   Vulkan answer reads the offscreen game-res target the world already draws
+   into (gate 4), which is an owned image for the same reason.
+
+   `tacli shot` is a different verb and is untouched: it reads the fork's
+   DirectDraw primary from the game thread at the flip (`ss_shot_service`, at
+   the end of tagpu_overlay.c), never a GL surface. */
 #endif
