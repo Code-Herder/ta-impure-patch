@@ -1,0 +1,81 @@
+landing-review: landing 11-5d (the posed program's GL half), level high, 2026-09-19
+
+Range main...HEAD at 5a467d8..8ceb3eb, main at 5a467d8. TWO dedicated read-only
+reviewers, both with the pristine build and objdump, on complementary briefs:
+one on the surviving code's logic, the documentation's claims and the
+measurement's reasoning; one purely on the deletion sweep -- what was taken away
+and what still expects it. Two rounds of fixes (66dd160, 8ceb3eb). Every finding
+verified against the code before acting; two were NOT upheld and are recorded
+with the citation that refutes them.
+
+The note is on the tip and not on 4479ed1, deliberately: reviewer 1 pointed out
+mid-review that the worktree was dirty with round-1's fix, so a note on the
+commit it read would attest a gate met on content that had since changed. The
+range above is what the two of them read plus the two fix commits.
+
+BOTH REVIEWERS INDEPENDENTLY RETURNED THE SAME HIGH, which is how the last two
+landings' worst findings arrived too.
+
+HIGH -- NO POSED UNIT CASTS INTO THE VULKAN CAST-SHADOW MAP, and this landing
+documented the opposite. `tagpu_posedraw_depth_begin` held the only
+`s_depthOn = 1` in the tree; with it deleted the chain is unbroken -- casts 0,
+depthOn 0, s_ncast never increments, `tagpu_vk_unit_cast` returns at `!s_ncast`
+(:2579), and `build_cast_pipeline` (only caller :2587, inside that function) is
+never reached. The `pose_depth` pipeline the header called PORTED is never
+built. The census that would catch it cannot: `otherCasters`' unit-side
+incrementers have no callers, so on an ordinary frame it is 0 - 0 and the map is
+published as complete. NOT a regression from this landing -- it dates to 11-3 --
+but this landing deleted the last possible setter and then called it ported,
+which is the sentence most likely to stop the next session looking. Corrected in
+five places.
+
+MEDIUM, AND THE ONE THAT CHANGED THE LANDING -- the measurement localised the
+loss to our own pipeline and attributed it to the engine, and the control that
+separates the two had not been run. It is one relaunch: the same fixture on
+renderer=gdi, where the engine detours install identically and `live()` is 0,
+but none of the Vulkan composite exists. RUN: the commander is PRESENT on gdi,
+window capture and `tacli shot` the same picture. So round 1's conclusion --
+"the engine's per-unit rasterise is invisible work" -- is FALSE. The loss is
+OURS, in the Vulkan composite path, and fixable. The 4b-2 comfort is true on gdi
+and false on Vulkan, and `tagpu_posedraw_live()` returning 0 is load-bearing
+rather than merely safe: a 1 would take the engine's copy away too.
+
+MEDIUM -- my round-1 fix itself overclaimed: `otherCasters` has THREE writers,
+the third (`tagpu_shadow.c:473`, the heightfield path) live and reachable, so
+"0 - 0, the guard reports success" is false in general. Narrowed to what holds.
+
+MEDIUM -- "there is no `tacli disarm`" was wrong and taught a hand-rolled `rm`
+over `tacli arm <i> <lever>=off`, which unlinks the file. MEDIUM -- the capture
+recipe matched window titles by substring, so `tacli:play1` matches
+`tacli:play10`. Both corrected in ta-drive.
+
+LOW x7 -- stale citations this landing created or inherited, a log string still
+promising 8bpp units, a source-vs-object uniform count (44 vs 25, both now
+labelled), two wrong line numbers in my own round-1 chain (the reviewers
+disagreed; the source settled it), and dead state left behind: the slant and
+wire counters with their two unreachable branches, the PD_R_* macros, and
+`unit_ok`'s `!tagpu_vk_owns_present() && !m->vao` -- a lane test in the file
+whose own rule this landing is named for.
+
+NOT UPHELD (1) -- that dropping the `tagpu_vk_owns_present()` wrapper from
+`tagpu_posedraw_ready()` changes behaviour where the lane is ST_READY without
+owning present. Not reachable: `tagpu_vk.c:509-512` says nothing but
+`render_vk.c` drives this lane, `tagpu_vk_own_present()` has one caller before
+the frame loop, `s_ownWin` is never cleared, and `tagpu_vk_max_uniform_range()`
+returns 0 unless the lane is ST_READY. The second reviewer reached the same
+conclusion independently and added the gdi case.
+
+NOT UPHELD (2) -- the stale citation in `tools/spirv-gen.py`. Fixing it FAILS
+THE BUILD: `tool_hash()` is the SHA-256 of the whole file and is one of three
+hashes in every generated header, so a comment edit makes `spirv-check` reject
+all thirteen and demand a glslang regeneration. Measured by doing it and
+reverting; recorded in the gaps instead.
+
+VERIFIED BY RUNNING IT, on the final binary, md5-matched to the build:
+`posedraw: armed - no rasteriser of its own, pose block 14336 bytes`,
+`units=7 pieces=30` in the hand-over (so `unit_ok` still passes records after
+its dead line went), `vk: census ... unit=1`, `OWND target=all skipped=0
+passed=64246`, and the presented frame pixel-identical to the pre-fix build.
+
+Gates: build clean (thread-split 34 files, spirv 49/33 current), docs committed
+before the review, wiki 63 pages + index, scan clean of this landing.
