@@ -64,7 +64,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
-#include "opengl_utils.h"
 #include "tagpu_opt.h"
 #include "tagpu_native.h"
 #include "tagpu_render3do.h"
@@ -265,50 +264,7 @@ static void nlog(const char* s)
 /* units skipped because their object pointer moved between gather and emit
    (a death landed inside the frame); per 300-frame window, on the native: line */
 
-typedef void (APIENTRY *PFN_DRAWARRAYS)(GLenum,GLint,GLsizei);
-typedef void (APIENTRY *PFN_DEPTHFUNC)(GLenum);
-typedef void (APIENTRY *PFN_DISABLE)(GLenum);
-typedef void (APIENTRY *PFN_BLENDFUNC)(GLenum,GLenum);
-typedef void (APIENTRY *PFN_UNIFORM1F)(GLint,GLfloat);
-typedef void (APIENTRY *PFN_UNIFORM2F)(GLint,GLfloat,GLfloat);
-typedef void (APIENTRY *PFN_UNIFORM3F)(GLint,GLfloat,GLfloat,GLfloat);
-typedef void (APIENTRY *PFN_UNIFORM4F)(GLint,GLfloat,GLfloat,GLfloat,GLfloat);
-typedef void (APIENTRY *PFN_ACTIVETEX)(GLenum);
-typedef void (APIENTRY *PFN_CLEARBUFFERFV)(GLenum,GLint,const GLfloat*);
-typedef void (APIENTRY *PFN_DEPTHMASK)(GLboolean);
-typedef void (APIENTRY *PFN_SCISSOR)(GLint,GLint,GLsizei,GLsizei);
-typedef void (APIENTRY *PFN_LINEWIDTH)(GLfloat);
-typedef void (APIENTRY *PFN_STENCILFUNC)(GLenum,GLint,GLuint);
-typedef void (APIENTRY *PFN_STENCILOP)(GLenum,GLenum,GLenum);
-typedef void (APIENTRY *PFN_COLORMASK)(GLboolean,GLboolean,GLboolean,GLboolean);
-typedef void (APIENTRY *PFN_BLITFB)(GLint,GLint,GLint,GLint,GLint,GLint,GLint,GLint,GLbitfield,GLenum);
-static PFN_DRAWARRAYS x_glDrawArrays;
-static PFN_DEPTHFUNC  x_glDepthFunc;
-static PFN_DISABLE    x_glDisable;
-static PFN_BLENDFUNC  x_glBlendFunc;
-static PFN_UNIFORM1F  x_glUniform1f;
-static PFN_UNIFORM2F  x_glUniform2f;
-static PFN_UNIFORM3F  x_glUniform3f;
-static PFN_UNIFORM4F  x_glUniform4f;
-static PFN_ACTIVETEX  x_glActiveTexture;
-static PFN_CLEARBUFFERFV x_glClearBufferfv;
-static PFN_DEPTHMASK  x_glDepthMask;
-static PFN_SCISSOR    x_glScissor;
-static PFN_LINEWIDTH  x_glLineWidth;
-static PFN_BLITFB     x_glBlitFramebuffer;
-static PFN_STENCILFUNC x_glStencilFunc;
-static PFN_STENCILOP   x_glStencilOp;
-static PFN_COLORMASK   x_glColorMask;
 
-static void* getgl(const char* n)
-{
-    void* p = xwglGetProcAddress ? (void*)xwglGetProcAddress(n) : NULL;
-    if (!p) { HMODULE gl = GetModuleHandleA("opengl32.dll");
-              if (gl) p = (void*)GetProcAddress(gl, n); }
-    return p;
-}
-
-static int    s_state = 0;             /* 0=unloaded 1=ready 2=failed */
 /* READ FROM THE GAME THREAD (tagpu_native_owns_unit, via tagpu_markown.c's
    mark_selbox), written here on the render thread — volatile so the publishing
    store below cannot be hoisted above the state it publishes. (It used to cite
@@ -346,7 +302,6 @@ static int    s_spxlog = 0;            /* anchor filmstrip (tagpu_spxlog.on) */
    more, so the race they detected and worked around cannot happen — the pose
    comes off the FIELDS. gpu-status.md §2.9 keeps the history. */
 static int    s_nano   = 1;            /* build-state look (tagpu_nano.off)  */
-static GLuint s_prog, s_vao, s_vbo, s_fbo, s_colTex, s_depTex, s_palTex;
 #define TAGPU_SS_MAX 4                 /* the most we will supersample by (G17b) */
 static int    s_devres = 0;            /* the world at device res — OPT IN, tagpu_devres.on */
 static TAGPU_WORLDTGT s_wt;            /* the world target, published per frame */
@@ -364,7 +319,23 @@ static int    s_wtHave = 0;
    file a session can arm and then measure nothing from. The widths it could
    set, and the 2026-09-11 coverage measurement behind them, are in
    ui-markers.md. */
-static GLuint s_fogTex, s_fogLutTex, s_cprog, s_cvao, s_cvbo;
+/* TWO GL NAMES THAT ARE CONSTANT 0 AND STILL PUBLISHED. Nothing creates
+   either since landing 11-5b took the bring-up, but `fv.fogTex`/`fv.fogLut`
+   below still carry them, and the one thing that reads those fields is
+   `tagpu_hires_draw.c` -- a file whose producer is already dead and whose fate
+   is the owner's (escalation reason 1). Deleting them means reshaping
+   `TAGPU_FXVIEW` and editing that file, so they stay, pinned, documented.
+   `s_palTex` sat beside them until this landing and did NOT survive the same
+   test: it had no reader at all, published or otherwise, once the palette
+   upload went. The lesson is that "it is published" has to be checked rather
+   than assumed from the neighbours -- the compiler is what caught it.
+   The BYTES the Vulkan twins actually read are `tagpu_native_foglut()`'s, the
+   256-byte CPU mirror. Note the collision: `TAGPU_FXVIEW.fogLut` is THIS, an
+   `unsigned int` GL name, while the frame packet's `fogLut` is a
+   `const unsigned char*` to those bytes. Different fields, same word.
+   Declared `unsigned int` rather than `GLuint` to match the field they feed --
+   which is what lets this file stop including the GL header at all. */
+static unsigned int s_fogTex, s_fogLutTex;
 /* the 256-byte fog shade table as it was last uploaded to s_fogLutTex, for a
    backend that cannot read a GL texture (Phase G / G19e, tagpu_native.h) */
 static unsigned char s_fogLutBytes[256];
@@ -372,16 +343,6 @@ static int s_fogLutHave;
 /* whether this frame's world FBO pass is actually scissored to the viewport
    (Phase G / G19e, tagpu_native.h) */
 static int s_scissorOn;
-static GLuint s_fbo2, s_colTex2, s_depTex2, s_dprog;
-static GLint  s_uGame, s_uShadow, s_uAlpha, s_uFog, s_uFogOrg, s_uFogDim,
-              s_uScafOn, s_uScafP;
-static GLint  s_uWaterT, s_uWaterMode, s_uDigT;
-static GLint  s_uNanoOn, s_uNanoT, s_uNanoC;
-static GLint  s_uLit, s_uLambert, s_uSun, s_uAmb, s_uNorm;  /* Classic++ lighting */
-static GLint  s_uRestored;                          /* Classic++: the unit atlas's twin */
-static GLint  s_uOffset, s_uSS, s_uZoom, s_uZoomC, s_uZoomF, s_uZoomCF, s_uDepthScale;
-static GLint  s_uCKey = -1, s_uCSurfSz = -1, s_uCVp = -1;  /* composite: the key */
-static GLint  s_uCCurs = -1;                               /* G17c: the cursor rect */
 static float  s_zoom = 1.0f;
 static TAGPU_PDVIEW s_pv;          /* the posed pass's view, filled once per
                                       frame and reused by the build-ghost pass */
@@ -389,8 +350,6 @@ static unsigned s_pvFrame = 0xFFFFFFFFu;   /* the frame that fill belongs to —
                                       never a real frame, so a ghost armed on
                                       the very first one cannot draw against a
                                       zeroed view */
-static int    s_fboW = 0, s_fboH = 0, s_fboSS = 0;
-static int    s_palInit = 0;
 static int    s_fogCols = 0, s_fogRows = 0, s_fogOrgX = 0, s_fogOrgY = 0;
 static int    s_fogCells = 0;         /* the ALLOCATION's cell count (= cols*rows) */
 /* Frames drawn zoomed out, or from an unacknowledged eye, whose packet carried
@@ -406,8 +365,6 @@ static int    s_fogLut = 0;   /* grey remap uploaded this frame (logged) */
    computes col0 as ((eye + (sign & 31)) >> 5) - 1, which is C's truncating
    division, so a floor-based remainder would disagree with the engine for a
    negative eye (eye = -20: engine origin -16, floor would say -48). */
-static GLint  s_uCast;                 /* the caster's three numbers (G14i) */
-static TAGPU_SHADOWU s_shU;            /* the shadow read-back uniforms      */
 static float  s_verts[MAXNV * NVST];
 /* NOTHING WRITES THIS ON THE SURVIVING LANE, AND THAT IS A REAL GAP -- read it
    before believing any note that says the selection rect is ours.
@@ -434,6 +391,19 @@ static volatile int s_selComplete = 0;
 static const float SH_V[3] = { 0.0f, 0.8944f, -0.4472f };
 static const float SH_L[3] = { -0.35f, 0.80f, -0.49f };
 
+/* SIX SHADERS, AND FIVE OF THEM HAVE NO C REFERENCE LEFT. They are a BUILD
+   INPUT, not dead GL code: `tools/spirv-gen.py` reads every one out of the
+   PREPROCESSED translation unit and generates the SPIR-V that
+   `tagpu_vk_unit.c` and `tagpu_vk_world.c` draw with -- the manifest names
+   tagpu_native::VS/FS, ::CVS/::CFS and ::DVS/::DFS, and deleting any of them
+   fails the build. `FS` is the exception with a live C caller:
+   `tagpu_native_unit_fs()` hands it to `tagpu_posedraw.c`, which is exactly
+   why the posed and unposed units cannot drift apart. The pragma below is
+   paired and its `pop` is PROVED with a planted probe rather than read --
+   landing 11-4b put one inside a comment, where it is text and not a
+   directive. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-variable"
 static const char* VS =
     "#version 330 core\n"
     "layout(location=0) in vec3 aPos;\n"     /* frame px, frame py, depth enc  */
@@ -671,172 +641,7 @@ static const char* DFS =
     "#version 330 core\n"
     "in vec2 uv; out vec4 frag; uniform sampler2D uTex;\n"
     "void main(){ frag = texture(uTex, uv); }\n";
-
-static GLuint mksh(GLenum t, const char* src)
-{
-    GLuint sh = glCreateShader(t);
-    glShaderSource(sh, 1, &src, NULL); glCompileShader(sh);
-    GLint ok = 0; glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
-    if (!ok) { char lg[512]; glGetShaderInfoLog(sh, sizeof lg, NULL, lg);
-               nlog("native: shader FAILED:"); nlog(lg); s_state = 2; }
-    return sh;
-}
-
-static void tex2d(GLuint* t, GLenum filt)
-{
-    glGenTextures(1, t);
-    glBindTexture(GL_TEXTURE_2D, *t);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filt);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filt);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, 0);
-}
-
-static void init_gl(void)
-{
-    x_glDrawArrays = (PFN_DRAWARRAYS)getgl("glDrawArrays");
-    x_glDepthFunc  = (PFN_DEPTHFUNC) getgl("glDepthFunc");
-    x_glDisable    = (PFN_DISABLE)   getgl("glDisable");
-    x_glBlendFunc  = (PFN_BLENDFUNC) getgl("glBlendFunc");
-    x_glUniform1f  = (PFN_UNIFORM1F) getgl("glUniform1f");
-    x_glUniform2f  = (PFN_UNIFORM2F) getgl("glUniform2f");
-    x_glUniform3f  = (PFN_UNIFORM3F) getgl("glUniform3f");
-    x_glUniform4f  = (PFN_UNIFORM4F) getgl("glUniform4f");
-    x_glActiveTexture = (PFN_ACTIVETEX)getgl("glActiveTexture");
-    x_glClearBufferfv = (PFN_CLEARBUFFERFV)getgl("glClearBufferfv");
-    x_glDepthMask  = (PFN_DEPTHMASK) getgl("glDepthMask");
-    x_glScissor    = (PFN_SCISSOR)   getgl("glScissor");
-    x_glLineWidth  = (PFN_LINEWIDTH) getgl("glLineWidth");
-    x_glBlitFramebuffer = (PFN_BLITFB) getgl("glBlitFramebuffer");
-    x_glStencilFunc = (PFN_STENCILFUNC)getgl("glStencilFunc");
-    x_glStencilOp   = (PFN_STENCILOP)  getgl("glStencilOp");
-    x_glColorMask   = (PFN_COLORMASK)  getgl("glColorMask");
-    if (!x_glDrawArrays || !x_glDepthFunc || !x_glDisable || !x_glBlendFunc ||
-        !x_glUniform1f || !x_glUniform2f || !x_glUniform4f || !x_glActiveTexture ||
-        !x_glClearBufferfv || !x_glDepthMask ||
-        !x_glStencilFunc || !x_glStencilOp || !x_glColorMask)
-    { nlog("native: missing GL proc"); s_state = 2; return; }
-
-    GLuint vs = mksh(GL_VERTEX_SHADER, VS), fs = mksh(GL_FRAGMENT_SHADER, FS);
-    if (s_state == 2) return;
-    s_prog = glCreateProgram();
-    glAttachShader(s_prog, vs); glAttachShader(s_prog, fs); glLinkProgram(s_prog);
-    GLint ok = 0; glGetProgramiv(s_prog, GL_LINK_STATUS, &ok);
-    if (!ok) { nlog("native: link FAILED"); s_state = 2; return; }
-    glDeleteShader(vs); glDeleteShader(fs);
-    s_uGame   = glGetUniformLocation(s_prog, "uGame");
-    s_uOffset = glGetUniformLocation(s_prog, "uOffset");
-    s_uShadow = glGetUniformLocation(s_prog, "uShadow");
-    s_uWaterT    = glGetUniformLocation(s_prog, "uWaterT");
-    s_uWaterMode = glGetUniformLocation(s_prog, "uWaterMode");
-    s_uDigT      = glGetUniformLocation(s_prog, "uDigT");
-    s_uNanoOn    = glGetUniformLocation(s_prog, "uNanoOn");
-    s_uLit       = glGetUniformLocation(s_prog, "uLit");
-    s_uLambert   = glGetUniformLocation(s_prog, "uLambert");
-    s_uSun       = glGetUniformLocation(s_prog, "uSun");
-    s_uAmb       = glGetUniformLocation(s_prog, "uAmb");
-    s_uNorm      = glGetUniformLocation(s_prog, "uNorm");
-    s_uNanoT     = glGetUniformLocation(s_prog, "uNanoT");
-    s_uNanoC     = glGetUniformLocation(s_prog, "uNanoC");
-    s_uAlpha  = glGetUniformLocation(s_prog, "uAlpha");
-    s_uFog    = glGetUniformLocation(s_prog, "uFog");
-    s_uFogOrg = glGetUniformLocation(s_prog, "uFogOrg");
-    s_uFogDim = glGetUniformLocation(s_prog, "uFogDim");
-    s_uScafOn = glGetUniformLocation(s_prog, "uScafOn");
-    s_uScafP  = glGetUniformLocation(s_prog, "uScafP");
-    s_uSS     = glGetUniformLocation(s_prog, "uSS");
-    s_uZoom   = glGetUniformLocation(s_prog, "uZoom");
-    s_uZoomC  = glGetUniformLocation(s_prog, "uZoomC");
-    s_uZoomF  = glGetUniformLocation(s_prog, "uZoomF");
-    s_uZoomCF = glGetUniformLocation(s_prog, "uZoomCF");
-    s_uDepthScale = glGetUniformLocation(s_prog, "uDepthScale");
-    s_uRestored   = glGetUniformLocation(s_prog, "uRestored");
-    s_uCast       = glGetUniformLocation(s_prog, "uCast");
-    glUseProgram(s_prog);
-    glUniform1i(glGetUniformLocation(s_prog, "uAtlas"), 0);
-    glUniform1i(glGetUniformLocation(s_prog, "uLUT"),   1);
-    tagpu_shadow_locate(s_prog, &s_shU);     /* names the map's two units */
-    glUniform1i(glGetUniformLocation(s_prog, "uPal"),   2);
-    glUniform1i(glGetUniformLocation(s_prog, "uScaf"),  3);
-    glUniform1i(glGetUniformLocation(s_prog, "uFogGrid"), 4);
-    glUniform1i(glGetUniformLocation(s_prog, "uFogLUT"),  5);
-    /* unit 8: the hires pass binds its own textures on 6 and 7 between the
-       shadow and body draws (tagpu_hires_draw.c) and restores only unit 0 */
-    glUniform1i(glGetUniformLocation(s_prog, "uAtlasRGB"), 8);
-    glUseProgram(0);
-
-    GLuint cvs = mksh(GL_VERTEX_SHADER, CVS), cfs = mksh(GL_FRAGMENT_SHADER, CFS);
-    if (s_state == 2) return;
-    s_cprog = glCreateProgram();
-    glAttachShader(s_cprog, cvs); glAttachShader(s_cprog, cfs); glLinkProgram(s_cprog);
-    glGetProgramiv(s_cprog, GL_LINK_STATUS, &ok);
-    if (!ok) { nlog("native: cprog link FAILED"); s_state = 2; return; }
-    glDeleteShader(cvs); glDeleteShader(cfs);
-    glUseProgram(s_cprog);
-    glUniform1i(glGetUniformLocation(s_cprog, "uTex"), 0);
-    glUniform1i(glGetUniformLocation(s_cprog, "uSurf"), 1);
-    glUniform1i(glGetUniformLocation(s_cprog, "uPal"),  2);
-    s_uCKey = glGetUniformLocation(s_cprog, "uKey");
-    s_uCSurfSz = glGetUniformLocation(s_cprog, "uSurfSz");
-    s_uCVp = glGetUniformLocation(s_cprog, "uVp");
-    s_uCCurs = glGetUniformLocation(s_cprog, "uCurs");
-    /* a GLSL uniform defaults to 0, and uKey 0 is an ACTIVE key — the whole
-       frame would invert against palette index 0. Default it off explicitly. */
-    if (s_uCKey >= 0) glUniform1i(s_uCKey, -1);
-    glUseProgram(0);
-
-    GLuint dvs = mksh(GL_VERTEX_SHADER, DVS), dfs = mksh(GL_FRAGMENT_SHADER, DFS);
-    if (s_state == 2) return;
-    s_dprog = glCreateProgram();
-    glAttachShader(s_dprog, dvs); glAttachShader(s_dprog, dfs); glLinkProgram(s_dprog);
-    glGetProgramiv(s_dprog, GL_LINK_STATUS, &ok);
-    if (!ok) { nlog("native: dprog link FAILED"); s_state = 2; return; }
-    glDeleteShader(dvs); glDeleteShader(dfs);
-    glUseProgram(s_dprog);
-    glUniform1i(glGetUniformLocation(s_dprog, "uTex"), 0);
-    glUseProgram(0);
-
-    glGenVertexArrays(1, &s_vao); glBindVertexArray(s_vao);
-    glGenBuffers(1, &s_vbo); glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof s_verts, NULL, GL_STREAM_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, NVST * 4, (void*)0);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, NVST * 4, (void*)12);
-    glEnableVertexAttribArray(2);
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, NVST * 4, (void*)20);
-    glEnableVertexAttribArray(3);
-    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, NVST * 4, (void*)28);
-    glEnableVertexAttribArray(4);
-    glVertexAttribPointer(4, 2, GL_FLOAT, GL_FALSE, NVST * 4, (void*)32);
-    glEnableVertexAttribArray(5);
-    glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, NVST * 4, (void*)40);
-    glEnableVertexAttribArray(6);
-    glVertexAttribPointer(6, 3, GL_FLOAT, GL_FALSE, NVST * 4, (void*)44);
-    glBindVertexArray(0);
-
-    const float quad[] = { 0,0, 1,0, 0,1, 1,1 };
-    glGenVertexArrays(1, &s_cvao); glBindVertexArray(s_cvao);
-    glGenBuffers(1, &s_cvbo); glBindBuffer(GL_ARRAY_BUFFER, s_cvbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof quad, quad, GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8, (void*)0);
-    glBindVertexArray(0);
-
-    tex2d(&s_palTex, GL_NEAREST);
-    tex2d(&s_fogTex, GL_NEAREST);
-    tex2d(&s_fogLutTex, GL_NEAREST);
-    tex2d(&s_colTex, GL_NEAREST);
-    tex2d(&s_depTex, GL_NEAREST);
-    tex2d(&s_colTex2, GL_LINEAR);          /* LINEAR = the 2:1 box filter */
-    tex2d(&s_depTex2, GL_NEAREST);
-    glGenFramebuffers(1, &s_fbo);
-    glGenFramebuffers(1, &s_fbo2);
-    s_state = 1;
-    nlog("native: GL ready (G12b pass)");
-}
-
+#pragma GCC diagnostic pop
 
 static int name_ieq(const char* a, const char* b)
 {
@@ -2364,20 +2169,16 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        view, the fog and palette COPIES, the four gathers and the vertex
        emission are the pass and run either way, and the composite -- the world
        FBO, the shadow map, the key/fill inversion and the resolve -- stands
-       down. `s_state` is the GL program's state and is only asked where GL
-       draws. [The vulkan-only plan, landing 4b-2.] */
-    const int gl_draws = !tagpu_vk_owns_present();
-    if (gl_draws && s_state == 2) {
-        /* THE GL PROGRAM HAS REFUSED, so this pass paints nothing at all --
-           and that includes the structures' slant shadows the blit's two
-           branches are detoured for. Publish that BEFORE returning: the engine
-           then keeps drawing its own, which is the only correct picture when
-           we draw none. [The vulkan-only plan, landing 10b: until it, the
-           branches were flipped for the process at DllMain and this path left
-           every building without a shadow.] */
-        tagpu_owndraw_set_structshadow(0, f->frame_counter);
-        return;
-    }
+       down. [The vulkan-only plan, landing 4b-2; the composite and the program
+       state it was gated on went in landings 11-3 and 11-5b.] */
+    /* A REFUSED-PROGRAM EARLY RETURN STOOD HERE and published
+       `set_structshadow(0)` before taking it, so that a pass painting nothing
+       left the engine drawing its own slant shadows rather than leaving every
+       building without one -- the defect landing 10b fixed. It is gone with the
+       program that could refuse, and the property survives in a better form:
+       every other return from this function reaches the same publication
+       through `SSHADOW_NONE()`, and the gate below is read-and-clear, so a
+       frame that never reaches the painters lowers it anyway. */
     if (s_armed < 0 || (f->frame_counter % 30) == 0) {
         int was = s_armed;
         /* NEVER PUBLISH "DISARMED" WHILE RE-READING. `s_armed` used to be zeroed
@@ -2507,20 +2308,14 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        if it is still being asked */
     tagpu_order_armed(f->frame_counter);
     if (!s_armed && !fxOn && !sfxOn && !featOn && !terrOn && !markOn) { SSHADOW_NONE(); return; }
-    /* BOTH OF THESE ARE GL AND ONLY GL. `init_gl` builds this pass's programs
-       and FBOs; `tagpu_r3d_ensure` builds the 3DO atlas and LUT textures ("init
-       on demand (GL context current)", where it is defined). Asking either on
-       the vulkan-only lane would refuse the whole pass, gathers included, on the
-       one lane the hand-overs are for. */
-    if (gl_draws) {
-        if (s_state == 0) init_gl();
-        if (s_state != 1) { SSHADOW_NONE(); return; }
-    }
-    /* THE 3DO ATLAS AND THE SHADE LUT ARE THE PASS'S, not the backend's, so
-       this is asked on both lanes -- the unit pass needs the atlas laid out and
-       the LUT mirrored whichever rasteriser draws it, and since tagpu_gaf.h's
-       change the atlas exists without a GL name. On the GL lane it is asked at
-       exactly the point it always was, right after `init_gl`. */
+    /* THE 3DO ATLAS AND THE SHADE LUT ARE THE PASS'S, not the backend's. A GL
+       bring-up stood immediately above this, building this pass's programs and
+       FBOs, and it was gated because asking it on the vulkan-only lane would
+       have refused the WHOLE pass -- gathers included -- on the one lane the
+       hand-overs are for. It went in landing 11-5b. What is left is asked
+       unconditionally, as it always was on both lanes: the unit pass needs the
+       atlas laid out and the LUT mirrored whichever rasteriser draws it, and
+       since tagpu_gaf.h's change the atlas exists without a GL name. */
     if (!tagpu_r3d_ensure()) { SSHADOW_NONE(); return; }
 
     char* ta = *(char**)TA_MAINPP;
@@ -2642,10 +2437,26 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        both draw for one frame; when it stops, one frame has no structure
        shadow and then the gate falls. Neither can persist, which is the
        property the two guessed versions did not have. */
+    /* THE `gl_draws` TERM IS GONE FROM THIS GATE, AND THAT MATTERS MORE THAN
+       THE OTHER DELETIONS IN THIS LANDING. It was ANDed in so that a GL ->
+       Vulkan switch could not carry one raised frame across the seam; with one
+       lane there is no seam, and leaving it would have PINNED THE GATE AT 0 for
+       any future painter -- the engine would keep drawing its slant shadows
+       underneath ours and nothing would report it.
+
+       WHAT IS STILL MISSING, stated rather than left to be found: nothing sets
+       `s_ssSuppress` to 1 any more. Its writers were the GL painters, deleted
+       with the draw half in landing 11-3, so this publishes 0 every frame and
+       the engine draws every structure shadow itself. That is the CORRECT
+       picture while we paint none -- but a Vulkan-side structure-shadow painter
+       must set `s_ssSuppress` where the GL one did, or it will draw over the
+       engine's rather than instead of them. The read-and-clear below is what
+       keeps that bounded by construction: a frame that does not reach a painter
+       lowers the gate again on its own. */
     {
         const int suppress = s_ssSuppress;
         s_ssSuppress = 0;                 /* this frame must earn it again */
-        tagpu_owndraw_set_structshadow(s_armed == 1 && gl_draws && suppress,
+        tagpu_owndraw_set_structshadow(s_armed == 1 && suppress,
                                        f->frame_counter);
     }
     int gw = f->game_width  > 0 ? f->game_width  : vpL + vw;
@@ -2769,21 +2580,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             /* THE UPLOAD IS GL; WHAT FOLLOWS IT IS THE PASS. The four statics
                below are what `tagpu_terr_render`'s hand-over carries to the
                Vulkan twin (`fogGrid`/`fogGridCols`/`fogGridRows` there), so the
-               gate is around the texture calls and not around the block.
-               The size test reads `s_fogCols`/`s_fogRows` BEFORE they are
-               updated, which is why it is inside the gate with them. */
-            if (gl_draws) {
-                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-                x_glActiveTexture(GL_TEXTURE4);
-                glBindTexture(GL_TEXTURE_2D, s_fogTex);
-                if (cols != s_fogCols || rows != s_fogRows)
-                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, cols, rows, 0,
-                                 GL_RG, GL_UNSIGNED_BYTE, buf);
-                else
-                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cols, rows,
-                                    GL_RG, GL_UNSIGNED_BYTE, buf);
-                x_glActiveTexture(GL_TEXTURE0);
-            }
+               gate was around the texture calls and not around the block, and
+               in landing 11-5b the calls went and the block stayed. The four
+               publications below are the whole of what this does now. */
             s_fogGrid = buf; s_fogCols = cols; s_fogRows = rows;
             s_fogCells = bufCells;
             s_fogOrgX = orgX;
@@ -2815,22 +2614,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                     for (i = 0; i < 256; i++) ident[i] = (unsigned char)i;
                     t = ident;
                 }
-                /* 256 bytes: always re-spec, so no init flag can survive a
-                   context reset and leave the texture storageless (which has
-                   the same all-black failure mode) */
-                if (gl_draws) {
-                    x_glActiveTexture(GL_TEXTURE5);
-                    glBindTexture(GL_TEXTURE_2D, s_fogLutTex);
-                    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, 256, 1, 0,
-                                 GL_RED, GL_UNSIGNED_BYTE, t);
-                    x_glActiveTexture(GL_TEXTURE0);
-                }
-                /* ...and the same 256 bytes kept where a second backend can
-                   reach them (Phase G / G19e). The identity fallback above is
-                   part of the pass's input, not a detail of the GL upload, so
-                   what is published is what was uploaded and never a second
-                   construction of it -- and on the vulkan-only lane, where
-                   nothing was uploaded, it is still the one construction. */
+                /* THE 256 BYTES, KEPT WHERE A SECOND BACKEND CAN REACH THEM
+                   (Phase G / G19e). A GL upload of the same buffer stood above
+                   this and went in landing 11-5b. The identity fallback above
+                   is part of the pass's INPUT, not a detail of that upload,
+                   which is why it survives it: `t` is the one construction of
+                   the table and this is the one copy of it. */
                 memcpy(s_fogLutBytes, t, 256);
                 s_fogLutHave = 1;
             }
@@ -2840,16 +2629,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* ---- the live palette (re-read per frame; it does NOT cycle -- terr.c),
        and this is the ONLY palette texture the world has: terrain, features,
        effects, markers and the replacement meshes are all handed s_palTex. ---- */
-    /* GL THROUGHOUT, unlike the two above: the bytes a second backend needs are
-       `tagpu_pal_live()`'s, which `tagpu_pal_frame` fills from this frame's
-       packet before any pass runs, and each Vulkan twin uploads them itself. */
-    if (gl_draws) {
-        x_glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, s_palTex);
-        if (!s_palInit) { glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 256, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, pal); s_palInit = 1; }
-        else glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_RGBA, GL_UNSIGNED_BYTE, pal);
-        x_glActiveTexture(GL_TEXTURE0);
-    }
+    /* THIS UPLOAD WAS GL THROUGHOUT, unlike the fog grid and the shade table
+       above, and so it left NOTHING behind when it went in landing 11-5b: the
+       bytes a second backend needs are `tagpu_pal_live()`'s, which
+       `tagpu_pal_frame` fills from this frame's packet before any pass runs,
+       and each Vulkan twin uploads them itself. `pal` above is read for the
+       log line and for that reason only. */
 
     /* ---- gather native-owned on-screen units ---- */
     /* ONE GATHERED DRAWABLE. `pu`/`pw` point into THIS FRAME'S PACKET — our
@@ -3616,74 +3401,78 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        0 until 4c gives this backend TA's surface. The input path therefore
        stays 1:1 here, which is correct while nothing zoomed reaches the screen.
        [The vulkan-only plan, landing 4b-2.] */
-    if (!gl_draws) {
-        /* WHETHER TERRAIN IS CLIPPED TO THE VIEWPORT IS THE PASS'S DECISION AND
-           NOT GL'S, and this line is where that gets said on this lane. The
-           engine clips unit blits to the viewport rect and this pass matches it;
-           the hand-over carries that as `scissorOn` and the Vulkan twin's
-           `terr_scissor` honours it ("NO CLIP WHERE THE GL LANE HAS NONE").
-           Below, `s_scissorOn` is set from whether `x_glScissor` RESOLVED --
-           which is a fact about one context's entry points, and the reason the
-           GL path has a fallback at all. With no context every `x_gl*` is NULL,
-           so leaving the flag to that told the twin "no clip" and it drew
-           terrain over the whole frame instead of the viewport.
-           MEASURED before the fix: 33 088 px of 786 432 (4.21%) differing
-           against the two-lane capture, every one of them black in the GL half
-           and LOS-grey here, and all of them outside the 896x704 viewport this
-           fixture logs as `zoomvp=`. Coverage, not colour. [Landing 4b-2.] */
-        s_scissorOn = 1;
-        /* IN THE COMPOSITE'S OWN ORDER, and with the composite's own predicates:
-           terrain is the world's bottom layer and the features follow it, which
-           is the order below and the order tagpu_vk.c records the passes in.
-           `glEnable(GL_BLEND)` wraps the feature render down there; over here the
-           twin owns its own blend state, which is why there is nothing to set. */
-        if (nterr) tagpu_terr_render(&fv, 0);
-        if (nfeat) tagpu_feat_render(&fv, 0);
-        /* the effects are the LAST of the world, after the features and the
-           units -- the order below, and the order tagpu_vk.c records in. The
-           scaffold texture is 0 here: the effects twin refuses any frame whose
-           twin had the scaffold live, so that is the value it wants. */
-        if (nfx) tagpu_fx_render(&fv, 0, 0);
-        /* THE MARKERS ARE THE FRAME'S TOP LAYER, above the world and below the
-           UI -- where the composite draws them, and where tagpu_vk.c records
-           them. `markOn` rather than a vertex count, because this pass's own
-           heartbeat has to run even on a frame with no markers: without it the
-           watchdog reads a dead pass and hands the draw back to the engine. */
-        if (markOn) tagpu_mark_render(&fv);
-        /* AND THE UNIT PASS, last of the world's five. Its three body-path entry
-           points gate their own GL; the shadow, slant, wire and depth ones are
-           the composite's and are not called here at all. `begin` opens the
-           recording window and arms the A/B, `unit` records each pose, `end`
-           publishes -- which is the whole of the hand-over. */
-        /* THIS LANE'S OWN HEARTBEAT, the composite's 300-frame stats line
-           being below the exit and so unreachable here. It reports what was
-           handed OVER rather than what was drawn, which is the only thing
-           this lane decides. */
-        if ((f->frame_counter % 300) == 0) {
-            char hb[176];
-            _snprintf(hb, sizeof hb,
-                      "native: vulkan lane handed over frame %u: terr=%d feat=%d "
-                      "fx=%d mark=%d units=%d posed=%d", f->frame_counter,
-                      nterr, nfeat, nfx, markOn ? 1 : 0, nu, npd);
-            hb[sizeof hb - 1] = 0;
-            nlog(hb);
-        }
-        if (npd) {
-            int k;
-            tagpu_posedraw_begin(&s_pv);
-            for (k = 0; k < npd; k++) tagpu_posedraw_unit(&pdu[k]);
-            tagpu_posedraw_end();
-        }
-        /* AND THE BUILD GHOST, in its own window after the units' [landing
-           11-3]. It is AFTER on purpose and not merely by habit: ghosts blend
-           with each other and with what they sit on, so they are recorded last
-           exactly as the GL pass drew them last. `_begin`/`_end` is a window
-           rather than a frame (tagpu_posedraw.h), and with no posed unit on
-           screen this is the first and only one. */
-        ghost_record(pk, f->frame_counter, eyeX, eyeY, vpL, vpT, r0,
-                     evpL, evpT, evw, evh);
-        return;
+    /* THE HAND-OVER IS THE END OF THIS FUNCTION, UNCONDITIONALLY. It stood
+       inside `if (!gl_draws) { … return; }`, with the GL draw half below it
+       reached by falling past; landing 11-3 deleted that half and landing
+       11-5b deleted the test, which was true at every reachable call. Nothing
+       follows this, so the `return` went with the `if`. */
+
+    /* WHETHER TERRAIN IS CLIPPED TO THE VIEWPORT IS THE PASS'S DECISION AND
+       NOT GL'S, and this line is where that gets said on this lane. The
+       engine clips unit blits to the viewport rect and this pass matches it;
+       the hand-over carries that as `scissorOn` and the Vulkan twin's
+       `terr_scissor` honours it ("NO CLIP WHERE THE GL LANE HAS NONE").
+       Below, `s_scissorOn` is set from whether `x_glScissor` RESOLVED --
+       which is a fact about one context's entry points, and the reason the
+       GL path has a fallback at all. With no context every `x_gl*` is NULL,
+       so leaving the flag to that told the twin "no clip" and it drew
+       terrain over the whole frame instead of the viewport.
+       MEASURED before the fix: 33 088 px of 786 432 (4.21%) differing
+       against the two-lane capture, every one of them black in the GL half
+       and LOS-grey here, and all of them outside the 896x704 viewport this
+       fixture logs as `zoomvp=`. Coverage, not colour. [Landing 4b-2.] */
+    s_scissorOn = 1;
+    /* IN THE COMPOSITE'S OWN ORDER, and with the composite's own predicates:
+       terrain is the world's bottom layer and the features follow it, which
+       is the order below and the order tagpu_vk.c records the passes in.
+       `glEnable(GL_BLEND)` wraps the feature render down there; over here the
+       twin owns its own blend state, which is why there is nothing to set. */
+    if (nterr) tagpu_terr_render(&fv, 0);
+    if (nfeat) tagpu_feat_render(&fv, 0);
+    /* the effects are the LAST of the world, after the features and the
+       units -- the order below, and the order tagpu_vk.c records in. The
+       scaffold texture is 0 here: the effects twin refuses any frame whose
+       twin had the scaffold live, so that is the value it wants. */
+    if (nfx) tagpu_fx_render(&fv, 0, 0);
+    /* THE MARKERS ARE THE FRAME'S TOP LAYER, above the world and below the
+       UI -- where the composite draws them, and where tagpu_vk.c records
+       them. `markOn` rather than a vertex count, because this pass's own
+       heartbeat has to run even on a frame with no markers: without it the
+       watchdog reads a dead pass and hands the draw back to the engine. */
+    if (markOn) tagpu_mark_render(&fv);
+    /* AND THE UNIT PASS, last of the world's five. Its three body-path entry
+       points gate their own GL; the shadow, slant, wire and depth ones are
+       the composite's and are not called here at all. `begin` opens the
+       recording window and arms the A/B, `unit` records each pose, `end`
+       publishes -- which is the whole of the hand-over. */
+    /* THIS LANE'S OWN HEARTBEAT, the composite's 300-frame stats line
+       being below the exit and so unreachable here. It reports what was
+       handed OVER rather than what was drawn, which is the only thing
+       this lane decides. */
+    if ((f->frame_counter % 300) == 0) {
+        char hb[176];
+        _snprintf(hb, sizeof hb,
+                  "native: vulkan lane handed over frame %u: terr=%d feat=%d "
+                  "fx=%d mark=%d units=%d posed=%d", f->frame_counter,
+                  nterr, nfeat, nfx, markOn ? 1 : 0, nu, npd);
+        hb[sizeof hb - 1] = 0;
+        nlog(hb);
     }
+    if (npd) {
+        int k;
+        tagpu_posedraw_begin(&s_pv);
+        for (k = 0; k < npd; k++) tagpu_posedraw_unit(&pdu[k]);
+        tagpu_posedraw_end();
+    }
+    /* AND THE BUILD GHOST, in its own window after the units' [landing
+       11-3]. It is AFTER on purpose and not merely by habit: ghosts blend
+       with each other and with what they sit on, so they are recorded last
+       exactly as the GL pass drew them last. `_begin`/`_end` is a window
+       rather than a frame (tagpu_posedraw.h), and with no posed unit on
+       screen this is the first and only one. */
+    ghost_record(pk, f->frame_counter, eyeX, eyeY, vpL, vpT, r0,
+                 evpL, evpT, evw, evh);
+
 
     /* THE GL DRAW HALF OF THE UNIT PASS STOOD HERE -- 1 054 lines, deleted by
        the vulkan-only plan's landing 11-3. Everything above this point is the
@@ -3804,11 +3593,15 @@ static void pose_dump(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* u,
 
 /* game-thread readable flag: the owndraw classifier suppresses the engine's
    scratch-fake-unit wreck rasterise only while the native husk pass is armed */
-/* the fork restarts its render thread (NEW GL context) on every display-mode
-   change — all our GL ids die; re-init from scratch on the next frame */
+/* THE DISPATCHER, and that is now most of what it is. The fork restarts its
+   render thread on every display-mode change; this used to forget four
+   GL-shaped statics of its own before telling every other pass to do the same,
+   and those went with the bring-up in landing 11-5b. What it still does is its
+   own: drop the fog grid, whose pointer names a buffer the next frame rebuilds,
+   and then the dispatch in order -- the restorer first, so the passes below
+   forget their jobs before their atlases go. */
 void tagpu_native_glreset(void)
 {
-    s_state = 0; s_fboW = s_fboH = s_fboSS = 0; s_palInit = 0;
     s_fogCols = s_fogRows = 0; s_fogCells = 0; s_fogGrid = NULL; s_fogLut = 0;
     tagpu_rglsl_glreset();      /* first: the passes below forget their jobs */
     tagpu_fx_glreset();
@@ -3822,9 +3615,12 @@ void tagpu_native_glreset(void)
     tagpu_posedraw_glreset();
 }
 
+/* `s_state != 2` -- "the GL program has not refused" -- was a term here until
+   landing 11-5b. There is no program to refuse and no state to hold the answer,
+   so the arm poll and the lever are the whole of it. */
 int tagpu_native_wrecks_armed(void)
 {
-    return s_armed > 0 && s_state != 2 && s_wrecks;
+    return s_armed > 0 && s_wrecks;
 }
 
 /* THE FOG GRID AS THE NATIVE PASS UPLOADED IT (Phase G / G19e, the unit pass).
