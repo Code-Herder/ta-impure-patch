@@ -13353,6 +13353,71 @@ The fork's own log has been saying *"no mirror and no read-back"* since the list
 This landing is the point at which that sentence stops being a description of one lane's choice
 and becomes a property of the tree.
 
+#### AND THEN THE MEASUREMENT ABOVE TURNED OUT NOT TO COVER THIS LANDING
+
+The four runs above had **`tagpu_gui.on` OFF**, which their own logs say in terms
+(`gui: trigger host only (tagpu_gui.on is not on) — the UI layer, the census and the 17 leaves
+are OFF`). They exercised the world passes and proved this landing broke none of them, which is
+worth having. They did **not** run the GUI lane, and the GUI lane is this landing's whole
+subject. Found by chasing a review finding that did not reproduce (below), not by re-reading the
+plan — the label said "part 2 measured" and the runs had never entered the code.
+
+**Re-run, same interleaving, `gui.on=1`.** The layer comes up armed — `gui: ARMED
+flip@0x4C63A0=1 leaves=17/17`, `twins=3`, and between **577 311 and 600 695 `twin_sprite` calls**
+and **4 355–4 517 `twin_copy` calls** per run. Twelve grabs fall into **four** distinct frames,
+which decompose as **two independent oscillators**, neither of them the build:
+
+| oscillator | size | where | seen on |
+|---|---|---|---|
+| the cursor's own pixel | **1 px** | exactly (512, 384) — the hotspot; `curs=1,10x20,drawn=293` | both builds, both states |
+| the minimap cluster | **48 px** | x[63..104] y[47..125], inside the minimap rect | the same bimodality §2.76 found |
+
+**Mask those two regions and all twelve grabs are byte-identical** — one hash across four runs
+and both builds, over 733 323 non-black pixels of compared frame. The entire UI layer — panel,
+bars, dialogs, 3 twins, 28 atlas frames, half a million sprite ops — is pixel-identical.
+
+Honest limit: in **this** experiment the minimap's second mode appears only in `brB`, so these
+four runs do not by themselves show that cluster is build-independent. What shows it is the
+`gui.off` experiment above, where `mainA` and `mainB` differ by exactly that cluster and nothing
+else, and §2.76's five runs of `main`'s own DLL producing both modes.
+
+#### AND "NOTHING OBSERVABLE CHANGES" IS OVERSTATED BY EXACTLY ONE LOG LINE
+
+`c76b56d`'s message opens "WHAT IT CHANGES: NOTHING OBSERVABLE". With the UI layer on, that is
+wrong by one line, and the review predicted it before the run did:
+
+```
+gui: no glReadPixels/FBO entry points - the restored twin cannot be mirrored and
+     the Vulkan edition stays indexed
+```
+
+`main` writes it **once per process** — `tagpu_gui_present` calls the arm every present,
+`s_mirWant` is 1 because `tagpu_vk_gui_prepare` asks for the mirror, and the refusal latches on
+`mirrorRgbFailed` so it is said once. Measured: **1 on each `main` run, 0 on each branch run**,
+and the string is absent from the branch's `ddraw.dll` entirely. It is the only line the landing
+removes, and losing it is an improvement — the plan already called it "a line that reads as a
+driver fault on a perfectly normal run" — but anyone log-diffing this branch will find it, so it
+is named here rather than discovered.
+
+Everything else on the log side is clean: **zero** `VK_ERROR`, `DEVICE_LOST`, `VUID` or
+validation-layer lines on any of the four runs, which is the check binding 41's unconditional
+`VK_NULL_HANDLE` needed.
+
+#### THE PINS, MEASURED RATHER THAN ARGUED
+
+Until this run the three pins were a reading of the source. The GUI's own counter dump states
+two of them as numbers, identically on **both** builds and all four runs:
+
+```
+twins=3 ... col=0/3 colvalid=0 rearms=0 rgb=0
+```
+
+`colvalid=0` is pin 1 — `s_colValid` never left its initialiser. `col=0/3` is pin 2 — zero of
+three surfaces got a colour twin, across **over half a million** `twin_sprite` calls and some
+4 400 `twin_copy` calls in a single session. The removed code was not merely unreachable on
+paper; the engine ran the two functions that would have armed it 580 000 times and they returned
+0 every time.
+
 #### GATES
 
 `make -C tagpu/ddraw -j$(nproc)` clean; `thread-split: clean — 34 listed file(s)`; `spirv: 49
