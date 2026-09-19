@@ -1,0 +1,8 @@
+landing-review: model=claude-opus-5 x2 (correctness + cross-thread, independent, parallel) effort=high range=main..1c4dced findings=10 acted=10 rejected=0 date=2026-09-19
+no correctness defect survived verification in either review; all ten findings were prose,
+documentation or latent-clarity, and every one was verified against the code before acting.
+the one that changed a published number: gpu-status 2.76's 'mirrorRgb*/mirror_rgb* 68 -> 51'
+was a \b-anchored count mislabelled as covering both spellings; substring-counted it is
+102 -> 57 (survivors 40+10+7). atlasRgb* 112 -> 29 unaffected and reproduced by both.
+fixes are in 6a00b8d and are comments, docs and one explicit zero that was already zero,
+so no re-review.
