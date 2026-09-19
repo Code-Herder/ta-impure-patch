@@ -1,0 +1,36 @@
+landing-review: 11-4a (tagpu_mark.c's GL draw half), medium+, dedicated read-only reviewer on main...HEAD.
+
+No HIGH. No correctness regression on the surviving lane. Verified by the
+reviewer, two independent ways each:
+
+* mk_push / mk_draw / tagpu_mark_frame / tagpu_mark_handover byte-identical to
+  315e496 (md5 10a86e458ff5129e648ed7779c921bb9 over the whole statics+functions
+  region) and correctly ordered after their statics. These had been accidentally
+  deleted during the surgery and restored by hand, which is why they were the
+  first thing checked.
+* VS / FS byte-identical (md5 d70aaf8a1d7d88fb4120c7166d656ebf); corroborated by
+  inc/spirv/tagpu_mark.spv.h being absent from the diffstat.
+* Both guard rewrites exact, not merely plausible: textTex is provably 0 and
+  gl_draws provably false at the single call site (tagpu_native.c:3652, inside
+  if (!gl_draws) at :3619). Record calls conserved -- 4 mk_push, 7 mk_draw,
+  before and after, same arguments and nesting.
+* No removed symbol still reachable; nothing newly unreachable.
+
+12 findings, all verified against the source before acting, all acted on in
+c099241:
+  F1  LOW  s_state was write-only and nothing could raise it -- deleted.
+  F2  LOW  palTex parameter dead and falsely documented -- removed.
+  F3  LOW  header contract block promised GL state no longer touched.
+  F4-F8   stale comments, orphaned doc line, bare block, blank lines.
+  F9  MED  docs overclaimed: _DECL uses re.search, so a PREFIX
+           __attribute__((unused)) DOES work. Corrected with the 4-placement
+           table rather than restated.
+  F10 LOW  'cannot be skipped by building one object' is false -- corrected.
+  F11 LOW  25 lane-gate sites, not 24.
+  F12 SPEC freshness gate hashes post-transform GLSL -- claim bounded.
+
+Re-measured after the fixes, which is how the reported 0-px noise floor was
+found to be phase luck: 8 grabs of one build give an animation set of exactly
+1 px at (512,384), TA's own cursor pulsing at the pointer rest position, in the
+frame rather than in X's overlay. Outside it, all 16 cross-build pairs differ by
+0 px of 786 432.
