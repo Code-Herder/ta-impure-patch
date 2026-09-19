@@ -1,0 +1,53 @@
+landing-review: model=claude-opus-5 effort=high range=main..22e6e4ec72cefc1375534123ec8f40826e92e8f4 findings=18 acted=11 rejected=2 noted=5 date=2026-09-18 rounds=3
+
+Round 1 (two independent reviewers at high, on main..c63e0b7): one on
+correctness, one told to attack the game-thread/render-thread synchronisation.
+8 + 6 findings.
+
+  HIGH, and the one that mattered: the round-1 fix for MEDIUM-1 hosted the
+  capture in dds_Unlock's DDSCAPS_PRIMARYSURFACE branch, which is gated on
+  g_ddraw.render.run -- cleared by the WINDOW thread on deactivate, minimise,
+  fullscreen toggle and mode change -- and is reached only on the flip's
+  DirectDraw arm at 0x4C6475, never the GDI BitBlt arm at 0x4C63C0. An arm
+  could wait for an arbitrary later frame, answer with an unrelated picture
+  stamped with the wrong time, or never be serviced. The safety argument had
+  become a fix by timing. Fixed by servicing the arm on the trigger family's
+  NEXT pass instead.
+
+  Also acted on: tascene ab's retired glshot call; the same-second filename
+  collision that ate an arm; write_ddraw_ini still writing openglcore; stale
+  render_ogl.c comments; the glshot --help text.
+
+  REJECTED with evidence: that gl_draws is true during Vulkan bring-up.
+  tagpu_vk_own_present() is render_vk.c:145, above the frame loop at :154 that
+  holds the only surviving tagpu_overlay_draw at :232.
+
+  CORRECTED IN MY OWN DOCS: the reason after_flip is unusable is not an
+  s_opsLive test inside it (it has none) but that tagpu_detour_observe emits
+  test eax,eax; jz and hijacks the return only when before_flip returns
+  non-zero, and before_flip returns 0 at if (!s_opsLive).
+
+Round 2 = the fixes above. Round 3 (one reviewer at high, narrowed to the new
+ordering): 4 findings, all acted on.
+
+  The suffix loop added in round 2 formatted into a 128-byte buffer with
+  _snprintf, which does not terminate at exactly count; a long window title
+  truncates the name, every suffix then formats identical bytes, and the loop
+  stats one path 99 times before giving up -- rebuilding the silent timeout the
+  suffix existed to remove. Names now go through ss_name, which refuses a
+  truncated one.
+
+  Two overclaims of mine corrected rather than softened: 'one flip apart' is
+  really one family PASS (16 ms gate, ~80 flips), and 'whichever arm the flip
+  takes' is true of the family running, not of the frame existing.
+
+  Twenty unreachable lines after tascene's die() removed.
+
+  REJECTED with evidence: that the suffix lets PrintScreen write 99 PNGs a
+  second under key repeat. keyboard.c fires on the key EDGE,
+  key_triggered = !(lParam & (1 << 30)).
+
+Measured after the final change: renderer=gdi 136 215 B (cursor present in the
+frame, evidence the capture follows the engine's cursor draw), renderer=vulkan
+136 143 B, and three tacli shots inside one wall-clock second delivering three
+files. NOT measured: a screen that presents exactly once.
