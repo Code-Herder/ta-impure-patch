@@ -1777,7 +1777,7 @@ ROSTER_RX = re.compile(r"\s*u(\d+)\s+(\S+)\s+own=(\d+)(?:\s+idx=(-?\d+))?"
 
 
 def cmd_roster(args):
-    """Parse the newest roster block the overlay logs every 300 frames."""
+    """Parse the newest roster block tagpu_packet_pub.c logs every 5 s."""
     inst = Instance(args.name)
     path = inst.gamedir / "tagpu.log"
     if not path.exists():
@@ -4100,7 +4100,7 @@ SCN_LAUNCH_TIMEOUT = 45.0   # `launch`'s own default: a cold prefix takes its ti
 SCN_MENU_TIMEOUT = 30.0     # ...and a gadget that never appears is a different fault
 SCN_LOAD_TIMEOUT = 180.0    # ...and a map load is longer again
 
-# The overlay logs this every 30 frames, from the same read that logs the roster.
+# tagpu_packet_pub.c logs this every 500 ms, from the same read that logs the roster.
 # A non-zero count is proof TA is past its loading screen with a world in memory —
 # which is the precondition the applier would otherwise report as a 30s timeout.
 SCN_LIVE_RX = re.compile(r"units: alive=([1-9]\d*)")

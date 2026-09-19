@@ -3,8 +3,9 @@
    destabilised TA under wine). Called from render_ogl.c just before SwapBuffers.
    Runs the file-triggered INPUT service (the other five moved to the game
    thread in landing 10c-1 -- see tagpu_triggers_frame at the end of this file),
-   detects GL context changes, flushes the engine detours, logs the live roster
-   tacli reads, then dispatches the GL passes (scaffold, native).
+   detects GL context changes, flushes the engine detours, then dispatches the
+   GL passes (scaffold, native). The live roster tacli reads left too, in
+   landing 10c-3 -- it is roster_log in tagpu_packet_pub.c.
    tagpu_overlay.off is the kill switch for everything we draw in GL.
    The G1/G2/Phase-A proof markers (corner spinner, mouse dot, per-unit and
    per-piece triangles) were retired 2026-09-02; the log lines they shared stay. */
@@ -38,7 +39,6 @@
 #include "tagpu_pal.h"
 #include "tagpu_surf.h"
 #include "tagpu_fps.h"
-#include "tagpu_packet.h"
 
 /* GL entry points the fork does not already expose — load once ourselves. */
 typedef void (APIENTRY *PFN_READPIXELS)(GLint,GLint,GLsizei,GLsizei,GLenum,GLenum,void*);
@@ -204,7 +204,10 @@ void tagpu_overlay_capture_end(const TAGPU_FRAME* f)
    the audit names as its open hazard (cross-thread-engine-reads.md §5 row 2).
    All three are gone:
 
-     the roster log     reads the packet's units table below;
+     the roster log     read the packet's units table, and since landing
+                        10c-3 it is not in this file at all -- roster_log in
+                        tagpu_packet_pub.c, on the game thread, so that
+                        renderer=gdi has a roster;
      probe_unit_model   deleted. It dumped one unit's PrimitiveStructs to the
                         log; `tools/tacob pose-check` and `tagpu_posedump.on`
                         both do that from the game thread, against the engine's
@@ -217,12 +220,6 @@ void tagpu_overlay_capture_end(const TAGPU_FRAME* f)
                         memory is the one thing the exchange exists to remove —
                         landing 2's claim that none remains was true only
                         because this path was off by default. */
-
-/* Walk the packet's units table and log what tacli reads: the `units:` line
-   every 30 frames (`scenario load` waits on alive>0, `roster` takes eye= from
-   it) and the full roster block every 300 frames (`tacli roster`). Screen
-   coords use the engine's rule sx = wx - eyeX + vpL, sy = wy - alt/2 - eyeY
-   + vpT at the engine's own viewport origin. */
 
 /* THE LIVE-STATE LOG MOVED OUT OF HERE [the vulkan-only plan, landing 10c-3].
    `log_units` emitted the three lines `tacli` greps for -- `units:`, the

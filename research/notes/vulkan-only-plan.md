@@ -1932,23 +1932,56 @@ produced nothing at all on the one lane it exists for, and produced it silently.
 forced when no fill has happened for the shortest of the three cadences — self-limiting, because
 on a lane whose renderer takes packets the fills are ~16 ms apart and it never fires.
 
-**Measured on both lanes, after a `scenario load` and ~30 s of play:**
+**Measured on both lanes, after a `scenario load` and ~45 s of play:**
 
-| lane | `units:` (500 ms) | `mouse:` (250 ms) | forced publishes | roster |
+| lane | `units:` (500 ms) | `mouse:` | roster | exchange counters |
 |---|---|---|---|---|
-| gdi | 62 | 124 | as designed | answers, 11 units + eye |
-| vulkan | 77 | 151 | `overrun=2` of `pub=2982`, `taken=2979` | answers |
+| gdi | 92 | 92 | 97 lines, and `tacli roster` answers | **not observable** — see below |
+| vulkan | 91 | 178 | answers | `overrun=2` `gap=2` of `pub=3582`, `taken=3579` |
 
-`mouse:` is exactly twice `units:` on both, which is the check that matters: **the first cut of
-the force asked the HEADER's 500 ms gate, and that pinned every line on gdi to 500 ms** — 22 and
-22 where the mouse should have had twice as many. Asking when the last FILL was instead is what
-lets each line keep its own cadence.
+The Vulkan row is the no-regression half: `overrun=2` is the two pre-existing forces (the
+level-end packet and the level's first in-play one), so **the keepalive never fired on a lane
+with a consumer**, which is the property it is built on.
+
+**THE gdi COUNTERS CANNOT BE READ, and that is worth knowing before anyone goes looking.** The
+`packet:` heartbeat is emitted by `tagpu_packet_frame_end`, whose only callers are
+`render_ogl.c` and `render_vk.c`. On gdi it is never printed. The forced-fill rate there is
+therefore stated from the code — one per `ROSTER_HDR_MS`, ~2/s — and not from a counter.
+
+**`mouse:` IS NOT A MACHINE-READ LINE, and an earlier draft of this section built its whole
+verification argument on it** [the landing review]. `tacli`'s structured readers are the peek
+line, the roster line and `units:`; the only other reference to `mouse: screen=` in the tree is a
+sentence of prose in [input-firewall](input-firewall.html). So the ratio `mouse:` = 2 × `units:`
+was never "the check that matters" — and it was also **not true on both lanes**: the figures
+recorded were gdi 62/124 and vulkan 77/151, and 2 × 77 is 154. The force now asks the HEADER's
+cadence instead, which halves the forced-publish rate — the one new risk this landing carries —
+and costs only that `mouse:` runs at 500 ms rather than 250 ms on a lane with no consumer, which
+is why the gdi row above reads 92/92 and the vulkan row 91/178.
 
 **GATED IN MILLISECONDS, NOT IN FRAMES.** The old throttles counted render frames at ~60/s
-(`% 300`, `>= 30`, `>= 15`). This runs from the in-play draw, measured at **13 361 draws/s**, so
-carrying those modulos across would have raised the file-write rate about two hundredfold on the
-game thread inside an engine call — exactly the fault the review of 10c-1 caught when this family
-first moved.
+(`% 300`, `>= 30`, `>= 15`). This runs from the in-play draw instead, and the draw rate is far
+higher than 60/s on every reading anyone has taken — **7 388 and 13 361 draws/s** on this
+instance across two runs of the same fixture, against the means of **816** and **842** recorded
+in [gpu-status](gpu-status.html) under different conditions and the **330..4900** band
+`tagpu_packet.c` documents. **Those figures are not reconciled and this landing did not
+reconcile them**; what matters here is that the conclusion holds at every one of them — even at
+the lowest recorded mean, carrying `>= 15` across would be a ~14× increase in file writes on the
+game thread inside an engine call, and that is the fault the review of 10c-1 caught when this
+family first moved.
+
+**ONE BURST BOUND, ADDED BY THE REVIEW.** `plog` is one `fopen`/`fprintf`/`fclose` per line, and
+the roster dump emits one line per unit with `n_units` bounded only by `TAGPU_PK_MAX_UNITS`
+(16384). On the render thread a stall cost a dropped frame; on the game thread it costs sim time,
+and the fixture used here has eleven units, which does not exercise it. The dump now takes **one
+open for the whole block**. The per-unit cost at a realistic unit count was never measured, and
+this bound is why it does not need to be.
+
+**AND THE ROSTER NO LONGER HAS AN OFF SWITCH.** `log_units` sat below `tagpu_overlay.c`'s
+`tagpu_overlay.off` early return and below the teardown gate; `roster_log` has neither. For
+`tacli` that is an improvement — the harness keeps working with the overlay off — and the
+teardown gate is moot now that the walk touches no engine memory and runs on the teardown's own
+thread. But it is a change to what that kill switch kills, and the new log has no lever of its
+own.
 
 **What 10c does NOT close:** the camera hold, `tacli wheel` and anything else riding the overlay
 frame still do not reach `renderer=gdi`. The two die at different points, and the review corrected

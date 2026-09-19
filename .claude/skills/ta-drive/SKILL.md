@@ -1913,8 +1913,12 @@ meaning in landing 10c-2 and that row has not been re-measured since).
 including `renderer=gdi`** (the vulkan-only plan's gate 10c, three landings). The triggers and the
 key/click injection run from the engine's flip; the live-state log — `units:`, the roster dump and
 `mouse:`, which with `peek:` are the whole of what `tacli` greps out of `tagpu.log` — is written
-by `tagpu_packet_pub.c` beside the frame packet. What still does NOT reach gdi is `tacli eye` and
-`tacli wheel`: both need the overlay frame, which only the GL and Vulkan backends run.
+by `tagpu_packet_pub.c` beside the frame packet. What still does NOT reach gdi: `tacli eye` and
+`tacli wheel`, which both need the overlay frame that only the GL and Vulkan backends run;
+`tacli glshot`, which captures a GL framebuffer and cannot mean anything there; and `tacli gui`,
+which writes a lever with no effect on that lane. `tacli shot` — the engine's own surface — does
+work. Note too that the `packet:` heartbeat is emitted from the render thread, so the exchange's
+counters are not printed on gdi at all.
 
 **`gui.on` DOES NOT GATE `tacli` ITSELF, and for one commit in the vulkan-only plan's landing 10c
 it did** — which is worth knowing because the failure was silent. The flip `0x4C63A0` is where the

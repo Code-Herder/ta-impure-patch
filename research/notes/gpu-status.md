@@ -2194,7 +2194,16 @@ crcbad= nopkt= | pub/s= taken/s= pubus p50= p99= | seq= tick= tps= speed= paused
 flags= eye= vp= flips= font= fg= trunc= used= | draws= inplay= draws/s= inplay/s= foreign= deep=
 fontcopies=<copies>/<refused> levelend=reclaim|own|none`.
 `viol`, `pviol`, `crcbad`, `foreign` and `commitfail` must stay 0; `skip` is the fresh gate
-working; `overrun`/`gap` are 0 in play and count only under `stress` or across a level end;
+working; `overrun`/`gap` are 0 in play **on a lane whose renderer takes packets**, and count
+under `stress`, across a level end, **or from the roster keepalive** — the vulkan-only plan's
+landing 10c-3 forces a fill when none has happened for 500 ms, so on `renderer=gdi`, where
+nothing calls `tagpu_packet_acquire` at all, every one of those (~2/s) lands on a FRESH cell and
+counts as an overrun, with `gap` climbing beside it; the same happens intermittently on a GL or
+Vulkan lane rendering below ~2 fps. **Before that landing this line read "`overrun`/`gap` are 0
+in play" full stop**, and on gdi it would now send you chasing a phantom. Note also that this
+whole heartbeat is emitted from `tagpu_packet_frame_end`, whose only callers are
+`render_ogl.c` and `render_vk.c` — so **on gdi the line is never printed and these counters
+cannot be read at all**;
 `tps` is `GameTime` per wall second and must read 3 × `speed`. A level change logs `packet: level
 end -> gen N …`, then the loader thread's entry and exit and `packet: level gen N: first in-play
 packet …`, in that order. Levers, read at attach: `tagpu_packet.off` (no slots, no publish, no

@@ -152,14 +152,14 @@ Surface trigger fires at most once per 8 frames (~0.26 s) — burst loops need
    empirically (sample a log value twice, 15 s apart) before trusting a change.
 10. **Camera steering**: `tacli eye <name> X Y` pins the eye (it writes both the eye
    and the scroll target, so the engine stops fighting), `--release` frees it. Steer by
-   the roster log (`u### TYPE own world screen`, every 300 frames): roster `screen=`
+   the roster log (`u### TYPE own world screen`, every 5 s (landing 10c-3; it was every 300 render frames)): roster `screen=`
    already includes the viewport offsets, and unit ids are NOT stable (alive-counter
    order) — match by world coords. Mouse-edge scrolling is legacy; do not warp the
    user's pointer to scroll.
 
 ## Closed-loop camera steering (converges in ~3 rounds)
 
-The `units:` log line carries a fresh `eye=(x,y)` every 30 frames (~1 s) — use
+The `units:` log line carries a fresh `eye=(x,y)` every 500 ms (landing 10c-3; it was every 30 render frames, which is 0.5 s at 60 fps — this line used to say ~1 s and was wrong before the move too) — use
 it as feedback instead of the 300-frame roster/swept lines (10 s stale = blind
 overshoot). Loop: read eye → scroll toward target with a duration computed from
 the delta (`~1400 px/s`, clamp 0.15–3 s) → park → re-read. Break when within

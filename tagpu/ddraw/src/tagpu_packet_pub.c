@@ -80,7 +80,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
-#include "../inc/dd.h"     /* g_ddraw: the game's own screen, for the roster's on-screen test */
+#include "dd.h"           /* g_ddraw: the game's own screen, for the roster's on-screen test */
 #include "tagpu_engine.h"
 #include "tagpu_packet.h"
 #include "tagpu_packet_pub.h"
@@ -321,9 +321,19 @@ typedef char pk_anchor_size[(sizeof(TAGPU_PK_ANCHOR) ==  16) ? 1 : -1];
 
 static TAGPU_PK_UNIT   s_uScratch[TAGPU_PK_MAX_UNITS];
 /* what fill_frame last wrote. Read back by roster_log immediately after the
-   publish, on the producer's own thread: the slot's only WRITER is this
-   producer on its next fill, consumers only read, so between the publish and
-   that next fill the bytes cannot move under us. Never read anywhere else. */
+   publish, on the producer's own thread.
+
+   THE INVARIANT IS THE CONSUMER'S ROTATION, NOT "CONSUMERS ONLY READ" [the
+   landing review corrected this]. "Consumers only read" is false under the
+   `tagpu_packet.poison` lever, where the consumer memsets the header of the
+   slot it hands back. What actually holds: for the slot just published to
+   reach the consumer's spare -- the one poison touches -- the consumer needs
+   two more acquires, each needing FRESH in the cell, and only a PUBLISH sets
+   FRESH. There is exactly one producer thread (prodByRole 0, any other
+   refused as `foreign`), and it is the thread sitting inside roster_log. So
+   the rotation cannot advance while we read. Move roster_log anywhere the
+   producer is not holding the thread, or add a second publisher, and this is
+   gone -- which the old wording would not have told you. */
 static const TAGPU_PACKET* s_lastFilled;
 static TAGPU_PK_WRECK  s_wScratch[TAGPU_PK_MAX_WRECKS];
 static TAGPU_PK_ANCHOR s_aScratch[TAGPU_PK_MAX_ANCHORS];
@@ -1614,6 +1624,14 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
        by cap_bytes, which the primitive set before calling us */
     tagpu_pk_fill((unsigned char*)p + offsetof(TAGPU_PACKET, used_bytes), 0,
                   sizeof(TAGPU_PACKET) - offsetof(TAGPU_PACKET, used_bytes));
+    /* STAMPED HERE, NOT AT THE RETURN [landing review]: the `!ta` exit below
+       returns early, and stamping only at the end would leave s_lastFilled
+       naming an EARLIER packet while the publish still reported success --
+       roster_log would then print a live `units: alive=` block from the
+       previous packet's world, which is the very line `tacli scenario load`
+       treats as proof the map is live. Stamped here the header is already
+       zeroed, so in_game is 0 and roster_log returns at its guard. */
+    s_lastFilled = p;
     p->used_bytes = sizeof(TAGPU_PACKET);
     p->text_fg = -1;
     p->gamma = 1.0f;
@@ -1719,7 +1737,6 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
         if (e > need) need = e;
     }
     p->used_bytes = cursor;
-    s_lastFilled = p;      /* the roster reads it back; see roster_log below */
     return need;
 }
 
@@ -1760,6 +1777,9 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
 #define ROSTER_MOUSE_MS  250u   /* `mouse:`  <- was >= 15 render frames  */
 
 static LARGE_INTEGER s_rosFreq, s_rosNow, s_rosFill, s_rosHdr, s_rosDump, s_rosMouse;
+/* QPF is asked ONCE. Without this a refusal re-probed on every in-play draw
+   for the life of the process, and said nothing (landing review). */
+static int s_rosFreqTried;
 
 static int ros_due(const LARGE_INTEGER* last, unsigned ms)
 {
@@ -1777,24 +1797,40 @@ static int ros_due(const LARGE_INTEGER* last, unsigned ms)
    produced nothing on the one lane landing 10c-3 exists for, and produced it
    silently.
 
-   IT ASKS WHEN THE LAST FILL WAS, not when a particular line is next due,
-   and the difference is measurable. Asking the HEADER's 500 ms gate (the
-   first cut) made the fill rate on a consumerless lane exactly the header's
-   rate, so `mouse:` -- whose own gate is 250 ms -- could only ever fire at
-   500 ms there. Measured on a gdi instance: 22 `units:` lines and 22
-   `mouse:` lines over the same run, where the mouse should have had twice
-   as many. Against the last FILL it is self-limiting for the right reason:
-   on a lane whose renderer takes packets the fills are ~16 ms apart, so this
-   is never due and never forces; on one with no consumer it forces at the
-   shortest cadence any of the three lines needs, and each line then keeps
-   its own. It stamps the shared clock, so the whole draw costs one
+   IT ASKS WHEN THE LAST FILL WAS, not when a particular line is next due.
+   Against the last FILL it is self-limiting for the right reason: on a lane
+   whose renderer takes packets the fills are ~16 ms apart, so this is never
+   due and never forces.
+
+   AND IT ASKS THE HEADER'S CADENCE, WHICH IS THE SLOWEST OF THE TWO THAT
+   MATTER [landing review]. An earlier cut used the MOUSE's 250 ms, on the
+   reasoning that a forced fill should serve the shortest gate any line has.
+   That doubled the forced-publish rate -- the one new risk this landing
+   carries -- to serve `mouse:`, and NOTHING PARSES `mouse:`: `tacli`'s
+   structured readers are the peek line, the roster line and `units:`, and
+   the only other reference in the tree is a sentence of prose in
+   input-firewall.md. It is a human diagnostic. So the force runs at
+   ROSTER_HDR_MS, `units:` and the roster keep their exact cadences on every
+   lane, and `mouse:` runs at 500 ms rather than 250 ms on a lane with no
+   consumer. That asymmetry is deliberate and it costs a diagnostic nothing.
+
+   It stamps the shared clock, so the whole draw costs one
    QueryPerformanceCounter. */
 static int roster_wants_fill(void)
 {
-    if (!s_rosFreq.QuadPart) QueryPerformanceFrequency(&s_rosFreq);
-    if (!s_rosFreq.QuadPart) return 0;            /* fail closed, as the trigger gate does */
+    if (s_rosFreqTried) {
+        if (!s_rosFreq.QuadPart) return 0;        /* fail closed, and stop asking */
+    } else {
+        s_rosFreqTried = 1;
+        QueryPerformanceFrequency(&s_rosFreq);
+        if (!s_rosFreq.QuadPart) {
+            plog("roster: QueryPerformanceFrequency refused -- `tacli roster` and "
+                 "`tacli scenario load` cannot work in this process");
+            return 0;
+        }
+    }
     QueryPerformanceCounter(&s_rosNow);
-    return ros_due(&s_rosFill, ROSTER_MOUSE_MS);  /* the shortest of the three */
+    return ros_due(&s_rosFill, ROSTER_HDR_MS);
 }
 
 static void roster_log(const TAGPU_PACKET* pk)
@@ -1802,6 +1838,7 @@ static void roster_log(const TAGPU_PACKET* pk)
     const TAGPU_PK_UNIT* uu;
     unsigned i;
     int alive = 0, onscreen = 0, eyeX, eyeY, gw, gh, me, wantHdr, wantDump;
+    FILE* dump;
 
     if (!s_rosFreq.QuadPart || !s_rosNow.QuadPart) return;
     s_rosFill = s_rosNow;    /* a fill just happened: that is what the force asks about */
@@ -1832,6 +1869,14 @@ static void roster_log(const TAGPU_PACKET* pk)
     if (wantHdr)  s_rosHdr  = s_rosNow;
     if (wantDump) s_rosDump = s_rosNow;
 
+    /* ONE OPEN FOR THE WHOLE DUMP, not one per unit [landing review]. plog()
+       is fopen/fprintf/fclose, and this loop is bounded only by
+       TAGPU_PK_MAX_UNITS (16384) -- at the reference setup's own 200v200 that
+       was ~400 opens every 5 s, and it now runs on the GAME thread, where a
+       stall costs sim time rather than a dropped frame. The landing measured
+       it at 11 units, which does not exercise it. Closed before the `units:`
+       line below so the two never hold the file at once. */
+    dump = wantDump ? fopen("tagpu.log", "a") : NULL;
     uu = tagpu_pk_units(pk);
     for (i = 0; i < pk->n_units; i++) {
         const TAGPU_PK_UNIT* u = &uu[i];
@@ -1846,16 +1891,18 @@ static void roster_log(const TAGPU_PACKET* pk)
            never a public identity -- but it is what `tacli scenario` reports
            per spawned entity, so the roster has to speak the same number for
            the two to be comparable. */
-        if (wantDump) {
+        if (dump) {
             char db[192]; _snprintf(db, sizeof db,
                 "  u%03d %-12.12s own=%d idx=%d world=(%d,%d,%d) screen=(%d,%d) nano=%.2f",
                 alive, u->name[0] ? u->name : "?", (int)u->owner, (int)u->id,
                 wx, wy, wz, sx, sy, u->nano);
-            plog(db);
+            db[sizeof db - 1] = 0;
+            fprintf(dump, "%s\n", db);
         }
         if (sx >= -gw / 40 && sx <= gw + gw / 40 && sy >= -gh / 40 && sy <= gh + gh / 40)
             onscreen++;
     }
+    if (dump) fclose(dump);
     if (wantHdr) {
         char b[160]; _snprintf(b, sizeof b, "units: alive=%d onscreen=%d eye=(%d,%d) me=%d",
                                alive, onscreen, eyeX, eyeY, (int)me); plog(b);
@@ -1979,22 +2026,30 @@ static void* __cdecl after_draw(unsigned int* regs)
        channel publishes through the load, so the FRESH gate can be set at the
        instant this draw runs — and a first packet the gate dropped would leave
        the renderer on an in_game = 0 packet, with no world, until the render
-       thread happened to take one in between. One forced publish per level,
-       counted as an overrun exactly like the level-end packet's. */
+       thread happened to take one in between. One forced publish per level for
+       THAT reason, counted as an overrun exactly like the level-end packet's.
+
+       IT IS NO LONGER THE ONLY FORCED ONE [landing 10c-3]. roster_wants_fill()
+       forces a fill whenever none has happened for ROSTER_HDR_MS, so on a lane
+       with no consumer -- renderer=gdi, where nothing calls
+       tagpu_packet_acquire -- this forces about twice a second and `overrun`
+       counts every one. gpu-status.md's exchange health rule used to read
+       "overrun/gap are 0 in play"; that is what this changed, and the rule now
+       says so. */
     {
-    const int pub = tagpu_packet_publish(fill_frame, NULL,
-                                         !s_levelOpen || roster_wants_fill());
-    if (pub && !s_levelOpen) {
-        char b[260];
-        s_levelOpen = 1;
-        _snprintf(b, sizeof b,
-                  "packet: level gen %u: first in-play packet at draw #%u (tick %u, load flags now 0x%04X, at the first non-in-play draw after the teardown 0x%04X, loader thread %u entered %u time(s), game thread %u)",
-                  s_levelGen, s_cDraws, s_lastTick, load_flags(), s_shellFlags,
-                  (unsigned)s_loaderTid, s_loaderEntries, (unsigned)s_gameTid);
-        b[sizeof b - 1] = 0; plog(b);
-    }
-    /* the live-state log tacli reads, from the packet just filled */
-    if (pub) roster_log(s_lastFilled);
+        const int pub = tagpu_packet_publish(fill_frame, NULL,
+                                             !s_levelOpen || roster_wants_fill());
+        if (pub && !s_levelOpen) {
+            char b[260];
+            s_levelOpen = 1;
+            _snprintf(b, sizeof b,
+                      "packet: level gen %u: first in-play packet at draw #%u (tick %u, load flags now 0x%04X, at the first non-in-play draw after the teardown 0x%04X, loader thread %u entered %u time(s), game thread %u)",
+                      s_levelGen, s_cDraws, s_lastTick, load_flags(), s_shellFlags,
+                      (unsigned)s_loaderTid, s_loaderEntries, (unsigned)s_gameTid);
+            b[sizeof b - 1] = 0; plog(b);
+        }
+        /* the live-state log tacli reads, from the packet just filled */
+        if (pub) roster_log(s_lastFilled);
     }
     return ret;
 }
