@@ -119,14 +119,15 @@ static int s_ab, s_abDone, s_abFrame;
 static int s_pubHave;                  /* this frame's hand-over is waiting   */
 static TAGPU_TERRHAND s_pub;
 /* THE CPU MIRRORS ARE ASKED FOR, ONCE, AND THEN KEPT. Unlike tagpu_gaf.c's
-   incremental atlas (§2.29), both of this pass's big textures are built WHOLE
-   in one call out of a buffer that is freed three lines later -- so the whole
-   of the mechanism here is "do not free it", and a mirror is correct from the
-   instant it exists because it IS the buffer glTexImage2D was handed. What the
-   flag has to do instead is force ONE rebuild when the Vulkan lane arms after
-   the texture was built: `ensure_atlas` and `ensure_height` both early-return
-   on an identity test, and the extra term below is what makes them fall
-   through exactly once. */
+   incremental atlas (gpu-status.md 2.29), both of this pass's big buffers --
+   the tile atlas and the height grid -- are built WHOLE in one pass out of a
+   buffer that used to be freed three lines later, so the whole of the
+   mechanism here is "do not free it", and a mirror is correct from the instant
+   it exists because it IS the buffer the build loop filled. What the flag has
+   to do instead is force ONE rebuild when the Vulkan lane arms after the
+   buffer was built: `ensure_atlas` and `ensure_height` both early-return on an
+   identity test, and the extra term below is what makes them fall through
+   exactly once. */
 static int s_mirrorWant;               /* the Vulkan lane asked for mirrors   */
 static unsigned char* s_atlasMirror;   /* ATLAS_W x s_atlasH, or NULL         */
 static unsigned s_atlasMirrorSerial;
@@ -146,11 +147,15 @@ static unsigned s_atlasMirrorSerial;
    reason -- the answer is a file-attribute query and it does not change
    mid-map in any way worth paying for every frame.
 
-   The list is the one `glsl_begin` built for the GL job, RETAINED instead of
-   freed: see tagpu_terr.h, `restoreFrames`. Retaining it costs
-   `s_atlasN * sizeof(TAGPU_RGLSL_FRAME)` -- 44 bytes a tile, so under 90 KB
-   for a full atlas -- and it is the only copy of two facts a `_vk` file cannot
-   re-derive, the tileability flags and the centre-out order. */
+   The list is `restore_publish`'s, retained rather than freed: see
+   tagpu_terr.h, `restoreFrames`. Retaining it costs
+   `s_atlasN * sizeof(TAGPU_RGLSL_FRAME)` -- 44 bytes a tile, so 222 KB for
+   Two Continents' 5062 tiles and 508 KB for the largest stock map's 11,561 --
+   and it is the only copy of two facts a `_vk` file cannot re-derive, the
+   tileability flags and the centre-out order. (This read "under 90 KB for a
+   full atlas", which is about 2045 tiles and was never a full one; the number
+   mattered less while nothing consumed the list. [FROM THE 11-5c LANDING
+   REVIEW.]) */
 static int                s_rvkWant;   /* tagpu_restorevk.on, latched         */
 static TAGPU_RGLSL_FRAME* s_rFrames;   /* s_rFrameN entries, restore order    */
 static int                s_rFrameN;
@@ -297,16 +302,17 @@ static const void* s_setPtr;           /* the TILE_SET we built from          */
 static int    s_setCount;
 static int    s_maxTex;
 /* Classic++ (tagpu_classicpp.on): the RESTORED copy of the atlas -- the same
-   cells on the same pitch, true colour from the unditherer's model run as
-   fragment passes by tagpu_restoreglsl.c straight into this texture -- so the
-   one set of UVs serves both looks. Built once per map, a slice per frame,
-   and the cells SHOW AS THEY LAND (renderers.md 4c Q6): the restorer clears
-   the texture to alpha 0 when the job starts and its out pass writes alpha 1
-   over every cell it paints, guard ring included, so the shader's alpha test
-   is the per-cell flag -- no second texture, no upload, and a cell's samples
-   are all-or-nothing because one quad paints its interior and its ring.
-   Draws issued in the same frame are in order, so a cell whose out pass was
-   issued by this frame's slice is restored in this frame's terrain draw. */
+   cells on the same pitch, true colour from the unditherer's model -- so the
+   one set of UVs serves both looks. THE IMAGE IS NOT OURS. Since landing 11-5c
+   this side owns the REQUEST and nothing else: the order, the frame list, and
+   the two flags below. The consumer (tagpu_vk_terr.c) owns the image, runs the
+   model, and knows when a cell has been painted; `restored` in the hand-over
+   is this side saying a request STANDS, not that anything has been restored.
+   The look it produces is unchanged and is described where it is now made:
+   a slice per frame, the cells SHOW AS THEY LAND (renderers.md 4c Q6), the
+   destination cleared to alpha 0 at the start of a job and each out pass
+   writing alpha 1 over the cell it paints, guard ring included, so the
+   fragment shader's alpha test is the per-cell flag. */
 static int    s_rgbState = 0;      /* 0 none, 1 request published, -1 failed  */
 static unsigned s_rgbPalSerial;    /* tagpu_pal serial the request was built through */
 static const unsigned char* s_setPix;   /* the current set's tile pixels     */
@@ -328,12 +334,13 @@ static int    s_hMeshW, s_hMeshH;      /* the grid it was built from: a failed
                                           rebuild leaves the old mesh, and this
                                           is what keeps it undrawn (review) */
 /* THE CASTER MESH'S CPU MIRROR (Phase G / G19e, the shadow pass). The same
-   answer as the atlas's and the height grid's: the very buffers the
-   glBufferData calls below were handed, kept instead of freed, so the Vulkan
-   shadow pass draws the SAME vertices and the SAME index order rather than a
-   second evaluation of build_hills' arithmetic. 19.3 MB on Two Continents
-   (6.4 vertices + 12.9 indices) and paid for only while the Vulkan lane is
-   armed -- `s_mirrorWant`, which is set from tagpu_vk_armed() on the arm beat.
+   answer as the atlas's and the height grid's: the very buffers build_hills
+   filled, kept instead of freed, so the Vulkan shadow pass draws the SAME
+   vertices and the SAME index order rather than a second evaluation of
+   build_hills' arithmetic. 19.3 MB on Two Continents (6.4 vertices + 12.9
+   indices) and paid for only while the Vulkan lane is armed --
+   `s_mirrorWant`, set from `tagpu_vk_owns_present()` on the arm beat (it read
+   `tagpu_vk_armed()` until the 4d-1 review; see the latch itself).
    The serial says when they last changed, so the Vulkan lane uploads on a map
    change and not per frame. */
 static float*    s_hMeshV;             /* s_hMeshVN * 3 floats, or NULL       */
@@ -501,7 +508,7 @@ static const char* FS =
        discarding, and it darkens (never hides) in grey — the engine's rule */
     TAGPU_GLSL_FOG_TERRAIN
     /* Classic++ (uLit): the restored colour where the reveal has painted it
-       -- alpha is the restorer's own "painted" mark (see s_rgbTex), a cell it
+       -- alpha is the restorer's own "painted" mark, a cell it
        has not reached yet is alpha 0 -- and the palette's colour elsewhere,
        so the reveal goes lit-indexed to lit-restored; lit by the lab's rule
        from the heightfield normal; then the grey band as the RGB rule
@@ -546,10 +553,17 @@ void tagpu_terr_glreset(void)
     /* The set identity (s_setPtr/s_setCount/s_setPix) is LEFT ALONE: zeroing
        s_atlasBuilt is what forces the atlas rebuild, and the identity's job is
        to tell a NEW MAP from the same set (ensure_atlas drops a standing
-       restore request on a new map). The request does not survive the reset
-       either -- the image it was painted into was the consumer's and went with
-       the device -- so it is published again and the consumer restores from
-       scratch rather than being handed a serial it has already seen. */
+       restore request on a new map). The request is dropped here too, so the
+       consumer is handed a new serial rather than one it has already seen.
+
+       NOTHING CALLS THIS ON THE SURVIVING LANE, and the name is the reason it
+       is worth saying. Its one caller is tagpu_overlay.c:290, inside
+       `if (cur != s_ctx)` where `cur` is `wglGetCurrentContext()` -- NULL for
+       the life of a process with no GL context, so the branch never fires. The
+       body is kept because none of it is GL any more: it is this pass's "drop
+       everything derived from the map" and a Vulkan device loss wants exactly
+       that. Retiring the entry point belongs with the rest of the GL entry-point
+       surface, 11-5e. [FROM THE 11-5c LANDING REVIEW.] */
     s_rgbState = 0;
     rlist_drop();
 }
@@ -560,8 +574,9 @@ void tagpu_terr_glreset(void)
    allocation, and the set's identity is what this module already trusts to
    say "new map") -- and re-checked every frame by ensure_height, because the
    set can be ready a frame before the grid is. A build that fails leaves
-   s_hW 0, which is what the render gates the lambert on (never s_hTex: a
-   previous map's texture is still a live id), and is retried every 60 frames
+   s_hW 0, which is what the hand-over gates the lambert on -- the dimensions,
+   never a texture name, which a previous map's build would leave standing --
+   and is retried every 60 frames
    until it succeeds or the inputs change. Without a grid Classic++ terrain
    draws UNLIT -- the restored colour and the grey rule stay, only the
    lambert is skipped (uHDim 0 in the shader). */
@@ -844,9 +859,9 @@ static int ensure_atlas(const char* ta)
     return 1;
 }
 
-/* ---- Classic++: the GLSL restorer, straight into s_rgbTex ----
+/* ---- Classic++: the restore ORDER, which is this side's half of it ----
    Every tile of the set as a frame, visible ones first, and since the cells
-   show as they land (s_rgbTex) the order is what the player watches: a tile's
+   show as they land the order is what the player watches: a tile's
    rank is the Chebyshev distance in cells from the CENTRE of the last gathered
    rect to the nearest map cell that uses it, so the reveal radiates from the
    middle of the screen, reaches the viewport's edge at rank ~half its span and
@@ -899,6 +914,17 @@ static int restore_publish(const char* ta, int repaint)
     int n = s_atlasN, i;
     int* order;
     TAGPU_RGLSL_FRAME* frames;
+    /* A REQUEST FOR NOTHING IS NOT A REQUEST. `malloc(0)` may hand back a
+       non-NULL pointer, and `restored` below is keyed on `s_rFrames` being
+       non-NULL -- so an atlas of zero tiles would publish "a restore stands"
+       with a list of zero frames, and the consumer's own test is
+       `restoreFrames && restoreN >= 1`. The two predicates would disagree
+       across the seam about the same fact. `ensure_atlas` refuses `count <= 0`,
+       but it can still reach `s_atlasN == 0` by clamping `rows` to
+       `s_maxTex / CELL_PITCH` on a device whose image bound is under 34, so
+       this is a BOUND rather than an argument about which devices exist.
+       [FROM THE 11-5c LANDING REVIEW, and found independently the same hour.] */
+    if (n < 1) return 0;
     order = restore_order(ta, n);
     frames = (TAGPU_RGLSL_FRAME*)malloc((size_t)n * sizeof *frames);
     if (!order || !frames) { free(order); free(frames); flog("terr: restore order alloc failed"); return 0; }
@@ -946,13 +972,20 @@ static int restore_publish(const char* ta, int repaint)
    `restored` below -- keyed on the GL restore's own state machine -- could
    only ever publish 0. One guard on a GL name, and a Vulkan-lane feature that
    read as "off". [The vulkan-only plan, landing 11-5c.] */
+static unsigned s_palSeen;             /* the palette serial seen LAST frame   */
 static void restore_step(const char* ta)
 {
+    unsigned palWas;
     /* the request is only worth building when something asked for it: without
        `tagpu_restorevk.on` there is no painter on this lane and the terrain
        draws indexed, which is the default and stays it */
     if (!s_rvkWant) return;
     if (!tagpu_classicpp_assets() || !s_atlasBuilt || !s_setPix) return;
+    /* LAST FRAME'S palette serial, read before anything below can publish and
+       move `s_rgbPalSerial`, so "the same two frames running" is asked of the
+       palette alone. See the repaint branch. */
+    palWas = s_palSeen;
+    s_palSeen = tagpu_pal_serial();
     if (s_rgbState == 0) {
         if (!s_rectValid) return;          /* the order wants a viewport: next frame */
         if (!tagpu_pal_live()) return;     /* ...and a palette: next frame  */
@@ -967,8 +1000,27 @@ static void restore_step(const char* ta)
     /* Published, and then the palette moved under it (the Gamma option, or
        `+gamma N`): the tiles hold the brightness the old palette gave them
        while the engine's own pixels beside them moved. Queue them all again
-       over the image that is there. */
-    if (s_rgbState == 1 && s_rgbPalSerial != tagpu_pal_serial()) {
+       over the image that is there.
+
+       ONLY ONCE THE PALETTE HAS STOPPED MOVING, and that is an ordering on the
+       palette's own serial rather than a timer: `tagpu_pal_serial()` bumps on
+       every frame whose 1024 bytes differ (tagpu_pal.c), so a FADE bumps it
+       once a frame for as long as it lasts. Two consecutive frames reading the
+       SAME serial is the palette having settled, and it is a fact about the
+       palette, not about elapsed time.
+       Without it a fade republished the request every frame, and the consumer
+       rebuilds its job on a serial change with its paint count back at zero --
+       so the restore made no progress for the length of the fade and paid
+       `restore_order`'s whole tile-map scan and a `tagpu_rglsl_tileable` per
+       tile for each frame of it. The GL lane never met this because its repaint
+       ran only from state 2, "the job is idle", a completion this side cannot
+       see: the painting is the consumer's. [FROM THE 11-5c LANDING REVIEW.]
+       RESIDUAL, stated rather than hidden: a palette that settles, moves and
+       settles again DURING a restore still restarts it each time. That is
+       correct -- those tiles do need the new palette -- but it is slower than
+       the GL lane's "finish first, then repaint", and the way to close it is a
+       completion signal back from the consumer. */
+    if (s_rgbState == 1 && s_rgbPalSerial != s_palSeen && palWas == s_palSeen) {
         char b[128];
         if (!s_rectValid) return;          /* restore_order wants a viewport: next frame */
         if (!restore_publish(ta, 1)) {
@@ -1131,6 +1183,26 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
            the session. Rebuilding is what the GL lane does on a context change
            and costs the same. [FROM THE 4b-2 LANDING REVIEW.] */
         if (s_maxTex > 0 && m != s_maxTex) s_atlasBuilt = 0;
+        /* AND A DEVICE THAT CANNOT HOLD THE ATLAS AT ALL IS REFUSED ONCE,
+           rather than left to be refused downstream per frame. The GL bring-up
+           made this check against GL_MAX_TEXTURE_SIZE and it went with the
+           bring-up in landing 11-5c; restored here because it is a property of
+           the atlas, not of an API. Without it `ensure_atlas` clamps `rows` to
+           `m / CELL_PITCH` and builds a 2176-wide image the consumer's own
+           creation then refuses, every frame, with nothing saying why.
+           Vulkan floors `maxImageDimension2D` at 4096 and ATLAS_W is 2176, so
+           no conformant device takes this arm -- it is a BOUND, not a
+           prediction about which devices exist.
+           [FROM THE 11-5c LANDING REVIEW.] */
+        if (m < ATLAS_W) {
+            char mb[128];
+            _snprintf(mb, sizeof mb, "terr: the device's 2D image limit %d is under "
+                                     "the atlas width %d - terrain stays the engine's",
+                      m, ATLAS_W);
+            flog(mb);
+            s_maxTex = m;
+            return terr_bail();
+        }
         s_maxTex = m;
     }
     if (!ensure_atlas(ta)) return terr_bail();
@@ -1272,9 +1344,9 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
 static unsigned short* s_fogCopy;
 static int             s_fogCopyCells;
 
-/* ONE STEP OF THE RESTORED READ-BACK, on the render thread with the context
-   current. A no-op unless the Vulkan lane asked for mirrors, and again once the
-   restorer has stopped painting, so a settled map pays one integer compare. */
+/* THIS FRAME'S HAND-OVER, filled and flagged. Everything the consumer draws
+   the terrain from is named here and nowhere else, and `s_pubHave` is set on
+   the last line so a half-filled struct is never visible as a ready one. */
 static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT* L)
 {
     int fogBad = 0;                    /* fog wanted, no grid: publish nothing */
@@ -1325,8 +1397,6 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
     s_pub.atlas = s_atlasMirror;
     s_pub.atlasW = ATLAS_W; s_pub.atlasH = s_atlasH;
     s_pub.atlasSerial = s_atlasMirrorSerial;
-    /* published only when the read-back has covered rows -- a non-NULL pointer
-       with 0 rows would hand a consumer an image with nothing to upload */
     /* THE REQUEST, AND NOTHING ELSE. `atlasRgb`/`atlasRgbRows` were the other
        half of tagpu_terr.h's "mutually exclusive" pair -- the GL twin's
        restored atlas, read back so this lane could upload it -- and they went
@@ -1436,16 +1506,17 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
        always really was. */
     if (s_ncell == 0) { s_pubHave = 0; s_abFrame = 0; return; }
 
-    /* COMPUTED BEFORE THE GATE, because the hand-over carries it: the RGB
-       mirror's state and `assets=` are both CPU-side, so this is the gather's
-       answer rather than the draw's. */
-    /* THE FIELD, NOT A STATE MACHINE'S WORD FOR IT: `restored` is what sets
-       `uRestored` in the consumer's shader (tagpu_vk_terr.c), so it says
-       exactly "there is a restore request standing for this atlas". It used to
-       read the GL restorer's `s_rgbState`, which on a lane with no GL context
-       never left 0 -- so the consumer painted the atlas it had been handed and
-       was then told to sample the indexed one. [The vulkan-only plan, landing
-       11-5c.] */
+    /* THE FIELD, NOT A STATE MACHINE'S WORD FOR IT. This says exactly "a
+       restore request STANDS for this atlas" -- no more, and in particular not
+       "the atlas is restored", which is the consumer's fact and is the
+       consumer's to keep. It used to read the GL restorer's `s_rgbState`, which
+       on a lane with no GL context never left 0, so a consumer that had painted
+       the atlas it was handed was told to sample the indexed one.
+       WHAT THE SHADER IS TOLD IS NOT THIS. `tagpu_vk_terr.c` ANDs this with its
+       own `s_rgbAtlas.view && .have` before writing `uRestored`, so a request
+       this lane cannot or has not yet serviced draws indexed rather than
+       drawing nothing -- which is what it did for one landing-review's length.
+       [The vulkan-only plan, landing 11-5c and its review.] */
     restored = (s_rFrames && tagpu_classicpp_assets()) ? 1 : 0;
     {
         const TAGPU_LIGHT* L = tagpu_classicpp_light();

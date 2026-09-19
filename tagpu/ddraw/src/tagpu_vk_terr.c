@@ -1064,10 +1064,14 @@ static void shared_bind(const TAGPU_VKPASS* d, uint32_t slot)
        on the `uLit == 1 && uRestored == 1` branch, which this pass now draws.
        IT FALLS BACK TO THE INDEXED VIEW when there is no restored image, and
        that is not a picture: a descriptor has to be VALID for the set to be
-       bound, naming the image already here costs no memory and no second
-       object, and `prepare`'s restored refusal keeps the branch unreachable on
-       exactly the frames the fallback is in place. That fallback is all this
-       binding was before gate 2, on every frame. */
+       bound, and naming the image already here costs no memory and no second
+       object. Nothing samples it through this binding while the fallback is in
+       place, because `uRestored` is computed from `s_rgbAtlas.view` and
+       `s_rgbAtlas.have` -- the same two facts that decide which view lands
+       here, so the flag and the descriptor cannot disagree. (Until landing
+       11-5c that was `prepare`'s restored refusal instead, which stood the
+       whole pass down; see there.) That fallback is all this binding was
+       before gate 2, on every frame. */
     ii[1] = ii[0];
     if (s_rgbAtlas.view) ii[1].imageView = s_rgbAtlas.view;
     ii[2].sampler = s_samp;
@@ -1248,7 +1252,20 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
         return;
     }
     if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; }
-    if (s_rjTried) return;
+    /* PAST THIS POINT THE SERIAL HAS MOVED AND WE ARE NOT PAINTING THE NEW ONE
+       YET, so every path that GIVES UP below must also drop `have`: what the
+       image holds was painted for the PREVIOUS request, through the previous
+       palette or over the previous map's rectangles, and `have` is what tells
+       the shader to sample it. Leaving it set is a silently WRONG picture
+       rather than a missing one -- the old map's colours over this one, or the
+       old palette's brightness beside engine pixels that have moved -- which is
+       the failure class this stack is worst at. Dropping it falls back to the
+       indexed atlas, which is the documented Classic++ fallback.
+       It is dropped at the GIVE-UP sites and not here, because `repaint` below
+       reads it: clearing it up front would turn every palette change into a
+       full blank-and-repaint, which is the one thing the repaint path exists to
+       avoid. [FROM THE 11-5c LANDING REVIEW.] */
+    if (s_rjTried) { s_rgbAtlas.have = 0; return; }
     /* THE DESTINATION AND THE SOURCE BOTH HAVE TO BE THERE. `img` absent means
        the device refused the image (the resize above reads that way); `have`
        absent on the indexed atlas means its upload has not been recorded yet,
@@ -1259,7 +1276,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
        loads the model off disk, so a session that never publishes a request
        never pays for it. It latches its verdict, so this is one integer
        compare on every frame after the first. */
-    if (!tagpu_vk_restore_up(d)) { s_rjTried = 1; return; }
+    if (!tagpu_vk_restore_up(d)) { s_rjTried = 1; s_rgbAtlas.have = 0; return; }
     /* A REPAINT ONLY OVER SOMETHING THIS PASS ACTUALLY PAINTED. The producer's
        flag says the GL twin's destination already holds a restore; ours is a
        different image and may have been created moments ago by the resize
@@ -1274,6 +1291,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
                                       s_rgbAtlas.w, s_rgbAtlas.h);
     if (!s_rjob) {
         s_rjTried = 1;                     /* the reason is already in the log */
+        s_rgbAtlas.have = 0;
         return;
     }
     if (!tagpu_vk_restore_job_add(s_rjob, t->restoreFrames, t->restoreN)) {
@@ -1282,6 +1300,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
         tagpu_vk_restore_job_free(d, s_rjob);
         s_rjob = NULL;
         s_rjTried = 1;
+        s_rgbAtlas.have = 0;
         return;
     }
     s_rjSerial = t->restoreSerial;
@@ -1297,6 +1316,7 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
 {
     TAGPU_TERRHAND t;
     SLOT* s;
+    int restored;                       /* what the SHADER is told, see below */
     VkDeviceSize ibytes, atlasBytes = 0, heightBytes = 0, heightOff = 0, bigBytes = 0;
     /* A UNION, NOT A CAST. Both blocks mix `int` and `float` members and
        writing an int through a float array is the aliasing rule broken at -O2,
@@ -1578,42 +1598,46 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        the refusal below, which is what its `have` feeds. */
     restore_want(d, &t);
 
-    /* THE RESTORED REFUSAL SITS AFTER THE UPLOADS, NOT BEFORE THEM, and the
-       order is the point. `prepare` returning 0 skips everything below it, so a
-       refusal placed above the upload meant the upload never ran: the pass
-       refused because the image had no contents, and the image never got
-       contents because the pass refused. Measured twice on the way here --
-       first img=0 (the resize was below it too), then have=0.
+    /* WHETHER THE SHADER SAMPLES THE RESTORED ATLAS IS THIS LANE'S OWN FACT,
+       NOT THE PRODUCER'S REQUEST. `t.restored` says a restore request STANDS
+       for this atlas; `s_rgbAtlas.have` says THIS LANE HAS PAINTED AT LEAST ONE
+       CELL of it, and `s_rgbAtlas.view` is what binding 42 names. Until both
+       hold, the indexed atlas is the picture -- which is the documented
+       Classic++ fallback and, during a restore, is exactly the centre-out
+       reveal: the fragment shader's alpha test picks restored or indexed PER
+       CELL, so the cells show as they land.
 
-       So the data lands first and THEN this is asked. `shared_upload` sets
-       `have` as it RECORDS the copy, into this frame's own command buffer and
-       ahead of this frame's draw with a barrier between them, so the frame that
-       uploads is also the frame that draws -- this refusal costs nothing once
-       the mirror exists. (An earlier version of this paragraph said the next
-       frame draws and this one is lost. It is not: the only frames refused are
-       the ones with no mirror to upload at all, which is the read-back's first
-       few, and the 0-px A/B was taken with the map settled either way.)
-       It tests the VIEW AND ITS CONTENTS because those are what
-       binding 42 names and what the shader samples -- the hand-over on its own
-       would only say a mirror exists somewhere.
-       IT ASKS FOR THIS FRAME'S MIRROR TOO, and that costs nothing: the producer
-       publishes one on every frame a read-back has covered rows, so the only
-       frames this adds are the ones where the mirror went away under a twin
-       that is still drawing restored -- the read-back latching off, above all.
-       `have` would still be set from the last map, and the lane would draw its
-       colours over this one. */
-    if (t.restored && !(s_rgbAtlas.view && s_rgbAtlas.have &&
-                        ((t.atlasRgb && t.atlasRgbRows > 0) || t.restoreFrames))) {
-        if (!s_saidRestored) {
-            s_saidRestored = 1;
-            plog(d, "terr: the GL twin is drawing through the Classic++ restored "
-                    "tile atlas and this lane has not %s it yet - nothing "
-                    "drawn until it has",
-                 t.restoreFrames ? "painted" : "uploaded");
-        }
-        return 0;
+       THIS USED TO STAND THE WHOLE PASS DOWN INSTEAD -- `if (t.restored &&
+       !(view && have && …)) return 0;` -- and that was right while a GL twin
+       drew the restored atlas beside us. Drawing indexed then would have put a
+       different picture on the screen from the one the twin drew, and holding
+       the two lanes to the same picture is what the A/B is for. THERE IS NO
+       TWIN. With one lane the only comparison is against ourselves, and the
+       refusal had become a trap: every way the restorer can decline --
+       `tagpu_vk_restore_up` refusing a format or failing to load the model,
+       `job_new` returning NULL, `job_add` refusing, a job that failed before
+       its first slice -- latches `s_rjTried`, which is one-way for the device's
+       life (cleared only in `tagpu_vk_terr_down`). After that `have` can never
+       become 1, so the stand-down was PERMANENT: no terrain at all for the
+       session, said once and silent after that. `tagpu_vk_restore.h` promises
+       that a refusal leaves "Classic++ indexed on this lane, which is the
+       shipped fallback, not a fault"; this is what keeps that promise.
+       [FROM THE 11-5c LANDING REVIEW.]
+
+       Landing 11-5c is what exposed it rather than what caused it: until then
+       `restored` came from the GL restorer's state machine and was pinned at 0
+       on this lane, so this branch was unreachable. Making the producer honest
+       made the consumer's parity rule fire for the first time. */
+    restored = t.restored && s_rgbAtlas.view && s_rgbAtlas.have;
+    /* SAID ONCE, AND ONLY FOR THE CASE WAITING CANNOT FIX: a request stands and
+       this lane has latched a refusal, so the terrain draws indexed for the
+       rest of the session. The ordinary not-yet-painted frames say nothing --
+       that is the reveal working, not a fault. */
+    if (t.restored && !restored && s_rjTried && !s_saidRestored) {
+        s_saidRestored = 1;
+        plog(d, "terr: a Classic++ restore request stands but this lane refused "
+                "the restorer - the terrain draws indexed for this session");
     }
-    s_saidRestored = 0;
 
     /* THE THREE SMALL IMAGES, per slot, so the one-line invariant covers them:
        UNDEFINED in, because the whole of each is re-sent every frame and there
@@ -1673,7 +1697,7 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     memcpy(s_umap + (size_t)slot * s_ustride, ub.f, UBLK_VS);
 
     memset(&ub, 0, sizeof ub);
-    ub.i[0]  = t.restored;                       /* uRestored     int @0   */
+    ub.i[0]  = restored;                         /* uRestored     int @0   */
     ub.f[2]  = t.hDimW;  ub.f[3]  = t.hDimH;     /* uHDim        vec2 @8   */
     ub.f[4]  = t.fogOrgX; ub.f[5] = t.fogOrgY;   /* uFogOrg      vec2 @16  */
     ub.f[6]  = t.fogCols; ub.f[7] = t.fogRows;   /* uFogDim      vec2 @24  */
@@ -1861,6 +1885,7 @@ void tagpu_vk_terr_down(const TAGPU_VKPASS* d)
        reasoning as ST_UNBUILT below, and the restorer's own `up` latch is
        cleared by its `down` for the same reason. */
     s_rjTried = 0;
+    s_saidRestored = 0;                 /* ...and so does the line it printed */
     kill_image(d, &s_rgbAtlas.img, &s_rgbAtlas.mem, &s_rgbAtlas.view);
     kill_image(d, &s_rgbAtlas.oldImg, &s_rgbAtlas.oldMem, &s_rgbAtlas.oldView);
     memset(&s_rgbAtlas, 0, sizeof s_rgbAtlas);

@@ -25,25 +25,44 @@ int  tagpu_terr_on(void);
 /* build this frame's quads; returns the CELL count (0 = nothing to draw) —
    one instanced quad each, see the vertex shader in tagpu_terr.c */
 int  tagpu_terr_gather(const TAGPU_FXVIEW* v);
-/* draw into the currently bound FBO (depth test on, depth writes on). Own
-   program/VAO; leaves program, VAO and texture bindings dirty. */
+/* GATHER AND HAND OVER. It drew, once; the draw half went in landing 11-3 and
+   the last of its GL in 11-5c, so what this does now is finish the frame's
+   hand-over and publish it. `palTex` was the GL palette texture name and is
+   unused -- its one caller passes 0 (tagpu_native.c) -- and retiring the
+   parameter belongs with the rest of the entry-point surface, 11-5e. */
 void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex);
+/* Drop everything derived from the map. Despite the name there is no GL here
+   any more, and NOTHING CALLS IT on the surviving lane: its one caller tests
+   `wglGetCurrentContext()`, which is NULL for the life of the process. See the
+   definition. */
 void tagpu_terr_glreset(void);
 
 /* Classic++ shadows (tagpu_shadow.c, renderers.md 2.8): the heightfield as a
    caster. One world-space vertex per 16-px grid point of the height grid,
-   built with it, row-major indices; draws the cell rows r0..r1 (inclusive,
-   clamped) with the CALLER's program in use, attribute 0 = the world point.
-   Returns 1 if anything was drawn.
+   built with it, row-major indices.
 
-   `out`, when given, comes back with THE CPU MIRROR OF THAT MESH AND THE RANGE
-   THE DRAW JUST USED (Phase G / G19e) -- the buffers glBufferData was handed,
-   retained instead of freed while the Vulkan lane is armed, and the clamped
-   first/count, so the Vulkan shadow pass draws the same indices rather than
-   re-deriving the clamp. Zeroed, and `v`/`idx` left NULL, whenever there is no
-   mirror; pass NULL when there is no Vulkan lane to feed. The pointers are the
-   terrain module's and live until the next map change -- a consumer takes them
-   through a hand-over that carries the frame they were published on. */
+   IT NO LONGER DRAWS ANYTHING -- landing 11-5c took the last three GL calls,
+   which were its whole draw half. What it does is CLAMP the requested cell
+   rows r0..r1 to the mesh and PUBLISH the mesh and that range, and the return
+   is now "the range is valid and `out` was filled", not "something was drawn".
+
+   `out`, when given, comes back with THE CPU MIRROR OF THE MESH AND THE
+   CLAMPED RANGE (Phase G / G19e) -- the very buffers build_hills filled,
+   retained instead of freed while the Vulkan lane is armed -- so the Vulkan
+   shadow pass draws the same indices rather than re-deriving the clamp.
+   Zeroed, and `v`/`idx` left NULL, whenever there is no mirror; pass NULL when
+   there is no Vulkan lane to feed. The pointers are the terrain module's and
+   live until the next map change -- a consumer takes them through a hand-over
+   that carries the frame they were published on.
+
+   NOTHING CALLS THIS TODAY, and a caller should know why before relying on it:
+   its only call site is `tagpu_shadow_hills`, which is itself called from
+   nowhere and would in any case return at `!s_live` -- `s_live` is set only
+   past tagpu_shadow.c's own GL bring-up, which latches failed on a lane with
+   no context. Landing 11-5c removed this function's own `!s_hVao` term, which
+   was a third pin on the same route; the route above it is still shut, and
+   whether tagpu_shadow.c's GL draw half is scaffolding or debris is the open
+   question the plan holds at escalation reason 1. [FROM THE 11-5c REVIEW.] */
 typedef struct TAGPU_TERRHILLS {
     const float*    v;          /* nv * 3 floats: the world point per vertex */
     size_t          nv;
@@ -137,12 +156,14 @@ int  tagpu_terr_key(void);
    unconditionally at the top), which is what made the terrain pass's omission
    legible once it was looked for. */
 
-/* THE UNIT QUAD IS DEFINED ONCE, HERE, and both lanes build their per-vertex
-   buffer from it: the two triangles whose shared edge runs (1,0)-(0,1), in the
-   engine's own vertex order. It is the pass's fixed geometry -- what varies is
-   the per-INSTANCE cell record below -- but a six-vertex literal copied into a
-   second file is still two things that can drift, and the whole worth of a 0-px
-   comparison is that only the rasteriser differs. */
+/* THE UNIT QUAD IS DEFINED ONCE, HERE: the two triangles whose shared edge
+   runs (1,0)-(0,1), in the engine's own vertex order. It is the pass's fixed
+   geometry -- what varies is the per-INSTANCE cell record below.
+   It had two users and now has one (tagpu_vk_terr.c); the GL lane's copy went
+   with its vertex buffer in landing 11-5c. The macro stays because the
+   geometry is still the pass's, stated once where the record it pairs with is
+   stated -- but there is nothing left for it to drift against, so it is no
+   longer the guard against drift it was written as. */
 #define TAGPU_TERR_QUAD  { 0.f,0.f, 1.f,0.f, 0.f,1.f, 1.f,0.f, 1.f,1.f, 0.f,1.f }
 #define TAGPU_TERR_QUADV 6
 /* SHORTS PER INSTANCE: the cell's column and row in this frame's gather grid,
@@ -241,13 +262,25 @@ typedef struct TAGPU_TERRHAND {
        the tile's own texels against the ART palette, and the ORDER is the
        centre-out rank over the live tile map. Both are engine-memory reads, so
        both belong on this side of the hand-over; what crosses is their result.
-       `restoreFrames` therefore points at the very list the GL job was given,
-       in the very order it was given, which is also what makes the two lanes
-       comparable byte-for-byte rather than merely both-plausible.
+       `restoreFrames` therefore points at the list `restore_publish` built,
+       in the order it built it. It used to point at the very list a GL job had
+       ALSO been given, which is what made the two lanes comparable
+       byte-for-byte rather than merely both-plausible; there is no second lane
+       since landing 11-5c, so that is no longer a property this field has --
+       and terrain's half of the `tagpu_restoredump.on` byte oracle went with
+       the GL job that produced it. [FROM THE 11-5c REVIEW.]
 
        LIFETIME: the frame list is retained for the map, not for the frame, but
        a consumer must still copy on the frame it takes it (as
-       tagpu_vk_restore_job_add does) -- a new map frees it. `restoreSerial`
+       tagpu_vk_restore_job_add does) -- a new map frees it.
+       AND BOTH ENDS ARE THE SAME THREAD, which is what makes that safe rather
+       than merely likely. The producer runs inside `tagpu_overlay_draw`
+       (render_vk.c) and the consumer inside `tagpu_vk_frame`, in that order, in
+       ONE iteration of the render loop -- so the pointer cannot be freed
+       between publication and the copy. Do not reason about this field as a
+       cross-thread hand-over; it is not one, and neither are `atlas` and
+       `height` above. [Established by the 11-5c review, which was briefed on
+       the opposite and disproved it.] `restoreSerial`
        changes whenever the list or its destination does, including a repaint;
        `restoreRepaint` is 1 when the destination already holds a restore and
        only the palette moved, so it is recoloured in place rather than

@@ -445,21 +445,25 @@ void tagpu_shadow_hills(void)
     if (!s_live || !L->terrainshadow) return;
     glUseProgram(s_progH);
     glUniformMatrix4fv(s_uMatH, 1, GL_FALSE, s_mat);
-    /* the draw fills `th` with the mirror it drew out of and the index range it
-       used, so the Vulkan lane draws the same indices rather than re-deriving
-       the row clamp (tagpu_terr.h) */
+    /* `th` comes back with the mesh and the index range, clamped once by the
+       code that owns the mesh, so the Vulkan lane draws the same indices rather
+       than re-deriving the row clamp (tagpu_terr.h).
+       IT NO LONGER DRAWS: landing 11-5c took the three GL calls that were this
+       function's draw half, so the return now means "the range is valid", not
+       "something was rasterised". Nothing below depended on the drawing -- the
+       census question is still the right one and is asked the same way. */
     if (!tagpu_terr_hills_draw(s_rows0, s_rows1, &th)) return;
-    /* IT DREW; WHETHER WE HAVE A COPY OF WHAT IT DREW IS A SEPARATE QUESTION,
-       AND CONFLATING THE TWO IS A SILENT WRONG PICTURE.
-       `tagpu_terr_hills_draw` returns 1 whenever it issued the draw and fills
-       `out` only when the mirror is there, so "drew, no mirror" arrives here as
-       a zeroed struct -- byte-identical to "the hills did not draw", which the
-       Vulkan pass reads as an EMPTY MAP and reports as complete. The terrain
-       pass would then sample an all-1.0 map while the GL twin's holds the whole
-       heightfield, and the A/B would call that parity.
+    /* THE RANGE IS VALID; WHETHER WE HAVE A COPY OF THE MESH IS A SEPARATE
+       QUESTION, AND CONFLATING THE TWO IS A SILENT WRONG PICTURE.
+       `tagpu_terr_hills_draw` returns 1 whenever the range is good and fills
+       `out` only when the mirror is there, so "range good, no mirror" arrives
+       here as a zeroed struct -- byte-identical to "the hills are not a
+       caster", which the Vulkan pass reads as an EMPTY MAP and reports as
+       complete. The terrain pass would then sample an all-1.0 map while the
+       heightfield stood as a caster, and the A/B would call that parity.
        It is reachable: `build_hills`' out-of-memory exit returns before it
-       touches s_hMeshW/s_hMeshH or the GL buffers, so a same-grid mesh from an
-       earlier build keeps drawing while `s_hMeshNoMirror` stops ensure_height
+       touches s_hMeshW/s_hMeshH, so a same-grid mesh from an earlier build
+       still passes the range test while `s_hMeshNoMirror` stops ensure_height
        ever asking again.
        So the heightfield joins the census: a caster drawn that this hand-over
        carries no copy of is exactly what `otherCasters` means, and the refusal
