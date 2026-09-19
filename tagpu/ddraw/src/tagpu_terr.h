@@ -176,7 +176,16 @@ typedef struct TAGPU_TERRHAND {
 
     /* The fragment stage's. `restored` and `lit` are the two Classic++
        branches, `shadowOn` the cast-shadow one, `fog` the engine's overlay
-       bit. The lighting numbers are the ones the GL draw passed. */
+       bit.
+
+       `restored` SAYS A RESTORE REQUEST IS STANDING FOR THIS ATLAS -- it is
+       the producer's `s_rFrames`, the published field itself, and it sets
+       `uRestored` in the consumer's fragment shader. Until landing 11-5c it
+       read the GL restorer's `s_rgbState` instead, which on a lane with no GL
+       context never left 0, so a consumer that had painted its own restored
+       atlas was told to sample the indexed one. WHETHER THE PAINT HAS LANDED
+       IS THE CONSUMER'S OWN FACT and it must still keep it: this flag is the
+       request, not the result. */
     int   restored, lit, lambert, fog, shadowOn;
     /* THE REST OF THE CAST-SHADOW BLOCK, and it is only meaningful while
        `shadowOn` is 1 -- tagpu_shadow_apply writes uShadowOn and then RETURNS
@@ -196,27 +205,36 @@ typedef struct TAGPU_TERRHAND {
        The atlas and the height grid are built ONCE PER MAP and their buffers
        are RETAINED rather than freed (tagpu_terr.c `s_mirrorWant`), which is
        this pass's whole answer to the texel problem: the mirror is the very
-       buffer the glTexImage2D above it was given, in the same call, so it is
-       correct from the instant it exists. */
+       buffer the build loop filled, so it is correct from the instant it
+       exists and nothing writes it again. */
     const unsigned char* atlas;       /* atlasW x atlasH R8                 */
     int                  atlasW, atlasH;
     unsigned             atlasSerial;
-    /* CLASSIC++'s RESTORED TILE ATLAS, MIRRORED (the Vulkan-only plan's gate
-       2). Unlike `atlas` above this is NOT the buffer an upload was handed --
-       the restorer paints it on the GPU, so it is a read-back, and it is NULL
-       until one has run. `restored` being 1 with this NULL is the case that
-       existed before the field and a consumer must stand down there, as it did
-       then. Rows are what the read-back covered; terrain's restore is one job
-       over the whole atlas rather than a lazy queue, so they reach atlasH. */
-    const unsigned char* atlasRgb;    /* atlasW x atlasRgbRows RGBA8         */
-    int                  atlasRgbRows;
+    /* PERMANENTLY NULL/0 SINCE LANDING 11-5c, AND KEPT AS A TOMBSTONE.
+       Classic++'s restored tile atlas, MIRRORED (the Vulkan-only plan's gate
+       2): unlike `atlas` above this was never the buffer an upload was handed
+       -- the restorer painted it on the GPU, so it was a read-back, through
+       tagpu_gaf.c's helper. The thing it read back was a GL texture, and it
+       went with the rest of terrain's GL, so there is no producer and there
+       will not be one. A consumer may go on testing it; it will never fire.
+       CHANGING THE STRUCT'S SHAPE BELONGS TO 11-5e -- do not plumb anything
+       new into these three believing there is a writer. */
+    const unsigned char* atlasRgb;    /* always NULL                         */
+    int                  atlasRgbRows;/* always 0                            */
     unsigned             atlasRgbSerial;
-    /* ...OR THE WORK ITSELF, for a lane that can restore on its own (the
-       Vulkan-only plan's landing 7). These two fields are MUTUALLY EXCLUSIVE
-       with `atlasRgb` above and the producer is what makes them so: under
-       `tagpu_restorevk.on` it stops reading the restored twin back and
-       publishes the frame list instead, so a consumer never has to choose
-       between a mirror and a request -- exactly one of them is here.
+    /* THE WORK ITSELF, for the lane that restores on its own (the Vulkan-only
+       plan's landing 7), and since 11-5c the only route there is. It used to
+       be one of two -- MUTUALLY EXCLUSIVE with `atlasRgb` above, made so by the
+       producer, which under `tagpu_restorevk.on` stopped reading the restored
+       twin back and published the frame list instead. With the read-back gone
+       the exclusion is structural and the choice no longer exists.
+
+       IT WAS ALSO UNREACHABLE UNTIL 11-5c, and that is worth recording where a
+       consumer will read it: the only writer of this list lived inside the GL
+       bring-up's `glsl_begin`, below a guard on a GL texture name, so on a lane
+       with no GL context `tagpu_restorevk.on` armed a consumer and sent it
+       nothing -- and `restored` below, computed from the GL restorer's own
+       state machine, could only publish 0. Both were fixed in that landing.
 
        WHY THE LIST AND NOT JUST "RESTORE IT": three of a frame's eleven
        numbers are content-dependent -- `wrap` is tagpu_rglsl_tileable() over

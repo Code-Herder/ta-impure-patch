@@ -11587,6 +11587,112 @@ caught in §2.69. Include removal proved inert separately. Five of the six shade
 sit behind a probed pragma; `FS` is the exception with a live C caller,
 `tagpu_native_unit_fs()`, which is why the posed and unposed units cannot drift apart.
 
+### 2.71 The terrain pass loses its GL, and a whole route comes unpinned — landing 11-5c
+
+`tagpu_terr.c` is GL-free: **107 call sites at HEAD, 0 now** (masked count, comments and string
+literals blanked first), 541 lines out and 159 in. Gone: `init_gl`, `mksh`, `getgl`,
+`glsl_begin`, `dump_if_armed`, `restore_step`'s GL half and `rgb_mirror_step`; seven `PFN_*`
+typedefs and seven `x_gl*` pointers; **ten GL object names** (`s_prog`, `s_vao`, `s_vbo`,
+`s_qvbo`, `s_atlasTex`, `s_rgbTex`, `s_hTex`, `s_hVao`, `s_hVbo`, `s_hIbo`); all eighteen
+uniform locations; the bring-up's `s_state`; `s_shU`; and `opengl_utils.h`.
+
+**The symbol table is the check, not grep.** Against HEAD's object compiled at the same path,
+31 defined symbols out and 1 in, and the breakdown sums to 31: **10** GL object names, **7** GL
+entry-point pointers, **7** read-back mirror fields, **2** the GL restore's job and state
+(`s_job`, `s_state`), **1** the shadow read-back uniforms (`s_shU`), **1** the draw's corner
+array (`corners.0`), **3** functions that survived `-O2` as symbols (`getgl`, `glsl_begin`,
+`mksh`). The one added is `restore_publish`. Two further lines in the diff (`last`, `lastl`) are
+the same function-scope statics renumbered because an earlier static was deleted, not removals —
+which is exactly why a raw `diff | wc -l` of 33 is not the number to quote.
+
+#### The finding: `tagpu_restorevk` was dead end to end, and had been since 4b-2
+
+This is the largest instance yet of the shape that has now turned up in four consecutive
+landings. `glsl_begin` did **two** jobs:
+
+1. **API-independent** — compute the centre-out restore order (`restore_order`), build the
+   per-tile `TAGPU_RGLSL_FRAME` list including each tile's tileability flag, and under
+   `s_rvkWant` publish it as `s_rFrames` for a consumer to paint from;
+2. **GL** — create `s_rgbTex`, spec it, and start a `tagpu_restoreglsl.c` job painting into it.
+
+Its only two call sites were inside `restore_step`, whose **first statement** is
+`if (!tagpu_classicpp_assets() || !s_atlasTex || !s_setPix) return;`. And `s_atlasTex`'s sole
+non-zero assignment is `glGenTextures(1, &s_atlasTex)` inside `ensure_atlas`'s
+`if (!tagpu_vk_owns_present())`. Traced at HEAD, not remembered: `glsl_begin` occurs three times
+in the file (one definition, two calls at `:1221` and `:1249`); `s_atlasTex` is assigned at
+`:1014` under the gate at `:1012`; `restore_step`'s return is `:1217`;
+`tagpu_vk_owns_present()` is `return s_ownWin != 0`, set once before the frame loop
+(`render_vk.c:145`) and never cleared.
+
+So on the vulkan-only lane:
+
+* **`tagpu_restorevk.on` published nothing.** The lever latched `s_rvkWant`, `tagpu_vk_terr.c`
+  stood up its restore job, its atlas image and its painter — and the only writer of `s_rFrames`
+  sat below a guard on a GL texture name. The consumer was armed and never fed.
+* **`restored` was pinned at 0.** It read `(s_rgbState == 1 || s_rgbState == 2)`, and
+  `s_rgbState` is written non-zero only inside `restore_step` below that same return. `restored`
+  is what sets `uRestored` in the consumer's fragment shader (`tagpu_vk_terr.c:1676`), so even a
+  consumer that *had* painted its restored atlas would have been told to sample the indexed one.
+
+Both are now fixed by the same change. The order and the list are their own function,
+`restore_publish` — no GL, no job — and `restore_step` drives it from `s_rvkWant` and the
+palette serial. `restored` reads the published field itself:
+
+```c
+restored = (s_rFrames && tagpu_classicpp_assets()) ? 1 : 0;
+```
+
+`s_rgbState` keeps its name and loses a state: **0 none, 1 request published, -1 failed**. There
+is no "complete" on this side, because completion is the consumer's fact and it already tracks
+it (`s_rgbAtlas.have`, set when its own job reports painted frames).
+
+**Default behaviour is unchanged, and provably rather than probably.** Without
+`tagpu_restorevk.on` the lever never latches, `restore_step` returns on its first line,
+`s_rFrames` stays NULL and `restored` is 0 — which is precisely what the pinned predicate
+published before. The only path that changes is the one that was dead.
+
+#### Two more predicates of the same shape
+
+**`tagpu_terr_hills_draw`'s `!s_hVao` term.** The guard read
+`if (!s_hVao || s_hMeshW < 2 || s_hMeshH < 2) return 0;`, and `s_hVao` is a GL vertex-array
+name created only inside `build_hills`' lane gate. It sat **above** the publication of the CPU
+caster mesh that the Vulkan shadow pass exists to receive — the function's own comment says "the
+Vulkan shadow pass draws this and nothing else" — so on a lane with no GL it returned 0 before
+reaching it. The two remaining terms are the mesh's own and are the ones that matter: after a
+map change whose rebuild failed, the old mesh is still what the arrays hold and the new grid's
+size would index past it.
+
+**`ensure_atlas`'s device bound.** The lane gate's GL arm brought up the program and read
+`GL_MAX_TEXTURE_SIZE` into `s_maxTex`; its `else if` asked the same of
+`tagpu_vk_max_image_dim()`. With the GL arm gone the bound is asked unconditionally, of the
+device that will sample the atlas.
+
+#### The read-back mirror goes with the texture it read
+
+`s_rgbMirror` and its six companions were the *other* way of feeding the same consumer: pull the
+GL twin's restored atlas back to the CPU through `tagpu_gaf.c`'s helper so a second backend could
+upload it. That only ever made sense while a GL lane painted it. `tagpu_terr.h`'s
+`atlasRgb`/`atlasRgbRows` are now always NULL/0, so the header's claim that the two hand-over
+fields are **mutually exclusive** holds by construction rather than by the latch order that
+landing 7c's review had to repair.
+
+#### Fields we write
+
+Nothing moved. Ten GL names left the file and none of them was a hand-over field. The hand-over
+loses two fields to permanent zero (`atlasRgb`, `atlasRgbRows`, with `atlasRgbSerial` following
+them) and gains no new one; `restoreFrames`/`restoreN`/`restoreSerial`/`restoreRepaint` are
+unchanged in shape and reachable for the first time.
+
+#### Verification
+
+Build clean; `thread-split: clean — 34 listed file(s)`; `spirv: 49 shaders, 33 programs, headers
+current`. Function inventory against HEAD: exactly `dump_if_armed`, `getgl`, `glsl_begin`,
+`init_gl`, `mksh`, `rgb_mirror_step` removed and exactly `restore_publish` added. `VS`/`FS` are
+the **Vulkan** terrain shaders' source of truth — `tools/spirv-gen.py` manifest entries
+`tagpu_terr::VS` and `tagpu_terr::FS`, read out of the preprocessed translation unit — and sit
+behind a pragma whose `pop` was **proved** by planting an unused static after it and compiling
+(a `-fsyntax-only` run does not surface `-Wunused-variable`; a real compile is required).
+
 ## 4. What the work taught us
 
 These are the transferable parts — the reasons things are shaped the way they are.

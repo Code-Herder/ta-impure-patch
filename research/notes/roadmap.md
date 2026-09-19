@@ -3214,18 +3214,33 @@ on this lane and survives because 4b-2 made its GL texture optional, and `tagpu_
 carries a `tagpu_vk_owns_present()` in the POSITIVE sense that arms the Vulkan mirror. Its review
 found the shape worth carrying forward: a uniform sweep had deleted `s_state` from `tagpu_fps.c`
 and left the identical write-only static in `tagpu_scaffold.c`, inside a function a previous
-review had already fixed once for testing it. **11-5 is under way and is FOUR parts, split along
-the passes themselves** — `11-5a` the feature and effects passes' GL bring-up (**landed**; both
+review had already fixed once for testing it. **11-5 is under way and is FIVE parts, split along
+the passes themselves** (four until 11-5c re-measured the surface and `tagpu_posedraw.c` earned
+its own row) — `11-5a` the feature and effects passes' GL bring-up (**landed**; both
 files now GL-free, no call, type, constant or `opengl_utils.h`, and the gates rewritten into the
 positive `if (!s_atlas.made)` form), `11-5b` `tagpu_native.c` (**landed**; 367 lines out, the file GL-free, and
 the landing's real find was a GATE rather than a call — the structure-shadow publication ANDed
 in `gl_draws`, which would have pinned it at 0 for any future painter, and `s_ssSuppress` has
 had no writer since 11-3, so the engine draws every structure shadow itself today), `11-5c`
-`tagpu_terr.c` (107, spread over nine functions), and
-`11-5d` the entry-point surface the row names — `opengl_utils.{c,h}`, `tagpu_restoreglsl.c`, the
+`tagpu_terr.c` (**landed**; all 107 sites out, 541 lines out and 159 in, and the find was
+bigger than 11-5b's — `glsl_begin` was building the restore ORDER and the frame list as well as
+starting a GL job, and it sat below a guard on a GL texture name, so `tagpu_restorevk.on` armed
+a fully built Vulkan consumer and never sent it anything, while `restored` — the flag that sets
+`uRestored` in that consumer's shader — was computed from the GL restorer's state machine and
+could only publish 0; both fixed, and the default path provably unchanged because without the
+lever the driver returns on its first line), `11-5d` `tagpu_posedraw.c` (122, all of them dead
+behind one ordering — `tagpu_posedraw_ready` returns early at `tagpu_vk_owns_present()`), and
+`11-5e` the entry-point surface the row names — `opengl_utils.{c,h}`, `tagpu_restoreglsl.c`, the
 orphaned GL-object accessors, and the include residue in the four files that still include
 `opengl_utils.h` and make no GL call (`render_gdi.c`, `tagpu_fps.c`, `tagpu_render3do.c`,
-`tagpu_scaffold.c`) — twelve files still include it and call GL. **Not covered by 11-5a–d**: `tagpu_shadow.c` and `tagpu_hires_draw.c`, still escalation
+`tagpu_scaffold.c`) — ten files still include it and call GL, down from twelve after 11-5a.
+**After 11-5c no world pass
+is left on the GL surface at all**: 714 call sites remain in ten files, and
+`tagpu_native.c`, `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c` and `tagpu_scaffold.c` are GL-free.
+**The rule the gate found, now named in the plan: deleting a backend is not mostly about
+deleting calls, it is about finding the predicates that encode "the backend is ready" as "the
+work is possible."** Four landings, four instances; the compiler cannot see them, because the
+state is written, read and consistent and only its value is pinned. **Not covered by 11-5a–e**: `tagpu_shadow.c` and `tagpu_hires_draw.c`, still escalation
 reason 1, and now known to be more than a preference — `tagpu_shadow_begin` has no caller
 anywhere in the tree, so that pass is already dead and the question is whether the two files are
 scaffolding for a Vulkan-side producer or debris. See the plan's

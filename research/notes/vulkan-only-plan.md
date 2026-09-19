@@ -2152,11 +2152,43 @@ that a count which grows is the plan catching up with the work.) The row was
      static const char* FS = ...
      #pragma GCC diagnostic pop
      ```
-   * **11-5 — what is left of the GL entry-point surface. FOUR PARTS, and the split follows
+   * **THE RULE THIS GATE FOUND, and it is the transferable part: deleting a backend is not
+     mostly about deleting calls. It is about finding the PREDICATES that quietly encode "the
+     backend is ready" as "the work is possible."** A GL object name — `s_state`, a texture, a
+     VAO — reads like a fact about our own progress, so it gets used as a gate on work that has
+     nothing to do with GL. On a lane with no GL context that name is permanently 0, and every
+     gate keyed on it is permanently shut. **The compiler cannot see this**: the state is
+     written, read and consistent; only its VALUE is pinned. Nor can a pixel A/B, because the
+     failure is something that does not happen.
+
+     Four consecutive landings, four instances, and they get worse as they go:
+
+     1. **11-4c** — `tagpu_scaffold_frameinfo` published its answer only when `s_state` said
+        the GL program was ready.
+     2. **11-5b** — `tagpu_owndraw_set_structshadow(s_armed == 1 && gl_draws && suppress, …)`.
+        Would have pinned the structure-shadow gate at 0 for any FUTURE painter.
+     3. **11-5c** — `tagpu_terr_hills_draw`'s `!s_hVao`, sitting above the publication of the
+        CPU caster mesh the Vulkan shadow pass exists to receive.
+     4. **11-5c** — `restore_step`'s `!s_atlasTex`, which made the ONLY publisher of the restore
+        frame list unreachable, and `restored`'s `s_rgbState`, which pinned the consumer's
+        `uRestored` at 0. Between them, `tagpu_restorevk.on` armed a fully implemented consumer
+        that was never sent anything and would have been told not to sample it if it had been.
+
+     **How to find them, since reading for "GL calls" does not.** For every GL name a file
+     defines, ask what tests it, and for each test ask whether the thing behind it is GL. A
+     mesh, a mirror, a serial, a published struct field and a device limit are not. Three of
+     the four above were found this way and one (11-5b's) by the landing review, which is the
+     rate to expect. The positive form is the fix in every case: gate on the thing itself —
+     `s_atlasBuilt`, `s_hMeshW`, `s_rFrames`, `s_ncell` — not on the name of the object some
+     backend built out of it.
+
+   * **11-5 — what is left of the GL entry-point surface. FIVE PARTS, and the split follows
      the passes rather than a calendar** (written 2026-09-19, by the landing that measured it;
-     `M` may still move, per the rule on splitting a gate). The row was filed as one thing
-     because it reads as "delete some headers"; the work showed the headers cannot go until
-     their callers do, and the callers are passes.
+     `M` moved from four to five when 11-5c re-measured the surface and `tagpu_posedraw.c`'s
+     122 sites turned out to need their own reachability argument, exactly as `tagpu_terr.c`'s
+     did — a count that grew is the plan catching up with the work). The row was filed as one
+     thing because it reads as "delete some headers"; the work showed the headers cannot go
+     until their callers do, and the callers are passes.
 
      - **11-5a — the feature and effects passes' GL bring-up. LANDED.** `tagpu_feat.c` and
        `tagpu_fx.c`, 98 GL call sites between them, all of it in `init_gl`/`mksh` because 11-3
@@ -2173,12 +2205,34 @@ that a count which grows is the plan catching up with the work.) The row was
        `s_ssSuppress` has had no writer since 11-3 took the GL draw half (verified across
        `31c700d` and `3771ec4`), so the gate publishes 0 every frame today; a Vulkan-side
        painter must set it. See gpu-status §2.70.
-     - **11-5c — `tagpu_terr.c`.** 107 sites spread over nine functions — `init_gl` (53),
-       `build_hills` (12), `build_height` (10), `ensure_atlas` (10), `glsl_begin` (9), `mksh`
-       (5), `dump_if_armed` (4), `tagpu_terr_hills_draw` (3), `rgb_mirror_step` (1). The spread
-       is why it is separate from 11-5b: each one needs its own reachability argument rather
-       than one shared gate.
-     - **11-5d — the entry-point surface this row names**, last, once every caller has left:
+     - **11-5c — `tagpu_terr.c`. LANDED.** 107 sites spread over nine functions — `init_gl`
+       (53), `build_hills` (12), `build_height` (10), `ensure_atlas` (10), `glsl_begin` (9),
+       `mksh` (5), `dump_if_armed` (4), `tagpu_terr_hills_draw` (3), `rgb_mirror_step` (1). The
+       spread is why it was separate from 11-5b: each one needed its own reachability argument
+       rather than one shared gate. 541 lines out, 159 in, 31 symbols out of the object and one
+       in. **What it found is instances 3 and 4 of the rule above**, and the second of them is
+       the largest thing this gate has turned up: `glsl_begin` was doing two jobs, and the
+       API-independent one — the centre-out restore order and the per-tile frame list — was the
+       ONLY writer of `s_rFrames`, the hand-over `tagpu_restorevk.on` exists to fill. It sat
+       below `restore_step`'s `!s_atlasTex`. So the lever armed `tagpu_vk_terr.c`'s restore job,
+       its atlas image and its painter, and fed them nothing — and `restored`, the flag that
+       sets `uRestored` in that consumer's shader, was computed from the GL restorer's own state
+       machine and could only publish 0. The order and the list are now `restore_publish`, with
+       no GL and no local job; `restored` reads `s_rFrames`. Default behaviour is unchanged and
+       provably so: without the lever, `restore_step` returns on its first line. See gpu-status
+       §2.71.
+     - **11-5d — `tagpu_posedraw.c`.** 122 sites, and its own row for the same reason
+       `tagpu_terr.c` had one: the reachability argument is per function, not per file, and the
+       file is 1400+ lines. What is already known: the bring-up `tagpu_posedraw_ready` takes a
+       Vulkan arm at `:542` that asks `tagpu_vk_max_uniform_range()` and returns before the GL
+       program below it; `tagpu_posedraw_live()` is `s_state == 1 && !tagpu_vk_owns_present()`
+       (`:162`), so it is 0 on this lane; a second gate stands at `:722`. **Do not assume from
+       that that the file is dead** — `:1032` is `if (!tagpu_vk_owns_present() && !m->vao)
+       return NULL;`, which is a live path with a GL name in it, and `:1420` carries the same
+       `s_mirrorWant` latch terrain has. **Expect an instance of the rule above here**: this is
+       the last world pass, it publishes a mirror, and `tagpu_posedraw_live()` is exactly the
+       shape — a published predicate whose name says "live" and whose value is pinned at 0.
+     - **11-5e — the entry-point surface this row names**, last, once every caller has left:
        `opengl_utils.{c,h}`, `tagpu_restoreglsl.c`, the orphaned GL-object accessors, and the
        include residue in the four files that still include `opengl_utils.h` and make no GL
        call: **`render_gdi.c`, `tagpu_fps.c`, `tagpu_render3do.c`, `tagpu_scaffold.c`** —
@@ -2191,7 +2245,15 @@ that a count which grows is the plan catching up with the work.) The row was
        mask applied naively deletes every include instead. After 11-5a, twelve files still
        include it and call GL.
 
-     **Not covered by 11-5a–d:** `tagpu_shadow.c` and `tagpu_hires_draw.c` (escalation reason
+     **The surface as 11-5c leaves it, re-measured with comments and string literals masked:
+     714 GL call sites in ten files** — `tagpu_restoreglsl.c` 249, `tagpu_hires_draw.c` 104,
+     `tagpu_posedraw.c` 122, `tagpu_shadow.c` 87, `tagpu_gaf.c` 39, `opengl_utils.c` 31,
+     `tagpu_hires.c` 30, `tagpu_overlay.c` 22, `tagpu_text.c` 20, `tagpu_ftime.c` 10. **No
+     world pass is on that list any more**: `tagpu_native.c`, `tagpu_terr.c`, `tagpu_feat.c`,
+     `tagpu_fx.c` and `tagpu_scaffold.c` are all GL-free. 11-5d takes 122 of the 714 and
+     11-5e takes 401; the remaining 191 are the two files below.
+
+     **Not covered by 11-5a–e:** `tagpu_shadow.c` and `tagpu_hires_draw.c` (escalation reason
      1), and the gate's own exit condition, which is 11-6's.
 
      The files it ends at: `opengl_utils.c`,
