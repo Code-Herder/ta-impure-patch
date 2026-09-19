@@ -1917,9 +1917,9 @@ detection, and the key/click injection), so `tagpu_gui_hook.c` installs its obse
 17 leaf detours. `tacli gui <i> remove`, `gui.off` and a bare `launch` (which writes
 `tagpu_defaults.off`, so no default applies) therefore leave the instance fully drivable.
 
-**The diagnostic is a phrase, not the absence of a line.** `tagpu_gui_init` has **five** exits and
-every one of them logs; only the first two mean the instance cannot be driven, and both say so in
-those words:
+**The diagnostic is a phrase, not the absence of a line.** `tagpu_gui_init` has **six** exits —
+five `return`s and the fall-through — and every one of them logs. Only the first two mean the
+instance cannot be driven, and both say so in those words:
 
 | boot line in `tagpu.log` | layer | drivable |
 |---|---|---|
@@ -1928,7 +1928,8 @@ those words:
 | `gui: trigger host only (tagpu_gui.on is not on) …` | no | yes |
 | `gui: UI layer NOT armed — engine bytes differ at a watched leaf …` | no | yes |
 | `gui: UI layer NOT armed — no arena …` | no | yes |
-| `gui: ARMED flip@0x4C63A0=1 leaves=17/17 …` (or `FAILED` on a partial leaf install) | yes | yes |
+| `gui: ARMED flip@0x4C63A0=1 leaves=17/17 …` | yes | yes |
+| `gui: FAILED flip@0x4C63A0=1 leaves=n/17 …` (a partial leaf install) | no — `s_installed` is 0, so the layer never draws | yes |
 
 So: **grep for `no tacli verb can answer`.** [An earlier draft of this section said "if neither
 line is in `tagpu.log`, no `tacli` verb can answer", naming only the first and last rows — which
@@ -1938,8 +1939,9 @@ the exact case the landing exists to protect.]
 **And `tacli gui <i> remove` does not always remove the layer.** It only unlinks `tagpu_gui.on`,
 and `tagpu_gui.on` is in the defaults table — so on an instance launched with `--defaults` the
 default re-applies and the layer stays fully armed. `gui.off` and a bare launch (which writes
-`tagpu_defaults.off`) are what actually take it away. `tacli gui`'s own status string calls the
-missing file "absent (module not armed)", which has the same error in it.
+`tagpu_defaults.off`) are what actually take it away. `tacli gui`'s status string used to call the
+missing file "absent (module not armed)", which had the same error in it; it now says "absent (the
+DLL's default applies unless the instance has `tagpu_defaults.off`)".
 
 ```bash
 tools/tacli gui <i> on            # arm BEFORE launch (the detours install at DLL attach); the draw follows the file live

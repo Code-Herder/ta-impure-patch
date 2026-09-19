@@ -1848,10 +1848,21 @@ static int __cdecl before_flip(void* entry_esp)
            ("rides the same table so it takes the same all-or-nothing byte
            match") and splitting it silently is how a table grows stale.
          - `ops_window_reset()` on the early return below memsets 4 KB on EVERY
-           flip, and the shell flips thousands of times a second. The ARMED
-           configuration does not pay that -- it resets once per census -- so
-           only a bare instance would have, which is precisely the instance
-           that gets nothing back for it.
+           flip, and the shell flips thousands of times a second. A bare
+           instance was paying that for nothing at all, since with no leaves
+           there is never an op to reset.
+
+           [CORRECTED by round 3 of the review: the first draft of this said
+           "the ARMED configuration does not pay that -- it resets once per
+           census". It does pay it, in two supported configurations, because
+           the reset sits on the `!s_census && !g_gui_draw` exit and
+           `g_gui_draw` is 0 whenever the layer is armed but not DRAWING:
+           `gui.on=off`, which is the documented live A/B, and any armed
+           instance on `renderer=gdi`, where `tagpu_gui_present` -- the only
+           writer of that word -- is never called because render_gdi.c makes no
+           `tagpu_` call. Both are pre-existing and neither is made worse here,
+           but armed+gdi is newly interesting now that gdi is meant to be the
+           stock lane, and it is not closed by this landing.]
          - the return hijack exists for `s_inFlip`, which only the leaf sites
            read, and for `before_alloc_push`, which is a leaf.
          - `surf_of_ctx` dereferences four dwords behind `ptr_ok` ALONE, and

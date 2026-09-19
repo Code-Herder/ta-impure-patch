@@ -159,9 +159,14 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            `tacli` verb and of the key/click injection. "tagpu_gui.on" gates
            the 17 LEAVES, the arena and the census, and those are still
            byte-matched all-or-nothing. Every detour calls the original, so the
-           engine draws exactly as before — we only watch. Disjoint from every
-           detour above (the leaves it watches are the GAF blits, the glyph
-           blitter, the line drawers, the surface copy and the flip). */
+           engine draws exactly as before — we only watch. The leaves it
+           watches are the GAF blits, the glyph blitter, the line drawers, the
+           surface copy and the flip, and ONE of them collides with a detour
+           above on purpose: leaf #1 is 0x4B7F90, which tagpu_fxown.c also
+           takes, and the two are CHAINED -- tagpu_detour.c names that exact
+           pair as the case the chain mechanism exists for. This line said
+           "disjoint from every detour above" until round 3 of landing 10c-2's
+           review. */
         tagpu_gui_init();
 
         /* zoom: the minimap's view rectangle, computed from the 1x view and so a

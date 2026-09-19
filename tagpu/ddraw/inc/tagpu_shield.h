@@ -64,13 +64,15 @@ BOOL tagpu_shield_on(void);
 
    IT IS NOT THREAD-FREE, and this line used to say it was [landing review of
    10c-2, round 2: the header asserted "game thread not required" while the .c
-   file it pointed at explained why that is false]. The RELEASES are posted and
-   those alone would not care. But on the disarm edge this function calls
-   clear_state(), which memsets s_down/s_async/s_release -- and s_down/s_async
-   are written by the wndproc, per key, through set_one(). Off the wndproc's
-   thread that memset races those writes, and what it produces is a key or a
-   mouse button left stuck down with nothing in the log. Re-host this and the
-   race comes back. */
+   file it pointed at explained why that is false]. The big one: on the disarm
+   edge this function calls clear_state(), which memsets s_down/s_async/
+   s_release -- and s_down/s_async are written by the wndproc, per key, through
+   set_one(). Off the wndproc's thread that memset races those writes, and what
+   it produces is a key or a mouse button left stuck down with nothing in the
+   log. The release sweep is smaller but not nothing either: it writes
+   s_release[vk] = 0, which the injector also writes when it sets a deadline --
+   one aligned dword against the memset's 768 bytes, but the same kind of
+   exposure [round 3]. Re-host this and both come back. */
 void tagpu_shield_frame(HWND hwnd);
 
 /* TRUE when the message was consumed: either a tagged injection (delivered to

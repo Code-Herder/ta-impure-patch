@@ -29,8 +29,9 @@
    review of 10c-2 caught it. `tagpu_gui_init` now installs the observer
    whenever the flip's bytes match and gates only the UI layer on the trigger.
    Two preconditions remain -- the byte match, and tagpu_detour_observe itself
-   succeeding (it can refuse on its allocation or on the chain rule) -- and
-   each has its own log line saying `no tacli verb can answer`.
+   succeeding (it can refuse on its allocation, on the chain rule, or on the
+   VirtualProtect in tagpu_detour_land) -- and each has its own log line saying
+   `no tacli verb can answer`.
 
    WHAT THE CALLER OWES: a TAGPU_FRAME whose geometry fields are real. They are
    all `g_ddraw` members the render thread's packet copies anyway, and they are

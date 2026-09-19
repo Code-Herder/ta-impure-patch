@@ -431,11 +431,15 @@ void tagpu_input_cmd(TAGPU_CMD* rec)
    PeekMessageA(PM_REMOVE) + DispatchMessageA, and the flip reaches ddraw
    through them -- after this detour returns, still inside the flip. So a
    WM_TAGPU_MOUSE posted here could be dispatched mid-flip. Its guard is five
-   conjuncts, of which `g_config.fix_not_responding` and `!IsWine()` are the
-   load-bearing two, and `!IsWine()` is decisive where this runs -- the other
-   three are the hwnd, the gui thread id, and a once-a-second rate limit whose
-   update is commented out, so it gates nothing. Unreachable here, then, but by
-   a CONFIGURATION fact rather than by an invariant of the injection path,
+   conjuncts and `!IsWine()` is decisive where this runs. Of the rest, the
+   strongest is `last_msg_pull_tick + 1000 < timeGetTime()` -- "the app has not
+   pumped for a second", which is the whole point of `fix_not_responding` and
+   is false almost always, because that field is stamped on essentially every
+   message the game pulls (fake_GetMessageA, fake_PeekMessageA, and dd.c's own
+   pull). [Round 3 of the review corrected this: the first draft called that
+   conjunct inert because the assignment INSIDE util_pull_messages is commented
+   out, having looked only there for its writers.] Unreachable here, then, but
+   by a CONFIGURATION fact rather than by an invariant of the injection path,
    which is why it is named instead of left implied. */
 void tagpu_input_frame(const TAGPU_FRAME* f)
 {
