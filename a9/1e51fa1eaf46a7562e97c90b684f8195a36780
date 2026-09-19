@@ -1,0 +1,80 @@
+landing-review: landing 11-5c (tagpu_terr.c loses its GL), level high, 2026-09-19
+
+Range main...HEAD at b5cdfe1..a91e51f for the first round and a0026b3 alone for
+the re-review; main at b5cdfe1. High rather than medium because the landing
+changes a published predicate the consumer's shader reads, and the brief
+(wrongly, see M-thread) treated the hand-over as crossing the thread split.
+
+THREE dedicated read-only reviewers in two rounds: one on deletion safety and
+comment truth, one on behaviour and lifetime, then one on the fix commit alone.
+No finding applied without verifying it against the code first.
+
+ROUND 1 -- 23 findings, two HIGH which are one defect, AND IT IS ONE THIS
+LANDING INTRODUCED.
+
+H1/H2 -- making `restored` honest fired the CONSUMER's parity rule for the
+first time. tagpu_vk_terr.c stood the whole terrain pass down whenever a
+restore request stood that this lane had not painted. Right while a GL twin
+drew beside us; there is no twin. And every way the restorer can decline
+latches s_rjTried one-way for the device's life, after which `have` can never
+become 1 -- so the stand-down was PERMANENT: no terrain at all for the session,
+said once and silent after. tagpu_vk_restore.h promises such a refusal leaves
+Classic++ indexed, "the shipped fallback, not a fault". Fixed where the fact
+lives: uRestored is now t.restored && s_rgbAtlas.view && .have, so a request
+this lane cannot service draws INDEXED.
+
+M -- the stale restored atlas past a serial change: every give-up path now
+drops `have`, at the give-up sites and not up front, because `repaint` reads it.
+M -- the repaint throttle (found by BOTH round-1 reviewers independently): HEAD
+gated it on state 2, "the job is idle", a completion this side cannot see.
+Collapsing the state machine made it fire per palette change, and pal_serial
+bumps once a frame during a fade, so the restore made no progress for its
+length. Now gated on the palette having settled.
+M-thread -- THE BRIEF WAS WRONG: there is no thread split in this pass.
+Producer and consumer run in one iteration of the render loop, job_add COPIES
+the frames, tagpu_reclaim does not apply. Recorded in gpu-status and the header.
+M -- two counting/scoping errors in my own §2.71 ("glsl_begin occurs three
+times" was four, and the fourth was the stale comment the miscount hid; "every
+GL site sat under !tagpu_vk_owns_present()" is false for 17 of 107, which went
+through a SECOND guard on a GL object name).
+M -- the !s_hVao removal was written as though it opened the caster route. It
+did not: tagpu_shadow_hills has no callers and would return at !s_live.
+M -- terrain's half of the tagpu_restoredump.on byte oracle went with
+dump_if_armed; ta-drive's loop looked like four passes and covered three.
+Plus ten stale comments naming deleted GL as live, and the header contracts.
+
+ROUND 2 (the fix commit) -- no HIGH, main fix confirmed, two real defects IN
+THE FIXES.
+
+M -- the restored atlas-width bound DID NOT BIND: it set s_maxTex = m and
+bailed, inside a block conditioned on s_maxTex != tagpu_vk_max_image_dim(), so
+the block was skipped from the next frame on. The pre-11-5c original latched
+s_state = 2. Now the refusal leaves s_maxTex alone and the LOG latches, on the
+device's reported value.
+L-but-real -- removing the stand-down let the pass draw while binding 42 named
+an image still in VK_IMAGE_LAYOUT_UNDEFINED, on exactly the declined-restorer
+path the fix exists for. Binding 42 now names the restored view only when
+`.have`, which cannot precede the job's clear -- so the test IS "it has left
+UNDEFINED", and the flag and the descriptor now come from the same two facts.
+M -- the debounce comment overclaimed: the render loop wakes more often than
+the palette changes, so a slow fade can still republish per step. What would
+close it is a completion signal the hand-over does not carry; said so in code.
+Plus a second comment-truth pass: six cross-references to the deleted refusal,
+the header's `restored` contract, the glreset caller chain, the failure log
+line, and the retained-list units (KiB, and a device-limit caveat).
+
+MEASURED BY RUNNING IT, twice -- after round 1 and again after round 2, same
+fixture (Two Continents, renderer=vulkan, terr.on=log classicpp.on restorevk.on,
+private Xvfb):
+  terr: restore request published -- 5062 frames, 2176x2720 atlas, serial 2
+  restorevk: terr: job started: 5062 frames (400 wrap-padded), model 12x64
+  vk: terr: restoring the tile atlas HERE - 5062 frames over 2176x2720
+  vk: terr: restored atlas painted here - 5062 frames, no mirror and no read-back
+  vk: census: frame 1200: 1 pass(es) drew ... terr=1
+The third line has never been printed by any build before this one. The .ab
+capture is the same both times: restored colour inside the line of sight, the
+engine's grey fog rule outside, 24.6 % saturated.
+
+Gates: build clean, thread-split clean (34 files), spirv 49 shaders / 33
+programs headers current, VS/FS pragma pop proved with a planted probe.
+Masked scan: 107 GL call sites at HEAD, 0 now. Symbol table: 31 out, 1 in.
