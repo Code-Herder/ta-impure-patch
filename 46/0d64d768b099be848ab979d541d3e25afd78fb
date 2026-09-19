@@ -1,0 +1,33 @@
+landing-review: model=claude-opus-5 x2 (independent, parallel, read-only) effort=high range=main..460d64d findings=14 acted=14 rejected=0 date=2026-09-19
+both reviewers reached 'safe to land' and neither found a correctness defect. both re-derived
+every published figure independently with their own maskers: mirrorRgb|mirror_rgb 57 -> 0 with
+main's per-file split (gaf.c 40, gaf.h 10, gui_surf.c 7), atlasRgb 30 -> 5 with the five
+survivors line for line, opengl_utils.h includers 6 -> 5, gl-sites narrow 252 unchanged and
+wide 323 -> 322, and the six-commit series 112/29/29/30/30/5.
+two things they established that the landing had not. (a) there are FOUR polarity-sensitive
+rewrites, not the two the commit message names -- 'on && !s_arHave' and the deleted bounds
+check are the others -- and all four drop a constant-TRUE conjunct from a refusal, so the
+rewrites preserve the expressions' VALUES rather than merely being unreachable. (b) binding 41
+is never a null descriptor: set_claim opens 'if (!v2) v2 = s_dumView;', so the unconditional
+VK_NULL_HANDLE resolves to the 1x1 dummy and no null-descriptor or robustness feature is
+relied on.
+all 14 findings were comment or documentation and every one was verified against the source
+before acting. the two worth naming: A-F4, the comment this landing rewrote claims 'mirror is
+the only allocation left in a TAGPU_GAFATLAS' and rlist is a second -- safe only because
+free_buffers' one caller is the GUI atlas, whose rlist is always NULL, and atlas_setup memsets
+afterwards, so it becomes a real leak the day the UI is given a list. NOT fixed here on
+purpose: rlist's lifetime is 11-5e-2c's declared subject and a half-fix (free the buffer,
+leave rlistWant/rlistFailed latched) is the shape this gate keeps finding, so the obligation
+is written into 11-5e-2c's entry and the function's own comment. B-F2a, thirteen lines
+documenting the deleted rgb_mirror_zeroed stayed behind and now read as documentation for
+job_clear_dest, describing a hazard from a function that no longer exists.
+B-F3 did NOT reproduce and chasing it found the real gap: it predicted one lost log line, the
+line appeared zero times on main's own runs, and the reason was that the four-run A/B had
+tagpu_gui.on OFF -- so the measurement labelled 'part 2 measured' had never entered the GUI
+lane, which is the landing's subject. a second interleaved four with gui.on=1 covers it: all
+twelve grabs one hash with the minimap cluster and the cursor's pixel at (512,384) masked, and
+the finding then CONFIRMED at 1 line per main run and 0 per branch run. 'nothing observable
+changes' is overstated by exactly that line, and the docs now say so.
+fixes are in 03e92f3 and fda8451 and are comment-only -- proven by masking: every touched .c
+and .h is byte-identical line-for-line to the reviewed tree -- so the measured binary is the
+landed binary and no re-review.
