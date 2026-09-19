@@ -1,0 +1,66 @@
+landing-review: landing 11-5b (tagpu_native.c's GL bring-up), level high, 2026-09-19
+
+Range main...HEAD at ad9b605..d68ee7e, main at ad9b605; a dedicated read-only
+reviewer with the mingw toolchain and objdump, 77 tool uses. Raised to high
+because the landing changes a PUBLISHED value that controls what the engine
+draws. NO behavioural defect. Three MEDIUM, two LOW groups, two SPECULATIVE.
+All verified against the source before acting.
+
+What the reviewer proved rather than accepted: the ordering (s_ownWin set once
+at render_vk.c:145, cleared nowhere, all ten references inspected;
+tagpu_overlay_draw has one call site; tagpu_native_frame has one caller); that
+removing the gl_draws term is inert in every reachable state it was asked to
+consider -- first frame, glreset, teardown, steady state; that
+tagpu_owndraw.c:284's `g_ssSkip = (g_ssTerr || g_ssPass) && g_sshadow` makes
+g_ssPass permanently 0, so the skip is driven entirely by terrown's key-fill
+today, which is the pre-landing behaviour exactly; that the de-indented
+hand-over is byte-identical to main's with four spaces removed (65 lines,
+diff -u empty); that all six shader literals are byte-identical AFTER FULL
+PREPROCESSING, which is what spirv-gen.py reads; and the pragma bracket, by
+re-running the probe.
+
+M1 -- the pre-existing paragraph twelve lines ABOVE the gate still said
+"`gl_draws` is ANDed in ... without it a GL -> Vulkan switch would carry one
+raised frame across the seam", contradicting the new paragraph below it on the
+one expression that decides whether the engine draws structure shadows. A
+later author adding a Vulkan painter could have restored a lane term and
+re-pinned the gate at 0 -- doubled shadows, silent. Rewritten. Two stale counts
+in the same block fixed: seven SSHADOW_NONE returns, not nine, and the
+hand-over return it cited is gone.
+
+M2 -- my comment said `pal` is "read for the log line and for that reason
+only". There is no such log line; `pal` is the argument to
+tagpu_r3d_atlas_frame(), which steps the 3DO atlas's Classic++ restore. A
+sweep trusting it would have deleted a live call.
+
+M3 -- s_fogTex/s_fogLutTex were kept because tagpu_hires_draw.c reads
+v->fogTex. It does, but those are TAGPU_HVIEW fields -- a DIFFERENT STRUCT.
+TAGPU_FXVIEW.fogTex/.fogLut had no reader anywhere. Both deleted with the
+write that was their reason to stay; the struct fields keep a tombstone.
+Second instance in one landing of "it is published" being inferred from a
+name: s_palTex was the first and the compiler caught it, this one survived the
+compiler because only the READ was missing. Rule recorded: trace the field,
+not the word. It also retires a false claim of dependency on escalation
+reason 1.
+
+LOW -- four counts in gpu-status §2.70, each a claim of verification: 27 GL
+entry points not 29 (the breakdown summed to 34 against its own total of 32,
+the same double-count the 11-5a review caught in §2.69); 21 of the 24
+SURVIVING functions, not of 28; fourteen GL object names, not seven; and "each
+of those three published outside the gate" is false of the palette, whose
+block was GL end to end -- contradicting this landing's own code comment. Four
+stale comments fixed, plus one sentence of mine that over-reached about
+"every other return".
+
+SPECULATIVE, both pre-existing and both filed for 11-5e rather than acted on:
+s_fogLut is write-only and has been since 11-3 -- proved by the optimiser
+eliding both stores in BOTH revisions, which it can only do with no reader in
+the TU; and tagpu_owndraw.c:1016's g_ssPass watchdog is inert for the same
+reason the gate is, and becomes live again the moment a Vulkan painter sets
+s_ssSuppress, which is the right shape.
+
+The fix commit's own code delta, measured: 23 of 24 functions instruction-
+identical, tagpu_native_frame minus exactly three instructions (the two dead
+stores).
+
+Fixes: b5cdfe1.
