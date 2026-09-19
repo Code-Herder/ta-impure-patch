@@ -2422,8 +2422,48 @@ that a count which grows is the plan catching up with the work.) The row was
      the atlas writer, not by the accessor — and this row already scopes the GL-object
      accessors here; recording it only because the sentence predates the landing that orphaned
      it.
+   * **11-5f — TA'S OWN FRAME LOSES ITS UNITS IN THE VULKAN COMPOSITE. Opened 2026-09-19 by
+     landing 11-5d's measurement, and it is a DEFECT rather than a deletion**, so it is its own
+     item and not a footnote to 11-5e. What was measured, on `one-unit` with the roster giving
+     the subject's screen position ([gpu-status](gpu-status.html) §2.72): the engine
+     rasterises every unit on both lanes; `tacli shot` — TA's own surface — carries the
+     commander in colour on both; on `renderer=gdi` the presented frame HAS it and the two
+     captures are the same picture; on `renderer=vulkan` the presented frame does NOT, with our
+     unit pass disarmed and with our terrain pass disarmed as well.
+
+     **So the engine is a real fallback and our composite is dropping it**, which matters beyond
+     units: it is every frame, on the shipped lane, with no error and no log line, and it
+     applies to anything TA draws that we do not — the shell and the menus (where `tagpu_gui.off`
+     is supposed to still show a game), husks the wreck pass does not own, and whatever an
+     unarmed pass leaves to the engine.
+
+     **THE LEAD, from reading and NOT yet measured.** `tagpu_surf_take` (`tagpu_surf.c:32`,
+     called from `tagpu_overlay_draw`) copies `g_ddraw.primary->surface` on the RENDER thread.
+     `ss_shot_service` (`tagpu_overlay.c:499`) reads the same object at the ENTRY of the engine's
+     flip on the GAME thread, where its own comment says it holds *"the frame the PREVIOUS flip
+     presented"*. `tagpu_surf.h`'s argument is explicitly a LIFETIME one — `g_ddraw.cs` keeps
+     the pointer live, `dds_Flip` swaps inside it so the row loop never splices two buffers —
+     and says nothing about the buffer holding a FINISHED frame; TA writes those bytes from the
+     game thread without entering that section. A snapshot landing mid-draw gets what TA has
+     drawn so far. The UI surviving is consistent rather than contradictory: on the presented
+     frame it comes from the GUI pass's mirror hand-over, which `tagpu_surf.h` says was the only
+     route TA's surface had before 4c.
+
+     **First measurement:** dump the snapshot's own bytes as a PPM in the frame `tacli shot`
+     fires and diff the two. **If it holds, the fix is an ORDERING** — snapshot where the shot
+     does, at the flip on the game thread, where the frame is finished by construction, and
+     publish it for the render thread — **never a timing mitigation** (`CLAUDE.md`, *Fixes must
+     be safe by construction*). This is a change to what one thread reads of another's state, so
+     it reviews at **`high`** and its reviewer is briefed on that specifically.
+
+     **Not assumed:** that the snapshot is the cause. The measurement above localises the loss
+     to our pipeline and no further.
+
    * **11-6 — the exit condition.** `renderer=gdi` documented and MEASURED as the stock
-     reference, with the residue named rather than waved at.
+     reference, with the residue named rather than waved at. **Note what 11-5d's gdi control
+     already shows about this reference: it renders TA's own units and our lane does not**, so
+     until 11-5f closes, a gdi-vs-vulkan comparison is measuring that defect as well as whatever
+     it was pointed at.
 
    **WHAT "STOCK" IS TAKEN TO MEAN — the decision this item was told to make.** The candidate
    readings are *stock as a lane* (nothing of ours reaches the screen) and *stock as a process*

@@ -3244,6 +3244,11 @@ Vulkan composite path, and fixable**; the predicate returning 0 is load-bearing 
 because a 1 would take the engine's copy away too. Mechanism not established; the lead is a
 render-thread snapshot of TA's primary with a lifetime argument and no content ordering —
 gpu-status §2.72), and
+`11-5f` **a DEFECT 11-5d opened rather than a deletion** — TA's own frame loses its units in
+the Vulkan composite, so the engine fallback that works on gdi does not work on the shipped
+lane; every frame, no error, no log line, and it applies to anything TA draws that we do not.
+The lead is a render-thread snapshot of TA's primary whose argument is a lifetime one with no
+content ordering; the fix, if it holds, is an ordering and reviews at `high`. And
 `11-5e` the entry-point surface the row names — `opengl_utils.{c,h}`, `tagpu_restoreglsl.c`, the
 orphaned GL-object accessors, and the include residue in the four files that still include
 `opengl_utils.h` and make no GL call (`render_gdi.c`, `tagpu_fps.c`, `tagpu_render3do.c`,
