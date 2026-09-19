@@ -12,7 +12,7 @@
    MENUS as well as in a game, because that is where half of `tacli` works.
 
    THE SCREENSHOT IS THE ONE MEMBER THAT ONLY ARMS. The others answer in place;
-   it cannot, because this host runs at the flip's ENTRY and the engine copies
+   it cannot, because the family runs at the flip's ENTRY and the engine copies
    back buffer -> primary INSIDE that call, so the primary still holds the
    previous frame here. It sets a flag and `dds_Unlock`'s primary branch takes
    the picture -- see screenshot.h. It is also the one member with no counter
