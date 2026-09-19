@@ -12583,3 +12583,187 @@ disagreed about and that were re-read from the source to settle — which is the
 The helper now preserves newlines, and any line number quoted from a masked scan before
 2026-09-19 should be re-read from the source before it is relied on.
 
+
+### 2.74 The GL restorer goes whole, and the predicate that pinned it was set on purpose — landing 11-5e-2
+
+`tagpu_restoreglsl.c` is deleted entire: 39 functions, **249 of the tree's 540 masked GL call
+sites**, the whole GLSL backend of the Classic++ restorer. With it go the `tagpu_gaf.c` code
+that fed it, the two blocks that stepped it, and one dead accessor. The surface goes
+**540 → 252** and the GL-bearing file count **six → four**, with `tagpu_gaf.c` leaving the set
+entirely.
+
+| file | before | after |
+|---|---|---|
+| `tagpu_restoreglsl.c` | 249 | **deleted** |
+| `tagpu_gaf.c` | 39 | **0** |
+| `tagpu_hires_draw.c` | 104 | 104 — escalation reason 1 |
+| `tagpu_shadow.c` | 87 | 87 — escalation reason 1 |
+| `opengl_utils.c` | 31 | 31 — last of all; it DEFINES the entry points |
+| `tagpu_hires.c` | 30 | 30 — goes with `tagpu_hires_draw.c` |
+| **total** | **540** | **252** |
+
+#### THE FIND: the root predicate is a VALUE, and a previous landing set it deliberately
+
+The restorer's only entry into GL was `tagpu_rglsl_job_new`, whose **one** call site is
+`tagpu_gaf.c`'s `tagpu_gaf_atlas_restore`, below `if (a->restoreFailed || !a->tex || !pal)
+return;`. And `a->tex` is **0 for the life of the process**:
+
+```
+a->tex = 0            tagpu_gaf_atlas_create   (the only other write is _lost's a->tex = 0)
+  -> tagpu_gaf_atlas_restore returns at its third gate, every call
+    -> tagpu_rglsl_job_new is never called
+      -> a->job is NULL for the life of the process
+        -> init_gl() never runs (its only path is job_new_x), s_glReady stays 0
+          -> gl_ready() 0 -> tagpu_rcore_step returns on its second line, every frame
+            -> all 249 GL sites in tagpu_restoreglsl.c are inert
+```
+
+No `glGenTextures` anywhere in the tree fills `a->tex`, and there is no `&a->tex`. **Landing
+11-4c took the one that did** — on 2026-09-19, hours before this landing — and said so in the
+comment it left behind: *"`a->tex` is set to 0 rather than left alone so that a re-created
+atlas cannot carry a stale name, and it is 0 for the life of the process: the `glGenTextures`
+that used to fill it went in landing 11-4c."*
+
+**That is COROLLARY 2, not corollary 3.** The pin is a value, set on purpose, and 11-4c's
+justification reasons entirely about stale texture names — it does not mention that the same
+line put 288 GL call sites and one live feed out of reach. The cost of a deliberate pin hides
+in its justification, exactly as 11-5d said. A second pin sits underneath (nothing calls
+`oglu_load_dll`, so every `getgl` is NULL) and would stop the same tree on its own, but it is
+not the root, and a write-up that named it as the root would have sent the next reader to the
+wrong file.
+
+#### AND UNPINNING IT RAN A CONSUMER THAT HAD NEVER RUN — corollary 1, measured
+
+`atlas_paint` ended in `if (a->job) restore_enqueue(a, e);`. `restore_enqueue` does two things:
+it queues the frame on the GL job **and** appends it to the **published frame list** — which is
+the *Vulkan* lane's restore input and has nothing to do with GL. So the GL predicate was gating
+the other backend's feed, and since 11-4c it has been gating it shut.
+
+Measured with a temporary probe in `atlas_paint`, pre-landing build, `fx-mix`, `restorevk.on`:
+
+```
+PROBE feat: PAINT AFTER ARM n=15 job=NULL tex=0 rlistN=0 (this paint will NOT enqueue)
+PROBE fx:   PAINT AFTER ARM n=3  job=NULL tex=0 rlistN=0 (this paint will NOT enqueue)
+vk: feat: restoring the atlas HERE - 0 of 0 frames over 2048x2048, generation 1
+vk: fx:   restoring the atlas HERE - 0 of 0 frames over 2048x2048, generation 1
+queue drains: 0
+```
+
+The list is armed (`rlistWant` 1, `rlist` allocated), the atlas holds 15 entries, and not one
+reaches the consumer. The same probe on the landing's build:
+
+```
+PROBE2 fx: paint n=3 rlistWant=1 rlist=SET rlistN=0 cap=256 minEdge=0 w=12 h=9
+PROBE2 fx: paint n=3 rlistWant=1 rlist=SET rlistN=1 cap=256 minEdge=0 w=7  h=4
+vk: feat: restoring the atlas HERE - 15 of 15 frames over 2048x2048, generation 1
+vk: fx:   restoring the atlas HERE - 5 of 5 frames over 2048x2048, generation 1
+queue drains: 162
+```
+
+**What it costs when it is shut.** `tagpu_gaf_atlas_restore_vk` seeds the list once from the
+entries present at arm time; `rlist_restart` — the only re-seed — is reachable only from that
+arm and from an overflow inside `rlist_add`, which cannot happen if `rlist_add` never runs. And
+`job_clear_dest` (a recycle, a repack) calls `rlist_reset`, which sets `rlistN = 0`. So the list
+could only shrink: seeded once, emptied by the first reset, never refilled. Every frame inserted
+afterwards stays indexed for the session.
+
+**The fix is safe by construction, and it is the removal of a guard rather than the addition of
+one.** `rlist_add` already returns at the top unless `rlistWant` and `rlist` are both set, so an
+unarmed list costs one `restore_frame_of` and nothing else. The gate now belongs to the list
+itself — the state that owns the work — instead of to an object belonging to a backend that no
+longer exists.
+
+**Why no pixel A/B could have caught it.** 11-4c's gate was `0 px of 786432 across all 64
+cross-build pairs`, and it was honestly run. The feed only exists when `tagpu_restorevk.on` is
+armed, and that fixture did not arm it. This is 11-5e-1's HIGH generalised: *a pixel diff cannot
+cover a lever the fixture does not arm* — there it was an instrument writing to `tagpu.log`,
+here a lever file.
+
+#### What was deleted, and how each was shown to be unreachable
+
+| deleted | why it could not run |
+|---|---|
+| `tagpu_restoreglsl.c` (39 functions) | `gl_ready()` is 0; `tagpu_rcore_step` returns on its second line |
+| `tagpu_gaf_atlas_restore` | returns at `!a->tex`, every call |
+| `twin_mips` | only caller was inside that function's `a->job` branch |
+| `dump_if_armed` | same, plus it reads `a->tex` and `a->rgb`, both pinned 0 |
+| `tagpu_gl_rgba_readback`, `rgb_rows` | only callers were `mirror_rgb_step`'s unreachable half |
+| `tagpu_r3d_atlas_texref` | **zero call sites**, and it returned the pinned `s_atlas.tex` |
+
+Inventory diffed per translation unit against `HEAD`: **45 functions gone, nothing else taken,
+nothing new**. Every deleted non-static is absent from every object file; `tagpu_rglsl_tileable`
+— which lives in `tagpu_restore_core.c`, not in the deleted backend, and is called from
+`tagpu_terr.c:961` and `tagpu_gaf.c` — still links.
+
+#### What was REDUCED rather than deleted, and why
+
+`tagpu_gaf_atlas_mirror_rgb_step` keeps the branch that was already the only reachable one
+(`!a->rgb`, and `a->rgb` had exactly one non-zero writer, the deleted `tagpu_gaf_atlas_restore`).
+The rest of the RGB read-back — `mirrorRgb*`, the `atlasRgb*` publications and their consumers —
+is **11-5e-2b**: it reaches **111 sites across `tagpu_vk_feat.c`, `tagpu_vk_fx.c`,
+`tagpu_vk_gui.c`, `tagpu_vk_unit.c`, `tagpu_vk_terr.c`, `tagpu_terr.c` and the four producers**,
+and the terrain's use of it is a different path that this landing did not trace. A consumer tree
+deleted ahead of its consumers is worse than one that is merely unreachable — the same reason
+11-5e-1 left fourteen `*_glreset` functions standing.
+
+Consequently `a->rgb` is now 0 for the life of the process, which pins one more consumer:
+`tagpu_posedraw.c:601` publishes `s_pub.restored = (tagpu_r3d_atlas_rgbref() && ...)`, i.e.
+**always 0**. Labelled in `tagpu_gaf.h`, not acted on here.
+
+#### Verification
+
+**Build gate.** `thread-split: clean — 34 listed file(s)`, `spirv: 49 shaders, 33 programs,
+headers current`, exit 0, no new warnings. The SPIR-V gate is untouched because
+`tools/spirv-gen.py:extract_restore()` reads the five restore shaders out of
+`tagpu_restore_glsl.h` — the header, note the underscore — and not out of the deleted `.c`;
+`tagpu_restore_glsl.h` also feeds `tools/tascene`'s browser pack and is **not** part of the GL
+lane's fate.
+
+**Verified by running it.** `one-unit`, Two Continents, 1024x768, `renderer=vulkan` confirmed in
+the ini after the run, both builds settled to `vk: census: 6 pass(es) drew` (terr, feat, unit,
+fx, mark, gui):
+
+| comparison | differing pixels of 786 432 |
+|---|---|
+| within one run, three grabs, both builds (six pairs) | **0** — the scene is STATIC |
+| **the same build, two separate RUNS** | **48**, every one inside the minimap |
+| previous build vs this build | **45** — 44 inside the minimap, 1 outside |
+
+The one pixel outside is at **(512, 384)**, the exact centre of the frame, with all eight
+neighbours identical: the mouse pointer. The 44 inside are two 5x5 blobs.
+
+**AND THE SAME-BUILD CROSS-RUN CONTROL IS WHAT MAKES THE 44 READABLE**, which is this landing's
+method finding. Two runs of the *same* build differ by 48 px — all in the minimap, in blobs of
+the same character (greyscale in one run, player-coloured in the other) at *different* map
+positions. So the minimap's blob colouring varies run to run on its own, the cross-build figure
+of 45 is **below the same-build noise floor of 48**, and reading the 44 as a change this landing
+caused would have been wrong. Three grabs inside one run prove the scene is static; they bound
+nothing about run-to-run variation, and that is a different question with a different control.
+11-5e-1 reported "44 px, 0 outside" without this control and so had no bound on its own noise —
+its attribution (differing AI unit counts) is consistent with what is seen here, but it was not
+measured.
+
+**The behaviour this landing actually changes is in the log, not in the pixels**, and the A/B
+fixture is blind to it by construction: it does not arm `tagpu_restorevk.on`. The probe runs
+above are the measurement for that half.
+
+#### Gaps this landing did not close
+
+- **`tagpu_shadow.c` (87) and `tagpu_hires_draw.c` (104)**, with `tagpu_hires.c` (30) behind
+  them, and `opengl_utils.c` (31) last of all — **escalation reason 1**, unchanged.
+- **11-5e-2b**: the RGB read-back, the `mirrorRgb*` fields, the `atlasRgb*` publications, the
+  `restored` flag in `tagpu_posedraw.c`, and the refusal messages that read as driver faults
+  (`gui: no glReadPixels/FBO entry points ...` fires on a perfectly healthy run).
+- **The restore dump oracle is now one-sided for the sprite and unit atlases**, exactly as
+  landing 11-5c left the terrain's: `tagpu_restore_<tag>.rgba` was written by `dump_if_armed`
+  and is not written by anything now, while `tagpu_restore_<tag>_vk.rgba` still is. It had
+  already stopped being written when 11-4c pinned `a->tex`; the skill still described the pair
+  as two-sided and is corrected with this landing.
+- **How much the restored feed actually paints is not a stable number.** The probe run reached
+  162 queue drains; an unprobed run of the same build, settled 120 s, reached 1 (the unit
+  atlas's 25-entry seed). The enqueue path is proven to run post-landing and proven not to run
+  pre-landing; the quantity depends on how many frames the scene inserts after the arm, and
+  this fixture varies a great deal between launches (the feature atlas held 15 entries in one
+  run and 1162 in another). A fixture that pins that down is what 11-5e-2b needs.
+- **No engine address was touched or read**: the diff's added lines carry no `0x4…`/`0x5…`
+  constant, so `exe-reverse-engineering.md` takes nothing from this landing.

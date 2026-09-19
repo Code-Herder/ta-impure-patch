@@ -942,11 +942,27 @@ tools/tacli scenario load <i> feat-forest --restart --res 1024x768 --maxfps 0
   the right pixels in the wrong cells, which the `.rgba` alone would also catch but the `.idx`
   localises in one line.
 
-**AND SINCE LANDING 7c IT IS A SAME-RUN TWO-LANE ORACLE, which is strictly stronger than the
-cross-build one above.** With `restorevk.on` the gather half stops mirroring its restored atlas for
-the Vulkan lane and publishes the frame LIST, so both restorers run in **one process** over the
-same atlas, the same palette and the same rectangles in the same order, and each writes its own
-dump:
+**THE TWO-LANE ORACLE IS GONE — THERE IS ONLY ONE LANE LEFT.** Landing 11-5e-2 (2026-09-19)
+deleted `tagpu_restoreglsl.c` and `tagpu_gaf.c`'s `dump_if_armed` with it, so
+`tagpu_restore_<tag>.rgba` — the GL half of every sprite and unit pair — **is not written by
+anything**, exactly as `tagpu_restore_terr.rgba` stopped being written in 11-5c. Only
+`tagpu_restore_<tag>_vk.rgba` is produced now, and a `cmp` of the pair compares a file against
+one that does not exist.
+
+It had in fact stopped working earlier than that: landing 11-4c pinned `a->tex` to 0, which made
+`tagpu_gaf_atlas_restore` return before it could create a GL job, and `dump_if_armed` refuses
+without one. So between 11-4c and 11-5e-2 this section described a two-sided oracle that was
+already one-sided — **check for the dump FILES before trusting a comparison recipe**, which is
+the same rule the `atlas=` note below states for a different reason.
+
+The description below is kept as the record of what the oracle WAS and what would have to be
+rebuilt to get one again (a second backend writing its own dump over the same rectangles in the
+same order). Nothing has replaced it.
+
+**As it worked until 11-4c:** with `restorevk.on` the gather half stops mirroring its restored
+atlas for the Vulkan lane and publishes the frame LIST, so both restorers ran in **one process**
+over the same atlas, the same palette and the same rectangles in the same order, and each wrote
+its own dump:
 
 ```bash
 # native.on=all wrecks is NOT optional for the sprite atlases -- see below
@@ -967,10 +983,13 @@ done
   7d, so each job dumps its own destination and a new consumer gets the oracle for nothing. The
   terrain's GL dump was renamed `tagpu_restore_terr.rgba` to match; **`tagpu_restore.rgba` and
   `tagpu_restore_vk.rgba` are the pre-7d names and no longer written.**
-- **Terrain no longer has a GL half to compare against** (landing 11-5c): `tagpu_restore_terr.rgba`
-  is not written by anything, while `tagpu_restore_terr_vk.rgba` still is. The pair is
-  one-sided, so the comparison for terrain is not "passing", it is **absent**. Nothing has
-  replaced it.
+- **NO atlas has a GL half to compare against any more.** The terrain's went in landing 11-5c
+  and the sprite and unit halves in 11-5e-2, so every pair is one-sided: the comparison is not
+  "passing", it is **absent**, for `terr`, `feat`, `fx` and `unit` alike. Nothing has replaced
+  it. What `restorevk.on` still buys is the published frame list itself, which is how the
+  Vulkan restorer is fed at all — and whether it is being fed is worth checking on its own:
+  `vk: <tag>: restoring the atlas HERE - N of N frames` with N=0 and zero
+  `restorevk: <tag>: queue drained` lines means the list is armed and empty.
 - **`feat.on` alone does not make a feature atlas exist.** Without `native.on=all wrecks` the
   feature pass never owns the leaf, emits nothing and atlases nothing: the log says `atlas=0` and
   `(nothing emitted: native.on needs "wrecks" before we can own the leaf)`, and the run measures a
@@ -1591,6 +1610,18 @@ done
 
 On a settled `one-unit` fixture those three are **0 differing pixels**.
 
+**AND A THIRD GATE: THE SAME-BUILD CONTROL HAS TO CROSS TWO RUNS, NOT THREE GRABS.** Three
+grabs inside one run prove the scene has stopped moving. They bound NOTHING about how much the
+scene differs between two launches of the same fixture, and on `one-unit` that is not small:
+two runs of the SAME DLL, both settled at `6 pass(es)`, differ by **48 px** — every one of them
+in the minimap, in 5x5 blobs that are greyscale in one run and player-coloured in the other, at
+different map positions each time. A cross-build figure of 45 px therefore sits BELOW the
+noise floor and means "no change", while the same 45 px read against a 0-px within-run control
+alone looks like a result. Run the old DLL twice before you compare it with the new one; it
+costs one `scenario load` and it is the difference between a measurement and a number.
+[Landing 11-5e-2, 2026-09-19. 11-5e-1 reported "44 px, 0 outside" with no cross-run control,
+so it never bounded its own noise — its attribution was consistent with this, but unmeasured.]
+
 **BUT 0 px MEANS STATIC, NOT SETTLED, AND YOU NEED BOTH.** This bit twice in one landing. A
 scene that has stopped moving at `3 pass(es) drew` gives a rock-solid 0-px control and is
 still greyscale, because the terrain pass and the palette are not up; compared against a
@@ -1638,15 +1669,26 @@ Then:
   to the framebuffer — `tagpu_ftime.on`, the census, the packet line — is invisible to this
   whole method, and a landing that changed one has not verified it by capturing frames. Arm
   the lever, let it report, and paste the line.
-- **Two instances given the same `tacli arm` line can still settle differently.** Observed:
-  one instance's gamedir held `tagpu_owndraw.on`, `tagpu_terrown.on`, `tagpu_featown.on`,
-  `tagpu_fxown.on` and `tagpu_markown.on` and reached `6 pass(es)`; a second, armed with the
-  same command, held none of them and sat at `3 pass(es)` indefinitely. **The mechanism is
-  not established** — nothing in `tagpu/ddraw/src` writes those files, so they arrive some
-  other way and a first draft of this note guessed wrong by saying the passes create them.
-  What is reliable is the remedy: compare a build against itself in the SAME instance — swap
-  the DLL and `scenario load` again — rather than standing up a second instance and hoping
-  the two converge.
+- **The `*own.on` levers are written by `tacli scenario load`, and it says so.** An instance
+  whose gamedir holds `tagpu_owndraw.on`, `tagpu_terrown.on`, `tagpu_featown.on`,
+  `tagpu_fxown.on` and `tagpu_markown.on` reaches `6 pass(es)`; one armed by hand with the same
+  pass list and no `scenario load` holds none of them and sits at `3 pass(es)` indefinitely.
+  The mechanism was recorded here as "not established" until 2026-09-19, when the tool was
+  simply read as it ran:
+
+  ```
+  auto-armed owndraw.on=all (native.on is set and owndraw must be installed at launch, not after)
+  auto-armed fxown.on    (fx.on and sfx.on is set and fxown must be installed at launch, not after)
+  auto-armed featown.on  (feat.on is set and featown must be installed at launch, not after)
+  auto-armed terrown.on  (terr.on is set and terrown must be installed at launch, not after)
+  ```
+
+  They have to exist at DLL attach, so `scenario load` writes them from the passes already
+  armed. `tacli launch` alone does not. **Read the tool's own output before writing down that
+  a mechanism is unknown** — this one had been printing the answer on every run.
+  The remedy is unchanged and still the right habit: compare a build against itself in the
+  SAME instance — swap the DLL and `scenario load` again — rather than standing up a second
+  instance and hoping the two converge.
 
 ### A masked-comment scan tells you WHETHER, never WHERE (2026-09-19)
 

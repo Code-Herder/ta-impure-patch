@@ -301,12 +301,21 @@ def restore_keys(name):
 def _restore_programs():
     out = []
     # `restore_mip` IS GENERATED BEFORE ITS VULKAN CONSUMER EXISTS, and that is
-    # this manifest's rule rather than an exception to it: the shader is real --
-    # the GL lane draws it as of landing 7e-1 -- and a shader in
+    # this manifest's rule rather than an exception to it: a shader in
     # `tagpu_restore_glsl.h` that no program uses fails the gate, precisely so
-    # that the two lanes cannot drift apart while one of them is unwritten. The
-    # emitted header is text nothing #includes until landing 7e-2 wires it, at
-    # a cost of one small array in the tree and none at run time.
+    # that a shader and its consumer cannot drift apart while one of them is
+    # unwritten. The emitted header is text nothing #includes until landing
+    # 7e-2 wires it, at a cost of one small array in the tree and none at run
+    # time.
+    #
+    # THE JUSTIFICATION USED TO READ "the shader is real -- the GL lane draws it
+    # as of landing 7e-1". That lane is gone: the vulkan-only plan's 11-5e-2
+    # deleted `tagpu_restoreglsl.c`, which was the only code that compiled these
+    # shaders at run time. `tagpu_restore_glsl.h` itself is untouched and stays
+    # the ONE copy of the text -- this tool reads the five shaders straight out
+    # of the header (see extract_restore) rather than out of any .c, and
+    # tools/tascene extracts the same macros for the browser pack -- so nothing
+    # about this manifest changes. Only the reason does.
     for prog, vs, fs in (("restore_fill", "FS_VS", "FILL_FS"),
                          ("restore_conv", "FS_VS", "CONV_FS"),
                          ("restore_out",  "OUT_VS", "OUT_FS"),

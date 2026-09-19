@@ -3255,16 +3255,30 @@ in it at all: `opengl_utils.c` DEFINES the GL entry points every other GL file c
 goes last of everything, behind `tagpu_shadow.c` and `tagpu_hires_draw.c` (escalation reason
 1). `11-5e-1` the three callerless leaf files (**landed 2026-09-19**: `tagpu_ftime.c`,
 `tagpu_text.c`, `tagpu_overlay.c`, 52 sites, thirteen functions, all three GL-free);
-`11-5e-2` `tagpu_gaf.c` and `tagpu_restoreglsl.c`, the live path, with the orphaned reset tree;
+`11-5e-2` `tagpu_gaf.c` and `tagpu_restoreglsl.c`, the live path, with the orphaned reset tree
+(**landed 2026-09-19**: `tagpu_restoreglsl.c` deleted entire, 288 sites, 45 functions, the
+surface 540 → 252 and the GL-bearing files six → four. Its find is **corollary 2 caught in the
+act and a consumer that had never run**: the root predicate is `a->tex`, which landing 11-4c
+pinned to 0 hours earlier for a good reason it stated — a re-created atlas must not carry a
+stale texture name — without noticing that the same line put 288 GL call sites AND the Vulkan
+lane's restore feed out of reach. `atlas_paint` ended in `if (a->job) restore_enqueue(a, e);`,
+and `restore_enqueue` feeds the GL job *and* the published frame list the other backend reads,
+so since 11-4c that list was seeded once and emptied by the first recycle. Probed in-process:
+pre-landing `PAINT AFTER ARM n=15 job=NULL rlistN=0 (will NOT enqueue)` and `0 of 0 frames`,
+0 queue drains; post-landing `rlistN 0 → 1`, `feat 15 of 15`, `fx 5 of 5`, 162 drains. **No
+pixel A/B could have caught it** — the feed exists only under `tagpu_restorevk.on`, which
+11-4c's fixture did not arm. The RGB read-back, its 111 `atlasRgb*` sites across five Vulkan
+passes and the terrain, and `tagpu_posedraw.c`'s `restored` flag are deferred to `11-5e-2b`);
 `11-5e-3` the include residue in `render_gdi.c`, `tagpu_fps.c` and `tagpu_scaffold.c`
 (11-5e-1 took `tagpu_render3do.c`'s).
-**After 11-5e-1 no world pass, no unit pass and no leaf module is left on the GL surface**:
-**540 call sites remain in six files** (one regex over comment-masked source, run on both
-trees: `tagpu_restoreglsl.c` 249, `tagpu_hires_draw.c` 104, `tagpu_shadow.c` 87, `tagpu_gaf.c`
-39, `opengl_utils.c` 31, `tagpu_hires.c` 30 — 592 less 11-5e-1's 52, the six surviving rows
-digit-for-digit unchanged), and `tagpu_native.c`, `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c`,
-`tagpu_scaffold.c`, `tagpu_posedraw.c`, `tagpu_overlay.c`, `tagpu_text.c` and `tagpu_ftime.c`
-are GL-free.
+**After 11-5e-2 no world pass, no unit pass, no leaf module and no asset module is left on the
+GL surface**: **252 call sites remain in FOUR files** (one regex over comment-masked source,
+run on both trees: `tagpu_hires_draw.c` 104, `tagpu_shadow.c` 87, `opengl_utils.c` 31,
+`tagpu_hires.c` 30 — 540 less 11-5e-2's 288, the four surviving rows digit-for-digit
+unchanged), **and every one of the four is behind escalation reason 1 or waiting on it**, so
+11-5e cannot finish the gate. `tagpu_native.c`, `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c`,
+`tagpu_scaffold.c`, `tagpu_posedraw.c`, `tagpu_overlay.c`, `tagpu_text.c`, `tagpu_ftime.c` and
+`tagpu_gaf.c` are GL-free. (11-5e-1 had left it at 540 in six files, 592 less its own 52.)
 **The rule the gate found, now named in the plan: deleting a backend is not mostly about
 deleting calls, it is about finding the predicates that encode "the backend is ready" as "the
 work is possible."** Five landings, five instances; the compiler cannot see them, because the

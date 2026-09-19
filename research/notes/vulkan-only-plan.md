@@ -2401,9 +2401,47 @@ that a count which grows is the plan catching up with the work.) The row was
          minimap**, where 44 pixels of unit blips differ because the two runs' AI had built
          different numbers of off-screen units (`alive=14` against `alive=9`, `onscreen=1`
          in both).
-       - **11-5e-2 — `tagpu_gaf.c` (39) and `tagpu_restoreglsl.c` (249)**, the live path, plus
-         the sixteen-function reset cascade 11-5e-1 orphaned, fourteen of which it deliberately
-         left standing
+       - **11-5e-2 — `tagpu_gaf.c` (39) and `tagpu_restoreglsl.c` (249). LANDED 2026-09-19.**
+         `tagpu_restoreglsl.c` deleted entire (39 functions), `tagpu_gaf.c` down to zero GL
+         sites, the surface **540 → 252** and the GL-bearing files **six → four**. 45 functions
+         gone, inventory diffed per TU, every deleted non-static absent from every object.
+         Measured: within a run 0 px over six pairs, the same build across two RUNS 48 px, and
+         cross-build **45 px of 786 432 — 44 in the minimap and one at the mouse pointer**,
+         i.e. BELOW the same-build run-to-run noise floor.
+
+         **The root predicate was `a->tex`, and landing 11-4c set it to 0 on purpose hours
+         earlier.** `tagpu_rglsl_job_new`'s one call site sits below `!a->tex` in
+         `tagpu_gaf_atlas_restore`, so no job was ever made, `gl_ready()` never turned on, and
+         `tagpu_rcore_step` returned on its second line every frame. **That is corollary 2, not
+         corollary 3** — a value set deliberately, whose cost hides in its justification:
+         11-4c argued about stale texture names and did not notice it had also put 288 GL call
+         sites and one live feed out of reach. The missing `LoadLibrary` is a second pin
+         underneath and would stop the same tree alone, but it is not the root.
+
+         **AND UNPINNING IT RAN A CONSUMER THAT HAD NEVER RUN.** `atlas_paint` ended in
+         `if (a->job) restore_enqueue(a, e);`, and `restore_enqueue` feeds the GL job **and**
+         the PUBLISHED FRAME LIST — the Vulkan lane's restore input. So a GL predicate was
+         gating the other backend's feed, shut since 11-4c: the list was seeded once by
+         `tagpu_gaf_atlas_restore_vk`, emptied by the first `job_clear_dest` (a recycle or a
+         repack), and never refilled, because the only re-seed is reachable from the arm and
+         from an overflow inside the call that never ran. Probed in-process, pre-landing:
+         `PAINT AFTER ARM n=15 job=NULL rlistN=0 (this paint will NOT enqueue)` and
+         `restoring the atlas HERE - 0 of 0 frames`, 0 queue drains. Post-landing:
+         `rlistN 0 → 1`, `feat 15 of 15`, `fx 5 of 5`, 162 drains. The guard is REMOVED rather
+         than replaced: `rlist_add` already returns unless the list is armed, so the gate
+         belongs to the list — the state that owns the work — instead of to a deleted
+         backend's object. **No pixel A/B could have caught it**: the feed exists only under
+         `tagpu_restorevk.on`, which 11-4c's fixture did not arm. 11-5e-1's HIGH generalised —
+         *a pixel diff cannot cover a lever the fixture does not arm*.
+
+         Deferred to **11-5e-2b**: the RGB read-back, the `mirrorRgb*` fields and the
+         `atlasRgb*` publications — 111 sites across five Vulkan passes, the terrain and the
+         four producers — plus `tagpu_posedraw.c`'s `restored` flag, which `a->rgb` now pins
+         to 0. `tagpu_gaf_atlas_mirror_rgb_step` is reduced to its one reachable branch and
+         labelled; the rest stands until its consumers can go with it.
+
+         It also carried the sixteen-function reset cascade 11-5e-1 orphaned, fourteen of which
+         that landing deliberately left standing
          (`tagpu_native_glreset` and four surviving siblings — `scaffold`, `r3d`, `gui`, `fps`;
          the fifth, `tagpu_overlay_glreset`, went with the capture. Through native: the
          restorer's, the effects', the feature pass's, the terrain pass's, the shadow pass's,
@@ -2428,11 +2466,14 @@ that a count which grows is the plan catching up with the work.) The row was
        mask applied naively deletes every include instead. After 11-5a, twelve files still
        include it and call GL.
 
-     **The surface as 11-5e-1 leaves it, re-measured on the same masked pattern: 540 GL call
-     sites in six files** — `tagpu_restoreglsl.c` 249, `tagpu_hires_draw.c` 104,
-     `tagpu_shadow.c` 87, `tagpu_gaf.c` 39, `opengl_utils.c` 31, `tagpu_hires.c` 30. That is
-     592 less 11-5e-1's 52, and **the six surviving rows are digit-for-digit what they were
-     before it**, which is the check that the landing touched only its own three files. The
+     **The surface as 11-5e-2 leaves it, re-measured on the same masked pattern: 252 GL call
+     sites in FOUR files** — `tagpu_hires_draw.c` 104, `tagpu_shadow.c` 87, `opengl_utils.c`
+     31, `tagpu_hires.c` 30. That is 540 less 11-5e-2's 288 (`tagpu_restoreglsl.c` 249 and
+     `tagpu_gaf.c` 39), and **the four surviving rows are digit-for-digit what they were
+     before it**, which is the check that the landing touched only its own files.
+
+     11-5e-1 left it at **540 in six files** — the same four plus `tagpu_restoreglsl.c` 249 and
+     `tagpu_gaf.c` 39 — which was 592 less its own 52, with the six rows likewise unchanged. The
      count is taken on both trees with ONE regex in one script rather than quoted from an
      earlier note: a wider pattern (allowing a lower-case letter after the `gl` prefix) reads
      689 on the same tree, because it counts `glyph_raster` and `glreset`, and a number
@@ -2441,19 +2482,24 @@ that a count which grows is the plan catching up with the work.) The row was
 
      **No world pass and no unit pass is on that list any more**: `tagpu_native.c`,
      `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c`, `tagpu_scaffold.c`, `tagpu_posedraw.c`,
-     `tagpu_overlay.c`, `tagpu_text.c` and `tagpu_ftime.c` are all GL-free. 11-5e-2 takes 288;
-     the remaining 252 are `opengl_utils.c` (31), `tagpu_hires_draw.c` (104),
-     `tagpu_shadow.c` (87) and `tagpu_hires.c` (30). The first draft of this line said "the two
-     files below" and left the arithmetic one file short: `tagpu_hires.c` is the fourth, and it
-     is named here because 30 sites that nobody has listed are how a gate's exit condition
-     slips. [The 11-5e-1 review's LOW.]
+     `tagpu_overlay.c`, `tagpu_text.c`, `tagpu_ftime.c` and — since 11-5e-2 — `tagpu_gaf.c`
+     are all GL-free. **11-5e-2 took its 288; the remaining 252 are `opengl_utils.c` (31),
+     `tagpu_hires_draw.c` (104), `tagpu_shadow.c` (87) and `tagpu_hires.c` (30)**, and every
+     one of the four is behind escalation reason 1 or waiting on it. The first draft of this
+     line said "the two files below" and left the arithmetic one file short: `tagpu_hires.c`
+     is the fourth, and it is named here because 30 sites that nobody has listed are how a
+     gate's exit condition slips. [The 11-5e-1 review's LOW.]
 
      **Not covered by 11-5a–e:** `tagpu_shadow.c` and `tagpu_hires_draw.c` (escalation reason
      1) — and, since 11-5e-1 found the dependency, `opengl_utils.c` with them, because it
      defines the entry points those two call. The gate's own exit condition is 11-6's.
 
      The files it ends at: `opengl_utils.c`,
-     `opengl_utils.h`, `openglshader.h`, `tagpu_restoreglsl.c`, and the plumbing users that
+     `opengl_utils.h`, `openglshader.h` (`tagpu_restoreglsl.c` left this set in 11-5e-2 —
+     deleted; note that `tagpu_restore_glsl.h`, with the underscore, is NOT in it and does not
+     go: `tools/spirv-gen.py` reads the five restore shaders out of that header to generate the
+     Vulkan lane's SPIR-V, and `tools/tascene` extracts the same macros for the browser pack),
+     and the plumbing users that
      remain (`opengl_utils.c`'s own `oglu_load_dll`, now called by nothing; `render_gdi.c`'s
      `g_oglu_version`; `tagpu_ftime.c`'s `xwglGetProcAddress`). `render_ogl.c`, `render_ogl.h`
      and the two capture verbs left this set in 11-2.
