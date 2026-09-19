@@ -112,12 +112,20 @@ typedef struct {
     int   castSkip;             /* out of the depth map (nanoframe, air drop) */
 } TAGPU_PDUNIT;
 
-/* Whether the pass can actually draw: its programs linked, its buffers exist
-   and the driver's uniform block is big enough. Published because `owndraw`
-   must not skip the engine's unit rasterise unless something will replace it —
+/* "SOMETHING WILL DRAW THE UNIT, SO THE ENGINE NEED NOT." Published because
+   `owndraw` must not skip the engine's unit rasterise unless that is true —
    gpu-posing.md §4, decision B. Safe to call from the GAME thread: the render
-   thread is the only writer and the word only ever says "live" after the pass
-   is. */
+   thread is the only writer and the word only ever promises in the safe
+   direction.
+
+   IT IS 0 ON THIS LANE and has been since the 4b-2 landing review, because
+   this pass hands over rather than draws and cannot promise the consumer ran.
+   Two things follow that a reader should have before relying on it, both
+   measured by landing 11-5d on 2026-09-19 and written up at the definition in
+   tagpu_posedraw.c: the engine therefore rasterises every unit every frame
+   (`OWND … skipped=0`), and NONE of that reaches the presented frame — so the
+   engine is not a fallback, and a frame our unit pass stands down on is blank
+   rather than 8bpp. */
 int  tagpu_posedraw_live(void);
 /* ...and whether it has TRIED and failed, as opposed to not having run yet.
    Only the first is a reason to say anything: `!live` is also the ordinary

@@ -151,14 +151,55 @@ static int    s_state;          /* 0 untried, 1 ready, 2 refused */
    on skipping and wiping for the life of the process and every covered unit
    would be invisible.
 
-   SO THE ANSWER IS NO THERE, by construction rather than by checking whether
-   the twin happened to draw. The engine keeps its own rasterise and its own
-   composite; our twin draws the same units into the swapchain from the
-   hand-over, which is independent of this. The cost is the engine doing work
-   whose output that lane does not present, and the redundancy goes when 4c
-   gives the backend TA's surface.
-   [FROM THE 4b-2 LANDING REVIEW, 2026-09-18.] */
-int tagpu_posedraw_live(void) { return s_state == 1 && !tagpu_vk_owns_present(); }
+   SO THE ANSWER IS NO, by construction rather than by checking whether the
+   twin happened to draw. The engine keeps its own rasterise and its own
+   composite; our twin draws the same units into the world target from the
+   hand-over, which is independent of this.
+
+   AND THE ENGINE IS NOT A FALLBACK, WHICH IS WHAT LANDING 11-5d MEASURED AND
+   IS THE REASON THIS COMMENT CHANGED. The 4b-2 text above rests on "the engine
+   keeps its own rasterise", and read on that as though a unit our lane failed
+   to draw would still be on the screen in 8bpp. IT WOULD NOT.
+
+   MEASURED 2026-09-19, `one-unit` on Two Continents, renderer=vulkan, 1024x768
+   on a private display, one ARMCOM at screen (512,384):
+
+     * the engine rasterises every unit, every frame: `OWND target=all
+       skipped=0 passed=55991` and climbing -- this predicate being false is
+       what makes it do that, so the work is really happening;
+     * `tacli shot` (TA's own surface) has that commander on it, in colour,
+       with its drop shadow, in every configuration tried;
+     * the PRESENTED frame does not. With `native.on` off so that nothing of
+       ours draws a unit, the commander is simply absent from the window --
+       our marker and health bar hang over empty ground.
+     * and it is not our terrain covering it: with `terr.on` off as well, TA's
+       own terrain IS on the presented frame (it comes up green, our passes
+       having drawn none of it) and the commander is STILL absent.
+
+   SO THE ENGINE'S PER-UNIT RASTERISE IS INVISIBLE WORK. Every frame it costs
+   what it costs and none of it reaches the player. The consequence that
+   matters is the other direction: a frame our unit pass stands down on -- a
+   short hand-over, a missing mirror, TAGPU_PD_MAXHAND -- shows NO UNIT, not an
+   8bpp one. The stand-down is not degraded, it is blank.
+
+   BY WHAT MECHANISM TA'S UNIT PIXELS ARE LOST IS NOT ESTABLISHED, and this
+   landing does not guess: they are in TA's surface when `tacli shot` reads it
+   and not in the frame we present, with our world image cleared to {0,0,0,0}
+   and blended premultiplied over it (tagpu_vk_world.c) and nothing of ours
+   drawn at those pixels. That is the next thing to find out, and it has to be
+   found out before this predicate is flipped -- turning it true would save the
+   invisible work, but its safety argument would then rest on a composite
+   whose behaviour nobody has explained.
+
+   WHICH IS WHY THIS IS `return 0` AND NOT A LANE TEST. The expression was
+   `s_state == 1 && !tagpu_vk_owns_present()`, whose second term is pinned
+   false, so the value has always been 0 here; writing it as a lane test made
+   it read as a thing that would come back when the lanes did. It will not.
+   `s_state` is deliberately not consulted: the pass arming has never been the
+   question this answers.
+   [FROM THE 4b-2 LANDING REVIEW, 2026-09-18; the redundancy half corrected by
+   the vulkan-only plan's 11-5d, 2026-09-19.] */
+int tagpu_posedraw_live(void) { return 0; }
 
 /* 1 only once the pass has TRIED and failed — a driver this build cannot run
    on. Distinct from `!live`, which is also true for the frame or two before

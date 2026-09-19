@@ -404,6 +404,20 @@ int __cdecl tagpu_owndraw_classify(unsigned int obj3do, unsigned int frame)
        NO UNITS AT ALL, because these detours are installed at DLL attach and
        cannot be uninstalled.
 
+       AND THE FALLBACK IS NOT WHAT THIS PARAGRAPH ASSUMES, on the lane the
+       build ships. `tagpu_posedraw_live()` is 0 there, so this branch is the
+       one every unit takes and the engine rasterises all of them -- measured
+       `OWND target=all skipped=0 passed=55991` on `one-unit`, 2026-09-19. But
+       NONE of that reaches the presented frame: the commander is on TA's own
+       surface (`tacli shot`, in colour) and absent from the window, with our
+       unit pass disarmed AND with our terrain pass disarmed too, so nothing of
+       ours is covering it. So "the engine draws a unit we also draw" is the
+       8bpp-under-RGB double draw only in cost; on screen the engine's copy is
+       not there. The failure this guard exists to avoid -- no units at all --
+       is therefore what a Vulkan-lane stand-down already produces. The
+       mechanism is not established and is NOT assumed here; the write-up is at
+       `tagpu_posedraw_live()`'s definition. [The vulkan-only plan, 11-5d.]
+
        So the classifier asks first. This runs on the GAME thread and reads a
        word only the render thread writes; it is safe by DIRECTION, not by
        timing. The word says "live" only after the programs have linked, and is
