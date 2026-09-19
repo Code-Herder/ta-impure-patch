@@ -9,7 +9,6 @@
 #include "ddsurface.h"
 #include "hook.h"
 #include "mouse.h"
-#include "render_d3d9.h"
 #include "utils.h"
 #include "config.h"
 #include "versionhelpers.h"
@@ -910,11 +909,7 @@ void util_toggle_fullscreen()
 
             g_config.window_state = g_config.windowed = TRUE;
 
-            if (g_ddraw.renderer == d3d9_render_main && !g_config.nonexclusive)
-            {
-                d3d9_reset(g_config.windowed);
-            }
-            else
+            /* the Direct3D9 reset branch stood here [landing 11-1] */
             {
                 if (g_ddraw.render.thread)
                 {

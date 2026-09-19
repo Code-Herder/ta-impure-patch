@@ -5,7 +5,6 @@
 #include "dd.h"
 #include "hook.h"
 #include "mouse.h"
-#include "render_d3d9.h"
 #include "config.h"
 #include "screenshot.h"
 #include "winapi_hooks.h"
@@ -32,7 +31,7 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     if (uMsg != WM_MOUSEMOVE && uMsg != WM_NCMOUSEMOVE && uMsg != WM_NCHITTEST && uMsg != WM_SETCURSOR &&
         uMsg != WM_KEYUP && uMsg != WM_KEYDOWN && uMsg != WM_CHAR && uMsg != WM_DEADCHAR && uMsg != WM_INPUT &&
         uMsg != WM_UNICHAR && uMsg != WM_IME_CHAR && uMsg != WM_IME_KEYDOWN && uMsg != WM_IME_KEYUP && uMsg != WM_TIMER &&
-        uMsg != WM_D3D9DEVICELOST && uMsg != WM_NULL)
+        uMsg != WM_NULL)
     {
         TRACE(
             "     uMsg = %s (%d), wParam = %08X (%d), lParam = %08X (%d, LO=%d HI=%d)\n",
@@ -238,17 +237,6 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     {
         uMsg = WM_DISPLAYCHANGE;
         break;
-    }
-    case WM_D3D9DEVICELOST:
-    {
-        if (((!g_config.windowed && !g_config.nonexclusive) || !util_is_minimized(g_ddraw.hwnd)) &&
-            g_ddraw.renderer == d3d9_render_main &&
-            d3d9_on_device_lost())
-        {
-            if (!g_config.windowed)
-                mouse_lock();
-        }
-        return 0;
     }
     case WM_TIMER:
     {
@@ -797,7 +785,7 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
         {
             if (!g_config.windowed)
             {
-                if (g_ddraw.renderer != d3d9_render_main || g_config.nonexclusive)
+                if (1) /* was: not the Direct3D9 lane, which is gone [11-1] */
                 {
                     ChangeDisplaySettings(&g_ddraw.render.mode, CDS_FULLSCREEN);
                     real_ShowWindow(g_ddraw.hwnd, SW_RESTORE);
@@ -823,7 +811,7 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
             if (!g_config.windowed)
             {
-                if (g_ddraw.renderer != d3d9_render_main || g_config.nonexclusive)
+                if (1) /* was: not the Direct3D9 lane, which is gone [11-1] */
                 {
                     real_ShowWindow(g_ddraw.hwnd, SW_MINIMIZE);
                     ChangeDisplaySettings(NULL, g_ddraw.bnet_active ? CDS_FULLSCREEN : 0);

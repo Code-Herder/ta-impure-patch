@@ -14,7 +14,6 @@
 #include "keyboard.h"
 #include "wndproc.h"
 #include "render_gdi.h"
-#include "render_d3d9.h"
 #include "render_ogl.h"
 #include "directinput.h"
 #include "ddsurface.h"
@@ -2032,11 +2031,7 @@ BOOL WINAPI fake_DestroyWindow(HWND hWnd)
     {
         dd_RestoreDisplayMode();
 
-        if (g_ddraw.renderer == d3d9_render_main)
-        {
-            d3d9_release();
-        }
-        else if (g_ddraw.renderer == ogl_render_main)
+        if (g_ddraw.renderer == ogl_render_main)
         {
             ogl_release();
         }

@@ -1566,6 +1566,75 @@ Back to the filed list:
    `openglshader.h`, `render_ogl.h`, and **`tagpu_restoreglsl.c`**. `renderer=gdi` becomes the
    documented stock reference.
 
+   **SPLIT INTO FIVE PARTS, 2026-09-18, BY THE SURVEYS BELOW — `landing 11-1 of 5`.** The row was
+   filed as one item and the work has shown it is not one: the six files it names are ~5 200
+   lines, and the GL halves bolted to sixteen passes the Vulkan lane still depends on are
+   1 233 more, across sixteen files that each need their own before/after. Per `CLAUDE.md`
+   *When a gate turns out to be several landings*, the parts are the seams the survey found, and
+   each one has to be something that can be RUN and shown:
+
+   * **11-1 — the renderer-selection surface.** ✓ **DONE 2026-09-18.** `render_d3d9.c` (742
+     lines), `render_d3d9.h`, `d3d9shader.h`, and every `d3d9_*` site in `dd.c`, `config.c`,
+     `debug.c`, `dllmain.c`, `utils.c`, `winapi_hooks.c`, `wndproc.c` — **2 539 lines deleted
+     against 93 added**, across fifteen files. It is the one member of the deletion set with
+     **no producer half** — nothing in `tagpu_*` calls into it and no Vulkan entry point depends
+     on it — so it went whole, and going first shrank the set before the hard part starts. It
+     carries this item's DEFINITIONAL half as its documentation: what "stock" is taken to mean
+     (next bullet but one).
+
+     **Measured**: `openglcore`, `vulkan` and `gdi` each launch, draw and answer `tacli ui` from
+     the main menu; the Vulkan lane still logs its 17 `vk:` bring-up lines. An instance whose ini
+     still asks for the deleted lane gets GDI and one log line — `ddraw: renderer=direct3d9 is
+     no longer built -- using gdi` — rather than a null renderer, because `renderer=` is read
+     from a file the player owns and old ini files outlive the code that read them.
+
+     **Two simplifications that are identities, not judgement calls**, and both are commented at
+     the site: `dd.c`'s `BOOL d3d9_active` could only ever become TRUE on the deleted lane, so
+     `if (!d3d9_active || g_config.nonexclusive)` is now unconditional and `if (d3d9_active &&
+     …) d3d9_reset(TRUE)` is gone — every surviving renderer already took exactly those paths.
+     Likewise `wndproc.c`'s two `renderer != d3d9_render_main || nonexclusive` tests.
+
+     **What was deliberately left**: `hook.c:582`'s `_strcmpi(mod_filename, "d3d9")`, which is
+     the "don't hook reshade/swiftshader/mesa3d" module blacklist and is about the SYSTEM
+     `d3d9.dll` a third-party layer may load, not about our renderer; and `ddraw.h`'s four
+     `D3D9Ex` mentions, which are the vendored DirectDraw header's own structures.
+   * **11-2 — the world passes' GL draw halves.** `tagpu_native.c`, `tagpu_terr.c`,
+     `tagpu_feat.c`, `tagpu_fx.c`, `tagpu_shadow.c`, `tagpu_posedraw.c`, `tagpu_hires_draw.c`,
+     `tagpu_render3do.c` — ~700 of the 1 233 lines. Every one keeps its producer and its
+     `_handover`; only the half below `tagpu_native.c:3753`'s `if (!gl_draws)` goes. Shown by:
+     the world A/B at `ss=2` still reads 0 px per pass.
+   * **11-3 — the UI and support passes' GL draw halves.** `tagpu_gui_surf.c`, `tagpu_mark.c`,
+     `tagpu_text.c`, `tagpu_fps.c`, `tagpu_gaf.c`, `tagpu_posebake.c`, `tagpu_scaffold.c`,
+     `tagpu_hires.c`, `tagpu_overlay.c` — the rest of the 1 233. Shown by: the UI A/B, and
+     `tacli ui` still answering on every lane.
+   * **11-4 — the GL entry-point surface itself.** `render_ogl.c`, `render_ogl.h`,
+     `opengl_utils.c`, `opengl_utils.h`, `openglshader.h`, `tagpu_restoreglsl.c`, and the three
+     one-line plumbing users (`dd.c`'s `oglu_load_dll`, `render_gdi.c`'s `g_oglu_version`,
+     `tagpu_ftime.c`'s `xwglGetProcAddress`). **It also owns `tacli shot` and `tacli glshot`,
+     which are wired ONLY into `render_ogl.c` and therefore die with it** — landing 10c-3's
+     review measured both verbs failing on gdi and on Vulkan already, so this part decides
+     whether they are rehosted on the flip like the trigger family or retired.
+   * **11-5 — the exit condition.** `renderer=gdi` documented and MEASURED as the stock
+     reference, with the residue named rather than waved at.
+
+   **WHAT "STOCK" IS TAKEN TO MEAN — the decision this item was told to make.** The candidate
+   readings are *stock as a lane* (nothing of ours reaches the screen) and *stock as a process*
+   (the engine's bytes are untouched). **The exit condition is the first**, and the second is
+   recorded as false with its two reasons named, because a claim nobody can state precisely is
+   worse than a narrower one that is true:
+
+   * `0x4266A7`, the DirectX-version warning's `jne`→`jmp`, is **ungated and stays ungated**. It
+     suppresses a modal startup dialog that appears only because the process is a DirectDraw
+     shim; it changes no pixel the engine draws and no input the engine reads. It is part of
+     making the game start, not part of drawing it.
+   * the `tagpu_curs` pair (`0x43E50C`, `0x499041`) **does** change input semantics, is **on by
+     default**, and is levered by `tagpu_curs.off`. It exists to compensate for `tools/tacli`
+     writing `Interface Type = 1`. So a gdi lane driven by `tacli` is not input-stock unless the
+     lever is set, and that is stated wherever the reference is cited rather than left implied.
+
+   So: **`renderer=gdi` is the stock reference for RENDERING**, and `tagpu_curs.off` is the extra
+   step for a run that also wants stock input. Anyone measuring against it needs both sentences.
+
    ~~**BLOCKED ON LANDINGS 10b AND 10c**~~ — **BOTH LANDED 2026-09-18, and this item's exit
    condition can now be CHECKED for the first time.** What the block said:
 

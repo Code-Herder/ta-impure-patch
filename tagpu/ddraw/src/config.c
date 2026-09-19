@@ -1,10 +1,8 @@
 #include <windows.h>
 #include <stdio.h>
-#include <d3d9.h>
 #include "fps_limiter.h"
 #include "config.h"
 #include "dd.h"
-#include "render_d3d9.h"
 #include "render_gdi.h"
 #include "render_ogl.h"
 #include "hook.h"
@@ -52,7 +50,6 @@ void cfg_load()
     GET_BOOL(g_config.border, "border", TRUE);
     GET_INT(g_config.save_settings, "savesettings", 1);
     GET_BOOL(g_config.resizable, "resizable", TRUE);
-    GET_INT(g_config.d3d9_filter, "d3d9_filter", FILTER_CUBIC);
     GET_INT(g_config.anti_aliased_fonts_min_size, "anti_aliased_fonts_min_size", 13);
     GET_INT(g_config.min_font_size, "min_font_size", 0);
     GET_INT(g_config.center_window, "center_window", CENTER_WINDOW_AUTO);
@@ -224,7 +221,7 @@ static void cfg_create_ini()
             "; Note: Does not have an impact on the game speed, to limit your game speed use 'maxgameticks='\n"
             "maxfps=-1\n"
             "\n"
-            "; Vertical synchronization, enable if you get tearing - (Requires 'renderer=auto/opengl*/direct3d9*')\n"
+            "; Vertical synchronization, enable if you get tearing - (Requires 'renderer=auto/opengl*')\n"
             "; Note: vsync=true can fix tearing but it will cause input lag\n"
             "vsync=false\n"
             "\n"
@@ -242,7 +239,7 @@ static void cfg_create_ini()
             "posX=-32000\n"
             "posY=-32000\n"
             "\n"
-            "; Renderer, possible values: auto, opengl, openglcore, gdi, direct3d9, direct3d9on12 (auto = try direct3d9/opengl, fallback = gdi)\n"
+            "; Renderer, possible values: auto, opengl, openglcore, vulkan, gdi (auto = try opengl, fallback = gdi)\n"
             "renderer=auto\n"
             "\n"
             "; Developer mode (don't lock the cursor)\n"
@@ -257,10 +254,6 @@ static void cfg_create_ini()
             "\n"
             "; Should the window be resizable by the user in windowed mode?\n"
             "resizable=true\n"
-            "\n"
-            "; Upscaling filter for the direct3d9* renderers\n"
-            "; Possible values: 0 = nearest-neighbor, 1 = bilinear, 2 = bicubic, 3 = lanczos (bicubic/lanczos only support 16/32bit color depth games)\n"
-            "d3d9_filter=2\n"
             "\n"
             "; Disable font smoothing for fonts that are smaller than size X\n"
             "anti_aliased_fonts_min_size=13\n"
@@ -311,7 +304,7 @@ static void cfg_create_ini()
             "; Note: Set this to a low value such as 5 or 10 if some parts of the game are not being displayed (e.g. menus or loading screens)\n"
             "minfps=0\n"
             "\n"
-            "; Disable fullscreen-exclusive mode for the direct3d9*/opengl* renderers\n"
+            "; Disable fullscreen-exclusive mode for the opengl* renderers\n"
             "; Note: Can be used in case some GUI elements like buttons/textboxes/videos/etc.. are invisible\n"
             "nonexclusive=true\n"
             "\n"
@@ -1438,7 +1431,7 @@ static void cfg_create_ini()
             "; Nox\n"
             "[NOX]\n"
             "checkfile=.\\NOX.ICD\n"
-            "renderer=direct3d9\n"
+            "renderer=auto\n"
             "nonexclusive=false\n"
             "windowed=false\n"
             "maxgameticks=125\n"

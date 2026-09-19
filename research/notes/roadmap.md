@@ -3185,7 +3185,13 @@ regression through any of it, and the added keepalive never fires there: `overru
 **What 10c did NOT close, and landing 11 owns it:** `renderer=gdi` is still not stock *as a lane*
 — **one** ungated patch, `0x4266A7`, the DirectX version warning with no lever at all, plus the
 `tagpu_curs` pair at `0x43E50C` / `0x499041`, which changes input semantics behind a
-`tagpu_curs.off` file. (This entry said "three unconditional patches **plus** the pair" until the
+`tagpu_curs.off` file. **Landing 11 has since split into five parts (`11-1 of 5`) and made that
+decision**: the exit condition is stock *as a lane* — nothing of ours reaches the screen — and
+stock *as a process* is recorded as false, because the warning patch suppresses a modal startup
+dialog rather than a pixel and stays ungated, while the cursor pair is real input behaviour, is
+on by default, and needs `tagpu_curs.off` for a run that wants stock input too. See the plan's
+item 11 for the parts; 11-1 is the D3D9 renderer, the one member of the deletion set with no
+producer half. (This entry said "three unconditional patches **plus** the pair" until the
 10c-2 review; the three sites in `tagpu_apply_patches()` **are** that one plus that pair.) And
 `tacli eye` / `tacli wheel` still do not reach the lane — the hold because there is no command
 record without an overlay frame, the wheel because `tagpu_zoom_wheel` refuses on `!s_live` before

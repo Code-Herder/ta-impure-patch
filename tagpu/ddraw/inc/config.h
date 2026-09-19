@@ -20,7 +20,6 @@ typedef struct CNCDDRAWCONFIG
     char dll_file_ext[MAX_PATH];
     char game_section[MAX_PATH];
     INIFILE ini;
-    BOOL d3d9on12;
     BOOL opengl_core;
 
     /* Optional settings */
@@ -39,7 +38,6 @@ typedef struct CNCDDRAWCONFIG
     BOOL border;
     int save_settings;
     BOOL resizable;
-    int d3d9_filter;
     int anti_aliased_fonts_min_size;
     int min_font_size;
     int center_window;

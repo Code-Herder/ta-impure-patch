@@ -29,7 +29,6 @@ void dbg_dump_dds_blt_fast_flags(DWORD flags);
 void dbg_dump_dds_lock_flags(DWORD flags);
 void dbg_dump_di_scm_flags(DWORD flags);
 void dbg_dump_hook_type(int idHook);
-char* dbg_d3d9_hr_to_str(HRESULT hr);
 char* dbg_mes_to_str(int id);
 void __cdecl dbg_invoke_watson(wchar_t const*, wchar_t const*, wchar_t const*, unsigned int, uintptr_t);
 

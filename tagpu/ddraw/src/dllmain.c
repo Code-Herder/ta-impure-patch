@@ -259,7 +259,6 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
                 /* Workaround for bug in Windows 11 (Steam RA2 crash) */
                 if (_strcmpi(s, "Win7RTM") == 0)
                 {
-                    g_config.d3d9on12 = TRUE;
                 }
 
                 if (_strcmpi(s, "WIN95") == 0 || _strcmpi(s, "WIN98") == 0 || _strcmpi(s, "NT4SP5") == 0)

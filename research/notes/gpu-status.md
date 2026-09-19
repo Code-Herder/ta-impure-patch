@@ -13,6 +13,15 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5
 
 ## 1. Status — what is ours, what is still the engine's
 
+**THERE ARE THREE RENDERER BACKENDS SINCE 2026-09-18, NOT FOUR.** `renderer=` takes
+`opengl`/`openglcore`, `vulkan` and `gdi`; **`direct3d9` and `direct3d9on12` are deleted** (the
+vulkan-only plan's landing 11-1 — `render_d3d9.c` and its two headers, 2 539 lines). The lane
+was the fork's, never ours: nothing under `tagpu_` ever called into it and no pass of ours had a
+D3D9 half, which is why it is the one member of that plan's deletion set that went whole. An ini
+that still asks for it gets GDI and says so once in `tagpu.log`. The GL lane is next to go, in
+pieces, and `renderer=gdi` is what the plan makes the stock reference — for RENDERING; see that
+plan's item 11 for the two patches that keep it from being stock as a *process*.
+
 **The engine's software frame is UI only.** Inside the world viewport it is a flat fill of one
 palette index — the *key* — and the composite is inverted against it: we drop OUR fragment
 wherever the engine's frame is **not** the key, so anything it still draws in there shows

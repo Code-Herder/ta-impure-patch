@@ -1,5 +1,6 @@
 #include <windows.h>
 #include <math.h>
+#include <stdio.h>
 #include "ddraw.h"
 #include "IDirectDraw.h"
 #include "dd.h"
@@ -8,7 +9,6 @@
 #include "mouse.h"
 #include "keyboard.h"
 #include "wndproc.h"
-#include "render_d3d9.h"
 #include "render_gdi.h"
 #include "render_ogl.h"
 #include "render_vk.h"
@@ -705,15 +705,7 @@ HRESULT dd_RestoreDisplayMode()
 
     if (!g_config.windowed)
     {
-        if (g_ddraw.renderer == d3d9_render_main && !g_config.nonexclusive)
-        {
-            if (!d3d9_reset(TRUE))
-                d3d9_release();
-        }
-        else
-        {
-            ChangeDisplaySettings(NULL, 0);
-        }
+        ChangeDisplaySettings(NULL, 0);
     }
 
     //real_ShowWindow(g_ddraw.hwnd, SW_MINIMIZE);
@@ -1249,20 +1241,7 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
             SWP_SHOWWINDOW | SWP_FRAMECHANGED);
 
 
-        BOOL d3d9_active = FALSE;
-
-        if (g_ddraw.renderer == d3d9_render_main)
-        {
-            d3d9_active = d3d9_create();
-
-            if (!d3d9_active)
-            {
-                d3d9_release();
-                g_ddraw.show_driver_warning = TRUE;
-                g_ddraw.renderer = gdi_render_main;
-            }
-        }
-        else if (g_ddraw.renderer == ogl_render_main)
+        if (g_ddraw.renderer == ogl_render_main)
         {
             if (!ogl_create())
             {
@@ -1321,37 +1300,7 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
             real_SetWindowLongA(g_ddraw.hwnd, GWL_EXSTYLE, exstyle & ~(WS_EX_CLIENTEDGE));
         }
 
-        BOOL d3d9_active = FALSE;
-
-        if (g_ddraw.renderer == d3d9_render_main)
-        {
-            if (g_config.nonexclusive)
-            {
-                if (util_is_minimized(g_ddraw.hwnd))
-                    real_ShowWindow(g_ddraw.hwnd, SW_RESTORE);
-
-                real_SetWindowPos(
-                    g_ddraw.hwnd,
-                    HWND_TOPMOST,
-                    0,
-                    0,
-                    g_ddraw.render.width,
-                    g_ddraw.render.height + menu_height,
-                    swp_flags);
-
-                swp_flags = SWP_SHOWWINDOW;
-            }
-
-            d3d9_active = d3d9_create();
-
-            if (!d3d9_active)
-            {
-                d3d9_release();
-                g_ddraw.show_driver_warning = TRUE;
-                g_ddraw.renderer = gdi_render_main;
-            }
-        }
-        else if (g_ddraw.renderer == ogl_render_main)
+        if (g_ddraw.renderer == ogl_render_main)
         {
             if (!ogl_create())
             {
@@ -1361,7 +1310,10 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
             }
         }
 
-        if (!d3d9_active || g_config.nonexclusive)
+        /* WAS `if (!d3d9_active || g_config.nonexclusive)` [landing 11-1].
+           d3d9_active could only ever be TRUE on the Direct3D9 lane, so with
+           that lane deleted the condition is unconditionally true -- this is
+           the same code path every surviving renderer already took. */
         {
             if (!zooming && ChangeDisplaySettings(&g_ddraw.render.mode, CDS_FULLSCREEN) != DISP_CHANGE_SUCCESSFUL)
             {
@@ -1409,9 +1361,6 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
             g_ddraw.render.width,
             g_ddraw.render.height + menu_height,
             swp_flags);
-
-        if (d3d9_active && g_config.nonexclusive)
-            d3d9_reset(TRUE);
 
         g_ddraw.last_set_window_pos_tick = timeGetTime();
 
@@ -1774,10 +1723,8 @@ ULONG dd_Release()
 
         if (!g_config.windowed)
         {
-            if (g_ddraw.renderer == d3d9_render_main && !g_config.nonexclusive)
+            if (0) /* was the Direct3D9 reset; the lane is gone [landing 11-1] */
             {
-                if (!d3d9_reset(TRUE))
-                    d3d9_release();
             }
             else
             {
@@ -1971,18 +1918,26 @@ HRESULT dd_CreateEx(GUID* lpGuid, LPVOID* lplpDD, REFIID iid, IUnknown* pUnkOute
         }
 
         
-        if (_strcmpi(g_config.renderer, "direct3d9on12") == 0)
-        {
-            g_config.d3d9on12 = TRUE;
-        }
-        else if (_strcmpi(g_config.renderer, "openglcore") == 0)
+        if (_strcmpi(g_config.renderer, "openglcore") == 0)
         {
             g_config.opengl_core = TRUE;
         }
 
-        if (tolower(g_config.renderer[0]) == 'd') /* direct3d9 or direct3d9on12*/
+        if (tolower(g_config.renderer[0]) == 'd') /* direct3d9, direct3d9on12 */
         {
-            g_ddraw.renderer = d3d9_render_main;
+            /* THE DIRECT3D9 LANE IS GONE [the vulkan-only plan, landing 11-1].
+               An ini that still asks for it gets GDI and a log line rather than
+               a null renderer: `renderer=` is read from a file the player owns
+               and old files outlive the code that read them. */
+            {
+                FILE* f = fopen("tagpu.log", "a");
+                if (f) {
+                    fprintf(f, "ddraw: renderer=%s is no longer built -- using gdi\n",
+                            g_config.renderer);
+                    fclose(f);
+                }
+            }
+            g_ddraw.renderer = gdi_render_main;
         }
         else if (tolower(g_config.renderer[0]) == 's' || tolower(g_config.renderer[0]) == 'g') /* gdi */
         {
@@ -2014,11 +1969,7 @@ HRESULT dd_CreateEx(GUID* lpGuid, LPVOID* lplpDD, REFIID iid, IUnknown* pUnkOute
         }
         else /* auto */
         {
-            if (!IsWine() && d3d9_is_available())
-            {
-                g_ddraw.renderer = d3d9_render_main;
-            }
-            else if (oglu_load_dll())
+            if (oglu_load_dll())
             {
                 g_ddraw.renderer = ogl_render_main;
             }
