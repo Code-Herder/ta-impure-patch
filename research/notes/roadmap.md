@@ -3249,20 +3249,34 @@ the Vulkan composite, so the engine fallback that works on gdi does not work on 
 lane; every frame, no error, no log line, and it applies to anything TA draws that we do not.
 The lead is a render-thread snapshot of TA's primary whose argument is a lifetime one with no
 content ordering; the fix, if it holds, is an ordering and reviews at `high`. And
-`11-5e` the entry-point surface the row names — `opengl_utils.{c,h}`, `tagpu_restoreglsl.c`, the
-orphaned GL-object accessors, and the include residue in the four files that still include
-`opengl_utils.h` and make no GL call (`render_gdi.c`, `tagpu_fps.c`, `tagpu_render3do.c`,
-`tagpu_scaffold.c`) — **nine** files still include it and call GL, down from twelve after 11-5a.
-**After 11-5d no world pass and no unit pass is left on the GL surface at all**: **592 call
-sites remain in nine files** (re-measured on the same masked pattern: `tagpu_restoreglsl.c` 249,
-`tagpu_hires_draw.c` 104, `tagpu_shadow.c` 87, `tagpu_gaf.c` 39, `opengl_utils.c` 31,
-`tagpu_hires.c` 30, `tagpu_overlay.c` 22, `tagpu_text.c` 20, `tagpu_ftime.c` 10 — 714 less
-11-5d's 122), and `tagpu_native.c`, `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c`,
-`tagpu_scaffold.c` and `tagpu_posedraw.c` are GL-free.
+`11-5e` the entry-point surface the row names, **now THREE landings because the row had one
+dependency backwards** — it said this part *ends at* `opengl_utils.c`, and that file cannot be
+in it at all: `opengl_utils.c` DEFINES the GL entry points every other GL file calls, so it
+goes last of everything, behind `tagpu_shadow.c` and `tagpu_hires_draw.c` (escalation reason
+1). `11-5e-1` the three callerless leaf files (**landed 2026-09-19**: `tagpu_ftime.c`,
+`tagpu_text.c`, `tagpu_overlay.c`, 52 sites, thirteen functions, all three GL-free);
+`11-5e-2` `tagpu_gaf.c` and `tagpu_restoreglsl.c`, the live path, with the orphaned reset tree;
+`11-5e-3` the include residue in `render_gdi.c`, `tagpu_fps.c` and `tagpu_scaffold.c`
+(11-5e-1 took `tagpu_render3do.c`'s).
+**After 11-5e-1 no world pass, no unit pass and no leaf module is left on the GL surface**:
+**540 call sites remain in six files** (one regex over comment-masked source, run on both
+trees: `tagpu_restoreglsl.c` 249, `tagpu_hires_draw.c` 104, `tagpu_shadow.c` 87, `tagpu_gaf.c`
+39, `opengl_utils.c` 31, `tagpu_hires.c` 30 — 592 less 11-5e-1's 52, the six surviving rows
+digit-for-digit unchanged), and `tagpu_native.c`, `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c`,
+`tagpu_scaffold.c`, `tagpu_posedraw.c`, `tagpu_overlay.c`, `tagpu_text.c` and `tagpu_ftime.c`
+are GL-free.
 **The rule the gate found, now named in the plan: deleting a backend is not mostly about
 deleting calls, it is about finding the predicates that encode "the backend is ready" as "the
-work is possible."** Four landings, four instances; the compiler cannot see them, because the
-state is written, read and consistent and only its value is pinned. **Not covered by 11-5a–e**: `tagpu_shadow.c` and `tagpu_hires_draw.c`, still escalation
+work is possible."** Five landings, five instances; the compiler cannot see them, because the
+state is written, read and consistent and only its value is pinned. **11-5e-1 added the third
+corollary and it changes how the search is run**: a predicate can be pinned by the ABSENCE of
+something rather than by a value — nothing in this build calls `wglCreateContext`,
+`wglMakeCurrent` or `SetPixelFormat`, so `tagpu_overlay.c`'s once-a-frame GL-context-change
+watch could never fire — and when it is, the root of a dead TREE is that predicate, not any
+function in it. Deleting that one branch orphaned sixteen functions across ten files, none of
+which a caller scan had flagged, because each of them did have a caller: the one above it.
+**So the search is "which tests can never be true", not "which functions have no callers";
+the latter finds leaves.** **Not covered by 11-5a–e**: `tagpu_shadow.c` and `tagpu_hires_draw.c`, still escalation
 reason 1, and now known to be more than a preference — `tagpu_shadow_begin` has no caller
 anywhere in the tree, so that pass is already dead and the question is whether the two files are
 scaffolding for a Vulkan-side producer or debris. See the plan's

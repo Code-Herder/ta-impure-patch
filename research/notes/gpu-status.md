@@ -11966,10 +11966,10 @@ write of `s_depthMat` in the tree, so with it gone:
 
 | link | result |
 |---|---|
-| `s_depthOn` | only ever assigned 0 (`tagpu_posedraw.c:1080`) |
-| `TAGPU_PDUREC.casts` | always 0 (`:793`) |
-| `TAGPU_PDHAND.depthOn` / `.castMat` | always 0 / the `memset` zero matrix (`:688`, `:689` never runs) |
-| `tagpu_vk_unit.c:2350` | `w->casts` always 0, so `s_ncast` never increments |
+| `s_depthOn` | only ever assigned 0 (`tagpu_posedraw.c:1108`) |
+| `TAGPU_PDUREC.casts` | always 0 (`:814`) |
+| `TAGPU_PDHAND.depthOn` / `.castMat` | always 0 / the `memcpy` at `:707` that never runs (`:706`) |
+| `tagpu_vk_unit.c:2358` | `w->casts` always 0, so `s_ncast` never increments |
 | `tagpu_vk_unit_cast` | returns at `!s_ncast` (`:2579`) every frame |
 | `build_cast_pipeline` | its **only** caller is `:2587`, inside that function |
 
@@ -12232,3 +12232,212 @@ FBO you own and the window stops being part of the equation.
 - [Terrain, features & depth](terrain-depth.html) — the OFFSCREEN, the fog, what is left in the viewport.
 - [UI markers](ui-markers.html) — every engine-drawn per-unit marker and how G13d took them.
 - [Field notes & gotchas](field-notes.html) — the things that cost time.
+### 2.73 Three leaf files go GL-free, and a watchman with no door takes a reset tree with it — landing 11-5e-1
+
+`tagpu_ftime.c`, `tagpu_text.c` and `tagpu_overlay.c` are GL-free: **52 call sites at the
+previous commit, 0 now** (masked count — comments and string literals blanked first), and the
+tree's surface goes from **592 sites in nine files to 540 in six**. Thirteen functions are
+gone. The deletions are the small half of this landing; the structural find below is the
+large one.
+
+**The two counts are taken on both trees by one script with one regex**, not quoted from an
+earlier section: `\b(?:gl|x_gl)[A-Z][A-Za-z0-9]*\s*\(` over comment-masked source, run against
+a `git archive` of the previous commit and against the worktree. A wider pattern that allows a
+lower-case letter after the `gl` prefix reads **689** on the same tree — it counts
+`glyph_raster`, `glreset` and friends — and a number compared against one measured differently
+is not a comparison. That mistake was made and caught inside this landing.
+
+#### What was deleted, and how each was shown to be unreachable
+
+Every one under a masked-comment caller scan across `tagpu/ddraw/src/*.{c,h}` and
+`tagpu/ddraw/inc/*.h`, each showing exactly its declaration and its definition and no call:
+
+| function | file | what it was |
+|---|---|---|
+| `tagpu_ftime_gl_begin` / `_gl_end` | `tagpu_ftime.c` | the GL lane's timestamp bracket; its one caller was `render_ogl.c`, deleted in 11-2 |
+| `tagpu_overlay_capture_begin` / `_capture_end` / `_target_fbo` | `tagpu_overlay.c` | the glshot capture into an FBO we owned; same caller |
+| `tagpu_overlay_glreset` | `tagpu_overlay.c` | forgot the capture's ids on a context change |
+| `tagpu_text_tex` / `tagpu_text_glyph_tex` | `tagpu_text.c` | the string and glyph atlases' GL textures |
+| `tagpu_text_glreset` | `tagpu_text.c` | dropped both ids |
+| `tagpu_mark_glreset` | `tagpu_mark.c` | its whole body was one forward to the line above |
+| `oerr` | `tagpu_overlay.c` | a five-site `glGetError` probe behind `tagpu_gldbg.on` |
+| `getgl` × 2 | `tagpu_ftime.c`, `tagpu_overlay.c` | the per-file GL loader |
+
+With them, **34 statics** (the object files' count, so the two function-scope ones are in
+it): 8 `PFN_*` typedefs and their 8 `x_gl*` pointers, the GL query pool (`s_qBeg`, `s_qEnd`,
+`s_qPend`, `s_qSlot`, `s_qMade`, `s_glOpen`), the `GL_TIMESTAMP` / `GL_QUERY_RESULT` /
+`GL_QUERY_RESULT_AVAILABLE` defines, `s_glFetched` / `s_glOk` / `s_glSaid` / `s_glDrives`, the
+second sample ring (`s_glRing`, `s_glN`, `s_glAt`, `s_glTotal`), the capture's
+`s_capFbo` / `s_capTex` / `s_capW` / `s_capH` / `s_capArmed` and the watch's `s_ctx` and
+`pwgc`, `oerr`'s `pge`, `s_tex` / `s_gtex` / `s_dirty` / `s_gdirty`, three
+`#include "opengl_utils.h"` lines and one `#include "tagpu_overlay.h"` (in
+`tagpu_render3do.c`, whose comment said it was there for `tagpu_overlay_target_fbo` — a
+function that file never called).
+
+#### THE FIND: a watch on a door that is not in the building
+
+`tagpu_overlay_draw` ran this once a frame, at the top, before anything else:
+
+```
+HGLRC cur = pwgc ? pwgc() : 0;          /* wglGetCurrentContext */
+if (cur != s_ctx) {
+    if (s_ctx) {
+        s_state = 0;
+        tagpu_overlay_glreset();  tagpu_native_glreset();
+        tagpu_scaffold_glreset(); tagpu_r3d_glreset();
+        tagpu_gui_glreset();      tagpu_fps_glreset();
+    }
+    s_ctx = cur;
+}
+```
+
+It was written for a real failure — the fork restarts its render thread with a new GL context
+on a display-mode change, and a stale FBO bind then cleared the real backbuffer black (found
+during the 1024x768 resolution test). **It cannot fire in this build.** A masked scan of every
+source finds no call to `wglCreateContext`, `wglMakeCurrent`, `SetPixelFormat` or
+`ChoosePixelFormat`: the only creator was `render_ogl.c`, deleted in 11-2. So `cur` is 0 on
+every call, `s_ctx` starts 0, and the inner `if (s_ctx)` has no first time.
+
+**Deleting that one branch left a SIXTEEN-function cascade with no root** — fourteen of them
+still compiled in — across ten files. (The commit message for this landing says *ten*; the
+number is sixteen. Ten was counted from the six names the watch itself listed plus the four
+below them that were already in view; the full walk, done for this section, found four more
+one level down. History is not rewritten here, so the commit stands and this is the
+correction.)
+
+```
+tagpu_overlay.c's context watch                  DELETED -- could never fire
+  |- tagpu_overlay_glreset                       DELETED (its state went with the capture)
+  |- tagpu_native_glreset            (:2000)     callerless
+  |    |- tagpu_rglsl_glreset        (:2002)     reachable only through it
+  |    |- tagpu_fx_glreset           (:2003)          "
+  |    |- tagpu_feat_glreset         (:2004)          "
+  |    |- tagpu_terr_glreset         (:2005)          "
+  |    |- tagpu_shadow_glreset       (:2006)          "     [escalation reason 1]
+  |    |- tagpu_hires_draw_glreset   (:2009)          "     [escalation reason 1]
+  |    |     `- tagpu_hires_glreset  (tagpu_hires_draw.c:669)  one level further down
+  |    |- tagpu_posebake_glreset     (:2010)          "
+  |    `- tagpu_posedraw_glreset     (:2011)          "
+  |         (tagpu_mark_glreset was :2007 and forwarded to tagpu_text_glreset;
+  |          both DELETED, their whole bodies being that forward)
+  |- tagpu_scaffold_glreset                      callerless
+  |- tagpu_r3d_glreset                           callerless
+  |- tagpu_gui_glreset                           callerless -- KEPT, it still resets the twin
+  |                                              table, the sharp layer, the cursor's
+  |                                              ownership and the minimap generation
+  `- tagpu_fps_glreset                           callerless
+```
+
+Line numbers are `tagpu_native.c`'s, after this landing removed `:2007`.
+
+**Only the two whose entire body was a forward are deleted here.** The rest are left standing
+and labelled in place, because their modules still hold live GL state — `tagpu_shadow.c` and
+`tagpu_hires_draw.c` are behind escalation reason 1 — and **a reset tree deleted ahead of the
+objects it resets is worse than one that is merely unreachable**: the next landing that
+deletes an atlas would have nothing left to tell it that atlas had a teardown path.
+
+#### Two predicates that read as choices and were not
+
+- **`s_glDrives`** (`tagpu_ftime.c`) decided *which lane prints the report*, so that exactly
+  one of two live lanes did. It was set only by `tagpu_ftime_gl_begin`. With that function
+  deleted it is permanently 0 and `!s_glDrives` is trivially true. The positive form is to
+  delete the static and the term, and to say in the one place a reader will look why there is
+  no arbitration: there is one lane.
+- **`report()`'s three branches** collapsed to one. The `vk/gl` ratio needed both rings and has
+  been unreachable since 4d-1; the two "one lane is silent" branches described a state the
+  function can no longer be called in, because its sole caller (`tagpu_ftime_vk_sample`) pushes
+  this frame's sample before it counts the frame, so `s_vkN > 0` there by construction. The
+  empty case now has no branch because it has no path.
+
+#### And one write-only pair the compiler will not catch
+
+`s_dirty` and `s_gdirty` in `tagpu_text.c` were CONSUMED by the GL uploads that read them.
+With the uploads gone they were assigned in four places and read in none — and **`-Wall` does
+not warn for a file-scope static that is only ever assigned**, which is the same trap
+`tagpu_gui_surf.c`'s own glreset comment records. They are deleted; `s_agen` and `s_gserial`,
+which tick and are never cleared, already carry the meaning for any number of consumers. That
+distinction was bought by the G19f landing-2 review (both reviewers led with it independently)
+and is restated beside the survivors so the next upload does not reintroduce a flag.
+
+#### A lever that now does nothing
+
+`tagpu_gldbg.on` had one reader left in the whole tree: `oerr`, the five-site `glGetError`
+probe in `tagpu_overlay.c` — probing a context this build never creates. With it gone the file
+`tagpu_gldbg.on` is inert. `research/notes/windowed-mode.md` said the lever gated two live
+probes in `render_ogl.c`; it now says the lever is dead and keeps only the trap that outlives
+it (GL 1.1 entry points resolve through `GetProcAddress(opengl32)`, never `wglGetProcAddress`,
+which returns NULL for them under wine — calling that NULL crashes TA with the usual secondary
+fault at `0x4d94e0`).
+
+#### Verification
+
+**Symbol table, per translation unit**, HEAD's revision compiled from a `git archive` at the
+same include paths, `i686-w64-mingw32-nm --defined-only`, diffed: exactly the 13 functions and
+19 statics above disappeared and **nothing else**. Two entries changed shape rather than
+vanishing — `_pct.part.0` became `_pct.part.0.constprop.0` and `_fprintf` became
+`_fprintf.constprop.0` — which is gcc specialising a helper that now has one caller shape, not
+a deletion. `tagpu_native.o` and `tagpu_gui_surf.o` show **no symbol change at all**, which is
+the check that the one-line edits in those two files were one-line edits. A separate function
+inventory (masked source, definitions only) agrees function for function.
+
+**Run, on the same fixture as 11-5d**: `one-unit` on Two Continents, 1024x768, `renderer=vulkan`
+confirmed in the instance's ini after the run, the arm set
+`native.on='all wrecks' terr.on feat.on fx.on sfx.on mark.on order.on zoom.on vpwide.on gui.on`,
+DLL md5-matched into the gamedir. Both builds run to `vk: census: … 6 pass(es) drew` (terr,
+feat, unit, fx, mark, gui) with `onscreen=1`, then three captures of the X window each:
+
+| comparison | differing pixels of 786 432 |
+|---|---|
+| previous build, capture 1 vs 2 vs 3 | **0** |
+| this build, capture 2 vs 3 | **0** |
+| **previous build vs this build** | **44 (0.01 %)** |
+| …of those, outside the minimap panel | **0** |
+
+The 44 are minimap unit blips: the two runs' AI had built different numbers of **off-screen**
+units by the time each settled (`alive=14` against `alive=9`, `onscreen=1` in both), so the
+dots differ and nothing in the viewport, the side panel, the resource bars or any glyph does.
+The whole presented frame is otherwise identical.
+
+**THE SAME-BUILD CONTROL IS THE PART THAT MAKES THIS A MEASUREMENT.** The first attempt
+compared one capture from each build and reported **28.5 %** differing — the earlier capture
+was taken while the scene was still settling (`3 pass(es) drew`, greyscale, the palette and
+terrain pass not yet up). Two captures of ONE build, a second apart, settle that: they differ
+by 0 pixels, so the fixture is deterministic and a cross-build difference is real. Without that
+control the 28.5 % reads as a regression this landing caused, and it was not one.
+
+#### Gaps this landing did not close
+
+- **`opengl_utils.c` cannot be deleted by 11-5e at all**, and the plan's ordering had this
+  backwards. It DEFINES the GL entry points every other GL file calls (`glBindTexture`,
+  `glTexImage2D`, `xwglGetProcAddress`, ~50 names used by `tagpu_restoreglsl.c`,
+  `tagpu_shadow.c`, `tagpu_hires*.c`, `tagpu_gaf.c`), so it goes last of everything — behind
+  `tagpu_shadow.c` and `tagpu_hires_draw.c`, which are escalation reason 1.
+- **Fourteen `*_glreset` functions are now unreachable and still compiled in** — five with no
+  caller at all (`tagpu_fps_`, `tagpu_gui_`, `tagpu_native_`, `tagpu_r3d_`, `tagpu_scaffold_`)
+  and nine reachable only through `tagpu_native_glreset`. Not a defect: each guards live GL
+  state. They are 11-5e-2's and the escalation's.
+- **`tagpu_hires_draw_frame` has no caller** either — the main entry of a 104-site file — and
+  `tagpu_hires_draw_glreset` is reached only from `tagpu_native_glreset`, which is itself
+  callerless now. Both facts are for the owner, with the escalation.
+- **`tagpu_native.c:997` still trips `-Wmisleading-indentation`**, and `tagpu_scaffold.c:366`
+  and `:367` trip the same. Pre-existing, on `main`, untouched here.
+
+#### THE TOOL BUG THIS LANDING FOUND IN ITS OWN METHOD, and what it invalidated
+
+The comment-masking helper every reachability scan in 11-5 has used replaced **every**
+character of a comment with a space — **including the newlines inside it**. A masked line
+number is therefore not a source line number: a multi-line comment collapses to one line and
+everything after it shifts earlier. On `tagpu_native.c` the gap is 1 622 lines
+(`tagpu_native_glreset` reads as 1998 masked and is at 3620). The CALL COUNTS and the
+caller/no-caller answers are unaffected — they never depended on position — so nothing 11-5a
+through 11-5e-1 deleted was deleted for a wrong reason. **The line numbers quoted in prose
+were affected**, and five of the seven in landing 11-5d's depth-twin chain were wrong:
+`tagpu_posedraw.c:1080 → :1108`, `:793 → :814`, `:688 → :706`, `:689 → :707`,
+`tagpu_vk_unit.c:2350 → :2358`. Corrected in place here and in `tagpu_posedraw.h`. The two
+that were right (`tagpu_vk_unit.c:2579` and `:2587`) are exactly the two that the 11-5d review
+disagreed about and that were re-read from the source to settle — which is the lesson:
+**a number two readers argue over gets checked; a number nobody questions does not.**
+
+The helper now preserves newlines, and any line number quoted from a masked scan before
+2026-09-19 should be re-read from the source before it is relied on.
+

@@ -204,11 +204,11 @@ void tagpu_posedraw_end(void);
    held the only `s_depthOn = 1` and the only write of `s_depthMat` in the tree.
    With it gone:
 
-     s_depthOn                    only ever assigned 0 (tagpu_posedraw.c:1080)
-     -> TAGPU_PDUREC.casts        always 0        (:793)
-     -> TAGPU_PDHAND.depthOn      always 0        (:688)
-     -> TAGPU_PDHAND.castMat      the memset zero matrix (:689 never runs)
-     -> tagpu_vk_unit.c:2350      w->casts always 0, so s_ncast never increments
+     s_depthOn                    only ever assigned 0 (tagpu_posedraw.c:1108)
+     -> TAGPU_PDUREC.casts        always 0        (:814)
+     -> TAGPU_PDHAND.depthOn      always 0        (:706)
+     -> TAGPU_PDHAND.castMat      the memcpy that never runs (:707)
+     -> tagpu_vk_unit.c:2358      w->casts always 0, so s_ncast never increments
      -> tagpu_vk_unit_cast        returns at `!s_ncast` (:2579) every frame
      -> build_cast_pipeline       its ONLY caller is :2587, inside that function
 

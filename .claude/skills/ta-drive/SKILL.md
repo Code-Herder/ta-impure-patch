@@ -1563,6 +1563,68 @@ A band-box drag is also the reliable way to **select** several units for the bar
 not armed, so it is not the signal. Ask the engine instead — `tacli order <i> move pos X Y --sel`
 reports `N issued`, and N is the selection.
 
+### Proving a deletion changed no pixel — the same-build control (2026-09-19, landing 11-5e-1)
+
+A landing that only removes unreachable code has one claim to verify: **the presented frame is
+what it was**. Capturing one frame from each build and diffing them does NOT verify that, and
+the first attempt at this reported **28.5 %** of the frame differing when the true answer was
+0.01 % — all of it game state. The frame at any given wall-clock moment depends on how far the
+run has settled, and the two runs had settled differently.
+
+**Take the same-build control first. It is two extra captures and it is what makes the number
+mean anything:**
+
+```bash
+WID=$(TACLI_DISPLAY=:NN ./tools/tacli ls --json | python3 -c "
+import json,sys
+for i in json.load(sys.stdin):
+    if i['name']=='<inst>': print(i['window'][0])")
+for i in 1 2 3; do
+  DISPLAY=:NN import -window "$WID" "$SCRATCH/ctl_$i.png"
+  TACLI_DISPLAY=:NN ./tools/tacli wait <inst> 3 >/dev/null
+done
+# ctl_1 vs ctl_2 vs ctl_3 must be 0 px. If they are not, the scene is still moving and
+# NOTHING measured against it means anything yet.
+```
+
+On a settled `one-unit` fixture those three are **0 differing pixels**, so the fixture is
+deterministic and a cross-build difference is real. Then:
+
+- **Wait for the census, not for a clock.** `vk: census: frame N: 6 pass(es) drew` (terr, feat,
+  unit, fx, mark, gui) is the settled state with the standard arm set. At `3 pass(es)` the
+  terrain pass and the palette are not up yet and the whole world renders **greyscale** — which
+  looks exactly like a catastrophic regression and is not one. `posedraw: armed …` appears at
+  the same moment; a capture before it is a capture of a different program.
+- **Match the game state, not the frame number.** `units: alive=N onscreen=M` is the handle.
+  Off-screen units still show as **minimap blips**, so two runs whose AI built different numbers
+  of units differ in the minimap panel and nowhere else. Mask the minimap rect (roughly
+  `[0:125, 0:128]` at 1024x768) and report inside/outside separately — "0 px outside the
+  minimap" is the sentence that proves the landing, and it is much easier to obtain than
+  identical unit counts.
+- **Build both DLLs in the real worktree, not in a `git archive` copy.** `spirv-check.sh` fails
+  outside a git repository, so the archive never links. Commit first, then
+  `git checkout HEAD~1 -- <the landing's files>`, `make`, copy the DLL aside,
+  `git checkout HEAD -- <same files>`, `make`, copy the second aside. Check
+  `git status --porcelain` is empty before and after. Swap a build in by replacing the
+  worktree's `tagpu/ddraw/ddraw.dll` before `scenario load` — tacli copies it into the gamedir
+  at launch, so editing the gamedir's copy directly is overwritten.
+- **Do not expect the two DLLs to be byte-identical when the source is.** A timestamp reaches
+  the PE header, so md5 differs between any two builds; md5 is for checking the right DLL
+  reached the gamedir, never for checking the source.
+- **Instances live in the MAIN checkout's `tagpu/instances/`, never in the worktree.** Read the
+  gamedir path out of `tacli ls --json` rather than assuming it is under the tree you are in.
+
+### A masked-comment scan tells you WHETHER, never WHERE (2026-09-19)
+
+The comment-masking helper the 11-5 reachability scans use blanked every character of a comment
+**including its newlines**, so a multi-line comment collapsed to one line and every line after
+it shifted earlier — by 1 622 lines on `tagpu_native.c`. Call counts and caller/no-caller
+answers never depended on position and are unaffected; **every line number quoted from such a
+scan was wrong**, and five of seven in one landing's write-up had to be corrected. Blank a
+comment to spaces but keep its `\n`, and re-read from the source any line number that is going
+into prose. The two numbers in that write-up that were RIGHT are the two that two reviewers
+argued about and someone went and looked at.
+
 ### Comparing the two LANES on screen — and why an A/B cannot do it
 
 `tools/vk-ab.py` compares the GL capture against the Vulkan one, so it is blind to any error the

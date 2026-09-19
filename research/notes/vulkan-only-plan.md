@@ -2212,6 +2212,25 @@ that a count which grows is the plan catching up with the work.) The row was
      A pin that is wrong shows up as a bug; a justification that is wrong shows up as a design
      everyone trusts, and it will not be the compiler that finds it either.
 
+     **AND THE THIRD COROLLARY, WHICH 11-5e-1 PAID FOR: a predicate can be pinned by the
+     ABSENCE of a thing rather than by a value, and when it is, the root of a dead TREE is
+     that predicate and not any function in the tree.** `tagpu_overlay.c` polled
+     `wglGetCurrentContext` once a frame and ran six modules' `*_glreset` when the handle
+     changed. Nothing about that code says "GL is gone": every variable is live, every branch
+     is ordinary, and its own caller runs every frame. It is dead because **no source of this
+     build calls `wglCreateContext`, `wglMakeCurrent` or `SetPixelFormat`** -- a fact about
+     what is NOT in the tree, which no amount of reading that file can establish. Deleting the
+     watch orphaned ten functions at once, across nine files, none of which a caller scan had
+     flagged, because each of them did have a caller: the one above it in the tree.
+
+     **So the search is not "which functions have no callers" -- that finds leaves. It is
+     "which tests can never be true", and what falls out is everything reachable only through
+     them.** The two searches answer different questions and only the second finds a cascade.
+     Corollary 1 is its mirror image: unpinning a predicate that is still LIVE runs its
+     consumers for the first time, and unpinning one that is DEAD orphans them. Establish
+     which kind you have before you touch it -- by scanning the whole tree for the thing whose
+     absence pins it, not by reading the file the predicate is in.
+
    * **11-5 — what is left of the GL entry-point surface. FIVE PARTS, and the split follows
      the passes rather than a calendar** (written 2026-09-19, by the landing that measured it;
      `M` moved from four to five when 11-5c re-measured the surface and `tagpu_posedraw.c`'s
@@ -2352,10 +2371,39 @@ that a count which grows is the plan catching up with the work.) The row was
        holds, the fix is an ORDERING and never a timing mitigation. **Not 11-5d's to make** —
        a cross-thread change belongs in a landing whose review is briefed on it. `preshadow`
        still wants its own question when that day comes.
-     - **11-5e — the entry-point surface this row names**, last, once every caller has left:
-       `opengl_utils.{c,h}`, `tagpu_restoreglsl.c`, the orphaned GL-object accessors, and the
-       include residue in the four files that still include `opengl_utils.h` and make no GL
-       call: **`render_gdi.c`, `tagpu_fps.c`, `tagpu_render3do.c`, `tagpu_scaffold.c`** —
+     - **11-5e — the entry-point surface this row names. THREE LANDINGS, and the split was
+       forced by a dependency the row had backwards** (written 2026-09-19 by 11-5e-1, which
+       found it). The row said this part *ends at* `opengl_utils.c`. It cannot contain that
+       file at all: **`opengl_utils.c` DEFINES the GL entry points every other GL file calls**
+       — `glBindTexture`, `glTexImage2D`, `xwglGetProcAddress`, about fifty names used by
+       `tagpu_restoreglsl.c`, `tagpu_shadow.c`, `tagpu_hires*.c`, `tagpu_gaf.c` — so it goes
+       last of everything, and `tagpu_shadow.c` and `tagpu_hires_draw.c` stand in front of it
+       behind **escalation reason 1**. 11-5e therefore ends one file short of where the row
+       said it would, and that last step belongs to whatever follows the escalation.
+
+       - **11-5e-1 — the three callerless leaf files. LANDED 2026-09-19.** `tagpu_ftime.c`
+         (10 sites), `tagpu_text.c` (20), `tagpu_overlay.c` (22): **52 sites, three files
+         GL-free, thirteen functions deleted**, every one callerless under a masked-comment
+         scan and every one confirmed gone from its object file's symbol table with nothing
+         else taken with it. Its real output is the third corollary above and the cascade it
+         found; the deletions are the smaller half. Verified by running it: the presented
+         frame is **pixel-identical to the pre-landing build over the whole frame except the
+         minimap**, where 44 pixels of unit blips differ because the two runs' AI had built
+         different numbers of off-screen units (`alive=14` against `alive=9`, `onscreen=1`
+         in both).
+       - **11-5e-2 — `tagpu_gaf.c` (39) and `tagpu_restoreglsl.c` (249)**, the live path, plus
+         the ten-function reset cascade 11-5e-1 orphaned and deliberately left standing
+         (`tagpu_native_glreset` and five siblings; through native, the restorer's, the shadow
+         pass's, the hires pass's and the two posedraw resets). The cascade can only be
+         deleted once the objects it resets are gone, so its tail is behind the escalation
+         with them. Carry 11-5e-1's survey finding into it: `tagpu_gaf_atlas_mirror_rgb` can
+         only ever refuse — lever on, it is never asked; lever off, there are no GL entry
+         points, so it latches `mirrorRgbFailed` and logs a line that reads as a driver fault
+         on a perfectly normal run.
+       - **11-5e-3 — the include residue**, in the files that include `opengl_utils.h` and
+         make no GL call: **`render_gdi.c`, `tagpu_fps.c`, `tagpu_scaffold.c`** (11-5e-1 took
+         `tagpu_render3do.c`'s, whose comment claimed it was there for
+         `tagpu_overlay_target_fbo` — a function that file never called) —
        named rather than counted, because a count goes stale the moment a landing empties
        another file, and because the first version of this line said *five*. That fifth was
        `tagpu_gui_surf.c`, and it was an artefact of the measurement: the script tested
@@ -2365,17 +2413,26 @@ that a count which grows is the plan catching up with the work.) The row was
        mask applied naively deletes every include instead. After 11-5a, twelve files still
        include it and call GL.
 
-     **The surface as 11-5d leaves it, re-measured on the same masked pattern: 592 GL call
-     sites in nine files** — `tagpu_restoreglsl.c` 249, `tagpu_hires_draw.c` 104,
-     `tagpu_shadow.c` 87, `tagpu_gaf.c` 39, `opengl_utils.c` 31, `tagpu_hires.c` 30,
-     `tagpu_overlay.c` 22, `tagpu_text.c` 20, `tagpu_ftime.c` 10. That is 714 less 11-5d's 122,
-     and the per-file rows are unchanged, which is the check that the landing touched only its
-     own file. **No world pass and no unit pass is on that list any more**: `tagpu_native.c`,
-     `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c`, `tagpu_scaffold.c` and `tagpu_posedraw.c`
-     are all GL-free. 11-5e takes 401; the remaining 191 are the two files below.
+     **The surface as 11-5e-1 leaves it, re-measured on the same masked pattern: 540 GL call
+     sites in six files** — `tagpu_restoreglsl.c` 249, `tagpu_hires_draw.c` 104,
+     `tagpu_shadow.c` 87, `tagpu_gaf.c` 39, `opengl_utils.c` 31, `tagpu_hires.c` 30. That is
+     592 less 11-5e-1's 52, and **the six surviving rows are digit-for-digit what they were
+     before it**, which is the check that the landing touched only its own three files. The
+     count is taken on both trees with ONE regex in one script rather than quoted from an
+     earlier note: a wider pattern (allowing a lower-case letter after the `gl` prefix) reads
+     689 on the same tree, because it counts `glyph_raster` and `glreset`, and a number
+     compared against one measured differently is not a comparison. The established pattern is
+     `\b(?:gl|x_gl)[A-Z][A-Za-z0-9]*\s*\(`, over comment-masked source.
+
+     **No world pass and no unit pass is on that list any more**: `tagpu_native.c`,
+     `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c`, `tagpu_scaffold.c`, `tagpu_posedraw.c`,
+     `tagpu_overlay.c`, `tagpu_text.c` and `tagpu_ftime.c` are all GL-free. 11-5e-2 takes 288;
+     the remaining 252 are `opengl_utils.c` and the two files below, all three of which are
+     behind the escalation.
 
      **Not covered by 11-5a–e:** `tagpu_shadow.c` and `tagpu_hires_draw.c` (escalation reason
-     1), and the gate's own exit condition, which is 11-6's.
+     1) — and, since 11-5e-1 found the dependency, `opengl_utils.c` with them, because it
+     defines the entry points those two call. The gate's own exit condition is 11-6's.
 
      The files it ends at: `opengl_utils.c`,
      `opengl_utils.h`, `openglshader.h`, `tagpu_restoreglsl.c`, and the plumbing users that
