@@ -406,36 +406,27 @@ typedef struct TAGPU_PDHAND {
        palette is tagpu_pal's snapshot; the fog pair is what the native pass
        uploaded this frame.
 
-       `atlasRgb` IS HERE SINCE GATE 3 of the Vulkan-only plan, where before it
-       was the one texel the pass had no mirror of and a `restored` frame was
-       refused outright for the session. It is the Classic++ restored twin, READ
-       BACK off the GPU rather than written by the paint -- which is why it
-       carries its own rows and its own serial and why neither is the indexed
-       mirror's: the indexed rows are the shelf cursor, these are what the last
-       read-back covered. NULL until a read-back has covered rows, and NULL
-       again after a context loss until it has covered them anew, so a frame the
-       twin drew restored is still refused until then -- for a few frames rather
-       than for the process. */
+       THE CLASSIC++ RESTORED TWIN IS NOT HERE AS TEXELS. `atlasRgb`,
+       `atlasRgbRows`, `atlasRgbMips` and `atlasRgbSerial` stood here from gate
+       3 until landing 11-5e-2b: the twin READ BACK off the GPU, with its own
+       rows and its own serial because the read-back lagged the shelf cursor.
+       The read-back was `glReadPixels` and nothing else, opengl32.dll is never
+       in the process (`oglu_load_dll` has no caller), so `atlasRgb` was NULL on
+       every published frame of every process from the day the GL bring-up
+       stopped being called. What replaced it is the frame LIST below, which the
+       consuming lane paints into its own twin on the device. */
     const unsigned char* atlas;   int atlasDim, atlasRows; unsigned atlasSerial;
-    /* `atlasRgbMips` is the TOP MIP LEVEL the read-back covered, 0 meaning
-       level 0 alone. The twin is sampled GL_LINEAR_MIPMAP_LINEAR (tagpu_gaf.c),
-       so a consumer that builds a single-level image draws a different picture
-       wherever a unit is minified -- which at ordinary zoom is every unit. The
-       levels are GL's OWN, read back rather than re-derived, so the two are
-       byte-identical by construction; the layout is tagpu_gaf.h's
-       `tagpu_gaf_mip_off` / `_bytes`. */
-    const unsigned char* atlasRgb; int atlasRgbRows, atlasRgbMips;
-    /* the anisotropy GL actually applied to the twin (0 = none). A consumer
-       that cannot apply the same ratio draws different art wherever the texture
-       is minified at an angle, so this is compared and not assumed. */
+    /* the anisotropy the OTHER lane's twin was filtered at (0 = none). A
+       consumer that cannot apply the same ratio draws different art wherever
+       the texture is minified at an angle, so this is compared and not assumed.
+       IT SURVIVED THE READ-BACK because it is a property of that twin's
+       SAMPLER rather than of the mirror, and it is published on the list path
+       for exactly that reason -- see `restoreDim` below. */
     float atlasRgbAniso;
-    unsigned atlasRgbSerial;
-    /* ...OR THE REQUEST INSTEAD OF THE PICTURE, and never both (the
-       Vulkan-only plan's landing 7e-2, the shape landing 7d gave the feature
-       and effects atlases). With `tagpu_restorevk.on` the gather half stops
-       reading the twin back and publishes the LIST OF FRAMES to restore
-       instead; the other lane paints them into its own twin, and this atlas's
-       `atlasRgb` above is NULL on those frames.
+    /* THE REQUEST, WHICH IS THE ONLY FORM THE TWIN COMES IN (the Vulkan-only
+       plan's landing 7e-2, the shape landing 7d gave the feature and effects
+       atlases). The gather half publishes the LIST OF FRAMES to restore; the
+       other lane paints them into its own twin.
 
        `restoreGen` is the only thing a cursor cannot survive: every
        discontinuity in the list -- arm, recycle, repack, GL context loss,
@@ -452,11 +443,10 @@ typedef struct TAGPU_PDHAND {
     unsigned                          restoreGen;
     int                               restoreRepaint;
     unsigned                          restoreBlanks;
-    /* THE TWIN'S SHAPE ON THE LIST PATH, because on that path there is no
-       read-back to carry it: `restoreDim` is the twin's square size and
-       `restoreMips` its top level, both from the atlas itself. `atlasRgbAniso`
-       above is published on BOTH paths for the same reason -- it is a property
-       of the twin's sampler, not of the mirror. */
+    /* THE TWIN'S SHAPE, because no read-back carries it: `restoreDim` is the
+       twin's square size and `restoreMips` its top level, both from the atlas
+       itself. `atlasRgbAniso` above comes from the same accessor for the same
+       reason. */
     int                               restoreDim, restoreMips;
     const unsigned char* lut;     int lutW, lutH;          unsigned lutSerial;
     const unsigned char* pal;     unsigned palSerial;

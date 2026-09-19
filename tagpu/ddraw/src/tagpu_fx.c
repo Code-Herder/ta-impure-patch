@@ -97,7 +97,6 @@ static int  s_ab, s_abDone, s_abFrame;
 static int  s_pubHave;                 /* this frame's hand-over is waiting   */
 static TAGPU_FXHAND s_pub;
 static int  s_mirrorAsked;             /* the atlas mirror has been asked for */
-static int  s_mirrorRgbAsked;          /* ...and its Classic++ restored twin  */
 static int  s_rlistAsked;              /* ...or the published restore list    */
 static int  s_armed = -1;
 static int  s_log = 0, s_lines = 1, s_models = 1, s_sprites = 1, s_expl = 1, s_debris = 1;
@@ -165,19 +164,13 @@ static void read_arm(unsigned frame_counter)
     "a Vulkan pass will run in this process", which is the question. */
     if (!s_mirrorAsked && s_atlas.dim > 0 && tagpu_vk_owns_present())
         s_mirrorAsked = tagpu_gaf_atlas_mirror(&s_atlas);
-    /* AND THE RESTORED TWIN'S, behind the same latch and gated additionally on
-       Classic++ actually painting -- tagpu_feat.c states the reasoning. */
-    /* AND THE OTHER ANSWER TO THE SAME QUESTION, ASKED FIRST (the Vulkan-only
-       plan's landing 7d). With `tagpu_restorevk.on` beside TotalA.exe the
-       other lane restores for itself and there is nothing to read back, so the
-       list is armed and the read-back below is never asked for -- and if it
-       was already armed on an earlier beat, arming the list frees it. Polled
-       on every beat until it takes, exactly as the two mirrors are, because
-       the lever is allowed to appear mid-session. */
+    /* AND THE RESTORE LIST (the Vulkan-only plan's landing 7d). With
+       `tagpu_restorevk.on` beside TotalA.exe the other lane restores for
+       itself, which since 11-5e-2b is the only way the restored twin reaches
+       it at all. Polled on every beat until it takes, exactly as the mirror
+       is, because the lever is allowed to appear mid-session. */
     if (s_mirrorAsked && !s_rlistAsked && tagpu_classicpp_assets())
         s_rlistAsked = tagpu_gaf_atlas_restore_vk(&s_atlas);
-    if (s_mirrorAsked && !s_rlistAsked && !s_mirrorRgbAsked && tagpu_classicpp_assets())
-        s_mirrorRgbAsked = tagpu_gaf_atlas_mirror_rgb(&s_atlas);
     /* the engine skip is armed by a successful gather (below), never by the
        file alone; passive turns it off here */
     if (s_passive) tagpu_fxown_set_skip(0);
@@ -323,7 +316,6 @@ void tagpu_fx_glreset(void)
        tagpu_fx.h has the distinction.) */
     s_pubHave = 0; s_abFrame = 0;
     s_mirrorAsked = 0;
-    s_mirrorRgbAsked = 0;
     tagpu_gaf_atlas_lost(&s_atlas);
 }
 
@@ -951,9 +943,6 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total, int scaf)
        same, which is the reason not to make this one file differ.
        [Stated accurately after the G19e effects review, 2026-09-15.] */
     if (!s_mirrorAsked) { s_pubHave = 0; s_abFrame = 0; return; }
-    /* ONE READ-BACK STEP PER PUBLISHED FRAME, on the render thread with the
-       context current, exactly as tagpu_feat.c does it. */
-    if (s_mirrorRgbAsked) tagpu_gaf_atlas_mirror_rgb_step(&s_atlas);
     memset(&s_pub, 0, sizeof s_pub);
     for (b = 0; b < NBUCKET; b++) { s_pub.vert[b] = s_verts[b]; s_pub.n[b] = s_nv[b]; }
     s_pub.gw = (float)v->gw; s_pub.gh = (float)v->gh;
@@ -982,23 +971,16 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total, int scaf)
         s_pub.atlasRows = rows;
     }
     s_pub.atlasSerial = s_atlas.mirrorSerial;
-    if (s_atlas.mirrorRgb && s_atlas.mirrorRgbRows > 0) {
-        s_pub.atlasRgb       = s_atlas.mirrorRgb;
-        s_pub.atlasRgbRows   = s_atlas.mirrorRgbRows;
-        s_pub.atlasRgbSerial = s_atlas.mirrorRgbSerial;
-    }
-    /* ...OR THE REQUEST INSTEAD OF THE PICTURE, and never both: the list is
-       armed only where the read-back is not, and `tagpu_gaf_atlas_restore_vk`
-       frees the mirror when it arms, so the branch above has already gone
-       NULL by the time this one publishes. Stated as an either/or here as
-       well rather than left to that -- the arm is a poll that can land on any
-       frame, and "mutually exclusive by construction" was already wrong once
-       on this plan for exactly that reason. [tagpu_terr.c carries the same
-       either/or.] */
+    /* THE REQUEST, WHICH SINCE 11-5e-2b IS THE ONLY THING PUBLISHED HERE. It
+       used to be one of a pair, and the pair was written as an either/or on
+       both sides rather than left to the arm order -- `atlasRgb` above carried
+       the twin's TEXELS, read back off GL, and the arm is a poll that can land
+       on any frame, so "mutually exclusive by construction" was already wrong
+       once on this plan. The read-back's only source was `glReadPixels` and
+       opengl32.dll is never in the process, so the picture half was NULL on
+       every published frame; it and the fields it wrote are gone.
+       [tagpu_terr.c carries the same account.] */
     if (s_atlas.rlistWant && s_atlas.rlist) {
-        s_pub.atlasRgb       = NULL;
-        s_pub.atlasRgbRows   = 0;
-        s_pub.atlasRgbSerial = 0;
         s_pub.restoreFrames  = s_atlas.rlist;
         s_pub.restoreN       = s_atlas.rlistN;
         s_pub.restoreGen     = s_atlas.rlistGen;

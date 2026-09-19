@@ -137,7 +137,7 @@ static unsigned s_atlasMirrorSerial;
    handed, but the restored one was painted on the GPU by tagpu_restoreglsl.c,
    so a CPU copy meant pulling it back down every published frame. What is left
    is the other route, below -- hand the CONSUMER the work instead of the
-   pixels -- and tagpu_terr.h's `atlasRgb`/`atlasRgbRows` are now always NULL/0.
+   pixels -- and tagpu_terr.h's `atlasRgb`/`atlasRgbRows` went with it (11-5e-2b).
    [The vulkan-only plan, landing 11-5c.] */
 
 /* ---- THE RESTORE REQUEST, for a lane that restores on its own -----------
@@ -1439,8 +1439,8 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
     /* THE REQUEST, AND NOTHING ELSE. `atlasRgb`/`atlasRgbRows` were the other
        half of tagpu_terr.h's "mutually exclusive" pair -- the GL twin's
        restored atlas, read back so this lane could upload it -- and they went
-       with the GL half in landing 11-5c, so they are now always NULL/0 and the
-       pair is exclusive by construction rather than by a latch order.
+       with the GL half in landing 11-5c; 11-5e-2b took the fields themselves,
+       so there is no pair left to be exclusive about.
        The serial goes out even with no list, because a DROP is news: it is how
        a consumer learns the atlas it was painting is not this map's. */
     if (s_rvkWant) {

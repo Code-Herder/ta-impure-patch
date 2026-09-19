@@ -638,26 +638,24 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
     tagpu_r3d_atlas_mirror_want();
     s_pub.atlas = tagpu_r3d_atlas_mirror(&s_pub.atlasDim, &s_pub.atlasRows,
                                          &s_pub.atlasSerial);
-    /* AND THE RESTORED TWIN, on the same beat and for the same reason -- it too
-       needs the atlas to have its dimensions, and asking is idempotent. The
-       STEP is here rather than in the arm beat because it is a glReadPixels off
-       an FBO and this is the render thread with the context current; it is a
-       no-op until the mirror is armed and again once the restorer has stopped
-       painting. The accessor returns NULL until a step has covered rows, so
-       nothing is published that a consumer could not upload. */
-    tagpu_r3d_atlas_mirror_rgb_want();
-    tagpu_r3d_atlas_mirror_rgb_step();
-    s_pub.atlasRgb = tagpu_r3d_atlas_mirror_rgb(NULL, &s_pub.atlasRgbRows,
-                                                &s_pub.atlasRgbMips,
-                                                &s_pub.atlasRgbAniso,
-                                                &s_pub.atlasRgbSerial);
-    /* ...OR THE REQUEST INSTEAD OF THE PICTURE, and never both (landing 7e-2).
-       Written as an either/or here as well as guaranteed by the arm freeing the
-       mirror: the arm is a poll that can land on any frame, and "mutually
-       exclusive by construction" was already wrong once on this plan for
-       exactly that reason. `atlasRgbAniso` is published on BOTH paths -- it is
-       the twin's sampler ratio, not the mirror's -- so it is read from the list
-       accessor here rather than left at whatever the mirror call zeroed it to. */
+    /* AND THE RESTORED TWIN, AS THE REQUEST AND NOTHING ELSE (landing 7e-2,
+       and 11-5e-2b). A read-back stood beside this and published the twin's
+       TEXELS: `tagpu_r3d_atlas_mirror_rgb_want` / `_step` armed and drove a
+       `glReadPixels` off an FBO here, on the render thread with the context
+       current, and the accessor handed the bytes over. There is no GL context
+       to read back from -- `oglu_load_dll` has no caller, so opengl32.dll is
+       never in the process -- and the accessor had returned NULL on every
+       published frame of every process for as long as that has been true.
+       `atlasRgbAniso` is the one thing that survived it, because it is the
+       twin's SAMPLER ratio rather than a fact about the mirror, and the list
+       accessor carries it.
+
+       THE ARM IS STILL A CALL ON THIS BEAT. `_want` chose between the list and
+       the read-back, and now arms only the list -- so dropping it along with
+       the read-back would leave the unit atlas with NO list armed and the other
+       lane with nothing to restore from. Silently, because a lane with no list
+       stands down rather than complains. */
+    tagpu_r3d_atlas_restore_want();
     {
         float aniso = 0.0f;
         const TAGPU_RGLSL_FRAME* fr =
@@ -666,10 +664,6 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
                                          &s_pub.restoreBlanks, &s_pub.restoreMips,
                                          &aniso);
         if (fr) {
-            s_pub.atlasRgb       = NULL;
-            s_pub.atlasRgbRows   = 0;
-            s_pub.atlasRgbMips   = 0;
-            s_pub.atlasRgbSerial = 0;
             s_pub.atlasRgbAniso  = aniso;
             s_pub.restoreFrames  = fr;
         } else {

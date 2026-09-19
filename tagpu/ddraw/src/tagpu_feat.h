@@ -92,26 +92,17 @@ typedef struct TAGPU_FEATHAND {
     int                   atlasRows;
     unsigned              atlasSerial;
 
-    /* CLASSIC++'s RESTORED TWIN, MIRRORED (the Vulkan-only plan's gate 2).
-       NULL until the restorer has painted something and the read-back has run,
-       so `restored` being 1 with this NULL is the case that existed before this
-       field and a consumer must stand down there exactly as it did then.
-
-       `atlasRgbRows` is the READ-BACK's own high-water mark and NOT the shelf
-       cursor `atlasRows` above: tagpu_gaf.c reads back what the restorer has
-       painted, and the restorer is sliced across frames, so it lags the shelf
-       by design. A consumer uploads these rows and treats everything below them
-       as alpha 0 -- which is what an unpainted cell reads as anyway, so the
-       progressive reveal works on this side with no extra flag. */
-    const unsigned char*  atlasRgb;      /* atlasDim x atlasRgbRows RGBA8     */
-    int                   atlasRgbRows;
-    unsigned              atlasRgbSerial;
-    /* ...OR THE WORK ITSELF, for a lane that can restore on its own (the
-       Vulkan-only plan's landing 7d). These four are MUTUALLY EXCLUSIVE with
-       `atlasRgb` above and the producer is what makes them so: under
-       `tagpu_restorevk.on` it stops reading the restored twin back and
-       publishes the frame list instead, so exactly one of the two is ever here
-       and a consumer never has to choose between a mirror and a request.
+    /* ...AND THE WORK ITSELF IS NOW THE ONLY FORM IT COMES IN (the Vulkan-only
+       plan's landing 7d, and 11-5e-2b). These were MUTUALLY EXCLUSIVE with a
+       read-back mirror, `atlasRgb`, that stood here until the GL backend that
+       produced it went: a consumer chose between a picture and a request. The
+       mirror's only source was `glReadPixels`, opengl32.dll is never loaded
+       (`oglu_load_dll` has no caller), so the picture was NULL on every
+       published frame of every process and the choice was never a choice.
+       `atlasRgb`'s companions were `atlasRgbRows`, the read-back's own
+       high-water mark, and `atlasRgbSerial`. Nothing new goes where they were:
+       the twin reaches a consumer as the list below and is painted on the
+       device.
 
        IT IS AN APPEND-ONLY LIST WITH A CURSOR, not terrain's whole list per
        serial, because a feature atlas is a lazy QUEUE: tagpu_gaf.c adds one

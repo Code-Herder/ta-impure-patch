@@ -185,7 +185,6 @@ static int s_ab, s_abDone, s_abFrame;
 static int s_pubHave;                  /* this frame's hand-over is waiting   */
 static TAGPU_FEATHAND s_pub;
 static int s_mirrorAsked;              /* the atlas mirror has been asked for */
-static int s_mirrorRgbAsked;           /* ...and its Classic++ restored twin  */
 static int s_rlistAsked;               /* ...or the published restore list    */
 
 int tagpu_feat_armed(unsigned frame_counter)
@@ -259,24 +258,13 @@ int tagpu_feat_armed(unsigned frame_counter)
     "a Vulkan pass will run in this process", which is the question. */
     if (!s_mirrorAsked && s_atlas.dim > 0 && tagpu_vk_owns_present())
         s_mirrorAsked = tagpu_gaf_atlas_mirror(&s_atlas);
-    /* AND THE RESTORED TWIN'S MIRROR, on the same beat, behind the same latch
-       and asked for SEPARATELY. It is a second 16 MB and it is only worth
-       anything while the restorer is the thing the GL twin samples, which is
-       what `tagpu_classicpp_assets()` answers -- so a session that never turns
-       Classic++ on never pays for it. Like the indexed one it is set on SUCCESS
-       only, so a request made before the atlas has its dimensions is retried on
-       the next beat rather than latched as a failure. */
-    /* AND THE OTHER ANSWER TO THE SAME QUESTION, ASKED FIRST (the Vulkan-only
-       plan's landing 7d). With `tagpu_restorevk.on` beside TotalA.exe the
-       other lane restores for itself and there is nothing to read back, so the
-       list is armed and the read-back below is never asked for -- and if it
-       was already armed on an earlier beat, arming the list frees it. Polled
-       on every beat until it takes, exactly as the two mirrors are, because
-       the lever is allowed to appear mid-session. */
+    /* AND THE RESTORE LIST (the Vulkan-only plan's landing 7d). With
+       `tagpu_restorevk.on` beside TotalA.exe the other lane restores for
+       itself, which since 11-5e-2b is the only way the restored twin reaches
+       it at all. Polled on every beat until it takes, exactly as the mirror
+       is, because the lever is allowed to appear mid-session. */
     if (s_mirrorAsked && !s_rlistAsked && tagpu_classicpp_assets())
         s_rlistAsked = tagpu_gaf_atlas_restore_vk(&s_atlas);
-    if (s_mirrorAsked && !s_rlistAsked && !s_mirrorRgbAsked && tagpu_classicpp_assets())
-        s_mirrorRgbAsked = tagpu_gaf_atlas_mirror_rgb(&s_atlas);
     if (s_passive) tagpu_featown_set_skip(0);
     if (was != 1) {
         char b[160];
@@ -952,12 +940,6 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
        `s_pubHave` is cleared with it so no earlier frame's hand-over can be
        taken later. [FROM THE G19e LANDING REVIEW, 2026-09-15.] */
     if (!s_mirrorAsked) { s_pubHave = 0; s_abFrame = 0; return; }
-    /* ONE STEP OF THE RESTORED READ-BACK PER PUBLISHED FRAME, here rather than
-       in the arm beat, because it is a glReadPixels off an FBO and this is the
-       render thread with the context current. It is a no-op until the mirror
-       has been armed and again once the restorer has stopped painting, so a
-       settled screen pays nothing for it. */
-    if (s_mirrorRgbAsked) tagpu_gaf_atlas_mirror_rgb_step(&s_atlas);
     memset(&s_pub, 0, sizeof s_pub);
     s_pub.shadow = s_verts[B_SHADOW]; s_pub.nShadow = s_nv[B_SHADOW];
     s_pub.body   = s_verts[B_BODY];   s_pub.nBody   = s_nv[B_BODY];
@@ -978,27 +960,16 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
         s_pub.atlasRows = rows;
     }
     s_pub.atlasSerial = s_atlas.mirrorSerial;
-    /* PUBLISHED ONLY WHEN THERE IS SOMETHING READ BACK. `mirrorRgbRows` is 0
-       until the first step has run and drops back to 0 on a context loss or a
-       re-arm (tagpu_gaf.c), and publishing a non-NULL pointer with 0 rows would
-       hand a consumer an image with no contents to upload. */
-    if (s_atlas.mirrorRgb && s_atlas.mirrorRgbRows > 0) {
-        s_pub.atlasRgb       = s_atlas.mirrorRgb;
-        s_pub.atlasRgbRows   = s_atlas.mirrorRgbRows;
-        s_pub.atlasRgbSerial = s_atlas.mirrorRgbSerial;
-    }
-    /* ...OR THE REQUEST INSTEAD OF THE PICTURE, and never both: the list is
-       armed only where the read-back is not, and `tagpu_gaf_atlas_restore_vk`
-       frees the mirror when it arms, so the branch above has already gone
-       NULL by the time this one publishes. Stated as an either/or here as
-       well rather than left to that -- the arm is a poll that can land on any
-       frame, and "mutually exclusive by construction" was already wrong once
-       on this plan for exactly that reason. [tagpu_terr.c carries the same
-       either/or.] */
+    /* THE REQUEST, WHICH SINCE 11-5e-2b IS THE ONLY THING PUBLISHED HERE. It
+       used to be one of a pair, and the pair was written as an either/or on
+       both sides rather than left to the arm order -- `atlasRgb` above carried
+       the twin's TEXELS, read back off GL, and the arm is a poll that can land
+       on any frame, so "mutually exclusive by construction" was already wrong
+       once on this plan. The read-back's only source was `glReadPixels` and
+       opengl32.dll is never in the process, so the picture half was NULL on
+       every published frame; it and the fields it wrote are gone.
+       [tagpu_terr.c carries the same account.] */
     if (s_atlas.rlistWant && s_atlas.rlist) {
-        s_pub.atlasRgb       = NULL;
-        s_pub.atlasRgbRows   = 0;
-        s_pub.atlasRgbSerial = 0;
         s_pub.restoreFrames  = s_atlas.rlist;
         s_pub.restoreN       = s_atlas.rlistN;
         s_pub.restoreGen     = s_atlas.rlistGen;

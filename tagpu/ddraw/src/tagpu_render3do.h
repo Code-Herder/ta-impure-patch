@@ -67,26 +67,23 @@ int tagpu_r3d_nano_state(float nano, unsigned id, unsigned tick,
 void tagpu_r3d_atlas_mirror_want(void);
 const unsigned char* tagpu_r3d_atlas_mirror(int* dim, int* rows, unsigned* serial);
 
-/* AND THE CLASSIC++ RESTORED TWIN'S MIRROR (gate 3 of the Vulkan-only plan).
-   Same three calls, one difference each: `_want` is additionally gated on
-   `tagpu_classicpp_assets()`, because the twin is a second 16 MB that a session
-   with Classic++ off must not pay for; `_step` has no counterpart on the
-   indexed side at all, because that mirror is written by the paint and this one
-   has to be READ BACK off the GPU (glReadPixels through an FBO, so the render
-   thread with the context current, once per published frame); and `_mirror_rgb`
-   reports the rows the read-back has COVERED rather than the shelf cursor,
-   which is what a consumer can upload. NULL until the first step has produced
-   rows, and NULL again after a context loss until it has produced them anew. */
-void tagpu_r3d_atlas_mirror_rgb_want(void);
-void tagpu_r3d_atlas_mirror_rgb_step(void);
-const unsigned char* tagpu_r3d_atlas_mirror_rgb(int* dim, int* rows, int* mips,
-                                                float* aniso, unsigned* serial);
-/* ...OR THE LIST OF FRAMES TO RESTORE, which `_want` above arms INSTEAD of the
-   read-back under `tagpu_restorevk.on` (the Vulkan-only plan's landing 7e-2).
-   The two are mutually exclusive: arming the list frees the mirror, and the
-   mirror accessor then returns NULL. `mips` and `aniso` describe the TWIN and
-   come from the atlas, because on this path no read-back carries them.
-   NULL until the list is armed and has entries. */
+/* ASK FOR THE CLASSIC++ RESTORED TWIN (gate 3 of the Vulkan-only plan, and
+   11-5e-2b). Gated on `tagpu_classicpp_assets()`, because the twin costs 16 MB
+   that a session with Classic++ off must not pay for, and idempotent: call it
+   once per published frame and it latches on success.
+
+   IT ARMS THE LIST, AND THAT IS ALL IT ARMS. Until 11-5e-2b these were three
+   calls -- `_want`, `_step` and `_mirror_rgb` -- and `_want` chose between the
+   list and a 16 MB RGBA8 READ-BACK of the GL twin, which `_step` drove with
+   `glReadPixels` through an FBO (hence "once per published frame, on the render
+   thread with the context current") and `_mirror_rgb` handed over as texels.
+   opengl32.dll is never in the process, so the read-back never produced a row;
+   all three shrank to this one. */
+void tagpu_r3d_atlas_restore_want(void);
+/* THE LIST OF FRAMES TO RESTORE, which `_want` above arms under
+   `tagpu_restorevk.on` (the Vulkan-only plan's landing 7e-2). `mips` and
+   `aniso` describe the TWIN and come from the atlas, because nothing reads it
+   back. NULL until the list is armed and has entries. */
 const TAGPU_RGLSL_FRAME* tagpu_r3d_atlas_restore_list(int* dim, int* n, unsigned* gen,
                                                       int* repaint, unsigned* blanks,
                                                       int* mips, float* aniso);

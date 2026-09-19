@@ -187,19 +187,14 @@ typedef struct TAGPU_FXHAND {
     int                   atlasRows;  /* the rows the shelf packer has used   */
     unsigned              atlasSerial;
 
-    /* CLASSIC++'s RESTORED TWIN, MIRRORED (the Vulkan-only plan's gate 2) --
-       tagpu_feat.h states the contract and this is the same one. NULL until the
-       restorer has painted and the read-back has run; `atlasRgbRows` is the
-       read-back's own high-water mark and lags the shelf cursor by design. */
-    const unsigned char*  atlasRgb;
-    int                   atlasRgbRows;
-    unsigned              atlasRgbSerial;
-    /* ...OR THE WORK ITSELF, for a lane that can restore on its own (the
-       Vulkan-only plan's landing 7d). These four are MUTUALLY EXCLUSIVE with
-       `atlasRgb` above and the producer is what makes them so: under
-       `tagpu_restorevk.on` it stops reading the restored twin back and
-       publishes the frame list instead, so exactly one of the two is ever here
-       and a consumer never has to choose between a mirror and a request.
+    /* ...AND THE WORK ITSELF IS NOW THE ONLY FORM IT COMES IN (the Vulkan-only
+       plan's landing 7d, and 11-5e-2b). These were MUTUALLY EXCLUSIVE with a
+       read-back mirror, `atlasRgb`, that stood here until the GL backend that
+       produced it went: a consumer chose between a picture and a request. The
+       mirror's only source was `glReadPixels`, opengl32.dll is never loaded
+       (`oglu_load_dll` has no caller), so the picture was NULL on every
+       published frame of every process and the choice was never a choice.
+       tagpu_feat.h carries the same tombstone and the same reasoning.
 
        IT IS AN APPEND-ONLY LIST WITH A CURSOR, not terrain's whole list per
        serial, because a effects atlas is a lazy QUEUE: tagpu_gaf.c adds one

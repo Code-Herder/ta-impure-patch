@@ -142,16 +142,16 @@ typedef struct TAGPU_GAFATLAS {
        4 and 4 so the twin can be MIPMAPPED to `mip` levels: with cells
        4-aligned and 4 texels of the frame's own edge around it, a mip texel
        at level <= 2 that touches a frame is made only of that frame's texels
-       (tools/tascene UNIT_PAD says the same). `mip` > 0 makes the twin
-       trilinear (GL_LINEAR_MIPMAP_LINEAR, MAX_LEVEL = mip, 4x anisotropic
-       where the extension answers) and its levels are regenerated after
-       every batch the restorer paints; 0 keeps it NEAREST, 1:1. */
+       (tools/tascene UNIT_PAD says the same). `mip` > 0 means the twin is
+       MIPPED to that top level and sampled trilinearly, 0 that it is NEAREST
+       and 1:1. IT IS NOW A SHAPE, NOT A SETTING: it described the GL twin's
+       own sampler (GL_LINEAR_MIPMAP_LINEAR, MAX_LEVEL = mip, 4x anisotropic
+       where the extension answered) and the levels that twin regenerated after
+       every batch the restorer painted, and there is no such twin since
+       11-5e-2. What reads it is `tagpu_r3d_atlas_restore_list`, which publishes
+       it as `restoreMips` so the OTHER lane builds a chain of the same depth
+       -- see `rgbAniso` below for the half of that contract which is pinned. */
     int           pad, align, mip;
-    /* `mippedN` -- frames painted when the mips were last built -- went with
-       the GL restorer in 11-5e-2; nothing rebuilds a twin's levels here now.
-       `mirroredMippedN` is written to 0 and never read: it is part of the
-       mirror, which goes in 11-5e-2b with the `atlasRgb*` publications. */
-    int           mirroredMippedN;
     /* Classic++ (renderers.md 4b Option 4): the RESTORED TWIN -- same dim,
        same shelf, GL_RGBA8 -- painted lazily from a queue that every miss
        feeds, so a frame draws indexed for the frame or two before its restore

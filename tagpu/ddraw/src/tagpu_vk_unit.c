@@ -96,12 +96,14 @@
    frame -- which is the configuration the shadow work is measured in --
    tagpu_native.c draws none of them.
 
-   CLASSIC++'s RESTORED ATLAS **IS** MIRRORED SINCE GATE 3 of the Vulkan-only
-   plan, so a frame whose twin reports `uRestored` 1 is DRAWN, through the
-   twin's own colours at binding 43 -- tagpu_render3do.c reads them back off
-   the RGBA8 surface and the hand-over carries them as `atlasRgb`. What is left
-   of the old refusal is "has the read-back produced rows YET", and it is no
-   longer latched for the session. MEASURED: on the fixture this pass's A/B
+   CLASSIC++'s RESTORED ATLAS IS DRAWN SINCE GATE 3 of the Vulkan-only plan, so
+   a frame whose twin reports `uRestored` 1 is DRAWN, through the twin's own
+   colours at binding 43. It reaches this lane as the producer's frame LIST,
+   which the restorer below paints into `s_arImg` here on the device; the
+   read-back mirror that carried it until landing 11-5e-2b is gone with the GL
+   backend that produced it. What is left of the old refusal is "has a restore
+   painted anything YET", and it is no longer latched for the session.
+   MEASURED: on the fixture this pass's A/B
    uses, the build before gate 3 drew NO PICTURE AT ALL with Classic++ art on
    and this one is 0 px with the cast-shadow map off, 1 px with it on -- and
    that 1 px is the shadow PCF's, established on the one configuration both
@@ -256,28 +258,26 @@ static int            s_atRows;
    whenever the read-back's high-water mark advanced, which is routinely, during
    play. [Same review, and it is the same fault twice.]
 
-   It is still built LAZILY -- on the first frame that carries a mirror rather
-   than beside the indexed atlas as the feature pass does -- so a session with
-   Classic++ off never pays the 16 MB. Lazy is safe here precisely because the
-   extent does not depend on the frame that triggers it.
+   It is still built LAZILY -- on the first frame that carries a restore list
+   rather than beside the indexed atlas as the feature pass does -- so a session
+   with Classic++ off never pays the 16 MB. Lazy is safe here precisely because
+   the extent does not depend on the frame that triggers it.
 
-   THE SERIAL ALONE DECIDES WHETHER TO UPLOAD. `s_arReq` is THE ROWS THE MIRROR
-   COVERED at the last upload, NOT the rows sent, and it is read for one thing
-   only: spotting a mirror that SHRANK, which needs the whole square re-sent
-   because the rows above the new mark still hold the previous twin's colours.
-   It is never compared against the published rows to decide WHETHER to send --
-   that comparison is gate 2's finding 2, where the two could never be equal and
-   16 MB went up every frame for ever.
-   This comment said "the rows LAST SENT" while claiming that discipline, and
-   the code did what the comment said: the whole-square rule forces the first
-   send to the full height, so the count latched there and every later frame
-   compared as a shrink. Same 16 MB, one atlas down, reached from the other
-   side. [The gate-3a re-review's finding 2; `tagpu_vk_feat.c`'s own
-   declaration carries the wording this one should have had.] */
+   NOTHING IS UPLOADED INTO IT. Until landing 11-5e-2b this image had a second
+   producer: a host-side RGBA8 mirror read back off the GL twin, staged and
+   copied in here, with `s_arSerial`/`s_arReq` deciding whether a frame owed it
+   bytes and whether the mirror had SHRUNK. That mirror was reachable only
+   through `glReadPixels`, and 11-5e-2's premise -- `oglu_load_dll` has no
+   caller, so opengl32.dll is never in the process -- made `tagpu_gaf.c`'s
+   producer refuse at its entry guard for the life of every process. The
+   published `atlasRgb` was NULL and `atlasRgbRows` 0 on every frame, so the
+   upload path here was dead code holding a dead field. The restorer below is
+   now the only thing that writes this image, and it writes it with
+   `vkCmdDraw`, not with a copy. [Landing 11-5e-2b.] */
 static VkImage        s_arImg;
 static VkDeviceMemory s_arMem;
 static VkImageView    s_arView;
-static int            s_arDim, s_arReq, s_arMips;
+static int            s_arDim, s_arMips;
 /* THE TWIN'S PER-LEVEL VIEWS (the Vulkan-only plan's landing 7e-2), made only
    when this lane restores for itself. `s_arLvl[L]` names level L alone, and the
    restorer takes them in pairs -- level L as the attachment, level L-1 as the
@@ -297,7 +297,6 @@ static TAGPU_VKRJOB*  s_rjob;
 static unsigned       s_rjGen, s_rjBlanks;
 static int            s_rjTaken, s_rjPainted, s_rjTried, s_rjChain;
 static VkImageView    s_rjSrcView, s_rjDstView;
-static unsigned       s_arSerial;
 static int            s_arHave;
 
 /* the 1x1 stand-ins a descriptor names when there is nothing real for it: the
@@ -1379,7 +1378,7 @@ static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int mips)
         if (s_arLvl[i]) { vkDestroyImageView(d->dev, s_arLvl[i], NULL); s_arLvl[i] = VK_NULL_HANDLE; }
     s_arLvlN = 0;
     kill_image(d, &s_arImg, &s_arMem, &s_arView);
-    s_arDim = 0; s_arMips = 0; s_arReq = 0; s_arSerial = 0; s_arHave = 0;
+    s_arDim = 0; s_arMips = 0; s_arHave = 0;
     /* COLOR_ATTACHMENT SINCE LANDING 7e-2, and it costs nothing when unused:
        the restorer paints level 0 into this image through a render pass and
        reduces the rest into it the same way, so every level is a colour
@@ -1606,118 +1605,20 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
     return 1;
 }
 
-/* THE RESTORED TWIN, on the same staging buffer and the same barrier shape.
+/* THE RESTORED TWIN IS NOT STAGED AND NOT COPIED. `rgb_stage_bytes`,
+   `rgb_rows_due` and `atlas_rgb_upload` lived here and put the GL read-back's
+   mirror onto the device: level 0's covered rows plus every other level whole,
+   at an offset past the indexed atlas's share, with the whole-square rule for a
+   mirror that shrank. All three are gone with the mirror that fed them
+   (11-5e-2b). Their careful parts are not lost -- the reservation-and-copy
+   agreeing by construction, and the refusal that matched `prepare`'s zeroed
+   count -- because `atlas_upload` above still carries both for the INDEXED
+   atlas, which is the one mirror this lane still uploads.
 
-   HOW MANY ROWS: `rgb_rows_due` decides, and the answer is either this frame's
-   covered rows or the WHOLE SQUARE. The square goes up on the first upload and
-   on a SHRINK -- the mirror drops to 0 rows on a context loss and on a re-arm
-   (tagpu_gaf.c) -- because uploading only the new, smaller count would leave
-   every row above it holding the previous twin's colours. The mirror's own
-   allocation is the full `dim * dim * 4` and it is calloc'd, so reading every
-   row of it is in bounds and the unpainted rows read as alpha 0, which is
-   exactly what an unpainted cell means. This is tagpu_vk_feat.c's rule,
-   unchanged, and the reason to keep the two files the same is that the one
-   place this pass DID differ from them is the fault its review found. */
-/* What the restored twin costs the staging buffer this frame: level 0's rows
-   plus every other level whole. One function so the RESERVATION and the COPY
-   cannot disagree -- they did on the terrain pass, and the gate-2 review is
-   where that was found. */
-static VkDeviceSize rgb_stage_bytes(const TAGPU_PDHAND* h, int rrows)
-{
-    VkDeviceSize n = (VkDeviceSize)h->atlasDim * rrows * 4;
-    int L;
-    for (L = 1; L <= h->atlasRgbMips; L++)
-        n += (VkDeviceSize)tagpu_gaf_mip_bytes(h->atlasDim, L);
-    return n;
-}
-
-static int rgb_rows_due(const TAGPU_PDHAND* h)
-{
-    int rrows = h->atlasRgbRows;
-    if (rrows > h->atlasDim) rrows = h->atlasDim;
-    if (!s_arHave || rrows < s_arReq) rrows = h->atlasDim;
-    return rrows;
-}
-
-static int atlas_rgb_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
-                            const TAGPU_PDHAND* h, VkDeviceSize stageOff)
-{
-    VkDeviceSize bytes;
-    int rrows;
-    /* ROWS OUT OF THIS ATLAS'S SQUARE ARE NO MIRROR, and `prepare` has already
-       said so in the log and zeroed its own copy -- so saying it here too is
-       what makes that message TRUE rather than half true. Without this the
-       upload went ahead on a clamped count while the pass refused the frame.
-       [The gate-3a re-review's minor finding.] */
-    if (!s_arImg || !h->atlasRgb || h->atlasRgbRows < 1 ||
-        h->atlasRgbRows > h->atlasDim) return 1;
-    if (s_arHave && s_arSerial == h->atlasRgbSerial) return 1;
-    /* THE IMAGE IS THIS ATLAS'S SQUARE OR NOTHING IS COPIED. It is built to
-       `atlasDim` and that number is bounded in `prepare`, so this cannot fire;
-       it is kept as the assertion that the copy's extent and the memcpy's
-       source are the same rectangle -- the gate-2 review found the terrain pass
-       reading one off the other. */
-    if (s_arDim != h->atlasDim || s_arMips != h->atlasRgbMips) return 1;
-    rrows = rgb_rows_due(h);
-    bytes = rgb_stage_bytes(h, rrows);
-    if (stageOff + bytes > s->vscap) return 0;
-    /* LEVEL 0'S ROWS FIRST, THEN EVERY OTHER LEVEL WHOLE, each at its own
-       offset in the staging buffer -- they cannot be one memcpy, because the
-       mirror holds the FULL level 0 (its unpainted rows read as alpha 0) while
-       the staging holds only the rows due, so the two layouts diverge after
-       the first level. */
-    {
-        size_t so = 0;
-        int L;
-        memcpy(s->vsmap + stageOff, h->atlasRgb, (size_t)s_arDim * rrows * 4);
-        so = (size_t)s_arDim * rrows * 4;
-        for (L = 1; L <= s_arMips; L++) {
-            size_t n = tagpu_gaf_mip_bytes(s_arDim, L);
-            memcpy(s->vsmap + stageOff + so,
-                   h->atlasRgb + tagpu_gaf_mip_off(s_arDim, L), n);
-            so += n;
-        }
-    }
-    img_barrier(cb, s_arImg, VK_IMAGE_ASPECT_COLOR_BIT,
-                (uint32_t)(s_arMips + 1),
-                s_arHave ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                         : VK_IMAGE_LAYOUT_UNDEFINED,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                s_arHave ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                         : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                s_arHave ? VK_ACCESS_SHADER_READ_BIT : 0,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    copy_rect(cb, s->vstage, stageOff, s_arImg, 0, s_arDim, rrows);
-    {
-        VkDeviceSize so = (VkDeviceSize)s_arDim * rrows * 4;
-        int L;
-        for (L = 1; L <= s_arMips; L++) {
-            int dl = s_arDim >> L;
-            if (dl < 1) dl = 1;
-            copy_rect(cb, s->vstage, stageOff + so, s_arImg, L, dl, dl);
-            so += (VkDeviceSize)tagpu_gaf_mip_bytes(s_arDim, L);
-        }
-    }
-    img_barrier(cb, s_arImg, VK_IMAGE_ASPECT_COLOR_BIT,
-                (uint32_t)(s_arMips + 1),
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-    s_arSerial = h->atlasRgbSerial;
-    /* THE ROWS THE MIRROR COVERED, NOT THE ROWS SENT. Storing the rows sent is
-       gate 2's finding 2 turned inside out: the whole-square rule forces the
-       first send to the full height, so `s_arReq` latched at `atlasDim`, every
-       later frame's shelf-bounded count compared as a SHRINK, and the partial
-       path below became unreachable -- 21 MB memcpy'd per serial change and 21
-       MB of host-visible staging reserved per slot, for ever. `tagpu_vk_feat.c`
-       stores the published rows for exactly this reason and says so in its own
-       declaration; this pass's comment claimed the same discipline while the
-       code did the opposite. [The gate-3a re-review's finding 2.] */
-    s_arReq = h->atlasRgbRows;
-    s_arHave = 1;
-    return 1;
-}
+   WHAT WRITES `s_arImg` NOW: `restore_want` below, through the restore job, on
+   the device, from the indexed atlas and the palette. There is no host-side
+   source for it any more, so there is no staging share to reserve and no serial
+   to compare -- `s_arHave` alone says whether it is a picture. */
 
 /* the two uniform blocks for one unit: the vertex stage's twice (the body's
    and the caster's) and the fragment stage's once, at the std140 offsets
@@ -1854,8 +1755,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     SLOT* s;
     VkMemoryBarrier mb = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
     VkDeviceSize ustride, vglOff2, fglOff, pstride, stageOff, stageNeed, atlasNeed;
-    VkDeviceSize rgbNeed = 0;
-    int rgbRows = 0, feed = 0;
+    int feed = 0;
     int fogW = 1, fogH = 1, i, anyUpload = 0, fogWanted = 0;
 
     s_ndraw = 0; s_ncast = 0; s_drawThis = 0;
@@ -2019,12 +1919,6 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        condition has cleared. This one clears by itself within a few frames of
        the restorer starting, so `s_saidRestored` gates the LOG LINE and not the
        refusal. */
-    rgbRows = h.atlasRgb ? h.atlasRgbRows : 0;
-    if (rgbRows < 0 || rgbRows > h.atlasDim) {
-        plog(d, "unit: a restored mirror of %d rows against a %d-row atlas is "
-                "not this atlas's - taken as no mirror", h.atlasRgbRows, h.atlasDim);
-        rgbRows = 0;
-    }
     /* BUILT BEFORE THE REFUSAL THAT TESTS IT, and that order is the whole of
        it: `prepare` returning 0 skips everything below, so a build placed after
        the refusal never runs -- the pass cannot make the image because it
@@ -2032,27 +1926,17 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        measured failing in exactly that shape twice on the way to gate 2, with
        a perfect hand-over against img=0 view=0. A failure is non-fatal: the
        view stays NULL and the refusal below then holds. */
-    /* ...OR BECAUSE A LIST WAS PUBLISHED. The rows are the MIRROR's, and on the
-       list path there is no mirror -- the twin is the thing this lane paints
-       into, so it has to exist BEFORE there is anything to put in it. Gating
-       its creation on the read-back's rows left `restore_want` with no
-       destination, so it made no job, so nothing ever painted, so the pass
-       stood down for the session with the list sitting there full: measured on
-       the first run of landing 7e-2's oracle, which dumped three sprite atlases
-       and no unit chain at all. The shape comes from the producer
-       (`restoreDim`/`restoreMips`) for the same reason the aniso does: on this
-       path no read-back carries it. */
-    if (rgbRows > 0) {
-        if (!atlas_rgb_build(d, h.atlasDim, h.atlasRgbMips)) {
-            if (!s_saidRgbImg) {
-                s_saidRgbImg = 1;
-                plog(d, "unit: no %d MB device image for the Classic++ restored twin "
-                        "- restored frames stand down while that is true",
-                     (h.atlasDim * h.atlasDim * 4) >> 20);
-            }
-        }
-    } else if (h.restoreFrames && h.restoreDim > 0 &&
-               h.restoreMips >= 0 && h.restoreMips <= TAGPU_VK_MAXMIP) {
+    /* ...AND BECAUSE A LIST WAS PUBLISHED, which is now the only reason there
+       is. The twin is the thing this lane PAINTS INTO, so it has to exist
+       BEFORE there is anything to put in it. Gating its creation on a
+       read-back's rows left `restore_want` with no destination, so it made no
+       job, so nothing ever painted, so the pass stood down for the session with
+       the list sitting there full: measured on the first run of landing 7e-2's
+       oracle, which dumped three sprite atlases and no unit chain at all. The
+       shape comes from the producer (`restoreDim`/`restoreMips`) for the same
+       reason the aniso does: nothing else carries it. */
+    if (h.restoreFrames && h.restoreDim > 0 &&
+        h.restoreMips >= 0 && h.restoreMips <= TAGPU_VK_MAXMIP) {
         if (!atlas_rgb_build(d, h.restoreDim, h.restoreMips)) {
             if (!s_saidRgbImg) {
                 s_saidRgbImg = 1;
@@ -2072,12 +1956,13 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        a different picture wherever a unit is minified at an angle, which is
        ordinary play, so the frame stands down rather than draw one. Same rule,
        and the same shape, as `s_cmpLinear` above. */
-    /* ON BOTH PATHS. `atlasRgbAniso` is the ratio GL applied to the TWIN, not a
-       fact about the read-back, and the producer publishes it whether it hands
-       over the picture or the list -- so a restore this lane runs for itself is
-       held to the same filter test as a mirror it uploaded. [Landing 7e-2.] */
-    if (h.restored && (rgbRows > 0 || h.restoreFrames) &&
-        h.atlasRgbAniso != s_twinAniso) {
+    /* `atlasRgbAniso` IS THE RATIO, AND IT SURVIVED THE MIRROR. It is a fact
+       about what the OTHER lane's twin was filtered at, not about the read-back
+       that used to carry it, and the producer publishes it on the list path too
+       -- so a restore this lane runs for itself is held to the filter test that
+       a mirror used to be held to. [Landing 7e-2; the field is what 11-5e-2
+       labelled `[PINNED 0]`, and 11-5e-2b kept it for this test.] */
+    if (h.restored && h.restoreFrames && h.atlasRgbAniso != s_twinAniso) {
         if (!s_saidAniso) {
             s_saidAniso = 1;
             plog(d, "unit: the GL twin filters the Classic++ restored atlas at %.1fx "
@@ -2089,21 +1974,21 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     }
     s_saidAniso = 0;
 
-    /* EITHER THE MIRROR OR A RESTORE THIS LANE RAN, and the refusal must not
-       always return: with the list armed there is no mirror and no painted
-       twin until a job exists, and the job is made below in `restore_want`. So
-       a frame that has the list, the image and no job yet FALLS THROUGH to make
-       one and then returns -- which is the deadlock landing 7d paid for in the
-       sprite passes and is written the same way here. [Landing 7e-2.] */
+    /* A RESTORE THIS LANE RAN, and the refusal must not always return: there is
+       no painted twin until a job exists, and the job is made below in
+       `restore_want`. So a frame that has the list, the image and no job yet
+       FALLS THROUGH to make one and then returns -- which is the deadlock
+       landing 7d paid for in the sprite passes and is written the same way
+       here. [Landing 7e-2.] */
     feed = 0;
-    if (h.restored && !(s_arView && (rgbRows > 0 || (h.restoreFrames && s_arHave)))) {
+    if (h.restored && !(s_arView && h.restoreFrames && s_arHave)) {
         if (h.restoreFrames && s_arImg && !s_rjTried) feed = 1;
         if (!s_saidRestored) {
             s_saidRestored = 1;
-            plog(d, "unit: the GL twin is drawing through the Classic++ restored "
-                    "atlas and this lane has neither a mirror of it nor a restore "
-                    "of its own yet - nothing drawn until one of them arrives, "
-                    "rather than a different picture from its own oracle");
+            plog(d, "unit: the other lane is drawing through the Classic++ restored "
+                    "atlas and this lane has no restore of its own yet - nothing "
+                    "drawn until one arrives, rather than a different picture from "
+                    "its own oracle");
         }
         if (!feed) goto standdown;
     } else s_saidRestored = 0;
@@ -2218,16 +2103,11 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        [FOUND 2026-09-16, the re-review of the fix.] */
     atlasNeed = (!s_atHave || s_atSerial != h.atlasSerial)
                 ? (VkDeviceSize)h.atlasDim * h.atlasDim : 0;
-    /* THE RESTORED TWIN RESERVES ITS SHARE THE SAME WAY, and for the same
-       reason: `atlas_rgb_upload` copies at an offset past the loop's bytes, so
-       an overspend by the loop would eat into its room. It is the image's own
-       extent, which is this frame's rows -- the indexed one reserves the full
-       square because its `atlasRows` can only make the copy smaller, and here
-       the image was built to the rows, so there is nothing to round up to. */
-    rgbNeed = (s_arView && h.atlasRgb && rgbRows > 0 &&
-               (!s_arHave || s_arSerial != h.atlasRgbSerial))
-              ? rgb_stage_bytes(&h, rgb_rows_due(&h)) : 0;
-    atlasNeed += rgbNeed;
+    /* THE RESTORED TWIN RESERVES NOTHING, because nothing is copied into it
+       from the host any more. It used to reserve its own share here for the
+       same reason the indexed atlas does -- an overspend by the loop above
+       would have eaten into the room its memcpy needed -- and that share is
+       gone with the mirror (11-5e-2b). The restorer paints it on the device. */
     stageNeed += atlasNeed;
     if (stageNeed) {
         if (!slot_vstage(d, s, stageNeed)) goto refuse;
@@ -2404,8 +2284,6 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     s_saidShort = 0;
 
     if (!atlas_upload(d, cb, s, &h, stageOff)) goto refuse;
-    if (!atlas_rgb_upload(d, cb, s, &h, stageOff + (atlasNeed - rgbNeed)))
-        goto refuse;
 
     /* THE REQUEST, AFTER THE ATLAS EXISTS. `restore_want` reads `s_atView`, and
        this is the call that makes it -- so asking earlier would ask over an
@@ -2414,11 +2292,10 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        says so by returning 0, exactly as the refusal above would have. */
     restore_want(d, &h);
     /* ...AND OUT THROUGH `feedout`, WHICH DESTROYS NOTHING. A feed frame has
-       drawn nothing, but it is not empty-handed: `atlas_upload` and
-       `atlas_rgb_upload` above have already recorded copies OUT OF
-       `s->vstage`, and `cb` is submitted whether this pass draws or not. It
-       took `standdown` until 2026-09-17 -- and `slot_free` there destroys that
-       very buffer. See the label. */
+       drawn nothing, but it is not empty-handed: `atlas_upload` above has
+       already recorded a copy OUT OF `s->vstage`, and `cb` is submitted whether
+       this pass draws or not. It took `standdown` until 2026-09-17 -- and
+       `slot_free` there destroys that very buffer. See the label. */
     if (feed) goto feedout;
 
     /* THE FOUR SMALL IMAGES, per slot, so the one-line invariant covers them:
@@ -2498,11 +2375,10 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 
 feedout:
     /* A FEED FRAME KEEPS ITS SLOT, because it has already spent it. By the
-       time control reaches here `slot_vstage` has allocated `s->vstage`,
+       time control reaches here `slot_vstage` has allocated `s->vstage` and
        `atlas_upload` has memcpy'd the indexed mirror into it and recorded a
-       `vkCmdCopyBufferToImage` out of it, and `atlas_rgb_upload` has done the
-       same for the restored twin. `cb` is submitted whether this pass draws or
-       not, so those copies WILL run -- and `standdown` below frees the slot,
+       `vkCmdCopyBufferToImage` out of it. `cb` is submitted whether this pass
+       draws or not, so that copy WILL run -- and `standdown` below frees the slot,
        which is `slot_free` -> `kill_buffer(&s->vstage)`: the source buffer of a
        copy the GPU has not executed yet.
 
@@ -2927,7 +2803,7 @@ void tagpu_vk_unit_down(const TAGPU_VKPASS* d)
     kill_image(d, &s_dumImg, &s_dumMem, &s_dumView);
     kill_image(d, &s_dumDepth, &s_dumDepthMem, &s_dumDepthView);
     s_atDim = 0; s_atSerial = 0; s_atHave = 0; s_atRows = 0; s_dumReady = 0;
-    s_arDim = 0; s_arMips = 0; s_arReq = 0; s_arSerial = 0; s_arHave = 0;
+    s_arDim = 0; s_arMips = 0; s_arHave = 0;
     if (s_dpool) { vkDestroyDescriptorPool(d->dev, s_dpool, NULL); s_dpool = VK_NULL_HANDLE; }
     if (s_pipeBody) { vkDestroyPipeline(d->dev, s_pipeBody, NULL); s_pipeBody = VK_NULL_HANDLE; }
     if (s_pipeGhost) { vkDestroyPipeline(d->dev, s_pipeGhost, NULL); s_pipeGhost = VK_NULL_HANDLE; }

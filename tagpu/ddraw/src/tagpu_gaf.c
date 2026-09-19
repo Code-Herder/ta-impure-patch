@@ -706,7 +706,6 @@ int tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a)
         a->mirrorRgbRows = 0;
         a->mirroredPainted = 0;
         a->mirroredRgbGen = 0;
-        a->mirroredMippedN = 0;
         a->mirrorRgbSerial++;       /* what a consumer holds is no longer fed  */
     }
     _snprintf(b, sizeof b, "%s: restorevk -- the restore is the other lane's to run, so"
@@ -759,7 +758,6 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
        tells it to blank and start over; without this it would keep painting
        the old layout's rects for the rest of the session. */
     rlist_reset(a, 0);
-    a->mirroredMippedN = 0;
     /* THE FBO DIED WITH THE CONTEXT TOO -- forgotten, never deleted, exactly
        as `tex` is above: deleting a name from a context that is gone either
        does nothing or destroys a live object of the NEW one that has been

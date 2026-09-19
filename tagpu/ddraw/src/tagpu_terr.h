@@ -242,24 +242,14 @@ typedef struct TAGPU_TERRHAND {
     const unsigned char* atlas;       /* atlasW x atlasH R8                 */
     int                  atlasW, atlasH;
     unsigned             atlasSerial;
-    /* PERMANENTLY NULL/0 SINCE LANDING 11-5c, AND KEPT AS A TOMBSTONE.
-       Classic++'s restored tile atlas, MIRRORED (the Vulkan-only plan's gate
-       2): unlike `atlas` above this was never the buffer an upload was handed
-       -- the restorer painted it on the GPU, so it was a read-back, through
-       tagpu_gaf.c's helper. The thing it read back was a GL texture, and it
-       went with the rest of terrain's GL, so there is no producer and there
-       will not be one. A consumer may go on testing it; it will never fire.
-       CHANGING THE STRUCT'S SHAPE BELONGS TO 11-5e -- do not plumb anything
-       new into these three believing there is a writer. */
-    const unsigned char* atlasRgb;    /* always NULL                         */
-    int                  atlasRgbRows;/* always 0                            */
-    unsigned             atlasRgbSerial;
     /* THE WORK ITSELF, for the lane that restores on its own (the Vulkan-only
        plan's landing 7), and since 11-5c the only route there is. It used to
-       be one of two -- MUTUALLY EXCLUSIVE with `atlasRgb` above, made so by the
-       producer, which under `tagpu_restorevk.on` stopped reading the restored
-       twin back and published the frame list instead. With the read-back gone
-       the exclusion is structural and the choice no longer exists.
+       be one of two: `atlasRgb`, `atlasRgbRows` and `atlasRgbSerial` stood here
+       and carried Classic++'s restored tile atlas as TEXELS, read back off the
+       GL twin through tagpu_gaf.c's helper. 11-5c took terrain's GL and with it
+       the producer, and the three sat here as a tombstone -- NULL, 0 and never
+       written -- with a note saying the struct's shape belonged to 11-5e.
+       This is 11-5e, and they are gone.
 
        IT WAS ALSO UNREACHABLE UNTIL 11-5c, and that is worth recording where a
        consumer will read it: the only writer of this list lived inside the GL

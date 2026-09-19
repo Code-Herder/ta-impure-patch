@@ -529,101 +529,24 @@ const unsigned char* tagpu_r3d_atlas_mirror(int* dim, int* rows, unsigned* seria
     return s_atlas.mirror;
 }
 
-/* THE RESTORED TWIN'S MIRROR (the Vulkan-only plan's gate 3), asked for
-   SEPARATELY from the indexed one and behind `tagpu_classicpp_assets()`. It is
-   a second 16 MB at this atlas's 2048 square and it is worth anything only
-   while the restorer is what the GL twin samples, so a session that never turns
-   Classic++ on never pays for it. Latched on SUCCESS only, so a request made
-   before the atlas has its dimensions -- the first frames of a session -- is
-   retried on the next publish rather than remembered as a failure.
-   `tagpu_gaf_atlas_mirror_rgb` is itself idempotent and latches its own
-   failures, so this flag is only about not re-asking on every frame. */
-static int s_mirrorRgbAsked;
-/* ...OR THE LIST, WHICH IS THE OTHER ANSWER TO THE SAME QUESTION and is asked
-   FIRST (the Vulkan-only plan's landing 7e-2, the shape 7d gave features and
-   effects). With `tagpu_restorevk.on` beside TotalA.exe the other lane restores
-   for itself, so there is nothing to read back: the list is armed, the 16 MB
-   read-back is never asked for, and if it was already armed on an earlier beat
-   then arming the list frees it. Polled on every beat until it takes, exactly
-   as the mirror is, because the lever may appear mid-session. */
+/* THE LIST, WHICH SINCE 11-5e-2b IS THE ONLY ANSWER TO THE QUESTION (the
+   Vulkan-only plan's landing 7e-2, the shape 7d gave features and effects).
+   With `tagpu_restorevk.on` beside TotalA.exe the other lane restores the twin
+   for itself. It used to be one of two: a 16 MB RGBA8 READ-BACK of the GL twin
+   was armed instead whenever the lever was absent, stepped once per published
+   frame through `glReadPixels` off an FBO, and handed over as `atlasRgb`. Its
+   source was opengl32.dll, which is never in the process (`oglu_load_dll` has
+   no caller), so it produced nothing on any frame of any process; the arm, the
+   step, the accessor and the hand-over fields went together. Polled on every
+   beat until it takes, because the lever may appear mid-session. */
 static int s_rlistAsked;
 
-void tagpu_r3d_atlas_mirror_rgb_want(void)
+void tagpu_r3d_atlas_restore_want(void)
 {
     if (s_state != 1 || !s_atlas.mirror || s_atlas.dim <= 0 ||
         !tagpu_classicpp_assets())
         return;
     if (!s_rlistAsked) s_rlistAsked = tagpu_gaf_atlas_restore_vk(&s_atlas);
-    if (!s_rlistAsked && !s_mirrorRgbAsked)
-        s_mirrorRgbAsked = tagpu_gaf_atlas_mirror_rgb(&s_atlas);
-}
-
-/* ONE READ-BACK STEP PER PUBLISHED FRAME. It is a glReadPixels off an FBO, so
-   it belongs where the context is current and the caller is the render thread;
-   it is a no-op until the mirror is armed and again once the restorer has
-   stopped painting, so a settled scene pays one integer compare. */
-void tagpu_r3d_atlas_mirror_rgb_step(void)
-{
-    /* the list's arm frees the mirror, so the step below would find nothing to
-       do -- but it is gated here as well rather than left to that, because the
-       arm is a poll that can land on any frame and "mutually exclusive by
-       construction" was already wrong once on this plan for that reason */
-    if (s_mirrorRgbAsked && !s_rlistAsked) tagpu_gaf_atlas_mirror_rgb_step(&s_atlas);
-}
-
-/* THE ROWS ARE THE READ-BACK'S, NOT THE SHELF'S, and that is the difference
-   from the indexed accessor above. The indexed mirror is written by the same
-   `atlas_paint` that writes GL, so the shelf cursor bounds what is in it; this
-   one is filled by a read-back that runs at its own cadence, so what is in the
-   buffer is what the last step covered. Reporting the shelf here would hand a
-   consumer rows nothing had read -- and reporting rows a consumer's serial
-   cannot distinguish is the fault the gate-2 review found on the other side of
-   exactly this hand-over. */
-const unsigned char* tagpu_r3d_atlas_mirror_rgb(int* dim, int* rows, int* mips,
-                                                float* aniso, unsigned* serial)
-{
-    if (dim) *dim = 0;
-    if (rows) *rows = 0;
-    if (mips) *mips = 0;
-    if (aniso) *aniso = 0.0f;
-    if (serial) *serial = 0;
-    if (!s_atlas.mirrorRgb || s_atlas.mirrorRgbRows <= 0 || s_atlas.dim <= 0)
-        return NULL;
-    /* A CHAIN THAT DID NOT COME BACK WHOLE IS NO MIRROR AT ALL, and the first
-       draft of this accessor got that exactly backwards. It handed the levels
-       that were actually read and told the consumer to "build the shallower
-       image rather than one with an undefined level in it" -- which is a third
-       option nobody has: GL still filters this twin to its own MAX_LEVEL, so a
-       shallower Vulkan chain is A DIFFERENT PICTURE wherever a unit is
-       minified, which is ordinary play, and it is the very thing the aniso
-       check three lines from the consumer's refusal stands down for.
-       AND THE DEPTH IS ALSO WHAT SIZES THE IMAGE. Reporting a depth that moves
-       makes `atlas_rgb_build` rebuild, which is `kill_image` on an image the
-       other slots' submitted command buffers still name, with no fence between
-       -- gate 2's confirmed use-after-free, one atlas over. Refusing here is
-       what makes that rebuild UNREACHABLE rather than rare: `mip` is this
-       atlas's compile-time depth, so every publish carrying rows carries the
-       same `*mips`, and the consumer's own dimension-and-depth test becomes
-       the assertion it is written as. The consumer already draws nothing on a
-       frame with no mirror, which is the right answer to a chain we cannot
-       reproduce. [The gate-3a re-review's finding 4.]
-       `mip` IS NOT LITERALLY IMMUTABLE, and the first draft of this argument
-       said it was. `r3d_init` reassigns it on every GL context reset and
-       `tagpu_gaf_atlas_restore` demotes it to 0 on a GL with no
-       glGenerateMipmap. The argument survives on ORDERING rather than on the
-       constant: both writes land strictly before any publish carrying rows,
-       because the restore runs at the top of the frame and the twin cannot
-       exist before the demote. Naming the real invariant matters -- the
-       verification pass found the false one, and the same pair is what
-       `tagpu_gaf.c` now bounds its mirror writes against. */
-    if (s_atlas.mirrorRgbMips != s_atlas.mip)
-        return NULL;                 /* every out-param was zeroed on entry */
-    if (dim) *dim = s_atlas.dim;
-    if (rows) *rows = s_atlas.mirrorRgbRows;
-    if (mips) *mips = s_atlas.mirrorRgbMips;
-    if (aniso) *aniso = s_atlas.rgbAniso;
-    if (serial) *serial = s_atlas.mirrorRgbSerial;
-    return s_atlas.mirrorRgb;
 }
 
 /* THE LIST, AND THE TWIN'S SHAPE WITH IT. On this path there is no read-back
@@ -635,7 +558,8 @@ const unsigned char* tagpu_r3d_atlas_mirror_rgb(int* dim, int* rows, int* mips,
    restorer was the only writer -- so this reports "no anisotropy" while the
    consumer's own sampler is built at `aniso=`, default 4. See
    `tagpu_gaf.h` `rgbAniso`: unpinning the list without fixing this stands the
-   unit pass down. NULL until the list has been armed AND has entries; a consumer that
+   unit pass down. Since 11-5e-2b this is the ONLY reporter of it -- the mirror
+   accessor that also carried it is gone with the mirror. NULL until the list has been armed AND has entries; a consumer that
    gets NULL falls back to whatever it did before, which is the indexed atlas. */
 const TAGPU_RGLSL_FRAME* tagpu_r3d_atlas_restore_list(int* dim, int* n, unsigned* gen,
                                                       int* repaint, unsigned* blanks,

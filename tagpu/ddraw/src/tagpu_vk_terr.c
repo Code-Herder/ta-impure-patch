@@ -1346,8 +1346,7 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        uFog. */
     union { float f[UBLK_FS / 4]; int i[UBLK_FS / 4]; } ub;
     int fogW = 1, fogH = 1, hW = 1, hH = 1;
-    int doAtlas, doHeight, doRgb;
-    VkDeviceSize rgbOff = 0, rgbBytes = 0;
+    int doAtlas, doHeight;
 
     if (s_state == ST_REFUSED) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
@@ -1458,17 +1457,7 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        tagpu_terr.c reads back `s_atlasH` rows into a buffer allocated for
        `s_atlasH`, so the number is right at the producer -- and that is a bound
        only while both files are read together, which is this block's stated
-       reason for existing. The atlas's own height is the ceiling because the
-       mirror IS the atlas's rows; over it, the mirror is treated as absent, so
-       the frame draws indexed instead of sizing an image and a memcpy from a
-       number nothing checked. (This said "stands down (the refusal below)";
-       there is no refusal since 11-5c and the frame still draws.) */
-    if (t.atlasRgb && (t.atlasRgbRows < 1 || t.atlasRgbRows > t.atlasH)) {
-        plog(d, "terr: a restored mirror of %d rows against a %d-row atlas is not "
-                "this atlas's - taken as no mirror", t.atlasRgbRows, t.atlasH);
-        t.atlasRgb = NULL;
-        t.atlasRgbRows = 0;
-    }
+       reason for existing. */
     if (t.height) {
         if (t.hW < 1 || t.hH < 1 || t.hW > HEIGHT_MAXDIM || t.hH > HEIGHT_MAXDIM) {
             plog(d, "terr: a %dx%d height grid is outside what this pass carries - nothing drawn",
@@ -1544,16 +1533,17 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        fallback. (That was true when this was written, false for one landing
        review's length while a refusal stood above it, and is true again --
        see the `restored` computation near the uniform writes.) */
-    if (t.atlasRgb &&
-        !shared_resize(d, &s_rgbAtlas, t.atlasW, t.atlasRgbRows,
-                       VK_FORMAT_R8G8B8A8_UNORM, IMG_RESTORED) &&
-        s_rgbAtlas.img)
-        return 0;                          /* a retire is still clearing       */
-    /* ...OR THE OTHER WAY ROUND: the request, and this lane paints the atlas
-       itself. Read exactly as the mirror's resize above is -- an image still
-       there means a retire is clearing and the frame waits, no image means the
-       device refused and `restore_want` below finds no destination -- and the
-       size is the ATLAS's, because terrain restores all of it. */
+    /* THE REQUEST, and this lane paints the atlas itself. Since 11-5e-2b this
+       is the ONLY route: the mirror's own resize stood above, gated on
+       `t.atlasRgb`, which tagpu_terr.c has published NULL on every frame since
+       landing 11-5c deleted the read-back that filled it.
+       The return is read like the other two images' -- an image still there
+       means a retire is clearing and the frame waits, no image means the
+       device refused and `restore_want` below finds no destination. The size
+       is the ATLAS's, because terrain restores all of it. A device refusal
+       here is NOT fatal to the pass, which is why it does not `goto refuse`:
+       the terrain draws INDEXED, which is what tagpu_vk_restore.h calls the
+       shipped fallback. */
     if (t.restoreFrames &&
         !shared_resize(d, &s_rgbAtlas, t.atlasW, t.atlasH,
                        VK_FORMAT_R8G8B8A8_UNORM, IMG_RESTORED) &&
@@ -1583,17 +1573,15 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        and memcpy'd out of the mirror, so the two have to be the same rectangle
        or the copy runs off the end of one of them; the resize can be deferred
        (see there), and "I asked for this size" is not "the image is this size".
-       [FROM THE GATE-2 LANDING REVIEW, 2026-09-16.] */
-    doRgb = s_rgbAtlas.img && t.atlasRgb && t.atlasRgbRows > 0 &&
-            s_rgbAtlas.w == t.atlasW && s_rgbAtlas.h == t.atlasRgbRows &&
-            (!s_rgbAtlas.have || s_rgbAtlas.serial != t.atlasRgbSerial);
-    if (doAtlas || doHeight || doRgb) {
+       [FROM THE GATE-2 LANDING REVIEW, 2026-09-16 -- the restored atlas's own
+       upload went in 11-5e-2b with the mirror that fed it, and the argument is
+       kept because the two survivors ride the same buffer for the same
+       reason.] */
+    if (doAtlas || doHeight) {
         atlasBytes = doAtlas ? (VkDeviceSize)t.atlasW * t.atlasH : 0;
         heightOff = ALIGN4(atlasBytes);
         heightBytes = doHeight ? (VkDeviceSize)hW * hH : 0;
-        rgbOff = ALIGN4(heightOff + heightBytes);
-        rgbBytes = doRgb ? (VkDeviceSize)s_rgbAtlas.w * s_rgbAtlas.h * 4 : 0;
-        bigBytes = rgbOff + rgbBytes;
+        bigBytes = ALIGN4(heightOff + heightBytes);
         if (s->bigCap < bigBytes || !s->bigStage) {
             slot_drop_bigstage(d, s);
             if (!mk_buffer(d, bigBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -1612,11 +1600,6 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
             else          memset(s->bigMap + heightOff, 0, 1);
             shared_upload(cb, &s_height, s->bigStage, heightOff);
             s_height.serial = t.height ? t.heightSerial : 0;
-        }
-        if (doRgb) {
-            memcpy(s->bigMap + rgbOff, t.atlasRgb, (size_t)rgbBytes);
-            shared_upload(cb, &s_rgbAtlas, s->bigStage, rgbOff);
-            s_rgbAtlas.serial = t.atlasRgbSerial;
         }
     } else {
         slot_drop_bigstage(d, s);
