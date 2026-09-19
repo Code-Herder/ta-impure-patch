@@ -1735,17 +1735,35 @@ Back to the filed list:
    | `tagpu_overlay.c` | `tagpu_overlay_draw` |
    | `tagpu_render3do.c` | **nothing** — the only one |
 
+   **Re-checked 2026-09-18, for the eight files landing 11-2 owns, and the table holds.** Worth
+   recording is HOW it failed first: deriving each file's exported symbols from its own header
+   and testing those against the Vulkan sources reported `tagpu_terr.c`, `tagpu_feat.c`,
+   `tagpu_fx.c` and `tagpu_shadow.c` as called by **nothing**, which would have made four of them
+   look deletable. Grepping the names directly found `tagpu_terr_handover` in `tagpu_vk_terr.c`,
+   `tagpu_feat_handover` in `tagpu_vk_feat.c`, `tagpu_fx_handover` in `tagpu_vk_fx.c` and
+   `tagpu_shadow_handover` in `tagpu_vk_shadow.c` — the header extraction, not the table, was
+   wrong. The same pass's apparent *extra* findings (`tagpu_native_foglut`,
+   `tagpu_posedraw_depth_begin`, `tagpu_hires_draw`…) turned out to be mentions inside comments,
+   with no call site in any `tagpu_vk*.c`. **This is the third time this item's survey has been
+   caught by its own boundary**, and the rule it keeps re-teaching is the one at the end of the
+   method note: a mechanical scan is only as good as the boundary nobody checked, so a name that
+   decides whether a function can be deleted gets grepped for directly.
+
    **So landing 11 is `tagpu_restore_core.c`'s split, sixteen times.** Each of those files is a
    PRODUCER the Vulkan lane depends on with a GL DRAW half bolted to it, and the landing deletes
    the half, in place, leaving the producer and its `_handover`. Not one of them is a file that
    can be removed. The six files the row names are the only ones that go whole, and they are the
    small part.
 
-   `tagpu_native.c:3753` opening `if (!gl_draws) { …hand over…; return; }` and closing at `:3812`
-   is what makes this tractable: **everything below that line in the unit pass is GL-only by
-   construction**, which is why `tagpu_shadow.c` and `tagpu_hires_draw.c` carry GL with no lane
-   guard of their own — their draw entry points are called from below it (`:4155`, `:4463`,
-   `:4522`) while their hand-over entry points are called from the Vulkan lane. The seam inside
+   `tagpu_native.c:3817`'s `if (!gl_draws) { …hand over…; return; }` is what makes this
+   tractable: **everything below that line in the unit pass is GL-only by construction**, which
+   is why `tagpu_shadow.c` and `tagpu_hires_draw.c` carry GL with no lane guard of their own —
+   their draw entry points are called from below it (`tagpu_shadow_caster` `:4247`,
+   `tagpu_shadow_unit` `:4278`, `tagpu_hires_depth` `:4287`, `tagpu_hires_draw` `:4599` and
+   `:4658`) while their hand-over entry points are called from the Vulkan lane. [The four numbers
+   this paragraph carried — `:3753`, `:4155`, `:4463`, `:4522` — were taken before landings
+   10b and 10c and had all drifted; `:4155` had become a comment line and `:4463` a macro
+   definition. Re-derived 2026-09-18.] The seam inside
    each file is real and already drawn; it is just drawn sixteen times.
 
    The other headers are cleaner than that: `openglshader.h` and `d3d9shader.h` have **no
