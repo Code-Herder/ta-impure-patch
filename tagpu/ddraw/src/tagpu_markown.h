@@ -71,7 +71,6 @@ void tagpu_markown_flush(unsigned int frame_counter);
 /* the post-fog capture window, the only one left: `tagpu_mark.on=nocursor`
    turns the re-draw off and this on, so the engine's build cursor can be put
    through our frame beside ours */
-void tagpu_markown_set_capture(int on);
 /* the health bars. A SEPARATE lever from everything else: skipping the engine's
    without drawing ours would simply lose them, and `nobars` has to be able to
    leave that half alone. */
@@ -95,19 +94,14 @@ void tagpu_markown_set_digits(int ours);
 void tagpu_markown_beat(unsigned int frame_counter);   /* "we drew this frame" */
 int  tagpu_markown_installed(void);
 
-/* one captured 8bpp layer, handed to the GL side */
-typedef struct TAGPU_MARKLAYER {
-    const unsigned char* pix;   /* the rect's top-left texel (NULL = nothing) */
-    int pitch;                  /* bytes per row of the buffer it sits in     */
-    int x, y, w, h;             /* the game-frame rect it covers              */
-} TAGPU_MARKLAYER;
+/* `TAGPU_MARKLAYER` AND ITS ONE LAYER STOOD HERE -- a rect of the engine's own
+   8-bit pixels, captured out of the post-fog marker block and handed over to be
+   drawn back onto the frame. The clean cut deleted the capture; see the note at
+   the top of tagpu_markown.c for what it did and why removing it also repairs
+   the reference frame.
 
-/* One layer, and it is the post-fog one. The pre-fog layer went with G13p; the
-   enum keeps the shape so the GL side can grow another without a rewrite. */
-enum { TAGPU_MARK_POSTFOG = 0, TAGPU_MARK_NLAYER = 1 };
-
-/* 1 and *out filled when layer i carries something this frame, else 0 */
-int tagpu_markown_layer(int i, TAGPU_MARKLAYER* out);
-/* the palette index an untouched texel of a captured layer holds */
+   THE KEY SURVIVES IT. `tagpu_mark.c` still publishes this index to the Vulkan
+   pass, which uses it as the value a marker fragment must not write -- the same
+   palette entry the terrain pass key-fills the viewport with. */
 int tagpu_markown_key(void);
 #endif

@@ -86,58 +86,30 @@ static const unsigned char BARS_STOLEN[5] = { 0x83, 0xEC, 0x10, 0x53, 0x55 };
 volatile unsigned char g_markown_skipBars = 0;
 
 static int g_installed = 0;
-static int g_capture = 0;                 /* follows tagpu_mark.on           */
 static int g_selbox = 0;                  /* ours redraws the selection rect */
 static int g_cursor = 0;                  /* ours redraws the build cursor   */
 static int g_orders = 0;                  /* ours redraws the order markers  */
 static int g_digits = 0;                  /* ours redraws the group digit    */
 static unsigned g_beat = 0, g_last = 0;
 
-/* One layer, double-buffered — the post-fog build-cursor window, and only
-   under `tagpu_mark.on=nocursor`. The game thread fills one buffer while the GL
-   thread may still be uploading the other: a single buffer would let a present
-   catch the key-fill half-done and show a frame with the top of every marker
-   missing, which reads as flicker. Two buffers and a published pointer cost
-   one more allocation and remove the whole class.
+/* THE CAPTURE IS GONE, AND WHAT IT DID IS WORTH STATING ONCE. Under
+   `tagpu_mark.on=nocursor` this file used to swap the engine's own pixel base
+   out from under it for the length of the post-fog marker block: the engine
+   drew the build cursor and the drag band box into a double-buffered scratch
+   of OURS, and `tagpu_mark.c` then drew those captured bytes back onto the
+   frame as a textured quad.
 
-   The publication is therefore only ever REPLACED, never emptied and refilled.
-   That distinction is the whole point and it is not academic: the engine runs
-   this draw block far more often than we present — measured at ~83 blocks per
-   presented frame on a live skirmish, because everything else in its frame is
-   skipped and ours is the slow half — so anything the game thread leaves the
-   published slot holding for the length of one capture is what roughly a tenth
-   of all presents will read. Clearing at the start of a capture cost exactly
-   that: 13 presents in 120 with SHIFT held showed no order markers at all.
+   THE CLEAN CUT DELETED IT, and for two reasons rather than one. It was the
+   marker pass's only engine-pixel path -- everything else it draws is
+   re-derived from engine STATE as our own geometry. And it DIVERTED the
+   engine's draw: bytes captured into our scratch never reached the engine's own
+   surface, so the reference frame `tagpu_surf_take` keeps was missing exactly
+   the markers the capture had taken. Removing it makes the golden source whole
+   again, which is what the cut is for.
 
-   TWO buffers are enough only because the reader outruns them, and that was
-   measured rather than assumed. The writer alternates slots, so the buffer the
-   GL thread is uploading is reclaimed two publications later — about 0.4 ms at
-   the rate above. Instrumented for the case that matters (the slot about to be
-   key-filled is the one the reader still holds): 0 in ~50 000 publications at
-   1024x768. It is the upload finishing inside two of the engine's blocks that
-   keeps this true, so it is the thing to re-measure if the layer ever grows far
-   faster than the block does. */
-typedef struct {
-    unsigned char* buf[2];
-    unsigned char* retired[2];            /* the pair before the last growth */
-    int   bytes;                          /* size of each buffer             */
-    int   which;                          /* the one being written           */
-    int   active;                         /* base is currently swapped out   */
-    int*  ctx;                            /* whose base we swapped           */
-    unsigned char* saved;                 /* what it held                    */
-    int   opened;                         /* this frame's fill actually ran  */
-    int   tried;                          /* ...and whether it was attempted */
-    /* Published for the GL side, which reads it on the present thread. TWO
-       slots and an index rather than one struct: the geometry and the pointer
-       have to change together, and a single copy lets a reader pair a fresh
-       `pix` with the previous resolution's rect. The writer fills the slot the
-       index does NOT name, then moves the index. */
-    TAGPU_MARKLAYER desc[2];
-    volatile int    pub;                  /* published slot, -1 = nothing    */
-    int             pend;                 /* the slot this window is filling */
-} LAYER;
-
-static LAYER g_L[TAGPU_MARK_NLAYER];
+   All the *ownership* levers below survive: those stop the engine drawing a
+   marker at all, so ours can stand in its place, and the two are not the same
+   act. [The vulkan-only plan, THE CLEAN CUT.] */
 
 static void flog(const char* s)
 {
@@ -145,181 +117,20 @@ static void flog(const char* s)
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
 
-static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
 
 int tagpu_markown_installed(void) { return g_installed; }
 int tagpu_markown_key(void) { return tagpu_terr_key(); }
 
-int tagpu_markown_layer(int i, TAGPU_MARKLAYER* out)
-{
-    LAYER* L;
-    int slot;
-    if (i < 0 || i >= TAGPU_MARK_NLAYER || !out) return 0;
-    L = &g_L[i];
-    slot = L->pub;
-    if (slot != 0 && slot != 1) return 0;
-    *out = L->desc[slot];
-    return out->pix && out->w > 0 && out->h > 0;
-}
-
-/* ---- the capture itself ---------------------------------------------- */
-
-static void layer_clear(LAYER* L);
-
-/* Point the context's pixel base at our scratch and, on the first call of a
-   frame, key-fill the viewport rect of it first. Returns 0 (and leaves the
-   engine's frame alone) for any context we cannot validate — a refused capture
-   just means the engine keeps drawing this block into its own frame, which is
-   the pre-G13d behaviour and always safe. */
-static int layer_begin(LAYER* L, int* ctx, int fresh)
-{
-    const char* ta = *(const char* const*)TA_MAINPP;
-    unsigned char* buf;
-    int pitch, cl, ct, cr, cb, x0, y0, x1, y1, need, y;
-
-    if (L->active) return 1;                        /* already ours          */
-    if (!ptr_ok(ctx) || IsBadReadPtr(ctx, CTX_FIELDS * 4) || !ptr_ok(ta)) return 0;
-    pitch = ctx[CTX_PITCH];
-    if (pitch <= 0 || pitch > 16384) return 0;
-    if (!ptr_ok((void*)(size_t)(unsigned)ctx[CTX_BASE])) return 0;
-    cl = ctx[CTX_CLIP_L]; ct = ctx[CTX_CLIP_T];
-    cr = ctx[CTX_CLIP_R]; cb = ctx[CTX_CLIP_B];
-    /* the same validation terrown's fill does: the OFFSCREEN carries no buffer
-       HEIGHT, so its inclusive clip rect is the only bound we have — and it is
-       what sizes our scratch, since every blit below is clipped to it */
-    if (!(cl >= 0 && ct >= 0 && cr >= cl && cb >= ct && cr < pitch && cb < 8192))
-        return 0;
-    need = pitch * (cb + 1);
-
-    if (!fresh) {
-        /* the second half of a double-outlined rect: keep the buffer, the fill
-           and the geometry the first call set up */
-        if (!L->opened || pitch != L->desc[L->pend].pitch || need > L->bytes)
-            return 0;
-        L->ctx = ctx;
-        L->saved = (unsigned char*)(size_t)(unsigned)ctx[CTX_BASE];
-        ctx[CTX_BASE] = (int)(size_t)L->buf[L->which];
-        L->active = 1;
-        return 1;
-    }
-
-    /* The ADDRESSABLE rect, not the true one: at zoom < 1 tagpu_vpwide widens
-       what the engine can name, its own drawers then reach past the 1x edge,
-       and the replay maps every captured pixel back through the zoom anyway
-       (layer_quad projects from the TRUE vpL/eye, so a capture at an engine
-       position outside the 1x viewport lands where it belongs on screen).
-       Capturing only the 1x rect would throw the ring's markers away again.
-       The clip intersection below is what keeps it inside our scratch. */
-    {
-        int w, h;
-        if (!tagpu_vpwide_addressable(&x0, &y0, &w, &h))
-            tagpu_vpwide_true_rect(ta, &x0, &y0, &w, &h);
-        x1 = x0 + w;
-        y1 = y0 + h;
-    }
-    if (x0 < cl) x0 = cl;
-    if (y0 < ct) y0 = ct;
-    if (x1 > cr + 1) x1 = cr + 1;
-    if (y1 > cb + 1) y1 = cb + 1;
-    if (x1 <= x0 || y1 <= y0) return 0;
-
-    if (need > L->bytes) {
-        /* NOT realloc. It moves the block, and the GL thread may be part-way
-           through a glTexSubImage2D out of it with no handshake to wait on —
-           dropping the publication first would only narrow that window, not
-           close it, because the reader has already copied the pointer out.
-           Allocate a new pair and RETIRE the old one for a generation instead:
-           `need` only grows when the engine's surface pitch does, i.e. on a
-           resolution change, so this holds at most one spare pair and frees it
-           the next time round, by which point no reader can still be in it. */
-        unsigned char* a = (unsigned char*)malloc((size_t)need);
-        unsigned char* b = a ? (unsigned char*)malloc((size_t)need) : NULL;
-        if (!a || !b) {
-            free(a); free(b);
-            flog("markown: capture buffer alloc failed");
-            return 0;                     /* buffers untouched; retry next call */
-        }
-        free(L->retired[0]); free(L->retired[1]);
-        L->retired[0] = L->buf[0]; L->retired[1] = L->buf[1];
-        L->buf[0] = a; L->buf[1] = b;
-        L->bytes = need;
-        /* both descriptors now name pixels in the retired pair */
-        layer_clear(L);
-    }
-
-    /* The slot the GL side is NOT reading, chosen BEFORE the fill and
-       REMEMBERED for layer_end: deriving it again there would pick the wrong
-       one if layer_clear ran on the other thread in between. Buffer index and
-       descriptor slot are the same number by construction, so this KEY FILL can
-       never land in the buffer the published descriptor names, and one index
-       cannot drift from the other. (The non-fresh path above is the deliberate
-       exception — see mark_transp.) */
-    L->pend = (L->pub == 0) ? 1 : 0;
-    L->which = L->pend;
-    buf = L->buf[L->which];
-
-    /* Only the viewport rect is filled, and only the viewport rect is ever
-       uploaded: a bar near the edge can spill past it under the context's own
-       clip, but in the engine the side panel is blitted over that spill a few
-       hundred instructions later, so not drawing it is what parity means. */
-    {
-        int k = tagpu_markown_key();
-        for (y = y0; y < y1; y++)
-            memset(buf + (size_t)y * pitch + x0, k, (size_t)(x1 - x0));
-    }
-
-    L->ctx = ctx;
-    L->saved = (unsigned char*)(size_t)(unsigned)ctx[CTX_BASE];
-    ctx[CTX_BASE] = (int)(size_t)buf;
-    {
-        TAGPU_MARKLAYER* d = &L->desc[L->pend];
-        d->pix = NULL; d->pitch = pitch;
-        d->x = x0; d->y = y0; d->w = x1 - x0; d->h = y1 - y0;
-    }
-    L->active = 1;
-    L->opened = 1;
-    return 1;
-}
-
-/* Give the engine its frame back and publish what was drawn. `publish` is 0
-   for a window we opened and then decided held nothing. */
-static void layer_end(LAYER* L, int publish)
-{
-    int slot;
-    if (!L->active) return;
-    L->ctx[CTX_BASE] = (int)(size_t)L->saved;
-    L->active = 0;
-    L->ctx = NULL; L->saved = NULL;
-    slot = L->pend;
-    L->desc[slot].pix = publish
-        ? L->buf[L->which] + (size_t)L->desc[slot].y * L->desc[slot].pitch
-                           + L->desc[slot].x
-        : NULL;
-    L->pub = slot;                    /* moved last: the descriptor is whole */
-}
-
-/* Publish "nothing here" without touching the context, and WITHOUT claiming a
-   slot — a flip here could hand layer_end the descriptor of an older frame.
-   One volatile int, safe from either thread; layer_end is not, which is why
-   nothing but the game thread calls it.
-
-   Call it only for a frame that has DECIDED it has nothing — never to open a
-   capture with. A capture that is about to publish leaves the last publication
-   standing until it has a whole new one to put in its place; that is what the
-   second buffer is for. */
-static void layer_clear(LAYER* L) { L->pub = -1; }
 
 /* ---- the redirected call sites --------------------------------------- */
 
 /* hook 8: the layer-8 particle draw runs FIRST, into the engine's own frame
    (those particles belong to tagpu_sfx, not to us). What remains here is
-   bookkeeping for the two things that need to know a marker block has STARTED
-   — the post-fog window's "was there anything last time", and the order
-   arena's — plus the font latch the text pass needs taken at this instant. */
+   bookkeeping the order arena needs to know a marker block has STARTED, plus
+   the font latch the text pass needs taken at this instant. (The post-fog
+   capture window's own frame started here too, until the clean cut.) */
 static void __stdcall mark_hook8(void* ctx, int n)
 {
-    LAYER* P = &g_L[TAGPU_MARK_POSTFOG];
-
     ((void (__stdcall *)(void*, int))PASS_SFX_VA)(ctx, n);
 
     /* The engine's own font and text colour, as of the start of the block that
@@ -330,17 +141,6 @@ static void __stdcall mark_hook8(void* ctx, int n)
        COPIED here, glyph by glyph, and travels in the packet as bytes: the
        present thread never dereferences it (tagpu_packet_pub.c). */
     tagpu_packet_pub_font_snapshot();
-
-    /* The post-fog window is per-call and every one of its calls is still ahead
-       of us in this frame, so this is where its frame starts. Its "nothing to
-       show" is only knowable in arrears — no DrawTranspRectangle came — so it
-       is decided here, about the frame that just ended, rather than by clearing
-       on the way in and hoping a call arrives before the next present. The cost
-       is a one-block ghost — the block in which the drag ends still carries the
-       last rect — against a hole that was most of a frame wide. */
-    if (!P->opened) layer_clear(P);
-    P->tried = 0;
-    P->opened = 0;
 
     /* and the order arena's own block: the snapshot only runs when the SHIFT
        gate at `0x469BE1` opens, so "no snapshot in this block" is the only
@@ -366,8 +166,6 @@ static void __stdcall mark_hook9(void* ctx, int n)
    and both land in the same buffer. */
 static void __stdcall mark_transp(void* ctx, void* rect, int colour)
 {
-    LAYER* L = &g_L[TAGPU_MARK_POSTFOG];
-    int opened = 0;
     /* OURS DRAWS BOTH OF THIS BLOCK'S PRIMITIVES, so the engine's pair is not
        drawn at all — capturing them could never carry them into the outer ring.
        The engine clips these rects to the OFFSCREEN, which is screen-sized,
@@ -377,26 +175,7 @@ static void __stdcall mark_transp(void* ctx, void* rect, int colour)
        an engine-drawn rect standing in our frame as a ghost at the unzoomed
        position, exactly as for the selection rect above. */
     if (g_cursor) return;
-    if (g_capture) {
-        /* `tried` and `opened` are separate on purpose: if the FIRST of the two
-           calls is refused (a clip rect that will not validate, an allocation
-           that failed) the second must not then take the fresh path, flip the
-           buffer and re-key-fill — that would drop the outer rect and publish
-           only the inner one. A refused first call means this frame's cursor
-           stays the engine's, whole. */
-        /* The second call continues into the buffer the first one PUBLISHED,
-           so a present landing between them uploads the outer rect without the
-           inner: one frame of single-outlined cursor. Publishing once, after
-           both, would need layer_end split into "give the context back" and
-           "swap the descriptor in" — worth it if the cursor is ever seen to
-           thin out, not before. It is strictly smaller than what it replaced,
-           which showed NO cursor from hook 9 until the first of these calls. */
-        int fresh = !L->tried;
-        L->tried = 1;
-        opened = layer_begin(L, (int*)ctx, fresh);
-    }
     ((void (__stdcall *)(void*, void*, int))PASS_TRANSP_VA)(ctx, rect, colour);
-    if (opened) layer_end(L, 1);
 }
 
 /* The selection rectangle is the one marker the engine draws INSIDE the unit
@@ -639,36 +418,10 @@ void tagpu_markown_set_cursor(int ours)
     int v = ours && g_installed;
     if (v == g_cursor) return;
     g_cursor = v;
-    /* the post-fog window can never open again while this is set, so its last
-       publication would stand behind ours forever; give it up here. One
-       volatile store, which is why this is safe from the present thread. */
-    if (v) layer_clear(&g_L[TAGPU_MARK_POSTFOG]);
     flog(v ? "markown: engine build cursor/band box SKIPPED (ours live)"
            : "markown: engine build cursor/band box restored");
 }
 
-void tagpu_markown_set_capture(int on)
-{
-    int v = on && g_installed;
-    if (v == g_capture) return;
-    g_capture = v;
-    if (!v) {
-        /* Publish "nothing" and stop opening new windows — but do NOT close an
-           open one from here. This runs on the PRESENT thread (the arm poll and
-           the watchdog both reach it) while `layer_begin` runs on the game
-           thread inside DrawGameScreen, and an open window's `ctx` points into
-           that thread's live stack frame. Racing `layer_end` against the game
-           thread's own could write a half-cleared `saved` — a NULL pixel base —
-           straight back into the engine's draw context. It is not needed
-           either: every window the game thread opens, it closes, at hook 9 or
-           at the end of the same DrawTranspRectangle call. */
-        layer_clear(&g_L[TAGPU_MARK_POSTFOG]);
-        g_L[TAGPU_MARK_POSTFOG].tried = 0;
-        g_L[TAGPU_MARK_POSTFOG].opened = 0;
-    }
-    flog(v ? "markown: engine UI markers CAPTURED (ours live)"
-           : "markown: engine UI markers restored");
-}
 
 void tagpu_markown_beat(unsigned int frame_counter) { g_beat = frame_counter; }
 
@@ -678,11 +431,10 @@ void tagpu_markown_flush(unsigned int frame_counter)
     /* if the native pass stops running (overlay off, GL failure, a frame path
        that never reaches it) the engine's markers come back rather than the
        health bars and order lines simply vanishing */
-    if ((g_capture || g_markown_skipBars || g_selbox || g_cursor || g_orders ||
+    if ((g_markown_skipBars || g_selbox || g_cursor || g_orders ||
          g_digits) &&
         frame_counter - g_beat > 90) {
         flog("markown: marker pass silent for 90 frames");
-        tagpu_markown_set_capture(0);
         tagpu_markown_set_bars(0);
         tagpu_markown_set_selbox(0);
         tagpu_markown_set_cursor(0);
@@ -693,9 +445,9 @@ void tagpu_markown_flush(unsigned int frame_counter)
         char b[128];
         g_last = frame_counter;
         _snprintf(b, sizeof b,
-                  "MARKOWN capture=%d bars-skipped=%u selbox=%d cursor=%d "
+                  "MARKOWN bars-skipped=%u selbox=%d cursor=%d "
                   "orders=%d digits=%d",
-                  g_capture, (unsigned)g_markown_skipBars, g_selbox, g_cursor,
+                  (unsigned)g_markown_skipBars, g_selbox, g_cursor,
                   g_orders, g_digits);
         flog(b);
     }

@@ -1,59 +1,48 @@
-/* The frame's bottom layer on the Vulkan lane: TA's own 8-bit screen resolved
-   through the presented palette. The header carries the argument.
+/* THE REFERENCE TEXTURE: TA's own 8-bit screen, on the device, drawn nowhere.
+   The header carries the argument.
 
-   THE SHADER IS THE FORK'S, NOT THIS FILE'S. `tagpu_spv_openglshader_*` is
-   generated from inc/openglshader.h, which is what the GL lane draws through
-   `g_ogl.main_program`. The two lanes therefore run the same GLSL, which is the
-   whole rule tools/spirv-gen.py exists to keep.
+   THIS PASS USED TO BE THE FRAME'S BOTTOM LAYER -- it resolved TA's indices
+   through the presented palette and blitted them under everything we draw.
+   THE CLEAN CUT DELETED THAT DRAW and everything that served it: the pipeline,
+   the descriptor sets, the sampler, the vertex and uniform buffers, the quad,
+   `record`, and the GLSL the fork's GL lane shared with it. Nothing the engine
+   rasterises reaches the screen any more, and there is no lever to bring it
+   back -- the code is gone rather than gated.
 
-   ORIENTATION: THE QUAD AND THE FLIP ARE ONE CHOICE, AND THIS FILE MAKES IT
-   ONCE. `render_ogl.c` builds TWO quads for the same blit and the difference is
-   exactly a y negation:
+   WHAT IS LEFT IS THE UPLOAD, AND IT IS THE POINT. `tagpu_surf_take` captures
+   TA's composed frame on the CPU; this puts it on the device as a per-slot R8
+   index image with its palette beside it, and `tagpu_vk_surf_engine_view`
+   hands that view out. It is the golden source: the picture the 1997 software
+   rasteriser drew, kept so our passes can be checked against it. It is a
+   reference and never a layer.
 
-     the WINDOW quad   (`:576-597`, the `else`)  tex (0,0) at clip y = +1
-     the FBO quad      (`:554-575`, `shader1`)   tex (0,0) at clip y = -1
-
-   The first is what the GL lane presents; the second feeds an offscreen target
-   that a later pass turns back over. `build`'s `quad[]` below is the FBO one,
-   and Vulkan's y-down clip space undoes its negation -- so it lands upright
-   with NO viewport flip. The window quad WITH the negative-height flip is
-   equally correct and would have been just as good a choice.
-
-   WHAT IS NOT TRUE is that a literal-quad pass never flips. That was the first
-   version of this comment, after the first build here took the flip and drew
-   TA's shell upside down; it is a statement about WHICH OF THE FORK'S TWO QUADS
-   was copied, not about the pass. A reader who copies the window quad and drops
-   the flip on that authority gets the upside-down picture back.
-   [The pairing was established by the 4c-1 landing review.]
-
-   [The vulkan-only plan, landing 4c-1.] */
-
+   IT HAS NO CONSUMER IN THE TREE TODAY, and that is deliberate rather than an
+   oversight. The one consumer it had was the UI layer's composite, which went
+   with the cut. Keeping the upload alive costs one memcpy and one
+   vkCmdCopyBufferToImage per changed frame -- and the serial gate below means
+   a still screen pays neither -- which is the price of having the golden
+   source addressable from a shader the moment something wants to diff against
+   it. Dropping it would make the next comparison a rebuild rather than a call.
+   [The vulkan-only plan, THE CLEAN CUT.] */
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
 #include "tagpu_vk_surf.h"
 #include "tagpu_surf.h"
-#include "spirv/openglshader.spv.h"
 
 #define IFNS(X) \
-    X(vkGetPhysicalDeviceMemoryProperties) X(vkGetPhysicalDeviceProperties) \
-    X(vkGetPhysicalDeviceFormatProperties)
+    X(vkGetPhysicalDeviceMemoryProperties)
 
+/* NO PIPELINE, NO DESCRIPTORS, NO SAMPLER AND NO DRAW COMMAND. This list is
+   the whole of what an upload needs, and the twenty entry points the blit
+   needed went with it. A pass that resolves only what it uses cannot quietly
+   grow a draw back. */
 #define DFNS(X) \
-    X(vkCreateShaderModule) X(vkDestroyShaderModule) \
-    X(vkCreateDescriptorSetLayout) X(vkDestroyDescriptorSetLayout) \
-    X(vkCreatePipelineLayout) X(vkDestroyPipelineLayout) \
-    X(vkCreateGraphicsPipelines) X(vkDestroyPipeline) \
-    X(vkCreateDescriptorPool) X(vkDestroyDescriptorPool) \
-    X(vkAllocateDescriptorSets) X(vkUpdateDescriptorSets) \
     X(vkCreateBuffer) X(vkDestroyBuffer) X(vkGetBufferMemoryRequirements) \
     X(vkBindBufferMemory) \
     X(vkCreateImage) X(vkDestroyImage) X(vkGetImageMemoryRequirements) \
     X(vkBindImageMemory) X(vkCreateImageView) X(vkDestroyImageView) \
-    X(vkCreateSampler) X(vkDestroySampler) \
     X(vkAllocateMemory) X(vkFreeMemory) X(vkMapMemory) X(vkUnmapMemory) \
-    X(vkCmdBindPipeline) X(vkCmdBindVertexBuffers) X(vkCmdBindDescriptorSets) \
-    X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor) \
     X(vkCmdCopyBufferToImage) X(vkCmdPipelineBarrier)
 
 #define DECL(n) static PFN_##n n;
@@ -64,14 +53,10 @@ DFNS(DECL)
 enum { ST_UNBUILT = 0, ST_READY = 1, ST_REFUSED = 2 };
 
 #define PAL_W 256                      /* the palette image, 256 x 1 RGBA */
-#define VF    12                       /* floats per vertex: three vec4s  */
-#define NV    6                        /* two triangles, listed           */
 
 static int s_state;
 static int s_downOwed;
 static int s_downPaying;
-static int s_drawThis;
-static int s_dx, s_dy, s_dw, s_dh;     /* where `record` puts it, this frame */
 /* WHAT THIS PASS HAS ACTUALLY DONE, reported periodically rather than latched
    once: the two upload counts are the evidence that the surface and the palette
    are gated SEPARATELY, which a one-shot line could not show and which the
@@ -79,16 +64,6 @@ static int s_dx, s_dy, s_dw, s_dh;     /* where `record` puts it, this frame */
    a still frame moves neither. */
 static unsigned s_nBytes, s_nPal, s_nFrames, s_saidAt;
 
-static VkDescriptorSetLayout s_dsl;
-static VkPipelineLayout      s_plo;
-static VkPipeline            s_pipe;
-static VkDescriptorPool      s_dpool;
-static VkSampler             s_samp;
-
-static VkBuffer       s_vbuf, s_ubuf;
-static VkDeviceMemory s_vmem, s_umem;
-static unsigned char* s_umap;
-static VkDeviceSize   s_ustride;
 
 typedef struct {
     VkImage         img,  pimg;
@@ -97,7 +72,6 @@ typedef struct {
     VkBuffer        stage;
     VkDeviceMemory  smem;
     unsigned char*  smap;
-    VkDescriptorSet dset;
     int             w, h;              /* what this slot is sized for, 0 = nothing */
     unsigned        serial, palSerial; /* the serials this slot's images hold      */
     int             haveSerial;
@@ -155,15 +129,6 @@ static int mk_buffer(const TAGPU_VKPASS* d, VkDeviceSize size, VkBufferUsageFlag
     return 1;
 }
 
-static VkShaderModule mk_module(const TAGPU_VKPASS* d, const uint32_t* w, size_t words)
-{
-    VkShaderModuleCreateInfo sci = { VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
-    VkShaderModule m = VK_NULL_HANDLE;
-    sci.codeSize = words * 4;
-    sci.pCode = w;
-    if (vkCreateShaderModule(d->dev, &sci, NULL, &m) != VK_SUCCESS) return VK_NULL_HANDLE;
-    return m;
-}
 
 static int resolve(const TAGPU_VKPASS* d)
 {
@@ -242,9 +207,6 @@ static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
    this descriptor set has completed. */
 static int slot_size(const TAGPU_VKPASS* d, SLOT* s, int w, int h)
 {
-    VkDescriptorImageInfo ii[2];
-    VkWriteDescriptorSet wr[2];
-
     if (s->w == w && s->h == h) return 1;
     slot_free(d, s);
 
@@ -260,248 +222,13 @@ static int slot_size(const TAGPU_VKPASS* d, SLOT* s, int w, int h)
                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                    &s->stage, &s->smem, &s->smap)) return 0;
 
-    /* THE DESCRIPTOR SET IS REWRITTEN HERE AND THAT IS LEGAL FOR THE SAME
-       REASON THE REST OF IT IS: this set is only ever bound by a submit that
-       used this slot, and that submit has completed. */
-    memset(ii, 0, sizeof ii); memset(wr, 0, sizeof wr);
-    ii[0].sampler = s_samp; ii[0].imageView = s->view;
-    ii[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    ii[1].sampler = s_samp; ii[1].imageView = s->pview;
-    ii[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    wr[0].dstSet = s->dset; wr[0].dstBinding = 40; wr[0].descriptorCount = 1;
-    wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    wr[0].pImageInfo = &ii[0];
-    wr[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    wr[1].dstSet = s->dset; wr[1].dstBinding = 41; wr[1].descriptorCount = 1;
-    wr[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    wr[1].pImageInfo = &ii[1];
-    vkUpdateDescriptorSets(d->dev, 2, wr, 0, NULL);
 
     s->w = w; s->h = h;
     return 1;
 }
 
-static int build_sampler(const TAGPU_VKPASS* d)
-{
-    VkSamplerCreateInfo sci = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
-    VkFormatProperties fp;
-
-    vkGetPhysicalDeviceFormatProperties(d->pd, VK_FORMAT_R8_UNORM, &fp);
-    if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
-        plog(d, "surf: this device cannot sample R8_UNORM - the bottom layer stays down");
-        return 0;
-    }
-    /* NEAREST, AND IT IS A CORRECTNESS SETTING RATHER THAN A LOOK. The texel is
-       a palette INDEX: half way between index 7 and index 8 is index 7.5, which
-       resolves to a colour that is in no palette entry and belongs to neither
-       neighbour. render_ogl.c:391 sets GL_NEAREST on the same texture for the
-       same reason, and :526 sets NEAREST + CLAMP_TO_EDGE on the palette. */
-    sci.magFilter = VK_FILTER_NEAREST;
-    sci.minFilter = VK_FILTER_NEAREST;
-    sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sci.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
-    sci.maxLod = 0.0f;
-    if (vkCreateSampler(d->dev, &sci, NULL, &s_samp) != VK_SUCCESS) return 0;
-    return 1;
-}
-
-static int build_pipeline(const TAGPU_VKPASS* d)
-{
-    VkDescriptorSetLayoutBinding b[3];
-    VkDescriptorSetLayoutCreateInfo dli = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-    VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
-    VkPipelineShaderStageCreateInfo st[2];
-    VkVertexInputBindingDescription vb;
-    VkVertexInputAttributeDescription va[3];
-    VkPipelineVertexInputStateCreateInfo vi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
-    VkPipelineInputAssemblyStateCreateInfo ia = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
-    VkPipelineViewportStateCreateInfo vp = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
-    VkPipelineRasterizationStateCreateInfo rs = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
-    VkPipelineMultisampleStateCreateInfo ms = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
-    VkPipelineColorBlendAttachmentState cba;
-    VkPipelineColorBlendStateCreateInfo cb = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
-    VkDynamicState dyn[2] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
-    VkPipelineDynamicStateCreateInfo dy = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
-    VkGraphicsPipelineCreateInfo gp = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
-    VkPipelineDepthStencilStateCreateInfo ds;
-    VkShaderModule vs = VK_NULL_HANDLE, fs = VK_NULL_HANDLE;
-    VkResult r;
-    int ok = 0;
-
-    /* THE BINDINGS ARE THE GENERATOR'S, printed in the header it emitted: the
-       vertex stage's uniform block at 0, and the fragment stage's two samplers
-       at 40 and 41, because tools/spirv-gen.py allocates bindings BY STAGE. */
-    memset(b, 0, sizeof b);
-    b[0].binding = 0;  b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    b[0].descriptorCount = 1; b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-    b[1].binding = 40; b[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    b[1].descriptorCount = 1; b[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    b[2].binding = 41; b[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    b[2].descriptorCount = 1; b[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    dli.bindingCount = 3; dli.pBindings = b;
-    if (vkCreateDescriptorSetLayout(d->dev, &dli, NULL, &s_dsl) != VK_SUCCESS) return 0;
-
-    pli.setLayoutCount = 1; pli.pSetLayouts = &s_dsl;
-    if (vkCreatePipelineLayout(d->dev, &pli, NULL, &s_plo) != VK_SUCCESS) return 0;
-
-    vs = mk_module(d, tagpu_spv_openglshader_PASSTHROUGH_VERT_SHADER,
-                   sizeof tagpu_spv_openglshader_PASSTHROUGH_VERT_SHADER / sizeof(uint32_t));
-    fs = mk_module(d, tagpu_spv_openglshader_PALETTE_FRAG_SHADER,
-                   sizeof tagpu_spv_openglshader_PALETTE_FRAG_SHADER / sizeof(uint32_t));
-    if (!vs || !fs) { plog(d, "surf: a shader module was refused"); goto out; }
-
-    memset(st, 0, sizeof st);
-    st[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    st[0].stage = VK_SHADER_STAGE_VERTEX_BIT;   st[0].module = vs; st[0].pName = "main";
-    st[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; st[1].module = fs; st[1].pName = "main";
-
-    /* THE LOCATIONS ARE ATTR_LOCATIONS' AND THIS IS THE OBLIGATION THAT TABLE
-       NAMES. The fork asks the linker where its attributes landed
-       (glGetAttribLocation), so there is no layout(location=) in the GLSL and
-       spirv-gen assigns them from a table in its manifest -- VertexCoord 0,
-       COLOR 1, TexCoord 2. A vertex buffer laid out any other way would feed
-       the shader the wrong vec4s and there is no link step left to catch it. */
-    memset(&vb, 0, sizeof vb);
-    vb.binding = 0; vb.stride = VF * sizeof(float);
-    vb.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    memset(va, 0, sizeof va);
-    va[0].location = 0; va[0].binding = 0;
-    va[0].format = VK_FORMAT_R32G32B32A32_SFLOAT; va[0].offset = 0;
-    va[1].location = 1; va[1].binding = 0;
-    va[1].format = VK_FORMAT_R32G32B32A32_SFLOAT; va[1].offset = 4 * sizeof(float);
-    va[2].location = 2; va[2].binding = 0;
-    va[2].format = VK_FORMAT_R32G32B32A32_SFLOAT; va[2].offset = 8 * sizeof(float);
-    vi.vertexBindingDescriptionCount = 1; vi.pVertexBindingDescriptions = &vb;
-    vi.vertexAttributeDescriptionCount = 3; vi.pVertexAttributeDescriptions = va;
-
-    /* A LIST OF TWO TRIANGLES, WHICH IS WHAT THE GL LANE DRAWS -- its four
-       vertices through a six-index element buffer (render_ogl.c:1427). */
-    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-    vp.viewportCount = 1; vp.scissorCount = 1;   /* both dynamic, set in record */
-
-    rs.polygonMode = VK_POLYGON_MODE_FILL;
-    /* NO CULLING, and one quad is not worth a winding argument. */
-    rs.cullMode = VK_CULL_MODE_NONE;
-    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    rs.lineWidth = 1.0f;
-
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-    /* THE DEPTH STATE IS DECLARED AND OFF. The seam's subpass has a depth
-       attachment, and a null pDepthStencilState there is invalid -- so a pass
-       that does not test depth still says so rather than omitting it
-       (tagpu_vk_pass.h). This is the frame's BOTTOM layer: it neither tests
-       against the world nor writes anything the world would test against. */
-    memset(&ds, 0, sizeof ds);
-    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    ds.depthTestEnable = VK_FALSE;
-    ds.depthWriteEnable = VK_FALSE;
-    ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
-
-    /* OPAQUE, AND IT MUST BE. This replaces the clear over the viewport rect;
-       blending it would mix TA's frame with the lever's clear colour. */
-    memset(&cba, 0, sizeof cba);
-    cba.blendEnable = VK_FALSE;
-    cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                         VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    cb.attachmentCount = 1; cb.pAttachments = &cba;
-
-    dy.dynamicStateCount = 2; dy.pDynamicStates = dyn;
-
-    gp.stageCount = 2; gp.pStages = st;
-    gp.pVertexInputState = &vi;
-    gp.pInputAssemblyState = &ia;
-    gp.pViewportState = &vp;
-    gp.pRasterizationState = &rs;
-    gp.pMultisampleState = &ms;
-    gp.pDepthStencilState = &ds;
-    gp.pColorBlendState = &cb;
-    gp.pDynamicState = &dy;
-    gp.layout = s_plo;
-    gp.renderPass = d->rp;
-    gp.subpass = 0;
-    r = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_pipe);
-    if (r != VK_SUCCESS) { plog(d, "surf: the pipeline was refused (%d)", (int)r); goto out; }
-    ok = 1;
-out:
-    if (vs) vkDestroyShaderModule(d->dev, vs, NULL);
-    if (fs) vkDestroyShaderModule(d->dev, fs, NULL);
-    return ok;
-}
-
-static int build_descriptors(const TAGPU_VKPASS* d)
-{
-    VkDescriptorPoolSize ps[2];
-    VkDescriptorPoolCreateInfo dpi = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
-    VkDescriptorSetAllocateInfo dai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
-    VkDescriptorSetLayout lay[TAGPU_VK_SLOTS];
-    VkDescriptorSet sets[TAGPU_VK_SLOTS];
-    VkDescriptorBufferInfo bi;
-    VkWriteDescriptorSet wr;
-    uint32_t i;
-
-    memset(ps, 0, sizeof ps);
-    ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; ps[0].descriptorCount = d->slots;
-    ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps[1].descriptorCount = d->slots * 2;           /* the surface and its palette */
-    dpi.maxSets = d->slots;
-    dpi.poolSizeCount = 2; dpi.pPoolSizes = ps;
-    if (vkCreateDescriptorPool(d->dev, &dpi, NULL, &s_dpool) != VK_SUCCESS) return 0;
-
-    for (i = 0; i < d->slots; i++) lay[i] = s_dsl;
-    dai.descriptorPool = s_dpool;
-    dai.descriptorSetCount = d->slots;
-    dai.pSetLayouts = lay;
-    if (vkAllocateDescriptorSets(d->dev, &dai, sets) != VK_SUCCESS) return 0;
-
-    for (i = 0; i < d->slots; i++) {
-        s_slot[i].dset = sets[i];
-        /* THE UNIFORM BLOCK IS WRITTEN ONCE, HERE: it is one slot's window into
-           a buffer that never moves, and the only thing in it is a matrix this
-           pass never changes. The images are written per slot in `slot_size`. */
-        memset(&bi, 0, sizeof bi); memset(&wr, 0, sizeof wr);
-        bi.buffer = s_ubuf; bi.offset = (VkDeviceSize)i * s_ustride; bi.range = 64;
-        wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        wr.dstSet = sets[i]; wr.dstBinding = 0; wr.descriptorCount = 1;
-        wr.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; wr.pBufferInfo = &bi;
-        vkUpdateDescriptorSets(d->dev, 1, &wr, 0, NULL);
-    }
-    return 1;
-}
-
 static int build(const TAGPU_VKPASS* d)
 {
-    VkPhysicalDeviceProperties props;
-    VkDeviceSize ualign;
-    unsigned char* vmap = NULL;
-    uint32_t i;
-    /* THE GL LANE'S OWN QUAD (render_ogl.c:557 and :567), its four vertices
-       THE FBO ONE (render_ogl.c:554-575), expanded through the 0,1,2 0,2,3
-       element order into a list, and its tex coords at 1.0 rather than
-       scale_w/scale_h because this image is sized exactly w x h and needs no
-       padding to address around. The header says why it is that quad and not
-       the window one at :576-597.
-       COLOR is unused by PALETTE_FRAG_SHADER -- the vertex stage forwards it to
-       a varying the fragment stage does not read -- but the attribute is
-       DECLARED, so it is bound rather than left undefined. */
-    static const float quad[NV * VF] = {
-        /* VertexCoord         COLOR                 TexCoord            */
-        -1.f,-1.f, 0.f, 1.f,   1.f, 1.f, 1.f, 1.f,   0.f, 0.f, 0.f, 0.f,
-        -1.f, 1.f, 0.f, 1.f,   1.f, 1.f, 1.f, 1.f,   0.f, 1.f, 0.f, 0.f,
-         1.f, 1.f, 0.f, 1.f,   1.f, 1.f, 1.f, 1.f,   1.f, 1.f, 0.f, 0.f,
-        -1.f,-1.f, 0.f, 1.f,   1.f, 1.f, 1.f, 1.f,   0.f, 0.f, 0.f, 0.f,
-         1.f, 1.f, 0.f, 1.f,   1.f, 1.f, 1.f, 1.f,   1.f, 1.f, 0.f, 0.f,
-         1.f,-1.f, 0.f, 1.f,   1.f, 1.f, 1.f, 1.f,   1.f, 0.f, 0.f, 0.f,
-    };
-    /* MVPMatrix IS THE IDENTITY, which is what render_ogl.c:622 sets: the quad
-       above is already in clip space and the vertex stage transforms nothing. */
-    static const float ident[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
 
     if (d->slots == 0 || d->slots > TAGPU_VK_SLOTS) {
         plog(d, "surf: %u frame slots is outside what this pass carries (%d)",
@@ -517,29 +244,10 @@ static int build(const TAGPU_VKPASS* d)
        [FROM THE 4c-1 LANDING REVIEW.] */
     if (!resolve(d)) { plog(d, "surf: an entry point is missing"); return 0; }
 
-    vkGetPhysicalDeviceProperties(d->pd, &props);
-    ualign = props.limits.minUniformBufferOffsetAlignment;
-    if (ualign < 64) ualign = 64;
-    s_ustride = ualign;
 
-    if (!mk_buffer(d, sizeof quad, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                   &s_vbuf, &s_vmem, &vmap)) return 0;
-    memcpy(vmap, quad, sizeof quad);
-    vkUnmapMemory(d->dev, s_vmem);
 
-    if (!mk_buffer(d, s_ustride * d->slots, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                   &s_ubuf, &s_umem, &s_umap)) return 0;
-    for (i = 0; i < d->slots; i++)
-        memcpy(s_umap + (size_t)i * s_ustride, ident, sizeof ident);
-
-    if (!build_sampler(d)) return 0;
-    if (!build_pipeline(d)) return 0;
-    if (!build_descriptors(d)) return 0;
-
-    plog(d, "surf: the bottom layer is up - the fork's own blit, %u frame slots",
-         (unsigned)d->slots);
+    plog(d, "surf: the reference texture is up - TA's own frame on the device, "
+            "%u frame slots, drawn nowhere", (unsigned)d->slots);
     return 1;
 }
 
@@ -551,7 +259,6 @@ int tagpu_vk_surf_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     VkBufferImageCopy rg;
     int fresh, freshPal;
 
-    s_drawThis = 0;
     if (s_state == ST_REFUSED) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
 
@@ -693,87 +400,21 @@ int tagpu_vk_surf_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         s->haveSerial = 1;
     }
 
-    /* WHERE IT GOES, THIS FRAME'S. Kept for `record`, which is handed the
-       swapchain extent and nothing else. */
-    s_dx = sf.dx; s_dy = sf.dy; s_dw = sf.dw; s_dh = sf.dh;
-    s_drawThis = 1;
-
-    /* READIED, NOT DRAWN, and the word matters since the clean cut. This is
-       incremented in `prepare` and the draw is `record`'s -- which the seam
-       skips entirely under `tagpu_purevk.on`. Labelled "drawn" it reported
-       thousands of draws, climbing, in exactly the configuration whose whole
-       point is that this pass draws nothing; a heartbeat that contradicts the
-       landing it is meant to evidence is worse than no heartbeat. The count is
-       unchanged -- only the claim it makes about itself is. */
+    /* READIED, NEVER DRAWN. `sf.dx..sf.dh` -- where TA put this frame inside
+       the window -- are deliberately NOT kept any more: they existed for
+       `record`'s viewport and there is no record. The reference is the image
+       and its extent (`tagpu_vk_surf_engine_view` hands both out); where the
+       engine would have placed it on screen is a property of a composite that
+       no longer happens, and holding it would invite one back. */
     s_nFrames++;
     if (d->frame - s_saidAt >= 300) {
         s_saidAt = d->frame;
-        plog(d, "surf: frame %u: %dx%d -> (%d,%d %dx%d), %u frame(s) readied, "
-                "%u byte upload(s) and %u palette upload(s)%s",
-             (unsigned)d->frame, sf.w, sf.h, sf.dx, sf.dy, sf.dw, sf.dh,
-             s_nFrames, s_nBytes, s_nPal,
-             d->pureVk ? " - the clean cut: none of them drawn, the surface is"
-                         " the reference only" : "");
+        plog(d, "surf: frame %u: %dx%d readied as the reference, %u frame(s), "
+                "%u byte upload(s) and %u palette upload(s) - drawn nowhere",
+             (unsigned)d->frame, sf.w, sf.h,
+             s_nFrames, s_nBytes, s_nPal);
     }
     return 1;
-}
-
-void tagpu_vk_surf_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
-                          uint32_t w, uint32_t h)
-{
-    VkViewport vp;
-    VkRect2D sc;
-    VkDeviceSize off = 0;
-
-    int rx, ry, rw, rh;
-    (void)d;
-    if (s_state != ST_READY || !s_drawThis) return;
-    s_drawThis = 0;
-
-    /* CLAMPED TO THE RENDER AREA WE ARE HANDED. `s_dx..s_dh` were captured by
-       tagpu_surf_take at the top of tagpu_overlay_draw, which runs BEFORE
-       tagpu_vk_frame may rebuild the swapchain -- so on the frame a window
-       shrinks, the rect is the old viewport and `w`/`h` are the new extent, and
-       an unclamped scissor would lie partly outside the render area, which the
-       spec leaves undefined. Every other ported pass uses the extent it is
-       handed and cannot get here; this one carries its own rect and so has to
-       say it. [FROM THE 4c-1 LANDING REVIEW.] */
-    rx = s_dx < 0 ? 0 : s_dx;
-    ry = s_dy < 0 ? 0 : s_dy;
-    if (rx >= (int)w || ry >= (int)h) return;
-    rw = s_dw; rh = s_dh;
-    if (rx + rw > (int)w) rw = (int)w - rx;
-    if (ry + rh > (int)h) rh = (int)h - ry;
-    if (rw < 1 || rh < 1) return;
-
-    /* NO FLIP, BECAUSE THE QUAD IS THE FBO ONE -- see the file header, which
-       carries the pairing and the mistake that established it. In short: the
-       quad puts tex (0,0) at clip y = -1, Vulkan's clip y = -1 is the TOP of
-       the viewport, so TA's row 0 lands at the top. A negative-height viewport
-       on top of that would be a SECOND negation.
-
-       THE RECT IS THE FRAME'S VIEWPORT, not the window: the letterbox is the
-       seam's clear and this must not paint over it. */
-    vp.x = (float)rx;
-    vp.y = (float)ry;
-    vp.width = (float)rw;
-    vp.height = (float)rh;
-    vp.minDepth = 0.0f;
-    vp.maxDepth = 1.0f;
-    vkCmdSetViewport(cb, 0, 1, &vp);
-
-    /* The scissor is NOT flipped: it is a framebuffer rectangle and has no clip
-       space in it. It is the same rect, so a viewport whose flip put a fragment
-       outside it is clipped rather than drawn somewhere unintended. */
-    sc.offset.x = rx; sc.offset.y = ry;
-    sc.extent.width = (uint32_t)rw; sc.extent.height = (uint32_t)rh;
-    vkCmdSetScissor(cb, 0, 1, &sc);
-
-    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipe);
-    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_plo, 0, 1,
-                            &s_slot[slot].dset, 0, NULL);
-    vkCmdBindVertexBuffers(cb, 0, 1, &s_vbuf, &off);
-    vkCmdDraw(cb, NV, 1, 0, 0);
 }
 
 VkImageView tagpu_vk_surf_engine_view(uint32_t slot, int* w, int* h)
@@ -799,17 +440,6 @@ void tagpu_vk_surf_down(const TAGPU_VKPASS* d)
     if (!d || !d->dev) return;
     if (!vkDestroyImageView) return;        /* never resolved: nothing was made */
     for (i = 0; i < TAGPU_VK_SLOTS; i++) slot_free(d, &s_slot[i]);
-    if (s_dpool) { vkDestroyDescriptorPool(d->dev, s_dpool, NULL); s_dpool = VK_NULL_HANDLE; }
-    if (s_pipe)  { vkDestroyPipeline(d->dev, s_pipe, NULL); s_pipe = VK_NULL_HANDLE; }
-    if (s_plo)   { vkDestroyPipelineLayout(d->dev, s_plo, NULL); s_plo = VK_NULL_HANDLE; }
-    if (s_dsl)   { vkDestroyDescriptorSetLayout(d->dev, s_dsl, NULL); s_dsl = VK_NULL_HANDLE; }
-    if (s_samp)  { vkDestroySampler(d->dev, s_samp, NULL); s_samp = VK_NULL_HANDLE; }
-    if (s_umap)  { vkUnmapMemory(d->dev, s_umem); s_umap = NULL; }
-    if (s_ubuf)  { vkDestroyBuffer(d->dev, s_ubuf, NULL); s_ubuf = VK_NULL_HANDLE; }
-    if (s_umem)  { vkFreeMemory(d->dev, s_umem, NULL); s_umem = VK_NULL_HANDLE; }
-    if (s_vbuf)  { vkDestroyBuffer(d->dev, s_vbuf, NULL); s_vbuf = VK_NULL_HANDLE; }
-    if (s_vmem)  { vkFreeMemory(d->dev, s_vmem, NULL); s_vmem = VK_NULL_HANDLE; }
-    s_drawThis = 0;
     if (s_state != ST_REFUSED) s_state = ST_UNBUILT;
     s_downOwed = 0;
     s_downPaying = 0;

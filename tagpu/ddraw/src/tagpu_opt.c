@@ -19,23 +19,49 @@ typedef struct { const char* on; const char* tokens; const char* needs; const ch
 
 /* The table: the ta-drive skill's default arm set, Classic++ and the extra weapons.
    Order is the order the log line lists them in. */
+/* THE `*own` LEVERS ARE NO LONGER PLAY DEFAULTS, AND THE REASON IS THE
+   REFERENCE FRAME. `tagpu_terrown`, `tagpu_featown`, `tagpu_fxown`,
+   `tagpu_markown` and `tagpu_owndraw` stop the ENGINE drawing something, so
+   that ours can stand in its place. That was right while our world was
+   composited OVER the engine's frame: whatever the engine drew and we also
+   drew showed through as a double image, and suppressing its half was the
+   cure.
+
+   THE CLEAN CUT REMOVED THE COMPOSITE, so the engine's frame reaches no pixel
+   of the screen and there is nothing left to show through. What the
+   suppressions still do is damage the one thing the cut promised to keep: the
+   reference. `tagpu_surf_take` captures the engine's composed frame as the
+   golden source, and with these armed that capture holds a flat key-filled
+   viewport with no terrain, no trees, no effects and no markers -- it is not
+   the picture the 1997 software rasteriser draws, it is the picture it draws
+   with five of its passes removed, which is worth nothing to compare against.
+   Measured before this change: `TERROWN skip=1 filled=1`, `FEATOWN skip=1`,
+   `OWND target=all skipped=0 passed=5311`.
+
+   WHAT IT COSTS is the CPU the engine spends rasterising a frame nobody sees,
+   which is real and is the whole of what these levers buy now. They are kept
+   and still work -- arm `tagpu_terrown.on` and the engine's terrain stops,
+   exactly as before -- so the trade is available to anyone who wants the
+   frame time back and does not need the reference. It is not the default,
+   because a golden source with holes in it is the more expensive mistake.
+   [The vulkan-only plan, THE CLEAN CUT.] */
 static const Def s_defs[] = {
     { "tagpu_native.on",    "all wrecks", 0, 0 },          /* every unit natively, 3D husks too   */
-    { "tagpu_owndraw.on",   "all", "tagpu_native.on", 0 },  /* ...and the engine's composite wiped */
     { "tagpu_terr.on",      "", 0, 0 },                     /* terrain and the fog overlay         */
-    { "tagpu_terrown.on",   "", "tagpu_terr.on", 0 },
     { "tagpu_feat.on",      "", 0, 0 },                     /* trees, rocks, wreckage              */
-    { "tagpu_featown.on",   "", "tagpu_feat.on", 0 },
     { "tagpu_fx.on",        "", 0, 0 },                     /* weapon fire, explosions, debris     */
     { "tagpu_sfx.on",       "", 0, 0 },                     /* the particle layers                 */
-    { "tagpu_fxown.on",     "", "tagpu_fx.on", "tagpu_sfx.on" },
     { "tagpu_mark.on",      "", 0, 0 },                     /* bars, cursor, band box, digits      */
-    { "tagpu_markown.on",   "", "tagpu_mark.on", 0 },
     { "tagpu_order.on",     "", 0, 0 },                     /* the shift-held order overlay        */
     { "tagpu_ghost.on",     "", "tagpu_native.on", 0 },     /* the building preview at the cursor  */
     { "tagpu_zoom.on",      "", 0, 0 },                     /* the wheel, the camera's range       */
     { "tagpu_vpwide.on",    "", "tagpu_zoom.on", 0 },       /* clicks land at zoom < 1             */
-    { "tagpu_gui.on",       "", 0, 0 },                     /* the GL UI layer, Classic 1:1        */
+    /* `tagpu_gui.on` IS NOT A DRAW ANY MORE and is not armed here. The UI
+       layer it turned on was deleted by the clean cut; what the file still
+       does is switch on the op CENSUS and the diagnostics, which are a
+       harness mode and never a play default. The observers themselves install
+       at DllMain with no trigger at all, because they host every `tacli`
+       verb. */
     { "tagpu_classicpp.on", "", 0, 0 },                     /* restored true colour, lit, shadowed */
     { "tagpu_weapons.on",   "", 0, 0 },                     /* 0..N weapons per unit               */
     /* HUD SCALE IS NOT A PLAY DEFAULT, and the reason is no longer the origin

@@ -139,8 +139,10 @@
 #define MAXBAR       2048                    /* bars per frame               */
 #define MVST         7                       /* x,y, u,v, wx,wz, colour      */
 #define QUADV        6
-#define CURSBASE     (TAGPU_MARK_NLAYER * QUADV)  /* the captured layer quad
-                                                comes first; the cursor next  */
+/* THE CAPTURED LAYER'S QUAD USED TO SIT AT 0 and the cursor after it. The clean
+   cut deleted that draw -- it was the engine's own rasterised bytes copied back
+   onto the frame -- so the cursor rects are the block's first region now. */
+#define CURSBASE     0
 #define MAXCURSV     (8 * QUADV)             /* two rects, four edges each    */
 #define BARBASE      (CURSBASE + MAXCURSV)   /* and the bars after those      */
 #define MAXMV        (BARBASE + MAXBAR * 2 * QUADV)
@@ -168,7 +170,7 @@ static void flog(const char* s)
 
 /* ---- arming ---- */
 static int s_armed = -1;
-static int s_log = 0, s_passive = 0, s_bars = 1, s_capture = 1, s_selbox = 1;
+static int s_log = 0, s_passive = 0, s_bars = 1, s_selbox = 1;
 static int s_cursor = 1, s_digits = 1;
 static unsigned s_armCheck = 0;
 
@@ -187,7 +189,6 @@ int tagpu_mark_armed(unsigned frame_counter)
     s_armed = 0;
     n = tagpu_opt_read("tagpu_mark.on", buf, sizeof buf);
     if (n < 0) {
-        tagpu_markown_set_capture(0);
         tagpu_markown_set_bars(0);
         tagpu_markown_set_selbox(0);
         tagpu_markown_set_cursor(0);
@@ -203,7 +204,7 @@ int tagpu_mark_armed(unsigned frame_counter)
     s_ab = GetFileAttributesA(MK_ABFILE) != INVALID_FILE_ATTRIBUTES;
     if (!s_ab) s_abDone = 0;
     {
-        s_log = 0; s_passive = 0; s_bars = 1; s_capture = 1; s_selbox = 1;
+        s_log = 0; s_passive = 0; s_bars = 1; s_selbox = 1;
         s_cursor = 1; s_digits = 1;
         if (n > 0) {
             char* p = buf;
@@ -219,7 +220,6 @@ int tagpu_mark_armed(unsigned frame_counter)
                 if (!lstrcmpiA(p, "log")) s_log = 1;
                 else if (!lstrcmpiA(p, "passive")) s_passive = 1;
                 else if (!lstrcmpiA(p, "nobars")) s_bars = 0;
-                else if (!lstrcmpiA(p, "nocapture")) s_capture = 0;
                 else if (!lstrcmpiA(p, "noselbox")) s_selbox = 0;
                 else if (!lstrcmpiA(p, "nocursor")) s_cursor = 0;
                 else if (!lstrcmpiA(p, "nodigits")) s_digits = 0;
@@ -237,16 +237,15 @@ int tagpu_mark_armed(unsigned frame_counter)
        gather and count, but leave every marker to the engine; the capture and
        the bar skip are separate because taking the bars over without drawing
        them would simply lose them.) */
-    if (s_passive || !s_capture) tagpu_markown_set_capture(0);
     if (s_passive || !s_bars) tagpu_markown_set_bars(0);
     if (s_passive || !s_selbox) tagpu_markown_set_selbox(0);
     if (s_passive || !s_cursor) tagpu_markown_set_cursor(0);
     if (s_passive || !s_digits) tagpu_markown_set_digits(0);
     if (was != 1) {
         char b[176];
-        _snprintf(b, sizeof b, "mark: ARMED (log=%d passive=%d bars=%d capture=%d "
+        _snprintf(b, sizeof b, "mark: ARMED (log=%d passive=%d bars=%d "
                   "selbox=%d cursor=%d digits=%d patched=%d)", s_log, s_passive,
-                  s_bars, s_capture, s_selbox, s_cursor, s_digits,
+                  s_bars, s_selbox, s_cursor, s_digits,
                   tagpu_markown_installed());
         flog(b);
     }
@@ -875,7 +874,17 @@ int tagpu_mark_handover(TAGPU_MKHAND* out, unsigned now)
     return 1;
 }
 
-/* `upload_layer` STOOD HERE and its first line was `if
+/* THE CAPTURED LAYER IS GONE, AND WITH IT THE LAST ENGINE PIXEL THIS PASS DREW.
+   `layer_quad` built a screen-space quad over `TAGPU_MARKLAYER.pix` -- a
+   pointer into the ENGINE'S OWN 8-bit surface, the bytes it rasterised for the
+   post-fog UI markers -- and the twin sampled it as palette indices. Every
+   other marker this pass draws (the bars, the selection and band-box rects, the
+   order lines and dots, the range circles, the group digit, the labels) is
+   re-derived from engine STATE and drawn as our own geometry out of our own
+   atlas, which is why they stayed. The cut is about pixels we copied, not about
+   facts we read. [The vulkan-only plan, THE CLEAN CUT.]
+
+   `upload_layer` STOOD HERE BEFORE THAT and its first line was `if
    (tagpu_vk_owns_present()) return 1;` -- so on this lane it uploaded nothing
    and answered yes, and every line after it was already dead [landing 11-4a].
    The reason it answered yes rather than no is worth keeping: THE LAYER IS
@@ -885,30 +894,10 @@ int tagpu_mark_handover(TAGPU_MKHAND* out, unsigned now)
    returned 0 with no context and dropped the layer from the HAND-OVER rather
    than from the draw, which is the GAF atlas's defect in miniature. */
 
-static void layer_quad(const TAGPU_FXVIEW* v, int base, const TAGPU_MARKLAYER* L)
-{
-    /* screen and world differ by a pure translation here, so the quad's world
-       coordinates interpolate exactly across it and the fog rule lands on the
-       same cells the engine's overlay would have */
-    float x0 = (float)L->x, y0 = (float)L->y;
-    float x1 = (float)(L->x + L->w), y1 = (float)(L->y + L->h);
-    float wx0 = x0 - (float)v->vpL + (float)v->eyeX;
-    float wz0 = y0 - (float)v->vpT + (float)v->eyeY;
-    float wx1 = x1 - (float)v->vpL + (float)v->eyeX;
-    float wz1 = y1 - (float)v->vpT + (float)v->eyeY;
-    put_vert(base + 0, x0, y0, 0.0f, 0.0f, wx0, wz0, 0.0f);
-    put_vert(base + 1, x1, y0, 1.0f, 0.0f, wx1, wz0, 0.0f);
-    put_vert(base + 2, x0, y1, 0.0f, 1.0f, wx0, wz1, 0.0f);
-    put_vert(base + 3, x1, y0, 1.0f, 0.0f, wx1, wz0, 0.0f);
-    put_vert(base + 4, x1, y1, 1.0f, 1.0f, wx1, wz1, 0.0f);
-    put_vert(base + 5, x0, y1, 0.0f, 1.0f, wx0, wz1, 0.0f);
-}
 
 void tagpu_mark_render(const TAGPU_FXVIEW* v)
 {
-    TAGPU_MARKLAYER lay[TAGPU_MARK_NLAYER];
-    int have[TAGPU_MARK_NLAYER];
-    int i, total, textBase = 0;
+    int total, textBase = 0;
 
     /* THIS PASS BUILDS THE RECORD THE TWIN DRAWS FROM, and nothing else. It used
        to do both: `mk_push` and `mk_draw` are the record and are pure CPU, and
@@ -926,18 +915,13 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
        again 30 frames later, forever. */
     tagpu_markown_beat(v->frame_counter);
     if (!s_passive) {
-        tagpu_markown_set_capture(s_capture);
         tagpu_markown_set_bars(s_bars);
         tagpu_markown_set_selbox(s_selbox);
         tagpu_markown_set_cursor(s_cursor);
         tagpu_markown_set_digits(s_digits);
     }
 
-    for (i = 0; i < TAGPU_MARK_NLAYER; i++) {
-        have[i] = (!s_passive && tagpu_markown_layer(i, &lay[i])) ? 1 : 0;
-        if (have[i]) layer_quad(v, i * QUADV, &lay[i]);
-    }
-    if (!have[TAGPU_MARK_POSTFOG] && s_nbar == 0 && s_ncurs == 0 &&
+    if (s_nbar == 0 && s_ncurs == 0 &&
         s_nordt == 0 && s_nordl == 0 && s_nordx == 0) return;
 
     /* ---- the Phase G A/B's lever ---- */
@@ -1017,9 +1001,6 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
         mk_draw(textBase + s_nordxOrd, s_nordx - s_nordxOrd, 0, 1,
                 v->fogMode & 1, TAGPU_MK_TEX_TEXT);
     }
-    if (have[TAGPU_MARK_POSTFOG]) {
-        mk_draw(TAGPU_MARK_POSTFOG * QUADV, QUADV, 0, 0, 0, TAGPU_MK_TEX_LAYER);
-    }
     /* last, and with the fog off for the same reason the layer above has it
        off: the engine draws these two rects after its fog overlay and never
        darkens them */
@@ -1045,16 +1026,10 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
        gather above found would have the Vulkan lane draw a marker layer missing
        a bucket, which is a different picture rather than an absent one. */
     if (!s_mkDropped && s_mkDn > 0) {
-        TAGPU_MARKLAYER* L = have[TAGPU_MARK_POSTFOG] ? &lay[TAGPU_MARK_POSTFOG] : NULL;
         memset(&s_mkPub, 0, sizeof s_mkPub);
         s_mkPub.frame = s_mkFrame;
         s_mkPub.verts = s_mkV; s_mkPub.nvert = s_mkVn;
         s_mkPub.draws = s_mkD; s_mkPub.ndraw = s_mkDn;
-        if (L && L->pix) {
-            s_mkPub.layer = L->pix; s_mkPub.layerPitch = L->pitch;
-            s_mkPub.layerX = L->x; s_mkPub.layerY = L->y;
-            s_mkPub.layerW = L->w; s_mkPub.layerH = L->h;
-        }
         s_mkPub.text = tagpu_text_atlas(&s_mkPub.textGen);
         tagpu_text_dims(&s_mkPub.textW, &s_mkPub.textH);
         /* the three the twin binds as textures, as bytes -- same shapes
@@ -1086,11 +1061,10 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
             tagpu_text_stats(&nstr, &ndrop);
             _snprintf(b, sizeof b,
                 "mark: bars=%d cursor=%d ordtri=%d ordline=%d text=%d(lab=%d) "
-                "atlas=%d/%d over=%d postfog=%s key=%d vp=(%d,%d %dx%d) "
+                "atlas=%d/%d over=%d key=%d vp=(%d,%d %dx%d) "
                 "zoom=%.2f%s",
                 s_cBar, s_ncurs / QUADV, s_nordt / 3, s_nordl / 2,
                 s_ntext, s_nordxOrd / QUADV, nstr, ndrop, s_xover,
-                have[TAGPU_MARK_POSTFOG] ? "captured" : "-",
                 tagpu_markown_key(), v->vpL, v->vpT, v->vw, v->vh, v->zoom,
                 s_passive ? " (passive: engine still drawing)" : "");
             flog(b);

@@ -178,7 +178,6 @@
 #include "tagpu_vk_unit.h"
 #include "tagpu_vk_hires.h"
 #include "tagpu_vk_mark.h"
-#include "tagpu_vk_gui.h"
 #include "tagpu_vk_shot.h"
 
 #define ON_FILE    "tagpu_vk.on"
@@ -190,21 +189,6 @@
    enumeration worker included, and the row plates whatever the cache last
    said. It is what an A/B against the pre-G19 DLL arms. */
 #define OFF_FILE   "tagpu_vk.off"
-/* THE CLEAN CUT (the vulkan-only plan). With this file present no pixel on the
-   presented frame may originate from an OBSERVATION of the engine: TA's own
-   composed 8-bit frame stops being a layer and the UI twin's composite stops
-   reaching the frame. Everything else about the frame is unchanged, and
-   everything UPSTREAM of those two draws keeps running -- the engine still
-   rasterises a complete frame into its own surface, `tagpu_surf_take` still
-   captures it and `tagpu_vk_surf_prepare` still uploads it, because that
-   surface is the golden source every later step is checked against.
-
-   IT IS OPT-IN AND OFF THE DEFAULTS TABLE, so `tagpu_opt.c` never turns it on:
-   it breaks the sidebar, the minimap, the resource bar and every menu by
-   design, and that is a thing an operator asks for by name. Polled on this
-   file's own 250 ms cadence like every other lever here, and published to the
-   passes through `TAGPU_VKPASS.pureVk` so a frame cannot see two answers. */
-#define PURE_FILE  "tagpu_purevk.on"
 /* THE A/B (Phase G / G19d). `tagpu_fps.c` owns the lever (`tagpu_fps.ab`): it
    clears the GL frame to black, writes `tagpu_fps_gl.ppm` and hands the flag
    over with the vertices, and this file writes `tagpu_fps_vk.ppm` out of the
@@ -220,7 +204,6 @@
 #define AB_FX      "tagpu_fx_vk.ppm"
 #define AB_MARK    "tagpu_mark_vk.ppm"
 #define AB_UNIT    "tagpu_posedraw_vk.ppm"
-#define AB_GUI     "tagpu_gui_vk.ppm"
 /* THE ONE LIST OF THEM, in the order `vk_present` selects in (which is the
    order the nested ternary it replaced tested in). The `tag` is the SAME string
    the pass passes to `tagpu_vk_ab_arm`, so a pass names its file once, here,
@@ -228,9 +211,15 @@
    `posedraw`'s file is `AB_UNIT`: the pass is the unit pass and the lever is
    `tagpu_posedraw.ab`, and that mismatch is exactly why this is a table and not
    a `_snprintf` of the tag. */
-static const struct { const char* tag; const char* path; } s_abFiles[8] = {
+/* THE COUNT COMES OFF THE ARRAY, not out of a literal repeated at each of its
+   three readers. Deleting the UI layer's row took this from 8 to 7, and two of
+   those readers were bare `i < 8` loops that would have walked one row past the
+   end -- a table whose length is written down four times has three chances to
+   disagree with itself. */
+#define AB_N ((int)(sizeof s_abFiles / sizeof s_abFiles[0]))
+static const struct { const char* tag; const char* path; } s_abFiles[7] = {
     { "terr", AB_TERR }, { "feat", AB_FEAT }, { "posedraw", AB_UNIT }, { "fx", AB_FX },
-    { "mark", AB_MARK }, { "scaffold", AB_SCAF }, { "gui", AB_GUI }, { "fps", AB_FPS },
+    { "mark", AB_MARK }, { "scaffold", AB_SCAF }, { "fps", AB_FPS },
 };
 #define GPUS_FILE  "tagpu_vk.gpus"      /* the cache the menu reads at attach */
 #define CFG_FILE   "tagpu_vk.cfg"       /* the player's choice, by name       */
@@ -572,25 +561,6 @@ static volatile LONG s_ownWin;          /* this backend owns the present       *
    all after 4d-1. [FROM THE LANDING REVIEW, 2026-09-17.] */
 static volatile LONG s_ownGone;
 
-/* DID THE UI LAYER ACTUALLY COMPOSITE THIS FRAME? Cleared at the top of
-   `tagpu_vk_frame` -- so every one of its early returns (the lever off, a
-   bring-up, a rebuild, ST_FAILED, ST_ZOMBIE, an out-of-date acquire) leaves it
-   0, which is the truth -- and set only where `tagpu_vk_gui_record` is actually
-   called.
-
-   IT EXISTS FOR THE CURSOR, and the gap it closes is `s_curDrew`'s.
-   `render_vk.c` has to tell `tagpu_cursown` whether OUR cursor reached the
-   screen, because the engine's own cursor blit stands down on that. The answer
-   it had was `tagpu_gui_cursor_drew_take()`, which says the mirror RECORD
-   survived to `draw_layer`'s tail -- and `tagpu_vk_gui_prepare` can still refuse
-   the frame after that (`s_behind`, `!s_engHave`, `!s_palHave`, a presented twin
-   that stood down or resized, either shader-refusal path). On those frames
-   nothing composited and the engine's cursor had already been suppressed.
-
-   The fix is an ORDERING and not a move: the publish stays on the path every
-   iteration reaches, but happens AFTER the frame it reports, with this as the
-   second half of its answer. [The vulkan-only plan, gate 4's last item.] */
-static int s_uiDrew;
 
 /* Called from the fork's wndproc on the game window's thread. An OBSERVER: it
    never swallows a message the fork or the engine needs, and since landing 4d-1
@@ -617,15 +587,6 @@ void tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 /* ---- the lever ----------------------------------------------------------- */
 static volatile LONG s_armed = -1;      /* -1 = never polled */
 static DWORD s_lastPoll;
-/* THE CLEAN CUT'S CACHED ANSWER. Written by `read_lever` and read by
-   `tagpu_vk_frame` and `tagpu_vk_purevk`, all three on the RENDER THREAD, so
-   it is a plain int for `s_uiDrew`'s reason and no interlock is owed. It is
-   not `s_armed`: that one is `InterlockedExchange`d because `tagpu_vk_armed`
-   answers the GAME thread, and this has no game-thread caller by design --
-   adding one would be an unsynchronised cross-thread read. */
-static int s_pureVk;
-/* said once: the cut dropped a UI-layer A/B claim */
-static int s_saidAbCut;
 /* THE A/B'S FRAME IS NOT DECIDED HERE (G19d). `tagpu_fps.c` polls the lever,
    captures its own half and hands the flag over with the vertices; this file
    only carries it through. Both lanes polling for themselves was the first
@@ -638,11 +599,6 @@ static void read_lever(void)
     char b[128];
     HANDLE h;
     DWORD n = 0;
-    /* FIRST, AND ABOVE THE `!on` RETURN BELOW. The cut is a question about what
-       this lane DRAWS, not about whether it runs, and the return below is taken
-       whenever `tagpu_vk.on` is absent -- so polling it after that line would
-       leave the answer frozen at whatever it was when the lane last armed. */
-    s_pureVk = exists(PURE_FILE);
     /* THE LEVER RETIRES INTO `renderer=` when this backend owns the present:
        `renderer=vulkan` that a stray `tagpu_vk.off` could disarm would leave
        the process with NO renderer and a black window, which is a worse
@@ -722,7 +678,7 @@ int tagpu_vk_ab_arm(const char* tag)
     int i;
     DWORD e;
     if (!tag) return 0;
-    for (i = 0; i < 8; i++) {
+    for (i = 0; i < AB_N; i++) {
         if (strcmp(tag, s_abFiles[i].tag) != 0) continue;
         if (DeleteFileA(s_abFiles[i].path)) return 1;
         e = GetLastError();
@@ -763,27 +719,7 @@ int tagpu_vk_owns_present(void)
     return s_ownWin != 0;
 }
 
-/* RENDER THREAD ONLY, and that is the whole of its safety. `s_uiDrew` is a
-   plain int with no interlock and no fence: it is written inside
-   `tagpu_vk_frame` and read by `render_vk.c` immediately after that call
-   returns, which is the same thread, so none is owed. It is NOT like
-   `s_ownWin` above -- whose "safe from any thread" is bought with
-   `InterlockedExchange` -- and this definition used to sit under that comment,
-   which told the next reader the opposite. A game-thread caller would be an
-   unsynchronised cross-thread read, which is the class CLAUDE.md says this
-   stack fails at silently. [FOUND BY THE LANDING REVIEW OF GATE 4's LAST
-   ITEM.] */
-int tagpu_vk_ui_composited(void) { return s_uiDrew; }
 
-/* RENDER THREAD ONLY, exactly as `tagpu_vk_ui_composited` is and for the same
-   reason: a plain int written by `read_lever` on the render thread's own poll
-   and read by `render_vk.c` in the same loop iteration. A game-thread caller
-   would be the unsynchronised cross-thread read CLAUDE.md says this stack fails
-   at silently -- if one is ever needed it gets its own interlocked publish, not
-   this. It answers for the CACHE, so it is 0 until the first poll, which is the
-   first frame: there is no window in which a pass and this disagree, because
-   both read the same `s_pureVk` the poll just wrote. */
-int tagpu_vk_purevk(void) { return s_pureVk; }
 
 int tagpu_vk_armed(void)
 {
@@ -1958,7 +1894,6 @@ static void vk_down(void)
         tagpu_vk_unit_down(&s_pass);
         tagpu_vk_hires_down(&s_pass);
         tagpu_vk_mark_down(&s_pass);
-        tagpu_vk_gui_down(&s_pass);
         tagpu_vk_surf_down(&s_pass);
         tagpu_vk_world_down(&s_pass);
         /* AFTER THE PASSES, because a pass owns the JOBS and the restorer owns
@@ -2633,7 +2568,7 @@ static int vk_present(void)
         tagpu_vk_fx_down_owed() || tagpu_vk_scaffold_down_owed() ||
         tagpu_vk_shadow_down_owed() || tagpu_vk_unit_down_owed() ||
         tagpu_vk_hires_down_owed() || tagpu_vk_mark_down_owed() ||
-        tagpu_vk_gui_down_owed() || tagpu_vk_surf_down_owed() ||
+        tagpu_vk_surf_down_owed() ||
         tagpu_vk_world_down_owed()) {
         if (!vkDeviceWaitIdle || vkDeviceWaitIdle(s_vk.dev) != VK_SUCCESS) {
             vklog("vkDeviceWaitIdle refused before an owed pass teardown - down");
@@ -2652,7 +2587,6 @@ static int vk_present(void)
         if (tagpu_vk_unit_down_owed())     tagpu_vk_unit_down_paid(&s_pass);
         if (tagpu_vk_hires_down_owed())    tagpu_vk_hires_down_paid(&s_pass);
         if (tagpu_vk_mark_down_owed())     tagpu_vk_mark_down_paid(&s_pass);
-        if (tagpu_vk_gui_down_owed())      tagpu_vk_gui_down_paid(&s_pass);
         if (tagpu_vk_surf_down_owed())     tagpu_vk_surf_down_paid(&s_pass);
         if (tagpu_vk_world_down_owed())    tagpu_vk_world_down_paid(&s_pass);
     }
@@ -2736,14 +2670,13 @@ static int vk_present(void)
        is what proves the GPU has finished with that slot's buffers, and it is
        the only thing that does. */
     {
-        int draw_surf = 0;
         int draw_world = 0;
         uint32_t tw = 0, th = 0;    /* the world target's extent, when there is one */
         int draw_fps = 0, draw_scaf = 0, draw_feat = 0, draw_terr = 0, draw_fx = 0;
         int draw_mark = 0, ab_mark = 0;
-        int draw_unit = 0, draw_gui = 0;
+        int draw_unit = 0;
         int ab_fps = 0, ab_scaf = 0, ab_feat = 0, ab_terr = 0, ab_fx = 0;
-        int ab_unit = 0, ab_gui = 0;
+        int ab_unit = 0;
         int ndraw = 0, nclaim = 0;
         const char* abpath = NULL;
         int abIsWorld = 0;              /* the claimed pass draws into the world */
@@ -2807,23 +2740,15 @@ static int vk_present(void)
                 picture, never a wrong one. */
             draw_world = tagpu_vk_world_prepare(&s_pass, cb, fi, &tw, &th);
 
-            draw_surf = tagpu_vk_surf_prepare(&s_pass, cb, fi);
-            /* ---- THE CLEAN CUT, HALF ONE: TA'S COMPOSED FRAME STOPS BEING A
-               LAYER. [`tagpu_purevk.on`; the vulkan-only plan.]
-
-               THE `prepare` ABOVE STILL RAN, AND THAT IS THE POINT. It uploads
-               the bytes `tagpu_surf_take` captured into this slot's R8 image --
-               the GOLDEN SOURCE, the engine's own complete frame, still drawn by
-               a rasteriser that knows this game's look perfectly. The cut takes
-               away its DRAW and nothing else, so the reference stays live and
-               every element we draw back later can be diffed against the same
-               rect of it. Standing the pass down instead would have thrown away
-               the thing the cut exists to keep.
-
-               IT IS ZEROED HERE RATHER THAN TESTED AT THE DRAW so that there is
-               exactly one place in this file that knows the cut is armed, and
-               so `draw_surf` means what it says everywhere below. */
-            if (s_pass.pureVk) draw_surf = 0;
+            /* THE REFERENCE IS FILLED HERE AND DRAWN NOWHERE. This uploads the
+               bytes `tagpu_surf_take` captured into this slot's R8 image -- the
+               original software rasteriser's own output, kept as a texture so
+               our passes can be checked against it. It is not a pass and it
+               puts no pixel anywhere: the composite it used to feed was deleted
+               with the rest of the engine compositing, so `ndraw` does not
+               count it and there is no `record` to call. Its accessor is
+               `tagpu_vk_surf_engine_view`. */
+            tagpu_vk_surf_prepare(&s_pass, cb, fi);
 
             /* THE SCAFFOLD'S UPLOAD IS FIRST OF OURS, though its DRAW is nearly last.
                The G12a overlay is a texture the unit, hi-res and effects
@@ -2870,58 +2795,17 @@ static int vk_present(void)
                the UI -- where tagpu_native.c draws them (landing 5). */
             draw_mark = tagpu_vk_mark_prepare(&s_pass, cb, fi);
             ab_mark = tagpu_vk_mark_ab_frame();
-            /* THE UI LAYER, whose whole replay is in `prepare`: a twin is
-               drawn into with its own render pass and render passes may not
-               nest, so this is the hook it has to be in -- the shadow pass's
-               shape, for the same reason. */
-            draw_gui = tagpu_vk_gui_prepare(&s_pass, cb, fi);
-            ab_gui = tagpu_vk_gui_ab_frame();
-            /* ---- THE CLEAN CUT, HALF TWO: NO REPLAYED ENGINE OP REACHES THE
-               FRAME. [`tagpu_purevk.on`; the vulkan-only plan.]
-
-               THE REPLAY STILL RAN, for the reason the file's own §"what this
-               landing does not carry" gives: the whole op stream is applied
-               inside `prepare`, and our twin store must equal what the engine
-               drew or it is worth nothing. Skipping frames of it would leave the
-               store permanently behind and silently, which is exactly the state
-               this pass's other refusals go out of their way to avoid. So the
-               ops are applied, the twins are kept level, and the COMPOSITE --
-               the one thing that puts a replayed engine pixel on screen -- is
-               what stops.
-
-               AND THE A/B CLAIM GOES WITH IT, which is not tidiness. `ab_gui`
-               means "capture this frame and diff it as the GUI pass's output";
-               with the composite cut, that capture holds a frame the GUI pass
-               drew nothing into, and the diff would report every pixel of the
-               layer as a difference -- an oracle failure that reads exactly like
-               a broken port, which tagpu_vk.c's own A/B rules call the worst
-               answer an oracle can give. The pass has already unlinked its
-               target file by the time we get here (`tagpu_vk_ab_arm`, latched on
-               the gather side), so dropping the claim leaves that file ABSENT,
-               and absent is this lane's word for "this arming produced no
-               capture" -- the honest answer rather than a wrong picture. */
-            if (s_pass.pureVk) {
-                /* SAY IT, or the absence of the file means the wrong thing.
-                   `tagpu_vk_ab_arm("gui")` has already DELETED the target and
-                   consumed the operator's arming on the gather side, and this
-                   lane's rule -- stated in the ta-drive skill and established
-                   by landing 4b-1 -- is that an absent `_vk.ppm` with no line
-                   beside it means the lever never fired, which is a different
-                   fault with a different fix. Dropping the claim silently made
-                   that diagnostic ambiguous. Measured 2026-09-20: cut armed,
-                   `touch tagpu_gui.ab` gave no file and no line at all, while
-                   the same arming with the cut off gave the seam's own
-                   "1 A/B levers claimed this frame and 4 passes drew into it".
-                   [FOUND BY BOTH REVIEWERS AND BY THE LANDING'S OWN PROBE.] */
-                if (ab_gui && !s_saidAbCut) {
-                    s_saidAbCut = 1;
-                    vklog("ab: the clean cut is armed, so the UI layer drew "
-                          "nothing and its A/B claim is dropped - no capture "
-                          "was taken and tagpu_gui_vk.ppm stays absent. Take "
-                          "tagpu_purevk.on away to measure this pass.");
-                }
-                draw_gui = 0; ab_gui = 0;
-            }
+            /* THE UI LAYER IS GONE, AND SO IS EVERY WAY BACK TO IT. It was
+               one quad: the engine's replayed UI twin and our own device-res
+               sharp layer composited together by `LAY_FS`, with `tagpu_vk_gui.c`
+               owning the GPU store behind it. Both halves reached the screen
+               through that single draw, so the cut took both -- the engine's
+               UI pixels could not be removed from it and our layer left in.
+               What the game has instead is nothing: no HUD, no sidebar, no
+               minimap, no cursor. That is the cost this cut was authorised to
+               pay, and the UI comes back as a pass of our own rather than as a
+               composite of the engine's. [The vulkan-only plan, THE CLEAN
+               CUT.] */
             draw_fps = tagpu_vk_fps_prepare(&s_pass, cb, fi);
             ab_fps = tagpu_vk_fps_ab_frame();
 
@@ -2948,8 +2832,8 @@ static int vk_present(void)
 
         }
         ndraw = draw_terr + draw_feat + draw_unit + draw_fx + draw_mark + draw_scaf +
-                draw_gui + draw_fps;
-        nclaim = ab_terr + ab_feat + ab_unit + ab_fx + ab_mark + ab_scaf + ab_gui + ab_fps;
+                draw_fps;
+        nclaim = ab_terr + ab_feat + ab_unit + ab_fx + ab_mark + ab_scaf + ab_fps;
         /* THE CLAIMED PASS'S FILE, out of the one list of them in this file
            (`s_abFiles`, above). The row order is the order the nested ternary
            this replaced tested in, so which pass wins a (refused) multi-claim
@@ -2968,11 +2852,11 @@ static int vk_present(void)
            wearing the words of one about construction.
            [FROM THE 4b-1 LANDING REVIEW, 2026-09-18.] */
         {
-            const int abclaim[8] = { ab_terr, ab_feat, ab_unit, ab_fx,
-                                     ab_mark, ab_scaf, ab_gui, ab_fps };
+            const int abclaim[AB_N] = { ab_terr, ab_feat, ab_unit, ab_fx,
+                                     ab_mark, ab_scaf, ab_fps };
             int abi;
             abpath = NULL;
-            for (abi = 0; abi < 8 && !abpath; abi++)
+            for (abi = 0; abi < AB_N && !abpath; abi++)
                 if (abclaim[abi]) {
                     abpath = s_abFiles[abi].path;
                     /* THE FIRST FIVE ROWS ARE THE WORLD, and the row order is
@@ -3016,54 +2900,12 @@ static int vk_present(void)
             rbi.clearValueCount = s_vk.dfmt != VK_FORMAT_UNDEFINED ? 2 : 0;
             rbi.pClearValues = cv;
             vkCmdBeginRenderPass(cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
-            /* THE BOTTOM LAYER, FIRST AND OVER THE CLEAR. It is opaque and
-               depth-testless, so it neither reads nor writes anything the world
-               passes below it depend on; the clear that ran before the pass
-               still carries the letterbox and any frame this refused.
-
-               ...AND NOT ON A FRAME AN A/B HAS CLAIMED, which is the one thing
-               that makes a world pass's A/B mean anything again. The GL half of
-               such a capture is the bare world FBO -- black wherever the pass
-               did not draw. Since 4c-1 the Vulkan half is the swapchain image
-               with TA's own frame UNDERNEATH, so the two stopped being the same
-               kind of picture: for an opaque pass every uncovered pixel
-               differed, and for a pass that BLENDS every translucent fragment
-               differed too, because one lane composites the effect over the
-               game and the other over black. Measured on the effects pass
-               before this line existed: of 1 622 pixels the GL capture drew,
-               226 agreed (the opaque fragments, byte-for-byte) and 1 396 did
-               not (median max-channel 19 -- the translucent ones).
-
-               `nclaim` is this frame's armed A/B levers, counted above and
-               before the render pass begins, so this costs exactly the frames
-               a measurement is being taken on and nothing else. It is the same
-               kind of measurement-only divergence as `tagpu_vk.on`'s
-               `color=0,0,0`, which exists so the two clears agree.
-               [FROM THE 4c-2 LANDING REVIEW.]
-
-               WHAT STILL DEPENDS ON THIS, AFTER 4c-3 AND 4d-2 -- and the
-               reason changed under it, so read this rather than the shape.
-               A world capture no longer reads this image at all: it reads the
-               offscreen world target, which TA's frame never reaches. The
-               scaffold, GUI and readout captures DO still read this image, and
-               what a capture has to be is THE PASS ALONE OVER THE CLEAR
-               COLOUR -- that is what makes it comparable to anything, whether
-               the other side of the comparison is another lane or another
-               BUILD. TA's own frame underneath turns every uncovered pixel into
-               a difference and every blended fragment into a composite over the
-               game instead of over the clear, which is exactly the regression
-               4c-1 introduced and 4c-2's review caught.
-
-               THE OLD REASON IS GONE AND DID NOT MATTER. This used to argue
-               from the GL half -- "their GL halves are still the default
-               framebuffer blacked by `tagpu_abshot_begin`" -- and landing 4d-2
-               deleted that function with the rest of the GL capture. The line
-               stays because the argument above never needed a second lane:
-               a capture of one pass over a clear is the thing being measured.
-               [THE PREMISE WAS CAUGHT BY THE 4d-2 LANDING REVIEW.] Measured
-               with the line in: the GUI A/B is 0 px of 307 200 (2026-09-18). */
-            if (draw_surf && nclaim == 0)
-                tagpu_vk_surf_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
+            /* NOTHING OF THE ENGINE'S IS DRAWN HERE ANY MORE. TA's composed
+               frame used to be the bottom layer of this render pass; that
+               draw, its pipeline and its quad were deleted, and what is left
+               of `tagpu_vk_surf` is the upload alone -- the reference texture
+               the world passes can be checked against. The clear is now the
+               bottom of the frame and the world is the first thing on it. */
             /* THE WORLD. With a target it was drawn into it above and this is
                the one draw that puts it on the frame, over TA's own surface and
                under the UI -- which is exactly where tagpu_native.c's composite
@@ -3076,20 +2918,6 @@ static int vk_present(void)
             else
                 world_records(cb, fi, s_vk.ext.width, s_vk.ext.height,
                               draw_terr, draw_feat, draw_unit, draw_fx, draw_mark);
-            /* THE UI IS ABOVE THE WORLD and below the readout, which is
-               where tagpu_overlay_draw puts it. */
-            if (draw_gui)
-                /* TAKEN FROM THE DRAW, NOT FROM THE CALL. `record` answers 1
-                   only when the composite reached the command buffer; its
-                   pipeline-build refusal LATCHES, so setting this beside the
-                   call would have reported a composite for the rest of the
-                   session and left `held` reading 0 on the one case it exists
-                   to catch. [FOUND BY THIS LANDING'S REVIEW.] After this the
-                   submit is unconditional and only the present is left -- and a
-                   present that fails takes the whole frame with it, cursor
-                   included. See `s_uiDrew`. */
-                s_uiDrew = tagpu_vk_gui_record(&s_pass, cb, fi,
-                                               s_vk.ext.width, s_vk.ext.height);
             if (draw_scaf)
                 tagpu_vk_scaffold_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_fps)
@@ -3135,9 +2963,9 @@ static int vk_present(void)
            this landing a round. */
         if ((s_pass.frame % 300u) == 0u)
             vklog("census: frame %u: %d pass(es) drew and %d claimed (terr=%d "
-                  "feat=%d unit=%d fx=%d mark=%d scaf=%d gui=%d fps=%d)",
+                  "feat=%d unit=%d fx=%d mark=%d scaf=%d fps=%d)",
                   (unsigned)s_pass.frame, ndraw, nclaim, draw_terr, draw_feat,
-                  draw_unit, draw_fx, draw_mark, draw_scaf, draw_gui, draw_fps);
+                  draw_unit, draw_fx, draw_mark, draw_scaf, draw_fps);
         /* WHICH IMAGE THE CAPTURE READS, AND IT IS NOT ALWAYS THE FRAME.
            [The vulkan-only plan, landing 4c-3.]
 
@@ -3271,7 +3099,6 @@ static int vk_resize(int w, int h)
     tagpu_vk_shadow_down(&s_pass);
     tagpu_vk_unit_down(&s_pass);
     tagpu_vk_hires_down(&s_pass);
-    tagpu_vk_gui_down(&s_pass);
     tagpu_vk_surf_down(&s_pass);
     tagpu_vk_world_down(&s_pass);
     /* AND ON A RESIZE TOO, though the device survives one: the restorer's
@@ -3295,9 +3122,6 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
     LONG st;
     DWORD now = GetTickCount();
 
-    /* NOTHING HAS COMPOSITED YET, and every early return below must leave this
-       saying so. See `s_uiDrew`. */
-    s_uiDrew = 0;
 
     /* THIS FRAME'S NUMBER, BEFORE ANY PASS CAN ASK FOR IT. Every `prepare`
        below reaches a GL module's hand-over through it, and refuses one that
@@ -3308,12 +3132,6 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
        here, on a cached answer refreshed every 250 ms, so the GL lane's frame
        is what it was before this file existed. */
     if (s_armed < 0 || (DWORD)(now - s_lastPoll) >= POLL_MS) { s_lastPoll = now; read_lever(); }
-    /* AND THE CUT'S ANSWER TO THE PASSES, ONCE, HERE. Every `prepare` below is
-       handed `&s_pass`, so taking it from the cache at the top of the frame is
-       what makes "one value for the whole frame" true rather than hoped for:
-       a pass reading the file itself would be reading it on its own cadence and
-       two passes could disagree across a flip of the lever. */
-    s_pass.pureVk = s_pureVk;
 
     /* THE DISARMED FRAME COSTS A PLAIN LOAD. `lane_state()` is a `lock cmpxchg`
        and the barrier it carries is only owed when something is actually going

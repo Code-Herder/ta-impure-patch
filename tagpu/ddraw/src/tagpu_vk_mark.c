@@ -75,7 +75,11 @@ DFNS(DECL)
 #define MK_VSTRIDE (MVST * 4)
 
 enum { ST_UNBUILT = 0, ST_READY = 1, ST_REFUSED = 2 };
-enum { IMG_LAYER = 0, IMG_TEXT, IMG_PAL, IMG_FOG, IMG_LUT, IMG_N };
+/* IMG_NONE WAS `IMG_LAYER`, the captured 8bpp post-fog layer, and it is now
+   only what that image already doubled as: the 1x1 0xFF stand-in that fills a
+   sampler binding with no picture this frame. The capture went with the clean
+   cut -- it was this pass's one engine-pixel path. */
+enum { IMG_NONE = 0, IMG_TEXT, IMG_PAL, IMG_FOG, IMG_LUT, IMG_N };
 
 static int s_state;
 static int s_downOwed, s_downPaying;
@@ -86,15 +90,18 @@ static VkPipelineLayout      s_plo;
 static VkPipeline            s_pipeTri, s_pipeLine;
 static VkRenderPass          s_pipeRp;
 static VkDescriptorPool      s_pool;
-/* TWO SETS PER SLOT, AND THE REASON IS THE GL TWIN'S OWN SHADER. `uLayer` is
-   ONE sampler that the twin feeds from TWO textures: the captured post-fog
-   layer for the layer draw, and tagpu_text.c's coverage atlas for the label
-   and digit draws. The GL lane simply bound the atlas to unit 0 and the layer
-   draw bound the layer back (`tagpu_text_tex`, deleted in 11-5e-1 -- that
-   module holds no GPU object now and hands out the atlas as bytes).
-   Vulkan has no per-draw texture bind, so
-   the choice moves into the descriptor set: `s_setL` carries the layer at
-   binding 40 and `s_setT` the atlas, and `record` picks one per draw.
+/* TWO SETS PER SLOT, AND ONE OF THEM IS NOW THE EMPTY ONE. `uLayer` is ONE
+   sampler at binding 40, and Vulkan has no per-draw texture bind, so which
+   image a draw samples is a property of the set: `s_setT` carries
+   tagpu_text.c's coverage atlas for the label and digit draws, `s_setN` the
+   1x1 stand-in for every draw that samples nothing (the bars, the rects, the
+   order lines and dots), and `record` picks one per draw.
+
+   IT USED TO BE A REAL CHOICE OF TEXTURES -- `s_setL` carried the captured
+   post-fog layer, the engine's own rasterised bytes, and a layer draw sampled
+   it. The clean cut deleted that draw, so the second set is the hole-filler
+   alone. It stays a set rather than becoming a branch because a set cannot be
+   bound with a hole and something must be at binding 40 either way.
 
    THE FIRST BUILD HAD ONE SET AND NEVER BOUND THE ATLAS AT ALL. The text image
    was sized, uploaded and generation-tracked, and then nothing sampled it: every
@@ -104,7 +111,7 @@ static VkDescriptorPool      s_pool;
    filled quad in its vertex colour. The bars-only A/B could not see it -- there
    was no text draw in the frame -- and the first A/B that had labels in it
    measured 3 891 pixels. */
-static VkDescriptorSet       s_setL[TAGPU_VK_SLOTS];
+static VkDescriptorSet       s_setN[TAGPU_VK_SLOTS];
 static VkDescriptorSet       s_setT[TAGPU_VK_SLOTS];
 static VkSampler             s_samp;          /* NEAREST: every texel here is an
                                                  index or a coverage byte */
@@ -115,7 +122,7 @@ static VkSampler             s_samp;          /* NEAREST: every texel here is an
    THEY WERE ONE SET SHARED BY EVERY SLOT UNTIL A LANDING REVIEW, 2026-09-17,
    and the comment here asserted the invariant that made that safe -- "per-pass
    images no other slot names, and the seam's fence for this slot has already
-   been waited on". Both halves were false. Every slot's `s_setL`/`s_setT` names
+   been waited on". Both halves were false. Every slot's `s_setN`/`s_setT` names
    these views, and the seam's fence makes frame `n` wait for frame `n - nimg`
    and nothing sooner (`tagpu_vk.c`, THE SEMAPHORE INDEXING) -- so with two
    swapchain images the previous frame's submission can still be sampling them.
@@ -173,13 +180,12 @@ static int s_saidPal;
    and `s_saidTex` two, so the first to fire silenced a DIFFERENT one for the
    rest of the session -- the same fault the image latches below were split
    for, left standing on the draw-list ones. [LANDING REVIEW, 2026-09-17.] */
-static int s_saidEmpty, s_saidMany, s_saidBound, s_saidTexA, s_saidTexL;
-static int s_saidPure;                  /* the clean cut, said once */
+static int s_saidEmpty, s_saidMany, s_saidBound, s_saidTexA;
 /* ONE LATCH PER SITE. A single `s_saidImg` shared by six upload sites hid every
    failure after the first -- including a failure at a DIFFERENT site, which is
    the case that matters. Two live diagnosis cycles were spent reading a masked
    error because of it. */
-static int s_saidImgL, s_saidImgT, s_saidImgP, s_saidImgF, s_saidImgU, s_saidImgS;
+static int s_saidImgT, s_saidImgP, s_saidImgF, s_saidImgU, s_saidImgS;
 static int s_saidNoDraw, s_saidSlot;
 
 static void plog(const TAGPU_VKPASS* d, const char* fmt, ...)
@@ -408,7 +414,7 @@ static int build_descriptors(const TAGPU_VKPASS* d)
     ai.pSetLayouts = lay;
     if (vkAllocateDescriptorSets(d->dev, &ai, all) != VK_SUCCESS) return 0;
     for (i = 0; i < d->slots; i++) {
-        s_setL[i] = all[i];
+        s_setN[i] = all[i];
         s_setT[i] = all[d->slots + i];
     }
     /* NEAREST on all four, and it is not a style choice: uLayer's texel IS a
@@ -593,8 +599,8 @@ static int slot_buf(const TAGPU_VKPASS* d, uint32_t slot, VkDeviceSize ubo,
 
 /* One of the two sets: `unit0` is what binding 40 -- the shader's `uLayer` --
    samples in it. Everything else in the two sets is identical, which is the
-   point: the only thing the GL twin changes between a text draw and a layer
-   draw is the texture on unit 0. */
+   point: the only thing that differs between a text draw and a textureless one
+   is the image on unit 0. */
 static void write_one(const TAGPU_VKPASS* d, uint32_t slot, VkDescriptorSet set,
                       const IMG* unit0)
 {
@@ -602,7 +608,7 @@ static void write_one(const TAGPU_VKPASS* d, uint32_t slot, VkDescriptorSet set,
     VkDescriptorImageInfo ii[NSAMP];
     VkWriteDescriptorSet w[2 + NSAMP];
     /* the order the shader names them: uLayer, uPal, uFogGrid, uFogLUT. A
-       binding with no image this frame falls back to the LAYER's view, which
+       binding with no image this frame falls back to the STAND-IN's view, which
        always exists once the pass is ready -- a set cannot be bound with a
        hole, and the uniform that would read it is 0 on such a frame. */
     const IMG* src[NSAMP];
@@ -623,7 +629,7 @@ static void write_one(const TAGPU_VKPASS* d, uint32_t slot, VkDescriptorSet set,
     w[n].pBufferInfo = &bi[1]; n++;
     for (i = 0; i < NSAMP; i++) {
         ii[i].sampler = s_samp;
-        ii[i].imageView = src[i]->view ? src[i]->view : s_img[slot][IMG_LAYER].view;
+        ii[i].imageView = src[i]->view ? src[i]->view : s_img[slot][IMG_NONE].view;
         ii[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[n].dstSet = set; w[n].dstBinding = SAMP_BIND[i];
@@ -636,7 +642,7 @@ static void write_one(const TAGPU_VKPASS* d, uint32_t slot, VkDescriptorSet set,
 
 static void write_set(const TAGPU_VKPASS* d, uint32_t slot)
 {
-    write_one(d, slot, s_setL[slot], &s_img[slot][IMG_LAYER]);
+    write_one(d, slot, s_setN[slot], &s_img[slot][IMG_NONE]);
     write_one(d, slot, s_setT[slot], &s_img[slot][IMG_TEXT]);
 }
 
@@ -695,13 +701,12 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     if (!s_saidIn) {
         s_saidIn = 1;
         plog(d, "mark: in: %d draw(s) %d verts | pal=%s fog=%s %dx%d lut=%s "
-                "text=%s %dx%d layer=%s | key=%d game=%.0fx%.0f zoom=%.2f ss=%.1f",
+                "text=%s %dx%d | key=%d game=%.0fx%.0f zoom=%.2f ss=%.1f",
              s_h.ndraw, s_h.nvert,
              s_h.pal ? "yes" : "NULL",
              s_h.fogGrid ? "yes" : "NULL", s_h.fogGridCols, s_h.fogGridRows,
              s_h.fogLut ? "yes" : "NULL",
              s_h.text ? "yes" : "NULL", s_h.textW, s_h.textH,
-             s_h.layer ? "yes" : "NULL",
              s_h.key, s_h.gw, s_h.gh, s_h.zoom, s_h.ss);
     }
     /* EVERY BAIL-OUT FROM HERE DOWN SAYS WHY. They were silent in the first
@@ -710,10 +715,10 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        shape of failure this project keeps paying for. Each latches SEPARATELY
        so a refusal is said once and not at the frame rate -- and so that one
        refusal cannot silence a different one. */
-    /* NO PALETTE, NO FRAME. Binding 41 falls back to the LAYER's view rather
+    /* NO PALETTE, NO FRAME. Binding 41 falls back to the STAND-IN's view rather
        than leaving a hole in the set, and the fragment shader's LAST line is
-       `texelFetch(uPal, ivec2(pi, 0), 0)` on EVERY path -- the flat one, the
-       text one and the layer one alike. So a frame with no palette would draw
+       `texelFetch(uPal, ivec2(pi, 0), 0)` on EVERY path -- the flat one and the
+       text one alike. So a frame with no palette would draw
        every marker out of a 1x1 R8 image instead of refusing: the whole layer
        in garbage colours, which is a different picture and not an absent one.
        The fallback's own comment said "the uniform that would read it is 0 on
@@ -780,20 +785,13 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         /* AND A DRAW THAT NAMES A TEXTURE THE HAND-OVER DID NOT BRING.
            Binding 40 falls back to whatever image is there rather than leaving
            a hole, so without this a text draw with no atlas would sample the
-           layer (or the 1x1 0xFF stand-in) and come out a solid quad -- which
-           is precisely the shape of the bug the two sets above exist to fix,
-           reachable by a second road. Refuse the frame instead. */
+           1x1 0xFF stand-in and come out a solid quad -- which is precisely
+           the shape of the bug the two sets above exist to fix, reachable by a
+           second road. Refuse the frame instead. */
         if (g->tex == TAGPU_MK_TEX_TEXT &&
             !(s_h.text && s_h.textW > 0 && s_h.textH > 0)) {
             if (!s_saidTexA) { s_saidTexA = 1;
                 plog(d, "mark: a text draw arrived with no coverage atlas - "
-                        "nothing drawn while that is true"); }
-            return 0;
-        }
-        if (g->tex == TAGPU_MK_TEX_LAYER &&
-            !(s_h.layer && s_h.layerW > 0 && s_h.layerH > 0)) {
-            if (!s_saidTexL) { s_saidTexL = 1;
-                plog(d, "mark: a layer draw arrived with no captured layer - "
                         "nothing drawn while that is true"); }
             return 0;
         }
@@ -853,8 +851,6 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
 
     /* the images this frame needs, and the staging to fill them */
     ssz = 0;
-    if (s_h.layer && s_h.layerW > 0 && s_h.layerH > 0)
-        ssz += (VkDeviceSize)s_h.layerW * s_h.layerH;
     if (s_h.text && s_h.textW > 0 && s_h.textH > 0)
         ssz += (VkDeviceSize)s_h.textW * s_h.textH;
     ssz += 256 * 4;                                  /* the palette */
@@ -883,14 +879,6 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     memcpy(s_vbMap[slot], s_h.verts, (size_t)vsz);
 
     off = 0;
-    if (s_h.layer && s_h.layerW > 0 && s_h.layerH > 0) {
-        if (!img_size(d, &s_img[slot][IMG_LAYER], s_h.layerW, s_h.layerH, VK_FORMAT_R8_UNORM) ||
-            !img_up(d, cb, slot, &s_img[slot][IMG_LAYER], s_h.layer, s_h.layerPitch, 1, off)) {
-            if (!s_saidImgL) { s_saidImgL = 1; plog(d, "mark: the captured layer would not upload (%dx%d)", s_h.layerW, s_h.layerH); }
-            return 0;
-        }
-        off += (VkDeviceSize)s_h.layerW * s_h.layerH;
-    }
     if (s_h.text && s_h.textW > 0 && s_h.textH > 0) {
         int fresh = !s_img[slot][IMG_TEXT].have || s_img[slot][IMG_TEXT].gen != s_h.textGen;
         if (!img_size(d, &s_img[slot][IMG_TEXT], s_h.textW, s_h.textH, VK_FORMAT_R8_UNORM)) {
@@ -940,10 +928,10 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        review -- "an image whose contents are UNDEFINED ... is not a mistake to
        make twice" -- and this is it made twice. The upload is what puts it in
        the layout the descriptor promises. */
-    if (!s_img[slot][IMG_LAYER].have) {
+    if (!s_img[slot][IMG_NONE].have) {
         static const unsigned char ONE = 0xFF;
-        if (!img_size(d, &s_img[slot][IMG_LAYER], 1, 1, VK_FORMAT_R8_UNORM) ||
-            !img_up(d, cb, slot, &s_img[slot][IMG_LAYER], &ONE, 1, 1, off)) {
+        if (!img_size(d, &s_img[slot][IMG_NONE], 1, 1, VK_FORMAT_R8_UNORM) ||
+            !img_up(d, cb, slot, &s_img[slot][IMG_NONE], &ONE, 1, 1, off)) {
             if (!s_saidImgS) { s_saidImgS = 1; plog(d, "mark: no 1x1 stand-in for the unused sampler bindings"); }
             return 0;
         }
@@ -1071,34 +1059,6 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
            because a bind of VK_NULL_HANDLE is undefined rather than loud and
            the cost of the branch is nothing. */
         if (g->lines && !s_pipeLine) continue;
-        /* ---- THE CLEAN CUT SKIPS THE CAPTURED LAYER, AND ONLY IT.
-           [`tagpu_purevk.on`; the vulkan-only plan. FOUND BY THIS LANDING'S
-           REVIEW, and the landing's own measurement could not have caught it:
-           the fixture ran under `tagpu_defaults.off` with `mark.on` unarmed,
-           while `mark.on` and `markown.on` are BOTH on `tagpu_opt.c`'s defaults
-           table and `s_capture` is 1 -- so on a stock instance this pass was
-           putting engine pixels on a frame whose whole claim is that none of
-           them are there.]
-
-           A `TAGPU_MK_TEX_LAYER` group samples `TAGPU_MARKLAYER.pix`, which is
-           a pointer into the ENGINE'S OWN 8-bit surface: bytes the engine
-           rasterised, captured and handed over. That is an observation of the
-           engine in exactly the sense the cut's rule names, and it is the only
-           one this pass makes.
-
-           NOTHING ELSE HERE IS CUT, and the distinction is the whole rule
-           rather than a convenience. The bars, the selection and band-box
-           rects, the order lines and dots, the range circles, the group digit
-           and the labels are all re-derived from engine STATE and drawn as our
-           own geometry out of our own atlas -- the same class as the terrain,
-           the units and the features, which are what the frame is made of.
-           The cut is about pixels we copied, not about facts we read. */
-        if (d->pureVk && g->tex == TAGPU_MK_TEX_LAYER) {
-            if (!s_saidPure) { s_saidPure = 1;
-                plog(d, "mark: the clean cut is armed - the captured 8bpp layer "
-                        "is not drawn; every other marker is ours and stays"); }
-            continue;
-        }
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           g->lines ? s_pipeLine : s_pipeTri);
         /* `glLineWidth(ss)`, and since 4c-2 it is genuinely `ss` rather than
@@ -1109,11 +1069,11 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         if (g->lines) vkCmdSetLineWidth(cb, s_lineW);
         dyno[0] = 0;
         dyno[1] = (uint32_t)s_fsOff[i];
-        /* UNIT 0 IS PER DRAW, exactly as it is in the GL twin: the text
-           draws sample the coverage atlas and the layer draw samples the
-           captured layer. A TEX_NONE draw samples neither (its vertices carry
-           u < 0, the flat path), so either set is the same picture for it. */
-        set = (g->tex == TAGPU_MK_TEX_TEXT) ? s_setT[slot] : s_setL[slot];
+        /* UNIT 0 IS PER DRAW: the text draws sample the coverage atlas and
+           everything else samples the 1x1 stand-in. A TEX_NONE draw does not
+           read it at all (its vertices carry u < 0, the flat path), so the
+           stand-in is there to fill the binding rather than to be sampled. */
+        set = (g->tex == TAGPU_MK_TEX_TEXT) ? s_setT[slot] : s_setN[slot];
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_plo,
                                 0, 1, &set, 2, dyno);
         vkCmdDraw(cb, (uint32_t)g->count, 1, (uint32_t)g->first, 0);
@@ -1145,7 +1105,7 @@ void tagpu_vk_mark_down(const TAGPU_VKPASS* d)
         s_uboMem[i] = s_vbMem[i] = s_stgMem[i] = VK_NULL_HANDLE;
         s_uboMap[i] = s_vbMap[i] = s_stgMap[i] = NULL;
         s_uboCap[i] = s_vbCap[i] = s_stgCap[i] = 0;
-        s_setL[i] = s_setT[i] = VK_NULL_HANDLE;
+        s_setN[i] = s_setT[i] = VK_NULL_HANDLE;
     }
     if (s_pipeTri) { vkDestroyPipeline(d->dev, s_pipeTri, NULL); s_pipeTri = VK_NULL_HANDLE; }
     if (s_pipeLine) { vkDestroyPipeline(d->dev, s_pipeLine, NULL); s_pipeLine = VK_NULL_HANDLE; }
@@ -1158,8 +1118,8 @@ void tagpu_vk_mark_down(const TAGPU_VKPASS* d)
     s_drawThis = 0; s_abFrame = 0;
     s_downOwed = 0; s_downPaying = 0;
     s_saidLine = s_saidWide = s_saidFog = s_saidLut = s_saidRoom = s_saidPal = 0;
-    s_saidEmpty = s_saidMany = s_saidBound = s_saidTexA = s_saidTexL = 0;
-    s_saidImgL = s_saidImgT = s_saidImgP = s_saidImgF = s_saidImgU = s_saidImgS = 0;
+    s_saidEmpty = s_saidMany = s_saidBound = s_saidTexA = 0;
+    s_saidImgT = s_saidImgP = s_saidImgF = s_saidImgU = s_saidImgS = 0;
     s_saidNoDraw = s_saidSlot = 0;
     s_saidHand = s_saidDrew = s_saidIn = 0;
 }

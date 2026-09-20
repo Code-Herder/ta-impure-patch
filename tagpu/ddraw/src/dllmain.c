@@ -20,7 +20,6 @@
 #include "tagpu_fogwide.h"
 #include "tagpu_gui.h"
 #include "tagpu_markown.h"
-#include "tagpu_cursown.h"
 #include "tagpu_zoom.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_weapons.h"
@@ -143,12 +142,16 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            installed on them still runs). */
         tagpu_markown_init();
 
-        /* tagpu: the engine's cursor BLIT, skipped while ours is on screen
-           (tagpu_cursown.h). Four 5-byte call-site redirects, byte-matched and
-           independent of each other; the functions they sit in are untouched,
-           so the engine's position writes, its background save and its
-           caller's restore all still run. Off with "tagpu_cursown.off". */
-        tagpu_cursown_init();
+        /* `tagpu_cursown_init()` STOOD HERE and the clean cut deleted the
+           module with it -- four 5-byte call-site redirects that skipped the
+           engine's cursor BLIT while OURS was on screen. Ours was the UI
+           layer's composite, which is gone, so the suppression could never
+           fire again: the byte it compared would have been 0 for the life of
+           every session, and four engine patches that can only ever be
+           no-operations are worse than none. The engine draws its own cursor
+           now, into its own surface, which is where the reference frame wants
+           it. A native cursor pass brings the suppression back with it.
+           [The vulkan-only plan, THE CLEAN CUT.] */
 
         /* tagpu: the flip observer AND the GL UI renderer's leaves (Phase E,
            tagpu_gui.h). TWO INSTALLS SINCE THE VULKAN-ONLY PLAN'S LANDING

@@ -79,29 +79,6 @@ typedef void* (__cdecl *tagpu_detour_after_fn)(unsigned int* regs);
 int tagpu_detour_observe(unsigned int va, const unsigned char* stolen, int nst,
                          tagpu_detour_before_fn before, tagpu_detour_after_fn after);
 
-/* BRANCH STEAL. `va` holds a `test`-then-`je` pair -- `nst` bytes, of which the
-   `je` is the last two -- and BOTH of its arms are engine code we must still be
-   able to reach. While *flag is set the stub takes the `je`'s arm
-   unconditionally (`target`); while it is clear the engine's own `test` runs
-   and chooses between `target` and `resume` exactly as it did before.
-
-   Neither existing shape expresses this. A leaf detour has a function to return
-   from and this has none -- both arms are inside one -- and a call-site skip
-   needs a `call` to repoint. Hence a third stub shape.
-
-   THE FLAG IS COMPARED FIRST, before the stolen `test`, so the flags the
-   engine's own `je` reads are the ones the engine's own `test` set.
-
-   TWO THINGS ARE THE CALLER'S: byte-matching `va` before asking for this, and
-   having checked that nothing branches INTO the stolen range past its first
-   byte. A `je` flip is immune to an incoming branch and a 5-byte detour is not,
-   so that check is not optional -- `objdump -d -M intel` over the whole image
-   for branch targets in the range, and a search of the image for each address
-   in it as a little-endian dword (a jump-table entry). 1 on success. */
-int tagpu_detour_branch(unsigned int va, const unsigned char* stolen, int nst,
-                        unsigned int target, unsigned int resume,
-                        volatile unsigned char* flag);
-
 /* Call-site skip: the 5-byte `call rel32` at `va` (which must resolve to
    `callee`, checked) is repointed at a stub that unwinds as the callee would —
    `ret argBytes`, the callee's own stdcall pop — while *flag is set, and

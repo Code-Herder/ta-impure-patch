@@ -1,49 +1,42 @@
 #ifndef TAGPU_VK_SURF_H
 #define TAGPU_VK_SURF_H
 
-/* THE FRAME'S BOTTOM LAYER: TA's own 8-bit screen, resolved through the
-   presented palette, drawn before anything of ours. Implementation:
-   tagpu_vk_surf.c. The bytes, the palette and the destination rect are
-   tagpu_surf.c's; the shader is the FORK's own -- PASSTHROUGH_VERT_SHADER and
-   PALETTE_FRAG_SHADER out of inc/openglshader.h, the pair render_ogl.c:260
-   builds as `g_ogl.main_program` and draws for the GL lane before any pass
-   runs. This is that draw, on the other backend.
+/* THE REFERENCE TEXTURE: TA's own 8-bit screen, on the device, drawn nowhere.
+   Implementation: tagpu_vk_surf.c. The bytes and the palette are
+   tagpu_surf.c's, captured from the engine's composed frame.
 
-   WHY IT EXISTS. On `renderer=vulkan` the seam cleared the swapchain image to
-   the lever's colour and TA's surface reached the frame ONLY through the GUI
-   pass's mirror hand-over, so `tagpu_gui.off` left a flat colour where the GL
-   lane still shows a game. That is one of the three blind spots the
-   vulkan-only plan's landing 1 named.
+   IT USED TO BE THE FRAME'S BOTTOM LAYER. This pass resolved TA's indices
+   through the presented palette and blitted them under everything of ours,
+   through the fork's own GLSL. THE CLEAN CUT DELETED THAT DRAW and the
+   pipeline, descriptors, sampler, buffers and quad behind it, so no pixel the
+   1997 software rasteriser produced reaches the screen. There is no lever back:
+   the code is gone, not gated.
 
-   THE CLEAR STAYS. `vkCmdClearColorImage` still runs before the render pass and
-   is still what covers the letterbox and a frame with no surface to draw. This
-   pass paints the viewport rect on top of it, inside the render pass, which is
-   the only place a pipeline can run.
+   WHAT IT IS NOW. One R8 index image per frame slot with its 256x1 palette
+   beside it, uploaded from the CPU capture and left in
+   SHADER_READ_ONLY_OPTIMAL. `tagpu_vk_surf_engine_view` hands that view and its
+   size to anything that wants to diff our output against the engine's. That is
+   the golden source, and holding it is this module's whole purpose.
 
-   THE TWO-PHASE CONTRACT is tagpu_vk_fps.h's, for the reason every pass here
-   shares: a texture upload is a transfer and a transfer may not be recorded
-   inside a render pass.
-     prepare()   before vkCmdBeginRenderPass -- build what is missing, upload
-                 this frame's surface and palette into this slot
-     record()    inside the render pass, FIRST of all the passes -- bind and draw
-   Both on the render thread, on the command buffer the seam is recording, in
-   that order, in one frame. `prepare` returning 0 means there is nothing to
-   draw and `record` must not be called. */
+   ONE PHASE, NOT TWO. Every other pass here has prepare/record because a
+   texture upload is a transfer and a transfer may not be recorded inside a
+   render pass. This one has only the transfer, so `prepare` is all there is and
+   it is called OUTSIDE vkCmdBeginRenderPass like the rest. Its return value is
+   "this slot now holds the current frame", not "call record next".
+
+   THE CLEAR IS THE BOTTOM OF THE FRAME NOW. `vkCmdClearColorImage` runs before
+   the render pass and covers the whole image, letterbox included; the world is
+   the first thing drawn on it. */
 
 #include "tagpu_vk_pass.h"
 
 /* `slot` is the frame slot (< d->slots) whose resources the GPU has finished
    with; the seam's fence wait is what proves that. */
 int  tagpu_vk_surf_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot);
-void tagpu_vk_surf_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
-                          uint32_t w, uint32_t h);
 
-/* THE ENGINE'S FRAME, FOR A SECOND READER (the vulkan-only plan's landing 10).
-   This pass already holds TA's 8-bit surface as an R8 image, uploaded once per
-   frame and left in SHADER_READ_ONLY_OPTIMAL -- and the UI layer's shader wants
-   exactly that image for its stale-mirror guard (`uSurf`). It used to upload a
-   SECOND copy of the same bytes from the same source; this hands over the one
-   that already exists.
+/* THE GOLDEN SOURCE, LENT OUT. The engine's frame as an R8 index image --
+   palette indices, not colour: index 254 is the terrain key, and a consumer
+   resolves through its own palette or compares indices directly.
 
    Returns VK_NULL_HANDLE when this slot holds no current frame. EVERY path in
    `tagpu_vk_surf_prepare` that does not leave this slot holding the current
@@ -55,14 +48,16 @@ void tagpu_vk_surf_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
 
    The caller must treat VK_NULL_HANDLE as "the surface pass has no image to
    lend". That is NOT the same as "there is no engine frame": the pass latches
-   ST_REFUSED permanently on an allocation failure, so a caller that stands
-   down on this alone stands down for the process. `tagpu_vk_gui.c` composites
-   without its stale-mirror guard instead.
+   ST_REFUSED permanently on an allocation failure, so a caller that stands down
+   on this alone stands down for the process.
 
-   The seam calls surf's prepare BEFORE the UI layer's (tagpu_vk.c:2771 before
-   :2822, same command buffer, same slot), so the image is uploaded and
-   barriered into SHADER_READ_ONLY_OPTIMAL ahead of the descriptor that names
-   it. `w`/`h` may be NULL. */
+   NO SAMPLER COMES WITH IT. The view is all this module owns since the cut took
+   its draw; a consumer brings its own, and should bring a NEAREST one -- half
+   way between index 7 and index 8 is index 7.5, which is in no palette entry
+   and belongs to neither neighbour.
+
+   THERE IS NO CONSUMER IN THE TREE TODAY. The one it had was the UI layer's
+   composite, deleted by the cut. `w`/`h` may be NULL. */
 VkImageView tagpu_vk_surf_engine_view(uint32_t slot, int* w, int* h);
 
 /* The teardown handshake every pass has: the seam asks, waits for the device to

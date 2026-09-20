@@ -79,7 +79,6 @@
 #include "config.h"
 #include "tagpu.h"
 #include "tagpu_overlay.h"
-#include "tagpu_cursown.h"
 #include "tagpu_gui.h"
 #include "tagpu_packet.h"
 #include "tagpu_reclaim.h"
@@ -116,10 +115,6 @@ DWORD WINAPI vk_render_main(void)
 #define VK_RETRY_BUDGET 3
 
     unsigned fc = 0;
-    /* OUR CURSOR REACHED THE MIRROR RECORD, taken inside the driver block and
-       published after the frame -- see both sites. Loop scope because the take
-       and the publish are on opposite sides of `tagpu_vk_frame`. */
-    int cur_drew = 0;
     int gave_up = 0, came_up = 0, retries = 0;
     DWORD timeout;
 
@@ -230,18 +225,6 @@ DWORD WINAPI vk_render_main(void)
             f.packet        = tagpu_packet_acquire(&f.packet_prev);
             tagpu_reclaim_pass_begin();
             tagpu_overlay_draw(&f);
-            /* TAKEN HERE, PUBLISHED AFTER THE FRAME. The take is what CLEARS
-               the producer's flag, so it has to happen once per iteration and
-               at this point -- this is the only place every path through the
-               driver reaches, and a take inside the UI present would keep its
-               last value across the driver's three early returns. But the
-               ANSWER it gives is only half of one: it says our cursor reached
-               the mirror record, and `tagpu_vk_gui_prepare` can still refuse the
-               frame afterwards, in which case nothing composited and the
-               engine's own cursor has been suppressed for nothing. So the value
-               is held and published below, against what the frame actually did.
-               [The vulkan-only plan, gate 4's last item.] */
-            cur_drew = tagpu_gui_cursor_drew_take();
             tagpu_reclaim_pass_end(f.frame_counter);
             tagpu_packet_frame_end(f.frame_counter);
             /* The render-options screen's deferred cfg write, off the game
@@ -269,47 +252,22 @@ DWORD WINAPI vk_render_main(void)
                            g_config.vsync, fc))
             came_up = 1;
 
-        /* AND NOW THE CURSOR, because now there is an answer. Both halves have
-           to be true: ours got as far as the mirror record (the take above) AND
-           the frame that record was for actually composited the UI
-           (`tagpu_vk_ui_composited`, which is 0 on every early return
-           `tagpu_vk_frame` has). Either alone suppresses the engine's cursor on
-           a frame that shows none of ours. This runs on every iteration, which
-           is the property the take's own placement was protecting. */
-        {
-            int composited = tagpu_vk_ui_composited();
-            /* COUNTED, so the fix is a number rather than a claim: these are the
-               frames that used to publish 1 with nothing of ours on screen.
+        /* THE CURSOR HAND-OVER STOOD HERE and there is nothing left to hand
+           over. Every frame this loop weighed two halves -- had OUR cursor
+           reached the mirror record (`tagpu_gui_cursor_drew_take`), and had the
+           frame it was for actually composited (`tagpu_vk_ui_composited`) --
+           and published the answer to `tagpu_cursown`, which suppressed the
+           engine's own cursor blit on a 1. The composite is gone, so both
+           halves are gone and the answer could only ever be 0; the suppression
+           module went with them rather than stay as four engine patches that
+           can never fire.
 
-               NOT COUNTED AT ALL UNDER THE CLEAN CUT, because there the counter
-               cannot mean what it says in ANY state. `tagpu_purevk.on` stops the
-               UI layer compositing on purpose, so `cur_drew && !composited` holds
-               on every frame of a cut session and this counter -- which the
-               heartbeat reports as "frames the engine's cursor was suppressed
-               with nothing of ours on screen" -- would climb without bound while
-               describing nothing that happened.
-
-               AND THE SUPPRESSION IS WIDER THAN "THE DESIGN FRAMES", WHICH IS
-               STATED HERE RATHER THAN LEFT TO BE DISCOVERED. `tagpu_vk_purevk()`
-               answers for the LEVER, not for whether this frame's composite was
-               the thing that got cut -- so the bring-up, a swapchain rebuild,
-               ST_FAILED and ST_ZOMBIE are silenced too, and those are frames the
-               counter would otherwise have wanted. Nothing is lost by it: once
-               the cut is armed the counter cannot tell those frames from the
-               designed ones anyway, because every frame satisfies its condition.
-               A counter that fires on everything reports nothing, and the
-               alternative -- publishing "the composite was cut THIS frame" purely
-               to keep a debug tally honest -- is more machinery than the tally is
-               worth. [FOUND BY THIS LANDING'S REVIEW.]
-
-               The PUBLISH below is deliberately NOT gated: 0 is exactly right
-               under the cut, because the engine's cursor must keep being drawn
-               into the surface we are keeping as the golden source.
-               [The vulkan-only plan, "The Clean Cut".] */
-            if (cur_drew && !composited && !tagpu_vk_purevk())
-                tagpu_cursown_note_held();
-            tagpu_cursown_publish(cur_drew && composited);
-        }
+           THE ENGINE DRAWS ITS OWN CURSOR NOW, into its own surface, which is
+           where the reference frame wants it: the golden source stays complete
+           even though nothing of it reaches the screen. WHAT THE PLAYER SEES IS
+           NO CURSOR AT ALL -- the cut's cost, named here rather than left to be
+           found. A cursor comes back as a pass of ours.
+           [The vulkan-only plan, THE CLEAN CUT.] */
 
         /* THE LOOP'S OWN EXIT WINS OVER A FAILURE, and the order is free. A
            frame that both fails and finds `render.run` clear is a shutdown or a
@@ -349,13 +307,6 @@ DWORD WINAPI vk_render_main(void)
 
         fpsl_frame_end();
     }
-
-    /* THE PRODUCER'S OWN TEARDOWN CLEARS IT, by construction: the thread that
-       is the only writer of the cursor-ownership flag clears it as it stops
-       writing. Leaving it set would keep the engine's cursor blit skipped for a
-       session that has no cursor of ours to put in its place -- no pointer at
-       all, which is the fail-closed shape this design exists to avoid. */
-    tagpu_cursown_publish(0);
 
     /* Every exit from the loop is a mode change, a shutdown or a lane that
        failed, and all three invalidate what the surface was made on -- so the

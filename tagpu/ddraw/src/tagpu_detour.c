@@ -127,36 +127,6 @@ int tagpu_detour_leaf(unsigned int va, const unsigned char* stolen, int nst,
     return tagpu_detour_land(va, s, nst);
 }
 
-/* See tagpu_detour.h. The stub is
-       cmp byte [flag],0 / jne TAKE / <the engine's test> / je TAKE
-       jmp resume
-     TAKE: jmp target
-   and `tlen` is the stolen range minus the `je`, which is re-emitted with a
-   rel8 of our own rather than copied -- the engine's rel8 is relative to its
-   own address and means nothing here. */
-int tagpu_detour_branch(unsigned int va, const unsigned char* stolen, int nst,
-                        unsigned int target, unsigned int resume,
-                        volatile unsigned char* flag)
-{
-    unsigned char* s;
-    unsigned char* p;
-    const int tlen = nst - 2;
-    if (nst < 5 || nst > 16) return 0;
-    s = tagpu_detour_stub();
-    if (!s) return 0;
-    p = s;
-    p = tagpu_detour_cmp_flag(p, flag);
-    *p++ = 0x75; *p++ = (unsigned char)(tlen + 2 + 5);   /* jne -> TAKE       */
-    memcpy(p, stolen, (size_t)tlen); p += tlen;          /* the engine's test */
-    *p++ = 0x74; *p++ = 0x05;                            /* je  -> TAKE       */
-    *p++ = 0xE9; tagpu_detour_rel(p, resume); p += 4;
-    *p++ = 0xE9; tagpu_detour_rel(p, target); p += 4;
-    /* the stub is not recorded for chaining: nothing may stack on a branch
-       steal, because an observer would see one arm and not the other */
-    if (!tagpu_detour_land(va, s, nst)) { VirtualFree(s, 0, MEM_RELEASE); return 0; }
-    return 1;
-}
-
 int tagpu_detour_leaf_call(unsigned int va, const unsigned char* stolen, int nst,
                            volatile unsigned char* flag, unsigned char retn,
                            void (__cdecl *fn)(void*))

@@ -224,13 +224,28 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        (tagpu_pal.h). The engine's half comes from this frame's packet; a flag
        otherwise: the first reader below does the work. */
     tagpu_pal_frame(f->packet);
-    /* TA'S OWN FRAME, ONCE, BEFORE ANY PASS GATHERS. It is the bottom layer of
-       the composite -- everything of ours is drawn over it and what we do not
-       draw is what the player still sees -- and taking it here means every
-       consumer in this frame gets the same bytes and the same palette. Two
-       passes reading the engine's surface at two instants is how the lanes end
-       up compositing different moments of one frame. Cheap and silent when
-       there is no 8-bit primary. [The vulkan-only plan, landing 4c-1.] */
+    /* TA'S OWN FRAME, ONCE. It used to be the bottom layer of the composite --
+       everything of ours drawn over it and what we did not draw left showing.
+       Since the clean cut it is THE REFERENCE and nothing else: the picture the
+       1997 software rasteriser produced, captured here so it can be compared
+       against what we draw. Nothing composites it and no lever brings that
+       back.
+
+       STILL TAKEN HERE, AND STILL ONCE. The capture wants the engine's frame at
+       one instant, and a second reader taking its own copy at a different one
+       is how a diff ends up measuring two moments instead of two renderers.
+       `tagpu_vk_surf_prepare` puts these bytes on the device;
+       `tagpu_vk_surf_engine_view` is how a pass asks for them.
+
+       WHERE IT SHOULD MOVE TO, WHICH THIS LANDING DID NOT DO. This runs on the
+       RENDER thread, and nothing sequences it against the game thread's draw --
+       so the capture can land mid-frame and the reference be a torn picture.
+       The hook it wants is the packet publisher's `after_draw` observer on
+       `DrawGameScreen` (0x468CF0, tagpu_packet_pub.c), where the engine's frame
+       is complete on the thread that drew it. Named here rather than left to be
+       rediscovered: it must be fixed before anyone trusts a pixel diff against
+       this. Cheap and silent when there is no 8-bit primary.
+       [The vulkan-only plan, landing 4c-1 and THE CLEAN CUT.] */
     tagpu_surf_take(f);
 
     /* THE VIEW FOR THIS FRAME, once, before any pass reads the eye: the zoom
@@ -248,13 +263,6 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        Vulkan twin draw it. */
     tagpu_scaffold_frame(f);
 
-    /* G17c: the cursor's ONE decision for this frame, before the world pass
-       reads it (tagpu_gui.h). Both the composite below and the UI layer after
-       it erase the engine's cursor from the same rect, and they can only agree
-       if the state is read once — which since landing 4c means latching THIS
-       FRAME'S PACKET here, for the whole of the GL UI's render half. */
-    tagpu_gui_cursor_frame(f->packet);
-
     /* G12b: native unit pass (tagpu_native.on) — needs this frame's scaffold.
        CALLED ON BOTH LANES since 4b-2: its arm poll, view, fog and palette
        copies, four world gathers and vertex emission are the pass, and it gates
@@ -263,11 +271,20 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        world composite has no counterpart there until 4c. */
     tagpu_native_frame(f);
 
-    /* Phase E: the UI layer — the presented surface's twin, drawn over the
-       world's composite (UI above the world; the engine's own pixels stay
-       the fallback beneath). Runs in the shell too: the native pass returns
-       early there, this does not. */
-    tagpu_gui_present(f);
+    /* PHASE E'S UI LAYER STOOD HERE and the clean cut deleted it. It replayed
+       the engine's captured UI ops into twin surfaces and composited them --
+       together with our own device-resolution sharp layer, through one quad --
+       over the world. Both halves were engine pixels on their way to the
+       screen or rode the same draw, so both went.
+
+       WHAT STILL RUNS is `tagpu_gui_hook.c`: the detours that WATCH the
+       engine's UI draws. They are kept for two reasons. They host
+       `tagpu_triggers_frame` -- every `tacli` verb in the fork is dispatched
+       from inside that flip hook and nothing else reaches it -- and the op
+       stream they capture is the engine's UI stated SEMANTICALLY (this sprite,
+       that string, at these coordinates), which is what a native UI pass will
+       be built from. Capture is not compositing; only the compositing was cut.
+       [The vulkan-only plan, THE CLEAN CUT.] */
 
     /* The frame-rate readout, ABOVE the UI layer: it is a diagnostic drawn over
        the finished frame and must not be hidden by the side panel or a dialog.

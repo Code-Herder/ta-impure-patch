@@ -96,12 +96,16 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v);
    the counts would be free to disagree with the pass that drew them, so what
    crosses is the DRAW LIST `tagpu_mark_render` issued, built as it issues it.
 
-   NOTHING HERE NEEDS A NEW MIRROR, which is what makes this landing smaller
-   than gates 2 and 3: the vertices are this file's own arrays, the layer is
-   already CPU bytes (`TAGPU_MARKLAYER`), and `tagpu_text_atlas` has existed
-   since G19d for exactly this. */
+   NOTHING HERE NEEDS A NEW MIRROR: the vertices are this file's own arrays and
+   `tagpu_text_atlas` has existed since G19d for exactly this. (It used to carry
+   the captured layer's bytes as well; the clean cut deleted that draw.) */
+/* 1 WAS `TAGPU_MK_TEX_LAYER` -- the captured post-fog layer, raw palette
+   indices the ENGINE rasterised, copied out of its own surface and drawn back
+   onto the frame. The clean cut deleted it: that is the one observation of the
+   engine's pixels this pass made, and everything else here is re-derived from
+   engine STATE and drawn as our own geometry. The value is retired rather than
+   reused, so a stale `tex` field cannot silently become a text draw. */
 enum { TAGPU_MK_TEX_NONE = 0,   /* no sampler feeds uLayer this draw */
-       TAGPU_MK_TEX_LAYER = 1,  /* the captured post-fog layer, palette indices */
        TAGPU_MK_TEX_TEXT = 2 }; /* tagpu_text.c's coverage atlas */
 
 typedef struct TAGPU_MKDRAW {
@@ -120,10 +124,6 @@ typedef struct TAGPU_MKHAND {
        layout `tagpu_mark.spv.h`'s vertex stage expects. */
     const float* verts; int nvert;
     const TAGPU_MKDRAW* draws; int ndraw;
-    /* the captured layer, or NULL. Palette indices, sampled NEAREST on both
-       lanes -- interpolating two indices gives a colour that is in neither. */
-    const unsigned char* layer;
-    int layerPitch, layerX, layerY, layerW, layerH;
     /* tagpu_text.c's atlas: one coverage byte a texel. `textGen` moves when a
        raster lands, which is how a backend holding its own copy is told. */
     const unsigned char* text; unsigned textGen; int textW, textH;

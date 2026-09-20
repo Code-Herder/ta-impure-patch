@@ -49,7 +49,6 @@
 #include <string.h>
 #include "tagpu_terrown.h"
 #include "tagpu_owndraw.h"
-#include "tagpu_featown.h"
 #include "tagpu_opt.h"
 #include "tagpu_terr.h"
 #include "tagpu_detour.h"
@@ -282,16 +281,11 @@ void tagpu_terrown_set_skip(int on)
            unit pass publishing `tagpu_terrown_filled()` a frame later -- gave
            up to two teal frames on every acquisition.] */
         if (v) tagpu_owndraw_set_structshadow_terr(1);
-        /* and the same for FEATURES, whose shadow has its own gate because it
-           has its own draw leaf (tagpu_featown.c). Same ordering, same reason:
-           up before the skip, down after it. */
-        if (v) tagpu_featown_set_shadow_terr(1);
         /* the engine's surface still holds a real terrain blit at this instant;
            the composite must not invert until a filled frame has gone through */
         g_filled = 0;
         g_terrown_skip = v;
         if (!v) tagpu_owndraw_set_structshadow_terr(0);
-        if (!v) tagpu_featown_set_shadow_terr(0);
         /* HANDING THE FOG SITE BACK VOIDS THE EYE WE LATCHED. While the engine
            calls `0x4843C0` itself we never see it rebuild, and it rebuilds at
            the live eye — so on the first tick after ownership returns, LosType
