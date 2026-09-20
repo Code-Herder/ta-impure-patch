@@ -3359,8 +3359,21 @@ already spelled `unsigned int`; the object file is symbol-identical across the c
 GL surface**: **252 call sites remain in FOUR files** (one regex over comment-masked source,
 run on both trees: `tagpu_hires_draw.c` 104, `tagpu_shadow.c` 87, `opengl_utils.c` 31,
 `tagpu_hires.c` 30 — 540 less 11-5e-2's 288, the four surviving rows digit-for-digit
-unchanged), **and every one of the four is behind escalation reason 1 or waiting on it**, so
-11-5e cannot finish the gate. `tagpu_native.c`, `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c`,
+unchanged), **and every one of the four was behind escalation reason 1 or waiting on it**, so
+11-5e could not finish the gate.
+
+**DECISION 1 UNBLOCKED THEM 2026-09-19, and the deletion is four landings, D1–D4.** The survey
+that shaped the split is in [gpu-status](gpu-status.html) §2.80 and the finding is not about
+deletion: **cast shadows and glTF replacement models are already off on the shipped lane**, each
+because the two halves of it went dark together so that nothing stood down and nothing logged.
+`s_live = 1` and `s_pubHave = 1` each occurred exactly once, inside callerless functions; and
+`tagpu_hires_draw_ready()` is 0 on every run because `opengl32.dll` is never in the process, so
+every replacement mesh is loaded, parsed and then discarded — which the live logs of all four
+A/B arms say in as many words. **D1 (the GLSL lift) and D2 (the shadow deletion) landed
+2026-09-19**: `gl-sites` is **165 narrow / 234 wide in three files**, D1's binary was
+byte-identical in `.text`, `.rdata` and `.data`, and D2 measured 44–45 px cross-build of which
+44 are the minimap and the rest is the cursor's own pixel. **Whether 11-6 may close with those
+two features dark is escalation reason 1 and is the owner's**, named rather than answered. `tagpu_native.c`, `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c`,
 `tagpu_scaffold.c`, `tagpu_posedraw.c`, `tagpu_overlay.c`, `tagpu_text.c`, `tagpu_ftime.c` and
 `tagpu_gaf.c` make no GL call — and **since 11-5e-2b part 2, `tagpu_gaf.c` is GL-*free* as well**:
 its wide count went 1 → 0 with the RGB mirror's `xwglGetProcAddress`, so the tree-wide wide total
