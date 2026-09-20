@@ -896,6 +896,27 @@ cannot be swapped between runs.
   the settled grab (the last one) is what the cross-build comparison uses. If *two* of three
   disagree, that is drift and the gate really has failed.
 
+  **AND IDENTIFY THE OUTLIER — the second one named itself.** On D3's A/B the same shape came
+  back much larger: `brB` grab 2 differed from grabs 1 and 3 by **97 092 px** while those two
+  were byte-identical. Naming it took three cheap steps and is worth repeating rather than
+  waving at, because "an outlier" and "the branch intermittently renders differently" look the
+  same in a pixel count:
+
+  1. **Colour the differing pixels in both frames.** Here they were green in the settled grabs
+     (mean RGB 15.8/95.3/65.7, only 67 distinct colours) and the grey of the terrain beneath in
+     the odd one — a *layer*, not noise.
+  2. **Look at the image**, downscaled side by side. Every tree was missing; terrain, unit, UI
+     and HUD identical.
+  3. **Ask whether it is ours to lose.** The per-frame census logs `feat=0` in *every* arm, main
+     included, and the feature pass prints `nothing emitted: …` — so those trees are the
+     engine's own sprites, composited, and no Vulkan pass touches them. A single frame between
+     two byte-identical ones, in a layer we do not draw, is a capture that caught the engine's
+     blit half done.
+
+  **The census is the step that settles it**, and it is free: a layer that differs between grabs
+  while its pass logs that it drew nothing is not the build's doing. Note the honest limit —
+  twelve grabs saw this once, which identifies the event and does **not** put a rate on it.
+
 - **CLEAN-BUILD BOTH SIDES OF AN A/B, OR YOU MAY NOT BE MEASURING THE TREE YOU NAMED**
   (2026-09-19). `make -C tagpu/ddraw` is incremental and the Makefile does generate header
   dependencies (`-MMD -MP`, `-include $(DEPS)`), so an incremental build is *usually* right —

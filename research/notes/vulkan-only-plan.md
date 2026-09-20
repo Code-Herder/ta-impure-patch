@@ -2879,8 +2879,19 @@ that a count which grows is the plan catching up with the work.) The row was
        comment records (FOUND 2026-09-15) can no longer occur. The fill stays; the reason
        is rewritten, because the gathers read `fv`.
      * **D3 — the hires deletion. DECIDED BY THE OWNER 2026-09-19: "disable glTF for now",
-       "mark glTF implementation: TODO, out of scope".** That settles the one question this
-       survey could not: `tagpu_hires.c` is **deleted whole**, not reduced to its CPU half.
+       "mark glTF implementation: TODO, out of scope". DONE 2026-09-19.** That settles the
+       one question this survey could not: `tagpu_hires.c` is **deleted whole**, not reduced
+       to its CPU half. 2 588 lines out, 158 in; `.text` down 35 648 bytes and the DLL down
+       51 712; **`gl-sites` goes 165 → 31 narrow and 234 → 98 wide, in ONE file** —
+       `opengl_utils.c`, which is all D4 has left. The cascade out of `tagpu_native.c` is the
+       part the row could not have predicted: `hires_pose`, `pmap_for`, `name_eq`, the `HPMAP`
+       cache, the `HPOSE_MAX` pose arena, `hunits[]`, `nhi` and its term in the emptiness
+       test, the `hires` field, and `gfx`, whose only reader was the dead branch. Verified by
+       the non-static inventory against a clean `git archive HEAD` tree: **identical**, 15 and
+       6 symbols. The four-arm interleaved `one-unit` A/B is **0 px outside the minimap and the
+       fixture's own oscillating cursor pixel** on all four cross-build pairings, census 749 452
+       on every arm, 0 VK errors, and the only log difference is the two `hires` lines gone from
+       the branch arms. [gpu-status §2.80.]
 
        **glTF REPLACEMENT MODELS ARE OUT OF SCOPE FOR THIS GATE AND FOR THE ONES AFTER IT,
        UNTIL THE OWNER SAYS OTHERWISE. [TODO]** They are not being *broken* by this: the

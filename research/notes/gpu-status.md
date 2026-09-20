@@ -13956,3 +13956,102 @@ four, and `gui: layer ON` confirmed per arm.
 That is what a deletion of code that could not execute is supposed to look like, and it is worth
 having in the same place as the argument: the argument said 0 px by construction, and the
 instrument that found 258 px three landings ago found none here.
+
+#### D3 — THE glTF LOADER AND ITS GL DRAW PASS
+
+**The owner's ruling, 2026-09-19: *"disable gltf for now"*, *"mark gltf implementation: todo out
+of scope"*.** That settles the one question this survey could not. `tagpu_hires.c` is deleted
+**whole** rather than reduced to its CPU half, and `tagpu_hires_draw.c` with it: **2 588 lines
+out, 158 in**, `.text` down **35 648 bytes** and the DLL down **51 712**. `gl-sites` goes
+**165 → 31 narrow** and **234 → 98 wide**, in **one remaining file** — `opengl_utils.c`.
+
+**Nothing that was deleted could execute, and there are three independent reasons, any one of
+them sufficient.**
+
+1. `ensure()` resolved five GL entry points through a library the process never loads, so
+   `tagpu_hires_draw_ready()` was 0 and **`tagpu_native.c` nulled every replacement-mesh pointer
+   itself** — immediately after logging the `.glb` it had just parsed.
+2. With that pointer NULL on every unit of every frame, the branch that built `hunits[]` and
+   posed the mesh never ran, so `nhi` was always 0.
+3. `tagpu_hires_depth`, the **only** writer of `s_hiHave`, had zero call sites, so
+   `tagpu_hires_handover` returned 0 at its only caller as well.
+
+**Deleting a loader is not deleting one file, and the cascade is the interesting part.** Out of
+`tagpu_native.c`: the replacement-mesh branch (42 lines), `hires_pose`, `pmap_for`, `name_eq`,
+the `HPMAP` piece-to-primitive cache and its two statics, the `HPOSE_MAX` pose arena,
+`hunits[]`, `nhi` and its term in the emptiness test, the `hires` field and its writers, and
+`gfx` — whose only reader was that branch. `cache_gen_check` keeps its call site and loses its
+body's only subject: the level-change edge is still the right invalidation point for a
+template-keyed cache, so it stays written rather than being re-derived by whoever adds the next
+one.
+
+**What is kept, and why each thing is not arbitrary.** `TAGPU_HMAXPIECE` is not about the
+loader — it sizes the per-piece uniform array in the shader the **Vulkan** lane still draws, so
+`inc/tagpu_hires.h` survives as that one constant and the reason, and changing it fails
+`tools/spirv-check.sh`. `tagpu_vk_hires.c` stays per Decision 1, because `tagpu_vk_shadow.c` and
+`tagpu_vk.c` call six of its entry points, and it inherits `TAGPU_HIHAND`, its three sub-types
+and `TAGPU_HI_MAXHAND` with the measurement written beside them. Its hand-over is a named
+file-local stub returning 0 — the shape D2 established.
+
+**What is genuinely given up is the code, not the feature**: the glTF parser, the piece table,
+the material grouping and the COB-driven pose. They are in `git` at this landing's parent, and
+the note in `tagpu_vk_hires.h` is the pointer a reviver needs. The feature itself was already
+producing nothing.
+
+#### D3'S PIXEL A/B — AND THE OUTLIER GRAB, IDENTIFIED THIS TIME
+
+Four arms, `one-unit`, **interleaved** `mainA brA mainB brB` so the same-build control spans the
+same stretch of wall-clock as the cross-build comparison does. Baseline arm is a DLL
+section-identical to `main` at the D2 review fix (`.text 0x000d33a4`, 1 517 056 B); branch arm is
+D3's (`.text 0x000ca864`, 1 465 344 B).
+
+| pairing | total | minimap | elsewhere | box |
+|---|---|---|---|---|
+| **cross-build** `mainA` vs `brA` | 48 px | 48 | **0** | — |
+| **cross-build** `mainA` vs `brB` | 45 px | 44 | 1 | (512,384) |
+| **cross-build** `mainB` vs `brA` | 1 px | 0 | 1 | (512,384) |
+| **cross-build** `mainB` vs `brB` | 44 px | 44 | **0** | — |
+| control `mainA` vs `mainB` | 49 px | 48 | 1 | (512,384) |
+| control `brA` vs `brB` | 45 px | 44 | 1 | (512,384) |
+
+The difference box derived from the data is **1×1, the single pixel (512,384)** — the same pixel
+D2's box collapsed to, and the control puts 1 px in it too, so it is the fixture's oscillating
+cursor pixel and not the change. **Outside the minimap and that one pixel: 0 px on all four
+cross-build pairings.** The settled census is **749 452** on every arm, as it has been since
+11-5e-2c. Zero `VK_ERROR` / validation lines and exactly one `gui: layer ON` per arm.
+
+The one log difference between the builds is the one D3 predicts: the two `hires` lines
+(`hires draw: missing GL proc`, then the fall-back to the engine's own 3DO) appear **twice in
+each main arm and zero times in each branch arm**. Nothing else differs in kind.
+
+**The outlier grab, and what it actually was.** `brB`'s three grabs went 0 px between 1 and 3 and
+**97 092 px** between either of those and grab 2 — the rule added to `ta-drive` last landing
+(read gate 1 on the settled pair) applied, and this time the outlier was identified rather than
+set aside. Grab 2 is the same frame with **every tree missing**: the differing pixels are green in
+the settled grabs (mean RGB 15.8/95.3/65.7, 67 distinct colours) and the grey of the terrain
+beneath in grab 2. It is not ours to lose — the per-frame census logs `feat=0` in **every** arm,
+main included, and the feature pass says so in as many words (`nothing emitted: native.on needs
+"wrecks" before we can own the leaf`), so the trees in this scene are drawn by the engine into
+its own frame and merely composited. A single frame between two byte-identical ones, in a layer
+no Vulkan pass touches, is a capture that caught the engine's own blit half done. **It is not a
+D3 effect** — and the honest limit on that statement is that twelve grabs saw it once, which is
+too few to put a rate on.
+
+#### TWO THINGS D3 GOT WRONG FIRST, BOTH CAUGHT BEFORE THEY LANDED
+
+**The first cut of the surgery mangled three comment blocks.** It located each function's
+preceding comment with a heuristic — "walk back while the line looks like a comment" — which cut
+three blocks in half and left `/*` unterminated. The compiler caught it (`"/*" within comment`).
+The cut was **thrown away**, `tagpu_native.c` restored from a pre-surgery copy, and the surgery
+redone with explicit line ranges, each one **printed for inspection and checked for balanced
+`/*` and `*/` before anything was deleted**. A heuristic that is right four times in five is the
+wrong tool for a deletion, because the fifth is silent.
+
+**And the inventory check earned its place again.** The repo added it after a scripted deletion
+once swallowed a neighbour, and it is run against a clean `git archive HEAD` tree rather than
+against assumptions: the non-static symbol lists of `tagpu_native.c` and `tagpu_vk_hires.c` are
+**identical** to HEAD's, 15 and 6. Two *static* functions did leave the object file — `nlog` and
+`pose_accum_body` — and that was checked rather than shrugged at: both are still defined and
+still called (13 and 2 call sites), and gcc inlined them entirely once each lost one. The
+compiler-generated clones that vanished from `tagpu_vk_hires.o` (`mem_type.isra.0`,
+`mk_buffer.constprop.0`) are the expected consequence of a stub that folds to a constant.

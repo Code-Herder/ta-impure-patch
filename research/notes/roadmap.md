@@ -3369,10 +3369,12 @@ because the two halves of it went dark together so that nothing stood down and n
 `s_live = 1` and `s_pubHave = 1` each occurred exactly once, inside callerless functions; and
 `tagpu_hires_draw_ready()` is 0 on every run because `opengl32.dll` is never in the process, so
 every replacement mesh is loaded, parsed and then discarded — which the live logs of all four
-A/B arms say in as many words. **D1 (the GLSL lift) and D2 (the shadow deletion) landed
-2026-09-19**: `gl-sites` is **165 narrow / 234 wide in three files**, D1's binary was
-byte-identical in `.text`, `.rdata` and `.data`, and D2 measured 44–45 px cross-build of which
-44 are the minimap and the rest is the cursor's own pixel. **Whether 11-6 may close with those
+A/B arms say in as many words. **D1 (the GLSL lift), D2 (the shadow deletion) and D3 (the glTF loader and its GL
+draw pass) landed 2026-09-19**: `gl-sites` is **31 narrow / 98 wide in ONE file**,
+`opengl_utils.c`, which is all D4 has left; D1's binary was
+byte-identical in `.text`, `.rdata` and `.data`, and D2 and D3 each measured 44–49 px cross-build
+of which 44–48 are the minimap and the rest is the fixture's own oscillating cursor pixel, which
+the same-build control shows too — 0 px elsewhere, census 749 452 on every arm. **Whether 11-6 may close with those
 two features dark is escalation reason 1 and is the owner's**, and half of it is now answered:
 **the owner ruled 2026-09-19 that glTF replacement models are disabled and the implementation is
 TODO, out of scope** — so D3 deletes `tagpu_hires.c` whole rather than reducing it to its CPU
