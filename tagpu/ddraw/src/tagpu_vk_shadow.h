@@ -85,4 +85,43 @@ void tagpu_vk_shadow_down(const TAGPU_VKPASS* d);
 int  tagpu_vk_shadow_down_owed(void);
 void tagpu_vk_shadow_down_paid(const TAGPU_VKPASS* d);
 
+/* ---- WHAT A SHADOW HAND-OVER IS, AND WHO IS SUPPOSED TO PUBLISH ONE -------
+
+   This type lived in `tagpu_shadow.h` until landing 11 D2 deleted that file
+   with the rest of the GL lane. It is kept, unchanged, because it is the shape
+   of the thing this pass needs and the next producer should not have to invent
+   it again.
+
+   THERE IS NO PRODUCER TODAY, AND THERE HAS NOT BEEN ONE FOR SOME TIME. The
+   only writer of the old hand-over's `have` flag was `tagpu_shadow_end`, which
+   lost its caller when the GL draw path was disarmed, so
+   `tagpu_vk_shadow_prepare` has returned 0 on every frame since -- and nothing
+   said so, because `shadowOn` went to 0 at the same instant and the consumers'
+   refusals are gated on it. Both halves went dark together. Measured and
+   written up with the deletion; see the vulkan-only plan's landing 11.
+
+   SO THIS PASS IS A FOUNDATION, NOT A FEATURE. Everything below it still
+   compiles, still builds its pipeline lazily, and still draws exactly what it
+   is handed. Reviving cast shadows is writing the producer: something on the
+   render thread that owns the light basis and the map extent, fills the struct
+   below and publishes it for `d->frame`. That is a feature landing with its own
+   measurement, not part of a deletion.
+   THE POINTERS ARE THE TERRAIN MODULE'S and name the CPU mirror of the caster
+   mesh, which that module frees and rebuilds on a map change. `frame` is the
+   fork's monotonic render-thread counter and `tagpu_shadow_handover` refuses
+   any other frame's, exactly as the terrain and feature hand-overs do: it is
+   what makes "these pointers are alive" a property of the frame number rather
+   than of which functions happened to run. */
+typedef struct TAGPU_SHADOWHAND {
+    unsigned frame;
+    int      res;                /* the map's edge in texels, this frame     */
+    float    mat[16];            /* uShadowMat, column-major, as GL got it   */
+    /* the heightfield caster, and the exact index range the GL draw used */
+    const float*    hv;   size_t hnv;
+    const unsigned* hi;   size_t hni;
+    unsigned        hillsSerial;
+    unsigned        firstIndex, indexCount;   /* 0 = the hills did not draw  */
+    int             otherCasters;             /* see above; 0 = complete     */
+} TAGPU_SHADOWHAND;
+
 #endif

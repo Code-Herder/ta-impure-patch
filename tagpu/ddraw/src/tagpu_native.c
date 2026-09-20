@@ -96,7 +96,6 @@
 #include "tagpu_pal.h"       /* the palette the screen is SHOWN with, not main+0x143A7 */
 #include "tagpu_vpwide.h"
 #include "tagpu_hud.h"
-#include "tagpu_shadow.h"    /* Classic++ cast shadows: the depth pass + read-back (G14i) */
 
 /* ---- engine layout (all binary-verified in earlier phases) ---- */
 #define TA_MAINPP    0x00511DE8u
@@ -3039,17 +3038,19 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     TAGPU_FXVIEW fv;
     int nfx = 0, nfeat = 0, nterr = 0;
     /* THE VIEW IS FILLED WHATEVER IS ARMED, and only the GATHERS are gated.
-       It used to be filled inside the `if` below — but `tagpu_shadow_begin`
-       is handed this same struct further down, on the Classic++ shadow path,
-       which is gated on NONE of these five passes. With all five disarmed the
-       shadow module was therefore reading UNINITIALISED STACK: its `zoom` came
-       out 0.000 and its light window ran to millions of texels, and the
-       hand-over it publishes was stamped with a garbage frame, so the Vulkan
-       lane's shadow pass silently found nothing every frame.
-       It cannot happen under the play defaults, where `terr.on` is always on;
-       it happens in exactly the configuration a single pass is MEASURED in.
+       THE REASON HAS CHANGED AND THE RULE HAS NOT. It used to be filled inside
+       the `if` below, and what moved it out was `tagpu_shadow_begin` being
+       handed this same struct on a path gated on none of these five passes:
+       with all five disarmed the shadow module read UNINITIALISED STACK, its
+       `zoom` came out 0.000, its light window ran to millions of texels, and
+       the hand-over it published carried a garbage frame. [FOUND 2026-09-15
+       taking the unit pass's A/B.]
+       That hand-off is gone -- landing 11 D2 deleted `tagpu_shadow.c`, and the
+       function had lost its caller before that. The fill stays where it is
+       because the GATHERS read `fv` and each of them is gated separately, so
+       the same uninitialised-stack shape is one re-gating away from returning.
        Forty stores on a path that already walks every unit is not worth
-       gating. [FOUND 2026-09-15 taking the unit pass's A/B.] */
+       gating. */
     {
         fv.eyeX = eyeX; fv.eyeY = eyeY;
         fv.packet = f->packet;
@@ -3618,7 +3619,6 @@ void tagpu_native_glreset(void)
     tagpu_fx_glreset();
     tagpu_feat_glreset();
     tagpu_terr_glreset();
-    tagpu_shadow_glreset();
     s_castLogged = 0;
     /* the marker pass left this cascade in 11-5e-1: its own ids went with the
        draw in 11-4a and the text module it forwarded to owns no GL object. */

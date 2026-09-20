@@ -49,7 +49,6 @@
 #include "tagpu_glsl.h"
 #include "tagpu_terrown.h"
 #include "tagpu_native.h"
-#include "tagpu_shadow.h"
 #include "tagpu_zoom.h"
 #include "tagpu_vk.h"       /* tagpu_vk_armed(): whether to pay for the mirrors */
 
@@ -1417,16 +1416,19 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
        tagpu_shadow_apply leaves every other shadow uniform ALONE when the map
        is not live, which for a freshly linked program means zero -- so the rest
        of that block is published as zero, and the two lanes agree about it. */
-    s_pub.shadowOn = tagpu_shadow_live() ? 1 : 0;
-    if (s_pub.shadowOn) {
-        memcpy(s_pub.shadowMat, tagpu_shadow_mat(), sizeof s_pub.shadowMat);
-        s_pub.shadowSun[0] = L->shadowSun[0];
-        s_pub.shadowSun[1] = L->shadowSun[1];
-        s_pub.shadowSun[2] = L->shadowSun[2];
-        tagpu_shadow_scale(s_pub.shScale);
-        s_pub.penumbra = L->penumbra;
-        s_pub.shade = L->shade;
-    }
+    /* 0, AND THAT IS WHAT IT ALREADY WAS. This read `tagpu_shadow_live()` until
+       landing 11 D2 deleted the GL lane's `tagpu_shadow.c`. That function
+       returned `s_live`, whose only assignment to 1 sat inside
+       `tagpu_shadow_begin`, which had no caller -- so this published 0 on every
+       frame and the `if` below it never ran. The other shadow fields are
+       published as zero and now demonstrably so: this function opens with
+       `memset(&s_pub, 0, sizeof s_pub)` and, since this edit, NOTHING in this
+       file writes `shadowMat`, `shadowSun`, `shScale`, `penumbra` or `shade` at
+       all -- which is a stronger statement than the old code could make, and
+       one a grep checks. Writing the constant changes nothing and stops the
+       file claiming to ask a question. Reviving cast shadows means writing a
+       producer; see `tagpu_vk_shadow.h` on TAGPU_SHADOWHAND. */
+    s_pub.shadowOn = 0;
     s_pub.fogOrgX = (float)v->fogOrgX; s_pub.fogOrgY = (float)v->fogOrgY;
     s_pub.fogCols = (float)v->fogCols; s_pub.fogRows = (float)v->fogRows;
     s_pub.hDimW = (float)s_hW; s_pub.hDimH = (float)s_hH;

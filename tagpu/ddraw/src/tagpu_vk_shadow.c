@@ -89,8 +89,7 @@
 #include "tagpu_vk_shadow.h"
 #include "tagpu_vk_unit.h"
 #include "tagpu_vk_hires.h"   /* the posed casters, drawn inside our render pass */
-#include "tagpu_shadow.h"
-#include "spirv/tagpu_shadow.spv.h"
+#include "spirv/tagpu_shadow.spv.h"   /* generated from src/tagpu_shadow_glsl.h */
 
 #define UBLK 64                            /* std140: one mat4, the generated  */
                                            /* header's own figure              */
@@ -749,6 +748,22 @@ static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
     kill_target(d, s);
 }
 
+/* THE HAND-OVER, WHICH NOTHING PUBLISHES. See `tagpu_vk_shadow.h`'s block on
+   TAGPU_SHADOWHAND for the measurement: the old producer was `tagpu_shadow_end`
+   in the GL lane's `tagpu_shadow.c`, and it lost its caller before landing 11
+   deleted the file. This returns 0 exactly as that function did on every frame
+   of the last several landings, so the pass's behaviour is unchanged by the
+   deletion -- which is the whole claim D2 has to make.
+
+   IT IS A FUNCTION RATHER THAN A `return 0;` AT THE CALL SITE so that the one
+   thing a reviver has to change is one body, and so that the refusal keeps its
+   name in the code instead of becoming an unexplained early exit. */
+static int shadow_handover(TAGPU_SHADOWHAND* out, unsigned now)
+{
+    (void)out; (void)now;
+    return 0;
+}
+
 /* ---- the frame ---------------------------------------------------------- */
 
 int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
@@ -785,7 +800,7 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
        ONCE THERE IS NOT. Giving this slot's target back here needs no new
        argument and no timer: it is the same instant, and the same ownership,
        that the rest of this function would write it in. */
-    if (!tagpu_shadow_handover(&h, d->frame)) {
+    if (!shadow_handover(&h, d->frame)) {
         if (s_state == ST_READY) slot_free(d, s);
         return 0;
     }

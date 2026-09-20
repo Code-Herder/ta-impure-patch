@@ -84,7 +84,6 @@
 #include "tagpu_native.h"
 #include "tagpu_render3do.h"
 #include "tagpu_classicpp.h"
-#include "tagpu_shadow.h"
 #include "tagpu_vk.h"      /* tagpu_vk_armed(): whether to publish at all */
 #include "tagpu_pal.h"
 #include "tagpu_posebake.h"
@@ -589,7 +588,6 @@ static int pose_words(const TAGPU_PDUNIT* u, float* flags, float* vis)
    which is the one where that matters. */
 static void pd_view_publish(const TAGPU_PDVIEW* v)
 {
-    const TAGPU_LIGHT* L = tagpu_classicpp_light();
     memset(&s_pub, 0, sizeof s_pub);
     s_pub.frame = s_frame;
     s_pub.gw = v->game[0]; s_pub.gh = v->game[1];
@@ -619,16 +617,19 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
     /* THE CAST-SHADOW READ-BACK BLOCK, from the same places tagpu_shadow_apply
        reads them: it writes uShadowOn and RETURNS when no map is live, so on
        such a frame the rest stays at the program's zero and is published zero. */
-    s_pub.shadowOn = tagpu_shadow_live() ? 1 : 0;
-    if (s_pub.shadowOn) {
-        memcpy(s_pub.shadowMat, tagpu_shadow_mat(), sizeof s_pub.shadowMat);
-        s_pub.shadowSun[0] = L->shadowSun[0];
-        s_pub.shadowSun[1] = L->shadowSun[1];
-        s_pub.shadowSun[2] = L->shadowSun[2];
-        tagpu_shadow_scale(s_pub.shScale);
-        s_pub.penumbra = L->penumbra;
-        s_pub.shade = L->shade;
-    }
+    /* 0, AND THAT IS WHAT IT ALREADY WAS. This read `tagpu_shadow_live()` until
+       landing 11 D2 deleted the GL lane's `tagpu_shadow.c`. That function
+       returned `s_live`, whose only assignment to 1 sat inside
+       `tagpu_shadow_begin`, which had no caller -- so this published 0 on every
+       frame and the `if` below it never ran. The other shadow fields are
+       published as zero and now demonstrably so: this function opens with
+       `memset(&s_pub, 0, sizeof s_pub)` and, since this edit, NOTHING in this
+       file writes `shadowMat`, `shadowSun`, `shScale`, `penumbra` or `shade` at
+       all -- which is a stronger statement than the old code could make, and
+       one a grep checks. Writing the constant changes nothing and stops the
+       file claiming to ask a question. Reviving cast shadows means writing a
+       producer; see `tagpu_vk_shadow.h` on TAGPU_SHADOWHAND. */
+    s_pub.shadowOn = 0;
 
     /* the viewport and the clip, which the scaffold rect already carries as
        four floats -- published as the integers the scissor was set from */
