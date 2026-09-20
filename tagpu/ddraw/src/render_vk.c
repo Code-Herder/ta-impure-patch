@@ -281,16 +281,31 @@ DWORD WINAPI vk_render_main(void)
             /* COUNTED, so the fix is a number rather than a claim: these are the
                frames that used to publish 1 with nothing of ours on screen.
 
-               NOT COUNTED UNDER THE CLEAN CUT, because there the same frames are
-               the DESIGN and not the defect. `tagpu_purevk.on` stops the UI
-               layer compositing on purpose, so `cur_drew && !composited` holds
+               NOT COUNTED AT ALL UNDER THE CLEAN CUT, because there the counter
+               cannot mean what it says in ANY state. `tagpu_purevk.on` stops the
+               UI layer compositing on purpose, so `cur_drew && !composited` holds
                on every frame of a cut session and this counter -- which the
                heartbeat reports as "frames the engine's cursor was suppressed
                with nothing of ours on screen" -- would climb without bound while
-               describing nothing that happened. The PUBLISH below is deliberately
-               NOT gated: 0 is exactly right under the cut, because the engine's
-               cursor must keep being drawn into the surface we are keeping as the
-               golden source. [The vulkan-only plan, "The Clean Cut".] */
+               describing nothing that happened.
+
+               AND THE SUPPRESSION IS WIDER THAN "THE DESIGN FRAMES", WHICH IS
+               STATED HERE RATHER THAN LEFT TO BE DISCOVERED. `tagpu_vk_purevk()`
+               answers for the LEVER, not for whether this frame's composite was
+               the thing that got cut -- so the bring-up, a swapchain rebuild,
+               ST_FAILED and ST_ZOMBIE are silenced too, and those are frames the
+               counter would otherwise have wanted. Nothing is lost by it: once
+               the cut is armed the counter cannot tell those frames from the
+               designed ones anyway, because every frame satisfies its condition.
+               A counter that fires on everything reports nothing, and the
+               alternative -- publishing "the composite was cut THIS frame" purely
+               to keep a debug tally honest -- is more machinery than the tally is
+               worth. [FOUND BY THIS LANDING'S REVIEW.]
+
+               The PUBLISH below is deliberately NOT gated: 0 is exactly right
+               under the cut, because the engine's cursor must keep being drawn
+               into the surface we are keeping as the golden source.
+               [The vulkan-only plan, "The Clean Cut".] */
             if (cur_drew && !composited && !tagpu_vk_purevk())
                 tagpu_cursown_note_held();
             tagpu_cursown_publish(cur_drew && composited);

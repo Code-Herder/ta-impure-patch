@@ -174,6 +174,7 @@ static int s_saidPal;
    rest of the session -- the same fault the image latches below were split
    for, left standing on the draw-list ones. [LANDING REVIEW, 2026-09-17.] */
 static int s_saidEmpty, s_saidMany, s_saidBound, s_saidTexA, s_saidTexL;
+static int s_saidPure;                  /* the clean cut, said once */
 /* ONE LATCH PER SITE. A single `s_saidImg` shared by six upload sites hid every
    failure after the first -- including a failure at a DIFFERENT site, which is
    the case that matters. Two live diagnosis cycles were spent reading a masked
@@ -1070,6 +1071,34 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
            because a bind of VK_NULL_HANDLE is undefined rather than loud and
            the cost of the branch is nothing. */
         if (g->lines && !s_pipeLine) continue;
+        /* ---- THE CLEAN CUT SKIPS THE CAPTURED LAYER, AND ONLY IT.
+           [`tagpu_purevk.on`; the vulkan-only plan. FOUND BY THIS LANDING'S
+           REVIEW, and the landing's own measurement could not have caught it:
+           the fixture ran under `tagpu_defaults.off` with `mark.on` unarmed,
+           while `mark.on` and `markown.on` are BOTH on `tagpu_opt.c`'s defaults
+           table and `s_capture` is 1 -- so on a stock instance this pass was
+           putting engine pixels on a frame whose whole claim is that none of
+           them are there.]
+
+           A `TAGPU_MK_TEX_LAYER` group samples `TAGPU_MARKLAYER.pix`, which is
+           a pointer into the ENGINE'S OWN 8-bit surface: bytes the engine
+           rasterised, captured and handed over. That is an observation of the
+           engine in exactly the sense the cut's rule names, and it is the only
+           one this pass makes.
+
+           NOTHING ELSE HERE IS CUT, and the distinction is the whole rule
+           rather than a convenience. The bars, the selection and band-box
+           rects, the order lines and dots, the range circles, the group digit
+           and the labels are all re-derived from engine STATE and drawn as our
+           own geometry out of our own atlas -- the same class as the terrain,
+           the units and the features, which are what the frame is made of.
+           The cut is about pixels we copied, not about facts we read. */
+        if (d->pureVk && g->tex == TAGPU_MK_TEX_LAYER) {
+            if (!s_saidPure) { s_saidPure = 1;
+                plog(d, "mark: the clean cut is armed - the captured 8bpp layer "
+                        "is not drawn; every other marker is ours and stays"); }
+            continue;
+        }
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           g->lines ? s_pipeLine : s_pipeTri);
         /* `glLineWidth(ss)`, and since 4c-2 it is genuinely `ss` rather than

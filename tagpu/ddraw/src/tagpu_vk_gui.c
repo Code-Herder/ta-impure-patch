@@ -1693,21 +1693,39 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        guard and the `uStrict` harness on their own uniforms, so the dummy view
        is never sampled. So this costs the guard, which has nothing left to
        guard, and nothing else. */
-    if (d->pureVk) {
+    if (!h.eng) {
+        /* NO ENGINE FRAME AT ALL. Exactly the refusal this pass made before
+           landing 10, on the same question: `h.eng` and the surface pass read
+           one `tagpu_surf_frame` snapshot per frame, so this is the producer
+           saying there is nothing to guard against.
+
+           THIS ARM STAYS THE HEAD OF THE CHAIN, AND THE CUT'S ARM GOES BELOW
+           IT RATHER THAN IN FRONT. The first version of this landing put the
+           cut first and made this an `else if`, which stopped `compose` being
+           cleared on a no-engine-frame FRAME whenever the cut was armed: the
+           blanket check further down tests `h.presented`, not `h.eng`, so the
+           pass walked on into `tw_find` and could reach `standdown` ->
+           `behind()`, charging `s_behindAsks` and -- after nine of them with no
+           good run to refund -- LATCHING `s_behindMute`, which survives the
+           lever being taken away and clears only at a full teardown. Nothing
+           looks wrong while the cut is armed, because the draw is dropped
+           anyway; the damage shows up after it is disarmed.
+           [FOUND BY THIS LANDING'S REVIEW.] */
+        if (!s_saidEng) { s_saidEng = 1;
+            plog(d, "gui: the hand-over carries no engine frame - nothing "
+                    "composited while that is true"); }
+        compose = 0;
+    } else if (d->pureVk) {
+        /* THE CLEAN CUT, and it is an ARM of this chain rather than a gate in
+           front of it -- see the note above. `engOk` stays 0, so `set_claim`
+           binds `s_dumView` and the engine's image is not reachable from this
+           pipeline at all; `compose` is deliberately LEFT ALONE, because the
+           ops still have to run and the seam is what drops the draw. */
         engView = VK_NULL_HANDLE; engW = 0; engH = 0; engOk = 0;
         if (!s_saidPure) { s_saidPure = 1;
             plog(d, "gui: the clean cut is armed - the ops are replayed and the "
                     "twins kept level, uSurf is unbound and nothing of this "
                     "layer reaches the frame"); }
-    } else if (!h.eng) {
-        /* NO ENGINE FRAME AT ALL. Exactly the refusal this pass made before
-           landing 10, on the same question: `h.eng` and the surface pass read
-           one `tagpu_surf_frame` snapshot per frame, so this is the producer
-           saying there is nothing to guard against. */
-        if (!s_saidEng) { s_saidEng = 1;
-            plog(d, "gui: the hand-over carries no engine frame - nothing "
-                    "composited while that is true"); }
-        compose = 0;
     } else if (!engView || engW < 1 || engH < 1 ||
                engW > SURF_MAXDIM || engH > SURF_MAXDIM ||
                engW < h.surfW || engH < h.surfH) {

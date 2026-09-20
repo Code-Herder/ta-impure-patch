@@ -3901,8 +3901,15 @@ back is not the order the plan implies.
 
 **What the cut does NOT do**, stated so the next session does not look for it: it does not stop
 the engine rasterising, it does not move `tagpu_surf_take` to the game thread, it does not draw
-anything back, and it changes no engine byte and no engine memory. It is two `if`s in the seam,
-one descriptor in the GUI pass, and a lever.
+anything back, and it changes no engine byte and no engine memory.
+
+**What it DOES touch**, counted rather than waved at — an earlier draft of this paragraph said
+"two `if`s in the seam, one descriptor in the GUI pass, and a lever", which reads as a bound and
+undercounts it [FOUND BY THIS LANDING'S REVIEW]: three draw gates (the surface layer, the UI
+layer, and the marker pass's captured 8bpp layer), one descriptor arm in the GUI pass, a new
+`TAGPU_VKPASS.pureVk` field with its poll and its once-per-frame publish, an exported
+`tagpu_vk_purevk()`, one behavioural gate OUTSIDE the seam (`render_vk.c`, the `cursown`
+held-counter), and two heartbeat wordings.
 
 ## What this plan does not know yet
 

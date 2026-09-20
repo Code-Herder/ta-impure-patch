@@ -624,6 +624,8 @@ static DWORD s_lastPoll;
    answers the GAME thread, and this has no game-thread caller by design --
    adding one would be an unsynchronised cross-thread read. */
 static int s_pureVk;
+/* said once: the cut dropped a UI-layer A/B claim */
+static int s_saidAbCut;
 /* THE A/B'S FRAME IS NOT DECIDED HERE (G19d). `tagpu_fps.c` polls the lever,
    captures its own half and hands the flag over with the vertices; this file
    only carries it through. Both lanes polling for themselves was the first
@@ -2898,7 +2900,28 @@ static int vk_present(void)
                the gather side), so dropping the claim leaves that file ABSENT,
                and absent is this lane's word for "this arming produced no
                capture" -- the honest answer rather than a wrong picture. */
-            if (s_pass.pureVk) { draw_gui = 0; ab_gui = 0; }
+            if (s_pass.pureVk) {
+                /* SAY IT, or the absence of the file means the wrong thing.
+                   `tagpu_vk_ab_arm("gui")` has already DELETED the target and
+                   consumed the operator's arming on the gather side, and this
+                   lane's rule -- stated in the ta-drive skill and established
+                   by landing 4b-1 -- is that an absent `_vk.ppm` with no line
+                   beside it means the lever never fired, which is a different
+                   fault with a different fix. Dropping the claim silently made
+                   that diagnostic ambiguous. Measured 2026-09-20: cut armed,
+                   `touch tagpu_gui.ab` gave no file and no line at all, while
+                   the same arming with the cut off gave the seam's own
+                   "1 A/B levers claimed this frame and 4 passes drew into it".
+                   [FOUND BY BOTH REVIEWERS AND BY THE LANDING'S OWN PROBE.] */
+                if (ab_gui && !s_saidAbCut) {
+                    s_saidAbCut = 1;
+                    vklog("ab: the clean cut is armed, so the UI layer drew "
+                          "nothing and its A/B claim is dropped - no capture "
+                          "was taken and tagpu_gui_vk.ppm stays absent. Take "
+                          "tagpu_purevk.on away to measure this pass.");
+                }
+                draw_gui = 0; ab_gui = 0;
+            }
             draw_fps = tagpu_vk_fps_prepare(&s_pass, cb, fi);
             ab_fps = tagpu_vk_fps_ab_frame();
 
