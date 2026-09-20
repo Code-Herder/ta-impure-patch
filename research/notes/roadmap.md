@@ -3373,7 +3373,12 @@ A/B arms say in as many words. **D1 (the GLSL lift) and D2 (the shadow deletion)
 2026-09-19**: `gl-sites` is **165 narrow / 234 wide in three files**, D1's binary was
 byte-identical in `.text`, `.rdata` and `.data`, and D2 measured 44–45 px cross-build of which
 44 are the minimap and the rest is the cursor's own pixel. **Whether 11-6 may close with those
-two features dark is escalation reason 1 and is the owner's**, named rather than answered. `tagpu_native.c`, `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c`,
+two features dark is escalation reason 1 and is the owner's**, and half of it is now answered:
+**the owner ruled 2026-09-19 that glTF replacement models are disabled and the implementation is
+TODO, out of scope** — so D3 deletes `tagpu_hires.c` whole rather than reducing it to its CPU
+half, and the parser, the piece table and the COB-driven pose go to `git` rather than staying as
+a foundation nothing feeds. Cast shadows are still open: `tagpu_vk_shadow.c` is kept and is a
+foundation, and reviving them is a feature landing with a producer to write. `tagpu_native.c`, `tagpu_terr.c`, `tagpu_feat.c`, `tagpu_fx.c`,
 `tagpu_scaffold.c`, `tagpu_posedraw.c`, `tagpu_overlay.c`, `tagpu_text.c`, `tagpu_ftime.c` and
 `tagpu_gaf.c` make no GL call — and **since 11-5e-2b part 2, `tagpu_gaf.c` is GL-*free* as well**:
 its wide count went 1 → 0 with the RGB mirror's `xwglGetProcAddress`, so the tree-wide wide total

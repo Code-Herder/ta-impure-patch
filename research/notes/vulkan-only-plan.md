@@ -2878,7 +2878,25 @@ that a count which grows is the plan catching up with the work.) The row was
        further down"* — there is no such hand-off, and the uninitialised-stack defect that
        comment records (FOUND 2026-09-15) can no longer occur. The fill stays; the reason
        is rewritten, because the gathers read `fv`.
-     * **D3 — the hires reduction.** `tagpu_hires_draw.c` and its header go whole;
+     * **D3 — the hires deletion. DECIDED BY THE OWNER 2026-09-19: "disable glTF for now",
+       "mark glTF implementation: TODO, out of scope".** That settles the one question this
+       survey could not: `tagpu_hires.c` is **deleted whole**, not reduced to its CPU half.
+
+       **glTF REPLACEMENT MODELS ARE OUT OF SCOPE FOR THIS GATE AND FOR THE ONES AFTER IT,
+       UNTIL THE OWNER SAYS OTHERWISE. [TODO]** They are not being *broken* by this: the
+       measurement above is that they already draw nothing on the shipped lane and have not
+       for several landings, so the deletion removes a loader whose output is discarded and a
+       draw path that cannot resolve a GL entry point. What is genuinely given up is the
+       CODE — the glTF parser, the piece table, the COB-driven pose (`hires_pose`), the
+       material grouping — and it is given up to `git`, not lost: it is in the tree until
+       this landing's parent, and this paragraph is the pointer a reviver needs.
+
+       **`tagpu_vk_hires.c` is KEPT**, as Decision 1 said, and it is a shell after this: its
+       hand-over producer goes with `tagpu_hires_draw.c` and its mesh source with
+       `tagpu_hires.c`. It stays because `tagpu_vk_shadow.c` and `tagpu_vk.c` call six of its
+       entry points, and deleting it is a cascade this gate has no reason to start.
+
+       The original reduction plan, which the decision replaces, follows for the record: `tagpu_hires_draw.c` and its header go whole;
        `tagpu_hires.c` keeps its glTF half and loses `tagpu_hires_vao`, `upload_img`,
        `white_tex`, `gl_probe` and the GL body of `mesh_gl_free`. `tagpu_native.c:2785`'s
        `tagpu_hires_draw_ready()` gate goes with the pass it guards.
