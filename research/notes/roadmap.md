@@ -3375,8 +3375,9 @@ draw pass) landed 2026-09-19**: `gl-sites` is **31 narrow / 98 wide in ONE file*
 `opengl_utils.c`, which is all D4 has left; D1's binary was
 byte-identical in `.text`, `.rdata` and `.data`, and D2 and D3 each measured **0 px outside the
 minimap and the fixture's own oscillating cursor pixel** on every cross-build pairing — D3's four
-came to 48, 45, 1 and 44 px, the same-build controls to 49 and 45, and the 1 px pairing has no
-minimap difference at all, so a single range would misdescribe them. Census 749 452 on every arm. **Whether 11-6 may close with those
+came to 1, 49, 44 and 44 px on the re-run after its review fixes, the same-build controls to 45
+and 48, and two of the pairings have no non-minimap difference at all while one has no minimap
+difference at all, so a single range would misdescribe them. Census 749 452 on every arm. **Whether 11-6 may close with those
 two features dark is escalation reason 1 and is the owner's**, and half of it is now answered:
 **the owner ruled 2026-09-19 that glTF replacement models are disabled and the implementation is
 TODO, out of scope** — so D3 deletes `tagpu_hires.c` whole rather than reducing it to its CPU

@@ -893,8 +893,18 @@ cannot be swapped between runs.
   is not static and the measurement gets thrown away — or worse, the outlier is the one compared
   across builds and invents a 40 000-px "build difference". With three, the odd one out is
   visible as an odd one out. **Gate 1 passes on the settled pair, not on all three pairings**, and
-  the settled grab (the last one) is what the cross-build comparison uses. If *two* of three
-  disagree, that is drift and the gate really has failed.
+  the settled grab is what the cross-build comparison uses. If *two* of three disagree, that is
+  drift and the gate really has failed.
+
+  **AND "THE SETTLED GRAB" IS THE ONE WITH A PARTNER, NOT THE LAST ONE.** This rule first said
+  "the settled grab (the last one)", on the assumption that a run settles and then stays settled,
+  so an outlier can only be an early grab. **That is false**, and D3's re-measure caught it before
+  a number was read: `brA` went grab 1 == grab 2 and **grab 3 different**, so the last grab was
+  the outlier and a comparator keyed on index 3 would have computed every cross-build number for
+  that arm from it. Pick the settled grab by **agreement** — whichever grab is byte-identical to
+  another, whatever its index — and if no two of the three agree, stop: that is the drift case,
+  and picking a representative from it is how a drifting fixture gets reported as a clean gate.
+  `cmp_x.py` does this now and exits with `GATE 1 FAILED` rather than choosing.
 
   **AND IDENTIFY THE OUTLIER — the second one named itself.** On D3's A/B the same shape came
   back much larger: `brB` grab 2 differed from grabs 1 and 3 by **97 092 px** while those two

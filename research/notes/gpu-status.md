@@ -14021,20 +14021,34 @@ same stretch of wall-clock as the cross-build comparison does. Baseline arm is a
 section-identical to `main` at the D2 review fix (`.text 0x000d33a4`, 1 517 056 B); branch arm is
 D3's (`.text 0x000ca864`, 1 465 344 B).
 
+**These are the RE-RUN's numbers, on the committed review-fix tree** — the fixes took 176 bytes
+off `.text`, so the first run's table was not inherited. (For the record the first run gave the
+same reading: 48/45/1/44 cross-build, 49 and 45 control, 0 px outside the minimap and the same
+single pixel.)
+
 | pairing | total | minimap | elsewhere | box |
 |---|---|---|---|---|
-| **cross-build** `mainA` vs `brA` | 48 px | 48 | **0** | — |
-| **cross-build** `mainA` vs `brB` | 45 px | 44 | 1 | (512,384) |
-| **cross-build** `mainB` vs `brA` | 1 px | 0 | 1 | (512,384) |
+| **cross-build** `mainA` vs `brA` | 1 px | 0 | 1 | (512,384) |
+| **cross-build** `mainA` vs `brB` | 49 px | 48 | 1 | (512,384) |
+| **cross-build** `mainB` vs `brA` | 44 px | 44 | **0** | — |
 | **cross-build** `mainB` vs `brB` | 44 px | 44 | **0** | — |
-| control `mainA` vs `mainB` | 49 px | 48 | 1 | (512,384) |
-| control `brA` vs `brB` | 45 px | 44 | 1 | (512,384) |
+| control `mainA` vs `mainB` | 45 px | 44 | 1 | (512,384) |
+| control `brA` vs `brB` | 48 px | 48 | **0** | — |
 
 The difference box derived from the data is **1×1, the single pixel (512,384)** — the same pixel
 D2's box collapsed to, and the control puts 1 px in it too, so it is the fixture's oscillating
 cursor pixel and not the change. **Outside the minimap and that one pixel: 0 px on all four
 cross-build pairings.** The settled census is **749 452** on every arm, as it has been since
 11-5e-2c. Zero `VK_ERROR` / validation lines and exactly one `gui: layer ON` per arm.
+
+**AND THE RE-RUN CORRECTED THE COMPARATOR BEFORE IT PRODUCED A NUMBER.** `cmp_x.py` took the
+**third** grab as each arm's settled frame, on the assumption that a run settles and then stays
+settled, so an outlier could only be an early grab. That is false, and this run is what showed
+it: **in three of the four arms grab 3 was the odd one out** and grabs 1 and 2 were
+byte-identical, so the old comparator would have computed three of the four cross-build numbers
+from outliers. It now picks the settled grab **by agreement** — whichever grab is byte-identical
+to another, whatever its index — and exits `GATE 1 FAILED` when no two agree, rather than
+choosing a representative from a drifting fixture. The `ta-drive` rule carries the correction.
 
 The one log difference between the builds is the one D3 predicts, and it is worth being exact
 about **which** lines, because the first draft of this paragraph named the wrong pair and so

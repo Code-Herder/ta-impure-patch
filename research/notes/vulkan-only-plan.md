@@ -2888,9 +2888,11 @@ that a count which grows is the plan catching up with the work.) The row was
        cache, the `HPOSE_MAX` pose arena, `hunits[]`, `nhi` and its term in the emptiness
        test, the `hires` field, and `gfx`, whose only reader was the dead branch. Verified by
        the non-static inventory against a clean `git archive HEAD` tree: **identical**, 15 and
-       6 symbols. The four-arm interleaved `one-unit` A/B is **0 px outside the minimap and the
-       fixture's own oscillating cursor pixel** on all four cross-build pairings, census 749 452
-       on every arm, 0 VK errors, and the only log difference is the two LOADER `hires` lines gone
+       6 symbols. The four-arm interleaved `one-unit` A/B — **re-run on the committed
+       review-fix tree, because those fixes took 176 bytes off `.text` and a measurement is not
+       inherited across a binary change** — is **0 px outside the minimap and the fixture's own
+       oscillating cursor pixel** on all four cross-build pairings, census 749 452 on every arm,
+       0 VK errors, and the only log difference is the two LOADER `hires` lines gone
        from the branch arms. That fixture is an ARMCOM with no replacement mesh, so it never
        reached the GL draw path; the lines proving THAT half dead are D2's, not D3's. [gpu-status §2.80.]
 
