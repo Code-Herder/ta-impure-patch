@@ -14080,43 +14080,72 @@ no Vulkan pass touches, is a capture that caught the engine's own blit half done
 D3 effect** — and the honest limit on that statement is that twelve grabs saw it once, which is
 too few to put a rate on.
 
-**BOTH OF THOSE READINGS WERE WRONG, AND MEASURING THE FRAME PROPERLY OVERTURNED THEM.** The
-first call was "a blit caught half done". The second, after the owner offered *"each time I see
-it I believe this simply the fog of war being full screen"*, was that the grab showed fog
-desaturating terrain and hiding features. **The owner then corrected the domain fact that kills
-that reading: grey fog of war does NOT hide trees — only the black unmapped fog does, and under
-black fog the terrain is not drawn at all.** So a frame with grey terrain and no trees is not any
-fog state TA has.
+**THREE READINGS OF THIS FRAME HAVE NOW BEEN WRONG, INCLUDING THE ONE THAT REPLACED THE OTHER
+TWO.** They are all recorded because the sequence is the lesson.
 
-What the frame actually contains, measured rather than eyeballed:
+1. *"A blit caught half done."*
+2. After the owner offered *"each time I see it I believe this simply the fog of war being full
+   screen"* — fog desaturating terrain and hiding features. **The owner killed this one with a
+   domain fact**: grey fog does NOT hide trees, only the black unmapped fog does, and under black
+   fog no terrain is drawn. So a frame with grey terrain and no trees is not a fog state TA has.
+3. *"The engine's composited layer flickers continuously, and every pixel A/B in this gate has
+   passed gate 1 by landing two grabs in the same state."* **D4's review killed this one by
+   counting all 36 grabs**, and it was the worst of the three because it was about to steer the
+   next gate.
 
-| | pixels | share |
-|---|---|---|
-| saturation 0–2 — **neutral grey** | 491 058 | **84.3 %** |
-| saturation 8–20 | 5 064 | 0.9 % |
-| saturation 20–50 | 12 072 | 2.1 % |
-| saturation 50–300 | 74 495 | 12.8 % |
+**WHAT THE 36 GRABS ACTUALLY SAY.** Saturated pixels (`max−min > 50`) over every grab of all
+three A/B runs:
 
-That is the **NORMAL** grab, not the outlier. **The world's median saturation is 0.0.** The
-terrain was already grey in every frame; nothing desaturated it between grabs. The only coloured
-thing in the scene is the 12.8 % that is the trees — and the per-frame census logs `feat=0` in
-every arm, so **our feature pass draws none of them**: they are the engine's own output,
-composited. The pixels that differ between grabs are exactly that coloured set (mean saturation
-82.0 in the frame that has them, 0.2 in the frame that does not), while the 485 600 pixels that
-are byte-identical between the two frames average RGB 66.7/67.1/66.7 — neutral in both.
+| saturated px | grabs |
+|---|---|
+| **74 495** | **33** |
+| 42 386 | 1 |
+| 34 034 | 1 |
+| 2 782 | 1 |
 
-**So the split is clean, and it is the 11-5f defect stated far more sharply than "half the
-engine's saturation": everything OUR lane renders is greyscale, and the only colour in the frame
-is what the engine composites.** The owner's hypothesis survives in that refined form — something
-is desaturating our lane's output wholesale — but it is not fog hiding features.
+**33 of 36 are bit-for-bit the same saturation state.** There is no continuous flicker; the
+fixture is static, and the earlier A/Bs passed gate 1 because the frame *is* stable, not by luck.
 
-**AND THE ENGINE'S LAYER IS NOT STABLE.** Three grabs of one arm, same scene, seconds apart,
-counted by saturated pixels: **34 034 / 74 495 / 42 386**. It varies by more than 2×. The
-"outlier grab" was never an outlier; the engine's composited content flickers continuously, and
-pairs of grabs sometimes catch the same state — which is how every pixel A/B in this gate has
-passed gate 1. That is the same defect 11-5f was filed for ("TA's own frame loses its units in
-the Vulkan composite"): when TA's frame lands there is colour and there are trees, when it does
-not there is our grey terrain alone.
+**AND TWO OF THE THREE ANOMALIES ARE TORN CAPTURES, WHICH IS READING (1) AFTER ALL.** The rows
+that differ:
+
+```
+d4_ab1  x_brB_1 vs x_brB_2 : 54 657 px, rows 0..383 BYTE-IDENTICAL, divergence 384..735
+d4_ab1  x_brB_3 vs x_brB_2 : 43 455 px, rows 0..391 BYTE-IDENTICAL, divergence 392..735
+```
+
+A hard horizontal boundary at row 384 — exactly half of 768 — with the whole top identical is a
+**screen tear**. `meas_x.sh` grabs with `import -window` on a live X11 window: no vsync, no
+buffer handshake, so a tear is the expected artefact, and 34 034 / 42 386 are *intermediate*
+counts, which a flicker between two stable states cannot produce and a part-done update can.
+
+**The third is a different shape and is still unexplained**: `d3_first_ab/x_brB_2` diverges from
+row 39 to row 735 — the whole world viewport, not a boundary — and holds only **2 782** saturated
+pixels against 74 495. That one is a genuine whole-frame loss of the engine's composited layer.
+
+**THE ONE NEW FACT WORTH KEEPING, AND IT IS ABOUT THE HARNESS, NOT THE RENDERER.** All three
+anomalies are in a **`brB`** arm, and `meas_x.sh` runs `mainA → brA → mainB → brB`, so `brB` is
+always the **last** arm. Three for three on the fourth launch is arm-correlated, not random. It
+is confounded — `brB` is both "last" and "branch" — but the D3 and D4 anomalies happened on
+*different branch binaries*, which points at launch order rather than at either build. **Whatever
+it is, it is the harness's fourth run, and the honest thing is that nobody has tested that.**
+
+**AND THE GREY-WORLD CLAIM BUILT ON THE HISTOGRAM IS WITHDRAWN TOO, BECAUSE THIS PROJECT HAD
+ALREADY REFUTED IT.** The histogram itself is sound — in the world region `y 39..735, x 188..1023`
+(n = 582 692 — **that region is the anomaly's own bounding box, not a viewport this project
+uses**; under 11-5f's world rect `x 260..1000, y 60..700` the same frame gives 83.8 %, and over
+the full frame 77.1 %), 84.3 % of pixels sit at saturation 0–2 under half-open bins and the
+median is 0.0 — but that is **our frame measured alone**, and "our lane outputs greyscale while only the engine's content carries
+colour" does not follow from it. The engine's frame is substantially grey in places too. An
+18-point sample taken earlier in this gate found **5 of 18 points where OURS is MORE saturated
+than the engine's** — engine `(43,43,43)` grey against ours `(7,83,43)` green, engine `(31,31,31)`
+against ours `(0,128,128)` cyan — and concluded, correctly, that *"we desaturate each pixel" is
+refuted*. What is established is narrower and was already written down: **the AGGREGATE
+saturation is roughly halved (mean 28.5 vs 14.7), while the structure matches**, which is the
+signature of a sub-texel sampling offset on TA's dithered terrain art rather than of a colour
+path that drops chroma. **The next test is at the DATA level — one tile through the palette
+against the same tile in our atlas — and the per-pixel screen diff must not be re-run**; it is
+dominated by dither and alignment noise and cannot separate the hypotheses.
 
 **11-5f now stops for the owner before any fix**, and they review a running game with the shield
 off rather than a screenshot — see the [vulkan-only plan](vulkan-only-plan.html), 11-5f.
@@ -14236,8 +14265,9 @@ compiler-generated clones that vanished from `tagpu_vk_hires.o` (`mem_type.isra.
 
 #### D4 — THE LAST GL FILE, AND THE LANE IS GONE
 
-D4 deletes what D1–D3 left: **`opengl_utils.c`** — the loader, the `wgl` bootstrap and the 98
-entry-point trampolines that were the whole of `gl-sites`' remaining count — together with its
+D4 deletes what D1–D3 left: **`opengl_utils.c`** — the loader, the `wgl` bootstrap and the
+**82** file-scope `PFN…PROC` pointers it resolved through **59** `xwglGetProcAddress` calls,
+which between them were the whole of `gl-sites`' remaining 98 call sites — together with its
 header and the three vendor headers only it included — **7 619 lines**, of which
 **7 006 are vendor headers** (`glcorearb.h`, `wglext.h`, `khrplatform.h`) that nothing else in
 the tree includes.
@@ -14252,8 +14282,11 @@ the tree includes.
 | **total** | **7 619** |
 
 Plus four lines out of `render_gdi.c` and thirteen in, so the commit is **7 623 deletions and 13
-insertions**. `gl-sites` goes **31 narrow / 98 wide → 0 / 0 — no file in the tree contains a GL
-call**, and `inc/KHR/` goes with its only file. `.text` −4 816 bytes, the DLL −7 680.
+insertions**. `gl-sites` goes **31 narrow / 98 wide → 0 / 0**, and there is no GL call left anywhere
+in `tagpu/ddraw/src` — **which is `gl-sites`' whole file set, and not the same thing as "the
+tree"**: its docstring excludes `tagpu/src/**` (the other DLL) and `tools/`, and both still have
+GL. `tagpu/src/tagpu.c` carries 5 narrow / 6 wide and `tools/vkcoexist.c` 8 / 19, neither of them
+in this DLL, and `inc/KHR/` goes with its only file. `.text` −4 816 bytes, the DLL −7 680.
 
 **`inc/openglshader.h` is NOT in this set, for the third time of asking.** It has **zero**
 `#include` directives naming it anywhere in the tree; `tools/spirv-gen.py` is its only consumer,
@@ -14269,9 +14302,14 @@ invisible.*
 Not "it compiles" — that is the check this repo has already watched fail, because a missing
 non-static function compiles clean under `-Wall`. Four facts, each re-derived:
 
-1. **No live reference outside the set.** With comments *and* string literals masked,
-   `(g_oglu_*|oglu_*|xwgl*|wgl[A-Z]*)` matches **230 times in four files** — 125
-   `opengl_utils.c`, 88 `wglext.h`, 15 `opengl_utils.h`, 2 `render_gdi.c` — and nowhere else.
+1. **No live reference outside the set, inside the DLL this builds.** With comments *and*
+   string literals masked by `gl-sites.py`'s own masker, `(g_oglu_\w*|oglu_\w*|xwgl\w*|wgl[A-Z]\w*)`
+   matches **268 times in four files** at `main` — 130 `opengl_utils.c`, 119 `wglext.h`, 17
+   `opengl_utils.h`, 2 `render_gdi.c` — and nowhere else **in `tagpu/ddraw`**, which is 0 at HEAD.
+   (This first said "230 … in the repo", which was wrong twice: the count came from a scratch
+   script with a looser pattern, and the scope was never the repo. **`tagpu/src/tagpu.c:55` has a
+   live `wglGetProcAddress(n)` call** and `tools/vkcoexist.c` has eleven masked matches — neither
+   is in this DLL, so the safety conclusion stands, but "nowhere else" did not.)
    `tagpu_overlay.c`, `tagpu_gaf.c` and `tagpu_vk.c` look like callers to a plain grep and are
    **all comments**, which is the trap this repo documents and the reason the masked count
    exists at all.
@@ -14296,7 +14334,9 @@ main : _gdi_render_main@0
 HEAD : _gdi_render_main@0      IDENTICAL
 ```
 
-and the DLL's export count is unchanged at **44**.
+and the DLL's export count is unchanged at **22** — the Export Address Table's 0x16 rows.
+(This said 44, which is that table counted together with the Name-Pointer table: the same 22
+symbols twice.)
 
 **And the player-visible string was checked in the binaries, not argued about.** The two string
 tables:
@@ -14352,12 +14392,13 @@ distinguish from a static fixture. The table above is attempt 2, where all four 
 #### THE RESIDUE D4 DOES NOT CLEAN UP, NAMED WITH ITS COUNT
 
 `render_ogl.c` and `render_ogl.h` went in **landing 11-2**. Tracked content still cites them
-**168 times** — 65 in `tagpu/ddraw` across 36 files (only **9** of which mark it as gone), 92 in
+**169 matching lines at HEAD** (`git grep -c`, which counts lines and not occurrences) — 63 in
+`tagpu/ddraw` across 35 files, 95 in
 `research/notes/`, 8 in `tools/`, 3 in `.claude/`. Most of the fork's are present tense:
 "render_ogl.c's loop", "called ONCE per frame from the render_ogl.c frame bracket",
 "`render_ogl.c:549` asks the LINKER where each attribute landed".
 
-**This is deliberately not folded into D4.** D4 is five files and two lines; an audit of 168
+**This is deliberately not folded into D4.** D4 is five files and two lines; an audit of ~170
 sites is a different landing with a different risk profile. But D4 is the landing after which
 there is no GL lane at all, so "the GL lane" stops being a thing a comment can point at — which
 makes this the moment to write the count down rather than let the next session find it.

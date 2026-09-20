@@ -124,9 +124,6 @@
     <ClCompile Include="src\config.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="src\opengl_utils.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="src\IDirect3D\IDirect3D.c">
       <Filter>Source Files\IDirect3D</Filter>
     </ClCompile>
@@ -177,12 +174,6 @@
     <ClInclude Include="inc\openglshader.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="inc\glcorearb.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="inc\KHR\khrplatform.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="inc\lodepng.h">
@@ -246,16 +237,10 @@
     <ClInclude Include="inc\config.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="inc\opengl_utils.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="inc\IDirect3D.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="inc\IAMMediaStream.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="inc\wglext.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="inc\IDirectDrawGammaControl.h">

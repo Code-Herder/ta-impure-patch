@@ -2928,8 +2928,9 @@ that a count which grows is the plan catching up with the work.) The row was
        file.
 
        **The safety argument, established before the edit rather than after.** With comments AND
-       string literals masked, every `(g_oglu_*|oglu_*|xwgl*|wgl[A-Z]*)` in the repo — 230 of
-       them — is in those files plus `render_gdi.c`'s two; `tagpu_overlay.c`, `tagpu_gaf.c` and
+       string literals masked, every `(g_oglu_\w*|oglu_\w*|xwgl\w*|wgl[A-Z]\w*)` **in `tagpu/ddraw`**
+       — 268 of them at `main`, 0 at HEAD — is in those files plus `render_gdi.c`'s two
+       (`tagpu/src/tagpu.c:55`'s live `wglGetProcAddress` is the other DLL, not this one); `tagpu_overlay.c`, `tagpu_gaf.c` and
        `tagpu_vk.c` look like callers to a plain grep and are all comments. `oglu_init` and
        `oglu_load_dll` masked-match four times between them: two prototypes, two definitions,
        **no callers**, so `opengl32.dll` is never loaded and `g_oglu_version` — a file-scope
@@ -2938,7 +2939,7 @@ that a count which grows is the plan catching up with the work.) The row was
        than argued: `gdi_render_main` IS reachable, its driver warning's parenthetical was
        already rendering empty, and the literal keeps the `()` so the text is identical
        character for character. `render_gdi.o`'s non-static inventory matches main's and the
-       DLL's export count is unchanged at 44. [gpu-status §2.80.]
+       DLL's export count is unchanged at 22. [gpu-status §2.80.]
 
      Deleting all of it takes `tools/gl-sites.py` to **0 narrow and 0 wide**: the four files
      hold 252 of the 252 narrow sites and 322 of the 322 wide ones.
@@ -3036,33 +3037,41 @@ that a count which grows is the plan catching up with the work.) The row was
      terrain at all. **A frame with grey terrain and no trees is therefore not any fog state TA
      has**, and the first attempt to read one that way was wrong.
 
-     Two things to say honestly about the hypothesis before anyone tests it:
+     Three things to say honestly before anyone tests it, and the third is a retraction:
 
-     1. **Measuring the frame properly made the defect far sharper than "half saturation", and
-        it points the same way.** In the NORMAL grab of landing 11 D3's A/B, **84.3 % of the
-        world's pixels have saturation 0–2 and the world's median saturation is 0.0** — the
-        terrain is not half-coloured, it is *greyscale*. The only coloured content is 12.8 % of
-        pixels at saturation 50–300, and that is the trees, which the per-frame census says our
-        feature pass does not draw (`feat=0` in every arm): they are the engine's own output,
-        composited. **So everything our lane renders is grey, and the only colour in the frame
-        is the engine's.** The owner's reading survives in that refined form — something
-        desaturates our lane's output wholesale — without needing fog to hide anything.
-        [gpu-status §2.80 carries the histogram.]
+     1. **What is established, and it is narrower than it has been stated.** The AGGREGATE
+        saturation of our frame is roughly half the engine's (mean 28.5 vs 14.7) while the
+        STRUCTURE matches — the same landforms in the same places, which rules out a wrong region
+        or a gross UV error. That is all.
 
-     1b. **And the engine's layer is not stable, which is probably the same defect as the unit
-        loss above.** Three grabs of one arm, same scene, seconds apart, counted by saturated
-        pixels: **34 034 / 74 495 / 42 386** — a 2× swing. The "outlier grab" was never an
-        outlier; TA's composited content flickers continuously, and pairs of grabs happen to
-        catch the same state, which is how every pixel A/B in this gate has passed gate 1.
-        **11-5f's filed symptom and the grey world are most likely one defect**: when TA's frame
-        lands there is colour and there are trees; when it does not there is our grey terrain
-        alone.
-     2. **The "grey world" symptom was not written down in this plan under any name** until this
-        paragraph, which is why three attempts at it left no trail here. It is recorded as: the
-        Vulkan lane presenting at roughly half the engine's colour saturation. Whether it is the
-        same defect as the unit loss above or a second one sharing a cause is **open** — the
-        composite losing TA's own frame and the world losing its colour are both what you would
-        see if the fog layer were covering everything.
+     2. **"We desaturate each pixel" IS ALREADY REFUTED, by this gate, and must not be
+        re-derived.** An 18-point sample found both frames carrying grey and saturated pixels in
+        *different places*, with **5 of 18 points where OURS is MORE saturated than the
+        engine's** — engine `(43,43,43)` grey against ours `(7,83,43)` green; engine `(31,31,31)`
+        against ours `(0,128,128)` cyan. Mean `|ours − luminance(engine)|` is 5.5, not 0. The
+        leading hypothesis is a **sub-texel sampling offset on TA's dithered terrain art**: a
+        fractional offset flips which of two alternating palette entries a screen pixel lands on,
+        and any averaging across that pair collapses a saturated pair toward its mean.
+
+     3. **RETRACTED 2026-09-19, by D4's review.** A session measured our frame ALONE, found 84.3 %
+        of its world pixels at saturation 0–2 with a median of 0.0, and concluded "everything our
+        lane renders is greyscale and the only colour is the engine's". **The histogram is
+        correct and the conclusion does not follow** — it never compared the engine's frame at
+        the same points, and item 2 above had already refuted it. The same session also claimed
+        the engine's composited layer "flickers continuously"; counting all **36** grabs of the
+        three A/B runs shows **33 at bit-for-bit the same saturation state**, and two of the
+        three anomalies are **screen tears** (divergence starting at row 384 of 768, and row 392,
+        with everything above byte-identical — `import -window` has no vsync). Neither claim
+        survives. [gpu-status §2.80 carries the counts.]
+
+     **WHAT IS GENUINELY NEW, AND IT IS ABOUT THE HARNESS.** All three anomalous grabs across
+     three A/B runs are in a **`brB`** arm, and `meas_x.sh` runs `mainA → brA → mainB → brB`, so
+     `brB` is always the **fourth and last** launch. Three for three is arm-correlated rather
+     than random, and it is confounded (`brB` is both "last" and "branch") — but D3's and D4's
+     anomalies came from *different branch binaries*, which points at launch order. The third
+     anomaly is not a tear: it diverges across the whole world viewport and holds 2 782 saturated
+     pixels against 74 495, a real whole-frame loss of the engine's layer. **Nobody has tested
+     the fourth-launch hypothesis, and it should be tested before it is explained.**
 
      **What would settle it, and it is cheap:** the question is now "what desaturates our lane's
      output", and saturation is a property of the colour path, not of geometry. Our terrain

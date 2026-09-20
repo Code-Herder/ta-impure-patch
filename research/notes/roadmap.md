@@ -3372,8 +3372,10 @@ because the two halves of it went dark together so that nothing stood down and n
 every replacement mesh is loaded, parsed and then discarded — which the live logs of all four
 A/B arms say in as many words. **D1 (the GLSL lift), D2 (the shadow deletion), D3 (the glTF loader and its GL
 draw pass) and D4 (`opengl_utils.c` and the GL headers) all landed 2026-09-19**: `gl-sites` is
-**0 narrow / 0 wide — NO FILE IN THE TREE CONTAINS A GL CALL**, and D4 alone took 7 623 lines of
-which 7 006 were vendor headers nothing else included; D1's binary was
+**0 narrow / 0 wide across `gl-sites`' whole file set, `tagpu/ddraw/src`** — not the same as
+"the tree", since its docstring excludes `tagpu/src/**` and `tools/`, which still have GL that is
+not in this DLL — and D4 alone deleted **7 619 lines of files** (7 623 including the four out of
+`render_gdi.c`), of which 7 006 were vendor headers nothing else included; D1's binary was
 byte-identical in `.text`, `.rdata` and `.data`, and D2 and D3 each measured **0 px outside the
 minimap and the fixture's own oscillating cursor pixel** on every cross-build pairing — D3's four
 came to 1, 49, 44 and 44 px on the re-run after its review fixes, the same-build controls to 45

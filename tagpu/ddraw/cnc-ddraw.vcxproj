@@ -62,7 +62,6 @@
     <ClCompile Include="src\lodepng.c" />
     <ClCompile Include="src\dd.c" />
     <ClCompile Include="src\mouse.c" />
-    <ClCompile Include="src\opengl_utils.c" />
     <ClCompile Include="src\ddpalette.c" />
     <ClCompile Include="src\render_gdi.c" />
     <ClCompile Include="src\screenshot.c" />
@@ -82,7 +81,6 @@
     <ClInclude Include="inc\directinput.h" />
     <ClInclude Include="inc\dllmain.h" />
     <ClInclude Include="inc\fps_limiter.h" />
-    <ClInclude Include="inc\glcorearb.h" />
     <ClInclude Include="inc\IDirect3D.h" />
     <ClInclude Include="inc\IAMMediaStream.h" />
     <ClInclude Include="inc\IDirectDrawGammaControl.h" />
@@ -97,12 +95,10 @@
     <ClInclude Include="inc\IDirectDrawClipper.h" />
     <ClInclude Include="inc\IDirectDrawPalette.h" />
     <ClInclude Include="inc\IDirectDrawSurface.h" />
-    <ClInclude Include="inc\KHR\khrplatform.h" />
     <ClInclude Include="inc\lodepng.h" />
     <ClInclude Include="inc\mouse.h" />
     <ClInclude Include="inc\debug.h" />
     <ClInclude Include="inc\dd.h" />
-    <ClInclude Include="inc\opengl_utils.h" />
     <ClInclude Include="inc\ddpalette.h" />
     <ClInclude Include="inc\openglshader.h" />
     <ClInclude Include="inc\render_gdi.h" />
@@ -111,7 +107,6 @@
     <ClInclude Include="inc\ddsurface.h" />
     <ClInclude Include="inc\version.h" />
     <ClInclude Include="inc\versionhelpers.h" />
-    <ClInclude Include="inc\wglext.h" />
     <ClInclude Include="inc\winapi_hooks.h" />
     <ClInclude Include="inc\wndproc.h" />
   </ItemGroup>
