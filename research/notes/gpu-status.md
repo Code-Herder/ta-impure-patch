@@ -14694,10 +14694,20 @@ writing the primary — and the thread that writes it is the one running the cop
 for the bytes and none is claimed; `g_ddraw.cs` is still taken, now as the weaker of two arguments
 and for uniformity with every other reader of that object.
 
-**It also pairs the reference with the packet.** The same call publishes the state our passes
-render from, so the golden source and what our renderer renders are the same engine frame by
-construction — a stronger property than "untorn", and the reason this hook was chosen over the
-flip's own entry, which would give the previous frame (complete, but one behind).
+**It also pairs the reference with the packet — at the producer, which is not the same as at the
+consumer.** The same call publishes the state our passes render from, so the two are taken from
+one engine frame, and that is the reason this hook was chosen over the flip's own entry (which
+would give the previous frame: complete, but one behind).
+
+**An earlier draft of this section said they therefore ARRIVE as one frame, and that is wrong**
+[the landing review, confirmed against the code]. They travel on two independent gates — the
+packet's `PKX_FRESH` and this module's `req`/`ack` — so a draw can publish without capturing and
+capture without publishing. The render thread also acquires the packet at the TOP of
+`render_vk.c`'s frame and calls `tagpu_surf_sync` after, inside `tagpu_overlay_draw`, so the
+frame it draws can render packet D-1 against reference D. **`TAGPU_SURFFRAME.stamp` carries the
+in-play draw number the snapshot was taken at, and it is how a comparison checks the pairing.
+Nothing gates on it** — a consumer that needs the two to match must compare `stamp` against
+`f->packet`'s own draw number and skip the frame itself.
 
 **And it closes a second hole nobody had named.** The palette used to be read BEFORE the critical
 section, from `tagpu_pal.c` — a module whose every entry point is render-thread only, which the
@@ -14718,10 +14728,23 @@ snapshot — two readers is not a hazard.
 game thread copies at most once per render frame and a render thread that is behind costs it
 nothing: `norequest=` counts the in-play draws that paid one acquire load and a compare.
 
-**The reference's lifetime is the level's.** `tagpu_surf_level_end` rides
-`tagpu_packet_pub_level_end`, so the snapshot cannot outlive the level it was taken from and be
-diffed against the next one. The render thread does the dropping, which keeps `have` to one writer,
-and it says so: `surf: the level ended - the golden source is dropped`.
+**The reference's lifetime is the level's, and the level is a property of the SNAPSHOT.**
+`tagpu_surf_level_end` rides `tagpu_packet_pub_level_end` and bumps one counter; each capture is
+stamped with the counter it was taken under; and both the render thread's adopt and
+`tagpu_surf_frame`'s serve refuse a snapshot whose stamp is not the current one. So the reference
+cannot outlive the level it was taken from and be diffed against the next one. `surf: the level
+ended - the golden source is dropped` says so in the log.
+
+**Both halves of that were wrong in the first version of this landing, and the landing review
+found them.** The first was a flag the producer cleared for the drop and then, four lines later
+in the same call, re-set by adopting the dead level's final capture — the *common* path, because
+a teardown usually lands with nothing in flight. The second is the one that matters here: the
+producer's half runs inside `tagpu_overlay_draw`, **below its `tagpu_reclaim_teardown_active()`
+early return** — which is a level teardown, the precise event the drop exists for — while the
+consumer `tagpu_vk_surf_prepare` is called from `tagpu_vk.c`'s frame record and shares neither of
+those returns. A flag in the producer could therefore never be cleared on the frames that needed
+it. Making the level a stamp on the data fixes both at once, and puts the test on the path every
+reader takes.
 
 #### What it measured
 
@@ -14736,6 +14759,23 @@ and it says so: `surf: the level ended - the golden source is dropped`.
 | the picture | 190 distinct colours in the viewport, 92 in the sidebar, **0 raw key, 0 teal** — a complete 1997 frame |
 | cost on the game thread | **55–58 µs mean, 136–289 µs max** per capture, at 1024×768 — the row loop, the comparison against the previous snapshot and the palette together |
 | the gate | `captured=1800 unchanged=1576 refused=0 norequest=2944` — two thirds of in-play draws pay a load and a compare and nothing else |
+
+#### And what the REVIEW FIXES measured, the same day
+
+The four corrections above (the level stamp, the reachable drop, the foreign-thread level end, the
+two documentation overclaims) were re-verified by running, on `feat-forest` / Two Continents /
+1024×768 / `renderer=vulkan`, with `tagpu_defaults.off` and `terr feat fx own+` armed explicitly —
+**not** the play defaults, which is why this instance's golden source is 49 % raw key where the
+table above reads 0: the `*own` levers skip the engine's own draw, and the key that leaves in the
+reference is §2.81's known hole, not a regression.
+
+| | |
+|---|---|
+| the invariant, again | **0 byte(s) of 786 432**, 10 of 10 checks across two levels — six with seven units patrolling, four after a level cycle |
+| **the drop, across a real level teardown** | `surf: the level ended - the golden source is dropped`, and then the consumer **stops dead**: 6 `vk: surf:` heartbeats in the window before the drop, **0 in the 3 172 log lines after it**, through the whole shell |
+| **and it comes back** | the second level re-armed from nothing — `vk: surf: the reference texture is up` and the heartbeats resume, `refused=0` throughout. The drop ends the reference; it does not poison it |
+| the golden source against an independent read, in motion | **352–529 px of 786 432** (median 397) against `tacli shot` — against a **shot-vs-shot control of 415–508** (median 453) on the same scene, both confined to one 22×55 px region holding an animating smoke plume. The capture is as close to an independent read of the primary as two independent reads are to each other; the 0 in the row above is the same measurement on a scene with nothing animating in it, and needs one |
+| cost, unchanged | **52–59 µs mean, 112–362 µs max**, `captured=388500 unchanged=381603 refused=0` |
 
 #### `tagpu_surfdump.on` — the oracle the reference did not have
 
@@ -14761,3 +14801,7 @@ an oracle rather than instrumentation, which is why it stays.
 * **A reference the game thread has not refreshed goes stale rather than absent.** The `stamp`
   field carries the in-play draw it was taken at so a comparison can say what it read; nothing
   gates on it, and the level-end drop is what covers the case that matters.
+* **`stamp` is also the only way to check the reference against the packet.** They are published
+  in one engine call but delivered through two gates, and the render thread takes the packet
+  first — so a frame can draw packet D-1 against reference D (above). A comparison that depends
+  on the pairing compares the two numbers itself.

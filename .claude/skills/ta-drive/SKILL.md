@@ -2370,7 +2370,11 @@ Four things to know before driving under it:
 - **The reference capture is an ORACLE since 2026-09-20** (gpu-status §2.82). It runs on the
   GAME thread, from the packet publisher's `after_draw` on `DrawGameScreen 0x468CF0` — past the
   flip, so the frame is finished by construction — and in the same call that publishes the packet
-  our passes render from, so the reference and the state are the same engine frame. It used to run
+  our passes render from, so the two are taken from one engine frame. **That is not a guarantee
+  that a given rendered frame was drawn from the packet matching the reference it is diffed
+  against** — two gates carry them and the render thread takes the packet first, so it can be one
+  draw behind. `stamp` in the dump line is the draw the reference came from; check it when a
+  comparison depends on the pairing. It used to run
   on the render thread sequenced against nothing, and that was not theoretical: **223 of 16 500
   reads at the old site came back torn**. Two consequences for driving:
   - **`tacli arm <i> surfdump.on`** is the one-shot oracle. It writes `tagpu_surf.ppm` (the golden

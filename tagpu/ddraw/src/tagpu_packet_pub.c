@@ -1958,6 +1958,13 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
     /* the argument is reclaim's counter when reclaim is the provider, kept for
        the log; ours is what the packet carries and what every consumer keys on */
     s_levelGen++;
+    /* THE GOLDEN SOURCE'S DROP IS ABOVE THE THREAD CHECK, and deliberately
+       [the landing review]. It was below it, so a teardown seen on a foreign
+       thread -- which this function counts and returns from -- left the
+       previous level's reference live with no line saying so. The level ended
+       whoever noticed; the drop is one atomic increment and needs no thread
+       identity, and the render thread is what acts on it. */
+    tagpu_surf_level_end();
     if (!on_game_thread()) {
         s_cForeign++;
         _snprintf(b, sizeof b, "packet: level end on thread %u, not the game thread %u — NOT published (foreign=%u)",
@@ -1985,12 +1992,6 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
     s_fxHave = 0; s_nProj = s_nExpl = s_nDebris = s_nPart = 0;
     /* the next level's picture is a different picture, and it has not been sent */
     s_mmPicGen = -1; s_mmPicW = s_mmPicH = 0;
-    /* AND THE GOLDEN SOURCE GOES WITH THE LEVEL. The reference is a frame of
-       THIS game; held through the shell it would be diffed against the next
-       one, which is a wrong answer wearing the shape of a right one. This side
-       only says so -- the render thread drops what it holds at its next sync,
-       which keeps that flag to one writer (tagpu_surf.h). */
-    tagpu_surf_level_end();
 }
 
 /* ---- the observers ------------------------------------------------------- */
@@ -2090,18 +2091,43 @@ static void* __cdecl after_draw(unsigned int* regs)
        thread that writes it is this one, which is not running anywhere else.
        Before this the copy ran on the RENDER thread out of `tagpu_overlay_draw`
        with nothing sequencing the two, and could publish a frame torn between
-       the engine's terrain rows and its side-panel rows.
+       the engine's terrain rows and its side-panel rows (measured: 223 of
+       16 500 reads at that site came back torn).
 
-       AND IT PAIRS THE REFERENCE WITH THE PACKET. The publish above is the
-       state our passes render; this is the picture the engine rendered from the
-       same state, in the same call. A diff of the two compares two renderers
-       rather than two moments.
+       THAT CALL IS CONDITIONAL, AND WHAT MAKES IT CERTAIN HERE IS THE
+       RETURN-ADDRESS FILTER RATHER THAN THE CALL'S PRESENCE [the landing
+       review; re-disassembled from the pristine exe 2026-09-20]. Two guards
+       stand over it -- `0x46A3CC test ebx,ebx / je 0x46A3E0` on argument 1
+       (`drawUnits`; the note explains why that argument lives in `ebx`) and
+       `0x46A3D0 mov 0x22c(%esp),%eax / test eax,eax / je 0x46A3E0` on
+       argument 2 (`blitScreen`) -- so a `DrawGameScreen` that draws without
+       presenting falls straight through to the `ret`. What satisfies both on
+       every draw we admit is `before_draw`'s `ret != VA_DRAW_RET_INPLAY`
+       test: that return address, `0x4969D2`, belongs to the single call site
+       `0x4969CD` (`push ebx; push ebx` at `0x4969CB`, `ebx` set to 1 at
+       `0x4967CF` and never rewritten in between), i.e. `DrawGameScreen(1, 1)`.
+       The other three call sites are the movie recorder and the screenshot
+       function, and the filter excludes them -- exe-reverse-engineering.md,
+       "its arguments, and the branch that skips hook 9". **So a new in-play
+       call site passing `blitScreen = 0` would reach this `after` with no
+       flip having run, and the capture would silently take the previous
+       frame.** Stated here because the filter is what carries it.
+
+       IT IS NOT A GUARANTEE THAT THE REFERENCE AND THE PACKET ARE THE SAME
+       FRAME, and an earlier draft of this comment claimed it was [the landing
+       review, CONFIRMED]. The publish above has its own FRESH gate and the
+       capture below has the render thread's request gate, and they are
+       independent: a draw can publish without capturing and capture without
+       publishing. The render thread also acquires the packet at the TOP of its
+       loop and syncs the snapshot after, so the frame it draws can render
+       packet D-1 against reference D. `stamp` carries the draw number the
+       snapshot was taken at, and it is how a comparison CHECKS the pairing --
+       nothing gates on it.
 
        AFTER the publish, deliberately: the packet is what the render thread
-       waits on, and the copy is most of a megabyte. `s_cDraws` rides along as
-       the snapshot's stamp so a comparison can name the draw it read. The call
-       returns at once unless the render thread has asked for a new one, which
-       is what bounds this to one copy per presented frame. */
+       waits on, and the copy is most of a megabyte. The call returns at once
+       unless the render thread has asked for a new one, which is what bounds
+       this to one copy per presented frame. */
     tagpu_surf_capture(s_cDraws);
     return ret;
 }

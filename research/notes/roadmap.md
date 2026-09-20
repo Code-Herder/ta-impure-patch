@@ -3455,8 +3455,9 @@ nothing — it held `g_ddraw.cs`, a lifetime argument for the pointer and never 
 bytes — and the tear was real: **223 of 16 500 reads at that site came back torn, 1.35 %**,
 measured by a probe that read the primary twice from where the copy used to run. It runs on the
 game thread now, at the publisher's `after_draw` on `0x468CF0`, past the flip and in the same call
-that publishes the packet, so the reference and the state our passes render are the same engine
-frame; the same double read there is 0 of 786 432 on every check. `tagpu_surfdump.on` is the
+that publishes the packet, so the two are taken from one engine frame — though they are not
+delivered as one, and a comparison that needs them paired checks `stamp` ([GPU
+status](gpu-status.html) §2.82); the same double read there is 0 of 786 432 on every check. `tagpu_surfdump.on` is the
 oracle. **The shell has no golden source** — it never calls `DrawGameScreen` — and `tacli shot` is
 the answer there. Also open: no structure draws its slant shadow on this lane — landing 11-2 took
 the draw with the GL tail, which is older than the cut and true on `main`; and the UI op

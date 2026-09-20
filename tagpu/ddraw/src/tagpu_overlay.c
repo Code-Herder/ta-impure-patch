@@ -240,7 +240,14 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        and where the frame is finished: `tagpu_packet_pub.c`'s `after_draw`
        observer on `DrawGameScreen 0x468CF0`, past the flip at `0x46A3DB`, in
        the same call that publishes the packet our passes draw from -- so the
-       reference and the state we render are the SAME engine frame.
+       reference and the state we render come from the same engine call.
+       WHICH IS NOT THE SAME AS RECEIVING THEM TOGETHER [the landing review].
+       The two travel on separate gates -- the packet's freshness test and this
+       module's `req`/`ack` -- and this thread takes the packet at the top of
+       the frame and syncs the snapshot here, after, so a frame can perfectly
+       well draw packet D-1 against reference D. `TAGPU_SURFFRAME.stamp` is the
+       in-play draw the snapshot was taken at, and it is how a comparison
+       CHECKS the pairing; nothing gates on it.
 
        WHAT IS LEFT HERE IS THE CONSUMER'S HALF, and it still runs exactly once
        a frame: take whatever the game thread has answered, record this frame's

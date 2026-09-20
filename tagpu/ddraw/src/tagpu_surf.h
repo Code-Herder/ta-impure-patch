@@ -82,11 +82,20 @@
    thread frame, because a capture needs a request and a request needs a sync.
    A render thread that is behind costs the game thread nothing at all.
 
-   THE SNAPSHOT'S LIFETIME IS THE LEVEL'S. `tagpu_surf_level_end` is called from
-   the same teardown that ends the packet's level, and the next `sync` drops what
-   it holds — so the reference cannot outlive the level it was taken from and be
-   diffed against the next one. The render thread does the dropping, so `have`
-   keeps exactly one writer.
+   THE SNAPSHOT'S LIFETIME IS THE LEVEL'S, AND THE LEVEL IS A PROPERTY OF THE
+   SNAPSHOT. `tagpu_surf_level_end` is called from the same teardown that ends
+   the packet's level and bumps one counter; the game thread stamps each capture
+   with the counter it was taken under; the render thread will adopt only a
+   capture stamped with the counter it has acted on, and `tagpu_surf_frame`
+   serves only a snapshot stamped with the CURRENT one. So the reference cannot
+   outlive the level it was taken from and be diffed against the next.
+
+   IT IS A STAMP RATHER THAN A FLAG BECAUSE A FLAG COULD NOT BE CLEARED IN TIME
+   [the landing review]. The producer's half runs inside `tagpu_overlay_draw`,
+   below its `tagpu_reclaim_teardown_active()` early return — a level teardown,
+   which is exactly the event the drop is for — while the consumer runs from the
+   Vulkan frame record and shares no such return. Testing the data on the
+   reader's own path is what makes the drop reachable at all.
 
    IT IS NOT AN ENGINE READ, and so this file is not on
    `tagpu/ddraw/thread-split.allow`. `g_ddraw.primary` is the FORK's own

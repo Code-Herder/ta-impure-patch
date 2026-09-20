@@ -2806,9 +2806,12 @@ with nothing marking it.
 a probe that did the read twice from where the copy used to run. The invariant is an ORDERING and
 the hook already existed: the packet publisher's `after_draw` observer on
 `DrawGameScreen 0x468CF0`, where the frame is complete on the thread that drew it — and where the
-packet our passes render from is published in the same call, so the reference and the state are the
-same engine frame. The shell, which never calls `DrawGameScreen`, has no golden source; `tacli
-shot` is the answer there.
+packet our passes render from is published in the same call, so the two are taken from one engine
+frame. **They are not delivered as one**: two independent gates carry them and the render thread
+takes the packet before it syncs the snapshot, so it can draw packet D-1 against reference D.
+`stamp` is how a comparison checks which draw it got; nothing gates on it ([gpu-status](gpu-status.html)
+§2.82). The shell, which never calls `DrawGameScreen`, has no golden source; `tacli shot` is the
+answer there.
 
 **Two more things the cut does not do, both named by the review and neither its doing.** No
 structure draws its slant shadow on this lane — landing 11-2 deleted the native pass's GL tail

@@ -22,8 +22,9 @@
    at all: `tagpu_gui_hook.c`'s `before_flip` is the only host of
    `tagpu_triggers_frame`, so every `tacli` verb in the fork is dispatched from
    inside it -- deleting the file would take the whole harness with it. The
-   second is that capture is not compositing. `tagpu_surf_take`'s reference
-   frame is kept for exactly the same reason.
+   second is that capture is not compositing. The golden source -- the engine's
+   own composed frame, captured by `tagpu_surf_capture` on the game thread since
+   2026-09-20 and sampled by nothing -- is kept for exactly the same reason.
 
    Family: tagpu_gui_hook.c (the observers, the census, the publisher),
    tagpu_gui_snap.c (the gadget-tree snapshot behind `tacli ui`, was
