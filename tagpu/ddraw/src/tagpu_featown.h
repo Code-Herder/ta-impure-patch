@@ -10,4 +10,13 @@ void tagpu_featown_flush(unsigned int frame_counter);
 void tagpu_featown_set_skip(int on);
 void tagpu_featown_beat(unsigned int frame_counter);   /* "we drew this frame" */
 int  tagpu_featown_installed(void);
+
+/* THE FEATURE-SHADOW GATE, which is a separate patch with a separate trigger:
+   it is installed whether or not tagpu_featown.on was present, and it follows
+   TERROWN's key fill rather than tagpu_feat.on. While the viewport is
+   key-filled the engine's feature shadow is skipped, because its 50 % ALP
+   blend against palette 254 reaches the screen as opaque teal. Raise it
+   BEFORE storing the terrain skip and lower it AFTER -- tagpu_featown.c has
+   the measurement and the ordering argument. */
+void tagpu_featown_set_shadow_terr(int on);
 #endif
