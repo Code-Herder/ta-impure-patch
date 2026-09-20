@@ -1,0 +1,58 @@
+landing-review: model=Opus 5 effort=high range=main..83ff6d4 findings=13 acted=10 rejected=3 date=2026-09-20
+
+Two independent read-only reviewers on main...60426ae, run in parallel: A on
+correctness and the scripted-cut damage, B on state written, the six removed
+byte patches and the game/render-thread coupling.
+
+ACTED (10):
+ A1/A2 HIGH, one defect: three emit gates of the deleted terrain gate's shape
+   left standing (tagpu_mark.c x2, tagpu_order.c), AND markown taken off the
+   defaults though it is the sole caller of tagpu_order_snapshot and
+   tagpu_packet_pub_font_snapshot. Presented frame had no bars, digits, build
+   cursor, band box, build ghost, order overlay or text. Fixed in 7a933a0 and
+   verified by running it: census 4 -> 5 pass(es) with mark=1, the packet's
+   font copy appears (glyphs=95), bars and a group digit on screen.
+ B1 the op PUBLISHER is unreachable: g_gui_draw lost its only writer with
+   tagpu_gui_surf.c. Documented at the declaration, in the heartbeat
+   ('publisher idle'), in tagpu_gui.h and in gpu-status 2.81 + the plan.
+   Not deleted: unreachable, not wrong, and a further cut needs its own review.
+ B4 qTail/aTail have no writer either -- a restored producer without a drain
+   latches s_stalled for the session. Recorded with B1.
+ B3 the minimap handshake's asking half is callerless. Documented both ends.
+ B2 tagpu_surf_take's tear: the review pinned the mechanism (g_ddraw.cs covers
+   dds_Flip's pointer swap and dds_SetPalette only; TA's raster enters no
+   section). The plan and the roadmap now carry the interleaving, not a worry.
+ A5 tagpu_vk.h still listed "gui" as a valid tagpu_vk_ab_arm tag.
+ A6 the deletion figure was one commit stale; recomputed as 7169/581.
+ A7 tagpu_gui.h claimed tagpu_cursown_publish(0) in render_vk.c keeps the
+   cursor unpatched -- that call and its module are deleted.
+ A4 four orphaned non-statics named in comments where they are declared.
+ (plus tagpu_feat.c's wrecks test, whose comment called it an
+  anti-double-draw gate; it is a completeness test.)
+
+ACTED DIFFERENTLY FROM THE FINDING (1):
+ A3 'structure slant shadows vanish' -- the symptom is real, the attribution
+   is not. Nothing on the Vulkan lane draws the slant at all: landing 11-2
+   deleted the native pass's GL tail, tagpu_vk_unit.c has no slant anything,
+   and it is the same on main. The stale owndraw term is simplified away with
+   a comment saying it restores nothing; the gap is recorded as open.
+
+REJECTED (3), with reasons:
+ A8a tagpu_vk_surf_engine_view bounding slot by TAGPU_VK_SLOTS -- that IS the
+   array bound and the function takes no d; tagpu_vk_surf_down frees every
+   slot on resize and teardown, so a slot above a shrunken swapchain cannot
+   keep haveSerial.
+ A8b s_nBytes/s_nPal/s_nFrames/s_saidAt surviving down -- process-cumulative
+   diagnostic counters, which is what they should be.
+ B5 the 16 MB arena is never VirtualFree'd -- true on main too, only committed
+   when tagpu_gui.on is armed (a harness mode, off the defaults), and it goes
+   with the transport whenever that is deleted.
+
+VERIFIED CLEAN by both, independently: the six removed byte patches
+(0x4C687D/0x4C2732/0x4C297E/0x4C258C are E8 rel32 -> 0x4B7F90; 1791a7e's
+0x46A784/0x46A7E0) leave no half-patched site and 1791a7e's revert is exact
+(tagpu_detour.[ch], tagpu_featown.[ch], tagpu_terrown.c byte-identical to
+main); both thread-migration claims in gpu-status 2.5 hold with no render-thread
+reader left; haveSerial's invalidation claim holds on every return path; AB_N
+replaced all three bare i<8 loops; no declaration lacks a definition; the new
+0x4A8349/0x4A835A -> 0x4A95E3 engine-map entry is confirmed by disassembly.
