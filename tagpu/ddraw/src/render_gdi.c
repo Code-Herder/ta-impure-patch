@@ -3,7 +3,6 @@
 #include "fps_limiter.h"
 #include "dd.h"
 #include "ddsurface.h"
-#include "opengl_utils.h"
 #include "utils.h"
 #include "wndproc.h"
 #include "hook.h"
@@ -27,11 +26,21 @@ DWORD WINAPI gdi_render_main(void)
         if (!g_config.windowed)
             PostMessage(g_ddraw.hwnd, WM_AUTORENDERER, 0, 0);
 
+        /* THE PARENTHETICAL WAS ALREADY EMPTY, AND THE TEXT BELOW IS WHAT THIS
+           ALREADY PRODUCED, CHARACTER FOR CHARACTER. `g_oglu_version` was a
+           file-scope `char[128]` in `opengl_utils.c` with exactly one writer,
+           `oglu_init`, and `oglu_init` had no caller at all -- so it held the
+           zero-initialised empty string for the life of every process, and the
+           `strlen(...) > 10` test that chose between it and "" was always false
+           and always chose it. Landing 11 D4 deleted `opengl_utils.c` with the
+           rest of the GL lane. This message is NOT dead: `gdi_render_main` is
+           still reached from `dd.c`, `render_vk.c` and `winapi_hooks.c`, so a
+           player can still see it -- and sees exactly what they saw before.
+           [The vulkan-only plan, landing 11 D4.] */
         _snprintf(
-            warning_text, 
+            warning_text,
             sizeof(warning_text) - 1,
-            "-WARNING- Using slow software rendering, please update your graphics card driver (%s)",
-            strlen(g_oglu_version) > 10 ? "" : g_oglu_version);
+            "-WARNING- Using slow software rendering, please update your graphics card driver ()");
     }
 
     Sleep(500);
