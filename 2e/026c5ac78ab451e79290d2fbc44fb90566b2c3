@@ -1,0 +1,91 @@
+landing-review: model=claude-opus-5 x2 (independent, parallel, read-only) effort=medium range=main..03cb2bd date=2026-09-19
+plus a third read-only verification pass over the fix itself (main..9bfe20d), which is where
+half of what follows comes from.
+
+both reviewers independently reached the same HIGH, and it is the larger half of this landing.
+unpinning `restored` made a stand-down reachable that had been dead code, and it does not stand
+down for a frame -- it stands down for the session. `restore_want` latches `s_rjTried` at five
+sites (tagpu_vk_unit.c:1276,1316,1319,1337,1352), cleared only by teardown, and its own first
+guard `if (s_rjTried) { s_arHave = 0; return; }` at :1301 then forces the twin absent, so one
+Vulkan resource refusal drew NO UNIT AT ALL for the rest of the session. the routine case is
+worse because nothing has to fail for it: `rlistRepaint` has exactly one assignment
+(tagpu_gaf.c:129) and both call sites of `rlist_restart` (:208, :584) pass 0, so it is a
+constant 0 and `if (!repaint) s_arHave = 0;` fires on every generation change -- every level
+boundary, atlas recycle and map change blanking units, features and effects. this broke a
+contract `atlas_rgb_build`'s own header had already written down: a device that will not give
+us the RGBA8 "loses restored frames rather than the pass".
+
+fix: a missing twin clears `h.restored` (uRestored goes 0, the shader takes the palette path)
+in all three passes and in the aniso gate. a bound on what the flag may promise, not a timing
+mitigation -- the hazard here is intra-thread ordering, not a race, so a fence would have fixed
+nothing while reading as though it had.
+
+THE FIRST CUT OF THAT FIX WAS WRONG AND THE VERIFICATION PASS CAUGHT IT. it cleared the flag on
+the `!feed` branch alone -- the rare half. a generation change satisfies every feed term
+(`restoreFrames` non-NULL, `s_arImg` built, `s_rjTried` still 0), so the routine case took
+`feed = 1` and left through `feedout` still drawing nothing, while the note asserted it was
+fixed. the flag is now cleared on BOTH branches, the `feedout` label is gone, and the feed frame
+draws indexed; `restore_want` takes no command buffer and never reads `restored`, so the job is
+still made and nothing it recorded can conflict with a draw.
+
+the descriptor had to follow and the fix would have been incomplete without it. binding 43 named
+the twin on `s_arView` alone; `mk_image` creates that image UNDEFINED (tagpu_vk_unit.c:491) and
+only the restorer's job transitions it, so a frame drawing with the image made but unpainted
+declared SHADER_READ_ONLY_OPTIMAL over an UNDEFINED image -- survivable only while the removed
+stand-down kept those frames from drawing at all. it now tests `s_arView && s_arHave`
+(:2633-2634), the same pair that decides uRestored, so flag and descriptor agree by construction
+rather than by a refusal placed elsewhere. tagpu_vk_terr.c:1080 settled this for binding 42 in
+the 11-5c re-review; this is that shape adopted, not reinvented.
+
+two regressions the first cut introduced, both found by the same pass and both fixed: it killed
+the `s_saidAniso` latch (`goto standdown` had made the reset unreachable while the condition
+held, so a fall-through logs the line EVERY frame), and it left two messages saying "nothing
+drawn" and "the other lane" on paths that now draw and about a lane that does not exist. a third
+such message was found later, in the aniso gate itself, and fixed in 2e026c5.
+
+the reviews' other findings, each verified against the source before acting: tagpu_posedraw.c
+asked `tagpu_classicpp_on()` where feat, fx and terr ask `tagpu_classicpp_assets()`, so turning
+assets off mid-session left units on the twin while everything else reverted -- mixed art,
+silently, until restart; the hand-over now clears `restored` alongside the list it promises, so
+"flag set, list absent" is unrepresentable rather than merely unreached; tagpu_gui_surf.c:643,
+the ONE caller of tagpu_gaf_atlas_free_buffers, still said that call does not free rlist; and
+`rgbAniso` REVERSED 11-5e-2's review prescription -- `s_twinAniso` is the knob clamped by the
+device and is 0.0f wherever the extension is absent, so publishing the constant that review
+asked for would have drawn no units at all there. the consumer compares against the knob
+(`s_twinAnisoWant`) instead, and `want > 1.0f` (:863) is a third term the first write-up had
+left out: at the documented A/B setting aniso=1 the applied value is 0.0f on EVERY device.
+
+also discharged here: the obligation 11-5e-2b's review wrote into this entry. `rlist_add`'s
+header denied a `free` this same landing added at tagpu_gaf.c:638, in three places in the
+shipped code. what is true is narrower and is now stated as such, with the residual named --
+the free does not bound a consumer that captured the pointer, and that is unreachable today only
+because free_buffers has exactly one call site, the GUI atlas, which never arms a list.
+
+MEASURED, TWO FIXTURES, because neither does both halves.
+crowd-static (16 unit types atlasing after the arm) is the log oracle: main paints the 25 frames
+the arm seeded and never another -- on main there is no append at all -- and the branch paints
+158, identically in two independent runs. zero VK errors, zero bound restarts.
+one-unit is the pixel oracle, four interleaved arms on the committed tree: 302 px cross-build,
+identical on all four pairings -- 44 in the minimap, 258 in a box DERIVED as the union of the
+four bounding boxes (x 502..516 y 355..388, the placed unit), and 0 px outside both. same-build
+control 48 px, all minimap. census 749 452 non-black px on every arm. the branch-only "drawing
+the indexed atlas" line appears exactly once per branch arm and never on main.
+crowd-static FAILS gate 1 by ~12 000 px (idle COB scripts), one-unit is a live skirmish whose
+minimap drifts -- so the fixture is picked per ORACLE, not per landing. and one grab in twelve
+of the first run was an outlier (40 556 px over 99 tiles while the grabs either side agreed to
+0 px inside that whole region), which is why the method takes three and reads gate 1 on the
+settled pair. both lessons are in the ta-drive skill.
+
+what came after the reviewed range: 9bfe20d (the H1 completion above, itself produced by the
+verification pass) and 2e026c5 (one plog format string, the drifted §2.79 citations, the
+ta-drive rule and the roadmap row). no re-review -- the code delta is one format string, which
+reaches the log file and nothing else, and the A/B above was re-run on the committed tree rather
+than argued about.
+
+NOT closed by this landing and named rather than swept: four log lines (tagpu_gaf.c:591,
+tagpu_terr.c:261, tagpu_vk_gui.c:1583, tagpu_vk_restore.c:2127) and two comments
+(tagpu_vk_feat.c:1059, tagpu_vk_fx.c:1095) still say "the other lane"; tagpu_vk_unit.c:1862 and
+:2674 say it too but their "nothing drawn" is still true, so only the reason is stale. the
+descriptor bind in feat and fx is once-off in atlas_build (feat.c:876, fx.c:912) and is a
+pre-existing residual. tagpu_vk_gui.c:1583 guards a stand-down of the same shape this landing
+removed from three passes, on a pass outside this diff -- an open question, not a finding.
