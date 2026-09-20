@@ -73,9 +73,15 @@ static const Def s_defs[] = {
        is that nobody has decided it: it changes the look of every screen at
        every resolution, the top bar's right-hand half goes off-screen at any
        scale above 100 %, and whether Auto belongs on by default is the
-       owner's call, not a gate's. It also needs `tagpu_gui.on`, which draws
-       the magnification: armed alone it shifts the world and leaves the HUD
-       at 1x. Arm tagpu_hud.on by hand; see gui-renderer.md 22.6. */
+       owner's call, not a gate's.
+
+       AND SINCE THE CLEAN CUT IT DRAWS NOTHING AT ALL. The magnification was
+       the UI layer's `LAY_FS` reading `uHud`, and that layer is deleted, so
+       arming `tagpu_hud.on` today shifts the world and the input mapping and
+       leaves no HUD behind to magnify. `tagpu_hud.c` is kept whole -- the
+       geometry, the ceiling, the input transform and the menu stage all still
+       work -- because the pass that consumes it is what has to be rebuilt.
+       Arm tagpu_hud.on by hand; see gui-renderer.md 22.6. */
 };
 #define NDEFS (int)(sizeof s_defs / sizeof s_defs[0])
 

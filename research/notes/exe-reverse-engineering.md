@@ -2277,8 +2277,15 @@ counter". Anything of ours that runs at this site runs **on that thread**, not o
 corrected above, which does not exist, and on counters that were gated behind
 `s_retDepth == 0 && !s_levelOpen` and so could not have counted an in-play draw whatever
 happened. **Which of the four paths draws in a given mode is still not established here**, and
-the module that takes the cursor over stopped needing to know: `tagpu_cursown.c` patches the blit
+the module that took the cursor over stopped needing to know: `tagpu_cursown.c` patched the blit
 `call` in all four.
+
+**THOSE FOUR PATCHES ARE GONE [2026-09-20].** `tagpu_cursown.c` is deleted. It suppressed the
+engine's cursor only while OURS was on screen, and ours was the UI layer's composite, which the
+clean cut deleted ([gpu-status](gpu-status.html) §2.81) — so the byte the four stubs compared
+could only ever be 0 for the life of a session. The addresses below are still correct and are
+still the four cursor blits; nothing of ours sits on any of them, and the engine draws its own
+cursor into its own surface, which is where the reference frame wants it.
 
 **THE FOUR CURSOR BLITS.** Every one of these functions contains exactly one
 `call CopyGafToContext 0x4B7F90`, and they are the only cursor blits in the image:
@@ -3330,9 +3337,16 @@ here for a redraw to re-issue. A forced repaint is a **shell** mechanism.
 0x4A968E` pushing `2`. A forced repaint is a `0x40` and joins the middle of that protocol without
 disturbing it. Mechanically confirmed over the whole function: **exactly two** calls to `0x4C69F0`
 and **exactly two** to `0x4C6AC0`, at the four addresses above and nowhere else. Two further
-branches skip the allocation and are not the redraw path — `0x4A8349` and `0x4A835A` abandon the
-call entirely when the panel is wider or taller than the screen (`0x4B6700`/`0x4B6710` against
-`panel+0x17`/`+0x19`).
+branches skip the allocation and are not the redraw path — `0x4A8349` and `0x4A835A` **jump to
+`0x4A95E3`**, the function's tail, when the panel is wider or taller than the screen
+(`0x4B6700()`/`0x4B6710()` — the screen width and height — against `panel+0x17`/`+0x19`). A panel
+bigger than the screen abandons the whole call.
+
+**HOW THAT PAIR WAS MISSED THE FIRST TIME, which is worth more than the pair.** The first
+enumeration looked for early **returns** before the allocation, found one, and did not look for
+**jumps past** it — of which there are three. An early return and a forward jump are the same
+fact about reachability and only one of them was being counted. Any "this call cannot reach X"
+claim on this binary has to enumerate both.
 
 **The two rect sentinels, and why a hand-placed `xpos` is written BEFORE the build call**
 [VERIFIED 2026-09-09, Phase F G18, disassembly of the pristine build]. `0x4A820C` opens with

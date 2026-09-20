@@ -1274,7 +1274,10 @@ satisfied by an `xdotool` park alone, because a later `--restart` silently un-pa
   and `twin_sprite`/`twin_copy` both return 0 unconditionally, so no UI op ever asks to sample
   one. **Do not expect colour in the UI from any lever, and do not read its absence as a fault
   to chase** — it is a named gap ([gpu-status](gpu-status.html) §2.78), and closing it means
-  arming a list for the UI, which is work rather than a setting.
+  arming a list for the UI, which is work rather than a setting. **[SUPERSEDED 2026-09-20 — THERE
+  IS NO UI.]** The clean cut deleted `tagpu_gui_surf.c` and `tagpu_vk_gui.c` entire, so the fifth
+  consumer has no consumer: the gap is still real and is now work with no client until the UI is
+  rebuilt as a pass of ours (§2.81).
 - **A SPRITE ATLAS IS WHAT MAKES A SWAPPED PER-BATCH TABLE VISIBLE, and the terrain is blind to
   it** (landing 7d, [gpu-status](gpu-status.html) §2.44). The restorer's per-frame tables carry
   each frame's rect, source rect and **colour key**; the terrain's frames are one size with no key,
@@ -2316,46 +2319,53 @@ never read it. A comment counted as a call site.]
 Note too that the `packet:` heartbeat is emitted from the render thread, so the exchange's
 counters are not printed on gdi at all.
 
-### The clean cut — `tagpu_purevk.on` (2026-09-20)
+### The clean cut — engine compositing is deleted (2026-09-20)
 
-**With this lever armed, NOTHING the engine drew reaches the screen.** TA's composed 8-bit frame
-stops being a layer and the UI twin's composite stops reaching the frame; the engine goes on
-rasterising and `tagpu_surf_take` goes on capturing, so its surface is kept as the **golden
-source** to check our own passes against. It is opt-in, off the defaults table, and **polled
-live** on the seam's own 250 ms cadence — so it flips on a running instance and flips back, and
-the re-armed frame is byte-identical to the first cut one.
+**NOTHING THE ENGINE DREW REACHES THE SCREEN, AND THERE IS NO LEVER.** `tagpu_purevk.on` existed
+for one day and is gone with the code it gated. TA's composed 8-bit frame is not a layer, the UI
+twin's composite does not exist, and the marker pass's captured 8bpp layer does not exist. The
+engine goes on rasterising and `tagpu_surf_take` goes on capturing, so its surface is kept as the
+**golden source** to check our own passes against.
+
+**What you see instead of the HUD is the lane's clear colour, which is magenta**
+(`tagpu_vk.on=color=0,0,0` for black). Gone from the screen: the side panel, the minimap, the
+resource bar, the top and bottom bars, the cursor, every dialog, every menu and the loading
+screen. On the play defaults the world itself is all ours — terrain, water, trees, units, wrecks,
+effects and the markers.
 
 ```bash
-tools/tacli arm <i> purevk.on          # the cut, live, ~250 ms
-tools/tacli arm <i> purevk.on=off      # back, live
-tools/tacli log <i> -g 'clean cut'     # one line from the GUI pass when it arms
-tools/tacli log <i> -g 'vk: census'    # gui=1 -> gui=0 is the flip
+tools/tacli log <i> -g 'vk: census'    # N pass(es) drew — terr/feat/unit/fx/mark/scaf/fps
+tools/tacli log <i> -g 'surf: frame'   # "readied as the reference … drawn nowhere"
+tools/tacli shot <i> -o /tmp/ref.png   # the golden source: the WHOLE 1997 frame
 ```
 
 Four things to know before driving under it:
 
-- **The HUD is GONE and that is the point** — side panel, minimap, resource bar, top and bottom
-  bars, every menu and the loading screen. What is left in their place is the lane's **clear
-  colour, which is magenta** (`tagpu_vk.on=color=0,0,0` for black). In the world viewport you
-  lose the health bars and the cursor and **nothing else**: on `feat-forest` at 1024×768 the
-  whole world-viewport difference is **1 857 px of 630 784**, and all of it is bars, the cursor
-  and the fixture's own walking commander. Terrain, water, trees, units and wrecks are ours
-  already.
-- **The harness drives a BLIND SHELL, measured.** `tacli scenario load … --restart` runs the
-  whole route to a live world with the census reading `0 pass(es) drew` for every frame of the
-  menus. `tacli ui` reads the engine's gadget array and clicks the coordinates it reports;
+- **The harness drives a BLIND SHELL, measured twice.** `tacli scenario load` runs the whole
+  route to a live world with the census reading `0 pass(es) drew` for every frame of the menus.
+  `tacli ui` reads the engine's gadget array and clicks the coordinates it reports;
   `_scn_wait_live` reads `tagpu.log`. No part of the route reads a pixel, so nothing about
   driving changes. **`tacli shot` still works** and is how you see the menu you are clicking.
-- **THE GOLDEN SOURCE IS NOT A COMPLETE FRAME in the shipped arm set.** A `tacli shot` under the
-  cut shows the HUD, the units, their bars and the cursor over a **flat cyan viewport with no
-  terrain and no trees** — `TERROWN skip=1 filled=1` and `FEATOWN skip=1` in the log are the
-  whole explanation. So **do not diff a terrain or feature element against the reference and
-  believe the number**: there is nothing there to diff against. Trees come back by not arming
-  `featown.on`; terrain needs a code change (`tagpu_terr.c:1260` refuses to emit without
-  `terrown` installed). Units ARE in the reference, because `OWND … skipped=0` — the engine's
-  unit rasteriser is not skipped at all.
-- **The reference capture is taken on the RENDER thread** (`tagpu_overlay.c:234`), sequenced
-  against nothing, so it may not hold a finished frame. Fine for looking; not yet an oracle.
+- **`tacli shot` is now the ONLY way to see the engine's frame**, and it is a complete one: on
+  the play defaults it shows terrain, water, trees, units, bars, minimap, resource bar, the
+  sidebar and the cursor — 0 raw key and 0 teal, 170 distinct colours in the viewport.
+- **THE `*own` LEVERS HOLE THAT REFERENCE, which is why they are no longer play defaults.**
+  `terrown`, `featown`, `fxown`, `markown` and `owndraw` stop the ENGINE drawing. Arm one and the
+  golden source loses exactly what it stopped: `terrown.on` gives you a flat cyan viewport
+  (`TERROWN skip=1 filled=1` in the log), `featown.on` takes the trees. **They still work and
+  still save the CPU** — arm them for a frame-time measurement, never for a comparison. Note
+  `markown` installs its detours at DLL ATTACH, so writing its file to a running instance opens
+  nothing.
+- **The reference capture is taken on the RENDER thread** (`tagpu_overlay.c`), sequenced against
+  nothing, so it may not hold a finished frame. **Fine for looking; not yet an oracle** — the
+  game-thread hook it wants is the packet publisher's `after_draw` on `DrawGameScreen 0x468CF0`.
+
+**How to check "no engine pixel reached the screen"**, which is the measurement this cut has to
+keep passing. Grab the window and test the engine's own chrome region, which our passes never
+draw into — at 1024×768 that is the top bar `y<22` and the sidebar `x<128, y>=22`, 118 016 px
+together. Every one of them must be the clear colour exactly. Then count `(0,255,255)` (the
+terrain key) and `(0,128,128)` (the key ALP-blended, i.e. teal) over the whole frame: both must
+be 0. Three settled grabs, and they should be identical.
 
 **`tacli shot` IS NOT A SCREENSHOT OF WHAT THE PLAYER SEES, and on the Vulkan lane the two
 genuinely disagree.** It captures the **engine's own surface** — TA's 8bpp frame — and that
@@ -2789,9 +2799,14 @@ UI layer draw there now, and the **five world** ones run at any `ss` — their i
 **The UI layer's A/B has four traps of its own, all paid for in the 4b-3 landing.**
 
 - **`tagpu_gui.on` must exist BEFORE the launch, and `tacli arm` adds the `tagpu_` prefix
-  itself.** `tagpu_gui_init` runs from the attach path and its first line is
-  `if (!read_tokens()) return;` — no lever file, no producer hooks, so `tagpu_gui_installed()`
-  stays false, `tagpu_gui_present` returns at its first line and there is no heartbeat at all.
+  itself.** `tagpu_gui_init` (`tagpu_gui_hook.c`) runs from the attach path; with no lever file
+  it installs the flip observer — so `tacli` still drives the instance — and returns at
+  `gui: trigger host only`, leaving the 17 producer leaves, the op queue and the census OFF, so
+  `tagpu_gui_installed()` stays false and there is no heartbeat at all. **Since 2026-09-20 that
+  is ALL the lever gates**: the clean cut deleted the draw half, so `tagpu_gui.on` is a
+  capture-and-census switch and is off the play defaults ([gpu-status](gpu-status.html) §2.81).
+  Arm it when you want the op stream or the `gui:` diagnostics, never to put something on
+  screen.
   A lever armed into a running game cannot undo that. The spelling is **`tacli arm <i>
   gui.on=mmbase`** (`tools/tacli:1474` builds `tagpu_{name}`): passing `tagpu_gui.on` produces
   `tagpu_tagpu_gui.on`, which `tacli` reports as armed and nothing ever reads. `echo mmbase >
@@ -3005,11 +3020,12 @@ touch <gamedir>/tagpu_fps.ab                             # one frame, both lanes
     **2048x1536, 3 145 728 px** — expect the px counts below to be four times the `ss=1` ones.
     Still true: **arming `ss.off` LIVE does not take**, because the FBO is built where the lever is
     not re-read, so whichever `ss` you want has to be settled before the launch.
-  * **The three UI passes (`gui`, `scaffold`, `fps`) are not `ss`-bound and never were.** `ss`
-    sizes only the world FBO (`s_fbo2`) and none of the three ever binds it — `tagpu_scaffold.c`
-    and `tagpu_fps.c` contain no `glBindFramebuffer` at all, and `tagpu_gui_surf.c` binds only its
-    own mirror FBO and 0 — so their GL half is the default framebuffer at any `ss`. None of them
-    ever carried an `ss != 1` refusal either. What they DO need is the window's own size: their
+  * **The three UI passes (`gui`, `scaffold`, `fps`) are not `ss`-bound and never were** — and
+    **`gui` is deleted since 2026-09-20** (§2.81), so it is two now. `ss` sizes only the world FBO
+    (`s_fbo2`) and none of them ever binds it — `tagpu_scaffold.c` and `tagpu_fps.c` contain no
+    `glBindFramebuffer` at all, and `tagpu_gui_surf.c` bound only its own mirror FBO and 0 — so
+    their GL half is the default framebuffer at any `ss`. None of them ever carried an `ss != 1`
+    refusal either. What they DO need is the window's own size: their
     Vulkan half is still the swapchain image, so the two agree only with no letterbox and `k = 1`.
   * **A world capture at 1080p with `ss = 2` is 3840x2160 — 33.2 MB a side.** The GL half mallocs
     that on the render thread and the Vulkan half allocates as much again in host-visible coherent
@@ -3256,8 +3272,11 @@ rm -f $G/tagpu_posedraw.ab $G/tagpu_posedraw_*.ppm; sleep 2; touch $G/tagpu_pose
 - **[HISTORY] `mark.on` WAS the lever, and why it stopped being one.** `tagpu_rglsl_step()` — at
   the time the only thing that ever painted a Classic++ restored twin — had **two** callers. The one that matters for a
   world A/B is `tagpu_native.c:3297`, inside `if (fxOn || sfxOn || featOn || terrOn || markOn)`;
-  the other is `tagpu_gui_surf.c:2465`, which steps it when the UI atlas has a restore job of its
-  own and nothing else stepped it this frame. Armed with `native.on` alone the first never runs —
+  the other was `tagpu_gui_surf.c:2465`, which stepped it when the UI atlas had a restore job of
+  its own and nothing else stepped it that frame. **Both are gone now**: landing 11-5e-2 deleted
+  the GL restorer and `tagpu_rglsl_step` with it (the Vulkan lane steps `tagpu_rcore_step` from
+  `tagpu_vk_restore.c:2551`), and the clean cut deleted `tagpu_gui_surf.c` entire (§2.81). This
+  entry is kept for the LEVER lesson, not for either call site. Armed with `native.on` alone the first never runs —
   the unit atlas's job is still queued (`tagpu_native_frame` reaches `tagpu_r3d_atlas_frame` on
   `s_armed` alone) and it sits at priority 3, behind terrain, features and effects. **Measured:
   the twin was still unpainted through the whole fixture** — the `uRestored == 1` branch read

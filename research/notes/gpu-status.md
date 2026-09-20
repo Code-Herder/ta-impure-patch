@@ -918,9 +918,19 @@ answer `ui-markers.md` §6.1 gives for everything else outside the 1× viewport.
 over the viewport** (`ARMOPT`, `EXITMENU`) are unchanged and still take the transform as though
 they were world, which was already true before this and is not verified either way here.
 
-### 2.3e The GL UI layer — observers, publisher, twins (`tagpu_gui_hook.c`, `tagpu_gui_surf.c`, `gui.on`, Phase E G15a + G15b + G15d + G15e + G17a–e)
+### 2.3e The engine's UI, observed — and the layer that drew it, deleted (`tagpu_gui_hook.c`, `gui.on`, Phase E G15a + G15b + G15d + G15e + G17a–e)
 
-**Phase 2 is complete.** G17e (2026-09-09) made the **minimap** ours at `k > 1`: the base from the
+> **READ THIS FIRST — THE DRAWING HALF OF THIS SECTION NO LONGER EXISTS [§2.81, 2026-09-20].**
+> The clean cut deleted `tagpu_gui_surf.c`, `tagpu_vk_gui.c`, the twins, the sharp layer, the
+> composite and their seven shader programs. Everything below about a twin, a mirror, a layer, a
+> sharp ramp or a minimap base is **history**, not current behaviour, and the figures in it were
+> real when they were taken. What still runs is the OBSERVER half — the detours, the op stream and
+> the census — which survived because capture is not compositing and because `before_flip` is the
+> only host of `tagpu_triggers_frame`. The hook table below is current; the prose around it is
+> not. The engine knowledge is [exe-reverse-engineering](exe-reverse-engineering.html) and
+> [gui-renderer](gui-renderer.html).
+
+**Phase 2 was complete.** G17e (2026-09-09) made the **minimap** ours at `k > 1`: the base from the
 TNT's own 252-px picture instead of the 126-px box the engine fits it into, and the fog, the unit
 dots, the radar arcs and `DrawPoint`'s points all taken from the engine's own pixels by masking
 `+0x142DB` and `+0x142DF` against `+0x142E3` — so the visibility decision never leaves the engine.
@@ -951,8 +961,8 @@ sees only the blits that really draw. Full argument lists, boxes and evidence: t
 | VA | What it is | Stolen | Observer records |
 |---|---|---|---|
 | `0x4C63A0` | `FlipOffscreenToPrimary` — the engine's "this frame is complete"; the census runs here, **and since the vulkan-only plan's landing 10c so does the whole on-demand trigger family** | 6 | the frame marker; diffs `*(globals+0xBC)` and every surface an op named. **Also `tagpu_triggers_frame`** (`tagpu_trigger.h`): peek, the weapon dump, the GUI snapshot, the unit/feature catalogues, scenario detection, — since 10c-2 — `tagpu_input.c`'s token half, and — since 11-2 — the engine-surface screenshot, which is the one member that answers a pass LATE: it services the previous pass's arm before polling for a new one, because at the flip's entry the primary still holds the frame the previous flip presented (§2.64). It runs from `before_flip`, above that function's three early returns, behind a **16 ms QPC gate** with its own counter: these throttle on `frame_counter % 5` (`% 15` for peek) written against the ~60/s *present* rate, and the shell flips **thousands of times a second** — `CENSUS_MS`'s comment beside it reads ~5 000 flips/s (measured 2026-09-07) with the op census at ~12 000 *ops*/s on MAINMENU, while §5352 and the GUI-renderer page say ~12 000 *flips*/s; **the two readings are not reconciled** and the gate does not depend on which is right, being a bound rather than a rate assumption. This is the only reason any `tacli` verb works on `renderer=gdi`, which reaches `tagpu_overlay_draw` never — **and therefore the observer installs whenever the flip's bytes match, NOT behind `tagpu_gui.on`**. For one commit it was behind that trigger, which `tagpu_defaults.off` (written by a bare `tacli launch`) takes away, so an ordinary instance had every `tacli` verb and all input injection silently dead **on every renderer**, with no line in the log because the early return was above the only one. The landing review of 10c-2 caught it. `tagpu_gui.on` now gates the UI layer, the census and the 17 leaves alone; `tacli gui remove` removes those and no longer removes the ability to drive the instance. The one trigger NOT here is `tagpu_input_eye_frame`, the camera hold: it dereferences `f->packet` and this frame has none |
-| `0x4C67C0` | the cursor draw **inside** the flip (`stdcall(globals, surface)`, `ret 8`), the shell's publish point since landing 6 — **its own observer, in `tagpu_packet_pub.c`**, not this census. The function itself is UNPATCHED: since 2026-09-14 `tagpu_cursown.c` skips only the `call` at `0x4C687D` that blits the sprite, so the observer, the background save at `0x4C6862` and the `+0x1B6/+0x1BA` writes all still run (a leaf on the whole function was tried on 2026-09-13 and withdrawn — GUI renderer §24.0) | 11 | the drawn cursor: `+0x1B2` the record, `+0x1B6/+0x1BA` the position it just wrote. Publishes a header-only `in_game = 0` packet with `cursor_live = 1` when the three early-out words hold, and `cursor_live = 0` when they do not — gated on **two** tests, `s_retDepth == 0` **and** `!s_levelOpen`. `s_retDepth == 0` alone is NOT the complement of the in-play gate: `0x495E66` calls `DrawGameScreen` and returns to `0x495E6B`, not the in-play `0x4969D2`, so a screenshot draw is in-play with `s_retDepth == 0`; `!s_levelOpen` is what keeps this channel out of a level. This row said "i.e. not inside an in-play draw" until the 2026-09-14 review — the code has always had both tests |
-| `0x4C25E0` | the body of the engine's **mouse thread** (`0x4C2990` is its entry, started by `_beginthread` at `0x4C2A9A` — which is why no `call 0x4C2990` exists); `stdcall(mouseObj)`, `ret 4`. Unpatched as a function; its cursor blit `0x4C2732` is one of the four `tagpu_cursown.c` skips | 8 | nothing — no observer, it is not a channel site. It writes `+0x196/+0x19A` and `+0x1B6/+0x1BA`, the latter as position **minus the hotspot**, exactly as `0x4C67C0` does [CORRECTED 2026-09-14: this row claimed the opposite and called it a fingerprint] |
+| `0x4C67C0` | the cursor draw **inside** the flip (`stdcall(globals, surface)`, `ret 8`), the shell's publish point since landing 6 — **its own observer, in `tagpu_packet_pub.c`**, not this census. The function is UNPATCHED and now unpatchable by us: `tagpu_cursown.c` used to skip the `call` at `0x4C687D` that blits the sprite, and **the whole module was deleted by the clean cut** (§2.81) because the composite that replaced the cursor is gone. The observer, the background save at `0x4C6862` and the `+0x1B6/+0x1BA` writes always ran and still do; the blit now runs as well, which is what keeps the cursor in the reference frame. (A leaf on the whole function was tried on 2026-09-13 and withdrawn — GUI renderer §24.0) | 11 | the drawn cursor: `+0x1B2` the record, `+0x1B6/+0x1BA` the position it just wrote. Publishes a header-only `in_game = 0` packet with `cursor_live = 1` when the three early-out words hold, and `cursor_live = 0` when they do not — gated on **two** tests, `s_retDepth == 0` **and** `!s_levelOpen`. `s_retDepth == 0` alone is NOT the complement of the in-play gate: `0x495E66` calls `DrawGameScreen` and returns to `0x495E6B`, not the in-play `0x4969D2`, so a screenshot draw is in-play with `s_retDepth == 0`; `!s_levelOpen` is what keeps this channel out of a level. This row said "i.e. not inside an in-play draw" until the 2026-09-14 review — the code has always had both tests |
+| `0x4C25E0` | the body of the engine's **mouse thread** (`0x4C2990` is its entry, started by `_beginthread` at `0x4C2A9A` — which is why no `call 0x4C2990` exists); `stdcall(mouseObj)`, `ret 4`. Unpatched as a function, and since the clean cut (§2.81) unpatched entirely: its cursor blit `0x4C2732` was one of the four `tagpu_cursown.c` skips and that module is deleted | 8 | nothing — no observer, it is not a channel site. It writes `+0x196/+0x19A` and `+0x1B6/+0x1BA`, the latter as position **minus the hotspot**, exactly as `0x4C67C0` does [CORRECTED 2026-09-14: this row claimed the opposite and called it a fingerprint] |
 | `0x4B7F90` | `CopyGafToContext(ctx, frame, x, y)` — **chained onto fxown's stub** | 6 | a sprite box at `(x−HotX, y−HotY)`, clipped |
 | `0x4B8500`, `0x4B8310` | the shaded blit and DrawText's alternate blit, same shape | 6 | same |
 | `0x4C6D20` | descriptor blit `(ctx, desc, src, dst)` — listbox, textfield | 7 | `*dst` |
@@ -1295,10 +1305,10 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `0x512344` / `0x512348` | the order-descriptor array and its end: `+0xC` is the type's marker-capability mask and `+0x10` its `cursor_ary` index. Read only; the end pointer is what lets us bound an index the engine does not |
 | `unit+0xAC` | the squad tag. Read only — and read as a **DWORD** and then used as a byte, because that is what `0x469C55`/`0x469CD1` do |
 | `main+0x2A43` | the player id the health-bar and group-digit loop compares unit owners against (`0x46967D` → `[esp+0x70]`, read at `0x469CA6`/`0x469CC9`). Read only. **Not `main+0x2A42`**, which is what the order-marker driver `0x48CC30` uses for its player range — two bytes, two loops, one block, written independently at `0x416B25`/`0x416B38`. `tagpu_mark.c` was on `0x2A42` from G13d until G13p corrected it |
-| `main+0x1426B`, `+0x142CB`, `+0x142DB`, `+0x142DF`, `+0x142E3`, `+0x142E7..+0x142ED`, `+0xDD9` | the minimap: the TNT's picture, the view rect and its colour, and the three 126-px surfaces (composite, fog base, scaled base). **Read only.** The picture is decoded on the MINIMAP BUILD's own thread inside `BuildMinimapSurface 0x466780` — not the game thread, measured — and the three surfaces are read per frame on the render thread while the game thread may be rewriting them, the same standing as the fork's own surface upload (G17e, [GL UI renderer](gui-renderer.html) §19) |
-| `[0x51FBD0]+0x1B2`, `+0x1B6`, `+0x1BA` | the cursor's **GAF frame** and the position it was last drawn at. Read only, on the render thread, once per frame in `tagpu_gui_cursor_frame()` — and read ONCE because two modules act on the answer: the UI layer stops discarding that rect and the world composite counts it as the terrain key, and a second read a pass later would leave a sliver of the engine's cursor standing (G17c, [GL UI renderer](gui-renderer.html) §17). The frame's pixels go through `tagpu_gaf_decode` into the UI atlas like any other sprite |
-| `[0x51FBD0]+0x204` / `+0x208` | the current font object and text foreground colour. Read only, on the GAME THREAD at hook 8: the engine re-points both many times a frame, so a present-thread read would get whatever the side panel last drew with. **Since 2026-09-12 (the frame packet's landing 1) the font is COPIED there**, header and 95 printable glyphs, each as a one-glyph font object, into the packet (`tagpu_packet_pub.c`); the present thread rasterises from the copy and no longer dereferences the engine's font at all (`tagpu_text.c`, §2.16). The GL UI's string op still carries the font's address — landing 4c |
-| **the frame packet's header and its four world tables** — the header: `main+0x38A47` (`GameTime`), `+0x38A4D` (the live speed), `+0x38A51` (paused), `+0x38D75` (the load flags), `+0x1431F`/`+0x14323` (eye), `+0x14327`/`+0x1432B` (scroll target), `+0x37E1F`/`+0x37E23` (screen), `+0x37E27..+0x37E33` (the rect the engine can name, since landing 2), `+0x1422B`/`+0x1422F`, `+0x14233`/`+0x14237` (map px, map cells), `+0x1423B`/`+0x1423F` (view cells), `+0x1438F` (`UNITINFOCount`), `+0x14351` (unit slots), `+0x14281` (`LosType`), `+0x37F06`, `+0x37F2F`, `+0x2A43`, `+0x2A42`, `+0x1427F`, `+0x143A7` (the palette table, 1 KB, since landing 2), `[0x51FBD0]+0x614` (gamma, bounded, since landing 2); **since landing 3** also `+0x0DCB` (the GUI colour array), `+0x2C76`/`+0x2C7A` (the dispatched mouse point), `+0x2C92..+0x2CA6` (the build cursor's two corners), `+0x2CC3`/`+0x2CC6` (the cursor mode and region flags), `+0x1424B`/`+0x1424F` (the feature sweep), `+0x14253` (`NumFeatureDefs`) and `[0x51FBD0]+0xC4` (the 32×256 shade table). **The three per-map BASES are deliberately NOT in it** — `+0x1426F` (FeatureDefs), `+0x1420B` (wreck records) and `+0x14377` (`MODEL_PTRS`) are read live, at every use, on the render thread: the teardown frees each and then NULLS it (`0x4221F8`→`0x422214`, `0x42227D`→`0x42228B`, `0x42DCCB`→`0x42DCD8`), so the null is what refuses the walk, and a copy taken at publish time and held for a frame reads straight past it. **[CORRECTED 2026-09-12 by a landing review, which found the copies.]** The tables: the unit array walked to `+0x14351`'s count, each record's `+0x64..+0x110` fields, its `UnitDef`'s `+0x20`/`+0x1FA`/`+0x241`, its `Object3do`'s `+0x00`/`+0x10`/`+0x18`/`+0x1E` and every `+0x22 + i·0x36` piece, the feature grid `+0x14287` over the widest zoom rect, and the wreck records the anchors name ([engine map](exe-reverse-engineering.html), "What the frame packet's publisher copies") | **Read only, on the GAME THREAD**, from the `after` of the `DrawGameScreen` observer on in-play frames only, and COPIED into the packet every presented frame (§2.16, §2.17; the addresses live in `inc/tagpu_engine.h`). **Since landing 2 the packet's `vp`, `eye` (plus the unacknowledged anchor deltas), `vp_addr`, `pal` and `gamma` ARE the view every pass draws from** — the native pass, the scaffold, the marker pass's build-cursor gate, the GL UI's layer draw and the palette module read no engine field for any of them |
+| `main+0x1426B`, `+0x142CB`, `+0x142DB`, `+0x142DF`, `+0x142E3`, `+0x142E7..+0x142ED`, `+0xDD9` | the minimap: the TNT's picture, the view rect and its colour, and the three 126-px surfaces (composite, fog base, scaled base). **Read only, and on the GAME THREAD only since the clean cut** (§2.81): the reader is `tagpu_packet_pub.c` (`MM_COMPOSITE`/`MM_FOGBASE`/`MM_SCALEDMAP`/`MM_PICFRAME`), which copies them into the packet. The picture is decoded on the MINIMAP BUILD's own thread inside `BuildMinimapSurface 0x466780` — not the game thread, measured. **The render-thread reader is gone**: `tagpu_gui_surf.c`'s sharp minimap layer read all three per frame while the game thread may have been rewriting them, the same standing as the fork's own surface upload (G17e, [GL UI renderer](gui-renderer.html) §19), and that layer is deleted. The `tagpu_gui_set_want_minimap` / `tagpu_gui_minimap_have` handshake survives in `tagpu_gui.h` with no consumer |
+| `[0x51FBD0]+0x1B2`, `+0x1B6`, `+0x1BA` | the cursor's **GAF frame** and the position it was last drawn at. Read only — **on the GAME THREAD since the clean cut** (§2.81), in `tagpu_packet_pub.c`'s observer of `0x4C67C0`, which publishes them into the shell packet's `cursor_live` channel. The render-thread reader, `tagpu_gui_cursor_frame()`, is **deleted** with the UI layer: it read them once per frame because two modules acted on the answer — the layer stopped discarding that rect and the world composite counted it as the terrain key — and a second read a pass later would have left a sliver of the engine's cursor standing (G17c, [GL UI renderer](gui-renderer.html) §17). Nothing decodes the frame's pixels now; the engine blits its own sprite into the reference frame |
+| `[0x51FBD0]+0x204` / `+0x208` | the current font object and text foreground colour. Read only, on the GAME THREAD at hook 8: the engine re-points both many times a frame, so a present-thread read would get whatever the side panel last drew with. **Since 2026-09-12 (the frame packet's landing 1) the font is COPIED there**, header and 95 printable glyphs, each as a one-glyph font object, into the packet (`tagpu_packet_pub.c`); the present thread rasterises from the copy and no longer dereferences the engine's font at all (`tagpu_text.c`, §2.16). The GL UI's string op carried the font's address too (landing 4c) and went with the UI layer (§2.81); `tagpu_gui_hook.c` still captures the op, so the address is still recorded — nothing reads it |
+| **the frame packet's header and its four world tables** — the header: `main+0x38A47` (`GameTime`), `+0x38A4D` (the live speed), `+0x38A51` (paused), `+0x38D75` (the load flags), `+0x1431F`/`+0x14323` (eye), `+0x14327`/`+0x1432B` (scroll target), `+0x37E1F`/`+0x37E23` (screen), `+0x37E27..+0x37E33` (the rect the engine can name, since landing 2), `+0x1422B`/`+0x1422F`, `+0x14233`/`+0x14237` (map px, map cells), `+0x1423B`/`+0x1423F` (view cells), `+0x1438F` (`UNITINFOCount`), `+0x14351` (unit slots), `+0x14281` (`LosType`), `+0x37F06`, `+0x37F2F`, `+0x2A43`, `+0x2A42`, `+0x1427F`, `+0x143A7` (the palette table, 1 KB, since landing 2), `[0x51FBD0]+0x614` (gamma, bounded, since landing 2); **since landing 3** also `+0x0DCB` (the GUI colour array), `+0x2C76`/`+0x2C7A` (the dispatched mouse point), `+0x2C92..+0x2CA6` (the build cursor's two corners), `+0x2CC3`/`+0x2CC6` (the cursor mode and region flags), `+0x1424B`/`+0x1424F` (the feature sweep), `+0x14253` (`NumFeatureDefs`) and `[0x51FBD0]+0xC4` (the 32×256 shade table). **The three per-map BASES are deliberately NOT in it** — `+0x1426F` (FeatureDefs), `+0x1420B` (wreck records) and `+0x14377` (`MODEL_PTRS`) are read live, at every use, on the render thread: the teardown frees each and then NULLS it (`0x4221F8`→`0x422214`, `0x42227D`→`0x42228B`, `0x42DCCB`→`0x42DCD8`), so the null is what refuses the walk, and a copy taken at publish time and held for a frame reads straight past it. **[CORRECTED 2026-09-12 by a landing review, which found the copies.]** The tables: the unit array walked to `+0x14351`'s count, each record's `+0x64..+0x110` fields, its `UnitDef`'s `+0x20`/`+0x1FA`/`+0x241`, its `Object3do`'s `+0x00`/`+0x10`/`+0x18`/`+0x1E` and every `+0x22 + i·0x36` piece, the feature grid `+0x14287` over the widest zoom rect, and the wreck records the anchors name ([engine map](exe-reverse-engineering.html), "What the frame packet's publisher copies") | **Read only, on the GAME THREAD**, from the `after` of the `DrawGameScreen` observer on in-play frames only, and COPIED into the packet every presented frame (§2.16, §2.17; the addresses live in `inc/tagpu_engine.h`). **Since landing 2 the packet's `vp`, `eye` (plus the unacknowledged anchor deltas), `vp_addr`, `pal` and `gamma` ARE the view every pass draws from** — the native pass, the scaffold, the marker pass's build-cursor gate and the palette module read no engine field for any of them. (The GL UI's layer draw was the fifth until the clean cut deleted it — §2.81) |
 | **order node `+0x32`, `+0x34`, `+0x42`** | **the target sprite's last-seen cache. WRITTEN, on the GAME THREAD, at the instant the engine's own drawer would have written it.** It is the only sim-side field this stack writes for a marker, and it is not optional: the cache is what stops a waypoint marker following a target that has left LOS, so a port that drops it leaks the target's live position (`tagpu_order.c`, `resolve_sprite`) |
 | **`Object3do+0x08`** | **the pose-dirty flag, and the interlock the unit pass reads it as.** Read only, on the render thread, on either side of every piece's posed-vertex copy: the engine rewrites `prim+0x22` in place and in two stages, and this field is 1 for exactly that window ([engine map](exe-reverse-engineering.html) "The repose"). Non-zero on either side means the buffer may be mid-rewrite and the pass emits the piece from the pose fields instead (§2.9) |
 | `Object3do+0x18/+0x1A/+0x1C` | the CACHED body turn — `unit+0x64` (about Z), `unit+0x66` (the heading, about Y), `unit+0x68` (about X), copied at `0x45AC7C` when any axis moves ≥ 8. Read only, and read in preference to the live `unit+0x64..` on the reconstruction path, because this copy is the one the compose baked into the vertices. **`[MEASURED 2026-09-08]` "In preference" is not a nicety: on a bomber the cached triple read `(0, 16128, 3)` against a live `(0, 44767, 65508)` — 157° of heading apart — and the drawn geometry followed the CACHED one.** On a tank the two were identical; which of them moves is not established. Anything folding `unit+0x64..` instead draws the unit at the wrong attitude, which is what `pose_dump` and `tacob pose-check` did until 2026-09-08 and `hires_pose` until 2026-09-09 |
@@ -2060,7 +2070,7 @@ patch, no engine read at all** — it counts our own presents and draws over the
 
 | site | what we do there | thread |
 |---|---|---|
-| `tagpu_overlay_draw`, after `tagpu_gui_present` | `tagpu_fps_present()` — the readout, drawn **above** the UI layer so the side panel and dialogs cannot hide it | render |
+| `tagpu_overlay_draw`, after the UI flush | `tagpu_fps_present()` — the readout, drawn **above** the UI layer so the side panel and dialogs could not hide it. **Since the clean cut there is no UI layer and no `tagpu_gui_present`** (§2.81), so this is the last thing drawn over the world and the only 2D overlay left in the frame; its position in the order is now arbitrary rather than load-bearing | render |
 | `tagpu_overlay_draw`, the context-change branch | `tagpu_fps_glreset()` alongside the other modules' | render |
 | `tagpu_menu.c` `write_levers()` | create or delete `tagpu_fps.on` — the deferred write, off the game thread, exactly as `tagpu_ss.off` is written | render |
 
@@ -2105,6 +2115,13 @@ instrumentation, because a readout drawn over the game cannot be compared agains
 the game under it. It clears the whole frame on purpose, once, until the lever is taken away.
 
 ### 2.15 HUD scale (`tagpu_hud.c`, **off unless armed**, `tagpu_hud.on`) — Phase F G18f
+
+> **THE DRAW HALF IS GONE SINCE 2026-09-20 (§2.81).** The magnification was the UI layer's
+> `LAY_FS` sampling `uHud`, and the clean cut deleted that layer, so arming `tagpu_hud.on` now
+> shifts the world and the input mapping and leaves no HUD behind to magnify. `tagpu_hud.c`
+> itself is untouched — the geometry, the ceiling, `tagpu_hud_to_engine`, the menu stage — and
+> everything below still describes what it computes. It was never a play default, so nothing
+> shipped changes; the pass that consumed it is what has to come back.
 
 The in-game HUD magnified inside the player's own Screen Size, over a world the engine goes on
 drawing exactly as it always did — so Screen Size and HUD size are two dials rather than two
@@ -10721,14 +10738,21 @@ already decides per draw, against a word that only a live lane sets:
 | the opaque and nano rasterise (`0x459830`, `0x459C70`) | `tagpu_posedraw_live()` | the posed program has linked (`s_state == 1`) and Vulkan does not own the present |
 | the pre-shadow composite wipe (`0x459338`, `0x45958C`, `0x4594DB`) | the same, plus the classifier's own target test | as above |
 | `buildfx` (`0x458DD0`) | `tagpu_native_owns_obj` | `s_armed == 1`, written **only** in `tagpu_native_frame` |
-| `terrown`, `featown`, `fxown`, `markown`, `cursown` | a `volatile unsigned char` the stub compares | `set_skip(ours-live)` from the pass that paints, with a watchdog |
+| `terrown`, `featown`, `fxown`, `markown` | a `volatile unsigned char` the stub compares | `set_skip(ours-live)` from the pass that paints, with a watchdog. **`cursown` was the fifth and is deleted** (§2.81); **none of the four is a play default since 2026-09-20**, because a suppressed engine pass holes the reference frame |
 | **the structure-shadow pair** (`0x4592BF`, `0x459522`) | a `volatile unsigned char` (`g_ssSkip`) the stub compares | `g_ssSkip = (g_ssTerr \|\| g_ssPass) && g_sshadow`. **`g_ssTerr`** is raised by `tagpu_terrown_set_skip` *before* it publishes its own skip byte — an ordering, so no draw can key-fill under a lowered gate. **`g_ssPass`** is `s_armed == 1 && gl_draws && s_ssSuppress`, published once per frame by the unit pass, and is the half the 8-frame watchdog releases |
 
 And **every one of those answers is produced inside `tagpu_overlay_draw`**, whose only callers
 are `render_ogl.c:1632` and `render_vk.c:232`. `render_gdi.c` contains no `tagpu_` call at all.
 So on `renderer=gdi` every gated suppression stands down by itself, and the one flip did not:
-`tagpu_owndraw.on` is a play default (`tagpu_opt.c`, target `all`), so on the lane this project
+`tagpu_owndraw.on` was a play default (`tagpu_opt.c`, target `all`), so on the lane this project
 calls the stock reference, **every building lost its slant shadow and nothing drew one**.
+
+> **AND THE DEFAULT ITSELF IS GONE SINCE 2026-09-20** (§2.81). `tagpu_owndraw.on` left `s_defs[]`
+> with the other `*own` levers, and `tagpu_owndraw_init` begins
+> `if (!tagpu_opt_on("tagpu_owndraw.on")) return;` — so unarmed it installs nothing at all: not
+> the two rasteriser detours, not `buildfx`, not the three completed-unit shadow sites, not the
+> structure-shadow pair. The detour below is still the right fix and is what makes the lever safe
+> to arm; it is no longer the only thing standing between the gdi lane and a missing shadow.
 
 **The shape of the fix.** The stub is the same shape the other suppressors' stubs have:
 
@@ -14405,133 +14429,163 @@ makes this the moment to write the count down rather than let the next session f
 **It is an input to 11-6's exit condition**: a gate whose title is "the OpenGL lane goes" that
 leaves 168 present-tense references to the deleted lane has not finished.
 
-### 2.81 The clean cut — the engine stops being a layer and becomes the reference — `tagpu_purevk.on`
+### 2.81 The clean cut — engine compositing is deleted, not levered
 
-**The rule, and it is a rule rather than a setting: with `tagpu_purevk.on` present, no pixel on
-the presented frame originates from an OBSERVATION of the engine.** What draws is our own world
-passes and nothing else. The engine goes on rasterising its whole frame into its own 8-bit
-surface, `tagpu_surf_take` goes on capturing it, `tagpu_vk_surf_prepare` goes on uploading it —
-into an image that is **never sampled for presentation**. It is the golden source now, not
-content. Off by default, off the `tagpu_opt.c` defaults table, polled live on the seam's own
-250 ms cadence.
+**The rule, and it is the code rather than a setting: no pixel on the presented frame originates
+from an OBSERVATION of the engine, and there is no way to ask for one.** `tagpu_purevk.on` existed
+for a day. The owner's ruling was *"I want pixel compositing with vulkan to be permanently
+disabled, not switch or option in engine to bring it back. The code must be a 100 % gone. We only
+compare against the second buffer containing the original software rasterizer output"*, with one
+condition: *"as long as the original software rasterized is still reachable in another
+buffer/texture so that it can be used for reference."* The lever and every branch that read it are
+gone with the code they gated.
 
-**Why cut before fixing.** While any engine pixel can reach the screen, every artifact needs a
-prior question answered first — *is this ours or theirs?* — and in the week before this landing
-that question was answered wrongly three times (the teal tree shadows, the green vent smoke, the
-"missing" units were all one confusion). After the cut the screen is exactly what our own passes
-drew, so anything missing is missing **visibly** and is a work item rather than a mystery.
+**Why cut at all.** While any engine pixel can reach the screen, every artifact needs a prior
+question answered first — *is this ours or theirs?* — and in the week before this landing that
+question was answered wrongly three times (the teal tree shadows, the green vent smoke and the
+"missing" units were all one confusion). The screen is now exactly what our own passes drew, so
+anything missing is missing **visibly** and is a work item rather than a mystery.
 
-#### The two sites, and the two that deliberately keep running
+#### What was deleted
 
-| site | under the cut | why |
+Three paths carried engine pixels to the frame. All three are removed at the source:
+
+| path | what went | what is left |
 |---|---|---|
-| `tagpu_vk_surf_record` | **not called** — `draw_surf` is zeroed after `prepare` | TA's composed frame stops being a layer |
-| `tagpu_vk_gui_record` | **not called** — `draw_gui` and `ab_gui` zeroed after `prepare` | no replayed engine op reaches the frame |
-| `uSurf` in `LAY_FS` | **unbound** — `tagpu_vk_gui.c` clears `engView`, the descriptor names `s_dumView` | the rule is about SAMPLING, not about one call site |
-| `tagpu_surf_take` + `tagpu_vk_surf_prepare` | **unchanged** | the reference texture fills every frame |
-| the GUI twin's op replay | **unchanged** | the twin store must stay level with the op stream or it is worth nothing |
+| **TA's composed frame**, the frame's bottom layer | `tagpu_vk_surf_record` and its pipeline, descriptor sets, sampler, vertex and uniform buffers and quad; the fork's own `PASSTHROUGH_VERT_SHADER` + `PALETTE_FRAG_SHADER` pair and its generated SPIR-V | the upload. `tagpu_vk_surf.c` is **one phase** now — no `record`, and its header says so |
+| **the UI layer** | `tagpu_vk_gui.c` (2897 lines), `tagpu_gui_surf.c` (2518), seven shader programs, `TAGPU_GUIHAND` and the whole twin store | nothing. `tagpu_gui_hook.c`'s op capture survives |
+| **the marker pass's captured 8bpp layer** | `TAGPU_MK_TEX_LAYER`, `TAGPU_MARKLAYER`, and `markown`'s context-base swap (`layer_begin`/`layer_end`/`layer_clear`, the double-buffered scratch, `tagpu_mark.on=nocapture`) | nothing. Every other marker is re-derived from engine STATE and drawn as our own geometry |
 
-**Both passes' `prepare` still runs, and that is the design rather than an oversight.** Standing
-either down would have taken the reference with it — which is the one thing the cut exists to
-keep — and would have left the twin store permanently and silently behind the engine's, which is
-the state every other refusal in `tagpu_vk_gui.c` goes out of its way to avoid. The cut takes
-away the DRAW and nothing else.
+`tagpu_cursown` went with them — four engine call-site redirects that skipped the engine's cursor
+BLIT while ours was on screen. Ours was the composite, so the byte they compare could only ever be
+0 for the life of a session, and four patches that can never fire are worse than none.
+`render_vk.c` publishes `tagpu_cursown_publish(0)`… and then that call went too, with the module.
 
-`TAGPU_VKPASS.pureVk` carries the poll's answer to the passes, set once per frame beside
-`s_pass.frame`, so a frame cannot see two answers across a flip of the lever.
-`tagpu_vk_purevk()` publishes the same cached value to `render_vk.c` — render thread only, a
-plain int, for `tagpu_vk_ui_composited`'s reason exactly.
+**`1791a7e` is reverted.** It stole two branches (`0x46A784`, `0x46A7E0`) to stop the engine's
+feature-shadow ALP blend `0x4B8500` landing as teal against terrown's key fill — a defect of the
+COMPOSITE, measured at 40 861 px. Under the cut no composite exists, and with `terrown` off the
+play defaults there is no key fill either. Measured before reverting: the presented frame **0 teal
+and 0 raw key**, the golden source 1280 teal and 625 049 raw key. `tagpu_detour_branch`, the third
+stub shape written for it, went back out with it.
 
-#### What it measured — `feat-forest`, Two Continents, `--los 0`, 1024×768, `e5a`
+#### The UI layer took our own work with it, and that is a property of how it was built
 
-Taken by flipping the lever **live in one run**, so the difference is the cut and nothing else.
-Noise floor first: three grabs with the cut off differ by 498 and 339 px, every one of them in
-one 24×49 box round the fixture's walking commander, and **0 px in all three HUD regions**.
+`LAY_FS` sampled the engine's replayed twin **and** G17a's device-resolution sharp layer through
+ONE quad and one fragment stage. The engine's half could not be removed from that draw and ours
+left in, so the cut took both. What the player has now is **no HUD, no sidebar, no minimap, no
+cursor, no dialogs and no shell** — stated here rather than left to be found. The UI returns as a
+pass of ours.
 
-| region | px changed by the cut | of |
-|---|---|---|
-| side panel `x<128` | **98 304** | 98 304 (100 %) |
-| top bar `y<32` | **28 672** | 28 672 (100 %) |
-| bottom bar `y≥h−32` | **28 672** | 28 672 (100 %) |
-| world viewport | **1 857** | 630 784 (0.3 %) |
+**`tagpu_gui_hook.c` survives, and for two reasons.** Capture is not compositing: the op stream it
+records is the engine's UI stated *semantically* — this sprite, that string, at these coordinates
+— which is what a native UI pass will be built from, and it is the same class as
+`tagpu_surf_take`'s reference frame. And `before_flip` is **the only host of
+`tagpu_triggers_frame`**, so deleting the file takes every `tacli` verb with it. What it no longer
+does is publish: with no consumer, `tagpu_gui.on` is a census-and-diagnostics trigger and is off
+the defaults table.
 
-The census goes `gui=1` → `gui=0` on the flip and stays there. **The round trip is exact**: the
-lever removed restores the HUD to the same 157 496 px, and re-armed gives a frame **byte-identical**
-to the first cut one (0 px of 786 432).
+#### The reference: a buffer and a texture, drawn nowhere
 
-**The world viewport's 1 857 px are nine clusters and every one of them is accounted for**, which
-is what makes this an inventory rather than a number:
+`tagpu_surf_take` captures TA's composed frame on the CPU; `tagpu_vk_surf_prepare` uploads it into
+this frame slot's R8 index image with its 256×1 palette beside it and leaves both in
+`SHADER_READ_ONLY_OPTIMAL`. `tagpu_vk_surf_engine_view(slot, &w, &h)` hands the view out — with no
+sampler, because the module owns none since the cut took its draw; a consumer brings its own, and
+it must be NEAREST (half way between index 7 and index 8 is index 7.5, which is in no palette
+entry and belongs to neither neighbour).
 
-* **357 px** at x[832..851] y[369..405] — the walking commander, i.e. the noise floor.
-* **1 388 px** in seven clusters of 35×5 and 67×6, in `(83,223,79)` green over `(87,231,191)`
-  teal — **the health bars**, which on this rig came from the twin's `PK_BAR` ops (`mark.on` is
-  not armed on `e5a`; with `mark.on`/`markown.on` our own marker pass draws them).
-* **112 px** at x[512..521] y[384..403], exactly 10×20 at the screen centre — **the cursor**,
-  which is `tagpu_cursown`'s own 10×20 footprint.
+**It has no consumer in the tree, deliberately.** The one it had was the composite. The upload
+costs one `memcpy` and one `vkCmdCopyBufferToImage` per **changed** frame — the serial gate means
+a still screen pays neither — and the alternative is that the next comparison starts with a
+rebuild rather than a call.
 
-Nothing else in the world went. Terrain, water, every tree, the units, the structures and the
-lab wreck are all still there, because all of them were already ours.
+#### The `*own` levers came off the play defaults, and that is what makes the reference worth keeping
 
-#### The blind shell works, and it is now measured rather than assumed
+This is the correction to the plan's §6, which calls the engine *"a complete, correct reference
+implementation of this game's look, running in the same process, on the same frame, with the same
+state."* **In the shipped arm set it was not, and the hole was exactly where you would most want
+to check yourself.** `tagpu_terrown`, `tagpu_featown`, `tagpu_fxown`, `tagpu_markown` and
+`tagpu_owndraw` stop the ENGINE drawing so ours can stand in its place — right while we composited
+over its frame, and afterwards only a way to hole the golden source. The engine's own counters
+said it in one line each:
 
-The plan named this the one untested assumption worth spending the first ten minutes on: with
-menus undrawn, can the harness still get into a game? **Yes, and the whole path runs.**
-`tacli scenario load e5a feat-forest --restart --los 0` under the cut clicked `SINGLE`,
-`Skirmish` and `Start`, set both toggles, reached a live world and applied all ten entities —
-while the census read **`0 pass(es) drew`** for every frame of the shell. Nothing was on the
-screen and it did not matter, because `tacli ui` reads the engine's own gadget array and clicks
-at the coordinates that array reports; `_scn_wait_live` reads `tagpu.log`. No part of the route
-reads a pixel.
-
-#### THE GOLDEN SOURCE IS NOT THE COMPLETE FRAME THE PLAN ASSUMED — and this is the surprise
-
-The plan's §6 says the engine is *"a complete, correct reference implementation of this game's
-look, running in the same process, on the same frame, with the same state."* **In the shipped
-arm set it is not, and the hole is exactly where you would most want to check yourself.** A
-`tacli shot` taken under the cut shows the HUD, the minimap, the units, their health bars and the
-cursor — and a viewport that is a **flat cyan fill**, palette index 254, with **no terrain and no
-trees**.
-
-The cause is the `*own` levers, and the engine's own counters say it in one line each:
-
-* `TERROWN skip=1 filled=1` — `tagpu_terrown` skips the engine's terrain pass *and* its fog
-  overlay and fills the viewport with the key instead.
-* `FEATOWN skip=1` — `tagpu_featown` skips the engine's feature draw, so no tree is rasterised.
+* `TERROWN skip=1 filled=1` — the engine's terrain pass *and* its fog overlay skipped, the
+  viewport filled with palette index 254 instead.
+* `FEATOWN skip=1` — no tree rasterised.
 * `OWND target=all skipped=0 passed=5311` — the unit rasteriser is **not** skipped, which is why
-  the units *are* in the reference. `tagpu_posedraw_live()` is a hardcoded `return 0`, so the
-  engine draws every unit every frame into pixels that were already being discarded.
+  units *were* in the reference. `tagpu_posedraw_live()` is a hardcoded `return 0`, so the engine
+  draws every unit every frame into pixels that were already being discarded.
 
-**So completing the reference is a lever change for features and a CODE change for terrain.**
-Dropping `featown.on` is enough for the trees. Terrain refuses: `tagpu_terr.c:1260` is
-`own = !s_passive && !s_over && tagpu_terrown_installed()`, and the comment above it gives the
-reason — *"our terrain is opaque and covers the whole viewport, so any other time it would hide
-the health bars, wireframes, build cursor and chat that the composite's key test exists to let
-through."* **That premise is exactly what the clean cut removes**: under the cut there is no
-composite and no key test, so the gate is guarding against a frame that can no longer happen.
-Nothing here changes it — this landing is the cut — but no diff against the reference should be
-trusted for terrain or features until it is.
+A `tacli shot` then showed the HUD, the minimap, the units, their bars and the cursor over a
+**flat cyan viewport with no terrain and no trees** — not the picture the 1997 rasteriser draws,
+but the picture it draws with five of its passes removed.
 
-The second caveat carried over from the plan is unchanged and still open: `tagpu_surf_take` runs
-at `tagpu_overlay.c:234` on the **render thread**, sequenced against nothing, so the reference may
-not always hold a finished frame. A game-thread hook where the frame is complete by construction
-already exists — the packet publisher's `after_draw` observer on `DrawGameScreen 0x468CF0`,
-installed at `tagpu_packet_pub.c:2476`. That is where the capture belongs before anyone trusts a
-diff against it. It does not bear on the cut.
+**They are not deleted.** Arm `tagpu_terrown.on` and the engine's terrain stops exactly as before.
+The CPU they save is real and is the whole of what they buy now; it is not the default, because a
+golden source with holes in it is the more expensive mistake.
+
+**AND IT CLOSED A GAP NOBODY WAS AIMING AT: `renderer=gdi` IS STOCK AGAIN.** `tagpu_owndraw.on`
+was the one suppression with no runtime gate — two structure-shadow `je`s flipped to `jmp`s at
+`DllMain`, which is why landing 10b replaced them with detoured branches behind `g_ssSkip`
+(§2.63). That fix made the flip safe; taking the lever off the defaults means it
+does not happen at all. `tagpu_owndraw_init` opens
+`if (!tagpu_opt_on("tagpu_owndraw.on")) return;`, so at the shipped defaults **the module writes
+no byte anywhere**: not the two rasteriser detours at `0x459830`/`0x459C70`, not `buildfx` at
+`0x458DD0`, not the three completed-unit shadow sites, not the structure-shadow pair. Whoever
+arms the lever gets all of it back, with 10b's gate under it.
+
+#### And the terrain pass's emit gate went with the composite
+
+`tagpu_terr_gather` refused to emit a single cell without `terrown` installed —
+`emit = own || s_over || wasFilled` — and the stated reason was the key test: *"our terrain is
+opaque and covers the whole viewport, so any other time it would hide the health bars, wireframes,
+build cursor and chat that the composite's key test exists to let through."* With `terrown` off
+the defaults that gate turned the ground to clear colour: the heartbeat read `grid=29x23 …
+cells=0`, so the 667-cell grid was walked every frame and not one quad came out of it. **Nothing is under us now**, so the gate is deleted; `own` stays and still asks whether to
+stop the *engine*, which is a question about the reference and the CPU rather than about what we
+draw. Census before: `3 pass(es) drew (terr=0 feat=1 unit=1 fx=1)`. After: `4 … (terr=1 …)`.
+
+#### What it measured
+
+`feat-forest`, Two Continents, `--los 0`, 1024×768, **the play defaults** (not
+`tagpu_defaults.off`). Three settled grabs of each, all three identical.
+
+| | |
+|---|---|
+| **the presented frame** | the engine's chrome — the top bar (22 528 px) and the sidebar (95 488) — is the seam's clear colour **exactly**, `0 px` of anything else. **0 teal and 0 raw key** anywhere in the 1024×768 frame. |
+| **the golden source** (`tacli shot`) | **0 raw key, 0 teal**, 170 distinct colours in the viewport and 59 in the sidebar: terrain, water, trees, units, health bars, minimap, resource bar and cursor. A complete 1997 frame. |
+
+Health: `viol=0 crcbad=0 trunc=0 overrun=0`, no `ErrorLog.txt`, sim ticking **30.00/s** at speed
+10, `applied 10 of 10, 0 failed`.
+
+**The blind shell works and is now measured twice.** The plan named this the one untested
+assumption worth spending the first ten minutes on: with menus undrawn, can the harness still get
+into a game? Yes, and the whole path runs — `tacli scenario load` clicked `SINGLE`, `Skirmish` and
+`Start`, set both toggles, reached a live world and applied all ten entities, with the census
+reading **`0 pass(es) drew`** for every frame of the shell. `tacli ui` reads the engine's own
+gadget array and clicks at the coordinates that array reports; `_scn_wait_live` reads `tagpu.log`.
+No part of the route reads a pixel.
 
 #### What the frame shows where nothing draws
 
-The lane's clear colour, which is **magenta** (`s_clear` = 1,0,1) unless `color=` in
-`tagpu_vk.on` says otherwise. The plan argued for black as the honest answer; magenta is the
-louder one and it is what the lane already had, so nothing was changed. An operator who wants
-black arms `tagpu_vk.on=color=0,0,0`.
+The lane's clear colour, which is **magenta** (`s_clear` = 1,0,1) unless `color=` in `tagpu_vk.on`
+says otherwise. The plan argued for black as the honest answer; magenta is the louder one and it
+is what the lane already had, so nothing was changed. An operator who wants black arms
+`tagpu_vk.on=color=0,0,0`.
 
-#### One counter's meaning changed, and both were corrected rather than left to mislead
+#### Still open, and the first one is a correctness bug in the instrument
 
-* `tagpu_cursown_note_held()` counts *"frames the engine's cursor was suppressed with nothing of
-  ours on screen"* — a defect when the cut is off, the **design** when it is on, and it would
-  have climbed on every frame of a cut session. `render_vk.c` no longer counts it under the cut.
-  The **publish** beside it is deliberately NOT gated: `tagpu_cursown_publish(0)` is exactly
-  right, because the engine's cursor must keep being drawn into the surface we are keeping.
-* The surf pass's heartbeat said *"N frame(s) drawn"* while counting `prepare`s. Under the cut it
-  reported thousands of draws, climbing, in the one configuration whose whole point is that the
-  pass draws nothing. It now reads *"N frame(s) readied"* and names the cut.
+* **`tagpu_surf_take` runs on the RENDER thread and nothing sequences it against the game
+  thread's draw** (`tagpu_overlay.c`), so the reference can hold a torn frame. A game-thread hook
+  where the frame is complete by construction already exists: the packet publisher's `after_draw`
+  observer on `DrawGameScreen 0x468CF0`, installed at `tagpu_packet_pub.c:2476`. **This must be
+  fixed before anyone trusts a pixel diff against the golden source.**
+* **The engine still rasterises a whole frame nobody sees**, and that is now deliberate twice
+  over: the reference needs it, and stopping it was always the last step. Nothing here measures
+  what it costs.
+* **Three contracts have a producer and no consumer** — named so they are not read as dead code:
+  `tagpu_vk_surf_engine_view` (above); `tagpu_gui_set_want_minimap` / `..._set_minimap_have`,
+  which still gate the packet publisher's 252×252 TNT minimap picture and its three live minimap
+  surfaces, so nothing asks and nothing is paid for; and `tagpu_gui_installed`.
+* **A build gate caught a file the deletion had left in `thread-split.allow`**
+  (`src/tagpu_cursown.c`), and two "clean builds" before it were a grep pattern that did not match
+  `Error 2` — the DLL under them was forty minutes old. Check the exit status, not the output.

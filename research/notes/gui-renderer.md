@@ -1,5 +1,15 @@
 # GL UI renderer — the plan for Phase E
 
+> **READ THIS FIRST — PHASE E's DRAWING HALF WAS DELETED 2026-09-20.** The clean cut removed
+> `tagpu_gui_surf.c`, `tagpu_vk_gui.c`, the twins, the sharp layer, the composite and their seven
+> shader programs: the engine's replayed UI twin and our own device-resolution layer reached the
+> screen through ONE quad, so removing the engine's half meant removing both
+> ([gpu-status](gpu-status.html) §2.81). The game has no UI on screen. **What survives is the
+> capture** — `tagpu_gui_hook.c`'s observers, the op stream and the census — and it survives
+> because the op stream is the engine's UI stated SEMANTICALLY, which is what the UI will be
+> rebuilt from. **Every engine fact on this page still holds and is the reason to keep it**; every
+> claim about a twin, a mirror, a layer or a composite is history.
+
 *The engine's software frame is UI only since G13b; this page is the plan for making the UI
 ours too — the side panel, the top and bottom bars, the minimap, chat and dialogs in game, and
 every screen of the shell outside it — drawn by OpenGL from the engine's own draw calls, with
@@ -3430,7 +3440,14 @@ without subtracting the hotspot). It does subtract it; see `exe-reverse-engineer
 in that cut established which site draws in play, and the counters offered as proof were behind a
 gate that could not have counted an in-play draw.
 
-### 24.1 The design that shipped: patch the blit `call`
+### 24.1 The design that shipped, and was deleted: patch the blit `call`
+
+> **DELETED 2026-09-20.** `tagpu_cursown.c` and its four patches are gone with the composite they
+> served ([gpu-status](gpu-status.html) §2.81). It suppressed the engine's cursor only while OURS
+> was on screen, and ours reached the screen only through the UI layer's one composite quad; with
+> that deleted the gate byte could only ever be 0. The engine draws its own cursor now, into its
+> own surface. **The design below is a record, and a good one to revive from** — the four blit
+> addresses, the same-length patch, the no-stolen-bytes argument and the measurement all stand.
 
 `tagpu_cursown.c`, the fourth own-the-draw module after terrown, featown and fxown, and the
 smallest. It patches **no function** — only the single `call CopyGafToContext 0x4B7F90` inside
