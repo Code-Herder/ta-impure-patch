@@ -1156,6 +1156,12 @@ that a count which grows is the plan catching up with the work.) The row was
        holds, the fix is an ORDERING and never a timing mitigation. **Not 11-5d's to make** —
        a cross-thread change belongs in a landing whose review is briefed on it. `preshadow`
        still wants its own question when that day comes.
+
+       **THE RACE ITSELF WAS MEASURED AND CLOSED 2026-09-20** ([gpu-status](gpu-status.html)
+       §2.82): 223 of 16 500 reads at that site came back torn, and the capture now runs on the
+       game thread at the publisher's `after_draw`. **That settles the LEAD, not this row's
+       symptom** — nothing ever connected the tear to the missing units, and this paragraph is
+       kept as the reasoning rather than as an answer.
      - **11-5e — the entry-point surface this row names. THREE LANDINGS, and the split was
        forced by a dependency the row had backwards** (written 2026-09-19 by 11-5e-1, which
        found it). The row said this part *ends at* `opengl_utils.c`. It cannot contain that
@@ -1786,7 +1792,14 @@ that a count which grows is the plan catching up with the work.) The row was
      frame it comes from the GUI pass's mirror hand-over, which `tagpu_surf.h` says was the only
      route TA's surface had before 4c.
 
-     **First measurement:** dump the snapshot's own bytes as a PPM in the frame `tacli shot`
+     **MEASURED AND CLOSED 2026-09-20** ([gpu-status](gpu-status.html) §2.82). The proposed
+     measurement is exactly the one that ran — the snapshot dumped as a PPM against `tacli
+     shot` — and the fix is the ORDERING this paragraph called for: the capture is on the game
+     thread, at the publisher's `after_draw`, and the two files are **0 px apart**. The tear was
+     real (223 of 16 500 reads at the old site). **Whether it was THIS row's symptom is still
+     unestablished**, and the text below is kept as the reasoning, not as a finding.
+
+     **The original plan, for the record:** dump the snapshot's own bytes as a PPM in the frame `tacli shot`
      fires and diff the two. **If it holds, the fix is an ORDERING** — snapshot where the shot
      does, at the flip on the game thread, where the frame is finished by construction, and
      publish it for the render thread — **never a timing mitigation** (`CLAUDE.md`, *Fixes must
@@ -2707,7 +2720,9 @@ skipped. `tagpu_mark.on=passive` is the arm that closes it.
 
 ### What the reference is
 
-`tagpu_surf_take` still captures TA's composed frame on the render thread; `tagpu_vk_surf.c`
+`tagpu_surf_capture` takes TA's composed frame **on the GAME thread since 2026-09-20**
+([gpu-status](gpu-status.html) §2.82 — the cut left this on the render thread and said so, and
+the tear it warned about measured 1.35 % of reads); `tagpu_vk_surf.c`
 still uploads it per frame slot as an R8 index image with its palette beside it, left in
 `SHADER_READ_ONLY_OPTIMAL`. `tagpu_vk_surf_engine_view(slot, &w, &h)` hands the view out, with no
 sampler — a consumer brings its own, and it must be NEAREST.
@@ -2775,23 +2790,25 @@ byte patches for a picture nobody sees.
 
 Stated so the next session does not look for it: it does not stop the engine rasterising (that is
 still the last step, and the reference is now the reason as well as the obstacle), it does not
-move `tagpu_surf_take` to the game thread, and it draws nothing back.
+move the capture to the game thread, and it draws nothing back.
 
-**`tagpu_surf_take` is still on the render thread and nothing sequences it against the game
-thread's draw**, so the capture can land mid-frame and the reference be a torn picture. The
-landing review pinned the mechanism rather than leaving it a worry: the function holds
-`g_ddraw.cs`, but that section serialises `dds_Flip`'s pointer swap and `dds_SetPalette` and
-nothing else, while TA rasterises into `primary->surface` through a Lock/Unlock pair that enters
-no section at all. **That is a lifetime argument for the POINTER and never a bound on the
-BYTES.** The failing interleaving is concrete: the render thread reaches the row loop while the
-game thread is inside `DrawGameScreen` between its terrain blit and its side-panel blit; the copy
-takes new terrain over last frame's panel, `diff` is true, the serial advances, and
-`tagpu_vk_surf_prepare` uploads the torn picture as the golden source with nothing marking it.
+**THE CAPTURE'S THREAD WAS FIXED IN A LANDING OF ITS OWN, 2026-09-20** — this paragraph is the
+cut's own statement of the bug, kept because the reasoning is the fix's and the numbers are now
+in [gpu-status](gpu-status.html) §2.82. What the cut left standing: the capture ran on the RENDER
+thread with nothing sequencing it against the game thread's draw, holding `g_ddraw.cs` — a section
+that serialises `dds_Flip`'s pointer swap and `dds_SetPalette` and nothing else, while TA
+rasterises into `primary->surface` through a Lock/Unlock pair that enters no section at all.
+**A lifetime argument for the POINTER and never a bound on the BYTES**, so the copy could take new
+terrain over last frame's panel, advance the serial, and upload a torn picture as the golden source
+with nothing marking it.
 
-The invariant has to be an ORDERING and the hook it wants exists: the packet publisher's
-`after_draw` observer on `DrawGameScreen 0x468CF0` (`tagpu_packet_pub.c`), where the frame is
-complete on the thread that drew it. **This must be fixed before anyone trusts a pixel diff
-against the golden source.**
+**It was not only a worry: 223 of 16 500 reads at that site came back torn, 1.35 %**, measured by
+a probe that did the read twice from where the copy used to run. The invariant is an ORDERING and
+the hook already existed: the packet publisher's `after_draw` observer on
+`DrawGameScreen 0x468CF0`, where the frame is complete on the thread that drew it — and where the
+packet our passes render from is published in the same call, so the reference and the state are the
+same engine frame. The shell, which never calls `DrawGameScreen`, has no golden source; `tacli
+shot` is the answer there.
 
 **Two more things the cut does not do, both named by the review and neither its doing.** No
 structure draws its slant shadow on this lane — landing 11-2 deleted the native pass's GL tail

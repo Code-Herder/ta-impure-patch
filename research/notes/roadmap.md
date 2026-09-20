@@ -3428,7 +3428,7 @@ marker pass's captured 8bpp layer with `markown`'s context-base swap, seven shad
 `tagpu_cursown` are **deleted** — **7 169 lines of source removed against 581 added** (plus 1 363 lines of
 generated SPIR-V headers) and four engine byte patches; `1791a7e`'s two more
 are reverted with them, the teal they cured being a defect of the composite. What is kept is the
-upload: `tagpu_surf_take` and a one-phase `tagpu_vk_surf.c` put the engine's frame on the device
+upload: `tagpu_surf_capture` and a one-phase `tagpu_vk_surf.c` put the engine's frame on the device
 as an R8 reference texture that nothing samples, reachable through
 `tagpu_vk_surf_engine_view`. **The `*own` levers came off the play defaults in the same landing**,
 because they hole that reference where we have taken over — `TERROWN skip=1 filled=1` and
@@ -3449,15 +3449,16 @@ drives a blind shell** — the whole `scenario load` route ran to a live world w
 reading `0 pass(es) drew` throughout, because `tacli ui` reads the gadget array and never a
 pixel. **What the player loses, stated rather than left to be found: no HUD, no sidebar, no
 minimap, no cursor, no dialogs and no shell.** The UI returns as a pass of ours, built from the op
-stream `tagpu_gui_hook.c` still captures. **Still open, and the review sharpened the first of them.** `tagpu_surf_take` runs on the render
-thread sequenced against nothing, so the reference can be torn: it holds `g_ddraw.cs`, but that
-section serialises `dds_Flip`'s pointer swap and `dds_SetPalette` and nothing else, while TA
-rasterises into the same surface through a Lock/Unlock pair that enters no section — a lifetime
-argument for the pointer, never a bound on the bytes. A capture that lands between the engine's
-terrain blit and its side-panel blit uploads new terrain over last frame's panel, bumps the
-serial and says nothing. The invariant would have to be an ORDERING: capture on the game thread
-at the publisher's `after_draw` on `0x468CF0`. **Fix that before trusting any pixel diff against
-the reference.** Also open: no structure draws its slant shadow on this lane — landing 11-2 took
+stream `tagpu_gui_hook.c` still captures. **The reference's own tear is CLOSED in a landing of its own, 2026-09-20** ([GPU
+status](gpu-status.html) §2.82). The cut left the capture on the render thread sequenced against
+nothing — it held `g_ddraw.cs`, a lifetime argument for the pointer and never a bound on the
+bytes — and the tear was real: **223 of 16 500 reads at that site came back torn, 1.35 %**,
+measured by a probe that read the primary twice from where the copy used to run. It runs on the
+game thread now, at the publisher's `after_draw` on `0x468CF0`, past the flip and in the same call
+that publishes the packet, so the reference and the state our passes render are the same engine
+frame; the same double read there is 0 of 786 432 on every check. `tagpu_surfdump.on` is the
+oracle. **The shell has no golden source** — it never calls `DrawGameScreen` — and `tacli shot` is
+the answer there. Also open: no structure draws its slant shadow on this lane — landing 11-2 took
 the draw with the GL tail, which is older than the cut and true on `main`; and the UI op
 PUBLISHER is unreachable (`g_gui_draw` has no writer), so `tagpu_gui.on` buys the leaves and the
 census and nothing else. And the shadow half is still escalation

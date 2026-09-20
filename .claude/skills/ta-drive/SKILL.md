@@ -2324,7 +2324,7 @@ counters are not printed on gdi at all.
 **NOTHING THE ENGINE DREW REACHES THE SCREEN, AND THERE IS NO LEVER.** `tagpu_purevk.on` existed
 for one day and is gone with the code it gated. TA's composed 8-bit frame is not a layer, the UI
 twin's composite does not exist, and the marker pass's captured 8bpp layer does not exist. The
-engine goes on rasterising and `tagpu_surf_take` goes on capturing, so its surface is kept as the
+engine goes on rasterising and `tagpu_surf_capture` goes on capturing, so its surface is kept as the
 **golden source** to check our own passes against.
 
 **What you see instead of the HUD is the lane's clear colour, which is magenta**
@@ -2367,9 +2367,23 @@ Four things to know before driving under it:
   still save the CPU** — arm them for a frame-time measurement, never for a comparison. Note
   `markown` installs its detours at DLL ATTACH, so writing its file to a running instance opens
   nothing.
-- **The reference capture is taken on the RENDER thread** (`tagpu_overlay.c`), sequenced against
-  nothing, so it may not hold a finished frame. **Fine for looking; not yet an oracle** — the
-  game-thread hook it wants is the packet publisher's `after_draw` on `DrawGameScreen 0x468CF0`.
+- **The reference capture is an ORACLE since 2026-09-20** (gpu-status §2.82). It runs on the
+  GAME thread, from the packet publisher's `after_draw` on `DrawGameScreen 0x468CF0` — past the
+  flip, so the frame is finished by construction — and in the same call that publishes the packet
+  our passes render from, so the reference and the state are the same engine frame. It used to run
+  on the render thread sequenced against nothing, and that was not theoretical: **223 of 16 500
+  reads at the old site came back torn**. Two consequences for driving:
+  - **`tacli arm <i> surfdump.on`** is the one-shot oracle. It writes `tagpu_surf.ppm` (the golden
+    source resolved through its own palette) and logs `surf: re-read check at draw N: 0 byte(s) of
+    M differ` — the game thread reading the primary twice at the capture site. **That number must
+    be 0**, with the game in motion; anything else means the site is wrong. On a settled paused
+    scene the PPM is **0 px** from `tacli shot`.
+  - **THERE IS NO GOLDEN SOURCE IN THE SHELL, and none on `renderer=gdi`.** The shell never calls
+    `DrawGameScreen`, and gdi makes no `tagpu_` call, so nothing asks and nothing is captured —
+    `tacli shot` is the answer in both cases and is unchanged. `surf: golden source WxH on the
+    GAME thread -- captured=… unchanged=… refused=0 …` every 300 captures is how you see it
+    running; `refused` must be 0, and `us avg=` is what it costs the game thread (55–58 µs at
+    1024x768).
 
 **How to check "no engine pixel reached the screen"**, which is the measurement this cut has to
 keep passing. Grab the window and test the engine's own chrome region, which our passes never

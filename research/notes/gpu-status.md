@@ -12077,6 +12077,10 @@ a property of the design, and fixable. Restated:
 Not established, and this landing does not guess. The lead comes from reading rather than
 measuring, and it fits every row above:
 
+**[The lead below was MEASURED AND CLOSED 2026-09-20 — §2.82. The race was real (223 of 16 500
+reads torn at that site) and the capture now runs on the game thread. Whether it was the
+mechanism of THIS section's symptom was never established, so this stays a lead.]**
+
 `tagpu_surf_take` (`tagpu_surf.c:32`, called from `tagpu_overlay_draw`) copies
 `g_ddraw.primary->surface` **on the render thread**. `tacli shot` reads the same object via
 `ss_shot_service(g_ddraw.primary)` (`tagpu_overlay.c:499`) at the **entry of the engine's flip,
@@ -14479,14 +14483,15 @@ pass of ours.
 **`tagpu_gui_hook.c` survives, and for two reasons.** Capture is not compositing: the op stream it
 records is the engine's UI stated *semantically* — this sprite, that string, at these coordinates
 — which is what a native UI pass will be built from, and it is the same class as
-`tagpu_surf_take`'s reference frame. And `before_flip` is **the only host of
+the reference frame. And `before_flip` is **the only host of
 `tagpu_triggers_frame`**, so deleting the file takes every `tacli` verb with it. What it no longer
 does is publish: with no consumer, `tagpu_gui.on` is a census-and-diagnostics trigger and is off
 the defaults table.
 
 #### The reference: a buffer and a texture, drawn nowhere
 
-`tagpu_surf_take` captures TA's composed frame on the CPU; `tagpu_vk_surf_prepare` uploads it into
+`tagpu_surf_capture` takes TA's composed frame on the CPU — **on the GAME thread, at the one point
+in the process where it is finished, since 2026-09-20 (§2.82)**; `tagpu_vk_surf_prepare` uploads it into
 this frame slot's R8 index image with its 256×1 palette beside it and leaves both in
 `SHADER_READ_ONLY_OPTIMAL`. `tagpu_vk_surf_engine_view(slot, &w, &h)` hands the view out — with no
 sampler, because the module owns none since the cut took its draw; a consumer brings its own, and
@@ -14636,11 +14641,12 @@ is what the lane already had, so nothing was changed. An operator who wants blac
 
 #### Still open, and the first one is a correctness bug in the instrument
 
-* **`tagpu_surf_take` runs on the RENDER thread and nothing sequences it against the game
-  thread's draw** (`tagpu_overlay.c`), so the reference can hold a torn frame. A game-thread hook
-  where the frame is complete by construction already exists: the packet publisher's `after_draw`
-  observer on `DrawGameScreen 0x468CF0`, installed at `tagpu_packet_pub.c:2476`. **This must be
-  fixed before anyone trusts a pixel diff against the golden source.**
+* ~~**The capture runs on the RENDER thread and nothing sequences it against the game thread's
+  draw**, so the reference can hold a torn frame.~~ **FIXED 2026-09-20, and the tear it warned
+  about was real: 223 of 16 500 reads at that site came back torn (1.35 %).** The copy runs on the
+  game thread now, from the packet publisher's `after_draw` observer on `DrawGameScreen 0x468CF0`,
+  past the flip — §2.82 has the mechanism, the ownership rule the hand-over needs, and the
+  numbers. What that hook does NOT cover is the shell, which never calls `DrawGameScreen`.
 * **The engine still rasterises a whole frame nobody sees**, and that is now deliberate twice
   over: the reference needs it, and stopping it was always the last step. Nothing here measures
   what it costs.
@@ -14651,3 +14657,107 @@ is what the lane already had, so nothing was changed. An operator who wants blac
 * **A build gate caught a file the deletion had left in `thread-split.allow`**
   (`src/tagpu_cursown.c`), and two "clean builds" before it were a grep pattern that did not match
   `Error 2` — the DLL under them was forty minutes old. Check the exit status, not the output.
+
+### 2.82 The golden source moves to the thread that draws it — and the old site's tear, measured
+
+**The clean cut (§2.81) left one correctness bug in its own instrument, and named it: the
+reference capture ran on the RENDER thread with nothing sequencing it against the game thread's
+draw.** That is what this landing fixes. The argument for the old site was `g_ddraw.cs`, and that
+section is a LIFETIME argument for the POINTER — it serialises `dds_Flip`'s swap and
+`dds_SetPalette` — never a bound on the BYTES: `dds_Lock` takes `This->cs` only under
+`g_config.lock_surfaces` and never `g_ddraw.cs` (`ddsurface.c:1014`), so TA rasterises into
+`primary->surface`, and `FlipOffscreenToPrimary 0x4C63A0` copies the engine's offscreen onto it,
+entirely outside it.
+
+#### The tear was real, and here is the number
+
+**223 of 16 500 reads at the old site came back torn — 1.35 %, 198 704 bytes in all.** Measured
+2026-09-20 with a temporary probe (removed before the landing) that read the primary twice from
+`tagpu_surf_sync`, i.e. exactly where the copy used to run, holding `g_ddraw.cs` exactly as the
+old code held it, on `feat-forest` at 1024×768 with two units patrolling. The same double read at
+the NEW site answered **0 bytes of 786 432 on every one of 14 checks**, across four runs, with the
+scene in motion.
+
+**A 20-sample version of that probe found nothing, and reporting it would have been wrong.** The
+engine is inside the flip for a few per cent of wall time and a probe's window is a few hundred
+microseconds, so twenty spaced samples expect well under one hit. Absence of an observation is not
+absence of a race — the continuous probe is what turned "the section is not a bound" from an
+argument into a measurement. [The first run of this landing's verification did exactly that and
+had to be thrown away.]
+
+#### Where the copy runs now
+
+`tagpu_packet_pub.c`'s `after_draw` observer on `DrawGameScreen 0x468CF0`, on the in-play draw
+only, after the packet is published. The flip is called from inside that function at `0x46A3DB`,
+34 bytes before its `ret` at `0x46A3FD`, so at the observer's `after` the engine has finished
+writing the primary — and the thread that writes it is the one running the copy. No lock is needed
+for the bytes and none is claimed; `g_ddraw.cs` is still taken, now as the weaker of two arguments
+and for uniformity with every other reader of that object.
+
+**It also pairs the reference with the packet.** The same call publishes the state our passes
+render from, so the golden source and what our renderer renders are the same engine frame by
+construction — a stronger property than "untorn", and the reason this hook was chosen over the
+flip's own entry, which would give the previous frame (complete, but one behind).
+
+**And it closes a second hole nobody had named.** The palette used to be read BEFORE the critical
+section, from `tagpu_pal.c` — a module whose every entry point is render-thread only, which the
+old call violated outright. It is now read from the primary's own palette object inside the same
+section as the bytes, so the indices and the table they resolve through cannot be a frame apart.
+
+#### The hand-over: two buffers and one ownership rule
+
+Moving the copy would only move the race unless the reader is ordered too. `tagpu_surf.h` carries
+the rule; the shape is: `hold` names the buffer the render thread owns, the game thread writes
+only `1 - hold`, `req`/`ack` counters make a capture *in flight* exactly while they differ, the
+render thread moves `hold` only when nothing is in flight, and each side's publish is a RELEASE
+store the other ACQUIREs. The two threads therefore never touch one buffer, and `hold` never moves
+under a capture. The game thread may READ the held buffer to compare bytes against the last
+snapshot — two readers is not a hazard.
+
+**That is also what bounds the cost.** A capture needs a request and a request needs a sync, so the
+game thread copies at most once per render frame and a render thread that is behind costs it
+nothing: `norequest=` counts the in-play draws that paid one acquire load and a compare.
+
+**The reference's lifetime is the level's.** `tagpu_surf_level_end` rides
+`tagpu_packet_pub_level_end`, so the snapshot cannot outlive the level it was taken from and be
+diffed against the next one. The render thread does the dropping, which keeps `have` to one writer,
+and it says so: `surf: the level ended - the golden source is dropped`.
+
+#### What it measured
+
+`feat-forest`, Two Continents, 1024×768, **the play defaults**, `renderer=vulkan`, census
+`5 pass(es) drew (terr=1 feat=1 unit=1 fx=1 mark=1)`.
+
+| | |
+|---|---|
+| the invariant | **0 byte(s) of 786 432** differ between two reads of the primary at the capture site — 14 of 14 checks, four runs, with two units patrolling |
+| the old site, same probe | **223 of 16 500 reads TORN, 198 704 bytes** |
+| the golden source against an independent read | **0 differing px of 786 432** against `tacli shot`, which reads the same primary from the other game-thread hook (`before_flip`, i.e. the previous completed frame), on a paused settled scene |
+| the picture | 190 distinct colours in the viewport, 92 in the sidebar, **0 raw key, 0 teal** — a complete 1997 frame |
+| cost on the game thread | **55–58 µs mean, 136–289 µs max** per capture, at 1024×768 — the row loop, the comparison against the previous snapshot and the palette together |
+| the gate | `captured=1800 unchanged=1576 refused=0 norequest=2944` — two thirds of in-play draws pay a load and a compare and nothing else |
+
+#### `tagpu_surfdump.on` — the oracle the reference did not have
+
+The golden source has no consumer in the tree, so there was no way to look at it and no way to
+check any claim about it. The lever is one shot, self-deleting, and answers both questions:
+`surf: re-read check at draw N: 0 byte(s) of M differ` from the game thread, and
+`tagpu_surf.ppm` — the snapshot resolved through its own palette — from the render thread. It is
+an oracle rather than instrumentation, which is why it stays.
+
+#### Still open, and what this does NOT do
+
+* **There is no golden source in the SHELL, and there cannot be at this hook.** The shell never
+  calls `DrawGameScreen` (`tagpu_packet_pub.c`, the cursor channel's "WHY NOT THE FLIP"), and the
+  only per-present site it does have — the cursor draw `0x4C67C0` — is *inside* the flip, where
+  the primary is mid-write. `tacli shot` is the answer there and is unchanged.
+* **On `renderer=gdi` nothing captures**, because `tagpu_surf_sync` runs from
+  `tagpu_overlay_draw` and that lane makes no `tagpu_` call. Nothing asks, so nothing is paid for;
+  the reference is the Vulkan lane's instrument.
+* **`markown` still holes the reference** — while our marker pass draws, the engine's bars,
+  digits, order markers and build cursor are skipped, and `tagpu_mark.on=passive` is the arm that
+  hands them back (§2.81). Unchanged by this landing and still the one hole the play defaults
+  leave.
+* **A reference the game thread has not refreshed goes stale rather than absent.** The `stamp`
+  field carries the in-play draw it was taken at so a comparison can say what it read; nothing
+  gates on it, and the level-end drop is what covers the case that matters.
