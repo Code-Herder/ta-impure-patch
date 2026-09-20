@@ -76,7 +76,7 @@ things remain from the original plan:
 
   | Half | Where it is | The gap |
   |---|---|---|
-  | Replacement-mesh slot in the DLL | `tagpu_hires.c` (glTF 2.0 loader) + `tagpu_hires_draw.c` (its own GL program) — `gamedir/hires/<defname>.glb` or `.gltf` renders instead of the 3DO, hot-reloaded on mtime. One static VBO per model, triangles sorted by material, one draw per material; per-pixel lighting against the engine's own light direction, normal maps through a derived TBN, metallic/roughness, mipmapped true colour. **Posed per piece from the engine's live COB state**, bound by glTF node name, so it walks, aims, recoils and honours `HIDE`. Shares the native pass's FBO, depth keys, scaffold, fog, waterline and silhouette shadow. **Proven end-to-end** (a 1577-tri 6-material Peewee, 20 of them in a fight vs engine-drawn AKs; the pose reconstructs the engine's own posed vertex buffer to 2e-5 model units) — [model import](model-import.html) | No skins, morph targets, glTF animation, sparse accessors or texture wrap modes (UVs clamp); PNG images only; 48 posable pieces. Team colour arrives as a `baseColorFactor` authored into the model by hand — the exemplar's `pw_team` and `pw_team_chest` materials carry ARM blue as a linear factor — and nothing drives it from the owning player. The order two simultaneous piece-turn axes compose in is a documented guess, and COB `MOVE` read zero in every sample |
+  | Replacement-mesh slot in the DLL — **DISABLED AND DELETED 2026-09-19 (landing 11 D3), on the owner's ruling: out of scope, implementation TODO. It had already been producing nothing for several landings; see §2.80. What follows is the design record.** | `tagpu_hires.c` (glTF 2.0 loader) + `tagpu_hires_draw.c` (its own GL program) — `gamedir/hires/<defname>.glb` or `.gltf` renders instead of the 3DO, hot-reloaded on mtime. One static VBO per model, triangles sorted by material, one draw per material; per-pixel lighting against the engine's own light direction, normal maps through a derived TBN, metallic/roughness, mipmapped true colour. **Posed per piece from the engine's live COB state**, bound by glTF node name, so it walks, aims, recoils and honours `HIDE`. Shares the native pass's FBO, depth keys, scaffold, fog, waterline and silhouette shadow. **Was proven end-to-end** (a 1577-tri 6-material Peewee, 20 of them in a fight vs engine-drawn AKs; the pose reconstructs the engine's own posed vertex buffer to 2e-5 model units) — [model import](model-import.html) | No skins, morph targets, glTF animation, sparse accessors or texture wrap modes (UVs clamp); PNG images only; 48 posable pieces. Team colour arrives as a `baseColorFactor` authored into the model by hand — the exemplar's `pw_team` and `pw_team_chest` materials carry ARM blue as a linear factor — and nothing drives it from the owning player. The order two simultaneous piece-turn axes compose in is a documented guess, and COB `MOVE` read zero in every sample |
   | glTF exporter | `tools/ta3do` — 3DO + GAF → glTF, standard views, `--undither` | on `main` since `f508124`. The **landed exemplar did not come out of it**: `units/pee-wee/armpw-detailed.glb` carries Blender's own `Khronos glTF Blender I/O` generator string and a `baseColorFactor` this tool never writes (it emits `pbrMetallicRoughness` with `metallicFactor`/`roughnessFactor` only). So the hand-authoring step between 3DO and shippable model is the unautomated half |
 
   So G11 is three concrete pieces of work, not a wiring job: **(a)** land the exporter and
@@ -9525,9 +9525,9 @@ means reimplementing selection, box-select, build placement and every cursor mod
 | Layer 8 and the `0x4FD588` particle class were never observed live (the latter is emitted by teleport and `0x472630`) | [Effects](effects.html) | a fixture that emits them |
 | The sim-side particle update walker's entry is not pinned | [Effects](effects.html) | nothing — only the DRAW is owned, by design |
 | Cloak polish (true alpha) | [Shadows & cloak](shadows-cloak.html) | a cloakable unit in a fixture |
-| **The hires stencil shadow is correct by construction but unproven on content.** `tagpu_hires_draw` got the same per-unit mark/blend as the 3DO path (G13n), because it blended `alpha 0.5` per fragment with depth writes off and a replacement mesh is denser than a 3DO. The only replacement mesh that exists is a Peewee, which is single-layer from above — the A/B (npass forced to 1 vs 2, `hires-peewee`, 10 frames each) shows the peak staying at 0.44–0.52 and no 0.25 mode either way, exactly as the stock Peewees were bit-identical across the 3DO fix. So the change is verified not to regress, and its benefit is unverified for want of a two-layer glb | `tagpu_hires_draw.c` | a replacement mesh with overlapping groups from above |
+| ~~**The hires stencil shadow is correct by construction but unproven on content.**~~ **MOOT since 11 D3 deleted the pass** (owner's ruling: glTF out of scope). `tagpu_hires_draw` got the same per-unit mark/blend as the 3DO path (G13n), because it blended `alpha 0.5` per fragment with depth writes off and a replacement mesh is denser than a 3DO. The only replacement mesh that exists is a Peewee, which is single-layer from above — the A/B (npass forced to 1 vs 2, `hires-peewee`, 10 frames each) shows the peak staying at 0.44–0.52 and no 0.25 mode either way, exactly as the stock Peewees were bit-identical across the 3DO fix. So the change is verified not to regress, and its benefit is unverified for want of a two-layer glb | `tagpu_hires_draw.c` | a replacement mesh with overlapping groups from above |
 | **A structure's slant shadow is not punched out by its own body at +5 px.** The engine erases the shadow where the body sprite sits 5 px right of itself (`0x4B9D70`), then draws the body at +0; we draw the shadow and cover it with the body at +0, so a strip up to 5 px wide along each building's right edge is shadowed where the engine shows ground | [Shadows & cloak](shadows-cloak.html) §"Structure shadows, owned" | a stencil pass — **the FBO carries a stencil since G13n**, so this is now cheap where it was not — or accept it |
-| A **replacement-mesh structure** casts every piece; the engine's raster takes only pieces with prim flag bit1 | `tagpu_hires_draw.c` `uSlant` | zeroing the shadow pose of the pieces whose engine prim lacks bit1 — no replacement structure exists yet to test it on |
+| ~~A **replacement-mesh structure** casts every piece~~ — **MOOT since 11 D3 deleted the pass**; recorded because a revival inherits it. The engine's raster takes only pieces with prim flag bit1 | `tagpu_hires_draw.c` `uSlant`, deleted | zeroing the shadow pose of the pieces whose engine prim lacks bit1 — no replacement structure ever existed to test it on |
 | A **nanoframe** casts nothing until complete; the engine drew the cached shadow of its finished pieces (teal under `terrown`) | `tagpu_native.c` (nano > 0 is not listed) | listing nanoframes shadow-only, pieces with bit1 |
 | **The structure-shadow flip is installed at attach and never undone**, like every code patch. Remove `tagpu_native.on` live under `owndraw all` and buildings lose their shadows along with their bodies (that state already draws no unit at all — *ta-drive*, "a stale owndraw.on is worse than none"); re-creating the file brings both back within 30 frames. With `writeback` armed beside `owndraw all` the engine's COMPLETED branch blits a real silhouette for a structure — teal under `terrown`, a silhouette instead of the slant without it | `tagpu_owndraw.c` | nothing for play; an A/B that needs the engine's cached shadow launches without `owndraw all` |
 | **Classic++ restored art is not exactly linear in the Gamma factor.** The restorer expands the indexed atlas through the palette the screen is shown with (§2.3f), so at a factor other than 1.0 the model sees brighter art than it was trained on. MEASURED 2026-09-09, Two Continents at factor 1.5 against `min(255, the factor-1.0 frame × 1.5)`: 88 % of the viewport differs, but by **more than 6 levels on 0.68 % of it**, max 19. The Classic (indexed) path is exact at every factor; this is the Classic++ lane only | `tagpu_pal.c`, §2.3f | restoring in the unscaled domain and applying the factor where each twin is *sampled* — five shaders in place of one palette, and it would also retire the repaint |
@@ -13775,7 +13775,7 @@ the first attempt ended up with a measurement that never touched the code the la
 for. The four gates bound drift between and within runs; none of them bounds a second player, and
 none of them notices that the thing under test was never exercised.
 
-### 2.80 Two features that were already dark, and the deletion that made them visible — landing 11 D1 and D2
+### 2.80 Two features that were already dark, and the deletion that made them visible — landing 11 D1, D2 and D3
 
 The gate's remaining work was filed as "delete four GL files". Surveying it after Decision 1
 found that **three of the four are not what the row assumed**, and one of the findings is not
@@ -13980,7 +13980,12 @@ them sufficient.**
 `tagpu_native.c`: the replacement-mesh branch (42 lines), `hires_pose`, `pmap_for`, `name_eq`,
 the `HPMAP` piece-to-primitive cache and its two statics, the `HPOSE_MAX` pose arena,
 `hunits[]`, `nhi` and its term in the emptiness test, the `hires` field and its writers, and
-`gfx` — whose only reader was that branch. `cache_gen_check` keeps its call site and loses its
+`gfx` — whose only reader was that branch. **`gy` was in exactly the same position and the first
+cut left it in**: its one reader was `h->shadowDy` inside the deleted branch, so it became a store
+nothing loads, which `-Wall` cannot say. The landing's review found it; it is gone now, and with
+it the `pu->ground_h` projection that fed it. Found beside it and deliberately NOT touched: `gnd`
+has no reader either, but it had none at D3's parent, so it is older than this deletion and is
+not this landing's to remove. `cache_gen_check` keeps its call site and loses its
 body's only subject: the level-change edge is still the right invalidation point for a
 template-keyed cache, so it stays written rather than being re-derived by whoever adds the next
 one.
@@ -13988,7 +13993,18 @@ one.
 **What is kept, and why each thing is not arbitrary.** `TAGPU_HMAXPIECE` is not about the
 loader — it sizes the per-piece uniform array in the shader the **Vulkan** lane still draws, so
 `inc/tagpu_hires.h` survives as that one constant and the reason, and changing it fails
-`tools/spirv-check.sh`. `tagpu_vk_hires.c` stays per Decision 1, because `tagpu_vk_shadow.c` and
+`tools/spirv-check.sh`.
+
+**AND FAILING `spirv-check` IS NOT ENOUGH, WHICH THE REVIEW CAUGHT.** The first draft said
+`tagpu_vk_hires.c` "sizes the matching block" from the macro. It does not: that block is the
+hand-copied literals `VS_SZ 2480` / `VS_PIECE 0` / `VS_GAME 2304`, and the macro appears there
+only as the bound on a `memcpy` into it. At 48 they agree exactly — 48 × 12 × 4 = 2304 =
+`VS_GAME − VS_PIECE`. Raise the macro to 64, regenerate the SPIR-V as the paragraph above
+instructs, and the bound admits `np = 64` while the destination is still 2 480 bytes: the copy
+writes 3 072 and runs off the end of `uPiece` into the projection uniforms. So the fix is not a
+better comment, it is **a bound**: `tagpu_vk_hires.c` now carries a compile-time assertion tying
+the two together, and a bump fails the build (`size of array … is negative`, naming the line)
+rather than the frame. Verified both ways — clean at 48, and the error above at 64. `tagpu_vk_hires.c` stays per Decision 1, because `tagpu_vk_shadow.c` and
 `tagpu_vk.c` call six of its entry points, and it inherits `TAGPU_HIHAND`, its three sub-types
 and `TAGPU_HI_MAXHAND` with the measurement written beside them. Its hand-over is a named
 file-local stub returning 0 — the shape D2 established.
@@ -14020,15 +14036,28 @@ cursor pixel and not the change. **Outside the minimap and that one pixel: 0 px 
 cross-build pairings.** The settled census is **749 452** on every arm, as it has been since
 11-5e-2c. Zero `VK_ERROR` / validation lines and exactly one `gui: layer ON` per arm.
 
-The one log difference between the builds is the one D3 predicts: the two `hires` lines
-(`hires draw: missing GL proc`, then the fall-back to the engine's own 3DO) appear **twice in
-each main arm and zero times in each branch arm**. Nothing else differs in kind.
+The one log difference between the builds is the one D3 predicts, and it is worth being exact
+about **which** lines, because the first draft of this paragraph named the wrong pair and so
+claimed more than the run showed. Each main arm logs two `hires` lines and each branch arm logs
+none:
+
+```
+hires: keeping the CPU vertex copy for a second lane - 0 model(s) re-read from file
+hires: armcom -> no replacement (looked for hires\<name>.glb / .gltf)
+```
+
+Those are the **LOADER** declining to find a replacement. `hires draw: missing GL proc` and the
+fall-back to the engine's own 3DO — the lines that prove the *draw* path dead — appear **zero
+times in all four D3 arms**, and once in each of D2's four. **This A/B did not exercise the draw
+path at all**: `one-unit` is an ARMCOM with no replacement mesh, so `tagpu_hires_draw_ready()`
+was never reached. The draw path's deadness rests on D2's `crowd-static` run, which did reach it,
+and on the static argument above — not on this measurement. Nothing else differs in kind.
 
 **The outlier grab, and what it actually was.** `brB`'s three grabs went 0 px between 1 and 3 and
 **97 092 px** between either of those and grab 2 — the rule added to `ta-drive` last landing
 (read gate 1 on the settled pair) applied, and this time the outlier was identified rather than
 set aside. Grab 2 is the same frame with **every tree missing**: the differing pixels are green in
-the settled grabs (mean RGB 15.8/95.3/65.7, 67 distinct colours) and the grey of the terrain
+the settled grabs (mean RGB 15.8/95.3/65.7, 74 distinct colours) and the grey of the terrain
 beneath in grab 2. It is not ours to lose — the per-frame census logs `feat=0` in **every** arm,
 main included, and the feature pass says so in as many words (`nothing emitted: native.on needs
 "wrecks" before we can own the leaf`), so the trees in this scene are drawn by the engine into
@@ -14036,6 +14065,96 @@ its own frame and merely composited. A single frame between two byte-identical o
 no Vulkan pass touches, is a capture that caught the engine's own blit half done. **It is not a
 D3 effect** — and the honest limit on that statement is that twelve grabs saw it once, which is
 too few to put a rate on.
+
+#### D3'S REVIEW — 23 FINDINGS, NONE A CODE DEFECT, AND ONE THAT BECAME A BOUND
+
+The dedicated read-only review returned **3 HIGH, 14 MEDIUM, 6 LOW**, verified every mechanical
+claim independently (symbol inventories, the moved struct byte-for-byte, the five GL entry
+points, `gl-sites`, both binary deltas, spirv currency, the pixel table recomputed from the
+grabs) and found **no correctness defect in the deletion**. Every finding was a stale comment or
+a wrong statement — which is what this gate keeps producing, and the reason the review is worth
+its cost.
+
+**THE ONE THAT WAS NOT PROSE (M1), and the only one that changed the binary's contract.**
+`inc/tagpu_hires.h` said `TAGPU_HMAXPIECE`'s second consumer, `tagpu_vk_hires.c`, "sizes the
+matching block", and that changing the macro "fails `tools/spirv-check.sh`" — inviting the reader
+to regenerate the SPIR-V and consider the job done. It does not size anything: the block is the
+hand-copied literals `VS_SZ 2480` / `VS_PIECE 0` / `VS_GAME 2304`, and the macro appears there
+only as the bound on a `memcpy` into it. At 48 they agree **exactly** — 48 × 12 × 4 = 2304 =
+`VS_GAME − VS_PIECE`, with no slack at all. At 64 the bound admits `np = 64` into a 2 480-byte
+destination and the copy writes 3 072, off the end of `uPiece` and through the projection
+uniforms. A comment asking the next maintainer to remember this is what was there, and it was
+wrong about which file sizes what, so the fix is **a bound rather than better prose**:
+
+```c
+typedef char tagpu_vk_hires_upiece_fits[
+    (TAGPU_HMAXPIECE * 12 * (int)sizeof(float) <= VS_GAME - VS_PIECE) ? 1 : -1];
+```
+
+Verified both ways: clean at 48, and at 64 the build stops with `error: size of array
+'tagpu_vk_hires_upiece_fits' is negative` naming the line. (`_Static_assert` is C11 and the build
+is `-std=c99`, hence the negative-array idiom.) This is the shape CLAUDE.md asks for — a bound,
+checked by construction, not a note asking someone to be careful.
+
+**THE FINDING AGAINST THIS LANDING'S OWN MEASUREMENT (H2).** The paragraph above about the A/B
+first said the two `hires` lines that vanish from the branch arms were `hires draw: missing GL
+proc` and the fall-back to the engine's own 3DO. The **count** was right and the **lines** were
+not: those two appear zero times in all four D3 arms and once in each of D2's. D3's fixture is an
+ARMCOM with no replacement mesh, so `tagpu_hires_draw_ready()` was never reached and the two
+lines that do vanish are the LOADER declining to find a file. The sentence as written read as
+"the A/B watched the dead draw path stop logging", and it did not. Corrected above, with the
+limit stated: **the draw path's deadness rests on D2's run and on the static argument, not on
+D3's measurement.** Naming the right count with the wrong lines is the subtlest kind of
+overclaim, because the number checks out.
+
+**THE FINDING THAT WAS DEAD CODE THIS LANDING CREATED (L1).** `gfx` was not the only local whose
+sole reader was the deleted branch — `gy` was too, and the first cut left it in. Its one reader
+was `h->shadowDy` inside that branch, so it became a store nothing loads, which `-Wall` cannot
+say. Removed, with the `pu->ground_h` projection that fed it. **Found beside it and deliberately
+not touched**: `gnd` has no reader either, but it had none at D3's parent, so it is older than
+this deletion and belongs to whoever audits it rather than to this landing.
+
+**EIGHT CONTRADICTIONS INSIDE THE TWO FILES THE LANDING WAS EDITING (H1).** The truthful 80-line
+block went in at the FOOT of `tagpu_vk_hires.h`; the contract at the HEAD of the same file — and
+of `tagpu_vk_hires.c` — still said the bodies belong to `tagpu_hires_draw.c`'s GL program, that
+`tagpu_shadow.c` counts the casters, and that `tagpu_hires_depth` is the oracle. All three were
+deleted by D2 and D3, so each file stated both things at once. Both contracts are now in the past
+tense and point at the foot of the file first. This is the same failure the D2 review returned as
+F5, one landing later, which is worth recording as a habit rather than an accident: **a session
+adding a truthful block to a file does not thereby read the rest of it.**
+
+**AND A FEATURE PAGE STILL DOCUMENTING A DELETED FEATURE AS WORKING (H3).**
+`research/notes/model-import.md` opened "Drop a glTF beside the game and the fork draws it
+instead of the unit type's 3DO" with a table pointing at all three deleted files, and was not in
+the docs commit at all; so did `gpu-status`'s own G11 half-table ("**Proven end-to-end**") and
+two `roadmap.md` G11 rows. All four now carry the owner's ruling and read in the past tense, and
+the pages are kept as the design record because that is what a revival needs.
+
+**THE OTHER TWELVE**, each verified against the source before it was touched: five writers of
+`s_hiHave` across three functions, not "exactly one" — the claim the argument needs is *the only
+assignment of 1* (M2); comments describing the deleted `nhi` term, the deleted hires pass, the
+deleted consumer of the pose form, the deleted `s_pmap` cache and the removed `n2->hires = NULL`
+(M3–M7); a `glreset` precondition that has now been MET and read as pending (M8); a dead
+`#include "tagpu_hires.h"` in `tagpu_native.c`, the exact residue §2.75 is about (M9); a roadmap
+range of "44–49 px" that misdescribes a pairing with 1 px and no minimap difference (M10);
+"13 and 2 call sites … once each lost one" — `pose_accum_body` has **one** left and `nlog` lost
+**four** of seventeen (M11); §2.80's heading still naming only D1 and D2 (M12); a "not covered"
+line naming two files this gate has since deleted (M13); nine cross-file comments and one
+scenario description naming the deleted files as live (M14); 74 distinct colours in the outlier
+grab, not 67 — the first count sampled only the first 20 000 differing pixels and was reported as
+if it covered all 97 092 (L2); and the `bt` sentence, both halves wrong (L4).
+
+**NOT FIXED, AND IT CANNOT BE.** `57820b1`'s commit message carries the `.text` figure 35 136,
+which is wrong — it is 35 648. The correction is in the notes and in `4ae4e3a`'s message, and
+history is not rewritten here to tidy a number, so `git log` keeps the wrong one. Recorded rather
+than quietly left (L3).
+
+**THE FIXES CHANGED THE BINARY, so the A/B was re-run rather than inherited.** D2's review fixes
+were comment-only and `.text`/`.rdata`/`.data` came out byte-identical, which let that landing
+keep its measurement. Not here: removing `gy`'s dead stores took **176 bytes** off `.text`
+(`0xca864` → `0xca7b4`). Dead-store removal is behaviour-free in every reasonable reading, and
+"every reasonable reading" is exactly what this repo does not accept as a measurement, so the
+table above is from the re-run.
 
 #### TWO THINGS D3 GOT WRONG FIRST, BOTH CAUGHT BEFORE THEY LANDED
 
@@ -14052,6 +14171,10 @@ once swallowed a neighbour, and it is run against a clean `git archive HEAD` tre
 against assumptions: the non-static symbol lists of `tagpu_native.c` and `tagpu_vk_hires.c` are
 **identical** to HEAD's, 15 and 6. Two *static* functions did leave the object file — `nlog` and
 `pose_accum_body` — and that was checked rather than shrugged at: both are still defined and
-still called (13 and 2 call sites), and gcc inlined them entirely once each lost one. The
+still called — `nlog` at 13 sites and `pose_accum_body` at **1** — and gcc inlined each entirely
+once its remaining callers were few enough. (The first draft of this sentence said "13 and 2 …
+once each lost one": `pose_accum_body` has ONE call site left, `pose_dump`'s, and `nlog` lost
+FOUR of seventeen, not one. Counts re-derived with `grep -cE '\bname\s*\('` at both revisions
+after the landing's review caught them.) The
 compiler-generated clones that vanished from `tagpu_vk_hires.o` (`mem_type.isra.0`,
 `mk_buffer.constprop.0`) are the expected consequence of a stub that folds to a constant.

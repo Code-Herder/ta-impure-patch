@@ -12,7 +12,8 @@ per frame. The engine rewrites those buffers **in place, on the game thread, in 
 ([engine map](exe-reverse-engineering.html), "The repose"), which is the pose race
 [§2.9](gpu-status.html) detects and works around. G16 stops reading them: the geometry becomes a
 static per-type vertex buffer and the pose becomes a per-piece matrix built from the engine's
-**fields**, exactly as the replacement-mesh pass (`tagpu_hires_draw.c`) has done since it was
+**fields**, exactly as the replacement-mesh pass (`tagpu_hires_draw.c`, deleted by landing 11
+D3) did since it was
 written.
 
 ---

@@ -524,10 +524,10 @@ int tagpu_scaffold_frameinfo(unsigned frame_counter, int* r0, int* nrows)
    THIS MODULE IS NOT ONE OF THE ONES WAITING ON THE ESCALATION, and the first
    version of this banner said it was by borrowing tagpu_native.c's wording.
    `tagpu_scaffold.c` carries ZERO GL call sites and the body below touches no
-   API at all, so unlike `tagpu_shadow.c`'s and `tagpu_hires_draw.c`'s resets
-   this one is not held up by objects that still have to go: it is deletable
-   as soon as someone decides the hand-over needs no reset entry point of its
-   own. Left standing only so the cascade goes in one piece. [ROUND 3'S
+   API at all, so it was never held up by objects that still had to go the way
+   `tagpu_shadow.c`'s and `tagpu_hires_draw.c`'s resets were -- and those two
+   files are themselves gone now, to landings 11 D2 and D3. It is deletable as
+   soon as someone decides the hand-over needs no reset entry point of its own. Left standing only so the cascade goes in one piece. [ROUND 3'S
    MEDIUM: a banner that borrows a justification for a module the
    justification does not fit is a reason to keep dead code for ever.] */
 void tagpu_scaffold_glreset(void)

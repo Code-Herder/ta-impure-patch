@@ -3,20 +3,28 @@
 /* The replacement meshes' CASTERS, drawn by Vulkan (the Vulkan-only plan's
    gate 3b). Contract only; tagpu_vk_hires.c is the pass.
 
-   THIS PASS DRAWS INTO THE CAST-SHADOW MAP AND NOWHERE ELSE. The bodies still
-   belong to `tagpu_hires_draw.c`'s GL program -- a glTF unit shaded per pixel
-   with normal maps and metallic/roughness is not what this gate is about. What
-   blocks the Vulkan lane is narrower and entirely mechanical: `tagpu_shadow.c`
-   counts every caster the GL map holds that this side has no copy of, and a
-   single Peewee with `hires/armpw.glb` active makes that count 1 -- which
-   stands the shadow map down, and the terrain and unit passes with it. So the
-   whole of gate 3b is: put those casters in the map, and stop the census
-   refusing.
+   READ THE BLOCK AT THE FOOT OF THIS FILE FIRST: since landing 11 D3 NOTHING
+   PUBLISHES A HAND-OVER, so this pass draws nothing. What follows is the
+   contract it was built to, kept because it is the shape a revival needs, and
+   written here in the PAST tense so it cannot be read as a description of a
+   running system.
 
-   WHAT IT IS FED. `tagpu_hires_handover` (tagpu_hires_draw.h), recorded by the
-   GL depth pass AS IT DRAWS: the triangles as CPU bytes, the per-unit anchor,
-   yaw/enc and cast triple exactly as the GL uniforms had them, and the pose
-   rows. No GL name crosses, which is the whole-phase rule.
+   IT DREW INTO THE CAST-SHADOW MAP AND NOWHERE ELSE. The bodies belonged to
+   `tagpu_hires_draw.c`'s GL program -- a glTF unit shaded per pixel with normal
+   maps and metallic/roughness was never what this gate was about. What blocked
+   the Vulkan lane was narrower and entirely mechanical: `tagpu_shadow.c`
+   counted every caster the GL map held that this side had no copy of, and a
+   single Peewee with `hires/armpw.glb` active made that count 1 -- which stood
+   the shadow map down, and the terrain and unit passes with it. So the whole of
+   gate 3b was: put those casters in the map, and stop the census refusing.
+   BOTH of those files are gone -- `tagpu_shadow.c` to landing 11 D2 and
+   `tagpu_hires_draw.c` to D3 -- so there is no census to satisfy and no GL map
+   to be smaller than.
+
+   WHAT IT WAS FED. `tagpu_hires_handover` (`tagpu_hires_draw.h`, deleted),
+   recorded by the GL depth pass AS IT DREW: the triangles as CPU bytes, the
+   per-unit anchor, yaw/enc and cast triple exactly as the GL uniforms had them,
+   and the pose rows. No GL name crossed, which was the whole-phase rule.
 
    THE ALBEDO DOES NOT CROSS, AND `cutoutSeen` IS WHY THAT IS HONEST. The depth
    path samples the albedo for one purpose -- the alpha cutout -- and every
@@ -38,11 +46,13 @@ void tagpu_vk_hires_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
    frame. Valid after `upload` and before `cast`, which is where the shadow
    pass's census needs it.
 
-   COMPARABLE TO `otherCasters` BY CONSTRUCTION, AND ONLY EVER SMALLER.
-   tagpu_shadow.c counts what the GL pass drew; this counts the subset that
-   reached the hand-over complete and whose device resources exist. The
-   hand-over itself refuses to publish a record short of the GL map, so this is
-   0 or all of them -- never a part. */
+   IT RETURNS 0, AND HAS SINCE BEFORE D3 (see the foot of this file). The
+   paragraph this replaced explained why it was comparable to `otherCasters` and
+   only ever smaller: `tagpu_shadow.c` counted what the GL pass drew, this
+   counted the subset that reached the hand-over complete and whose device
+   resources existed, and the hand-over refused to publish a record short of the
+   GL map, so it was 0 or all of them and never a part. Neither counter exists
+   now; the invariant is recorded because a revival has to re-establish it. */
 int  tagpu_vk_hires_casters(void);
 
 /* Draw them, inside the caller's render pass, with the caller's viewport and
@@ -71,13 +81,18 @@ void tagpu_vk_hires_down_paid(const TAGPU_VKPASS* d);
    invent them again.
 
    THERE IS NO PRODUCER, AND THERE WAS NONE BEFORE THE DELETION EITHER.
-   `s_hiHave` had exactly one writer, inside `tagpu_hires_depth`, and that
-   function had ZERO call sites -- so the hand-over returned 0 on every frame of
-   every session. Independently of that, `tagpu_hires_draw_ready()` answered 0
-   because `opengl32.dll` is never in the process, so `tagpu_native.c` nulled
-   every replacement-mesh pointer and there was nothing to publish in any case.
-   Measured on live runs: all four A/B arms log `hires draw: missing GL proc`
-   and then the fallback to the engine's own 3DO.
+   `s_hiHave` was assigned in five places across three functions, but the only
+   assignment of **1** was at `tagpu_hires_draw.c:611`, inside
+   `tagpu_hires_depth` -- and that function had ZERO call sites, so the flag was
+   never set and the hand-over returned 0 on every frame of every session. (The
+   other four assignments all wrote 0.) Independently of that,
+   `tagpu_hires_draw_ready()` answered 0 because `opengl32.dll` is never in the
+   process, so `tagpu_native.c` nulled every replacement-mesh pointer and there
+   was nothing to publish in any case. Measured on live runs: D2's four
+   `crowd-static` arms each log `hires draw: missing GL proc` and then the
+   fallback to the engine's own 3DO. D3's `one-unit` arms do NOT -- that fixture
+   is an ARMCOM with no replacement mesh, so the draw path was never reached at
+   all, and its logs show only the loader declining to find one.
 
    glTF REPLACEMENT MODELS ARE DISABLED AND THEIR IMPLEMENTATION IS TODO AND
    OUT OF SCOPE -- the owner's ruling, 2026-09-19. Reviving them needs a LOADER

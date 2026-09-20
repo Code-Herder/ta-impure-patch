@@ -211,8 +211,9 @@ static void shade_build_lut(const unsigned char* shd)
 /* SH_V = (0, 0.8944, -0.4472) */
 /* sun: high, from screen upper-left, slightly toward camera:
    SH_L = (-0.35, 0.80, -0.49). Both vectors are kept here as the CALIBRATION
-   OF RECORD — tagpu_native.c, tagpu_hires_draw.c and tagpu_classicpp.c all
-   cite this file by name for them — and no longer as live constants: the
+   OF RECORD — tagpu_native.c and tagpu_classicpp.c cite this file by name for
+   them, and tagpu_hires_draw.c did until landing 11 D3 deleted it — and no
+   longer as live constants: the
    write-back that shaded with them is gone and each pass carries its own copy
    of the numbers in the form its shader wants. */
 

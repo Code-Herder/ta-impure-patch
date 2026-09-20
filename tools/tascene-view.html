@@ -101,7 +101,7 @@
        filter=<f>    EXPLORE: how the RESTORED unit textures are sampled.
                      linear = trilinear (bilinear + mipmaps, levels 0..2)
                      with `aniso` taps — what the game's own hires path does
-                     (tagpu_hires.c: GL_LINEAR_MIPMAP_LINEAR). nearest = one
+                     (GL_LINEAR_MIPMAP_LINEAR, as the deleted tagpu_hires.c did). nearest = one
                      texel, the stock look. DEFAULT linear when the pack's
                      unit atlas is padded for it (`build` since UNIT_PAD),
                      nearest otherwise; filter=linear on an unpadded pack

@@ -42,8 +42,10 @@ typedef struct TAGPU_FXVIEW {
        names that fed them. Left in place rather than removed because changing
        this struct's shape is 11-5e's, not a review fix's -- but do not plumb
        anything into them believing there is a consumer: there is not, and the
-       review that found that also found `tagpu_hires_draw.c`'s `v->fogTex` is
-       a TAGPU_HVIEW field, a different struct with a similar name. */
+       review that found that also found `tagpu_hires_draw.c`'s `v->fogTex`
+       was a TAGPU_HVIEW field, a different struct with a similar name.
+       Both that file and that struct went in landing 11 D3; the note is
+       kept because the name collision is why the review looked twice. */
     unsigned int fogTex, fogLut;    /* RG8 grid; 256x1 grey palette remap      */
     unsigned int frame_counter;
 } TAGPU_FXVIEW;

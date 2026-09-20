@@ -537,7 +537,8 @@ failed to coincide.
    `emit_slant` in `tagpu_native.c` now follows `0x45A610` rule for rule (every
    face of every visible+cached piece, flat, integer-snapped, face 0 under the
    selection rule) and the draw passes −1e9 for both erases on a slant unit
-   (`tagpu_hires_draw.c` does the same for a replacement structure's). Measured
+   (`tagpu_hires_draw.c` did the same for a replacement structure's, until landing 11 D3
+   deleted it). Measured
    with the engine's toggle on `scenarios/shadow-lab.json`, same eye, 200×140 px around each
    building, stock engine / ours: Kbot lab **997 / 1094**, solar 1228 / 1246,
    ARM extractor 2406 / 2442, COR extractor 618 / 859 and COR wind 2273 / 3169

@@ -903,7 +903,7 @@ cannot be swapped between runs.
   same in a pixel count:
 
   1. **Colour the differing pixels in both frames.** Here they were green in the settled grabs
-     (mean RGB 15.8/95.3/65.7, only 67 distinct colours) and the grey of the terrain beneath in
+     (mean RGB 15.8/95.3/65.7, only 74 distinct colours) and the grey of the terrain beneath in
      the odd one — a *layer*, not noise.
   2. **Look at the image**, downscaled side by side. Every tree was missing; terrain, unit, UI
      and HUD identical.

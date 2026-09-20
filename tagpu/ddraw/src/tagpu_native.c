@@ -68,7 +68,6 @@
 #include "tagpu_native.h"
 #include "tagpu_render3do.h"
 #include "tagpu_scaffold.h"
-#include "tagpu_hires.h"
 #include "tagpu_fx.h"
 #include "tagpu_sfx.h"
 #include "tagpu_fxown.h"
@@ -854,12 +853,14 @@ static const char* model_root(const TAGPU_PACKET* pk, unsigned mid)
 
 
 
-/* Replacement meshes do NOT come through this vertex stream. A glTF model has
-   smooth normals, normal maps and true-colour materials, none of which this
-   program's palette-index shader can carry, so it renders in its own pass
-   (tagpu_hires_draw.c) which shares this frame's FBO, depth keys, scaffold,
-   fog and shadow rules. Units holding one are gathered below and simply
-   contribute no vertices here. */
+/* THIS VERTEX STREAM IS NOW THE ONLY ONE. It used to say that replacement
+   meshes did not come through it -- a glTF model has smooth normals, normal
+   maps and true-colour materials, none of which this program's palette-index
+   shader can carry -- and that they rendered in their own pass, which shared
+   this frame's FBO, depth keys, scaffold, fog and shadow rules. Landing 11 D3
+   deleted that pass with the rest of the glTF lane, and with it the branch that
+   gathered the units holding one. Nothing is diverted away from here any
+   more. [The vulkan-only plan, landing 11 D3.] */
 
 /* faces of one Model3DONode whose vertices are already model-space floats
    P[nvert*3] — the engine-posed vbuf for units, rotated raw verts for
@@ -1056,9 +1057,11 @@ static int emit_fx_model(const TAGPU_FXMODEL* m, int nv, float fxKey)
 }
 
 /* ------------------------------------------------------- replacement pose --
-   One unit's COB pose, in the form tagpu_hires_draw.c consumes: per glTF
-   piece a 4x3 (3 rows of 4) that carries a REST vertex of that piece to where
-   the unit's script is holding it this frame.
+   One unit's COB pose: per piece a 4x3 (3 rows of 4) that carries a REST
+   vertex of that piece to where the unit's script is holding it this frame.
+   It was written for `tagpu_hires_draw.c`, which landing 11 D3 deleted; what
+   survives below serves `pose_accum_body` and `pose_dump`, and the form is
+   kept because those two read it.
 
    The engine keeps the pose as explicit fields rather than only as posed
    vertices, so nothing here has to recover a transform from geometry. Per
@@ -1128,22 +1131,22 @@ static void piece_local(const unsigned short* turn, const float* d, float* o)
     o[0*4+3] = d[0]; o[1*4+3] = d[1]; o[2*4+3] = d[2];
 }
 
+/* ---- the level generation, and the caches that USED to hang off it
+   THERE IS NO CACHE LEFT TO DROP. This block guarded `s_pmap`, a replacement
+   mesh's glTF-piece -> engine-primitive map keyed on a raw `Model3DONode*`; it
+   was one of three until landing 11-3 took the two model-AABB caches with the
+   GL draw halves, and landing 11 D3 took `s_pmap` itself with the glTF loader.
+   What is kept is the generation edge, because the reasoning below is the
+   expensive part and the next cache keyed on a template will need it verbatim.
 
-
-
-/* ---- the cache keyed on a MODEL TEMPLATE, and the level it belongs to
-   `s_pmap` (a replacement mesh's glTF piece -> engine primitive map) is keyed
-   on a raw `Model3DONode*`. (It was one of three until landing 11-3 took the
-   two model-AABB caches with the GL draw halves; the reasoning below was
-   written for all three and holds unchanged for the one that is left.) That
-   tree is
-   shared by every unit of a type, so it rightly outlives any unit — but it does
-   NOT outlive the LEVEL, and it is not freed through `FreeObjectState`, so
-   `tagpu_reclaim`'s deferral does not cover it. Until this check existed
-   nothing dropped these entries at all: a second level whose allocator handed
-   the same address to a different model was served the first level's answer,
-   for the rest of the process. That is not a fault -- it is a wrong shadow
-   height, a wrong select box and a mis-bound replacement pose, silently.
+   THE HAZARD IT EXISTS FOR, stated for that next cache. A model template tree
+   is shared by every unit of a type, so it rightly outlives any unit -- but it
+   does NOT outlive the LEVEL, and it is not freed through `FreeObjectState`, so
+   `tagpu_reclaim`'s deferral does not cover it. Before this check nothing
+   dropped such entries at all: a second level whose allocator handed the same
+   address to a different model was served the first level's answer, for the
+   rest of the process. That is not a fault -- it is a wrong shadow height, a
+   wrong select box and a mis-bound pose, silently.
 
    The cure is THE PACKET'S level generation, which the publisher advances at
    every level end -- it used to be tagpu_reclaim's own counter, and that moves
@@ -1157,9 +1160,10 @@ static void piece_local(const unsigned short* turn, const float* d, float* o)
    stale entries. Checked once per frame rather than per lookup: every one of
    these caches is consulted only from tagpu_native_frame's own call tree.
 
-   It holds no GL objects, so dropping it is resetting one count; the entries
-   rebuild on the next frame that asks. */
-static unsigned s_cacheGen;              /* the level s_pmap describes           */
+   Such a cache holds no GL objects, so dropping it is resetting one count and
+   the entries rebuild on the next frame that asks. [The vulkan-only plan,
+   landing 11 D3.] */
+static unsigned s_cacheGen;              /* the level the (currently absent) caches describe */
 static unsigned s_lastLevelGen;          /* the last packet's, carried over a frame with none */
 
 static void cache_gen_check(unsigned g)
@@ -1192,8 +1196,9 @@ typedef struct {
 
 /* `bt` non-NULL folds the body turn into the BASE piece's own turn, exactly
    where the compose adds it (0x45B0DB, only on the top-level call) -- the
-   reconstruction needs it because P_VBUF holds the body-rotated pose, while
-   hires_pose and pose_dump want model space and pass NULL. */
+   reconstruction needs it because P_VBUF holds the body-rotated pose. The
+   only caller left, `pose_dump`, passes `bt` NON-NULL; `hires_pose`, which
+   passed NULL for model space, went with landing 11 D3. */
 /* `pc` is this unit's PK_PIECE run out of the frame packet and `nparts` its
    length; `basePiece` the index the body turn folds into (0xFFFF = none). The
    per-piece POSE fields are the packet's copy, taken on the game thread; the
@@ -2508,7 +2513,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     typedef struct { const TAGPU_PK_UNIT* pu; const TAGPU_PK_WRECK* pw;
                      const TAGPU_PK_PIECE* pc; int nparts; unsigned basePiece;
                      const unsigned short* bturn;
-                     float ax, ay, gy, wx0, wz0, wy, gnd;
+                     float ax, ay, wx0, wz0, wy, gnd;
                      int rel, owner, cloaked, air, feat, sel, shadow, slant; unsigned yaw;
                      float waterT, digT; int waterMode;
                      int nanoOn; float nanoT, nanoC[3], nanoWire; } NU;
@@ -2661,17 +2666,19 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         n2->feat = 0;
         n2->sel = ((st & 0x10) && (uiGates & 4));
         if (n2->sel) nsel++;
-        /* shadow sits at GROUND height under the unit (engine: GetPosHeight);
-           terrain height byte = PLOT_MEMORY tile +0x04 (16-px grid) */
-        {
-            float gy = ay;
-            if (pu->flags & TAGPU_PK_U_GROUND) {
-                int th = pu->ground_h;
-                gy = fy - (float)th * 0.5f - (float)eyeY + (float)vpT;
-                n2->gnd = (float)th;
-            }
-            n2->gy = gy;
-        }
+        /* GROUND height under the unit (engine: GetPosHeight); terrain height
+           byte = PLOT_MEMORY tile +0x04 (16-px grid).
+
+           `gy` -- the screen-space ground line this used to derive -- IS GONE.
+           Its only reader was `h->shadowDy` inside the replacement-mesh branch,
+           which landing 11 D3 deleted, so it became a store nothing loaded and
+           -Wall could not say so. `gnd` is kept: it is the raw height byte, not
+           a projection of it.
+
+           FOUND HERE AND NOT TOUCHED, because it is not this landing's: `gnd`
+           has no reader either, and had none at D3's parent, so it is older
+           than this deletion and belongs to whoever audits it. */
+        if (pu->flags & TAGPU_PK_U_GROUND) n2->gnd = (float)pu->ground_h;
         n2->rel = (wy >> 4) - r0;
         n2->owner = owner; n2->cloaked = cloaked;
     }
@@ -2778,7 +2785,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 NU* n2 = &units[nu++];
                 n2->pu = NULL; n2->pw = pw; n2->pc = wpc; n2->nparts = pw->piece_n;
                 n2->basePiece = pw->base_piece; n2->bturn = pw->bturn;
-                n2->ax = ax; n2->ay = ay; n2->gy = ay;
+                n2->ax = ax; n2->ay = ay;
                 n2->wx0 = (float)rx; n2->wz0 = (float)(ry - rz / 2);
                 n2->wy = (float)rz; n2->gnd = (float)rz;
                 n2->rel = (ry >> 4) - r0;
@@ -2786,12 +2793,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 n2->shadow = 0;     /* the engine's FShadow feature shadow stays */
                 n2->slant = 0;
                 /* units[] is static and only nu resets per frame, so a field
-                   left unwritten here is last frame's. A wreck landing on an
-                   index that held a replacement unit would inherit its HMesh*:
-                   the build loop takes the hires branch, emits no native
-                   vertices (the wreck itself vanishes) and draws that unit's
-                   model at the wreck's anchor, at a stale yaw, posed against
-                   the wreck's own Object3do. */
+                   left unwritten here is last frame's, and every field a wreck
+                   does not set has to be cleared here rather than assumed. The
+                   worst case this rule was written for is gone -- a wreck
+                   landing on an index that held a replacement unit inherited
+                   its HMesh*, took the hires branch, emitted no native vertices
+                   (the wreck itself vanished) and drew that unit's model at the
+                   wreck's anchor -- because landing 11 D3 deleted the field and
+                   the branch. The rule survives it: yaw is still last frame's
+                   if nothing writes it. */
                 n2->yaw = 0;
                 n2->waterT = -1e9f; n2->digT = -1e9f; n2->waterMode = 0;
                 /* ...and the nanoframe group, for the same reason: a wreck on
@@ -3156,10 +3166,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         int k, nm = tagpu_fx_nmodels();
         for (k = 0; k < nm; k++) nv = emit_fx_model(tagpu_fx_model(k), nv, fxKey);
     }
-    /* nhi belongs in this test: a replacement unit contributes no vertices to
-       this pass (it is the other one's), so a frame holding nothing but those
-       would bail here and draw them nowhere. SINCE G16 STEP 8 npd belongs in
-       it for exactly the same reason, and more urgently: an ordinary unit
+    /* npd belongs in this test, SINCE G16 STEP 8, and urgently: an ordinary unit
        contributes no vertices either now, so without this a frame of nothing
        but units — every unit in the game, on a map with our terrain off —
        would return here having drawn none of them. */
@@ -3410,8 +3417,12 @@ static void pose_dump(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* u,
    it; it is left standing because several of those modules still hold live GL
    state this landing does not touch, and a reset tree deleted ahead of the
    objects it resets is worse than one that is merely unreachable.
-   [The vulkan-only plan, 11-5e-1. The deletion belongs to whichever landing
-   takes the last GL object out of tagpu_shadow.c and tagpu_hires_draw.c.] */
+   [The vulkan-only plan, 11-5e-1. THAT CONDITION IS NOW MET and the function
+   is still here: landings 11 D2 and D3 deleted tagpu_shadow.c and
+   tagpu_hires_draw.c, so no GL object is left for this tree to reset. It is
+   kept deliberately until D4 takes opengl_utils.c, because a reset tree that
+   is merely unreachable costs nothing and one that misses a live object costs
+   a leak -- delete it WITH the last GL file, not before.] */
 void tagpu_native_glreset(void)
 {
     s_fogCols = s_fogRows = 0; s_fogCells = 0; s_fogGrid = NULL; s_fogLut = 0;

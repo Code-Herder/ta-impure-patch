@@ -2890,8 +2890,9 @@ that a count which grows is the plan catching up with the work.) The row was
        the non-static inventory against a clean `git archive HEAD` tree: **identical**, 15 and
        6 symbols. The four-arm interleaved `one-unit` A/B is **0 px outside the minimap and the
        fixture's own oscillating cursor pixel** on all four cross-build pairings, census 749 452
-       on every arm, 0 VK errors, and the only log difference is the two `hires` lines gone from
-       the branch arms. [gpu-status §2.80.]
+       on every arm, 0 VK errors, and the only log difference is the two LOADER `hires` lines gone
+       from the branch arms. That fixture is an ARMCOM with no replacement mesh, so it never
+       reached the GL draw path; the lines proving THAT half dead are D2's, not D3's. [gpu-status §2.80.]
 
        **glTF REPLACEMENT MODELS ARE OUT OF SCOPE FOR THIS GATE AND FOR THE ONES AFTER IT,
        UNTIL THE OWNER SAYS OTHERWISE. [TODO]** They are not being *broken* by this: the

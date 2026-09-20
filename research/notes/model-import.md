@@ -1,7 +1,22 @@
 # Model import — glTF 2.0 → the running engine, posed by the unit's own script
 
+> **DISABLED AND OUT OF SCOPE SINCE 2026-09-19, AND THE CODE IS DELETED.** The owner ruled that
+> glTF replacement models are disabled and their implementation is TODO and out of scope, and
+> the vulkan-only plan's landing 11 D3 deleted the loader (`tagpu_hires.c`), its GL draw pass
+> (`tagpu_hires_draw.c`) and the pose path in `tagpu_native.c` — 2 588 lines. **Nothing in the
+> shipped DLL reads `gamedir/hires/` any more.**
+>
+> The feature was already producing nothing before the deletion: its draw pass resolved five GL
+> entry points through `opengl32.dll`, which has had no loader call since the OpenGL lane went,
+> so every model was loaded, parsed and then discarded. That is measured, not assumed — see
+> [gpu-status](gpu-status.md) §2.80.
+>
+> **This page is kept as the design record**, because it is what a revival needs and the code is
+> one `git show` away (landing 11 D3's parent). Everything below is written as it was when the
+> feature ran; read it in the past tense. [Roadmap](roadmap.md) G11 carries the same notice.
+
 The other half of [model export](model-export.md). Drop a glTF beside the game and the fork
-draws it *instead of* the unit type's 3DO, in the engine's own frame, driven by the engine's
+drew it *instead of* the unit type's 3DO, in the engine's own frame, driven by the engine's
 own COB script — so the replacement walks, aims and recoils rather than sliding around as a
 statue:
 
@@ -23,9 +38,9 @@ again to try again.
 
 | Piece of it | Where |
 |---|---|
-| Loader — glTF/GLB → one static interleaved VBO per model, triangles sorted by material, one piece index per vertex | `tagpu/ddraw/src/tagpu_hires.c` |
-| Renderer — its own GL program: per-pixel light, normal maps, GGX, the per-piece pose | `tagpu/ddraw/src/tagpu_hires_draw.c` |
-| Pose — reads the engine's live per-piece state and hands the renderer one matrix per piece | `tagpu/ddraw/src/tagpu_native.c`, `pose_accum` / `hires_pose` |
+| Loader — glTF/GLB → one static interleaved VBO per model, triangles sorted by material, one piece index per vertex | `tagpu/ddraw/src/tagpu_hires.c` — **deleted, 11 D3** |
+| Renderer — its own GL program: per-pixel light, normal maps, GGX, the per-piece pose | `tagpu/ddraw/src/tagpu_hires_draw.c` — **deleted, 11 D3** |
+| Pose — reads the engine's live per-piece state and hands the renderer one matrix per piece | `tagpu/ddraw/src/tagpu_native.c`, `pose_accum` / `hires_pose` — **`hires_pose` deleted, 11 D3** |
 | The oracle — `tagpu_posedump.on`, and what makes all of this checkable | `tagpu_native.c`, `pose_dump` |
 
 Scenarios: `scenarios/hires-one.json` (one Peewee beside one engine-drawn AK, the close-up),

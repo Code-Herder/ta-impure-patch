@@ -13,7 +13,9 @@
    program's attributes arrive already in frame-pixel space and are shared with
    the selection lines and the effects models, which stay CPU-built; a uniform
    switch would leave one path reading attributes the other VAO does not bind.
-   `tagpu_hires_draw.c` is the precedent for both this and the depth twin.
+   `tagpu_hires_draw.c` WAS the precedent for both this and the depth twin;
+   landing 11 D3 deleted it, so the precedent is in git at that landing's
+   parent rather than in the tree.
 
    THE FRAGMENT SHADER IS THE NATIVE PASS'S OWN, taken through
    `tagpu_native_unit_fs()` rather than copied, so the two programs cannot

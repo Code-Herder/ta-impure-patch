@@ -1,22 +1,30 @@
 /* tagpu_vk_hires.c -- the replacement meshes' CASTERS, drawn by Vulkan.
    Contract: tagpu_vk_hires.h. Phase G, the Vulkan-only plan's gate 3b.
 
-   WHY THIS PASS IS SMALL, AND WHY IT IS THE ONE THAT UNBLOCKS THE LANE.
-   `tagpu_shadow.c` counts every caster in the GL cast-shadow map that this side
-   of the seam has no copy of. A tacli instance ships `hires/armpw.glb` ACTIVE,
-   so one Peewee on screen makes that count 1 and a 257-unit crowd makes it 16 --
-   and a map with an uncounted caster is one `tagpu_vk_shadow.c` refuses to draw
-   at all, which stands the terrain and unit passes down behind it. So gate 3b
-   is not "port the glTF renderer": it is "put those silhouettes in the map".
-   The bodies stay with `tagpu_hires_draw.c`'s GL program, which is the whole
-   difference between this file and its 1400-line siblings.
+   THIS PASS DRAWS NOTHING, AND HAS SINCE BEFORE LANDING 11 D3 DELETED ITS
+   PRODUCER. `hires_handover` below is a stub returning 0 and the block above it
+   says why. Everything in this header comment is the design it was built to,
+   in the PAST tense, kept because it is what a revival has to re-establish.
 
-   WHAT THE ORACLE IS. `tagpu_hires_depth` in that same file, and this pass is
-   fed by the record IT writes as it draws (tagpu_hires_draw.h,
+   WHY THIS PASS WAS SMALL, AND WHY IT WAS THE ONE THAT UNBLOCKED THE LANE.
+   `tagpu_shadow.c` counted every caster in the GL cast-shadow map that this
+   side of the seam had no copy of. A tacli instance ships `hires/armpw.glb`
+   ACTIVE, so one Peewee on screen made that count 1 and a 257-unit crowd made
+   it 16 -- and a map with an uncounted caster was one `tagpu_vk_shadow.c`
+   refused to draw at all, which stood the terrain and unit passes down behind
+   it. So gate 3b was not "port the glTF renderer": it was "put those
+   silhouettes in the map". The bodies stayed with `tagpu_hires_draw.c`'s GL
+   program, which was the whole difference between this file and its 1400-line
+   siblings. `tagpu_shadow.c` went to landing 11 D2 and `tagpu_hires_draw.c` to
+   D3, so neither the census nor the GL map exists now.
+
+   WHAT THE ORACLE WAS. `tagpu_hires_depth` in that same file, and this pass was
+   fed by the record IT wrote as it drew (`tagpu_hires_draw.h`,
    `tagpu_hires_handover`) rather than by a second walk over the units. Three
-   things drop a unit from the GL map -- `castSkip`, a VAO that would not build,
-   a group whose count is zero -- and a re-derivation is free to disagree with
-   the original about any of them while both look right.
+   things dropped a unit from the GL map -- `castSkip`, a VAO that would not
+   build, a group whose count was zero -- and a re-derivation was free to
+   disagree with the original about any of them while both looked right. That is
+   the reason a revival wants a producer beside the geometry, not a second walk.
 
    ---- THE ALBEDO IS NOT CARRIED, AND THAT IS CHECKED RATHER THAN HOPED ----
 
@@ -94,6 +102,24 @@ DFNS(DECL)
 #define VS_DEPTH   2384
 #define VS_SHMAT   2400
 #define VS_CAST    2464
+
+/* THE BOUND AT THE MEMCPY BELOW IS `TAGPU_HMAXPIECE`; THE DESTINATION IS
+   `VS_SZ`. Nothing derives one from the other -- the numbers above are copied
+   by hand from what the generated SPIR-V header prints -- so raising
+   TAGPU_HMAXPIECE and regenerating the shader would widen the bound and leave
+   the block its old size, and `np * 12 * sizeof(float)` would run past
+   `uPiece` into the projection uniforms and then off the end.
+
+   A comment asking the next maintainer to remember this is what was here
+   before, and it was WRONG about which file sizes what. This is the bound
+   instead: a negative array size is the C99 way to fail at compile time (the
+   build is -std=c99, so `_Static_assert` is not available), and it fails
+   LOUDLY -- `size of array is negative` naming this line. If you widen the
+   uniform block on purpose, update VS_SZ/VS_GAME from the generated header and
+   this assertion goes quiet by itself. [Landing 11 D3's review, finding M1.] */
+typedef char tagpu_vk_hires_upiece_fits[
+    (TAGPU_HMAXPIECE * 12 * (int)sizeof(float) <= VS_GAME - VS_PIECE) ? 1 : -1];
+
 
 #define FS_SZ       208
 #define FS_BASE      80
@@ -623,9 +649,11 @@ static void write_set(const TAGPU_VKPASS* d, uint32_t slot)
 
 /* THE HAND-OVER, WHICH NOTHING PUBLISHES. Its producer was
    `tagpu_hires_depth` in `tagpu_hires_draw.c`, and that function had ZERO call
-   sites well before landing 11 D3 deleted the file -- `s_hiHave` was written in
-   one place, inside it, so `tagpu_hires_handover` returned 0 on every frame of
-   every session. There was a second, independent reason the same pass could not
+   sites well before landing 11 D3 deleted the file. `s_hiHave` was assigned in
+   five places across three functions, but the ONLY assignment of 1 was at
+   `tagpu_hires_draw.c:611`, inside that callerless function; the other four
+   wrote 0. So the flag was never set and `tagpu_hires_handover` returned 0 on
+   every frame of every session. There was a second, independent reason the same pass could not
    fire: `tagpu_hires_draw_ready()` was 0 because `opengl32.dll` is never in the
    process, so `tagpu_native.c` nulled every replacement-mesh pointer and the
    hand-over had nothing to carry even if something had published one.

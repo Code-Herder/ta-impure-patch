@@ -109,10 +109,14 @@
    that 1 px is the shadow PCF's, established on the one configuration both
    builds can draw (gpu-status §2.37).
 
-   THE REPLACEMENT MESHES (tagpu_hires_draw.c) ARE STILL NOT THIS PASS'S, and
-   they are the last caster the shadow map's census holds that nothing on this
-   side draws -- measured at 1 refused caster with one `armpw.glb` on screen and
+   THE REPLACEMENT MESHES ARE GONE, AND SO IS THE CENSUS THAT COUNTED THEM.
+   They were the last caster the shadow map's census held that nothing on this
+   side drew -- measured at 1 refused caster with one `armpw.glb` on screen and
    16 on a 257-unit crowd, because a tacli instance ships that mesh active.
+   Landing 11 D2 deleted `tagpu_shadow.c` and with it the census; D3 deleted
+   `tagpu_hires_draw.c` and the loader that fed it, on the owner's ruling that
+   glTF replacement models are disabled and out of scope. Nothing refuses this
+   pass on their account any more.
 
    THE NATIVE 3DO STREAM'S OWN UNIT VERTICES ARE NOT A THING ANY MORE. That
    clause used to stand here beside the replacement meshes; it is wrong.
