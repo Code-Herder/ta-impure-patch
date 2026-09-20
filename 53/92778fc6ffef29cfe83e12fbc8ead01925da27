@@ -1,0 +1,106 @@
+landing-review: model=claude-opus-5 (dedicated, read-only) effort=medium range=main...4ae4e3a findings=23 acted=22 rejected=0 date=2026-09-19
+verdict: safe to land. no correctness defect in the deletion; 22 of 23 findings fixed, the
+twenty-third is a commit message that cannot be corrected without rewriting history.
+
+what the reviewer re-derived rather than took. the non-static symbol inventories of
+tagpu_native.c and tagpu_vk_hires.c, by building `git archive main` and `git archive HEAD` into
+/tmp and diffing `nm --defined-only`: identical, 15 and 6 -- no neighbour swallowed. both files
+recompiled with -Wall -Wextra -Wcomment: no `"/*" within comment`, no new warning beyond the
+pre-existing -Wmisleading-indentation at tagpu_native.c:995. the moved types diffed
+byte-for-byte against d005854:inc/tagpu_hires_draw.h: identical, so no silent ABI move. the
+safety chain walked end to end -- ensure() resolves exactly five entry points (glDrawArrays,
+glActiveTexture, glStencilFunc, glStencilOp, glColorMask) through getgl, which needs
+xwglGetProcAddress or GetModuleHandleA("opengl32.dll"), both set only by oglu_load_dll, which has
+one declaration, one definition and no caller. gl-sites 165/234 in three files at main, 31/98 in
+one at HEAD. .text 0xd33a4 -> 0xca864 and 1 517 056 -> 1 465 344 B, matching the note exactly.
+"six entry points" confirmed (upload, casters, cast, down, down_owed, down_paid). "42 lines"
+confirmed at main:3225..3266. spirv-check current, and confirmed to FAIL when TAGPU_HMAXPIECE
+moves. the pixel table recomputed from the grabs, including the outlier.
+
+THE FINDING THAT BECAME A BOUND (M1, MEDIUM). inc/tagpu_hires.h said the macro's second consumer
+"sizes the matching block" and that changing it fails spirv-check -- which invites regenerating
+the SPIR-V and stopping. tagpu_vk_hires.c sizes nothing: VS_SZ 2480 / VS_PIECE 0 / VS_GAME 2304
+are hand-copied literals and the macro is only the memcpy's bound. at 48 they agree with zero
+slack (48*12*4 = 2304 = VS_GAME - VS_PIECE); at 64 the bound admits np = 64 into 2 480 bytes and
+the copy writes 3 072, off the end of uPiece through the projection uniforms. fixed as a BOUND
+rather than better prose -- a negative-array compile-time assertion (-std=c99, so no
+_Static_assert), verified clean at 48 and failing at 64 with "size of array ... is negative"
+naming the line. this is the only finding that changed what the code guarantees.
+
+THE FINDING AGAINST THE LANDING'S OWN MEASUREMENT (H2, HIGH). the A/B paragraph named the wrong
+two log lines: `hires draw: missing GL proc` and the 3DO fall-back appear ZERO times in all four
+D3 arms and once in each of D2's. D3's one-unit fixture is an ARMCOM with no replacement mesh, so
+tagpu_hires_draw_ready() was never reached; what vanishes from the branch arms is the LOADER
+declining to find a file. the COUNT was right, which is what let it through. corrected, with the
+limit written down: the draw path's deadness rests on D2's crowd-static run and on the static
+argument, not on this measurement.
+
+THE FINDING THAT WAS DEAD CODE THIS LANDING MADE (L1, LOW by severity, not by interest). `gfx`
+was not the only local whose sole reader was the deleted branch -- `gy` was too, read once at
+h->shadowDy inside it, and the first cut left it in as a store nothing loads, which -Wall cannot
+say. removed with the pu->ground_h projection feeding it. found beside it and deliberately NOT
+touched: `gnd` has no reader either but had none at D3's parent, so it predates this deletion.
+
+THE HABIT, NOT THE ACCIDENT (H1, HIGH). the truthful 80-line block went in at the FOOT of
+tagpu_vk_hires.h while the contract at the HEAD of that file and of tagpu_vk_hires.c still said
+the bodies belong to tagpu_hires_draw.c's GL program, tagpu_shadow.c counts the casters and
+tagpu_hires_depth is the oracle -- eight statements, all deleted by D2 and D3, so each file said
+both things at once. this is D2's F5 one landing later: a session adding a truthful block to a
+file does not thereby read the rest of it.
+
+AND A FEATURE PAGE DOCUMENTING A DELETED FEATURE AS WORKING (H3, HIGH). model-import.md opened
+"Drop a glTF beside the game and the fork draws it instead of the unit type's 3DO" with a table
+pointing at all three deleted files, and was not in the docs commit at all; so did gpu-status's
+G11 half-table ("Proven end-to-end") and two roadmap G11 rows. all now carry the owner's ruling
+and read in the past tense, kept as the design record.
+
+the other eighteen, each verified before it was touched: five writers of s_hiHave across three
+functions, not "exactly one" -- the claim the argument needs is the only assignment of 1 (M2);
+comments describing the deleted nhi term, the deleted hires pass, the deleted consumer of the
+pose form, the deleted s_pmap cache and the removed n2->hires = NULL (M3-M7); a glreset
+precondition now MET and still reading as pending (M8); a dead #include "tagpu_hires.h" in
+tagpu_native.c, the exact residue 2.75 is about (M9); a roadmap range "44-49 px" that
+misdescribes a pairing with 1 px and no minimap difference (M10); "13 and 2 call sites ... once
+each lost one" -- pose_accum_body has ONE left, nlog lost FOUR of seventeen (M11); 2.80's heading
+naming only D1 and D2 (M12); a "not covered" line naming two files this gate has since deleted
+(M13); nine cross-file comments and one scenario description naming the deleted files as live
+(M14); 74 distinct colours in the outlier grab, not 67 -- the first count sampled 20 000 of
+97 092 differing pixels and was reported as covering all of them (L2); and the bt sentence, both
+halves wrong (L4). L6 was raised as a nit and needed no change: cache_gen_check is now a pure
+no-op and its own comment already says so.
+
+NOT FIXED AND NOT FIXABLE (L3). 57820b1's commit message carries .text -35 136, which is wrong --
+it is -35 648. history is not rewritten here to tidy a number, so git log keeps it; the
+correction is in 4ae4e3a's message and in the notes.
+
+THE FIXES CHANGED THE BINARY, SO THE A/B WAS RE-RUN RATHER THAN INHERITED. D2's review fixes were
+comment-only and came out byte-identical in .text/.rdata/.data, which let that landing keep its
+measurement. not here: removing gy's dead stores took 176 bytes off .text (0xca864 -> 0xca7b4).
+dead-store removal is behaviour-free in every reasonable reading, and "every reasonable reading"
+is not a measurement.
+
+MEASURED, on the committed fix tree, both arms clean-built:
+  one-unit, four arms interleaved mainA brA mainB brB, both arms clean-built, gui.on=1.
+  cross-build 1 / 49 / 44 / 44 px; same-build controls 45 and 48. the difference box derived
+  from the data is 1x1 -- the single pixel (512,384), which the control puts 1 px in too, so it
+  is the fixture's own oscillating cursor and not the change. OUTSIDE THE MINIMAP AND THAT PIXEL:
+  0 px on all four cross-build pairings. settled census 749 452 on every arm. zero VK_ERROR /
+  validation lines, exactly one `gui: layer ON` per arm, and the two LOADER hires lines present
+  twice in each main arm and absent from both branch arms.
+
+  AND THE RE-RUN CAUGHT A COMPARATOR BUG BEFORE IT PRODUCED A NUMBER. cmp_x.py took the THIRD
+  grab as each arm's settled frame, assuming a run settles and stays settled so an outlier can
+  only be early. false: in THREE of the four arms grab 3 was the odd one out while grabs 1 and 2
+  were byte-identical, so the old comparator would have computed three of the four cross-build
+  numbers from outliers. it now picks by AGREEMENT -- whichever grab is byte-identical to another,
+  whatever its index -- and exits GATE 1 FAILED when no two agree rather than choosing a
+  representative from a drifting fixture. second correction to the same ta-drive rule in two
+  landings; both came from the data, not from review.
+
+NOT verifiable read-only, and the reviewer said so rather than waving at it: the pixel table and
+the binary figures need a build and a run; it did not run build_wiki.py because that writes into
+the worktree.
+
+OPEN, and named rather than answered: whether 11-6 may close with cast shadows dark is escalation
+reason 1 and is the owner's. the glTF half was answered during D3 -- disabled, implementation
+TODO, out of scope.
