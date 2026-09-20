@@ -9,8 +9,9 @@
    rasterises reaches the screen any more, and there is no lever to bring it
    back -- the code is gone rather than gated.
 
-   WHAT IS LEFT IS THE UPLOAD, AND IT IS THE POINT. `tagpu_surf_take` captures
-   TA's composed frame on the CPU; this puts it on the device as a per-slot R8
+   WHAT IS LEFT IS THE UPLOAD, AND IT IS THE POINT. `tagpu_surf_capture` takes
+   TA's composed frame on the GAME thread, at the one point in the process where
+   it is finished (tagpu_surf.h); this puts it on the device as a per-slot R8
    index image with its palette beside it, and `tagpu_vk_surf_engine_view`
    hands that view out. It is the golden source: the picture the 1997 software
    rasteriser drew, kept so our passes can be checked against it. It is a
@@ -287,10 +288,11 @@ int tagpu_vk_surf_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         /* AND THE SLOT STOPS BEING ADDRESSABLE. This return used to leave
            `haveSerial` set, so `tagpu_vk_surf_engine_view` would hand this
            slot's image -- TAGPU_VK_SLOTS frames old -- to the UI layer as the
-           current frame. Unreachable today (`tagpu_surf_take` refuses an
-           out-of-range surface before `s_have` is set, so `tagpu_surf_frame`
-           cannot return one), which is exactly why it would have survived
-           until an edit here made it live. [FOUND by landing 10's review.] */
+           current frame. Unreachable today (the capture refuses an
+           out-of-range surface before it marks the snapshot usable, so
+           `tagpu_surf_frame` cannot return one), which is exactly why it would
+           have survived until an edit here made it live. [FOUND by landing
+           10's review.] */
         if (s_state == ST_READY) s_slot[slot].haveSerial = 0;
         return 0;
     }

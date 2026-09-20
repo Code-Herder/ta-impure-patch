@@ -99,6 +99,8 @@
 #include "tagpu_gui.h"       /* whether the render half wants the minimap surfaces */
 #include "tagpu_order.h"     /* tagpu_order_copy_builds: the build-ghost table,
                                 out of the snapshot the squares draw from        */
+#include "tagpu_surf.h"      /* the golden source: TA's composed frame, copied on
+                                THIS thread at the one point it is finished      */
 
 /* DrawGameScreen's prologue, `sub esp,0x214` — the same six bytes
    tagpu_menu.c observes */
@@ -1983,6 +1985,12 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
     s_fxHave = 0; s_nProj = s_nExpl = s_nDebris = s_nPart = 0;
     /* the next level's picture is a different picture, and it has not been sent */
     s_mmPicGen = -1; s_mmPicW = s_mmPicH = 0;
+    /* AND THE GOLDEN SOURCE GOES WITH THE LEVEL. The reference is a frame of
+       THIS game; held through the shell it would be diffed against the next
+       one, which is a wrong answer wearing the shape of a right one. This side
+       only says so -- the render thread drops what it holds at its next sync,
+       which keeps that flag to one writer (tagpu_surf.h). */
+    tagpu_surf_level_end();
 }
 
 /* ---- the observers ------------------------------------------------------- */
@@ -2072,6 +2080,29 @@ static void* __cdecl after_draw(unsigned int* regs)
         /* the live-state log tacli reads, from the packet just filled */
         if (pub) roster_log(s_lastFilled);
     }
+
+    /* THE GOLDEN SOURCE, ON THE THREAD THAT DREW IT [2026-09-20]. TA's composed
+       frame is copied here and nowhere else. This is the one point in the
+       process where it is COMPLETE BY CONSTRUCTION rather than by timing: the
+       flip `0x4C63A0` is called from inside this very function at `0x46A3DB`,
+       34 bytes before its `ret` at `0x46A3FD`, so by the time the observer's
+       `after` runs the engine has finished writing the primary -- and the
+       thread that writes it is this one, which is not running anywhere else.
+       Before this the copy ran on the RENDER thread out of `tagpu_overlay_draw`
+       with nothing sequencing the two, and could publish a frame torn between
+       the engine's terrain rows and its side-panel rows.
+
+       AND IT PAIRS THE REFERENCE WITH THE PACKET. The publish above is the
+       state our passes render; this is the picture the engine rendered from the
+       same state, in the same call. A diff of the two compares two renderers
+       rather than two moments.
+
+       AFTER the publish, deliberately: the packet is what the render thread
+       waits on, and the copy is most of a megabyte. `s_cDraws` rides along as
+       the snapshot's stamp so a comparison can name the draw it read. The call
+       returns at once unless the render thread has asked for a new one, which
+       is what bounds this to one copy per presented frame. */
+    tagpu_surf_capture(s_cDraws);
     return ret;
 }
 

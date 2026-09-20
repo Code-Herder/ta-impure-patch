@@ -103,7 +103,7 @@ static unsigned g_beat = 0, g_last = 0;
    marker pass's only engine-pixel path -- everything else it draws is
    re-derived from engine STATE as our own geometry. And it DIVERTED the
    engine's draw: bytes captured into our scratch never reached the engine's own
-   surface, so the reference frame `tagpu_surf_take` keeps was missing exactly
+   surface, so the reference frame `tagpu_surf.c` keeps was missing exactly
    the markers the capture had taken. Removing it makes the golden source whole
    again, which is what the cut is for.
 

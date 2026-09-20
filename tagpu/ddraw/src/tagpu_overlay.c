@@ -224,29 +224,33 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        (tagpu_pal.h). The engine's half comes from this frame's packet; a flag
        otherwise: the first reader below does the work. */
     tagpu_pal_frame(f->packet);
-    /* TA'S OWN FRAME, ONCE. It used to be the bottom layer of the composite --
-       everything of ours drawn over it and what we did not draw left showing.
-       Since the clean cut it is THE REFERENCE and nothing else: the picture the
-       1997 software rasteriser produced, captured here so it can be compared
-       against what we draw. Nothing composites it and no lever brings that
-       back.
+    /* TA'S OWN FRAME -- TAKEN ON THE GAME THREAD, TAKEN HERE. It used to be
+       the bottom layer of the composite -- everything of ours drawn over it and
+       what we did not draw left showing. Since the clean cut it is THE
+       REFERENCE and nothing else: the picture the 1997 software rasteriser
+       produced, kept so it can be compared against what we draw. Nothing
+       composites it and no lever brings that back.
 
-       STILL TAKEN HERE, AND STILL ONCE. The capture wants the engine's frame at
-       one instant, and a second reader taking its own copy at a different one
-       is how a diff ends up measuring two moments instead of two renderers.
-       `tagpu_vk_surf_prepare` puts these bytes on the device;
+       THE COPY IS NO LONGER MADE HERE, AND THAT IS THE POINT [2026-09-20].
+       This is the render thread; the bytes are written by the game thread, in
+       TA's rasteriser and in the flip's row loop, under no lock that covers
+       them. A copy taken from here could land mid-frame and publish a TORN
+       picture as the golden source with nothing marking it -- the hazard the
+       clean cut named and did not fix. The copy now runs where the writer runs
+       and where the frame is finished: `tagpu_packet_pub.c`'s `after_draw`
+       observer on `DrawGameScreen 0x468CF0`, past the flip at `0x46A3DB`, in
+       the same call that publishes the packet our passes draw from -- so the
+       reference and the state we render are the SAME engine frame.
+
+       WHAT IS LEFT HERE IS THE CONSUMER'S HALF, and it still runs exactly once
+       a frame: take whatever the game thread has answered, record this frame's
+       letterboxed viewport (ours, not the engine's), and ask for the next. Two
+       atomic loads and a store; `tagpu_surf.h` carries the ownership rule that
+       makes the two-buffer hand-over safe by construction rather than by
+       timing. `tagpu_vk_surf_prepare` puts the bytes on the device;
        `tagpu_vk_surf_engine_view` is how a pass asks for them.
-
-       WHERE IT SHOULD MOVE TO, WHICH THIS LANDING DID NOT DO. This runs on the
-       RENDER thread, and nothing sequences it against the game thread's draw --
-       so the capture can land mid-frame and the reference be a torn picture.
-       The hook it wants is the packet publisher's `after_draw` observer on
-       `DrawGameScreen` (0x468CF0, tagpu_packet_pub.c), where the engine's frame
-       is complete on the thread that drew it. Named here rather than left to be
-       rediscovered: it must be fixed before anyone trusts a pixel diff against
-       this. Cheap and silent when there is no 8-bit primary.
        [The vulkan-only plan, landing 4c-1 and THE CLEAN CUT.] */
-    tagpu_surf_take(f);
+    tagpu_surf_sync(f);
 
     /* THE VIEW FOR THIS FRAME, once, before any pass reads the eye: the zoom
        level (the levers, the wheel's ease), the cursor anchor's step against

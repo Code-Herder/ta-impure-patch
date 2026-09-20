@@ -2741,7 +2741,7 @@ static int vk_present(void)
             draw_world = tagpu_vk_world_prepare(&s_pass, cb, fi, &tw, &th);
 
             /* THE REFERENCE IS FILLED HERE AND DRAWN NOWHERE. This uploads the
-               bytes `tagpu_surf_take` captured into this slot's R8 image -- the
+               bytes the GAME thread captured into this slot's R8 image -- the
                original software rasteriser's own output, kept as a texture so
                our passes can be checked against it. It is not a pass and it
                puts no pixel anywhere: the composite it used to feed was deleted

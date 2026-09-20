@@ -191,19 +191,15 @@ static int    s_state;          /* 0 untried, 1 ready, 2 refused */
    bug is fixed the 4b-2 comfort comes back intact -- the engine really is the
    fallback, as it already is on gdi.
 
-   THE MECHANISM IS NOT ESTABLISHED AND THIS LANDING DOES NOT GUESS. The lead,
-   from reading rather than measuring: `tagpu_surf_take` (tagpu_surf.c:32,
-   called from `tagpu_overlay_draw`) copies `g_ddraw.primary->surface` on the
-   RENDER thread, while `tacli shot` reads the same object at the entry of the
-   engine's flip on the GAME thread, where it is by construction the frame the
-   previous flip presented. tagpu_surf.h's argument is explicitly a LIFETIME
-   one -- `g_ddraw.cs` keeps the pointer live and `dds_Flip` swaps inside it --
-   and says nothing about the buffer holding a FINISHED frame; TA writes those
-   bytes without entering that section. If the snapshot lands mid-draw it gets
-   what TA has drawn so far, which fits every observation above. Test it by
-   dumping the snapshot's own bytes in the frame `tacli shot` fires and
-   diffing. If it holds, the fix is an ORDERING -- snapshot where the shot
-   does -- never a timing mitigation.
+   THE MECHANISM IS NOT ESTABLISHED AND THIS LANDING DOES NOT GUESS. The lead
+   this paragraph carried was that the reference snapshot was taken on the
+   RENDER thread while TA wrote those bytes on the game thread under no lock
+   that covered them -- a LIFETIME argument for the pointer standing in for a
+   bound on the buffer -- so it could hold a half-drawn frame. THAT HALF IS NOW
+   FIXED [2026-09-20]: the copy runs on the game thread from the packet
+   publisher's `after_draw`, past the flip, and `tagpu_surf.h` carries the
+   ordering. It was never shown to be the mechanism of the fault described
+   above, and nothing here claims it was; what is gone is the confound.
 
    WHICH IS WHY THIS IS `return 0` AND NOT A LANE TEST. The expression was
    `s_state == 1 && !tagpu_vk_owns_present()`, whose second term is pinned

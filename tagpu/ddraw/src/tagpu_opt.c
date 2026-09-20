@@ -30,7 +30,7 @@ typedef struct { const char* on; const char* tokens; const char* needs; const ch
    THE CLEAN CUT REMOVED THE COMPOSITE, so the engine's frame reaches no pixel
    of the screen and there is nothing left to show through. What the
    suppressions still do is damage the one thing the cut promised to keep: the
-   reference. `tagpu_surf_take` captures the engine's composed frame as the
+   reference. `tagpu_surf_capture` takes the engine's composed frame as the
    golden source, and with these armed that capture holds a flat key-filled
    viewport with no terrain, no trees, no effects and no markers -- it is not
    the picture the 1997 software rasteriser draws, it is the picture it draws
