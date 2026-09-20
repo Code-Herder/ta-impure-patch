@@ -2914,10 +2914,31 @@ that a count which grows is the plan catching up with the work.) The row was
        `tagpu_hires.c` keeps its glTF half and loses `tagpu_hires_vao`, `upload_img`,
        `white_tex`, `gl_probe` and the GL body of `mesh_gl_free`. `tagpu_native.c:2785`'s
        `tagpu_hires_draw_ready()` gate goes with the pass it guards.
-     * **D4 — `opengl_utils.c` and the GL headers.** `opengl_utils.c`, `inc/opengl_utils.h`,
-       `inc/glcorearb.h`, `inc/wglext.h`, `inc/KHR/khrplatform.h`, plus the two lines in
-       `render_gdi.c`. `inc/openglshader.h` is **not** in this set — see the correction
-       above.
+     * **D4 — `opengl_utils.c` and the GL headers. DONE 2026-09-19.** `opengl_utils.c`,
+       `inc/opengl_utils.h`, `inc/glcorearb.h`, `inc/wglext.h`, `inc/KHR/khrplatform.h`, plus
+       the two lines in `render_gdi.c`. `inc/openglshader.h` is **not** in this set — see the
+       correction above, and it is now confirmed a third time: that header has **zero**
+       `#include` directives naming it anywhere in the tree, so every C-level dependency check
+       sees an orphan; walking `SOURCES` + `HEADER_SOURCES` and everything reachable under
+       `-Iinc` reaches **62 files**, `openglshader.h` among them and none of D4's five.
+
+       **7 619 lines of files plus four lines out of `render_gdi.c` and thirteen in — 7 623
+       deletions, 13 insertions. `gl-sites` goes 31 narrow / 98 wide → 0 / 0: no file in the
+       tree contains a GL call.** `.text` −4 816, the DLL −7 680. `inc/KHR/` goes with its only
+       file.
+
+       **The safety argument, established before the edit rather than after.** With comments AND
+       string literals masked, every `(g_oglu_*|oglu_*|xwgl*|wgl[A-Z]*)` in the repo — 230 of
+       them — is in those files plus `render_gdi.c`'s two; `tagpu_overlay.c`, `tagpu_gaf.c` and
+       `tagpu_vk.c` look like callers to a plain grep and are all comments. `oglu_init` and
+       `oglu_load_dll` masked-match four times between them: two prototypes, two definitions,
+       **no callers**, so `opengl32.dll` is never loaded and `g_oglu_version` — a file-scope
+       `char[128]` written only inside `oglu_init` — held its zero initialisation for the life
+       of every process. The one player-visible consequence was checked in the binaries rather
+       than argued: `gdi_render_main` IS reachable, its driver warning's parenthetical was
+       already rendering empty, and the literal keeps the `()` so the text is identical
+       character for character. `render_gdi.o`'s non-static inventory matches main's and the
+       DLL's export count is unchanged at 44. [gpu-status §2.80.]
 
      Deleting all of it takes `tools/gl-sites.py` to **0 narrow and 0 wide**: the four files
      hold 252 of the 252 narrow sites and 322 of the 322 wide ones.
@@ -3001,6 +3022,65 @@ that a count which grows is the plan catching up with the work.) The row was
 
      **Not assumed:** that the snapshot is the cause. The measurement above localises the loss
      to our pipeline and no further.
+
+     **THE OWNER'S HYPOTHESIS, 2026-09-19, AND THIS GATE NOW STOPS FOR THEM.** *"Gray world
+     issue: each time I see it I believe this simply the fog of war being full screen. Stop when
+     at that fix gate and show it to me."* — so **11-5f does not get driven to a fix without the
+     owner seeing it first.** Whatever a session finds here, it stops at the fix and shows the
+     picture.
+
+     **The owner then corrected the domain fact that disciplines this**, and it is recorded
+     because a session that did not know it would chase the wrong thing: *"I don't think trees
+     are supposed to be hidden by the gray fog of war, only the full black one for unmapped map
+     areas."* So grey fog keeps static features and merely darkens terrain; black fog draws no
+     terrain at all. **A frame with grey terrain and no trees is therefore not any fog state TA
+     has**, and the first attempt to read one that way was wrong.
+
+     Two things to say honestly about the hypothesis before anyone tests it:
+
+     1. **Measuring the frame properly made the defect far sharper than "half saturation", and
+        it points the same way.** In the NORMAL grab of landing 11 D3's A/B, **84.3 % of the
+        world's pixels have saturation 0–2 and the world's median saturation is 0.0** — the
+        terrain is not half-coloured, it is *greyscale*. The only coloured content is 12.8 % of
+        pixels at saturation 50–300, and that is the trees, which the per-frame census says our
+        feature pass does not draw (`feat=0` in every arm): they are the engine's own output,
+        composited. **So everything our lane renders is grey, and the only colour in the frame
+        is the engine's.** The owner's reading survives in that refined form — something
+        desaturates our lane's output wholesale — without needing fog to hide anything.
+        [gpu-status §2.80 carries the histogram.]
+
+     1b. **And the engine's layer is not stable, which is probably the same defect as the unit
+        loss above.** Three grabs of one arm, same scene, seconds apart, counted by saturated
+        pixels: **34 034 / 74 495 / 42 386** — a 2× swing. The "outlier grab" was never an
+        outlier; TA's composited content flickers continuously, and pairs of grabs happen to
+        catch the same state, which is how every pixel A/B in this gate has passed gate 1.
+        **11-5f's filed symptom and the grey world are most likely one defect**: when TA's frame
+        lands there is colour and there are trees; when it does not there is our grey terrain
+        alone.
+     2. **The "grey world" symptom was not written down in this plan under any name** until this
+        paragraph, which is why three attempts at it left no trail here. It is recorded as: the
+        Vulkan lane presenting at roughly half the engine's colour saturation. Whether it is the
+        same defect as the unit loss above or a second one sharing a cause is **open** — the
+        composite losing TA's own frame and the world losing its colour are both what you would
+        see if the fog layer were covering everything.
+
+     **What would settle it, and it is cheap:** the question is now "what desaturates our lane's
+     output", and saturation is a property of the colour path, not of geometry. Our terrain
+     samples an indexed atlas through a palette; a palette that resolves to luminance, an
+     `R8`/`sRGB` format mismatch, or a fog/shade factor applied at full strength would each
+     produce exactly a median saturation of 0.0. Fog of war is still worth excluding first
+     because it is state rather than a guess — `tagpu_fogwide.c` and the two grids are ours, and
+     the engine's fog bit is in [exe-reverse-engineering](exe-reverse-engineering.html) — so read
+     the grid the Vulkan lane binds on a grey frame and ask whether it says "unseen" everywhere.
+     Either way it is a **data check, not another frame diff**, which is what this gate was
+     already told to do next.
+
+     **HOW THE OWNER REVIEWS IT, ON THEIR INSTRUCTION 2026-09-19:** *"When you need me to check
+     the gray world issue, stop the loop and let me review the running game with shield off to
+     confirm the issue."* So the session **stops the loop**, leaves an instance RUNNING with
+     `tacli shield <name> off` so their keyboard and mouse reach it, and hands it over — not a
+     screenshot, and not on the 4K screen (`tile` in `instance.json` is the lever). Confirmation
+     comes from the owner looking at a live game, before any fix is attempted.
 
    * **11-6 — the exit condition.** `renderer=gdi` documented and MEASURED as the stock
      reference, with the residue named rather than waved at. **Note what 11-5d's gdi control

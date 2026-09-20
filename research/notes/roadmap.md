@@ -3370,9 +3370,10 @@ because the two halves of it went dark together so that nothing stood down and n
 `s_live = 1` and `s_pubHave = 1` each occurred exactly once, inside callerless functions; and
 `tagpu_hires_draw_ready()` is 0 on every run because `opengl32.dll` is never in the process, so
 every replacement mesh is loaded, parsed and then discarded — which the live logs of all four
-A/B arms say in as many words. **D1 (the GLSL lift), D2 (the shadow deletion) and D3 (the glTF loader and its GL
-draw pass) landed 2026-09-19**: `gl-sites` is **31 narrow / 98 wide in ONE file**,
-`opengl_utils.c`, which is all D4 has left; D1's binary was
+A/B arms say in as many words. **D1 (the GLSL lift), D2 (the shadow deletion), D3 (the glTF loader and its GL
+draw pass) and D4 (`opengl_utils.c` and the GL headers) all landed 2026-09-19**: `gl-sites` is
+**0 narrow / 0 wide — NO FILE IN THE TREE CONTAINS A GL CALL**, and D4 alone took 7 623 lines of
+which 7 006 were vendor headers nothing else included; D1's binary was
 byte-identical in `.text`, `.rdata` and `.data`, and D2 and D3 each measured **0 px outside the
 minimap and the fixture's own oscillating cursor pixel** on every cross-build pairing — D3's four
 came to 1, 49, 44 and 44 px on the re-run after its review fixes, the same-build controls to 45
@@ -3409,9 +3410,11 @@ absence.) Deleting that one branch orphaned sixteen functions across sixteen fil
 each — none of which a caller scan had flagged, because each of them did have a caller: the
 one above it.
 **So the search is "which tests can never be true", not "which functions have no callers";
-the latter finds leaves.** **Not covered by 11-5a–e**: `opengl_utils.c` and its four headers, which D4 takes;
-`tagpu_shadow.c` and `tagpu_hires_draw.c` were the other two and landings D2 and D3 took them,
-the shadow half still escalation
+the latter finds leaves.** **Not covered by 11-5a–e**: nothing of the GL lane — D2, D3 and D4 took
+`tagpu_shadow.c`, `tagpu_hires_draw.c`, `opengl_utils.c` and its four headers, and `gl-sites`
+reads 0/0. What IS still open is **11-5f**, the grey world and the composite losing TA's own
+frame, which measurement now suggests are one defect and which **stops for the owner before any
+fix**; and the shadow half still escalation
 reason 1, and now known to be more than a preference — `tagpu_shadow_begin` has no caller
 anywhere in the tree, so that pass is already dead and the question is whether the two files are
 scaffolding for a Vulkan-side producer or debris. See the plan's

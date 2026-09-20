@@ -13775,7 +13775,7 @@ the first attempt ended up with a measurement that never touched the code the la
 for. The four gates bound drift between and within runs; none of them bounds a second player, and
 none of them notices that the thing under test was never exercised.
 
-### 2.80 Two features that were already dark, and the deletion that made them visible — landing 11 D1, D2 and D3
+### 2.80 Two features that were already dark, and the deletion that made them visible — landing 11 D1–D4
 
 The gate's remaining work was filed as "delete four GL files". Surveying it after Decision 1
 found that **three of the four are not what the row assumed**, and one of the findings is not
@@ -14080,6 +14080,47 @@ no Vulkan pass touches, is a capture that caught the engine's own blit half done
 D3 effect** — and the honest limit on that statement is that twelve grabs saw it once, which is
 too few to put a rate on.
 
+**BOTH OF THOSE READINGS WERE WRONG, AND MEASURING THE FRAME PROPERLY OVERTURNED THEM.** The
+first call was "a blit caught half done". The second, after the owner offered *"each time I see
+it I believe this simply the fog of war being full screen"*, was that the grab showed fog
+desaturating terrain and hiding features. **The owner then corrected the domain fact that kills
+that reading: grey fog of war does NOT hide trees — only the black unmapped fog does, and under
+black fog the terrain is not drawn at all.** So a frame with grey terrain and no trees is not any
+fog state TA has.
+
+What the frame actually contains, measured rather than eyeballed:
+
+| | pixels | share |
+|---|---|---|
+| saturation 0–2 — **neutral grey** | 491 058 | **84.3 %** |
+| saturation 8–20 | 5 064 | 0.9 % |
+| saturation 20–50 | 12 072 | 2.1 % |
+| saturation 50–300 | 74 495 | 12.8 % |
+
+That is the **NORMAL** grab, not the outlier. **The world's median saturation is 0.0.** The
+terrain was already grey in every frame; nothing desaturated it between grabs. The only coloured
+thing in the scene is the 12.8 % that is the trees — and the per-frame census logs `feat=0` in
+every arm, so **our feature pass draws none of them**: they are the engine's own output,
+composited. The pixels that differ between grabs are exactly that coloured set (mean saturation
+82.0 in the frame that has them, 0.2 in the frame that does not), while the 485 600 pixels that
+are byte-identical between the two frames average RGB 66.7/67.1/66.7 — neutral in both.
+
+**So the split is clean, and it is the 11-5f defect stated far more sharply than "half the
+engine's saturation": everything OUR lane renders is greyscale, and the only colour in the frame
+is what the engine composites.** The owner's hypothesis survives in that refined form — something
+is desaturating our lane's output wholesale — but it is not fog hiding features.
+
+**AND THE ENGINE'S LAYER IS NOT STABLE.** Three grabs of one arm, same scene, seconds apart,
+counted by saturated pixels: **34 034 / 74 495 / 42 386**. It varies by more than 2×. The
+"outlier grab" was never an outlier; the engine's composited content flickers continuously, and
+pairs of grabs sometimes catch the same state — which is how every pixel A/B in this gate has
+passed gate 1. That is the same defect 11-5f was filed for ("TA's own frame loses its units in
+the Vulkan composite"): when TA's frame lands there is colour and there are trees, when it does
+not there is our grey terrain alone.
+
+**11-5f now stops for the owner before any fix**, and they review a running game with the shield
+off rather than a screenshot — see the [vulkan-only plan](vulkan-only-plan.html), 11-5f.
+
 #### D3'S REVIEW — 23 FINDINGS, NONE A CODE DEFECT, AND ONE THAT BECAME A BOUND
 
 The dedicated read-only review returned **3 HIGH, 14 MEDIUM, 6 LOW**, verified every mechanical
@@ -14192,3 +14233,103 @@ FOUR of seventeen, not one. Counts re-derived with `grep -cE '\bname\s*\('` at b
 after the landing's review caught them.) The
 compiler-generated clones that vanished from `tagpu_vk_hires.o` (`mem_type.isra.0`,
 `mk_buffer.constprop.0`) are the expected consequence of a stub that folds to a constant.
+
+#### D4 — THE LAST GL FILE, AND THE LANE IS GONE
+
+D4 deletes what D1–D3 left: **`opengl_utils.c`** — the loader, the `wgl` bootstrap and the 98
+entry-point trampolines that were the whole of `gl-sites`' remaining count — together with its
+header and the three vendor headers only it included — **7 619 lines**, of which
+**7 006 are vendor headers** (`glcorearb.h`, `wglext.h`, `khrplatform.h`) that nothing else in
+the tree includes.
+
+| out | lines |
+|---|---|
+| `tagpu/ddraw/src/opengl_utils.c` | 493 |
+| `tagpu/ddraw/inc/opengl_utils.h` | 120 |
+| `tagpu/ddraw/inc/glcorearb.h` | 5 879 |
+| `tagpu/ddraw/inc/wglext.h` | 845 |
+| `tagpu/ddraw/inc/KHR/khrplatform.h` | 282 |
+| **total** | **7 619** |
+
+Plus four lines out of `render_gdi.c` and thirteen in, so the commit is **7 623 deletions and 13
+insertions**. `gl-sites` goes **31 narrow / 98 wide → 0 / 0 — no file in the tree contains a GL
+call**, and `inc/KHR/` goes with its only file. `.text` −4 816 bytes, the DLL −7 680.
+
+**`inc/openglshader.h` is NOT in this set, for the third time of asking.** It has **zero**
+`#include` directives naming it anywhere in the tree; `tools/spirv-gen.py` is its only consumer,
+through `HEADER_SOURCES`, and the Vulkan lane draws one pair out of it — the base blit that puts
+TA's 8-bit surface on the frame through the palette. Every C-level dependency check sees an
+orphan. The check that does not: walk `SOURCES` + `HEADER_SOURCES` and every `#include`
+reachable from them under `-Iinc`. That reaches **62 files**, `openglshader.h` among them and
+none of D4's five. *A file whose only consumer is `tools/spirv-gen.py` is load-bearing and
+invisible.*
+
+#### WHAT MADE THE DELETION SAFE, ESTABLISHED BEFORE THE EDIT
+
+Not "it compiles" — that is the check this repo has already watched fail, because a missing
+non-static function compiles clean under `-Wall`. Four facts, each re-derived:
+
+1. **No live reference outside the set.** With comments *and* string literals masked,
+   `(g_oglu_*|oglu_*|xwgl*|wgl[A-Z]*)` matches **230 times in four files** — 125
+   `opengl_utils.c`, 88 `wglext.h`, 15 `opengl_utils.h`, 2 `render_gdi.c` — and nowhere else.
+   `tagpu_overlay.c`, `tagpu_gaf.c` and `tagpu_vk.c` look like callers to a plain grep and are
+   **all comments**, which is the trap this repo documents and the reason the masked count
+   exists at all.
+2. **The two entry points have no callers.** `oglu_init` and `oglu_load_dll` masked-match four
+   times between them: two prototypes and two definitions. So `opengl32.dll` is never loaded.
+3. **`g_oglu_version` was therefore always the empty string.** It is a file-scope `char[128]`
+   with exactly one writer, inside `oglu_init` — so it held its zero initialisation for the life
+   of every process, and `strlen(...) > 10` was always false.
+4. **The one player-visible consequence was checked rather than assumed.** `gdi_render_main`
+   **is** reachable (`dd.c`, `render_vk.c`, `winapi_hooks.c`), so the driver warning can still
+   appear. Its parenthetical was already rendering empty; the literal keeps the `()` and drops
+   the `%s`, so the text a player sees is identical character for character.
+
+#### VERIFIED BY INVENTORY, NOT BY "IT COMPILES"
+
+`render_gdi.c` is the only edited translation unit, and a missing non-static function compiles
+clean under `-Wall` — which is why this repo checks the inventory instead. Built `git archive
+main` into a temp tree, compiled the file both sides, compared `nm --defined-only`:
+
+```
+main : _gdi_render_main@0
+HEAD : _gdi_render_main@0      IDENTICAL
+```
+
+and the DLL's export count is unchanged at **44**.
+
+**And the player-visible string was checked in the binaries, not argued about.** The two string
+tables:
+
+```
+main  "-WARNING- Using slow software rendering, please update your graphics card driver (%s)"
+D4    "-WARNING- Using slow software rendering, please update your graphics card driver ()"
+```
+
+`%s` was always fed `g_oglu_version`, always `""`, so both render `…driver ()` — character for
+character the same thing a player saw before.
+
+#### THE TOOL REFUSED ITS OWN FIRST RUN, WHICH IS THE RIGHT FAILURE DIRECTION
+
+The edit script ends with a guard: nothing named `opengl_utils` or `g_oglu` may survive in
+`render_gdi.c`. It fired — on the replacement comment, which names both as *history*, because
+that is what a tombstone comment is for. The guard now masks comments and string literals first
+and checks only what the compiler sees. Worth recording rather than quietly patching: a deletion
+tool that refuses wrongly costs one minute, and D3's first cut — a heuristic that was right four
+times in five — cost a thrown-away surgery. **Refuse by default; the fifth case is the silent
+one.**
+
+#### THE RESIDUE D4 DOES NOT CLEAN UP, NAMED WITH ITS COUNT
+
+`render_ogl.c` and `render_ogl.h` went in **landing 11-2**. Tracked content still cites them
+**168 times** — 65 in `tagpu/ddraw` across 36 files (only **9** of which mark it as gone), 92 in
+`research/notes/`, 8 in `tools/`, 3 in `.claude/`. Most of the fork's are present tense:
+"render_ogl.c's loop", "called ONCE per frame from the render_ogl.c frame bracket",
+"`render_ogl.c:549` asks the LINKER where each attribute landed".
+
+**This is deliberately not folded into D4.** D4 is five files and two lines; an audit of 168
+sites is a different landing with a different risk profile. But D4 is the landing after which
+there is no GL lane at all, so "the GL lane" stops being a thing a comment can point at — which
+makes this the moment to write the count down rather than let the next session find it.
+**It is an input to 11-6's exit condition**: a gate whose title is "the OpenGL lane goes" that
+leaves 168 present-tense references to the deleted lane has not finished.
