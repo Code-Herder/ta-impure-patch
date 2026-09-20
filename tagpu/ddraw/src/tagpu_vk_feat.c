@@ -1286,14 +1286,17 @@ int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
                         ? "this frame makes the job and draws nothing"
                         : "drawing the indexed atlas until one is painted");
         }
-        /* NO TWIN AND NO FEED DRAWS INDEXED, NOT NOTHING (11-5e-2c review, H1).
-           This was `return 0`, unreachable while `restored` was pinned 0 and
-           reachable the moment it was unpinned -- and this atlas changes
-           generation on every map or level change, so it is the routine path
-           and not only the failure one. Same argument as the unit pass: there
-           is no second lane to disagree with, and the binding already falls
-           back to the indexed view. */
-        if (!feed) h.restored = 0;
+        /* AN UNPAINTED TWIN DRAWS INDEXED, ON BOTH BRANCHES (11-5e-2c review
+           H1, completed by the verification pass). This was `return 0`,
+           unreachable while `restored` was pinned 0 and reachable the moment it
+           was unpinned -- and this atlas changes generation on every map or
+           level change, so it is the routine path and not only the failure one.
+           The first cut cleared the flag on `!feed` alone, which is the rare
+           half: a generation change satisfies every feed term and so still
+           returned without drawing. Same argument as the unit pass -- there is
+           no second lane to disagree with, so indexed art is Classic++ restore
+           off for one frame rather than a disagreement with anybody. */
+        h.restored = 0;
     } else s_saidRestored = 0;
 
     /* THE BOUNDS, RE-CHECKED. Every one of these sizes an allocation or a
@@ -1348,10 +1351,12 @@ int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        `tagpu_vk_restore_step`, after every pass's prepare -- this call only
        creates and feeds the job. */
     restore_want(d, &h);
-    /* A FEED FRAME ENDS HERE: the atlas is uploaded and the restore has its
-       frames, and there is no restored twin to draw against yet. The frame is
-       NOT claimed -- see the A/B note at the bottom of this function. */
-    if (feed) return 0;
+    /* A FEED FRAME USED TO END HERE and no longer does (11-5e-2c): "there is no
+       restored twin to draw against yet" was true and beside the point, because
+       the indexed atlas is there to draw against and is what this pass drew
+       before Classic++ existed. `restore_want` above has already made the job --
+       it takes no command buffer and never reads `restored` -- so drawing on
+       this frame conflicts with nothing it did. */
 
     /* THE THREE SMALL IMAGES, per slot, so the one-line invariant covers them:
        UNDEFINED in, because the whole of each is re-sent every frame and there

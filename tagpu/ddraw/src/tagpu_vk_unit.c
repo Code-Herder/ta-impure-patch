@@ -1154,11 +1154,20 @@ static int build_descriptors(const TAGPU_VKPASS* d)
    the test is kept as the assertion that it does not.
 
    A FAILURE HERE IS NOT FATAL AND MUST NOT BE. The view stays NULL, binding 43
-   falls back to the indexed view exactly as it did before gate 3, and the
-   restored refusal in `prepare` keeps the branch unreachable -- so a device
+   falls back to the indexed view exactly as it did before gate 3 -- so a device
    that will not give us 16 MB of RGBA8 loses restored frames rather than the
    pass. That is why it does not join the `goto refuse` family, whose label
-   stops the pass for the session. */
+   stops the pass for the session.
+
+   THIS USED TO REST ON A THIRD CLAUSE -- "and the restored refusal in `prepare`
+   keeps the branch unreachable" -- AND 11-5e-2c MADE IT FALSE. That refusal was
+   dead code while `restored` was pinned 0; unpinning the flag woke it, and it
+   did not lose restored frames, it lost the pass for the session. The refusal
+   is gone and what holds the promise now is stated where it is enforced:
+   `prepare` clears `h.restored` whenever the twin is not painted, and the
+   binding below names the twin only when `s_arHave` says it has left
+   UNDEFINED. The two are computed from the same pair, so the flag and the
+   descriptor agree by construction. [The 11-5e-2c reviews.] */
 /* THE REQUEST, AND WHAT THIS LANE DOES WITH IT (the Vulkan-only plan's landing
    7e-2). Landing 7d's `restore_want` in tagpu_vk_feat.c and tagpu_vk_fx.c is
    the shape and every comment there applies here; what the UNITS add is the
@@ -2006,8 +2015,11 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
            not give us 16 MB of RGBA8 loses restored frames rather than the
            pass". */
         h.restored = 0;
-    }
-    s_saidAniso = 0;
+    } else s_saidAniso = 0;   /* the latch, which the first cut of this fix killed:
+                                 `goto standdown` used to make the line below
+                                 unreachable while the condition held, so moving to a
+                                 fall-through logged it EVERY frame. [The 11-5e-2c
+                                 verification pass.] */
 
     /* A RESTORE THIS LANE RAN, and the refusal must not always return: there is
        no painted twin until a job exists, and the job is made below in
@@ -2020,26 +2032,31 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         if (h.restoreFrames && s_arImg && !s_rjTried) feed = 1;
         if (!s_saidRestored) {
             s_saidRestored = 1;
-            plog(d, "unit: the other lane is drawing through the Classic++ restored "
-                    "atlas and this lane has no restore of its own yet - nothing "
-                    "drawn until one arrives, rather than a different picture from "
-                    "its own oracle");
+            plog(d, "unit: a Classic++ restore is armed and this lane's twin is not "
+                    "painted yet - drawing the indexed atlas until it is%s",
+                 feed ? " (this frame also makes the restore job)" : "");
         }
-        /* NO TWIN AND NO FEED IS "DRAW IT INDEXED", NOT "DRAW NOTHING"
-           (11-5e-2c review, H1). This was `goto standdown`, and unpinning
-           `restored` is what made it reachable -- with five one-way `s_rjTried`
-           latches above and `rlistRepaint` a constant 0, it blanked every unit
-           for the rest of the session on any restorer refusal, and for the
-           length of a repaint on every ordinary generation change.
+        /* AN UNPAINTED TWIN DRAWS INDEXED. ON BOTH BRANCHES (11-5e-2c review,
+           H1, completed by the verification pass). This was `goto standdown`,
+           and unpinning `restored` is what made it reachable: with five one-way
+           `s_rjTried` latches above it blanked every unit for the rest of the
+           SESSION on any restorer refusal, and -- because `rlistRepaint` is a
+           constant 0, so `if (!repaint) s_arHave = 0;` fires on every
+           generation change -- for the length of a repaint on every level
+           boundary, recycle and map change.
 
-           THE STAND-DOWN'S PREMISE IS GONE. It existed to avoid showing "a
-           different picture from its own oracle" -- art filtered unlike the
-           other lane's. There is no other lane: `render_vk.c:232` is the only
-           caller of `tagpu_overlay_draw`. Indexed art is not a disagreement
-           with anybody, it is simply Classic++ restore off for this frame, and
-           binding 43 already falls back to `s_atView`/`s_samp` for exactly
-           that. A bound on what the flag may promise, not a timing fix. */
-        if (!feed) h.restored = 0;
+           THE FIRST CUT OF THIS FIX ONLY COVERED `!feed`, WHICH IS THE RARE
+           HALF. A generation change satisfies all three feed terms, so it took
+           `feed = 1` and returned through `feedout` still drawing nothing --
+           the routine case, unfixed, while the note claimed otherwise.
+
+           THE STAND-DOWN'S PREMISE IS GONE EITHER WAY. It existed to avoid
+           showing "a different picture from its own oracle" -- art filtered
+           unlike the other lane's. There is no other lane: `render_vk.c:232`
+           is the only caller of `tagpu_overlay_draw`. Indexed art is not a
+           disagreement with anybody, it is Classic++ restore off for one
+           frame. A bound on what the flag may promise, not a timing fix. */
+        h.restored = 0;
     } else s_saidRestored = 0;
 
     /* THE FOG GRID, and the bound re-checked in this file's own terms. A unit
@@ -2340,12 +2357,12 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        frame that came here only to make the job: it has nothing to draw yet and
        says so by returning 0, exactly as the refusal above would have. */
     restore_want(d, &h);
-    /* ...AND OUT THROUGH `feedout`, WHICH DESTROYS NOTHING. A feed frame has
-       drawn nothing, but it is not empty-handed: `atlas_upload` above has
-       already recorded a copy OUT OF `s->vstage`, and `cb` is submitted whether
-       this pass draws or not. It took `standdown` until 2026-09-17 -- and
-       `slot_free` there destroys that very buffer. See the label. */
-    if (feed) goto feedout;
+    /* AND THE FEED FRAME NOW DRAWS, so there is no `goto feedout` here any more
+       (11-5e-2c). It used to leave through that label having drawn nothing,
+       because the only thing it could draw was a twin that did not exist yet;
+       with `restored` cleared above it draws the indexed atlas like any other
+       frame. `feedout` itself is gone with the jump -- what it protected against
+       is recorded at `standdown` instead, because that is where the hazard is. */
 
     /* THE FOUR SMALL IMAGES, per slot, so the one-line invariant covers them:
        UNDEFINED in, because the whole of each is re-sent every frame and there
@@ -2422,40 +2439,6 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     s_pStride = pstride;
     return 1;
 
-feedout:
-    /* A FEED FRAME KEEPS ITS SLOT, because it has already spent it. By the
-       time control reaches here `slot_vstage` has allocated `s->vstage` and
-       `atlas_upload` has memcpy'd the indexed mirror into it and recorded a
-       `vkCmdCopyBufferToImage` out of it. `cb` is submitted whether this pass
-       draws or not, so that copy WILL run -- and `standdown` below frees the slot,
-       which is `slot_free` -> `kill_buffer(&s->vstage)`: the source buffer of a
-       copy the GPU has not executed yet.
-
-       WHAT IT LOOKED LIKE, because this is the shape to recognise rather than
-       the rule to recite. `atlas_upload` latches `s_atHave`, `s_atSerial` and
-       `s_atRows` at RECORD time, so after the lost copy the pass believes the
-       device holds rows it never received, and it does not re-upload until the
-       mirror's serial moves again. `restore_want`, three lines above, then
-       hands the restorer frames that `covered_prefix` says are covered, and the
-       Vulkan lane restores them from an EMPTY atlas image. The OUT pass reads
-       `frag = c - net` with `c` and `net` both taken from palette index 0, so
-       every one of those cells came out BLACK, alpha 1 -- and only on the
-       Vulkan lane, because the GL lane samples `tex`, which was never missing
-       the art.
-
-       Landing 7e-2's chain oracle is what found it, and the evidence is worth
-       keeping because every cheaper reading of it was wrong: the frames are
-       FULL in the mirror at upload time (per-frame non-zero counts, empty=0 of
-       25), the staged bytes are byte-for-byte the mirror (55 608 == 55 608),
-       and a read-back of the device image taken early shows 404 798 texels
-       missing while the same read-back taken later is exact. The end-of-run
-       source dump therefore says IDENTICAL and cannot see this at all.
-
-       So this path destroys NOTHING, exactly as `refuse` does and for exactly
-       the same reason -- it simply is not a refusal, so the pass stays READY
-       and the slot's buffers are reused or resized by whichever frame takes the
-       slot next, behind that slot's own fence. [FOUND 2026-09-17.] */
-    return 0;
 
 standdown:
     /* NOT A REFUSAL OF THE PASS: a frame this pass will not draw, and the slot
@@ -2466,8 +2449,32 @@ standdown:
        control reaches here. That was the whole of the argument and it was
        stated as "safe here and only here", which read as a property of the
        label rather than of its callers -- and then the feed path was pointed at
-       it from BELOW the two atlas uploads. A new stand-down added under
-       `slot_vstage` belongs at `feedout`, not here. */
+       it from BELOW the two atlas uploads.
+
+       `feedout` WAS THE LABEL THAT SOLVED THAT, AND IT IS GONE SINCE 11-5e-2c,
+       because the feed frame now draws and nothing jumps there any more. The
+       hazard it existed for is unchanged and is recorded here instead, since a
+       future stand-down is the only way to meet it again:
+
+         by the time control is below `slot_vstage`, `atlas_upload` has memcpy'd
+         the indexed mirror into `s->vstage` and recorded a
+         `vkCmdCopyBufferToImage` out of it. `cb` is submitted whether this pass
+         draws or not, so that copy WILL run -- and `slot_free` here is
+         `kill_buffer(&s->vstage)`, the SOURCE buffer of a copy the GPU has not
+         executed yet.
+
+       What that looked like, because the shape is worth recognising rather than
+       the rule reciting: `atlas_upload` latches `s_atHave`, `s_atSerial` and
+       `s_atRows` at RECORD time, so after the lost copy the pass believed the
+       device held rows it never received and did not re-upload until the
+       mirror's serial moved again. `restore_want` then handed the restorer
+       frames `covered_prefix` called covered, and the lane restored them from an
+       EMPTY atlas image: the OUT pass reads `frag = c - net` with both taken
+       from palette index 0, so every one of those cells came out BLACK, alpha 1.
+       [FOUND 2026-09-17.]
+
+       SO: a new stand-down added BELOW `slot_vstage` must `return 0` without
+       freeing the slot -- never `goto standdown`. */
     if (s_state == ST_READY) slot_free(d, s);
     return 0;
 
@@ -2611,8 +2618,20 @@ static void bind_main(const TAGPU_VKPASS* d, uint32_t slot)
        is the indexed image AND the indexed sampler together: filtering palette
        indices would blend two table entries, and the pair only ever stands in
        on frames `prepare` has already refused. */
-    ii[3].sampler = s_arView ? s_sampTwin : s_samp;
-    ii[3].imageView = s_arView ? s_arView : s_atView;
+    /* `s_arHave`, NOT JUST `s_arView` -- A LAYOUT QUESTION BEFORE A PICTURE ONE
+       (11-5e-2c verification pass). `mk_image` creates the twin UNDEFINED and
+       only the restorer's own job transitions it; on a path where the image is
+       made and no job ever runs it stays UNDEFINED, and naming it here with
+       `imageLayout = SHADER_READ_ONLY_OPTIMAL` is a descriptor-layout mismatch
+       on a statically-used binding. That was survivable only while the removed
+       stand-down kept those frames from drawing at all. `s_arHave` comes from
+       `painted > 0`, so testing it is exactly "this image has left UNDEFINED",
+       and it is the same pair that decides `uRestored` -- which makes the flag
+       and this descriptor agree BY CONSTRUCTION rather than by a refusal placed
+       somewhere else. `tagpu_vk_terr.c:1080` settled this for binding 42 in the
+       11-5c re-review and gives the whole argument. */
+    ii[3].sampler   = (s_arView && s_arHave) ? s_sampTwin : s_samp;
+    ii[3].imageView = (s_arView && s_arHave) ? s_arView   : s_atView;
     /* BINDING 44 NAMES THE REAL OVERLAY WHEN THERE IS ONE, even though this
        pass refuses every frame that samples it (see `upload`): the mechanism
        is what the next landing needs, and a descriptor that names the actual
