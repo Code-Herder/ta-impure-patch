@@ -63,4 +63,84 @@ void tagpu_vk_hires_down(const TAGPU_VKPASS* d);
 int  tagpu_vk_hires_down_owed(void);
 void tagpu_vk_hires_down_paid(const TAGPU_VKPASS* d);
 
+/* ---- WHAT A HIRES HAND-OVER IS, AND WHO IS SUPPOSED TO PUBLISH ONE --------
+
+   These four types lived in `inc/tagpu_hires_draw.h` until landing 11 D3
+   deleted that header with the GL lane. They are kept, unchanged, because they
+   are the shape this pass consumes and the next producer should not have to
+   invent them again.
+
+   THERE IS NO PRODUCER, AND THERE WAS NONE BEFORE THE DELETION EITHER.
+   `s_hiHave` had exactly one writer, inside `tagpu_hires_depth`, and that
+   function had ZERO call sites -- so the hand-over returned 0 on every frame of
+   every session. Independently of that, `tagpu_hires_draw_ready()` answered 0
+   because `opengl32.dll` is never in the process, so `tagpu_native.c` nulled
+   every replacement-mesh pointer and there was nothing to publish in any case.
+   Measured on live runs: all four A/B arms log `hires draw: missing GL proc`
+   and then the fallback to the engine's own 3DO.
+
+   glTF REPLACEMENT MODELS ARE DISABLED AND THEIR IMPLEMENTATION IS TODO AND
+   OUT OF SCOPE -- the owner's ruling, 2026-09-19. Reviving them needs a LOADER
+   first: the glTF parser, the piece table, the material grouping and the
+   COB-driven pose went with `tagpu_hires.c` and are in git at D3's parent.
+   What this pass still owns is everything it always did -- the vertex buffers,
+   the descriptors, the pose uniform block and the caster draw.
+   [gpu-status 2.80.] */
+
+/* The cap every count in the hand-over is checked against, moved here with
+   the types it bounds (landing 11 D3). */
+#define TAGPU_HI_MAXHAND 256
+
+typedef struct TAGPU_HIGREC {       /* one glTF material's draw */
+    float base[4];                  /* baseColorFactor, linear  */
+    float cutoff;                   /* < 0 OPAQUE, else the alpha cutoff */
+    int   first, count;             /* VERTICES, as TAGPU_HGROUP gives them */
+} TAGPU_HIGREC;
+
+typedef struct TAGPU_HIMESH {
+    /* the triangles as bytes. `gen` moves on every reload of the file, so a
+       consumer caching a device buffer keyed on it is told when the triangles
+       under it changed -- the pointer alone is not an identity, because the
+       mesh table recycles its slots. */
+    const float* v;
+    int      ntri, stride;
+    unsigned gen;
+    int      npiece;
+    int      grpOff, ngroup;        /* this mesh's run in `groups` */
+} TAGPU_HIMESH;
+
+typedef struct TAGPU_HIUREC {
+    int   mesh;                     /* index into `meshes`      */
+    int   npose;                    /* pieces `rows` carries    */
+    unsigned rowOff;                /* first of npose*3 vec4 in `rows` */
+    float anchor[4];                /* ax, ay, world x, projected world z */
+    float yawEnc[3];                /* cos(yaw), sin(yaw), enc -- AS THE GL
+                                       pass computes them, so the port does no
+                                       trigonometry of its own to disagree in */
+    float cast[3];                  /* altitude, ground + throw, length scale */
+} TAGPU_HIUREC;
+
+typedef struct TAGPU_HIHAND {
+    unsigned frame;
+    /* 1 = the GL depth pass ran this frame. 0 means the map has no replacement
+       mesh in it, which is NOT the same as "no unit had one": the pass returns
+       early when it is not ready, and a consumer that read the unit records
+       alone would draw casters the oracle did not. */
+    int   depthOn;
+    float shadowMat[16];
+    const TAGPU_HIUREC* units;  int nunit;
+    const TAGPU_HIMESH* meshes; int nmesh;
+    const TAGPU_HIGREC* groups; int ngroup;
+    const float* rows; unsigned nrow;   /* vec4s, 3 per piece per unit */
+    /* THE ALBEDO IS NOT CARRIED, AND THIS IS THE FLAG THAT MAKES THAT HONEST.
+       The depth path samples the albedo for one thing only -- the alpha cutout
+       (`if (uCutoff >= 0.0 && tex.a * uBase.a < uCutoff) discard;`) -- and
+       every material of the shipped replacement is alphaMode OPAQUE, so
+       `cutoff` is negative for every group and the sampled value is discarded.
+       1 here means a group with a real cutoff was drawn into the GL map, and
+       the Vulkan pass must then draw NOTHING rather than a map with the holes
+       missing. Deferring the textures is only honest while this is checked. */
+    int   cutoutSeen;
+} TAGPU_HIHAND;
+
 #endif

@@ -69,7 +69,6 @@
 #include "tagpu_render3do.h"
 #include "tagpu_scaffold.h"
 #include "tagpu_hires.h"
-#include "tagpu_hires_draw.h"
 #include "tagpu_fx.h"
 #include "tagpu_sfx.h"
 #include "tagpu_fxown.h"
@@ -1094,9 +1093,6 @@ static int emit_fx_model(const TAGPU_FXMODEL* m, int nv, float fxKey)
 
    research/notes/model-import.md carries the derivation and the numbers. */
 
-#define HPOSE_MAX  49152        /* floats: ~340 posed Peewees in a frame     */
-static float s_hpose[HPOSE_MAX];
-static int   s_hposeN;
 
 /* o = a * b, both 4x3 row-major (rows of {m0,m1,m2,t}) */
 static void m43_mul(const float* a, const float* b, float* o)
@@ -1132,83 +1128,8 @@ static void piece_local(const unsigned short* turn, const float* d, float* o)
     o[0*4+3] = d[0]; o[1*4+3] = d[1]; o[2*4+3] = d[2];
 }
 
-/* glTF piece -> engine primitive, resolved by name once per unit TYPE: the
-   Model3DONode tree is shared by every unit of a type, so the node pointer of
-   primitive 0 identifies the template the mapping was resolved against, and
-   the mesh's reload generation identifies the piece list on the other side. */
-typedef struct {
-    const void* mesh;
-    unsigned gen;
-    const void* nd0;
-    int   n;                                  /* glTF pieces mapped         */
-    short e[TAGPU_HMAXPIECE];                 /* engine primitive, -1 = none */
-} HPMAP;
-static HPMAP s_pmap[8];
-static int   s_npmap;
 
-/* `a` is ours (a glTF piece name, at most 31 chars); `b` is the engine's, and
-   the caller can only establish that ONE byte of it is readable. This compare
-   reads as many as `a` is long, so a name lying in the last bytes of a page
-   would fault the render thread on the next one — every other engine-string
-   read in this file is bounded the same way. It resolves once per unit TYPE,
-   so probing each byte costs nothing worth measuring. */
-static int name_eq(const char* a, const char* b)
-{
-    for (; *a; a++, b++) {
-        char ca = *a, cb;
-        if (IsBadReadPtr(b, 1)) return 0;
-        cb = *b;
-        if (!cb) return 0;
-        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca + 32);
-        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb + 32);
-        if (ca != cb) return 0;
-    }
-    return !IsBadReadPtr(b, 1) && *b == 0;
-}
 
-static const HPMAP* pmap_for(const void* mesh, const char* const* nd, int nparts)
-{
-    int i, g, np = tagpu_hires_npiece(mesh);
-    unsigned gen = tagpu_hires_gen(mesh);
-    HPMAP* m;
-    if (np > TAGPU_HMAXPIECE) np = TAGPU_HMAXPIECE;
-    for (i = 0; i < s_npmap; i++)
-        if (s_pmap[i].mesh == mesh && s_pmap[i].gen == gen &&
-            s_pmap[i].nd0 == nd[0]) return &s_pmap[i];
-    /* the table only ever holds one entry per replacement type, and there can
-       be at most MAXMESH of those; a full table means a type was reloaded
-       against a new template, so start over rather than stop mapping */
-    if (s_npmap >= (int)(sizeof s_pmap / sizeof s_pmap[0])) s_npmap = 0;
-    m = &s_pmap[s_npmap++];
-    m->mesh = mesh; m->gen = gen; m->nd0 = nd[0]; m->n = np;
-    char b[256];
-    int nb = 0, bl;
-    bl = _snprintf(b, sizeof b, "hires: pose unbound:");
-    for (g = 0; g < np; g++) {
-        const char* want = tagpu_hires_piece(mesh, g);
-        m->e[g] = -1;
-        if (want && want[0])
-            for (i = 0; i < nparts; i++) {
-                const char* have = *(const char* const*)(nd[i] + N_NAME);
-                if (!ptr_ok(have) || IsBadReadPtr(have, 1)) continue;
-                if (name_eq(want, have)) { m->e[g] = (short)i; break; }
-            }
-        if (m->e[g] >= 0) { nb++; continue; }
-        /* a node the unit's 3DO has no piece for can never move: say which,
-           because a renamed node is silent otherwise — it just stops posing */
-        if (bl > 0 && bl < (int)sizeof b - 34)
-            bl += _snprintf(b + bl, sizeof b - bl, " %.30s",
-                            (want && want[0]) ? want : "<unnamed>");
-    }
-    {
-        char l[128];
-        _snprintf(l, sizeof l, "hires: pose bound %d of %d piece%s to the unit's 3DO",
-                  nb, np, np == 1 ? "" : "s");
-        nlog(l);
-        if (nb < np) nlog(b);
-    }
-    return m;
-}
 
 /* ---- the cache keyed on a MODEL TEMPLATE, and the level it belongs to
    `s_pmap` (a replacement mesh's glTF piece -> engine primitive map) is keyed
@@ -1243,16 +1164,14 @@ static unsigned s_lastLevelGen;          /* the last packet's, carried over a fr
 
 static void cache_gen_check(unsigned g)
 {
+    /* THE ONLY THING THIS DROPPED WAS `s_pmap`, the replacement mesh's glTF
+       piece -> engine primitive map, and landing 11 D3 deleted it with the
+       loader. `s_cacheGen` is still tracked, and the level-change edge is
+       still the right place to invalidate a template-keyed cache, so the
+       function and its call site stay rather than being re-derived by whoever
+       adds the next one. Nothing consults it today. */
     if (g == s_cacheGen) return;
-    if (s_npmap) {
-        char b[160];
-        _snprintf(b, sizeof b,
-                  "native: level %u -> %u, dropping the template cache: pmap=%d",
-                  s_cacheGen, g, s_npmap);
-        nlog(b);
-    }
     s_cacheGen = g;
-    s_npmap = 0;
 }
 
 /* Everything one unit's pose needs, accumulated down the piece tree. Shared
@@ -1558,76 +1477,6 @@ static int posed_pose(const TAGPU_PK_UNIT* pu, const TAGPU_PK_PIECE* pc,
     return nparts;
 }
 
-/* Fill out[npiece*12] for `mesh` from the unit's Object3do. 0 = leave it all
-   at rest (the caller then uploads the identity).
-
-   THE BODY TURN IS FOLDED IN HERE, ALL THREE WORDS, from the Object3do's
-   CACHED copy — and both halves of that sentence were wrong until 2026-09-09.
-   This pass used to pose in model space and let the shader rotate the result
-   by the heading alone (`uYawEnc`), which is not what the engine does twice
-   over:
-
-     - the engine folds the whole triple at Object3do+0x18/+0x1A/+0x1C into the
-       BASE piece's own turn (0x45B0DB) before composing, so bank and pitch are
-       part of the pose and not an outer rotation. Applying the heading alone
-       draws a replacement mesh upright on ground that tilts every other unit —
-       right on the flat, wrong on every slope, and a Stumpy on the fixture
-       hillside reads 17.4 deg of bank and -22.1 of pitch;
-     - and the words to fold are the CACHED ones, not the live unit+0x64. On a
-       ground unit the two agree; on a bomber they were measured 157 degrees of
-       heading apart (cached (0,16128,3) against live (0,44767,65508)), and the
-       geometry the engine draws follows the cached copy.
-
-   This is the same additive fold recon_begin uses, and that path is measured
-   at exactly 0 residual against the engine's own P_VBUF on all eight COB
-   classes (`tools/tacob pose-check --all`) — so the fold is the engine's
-   arithmetic, and the outer rotation it replaces was the approximation.
-   The caller sends 0 for the shader's yaw whenever this returns 1: the pose
-   already carries the rotation, and turning it again would double it.
-   model-import.md, "The body turn is all three words". */
-static int hires_pose(const TAGPU_PK_PIECE* pc, int nparts, const unsigned short* bturn,
-                      unsigned basePiece, const void* mesh, float* out, int npiece)
-{
-    static HPOSE h;                        /* 17 kB at TAGPU_PBMAXPIECE: not a local */
-    unsigned short bt[3];
-    int g;
-    if (!pc || nparts <= 0) return 0;
-    bt[0] = bturn[2];                      /* +0x1C = unit+0x68, about X */
-    bt[1] = bturn[1];                      /* +0x1A = unit+0x66, about Y */
-    bt[2] = bturn[0];                      /* +0x18 = unit+0x64, about Z */
-    if (!pose_accum_body(pc, nparts, basePiece, &h, bt)) return 0;
-    {
-        const HPMAP* pm = pmap_for(mesh, h.nd, nparts);
-        for (g = 0; g < npiece; g++) {
-            float* o = out + g * 12;
-            /* the map was resolved against a node template, and `nparts`
-               comes off the unit rather than the template — so bound the index
-               by THIS unit's part count rather than trusting the two agree */
-            int e = (g < pm->n) ? pm->e[g] : -1;
-            int r;
-            if (e >= nparts) e = -1;
-            if (e < 0 || !h.done[e]) {                  /* rest pose */
-                memset(o, 0, 12 * sizeof(float));
-                o[0] = o[5] = o[10] = 1.0f;
-                continue;
-            }
-            if (!(pc[e].flags & 1)) {
-                memset(o, 0, 12 * sizeof(float));       /* COB HIDE */
-                continue;
-            }
-            /* P * T(-restOffset) */
-            for (r = 0; r < 3; r++) {
-                o[r*4+0] = h.acc[e][r*4+0];
-                o[r*4+1] = h.acc[e][r*4+1];
-                o[r*4+2] = h.acc[e][r*4+2];
-                o[r*4+3] = h.acc[e][r*4+3] - (h.acc[e][r*4+0]*h.rest[e][0] +
-                                              h.acc[e][r*4+1]*h.rest[e][1] +
-                                              h.acc[e][r*4+2]*h.rest[e][2]);
-            }
-        }
-    }
-    return 1;
-}
 
 /* ---- the build ghost -----------------------------------------------------
    The translucent preview of a building under the placement cursor and of
@@ -2148,7 +1997,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        thread, and not wherever the generation moved */
     tagpu_posebake_frame(f->frame_counter, s_lastLevelGen);
     pose_rest_block_init();      /* the degradation's block, once per session */
-    tagpu_hires_frame(f->frame_counter);      /* gate 3b: same beat, same reason */
     tagpu_mark_frame(f->frame_counter);       /* landing 5: and again */
     tagpu_posedraw_frame(f->frame_counter);   /* this frame's counters, and the
                                               Vulkan hand-over's frame stamp */
@@ -2516,7 +2364,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     float airKey = fxKey + 12.0f;
     float depthScale = airKey + 8.0f;
 
-    unsigned gfx = pk->gfx_opt;
     unsigned lostype = pk->los_type;
     int watched = pk->watched;
 
@@ -2661,7 +2508,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     typedef struct { const TAGPU_PK_UNIT* pu; const TAGPU_PK_WRECK* pw;
                      const TAGPU_PK_PIECE* pc; int nparts; unsigned basePiece;
                      const unsigned short* bturn;
-                     const void* hires;
                      float ax, ay, gy, wx0, wz0, wy, gnd;
                      int rel, owner, cloaked, air, feat, sel, shadow, slant; unsigned yaw;
                      float waterT, digT; int waterMode;
@@ -2729,7 +2575,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         n2->wx0 = fx; n2->wz0 = fy - fz * 0.5f;
         n2->wy = fz; n2->gnd = fz;          /* the ground under it, refined below */
         n2->yaw = pu->rot[1];
-        n2->hires = NULL;
         n2->shadow = 0; n2->slant = 0;
         /* build state: the engine's own staging for a unit under construction
            (build-state.md), shared with the composite path so the two cannot
@@ -2770,27 +2615,17 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                     n2->shadow = !(mask & 0x02000000u) &&  /* noshadow          */
                                  !(mask & 0x00081000u);    /* canhover|floater  */
                 }
-                /* the UnitName, lowercased by the publisher (UnitDef+0x20) */
-                char nm[sizeof pu->name + 1];
-                memcpy(nm, pu->name, sizeof pu->name);
-                nm[sizeof pu->name] = 0;
-                n2->hires = tagpu_hires_mesh(nm, f->frame_counter);
-                /* A replacement unit contributes NO vertices to this pass, so
-                   routing it there while the other pass cannot draw makes it
-                   invisible rather than stock — and the other pass latches off
-                   for the session when its program fails to build. Ask first;
-                   the file is still looked up and logged, so the log says the
-                   glTF was found AND why the unit is rendering as a 3DO. */
-                if (n2->hires && !tagpu_hires_draw_ready()) {
-                    static int said = 0;
-                    n2->hires = NULL;
-                    if (!said) {
-                        said = 1;
-                        nlog("hires: the replacement pass failed to build (see "
-                             "'hires draw:' above) - replacement units fall "
-                             "back to the engine's own 3DO");
-                    }
-                }
+                /* NO REPLACEMENT MESH IS LOOKED UP ANY MORE. This asked
+                   `tagpu_hires_mesh` for a `hires\<UnitName>.glb`, and then
+                   threw the answer away whenever the replacement pass could not
+                   draw -- which was EVERY session, because that pass resolved
+                   its GL entry points through a library the process never
+                   loads. The logs said so in as many words on every run.
+                   Landing 11 D3 deleted both files on the owner's ruling that
+                   glTF replacement models are disabled and the implementation
+                   is TODO and out of scope, so the lookup goes with them and
+                   every unit takes the posed path below, exactly as it already
+                   did. */
             }
         }
         /* waterline + digger clipping, PATH B only (composite has a depth
@@ -2957,7 +2792,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                    vertices (the wreck itself vanishes) and draws that unit's
                    model at the wreck's anchor, at a stale yaw, posed against
                    the wreck's own Object3do. */
-                n2->hires = NULL; n2->yaw = 0;
+                n2->yaw = 0;
                 n2->waterT = -1e9f; n2->digT = -1e9f; n2->waterMode = 0;
                 /* ...and the nanoframe group, for the same reason: a wreck on
                    an index that held a unit under construction inherited
@@ -3160,8 +2995,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
 
 
     int i;
-    static TAGPU_HUNIT hunits[MAXU];
-    int nhi = 0;
     /* G16 step 5: the units the POSED program drew, and their poses. `pdix[i]`
        is the unit's entry or -1; a posed unit contributes no vertices to the
        shared stream, so its firstv range is empty and every CPU draw over it
@@ -3195,7 +3028,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         crcNow = pk->tick;
         if (crcNow != crcTick) { crcTick = crcNow; crcLog = 1; }
     }
-    s_hposeN = 0;
     for (i = 0; i < nu; i++) {
         /* BEFORE any of the skips below, not in the branch that fills it: the
            array is static, so a unit that takes an early `continue` — dead, or
@@ -3222,48 +3054,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            field below are a COPY the game thread made, in our own memory,
            valid for the whole frame. `s_reread` therefore stays 0 for good
            and the counter is kept only so a non-zero one would be loud. */
-        if (units[i].hires) {
-            /* no vertices here: this unit is the other pass's, and leaving
-               firstv[i] == firstv[i+1] makes its draws below empty */
-            TAGPU_HUNIT* h = &hunits[nhi++];
-            h->mesh = units[i].hires;
-            /* the COB pose, into a frame arena; past the arena a unit still
-               draws, at rest, rather than dropping out of the scene */
-            h->pose = NULL; h->npose = 0;
-            {
-                int np = tagpu_hires_npiece(units[i].hires);
-                if (np > TAGPU_HMAXPIECE) np = TAGPU_HMAXPIECE;
-                if (np > 0 && s_hposeN + np * 12 <= HPOSE_MAX) {
-                    float* dst = s_hpose + s_hposeN;
-                    if (hires_pose(units[i].pc, units[i].nparts, units[i].bturn,
-                                   units[i].basePiece, units[i].hires, dst, np)) {
-                        h->pose = dst; h->npose = np;
-                        s_hposeN += np * 12;
-                    }
-                }
-            }
-            h->ax = units[i].ax;   h->ay = units[i].ay;
-            h->wx0 = units[i].wx0; h->wz0 = units[i].wz0;
-            h->enc = encBase;
-            h->shadowDy = (float)(units[i].gy - units[i].ay);
-            /* the pose carries the body turn now (hires_pose), so the
-               shader must not turn it again; only the rest-pose fallback,
-               which has no pose to carry anything, still needs an outer
-               rotation — and it takes the heading from the CACHED triple the
-               drawn geometry follows, not the live unit word */
-            h->yaw = h->pose ? 0 : units[i].bturn[1];
-            h->alpha = units[i].cloaked ? 0.5f : 1.0f;
-            h->fog = FOGW(i);
-            h->waterT = units[i].waterT;
-            h->digT = units[i].digT;
-            h->waterMode = units[i].waterMode;
-            /* the silhouette needs both option bits, the slant only "Shadow"
-               (the engine's cached branch never tests TShadow) */
-            h->slant = units[i].slant;
-            h->shadow = units[i].shadow && (units[i].slant || (gfx & 8));
-            h->air = units[i].air;
-            h->cast[0] = h->cast[1] = 0.0f; h->cast[2] = 1.0f; h->castSkip = 1;
-        } else {
+        /* THE REPLACEMENT-MESH BRANCH STOOD HERE, AND IT WAS UNREACHABLE.
+           It built a TAGPU_HUNIT for the glTF draw pass and posed the mesh
+           with hires_pose. `units[i].hires` was NULL on every unit of every
+           frame: the pass it routed to could not resolve a GL entry point,
+           so this file nulled the pointer itself and said so in the log.
+           Landing 11 D3 took it with the two files. [glTF replacement
+           models: disabled, implementation TODO and out of scope -- the
+           owner, 2026-09-19.] */
+        {
             /* G16 step 8: THE POSED PROGRAM IS THE PATH. This unit is drawn
                out of its type's baked buffers with its pose in a uniform
                block, and no vertices are built for it here at all — the CPU
@@ -3364,7 +3163,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        contributes no vertices either now, so without this a frame of nothing
        but units — every unit in the game, on a map with our terrain off —
        would return here having drawn none of them. */
-    if (nv == 0 && nhi == 0 && npd == 0 && nfx == 0 && nfeat == 0 && nterr == 0 &&
+    if (nv == 0 && npd == 0 && nfx == 0 && nfeat == 0 && nterr == 0 &&
         !markOn && !terrOwned) return;
 
     /* MOVED BELOW THE GATHER, not left at the top of the composite [4b-2]. The
@@ -3622,7 +3421,6 @@ void tagpu_native_glreset(void)
     s_castLogged = 0;
     /* the marker pass left this cascade in 11-5e-1: its own ids went with the
        draw in 11-4a and the text module it forwarded to owns no GL object. */
-    tagpu_hires_draw_glreset();
     tagpu_posebake_glreset();
     tagpu_posedraw_glreset();
 }

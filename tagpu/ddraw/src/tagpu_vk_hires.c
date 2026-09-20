@@ -52,8 +52,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include "tagpu_vk_hires.h"
-#include "tagpu_hires.h"
-#include "tagpu_hires_draw.h"
+#include "tagpu_hires.h"   /* TAGPU_HMAXPIECE -- all that is left of that header */
 #include "spirv/tagpu_hires_draw.spv.h"
 
 #define IFNS(X) \
@@ -622,6 +621,30 @@ static void write_set(const TAGPU_VKPASS* d, uint32_t slot)
     vkUpdateDescriptorSets(d->dev, (uint32_t)n, w, 0, NULL);
 }
 
+/* THE HAND-OVER, WHICH NOTHING PUBLISHES. Its producer was
+   `tagpu_hires_depth` in `tagpu_hires_draw.c`, and that function had ZERO call
+   sites well before landing 11 D3 deleted the file -- `s_hiHave` was written in
+   one place, inside it, so `tagpu_hires_handover` returned 0 on every frame of
+   every session. There was a second, independent reason the same pass could not
+   fire: `tagpu_hires_draw_ready()` was 0 because `opengl32.dll` is never in the
+   process, so `tagpu_native.c` nulled every replacement-mesh pointer and the
+   hand-over had nothing to carry even if something had published one.
+
+   So this returns exactly what the deleted function returned, and D3 changes no
+   behaviour -- which is the whole claim it has to make.
+
+   REVIVING THIS IS A FEATURE LANDING AND IT NEEDS A LOADER FIRST. glTF parsing,
+   the piece table, the material grouping and the COB-driven pose went with
+   `tagpu_hires.c`; they are in git at this landing's parent. What this pass
+   still owns is everything below: the vertex buffers, the descriptors, the
+   pose uniform block and the caster draw. [The vulkan-only plan, landing 11 D3;
+   gpu-status 2.80.] */
+static int hires_handover(TAGPU_HIHAND* out, unsigned now)
+{
+    (void)out; (void)now;
+    return 0;
+}
+
 void tagpu_vk_hires_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
 {
     VkPhysicalDeviceProperties props;
@@ -663,18 +686,13 @@ void tagpu_vk_hires_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
         return;
     }
 
-    /* ASK THE PRODUCER TO KEEP THE TRIANGLES. Idempotent, and it belongs here
-       rather than in the GL pass: this is the only consumer that needs them, so
-       a session that never arms this lane never pays for the copy. It is asked
-       every frame because the answer is one branch once it is armed, and the
-       FIRST ask may land after the models are already uploaded and freed -- the
-       producer answers that by re-reading them, and until it has, the
-       hand-over below carries meshes with no bytes and refuses to publish. The
-       lane draws nothing for those few frames and the census says so, which is
-       the correct shape for "not yet" and needs no extra state here. */
-    tagpu_hires_verts_want();
+    /* THE PRODUCER IS GONE. This used to ask `tagpu_hires_verts_want()` to keep
+       the CPU triangle copy, because this pass was the only consumer that
+       needed it. Landing 11 D3 deleted `tagpu_hires.c` and `tagpu_hires_draw.c`
+       with the rest of the GL lane, on the owner's ruling that glTF replacement
+       models are disabled and their implementation is TODO and out of scope. */
 
-    if (!tagpu_hires_handover(&s_h, d->frame)) return;
+    if (!hires_handover(&s_h, d->frame)) return;
     s_have = 1;
     if (!s_h.depthOn || s_h.nunit <= 0) return;
 
