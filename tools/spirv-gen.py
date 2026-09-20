@@ -372,7 +372,19 @@ ATTR_LOCATIONS = {
 # same thing, and the rule this whole tool exists for says it gets the GL
 # lane's shader rather than an edition of its own.
 # [The vulkan-only plan, landing 4c-1.]
-HEADER_SOURCES = {"openglshader": "inc/openglshader.h"}
+HEADER_SOURCES = {"openglshader":     "inc/openglshader.h",
+                  # LIFTED SO THE GL FILE CAN GO AND THE SHADERS CAN STAY.
+                  # `tagpu_shadow.c` and `tagpu_hires_draw.c` are deleted by
+                  # landing 11; their GLSL is not, because the Vulkan lane
+                  # draws it. `SOURCES` and `PROGRAMS` are UNCHANGED on
+                  # purpose -- removing a name there stops generating the
+                  # `inc/spirv/*.spv.h` that the surviving `tagpu_vk_*.c`
+                  # files include. Both headers sit in `src/` because the
+                  # hires fragment shader pulls `TAGPU_GLSL_*` out of
+                  # `src/tagpu_glsl.h` and this preprocess runs `-Iinc` only.
+                  # [The vulkan-only plan, landing 11 D1.]
+                  "tagpu_shadow":     "src/tagpu_shadow_glsl.h",
+                  "tagpu_hires_draw": "src/tagpu_hires_glsl.h"}
 
 # The restorer's pairings are appended rather than written out: eight of the ten
 # are the same conv program at a different (NK, kmax), and spelling them by hand

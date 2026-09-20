@@ -2844,6 +2844,21 @@ that a count which grows is the plan catching up with the work.) The row was
        recorded before the move — `541d516e…` (`FS_NONE`), `3d0b737c…` (`VS_H`),
        `36099c03…` (`VS_U`), `cac5d116…` (`hires VS`), `743af5ef…` (`hires FS`) — must
        come back identical or `spirv-check` fails the build.
+
+       **DONE 2026-09-19, and the gate came back stronger than it had to.** All five
+       `glsl` hashes and all five `words` hashes are unchanged. Across the thirteen
+       committed headers the only edits are the thirteen `transform` lines — `tool_hash()`
+       hashes `spirv-gen.py` itself, so touching `HEADER_SOURCES` invalidates every header
+       by design — and two provenance lines now naming `src/tagpu_shadow_glsl.h` and
+       `src/tagpu_hires_glsl.h`. **The shipped binary is unchanged**: `.text`, `.rdata` and
+       `.data` are each byte-identical to the pre-landing clean build, and the whole DLL
+       differs in **six bytes** — the COFF `TimeDateStamp` (`0x88`), the optional header's
+       `CheckSum` (`0xd8`) and the export directory's own timestamp (`0x166c04`, four bytes
+       into `.edata`). That is why D1 carries no pixel A/B and no review: there is no
+       behaviour to measure or to read. `STR`/`STR2` moved into the hires header with the
+       shaders, because the stringify is part of the shader text — left behind in the
+       deleted file, `uniform vec4 uPiece[TAGPU_HMAXPIECE*3]` would have reached the
+       generator unsized.
      * **D2 — the shadow deletion.** `tagpu_shadow.c` and `tagpu_shadow.h`, and the nine
        live call sites, each of which returns a constant today: `tagpu_shadow_live()` → 0
        (×2), `tagpu_shadow_mat()`/`_scale()` unreachable behind `if (shadowOn)` (×2 each),
