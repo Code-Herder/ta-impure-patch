@@ -13449,7 +13449,7 @@ nothing while reading as though it had**. Established by call graph instead:
 | ↳ `tagpu_overlay.c:264` | `tagpu_native_frame` (its only caller) | render |
 | ↳ `:3291`, and `ghost_record` → `ghost_one:1887` | `tagpu_posebake_unit` → `mat_bake` → `pb_walk` → `mat_emit:467` → `tagpu_r3d_atlas_uv` → `atlas_paint` | render |
 | ↳ `:3357` | `emit_fx_model` → `emit_node` → `tagpu_native.c:940` → `tagpu_r3d_atlas_uv` → `atlas_paint` | render |
-| `render_vk.c:268` | `tagpu_vk_frame` → `vk_present` → `tagpu_vk_unit.c:1789` → `tagpu_posedraw_handover` | render |
+| `render_vk.c:268` | `tagpu_vk_frame` → `vk_present` → `tagpu_vk_unit.c:1803` → `tagpu_posedraw_handover` | render |
 
 Every paint of an armed atlas and every consumer are the **same thread**, in one
 iteration of one loop. The unit atlas is reachable only through `tagpu_native.c:940`
@@ -13484,7 +13484,7 @@ owns is `dim × dim` = 4 MB.
 **AND THE ONE `free`, which the review caught this section denying.** The first draft said
 `a->rlist` had "exactly one writer in the file and no `realloc` and no `free` anywhere in
 it" — and this same landing added `free(a->rlist)` to `tagpu_gaf_atlas_free_buffers`
-(`tagpu_gaf.c:620`), which the section itself describes forty lines further down. Three
+(`tagpu_gaf.c:638`), which the section itself describes forty lines further down. Three
 comments in the shipped code repeated the same false absolute; only one worded it
 correctly. What is true is narrower:
 
@@ -13494,7 +13494,7 @@ correctly. What is true is narrower:
 
 **What it does not bound is a consumer that captured the pointer before that `free` ran**,
 and that is unreachable today only because `tagpu_gaf_atlas_free_buffers` has exactly one
-call site — `tagpu_gui_surf.c:638`, the GUI atlas, which never arms a list. That is an
+call site — `tagpu_gui_surf.c:643`, the GUI atlas, which never arms a list. That is an
 argument about the *caller*, which is the shape this landing set out to replace. It is
 written down rather than left to be re-derived, in the note and at `rlist_add`'s own
 header: **a second caller, on an armed atlas, re-opens the hazard.**
@@ -13530,7 +13530,7 @@ and says so in the log. The bounds test is re-checked afterwards anyway, because
 **`restored` asked a GL question.** All three producers gated it on the atlas's GL
 texture name — `tagpu_posedraw.c` through `tagpu_r3d_atlas_rgbref()`, `tagpu_feat.c`
 and `tagpu_fx.c` on `s_atlas.rgb` — and that name has exactly **one writer in the tree**,
-`tagpu_gaf.c:643 a->rgb = 0`. It published 0 on every frame since 11-5e-2 deleted the
+`tagpu_gaf.c:661 a->rgb = 0`. It published 0 on every frame since 11-5e-2 deleted the
 restorer. It now asks whether the published list is armed, which is the route that
 exists. In `tagpu_posedraw.c` the assignment also **moved below the arm it asks about**;
 it had sat 57 lines above `tagpu_r3d_atlas_restore_want()` (`main`'s
@@ -13550,7 +13550,7 @@ So publishing `TAGPU_GAF_TWIN_ANISO` — the fix the warning asked for — would
 swapped one silent stand-down for another, on every device without anisotropic
 filtering, over a feature it can do nothing about. The guard has a **third** term the
 first draft of this section left out, and it is the one that bites soonest:
-`want > 1.0f` (`tagpu_vk_unit.c:858`). `aniso=1` is the documented A/B setting, and at
+`want > 1.0f` (`tagpu_vk_unit.c:863`). `aniso=1` is the documented A/B setting, and at
 `aniso=1` the applied value is `0.0f` on *every* device, not only on one without the
 extension. That is the plan's own predicted
 failure arriving from the other side.
@@ -13590,13 +13590,13 @@ The two pins above are described as flags, which makes them sound like bookkeepi
 | step | file:line |
 |---|---|
 | producer publishes the flag | `tagpu_posedraw.c` (below the arm, since this landing) |
-| consumer copies it into the uniform block | `tagpu_vk_unit.c:1696` — `b.i[0] = h->restored;` |
+| consumer copies it into the uniform block | `tagpu_vk_unit.c:1710` — `b.i[0] = h->restored;` |
 | shader declares it | `tagpu_native.c:442` — `uniform int uRestored;` |
 | shader acts on it | `tagpu_native.c:470` — `if (uRestored == 1) t = texture(uAtlasRGB, vUV);` |
 
 With the flag at 0, `t` stays `vec4(0.0)` and the fragment falls through to the
 palette-indexed path. So the restored twin was **built, painted, mipped and bound** —
-`tagpu_vk_unit.c:2579-2580` binds `s_arView`/`s_sampTwin` at slot 3 on the strength of
+`tagpu_vk_unit.c:2633-2634` binds `s_arView`/`s_sampTwin` at slot 3 on the strength of
 the view existing, not of the flag — and then **never read**. Every session since
 11-5e-2 has paid for a restore whose output no shader sampled.
 
@@ -13615,7 +13615,7 @@ the unpin broke —
 
 | case | mechanism | effect |
 |---|---|---|
-| **failure** | `s_rjTried` latches at five sites in `restore_want`, cleared only by teardown; `:1292` then forces `s_arHave = 0` | one Vulkan resource refusal ⇒ **no unit drawn at all for the session** |
+| **failure** | `s_rjTried` latches at five sites in `restore_want`, cleared only by teardown; its own first guard `if (s_rjTried) { s_arHave = 0; return; }` (`tagpu_vk_unit.c:1301`) then forces it | one Vulkan resource refusal ⇒ **no unit drawn at all for the session** |
 | **routine** | `rlistRepaint` has one assignment and **both** call sites pass 0, so `if (!repaint) s_arHave = 0;` fires on every generation change | every level boundary, atlas recycle and map change blanks **all** units, features and effects for the length of a repaint |
 
 The routine case is the worse one because nothing has to fail for it.
@@ -13623,18 +13623,70 @@ The routine case is the worse one because nothing has to fail for it.
 **The fix is this landing's own argument carried through, not a new one.** The stand-down existed
 to avoid showing *"a different picture from its own oracle"* — art filtered unlike the other
 lane's. There is no other lane, and `tagpu_gaf.h` says so in this same landing. Indexed art is
-not a disagreement with anybody; it is Classic++ restore off for one frame, and binding 43
-already falls back to `s_atView`/`s_samp` for precisely that. So a missing twin now clears
-`h.restored` — `uRestored` goes 0 and the shader takes the palette path — in all three passes
-and in the aniso gate, whose penalty was likewise the whole pass for an edited cfg file. **A
-bound on what the flag may promise, not a timing mitigation.**
+not a disagreement with anybody; it is Classic++ restore off for one frame. So a missing twin
+clears `h.restored` — `uRestored` goes 0 and the shader takes the palette path — in all three
+passes and in the aniso gate, whose penalty was likewise the whole pass for an edited cfg file.
+**A bound on what the flag may promise, not a timing mitigation.**
+
+**AND THE FIRST CUT OF IT ONLY COVERED THE RARE HALF, WHICH THIS SECTION CLAIMED OTHERWISE.**
+It cleared the flag on `!feed` alone. A generation change satisfies every feed term —
+`restoreFrames` non-NULL, `s_arImg` built, `s_rjTried` still 0 — so it took `feed = 1` and left
+through `feedout` drawing nothing, which is the routine case the table above calls the worse
+one. A verification pass found it, and found this paragraph asserting it was fixed. The flag is
+now cleared on **both** branches and the feed frame draws indexed; `restore_want` takes no
+command buffer and never reads `restored`, so the job is still made and nothing it recorded can
+conflict with a draw.
+
+**The descriptor had to follow, and this is the part the fix could not have been complete
+without.** Binding 43 named the twin on `s_arView` alone. `mk_image` creates that image
+`UNDEFINED` and only the restorer's job transitions it, so a frame drawing with the image made
+but unpainted declares `SHADER_READ_ONLY_OPTIMAL` over an `UNDEFINED` image — survivable only
+while the removed stand-down kept those frames from drawing at all. It now tests
+`s_arView && s_arHave`, which is exactly *"this image has left UNDEFINED"*, and is the same pair
+that decides `uRestored`: flag and descriptor agree by construction rather than by a refusal
+placed somewhere else. `tagpu_vk_terr.c:1080` settled this for binding 42 in the 11-5c
+re-review and carries the argument; this is that shape, adopted rather than reinvented.
+
+**Two regressions the first cut introduced, both found by the same pass.** It killed the
+`s_saidAniso` latch — `goto standdown` had made the reset unreachable while the condition held,
+so a fall-through runs it on the pass that sets it and the line logs *every frame* — and it left
+the unit pass's two messages saying "nothing drawn" and "the other lane" on paths that now draw
+and about a lane that does not exist. **A third said the same thing and was missed until the
+citation pass:** the aniso gate's own message ended *"nothing is drawn on a frame that samples
+it"* while the two lines below it now clear `h.restored` and draw indexed. It says *"this frame
+draws the indexed atlas"* now. All three fixed; the re-measurement's paired logs are 6284
+lines for `main` A and 6284 for branch A, 6275 and 6276 for the B pair, so nothing leaked into
+per-frame logging.
+
+**Four log lines and two comments still say "the other lane", and this landing did not reach
+them.** It reworded the messages of the three passes whose logic it rewrote; still printing on
+builds that have no GL lane at all are `tagpu_gaf.c:591`, `tagpu_terr.c:261`,
+`tagpu_vk_gui.c:1583` and `tagpu_vk_restore.c:2127` ("the same integer (sum+1)/4 **the GL lane
+draws**"), with the same phrase surviving in comments at `tagpu_vk_feat.c:1059` and
+`tagpu_vk_fx.c:1095`. All are 11-5e-2 vintage. Strings and comments are not behaviour, so they
+cost a wrong sentence in a log rather than a wrong frame, and the sweep belongs to the deletion
+landing, where "there is no other lane" stops being a claim in prose and becomes the tree.
+
+Two more sit in this file and were deliberately left: `tagpu_vk_unit.c:1862` (*"the GL twin's
+shadow PCF is bilinear"*) and `:2674` (*"the GL twin drew these units against a cast-shadow
+map"*). Unlike the three above, **their "nothing drawn" is still true** — both really do stand
+down — so only the *reason* they give is stale, and they name the shadow path, which is the
+deletion landing's subject rather than this one's.
+
+**One of the four is not only a string, and it is named here so the next landing does not have
+to find it twice.** `tagpu_vk_gui.c:1583` guards a stand-down of exactly the shape this section
+just removed from three passes — *"the other lane is compositing Classic++ colour and this one
+has no restored atlas to composite from - nothing composited while that is true"* — on the GUI
+pass, which is outside this landing's diff and was therefore not verified, measured or changed
+here. Whether its `h.colourTwins` gate is reachable on a Vulkan-only build is an open question,
+not a finding.
 
 Three more the reviews caught, each verified against the source before it was acted on:
 `tagpu_posedraw.c` asked `tagpu_classicpp_on()` where feat, fx and terr ask
 `tagpu_classicpp_assets()`, so turning assets off mid-session left units on the twin while
 everything else reverted — mixed art, silently, until restart; the hand-over now clears
 `restored` alongside the list it promises, making "flag set, list absent" unrepresentable rather
-than merely unreached; and `tagpu_gui_surf.c:633`, the **one** caller of
+than merely unreached; and `tagpu_gui_surf.c:643`, the **one** caller of
 `tagpu_gaf_atlas_free_buffers`, still said that call does not free `rlist`.
 
 #### THE MEASUREMENT — TWO FIXTURES, BECAUSE NEITHER CAN DO BOTH HALVES
@@ -13660,7 +13712,10 @@ Clean-built DLLs, interleaved, two runs each:
 `main` paints exactly what the arm seeded and never another frame, because on `main` there is no
 append at all — `restore_frame_of`'s only caller is `rlist_restart`'s sweep of `a->ents`. The
 branch appends **133 more**, identically in two independent runs. Zero VK errors, zero bound
-restarts, on both. **That is the feed, measured.**
+restarts, on both. **That is the feed, measured.** Re-run unchanged after the fix above, with
+the branch-only line `a Classic++ restore is armed and this lane's twin is not painted yet —
+drawing the indexed atlas until it is (this frame also makes the restore job)` appearing exactly
+once: the frame that now draws is precisely the feed frame that used to return blank.
 
 **Fixture B — `one-unit`, for the pixels**, because `crowd-static` fails gate 1 outright: its
 units run their idle COB scripts and three grabs 4 s apart differ by ~12 000 px on every build.
@@ -13668,15 +13723,25 @@ units run their idle COB scripts and three grabs 4 s apart differ by ~12 000 px 
 | | total | minimap | unit box | elsewhere |
 |---|---|---|---|---|
 | gate 1, settled pair, worst of four runs | 1 | 0 | 1 (the cursor) | 0 |
-| **control** — `main` A vs `main` B | 49 | **48** | 1 | **0** |
+| **control** — `main` A vs `main` B | 48 | **48** | 0 | **0** |
 | **control** — branch A vs branch B | 0 | 0 | 0 | 0 |
-| cross-build, **all four** pairings | 302–303 | 44 | **258–259** | **0** |
+| cross-build, **all four** pairings | 302 | 44 | **258** | **0** |
 
 **258 px of 786 432, in the box of the one placed unit** (`world=(1600,1600,91)
 screen=(512,384)`), identical across all four cross-build pairings, and **0 px everywhere
-outside the minimap and that box**. The figure is unchanged by the H1 fix, which is the expected
-result: the fix only alters what happens when the twin is *absent*, and at steady state both
-builds have one.
+outside the minimap and that box**. The box is not asserted, it is **derived**: the union of
+the four cross-build bounding boxes, `x 502..516 y 355..388`, 15×34 px, centred on the placed
+unit — so it cannot have been fitted to the answer. The census is 749 452 non-black px on every
+one of the four runs, so no arm drew an empty frame. Zero VK errors on all four. The figure is
+unchanged by the H1 fix, which is the expected result: the fix only alters what happens when the
+twin is *absent*, and at steady state both builds have one.
+
+**It was run twice, and the second run is the one that ships.** The first ran against a branch
+DLL that predated one `plog` format-string correction (the aniso gate still said *"nothing is
+drawn"*); it gave 258–259 px in the same derived box and 0 px outside it. The re-run above is
+built from the committed tree. A format string reaches the log file and nothing else, so the
+agreement is expected rather than informative — but the number that is written down is the one
+measured on the tree that lands.
 
 #### THE FIXTURE LESSON, WHICH COST THIS LANDING TWO ROUNDS
 
@@ -13690,6 +13755,16 @@ The first write-up had to exclude it by construction alone, because two runs per
 separate "the build did it" from "a wandering commander split along the build" — and a 0 px
 control does not help, since a commander with two resting places produces exactly that. **This
 run's control is the honest version of that claim.**
+
+**AND ONE GRAB IN TWELVE WAS AN OUTLIER, WHICH IS WHY THE METHOD TAKES THREE.** In the first
+run's `main` A arm, grab 2 differed from grabs 1 and 3 by **40 556 px** — scattered over
+x[220..1023] y[392..735], 99 of the 768 32×32 tiles, mean |Δ| 126 — while grabs 1 and 3 agreed
+**0 px inside that whole region**. The other eleven grabs across the four arms were 0–1 px
+apart, and no other arm showed it: one capture caught a transient the live skirmish produced,
+not drift. With two grabs the run reads as a fixture that is not static and the measurement is
+discarded, or the outlier becomes the cross-build comparand and invents a 40 000-px "build
+difference". **Gate 1 is read on the settled pair; two of three disagreeing is the failure it
+is actually looking for.** [Added to the `ta-drive` skill.]
 
 **`crowd-static` is static as a situation, not as pixels**, and its own description says the
 first thing without the second. It is the right fixture for a counter at scale and the wrong one

@@ -2000,8 +2000,8 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             plog(d, "unit: the Classic++ restored atlas is published for %.1fx "
                     "anisotropic and this lane's sampler was built for %.1fx - the "
                     "knob changed after the sampler was made, and a sampler cannot "
-                    "be rebuilt mid-frame, so nothing is drawn on a frame that "
-                    "samples it rather than differently filtered art "
+                    "be rebuilt mid-frame, so this frame draws the indexed atlas "
+                    "rather than differently filtered art "
                     "(the device applied %.1fx)",
                  (double)h.atlasRgbAniso, (double)s_twinAnisoWant, (double)s_twinAniso);
         }

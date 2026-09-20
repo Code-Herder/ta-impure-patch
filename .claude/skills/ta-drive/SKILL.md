@@ -881,6 +881,21 @@ cannot be swapped between runs.
   of the viewport — so with `gui.on` the rule is **mask the minimap and the cursor hotspot**, and
   three grabs 4 s apart will NOT be identical without that.
 
+- **THREE GRABS, AND READ GATE 1 AS "THE SETTLED PAIR" — ONE GRAB IN TWELVE WAS AN OUTLIER**
+  (2026-09-19). On the 11-5e-2c A/B, `one-unit` on `e5a`: grab 2 of the `main` A run differed
+  from grabs 1 and 3 by **40 556 px** — a scattered region x[220..1023] y[392..735], 99 of the
+  768 32x32 tiles, mean |delta| 126 — while grabs 1 and 3 agreed **0 px inside that whole
+  region** and 1 px overall (the cursor). The other eleven grabs of the run were 0-1 px apart.
+  So the frame was not drifting; one capture caught a transient the live skirmish produced (the
+  AI's units and the fog edge move in the lower-right), and the other three arms never showed it.
+
+  **The consequence is why three is the number.** With two grabs this run reads as a fixture that
+  is not static and the measurement gets thrown away — or worse, the outlier is the one compared
+  across builds and invents a 40 000-px "build difference". With three, the odd one out is
+  visible as an odd one out. **Gate 1 passes on the settled pair, not on all three pairings**, and
+  the settled grab (the last one) is what the cross-build comparison uses. If *two* of three
+  disagree, that is drift and the gate really has failed.
+
 - **CLEAN-BUILD BOTH SIDES OF AN A/B, OR YOU MAY NOT BE MEASURING THE TREE YOU NAMED**
   (2026-09-19). `make -C tagpu/ddraw` is incremental and the Makefile does generate header
   dependencies (`-MMD -MP`, `-include $(DEPS)`), so an incremental build is *usually* right —

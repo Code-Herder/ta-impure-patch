@@ -166,7 +166,7 @@ static void rlist_restart(TAGPU_GAFATLAS* a, int repaint)
 
    THE ONE `free` IS NAMED RATHER THAN DENIED. This comment said "no `realloc`
    and no `free` in this file" until the landing review caught it: the same
-   landing added `free(a->rlist)` to `tagpu_gaf_atlas_free_buffers` (`:620`),
+   landing added `free(a->rlist)` to `tagpu_gaf_atlas_free_buffers` (`:638`),
    forty lines after claiming it did not exist. What is true is narrower and
    has to be stated as such -- there is no `realloc`, and the single `free` is
    the atlas's own teardown, which clears `rlist`, `rlistWant` and the counts
@@ -176,7 +176,7 @@ static void rlist_restart(TAGPU_GAFATLAS* a, int repaint)
    That `free` does NOT bound a consumer that captured the pointer before it
    ran. It is unreachable for an armed atlas today only because
    `tagpu_gaf_atlas_free_buffers` has exactly one call site --
-   `tagpu_gui_surf.c:638`, the GUI atlas, which never arms a list (it is not
+   `tagpu_gui_surf.c:643`, the GUI atlas, which never arms a list (it is not
    one of `tagpu_gaf_atlas_restore_vk`'s three callers). That is an argument
    about the caller, which is the shape this landing set out to replace, so it
    is written down rather than left to be re-derived. A second caller on an

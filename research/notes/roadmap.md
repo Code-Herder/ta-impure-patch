@@ -3338,7 +3338,13 @@ the larger half of the landing: unpinning `restored` made a session-long total s
 reachable (five one-way `s_rjTried` latches, and `rlistRepaint` a constant 0 so every generation
 change blanked the pass), against a contract `atlas_rgb_build` had already written down — a
 restored-twin failure loses restored frames, never the pass. A missing twin now clears the flag
-and draws indexed. `rgbAniso` reversed 11-5e-2's review
+and draws indexed — **on both branches of that gate**, which the first cut got wrong: it covered
+only `!feed`, and a generation change satisfies every feed term, so the routine case stayed
+blank while the note said it was fixed. The descriptor had to follow and is the half the fix
+could not have been complete without: binding 43 named the twin on `s_arView` alone, and
+`mk_image` leaves that image `UNDEFINED` until the restorer's job paints it, so it now tests
+`s_arView && s_arHave` — the same pair that decides `uRestored`, so flag and descriptor agree by
+construction instead of by a refusal placed elsewhere. `rgbAniso` reversed 11-5e-2's review
 prescription — `s_twinAniso` is the knob *clamped by the device* and is `0.0f` where anisotropy
 is absent, so the constant that review asked for would have drawn no units at all there;
 `11-5e-3` the include residue (**landed 2026-09-19**: `tagpu_fps.c`, `tagpu_scaffold.c` and
