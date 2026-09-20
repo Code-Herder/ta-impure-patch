@@ -53,6 +53,28 @@ static const Def s_defs[] = {
     { "tagpu_sfx.on",       "", 0, 0 },                     /* the particle layers                 */
     { "tagpu_mark.on",      "", 0, 0 },                     /* bars, cursor, band box, digits      */
     { "tagpu_order.on",     "", 0, 0 },                     /* the shift-held order overlay        */
+    /* MARKOWN IS A PRODUCER, WHICH IS WHY IT IS THE ONE `*own` LEVER STILL
+       HERE. The clean cut took the others off this table because a suppressed
+       engine pass holes the reference frame, and `markown` was taken off with
+       them -- which silently removed the health bars, the group digits, the
+       build cursor, the drag band box, the build ghost, the order markers, the
+       ShowRanges labels and ALL text from the presented frame. The gates were
+       only half of it: `mark_orders` is the sole caller of
+       `tagpu_order_snapshot` and the hook-8 stub the sole caller of
+       `tagpu_packet_pub_font_snapshot`, so without the redirects installed the
+       order arena is never filled and the packet carries no font, and no
+       marker pass can draw whatever its gates say. [Found by the landing
+       review, 2026-09-20.]
+
+       WHAT IT COSTS THE REFERENCE, said rather than left to be found: while
+       our marker pass draws, it asks `markown` to skip the engine's own, so
+       the reference frame loses its bars, digits, order markers and build
+       cursor -- the ONE hole the play defaults leave in it, and the reason the
+       skips stay dynamic rather than becoming unconditional. For a
+       reference-quality capture, `tagpu_mark.on=passive` hands every one of
+       them back (the engine draws, we do not) with the redirects still
+       installed. */
+    { "tagpu_markown.on",   "", "tagpu_mark.on", 0 },       /* the snapshots the two passes draw from */
     { "tagpu_ghost.on",     "", "tagpu_native.on", 0 },     /* the building preview at the cursor  */
     { "tagpu_zoom.on",      "", 0, 0 },                     /* the wheel, the camera's range       */
     { "tagpu_vpwide.on",    "", "tagpu_zoom.on", 0 },       /* clicks land at zoom < 1             */

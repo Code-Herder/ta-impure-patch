@@ -80,7 +80,7 @@
 #include "tagpu_mark.h"
 #include "tagpu_markown.h"
 #include "tagpu_order.h"
-#include "tagpu_owndraw.h"   /* tagpu_owndraw_structshadow_ours: who draws a building's shadow */
+#include "tagpu_owndraw.h"   /* set_structshadow, buildfx_armed; structshadow_ours has no caller since 2026-09-20 */
 #include "tagpu_reclaim.h"   /* the teardown fence this file's template reads stand behind */
 #include "tagpu_posebake.h"
 #include "tagpu_vk.h"        /* tagpu_vk_owns_present: is there a GL lane at all? */
@@ -2596,11 +2596,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 /* mirror the engine's shadow branch in the blit 0x459200
                    (shadows-cloak.md §3). ST_STRUCT units take the CACHED
                    SLANT SHADOW branch (Object3do+0x14): while owndraw "all"
-                   has redirected that branch (tagpu_owndraw_structshadow_ours)
-                   the engine draws nothing for them and the slant shadow is
-                   ours, under that branch's own gates -- noshadow, and the
-                   model-0-under-water skip at 0x4592D5; canhover/floater are
-                   NOT tested there. The rest get a composite-derived
+                   has redirected that branch the engine draws nothing for them
+                   and the slant shadow is ours, under that branch's own gates
+                   -- noshadow, and the model-0-under-water skip at 0x4592D5;
+                   canhover/floater are NOT tested there. (The test that asked
+                   `tagpu_owndraw_structshadow_ours` is gone from the
+                   assignment below; read its comment before trusting any of
+                   this -- no slant shadow is drawn on this lane at all.) The rest get a composite-derived
                    silhouette the wipe emptied -- ours, under the engine's
                    FBI gates. Without the redirect a structure keeps the
                    engine's cached shadow, exactly as before. */
@@ -2611,8 +2613,26 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                    structure bit (0x4594D0) and clips a silhouette inline */
                 n2->slant = (st & ST_STRUCT) != 0 && !(mask & UD_DIGGER);
                 if (n2->slant) {
-                    n2->shadow = tagpu_owndraw_structshadow_ours() &&
-                                 !(mask & 0x02000000u);    /* noshadow          */
+                    /* `tagpu_owndraw_structshadow_ours()` WAS THE FIRST TERM
+                       and is gone. It answered `g_ssSkip` -- "we took the
+                       engine's cached slant shadow" -- which was the licence
+                       to draw ours only where the engine's own would otherwise
+                       have shown through the COMPOSITE. There is no composite
+                       and `owndraw` is off the defaults, so the term was 0 for
+                       the life of every session and said nothing true.
+
+                       THIS DOES NOT PUT A STRUCTURE SHADOW BACK ON THE SCREEN,
+                       and must not be read as though it did. **Nothing on the
+                       Vulkan lane draws the slant at all**: landing 11-2
+                       deleted this pass's GL tail and the slant and silhouette
+                       shadow draws went with it (the note at the end of
+                       `tagpu_native_frame` lists them), and `tagpu_vk_unit.c`
+                       contains no slant anything -- checked 2026-09-20, on
+                       `main` as well, so the gap predates the clean cut. This
+                       field feeds a bake whose only consumer was that tail.
+                       Simplified rather than deleted because it is the record
+                       of what a restored slant pass must ask. */
+                    n2->shadow = !(mask & 0x02000000u);    /* noshadow          */
                     if (n2->shadow && pu->model_id == 0 &&
                         fz < (float)pk->sea_level)
                         n2->shadow = 0;

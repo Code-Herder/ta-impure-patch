@@ -796,7 +796,37 @@ unsigned tagpu_gui_flips(void) { return s_flips; }
 TAGPU_GUIQ g_guiq;                    /* the queue; storage below              */
 static TAGPU_PUBOP    s_qops[TAGPU_GUI_QCAP];
 static unsigned char* s_arena;
-volatile int g_gui_draw = 0;          /* set by the render thread's trigger poll */
+/* THE PUBLISHER HAS NO PRODUCER GATE AND NO CONSUMER SINCE THE CLEAN CUT, and
+   the heartbeat below says so rather than leaving `published=0` to be chased.
+   `g_gui_draw` was written in exactly one place -- `tagpu_gui_surf.c`'s trigger
+   poll on the render thread -- and that file is deleted, so this word is 0 for
+   the life of every process. `publish()` returns on its first line, `g_guiq`
+   never receives an op, the arena is never written, and `gaf_capture` /
+   `text_capture` are reached only through the census's half of their
+   `(s_census || g_gui_draw)` gate.
+
+   WHAT STILL WORKS, which is the whole of what `tagpu_gui.on` now buys: the 17
+   leaves record ops into `s_ops`, and the census diffs each surface against its
+   own copy and reports what no op explains. That is a harness mode, which is
+   why the lever is off the defaults table.
+
+   NOT DELETED WITH THE REST OF THE CUT, deliberately. The transport --
+   `publish`, `g_guiq`, the arena, `consumer_stalled`, `dedup`, the seen table
+   and the two captures -- is unreachable, not wrong: it writes no engine
+   memory, produces no pixel and commits its 16 MB only when the lever is
+   armed. It is also the only record in the tree of how UI art is decoded at
+   the engine's OWN blit, which `gaf_capture`'s comment argues is the only
+   moment the art is alive by the engine's ordering rather than by our hope --
+   the thing a native UI pass has to do first. Deleting it is a landing of its
+   own, with its own review, not a tail on this one.
+
+   IF A CONSUMER COMES BACK IT NEEDS A DRAIN IN THE SAME LANDING. `g_guiq.qTail`
+   and `aTail` lost their only writers with the same file, so a producer
+   restored alone would fill the queue, trip `consumer_stalled` at a quarter of
+   the queue or half the arena, and latch `s_stalled` for the session --
+   `consumer_stalled`'s release tests `head == tail`, which a frozen tail can
+   never satisfy. [Both halves found by the landing review, 2026-09-20.] */
+volatile int g_gui_draw = 0;          /* NO WRITER since the clean cut: see above */
 static int   s_pubOverflow = 0;
 static unsigned s_pubOps = 0, s_pubBytes = 0;
 
@@ -2369,8 +2399,22 @@ void tagpu_gui_init(void)
     glog(b);
 }
 
+/* NO CALLER SINCE THE CLEAN CUT. `tagpu_gui_surf.c` asked this before drawing
+   its layer; `tagpu_gui.h` keeps it declared because it is the honest answer to
+   "did the 17 leaves install", which a future UI pass will ask again. */
 int tagpu_gui_installed(void) { return s_installed; }
 
+/* THE MINIMAP HANDSHAKE HAS LOST ITS ASKING HALF, and both setters below are
+   callerless. `tagpu_gui_surf.c`'s sharp minimap layer raised `g_wantMm` once
+   per present and published `g_mmHave` from its own frame; it is deleted, so
+   `tagpu_gui_want_minimap()` answers 0 for the life of the process,
+   `tagpu_packet_pub.c` never copies the three 126-px surfaces or the TNT
+   picture into the packet, and `want_minimap_watchdog` can never fire -- it
+   releases a flag nothing raises. Nothing starves: the publisher's own test is
+   `if (tagpu_gui_want_minimap())`, so not asking costs the copy and nothing
+   else, and the engine goes on drawing its own minimap into the reference
+   surface. The pair stays because the packet side of it is intact and a native
+   minimap is what will ask again. [Landing review, 2026-09-20.] */
 static volatile unsigned char g_wantMm;
 static unsigned g_wantMmBeat;
 void tagpu_gui_set_want_minimap(int on, unsigned int frame_counter)
@@ -2407,7 +2451,13 @@ void tagpu_gui_flush(unsigned int frame_counter)
     if (!s_installed) return;
     if (frame_counter - last >= 600) {
         last = frame_counter;
-        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u",
+        /* `published`, `bytes`, `queue`, `resets`, `overflows`, `stalls` and
+           `draw` ARE ALL STRUCTURALLY ZERO since the clean cut -- `g_gui_draw`
+           has no writer, so `publish` never runs (see its declaration). They
+           stay in the line because a restored consumer will want them back and
+           a zero that is explained costs nothing; the trailing clause is what
+           stops the next reader chasing them. */
+        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u (publisher idle: no consumer since the clean cut)",
                   s_flips, s_opsTotal, s_opsDropped, s_changedTotal, s_unexplTotal, s_nsurf,
                   s_pubOps, s_pubBytes, g_guiq.qHead - g_guiq.qTail, g_guiq.resets, g_guiq.overflows, g_guiq.stalls, g_gui_draw, s_freeqFlush, s_repaints, s_repaintSkips, s_repaintOps);
         glog(b);

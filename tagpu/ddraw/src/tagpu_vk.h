@@ -166,7 +166,9 @@ int tagpu_vk_owns_present(void);
 
 
 /* Unlink `tagpu_<tag>_vk.ppm`, where `tag` is one of "scaffold", "fps", "terr",
-   "feat", "fx", "mark", "posedraw", "gui". A pass calls this AT THE INSTANT IT LATCHES A CLAIM and
+   "feat", "fx", "mark", "posedraw". ("gui" was the seventh and its row left the
+   table with the UI layer -- `tagpu_vk_ab_arm("gui")` returns 0 now, and the
+   lever file is read by nobody.) A pass calls this AT THE INSTANT IT LATCHES A CLAIM and
    nowhere else -- the placement is the whole guarantee, and tagpu_vk.c states it
    at length. Safe on either lane and on a lane that is not up.
 

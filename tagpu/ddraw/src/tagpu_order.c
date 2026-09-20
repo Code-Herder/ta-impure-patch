@@ -1433,9 +1433,14 @@ int tagpu_order_gather(const TAGPU_FXVIEW* v)
        not also run — under trace the artifact is the two logged node lists,
        not a doubled screen. */
     if (s_armed != 1 || s_passive || s_trace) return 0;
-    /* Without the redirect the engine is still drawing its own and ours would
-       be a second set at the unzoomed position. Refuse rather than double. */
-    if (!tagpu_markown_installed()) return 0;
+    /* THE DOUBLE-DRAW REFUSAL IS DELETED (gpu-status 2.81). It read
+       `if (!tagpu_markown_installed()) return 0;` because without the redirect
+       the engine drew its own set at the unzoomed position into the frame we
+       composited over. There is no composite: the engine's set lands in the
+       reference surface. What this pass still NEEDS from `markown` is the
+       arena -- `mark_orders` is the only caller of `tagpu_order_snapshot` --
+       and an uninstalled `markown` shows up below as an empty slot, which is
+       the honest failure and not a refusal to draw. */
     /* THE FRAME PACKET IS THE ONLY ENGINE STATE THIS HALF SEES (landing 3):
        the units the records name, the GUI colour table and the palette the ink
        ranking uses. No main pointer, no unit array pair, no def dereference. */

@@ -53,9 +53,12 @@ unsigned tagpu_gui_flips(void);                     /* the publisher's flip coun
    frame, whether OUR cursor was being drawn, so that the composite and the
    world pass could erase the engine's from the same rect and not ship two.
    With nothing of ours on screen there is nothing to erase for: the engine
-   draws its own cursor into its own surface, `tagpu_cursown_publish(0)` in
-   render_vk.c keeps it that way unconditionally, and the reference frame is
-   complete because of it. What the player sees is no cursor at all, which is
+   draws its own cursor into its own surface, and the reference frame is
+   complete because of it. [This said `tagpu_cursown_publish(0)` in
+   `render_vk.c` "keeps it that way unconditionally" until the landing review
+   of 2026-09-20 -- that call and the whole `tagpu_cursown` module are deleted,
+   so there is nothing keeping anything: the engine's blit was simply never
+   patched again.] What the player sees is no cursor at all, which is
    the cut's cost rather than a defect to work around.
 
    WHAT THAT WORK ESTABLISHED IS WORTH KEEPING and is written down in

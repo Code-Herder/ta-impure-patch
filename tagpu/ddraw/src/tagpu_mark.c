@@ -538,14 +538,17 @@ static void put_outline(int* nv, int l, int t, int r, int b, int col,
 
 /* Does the cursor layer belong to US this frame? This is the ONE place that
    question is answered: gather_cursor asks it, and so does every client that
-   draws a twin of something in that layer. Folding `tagpu_markown_installed()`
-   in matters as much as the lever bits — without the redirect the engine is
-   still drawing its own pair, and ours would be a second, differently placed
-   one, so the honest answer there is "not ours" and the caller refuses rather
-   than doubles. */
+   draws a twin of something in that layer -- `tagpu_native.c`'s build ghost
+   above all.
+
+   `tagpu_markown_installed()` USED TO BE FOLDED IN HERE and is not any more,
+   for the reason the bar gate below lost the same test: the engine's own pair
+   was a second, differently placed one only while the composite put it on the
+   screen. It goes to the reference surface now. `passive` stays, because that
+   lever's whole job is to hand the draw back. */
 int tagpu_mark_cursor_ours(void)
 {
-    return s_armed == 1 && s_cursor && !s_passive && tagpu_markown_installed();
+    return s_armed == 1 && s_cursor && !s_passive;
 }
 
 /* the build-cursor footprint and the drag band box — the whole of
@@ -669,11 +672,17 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
        SAME loop (`0x469CB9` then `0x469CF9`), behind the same `damagebars`
        gate, so `nobars` may not take the digits with it. */
     if (s_armed != 1 || (!s_bars && !s_digits)) return 0;
-    /* The bar skip is a byte in the engine's code path and the digit skip is a
-       redirected call site; without the patches the engine is still drawing
-       both itself and ours would be a second set at a second position. Refuse
-       rather than double-draw. */
-    if (!tagpu_markown_installed()) return 0;
+    /* THE DOUBLE-DRAW REFUSAL IS DELETED, for the reason the terrain pass's
+       emit gate was (gpu-status 2.81). It read
+       `if (!tagpu_markown_installed()) return 0;` and its premise was the
+       COMPOSITE: without the patches the engine drew its own bars and digits
+       into the frame we then drew on top of, so ours would have been a second
+       set at a second position. Nothing of the engine's reaches the screen any
+       more -- its bars land in the reference surface and nowhere else -- so
+       there is no pair to make. `markown` is still WANTED here, and it is back
+       on the defaults table, but as the PRODUCER of the snapshots this pass
+       and `tagpu_order.c` draw from, not as the thing that earns us the right
+       to draw. */
     if (!(pk->game_opt & 1)) return 0;                  /* damagebars */
 
     watched = pk->local_player;      /* 0x2A43: the bar loop's, see the header */

@@ -706,10 +706,15 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     memset(&s_c, 0, sizeof s_c);
     s_cBody = s_cShadow = s_cAtlasFail = s_cOverflow = 0;
     s_logged = 0;
-    /* Emit nothing unless we will actually own the draw. `passive` is the
-       explicit A/B lever; the wrecks requirement is the implicit one — without
-       it the engine keeps drawing every feature and ours would land on top as a
-       double draw, with the occlusion this pass exists for silently inert. */
+    /* `passive` is the explicit A/B lever. The wrecks requirement is not an
+       anti-double-draw test and must not be read as one -- the engine's
+       features reach the reference surface and no screen (gpu-status 2.81).
+       It is a COMPLETENESS test: this pass draws flats, talls and wrecks as
+       one depth-sorted set, and `tagpu_native.on=wrecks` is what supplies the
+       wreck half, so without it we would emit a feature scene with its 3D
+       husks missing. `tagpu_native.on` ships as `all wrecks`, so the branch is
+       taken in every shipped configuration; it is a refusal for a hand-built
+       arm set, not a gate the defaults depend on. */
     s_ownable = tagpu_native_wrecks_armed();
     s_mute = s_passive || !s_ownable;
     s_cpp = tagpu_classicpp_on();
