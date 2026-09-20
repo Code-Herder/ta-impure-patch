@@ -1179,7 +1179,7 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     const unsigned short* tmap;
     int mapW16, mapH16, stride, mrows;
     int tx0, ty0, fx, fy, cols, rows, r, c;
-    int skipped = 0, junk = 0, own, wasFilled, emit;
+    int skipped = 0, junk = 0, own;
     int eyeX, eyeY, vpL, vpT, evw, evh;
     float iw, ih;
 
@@ -1248,17 +1248,28 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     restore_step(ta);
 
     s_ncell = 0;
-    /* Read BEFORE touching the skip: it says whether the engine frame we are
-       about to composite over is the key fill rather than a terrain blit. */
-    wasFilled = tagpu_terrown_filled();
-    /* Emitting without owning the draw is only ever right as a deliberate A/B
-       (`over`) or for the one frame after we hand the draw back — our terrain
-       is opaque and covers the whole viewport, so any other time it would hide
-       the health bars, wireframes, build cursor and chat that the composite's
-       key test exists to let through. Without the patch installed there IS no
-       key, so the pass counts and says so rather than blanking the overlays. */
+    /* THE GATHER IS UNCONDITIONAL NOW, and the clean cut is what freed it.
+
+       IT USED TO BE GATED ON OWNING THE ENGINE'S DRAW -- `own || over ||
+       wasFilled` -- and the reason was the composite: our terrain is opaque and
+       covers the whole viewport, so with the engine's frame UNDER ours,
+       emitting without having key-filled it first would hide the health bars,
+       wireframes, build cursor and chat that the composite's key test existed
+       to let through. Without `terrown` installed there was no key at all, so
+       the pass counted its cells and deliberately emitted none rather than
+       blank those overlays -- which is why a default instance drew no terrain
+       the moment `terrown` came off the defaults.
+
+       THERE IS NOTHING UNDER US ANY MORE. The engine's frame reaches no pixel
+       of the screen, so an opaque terrain can hide nothing that was going to be
+       shown; what it covers is the seam's clear colour. The gate was a property
+       of the composite and went with it.
+
+       `own` IS STILL THE ENGINE'S HALF and still asks the same question, for
+       its own reason: whether to tell `terrown` to stop the engine drawing its
+       terrain. That is a lever about the reference frame and the CPU, not about
+       what we draw. [The vulkan-only plan, THE CLEAN CUT.] */
     own = !s_passive && !s_over && tagpu_terrown_installed();
-    emit = own || s_over || wasFilled;
 
     tmap = *(const unsigned short* const*)(ta + OFF_TILEMAP);
     mapW16 = *(const int*)(ta + OFF_MAPW16);
@@ -1296,7 +1307,7 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
        floats. The map cell is s_rectTx0/s_rectTy0, set just above. */
     s_origX = (float)(vpL - fx); s_origY = (float)(vpT - fy);
     s_iw = iw; s_ih = ih;
-    for (r = 0; r < rows && emit; r++) {
+    for (r = 0; r < rows; r++) {
         int my = ty0 + r;
         if (my < 0 || my >= mrows) { skipped += cols; continue; }
         for (c = 0; c < cols; c++) {
@@ -1335,8 +1346,14 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
                 s_over ? " (over: engine still drawing)"
                        : (s_passive ? " (passive: engine still drawing)" : ""),
                 tagpu_terrown_installed() ? ""
-                    : " (NOTHING EMITTED: terrown.on must exist at DLL attach —"
-                      " arm it before launch, not after)");
+                    : " (terrown off: the engine keeps its terrain, and the"
+                      " reference frame with it)");
+            /* `_snprintf` DOES NOT TERMINATE WHAT IT TRUNCATES on this CRT, and
+               the first edition of the suffix above proved it: the line ran
+               past 240 bytes and reached the log with a garbled tail and no NUL
+               behind it. Every other `_snprintf` in this file that can fill its
+               buffer pairs it with this line. */
+            b[sizeof b - 1] = 0;
             flog(b);
         }
     }
