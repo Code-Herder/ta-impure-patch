@@ -2721,14 +2721,35 @@ that a count which grows is the plan catching up with the work.) The row was
      defines the entry points those two call. The gate's own exit condition is 11-6's.
 
      The files it ends at: `opengl_utils.c`,
-     `opengl_utils.h`, `openglshader.h` (`tagpu_restoreglsl.c` left this set in 11-5e-2 —
+     `opengl_utils.h` (`tagpu_restoreglsl.c` left this set in 11-5e-2 —
      deleted; note that `tagpu_restore_glsl.h`, with the underscore, is NOT in it and does not
      go: `tools/spirv-gen.py` reads the five restore shaders out of that header to generate the
      Vulkan lane's SPIR-V, and `tools/tascene` extracts the same macros for the browser pack),
      and the plumbing users that
      remain (`opengl_utils.c`'s own `oglu_load_dll`, now called by nothing; `render_gdi.c`'s
-     `g_oglu_version`; `tagpu_ftime.c`'s `xwglGetProcAddress`). `render_ogl.c`, `render_ogl.h`
+     `g_oglu_version`). `render_ogl.c`, `render_ogl.h`
      and the two capture verbs left this set in 11-2.
+
+     **TWO NAMES THIS LIST CARRIED WRONGLY, both checked 2026-09-19 rather than assumed.**
+
+     * **`openglshader.h` IS NOT DELETABLE AND WAS ON THE LIST.** Nothing includes it as a C
+       header any more — the single `#include` anywhere in `tagpu/ddraw/` is
+       `tagpu_vk_surf.c:36`, and it takes the *generated* `spirv/openglshader.spv.h`. What
+       still reads `inc/openglshader.h` is `tools/spirv-gen.py`, through `HEADER_SOURCES`
+       (`:375`), to generate `surf_pal` — `PASSTHROUGH_VERT_SHADER` + `PALETTE_FRAG_SHADER`,
+       the base blit that puts TA's 8-bit surface on the frame through the palette. Delete the
+       header and `spirv-check` fails and the Vulkan lane loses its bottom layer. **The general
+       rule this is the second instance of: a file whose only consumer is `tools/spirv-gen.py`
+       is load-bearing and invisible to every C-level dependency check** — the first instance
+       was the deletion survey proposing to strip `SOURCES`/`PROGRAMS` entries, which would
+       have deleted SPIR-V the surviving files include. After this gate `openglshader.h` is a
+       pure GLSL source file whose name reads as GL and whose content only the Vulkan lane
+       runs; renaming it is a real change to `HEADER_SOURCES` and to every generated header's
+       provenance line, so it is named here and not done.
+     * **`tagpu_ftime.c`'s `xwglGetProcAddress` is already gone.** The file includes
+       `windows.h`, `stdio.h`, `stdlib.h` and `tagpu_ftime.h` and nothing else; it contains no
+       `wgl`, no GL entry point and no `opengl_utils.h`. 11-5e-1 took it with that file's other
+       GL residue. The line stayed behind.
 
      **SURVEYED 2026-09-19, while 11-4c's review ran, and the shape is better than the row
      assumed. Three facts, each measured rather than estimated:**
