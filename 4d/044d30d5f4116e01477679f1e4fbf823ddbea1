@@ -1,0 +1,88 @@
+landing-review: model=claude-opus-5 (dedicated, read-only) effort=medium range=main...f5de98d findings=14 acted=14 rejected=0 date=2026-09-19
+verdict: safe to land, conditional on finding 1, which is fixed in 4d044d3. no runtime defect:
+nothing live referenced the deleted set, and the reviewer re-derived every fact the deletion
+rests on rather than taking it.
+
+what it re-derived. masked (g_oglu_*|oglu_*|xwgl*|wgl[A-Z]*) in tagpu/ddraw at HEAD = 0;
+tagpu_overlay.c / tagpu_gaf.c / tagpu_vk.c raw 6/3/1 but masked 0/0/0 at main, which is the trap
+this repo documents. oglu_init + oglu_load_dll = 4 masked matches, all prototypes and
+definitions, no callers. g_oglu_version written only inside oglu_init (main:opengl_utils.c
+213-220, the function spanning 139-240). The player-visible string checked THREE ways: gcc -S
+both sides, both binaries' string tables, and the rendered result -- main emits "...driver (%s)"
+fed "", HEAD emits "...driver ()", identical output. render_gdi.c's exported inventory identical
+(_gdi_render_main@0). openglshader.h present, zero #include naming it, in HEADER_SOURCES, drawn
+by tagpu_vk_surf.c:351-354; the include closure of SOURCES+HEADER_SOURCES under -Iinc is 62
+files, it among them and none of D4's five. spirv-check current. Whole tree -fsyntax-only clean
+but for the pre-existing -Wmisleading-indentation at tagpu_native.c:995. Line counts, the A/B
+table and the census all reproduce line for line, and it checked the A/B ran the right binaries
+by md5.
+
+F1, MEDIUM, AND THE ONLY CODE DEFECT: cnc-ddraw.vcxproj and .filters still listed all five
+deleted files, so the Visual Studio build fails on a missing source. The Makefile uses
+$(wildcard src/*.c), which is precisely why "it compiles" did not catch it -- the blind spot this
+landing's own "verified by inventory, not by it compiles" section is about. Landing 11-2 set the
+precedent (75e62a9 removed the same two lines for render_ogl.c) and D4 broke it. Fixed, and then
+checked further than the finding asked: every file either project lists now exists.
+
+F2 + F3 + F14, THE RETRACTION, AND IT IS THE IMPLEMENTER'S. The docs claimed the engine's
+composited layer "flickers continuously" and that every pixel A/B in this gate had passed gate 1
+by landing two grabs in the same state. Counting all 36 grabs of the three runs: 33 are at
+bit-for-bit the same saturation state (74 495 saturated px). No flicker; the fixture is static
+and the earlier gates passed honestly. Two of the three anomalies are SCREEN TEARS -- divergence
+begins at row 384 of 768 and at row 392, with everything above byte-identical, and import -window
+has no vsync -- which makes the FIRST reading, "a blit caught half done", the one the geometry
+supported all along. The docs had deleted that reading as wrong.
+
+The same paragraphs claimed, from a histogram of OUR frame alone, that our lane outputs greyscale
+while only the engine's content carries colour. The histogram is right (84.3 % at saturation 0-2,
+median 0.0) and the conclusion does not follow: it never compared the engine's frame at the same
+points, and this gate had ALREADY refuted it -- an 18-point sample found 5 of 18 points where
+OURS is more saturated than the engine's, and recorded "we desaturate each pixel is refuted".
+What is established stays narrower: aggregate saturation roughly halved while structure matches,
+the signature of a sub-texel sampling offset on dithered terrain art. Both claims withdrawn in
+the notes, with the prior refutation restored where a session will meet it.
+
+WHAT SURVIVED AS NEW, and it is about the harness rather than the renderer: all three anomalous
+grabs across three runs are in a brB arm, and meas_x.sh runs mainA -> brA -> mainB -> brB, so brB
+is always the FOURTH and last launch. Three for three is arm-correlated. Confounded, since brB is
+both "last" and "branch" -- but D3's and D4's anomalies came from different branch binaries,
+which points at launch order. Untested, and named as untested.
+
+the numbers, all re-derived and all wrong as first written: 268 masked matches (130/119/17/2),
+not 230, and the scope was tagpu/ddraw and never "the repo" -- tagpu/src/tagpu.c:55 carries a
+LIVE wglGetProcAddress call, in the other DLL, so the safety conclusion stands but "nowhere else"
+did not. 22 exports, not 44 (44 is the Export Address Table and the Name-Pointer table counted
+together: the same 22 symbols twice). gl-sites reads 0/0 across ITS file set, tagpu/ddraw/src,
+which its own docstring says excludes tagpu/src/** and tools/ -- both still carry GL (5/6 and
+8/19), so "no file in the tree" was false. 169 render_ogl lines at HEAD, not 168, and the
+breakdown mixed main's counts with HEAD's. 82 PFN pointers resolved through 59
+xwglGetProcAddress calls, not "98 trampolines" (98 is gl-sites' wide call count). 7 619 lines of
+files, 7 623 including render_gdi.c's four -- two notes gave different numbers for the same
+thing. The histogram's region was undocumented and was the anomaly's own bounding box; under
+11-5f's world rect the same frame gives 83.8 %, and its bins were half-open without saying so.
+"exactly that coloured set" is 74 % of it. And `1b.` is not an ordered-list marker, so two items
+rendered as literal text in the wiki.
+
+MEASURED. one-unit, four arms interleaved mainA brA mainB brB, both arms clean-built, gui.on=1.
+cross-build 45 / 49 / 45 / 1 px; controls 48 and 44. The derived box is 1x1 at (512,384), the
+fixture's own oscillating cursor, which the control puts a pixel in too. OUTSIDE THE MINIMAP AND
+THAT PIXEL: 0 px on all four cross-build pairings. Census 749 452 on every arm. Zero VK_ERROR /
+validation lines, one `gui: layer ON` each, ZERO oglu/opengl/wgl log lines on either build and no
+GDI fall-back on any arm -- so nothing regressed into software rendering when the loader went.
+
+ATTEMPT 1 FAILED GATE 1, and that is the comparator working. brB's three grabs disagreed pairwise
+by 54 657 / 11 202 / 43 455 px and cmp_x.py refused to report any number, exiting "GATE 1 FAILED
+... the fixture is drifting, not settling." That is the same-day fix -- choose the settled grab by
+AGREEMENT rather than by index -- catching a real failure on its first outing. Attempt 2, where
+all four arms settled, is the table above. (The review then showed the cause is tearing in the
+fourth arm, not drift, which makes the refusal right for a reason nobody had yet.)
+
+THE REVIEW FIXES DID NOT MOVE THE BINARY: .text, .rdata and .data are byte-identical to the DLL
+the A/B measured, and zero .c/.h files changed after it, so the measurement carries. (D3's did
+move, by 176 bytes, and was re-run rather than inherited.)
+
+NOT verifiable read-only, and the reviewer said so: the A/B needs a build and a run.
+
+OPEN, and named rather than answered: 11-5f, which now STOPS FOR THE OWNER before any fix -- they
+review a running game with the shield off. And whether 11-6 may close with cast shadows dark is
+escalation reason 1 and is theirs.
