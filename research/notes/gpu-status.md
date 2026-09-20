@@ -14319,6 +14319,36 @@ tool that refuses wrongly costs one minute, and D3's first cut — a heuristic t
 times in five — cost a thrown-away surgery. **Refuse by default; the fifth case is the silent
 one.**
 
+#### D4'S PIXEL A/B — AND THE GATE FAILED HONESTLY ON THE FIRST ATTEMPT
+
+Four arms, `one-unit`, interleaved, both arms clean-built. Baseline is `main` at `5392778`
+(`.text 0x000ca7b4`, 1 464 832 B), branch is D4 (`.text 0x000c94e4`, 1 457 152 B).
+
+| pairing | total | minimap | elsewhere |
+|---|---|---|---|
+| **cross-build** `mainA`/`brA` | 45 px | 44 | 1 |
+| **cross-build** `mainA`/`brB` | 49 px | 48 | 1 |
+| **cross-build** `mainB`/`brA` | 45 px | 44 | 1 |
+| **cross-build** `mainB`/`brB` | 1 px | 0 | 1 |
+| control `mainA`/`mainB` | 48 px | 48 | **0** |
+| control `brA`/`brB` | 44 px | 44 | **0** |
+
+The derived box is again **1×1 at (512,384)**, the fixture's oscillating cursor pixel. **Outside
+the minimap and that pixel: 0 px on all four cross-build pairings.** Census **749 452** on every
+arm, zero `VK_ERROR` / validation lines, one `gui: layer ON` each, **zero `oglu`/`opengl`/`wgl`
+log lines on either build**, and no GDI fall-back on any arm — so nothing regressed into software
+rendering when the loader went.
+
+**THE FIRST ATTEMPT FAILED GATE 1, AND THAT IS THE POINT.** `brB`'s three grabs disagreed
+pairwise by **54 657 / 11 202 / 43 455 px** — no two of the three agreed — and the comparator
+**refused to report any number**, exiting `GATE 1 FAILED … the fixture is drifting, not
+settling. Do not read further.` That refusal is the fix made earlier the same day (pick the
+settled grab by agreement, not by index) catching a real failure on its first outing. The cause
+is the 11-5f instability measured above: the engine's composited layer flickers, and a run can
+land three grabs in three different states. **Every earlier pixel A/B in this gate passed gate 1
+by landing two of three grabs in the same state**, which is luck the old comparator could not
+distinguish from a static fixture. The table above is attempt 2, where all four arms settled.
+
 #### THE RESIDUE D4 DOES NOT CLEAN UP, NAMED WITH ITS COUNT
 
 `render_ogl.c` and `render_ogl.h` went in **landing 11-2**. Tracked content still cites them
