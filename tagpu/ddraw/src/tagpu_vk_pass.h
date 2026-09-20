@@ -152,6 +152,22 @@ typedef struct {
        frame whose gather bailed, because then it is not called at all.
        [FROM THE G19e RE-REVIEW, 2026-09-15 -- both reviewers, separately.] */
     unsigned                  frame;
+    /* THE CLEAN CUT IS ARMED (`tagpu_purevk.on`), so no pixel on the presented
+       frame may originate from an OBSERVATION of the engine -- neither TA's own
+       composed 8-bit frame drawn as a layer, nor the UI twin built by replaying
+       the engine's draw ops. The seam polls the lever on its own 250 ms cadence
+       and publishes the answer here, so a pass never reads the file itself and
+       every pass in a frame sees one value.
+
+       IT IS NOT AN ARMING FLAG AND MUST NOT BE USED AS ONE. What the cut stops
+       is DRAWING; everything upstream of the draw keeps running, because the
+       engine's frame is kept as the golden source to check ourselves against
+       (`tagpu_surf_take` on the game side, `tagpu_vk_surf_prepare`'s upload on
+       this one) and because the twin store has to stay level with the op stream
+       whether or not we composite it. A pass that stood DOWN on this would take
+       the reference with it, which is the one thing the cut exists to keep.
+       [The vulkan-only plan, "The Clean Cut".] */
+    int                       pureVk;
     PFN_vkGetInstanceProcAddr gipa;
     PFN_vkGetDeviceProcAddr   gdpa;
     void                    (*log)(const char* s);

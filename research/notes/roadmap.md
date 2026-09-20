@@ -3414,9 +3414,23 @@ one above it.
 **So the search is "which tests can never be true", not "which functions have no callers";
 the latter finds leaves.** **Not covered by 11-5a–e**: nothing of the GL lane — D2, D3 and D4 took
 `tagpu_shadow.c`, `tagpu_hires_draw.c`, `opengl_utils.c` and its four headers, and `gl-sites`
-reads 0/0. What IS still open is **11-5f**, the grey world and the composite losing TA's own
-frame, which measurement now suggests are one defect and which **stops for the owner before any
-fix**; and the shadow half still escalation
+reads 0/0. **11-5f STOPPED FOR THE OWNER AND THE OWNER ANSWERED IT, 2026-09-20: not a fix, a
+CUT.** "We 100 % stop compositing anything from the engine, we just keep it in 100 % separate
+texture to do checks from the golden source." So the defect is not diagnosed and not repaired —
+the layer it lives in stops reaching the screen at all. `tagpu_purevk.on` is that
+([gpu-status](gpu-status.html) §2.81): `tagpu_vk_surf_record` and `tagpu_vk_gui_record` are not
+called, `uSurf` is unbound, and `tagpu_surf_take` and the surf pass's upload are kept untouched
+so the engine's frame stays live as the reference. Measured by flipping the lever **live in one
+run** on `feat-forest`: all three HUD regions 100 % changed, the world viewport **1 857 px of
+630 784**, and every one of those nine clusters named — 357 px of walking-commander noise, 1 388
+px of health bars (the twin's `PK_BAR` ops) and the cursor's own 10×20. The round trip is exact
+and the re-armed frame is byte-identical. **And the harness drives a blind shell** — the whole
+`scenario load` route ran to a live world with the census reading `0 pass(es) drew` throughout,
+because `tacli ui` reads the gadget array and never a pixel. **The surprise it turned up is that
+the golden source is NOT the complete frame the plan assumed**: `TERROWN skip=1 filled=1` and
+`FEATOWN skip=1` mean the reference carries no terrain and no trees, so completing it is a lever
+change for features and a code change for terrain (`tagpu_terr.c:1260`, whose stated reason is
+the composite's key test — the very thing the cut removes). Still open after this; and the shadow half still escalation
 reason 1, and now known to be more than a preference — `tagpu_shadow_begin` has no caller
 anywhere in the tree, so that pass is already dead and the question is whether the two files are
 scaffolding for a Vulkan-side producer or debris. See the plan's

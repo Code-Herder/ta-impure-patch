@@ -250,6 +250,7 @@ static int              s_atDim, s_glW, s_glH;
 static unsigned         s_atSerial, s_palSerial, s_glSerial;
 static int              s_atHave, s_palHave, s_dumReady, s_glHave;
 static int              s_saidBorrow;
+static int              s_saidPure;     /* the clean cut, said once */
 /* THE RESTORED UI ATLAS IS NOT HERE ANY MORE (landing 11-5e-2b). It was an
    RGBA8 image of the same dim and the same shelf as the indexed one, uploaded
    from `atlasRgb` -- the texels the GL lane's restorer had painted, read back
@@ -1678,7 +1679,27 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        fails HERE, where `tagpu_vk_surf.c:292` tests for it by name, instead of
        through a `mk_image` of our own that never checked. */
     engView = tagpu_vk_surf_engine_view(slot, &engW, &engH);
-    if (!h.eng) {
+    /* ---- THE CLEAN CUT UNBINDS `uSurf`. [`tagpu_purevk.on`; the vulkan-only
+       plan.] The seam already drops this pass's composite on a cut frame, so
+       nothing this descriptor names can reach the screen through the draw --
+       but the RULE the cut states is about SAMPLING, not about one call site,
+       and a rule that holds only because of what another file happens to do
+       today is the kind that comes apart under the next edit. Cleared here, in
+       the pass that owns the sampling, the descriptor names `s_dumView` and the
+       engine's image is not reachable from this pipeline at all.
+
+       `engOk = 0` IS ALREADY A SUPPORTED STATE, not a new one: it is what the
+       borrow refusal below leaves, and `LAY_FS` gates both the stale-mirror
+       guard and the `uStrict` harness on their own uniforms, so the dummy view
+       is never sampled. So this costs the guard, which has nothing left to
+       guard, and nothing else. */
+    if (d->pureVk) {
+        engView = VK_NULL_HANDLE; engW = 0; engH = 0; engOk = 0;
+        if (!s_saidPure) { s_saidPure = 1;
+            plog(d, "gui: the clean cut is armed - the ops are replayed and the "
+                    "twins kept level, uSurf is unbound and nothing of this "
+                    "layer reaches the frame"); }
+    } else if (!h.eng) {
         /* NO ENGINE FRAME AT ALL. Exactly the refusal this pass made before
            landing 10, on the same question: `h.eng` and the surface pass read
            one `tagpu_surf_frame` snapshot per frame, so this is the producer
@@ -1714,7 +1735,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     "%dx%d) - compositing with the stale-mirror guard off",
                  engW, engH, h.surfW, h.surfH); }
         engOk = 0;
-    } else { engOk = 1; s_saidEng = 0; s_saidBorrow = 0; }
+    } else { engOk = 1; s_saidEng = 0; s_saidBorrow = 0; s_saidPure = 0; }
     if (!h.pal || !h.presented || h.surfW < 1 || h.surfH < 1 ||
         h.surfW > SURF_MAXDIM || h.surfH > SURF_MAXDIM) compose = 0;
     if (h.atlas && (h.atlasDim < 1 || h.atlasDim > ATLAS_MAXDIM ||

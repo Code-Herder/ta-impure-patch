@@ -2316,6 +2316,47 @@ never read it. A comment counted as a call site.]
 Note too that the `packet:` heartbeat is emitted from the render thread, so the exchange's
 counters are not printed on gdi at all.
 
+### The clean cut — `tagpu_purevk.on` (2026-09-20)
+
+**With this lever armed, NOTHING the engine drew reaches the screen.** TA's composed 8-bit frame
+stops being a layer and the UI twin's composite stops reaching the frame; the engine goes on
+rasterising and `tagpu_surf_take` goes on capturing, so its surface is kept as the **golden
+source** to check our own passes against. It is opt-in, off the defaults table, and **polled
+live** on the seam's own 250 ms cadence — so it flips on a running instance and flips back, and
+the re-armed frame is byte-identical to the first cut one.
+
+```bash
+tools/tacli arm <i> purevk.on          # the cut, live, ~250 ms
+tools/tacli arm <i> purevk.on=off      # back, live
+tools/tacli log <i> -g 'clean cut'     # one line from the GUI pass when it arms
+tools/tacli log <i> -g 'vk: census'    # gui=1 -> gui=0 is the flip
+```
+
+Four things to know before driving under it:
+
+- **The HUD is GONE and that is the point** — side panel, minimap, resource bar, top and bottom
+  bars, every menu and the loading screen. What is left in their place is the lane's **clear
+  colour, which is magenta** (`tagpu_vk.on=color=0,0,0` for black). In the world viewport you
+  lose the health bars and the cursor and **nothing else**: on `feat-forest` at 1024×768 the
+  whole world-viewport difference is **1 857 px of 630 784**, and all of it is bars, the cursor
+  and the fixture's own walking commander. Terrain, water, trees, units and wrecks are ours
+  already.
+- **The harness drives a BLIND SHELL, measured.** `tacli scenario load … --restart` runs the
+  whole route to a live world with the census reading `0 pass(es) drew` for every frame of the
+  menus. `tacli ui` reads the engine's gadget array and clicks the coordinates it reports;
+  `_scn_wait_live` reads `tagpu.log`. No part of the route reads a pixel, so nothing about
+  driving changes. **`tacli shot` still works** and is how you see the menu you are clicking.
+- **THE GOLDEN SOURCE IS NOT A COMPLETE FRAME in the shipped arm set.** A `tacli shot` under the
+  cut shows the HUD, the units, their bars and the cursor over a **flat cyan viewport with no
+  terrain and no trees** — `TERROWN skip=1 filled=1` and `FEATOWN skip=1` in the log are the
+  whole explanation. So **do not diff a terrain or feature element against the reference and
+  believe the number**: there is nothing there to diff against. Trees come back by not arming
+  `featown.on`; terrain needs a code change (`tagpu_terr.c:1260` refuses to emit without
+  `terrown` installed). Units ARE in the reference, because `OWND … skipped=0` — the engine's
+  unit rasteriser is not skipped at all.
+- **The reference capture is taken on the RENDER thread** (`tagpu_overlay.c:234`), sequenced
+  against nothing, so it may not hold a finished frame. Fine for looking; not yet an oracle.
+
 **`tacli shot` IS NOT A SCREENSHOT OF WHAT THE PLAYER SEES, and on the Vulkan lane the two
 genuinely disagree.** It captures the **engine's own surface** — TA's 8bpp frame — and that
 frame is only the BOTTOM LAYER of what gets presented (`tagpu_vk_world.c`: our world is drawn

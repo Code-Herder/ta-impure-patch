@@ -698,13 +698,22 @@ int tagpu_vk_surf_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     s_dx = sf.dx; s_dy = sf.dy; s_dw = sf.dw; s_dh = sf.dh;
     s_drawThis = 1;
 
+    /* READIED, NOT DRAWN, and the word matters since the clean cut. This is
+       incremented in `prepare` and the draw is `record`'s -- which the seam
+       skips entirely under `tagpu_purevk.on`. Labelled "drawn" it reported
+       thousands of draws, climbing, in exactly the configuration whose whole
+       point is that this pass draws nothing; a heartbeat that contradicts the
+       landing it is meant to evidence is worse than no heartbeat. The count is
+       unchanged -- only the claim it makes about itself is. */
     s_nFrames++;
     if (d->frame - s_saidAt >= 300) {
         s_saidAt = d->frame;
-        plog(d, "surf: frame %u: %dx%d -> (%d,%d %dx%d), %u frame(s) drawn, "
-                "%u byte upload(s) and %u palette upload(s)",
+        plog(d, "surf: frame %u: %dx%d -> (%d,%d %dx%d), %u frame(s) readied, "
+                "%u byte upload(s) and %u palette upload(s)%s",
              (unsigned)d->frame, sf.w, sf.h, sf.dx, sf.dy, sf.dw, sf.dh,
-             s_nFrames, s_nBytes, s_nPal);
+             s_nFrames, s_nBytes, s_nPal,
+             d->pureVk ? " - the clean cut: none of them drawn, the surface is"
+                         " the reference only" : "");
     }
     return 1;
 }

@@ -190,6 +190,21 @@
    enumeration worker included, and the row plates whatever the cache last
    said. It is what an A/B against the pre-G19 DLL arms. */
 #define OFF_FILE   "tagpu_vk.off"
+/* THE CLEAN CUT (the vulkan-only plan). With this file present no pixel on the
+   presented frame may originate from an OBSERVATION of the engine: TA's own
+   composed 8-bit frame stops being a layer and the UI twin's composite stops
+   reaching the frame. Everything else about the frame is unchanged, and
+   everything UPSTREAM of those two draws keeps running -- the engine still
+   rasterises a complete frame into its own surface, `tagpu_surf_take` still
+   captures it and `tagpu_vk_surf_prepare` still uploads it, because that
+   surface is the golden source every later step is checked against.
+
+   IT IS OPT-IN AND OFF THE DEFAULTS TABLE, so `tagpu_opt.c` never turns it on:
+   it breaks the sidebar, the minimap, the resource bar and every menu by
+   design, and that is a thing an operator asks for by name. Polled on this
+   file's own 250 ms cadence like every other lever here, and published to the
+   passes through `TAGPU_VKPASS.pureVk` so a frame cannot see two answers. */
+#define PURE_FILE  "tagpu_purevk.on"
 /* THE A/B (Phase G / G19d). `tagpu_fps.c` owns the lever (`tagpu_fps.ab`): it
    clears the GL frame to black, writes `tagpu_fps_gl.ppm` and hands the flag
    over with the vertices, and this file writes `tagpu_fps_vk.ppm` out of the
@@ -602,6 +617,13 @@ void tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 /* ---- the lever ----------------------------------------------------------- */
 static volatile LONG s_armed = -1;      /* -1 = never polled */
 static DWORD s_lastPoll;
+/* THE CLEAN CUT'S CACHED ANSWER. Written by `read_lever` and read by
+   `tagpu_vk_frame` and `tagpu_vk_purevk`, all three on the RENDER THREAD, so
+   it is a plain int for `s_uiDrew`'s reason and no interlock is owed. It is
+   not `s_armed`: that one is `InterlockedExchange`d because `tagpu_vk_armed`
+   answers the GAME thread, and this has no game-thread caller by design --
+   adding one would be an unsynchronised cross-thread read. */
+static int s_pureVk;
 /* THE A/B'S FRAME IS NOT DECIDED HERE (G19d). `tagpu_fps.c` polls the lever,
    captures its own half and hands the flag over with the vertices; this file
    only carries it through. Both lanes polling for themselves was the first
@@ -614,6 +636,11 @@ static void read_lever(void)
     char b[128];
     HANDLE h;
     DWORD n = 0;
+    /* FIRST, AND ABOVE THE `!on` RETURN BELOW. The cut is a question about what
+       this lane DRAWS, not about whether it runs, and the return below is taken
+       whenever `tagpu_vk.on` is absent -- so polling it after that line would
+       leave the answer frozen at whatever it was when the lane last armed. */
+    s_pureVk = exists(PURE_FILE);
     /* THE LEVER RETIRES INTO `renderer=` when this backend owns the present:
        `renderer=vulkan` that a stray `tagpu_vk.off` could disarm would leave
        the process with NO renderer and a black window, which is a worse
@@ -745,6 +772,16 @@ int tagpu_vk_owns_present(void)
    stack fails at silently. [FOUND BY THE LANDING REVIEW OF GATE 4's LAST
    ITEM.] */
 int tagpu_vk_ui_composited(void) { return s_uiDrew; }
+
+/* RENDER THREAD ONLY, exactly as `tagpu_vk_ui_composited` is and for the same
+   reason: a plain int written by `read_lever` on the render thread's own poll
+   and read by `render_vk.c` in the same loop iteration. A game-thread caller
+   would be the unsynchronised cross-thread read CLAUDE.md says this stack fails
+   at silently -- if one is ever needed it gets its own interlocked publish, not
+   this. It answers for the CACHE, so it is 0 until the first poll, which is the
+   first frame: there is no window in which a pass and this disagree, because
+   both read the same `s_pureVk` the poll just wrote. */
+int tagpu_vk_purevk(void) { return s_pureVk; }
 
 int tagpu_vk_armed(void)
 {
@@ -2769,6 +2806,22 @@ static int vk_present(void)
             draw_world = tagpu_vk_world_prepare(&s_pass, cb, fi, &tw, &th);
 
             draw_surf = tagpu_vk_surf_prepare(&s_pass, cb, fi);
+            /* ---- THE CLEAN CUT, HALF ONE: TA'S COMPOSED FRAME STOPS BEING A
+               LAYER. [`tagpu_purevk.on`; the vulkan-only plan.]
+
+               THE `prepare` ABOVE STILL RAN, AND THAT IS THE POINT. It uploads
+               the bytes `tagpu_surf_take` captured into this slot's R8 image --
+               the GOLDEN SOURCE, the engine's own complete frame, still drawn by
+               a rasteriser that knows this game's look perfectly. The cut takes
+               away its DRAW and nothing else, so the reference stays live and
+               every element we draw back later can be diffed against the same
+               rect of it. Standing the pass down instead would have thrown away
+               the thing the cut exists to keep.
+
+               IT IS ZEROED HERE RATHER THAN TESTED AT THE DRAW so that there is
+               exactly one place in this file that knows the cut is armed, and
+               so `draw_surf` means what it says everywhere below. */
+            if (s_pass.pureVk) draw_surf = 0;
 
             /* THE SCAFFOLD'S UPLOAD IS FIRST OF OURS, though its DRAW is nearly last.
                The G12a overlay is a texture the unit, hi-res and effects
@@ -2821,6 +2874,31 @@ static int vk_present(void)
                shape, for the same reason. */
             draw_gui = tagpu_vk_gui_prepare(&s_pass, cb, fi);
             ab_gui = tagpu_vk_gui_ab_frame();
+            /* ---- THE CLEAN CUT, HALF TWO: NO REPLAYED ENGINE OP REACHES THE
+               FRAME. [`tagpu_purevk.on`; the vulkan-only plan.]
+
+               THE REPLAY STILL RAN, for the reason the file's own §"what this
+               landing does not carry" gives: the whole op stream is applied
+               inside `prepare`, and our twin store must equal what the engine
+               drew or it is worth nothing. Skipping frames of it would leave the
+               store permanently behind and silently, which is exactly the state
+               this pass's other refusals go out of their way to avoid. So the
+               ops are applied, the twins are kept level, and the COMPOSITE --
+               the one thing that puts a replayed engine pixel on screen -- is
+               what stops.
+
+               AND THE A/B CLAIM GOES WITH IT, which is not tidiness. `ab_gui`
+               means "capture this frame and diff it as the GUI pass's output";
+               with the composite cut, that capture holds a frame the GUI pass
+               drew nothing into, and the diff would report every pixel of the
+               layer as a difference -- an oracle failure that reads exactly like
+               a broken port, which tagpu_vk.c's own A/B rules call the worst
+               answer an oracle can give. The pass has already unlinked its
+               target file by the time we get here (`tagpu_vk_ab_arm`, latched on
+               the gather side), so dropping the claim leaves that file ABSENT,
+               and absent is this lane's word for "this arming produced no
+               capture" -- the honest answer rather than a wrong picture. */
+            if (s_pass.pureVk) { draw_gui = 0; ab_gui = 0; }
             draw_fps = tagpu_vk_fps_prepare(&s_pass, cb, fi);
             ab_fps = tagpu_vk_fps_ab_frame();
 
@@ -3207,6 +3285,12 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
        here, on a cached answer refreshed every 250 ms, so the GL lane's frame
        is what it was before this file existed. */
     if (s_armed < 0 || (DWORD)(now - s_lastPoll) >= POLL_MS) { s_lastPoll = now; read_lever(); }
+    /* AND THE CUT'S ANSWER TO THE PASSES, ONCE, HERE. Every `prepare` below is
+       handed `&s_pass`, so taking it from the cache at the top of the frame is
+       what makes "one value for the whole frame" true rather than hoped for:
+       a pass reading the file itself would be reading it on its own cadence and
+       two passes could disagree across a flip of the lever. */
+    s_pass.pureVk = s_pureVk;
 
     /* THE DISARMED FRAME COSTS A PLAIN LOAD. `lane_state()` is a `lock cmpxchg`
        and the barrier it carries is only owed when something is actually going

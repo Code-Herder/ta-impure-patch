@@ -3869,6 +3869,41 @@ The per-pass `tagpu_<x>.off` files, `tagpu_defaults.off`, `tagpu_reclaim.off` an
 at all. `README.txt`'s claim that three files give you *"the stock one through cnc-ddraw"* is
 false by that one byte, and stays false unless it is given a lever or the sentence is corrected.
 
+## THE CLEAN CUT — the engine stops being a layer [LANDED 2026-09-20]
+
+`tagpu_purevk.on`. The owner's answer to 11-5f, and it is not a fix: *"we 100 % stop compositing
+anything from the engine, we just keep it in 100 % separate texture to do checks from the golden
+source"*, *"the first step has to be a 100 % clean cut from the software engine even if it breaks
+UI elements."* The full write-up, the measurement and the inventory are
+[gpu-status](gpu-status.html) §2.81. What belongs here is what it changes about **this plan**.
+
+**It settles two of the plan's own open decisions by instruction rather than by argument.** The
+cut line is the hard one — the composed frame *and* the replayed op stream — and the shell keeps
+no exemption. Menus are undrawn, and that was measured to be survivable before anything else was
+built.
+
+**It corrects the plan's premise about the reference.** §6 of the published plan calls the
+engine *"a complete, correct reference implementation of this game's look."* Measured, in the
+shipped arm set, it is not: `TERROWN skip=1 filled=1` and `FEATOWN skip=1` mean the reference
+holds the HUD, the units, the bars and the cursor over a **flat key-coloured viewport with no
+terrain and no trees**. The `*own` levers hole the reference exactly where we have taken over,
+which is exactly where a diff would be worth taking. Features are a lever away; terrain is not —
+`tagpu_terr.c:1260` refuses to emit without `terrown` installed, and its stated reason is the
+composite's key test, which under the cut no longer exists. **Whoever writes step 4 of the cut's
+own order of work takes that gate first, or their A/B has nothing to diff against.**
+
+**Step 7 gets a second reason to be last.** The plan already put "stop the engine rasterising"
+after everything, because the reference needs a complete frame. The finding above sharpens it:
+the engine is currently the *only* source of a reference for the HUD, and `OWND target=all
+skipped=0 passed=5311` says its unit rasteriser is not even being skipped today — so the frame
+it draws is more complete for units than for the world, and the order in which those are given
+back is not the order the plan implies.
+
+**What the cut does NOT do**, stated so the next session does not look for it: it does not stop
+the engine rasterising, it does not move `tagpu_surf_take` to the game thread, it does not draw
+anything back, and it changes no engine byte and no engine memory. It is two `if`s in the seam,
+one descriptor in the GUI pass, and a lever.
+
 ## What this plan does not know yet
 
 * **Whether the audit reorders all of it.** Three gaps came out of one blind spot while planning;

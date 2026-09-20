@@ -14404,3 +14404,134 @@ there is no GL lane at all, so "the GL lane" stops being a thing a comment can p
 makes this the moment to write the count down rather than let the next session find it.
 **It is an input to 11-6's exit condition**: a gate whose title is "the OpenGL lane goes" that
 leaves 168 present-tense references to the deleted lane has not finished.
+
+### 2.81 The clean cut — the engine stops being a layer and becomes the reference — `tagpu_purevk.on`
+
+**The rule, and it is a rule rather than a setting: with `tagpu_purevk.on` present, no pixel on
+the presented frame originates from an OBSERVATION of the engine.** What draws is our own world
+passes and nothing else. The engine goes on rasterising its whole frame into its own 8-bit
+surface, `tagpu_surf_take` goes on capturing it, `tagpu_vk_surf_prepare` goes on uploading it —
+into an image that is **never sampled for presentation**. It is the golden source now, not
+content. Off by default, off the `tagpu_opt.c` defaults table, polled live on the seam's own
+250 ms cadence.
+
+**Why cut before fixing.** While any engine pixel can reach the screen, every artifact needs a
+prior question answered first — *is this ours or theirs?* — and in the week before this landing
+that question was answered wrongly three times (the teal tree shadows, the green vent smoke, the
+"missing" units were all one confusion). After the cut the screen is exactly what our own passes
+drew, so anything missing is missing **visibly** and is a work item rather than a mystery.
+
+#### The two sites, and the two that deliberately keep running
+
+| site | under the cut | why |
+|---|---|---|
+| `tagpu_vk_surf_record` | **not called** — `draw_surf` is zeroed after `prepare` | TA's composed frame stops being a layer |
+| `tagpu_vk_gui_record` | **not called** — `draw_gui` and `ab_gui` zeroed after `prepare` | no replayed engine op reaches the frame |
+| `uSurf` in `LAY_FS` | **unbound** — `tagpu_vk_gui.c` clears `engView`, the descriptor names `s_dumView` | the rule is about SAMPLING, not about one call site |
+| `tagpu_surf_take` + `tagpu_vk_surf_prepare` | **unchanged** | the reference texture fills every frame |
+| the GUI twin's op replay | **unchanged** | the twin store must stay level with the op stream or it is worth nothing |
+
+**Both passes' `prepare` still runs, and that is the design rather than an oversight.** Standing
+either down would have taken the reference with it — which is the one thing the cut exists to
+keep — and would have left the twin store permanently and silently behind the engine's, which is
+the state every other refusal in `tagpu_vk_gui.c` goes out of its way to avoid. The cut takes
+away the DRAW and nothing else.
+
+`TAGPU_VKPASS.pureVk` carries the poll's answer to the passes, set once per frame beside
+`s_pass.frame`, so a frame cannot see two answers across a flip of the lever.
+`tagpu_vk_purevk()` publishes the same cached value to `render_vk.c` — render thread only, a
+plain int, for `tagpu_vk_ui_composited`'s reason exactly.
+
+#### What it measured — `feat-forest`, Two Continents, `--los 0`, 1024×768, `e5a`
+
+Taken by flipping the lever **live in one run**, so the difference is the cut and nothing else.
+Noise floor first: three grabs with the cut off differ by 498 and 339 px, every one of them in
+one 24×49 box round the fixture's walking commander, and **0 px in all three HUD regions**.
+
+| region | px changed by the cut | of |
+|---|---|---|
+| side panel `x<128` | **98 304** | 98 304 (100 %) |
+| top bar `y<32` | **28 672** | 28 672 (100 %) |
+| bottom bar `y≥h−32` | **28 672** | 28 672 (100 %) |
+| world viewport | **1 857** | 630 784 (0.3 %) |
+
+The census goes `gui=1` → `gui=0` on the flip and stays there. **The round trip is exact**: the
+lever removed restores the HUD to the same 157 496 px, and re-armed gives a frame **byte-identical**
+to the first cut one (0 px of 786 432).
+
+**The world viewport's 1 857 px are nine clusters and every one of them is accounted for**, which
+is what makes this an inventory rather than a number:
+
+* **357 px** at x[832..851] y[369..405] — the walking commander, i.e. the noise floor.
+* **1 388 px** in seven clusters of 35×5 and 67×6, in `(83,223,79)` green over `(87,231,191)`
+  teal — **the health bars**, which on this rig came from the twin's `PK_BAR` ops (`mark.on` is
+  not armed on `e5a`; with `mark.on`/`markown.on` our own marker pass draws them).
+* **112 px** at x[512..521] y[384..403], exactly 10×20 at the screen centre — **the cursor**,
+  which is `tagpu_cursown`'s own 10×20 footprint.
+
+Nothing else in the world went. Terrain, water, every tree, the units, the structures and the
+lab wreck are all still there, because all of them were already ours.
+
+#### The blind shell works, and it is now measured rather than assumed
+
+The plan named this the one untested assumption worth spending the first ten minutes on: with
+menus undrawn, can the harness still get into a game? **Yes, and the whole path runs.**
+`tacli scenario load e5a feat-forest --restart --los 0` under the cut clicked `SINGLE`,
+`Skirmish` and `Start`, set both toggles, reached a live world and applied all ten entities —
+while the census read **`0 pass(es) drew`** for every frame of the shell. Nothing was on the
+screen and it did not matter, because `tacli ui` reads the engine's own gadget array and clicks
+at the coordinates that array reports; `_scn_wait_live` reads `tagpu.log`. No part of the route
+reads a pixel.
+
+#### THE GOLDEN SOURCE IS NOT THE COMPLETE FRAME THE PLAN ASSUMED — and this is the surprise
+
+The plan's §6 says the engine is *"a complete, correct reference implementation of this game's
+look, running in the same process, on the same frame, with the same state."* **In the shipped
+arm set it is not, and the hole is exactly where you would most want to check yourself.** A
+`tacli shot` taken under the cut shows the HUD, the minimap, the units, their health bars and the
+cursor — and a viewport that is a **flat cyan fill**, palette index 254, with **no terrain and no
+trees**.
+
+The cause is the `*own` levers, and the engine's own counters say it in one line each:
+
+* `TERROWN skip=1 filled=1` — `tagpu_terrown` skips the engine's terrain pass *and* its fog
+  overlay and fills the viewport with the key instead.
+* `FEATOWN skip=1` — `tagpu_featown` skips the engine's feature draw, so no tree is rasterised.
+* `OWND target=all skipped=0 passed=5311` — the unit rasteriser is **not** skipped, which is why
+  the units *are* in the reference. `tagpu_posedraw_live()` is a hardcoded `return 0`, so the
+  engine draws every unit every frame into pixels that were already being discarded.
+
+**So completing the reference is a lever change for features and a CODE change for terrain.**
+Dropping `featown.on` is enough for the trees. Terrain refuses: `tagpu_terr.c:1260` is
+`own = !s_passive && !s_over && tagpu_terrown_installed()`, and the comment above it gives the
+reason — *"our terrain is opaque and covers the whole viewport, so any other time it would hide
+the health bars, wireframes, build cursor and chat that the composite's key test exists to let
+through."* **That premise is exactly what the clean cut removes**: under the cut there is no
+composite and no key test, so the gate is guarding against a frame that can no longer happen.
+Nothing here changes it — this landing is the cut — but no diff against the reference should be
+trusted for terrain or features until it is.
+
+The second caveat carried over from the plan is unchanged and still open: `tagpu_surf_take` runs
+at `tagpu_overlay.c:234` on the **render thread**, sequenced against nothing, so the reference may
+not always hold a finished frame. A game-thread hook where the frame is complete by construction
+already exists — the packet publisher's `after_draw` observer on `DrawGameScreen 0x468CF0`,
+installed at `tagpu_packet_pub.c:2476`. That is where the capture belongs before anyone trusts a
+diff against it. It does not bear on the cut.
+
+#### What the frame shows where nothing draws
+
+The lane's clear colour, which is **magenta** (`s_clear` = 1,0,1) unless `color=` in
+`tagpu_vk.on` says otherwise. The plan argued for black as the honest answer; magenta is the
+louder one and it is what the lane already had, so nothing was changed. An operator who wants
+black arms `tagpu_vk.on=color=0,0,0`.
+
+#### One counter's meaning changed, and both were corrected rather than left to mislead
+
+* `tagpu_cursown_note_held()` counts *"frames the engine's cursor was suppressed with nothing of
+  ours on screen"* — a defect when the cut is off, the **design** when it is on, and it would
+  have climbed on every frame of a cut session. `render_vk.c` no longer counts it under the cut.
+  The **publish** beside it is deliberately NOT gated: `tagpu_cursown_publish(0)` is exactly
+  right, because the engine's cursor must keep being drawn into the surface we are keeping.
+* The surf pass's heartbeat said *"N frame(s) drawn"* while counting `prepare`s. Under the cut it
+  reported thousands of draws, climbing, in the one configuration whose whole point is that the
+  pass draws nothing. It now reads *"N frame(s) readied"* and names the cut.

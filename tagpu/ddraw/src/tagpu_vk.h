@@ -177,6 +177,21 @@ int tagpu_vk_owns_present(void);
    avoid. [The vulkan-only plan, gate 4's last item.] */
 int tagpu_vk_ui_composited(void);
 
+/* 1 when THE CLEAN CUT is armed (`tagpu_purevk.on`): no pixel on the presented
+   frame originates from an observation of the engine -- TA's composed 8-bit
+   frame is not drawn as a layer and the UI twin's composite does not reach the
+   frame. The engine still rasterises, `tagpu_surf_take` still captures, and
+   that surface is kept as the golden source to check our own passes against.
+
+   ASK IT ON THE RENDER THREAD ONLY. It is the poll's cached answer, a plain int
+   with no interlock, for exactly `tagpu_vk_ui_composited`'s reason. What it is
+   FOR is the handful of render-loop decisions whose MEANING the cut changes --
+   an instrument that counts "we suppressed the engine and showed nothing of
+   ours" is counting a defect when the cut is off and counting the design when
+   it is on. It is not an arming question and nothing should stand down on it.
+   [The vulkan-only plan, "The Clean Cut".] */
+int tagpu_vk_purevk(void);
+
 /* Unlink `tagpu_<tag>_vk.ppm`, where `tag` is one of "scaffold", "fps", "terr",
    "feat", "fx", "mark", "posedraw", "gui". A pass calls this AT THE INSTANT IT LATCHES A CLAIM and
    nowhere else -- the placement is the whole guarantee, and tagpu_vk.c states it
