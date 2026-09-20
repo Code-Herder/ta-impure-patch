@@ -14544,6 +14544,68 @@ cells=0`, so the 667-cell grid was walked every frame and not one quad came out 
 stop the *engine*, which is a question about the reference and the CPU rather than about what we
 draw. Census before: `3 pass(es) drew (terr=0 feat=1 unit=1 fx=1)`. After: `4 … (terr=1 …)`.
 
+#### The review found three more emit gates of the same shape, and a producer I had taken away
+
+The terrain gate above was not the only one. `tagpu_mark.c` refused its bars and digits on
+`!tagpu_markown_installed()`, `tagpu_mark_cursor_ours()` folded the same test in (so the build
+cursor, the drag band box **and the build ghost** went with it), and `tagpu_order.c` refused the
+whole order overlay on it. Every one said *refuse rather than double-draw*, and every one was
+answering a question about the composite. All three are deleted.
+
+**AND `markown` IS A PRODUCER, WHICH IS WHY TAKING IT OFF THE DEFAULTS WAS A BIGGER CHANGE THAN
+IT LOOKED.** `mark_orders` is the sole caller of `tagpu_order_snapshot`, and the hook-8 stub the
+sole caller of `tagpu_packet_pub_font_snapshot` — so with the redirects uninstalled the order
+arena was never filled and the packet carried no font at all: no order markers, no route dots,
+no target circles, no `ShowRanges` labels, **no text anywhere**, whatever the gates said. The
+census said it in one field and I did not read it: `4 pass(es) drew (terr=1 feat=1 unit=1 fx=1)`
+with no `mark=`. So `tagpu_markown.on` is back on the defaults table, as the producer, and it is
+the one `*own` lever that is.
+
+| | before | after |
+|---|---|---|
+| census | `4 pass(es) drew (terr=1 feat=1 unit=1 fx=1)` | `5 … (terr=1 feat=1 unit=1 fx=1 mark=1)` |
+| the packet's font | no `packet: font … copied` line at all | `rows=11 yoff=1 glyphs=95 bytes=1612 dropped=0` |
+| on screen | no bar, no digit, no cursor, no order overlay | bars over every owned unit; a control group's digit under the bar |
+
+**What it costs the reference, and it is the only hole the defaults leave in it.** While the
+marker pass draws it asks `markown` to skip the engine's own, so `tacli shot` shows a 1997 frame
+without its bars, digits, order markers and build cursor. That is why the skips stay dynamic
+rather than becoming unconditional: `tagpu_mark.on=passive` hands every one of them back with
+the redirects still installed, and that is the arm for a reference-quality capture.
+
+#### The structure slant shadow is NOT drawn on this lane, and the clean cut did not do it
+
+The same review read `n2->shadow = tagpu_owndraw_structshadow_ours() && …` (`tagpu_native.c`) as
+a fourth gate of that shape, and the first term is indeed 0 for the life of every session now
+that `owndraw` is off the defaults. **But nothing on the Vulkan lane draws the slant at all.**
+Landing 11-2 deleted this pass's GL tail and *"the selection rects, the slant and silhouette
+shadow draws, the wire and ghost passes, the depth pre-pass"* went with it; `tagpu_vk_unit.c`
+contains no `slant` anything and the geometry build's shadow branch is four blank lines.
+**Checked on `main` as well — the gap predates the clean cut and no defaults change made it.**
+The stale term is simplified away because it said nothing true; the shadow is an open item for
+whoever ports that draw, and the field is kept as the record of what such a pass must ask.
+
+#### Two halves of the UI hand-over that outlived their other half
+
+Neither is wrong at runtime — no engine memory, no pixel, no wrong state — and both are recorded
+here rather than deleted, because deleting them is a landing with its own review.
+
+* **The publisher has no producer gate.** `g_gui_draw` was written in exactly one place,
+  `tagpu_gui_surf.c`'s trigger poll, so it is 0 for the life of every process: `publish()`
+  returns on its first line, `g_guiq` never receives an op and the 16 MB arena is never written.
+  What `tagpu_gui.on` still buys is the 17 leaves recording into `s_ops` and the census diffing
+  each surface against its own copy — a harness mode, which is why the lever is off the defaults.
+  The heartbeat says `publisher idle` so nobody chases `published=0`. **A restored consumer needs
+  a drain in the same landing**: `g_guiq.qTail` and `aTail` lost their writers with the same
+  file, so a producer alone would trip `consumer_stalled` at a quarter of the queue or half the
+  arena and latch `s_stalled` for the session — its release tests `head == tail`, which a frozen
+  tail can never satisfy.
+* **The minimap handshake has no asking half.** `tagpu_gui_set_want_minimap` and
+  `tagpu_gui_set_minimap_have` are callerless, so `tagpu_gui_want_minimap()` answers 0 for the
+  process, `tagpu_packet_pub.c` never copies the three 126-px surfaces or the TNT picture, and
+  `want_minimap_watchdog` can never fire. Nothing starves: the publisher's own test is
+  `if (tagpu_gui_want_minimap())`, so not asking costs the copy and nothing else.
+
 #### What it measured
 
 `feat-forest`, Two Continents, `--los 0`, 1024×768, **the play defaults** (not
@@ -14552,7 +14614,7 @@ draw. Census before: `3 pass(es) drew (terr=0 feat=1 unit=1 fx=1)`. After: `4 �
 | | |
 |---|---|
 | **the presented frame** | the engine's chrome — the top bar (22 528 px) and the sidebar (95 488) — is the seam's clear colour **exactly**, `0 px` of anything else. **0 teal and 0 raw key** anywhere in the 1024×768 frame. |
-| **the golden source** (`tacli shot`) | **0 raw key, 0 teal**, 170 distinct colours in the viewport and 59 in the sidebar: terrain, water, trees, units, health bars, minimap, resource bar and cursor. A complete 1997 frame. |
+| **the golden source** (`tacli shot`) | **0 raw key, 0 teal**, 170 distinct colours in the viewport and 59 in the sidebar: terrain, water, trees, units, health bars, minimap, resource bar and cursor. A complete 1997 frame. **[Measured with `markown` off the defaults, which is what this landing shipped for one commit. Since `7a933a0` put it back as the producer, the engine's bars, digits, order markers and build cursor are skipped while ours draw — `tacli shot` shows the frame without them, and `tagpu_mark.on=passive` is what reproduces the reading above.]** |
 
 Health: `viol=0 crcbad=0 trunc=0 overrun=0`, no `ErrorLog.txt`, sim ticking **30.00/s** at speed
 10, `applied 10 of 10, 0 failed`.

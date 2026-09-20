@@ -2331,12 +2331,23 @@ engine goes on rasterising and `tagpu_surf_take` goes on capturing, so its surfa
 (`tagpu_vk.on=color=0,0,0` for black). Gone from the screen: the side panel, the minimap, the
 resource bar, the top and bottom bars, the cursor, every dialog, every menu and the loading
 screen. On the play defaults the world itself is all ours — terrain, water, trees, units, wrecks,
-effects and the markers.
+effects and the markers (health bars, group digits, the build cursor, the drag band box, the
+order overlay and its labels). **`5 pass(es) drew … mark=1` is the healthy census**; a `mark=0`
+means the marker pass stood down and is worth chasing, because between `a2b1333` and `7a933a0`
+that was a real defect — `markown` came off the defaults with the other `*own` levers and it is
+the PRODUCER of the order arena and the packet's font copy, not only a suppressor.
+
+**One thing our markers cost the golden source**: while the marker pass draws, it asks `markown`
+to skip the engine's own, so `tacli shot` shows the 1997 frame WITHOUT its bars, digits, order
+markers and build cursor. That is the only hole the defaults leave. `tacli arm <i>
+mark.on=passive` hands every one of them back — the engine draws them, we do not — which is the
+arm for a reference-quality capture.
 
 ```bash
 tools/tacli log <i> -g 'vk: census'    # N pass(es) drew — terr/feat/unit/fx/mark/scaf/fps
 tools/tacli log <i> -g 'surf: frame'   # "readied as the reference … drawn nowhere"
 tools/tacli shot <i> -o /tmp/ref.png   # the golden source: the WHOLE 1997 frame
+tools/tacli arm  <i> mark.on=passive   # …markers included, for a reference capture
 ```
 
 Four things to know before driving under it:

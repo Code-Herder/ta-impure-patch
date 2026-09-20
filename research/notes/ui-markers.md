@@ -703,8 +703,20 @@ capture is exact by construction, text included.
 pre-fog window — window A — is gone: its last engine primitive was the group digit, and that
 is ours now, so the window is never opened and the 64 KB identity blend LUT that existed only
 to protect the target sprite inside it went with it. What survives is the POST-fog window,
-opened by nothing in normal play and kept so `mark.on=nocursor` can still put the engine's
-own build cursor through our frame for an A/B. What was decisive throughout is not the
+opened by nothing in normal play. It was kept so `mark.on=nocursor` could put the engine's own
+build cursor **through our frame** for an A/B; **that is no longer what it does** — the clean cut
+deleted the composite and `markown`'s capture with it (2026-09-20,
+[gpu-status](gpu-status.html) §2.81), so `nocursor` now only means "our pass does not draw the
+build cursor" and the engine's lands in the reference surface like the rest of its frame. The
+A/B is a diff of the two buffers now, not of one.
+
+> **KNOWN CRASH, PRE-EXISTING AND UNFIXED: `mark.on=nocursor` plus a world click kills the
+> game.** Found 2026-09-20 while verifying an unrelated finding. It faults on the GAME thread,
+> reading a page boundary inside a system module. **It reproduces on `main`'s own DLL** —
+> md5-confirmed against the instance's copy, with the lever file absent — three runs, three
+> crashes, so it is neither the clean cut's nor any recent landing's. Root cause not found and
+> not looked for. Do not use `nocursor` in a session that clicks the world; nothing else is
+> known to trip it. What was decisive throughout is not the
 arithmetic but the bound — §6.1's gap is not something a wider buffer can close.
 
 | Marker | Ours how | Engine side |
@@ -720,8 +732,10 @@ arithmetic but the bound — §6.1's gap is not something a wider buffer can clo
 `0x469BD7` → hook 9 `0x469D2C`, drawn with the fog rule applied (the engine's block runs
 *before* `0x4848E0` and is darkened by it); window B is the two `DrawTranspRectangle` calls,
 drawn with fog off, because the engine never darkens the build cursor. **Window A is gone as
-of G13p** and window B is opened by nothing in normal play — only `mark.on=nocursor` opens it,
-so the engine's own build cursor can be put through our frame for an A/B. Everything from
+of G13p** and window B is opened by nothing in normal play — only `mark.on=nocursor` opened it,
+so the engine's own build cursor could be put through our frame for an A/B. **The capture itself
+is deleted since 2026-09-20** (§2.81): the token survives and still stops our pass drawing the
+cursor, but nothing of the engine's is copied anywhere. Everything from
 here to §6.1 is therefore the history of a mechanism we no longer run, kept because the
 addresses and the blend argument in it are still the map.
 

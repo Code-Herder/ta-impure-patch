@@ -2686,6 +2686,25 @@ The UI returns as a pass of ours, built from the op stream the hook still captur
 engine's UI stated *semantically*, and the reason that file survived. (The other reason is that
 `before_flip` is the only host of `tagpu_triggers_frame`; deleting it takes every `tacli` verb.)
 
+**READ "CAPTURES" NARROWLY: the PUBLISHER is unreachable.** The landing review found that
+`g_gui_draw` — `publish()`'s gate — was written in exactly one place, `tagpu_gui_surf.c`'s
+trigger poll, so it is 0 for the life of every process: the op QUEUE is never filled and the
+16 MB arena never written, in any configuration. What survives and works is the 17 leaves
+recording into `s_ops` and the census diffing each surface against its own copy. That is enough
+for the future pass — the ops, their boxes, their fonts and their destinations are all there —
+but a restored consumer must bring a DRAIN in the same landing, because `qTail`/`aTail` lost
+their writers too and a producer alone latches `s_stalled` for the session. The transport is
+documented rather than deleted; it makes no pixel and writes no engine memory, and
+`gaf_capture` is the only record in the tree of decoding UI art at the engine's own blit.
+
+**And the marker family is the exception to "the `*own` levers came off".** `markown` went back
+on the play defaults two commits later: it is the sole caller of `tagpu_order_snapshot` and of
+`tagpu_packet_pub_font_snapshot`, so uninstalling it left the order arena empty and the packet
+without a font — no bars, no digits, no build cursor, no band box, no build ghost, no order
+overlay, no text. Three more emit gates of the terrain gate's exact shape went with it. The price
+is the one hole the defaults leave in the reference: while our markers draw, the engine's are
+skipped. `tagpu_mark.on=passive` is the arm that closes it.
+
 ### What the reference is
 
 `tagpu_surf_take` still captures TA's composed frame on the render thread; `tagpu_vk_surf.c`
@@ -2698,7 +2717,7 @@ costs one memcpy and one `vkCmdCopyBufferToImage` per *changed* frame — a stil
 neither, because the serial gate holds — and the alternative is that the next comparison starts
 with a rebuild rather than a call.
 
-### The `*own` levers came off the play defaults, and that is what makes the reference worth keeping
+### The `*own` levers came off the play defaults — all but one — and that is what makes the reference worth keeping
 
 This corrects the published plan's §6, which calls the engine *"a complete, correct reference
 implementation of this game's look."* With `terrown`, `featown`, `fxown`, `markown` and `owndraw`
@@ -2710,6 +2729,22 @@ key-coloured viewport with no terrain and no trees** — 625 049 px of raw key.
 They are not deleted. Arm `tagpu_terrown.on` and the engine's terrain stops exactly as before; the
 CPU it saves is real and is the whole of what those levers buy now. It is not the default, because
 a golden source with holes in it is the more expensive mistake.
+
+**`markown` IS THE EXCEPTION AND IT COST A COMMIT TO FIND OUT WHY.** It is a PRODUCER as well as
+a suppressor: `mark_orders` is the sole caller of `tagpu_order_snapshot` and the hook-8 stub the
+sole caller of `tagpu_packet_pub_font_snapshot`. Uninstalled, the order arena is never filled and
+the packet carries no font, so the presented frame lost its health bars, group digits, build
+cursor, drag band box, build ghost, order overlay, `ShowRanges` labels and **all text** — and
+three emit gates of the terrain gate's exact shape (`tagpu_mark.c` twice, `tagpu_order.c` once)
+refused to draw on top of that. The census said it in a field nobody read: `4 pass(es) drew
+(terr=1 feat=1 unit=1 fx=1)` with no `mark=`. It is back on the defaults, and the rule to carry
+forward is that **a `*own` module's redirects are where we OBSERVE as well as where we suppress;
+check what a lever produces before taking it off a table.**
+
+The price is the one hole the play defaults leave in the reference: while our marker pass draws,
+it asks `markown` to skip the engine's own, so `tacli shot` shows the 1997 frame without its
+bars, digits, order markers and build cursor. `tagpu_mark.on=passive` hands every one of them
+back with the redirects still installed — the arm for a reference-quality capture.
 
 **`tagpu_terr.c`'s emit gate went with the composite.** The pass refused to emit a single cell
 without `terrown` installed, and its stated reason was the key test — our terrain is opaque, so
@@ -2725,7 +2760,7 @@ identical:
 | | |
 |---|---|
 | the presented frame | the engine's chrome — top bar and sidebar, 118 016 px — is the seam's clear colour **exactly**; 0 px of anything else. 0 teal and 0 raw key anywhere in the frame. |
-| the golden source | 0 raw key, 0 teal, **170 distinct colours** in the viewport and 59 in the sidebar: terrain, water, trees, units, health bars, minimap, resource bar, cursor. A complete 1997 frame. |
+| the golden source | 0 raw key, 0 teal, **170 distinct colours** in the viewport and 59 in the sidebar: terrain, water, trees, units, health bars, minimap, resource bar, cursor. A complete 1997 frame. **Taken with `markown` off, which shipped for one commit; reproduce it now with `tagpu_mark.on=passive`.** |
 
 `viol=0 crcbad=0 trunc=0`, no `ErrorLog`, sim ticking 30/s at speed 10. The harness drove the
 whole blind shell — SINGLE, Skirmish, Start — with no UI drawn, which was the untested assumption
@@ -2743,10 +2778,27 @@ still the last step, and the reference is now the reason as well as the obstacle
 move `tagpu_surf_take` to the game thread, and it draws nothing back.
 
 **`tagpu_surf_take` is still on the render thread and nothing sequences it against the game
-thread's draw**, so the capture can land mid-frame and the reference be a torn picture. The hook
-it wants exists: the packet publisher's `after_draw` observer on `DrawGameScreen 0x468CF0`
-(`tagpu_packet_pub.c`), where the frame is complete on the thread that drew it. **This must be
-fixed before anyone trusts a pixel diff against the golden source.**
+thread's draw**, so the capture can land mid-frame and the reference be a torn picture. The
+landing review pinned the mechanism rather than leaving it a worry: the function holds
+`g_ddraw.cs`, but that section serialises `dds_Flip`'s pointer swap and `dds_SetPalette` and
+nothing else, while TA rasterises into `primary->surface` through a Lock/Unlock pair that enters
+no section at all. **That is a lifetime argument for the POINTER and never a bound on the
+BYTES.** The failing interleaving is concrete: the render thread reaches the row loop while the
+game thread is inside `DrawGameScreen` between its terrain blit and its side-panel blit; the copy
+takes new terrain over last frame's panel, `diff` is true, the serial advances, and
+`tagpu_vk_surf_prepare` uploads the torn picture as the golden source with nothing marking it.
+
+The invariant has to be an ORDERING and the hook it wants exists: the packet publisher's
+`after_draw` observer on `DrawGameScreen 0x468CF0` (`tagpu_packet_pub.c`), where the frame is
+complete on the thread that drew it. **This must be fixed before anyone trusts a pixel diff
+against the golden source.**
+
+**Two more things the cut does not do, both named by the review and neither its doing.** No
+structure draws its slant shadow on this lane — landing 11-2 deleted the native pass's GL tail
+and the slant and silhouette draws went with it, `tagpu_vk_unit.c` has no slant anything, and
+this is true on `main`. And the UI op PUBLISHER is unreachable: `g_gui_draw` lost its only writer
+with `tagpu_gui_surf.c`, so the queue and its arena are never used and `tagpu_gui.on` buys the
+17 leaves and the census, nothing more.
 
 ### The dormant contracts the cut left standing
 
