@@ -1,0 +1,76 @@
+landing-review: model=claude-opus-5 (dedicated, read-only) effort=medium range=main..7202b00 findings=8 acted=8 rejected=0 date=2026-09-19
+verdict: safe to land. no correctness defect in the code half; all eight findings are prose.
+
+what the reviewer re-derived rather than took. all 13 entry points of the deleted module,
+checked at db6fe8d^ with comments and string literals masked: eight are callerless (_begin,
+_unit, _hills, _end, _caster, _locate, _apply, _note_casters), and the five that are not return
+constants. `s_live = 1` and `s_pubHave = 1` each occur exactly once, inside _begin and _end,
+both callerless -- so _live() and _handover() returned 0 for the life of every process. it
+widened past the helper's scope to rule out non-C reach: no *.cpp, *.def, *.rc or Makefile
+reference; exports.def exports no tagpu_shadow_*; no GetProcAddress or function-pointer table.
+it also ran the function-inventory check this repo learned to run after a scripted deletion
+swallowed a neighbour: top-level declarators in all four edited .c files are identical to main
+except the one added `static int shadow_handover`.
+
+it confirmed the three claims the landing rests on. (a) `s_pub.shadowOn = 0` is equivalent:
+both publish functions open with memset(&s_pub, 0, sizeof s_pub) and, after the edit, exactly
+one write to any shadow field remains in each file -- the new constant. zero-vs-stale is
+unreachable because the memset precedes every publish, and every consumer reads shadow state
+only under shadowOn. (b) nothing is lost silently: TAGPU_SHADOWU had no user outside the
+deleted file; TAGPU_SHADOWHAND's new home is self-sufficient for size_t through
+tagpu_vk_pass.h; no file depended on the transitive tagpu_fx.h accidentally. (c) the stub drops
+no side effect: s_liveHave/s_res clearing, the ST_REFUSED test, the slot bounds test and
+mesh_slot_done all run before the hand-over check, and the old handover's only side effect fired
+on a success path that never executed. no new warnings; no -Werror.
+
+it independently reproduced every published figure: gl-sites 165/234 at HEAD, 87/88 for the
+deleted file, 165 + 87 = 252; eight of thirteen callerless; tagpu_shadow_[a-z_]+ masked-matches
+0 at HEAD; the five #include "opengl_utils.h" directives at db6fe8d^; dd.c:1908-1931 landing
+every GL spelling on vk_render_main; s_hiHave written once, at tagpu_hires_draw.c:611, inside
+the callerless tagpu_hires_depth.
+
+THE FINDING WORTH THE LANDING (F6, MEDIUM). D2 orphaned `tagpu_terr_hills_draw`:
+`tagpu_shadow_hills` was its only caller, masked counts 3 -> 2 across the commit. tagpu_terr.h
+still said "its only call site is tagpu_shadow_hills, which is itself called from nowhere",
+which after D2 is a sentence about a function that does not exist. the consequence: that
+function is the ONLY reader of the heightfield CPU mirror s_hMeshV/s_hMeshI -- 19.3 MB on Two
+Continents by build_hills' own arithmetic (tagpu_terr.c:354), built unconditionally -- so the
+memory is now provably unread. not a regression, since a callerless caller read nothing either,
+but 2.80 is the survey of what is already dark and had missed the one thing D2 itself darkened.
+recorded there and at the function's own declaration, and named as the next deletion.
+TAGPU_TERRHILLS likewise has no consumer outside its header.
+
+THE FINDING AT MY EXPENSE (F1, MEDIUM). the paragraph defending raw line numbers -- on the
+grounds that `git show` takes a line number -- gave the numbers for the wrong revision. it named
+db6fe8d^ and cited 403 and 531, which are 6a34c3e's; D1's GLSL lift had taken 25 lines off the
+top of the file. the correct pair is 378 and 506, read out of that revision to check. naming a
+revision does not make a line number safe; it only narrows which tree the check runs against,
+and the check still has to be run. third citation drift in this gate.
+
+the other six, all one-line prose corrections, all verified first: "nine live call sites" is
+eight and the enumeration itself summed to eight; oglu_load_dll has eighteen references outside
+opengl_utils.c, seventeen comments and one prototype, not "every reference ... seventeen";
+tagpu_native.c:3606 is 3607 in the plan's copy; tagpu_vk_shadow.h -- the header chosen as
+TAGPU_SHADOWHAND's new home -- still opened by calling tagpu_shadow.c the current source of the
+matrix, cited "tagpu_shadow.h's otherCasters" for a field now 80 lines below in the same file,
+and named tagpu_shadow_handover, which no longer exists; two citations pointed into the deleted
+file by line number (tagpu_posedraw.h, tagpu_terr.c:671); and the stale present-tense paragraphs
+about tagpu_shadow_apply sat directly above the new blocks explaining it is gone.
+
+the fixes are in d005854 and are comments and prose only -- .text, .rdata and .data are
+byte-identical to the binary the A/B measured -- so the measurement below stands unchanged and
+there is no re-review.
+
+MEASURED. one-unit, four interleaved arms, clean-built both sides, gui.on=1: 44-45 px
+cross-build on all four pairings, of which 44 are the minimap and the remainder is the cursor's
+own pixel at (512,384). the derived difference box collapsed to that single pixel -- the same
+script found a 15x34 box of 258 px on this fixture three landings ago. same-build control 48 px,
+all minimap. census 749 452 non-black px on every arm, zero VK errors on all four.
+
+NOT verifiable read-only, and the reviewer said so rather than waving at it: D1's byte-identical
+binary and the pixel table both need a build and a run.
+
+OPEN, and named rather than answered: whether 11-6 may close with cast shadows dark is
+escalation reason 1 and is the owner's. the glTF half of that question the owner answered during
+this landing -- disabled, implementation TODO and out of scope -- which is what makes D3 delete
+tagpu_hires.c whole rather than reduce it.
