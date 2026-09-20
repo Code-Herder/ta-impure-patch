@@ -1,0 +1,31 @@
+landing-review: high, two independent read-only reviewers, 2026-09-20, on main...462e467 (1791a7e + the clean cut).
+
+Reviewer A (harness reviewer): 7 findings. Reviewer B (independent, focused on
+patches and state): 9 findings, plus an explicit clean bill on the byte patches
+(rel32, stub arithmetic, stolen length and relocatability, byte-match fail-closed,
+no incoming branches into either stolen range, flags/registers across both arms),
+on engine memory (none written; TAdynmem+0x37F06 only read), on cross-frame static
+state, and on the lever's thread discipline (one writer, one thread, one value per
+frame). All five documentation citations in gpu-status 2.81 confirmed exact.
+
+ACTED ON in 50d166b, each verified against the code first:
+ - HIGH  the marker pass's captured 8bpp layer was still engine pixels on the
+         frame under the cut, in the stock arm set. Cut, and only that group.
+ - MED   the cut's branch had swallowed the !h.eng refusal (compose no longer
+         cleared), reachable to a latched s_behindMute that survives the lever.
+ - LOW   the dropped UI-layer A/B claim was silent; it says so now.
+ - LOW   two wordings that claimed more than they had.
+
+OPEN AND THE OWNER'S (escalation reason 1): six findings land on 1791a7e, two of
+them HIGH and both about the correctness of that fix rather than its prose --
+0x4B7F90 itself reaches the ALP blend 0x4B8500 via sub-frame recursion (verified
+at 0x4b7ffe), so 'shape 1 cannot produce teal' is false; and 0x46A840 is a third,
+ungated call to 0x4B8500 in the same leaf, on the BODY path. Also: the in-source
+measurement contradicts its own commit message, the patches install before the
+lever is consulted, the comment mislabels shape 1's shadow test as 0x46A6E8 (it is
+0x46A6ED), the rollback's justification is disproved by tagpu_owndraw.c's twin,
+and the commit carries no documentation pass. Not acted on: whether 1791a7e lands
+at all is the owner's call.
+
+SEPARATELY, pre-existing and not this branch: mark.on=nocursor plus a world click
+crashes the game thread; reproduced on main's own DLL, md5-confirmed.
