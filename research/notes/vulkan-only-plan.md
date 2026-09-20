@@ -2751,6 +2751,121 @@ that a count which grows is the plan catching up with the work.) The row was
        `wgl`, no GL entry point and no `opengl_utils.h`. 11-5e-1 took it with that file's other
        GL residue. The line stayed behind.
 
+     **SURVEYED AGAIN 2026-09-19, AFTER DECISION 1, AND THE DELETION IS FOUR LANDINGS
+     RATHER THAN ONE — because three of the four files are not what the row assumed.**
+     Every claim below was checked with comments and string literals masked
+     (`count_masked.py`), because a plain grep is wrong in both directions here and caught
+     this session out once already: the first pass of this survey reported four surviving
+     files as including `opengl_utils.h` when the hits were prose *about* its removal.
+
+     **THE REAL INCLUDE COUNT IS FIVE, AND FOUR OF THE FIVE ARE THE DOOMED FILES.**
+     `#include "opengl_utils.h"` appears as a directive at `opengl_utils.c:3`,
+     `tagpu_shadow.c:38`, `tagpu_hires.c:62`, `tagpu_hires_draw.c:60` and `render_gdi.c:6`.
+     **`render_gdi.c` is the only survivor**, and its whole use of the header is
+     `g_oglu_version` at `:34` — a cosmetic string spliced into the software-rendering
+     warning. `oglu_init` is the only writer of that global and has **no caller**, so it is
+     the empty string for the life of the process and `strlen("") > 10` already selects the
+     empty branch. Replacing it with `""` is behaviour-identical by construction.
+
+     **AND THE MAKEFILE NEEDS NO EDIT AT ALL.** `Makefile:57` is
+     `SRCS := $(wildcard src/*.c) $(wildcard src/*/*.c) res.rc` — no file is named
+     individually, so deleting a `.c` removes it from the build with no list to keep in
+     step. `thread-split.allow` names none of the four either.
+
+     **THE THREE FEATURES THAT ARE ALREADY DARK, AND HOLD EACH OTHER UP.** This is the
+     finding that makes the deletion four landings, and it is not a deletion consequence —
+     it is the state of the shipped lane today, measured on the live logs of all four arms
+     of 11-5e-2c's A/B:
+
+     1. **The shadow map cannot be drawn.** `s_live = 1` occurs once, at
+        `tagpu_shadow.c:403` inside `tagpu_shadow_begin`, and `s_pubHave = 1` once, at
+        `:531` inside `tagpu_shadow_end`. **Both functions are callerless** — with
+        comments and strings masked, `tagpu_shadow_(begin|end|hills|unit|note_casters|
+        caster|locate|apply)(` appears only in `tagpu_shadow.c` and `tagpu_shadow.h`. So
+        `tagpu_shadow_live()` returns 0 for the session, both producers publish
+        `shadowOn = 0` (`tagpu_posedraw.c:622`, `tagpu_terr.c:1420`), and
+        `tagpu_shadow_handover` fails its first term every frame — which makes
+        `tagpu_vk_shadow_prepare` return 0 at `tagpu_vk_shadow.c:788`, leaves `s_liveHave`
+        unset, and makes `tagpu_vk_shadow_ready()` answer false always. **Both halves went
+        dark together, which is why nothing stands down and nothing logs**: the two consumer
+        refusals (`tagpu_vk_unit.c:2670`, `tagpu_vk_terr.c:1407`) are themselves gated on
+        `shadowOn`. The tree knew half of this — `tagpu_vk_shadow.c:1023` records that
+        `ours` is always 0 because `TAGPU_PDHAND.depthOn` lost its producer to 11-5d — but
+        "shadows with no casters" and "no shadow map at all" are different sentences and
+        only the first was written down.
+     2. **Replacement glTF models are loaded and then thrown away, every session.** The
+        crowd-static logs of all four A/B arms, both builds, carry
+        `hires draw: missing GL proc` followed by `hires: the replacement pass failed to
+        build (see 'hires draw:' above) - replacement units fall back to the engine's own
+        3DO`, and between them `hires: hires\armpw.glb loaded, 1577 tris, 6 materials, 10
+        images, 12 pieces`. `ensure()` (`tagpu_hires_draw.c:403`) resolves its five entry
+        points through `getgl`, `opengl32.dll` is never in the process, so `s_state = 2`,
+        `tagpu_hires_draw_ready()` is 0, and `tagpu_native.c:2787` nulls **every**
+        `n2->hires`. `nhi` is therefore always 0 and `hunits[]` (`:3227`) is read only by
+        the emptiness test at `:3366`.
+     3. **The Vulkan hires caster cannot fire either**, and for a second independent
+        reason: `tagpu_hires_draw` and `tagpu_hires_depth` have **zero call sites** in the
+        tree, and `tagpu_hires_depth` is the only writer of `s_hiHave`, so
+        `tagpu_hires_handover` returns 0 at its only caller `tagpu_vk_hires.c:677`. Its
+        consumers are `tagpu_vk_shadow.c` (which cannot fire, per 1) and `tagpu_vk.c`.
+
+     **What this means for the deletion: it is provably behaviour-neutral, and its oracle is
+     0 px on every fixture rather than a difference to explain.** No `renderer=` value
+     reaches the GL lane (`dd.c:1908-1931`), `oglu_load_dll` has no caller so no GL entry
+     point is resolvable, and the three features above are already producing nothing.
+
+     **What it means for the GATE is a question this row cannot answer, and it is
+     escalation reason 1.** Option A keeps `tagpu_vk_shadow.c` and `tagpu_vk_hires.c` "as
+     the foundation"; the measurement above says those are passes that *cannot currently
+     fire*, and reviving either is a feature landing with a producer to write, not a
+     deletion. **Whether 11-6 may close with soft shadows and replacement models dark on
+     the shipped lane is the owner's call**, and nothing here rewrites the exit condition.
+
+     **`tagpu_hires.c` IS NOT DELETABLE WHOLESALE, and the row assumed it was.** Of its ten
+     entry points, `tagpu_native.c` calls four — `tagpu_hires_mesh` (`:2778`),
+     `tagpu_hires_npiece` (`:1172`, `:3233`), `tagpu_hires_gen` (`:1173`) and
+     `tagpu_hires_piece` (`:1189`) — and all four are **pure CPU**: the glTF name table,
+     the file-stat cadence and the parse. Its 30 GL sites live in exactly four places
+     (`mesh_gl_free`, `upload_img`, `white_tex` and `tagpu_hires_vao`'s own body), and
+     `tagpu_hires_vao`'s only callers are in `tagpu_hires_draw.c`, which goes. So this file
+     is **reduced to its CPU half, not deleted**, and that is the one place in this gate
+     where "delete the file" was the wrong instruction.
+
+     **The four landings, each with a result you can run:**
+
+     * **D1 — the GLSL lift.** Move `VS_U`/`VS_H`/`FS_NONE` out of `tagpu_shadow.c` and
+       `VS`/`FS` out of `tagpu_hires_draw.c` into headers under `src/` (they must sit there
+       rather than `inc/`, because `tagpu_hires_draw.c`'s fragment shader pulls five
+       `TAGPU_GLSL_*` macros out of `src/tagpu_glsl.h` and `spirv-gen.py` preprocesses with
+       `-Iinc` only), and add two `HEADER_SOURCES` entries at `tools/spirv-gen.py:375`.
+       `SOURCES` and `PROGRAMS` are **unchanged** — editing those would delete SPIR-V the
+       surviving Vulkan files include. **The gate is exact**: every generated header carries
+       a per-shader `glsl <md5>` of the source it was compiled from, so the five hashes
+       recorded before the move — `541d516e…` (`FS_NONE`), `3d0b737c…` (`VS_H`),
+       `36099c03…` (`VS_U`), `cac5d116…` (`hires VS`), `743af5ef…` (`hires FS`) — must
+       come back identical or `spirv-check` fails the build.
+     * **D2 — the shadow deletion.** `tagpu_shadow.c` and `tagpu_shadow.h`, and the nine
+       live call sites, each of which returns a constant today: `tagpu_shadow_live()` → 0
+       (×2), `tagpu_shadow_mat()`/`_scale()` unreachable behind `if (shadowOn)` (×2 each),
+       `tagpu_shadow_handover()` → 0 (×1), and `tagpu_shadow_glreset()` (×1) whose caller
+       `tagpu_native_glreset` is itself dead and says so at `tagpu_native.c:3599`. Also
+       corrects `tagpu_native.c:3040-3052`, which justifies filling `TAGPU_FXVIEW fv`
+       unconditionally on the ground that *"`tagpu_shadow_begin` is handed this same struct
+       further down"* — there is no such hand-off, and the uninitialised-stack defect that
+       comment records (FOUND 2026-09-15) can no longer occur. The fill stays; the reason
+       is rewritten, because the gathers read `fv`.
+     * **D3 — the hires reduction.** `tagpu_hires_draw.c` and its header go whole;
+       `tagpu_hires.c` keeps its glTF half and loses `tagpu_hires_vao`, `upload_img`,
+       `white_tex`, `gl_probe` and the GL body of `mesh_gl_free`. `tagpu_native.c:2785`'s
+       `tagpu_hires_draw_ready()` gate goes with the pass it guards.
+     * **D4 — `opengl_utils.c` and the GL headers.** `opengl_utils.c`, `inc/opengl_utils.h`,
+       `inc/glcorearb.h`, `inc/wglext.h`, `inc/KHR/khrplatform.h`, plus the two lines in
+       `render_gdi.c`. `inc/openglshader.h` is **not** in this set — see the correction
+       above.
+
+     Deleting all of it takes `tools/gl-sites.py` to **0 narrow and 0 wide**: the four files
+     hold 252 of the 252 narrow sites and 322 of the 322 wide ones.
+
      **SURVEYED 2026-09-19, while 11-4c's review ran, and the shape is better than the row
      assumed. Three facts, each measured rather than estimated:**
 
