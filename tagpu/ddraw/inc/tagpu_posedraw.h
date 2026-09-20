@@ -220,8 +220,8 @@ void tagpu_posedraw_end(void);
 
    AND THE CENSUS CANNOT SEE IT, though not for the reason a first version of
    this paragraph gave. `tagpu_vk_shadow.c:847` asks `h.otherCasters - ours >
-   0`. `otherCasters` has THREE writers, not two: `tagpu_shadow_unit` (:432)
-   and `tagpu_shadow_note_casters` (:438), both callerless, AND the
+   0`. `otherCasters` had THREE writers, not two: `tagpu_shadow_unit` and
+   `tagpu_shadow_note_casters`, both callerless, AND the
    heightfield-mirror-missing path at :473, which both G19e shadow reviewers
    added precisely so the census covers all four kinds of caster. That third
    one is live and reachable, so "0 - 0" is not true in general -- when

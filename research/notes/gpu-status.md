@@ -13794,8 +13794,8 @@ and four of the five are the doomed files.**
 
 | fact | where | consequence |
 |---|---|---|
-| `s_live = 1` occurs **once** | `tagpu_shadow.c:403`, inside `tagpu_shadow_begin` | which is **callerless** |
-| `s_pubHave = 1` occurs **once** | `tagpu_shadow.c:531`, inside `tagpu_shadow_end` | which is **callerless** |
+| `s_live = 1` occurs **once** | `tagpu_shadow.c:378`, inside `tagpu_shadow_begin` | which is **callerless** |
+| `s_pubHave = 1` occurs **once** | `tagpu_shadow.c:506`, inside `tagpu_shadow_end` | which is **callerless** |
 | ⇒ `tagpu_shadow_live()` | returns 0 for the life of the process | `shadowOn` is 0 at both producers (`tagpu_posedraw.c`, `tagpu_terr.c`) |
 | ⇒ `tagpu_shadow_handover()` | fails its first term every frame | `tagpu_vk_shadow_prepare` returns 0, `s_liveHave` never set |
 | ⇒ `tagpu_vk_shadow_ready()` | answers false, always | and **nothing stands down**, because the two consumer refusals (`tagpu_vk_unit.c:2670`, `tagpu_vk_terr.c:1407`) are themselves gated on `shadowOn` |
@@ -13804,9 +13804,16 @@ With comments and strings masked, eight of the thirteen `tagpu_shadow_*` entry p
 nowhere outside `tagpu_shadow.c` and `tagpu_shadow.h`.
 
 **The two `tagpu_shadow.c` line numbers in that table are into the file D2 deleted**, at its last
-revision (`db6fe8d^`); every other citation on this page is live. They are kept as numbers rather
-than softened to names because reconstructing the argument means reading those two assignments,
-and `git show` takes a line number.
+revision — `db6fe8d^`, which is `ee47584`. Every other citation on this page is live. They are
+kept as numbers rather than softened to names because reconstructing the argument means reading
+those two assignments, and `git show db6fe8d^:tagpu/ddraw/src/tagpu_shadow.c` takes a line
+number.
+
+**And the first draft of this paragraph got them wrong in exactly the way it was written to
+prevent** — it gave 403 and 531, which are the numbers at `6a34c3e`, *before* D1's GLSL lift took
+25 lines off the top of the file. D2's review caught it. Naming a revision does not make a line
+number safe; it only narrows which tree you have to check it against, and that check still has to
+be run.
 
 **The tree had recorded half of this and the half it recorded reads as something milder.**
 `tagpu_vk_shadow.c:1039` says `ours` is always 0 from the unit pass, because
@@ -13843,8 +13850,9 @@ Three independent reasons, none of them timing:
    and anything unrecognised all land on `vk_render_main`, with a log line for the two spellings
    that used to mean something. 11-2 did that.
 2. **`oglu_load_dll` has no caller**, so no GL entry point in any of the four files is
-   resolvable. Every reference to it outside `opengl_utils.c` — seventeen of them — is a comment
-   asserting exactly this.
+   resolvable. Eighteen references to it exist outside `opengl_utils.c`: its prototype in
+   `inc/opengl_utils.h`, and **seventeen comments asserting exactly this**. With comments and
+   string literals masked the whole tree has two — the declaration and the definition.
 3. **The three features above already produce nothing.**
 
 So the oracle is **0 px on every fixture**, not a difference to explain.
@@ -13888,7 +13896,7 @@ no behaviour to measure or to read.
 #### D2 — THE SHADOW DELETION
 
 `tagpu_shadow.c` and `tagpu_shadow.h` go, with **87 of the tree's 252** narrow GL sites.
-`gl-sites` drops to **165 narrow / 234 wide**. The nine live call sites become:
+`gl-sites` drops to **165 narrow / 234 wide**. The eight live call sites become:
 
 | site | was | is |
 |---|---|---|
@@ -13906,6 +13914,19 @@ and the refusal keeps its name instead of becoming an unexplained early exit.
 branch never ran; the new code publishes zeros because nothing in the file writes those fields at
 all — a stronger statement, and one a grep checks. After the commit, `tagpu_shadow_[a-z_]+`
 masked-matches **0 times** in the whole tree.
+
+**AND D2 MADE ONE MORE THING DARK, WHICH THIS SURVEY MISSED AND ITS REVIEW DID NOT.**
+`tagpu_shadow_hills` was the only caller of `tagpu_terr_hills_draw`, so that function went from
+one call site to **none** — masked counts 3 → 2 across the commit, def and declaration only.
+`tagpu_terr.h` still said "its only call site is `tagpu_shadow_hills`, which is itself called
+from nowhere", which after D2 is a sentence about a function that does not exist; it now says
+there is no call site at all. The consequence worth recording: `tagpu_terr_hills_draw` is the
+**only reader** of the heightfield CPU mirror `s_hMeshV`/`s_hMeshI` — **19.3 MB on Two
+Continents** by `build_hills`' own arithmetic (`tagpu_terr.c:354`), built unconditionally — so
+that memory is now provably unread. It is **not a regression**: a callerless caller read nothing
+either, so the mirror has been dead for as long as `tagpu_shadow_hills` has. It is the next
+deletion, and `TAGPU_TERRHILLS` has no consumer outside its own header. Named here rather than
+left to be re-derived.
 
 It also corrects `tagpu_native.c`'s reason for filling `TAGPU_FXVIEW fv` unconditionally, which
 cited a hand-off to `tagpu_shadow_begin` that no longer exists. The fill stays — the gathers read

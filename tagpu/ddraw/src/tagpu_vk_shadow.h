@@ -2,7 +2,10 @@
 #define TAGPU_VK_SHADOW_H
 /* The Classic++ cast-shadow depth map, drawn by Vulkan (Phase G / G19e, the
    FIFTH world pass). Implementation: tagpu_vk_shadow.c. The GL edition is
-   tagpu_shadow.c and stays the source of the matrix, the caster geometry and
+   tagpu_shadow.c, DELETED BY LANDING 11 D2 -- read the TAGPU_SHADOWHAND
+   block at the bottom of this file before anything else here, because
+   this pass has had no producer since. It WAS the source of the matrix,
+   the caster geometry and
    the shader.
 
    IT IS THE FIRST PASS THAT DRAWS INTO SOMETHING OTHER THAN THE FRAME. Every
@@ -31,7 +34,7 @@
 /* Draw this frame's map. Returns 1 when a complete map now stands in
    `tagpu_vk_shadow_view(slot)`, 0 when nothing was drawn -- no map this frame,
    a device refusal, or a map holding casters the hand-over carries no copy of
-   (tagpu_shadow.h's `otherCasters`, which is every unit until the unit pass
+   (`otherCasters`, in the TAGPU_SHADOWHAND block below, which is every unit until the unit pass
    lands). `slot` is the frame slot the seam's fence has proved free.
 
    IT DRAWS NO FRAME PIXEL, so the seam must NOT count it among the passes that
@@ -108,7 +111,7 @@ void tagpu_vk_shadow_down_paid(const TAGPU_VKPASS* d);
    measurement, not part of a deletion.
    THE POINTERS ARE THE TERRAIN MODULE'S and name the CPU mirror of the caster
    mesh, which that module frees and rebuilds on a map change. `frame` is the
-   fork's monotonic render-thread counter and `tagpu_shadow_handover` refuses
+   fork's monotonic render-thread counter and the hand-over refuses
    any other frame's, exactly as the terrain and feature hand-overs do: it is
    what makes "these pointers are alive" a property of the frame number rather
    than of which functions happened to run. */

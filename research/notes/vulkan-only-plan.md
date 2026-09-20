@@ -2868,12 +2868,12 @@ that a count which grows is the plan catching up with the work.) The row was
        of which 44 are the minimap**, the remainder the cursor's own pixel at (512,384), and
        the derived difference box collapsed to that single pixel — nothing outside the minimap
        and the cursor differs at all. The same-build control carries 48 px of the same minimap
-       drift. [gpu-status §2.80.] The original scope follows: `tagpu_shadow.c` and `tagpu_shadow.h`, and the nine
+       drift. [gpu-status §2.80.] The original scope follows: `tagpu_shadow.c` and `tagpu_shadow.h`, and the eight
        live call sites, each of which returns a constant today: `tagpu_shadow_live()` → 0
        (×2), `tagpu_shadow_mat()`/`_scale()` unreachable behind `if (shadowOn)` (×2 each),
        `tagpu_shadow_handover()` → 0 (×1), and `tagpu_shadow_glreset()` (×1) whose caller
-       `tagpu_native_glreset` is itself dead and says so at `tagpu_native.c:3606`. Also
-       corrects `tagpu_native.c:3040-3052`, which justifies filling `TAGPU_FXVIEW fv`
+       `tagpu_native_glreset` is itself dead and says so at `tagpu_native.c:3607`. Also
+       corrects `tagpu_native.c:3041-3052`, which justifies filling `TAGPU_FXVIEW fv`
        unconditionally on the ground that *"`tagpu_shadow_begin` is handed this same struct
        further down"* — there is no such hand-off, and the uninitialised-stack defect that
        comment records (FOUND 2026-09-15) can no longer occur. The fill stays; the reason

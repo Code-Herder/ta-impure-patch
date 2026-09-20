@@ -614,9 +614,10 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
     s_pub.sun[0] = v->sun[0]; s_pub.sun[1] = v->sun[1]; s_pub.sun[2] = v->sun[2];
     s_pub.amb = v->amb; s_pub.norm = v->norm;
 
-    /* THE CAST-SHADOW READ-BACK BLOCK, from the same places tagpu_shadow_apply
-       reads them: it writes uShadowOn and RETURNS when no map is live, so on
-       such a frame the rest stays at the program's zero and is published zero. */
+    /* THE CAST-SHADOW READ-BACK BLOCK. It used to mirror `tagpu_shadow_apply`,
+       which wrote uShadowOn and RETURNED when no map was live, so the rest of
+       the block stayed at the program's zero. That function is gone with the
+       rest of the GL lane (landing 11 D2); what is left is the zero. */
     /* 0, AND THAT IS WHAT IT ALREADY WAS. This read `tagpu_shadow_live()` until
        landing 11 D2 deleted the GL lane's `tagpu_shadow.c`. That function
        returned `s_live`, whose only assignment to 1 sat inside

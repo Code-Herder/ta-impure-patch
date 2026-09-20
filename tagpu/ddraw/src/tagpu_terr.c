@@ -668,7 +668,7 @@ static void build_height(const char* ta, unsigned frame)
    OFF BY DEFAULT and normally never draws. ====
    `terrainshadow` now defaults to 0 (tagpu_classicpp.c shadow_defaults --
    the ground self-shadowed itself, renderers.md 2.7b), and the only caller of
-   tagpu_terr_hills_draw is gated on it (tagpu_shadow.c:398). This function is
+   tagpu_terr_hills_draw was gated on it. This function is
    NOT gated: build_height calls it unconditionally, so every map pays 6.4 MB
    of vertices and 12.9 MB of indices that nothing reads.
 
@@ -1409,13 +1409,13 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
     s_pub.lit = tagpu_classicpp_on() ? 1 : 0;
     s_pub.lambert = tagpu_classicpp_lit() ? 1 : 0;
     s_pub.fog = v->fogMode & 1;
-    /* THE CAST-SHADOW BLOCK. Since G19e's shadow pass the map itself is drawn
-       by tagpu_vk_shadow.c into an image of its own, so this is no longer a
-       refusal: the Vulkan lane samples ITS map with THESE uniforms, which are
-       the ones the GL draw below is about to be given.
-       tagpu_shadow_apply leaves every other shadow uniform ALONE when the map
-       is not live, which for a freshly linked program means zero -- so the rest
-       of that block is published as zero, and the two lanes agree about it. */
+    /* THE CAST-SHADOW BLOCK. Since G19e the map is drawn by tagpu_vk_shadow.c
+       into an image of its own, and since landing 11 D2 that pass has no
+       producer -- the GL half that used to publish the hand-over is deleted,
+       and it had been callerless before that. The uniforms this used to mirror
+       came from `tagpu_shadow_apply`, which left every shadow uniform but
+       uShadowOn ALONE when no map was live; what is left of all of it is the
+       zero below. */
     /* 0, AND THAT IS WHAT IT ALREADY WAS. This read `tagpu_shadow_live()` until
        landing 11 D2 deleted the GL lane's `tagpu_shadow.c`. That function
        returned `s_live`, whose only assignment to 1 sat inside

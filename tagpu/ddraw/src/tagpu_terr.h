@@ -55,14 +55,20 @@ void tagpu_terr_glreset(void);
    live until the next map change -- a consumer takes them through a hand-over
    that carries the frame they were published on.
 
-   NOTHING CALLS THIS TODAY, and a caller should know why before relying on it:
-   its only call site is `tagpu_shadow_hills`, which is itself called from
-   nowhere and would in any case return at `!s_live` -- `s_live` is set only
-   past tagpu_shadow.c's own GL bring-up, which latches failed on a lane with
-   no context. Landing 11-5c removed this function's own `!s_hVao` term, which
-   was a third pin on the same route; the route above it is still shut, and
-   whether tagpu_shadow.c's GL draw half is scaffolding or debris is the open
-   question the plan holds at escalation reason 1. [FROM THE 11-5c REVIEW.] */
+   NOTHING CALLS THIS, AND SINCE LANDING 11 D2 THERE IS NO CALL SITE AT ALL.
+   Until then its one call site was `tagpu_shadow_hills`, itself callerless,
+   which would in any case have returned at `!s_live` -- and `s_live` was set
+   only past tagpu_shadow.c's GL bring-up, which latched failed on a lane with
+   no context. D2 deleted that file, so the route is not merely shut, it is
+   absent. [The 11-5c review found the pins; D2's review found the orphaning.]
+
+   THE COST THIS NOW PROVABLY WASTES is the heightfield CPU mirror
+   `s_hMeshV`/`s_hMeshI` -- 19.3 MB on Two Continents by `build_hills`'
+   arithmetic, built unconditionally -- because this function is its ONLY
+   reader. That was already true before D2 (a callerless caller reads nothing),
+   so this is not a regression; it is the next deletion, and it is named here
+   rather than left for the next person to re-derive. `TAGPU_TERRHILLS` has no
+   consumer outside this header either. */
 typedef struct TAGPU_TERRHILLS {
     const float*    v;          /* nv * 3 floats: the world point per vertex */
     size_t          nv;
