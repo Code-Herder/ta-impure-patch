@@ -2789,7 +2789,7 @@ that a count which grows is the plan catching up with the work.) The row was
         unset, and makes `tagpu_vk_shadow_ready()` answer false always. **Both halves went
         dark together, which is why nothing stands down and nothing logs**: the two consumer
         refusals (`tagpu_vk_unit.c:2670`, `tagpu_vk_terr.c:1407`) are themselves gated on
-        `shadowOn`. The tree knew half of this — `tagpu_vk_shadow.c:1023` records that
+        `shadowOn`. The tree knew half of this — `tagpu_vk_shadow.c:1024` records that
         `ours` is always 0 because `TAGPU_PDHAND.depthOn` lost its producer to 11-5d — but
         "shadows with no casters" and "no shadow map at all" are different sentences and
         only the first was written down.
@@ -2848,7 +2848,7 @@ that a count which grows is the plan catching up with the work.) The row was
        live call sites, each of which returns a constant today: `tagpu_shadow_live()` → 0
        (×2), `tagpu_shadow_mat()`/`_scale()` unreachable behind `if (shadowOn)` (×2 each),
        `tagpu_shadow_handover()` → 0 (×1), and `tagpu_shadow_glreset()` (×1) whose caller
-       `tagpu_native_glreset` is itself dead and says so at `tagpu_native.c:3599`. Also
+       `tagpu_native_glreset` is itself dead and says so at `tagpu_native.c:3606`. Also
        corrects `tagpu_native.c:3040-3052`, which justifies filling `TAGPU_FXVIEW fv`
        unconditionally on the ground that *"`tagpu_shadow_begin` is handed this same struct
        further down"* — there is no such hand-off, and the uninitialised-stack defect that
