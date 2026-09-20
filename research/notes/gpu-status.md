@@ -13774,3 +13774,164 @@ for a frame.
 the first attempt ended up with a measurement that never touched the code the landing is named
 for. The four gates bound drift between and within runs; none of them bounds a second player, and
 none of them notices that the thing under test was never exercised.
+
+### 2.80 Two features that were already dark, and the deletion that made them visible — landing 11 D1 and D2
+
+The gate's remaining work was filed as "delete four GL files". Surveying it after Decision 1
+found that **three of the four are not what the row assumed**, and one of the findings is not
+about deletion at all: cast shadows and glTF replacement models are **off on the shipped lane
+today**, each for its own reason, and the two halves of each went dark together so that nothing
+stood down and nothing logged.
+
+Everything below was checked with comments and string literals masked (`count_masked.py`). That
+is not fastidiousness: a plain grep is wrong in both directions here and it caught this session
+out once. The first pass of the survey reported four surviving files as including
+`opengl_utils.h`; the hits were prose *about* its removal. **The real directive count is five —
+`opengl_utils.c`, `tagpu_shadow.c`, `tagpu_hires.c`, `tagpu_hires_draw.c` and `render_gdi.c` —
+and four of the five are the doomed files.**
+
+#### THE SHADOW CHAIN, EVERY LINK
+
+| fact | where | consequence |
+|---|---|---|
+| `s_live = 1` occurs **once** | `tagpu_shadow.c:403`, inside `tagpu_shadow_begin` | which is **callerless** |
+| `s_pubHave = 1` occurs **once** | `tagpu_shadow.c:531`, inside `tagpu_shadow_end` | which is **callerless** |
+| ⇒ `tagpu_shadow_live()` | returns 0 for the life of the process | `shadowOn` is 0 at both producers (`tagpu_posedraw.c`, `tagpu_terr.c`) |
+| ⇒ `tagpu_shadow_handover()` | fails its first term every frame | `tagpu_vk_shadow_prepare` returns 0, `s_liveHave` never set |
+| ⇒ `tagpu_vk_shadow_ready()` | answers false, always | and **nothing stands down**, because the two consumer refusals (`tagpu_vk_unit.c:2670`, `tagpu_vk_terr.c:1407`) are themselves gated on `shadowOn` |
+
+With comments and strings masked, eight of the thirteen `tagpu_shadow_*` entry points appeared
+nowhere outside `tagpu_shadow.c` and `tagpu_shadow.h`.
+
+**The two `tagpu_shadow.c` line numbers in that table are into the file D2 deleted**, at its last
+revision (`db6fe8d^`); every other citation on this page is live. They are kept as numbers rather
+than softened to names because reconstructing the argument means reading those two assignments,
+and `git show` takes a line number.
+
+**The tree had recorded half of this and the half it recorded reads as something milder.**
+`tagpu_vk_shadow.c:1039` says `ours` is always 0 from the unit pass, because
+`TAGPU_PDHAND.depthOn` lost its producer when 11-5d deleted `tagpu_posedraw_depth_unit`. "Shadows
+with no casters" and "no shadow map at all" are different sentences, and only the first was
+written down.
+
+#### THE HIRES CHAIN, WHICH IS MEASURED RATHER THAN ARGUED
+
+`ensure()` (`tagpu_hires_draw.c:225`) resolves five entry points through `getgl`. `oglu_load_dll`
+has no caller, so `opengl32.dll` is never in the process, so `s_state = 2` and
+`tagpu_hires_draw_ready()` is 0 — and `tagpu_native.c:2786` nulls **every** `n2->hires`. The
+crowd-static logs of all four A/B arms, on **both** builds, carry the whole story in three lines:
+
+```
+hires: armpw -> hires\armpw.glb
+hires: hires\armpw.glb loaded, 1577 tris, 6 materials, 10 images, 12 pieces
+hires draw: missing GL proc
+hires: the replacement pass failed to build (see 'hires draw:' above) -
+       replacement units fall back to the engine's own 3DO
+```
+
+The file is found, parsed, and thrown away, every session. `nhi` is therefore always 0 and
+`hunits[]` (`tagpu_native.c:3228`) is read only by the emptiness test at `:3367`. There is a
+second, independent reason the Vulkan side cannot fire: `tagpu_hires_draw` and
+`tagpu_hires_depth` have **zero call sites**, and `_depth` is the only writer of `s_hiHave`, so
+`tagpu_hires_handover` returns 0 at its only caller `tagpu_vk_hires.c:677`.
+
+#### WHY THE DELETION IS SAFE BY CONSTRUCTION, AND WHAT IT IS NOT
+
+Three independent reasons, none of them timing:
+
+1. **No `renderer=` value reaches the GL lane.** `dd.c:1908-1931`: `opengl`, `openglcore`, `auto`
+   and anything unrecognised all land on `vk_render_main`, with a log line for the two spellings
+   that used to mean something. 11-2 did that.
+2. **`oglu_load_dll` has no caller**, so no GL entry point in any of the four files is
+   resolvable. Every reference to it outside `opengl_utils.c` — seventeen of them — is a comment
+   asserting exactly this.
+3. **The three features above already produce nothing.**
+
+So the oracle is **0 px on every fixture**, not a difference to explain.
+
+**What it is NOT is a decision about the gate.** Option A keeps `tagpu_vk_shadow.c` and
+`tagpu_vk_hires.c` "as the foundation"; the measurement says those are passes that *cannot
+currently fire*, and reviving either is a feature landing with a producer to write. Whether 11-6
+may close with soft shadows and replacement models dark is the exit condition's meaning and is
+**the owner's** — escalation reason 1, named and not answered here.
+
+#### D1 — THE GLSL LIFT, WHOSE GATE IS EXACT
+
+`tools/spirv-gen.py` reads each shader source by preprocessing one translation unit: `src/<name>.c`
+by default, or whatever `HEADER_SOURCES` maps the name to. The two doomed files own three of the
+Vulkan lane's programs (`shadow_unit`, `shadow_hires`, `hires`), so their GLSL moved into
+`src/tagpu_shadow_glsl.h` and `src/tagpu_hires_glsl.h` and `HEADER_SOURCES` gained two entries.
+
+**`SOURCES` and `PROGRAMS` are untouched on purpose.** Removing a name from those stops
+generating the `inc/spirv/*.spv.h` that the surviving `tagpu_vk_*.c` files include — the same
+trap `inc/openglshader.h` sits in, and the reason for the rule this is the second instance of:
+**a file whose only consumer is `tools/spirv-gen.py` is load-bearing and invisible to every
+C-level dependency check.** `tagpu_shadow_glsl.h` is now exactly such a file: nothing
+`#include`s it.
+
+Both headers sit in `src/` rather than `inc/` because the hires fragment shader pastes five
+`TAGPU_GLSL_*` macros out of `src/tagpu_glsl.h` and the generator preprocesses with `-Iinc`
+alone. `STR`/`STR2` moved with the shaders for the same kind of reason: the stringify is part of
+the shader text, and left behind in the deleted file `uniform vec4 uPiece[TAGPU_HMAXPIECE*3]`
+would have reached the generator unsized.
+
+**The gate came back stronger than it had to.** All five `glsl` hashes and all five `words`
+hashes are unchanged. Across the thirteen committed headers the only edits are the thirteen
+`transform` lines — `tool_hash()` hashes `spirv-gen.py` itself, so touching `HEADER_SOURCES`
+invalidates every header by design — and two provenance lines naming the new files. And the
+shipped binary is unchanged: `.text`, `.rdata` and `.data` are each **byte-identical** to the
+pre-landing clean build, the whole DLL differing in **six bytes** — the COFF `TimeDateStamp`
+(`0x88`), the optional header's `CheckSum` (`0xd8`) and the export directory's own timestamp
+(`0x166c04`, four bytes into `.edata`). D1 therefore carries no pixel A/B and no review: there is
+no behaviour to measure or to read.
+
+#### D2 — THE SHADOW DELETION
+
+`tagpu_shadow.c` and `tagpu_shadow.h` go, with **87 of the tree's 252** narrow GL sites.
+`gl-sites` drops to **165 narrow / 234 wide**. The nine live call sites become:
+
+| site | was | is |
+|---|---|---|
+| `tagpu_posedraw.c`, `tagpu_terr.c` | `s_pub.shadowOn = tagpu_shadow_live() ? 1 : 0;` and a block | `s_pub.shadowOn = 0;` |
+| the same block's body | `shadowMat`, `shadowSun`, `shScale`, `penumbra`, `shade` | **no writer left in either file**, and each function opens with `memset(&s_pub, 0, sizeof s_pub)` |
+| `tagpu_vk_shadow.c` | `tagpu_shadow_handover(&h, d->frame)` | a named file-local `shadow_handover` stub returning 0 |
+| `tagpu_native.c` | `tagpu_shadow_glreset();` | deleted with its dead caller (`tagpu_native_glreset` says so at `:3607`) |
+
+`TAGPU_SHADOWHAND` moved into `tagpu_vk_shadow.h` unchanged, with the measurement above written
+beside it, because it is the shape the next producer needs and should not have to reinvent. **The
+stub is a function rather than a `return 0;` at the call site**, so a reviver changes one body
+and the refusal keeps its name instead of becoming an unexplained early exit.
+
+**The "no writer left" line is the part worth keeping.** The old code published zeros because a
+branch never ran; the new code publishes zeros because nothing in the file writes those fields at
+all — a stronger statement, and one a grep checks. After the commit, `tagpu_shadow_[a-z_]+`
+masked-matches **0 times** in the whole tree.
+
+It also corrects `tagpu_native.c`'s reason for filling `TAGPU_FXVIEW fv` unconditionally, which
+cited a hand-off to `tagpu_shadow_begin` that no longer exists. The fill stays — the gathers read
+`fv` and each is gated separately, so the uninitialised-stack defect that comment records (FOUND
+2026-09-15) is one re-gating away from returning — but the reason is now the true one.
+
+#### THE D2 MEASUREMENT — 0 px, AND WHAT "0 px" LOOKS LIKE ON THIS FIXTURE
+
+`one-unit`, four interleaved arms, clean-built both sides, `gui.on=1`. Read against 11-5e-2c's
+run of the same fixture, where the same four pairings produced a 15×34 box of 258 px.
+
+| | total | minimap | elsewhere |
+|---|---|---|---|
+| gate 1, worst pair within a run | 1 | 0 | 1 (the cursor at (512,384)) |
+| **control** — `main` A vs `main` B | 1 | 0 | 1 |
+| **control** — D2 A vs D2 B | 49 | **48** | 1 |
+| cross-build, all four pairings | 44–45 | **44** | **0–1** |
+
+**The derived box collapsed to a single pixel — `x 512..512 y 384..384`.** The script takes the
+union of the four cross-build bounding boxes outside the minimap, and on 11-5e-2c that union was
+the placed unit; here it is the cursor hotspot, the fixture's other known oscillator. So the
+honest reading is **nothing outside the minimap and the cursor differs at all**, and both of
+those appear in the same-build control at the same or larger magnitude (48 px of minimap drift
+between two runs of D2 itself). Census 749 452 non-black px on every arm, zero VK errors on all
+four, and `gui: layer ON` confirmed per arm.
+
+That is what a deletion of code that could not execute is supposed to look like, and it is worth
+having in the same place as the argument: the argument said 0 px by construction, and the
+instrument that found 258 px three landings ago found none here.

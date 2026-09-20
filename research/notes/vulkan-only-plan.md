@@ -2859,7 +2859,16 @@ that a count which grows is the plan catching up with the work.) The row was
        shaders, because the stringify is part of the shader text — left behind in the
        deleted file, `uniform vec4 uPiece[TAGPU_HMAXPIECE*3]` would have reached the
        generator unsized.
-     * **D2 — the shadow deletion.** `tagpu_shadow.c` and `tagpu_shadow.h`, and the nine
+     * **D2 — the shadow deletion. DONE 2026-09-19.** `tagpu_shadow.c` and `tagpu_shadow.h`
+       gone with 87 of the 252 narrow sites; `gl-sites` is **165 narrow / 234 wide**, and
+       `tagpu_shadow_[a-z_]+` masked-matches **0 times** in the tree. `TAGPU_SHADOWHAND` moved
+       into `tagpu_vk_shadow.h` with the measurement written beside it, and the hand-over is a
+       named file-local stub returning 0 — a function rather than an early exit, so a reviver
+       changes one body. Measured on `one-unit`, four interleaved arms: **44–45 px cross-build
+       of which 44 are the minimap**, the remainder the cursor's own pixel at (512,384), and
+       the derived difference box collapsed to that single pixel — nothing outside the minimap
+       and the cursor differs at all. The same-build control carries 48 px of the same minimap
+       drift. [gpu-status §2.80.] The original scope follows: `tagpu_shadow.c` and `tagpu_shadow.h`, and the nine
        live call sites, each of which returns a constant today: `tagpu_shadow_live()` → 0
        (×2), `tagpu_shadow_mat()`/`_scale()` unreachable behind `if (shadowOn)` (×2 each),
        `tagpu_shadow_handover()` → 0 (×1), and `tagpu_shadow_glreset()` (×1) whose caller
