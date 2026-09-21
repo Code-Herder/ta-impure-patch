@@ -1785,20 +1785,57 @@ static void sharp_minimap(const TAGPU_FRAME* f)
            to mean anything, and a fade is a run of palette changes that costs a
            190 KB re-upload each — against 13 356 texels of engine surface this
            module already uploads every single frame */
+        /* THE PICTURE IS PADDED AND THE BOX IS NOT, which is the whole reason
+           the right of the minimap was a flat blue band. The level's minimap is
+           a GAF frame at `main+0x1426B` whose header is a SQUARE 252x252, but
+           the map only fills an aspect-correct region inside it: on a 336x400
+           map the data runs to column 212 and columns 213..251 are one uniform
+           colour [MEASURED 2026-09-21 — the last column that is not internally
+           constant is 212, and rows run to 251]. Drawing the whole frame with
+           0..1 UVs therefore squeezed 252 columns of which 40 were padding into
+           the 106-px box: the map landed in 89 columns and the padding stretched
+           across the remaining 17. Golden fills all 106.
+
+           THE CROP GOES IN THE BAKE, NOT IN THE UVs. `MM_FS` uses the SAME `uv`
+           for `uPic` and for `uEng`, and the engine's fogged/unfogged pair is
+           exactly box-sized and needs the full 0..1 — so narrowing the UVs would
+           have fixed the picture and broken the mask with it. Uploading only the
+           valid sub-rect keeps 0..1 true for both, needs no new uniform, touches
+           no shader, and makes the upload smaller.
+
+           THE VALID REGION CARRIES THE BOX'S ASPECT, inscribed in the frame, and
+           the box is taken from the PACKET rather than from `mw`/`mh` here:
+           those have been through the HUD-scale multiply above, and the aspect
+           should come from the engine's own fitted box, not from a rounded copy
+           of it. 252 x 106/126 is 212, which is where the data measurably stops. */
         {
-            unsigned n = (unsigned)pw * (unsigned)ph, i;
+            int bw = pk->mm_box[2], bh = pk->mm_box[3];
+            int vw = pw, vh = ph, y, x;
+            unsigned n;
+            if (bw > 0 && bh > 0) {
+                if      ((long)bw * ph < (long)bh * pw) vw = (int)(((long)ph * bw) / bh);
+                else if ((long)bw * ph > (long)bh * pw) vh = (int)(((long)pw * bh) / bw);
+                if (vw < 1) vw = 1; else if (vw > pw) vw = pw;
+                if (vh < 1) vh = 1; else if (vh > ph) vh = ph;
+            }
+            n = (unsigned)vw * (unsigned)vh;
             if (n * 3 > s_mmPicCap) {
                 free(s_mmPicRgb); s_mmPicCap = n * 3 + 4096;
                 s_mmPicRgb = (unsigned char*)malloc(s_mmPicCap);
                 if (!s_mmPicRgb) { s_mmPicCap = 0; return; }
             }
-            for (i = 0; i < n; i++) {
-                const unsigned char* e = pal + 4 * (unsigned)pic[i];
-                s_mmPicRgb[3 * i] = e[0]; s_mmPicRgb[3 * i + 1] = e[1]; s_mmPicRgb[3 * i + 2] = e[2];
+            for (y = 0; y < vh; y++) {
+                const unsigned char* srow = pic + (size_t)y * (unsigned)pw;
+                unsigned char* drow = s_mmPicRgb + (size_t)y * (unsigned)vw * 3;
+                for (x = 0; x < vw; x++) {
+                    const unsigned char* e = pal + 4 * (unsigned)srow[x];
+                    drow[3 * x] = e[0]; drow[3 * x + 1] = e[1]; drow[3 * x + 2] = e[2];
+                }
             }
             s_mmPicSerial++;
+            s_mmTW = vw; s_mmTH = vh;
         }
-        s_mmGenSeen = gen; s_mmPalSeen = tagpu_pal_serial(); s_mmTW = pw; s_mmTH = ph;
+        s_mmGenSeen = gen; s_mmPalSeen = tagpu_pal_serial();
         s_mmBaked = 1;
     }
     /* the program, its uniforms and every texture unit are set by whichever
