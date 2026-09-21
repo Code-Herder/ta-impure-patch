@@ -854,6 +854,17 @@ static unsigned s_assetAcked = 0;     /* assets the consumer echoed back        
 static unsigned s_assetDrift = 0;     /* pixels that moved in an ACKED asset -- the
                                          residual the claim names, measured under
                                          `census.on` and expected to read 0        */
+/* ---- THE FOCUS TINT'S THREE (landing 8d) --------------------------------
+   `s_tints` is what crossed as `PK_TINT`; `s_focusRowBad` is a shade level
+   outside the table's 32 rows, refused by `before_focus` (the engine passes it
+   through unmasked and reads off the end -- see there); `s_tintNoTable` is a
+   tint observed while `globals+0xC8` was not readable, which is the state in
+   which `0x4BEC70` itself returns without drawing, so it is a match and not a
+   loss. All three are expected to read 0 except `s_tints`. */
+static unsigned s_tints = 0;
+static unsigned s_focusRowBad = 0;
+static unsigned s_tintNoTable = 0;
+
 /* NEVER REISSUED, which is what makes the echo an identity. Skips 0 on wrap so
    that 0 always means "no offer in flight"; a wrap needs 2^32 offers. */
 static unsigned s_assetTokNext = 1;
@@ -1081,6 +1092,69 @@ static int pub_seed(SURF* s)
     if (!pub_surface_bytes(s, 0, 0, s->w - 1, s->h - 1, o)) return 0;
     pub_commit();
     s->seeded = 1;
+    return 1;
+}
+
+/* ---- THE LIGHTEN TABLE, `globals+0xC8` (landing 8d) ---------------------
+   What a focus tint remaps through: 32 rows of 256 bytes, built by the engine
+   at init. `tagpu_packet_pub.c` latches the same table for the world's flash
+   blit (`lht_snapshot`) and the shade table beside it the same way; this is
+   the GUI queue's own copy, because the op stream is a different channel from
+   the frame packet and a pointer between them would be a lifetime nobody has
+   established.
+
+   LATCHED ON THE POINTER, exactly as those two are: the note records no
+   rebuild, but "no note establishes it" is the font's lesson, so a different
+   pointer is a different table and is re-copied. The SIZE is the format's
+   bound -- `TAGPU_GUI_SHADE_BYTES` carries that argument.
+
+   THE READABILITY TEST IS `0x4BEC70`'S OWN. It fetches `[globals+0xC8]` and
+   returns 0 without drawing when it is NULL (`0x4BEC7B`), so a null table is
+   the state in which the engine draws no tint either -- publishing nothing is
+   a match, not a gap. `ptr_ok` on top of that is a value filter on a pointer
+   we are about to read 8 KB through and is NOT the safety argument; the
+   argument is that this is an init-time allocation the engine holds for the
+   process and hands to its own rasteriser on the same thread we are on. */
+#define TA_GFXPP   0x0051FBD0u   /* the graphics globals -- `0x4B6220` returns it */
+#define GFX_LHT    0x0C8         /* u8[32][256], the LIGHTEN table                */
+static unsigned char s_lht[TAGPU_GUI_SHADE_BYTES];
+static const unsigned char* s_lhtPtr = NULL;
+static int      s_lhtOk = 0;
+static int      s_lhtSent = 0;        /* crossed since the last reset          */
+static unsigned s_lhtCopies = 0;
+
+/* 1 = the consumer has the table (or will, ahead of this batch's first tint),
+   0 = there is none to publish, -1 = the queue is full and `publish` must
+   return. Three states rather than two because "no table" and "no room" call
+   for opposite things and one of them is silent. */
+static int pub_shade(void)
+{
+    const char* g;
+    const unsigned char* t;
+    TAGPU_PUBOP* o;
+    unsigned char* dst;
+    g = *(const char* const*)TA_GFXPP;
+    if (!ptr_ok(g)) return 0;
+    t = *(const unsigned char* const*)(g + GFX_LHT);
+    if (!ptr_ok(t)) return 0;
+    if (t != s_lhtPtr || !s_lhtOk) {
+        memcpy(s_lht, t, sizeof s_lht);
+        s_lhtPtr = t; s_lhtOk = 1; s_lhtCopies++;
+        s_lhtSent = 0;                 /* a different table is a different fact */
+    }
+    if (s_lhtSent) return 1;
+    o = pub_op(PK_SHADE, 0);
+    if (!o) return -1;
+    o->w = (int)TAGPU_GUI_SHADE_ROWS; o->h = 256;
+    dst = pub_bytes(o, (unsigned)sizeof s_lht);
+    if (!dst) return -1;
+    memcpy(dst, s_lht, sizeof s_lht);
+    pub_commit();
+    /* AFTER THE COMMIT, NEVER BEFORE IT. Marking it sent on the way in would
+       have claimed a table that a full arena threw away -- the same shape of
+       mistake as acking an asset at publish rather than at hand-over, which
+       cost this lane a whole episode's backdrop one landing ago. */
+    s_lhtSent = 1;
     return 1;
 }
 
@@ -1639,6 +1713,13 @@ static void publish(unsigned flipSurf)
            tables above get, and it was missing [found by the review of the
            review's fixes]. */
         gfont_sent_clear();
+        /* AND THE LIGHTEN TABLE. Same rule as the glyphs and the asset: a
+           reseed is the consumer saying it threw state away, and whatever was
+           in flight when it did was skipped whole -- so a `PK_SHADE` that has
+           not been drained yet is lost while `s_lhtSent` still claims it
+           landed, and every tint afterwards would index a table the consumer
+           does not have. Cheap to redo: 8 KB once per reset. */
+        s_lhtSent = 0;
         /* an overflow drops the queue's tail too: what the consumer has not
            taken is stale against the fresh seeds */
         if (s_pubOverflow) g_guiq.overflows++;
@@ -1922,6 +2003,36 @@ static void publish(unsigned flipSurf)
             o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
             o->fg = op->col;
             pub_commit();
+            continue;
+        }
+        /* A TINT IS A BOX, A ROW, AND -- ONCE -- THE TABLE. [The vulkan-only
+           plan, landing 8d.] `0x4BF7B0`'s edges go through `0x4BEC70` to
+           `0x4CC8DF`, which READS the destination byte and writes back
+           `LUT[row*256 + byte]`: there is no colour in the op at all, which is
+           why it could not be a `PK_BAR` or a `PK_RECT` and stayed on
+           `PK_PIXELS` -- i.e. off the screen entirely -- from the clean cut
+           until here. What crosses is the OPERATION; the consumer applies it
+           to its own twin and no engine pixel is involved.
+
+           `before_focus` has already split the rectangle into its four edges
+           and clipped each as the engine does, so this is one edge and the box
+           is one pixel thick. The ORDER of the four matters at the corners --
+           see `PK_TINT` in tagpu_gui_int.h -- and it is the array's order,
+           which is the engine's.
+
+           THE TABLE GOES FIRST AND IN THE SAME BATCH, which is the whole
+           delivery argument: the queue is FIFO, so a tint the consumer takes
+           has the table it indexes, and a batch that runs out of room loses
+           both together. */
+        if (op->kind == OP_FOCUS) {
+            int st = pub_shade();
+            if (st < 0) return;
+            if (st == 0) { s_tintNoTable++; continue; }
+            o = pub_op(PK_TINT, s->base); if (!o) return;
+            o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
+            o->fg = op->col;                      /* the ROW, not an index */
+            pub_commit();
+            s_tints++;
             continue;
         }
         /* THE TRANSFORMED FRAME, already resampled to its box by `scale_capture`.
@@ -2506,8 +2617,22 @@ static int __cdecl before_flip(void* entry_esp)
             unsigned raw = 0, sem = 0, tot;
             for (k = 1; k < OP_NKIND; k++) {
                 if (!s_kindArea[k]) continue;
+                /* `OP_FOCUS` JOINED THIS SET WITH LANDING 8d and it is what
+                   moves the shell's figure: it was the whole of `raw` on
+                   MAINMENU (`raw=1156164` against a `focus` of exactly that),
+                   and `PK_TINT` is its semantic op. `OP_FILL` joined it in the
+                   same pass as a correction rather than a change -- it has
+                   crossed as a `PK_BAR` since the whole-surface fill branch
+                   went in, and counting it as raw under-reported what this lane
+                   can already reproduce.
+                   `OP_SCALE` is NOT here and that is deliberate: it publishes a
+                   `PK_SPRITE` only when its resampled plane was captured, and a
+                   kind that is sometimes semantic cannot be summed as though it
+                   always were. It stays in `raw`, which over-reports it -- the
+                   direction an honest gap should err in. */
                 if (k == OP_GAF || k == OP_TEXT || k == OP_BAR ||
-                    k == OP_RECT || k == OP_LINE || k == OP_COPY) sem += s_kindArea[k];
+                    k == OP_RECT || k == OP_LINE || k == OP_COPY ||
+                    k == OP_FOCUS || k == OP_FILL) sem += s_kindArea[k];
                 else if (k != OP_FLIP)                            raw += s_kindArea[k];
                 if (full) continue;
                 w = _snprintf(ar + n, sizeof ar - (size_t)n, "%s%s %u",
@@ -3228,12 +3353,15 @@ void tagpu_gui_flush(unsigned int frame_counter)
        magnitude of one counter. mingw's `_snprintf` does not NUL-terminate on
        truncation, and `glog` hands the result to `fprintf("%s")`, so the
        failure would have been an out-of-bounds READ, not a tidy cut. */
-    char b[480];        /* 444 worst case, RE-COUNTED rather than adjusted by eye:
-                           171 literal characters, 25 `%u` at ten digits and 2 `%d`
+    char b[544];        /* 493 worst case, RE-COUNTED rather than adjusted by eye:
+                           180 literal characters, 29 `%u` at ten digits and 2 `%d`
                            at eleven, plus the NUL. The `asset=` group is FOUR
                            fields, not the two an earlier revision of this comment
                            claimed -- the arithmetic was right and the prose was
-                           stale, which is the way this line gets overrun. */
+                           stale, which is the way this line gets overrun. Landing
+                           8d added the FOUR-field `tint=` group: 444 -> 493, which
+                           is 13 past what the buffer was, so this is the second
+                           time the count has caught an overrun before it shipped. */
     want_minimap_watchdog(frame_counter);
     if (!s_installed) return;
     if (frame_counter - last >= 600) {
@@ -3246,16 +3374,17 @@ void tagpu_gui_flush(unsigned int frame_counter)
            resets=5 draw=1` in an ordinary boot [2026-09-21]. Every field here is
            live; read them as numbers again.
 
-           SIZED FOR THE COUNTERS, NOT FOR THE LINE YOU LAST SAW. Twenty-five
-           `%u`s at ten digits and two `%d`s at eleven, plus 171 literals, is
-           443 bytes, and the observed line is ~240 -- the gap is entirely how
-           long the session has run. This buffer has been overrun once before by
-           one field too many, so COUNT IT AGAIN when you add one. */
-        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u chrome=%u/%u panel=%u/%u hud=%u/%u asset=%u/%u/%u/%u",
+           SIZED FOR THE COUNTERS, NOT FOR THE LINE YOU LAST SAW. Twenty-nine
+           `%u`s at ten digits and two `%d`s at eleven, plus 180 literals, is
+           492 bytes, and the observed line is ~260 -- the gap is entirely how
+           long the session has run. This buffer has been overrun twice before by
+           one group too many, so COUNT IT AGAIN when you add one. */
+        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u chrome=%u/%u panel=%u/%u hud=%u/%u asset=%u/%u/%u/%u tint=%u/%u/%u/%u",
                   s_flips, s_opsTotal, s_opsDropped, s_changedTotal, s_unexplTotal, s_nsurf,
                   s_pubOps, s_pubBytes, g_guiq.qHead - g_guiq.qTail, g_guiq.resets, g_guiq.overflows, g_guiq.stalls, g_gui_draw, s_freeqFlush, s_repaints, s_repaintSkips, s_repaintOps,
                   s_chromeEmits, s_chromeRefused, s_panelEmits, s_panelRefused, s_hudPokes, s_hudRefused,
-                  s_assetSends, s_assetAcked, s_assetRevoked, s_assetDrift);
+                  s_assetSends, s_assetAcked, s_assetRevoked, s_assetDrift,
+                  s_tints, s_lhtCopies, s_focusRowBad, s_tintNoTable);
         glog(b);
         {
             /* THE SAME GUARD AS THE OTHER THREE IN THIS FILE: mingw's

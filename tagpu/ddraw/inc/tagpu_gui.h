@@ -149,6 +149,16 @@ unsigned tagpu_gui_minimap_have(void);
    is the only thing a second backend has to reproduce. Keeping them separate
    means a change to the queue cannot silently change the port's contract.  */
 
+/* THE LIGHTEN TABLE'S SHAPE, AND THE SHAPE IS THE BOUND. `0x4CC8DF` indexes it
+   `[(row << 8) | dst]` with `dst` zero-extended from a byte (`xor eax,eax` then
+   `mov al,[edi]`), and `0x4BF4D0` -- the same table, the other consumer --
+   clamps its row to `<= 0x1F` at `0x4BF595`. So 32 x 256 is exactly what either
+   writer can reach, and a copy of that size reads what they read and nothing
+   more. The same argument `tagpu_packet_pub.c`'s `shd_snapshot` and
+   `lht_snapshot` already make for the world's two copies of these tables. */
+#define TAGPU_GUI_SHADE_ROWS  32u
+#define TAGPU_GUI_SHADE_BYTES (TAGPU_GUI_SHADE_ROWS * 256u)
+
 enum { TAGPU_GUICOL_DST = 1, TAGPU_GUICOL_ON = 2 };   /* TAGPU_GUIOP::col */
 
 enum {
@@ -162,9 +172,30 @@ enum {
     TAGPU_GUIOP_STRING,     /* TA's own glyphs, stamped into the twin         */
     TAGPU_GUIOP_BAR,        /* landing 8a: the box filled with palette index
                                `fg`, fully covered. No arena bytes.            */
-    TAGPU_GUIOP_RECT        /* landing 8b: the box's four INCLUSIVE EDGES in
+    TAGPU_GUIOP_RECT,       /* landing 8b: the box's four INCLUSIVE EDGES in
                                palette index `fg`, one pixel wide, interior
                                untouched. No arena bytes.                      */
+    TAGPU_GUIOP_TINT        /* landing 8d: the box, one pixel thick, REMAPPED
+                               THROUGH ROW `fg` of `TAGPU_GUIHAND::shade` --
+                               `idx = shade[fg * 256 + idx]`, coverage
+                               unchanged. No arena bytes.
+
+                               THE ONE OP IN THE STREAM THAT READS ITS OWN
+                               DESTINATION, which is what a consumer has to
+                               plan for rather than discover: the box must be
+                               snapshotted before the draw that rewrites it,
+                               because sampling an attachment a draw is writing
+                               is undefined in both APIs (the same rule that
+                               makes `TAGPU_GUIOP_COPY` refuse a self-copy).
+
+                               AND THE ORDER OF THESE OPS IS LOAD-BEARING where
+                               no other kind's is: the four edges of one focus
+                               rectangle SHARE THEIR CORNERS, so each corner is
+                               remapped twice and applying them out of order,
+                               or in parallel from one snapshot, gives a
+                               different picture at four pixels per rectangle.
+                               `0x4BF7B0`'s own order is top, right, bottom,
+                               left.                                          */
 };
 
 typedef struct TAGPU_GUIOP {
@@ -325,6 +356,21 @@ typedef struct TAGPU_GUIHAND {
 
     const unsigned char* pal;       /* 256 x RGBA8, tagpu_pal_live()          */
     unsigned             palSerial;
+
+    /* THE ENGINE'S LIGHTEN TABLE, `globals+0xC8`: 32 rows of 256 bytes, row
+       major, and the only thing a `TAGPU_GUIOP_TINT` needs beyond its box.
+       NULL until a `PK_SHADE` has been drained, which the producer publishes
+       ahead of the first tint of a batch -- so a tint op and a null table
+       cannot both be in one hand-over, and a port that finds them together is
+       looking at a bug rather than at a state to cope with.
+
+       `shadeSerial` is the atlas's rule, not the palette's: it moves when the
+       BYTES move, which for this table is once a session in practice (the
+       engine builds it at init) and whenever the engine hands out a different
+       pointer. Uploading on a change rather than per frame is the point of
+       carrying a serial at all. */
+    const unsigned char* shade;
+    unsigned             shadeSerial;
 
     /* THE ENGINE'S OWN FRAME, which the composite samples as its bottom layer
        and its stale-mirror guard compares against. The GL lane reads it as

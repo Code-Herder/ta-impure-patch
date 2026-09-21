@@ -158,12 +158,16 @@ GLSLANG = REPO / "tools" / "glslang" / "bin" / "glslang"
 # source. Each entry is (program name, vertex "file::symbol", fragment one).
 # The line number beside each group is where that pairing is made.
 PROGRAMS = [
-    # tagpu_gui_surf.c -- one quad vertex stage, six fragment stages. RESTORED
+    # tagpu_gui_surf.c -- one quad vertex stage, seven fragment stages. RESTORED
     # by the UI rebuild: the clean cut took these with the composite, and the
     # composite is what is not coming back. `LAY_FS` no longer samples TA's
-    # frame, so none of the seven puts an engine pixel anywhere.
+    # frame, so none of the eight puts an engine pixel anywhere -- `TINT_FS`
+    # included: what it samples is a copy of OUR OWN twin, made one command
+    # earlier, and the table it indexes through is the engine's palette-derived
+    # LUT and not a picture.
     ("gui_spr",      "tagpu_gui_surf::QVS",     "tagpu_gui_surf::SPR_FS"),
     ("gui_cpy",      "tagpu_gui_surf::QVS",     "tagpu_gui_surf::CPY_FS"),
+    ("gui_tint",     "tagpu_gui_surf::QVS",     "tagpu_gui_surf::TINT_FS"),
     ("gui_lay",      "tagpu_gui_surf::LAY_VS",  "tagpu_gui_surf::LAY_FS"),
     ("gui_sharp",    "tagpu_gui_surf::QVS",     "tagpu_gui_surf::SHARP_FS"),
     ("gui_curs",     "tagpu_gui_surf::QVS",     "tagpu_gui_surf::CURS_FS"),

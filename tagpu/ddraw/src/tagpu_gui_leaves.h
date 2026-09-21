@@ -313,8 +313,79 @@ static int __cdecl before_rect(void* e) { if (on_game_thread()) rect_box(e, OP_R
    0x4BEC70, whose writer 0x4CC8DF reads the destination and remaps it through
    globals+0xC8. A tint, not a colour -- see the OP_FOCUS comment in
    tagpu_gui_hook.c. [The "eight edges" this said at first were two mutually
-   exclusive arms on ctx == NULL; corrected by 8b's review.] */
-static int __cdecl before_focus(void* e) { if (on_game_thread()) rect_box(e, OP_FOCUS); return 0; }
+   exclusive arms on ctx == NULL; corrected by 8b's review.]
+
+   AND SINCE LANDING 8d IT RECORDS THE FOUR EDGES AS FOUR OPS, in the engine's
+   own order, rather than one op for the box. Three things fall out of that and
+   each of them was a reason the box could not be published:
+
+     - THE CLIP. `0x4BF7B0` hands each edge to `0x4BEC70` separately and
+       `0x4BEA20` clips each on its own, so a rectangle crossing the clip rect
+       is an OPEN figure -- exactly `OP_RECT::clipped`'s problem, which that
+       kind answers by falling back to the box's bytes. A tint has no such
+       fallback (there is no colour to publish), so the decomposition IS the
+       answer: `op_add` already drops an edge that clips to nothing and clamps
+       the rest, which is what `0x4BEA20` does, one edge at a time.
+     - THE CORNERS. Top covers (l,t)..(r,t) inclusive at both ends and left
+       covers (l,t)..(l,b), so (l,t) is remapped TWICE -- `LUT[LUT[x]]` -- and
+       so are the other three corners. Four sequential ops reproduce that; one
+       box op would have had to carry the rule.
+     - THE AREA. `s_kindArea[OP_FOCUS]` now counts the pixels the engine writes
+       instead of the bounding box, so `gui area:`'s `focus` figure is the
+       traffic and not an over-estimate of it. The numbers in gui-renderer.md
+       from before this landing are the old measure.
+
+   Disassembled 2026-09-21 for this landing: both arms draw (l,t,r,t),
+   (r,t,r,b), (l,b,r,b), (l,t,l,b) with the level passed straight through as
+   `0x4BEC70`'s sixth argument and `0x4CC8DF`'s sixth. The RECT fields are
+   [esi]=l, [esi+4]=t, [esi+8]=r, [esi+0xC]=b. */
+static int __cdecl before_focus(void* e)
+{
+    const int* ctx;
+    const int* rc;
+    int box[4], k, lvl;
+    SURF* s;
+    /* the four edges, in the engine's order: top, right, bottom, left */
+    static const unsigned char EDGE[4][4] = {
+        { 0, 1, 2, 1 },   /* (l, t) - (r, t) */
+        { 2, 1, 2, 3 },   /* (r, t) - (r, b) */
+        { 0, 3, 2, 3 },   /* (l, b) - (r, b) */
+        { 0, 1, 0, 3 }    /* (l, t) - (l, b) */
+    };
+    if (!on_game_thread()) return 0;
+    if (s_inFlip) return 0;
+    ctx = ctx_or_back(ARG(e, 1));
+    rc  = (const int*)(size_t)ARG(e, 2);
+    if (!ptr_ok(rc)) { op_add(OP_FOCUS, NULL, 0, 0, 0, 0); return 0; }
+    /* THE ROW, BOUNDED HERE BECAUSE THE ENGINE DOES NOT BOUND IT ANYWHERE.
+       `0x4BF7B0` passes this int through `0x4BEC70` unmasked and `0x4CC8DF`
+       does `shl eax,0x8` on it, so a level outside 0..31 reads OFF the 32-row
+       table -- the engine's own bug, and one whose output is whatever memory
+       follows the table. We cannot reproduce that and will not guess at it, so
+       such an op is refused and counted; the counter is what says it never
+       happens. It never can from the one caller: `0x4A16F0` starts at 0x1F and
+       walks 31, 28, 24, 19, 13, 6 over six expanding rectangles. */
+    lvl = SARG(e, 3);
+    if (lvl < 0 || lvl >= (int)TAGPU_GUI_SHADE_ROWS) { s_focusRowBad++; return 0; }
+    box[0] = rc[0]; box[1] = rc[1]; box[2] = rc[2]; box[3] = rc[3];
+    /* NORMALISING IS EXACT HERE where it would not be for a filled box: each
+       edge is a SEGMENT and `0x4CC8DF` swaps its own endpoints (`0x4CC8FA`,
+       `0x4CC94E`), so (l,t)-(r,t) and (r,t)-(l,t) write the same pixels. */
+    if (box[0] > box[2]) { int q = box[0]; box[0] = box[2]; box[2] = q; }
+    if (box[1] > box[3]) { int q = box[1]; box[1] = box[3]; box[3] = q; }
+    s = surf_of_ctx(ctx);
+    for (k = 0; k < 4; k++) {
+        int l = box[EDGE[k][0]], t = box[EDGE[k][1]];
+        int r = box[EDGE[k][2]], b = box[EDGE[k][3]];
+        if (s) clip_ctx(ctx, &l, &t, &r, &b);
+        op_add(OP_FOCUS, s, l, t, r, b);
+        /* `col` IS THE ROW, not a palette index -- `OP::col` in
+           tagpu_gui_hook.c has what the argument means for each of the four
+           `rect_box` leaves, and this is the one that means a shade level. */
+        if (s_lastOp) s_lastOp->col = (unsigned char)lvl;
+    }
+    return 0;
+}
 
 /* ---- 0x4C6B70 surface->surface blit stdcall(dst ctx, src surface, x, y)
         ret 0x10 (the GUI panel reaching the frame; gui-renderer.md §2) -- */

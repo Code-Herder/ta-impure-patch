@@ -148,6 +148,22 @@ static unsigned s_bars = 0;
 /* HOLLOW RECTANGLES replayed as geometry, beside `bars=` for the same reason.
    [The vulkan-only plan, landing 8b.] */
 static unsigned s_rects = 0;
+/* FOCUS-TINT EDGES replayed as an operation, beside the other two. The third
+   and last kind that used to be `PK_PIXELS` on the shell's menus, and the one
+   that was the WHOLE residual there: 1 523 px of a 1 613 px difference at
+   640x480, MAINMENU. [The vulkan-only plan, landing 8d.] */
+static unsigned s_tints = 0;
+/* THE ENGINE'S LIGHTEN TABLE, `globals+0xC8`, as `PK_SHADE` delivered it. A
+   FILE-STATIC AND NOT A POINTER INTO THE QUEUE, for the reason the mirror
+   exists at all: `drain` advances the arena tail per op, so the bytes are the
+   game thread's again the moment this function returns, and the Vulkan lane
+   does not run until two calls later. The hand-over carries THIS, by pointer,
+   every frame -- so a mirror frame the consumer abandons cannot lose the
+   table, which is what lets `PK_SHADE` need no acknowledgement of any kind.
+   `s_shadeSerial` moves when the bytes do, and is the port's upload trigger. */
+static unsigned char s_shade[TAGPU_GUI_SHADE_BYTES];
+static int      s_shadeHave = 0;
+static unsigned s_shadeSerial = 0;
 static int    s_skipToReset = 0;        /* after a GL context change: the queue's ops up to the producer's next
                                            RESET were published against twins and an atlas that died with the
                                            context — take their arena bytes, apply nothing (see drain) */
@@ -395,6 +411,43 @@ static const char* CPY_FS =
        the destination's colour there, which is what a copy from an indexed
        surface means */
     "  oCol = uSrcHasCol != 0 ? texelFetch(uSrcCol, p, 0) : vec4(0.0); }\n";
+/* THE FOCUS TINT (landing 8d): the destination's own index, remapped through
+   one row of the engine's lighten table.
+
+   `uSrc` IS A SNAPSHOT OF THE TWIN, NOT THE TWIN. `0x4CC8DF` does
+   `dst = LUT[row*256 + dst]`, a read-modify-write of the very texels this
+   draw writes, and sampling an attachment a draw is writing is undefined in
+   both APIs -- the same rule that makes a self-`PK_COPY` a refusal one file
+   over. So the caller copies the box out first and this samples the copy, at
+   the SAME COORDINATES, which is why there is no offset uniform: `gl_FragCoord`
+   indexes both.
+
+   COVERAGE IS CARRIED THROUGH UNCHANGED, and that is the difference between a
+   tint and every other op here. A bar covers, a clear uncovers, a sprite
+   covers what it does not key out; a tint says nothing about coverage at all,
+   because the engine has no such concept and this op only remaps a byte. So
+   green comes from the snapshot rather than from a constant.
+
+   `oCol` GOES TO ZERO for `STR_FS`'s reason: the index under this pixel has
+   changed, so whatever restored colour the Classic++ lane had painted there is
+   now colour for a different index. Dropping it falls the texel back to the
+   palette, which resolves the tinted index correctly; leaving it would show
+   the untinted art through a highlight the engine has just drawn.
+
+   THE ROW IS AN INDEX INTO A 32-ROW TABLE AND IS BOUNDED BY THE PRODUCER
+   (`before_focus` refuses anything else), so there is no clamp here -- a clamp
+   would turn a producer bug into a wrong picture instead of a loud one. */
+static const char* TINT_FS =
+    "#version 330 core\n"
+    "layout(location=0) out vec4 oIdx;\n"
+    "layout(location=1) out vec4 oCol;\n"
+    "uniform sampler2D uSrc; uniform sampler2D uShade;\n"
+    "uniform int uRow;\n"
+    "void main(){ ivec2 p = ivec2(gl_FragCoord.xy);\n"
+    "  vec2 g = texelFetch(uSrc, p, 0).rg;\n"
+    "  int i = int(g.r * 255.0 + 0.5);\n"
+    "  oIdx = vec4(texelFetch(uShade, ivec2(i, uRow), 0).r, g.g, 0.0, 0.0);\n"
+    "  oCol = vec4(0.0); }\n";
 /* the layer over the frame: uv.y = 0 at the top of the screen, like the
    native composite's CVS; the twin's row 0 is the surface's row 0 */
 static const char* LAY_VS =
@@ -1331,7 +1384,7 @@ static void drain(void)
             break;
         case PK_RECT:
             /* FOUR EDGES, no arena bytes. `0x4BF8C0` only; `0x4BF7B0` tints and
-               is `OP_FOCUS`, which still publishes pixels.
+               is `OP_FOCUS`, which crosses as `PK_TINT` below since landing 8d.
                [The vulkan-only plan, landing 8b.] */
             t = twin_find(o->surf);
             if (t) {
@@ -1339,6 +1392,43 @@ static void drain(void)
                 m = mir_op();
                 if (m) { m->kind = TAGPU_GUIOP_RECT; mir_box(m, o); m->fg = o->fg; }
                 s_rects++;
+            }
+            break;
+        case PK_SHADE:
+            /* THE TABLE, AND IT IS NOT A PICTURE. `globals+0xC8` is a
+               palette-derived remap the engine builds at init -- the same
+               category as the palette itself, which has always crossed -- so
+               it is on the allowed side of the clean cut. Nothing composed it.
+
+               VALIDATED AGAINST THE FORMAT rather than trusted: the producer
+               and this file agree on 32 x 256 through one constant, and an
+               `alen` that is not exactly that is a queue this build did not
+               write. Refusing it leaves `s_shadeHave` where it was, which the
+               tint case below then reads as "no table". */
+            if (o->alen == TAGPU_GUI_SHADE_BYTES) {
+                memcpy(s_shade, g_guiq.arena + o->aoff, TAGPU_GUI_SHADE_BYTES);
+                s_shadeHave = 1; s_shadeSerial++;
+            }
+            break;
+        case PK_TINT:
+            /* ONE EDGE OF A FOCUS RECTANGLE, REMAPPED THROUGH ROW `fg`. No
+               arena bytes: what the op carries is the operation, and the
+               consumer applies it to its own twin.
+
+               THE TABLE IS A PRECONDITION AND NOT A FALLBACK. The producer
+               publishes `PK_SHADE` ahead of the first tint of a batch and the
+               queue is FIFO, so `s_shadeHave` is set by the time this runs --
+               unless the table could not be read at all, in which case the
+               producer published no tint either (`0x4BEC70` refuses on the
+               same condition). A tint here without one is therefore a bug in
+               this build, and the answer is to draw nothing rather than to
+               index a table of zeros. */
+            t = twin_find(o->surf);
+            if (t && s_shadeHave) {
+                TAGPU_GUIOP* m;
+                m = mir_op();
+                if (m) { m->kind = TAGPU_GUIOP_TINT; mir_box(m, o); m->fg = o->fg; }
+                s_tints++;
             }
             break;
         case PK_SPRITE: {
@@ -2380,7 +2470,18 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
            72 conversions, worst case 1181 with the terminator. 1152 would have
            truncated -- and truncation here is silent and takes the TAIL, where
            `fps=` lives. [The 1152 was 9 bytes of headroom when 8a's review
-           counted it; one more counter spent all of it.] */
+           counted it; one more counter spent all of it.]
+
+           RE-MEASURED AGAIN 2026-09-21 for landing 8d's `tints=`, BY SCRIPT
+           over the format string, and the 2026-09-18 figures above are wrong:
+           the string held 430 literals and SEVENTY conversions, not 72, for a
+           worst case of 1204. It fitted, so nothing broke and nothing said so
+           -- which is what an arithmetic recorded by hand does. The method,
+           written down so the next one is reproducible rather than re-guessed:
+           %u -> 10, %d -> 11, %08X -> 8, each float -> 24 (a bound on the
+           values these carry, not on a double). It is now 438 literals and 72
+           conversions, worst case 1232 against a 1280-byte buffer: 48 bytes of
+           headroom, which is FOUR `%u`s. Count it again when you add one. */
         char b[1280];
         int palDiffAt, palDiff = tagpu_pal_diff(&palDiffAt);
         static LARGE_INTEGER t0, fq;
@@ -2395,8 +2496,8 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u pixdrop=%u assets=%u bars=%u rects=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u gafnoplane=%u gafreseed=%u gafscratch=%u/%u/%u strrearm=%u glyscratch=%u/%u gfont=%u/%u/%u/%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
-                  s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_pixDropped, s_assets, s_bars, s_rects, s_clears,
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u pixdrop=%u assets=%u bars=%u rects=%u tints=%u/%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u gafnoplane=%u gafreseed=%u gafscratch=%u/%u/%u strrearm=%u glyscratch=%u/%u gfont=%u/%u/%u/%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
+                  s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_pixDropped, s_assets, s_bars, s_rects, s_tints, s_shadeSerial, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.gafnoplane, g_guiq.gafreseed, g_guiq.gafhigh, g_guiq.gaflost, g_guiq.gafbaddec, g_guiq.strrearm, g_guiq.glyhigh, g_guiq.glylost, pGlyphs, pResends, pRefused, pRecycles, g_guiq.stalls,
                   s_skipped, tagpu_pal_changes(), palDiff, palDiffAt, tagpu_pal_presented(),
                   tagpu_classicpp_on() ? 1 : 0, tagpu_classicpp_assets() ? 1 : 0,
@@ -2594,6 +2695,15 @@ static void mir_finish(const TAGPU_FRAME* f)
 
     s_mHand.pal = tagpu_pal_live();
     s_mHand.palSerial = tagpu_pal_serial();
+
+    /* THE LIGHTEN TABLE, BY POINTER AND EVERY FRAME (landing 8d). It aliases
+       this file's own static, not the queue's arena, so it outlives the drain
+       that filled it -- and carrying it on every hand-over rather than as a
+       one-shot is what makes `PK_SHADE` need no acknowledgement: a frame the
+       consumer abandons loses the RECORD, never the table. NULL until one has
+       arrived, which is a state no tint op can be published into. */
+    s_mHand.shade = s_shadeHave ? s_shade : NULL;
+    s_mHand.shadeSerial = s_shadeSerial;
 
     /* THE ENGINE'S OWN FRAME. The composite's bottom layer and its
        stale-mirror guard both sample it, as `f->surface_tex` -- a GL texture,

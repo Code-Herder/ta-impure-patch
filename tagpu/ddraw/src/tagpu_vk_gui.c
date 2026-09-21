@@ -118,7 +118,7 @@
     X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor) \
     X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdClearAttachments) \
     X(vkCmdClearColorImage) \
-    X(vkCmdCopyBufferToImage) X(vkCmdPipelineBarrier)
+    X(vkCmdCopyBufferToImage) X(vkCmdCopyImage) X(vkCmdPipelineBarrier)
 
 #define DECL(n) static PFN_##n n;
 IFNS(DECL)
@@ -224,6 +224,11 @@ static VkDescriptorSetLayout s_dslTwin, s_dslLay;
 static VkPipelineLayout s_ploTwin, s_ploLay;
 static VkPipeline       s_pipeSpr, s_pipeCpy, s_pipeStr, s_pipeLay;
 static VkPipeline       s_pipeSpr2, s_pipeCpy2, s_pipeStr2;
+/* THE FOCUS TINT (landing 8d). One more pair against the same two passes and
+   the same layout -- `TINT_FS` samples at bindings 40 and 41 and reads one int
+   at 32, which is `CPY_FS`'s shape exactly, so nothing about the descriptor
+   set layout or the pipeline layout changes for it. */
+static VkPipeline       s_pipeTint, s_pipeTint2;
 /* THE SHARP LAYER (landing 3). Its three programs share one layout -- G19c gave
    all three a 16-byte block at binding 32 and CURS/MM three samplers at 40..42
    -- so one descriptor set layout serves them and `SDSET_*` indexes one
@@ -249,6 +254,37 @@ static VkImageView      s_atView, s_palView, s_dumView, s_glView;
 static int              s_atDim, s_glW, s_glH;
 static unsigned         s_atSerial, s_palSerial, s_glSerial;
 static int              s_atHave, s_palHave, s_dumReady, s_glHave;
+/* THE LIGHTEN TABLE (landing 8d): 256 wide by 32 tall, R8, so `TINT_FS`'s
+   `texelFetch(uShade, ivec2(index, row))` is the engine's own
+   `LUT[row * 256 + index]` with no arithmetic in between. The hand-over's
+   bytes are already row-major 32 x 256, so the upload is one `copy_rect` of
+   the block. Uploaded on a serial change, like the atlas and the palette. */
+static VkImage          s_lutImg;
+static VkDeviceMemory   s_lutMem;
+static VkImageView      s_lutView;
+static unsigned         s_lutSerial;
+static int              s_lutHave;
+/* ...AND THE SNAPSHOT A TINT READS. A tint is a read-modify-write of the twin
+   it draws into, and sampling an attachment a draw is writing is undefined, so
+   the box is copied out to this image first and the draw samples the copy.
+
+   AT THE SAME COORDINATES, which is why it is sized to the largest twin any
+   tint has landed on rather than to the largest BOX: `TINT_FS` indexes it with
+   `gl_FragCoord` and there is no offset uniform to get wrong. One image for
+   the module, grown and never shrunk -- 640x480 in the shell, 614 KB, and the
+   shell is the only place tints occur at all.
+
+   IT IS NOT DOUBLE-BUFFERED AND DOES NOT NEED TO BE: every write to it and
+   every read of it is recorded into ONE command buffer in submission order,
+   with a layout transition between each pair, so the copy for tint n+1 cannot
+   overtake the draw that read tint n. That is an ordering inside a queue, not
+   a timing argument. */
+static VkImage          s_tintImg;
+static VkDeviceMemory   s_tintMem;
+static VkImageView      s_tintView;
+static int              s_tintW, s_tintH;
+static VkImageLayout    s_tintLay;
+static unsigned         s_tintOps;
 /* THE RESTORED UI ATLAS IS NOT HERE ANY MORE (landing 11-5e-2b). It was an
    RGBA8 image of the same dim and the same shelf as the indexed one, uploaded
    from `atlasRgb` -- the texels the GL lane's restorer had painted, read back
@@ -492,12 +528,24 @@ static void lay_to(VkCommandBuffer cb, VkImage img, VkImageLayout* cur, VkImageL
         sa = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT; break;
     case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
         ss = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT; sa = VK_ACCESS_SHADER_READ_BIT; break;
+    /* TRANSFER_SRC ARRIVED WITH LANDING 8d's TINT, and it needed a case on BOTH
+       sides rather than the `default`. Leaving from it through the default
+       would have given `TOP_OF_PIPE`, which waits for nothing -- so the write
+       that follows a tint's snapshot copy could be ordered before the copy's
+       own READ of the same image (a write-after-read hazard, the one kind an
+       execution dependency alone fixes and a missing one silently corrupts).
+       Arriving at it through the default would have named the FRAGMENT stage
+       for what is a transfer. */
+    case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+        ss = VK_PIPELINE_STAGE_TRANSFER_BIT; sa = VK_ACCESS_TRANSFER_READ_BIT; break;
     default:
         ss = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT; sa = 0; break;
     }
     switch (to) {
     case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
         ds = VK_PIPELINE_STAGE_TRANSFER_BIT; da = VK_ACCESS_TRANSFER_WRITE_BIT; break;
+    case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+        ds = VK_PIPELINE_STAGE_TRANSFER_BIT; da = VK_ACCESS_TRANSFER_READ_BIT; break;
     case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
         ds = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
         da = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT; break;
@@ -635,8 +683,14 @@ static TWIN* tw_make(const TAGPU_VKPASS* d, unsigned surf, int w, int h)
     if (s_ntw >= TW_MAX && !tw_drop(d, &s_tw[0])) return NULL;
     t = &s_tw[s_ntw];
     memset(t, 0, sizeof *t);
+    /* TRANSFER_SRC IS LANDING 8d'S, and it is the only usage this module adds
+       for the whole of the focus tint: a tint copies the box it is about to
+       rewrite out to `s_tintImg` first, because a draw may not sample the
+       attachment it writes. Nothing else in this file reads a twin by
+       transfer. */
     if (!mk_image(d, w, h, VK_FORMAT_R8G8_UNORM,
-                  VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                  VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                  VK_IMAGE_USAGE_SAMPLED_BIT |
                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
                   &t->img, &t->mem, &t->view))
         return NULL;
@@ -1230,6 +1284,15 @@ static int build(const TAGPU_VKPASS* d)
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_STR_FS,
                          sizeof tagpu_spv_tagpu_gui_surf_STR_FS / 4,
                          s_twRp2, 2, &s_pipeStr2)) return 0;
+    /* the tint, on the same two passes: it writes both locations exactly as
+       the other three do, so the one-attachment edition simply discards the
+       colour write [landing 8d] */
+    if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_TINT_FS,
+                         sizeof tagpu_spv_tagpu_gui_surf_TINT_FS / 4,
+                         s_twRp, 1, &s_pipeTint)) return 0;
+    if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_TINT_FS,
+                         sizeof tagpu_spv_tagpu_gui_surf_TINT_FS / 4,
+                         s_twRp2, 2, &s_pipeTint2)) return 0;
     if (!build_sharp_rp(d)) return 0;
     if (!build_sharp_pipe(d, tagpu_spv_tagpu_gui_surf_SHARP_FS,
                           sizeof tagpu_spv_tagpu_gui_surf_SHARP_FS / 4, &s_pipeFlat)) return 0;
@@ -1482,8 +1545,8 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     int nsd = 0;
     VkDeviceSize mmPicOff = 0, mmEngOff = 0, sStride = 0;
     VkDeviceSize stNeed = 0, stOff = 0, uStride, fStride;
-    VkDeviceSize atOff = 0, palOff = 0;
-    int atUp = 0, palUp = 0;
+    VkDeviceSize atOff = 0, palOff = 0, lutOff = 0;
+    int atUp = 0, palUp = 0, lutUp = 0;
     TWIN* cur = NULL;
     int rpOpen = 0;
     int drawn = 0;
@@ -1779,6 +1842,24 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                and not with the quads. [BAR: landing 8a; RECT: landing 8b.] */
             if (bw < 1 || bh < 1) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
             break;
+        case TAGPU_GUIOP_TINT:
+            /* THE TINT IS A DRAW, unlike the other three geometric ops: there
+               is no clear value for "whatever was here, remapped". One quad,
+               one uniform window, one descriptor set -- `CPY_FS`'s cost.
+               THE ROW IS BOUNDED IN THIS FILE'S OWN TERMS, which is this
+               pass's rule and not a duplicate of the producer's: `fg` indexes
+               a 32-row image and a row past the end is a sampler read this
+               file cannot describe, whatever the other side believes it sent.
+               THE TABLE IS A PRECONDITION and its absence is a `behind` rather
+               than a skip: the drain does not mirror a tint without one, so a
+               tint arriving here with `h.shade == NULL` means the two halves
+               disagree, and a store that quietly skips ops the other half
+               applied is the silent divergence this pass exists to avoid. */
+            if (bw < 1 || bh < 1) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
+            if (o->fg >= TAGPU_GUI_SHADE_ROWS) { if (!behind(d, "a tint row past the table")) goto refuse; return 0; }
+            if (!h.shade) { if (!behind(d, "a tint with no shade table")) goto refuse; return 0; }
+            ndraw++; nquad++;
+            break;
         case TAGPU_GUIOP_FREE:
         case TAGPU_GUIOP_RESET:
             break;
@@ -1805,6 +1886,11 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         atUp = 1; stNeed += (VkDeviceSize)h.atlasDim * h.atlasRows;
     }
     if (h.pal && (!s_palHave || s_palSerial != h.palSerial)) { palUp = 1; stNeed += 256 * 4; }
+    /* THE LIGHTEN TABLE, on the palette's rule: uploaded when its serial moves,
+       which for this table is once a session in practice. [Landing 8d.] */
+    if (h.shade && (!s_lutHave || s_lutSerial != h.shadeSerial)) {
+        lutUp = 1; stNeed += TAGPU_GUI_SHADE_BYTES;
+    }
     /* THE MINIMAP'S TWO, WIDENED RGB8 -> RGBA8 ON THE WAY IN, so what they
        reserve is FOUR bytes a texel and not three. The picture moves on a map
        load and a palette change and says so with a serial; the engine's pair
@@ -1936,6 +2022,19 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         memcpy(s->stMap + stOff, h.pal, 256 * 4);
         stOff += 256 * 4;
     }
+    if (lutUp) {
+        /* 256 WIDE BY 32 TALL, so row-major `[row][index]` is `(x, y)` with no
+           arithmetic in the shader and the hand-over's block copies straight
+           in. The image is never recreated -- its size is a constant of the
+           format -- so there is no retire here and no `ret_push`. */
+        if (!s_lutImg &&
+            !mk_image(d, 256, (int)TAGPU_GUI_SHADE_ROWS, VK_FORMAT_R8_UNORM,
+                      VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                      &s_lutImg, &s_lutMem, &s_lutView)) goto refuse;
+        lutOff = stOff;
+        memcpy(s->stMap + stOff, h.shade, TAGPU_GUI_SHADE_BYTES);
+        stOff += TAGPU_GUI_SHADE_BYTES;
+    }
 
     if (atUp) {
         img_barrier(cb, s_atImg,
@@ -2034,6 +2133,22 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
         s_palHave = 1; s_palSerial = h.palSerial;
+    }
+    if (lutUp) {
+        img_barrier(cb, s_lutImg,
+                    s_lutHave ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                              : VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    s_lutHave ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                              : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                    s_lutHave ? VK_ACCESS_SHADER_READ_BIT : 0,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+        copy_rect(cb, s->stage, lutOff, s_lutImg, 0, 0, 256, (int)TAGPU_GUI_SHADE_ROWS);
+        img_barrier(cb, s_lutImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        s_lutHave = 1; s_lutSerial = h.shadeSerial;
     }
     /* no barrier and no copy for the engine's frame: `tagpu_vk_surf_prepare`
        recorded both into this same command buffer, for this same slot, before
@@ -2441,6 +2556,143 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                engine has just repainted. */
             tw_col_drop(cb, t, ux, uy, uw, uh);
             break; }
+        /* ---- THE FOCUS TINT (landing 8d) -----------------------------------
+           The only op in the stream that READS ITS DESTINATION: `0x4CC8DF`
+           does `dst = LUT[row*256 + dst]` per pixel, and a draw may not sample
+           the attachment it is writing. So this is a snapshot and then a draw,
+           and it lives down here with the transfers rather than up with the
+           other draws because the snapshot is a `vkCmdCopyImage`, which is
+           illegal inside a render pass instance.
+
+           WHY A COPY AND NOT A SUBPASS SELF-DEPENDENCY. Core Vulkan can do
+           this in one pass -- declare the attachment as an input attachment
+           too, add a `VkSubpassDependency` with `srcSubpass == dstSubpass` and
+           `BY_REGION`, and `subpassLoad()` gives the current value at this
+           fragment. That is the textbook answer and it was rejected for this
+           landing on blast radius, not on merit: it puts the twin attachment
+           in `VK_IMAGE_LAYOUT_GENERAL` for EVERY op of EVERY twin, adds a
+           binding to the descriptor set layout that every other draw's set
+           must then fill with its own destination, and rewrites the
+           synchronisation of a shared, load-bearing path -- the one class this
+           project's own rules single out as failing silently. A copy plus a
+           draw costs one render-pass instance per tinted edge and touches
+           nothing but this case. If the cost ever shows up in a frame time,
+           the self-dependency is the measured next step.
+
+           SIX RECTANGLES, TWENTY-FOUR EDGES, PER FOCUSED GADGET.
+           `0x4A16F0` walks levels 31, 28, 24, 19, 13, 6 over rectangles
+           expanding by one pixel a step, so a menu with a focused button
+           spends 24 of these a draw. Each is one pixel thick. */
+        case TAGPU_GUIOP_TINT: {
+            VkRenderPassBeginInfo rb = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+            VkImageCopy rgn;
+            float qv[24];
+            float* uq;
+            int* fq;
+            uint32_t dynb[2];
+            VkDeviceSize vbOff;
+            VkDescriptorSet dst_;
+            int si_ = 0;
+            int x0 = o->l, y0 = o->t, x1 = o->r, y1 = o->b;
+            t = tw_find(o->surf);
+            /* THE SAME REFUSAL EVERY OTHER DRAW MAKES: the GL lane had a twin
+               and this store does not, which is the definition of behind. */
+            if (!t) { sdWhy = "an op names a surface this store never seeded"; goto standdown; }
+            if (!s_lutHave) { sdWhy = "a tint before the shade table was uploaded"; goto standdown; }
+            if ((o->col & TAGPU_GUICOL_DST) && !t->colImg) {
+                if (!tw_colour(d, t)) {
+                    sdWhy = "the GL lane gave a twin colour and this one could not";
+                    goto standdown;
+                }
+            }
+            tw_fresh(cb, t);
+            /* CLAMPED TO THE TWIN BEFORE ANYTHING ELSE, because both the copy
+               region and the render area are undefined outside it. The
+               producer already clips to the surface; this is this file's own
+               bound on a value it did not compute. */
+            if (x0 < 0) x0 = 0;
+            if (y0 < 0) y0 = 0;
+            if (x1 > t->w - 1) x1 = t->w - 1;
+            if (y1 > t->h - 1) y1 = t->h - 1;
+            if (x0 > x1 || y0 > y1) break;
+            /* THE SNAPSHOT IMAGE COVERS THE WHOLE TWIN, not just the box, so
+               that the copy lands at the SAME COORDINATES and `TINT_FS` can
+               index it with `gl_FragCoord` -- no offset uniform, nothing to
+               get the sign of wrong. Grown and never shrunk. */
+            if (s_tintW < t->w || s_tintH < t->h) {
+                int nw = s_tintW > t->w ? s_tintW : t->w;
+                int nh = s_tintH > t->h ? s_tintH : t->h;
+                /* RETIRED, NOT DESTROYED: an earlier frame's tint draw may
+                   still be in flight naming this view. */
+                if (!ret_push(d, s_tintImg, s_tintMem, s_tintView, VK_NULL_HANDLE)) goto refuse;
+                s_tintImg = VK_NULL_HANDLE; s_tintMem = VK_NULL_HANDLE;
+                s_tintView = VK_NULL_HANDLE; s_tintW = s_tintH = 0;
+                if (!mk_image(d, nw, nh, VK_FORMAT_R8G8_UNORM,
+                              VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                              &s_tintImg, &s_tintMem, &s_tintView)) goto refuse;
+                s_tintW = nw; s_tintH = nh;
+                s_tintLay = VK_IMAGE_LAYOUT_UNDEFINED;
+            }
+            tw_to(cb, t, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            lay_to(cb, s_tintImg, &s_tintLay, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            memset(&rgn, 0, sizeof rgn);
+            rgn.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            rgn.srcSubresource.layerCount = 1;
+            rgn.dstSubresource = rgn.srcSubresource;
+            rgn.srcOffset.x = x0; rgn.srcOffset.y = y0;
+            rgn.dstOffset = rgn.srcOffset;
+            rgn.extent.width = (uint32_t)(x1 - x0 + 1);
+            rgn.extent.height = (uint32_t)(y1 - y0 + 1);
+            rgn.extent.depth = 1;
+            /* ONLY THE INDEX PLANE IS SNAPSHOTTED. The colour twin is not read
+               by `TINT_FS` at all -- the op changes the index, so whatever
+               restored colour stood there is colour for a different index and
+               is written to zero rather than remapped. */
+            vkCmdCopyImage(cb, t->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           s_tintImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rgn);
+            lay_to(cb, s_tintImg, &s_tintLay, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            tw_to(cb, t, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            if (!set_claim(d, s, s_tintView, s_lutView, QVS_SZ, TWF_SZ, &si_)) {
+                sdWhy = "this frame claimed more distinct images than there are sets";
+                goto standdown; }
+            dst_ = s->sets[si_];
+            uq = (float*)(s->ubMap + (VkDeviceSize)drawn * uStride);
+            fq = (int*)(s->fbMap + (VkDeviceSize)drawn * fStride);
+            vbOff = (VkDeviceSize)quads * 24 * sizeof(float);
+            uq[0] = (float)t->w; uq[1] = (float)t->h;
+            fq[0] = (int)o->fg;                        /* uRow */
+            quadv(qv, (float)x0, (float)y0, (float)(x1 + 1), (float)(y1 + 1), 0, 0, 0, 0);
+            memcpy(s->vbMap + vbOff, qv, sizeof qv);
+            dynb[0] = (uint32_t)((VkDeviceSize)drawn * uStride);
+            dynb[1] = (uint32_t)((VkDeviceSize)drawn * fStride);
+            rb.renderPass = t->colImg ? s_twRp2 : s_twRp;
+            rb.framebuffer = t->colImg ? t->fb2 : t->fb;
+            rb.renderArea.extent.width = (uint32_t)t->w;
+            rb.renderArea.extent.height = (uint32_t)t->h;
+            vkCmdBeginRenderPass(cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
+            set_viewport(cb, t->w, t->h);
+            set_scissor(cb, x0, y0, x1 - x0 + 1, y1 - y0 + 1, t->w, t->h);
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              t->colImg ? s_pipeTint2 : s_pipeTint);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    s_ploTwin, 0, 1, &dst_, 2, dynb);
+            vkCmdBindVertexBuffers(cb, 0, 1, &s->vb, &vbOff);
+            vkCmdDraw(cb, 6, 1, 0, 0);
+            /* CLOSED HERE, so the loop's invariant -- no pass open at the top
+               of this switch -- holds for the op after this one, tint or not.
+               `cur` is already NULL and stays so. */
+            vkCmdEndRenderPass(cb);
+            drawn++; quads++;
+            /* SAID ONCE, on the first edge this lane ever draws. The counter
+               behind it would otherwise be a write-only static, which this
+               module has shipped eighteen of before and which `-Wall` cannot
+               see; one line that proves the path is live is worth more than a
+               number nothing prints. */
+            if (!s_tintOps++)
+                plog(d, "gui: the focus tint is drawing - surface %08X, box "
+                        "(%d,%d)-(%d,%d), row %u of the lighten table",
+                     o->surf, x0, y0, x1, y1, (unsigned)o->fg);
+            break; }
         default: break;
         }
     }
@@ -2820,6 +3072,11 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     kill_image(d, &s_mmPicImg, &s_mmPicMem, &s_mmPicView);
     kill_image(d, &s_mmEngImg, &s_mmEngMem, &s_mmEngView);
     kill_image(d, &s_dumImg, &s_dumMem, &s_dumView);
+    /* the tint's two: the lighten table and the snapshot a tint samples */
+    kill_image(d, &s_lutImg,  &s_lutMem,  &s_lutView);
+    kill_image(d, &s_tintImg, &s_tintMem, &s_tintView);
+    s_lutHave = 0; s_lutSerial = 0;
+    s_tintW = s_tintH = 0; s_tintLay = VK_IMAGE_LAYOUT_UNDEFINED;
     s_atDim = 0; s_atHave = 0; s_atSerial = 0;
     s_colRearm = 0; s_colRearmSeen = 0;
     s_palHave = 0; s_palSerial = 0;
@@ -2834,6 +3091,8 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     if (s_pipeSpr2) { vkDestroyPipeline(d->dev, s_pipeSpr2, NULL); s_pipeSpr2 = VK_NULL_HANDLE; }
     if (s_pipeCpy2) { vkDestroyPipeline(d->dev, s_pipeCpy2, NULL); s_pipeCpy2 = VK_NULL_HANDLE; }
     if (s_pipeStr2) { vkDestroyPipeline(d->dev, s_pipeStr2, NULL); s_pipeStr2 = VK_NULL_HANDLE; }
+    if (s_pipeTint) { vkDestroyPipeline(d->dev, s_pipeTint, NULL); s_pipeTint = VK_NULL_HANDLE; }
+    if (s_pipeTint2) { vkDestroyPipeline(d->dev, s_pipeTint2, NULL); s_pipeTint2 = VK_NULL_HANDLE; }
     if (s_pipeCurs) { vkDestroyPipeline(d->dev, s_pipeCurs, NULL); s_pipeCurs = VK_NULL_HANDLE; }
     if (s_pipeMM)   { vkDestroyPipeline(d->dev, s_pipeMM,   NULL); s_pipeMM   = VK_NULL_HANDLE; }
     if (s_pipeFlat) { vkDestroyPipeline(d->dev, s_pipeFlat, NULL); s_pipeFlat = VK_NULL_HANDLE; }

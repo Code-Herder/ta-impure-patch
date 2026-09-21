@@ -36,7 +36,8 @@ enum {
                        `PK_PIXELS` this op published its whole box, interior
                        included, read out of the surface at the flip: it carried
                        pixels the op never wrote, from a moment after it ran.
-                       `0x4BF7B0` does NOT produce this -- it tints. */,
+                       `0x4BF7B0` does NOT produce this -- it tints, and since
+                       landing 8d it produces `PK_TINT` below. */,
     PK_ASSET        /* a DECODED ASSET SURFACE, whole: `w`/`h`/`pitch` as a seed,
                        and its bytes follow in the arena. It is NOT `PK_SEED`,
                        and the difference is the whole reason it may cross where
@@ -68,7 +69,49 @@ enum {
                        also what makes reading it AT THE FLIP exact, where the
                        same read for `PK_PIXELS` is a box of bytes from a moment
                        later than the draw it stands for. [Landing: the shell
-                       backdrop, 2026-09-21.] */
+                       backdrop, 2026-09-21.] */,
+    PK_SHADE,       /* the engine's LIGHTEN table, `globals+0xC8`, 32 rows of
+                       256 bytes, in the arena. It is a palette-derived REMAP
+                       and not a picture -- the same category as the palette
+                       itself, which has always crossed -- so it is on the
+                       allowed side of the clean cut for the reason `PK_ASSET`
+                       is: nothing composed it.
+
+                       PUBLISHED AHEAD OF THE FIRST `PK_TINT` OF A BATCH AND AT
+                       MOST ONCE PER RESET, and the ordering is the whole
+                       delivery argument. The queue is FIFO and the drain
+                       applies in order, so a tint that reaches the consumer
+                       has the table it indexes; a batch that runs out of room
+                       loses the table AND the tints behind it together, and
+                       raises the reset that re-arms `s_lhtSent`. No ack, no
+                       serial, no retry -- the things `PK_ASSET` needed because
+                       ITS payload had to survive a consumer that was not
+                       recording. This one lands in a file-static the render
+                       half keeps, which the hand-over then carries by pointer
+                       every frame, so an abandoned mirror frame cannot lose
+                       it. */
+    PK_TINT         /* landing 8d: ONE EDGE of a focus rectangle -- the box is
+                       `l,t,r,b` inclusive and one pixel thick, `fg` is the ROW
+                       of the lighten table, and NOTHING follows in the arena.
+
+                       It is a READ-MODIFY-WRITE, which is what kept `0x4BF7B0`
+                       on `PK_PIXELS` through landings 8a-8c and therefore off
+                       the screen entirely since the clean cut: the writer
+                       `0x4CC8DF` does `dst = LUT[row*256 + dst]` per pixel, so
+                       there is no colour to name. What crosses instead is the
+                       OPERATION -- a box, a row, and (once) the table -- and
+                       the consumer applies it to its own twin. No engine pixel
+                       is involved at any point.
+
+                       ONE EDGE PER OP, NOT ONE BOX. `0x4BF7B0` draws top,
+                       right, bottom then left through four separate
+                       `0x4BEC70` calls, each clipped on its own by `0x4BEA20`,
+                       and the four CORNERS are therefore tinted TWICE --
+                       `LUT[row][LUT[row][x]]`. Publishing the box would have
+                       had to carry both the clip rect and that overlap rule;
+                       four ops carry them by construction, in the engine's own
+                       order, and `op_add`'s existing clip drops an edge that
+                       falls outside exactly as `0x4BEA20` does. */
 };
 
 typedef struct TAGPU_PUBOP {
@@ -116,6 +159,12 @@ typedef struct TAGPU_PUBOP {
     unsigned       assetTok;        /* PK_ASSET: the offer's one-time token     */
     unsigned       flip;            /* the flip this belongs to (diagnostics)   */
 } TAGPU_PUBOP;
+
+/* `TAGPU_GUI_SHADE_ROWS` / `_BYTES` -- the lighten table's shape, and the
+   argument that the shape is the bound -- are in the PUBLIC header
+   (`inc/tagpu_gui.h`), beside the `shade` pointer the hand-over carries,
+   because the Vulkan lane needs them and this header is private to the
+   tagpu_gui_* family. */
 
 #define TAGPU_GUI_ASSET_TRIES 240u           /* offers before an asset is given up on */
 #define TAGPU_GUI_QCAP   (1u << 16)          /* ops                            */
