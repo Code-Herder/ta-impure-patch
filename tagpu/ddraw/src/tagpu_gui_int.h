@@ -58,8 +58,13 @@ enum {
                        surface without passing a leaf would leave the twin
                        holding older bytes with nothing to re-offer. Wrong
                        picture, never a crash. `s_assetDrift` in the hook
-                       measures exactly that under `census.on` and reads 0; the
-                       hole is named rather than papered over. Being stable is
+                       measures it under `census.on` and reads 0 -- but read
+                       that as NO DRIFT AFTER THE ACK, not as no drift since the
+                       loader: the census refreshes each surface's shadow every
+                       pass and the test needs `assetSent`, which lands one to
+                       three presents after the bytes were taken, so movement
+                       inside that gap is folded into the shadow unseen. The
+                       hole is named and bounded rather than papered over. Being stable is
                        also what makes reading it AT THE FLIP exact, where the
                        same read for `PK_PIXELS` is a box of bytes from a moment
                        later than the draw it stands for. [Landing: the shell

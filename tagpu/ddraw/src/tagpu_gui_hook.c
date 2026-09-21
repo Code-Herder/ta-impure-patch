@@ -900,8 +900,33 @@ static void op_add(int kind, SURF* s, int l, int t, int r, int b)
        drain drops, and the screen drew black. Past this line every remaining
        path either records the op or drops it for want of room, and both mean
        pixels are being written, so the claim is exactly as strong as it was.
-       [FOUND by the landing review.] */
-    if (s->isAsset) { s->isAsset = 0; s_assetRevoked++; }
+       [FOUND by the landing review.]
+
+       IT IS PERMANENT, AND THE RECOVERIES AROUND IT ARE PER-EPISODE, so a
+       revocation that lands on a surface whose bytes have already crossed says
+       nothing now and goes black at the NEXT RESEED: the reseed clears
+       `seeded`, the offer branch is refused on `isAsset`, no `PK_COPY` is
+       emitted, and `PK_PIXELS` is dropped. **The review proposed restoring the
+       claim at the reseed (a `wasAsset` bit) and that is REFUSED, because it
+       would breach the clean cut**: a surface something drew into holds
+       COMPOSED pixels, and composed pixels are the one thing that may not
+       cross. There is no by-design repair that respects the cut -- the honest
+       outcome for a copy whose source is composed is that we do not carry it --
+       so what is added instead is that the case cannot happen QUIETLY. It fires
+       at most once per surface, because this is the line that clears the flag.
+       [The landing review's M2, second half; the first half rejected above.] */
+    if (s->isAsset) {
+        if (s->assetSent || s->assetTok) {
+            char rb[160];
+            _snprintf(rb, sizeof rb,
+                      "gui asset: REVOKED a surface whose bytes already crossed — base %08X %dx%d, "
+                      "kind %s box=(%d,%d)-(%d,%d); it will go black at the next reseed",
+                      s->base, s->w, s->h, OP_NAME[kind], l, t, r, b);
+            rb[sizeof rb - 1] = 0;
+            glog(rb);
+        }
+        s->isAsset = 0; s_assetRevoked++;
+    }
     s_kindArea[kind] += (unsigned)(r - l + 1) * (unsigned)(b - t + 1);
     if (s_nops >= MAX_OPS) { s_opsDropped++; return; }
     o = &s_ops[s_nops++];
@@ -939,37 +964,36 @@ unsigned tagpu_gui_flips(void) { return s_flips; }
 TAGPU_GUIQ g_guiq;                    /* the queue; storage below              */
 static TAGPU_PUBOP    s_qops[TAGPU_GUI_QCAP];
 static unsigned char* s_arena;
-/* THE PUBLISHER HAS NO PRODUCER GATE AND NO CONSUMER SINCE THE CLEAN CUT, and
-   the heartbeat below says so rather than leaving `published=0` to be chased.
-   `g_gui_draw` was written in exactly one place -- `tagpu_gui_surf.c`'s trigger
-   poll on the render thread -- and that file is deleted, so this word is 0 for
-   the life of every process. `publish()` returns on its first line, `g_guiq`
-   never receives an op, the arena is never written, and `gaf_capture` /
-   `text_capture` are reached only through the census's half of their
-   `(s_census || g_gui_draw)` gate.
+/* `g_gui_draw` IS THE CONSUMER SAYING IT IS THERE: 0 means nothing drains the
+   queue, so `publish()` returns on its first line, `g_guiq` receives no op, the
+   arena is never written, and `gaf_capture` / `text_capture` are reached only
+   through the census's half of their `(s_census || g_gui_draw)` gate.
 
-   WHAT STILL WORKS, which is the whole of what `tagpu_gui.on` now buys: the 17
+   THIS COMMENT USED TO SAY THE WORD HAD NO WRITER AT ALL, and that it was 0 for
+   the life of every process because `tagpu_gui_surf.c` had been deleted with
+   the clean cut. Both halves are false and have been since the renderer was
+   restored: the file exists, `tagpu_gui_surf.c` writes this word (`g_gui_draw =
+   on`), and an ordinary boot measures `published=4653791 bytes=902287148
+   draw=1`. Every consequence drawn from the old claim went with it -- the
+   transport is not "unreachable, not wrong", the queue's tail pointers are not
+   writerless, and no future landing has to "bring a drain in the same landing"
+   because the drain is already here. The paragraph outlived the restore by
+   several commits, was corrected in the heartbeat's comment 200 lines below
+   first, and is corrected here second, which is the wrong order and the reason
+   it is worth saying plainly: a stale note is worse than no note, and the big
+   authoritative copy is the one that gets believed.
+   [FOUND by the landing review of 381465c, 2026-09-21.]
+
+   WHAT THE LEVER BUYS WITHOUT A CONSUMER is still true and still useful: the 17
    leaves record ops into `s_ops`, and the census diffs each surface against its
-   own copy and reports what no op explains. That is a harness mode, which is
-   why the lever is off the defaults table.
+   own copy and reports what no op explains. That is the harness mode, which is
+   why `census` is a token of its own.
 
-   NOT DELETED WITH THE REST OF THE CUT, deliberately. The transport --
-   `publish`, `g_guiq`, the arena, `consumer_stalled`, `dedup`, the seen table
-   and the two captures -- is unreachable, not wrong: it writes no engine
-   memory, produces no pixel and commits its 16 MB only when the lever is
-   armed. It is also the only record in the tree of how UI art is decoded at
-   the engine's OWN blit, which `gaf_capture`'s comment argues is the only
-   moment the art is alive by the engine's ordering rather than by our hope --
-   the thing a native UI pass has to do first. Deleting it is a landing of its
-   own, with its own review, not a tail on this one.
-
-   IF A CONSUMER COMES BACK IT NEEDS A DRAIN IN THE SAME LANDING. `g_guiq.qTail`
-   and `aTail` lost their only writers with the same file, so a producer
-   restored alone would fill the queue, trip `consumer_stalled` at a quarter of
-   the queue or half the arena, and latch `s_stalled` for the session --
-   `consumer_stalled`'s release tests `head == tail`, which a frozen tail can
-   never satisfy. [Both halves found by the landing review, 2026-09-20.] */
-volatile int g_gui_draw = 0;          /* NO WRITER since the clean cut: see above */
+   THE TRANSPORT IS ALSO THE ONLY RECORD IN THE TREE of how UI art is decoded at
+   the engine's OWN blit -- `gaf_capture`'s comment argues that is the only
+   moment the art is alive by the engine's ordering rather than by our hope,
+   which is the thing a native UI pass has to get right first. */
+volatile int g_gui_draw = 0;          /* 0 until the consumer arms: see above */
 static int   s_pubOverflow = 0;
 static unsigned s_pubOps = 0, s_pubBytes = 0;
 
@@ -1969,15 +1993,24 @@ static void publish(unsigned flipSurf)
             if (src && src->isAsset && !src->assetSent && src->w > 0 && src->h > 0 &&
                 g_guiq.mirArmed &&
                 src->assetTries < TAGPU_GUI_ASSET_TRIES) {
+                /* THE TOKEN IS STAMPED ON THE OP AND ADOPTED BY THE SURFACE
+                   ONLY ONCE THE OFFER IS COMMITTED. Writing `src->assetTok`
+                   first retired the previous token on the arena-full path --
+                   `pub_surface_bytes` returns without committing -- so an echo
+                   already on its way for the offer that DID go out could no
+                   longer match it, costing a re-offer for no reason. A local
+                   until `pub_commit`, and `assetTok` then describes only offers
+                   that actually left. [The landing review's L5.] */
+                unsigned tok = asset_token();
                 TAGPU_PUBOP* a = pub_op(PK_ASSET, src->base);
                 if (!a) return;
-                src->assetTok = asset_token();
-                a->assetTok = src->assetTok;
+                a->assetTok = tok;
                 a->w = src->w; a->h = src->h; a->pitch = src->pitch;
                 a->l = 0; a->t = 0;
                 a->r = (short)(src->w - 1); a->b = (short)(src->h - 1);
                 if (!pub_surface_bytes(src, 0, 0, src->w - 1, src->h - 1, a)) return;
                 pub_commit();
+                src->assetTok = tok;
                 src->assetTries++;
                 src->seeded = 1;          /* the copy below may now name it */
                 s_assetSends++;
@@ -1989,6 +2022,21 @@ static void publish(unsigned flipSurf)
                 pub_commit();
                 continue;
             }
+            /* A THROTTLED ASSET PUBLISHES NOTHING, NOT A PACKET THE DRAIN WILL
+               DROP -- and without this the `mirArmed` throttle saves no bytes
+               at all, which is what the landing review measured against the
+               claim. Skipping the offer leaves `seeded` at 0, so this copy fell
+               through to the `PK_PIXELS` below, which copies THE DESTINATION'S
+               WHOLE BOX -- for the shell backdrop the same 307 200 bytes, into
+               the same arena, for a drain that has dropped every `PK_PIXELS`
+               since the clean cut. Same cost, different packet kind.
+
+               EMITTING NOTHING IS INDISTINGUISHABLE IN THE PICTURE: a dropped
+               packet leaves the destination twin holding what it already had,
+               and so does no packet. Only the memcpy differs. The surface is
+               re-offered as soon as `mirArmed` reads 1, because nothing here
+               retires an offer. [The landing review's M3.] */
+            if (src && src->isAsset && !src->seeded) continue;
         }
         /* everything else — and a copy from a source we do not twin — is its
            box's bytes as they stand now */

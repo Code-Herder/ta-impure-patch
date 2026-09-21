@@ -580,15 +580,31 @@ static int __cdecl before_build(void* e)
     return 0;
 }
 
-/* A SHELL BACKGROUND'S TAG, and the string is MEASURED rather than assumed:
+/* A LOADER-DECODED PCX'S TAG. The string is MEASURED rather than assumed:
    `SurfaceCreateNamed 0x4C69F0` is handed `"bitmaps\FrontendX.PCX"` for the
-   main menu's 640x480 backdrop (read off the trace 2026-09-21; the other tags
-   a shell session creates are "OFFSCREEN", "<SCREEN>.GUI", "SAVE UNDER" and
-   "SAVEMOUSE 1..3"). Only the directory is tested: the file name varies per
-   screen and is not what makes the surface an asset -- what makes it one is
-   that the loader fills it and nothing draws into it, which `op_add` is what
-   actually enforces. Bounded and case-insensitive; a tag that is not a
-   readable string simply is not one of these. */
+   main menu's 640x480 backdrop, and a five-screen walk (2026-09-21) also names
+   `"bitmaps\singlebg.PCX"` and `"bitmaps\Skirmsetup4x.PCX"`; the other tags a
+   shell session creates are "OFFSCREEN", the screen's own name ("MAINMENU.GUI",
+   "SINGLE.GUI", ...), "SAVE UNDER" and "SAVEMOUSE 1..3".
+
+   WHY THE PREFIX IS SAFE, and it is a fact about the BINARY: all 18 call sites
+   of `0x4C69F0` were enumerated and every literal tag resolved, and NONE of the
+   twelve begins with `bitmaps\` -- so this cannot alias one of the engine's
+   composed or scratch surfaces, which is the case that would be a correctness
+   bug. (exe-reverse-engineering.md has the table.)
+
+   THE NAME OF THIS FUNCTION IS NARROWER THAN WHAT IT CLAIMS, deliberately left
+   rather than silently widened: `0x4CAF30` is reached through a generic
+   `bitmaps\<name>.PCX` loader (`0x429290`, four callers, one of them working
+   out of "bitmaps\glamour"), so this matches that whole class and not only the
+   three shell backdrops. That is the RIGHT class: what the tag establishes is
+   "the PCX loader filled this surface", never "this is a menu background". Only
+   the directory is tested because the file name is not what makes a surface an
+   asset -- what makes it one is that the loader fills it and no observed draw
+   covers a pixel of it, which `op_add` is what actually enforces, and a claimed
+   surface that is never a copy source costs nothing either way. Bounded and
+   case-insensitive; a tag that is not a readable string simply is not one of
+   these. [Reach found by the landing review of 381465c.] */
 static int tag_is_shell_bg(const char* tag)
 {
     static const char pre[] = "bitmaps\\";
@@ -622,7 +638,7 @@ static void* __cdecl after_alloc(unsigned int* regs)
        read now -- the surface is blank at this point (see the seed below) and
        the loader has not run -- they cross at the first copy that reads it. */
     if (s) { s->isAsset = tag_is_shell_bg(tag); s->assetSent = 0;
-             s->assetTries = 0; s->assetTok = 0; }   /* the whole triple, as everywhere else */
+             s->assetTries = 0; s->assetTok = 0; }   /* all four, as everywhere else */
     if (s && s_trace) {
         char b[200];
         _snprintf(b, sizeof b, "gui trace: alloc \"%.32s\" %dx%d base %08X (screen %s)",

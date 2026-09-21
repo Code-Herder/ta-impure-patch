@@ -961,6 +961,26 @@ static int       s_mirWant = 0;        /* the Vulkan pass asked for one       */
    and throws it away. Acking there would tell the producer its 300 KB had
    landed when it had not. [The landing review's.] */
 static unsigned  s_mirAssetTok = 0;
+/* ONE SLOT, NOT ONE PER ASSET: a second `PK_ASSET` in the same drain overwrites
+   the first, so only the last is acked. It converges rather than stalling --
+   the acked surface stops offering, so the next present carries one asset and
+   acks it -- at one extra offer per surface per round, and `TAGPU_GUI_ASSET_TRIES`
+   still bounds it. One backdrop per screen is the only case that exists today;
+   an array is the fix if a screen ever loads two. [The landing review's L4.] */
+/* ...AND THE TOKEN THE PUBLISHED RECORD CARRIES, which is a different thing
+   again. `mir_finish` publishing a record is NOT the consumer taking it: it
+   only sets `s_mHave`, and the taking is `tagpu_gui_handover`, which the
+   Vulkan lane calls from `tagpu_vk_gui_prepare` LATER IN THE SAME LOOP
+   ITERATION -- after an acquire that can return VK_ERROR_OUT_OF_DATE_KHR and
+   bail (`tagpu_vk.c`, the swapchain rebuild). The next `mir_begin` then drops
+   the untaken record. Acking at `mir_finish` therefore told the producer its
+   300 KB had landed on a frame where the record was thrown away, and since
+   nothing but an ack retires an offer, the backdrop went black FOR THE REST OF
+   THE EPISODE -- on a path a player reaches by dragging the window, with
+   `asset=n/n/0/0` reading as success. [FOUND by the landing review of 381465c;
+   it is the fifth instance of this landing's one mistake, at the one boundary
+   the first four fixes did not reach.] */
+static unsigned  s_handAssetTok = 0;
 static int       s_mirRec  = 0;        /* ...and this frame is being recorded */
 static unsigned  s_mirLost = 0;        /* frames abandoned for want of room   */
 static int       s_mOther = 0;         /* ops this landing does not carry     */
@@ -1021,6 +1041,13 @@ static void mir_begin(void)
     s_abFrame = 0;          /* the claim never outlives the frame that made it */
     s_mirRec = s_mirWant;
     s_mirAssetTok = 0;
+    /* THE PREVIOUS RECORD'S TOKEN DIES WITH THE PREVIOUS RECORD. If it was
+       never taken, this is what stops a later hand-over acking bytes that were
+       thrown away; if this frame carries no asset, it is what stops a stale
+       token riding out on an unrelated record. Clearing it HERE rather than
+       conditionally in `mir_finish` is what makes both true without a case
+       analysis -- including `mir_finish`'s `lost` arm, which returns early. */
+    s_handAssetTok = 0;
     s_mHave = 0;
 }
 
@@ -2448,10 +2475,13 @@ static void mir_finish(const TAGPU_FRAME* f)
         return;
     }
     s_mHand.lost = 0;
-    /* THE ECHO, AT THE ONE POINT WHERE THE RECORD IS KNOWN TO BE GOING OUT:
-       past `!s_mirWant`, past `!s_mirRec`, past both atlas-generation tests.
-       The producer stops re-offering only for a token it sees here. */
-    if (s_mirAssetTok) { g_guiq.assetAck = s_mirAssetTok; s_mirAssetTok = 0; }
+    /* THE TOKEN MOVES TO THE RECORD; IT IS NOT ECHOED HERE. Past `!s_mirWant`,
+       past `!s_mirRec` and past both atlas-generation tests, this record is
+       good -- but "good" is not "delivered", and the producer must only stop
+       re-offering for bytes the consumer actually holds. The echo is published
+       in `tagpu_gui_handover`, where taking the record is what the call means.
+       Assigned unconditionally so a frame with no asset clears it. */
+    s_handAssetTok = s_mirAssetTok; s_mirAssetTok = 0;
     if (!s_mLayer) {
         s_mHand.presented = 0; s_mHand.surfW = s_mHand.surfH = 0;
         s_mHand.strict = 0; s_mHand.guard = 0; s_mHand.sharpOn = 0;
@@ -2655,6 +2685,14 @@ int tagpu_gui_handover(TAGPU_GUIHAND* out, unsigned now)
     if (s_mFrame != now) return 0;
     *out = s_mHand;
     s_mTaken = 1;
+    /* THE ASSET ECHO, AND THIS IS THE ONE PLACE IT IS TRUE BY DEFINITION. The
+       producer reads `assetAck` to decide an offer is done with; publishing it
+       in the same statement sequence that hands the record out makes "acked"
+       mean "the consumer has these bytes" rather than "a record carrying them
+       was made available and may yet be dropped". An ordering, not a window:
+       there is no path from here that can fail to deliver what `*out` already
+       carries. [The landing review's H1.] */
+    if (s_handAssetTok) { g_guiq.assetAck = s_handAssetTok; s_handAssetTok = 0; }
     return 1;
 }
 

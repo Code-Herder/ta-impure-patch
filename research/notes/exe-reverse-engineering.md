@@ -2982,7 +2982,7 @@ both by address (`main+0x37E1B == *(globals+0xBC) == 0x04490020` in a 1024×768 
   | `0x4669CF` | `0x507518` | `"RADAR FINAL"` |
   | `0x4669FA` | `0x507508` | `"RADAR MAPPED"` |
   | `0x490AD8`, `0x491255`, `0x491B28`, `0x4980D4`, `0x498407` | `0x5091D4` | `"OFFSCREEN"` ×5 |
-  | **`0x4A907C`** | **`[ebp+2]`** | the screen's own name — `"MAINMENU.GUI"`, `"SINGLE.GUI"`, … |
+  | **`0x4A907C`** | **`ebp+2`** (a `lea`, not a load) | the screen's own name — `"MAINMENU.GUI"`, `"SINGLE.GUI"`, … |
   | `0x4A90B5` | `0x509914` | `"SAVE UNDER"` |
   | `0x4C2C22`, `0x4C2C39`, `0x4C2C50` | `0x50A5E8`/`0x50A5DC`/`0x50A5D0` | `"SAVEMOUSE 1/2/3"` |
   | **`0x4CAFB3`** | **`ebx`** | the PCX loader's path — `"bitmaps\FrontendX.PCX"`, … |
@@ -3012,9 +3012,26 @@ both by address (`main+0x37E1B == *(globals+0xBC) == 0x04490020` in a 1024×768 
   `"FLIPSURFACE" 128×352`, `"BKUPSURFACE" 300×480`, and one `"bitmaps\<name>.PCX" 640×480`
   per shell background loaded.
 
-  **NO LITERAL TAG BEGINS WITH `bitmaps\`** — checked against all twelve strings above. That
-  is the property, and the only property, that makes the fork's eight-character prefix test
-  (`tag_is_shell_bg`) unable to claim an engine surface by accident.
+  **NO LITERAL TAG BEGINS WITH `bitmaps\`** — checked against all twelve strings above. That is
+  what stops the fork's eight-character prefix test aliasing one of the engine's composed or
+  scratch surfaces, which is the case that would be a correctness bug.
+
+  **IT IS NOT A TEST FOR "A SHELL BACKDROP", AND SAYING SO WOULD BE THE OVER-REACH.** The twelve
+  literals are only twelve of the fourteen tags; the two REGISTER sites are not bounded by that
+  check, and one of them reaches further than the shell. `0x4CAF30` has three callers, and
+  `0x4292BD` sits inside **`0x429290`** — a generic loader that formats `bitmaps` (`0x503384`)
+  with the caller's name and `PCX` (`0x502974`) and loads the result, and which has **four**
+  callers of its own, one of them (`0x41DBB2`) working out of `"bitmaps\glamour"` (`0x502964`).
+  So every surface `0x429290` creates carries a `bitmaps\…PCX` tag and the prefix claims that
+  whole class — not only the three shell backgrounds. The other two direct callers of `0x4CAF30`
+  build `unitpics\<name>.PCX` and do not match.
+
+  **That is the right class rather than a leak, and the distinction is the point**: what the tag
+  establishes is *"the PCX loader filled this surface"*, never *"this is a menu background"*. The
+  fork's `tag_is_shell_bg` is named more narrowly than it behaves; what it actually claims is a
+  loader-decoded PCX, `op_add` re-checks that no observed draw covers a pixel of it, and a
+  surface that is never a copy source costs nothing whether it is claimed or not. [Reach found
+  by the landing review of 381465c; the caller counts and the three strings verified here.]
 - **`SurfaceFree 0x4C6AC0(OFFSCREEN*)`** — `stdcall`, `ret 4`: `if (p && p[+0x2C] & 1)
   0x4D85A0(p)`. Prologue `8B 44 24 04 85 C0`. 23 callers; the GUI's are `0x4A9537`
   (`panel+0xB8`) and `0x4A9549` (`panel+0xBC`) in the teardown arm.
@@ -3605,7 +3622,8 @@ The tag is the file path because **the PCX loader passes its own argument straig
 that single fact is what the fork's `PK_ASSET` rests on. Disassembled 2026-09-21:
 
 ```
-4caf37: mov  ebx,[esp+0x9c]      ; arg0 — the path, held in ebx for the whole function
+4caf37: mov  ebx,[esp+0x9c]      ; arg0 — the path, held in ebx up to the call at 0x4CAFB3
+                                 ;   (0x4CAFB8 then reuses ebx for the returned object)
 4caf41: push ebx
 4caf42: call 0x4bb5b0            ; file open (stdcall, ret 4)  -> ebp = handle
 4caf4b: je   0x4cb06f            ; no file: out

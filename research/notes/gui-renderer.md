@@ -259,10 +259,19 @@ op covers a pixel of the surface as a DESTINATION**.
 **The prefix test is safe because of a fact about the BINARY, not about the trace.** All 18 call
 sites of `0x4C69F0` were enumerated and every literal tag resolved — `"Copy of last game frame"`,
 `"FLIPSURFACE"`, `"BKUPSURFACE"`, the four radar ones, `"OFFSCREEN"`, `"SAVE UNDER"`,
-`"SAVEMOUSE 1..3"` — and **none of them begins with `bitmaps\`**. Only two sites push a register:
-`0x4A907C` (the screen's name) and `0x4CAFB3`, the PCX loader, which passes its own path argument
-straight through. Full table and the loader's disassembly in
-[the engine map](exe-reverse-engineering.html).
+`"SAVEMOUSE 1..3"` — and **none of them begins with `bitmaps\`**. That is what stops the prefix
+aliasing one of the engine's composed or scratch surfaces, which is the case that would be a
+correctness bug. Only two sites push a register: `0x4A907C` (the screen's name) and `0x4CAFB3`,
+the PCX loader, which passes its own path argument straight through.
+
+**But it does not test for "a shell backdrop", and `tag_is_shell_bg` is named more narrowly than
+it behaves.** `0x4CAF30`'s three callers include `0x4292BD`, inside a generic `bitmaps\<name>.PCX`
+loader (`0x429290`) that has four callers of its own — one of them working out of
+`"bitmaps\glamour"`. So the prefix claims every surface that loader fills, not just the three
+shell backgrounds. **That is the right class rather than a leak**: what the tag establishes is
+*"the PCX loader filled this surface"*, never *"this is a menu background"*, and a claimed
+surface that is never a copy source costs nothing at all. Full table, caller counts and the
+loader's disassembly in [the engine map](exe-reverse-engineering.html).
 
 **"Immutable" would be an overclaim, so it is not made.** What `op_add` checks is that no op
 *recorded through the 17 leaves* covered a pixel of the surface; the loader that fills it is itself
@@ -313,7 +322,30 @@ touching the consumer's word. `assetSent` is cleared wherever `seeded` is, becau
 CONSUMER's twin and must die with it — `hud_invalidate`'s "for this debt, not ever", one packet
 along.
 
-**THREE MORE FIXES CAME OUT OF THE REVIEW, and two of them were about the same word — "state".**
+**AND THEN A FIFTH INSTANCE OF THE SAME MISTAKE, AT THE ONE BOUNDARY THE FIRST FOUR DID NOT
+REACH.** The second review found it and it would have shipped. `mir_finish` publishing a record is
+**not** the consumer taking it: it sets `s_mHave`, and the taking is `tagpu_gui_handover`, which
+the Vulkan lane calls from `tagpu_vk_gui_prepare` *later in the same loop iteration* —
+`render_vk.c` runs `tagpu_overlay_draw` (which reaches `mir_finish`) at one line and
+`tagpu_vk_frame` at the next. In between sits `vkAcquireNextImageKHR`, and on
+`VK_ERROR_OUT_OF_DATE_KHR` it returns `-1` before `tagpu_vk_gui_prepare` is ever called. The next
+`mir_begin` drops the untaken record. So:
+
+> the ack went out, the record was thrown away, `assetSent` was set, **nothing re-offered**, and
+> `PK_COPY` kept naming a twin that was never seeded — a black backdrop for the rest of the
+> episode, reading `asset=n/n/0/0` as success, on a path a player reaches by dragging the window.
+
+The fix is the ordering, not a retry: **the echo moved into `tagpu_gui_handover`, published in the
+same statement sequence that copies the record out and sets `s_mTaken`.** "Acked" now means "the
+consumer has these bytes" by definition rather than "a record carrying them was made available and
+may yet be dropped", and `mir_begin` clears the pending token so an untaken record acks nothing.
+**Verified by construction and NOT by measurement**: `g_guiq.assetAck` is assigned in exactly one
+place, after `*out = s_mHand`, so no path can publish it without delivering. An attempt to induce
+the failing path by resizing the window produced no swapchain rebuild at all (one `vk: swapchain:`
+line, the original), so the path itself remains unexercised by any test here — said plainly rather
+than dressed up as a passing one.
+
+**FOUR MORE FIXES CAME OUT OF THE REVIEWS, and two of them were about the same word — "state".**
 
 5. **The retry bound was a clock standing in for a state.** `TAGPU_GUI_ASSET_TRIES` (240) is
    ~1.2 s of presents, and while the Vulkan lane was unarmed the producer composed a 307 200-byte
@@ -324,7 +356,16 @@ along.
    what makes a stale read harmless in both directions: armed-read-as-disarmed skips one present
    and re-offers on the next, disarmed-read-as-armed spends one offer nobody acks. Nothing but the
    echo retires an offer, so it cannot lose the asset. Measured: sends per shell session fell from
-   **49 to 9**, and 22 to 3 acks over a five-screen walk, converging and then stopping.
+   **49 to 9**, and 21-22 sends to 3 acks over a five-screen walk, converging and then stopping.
+
+   **The first version of this fix saved no bytes at all, and the second review caught the claim
+   rather than the code.** Skipping the offer leaves `seeded` at 0, so the very same `OP_COPY` fell
+   through to `PK_PIXELS`, which publishes **the destination's whole box** — for the shell backdrop
+   the identical 307 200 bytes, into the identical arena, for a drain that has dropped every
+   `PK_PIXELS` since the clean cut. Same cost, different packet kind. A throttled asset now
+   publishes *nothing*, which is indistinguishable in the picture (a dropped packet and no packet
+   both leave the destination twin holding what it had) and is the only version where the byte
+   figure is true.
 6. **Revoking before the clip revoked a claim about bytes nothing had touched — and it cost the
    picture.** `op_add` cleared `isAsset` at the top, before the box was clipped to the surface, so
    a *fully clipped* op — one that writes nothing at all — retired the claim. `publish` seeds only
@@ -333,7 +374,21 @@ along.
    screen drew black. Moved past `if (l > r || t > b) return;`, where every remaining path either
    records the op or drops it for want of room — both of which mean pixels are being written — so
    the claim is exactly as strong and the black case is gone.
-7. **`ops_forget_base` forgot the destination and not the source.** A copy whose source had been
+7. **The token was burned before the offer was known to be in flight.** `src->assetTok` was
+   assigned before `pub_surface_bytes`, which returns without committing when the arena is full —
+   retiring the previous token with nothing in flight, so an echo already on its way for the offer
+   that *did* go out could no longer match it. Assigned into a local and adopted after
+   `pub_commit`, so `assetTok` describes only offers that actually left.
+8. **A revocation that lands on a surface whose bytes already crossed is permanent, and every
+   recovery around it is per-episode** — the reseed clears `seeded`/`assetSent`/`assetTries`/
+   `assetTok` but not `isAsset`, so such a surface goes black at the *next* reseed, silently. The
+   review proposed restoring the claim at the reseed (a `wasAsset` bit); **that is refused, because
+   it would breach the clean cut** — a surface something drew into holds COMPOSED pixels, and those
+   are the one thing that may not cross. There is no by-design repair that respects the cut, so
+   what was added instead is that the case cannot happen *quietly*: the revocation logs a line
+   naming the surface and saying it will go black at the next reseed. It fires at most once per
+   surface. Measured 0 in every run.
+9. **`ops_forget_base` forgot the destination and not the source.** A copy whose source had been
    freed kept naming the dead address, and this module's own measurement is that the engine's next
    `0x4C69F0` lands on the freed block — so `surf_by_base(op->src)` resolved a stranger, and since
    `PK_ASSET` could have made a 300 KB offer in a dead surface's name. It now clears both; an
@@ -349,9 +404,12 @@ along.
 | `SKIRMISH.GUI` | **98.95 %** | **0** |
 | `MAINMENU.GUI` #2, after popping two screens | **99.47 %** | **0** |
 | `SINGLE.GUI` #2, on a recycled base | **99.42 %** | **0** |
+| `MAINMENU.GUI` after seven window resizes | **99.48 %** | **0** |
 
-Nothing is absent any more, and the counters end `asset=22/3/0/0` — 22 offers, 3 acks (one per
-distinct backdrop), **0 revocations and 0 drift**. The residual on the main menu is ~1 617 px:
+Nothing is absent any more, and the counters end `asset=21/3/0/0` — 21 offers, 3 acks (one per
+distinct backdrop), **0 revocations and 0 drift**, with `mirlost=0` and no revocation warning in
+the log. The handshake still converges with the echo moved to the hand-over, which is the thing
+that had to be re-checked after that fix. The residual on the main menu is ~1 617 px:
 ~1 523 in the button row — the focus tint `0x4BF7B0`, which is a read-modify-write and still falls
 to `PK_PIXELS` — and the rest in the art region, where the green particle animation is a frame
 apart between the two captures. **This is a front-end fix and not a main-menu one**: every shell
