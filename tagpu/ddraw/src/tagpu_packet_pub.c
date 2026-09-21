@@ -1965,13 +1965,15 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
        whoever noticed; the drop is one atomic increment and needs no thread
        identity, and the render thread is what acts on it.
 
-       THAT BRANCH IS UNREACHABLE ON TODAY'S BINARY and this line is therefore
-       belt-and-braces -- said so that nobody reads it as evidence that a
-       foreign teardown happens. The survey is in exe-reverse-engineering.md,
-       "Who enters 0x491B60": the teardown's address is never taken, three of
-       its six call sites are in code nothing can enter, and the loader thread
-       has no path to it; measured on four teardowns over two UI paths, all on
-       the game thread. The other provider of this function, `after_teardown`
+       NO FOREIGN TEARDOWN HAS EVER BEEN OBSERVED and this line is therefore
+       belt-and-braces -- said so that nobody reads it as evidence that one
+       happens. The survey is in exe-reverse-engineering.md, "Who enters
+       0x491B60": the teardown's address is never taken, so its six call sites
+       are the complete set; but all six are dispatched through the engine's
+       state-handler pointer, so the call graph cannot settle the thread and
+       the answer is the measurement -- four teardowns over two UI paths, all
+       on the game thread, plus the `tdforeign=` instrument that re-checks it
+       every run. The other provider of this function, `after_teardown`
        below, is game-thread-only by construction (its `before` returns 0 off
        the game thread, and the stub skips the `after` when it does). One
        atomic increment is worth not having to re-derive that. */

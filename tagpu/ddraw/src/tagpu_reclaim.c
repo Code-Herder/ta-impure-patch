@@ -151,7 +151,16 @@ static int   s_foreign_logged;
    convert a question about identity into a real fault. `reclaim_template_free`
    can check because it HAS a fallback (hand the block to the system free);
    these two do not. So the code does its work on whoever calls it, and says
-   loudly if that was ever not the game thread. */
+   loudly if that was ever not the game thread.
+
+   THE BASELINE HERE IS NOT THE PUBLISHER'S. This file asks
+   `g_ddraw.gui_thread_id` -- the window's owner thread, from
+   GetWindowThreadProcessId -- falling back to `s_owner_tid`, the thread of the
+   first deferred free. `tagpu_packet_pub.c`'s `on_game_thread()` asks
+   `s_gameTid`, the thread DllMain ran on. They agree in every configuration
+   seen, but they are different questions, so `foreign=` on the packet line and
+   `tdforeign=` on this one are not measuring quite the same thing [the landing
+   review]. */
 static volatile DWORD    s_tdTid;          /* the thread that entered 0x491B60 */
 static volatile unsigned s_cTdForeign;
 static volatile unsigned s_cDeferred, s_cDrained, s_cOverflow, s_cForeign,
@@ -290,9 +299,16 @@ static void __cdecl reclaim_template_free(void* p)
    recycled to a new object while we still hold it. */
 static void __cdecl reclaim_teardown_pre(void)
 {
-    DWORD t0;
+    DWORD t0, game;
     unsigned n = 0, busy = 0;
-    char b[200];
+    const char* sfx;
+    /* 320, NOT 200 [the landing review]. The line grew by two thread ids and a
+       suffix of up to 33 bytes, worst case 239 -- and this toolchain's
+       `_snprintf` is msvcrt's, which on truncation writes `_Count` characters,
+       returns -1 and DOES NOT terminate. `rlog` would then have read past the
+       buffer. Terminated explicitly below as well, like every other formatter
+       in the fork. */
+    char b[320];
 
     /* THE BASELINE HAS TO BE KNOWN BEFORE A MISMATCH MEANS ANYTHING. `gui_thread_id`
        is set from GetWindowThreadProcessId when the window is created (dd.c) and
@@ -300,11 +316,18 @@ static void __cdecl reclaim_teardown_pre(void)
        is always set -- but if neither were, comparing against 0 would report every
        teardown as FOREIGN, and an instrument whose failure mode is a false alarm
        is worse than none. Unknown is unknown, not foreign. */
-    {
-        DWORD game = g_ddraw.gui_thread_id ? g_ddraw.gui_thread_id : s_owner_tid;
-        s_tdTid = GetCurrentThreadId();
-        if (game && s_tdTid != game) s_cTdForeign++;
-    }
+    game = g_ddraw.gui_thread_id ? g_ddraw.gui_thread_id : s_owner_tid;
+    s_tdTid = GetCurrentThreadId();
+    if (game && s_tdTid != game) s_cTdForeign++;
+    /* THIS TEARDOWN'S VERDICT, NOT THE SESSION'S [the landing review]. The
+       suffix tested the cumulative counter, so one foreign teardown would have
+       marked every later game-thread one FOREIGN -- a line contradicting its
+       own two numbers for the rest of the session, which is the exact failure
+       mode this instrument was rebuilt to avoid. The cumulative view is
+       `tdforeign=` on the heartbeat, where it belongs. */
+    sfx = !game            ? " - game thread not known yet"
+        : (s_tdTid != game) ? " - FOREIGN, see tagpu_reclaim.c"
+                            : "";
     InterlockedExchange(&s_teardown, 1);       /* fence: visible before we look */
     t0 = GetTickCount();
     while (s_completed != s_started) {         /* the reader is inside a pass */
@@ -324,12 +347,9 @@ static void __cdecl reclaim_teardown_pre(void)
               busy ? "reclaim: level teardown (gen %u -> %u) on thread %u (game %u%s): reader still in its pass after %u ms — %u queued object(s) KEPT, the cascade's frees deferred"
                    : "reclaim: level teardown (gen %u -> %u) on thread %u (game %u%s): flushed %u queued object(s), reader idle; the cascade frees synchronously",
               (unsigned)s_levelGen, (unsigned)s_levelGen + 1u,
-              (unsigned)s_tdTid,
-              (unsigned)(g_ddraw.gui_thread_id ? g_ddraw.gui_thread_id : s_owner_tid),
-              !(g_ddraw.gui_thread_id ? g_ddraw.gui_thread_id : s_owner_tid)
-                  ? " — game thread not known yet"
-                  : (s_cTdForeign ? " — FOREIGN, see tagpu_reclaim.c" : ""),
+              (unsigned)s_tdTid, (unsigned)game, sfx,
               busy ? RC_TEARDOWN_WAIT_MS : n, (unsigned)(s_tail - s_head));
+    b[sizeof b - 1] = 0;
     rlog(b);
 }
 
@@ -411,7 +431,8 @@ static void __cdecl reclaim_teardown_post(void)
        screen.
 
        ON WHATEVER THREAD ENTERED 0x491B60, and that is now recorded rather
-       than claimed (`s_tdTid`, the pre hook, and the teardown log line). It
+       than claimed -- by the PRE hook, which is where `s_tdTid` is written and
+       read (this hook only inherits the thread). It
        said "game thread, like everything in this hook" as an assertion, which
        is what the landing review objected to. The callee is built for it: its
        first act is the golden source's drop, one atomic increment that needs

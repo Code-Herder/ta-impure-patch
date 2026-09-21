@@ -479,45 +479,81 @@ load flags", traced 2026-09-12) — allocates in this order: `0x471D90` layers
 the unit array (`0x4918D4`), and later `0x4669B0` the minimap (`0x4919C3`). Between the two the
 render thread is live: the reclaim post hook clears its flag as soon as `0x491B60` returns.
 
-#### Who enters `0x491B60`, and on which thread — the closed caller survey
+#### Who enters `0x491B60`, and on which thread
 
-*[BINARY-VERIFIED 2026-09-20, and MEASURED the same day. Settled because the fork's teardown
-hooks do real work on whatever thread calls them, so "game thread" had to be a fact rather than
-a comment — `tagpu_reclaim.c`, and gpu-status §2.82.]*
+*[BINARY-VERIFIED 2026-09-20. **The first version of this section was wrong in an instructive
+way — the correction is at the foot and is worth reading before trusting any call-site table in
+these notes, including this one.**]*
 
-**The entry set is closed.** `0x491B60`'s address is never taken: scanning the whole image for
-the 32-bit constant `0x00491B60` finds nothing in `.text`, `.rdata` or `.data`, so it cannot be
-reached through a function pointer, a vtable or a dispatch table. Every entry is a direct
-`E8`, and there are exactly **six**:
+**The entry set is closed to direct calls.** `0x491B60`'s address is never taken: the 32-bit
+constant `0x00491B60` appears at no offset of the 1 178 624-byte image, and there is no `.reloc`
+section, so a stored address would have to be literal. It therefore cannot be reached through a
+function pointer, a vtable or a dispatch table, and the `E8` sites are all of them. There are
+exactly **six**:
 
-| call site | in function | status |
+| call site | in function | what it does |
 | --- | --- | --- |
-| `0x460630` | `0x4604A0` | **live** — the in-game menu's quit path |
-| `0x491C6A` | `0x491C60` | **live** — a three-call shutdown stub (`0x4257A0`, `0x451B60`, then the teardown); its only caller is `0x460626`, also inside `0x4604A0` |
-| `0x49262C` | `0x491EC0` | **live** — four callers; traces by direct calls to `0x493060 ← 0x41EAA0 ← 0x41F0A0 ← 0x41F630 ← 0x426E80 ← 0x496790`, the in-game frame callback, i.e. the **game thread** |
-| `0x4996AA`, `0x49971D`, `0x4997AF` | `0x499100` | **DEAD CODE — these three never execute** |
+| `0x460630` | `0x4605C0` | the in-game menu's quit path |
+| `0x491C6A` | `0x491C60` | a three-call shutdown stub (`0x4257A0`, `0x451B60`, the teardown); its only caller is `0x460626`, also in `0x4605C0` |
+| `0x49262C` | `0x492360` | |
+| `0x4996AA` | `0x499200` | sets state **7**, handler `0x499880` |
+| `0x49971D`, `0x4997AF` | `0x499200` | teardown, then `0x491D70(1)`, `0x4A9660`, `0x4257A0`, then state **2** with handler `0x496BB0` — the shell. This is EXITMENU→MAINMENU and EXITMENU→RESTART |
 
-**`0x499100` is unreachable.** Counting every control transfer in `.text` — `E8`, `E9`, `EB` and
-the `0F 8x` conditionals — exactly **one** targets `0x499100`, and it is `0x4993AC`, *inside
-`0x499100` itself*. Its address is never taken either. So nothing can make the first call: the
-function can only recurse, and never starts. Half the teardown's apparent call sites are in it.
+**None of those four functions has a direct caller.** Every one is address-taken and entered
+through the engine's **state-handler slot `[main+0x391F5]`**, dispatched at the single site
+`0x499A1C` (`call dword ptr [eax+0x391F5]`) inside `0x499890`. `0x499200` is installed as the
+in-game handler by the loading-screen handler `0x497F40` (`mov [ecx+0x391F5], 0x499200` at
+`0x498455`, beside `mov [ecx+0x391F1], 6`), and also at `0x490BC5`. The same slot holds
+`0x496BB0`, `0x496B10`, `0x496CE0`, `0x496DB0`, `0x497F40` and `0x499880` — it is the engine's
+whole state machine. `0x496790`, the in-game frame callback, is *not* address-taken; it is
+called directly from `0x499200` at `0x4995B8` and `0x4996A5`.
 
-**Only three threads exist in the process.** `CreateThread` is the sole thread-creation import —
-no `_beginthread`/`_beginthreadex`, no `TerminateThread` — and it has three call sites
-(`0x4DA27A`, `0x4E616E`, `0x4E780C`). The only foreign thread that touches game state is the
-**loader** (`0x497C70` → body `0x497180`, created through the `0x4E7850` CRT wrapper), and it
-has **no control path of any kind** to `0x491B60`.
+**So the static call graph cannot carry the thread identity, and does not.** It ends at an
+indirect dispatch, and `0x499890` contains no `PeekMessage`/`GetMessage`/`DispatchMessage` of
+its own, so the pump is elsewhere again. What the static work *does* establish is the bound: the
+entry set is closed, so those six sites are all the ways in.
 
-**Measured, because the two live menu sites go through TA's gadget dispatch and so cannot be
-traced statically.** Four teardowns over two distinct UI paths — EXITMENU→MAINMENU ×3 and
-EXITMENU→RESTART ×1 — all entered `0x491B60` on the **game thread** (560), with the loader thread
-alive on a different id (588, then 648) at the same time. Plus 50 teardowns across the 299
-surviving instance logs, with zero foreign level-ends ever recorded. The fork now names the
-thread in its teardown line and carries `tdforeign=` in the reclaim heartbeat, so this is
-re-checked on every run, including configurations that session could not reproduce.
+**What the loader thread result really is.** The direct-call transitive closure of `0x497C70` /
+`0x497180` is 1 208 functions and contains neither `0x491B60`, nor the dispatcher `0x499890`,
+nor the state-setter `0x4B4FD0`, nor `0x499200`. That is a **direct-call** result and not a
+proof: the same closure holds 690 indirect call sites across 260 functions.
 
-**Conclusion: the level teardown is game-thread-only on every path that exists in the shipped
-binary.**
+**Thread creation.** `CreateThread` is the only thread-creation import — no `_beginthread`,
+`_beginthreadex`, `TerminateThread` or fiber API — with exactly **three call sites**
+(`0x4DA27A`, `0x4E616E`, `0x4E780C`). That bounds the spawn *sites*, not the number of threads:
+`0x4E77D0` is a generic CRT spawn wrapper, reachable through the `ret 0xC` wrapper `0x4B6B20`,
+so one site can make many threads. The loader is `push 0x497C70; call 0x4B6B20` at `0x4982C5`,
+through that wrapper, with `0x497C70` calling the body `0x497180` at `0x497CA1`.
+
+**The identity itself is MEASURED, and re-measured on every run.** Four teardowns over two
+distinct UI paths — EXITMENU→MAINMENU ×3 and EXITMENU→RESTART ×1 — all entered `0x491B60` on
+the game thread, with the loader thread alive on a different id at the same moment. A grep of
+the 299 surviving instance logs finds 50 teardowns and no foreign level-end ever recorded. The
+fork now names the entering thread in its teardown line and carries `tdforeign=` in the reclaim
+heartbeat, so the claim is re-checked on every launch, including configurations that session
+could not reproduce.
+
+**Conclusion: the level teardown is game-thread only, on the evidence of the measurement and the
+standing instrument — not of the call graph, which stops at a function pointer.**
+
+> **THE CORRECTION, AND THE METHOD THAT CAUSED IT.** The first version of this section said three
+> of the six call sites were *dead code* inside `0x499100`, which "can only recurse". Every part
+> of that is false. `0x499100` is an ordinary `stdcall` helper running `0x499100..0x4991FB`
+> (`ret 4`, then two `nop`s); it contains no call to the teardown at all. The three calls are in
+> `0x499200`, a **live** state handler — and by its own behaviour it is the quit and restart
+> paths, i.e. almost certainly the very sites the measurement exercised while the note called
+> them unreachable.
+>
+> The cause: call sites were attributed to the **nearest preceding `E8` target**, on the
+> assumption that a function starts where something calls it. In this binary the main-loop
+> functions are *never* called — they are stored in `[main+0x391F5]` and dispatched — so they are
+> invisible to that heuristic, and their call sites get charged to whatever ordinary helper
+> happens to sit above them. Two other rows in the table above were wrong the same way
+> (`0x4604A0` for `0x4605C0`, `0x491EC0` for `0x492360`), as was a six-hop "direct call" chain
+> that did not connect. **Take function starts from address-taken constants as well as call
+> targets, and check the claimed function actually contains the call site** — an `objdump` of
+> the boundary costs one command and would have caught all of it.
+
 
 | Field | What | Published by the load | Freed / nulled by the teardown |
 | --- | --- | --- | --- |

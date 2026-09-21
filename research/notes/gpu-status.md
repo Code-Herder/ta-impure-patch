@@ -14810,24 +14810,30 @@ an oracle rather than instrumentation, which is why it stays.
   in one engine call but delivered through two gates, and the render thread takes the packet
   first — so a frame can draw packet D-1 against reference D (above). A comparison that depends
   on the pairing compares the two numbers itself.
-* **SETTLED 2026-09-20, the same day it was raised: the level teardown is GAME-THREAD ONLY on
-  every path that exists in the shipped binary** — so the reference's level stamp, the drop's
-  placement and reclaim's unguarded hooks all rest on a fact now rather than on a comment. The
-  survey is in [exe-reverse-engineering](exe-reverse-engineering.html), *Who enters `0x491B60`*;
-  the short form:
-  * `0x491B60`'s **address is never taken anywhere in the image**, so its entry set is closed:
-    six direct calls and nothing else.
-  * **Three of the six are dead code.** They live in `0x499100`, which has exactly one control
-    transfer into it in all of `.text` — a call from inside itself — and no address-taken
-    reference. It can only recurse, and nothing can make the first call.
-  * Of the three live sites, one traces statically to the in-game frame callback `0x496790`
-    (the game thread). The other two are the in-game menu's quit and restart paths, which go
-    through TA's gadget dispatch and so cannot be traced statically — they were **measured**
-    instead: four teardowns over two distinct UI paths, all on the game thread, with the loader
-    thread alive on a different id at the same moment.
-  * The process has exactly **three** threads (`CreateThread` is the only creation import), and
-    the one foreign thread that touches game state — the loader, `0x497C70` → `0x497180` — has
-    no control path to the teardown at all.
+* **SETTLED 2026-09-20: the level teardown is GAME-THREAD ONLY — on the evidence of a
+  measurement and a standing instrument, not of the call graph.** The survey is in
+  [exe-reverse-engineering](exe-reverse-engineering.html), *Who enters `0x491B60`*; the short
+  form:
+  * `0x491B60`'s **address is never taken anywhere in the image**, and there is no `.reloc`, so
+    its entry set is closed: six direct calls and nothing else. That is the part the static work
+    does establish.
+  * **All six sit in four functions that have no direct caller.** Each is address-taken and
+    entered through the engine's state-handler slot `[main+0x391F5]`, dispatched from the single
+    site `0x499A1C`. So the call graph stops at a function pointer and cannot carry the thread
+    identity by itself.
+  * The loader thread's **direct-call** closure (1 208 functions) contains neither the teardown
+    nor the dispatcher nor the state-setter — worth having, but it is a direct-call result, and
+    that closure also holds 690 indirect call sites.
+  * **The identity is measured:** four teardowns over two distinct UI paths, all on the game
+    thread, with the loader thread alive on a different id at the same moment; plus 50 teardowns
+    across the 299 surviving instance logs with no foreign level-end ever recorded. `tdforeign=`
+    and the thread id in the teardown line now re-check it on every launch.
+  * **A first version of this bullet claimed three of the six call sites were dead code. They
+    are not** — they are in `0x499200`, a live state handler, and by its behaviour it is the
+    quit and restart paths, i.e. probably the very sites the measurement exercised. The cause
+    was attributing call sites to the nearest preceding call target, which is blind to
+    functions that are only ever dispatched through a pointer. The correction and the method
+    that caused it are written out in the engine map.
 * **The two sentences that looked contradictory were answering different questions.**
   `reclaim_template_free` checks the thread because it *has* a fallback: hand the block to the
   system free. The teardown hooks have none — the pre hook's job is to quiesce the render thread
@@ -14837,7 +14843,9 @@ an oracle rather than instrumentation, which is why it stays.
   measure, which is what `tdforeign=` and the thread id in the teardown line now do on every run,
   including configurations this session cannot reproduce.
 * **Two guards in the golden-source path are therefore belt-and-braces, and stay.** The drop
-  sitting above `tagpu_packet_pub_level_end`'s thread check cannot matter on today's binary, and
-  the straddle discard can never fire — one thread cannot be inside `take_into` and in the
-  teardown at once, which is why `straddle=0` and always will be. Both are one compare, and both
-  keep the module correct without depending on this survey staying true.
+  sitting above `tagpu_packet_pub_level_end`'s thread check is not expected to matter, and the
+  straddle discard is not expected to fire — one thread cannot be inside `take_into` and in the
+  teardown at once, which is why `straddle=0`. Neither is stated as "can never", because what
+  rules it out is a measurement plus a closed entry set, not a proof over the call graph. Both
+  are one compare, and the reason to keep them is exactly that they hold the module correct
+  **without** depending on the survey staying true.

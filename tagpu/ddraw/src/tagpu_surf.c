@@ -91,12 +91,14 @@ static unsigned s_palSerial = 1;
 static unsigned s_dropReq;              /* game -> render: the level ended    */
 static unsigned s_captures, s_unchanged, s_refused, s_norequest;
 /* CAPTURES THROWN AWAY BECAUSE A TEARDOWN LANDED WHILE THEY RAN. It is 0, and
-   on today's binary it CANNOT be anything else: this can only fire if a level
-   teardown arrives on a thread that is not the one copying, and the teardown
-   `0x491B60` was surveyed on 2026-09-20 and is game-thread only -- its address
-   is never taken, three of its six call sites are in unreachable code, and the
-   one foreign thread that touches game state (the loader) has no path to it
-   (exe-reverse-engineering.md, "Who enters 0x491B60"). The test stays because
+   on today's binary nothing is expected to make it fire: this can only happen
+   if a level teardown arrives on a thread that is not the one copying, and the
+   teardown `0x491B60` was surveyed and measured on 2026-09-20 and is
+   game-thread only -- its address is never taken, so its six call sites are all
+   of them, and every teardown measured came in on the game thread
+   (exe-reverse-engineering.md, "Who enters 0x491B60"; note that the identity
+   rests on the measurement, because all six sites are dispatched through a
+   function pointer and the call graph stops there). The test stays because
    it is one compare and it keeps this module correct without depending on that
    survey staying true; the counter stays because it is the thing that would
    say so if it ever stopped being. */
