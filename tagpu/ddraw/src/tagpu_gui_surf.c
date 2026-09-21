@@ -140,6 +140,7 @@ static unsigned s_drained = 0, s_sprites = 0, s_copies = 0, s_pixels = 0, s_seed
    and kept deliberately: two counters that used to be one are how a reader
    sees that the traffic did not stop, the CARRYING did. */
 static unsigned s_pixDropped = 0;
+static unsigned s_assets = 0;          /* PK_ASSET ops carried into a twin     */
 /* SOLID RECTANGLES REPLAYED AS GEOMETRY, counted beside `pixels=` so the two
    can be read against each other: every one of these used to be a `PK_PIXELS`
    box of arena bytes. [The vulkan-only plan, landing 8a.] */
@@ -1210,6 +1211,33 @@ static void drain(void)
             }
             s_seeds++;
             break;
+        case PK_ASSET: {
+            /* THE ONE OP WHOSE PAYLOAD CROSSES WHERE A SEED'S DOES NOT, and
+               the mirror carries it as a SEED **with** its bytes -- which is
+               precisely the shape `TAGPU_GUIOP_SEED` already has on the other
+               side (`o->alen` optional, validated as `w * h`), so the Vulkan
+               lane needs no case of its own and no new validation. The
+               producer's guarantee is what earns this: the surface was filled
+               by the loader and `op_add` has never seen an op name it as a
+               destination. See PK_ASSET in tagpu_gui_int.h. */
+            unsigned off = 0;
+            t = twin_make(o->surf, o->w, o->h);
+            if (t && o->alen && o->alen == (unsigned)o->w * (unsigned)o->h &&
+                mir_bytes(g_guiq.arena + o->aoff, o->alen, &off)) {
+                TAGPU_GUIOP* m = mir_op();
+                if (m) {
+                    m->kind = TAGPU_GUIOP_SEED; mir_box(m, o);
+                    m->w = o->w; m->h = o->h;
+                    m->aoff = off; m->alen = o->alen;
+                    /* THE ECHO, AND ONLY ON THE PATH THAT ACTUALLY CARRIED IT.
+                       `mir_op` can still refuse after `mir_bytes` took the
+                       arena, so the ack belongs here, inside `if (m)`, and not
+                       one brace out. */
+                    g_guiq.assetAck = o->surf;
+                    s_assets++;
+                }
+            }
+            break; }
         case PK_FREE:
             t = twin_find(o->surf);
             if (t) { TAGPU_GUIOP* m; twin_drop(t);
@@ -2334,8 +2362,8 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u pixdrop=%u bars=%u rects=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u gafnoplane=%u gafreseed=%u gafscratch=%u/%u/%u strrearm=%u glyscratch=%u/%u gfont=%u/%u/%u/%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
-                  s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_pixDropped, s_bars, s_rects, s_clears,
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u pixdrop=%u assets=%u bars=%u rects=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u gafnoplane=%u gafreseed=%u gafscratch=%u/%u/%u strrearm=%u glyscratch=%u/%u gfont=%u/%u/%u/%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
+                  s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_pixDropped, s_assets, s_bars, s_rects, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.gafnoplane, g_guiq.gafreseed, g_guiq.gafhigh, g_guiq.gaflost, g_guiq.gafbaddec, g_guiq.strrearm, g_guiq.glyhigh, g_guiq.glylost, pGlyphs, pResends, pRefused, pRecycles, g_guiq.stalls,
                   s_skipped, tagpu_pal_changes(), palDiff, palDiffAt, tagpu_pal_presented(),
                   tagpu_classicpp_on() ? 1 : 0, tagpu_classicpp_assets() ? 1 : 0,

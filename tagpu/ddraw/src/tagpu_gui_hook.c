@@ -134,6 +134,11 @@ typedef struct SURF {
     int isOffscreen;                  /* created with the tag "OFFSCREEN" (0x5091D4): THE
                                          main offscreen, of which the engine has one at a
                                          time — see surf_drop_offscreens             */
+    int isAsset;                      /* created with a "bitmaps\\....PCX" tag AND never yet
+                                         named as an op's destination: a decoded asset, not
+                                         a composition. `op_add` clears it; see PK_ASSET  */
+    int assetSent;                    /* the consumer ACKED these bytes (g_guiq.assetAck) */
+    unsigned assetTries;              /* offers made; bounded by TAGPU_GUI_ASSET_TRIES  */
 } SURF;
 #define MAX_SURF 24
 static SURF s_surf[MAX_SURF];
@@ -365,6 +370,7 @@ static SURF* surf_get(unsigned base, int w, int h, int pitch, unsigned owner)
                 s_surf[i].w = w; s_surf[i].h = h; s_surf[i].pitch = pitch;
                 s_surf[i].copyValid = 0;
                 s_surf[i].seeded = 0;          /* the twin is the old size: re-make it */
+                s_surf[i].assetSent = 0; s_surf[i].assetTries = 0;   /* and with it */
                 free(s_surf[i].copy); free(s_surf[i].mask); free(s_surf[i].acc);
                 s_surf[i].copy = s_surf[i].mask = s_surf[i].acc = NULL;
             }
@@ -828,6 +834,9 @@ static unsigned s_nullCtx[OP_NKIND];        /* ops whose ctx was NULL/unknown */
    Duplicates are counted, exactly as `s_kindCount` counts them: the dedup is
    `publish`'s, and this measures what the engine DREW. */
 static unsigned s_kindArea[OP_NKIND];
+static unsigned s_assetSends = 0;     /* PK_ASSET ops published                   */
+static unsigned s_assetRevoked = 0;   /* surfaces that stopped being assets       */
+static unsigned s_assetAcked = 0;     /* assets the consumer echoed back          */
 
 static void op_add(int kind, SURF* s, int l, int t, int r, int b)
 {
@@ -843,6 +852,15 @@ static void op_add(int kind, SURF* s, int l, int t, int r, int b)
     s_kindTotal[kind]++;
     s_opsTotal++;
     if (!s) { s_nullCtx[kind]++; return; }
+    /* THE INVARIANT BEHIND `PK_ASSET`, AND IT IS ENFORCED HERE BECAUSE THIS IS
+       WHERE A DESTINATION IS NAMED. An asset surface is one the loader filled
+       and nothing draws into; the moment an op targets it that is no longer
+       true, so it stops being one -- for the rest of its life, and before the
+       op is even clipped, because an attempt to draw is what the claim is
+       about. `assetSent` is deliberately NOT cleared: bytes that already
+       crossed are not un-sent, and the ops now arriving will paint over them,
+       which is exactly the right outcome. */
+    if (s->isAsset) { s->isAsset = 0; s_assetRevoked++; }
     if (l < 0) l = 0;
     if (t < 0) t = 0;
     if (r > s->w - 1) r = s->w - 1;
@@ -1530,7 +1548,28 @@ static void publish(unsigned flipSurf)
     if (g_guiq.reseed || s_pubOverflow) {
         TAGPU_PUBOP* o;
         unsigned why = g_guiq.why;
-        for (i = 0; i < s_nsurf; i++) s_surf[i].seeded = 0;
+        /* `assetSent` DIES WITH THE TWIN IT DESCRIBES. It is not a fact about
+           this side -- it records that the CONSUMER holds the asset's bytes --
+           so a reseed, which is the consumer saying it threw its twins away,
+           un-sends it exactly as it un-seeds everything else. Missing this made
+           the backdrop come back black after the first reset and stay that way,
+           because the surface re-seeded EMPTY (a `PK_SEED`'s payload is dropped
+           by design) while `assetSent` still claimed the bytes had landed. The
+           first-sight tables two lines below are re-armed for the same reason
+           and were the model for this. */
+        for (i = 0; i < s_nsurf; i++) {
+            s_surf[i].seeded = 0;
+            s_surf[i].assetSent = 0; s_surf[i].assetTries = 0;
+        }
+        /* AND THE ECHO WITH THEM, PER EPISODE AND NOT EVER. Clearing
+           `assetSent` alone left `assetAck` still naming this surface from the
+           LAST episode, so the re-offer test passed on the stale echo and
+           re-marked the debt paid without a byte crossing: the backdrop came
+           back black after the first reset, exactly as before the packet
+           existed. The consumer re-earns the ack for every episode.
+           [Same shape as `hud_invalidate`'s "poked for this debt, not ever" --
+           found the same way, by running it.] */
+        g_guiq.assetAck = 0;
         memset(s_seenF, 0, sizeof s_seenF); memset(s_seenP, 0, sizeof s_seenP);
         s_seenGen++;
         /* AND THE GLYPHS. A reseed is the consumer saying it threw state away,
@@ -1846,6 +1885,34 @@ static void publish(unsigned flipSurf)
     as_pixels:
         if (op->kind == OP_COPY) {
             SURF* src = surf_by_base(op->src);
+            /* THE ASSET'S BYTES, ONCE, AND AHEAD OF THE COPY THAT NEEDS THEM.
+               Not at `after_alloc`, where the surface is still blank and the
+               loader has not run; not as a `PK_SEED`, whose payload the drain
+               drops by design. Here the source has been filled, is immutable
+               (see `isAsset`), and is about to be read by a copy whose twin is
+               otherwise empty -- which is exactly the black backdrop this
+               closes. Ordering is the queue's own: this commits before the
+               `PK_COPY` below, so the consumer has the source before it is
+               asked to sample it. */
+            /* ACKED, NOT MERELY SENT. `assetSent` is set by the consumer's
+               echo below and never by the act of publishing -- the same lesson
+               the panel debt taught: a payload is delivered when the other side
+               says so, not when this side lets go of it. */
+            if (src && src->isAsset && !src->assetSent &&
+                g_guiq.assetAck == src->base) { src->assetSent = 1; s_assetAcked++; }
+            if (src && src->isAsset && !src->assetSent && src->w > 0 && src->h > 0 &&
+                src->assetTries < TAGPU_GUI_ASSET_TRIES) {
+                TAGPU_PUBOP* a = pub_op(PK_ASSET, src->base);
+                if (!a) return;
+                a->w = src->w; a->h = src->h; a->pitch = src->pitch;
+                a->l = 0; a->t = 0;
+                a->r = (short)(src->w - 1); a->b = (short)(src->h - 1);
+                if (!pub_surface_bytes(src, 0, 0, src->w - 1, src->h - 1, a)) return;
+                pub_commit();
+                src->assetTries++;
+                src->seeded = 1;          /* the copy below may now name it */
+                s_assetSends++;
+            }
             if (src && src->seeded) {
                 o = pub_op(PK_COPY, s->base); if (!o) return;
                 o->src = op->src; o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
@@ -3030,7 +3097,7 @@ void tagpu_gui_flush(unsigned int frame_counter)
        magnitude of one counter. mingw's `_snprintf` does not NUL-terminate on
        truncation, and `glog` hands the result to `fprintf("%s")`, so the
        failure would have been an out-of-bounds READ, not a tidy cut. */
-    char b[416];
+    char b[480];        /* +2 fields (asset=%u/%u) over the 416 measured below */
     want_minimap_watchdog(frame_counter);
     if (!s_installed) return;
     if (frame_counter - last >= 600) {
@@ -3047,17 +3114,30 @@ void tagpu_gui_flush(unsigned int frame_counter)
            `%u`s at ten digits plus the literals is 360 bytes, and the observed
            line is 232 -- the gap is entirely how long the session has run. This
            buffer has been overrun once before by one field too many. */
-        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u chrome=%u/%u panel=%u/%u hud=%u/%u",
+        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u chrome=%u/%u panel=%u/%u hud=%u/%u asset=%u/%u/%u",
                   s_flips, s_opsTotal, s_opsDropped, s_changedTotal, s_unexplTotal, s_nsurf,
                   s_pubOps, s_pubBytes, g_guiq.qHead - g_guiq.qTail, g_guiq.resets, g_guiq.overflows, g_guiq.stalls, g_gui_draw, s_freeqFlush, s_repaints, s_repaintSkips, s_repaintOps,
-                  s_chromeEmits, s_chromeRefused, s_panelEmits, s_panelRefused, s_hudPokes, s_hudRefused);
+                  s_chromeEmits, s_chromeRefused, s_panelEmits, s_panelRefused, s_hudPokes, s_hudRefused,
+                  s_assetSends, s_assetAcked, s_assetRevoked);
         glog(b);
         {
-            int k, n = 0;
+            /* THE SAME GUARD AS THE OTHER THREE IN THIS FILE: mingw's
+               `_snprintf` returns -1 on truncation, so a bare `n +=` makes `n`
+               negative and the size argument wrap. `ops` is also read by `%s`
+               and was never terminated when no kind had fired. */
+            int k, n = 0, w;
             char ops[300];
-            for (k = 1; k < OP_NKIND; k++)
-                if (s_kindTotal[k]) n += _snprintf(ops + n, sizeof ops - (size_t)n, "%s%s %u", n ? " " : "", OP_NAME[k], s_kindTotal[k]);
+            for (k = 1; k < OP_NKIND; k++) {
+                if (!s_kindTotal[k]) continue;
+                w = _snprintf(ops + n, sizeof ops - (size_t)n, "%s%s %u", n ? " " : "", OP_NAME[k], s_kindTotal[k]);
+                if (w < 0) break;
+                n += w;
+                if (n >= (int)sizeof ops) { n = (int)sizeof ops - 1; break; }
+            }
+            ops[n] = 0;
+            if (!n) _snprintf(ops, sizeof ops, "none");
             _snprintf(b, sizeof b, "GUI kinds: %s", ops);
+            b[sizeof b - 1] = 0;
             glog(b);
         }
     }

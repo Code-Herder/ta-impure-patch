@@ -219,7 +219,79 @@ reset debt**, which is what the re-poke fix was for.
   `repaint_service`, so with repaints off the emblem is never re-offered and `s_panelPend` stays
   raised. Harmless — nothing is written and no loop spins — but the counter reads as owed for ever.
 - **A `publish()` that fails after the op was recorded still loses the emblem** until the next
-  reset. The debt is now cleared only when `op_add` actually recorded (the `MAX_OPS` drop is
+  reset.
+**THE SHELL WAS 3.71 % OF THE ENGINE'S OWN PICTURE, AND ONE PACKET CLOSED THE FRONT END**
+**[MEASURED AND FIXED 2026-09-21]**. Measured at k = 1 (640×480, where the shell renders and the
+sharp ramp is identity, so a pixel diff is valid): `MAINMENU.GUI` was **11 401 / 307 200 = 3.71 %**
+identical to the golden source, and **every one of the 295 799 differing pixels was pure black in
+ours** — nothing drawn wrong, the backdrop and logo simply absent. Only the gadgets drew.
+
+The census named the hole exactly: a second 640×480 surface with `changed=307072
+unexplained=307072` and **`ops_on_it=0 of 232`**. The chain around it is
+
+```
+loader ──decodes bitmaps\<name>.PCX──▶ *(GUIMEM+0x24)   ← 0 ops, twin EMPTY
+                    0x4C6B70 ─────────┘  (hooked → PK_COPY ✓, every frame)
+                                       ▼ panel+0xBC ← the gadget ops ✓
+                    0x4C6B70 ─────────┘  ▼ the flip surface ✓
+```
+
+so **every link was already observed except the first, and the first is not a draw at all**. The
+build sequence's `0x4C6B70(panel+0xBC, *(GUIMEM+0x24), 0, 0)` crosses fine; what it reads is a
+surface the *loader* filled, which no leaf can see because nothing ever draws into it. The two
+existing escapes are both closed by design: `PK_SEED` drops its payload (that is the engine pixel
+the clean cut removed), and the forced repaint re-emits gadgets only — measured `[gaf 105 line 4
+focus 6]`, no backdrop.
+
+**`PK_ASSET` carries it, and the invariant is what makes that legal.** The clean cut forbids
+COMPOSED pixels, not decoded source art — `scale_capture` already reads the engine's GAF frame
+bytes for a `PK_SPRITE`'s first sight. The line between the two is whether anything draws into the
+surface, and that is now *checked*: `after_alloc` claims the surface when its creation tag starts
+`bitmaps\` (**MEASURED: `"bitmaps\FrontendX.PCX"`, 640×480** — the shell's other tags are
+`OFFSCREEN`, `<SCREEN>.GUI`, `SAVE UNDER`, `SAVEMOUSE 1..3`), and **`op_add` revokes the claim the
+instant any op names the surface as a DESTINATION**. Immutability is also what makes reading it at
+the flip exact, where the identical read for `PK_PIXELS` is a box of bytes from a moment *later*
+than the draw it stands for.
+
+**The consumer needed no new case.** `PK_ASSET` mirrors as `TAGPU_GUIOP_SEED` *with* its bytes —
+the shape the Vulkan lane's SEED already has (`o->alen` optional, validated as `w * h`), a path
+that existed and had never been exercised because the GL drain always set `alen = 0`. Zero Vulkan
+changes.
+
+**Two bugs on the way, both of the same family, both found by running it.** The publish was at
+first a one-shot, and `mir_bytes` refuses silently when the mirror is not recording (it follows the
+Vulkan pass, and is not recording on the early frames where a screen builds) — so the payload was
+lost on the one frame that mattered, with `mirlost=0` to show for it. The fix is an
+acknowledgement: the consumer writes back the base it actually carried (`g_guiq.assetAck`), the
+producer re-offers until it sees it, bounded by `TAGPU_GUI_ASSET_TRIES` so a consumer that never
+records cannot be fed 300 KB a flip for ever. Then the ack itself had to be made **per episode**:
+clearing `assetSent` on a reseed while `assetAck` still named the surface from the *last* episode
+let the stale echo satisfy the new debt without a byte crossing, and the backdrop came back black
+after the first reset exactly as before. That is `hud_invalidate`'s "for this debt, not ever" one
+packet along, and it is why `assetSent` is cleared wherever `seeded` is — it describes the
+CONSUMER's twin and must die with it.
+
+**Measured after, k = 1, 640×480, presented against the golden source, `missing` = black in ours:**
+
+| screen | identical | missing |
+|---|---|---|
+| `MAINMENU.GUI` | **99.48 %** (from 3.71 %) | **0** |
+| `SINGLE.GUI` | **99.42 %** | **0** |
+| `SKIRMISH.GUI` | **98.95 %** | **0** |
+
+Nothing is absent any more. The residual on the main menu is 1 613 px: 1 523 in the button row —
+the focus tint `0x4BF7B0`, which is a read-modify-write and still falls to `PK_PIXELS` — and 90 in
+the art region. **This is a front-end fix and not a main-menu one**: every shell screen is built by
+the same sequence with its own PCX, which is why three screens closed for one packet. In game,
+unchanged: all UI outside the minimap still 125 908 / 125 908, badge 400/400, minimap flat columns
+0.
+
+**What it does NOT do.** It carries the engine's decoded bytes, so the picture is byte-exact with
+the 1997 rasteriser rather than restored. The packet keys on the surface, and the *name* is the
+next step: reading `bitmaps\<name>.PCX` from our own asset store would let the colour twin carry a
+restored backdrop with no producer change and no packet change — that is the whole reason the tag,
+not the bytes, is what identifies these surfaces.
+ The debt is now cleared only when `op_add` actually recorded (the `MAX_OPS` drop is
   covered), but not when the packet itself is refused downstream. That path drops the whole frame's
   ops, ours among them, so it is the general case rather than a panel-specific hole.
 

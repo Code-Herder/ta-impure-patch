@@ -580,6 +580,28 @@ static int __cdecl before_build(void* e)
     return 0;
 }
 
+/* A SHELL BACKGROUND'S TAG, and the string is MEASURED rather than assumed:
+   `SurfaceCreateNamed 0x4C69F0` is handed `"bitmaps\FrontendX.PCX"` for the
+   main menu's 640x480 backdrop (read off the trace 2026-09-21; the other tags
+   a shell session creates are "OFFSCREEN", "<SCREEN>.GUI", "SAVE UNDER" and
+   "SAVEMOUSE 1..3"). Only the directory is tested: the file name varies per
+   screen and is not what makes the surface an asset -- what makes it one is
+   that the loader fills it and nothing draws into it, which `op_add` is what
+   actually enforces. Bounded and case-insensitive; a tag that is not a
+   readable string simply is not one of these. */
+static int tag_is_shell_bg(const char* tag)
+{
+    static const char pre[] = "bitmaps\\";
+    int i;
+    if (!ptr_ok(tag)) return 0;
+    for (i = 0; i < 8; i++) {
+        char c = tag[i];
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (c != pre[i]) return 0;
+    }
+    return 1;
+}
+
 /* ---- 0x4C69F0 SurfaceCreateNamed(tag, w, h) stdcall ret 0xC: register the
         new surface from its returned object (resolution.md §3.3) --------- */
 static int __cdecl before_alloc(void* e)
@@ -594,6 +616,12 @@ static void* __cdecl after_alloc(unsigned int* regs)
     const char* tag = s_allocTag[s_retDepth];
     SURF* s = ptr_ok(obj) ? surf_of_ctx(obj) : NULL;
     if (s && tag == (const char*)(size_t)TAG_OFFSCREEN) { s->isOffscreen = 1; surf_drop_offscreens(s->base); }
+    /* CLAIMED HERE, EARNED BY SURVIVING `op_add`. The tag only says where the
+       surface came from; the claim that nothing composes into it is kept by
+       `op_add` clearing this the first time an op names it. The bytes are NOT
+       read now -- the surface is blank at this point (see the seed below) and
+       the loader has not run -- they cross at the first copy that reads it. */
+    if (s) { s->isAsset = tag_is_shell_bg(tag); s->assetSent = 0; }
     if (s && s_trace) {
         char b[200];
         _snprintf(b, sizeof b, "gui trace: alloc \"%.32s\" %dx%d base %08X (screen %s)",

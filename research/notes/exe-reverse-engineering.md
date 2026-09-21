@@ -3559,6 +3559,16 @@ Every handler draws into `[panel+0xBC]` with that object as its context (`ebx=[p
 loader, not by any draw leaf (MEASURED: 307 072 unexplained bytes on `MAINMENU.GUI`'s
 `03D51178 640×480`, zero ops), and read only as a copy source.
 
+Its creation tag is the file path, and the string is **MEASURED**: `0x4C69F0` is handed
+`"bitmaps\FrontendX.PCX"` for the main menu's 640×480 backdrop (trace, 2026-09-21; the other tags
+a shell session creates are `"OFFSCREEN"`, `"<SCREEN>.GUI"`, `"SAVE UNDER"` and `"SAVEMOUSE 1..3"`).
+That tag is what the fork keys `PK_ASSET` on — **the two facts in this paragraph are the whole
+basis for it**: the surface is named after a file, and nothing draws into it, so its bytes are
+decoded source art rather than anything the 1997 rasteriser composed. `op_add` re-checks the second
+one for the surface's whole life rather than trusting it. Until 2026-09-21 the fork carried none of
+this and every shell screen presented its gadgets over black — 3.71 % of the engine's own picture.
+See [the GUI renderer](gui-renderer.html), "the shell was 3.71 %".
+
 | `id` | handler | `ret` | prologue (steal) | draws through |
 |---|---|---|---|---|
 | 1 button | `0x4A5F40` | 8 | `81 EC D8 00 00 00 53 55` (8) | `0x4B7F90(ctx, frame, x+HotX, y+HotY)` at `0x4A61BE`, `DrawText 0x4A50E0`, `0x4BE950`, `0x4B8310`; sets `TheActive_GUIMEM+0x14 = 1` at `0x4A5F5E` |

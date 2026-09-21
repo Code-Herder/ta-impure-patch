@@ -36,7 +36,23 @@ enum {
                        `PK_PIXELS` this op published its whole box, interior
                        included, read out of the surface at the flip: it carried
                        pixels the op never wrote, from a moment after it ran.
-                       `0x4BF7B0` does NOT produce this -- it tints. */
+                       `0x4BF7B0` does NOT produce this -- it tints. */,
+    PK_ASSET        /* a DECODED ASSET SURFACE, whole: `w`/`h`/`pitch` as a seed,
+                       and its bytes follow in the arena. It is NOT `PK_SEED`,
+                       and the difference is the whole reason it may cross where
+                       a seed may not: a seed carries what the 1997 rasteriser
+                       COMPOSED, and this carries a surface the engine's LOADER
+                       decoded and that nothing ever draws into -- the same
+                       category as the GAF frame bytes a `PK_SPRITE`'s first
+                       sight already carries. The producer only ever emits it
+                       for a surface whose `isAsset` still stands, and `op_add`
+                       clears that the instant any op names the surface as a
+                       DESTINATION, so "nothing draws into it" is a checked
+                       property and not an assumption. Being immutable is also
+                       what makes reading it AT THE FLIP exact, where the same
+                       read for `PK_PIXELS` is a box of bytes from a moment
+                       later than the draw it stands for. [Landing: the shell
+                       backdrop, 2026-09-21.] */
 };
 
 typedef struct TAGPU_PUBOP {
@@ -84,6 +100,7 @@ typedef struct TAGPU_PUBOP {
     unsigned       flip;            /* the flip this belongs to (diagnostics)   */
 } TAGPU_PUBOP;
 
+#define TAGPU_GUI_ASSET_TRIES 240u           /* offers before an asset is given up on */
 #define TAGPU_GUI_QCAP   (1u << 16)          /* ops                            */
 #define TAGPU_GUI_ASIZE  (16u << 20)         /* arena bytes                    */
 
@@ -92,6 +109,18 @@ typedef struct TAGPU_GUIQ {
     unsigned char* arena;                    /* TAGPU_GUI_ASIZE                */
     volatile unsigned qHead, qTail;          /* producer writes head, consumer tail */
     volatile unsigned aHead, aTail;          /* arena bytes, same roles        */
+    /* THE ASSET HANDSHAKE, and it is an ORDERING and not a hope. A `PK_ASSET`
+       is published once and its payload is large, so the producer must know
+       whether it LANDED rather than assume it did -- the consumer's mirror is
+       not recording on every frame (it follows the Vulkan pass), and
+       `mir_bytes` refuses silently when it is not, which lost the shell
+       backdrop on the one frame that mattered. The consumer writes the base it
+       actually carried; the producer re-offers until it sees that base come
+       back, and gives up after `TAGPU_GUI_ASSET_TRIES` so a consumer that never
+       records cannot be fed a 300 KB payload every flip for ever. Written by
+       the consumer, read by the producer, one word, no lock: a stale read costs
+       one extra offer, never a wrong picture. */
+    volatile unsigned assetAck;              /* consumer: the base it last carried as PK_ASSET */
     volatile unsigned reseed;                /* consumer asks the producer to seed everything */
     volatile unsigned why;                   /* the last reason `reseed` (or an overflow) was raised: TAGPU_GUI_WHY_* */
     volatile unsigned overflows;             /* the producer ran out of queue or arena  */
