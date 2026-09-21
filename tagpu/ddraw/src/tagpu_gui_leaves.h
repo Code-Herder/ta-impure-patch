@@ -401,6 +401,14 @@ static int __cdecl before_fill(void* e)
     if (!on_game_thread()) return 0;
     s = surf_of_ctx(ctx);
     op_add(OP_FILL, s, 0, 0, s ? s->w - 1 : 0, s ? s->h - 1 : 0);
+    /* AND THE COLOUR, which this leaf recorded nowhere until 2026-09-21. Without
+       it the op could only ever publish as its box's BYTES, and since the clean
+       cut those are dropped -- so the engine's own clear of the offscreen
+       (0x4C6890(offscreen, 0) at the head of 0x467D70) reached the twin as
+       nothing at all, and every region the engine leaves at index 0 presented as
+       the lane's magenta instead of black. Same shape as `rect_box`'s third
+       argument, taken while the engine is inside the call. */
+    if (s_lastOp) s_lastOp->col = (unsigned char)ARG(e, 2);
     return 0;
 }
 

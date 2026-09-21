@@ -164,7 +164,9 @@ static int  s_nsurf = 0;
 #define CHROME_RECSIDE 0x95u          /* record+ : the side byte             */
 #define CHROME_XOFF    0x81           /* the top and bottom bars start here  */
 #define CHROME_YOFF    0x20           /* the bottom bar sits ScreenH - 0x20  */
+#define GFX_SCREEN_W   0xD4u          /* 0x4B6700 is `return *(*(0x51FBD0)+0xD4)` */
 #define GFX_SCREEN_H   0xD8u          /* 0x4B6710 is `return *(*(0x51FBD0)+0xD8)` */
+#define CHROME_TILEMAX 16             /* 3840 / 513 is 8; the bound, not the exit */
 #define GAF_FETCH_VA   0x004B7F30u    /* frame = fetch(sequence, index), stdcall ret 8 */
 typedef void* (__stdcall *gaf_fetch_fn)(void* seq, int idx);
 
@@ -1646,6 +1648,22 @@ static void publish(unsigned flipSurf)
             pub_commit();
             continue;
         }
+        /* A WHOLE-SURFACE FILL IS A BAR THE SIZE OF THE SURFACE. `0x4C6890`
+           writes one palette index over every pixel, which is `PK_BAR`'s exact
+           shape -- same packet, same `twin_fill`, coverage 1. It had no branch
+           here at all, so it fell to `as_pixels` and, since the clean cut, was
+           dropped: the engine's clear of the offscreen never reached the twin,
+           and every pixel the engine left at index 0 presented as the lane's
+           magenta clear. The viewport's own erase still uncovers the world after
+           this, because the FLIP op that emits it is recorded after these and
+           publishes later in the same window. [2026-09-21.] */
+        if (op->kind == OP_FILL) {
+            o = pub_op(PK_BAR, s->base); if (!o) return;
+            o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
+            o->fg = op->col;
+            pub_commit();
+            continue;
+        }
         /* A HOLLOW RECTANGLE IS FOUR EDGES AND A COLOUR. [The vulkan-only
            plan, landing 8b.] `DrawTranspRectangle 0x4BF8C0` is named for its
            hollow centre and NOT for translucency: its four edges go through
@@ -2415,16 +2433,34 @@ static void* __cdecl after_flip(unsigned int* regs)
    whole level. The debt is kept until it is paid or the level closes. */
 static void chrome_emit(struct SURF* fs)
 {
-    static const struct { unsigned tbl; int x; int bottom; } PIECE[3] = {
-        { CHROME_TOP,    CHROME_XOFF, 0 },
-        { CHROME_BOTTOM, CHROME_XOFF, 1 },
-        { CHROME_PANEL,  0,           0 },
+    /* THE TWO BARS TILE, THE PANEL DOES NOT. The bar frames are 513 px wide and
+       the engine lays them end to end from 0x81 until it runs out of screen --
+       measured, not assumed: the probe caught the second one at
+       `gaf box=(642,736)-(1023,767)`, and 0x81 + 513 is exactly 642, with the
+       right edge clipped by the surface rather than by a narrower asset. A
+       recipe that drew each bar once left everything past 642 black, which at
+       1024 wide is 382 px of every bar and at 1920 would be most of it. */
+    /* `ext` is the sequence a bar CONTINUES with past its first tile, and for the
+       top bar that is the BOTTOM bar's art, not its own. Established by
+       measurement rather than from the engine's code: in the golden source the
+       top bar's x642..1023 is 97.1% identical to the bottom bar's tiles and only
+       9.8% identical to its own left half, which carries METAL and ENERGY.
+       Repeating its own frame drew a second METAL / ENERGY panel at x=642, and
+       its sequence holds one frame so there is no plain variant inside it.
+       NOT DERIVED FROM THE PRODUCER: the engine function that lays these
+       continuations is still unidentified -- it is neither 0x467D70 (three
+       blits, no loop) nor either site in 0x46A860 (both redraw the same first
+       tile). This reproduces what that function's output looks like. */
+    static const struct { unsigned tbl; unsigned ext; int x; int bottom; int tile; } PIECE[3] = {
+        { CHROME_TOP,    CHROME_BOTTOM, CHROME_XOFF, 0, 1 },
+        { CHROME_BOTTOM, CHROME_BOTTOM, CHROME_XOFF, 1, 1 },
+        { CHROME_PANEL,  0,             0,           0, 0 },
     };
     const char* ta;
     const char* gfx;
     const char* rec;
     unsigned side;
-    int h, i, made = 0;
+    int h, w, i, made = 0;
 
     if (!s_chromePend || !fs) return;
     if (!tagpu_reclaim_level_tracked() || tagpu_reclaim_level_closing()) {
@@ -2437,7 +2473,8 @@ static void chrome_emit(struct SURF* fs)
     gfx = *(const char* const*)GFX_GLOBALS_PP;
     if (!ptr_ok(gfx)) return;
     h = *(const int*)(gfx + GFX_SCREEN_H);
-    if (h <= CHROME_YOFF) { s_chromePend = 0; s_chromeRefused++; return; }
+    w = *(const int*)(gfx + GFX_SCREEN_W);
+    if (h <= CHROME_YOFF || w <= CHROME_XOFF) { s_chromePend = 0; s_chromeRefused++; return; }
 
     rec = *(const char* const*)(ta + CHROME_PLRTBL +
                                 (unsigned)*(const unsigned char*)(ta + CHROME_PLAYER) * CHROME_STRIDE);
@@ -2446,25 +2483,47 @@ static void chrome_emit(struct SURF* fs)
     if (side >= CHROME_SIDES) { s_chromePend = 0; s_chromeRefused++; return; }
 
     s_chromePend = 0;
+    /* THE FILL FIRST, because that is the order 0x467D70 itself uses: it calls
+       0x4C6890(offscreen, 0) at its head and only then blits the three pieces.
+       Reproducing it is what puts black where the engine leaves black -- the
+       column below the 129x480 panel above all, which is 36 896 px of index 0 in
+       the golden source and was the lane's magenta here. */
+    op_add(OP_FILL, fs, 0, 0, fs->w - 1, fs->h - 1);
+    if (s_lastOp) s_lastOp->col = 0;
     for (i = 0; i < 3; i++) {
         void* seq = *(void* const*)(ta + PIECE[i].tbl + side * 4);
         const unsigned char* fr;
-        int x, y;
+        int x, y, step, n;
         if (!ptr_ok(seq)) continue;
         fr = (const unsigned char*)((gaf_fetch_fn)GAF_FETCH_VA)(seq, 0);
         if (!ptr_ok(fr)) continue;
         /* the engine's own arithmetic: it passes hotspot + offset and the blit
            subtracts the hotspot again, so these land at (x, y) exactly */
-        x = PIECE[i].x + GF_HX(fr);
         y = (PIECE[i].bottom ? h - CHROME_YOFF : 0) + GF_HY(fr);
-        gaf_record(NULL, fs, fr, x, y, OP_GAF);
-        made++;
+        step = PIECE[i].tile ? (int)GF_W(fr) : 0;
+        /* BOUNDED BY COUNT, NOT ONLY BY THE EDGE. `step` comes from a frame
+           header, which is engine DATA: a zero or negative width would spin this
+           loop for ever and a one-pixel one would emit thousands of ops. The
+           count is the bound; the screen edge is the ordinary exit. */
+        for (n = 0, x = PIECE[i].x; n < CHROME_TILEMAX; n++) {
+            if (n == 1 && PIECE[i].ext && PIECE[i].ext != PIECE[i].tbl) {
+                void* es = *(void* const*)(ta + PIECE[i].ext + side * 4);
+                const unsigned char* ef = ptr_ok(es)
+                    ? (const unsigned char*)((gaf_fetch_fn)GAF_FETCH_VA)(es, 0) : NULL;
+                if (ptr_ok(ef)) { fr = ef; step = (int)GF_W(fr); y = GF_HY(fr); }
+            }
+            gaf_record(NULL, fs, fr, x + GF_HX(fr), y, OP_GAF);
+            made++;
+            if (step <= 0) break;
+            x += step;
+            if (x >= w) break;
+        }
     }
     if (made) s_chromeEmits++;
     if (s_log && made) {
         char b[160];
-        _snprintf(b, sizeof b, "gui chrome: re-emitted %d/3 for side %u at ScreenH=%d (reset #%u)",
-                  made, side, h, g_guiq.resets);
+        _snprintf(b, sizeof b, "gui chrome: re-emitted %d op(s) for side %u at %dx%d (reset #%u)",
+                  made, side, w, h, g_guiq.resets);
         b[sizeof b - 1] = 0;
         glog(b);
     }

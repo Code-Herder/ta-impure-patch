@@ -38,7 +38,15 @@
 #define TAGPU_AS_FRAME  0x00    /* u16 current frame index                  */
 #define TAGPU_AS_SEQ    0x08    /* sequence*                                */
 
-#define TAGPU_GAF_DECMAX 512    /* largest frame edge the decoder accepts    */
+/* 640 SINCE 2026-09-21, WAS 512, AND THE REASON IS ONE PIXEL. The in-game HUD
+   bars are 513-px frames, so at 512 they failed `fw <= DECMAX` by one, fell to
+   `as_pixels`, and -- since the clean cut drops PK_PIXELS -- drew nothing at
+   all. 640 also takes in the shell's 640-wide title art that the gui hook's own
+   comment names as the thing past the old edge, and stops there: the next power
+   of two costs 1.5 MB of static for nothing this engine asks for.
+   COST: s_dec and s_pad grow from ~522 KB together to ~813 KB. The gui atlas is
+   2048 square, so a 513-wide entry was never the constraint. */
+#define TAGPU_GAF_DECMAX 640    /* largest frame edge the decoder accepts    */
 #define TAGPU_GAF_PADMAX 4      /* widest replicated border an atlas may ask  */
 
 typedef struct TAGPU_GAFENT {
