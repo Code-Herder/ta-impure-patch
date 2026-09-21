@@ -57,6 +57,12 @@
 #define OFF_GUI_TOP   0x531           /* GUIInfo.TheActive_GUIMEM               */
 #define GM_CTRLS      0x04
 #define P_SURFACE     0xBC            /* panel record: OFFSCREEN* surface       */
+/* the panel's own rect, four SIGNED shorts, read by 0x4AB0B0 at 0x4AB0DF..
+   0x4AB0FF (x, y, w, h -- it forms right/bottom as x+w-1, y+h-1) and again at
+   0x4AB11E/0x4AB122 as the destination of the blit itself [DISASSEMBLED
+   2026-09-21]. The in-game side panel reads [0, 128, 128, 352]. */
+#define P_RECT_X      0x13
+#define P_RECT_Y      0x15
 #define P_TOTAL       0xB6
 
 /* OFFSCREEN / drawing context head, shared by the surface object and the
@@ -171,7 +177,12 @@ static int  s_nsurf = 0;
 typedef void* (__stdcall *gaf_fetch_fn)(void* seq, int idx);
 
 static void chrome_emit(struct SURF* fs);     /* below the leaves include */
+static void copy_record(struct SURF* s, const int* dst, const int* src, int x, int y);
+                                              /* the copy leaf's body, same reason */
 static int      s_chromePend = 0;             /* a reset owes the chrome a re-emit */
+static int      s_panelPend = 0;              /* ... and owes the panel blit too   */
+static unsigned s_panelEmits = 0, s_panelRefused = 0;
+static unsigned s_frameBase = 0;              /* the flip surface publish last saw */
 static unsigned s_chromeEmits = 0, s_chromeRefused = 0;
 
 #define TAG_OFFSCREEN 0x005091D4u     /* the "OFFSCREEN" string every 0x4C69F0 of the main
@@ -1362,6 +1373,11 @@ static int consumer_stalled(void)
 
 static void publish(unsigned flipSurf)
 {
+    /* the panel re-emit runs at the flip's RETURN, where the flip surface is no
+       longer an argument to anything. Kept as the BASE, a value, and resolved
+       through `surf_by_base` at the point of use, so a surface freed in between
+       is a failed lookup rather than a dangling SURF*. */
+    if (flipSurf) s_frameBase = flipSurf;
     int i;
     SURF* fs;
     int vl = 0, vt = 0, vr = -1, vb = -1;
@@ -1441,6 +1457,7 @@ static void publish(unsigned flipSurf)
            landing 9's repaint runs later still (after_flip) and lands behind
            them. Ordering by position in the op array, not by a rule. */
         s_chromePend = 1;
+        s_panelPend = 1;
     }
     {
         const char* ta = *(const char* const*)TA_MAINPP;
@@ -2306,6 +2323,65 @@ static void repaint_refused(void)
     s_repaintSkips++;
 }
 
+/* THE PANEL SURFACE REACHES THE FRAME ONLY WHILE THE ENGINE THINKS IT IS DIRTY,
+   and after a reset it never does again. `0x4AB0B0` blits `panel+0xBC` to the
+   frame at the panel rect and CLEARS `Active_b (+0x14)` in the same breath
+   (`0x4AB111` and `0x4AB13F`), so there is exactly one blit per dirty mark; the
+   other way in is the overlap test at `0x4AB136`, and the in-game side panel at
+   `[0,128,128,352]` does not overlap the viewport `{128,32,W-1,H-33}`, so that
+   never fires either. The ARM/CORE emblem lives in that surface and arrived
+   exactly once per level -- `copies=1` -- which is why it was missing from every
+   frame after the first reset. [MEASURED 2026-09-21: the probe at (64,285) saw
+   one `copy box=(0,128)-(127,479)` and nothing afterwards.]
+
+   WE DO NOT MARK THE ENGINE'S FLAG. Setting `Active_b` would be a write to engine
+   state that races the engine's own use of it -- it clears the flag itself, two
+   instructions after reading it -- and would buy nothing we cannot get by
+   re-emitting the blit as an op, which writes nothing at all.
+
+   WHY THE SOURCE TWIN IS FILLED, BY ORDERING. The redraw issued immediately above
+   repaints the whole panel surface: in game `GUIMEM+0x24` is NULL, so `0x4A911D`
+   takes the picture handler `0x4B0230(gi, 0, panel+0xC4)`, which draws one
+   128x352 GAF into `panel+0xBC` [MEASURED 2026-09-21: `repaint #4 -- 1 op(s)
+   [gaf 1]`, base `0BB00090` = the panel object's own `+0x0C`, box (0,0)-(127,351)].
+   Those ops and this copy go into the SAME window, this one strictly after them,
+   and the consumer replays a window in array order. So the copy reads a twin the
+   ops just above it built -- position in `s_ops`, not a claim about timing.
+
+   AND THE GUARD IS NOT AN OPTIMISATION. `twin_copy`'s caller asks for a RESEED
+   when the source twin is missing (`g_guiq.why = WHY_COPY`), and a reseed is a
+   reset, and a reset owes another of these copies: emitting one blind is a loop,
+   not a wasted op. So we emit only when the redraw actually put an op on the
+   panel surface's own base -- a checked fact about this window. When it did not,
+   the debt is kept and the next redraw gets the chance; nothing is emitted. */
+static void panel_emit(const char* ctrls, int n0)
+{
+    const int* psurf;
+    SURF* fs;
+    unsigned pbase;
+    int i, filled = 0;
+
+    if (!s_panelPend) return;
+    if (!tagpu_reclaim_level_tracked() || tagpu_reclaim_level_closing()) {
+        s_panelPend = 0; s_panelRefused++; return;
+    }
+    if (!tagpu_packet_pub_level_open()) return;      /* not yet in play: keep the debt */
+    fs = surf_by_base(s_frameBase);
+    if (!fs) return;
+    psurf = (const int*)(size_t)*(const void* const*)(ctrls + P_SURFACE);
+    if (!ptr_ok(psurf)) { s_panelPend = 0; s_panelRefused++; return; }
+    pbase = (unsigned)psurf[CTX_BASE];
+    if (!pbase) { s_panelPend = 0; s_panelRefused++; return; }
+    for (i = n0; i < s_nops; i++)
+        if (s_ops[i].base == pbase) { filled = 1; break; }
+    if (!filled) return;                             /* keep the debt */
+    surf_of_ctx(psurf);                              /* the source is a surface too */
+    copy_record(fs, NULL, psurf,
+                *(const short*)(ctrls + P_RECT_X), *(const short*)(ctrls + P_RECT_Y));
+    s_panelPend = 0;
+    s_panelEmits++;
+}
+
 static void repaint_service(void)
 {
     const char* ta;
@@ -2378,6 +2454,9 @@ static void repaint_service(void)
         b[sizeof b - 1] = 0;
         glog(b);
     }
+    /* after the log block on purpose: `s_repaintOps` and the kind breakdown are
+       what the REDRAW drew, and this op is ours. */
+    panel_emit(ctrls, n0);
 }
 
 static void* __cdecl after_flip(unsigned int* regs)
@@ -2691,21 +2770,27 @@ void tagpu_gui_flush(unsigned int frame_counter)
        magnitude of one counter. mingw's `_snprintf` does not NUL-terminate on
        truncation, and `glog` hands the result to `fprintf("%s")`, so the
        failure would have been an out-of-bounds READ, not a tidy cut. */
-    char b[352];
+    char b[416];
     want_minimap_watchdog(frame_counter);
     if (!s_installed) return;
     if (frame_counter - last >= 600) {
         last = frame_counter;
         /* `published`, `bytes`, `queue`, `resets`, `overflows`, `stalls` and
-           `draw` ARE ALL STRUCTURALLY ZERO since the clean cut -- `g_gui_draw`
-           has no writer, so `publish` never runs (see its declaration). They
-           stay in the line because a restored consumer will want them back and
-           a zero that is explained costs nothing; the trailing clause is what
-           stops the next reader chasing them. */
-        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u chrome=%u/%u",
+           `draw` WERE ALL STRUCTURALLY ZERO while the consumer was out --
+           `g_gui_draw` had no writer then, so `publish` never ran. THAT IS NO
+           LONGER TRUE and the paragraph saying so outlived the renderer restore
+           by three commits: a measured line now reads `published=2363986
+           resets=5 draw=1` in an ordinary boot [2026-09-21]. Every field here is
+           live; read them as numbers again.
+
+           SIZED FOR THE COUNTERS, NOT FOR THE LINE YOU LAST SAW. Twenty-one
+           `%u`s at ten digits plus the literals is 360 bytes, and the observed
+           line is 232 -- the gap is entirely how long the session has run. This
+           buffer has been overrun once before by one field too many. */
+        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u chrome=%u/%u panel=%u/%u",
                   s_flips, s_opsTotal, s_opsDropped, s_changedTotal, s_unexplTotal, s_nsurf,
                   s_pubOps, s_pubBytes, g_guiq.qHead - g_guiq.qTail, g_guiq.resets, g_guiq.overflows, g_guiq.stalls, g_gui_draw, s_freeqFlush, s_repaints, s_repaintSkips, s_repaintOps,
-                  s_chromeEmits, s_chromeRefused);
+                  s_chromeEmits, s_chromeRefused, s_panelEmits, s_panelRefused);
         glog(b);
         {
             int k, n = 0;

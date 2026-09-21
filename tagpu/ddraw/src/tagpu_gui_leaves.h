@@ -318,27 +318,38 @@ static int __cdecl before_focus(void* e) { if (on_game_thread()) rect_box(e, OP_
 
 /* ---- 0x4C6B70 surface->surface blit stdcall(dst ctx, src surface, x, y)
         ret 0x10 (the GUI panel reaching the frame; gui-renderer.md §2) -- */
-static int __cdecl before_copy(void* e)
+/* THE BODY OF THE COPY LEAF, REACHABLE WITHOUT A DETOUR FRAME. Factored out
+   for the same reason `gaf_record` was: the panel re-emit in `tagpu_gui_hook.c`
+   has to produce an op the publisher cannot tell apart from an observed one, and
+   the way to guarantee that is to run the same code rather than a second copy of
+   the arithmetic. `dst` may be NULL -- the re-emit reaches the destination as a
+   SURF and has no context to clip against, and the engine's own panel blit is
+   clipped by the surface bounds alone, which `op_add` already applies. */
+static void copy_record(SURF* s, const int* dst, const int* src, int x, int y)
 {
-    const int* dst = ctx_or_back(ARG(e, 1));
-    const int* src = ctx_or_back(ARG(e, 2));      /* src NULL = the screen too */
-    int x = SARG(e, 3), y = SARG(e, 4);
     int l, t, r, b;
-    SURF* s;
-    if (!on_game_thread() || excluded_caller(ARG(e, 0))) return 0;
-    if (ptr_ok(src)) surf_of_ctx(src);            /* the source is a surface too */
-    s = surf_of_ctx(dst);
-    if (!ptr_ok(src)) { op_add(OP_COPY, NULL, 0, 0, 0, 0); return 0; }
     /* 0x4CBBE0 lands the whole source at (x - originX, y - originY) */
     x -= *(const short*)((const char*)src + 0x18);
     y -= *(const short*)((const char*)src + 0x1A);
     l = x; t = y; r = x + src[CTX_W] - 1; b = y + src[CTX_H] - 1;
-    if (s) clip_ctx(dst, &l, &t, &r, &b);
+    if (s && dst) clip_ctx(dst, &l, &t, &r, &b);
     op_add(OP_COPY, s, l, t, r, b);
     if (s_lastOp) {
         s_lastOp->src = (unsigned)src[CTX_BASE];
         s_lastOp->sl = (short)(l - x); s_lastOp->st = (short)(t - y);   /* source top-left of the box */
     }
+}
+
+static int __cdecl before_copy(void* e)
+{
+    const int* dst = ctx_or_back(ARG(e, 1));
+    const int* src = ctx_or_back(ARG(e, 2));      /* src NULL = the screen too */
+    SURF* s;
+    if (!on_game_thread() || excluded_caller(ARG(e, 0))) return 0;
+    if (ptr_ok(src)) surf_of_ctx(src);            /* the source is a surface too */
+    s = surf_of_ctx(dst);
+    if (!ptr_ok(src)) { op_add(OP_COPY, NULL, 0, 0, 0, 0); return 0; }
+    copy_record(s, dst, src, SARG(e, 3), SARG(e, 4));
     return 0;
 }
 
