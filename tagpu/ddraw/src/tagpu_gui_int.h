@@ -46,11 +46,22 @@ enum {
                        category as the GAF frame bytes a `PK_SPRITE`'s first
                        sight already carries. The producer only ever emits it
                        for a surface whose `isAsset` still stands, and `op_add`
-                       clears that the instant any op names the surface as a
-                       DESTINATION, so "nothing draws into it" is a checked
-                       property and not an assumption. Being immutable is also
-                       what makes reading it AT THE FLIP exact, where the same
-                       read for `PK_PIXELS` is a box of bytes from a moment
+                       clears that the instant an op covers a pixel of the
+                       surface as a DESTINATION.
+
+                       WHAT THAT CHECKS AND WHAT IT DOES NOT, stated because the
+                       shorter version of this sentence was an overclaim: the
+                       check is over the SEVENTEEN LEAVES, so it says no
+                       OBSERVED draw named the surface. The loader that fills it
+                       is itself an unhooked write path -- that is the whole
+                       premise -- so an engine path that re-filled a claimed
+                       surface without passing a leaf would leave the twin
+                       holding older bytes with nothing to re-offer. Wrong
+                       picture, never a crash. `s_assetDrift` in the hook
+                       measures exactly that under `census.on` and reads 0; the
+                       hole is named rather than papered over. Being stable is
+                       also what makes reading it AT THE FLIP exact, where the
+                       same read for `PK_PIXELS` is a box of bytes from a moment
                        later than the draw it stands for. [Landing: the shell
                        backdrop, 2026-09-21.] */
 };
@@ -97,6 +108,7 @@ typedef struct TAGPU_PUBOP {
     unsigned short gcount;          /* glyph records at the head of the block   */
     unsigned char  font_rows;       /* font[0], the rows the blitter writes     */
     signed char    font_yoff;       /* font[2], subtracted from y               */
+    unsigned       assetTok;        /* PK_ASSET: the offer's one-time token     */
     unsigned       flip;            /* the flip this belongs to (diagnostics)   */
 } TAGPU_PUBOP;
 
@@ -109,18 +121,49 @@ typedef struct TAGPU_GUIQ {
     unsigned char* arena;                    /* TAGPU_GUI_ASIZE                */
     volatile unsigned qHead, qTail;          /* producer writes head, consumer tail */
     volatile unsigned aHead, aTail;          /* arena bytes, same roles        */
-    /* THE ASSET HANDSHAKE, and it is an ORDERING and not a hope. A `PK_ASSET`
-       is published once and its payload is large, so the producer must know
-       whether it LANDED rather than assume it did -- the consumer's mirror is
-       not recording on every frame (it follows the Vulkan pass), and
-       `mir_bytes` refuses silently when it is not, which lost the shell
-       backdrop on the one frame that mattered. The consumer writes the base it
-       actually carried; the producer re-offers until it sees that base come
-       back, and gives up after `TAGPU_GUI_ASSET_TRIES` so a consumer that never
-       records cannot be fed a 300 KB payload every flip for ever. Written by
-       the consumer, read by the producer, one word, no lock: a stale read costs
-       one extra offer, never a wrong picture. */
-    volatile unsigned assetAck;              /* consumer: the base it last carried as PK_ASSET */
+    /* THE ASSET HANDSHAKE. A `PK_ASSET` is published once and its payload is
+       large, so the producer must know whether it LANDED rather than assume it
+       did -- the consumer's mirror is not recording on every frame (it follows
+       the Vulkan pass) and `mir_bytes` refuses silently when it is not, which
+       lost the shell backdrop on the one frame that mattered.
+
+       WHAT THE CONSUMER ECHOES IS A ONE-TIME TOKEN, NOT THE SURFACE'S BASE, and
+       that is the whole safety of it. The first cut echoed the base, and a base
+       is not an identity here: this module frees a surface and the engine's next
+       `0x4C69F0` lands on the same block (MEASURED -- see `surf_drop_offscreens`),
+       so an ack left standing from a DEAD surface was matched by the live one
+       that inherited its address, the offer was skipped, and the screen that
+       replaced it drew black. The same word also let an in-flight echo from the
+       PREVIOUS episode land after a reseed had cleared it. A token is issued
+       once per offer and never reissued, so neither a recycled base nor a late
+       echo can satisfy an offer that was not made. [Both found by the landing
+       review of this commit; both were the pre-landing symptom coming back.]
+
+       ONE WRITER EACH WAY: the consumer writes `assetAck`, the producer only
+       reads it. The producer does NOT clear it -- it does not need to, because a
+       token it never issued cannot match. The echo is published by `mir_finish`
+       when the record is actually handed over, not when the op entered it, so a
+       record that is later thrown away acks nothing.
+
+       `mirArmed` IS THE THROTTLE AND THE TOKEN IS THE CORRECTNESS, and keeping
+       those two apart is what makes the retry a state machine rather than a
+       clock. The consumer publishes `mirArmed` from the ONE place that arms or
+       disarms its mirror (`tagpu_gui_mirror_want`), and the producer refuses to
+       compose an offer while it reads 0. Without it, a shell sitting in front of
+       an unarmed Vulkan lane re-published a 300 KB backdrop every present until
+       the try count ran out -- up to ~72 MB of game-thread memcpy per episode
+       for bytes with no consumer. A STALE READ COSTS AT MOST ONE FRAME: armed
+       read as disarmed skips that present's offer and the next one makes it
+       again; disarmed read as armed spends one offer nobody acks, which is the
+       case that already had to be handled. It can never LOSE the asset, because
+       nothing here retires an offer -- only the consumer's echo does.
+
+       `TAGPU_GUI_ASSET_TRIES` is then a backstop rather than the mechanism: it
+       bounds the offers within one episode against a lane that is armed but
+       never records (every present abandoned for want of room), and a reseed
+       starts a fresh count, so it is not a bound on lifetime traffic. */
+    volatile unsigned mirArmed;              /* consumer: its mirror is recording  */
+    volatile unsigned assetAck;              /* consumer: the token it last CARRIED */
     volatile unsigned reseed;                /* consumer asks the producer to seed everything */
     volatile unsigned why;                   /* the last reason `reseed` (or an overflow) was raised: TAGPU_GUI_WHY_* */
     volatile unsigned overflows;             /* the producer ran out of queue or arena  */

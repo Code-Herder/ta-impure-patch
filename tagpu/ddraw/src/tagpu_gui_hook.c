@@ -137,7 +137,8 @@ typedef struct SURF {
     int isAsset;                      /* created with a "bitmaps\\....PCX" tag AND never yet
                                          named as an op's destination: a decoded asset, not
                                          a composition. `op_add` clears it; see PK_ASSET  */
-    int assetSent;                    /* the consumer ACKED these bytes (g_guiq.assetAck) */
+    int assetSent;                    /* the consumer ACKED this surface's current token */
+    unsigned assetTok;                /* the token of the offer in flight, 0 = none    */
     unsigned assetTries;              /* offers made; bounded by TAGPU_GUI_ASSET_TRIES  */
 } SURF;
 #define MAX_SURF 24
@@ -370,7 +371,7 @@ static SURF* surf_get(unsigned base, int w, int h, int pitch, unsigned owner)
                 s_surf[i].w = w; s_surf[i].h = h; s_surf[i].pitch = pitch;
                 s_surf[i].copyValid = 0;
                 s_surf[i].seeded = 0;          /* the twin is the old size: re-make it */
-                s_surf[i].assetSent = 0; s_surf[i].assetTries = 0;   /* and with it */
+                s_surf[i].assetSent = 0; s_surf[i].assetTries = 0; s_surf[i].assetTok = 0;
                 free(s_surf[i].copy); free(s_surf[i].mask); free(s_surf[i].acc);
                 s_surf[i].copy = s_surf[i].mask = s_surf[i].acc = NULL;
             }
@@ -813,11 +814,24 @@ static OP       s_ops[MAX_OPS];
 static int      s_nops = 0;
 /* ops recorded against a base are dead once the object is gone or re-made: a
    new surface may be allocated over the same bytes before the next census, and
-   neither the census nor the publisher may apply an old box to it */
+   neither the census nor the publisher may apply an old box to it.
+
+   A COPY'S SOURCE IS A BASE TOO, and it was not being forgotten. The
+   destination alone was cleared, so an op whose destination is still alive and
+   whose SOURCE was freed kept naming the dead address -- and this module's own
+   measurement is that the engine's next `0x4C69F0` lands on the freed block, so
+   `publish`'s `surf_by_base(op->src)` resolved a stranger. That is a wrong
+   picture (the copy samples whatever now lives there) and, since `PK_ASSET`,
+   potentially a wrong 300 KB offer made in the dead surface's name. Clearing it
+   makes the source unresolvable instead, and an unresolved source falls through
+   to the box's own bytes, which is the honest answer. [The landing review's.] */
 static void ops_forget_base(unsigned base)
 {
     int k;
-    for (k = 0; k < s_nops; k++) if (s_ops[k].base == base) s_ops[k].base = 0;
+    for (k = 0; k < s_nops; k++) {
+        if (s_ops[k].base == base) s_ops[k].base = 0;
+        if (s_ops[k].src  == base) s_ops[k].src  = 0;
+    }
 }
 static unsigned s_kindCount[OP_NKIND];
 static unsigned s_kindTotal[OP_NKIND];          /* cumulative, for the heartbeat */
@@ -837,6 +851,18 @@ static unsigned s_kindArea[OP_NKIND];
 static unsigned s_assetSends = 0;     /* PK_ASSET ops published                   */
 static unsigned s_assetRevoked = 0;   /* surfaces that stopped being assets       */
 static unsigned s_assetAcked = 0;     /* assets the consumer echoed back          */
+static unsigned s_assetDrift = 0;     /* pixels that moved in an ACKED asset -- the
+                                         residual the claim names, measured under
+                                         `census.on` and expected to read 0        */
+/* NEVER REISSUED, which is what makes the echo an identity. Skips 0 on wrap so
+   that 0 always means "no offer in flight"; a wrap needs 2^32 offers. */
+static unsigned s_assetTokNext = 1;
+static unsigned asset_token(void)
+{
+    unsigned t = s_assetTokNext++;
+    if (!s_assetTokNext) s_assetTokNext = 1;
+    return t;
+}
 
 static void op_add(int kind, SURF* s, int l, int t, int r, int b)
 {
@@ -852,20 +878,30 @@ static void op_add(int kind, SURF* s, int l, int t, int r, int b)
     s_kindTotal[kind]++;
     s_opsTotal++;
     if (!s) { s_nullCtx[kind]++; return; }
-    /* THE INVARIANT BEHIND `PK_ASSET`, AND IT IS ENFORCED HERE BECAUSE THIS IS
-       WHERE A DESTINATION IS NAMED. An asset surface is one the loader filled
-       and nothing draws into; the moment an op targets it that is no longer
-       true, so it stops being one -- for the rest of its life, and before the
-       op is even clipped, because an attempt to draw is what the claim is
-       about. `assetSent` is deliberately NOT cleared: bytes that already
-       crossed are not un-sent, and the ops now arriving will paint over them,
-       which is exactly the right outcome. */
-    if (s->isAsset) { s->isAsset = 0; s_assetRevoked++; }
     if (l < 0) l = 0;
     if (t < 0) t = 0;
     if (r > s->w - 1) r = s->w - 1;
     if (b > s->h - 1) b = s->h - 1;
     if (l > r || t > b) return;
+    /* THE INVARIANT BEHIND `PK_ASSET`, AND IT IS ENFORCED HERE BECAUSE THIS IS
+       WHERE A DESTINATION IS NAMED AND ITS BOX IS KNOWN TO COVER A PIXEL. An
+       asset surface is one the loader filled and nothing draws into; the moment
+       an op covers a pixel of it that is no longer true, so it stops being one
+       for the rest of its life. `assetSent` is deliberately NOT cleared: bytes
+       that already crossed are not un-sent, and the ops now arriving will paint
+       over them, which is exactly the right outcome.
+
+       AFTER THE CLIP, NOT BEFORE IT, and the move is a fix rather than a
+       tidy-up. Revoking on an op that clipped to nothing revoked a claim about
+       bytes the engine never touched, and it cost the picture: the surface was
+       no longer an asset, `publish` seeds only DESTINATIONS it has an op for,
+       and a surface that is only ever a copy SOURCE therefore had no path left
+       to any content at all -- the copy fell through to `PK_PIXELS`, which the
+       drain drops, and the screen drew black. Past this line every remaining
+       path either records the op or drops it for want of room, and both mean
+       pixels are being written, so the claim is exactly as strong as it was.
+       [FOUND by the landing review.] */
+    if (s->isAsset) { s->isAsset = 0; s_assetRevoked++; }
     s_kindArea[kind] += (unsigned)(r - l + 1) * (unsigned)(b - t + 1);
     if (s_nops >= MAX_OPS) { s_opsDropped++; return; }
     o = &s_ops[s_nops++];
@@ -1559,17 +1595,17 @@ static void publish(unsigned flipSurf)
            and were the model for this. */
         for (i = 0; i < s_nsurf; i++) {
             s_surf[i].seeded = 0;
-            s_surf[i].assetSent = 0; s_surf[i].assetTries = 0;
+            s_surf[i].assetSent = 0; s_surf[i].assetTries = 0; s_surf[i].assetTok = 0;
         }
-        /* AND THE ECHO WITH THEM, PER EPISODE AND NOT EVER. Clearing
-           `assetSent` alone left `assetAck` still naming this surface from the
-           LAST episode, so the re-offer test passed on the stale echo and
-           re-marked the debt paid without a byte crossing: the backdrop came
-           back black after the first reset, exactly as before the packet
-           existed. The consumer re-earns the ack for every episode.
-           [Same shape as `hud_invalidate`'s "poked for this debt, not ever" --
-           found the same way, by running it.] */
-        g_guiq.assetAck = 0;
+        /* `assetTok` GOES WITH THEM, and clearing it is what retires every echo
+           still in flight: the next offer issues a NEW token, and a token that
+           was never issued for it cannot satisfy it. The first cut cleared
+           `g_guiq.assetAck` here instead, which made the producer a second
+           writer of the consumer's word AND still lost the race -- an in-flight
+           `PK_ASSET` from the previous episode could be drained after the clear
+           and before the read a few hundred microseconds later, re-marking the
+           debt paid with nothing across. Retiring the token is the same
+           statement with no window in it. [The landing review's.] */
         memset(s_seenF, 0, sizeof s_seenF); memset(s_seenP, 0, sizeof s_seenP);
         s_seenGen++;
         /* AND THE GLYPHS. A reseed is the consumer saying it threw state away,
@@ -1888,22 +1924,55 @@ static void publish(unsigned flipSurf)
             /* THE ASSET'S BYTES, ONCE, AND AHEAD OF THE COPY THAT NEEDS THEM.
                Not at `after_alloc`, where the surface is still blank and the
                loader has not run; not as a `PK_SEED`, whose payload the drain
-               drops by design. Here the source has been filled, is immutable
-               (see `isAsset`), and is about to be read by a copy whose twin is
-               otherwise empty -- which is exactly the black backdrop this
-               closes. Ordering is the queue's own: this commits before the
+               drops by design. Here the source has been filled and is about to
+               be read by a copy whose twin is otherwise empty -- which is
+               exactly the black backdrop this closes.
+
+               THE LIFETIME ARGUMENT IS `before_memfree`'s, and it is cited here
+               rather than left implied: `0x4D85A0` is the sole caller of the
+               allocator's free, the observer at its entry is this module's
+               destructor for the object, a game-thread free drops the entry
+               inline, and an off-thread free goes through the ring
+               `surf_drain_freeq()` empties at the top of every `before_flip` --
+               before the census or the publisher reads a single base. That
+               covers an asset SOURCE exactly as it covers a seed's destination:
+               same object class, same `owner = base - 0x30`. The `ptr_ok` in
+               `pub_surface_bytes` is a value filter and is NOT this argument.
+
+               "IMMUTABLE" IS TOO STRONG, so it is not claimed. What `op_add`
+               enforces is that no op recorded THROUGH THE 17 LEAVES, with their
+               gates open, has named this surface as a destination -- the loader
+               that fills it is itself an unhooked write path, which is the whole
+               premise. An engine path that re-filled a claimed surface without
+               passing a leaf would leave the twin holding the older bytes, and
+               nothing would re-offer. Wrong picture, never a crash; stated as
+               the residual rather than papered over. [The landing review's.] Ordering is the queue's own: this commits before the
                `PK_COPY` below, so the consumer has the source before it is
                asked to sample it. */
-            /* ACKED, NOT MERELY SENT. `assetSent` is set by the consumer's
-               echo below and never by the act of publishing -- the same lesson
-               the panel debt taught: a payload is delivered when the other side
-               says so, not when this side lets go of it. */
-            if (src && src->isAsset && !src->assetSent &&
-                g_guiq.assetAck == src->base) { src->assetSent = 1; s_assetAcked++; }
+            /* ACKED, NOT MERELY SENT -- and acked by the TOKEN THIS SURFACE'S
+               OFFER CARRIED, not by its address. `assetSent` is set by the
+               consumer's echo and never by the act of publishing (the lesson the
+               panel debt taught), and the token is what makes the echo mean this
+               offer rather than some earlier surface that happened to occupy the
+               same block. `assetTok == 0` is "no offer in flight" and must never
+               match the initial `assetAck` of 0. */
+            if (src && src->isAsset && !src->assetSent && src->assetTok &&
+                g_guiq.assetAck == src->assetTok) { src->assetSent = 1; s_assetAcked++; }
+            /* AND ONLY WHILE SOMETHING IS LISTENING. `mirArmed` is the
+               consumer's own arm state, not a timer: an unarmed lane drops the
+               payload in `mir_bytes` without a word, so composing the offer at
+               all is pure game-thread memcpy. Reading it stale is harmless in
+               both directions -- a missed present re-offers on the next one, a
+               spurious one goes unacked -- because nothing but the echo retires
+               an offer. [The landing review's: the try count was a ~1.2 s
+               timeout standing in for a state, and 240 x 300 KB is ~72 MB.] */
             if (src && src->isAsset && !src->assetSent && src->w > 0 && src->h > 0 &&
+                g_guiq.mirArmed &&
                 src->assetTries < TAGPU_GUI_ASSET_TRIES) {
                 TAGPU_PUBOP* a = pub_op(PK_ASSET, src->base);
                 if (!a) return;
+                src->assetTok = asset_token();
+                a->assetTok = src->assetTok;
                 a->w = src->w; a->h = src->h; a->pitch = src->pitch;
                 a->l = 0; a->t = 0;
                 a->r = (short)(src->w - 1); a->b = (short)(src->h - 1);
@@ -2264,6 +2333,20 @@ static int __cdecl before_flip(void* entry_esp)
                 surf_drop(i); i--;
                 continue;
             }
+            /* DID THE ASSET CLAIM ACTUALLY HOLD? The claim `PK_ASSET` rests on
+               is that nothing writes an asset surface after the loader filled
+               it, and `op_add` can only enforce the half that comes through the
+               17 leaves -- an engine path that re-filled one without passing a
+               leaf would leave the twin holding older bytes and nothing would
+               re-offer. That was written down as a residual; this MEASURES it,
+               for free, because the census already diffs every tracked surface
+               against its own shadow. A surface still claiming `isAsset` whose
+               bytes crossed (`assetSent`) and then moved is precisely the hole.
+               DIAGNOSTIC, NOT A GUARD: the census runs only under `census.on`,
+               so this says whether the residual is real, it does not close it.
+               [The landing review's: cheap enough that not measuring it was the
+               only thing making it unmeasurable.] */
+            if (s_surf[i].isAsset && s_surf[i].assetSent && c2) s_assetDrift += c2;
             if (u2 && s_log && s_surf[i].h > 1) {
                 int k, onThis = 0, shown = 0;
                 for (k = 0; k < s_nops; k++) if (s_ops[k].base == s_surf[i].base) onThis++;
@@ -3097,7 +3180,12 @@ void tagpu_gui_flush(unsigned int frame_counter)
        magnitude of one counter. mingw's `_snprintf` does not NUL-terminate on
        truncation, and `glog` hands the result to `fprintf("%s")`, so the
        failure would have been an out-of-bounds READ, not a tidy cut. */
-    char b[480];        /* +2 fields (asset=%u/%u) over the 416 measured below */
+    char b[480];        /* 444 worst case, RE-COUNTED rather than adjusted by eye:
+                           171 literal characters, 25 `%u` at ten digits and 2 `%d`
+                           at eleven, plus the NUL. The `asset=` group is FOUR
+                           fields, not the two an earlier revision of this comment
+                           claimed -- the arithmetic was right and the prose was
+                           stale, which is the way this line gets overrun. */
     want_minimap_watchdog(frame_counter);
     if (!s_installed) return;
     if (frame_counter - last >= 600) {
@@ -3110,15 +3198,16 @@ void tagpu_gui_flush(unsigned int frame_counter)
            resets=5 draw=1` in an ordinary boot [2026-09-21]. Every field here is
            live; read them as numbers again.
 
-           SIZED FOR THE COUNTERS, NOT FOR THE LINE YOU LAST SAW. Twenty-one
-           `%u`s at ten digits plus the literals is 360 bytes, and the observed
-           line is 232 -- the gap is entirely how long the session has run. This
-           buffer has been overrun once before by one field too many. */
-        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u chrome=%u/%u panel=%u/%u hud=%u/%u asset=%u/%u/%u",
+           SIZED FOR THE COUNTERS, NOT FOR THE LINE YOU LAST SAW. Twenty-five
+           `%u`s at ten digits and two `%d`s at eleven, plus 171 literals, is
+           443 bytes, and the observed line is ~240 -- the gap is entirely how
+           long the session has run. This buffer has been overrun once before by
+           one field too many, so COUNT IT AGAIN when you add one. */
+        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u chrome=%u/%u panel=%u/%u hud=%u/%u asset=%u/%u/%u/%u",
                   s_flips, s_opsTotal, s_opsDropped, s_changedTotal, s_unexplTotal, s_nsurf,
                   s_pubOps, s_pubBytes, g_guiq.qHead - g_guiq.qTail, g_guiq.resets, g_guiq.overflows, g_guiq.stalls, g_gui_draw, s_freeqFlush, s_repaints, s_repaintSkips, s_repaintOps,
                   s_chromeEmits, s_chromeRefused, s_panelEmits, s_panelRefused, s_hudPokes, s_hudRefused,
-                  s_assetSends, s_assetAcked, s_assetRevoked);
+                  s_assetSends, s_assetAcked, s_assetRevoked, s_assetDrift);
         glog(b);
         {
             /* THE SAME GUARD AS THE OTHER THREE IN THIS FILE: mingw's

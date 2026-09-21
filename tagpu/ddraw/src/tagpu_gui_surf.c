@@ -954,6 +954,13 @@ static void twins_reset(void)
    A/B would report it as a rasteriser difference. `s_mirLost` counts it. */
 
 static int       s_mirWant = 0;        /* the Vulkan pass asked for one       */
+/* THE ASSET TOKEN THIS RECORD CARRIES, held back until the record is actually
+   handed over. `mir_op` succeeding is not delivery: a later op in the same
+   drain can exhaust MIR_OPS_MAX/MIR_ARENA_MAX, or a glyph repack or an atlas
+   move can invalidate the whole frame, and `mir_finish` then publishes `lost`
+   and throws it away. Acking there would tell the producer its 300 KB had
+   landed when it had not. [The landing review's.] */
+static unsigned  s_mirAssetTok = 0;
 static int       s_mirRec  = 0;        /* ...and this frame is being recorded */
 static unsigned  s_mirLost = 0;        /* frames abandoned for want of room   */
 static int       s_mOther = 0;         /* ops this landing does not carry     */
@@ -1013,6 +1020,7 @@ static void mir_begin(void)
     s_mNSDraw = 0;
     s_abFrame = 0;          /* the claim never outlives the frame that made it */
     s_mirRec = s_mirWant;
+    s_mirAssetTok = 0;
     s_mHave = 0;
 }
 
@@ -1229,11 +1237,9 @@ static void drain(void)
                     m->kind = TAGPU_GUIOP_SEED; mir_box(m, o);
                     m->w = o->w; m->h = o->h;
                     m->aoff = off; m->alen = o->alen;
-                    /* THE ECHO, AND ONLY ON THE PATH THAT ACTUALLY CARRIED IT.
-                       `mir_op` can still refuse after `mir_bytes` took the
-                       arena, so the ack belongs here, inside `if (m)`, and not
-                       one brace out. */
-                    g_guiq.assetAck = o->surf;
+                    /* REMEMBERED, NOT YET ACKED -- `mir_finish` publishes it
+                       if and only if this record is handed over. */
+                    s_mirAssetTok = o->assetTok;
                     s_assets++;
                 }
             }
@@ -2442,6 +2448,10 @@ static void mir_finish(const TAGPU_FRAME* f)
         return;
     }
     s_mHand.lost = 0;
+    /* THE ECHO, AT THE ONE POINT WHERE THE RECORD IS KNOWN TO BE GOING OUT:
+       past `!s_mirWant`, past `!s_mirRec`, past both atlas-generation tests.
+       The producer stops re-offering only for a token it sees here. */
+    if (s_mirAssetTok) { g_guiq.assetAck = s_mirAssetTok; s_mirAssetTok = 0; }
     if (!s_mLayer) {
         s_mHand.presented = 0; s_mHand.surfW = s_mHand.surfH = 0;
         s_mHand.strict = 0; s_mHand.guard = 0; s_mHand.sharpOn = 0;
@@ -2626,6 +2636,13 @@ void tagpu_gui_mirror_want(int on)
            there is no read-back any more.) */
     }
     s_mirWant = on ? 1 : 0;
+    /* THE PRODUCER'S ASSET THROTTLE, PUBLISHED FROM THE ONE PLACE THAT DECIDES
+       IT. A `PK_ASSET` is ~300 KB of game-thread memcpy and is worth nothing
+       while this lane is not recording, so the producer reads this before it
+       composes one. It is a THROTTLE and not the handshake: correctness is the
+       token echoed in `mir_finish`, and a stale read here costs one frame of
+       delay or one unacked offer, never a lost asset. [The landing review's.] */
+    g_guiq.mirArmed = s_mirWant ? 1u : 0u;
 }
 
 int tagpu_gui_handover(TAGPU_GUIHAND* out, unsigned now)
