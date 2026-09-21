@@ -149,10 +149,30 @@ so a reset loses anything the engine will not redraw on its own. Three cases, al
   blit time, our capture would have carried the base ones and every player would have worn the
   same colour.
 
+**THE MINIMAP PICTURE IS PADDED AND ITS BOX IS NOT** **[MEASURED AND FIXED 2026-09-21]**. The
+level's minimap is a GAF frame at `main+0x1426B` whose header is a **square 252×252**, but the map
+only fills an aspect-correct region inside it: on a 336×400 map the last column that is not
+internally constant is **212**, and 213..251 are one uniform colour, while rows run to 251.
+`sharp_minimap` drew the whole frame with full 0..1 UVs, so all 252 columns were squeezed into the
+106-px box — the map landed in 89 of them and the padding stretched across the other 17, which is
+the flat blue band that used to sit down the right of the minimap.
+
+The crop goes in the **CPU bake**, not in the UVs, and that is the load-bearing part: `MM_FS` uses
+the same `uv` for `uPic` and for `uEng`, and the engine's fogged/unfogged pair is exactly box-sized
+and needs the full 0..1 — narrowing the UVs would have fixed the picture and silently broken the
+fog mask with it. Baking only the valid sub-rect keeps 0..1 true for both, needs no new uniform and
+touches no shader. The aspect is taken from `pk->mm_box`, the engine's own fitted box, rather than
+from the `mw`/`mh` in that function, which have already been through the HUD-scale multiply:
+252 × 106/126 is 212, which is where the data measurably stops.
+
+Minimap region against the golden source: **47.2 % → 72.09 %**, and internally flat columns inside
+it **17 → 0**. What is left is the restorer and not a fault — the engine's picture carries 68
+distinct colours against our 533, mean delta 16/255, 96.7 % of differing pixels within 32/255.
+
 **What the in-game HUD measures at 1024×768 after all of this**, presented frame against the golden
 source, resources left untouched at the cap: badge **400/400**, top bar **28 672/28 672**, panel
-rect **45 056/45 056**, the column below the panel **36 864/36 864**, bottom bar **28 672/28 672**.
-The minimap is live and differs between the two captures' instants, as it always has.
+rect **45 056/45 056**, the column below the panel **36 864/36 864**, bottom bar **28 672/28 672**,
+minimap **72.09 %** with the balance being the dither the restorer smooths.
 
 **The rest of the in-game HUD is per-frame into the main offscreen** **[VERIFIED,
 [UI markers](ui-markers.html) §4 and the `DrawGameScreen` tail]**: the resource text block
