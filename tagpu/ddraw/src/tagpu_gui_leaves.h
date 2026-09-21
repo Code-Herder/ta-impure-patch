@@ -384,8 +384,10 @@ static int __cdecl before_gafd(void* e)
 static int __cdecl before_scale(void* e)
 {
     const int* ctx = ctx_or_back(ARG(e, 1));
+    const unsigned char* fr = (const unsigned char*)(size_t)ARG(e, 2);
     const int* xy = (const int*)(size_t)ARG(e, 3);
-    int l, t, r, b, i;
+    const int* uv = (const int*)(size_t)ARG(e, 4);
+    int l, t, r, b, i, dw = 0, dh = 0, plain = 0;
     SURF* s;
     if (!on_game_thread() || s_inFlip) return 0;
     if (!ptr_ok(xy)) { op_add(OP_SCALE, NULL, 0, 0, 0, 0); return 0; }
@@ -396,9 +398,52 @@ static int __cdecl before_scale(void* e)
         if (xy[2 * i + 1] < t) t = xy[2 * i + 1];
         if (xy[2 * i + 1] > b) b = xy[2 * i + 1];
     }
+    /* AN AXIS-ALIGNED, UNCLIPPED, WHOLE-FRAME STAMP IS A SPRITE -- and NOTHING
+       ELSE IS CLAIMED HERE. The three vertices are origin, +u and +u+v, so the
+       stamp is axis-aligned exactly when v0 and v1 share a y and v1 and v2 share
+       an x, and it covers the whole frame exactly when the uv triangle runs
+       (0,0) (w,0) (w,h). The in-game player badge is that case, measured
+       2026-09-21 as `xy=(132,5)(152,5)(152,25) uv=(0,0)(32,0)(32,32)`. A rotated
+       or sheared stamp, a partial uv window, or one the context clipped keeps
+       the old behaviour and publishes its box: the bound is the test, not a
+       belief about what the engine draws.
+
+       AND THE EXTENT IS HALF-OPEN, which the vertices' bounding box is not. The
+       far vertex is the edge the span stops BEFORE, not a pixel: golden draws
+       that badge over x 132..151, twenty pixels, where the bbox says 132..152.
+       Taking the bbox made it twenty-one wide and put every interior line a
+       texel out. So the destination is `xy[2]-xy[0]` by `xy[5]-xy[1]`, and that
+       same span is the resample denominator. [The bars were one pixel too wide
+       for exactly this reason in b0b867a; this is the same mistake in a second
+       place, found by measuring the extent rather than trusting the box.]
+
+       `fr[0x0A]` is the sub-frame count, refused for the same reason
+       `gaf_record` turns such a frame into OP_GAFA: a stack is not one plane. */
+    if (ptr_ok(fr) && ptr_ok(uv) && fr[0x0A] == 0 &&
+        xy[1] == xy[3] && xy[2] == xy[4] &&
+        uv[0] == 0 && uv[1] == 0 && uv[3] == 0 && uv[2] == uv[4] &&
+        uv[2] == (int)GF_W(fr) && uv[5] == (int)GF_H(fr)) {
+        dw = xy[2] - xy[0]; dh = xy[5] - xy[1];
+        if (dw > 0 && dh > 0 && dw <= TAGPU_GAF_DECMAX && dh <= TAGPU_GAF_DECMAX &&
+            l == xy[0] && t == xy[1]) { r = l + dw - 1; b = t + dh - 1; plain = 1; }
+    }
     s = surf_of_ctx(ctx);
-    if (s) clip_ctx(ctx, &l, &t, &r, &b);
+    if (s) {
+        int cl = l, ct = t, cr = r, cb = b;
+        clip_ctx(ctx, &cl, &ct, &cr, &cb);
+        if (cl != l || ct != t || cr != r || cb != b) plain = 0;   /* clipped: box it */
+        l = cl; t = ct; r = cr; b = cb;
+    }
     op_add(OP_SCALE, s, l, t, r, b);
+    if (plain && s_lastOp) {
+        OP* o = s_lastOp;
+        o->frame = fr; o->pix = *(const void* const*)(fr + 0x10); o->ck = fr[0x08];
+        o->fw = (unsigned short)dw; o->fh = (unsigned short)dh;
+        o->dx = (short)l; o->dy = (short)t;
+        o->fcomp = fr[0x09]; o->fsub = fr[0x0A]; o->fsubn = fr[0x0B];
+        /* the same gate `gaf_record` uses: never decode for a window nobody reads */
+        if (s_census || g_gui_draw) scale_capture(o, fr, dw, dh);
+    }
     return 0;
 }
 

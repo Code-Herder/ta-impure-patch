@@ -164,6 +164,20 @@ static int  s_nsurf = 0;
 #define CHROME_BOTTOM  0x14833u
 #define CHROME_PANEL   0x14847u
 #define CHROME_SIDES   5              /* (0x14833 - 0x1481F) / 4 */
+/* main+ : the resource block's own 33-byte LAST-DRAWN MEMO. `DrawGameScreen`
+   runs every frame, but the METAL/ENERGY block at 0x468E40..0x4692C0 seeds a
+   stack local from this memo, overwrites the live fields, `repz cmpsb`s the 33
+   bytes against it at 0x468FD9 and SKIPS THE WHOLE BLOCK when they match
+   (`je 0x469610` at 0x468FDB); only on a difference does it copy the fresh
+   state back (0x468FEC) and draw. So at a fresh skirmish, with metal and energy
+   both pinned at the storage cap, the bars and all six numbers are drawn once
+   and then never again -- and a twin reset loses them for the rest of the level.
+   [DISASSEMBLED 2026-09-21.]
+
+   IT IS TOUCHED NOWHERE ELSE IN THE BINARY: exactly two references, `0x468E51`
+   (seed the local) and `0x468FC6` (compare and update), both inside this block.
+   It is a display memo, not sim state. */
+#define HUD_MEMO       0x37E3Fu
 #define CHROME_PLAYER  0x2A43u        /* main+ : the local player index      */
 #define CHROME_PLRTBL  0x1B8Au        /* main+ : records, stride 331         */
 #define CHROME_STRIDE  331
@@ -181,6 +195,10 @@ static void copy_record(struct SURF* s, const int* dst, const int* src, int x, i
                                               /* the copy leaf's body, same reason */
 static int      s_chromePend = 0;             /* a reset owes the chrome a re-emit */
 static int      s_panelPend = 0;              /* ... and owes the panel blit too   */
+static int      s_hudPend = 0;                /* ... and owes the resource block   */
+static unsigned s_hudPokes = 0, s_hudRefused = 0;
+static int      s_hudPoked = 0;               /* poked for THIS debt, not ever   */
+static unsigned char s_hudPoison = 0;
 static unsigned s_panelEmits = 0, s_panelRefused = 0;
 static unsigned s_frameBase = 0;              /* the flip surface publish last saw */
 static unsigned s_chromeEmits = 0, s_chromeRefused = 0;
@@ -1155,6 +1173,89 @@ static void gaf_capture(OP* o, const unsigned char* fr)
     if (s_gafUsed > g_guiq.gafhigh) g_guiq.gafhigh = s_gafUsed;
 }
 
+/* A TRANSFORMED GAF FRAME, RESAMPLED TO ITS DESTINATION HERE rather than in the
+   renderer. `GAF_DrawTransformed 0x4C7580` maps a frame onto a parallelogram, and
+   the one the in-game HUD uses is the player's colour badge: a 32x32 frame onto
+   `(132,5)-(152,25)`, measured 2026-09-21 as a SINGLE call whose three vertices
+   are origin, +u and +u+v -- `xy=(132,5)(152,5)(152,25) uv=(0,0)(32,0)(32,32)` --
+   so it is an axis-aligned uniform downscale and nothing more.
+
+   WHY NOT IN THE RENDERER. The Vulkan lane draws a sprite over
+   `(sl,st)-(sl+fw,st+fh)`, the FRAME's size, not the op's box, and it does that
+   deliberately: a clipped sprite still needs its whole quad. Teaching it a second
+   destination size would touch the render thread for one 21x21 badge. Resampling
+   here gives the existing sprite path a frame that is already the right size, and
+   the atlas keys on `(frame, pix, fw, fh)`, so the scaled variant is a different
+   entry from any 1:1 use of the same art and cannot collide with it.
+
+   NEAREST, AND SAID PLAINLY: this reproduces the engine's affine map by sampling
+   `src[(y*sh)/dh][(x*sw)/dw]`, which is the same rule its rasteriser steps but not
+   provably the same rounding on every texel. The badge is measured against the
+   golden source rather than assumed; whatever that number is, it is in the note.
+
+   THE PLANE IS ALWAYS CARRIED. `gaf_capture` dedups through `seen_frame`, which is
+   keyed on the frame POINTER -- so a 1:1 sight of the same art would answer "the
+   consumer already has it" while the atlas held no scaled entry, and the sprite
+   would be lost and ask for a reseed, every window, for ever. 441 bytes against a
+   16 MB arena is the cheaper side of that trade by a wide margin. */
+static void scale_capture(OP* o, const unsigned char* fr, int dw, int dh)
+{
+    /* the frame header's own w/h; `GF_W`/`GF_H` live in the leaves include,
+       which is below this point in the translation unit */
+    int sw = (int)*(const unsigned short*)(fr + 0x00);
+    int sh = (int)*(const unsigned short*)(fr + 0x02);
+    unsigned n = (unsigned)dw * (unsigned)dh;
+    unsigned char *dst, *tmp;
+    int x, y;
+    o->goff = o->glen = 0;
+    o->sgen = s_seenGen;
+    o->fkey = (unsigned)(size_t)frame_key(fr, o->pix, sw, sh);
+    if (!o->fkey) return;                        /* unreadable now: publish nothing */
+    if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
+    if (sw > TAGPU_GAF_DECMAX || sh > TAGPU_GAF_DECMAX) return;
+    /* the native decode goes BEYOND the output in the same scratch and is
+       transient -- `s_gafUsed` only ever advances over the resampled plane */
+    if (n + (unsigned)sw * (unsigned)sh > GAF_SCRATCH - s_gafUsed) { g_guiq.gaflost++; return; }
+    dst = s_gafBuf + s_gafUsed;
+    tmp = dst + n;
+    if (!tagpu_gaf_decode(fr, sw, sh, tmp)) { g_guiq.gafbaddec++; return; }
+    /* A 16.16 ACCUMULATOR, NOT `(x * sw) / dw`, and the difference is measurable.
+       The two agree almost everywhere and disagree exactly where the truncated
+       step lands a hair under an integer: with sw=32, dw=20 the step is
+       `32<<16 / 20` = 104857, so x=5 accumulates 524285 and shifts to 7, where
+       the division gives 524288/65536 = 8. Sixteen of the badge's 400 pixels
+       took the brighter neighbour in the engine's frame and the darker one in
+       ours, and those sixteen are that off-by-one: every unambiguous column the
+       two images could be matched on (0, 9, 13, 14, 16, 17, 18) agrees with BOTH
+       rules, so the accumulator is what distinguishes them. This is what a 1997
+       affine rasteriser steps, and reproducing the step is what makes the badge
+       exact rather than nearly right. [MEASURED 2026-09-21.]
+
+       THE SHIFT IS BOUNDED ANYWAY. A truncated step cannot walk off the frame,
+       but `sw`/`sh` come from a frame header, which is engine DATA: the clamp is
+       what makes that a fact rather than an argument about the arithmetic. */
+    {
+        unsigned stepx = ((unsigned)sw << 16) / (unsigned)dw;
+        unsigned stepy = ((unsigned)sh << 16) / (unsigned)dh;
+        unsigned accy = 0;
+        for (y = 0; y < dh; y++, accy += stepy) {
+            unsigned sy = accy >> 16, accx = 0;
+            const unsigned char* srow;
+            unsigned char* drow = dst + (size_t)y * (unsigned)dw;
+            if (sy >= (unsigned)sh) sy = (unsigned)sh - 1;
+            srow = tmp + (size_t)sy * (unsigned)sw;
+            for (x = 0; x < dw; x++, accx += stepx) {
+                unsigned sx = accx >> 16;
+                if (sx >= (unsigned)sw) sx = (unsigned)sw - 1;
+                drow[x] = srow[sx];
+            }
+        }
+    }
+    o->goff = s_gafUsed; o->glen = n;
+    s_gafUsed += n;
+}
+
+
 /* ---- THE FONT THIS OP NAMES CANNOT GO AWAY, BECAUSE NOTHING NAMES IT LATER
    (G19f-8, the same move as G19f-7 made for the sprite).
 
@@ -1458,6 +1559,8 @@ static void publish(unsigned flipSurf)
            them. Ordering by position in the op array, not by a rule. */
         s_chromePend = 1;
         s_panelPend = 1;
+        s_hudPend   = 1;
+        s_hudPoked  = 0;   /* a NEW debt: the last episode's poke says nothing */
     }
     {
         const char* ta = *(const char* const*)TA_MAINPP;
@@ -1714,6 +1817,24 @@ static void publish(unsigned flipSurf)
             o = pub_op(PK_BAR, s->base); if (!o) return;
             o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
             o->fg = op->col;
+            pub_commit();
+            continue;
+        }
+        /* THE TRANSFORMED FRAME, already resampled to its box by `scale_capture`.
+           It carries its plane every time on purpose (see there), so there is no
+           `seen_frame` arm here and no first-sight case to get wrong. Without
+           this branch `OP_SCALE` fell to `as_pixels` -> `PK_PIXELS`, which the
+           drain drops since the clean cut: the player's colour badge, and every
+           other transformed GAF draw, rendered NOTHING at all. */
+        if (op->kind == OP_SCALE && op->glen && op->fw && op->fh) {
+            unsigned char* dst;
+            o = pub_op(PK_SPRITE, s->base); if (!o) return;
+            o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
+            o->sl = op->dx; o->st = op->dy; o->fw = op->fw; o->fh = op->fh; o->ck = op->ck;
+            o->frame = op->frame; o->pix = op->pix;
+            dst = pub_bytes(o, op->glen);
+            if (!dst) return;
+            memcpy(dst, s_gafBuf + op->goff, op->glen);
             pub_commit();
             continue;
         }
@@ -2382,6 +2503,60 @@ static void panel_emit(const char* ctrls, int n0)
     s_panelEmits++;
 }
 
+/* MAKE THE ENGINE REDRAW ITS OWN RESOURCE BLOCK, rather than drawing one.
+   Everything in that block already publishes through leaves we have -- the bar
+   fill is `0x4BF6F0` twice, the six numbers are `0x4C14F0` -> `0x4CCF60` three
+   times -- so the only thing missing after a reset is a REASON for the engine to
+   run it again. `HUD_MEMO` is that reason, and one byte of it is enough.
+
+   WHY BYTE 0 AND NOT THE WHOLE MEMO. The block seeds its stack local FROM the
+   memo and then overwrites the live fields, so a byte it does not overwrite
+   compares equal however we poison it (local and memo carry the same poison) and
+   would buy nothing. Byte 0 is overwritten, at `0x468E7F`, with a value read
+   fresh out of the player record -- and, unlike bytes 1..4 which `flds
+   0x79(%esp)` reads at `0x468E7B` as the number's animation state, it is never
+   read back from the memo. So poisoning byte 0 changes the COMPARISON and
+   nothing the engine displays: no value is fabricated, and the redraw recomputes
+   every field from the player record regardless. Poisoning the animated bytes
+   would have made the numbers converge from a value we invented.
+
+   BOUNDED, AND NOT BY LUCK. A poison equal to the byte the block would compute
+   compares equal and skips, so the debt is kept and the poison is COMPLEMENTED
+   on the retry: the fresh byte cannot equal both x and ~x, so the second attempt
+   must differ. At most two pokes per reset, and the debt clears as soon as the
+   memo stops reading back as our poison -- which is the engine having written
+   its own fresh state over it, i.e. having drawn.
+
+   ORDERING, NOT TIMING. This runs at the flip's RETURN, on the game thread --
+   which is INSIDE `DrawGameScreen`, after its resource block has already run
+   for this frame. Nothing is mid-read, and the next frame's `repz cmpsb` is the
+   first thing to look at what we wrote. */
+static void hud_invalidate(void)
+{
+    char* ta;
+    volatile unsigned char* memo;
+    if (!s_hudPend) return;
+    if (!tagpu_reclaim_level_tracked() || tagpu_reclaim_level_closing()) {
+        s_hudPend = 0; s_hudRefused++; return;
+    }
+    if (!tagpu_packet_pub_level_open()) return;      /* not yet in play: keep the debt */
+    ta = *(char* const*)TA_MAINPP;
+    if (!ptr_ok(ta)) return;
+    memo = (volatile unsigned char*)(ta + HUD_MEMO);
+    /* PER EPISODE, NOT EVER. This was `s_hudPokes && ...` and that is a
+       different question: once ANY poke had landed, the memo had long since been
+       overwritten by the engine's own fresh state, so the test passed on every
+       LATER reset and cleared each new debt without poking at all. Measured:
+       three resets, `hud=1/0`, bars still black. `s_hudPoked` is cleared with
+       every new debt, so the test only ever asks about the poke this episode
+       made. [FOUND by running it.] */
+    if (s_hudPoked && *memo != s_hudPoison) { s_hudPend = 0; s_hudPoked = 0; return; }
+    s_hudPoison = (unsigned char)(s_hudPoison ^ 0xFFu);
+    *memo = s_hudPoison;
+    s_hudPoked = 1;
+    s_hudPokes++;
+}
+
 static void repaint_service(void)
 {
     const char* ta;
@@ -2468,6 +2643,7 @@ static void* __cdecl after_flip(unsigned int* regs)
        would push and pop above it */
     repaint_arm();
     repaint_service();
+    hud_invalidate();
     return s_retDepth > 0 ? s_retStack[--s_retDepth] : NULL;
 }
 
@@ -2787,10 +2963,10 @@ void tagpu_gui_flush(unsigned int frame_counter)
            `%u`s at ten digits plus the literals is 360 bytes, and the observed
            line is 232 -- the gap is entirely how long the session has run. This
            buffer has been overrun once before by one field too many. */
-        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u chrome=%u/%u panel=%u/%u",
+        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u chrome=%u/%u panel=%u/%u hud=%u/%u",
                   s_flips, s_opsTotal, s_opsDropped, s_changedTotal, s_unexplTotal, s_nsurf,
                   s_pubOps, s_pubBytes, g_guiq.qHead - g_guiq.qTail, g_guiq.resets, g_guiq.overflows, g_guiq.stalls, g_gui_draw, s_freeqFlush, s_repaints, s_repaintSkips, s_repaintOps,
-                  s_chromeEmits, s_chromeRefused, s_panelEmits, s_panelRefused);
+                  s_chromeEmits, s_chromeRefused, s_panelEmits, s_panelRefused, s_hudPokes, s_hudRefused);
         glog(b);
         {
             int k, n = 0;
