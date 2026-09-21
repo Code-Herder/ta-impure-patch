@@ -1,0 +1,103 @@
+landing-review: model=Opus 5 effort=high range=main...de329ee findings=16 acted=14 rejected=2 date=2026-09-20
+
+Two rounds. Round 1 ran on deb8717..d8a2993 and its findings are recorded in
+de329ee's own message (the HIGH: a level-end drop that undid itself in the
+same call, found independently by both reviewers). This note is round 2: two
+independent read-only reviewers on main...de329ee in parallel -- A on
+correctness and the engine addresses, which it re-derived from
+pristine/TotalA.exe.pristine rather than taking from the diff; B on the
+synchronisation alone, asked for the interleaving that breaks each claimed
+ordering rather than an opinion on the design. Acted on in 1c542a2.
+
+BOTH FOUND THE SAME MEDIUM, INDEPENDENTLY, and it was the previous round's
+defect in a narrower window. The level stamp was read AFTER the copy, and the
+comment above it asserted that side was the safe one. It is the opposite:
+labelling a capture that straddled a teardown with the NEW level is exactly
+what makes both readers accept it -- the adopt matches because s_dropSeen has
+just advanced to that value, the serve matches because s_dropReq is that
+value, and the dying level's last frame then stands as the new level's
+reference for the whole loading screen, where no in-play draw runs to displace
+it. Fixed by reading the counter before the copy and discarding a capture the
+level moved under.
+
+A's SECOND MEDIUM is the one worth keeping: the new site's "invariant,
+MEASURED" was 24 one-shot double-reads, and at the OLD site's measured 1.35 %
+tear rate P(0 torn in 24) = 0.72 -- so the figure was fully consistent with a
+site tearing exactly as badly as the one it was tabled against. That is this
+landing's own recorded lesson about a 20-sample probe, applied to its
+replacement. Fixed by giving the oracle a continuous mode
+(tagpu_surfcheck.on) and re-measuring on the binary that lands:
+0 of 21 669 checks torn, 18 268 in one level with seven units patrolling plus
+3 401 after a full teardown and a fresh level, against the old site's 223 of
+16 500.
+
+ACTED (14):
+ M1 (A+B)  the level stamp read before the copy; a straddling capture
+           discarded outright, so every adoptable snapshot lies entirely
+           within one level by construction. New straddle= counter: 0 over
+           21 000 captures and a real level cycle.
+ M2 (A)    the continuous oracle, and the re-measurement above.
+ A-L2      the copy's depth test reads g_ddraw.primary->bpp, not the device
+           mode's -- the argument the comment three lines up already made for
+           width and height and did not apply to itself.
+ A-L5      the engine map gains the flip's two guards, 0x46A3CC test ebx,ebx
+           and 0x46A3D0 mov eax,[esp+0x22C], with the note that the flip is
+           CONDITIONAL and what carries it is the return-address filter.
+ A-L6      three notes still naming tagpu_surf_take, gone two commits back.
+ A-L7      before_draw's "DrawGameScreen (0x468CF0..0x46A200)" corrected to
+           ..0x46A3FD, 0x1FD bytes it was understating.
+ A-L8      the cost scales with pixel count, said in the header.
+ B-L2      dw/dh read before the publish and used after it; past the release
+           store the buffer is no longer the game thread's to read.
+ B-L5      the drop's log line no longer gated on the held snapshot's own
+           generation, which silently skipped the one line that makes a drop
+           observable.
+ A-L4/B-L3 s_hold stored and s_dumpArm loaded with __atomic, because this file
+           states that rule about those very words.
+ A-L3      "Both callers are the render thread" -- there is one caller; it
+           meant the two readers of s_dropReq.
+ B-L4      the re-read compare holds g_ddraw.cs, which in continuous mode is
+           every capture: documented as why that mode is a probe you arm for a
+           run, with the measured cost (us avg 373 armed vs 43-59 unarmed).
+ B-extra   renderer=gdi and s_countOnly leave the render thread holding a
+           request nobody will serve -- benign, previously unwritten.
+ B-owner   the foreign-thread teardown question written down under §2.82
+           *Still open*: reclaim_teardown_post calls our level-end with no
+           thread check while reclaim_template_free twelve lines above does
+           check and counts a foreign caller as "never seen", so either the
+           foreign branch this landing moved the drop above is dead code or
+           that check is the wrong one. The M1 fix is correct either way,
+           which is why it does not block; straddle= is the instrument.
+
+REJECTED (2), each with the reason written at the code:
+ A-L1  a re-entrancy guard on the producer. Not reachable: after_draw pops the
+       return stack BEFORE it captures, the in-play filter admits the single
+       call site 0x4969CD, and two captures would be strictly sequential in
+       any case because each runs after its inner draw has returned. Measured
+       deep=0. Stated in tagpu_surf.h rather than guarded.
+ R1-5  slog unsynchronised across the two threads. House pattern at 55 call
+       sites in the DLL, not one of which locks; it carries no state and
+       nothing reads it back. One lock for all of them or none.
+
+CONFIRMED by A against the binary: every disassembly claim in the diff --
+0x46A3CC/0x46A3CE, 0x46A3D0/0x46A3D7/0x46A3D9, the flip at 0x46A3DB, ret 0x8
+at 0x46A3FD (34 bytes), arg1 [esp+0x228] in ebx with no write between
+0x469F29 and 0x46A3CC, 0x4967CF mov ebx,1 unrewritten to 0x4969CB/CD, and
+exactly four E8 call sites of 0x468CF0. Also the copy's bounds, the palette
+move's lifetime argument, and that g_ddraw.cs is a lifetime argument only.
+CONFIRMED by B: the req/ack handshake (s_ack <= s_req <= s_ack+1), s_hold's
+publication and the release/acquire sides, that the bytes are ordered by the
+counters including a realloc'd pointer, that the two threads never touch one
+buffer as writer and reader, that no logging counter is load-bearing, that
+nothing is ever freed so there is no lifetime hazard, and the thread identity
+of the capture enforced by the detour stub rather than by convention.
+
+VERIFIED BY RUNNING, feat-forest / Two Continents / 1024x768 / vulkan, play
+defaults, on the binary that lands:
+ - 0 of 21 669 continuous re-read checks torn, across two levels and a real
+   teardown; straddle=0
+ - the drop: the log line, then the consumer stops dead -- 0 vk: surf:
+   heartbeats through the entire shell -- and the reference rebuilds for the
+   next level
+ - the golden source against tacli shot, in motion: 352-529 px, against a
+   shot-vs-shot control of 415-508 on the same scene
