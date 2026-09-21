@@ -531,18 +531,72 @@ render-pass instances and 24 image copies per focused-gadget draw is not free on
 rasteriser. Uncapped on `MAINMENU.GUI` at 640×480, reference setup, Xvfb + llvmpipe, six samples
 per arm:
 
-| build | fps (mean of 6) |
-|---|---|
-| before the tint | **171.3 / 172.2 / 174.0** across three runs |
-| with it, `renderArea` = the whole twin | **150.8** |
-| with it, `renderArea` = the op's box | **147.6 / 154.6** |
+**Narrowing the render area bought nothing**: measured with `renderArea` at the op's box and at
+the whole twin, the two tint arms sat inside each other's spread. It is kept because it states
+what the pass actually touches and because the 614 KB load/store it declines is real on an
+implementation that honours a partial area; that part is **not verified here** and is not a figure
+to quote. llvmpipe evidently does not skip work for it. The real lever, if this ever matters on
+hardware, is the subpass self-dependency: one render pass instead of twenty-four.
 
-so about **13 %**, and **narrowing the render area bought nothing** — the two tint arms sit inside
-each other's spread. The narrowing is kept because it states what the pass actually touches and
-because the 614 KB load/store it declines is real on an implementation that honours a partial
-area; that part is **not verified here** and is not a figure to quote. llvmpipe evidently does not
-skip work for it. The real lever, if this ever matters on hardware, is the subpass
-self-dependency: one render pass instead of twenty-four.
+**The cost, re-measured on the build that shipped** — the review's fixes included, so the figure
+describes the landed code rather than the first cut. Two DLLs (`main` and the branch tip) run in
+turn on one instance, three alternating runs an arm, eight samples a run:
+
+| arm | run means | pooled (n = 24) |
+|---|---|---|
+| `main`, no tint | 177.2 / 179.7 / 179.3 | **178.7** |
+| branch, with the tint | 162.3 / 167.5 / 159.6 | **163.1** |
+
+so **about 8.7 %**. Note the asymmetry in the spread: the no-tint arm is tight (177–180) and the
+tint arm is not (159.6–167.5), so 8.7 % is a figure with a few points of slop in it and not a
+constant. *[This supersedes the "~13 %" (173.1 → 151.1) this block carried until 2026-09-21. That
+was a different build and a differently pooled run set, and the landing review caught it
+disagreeing with the figure quoted in `tagpu_vk_gui.c` — which is why it is replaced by a fresh
+measurement rather than by picking whichever of the two numbers looked better.]*
+
+**What the landing review found, and what each finding turned out to rest on.** Two reviewers ran
+the branch diff in parallel, the second on the cross-thread and GPU ordering alone. Six findings
+were real and are fixed on the branch; the interesting thing about them is that **five of the six
+are the same mistake** — a fact about the engine or the queue that was *assumed* where a
+neighbouring piece of this codebase had already established it.
+
+| what was wrong | what it actually rested on |
+|---|---|
+| `pub_shade` copied `[globals+0xC8]` guarded only by a pointer test | `tagpu_packet_pub.c`'s `lht_snapshot` — the function this one was written from — tests `PROG_CAPS` bit 7 first. The bit and the pointer are separate facts: `0x4BA660` allocates the 8192 bytes and returns without touching the caps word, so an allocated-but-unbuilt table read as though it were a table. |
+| the copy was latched on the table's **pointer** | `0x4BAB30` rewrites the LHT **in place** from `0x42E2AB` (see [the engine map](exe-reverse-engineering.html)), so a regeneration changes every byte and moves nothing. The latch is keyed on the **content** now — the same 8 KB read either way, and it needs no argument about how many times that path can run. |
+| `dedup` collapsed two identical `OP_FOCUS` ops | `op_same` compares the box and not `col`, and had no notion of *which edge* an op was. At `t == b` a focus rect's top and bottom edges are byte-identical **within one call**, and a tint reads its own destination, so the engine's `LUT[LUT[x]]` collapsed to `LUT[x]`. The edge ordinal and the row are part of the op's identity now. |
+| the colour twin was transitioned to a layout it was not created for | `tw_to` moves **both** planes of a twin; `tw_make` was given `TRANSFER_SRC` when the tint landed and `tw_colour` was not. Latent — nothing on this lane makes a colour twin today — so it would have fired the day Classic++ colour came back, far from this change. |
+| the scratch image's comment claimed "one command buffer" | It is module-wide and reachable from every in-flight frame, so consecutive tints are in *different* command buffers. What orders them is that a pipeline barrier's first scope spans **submission order**, not one buffer — and that the layout genuinely alternates, so `lay_to`'s equal-layout early-out never elides the barrier. The invariant held; the stated reason was not it. |
+| `build_rp_n` declared no `TRANSFER_READ` | The tint copies the attachment **out** before drawing into it. The explicit barriers order it; the declared dependency was simply silent about an access that exists. |
+
+**The one finding that was not a wrong assumption: the tint is the first NON-IDEMPOTENT op in the
+stream, and the error model around it assumed idempotence.** Every other kind overwrites the box
+it names, so a dropped op costs one wrong region until the next repaint. A tint *reads* its box,
+so applying one over a box the drain failed to repaint folds this frame's error into next frame's
+input — `LUT[LUT[x]]`, then `LUT³[x]`, with nothing short of a `PK_RESET` to unwind it. Since
+`PK_PIXELS` is dropped by design, the ingredient was already on the shelf. The drain now records
+the boxes it dropped a `PK_PIXELS` for and **declines any tint that intersects one**, which leaves
+the twin at its last consistent state instead of compounding.
+
+**Two things the reviewers went after and did not get.** The tint adds 24 draws and 24 quads per
+focused-gadget flip where there were none, which is new pressure on `DRAW_MAX` (16 384) — but
+pass 1 tests `ndraw > DRAW_MAX || nquad > QUAD_MAX` and stands the frame down rather than
+overrunning the mapped buffers, so the headroom is a cost question and not a safety one. And the
+`PK_SHADE`-before-`PK_TINT` ordering has one hole, `s_skipToReset`, which jumps the drain's whole
+switch until a `PK_RESET` and would skip a table the producer had already marked sent: it is
+unreachable, because the only thing that sets it is `tagpu_gui_glreset`, which has no caller left
+after the GL half went. Named here rather than fixed, because the fix would be to give a dead
+function a live invariant.
+
+That guard is also the landing's own worked example of why a measurement is not optional. The
+first cut of it was **per surface** rather than per box, which reads as the safer choice and is
+not: `SKIRMISH.GUI`'s player-colour swatches fall to `PK_PIXELS` on the **same surface** as the
+focus rings, so a surface-wide flag declined 2 439 232 tints for drops nowhere near them and put
+that screen straight back at its pre-landing 98.95 %. Per box, the same screen is at 99.53 % and
+the guard fires **54** times. What makes a tint unsafe is that the box it is about to READ was not
+repainted, so the box is the unit of the test. `tints=` on the `gui:` line carries both refusals
+separately — `tintdrop` (no twin or no table, which the code says is impossible and which reads 0)
+and `tintstale` (the compounding guard, which is *expected* to be non-zero wherever `pixdrop` is).
 
 **The corrected measure, stated because a figure in this file changed meaning.**
 `s_kindArea[OP_FOCUS]` counted the bounding box of each `0x4BF7B0` call and now counts the four

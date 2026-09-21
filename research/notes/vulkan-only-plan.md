@@ -205,7 +205,7 @@ outlive them.
 | 7 | the restorer: the core/GL split, the Vulkan half, four consumers, the mip rule | 09-17 | 2.42–2.47 |
 | 4a–4d | `render_vk.c`: the backend, the driver, the `ss×` target, the deletion of route D | 09-17/18 | 2.48–2.57 |
 | 8a/8c | `PK_BAR` for `OP_BAR`, and `OP_LINE` split axis-aligned/diagonal | 09-18 | 2.58, 2.60 |
-| 8d | `PK_TINT` + `PK_SHADE` for `OP_FOCUS` — the shell's last droppable traffic | 09-21 | gui-renderer's focus-glow block |
+| 8d | `PK_TINT` + `PK_SHADE` for `OP_FOCUS` — the shell's last droppable traffic | 09-21 | gui-renderer's focus-glow block, and the review table under it: six findings, five of them a fact assumed where a neighbour had established it, one a real mechanism (a tint is the first non-idempotent op here) |
 | 9 | seeds carry art — `GUI_StageUpdateDraw(gi, 0x40)` at the flip's return | 09-18 | 2.61 |
 | 10 | the duplicate engine-frame upload goes | 09-18 | 2.62 |
 

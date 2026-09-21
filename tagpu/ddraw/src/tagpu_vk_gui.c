@@ -2710,17 +2710,29 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                changes nothing about what it draws.
 
                AND IT BOUGHT NOTHING MEASURABLE HERE, which is the honest
-               half. Uncapped on MAINMENU at 640x480, reference setup, Xvfb +
-               llvmpipe, six samples an arm: 173.1 fps without the tint, 151.1
-               with it and the area narrowed, 150.8 with it at the FULL area --
-               the two tint arms are inside each other's spread and llvmpipe
-               evidently does not skip work for a partial area. It is kept
-               because it states what the pass touches and because the
-               load/store it declines is real on an implementation that
-               honours it; THAT part is NOT verified here and must not be
-               quoted as though it were. The real lever, if the ~13 % ever
-               matters on hardware, is the subpass self-dependency described
-               above -- one render pass instead of twenty-four. */
+               half: measured with it narrowed and at the FULL twin, the two
+               tint arms sat inside each other's spread, so llvmpipe evidently
+               does not skip work for a partial area. It is kept because it
+               states what the pass touches and because the load/store it
+               declines is real on an implementation that honours it; THAT
+               part is NOT verified here and must not be quoted as though it
+               were. The real lever, if the cost ever matters on hardware, is
+               the subpass self-dependency described above -- one render pass
+               instead of twenty-four.
+
+               THE COST ITSELF, re-measured on the build that shipped (the
+               review's fixes included, so the figure describes THIS code):
+               uncapped on MAINMENU at 640x480, reference setup, Xvfb +
+               llvmpipe, two DLLs run in turn on one instance, three
+               alternating runs an arm and eight samples a run --
+               **178.7 fps without the tint against 163.1 with it, 24 samples
+               each, about 8.7 %**. Run means were 177.2 / 179.7 / 179.3
+               without and 162.3 / 167.5 / 159.6 with, so the no-tint arm is
+               tight and the tint arm is not: treat 8.7 % as a figure with a
+               few points of slop in it, not a constant. The note's earlier
+               "~13 %" came from a different build and a differently pooled
+               run set; gui-renderer.md says so rather than quietly replacing
+               the number. */
             rb.renderArea.offset.x = x0; rb.renderArea.offset.y = y0;
             rb.renderArea.extent.width  = (uint32_t)(x1 - x0 + 1);
             rb.renderArea.extent.height = (uint32_t)(y1 - y0 + 1);

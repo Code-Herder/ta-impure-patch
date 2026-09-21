@@ -10325,6 +10325,17 @@ colour of its own.
 **A negative result that will bite whoever ports the tints:** the LUT index is **unsigned** in
 `0x4CC8DF` and **signed** in `0x4BF4D0` (`movsx`). One table, two addressing conventions.
 
+**And a second one, found by landing 8d's review rather than by the port:** because `0x4CC8DF`
+*reads* its destination, a tint is the first op in this stream that is **not idempotent**, and
+two places in the fork quietly assumed every op was. `dedup` collapses ops that compare equal —
+correct for every kind that overwrites its box, wrong for a tint, whose two identical copies are
+`LUT[LUT[x]]` and not a slower route to `LUT[x]`; a one-pixel-tall focus rect produces exactly
+that pair **inside a single call**, since at `t == b` the top and bottom edges carry the same
+box. And the drain drops `PK_PIXELS` by design, so a tint replayed over a box that failed to
+repaint folds each frame's error into the next frame's input. Neither is visible as a wrong
+pixel on the frame it happens; both compound. Whoever ports the *other* read-modify-write
+(`0x4BF4D0`, one table along) inherits both questions unchanged.
+
 So `before_focus` is its own op kind now — `OP_FOCUS` — and `OP_RECT` means exactly `0x4BF8C0`.
 That split is the whole of what made 8b portable, and it is also what produced the next section.
 

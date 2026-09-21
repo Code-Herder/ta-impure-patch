@@ -838,6 +838,40 @@ the fix while leaving the engine's real table stale for every other blend in the
 let the teardown hand a DLL-heap block to TA's static-CRT free. `0x4D83B0` / `0x4D85A0` are
 TA's own malloc/free.
 
+##### The three tables are ONE family, and each is rewritten IN PLACE behind its own caps bit [DISASSEMBLED 2026-09-21, by landing 8d's review]
+
+`0x4BAAD0` above is not a one-off. Three consecutive five-byte-aligned stubs do the identical
+thing to three different slots of the graphics globals, and reading them together is what says
+what `[globals+0xF0]` actually means:
+
+| VA | slot | caps bit tested | dwords copied | bytes |
+| --- | --- | --- | --- | --- |
+| `0x4BAAD0` | `+0xC0` — the ALP blend LUT | `shr cl,5` → **bit 5** | `0x4000` | 65536 |
+| `0x4BAB00` | `+0xC4` — `GFX_SHD`, the PALETTE.SHD **darken** table | `shr cl,6` → **bit 6** | `0x800` | 8192 |
+| `0x4BAB30` | `+0xC8` — `PROG_LHT`, the **lighten** table | `shr cl,7` → **bit 7** | `0x800` | 8192 |
+
+Each is `stdcall(src)` `ret 4`: `call 0x4B6220` for the globals, `mov cl,[eax+0xF0]`, shift its
+bit into bit 0, `test cl,1`, and on clear return without writing anything. On set it loads the
+EXISTING pointer out of the slot and `rep movsd`s the caller's buffer into it. **Bit 6 is new
+here** — the table at line 3421 named bits 5 and 7 and had nothing for the darken table.
+
+Two consequences, and landing 8d walked into both:
+
+- **The caps bit is the engine's own precondition for the buffer being a table**, and it is a
+  separate event from the allocation. `0x4BA660` allocates the LHT's 8192 bytes
+  (`push 0x2000; push 0x50A448; call 0x4D83B0`), stores the pointer at `[ecx+0xC8]` and returns
+  1 **without touching `[globals+0xF0]`**. So "the pointer is non-NULL" and "the table has been
+  built" are different facts, and only the second is the one a reader wants. `0x4BEC70` — the
+  tint's own writer — tests only the pointer (`0x4BEC7B`) and will draw through an unbuilt
+  table; `tagpu_packet_pub.c`'s `lht_snapshot` has always tested the bit.
+- **The rewrite keeps the pointer.** `0x4BAB30`'s only caller is `0x42E2AB`, which loads
+  PALETTE.LHT into a heap buffer through `0x4BBC40`/`0x4BBE50`, calls the setter, and frees the
+  source immediately at `0x42E2B1`. The table's address is therefore a *poor identity*: a
+  regeneration changes all 8192 bytes and moves nothing, so anything latched on the pointer sees
+  no change at all. This is the same hazard the `+0xC0` paragraph above describes from the other
+  side — there the danger is our buffer being written *into*, here it is the engine's buffer
+  being rewritten *under* a cached copy.
+
 **The composite, and who reaches it.** `AlphaCompsteBuf2OFFScreen 0x4B8500` re-reads
 `[globals+0xC0]` *inside* the call, at `0x4B8665` and `0x4B8691`, which is what makes a swap
 bracketed around the call visible to it. It has **24 call sites**: `0x4399BB`, `0x459319`,
@@ -1163,9 +1197,15 @@ reimplements either must not copy the other's.
 sixth argument of the first becomes the sixth of the second (`mov ecx,[esp+0x50]` at `0x4BECD3`,
 pushed at `0x4BECE0`) and `[globals+0xC8]` becomes the seventh. Both arms of `0x4BEC70` — the one
 that acquires a context through `0x4C5E70` and the one handed a live one — do the same thing;
-`0x4BEA20` clips **in place on the caller's own argument slots** (`lea` of `[esp+0x48..0x50]`,
-so `(&ctx_local, &x0, &y0, &x1, &y1)`), which is why the clipped coordinates are simply pushed
-again.
+`0x4BEA20` clips **in place on the caller's own argument slots**, which is why the clipped
+coordinates are simply pushed again. The five `lea`s that build its argument list are at
+`0x4BECAB`..`0x4BECC3` and read `[esp+0x4c]`, `[esp+0x48]`, `[esp+0x48]`, `[esp+0x48]`,
+`[esp+0x14]` — the same displacement three times because each intervening `push` moves `esp`
+under it, so against the frame at entry they are `&x0`..`&y1` at `S+0x08`..`S+0x14` plus the ctx
+local, i.e. `(&ctx_local, &x0, &y0, &x1, &y1)`. *[CORRECTED 2026-09-21 by the landing review:
+this said "`lea` of `[esp+0x48..0x50]`", a range that appears nowhere in the function. The
+semantic claim was right and the encoding quoted for it was not — and an encoding is exactly
+what the next reader will try to match against the bytes.]*
 
 **Nothing between the caller and the table bounds the row.** `0x4BF7B0` passes its third argument
 straight down and `0x4CC8DF` does `shl eax,0x8` on it, so a level outside 0..31 addresses past a
@@ -3412,7 +3452,8 @@ packet's level generation.
 `TAProgram` (`[0x51FBD0]`) carries two tables the effects pass needs beside them: `+0xC8` the
 32 × 256 LHT "lighten" ramp the explosion flash is derived from, `+0xCC` the 256-byte palette remap
 `0x4BFE10` applies to the fog band, and `+0xF0` the capability word (bit 5 the ALP alpha table is
-built, bit 7 the LHT one).
+built, **bit 6 the PALETTE.SHD darken table**, bit 7 the LHT one — the three in-place setters
+above are what establish the mapping).
 
 ### The two fog lattices, and the minimap's four surfaces [VERIFIED 2026-09-12, landing 4b and 4c]
 
