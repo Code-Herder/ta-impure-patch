@@ -78,12 +78,21 @@ static const Def s_defs[] = {
     { "tagpu_ghost.on",     "", "tagpu_native.on", 0 },     /* the building preview at the cursor  */
     { "tagpu_zoom.on",      "", 0, 0 },                     /* the wheel, the camera's range       */
     { "tagpu_vpwide.on",    "", "tagpu_zoom.on", 0 },       /* clicks land at zoom < 1             */
-    /* `tagpu_gui.on` IS NOT A DRAW ANY MORE and is not armed here. The UI
-       layer it turned on was deleted by the clean cut; what the file still
-       does is switch on the op CENSUS and the diagnostics, which are a
-       harness mode and never a play default. The observers themselves install
-       at DllMain with no trigger at all, because they host every `tacli`
-       verb. */
+    /* `tagpu_gui.on` IS A DRAW AGAIN. The clean cut deleted the layer this
+       armed and took the row with it; the rebuild puts the layer back without
+       the composite -- the twins and the device-resolution sharp layer are
+       ours, and `LAY_FS` no longer declares a sampler for TA's own frame -- so
+       it is the UI and belongs on the play defaults. Without it the game has
+       no HUD, no sidebar, no minimap, no cursor and no shell.
+
+       THE OBSERVERS STILL INSTALL WITHOUT IT, which is why the row can be a
+       play default rather than a requirement: `tagpu_gui_init` puts the flip
+       hook in at DllMain whatever this file says, because that hook hosts
+       `tagpu_triggers_frame` and every `tacli` verb is dispatched from inside
+       it. What the row turns on is the 17 leaves, the op queue and the layer.
+       `gui.off` therefore still gives a fully drivable instance with no UI,
+       which is the A/B. */
+    { "tagpu_gui.on",       "", 0, 0 },                     /* the UI: panel, bars, minimap, cursor, shell */
     { "tagpu_classicpp.on", "", 0, 0 },                     /* restored true colour, lit, shadowed */
     { "tagpu_weapons.on",   "", 0, 0 },                     /* 0..N weapons per unit               */
     /* HUD SCALE IS NOT A PLAY DEFAULT, and the reason is no longer the origin

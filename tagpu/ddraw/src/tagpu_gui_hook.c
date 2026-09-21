@@ -2439,7 +2439,7 @@ void tagpu_gui_init(void)
     s_opsLive = 1;            /* before the install: a partial one still pushes ops */
     n = leaves_install();
     s_installed = n == LEAF_COUNT;
-    _snprintf(b, sizeof b, "gui: %s flip@0x4C63A0=%d leaves=%d/%d census=%d log=%d pgm=%d key=%d (op capture only; nothing draws it since the clean cut)",
+    _snprintf(b, sizeof b, "gui: %s flip@0x4C63A0=%d leaves=%d/%d census=%d log=%d pgm=%d key=%d (the op stream feeds the UI pass; no engine pixel is carried)",
               s_installed ? "ARMED" : "FAILED", ok, n, LEAF_COUNT, s_census, s_log, s_pgm, s_key);
     b[sizeof b - 1] = 0;      /* _snprintf does not terminate what it truncates */
     glog(b);

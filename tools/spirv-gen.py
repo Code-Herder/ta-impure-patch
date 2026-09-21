@@ -158,13 +158,23 @@ GLSLANG = REPO / "tools" / "glslang" / "bin" / "glslang"
 # source. Each entry is (program name, vertex "file::symbol", fragment one).
 # The line number beside each group is where that pairing is made.
 PROGRAMS = [
-    # THE UI LAYER'S SEVEN PROGRAMS AND THE FORK'S OWN BASE BLIT STOOD HERE.
-    # They were the engine's pixels on their way to the screen -- the replayed
-    # UI twin, the layer that composited it, and TA's whole 8-bit frame
-    # resolved through the presented palette. The clean cut deleted every one
-    # of those draws, so the GLSL they were generated from went with them and
-    # these rows have nothing left to name. [The vulkan-only plan, THE CLEAN
-    # CUT.]
+    # tagpu_gui_surf.c -- one quad vertex stage, six fragment stages. RESTORED
+    # by the UI rebuild: the clean cut took these with the composite, and the
+    # composite is what is not coming back. `LAY_FS` no longer samples TA's
+    # frame, so none of the seven puts an engine pixel anywhere.
+    ("gui_spr",      "tagpu_gui_surf::QVS",     "tagpu_gui_surf::SPR_FS"),
+    ("gui_cpy",      "tagpu_gui_surf::QVS",     "tagpu_gui_surf::CPY_FS"),
+    ("gui_lay",      "tagpu_gui_surf::LAY_VS",  "tagpu_gui_surf::LAY_FS"),
+    ("gui_sharp",    "tagpu_gui_surf::QVS",     "tagpu_gui_surf::SHARP_FS"),
+    ("gui_curs",     "tagpu_gui_surf::QVS",     "tagpu_gui_surf::CURS_FS"),
+    ("gui_str",      "tagpu_gui_surf::QVS",     "tagpu_gui_surf::STR_FS"),
+    ("gui_mm",       "tagpu_gui_surf::QVS",     "tagpu_gui_surf::MM_FS"),
+    # THE FORK'S OWN BASE BLIT IS NOT RESTORED WITH THEM, and that is the whole
+    # distinction the rebuild rests on. `surf_pal` -- PASSTHROUGH_VERT_SHADER +
+    # PALETTE_FRAG_SHADER out of `inc/openglshader.h` -- resolved TA's entire
+    # 8-bit frame through the palette and put it on the screen as the bottom
+    # layer. That is an engine pixel by definition and it stays deleted, with
+    # `openglshader` out of SOURCES and ATTR_LOCATIONS empty.
     # tagpu_native.c:686,734,754
     ("native_unit",  "tagpu_native::VS",        "tagpu_native::FS"),
     ("native_c",     "tagpu_native::CVS",       "tagpu_native::CFS"),
@@ -329,7 +339,7 @@ def _restore_programs():
 
 
 # Every C source a shader is read out of, in the order the headers are emitted.
-SOURCES = ["tagpu_native", "tagpu_shadow", "tagpu_terr",
+SOURCES = ["tagpu_gui_surf", "tagpu_native", "tagpu_shadow", "tagpu_terr",
            "tagpu_posedraw", "tagpu_fps", "tagpu_mark", "tagpu_scaffold",
            "tagpu_fx", "tagpu_feat", "tagpu_hires_draw"]
 

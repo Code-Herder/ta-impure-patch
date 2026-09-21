@@ -282,20 +282,29 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        world composite has no counterpart there until 4c. */
     tagpu_native_frame(f);
 
-    /* PHASE E'S UI LAYER STOOD HERE and the clean cut deleted it. It replayed
-       the engine's captured UI ops into twin surfaces and composited them --
-       together with our own device-resolution sharp layer, through one quad --
-       over the world. Both halves were engine pixels on their way to the
-       screen or rode the same draw, so both went.
+    /* G17c: the cursor's ONE decision for this frame, before the world pass
+       reads it (tagpu_gui.h). The state is read once, latching THIS FRAME'S
+       PACKET for the whole of the UI's render half, so every reader of it in
+       this frame agrees. */
+    tagpu_gui_cursor_frame(f->packet);
 
-       WHAT STILL RUNS is `tagpu_gui_hook.c`: the detours that WATCH the
-       engine's UI draws. They are kept for two reasons. They host
-       `tagpu_triggers_frame` -- every `tacli` verb in the fork is dispatched
-       from inside that flip hook and nothing else reaches it -- and the op
-       stream they capture is the engine's UI stated SEMANTICALLY (this sprite,
-       that string, at these coordinates), which is what a native UI pass will
-       be built from. Capture is not compositing; only the compositing was cut.
-       [The vulkan-only plan, THE CLEAN CUT.] */
+    /* PHASE E'S UI LAYER, AND IT IS THE DRAIN RATHER THAN A DRAW. This applies
+       the op stream the game thread published -- resolving each sprite to its
+       atlas rect, stamping each string from the glyph atlas, keeping the twin
+       bookkeeping level -- and fills `TAGPU_GUIHAND` for `tagpu_vk_gui.c` to
+       replay on the device. Not one `gl*` call has been in this path since
+       landing 11-4b; the drawing is the Vulkan pass's.
+
+       WHAT THE CLEAN CUT TOOK AND THE REBUILD DOES NOT BRING BACK: the
+       composite. The engine's own frame was the bottom layer of that draw and
+       `LAY_FS` sampled it; now it does not, the sampler is not declared, and
+       the golden source is captured for comparison and drawn nowhere. What
+       comes back is the half that was always ours -- the twins we replay and
+       the device-resolution sharp layer above them.
+
+       Runs in the shell too: the native pass returns early there, this does
+       not. */
+    tagpu_gui_present(f);
 
     /* The frame-rate readout, ABOVE the UI layer: it is a diagnostic drawn over
        the finished frame and must not be hidden by the side panel or a dialog.

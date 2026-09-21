@@ -166,6 +166,7 @@
 
 #include "hook.h"
 #include "tagpu_vk.h"
+#include "tagpu_vk_gui.h"
 #include "tagpu_vk_fps.h"
 #include "tagpu_vk_scaffold.h"
 #include "tagpu_vk_surf.h"
@@ -197,6 +198,7 @@
    with the same text on them. */
 /* ONE FILE PER PORTED PASS, because each pass has its own GL twin and its own
    lever. `s_abPath` below carries whichever one claimed the pending frame. */
+#define AB_GUI     "tagpu_gui_vk.ppm"
 #define AB_FPS     "tagpu_fps_vk.ppm"
 #define AB_SCAF    "tagpu_scaffold_vk.ppm"
 #define AB_FEAT    "tagpu_feat_vk.ppm"
@@ -215,11 +217,18 @@
    three readers. Deleting the UI layer's row took this from 8 to 7, and two of
    those readers were bare `i < 8` loops that would have walked one row past the
    end -- a table whose length is written down four times has three chances to
-   disagree with itself. */
+   disagree with itself.
+
+   AND THE DIMENSION IS LEFT EMPTY, which it was not: the row count was still
+   spelled `[7]` beside a comment saying the count comes off the array, so
+   restoring the UI row initialised eight entries into seven slots and the
+   compiler said "excess elements in array initializer" rather than anything
+   about the A/B. An explicit dimension here is the fourth place the length was
+   written down. [The UI rebuild.] */
 #define AB_N ((int)(sizeof s_abFiles / sizeof s_abFiles[0]))
-static const struct { const char* tag; const char* path; } s_abFiles[7] = {
+static const struct { const char* tag; const char* path; } s_abFiles[] = {
     { "terr", AB_TERR }, { "feat", AB_FEAT }, { "posedraw", AB_UNIT }, { "fx", AB_FX },
-    { "mark", AB_MARK }, { "scaffold", AB_SCAF }, { "fps", AB_FPS },
+    { "mark", AB_MARK }, { "scaffold", AB_SCAF }, { "gui", AB_GUI }, { "fps", AB_FPS },
 };
 #define GPUS_FILE  "tagpu_vk.gpus"      /* the cache the menu reads at attach */
 #define CFG_FILE   "tagpu_vk.cfg"       /* the player's choice, by name       */
@@ -1885,6 +1894,7 @@ static void vk_down(void)
            its own; they belong to this device and must be back before it is
            destroyed. The wait above is what makes that safe rather than a race
            -- nothing of theirs is still in a queue. */
+        tagpu_vk_gui_down(&s_pass);
         tagpu_vk_fps_down(&s_pass);
         tagpu_vk_scaffold_down(&s_pass);
         tagpu_vk_feat_down(&s_pass);
@@ -2568,7 +2578,7 @@ static int vk_present(void)
         tagpu_vk_fx_down_owed() || tagpu_vk_scaffold_down_owed() ||
         tagpu_vk_shadow_down_owed() || tagpu_vk_unit_down_owed() ||
         tagpu_vk_hires_down_owed() || tagpu_vk_mark_down_owed() ||
-        tagpu_vk_surf_down_owed() ||
+        tagpu_vk_surf_down_owed() || tagpu_vk_gui_down_owed() ||
         tagpu_vk_world_down_owed()) {
         if (!vkDeviceWaitIdle || vkDeviceWaitIdle(s_vk.dev) != VK_SUCCESS) {
             vklog("vkDeviceWaitIdle refused before an owed pass teardown - down");
@@ -2588,6 +2598,7 @@ static int vk_present(void)
         if (tagpu_vk_hires_down_owed())    tagpu_vk_hires_down_paid(&s_pass);
         if (tagpu_vk_mark_down_owed())     tagpu_vk_mark_down_paid(&s_pass);
         if (tagpu_vk_surf_down_owed())     tagpu_vk_surf_down_paid(&s_pass);
+        if (tagpu_vk_gui_down_owed())      tagpu_vk_gui_down_paid(&s_pass);
         if (tagpu_vk_world_down_owed())    tagpu_vk_world_down_paid(&s_pass);
     }
 
@@ -2673,9 +2684,11 @@ static int vk_present(void)
         int draw_world = 0;
         uint32_t tw = 0, th = 0;    /* the world target's extent, when there is one */
         int draw_fps = 0, draw_scaf = 0, draw_feat = 0, draw_terr = 0, draw_fx = 0;
+        int draw_gui = 0;
         int draw_mark = 0, ab_mark = 0;
         int draw_unit = 0;
         int ab_fps = 0, ab_scaf = 0, ab_feat = 0, ab_terr = 0, ab_fx = 0;
+        int ab_gui = 0;
         int ab_unit = 0;
         int ndraw = 0, nclaim = 0;
         const char* abpath = NULL;
@@ -2795,17 +2808,24 @@ static int vk_present(void)
                the UI -- where tagpu_native.c draws them (landing 5). */
             draw_mark = tagpu_vk_mark_prepare(&s_pass, cb, fi);
             ab_mark = tagpu_vk_mark_ab_frame();
-            /* THE UI LAYER IS GONE, AND SO IS EVERY WAY BACK TO IT. It was
-               one quad: the engine's replayed UI twin and our own device-res
-               sharp layer composited together by `LAY_FS`, with `tagpu_vk_gui.c`
-               owning the GPU store behind it. Both halves reached the screen
-               through that single draw, so the cut took both -- the engine's
-               UI pixels could not be removed from it and our layer left in.
-               What the game has instead is nothing: no HUD, no sidebar, no
-               minimap, no cursor. That is the cost this cut was authorised to
-               pay, and the UI comes back as a pass of our own rather than as a
-               composite of the engine's. [The vulkan-only plan, THE CLEAN
-               CUT.] */
+            /* THE UI LAYER IS BACK, AND THE COMPOSITE IS NOT. The cut took
+               both halves of one quad -- the engine's replayed UI twin and our
+               own device-resolution sharp layer -- because `LAY_FS` sampled
+               TA's composed frame in the same fragment stage and the engine's
+               half could not be removed while ours stayed. The rebuild removes
+               the engine's half AT THE SOURCE instead: `uSurf` is not declared,
+               the descriptor set carries four images and none of them is TA's,
+               and this pass never calls `tagpu_vk_surf_engine_view`. What it
+               draws is the twin store it replayed from the op stream plus the
+               sharp layer, and both are ours.
+
+               ITS REPLAY IS IN `prepare` AND ITS DRAW IS IN `record`, which is
+               not a style choice: a twin is drawn into with its own render pass
+               and render passes may not nest, so the whole op replay has to
+               happen out here -- exactly as the shadow map records its map in
+               `prepare`. [G19f landing 1; restored by the UI rebuild.] */
+            draw_gui = tagpu_vk_gui_prepare(&s_pass, cb, fi);
+            ab_gui = tagpu_vk_gui_ab_frame();
             draw_fps = tagpu_vk_fps_prepare(&s_pass, cb, fi);
             ab_fps = tagpu_vk_fps_ab_frame();
 
@@ -2832,8 +2852,8 @@ static int vk_present(void)
 
         }
         ndraw = draw_terr + draw_feat + draw_unit + draw_fx + draw_mark + draw_scaf +
-                draw_fps;
-        nclaim = ab_terr + ab_feat + ab_unit + ab_fx + ab_mark + ab_scaf + ab_fps;
+                draw_gui + draw_fps;
+        nclaim = ab_terr + ab_feat + ab_unit + ab_fx + ab_mark + ab_scaf + ab_gui + ab_fps;
         /* THE CLAIMED PASS'S FILE, out of the one list of them in this file
            (`s_abFiles`, above). The row order is the order the nested ternary
            this replaced tested in, so which pass wins a (refused) multi-claim
@@ -2853,7 +2873,7 @@ static int vk_present(void)
            [FROM THE 4b-1 LANDING REVIEW, 2026-09-18.] */
         {
             const int abclaim[AB_N] = { ab_terr, ab_feat, ab_unit, ab_fx,
-                                     ab_mark, ab_scaf, ab_fps };
+                                     ab_mark, ab_scaf, ab_gui, ab_fps };
             int abi;
             abpath = NULL;
             for (abi = 0; abi < AB_N && !abpath; abi++)
@@ -2918,6 +2938,14 @@ static int vk_present(void)
             else
                 world_records(cb, fi, s_vk.ext.width, s_vk.ext.height,
                               draw_terr, draw_feat, draw_unit, draw_fx, draw_mark);
+            /* THE UI GOES OVER THE WORLD AND UNDER THE READOUT, which is where
+               the GL lane drew it: the readout has to sit above the side panel
+               and the dialogs or they hide it. The return is not kept -- it fed
+               `tagpu_cursown_publish`, and that module is deleted, because the
+               engine's own cursor blit reaches only the golden source now and
+               suppressing it would just put a hole in the reference. */
+            if (draw_gui)
+                tagpu_vk_gui_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_scaf)
                 tagpu_vk_scaffold_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             if (draw_fps)
@@ -2963,9 +2991,9 @@ static int vk_present(void)
            this landing a round. */
         if ((s_pass.frame % 300u) == 0u)
             vklog("census: frame %u: %d pass(es) drew and %d claimed (terr=%d "
-                  "feat=%d unit=%d fx=%d mark=%d scaf=%d fps=%d)",
+                  "feat=%d unit=%d fx=%d mark=%d scaf=%d gui=%d fps=%d)",
                   (unsigned)s_pass.frame, ndraw, nclaim, draw_terr, draw_feat,
-                  draw_unit, draw_fx, draw_mark, draw_scaf, draw_fps);
+                  draw_unit, draw_fx, draw_mark, draw_scaf, draw_gui, draw_fps);
         /* WHICH IMAGE THE CAPTURE READS, AND IT IS NOT ALWAYS THE FRAME.
            [The vulkan-only plan, landing 4c-3.]
 
