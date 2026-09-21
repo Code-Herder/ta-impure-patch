@@ -1,0 +1,48 @@
+landing-review: 2026-09-21, effort high, two independent read-only reviewers (round 2 of 2)
+
+Scope: eb964a8..3624465 — the fixes that acted on round 1, plus the documentation
+pass. Re-reviewed because round 1's fixes added a NEW cross-thread published word
+(g_guiq.mirArmed) that no reviewer had seen. Reviewer A took synchronisation and
+lifetimes; reviewer B took factual claims and single-thread correctness.
+
+HIGH (reviewer A), real and fixed in 499068a: the asset echo said "published",
+not "taken". mir_finish only sets s_mHave; the taking is tagpu_gui_handover,
+called from tagpu_vk_gui_prepare later in the SAME loop iteration, and
+vkAcquireNextImageKHR returning OUT_OF_DATE bails at tagpu_vk.c:2607 before it.
+The next mir_begin drops the untaken record — so the ack went out, the bytes
+were thrown away, assetSent was set and nothing re-offered: permanent black
+backdrop on a window drag, reading as success. Echo moved into the hand-over.
+
+MEDIUM, both acted on: M3 — the mirArmed throttle saved no bytes, because the
+skipped offer left seeded=0 and the copy fell through to PK_PIXELS of the same
+307 200 bytes; a throttled asset now publishes nothing, and the claim is
+corrected in all three places. M2 — a revocation on an already-crossed surface
+is permanent while its recoveries are per-episode; the proposed repair
+(wasAsset restored at reseed) was REFUSED because it would carry COMPOSED
+pixels across the clean cut, so the case is made loud instead.
+
+LOW acted on: L4/L5/L6/L7-equivalents — token assigned only on a committed
+offer; s_mirAssetTok's single slot documented; s_assetDrift's blind window
+stated; [ebp+2] corrected to ebp+2 (a lea); "held in ebx for the whole function"
+corrected (0x4CAFB8 reuses it); "the whole triple" corrected to four fields.
+
+The one substantive documentation over-reach, found by reviewer B and verified
+here: "no engine surface can be claimed by accident" was too strong. 0x4CAF30
+has three callers and 0x4292BD sits inside a GENERIC bitmaps\<name>.PCX loader
+(0x429290, four callers, one working from "bitmaps\glamour" 0x502964), so the
+prefix claims that whole class, not three backdrops. Corrected in both notes,
+and it reframes the test: what the tag establishes is "the PCX loader filled
+this surface", never "this is a menu background".
+
+Also fixed: a 30-line comment in tagpu_gui_hook.c asserting g_gui_draw has no
+writer and tagpu_gui_surf.c "is deleted". Both false — the file writes it and a
+boot measures published=4653791 draw=1. Pre-existing, but this landing had
+already corrected the same claim 200 lines below, so the larger copy could not
+stand.
+
+Verified TRUE by both reviewers against the pristine binary: all four
+disassembly claims, the 18-call-site enumeration (re-derived by byte scan; the
+dword 0x004C69F0 appears nowhere, so there is no indirect caller either), the
+revocation staying above the MAX_OPS drop, ops_forget_base(0) being unreachable
+and harmless, token hygiene (asset_token never returns 0), and the heartbeat
+buffer arithmetic (444 worst case into char b[480]).
