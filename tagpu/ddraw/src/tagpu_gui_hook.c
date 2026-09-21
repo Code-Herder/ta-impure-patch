@@ -2587,17 +2587,20 @@ void tagpu_gui_init(void)
    "did the 17 leaves install", which a future UI pass will ask again. */
 int tagpu_gui_installed(void) { return s_installed; }
 
-/* THE MINIMAP HANDSHAKE HAS LOST ITS ASKING HALF, and both setters below are
-   callerless. `tagpu_gui_surf.c`'s sharp minimap layer raised `g_wantMm` once
-   per present and published `g_mmHave` from its own frame; it is deleted, so
-   `tagpu_gui_want_minimap()` answers 0 for the life of the process,
-   `tagpu_packet_pub.c` never copies the three 126-px surfaces or the TNT
-   picture into the packet, and `want_minimap_watchdog` can never fire -- it
-   releases a flag nothing raises. Nothing starves: the publisher's own test is
-   `if (tagpu_gui_want_minimap())`, so not asking costs the copy and nothing
-   else, and the engine goes on drawing its own minimap into the reference
-   surface. The pair stays because the packet side of it is intact and a native
-   minimap is what will ask again. [Landing review, 2026-09-20.] */
+/* THE MINIMAP HANDSHAKE IS WHOLE AGAIN. This comment said both setters were
+   callerless and that `tagpu_gui_want_minimap()` "answers 0 for the life of the
+   process" -- true while `tagpu_gui_surf.c` was deleted, and wrong the moment it
+   was restored: its sharp minimap layer raises `g_wantMm` once per present and
+   publishes `g_mmHave` from its own frame, exactly as it used to, so
+   `tagpu_packet_pub.c` interleaves the three 126-px surfaces and the level's
+   picture again and `want_minimap_watchdog` has something to release.
+
+   IT COST A DIAGNOSIS TO LEAVE STALE. Reading it as current is what sent the
+   2026-09-21 hunt for the missing minimap at the packet channel, which was
+   healthy, instead of at the k = 1 gate in `sharp_minimap` that was actually
+   refusing to draw. A note that describes a deleted module is worse than none
+   once the module is back. [Corrected 2026-09-21; the deleted-half state it
+   described was the clean cut's, and ended with the renderer restore.] */
 static volatile unsigned char g_wantMm;
 static unsigned g_wantMmBeat;
 void tagpu_gui_set_want_minimap(int on, unsigned int frame_counter)

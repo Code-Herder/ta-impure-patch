@@ -1717,16 +1717,37 @@ static void sharp_minimap(const TAGPU_FRAME* f)
     }
     kx = (f->game_width  > 0) ? (float)f->vp_w / (float)f->game_width  : 1.0f;
     ky = (f->game_height > 0) ? (float)f->vp_h / (float)f->game_height : 1.0f;
-    /* AT k = 1 THE ENGINE'S MINIMAP STANDS, and that is not timidity — it is
-       where the arithmetic says the win is. The box is 106x126 DEVICE pixels
-       there, so drawing it from a 252x252 source throws three quarters of the
-       picture away and lands on a nearest downsample where the engine used its
-       own stretch: no sharper, and 7232 px away from the oracle every phase-1
-       measurement is taken against. The extra resolution only starts paying at
-       k > 1, where the engine blows its 126-px picture up and we do not.
-       `mmbase` forces it on anyway, which is how the k = 1 comparison above was
-       taken at all. */
-    if (kx <= 1.001f && ky <= 1.001f && !s_mmforce) return;
+    /* THIS GATE USED TO RETURN AT k = 1, AND IT WAS RIGHT UNTIL THE CLEAN CUT.
+       What stood here read: "AT k = 1 THE ENGINE'S MINIMAP STANDS, and that is
+       not timidity — it is where the arithmetic says the win is. The box is
+       106x126 DEVICE pixels there, so drawing it from a 252x252 source throws
+       three quarters of the picture away and lands on a nearest downsample
+       where the engine used its own stretch: no sharper, and 7232 px away from
+       the oracle every phase-1 measurement is taken against."
+
+       Every word of that arithmetic still holds. What no longer holds is the
+       premise underneath it — that declining to draw leaves the ENGINE'S
+       minimap on screen. Since the clean cut no pixel of the presented frame
+       comes from the engine, so declining leaves a BLACK BOX, and a nearest
+       downsample that is 7232 px from the oracle beats a hole that is the whole
+       126x106 of it. The comparison the old gate made is not available any
+       more; the one it actually faces is against nothing.
+
+       MEASURED 2026-09-21, 1024x768 skirmish at k = 1.000: the minimap region
+       carried 1 flat colour with the gate in and 1097 with `mmbase` forcing it
+       past, against the reference's 68 — the unit blips and the viewport box
+       drew either way, because those are ops of their own; only the terrain
+       picture underneath them was missing. Band-by-band the whole side panel
+       then met or beat the reference, and it was the only element short.
+
+       THE COST THE OLD COMMENT NAMES IS REAL AND IS NOW PAID AT EVERY k: ~13 KB
+       of interleave per publish on the game thread, in every session, where
+       before a window that never resized paid nothing. `nominimap` is the
+       opt-out. `mmbase` survives as the harness lever it always was, and no
+       longer changes anything at k = 1 because the gate it forced is gone.
+       [Stranded by the clean cut a2b1333; found 2026-09-21 by diffing the side
+       panel against the golden source, band by band.] */
+    (void)s_mmforce;
     /* THE STANDING REQUEST, AND IT IS RAISED HERE RATHER THAN AT THE TOP. The
        publisher interleaves the three minimap surfaces and carries the level's
        picture only while this is up, and at k = 1 (the gate just above) the
