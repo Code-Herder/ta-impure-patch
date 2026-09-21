@@ -2667,8 +2667,31 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             dynb[1] = (uint32_t)((VkDeviceSize)drawn * fStride);
             rb.renderPass = t->colImg ? s_twRp2 : s_twRp;
             rb.framebuffer = t->colImg ? t->fb2 : t->fb;
-            rb.renderArea.extent.width = (uint32_t)t->w;
-            rb.renderArea.extent.height = (uint32_t)t->h;
+            /* THE RENDER AREA IS THE BOX, NOT THE TWIN. The other passes in
+               this file are opened ONCE and shared by every draw that follows,
+               so their area has to be the whole attachment; a tint opens one
+               of its own per edge, and both attachments LOAD and STORE, so a
+               full-twin area declares that 614 KB is loaded and stored to
+               write about sixty-five pixels -- twenty-four times per focused
+               gadget. The scissor is already this rectangle and the viewport
+               still spans the twin, so this narrows what the pass TOUCHES and
+               changes nothing about what it draws.
+
+               AND IT BOUGHT NOTHING MEASURABLE HERE, which is the honest
+               half. Uncapped on MAINMENU at 640x480, reference setup, Xvfb +
+               llvmpipe, six samples an arm: 173.1 fps without the tint, 151.1
+               with it and the area narrowed, 150.8 with it at the FULL area --
+               the two tint arms are inside each other's spread and llvmpipe
+               evidently does not skip work for a partial area. It is kept
+               because it states what the pass touches and because the
+               load/store it declines is real on an implementation that
+               honours it; THAT part is NOT verified here and must not be
+               quoted as though it were. The real lever, if the ~13 % ever
+               matters on hardware, is the subpass self-dependency described
+               above -- one render pass instead of twenty-four. */
+            rb.renderArea.offset.x = x0; rb.renderArea.offset.y = y0;
+            rb.renderArea.extent.width  = (uint32_t)(x1 - x0 + 1);
+            rb.renderArea.extent.height = (uint32_t)(y1 - y0 + 1);
             vkCmdBeginRenderPass(cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
             set_viewport(cb, t->w, t->h);
             set_scissor(cb, x0, y0, x1 - x0 + 1, y1 - y0 + 1, t->w, t->h);

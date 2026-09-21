@@ -205,6 +205,7 @@ outlive them.
 | 7 | the restorer: the core/GL split, the Vulkan half, four consumers, the mip rule | 09-17 | 2.42–2.47 |
 | 4a–4d | `render_vk.c`: the backend, the driver, the `ss×` target, the deletion of route D | 09-17/18 | 2.48–2.57 |
 | 8a/8c | `PK_BAR` for `OP_BAR`, and `OP_LINE` split axis-aligned/diagonal | 09-18 | 2.58, 2.60 |
+| 8d | `PK_TINT` + `PK_SHADE` for `OP_FOCUS` — the shell's last droppable traffic | 09-21 | gui-renderer's focus-glow block |
 | 9 | seeds carry art — `GUI_StageUpdateDraw(gi, 0x40)` at the flip's return | 09-18 | 2.61 |
 | 10 | the duplicate engine-frame upload goes | 09-18 | 2.62 |
 
@@ -366,6 +367,16 @@ see it. Making the OUT shader report the index it had read is what found it.
   pipeline. Leaving all three as `PK_PIXELS` is defensible — publishing the destination's bytes is
   what a destination-dependent op means — and **that is the owner's decision about the exit
   condition**, not a session's.
+
+  **`focus` IS CLOSED SINCE 2026-09-21, and the reasoning above was half right.** A colour and a
+  box cannot express a tint — but the OPERATION can, and `PK_TINT` carries a box, a row and no
+  payload while `PK_SHADE` carries the 32 × 256 lighten table once. The consumer snapshots the box
+  and re-derives the remap; nothing composed by the engine crosses, so the clean cut is intact.
+  What the paragraph above got right is that publishing the *bytes* was never the answer; what it
+  got wrong is that a destination-dependent op has to publish anything of the destination at all.
+  `frame` (`0x4BF4D0`) is the same shape one table along — a filled box through `globals+0xC4`
+  when its level is negative — and needs no new mechanism, only the branch. `OP_SCALE` is
+  unchanged and is now the **only** `raw` left in the shell.
 
 
 11. **The deletion landing** — `render_ogl.c`, `render_d3d9.c`, `opengl_utils.c`,

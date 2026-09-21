@@ -412,7 +412,9 @@ the log. The handshake still converges with the echo moved to the hand-over, whi
 that had to be re-checked after that fix. The residual on the main menu is ~1 617 px:
 ~1 523 in the button row — the focus tint `0x4BF7B0`, which is a read-modify-write and still falls
 to `PK_PIXELS` — and the rest in the art region, where the green particle animation is a frame
-apart between the two captures. **This is a front-end fix and not a main-menu one**: every shell
+apart between the two captures. **[The button row closed the same day: the tint is `PK_TINT`
+since 2026-09-21, and this table's figures are the ones it moved. See the next block.]**
+**This is a front-end fix and not a main-menu one**: every shell
 screen is built by the same sequence with its own PCX, which is why three screens closed for one
 packet.
 
@@ -431,6 +433,126 @@ the 1997 rasteriser rather than restored. The packet keys on the surface, and th
 next step: reading `bitmaps\<name>.PCX` from our own asset store would let the colour twin carry a
 restored backdrop with no producer change and no packet change — that is the whole reason the tag,
 not the bytes, is what identifies these surfaces.
+
+### The focus glow — the last of the shell's dropped traffic  [MEASURED AND FIXED 2026-09-21]
+
+The residual the table above names was **the focused button's highlight**, and it was the whole of
+what the shell still published as droppable: on `MAINMENU.GUI` the census read
+`area=44434206[... focus 1156164] semantic=43278042 raw=1156164` — **`raw` equalled the `focus`
+figure exactly**. `0x4BF7B0` is a read-modify-write, its writer `0x4CC8DF` doing
+`dst = LUT[row*256 + dst]` through the lighten table at `globals+0xC8`, so there is no colour to
+put in a `PK_BAR` and no outline to put in a `PK_RECT`; it fell to `PK_PIXELS` and the drain has
+dropped every one of those since the clean cut.
+
+**What crosses is the operation.** `PK_TINT` carries a box and a row and no arena bytes;
+`PK_SHADE` carries the 32 × 256 table once. The table may cross for `PK_ASSET`'s reason and not a
+weaker one: it is a palette-derived remap the engine builds at init, and **nothing composed it** —
+the same category as the palette itself, which has always crossed. The consumer then applies the
+remap to its own twin, and no engine pixel is involved at any point.
+
+**Three facts out of the disassembly decided the shape** ([the engine map](exe-reverse-engineering.html)
+has all of it):
+
+1. **`0x4BF7B0` draws four edges, each clipped on its own.** Top `(l,t)-(r,t)`, right
+   `(r,t)-(r,b)`, bottom `(l,b)-(r,b)`, left `(l,t)-(l,b)`, each through its own `0x4BEC70`, each
+   clipped by `0x4BEA20` separately. That is exactly `OP_RECT`'s open-figure problem — and
+   `OP_RECT` answers it by falling back to the box's bytes, which a tint cannot do. So the
+   **observer records four ops instead of one box**, and `op_add`'s existing clip drops an edge
+   that falls outside precisely as the engine's does. No clip rect in the packet, no fallback, no
+   `clipped` flag.
+2. **The corners are tinted twice.** Both axis-aligned loops in `0x4CC8DF` are inclusive at both
+   endpoints (`inc ecx` at `0x4CC954` and `0x4CC995`), so the top edge covers `(l,t)` and the left
+   edge covers it again: the engine's own output there is `LUT[LUT[x]]`. Four ops replayed in the
+   engine's order reproduce it; one box op would have had to carry the rule. **This is measured,
+   not argued**: the button row diffs to 0 px, and six rings × four corners is 24 pixels that
+   would show if the ordering were wrong.
+3. **The row is not bounded by anything in the engine.** `0x4BF7B0` passes its third argument
+   through `0x4BEC70` unmasked and `0x4CC8DF` does `shl eax,0x8` on it — a level outside 0..31
+   reads off the end of a 32-row table. `0x4BF4D0`, the same table's other consumer, *does* clamp.
+   So the bound is ours: `before_focus` refuses such an op and counts it, because an off-table read
+   cannot be reproduced and guessing at it is worse than not drawing. It reads 0, and it can only
+   read 0 from the one caller — `0x4A16F0` walks **31, 28, 24, 19, 13, 6** over six rectangles
+   expanding by a pixel a step. The highlight is a **six-pixel glow**, 24 tinted edges a draw.
+
+**The delivery of the table needs no acknowledgement, and that is the point.** `PK_ASSET` needed a
+one-time token because its payload had to survive a consumer that was not recording; `PK_SHADE`
+lands in a render-half static that the hand-over then carries **by pointer every frame**, so an
+abandoned mirror frame loses the record and never the table. What is left is an ordering: the
+producer publishes the table ahead of the first tint of a batch, the queue is FIFO, and a batch
+that runs out of room loses the table and the tints behind it together — and raises the reset that
+re-arms the flag. Measured `tint=1086696/1/0/0`: one copy of the table, **no row refused, no tint
+published without one**, over 14 resets that re-sent the same 8 KB.
+
+**The consumer snapshots before it draws**, because sampling an attachment a draw is writing is
+undefined in both APIs — the rule that already makes a self-`PK_COPY` a refusal. A subpass
+self-dependency (`srcSubpass == dstSubpass`, `BY_REGION`, `subpassLoad`) would do it in one pass
+and is core Vulkan; it was **rejected on blast radius rather than on merit**, because it puts every
+twin attachment in `VK_IMAGE_LAYOUT_GENERAL`, adds a binding every other draw's descriptor set
+must fill with its own destination, and rewrites the synchronisation of a shared path for one op
+kind. A copy plus a draw costs one render-pass instance per edge and touches nothing else.
+
+**Measured, k = 1, 640×480, presented against the golden source:**
+
+| screen | identical | missing | before |
+|---|---|---|---|
+| `MAINMENU.GUI` | **99.97 %** | **0** | 99.47 % |
+| `SINGLE.GUI` | **100.00 %** | **0** | 99.42 % |
+| `SKIRMISH.GUI` | **99.53 %** | **0** | 98.95 % |
+| `MAINMENU.GUI` after a two-screen pop | **99.97 %** | **0** | 99.47 % |
+| `MAINMENU.GUI` after seven window resizes | **99.97 %** | **0** | 99.48 % |
+
+`MAINMENU.GUI`'s census now reads **`raw=0 pct=0.00`** — the main menu publishes nothing the drain
+can drop. The 93 px left are the green particle animation a frame apart between the two captures,
+scattered over `y 1..230`; **the button row is 0**. The seven resizes did rebuild the swapchain
+this time (`vk: swapchain: 3 images 1200x900 / 700x520 / 640x480`), which the previous landing
+could not provoke at all, and the picture came back with `asset=54/12/0/0` — 0 revocations, 0
+drift — and `mirlost=0`.
+
+**`SINGLE.GUI` is exact.** 307 200 / 307 200.
+
+**What is left, and it is one kind.** `SKIRMISH.GUI`'s 1 444 differing pixels are the **player
+colour swatches**, a 19-px column at `x 214..232` repeated down the player rows: the engine has a
+blue/red/white/green square where ours has the button's grey. Those are `OP_SCALE` — the
+transformed GAF — and they are the only `raw` left anywhere in the shell
+(`area=26491062[... scale 62400 ...] raw=62400 pct=0.23`). `publish` gives `OP_SCALE` a
+`PK_SPRITE` only when the resampled plane was captured at observe time; these are the ones where it
+was not, and they fall through to `PK_PIXELS`. **That is the next packet**, and it needs no new
+kind — only the capture to succeed.
+
+**In game the tint never fires.** 153 census windows across a loaded scenario carry **zero `focus`
+ops**, and `raw=0` on every one of them. The in-game picture was checked as an A/B between builds
+rather than against the engine (the world is our own renderer and differs by animation phase):
+`crowd-static` on Two Continents at 1024×768, the two DLLs run in turn on the same instance,
+**5 100 differing pixels, all 5 100 inside the world viewport `(128,32) 896×704` and 0 in the
+chrome**.
+
+**What it costs, measured — including the optimisation that did not work.** Twenty-four
+render-pass instances and 24 image copies per focused-gadget draw is not free on a software
+rasteriser. Uncapped on `MAINMENU.GUI` at 640×480, reference setup, Xvfb + llvmpipe, six samples
+per arm:
+
+| build | fps (mean of 6) |
+|---|---|
+| before the tint | **171.3 / 172.2 / 174.0** across three runs |
+| with it, `renderArea` = the whole twin | **150.8** |
+| with it, `renderArea` = the op's box | **147.6 / 154.6** |
+
+so about **13 %**, and **narrowing the render area bought nothing** — the two tint arms sit inside
+each other's spread. The narrowing is kept because it states what the pass actually touches and
+because the 614 KB load/store it declines is real on an implementation that honours a partial
+area; that part is **not verified here** and is not a figure to quote. llvmpipe evidently does not
+skip work for it. The real lever, if this ever matters on hardware, is the subpass
+self-dependency: one render pass instead of twenty-four.
+
+**The corrected measure, stated because a figure in this file changed meaning.**
+`s_kindArea[OP_FOCUS]` counted the bounding box of each `0x4BF7B0` call and now counts the four
+edges, so `focus` in `gui area:` is the pixels the engine writes rather than the box it writes
+inside — `1 156 164` before this landing and `1 560` per window after, for the same screen. The
+before figures quoted above and in §8 are the old measure. `OP_FILL` moved from `raw` to
+`semantic` in the same line as a correction rather than a change: it has crossed as a `PK_BAR`
+since the whole-surface fill branch went in. `OP_SCALE` stays in `raw`, which over-reports it,
+because it is semantic only when its plane was captured and a sometimes-semantic kind cannot be
+summed as though it always were.
 
 **The rest of the in-game HUD is per-frame into the main offscreen** **[VERIFIED,
 [UI markers](ui-markers.html) §4 and the `DrawGameScreen` tail]**: the resource text block
@@ -855,7 +977,7 @@ they carry there; G15a adds the new ones.
 | `0x4C7580` | textured-**quad** stamp `(ctx, src, xy[8], uv[8])`; **FOUR** vertices (`cmp ecx,0x4` at `0x4C7676`, stride 8), origin, `+u`, `+u+v`, `+v`, and the span is HALF-OPEN in both axes — the far vertex is the edge it stops before, not a pixel. With `uv == NULL` the engine synthesises `(0,0)(w-1,0)(w-1,h-1)(0,h-1)` — note `w-1` | VERIFIED; args MEASURED 2026-09-07, the half-open extent MEASURED 2026-09-21, **the vertex COUNT corrected from three to four 2026-09-21 by the landing review** |
 | `0x4C6D20` | descriptor blit `(ctx, desc, src, dst)`, `ret 0x10` | VERIFIED 2026-09-07 |
 | `0x4BF4D0` | framed box `(ctx, RECT*, colour)`, `ret 0xC` — the F4 popup's border | VERIFIED 2026-09-07 |
-| `0x4BF7B0` | the focus rectangle, `(ctx, RECT*, colour)` | VERIFIED 2026-09-07 |
+| `0x4BF7B0` | the focus rectangle, `(ctx, RECT*, **level**)` — the third argument is a shade level into `globals+0xC8`, not a colour [CORRECTED 2026-09-18; four edges, six rings, disassembled 2026-09-21] | VERIFIED 2026-09-07 |
 | `0x4A81E0` | `GUI_StageUpdateDraw(gi, flags)`, `ret 8`; flags `1` build, `2` teardown, `0x40` redraw | VERIFIED 2026-09-07 |
 | `0x466B00` | `DrawMinimap(ctx)`, `ret 4`, one caller `0x46961F` | VERIFIED 2026-09-07 |
 | `0x4A9176` / `0x4A962C` | gadget type switch / 13-entry table | VERIFIED (gui-gadgets §3) |

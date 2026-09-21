@@ -968,7 +968,7 @@ sees only the blits that really draw. Full argument lists, boxes and evidence: t
 | `0x4C6D20` | descriptor blit `(ctx, desc, src, dst)` — listbox, textfield | 7 | `*dst` |
 | `0x4C7580` | the textured-**quad** stamp `(ctx, src, xy[8], uv[8])`, FOUR vertices — the option screens' wide backdrop | 5 | the vertices' bounding box, over all four |
 | `0x4CCF60` | the glyph blitter, cdecl 9 args | 6 | the string's box from the font's width table, the string's bytes copied into a window scratch, and **since G19f-8 the font itself**: the slot id, `font[0]`/`font[2]`, and a glyph record for every code of this string the font has not sent yet (`text_capture`). `publish` then dereferences no font at all — the read happens one instruction before the engine's own, which is the whole of the lifetime argument |
-| `0x4BE950`, `0x4BF6F0`, `0x4BF8C0`, `0x4BF7B0`, `0x4BF4D0` | line, bar, hollow rect, focus rect, framed box | 8/7/6/7/7 | the rect, clipped |
+| `0x4BE950`, `0x4BF6F0`, `0x4BF8C0`, `0x4BF7B0`, `0x4BF4D0` | line, bar, hollow rect, focus rect, framed box | 8/7/6/7/7 | the rect, clipped — **except the focus rectangle, which records FOUR ops since landing 8d (2026-09-21), one per edge in the engine's own order (top, right, bottom, left), each clipped on its own as `0x4BEA20` clips them.** The box is not what `0x4BF7B0` draws: its four edges go through four separate `0x4BEC70` calls, so a single clipped box would close a figure the engine left open, and the four shared corners are tinted twice. It also refuses a shade level outside the table's 32 rows, which nothing in the engine bounds |
 | `0x4C6890` | `SurfaceFill(surface, colour)` | 7 | the whole surface |
 | `0x4C6B70` | surface → surface `(dst, src, x, y)` — the GUI panel reaching the frame | 8 | the source's box at `(x−originX, y−originY)`, clipped |
 | `0x4C69F0` | `SurfaceCreateNamed(tag, w, h)` — return hijacked | 6 | registers the surface, seeds its copy so its build is diffed |
@@ -10334,13 +10334,24 @@ One live game, `renderer=vulkan`, full play arm set, 1024x768:
 
 | op kind | engine function | count | status |
 |---|---|---|---|
-| **`focus`** | `0x4BF7B0` — **a tint** | **1 223 310** | **`PK_PIXELS`, and cannot leave it as a colour and a box** |
+| **`focus`** | `0x4BF7B0` — **a tint** | **1 223 310** | **`PK_TINT` since landing 8d, 2026-09-21** (was: "`PK_PIXELS`, and cannot leave it as a colour and a box" — right about the colour, wrong that nothing else could carry it) |
 | `line` | `0x4BE950` | 842 790 | `PK_PIXELS` — landing 8c |
 | `copy` | `0x4C6B70` | 414 729 | already `PK_COPY` |
 | `rect` | `0x4BF8C0` | **3 476** | **`PK_RECT` — this landing** |
 | `bar` | `0x4BF6F0` | 1 184 | `PK_BAR` — landing 8a |
-| `scale` | | 6 819 | `PK_PIXELS` |
-| `frame` | `0x4BF4D0` — a tint | 0 this run | `PK_PIXELS` |
+| `scale` | | 6 819 | `PK_PIXELS` — **the only one left**, and the last `raw` in the shell |
+| `frame` | `0x4BF4D0` — a tint | 0 this run | `PK_PIXELS`; `PK_TINT`'s shape one table along — a FILLED box through `globals+0xC4` when its level is negative — so it needs the branch and no new mechanism |
+
+**The `focus` row's verdict was overturned three days later and the way it was wrong is the useful
+part.** "Cannot leave it as a colour and a box" is true; "and therefore must publish the
+destination's bytes" does not follow, and that second step was never stated — it was assumed.
+What crosses instead is the **operation**: a box, a row, and the 32 × 256 lighten table once
+(`PK_TINT` / `PK_SHADE`). The consumer re-derives the remap on its own twin, so nothing the
+engine composed crosses and the clean cut is untouched. The count above also changes meaning
+after 8d: the observer now records the four EDGES of each focus rectangle as four ops, so `focus`
+counts four times as many ops covering a quarter as much area each, and the area figure is the
+pixels the engine writes rather than the box it writes inside. Full write-up in
+[the GUI renderer note](gui-renderer.html).
 
 **The `rect 5 396 343` this plan has quoted since the survey was the two functions added
 together, and it is ~99.7 % the focus rectangle.** 8b was filed as "the volume"; it is 3 476 ops.

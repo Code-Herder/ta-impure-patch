@@ -1156,6 +1156,64 @@ published as a box and an index; the consumer has to be able to read the surface
 *before* the row base. Two functions, one table, two addressing conventions — a consumer that
 reimplements either must not copy the other's.
 
+##### The full argument map, and the row is carried through unmasked [DISASSEMBLED 2026-09-21, for landing 8d]
+
+`0x4BEC70` is **`(ctx, x0, y0, x1, y1, row)` stdcall `ret 0x18`**, and `0x4CC8DF` is
+**`(ctx, x0, y0, x1, y1, row, lut)` cdecl** — seven dwords, `add esp,0x1c` at `0x4BECF7`. The
+sixth argument of the first becomes the sixth of the second (`mov ecx,[esp+0x50]` at `0x4BECD3`,
+pushed at `0x4BECE0`) and `[globals+0xC8]` becomes the seventh. Both arms of `0x4BEC70` — the one
+that acquires a context through `0x4C5E70` and the one handed a live one — do the same thing;
+`0x4BEA20` clips **in place on the caller's own argument slots** (`lea` of `[esp+0x48..0x50]`,
+so `(&ctx_local, &x0, &y0, &x1, &y1)`), which is why the clipped coordinates are simply pushed
+again.
+
+**Nothing between the caller and the table bounds the row.** `0x4BF7B0` passes its third argument
+straight down and `0x4CC8DF` does `shl eax,0x8` on it, so a level outside 0..31 addresses past a
+32-row table. `0x4BF4D0` clamps (`<= 0x1F` at `0x4BF595`) and this path does not — **an asymmetry
+worth knowing before reimplementing either**, and the reason this fork refuses such an op rather
+than reproducing an off-table read.
+
+**The pixel loops are inclusive at both endpoints, like `0x4CC7AB`'s.** `0x4CC944` (dx == 0) does
+`sub ecx,eax` / `inc ecx` and `0x4CC983` (dy == 0) the same, so an edge covers both of its corners
+— which is what makes the four edges of a focus rectangle overlap at four pixels and tint each of
+them **twice**.
+
+**A negative result about addressing, and it is an engine quirk rather than ours.** The two
+axis-aligned cases compute the same address from different fields: the horizontal one uses
+`mov edx,[edi+8]` — `ctx+0x08`, the **pitch** — and the vertical one `mov edx,[edi]`, `ctx+0x00`,
+the **width** (`0x4CC958`). They agree only while pitch == width. Every surface this has been
+observed on satisfies that, so it has never been visible; a reimplementation that uses the pitch
+for both is doing the right thing and will differ from the engine on any surface where it does
+not.
+
+##### `0x4A16F0` draws SIX rectangles, not one: the focus glow [DISASSEMBLED 2026-09-21]
+
+`0x4BF7B0` has exactly **one** caller in the image (`0x4A17EF`, by an exhaustive `E8` scan of
+`.text`), and it is inside a loop:
+
+```
+4a1799:  mov  edi,0x1f            ; level = 31
+4a17a6:  xor  esi,esi             ; i = 0
+         ; rect = { x, y, x+w-1, y+h-1 } from gadget +0x13/+0x15 (x,y), +0x17/+0x19 (w,h)
+4a17b8:  ...                      ; loop top
+4a17c8:  dec edx / dec ecx / inc eax / inc ebx      ; l--, t--, r++, b++ -- expand by one
+4a17ef:  call 0x4bf7b0            ; (panel+0xBC, &rect, level)
+4a17f4:  mov  eax,0xfffffffd
+4a17f9:  sub  eax,esi             ; -3 - i
+4a17fb:  add  edi,eax             ; level += -3 - i
+4a17fd:  inc  esi
+4a17fe:  cmp  esi,0x6 / jl        ; six iterations
+```
+
+So the focus highlight is **six concentric tinted rectangles**, each one pixel further out than
+the last, at lighten levels **31, 28, 24, 19, 13, 6** — a glow that fades outward over six pixels.
+Twenty-four tinted edges per focused gadget per draw. Gadget types 3, 5 and 2 return before the
+loop (`0x4A1756`, `0x4A176C`, `0x4A1775`); type 3 writes `0x1E` to `record+0x1F` and draws
+nothing.
+
+**Every level it produces is inside the table**, which is why the unbounded row above has never
+been reached in practice — but the bound belongs to the consumer, not to the observation.
+
 **`0x4CC7AB`** is `cdecl(ctx, x0, y0, x1, y1, colour)` and it is a **store-only Bresenham**:
 `stos byte` with no read of the destination, so nothing here touches the blend LUT. **Its colour
 argument is `[ebp+0x1C]`, loaded as a DWORD and stored `stos BYTE al` / `rep stos BYTE al`
@@ -3724,7 +3782,7 @@ clip.
 | `0x4BE950` | `DrawLine` | stdcall `0x18` | `(ctx, x0, y0, x1, y1, colour)` | bbox after `0x4BEA20`; 83 callers | `83 EC 30 56 8B 74 24 38` (8) |
 | `0x4BF6F0` | `DrawBar` | stdcall `0xC` | `(ctx, RECT*, colour)` | the rect, inclusive, via `0x4BF620` + `0x4CCDEA`; 47 callers | `83 EC 40 8B 44 24 48` (7) |
 | `0x4BF8C0` | `DrawTranspRectangle` | stdcall `0xC` | `(ctx, RECT*, colour)` | hollow rect; 12 callers incl. the minimap view box `0x466B5E`, the HUD `0x467F6C` | `83 EC 68 53 56 57` (6) |
-| `0x4BF7B0` | the focus rectangle — **a TINT, not a colour** | stdcall `0xC` | `(ctx, RECT*, level)` | **four** edges of one box, each through `0x4BEC70`, which READS THE DESTINATION; the two groups of four calls are **mutually exclusive arms** on `ctx == NULL` (below); drawn last by `GUI_StageUpdateDraw` via `0x4A16F0(gi, idx, 8)` | `83 EC 30 53 55 56 57` (7) |
+| `0x4BF7B0` | the focus rectangle — **a TINT, not a colour** | stdcall `0xC` | `(ctx, RECT*, level)` | **four** edges of one box — top `(l,t)-(r,t)`, right `(r,t)-(r,b)`, bottom `(l,b)-(r,b)`, left `(l,t)-(l,b)`, in that order — each through `0x4BEC70`, which READS THE DESTINATION; the two groups of four calls are **mutually exclusive arms** on `ctx == NULL` (below); its ONE caller `0x4A16F0` runs it **six times** over expanding rectangles at levels 31, 28, 24, 19, 13, 6, which is the glow (below) | `83 EC 30 53 55 56 57` (7) |
 | `0x4BF4D0` | **the box SHADER** — not a fill at all | stdcall `0xC` | `(ctx, RECT*, level)` — the third argument is a **signed shade level**, not a colour | one clip through `0x4BF620` (×**1**), **no `0x4CCDEA`**, then every pixel in the box remapped through a 256-byte LUT row; **what `DrawPopupF4Dialog 0x4948E0` draws its border with** (×3 — three *calls*, not three fills) | `83 EC 40 53 55 56 57` (7) |
 | `0x4BF620` | the rect CLIPPER the four above share | stdcall `8` | `(clip RECT*, RECT*)` | clamps the second rect into the first and returns 0 when they do not overlap — four `cmp`/early-out pairs, then four clamps. **Carries no colour.** | `8B 4C 24 04 83 EC 10` (7) |
 | `0x4CCDEA` | the solid-fill WRITER the four above share | cdecl, 3 args | `(surface, RECT*, colour)` | **uses only the LOW BYTE of `colour`** — see below | `55 8B EC 56 57 53 51 52` (8) |
