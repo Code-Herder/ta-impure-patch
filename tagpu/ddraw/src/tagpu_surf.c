@@ -47,10 +47,21 @@ typedef struct {
     unsigned char  pal[1024];           /* R,G,B,255                          */
     unsigned       serial, palSerial;
     unsigned       stamp;
-    /* THE LEVEL THIS CAPTURE BELONGS TO, as `s_dropReq` stood when it was
-       taken -- read AFTER the copy, so a teardown that lands mid-copy is
-       recorded and the consumer refuses the frame rather than adopting a
-       picture of a level that was being freed under it. */
+    /* THE LEVEL THIS CAPTURE BELONGS TO, as `s_dropReq` stood when the copy
+       STARTED -- and the copy is thrown away entirely if the counter moved
+       while it ran [both landing reviewers, independently; the first draft read
+       it AFTER the copy and its comment claimed that was the safe side].
+
+       It is not. Reading it after is what makes a straddling capture look
+       CURRENT: the bytes are the dying level's, the stamp is the new level's,
+       so the adopt matches (`s_dropSeen` has just advanced to the same value)
+       and the serve matches (`s_dropReq` is that value), and the dead level's
+       final frame is handed out as the new level's reference for the whole
+       loading screen -- no in-play draw runs there to displace it. That is the
+       exact bug this landing's previous commit says it fixed, re-entered
+       through a narrower door. Reading it BEFORE is safe in every interleaving:
+       a teardown landing before the load stamps the new level either way, and
+       one landing after it is refused by both readers. */
     unsigned       drop;
     int            have;                /* this buffer holds a usable frame   */
 } SNAP;
@@ -79,17 +90,46 @@ static unsigned s_serial = 1;           /* monotonic across both buffers      */
 static unsigned s_palSerial = 1;
 static unsigned s_dropReq;              /* game -> render: the level ended    */
 static unsigned s_captures, s_unchanged, s_refused, s_norequest;
-/* THE ONE-SHOT ORACLE (`tagpu_surfdump.on`, self-deleting), armed on the render
-   thread and read on both. `s_reread` is the direct test of THIS landing's
-   invariant and `s_dumpArm` is how anyone looks at the golden source at all --
-   it has no consumer in the tree, so without this there is no way to see it.
+/* CAPTURES THROWN AWAY BECAUSE A TEARDOWN LANDED WHILE THEY RAN. It should be
+   0, and it is also the instrument for an open question the tree does not
+   answer: this can only be non-zero if a level teardown reaches us on a thread
+   that is NOT the one copying, i.e. a foreign-thread teardown -- which
+   `tagpu_reclaim.c` guards against in one function and not in the one that
+   calls us. A single count here settles it. */
+static unsigned s_straddle;
+/* THE ORACLE, armed on the render thread and read on both. `s_reread` is the
+   direct test of THIS landing's invariant and `s_dumpArm` is how anyone looks
+   at the golden source at all -- it has no consumer in the tree, so without
+   this there is no way to see it.
 
-   They are `__atomic` rather than `volatile` for the reason stated three lines
-   above the hand-over's own words: `volatile` orders nothing, and a file that
-   says so must not then make two exceptions for its own diagnostics. RELAXED is
-   all either needs -- a missed or late one-shot is the whole consequence. */
+   `s_reread` HAS TWO MODES, AND THE SECOND ONE EXISTS BECAUSE THE FIRST CANNOT
+   MEASURE WHAT THIS LANDING CLAIMS [the landing review, and it is this
+   landing's own lesson turned on itself]. `tagpu_surfdump.on` is one shot, so a
+   run of it yields one double-read; twenty-four of them across four sessions
+   yielded twenty-four. At the OLD site's measured tear rate of 1.35 %, twenty-
+   four clean checks happen 72 % of the time -- so "0 of 24" is exactly what a
+   site tearing as badly as the old one would produce, and reporting it beside
+   the old site's 223-of-16 500 as though the two were comparable is the same
+   error this landing's own commit records: a sample too small to see the thing
+   it is looking for is not a measurement.
+
+   So `tagpu_surfcheck.on` (mode 2) re-reads on EVERY capture for as long as the
+   file is there, keeps the totals, and says nothing unless a check comes back
+   non-zero. That is the continuous probe the old site was condemned by, pointed
+   at the new one.
+
+   `__atomic` rather than `volatile` for the reason stated three lines above the
+   hand-over's own words: `volatile` orders nothing, and a file that says so
+   must not then make two exceptions for its own diagnostics. RELAXED is all any
+   of them needs -- a missed or late arm is the whole consequence. */
+#define RR_OFF   0u
+#define RR_ONCE  1u
+#define RR_EVERY 2u
 static unsigned s_reread;               /* game: read the primary twice, compare */
 static unsigned s_dumpArm;              /* render: write the next snapshot out    */
+/* The continuous oracle's tally. Game thread writes, and the render thread
+   reads them once when the lever is taken away -- atomics for that crossing. */
+static unsigned s_rrChecks, s_rrTorn, s_rrWorst, s_rrBytes;
 static unsigned s_usTotal, s_usMax, s_usN;
 static int      s_saidRefused, s_saidFirst;
 static LARGE_INTEGER s_freq;
@@ -107,11 +147,12 @@ static LARGE_INTEGER s_freq;
    the object after leaving it -- and the bytes' writer is this thread, which is
    not running. The section costs nothing at 30 draws a second and keeps one
    rule for every reader of this object in the DLL. */
-static int take_into(SNAP* d, const SNAP* prev, unsigned stamp, int* rrBad)
+static int take_into(SNAP* d, const SNAP* prev, unsigned stamp, int* rrBad, int* rrShout)
 {
     int ok = 0;
 
     *rrBad = -1;                        /* the re-read oracle did not run */
+    *rrShout = 0;
 
     EnterCriticalSection(&g_ddraw.cs);
     /* THE BOUND COMES FROM THE OBJECT BEING READ. `g_ddraw.width/height` is the
@@ -121,7 +162,16 @@ static int take_into(SNAP* d, const SNAP* prev, unsigned stamp, int* rrBad)
        primary's allocation. CLAUDE.md: a value is DATA until it has been
        validated as data. */
     if (g_ddraw.primary && g_ddraw.primary->surface && g_ddraw.primary->palette &&
-        g_ddraw.bpp == 8 &&
+        /* THE PRIMARY'S OWN DEPTH, for the same reason as its own geometry two
+           lines down [the landing review]. This read `g_ddraw.bpp` -- the
+           device MODE -- while the comment above condemned exactly that for
+           width and height. `ddsurface.c` stamps the surface's `bpp` when it
+           creates it and `dd.c` sets the mode's at SetDisplayMode, so between
+           the two the pair disagrees, and an 8 here over a 16bpp primary takes
+           `w` bytes a row and calls them palette indices: a wrong picture, in
+           bounds. Pre-existing and identical on `main`; it is fixed here
+           because this landing's comment claims the class is closed. */
+        g_ddraw.primary->bpp == 8 &&
         g_ddraw.primary->width > 0 && g_ddraw.primary->height > 0) {
         int w = g_ddraw.primary->width, h = g_ddraw.primary->height;
         int pitch = g_ddraw.primary->pitch ? (int)g_ddraw.primary->pitch : w;
@@ -164,7 +214,9 @@ static int take_into(SNAP* d, const SNAP* prev, unsigned stamp, int* rrBad)
                    the claim is false and the site is wrong. At the old site --
                    the render thread, mid-frame -- this is exactly the number
                    that could not be bounded. */
-                if (__atomic_load_n(&s_reread, __ATOMIC_RELAXED)) {
+                {
+                  unsigned mode = __atomic_load_n(&s_reread, __ATOMIC_RELAXED);
+                  if (mode != RR_OFF) {
                     unsigned bad = 0;
                     int yy;
                     for (yy = 0; yy < h; yy++) {
@@ -177,9 +229,36 @@ static int take_into(SNAP* d, const SNAP* prev, unsigned stamp, int* rrBad)
                        the caller: `slog` opens, writes and closes a file, and
                        this is the one place that would hold `g_ddraw.cs` over
                        something unbounded -- with the render thread's own use
-                       of that section (tagpu_pal.c) waiting behind it. */
-                    __atomic_store_n(&s_reread, 0u, __ATOMIC_RELAXED);
+                       of that section (tagpu_pal.c) waiting behind it.
+
+                       THE COMPARE ITSELF IS STILL INSIDE, and in RR_EVERY that
+                       is a `w*h` scalar pass holding `g_ddraw.cs` on every
+                       capture -- about a millisecond at 1024x768, with the
+                       render thread (ABOVE_NORMAL priority) able to block
+                       behind it [the landing review]. It has to be inside: the
+                       second read is of the PRIMARY, and the section is what
+                       keeps that pointer live. This is why the continuous mode
+                       is a probe you arm for a measurement and take away again,
+                       and never a play default. */
+                    if (mode == RR_ONCE) {
+                        __atomic_store_n(&s_reread, RR_OFF, __ATOMIC_RELAXED);
+                        *rrShout = 1;          /* a one-shot always says its answer */
+                    } else {
+                        /* CONTINUOUS: keep the tally, and speak only when the
+                           invariant is violated. One line per capture would be
+                           1 800 a minute and would itself perturb what it
+                           measures. */
+                        __atomic_fetch_add(&s_rrChecks, 1u, __ATOMIC_RELAXED);
+                        if (bad) {
+                            __atomic_fetch_add(&s_rrTorn, 1u, __ATOMIC_RELAXED);
+                            __atomic_fetch_add(&s_rrBytes, bad, __ATOMIC_RELAXED);
+                            if (bad > __atomic_load_n(&s_rrWorst, __ATOMIC_RELAXED))
+                                __atomic_store_n(&s_rrWorst, bad, __ATOMIC_RELAXED);
+                            *rrShout = 1;
+                        }
+                    }
                     *rrBad = (int)bad;
+                  }
                 }
                 /* THE PALETTE, IN THIS SAME SECTION AND THIS SAME INSTANT. The
                    interleave stays inside the guard because RGBQUAD is
@@ -222,16 +301,28 @@ static int take_into(SNAP* d, const SNAP* prev, unsigned stamp, int* rrBad)
    a compare. */
 static void heartbeat(int w, int h)
 {
-    char b[256];
+    char b[320], rr[96];
+    unsigned n = __atomic_load_n(&s_rrChecks, __ATOMIC_RELAXED);
+    rr[0] = 0;
+    /* THE CONTINUOUS ORACLE'S RUNNING TALLY, and only while it is running. This
+       is the number the claim rests on, so it belongs where anyone watching the
+       log will see it accumulate rather than only at the end. */
+    if (n) {
+        _snprintf(rr, sizeof rr, " | re-read %u check(s) %u torn, %u byte(s), worst %u",
+                  n, __atomic_load_n(&s_rrTorn, __ATOMIC_RELAXED),
+                  __atomic_load_n(&s_rrBytes, __ATOMIC_RELAXED),
+                  __atomic_load_n(&s_rrWorst, __ATOMIC_RELAXED));
+        rr[sizeof rr - 1] = 0;
+    }
     _snprintf(b, sizeof b,
               "surf: golden source %dx%d on the GAME thread -- captured=%u unchanged=%u "
-              "refused=%u norequest=%u serial=%u/%u | render asked=%u waited=%u | "
-              "us avg=%u max=%u",
-              w, h, s_captures, s_unchanged, s_refused, s_norequest,
+              "refused=%u straddle=%u norequest=%u serial=%u/%u | render asked=%u waited=%u | "
+              "us avg=%u max=%u%s",
+              w, h, s_captures, s_unchanged, s_refused, s_straddle, s_norequest,
               s_serial, s_palSerial,
               __atomic_load_n(&s_asked, __ATOMIC_RELAXED),
               __atomic_load_n(&s_waited, __ATOMIC_RELAXED),
-              s_usN ? s_usTotal / s_usN : 0u, s_usMax);
+              s_usN ? s_usTotal / s_usN : 0u, s_usMax, rr);
     b[sizeof b - 1] = 0;
     slog(b);
     s_usTotal = 0; s_usN = 0; s_usMax = 0;
@@ -240,8 +331,9 @@ static void heartbeat(int w, int h)
 void tagpu_surf_capture(unsigned stamp)
 {
     unsigned req = __atomic_load_n(&s_req, __ATOMIC_ACQUIRE);
+    unsigned dropBefore;
     LARGE_INTEGER t0, t1;
-    int hold, ok, rrBad;
+    int hold, ok, rrBad, rrShout, dw, dh;
     SNAP* d;
 
     /* NOTHING HAS BEEN ASKED FOR. This is the gate that bounds what this costs
@@ -256,30 +348,42 @@ void tagpu_surf_capture(unsigned stamp)
     d = &s_snap[1 - hold];
 
     if (!s_freq.QuadPart) QueryPerformanceFrequency(&s_freq);
+    /* THE LEVEL, BEFORE THE COPY (see SNAP.drop). */
+    dropBefore = __atomic_load_n(&s_dropReq, __ATOMIC_ACQUIRE);
     QueryPerformanceCounter(&t0);
-    ok = take_into(d, &s_snap[hold], stamp, &rrBad);
+    ok = take_into(d, &s_snap[hold], stamp, &rrBad, &rrShout);
     QueryPerformanceCounter(&t1);
     if (s_freq.QuadPart && t1.QuadPart >= t0.QuadPart) {
         unsigned us = (unsigned)(((t1.QuadPart - t0.QuadPart) * 1000000LL) / s_freq.QuadPart);
         s_usTotal += us; s_usN++;
         if (us > s_usMax) s_usMax = us;
     }
-    /* AFTER the copy, deliberately (see SNAP.drop). */
-    d->drop = __atomic_load_n(&s_dropReq, __ATOMIC_ACQUIRE);
-    d->have = ok;
-    if (ok) s_captures++;
+    d->drop = dropBefore;
+    /* AND A COPY THAT STRADDLED A TEARDOWN IS NOT PUBLISHED AT ALL. Stamping
+       with the level it started in is already safe -- both readers refuse it
+       once they have acted on the drop -- but discarding it outright makes the
+       stronger statement true by construction: every snapshot the render thread
+       can adopt lies entirely within one level. A refusal is still an answer,
+       which is the path this takes. */
+    d->have = ok && (__atomic_load_n(&s_dropReq, __ATOMIC_ACQUIRE) == dropBefore);
+    if (d->have) s_captures++;
+    else if (ok) s_straddle++;         /* copied fine; the level moved under it */
+    /* READ BEFORE THE PUBLISH, USED AFTER IT. The moment `s_ack` is stored the
+       render thread may adopt `d`, and then it is no longer ours to read -- the
+       rule this file states at the top. Both uses below are logging. */
+    dw = d->w; dh = d->h;
 
     /* THE PUBLISH. Everything above -- the bytes, the palette, the serials, the
        geometry and `have` -- becomes visible to the render thread with this
        store and not before it. */
     __atomic_store_n(&s_ack, req, __ATOMIC_RELEASE);
 
-    if (rrBad >= 0) {
+    if (rrShout) {
         char b[208];
         _snprintf(b, sizeof b,
                   "surf: re-read check at draw %u: %d byte(s) of %d differ between two "
                   "reads of the primary at this site (0 = nothing else is writing it)",
-                  stamp, rrBad, d->w * d->h);
+                  stamp, rrBad, dw * dh);
         b[sizeof b - 1] = 0;
         slog(b);
     }
@@ -312,7 +416,7 @@ void tagpu_surf_capture(unsigned stamp)
        ATTEMPT re-printed the line -- and zeroed the timing accumulators -- once
        per in-play draw for as long as captures were being refused, naming a
        geometry `take_into` never set. */
-    if (ok && s_captures % SURF_LOG_EVERY == 0) heartbeat(d->w, d->h);
+    if (d->have && s_captures % SURF_LOG_EVERY == 0) heartbeat(dw, dh);
 }
 
 void tagpu_surf_level_end(void)
@@ -368,15 +472,44 @@ void tagpu_surf_sync(const TAGPU_FRAME* f)
 {
     unsigned ack, drop;
 
-    /* THE ONE-SHOT ORACLE. Polled here because this is the render thread's one
-       call a frame -- 60 file stats a second, not the flip's 5 000 (the lesson
-       `tagpu_gui_hook.c`'s trigger family records). It arms BOTH halves: the
-       game thread's re-read check on its next capture, and this thread's dump
-       of whatever that capture publishes. */
+    /* THE ORACLE, POLLED HERE because this is the render thread's one call a
+       frame -- 60 file stats a second, not the flip's 5 000 (the lesson
+       `tagpu_gui_hook.c`'s trigger family records).
+
+       `tagpu_surfdump.on` is the ONE SHOT, self-deleting, and arms both halves:
+       the game thread's re-read check on its next capture, and this thread's
+       dump of whatever that capture publishes -- one picture and one answer,
+       which is what you want when you are looking at the reference.
+
+       `tagpu_surfcheck.on` is the CONTINUOUS probe and is NOT deleted: it runs
+       the re-read on every capture for as long as the file is there and says
+       nothing unless a check is non-zero. Taking the file away prints the
+       tally. It exists because a one-shot cannot measure a rare race -- see
+       `s_reread`'s own comment, which is this landing's lesson applied to
+       itself. */
     if (GetFileAttributesA("tagpu_surfdump.on") != INVALID_FILE_ATTRIBUTES) {
         DeleteFileA("tagpu_surfdump.on");
-        __atomic_store_n(&s_reread, 1u, __ATOMIC_RELAXED);
+        __atomic_store_n(&s_reread, RR_ONCE, __ATOMIC_RELAXED);
         __atomic_store_n(&s_dumpArm, 1u, __ATOMIC_RELAXED);
+    } else if (GetFileAttributesA("tagpu_surfcheck.on") != INVALID_FILE_ATTRIBUTES) {
+        if (__atomic_load_n(&s_reread, __ATOMIC_RELAXED) != RR_EVERY) {
+            __atomic_store_n(&s_reread, RR_EVERY, __ATOMIC_RELAXED);
+            slog("surf: the continuous re-read check is ARMED (tagpu_surfcheck.on) -- "
+                 "every capture reads the primary twice; silence means 0 torn. "
+                 "Remove the file for the tally.");
+        }
+    } else if (__atomic_load_n(&s_reread, __ATOMIC_RELAXED) == RR_EVERY) {
+        char b[224];
+        unsigned n = __atomic_load_n(&s_rrChecks, __ATOMIC_RELAXED);
+        __atomic_store_n(&s_reread, RR_OFF, __ATOMIC_RELAXED);
+        _snprintf(b, sizeof b,
+                  "surf: the continuous re-read check is DISARMED -- %u check(s), "
+                  "%u torn, %u byte(s) in all, worst %u",
+                  n, __atomic_load_n(&s_rrTorn, __ATOMIC_RELAXED),
+                  __atomic_load_n(&s_rrBytes, __ATOMIC_RELAXED),
+                  __atomic_load_n(&s_rrWorst, __ATOMIC_RELAXED));
+        b[sizeof b - 1] = 0;
+        slog(b);
     }
 
     /* WHERE IT GOES IS THIS FRAME'S, and it is OURS rather than the engine's:
@@ -398,7 +531,12 @@ void tagpu_surf_sync(const TAGPU_FRAME* f)
        goes stale look the same from outside. */
     drop = __atomic_load_n(&s_dropReq, __ATOMIC_ACQUIRE);
     if (drop != s_dropSeen) {
-        if (s_holdValid && s_snap[s_hold].have && s_snap[s_hold].drop == s_dropSeen)
+        /* GATED ONLY ON HOLDING SOMETHING. It was also gated on the held
+           snapshot carrying the generation we were leaving, which is silently
+           false whenever we hold a frame from an older one -- and this line is
+           the only thing that makes a drop observable from outside [the landing
+           review]. */
+        if (s_holdValid && s_snap[s_hold].have)
             slog("surf: the level ended - the golden source is dropped; "
                  "there is none again until the next in-play draw");
         s_dropSeen = drop;
@@ -433,8 +571,18 @@ void tagpu_surf_sync(const TAGPU_FRAME* f)
        not throw away a good capture from the NEW level, which a request-number
        barrier would have. */
     if (s_snap[1 - s_hold].have && s_snap[1 - s_hold].drop == s_dropSeen) {
-        s_hold = 1 - s_hold; s_holdValid = 1;
-        if (s_dumpArm) { __atomic_store_n(&s_dumpArm, 0, __ATOMIC_RELAXED); dump_ppm(&s_snap[s_hold]); }
+        /* `__atomic` on both, because this file states that rule about these
+           very words and must not then except its own code from it [the landing
+           review]. Neither is a race today -- the req/ack protocol makes
+           `s_hold` stable whenever the game thread reads it, and `s_dumpArm` is
+           written and read on this thread -- but a rule the code does not
+           follow is how the next edit gets it wrong. */
+        __atomic_store_n(&s_hold, 1 - s_hold, __ATOMIC_RELAXED);
+        s_holdValid = 1;
+        if (__atomic_load_n(&s_dumpArm, __ATOMIC_RELAXED)) {
+            __atomic_store_n(&s_dumpArm, 0u, __ATOMIC_RELAXED);
+            dump_ppm(&s_snap[s_hold]);
+        }
     }
 
     /* ASK FOR THE NEXT, with `s_hold` already settled: the RELEASE store is what
@@ -455,7 +603,9 @@ int tagpu_surf_frame(TAGPU_SURFFRAME* out)
        not (see `tagpu_surf_sync`). Reading `s_dropReq` rather than `s_dropSeen`
        is what makes it independent of whether the producer ran at all: a
        teardown that suppresses `tagpu_overlay_draw` still ends the reference on
-       the very next frame. Both callers are the render thread, so the load
+       the very next frame. Both READERS of `s_dropReq` on this side -- this one
+       and the adopt in `tagpu_surf_sync` -- are the render thread (this
+       function has exactly one caller, `tagpu_vk_surf_prepare`), so the load
        needs no more than ACQUIRE against the game thread's increment. */
     if (s->drop != __atomic_load_n(&s_dropReq, __ATOMIC_ACQUIRE)) return 0;
     if (s_dw < 1 || s_dh < 1) return 0;     /* nowhere to put it */

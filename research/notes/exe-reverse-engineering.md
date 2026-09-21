@@ -3714,7 +3714,21 @@ call order, with each gate (`ebx` is the function's `drawUnits` argument):
 | `0x46A308..0x46A3B8` | `[main+0x38DD5]` and `ebx` | the nine profiler bars `0x46B900` |
 | `0x46A3C2` **`DrawOptionsTab 0x45FFB0`** (the symbol's name; the `LIGHTBAR` wipe) | `0x512FE4 != 0` | below |
 | `0x46A3C7` `0x4C2870` | — | the cursor, back buffer only |
-| `0x46A3DB` `0x4C63A0` | `ebx` and `[esp+0x22C]` (`blitScreen`) | the flip |
+| `0x46A3CC` `test ebx,ebx` / `0x46A3CE je 0x46A3E0` | — | **guard 1 on the flip**: argument 1 (`drawUnits`, the `ebx` the marker block tests) |
+| `0x46A3D0` `mov eax,[esp+0x22C]` / `0x46A3D7 test eax,eax` / `0x46A3D9 je 0x46A3E0` | — | **guard 2 on the flip**: argument 2 (`blitScreen`) |
+| `0x46A3DB` `0x4C63A0` | `ebx` and `[esp+0x22C]` (`blitScreen`) | the flip, **conditional on both guards above** |
+| `0x46A400` | — | a profiler accumulator; the only call between the flip and the `ret`, and it writes nothing to the primary |
+
+**The two guards are why "the flip is inside `DrawGameScreen`" is not on its own an argument that
+a frame has been presented** *[BINARY-VERIFIED 2026-09-20, re-derived for the golden-source
+landing]*. A `DrawGameScreen` that draws without presenting falls through both `je`s straight to
+the tail. What makes the flip certain on the played path is the **return-address filter**: only
+`0x4969CD` (`push ebx; push ebx` at `0x4969CB`, `ebx` set to 1 at `0x4967CF` and not rewritten in
+between — `DrawGameScreen(1, 1)`) returns to `VA_DRAW_RET_INPLAY 0x4969D2`, and both guards are
+satisfied there. A future in-play call site passing `blitScreen = 0` would reach an `after`
+observer with no flip having run. `tagpu_packet_pub.c`'s `after_draw` states this where it
+captures the golden source.
+
 
 **The `LIGHTBAR` wipe, `0x45FFB0`** — the in-game menu's opening animation, a bright bar sweeping
 the panel's width while the panel is revealed behind it: the opener **`0x460160`** (`ret 4`, the

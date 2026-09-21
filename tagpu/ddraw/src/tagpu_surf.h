@@ -52,6 +52,17 @@
    primary from `before_flip` on the game thread, one flip after the arm, which
    is the last COMPLETED frame.
 
+   TWO MORE CONFIGURATIONS CAPTURE NOTHING, and in both the render thread is
+   left holding a request that will never be served [the landing review; both
+   benign, neither previously written down]. Under `renderer=gdi` the render
+   half never runs at all, so no request is ever made and the game thread's
+   gate returns on its first compare — zero cost. Under the publisher's
+   `s_countOnly` the `after_draw` observer is not registered, so the render
+   thread asks and the game thread never answers: `asked` climbs by one, `ack`
+   never moves, every later sync takes the in-flight branch, and the reference
+   stays absent. Nothing spins, nothing blocks and nothing leaks; the heartbeat
+   shows it as `asked=1 captured=0`.
+
    ---------------------------------------------------------------------------
    THE HAND-OVER: TWO BUFFERS AND ONE OWNERSHIP RULE
 
@@ -78,9 +89,28 @@
    almost always finished". `volatile` is not the mechanism; the `__atomic`
    acquire/release pair is, for the reason `tagpu_packet.c` states at length.
 
-   IT ALSO BOUNDS THE COST. The game thread copies at most once per render-
-   thread frame, because a capture needs a request and a request needs a sync.
-   A render thread that is behind costs the game thread nothing at all.
+   AND IT IS NOT RE-ENTRANT, WHICH COSTS NOTHING TO SAY AND WAS NOT SAID [the
+   landing review asked; rejected, with this reason]. The producer would break
+   if a second capture could begin while one was mid-copy on the same thread:
+   the inner publish would let the render thread flip `hold`, and the outer
+   would go on writing the buffer the render thread now owns. It cannot happen.
+   `tagpu_surf_capture` runs from `after_draw`, which runs only for the return
+   address `VA_DRAW_RET_INPLAY` -- one call site, `0x4969CD` in the frame
+   callback, which `DrawGameScreen` does not call -- and `after_draw` pops the
+   return stack BEFORE it captures, so a nested in-play draw would still produce
+   two captures strictly one after the other, each complete before the next
+   begins. Nothing in `tagpu_surf_capture` can re-enter the engine. The
+   publisher counts what would falsify this (`deep=` in its heartbeat; 0 over
+   every session measured).
+
+   IT ALSO BOUNDS THE COST, THOUGH NOT BY PIXEL COUNT. The game thread copies
+   at most once per render-thread frame, because a capture needs a request and a
+   request needs a sync, and a render thread that is behind costs the game
+   thread nothing at all. But what each copy costs is `w*h` copied plus `w*h`
+   compared, on TA's lockstep game thread: the 52-59 us the notes quote is
+   1024x768, and the figure scales with the pixels [the landing review]. At the
+   `TAGPU_SURF_MAXDIM` ceiling it would be a 16 MiB copy and a 16 MiB compare
+   per in-play draw. The heartbeat prints `us avg/max` so it is never a guess.
 
    THE SNAPSHOT'S LIFETIME IS THE LEVEL'S, AND THE LEVEL IS A PROPERTY OF THE
    SNAPSHOT. `tagpu_surf_level_end` is called from the same teardown that ends

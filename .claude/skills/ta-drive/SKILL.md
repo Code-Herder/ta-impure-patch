@@ -2377,11 +2377,27 @@ Four things to know before driving under it:
   comparison depends on the pairing. It used to run
   on the render thread sequenced against nothing, and that was not theoretical: **223 of 16 500
   reads at the old site came back torn**. Two consequences for driving:
-  - **`tacli arm <i> surfdump.on`** is the one-shot oracle. It writes `tagpu_surf.ppm` (the golden
+  - **`tacli arm <i> surfdump.on`** is the ONE-SHOT oracle. It writes `tagpu_surf.ppm` (the golden
     source resolved through its own palette) and logs `surf: re-read check at draw N: 0 byte(s) of
     M differ` — the game thread reading the primary twice at the capture site. **That number must
-    be 0**, with the game in motion; anything else means the site is wrong. On a settled paused
-    scene the PPM is **0 px** from `tacli shot`.
+    be 0**, with the game in motion; anything else means the site is wrong.
+  - **`tacli arm <i> surfcheck.on` is the CONTINUOUS one, and it is the one that measures.** It
+    re-reads on *every* capture for as long as the file is there, says nothing while the answer
+    is 0, and carries a running tally in the heartbeat (`re-read N check(s) 0 torn`). Remove the
+    file and it prints the total. **The tally is cumulative for the life of the process** — re-arming
+    continues it rather than restarting, so a per-run figure is a subtraction. Measured 2026-09-20
+    on the new site: **0 of 21 669 torn**, against the old site's 223 of 16 500. **Reach for this and not `surfdump.on` whenever the question is
+    "is the site sound"** — a one-shot cannot answer it: at the *old* site's measured 1.35 % tear
+    rate, twenty-four one-shot checks come back clean 72 % of the time, so a handful of zeroes
+    is what a badly torn site looks like too. It roughly doubles the per-capture cost and holds
+    `g_ddraw.cs` across the compare, so it is a probe you arm for a run and take away again,
+    never something to leave on.
+  - **The PPM against `tacli shot` is NOT expected to be 0 px on a live scene**, and an earlier
+    version of this note said it was. Both read the same primary but at different draws, so
+    anything animating — a smoke plume, the resource bar, a unit — differs. Measured
+    2026-09-20 on `feat-forest`: the PPM differs from `tacli shot` by 352–529 px, against a
+    **`tacli shot` vs `tacli shot` control of 415–508 px on the same scene**. The control is the
+    floor; the test is whether the capture is worse than it, and it is not. Run the control.
   - **THERE IS NO GOLDEN SOURCE IN THE SHELL, and none on `renderer=gdi`.** The shell never calls
     `DrawGameScreen`, and gdi makes no `tagpu_` call, so nothing asks and nothing is captured —
     `tacli shot` is the answer in both cases and is unchanged. `surf: golden source WxH on the

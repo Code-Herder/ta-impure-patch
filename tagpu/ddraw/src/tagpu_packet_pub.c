@@ -2020,7 +2020,11 @@ static int __cdecl before_draw(void* entry_esp)
        the draw call at 0x4969CD, and both can be skipped: the stepper when the
        sim is paused, both under an in-game GUI screen — and before the draw's
        first read of the eye at 0x468DD9; no store to the eye exists inside
-       DrawGameScreen (0x468CF0..0x46A200), so a delta applied here composes
+       DrawGameScreen (whose extent is 0x468CF0..0x46A3FD -- this said
+       ..0x46A200, understating it by the 0x1FD-byte tail the golden-source
+       landing walked; the rows there are status icons, the clock, the GUI
+       blit, the profiler bars, the options tab, the cursor and the flip, and
+       none of them stores the eye), so a delta applied here composes
        with the engine's own camera move and the draw that follows reads the
        commanded eye; its fog rebuild and its minimap box see it too. The
        latest record is taken and every part of it applied by the module that

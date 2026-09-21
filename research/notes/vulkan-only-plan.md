@@ -1146,8 +1146,9 @@ that a count which grows is the plan catching up with the work.) The row was
        the measurement written at it — value-identical to what it had always returned, so no
        consumer runs for the first time.
 
-       **AND THE MECHANISM IS A LEAD, NOT A FINDING.** `tagpu_surf_take` (`tagpu_surf.c:32`, from
-       `tagpu_overlay_draw`) copies `g_ddraw.primary->surface` on the RENDER thread;
+       **AND THE MECHANISM IS A LEAD, NOT A FINDING.** the capture, then `tagpu_surf_take`
+       (`tagpu_surf.c:32`, from `tagpu_overlay_draw`; the name and the line are both gone since
+       2026-09-20 — it is `tagpu_surf_capture` on the game thread now) copies `g_ddraw.primary->surface` on the RENDER thread;
        `ss_shot_service` reads the same object at the entry of the engine's flip on the GAME
        thread, where its comment says it holds *"the frame the PREVIOUS flip presented"*.
        `tagpu_surf.h`'s argument is explicitly a LIFETIME one and says nothing about the buffer
@@ -1779,8 +1780,9 @@ that a count which grows is the plan catching up with the work.) The row was
      is supposed to still show a game), husks the wreck pass does not own, and whatever an
      unarmed pass leaves to the engine.
 
-     **THE LEAD, from reading and NOT yet measured.** `tagpu_surf_take` (`tagpu_surf.c:32`,
-     called from `tagpu_overlay_draw`) copies `g_ddraw.primary->surface` on the RENDER thread.
+     **THE LEAD, from reading and NOT yet measured.** the capture, then `tagpu_surf_take`
+     (`tagpu_surf.c:32`, called from `tagpu_overlay_draw`; both the name and the line are gone
+     since 2026-09-20 — it is `tagpu_surf_capture` on the game thread now) copies `g_ddraw.primary->surface` on the RENDER thread.
      `ss_shot_service` (defined `screenshot.c:157`, called from `tagpu_overlay.c:360` — this said
      `tagpu_overlay.c:499`, and that file is 365 lines long) reads the same object at the ENTRY of the engine's
      flip on the GAME thread, where its own comment says it holds *"the frame the PREVIOUS flip
@@ -2810,7 +2812,7 @@ packet our passes render from is published in the same call, so the two are take
 frame. **They are not delivered as one**: two independent gates carry them and the render thread
 takes the packet before it syncs the snapshot, so it can draw packet D-1 against reference D.
 `stamp` is how a comparison checks which draw it got; nothing gates on it ([gpu-status](gpu-status.html)
-§2.82). The shell, which never calls `DrawGameScreen`, has no golden source; `tacli shot` is the
+§2.82). The same continuous probe at the NEW site returns **0 of 21 669 reads torn**. The shell, which never calls `DrawGameScreen`, has no golden source; `tacli shot` is the
 answer there.
 
 **Two more things the cut does not do, both named by the review and neither its doing.** No

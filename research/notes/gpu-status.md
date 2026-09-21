@@ -12081,7 +12081,9 @@ measuring, and it fits every row above:
 reads torn at that site) and the capture now runs on the game thread. Whether it was the
 mechanism of THIS section's symptom was never established, so this stays a lead.]**
 
-`tagpu_surf_take` (`tagpu_surf.c:32`, called from `tagpu_overlay_draw`) copies
+the capture, then `tagpu_surf_take` (`tagpu_surf.c:32`, called from `tagpu_overlay_draw`;
+the name and the line are both gone since 2026-09-20 — it is `tagpu_surf_capture` on the game
+thread) copies
 `g_ddraw.primary->surface` **on the render thread**. `tacli shot` reads the same object via
 `ss_shot_service(g_ddraw.primary)` (`tagpu_overlay.c:499`) at the **entry of the engine's flip,
 on the game thread**, where its own comment says *"the primary here holds the frame the PREVIOUS
@@ -14753,8 +14755,8 @@ reader takes.
 
 | | |
 |---|---|
-| the invariant | **0 byte(s) of 786 432** differ between two reads of the primary at the capture site — 14 of 14 checks, four runs, with two units patrolling |
-| the old site, same probe | **223 of 16 500 reads TORN, 198 704 bytes** |
+| the invariant, SPOT-CHECKED | **0 byte(s) of 786 432** differ between two reads of the primary at the capture site — 14 of 14 one-shot checks, four runs, with two units patrolling. **This row is not a measurement, and the first version of this section presented it as one** — see the review table below |
+| the old site, the continuous probe | **223 of 16 500 reads TORN, 198 704 bytes** |
 | the golden source against an independent read | **0 differing px of 786 432** against `tacli shot`, which reads the same primary from the other game-thread hook (`before_flip`, i.e. the previous completed frame), on a paused settled scene |
 | the picture | 190 distinct colours in the viewport, 92 in the sidebar, **0 raw key, 0 teal** — a complete 1997 frame |
 | cost on the game thread | **55–58 µs mean, 136–289 µs max** per capture, at 1024×768 — the row loop, the comparison against the previous snapshot and the palette together |
@@ -14771,7 +14773,10 @@ reference is §2.81's known hole, not a regression.
 
 | | |
 |---|---|
-| the invariant, again | **0 byte(s) of 786 432**, 10 of 10 checks across two levels — six with seven units patrolling, four after a level cycle |
+| the invariant, again (one-shot) | **0 byte(s) of 786 432**, 10 of 10 checks across two levels — six with seven units patrolling, four after a level cycle. Still a spot check; the row below is the measurement |
+| **the invariant, MEASURED — the same probe the old site was condemned by** | **0 of 21 669 checks torn, 0 bytes, worst 0**, continuous: 18 268 in the first level with seven units patrolling, then 3 401 more after a full teardown and a fresh level. Against the old site's **223 of 16 500**. Zero events in 21 669 puts the 95 % upper bound on the rate near **0.014 %**, so the two sites are separated by at least ninety-fold rather than by a sample too small to tell them apart |
+| **captures discarded because a teardown landed mid-copy** | `straddle=0`, over 21 000 captures and a real level cycle — the new counter, and also the instrument for the foreign-thread question under *Still open* |
+| what the probe itself costs | `us avg=373 max=535` armed, against `43–59` unarmed: it re-reads and compares the whole surface on every capture and holds `g_ddraw.cs` across it. A lever you arm for a run and take away again, never a default |
 | **the drop, across a real level teardown** | `surf: the level ended - the golden source is dropped`, and then the consumer **stops dead**: 6 `vk: surf:` heartbeats in the window before the drop, **0 in the 3 172 log lines after it**, through the whole shell |
 | **and it comes back** | the second level re-armed from nothing — `vk: surf: the reference texture is up` and the heartbeats resume, `refused=0` throughout. The drop ends the reference; it does not poison it |
 | the golden source against an independent read, in motion | **352–529 px of 786 432** (median 397) against `tacli shot` — against a **shot-vs-shot control of 415–508** (median 453) on the same scene, both confined to one 22×55 px region holding an animating smoke plume. The capture is as close to an independent read of the primary as two independent reads are to each other; the 0 in the row above is the same measurement on a scene with nothing animating in it, and needs one |
@@ -14805,3 +14810,18 @@ an oracle rather than instrumentation, which is why it stays.
   in one engine call but delivered through two gates, and the render thread takes the packet
   first — so a frame can draw packet D-1 against reference D (above). A comparison that depends
   on the pairing compares the two numbers itself.
+* **Whether a level teardown can reach us on a FOREIGN thread is not settled, and two places in
+  the tree answer it differently.** It matters because the capture's level stamp and the drop's
+  placement both hang on it. `tagpu_reclaim.c`'s `reclaim_teardown_post` — which calls
+  `tagpu_packet_pub_level_end`, and so our `tagpu_surf_level_end` — has **no thread check at
+  all**, and its header says "on entry to `0x491B60` (game thread)" as a statement rather than a
+  guard; twelve lines above it, `reclaim_template_free` *does* check, and counts a foreign caller
+  with the comment "never seen: `0x42DB90` is game-thread only". Meanwhile
+  `tagpu_packet_pub_level_end` keeps a foreign-thread branch and a `foreign=` counter, which is
+  why this landing moved the drop above the thread test at all. Measured `foreign=0` across every
+  session to date. **So either the foreign branch is dead code, or the thread check twelve lines
+  up is the one that is wrong — and one of the two sentences in the tree is false.** This landing
+  does not settle it; it is written so that the answer does not change the outcome (the level is
+  stamped before the copy and a straddling capture is discarded, which is correct either way).
+  Settling it is a `0x491B60` caller survey, and it should be done before anyone leans on either
+  sentence.
