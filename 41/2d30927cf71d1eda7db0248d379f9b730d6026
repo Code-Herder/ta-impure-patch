@@ -1,0 +1,74 @@
+landing-review: model=Opus 5 effort=medium range=1c542a2...9b0bcde findings=8 acted=8 rejected=0 date=2026-09-20
+
+One read-only reviewer on the teardown instrument and the `0x491B60` caller
+survey, asked to re-derive every binary claim from pristine/TotalA.exe.pristine
+rather than take it from the diff. Acted on in 88cb8ec and 412d309.
+
+IT FOUND THE SURVEY'S HEADLINE FALSE, and two source files plus two notes had
+already begun citing it.
+
+ F1 HIGH  "three of the six call sites are DEAD CODE in 0x499100" is wrong.
+          0x499100 is an ordinary stdcall helper 0x499100..0x4991FB (ret 4,
+          then nops) containing no call to the teardown; the three calls are
+          in 0x499200, a LIVE state handler, address-taken at 0x490BC5 and
+          0x498455 and dispatched through [main+0x391F5] at 0x499A1C. By its
+          behaviour it is the quit and restart paths -- so the commit measured
+          four teardowns arriving through sites it had just called unreachable.
+          VERIFIED independently before acting: the function boundary by
+          objdump, the two address-taken sites by byte scan (file 0x8FFCB,
+          0x9785B), the dispatcher by objdump.
+ F2 HIGH  three of the four "in function" attributions wrong the same way
+          (0x4604A0 for 0x4605C0, 0x491EC0 for 0x492360), and a six-hop chain
+          of "direct calls" that does not connect. CAUSE: call sites were
+          attributed to the nearest preceding E8 target, which is blind to
+          functions that are only ever dispatched through a pointer -- and in
+          this binary that is every main-loop function. Written into the note
+          as the method lesson, which is the part worth keeping.
+ F3 MED   "the loader has no control path of any kind" is a direct-call result
+          only; that closure holds 690 indirect call sites. Restated.
+ F4 MED   char b[200] for a line whose worst case is 239. msvcrt's _snprintf
+          writes _Count chars, returns -1 and does NOT terminate on truncation,
+          and rlog would read past it. Fits on Wine's 3-digit tids, which is
+          why the daily loop would never show it. Now b[320] + explicit
+          termination. VERIFIED by recomputing the format width.
+ F5 MED   the FOREIGN suffix tested the CUMULATIVE counter, so one foreign
+          teardown would mark every later game-thread one FOREIGN -- the exact
+          failure mode 9b0bcde added its baseline guard to prevent. Now this
+          teardown's verdict; cumulative stays on the heartbeat.
+ F6 LOW   "three threads exist" -> "three thread-creation call sites"
+          (0x4E77D0 is a generic CRT spawn wrapper).
+ F7 LOW   the stated scan method omitted 70-7F, E3, E0-E2. Result unchanged;
+          the claim that depended on it is withdrawn anyway.
+ F8 LOW   "can never fire" absolutes on the two golden-source guards, and the
+          reclaim/packet_pub baseline difference (gui_thread_id vs s_gameTid).
+          Both stated.
+
+AND CHASING F1 TO ITS END FOUND THE ARGUMENT THAT WAS ACTUALLY THERE (412d309,
+after the review): 0x499200 calls the frame callback 0x496790 directly at
+0x4995B8 and 0x4996A5 -- the latter the instruction immediately before the
+teardown call at 0x4996AA, same straight line -- and 0x496790 is what the
+publisher gates with on_game_thread() on every in-play draw, never once
+foreign. So three of the six sites are pinned by construction after all, just
+not the three the first version claimed. The other three rest on the four
+measured teardowns plus the tdforeign= instrument, and the note records that
+the measured teardowns went through the pinned three, so the unpinned three
+are the least exercised.
+
+CONFIRMED by the reviewer against the binary: 0x00491B60 appears at no offset
+of the 1 178 624-byte image and there is no .reloc, so the entry set is closed;
+exactly six E8 calls at the six stated addresses (scan is a superset, so both
+bounds); exactly one control transfer into 0x499100, over E8/E9/EB/0F8x plus
+70-7F/E3/E0-E2; CreateThread the only thread-creation import with three call
+sites; the loader's identity 0x4982C5 -> 0x4B6B20 -> 0x4E77D0 -> CreateThread,
+entry 0x497C70 -> body 0x497180; and tagpu_packet_pub.c's new claim that
+after_teardown is unreachable off the game thread (before returns 0, and
+tagpu_detour.c:181-190 emits jz +8 past the return hijack).
+CONFIRMED on the instrument: both new statics are naturally-aligned 32-bit
+words so no torn read is possible, nothing branches on either, staleness is
+bounded by one heartbeat and can only delay a report; and no state exists in
+which g_ddraw.gui_thread_id is non-zero but names a thread other than the
+game thread (single write in dd_SetCooperativeLevel, from
+GetWindowThreadProcessId, never cleared).
+
+VERIFIED BY RUNNING after the fixes: teardown on thread 560, game 560,
+tdforeign=0, the line 136 bytes, golden source dropped.
