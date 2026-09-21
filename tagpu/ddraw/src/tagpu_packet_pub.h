@@ -109,4 +109,18 @@ unsigned tagpu_packet_pub_level_gen(void);
    when it is 0 -- 0 means no ordering is available, which is a reason to refuse
    a read rather than to take it. */
 int tagpu_packet_pub_level_tracked(void);
+
+/* GAME THREAD: 1 once this level's FIRST in-play packet has published, 0 again
+   from the level end. It is the producer-side reading of the packet's `in_game`,
+   and it is the gate a producer uses to ask "is a level actually on screen" --
+   not `level_gen`, which answers "has a boundary happened", and not `load_flags`,
+   which is for the log.
+
+   IT IS TRUE ONLY AFTER THE ENGINE HAS DRAWN THE LEVEL AT LEAST ONCE, and that
+   ordering is the engine's rather than ours: the in-play packet publishes from
+   the observer on DrawGameScreen's in-play call site, which the engine installs
+   at 0x498342, and 0x497CE0 installs it BEFORE it paints at 0x49842A. So a
+   caller gated on this can never run ahead of the engine's own first paint of
+   the level's chrome. [Added for the GUI chrome re-emit.] */
+int tagpu_packet_pub_level_open(void);
 #endif

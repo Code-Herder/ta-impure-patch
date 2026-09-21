@@ -132,6 +132,46 @@ typedef struct SURF {
 #define MAX_SURF 24
 static SURF s_surf[MAX_SURF];
 static int  s_nsurf = 0;
+/* ---- THE HUD CHROME: the one producer the engine never re-offers ---------
+   The side panel, top bar and bottom bar are painted by 0x467D70, called once
+   per mode switch from 0x49842A and never again. Every other op producer can be
+   asked to repeat itself -- landing 9 asks the gadget stage directly -- but this
+   one cannot: 0x467D70 clears its destination (0x4C6890) and PRESENTS A FRAME
+   (0x4C63A0 at 0x467E41), so re-firing it is not a repaint. Issuing its blits
+   ourselves is no better: their destination is *(main+0x37E1B), the engine's
+   offscreen, which is the golden source.
+
+   So we re-derive it instead. The recipe is small because the positions are
+   constants: 0x467D70 adds 0x81 to the frame's own HotX and 0x4B7F90 lands the
+   frame at (x - HotX, y - HotY), so the hotspot cancels and the three pieces
+   land at fixed screen coordinates. Only ScreenH is live, and it is re-read
+   every time rather than remembered, so a resolution change is followed with no
+   re-capture.
+
+   FIVE ENTRIES PER TABLE, AND THAT IS THE BOUND ON `side`. The three tables sit
+   0x14 bytes apart (0x1481F, 0x14833, 0x14847), so each holds five dwords. The
+   engine does not bounds-test the side byte it indexes them with -- it does
+   `xor eax,eax; mov al,[rec+0x95]` and indexes -- so we do, because a side read
+   out of a recycled record is DATA until it has been checked against the
+   table's own extent. [RE 2026-09-21 from the retail binary.] */
+#define CHROME_TOP     0x1481Fu       /* main+ ..., indexed by side*4 */
+#define CHROME_BOTTOM  0x14833u
+#define CHROME_PANEL   0x14847u
+#define CHROME_SIDES   5              /* (0x14833 - 0x1481F) / 4 */
+#define CHROME_PLAYER  0x2A43u        /* main+ : the local player index      */
+#define CHROME_PLRTBL  0x1B8Au        /* main+ : records, stride 331         */
+#define CHROME_STRIDE  331
+#define CHROME_RECSIDE 0x95u          /* record+ : the side byte             */
+#define CHROME_XOFF    0x81           /* the top and bottom bars start here  */
+#define CHROME_YOFF    0x20           /* the bottom bar sits ScreenH - 0x20  */
+#define GFX_SCREEN_H   0xD8u          /* 0x4B6710 is `return *(*(0x51FBD0)+0xD8)` */
+#define GAF_FETCH_VA   0x004B7F30u    /* frame = fetch(sequence, index), stdcall ret 8 */
+typedef void* (__stdcall *gaf_fetch_fn)(void* seq, int idx);
+
+static void chrome_emit(struct SURF* fs);     /* below the leaves include */
+static int      s_chromePend = 0;             /* a reset owes the chrome a re-emit */
+static unsigned s_chromeEmits = 0, s_chromeRefused = 0;
+
 #define TAG_OFFSCREEN 0x005091D4u     /* the "OFFSCREEN" string every 0x4C69F0 of the main
                                          offscreen pushes: 0x490AD3, 0x491250, 0x491B23,
                                          0x4980CF, 0x498402                              */
@@ -1391,6 +1431,14 @@ static void publish(unsigned flipSurf)
         o = pub_op(PK_RESET, 0);
         if (!o) return;
         pub_commit();
+        /* THE CHROME IS OWED, NOT EMITTED HERE. A reset means the consumer threw
+           every twin away, and the chrome is the one thing the engine will not
+           redraw for us. It is emitted at the TOP of the next window rather than
+           into this one, because that is what puts it UNDER the gadgets: the
+           window is empty at that point, so the three ops take slots 0..2, and
+           landing 9's repaint runs later still (after_flip) and lands behind
+           them. Ordering by position in the op array, not by a rule. */
+        s_chromePend = 1;
     }
     {
         const char* ta = *(const char* const*)TA_MAINPP;
@@ -1945,7 +1993,7 @@ static int __cdecl before_flip(void* entry_esp)
         return hijack;                              /* too soon: keep accumulating ops */
     s_lastQpc = now;
     s_censuses++;
-    if (!s_census) { publish(s ? s->base : 0); ops_window_reset(); return hijack; }
+    if (!s_census) { publish(s ? s->base : 0); ops_window_reset(); chrome_emit(s); return hijack; }
     if (s) {
         int vl = 0, vt = 0, vr = -1, vb = -1, sub = 0;
         if (isGame) {
@@ -2083,6 +2131,7 @@ static int __cdecl before_flip(void* entry_esp)
     }
     publish(s ? s->base : 0);
     ops_window_reset();
+    chrome_emit(s);
     memset(s_kindCount, 0, sizeof s_kindCount);
     memset(s_kindArea, 0, sizeof s_kindArea);
     memset(s_nullCtx, 0, sizeof s_nullCtx);
@@ -2333,6 +2382,94 @@ static void* __cdecl after_flip(unsigned int* regs)
 
 #include "tagpu_gui_leaves.h"
 
+/* ---- the chrome re-emit --------------------------------------------------
+   Owed by a reset (see `publish`), paid at the top of the next op window.
+
+   TWO GATES, NEITHER OF THEM OURS, and between them they replace every
+   lifetime argument this function would otherwise need:
+
+     - `tagpu_packet_pub_level_open()` -- a level is actually on screen. True
+       only after the engine's first in-play draw, and the engine installs that
+       draw's call site (0x498342) BEFORE it paints the chrome (0x49842A), both
+       inside 0x497CE0. So this cannot be true before the art exists. It is also
+       what keeps us out of the shell and off the loading screen.
+
+     - `tagpu_reclaim_level_closing()` -- the teardown is in flight. Raised in
+       the PRE hook, before the first per-level asset is freed, and lowered after
+       the generation moves. The sequence tables are NEVER NULLed while the banks
+       behind them are freed at teardown, so reading them during the cascade
+       would hand us a dangling pointer; this refuses instead. Its companion
+       `tagpu_reclaim_level_tracked()` says whether that ordering exists at all,
+       and 0 there is a reason to refuse, never to proceed -- so a build with the
+       teardown wrap missing draws no chrome rather than an unsafe one.
+
+   WHY THE GATES AND NOT A REACHABILITY ARGUMENT. `publish` and the teardown both
+   run on the game thread and 0x491B60 reaches no flip, so in principle they
+   cannot interleave -- but that closure is 610 functions and contains 362
+   indirect call sites, which is not something a static read can close. The
+   gates are a bound instead, and bounds do not care what a function pointer
+   does. [The design interview, 2026-09-21.]
+
+   NOT-YET-OPEN IS A RETRY, NOT A REFUSAL. A reset can land between the paint and
+   the first in-play draw; clearing the debt there would lose the chrome for the
+   whole level. The debt is kept until it is paid or the level closes. */
+static void chrome_emit(struct SURF* fs)
+{
+    static const struct { unsigned tbl; int x; int bottom; } PIECE[3] = {
+        { CHROME_TOP,    CHROME_XOFF, 0 },
+        { CHROME_BOTTOM, CHROME_XOFF, 1 },
+        { CHROME_PANEL,  0,           0 },
+    };
+    const char* ta;
+    const char* gfx;
+    const char* rec;
+    unsigned side;
+    int h, i, made = 0;
+
+    if (!s_chromePend || !fs) return;
+    if (!tagpu_reclaim_level_tracked() || tagpu_reclaim_level_closing()) {
+        s_chromePend = 0; s_chromeRefused++; return;
+    }
+    if (!tagpu_packet_pub_level_open()) return;        /* not yet in play: keep the debt */
+
+    ta = *(const char* const*)TA_MAINPP;
+    if (!ptr_ok(ta)) return;
+    gfx = *(const char* const*)GFX_GLOBALS_PP;
+    if (!ptr_ok(gfx)) return;
+    h = *(const int*)(gfx + GFX_SCREEN_H);
+    if (h <= CHROME_YOFF) { s_chromePend = 0; s_chromeRefused++; return; }
+
+    rec = *(const char* const*)(ta + CHROME_PLRTBL +
+                                (unsigned)*(const unsigned char*)(ta + CHROME_PLAYER) * CHROME_STRIDE);
+    if (!ptr_ok(rec)) return;
+    side = *(const unsigned char*)(rec + CHROME_RECSIDE);
+    if (side >= CHROME_SIDES) { s_chromePend = 0; s_chromeRefused++; return; }
+
+    s_chromePend = 0;
+    for (i = 0; i < 3; i++) {
+        void* seq = *(void* const*)(ta + PIECE[i].tbl + side * 4);
+        const unsigned char* fr;
+        int x, y;
+        if (!ptr_ok(seq)) continue;
+        fr = (const unsigned char*)((gaf_fetch_fn)GAF_FETCH_VA)(seq, 0);
+        if (!ptr_ok(fr)) continue;
+        /* the engine's own arithmetic: it passes hotspot + offset and the blit
+           subtracts the hotspot again, so these land at (x, y) exactly */
+        x = PIECE[i].x + GF_HX(fr);
+        y = (PIECE[i].bottom ? h - CHROME_YOFF : 0) + GF_HY(fr);
+        gaf_record(NULL, fs, fr, x, y, OP_GAF);
+        made++;
+    }
+    if (made) s_chromeEmits++;
+    if (s_log && made) {
+        char b[160];
+        _snprintf(b, sizeof b, "gui chrome: re-emitted %d/3 for side %u at ScreenH=%d (reset #%u)",
+                  made, side, h, g_guiq.resets);
+        b[sizeof b - 1] = 0;
+        glog(b);
+    }
+}
+
 /* ---- install ----------------------------------------------------------- */
 
 static int read_tokens(void)
@@ -2503,9 +2640,10 @@ void tagpu_gui_flush(unsigned int frame_counter)
            stay in the line because a restored consumer will want them back and
            a zero that is explained costs nothing; the trailing clause is what
            stops the next reader chasing them. */
-        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u (publisher idle: no consumer since the clean cut)",
+        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u chrome=%u/%u",
                   s_flips, s_opsTotal, s_opsDropped, s_changedTotal, s_unexplTotal, s_nsurf,
-                  s_pubOps, s_pubBytes, g_guiq.qHead - g_guiq.qTail, g_guiq.resets, g_guiq.overflows, g_guiq.stalls, g_gui_draw, s_freeqFlush, s_repaints, s_repaintSkips, s_repaintOps);
+                  s_pubOps, s_pubBytes, g_guiq.qHead - g_guiq.qTail, g_guiq.resets, g_guiq.overflows, g_guiq.stalls, g_gui_draw, s_freeqFlush, s_repaints, s_repaintSkips, s_repaintOps,
+                  s_chromeEmits, s_chromeRefused);
         glog(b);
         {
             int k, n = 0;

@@ -2185,6 +2185,7 @@ static void* __cdecl after_loader(unsigned int* regs)
 
 unsigned tagpu_packet_pub_draw_seq(void)  { return s_cDraws; }
 unsigned tagpu_packet_pub_level_gen(void) { return s_levelGen; }
+int      tagpu_packet_pub_level_open(void) { return s_levelOpen; }
 /* `s_levelEndBy` IS NOT THE WHOLE ANSWER, and reading it as one was a defect.
    It is only ever assigned inside `if (!s_countOnly)`, and `s_countOnly` is
    `!tagpu_packet_armed()` -- so under `tagpu_packet.off` it stays 0 while the

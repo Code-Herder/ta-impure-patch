@@ -64,30 +64,25 @@ static int excluded_caller(unsigned ret)
 }
 
 static int s_gafDbg = 0;          /* trace: the first blits after a build */
-static void gaf_box(void* e, int kind)
+
+/* THE BLIT'S TAIL, WITHOUT THE STACK FRAME -- everything `gaf_box` does once it
+   knows the destination and the frame. It is factored out because the HUD
+   chrome's re-emit (`chrome_emit`, tagpu_gui_hook.c) has to produce ops that are
+   indistinguishable from an observed blit's: same box arithmetic, same identity
+   hash, same first-sight plane capture. A second copy of this would be a second
+   place for the sprite/pixels decision to drift.
+
+   `ctx` may be NULL, which is the re-emit's case: there is no engine clip rect
+   to honour because no engine call is in flight, and `op_add` already clamps the
+   box to the surface. Every other caller passes the one it was handed. */
+static void gaf_record(const int* ctx, SURF* s, const unsigned char* fr,
+                       int x, int y, int kind)
 {
-    const int* ctx = ctx_or_back(ARG(e, 1));
-    const unsigned char* fr = (const unsigned char*)(size_t)ARG(e, 2);
-    int x = SARG(e, 3), y = SARG(e, 4);
     int l, t, r, b;
-    SURF* s;
-    if (excluded_caller(ARG(e, 0))) return;
-    s = surf_of_ctx(ctx);
-    if (s_trace && s_gafDbg > 0 && ptr_ok(ctx)) {
-        const char* ta = *(const char* const*)TA_MAINPP;
-        const char* top = ptr_ok(ta) ? *(const char* const*)(ta + OFF_GUI_TOP) : NULL;
-        const char* ct = ptr_ok(top) ? *(const char* const*)(top + GM_CTRLS) : NULL;
-        char b[300];
-        s_gafDbg--;
-        _snprintf(b, sizeof b, "gui trace: blit ret=%08X ctxArg=%08X hdr=(%d,%d,%d,%08X) clip=(%d,%d,%d,%d) at (%d,%d) panel+0xBC=%08X +0xB8=%08X",
-                  ARG(e, 0), ARG(e, 1), ctx[0], ctx[1], ctx[2], (unsigned)ctx[3], ctx[7], ctx[8], ctx[9], ctx[10], x, y,
-                  ptr_ok(ct) ? *(const unsigned*)(ct + P_SURFACE) : 0u, ptr_ok(ct) ? *(const unsigned*)(ct + 0xB8) : 0u);
-        glog(b);
-    }
     if (!ptr_ok(fr)) { op_add(kind, NULL, 0, 0, 0, 0); return; }
     l = x - GF_HX(fr); t = y - GF_HY(fr);
     r = l + GF_W(fr) - 1; b = t + GF_H(fr) - 1;
-    if (s) clip_ctx(ctx, &l, &t, &r, &b);
+    if (s && ctx) clip_ctx(ctx, &l, &t, &r, &b);
     op_add(kind, s, l, t, r, b);
     if (s_lastOp) {
         /* a plain keyed blit of an uncompressed-or-RLE frame with no sub-frames
@@ -102,7 +97,9 @@ static void gaf_box(void* e, int kind)
            alive by the engine's ordering rather than by our hope; `publish`
            runs up to CENSUS_MS later, after a screen pop may have freed it.
            Only the sprite kinds resolve a frame at publish, so only they pay
-           it. See `gaf_capture`. */
+           it. See `gaf_capture`.
+           THE RE-EMIT HAS ITS OWN ORDERING for this same read and it is not
+           this one -- it is not inside any engine call. See `chrome_emit`. */
         s_lastOp->fcomp = fr[0x09]; s_lastOp->fsub = fr[0x0A]; s_lastOp->fsubn = fr[0x0B];
         /* ONLY WHEN SOMETHING WILL CONSUME IT. `publish` returns at once when
            `!g_gui_draw`, and a census-less, draw-less window is thrown away
@@ -119,6 +116,28 @@ static void gaf_box(void* e, int kind)
                                                 scratch is never spent on a
                                                 frame it will refuse anyway */
     }
+}
+
+static void gaf_box(void* e, int kind)
+{
+    const int* ctx = ctx_or_back(ARG(e, 1));
+    const unsigned char* fr = (const unsigned char*)(size_t)ARG(e, 2);
+    int x = SARG(e, 3), y = SARG(e, 4);
+    SURF* s;
+    if (excluded_caller(ARG(e, 0))) return;
+    s = surf_of_ctx(ctx);
+    if (s_trace && s_gafDbg > 0 && ptr_ok(ctx)) {
+        const char* ta = *(const char* const*)TA_MAINPP;
+        const char* top = ptr_ok(ta) ? *(const char* const*)(ta + OFF_GUI_TOP) : NULL;
+        const char* ct = ptr_ok(top) ? *(const char* const*)(top + GM_CTRLS) : NULL;
+        char b[300];
+        s_gafDbg--;
+        _snprintf(b, sizeof b, "gui trace: blit ret=%08X ctxArg=%08X hdr=(%d,%d,%d,%08X) clip=(%d,%d,%d,%d) at (%d,%d) panel+0xBC=%08X +0xB8=%08X",
+                  ARG(e, 0), ARG(e, 1), ctx[0], ctx[1], ctx[2], (unsigned)ctx[3], ctx[7], ctx[8], ctx[9], ctx[10], x, y,
+                  ptr_ok(ct) ? *(const unsigned*)(ct + P_SURFACE) : 0u, ptr_ok(ct) ? *(const unsigned*)(ct + 0xB8) : 0u);
+        glog(b);
+    }
+    gaf_record(ctx, s, fr, x, y, kind);
 }
 static int __cdecl before_gaf(void* e)  { if (on_game_thread()) gaf_box(e, OP_GAF);  return 0; }
 static int __cdecl before_gafa(void* e) { if (on_game_thread()) gaf_box(e, OP_GAFA); return 0; }
