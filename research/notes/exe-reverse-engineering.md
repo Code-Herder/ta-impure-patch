@@ -897,6 +897,75 @@ targets, re-read for the aircraft work rather than taken from the earlier note.]
 | `0x469B2C` | `0x420B00` | explosions and effects |
 | `0x469BA3` | `0x45AC20` DrawUnit | **site B** — everything `(state&3) != 1`, over ALL rows |
 
+#### The resource block, and the 33-byte memo that skips it [DISASSEMBLED 2026-09-21]
+
+`DrawGameScreen` runs every frame, but its METAL/ENERGY block at `0x468E40..0x469610` usually does
+not. (The extent is the skip's own target: `je 0x469610` jumps over the block, and `0x469610` is
+past the `0x4692C0` this section first gave as its end.) The block seeds a stack local from a **33-byte memo at `main+0x37E3F`** (`0x468E51`, `rep
+movsl` ×8 + `movsb`), overwrites the live fields, then `repz cmpsb`s all 33 bytes against that memo
+at `0x468FD9` and **skips the whole block when they match** — `je 0x469610` at `0x468FDB`. Only on a
+difference does it copy the fresh state back (`0x468FEC`) and draw.
+
+**The memo has THREE references in the binary** — `0x468E51` (seed), `0x468FC6`
+(compare/update) and `0x4679A6`, an `add eax,0x37e3f` inside the function at `0x4679A0` that
+zeroes four dwords of the memo (`[eax+0x1D]`, `[eax+0x19]`, `[eax+0x0D]`, `[eax+0x01]`) before
+going on to clear `+0x37E90`/`+0x37E94`. It does **not** write byte 0, so nothing here opposes the
+poke.
+
+*This line read "exactly two references" until the landing review of 2026-09-21 disproved it, and
+the mistake is instructive: the evidence quoted for it was `objdump -d | grep '0x37e3f('`, and that
+trailing parenthesis only matches the memory-operand forms `0x37e3f(%reg)`. The third site is a
+plain immediate — `add eax,0x37e3f` — so the grep that "proved" the claim was built to miss it. The
+search to run is `grep 37e3f`, unanchored.* It is a display memo, not sim state.
+
+**Which bytes are read back and which are not.** Byte 0 of the local is written at `0x468E7F` from
+`cl`, a byte taken out of the player record, and is never read from the memo. Bytes 1..4 ARE read
+from it — `flds 0x79(%esp)` at `0x468E7B`, before byte 0 is written — and are the displayed
+number's animation state: `0x468E83`/`0x468E90` convert the old and new values and `0x468E9F`/
+`0x468EB3` divide the difference by 8, so the number eases toward its target over frames. That
+asymmetry is what makes byte 0 the only one a fork may poison to force a redraw without
+fabricating a value the engine then displays.
+
+What the block draws, all through leaves the GUI observer already has: the two bar fills via
+`0x4BF6F0` (`0x46912E`, `0x4691B2`), the six numbers via `DrawTextCustomFont 0x4C14F0` ×3 — which
+reaches the hooked glyph blitter `0x4CCF60` internally — and the player's colour badge via
+`0x467C00` at `0x4690AB`. The guard above the first bar — `fcomps 0x4FD568` at `0x4690BD`, `jne 0x4691B9` at `0x4690ED`
+— is a divide-by-zero check on max storage, not a dirty test.
+
+#### `0x467C00` — the player's colour badge, and where its colour comes from [DISASSEMBLED 2026-09-21]
+
+Reads a byte at **`player+0x96`** (`0x467C18`), the field next to the side byte at `+0x95`, then
+indexes the table at **`main+0x148DB`** with **stride 8** and takes the GAF frame at **`+0x28`**
+(`0x467C24`). That frame is pushed straight to `GAF_DrawTransformed 0x4C7580` at `0x467C8F`. So
+**each player colour is a different GAF frame, not a palette remap of one** — an observer that
+captures the frame the engine passed follows the colour with no colour logic of its own. Measured
+across five colours at 1024×768, every badge exact against the engine's own frame.
+
+#### `GAF_DrawTransformed 0x4C7580` — the vertex roles, and the half-open span [MEASURED 2026-09-21]
+
+It takes **FOUR vertices, not three** — `0x4C763D..0x4C7679` loops `ecx = 0..3` over arg3 with
+`add edx,0x8`, so the arrays are `xy[8]`/`uv[8]`, and when `uv` is NULL it synthesises its own quad
+`(0,0) (w-1,0) (w-1,h-1) (0,h-1)` at `[esp+0x4C..0x68]` (note `w-1`, not `w`). The roles are
+**origin, `+u`, `+u+v`, `+v`**: the in-game badge is
+`xy=(132,5)(152,5)(152,25)(132,25)` with `uv=(0,0)(32,0)(32,32)(0,32)`, a 32×32 frame onto a 20×20
+quad, and `0x467C00` builds it by storing the same register twice — `edx` into `xy[0]` and `xy[6]`,
+`ecx` into `xy[5]` and `xy[7]` — which is what makes the fourth corner checkable.
+*[CORRECTED 2026-09-21 by the landing review; this section first said "three vertices … not an
+arbitrary triangle", having looked only at the first three.]* **The
+span is half-open in both axes** — the far vertex is the edge the fill stops before, not a pixel:
+that badge covers x 132..151, twenty columns, where the vertices' bounding box says 132..152. The
+sampling steps a **16.16 accumulator**, not `(x * sw) / dw`: with `sw=32, dw=20` the truncated step
+is 104857, so x=5 accumulates 524285 and shifts to 7 where the division gives 8, and sixteen of the
+badge's 400 pixels differ on exactly that.
+
+#### `main+0x1426B` — the level's minimap picture is a PADDED square [MEASURED 2026-09-21]
+
+The frame's header is 252×252, but the map only fills an aspect-correct region inside it: on a
+336×400 map the last column that is not internally constant is **212**, and 213..251 are one
+uniform colour, while rows run to 251. `0x46684F` loads it and `0x46685F` hands it to the stretch
+`0x4B95A0` with the box-sized context built at `0x466845`. A consumer that stretches the whole
+frame into the box puts 40 columns of padding on screen.
+
 #### The 3D wreck draw: a husk borrows the UNIT pipeline through one shared scratch [VERIFIED 2026-09-14]
 
 The feature draw `0x46A610` (arg = a feature-grid cell) splits twice. `0x46A6B5`
@@ -3541,7 +3610,7 @@ clip.
 | `0x4B8310` | the blit `DrawText` takes under `globals+0xF0` bit 7 | stdcall `0x10` [INFERRED from the call site] | same shape | same | `81 EC 94 00 00 00` (6) |
 | `0x4B8150` | opaque GAF blit | stdcall `0x10` | `(ctx, GAFFrame*, x, y)` — a **frame**, not a descriptor | leaf `0x4CBDD1`, no key; 4 callers, **all terrain** (`0x484110`, `0x48415C`, `0x484228`, `0x484274`) — not a UI leaf | |
 | `0x4C6D20` | descriptor blit | stdcall `0x10` | `(ctx, desc {w,h,stride,pixels}, RECT* src, RECT* dst)` | `*dst`; GUI callers `0x4A1C08` (listbox), `0x4A4EC0` (textfield); `0x4C6DC0` is the keyed twin with no callers | `8B 44 24 04 83 EC 30` (7) |
-| **`0x4C7580`** | **textured-triangle stamp** (`GAF_DrawTransformed` [CORPUS]) | stdcall `0x10` | `(ctx, src, int xy[6], int uv[6])` — three screen vertices and their texture coordinates, **MEASURED** `(214,94)(233,94)(233,113)` with uv `(1,1)(31,1)(31,31)` | the vertices' bounding box; **the in-game option screens' wide dark backdrop right of the 128-px panel is drawn as these** (13–37 per build), which is why that region has slanted edges | `B8 8C 7D 00 00` (5, the stack probe) |
+| **`0x4C7580`** | **textured-quad stamp** (`GAF_DrawTransformed` [CORPUS]) | stdcall `0x10` | `(ctx, src, int xy[8], int uv[8])` — **FOUR** screen vertices and their texture coordinates (`cmp ecx,0x4` at `0x4C7676`, stride 8; `uv == NULL` synthesises `(0,0)(w-1,0)(w-1,h-1)(0,h-1)`), **MEASURED** `(214,94)(233,94)(233,113)…` with uv `(1,1)(31,1)(31,31)…` — *the first three only; the count was corrected from three to four 2026-09-21* | the vertices' bounding box; **the in-game option screens' wide dark backdrop right of the 128-px panel is drawn as these** (13–37 per build), which is why that region has slanted edges | `B8 8C 7D 00 00` (5, the stack probe) |
 | `0x4CCF60` | glyph blitter | cdecl, 9 args | `(base, pitch, font, str, x, y, fg, bg, transparent)` | row `y − (s8)font[2]`, width the sum of `font[off]` per glyph, stops at `\0` **or `\n`**; 2 callers, both in `0x4C14F0` | `55 8B EC 83 C4 F0` (6) |
 | `0x4BE950` | `DrawLine` | stdcall `0x18` | `(ctx, x0, y0, x1, y1, colour)` | bbox after `0x4BEA20`; 83 callers | `83 EC 30 56 8B 74 24 38` (8) |
 | `0x4BF6F0` | `DrawBar` | stdcall `0xC` | `(ctx, RECT*, colour)` | the rect, inclusive, via `0x4BF620` + `0x4CCDEA`; 47 callers | `83 EC 40 8B 44 24 48` (7) |

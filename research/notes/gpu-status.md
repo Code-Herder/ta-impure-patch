@@ -966,7 +966,7 @@ sees only the blits that really draw. Full argument lists, boxes and evidence: t
 | `0x4B7F90` | `CopyGafToContext(ctx, frame, x, y)` — **chained onto fxown's stub** | 6 | a sprite box at `(x−HotX, y−HotY)`, clipped |
 | `0x4B8500`, `0x4B8310` | the shaded blit and DrawText's alternate blit, same shape | 6 | same |
 | `0x4C6D20` | descriptor blit `(ctx, desc, src, dst)` — listbox, textfield | 7 | `*dst` |
-| `0x4C7580` | the textured-triangle stamp `(ctx, src, xy[6], uv[6])` — the option screens' wide backdrop | 5 | the vertices' bounding box |
+| `0x4C7580` | the textured-**quad** stamp `(ctx, src, xy[8], uv[8])`, FOUR vertices — the option screens' wide backdrop | 5 | the vertices' bounding box, over all four |
 | `0x4CCF60` | the glyph blitter, cdecl 9 args | 6 | the string's box from the font's width table, the string's bytes copied into a window scratch, and **since G19f-8 the font itself**: the slot id, `font[0]`/`font[2]`, and a glyph record for every code of this string the font has not sent yet (`text_capture`). `publish` then dereferences no font at all — the read happens one instruction before the engine's own, which is the whole of the lifetime argument |
 | `0x4BE950`, `0x4BF6F0`, `0x4BF8C0`, `0x4BF7B0`, `0x4BF4D0` | line, bar, hollow rect, focus rect, framed box | 8/7/6/7/7 | the rect, clipped |
 | `0x4C6890` | `SurfaceFill(surface, colour)` | 7 | the whole surface |
@@ -1166,9 +1166,37 @@ strings, the hold-SPACE box, `PREFS`, `VISUALRT`, the F4 box and the chat over t
 GL object changed for it; the census on CORE explains 1 717 044 of 1 717 044 changed pixels.
 [GL UI renderer](gui-renderer.html) §11.
 
-**Fields we write: none.** The module reads the engine's surfaces, the palette and the mouse
+**Fields we write: `main+0x37E3F`, one byte, directly — and, INDIRECTLY, whatever the engine's own
+redraw writes when we ask for one.** This line read "none" until 2026-09-21, then "ONE, and it is
+new"; the landing review showed that second answer was also short, and the difference matters
+enough to state first. The direct write is the memo byte. The indirect one is that
+`repaint_service` calls `0x4A81E0(gi, 0x40)`, which reaches `0x4A16F0` and writes `gi+0xCCA`
+(`0x4A1708`) and the gadget's `+0x1F` (`0x4A1722`, `0x4A1758`) — engine fields, written by engine
+code, on a frame we asked for. **The argument that used to cover this does not.** It ran "the
+engine calls this with `0x40` itself, so the path is one it already takes", and the engine's pump
+at `0x4AA0C5` actually passes `[GUIMEM+0x10] | 0x40` — never a bare `0x40`. Ours is a subset of
+those bits, so it cannot *add* an allocation, but the precedent was being claimed for an argument
+value the engine never passes, and "no allocation, no free under `0x40`" is therefore **asserted,
+not established**. What IS established is the measurement: repaints ran across every screen in the
+fixture set without a fault, and the ops came back semantic. *Named as an open gap rather than
+closed.* The module reads the engine's surfaces, the palette and the mouse
 object — and, since G15d, the fork's own palette object under the fork's lock — and writes GL
-objects of its own; the engine's behaviour is byte-identical with it armed, on or off.
+objects of its own. On top of that it now **poisons byte 0 of the 33-byte last-drawn memo** the
+METAL/ENERGY block inside `DrawGameScreen` compares itself against, once per twin reset, to make
+the engine redraw a block it would otherwise skip for the life of the level ([engine
+map](exe-reverse-engineering.html) "The resource block, and the 33-byte memo that skips it").
+
+What keeps the memo write inside this module's contract rather than breaking it: the memo has
+**three** references in the binary — `0x468E51` and `0x468FC6` inside that block, plus `0x4679A6`,
+which zeroes four dwords of it and never touches byte 0 (this read "exactly two references" until
+the landing review searched for a third) — and every one of them is display code, so it is a
+display memo and not sim state; byte 0 is written by the block from the player record at `0x468E7F` and never read back out
+of the memo, so no value the engine displays is ever invented by us (bytes 1..4 ARE read back, as
+the number's animation state, and are deliberately left alone); and the write happens on the game
+thread at the flip's return, after that frame's block has already run. The engine's behaviour with
+the module armed is therefore **one extra redraw of its own resource block per reset**, not a
+changed value — but it is no longer byte-identical, and a reader looking for what this module
+touches must find this here.
 **G17a (2026-09-09) did not change that**: it added a GL texture, an FBO and shader arithmetic
 and reads no engine address the module did not already read. **Nor did G17b**, which is
 fork-side and tooling: the client-area → engine-logical pointer transform moved out of

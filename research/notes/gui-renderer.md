@@ -93,14 +93,17 @@ so a reset loses anything the engine will not redraw on its own. Three cases, al
 
 - **The resource bars and their six numbers.** They publish through leaves we already have —
   `0x4BF6F0` (the `bar` leaf, twice) and `0x4C14F0` → `0x4CCF60` (the `text` leaf, three times),
-  all inline in `DrawGameScreen` at `0x468E40..0x4692C0`. What stops them is a **33-byte memo at
+  all inline in `DrawGameScreen` at `0x468E40..0x469610`. What stops them is a **33-byte memo at
   `main+0x37E3F`**: the block seeds a stack local from it, overwrites the live fields, `repz
   cmpsb`s the 33 bytes against it at `0x468FD9` and **skips the whole block when they match**
   (`je 0x469610` at `0x468FDB`); only a difference makes it copy the fresh state back
   (`0x468FEC`) and draw. A fresh skirmish pins metal and energy at the 100000 storage cap, so
   nothing changes, so it draws once and never again — and a reset then loses the bars and all six
-  numbers for the rest of the level. The memo has **exactly two references in the whole binary**,
-  `0x468E51` and `0x468FC6`, both inside this block: a display memo, not sim state. `hud_invalidate`
+  numbers for the rest of the level. The memo has **three references, not two**: `0x468E51` and
+  `0x468FC6` inside this block, and `0x4679A6` in the function at `0x4679A0`, which zeroes four
+  dwords of it (`+0x1D`, `+0x19`, `+0x0D`, `+0x01`). That third site never touches **byte 0**, so
+  the poke below is still unopposed — but this line read "exactly two references in the whole
+  binary" until the landing review went looking. A display memo, not sim state. `hud_invalidate`
   poisons **byte 0** of it on the same reset debt the chrome and panel use — the one byte the
   block overwrites (`0x468E7F`, from the player record) and never reads back, unlike bytes 1..4
   which `flds 0x79(%esp)` reads at `0x468E7B` as the number's animation state. So the poke changes
@@ -117,9 +120,12 @@ so a reset loses anything the engine will not redraw on its own. Three cases, al
 - **The player's colour badge, which was never a reset problem at all.** `OP_SCALE` had **no
   publish branch**: it fell to `as_pixels` → `PK_PIXELS`, which the drain drops since the clean
   cut, so the badge — and every transformed GAF draw — rendered **nothing at any time**.
-  `GAF_DrawTransformed 0x4C7580` stamps a frame onto a parallelogram whose three vertices are
-  origin, `+u` and `+u+v`; the badge is the axis-aligned whole-frame case,
-  `xy=(132,5)(152,5)(152,25) uv=(0,0)(32,0)(32,32)`, a 32×32 frame onto a 20×20 quad. That case is
+  `GAF_DrawTransformed 0x4C7580` stamps a frame onto a **quad of FOUR vertices** — its own loop
+  walks arg3 with `add edx,0x8` and `cmp ecx,0x4; jl` (`0x4C763D..0x4C7679`), so the arrays are
+  `xy[8]`/`uv[8]`. The badge is the axis-aligned whole-frame case,
+  `xy=(132,5)(152,5)(152,25)(132,25) uv=(0,0)(32,0)(32,32)(0,32)`, a 32×32 frame onto a 20×20 quad.
+  *This read "three vertices are origin, `+u` and `+u+v`" until the landing review disassembled the
+  loop; the 2026-09-07 sighting that produced it had only looked at the first three.* That case is
   now resampled to its destination in `scale_capture` and published as an ordinary `PK_SPRITE`, so
   **the render thread is untouched** (its sprite quad is `(sl,st)-(sl+fw,st+fh)`, the frame's size,
   deliberately — a clipped sprite still needs its whole quad); anything rotated, sheared, partial
@@ -161,9 +167,19 @@ The crop goes in the **CPU bake**, not in the UVs, and that is the load-bearing 
 the same `uv` for `uPic` and for `uEng`, and the engine's fogged/unfogged pair is exactly box-sized
 and needs the full 0..1 — narrowing the UVs would have fixed the picture and silently broken the
 fog mask with it. Baking only the valid sub-rect keeps 0..1 true for both, needs no new uniform and
-touches no shader. The aspect is taken from `pk->mm_box`, the engine's own fitted box, rather than
-from the `mw`/`mh` in that function, which have already been through the HUD-scale multiply:
-252 × 106/126 is 212, which is where the data measurably stops.
+touches no shader.
+
+**The bound is the engine's own reading rule, and the aspect formula that first stood here was
+right by coincidence** *[CORRECTED 2026-09-21 by the landing review]*. `0x4B95A0` is not the
+"stretch into an aspect-correct box" this section first called it — it is a fixed **2:1 box
+downsample**. Its destination extent comes from `WORD[arg2+0]`/`[arg2+2]`, and for each
+destination pixel it reads a 2×2 source box: offset `2*(row*sw + col)` (`0x4B95F6
+lea eax,[edi+ebx*2]`), that pixel and its right neighbour, then the same pair one source row down,
+blended through the 64 K LUT at `[arg1+0xC0]`. So the engine reads exactly
+`[0, 2·bw) × [0, 2·bh)` and crops the padding by never looking at it. The crop is now that same
+rule — `vw = min(pw, 2·bw)`, `vh = min(ph, 2·bh)` — which is checkable against the disassembly.
+The old aspect fit (`252 × 106/126 = 212`) produced the identical 212 **only because `ph == 2·bh`
+here** (252 = 2 × 126), a property of this map's box and not of the engine.
 
 Minimap region against the golden source: **47.2 % → 72.09 %**, and internally flat columns inside
 it **17 → 0**. What is left is the restorer and not a fault — the engine's picture carries 68
@@ -174,9 +190,42 @@ source, resources left untouched at the cap: badge **400/400**, top bar **28 672
 rect **45 056/45 056**, the column below the panel **36 864/36 864**, bottom bar **28 672/28 672**,
 minimap **72.09 %** with the balance being the dither the restorer smooths.
 
+**RE-MEASURED after the landing review's fixes**, fresh 1024×768 skirmish, presented frame against
+the golden source, with the minimap box (`x 10..115, y 0..125`) separated out because it straddles
+the top-bar/panel boundary: **every UI pixel outside the minimap is exact — 125 908 / 125 908.**
+Badge 400/400, top bar (less minimap) 25 704/25 704, panel (less minimap) 34 668/34 668, the column
+below the panel 36 864/36 864, bottom bar 28 672/28 672. Internally flat columns inside the minimap
+box: **0**, the same as the golden source's own 0. The minimap's exact-match figure on this fixture
+is 65.8 % at mean delta 5.5/255 (98.9 % of pixels within 32/255) — a different skirmish explores a
+different map, so that percentage is not comparable across fixtures and the flat-column count is
+the regression test that is. The HUD counters read `panel=1/0 hud=2/0 chrome=2/0`: **one poke per
+reset debt**, which is what the re-poke fix was for.
+
+**What this landing did NOT close**, each named rather than implied:
+
+- **Three of the ten `0x4C7580` callers pass `uv == NULL`** (`0x42136C`, `0x458664`, `0x46BC1E`),
+  and `before_scale` requires a real `uv`, so the default-uv whole-frame stamp — the very case the
+  sprite branch exists for — still falls to `PK_PIXELS` and is dropped by the drain. The engine's
+  synthesised default is `(0,0)(w-1,0)(w-1,h-1)(0,h-1)`, using `w-1` where our test demands
+  `GF_W(fr)`, so the two callers that build `w-1`/`h-1` explicitly (`0x494CBB`, `0x4A4B1B`) are
+  excluded for the same reason. Closing it means deciding whether `w-1` and `w` name the same
+  extent under the half-open rule, which wants its own measurement.
+- **`scale_capture` carries its plane every window with no dedup.** That is 400 B for the badge
+  and would be up to ~400 KB per window for a 640×640 plain stamp. Bounded by `TAGPU_GAF_DECMAX`
+  and by `gaflost`, so it is a cost and not a fault — but an unstated one until now. The dedup
+  table cannot simply be reused: it is keyed on the frame pointer, so a later 1:1 blit of the same
+  frame would wrongly answer "already have it".
+- **With `norepaint`, the panel debt is permanent.** `panel_emit` is only called at the tail of
+  `repaint_service`, so with repaints off the emblem is never re-offered and `s_panelPend` stays
+  raised. Harmless — nothing is written and no loop spins — but the counter reads as owed for ever.
+- **A `publish()` that fails after the op was recorded still loses the emblem** until the next
+  reset. The debt is now cleared only when `op_add` actually recorded (the `MAX_OPS` drop is
+  covered), but not when the packet itself is refused downstream. That path drops the whole frame's
+  ops, ours among them, so it is the general case rather than a panel-specific hole.
+
 **The rest of the in-game HUD is per-frame into the main offscreen** **[VERIFIED,
 [UI markers](ui-markers.html) §4 and the `DrawGameScreen` tail]**: the resource text block
-(`DrawTextCustomFont 0x4C14F0` and four GAF blits, `~0x468E40..0x4692C0`, string
+(`DrawTextCustomFont 0x4C14F0` and four GAF blits, `~0x468E40..0x469610`, string
 `"%dK%s %s%s E:%d M:%d"` at `0x50783C`), `DrawChatText 0x464060` at `0x469FCB`,
 `DrawPopupF4Dialog 0x4948E0` at `0x469F65`, `DrawPopupButtomDialog 0x4689C0` at `0x469F9F`, the
 clock and debug strings, the `LIGHTBAR` slide `0x45FFB0` at `0x46A3C2`, and the debug profiler
@@ -594,7 +643,7 @@ they carry there; G15a adds the new ones.
 | `0x4C6890` | `SurfaceFill(surface, colour)`, `ret 8` | VERIFIED 2026-09-07 |
 | `0x4C5E70` | `GetContext(out)`: NULL-context path, arm 1 = `*(globals+0xBC)` | VERIFIED 2026-09-07 |
 | `*(0x51FBD0)+0xBC` / `+0xDC` | the system back buffer every flip presents / its valid flag | VERIFIED 2026-09-07 |
-| `0x4C7580` | textured-triangle stamp `(ctx, src, xy[6], uv[6])`; the three vertices are origin, `+u` and `+u+v`, and the span is HALF-OPEN in both axes — the far vertex is the edge it stops before, not a pixel | VERIFIED; args MEASURED 2026-09-07, the vertex roles and the half-open extent MEASURED 2026-09-21 |
+| `0x4C7580` | textured-**quad** stamp `(ctx, src, xy[8], uv[8])`; **FOUR** vertices (`cmp ecx,0x4` at `0x4C7676`, stride 8), origin, `+u`, `+u+v`, `+v`, and the span is HALF-OPEN in both axes — the far vertex is the edge it stops before, not a pixel. With `uv == NULL` the engine synthesises `(0,0)(w-1,0)(w-1,h-1)(0,h-1)` — note `w-1` | VERIFIED; args MEASURED 2026-09-07, the half-open extent MEASURED 2026-09-21, **the vertex COUNT corrected from three to four 2026-09-21 by the landing review** |
 | `0x4C6D20` | descriptor blit `(ctx, desc, src, dst)`, `ret 0x10` | VERIFIED 2026-09-07 |
 | `0x4BF4D0` | framed box `(ctx, RECT*, colour)`, `ret 0xC` — the F4 popup's border | VERIFIED 2026-09-07 |
 | `0x4BF7B0` | the focus rectangle, `(ctx, RECT*, colour)` | VERIFIED 2026-09-07 |
