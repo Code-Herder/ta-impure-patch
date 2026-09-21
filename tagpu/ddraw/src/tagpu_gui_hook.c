@@ -740,6 +740,18 @@ static void ops_forget_base(unsigned base)
 static unsigned s_kindCount[OP_NKIND];
 static unsigned s_kindTotal[OP_NKIND];          /* cumulative, for the heartbeat */
 static unsigned s_nullCtx[OP_NKIND];        /* ops whose ctx was NULL/unknown */
+/* THE AREA EACH KIND COVERS, beside the count, because the count cannot answer
+   the question the rebuild asks. `publish` gives six kinds a SEMANTIC op --
+   gaf -> PK_SPRITE, text -> PK_STRING, bar/line -> PK_BAR, rect -> PK_RECT,
+   copy -> PK_COPY -- and sends every other kind as `PK_PIXELS`, a box of the
+   engine's own composed bytes. Which kinds those are is a count question and
+   is already answered; HOW MUCH SCREEN they own is not, and one `scale` op can
+   be a whole map preview where forty `gaf` ops are forty 16x16 icons. Summed
+   AFTER the surface clip, so it is the area actually written, and before the
+   MAX_OPS drop, so a full ring does not silently shrink the figure.
+   Duplicates are counted, exactly as `s_kindCount` counts them: the dedup is
+   `publish`'s, and this measures what the engine DREW. */
+static unsigned s_kindArea[OP_NKIND];
 
 static void op_add(int kind, SURF* s, int l, int t, int r, int b)
 {
@@ -760,6 +772,7 @@ static void op_add(int kind, SURF* s, int l, int t, int r, int b)
     if (r > s->w - 1) r = s->w - 1;
     if (b > s->h - 1) b = s->h - 1;
     if (l > r || t > b) return;
+    s_kindArea[kind] += (unsigned)(r - l + 1) * (unsigned)(b - t + 1);
     if (s_nops >= MAX_OPS) { s_opsDropped++; return; }
     o = &s_ops[s_nops++];
     memset(o, 0, sizeof *o);
@@ -2035,10 +2048,43 @@ static int __cdecl before_flip(void* entry_esp)
             s_winChanged = s_winUnexpl = s_winCensus = 0;
             s_winL = s_winT = 0x7FFF; s_winR = s_winB = -1;
         }
+        /* ---- AND THE SAME WINDOW BY AREA, WHICH IS THE REBUILD'S QUESTION.
+           Its own line rather than more fields on the one above: that line is
+           read by eye and by `uiwalk`, and it is already 300 characters.
+           `raw=` is the part of the drawn area `publish` can only send as a box
+           of the engine's composed bytes -- the kinds with no semantic op --
+           so it is the area that has NO source but an observation of the
+           engine, and the area a UI pass of ours cannot reproduce until each
+           of those kinds is given one. It is a SUM OVER OPS and not a covered
+           area: ops overlap, so it can exceed the surface and `pct` can exceed
+           100. That is the honest quantity -- de-duplicating it would need a
+           coverage mask per kind, which is the census's `pgm` job and not a
+           per-op tally's. Read it as weight, not as a footprint. */
+        if (s_log) {
+            char ar[240]; int k, n = 0;
+            unsigned raw = 0, sem = 0, tot;
+            for (k = 1; k < OP_NKIND; k++) {
+                if (!s_kindArea[k]) continue;
+                if (k == OP_GAF || k == OP_TEXT || k == OP_BAR ||
+                    k == OP_RECT || k == OP_LINE || k == OP_COPY) sem += s_kindArea[k];
+                else if (k != OP_FLIP)                            raw += s_kindArea[k];
+                n += _snprintf(ar + n, sizeof ar - (size_t)n, "%s%s %u",
+                               n ? " " : "", OP_NAME[k], s_kindArea[k]);
+            }
+            tot = sem + raw;
+            _snprintf(b, sizeof b,
+                "gui area: %s %s %dx%d surf=%u area=%u[%s] semantic=%u raw=%u pct=%u.%02u",
+                isGame ? "GAME" : "shell", top_screen_name(), s->w, s->h,
+                (unsigned)s->w * (unsigned)s->h, tot, ar, sem, raw,
+                tot ? (unsigned)((unsigned long long)raw * 100u / tot) : 0u,
+                tot ? (unsigned)((unsigned long long)raw * 10000u / tot % 100u) : 0u);
+            glog(b);
+        }
     }
     publish(s ? s->base : 0);
     ops_window_reset();
     memset(s_kindCount, 0, sizeof s_kindCount);
+    memset(s_kindArea, 0, sizeof s_kindArea);
     memset(s_nullCtx, 0, sizeof s_nullCtx);
     s_builds = 0; s_buildFlags = 0;
     return hijack;
