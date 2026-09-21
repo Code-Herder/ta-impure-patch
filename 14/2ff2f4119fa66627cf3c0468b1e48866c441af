@@ -1,0 +1,35 @@
+landing-review: model=claude-opus-5 effort=high range=main..142ff2f findings=11 acted=11 rejected=0 date=2026-09-21
+
+Two independent read-only reviewers, run in parallel per CLAUDE.md's high rule
+(the landing writes engine state at main+0x37E3F and changes what the render
+thread consumes). 12 distinct findings reported, 11 after deduplication -- both
+reviewers independently found the memo's reference count wrong.
+
+Every finding was verified against pristine/TotalA.exe.pristine before action.
+All 11 acted on; none rejected. Two were acted on by naming an open gap rather
+than by changing code, because closing them needs its own measurement:
+0x4C7580's uv==NULL callers, and the 0x40-vs-flags|0x40 argument.
+
+Fixed in 4c5493c: the poke was once per flip rather than once per debt (44 call
+sites on 0x4C63A0, not the one inline flip); before_scale ignored the fourth
+vertex and the bbox loop missed it; the minimap crop was derived from an aspect
+stretch where 0x4B95A0 is a 2:1 box downsample; the gui area: block re-created
+this file's own documented _snprintf trap (plus one identical pre-existing
+instance); repaint_service had no lifetime gate; the panel debt cleared on the
+call rather than the record; the flip surface was read after the census could
+swap-remove it.
+
+Corrected in 862285d: four documented claims the reviewers disproved, three of
+them load-bearing -- the memo's 'exactly two references' (the grep quoted as
+evidence was written so it could not match the third site), 0x4C7580's 'three
+vertices', the minimap's aspect model, and gpu-status.md's 'fields we write:
+ONE'. roadmap.md's G19f 'correct by construction and UNMEASURED' likewise.
+
+One finding was over-applied by me and caught before it ran: copying the other
+emitters' !level_tracked() gate into repaint_service would have refused every
+menu repaint in the shell, where s_levelTracked is 0 by definition. The shipped
+gate is level_closing() alone.
+
+Re-verified by running after the fixes, 1024x768 skirmish vs the golden source:
+UI outside the minimap 125908/125908 exact, badge 400/400, minimap flat columns
+0, bars and all six numbers drawn, panel=1/0 hud=2/0 chrome=2/0.
