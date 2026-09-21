@@ -508,10 +508,33 @@ in-game handler by the loading-screen handler `0x497F40` (`mov [ecx+0x391F5], 0x
 whole state machine. `0x496790`, the in-game frame callback, is *not* address-taken; it is
 called directly from `0x499200` at `0x4995B8` and `0x4996A5`.
 
-**So the static call graph cannot carry the thread identity, and does not.** It ends at an
-indirect dispatch, and `0x499890` contains no `PeekMessage`/`GetMessage`/`DispatchMessage` of
-its own, so the pump is elsewhere again. What the static work *does* establish is the bound: the
-entry set is closed, so those six sites are all the ways in.
+**But THREE OF THE SIX are pinned to the game thread by construction, in the strongest way this
+binary allows.** `0x499200` — the function holding `0x4996AA`, `0x49971D` and `0x4997AF` — also
+calls the in-game frame callback **`0x496790` directly**, at `0x4995B8` and at `0x4996A5`. The
+second of those is the instruction immediately before the teardown call:
+
+```
+0x4996A5   call 0x496790        ; draw the frame
+0x4996AA   call 0x491B60        ; and tear the level down
+```
+
+Same function, same straight line, no branch between them. And `0x496790` is precisely the
+function whose `DrawGameScreen(1, 1)` at `0x4969CD` the fork's publisher gates with
+`on_game_thread()` — a test it applies to *every in-play draw*, hundreds of thousands per
+session, and which has never once counted a foreign one (`foreign=0`). So whatever thread runs
+the frame callback runs these three teardown calls, and that thread is measured continuously,
+not sampled.
+
+**The other three are not pinned statically.** `0x460630` and `0x491C6A` (in `0x4605C0`) and
+`0x49262C` (in `0x492360`) call nothing that is independently tied to a thread; their functions
+are reached through the state slot like the rest, and the graph stops there. For those, the
+evidence is the measurement and the standing instrument, nothing more. Note the asymmetry cuts
+against comfort rather than for it: by `0x499200`'s behaviour the measured teardowns went
+through the three sites that are *also* pinned by construction, so the three that rest on
+measurement alone are the ones least exercised.
+
+What the static work establishes overall is the bound: the entry set is closed, so those six
+sites are all the ways in.
 
 **What the loader thread result really is.** The direct-call transitive closure of `0x497C70` /
 `0x497180` is 1 208 functions and contains neither `0x491B60`, nor the dispatcher `0x499890`,

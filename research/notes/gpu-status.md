@@ -14819,8 +14819,15 @@ an oracle rather than instrumentation, which is why it stays.
     does establish.
   * **All six sit in four functions that have no direct caller.** Each is address-taken and
     entered through the engine's state-handler slot `[main+0x391F5]`, dispatched from the single
-    site `0x499A1C`. So the call graph stops at a function pointer and cannot carry the thread
-    identity by itself.
+    site `0x499A1C`. So the call graph stops at a function pointer.
+  * **Three of the six are nevertheless pinned by construction.** `0x499200` holds those three
+    *and* calls the in-game frame callback `0x496790` directly — once at `0x4996A5`, the
+    instruction immediately before the teardown call at `0x4996AA`. `0x496790` is the function
+    the publisher gates with `on_game_thread()` on every in-play draw, hundreds of thousands a
+    session, never once foreign. Same function, same straight line, same thread.
+  * **The other three rest on the measurement alone**, and the asymmetry is unflattering: by
+    `0x499200`'s behaviour the teardowns that were measured went through the three sites that
+    are *also* pinned statically, so the three carried by measurement are the least exercised.
   * The loader thread's **direct-call** closure (1 208 functions) contains neither the teardown
     nor the dispatcher nor the state-setter — worth having, but it is a direct-call result, and
     that closure also holds 690 indirect call sites.
