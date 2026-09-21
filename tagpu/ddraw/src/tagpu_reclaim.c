@@ -294,9 +294,17 @@ static void __cdecl reclaim_teardown_pre(void)
     unsigned n = 0, busy = 0;
     char b[200];
 
-    s_tdTid = GetCurrentThreadId();
-    if (s_tdTid != (g_ddraw.gui_thread_id ? g_ddraw.gui_thread_id : s_owner_tid))
-        s_cTdForeign++;
+    /* THE BASELINE HAS TO BE KNOWN BEFORE A MISMATCH MEANS ANYTHING. `gui_thread_id`
+       is set from GetWindowThreadProcessId when the window is created (dd.c) and
+       `s_owner_tid` on the first deferred free, so by a level teardown one of them
+       is always set -- but if neither were, comparing against 0 would report every
+       teardown as FOREIGN, and an instrument whose failure mode is a false alarm
+       is worse than none. Unknown is unknown, not foreign. */
+    {
+        DWORD game = g_ddraw.gui_thread_id ? g_ddraw.gui_thread_id : s_owner_tid;
+        s_tdTid = GetCurrentThreadId();
+        if (game && s_tdTid != game) s_cTdForeign++;
+    }
     InterlockedExchange(&s_teardown, 1);       /* fence: visible before we look */
     t0 = GetTickCount();
     while (s_completed != s_started) {         /* the reader is inside a pass */
@@ -318,7 +326,9 @@ static void __cdecl reclaim_teardown_pre(void)
               (unsigned)s_levelGen, (unsigned)s_levelGen + 1u,
               (unsigned)s_tdTid,
               (unsigned)(g_ddraw.gui_thread_id ? g_ddraw.gui_thread_id : s_owner_tid),
-              s_cTdForeign ? " — FOREIGN, see tagpu_reclaim.c" : "",
+              !(g_ddraw.gui_thread_id ? g_ddraw.gui_thread_id : s_owner_tid)
+                  ? " — game thread not known yet"
+                  : (s_cTdForeign ? " — FOREIGN, see tagpu_reclaim.c" : ""),
               busy ? RC_TEARDOWN_WAIT_MS : n, (unsigned)(s_tail - s_head));
     rlog(b);
 }
