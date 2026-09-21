@@ -1,0 +1,29 @@
+landing-review: 2026-09-21, effort high, two independent read-only reviewers (round 1 of 2)
+
+Scope: main...eb964a8 — PK_ASSET, a new packet carrying the shell's loader-decoded
+PCX backdrop from the game thread to the render thread over g_guiq.
+High because it adds a cross-thread handshake (assetAck) and new published state.
+
+Both reviewers independently found the same HIGH: the consumer echoed the
+surface's BASE, and a base is not an identity here — this module frees a surface
+and the engine's next 0x4C69F0 lands on the same block, so an ack standing from
+a dead surface was satisfied by the live one that inherited its address. Fixed
+with a one-time token; the producer stopped writing assetAck at all, and the
+echo moved to mir_finish so a discarded record acked nothing.
+
+Findings acted on: R1-3/R1-4 (the "nothing draws into it" overclaim — softened
+and then measured), R1-6 (the try count was a timeout standing for a state →
+g_guiq.mirArmed), R1-7 (ops_forget_base left a dead base in o->src), R1-8 (the
+revocation ran before the clip, so a fully-clipped op retired the claim and a
+copy-source-only surface went black), R1-11 (heartbeat field count).
+
+Findings REJECTED, with evidence:
+- R1-9 ("the tag is \"GUI SURFACE\" 0x509920; <SCREEN>.GUI was a mis-read of our
+  own trace line"). FALSE. 0x4A906C's `mov eax,0x509920` is the else-arm of
+  `test eax,eax` on `lea eax,[ebp+0x2]`, which is never zero, so it is dead
+  code; a five-screen trace names MAINMENU.GUI / SINGLE.GUI / SKIRMISH.GUI and
+  never "GUI SURFACE". Both round-2 reviewers re-derived this independently and
+  agreed. Reading the string at that address is what makes the finding look
+  right, and it is not evidence that the string is pushed.
+
+R1-10 (document 0x4CAF30 as the PCX loader) was verified and written up.
