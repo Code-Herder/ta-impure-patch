@@ -375,12 +375,21 @@ static int __cdecl before_gafd(void* e)
     return 0;
 }
 
-/* ---- 0x4C7580 GAF_DrawTransformed(ctx, src, int xy[6], int uv[6]) stdcall
-        ret 0x10 — a TEXTURED TRIANGLE: three screen vertices (x0,y0,x1,y1,x2,y2)
-        and their texture coordinates [MEASURED 2026-09-07: the in-game option
-        screens' wide backdrop right of the 128-px panel is drawn as these,
-        e.g. (214,94)(233,94)(233,113) with uv (1,1)(31,1)(31,31)]. The box is
-        the vertices' bounding box, clipped. ------------------------------- */
+/* ---- 0x4C7580 GAF_DrawTransformed(ctx, src, int xy[8], int uv[8]) stdcall
+        ret 0x10 — a TEXTURED QUAD: FOUR screen vertices and their texture
+        coordinates. [CORRECTED 2026-09-21 by the landing review, which
+        disassembled the loop: `0x4C763D..0x4C7679` walks arg3 with `add
+        edx,0x8` and `cmp ecx,0x4; jl`, so it is four vertices at stride 8, not
+        three. The earlier "three vertices (x0,y0,x1,y1,x2,y2)" reading came
+        from the 2026-09-07 sighting of the option screens' backdrop, where
+        only the first three were looked at.]
+
+        When `uv` is NULL the engine synthesises its own quad
+        `(0,0) (w-1,0) (w-1,h-1) (0,h-1)` at `[esp+0x4C..0x68]` — note `w-1`,
+        not `w`, which is why the whole-frame test below cannot be relaxed to
+        cover those callers without changing what it compares.
+
+        The box is the vertices' bounding box over ALL FOUR, clipped. ------ */
 static int __cdecl before_scale(void* e)
 {
     const int* ctx = ctx_or_back(ARG(e, 1));
@@ -392,7 +401,9 @@ static int __cdecl before_scale(void* e)
     if (!on_game_thread() || s_inFlip) return 0;
     if (!ptr_ok(xy)) { op_add(OP_SCALE, NULL, 0, 0, 0, 0); return 0; }
     l = r = xy[0]; t = b = xy[1];
-    for (i = 1; i < 3; i++) {
+    /* FOUR, not three: the engine's own loop reads four vertices, so a box over
+       three of them can be too small. [The landing review's.] */
+    for (i = 1; i < 4; i++) {
         if (xy[2 * i] < l) l = xy[2 * i];
         if (xy[2 * i] > r) r = xy[2 * i];
         if (xy[2 * i + 1] < t) t = xy[2 * i + 1];
@@ -419,9 +430,18 @@ static int __cdecl before_scale(void* e)
 
        `fr[0x0A]` is the sub-frame count, refused for the same reason
        `gaf_record` turns such a frame into OP_GAFA: a stack is not one plane. */
+    /* ALL FOUR VERTICES, or the shape is not the rectangle this claims it is.
+       `xy[6]`/`xy[7]` (v3) went uninspected until the landing review: the test
+       pinned v0's row, v1's column and the u/v extents, which a quad whose
+       fourth corner sits anywhere at all still satisfies -- and such a quad
+       would have been published as an axis-aligned sprite. Every caller
+       disassembled so far builds a true rectangle, so this corrects a test that
+       was too weak rather than a picture that was wrong. */
     if (ptr_ok(fr) && ptr_ok(uv) && fr[0x0A] == 0 &&
         xy[1] == xy[3] && xy[2] == xy[4] &&
+        xy[6] == xy[0] && xy[7] == xy[5] &&
         uv[0] == 0 && uv[1] == 0 && uv[3] == 0 && uv[2] == uv[4] &&
+        uv[6] == 0 && uv[7] == uv[5] &&
         uv[2] == (int)GF_W(fr) && uv[5] == (int)GF_H(fr)) {
         dw = xy[2] - xy[0]; dh = xy[5] - xy[1];
         if (dw > 0 && dh > 0 && dw <= TAGPU_GAF_DECMAX && dh <= TAGPU_GAF_DECMAX &&

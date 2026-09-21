@@ -402,7 +402,7 @@ typedef struct TAGPU_PK_PART {
                                       picture), checked once at acquire; this
                                       only keeps the product inside 32 bits and
                                       the scratch inside its array. The picture
-                                      is a GAF frame, so TAGPU_GAF_DECMAX (512)
+                                      is a GAF frame, so TAGPU_GAF_DECMAX (640)
                                       is its own decoder's ceiling as well      */
 
 #define TAGPU_PK_FOG_DIMCAP 4096   /* a sanity ceiling on a dimension; the real

@@ -205,6 +205,7 @@ static unsigned s_mmGenSeen;            /* the generation s_mmTex holds; 0 = not
    the texture. [The vulkan-only plan, landing 4b-3.] */
 static int      s_mmBaked;
 static int      s_mmTW, s_mmTH;         /* its size in texels                               */
+static int      s_mmBoxSeen[2];         /* the mm_box the standing bake was cropped to      */
 static int      s_mmbase = 0;           /* the minimap is ours (see the k rule in sharp_minimap) */
 static int      s_mmforce = 0;          /* token `mmbase`: draw it at k = 1 too, for the harness */
 static unsigned s_mmDrawn = 0;
@@ -1748,16 +1749,19 @@ static void sharp_minimap(const TAGPU_FRAME* f)
        [Stranded by the clean cut a2b1333; found 2026-09-21 by diffing the side
        panel against the golden source, band by band.] */
     (void)s_mmforce;
-    /* THE STANDING REQUEST, AND IT IS RAISED HERE RATHER THAN AT THE TOP. The
-       publisher interleaves the three minimap surfaces and carries the level's
-       picture only while this is up, and at k = 1 (the gate just above) the
-       sharp minimap is deliberately the engine's own — so a request raised
-       before the gate would have the game thread pay ~13 KB of interleave per
-       publish, for ever, in every session that never resizes its window. Past
-       the gate the first frame raises it and the next one draws, which costs
-       two frames of the engine's own minimap after a resize and nothing at all
-       before one. Dropped by the module's own watchdog after 90 silent
-       frames. */
+    /* THE STANDING REQUEST. The publisher interleaves the three minimap
+       surfaces and carries the level's picture only while this is up. Dropped
+       by the module's own watchdog after 90 silent frames.
+
+       WHAT USED TO STAND HERE DESCRIBED A GATE THAT NO LONGER EXISTS: it said
+       the request was raised past a k = 1 gate "just above", that the sharp
+       minimap was "deliberately the engine's own" at k = 1, and that the first
+       frame raises and the next draws, "which costs two frames of the engine's
+       own minimap after a resize". The block twenty lines above deleted that
+       gate in this same landing and says so; this paragraph was left behind
+       describing the old shape and contradicting it. The cost is now paid at
+       every k, which is exactly what that block states. `nominimap` is the
+       opt-out. [The landing review's.] */
     tagpu_gui_set_want_minimap(1, f->frame_counter);
     if (s_mmbase) {
         if (!minimap_pic(pk, &pic, &pw, &ph, &gen)) return;
@@ -1803,18 +1807,26 @@ static void sharp_minimap(const TAGPU_FRAME* f)
            valid sub-rect keeps 0..1 true for both, needs no new uniform, touches
            no shader, and makes the upload smaller.
 
-           THE VALID REGION CARRIES THE BOX'S ASPECT, inscribed in the frame, and
-           the box is taken from the PACKET rather than from `mw`/`mh` here:
-           those have been through the HUD-scale multiply above, and the aspect
-           should come from the engine's own fitted box, not from a rounded copy
-           of it. 252 x 106/126 is 212, which is where the data measurably stops. */
+           THE VALID REGION IS WHAT THE ENGINE READS, and `0x4B95A0` is not the
+           stretch this comment first called it: it is a fixed 2:1 BOX
+           DOWNSAMPLE. Destination extent comes from `WORD[arg2+0]`/`[arg2+2]`,
+           and for each destination pixel it reads a 2x2 source box -- source
+           offset `2*(row*sw + col)` (`0x4B95F6 lea eax,[edi+ebx*2]`), that
+           pixel and its right neighbour, then the same pair one source row
+           down, blended through the 64K LUT at `[arg1+0xC0]`. So the engine
+           reads exactly `[0, 2*bw) x [0, 2*bh)` and crops the padding by never
+           looking at it, and the bound we want is that same rule rather than an
+           aspect fit. The two agree here only because `ph == 2*bh` (252 = 2*126)
+           -- 252 x 106/126 is also 212 -- which is a coincidence of this map's
+           box, not a property. [The landing review disassembled it; the aspect
+           formula it replaces was right by luck.] */
         {
             int bw = pk->mm_box[2], bh = pk->mm_box[3];
             int vw = pw, vh = ph, y, x;
             unsigned n;
             if (bw > 0 && bh > 0) {
-                if      ((long)bw * ph < (long)bh * pw) vw = (int)(((long)ph * bw) / bh);
-                else if ((long)bw * ph > (long)bh * pw) vh = (int)(((long)pw * bh) / bw);
+                if (bw < pw / 2) vw = 2 * bw;        /* exactly what 0x4B95A0 reads */
+                if (bh < ph / 2) vh = 2 * bh;
                 if (vw < 1) vw = 1; else if (vw > pw) vw = pw;
                 if (vh < 1) vh = 1; else if (vh > ph) vh = ph;
             }
@@ -1835,6 +1847,12 @@ static void sharp_minimap(const TAGPU_FRAME* f)
             s_mmPicSerial++;
             s_mmTW = vw; s_mmTH = vh;
         }
+        /* THE BOX IS PART OF THE KEY. `s_mmTW`/`s_mmTH` are derived from
+           `pk->mm_box` just above, so a box that changed without the generation
+           or the palette changing would leave a bake of the wrong size standing.
+           Constant per level today; keyed so it does not have to stay that way.
+           [The landing review's.] */
+        s_mmBoxSeen[0] = pk->mm_box[2]; s_mmBoxSeen[1] = pk->mm_box[3];
         s_mmGenSeen = gen; s_mmPalSeen = tagpu_pal_serial();
         s_mmBaked = 1;
     }

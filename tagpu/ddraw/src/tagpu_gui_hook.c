@@ -174,8 +174,13 @@ static int  s_nsurf = 0;
    and then never again -- and a twin reset loses them for the rest of the level.
    [DISASSEMBLED 2026-09-21.]
 
-   IT IS TOUCHED NOWHERE ELSE IN THE BINARY: exactly two references, `0x468E51`
-   (seed the local) and `0x468FC6` (compare and update), both inside this block.
+   THREE references, not two -- and the third was missed until the landing
+   review disassembled for it. `0x468E51` seeds the local and `0x468FC6`
+   compares and updates, both inside this block; `0x4679A6` (in the function at
+   `0x4679A0`) zeroes four DWORDs of it, at `+0x1D`, `+0x19`, `+0x0D` and
+   `+0x01`. That third one does NOT touch byte 0, so byte 0 is still ours alone
+   to poison and the argument below stands -- but "nowhere else in the binary"
+   was false, and it was the kind of claim that only a search can support.
    It is a display memo, not sim state. */
 #define HUD_MEMO       0x37E3Fu
 #define CHROME_PLAYER  0x2A43u        /* main+ : the local player index      */
@@ -1997,7 +2002,7 @@ static int __cdecl before_flip(void* entry_esp)
     SURF* s;
     int isGame = (ret == FLIP_RET_GAME);
     unsigned changed = 0, unexpl = 0;
-    char b[320];
+    char b[512];        /* holds the `gui area:` line: 288 of `ar` plus ~150 */
     static LARGE_INTEGER s_lastQpc, s_freq;
     static unsigned s_censuses = 0;
     LARGE_INTEGER now;
@@ -2215,6 +2220,18 @@ static int __cdecl before_flip(void* entry_esp)
             }
         }
     }
+    /* THE CENSUS ABOVE CAN MOVE THIS SURFACE. `surf_drop` swap-removes
+       (`s_surf[i] = s_surf[--s_nsurf]`, the rule stated at the top of this
+       file), so dropping any earlier slot copies the LAST slot's contents down
+       and leaves a `SURF*` that pointed at the last slot one past `s_nsurf`.
+       The loop skips the flip surface itself, so it is always still in the
+       table -- only its address can have changed, which is exactly what
+       `surf_by_base` is for and why `s_frameBase` exists. Today the swapped-out
+       bytes survive and every read still returns the right value; the pointer
+       comparison `&s_surf[i] != s` below is already wrong when it happens, and
+       a later insert into that slot would alias a different surface.
+       [The landing review's.] */
+    if (s) s = surf_by_base(s->base);
     if (s && s_trace && unexpl > 256) {
         /* the ops that touched the residual's box, up to 96 — the rest of the
            frame's ops are noise for placing it */
@@ -2235,11 +2252,21 @@ static int __cdecl before_flip(void* entry_esp)
     if (s && (unexpl > 256 || s_censuses - s_lastLog >= (unsigned)(s_log ? LOG_EVERY : LOG_EVERY * 20))) {
         s_lastLog = s_censuses;
         {
-            char ops[200]; int k, n = 0; unsigned nullc = 0;
+            /* PRE-EXISTING, and the same trap as the `gui area:` block below:
+               unguarded `n +=`, sized 200 against a 255-byte worst case, and
+               never terminated. Fixed here rather than noted because this
+               landing edited the block it sits in. */
+            char ops[288]; int k, n = 0, w; unsigned nullc = 0;
             for (k = 1; k < OP_NKIND; k++) {
                 nullc += s_nullCtx[k];
-                if (s_kindCount[k]) n += _snprintf(ops + n, sizeof ops - (size_t)n, "%s%s %u", n ? " " : "", OP_NAME[k], s_kindCount[k]);
+                if (!s_kindCount[k]) continue;
+                w = _snprintf(ops + n, sizeof ops - (size_t)n, "%s%s %u", n ? " " : "", OP_NAME[k], s_kindCount[k]);
+                if (w < 0) break;
+                n += w;
+                if (n >= (int)sizeof ops) { n = (int)sizeof ops - 1; break; }
             }
+            ops[n] = 0;
+            if (!n) _snprintf(ops, sizeof ops, "none");
             /* the numbers are the WINDOW's — every census since the previous line */
             _snprintf(b, sizeof b,
                 "gui census: %s %s %08X %dx%d flip=%u n=%u win=%u changed=%u unexplained=%u box=(%d,%d)-(%d,%d) ops=%d[%s] "
@@ -2265,16 +2292,34 @@ static int __cdecl before_flip(void* entry_esp)
            coverage mask per kind, which is the census's `pgm` job and not a
            per-op tally's. Read it as weight, not as a footprint. */
         if (s_log) {
-            char ar[240]; int k, n = 0;
+            /* THE SAME GUARD `repaint_service` CARRIES, and this block shipped
+               without it. mingw's `_snprintf` returns -1 on truncation rather
+               than the length it wanted, so a bare `n += _snprintf(...)` makes
+               `n` negative and `sizeof ar - (size_t)n` wrap to a size that
+               writes BEFORE the buffer. `ar` was also sized 240 for a worst
+               case of fifteen kinds x (five-char name + space + ten digits +
+               separator) = 255, and was read by `%s` without ever being
+               terminated -- including when no kind had area and the loop never
+               ran at all. `full` stops the TEXT while the totals keep
+               accruing, so `sem`/`raw`/`pct` stay exact either way.
+               [The landing review's; the same trap, fifty lines from its own
+               warning.] */
+            char ar[288]; int k, n = 0, w, full = 0;
             unsigned raw = 0, sem = 0, tot;
             for (k = 1; k < OP_NKIND; k++) {
                 if (!s_kindArea[k]) continue;
                 if (k == OP_GAF || k == OP_TEXT || k == OP_BAR ||
                     k == OP_RECT || k == OP_LINE || k == OP_COPY) sem += s_kindArea[k];
                 else if (k != OP_FLIP)                            raw += s_kindArea[k];
-                n += _snprintf(ar + n, sizeof ar - (size_t)n, "%s%s %u",
-                               n ? " " : "", OP_NAME[k], s_kindArea[k]);
+                if (full) continue;
+                w = _snprintf(ar + n, sizeof ar - (size_t)n, "%s%s %u",
+                              n ? " " : "", OP_NAME[k], s_kindArea[k]);
+                if (w < 0) { full = 1; continue; }
+                n += w;
+                if (n >= (int)sizeof ar) { n = (int)sizeof ar - 1; full = 1; }
             }
+            ar[n] = 0;
+            if (!n) _snprintf(ar, sizeof ar, "none");
             tot = sem + raw;
             _snprintf(b, sizeof b,
                 "gui area: %s %s %dx%d surf=%u area=%u[%s] semantic=%u raw=%u pct=%u.%02u",
@@ -2282,6 +2327,7 @@ static int __cdecl before_flip(void* entry_esp)
                 (unsigned)s->w * (unsigned)s->h, tot, ar, sem, raw,
                 tot ? (unsigned)((unsigned long long)raw * 100u / tot) : 0u,
                 tot ? (unsigned)((unsigned long long)raw * 10000u / tot % 100u) : 0u);
+            b[sizeof b - 1] = 0;
             glog(b);
         }
     }
@@ -2499,6 +2545,13 @@ static void panel_emit(const char* ctrls, int n0)
     surf_of_ctx(psurf);                              /* the source is a surface too */
     copy_record(fs, NULL, psurf,
                 *(const short*)(ctrls + P_RECT_X), *(const short*)(ctrls + P_RECT_Y));
+    /* THE DEBT IS PAID BY A RECORD, NOT BY A CALL. `op_add` drops silently at
+       `s_nops >= MAX_OPS` and leaves `s_lastOp` NULL, which `copy_record`
+       already tests before filling in the source -- so on a full ring the old
+       code cleared the debt for a copy that was never recorded and the emblem
+       stayed missing until the next reset. Keep the debt instead; the next
+       repaint re-offers it. [The landing review's.] */
+    if (!s_lastOp) return;
     s_panelPend = 0;
     s_panelEmits++;
 }
@@ -2550,7 +2603,20 @@ static void hud_invalidate(void)
        three resets, `hud=1/0`, bars still black. `s_hudPoked` is cleared with
        every new debt, so the test only ever asks about the poke this episode
        made. [FOUND by running it.] */
-    if (s_hudPoked && *memo != s_hudPoison) { s_hudPend = 0; s_hudPoked = 0; return; }
+    if (s_hudPoked) {
+        /* ONE POKE PER DEBT, BY CONSTRUCTION -- not one per flip. `after_flip`
+           is on the flip FUNCTION `0x4C63A0`, which has 44 call sites; it is
+           NOT only the flip inline in `DrawGameScreen` at `0x46A3DB`, and even
+           that one is conditional (`je 0x46A3E0`). The chrome painter
+           `0x467D70` presents at `0x467E41` and returns, so presents do happen
+           with no resource block between them. There, "the memo still holds our
+           poison" does not mean "the engine has not redrawn yet" -- it means
+           nothing has looked, and the old code complemented and re-poked once
+           per flip for as long as that lasted. The poison is already in place:
+           keep the debt and write nothing more. [The landing review's.] */
+        if (*memo != s_hudPoison) { s_hudPend = 0; s_hudPoked = 0; }
+        return;
+    }
     s_hudPoison = (unsigned char)(s_hudPoison ^ 0xFFu);
     *memo = s_hudPoison;
     s_hudPoked = 1;
@@ -2566,6 +2632,24 @@ static void repaint_service(void)
     int n0, k;
     unsigned before[OP_NKIND];
     if (!s_repaint || !s_repaintPend || s_repainting || !g_gui_draw) return;
+    /* THE LIFETIME GATE, which this one was missing while `panel_emit`,
+       `hud_invalidate` and `chrome_emit` all had it -- and this is the only one
+       of the four that CALLS INTO the engine. The four `ptr_ok` tests below are
+       range tests on VALUES and are not a lifetime argument (this project's own
+       rule); what keeps the redraw off a level that is going away is asking the
+       reclaimer.
+
+       `level_closing()` ALONE, and NOT the other three's
+       `!level_tracked() || level_closing()`. Those two are level-scoped -- the
+       resource block and the side panel exist only in a game -- but a repaint
+       is exactly as necessary in the SHELL, where `s_levelTracked` is 0 by
+       definition. Copying their gate here would have refused every menu
+       repaint in the game's whole front end. `level_closing()` is
+       `s_levelTracked && s_teardown`, so it is false in the shell and true only
+       while a tracked level is actually going away, which is the one window
+       this call must not be in. [The review found the missing gate; the wrong
+       gate was mine, caught before it ran.] */
+    if (tagpu_reclaim_level_closing()) { repaint_refused(); return; }
     /* ptr_ok here is a range test on a VALUE, as everywhere else in this file;
        what makes the call safe is the three-link check below plus the flag */
     ta = *(const char* const*)TA_MAINPP;
