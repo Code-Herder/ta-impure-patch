@@ -73,6 +73,46 @@ shape is verified]. A null `vp` takes the dirty test alone. The in-game side pan
 `[0,128,128,352]` does not overlap the viewport `{128,32,W−1,H−33}`, so it is re-blitted only
 when something marks it dirty.
 
+**And that is why the faction emblem went missing** **[MEASURED 2026-09-21]**. `0x4AB0B0`
+clears `Active_b` immediately after blitting, so there is exactly one blit per dirty mark; the
+in-game panel's rect never overlaps the viewport, so the other way in never fires either. The
+ARM/CORE emblem lives in `panel+0xBC` and reached the frame **once per level** — a probe at
+`(64, 285)` saw a single `copy box=(0,128)-(127,479) src=0BB01138` and nothing afterwards — so
+every twin reset lost it permanently. The fix re-emits that blit as an op (`panel_emit`,
+`tagpu_gui_hook.c`) rather than marking the engine's flag, appended **after** the repaint's own
+ops in the same window so the source twin is built by the ops above it. The source is
+`panel+0xBC` itself, which is how the side comes out right with no side lookup: the engine chose
+ARM or CORE when it built the screen. Panel rect `(0,128)-(127,479)` against the golden source at
+1024×768: ARM 45 056 / 45 056 px identical, CORE 45 056 / 45 056, and the two agree with each
+other on only 7.4 % of pixels.
+
+**THE SAME SHAPE BITES EVERY STATIC PIECE OF THE IN-GAME HUD, and the emblem was one instance of
+a family** **[MEASURED 2026-09-21]**. The engine is retained everywhere: it draws a thing when
+the thing changes and then remembers it in the offscreen. Our op stream is a replay, so a reset
+loses anything the engine will not redraw on its own. Three cases were separated:
+
+- **The resource bars and their six numbers are NOT broken.** They publish through leaves we
+  already have — `0x4BF6F0` (the `bar` leaf, twice) and `0x4C14F0` → `0x4CCF60` (the `text` leaf,
+  three times), all inline in `DrawGameScreen` at `0x468E40..0x4692C0`. A probe at `(300, 13)`
+  caught `bar box=(218,12)-(344,14)` eight times, every one of them **before** the session's
+  last reset. They looked missing only because a fresh skirmish starts with metal and energy
+  **pinned at the 100000 storage cap** (`+1.0/-0.0`, `+25/-1`), so nothing changes, so the engine
+  redraws nothing. Spend anything and the whole block comes back: after one Solar Collector the
+  top bar read `99962 / +1.0 / -17.4` and `99864 / +25 / -91` with both fills painted, 98 % identical
+  to the golden source (the remainder being the two captures' different instants). The residual is
+  real but narrow: after a reset the last-drawn state is gone until a value next moves.
+- **`0x468CF0` is NOT a callable repainter.** It is `DrawGameScreen` itself, running to `0x46A3FD`
+  (`ret 8`) with the flip inline at `0x46A3DB`, four callers (`0x495C76`, `0x495E66`, `0x4962C2`,
+  `0x4969CD`). The resource block is inline in it, not a function, so there is no `0x4A81E0`-style
+  entry point to re-fire for the top bar the way `repaint_service` does for the GUI screen.
+  [NEGATIVE RESULT — recorded because the shape of the emblem fix suggests this and it does not work.]
+- **The player badge is a genuine hole, and not a reset one.** The 21×21 colour badge at
+  `(132,5)-(152,25)` is drawn by `GAF_DrawTransformed 0x4C7580` — the `scale` leaf — and
+  **`OP_SCALE` has no publish branch at all**: it falls to `as_pixels` → `PK_PIXELS`, which the
+  drain drops since the clean cut. So it renders nothing at any time, reset or not, and so does
+  every other transformed GAF draw. The leaf records only the vertices' bounding box today: no
+  source surface, no UVs, so publishing it needs the leaf extended and a new packet op.
+
 **The rest of the in-game HUD is per-frame into the main offscreen** **[VERIFIED,
 [UI markers](ui-markers.html) §4 and the `DrawGameScreen` tail]**: the resource text block
 (`DrawTextCustomFont 0x4C14F0` and four GAF blits, `~0x468E40..0x4692C0`, string
@@ -483,7 +523,7 @@ they carry there; G15a adds the new ones.
 |---|---|---|
 | `0x46A303` | `DrawGameScreen`'s call into the GUI draw, `0x4AB170(main+0x519, &ctx, main+0x37E27)` | VERIFIED 2026-09-06 |
 | `0x4AB170` | GUI draw thunk `(GUIInfo*, OFFSCREEN*, RECT*)`, `ret 0xC`; loads `gi+0x18` | VERIFIED 2026-09-06 |
-| `0x4AB0B0` | per-screen draw: recurse `+0x00`, blit `panel+0xBC` via `0x4C6B70` when `+0x14 == 1` or `0x4B67D0(&rect, vp)` | VERIFIED 2026-09-06 |
+| `0x4AB0B0` | per-screen draw: recurse `+0x00`, blit `panel+0xBC` via `0x4C6B70` when `+0x14 == 1` or `0x4B67D0(&rect, vp)`, then **clear `+0x14`** (`0x4AB111`, `0x4AB13F`) — one blit per dirty mark. Panel rect = four SIGNED shorts at `panel+0x13/0x15/0x17/0x19` (x, y, w, h; right/bottom formed as `x+w-1`, `y+h-1` at `0x4AB0F3`/`0x4AB0FF`), and the blit's destination is `(panel+0x13, panel+0x15)` read again at `0x4AB122`/`0x4AB11E` | VERIFIED 2026-09-06; rect offsets and the `Active_b` clear DISASSEMBLED 2026-09-21 |
 | `0x4B67D0` | rect-overlap test | [INFERRED] name, call shape verified |
 | `0x4C6B70` | surface→surface blit `stdcall(dst, src, x, y)`, `ret 0x10`, over `0x4CBBE0` | VERIFIED (ui-markers §6.4 session) |
 | `0x4CBBE0` | `CopyScreenContext`, raw 8bpp clipped rect copy | VERIFIED |
