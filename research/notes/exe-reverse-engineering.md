@@ -2966,15 +2966,55 @@ both by address (`main+0x37E1B == *(globals+0xBC) == 0x04490020` in a 1024×768 
   `imul eax,esi; add eax,0x30` at `0x4C6A01`/`0x4C6A04` is the size it asks `0x4D83B0` for,
   and `lea edx,[eax+0x30]` / `mov [eax+0xC],edx` at `0x4C6A0E`/`0x4C6A14` is what makes the
   pixel base `object + 0x30`. That identity is what lets an observer on `MEM_Free` retire a
-  surface from the block pointer alone. 18 callers; the GUI's are `0x4A907C`
-  (the screen's own surface, tagged with the screen's name) and `0x4A90B5` (its `"SAVE UNDER"`
-  snapshot); `0x498407` creates the game offscreen `main+0x37E1B`; the minimap's are
-  `0x466823`, `0x466881`, `0x4669CF`, `0x4669FA`. **The tags name the surfaces**, and a
-  session's inventory reads (MEASURED): `"OFFSCREEN" 640×480` (shell) and `1024×768` (game),
-  one `"<SCREEN>.GUI"` per pushed screen (`MAINMENU.GUI 640×480`, `ARMCOM1.GUI 128×352`,
-  `PREFS.GUI 128×354`, **`VISUALRT.GUI 278×354`**, `TALK.GUI 512×33`, …), a `"SAVE UNDER"` per
-  screen, `"SAVEMOUSE 1..3"`, `"FLIPSURFACE" 128×352`, `"BKUPSURFACE" 300×480`, and one
-  `"bitmaps\<name>.PCX" 640×480` per shell background loaded.
+  surface from the block pointer alone.
+
+  **EVERY ONE OF THE 18 CALL SITES AND THE TAG IT PUSHES** — enumerated out of the binary
+  2026-09-21 rather than sampled from a trace, because the tag is what `PK_ASSET` keys on and
+  a list that is merely *mostly* complete cannot answer "can this prefix alias anything else":
+
+  | site(s) | tag | string |
+  |---|---|---|
+  | `0x41F85E` | `0x502BE0` | `"Copy of last game frame"` |
+  | `0x460190` | `0x506C9C` | `"FLIPSURFACE"` |
+  | `0x46020E` | `0x506C90` | `"BKUPSURFACE"` |
+  | `0x466823` | `0x5074F8` | `"RADAR PICTURE"` |
+  | `0x466881` | `0x5074E8` | `"RADARPIC TEMP"` |
+  | `0x4669CF` | `0x507518` | `"RADAR FINAL"` |
+  | `0x4669FA` | `0x507508` | `"RADAR MAPPED"` |
+  | `0x490AD8`, `0x491255`, `0x491B28`, `0x4980D4`, `0x498407` | `0x5091D4` | `"OFFSCREEN"` ×5 |
+  | **`0x4A907C`** | **`[ebp+2]`** | the screen's own name — `"MAINMENU.GUI"`, `"SINGLE.GUI"`, … |
+  | `0x4A90B5` | `0x509914` | `"SAVE UNDER"` |
+  | `0x4C2C22`, `0x4C2C39`, `0x4C2C50` | `0x50A5E8`/`0x50A5DC`/`0x50A5D0` | `"SAVEMOUSE 1/2/3"` |
+  | **`0x4CAFB3`** | **`ebx`** | the PCX loader's path — `"bitmaps\FrontendX.PCX"`, … |
+
+  **`"GUI SURFACE"` (`0x509920`) IS DEAD CODE, and this is the negative result that matters.**
+  At `0x4A906C` it looks exactly like the screen surface's tag, and reading the string at that
+  address "confirms" it. It is the else-arm of a null test the compiler could not fold:
+
+  ```
+  4a9065: lea  eax,[ebp+0x2]     ; the GUIMEMSTRUCT's name field
+  4a9068: test eax,eax
+  4a906a: jne  0x4a9071          ; ALWAYS taken — an address of ebp+2 is never 0
+  4a906c: mov  eax,0x509920      ; "GUI SURFACE" — unreachable
+  4a9071: …
+  4a907b: push eax               ; the tag actually pushed
+  ```
+
+  A trace of a shell session names `"MAINMENU.GUI"`, `"SINGLE.GUI"` and `"SKIRMISH.GUI"` and
+  never once `"GUI SURFACE"`, which is the live half of the same fact. **A string sitting at a
+  `mov` before the `push` is not evidence it is pushed**; this one cost a review a wrong
+  finding and nearly cost this file a correct line.
+
+  **The tags name the surfaces**, and a session's inventory reads (MEASURED): `"OFFSCREEN"
+  640×480` (shell) and `1024×768` (game), one `"<SCREEN>.GUI"` per pushed screen
+  (`MAINMENU.GUI 640×480`, `ARMCOM1.GUI 128×352`, `PREFS.GUI 128×354`, **`VISUALRT.GUI
+  278×354`**, `TALK.GUI 512×33`, …), a `"SAVE UNDER"` per screen, `"SAVEMOUSE 1..3"`,
+  `"FLIPSURFACE" 128×352`, `"BKUPSURFACE" 300×480`, and one `"bitmaps\<name>.PCX" 640×480`
+  per shell background loaded.
+
+  **NO LITERAL TAG BEGINS WITH `bitmaps\`** — checked against all twelve strings above. That
+  is the property, and the only property, that makes the fork's eight-character prefix test
+  (`tag_is_shell_bg`) unable to claim an engine surface by accident.
 - **`SurfaceFree 0x4C6AC0(OFFSCREEN*)`** — `stdcall`, `ret 4`: `if (p && p[+0x2C] & 1)
   0x4D85A0(p)`. Prologue `8B 44 24 04 85 C0`. 23 callers; the GUI's are `0x4A9537`
   (`panel+0xB8`) and `0x4A9549` (`panel+0xBC`) in the teardown arm.
@@ -3559,14 +3599,55 @@ Every handler draws into `[panel+0xBC]` with that object as its context (`ebx=[p
 loader, not by any draw leaf (MEASURED: 307 072 unexplained bytes on `MAINMENU.GUI`'s
 `03D51178 640×480`, zero ops), and read only as a copy source.
 
-Its creation tag is the file path, and the string is **MEASURED**: `0x4C69F0` is handed
-`"bitmaps\FrontendX.PCX"` for the main menu's 640×480 backdrop (trace, 2026-09-21; the other tags
-a shell session creates are `"OFFSCREEN"`, `"<SCREEN>.GUI"`, `"SAVE UNDER"` and `"SAVEMOUSE 1..3"`).
-That tag is what the fork keys `PK_ASSET` on — **the two facts in this paragraph are the whole
-basis for it**: the surface is named after a file, and nothing draws into it, so its bytes are
-decoded source art rather than anything the 1997 rasteriser composed. `op_add` re-checks the second
-one for the surface's whole life rather than trusting it. Until 2026-09-21 the fork carried none of
-this and every shell screen presented its gadgets over black — 3.71 % of the engine's own picture.
+#### `0x4CAF30 PCXLoadToSurface(const char* path)` — where that tag comes from [VERIFIED]
+
+The tag is the file path because **the PCX loader passes its own argument straight through**, and
+that single fact is what the fork's `PK_ASSET` rests on. Disassembled 2026-09-21:
+
+```
+4caf37: mov  ebx,[esp+0x9c]      ; arg0 — the path, held in ebx for the whole function
+4caf41: push ebx
+4caf42: call 0x4bb5b0            ; file open (stdcall, ret 4)  -> ebp = handle
+4caf4b: je   0x4cb06f            ; no file: out
+4caf55: push 0x80 / push buf / push ebp
+4caf5c: call 0x4bb7c0            ; read 0x80 header bytes (stdcall, ret 0xC)
+4caf61: cmp  eax,0x80 ; jne out  ; a short read is not a PCX
+4caf6c: cmp  BYTE [esp+0x24],0xa ; PCX magic
+4caf77: cmp  BYTE [esp+0x25],0x5 ; PCX version 5 (the 256-colour flavour)
+4caf82: esi = [esp+0x2c] - [esp+0x28] + 1     ; xmax - xmin + 1  = width
+        edi = [esp+0x2e] - [esp+0x2a] + 1     ; ymax - ymin + 1  = height
+4cafb0: push edi / push esi / push ebx        ; (tag, w, h)
+4cafb3: call 0x4c69f0            ; SurfaceCreateNamed — THE TAG IS THE PATH
+```
+
+The header offsets land on PCX's `xmin/ymin/xmax/ymax` at `+4/+6/+8/+10` exactly because both
+helpers are **stdcall** (`0x4BB5B0` is `ret 4`, `0x4BB7C0` is `ret 0xC` — checked), so `esp` is
+unchanged across the read and the buffer stays at `esp+0x24`. Had either been cdecl the offsets
+would be 12 bytes off and the reading would be wrong; it is worth saying which, because the
+arithmetic is the whole proof that `esi`/`edi` are a width and a height.
+
+So the tag of `*(GUIMEM+0x24)` is the path only in the sense that **the caller's path string is
+still in `ebx`** — there is no formatting, no copy, no per-surface name. `ptr_ok` plus a bounded
+eight-character compare is therefore the complete test, and the table above is why it cannot
+collide.
+
+Its creation tag is that file path, and the string is **MEASURED** as well as disassembled:
+`0x4C69F0` is handed `"bitmaps\FrontendX.PCX"` for the main menu's 640×480 backdrop, and a
+five-screen shell walk (2026-09-21) names exactly `"bitmaps\FrontendX.PCX"`,
+`"bitmaps\singlebg.PCX"` and `"bitmaps\Skirmsetup4x.PCX"` beside `"OFFSCREEN"`,
+`"MAINMENU.GUI"`/`"SINGLE.GUI"`/`"SKIRMISH.GUI"`, `"SAVE UNDER"` and `"SAVEMOUSE 1..3"` — the
+whole shell inventory, nothing else.
+
+That tag is what the fork keys `PK_ASSET` on — **the two facts here are the whole basis for it**:
+the surface is named after a file, and no observed draw targets it, so its bytes are decoded
+source art rather than anything the 1997 rasteriser composed. `op_add` re-checks the second one
+for the surface's whole life rather than trusting it, **and since 2026-09-21 the census also
+measures whether the check is telling the truth** (`s_assetDrift`: pixels that moved in a surface
+that still claims the tag and whose bytes have already crossed). It reads **0** over a 920 000-flip
+session across five screens. What that does *not* cover is an engine path that re-fills such a
+surface without passing one of the 17 leaves — the loader itself is one, which is the premise —
+so the residual is named rather than closed. Until 2026-09-21 the fork carried none of this and
+every shell screen presented its gadgets over black — 3.71 % of the engine's own picture.
 See [the GUI renderer](gui-renderer.html), "the shell was 3.71 %".
 
 | `id` | handler | `ret` | prologue (steal) | draws through |
