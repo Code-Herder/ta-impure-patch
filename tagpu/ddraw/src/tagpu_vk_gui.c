@@ -274,11 +274,21 @@ static int              s_lutHave;
    the module, grown and never shrunk -- 640x480 in the shell, 614 KB, and the
    shell is the only place tints occur at all.
 
-   IT IS NOT DOUBLE-BUFFERED AND DOES NOT NEED TO BE: every write to it and
-   every read of it is recorded into ONE command buffer in submission order,
-   with a layout transition between each pair, so the copy for tint n+1 cannot
-   overtake the draw that read tint n. That is an ordering inside a queue, not
-   a timing argument. */
+   IT IS NOT DOUBLE-BUFFERED AND DOES NOT NEED TO BE, but the reason is not
+   the one this comment gave until the landing review [CORRECTED, landing 8d].
+   It said "one command buffer", and that is false: the image is module-wide,
+   so every one of `d->slots` in-flight frames records against it and frame
+   N+1's copy is a DIFFERENT command buffer from frame N's draw. What actually
+   orders them is that `vkCmdPipelineBarrier`'s first scope covers everything
+   submitted earlier on the queue, not merely everything earlier in the same
+   buffer -- so the TRANSFER_DST transition that opens tint n+1's copy waits on
+   frame N's fragment reads wherever they were recorded. The write-after-read
+   between consecutive tints is covered by that and by nothing else, and it
+   holds only because the layout genuinely alternates (TRANSFER_DST <-> SHADER
+   READ_ONLY), which keeps `lay_to`'s `*cur == to` early-out from eliding the
+   barrier. It is still an ordering inside a queue rather than a timing
+   argument -- but it is a submission-order one, and a future edit that made
+   the layout idempotent would silently remove it. */
 static VkImage          s_tintImg;
 static VkDeviceMemory   s_tintMem;
 static VkImageView      s_tintView;
@@ -757,8 +767,21 @@ static int tw_colour(const TAGPU_VKPASS* d, TWIN* t)
     VkFramebufferCreateInfo fi = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
     VkImageView att[2];
     if (t->colImg) return 1;
+    /* TRANSFER_SRC IS HERE BECAUSE `tw_to` MOVES BOTH PLANES [FROM REVIEW,
+       landing 8d]. Nothing transfer-reads the colour image -- the tint
+       snapshots only the index plane -- but `tw_to`'s contract is that the
+       two images of a twin share a layout, so a tint on a twin that HAS
+       colour transitions this one to TRANSFER_SRC_OPTIMAL as well, and a
+       barrier to a layout the image was not created for is invalid
+       (VUID-VkImageMemoryBarrier-newLayout-01208). `tw_make` was given the
+       flag when the tint landed and this function was not, which made it a
+       latent fault rather than a live one: nothing on this lane makes a
+       colour twin today (`twin_sprite`/`twin_copy` pass col == 0), so it
+       would have fired on the day Classic++ colour came back, silently and
+       far from this change. */
     if (!mk_image(d, t->w, t->h, VK_FORMAT_R8G8B8A8_UNORM,
-                  VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                  VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                  VK_IMAGE_USAGE_SAMPLED_BIT |
                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
                   &t->colImg, &t->colMem, &t->colView))
         return 0;
@@ -843,7 +866,15 @@ static int build_rp_n(const TAGPU_VKPASS* d, int n, VkRenderPass* out)
                           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     dep[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    /* TRANSFER_READ ON BOTH SIDES [FROM REVIEW, landing 8d]: the tint copies
+       the attachment OUT (`vkCmdCopyImage` with the twin as source) before it
+       draws into it, so a transfer read both precedes a pass and follows one.
+       The explicit `tw_to` barriers are what actually order those today -- the
+       declared dependency was simply silent about a transfer access that
+       exists, which is the sort of gap that becomes a real one the first time
+       someone removes a barrier because "the render pass declares it". */
     dep[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT |
+                           VK_ACCESS_TRANSFER_READ_BIT |
                            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     dep[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                            VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
@@ -856,6 +887,7 @@ static int build_rp_n(const TAGPU_VKPASS* d, int n, VkRenderPass* out)
                           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     dep[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     dep[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT |
+                           VK_ACCESS_TRANSFER_READ_BIT |
                            VK_ACCESS_SHADER_READ_BIT |
                            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     ri.attachmentCount = (uint32_t)n; ri.pAttachments = a;

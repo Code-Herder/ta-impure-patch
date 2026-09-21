@@ -17,12 +17,14 @@
    appendix): +0xBC = the system-memory back buffer every flip presents and
    every NULL-context blit draws into, valid while +0xDC != 0. DrawGameScreen
    makes main+0x37E1B that buffer at 0x468D30; the shell has its own. */
-#define GFX_GLOBALS_PP 0x0051FBD0u
+/* `TA_GFX_PP` comes from inc/tagpu_engine.h, which tagpu_gui_hook.c -- this
+   file's only includer -- includes above it. There is no local spelling of
+   0x51FBD0 any more. [FROM REVIEW, landing 8d.] */
 #define GFX_BACKBUF    0xBC
 #define GFX_BACKBUF_ON 0xDC
 static const int* back_buffer(void)
 {
-    const char* g = *(const char* const*)GFX_GLOBALS_PP;
+    const char* g = *(const char* const*)TA_GFX_PP;
     if (!ptr_ok(g) || *(const int*)(g + GFX_BACKBUF_ON) == 0) return NULL;
     return *(const int* const*)(g + GFX_BACKBUF);
 }
@@ -382,7 +384,10 @@ static int __cdecl before_focus(void* e)
         /* `col` IS THE ROW, not a palette index -- `OP::col` in
            tagpu_gui_hook.c has what the argument means for each of the four
            `rect_box` leaves, and this is the one that means a shade level. */
-        if (s_lastOp) s_lastOp->col = (unsigned char)lvl;
+        /* `edge` IS PART OF THE IDENTITY, not decoration: see `op_same`.
+           A one-pixel-tall rect makes edges 0 and 2 the same box. */
+        if (s_lastOp) { s_lastOp->col = (unsigned char)lvl;
+                        s_lastOp->edge = (unsigned char)k; }
     }
     return 0;
 }

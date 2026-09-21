@@ -319,14 +319,29 @@
 #define VT_BASE            0x004FD5A8u /* destroyed: draws nothing             */
 /* TAProgram (the graphics globals' owner, TA_GFX_PP) */
 #define PROG_LHT           0x0C8       /* u8[32][256] lighten table            */
-#define PROG_CAPS          0x0F0       /* u16: bit5 ALP built, bit7 LHT built  */
+#define PROG_CAPS          0x0F0       /* u16: bit5 ALP built, bit6 SHD built, */
+                                       /* bit7 LHT built. Established by the    */
+                                       /* three in-place setters 0x4BAAD0 /     */
+                                       /* 0x4BAB00 / 0x4BAB30, each of which    */
+                                       /* tests its own bit and refuses to      */
+                                       /* write when it is clear. The bit is a   */
+                                       /* SEPARATE fact from the pointer being  */
+                                       /* non-NULL: 0x4BA660 allocates the LHT  */
+                                       /* and returns without touching this     */
+                                       /* word. Test it before reading a table. */
 
 /* ---- the graphics globals ------------------------------------------------ */
 #define GFX_FONT           0x204        /* the current font object: SetFont 0x4C1420 */
 #define GFX_TEXTFG         0x208        /* its foreground index: SetTextColors 0x4C13A0 */
 #define GFX_SHD            0x0C4        /* u8[32][256] PALETTE.SHD: the shade   */
                                         /* table the Gouraud rasteriser 0x459C70 */
-                                        /* uses; built at init, never rebuilt    */
+                                        /* uses. "Never rebuilt" was WRONG       */
+                                        /* [2026-09-21]: 0x4BAB00 rewrites it IN */
+                                        /* PLACE behind caps bit 6, from         */
+                                        /* 0x42E21B — the same shape as the LHT's */
+                                        /* 0x4BAB30. How often that path runs is */
+                                        /* NOT established; what is established  */
+                                        /* is that the pointer is no identity.   */
 #define GFX_GAMMA          0x614        /* float: the factor 0x4BA200 scales every     */
                                         /* palette entry by (SetGamma 0x4BA590)        */
 

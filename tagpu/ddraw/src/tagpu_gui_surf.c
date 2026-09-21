@@ -101,6 +101,7 @@
    so it reads 0 on almost every frame. */
 #define POLL_MS        500
 #define MAX_TWINS      32
+#define TINT_LOST_MAX  32       /* dropped PK_PIXELS boxes remembered per twin */
 #define ATLAS_DIM      2048
 #define ATLAS_MAX      4096
 #define UI_RESTORE_PRIO 4       /* terrain 0, features 1, effects 2, 3DO units 3 */
@@ -124,6 +125,25 @@ static void slog(const char* s)
 typedef struct TWIN {
     unsigned surf;                      /* the engine surface's pixel base     */
     int w, h;
+    /* THE BOXES THIS PASS DROPPED A `PK_PIXELS` FOR [FROM REVIEW, landing 8d].
+       Only the tint reads them, and only because the tint is the one op whose
+       result depends on what the twin already holds. Cleared at the top of
+       every `drain`, so they mean "in this batch", never "ever".
+
+       PER BOX AND NOT PER SURFACE, which the first cut of this guard got
+       wrong and the measurement caught: SKIRMISH.GUI's player-colour swatches
+       fall to `PK_PIXELS` on the SAME surface as the focus rings, so a
+       surface-wide flag declined 2.4 M tints for drops nowhere near them and
+       put that screen back at its pre-landing 98.95 %. What makes a tint
+       unsafe is that the box it is about to READ was not repainted, so the
+       box is the unit of the test.
+
+       Past `TINT_LOST_MAX` the extras are merged into the last slot. A union
+       is a SUPERSET of the boxes it replaces, so a tint that intersects any
+       of them still intersects the union: the overflow costs precision and
+       cannot cost soundness, and the array needs no second state. */
+    int nLost;
+    int lost[TINT_LOST_MAX][4];
 } TWIN;
 static TWIN   s_twins[MAX_TWINS];
 static int    s_ntwins = 0;
@@ -141,6 +161,15 @@ static unsigned s_drained = 0, s_sprites = 0, s_copies = 0, s_pixels = 0, s_seed
    sees that the traffic did not stop, the CARRYING did. */
 static unsigned s_pixDropped = 0;
 static unsigned s_assets = 0;          /* PK_ASSET ops carried into a twin     */
+/* TINTS THE DRAIN DECLINED, BY REASON [FROM REVIEW, landing 8d]. `tintdrop`
+   is no twin or no table -- the comment on the case below says that cannot
+   happen, so a non-zero here is that comment being wrong and the whole point
+   of spending four bytes on it. `tintstale` is the one that is EXPECTED to be
+   non-zero on a screen whose paint falls back to `PK_PIXELS`: the tint was
+   declined because the pixels under it were, which is the compounding guard
+   and not a fault. Two counters and not one, because "the table never came"
+   and "the paint under it went" are opposite bugs. */
+static unsigned s_tintDrop = 0, s_tintStale = 0;
 /* SOLID RECTANGLES REPLAYED AS GEOMETRY, counted beside `pixels=` so the two
    can be read against each other: every one of these used to be a `PK_PIXELS`
    box of arena bytes. [The vulkan-only plan, landing 8a.] */
@@ -264,12 +293,13 @@ static float  s_hudS = 1.0f;            /* HUD scale in force this frame (20); 1
 
    ----------------------------------------------------------------- shaders */
 /* a quad in surface pixels -> the twin's FBO (row 0 = surface row 0) */
-/* THESE NINE ARE A BUILD INPUT, NOT CODE THIS FILE RUNS. With the GL half gone
+/* THESE TEN ARE A BUILD INPUT, NOT CODE THIS FILE RUNS. With the GL half gone
    [landing 11-4b] nothing here references them -- but `tools/spirv-gen.py` reads
    them out of the PREPROCESSED translation unit and generates
    `inc/spirv/tagpu_gui_surf.spv.h`, which `tagpu_vk_gui.c` includes and draws
-   with. This file holds more of them than any other: all seven `gui_*` programs
-   of the PROGRAMS table are built from this pair-set. Deleting them fails the
+   with. This file holds more of them than any other: all eight `gui_*` programs
+   of the PROGRAMS table are built from this pair-set (`TINT_FS` made it ten
+   strings and eight programs -- landing 8d). Deleting them fails the
    build loudly ("the manifest names tagpu_gui_surf::QVS and the source does not
    have it") rather than silently, but they must not be deleted at all. The
    pragma is local and paired; `__attribute__((unused))` also works, as a PREFIX
@@ -1227,10 +1257,26 @@ static void mir_box(TAGPU_GUIOP* m, const TAGPU_PUBOP* o)
     m->sl = o->sl; m->st = o->st;
 }
 
+/* DOES THIS TINT READ A BOX THIS PASS FAILED TO REPAINT? Inclusive on every
+   edge, which is the convention `mir_box` carries and the one the Vulkan lane
+   reads back (`extent = x1 - x0 + 1`). Erring inclusive is erring toward
+   declining a tint, which costs one frame of glow and never compounds. */
+static int tint_over_lost(const TWIN* t, const TAGPU_PUBOP* o)
+{
+    int k;
+    for (k = 0; k < t->nLost; k++) {
+        const int* L = t->lost[k];
+        if (o->l <= L[2] && o->r >= L[0] && o->t <= L[3] && o->b >= L[1]) return 1;
+    }
+    return 0;
+}
+
 static void drain(void)
 {
     unsigned tail = g_guiq.qTail, head = g_guiq.qHead;
     int budget = 20000;                    /* ops per present: a burst is many flips */
+    int ti;
+    for (ti = 0; ti < s_ntwins; ti++) s_twins[ti].nLost = 0;
     while (tail != head && budget-- > 0) {
         const TAGPU_PUBOP* o = &g_guiq.ops[tail & (TAGPU_GUI_QCAP - 1)];
         TWIN* t;
@@ -1362,7 +1408,29 @@ static void drain(void)
                regions simply do not draw, visibly, which is the whole reason
                for cutting rather than levering. */
             t = twin_find(o->surf);
-            if (t && o->alen) s_pixDropped++;
+            /* THE TINT'S DESTINATION JUST STOPPED MATCHING THE ENGINE'S, and
+               the tint is the only op that cares [FROM REVIEW, landing 8d].
+               Every other kind overwrites its box, so a dropped neighbour
+               costs one wrong region until the next repaint paints it again.
+               A tint READS the box, so applying one over a box we did not
+               repaint folds this frame's error into next frame's input:
+               `LUT[LUT[x]]`, then `LUT^3[x]`, with nothing short of a
+               `PK_RESET` to unwind it. Declining the tint instead leaves the
+               twin at its last CONSISTENT state, which is the same thing the
+               dropped pixels themselves leave there. */
+            if (t) {
+                if (t->nLost < TINT_LOST_MAX) {
+                    int* L = t->lost[t->nLost++];
+                    L[0] = o->l; L[1] = o->t; L[2] = o->r; L[3] = o->b;
+                } else {                      /* merge: a union is a superset */
+                    int* L = t->lost[TINT_LOST_MAX - 1];
+                    if (o->l < L[0]) L[0] = o->l;
+                    if (o->t < L[1]) L[1] = o->t;
+                    if (o->r > L[2]) L[2] = o->r;
+                    if (o->b > L[3]) L[3] = o->b;
+                }
+                if (o->alen) s_pixDropped++;
+            }
             break;
         case PK_BAR:
             /* A SOLID RECTANGLE, filled with one palette index and fully
@@ -1424,7 +1492,13 @@ static void drain(void)
                this build, and the answer is to draw nothing rather than to
                index a table of zeros. */
             t = twin_find(o->surf);
-            if (t && s_shadeHave) {
+            if (!t || !s_shadeHave) { s_tintDrop++; break; }
+            /* SEE `PK_PIXELS` ABOVE: not over a box this batch failed to
+               repaint. A tint is the only op here that reads its own
+               destination, so it is the only one that may not run against a
+               destination we know is wrong. */
+            if (tint_over_lost(t, o)) { s_tintStale++; break; }
+            {
                 TAGPU_GUIOP* m;
                 m = mir_op();
                 if (m) { m->kind = TAGPU_GUIOP_TINT; mir_box(m, o); m->fg = o->fg; }
@@ -2482,7 +2556,7 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
            values these carry, not on a double). It is now 438 literals and 72
            conversions, worst case 1232 against a 1280-byte buffer: 48 bytes of
            headroom, which is FOUR `%u`s. Count it again when you add one. */
-        char b[1280];
+        char b[1344];
         int palDiffAt, palDiff = tagpu_pal_diff(&palDiffAt);
         static LARGE_INTEGER t0, fq;
         LARGE_INTEGER t1;
@@ -2496,8 +2570,8 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u pixdrop=%u assets=%u bars=%u rects=%u tints=%u/%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u gafnoplane=%u gafreseed=%u gafscratch=%u/%u/%u strrearm=%u glyscratch=%u/%u gfont=%u/%u/%u/%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
-                  s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_pixDropped, s_assets, s_bars, s_rects, s_tints, s_shadeSerial, s_clears,
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u pixdrop=%u assets=%u bars=%u rects=%u tints=%u/%u/%u/%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u gafnoplane=%u gafreseed=%u gafscratch=%u/%u/%u strrearm=%u glyscratch=%u/%u gfont=%u/%u/%u/%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
+                  s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_pixDropped, s_assets, s_bars, s_rects, s_tints, s_shadeSerial, s_tintDrop, s_tintStale, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.gafnoplane, g_guiq.gafreseed, g_guiq.gafhigh, g_guiq.gaflost, g_guiq.gafbaddec, g_guiq.strrearm, g_guiq.glyhigh, g_guiq.glylost, pGlyphs, pResends, pRefused, pRecycles, g_guiq.stalls,
                   s_skipped, tagpu_pal_changes(), palDiff, palDiffAt, tagpu_pal_presented(),
                   tagpu_classicpp_on() ? 1 : 0, tagpu_classicpp_assets() ? 1 : 0,

@@ -49,6 +49,7 @@
 #include "tagpu_terrown.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_packet_pub.h"
+#include "../inc/tagpu_engine.h"
 #include "../inc/dd.h"
 #include "../inc/tagpu.h"
 #include "tagpu_trigger.h"
@@ -526,6 +527,15 @@ typedef struct OP {
     unsigned gboff; unsigned short gblen;
     unsigned char frows; signed char fyoff;
     unsigned fgen;
+    /* WHICH OF THE FOUR EDGES OF ITS FOCUS RECTANGLE THIS IS (0..3), and it
+       exists to be part of the op's IDENTITY [FROM REVIEW, landing 8d].
+       `0x4BF7B0` draws four edges of one box, and at `t == b` the top edge
+       (l,t)-(r,t) and the bottom edge (l,b)-(r,b) carry byte-identical
+       boxes -- the engine draws both, and since a tint READS its destination
+       (`0x4CC8DF` stores `LUT[row*256 + dst]`) two of them are `LUT[LUT[x]]`
+       and not a slower route to `LUT[x]`. Without this `dedup` collapsed them.
+       Only `OP_FOCUS` sets or reads it. */
+    unsigned char edge;
     unsigned char dup;                          /* an identical op follows: dropped */
 } OP;
 /* ---- THE UI FONTS, AS IDENTITIES AND BITS (landing 4c) -------------------
@@ -1115,10 +1125,12 @@ static int pub_seed(SURF* s)
    we are about to read 8 KB through and is NOT the safety argument; the
    argument is that this is an init-time allocation the engine holds for the
    process and hands to its own rasteriser on the same thread we are on. */
-#define TA_GFXPP   0x0051FBD0u   /* the graphics globals -- `0x4B6220` returns it */
-#define GFX_LHT    0x0C8         /* u8[32][256], the LIGHTEN table                */
+/* THE ADDRESSES COME FROM `tagpu_engine.h` (`TA_GFX_PP`, `PROG_LHT`,
+   `PROG_CAPS`), not from private copies here. This file is a `publisher` in
+   `thread-split.allow`, so it may include that header, and a second spelling
+   of `0x51FBD0` in a file that already reaches it twice is how two copies of
+   one fact drift apart. [FROM REVIEW, landing 8d.] */
 static unsigned char s_lht[TAGPU_GUI_SHADE_BYTES];
-static const unsigned char* s_lhtPtr = NULL;
 static int      s_lhtOk = 0;
 static int      s_lhtSent = 0;        /* crossed since the last reset          */
 static unsigned s_lhtCopies = 0;
@@ -1133,13 +1145,43 @@ static int pub_shade(void)
     const unsigned char* t;
     TAGPU_PUBOP* o;
     unsigned char* dst;
-    g = *(const char* const*)TA_GFXPP;
+    g = *(const char* const*)TA_GFX_PP;
     if (!ptr_ok(g)) return 0;
-    t = *(const unsigned char* const*)(g + GFX_LHT);
+    /* THE ENGINE'S OWN PRECONDITION, AND IT IS A BOUND AND NOT A PROBE
+       [FROM REVIEW, landing 8d]. `PROG_CAPS` bit 7 is the graphics globals'
+       "the lighten table is there" flag, and it is the engine's own gate on
+       this exact buffer: the in-place setter `0x4BAB30` tests `[globals+0xF0]`
+       bit 7 and returns without writing when it is clear, exactly as
+       `0x4BAB00` does for the darken table on bit 6 and `0x4BAAD0` for the
+       alpha table on bit 5. Its siblings' shape is the proof of what the bit
+       means. Without this test an allocation that exists but has not been
+       filled yet -- `0x4BA660` allocates the 8192 bytes and returns 1 without
+       touching the caps word, so the two are separate events -- is copied as
+       though it were a table, and because the latch below used to key on the
+       POINTER the mistake was permanent: the engine fills the same buffer, so
+       a re-read never fired and every focus glow for the session remapped
+       through whatever those bytes held. `tagpu_packet_pub.c`'s
+       `lht_snapshot` has always had this test; this function was written from
+       it and dropped it. `0x4BEC70` itself does NOT test the bit -- it null-
+       checks and draws -- so the engine will happily draw through an unbuilt
+       table and we deliberately will not. */
+    if (!(*(const unsigned short*)(g + PROG_CAPS) & 0x80u)) return 0;
+    t = *(const unsigned char* const*)(g + PROG_LHT);
     if (!ptr_ok(t)) return 0;
-    if (t != s_lhtPtr || !s_lhtOk) {
+    /* KEYED ON THE CONTENT, NOT ON THE POINTER [FROM REVIEW, landing 8d].
+       `0x4BAB30` is reached from `0x42E2AB`, which loads PALETTE.LHT into a
+       heap buffer, `rep movsd`s 0x800 dwords of it straight into
+       `[globals+0xC8]` and frees the source at `0x42E2B1` -- an IN-PLACE
+       rewrite that leaves the pointer exactly where it was. A latch keyed on
+       the pointer cannot see it, and `lhtcopies=1` would have read as proof
+       that nothing changed. Comparing the bytes we are about to rely on is
+       the same 8 KB read either way and needs no argument about how many
+       times that path can run. The read is ordered against the rewrite by
+       being on the same thread: `0x42E2AB` and this observer are both game
+       thread, so the engine cannot be mid-`rep movsd` while we are here. */
+    if (!s_lhtOk || memcmp(s_lht, t, sizeof s_lht) != 0) {
         memcpy(s_lht, t, sizeof s_lht);
-        s_lhtPtr = t; s_lhtOk = 1; s_lhtCopies++;
+        s_lhtOk = 1; s_lhtCopies++;
         s_lhtSent = 0;                 /* a different table is a different fact */
     }
     if (s_lhtSent) return 1;
@@ -1539,6 +1581,19 @@ static int op_same(const OP* a, const OP* b)
        collapsing two draws over the same rectangle was exactly right — the
        later read carried both. A string op carries the string, so dropping the
        earlier one would drop whatever ink of it the later one does not cover. */
+    /* A TINT COLLAPSES ACROSS FLIPS AND NEVER WITHIN ONE CALL [FROM REVIEW,
+       landing 8d]. Across flips the collapse is right for the same reason it
+       is right for every other kind: the engine REPAINTS the gadget before it
+       tints it again, so the last flip's paint-then-tint is the whole of what
+       the batch leaves on screen. What must not collapse is two edges of the
+       SAME call, which have no repaint between them -- so the edge ordinal is
+       part of the identity. `col` is here too: it is the shade ROW, and two
+       rings at different levels over one box are two different pictures.
+       (Measured both ways: exempting `OP_FOCUS` from `dedup` outright put
+       SINGLE.GUI at 99.75 %, over-tinting a gadget whose repaint collapsed
+       while its tints did not.) */
+    if (a->kind == OP_FOCUS)
+        return a->edge == b->edge && a->col == b->col;
     if (a->kind == OP_TEXT)
         return a->slen == b->slen && a->dx == b->dx && a->dy == b->dy &&
                a->fg == b->fg && a->bg == b->bg && a->tr == b->tr &&
@@ -3132,7 +3187,7 @@ static void chrome_emit(struct SURF* fs)
 
     ta = *(const char* const*)TA_MAINPP;
     if (!ptr_ok(ta)) return;
-    gfx = *(const char* const*)GFX_GLOBALS_PP;
+    gfx = *(const char* const*)TA_GFX_PP;
     if (!ptr_ok(gfx)) return;
     h = *(const int*)(gfx + GFX_SCREEN_H);
     w = *(const int*)(gfx + GFX_SCREEN_W);

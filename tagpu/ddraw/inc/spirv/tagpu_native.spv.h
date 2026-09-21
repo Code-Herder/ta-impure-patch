@@ -4,7 +4,7 @@
  * truth is the GLSL string in that file; this is its translation, and
  * `make` fails if the two have drifted (tools/spirv-check.sh).
  *
- * transform efb157ecda6c0524
+ * transform 9ca87ffa3b79de4d
  */
 #ifndef TAGPU_SPIRV_TAGPU_NATIVE_H
 #define TAGPU_SPIRV_TAGPU_NATIVE_H
