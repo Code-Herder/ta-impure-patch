@@ -14810,18 +14810,34 @@ an oracle rather than instrumentation, which is why it stays.
   in one engine call but delivered through two gates, and the render thread takes the packet
   first — so a frame can draw packet D-1 against reference D (above). A comparison that depends
   on the pairing compares the two numbers itself.
-* **Whether a level teardown can reach us on a FOREIGN thread is not settled, and two places in
-  the tree answer it differently.** It matters because the capture's level stamp and the drop's
-  placement both hang on it. `tagpu_reclaim.c`'s `reclaim_teardown_post` — which calls
-  `tagpu_packet_pub_level_end`, and so our `tagpu_surf_level_end` — has **no thread check at
-  all**, and its header says "on entry to `0x491B60` (game thread)" as a statement rather than a
-  guard; twelve lines above it, `reclaim_template_free` *does* check, and counts a foreign caller
-  with the comment "never seen: `0x42DB90` is game-thread only". Meanwhile
-  `tagpu_packet_pub_level_end` keeps a foreign-thread branch and a `foreign=` counter, which is
-  why this landing moved the drop above the thread test at all. Measured `foreign=0` across every
-  session to date. **So either the foreign branch is dead code, or the thread check twelve lines
-  up is the one that is wrong — and one of the two sentences in the tree is false.** This landing
-  does not settle it; it is written so that the answer does not change the outcome (the level is
-  stamped before the copy and a straddling capture is discarded, which is correct either way).
-  Settling it is a `0x491B60` caller survey, and it should be done before anyone leans on either
-  sentence.
+* **SETTLED 2026-09-20, the same day it was raised: the level teardown is GAME-THREAD ONLY on
+  every path that exists in the shipped binary** — so the reference's level stamp, the drop's
+  placement and reclaim's unguarded hooks all rest on a fact now rather than on a comment. The
+  survey is in [exe-reverse-engineering](exe-reverse-engineering.html), *Who enters `0x491B60`*;
+  the short form:
+  * `0x491B60`'s **address is never taken anywhere in the image**, so its entry set is closed:
+    six direct calls and nothing else.
+  * **Three of the six are dead code.** They live in `0x499100`, which has exactly one control
+    transfer into it in all of `.text` — a call from inside itself — and no address-taken
+    reference. It can only recurse, and nothing can make the first call.
+  * Of the three live sites, one traces statically to the in-game frame callback `0x496790`
+    (the game thread). The other two are the in-game menu's quit and restart paths, which go
+    through TA's gadget dispatch and so cannot be traced statically — they were **measured**
+    instead: four teardowns over two distinct UI paths, all on the game thread, with the loader
+    thread alive on a different id at the same moment.
+  * The process has exactly **three** threads (`CreateThread` is the only creation import), and
+    the one foreign thread that touches game state — the loader, `0x497C70` → `0x497180` — has
+    no control path to the teardown at all.
+* **The two sentences that looked contradictory were answering different questions.**
+  `reclaim_template_free` checks the thread because it *has* a fallback: hand the block to the
+  system free. The teardown hooks have none — the pre hook's job is to quiesce the render thread
+  and flush the ring, the post hook's is to free what the cascade queued — so an early return on
+  a foreign thread would leave the reader unquiesced and the deferral state wrong. **A guard
+  there would convert a question about identity into a real fault.** The right answer was to
+  measure, which is what `tdforeign=` and the thread id in the teardown line now do on every run,
+  including configurations this session cannot reproduce.
+* **Two guards in the golden-source path are therefore belt-and-braces, and stay.** The drop
+  sitting above `tagpu_packet_pub_level_end`'s thread check cannot matter on today's binary, and
+  the straddle discard can never fire — one thread cannot be inside `take_into` and in the
+  teardown at once, which is why `straddle=0` and always will be. Both are one compare, and both
+  keep the module correct without depending on this survey staying true.

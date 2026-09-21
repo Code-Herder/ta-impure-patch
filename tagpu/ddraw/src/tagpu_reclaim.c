@@ -136,6 +136,24 @@ static volatile DWORD s_owner_tid;         /* the game thread, when the fork has
 static int   s_foreign_logged;
 
 /* counters: written on the game thread, read racily by the render thread's log */
+/* WHICH THREAD THE TEARDOWN CAME IN ON, MEASURED RATHER THAN ASSERTED. Two
+   places in this file used to answer that differently: `reclaim_template_free`
+   below CHECKS and falls back, while both teardown hooks simply said "game
+   thread" in a comment. The landing review asked which was right; this is the
+   instrument that answers it, on every run and on machines this session cannot
+   reproduce (multiplayer, a campaign defeat, an alt-tabbed load).
+
+   A GUARD HERE WOULD BE WRONG, WHICH IS WHY THERE IS NONE. The pre hook's job
+   is to publish `s_teardown`, wait for the render thread to leave its pass and
+   flush the ring; the post hook's is to free what the cascade queued. Neither
+   has a meaningful "not my thread, do nothing" branch -- returning early would
+   leave the reader unquiesced and the deferral state wrong, i.e. it would
+   convert a question about identity into a real fault. `reclaim_template_free`
+   can check because it HAS a fallback (hand the block to the system free);
+   these two do not. So the code does its work on whoever calls it, and says
+   loudly if that was ever not the game thread. */
+static volatile DWORD    s_tdTid;          /* the thread that entered 0x491B60 */
+static volatile unsigned s_cTdForeign;
 static volatile unsigned s_cDeferred, s_cDrained, s_cOverflow, s_cForeign,
                          s_cFlushed, s_cHeld, s_cHigh, s_cTeardowns,
                          s_cTmpl, s_cTmplFreed, s_cTmplLeaked;
@@ -276,6 +294,9 @@ static void __cdecl reclaim_teardown_pre(void)
     unsigned n = 0, busy = 0;
     char b[200];
 
+    s_tdTid = GetCurrentThreadId();
+    if (s_tdTid != (g_ddraw.gui_thread_id ? g_ddraw.gui_thread_id : s_owner_tid))
+        s_cTdForeign++;
     InterlockedExchange(&s_teardown, 1);       /* fence: visible before we look */
     t0 = GetTickCount();
     while (s_completed != s_started) {         /* the reader is inside a pass */
@@ -292,9 +313,12 @@ static void __cdecl reclaim_teardown_pre(void)
     }
     s_cTeardowns++;
     _snprintf(b, sizeof b,
-              busy ? "reclaim: level teardown (gen %u -> %u): reader still in its pass after %u ms — %u queued object(s) KEPT, the cascade's frees deferred"
-                   : "reclaim: level teardown (gen %u -> %u): flushed %u queued object(s), reader idle; the cascade frees synchronously",
+              busy ? "reclaim: level teardown (gen %u -> %u) on thread %u (game %u%s): reader still in its pass after %u ms — %u queued object(s) KEPT, the cascade's frees deferred"
+                   : "reclaim: level teardown (gen %u -> %u) on thread %u (game %u%s): flushed %u queued object(s), reader idle; the cascade frees synchronously",
               (unsigned)s_levelGen, (unsigned)s_levelGen + 1u,
+              (unsigned)s_tdTid,
+              (unsigned)(g_ddraw.gui_thread_id ? g_ddraw.gui_thread_id : s_owner_tid),
+              s_cTdForeign ? " — FOREIGN, see tagpu_reclaim.c" : "",
               busy ? RC_TEARDOWN_WAIT_MS : n, (unsigned)(s_tail - s_head));
     rlog(b);
 }
@@ -374,7 +398,15 @@ static void __cdecl reclaim_teardown_post(void)
        thousands of times a second but no in-play frame exists until the next
        level's loader has finished, so without it the renderer would keep the
        dead level's last packet and draw it over the menus and the loading
-       screen. Game thread, like everything in this hook. */
+       screen.
+
+       ON WHATEVER THREAD ENTERED 0x491B60, and that is now recorded rather
+       than claimed (`s_tdTid`, the pre hook, and the teardown log line). It
+       said "game thread, like everything in this hook" as an assertion, which
+       is what the landing review objected to. The callee is built for it: its
+       first act is the golden source's drop, one atomic increment that needs
+       no thread identity, and it then tests the thread itself and declines to
+       publish if it is not the game thread's. */
     tagpu_packet_pub_level_end((unsigned)s_levelGen);
     InterlockedExchange(&s_teardown, 0);
 }
@@ -419,12 +451,12 @@ void tagpu_reclaim_pass_end(unsigned frame_counter)
     if (!s_installed) return;
     InterlockedExchange(&s_completed, s_started);       /* after the last engine read */
     if (frame_counter - last >= 300) {
-        char b[200];
+        char b[224];
         last = frame_counter;
         _snprintf(b, sizeof b,
-                  "reclaim: def=%u drn=%u queued=%u hw=%u ovf=%u foreign=%u flushed=%u held=%u teardowns=%u tmpl=%u/%u/%u pass=%ld",
+                  "reclaim: def=%u drn=%u queued=%u hw=%u ovf=%u foreign=%u tdforeign=%u flushed=%u held=%u teardowns=%u tmpl=%u/%u/%u pass=%ld",
                   s_cDeferred, s_cDrained, (unsigned)(s_tail - s_head), s_cHigh, s_cOverflow,
-                  s_cForeign, s_cFlushed, s_cHeld, s_cTeardowns,
+                  s_cForeign, s_cTdForeign, s_cFlushed, s_cHeld, s_cTeardowns,
                   s_cTmpl, s_cTmplFreed, s_cTmplLeaked, (long)s_completed);
         rlog(b);
     }

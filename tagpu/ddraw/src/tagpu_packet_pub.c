@@ -1960,10 +1960,21 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
     s_levelGen++;
     /* THE GOLDEN SOURCE'S DROP IS ABOVE THE THREAD CHECK, and deliberately
        [the landing review]. It was below it, so a teardown seen on a foreign
-       thread -- which this function counts and returns from -- left the
+       thread -- which this function counts and returns from -- would leave the
        previous level's reference live with no line saying so. The level ended
        whoever noticed; the drop is one atomic increment and needs no thread
-       identity, and the render thread is what acts on it. */
+       identity, and the render thread is what acts on it.
+
+       THAT BRANCH IS UNREACHABLE ON TODAY'S BINARY and this line is therefore
+       belt-and-braces -- said so that nobody reads it as evidence that a
+       foreign teardown happens. The survey is in exe-reverse-engineering.md,
+       "Who enters 0x491B60": the teardown's address is never taken, three of
+       its six call sites are in code nothing can enter, and the loader thread
+       has no path to it; measured on four teardowns over two UI paths, all on
+       the game thread. The other provider of this function, `after_teardown`
+       below, is game-thread-only by construction (its `before` returns 0 off
+       the game thread, and the stub skips the `after` when it does). One
+       atomic increment is worth not having to re-derive that. */
     tagpu_surf_level_end();
     if (!on_game_thread()) {
         s_cForeign++;

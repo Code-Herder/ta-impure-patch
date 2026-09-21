@@ -90,12 +90,16 @@ static unsigned s_serial = 1;           /* monotonic across both buffers      */
 static unsigned s_palSerial = 1;
 static unsigned s_dropReq;              /* game -> render: the level ended    */
 static unsigned s_captures, s_unchanged, s_refused, s_norequest;
-/* CAPTURES THROWN AWAY BECAUSE A TEARDOWN LANDED WHILE THEY RAN. It should be
-   0, and it is also the instrument for an open question the tree does not
-   answer: this can only be non-zero if a level teardown reaches us on a thread
-   that is NOT the one copying, i.e. a foreign-thread teardown -- which
-   `tagpu_reclaim.c` guards against in one function and not in the one that
-   calls us. A single count here settles it. */
+/* CAPTURES THROWN AWAY BECAUSE A TEARDOWN LANDED WHILE THEY RAN. It is 0, and
+   on today's binary it CANNOT be anything else: this can only fire if a level
+   teardown arrives on a thread that is not the one copying, and the teardown
+   `0x491B60` was surveyed on 2026-09-20 and is game-thread only -- its address
+   is never taken, three of its six call sites are in unreachable code, and the
+   one foreign thread that touches game state (the loader) has no path to it
+   (exe-reverse-engineering.md, "Who enters 0x491B60"). The test stays because
+   it is one compare and it keeps this module correct without depending on that
+   survey staying true; the counter stays because it is the thing that would
+   say so if it ever stopped being. */
 static unsigned s_straddle;
 /* THE ORACLE, armed on the render thread and read on both. `s_reread` is the
    direct test of THIS landing's invariant and `s_dumpArm` is how anyone looks

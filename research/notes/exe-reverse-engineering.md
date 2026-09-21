@@ -479,6 +479,46 @@ load flags", traced 2026-09-12) — allocates in this order: `0x471D90` layers
 the unit array (`0x4918D4`), and later `0x4669B0` the minimap (`0x4919C3`). Between the two the
 render thread is live: the reclaim post hook clears its flag as soon as `0x491B60` returns.
 
+#### Who enters `0x491B60`, and on which thread — the closed caller survey
+
+*[BINARY-VERIFIED 2026-09-20, and MEASURED the same day. Settled because the fork's teardown
+hooks do real work on whatever thread calls them, so "game thread" had to be a fact rather than
+a comment — `tagpu_reclaim.c`, and gpu-status §2.82.]*
+
+**The entry set is closed.** `0x491B60`'s address is never taken: scanning the whole image for
+the 32-bit constant `0x00491B60` finds nothing in `.text`, `.rdata` or `.data`, so it cannot be
+reached through a function pointer, a vtable or a dispatch table. Every entry is a direct
+`E8`, and there are exactly **six**:
+
+| call site | in function | status |
+| --- | --- | --- |
+| `0x460630` | `0x4604A0` | **live** — the in-game menu's quit path |
+| `0x491C6A` | `0x491C60` | **live** — a three-call shutdown stub (`0x4257A0`, `0x451B60`, then the teardown); its only caller is `0x460626`, also inside `0x4604A0` |
+| `0x49262C` | `0x491EC0` | **live** — four callers; traces by direct calls to `0x493060 ← 0x41EAA0 ← 0x41F0A0 ← 0x41F630 ← 0x426E80 ← 0x496790`, the in-game frame callback, i.e. the **game thread** |
+| `0x4996AA`, `0x49971D`, `0x4997AF` | `0x499100` | **DEAD CODE — these three never execute** |
+
+**`0x499100` is unreachable.** Counting every control transfer in `.text` — `E8`, `E9`, `EB` and
+the `0F 8x` conditionals — exactly **one** targets `0x499100`, and it is `0x4993AC`, *inside
+`0x499100` itself*. Its address is never taken either. So nothing can make the first call: the
+function can only recurse, and never starts. Half the teardown's apparent call sites are in it.
+
+**Only three threads exist in the process.** `CreateThread` is the sole thread-creation import —
+no `_beginthread`/`_beginthreadex`, no `TerminateThread` — and it has three call sites
+(`0x4DA27A`, `0x4E616E`, `0x4E780C`). The only foreign thread that touches game state is the
+**loader** (`0x497C70` → body `0x497180`, created through the `0x4E7850` CRT wrapper), and it
+has **no control path of any kind** to `0x491B60`.
+
+**Measured, because the two live menu sites go through TA's gadget dispatch and so cannot be
+traced statically.** Four teardowns over two distinct UI paths — EXITMENU→MAINMENU ×3 and
+EXITMENU→RESTART ×1 — all entered `0x491B60` on the **game thread** (560), with the loader thread
+alive on a different id (588, then 648) at the same time. Plus 50 teardowns across the 299
+surviving instance logs, with zero foreign level-ends ever recorded. The fork now names the
+thread in its teardown line and carries `tdforeign=` in the reclaim heartbeat, so this is
+re-checked on every run, including configurations that session could not reproduce.
+
+**Conclusion: the level teardown is game-thread-only on every path that exists in the shipped
+binary.**
+
 | Field | What | Published by the load | Freed / nulled by the teardown |
 | --- | --- | --- | --- |
 | `main+0x14351` | the unit array's **slot count**, `u16` = `10·[main+0x37EE6] + 1` (the name is <span class="pill pill-warn">INFERRED</span>; the arithmetic is not) | `0x4854EF`, **before** `begin` | untouched |
