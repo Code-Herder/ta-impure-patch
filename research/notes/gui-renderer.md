@@ -87,31 +87,58 @@ ARM or CORE when it built the screen. Panel rect `(0,128)-(127,479)` against the
 other on only 7.4 % of pixels.
 
 **THE SAME SHAPE BITES EVERY STATIC PIECE OF THE IN-GAME HUD, and the emblem was one instance of
-a family** **[MEASURED 2026-09-21]**. The engine is retained everywhere: it draws a thing when
-the thing changes and then remembers it in the offscreen. Our op stream is a replay, so a reset
-loses anything the engine will not redraw on its own. Three cases were separated:
+a family** **[MEASURED AND FIXED 2026-09-21]**. The engine is retained everywhere: it draws a
+thing when the thing changes and then remembers it in the offscreen. Our op stream is a replay,
+so a reset loses anything the engine will not redraw on its own. Three cases, all closed:
 
-- **The resource bars and their six numbers are NOT broken.** They publish through leaves we
-  already have — `0x4BF6F0` (the `bar` leaf, twice) and `0x4C14F0` → `0x4CCF60` (the `text` leaf,
-  three times), all inline in `DrawGameScreen` at `0x468E40..0x4692C0`. A probe at `(300, 13)`
-  caught `bar box=(218,12)-(344,14)` eight times, every one of them **before** the session's
-  last reset. They looked missing only because a fresh skirmish starts with metal and energy
-  **pinned at the 100000 storage cap** (`+1.0/-0.0`, `+25/-1`), so nothing changes, so the engine
-  redraws nothing. Spend anything and the whole block comes back: after one Solar Collector the
-  top bar read `99962 / +1.0 / -17.4` and `99864 / +25 / -91` with both fills painted, 98 % identical
-  to the golden source (the remainder being the two captures' different instants). The residual is
-  real but narrow: after a reset the last-drawn state is gone until a value next moves.
+- **The resource bars and their six numbers.** They publish through leaves we already have —
+  `0x4BF6F0` (the `bar` leaf, twice) and `0x4C14F0` → `0x4CCF60` (the `text` leaf, three times),
+  all inline in `DrawGameScreen` at `0x468E40..0x4692C0`. What stops them is a **33-byte memo at
+  `main+0x37E3F`**: the block seeds a stack local from it, overwrites the live fields, `repz
+  cmpsb`s the 33 bytes against it at `0x468FD9` and **skips the whole block when they match**
+  (`je 0x469610` at `0x468FDB`); only a difference makes it copy the fresh state back
+  (`0x468FEC`) and draw. A fresh skirmish pins metal and energy at the 100000 storage cap, so
+  nothing changes, so it draws once and never again — and a reset then loses the bars and all six
+  numbers for the rest of the level. The memo has **exactly two references in the whole binary**,
+  `0x468E51` and `0x468FC6`, both inside this block: a display memo, not sim state. `hud_invalidate`
+  poisons **byte 0** of it on the same reset debt the chrome and panel use — the one byte the
+  block overwrites (`0x468E7F`, from the player record) and never reads back, unlike bytes 1..4
+  which `flds 0x79(%esp)` reads at `0x468E7B` as the number's animation state. So the poke changes
+  the comparison and nothing displayed; poisoning the animated bytes would have made the numbers
+  converge from a value we invented. A poison equal to the byte the block would compute compares
+  equal, so the debt is kept and the poison is **complemented** on the retry — the fresh byte
+  cannot equal both `x` and `~x`, which bounds it at two pokes.
 - **`0x468CF0` is NOT a callable repainter.** It is `DrawGameScreen` itself, running to `0x46A3FD`
   (`ret 8`) with the flip inline at `0x46A3DB`, four callers (`0x495C76`, `0x495E66`, `0x4962C2`,
-  `0x4969CD`). The resource block is inline in it, not a function, so there is no `0x4A81E0`-style
-  entry point to re-fire for the top bar the way `repaint_service` does for the GUI screen.
-  [NEGATIVE RESULT — recorded because the shape of the emblem fix suggests this and it does not work.]
-- **The player badge is a genuine hole, and not a reset one.** The 21×21 colour badge at
-  `(132,5)-(152,25)` is drawn by `GAF_DrawTransformed 0x4C7580` — the `scale` leaf — and
-  **`OP_SCALE` has no publish branch at all**: it falls to `as_pixels` → `PK_PIXELS`, which the
-  drain drops since the clean cut. So it renders nothing at any time, reset or not, and so does
-  every other transformed GAF draw. The leaf records only the vertices' bounding box today: no
-  source surface, no UVs, so publishing it needs the leaf extended and a new packet op.
+  `0x4969CD`). The resource block is inline in it, not a function, so there is no
+  `0x4A81E0`-style entry point to re-fire the way `repaint_service` does for the GUI screen —
+  which is why the memo is the lever and not a call.
+  [NEGATIVE RESULT — recorded because the emblem fix's shape suggests this and it does not work.]
+- **The player's colour badge, which was never a reset problem at all.** `OP_SCALE` had **no
+  publish branch**: it fell to `as_pixels` → `PK_PIXELS`, which the drain drops since the clean
+  cut, so the badge — and every transformed GAF draw — rendered **nothing at any time**.
+  `GAF_DrawTransformed 0x4C7580` stamps a frame onto a parallelogram whose three vertices are
+  origin, `+u` and `+u+v`; the badge is the axis-aligned whole-frame case,
+  `xy=(132,5)(152,5)(152,25) uv=(0,0)(32,0)(32,32)`, a 32×32 frame onto a 20×20 quad. That case is
+  now resampled to its destination in `scale_capture` and published as an ordinary `PK_SPRITE`, so
+  **the render thread is untouched** (its sprite quad is `(sl,st)-(sl+fw,st+fh)`, the frame's size,
+  deliberately — a clipped sprite still needs its whole quad); anything rotated, sheared, partial
+  or clipped keeps the old behaviour and publishes its box.
+
+  Two things only measurement could have given. **The extent is half-open** — the far vertex is
+  the edge the span stops before, not a pixel, so the badge covers x 132..151 where the vertices'
+  bounding box says 132..152; taking the bbox made it 21 wide and put every interior line a texel
+  out. (The bars were one pixel too wide for this same reason in `b0b867a`.) And the resample is a
+  **16.16 accumulator**, not `(x * sw) / dw`: with `sw=32, dw=20` the truncated step is 104857, so
+  x=5 accumulates 524285 and shifts to **7**, where the division gives 524288/65536 = **8**. Every
+  unambiguous column the two images could be matched on agrees with both rules, so the accumulator
+  is what separates them — it is what a 1997 affine rasteriser steps. The three states measured in
+  order: **0 drawn → 64.4% → 96.0% → 400/400**.
+
+**What the in-game HUD measures at 1024×768 after all of this**, presented frame against the golden
+source, resources left untouched at the cap: badge **400/400**, top bar **28 672/28 672**, panel
+rect **45 056/45 056**, the column below the panel **36 864/36 864**, bottom bar **28 672/28 672**.
+The minimap is live and differs between the two captures' instants, as it always has.
 
 **The rest of the in-game HUD is per-frame into the main offscreen** **[VERIFIED,
 [UI markers](ui-markers.html) §4 and the `DrawGameScreen` tail]**: the resource text block
@@ -533,7 +560,7 @@ they carry there; G15a adds the new ones.
 | `0x4C6890` | `SurfaceFill(surface, colour)`, `ret 8` | VERIFIED 2026-09-07 |
 | `0x4C5E70` | `GetContext(out)`: NULL-context path, arm 1 = `*(globals+0xBC)` | VERIFIED 2026-09-07 |
 | `*(0x51FBD0)+0xBC` / `+0xDC` | the system back buffer every flip presents / its valid flag | VERIFIED 2026-09-07 |
-| `0x4C7580` | textured-triangle stamp `(ctx, src, xy[6], uv[6])` | VERIFIED; args MEASURED 2026-09-07 |
+| `0x4C7580` | textured-triangle stamp `(ctx, src, xy[6], uv[6])`; the three vertices are origin, `+u` and `+u+v`, and the span is HALF-OPEN in both axes — the far vertex is the edge it stops before, not a pixel | VERIFIED; args MEASURED 2026-09-07, the vertex roles and the half-open extent MEASURED 2026-09-21 |
 | `0x4C6D20` | descriptor blit `(ctx, desc, src, dst)`, `ret 0x10` | VERIFIED 2026-09-07 |
 | `0x4BF4D0` | framed box `(ctx, RECT*, colour)`, `ret 0xC` — the F4 popup's border | VERIFIED 2026-09-07 |
 | `0x4BF7B0` | the focus rectangle, `(ctx, RECT*, colour)` | VERIFIED 2026-09-07 |
