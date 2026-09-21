@@ -135,6 +135,20 @@ so a reset loses anything the engine will not redraw on its own. Three cases, al
   is what separates them — it is what a 1997 affine rasteriser steps. The three states measured in
   order: **0 drawn → 64.4% → 96.0% → 400/400**.
 
+  **THE TEAM COLOUR RIDES ON THE FRAME POINTER, which is why it needed no code of its own**
+  **[DISASSEMBLED AND MEASURED 2026-09-21]**. The badge painter is `0x467C00`, called from the
+  resource block at `0x4690AB`: it reads a byte at `player+0x96` — the field next to the side byte
+  at `+0x95` — indexes the table at `main+0x148DB` with stride 8, takes the frame at `+0x28`
+  (`0x467C24`) and pushes THAT as `src` to `0x4C7580` (`0x467C8F`). So each player colour is a
+  **different GAF frame**, not a palette remap of one, and an observer that captures whatever
+  frame the engine passed follows the colour for free. Verified at 1024×768 against the golden
+  source across five colours — the default red, and `--player 1:1:0:C` for C = 0 blue, 2 white,
+  4 navy, 6 yellow — every one **400/400**, and the four are pairwise **0.0 %** identical to each
+  other, so this is really per-colour art and not one badge that happens to match. Worth stating
+  because the plausible alternative would have broken silently: had the engine remapped indices at
+  blit time, our capture would have carried the base ones and every player would have worn the
+  same colour.
+
 **What the in-game HUD measures at 1024×768 after all of this**, presented frame against the golden
 source, resources left untouched at the cap: badge **400/400**, top bar **28 672/28 672**, panel
 rect **45 056/45 056**, the column below the panel **36 864/36 864**, bottom bar **28 672/28 672**.
