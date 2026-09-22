@@ -269,7 +269,7 @@ so machine-checked against the real layout rather than guessed. [VERIFIED]
 | Unit array | `TAdynmemStruct::BeginUnitsArray_p` / `EndOfUnitsArray_p` (the latter at struct offset `0x1435B`) — a **flat contiguous array**, indexed by `short UnitInGameIndex`. |
 | `PlayerStruct` | `Players[10]` inline at `TAdynmemStruct+0x1B63`, ending at `0x2851` → **~322 bytes each**. LOS buffer ptr at 0x7C, LOS tile w/h at 0x80/0x84. |
 | Resource accounting | Inside `PlayerStruct`: `fCurrentEnergy`, `fEnergyProducton`, `fEnergyExpense`, `fCurrentMetal`, `fMetalProduction`, `fMetalExpense`, `fMaxEnergyStorage`, `fMaxMetalStorage` as **`float`**; lifetime totals (`fTotalEnergyProduced`, `fEnergyWasted`, …) as **`double`**. |
-| `UnitDefStruct` (FBI) | **`sizeof == 0x249`** (585 bytes). CRCs at 0x13E/0x142/0x146; `buildLimit` 0x15A; **`weapon1/2/3` at 0x1EE/0x1F2/0x1F6**; `nMaxHP` 0x1FA; sight/radar/sonar 0x202/0x204/0x206. |
+| `UnitDefStruct` (FBI) | **`sizeof == 0x249`** (585 bytes). CRCs at 0x13E/0x142/0x146; `buildLimit` 0x15A; **`weapon1/2/3` at 0x1EE/0x1F2/0x1F6**; `nMaxHP` 0x1FA; sight/radar/sonar 0x202/0x204/0x206; **`BuildAngle` 0x210** (the spawn's heading spread, §"`0x485A40`"). |
 | Map / features | `FeatureStruct` is a **13-byte (`0x0D`) per-tile record**; `FeatureMapSizeX/Y` at `0x14233`/`0x14237`; `MAPPED_MEMORY_p` `0x14273`; `FeatureMap` `0x14287`. |
 | Tile set / tile map | **`TILE_SET`** at `main+0x14283` → `{u32 count; u8* pixels}`: `count` 32×32 8bpp tiles of `0x400` bytes each, built by `LoadMap` and static for the map (Two Continents: 5062). **`TILE_MAP`** at `main+0x1428B`: `u16` tile index per 32-px cell, row stride `FeatureMapSizeX/2`. Both byte-confirmed against the terrain blit `0x483FA0` ([terrain & depth](terrain-depth.html) §2) and read every frame by `tagpu_terr.c`. The Classic++ restorer reads them once more per map, on the render thread, at the moment its job starts (`tagpu_terr.c` `glsl_begin`/`restore_order`, 2026-09-05): every `TILE_SET` tile's edge texels for the tileability test, and the whole `TILE_MAP` once to rank each tile by its distance in cells from the viewport (the restore runs visible tiles first). The pixels themselves are never copied again — the GLSL passes sample the R8 atlas the terrain pass already uploaded (the ONNX path that copied the whole set was deleted 2026-09-05). Read-only. |
 | Live palette | `main+0x143A7`: 256 entries × 4 bytes, **R, G, B, pad** — and it does **not** cycle. The Classic++ restorer snapshots it once per job into its own 256×1 RGBA8 texture (the fill pass's palette lookup), so a restore is consistent with itself whatever the native pass uploads meanwhile. [MEASURED 2026-09-05] Read out of the live
@@ -1471,6 +1471,68 @@ and spanning one pixel past the corners, four in colour B exactly on them
 
 **`DrawLine 0x4BE950` is `stdcall(ctx, x0, y0, x1, y1, colour)`** — fixed by those eight
 call sites, where the first and third pushed values are the two x's.
+
+### `0x485A40` — the spawn's rotation words, and `BuildAngle`
+
+[MEASURED 2026-09-21, this project — `objdump -d -M intel` of the pristine build, plus a live
+A/B in the game.] **A newly created unit does NOT face `0x0000`, and it does not face a fixed
+direction either.** `0x485A40` is the spawn initialiser, `ret 0x14` (five arguments, the unit
+first). It takes the type at `unit+0xA6`, resolves `def = UnitDefs(main+0x1439B) + type·0x249`
+with the same `(type·65)·9` multiply `0x438C1D` uses (`0x485A4B..0x485A68`), stores it at
+`unit+0x92`, ORs the alive bit `0x10000000` into `unit+0x110` — and then writes the rotation
+triple at `unit+0x64`:
+
+```
+0x485B92   pitch  unit+0x68 = 0                 (bx, zeroed at 0x485A49 and never reloaded)
+0x485C02   bank   unit+0x64 = 0                 (same register)
+0x485BD6   ax     = def[0x210]                  BuildAngle
+0x485BDE   call 0x4B6C30(ax)                    the sim RNG: seed%n, 0 for n < 2
+0x485BF0   ecx    = 0x8000 - def[0x210] / 2     (shr dx,1 / sub)
+0x485C00   eax    = rand + ecx
+0x485C06   head   unit+0x66 = ax
+```
+
+so
+
+> **`unit+0x66 = 0x8000 − BuildAngle/2 + rand(BuildAngle)`, and bank and pitch are 0.**
+
+`rand` is the shared sim PRNG `0x4B6C30` (Park–Miller, state `ds:0x51FC88`, §"The COB engine"),
+which is why the value is not reproducible from outside the simulation and why nothing outside
+it may draw from that seed.
+
+**Its three call sites are the complete set** — `0x485EF8`, `0x4860A0`, `0x4862B8`, all direct,
+and the address is never taken anywhere in the image — so every unit that exists was rotated
+here, whatever created it. (A scenario applier that writes `+0x66` afterwards, as ours does,
+therefore overwrites this; `tacli`'s `facing` degrees are measured from `0x8000`, which is why
+that is the zero in `scenario-format.md`.)
+
+**`UnitDef+0x210` is the FBI tag `BuildAngle`**, parsed at `0x42C56D`: the FBI reader pushes a
+tag name and calls `0x4C46C0`, and each store lands one instruction group AFTER the call whose
+value it keeps — `0x503C00` `buildangle` → `+0x210`, with `0x503C0C` `mincloakdistance` →
+`+0x208` and `0x503BF0` `builddistance` → `+0x212` on either side of it as the check that the
+pairing is not off by one. Add it to `UnitDefStruct`'s field list: `0x210` u16 `BuildAngle`.
+
+**What stock content puts there** [measured from the reference install's archives, 2026-09-21]:
+105 of the 278 unique unit `.fbi` files set the tag at all, and the values cluster by class:
+
+| value | ± | n | who |
+|---|---|---|---|
+| `0` | 0° | 2 | `armfort` `corfort` |
+| `1024` | 2.8° | 8 | the plants and labs (`armvp` `armasp` `armavp` `coralab` `corasp` `coravp` `corlab`) and `corwin` |
+| `2048` | 5.6° | 8 | `armalab` `corvp`, both gates, both geothermals, both mohos, `cormex` |
+| `4096` | 11.25° | 17 | `armsolar` `armestor` `armmstor` `armlab`, the fusions, the big defences (`armanni` `cordoom` `armbrtha` `corhlt`), both targeting facilities |
+| `8192` | 22.5° | 40 | `armmex` `armwin`, the metal makers, radars, sonars, silos, dragon's teeth, the underwater set |
+| `8196` | 22.5° | 1 | `corestor` — four more than its neighbours, and nothing turns on it |
+| `16384` | 45° | 24 | the naval buildings and the big ships |
+| `29096` | 79.9° | 2 | `armvulc` `corbuzz` |
+| `32768` | 90° | 3 | `corsolar` `armllt` `corllt` |
+
+The 173 files with no tag get `0`, hence `rand(0) = 0` and an exact `0x8000`.
+
+**Why this was chased**: the build ghost drew its preview at the model's rest orientation,
+which is heading `0x0000` — half a turn from every building the engine places. It now draws at
+`0x8000` and the per-instance draw above is a named residual, not a bug
+([gpu-status](gpu-status.html) §2.23).
 
 ### `0x4394E0` — the route dots
 

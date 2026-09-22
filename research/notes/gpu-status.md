@@ -3070,8 +3070,10 @@ whose DATA arrives entirely in the frame packet.
 - **The draw.** The ghost pass lives in `tagpu_native.c` (the `fenced` file whose allowance the
   `MODEL_PTRS` template read stands on) and synthesises the piece list from the model tree —
   parents first, at rest, the same walk class the bake and `PK_PIECE.node` stand on — then bakes
-  and poses: a **rest pose**, per-piece translation by the bake's `restOff` (posed_pose's own
-  output for a unit holding every piece at rest), into render-thread scratch. One ghost = one
+  and poses: the rest pose **turned to the heading a built structure stands at** — per-piece
+  translation by the bake's `restOff`, the whole of it rotated by `0x8000` about the root
+  piece's own rest point, which is `posed_pose`'s output for a unit holding every piece at rest
+  with that body turn (see the heading bullet below) — into render-thread scratch. One ghost = one
   bake lookup, one `glDrawArrays`, no pose arena. `fog=0` so it never fog-dims, like the square;
   no shadow, no nanoframe wire, no waterline. The material is owner 0, so the ghost shows the
   player's own team colour — exactly what the built unit will look like. An earlier cut tinted
@@ -3113,6 +3115,30 @@ whose DATA arrives entirely in the frame packet.
   Counted as `built=` in the heartbeat. Measured on `one-unit`, three solars shift-queued: the
   one being nanolathed shows square and spray with no model inside it, the next one along shows
   square and ghost, and `built=` climbs at the frame rate while `queue=` does the same.
+- **THE GHOST STANDS AT THE HEADING THE BUILDING WILL STAND AT — `0x8000`, NOT THE MODEL'S
+  REST ONE** [owner-reported and fixed 2026-09-21]. Until this the ghost drew every piece at
+  its rest offset with an identity rotation, which is heading `0x0000` — **half a turn from
+  every structure the engine places**, and the owner saw it as the preview and the finished
+  building disagreeing. The engine's spawn `0x485A40` writes the new unit's three rotation
+  words as bank 0, pitch 0 and `unit+0x66 = 0x8000 - BuildAngle/2 + rand(BuildAngle)`
+  ([exe-reverse-engineering](exe-reverse-engineering.html) §"`0x485A40` — the spawn's rotation
+  words"). The centre of that is `0x8000`, the default facing, and the ghost now takes it: one
+  rotation about the root piece's rest point, which is what `posed_pose`'s chain collapses to
+  when nothing but the base piece turns.
+  **The spread is a residual this cannot close and does not pretend to.** The draw is taken
+  from the shared sim seed `0x51FC88` at creation time, so it is neither knowable in advance
+  (the number of intervening draws is unknown) nor ours to consume (drawing from it would
+  desync a network game). 105 of the 278 unique unit FBIs in the reference install's archives
+  set `BuildAngle`, so the residual is real and varies by type: absent on most mobile units,
+  0 on the two forts, ±11.25° on ARMSOLAR and ARMESTOR (4096), ±22.5° on ARMMEX and ARMWIN
+  (8192), ±90° on CORSOLAR and both LLTs (32768). The preview is the centre of that
+  distribution; the building lands somewhere inside it.
+  **Measured** with `scenarios/build-facing.json` — two ARMVPs, one at `facing 0` (heading
+  `0x8000`) and one at `facing 180` (`0x0000`) — the ghost parked on clear ground at
+  `alpha=1.0` (the token, so the silhouette is readable): the
+  pre-fix ghost matches the `0x0000` reference — blue roof band at the bottom, ramps at the top
+  — and the fixed ghost matches the `0x8000` one, band at the top and ramps at the bottom.
+  Same instance, same scenario, same camera, the two DLLs swapped under `--keep-dll`.
 - **The lever.** `tagpu_ghost.on` (tokens: `alpha=<f>`, default 0.40), re-read on the pass's own
   30-frame poll; the armed line and the `ghost: curs= queue= drawn= built= nobake= trunc= alpha=`
   heartbeat log only on change / every 300 frames. `nobake` and `trunc` must stay 0; `built=` is

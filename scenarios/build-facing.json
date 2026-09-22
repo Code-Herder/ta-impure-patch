@@ -1,0 +1,18 @@
+{
+  "format": "ta-scenario/1",
+  "description": "The build ghost's alignment oracle: a commander and two ARMVPs, one at facing 0 (heading 0x8000, what the engine's spawn centres on) and one at facing 180 (0x0000, the model's own rest orientation). Select ARMVP on the commander's second build page, park the placement ghost on clear ground, and see which of the two it matches.",
+  "on_error": "abort",
+
+  "setup": {
+    "clear_existing": false,
+    "switches": {"shootall": true, "noshake": true}
+  },
+
+  "units": [
+    { "id": "hero",   "type": "ARMCOM", "owner": 0, "pos": [1600, 1600], "facing": 90 },
+    { "id": "ref0",   "type": "ARMVP",  "owner": 0, "pos": [1350, 1450], "facing": 0 },
+    { "id": "ref180", "type": "ARMVP",  "owner": 0, "pos": [1350, 1750], "facing": 180 }
+  ],
+
+  "camera": { "center_on": "hero" }
+}

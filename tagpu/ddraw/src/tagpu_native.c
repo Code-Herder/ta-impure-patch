@@ -1740,15 +1740,58 @@ static int ghost_one(const TAGPU_PACKET* pk, unsigned mid,
        2026-09-12 leak). */
     if (!tagpu_posebake_unit(s_pc, np, pk->local_player, 1, &bg, &bm) ||
         bg->nparts <= 0 || bg->count[TAGPU_PB_BODY] <= 0) { s_ghostNoBake++; return 0; }
-    for (i = 0; i < bg->nparts; i++) {
-        float* o = s_pose + (size_t)i * 12;
-        memset(o, 0, 12 * sizeof(float));
-        o[0] = o[5] = o[10] = 1.0f;
-        o[3] = bg->restOff[i][0];
-        o[7] = bg->restOff[i][1];
-        o[11] = bg->restOff[i][2];
-        s_shaded[i] = 1;
-        s_pvis[i] = 1;
+    /* THE HEADING THE BUILDING WILL ACTUALLY STAND AT, NOT THE MODEL'S REST
+       ONE. A ghost posed at rest is half a turn away from every structure the
+       engine places: the spawn `0x485A40` writes the new unit's three rotation
+       words as bank 0, pitch 0 and
+
+           unit+0x66 = 0x8000 - BuildAngle/2 + rand(BuildAngle)
+
+       where `BuildAngle` is the FBI tag at `UnitDef+0x210` (parsed at
+       `0x42C56D`) and `rand(n)` is the sim PRNG `0x4B6C30`, which returns 0
+       for n < 2. So the CENTRE of what the engine will do is `0x8000` — the
+       default facing, a half turn from the rest pose — and that is what the
+       preview takes.
+
+       THE SPREAD IS NOT PREDICTABLE AND IS DELIBERATELY NOT CHASED. The draw
+       happens when the unit is created, out of the shared sim seed at
+       `0x51FC88`; reading it here would tell us nothing (the number of draws
+       between now and the creation is unknown) and drawing from it would
+       desync a network game. Stock content sets `BuildAngle` on 105 of the
+       278 unit types in the reference install's archives, so the residual is
+       real and varies by type: absent (exact) on most mobile units, 0 on the
+       two forts, +-11.25 deg on ARMSOLAR and ARMESTOR (4096), +-22.5 deg on
+       ARMMEX and ARMWIN (8192), +-90 deg on CORSOLAR and both LLTs (32768).
+       The preview is the centre of that distribution; the building lands
+       somewhere in it.
+
+       The arithmetic is posed_pose's with every piece turn zero and the body
+       turn folded into the base piece — which, for a template walk, is the
+       root: ghost_pieces emits parents before children, so piece 0 is it. A
+       chain in which nothing but the base turns collapses to ONE rotation
+       about the root's own rest point, which is what this loop writes
+       directly rather than walking the tree a second time. */
+    {
+        static const unsigned short bt[3] = { 0, 0x8000u, 0 };  /* X, Y, Z */
+        const float* r0 = bg->restOff[0];
+        float zero[3], rot[12];
+        zero[0] = zero[1] = zero[2] = 0.0f;
+        piece_local(bt, zero, rot);            /* the 3x3 only; t is ours */
+        for (i = 0; i < bg->nparts; i++) {
+            float* o = s_pose + (size_t)i * 12;
+            float rel[3];
+            int k;
+            for (k = 0; k < 3; k++) rel[k] = bg->restOff[i][k] - r0[k];
+            for (k = 0; k < 3; k++) {
+                o[k*4+0] = rot[k*4+0];
+                o[k*4+1] = rot[k*4+1];
+                o[k*4+2] = rot[k*4+2];
+                o[k*4+3] = rot[k*4+0]*rel[0] + rot[k*4+1]*rel[1] +
+                           rot[k*4+2]*rel[2] + r0[k];
+            }
+            s_shaded[i] = 1;
+            s_pvis[i] = 1;
+        }
     }
     memset(&q, 0, sizeof q);
     q.geom = bg; q.mat = bm;

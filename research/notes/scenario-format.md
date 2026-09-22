@@ -433,7 +433,7 @@ bug, and it loops its lane now.
 
 | Field | Offset | Note |
 |---|---|---|
-| heading | `+0x66` | `Volume_Word{bank, heading, pitch}` at `+0x64`. Full circle `0x10000`, quarter `0x4000`, **default `0x8000`**, increases CCW from above. |
+| heading | `+0x66` | `Volume_Word{bank, heading, pitch}` at `+0x64`. Full circle `0x10000`, quarter `0x4000`, **default `0x8000`**, increases CCW from above. The engine's own spawn writes `0x8000 - BuildAngle/2 + rand(BuildAngle)` here, so `0x8000` is the CENTRE of what a built unit gets, not what every one of them gets ([exe-reverse-engineering](exe-reverse-engineering.html) §"`0x485A40`"); the applier writes the exact word and overwrites that. |
 | position | `+0x6A` X, `+0x6E` **altitude**, `+0x72` map depth | Three 16.16 dwords. **Naming trap**: tamem uses the screen convention (`XPos/ZPos/YPos`), Ghidra transposes it. Same bytes; do not "fix" either. |
 | type index | `+0xA6` `UnitID` | The unit **type**, not the instance. |
 | instance slot | `+0xA8` `UnitInGameIndex` | **Recycled on death — never a public identity.** |
