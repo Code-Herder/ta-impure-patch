@@ -14627,9 +14627,20 @@ golden source with holes in it is the more expensive mistake.
 > paints it, and the one thing that keeps it off the world is `tagpu_gui_surf.c`'s `uVpKey` rule
 > — inside the viewport rect, a texel equal to the key resolves to `vec4(0.0)` instead of a
 > colour. `uVpKey` is `tagpu_terrown_filled() ? key : -1`, so with `terrown` absent there is no
-> key fill, the rule is inert, and the layer paints the ENGINE's terrain opaquely over our whole
-> world. The key fill is what makes a viewport texel separable from a UI texel at all; nothing
-> else in the frame distinguishes them.
+> key fill, the rule is inert, and the layer mirrors the engine's in-viewport pixels opaquely
+> over our whole world. The key fill is what makes a viewport texel separable from a UI texel at
+> all; nothing else in the frame distinguishes them.
+>
+> **What it paints there is black plus the engine's features — not the engine's terrain**
+> [PICTURED 2026-09-21, `scenarios/build-facing.json` at the play defaults plus
+> `tagpu_terrown.off`]: a flat black viewport carrying the engine's trees and rocks, its cursor
+> and its HUD, with no terrain of either renderer and no unit of either. That our world passes
+> were drawing underneath it all along is the `gui.off` row of the table below. **Why the
+> engine's own terrain is not in that mirror is NOT established** — its blit at `0x483FA0` runs
+> (nothing suppresses it once `terrown` is off) and its features do reach the twin, so the
+> terrain's absence is a property of what the publisher hands the layer rather than of the
+> engine's drawing. It does not move the conclusion, which is about COVERAGE: whatever those
+> bytes are, they are opaque and they are over the whole viewport.
 >
 > **Measured, `one-unit` on Two Continents at 1024x768, exactly-black pixels of the 896x704
 > viewport in a grab of the game window:**
