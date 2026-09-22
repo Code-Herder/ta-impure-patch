@@ -536,6 +536,13 @@ typedef struct OP {
        and not a slower route to `LUT[x]`. Without this `dedup` collapsed them.
        Only `OP_FOCUS` sets or reads it. */
     unsigned char edge;
+    /* OP_SCALE: THE SOURCE WINDOW the transformed draw takes out of its frame,
+       in frame texels, half-open like the destination extent. The whole-frame
+       case is (0, 0, GF_W, GF_H) and every other kind leaves it zeroed.
+       `swin` is the same four values packed one byte each for the consumer's
+       atlas key, or 0 for "the whole frame" -- see `tagpu_gui_int.h`. */
+    unsigned short su, sv, sww, swh;
+    unsigned       swin;
     unsigned char dup;                          /* an identical op follows: dropped */
 } OP;
 /* ---- THE UI FONTS, AS IDENTITIES AND BITS (landing 4c) -------------------
@@ -858,6 +865,15 @@ static unsigned s_nullCtx[OP_NKIND];        /* ops whose ctx was NULL/unknown */
    Duplicates are counted, exactly as `s_kindCount` counts them: the dedup is
    `publish`'s, and this measures what the engine DREW. */
 static unsigned s_kindArea[OP_NKIND];
+/* THE SEMANTIC HALF OF `OP_SCALE`, which is the one kind that is semantic for
+   SOME of its ops and not others [landing 8e]. A transformed draw crosses as a
+   `PK_SPRITE` when its plane was captured -- an axis-aligned, keyable window of
+   a single-plane frame -- and as nothing at all otherwise. Summing the whole
+   kind into `raw` was right while the capture almost never fired; with the
+   shell's swatches closed it reported `raw=0.21 pct` for a screen whose
+   residual is zero, which is a measure that has stopped measuring. Counted
+   here, against the SAME box `s_kindArea` took, so the two are subtractable. */
+static unsigned s_scaleSem;
 static unsigned s_assetSends = 0;     /* PK_ASSET ops published                   */
 static unsigned s_assetRevoked = 0;   /* surfaces that stopped being assets       */
 static unsigned s_assetAcked = 0;     /* assets the consumer echoed back          */
@@ -1403,6 +1419,10 @@ static void scale_capture(OP* o, const unsigned char* fr, int dw, int dh)
        which is below this point in the translation unit */
     int sw = (int)*(const unsigned short*)(fr + 0x00);
     int sh = (int)*(const unsigned short*)(fr + 0x02);
+    /* the window inside that frame; `before_scale` bounded it against the
+       header above and stamped it on the op, so these are already facts */
+    int su = (int)o->su, sv = (int)o->sv;
+    int ww = (int)o->sww, wh = (int)o->swh;
     unsigned n = (unsigned)dw * (unsigned)dh;
     unsigned char *dst, *tmp;
     int x, y;
@@ -1412,6 +1432,12 @@ static void scale_capture(OP* o, const unsigned char* fr, int dw, int dh)
     if (!o->fkey) return;                        /* unreadable now: publish nothing */
     if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
     if (sw > TAGPU_GAF_DECMAX || sh > TAGPU_GAF_DECMAX) return;
+    /* RE-TESTED HERE, against the header THIS function read. `before_scale`
+       bounded the window against a header it read at observe time; re-reading
+       it means the two reads could in principle disagree, and the decode and
+       the walk below both index off this one. Cheaper to re-test than to
+       argue that they cannot. */
+    if (su < 0 || sv < 0 || ww <= 0 || wh <= 0 || su + ww > sw || sv + wh > sh) return;
     /* the native decode goes BEYOND the output in the same scratch and is
        transient -- `s_gafUsed` only ever advances over the resampled plane */
     if (n + (unsigned)sw * (unsigned)sh > GAF_SCRATCH - s_gafUsed) { g_guiq.gaflost++; return; }
@@ -1434,18 +1460,28 @@ static void scale_capture(OP* o, const unsigned char* fr, int dw, int dh)
        but `sw`/`sh` come from a frame header, which is engine DATA: the clamp is
        what makes that a fact rather than an argument about the arithmetic. */
     {
-        unsigned stepx = ((unsigned)sw << 16) / (unsigned)dw;
-        unsigned stepy = ((unsigned)sh << 16) / (unsigned)dh;
-        unsigned accy = 0;
+        /* THE WINDOW IS THE SOURCE, AND IT IS WHAT THE STEP DIVIDES [landing
+           8e]. `sw`/`sh` above are the FRAME's dimensions, which is what the
+           decode fills and what a row is indexed by; the resample walks only
+           the rectangle the uv corners named, starting at its origin. For the
+           whole-frame case -- the in-game badge, and every caller that existed
+           before the swatches -- (su, sv) is (0, 0) and (sww, swh) is
+           (sw, sh), so every value below is what it was and the badge's
+           measured texels are untouched. */
+        unsigned stepx = ((unsigned)ww << 16) / (unsigned)dw;
+        unsigned stepy = ((unsigned)wh << 16) / (unsigned)dh;
+        unsigned accy = (unsigned)sv << 16;
+        unsigned xlim = (unsigned)(su + ww) - 1u;
+        unsigned ylim = (unsigned)(sv + wh) - 1u;
         for (y = 0; y < dh; y++, accy += stepy) {
-            unsigned sy = accy >> 16, accx = 0;
+            unsigned sy = accy >> 16, accx = (unsigned)su << 16;
             const unsigned char* srow;
             unsigned char* drow = dst + (size_t)y * (unsigned)dw;
-            if (sy >= (unsigned)sh) sy = (unsigned)sh - 1;
+            if (sy > ylim) sy = ylim;
             srow = tmp + (size_t)sy * (unsigned)sw;
             for (x = 0; x < dw; x++, accx += stepx) {
                 unsigned sx = accx >> 16;
-                if (sx >= (unsigned)sw) sx = (unsigned)sw - 1;
+                if (sx > xlim) sx = xlim;
                 drow[x] = srow[sx];
             }
         }
@@ -2102,6 +2138,10 @@ static void publish(unsigned flipSurf)
             o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
             o->sl = op->dx; o->st = op->dy; o->fw = op->fw; o->fh = op->fh; o->ck = op->ck;
             o->frame = op->frame; o->pix = op->pix;
+            /* the atlas's extra key: 0 for a whole-frame stamp, the packed
+               window for a sub-rectangle. Without it two windows of one frame
+               at one destination size are the same entry. [Landing 8e.] */
+            o->swin = op->swin;
             dst = pub_bytes(o, op->glen);
             if (!dst) return;
             memcpy(dst, s_gafBuf + op->goff, op->glen);
@@ -2688,6 +2728,19 @@ static int __cdecl before_flip(void* entry_esp)
                 if (k == OP_GAF || k == OP_TEXT || k == OP_BAR ||
                     k == OP_RECT || k == OP_LINE || k == OP_COPY ||
                     k == OP_FOCUS || k == OP_FILL) sem += s_kindArea[k];
+                /* SPLIT, NOT PROMOTED. `OP_SCALE` is still not a kind that can
+                   be summed as though it were always semantic -- a rotated or
+                   sheared stamp, a sub-frame stack, a window too large to key
+                   and a clipped draw all still publish nothing. What changed is
+                   that the captured ones are now the common case, so the two
+                   halves are counted apart instead of the whole being charged
+                   to `raw`. `s_scaleSem` can never exceed `s_kindArea` because
+                   both take the same box from the same op. */
+                else if (k == OP_SCALE) {
+                    unsigned semArea = s_scaleSem <= s_kindArea[k] ? s_scaleSem : s_kindArea[k];
+                    sem += semArea;
+                    raw += s_kindArea[k] - semArea;
+                }
                 else if (k != OP_FLIP)                            raw += s_kindArea[k];
                 if (full) continue;
                 w = _snprintf(ar + n, sizeof ar - (size_t)n, "%s%s %u",
@@ -2714,6 +2767,7 @@ static int __cdecl before_flip(void* entry_esp)
     chrome_emit(s);
     memset(s_kindCount, 0, sizeof s_kindCount);
     memset(s_kindArea, 0, sizeof s_kindArea);
+    s_scaleSem = 0;
     memset(s_nullCtx, 0, sizeof s_nullCtx);
     s_builds = 0; s_buildFlags = 0;
     return hijack;

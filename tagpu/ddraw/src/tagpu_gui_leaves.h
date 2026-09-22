@@ -473,6 +473,7 @@ static int __cdecl before_scale(void* e)
     const int* xy = (const int*)(size_t)ARG(e, 3);
     const int* uv = (const int*)(size_t)ARG(e, 4);
     int l, t, r, b, i, dw = 0, dh = 0, plain = 0;
+    int winU = 0, winV = 0, winW = 0, winH = 0;   /* the source window, frame texels */
     SURF* s;
     if (!on_game_thread() || s_inFlip) return 0;
     if (!ptr_ok(xy)) { op_add(OP_SCALE, NULL, 0, 0, 0, 0); return 0; }
@@ -516,12 +517,43 @@ static int __cdecl before_scale(void* e)
     if (ptr_ok(fr) && ptr_ok(uv) && fr[0x0A] == 0 &&
         xy[1] == xy[3] && xy[2] == xy[4] &&
         xy[6] == xy[0] && xy[7] == xy[5] &&
-        uv[0] == 0 && uv[1] == 0 && uv[3] == 0 && uv[2] == uv[4] &&
-        uv[6] == 0 && uv[7] == uv[5] &&
-        uv[2] == (int)GF_W(fr) && uv[5] == (int)GF_H(fr)) {
+        uv[1] == uv[3] && uv[2] == uv[4] &&
+        uv[6] == uv[0] && uv[7] == uv[5]) {
+        /* THE SOURCE IS A WINDOW, NOT NECESSARILY THE WHOLE FRAME [landing 8e].
+           The quad's u/v corners are axis-aligned by the four tests above, so
+           the source is the rectangle (uv[0], uv[1]) with the same half-open
+           extents the destination uses. SKIRMISH.GUI's four player swatches are
+           the case that forced this: measured 2026-09-21 as
+           `xy=(214,94)(233,94)(233,113)(214,113) uv=(1,1)(31,1)(31,31)(1,31)`
+           against a 32x32 frame -- a 30x30 window inset one texel, resampled to
+           19x19. They were the ENTIRE remaining residual of the shell (1 444 px,
+           `raw=62400 pct=0.23`), and the old test refused them on `uv[0] == 0`
+           alone. Nothing else about the shape changed: this widened what counts
+           as a source, not what counts as an axis-aligned stamp. */
+        int su = uv[0], sv = uv[1];
+        int sww = uv[2] - uv[0], swh = uv[5] - uv[1];
+        int fw = (int)GF_W(fr), fh = (int)GF_H(fr);
         dw = xy[2] - xy[0]; dh = xy[5] - xy[1];
+        /* THE WINDOW IS BOUNDED BY THE FRAME, and the frame's own header is
+           engine DATA -- so this is the bound that makes `scale_capture`'s
+           reads facts rather than arithmetic it hopes about. */
         if (dw > 0 && dh > 0 && dw <= TAGPU_GAF_DECMAX && dh <= TAGPU_GAF_DECMAX &&
-            l == xy[0] && t == xy[1]) { r = l + dw - 1; b = t + dh - 1; plain = 1; }
+            su >= 0 && sv >= 0 && sww > 0 && swh > 0 &&
+            fw > 0 && fh > 0 && su + sww <= fw && sv + swh <= fh &&
+            l == xy[0] && t == xy[1]) {
+            /* AND IT MUST BE KEYABLE. The consumer tells two windows of one
+               frame apart by this packed value alone, so a window that will
+               not fit it keeps the old path rather than claiming an identity
+               it does not have. 0 is reserved for the whole frame, which is
+               what every 1:1 sprite and the in-game badge publish, so their
+               atlas keys are bit-for-bit what they were. */
+            if (su == 0 && sv == 0 && sww == fw && swh == fh) {
+                r = l + dw - 1; b = t + dh - 1; plain = 1;
+            } else if (su <= 255 && sv <= 255 && sww <= 255 && swh <= 255) {
+                r = l + dw - 1; b = t + dh - 1; plain = 2;
+            }
+            if (plain) { winU = su; winV = sv; winW = sww; winH = swh; }
+        }
     }
     s = surf_of_ctx(ctx);
     if (s) {
@@ -537,8 +569,20 @@ static int __cdecl before_scale(void* e)
         o->fw = (unsigned short)dw; o->fh = (unsigned short)dh;
         o->dx = (short)l; o->dy = (short)t;
         o->fcomp = fr[0x09]; o->fsub = fr[0x0A]; o->fsubn = fr[0x0B];
+        o->su  = (unsigned short)winU;  o->sv  = (unsigned short)winV;
+        o->sww = (unsigned short)winW; o->swh = (unsigned short)winH;
+        /* 0 = the whole frame; `plain == 2` is the windowed case, and the pack
+           cannot produce 0 there because both extents are > 0 */
+        o->swin = (plain == 2)
+                ? ((unsigned)winU | ((unsigned)winV << 8) |
+                   ((unsigned)winW << 16) | ((unsigned)winH << 24))
+                : 0u;
         /* the same gate `gaf_record` uses: never decode for a window nobody reads */
         if (s_census || g_gui_draw) scale_capture(o, fr, dw, dh);
+        /* AFTER the capture, and on its result: `glen` is what `publish` tests
+           before it makes a `PK_SPRITE`, so counting the same thing keeps the
+           census and the queue telling one story. */
+        if (o->glen) s_scaleSem += (unsigned)(r - l + 1) * (unsigned)(b - t + 1);
     }
     return 0;
 }

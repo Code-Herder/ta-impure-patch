@@ -1012,13 +1012,14 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
 /* the insertion shared by atlas_get (which decodes into s_dec first) and
    atlas_put (which is handed the bytes): `pixels` holds w*h indices */
 static const TAGPU_GAFENT* atlas_insert(TAGPU_GAFATLAS* a, const void* g, const void* pix,
-                                        int w, int h, unsigned char ck, const unsigned char* pixels)
+                                        int w, int h, unsigned win,
+                                        unsigned char ck, const unsigned char* pixels)
 {
     int slot;
     TAGPU_GAFENT* e;
     for (slot = (int)gaf_hash(g); a->hash[slot]; slot = (slot + 1) & (TAGPU_GAF_HASH - 1)) {
         TAGPU_GAFENT* c = &a->ents[a->hash[slot] - 1];
-        if (c->frame == g && c->pix == pix && c->w == w && c->h == h) {
+        if (c->frame == g && c->pix == pix && c->w == w && c->h == h && c->win == win) {
             c->hit = 1;                 /* still wanted: survives the next repack */
             if (c->ok) return c;
             /* a repack reserved this rect and the caller is holding exactly
@@ -1037,7 +1038,7 @@ static const TAGPU_GAFENT* atlas_insert(TAGPU_GAFATLAS* a, const void* g, const 
         if (a->shelfX + cw > a->dim) { a->shelfY += a->shelfH; a->shelfX = 0; a->shelfH = 0; }
         if (a->shelfY + ch > a->dim) { a->full = 1; return NULL; }
         e = &a->ents[a->n];
-        e->frame = g; e->pix = pix;
+        e->frame = g; e->pix = pix; e->win = win;
         e->w = (unsigned short)w; e->h = (unsigned short)h; e->ok = 0; e->resv = 0;
         e->hit = 1;                     /* asked for by definition: it is being inserted */
         e->x = (unsigned short)(a->shelfX + p);       /* inside the border */
@@ -1062,7 +1063,7 @@ const TAGPU_GAFENT* tagpu_gaf_atlas_get(TAGPU_GAFATLAS* a, const unsigned char* 
        decode into s_dec and the guard-rail copy below both index off it */
     if (w <= 0 || h <= 0 || w > TAGPU_GAF_DECMAX || h > TAGPU_GAF_DECMAX) return NULL;
     pix = *(const void* const*)(g + TAGPU_GF_PIX);
-    hit = tagpu_gaf_atlas_find(a, g, pix, w, h);
+    hit = tagpu_gaf_atlas_find(a, g, pix, w, h, 0u);   /* atlas_get is always the whole frame */
     /* the fast path is the one that runs hundreds of times a frame, so this is
        where an entry proves it is still part of the working set */
     if (hit) { ((TAGPU_GAFENT*)hit)->hit = 1; return hit; }
@@ -1070,25 +1071,26 @@ const TAGPU_GAFENT* tagpu_gaf_atlas_get(TAGPU_GAFATLAS* a, const unsigned char* 
        claiming the slot here would cache the failure for the atlas's whole
        life, and the feature atlas is meant to live as long as the map */
     if (!tagpu_gaf_decode(g, w, h, s_dec)) return NULL;
-    return atlas_insert(a, g, pix, w, h, g[TAGPU_GF_CK], s_dec);
+    return atlas_insert(a, g, pix, w, h, 0u, g[TAGPU_GF_CK], s_dec);
 }
 
 const TAGPU_GAFENT* tagpu_gaf_atlas_put(TAGPU_GAFATLAS* a, const void* frame, const void* pix,
-                                        int w, int h, unsigned char ck, const unsigned char* pixels)
+                                        int w, int h, unsigned win,
+                                        unsigned char ck, const unsigned char* pixels)
 {
     if (!tagpu_gaf_atlas_create(a)) return NULL;
     if (w <= 0 || h <= 0 || w > TAGPU_GAF_DECMAX || h > TAGPU_GAF_DECMAX || !pixels) return NULL;
-    return atlas_insert(a, frame, pix, w, h, ck, pixels);
+    return atlas_insert(a, frame, pix, w, h, win, ck, pixels);
 }
 
 const TAGPU_GAFENT* tagpu_gaf_atlas_find(const TAGPU_GAFATLAS* a, const void* frame, const void* pix,
-                                         int w, int h)
+                                         int w, int h, unsigned win)
 {
     int slot;
     if (!a->ents || !a->n) return NULL;
     for (slot = (int)gaf_hash(frame); a->hash[slot]; slot = (slot + 1) & (TAGPU_GAF_HASH - 1)) {
         const TAGPU_GAFENT* c = &a->ents[a->hash[slot] - 1];
-        if (c->frame == frame && c->pix == pix && c->w == w && c->h == h)
+        if (c->frame == frame && c->pix == pix && c->w == w && c->h == h && c->win == win)
             return c->ok ? c : NULL;
     }
     return NULL;
