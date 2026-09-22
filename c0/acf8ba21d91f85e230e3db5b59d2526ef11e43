@@ -1,0 +1,38 @@
+landing-review: model=opus-5 x2 (independent, parallel) effort=high range=main..c0acf8b findings=9 acted=9 rejected=0 date=2026-09-22
+
+Two read-only reviewers on the accumulated branch diff, briefed per
+.claude/commands/git_commit_merge_wt.md Step 5; the second focused on the
+synchronisation, the state written and the byte patches.
+
+Verified clean by both, against pristine/TotalA.exe.pristine:
+- all four call sites hold E8 rel32 to the stated VAs, and every thunk's calling
+  convention matches its callee (0x483FA0 ret 4, 0x4C69C0 ret 4, 0x471F90 ret 8,
+  0x435100 = 8B 01 C3 mov eax,[ecx]; ret -> ECX only, fastcall)
+- neither span can latch s_world: 0 escaping jumps, 0 rets, 0 indirect jumps,
+  0 decode desyncs inside either; both joins (0x468DFF, 0x469E0D) land ahead of
+  their OUT sites; no other module patches any of the four
+- op_add / before_flip / dedup / publish are all game-thread; the render thread
+  touches only the published queue, so there is no cross-thread order to establish
+- OP::seq and tagpu_terrown_fill_seq have no surviving reader anywhere
+- publish order = qHead order = drain order; a failed pub_op strands no partial
+  packet (pub_commit is MemoryBarrier(); qHead++, and s_pubOverflow forces a reseed)
+- band[4][4] is a correct decomposition at every edge; OP_FILL has one producer
+
+Findings, all acted on in 7f655ff:
+1 phase_install wrote four patches with no rollback and s_phaseLive gated nothing,
+  so a partial write failed CLOSED and killed the HUD while logging worldphase=0
+2 the phase refuses every 'let the engine draw it' mode, not just the markers
+  (native.off = no units, terr.off, fx/sfx passive, feat.off) -- docs understated it
+3 the erase hung off an OP_FLIP record that op_add's saturation test may not push
+4 op_hash did not include world although op_same compares it
+5 tagpu_gui_init's b[220] was one byte short of its 221 worst case
+6 the heartbeat count comment was wrong in every term (571, not 565)
+7 the engine map's feature-leaf counts (0x4B7EE0 omitted; two leaves, not three)
+8 tagpu_order.c's bstarted infers an un-disassembled node lifetime -- named as a
+  residual, not fixed; nothing is dereferenced so the worst case is cosmetic
+9 terrown's terr_fill writes the engine offscreen with cb < 8192 as the only
+  last-row backstop, and this landing makes it a default again -- named as a residual
+
+Re-verified by running the game after the fixes: worldphase=1, viewport 0.03 %
+black, world=85177527/2944471, and on leaving for the shell vpclear and world both
+freeze across ~300k further flips with no hole in the backdrop.
