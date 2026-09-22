@@ -19,32 +19,62 @@ typedef struct { const char* on; const char* tokens; const char* needs; const ch
 
 /* The table: the ta-drive skill's default arm set, Classic++ and the extra weapons.
    Order is the order the log line lists them in. */
-/* THE `*own` LEVERS ARE NO LONGER PLAY DEFAULTS, AND THE REASON IS THE
-   REFERENCE FRAME. `tagpu_terrown`, `tagpu_featown`, `tagpu_fxown`,
-   `tagpu_markown` and `tagpu_owndraw` stop the ENGINE drawing something, so
-   that ours can stand in its place. That was right while our world was
-   composited OVER the engine's frame: whatever the engine drew and we also
-   drew showed through as a double image, and suppressing its half was the
-   cure.
+/* THREE OF THE `*own` LEVERS ARE NOT PLAY DEFAULTS, AND THE REASON IS THE
+   REFERENCE FRAME. `tagpu_featown`, `tagpu_fxown` and `tagpu_owndraw` stop the
+   ENGINE drawing something, so that ours can stand in its place. That was right
+   while our world was composited OVER the engine's frame: whatever the engine
+   drew and we also drew showed through as a double image, and suppressing its
+   half was the cure.
 
    THE CLEAN CUT REMOVED THE COMPOSITE, so the engine's frame reaches no pixel
-   of the screen and there is nothing left to show through. What the
+   of the screen and there is nothing left to show through. What those three
    suppressions still do is damage the one thing the cut promised to keep: the
    reference. `tagpu_surf_capture` takes the engine's composed frame as the
-   golden source, and with these armed that capture holds a flat key-filled
-   viewport with no terrain, no trees, no effects and no markers -- it is not
-   the picture the 1997 software rasteriser draws, it is the picture it draws
-   with five of its passes removed, which is worth nothing to compare against.
-   Measured before this change: `TERROWN skip=1 filled=1`, `FEATOWN skip=1`,
-   `OWND target=all skipped=0 passed=5311`.
+   golden source, and with them armed that capture holds a viewport with no
+   trees, no effects and no units -- it is not the picture the 1997 software
+   rasteriser draws, it is the picture it draws with its passes removed, which
+   is worth nothing to compare against. Measured before that change:
+   `FEATOWN skip=1`, `OWND target=all skipped=0 passed=5311`.
 
-   WHAT IT COSTS is the CPU the engine spends rasterising a frame nobody sees,
-   which is real and is the whole of what these levers buy now. They are kept
-   and still work -- arm `tagpu_terrown.on` and the engine's terrain stops,
-   exactly as before -- so the trade is available to anyone who wants the
-   frame time back and does not need the reference. It is not the default,
-   because a golden source with holes in it is the more expensive mistake.
-   [The vulkan-only plan, THE CLEAN CUT.] */
+   WHAT THEY COST is the CPU the engine spends rasterising a frame nobody sees,
+   which is real and is the whole of what those three buy now. They are kept
+   and still work -- arm `tagpu_featown.on` and the engine's features stop,
+   exactly as before -- so the trade is available to anyone who wants the frame
+   time back and does not need the reference. It is not the default, because a
+   golden source with holes in it is the more expensive mistake.
+   [The vulkan-only plan, THE CLEAN CUT.]
+
+   `tagpu_terrown` IS A PLAY DEFAULT AND IS NOT ONE OF THEM, because it is not
+   an optimisation: THE UI LAYER CANNOT FIND THE VIEWPORT WITHOUT IT. The layer
+   resolves the engine's surface twin through the palette and paints it, and the
+   one thing that keeps it off the world is `tagpu_gui_surf.c`'s
+   `uVpKey` rule -- inside the viewport rect, a texel equal to the key resolves
+   to `vec4(0.0)` instead of a colour. `uVpKey` is
+   `tagpu_terrown_filled() ? key : -1`, so with `terrown` absent there is no key
+   fill, the rule is inert, and the layer paints the ENGINE's terrain opaquely
+   over our whole world. The key fill is what makes a viewport texel separable
+   from a UI texel at all; nothing else in the frame distinguishes them.
+
+   MEASURED 2026-09-21, one-unit on Two Continents at 1024x768, counting exactly
+   black pixels of the 896x704 viewport in a grab of the game window:
+
+     play defaults, nothing armed              80.40 % black -- no terrain, no
+                                               units, no build ghost on screen
+     + tagpu_terr.on (auto-arms terrown)        0.03 % black -- the whole picture
+     play defaults + tagpu_gui.off              0.03 % black -- the world was
+                                               always drawing; the layer hid it
+
+   That third row is the proof the world passes were never the fault: the census
+   read `6 pass(es) drew` and `native:` handed over `terr=644 ... units=1
+   posed=1` in the 80 % black run. `owndraw`, `featown` and `fxown` were absent
+   from the second row, so terrown is the whole of the delta and those three are
+   correctly still off.
+
+   WHAT IT COSTS, said plainly: the golden source loses its terrain -- `tacli
+   shot` shows a key-filled viewport, `TERROWN skip=1 filled=1` -- exactly as
+   the paragraph above warned. `tagpu_terrown.off` is the way back for a
+   reference-quality capture, the same shape as `mark.on=passive`. A reference
+   with terrain in it is worth less than a game with a picture in it. */
 static const Def s_defs[] = {
     { "tagpu_native.on",    "all wrecks", 0, 0 },          /* every unit natively, 3D husks too   */
     { "tagpu_terr.on",      "", 0, 0 },                     /* terrain and the fog overlay         */
@@ -75,6 +105,7 @@ static const Def s_defs[] = {
        them back (the engine draws, we do not) with the redirects still
        installed. */
     { "tagpu_markown.on",   "", "tagpu_mark.on", 0 },       /* the snapshots the two passes draw from */
+    { "tagpu_terrown.on",   "", "tagpu_terr.on", 0 },       /* the key fill the UI layer finds the viewport by */
     { "tagpu_ghost.on",     "", "tagpu_native.on", 0 },     /* the building preview at the cursor  */
     { "tagpu_zoom.on",      "", 0, 0 },                     /* the wheel, the camera's range       */
     { "tagpu_vpwide.on",    "", "tagpu_zoom.on", 0 },       /* clicks land at zoom < 1             */

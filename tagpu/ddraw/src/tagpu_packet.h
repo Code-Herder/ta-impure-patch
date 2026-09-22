@@ -208,7 +208,17 @@ typedef struct TAGPU_PK_ANCHOR {
    differ only by one presented frame — the copy's age. */
 typedef struct TAGPU_PK_BUILD {
     uint16_t type;            /* node+0x36, the build target's unit-type id     */
-    uint16_t pad;
+    uint16_t started;         /* node+0x16 (N_TARGET) resolved to a live unit:
+                                 the nanoframe EXISTS and the builder is working
+                                 on it, so the site is no longer empty ground.
+                                 The square still draws over the frame -- that is
+                                 the engine's own behaviour and the marker pass
+                                 reproduces it -- but the GHOST must not, or the
+                                 player sees a second, solid copy of the building
+                                 standing inside the one being built. An exact
+                                 link, not a position match: the engine hangs the
+                                 created unit on the order node itself, so there
+                                 is no tolerance to tune and nothing to race. */
     int32_t  pos[3];          /* node+0x22.., 16.16 x, altitude, z              */
 } TAGPU_PK_BUILD;
 

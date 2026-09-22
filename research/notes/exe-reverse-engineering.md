@@ -1420,6 +1420,20 @@ in `0x512348` the bound costs two loads, so ours takes it.
 
 ### `0x438C00` — the build-site footprint rect
 
+**`node+0x16` TELLS AN EMPTY SITE FROM ONE ALREADY UNDER CONSTRUCTION** [MEASURED LIVE
+2026-09-21]. It is the order node's ordinary target-unit field — the one `0x4399F0`'s prologue
+reads for the target circle and the sprite resolver reads for the last-seen cache — and on a
+BUILD node it is NULL while the site is still empty ground and holds the created unit from the
+moment construction begins. The node itself survives the whole build, which is why the engine
+goes on drawing a footprint rect over a nanoframe: `0x438C00` gates on `node+0x36` alone and
+never asks this. Established behaviourally, not from the writer: with the build ghost skipping
+every entry whose `+0x16` resolves, the site being nanolathed lost its ghost on the frame the
+frame appeared while the next site in the queue kept its own, over a three-site queue, and the
+pass's `built=` counter tracked exactly the sites with a frame standing on them. **The store
+itself was not disassembled** — what is established is the field's state before and after the
+transition, which is what the consumer needs. The build ghost's `TAGPU_PK_BUILD.started` is
+this field, resolved on the game thread by `tagpu_order.c`'s walk.
+
 `ret 0x14`. Nothing at all unless `node+0x36` (the build target's unit type id, u16) is
 non-zero — the early exit at `0x438C0E` skips the `pos` chaining as well as the draw.
 `def = UnitDefs(main+0x1439B) + type·0x249` (`0x438C1D..0x438C38`, the multiply written as

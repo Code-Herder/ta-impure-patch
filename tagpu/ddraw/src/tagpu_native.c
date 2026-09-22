@@ -1523,6 +1523,7 @@ static unsigned s_ghostCheck = 0;
 static int   s_ghostLogged = -1;     /* the armed state the log last named */
 static unsigned s_ghostCurs = 0, s_ghostQueue = 0, s_ghostDrawn = 0;
 static unsigned s_ghostNoBake = 0, s_ghostTrunc = 0;
+static unsigned s_ghostBuilt = 0;    /* queue sites already under construction */
 static int   s_ghostNoDraw = 0;      /* the missing prerequisite was logged */
 
 /* THE BUILD GHOST'S STANDING REQUEST FOR THE PACKET'S BUILDS TABLE. Written on
@@ -1867,9 +1868,10 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
     if ((frame_counter % 300) == 0) {
         char b[160];
         _snprintf(b, sizeof b,
-                  "ghost: curs=%u queue=%u drawn=%u nobake=%u trunc=%u alpha=%.2f",
-                  s_ghostCurs, s_ghostQueue, s_ghostDrawn, s_ghostNoBake,
-                  s_ghostTrunc, s_ghostAlpha);
+                  "ghost: curs=%u queue=%u drawn=%u built=%u nobake=%u trunc=%u"
+                  " alpha=%.2f",
+                  s_ghostCurs, s_ghostQueue, s_ghostDrawn, s_ghostBuilt,
+                  s_ghostNoBake, s_ghostTrunc, s_ghostAlpha);
         nlog(b);
     }
     /* the cursor: the square's own gate — mode 14, and either the band bit or
@@ -1944,8 +1946,21 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
                   &s_pv, eyeX, eyeY, vpL, vpT, r0);
     }
     for (k = 0; k < nb; k++) {
-        float fx = (float)bs[k].pos[0] / 65536.0f;
-        float fz = (float)bs[k].pos[2] / 65536.0f;
+        float fx, fz;
+        /* THE SITE THAT IS ALREADY A BUILDING. A build order keeps its node for
+           the whole of the construction, so the queue table carries the site the
+           builder is working on exactly as it carries the ones it has not
+           reached -- and a ghost there stands a second, solid copy of the
+           building inside the nanoframe that is really being built, which is
+           what the player sees as the ghost's outline under the unit. The
+           publisher answers it on the game thread from the node's own target
+           (`started`), so this is a link the engine made and not a position
+           match with a tolerance in it. The SQUARE stays: the engine draws its
+           own over a frame under construction and the marker pass reproduces
+           that. [Owner-reported 2026-09-21.] */
+        if (bs[k].started) { s_ghostBuilt++; continue; }
+        fx = (float)bs[k].pos[0] / 65536.0f;
+        fz = (float)bs[k].pos[2] / 65536.0f;
         /* the same truncating halving draw_build projects with: it halves the
            whole world px `(foot + pos) >> 16`, and a footprint offset is a
            whole world px, so truncating the position alone lands on the same

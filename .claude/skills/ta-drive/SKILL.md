@@ -2357,16 +2357,31 @@ Four things to know before driving under it:
   `tacli ui` reads the engine's gadget array and clicks the coordinates it reports;
   `_scn_wait_live` reads `tagpu.log`. No part of the route reads a pixel, so nothing about
   driving changes. **`tacli shot` still works** and is how you see the menu you are clicking.
-- **`tacli shot` is now the ONLY way to see the engine's frame**, and it is a complete one: on
-  the play defaults it shows terrain, water, trees, units, bars, minimap, resource bar, the
-  sidebar and the cursor — 0 raw key and 0 teal, 170 distinct colours in the viewport.
-- **THE `*own` LEVERS HOLE THAT REFERENCE, which is why they are no longer play defaults.**
-  `terrown`, `featown`, `fxown`, `markown` and `owndraw` stop the ENGINE drawing. Arm one and the
-  golden source loses exactly what it stopped: `terrown.on` gives you a flat cyan viewport
-  (`TERROWN skip=1 filled=1` in the log), `featown.on` takes the trees. **They still work and
-  still save the CPU** — arm them for a frame-time measurement, never for a comparison. Note
-  `markown` installs its detours at DLL ATTACH, so writing its file to a running instance opens
-  nothing.
+- **`tacli shot` is the ONLY way to see the engine's frame**, and on the play defaults it is now
+  a reference with ONE hole in it: `terrown` and `markown` are defaults, so the viewport arrives
+  **key-filled, with no terrain** and without the bars, digits, order markers and build cursor.
+  **`tacli arm <i> terrown.off mark.on=passive` hands all of it back** and is the arm for a
+  reference-quality capture. (Before 2026-09-21 `terrown` was off by default and this bullet said
+  the shot was complete; it was, and the game had no picture — see the next bullet.)
+- **THREE `*own` LEVERS HOLE THAT REFERENCE, which is why they are not play defaults.**
+  `featown`, `fxown` and `owndraw` stop the ENGINE drawing. Arm one and the golden source loses
+  exactly what it stopped: `featown.on` takes the trees. **They still work and still save the
+  CPU** — arm them for a frame-time measurement, never for a comparison. Note `markown` installs
+  its detours at DLL ATTACH, so writing its file to a running instance opens nothing.
+- **`terrown` IS A PLAY DEFAULT AGAIN SINCE 2026-09-21, AND IT IS NOT OPTIONAL: WITHOUT IT THE
+  GAME HAS NO PICTURE.** The UI layer finds the world viewport only by `terrown`'s key fill
+  (`tagpu_gui_surf.c`'s `uVpKey`), so with `terrown` absent it paints the ENGINE's terrain
+  opaquely over everything we drew. Measured on `one-unit` at 1024x768, exactly-black pixels of
+  the viewport: **80.40 %** on the old defaults (no terrain, no units, no build ghost on screen)
+  against **0.03 %** with it — while the census read `6 pass(es) drew` and `native:` handed over
+  `terr=644 … units=1 posed=1` in both. `tagpu_gui.off` also reads 0.03 %, which is the proof the
+  world passes were never the fault.
+- **THE TRAP THIS LEAVES FOR YOU: `tacli` auto-arms the `*own` halves from the pass TRIGGER
+  FILES, so a defaults-only instance and a file-armed one are different configurations.**
+  `_ensure_terrown_for_terr` (`tools/tacli:1035`) is `if not terr.exists(): drop terrown`, and
+  the same for `owndraw`/`featown`/`fxown`, so a pass that is on *by DLL default* leaves no file
+  and auto-arms nothing. Before the default moved, that alone was the difference between a game
+  with a picture and a black viewport — and it reads as a renderer bug, not as an arm-set one.
 - **The reference capture is an ORACLE since 2026-09-20** (gpu-status §2.82). It runs on the
   GAME thread, from the packet publisher's `after_draw` on `DrawGameScreen 0x468CF0` — past the
   flip, so the frame is finished by construction — and in the same call that publishes the packet

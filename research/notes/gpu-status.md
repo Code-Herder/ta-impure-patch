@@ -3099,9 +3099,24 @@ whose DATA arrives entirely in the frame packet.
   instantiated. The slot is guaranteed non-NULL by that bound; that it is *walkable* is inferred
   from the engine's own unconditional walk at `0x4CB650`, not measured for a never-instantiated
   def. [Named by the 2026-09-14 landing review; no fault observed in 57 480 walks.]
+- **A SITE THAT IS ALREADY A NANOFRAME GETS NO GHOST** [owner-reported and fixed 2026-09-21].
+  A build order keeps its node for the whole of the construction, so the queue table carries the
+  site the builder is *working on* exactly as it carries the ones it has not reached — and the
+  ghost drew there too, standing a second, solid copy of the building inside the frame being
+  built. The publisher now answers the question on the game thread, from the node's own target
+  field: `OrderNode+0x16` (`N_TARGET`, the field `resolve_sprite` and `circle_centre` already
+  read) is NULL while the site is empty ground and holds the created unit once construction
+  begins, so `TAGPU_PK_BUILD.started` — the record's dead `pad`, repurposed — says which. It is
+  an **exact link the engine itself made**, not a position match with a tolerance in it, so
+  there is nothing to tune and nothing to race. **The SQUARE stays**: the engine draws its own
+  over a frame under construction and the marker pass reproduces that; only the ghost drops.
+  Counted as `built=` in the heartbeat. Measured on `one-unit`, three solars shift-queued: the
+  one being nanolathed shows square and spray with no model inside it, the next one along shows
+  square and ghost, and `built=` climbs at the frame rate while `queue=` does the same.
 - **The lever.** `tagpu_ghost.on` (tokens: `alpha=<f>`, default 0.40), re-read on the pass's own
-  30-frame poll; the armed line and the `ghost: curs= queue= drawn= nobake= trunc= alpha=`
-  heartbeat log only on change / every 300 frames. `nobake` and `trunc` must stay 0. **It needs
+  30-frame poll; the armed line and the `ghost: curs= queue= drawn= built= nobake= trunc= alpha=`
+  heartbeat log only on change / every 300 frames. `nobake` and `trunc` must stay 0; `built=` is
+  a count, not an alarm — it is non-zero whenever anything is being built. **It needs
   `tagpu_native.on`** — the ghost draws through the unit pass's view and program — and says so:
   armed without it the log reads `ghost: off — needs tagpu_native.on (it draws through the unit
   pass)` and the pass declines. **Since 2026-09-14 it IS a play default** and carries `needs
@@ -14576,9 +14591,40 @@ A `tacli shot` then showed the HUD, the minimap, the units, their bars and the c
 **flat cyan viewport with no terrain and no trees** — not the picture the 1997 rasteriser draws,
 but the picture it draws with five of its passes removed.
 
-**They are not deleted.** Arm `tagpu_terrown.on` and the engine's terrain stops exactly as before.
+**They are not deleted.** Arm `tagpu_featown.on` and the engine's features stop exactly as before.
 The CPU they save is real and is the whole of what they buy now; it is not the default, because a
 golden source with holes in it is the more expensive mistake.
+
+> **`terrown` WENT BACK ON THE DEFAULTS 2026-09-21, AND THE PARAGRAPH ABOVE IS WHY IT WAS WRONG
+> TO TAKE IT OFF.** It is not an optimisation like the other four: **the UI layer cannot find the
+> viewport without it.** The layer resolves the engine's surface twin through the palette and
+> paints it, and the one thing that keeps it off the world is `tagpu_gui_surf.c`'s `uVpKey` rule
+> — inside the viewport rect, a texel equal to the key resolves to `vec4(0.0)` instead of a
+> colour. `uVpKey` is `tagpu_terrown_filled() ? key : -1`, so with `terrown` absent there is no
+> key fill, the rule is inert, and the layer paints the ENGINE's terrain opaquely over our whole
+> world. The key fill is what makes a viewport texel separable from a UI texel at all; nothing
+> else in the frame distinguishes them.
+>
+> **Measured, `one-unit` on Two Continents at 1024x768, exactly-black pixels of the 896x704
+> viewport in a grab of the game window:**
+>
+> | arm | viewport black | what is on screen |
+> | --- | --- | --- |
+> | play defaults, nothing armed | **80.40 %** | no terrain, no units, no build ghost |
+> | + `tagpu_terr.on` (tacli auto-arms `terrown`) | **0.03 %** | the whole picture |
+> | play defaults + `tagpu_gui.off` | **0.03 %** | the world was drawing all along |
+>
+> That third row is the proof the world passes were never at fault: in the 80 % run the census
+> read `6 pass(es) drew` and `native:` handed over `terr=644 … units=1 posed=1`. `owndraw`,
+> `featown` and `fxown` were all absent from the second row, so `terrown` is the whole of the
+> delta and the other three are correctly still off.
+>
+> **What it costs is what this subsection warns about, knowingly**: the golden source loses its
+> terrain again — `tacli shot` shows a key-filled viewport, `TERROWN skip=1 filled=1`.
+> **`tagpu_terrown.off` is the way back** for a reference-quality capture, the same shape as
+> `mark.on=passive`. A reference with terrain in it is worth less than a game with a picture in
+> it. The better repair — teaching the layer the viewport rect without needing a key — is not
+> done and is the open item here.
 
 **AND IT CLOSED A GAP NOBODY WAS AIMING AT: `renderer=gdi` IS STOCK AGAIN.** `tagpu_owndraw.on`
 was the one suppression with no runtime gate — two structure-shadow `je`s flipped to `jmp`s at

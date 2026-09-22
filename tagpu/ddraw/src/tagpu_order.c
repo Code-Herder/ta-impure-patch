@@ -423,6 +423,7 @@ typedef struct ORDREC {
                                 sight for the second pulse circle             */
     unsigned char haveDef;   /* the issuing unit's def resolved               */
     unsigned char haveBdef;  /* the build target's def resolved               */
+    unsigned char bstarted;  /* node+0x16 is a live unit: the nanoframe is up  */
 } ORDREC;
 
 typedef struct ORDARENA {
@@ -682,6 +683,18 @@ static void walk_unit(ORDARENA* A, const char* ta, const char* units, const char
                             r->foot[4] = *(const int*)(d2 + UD_FOOT_Z1);
                         }
                     }
+                    /* HAS THIS SITE BECOME A NANOFRAME? The engine hangs the
+                       created unit on the node's own target field the moment
+                       construction begins (N_TARGET, the same field
+                       `resolve_sprite` and `circle_centre` read), and clears the
+                       node when the building finishes -- so a build node with a
+                       live target is a site that is no longer empty ground. The
+                       ghost pass drops those; the square keeps drawing, which is
+                       what the engine does. Read here, on the game thread, with
+                       the same `ptr_ok` those two use, and carried as a flag: no
+                       pointer crosses and the present thread compares nothing. */
+                    r->bstarted =
+                        ptr_ok(*(const char* const*)(node + N_TARGET)) ? 1 : 0;
                     pos[0] = r->bx; pos[1] = r->by; pos[2] = r->bz;
                     startU = NULL;
                 }
@@ -835,7 +848,7 @@ int tagpu_order_copy_builds(TAGPU_PK_BUILD* dst, int max)
         const ORDREC* r = &A->rec[i];
         if (!s_build || !r->btype || !r->haveBdef) continue;
         dst[n].type = r->btype;
-        dst[n].pad = 0;
+        dst[n].started = r->bstarted;
         dst[n].pos[0] = r->bx;
         dst[n].pos[1] = r->by;
         dst[n].pos[2] = r->bz;
