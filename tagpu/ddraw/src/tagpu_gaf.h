@@ -52,6 +52,16 @@
 typedef struct TAGPU_GAFENT {
     const void*    frame;       /* keyed on the header AND its pixel ptr:    */
     const void*    pix;         /* freed sequences get their address reused  */
+    /* AND ON THE SOURCE WINDOW, because (frame, pix, w, h) stopped being an
+       identity the moment a transformed draw could take a SUB-RECTANGLE of a
+       frame [landing 8e]. 0 is "the whole frame", which is what every 1:1
+       sprite, every cursor and every atlas_get passes, so their keys are
+       unchanged. A windowed capture packs (u0, v0, uw, uh) one byte each --
+       see `scale_capture`'s caller, which refuses to claim a window it cannot
+       key. Without this, two windows of one frame resampled to the same
+       destination size collide, `atlas_find` runs BEFORE `atlas_put`, and the
+       second draw silently reuses the first one's texels. */
+    unsigned       win;
     unsigned short w, h;
     unsigned short x, y;        /* its first texel in the atlas (inside the border) */
     float          u0, v0, u1, v1;
@@ -379,15 +389,23 @@ int tagpu_gaf_decode(const unsigned char* g, int w, int h, unsigned char* out);
    the next tagpu_gaf_atlas_reset recycles it — never mid-frame, or quads
    already emitted would point at re-used texels). */
 const TAGPU_GAFENT* tagpu_gaf_atlas_get(TAGPU_GAFATLAS* a, const unsigned char* g);
-/* The same entry from PRE-DECODED pixels (w*h bytes, colour key `ck`), keyed
-   like atlas_get on (frame, pix, w, h) but never reading either pointer: the
-   GL UI renderer's sprite ops carry their bytes across the thread boundary
-   because the shell frees a popped screen's art under the render thread
-   (gui-renderer.md 3.5). `find` is the lookup alone, NULL when absent. */
+/* The same entry from PRE-DECODED pixels (w*h bytes, colour key `ck`), keyed on
+   (frame, pix, w, h, win) but never reading either pointer: the GL UI renderer's
+   sprite ops carry their bytes across the thread boundary because the shell frees
+   a popped screen's art under the render thread (gui-renderer.md 3.5). `find` is
+   the lookup alone, NULL when absent.
+
+   `win` is the SOURCE WINDOW and 0 means "the whole frame" -- which is what
+   atlas_get and every 1:1 caller pass, so their keys are exactly what they were.
+   It exists because a transformed draw can take a sub-rectangle of a frame, and
+   (frame, pix, w, h) alone cannot tell two such windows apart. [Landing 8e; this
+   comment said "keyed like atlas_get on (frame, pix, w, h)" and was left stale by
+   the commit that changed the signature three lines below it.] */
 const TAGPU_GAFENT* tagpu_gaf_atlas_put(TAGPU_GAFATLAS* a, const void* frame, const void* pix,
-                                        int w, int h, unsigned char ck, const unsigned char* pixels);
+                                        int w, int h, unsigned win,
+                                        unsigned char ck, const unsigned char* pixels);
 const TAGPU_GAFENT* tagpu_gaf_atlas_find(const TAGPU_GAFATLAS* a, const void* frame, const void* pix,
-                                         int w, int h);
+                                         int w, int h, unsigned win);
 /* Recycle a full atlas. With `repack` set this RE-LAYS the entries it holds
    tallest-first and keeps them (reserved, re-uploading on demand); without
    it -- and always for a restart that is not "full", such as the UI atlas's

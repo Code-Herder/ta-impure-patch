@@ -992,6 +992,42 @@ sampling steps a **16.16 accumulator**, not `(x * sw) / dw`: with `sw=32, dw=20`
 is 104857, so x=5 accumulates 524285 and shifts to 7 where the division gives 8, and sixteen of the
 badge's 400 pixels differ on exactly that.
 
+**And the uv quad is a WINDOW, not necessarily the whole frame** [MEASURED 2026-09-21, landing 8e].
+The badge is the degenerate case and reading only it makes `uv` look like a formality.
+`SKIRMISH.GUI`'s four player-colour swatches use the same function with a genuine sub-rectangle:
+
+```
+xy = (214,94)(233,94)(233,113)(214,113)        the destination, 19 x 19 half-open
+uv = (1,1)(31,1)(31,31)(1,31)                  a 30 x 30 window inset one texel
+frame 32x32, comp=0, sub=0/0
+```
+
+The u/v corners carry the same roles and the same half-open convention as the screen ones, so the
+source is the rectangle `(uv[0], uv[1])` with extents `uv[2]-uv[0]` by `uv[5]-uv[1]`. A consumer
+that reads the frame's own dimensions as the source — which is what ours did until 8e — resamples
+32 texels where the engine resamples 30 and is a texel out over most of the span. **The inset is
+not decoration:** these frames are 32×32 tiles whose outer ring is border, and the caller trims it.
+
+Note the asymmetry this leaves: a caller that passes `uv == NULL` gets the synthesised
+`(0,0) (w-1,0) (w-1,h-1) (0,h-1)` above, whose extent is `w-1` and not `w`.
+
+**There is only ONE convention, not two, and the substitution is what proves it**
+*[CORRECTED 2026-09-21 by 8e's review, which disassembled the path this first called "not
+established"]*. `0x4C75EB..0x4C761F` builds the quad into `[esp+0x4C..0x68]` and then
+**overwrites the argument slot in place** — `mov DWORD PTR [esp+0x7dac],edx` at `0x4C75F4` — so
+from there on the function cannot tell a synthesised quad from a caller's. The single
+interpolation path follows: the edge walk at `0x4C77C2..0x4C77FA` steps `((uv_b-uv_a)<<16)/dy`
+from `uv_a<<16`, and the span filler `0x4C7310` steps `(uR-uL)/(xR-xL)` from `uL`. The
+synthesised quad is therefore the SAME half-open convention naming a `(w-1)×(h-1)` **window** —
+the engine's own default drops the frame's last row and column — and `0x4C75FB`/`0x4C7616`'s
+`dec eax` is where that comes from, against `0x467C34`/`0x467C4A`, which store `WORD[frame+0]`
+and `[+2]` undecremented for the badge. The asymmetry is real; the hedge about which rule applies
+was not.
+
+The fork still **refuses** a NULL-uv draw and publishes its box. That is now a choice rather than
+an unknown: no measured caller passes NULL, so supporting it would be code whose output nothing
+could be compared against, and an unverified branch is worse than a named gap.
+
 #### `main+0x1426B` — the level's minimap picture is a PADDED square [MEASURED 2026-09-21]
 
 The frame's header is 252×252, but the map only fills an aspect-correct region inside it: on a

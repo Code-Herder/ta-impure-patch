@@ -1509,8 +1509,8 @@ static void drain(void)
             const TAGPU_GAFENT* e;
             t = twin_find(o->surf);
             if (!t) break;
-            e = tagpu_gaf_atlas_find(&s_atlas, o->frame, o->pix, o->fw, o->fh);
-            if (!e && o->alen) e = tagpu_gaf_atlas_put(&s_atlas, o->frame, o->pix, o->fw, o->fh, o->ck, g_guiq.arena + o->aoff);
+            e = tagpu_gaf_atlas_find(&s_atlas, o->frame, o->pix, o->fw, o->fh, o->swin);
+            if (!e && o->alen) e = tagpu_gaf_atlas_put(&s_atlas, o->frame, o->pix, o->fw, o->fh, o->swin, o->ck, g_guiq.arena + o->aoff);
             if (!e) {
                 /* the atlas is full, or the frame's bytes never arrived (an
                    earlier reset lost them): a fresh start — the seeds carry
@@ -1666,7 +1666,7 @@ void tagpu_gui_cursor_frame(const TAGPU_PACKET* pk)
     s_curCK = fr[TAGPU_GF_CK];
     s_curFrame = fr;
     pix = *(const void* const*)(fr + TAGPU_GF_PIX);
-    if (tagpu_gaf_atlas_find(&s_atlas, fr, pix, s_curW, s_curH)) s_curOwn = 1;
+    if (tagpu_gaf_atlas_find(&s_atlas, fr, pix, s_curW, s_curH, 0u)) s_curOwn = 1;  /* the cursor is never windowed */
     else s_curWarm++;
 }
 
