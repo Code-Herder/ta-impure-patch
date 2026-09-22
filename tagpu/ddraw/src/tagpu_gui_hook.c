@@ -467,15 +467,12 @@ typedef struct OP {
        means the op was recorded inside one of `DrawGameScreen`'s two world
        spans (see "THE WORLD PHASE" above `op_add`) and `publish` refuses it:
        world content may not cross into the UI replay whatever leaf it came
-       through. Its companion is `game` below, which is the flip marker's. */
+       through. The erase's own gate is NOT here: it is `s_winGameFlip`, a
+       window flag, because an op record is not guaranteed to exist (see the
+       `PK_CLEAR` emit in `publish`). `seq` was here and is gone with it — it
+       was `tagpu_terrown_fill_seq()`, and it made `terrown` the publisher's
+       only signal that the viewport was ours. */
     unsigned char world;
-    /* flip marker only: this flip is the IN-PLAY one (`ret == FLIP_RET_GAME`)
-       and a level is open, so the frame that FOLLOWS it owes the viewport an
-       erase. It replaced `seq`, which was `tagpu_terrown_fill_seq()` — the
-       erase used to be emitted only when the terrain skip's key fill had run,
-       which made `terrown` the publisher's only signal that the viewport was
-       ours. See the `PK_CLEAR` emit in `publish`. */
-    unsigned char game;
     /* text (G17d): the string is copied into a game-thread scratch AT OBSERVE
        TIME, not read again at publish. The argument routinely points at a
        caller's stack temp, which is gone by the flip — the same reason a
@@ -966,6 +963,7 @@ static unsigned s_worldDropped = 0;          /* ... and refused by `publish`    
 static unsigned s_fillClipped = 0;           /* whole-surface fills cut round the
                                                 viewport instead of covering it  */
 static unsigned s_vpClears = 0;              /* viewport erases published        */
+static unsigned char s_winGameFlip = 0;      /* this window held an in-play flip */
 
 #define WP_TERRAIN_VA     0x00483FA0u        /* stdcall(ctx),    ret 4  */
 #define WP_CLIPRESET_VA   0x004C69C0u        /* stdcall(ctx),    ret 4  */
@@ -1041,10 +1039,32 @@ static int phase_install(void)
              "the UI replay");
         return 0;
     }
-    ok  = wp_redirect(WP_SITE_HEAD_IN,   (void*)wp_head_in);
-    ok &= wp_redirect(WP_SITE_HEAD_OUT,  (void*)wp_head_out);
-    ok &= wp_redirect(WP_SITE_SWEEP_IN,  (void*)wp_sweep_in);
+    /* THE WRITE ORDER IS PART OF THE FIX, and it is the opposite of the obvious
+       one. The two sites that CLEAR the flag go in before the two that SET it,
+       so the only state a half-written install can reach is a clear with no set:
+       `s_world` never becomes 1 and the UI layer behaves exactly as it does
+       unarmed. Writing the setters first fails CLOSED instead -- the first frame
+       enters at 0x468DB0, sets the flag, never reaches the unwritten clear, and
+       `publish` then refuses EVERY op for the rest of the session, taking the
+       whole HUD with it. The byte check above is all-or-nothing; these four
+       writes are not, because `tagpu_detour_write` can fail on its own. */
+    ok  = wp_redirect(WP_SITE_HEAD_OUT,  (void*)wp_head_out);
     ok &= wp_redirect(WP_SITE_SWEEP_OUT, (void*)wp_sweep_out);
+    ok &= wp_redirect(WP_SITE_HEAD_IN,   (void*)wp_head_in);
+    ok &= wp_redirect(WP_SITE_SWEEP_IN,  (void*)wp_sweep_in);
+    if (!ok) {
+        /* put back whatever went in. A site is restored by pointing it at its
+           ORIGINAL target: the bytes are DERIVED from the site and the target,
+           never saved, so there is no copy to keep in sync and restoring a site
+           that was never written is a no-op that writes the bytes already there.
+           A restore that itself fails is covered by the stamp gate in `op_add`. */
+        wp_redirect(WP_SITE_HEAD_IN,   (void*)(size_t)WP_TERRAIN_VA);
+        wp_redirect(WP_SITE_SWEEP_IN,  (void*)(size_t)WP_SFXLAYER_VA);
+        wp_redirect(WP_SITE_HEAD_OUT,  (void*)(size_t)WP_CLIPRESET_VA);
+        wp_redirect(WP_SITE_SWEEP_OUT, (void*)(size_t)WP_MODEQ_VA);
+        glog("gui: the world phase FAILED to install and was rolled back — the "
+             "engine's own world draws replay through the UI layer again");
+    }
     s_phaseLive = ok;
     return ok;
 }
@@ -1123,7 +1143,12 @@ static void op_add(int kind, SURF* s, int l, int t, int r, int b)
        `chrome_emit` — which is not inside any engine call — would need its own
        rule. It does not: it runs at the flip, past `0x469F36`, so the flag it
        reads is 0 by the same ordering that gives every other op its answer. */
-    o->world = s_world;
+    /* THE GATE THAT MAKES THE WHOLE PHASE FAIL OPEN. `s_phaseLive` is set only
+       when all four redirects went in; until then -- and for ever, if the
+       install failed and even its rollback failed -- every op is stamped UI and
+       `publish` refuses nothing. A latched `s_world` cannot cost a pixel,
+       because nothing reads it. */
+    o->world = (unsigned char)(s_phaseLive ? s_world : 0);
     if (o->world) s_worldOps++;
     s_lastOp = o;
 }
@@ -1491,6 +1516,7 @@ static struct { const void* fr; unsigned key, off, len; } s_gcap[GCAP_N];  /* th
 static void ops_window_reset(void)
 {
     s_nops = 0;
+    s_winGameFlip = 0;
     s_strUsed = 0;
     s_glyUsed = 0;
     s_gafUsed = 0;
@@ -1739,6 +1765,12 @@ static unsigned op_hash(const OP* o)
     h ^= (unsigned)(unsigned short)o->r * 0x165667B1u; h ^= (unsigned)(unsigned short)o->b * 0xD3A2646Cu;
     h ^= (unsigned)(size_t)o->frame * 0xFD7046C5u; h ^= (unsigned)(size_t)o->pix * 0xB55A4F09u;
     h ^= o->src * 0x2C1B3C6Du; h ^= (unsigned)(unsigned short)o->sl * 0x297A2D39u; h ^= (unsigned)(unsigned short)o->st * 0x4F6B9E23u;
+    h ^= (unsigned)o->world * 0x9E3779B9u;   /* `op_same` compares it, so the hash
+                                                must separate it too: otherwise a WORLD
+                                                op and a geometrically identical UI one
+                                                collide, lengthen the probe chain, and a
+                                                chain that reaches DUP_PROBE_MAX leaves
+                                                both out of the table */
     h ^= h >> 16;
     return h & (DUP_TAB - 1);
 }
@@ -2006,38 +2038,42 @@ static void publish(unsigned flipSurf)
        keeps the LAST of two identical ops, so the one surviving copy of a
        per-frame draw sits immediately before the marker. MEASURED 2026-09-22:
        with the erase at the marker, the `PAUSED` banner is in the golden source
-       and absent from the screen, every frame.
+       and absent from the screen (one grab, against a baseline DLL built from
+       `main` as the control -- not a per-frame census).
 
        THE OLD `seq` GATE HID THIS BY NEVER FIRING. It asked whether
        `tagpu_terrown_fill_seq()` had advanced between this flip and the next,
        and read `nextSeq` for the LAST flip of the window at publish time —
        the same instant the marker's own `seq` was taken, one statement earlier
        — so the two were always equal and the last flip emitted nothing. At the
-       ~60 flips a second an in-play frame runs at, a window holds exactly one
-       flip, so the erase was DEAD in play and `uVpKey` was carrying the
+       ~60 flips a second an in-play frame runs at, a 5 ms window holds exactly
+       one flip (the shell, at its far higher flip rate, can hold several — the
+       flag above is raised by any of them), so the erase was DEAD in play and `uVpKey` was carrying the
        viewport alone. That is what made `terrown` load-bearing (gpu-status.md
        §2.81) and it is why removing the gate could not simply be a matter of
        widening it.
 
-       THE GATE IS ARM STATE, NOT A COUNTER. `OP::game` is `ret ==
-       FLIP_RET_GAME` AND `tagpu_packet_pub_level_open()`, both taken on the
-       game thread at the flip and both static across the frame; a window is a
-       game window when any flip in it says so. It is deliberately NOT a value
+       THE GATE IS ARM STATE, NOT A COUNTER, and it is a WINDOW FLAG rather
+       than a field of the flip op. `s_winGameFlip` is `ret == FLIP_RET_GAME`
+       AND `tagpu_packet_pub_level_open()`, both taken on the game thread at the
+       flip and both static across the frame; it is raised by any flip in the
+       window and cleared by `ops_window_reset`, so a window is a game window
+       when any flip in it said so. It is deliberately NOT carried on the
+       `OP_FLIP` record: that record is only pushed `if (s && s_nops < MAX_OPS)`,
+       so on a saturated window -- exactly the window whose frame drew the most
+       -- the erase would be the thing that went missing, and last frame's
+       viewport would survive under this frame's UI. The flag costs one byte and
+       has no such hole. It is deliberately NOT a value
        the world pass publishes — that is a render-thread counter read here a
        frame late, and on every 0->1 acquisition edge (level entry, recovery
        from a `terr_bail`) the gate would still be down and the frame wrong.
        `tagpu_owndraw.c` ~:210-225 is the precedent for that exact hazard. */
-    if (vr >= 0 && fs) {
-        int k, game = 0;
-        for (k = 0; k < s_nops; k++)
-            if (s_ops[k].kind == OP_FLIP && s_ops[k].game) { game = 1; break; }
-        if (game) {
-            TAGPU_PUBOP* c = pub_op(PK_CLEAR, fs->base);
-            if (!c) return;
-            c->l = (short)vl; c->t = (short)vt; c->r = (short)vr; c->b = (short)vb;
-            pub_commit();
-            s_vpClears++;
-        }
+    if (vr >= 0 && fs && s_winGameFlip) {
+        TAGPU_PUBOP* c = pub_op(PK_CLEAR, fs->base);
+        if (!c) return;
+        c->l = (short)vl; c->t = (short)vt; c->r = (short)vr; c->b = (short)vb;
+        pub_commit();
+        s_vpClears++;
     }
     for (i = 0; i < s_nops && !s_pubOverflow; i++) {
         OP* op = &s_ops[i];
@@ -2756,11 +2792,11 @@ static int __cdecl before_flip(void* entry_esp)
        known on this thread and neither is a per-frame value the OTHER thread
        published: `ret` is this call's own return address and `level_open` moves
        once per level. */
+    if (isGame && tagpu_packet_pub_level_open()) s_winGameFlip = 1;
     if (s && s_nops < MAX_OPS) {
         OP* o = &s_ops[s_nops++];
         memset(o, 0, sizeof *o);
         o->kind = OP_FLIP; o->base = s->base;
-        o->game = (unsigned char)(isGame && tagpu_packet_pub_level_open());
     }
     /* the cursor is drawn into the back buffer INSIDE the flip and its
        background restored before it returns: nothing in between is UI */
@@ -3579,7 +3615,12 @@ static int read_tokens(void)
    is the diagnostic, not the absence of a line. */
 void tagpu_gui_init(void)
 {
-    char b[220];
+    char b[256];        /* 221 worst case: 126 literal characters, the longest
+                           `%s` (`FAILED`, 6), 8 `%d` at eleven digits and the
+                           NUL. All eight are small flags today, so 220 never
+                           actually overran -- but `_snprintf` does not
+                           NUL-terminate on truncation and `glog` reads `%s`,
+                           so one byte short is an out-of-bounds READ, not a cut. */
     int n, ok, want, phase = 0;
 
     want = read_tokens();
@@ -3686,10 +3727,16 @@ void tagpu_gui_flush(unsigned int frame_counter)
        magnitude of one counter. mingw's `_snprintf` does not NUL-terminate on
        truncation, and `glog` hands the result to `fprintf("%s")`, so the
        failure would have been an out-of-bounds READ, not a tidy cut. */
-    char b[600];        /* 565 worst case, RE-COUNTED rather than adjusted by eye:
-                           213 literal characters, 33 `%u` at ten digits, 1 `%d` at
-                           eleven (`draw`, an int) and 1 at two (`s_phaseLive`, 0
-                           or 1), plus the NUL. The `asset=` group is FOUR
+    char b[600];        /* 571 worst case, COUNTED OUT OF THE FORMAT STRING rather
+                           than adjusted by eye: 207 literal characters, 33 `%u` at
+                           ten digits, and THREE `%d` at eleven (`world=…/%d`,
+                           `surfaces=%d`, `draw=%d`) plus the NUL. An earlier
+                           revision of this comment said 213 literals and two `%d`,
+                           one of them "at two digits" because `s_phaseLive` only
+                           ever holds 0 or 1 -- a conversion is sized by its TYPE,
+                           not by the values you expect in it, and that is the
+                           reasoning that overran this buffer twice. The `asset=`
+                           group is FOUR
                            fields, not the two an earlier revision of this comment
                            claimed -- the arithmetic was right and the prose was
                            stale, which is the way this line gets overrun. Landing
@@ -3697,8 +3744,8 @@ void tagpu_gui_flush(unsigned int frame_counter)
                            is 13 past what the buffer was, so this is the second
                            time the count has caught an overrun before it shipped.
                            The world phase (2026-09-22) added `world=%u/%u/%d`,
-                           `fillcut=%u` and `vpclear=%u`: 493 -> 565, which is
-                           21 past 544 -- the third time. */
+                           `fillcut=%u` and `vpclear=%u`: 493 -> 571, which is
+                           27 past 544 -- the third time. */
     want_minimap_watchdog(frame_counter);
     if (!s_installed) return;
     if (frame_counter - last >= 600) {
@@ -3712,9 +3759,9 @@ void tagpu_gui_flush(unsigned int frame_counter)
            live; read them as numbers again.
 
            SIZED FOR THE COUNTERS, NOT FOR THE LINE YOU LAST SAW. Thirty-three
-           `%u`s at ten digits, one `%d` at eleven and one at two, plus 213
-           literals, is 565 bytes -- past this buffer's 512 in the worst case,
-           which is why `b` is now 600. The observed line is ~300; the gap is
+           `%u`s at ten digits and three `%d` at eleven, plus 207 literals, is
+           571 bytes -- past the 544 this buffer held, which is why `b` is now
+           600. The observed line is ~300; the gap is
            entirely how long the session has run. This buffer has been overrun
            twice before by one group too many, so COUNT IT AGAIN when you add
            one. [`world=`, `fillcut=` and `vpclear=` added 2026-09-22 with the

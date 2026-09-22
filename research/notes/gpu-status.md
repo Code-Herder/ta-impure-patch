@@ -14723,17 +14723,34 @@ golden source with holes in it is the more expensive mistake.
 > not a key-filled viewport. `terrown` is still a play default and still an available
 > optimisation; it is no longer load-bearing for the picture.
 >
-> **WHAT THE WORLD PHASE COSTS, and it is not nothing.** Everything the engine draws inside the
-> two spans is refused, which includes its **world-anchored UI markers** — the selection box, the
-> health bars, the group digit, the order markers, the build cursor and the drag band box. At the
-> play defaults our own marker pass draws all of them and nothing is lost. Under `mark.on=passive`
-> or `mark.on=noselbox`, which hand the engine's copies back, those copies now reach the *golden
-> source* and **not the screen** — MEASURED 2026-09-22: with `noselbox` and a unit selected, the
-> box is in `tacli shot` and absent from the window. That is correct by the phase's own argument
-> (they are world-anchored, projected through the eye, and wrong at any zoom ≠ 1 — `markown`'s own
-> note calls the engine's copy "a ghost box at the unzoomed position"), and it is a real change to
-> what `noselbox` is good for: as a way of forcing engine pixels onto the *screen* it is blunted,
-> and the lever to use instead is `tagpu_worldphase.off`.
+> **WHAT THE WORLD PHASE COSTS, AND IT IS EVERY "LET THE ENGINE DRAW IT" MODE, NOT JUST THE
+> MARKERS.** The first revision of this section named only the world-anchored markers; that is the
+> most visible case, not the rule. The rule is: **everything the engine draws inside the two spans
+> is refused, so any configuration in which one of our passes stands down and the engine's own
+> draw of that thing is left enabled now loses it from the screen** — it still reaches the golden
+> source. Concretely, with the call site that puts each inside a span:
+>
+> | mode | what the engine draws | site | what you now get |
+> |---|---|---|---|
+> | `mark.on=passive`, `nobars`, `noselbox`, `nocursor`, `nodigits` | selection box, health bars, group digit, build cursor, band box | `0x4699EB`, `0x469B8A`, `0x469CF9`, `0x469EC5`, `0x469F1E` | golden source only |
+> | `fx.on=passive` | the effect layers | `0x469B22`, `0x469B2C` | golden source only |
+> | `sfx.on=passive` | the sfx layers | via `0x471F90` ×10 | golden source only |
+> | `tagpu_native.off` | **the units themselves** | `DrawUnit 0x45AC20` at `0x469A00` and `0x469BA3` | golden source only |
+> | `tagpu_terr.off` | the terrain | `0x483FA0` at `0x468DB0` | golden source only |
+> | `feat.off` with `featown` off | the feature sprites | the feature leaf `0x46A610`, called ×3 from span 2 | golden source only |
+>
+> So `mark.on=noselbox` now means *no selection box on the screen at all*, and `tagpu_native.off`
+> means *no units on the screen at all* — where before the clean cut each meant "the engine's copy
+> instead of ours". MEASURED 2026-09-22 for the marker row: with `noselbox` and a unit selected,
+> the box is in `tacli shot` and absent from the window. The other rows follow from the same
+> mechanism and the call sites above; only the marker row was measured.
+>
+> This is correct by the phase's own argument — these are world-anchored draws, projected through
+> the engine's unzoomed eye, and wrong at any zoom ≠ 1 (`markown`'s note calls the engine's box "a
+> ghost box at the unzoomed position") — but it is a real change to what those levers are good
+> for. **As a way of forcing engine pixels onto the screen, every one of them is now blunted, and
+> the lever to use instead is `tagpu_worldphase.off`**, which restores the pre-landing behaviour
+> for all of them at once.
 >
 > **What the leak actually looked like, now that it is gone.** A cross-build A/B at the play
 > defaults on the same fixture differs by **36 949 px of 786 432, every one of them on a tree**:
@@ -14746,9 +14763,27 @@ golden source with holes in it is the more expensive mistake.
 > viewport are a `PK_SEED` that deliberately carries none and a `PK_PIXELS` this lane drops, which
 > suggests the rule has little left to protect — but that is still "suggests", not "measured", and
 > retiring it belongs with the rest of the `terrown` removal (the fog tick's re-homing, `g_ssTerr`,
-> `OP.seq`'s other readers, the `tacli` auto-arm). What this landing did delete is
-> `tagpu_terrown_fill_seq()` and `g_fillSeq`, which had no reader left once the erase stopped
-> asking.
+> the `tacli` auto-arm). What this landing did delete is `tagpu_terrown_fill_seq()` and
+> `g_fillSeq`, which had no reader left once the erase stopped asking.
+>
+> *(An earlier revision of this line also listed "`OP.seq`'s other readers" as open. There are
+> none — both reviewers swept the tree 2026-09-22 and `OP::seq` and `tagpu_terrown_fill_seq` have
+> no surviving reader anywhere. `tagpu_order.c`'s `r->seq` is an unrelated cursor-sprite pointer
+> and `tagpu_packet.c`'s `m->seq` is the command ring.)*
+>
+> Two residuals the review named, both cosmetic-worst-case and neither fixed here:
+>
+> - **`tagpu_order.c`'s `bstarted`** infers "this site is already a nanoframe" from a `ptr_ok` on
+>   the order node's `N_TARGET`. Nothing is dereferenced, so it cannot fault; but that the engine
+>   *clears* the node when the building finishes is `[INFERRED]` — the release path has not been
+>   disassembled. A stale in-range target means the ghost for that one site never returns. The fix
+>   is that disassembly, not a wider test.
+> - **`terrown`'s `terr_fill` writes into the engine offscreen**, and this landing restores it to
+>   the play defaults, so that write now happens in every session. It is bounded by the engine's
+>   own validated clip rect (the same rect the engine's blits obey), which is a design bound and
+>   not a timing one — but the offscreen carries no buffer height, so the literal `cb < 8192` in
+>   `tagpu_terrown.c` is the only backstop on the last row. Unchanged by this landing; named here
+>   because the landing is what makes it a default again.
 
 **AND IT CLOSED A GAP NOBODY WAS AIMING AT: `renderer=gdi` IS STOCK AGAIN.** `tagpu_owndraw.on`
 was the one suppression with no runtime gate — two structure-shadow `je`s flipped to `jmp`s at

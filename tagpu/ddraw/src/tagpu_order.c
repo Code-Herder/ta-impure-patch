@@ -686,13 +686,26 @@ static void walk_unit(ORDARENA* A, const char* ta, const char* units, const char
                     /* HAS THIS SITE BECOME A NANOFRAME? The engine hangs the
                        created unit on the node's own target field the moment
                        construction begins (N_TARGET, the same field
-                       `resolve_sprite` and `circle_centre` read), and clears the
-                       node when the building finishes -- so a build node with a
-                       live target is a site that is no longer empty ground. The
-                       ghost pass drops those; the square keeps drawing, which is
-                       what the engine does. Read here, on the game thread, with
-                       the same `ptr_ok` those two use, and carried as a flag: no
-                       pointer crosses and the present thread compares nothing. */
+                       `resolve_sprite` and `circle_centre` read), so a build
+                       node with a live target is a site that is no longer empty
+                       ground. The ghost pass drops those; the square keeps
+                       drawing, which is what the engine does. Read here, on the
+                       game thread, with the same `ptr_ok` those two use, and
+                       carried as a flag: no pointer crosses and the present
+                       thread compares nothing.
+
+                       WHAT THIS IS NOT: a lifetime argument. `ptr_ok` is a range
+                       test on a VALUE, and nothing here is dereferenced, so the
+                       worst case is cosmetic and cannot fault. That the engine
+                       clears the node when the building finishes is [INFERRED]
+                       -- the clearing site has not been disassembled. If it does
+                       NOT clear it, or if the nanoframe dies while the queued
+                       node survives, N_TARGET holds a stale in-range pointer,
+                       `started` stays 1, and the preview for that one site never
+                       comes back although it is empty ground again. Nothing else
+                       degrades. Found by review 2026-09-22 and left open: the fix
+                       is to disassemble the node's release path, not to widen the
+                       test. */
                     r->bstarted =
                         ptr_ok(*(const char* const*)(node + N_TARGET)) ? 1 : 0;
                     pos[0] = r->bx; pos[1] = r->by; pos[2] = r->bz;

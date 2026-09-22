@@ -978,8 +978,10 @@ to `0x469F36` takes the metal/energy readout and the minimap with it. The terrai
 subtree is also provably incapable of leaking through an observed leaf: `0x483FA0..0x4843C0`
 calls `0x4B8150` ×4 and `0x4C6E70` once and nothing else, neither of which is a UI leaf. The
 feature leaf `0x46A610..0x46A860` is the opposite case — `0x4B7F90` ×5, `0x4B8500` ×3,
-`0x4B7F30` ×2 and `0x45AC20` — three of which the UI layer observes, which is why features were
-the measured leak.
+`0x4B7EE0` ×4, `0x4B7F30` ×2 and `0x45AC20` once — of which **two**, `0x4B7F90` and `0x4B8500`,
+are in `tagpu_gui_leaves.h`, which is why features were the measured leak. (`0x4B7EE0` was
+omitted and the count given as "three" in the first revision of this section, 2026-09-22; both
+are corrected here against `objdump` over the range.)
 
 #### The resource block, and the 33-byte memo that skips it [DISASSEMBLED 2026-09-21]
 

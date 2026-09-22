@@ -2383,15 +2383,19 @@ Four things to know before driving under it:
   tick runs inside `terrown`'s fog-overlay detour and only while the skip is set, so with
   `terrown` off the wide grid stops being rebuilt and a zoomed-out frame falls back to the
   engine's 1× one. Re-homing that tick is the rest of the `terrown` removal and is not done.
-- **THE WORLD PHASE REFUSES THE ENGINE'S WORLD-ANCHORED MARKERS, so `mark.on=passive` and
-  `mark.on=noselbox` no longer put them on the SCREEN.** Everything the engine draws between
-  `0x469849` and `0x469F36` — the selection box, health bars, the group digit, the order markers,
-  the build cursor and the drag band box — is dropped from the replay. At the play defaults our
-  own marker pass draws all of them and nothing is lost, and they are still in `tacli shot`, which
-  is what `passive` is for. But as a way of *forcing engine pixels onto the screen*, `noselbox` is
-  blunted: **measured 2026-09-22, with `noselbox` and a unit selected the box is in the golden
-  source and absent from the window.** The lever for that job now is **`tacli arm <i>
-  worldphase.off`**, which turns the phase off wholesale (it is read at DLL attach, so arm it
+- **THE WORLD PHASE REFUSES EVERYTHING THE ENGINE DRAWS INSIDE THE WORLD, so every "let the
+  engine draw it" mode now reaches the golden source and NOT the screen.** Everything drawn
+  between `0x468DB0`–`0x468E3A` and `0x469849`–`0x469F36` is dropped from the replay. That is not
+  only the world-anchored markers (selection box, health bars, group digit, order markers, build
+  cursor, band box) — it is also **`tagpu_native.off` (the units), `tagpu_terr.off` (the
+  terrain), `fx.on=passive`, `sfx.on=passive`, and `feat.off` with `featown` off (the trees)**.
+  At the play defaults our own passes draw all of it and nothing is lost, and all of it is still
+  in `tacli shot`, which is what `passive` is for. But **as a way of forcing engine pixels onto
+  the screen, every one of those levers is now blunted**: measured 2026-09-22, with `noselbox`
+  and a unit selected the box is in the golden source and absent from the window; the other modes
+  follow from the same mechanism (gpu-status.md §2.81 has the site-by-site table) and were not
+  each measured. The lever for that job now is **`tacli arm <i> worldphase.off`**, which turns
+  the phase off wholesale and restores all of them at once (it is read at DLL attach, so arm it
   before the launch).
 - **THE TRAP THIS LEAVES FOR YOU: `tacli` auto-arms the `*own` halves from the pass TRIGGER
   FILES, so a defaults-only instance and a file-armed one are different configurations.**
