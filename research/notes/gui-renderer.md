@@ -1245,8 +1245,20 @@ only thing the two threads share:
 | a surface first seen since the last reset | **seed** | the surface's bytes, whole, read now |
 | `0x4B7F90` of a frame ≤ 512 px, no sub-frames | **sprite** | the frame identity `(header, pixel pointer)`, the destination, the colour key; on first sight the frame's pixels, decoded on the game thread |
 | `0x4C6B70` from a twinned source | **copy** | source, box, source top-left |
-| a flip after which `terrown`'s fill sequence advanced | **clear** | the true viewport rect |
-| everything else — text, lines, rects, fills, the descriptor blit, the textured triangles, the shaded and sub-frame GAF variants, a copy from an untwinned source | **pixels** | the box's bytes **as they stand at publish time** |
+| a publish window holding an in-play flip | **clear** | the true viewport rect, emitted at the TOP of the window. *[REWRITTEN 2026-09-22. It used to read "a flip after which `terrown`'s fill sequence advanced", emitted at the flip marker, and BOTH halves of that were wrong. The gate compared the fill sequence read at the flip marker with the one read at publish — the same accessor, one statement apart, for the last flip of the window — so at the ~60 flips a second an in-play frame runs at, where a window holds exactly one flip, it was always equal and the clear NEVER FIRED in play; `uVpKey` was holding the viewport alone, which is what made `terrown` load-bearing. And the position was wrong too: the flip marker is pushed AFTER the frame's ops, so a clear emitted there wipes every engine draw inside the viewport, which `dedup` makes total by keeping only the last copy of a per-frame draw. Measured: the `PAUSED` banner in the golden source and absent from the screen. [GPU status](gpu-status.html) §2.81.]* |
+| a whole-surface `OP_FILL` on the frame surface, in play | **up to four bars** | the fill's colour over the bands AROUND the viewport rect, never over it. The HUD chrome's `0x4C6890(offscreen, 0)` spans the surface because that is a convenient box for "the chrome area"; publishing it whole laid opaque black over the world until the next erase, and around a reset — where `chrome_emit` pays its debt at the top of the next window — after it. A fill wholly inside the viewport emits nothing |
+| everything else — text, lines, rects, fills on other surfaces, the descriptor blit, the textured triangles, the shaded and sub-frame GAF variants, a copy from an untwinned source | **pixels** | the box's bytes **as they stand at publish time** |
+
+**AND SINCE 2026-09-22 AN OP CARRIES ITS PROVENANCE, which is a gate above this whole table.**
+Every op recorded inside one of `DrawGameScreen`'s two world spans is stamped WORLD and the
+publisher refuses it, whatever kind it would have been: the engine's feature sprites went through
+the same `0x4B7F90`/`0x4B8500` the side panel uses and were replayed over our own world, and no
+rule about KIND could ever have told them apart. The four call-site redirects that bracket the
+spans, and why the bracket is two spans rather than one, are in
+[GPU status](gpu-status.html) §2.3e and the [engine map](exe-reverse-engineering.html)'s
+*The TWO WORLD SPANS*. `world` is also part of an op's dedup IDENTITY — `dedup` keeps the LATER
+of two duplicates, so without that a UI draw matching a later world draw would be collapsed into
+an op the publisher then refuses, and the UI draw would vanish.
 
 Three things the run settled, none of them in the plan:
 

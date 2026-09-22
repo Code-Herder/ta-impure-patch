@@ -947,7 +947,30 @@ client point rather than the engine's logical grid, with the engine's own erased
 and the world composite together ([GL UI renderer](gui-renderer.html) §15–§17). Still no engine
 patch in phase 2 and no new engine-state write.
 
-Nothing here changes what the engine draws. Every site is an **observer detour**
+**AND SINCE 2026-09-22 THERE ARE FOUR CALL-SITE REDIRECTS BESIDE THE 17 LEAVES — the world
+phase.** They carry no observer and record no op: each is the 5-byte `call rel32` at a
+`DrawGameScreen` site repointed at a thunk of three instructions — `mov byte [s_world], v` then a
+tail `jmp` to the engine's own function — so the engine's arguments, its stack and its return are
+untouched and redirecting the SITE composes with whatever is detoured on the CALLEE. They bracket
+the two spans in which `DrawGameScreen` paints the world, and `op_add` stamps every op recorded
+inside one; `publish` then refuses it, because world content may not cross into a UI replay
+whatever leaf carried it. Byte-matched all-or-nothing at attach, installed with the leaves and
+reported as `worldphase=` on the `gui: ARMED` line; `tagpu_worldphase.off` is the A/B lever and a
+byte mismatch arms nothing and drops nothing.
+
+| site | calls | what it opens or closes |
+|---|---|---|
+| `0x468DB0` | `0x483FA0` terrain | span 1 **opens** |
+| `0x468E3A` | `0x4C69C0` clip reset | span 1 **closes** — the METAL/ENERGY block and the minimap follow, and are UI |
+| `0x469849` | `0x471F90(ctx, 0)` particle layer 0 | span 2 **opens** |
+| `0x469F36` | `0x435100` a mode query (`__fastcall`, ECX) | span 2 **closes** — the HUD extras tail follows, and is UI |
+
+Both closers are branch joins reached on every call of `DrawGameScreen`, so the flag cannot leave
+the function. Why these four and not the obvious single bracket, the branch evidence and the
+subtree call lists: the [engine map](exe-reverse-engineering.html), *The TWO WORLD SPANS*, and
+§2.81's `*own` subsection for what it cost and what it bought.
+
+Nothing here changes what the engine draws. Every leaf site is an **observer detour**
 (`tagpu_detour_observe`): the original runs unchanged, we read its arguments on the way in and,
 for the allocator, its result on the way out; every register and EFLAGS are saved around both
 calls (`pushfd/pushad … popad/popfd`, since the 2026-09-07 review). Installed once at DllMain when `tagpu_gui.on`
@@ -14621,74 +14644,111 @@ but the picture it draws with five of its passes removed.
 The CPU they save is real and is the whole of what they buy now; it is not the default, because a
 golden source with holes in it is the more expensive mistake.
 
-> **`terrown` WENT BACK ON THE DEFAULTS 2026-09-21, AND THE PARAGRAPH ABOVE IS WHY IT WAS WRONG
-> TO TAKE IT OFF.** It is not an optimisation like the other four: **the UI layer cannot find the
-> viewport without it.** The layer resolves the engine's surface twin through the palette and
-> paints it, and the one thing that keeps it off the world is `tagpu_gui_surf.c`'s `uVpKey` rule
-> — inside the viewport rect, a texel equal to the key resolves to `vec4(0.0)` instead of a
-> colour. `uVpKey` is `tagpu_terrown_filled() ? key : -1`, so with `terrown` absent there is no
-> key fill, the rule is inert, and the layer mirrors the engine's in-viewport pixels opaquely
-> over our whole world. The key fill is what makes a viewport texel separable from a UI texel at
-> all; nothing else in the frame distinguishes them.
+> **`terrown` WENT BACK ON THE DEFAULTS 2026-09-21 BECAUSE THE UI LAYER COULD NOT FIND THE
+> VIEWPORT WITHOUT IT, AND ON 2026-09-22 THAT STOPPED BEING TRUE.** The history is kept because
+> the mechanism it uncovered is the reason the repair is shaped the way it is.
 >
-> **AND THE MECHANISM IS THE ERASE, NOT THE KEY RULE** [established 2026-09-21, from the
-> publisher and pictured with `scenarios/build-facing.json` at the play defaults plus
-> `tagpu_terrown.off`]. What is on screen there is a **flat black viewport carrying the engine's
-> trees and rocks** — no terrain from either renderer, no unit from either — which is not "the
-> engine's frame mirrored" and is worth following through, because it names the one line that
-> would free `terrown`:
+> **What was wrong.** The layer resolves the engine's surface twin through the palette and
+> replays it, and with `terrown` absent the picture was a **flat black viewport carrying the
+> engine's trees and rocks** — no terrain from either renderer, no unit from either. Following
+> that through named three separate things, only one of which was `uVpKey`:
 >
 > * The twin is a **replay of DESCRIBED draws**, not a copy of the engine's frame. `PK_SEED`
->   crosses with `alen = 0` on purpose (`tagpu_gui_surf.c` §PK_SEED: "the twin is made empty, and
->   the engine's bytes are not carried"), and `PK_PIXELS`, the publisher's byte-box fallback, is
->   dropped by this lane. So the engine's terrain grid blit `0x483FA0` and its unit rasteriser
->   never enter the twin at all — neither is a described op — while its **features do**, because
->   a GAF blit publishes as `PK_SPRITE`. That is the trees.
-> * The black is the engine's **own whole-surface clear `0x4C6890`**, which publishes as a
->   `PK_BAR` the size of the surface (`tagpu_gui_hook.c`, the `OP_FILL` branch). It is opaque and
->   it covers the viewport every frame.
-> * What normally re-opens the viewport after that clear is **one `PK_CLEAR`, emitted at the FLIP
->   op** (`tagpu_gui_hook.c:1825`) — and it is emitted **only when `tagpu_terrown_fill_seq()` has
->   advanced**, i.e. only when the key fill ran. `g_fillSeq` is bumped by a successful fill and by
->   nothing else, so with `terrown` off the erase never fires, the engine's black fill stands for
->   the whole frame, and our world is behind it.
+>   crosses with `alen = 0` on purpose and `PK_PIXELS` is dropped by this lane, so the engine's
+>   terrain grid blit `0x483FA0` and its unit rasteriser never enter the twin at all — neither is
+>   a described op. Its **features do**, because a GAF blit publishes as `PK_SPRITE`. That is the
+>   trees, and it is a *provenance* failure: nothing in the channel said which draws were world.
+> * The black is the engine's **own whole-surface clear `0x4C6890`**, published as a `PK_BAR` the
+>   size of the surface. It is opaque and it covered the viewport. That is a *state* failure.
+> * What was meant to re-open the viewport was one **`PK_CLEAR` emitted at the FLIP op**, gated on
+>   `tagpu_terrown_fill_seq()` having advanced — and **that gate never fired in play.** It read
+>   `nextSeq` for the last flip of the window at publish time, one statement after the marker's
+>   own `seq` was taken from the same accessor, so the two were always equal; and at the ~60 flips
+>   a second an in-play frame runs at, a publish window holds exactly one flip. The erase was
+>   **dead code on the played path**, and `uVpKey` was carrying the viewport by itself. That is
+>   why the fix could not be a matter of widening the gate.
 >
-> So `terrown` is supplying the publisher's only per-frame signal that *the viewport is ours*,
-> and the `uVpKey` rule is the second half of the same arrangement rather than the whole of it.
+> **THE THREE FIXES, LANDED 2026-09-22.** They answer different questions and none substitutes
+> for another:
 >
-> **Measured, `one-unit` on Two Continents at 1024x768, exactly-black pixels of the 896x704
-> viewport in a grab of the game window:**
+> | fix | question | what it does |
+> |---|---|---|
+> | **the world phase** | *may this op be replayed at all?* (provenance) | an op recorded inside one of `DrawGameScreen`'s two world spans is stamped WORLD and `publish` refuses it |
+> | **the unconditional erase** | *what does the viewport hold before this window's draws?* (state) | one `PK_CLEAR` over the true viewport rect at the **top** of every in-play publish window |
+> | **the clipped chrome fill** | *must the black cover the world at all?* | a whole-surface `OP_FILL` on the frame surface is published as up to four `PK_BAR` bands **around** the viewport instead of one over it |
+>
+> **The world phase, and the four addresses it rests on.** `DrawGameScreen` paints its world in
+> **two** straight-line spans with UI between them — the METAL/ENERGY block and the minimap sit
+> *after* the terrain blit and *before* the unit sweep — so the bracket is
+> `0x468DB0`…`0x468E3A` and `0x469849`…`0x469F36`, each a 5-byte `call rel32` repointed at a
+> thunk that sets a byte and tail-jumps to the engine's own function. Both closers are reached on
+> every call of `DrawGameScreen`, so the flag cannot leak out of it; every site is byte-matched
+> all-or-nothing at attach and redirecting the SITE composes with whatever is detoured on the
+> CALLEE, so `terrown`'s skip of `0x483FA0` still wins and `fxown`'s detour on `0x471F90` still
+> runs. The full call table, the branch joins and the negative results are in the
+> [engine map](exe-reverse-engineering.html), *The TWO WORLD SPANS*.
+>
+> **It fails OPEN**: a build whose bytes differ arms nothing, the flag stays 0, no op is ever
+> dropped, and the leak is back — the state every build was in before this. `gui: ARMED …
+> worldphase=1` in `tagpu.log` says it took; `tagpu_worldphase.off` is the A/B lever, and the
+> heartbeat carries `world=<stamped>/<dropped>/<live>`.
+>
+> **The erase is at the TOP of the window and this is not cosmetic.** The flip marker is pushed at
+> the top of `before_flip`, i.e. AFTER the frame's ops, so an erase emitted there lands on top of
+> every engine draw the frame put inside the viewport — and `dedup` makes that total rather than
+> intermittent, because it keeps the LAST of two identical ops and the one surviving copy of a
+> per-frame draw sits immediately before the marker. **MEASURED 2026-09-22: with the erase at the
+> marker, the `PAUSED` banner is in the golden source and absent from the screen; moving the
+> erase to the top of the window brings it back.** The control that made that readable was the
+> pre-landing DLL, built from the same tree and run in the same instance under `--keep-dll`:
+> `PAUSED` draws there, so it is a regression this landing introduced and then closed, not a
+> pre-existing gap.
+> The gate is arm state — `ret == FLIP_RET_GAME` and `tagpu_packet_pub_level_open()`, both taken
+> on the game thread and both static across the frame — and deliberately not a counter the world
+> pass publishes, which would be read here a frame late and be down on every 0→1 acquisition edge
+> (`tagpu_owndraw.c` ~:210-225 is the precedent). The viewport rect is read only while a level is
+> open: `main+0x37E27` keeps the last level's rect in the shell, and an ungated read would punch
+> a hole in the MAIN MENU's own backdrop fill.
+>
+> **MEASURED, `build-facing` on Two Continents at 1024x768, the play defaults, exactly-black
+> pixels of the 896x704 viewport in a grab of the game window:**
 >
 > | arm | viewport black | what is on screen |
 > | --- | --- | --- |
-> | play defaults, nothing armed | **80.40 %** | no terrain, no units, no build ghost |
-> | + `tagpu_terr.on` (tacli auto-arms `terrown`) | **0.03 %** | the whole picture |
-> | play defaults + `tagpu_gui.off` | **0.03 %** | the world was drawing all along |
+> | play defaults (`terrown` on) | **0.03 %** | the whole picture |
+> | play defaults + `tagpu_terrown.off` | **0.03 %** | the whole picture — 8898 distinct colours, the same number |
 >
-> That third row is the proof the world passes were never at fault: in the 80 % run the census
-> read `6 pass(es) drew` and `native:` handed over `terr=644 … units=1 posed=1`. `owndraw`,
-> `featown` and `fxown` were all absent from the second row, so `terrown` is the whole of the
-> delta and the other three are correctly still off.
+> That second row was **80.40 %** before this landing. And the prize that goes with it: with
+> `terrown` off, **`tacli shot` has terrain again** — the golden source is a whole 1997 frame,
+> not a key-filled viewport. `terrown` is still a play default and still an available
+> optimisation; it is no longer load-bearing for the picture.
 >
-> **What it costs is what this subsection warns about, knowingly**: the golden source loses its
-> terrain again — `tacli shot` shows a key-filled viewport, `TERROWN skip=1 filled=1`. And it
-> loses it *by construction*, not as a side effect: the key fill IS the terrain blit's
-> replacement, so the same act that gives the publisher its per-frame signal is the act that
-> takes terrain out of the reference frame. The two cannot both be had while the signal lives in
-> the frame itself. **`tagpu_terrown.off` is the way back** for a reference-quality capture, the
-> same shape as `mark.on=passive`. A reference with terrain in it is worth less than a game with
-> a picture in it.
+> **WHAT THE WORLD PHASE COSTS, and it is not nothing.** Everything the engine draws inside the
+> two spans is refused, which includes its **world-anchored UI markers** — the selection box, the
+> health bars, the group digit, the order markers, the build cursor and the drag band box. At the
+> play defaults our own marker pass draws all of them and nothing is lost. Under `mark.on=passive`
+> or `mark.on=noselbox`, which hand the engine's copies back, those copies now reach the *golden
+> source* and **not the screen** — MEASURED 2026-09-22: with `noselbox` and a unit selected, the
+> box is in `tacli shot` and absent from the window. That is correct by the phase's own argument
+> (they are world-anchored, projected through the eye, and wrong at any zoom ≠ 1 — `markown`'s own
+> note calls the engine's copy "a ghost box at the unzoomed position"), and it is a real change to
+> what `noselbox` is good for: as a way of forcing engine pixels onto the *screen* it is blunted,
+> and the lever to use instead is `tagpu_worldphase.off`.
 >
-> **THE REPAIR THIS POINTS AT, NOT DONE AND NOT ASSUMED**: emit the viewport `PK_CLEAR` on every
-> game frame instead of only when `tagpu_terrown_fill_seq()` advanced. The publisher already has
-> the rect — it computes `tagpu_vpwide_true_rect` a few lines away, for the census — so the erase
-> need not be tied to a fill at all, and with the erase unconditional the engine could keep its
-> terrain and the reference frame would be whole again. What has to be CHECKED rather than
-> assumed is what the `uVpKey` rule would still be for: the two op kinds that could carry raw
-> engine bytes into the viewport are a `PK_SEED` that deliberately carries none and a `PK_PIXELS`
-> this lane drops, which suggests the rule has little left to protect — but "suggests" is not
-> "measured", and the way to find out is to make the erase unconditional, drop `terrown` from the
-> defaults, and look at a frame with chat, a dialog and the message band on it.
+> **What the leak actually looked like, now that it is gone.** A cross-build A/B at the play
+> defaults on the same fixture differs by **36 949 px of 786 432, every one of them on a tree**:
+> the baseline painted the engine's 8bpp sprite over ours (119 distinct colours in the differing
+> set) and this build shows ours alone (694 distinct colours there), mean |Δ| 1.86. Arm
+> `feat.off` and the trees now disappear entirely, where before the engine's stayed.
+>
+> **STILL OPEN, and not closed by this landing.** `uVpKey` is still wired and still reads
+> `tagpu_terrown_filled() ? key : -1`; the two op kinds that could carry raw engine bytes into the
+> viewport are a `PK_SEED` that deliberately carries none and a `PK_PIXELS` this lane drops, which
+> suggests the rule has little left to protect — but that is still "suggests", not "measured", and
+> retiring it belongs with the rest of the `terrown` removal (the fog tick's re-homing, `g_ssTerr`,
+> `OP.seq`'s other readers, the `tacli` auto-arm). What this landing did delete is
+> `tagpu_terrown_fill_seq()` and `g_fillSeq`, which had no reader left once the erase stopped
+> asking.
 
 **AND IT CLOSED A GAP NOBODY WAS AIMING AT: `renderer=gdi` IS STOCK AGAIN.** `tagpu_owndraw.on`
 was the one suppression with no runtime gate — two structure-shadow `je`s flipped to `jmp`s at

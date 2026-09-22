@@ -462,7 +462,20 @@ typedef struct OP {
     unsigned sgen;                              /* the seen table `glen` was decided against */
     short dx, dy;                               /* sprite: unclipped top-left */
     unsigned src; short sl, st;                 /* copy: source, its top-left */
-    unsigned seq;                               /* flip: terrown's fill seq   */
+    /* WHICH PHASE OF THE ENGINE'S DRAW THIS OP WAS OBSERVED IN, and it is the
+       only field here that is about PROVENANCE rather than about the draw. 1
+       means the op was recorded inside one of `DrawGameScreen`'s two world
+       spans (see "THE WORLD PHASE" above `op_add`) and `publish` refuses it:
+       world content may not cross into the UI replay whatever leaf it came
+       through. Its companion is `game` below, which is the flip marker's. */
+    unsigned char world;
+    /* flip marker only: this flip is the IN-PLAY one (`ret == FLIP_RET_GAME`)
+       and a level is open, so the frame that FOLLOWS it owes the viewport an
+       erase. It replaced `seq`, which was `tagpu_terrown_fill_seq()` — the
+       erase used to be emitted only when the terrain skip's key fill had run,
+       which made `terrown` the publisher's only signal that the viewport was
+       ours. See the `PK_CLEAR` emit in `publish`. */
+    unsigned char game;
     /* text (G17d): the string is copied into a game-thread scratch AT OBSERVE
        TIME, not read again at publish. The argument routinely points at a
        caller's stack temp, which is gone by the flip — the same reason a
@@ -885,6 +898,157 @@ static unsigned asset_token(void)
     return t;
 }
 
+/* ---- THE WORLD PHASE: WHERE AN OP CAME FROM, NOT WHAT IT LOOKS LIKE ------
+
+   Every op in this file is an OBSERVATION of an engine draw, and until this
+   section nothing in the channel distinguished a UI draw from a WORLD draw.
+   That is not a cosmetic gap: the engine's feature pass `0x46A610` blits its
+   trees through `0x4B7F90`/`0x4B8500`, the same two GAF blitters the side panel
+   and the dialogs use, so the trees published as `PK_SPRITE` and were replayed
+   over our own world. `featown` papered over it by stopping the engine drawing
+   at all, which holes the reference frame — the thing the clean cut exists to
+   keep whole.
+
+   A LIST OF GUILTY DRAWERS IS NOT A FIX, because the next one nobody has
+   enumerated leaks exactly the same way. What is recorded here instead is the
+   PHASE the engine was in when the op was taken: `DrawGameScreen 0x468CF0`
+   paints its world in two straight-line spans, and an op recorded inside either
+   of them is world content whatever leaf it came through. `publish` drops it.
+
+   THE TWO SPANS, from an `objdump` of `0x468CF0..0x46A400` [BINARY-VERIFIED
+   2026-09-22, the pristine build]. They are two and not one because the engine
+   paints the METAL/ENERGY readout and the MINIMAP in between, and both of those
+   are UI:
+
+     0x468DB0  call 0x483FA0   terrain            <- span 1 opens
+     0x468DBA  call 0x418310   map debug overlay
+     0x468E16  call 0x4BE950   ) two lines at an EYE-RELATIVE position (the
+     0x468E30  call 0x4BE950   ) `+0x80`/`+0x20` bias), gated on main+0x14280==2
+     0x468E3A  call 0x4C69C0   clip reset         <- span 1 closes
+     0x468E40..0x469610        the METAL/ENERGY block          UI
+     0x46961F  call 0x466B00   DrawMinimap                     UI
+     0x4696E7  call 0x4C13A0   the block's font/colour latch
+     0x469849  call 0x471F90   particle layer 0   <- span 2 opens
+     ...                       features, units, weapons, explosions, the
+                               marker block, the fog overlay, the build cursor
+     0x469F1E  call 0x4BF8C0   the band box, the last world-anchored draw
+     0x469F36  call 0x435100   a mode query       <- span 2 closes
+     0x469F40..0x46A3E0        the HUD extras tail: the F4/SPACE popup, chat,
+                               the debug line, the clock, the retained GUI
+                               blit, the profiler bars, the LIGHTBAR wipe   UI
+
+   WHY THESE FOUR ADDRESSES AND NOT THE OBVIOUS ONES. The handoff proposed
+   `0x468DB0` as the single opener — "the first thing in the world draw" — and
+   the disassembly refuses it: the resource block and the minimap come AFTER the
+   terrain blit, so one span from there to the tail would take the metal
+   readout and the minimap off the screen. Both closers are reached on EVERY
+   call of `DrawGameScreen`, which is what keeps the flag from leaking out of
+   the function: `0x468E3A` is the join of the `main+0x14280 == 2` branch
+   (`0x468DFF jne 0x468E35`), and `0x469F36` is the join of the whole build-
+   cursor block (`0x469E0D je 0x469F30`, and the drawn path falls through
+   `0x469F23` to the same label). Neither is inside a loop.
+
+   OBSERVERS, NOT SUPPRESSIONS. Each site is a 5-byte `call rel32` repointed at
+   a thunk that sets the flag and then calls the engine's own function with the
+   engine's own arguments — `tagpu_markown.c`'s idiom, and the same reason:
+   redirecting the SITE composes with whatever is detoured on the CALLEE, so
+   `terrown`'s skip of `0x483FA0` still wins and `fxown`'s detour on `0x471F90`
+   still runs. Nothing the engine does changes.
+
+   IT FAILS OPEN, DELIBERATELY. A build whose bytes differ arms nothing, the
+   flag stays 0, no op is ever dropped, and the leak is back — which is the
+   state every build was in until this landing. Failing the other way would
+   take the HUD off the screen on an exe we do not recognise. */
+static volatile unsigned char s_world = 0;   /* inside an engine world span      */
+static int      s_phaseLive = 0;             /* the four redirects are installed */
+static unsigned s_worldOps = 0;              /* ops stamped WORLD                */
+static unsigned s_worldDropped = 0;          /* ... and refused by `publish`     */
+static unsigned s_fillClipped = 0;           /* whole-surface fills cut round the
+                                                viewport instead of covering it  */
+static unsigned s_vpClears = 0;              /* viewport erases published        */
+
+#define WP_TERRAIN_VA     0x00483FA0u        /* stdcall(ctx),    ret 4  */
+#define WP_CLIPRESET_VA   0x004C69C0u        /* stdcall(ctx),    ret 4  */
+#define WP_SFXLAYER_VA    0x00471F90u        /* stdcall(ctx, n), ret 8  */
+#define WP_MODEQ_VA       0x00435100u        /* `mov eax,[ecx]; ret` — one
+                                                argument, in ECX, no stack */
+#define WP_SITE_HEAD_IN   0x00468DB0u
+#define WP_SITE_HEAD_OUT  0x00468E3Au
+#define WP_SITE_SWEEP_IN  0x00469849u
+#define WP_SITE_SWEEP_OUT 0x00469F36u
+
+/* THE FLAG IS SET BEFORE THE CALL AT EVERY SITE, so the callee is inside the
+   phase the site names: terrain and the particle layer are WORLD, the clip
+   reset and the mode query are UI. */
+static void __stdcall wp_head_in(void* ctx)
+{
+    s_world = 1;
+    ((void (__stdcall *)(void*))(size_t)WP_TERRAIN_VA)(ctx);
+}
+static void __stdcall wp_head_out(void* ctx)
+{
+    s_world = 0;
+    ((void (__stdcall *)(void*))(size_t)WP_CLIPRESET_VA)(ctx);
+}
+static void __stdcall wp_sweep_in(void* ctx, int n)
+{
+    s_world = 1;
+    ((void (__stdcall *)(void*, int))(size_t)WP_SFXLAYER_VA)(ctx, n);
+}
+/* `0x435100` takes its one argument in ECX and pops nothing, which is what
+   `__fastcall` means to GCC on i386 for a single pointer argument. The engine
+   reloads both ECX and EDX after the call (`0x469F40`/`0x469F46`) and needs
+   only EAX from it, so a C thunk's ordinary clobbers are invisible here. */
+static int __fastcall wp_sweep_out(void* obj)
+{
+    s_world = 0;
+    return ((int (__fastcall *)(void*))(size_t)WP_MODEQ_VA)(obj);
+}
+
+/* an `E8 <rel32>` at `site` whose target is `expect`? The sites are in the
+   exe's own `.text`, mapped by the loader before DllMain runs — DDRAW.dll is a
+   static import of TotalA.exe — so there is nothing here to probe for. */
+static int wp_site_is(unsigned site, unsigned expect)
+{
+    const unsigned char* p = (const unsigned char*)(size_t)site;
+    return p[0] == 0xE8 && *(const unsigned*)(p + 1) == expect - (site + 5);
+}
+
+static int wp_redirect(unsigned site, void* target)
+{
+    unsigned char b[5];
+    b[0] = 0xE8;
+    *(unsigned*)(b + 1) = (unsigned)(size_t)target - (site + 5);
+    return tagpu_detour_write(site, b, 5);
+}
+
+static int phase_install(void)
+{
+    int ok;
+    if (GetFileAttributesA("tagpu_worldphase.off") != INVALID_FILE_ATTRIBUTES) {
+        glog("gui: the world phase is OFF (tagpu_worldphase.off) — the engine's "
+             "own world draws replay through the UI layer again");
+        return 0;
+    }
+    /* all-or-nothing: every byte checked before any is written, so a patched or
+       different exe arms none of the four rather than half of them */
+    if (!wp_site_is(WP_SITE_HEAD_IN,   WP_TERRAIN_VA)   ||
+        !wp_site_is(WP_SITE_HEAD_OUT,  WP_CLIPRESET_VA) ||
+        !wp_site_is(WP_SITE_SWEEP_IN,  WP_SFXLAYER_VA)  ||
+        !wp_site_is(WP_SITE_SWEEP_OUT, WP_MODEQ_VA)) {
+        glog("gui: the world phase is NOT armed — engine bytes differ at one of "
+             "0x468DB0/0x468E3A/0x469849/0x469F36; engine world draws will reach "
+             "the UI replay");
+        return 0;
+    }
+    ok  = wp_redirect(WP_SITE_HEAD_IN,   (void*)wp_head_in);
+    ok &= wp_redirect(WP_SITE_HEAD_OUT,  (void*)wp_head_out);
+    ok &= wp_redirect(WP_SITE_SWEEP_IN,  (void*)wp_sweep_in);
+    ok &= wp_redirect(WP_SITE_SWEEP_OUT, (void*)wp_sweep_out);
+    s_phaseLive = ok;
+    return ok;
+}
+
 static void op_add(int kind, SURF* s, int l, int t, int r, int b)
 {
     OP* o;
@@ -954,6 +1118,13 @@ static void op_add(int kind, SURF* s, int l, int t, int r, int b)
     memset(o, 0, sizeof *o);
     o->base = s->base; o->l = (short)l; o->t = (short)t; o->r = (short)r; o->b = (short)b;
     o->kind = (unsigned char)kind;
+    /* THE PROVENANCE, TAKEN HERE BECAUSE THIS IS THE ONLY PLACE AN OP IS BORN.
+       Stamping at the observer would mean seventeen places to keep in step, and
+       `chrome_emit` — which is not inside any engine call — would need its own
+       rule. It does not: it runs at the flip, past `0x469F36`, so the flag it
+       reads is 0 by the same ordering that gives every other op its answer. */
+    o->world = s_world;
+    if (o->world) s_worldOps++;
     s_lastOp = o;
 }
 
@@ -1573,6 +1744,15 @@ static unsigned op_hash(const OP* o)
 }
 static int op_same(const OP* a, const OP* b)
 {
+    /* A WORLD OP AND A UI OP ARE NEVER THE SAME OP, whatever their boxes say.
+       `dedup` keeps the LATER of two duplicates and marks the earlier, so
+       without this a UI draw that happened to match a later world draw — same
+       kind, same surface, same box, same frame — would be collapsed into an op
+       `publish` then refuses, and the UI draw would simply vanish. The odds are
+       small and the failure is silent, which is the pair this file has been
+       caught by before (`OP::edge`, and for the same reason: an identity that
+       left out what actually distinguishes two draws). */
+    if (a->world != b->world) return 0;
     if (!(a->kind == b->kind && a->base == b->base && a->l == b->l && a->t == b->t && a->r == b->r && a->b == b->b &&
           a->frame == b->frame && a->pix == b->pix && a->src == b->src && a->sl == b->sl && a->st == b->st))
         return 0;
@@ -1802,7 +1982,14 @@ static void publish(unsigned flipSurf)
         s_hudPend   = 1;
         s_hudPoked  = 0;   /* a NEW debt: the last episode's poke says nothing */
     }
-    {
+    /* THE VIEWPORT RECT, AND ONLY WHILE A LEVEL IS OPEN. `main+0x37E27` keeps
+       the last level's rect after the shell comes back, so an ungated read
+       hands a perfectly plausible rectangle to two consumers that would then
+       act on it off a level: the frame's erase below, and the chrome fill's cut
+       in the `OP_FILL` branch — which would punch a hole in the MAIN MENU's
+       backdrop fill. `vr < 0` is the one answer that means "there is no
+       viewport", and both test it. */
+    if (tagpu_packet_pub_level_open()) {
         const char* ta = *(const char* const*)TA_MAINPP;
         int L, T, W, H;
         tagpu_vpwide_true_rect(ta, &L, &T, &W, &H);
@@ -1810,25 +1997,56 @@ static void publish(unsigned flipSurf)
     }
     fs = surf_by_base(flipSurf);
     if (fs && !fs->seeded && !pub_seed(fs)) return;
+    /* ---- THE VIEWPORT'S ERASE -------------------------------------------
+       What the viewport region holds BEFORE this window's draws, which is why
+       it is emitted HERE and not at the flip marker: the marker is pushed at
+       the TOP of `before_flip`, i.e. AFTER the frame's ops, so an erase emitted
+       there lands on top of every engine draw the frame put inside the viewport
+       and wipes it. `dedup` makes that total rather than intermittent — it
+       keeps the LAST of two identical ops, so the one surviving copy of a
+       per-frame draw sits immediately before the marker. MEASURED 2026-09-22:
+       with the erase at the marker, the `PAUSED` banner is in the golden source
+       and absent from the screen, every frame.
+
+       THE OLD `seq` GATE HID THIS BY NEVER FIRING. It asked whether
+       `tagpu_terrown_fill_seq()` had advanced between this flip and the next,
+       and read `nextSeq` for the LAST flip of the window at publish time —
+       the same instant the marker's own `seq` was taken, one statement earlier
+       — so the two were always equal and the last flip emitted nothing. At the
+       ~60 flips a second an in-play frame runs at, a window holds exactly one
+       flip, so the erase was DEAD in play and `uVpKey` was carrying the
+       viewport alone. That is what made `terrown` load-bearing (gpu-status.md
+       §2.81) and it is why removing the gate could not simply be a matter of
+       widening it.
+
+       THE GATE IS ARM STATE, NOT A COUNTER. `OP::game` is `ret ==
+       FLIP_RET_GAME` AND `tagpu_packet_pub_level_open()`, both taken on the
+       game thread at the flip and both static across the frame; a window is a
+       game window when any flip in it says so. It is deliberately NOT a value
+       the world pass publishes — that is a render-thread counter read here a
+       frame late, and on every 0->1 acquisition edge (level entry, recovery
+       from a `terr_bail`) the gate would still be down and the frame wrong.
+       `tagpu_owndraw.c` ~:210-225 is the precedent for that exact hazard. */
+    if (vr >= 0 && fs) {
+        int k, game = 0;
+        for (k = 0; k < s_nops; k++)
+            if (s_ops[k].kind == OP_FLIP && s_ops[k].game) { game = 1; break; }
+        if (game) {
+            TAGPU_PUBOP* c = pub_op(PK_CLEAR, fs->base);
+            if (!c) return;
+            c->l = (short)vl; c->t = (short)vt; c->r = (short)vr; c->b = (short)vb;
+            pub_commit();
+            s_vpClears++;
+        }
+    }
     for (i = 0; i < s_nops && !s_pubOverflow; i++) {
         OP* op = &s_ops[i];
         SURF* s;
         TAGPU_PUBOP* o;
         if (op->kind == OP_FLIP) {
-            unsigned nextSeq = (i + 1 < s_nops) ? 0 : tagpu_terrown_fill_seq();
-            int k;
-            for (k = i + 1; k < s_nops; k++) if (s_ops[k].kind == OP_FLIP) { nextSeq = s_ops[k].seq; break; }
-            if (k >= s_nops) nextSeq = tagpu_terrown_fill_seq();
             s = surf_by_base(op->base);
             if (s && !s->seeded && !pub_seed(s)) return;
             o = pub_op(PK_FRAME, op->base); if (!o) return; pub_commit();
-            /* the frame that follows this flip began with the terrain skip's
-               key fill: that is the viewport's erase, mirrored as a clear */
-            if (nextSeq != op->seq && vr >= 0 && s) {
-                o = pub_op(PK_CLEAR, op->base); if (!o) return;
-                o->l = (short)vl; o->t = (short)vt; o->r = (short)vr; o->b = (short)vb;
-                pub_commit();
-            }
             continue;
         }
         if (op->dup) continue;
@@ -1852,6 +2070,19 @@ static void publish(unsigned flipSurf)
                       op->src, op->sl, op->st);
             glog(b);
         }
+        /* WORLD CONTENT DOES NOT CROSS. The op was recorded inside one of
+           `DrawGameScreen`'s world spans (see "THE WORLD PHASE" above
+           `op_add`), so whatever leaf carried it, it is the engine painting the
+           world and this channel replays the UI.
+
+           DROPPED HERE, and the position is chosen twice over. Not in `op_add`:
+           the census explains changed pixels from the op array, and an op that
+           is never recorded reads there as an UNEXPLAINED change — an
+           instrument lying about a draw we chose not to carry. And not before
+           the probe above: `gui probe:` answers "what did the engine draw at
+           this pixel", which world draws are part of. It IS before `pub_seed`,
+           so a surface no UI op ever names is never seeded for one. */
+        if (op->world) { s_worldDropped++; continue; }
         if (!s->seeded && !pub_seed(s)) return;
         /* a plain keyed blit of a frame the atlas can hold is a sprite; a frame
            past the decoder's edge (TAGPU_GAF_DECMAX, the shell's 640-wide title
@@ -2018,6 +2249,42 @@ static void publish(unsigned flipSurf)
            this, because the FLIP op that emits it is recorded after these and
            publishes later in the same window. [2026-09-21.] */
         if (op->kind == OP_FILL) {
+            /* AND IT IS CUT ROUND THE VIEWPORT RATHER THAN UNDONE AFTERWARDS.
+               The fill that matters here is the HUD chrome's: `0x467D70` calls
+               `0x4C6890(offscreen, 0)` at its head before blitting its three
+               pieces, so the black it lays down spans the whole surface — the
+               viewport included — although every pixel of it that MEANS
+               anything is outside. The frame's erase already reopens the
+               viewport, but it is emitted at the FLIP op, so a chrome re-emit
+               landing after it in the same window (`chrome_emit` runs at the
+               flip's return, and pays a debt a reset left) blackens the world
+               until the next frame's erase. Subtracting the rect is the answer
+               that has no ordering in it at all.
+
+               UP TO FOUR BANDS, and a fill wholly inside the viewport emits
+               none — which is right: it would be erased whole. The engine's own
+               clip is not involved; `op_add` has already clamped the box to the
+               surface. `s->base == flipSurf` keeps this off the GUI screens'
+               own surfaces, whose fills have nothing to do with the viewport. */
+            int bl = op->l, bt = op->t, br = op->r, bb = op->b;
+            if (vr >= 0 && s->base == flipSurf &&
+                bl <= vr && br >= vl && bt <= vb && bb >= vt) {
+                int band[4][4], nb = 0, k;
+                int it = bt > vt ? bt : vt, ib = bb < vb ? bb : vb;
+                if (bt < vt) { band[nb][0] = bl;     band[nb][1] = bt;     band[nb][2] = br; band[nb][3] = vt - 1; nb++; }
+                if (bb > vb) { band[nb][0] = bl;     band[nb][1] = vb + 1; band[nb][2] = br; band[nb][3] = bb;     nb++; }
+                if (bl < vl) { band[nb][0] = bl;     band[nb][1] = it;     band[nb][2] = vl - 1; band[nb][3] = ib; nb++; }
+                if (br > vr) { band[nb][0] = vr + 1; band[nb][1] = it;     band[nb][2] = br; band[nb][3] = ib;     nb++; }
+                for (k = 0; k < nb; k++) {
+                    o = pub_op(PK_BAR, s->base); if (!o) return;
+                    o->l = (short)band[k][0]; o->t = (short)band[k][1];
+                    o->r = (short)band[k][2]; o->b = (short)band[k][3];
+                    o->fg = op->col;
+                    pub_commit();
+                }
+                s_fillClipped++;
+                continue;
+            }
             o = pub_op(PK_BAR, s->base); if (!o) return;
             o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
             o->fg = op->col;
@@ -2484,11 +2751,16 @@ static int __cdecl before_flip(void* entry_esp)
 
     src = flip_source(entry_esp);
     s = surf_of_ctx(src);
-    /* the marker: this flip's surface and the fill sequence as of now */
+    /* the marker: this flip's surface, and whether the frame that follows it is
+       an in-play one and therefore owes the viewport its erase. Both terms are
+       known on this thread and neither is a per-frame value the OTHER thread
+       published: `ret` is this call's own return address and `level_open` moves
+       once per level. */
     if (s && s_nops < MAX_OPS) {
         OP* o = &s_ops[s_nops++];
         memset(o, 0, sizeof *o);
-        o->kind = OP_FLIP; o->base = s->base; o->seq = tagpu_terrown_fill_seq();
+        o->kind = OP_FLIP; o->base = s->base;
+        o->game = (unsigned char)(isGame && tagpu_packet_pub_level_open());
     }
     /* the cursor is drawn into the back buffer INSIDE the flip and its
        background restored before it returns: nothing in between is UI */
@@ -3307,8 +3579,8 @@ static int read_tokens(void)
    is the diagnostic, not the absence of a line. */
 void tagpu_gui_init(void)
 {
-    char b[200];
-    int n, ok, want;
+    char b[220];
+    int n, ok, want, phase = 0;
 
     want = read_tokens();
 
@@ -3352,8 +3624,14 @@ void tagpu_gui_init(void)
     s_opsLive = 1;            /* before the install: a partial one still pushes ops */
     n = leaves_install();
     s_installed = n == LEAF_COUNT;
-    _snprintf(b, sizeof b, "gui: %s flip@0x4C63A0=%d leaves=%d/%d census=%d log=%d pgm=%d key=%d (the op stream feeds the UI pass; no engine pixel is carried)",
-              s_installed ? "ARMED" : "FAILED", ok, n, LEAF_COUNT, s_census, s_log, s_pgm, s_key);
+    /* AND THE PROVENANCE BRACKET, WITH THE LEAVES AND NOT BEFORE THEM: the four
+       redirects exist to stamp ops, and without the leaves there is no op to
+       stamp. It arms independently — a refusal there leaves the op capture
+       working and the engine's world draws crossing, which is the state before
+       this landing, and the log line says so. */
+    phase = phase_install();
+    _snprintf(b, sizeof b, "gui: %s flip@0x4C63A0=%d leaves=%d/%d worldphase=%d census=%d log=%d pgm=%d key=%d (the op stream feeds the UI pass; no engine pixel is carried)",
+              s_installed ? "ARMED" : "FAILED", ok, n, LEAF_COUNT, phase, s_census, s_log, s_pgm, s_key);
     b[sizeof b - 1] = 0;      /* _snprintf does not terminate what it truncates */
     glog(b);
 }
@@ -3408,15 +3686,19 @@ void tagpu_gui_flush(unsigned int frame_counter)
        magnitude of one counter. mingw's `_snprintf` does not NUL-terminate on
        truncation, and `glog` hands the result to `fprintf("%s")`, so the
        failure would have been an out-of-bounds READ, not a tidy cut. */
-    char b[544];        /* 493 worst case, RE-COUNTED rather than adjusted by eye:
-                           180 literal characters, 29 `%u` at ten digits and 2 `%d`
-                           at eleven, plus the NUL. The `asset=` group is FOUR
+    char b[600];        /* 565 worst case, RE-COUNTED rather than adjusted by eye:
+                           213 literal characters, 33 `%u` at ten digits, 1 `%d` at
+                           eleven (`draw`, an int) and 1 at two (`s_phaseLive`, 0
+                           or 1), plus the NUL. The `asset=` group is FOUR
                            fields, not the two an earlier revision of this comment
                            claimed -- the arithmetic was right and the prose was
                            stale, which is the way this line gets overrun. Landing
                            8d added the FOUR-field `tint=` group: 444 -> 493, which
                            is 13 past what the buffer was, so this is the second
-                           time the count has caught an overrun before it shipped. */
+                           time the count has caught an overrun before it shipped.
+                           The world phase (2026-09-22) added `world=%u/%u/%d`,
+                           `fillcut=%u` and `vpclear=%u`: 493 -> 565, which is
+                           21 past 544 -- the third time. */
     want_minimap_watchdog(frame_counter);
     if (!s_installed) return;
     if (frame_counter - last >= 600) {
@@ -3429,13 +3711,18 @@ void tagpu_gui_flush(unsigned int frame_counter)
            resets=5 draw=1` in an ordinary boot [2026-09-21]. Every field here is
            live; read them as numbers again.
 
-           SIZED FOR THE COUNTERS, NOT FOR THE LINE YOU LAST SAW. Twenty-nine
-           `%u`s at ten digits and two `%d`s at eleven, plus 180 literals, is
-           492 bytes, and the observed line is ~260 -- the gap is entirely how
-           long the session has run. This buffer has been overrun twice before by
-           one group too many, so COUNT IT AGAIN when you add one. */
-        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u chrome=%u/%u panel=%u/%u hud=%u/%u asset=%u/%u/%u/%u tint=%u/%u/%u/%u",
-                  s_flips, s_opsTotal, s_opsDropped, s_changedTotal, s_unexplTotal, s_nsurf,
+           SIZED FOR THE COUNTERS, NOT FOR THE LINE YOU LAST SAW. Thirty-three
+           `%u`s at ten digits, one `%d` at eleven and one at two, plus 213
+           literals, is 565 bytes -- past this buffer's 512 in the worst case,
+           which is why `b` is now 600. The observed line is ~300; the gap is
+           entirely how long the session has run. This buffer has been overrun
+           twice before by one group too many, so COUNT IT AGAIN when you add
+           one. [`world=`, `fillcut=` and `vpclear=` added 2026-09-22 with the
+           world phase.] */
+        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u world=%u/%u/%d fillcut=%u vpclear=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u chrome=%u/%u panel=%u/%u hud=%u/%u asset=%u/%u/%u/%u tint=%u/%u/%u/%u",
+                  s_flips, s_opsTotal, s_opsDropped,
+                  s_worldOps, s_worldDropped, s_phaseLive, s_fillClipped, s_vpClears,
+                  s_changedTotal, s_unexplTotal, s_nsurf,
                   s_pubOps, s_pubBytes, g_guiq.qHead - g_guiq.qTail, g_guiq.resets, g_guiq.overflows, g_guiq.stalls, g_gui_draw, s_freeqFlush, s_repaints, s_repaintSkips, s_repaintOps,
                   s_chromeEmits, s_chromeRefused, s_panelEmits, s_panelRefused, s_hudPokes, s_hudRefused,
                   s_assetSends, s_assetAcked, s_assetRevoked, s_assetDrift,

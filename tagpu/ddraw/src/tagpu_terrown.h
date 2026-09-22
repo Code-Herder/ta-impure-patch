@@ -31,12 +31,14 @@ int  tagpu_terrown_installed(void);
    skip — the composite must not invert on the frame the skip is first set,
    when the engine's surface still holds a real terrain blit */
 int  tagpu_terrown_filled(void);
-/* bumped by every successful fill. The composite watches it stall: if the game
-   thread draws frames that never reach 0x483FA0 (a screen other than the world),
-   the engine's surface stops carrying our key and inverting against it would
-   black out that screen. A stall simply stops the inversion, which leaves our
-   own FBO covering the viewport — always safe, and self-correcting. */
-unsigned tagpu_terrown_fill_seq(void);
+/* `tagpu_terrown_fill_seq()` STOOD HERE and is deleted [2026-09-22]. It was
+   bumped by every successful key fill, and its one reader was the UI layer's
+   publisher: the viewport's erase was emitted only on a frame whose fill
+   sequence had advanced. That made this lever — which suppresses the engine's
+   terrain pass and so holes the reference frame — the publisher's only signal
+   that the viewport was ours, and with `terrown` off the erase never fired at
+   all. The erase is now a property of the frame (`tagpu_gui_hook.c`'s `publish`,
+   the `PK_CLEAR` at the flip marker), so nothing asks this any more. */
 /* 1 while the engine's fog overlay 0x4848E0 is ours — which is to say while
    the lazy rebuild of the screen fog grid is a decision WE make, in
    terr_fogtick, rather than one the engine makes by testing a bit we would

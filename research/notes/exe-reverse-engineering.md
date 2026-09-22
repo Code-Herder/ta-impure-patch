@@ -931,6 +931,56 @@ targets, re-read for the aircraft work rather than taken from the earlier note.]
 | `0x469B2C` | `0x420B00` | explosions and effects |
 | `0x469BA3` | `0x45AC20` DrawUnit | **site B** — everything `(state&3) != 1`, over ALL rows |
 
+#### The TWO WORLD SPANS, and why the draw is not one run [BINARY-VERIFIED 2026-09-22]
+
+Read for the UI layer's world phase (`tagpu_gui_hook.c`, gpu-status §2.81): the question was
+"where does `DrawGameScreen`'s world draw begin and end", and the answer is that it has **two**
+straight-line spans with UI between them, not one. The whole call list of
+`0x468CF0..0x46A400`, filtered to what writes pixels, in address order:
+
+| VA | Calls | What | phase |
+| --- | --- | --- | --- |
+| `0x468D30` | `0x4C69A0` | makes `main+0x37E1B` the back buffer | — |
+| **`0x468DB0`** | `0x483FA0` | **the terrain grid blit** | **WORLD opens** |
+| `0x468DBA` | `0x418310` | the map debug overlay, normally a no-op | WORLD |
+| `0x468E16`, `0x468E30` | `0x4BE950` | **two lines at an EYE-RELATIVE position** — `esi`/`edi` are `main+0x2CAC/+0x2CB0/+0x2CB4` minus the eye `+0x1431F`/`+0x14323` with the `+0x80`/`+0x20` bias, i.e. the world-space projection idiom. Gated on `main+0x14280 == 2` (`0x468DFF jne 0x468E35`). Colour `[ebx+0x0F]` | WORLD |
+| **`0x468E3A`** | `0x4C69C0` | the clip reset; the join of that branch, so it is reached on every call | **WORLD closes** |
+| `0x468E40..0x469610` | — | the METAL/ENERGY resource block | UI |
+| `0x469615` | `0x46A860` | `stdcall(ctx) ret 4`, sole caller. Reads `main+0x37E23` (screen H) and `main+0x147A7` and draws along the bottom of the screen; `chrome_emit` (`tagpu_gui_hook.c`) records that its two GAF sites redraw the bar's FIRST tile rather than the continuation, so it is **not** the function that lays the repeats. [INFERRED: the bottom HUD bar.] Not disassembled further | UI |
+| `0x46961F` | `0x466B00` `DrawMinimap` | the minimap | UI |
+| `0x46964F` | `0x4C6B10` | the draw context re-seeded from `main+0x37E27` | — |
+| `0x4696CD`/`0x4696E7` | `0x4C1420`/`0x4C13A0` | the marker block's font and text-colour latch | — |
+| **`0x469849`** | `0x471F90(ctx, 0)` | **particle layer 0** | **WORLD opens** |
+| `0x469855`, `0x469861` | `0x471F90` | particle layers 1 and 2 | WORLD |
+| `0x469920`… | see the table above | features, units, weapons, explosions | WORLD |
+| `0x469BD7`…`0x469D2C` | `0x471F90(ctx, 8/9)` | the marker block: order markers, health bars, the group digit | WORLD |
+| `0x469D8E` | `0x4848E0` | the fog overlay | WORLD |
+| `0x469EC5`, `0x469F1E` | `0x4BF8C0` | the build cursor and the drag band box — the last world-anchored draw | WORLD |
+| **`0x469F36`** | `0x435100` | a mode query on `main+0x391E9` | **WORLD closes** |
+| `0x469F40..0x46A3E0` | — | the HUD extras tail (below) | UI |
+
+**The two closers are reached on EVERY call**, which is what lets a flag set at an opener be
+relied on to come down inside the same function. `0x468E3A` is the join of `0x468DFF jne
+0x468E35`; `0x469F36` is the join of the whole build-cursor block — `0x469E0D je 0x469F30` from
+the gate and a fall-through from `0x469F23` when it did draw, both landing on `0x469F30`. Neither
+is inside a loop, and `0x469849` is reached straight-line from `0x4696E7` (the intervening
+`0x4696EC..0x469842` is arithmetic and two loops with no call in them at all).
+
+**`0x435100` is `mov eax,[ecx]; ret`** — one argument, in ECX, nothing on the stack, no pop:
+`__fastcall` for a single pointer in GCC's i386 spelling. Its caller reloads both ECX and EDX
+immediately afterwards (`0x469F40`/`0x469F46`) and uses only EAX from it. `0x4C69C0` is
+`stdcall(ctx) ret 4`, `0x471F90` `stdcall(ctx, n) ret 8`, `0x483FA0` `stdcall(ctx) ret 4`.
+
+**NEGATIVE RESULT, and it is the one that settled the design.** The obvious single bracket —
+open at the terrain blit `0x468DB0` and close at the tail — is WRONG: the resource block and the
+minimap are painted *after* the terrain and *before* the unit sweep, so one span from `0x468DB0`
+to `0x469F36` takes the metal/energy readout and the minimap with it. The terrain blit's own
+subtree is also provably incapable of leaking through an observed leaf: `0x483FA0..0x4843C0`
+calls `0x4B8150` ×4 and `0x4C6E70` once and nothing else, neither of which is a UI leaf. The
+feature leaf `0x46A610..0x46A860` is the opposite case — `0x4B7F90` ×5, `0x4B8500` ×3,
+`0x4B7F30` ×2 and `0x45AC20` — three of which the UI layer observes, which is why features were
+the measured leak.
+
 #### The resource block, and the 33-byte memo that skips it [DISASSEMBLED 2026-09-21]
 
 `DrawGameScreen` runs every frame, but its METAL/ENERGY block at `0x468E40..0x469610` usually does

@@ -44,37 +44,37 @@ typedef struct { const char* on; const char* tokens; const char* needs; const ch
    golden source with holes in it is the more expensive mistake.
    [The vulkan-only plan, THE CLEAN CUT.]
 
-   `tagpu_terrown` IS A PLAY DEFAULT AND IS NOT ONE OF THEM, because it is not
-   an optimisation: THE UI LAYER CANNOT FIND THE VIEWPORT WITHOUT IT. The layer
-   resolves the engine's surface twin through the palette and paints it, and the
-   one thing that keeps it off the world is `tagpu_gui_surf.c`'s
-   `uVpKey` rule -- inside the viewport rect, a texel equal to the key resolves
-   to `vec4(0.0)` instead of a colour. `uVpKey` is
-   `tagpu_terrown_filled() ? key : -1`, so with `terrown` absent there is no key
-   fill, the rule is inert, and the layer paints the ENGINE's terrain opaquely
-   over our whole world. The key fill is what makes a viewport texel separable
-   from a UI texel at all; nothing else in the frame distinguishes them.
+   `tagpu_terrown` IS A PLAY DEFAULT AND IS NOT ONE OF THEM, and the reason
+   changed on 2026-09-22. It was on this table because THE UI LAYER COULD NOT
+   FIND THE VIEWPORT WITHOUT IT: with `terrown` absent the layer replayed the
+   engine's own whole-surface clear over the world and its feature sprites on
+   top, and the viewport measured 80.40 % black. Three things were wrong and
+   `terrown` was papering over all of them -- see gpu-status.md 2.81, the
+   `*own` levers subsection, for the full account and the numbers:
 
-   MEASURED 2026-09-21, one-unit on Two Continents at 1024x768, counting exactly
-   black pixels of the 896x704 viewport in a grab of the game window:
+     - nothing in the op channel said which draws were WORLD, so the engine's
+       features crossed through the same GAF blitters the side panel uses;
+     - the engine's whole-surface fill was published as a bar over everything;
+     - the viewport's erase was gated on this module's fill sequence, and that
+       gate never fired on the played path at all.
 
-     play defaults, nothing armed              80.40 % black -- no terrain, no
-                                               units, no build ghost on screen
-     + tagpu_terr.on (auto-arms terrown)        0.03 % black -- the whole picture
-     play defaults + tagpu_gui.off              0.03 % black -- the world was
-                                               always drawing; the layer hid it
+   All three are fixed in `tagpu_gui_hook.c` (the world phase, the erase at the
+   top of every in-play publish window, and the chrome fill cut round the
+   viewport). MEASURED 2026-09-22 on `build-facing`, Two Continents, 1024x768,
+   exactly-black pixels of the 896x704 viewport: the play defaults and the play
+   defaults plus `tagpu_terrown.off` both read 0.03 %, with the same 8898
+   distinct colours. So the row below is now what it always claimed to be -- an
+   OPTIMISATION, kept on by default because it is free and because nothing has
+   yet re-homed the wide fog tick that rides its second detour.
 
-   That third row is the proof the world passes were never the fault: the census
-   read `6 pass(es) drew` and `native:` handed over `terr=644 ... units=1
-   posed=1` in the 80 % black run. `owndraw`, `featown` and `fxown` were absent
-   from the second row, so terrown is the whole of the delta and those three are
-   correctly still off.
-
-   WHAT IT COSTS, said plainly: the golden source loses its terrain -- `tacli
-   shot` shows a key-filled viewport, `TERROWN skip=1 filled=1` -- exactly as
-   the paragraph above warned. `tagpu_terrown.off` is the way back for a
-   reference-quality capture, the same shape as `mark.on=passive`. A reference
-   with terrain in it is worth less than a game with a picture in it. */
+   WHAT IT STILL COSTS, said plainly: the golden source loses its terrain --
+   `tacli shot` shows a key-filled viewport, `TERROWN skip=1 filled=1`.
+   `tagpu_terrown.off` is the way back for a reference-quality capture, the
+   same shape as `mark.on=passive`, and SINCE THIS LANDING IT COSTS THE PICTURE
+   NOTHING. What it does still cost is the zoomed-out fog: `tagpu_fogwide`'s
+   tick runs inside this module's fog-overlay detour and only while the skip is
+   set, so with `terrown` off the wide grid stops. Re-homing it is the rest of
+   the `terrown` removal, not this landing. */
 static const Def s_defs[] = {
     { "tagpu_native.on",    "all wrecks", 0, 0 },          /* every unit natively, 3D husks too   */
     { "tagpu_terr.on",      "", 0, 0 },                     /* terrain and the fog overlay         */

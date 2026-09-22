@@ -85,7 +85,6 @@ static const unsigned char FOG_STOLEN[5] =
 volatile unsigned char g_terrown_skip = 0;
 static int g_installed = 0;
 static volatile int g_filled = 0;      /* the fill has run under this skip */
-static volatile unsigned g_fillSeq = 0;/* bumped by every successful fill    */
 static unsigned g_beat = 0, g_last = 0;
 
 static void flog(const char* s)
@@ -148,7 +147,6 @@ static void __cdecl terr_fill(void* ctxv)
        own FBO covering the viewport — the world is right and the engine's
        overlays are missing, which beats hiding the world. */
     g_filled = 1;
-    g_fillSeq++;
 }
 
 /* In place of the fog overlay: its lazy grid rebuild, and only that — plus the
@@ -310,8 +308,6 @@ int tagpu_terrown_filled(void) { return g_terrown_skip && g_filled; }
    leaf_call detour on 0x4848E0 tests, so terr_fogtick above runs on precisely
    these ticks and on no others. */
 int tagpu_terrown_owns_fog(void) { return g_terrown_skip != 0; }
-
-unsigned tagpu_terrown_fill_seq(void) { return g_fillSeq; }
 
 void tagpu_terrown_flush(unsigned int frame_counter)
 {

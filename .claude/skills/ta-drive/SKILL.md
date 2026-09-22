@@ -2368,14 +2368,31 @@ Four things to know before driving under it:
   exactly what it stopped: `featown.on` takes the trees. **They still work and still save the
   CPU** — arm them for a frame-time measurement, never for a comparison. Note `markown` installs
   its detours at DLL ATTACH, so writing its file to a running instance opens nothing.
-- **`terrown` IS A PLAY DEFAULT AGAIN SINCE 2026-09-21, AND IT IS NOT OPTIONAL: WITHOUT IT THE
-  GAME HAS NO PICTURE.** The UI layer finds the world viewport only by `terrown`'s key fill
-  (`tagpu_gui_surf.c`'s `uVpKey`), so with `terrown` absent it paints the ENGINE's terrain
-  opaquely over everything we drew. Measured on `one-unit` at 1024x768, exactly-black pixels of
-  the viewport: **80.40 %** on the old defaults (no terrain, no units, no build ghost on screen)
-  against **0.03 %** with it — while the census read `6 pass(es) drew` and `native:` handed over
-  `terr=644 … units=1 posed=1` in both. `tagpu_gui.off` also reads 0.03 %, which is the proof the
-  world passes were never the fault.
+- **`terrown` IS A PLAY DEFAULT, AND SINCE 2026-09-22 IT IS AN OPTIMISATION AGAIN RATHER THAN A
+  REQUIREMENT.** Between 2026-09-21 and then it was load-bearing: with it absent the UI layer
+  replayed the engine's whole-surface clear over the world and its trees on top, and the viewport
+  measured **80.40 %** exactly-black against **0.03 %** with it. Three fixes in
+  `tagpu_gui_hook.c` closed that — the world phase (engine world draws are stamped and refused),
+  the viewport erase emitted at the top of every in-play publish window instead of behind
+  `terrown`'s fill sequence, and the chrome fill cut round the viewport. **Measured 2026-09-22 on
+  `build-facing` at 1024x768: the play defaults and the play defaults plus `tagpu_terrown.off`
+  both read 0.03 %, 8898 distinct colours, the same picture** — and with it off, **`tacli shot`
+  has terrain again**, which is the whole reason to turn it off. gpu-status §2.81, the `*own`
+  levers subsection.
+- **What `terrown.off` still costs is the ZOOMED-OUT FOG, not the picture.** `tagpu_fogwide`'s
+  tick runs inside `terrown`'s fog-overlay detour and only while the skip is set, so with
+  `terrown` off the wide grid stops being rebuilt and a zoomed-out frame falls back to the
+  engine's 1× one. Re-homing that tick is the rest of the `terrown` removal and is not done.
+- **THE WORLD PHASE REFUSES THE ENGINE'S WORLD-ANCHORED MARKERS, so `mark.on=passive` and
+  `mark.on=noselbox` no longer put them on the SCREEN.** Everything the engine draws between
+  `0x469849` and `0x469F36` — the selection box, health bars, the group digit, the order markers,
+  the build cursor and the drag band box — is dropped from the replay. At the play defaults our
+  own marker pass draws all of them and nothing is lost, and they are still in `tacli shot`, which
+  is what `passive` is for. But as a way of *forcing engine pixels onto the screen*, `noselbox` is
+  blunted: **measured 2026-09-22, with `noselbox` and a unit selected the box is in the golden
+  source and absent from the window.** The lever for that job now is **`tacli arm <i>
+  worldphase.off`**, which turns the phase off wholesale (it is read at DLL attach, so arm it
+  before the launch).
 - **THE TRAP THIS LEAVES FOR YOU: `tacli` auto-arms the `*own` halves from the pass TRIGGER
   FILES, so a defaults-only instance and a file-armed one are different configurations.**
   `_ensure_terrown_for_terr` (`tools/tacli:1035`) is `if not terr.exists(): drop terrown`, and
