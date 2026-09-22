@@ -2737,6 +2737,11 @@ static int __cdecl before_flip(void* entry_esp)
                    to `raw`. `s_scaleSem` can never exceed `s_kindArea` because
                    both take the same box from the same op. */
                 else if (k == OP_SCALE) {
+                    /* the min is a BOUND and not an expectation: both sides take
+                       the op's own clamped box, so they are equal or `s_scaleSem`
+                       is the smaller. It is here so that a future edit which
+                       breaks that cannot make `raw` underflow into a huge
+                       unsigned and read as a catastrophe. */
                     unsigned semArea = s_scaleSem <= s_kindArea[k] ? s_scaleSem : s_kindArea[k];
                     sem += semArea;
                     raw += s_kindArea[k] - semArea;

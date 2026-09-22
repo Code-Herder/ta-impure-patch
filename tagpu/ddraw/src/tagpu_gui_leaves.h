@@ -581,8 +581,16 @@ static int __cdecl before_scale(void* e)
         if (s_census || g_gui_draw) scale_capture(o, fr, dw, dh);
         /* AFTER the capture, and on its result: `glen` is what `publish` tests
            before it makes a `PK_SPRITE`, so counting the same thing keeps the
-           census and the queue telling one story. */
-        if (o->glen) s_scaleSem += (unsigned)(r - l + 1) * (unsigned)(b - t + 1);
+           census and the queue telling one story.
+
+           FROM THE OP'S OWN BOX, not from the locals. `op_add` clamps to the
+           SURFACE before it accumulates `s_kindArea`, and these locals were
+           only clipped to the CONTEXT -- so taking them here would let the
+           semantic half exceed the total it is subtracted from whenever the
+           two rectangles differ. Reading `o->l..o->b` back is the same box
+           `s_kindArea` just took, by construction rather than by coincidence. */
+        if (o->glen)
+            s_scaleSem += (unsigned)(o->r - o->l + 1) * (unsigned)(o->b - o->t + 1);
     }
     return 0;
 }
