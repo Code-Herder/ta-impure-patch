@@ -572,6 +572,39 @@ direction to err while the capture almost never fired. With the swatches closed 
 The two halves are counted apart now, off the same box, so the kind is still **not** treated as
 though it were always semantic.
 
+**What the landing review found.** Two reviewers, the second on the blast radius of the shared
+atlas key. Three real code findings, all fixed on the branch:
+
+| what was wrong | what it rested on |
+|---|---|
+| the scaled sprite published the **raw plane pointer** as its atlas key where the 1:1 path publishes `frame_key`'s **content hash** | `pix` is in that key precisely because "freed sequences get their address reused". For every scaled sprite the defence was not in force: the shell frees a popped screen's art, the allocator hands a *different* frame the same header and plane addresses, and the same window at the same size would hit a stale entry for the rest of the session. `scale_capture` had always computed the right value and `publish` simply never read it — pre-existing, but 8e multiplies the entries per frame address and lengthens their lives. |
+| `op_same` did not compare the window | The prefix compares the frame and the plane, equal for every window of one frame, so a windowed stamp and a whole-frame one over the same box collapsed. Mostly harmless — a sprite overwrites its box — but a **colour-keyed** sprite leaves its transparent texels alone, so the survivor does not write what both would have. Fixed by making the identity finer, the same shape as 8d's `edge` field, rather than exempting the kind, which 8d measured to be the wrong instrument. |
+| two comments and one note claim asserted the identity this landing breaks | `scale_capture`'s heading still said the scaled variant "cannot collide" with a 1:1 use, `tagpu_gaf.h` still documented the four-part key three lines above the new parameter, and `tagpu_render3do.c` quoted the old signature. The one comment a reader lands on first argued the key was safe without a window. |
+
+**And one claim of my own that the disassembly disproved.** The note above hedged that, for a
+`uv == NULL` caller, "which of the two conventions the rasteriser honours is not established".
+There are not two: `0x4C75F4` **overwrites the argument slot in place** with the synthesised quad,
+so one interpolation path serves both and the default is simply a `(w-1)×(h-1)` window. The
+asymmetry is real, the hedge was not, and the engine map says so now.
+
+**A pressure point named rather than closed.** Windows create more distinct atlas entries per
+frame address than whole-frame stamps do, and the GUI atlas — unlike the feature atlas — never
+sets `repack`, so when it fills it drops every entry and re-seeds. A GUI caller that *animates*
+its uv window would refill and re-drop it indefinitely; before 8e such a draw was refused on
+`uv[0] == 0` and cost one dropped `PK_PIXELS` box. No measured caller does this, and the
+measurement is the honest bound available rather than a proof: **1 477 in-game census windows**
+carry `scale` counts of 1–8 (the badge) and `nosurf=0` on every one, with the atlas at 52/4096;
+the shell sits at 97/4096 with four windowed entries. The failure mode if one appeared is a cache
+thrash on an existing, handled path, not wrong pixels.
+
+That `nosurf=0` also disproves a hypothesis worth recording, because it is the obvious one:
+`0x4C7580` has **ten** callers and some are the 3DO per-face texture stamp, so it looks as though
+only `surf_of_ctx` returning NULL keeps a flood of per-face windows out of the atlas. It is not —
+if those calls arrived and were refused, `nosurf` would count them, and across 1 477 windows it is
+zero. They never reach the observer at all, because this fork owns the world draw and the engine's
+own 3DO path does not run. That is an ordering, and a stronger one than the refusal would have
+been.
+
 **In game, unchanged.** `raw=0`, `scale` live at ~25 800 (the badge), and an A/B of this DLL against
 `main`'s on `crowd-static` at 1024×768 differs by **0 pixels in the chrome** (12 685 inside the
 world viewport, which is animation phase). In-game `unexplained` runs 1 436–2 051 here against

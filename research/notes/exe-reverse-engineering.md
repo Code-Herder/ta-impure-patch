@@ -1009,9 +1009,24 @@ that reads the frame's own dimensions as the source — which is what ours did u
 not decoration:** these frames are 32×32 tiles whose outer ring is border, and the caller trims it.
 
 Note the asymmetry this leaves: a caller that passes `uv == NULL` gets the synthesised
-`(0,0) (w-1,0) (w-1,h-1) (0,h-1)` above, whose extent is `w-1` and not `w` — a *different*
-convention from an explicit quad's. Both readings are recorded; no measured caller passes NULL, so
-which of the two the rasteriser's own step actually honours there is **not established**.
+`(0,0) (w-1,0) (w-1,h-1) (0,h-1)` above, whose extent is `w-1` and not `w`.
+
+**There is only ONE convention, not two, and the substitution is what proves it**
+*[CORRECTED 2026-09-21 by 8e's review, which disassembled the path this first called "not
+established"]*. `0x4C75EB..0x4C761F` builds the quad into `[esp+0x4C..0x68]` and then
+**overwrites the argument slot in place** — `mov DWORD PTR [esp+0x7dac],edx` at `0x4C75F4` — so
+from there on the function cannot tell a synthesised quad from a caller's. The single
+interpolation path follows: the edge walk at `0x4C77C2..0x4C77FA` steps `((uv_b-uv_a)<<16)/dy`
+from `uv_a<<16`, and the span filler `0x4C7310` steps `(uR-uL)/(xR-xL)` from `uL`. The
+synthesised quad is therefore the SAME half-open convention naming a `(w-1)×(h-1)` **window** —
+the engine's own default drops the frame's last row and column — and `0x4C75FB`/`0x4C7616`'s
+`dec eax` is where that comes from, against `0x467C34`/`0x467C4A`, which store `WORD[frame+0]`
+and `[+2]` undecremented for the badge. The asymmetry is real; the hedge about which rule applies
+was not.
+
+The fork still **refuses** a NULL-uv draw and publishes its box. That is now a choice rather than
+an unknown: no measured caller passes NULL, so supporting it would be code whose output nothing
+could be compared against, and an unverified branch is worse than a named gap.
 
 #### `main+0x1426B` — the level's minimap picture is a PADDED square [MEASURED 2026-09-21]
 
