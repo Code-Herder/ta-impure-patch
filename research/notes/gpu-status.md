@@ -14631,16 +14631,30 @@ golden source with holes in it is the more expensive mistake.
 > over our whole world. The key fill is what makes a viewport texel separable from a UI texel at
 > all; nothing else in the frame distinguishes them.
 >
-> **What it paints there is black plus the engine's features — not the engine's terrain**
-> [PICTURED 2026-09-21, `scenarios/build-facing.json` at the play defaults plus
-> `tagpu_terrown.off`]: a flat black viewport carrying the engine's trees and rocks, its cursor
-> and its HUD, with no terrain of either renderer and no unit of either. That our world passes
-> were drawing underneath it all along is the `gui.off` row of the table below. **Why the
-> engine's own terrain is not in that mirror is NOT established** — its blit at `0x483FA0` runs
-> (nothing suppresses it once `terrown` is off) and its features do reach the twin, so the
-> terrain's absence is a property of what the publisher hands the layer rather than of the
-> engine's drawing. It does not move the conclusion, which is about COVERAGE: whatever those
-> bytes are, they are opaque and they are over the whole viewport.
+> **AND THE MECHANISM IS THE ERASE, NOT THE KEY RULE** [established 2026-09-21, from the
+> publisher and pictured with `scenarios/build-facing.json` at the play defaults plus
+> `tagpu_terrown.off`]. What is on screen there is a **flat black viewport carrying the engine's
+> trees and rocks** — no terrain from either renderer, no unit from either — which is not "the
+> engine's frame mirrored" and is worth following through, because it names the one line that
+> would free `terrown`:
+>
+> * The twin is a **replay of DESCRIBED draws**, not a copy of the engine's frame. `PK_SEED`
+>   crosses with `alen = 0` on purpose (`tagpu_gui_surf.c` §PK_SEED: "the twin is made empty, and
+>   the engine's bytes are not carried"), and `PK_PIXELS`, the publisher's byte-box fallback, is
+>   dropped by this lane. So the engine's terrain grid blit `0x483FA0` and its unit rasteriser
+>   never enter the twin at all — neither is a described op — while its **features do**, because
+>   a GAF blit publishes as `PK_SPRITE`. That is the trees.
+> * The black is the engine's **own whole-surface clear `0x4C6890`**, which publishes as a
+>   `PK_BAR` the size of the surface (`tagpu_gui_hook.c`, the `OP_FILL` branch). It is opaque and
+>   it covers the viewport every frame.
+> * What normally re-opens the viewport after that clear is **one `PK_CLEAR`, emitted at the FLIP
+>   op** (`tagpu_gui_hook.c:1825`) — and it is emitted **only when `tagpu_terrown_fill_seq()` has
+>   advanced**, i.e. only when the key fill ran. `g_fillSeq` is bumped by a successful fill and by
+>   nothing else, so with `terrown` off the erase never fires, the engine's black fill stands for
+>   the whole frame, and our world is behind it.
+>
+> So `terrown` is supplying the publisher's only per-frame signal that *the viewport is ours*,
+> and the `uVpKey` rule is the second half of the same arrangement rather than the whole of it.
 >
 > **Measured, `one-unit` on Two Continents at 1024x768, exactly-black pixels of the 896x704
 > viewport in a grab of the game window:**
@@ -14657,11 +14671,24 @@ golden source with holes in it is the more expensive mistake.
 > delta and the other three are correctly still off.
 >
 > **What it costs is what this subsection warns about, knowingly**: the golden source loses its
-> terrain again — `tacli shot` shows a key-filled viewport, `TERROWN skip=1 filled=1`.
-> **`tagpu_terrown.off` is the way back** for a reference-quality capture, the same shape as
-> `mark.on=passive`. A reference with terrain in it is worth less than a game with a picture in
-> it. The better repair — teaching the layer the viewport rect without needing a key — is not
-> done and is the open item here.
+> terrain again — `tacli shot` shows a key-filled viewport, `TERROWN skip=1 filled=1`. And it
+> loses it *by construction*, not as a side effect: the key fill IS the terrain blit's
+> replacement, so the same act that gives the publisher its per-frame signal is the act that
+> takes terrain out of the reference frame. The two cannot both be had while the signal lives in
+> the frame itself. **`tagpu_terrown.off` is the way back** for a reference-quality capture, the
+> same shape as `mark.on=passive`. A reference with terrain in it is worth less than a game with
+> a picture in it.
+>
+> **THE REPAIR THIS POINTS AT, NOT DONE AND NOT ASSUMED**: emit the viewport `PK_CLEAR` on every
+> game frame instead of only when `tagpu_terrown_fill_seq()` advanced. The publisher already has
+> the rect — it computes `tagpu_vpwide_true_rect` a few lines away, for the census — so the erase
+> need not be tied to a fill at all, and with the erase unconditional the engine could keep its
+> terrain and the reference frame would be whole again. What has to be CHECKED rather than
+> assumed is what the `uVpKey` rule would still be for: the two op kinds that could carry raw
+> engine bytes into the viewport are a `PK_SEED` that deliberately carries none and a `PK_PIXELS`
+> this lane drops, which suggests the rule has little left to protect — but "suggests" is not
+> "measured", and the way to find out is to make the erase unconditional, drop `terrown` from the
+> defaults, and look at a frame with chat, a dialog and the message band on it.
 
 **AND IT CLOSED A GAP NOBODY WAS AIMING AT: `renderer=gdi` IS STOCK AGAIN.** `tagpu_owndraw.on`
 was the one suppression with no runtime gate — two structure-shadow `je`s flipped to `jmp`s at
