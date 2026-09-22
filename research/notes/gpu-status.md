@@ -10403,6 +10403,16 @@ pixel on the frame it happens; both compound. Whoever ports the *other* read-mod
 So `before_focus` is its own op kind now — `OP_FOCUS` — and `OP_RECT` means exactly `0x4BF8C0`.
 That split is the whole of what made 8b portable, and it is also what produced the next section.
 
+**`OP_SCALE` is the one kind here that is semantic for some of its ops and not others**
+[landing 8e, 2026-09-21]. `GAF_DrawTransformed 0x4C7580` maps a frame onto a quad, and only the
+axis-aligned cases can be replayed as a sprite; the rest still publish nothing. What 8e changed is
+which axis-aligned cases count — the uv quad is a **window**, so a sub-rectangle of a frame is a
+source like any other, and `SKIRMISH.GUI`'s player swatches (a 30×30 inset of a 32×32 frame at
+19×19) were the shell's entire remaining residual for want of that one reading. Two consequences
+worth carrying: the consumer's atlas key `(frame, pix, w, h)` is **not** an identity once windows
+exist, and the census cannot sum this kind as though it were always semantic — it counts the
+captured and uncaptured halves apart.
+
 #### What the census actually says, now that the two are counted apart
 
 One live game, `renderer=vulkan`, full play arm set, 1024x768:
@@ -11217,8 +11227,9 @@ player asked for no shadows and gets four teal blobs.
   builds the cast-shadow map and never consults the terrain module; a structure's slant lands on
   the *ground*, and the ground is `tagpu_terr`, whose `tagpu_shadow_apply` runs only from
   `tagpu_terr_render`, which is called under `if (nterr)`. So `mapLive == 1 && nterr == 0` is
-  reachable — through the `tagpu_terr.off` lever, or any of `terr_bail`'s ~10 refusals, several of
-  them session-long — and in it the map is built, nothing samples it, and at the shipped
+  reachable — by leaving `terr.on` unarmed (there is no `tagpu_terr.off` lever: `.off` does nothing
+  while `.on` exists, so the configuration is the arm file's absence), or by any of `terr_bail`'s
+  ~10 refusals, several of them session-long — and in it the map is built, nothing samples it, and at the shipped
   `shadows=SOFT` the slant range is force-skipped as well. Every structure would have lost its
   shadow for as long as that held, while `terr_bail` had handed the ground back to the engine.
   `nterr` is the composite's own predicate, quoted the same way §2.x's `if (nterr)` hand-over
@@ -14735,13 +14746,16 @@ golden source with holes in it is the more expensive mistake.
 > | `mark.on=passive`, `nobars`, `noselbox`, `nocursor`, `nodigits` | selection box, health bars, group digit, build cursor, band box | `0x4699EB`, `0x469B8A`, `0x469CF9`, `0x469EC5`, `0x469F1E` | golden source only |
 > | `fx.on=passive` | the effect layers | `0x469B22`, `0x469B2C` | golden source only |
 > | `sfx.on=passive` | the sfx layers | via `0x471F90` ×10 | golden source only |
-> | `tagpu_native.off` | **the units themselves** | `DrawUnit 0x45AC20` at `0x469A00` and `0x469BA3` | golden source only |
-> | `tagpu_terr.off` | the terrain | `0x483FA0` at `0x468DB0` | golden source only |
-> | `feat.off` with `featown` off | the feature sprites | the feature leaf `0x46A610`, called ×3 from span 2 | golden source only |
+> | no `native.on`, `owndraw` also absent | **the units themselves** | `DrawUnit 0x45AC20` at `0x469A00` and `0x469BA3` | golden source only |
+> | no `terr.on`, `terrown` also absent | the terrain | `0x483FA0` at `0x468DB0` | golden source only |
+> | no `feat.on`, `featown` also absent | the feature sprites | the feature leaf `0x46A610`, called ×3 from span 2 | golden source only |
 >
-> So `mark.on=noselbox` now means *no selection box on the screen at all*, and `tagpu_native.off`
-> means *no units on the screen at all* — where before the clean cut each meant "the engine's copy
-> instead of ours". MEASURED 2026-09-22 for the marker row: with `noselbox` and a unit selected,
+> So `mark.on=noselbox` now means *no selection box on the screen at all*, and an instance with no
+> `native.on` and no `owndraw` means *no units on the screen at all* — where before the clean cut
+> each meant "the engine's copy instead of ours". (Note there is no `<pass>.off` lever for any of
+> these: `tagpu_opt.c`'s rule is that `.off` does nothing while `.on` exists, so the configuration
+> is the arm file's **absence**, which is what `--defaults` or a hand-built arm line produces.
+> Only `tagpu_worldphase.off` is a real file, and it is this landing's own.) MEASURED 2026-09-22 for the marker row: with `noselbox` and a unit selected,
 > the box is in `tacli shot` and absent from the window. The other rows follow from the same
 > mechanism and the call sites above; only the marker row was measured.
 >

@@ -144,7 +144,8 @@ pass lands with it.
   are the expensive part of this project and get re-derived every time they are not written down.
 - **Then the module docs**: `gpu-status.md`'s hook map and its *fields we write* table,
   `roadmap.md`'s gate row and entry, and the `ta-*` skill if how you drive or measure the game
-  changed.
+  changed — by that skill's own *Maintaining this skill* rules: state the present, replace
+  rather than annotate, and keep the landing's story in the note.
 - **Correct what the work proved wrong.** A stale note is worse than no note.
 - **State the gaps the landing did not close** instead of writing as though it closed them.
 - Mark inferred names `[INFERRED]`; check every claim against the source, never from memory.

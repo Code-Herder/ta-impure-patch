@@ -156,6 +156,14 @@ typedef struct TAGPU_PUBOP {
     unsigned short gcount;          /* glyph records at the head of the block   */
     unsigned char  font_rows;       /* font[0], the rows the blitter writes     */
     signed char    font_yoff;       /* font[2], subtracted from y               */
+    /* PK_SPRITE: THE SOURCE WINDOW, as the atlas's extra key byte-packed
+       (u0, v0, uw, uh). 0 means the whole frame and is what every 1:1 GAF
+       sprite publishes, so nothing but a windowed `OP_SCALE` ever sets it.
+       It exists because `GAF_DrawTransformed 0x4C7580` can map a SUB-rectangle
+       of a frame -- SKIRMISH.GUI's player swatches take (1,1)..(31,31) of a
+       32x32 frame -- and the consumer's atlas key (frame, pix, w, h) cannot
+       tell two such windows apart. [Landing 8e.] */
+    unsigned       swin;
     unsigned       assetTok;        /* PK_ASSET: the offer's one-time token     */
     unsigned       flip;            /* the flip this belongs to (diagnostics)   */
 } TAGPU_PUBOP;

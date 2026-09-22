@@ -67,7 +67,7 @@ tools/tacli launch t1 --res 1920x1080
 ## Looking at the game
 
 - `tacli shot` — the engine's own 8-bit surface. Engine truth, and the only view that shows the engine's UI.
-- `tacli glshot` — the OpenGL framebuffer, what is actually on screen, including everything the patch draws.
+- The presented frame is the window itself: grab it by id (`import -window <id>`, the id from `tacli ls --json`). `tacli glshot` is retired and fails loudly: there is no GL framebuffer in the process.
 - `tacli roster` — the live units with type, owner, world and screen position, plus where the camera is.
 - `tacli log` and `tacli wait` — the patch's log, and a wait for a regex in it. This is how a script knows a pass armed, a model loaded, or a restore finished.
 - `tacli peek` — read game memory from inside the process. The cheap way to answer "did that actually change anything" without a debugger.
@@ -123,7 +123,7 @@ tools/mp_lobby.sh h1 j1 'Two Continents'            # menus -> battle room -> li
 
 ## The agent skill
 
-`.claude/skills/ta-drive/SKILL.md` is the skill. It is what an agent reads before it touches the game, and it is where the lessons accumulate: every time an agent lost an hour to something, the fix went into the skill so the next one doesn't.
+`.claude/skills/ta-drive/SKILL.md` is the skill. It is what an agent reads before it touches the game: a reference to how the tool and the renderer behave now, with the detail behind it in `references/` (the levers, how to measure, the UI layer, the modules). Every time an agent lost an hour to something, the rule that would have saved it went into the skill; the story of how it was found stays in the research notes, and the skill's own *Maintaining this skill* section keeps it that way.
 
 The rules of engagement:
 
@@ -133,7 +133,7 @@ The rules of engagement:
 - **Arm every pass before launching**, unless the launch is a measurement. A bare launch is the 1997 renderer, which is a control, not a demo.
 - **Clean up.** Stop the instance when done, remove it when it has no further use.
 
-Then the loop: launch, snapshot the UI, act, order, look (`shot`, `glshot`, `roster`, `log`), measure (`peek`, `weapons`), stop. The rest of the file is the accumulated detail: how the input path works and where it bites, how to read the catalogues, how to arm and read every pass, the multiplayer recipe, and a list of things that will bite you. Screenshots, video and frame-by-frame work are the `ta-capture` skill.
+Then the loop: launch, snapshot the UI, act, order, look (`shot`, `roster`, `log`), measure (`peek`, `weapons`), stop. The rest of the file is the detail: how the input path works and where it bites, how to read the catalogues, how to arm the passes, the multiplayer recipe, and a list of things that will bite you. Screenshots, video and frame-by-frame work are the `ta-capture` skill.
 
 ## Scenarios as tests
 
@@ -147,7 +147,7 @@ A test is a scenario, a few tacli commands and an assertion on what they return.
 ```bash
 tools/tacli scenario load t1 hires-crowd
 tools/tacli wait t1 'pose bound 12 of 12' --timeout 30
-tools/tacli glshot t1 -o /tmp/crowd.ppm
+tools/tacli shot t1 -o /tmp/crowd.png
 tools/tacli stop t1
 ```
 
@@ -237,10 +237,10 @@ Every command takes an instance name first and `--json` anywhere.
 | `ui` | snapshot and drive the on-screen gadgets: `show`, `click`, `set`, `check`, `uncheck`, `select`, `hover`, `fill`, `press`, `wait`; `--page` walks a paged build menu |
 | `shield` | the input firewall: `on`, `off`, or omit to report |
 | `arm` | set or clear the patch's trigger files, e.g. `native.on=all owndraw.on zoom.on classicpp.on`, `native.on=off` |
-| `gui` | the GL UI renderer: `on`, `strict`, `census`, `off`, `remove` |
+| `gui` | the UI renderer: `on`, `strict`, `census`, `off`, `remove` |
 | `switches` | read or set the engine switches: `shootall=on noshake=on` … |
 | `shot` | screenshot of the engine's surface (PNG) |
-| `glshot` | capture of the GL framebuffer, including the patch's passes (PPM) |
+| `glshot` | retired — fails loudly; grab the window by id for the presented frame |
 | `roster` | the latest unit roster and the camera eye |
 | `log` | tail the patch's log (`-n`, `-g regex`) |
 | `wait` | wait for a regex in the log (`--timeout`) |

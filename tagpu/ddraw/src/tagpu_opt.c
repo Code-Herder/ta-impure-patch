@@ -105,7 +105,7 @@ static const Def s_defs[] = {
        them back (the engine draws, we do not) with the redirects still
        installed. */
     { "tagpu_markown.on",   "", "tagpu_mark.on", 0 },       /* the snapshots the two passes draw from */
-    { "tagpu_terrown.on",   "", "tagpu_terr.on", 0 },       /* the key fill the UI layer finds the viewport by */
+    { "tagpu_terrown.on",   "", "tagpu_terr.on", 0 },       /* the engine's terrain pass skipped, and the key fill `uVpKey` still inverts against */
     { "tagpu_ghost.on",     "", "tagpu_native.on", 0 },     /* the building preview at the cursor  */
     { "tagpu_zoom.on",      "", 0, 0 },                     /* the wheel, the camera's range       */
     { "tagpu_vpwide.on",    "", "tagpu_zoom.on", 0 },       /* clicks land at zoom < 1             */
