@@ -992,6 +992,27 @@ sampling steps a **16.16 accumulator**, not `(x * sw) / dw`: with `sw=32, dw=20`
 is 104857, so x=5 accumulates 524285 and shifts to 7 where the division gives 8, and sixteen of the
 badge's 400 pixels differ on exactly that.
 
+**And the uv quad is a WINDOW, not necessarily the whole frame** [MEASURED 2026-09-21, landing 8e].
+The badge is the degenerate case and reading only it makes `uv` look like a formality.
+`SKIRMISH.GUI`'s four player-colour swatches use the same function with a genuine sub-rectangle:
+
+```
+xy = (214,94)(233,94)(233,113)(214,113)        the destination, 19 x 19 half-open
+uv = (1,1)(31,1)(31,31)(1,31)                  a 30 x 30 window inset one texel
+frame 32x32, comp=0, sub=0/0
+```
+
+The u/v corners carry the same roles and the same half-open convention as the screen ones, so the
+source is the rectangle `(uv[0], uv[1])` with extents `uv[2]-uv[0]` by `uv[5]-uv[1]`. A consumer
+that reads the frame's own dimensions as the source — which is what ours did until 8e — resamples
+32 texels where the engine resamples 30 and is a texel out over most of the span. **The inset is
+not decoration:** these frames are 32×32 tiles whose outer ring is border, and the caller trims it.
+
+Note the asymmetry this leaves: a caller that passes `uv == NULL` gets the synthesised
+`(0,0) (w-1,0) (w-1,h-1) (0,h-1)` above, whose extent is `w-1` and not `w` — a *different*
+convention from an explicit quad's. Both readings are recorded; no measured caller passes NULL, so
+which of the two the rasteriser's own step actually honours there is **not established**.
+
 #### `main+0x1426B` — the level's minimap picture is a PADDED square [MEASURED 2026-09-21]
 
 The frame's header is 252×252, but the map only fills an aspect-correct region inside it: on a

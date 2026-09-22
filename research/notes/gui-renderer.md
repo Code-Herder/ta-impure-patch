@@ -128,8 +128,10 @@ so a reset loses anything the engine will not redraw on its own. Three cases, al
   loop; the 2026-09-07 sighting that produced it had only looked at the first three.* That case is
   now resampled to its destination in `scale_capture` and published as an ordinary `PK_SPRITE`, so
   **the render thread is untouched** (its sprite quad is `(sl,st)-(sl+fw,st+fh)`, the frame's size,
-  deliberately — a clipped sprite still needs its whole quad); anything rotated, sheared, partial
-  or clipped keeps the old behaviour and publishes its box.
+  deliberately — a clipped sprite still needs its whole quad); anything rotated, sheared or clipped
+  keeps the old behaviour and publishes its box. *["partial" left this list in landing 8e: a
+  partial uv window is a supported source now, and it was the whole of the shell's last residual —
+  see the swatches below.]*
 
   Two things only measurement could have given. **The extent is half-open** — the far vertex is
   the edge the span stops before, not a pixel, so the badge covers x 132..151 where the vertices'
@@ -510,14 +512,71 @@ drift — and `mirlost=0`.
 
 **`SINGLE.GUI` is exact.** 307 200 / 307 200.
 
-**What is left, and it is one kind.** `SKIRMISH.GUI`'s 1 444 differing pixels are the **player
-colour swatches**, a 19-px column at `x 214..232` repeated down the player rows: the engine has a
-blue/red/white/green square where ours has the button's grey. Those are `OP_SCALE` — the
-transformed GAF — and they are the only `raw` left anywhere in the shell
-(`area=26491062[... scale 62400 ...] raw=62400 pct=0.23`). `publish` gives `OP_SCALE` a
-`PK_SPRITE` only when the resampled plane was captured at observe time; these are the ones where it
-was not, and they fall through to `PK_PIXELS`. **That is the next packet**, and it needs no new
-kind — only the capture to succeed.
+**What was left, and it was one condition — CLOSED 2026-09-21, landing 8e.** `SKIRMISH.GUI`'s
+1 444 differing pixels were the **player colour swatches**, a 19-px column at `x 214..232` repeated
+down the player rows: the engine had a blue/red/white/green square where ours had the button's grey.
+They were `OP_SCALE` and the only `raw` left anywhere in the shell
+(`area=26491062[... scale 62400 ...] raw=62400 pct=0.23`).
+
+The prediction above — "it needs no new kind, only the capture to succeed" — was right about the
+kind and wrong about why the capture failed. It was not a decoder limit, a scratch overflow or a
+shape the observer could not describe. Measured at the leaf, the four calls are:
+
+```
+xy = (214,94)(233,94)(233,113)(214,113)
+uv = (1,1)(31,1)(31,31)(1,31)          frame 32x32, comp=0, sub=0/0
+```
+
+**a true axis-aligned rectangle that passed every test but `uv[0] == 0`.** The source is a 30×30
+**window inset one texel** from a 32×32 frame, resampled to 19×19. The old test demanded the uv
+quad cover the WHOLE frame, so it refused them on their origin alone.
+
+So the test admits any axis-aligned uv **window** now, and `scale_capture` walks that rectangle
+instead of the frame: the 16.16 accumulator starts at the window's origin, steps by the window's
+extent over the destination, and clamps at the window's edges. The whole-frame case is
+`(0, 0, GF_W, GF_H)`, so every value in it is what it was and the badge's measured texels are
+untouched. The window is bounded against the frame header at observe time **and re-tested inside
+`scale_capture`** against the header that function reads, because the decode and the walk both
+index off the second read.
+
+**The one non-local consequence: a window breaks the atlas key.** The consumer keys a sprite on
+`(frame, pix, w, h)`, which was an identity for exactly as long as a transformed draw could only be
+the whole frame. Two windows of one frame resampled to the same destination size are the same key
+with different texels — and `tagpu_gaf_atlas_find` runs **before** `atlas_put`, so the second draw
+would silently reuse the first one's pixels. The entry, the packet and the two lookups carry the
+window as an extra key now: **0 means "the whole frame"**, which is what every 1:1 sprite, the
+cursor and every `atlas_get` passes, so their keys are bit-for-bit unchanged. A window that will not
+fit the packed key keeps the old path rather than claiming an identity it does not have. This was
+not reachable on the four swatches — they are four different frames — and it is closed by
+construction rather than by that observation.
+
+**What still falls back**, and it is named rather than implied: a rotated or sheared stamp, a
+sub-frame stack (`fr[0x0A] != 0`), a draw the context clipped, a window too large to key, and a
+caller that passes `uv == NULL` — for that last one the engine synthesises its own quad using
+`w-1`, a different convention this deliberately does not fold in, because no measured caller uses
+it and guessing at one would be a claim rather than a reading.
+
+| screen | before 8e | after |
+|---|---|---|
+| `MAINMENU.GUI` | 99.97 % | **99.97 %** (90 px, the animated logo; 90–97 across runs) |
+| `SINGLE.GUI` | 100.00 % | **100.00 %** |
+| `SKIRMISH.GUI` | 99.53 % | **100.00 %** |
+
+0 missing on all three, and **`raw=0 pct=0.00` on every census window of every shell screen** with
+`scale` still carrying real area. `unexplained=0`, `gafscratch` lost=0 baddec=0, overflows=0.
+
+**The census stopped over-reporting, which is a correction and not a promotion.** `OP_SCALE` was
+summed entirely into `raw` because it is semantic only when its plane was captured — the honest
+direction to err while the capture almost never fired. With the swatches closed it reported
+`raw=0.21 pct` for a screen whose residual is zero, which is a measure that has stopped measuring.
+The two halves are counted apart now, off the same box, so the kind is still **not** treated as
+though it were always semantic.
+
+**In game, unchanged.** `raw=0`, `scale` live at ~25 800 (the badge), and an A/B of this DLL against
+`main`'s on `crowd-static` at 1024×768 differs by **0 pixels in the chrome** (12 685 inside the
+world viewport, which is animation phase). In-game `unexplained` runs 1 436–2 051 here against
+`main`'s 1 673–2 143 — the same pre-existing band, and it is pre-existing: it was checked against
+`main` rather than assumed.
 
 **In game the tint never fires.** 153 census windows across a loaded scenario carry **zero `focus`
 ops**, and `raw=0` on every one of them. The in-game picture was checked as an A/B between builds

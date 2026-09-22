@@ -10339,6 +10339,16 @@ pixel on the frame it happens; both compound. Whoever ports the *other* read-mod
 So `before_focus` is its own op kind now — `OP_FOCUS` — and `OP_RECT` means exactly `0x4BF8C0`.
 That split is the whole of what made 8b portable, and it is also what produced the next section.
 
+**`OP_SCALE` is the one kind here that is semantic for some of its ops and not others**
+[landing 8e, 2026-09-21]. `GAF_DrawTransformed 0x4C7580` maps a frame onto a quad, and only the
+axis-aligned cases can be replayed as a sprite; the rest still publish nothing. What 8e changed is
+which axis-aligned cases count — the uv quad is a **window**, so a sub-rectangle of a frame is a
+source like any other, and `SKIRMISH.GUI`'s player swatches (a 30×30 inset of a 32×32 frame at
+19×19) were the shell's entire remaining residual for want of that one reading. Two consequences
+worth carrying: the consumer's atlas key `(frame, pix, w, h)` is **not** an identity once windows
+exist, and the census cannot sum this kind as though it were always semantic — it counts the
+captured and uncaptured halves apart.
+
 #### What the census actually says, now that the two are counted apart
 
 One live game, `renderer=vulkan`, full play arm set, 1024x768:
