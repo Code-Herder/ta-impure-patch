@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5 effort=high range=main..4651b47 reviewers=2 (correctness; atlas-key blast radius) findings=3 acted=3 rejected=1 date=2026-09-21
