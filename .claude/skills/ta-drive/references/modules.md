@@ -1,0 +1,134 @@
+# Modules with their own workflow
+
+Extra weapons, the COB trace, multiplayer, and the render-options screen with its GPU row. Each
+is driven through `tacli` like everything else; what differs is the setup around it.
+
+1. [Extra weapons](#extra-weapons)
+2. [The COB script trace](#the-cob-script-trace)
+3. [Multiplayer: two instances in one game](#multiplayer-two-instances-in-one-game)
+4. [The render-options screen and the GPU row](#the-render-options-screen-and-the-gpu-row)
+
+## Extra weapons
+
+`tagpu_weapons.c` lifts "three weapons per unit" to `Weapon4..N` (capacity 16). It is a play
+default under `--defaults`; on a `tacli` instance it is **off unless armed before launch**, and
+stock units run the untouched engine code either way (`research/notes/extra-weapons.md`).
+
+```bash
+tools/tacli launch w1; tools/tacli stop w1          # create the instance dir
+tools/tacli arm w1 weapons.on                        # must exist at DLL attach
+tools/extra_weapons_fixture.py                       # builds scenarios/content/wpn-test.ufo (gitignored)
+ln -s $PWD/scenarios/content/wpn-test.ufo tagpu/instances/w1/gamedir/   # the test units
+rm -f tagpu/instances/w1/catalogue.json              # cached type list is now stale
+tools/tacli scenario load w1 wpn-llt10 --restart     # two ten-laser towers vs solars
+tools/tacli weapons w1                               # every slot of every unit + counters
+tools/tacli log w1 -g "weapons: (loader|VIOL|MISM)"
+```
+
+- **`tacli weapons <inst> [idx…]` is the oracle**: per slot the state byte, weapon, target,
+  reload, heading, pitch, stock, aim result and COB thread, plus `armed`, the C-path hit counters
+  and projectile launches per slot. It works **unarmed** too — that instance is your control. With
+  stock content and the module armed, every counter but `loader`/`stock_splice` must read 0 and
+  `mismatch`/`violation` must be 0; that is the regression check.
+- It also prints each unit type's `CRC_weapons` and `CRC_all`, the unit-sync values. Armed and
+  unarmed differ for exactly the types carrying `Weapon4+`. In a multiplayer game TA **disables**
+  a type the peers disagree about (it vanishes from `tacli units` on both sides) and starts
+  anyway, silently.
+- **Content goes in a `.ufo`, never as loose files** (the engine finds a loose `units/*.fbi` and
+  then drops the type). `tools/hpipack.py` writes and reads the archive, `tools/cobclone.py`
+  gives a COB per-weapon script copies, `tools/extra_weapons_fixture.py` rebuilds the shipped test
+  pack from the game. After adding or removing archives, delete the instance's `catalogue.json` or
+  `scenario load` refuses the new type at validation.
+- Fixtures: `wpn-llt10`, `wpn-peewee4`, `wpn-badtgt`.
+
+## The COB script trace
+
+`tagpu_cobtrace.on` at DLL attach makes the DLL log every COB thread the engine starts, refuses,
+returns, kills or draws a random number for — one tab-separated line each, stamped with the sim
+tick — to `gamedir/tagpu_cobtrace.log`. The value is a unit-type filter. Line contract:
+`research/notes/tacob-design.md` §"The trace contract"; the engine seam:
+`exe-reverse-engineering.md` §"The COB engine".
+
+```bash
+tools/tacli arm c1 cobtrace.on=ARMPW native.on=all   # native.on because the pose oracle lives in that pass
+tools/tacli scenario load c1 cob-kbot --restart
+sleep 8; tools/tacli arm c1 posedump.on              # one pose dump, header `posedump: tick= idx=`
+grep -a 'cobtrace:' tagpu/instances/c1/gamedir/tagpu.log      # ARMED … filter=,ARMPW,
+cut -f1-8 tagpu/instances/c1/gamedir/tagpu_cobtrace.log | head
+```
+
+- **`tools/cobtrace_fixtures.py`** runs the nine class scenarios (`scenarios/cob-*.json`) this way
+  and keeps `cobtrace.log`, `posedump.txt` and tacli's `apply.json` per class under
+  `research/notes/evidence/cobtrace/`. It parks the camera on the traced unit (`tacli eye`) before
+  dropping `posedump.on`: the pose oracle dumps the first unit the native pass draws, and an
+  aircraft or a ship has left the spawn view by the time it has done anything.
+- **Sight radius before weapon range.** A unit 250 wu from an enemy it cannot see never aims. Put
+  the target inside the shooter's `SightDistance`, not just its range.
+- **A Hawk is air-to-air**; ordered at a ground unit it flies over it and does nothing.
+- The file is truncated at every launch and flushed per line, so `tacli stop` loses nothing.
+- `tools/tacob pose-check` reads the pose dump; the dump's fields are what it exists for.
+
+## Multiplayer: two instances in one game
+
+Works over loopback on the stock wine these instances use, with Microsoft's own DirectPlay in
+front of wine's builtin (which implements the client half only and cannot create a session).
+`tools/dpinstall.sh` installs it into a prefix, `tools/dptest/` proves a prefix can host before you
+go blaming the game, and `research/notes/networking-lobbies.md` has the protocol.
+
+```bash
+tools/tacli launch h1 --dplay --free-dplay-port     # the host
+tools/tacli launch j1 --dplay                       # the joiner
+tools/mp_lobby.sh h1 j1 'Two Continents'            # menus -> battle room -> live
+MP_NO_START=1 tools/mp_lobby.sh h1 j1               # stop in the battle room
+```
+
+- `--dplay` installs native DirectPlay into that instance's prefix and appends the overrides to
+  `ddraw=n,b`. Sticky per instance; a single-player instance keeps wine's builtin.
+- `--free-dplay-port` kills a stale `dplaysvr.exe`. DirectPlay's name server outlives the game that
+  started it and owns UDP 47624 **machine-wide**, so a leftover one makes the next host fail
+  `Open(DPOPEN_CREATE) = DPERR_GENERIC`, which looks exactly like a broken prefix. Put it on the
+  **hosting** launch only: doing it while a peer is hosting takes that game down too. Never
+  `pkill -x dplaysvr.exe` by hand while another agent's game is hosting.
+- After running `dptest` against a prefix, **let it settle** before launching TA there: a wineserver
+  still shutting down produced a launch with no process and no `ErrorLog.txt`.
+- **`START` ungreys only when every player is ready, the host included.** Each client lists
+  *itself* as row 0, so the host's own toggle is `READY0` on its screen and the joiner's is `READY0`
+  on theirs. `PLAYER0`/`READY0`/`PLAYER1`… are created at runtime and sit past the end of the
+  default `ui` snapshot; reach them with `ui <inst> show READY1`.
+- **Lobby state syncs**: set the map on the host and read it back on the joiner
+  (`ui <join> show MAPNAME`) as a cheap proof the link is live.
+- **`scenario apply` on the host replicates its units to the joiner** through TA's own create
+  packet. Apply on one peer only.
+- `SELPROV`'s `SELECT` crashes the game on the non-TCP/IP rows; select *Internet TCP/IP
+  Connection For DirectPlay* **by name, never by row number** — it is row 0 under wine's builtin
+  DirectPlay and row 3 under the native one.
+
+## The render-options screen and the GPU row
+
+`tagpu_menu.c` adds our rows to **Options → Visuals**: the frame-rate readout (`VFPS`), the GPU
+(`VGPU`), the video mode and monitor (`VMODE`, `VMON`), the UI scale (`VSCALE`) and the visual
+switches. The screen owns the lever files it writes — `tagpu_classicpp.on`/`.off`,
+`tagpu_classicpp.cfg`, `tagpu_ss.off`, `tagpu_fps.on` — so a row change is in force immediately
+and survives a relaunch. `tagpu_menu.off` disables the screen. Its rows are ordinary gadgets:
+
+```bash
+tools/tacli ui <i> show VGPU                  # stages, stage, grayed
+tools/tacli ui <i> click VGPU                 # cycle; the lane rebuilds within a frame
+cat <gamedir>/tagpu_vk.gpus                   # "<0|1> <name>" per device, 1 = discrete
+cat <gamedir>/tagpu_vk.cfg                    # gpu=<name> — the choice, stored BY NAME
+```
+
+- **The GPU list is one launch behind.** The captions live in a generated `.GUI` written at DLL
+  attach, and a Vulkan instance cannot be created there, so a worker enumerates after the render
+  thread is up and writes `tagpu_vk.gpus` for the *next* launch. On a gamedir that has never run
+  this DLL the row reads `(not listed yet)` and is greyed; relaunch once.
+- **The row is greyed unless there are at least two devices.** It binds the Vulkan device only.
+- **It plates the device actually bound, not the one requested.** A stored name no longer present
+  falls back to the discrete default and logs `the requested GPU "…" is not among the devices
+  present`.
+- **At most eight devices are listed** (our cap; a stage button's art index is clamped by the
+  engine, so a row past four stages draws the four-bar plate and still works). Names are truncated
+  to 31 characters at a word boundary.
+- **A dialog over the world at zoom ≠ 1 takes 1:1 clicks** (the transform reads the engine's
+  ownership bit at `main+0x37EBE`), so the rows are driven at any zoom; `SHARE.GUI` is the one
+  screen whose zoomed clicks are a known gap.
