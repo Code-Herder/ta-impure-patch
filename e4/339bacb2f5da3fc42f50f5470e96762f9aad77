@@ -1,0 +1,3 @@
+landing-review: model=claude-opus-5-5 effort=high range=main..e4339ba findings=8 acted=7 rejected=0 date=2026-09-23
+
+Two fresh read-only reviewers. B (sync/lifetime): the truncation refusal gated on the arming state, stale comments, stale notes -- acted in 595a5cd. A (correctness/docs): the section-number collision with main, stale gpu-posing lines, PB_MAXGEOM too small for wreck/ghost models, the npose comment and the shared saidGrow latch -- acted in 34e9cda; its 2^27 claim duplicated one B had already fixed.
