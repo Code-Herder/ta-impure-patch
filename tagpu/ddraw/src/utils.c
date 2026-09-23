@@ -14,6 +14,7 @@
 #include "versionhelpers.h"
 #include "delay_imports.h"
 #include "tagpu_menu.h"
+#include "tagpu_log.h"
 
 
 /*
@@ -698,6 +699,48 @@ BOOL util_target_monitor(RECT* out)
 
     *out = mi.rcMonitor;
     return TRUE;
+}
+
+/* The target monitor's refresh rate in Hz, for the Refresh frame cap: the
+   frequency of that monitor's own adapter's CURRENT mode -- the menu's chosen
+   adapter by name (`tagpu_menu_monitor_device`), else the one the window is on,
+   else the primary. Whether a secondary reports its own rate is not known on
+   wine: on the reference setup the secondaries' current mode reads 0x0 (the
+   comment above), and a frequency of 0 falls to the bound below.
+   BOUNDED: Windows answers 0 or 1 for "the hardware default", which would be a
+   cap of 0 or 1 fps, so anything outside 24..1000 Hz is the stock 60. */
+int util_target_refresh(void)
+{
+    MONITORINFOEXA mi;
+    DEVMODEA m;
+    const char* dev = tagpu_menu_monitor_device();
+    int hz;
+
+    memset(&m, 0, sizeof(m));
+    m.dmSize = sizeof(m);
+
+    if (!dev)
+    {
+        POINT origin = { 0, 0 };
+        HMONITOR mon = g_ddraw.hwnd ?
+            MonitorFromWindow(g_ddraw.hwnd, MONITOR_DEFAULTTONEAREST) :
+            MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY);
+
+        mi.cbSize = sizeof(mi);
+        if (mon && GetMonitorInfoA(mon, (MONITORINFO*)&mi))
+            dev = mi.szDevice;
+    }
+
+    if (!dev || !real_EnumDisplaySettingsA(dev, ENUM_CURRENT_SETTINGS, &m))
+    {
+        tagpu_log("frame cap: Refresh = 60 fps (the target monitor's mode could not be read)");
+        return 60;
+    }
+
+    hz = (m.dmDisplayFrequency >= 24 && m.dmDisplayFrequency <= 1000) ? (int)m.dmDisplayFrequency : 60;
+    tagpu_logf("frame cap: Refresh = %d fps (%s reports %lu Hz)", hz, dev,
+               (unsigned long)m.dmDisplayFrequency);
+    return hz;
 }
 
 BOOL util_get_lowest_resolution(

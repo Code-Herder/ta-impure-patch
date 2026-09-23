@@ -148,9 +148,16 @@ tacli log <i> -g '^settings:'                 # what the store loaded, migrated 
   thread is up and writes `tagpu_vk.gpus` for the *next* launch. On a gamedir that has never run
   this DLL the row reads `(not listed yet)` and is greyed; relaunch once.
 - **The row is greyed unless there are at least two devices.** It binds the Vulkan device only.
-- **It plates the device actually bound, not the one requested.** A stored name no longer present
-  falls back to the discrete default and logs `the requested GPU "…" is not among the devices
-  present`.
+- **Its first stage is Auto** (`gpu=auto`): the lane ranks discrete > integrated > virtual > CPU,
+  then device-local memory, and logs `vk: Auto: <name> (type rank N of 4, M MB device-local)`. A
+  named choice plates the device actually bound; a stored name no longer present binds the Auto
+  pick and logs `the requested GPU "…" is not among the devices present - Auto instead`.
+- **llvmpipe is not offered while a GPU is present**, and a stored choice of it is refused
+  (`vk: the requested GPU "…" is a software rasteriser`), so on the reference setup the row is
+  Auto alone and greyed. With llvmpipe bound the game dies on opening Options → Visuals and at a
+  3840x2160 start-up; that only happens now on a machine with no GPU.
+- **The Frame cap row's first stage is Refresh** (`maxfps=refresh`, the target monitor's rate,
+  logged as `frame cap: Refresh = N fps`); tacli's `ddraw.ini` `maxfps` holds the row.
 - **At most eight devices are listed** (our cap; a stage button's art index is clamped by the
   engine, so a row past four stages draws the four-bar plate and still works). Names are truncated
   to 31 characters at a word boundary.

@@ -61,4 +61,18 @@ BOOL fpsl_dwm_is_enabled();
 void fpsl_frame_start();
 void fpsl_frame_end();
 
+/* tagpu: THE RENDER THREAD IS fpsl_init's ONE OWNER after start-up. It closes
+   the D3DKMT adapter the render thread waits on, and writes the tick fields and
+   the cap the render thread paces by, so any other thread only REQUESTS it --
+   the render thread runs it at its next fpsl_frame_start.
+
+   fpsl_request_cap: the menu's frame cap, -1 for Refresh (the target monitor's
+   rate, resolved by fpsl_init into a plain positive cap -- never cnc-ddraw's
+   own negative maxfps, which paces by DwmFlush/vblank instead), >= 0 an fps.
+   FPSL_CAP_NONE (never requested) leaves the ini's maxfps as it is. */
+#define FPSL_CAP_NONE (-0x7FFFFFFF)
+void fpsl_request_cap(int cap);
+void fpsl_request_init(void);
+int  fpsl_cap_request(void);
+
 #endif

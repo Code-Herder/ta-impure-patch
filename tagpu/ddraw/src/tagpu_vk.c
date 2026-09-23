@@ -705,17 +705,19 @@ static volatile LONG s_count;
                             gets a rebuild after it -- convergence by
                             construction, not by the click being slow. */
 static char  s_choice[NAMELEN];         /* the STORED choice, from the store; "" = none */
-static volatile LONG s_choiceIdx = -1;  /* the row's request, into s_name[]; -1 = none */
+static volatile LONG s_choiceIdx = -1;  /* the row's request, into s_name[]; -1 = none,
+                                           TAGPU_VK_GPU_AUTO = Auto */
 static volatile LONG s_choiceGen;       /* bumped by a click: the render thread's signal */
 static LONG  s_choiceSeen;              /* the generation the live device was built for */
 static volatile LONG s_activeIndex = -1;
 
 /* The name the lane should bind: the row's request when there is one, else
-   whatever the store held, else "" for "no preference". Both sources are
-   immutable, so this can be called from any thread. */
+   whatever the store held; "" is Auto. Both sources are immutable, so this can
+   be called from any thread. */
 static const char* want_name(void)
 {
     LONG i = s_choiceIdx;
+    if (i == TAGPU_VK_GPU_AUTO) return "";
     if (i >= 0 && i < s_count) return s_name[i];
     return s_choice;
 }
@@ -731,6 +733,7 @@ void tagpu_vk_names_init(void)
     /* the stored choice first, out of the settings store; "" means "nobody
        has chosen" rather than an error */
     vk_canon(s_choice, sizeof s_choice, tagpu_settings_gpu());
+    if (!lstrcmpiA(s_choice, "auto")) s_choice[0] = 0;
 
     h = CreateFileA(GPUS_FILE, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, 0,
                     OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
@@ -776,29 +779,21 @@ const char* tagpu_vk_gpu_name(int i)
     return (i >= 0 && i < (int)s_count) ? s_name[i] : "";
 }
 
-int tagpu_vk_gpu_default(void)
-{
-    int i;
-    for (i = 0; i < (int)s_count; i++) if (s_disc[i]) return i;
-    return 0;
-}
-
 int tagpu_vk_gpu_stored(void)
 {
     int i;
-    LONG k = s_choiceIdx;
-    if (k >= 0 && k < s_count) return (int)k;
-    if (s_choice[0])
+    const char* w = want_name();
+    if (w[0])
         for (i = 0; i < (int)s_count; i++)
-            if (!lstrcmpiA(s_name[i], s_choice)) return i;
-    return tagpu_vk_gpu_default();
+            if (!lstrcmpiA(s_name[i], w)) return i;
+    return TAGPU_VK_GPU_AUTO;
 }
 
 int tagpu_vk_gpu_active(void) { return (int)s_activeIndex; }
 
 void tagpu_vk_gpu_select(int i)
 {
-    if (i < 0 || i >= (int)s_count) return;
+    if (i != TAGPU_VK_GPU_AUTO && (i < 0 || i >= (int)s_count)) return;
     InterlockedExchange(&s_choiceIdx, i);
     /* THE GENERATION IS BUMPED SECOND AND WITH A BARRIER, so a thread that sees
        it has the index behind it. A counter rather than a flag: the render
@@ -809,7 +804,8 @@ void tagpu_vk_gpu_select(int i)
 
 void tagpu_vk_gpu_store(void)
 {
-    tagpu_settings_set_gpu(want_name());
+    const char* w = want_name();
+    tagpu_settings_set_gpu(w[0] ? w : "auto");
 }
 
 /* ---- address-space cost ---------------------------------------------------
@@ -1106,7 +1102,7 @@ static DWORD WINAPI enum_worker(LPVOID arg)
     char out[MAXDEV * (NAMELEN + 8) + 64];
     char name[MAXDEV][NAMELEN];
     int  disc[MAXDEV];
-    int at = 0, i, changed;
+    int at = 0, i, m = 0, changed, anygpu = 0, hidden = 0;
     HANDLE h;
     DWORD wrote = 0;
 
@@ -1138,6 +1134,17 @@ static DWORD WINAPI enum_worker(LPVOID arg)
         return 0;
     }
 
+    /* A SOFTWARE RASTERISER IS NOT OFFERED BESIDE A GPU. llvmpipe is
+       VK_PHYSICAL_DEVICE_TYPE_CPU, is never what a player wants when a GPU is
+       there, and a choice of it that fails at bring-up is one the player
+       cannot undo from the menu. With no GPU at all it stays: it is then the
+       only device. `pick_device` refuses a stored one on the same rule. */
+    for (i = 0; i < (int)n; i++) {
+        VkPhysicalDeviceProperties p;
+        vkGetPhysicalDeviceProperties(pds[i], &p);
+        if (p.deviceType != VK_PHYSICAL_DEVICE_TYPE_CPU) anygpu = 1;
+    }
+
     /* Build the file text first, and compare it with what the cache already
        says: an unchanged list is not rewritten, so the common launch does no
        write at all and a file watcher sees a change only when there is one. */
@@ -1145,22 +1152,24 @@ static DWORD WINAPI enum_worker(LPVOID arg)
         VkPhysicalDeviceProperties p;
         int k;
         vkGetPhysicalDeviceProperties(pds[i], &p);
-        vk_canon(name[i], NAMELEN, p.deviceName);
-        disc[i] = (p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU);
+        if (anygpu && p.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU) { hidden++; continue; }
+        vk_canon(name[m], NAMELEN, p.deviceName);
+        disc[m] = (p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU);
         /* `_snprintf` RETURNS -1 ON TRUNCATION, not the length it wanted, so
            the return is checked BEFORE it is added: `at += -1` would step the
            cursor backwards and the next device would be written in front of the
            buffer. It cannot truncate at today's bounds (4 devices x 34 bytes
            against 224), which is exactly why it would sit here unnoticed until
            one of them moved. */
-        k = _snprintf(out + at, sizeof out - at - 1, "%d %s\n", disc[i], name[i]);
+        k = _snprintf(out + at, sizeof out - at - 1, "%d %s\n", disc[m], name[m]);
         if (k < 0 || k >= (int)(sizeof out - at - 1)) break;
         at += k;
+        m++;
     }
     out[sizeof out - 1] = 0;
 
-    changed = (int)n != (int)s_count;
-    for (i = 0; !changed && i < (int)n; i++)
+    changed = m != (int)s_count;
+    for (i = 0; !changed && i < m; i++)
         if (lstrcmpA(s_name[i], name[i]) || s_disc[i] != disc[i]) changed = 1;
 
     if (changed) {
@@ -1178,13 +1187,15 @@ static DWORD WINAPI enum_worker(LPVOID arg)
             if (ok) ok = MoveFileExA(GPUS_TMP, GPUS_FILE, MOVEFILE_REPLACE_EXISTING);
             if (!ok) DeleteFileA(GPUS_TMP);
         }
-        vklog("enumerated %u device(s) - " GPUS_FILE " %s, so the GPU row lists them "
-              "from the NEXT launch (the menu's .GUI is written at attach)",
-              n, ok ? "rewritten" : "could NOT be rewritten and is left as it was");
+        vklog("enumerated %u device(s), %d software rasteriser(s) not offered - " GPUS_FILE
+              " %s, so the GPU row lists them from the NEXT launch (the menu's .GUI is "
+              "written at attach)", n, hidden,
+              ok ? "rewritten" : "could NOT be rewritten and is left as it was");
     } else {
-        vklog("enumerated %u device(s) - " GPUS_FILE " already agrees", n);
+        vklog("enumerated %u device(s), %d software rasteriser(s) not offered - " GPUS_FILE
+              " already agrees", n, hidden);
     }
-    for (i = 0; i < (int)n; i++)
+    for (i = 0; i < m; i++)
         vklog("  device %d: %s%s", i, name[i], disc[i] ? "  [discrete]" : "");
 
     vkDestroyInstance(inst, NULL);
@@ -1812,15 +1823,43 @@ static void vk_down(void)
     InterlockedExchange(&s_activeIndex, -1);
 }
 
-/* Which physical device to bind: the player's stored name when the loader
-   still offers it, else the first DISCRETE_GPU, else the first that can
-   present.
+/* AUTO'S RANKING: the device type first -- discrete > integrated > virtual >
+   CPU -- and within a type the largest DEVICE_LOCAL heap, the one number every
+   driver reports that tracks how much GPU there is. A software rasteriser
+   (llvmpipe) is VK_PHYSICAL_DEVICE_TYPE_CPU and so always last. */
+static int gpu_type_rank(VkPhysicalDeviceType t)
+{
+    switch (t) {
+    case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:   return 4;
+    case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: return 3;
+    case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:    return 2;
+    case VK_PHYSICAL_DEVICE_TYPE_CPU:            return 1;
+    default:                                     return 0;
+    }
+}
+
+static VkDeviceSize gpu_local_heap(VkPhysicalDevice pd)
+{
+    VkPhysicalDeviceMemoryProperties mp;
+    VkDeviceSize best = 0;
+    uint32_t k;
+    vkGetPhysicalDeviceMemoryProperties(pd, &mp);
+    for (k = 0; k < mp.memoryHeapCount && k < VK_MAX_MEMORY_HEAPS; k++)
+        if ((mp.memoryHeaps[k].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) && mp.memoryHeaps[k].size > best)
+            best = mp.memoryHeaps[k].size;
+    return best;
+}
+
+/* Which physical device to bind: the player's named choice when the loader
+   still offers it and it can present, else Auto -- the best-ranked device that
+   can present; on a tie the loader's earlier one.
    Bounded by `n` throughout -- the index never leaves the array the loader
    handed us. */
 static int pick_device(VkPhysicalDevice* pds, uint32_t n, uint32_t* qfam_out, char* name_out)
 {
-    int chosen = -1, fallback = -1;
-    uint32_t i, k, qfam = 0, fbqfam = 0;
+    int chosen = -1, best = -1, bestRank = -1, chosenCpu = 0, gpuPresent = 0;
+    VkDeviceSize bestHeap = 0;
+    uint32_t i, k, qfam = 0, bestq = 0;
     char cname[NAMELEN];
     /* Latched ONCE for the whole scan: a name that changed halfway through
        would pick by one string and report the other. */
@@ -1830,7 +1869,8 @@ static int pick_device(VkPhysicalDevice* pds, uint32_t n, uint32_t* qfam_out, ch
         VkPhysicalDeviceProperties p;
         VkQueueFamilyProperties q[16];
         uint32_t nq = 16;
-        int presentable = -1;
+        int presentable = -1, rank;
+        VkDeviceSize heap;
 
         vkGetPhysicalDeviceProperties(pds[i], &p);
         vkGetPhysicalDeviceQueueFamilyProperties(pds[i], &nq, NULL);
@@ -1845,26 +1885,32 @@ static int pick_device(VkPhysicalDevice* pds, uint32_t n, uint32_t* qfam_out, ch
 
         vk_canon(cname, sizeof cname, p.deviceName);
         if (want[0] && !lstrcmpiA(cname, want)) {
-            chosen = (int)i; qfam = (uint32_t)presentable;
+            chosen = (int)i; qfam = (uint32_t)presentable; chosenCpu = p.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU;
         }
-        /* the fallback is the first presentable device, upgraded the moment a
-           DISCRETE_GPU appears, so the default lands on DISCRETE_GPU when one
-           exists */
-        if (fallback < 0) { fallback = (int)i; fbqfam = (uint32_t)presentable; }
-        else {
-            VkPhysicalDeviceProperties fp;
-            vkGetPhysicalDeviceProperties(pds[fallback], &fp);
-            if (fp.deviceType != VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU &&
-                p.deviceType  == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
-                fallback = (int)i; fbqfam = (uint32_t)presentable;
-            }
+        if (p.deviceType != VK_PHYSICAL_DEVICE_TYPE_CPU) gpuPresent = 1;
+        rank = gpu_type_rank(p.deviceType);
+        heap = gpu_local_heap(pds[i]);
+        if (rank > bestRank || (rank == bestRank && heap > bestHeap)) {
+            best = (int)i; bestq = (uint32_t)presentable; bestRank = rank; bestHeap = heap;
         }
     }
 
+    /* the enumeration's rule: a software rasteriser is not used beside a GPU */
+    if (chosen >= 0 && chosenCpu && gpuPresent) {
+        vklog("the requested GPU \"%s\" is a software rasteriser and a GPU is present - Auto instead", want);
+        chosen = -1;
+    } else if (chosen < 0 && want[0]) {
+        vklog("the requested GPU \"%s\" is not among the devices present - Auto instead", want);
+    }
     if (chosen < 0) {
-        if (want[0])
-            vklog("the requested GPU \"%s\" is not among the devices present - falling back", want);
-        chosen = fallback; qfam = fbqfam;
+        chosen = best; qfam = bestq;
+        if (chosen >= 0) {
+            VkPhysicalDeviceProperties p;
+            vkGetPhysicalDeviceProperties(pds[chosen], &p);
+            vk_canon(cname, sizeof cname, p.deviceName);
+            vklog("Auto: %s (type rank %d of 4, %u MB device-local)", cname, bestRank,
+                  (unsigned)(bestHeap >> 20));
+        }
     }
     if (chosen < 0) return -1;
 

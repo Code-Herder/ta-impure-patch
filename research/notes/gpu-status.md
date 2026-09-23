@@ -2071,7 +2071,7 @@ captions; names, `assoc`, `commonattribs`, `range` and `stages` verbatim), the s
 
 | column | rows |
 |---|---|
-| **Window** | Display mode (window / borderless fullscreen, `util_toggle_fullscreen`), Monitor (`EnumDisplayMonitors`, `SetWindowPos`), UI scale (Auto / 1x..4x, the client set to k x the Screen Size row's own mode at `main+0x37F1B/+0x37F1F`), Screen Size (stock `VIDSLDR`), Frame cap (60 / 120 / uncapped, `g_config.maxfps` + `fpsl_init`), Gamma (stock), **GPU (Vulkan)** (G19b — `tagpu_vk.h`; caption at y 364, control at 380, in the space the Gamma slider left free) |
+| **Window** | Display mode (window / borderless fullscreen, `util_toggle_fullscreen`), Monitor (`EnumDisplayMonitors`, `SetWindowPos`), UI scale (Auto / 1x..4x, the client set to k x the Screen Size row's own mode at `main+0x37F1B/+0x37F1F`), Screen Size (stock `VIDSLDR`), Frame cap (Refresh / 60 / 120 / uncapped, `g_config.maxfps` + `fpsl_init`; Refresh is the target monitor's rate, resolved into a positive cap on the render thread — renderers §2.10b), Gamma (stock), **GPU (Vulkan)** (G19b — `tagpu_vk.h`; caption at y 364, control at 380, in the space the Gamma slider left free) |
 | **Impure rendering** | Renderer, Undithered assets, Dynamic lighting, Shadows, Shadow quality, Supersampling, FPS counter |
 
 Four things this rests on, each measured rather than assumed:
@@ -2101,9 +2101,11 @@ Four things this rests on, each measured rather than assumed:
   cache at the *next* attach. It is the same bargain the Monitor row already makes for a
   hot-plugged monitor. The row's **model** is not one launch behind: the choice is stored by
   name as `gpu=` in the settings store (`impure.cfg`, [renderers](renderers.html) §2.10b), and
-  `read_display_state` plates `tagpu_vk_gpu_active()` — the device
-  the render thread actually bound — whenever the lane is up, so a request that could not be
-  honoured shows as the device that was.
+  its first stage is **Auto** (`gpu=auto`, the lane's own ranking: [renderers](renderers.html)
+  §2.10b). A software rasteriser is not listed while a GPU is present, so on a machine with one
+  GPU the row is Auto alone, greyed. Auto plates Auto; a named choice plates `tagpu_vk_gpu_active()` — the device the render
+  thread actually bound — whenever the lane is up, so a request that could not be honoured shows
+  as the device that was.
 
 **The Monitor row rebuilds the screen**, because the Screen Size list belongs to a monitor
 and the engine builds it once per visit (`0x45E6B0` into `GUIMEMSTRUCT+0x0C`, hung off

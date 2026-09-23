@@ -1258,14 +1258,14 @@ exception: nothing but the menu ever wrote it and it was never released, so it i
 | `shadowres` | 2048 | greyed until the soft map has a producer; stored anyway |
 | `ss` | 2 | **every resolution** — the owner's call; an Auto-by-resolution stage was proposed and declined |
 | `fps` | 0 | a diagnostic |
-| `maxfps` | `refresh` | a new stage: the monitor's refresh rate (landing 3). Until landing 3 the default is **60**, the stock cap |
+| `maxfps` | `refresh` | the target monitor's refresh rate — cnc-ddraw's own `maxfps=-1`, asked of the monitor's adapter rather than the primary's, and bounded (below) |
 | `hudscale` | `off` | the pass unarmed, which the UI scale row plates as 100 % — the stock size it draws at. **Not Auto**, as the interview first had it: `tagpu_hud.on` is off the play defaults because whether HUD scale is on by default is the owner's call, and its composite does not magnify today (`tagpu_opt.c`). Found while building landing 1 |
 | `gamma` | 12 | 0..20; the stock default, and the factor the engine's own Restore sets |
 | `resolution` | `native` | or `WxH`; resolved against the selected monitor |
 | `display` | `fullscreen` | borderless |
 | `monitor` | the primary | stored by device name (`\\.\DISPLAY2`), never by index |
 | `window` | — | the windowed frame rect, once there has been one |
-| `gpu` | `auto` | discrete > integrated > virtual > CPU, then the largest `DEVICE_LOCAL` heap (landing 3). Until landing 3 an absent `gpu=` is `pick_device`'s first `DISCRETE_GPU` |
+| `gpu` | `auto` | discrete > integrated > virtual > CPU, then the largest `DEVICE_LOCAL` heap; the row's first stage |
 
 **The preset is derived, so Classic++ can improve under a player.** While `style` is `classic`
 or `classic++`, the render keys (`assets`, `light`, `shadowres`) are **rewritten from the DLL's
@@ -1391,7 +1391,7 @@ What each value does:
 |---|---|---|
 | 1 | the store: load, bounds, precedence, preset, migration, deferred write; every row that was already ours moved onto it (render rows, SS, FPS, UI scale, frame cap, display mode, monitor by name, the window rect, GPU); the menu stops writing levers; tacli creates the empty store | built 2026-09-23 (`tagpu_settings.c`) |
 | 2 | the engine's values: gamma, resolution and the battleroom, the Shadows fold, the Shading/AA A/B and removal, `VISUALRT.GUI` — and **the front end's layout**: the renderer column had put Supersampling on Shading's slot and the FPS counter below the 480-high shell; removing the three stock toggles freed the slots, and the rows now sit on one pitch | built 2026-09-23 (`tagpu_menu.c`) |
-| 3 | GPU Auto and its ranking; the Refresh frame-cap stage | planned |
+| 3 | GPU Auto and its ranking; the Refresh frame-cap stage | built 2026-09-23 (`tagpu_vk.c`, `utils.c`) |
 
 **Landing 1, verified 2026-09-23** on a private 1920×1080 Xvfb (`:93`), the reference setup's
 RTX 4070 and llvmpipe both listed:
@@ -1417,6 +1417,50 @@ RTX 4070 and llvmpipe both listed:
   flush on a menu Exit (`window=300,200,0,0`); an unreadable store (`chmod 000`) logs *could NOT be
   read* and is byte-identical after a click; with `renderer=gdi` (no Vulkan device up) a click is
   in the store mid-session.
+
+**GPU Auto.** `pick_device` (`tagpu_vk.c`) binds the named choice when the loader still offers it
+and it can present, else Auto: among the devices that can present on the game window, the best
+type rank — discrete 4, integrated 3, virtual 2, CPU 1 — then the largest `DEVICE_LOCAL` heap,
+then the loader's order. **A software rasteriser (`TYPE_CPU`, llvmpipe) is not offered beside a
+GPU**: the enumeration leaves it out of `tagpu_vk.gpus` (`… 1 software rasteriser(s) not offered`),
+and `pick_device` refuses a stored one while a GPU can present (`the requested GPU "…" is a
+software rasteriser and a GPU is present - Auto instead`). A choice of it that failed at bring-up
+was one the player could not undo from the menu — with llvmpipe bound the game dies at start-up
+at 3840×2160 and on opening Visuals. With no GPU at all it stays: it is then the only device. The row's stages are `Auto` and then the cached device names; Auto plates `Auto`,
+a named choice plates the device actually bound. The store writes `gpu=auto` or the name; a name
+no longer present binds the Auto pick and says so in the log (`the requested GPU "…" is not among
+the devices present - Auto instead`, then `Auto: <name> (type rank N of 4, M MB device-local)`).
+
+**Refresh.** `maxfps=refresh` is stored as `-1` but is **never put in force as a negative cap**:
+cnc-ddraw's own `maxfps=-1` means "pace by `DwmFlush`, else by the D3DKMT vblank wait", which on
+Windows 8+ is the compositor's rate whatever monitor the game is on, and under wine an adapter
+open that fails every frame. Instead the store's cap is a **request** (`fpsl_request_cap`,
+`fps_limiter.h`), and `fpsl_init` resolves Refresh into a plain positive cap — the target
+monitor's rate from `util_target_refresh` (`utils.c`): the menu's chosen adapter by name, else
+the window's monitor, else the primary; bounded to 24..1000 Hz, else 60, because Windows answers
+0 or 1 for "the hardware default". So Refresh paces on the same tick path as 60 and 120.
+**The render thread is `fpsl_init`'s one owner**: the menu's Frame cap click, the Monitor row and
+`WM_DISPLAYCHANGE` only request it, and the render thread runs it at its next `fpsl_frame_start`
+— `fpsl_init` closes the D3DKMT adapter the render thread waits on and rewrites the tick fields it
+paces by, which a click on the window thread used to do under it. Logged each time: `frame cap:
+Refresh = N fps (<adapter> reports M Hz)`. A `maxfps` typed into `ddraw.ini` still holds the row
+(tacli's instances write one), with cnc-ddraw's own meaning, a negative value included. **Not
+covered:** a window dragged to another monitor without the Monitor row keeps the old rate until
+the next display change or relaunch; and whether a secondary monitor reports its own rate under
+wine is unknown — the reference setup's secondaries report their current mode as 0x0, which the
+bound turns into 60.
+
+**Landing 3, verified 2026-09-23** on the same Xvfb, the reference setup's RTX 4070 and llvmpipe
+listed: Auto binds the RTX (`type rank 4 of 4, 12282 MB device-local`); a stored `Imaginary GPU
+9000` logs the fallback and binds the RTX with the row on Auto; Auto → the RTX by name → Undo back
+to `gpu=auto`, each a rebind; the Frame cap row cycles to Refresh (`maxfps=refresh`, `Refresh = 60
+fps (\\.\DISPLAY1 reports 60 Hz)`), and Restore puts it back from 60 with `gpu=auto` untouched;
+after the review's fix, measured from the census frame counter over 20 s: Refresh ~60 fps,
+Uncapped ~165, Refresh again ~60 — the request applied by the render thread each time.
+**Not verified:** a refresh other than 60 (wine reports 60 for the Xvfb output), and a rebind to
+llvmpipe from the Visuals screen — with llvmpipe bound, opening Options → Visuals kills the game,
+and it did so before the settings store existed (`dfe4b69`, the old `tagpu_vk.cfg` naming it), so it
+is an older llvmpipe fault, not this work's; the rebind itself is unchanged from landing 1.
 
 **Landing 2, verified 2026-09-23** on the same Xvfb, Classic++ on Vulkan:
 
