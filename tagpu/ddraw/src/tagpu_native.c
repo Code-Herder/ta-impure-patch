@@ -3283,12 +3283,21 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
 
        WHAT IS NOT DONE HERE, stated rather than left to be discovered: the
        300-frame stats line at the end of the composite (posebake, posedraw and
-       the fill sequence) does not run on this lane, and neither does
-       `tagpu_zoom_publish_view` -- but that one could not run anyway, because
-       it is gated on `keyOn >= 0` and `keyOn` needs `f->surface_tex`, which is
-       0 until 4c gives this backend TA's surface. The input path therefore
-       stays 1:1 here, which is correct while nothing zoomed reaches the screen.
-       [The vulkan-only plan, landing 4b-2.] */
+       the fill sequence) does not run on this lane; this lane's own heartbeat
+       below reports what was handed OVER instead.
+       [The vulkan-only plan, landing 4b-2.]
+
+       `tagpu_zoom_publish_view` IS DONE HERE, at the foot of the hand-over.
+       It was written for the GL composite and gated there on `keyOn >= 0` --
+       "the terrain under you is ours and the key/fill inversion is in force",
+       which was the GL lane's way of saying the world on screen is drawn at
+       our zoom rather than by the engine at 1x. That test cannot be carried
+       over, because the thing it tested is gone: since the clean cut nothing
+       composites TA's own frame at all (tagpu_overlay.c, `tagpu_surf_sync`) --
+       it is captured as the reference and drawn nowhere. On this lane the ONLY
+       world pixels that reach the screen are the ones handed over right above,
+       so reaching this line IS the fact `keyOn` stood for. See the publish
+       itself for the gate that replaces it. */
     /* THE HAND-OVER IS THE END OF THIS FUNCTION, UNCONDITIONALLY. It stood
        inside `if (!gl_draws) { … return; }`, with the GL draw half below it
        reached by falling past; landing 11-3 deleted that half and landing
@@ -3360,6 +3369,39 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        screen this is the first and only one. */
     ghost_record(pk, f->frame_counter, eyeX, eyeY, vpL, vpT, r0,
                  evpL, evpT, evw, evh);
+
+    /* THE WORLD ON SCREEN IS OURS, AT OUR ZOOM -- SAY SO, so that the input
+       path starts unzooming and the wheel has something to be live over
+       (tagpu_zoom.h). Without this line `s_live` is never raised and every
+       notch is refused with "no zoomed world on screen", which is what the
+       lane shipped with between landing 4b-2 and here.
+
+       THE RECT IS THE TRUE VIEWPORT AND NOT THE EFFECTIVE ONE. `pk->vp[]` is
+       the engine's own 1x world rect as the GAME thread published it -- the
+       screen region the world is drawn in, which does NOT move or grow with
+       the zoom -- while `evpL/evw` is the wider slab the gathers read from at
+       zoom < 1 and is not a screen rect at all. Publishing the true one is
+       what gives the wheel its two halves for free: over the side panel or a
+       dialog a notch is refused (`in_viewport` fails), and at zoom < 1 the
+       outer ring is INSIDE this rect, so a notch out there still works.
+
+       AND IT IS THE SPACE THE MESSAGE CARRIES. `tagpu_zoom_wheel` compares its
+       `lparam` against this rect and that lparam is game-space, which is what
+       `pk->vp[]` is too; the letterbox and any window scale are already off it
+       by the time either door is reached. The Vulkan composite's own rect
+       (`TAGPU_WORLDTGT.vx/vw`, frame pixels) is the same region in the OTHER
+       space and must not be used here.
+
+       THE GATE IS THIS FUNCTION'S OWN PREAMBLE, established rather than
+       re-tested: reaching this line means a packet exists and `pk->in_game`
+       is set, the viewport passed its 64..16384 bound, the predicted eye
+       resolved, and at least one world pass was armed -- every one of those
+       is an early `return` above. A menu, a game not yet loaded, a teardown
+       and a fully disarmed pass therefore publish NOTHING, and
+       `tagpu_zoom_frame_end` takes the transform back to 1:1 on the very next
+       frame that does not reach here. The claim is one frame long by
+       construction; it cannot latch. */
+    tagpu_zoom_publish_view(vpL, vpT, vw, vh);
 
 
     /* THE GL DRAW HALF OF THE UNIT PASS STOOD HERE -- 1 054 lines, deleted by

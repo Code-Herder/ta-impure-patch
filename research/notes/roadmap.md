@@ -3614,6 +3614,20 @@ at 32 and 64 bit), so the pivot costs the bring-up work and nothing written abov
 never removed and never regressed — that is the point of constraint 4. A Phase G that stops at
 G19b has still shipped the GPU picker, which is the player-facing half.
 
+**THE SCROLL WHEEL CAME BACK 2026-09-22, and the gap it leaves behind is the shape to watch for.**
+`tagpu_zoom_publish_view` had no caller in the tree between landing 4b-2 and that date: the GL
+composite was its only one and went with the GL tail, so `s_live` was never raised, `tagpu_zoom.txt`
+was the only working zoom lever, and the shipped play configuration answered every wheel notch with
+*"zoom: wheel ignored — no zoomed world on screen"*. The four things that ride the same `live` flag
+went with it — the addressable rect at zoom < 1 (so ring clicks were dropped), the minimap view box,
+the widened camera range and the scroll-rate scaling. **The publish is at the foot of
+`tagpu_native_frame`'s hand-over now, gated on that function's own preamble**, and every item is
+measured back in [gpu-status](gpu-status.html) §2.3a. The shape: 4b-2 recorded the omission
+honestly and gave a reason that would expire (`keyOn` needs TA's surface, "until 4c"), and then the
+clean cut removed the thing the reason was about rather than supplying it — so the sentence stayed
+true-sounding and the feature stayed dead through every landing after it. **A stated gap needs the
+condition that closes it to be something a later landing will actually test.**
+
 ## Shipping — the build people can download (2026-09-08)
 
 Until the game has the render options screen (**Phase F / G18** above; [renderers](renderers.html)
