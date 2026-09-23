@@ -1054,6 +1054,150 @@ static int emit_fx_model(const TAGPU_FXMODEL* m, int nv, float fxKey)
                      m->owner, 0, selprim != -1 ? 0 : -1, 1);
 }
 
+/* ---- THE SELECTION RECT (`DrawUnitSelectBoxRect 0x46A530`, ui-markers.md §1) ----
+   Back on the Vulkan lane, drawn by tagpu_vk_mark.c out of tagpu_mark.c's
+   bucket. It lived only inside the GL unit draw that landing 11-3 deleted, and
+   nothing replaced it: the engine went on drawing its own box, into a surface
+   that since the clean cut reaches no screen, so a selected unit showed no rect
+   at all. The geometry below is that GL pass's, which was measured against the
+   engine's own box (ui-markers.md §1, "what it took to land on the engine's
+   pixels"); what changed is only who draws it.
+
+   THE BOUNDS ARE THE ROOT PIECE'S, NOT THE WHOLE TREE'S -- ~11 px on a Stumpy.
+   The engine asks `0x4CB650(model, &min, &max, 0)`, which seeds BOTH bounds
+   with {0,0,0} (`0x4CB65D`..`0x4CB675`), takes only a node with THREE OR MORE
+   vertices (`0x4CB6D9` `cmp $2,eax; jle`), and descends into child and sibling
+   only on a non-zero flag (`0x4CB780`); the select box passes 0 (`push $0`
+   @`0x46A55A`), so the walk never leaves the root.
+
+   CACHED PER ROOT NODE, AND DROPPED ON THE LEVEL EDGE (`cache_gen_check`), so
+   a template address reused by the next level cannot hand back the old
+   model's bounds. WHY THE READ IS SAFE is model_root's argument, not a probe:
+   the node came out of a bounded index into the live template table, and the
+   templates are held alive for the length of this pass by tagpu_reclaim's
+   teardown wrap (whose 1 s timeout is the pre-existing hole recorded in
+   thread-safe-destruction.md §6a). A live template is internally consistent,
+   so its vertex array holds `nvert` vertices; the count is still bounded as
+   DATA before it sizes a loop. */
+typedef struct { const char* node; float mn[3], mx[3]; } SELAABB;
+static SELAABB s_sbox[256];
+static int     s_nsbox;
+static unsigned s_sboxFull;           /* types refused because the cache is full */
+
+static const SELAABB* selbox_aabb(const char* nd)
+{
+    int i, nvert;
+    const int* vb;
+    SELAABB* a;
+    for (i = 0; i < s_nsbox; i++)
+        if (s_sbox[i].node == nd) return &s_sbox[i];
+    if (!ptr_ok(nd)) return NULL;
+    if (s_nsbox >= 256) { s_sboxFull++; return NULL; }
+    nvert = *(const int*)(nd + N_VCOUNT);
+    vb = *(const int* const*)(nd + N_VERTS);
+    /* past any stock model by an order of magnitude: not a template */
+    if (nvert > 4096) return NULL;
+    if (nvert > 2 && !ptr_ok(vb)) return NULL;
+    a = &s_sbox[s_nsbox];
+    a->node = nd;
+    a->mn[0] = a->mn[1] = a->mn[2] = 0.0f;      /* the engine's {0,0,0} seed */
+    a->mx[0] = a->mx[1] = a->mx[2] = 0.0f;
+    if (nvert > 2) {                             /* 0x4CB6D9's threshold */
+        const int* of = (const int*)(nd + N_OFF);
+        int k, r;
+        for (k = 0; k < nvert; k++)
+            for (r = 0; r < 3; r++) {
+                float v = (float)(of[r] + vb[k*3+r]) / 65536.0f;
+                if (v < a->mn[r]) a->mn[r] = v;
+                if (v > a->mx[r]) a->mx[r] = v;
+            }
+    }
+    s_nsbox++;
+    return a;
+}
+
+/* One selected unit's rect into the marker pass. `ax`/`ay` are the gather's
+   anchor (frame px, eye and viewport folded in), `alt` its altitude, `enc` the
+   depth key its body is drawn at. Returns 1 when a rect was emitted. */
+static int selbox_emit(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* pu,
+                       float ax, float ay, float alt, float wx, float wz,
+                       float enc, float depthScale,
+                       int vpL, int vpT, int vw, int vh, float zoom)
+{
+    const char* root;
+    const SELAABB* a;
+    const float K = 6.2831853f / 65536.0f;
+    float c0, s0, c1, s1, c2, s2, px[4], py[4], y0, depth;
+    float cx[4], cz[4];
+    int k;
+    if (!pu->model_id) return 0;
+    root = model_root(pk, pu->model_id);
+    a = root ? selbox_aabb(root) : NULL;
+    if (!a) return 0;
+    /* ALL THREE ANGLES, in 0x4B6CC0's order and sense: Rz(+0x64) on (x,y),
+       Rx(+0x68) on (y,z), Ry(+0x66) on (x,z), each `a' = a*cos - b*sin` --
+       the same triple an effects model takes (`emit_fx_model`). The tilt words
+       are live on a slope (17.4 deg of bank, -22.1 of pitch measured on one
+       hillside), and the TRANSPOSED heading turns the rect against its unit,
+       which is what the GL pass did until 2026-09-08. */
+    c0 = cosf((float)pu->rot[0] * K); s0 = sinf((float)pu->rot[0] * K);
+    c1 = cosf((float)pu->rot[1] * K); s1 = sinf((float)pu->rot[1] * K);
+    c2 = cosf((float)pu->rot[2] * K); s2 = sinf((float)pu->rot[2] * K);
+    y0 = a->mn[1];                              /* flat, at the LOWEST model y */
+    cx[0] = a->mn[0]; cx[1] = a->mx[0]; cx[2] = a->mx[0]; cx[3] = a->mn[0];
+    cz[0] = a->mn[2]; cz[1] = a->mn[2]; cz[2] = a->mx[2]; cz[3] = a->mx[2];
+    for (k = 0; k < 4; k++) {
+        float x = cx[k], y = y0, z = cz[k];
+        if (pu->rot[0]) rot2(c0, s0, &x, &y);
+        if (pu->rot[2]) rot2(c2, s2, &y, &z);
+        if (pu->rot[1]) rot2(c1, s1, &x, &z);
+        /* THE ENGINE'S OWN PROJECTION (0x467A50), TERM BY TERM, because it
+           truncates each one SEPARATELY and only then halves the height:
+
+             sx = ((rot.x + pos.x) >> 16) + 0x80
+             sy = ((pos.z - rot.z) >> 16) - (((rot.y + pos.y) >> 16) >> 1) + 0x20
+
+           `>>` is arithmetic, so both are floors, and `sar 1` floors the
+           ALREADY floored height -- folding them into one float expression
+           lands a pixel out on some edges (46 of ~110 box pixels, measured).
+           The anchor carries the eye and the altitude already:
+           ax = wx - eyeX + vpL, ay = wz - alt/2 - eyeY + vpT. The +0.5 puts
+           each corner on a pixel CENTRE, where a Bresenham line's endpoint
+           is. */
+        {
+            float zt = (ay - (float)vpT + alt * 0.5f) - z;
+            float yt = floorf(floorf(y + alt) * 0.5f);
+            px[k] = floorf(ax - (float)vpL + x) + (float)vpL + 0.5f;
+            py[k] = floorf(zt) - yt + (float)vpT + 0.5f;
+        }
+        /* Away from 1x the vertex stage scales about the zoom centre and a
+           truncated corner lands between pixels, so snap there too: forward
+           through the zoom, onto the centre of a game pixel, and back -- the
+           rule the GL pass had and tagpu_mark.c's `snap_device` restates. */
+        if (zoom > 0.0f && zoom != 1.0f) {
+            float zcx0 = (float)vpL + (float)vw * 0.5f;
+            float zcy0 = (float)vpT + (float)vh * 0.5f;
+            float sx = (px[k] - zcx0) * zoom + zcx0;
+            float sy = (py[k] - zcy0) * zoom + zcy0;
+            sx = floorf(sx) + 0.5f;
+            sy = floorf(sy) + 0.5f;
+            px[k] = (sx - zcx0) / zoom + zcx0;
+            py[k] = (sy - zcy0) / zoom + zcy0;
+        }
+    }
+    /* HALF A KEY UNDER ITS OWN UNIT: the GL pass's `encb - 0.5`, the vertex
+       stage's own mapping (`1 - enc/uDepthScale`). The body's keys run
+       enc +- 1.8 with the model's depth, so the rect is hidden behind the part
+       of its unit that stands above its base -- the engine draws the rect
+       first and the sprite over it -- and stays over everything a whole row
+       (4 keys) behind. */
+    depth = 1.0f - (enc - 0.5f) / depthScale;
+    if (depth < 0.0f) depth = 0.0f;
+    if (depth > 1.0f) depth = 1.0f;
+    return tagpu_mark_emit_selbox(px, py, pk->gui_col[SELBOX_COLIDX],
+                                  wx, wz, depth);
+}
+
 /* ------------------------------------------------------- replacement pose --
    One unit's COB pose: per piece a 4x3 (3 rows of 4) that carries a REST
    vertex of that piece to where the unit's script is holding it this frame.
@@ -1166,14 +1310,14 @@ static unsigned s_lastLevelGen;          /* the last packet's, carried over a fr
 
 static void cache_gen_check(unsigned g)
 {
-    /* THE ONLY THING THIS DROPPED WAS `s_pmap`, the replacement mesh's glTF
-       piece -> engine primitive map, and landing 11 D3 deleted it with the
-       loader. `s_cacheGen` is still tracked, and the level-change edge is
-       still the right place to invalidate a template-keyed cache, so the
-       function and its call site stay rather than being re-derived by whoever
-       adds the next one. Nothing consults it today. */
+    /* WHAT THIS DROPS: `s_sbox`, the selection rect's root-piece bounds,
+       keyed by template node. (It once dropped `s_pmap`, the replacement
+       mesh's glTF piece map, which landing 11 D3 deleted with the loader; the
+       function and its call site were kept for exactly the next template-keyed
+       cache, and this is it.) */
     if (g == s_cacheGen) return;
     s_cacheGen = g;
+    s_nsbox = 0;          /* the selection rect's root-piece bounds */
 }
 
 /* Everything one unit's pose needs, accumulated down the piece tree. Shared
@@ -3158,6 +3302,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         crcNow = pk->tick;
         if (crcNow != crcTick) { crcTick = crcNow; crcLog = 1; }
     }
+    /* selection rects handed to the marker pass this frame -- the pass
+       decides whether they are ours (`tagpu_mark_emit_selbox`) and says 0
+       when not, so this reads 0 under `noselbox` or `passive` */
+    int nselDrawn = 0;
     for (i = 0; i < nu; i++) {
         /* BEFORE any of the skips below, not in the branch that fills it: the
            array is static, so a unit that takes an early `continue` — dead, or
@@ -3176,6 +3324,16 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            sit at FEATURE depth (3+rel*4, terrain-depth 3.4) */
         float encBase = units[i].air ? airKey
                       : (units[i].feat ? 3.0f : 1.0f) + (float)units[i].rel * 4.0f;
+        /* THE SELECTION RECT, here because this is where the unit's depth key
+           is decided, and ahead of every `continue` below: the engine draws
+           the rect whether or not the body can be (0x46A530 has no model
+           test, and a body the bake refuses is not a unit that was not
+           selected). `sel` already carries the SelBoxes gate (ui_gates bit 2). */
+        if (units[i].sel && markOn && units[i].pu)
+            nselDrawn += selbox_emit(pk, units[i].pu, units[i].ax, units[i].ay,
+                                     units[i].wy, units[i].wx0, units[i].wz0,
+                                     encBase, depthScale, vpL, vpT, vw, vh,
+                                     s_zoom);
         /* THE RE-READ IS GONE (frame packet exchange, landing 3). This used to
            compare the unit's `+0x9E` again against the Object3do gathered a
            moment earlier, because the engine could free it between the two —
@@ -3410,11 +3568,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        handed OVER rather than what was drawn, which is the only thing
        this lane decides. */
     if ((f->frame_counter % 300) == 0) {
-        char hb[176];
+        char hb[256];
         _snprintf(hb, sizeof hb,
                   "native: vulkan lane handed over frame %u: terr=%d feat=%d "
-                  "fx=%d mark=%d units=%d posed=%d", f->frame_counter,
-                  nterr, nfeat, nfx, markOn ? 1 : 0, nu, npd);
+                  "fx=%d mark=%d units=%d posed=%d sel=%d/%d selcache=%d full=%u",
+                  f->frame_counter, nterr, nfeat, nfx, markOn ? 1 : 0, nu, npd,
+                  nselDrawn, nsel, s_nsbox, s_sboxFull);
         hb[sizeof hb - 1] = 0;
         nlog(hb);
     }

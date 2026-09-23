@@ -137,7 +137,7 @@
 #define GUI_WHITE    0x0F
 
 #define MAXBAR       2048                    /* bars per frame               */
-#define MVST         7                       /* x,y, u,v, wx,wz, colour      */
+#define MVST         8                       /* x,y, u,v, wx,wz, colour, z   */
 #define QUADV        6
 /* THE CAPTURED LAYER'S QUAD USED TO SIT AT 0 and the cursor after it. The clean
    cut deleted that draw -- it was the engine's own rasterised bytes copied back
@@ -161,6 +161,10 @@
    the failure mode to know: ShowRanges over a large selection is the only thing
    that can reach the cap, and it costs the digits first. */
 #define MAXORDX      4800                    /* text verts (6 per quad)      */
+/* The selection rects: four lines, eight vertices, per selected unit, for as
+   many units as the native gather can hold (its MAXU). A frame over it loses
+   the rects past the cap and `mark: ... selover=N` says so. */
+#define MAXSELV      (2048 * 8)
 
 static void flog(const char* s)
 {
@@ -266,6 +270,8 @@ static float s_verts[MAXMV * MVST];
 static float s_ordt[MAXORDT * MVST];   /* order markers: filled triangles     */
 static float s_ordl[MAXORDL * MVST];   /* order markers: a line list          */
 static float s_ordx[MAXORDX * MVST];   /* text quads: labels, then digits     */
+static float s_sel[MAXSELV * MVST];    /* selection rects: a line list        */
+static int   s_nsel, s_selover;        /* their verts / rects refused, a frame */
 static int   s_nbar;                   /* bars gathered (2 quads each)        */
 static int   s_cBar;                   /* counted, whether emitted or not     */
 static int   s_ncurs;                  /* build cursor / band box verts       */
@@ -299,6 +305,7 @@ static const char* VS =
     "layout(location=1) in vec2 aUV;\n"
     "layout(location=2) in vec2 aWorld;\n"
     "layout(location=3) in float aCol;\n"
+    "layout(location=4) in float aDepth;\n"
     "uniform vec2 uGame;\n"
     "uniform float uZoom;\n"
     "uniform vec2 uZoomC;\n"
@@ -307,8 +314,11 @@ static const char* VS =
     /* the same scale-about-the-view-centre every world pass uses, so a marker
        tracks the unit it belongs to at any zoom */
     "  vec2 p = (aPos - uZoomC) * uZoom + uZoomC;\n"
-    /* markers are the frame's top layer: depth 0, drawn with the test off */
-    "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0, 0.0, 1.0);\n"
+    /* markers are the frame's top layer, drawn with the depth test off, and
+       carry 0 here; the selection rects alone carry a real z (the unit pass's
+       own `1 - enc/uDepthScale`, computed by the caller) and are the one draw
+       that tests it -- see tagpu_mark_emit_selbox */
+    "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0, aDepth, 1.0);\n"
     "  vUV = aUV; vWorld = aWorld; vCol = aCol;\n"
     "}\n";
 static const char* FS =
@@ -373,6 +383,7 @@ static void put_vert(int i, float x, float y, float u, float v, float wx, float 
 {
     float* o = s_verts + (size_t)i * MVST;
     o[0] = x; o[1] = y; o[2] = u; o[3] = v; o[4] = wx; o[5] = wz; o[6] = col;
+    o[7] = 0.0f;                       /* the top layer: no depth test reads it */
 }
 
 /* the order buckets' own writer: same vertex, a different array */
@@ -381,6 +392,7 @@ static void put_at(float* base, int i, float x, float y, float u, float v,
 {
     float* o = base + (size_t)i * MVST;
     o[0] = x; o[1] = y; o[2] = u; o[3] = v; o[4] = wx; o[5] = wz; o[6] = col;
+    o[7] = 0.0f;
 }
 
 static void put_ord(float* base, int i, float x, float y, float wx, float wz,
@@ -411,6 +423,40 @@ int tagpu_mark_emit_tri(float x0, float y0, float x1, float y1,
     put_ord(s_ordt, s_nordt + 1, x1, y1, wx, wz, c);
     put_ord(s_ordt, s_nordt + 2, x2, y2, wx, wz, c);
     s_nordt += 3;
+    return 1;
+}
+
+/* THE SELECTION RECT, emitted by the native pass's unit loop, which is the one
+   place that knows both the unit's depth key and the engine's projection of its
+   bounds -- the same division of labour as the order markers, whose geometry
+   tagpu_order.c computes and this pass draws.
+
+   OURS UNDER EXACTLY THE CONDITIONS markown's `mark_selbox` is told so
+   (`tagpu_markown_set_selbox(s_selbox)` in tagpu_mark_render): armed, not
+   passive, not `noselbox`. The engine's own box still lands in its reference
+   surface -- `mark_selbox` suppresses it only when tagpu_native says every box
+   was emitted, and nothing on this lane says so (see `s_selComplete` there) --
+   but that surface reaches no screen, so the two cannot double-draw.
+
+   `s_armed` is this module's own 30-frame poll and the caller runs between
+   this frame's gather and its render, which is where the bucket is reset and
+   published; `tagpu_mark_frame` resets it too, so a frame whose gather did not
+   run cannot publish another frame's rects. */
+int tagpu_mark_emit_selbox(const float px[4], const float py[4], int colidx,
+                           float wx, float wz, float depth)
+{
+    float c = (float)colidx / 255.0f;
+    int k;
+    if (s_armed != 1 || s_passive || !s_selbox) return 0;
+    if (s_nsel + 8 > MAXSELV) { s_selover++; return 0; }
+    for (k = 0; k < 4; k++) {
+        int k2 = (k + 1) & 3;
+        put_ord(s_sel, s_nsel + 0, px[k],  py[k],  wx, wz, c);
+        put_ord(s_sel, s_nsel + 1, px[k2], py[k2], wx, wz, c);
+        s_sel[(size_t)(s_nsel + 0) * MVST + 7] = depth;
+        s_sel[(size_t)(s_nsel + 1) * MVST + 7] = depth;
+        s_nsel += 2;
+    }
     return 1;
 }
 
@@ -647,6 +693,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     int watched, nv = BARBASE;
 
     s_nbar = 0; s_cBar = 0; s_nordt = 0; s_nordl = 0; s_nordx = 0;
+    s_nsel = 0; s_selover = 0;
     s_nordxOrd = 0; s_ntext = 0; s_xover = 0;
     if (!pk || !pk->in_game) return 0;
     /* before anything emits: tagpu_order.c's labels come through
@@ -859,13 +906,15 @@ static int mk_push(const float* v, int n)
     return at;
 }
 
-static void mk_draw(int first, int count, int lines, int text, int fog, int tex)
+static void mk_draw(int first, int count, int lines, int text, int fog, int tex,
+                    int depth)
 {
     if (count <= 0) return;
     if (s_mkDn >= TAGPU_MK_MAXDRAW) { s_mkDropped = 1; return; }
     s_mkD[s_mkDn].first = first; s_mkD[s_mkDn].count = count;
     s_mkD[s_mkDn].lines = lines; s_mkD[s_mkDn].text = text;
     s_mkD[s_mkDn].fog = fog;     s_mkD[s_mkDn].tex = tex;
+    s_mkD[s_mkDn].depth = depth;
     s_mkDn++;
 }
 
@@ -873,6 +922,7 @@ void tagpu_mark_frame(unsigned frame_counter)
 {
     s_mkFrame = frame_counter;
     s_mkHave = 0;
+    s_nsel = 0;           /* emitted after the gather, so reset here as well */
 }
 
 int tagpu_mark_handover(TAGPU_MKHAND* out, unsigned now)
@@ -906,7 +956,7 @@ int tagpu_mark_handover(TAGPU_MKHAND* out, unsigned now)
 
 void tagpu_mark_render(const TAGPU_FXVIEW* v)
 {
-    int total, textBase = 0;
+    int total, textBase = 0, selBase = 0;
 
     /* THIS PASS BUILDS THE RECORD THE TWIN DRAWS FROM, and nothing else. It used
        to do both: `mk_push` and `mk_draw` are the record and are pure CPU, and
@@ -930,7 +980,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
         tagpu_markown_set_digits(s_digits);
     }
 
-    if (s_nbar == 0 && s_ncurs == 0 &&
+    if (s_nbar == 0 && s_ncurs == 0 && s_nsel == 0 &&
         s_nordt == 0 && s_nordl == 0 && s_nordx == 0) return;
 
     /* ---- the Phase G A/B's lever ---- */
@@ -964,6 +1014,19 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
     if (s_nordt) mk_push(s_ordt, s_nordt);
     if (s_nordl) mk_push(s_ordl, s_nordl);
     if (s_nordx) mk_push(s_ordx, s_nordx);
+    selBase = textBase + s_nordx;
+    if (s_nsel) mk_push(s_sel, s_nsel);
+
+    /* THE SELECTION RECTS FIRST, and depth-tested: the engine draws each one
+       inside the unit sweep, immediately before its own unit (`0x4699EB`,
+       `0x469B8A`), so it is under that unit and every later row and over what
+       came before -- which is what the unit pass's depth keys already encode,
+       so the test reproduces the order the sweep had. Everything after it in
+       this list is drawn over the finished world, as the engine draws it after
+       the sweeps. Fogged like the bars: the fog overlay comes after the sweep. */
+    if (s_nsel) {
+        mk_draw(selBase, s_nsel, 1, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE, 1);
+    }
 
     /* The engine's own order inside the block: order markers and their
        ShowRanges labels first (`0x469BFC`), then the health bars over them
@@ -976,10 +1039,10 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
            keeps a native-res marker a hairline at 4x instead of a 1997 pixel
            blown up to sixteen */
         if (s_nordt) {
-            mk_draw(total, s_nordt, 0, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE);
+            mk_draw(total, s_nordt, 0, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE, 0);
         }
         if (s_nordl) {
-            mk_draw(total + s_nordt, s_nordl, 1, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE);
+            mk_draw(total + s_nordt, s_nordl, 1, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE, 0);
         }
     }
     if (s_nordx) {
@@ -995,11 +1058,11 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
            (`text`/`textGen`/`textW`/`textH`) and uploads its own, so the answer
            here is yes without a texture -- which is now unconditional. */
         if (s_nordxOrd) {
-            mk_draw(textBase, s_nordxOrd, 0, 1, v->fogMode & 1, TAGPU_MK_TEX_TEXT);
+            mk_draw(textBase, s_nordxOrd, 0, 1, v->fogMode & 1, TAGPU_MK_TEX_TEXT, 0);
         }
     }
     if (s_nbar) {
-        mk_draw(BARBASE, s_nbar, 0, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE);
+        mk_draw(BARBASE, s_nbar, 0, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE, 0);
     }
     if (s_nordx > s_nordxOrd) {
         /* the digits, over the bars, out of the same atlas — a SECOND record
@@ -1008,13 +1071,13 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
            order driver at 0x469BFC and the digit at 0x469CF9). It was also a
            second GL draw, for a binding reason that went with the draw. */
         mk_draw(textBase + s_nordxOrd, s_nordx - s_nordxOrd, 0, 1,
-                v->fogMode & 1, TAGPU_MK_TEX_TEXT);
+                v->fogMode & 1, TAGPU_MK_TEX_TEXT, 0);
     }
     /* last, and with the fog off for the same reason the layer above has it
        off: the engine draws these two rects after its fog overlay and never
        darkens them */
     if (s_ncurs) {
-        mk_draw(CURSBASE, s_ncurs, 0, 0, 0, TAGPU_MK_TEX_NONE);
+        mk_draw(CURSBASE, s_ncurs, 0, 0, 0, TAGPU_MK_TEX_NONE, 0);
     }
 
     if (s_abTaking) {
@@ -1069,10 +1132,12 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
             last = v->frame_counter;
             tagpu_text_stats(&nstr, &ndrop);
             _snprintf(b, sizeof b,
-                "mark: bars=%d cursor=%d ordtri=%d ordline=%d text=%d(lab=%d) "
+                "mark: bars=%d sel=%d selover=%d cursor=%d ordtri=%d "
+                "ordline=%d text=%d(lab=%d) "
                 "atlas=%d/%d over=%d key=%d vp=(%d,%d %dx%d) "
                 "zoom=%.2f%s",
-                s_cBar, s_ncurs / QUADV, s_nordt / 3, s_nordl / 2,
+                s_cBar, s_nsel / 8, s_selover, s_ncurs / QUADV, s_nordt / 3,
+                s_nordl / 2,
                 s_ntext, s_nordxOrd / QUADV, nstr, ndrop, s_xover,
                 tagpu_markown_key(), v->vpL, v->vpT, v->vw, v->vh, v->zoom,
                 s_passive ? " (passive: engine still drawing)" : "");
