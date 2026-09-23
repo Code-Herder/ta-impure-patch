@@ -44,18 +44,24 @@
 
 enum { TAGPU_PB_BODY = 0, TAGPU_PB_SLANT, TAGPU_PB_WIRE, TAGPU_PB_NRANGE };
 
-/* THE POSED PROGRAM'S `Pose` BLOCK, std140, SHARED BY BOTH LANES. It lives
-   here rather than in tagpu_posedraw.h because every number in it is the
-   bake's piece ceiling: 3 rows of a 4x3 per piece, then two packed per-piece
-   words four to a vec4. tagpu_posedraw.c builds the GLSL declaration from
-   these and tagpu_vk_unit.c fills the buffer from them, so the two cannot
-   drift -- which is rule 4 of this lane ("re-check every bound in the
-   consuming file, and share the constant through the header"). */
-#define TAGPU_PD_ROWS    (TAGPU_PBMAXPIECE * 3)              /* 768 vec4     */
-#define TAGPU_PD_FLAGV   (TAGPU_PBMAXPIECE / 4)              /*  64 vec4     */
-#define TAGPU_PD_FLAGOFF (TAGPU_PD_ROWS * 16)                /* bytes        */
-#define TAGPU_PD_VISOFF  ((TAGPU_PD_ROWS + TAGPU_PD_FLAGV) * 16)
-#define TAGPU_PD_BLOCK   ((TAGPU_PD_ROWS + TAGPU_PD_FLAGV * 2) * 16)  /* 14336 */
+/* THE POSED PROGRAM'S `Pose` STORAGE BUFFER. It lives here rather than in
+   tagpu_posedraw.h because every bound in it is the bake's piece ceiling.
+   One `vec4` array a frame, in three sections that follow one another:
+
+     rows   every posed unit's pose, 3 vec4 a piece (the rows of a 4x3)
+     flags  every unit's `shaded` words, one float a piece, packed 4 to a vec4
+     vis    every unit's visibility words, laid out exactly as `flags`
+
+   which is the hand-over's `rows`, `flags` and `vis` arrays copied whole. A
+   unit reaches its slices through three base indices in its uniform block;
+   a unit's word run is padded to a whole vec4, so each unit's starts on one.
+   tagpu_posedraw.c declares the buffer and tagpu_vk_unit.c fills it, and both
+   take their numbers from here -- rule 4 of this lane ("re-check every bound
+   in the consuming file, and share the constant through the header"). */
+#define TAGPU_PD_FLAGV   (TAGPU_PBMAXPIECE / 4)   /* one unit's word vec4s at the ceiling: 64 */
+/* one unit's pose at the piece ceiling, in bytes: 256 x 48 of rows plus the two
+   word runs, 14 336. What the device must be able to bind for one unit. */
+#define TAGPU_PD_UNITMAX ((TAGPU_PBMAXPIECE * 3 + TAGPU_PD_FLAGV * 2) * 16)
 
 typedef struct TAGPU_PBGEOM {
     const char*  root;                        /* Model3DONode* of primitive 0 */

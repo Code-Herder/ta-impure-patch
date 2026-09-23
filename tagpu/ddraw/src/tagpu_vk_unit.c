@@ -5,8 +5,8 @@
    IT IS NOT A SECOND IMPLEMENTATION OF THE PASS. Everything arrives through
    `tagpu_posedraw_handover` (tagpu_posedraw.h): the vertices are the two
    streams the GL bake uploaded, reached through tagpu_posebake.h's mirrors;
-   the draw ranges are the `first`/`count` the GL glDrawArrays used; the pose
-   block is the bytes `upload_pose` wrote, through the same conversion; the
+   the draw ranges are the `first`/`count` the GL glDrawArrays used; the poses
+   are the hand-over's three arenas, copied whole; the
    uniforms are the numbers the GL draws passed; the texels are the bytes each
    GL texture was uploaded from; and the shaders are the same GLSL through
    tools/spirv-gen.py. What a 0-px comparison then compares is two rasterisers.
@@ -34,29 +34,31 @@
       image at all, and the question does not arise. Two layouts, two sets per
       slot, one pipeline each.
 
-   2. PER-UNIT UNIFORMS, WHICH IS WHAT A UNIT PASS IS. The GL twin re-uploads
-      one 14 336-byte pose block and a dozen loose uniforms per unit and draws
-      between the uploads; a Vulkan command buffer cannot, because every draw
-      it records is submitted together. So each unit gets its own window in
-      three DYNAMIC uniform buffers and the draw binds the set with three
-      offsets. That is the whole of the per-unit cost and it is the pass's
-      memory story:
+   2. PER-UNIT UNIFORMS, WHICH IS WHAT A UNIT PASS IS. Every draw a Vulkan
+      command buffer records is submitted together, so nothing can be
+      re-uploaded between two draws. Each unit therefore gets its own window
+      in the slot's SMALL buffer, bound with two dynamic offsets; every unit's
+      pose shares one STORAGE buffer, and the unit's window carries its three
+      base indices into it. That is the whole of the per-unit cost and it is
+      the pass's memory story:
 
-        the POSE buffer   TAGPU_PD_BLOCK (14 336) a unit, per frame slot. The
-                          block's SIZE is the 256-piece ceiling, not the model
-                          -- stock's worst is 36 pieces -- but a descriptor
-                          must cover the block the shader declares, so the
-                          window cannot be shortened to the model. 300 units is
-                          4.3 MB a slot.
-        the SMALL buffer  two vertex-stage blocks (the body's and the caster's)
-                          and one fragment-stage block a unit, each at a
-                          device-accepted offset: 768 bytes a unit on the
-                          reference device.
+        the POSE buffer   the hand-over's `rows`, `flags` and `vis` copied
+                          whole, in tagpu_posebake.h's layout, so a unit costs
+                          what its model has: 48 bytes a piece plus two word
+                          runs padded to a vec4 -- 2 016 bytes for stock's
+                          worst, 36 pieces. Its size is checked every frame
+                          against the device's `maxStorageBufferRange`, which
+                          the spec puts at 128 MB or more.
+        the SMALL buffer  four vertex-stage blocks (body, caster, hard shadow,
+                          wire) and three fragment-stage blocks a unit, each
+                          at a device-accepted offset: 1 728 bytes a unit at
+                          the reference device's 64-byte alignment.
 
-      Both are grown to the frame's own unit count rather than to
-      TAGPU_PD_MAXHAND, and both are given back the moment a frame hands
-      nothing over -- §2.28's rule, and at this size it is the rule that makes
-      the pass affordable in a 32-bit address space.
+      Both grow to the frame's own size and are given back the moment a frame
+      hands nothing over -- §2.28's rule. AT THE DESIGN POINT, 10 241 units
+      (TAGPU_PK_DESIGN_SLOTS) all posed and on screen at stock's worst model,
+      that is 20.6 MB of pose and 17.7 MB of blocks per frame slot, times the
+      slot count in address space. Only a frame that large pays it.
 
    3. PER-TYPE VERTEX BUFFERS, AND A SERIAL RATHER THAN A POINTER. The GL twin
       draws every unit out of its TYPE's two static buffers, so this keeps one
@@ -184,10 +186,10 @@
 #include "spirv/tagpu_posedraw.spv.h"
 #include "spirv/tagpu_native.spv.h"
 
-/* the two std140 blocks, at the sizes the generated SPIR-V headers print for them */
-#define VGL_SZ  176                        /* tagpu_posedraw::VS  _Globals    */
+/* the two std140 blocks, at the sizes the generated SPIR-V headers print for
+   them. The pose is a storage buffer sized per frame, so it has no size here. */
+#define VGL_SZ  192                        /* tagpu_posedraw::VS  _Globals    */
 #define FGL_SZ  272                        /* tagpu_native::FS    _Globals    */
-#define POSE_SZ TAGPU_PD_BLOCK             /* the Pose block, 14336           */
 
 /* the two vertex bindings, which are the GL VAO's two buffers */
 #define GEOM_STRIDE (TAGPU_PB_GEOMST * 4)  /* 32 */
@@ -385,7 +387,7 @@ typedef struct {
     unsigned char*  umap;
     VkDeviceSize    ucap;
 
-    VkBuffer        pbuf;                  /* the pose blocks                  */
+    VkBuffer        pbuf;                  /* the frame's poses, a storage buffer */
     VkDeviceMemory  pmem;
     unsigned char*  pmap;
     VkDeviceSize    pcap;
@@ -447,7 +449,12 @@ static int      s_shadowOn;            /* the twin drew these against a map  */
    once at build, because `build` is where the alignment is read and a pass that
    cached them would have two places to keep in step. */
 static VkDeviceSize s_uStride, s_vglOff2, s_vglOff3, s_vglOff4, s_fglOff, s_fglOff2,
-                    s_fglOff3, s_pStride;
+                    s_fglOff3;
+/* this frame's packed pose, in bytes: the range both sets bind, and so what
+   the shader's `uPose.length()` answers */
+static VkDeviceSize s_poseBytes;
+/* the device's `maxStorageBufferRange`, read in `build` */
+static VkDeviceSize s_ssboMax;
 static unsigned     s_nwire;            /* nanoframe wires recorded this frame */
 /* shadow casters recorded this frame, so the pass can REPORT having painted a
    structure slant rather than let the producer predict it (tagpu_posedraw.h) */
@@ -801,7 +808,7 @@ static int slot_sized(const TAGPU_VKPASS* d, SLOT* s,
     if (s->pcap < pbytes) {
         kill_buffer(d, &s->pbuf, &s->pmem, &s->pmap);
         s->pcap = 0;
-        if (!mk_buffer(d, pbytes, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        if (!mk_buffer(d, pbytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                        &s->pbuf, &s->pmem, &s->pmap)) return 0;
@@ -937,11 +944,13 @@ static int build_layouts(const TAGPU_VKPASS* d)
     int n = 0, i;
 
     memset(b, 0, sizeof b);
-    /* the body's: the two vertex-stage blocks, the fragment-stage one, and the
-       nine samplers inc/spirv/tagpu_native.spv.h names for tagpu_native::FS */
+    /* the body's: the vertex-stage block, the pose, the fragment-stage block,
+       and the nine samplers inc/spirv/tagpu_native.spv.h names for
+       tagpu_native::FS. The pose is NOT dynamic: every unit binds the whole
+       buffer and reaches its own slice through the base indices in its block. */
     b[n].binding = 0;  b[n].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
     b[n].descriptorCount = 1; b[n].stageFlags = VK_SHADER_STAGE_VERTEX_BIT; n++;
-    b[n].binding = 1;  b[n].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    b[n].binding = 1;  b[n].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     b[n].descriptorCount = 1; b[n].stageFlags = VK_SHADER_STAGE_VERTEX_BIT; n++;
     b[n].binding = 32; b[n].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
     b[n].descriptorCount = 1; b[n].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT; n++;
@@ -1337,7 +1346,7 @@ done:
 
 static int build_descriptors(const TAGPU_VKPASS* d)
 {
-    VkDescriptorPoolSize ps[2];
+    VkDescriptorPoolSize ps[3];
     VkDescriptorPoolCreateInfo pi = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
     VkDescriptorSetLayout lay[TAGPU_VK_SLOTS];
     VkDescriptorSet sets[TAGPU_VK_SLOTS];
@@ -1346,11 +1355,13 @@ static int build_descriptors(const TAGPU_VKPASS* d)
 
     memset(ps, 0, sizeof ps);
     ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-    ps[0].descriptorCount = d->slots * 5;          /* 3 in main, 2 in cast     */
-    ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps[1].descriptorCount = d->slots * 9;
+    ps[0].descriptorCount = d->slots * 3;          /* 2 in main, 1 in cast     */
+    ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    ps[1].descriptorCount = d->slots * 2;          /* the pose, in each set    */
+    ps[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    ps[2].descriptorCount = d->slots * 9;
     pi.maxSets = d->slots * 2;
-    pi.poolSizeCount = 2; pi.pPoolSizes = ps;
+    pi.poolSizeCount = 3; pi.pPoolSizes = ps;
     if (vkCreateDescriptorPool(d->dev, &pi, NULL, &s_dpool) != VK_SUCCESS) return 0;
 
     for (i = 0; i < d->slots; i++) lay[i] = s_dslMain;
@@ -1770,13 +1781,15 @@ static int build(const TAGPU_VKPASS* d)
     vkGetPhysicalDeviceProperties(d->pd, &props);
     s_ualign = props.limits.minUniformBufferOffsetAlignment;
     if (s_ualign == 0) s_ualign = 1;
-    /* THE BOUND THE DRIVER SETS ON A UNIFORM WINDOW, checked rather than
-       assumed -- the GL twin checks GL_MAX_UNIFORM_BLOCK_SIZE for the same
-       reason and refuses to arm below it. The pose block is the big one. */
-    if (props.limits.maxUniformBufferRange < POSE_SZ) {
-        plog(d, "unit: maxUniformBufferRange is %u and the pose block needs %d "
-                "- the pass stays down",
-             (unsigned)props.limits.maxUniformBufferRange, POSE_SZ);
+    /* THE BOUND THE DRIVER SETS ON A STORAGE RANGE, read rather than assumed.
+       `upload` checks every frame's packed pose against it; here the pass
+       refuses a device that could not bind even one unit at the piece
+       ceiling, which the spec's 128 MB floor rules out on a conformant one. */
+    s_ssboMax = props.limits.maxStorageBufferRange;
+    if (s_ssboMax < (VkDeviceSize)TAGPU_PD_UNITMAX) {
+        plog(d, "unit: maxStorageBufferRange is %u and one unit's pose can need "
+                "%d - the pass stays down",
+             (unsigned)props.limits.maxStorageBufferRange, TAGPU_PD_UNITMAX);
         return 0;
     }
     if (!build_samplers(d) || !build_layouts(d) || !build_body_pipeline(d) ||
@@ -1792,11 +1805,11 @@ static int build(const TAGPU_VKPASS* d)
        drawing it without the mask, is the wrong picture. */
     s_shOk = build_shadow_pipelines(d);
     plog(d, "unit: up - %u frame slots, uniform offset alignment %u, %u bytes "
-            "of blocks and %d of pose per unit, compare sampler %s, hard "
-            "shadows %s, nanoframe wire %s",
+            "of blocks per unit, pose storage limit %u, compare sampler %s, "
+            "hard shadows %s, nanoframe wire %s",
          (unsigned)d->slots, (unsigned)s_ualign,
          (unsigned)(align_up(VGL_SZ, s_ualign) * 4 + align_up(FGL_SZ, s_ualign) * 3),
-         (int)align_up(POSE_SZ, s_ualign),
+         (unsigned)(s_ssboMax > 0xFFFFFFFFu ? 0xFFFFFFFFu : s_ssboMax),
          s_cmpLinear ? "LINEAR" : "NEAREST (the map cannot be sampled)",
          s_shOk ? "on (stencil-masked)"
                 : (d->stencilok ? "OFF - the pipelines were refused"
@@ -1875,13 +1888,16 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
    source for it any more, so there is no staging share to reserve and no serial
    to compare -- `s_arHave` alone says whether it is a picture. */
 
-/* the two uniform blocks for one unit: the vertex stage's twice (the body's
-   and the caster's) and the fragment stage's once, at the std140 offsets
-   the generated SPIR-V headers print. A UNION, NOT A CAST: both blocks mix `int` and
-   `float` members, and writing an int through a float array is the aliasing
-   rule broken at -O2. */
+/* One unit's window: the vertex stage's block four times (body, caster, hard
+   shadow, wire) and the fragment stage's three times, at the std140 offsets
+   the generated SPIR-V headers print. `base` is the unit's first row, first
+   shaded word and first visibility word in the pose buffer, in vec4, and every
+   vertex-stage block carries them. A UNION, NOT A CAST: both blocks mix `int`
+   and `float` members, and writing an int through a float array is the
+   aliasing rule broken at -O2. */
 static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
-                        const TAGPU_PDUREC* r, VkDeviceSize vglOff2,
+                        const TAGPU_PDUREC* r, const int base[3],
+                        VkDeviceSize vglOff2,
                         VkDeviceSize vglOff3, VkDeviceSize vglOff4,
                         VkDeviceSize fglOff, VkDeviceSize fglOff2,
                         VkDeviceSize fglOff3)
@@ -1910,6 +1926,9 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
     memcpy(&b.f[24], h->shadowMat, 64);
     b.i[40] = 0;                                       /* uRange       int @160*/
     b.f[41] = 0.0f;                                    /* uWire      float @164*/
+    b.i[42] = base[0];                                 /* uRowBase     int @168*/
+    b.i[43] = base[1];                                 /* uFlagBase    int @172*/
+    b.i[44] = base[2];                                 /* uVisBase     int @176*/
     memcpy(ub, b.f, VGL_SZ);
 
     /* ---- the vertex stage, the CLASSIC HARD SHADOW ----
@@ -1926,8 +1945,8 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
        THE RANGE IS WHICH OF THE ENGINE'S TWO BRANCHES THIS UNIT TAKES. A
        structure's slant is the bake's SLANT range, whose own projection and
        integer snap the vertex shader applies on `uRange == 1` -- 0x45A610's,
-       not the body's -- and whose per-piece `cached` rule it reads off
-       uPieceVis. Everything else is the BODY range over again, which IS the
+       not the body's -- and whose per-piece `cached` rule it reads off the
+       unit's visibility words. Everything else is the BODY range over again, which IS the
        blackened composite: the same triangles, the same pose, shifted.
 
        uDepthPass STAYS 0 and uShadowMat is carried for the same reason the
@@ -1972,6 +1991,7 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
     b.i[23] = 1;                                       /* uDepthPass           */
     memcpy(&b.f[24], h->castMat, 64);                  /* uShadowMat           */
     b.i[40] = 0;                                       /* uRange = BODY        */
+    b.i[42] = base[0]; b.i[43] = base[1]; b.i[44] = base[2];
     memcpy(ub + vglOff2, b.f, VGL_SZ);
 
     /* ---- the fragment stage ---- */
@@ -2058,24 +2078,6 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
     memcpy(ub + fglOff3, b.f, FGL_SZ);
 }
 
-/* One unit's pose block, written exactly where and exactly as far as
-   `upload_pose` writes it: `np * 3` rows from 0, then `nf * 4` floats at each
-   of the two packed offsets. The rest of the 14 336-byte window is never read,
-   because no vertex of this model carries a piece index past `np`. */
-static void fill_pose(unsigned char* pb, const TAGPU_PDHAND* h,
-                      const TAGPU_PDUREC* r)
-{
-    int np = r->npose, nf;
-    if (np < 1) return;
-    if (np > TAGPU_PBMAXPIECE) np = TAGPU_PBMAXPIECE;
-    nf = (np + 3) / 4;
-    memcpy(pb, h->rows + (size_t)r->rowOff * 4, (size_t)np * 12 * sizeof(float));
-    memcpy(pb + TAGPU_PD_FLAGOFF, h->flags + r->flagOff,
-           (size_t)nf * 4 * sizeof(float));
-    memcpy(pb + TAGPU_PD_VISOFF, h->vis + r->flagOff,
-           (size_t)nf * 4 * sizeof(float));
-}
-
 static int draw_room(unsigned n)
 {
     DRAW* q;
@@ -2094,7 +2096,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     TAGPU_PDHAND h;
     SLOT* s;
     VkMemoryBarrier mb = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
-    VkDeviceSize ustride, vglOff2, vglOff3, vglOff4, fglOff, fglOff2, fglOff3, pstride;
+    VkDeviceSize ustride, vglOff2, vglOff3, vglOff4, fglOff, fglOff2, fglOff3, poseBytes;
     VkDeviceSize stageOff, stageNeed, atlasNeed;
     int feed = 0;
     int fogW = 1, fogH = 1, i, anyUpload = 0, fogWanted = 0;
@@ -2112,8 +2114,8 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     ret_slot_done(d, slot);
 
     /* NOTHING IS BUILT UNTIL THERE IS SOMETHING TO DRAW, AND NOTHING IS KEPT
-       ONCE THERE IS NOT. The pose buffer alone is 14 336 bytes a unit a slot,
-       which is the largest thing this pass owns after the atlas; giving slot
+       ONCE THERE IS NOT. The two sized buffers scale with the units on screen
+       and are the largest thing this pass owns after the atlas; giving slot
        `slot` back at this point needs no new argument and no timer, because it
        is the same instant, and the same ownership, that the rest of this
        function writes it in. */
@@ -2147,14 +2149,12 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        recorded into `cb` that names any of this slot's buffers or images, and
        the seam waited on fence[slot] -- the same ownership argument the
        hand-over-failed path above makes, at the same instant. Without it a
-       refusal that holds for a session (the scaffold armed, a build ghost on
-       screen, a replacement mesh, a device that will not filter the map) keeps
-       this slot's pose buffer for the life of the process: 14 336 bytes a unit
-       a slot, 7.3 MB a slot at the hand-over's cap, in the 32-bit address
-       space whose largest free block this phase spends its budget measuring.
-       §2.28's rule is "nothing is kept once there is nothing to draw", and
-       before this it held only for the frame that handed nothing over.
-       [FOUND 2026-09-16, the landing review.] */
+       refusal that holds for a session (the scaffold armed, a device that will
+       not filter the map) would keep this slot's sized buffers for the life of
+       the process, in the 32-bit address space whose largest free block this
+       phase spends its budget measuring. §2.28's rule is "nothing is kept once
+       there is nothing to draw", and this is where it holds for a refused frame
+       as well as an empty one. */
 
     /* A COMPARE SAMPLER THAT IS NOT THE TWIN'S, AND THE DECISION IS TAKEN
        HERE. The GL PCF is bilinear and linear filtering of a depth format is a
@@ -2183,17 +2183,17 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     }
     s_saidCmp = 0;
 
-    /* THE FRAME HAS DRAWS THIS PASS DOES NOT CARRY -- a unit past the
-       hand-over's cap, or one an arena would not grow for.
-       NOT THE BUILD GHOST since landing 6: it is carried, and drawn by
-       `tagpu_vk_unit_record_ghosts` after the effects pass.
-       tagpu_posedraw.h says why the count is narrow. */
+    /* THE FRAME HAS UNITS THIS PASS DOES NOT CARRY -- past the hand-over's
+       cap, an arena that would not grow, or a packet that was truncated. The
+       build ghost is carried and is not among them. tagpu_posedraw.h says why
+       the count is narrow. */
     if (h.otherDraws > 0) {
         if (!s_saidOther) {
             s_saidOther = 1;
-            plog(d, "unit: the GL twin drew %d posed unit(s) this hand-over does "
-                    "not carry (past its cap, or an arena that would not grow) - "
-                    "nothing drawn while that is true", h.otherDraws);
+            plog(d, "unit: the frame has %d posed unit(s) this hand-over does "
+                    "not carry (past its cap, an arena that would not grow, or "
+                    "a truncated packet) - nothing drawn while that is true",
+                 h.otherDraws);
         }
         goto standdown;
     }
@@ -2211,6 +2211,22 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     "units=%d rows=%d flags=%d vis=%d - nothing drawn",
                  (unsigned)d->frame, h.nunit, TAGPU_PD_MAXHAND,
                  h.units ? 1 : 0, h.rows ? 1 : 0, h.flags ? 1 : 0, h.vis ? 1 : 0);
+        goto standdown;
+    }
+
+    /* THE PACKED POSE'S SIZE, from the hand-over's own two counts, before
+       anything is sized from it. `nflag` is in floats and each unit's word run
+       is a whole vec4, so a count that is not a multiple of 4 is not a
+       hand-over this file understands. The limit is the device's own, and a
+       frame under it also keeps every base index below 2^27 vec4, so the
+       `int` bases the shader takes cannot overflow. */
+    poseBytes = ((VkDeviceSize)h.nrow + (VkDeviceSize)(h.nflag / 4) * 2) * 16;
+    if ((h.nflag & 3u) || h.nrow < 3 || h.nflag < 4 || poseBytes > s_ssboMax) {
+        if ((d->frame % 300u) == 0u)
+            plog(d, "unit: frame %u: the packed pose is %u rows and %u words, "
+                    "%.1f MB against the device's %.1f MB storage range - "
+                    "nothing drawn", (unsigned)d->frame, h.nrow, h.nflag,
+                 (double)poseBytes / 1048576.0, (double)s_ssboMax / 1048576.0);
         goto standdown;
     }
 
@@ -2459,9 +2475,8 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        body's, the caster's, the hard shadow's, the nanoframe wire's) and three
        fragment-stage (the body's, the hard shadow's, the wire's). The wire's
        pair is written for every unit, nanoframe or not, because the window is
-       per unit and fixed-stride: 512 bytes a unit more on the reference
-       device's 64-byte alignment (192 + 320), 256 KB a slot at 512 units -- small against
-       the 14 336-byte pose window every unit already takes. */
+       per unit and fixed-stride: 512 bytes a unit on the reference device's
+       64-byte alignment (192 + 320). */
     {
         VkDeviceSize vgl = align_up(VGL_SZ, s_ualign);
         VkDeviceSize fgl = align_up(FGL_SZ, s_ualign);
@@ -2473,9 +2488,15 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         fglOff3 = vgl * 4 + fgl * 2;
         ustride = vgl * 4 + fgl * 3;
     }
-    pstride = align_up(POSE_SZ, s_ualign);
-    if (!slot_sized(d, s, ustride * (VkDeviceSize)h.nunit,
-                    pstride * (VkDeviceSize)h.nunit)) goto refuse;
+    if (!slot_sized(d, s, ustride * (VkDeviceSize)h.nunit, poseBytes)) goto refuse;
+    /* THE POSE, ONE COPY OF EACH ARENA, laid out as tagpu_posebake.h states:
+       rows, then the shaded words, then the visibility words. */
+    {
+        size_t rb = (size_t)h.nrow * 16, fb = (size_t)h.nflag * sizeof(float);
+        memcpy(s->pmap, h.rows, rb);
+        memcpy(s->pmap + rb, h.flags, fb);
+        memcpy(s->pmap + rb + fb, h.vis, fb);
+    }
 
     /* ---- what has to be uploaded this frame, and the staging to carry it ---- */
     if (!draw_room((unsigned)h.nunit)) goto refuse;
@@ -2529,9 +2550,15 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
            together. */
         if (r->nvert < 1 || r->nvert > 262144) continue;
         if (r->count < 1 || r->first < 0 || r->first + r->count > r->nvert) continue;
+        /* The pose slices are bounded here too: a unit whose slice does not
+           lie inside the copied arenas is not drawn, and the every-unit-or-none
+           gate refuses the frame. The shader's clamps then never bind on data
+           that reached a draw. */
         if (r->npose < 1 || r->npose > TAGPU_PBMAXPIECE) continue;
-        if ((size_t)r->rowOff * 4 + (size_t)r->npose * 12 > h.nrow * 4) continue;
-        if (r->flagOff + (unsigned)(((r->npose + 3) / 4) * 4) > h.nflag) continue;
+        if ((size_t)r->rowOff + (size_t)r->npose * 3 > (size_t)h.nrow) continue;
+        if ((r->flagOff & 3u) ||
+            (size_t)r->flagOff + (size_t)((r->npose + 3) / 4) * 4 > (size_t)h.nflag)
+            continue;
 
         /* STAMPED THE MOMENT THEY RESOLVE, AND NOT AFTER THE LOOP BELOW.
            `vb_slot` refuses to evict an entry stamped with the frame in hand,
@@ -2663,9 +2690,14 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         if (w->wireCount) s_nwire++;
         s_ndraw++;
 
-        fill_blocks(s->umap + (VkDeviceSize)i * ustride, &h, r,
-                    vglOff2, vglOff3, vglOff4, fglOff, fglOff2, fglOff3);
-        fill_pose(s->pmap + (VkDeviceSize)i * pstride, &h, r);
+        {
+            int base[3];
+            base[0] = (int)r->rowOff;
+            base[1] = (int)(h.nrow + r->flagOff / 4);
+            base[2] = (int)(h.nrow + h.nflag / 4 + r->flagOff / 4);
+            fill_blocks(s->umap + (VkDeviceSize)i * ustride, &h, r, base,
+                        vglOff2, vglOff3, vglOff4, fglOff, fglOff2, fglOff3);
+        }
     }
 
     /* ONE BARRIER FOR EVERY VERTEX BUFFER WRITTEN THIS FRAME, AND IT IS
@@ -2797,7 +2829,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     s_uStride = ustride; s_vglOff2 = vglOff2; s_vglOff3 = vglOff3;
     s_vglOff4 = vglOff4;
     s_fglOff = fglOff;   s_fglOff2 = fglOff2; s_fglOff3 = fglOff3;
-    s_pStride = pstride;
+    s_poseBytes = poseBytes;
     return 1;
 
 
@@ -2899,13 +2931,14 @@ int tagpu_vk_unit_cast(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
         VkWriteDescriptorSet wr[2];
         memset(bi, 0, sizeof bi); memset(wr, 0, sizeof wr);
         bi[0].buffer = s_slot[slot].ubuf; bi[0].offset = 0; bi[0].range = VGL_SZ;
-        bi[1].buffer = s_slot[slot].pbuf; bi[1].offset = 0; bi[1].range = POSE_SZ;
+        bi[1].buffer = s_slot[slot].pbuf; bi[1].offset = 0; bi[1].range = s_poseBytes;
         wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         wr[0].dstSet = s_slot[slot].dsCast; wr[0].dstBinding = 0;
         wr[0].descriptorCount = 1;
         wr[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         wr[0].pBufferInfo = &bi[0];
         wr[1] = wr[0]; wr[1].dstBinding = 1; wr[1].pBufferInfo = &bi[1];
+        wr[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         vkUpdateDescriptorSets(d->dev, 2, wr, 0, NULL);
     }
 
@@ -2914,13 +2947,12 @@ int tagpu_vk_unit_cast(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
         const DRAW* w = &s_draw[i];
         VkBuffer vbs[2];
         VkDeviceSize offs[2];
-        uint32_t dyn[2];
+        uint32_t dyn;
         if (!w->casts) continue;
-        /* the CASTER's vertex block, which is the second of this unit's two */
-        dyn[0] = (uint32_t)((VkDeviceSize)w->unit * s_uStride + s_vglOff2);
-        dyn[1] = (uint32_t)((VkDeviceSize)w->unit * s_pStride);
+        /* the CASTER's vertex block, the second of this unit's four */
+        dyn = (uint32_t)((VkDeviceSize)w->unit * s_uStride + s_vglOff2);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_ploCast,
-                                0, 1, &s_slot[slot].dsCast, 2, dyn);
+                                0, 1, &s_slot[slot].dsCast, 1, &dyn);
         vbs[0] = w->geom; vbs[1] = w->mat;
         offs[0] = zero;   offs[1] = zero;
         vkCmdBindVertexBuffers(cb, 0, 2, vbs, offs);
@@ -2950,14 +2982,15 @@ static void bind_main(const TAGPU_VKPASS* d, uint32_t slot)
     if (!scaf) scaf = s_dumView;
 
     bi[0].buffer = s->ubuf; bi[0].offset = 0; bi[0].range = VGL_SZ;
-    bi[1].buffer = s->pbuf; bi[1].offset = 0; bi[1].range = POSE_SZ;
+    bi[1].buffer = s->pbuf; bi[1].offset = 0; bi[1].range = s_poseBytes;
     bi[2].buffer = s->ubuf; bi[2].offset = 0; bi[2].range = FGL_SZ;
     for (i = 0; i < 3; i++) {
         wr[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         wr[n].dstSet = s->dsMain;
         wr[n].dstBinding = (uint32_t)(i == 2 ? 32 : i);
         wr[n].descriptorCount = 1;
-        wr[n].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        wr[n].descriptorType = i == 1 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+                                      : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         wr[n].pBufferInfo = &bi[i];
         n++;
     }
@@ -3169,15 +3202,14 @@ static void record_stage(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                 const DRAW* q = &s_draw[i];
                 VkBuffer vbs[2];
                 VkDeviceSize offs[2];
-                uint32_t dyn[3];
+                uint32_t dyn[2];
                 if (q->shKind != kind) continue;
                 dyn[0] = (uint32_t)((VkDeviceSize)q->unit * s_uStride + s_vglOff3);
-                dyn[1] = (uint32_t)((VkDeviceSize)q->unit * s_pStride);
-                dyn[2] = (uint32_t)((VkDeviceSize)q->unit * s_uStride + s_fglOff2);
+                dyn[1] = (uint32_t)((VkDeviceSize)q->unit * s_uStride + s_fglOff2);
                 vbs[0] = q->geom; vbs[1] = q->mat;
                 offs[0] = 0;      offs[1] = 0;
                 vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_ploMain,
-                                        0, 1, &s_slot[slot].dsMain, 3, dyn);
+                                        0, 1, &s_slot[slot].dsMain, 2, dyn);
                 vkCmdBindVertexBuffers(cb, 0, 2, vbs, offs);
                 vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeShMark);
                 vkCmdDraw(cb, q->shCount, 1, q->shFirst, 0);
@@ -3207,13 +3239,12 @@ static void record_stage(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             const DRAW* q = &s_draw[i];
             VkBuffer vbs[2];
             VkDeviceSize offs[2];
-            uint32_t dyn[3];
+            uint32_t dyn[2];
             if (!q->wireCount) continue;
             dyn[0] = (uint32_t)((VkDeviceSize)q->unit * s_uStride + s_vglOff4);
-            dyn[1] = (uint32_t)((VkDeviceSize)q->unit * s_pStride);
-            dyn[2] = (uint32_t)((VkDeviceSize)q->unit * s_uStride + s_fglOff3);
+            dyn[1] = (uint32_t)((VkDeviceSize)q->unit * s_uStride + s_fglOff3);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_ploMain,
-                                    0, 1, &s_slot[slot].dsMain, 3, dyn);
+                                    0, 1, &s_slot[slot].dsMain, 2, dyn);
             vbs[0] = q->geom; vbs[1] = q->mat;
             offs[0] = 0;      offs[1] = 0;
             vkCmdBindVertexBuffers(cb, 0, 2, vbs, offs);
@@ -3229,13 +3260,12 @@ static void record_stage(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         want = q->ghost ? s_pipeGhost : s_pipeBody;
         VkBuffer vbs[2];
         VkDeviceSize offs[2];
-        uint32_t dyn[3];
+        uint32_t dyn[2];
         if (want != bound) { vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want); bound = want; }
         dyn[0] = (uint32_t)((VkDeviceSize)q->unit * s_uStride);
-        dyn[1] = (uint32_t)((VkDeviceSize)q->unit * s_pStride);
-        dyn[2] = (uint32_t)((VkDeviceSize)q->unit * s_uStride + s_fglOff);
+        dyn[1] = (uint32_t)((VkDeviceSize)q->unit * s_uStride + s_fglOff);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_ploMain,
-                                0, 1, &s_slot[slot].dsMain, 3, dyn);
+                                0, 1, &s_slot[slot].dsMain, 2, dyn);
         vbs[0] = q->geom; vbs[1] = q->mat;
         offs[0] = 0;      offs[1] = 0;
         vkCmdBindVertexBuffers(cb, 0, 2, vbs, offs);

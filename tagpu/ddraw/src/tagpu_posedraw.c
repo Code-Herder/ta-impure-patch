@@ -57,15 +57,19 @@
    SHD row where the CPU path takes a shaded one. Gate B is told to look for
    exactly that — a whole face one row off, rather than an edge flip.
 
-   THE POSE LIVES IN A std140 UNIFORM BLOCK, which is what takes the piece cap
-   out of the design (gpu-posing.md decision 7). The block is
-   TAGPU_PBMAXPIECE (256) pieces of 3 rows plus two packed flag arrays — 14336
-   bytes, with headroom rather than sitting exactly on any limit. The headroom
-   is not assumed: the device's `maxUniformBufferRange` is read at bring-up and
-   the pass refuses to arm below it. Since G16 step 8 there is no CPU emitter to
-   leave those units to, so the refusal is published instead
-   (`tagpu_posedraw_live`) and `owndraw` stops skipping the engine's own unit
-   rasterise — the engine draws them, rather than nothing drawing them.
+   THE POSE LIVES IN ONE STORAGE BUFFER PER FRAME, which is what takes the
+   piece cap out of the design (gpu-posing.md decision 7). Every posed unit's
+   rows are packed back to back, then every unit's `shaded` words, then every
+   unit's visibility words (tagpu_posebake.h has the layout), and a unit reaches
+   its own slice through three base indices in its uniform block. A unit
+   therefore costs what its model has -- 2 016 bytes for stock's worst, 36
+   pieces -- and the model ceiling, TAGPU_PBMAXPIECE (256), is a bound on one
+   unit rather than a size every unit pays. The pass arms only on a device
+   that can hold one unit at that ceiling (`tagpu_posedraw_ready`); the
+   consumer checks each frame's packed size against the device's own limit.
+   When the pass refuses to arm it says so (`tagpu_posedraw_live`), and
+   `owndraw` stops skipping the engine's own unit rasterise -- the engine draws
+   those units, rather than nothing drawing them.
 
    A HIDDEN PIECE ARRIVES AS AN ALL-ZERO MATRIX and collapses its triangles onto
    the model origin; a face the material stream has nothing for carries the skip
@@ -82,6 +86,7 @@
 #include "tagpu_posebake.h"
 #include "tagpu_posedraw.h"
 #include "tagpu_native.h"
+#include "tagpu_packet.h"     /* the record count TAGPU_PD_MAXHAND must cover */
 #include "tagpu_render3do.h"
 #include "tagpu_classicpp.h"
 #include "tagpu_vk.h"      /* tagpu_vk_armed(): whether to publish at all */
@@ -91,19 +96,15 @@
 #define STR2(x) #x
 #define STR(x)  STR2(x)
 
-/* the block: 3 rows per piece, then two packed floats per piece — `shaded`
-   for the body's SHD row and a visibility WORD (0 / 1 / 3) the slant and the
-   wire read. Two arrays rather than bits of one float because the second costs
-   1 KB (14336 against GL 3.1's guaranteed 16384) and a packed pair costs every
+/* per piece: 3 rows, then two packed floats -- `shaded` for the body's SHD
+   row and a visibility WORD (0 / 1 / 3) the slant and the wire read. Two
+   arrays rather than bits of one float because a packed pair costs every
    reader of it a decode; the second is a word rather than two more arrays
-   because its two values nest — a slant caster is always visible. */
-/* the numbers themselves are tagpu_posebake.h's, shared with the Vulkan
-   edition of this pass so that the two cannot describe the block differently */
-#define PD_ROWS    TAGPU_PD_ROWS
+   because its two values nest -- a slant caster is always visible. The
+   numbers are tagpu_posebake.h's, shared with the Vulkan pass that fills the
+   buffer, so the two cannot describe it differently. */
 #define PD_FLAGV   TAGPU_PD_FLAGV
-#define PD_FLAGOFF TAGPU_PD_FLAGOFF
-#define PD_VISOFF  TAGPU_PD_VISOFF
-#define PD_BLOCK   TAGPU_PD_BLOCK
+#define PD_UNITMAX TAGPU_PD_UNITMAX
 
 /* `uRange`'s three values (BODY 0, SLANT 1, WIRE 2) were #defined here for the
    draws that passed them. All three draws went with landing 11-5d, and the
@@ -313,6 +314,15 @@ unsigned tagpu_posedraw_drawn(void) { return s_units; }
    of who happened to run */
 static int s_slantDrew;
 void tagpu_posedraw_slant_drew(void) { s_slantDrew = 1; }
+
+void tagpu_posedraw_uncarried(void) { if (s_state == 1) s_other++; }
+
+/* TAGPU_PD_MAXHAND is every record the producer can make (tagpu_posedraw.h),
+   so a frame is never refused for its count while the packet's tables are the
+   size they are -- and the tables cover the design point. */
+typedef char pd_maxhand_covers[(TAGPU_PD_MAXHAND >= (int)(TAGPU_PK_MAX_UNITS +
+    TAGPU_PK_MAX_WRECKS + 1u + TAGPU_PK_MAX_BUILDS)) ? 1 : -1];
+typedef char pd_units_design[(TAGPU_PK_MAX_UNITS >= TAGPU_PK_DESIGN_SLOTS) ? 1 : -1];
 int  tagpu_posedraw_slant_take(void) { int v = s_slantDrew; s_slantDrew = 0; return v; }
 /* `s_slantU/s_slantT/s_wireU/s_wireL` counted the slant and wire draws and
    went with them in landing 11-5d: their only increments were inside
@@ -343,14 +353,16 @@ static const char* VS =
     "layout(location=4) in vec2 aUV;\n"
     "layout(location=5) in vec2 aFC;\n"      /* flat idx/255, tex ck/255      */
     "layout(location=6) in float aSkip;\n"
-    /* 3 rows of a 4x3 per piece, then two per-piece words packed 4 to a vec4:
-       uPieceFlag 1.0 = the piece is shaded (emit_geom_at's `pieceShaded`);
-       uPieceVis  0 = not drawn, 1 = drawn, 3 = drawn AND the slant casts from
-       it (`P_FLAGS` bit 0, and bit 1 as well). */
-    "layout(std140) uniform Pose {\n"
-    "  vec4 uRow[" STR(PD_ROWS) "];\n"
-    "  vec4 uPieceFlag[" STR(PD_FLAGV) "];\n"
-    "  vec4 uPieceVis[" STR(PD_FLAGV) "];\n"
+    /* The frame's poses, packed (tagpu_posebake.h). This unit's slice: 3 rows
+       of a 4x3 per piece from uRowBase, and two per-piece words packed 4 to a
+       vec4 from uFlagBase and uVisBase --
+         flag 1.0 = the piece is shaded (emit_geom_at's `pieceShaded`);
+         vis  0 = not drawn, 1 = drawn, 3 = drawn AND the slant casts from it
+              (`P_FLAGS` bit 0, and bit 1 as well).
+       readonly: a vertex stage that wrote it would need a device feature no
+       pass enables. */
+    "layout(std430) readonly buffer Pose {\n"
+    "  vec4 uPose[];\n"
     "};\n"
     "uniform vec2 uGame;\n"
     "uniform vec2 uOffset;\n"
@@ -365,6 +377,11 @@ static const char* VS =
     "uniform mat4 uShadowMat;\n"
     "uniform int uRange;\n"                 /* 0 body, 1 slant, 2 wire       */
     "uniform float uWire;\n"                /* the nanoframe blue, idx/255   */
+    /* this unit's three slices of `uPose`, in vec4: its first row, its first
+       shaded word, its first visibility word */
+    "uniform int uRowBase;\n"
+    "uniform int uFlagBase;\n"
+    "uniform int uVisBase;\n"
     "out vec2 vUV; flat out vec2 vFC; flat out float vShade; out vec2 vWorld;\n"
     "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
     /* tagpu_native.c's SH_V and SH_L, the engine's shading basis */
@@ -372,7 +389,14 @@ static const char* VS =
     "const vec3 SH_L = vec3(-0.35, 0.80, -0.49);\n"
     "void main(){\n"
     "  int pi = int(aPiece + 0.5);\n"
-    "  int pb = pi * 3;\n"
+    /* EVERY INDEX INTO `uPose` IS CLAMPED TO THE BOUND RANGE, so no vertex can
+       read past it whatever it is handed. That is the memory bound, not the
+       correctness one: the consumer refuses a frame in which any unit's slice
+       does not fit (tagpu_vk_unit.c), and the bake's piece index stays below
+       the unit's pose count (`pb_walk` emits p < nparts, `unit_ok` requires
+       npose >= nparts). On data that passes both, every clamp is a no-op. */
+    "  int pl = uPose.length() - 1;\n"
+    "  int pb = clamp(uRowBase + pi * 3, 0, pl - 2);\n"
     /* Three ways a vertex is not drawn, and all of them collapse the same way
        — every vertex of the primitive carries the same answer, so the whole
        primitive lands outside the same clip plane and nothing survives.
@@ -382,20 +406,20 @@ static const char* VS =
        vertices (gpu-posing.md §4). Always 0 in the slant range, which flat
        fills every face it is given.
 
-       uPieceVis >= 3, the SLANT's per-piece rule: `(P_FLAGS & 3) == 3`,
+       vis >= 3, the SLANT's per-piece rule: `(P_FLAGS & 3) == 3`,
        visible AND `cached`, which a COB's dont-cache clears (a wind
        generator's mast). It cannot ride the all-zero matrix the way body
        visibility does, because such a piece still draws in the BODY range and
        needs its matrix there.
 
-       uPieceVis >= 1, the WIRE's: `P_FLAGS & 1`, the same rule the body has —
+       vis >= 1, the WIRE's: `P_FLAGS & 1`, the same rule the body has —
        but the body expresses it as an all-zero matrix, which collapses a
        triangle to zero AREA, and a triangle of zero area is guaranteed to
        produce no fragments. A LINE of zero length is not: the rasterisation
        rules do not promise it away, and one bright pixel per hidden edge would
        land exactly on the unit's origin. So the wire is refused here instead
        of relying on that. */
-    "  float pvis = uPieceVis[pi >> 2][pi & 3];\n"
+    "  float pvis = uPose[clamp(uVisBase + (pi >> 2), 0, pl)][pi & 3];\n"
     "  if (aSkip > 0.5 ||\n"
     "      (uRange == 1 && pvis < 2.5) ||\n"
     "      (uRange == 2 && pvis < 0.5)) {\n"
@@ -405,7 +429,7 @@ static const char* VS =
     "    return;\n"
     "  }\n"
     "  vec4 rp = vec4(aPos, 1.0);\n"
-    "  vec3 m = vec3(dot(uRow[pb], rp), dot(uRow[pb+1], rp), dot(uRow[pb+2], rp));\n"
+    "  vec3 m = vec3(dot(uPose[pb], rp), dot(uPose[pb+1], rp), dot(uPose[pb+2], rp));\n"
     /* THE POSED VERTEX ONTO THE ENGINE'S OWN 16.16 GRID, before anything reads
        it. This is not an optimisation of the slant's snap: it is the vertex's
        REPRESENTATION. The engine holds every posed vertex as three 16.16
@@ -446,10 +470,10 @@ static const char* VS =
        direction, which is what the piece matrix decides. */
     "  float shade = uShd.x / 31.0;\n"
     "  vec3 un = vec3(0.0, 1.0, 0.0);\n"
-    "  bool pShaded = uPieceFlag[pi >> 2][pi & 3] > 0.5;\n"
+    "  bool pShaded = uPose[clamp(uFlagBase + (pi >> 2), 0, pl)][pi & 3] > 0.5;\n"
     "  if (aGF >= 0.5 && pShaded) {\n"
-    "    vec3 n = vec3(dot(uRow[pb].xyz, aNrm), dot(uRow[pb+1].xyz, aNrm),\n"
-    "                  dot(uRow[pb+2].xyz, aNrm));\n"
+    "    vec3 n = vec3(dot(uPose[pb].xyz, aNrm), dot(uPose[pb+1].xyz, aNrm),\n"
+    "                  dot(uPose[pb+2].xyz, aNrm));\n"
     "    if (dot(n, SH_V) < 0.0) n = -n;\n"
     "    float nl = length(n);\n"
     "    if (nl > 1e-6) {\n"
@@ -496,15 +520,15 @@ int tagpu_posedraw_ready(void)
     if (s_state) {
         /* RE-ASKED, NOT LATCHED, where the bound belongs to a device that can
            change under us: the GPU picker tears the lane down and re-picks, and
-           a smaller device may not hold the pose block the larger one did. The
+           a smaller device may not hold one unit's pose the larger one did. The
            accessor caches per device, so this is one compare in the steady
-           state. [FROM THE 4b-2 LANDING REVIEW.] */
+           state. */
         if (s_state == 1) {
-            lim = tagpu_vk_max_uniform_range();
-            if (lim > 0 && lim < PD_BLOCK) {
+            lim = tagpu_vk_max_storage_range();
+            if (lim > 0 && lim < PD_UNITMAX) {
                 _snprintf(b, sizeof b,
-                          "posedraw: the device changed and its maxUniformBufferRange is "
-                          "%d, the pose block needs %d - standing down", lim, PD_BLOCK);
+                          "posedraw: the device changed and its maxStorageBufferRange is "
+                          "%d, one unit's pose needs %d - standing down", lim, PD_UNITMAX);
                 b[sizeof b - 1] = 0;
                 plog(b);
                 s_state = 2;
@@ -521,24 +545,27 @@ int tagpu_posedraw_ready(void)
     s_state = 3;
 
     /* THIS PASS ARMS WITHOUT A PROGRAM OF ITS OWN. It never rasterises
-       anything: it fills the pose block that `tagpu_vk_pose.c` binds, and the
-       SPIR-V for that draw is compiled from `VS`/`DFS` above at build time.
+       anything: it fills the hand-over whose poses tagpu_vk_unit.c binds, and
+       the SPIR-V for that draw is compiled from `VS`/`DFS` above by
+       tools/spirv-gen.py.
        What the callers need from this function is a yes, because the per-unit
        gather is gated on it (`if (!pdReady) continue;`) and the gather is what
        feeds the hand-over.
 
-       THE ONE REAL QUESTION IS WHETHER THE DEVICE CAN HOLD THE BLOCK. The pose
-       block is a compile-time size (`PD_BLOCK`), so the whole of bring-up is
-       one `maxUniformBufferRange` compare. A 0 there means no device YET, not a
-       device that cannot: `s_state` goes back to 0 so the next frame asks
-       again, rather than latching a refusal during the lane's ~200 ms
-       bring-up. [The vulkan-only plan, 4b-2 and 11-5d.] */
-    lim = tagpu_vk_max_uniform_range();
+       THE ONE DEVICE QUESTION IS WHETHER IT CAN BIND ONE UNIT AT THE PIECE
+       CEILING (`PD_UNITMAX`, 14 336 bytes). The spec guarantees every device
+       at least 128 MB of `maxStorageBufferRange`, so this cannot refuse a
+       conformant device; it is asked because the number is the device's, not
+       ours. The FRAME's size is the consumer's check, against the same limit,
+       on every frame. A 0 here means no device YET, not a device that cannot:
+       `s_state` goes back to 0 so the next frame asks again, rather than
+       latching a refusal during the lane's ~200 ms bring-up. */
+    lim = tagpu_vk_max_storage_range();
     if (lim <= 0) { s_state = 0; return 0; }
-    if (lim < PD_BLOCK) {
+    if (lim < PD_UNITMAX) {
         _snprintf(b, sizeof b,
-                  "posedraw: refused — the device's maxUniformBufferRange is %d, "
-                  "the pose block needs %d", lim, PD_BLOCK);
+                  "posedraw: refused — the device's maxStorageBufferRange is %d, "
+                  "one unit's pose needs %d", lim, PD_UNITMAX);
         b[sizeof b - 1] = 0;
         plog(b);
         s_state = 2;
@@ -546,23 +573,19 @@ int tagpu_posedraw_ready(void)
     }
     s_state = 1;
     _snprintf(b, sizeof b,
-              "posedraw: armed — no rasteriser of its own, pose block "
-              "%d bytes (%d pieces), device limit %d", PD_BLOCK, TAGPU_PBMAXPIECE, lim);
+              "posedraw: armed — no rasteriser of its own, one unit's pose "
+              "at most %d bytes (%d pieces), device storage limit %d",
+              PD_UNITMAX, TAGPU_PBMAXPIECE, lim);
     b[sizeof b - 1] = 0;
     plog(b);
     return 1;
 }
 
 /* ---- the pose words ------------------------------------------------------
-   THE UPLOAD THIS SECTION WAS NAMED FOR WENT WITH LANDING 11-5d; what is left
-   is the conversion it shared with the hand-over.
-
    The two packed per-piece words, one float a piece, zero-filled out to the
-   vec4 the block stores them in. It was FACTORED OUT so that the hand-over
-   carried exactly the bytes the upload wrote rather than a second conversion
-   of the same two arrays, and with the upload gone that is now the only
-   description left: the Vulkan pass writes `nf * 16` bytes at PD_FLAGOFF and
-   PD_VISOFF, and this is where those bytes are made.
+   vec4 the storage buffer holds them in. This is the one place those bytes
+   are made: the hand-over appends them to its `flags` and `vis` arrays and the
+   Vulkan pass copies those arrays whole into the buffer's two word sections.
 
    IT IS PURE, and the landing relied on that to delete the upload: it fills
    two caller-provided arrays and returns a count, holding nothing between
@@ -785,9 +808,9 @@ static void pd_record(const TAGPU_PDUNIT* u, const TAGPU_PBGEOM* g,
        is the BODY range shifted (the engine blackens the composite it has just
        built and blits it again, 0x45A470 then 0x459200); the structure slant is
        the bake's own SLANT range, whose per-piece `cached` rule the vertex
-       shader applies off uPieceVis. A ghost casts nothing -- it is a preview of
-       a building that is not there, and the engine draws no shadow for a
-       placement cursor. */
+       shader applies off the visibility word. A ghost casts nothing -- it is a
+       preview of a building that is not there, and the engine draws no shadow
+       for a placement cursor. */
     r->shKind = u->ghost ? TAGPU_PDSH_NONE : u->shKind;
     r->shOffY = u->shOffY;
     if (r->shKind == TAGPU_PDSH_SLANT) {
@@ -1238,11 +1261,9 @@ void tagpu_posedraw_frame(unsigned frame_counter)
 
 void tagpu_posedraw_glreset(void)
 {
-    /* THREE GL OBJECT NAMES WERE FORGOTTEN HERE, and they went with landing
-       11-5d along with the program they named. What is left is the arm state,
-       and it still belongs here: the fork restarts its render thread on every
-       display-mode change, and the device the next `ready()` asks about its
-       `maxUniformBufferRange` may not be the device this one answered for. */
+    /* The arm state belongs to a device: the fork restarts its render thread
+       on every display-mode change, and the device the next `ready()` asks
+       about its `maxStorageBufferRange` may not be the one this answered for. */
     s_state = 0;
 }
 

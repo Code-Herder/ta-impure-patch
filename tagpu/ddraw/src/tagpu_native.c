@@ -2428,6 +2428,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        published view and the effective gather below all mean this rect. */
     const TAGPU_PACKET* pk = f->packet;
     if (!pk || !pk->in_game) { SSHADOW_NONE(); return; }
+    /* A PACKET THAT DROPPED UNITS, PIECES OR WRECKS is a frame with units this
+       pass cannot see, so the unit hand-over is refused whole: a frame drawn
+       with some units missing is a different frame, not a slightly worse one. */
+    if (pk->truncated & (TAGPU_PK_TRUNC_UNITS | TAGPU_PK_TRUNC_PIECES |
+                         TAGPU_PK_TRUNC_WRECKS))
+        tagpu_posedraw_uncarried();
     int vpL = pk->vp[0], vpT = pk->vp[1], vw = pk->vp[2], vh = pk->vp[3];
     int eyeX, eyeY;
     if (!tagpu_zoom_predicted_eye(&eyeX, &eyeY)) { SSHADOW_NONE(); return; }

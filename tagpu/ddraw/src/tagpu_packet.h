@@ -449,10 +449,18 @@ typedef struct TAGPU_PK_PART {
    tagpu_packet_pub.c compiles a static assertion that the two agree. */
 #define TAGPU_PK_MAXPIECE   256u
 
-/* The units table's own ceiling. The engine's slot count is 10 x MaxUnits + 1
-   and MaxUnits tops out at 1500, so 15001 is the largest the engine can ask
-   for; 16384 is that rounded up, and a slot count past it truncates the table
-   (and says so) rather than walking off the publisher's scratch. */
+/* THE DESIGN POINT: ten players of 1024 units each. The engine's unit array
+   has 10 x MaxUnits + 1 slots (the u16 at main+0x14351); stock clamps MaxUnits
+   to 500 (`cmp eax, 0x1f4` at 0x491658, DISASSEMBLED -- scenario-format.md),
+   and a unit-limit patch raising that clamp to 1024 makes 10 241. Every cap
+   in the exchange and in the passes it feeds that scales with the unit count
+   is asserted against this where it is declared, so a cap below it fails the
+   build rather than a large game. */
+#define TAGPU_PK_DESIGN_SLOTS (10u * 1024u + 1u)
+
+/* The units table's own ceiling: the design point rounded up to a power of
+   two. A slot count past it truncates the table (and says so, through
+   TAGPU_PK_TRUNC_UNITS) rather than walking off the publisher's scratch. */
 #define TAGPU_PK_MAX_UNITS    16384u
 #define TAGPU_PK_MAX_WRECKS   4096u
 #define TAGPU_PK_MAX_ANCHORS  65536u

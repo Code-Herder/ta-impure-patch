@@ -1174,6 +1174,27 @@ int tagpu_vk_max_uniform_range(void)
     return cached;
 }
 
+/* THE DEVICE'S LARGEST STORAGE BUFFER RANGE, or 0 while there is no device.
+   The posed-unit pass binds one storage buffer holding the whole frame's poses
+   and checks the frame's size against this. Cached against the device it came
+   from, for the same reason as the uniform range above: the GPU picker can
+   re-pick a smaller device under us. 0 IS "NOT YET", NEVER A LIMIT. */
+int tagpu_vk_max_storage_range(void)
+{
+    static int cached;
+    static VkPhysicalDevice cachedFor;
+    VkPhysicalDeviceProperties p;
+    if (!s_vk.pd || lane_state() != ST_READY) return 0;
+    if (cached > 0 && cachedFor == s_vk.pd) return cached;
+    vkGetPhysicalDeviceProperties(s_vk.pd, &p);
+    /* the spec's floor is 2^27; a device reporting past INT_MAX is capped
+       rather than refused -- the pass never asks for more than a frame holds */
+    cached = p.limits.maxStorageBufferRange > 0x7FFFFFFFu
+               ? 0x7FFFFFFF : (int)p.limits.maxStorageBufferRange;
+    cachedFor = s_vk.pd;
+    return cached;
+}
+
 
 /* PUT A LANE THAT FAILED BACK TO ST_OFF so the next frame brings it up again.
    The caller owns the policy -- how many times is worth trying -- because what

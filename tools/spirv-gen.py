@@ -66,6 +66,7 @@ THE TRANSFORM, in full. Each item is mechanical and applies to every shader:
 
          vertex    set 0, binding  0 = the globals block
                                   1.. = named blocks, in declaration order
+                                        (uniform or readonly buffer)
                                   8.. = samplers, in declaration order
          fragment  set 0, binding 32 = the globals block
                                  33.. = named blocks
@@ -74,6 +75,14 @@ THE TRANSFORM, in full. Each item is mechanical and applies to every shader:
      Sparse, and deliberately so: a binding NUMBER costs nothing (the limits
      are on counts), and the gap means a vertex stage and a fragment stage can
      never collide whatever either one declares.
+
+     A NAMED BLOCK MAY BE A STORAGE BLOCK, `layout(std430) readonly buffer X
+     { vec4 a[]; };`, and it passes through exactly as a uniform block does:
+     same allocation, its qualifier kept. GLSL 330 has no such block, so a
+     source that declares one is Vulkan-only -- which every shader here is,
+     since nothing compiles the 330 text. `readonly` is required, not a
+     choice: a vertex stage that WRITES a storage buffer needs the
+     `vertexPipelineStoresAndAtomics` feature, and no pass enables it.
   5. VARYINGS GET EXPLICIT LOCATIONS, AND THE VERTEX STAGE DECIDES THEM. Each
      vertex `out` takes locations in declaration order; the fragment stage's
      `in` of the same name takes the NUMBER ITS VERTEX STAGE GAVE IT, so a
@@ -626,7 +635,17 @@ _VAR = re.compile(r'^\s*((?:(?:flat|smooth|noperspective|centroid|highp|mediump|
                   r'((?:\[[^\]]*\])?)\s*$')
 
 _LAYOUT_LOC = re.compile(r'layout\s*\(\s*location\s*=\s*(\d+)\s*\)')
-_BLOCK_OPEN = re.compile(r'^\s*layout\s*\(\s*(std140|std430)\s*\)\s*uniform\s+(\w+)\s*\{\s*$')
+# group 1 the layout, 2 the storage qualifier (`uniform` or `readonly buffer`),
+# 3 the block's name
+_BLOCK_QUAL = r'(uniform|readonly\s+buffer)'
+_BLOCK_OPEN = re.compile(r'^\s*layout\s*\(\s*(std140|std430)\s*\)\s*' + _BLOCK_QUAL +
+                         r'\s+(\w+)\s*\{\s*$')
+
+
+def block_qual(q):
+    """The qualifier as the transform writes it -- single-spaced whatever the
+    source had, so `residual()` compares like with like."""
+    return " ".join(q.split())
 
 # The same block written on ONE line, `{ members } ;` and all. Split rather than
 # parsed in place: every reader below already handles the multi-line spelling, and
@@ -636,7 +655,7 @@ _BLOCK_OPEN = re.compile(r'^\s*layout\s*\(\s*(std140|std430)\s*\)\s*uniform\s+(\
 # { mat4 w[WMAX]; };` is the first in this tree; before this the block was never
 # seen at all and so never got its set/binding.]
 _BLOCK_1LINE = re.compile(
-    r'^(\s*layout\s*\(\s*(?:std140|std430)\s*\)\s*uniform\s+\w+\s*\{)'
+    r'^(\s*layout\s*\(\s*(?:std140|std430)\s*\)\s*(?:uniform|readonly\s+buffer)\s+\w+\s*\{)'
     r'(.+?)'
     r'(\}\s*;)\s*$')
 
@@ -646,7 +665,7 @@ _BLOCK_1LINE = re.compile(
 # which is precisely the failure landing 7 spent a run diagnosing.
 # [Landing 7's review, 2026-09-17.]
 _BLOCK_1LINE_INST = re.compile(
-    r'^\s*layout\s*\(\s*(?:std140|std430)\s*\)\s*uniform\s+\w+\s*\{.+?\}\s*\w+\s*;\s*$')
+    r'^\s*layout\s*\(\s*(?:std140|std430)\s*\)\s*(?:uniform|readonly\s+buffer)\s+\w+\s*\{.+?\}\s*\w+\s*;\s*$')
 
 
 def normalise_blocks(src):
@@ -729,6 +748,7 @@ class Shader(object):
         self.globals = []         # (type, name, arrsize) in declaration order
         self.samplers = []        # (type, name)
         self.blocks = []          # named block names, in declaration order
+        self.block_qual = {}      # name -> "uniform" | "readonly buffer"
         self.outs = {}            # name -> (type, arr) for a vertex stage
         self.out_order = []
         self.ins = []             # (name, type, arr) for a fragment stage
@@ -764,7 +784,8 @@ def parse(sh):
                     sh.ins.append((name, ty, n, norm_quals(quals)))
         m = _BLOCK_OPEN.match(raw)
         if m:
-            sh.blocks.append(m.group(2))
+            sh.blocks.append(m.group(3))
+            sh.block_qual[m.group(3)] = block_qual(m.group(2))
         depth += raw.count("{") - raw.count("}")
 
 
@@ -791,7 +812,8 @@ def arr_size(arr):
         die("array size '%s' is not a constant expression" % inner)
 
 
-_VKBLOCK = re.compile(r'^layout\(set = 0, binding = \d+, (std140|std430)\) uniform (\w+) \{$')
+_VKBLOCK = re.compile(r'^layout\(set = 0, binding = \d+, (std140|std430)\) ' + _BLOCK_QUAL +
+                      r' (\w+) \{$')
 _GLOBALS_OPEN = "uniform _Globals {"
 
 
@@ -824,7 +846,7 @@ def residual(text):
             continue
         m = _BLOCK_OPEN.match(raw) or _VKBLOCK.match(raw)
         if m:
-            out.append("uniform %s {" % m.group(2))
+            out.append("%s %s {" % (block_qual(m.group(2)), m.group(3)))
             depth += 1
             continue
         if depth == 0 and not raw.lstrip().startswith("#"):
@@ -903,8 +925,9 @@ def transform(sh, varying_loc):
 
         m = _BLOCK_OPEN.match(line)
         if m:
-            out.append("layout(set = 0, binding = %d, %s) uniform %s {"
-                       % (blk[m.group(2)], m.group(1), m.group(2)))
+            out.append("layout(set = 0, binding = %d, %s) %s %s {"
+                       % (blk[m.group(3)], m.group(1), block_qual(m.group(2)),
+                          m.group(3)))
             depth += 1
             continue
 
@@ -1165,8 +1188,10 @@ def emit(cfile, shaders, words):
         # `mat4 w[WMAX]` and WMAX is NK x kmax, which varies per variant and
         # which the C side already computes to size its buffer.
         for i, bn in enumerate(sh.blocks):
-            L.append(" * set 0 binding %d: uniform block %s"
-                     % ((VERT_BASE if sh.stage == "vert" else FRAG_BASE) + 1 + i, bn))
+            L.append(" * set 0 binding %d: %s block %s"
+                     % ((VERT_BASE if sh.stage == "vert" else FRAG_BASE) + 1 + i,
+                        "storage (readonly)" if sh.block_qual.get(bn) == "readonly buffer"
+                        else "uniform", bn))
         for i, (ty, name) in enumerate(sh.samplers):
             L.append(" * set 0 binding %d: %s %s"
                      % ((VERT_BASE if sh.stage == "vert" else FRAG_BASE) + 8 + i,
