@@ -77,9 +77,7 @@
        edgedim=<b>   brightness of the mirror at the map's edge, default 0.5
        edgegrey=<g>  0 = the mirrored colour, 1 = the fog's grey; default 0.75
        edgefade=<px> world px from the edge to black, default 1536
-       edgesteps=<n> bands of the fade, default 0: smooth in true colour,
-                     and in indexed colour one band per row of TA's shade
-                     table between black and neutral
+       edgesteps=<n> bands of the fade, default 0 = smooth
        edgedither=<b> a 4x4 ordered dither across the bands, default 0 —
                      TA never dithers when it darkens, so this is off
        relief=<k>    EXPLORE: displacement scale. DEFAULT 0 — the art left
@@ -260,13 +258,14 @@
      at 30 % brightness, bending away and fading out. edge=mirror is that idea
      in TA's own terms: the same tiles, texel for texel (a cell reflects
      across every edge it is past, and its texels flip), in the fog of war's
-     grey — the engine's grey is (R+G+B)/3 then the nearest palette colour —
-     dimmed, and fading to black. True colour fades smoothly. Indexed colour
-     stays inside the palette and darkens the way the engine does, through
-     its own shade table (PALETTE.SHD: row 0 is black, row 15 leaves a colour
-     as it is), one band per row, with no pattern: TA's fog and its face
-     shading are palette remaps and never dither, and a dither is exactly
-     what Classic++ exists to take out. Unlit, because mirrored art
+     grey, dimmed, and fading smoothly to black, IN FULL COLOUR IN BOTH
+     LANES: Classic takes each texel's palette colour, exactly the colour it
+     draws, and darkens that. The mirror is not something the engine draws,
+     so there is no palette to stay inside, and an 8-bit fade either shows
+     its steps or needs a dither — TA never dithers when it darkens, and a
+     dither is what Classic++ exists to take out. The grey is the RGB mean,
+     as TAGPU_GLSL_FOG_GREY_RGB takes it, not snapped to the palette the way
+     the engine's own fog grey is. Unlit, because mirrored art
      is lit from wherever the reflection sent the painted light. The map's own
      features (the TNT's anchors, not a scenario's) are mirrored with the
      terrain: flipped with it across a side edge, upright across the top and
@@ -1021,10 +1020,11 @@ void main(){
 }`;
 // The mirror's tone, shared by its terrain and its features so the two cannot
 // drift: the band a drawn point falls in, from its distance to the map on the
-// tile grid, and what that band does to a colour or to a palette index.
+// tile grid, and what that band does to a colour. Full colour in both lanes:
+// the mirror is not something the engine draws, so Classic has no palette to
+// stay inside here, and an 8-bit fade either bands or dithers.
 const EDGE_TONE = `
 uniform sampler2D uPal;
-uniform sampler2D uEdgeLUT;  // indexed: row l maps an index to its band-l grey
 uniform vec2 uMapPx;         // the map's extent on the tile grid, px
 uniform vec4 uEdge;          // brightness at the edge, grey, fade px, bands
 uniform int uDither;
@@ -1047,10 +1047,9 @@ vec3 edgeRGB(vec3 c, vec2 w) {
   c = mix(c, vec3(dot(c, vec3(1.0/3.0))), uEdge.y);
   return c * uEdge.x * (S > 0.0 ? 1.0 - band / S : 1.0 - t);
 }
-vec3 edgeIndexed(int i, vec2 w) {
-  float band = edgeBand(w, edgeT(w));
-  int j = int(texelFetch(uEdgeLUT, ivec2(i, int(band)), 0).r * 255.0 + 0.5);
-  return texelFetch(uPal, ivec2(j, 0), 0).rgb;
+// an index's colour: the texel exactly as Classic draws it
+vec3 edgePal(float idx) {
+  return texelFetch(uPal, ivec2(int(idx * 255.0 + 0.5), 0), 0).rgb;
 }`;
 const EDGE_FS = `#version 300 es
 precision highp float;
@@ -1061,9 +1060,8 @@ uniform sampler2D uRGB;      // restored colour, same layout
 uniform int uUndither;
 ${EDGE_TONE}
 void main(){
-  frag = vec4(uUndither == 1 ? edgeRGB(texture(uRGB, vUV).rgb, vWorld)
-                             : edgeIndexed(int(texture(uAtlas, vUV).r * 255.0 + 0.5), vWorld),
-              1.0);
+  vec3 c = uUndither == 1 ? texture(uRGB, vUV).rgb : edgePal(texture(uAtlas, vUV).r);
+  frag = vec4(edgeRGB(c, vWorld), 1.0);
 }`;
 // The map's own features, mirrored with the terrain under them: the sprite
 // format of tagpu_feat.c (so the depth keys sort them against the map's own
@@ -1106,7 +1104,7 @@ void main(){
   } else {
     float idx = texture(uAtlas, vUV).r;
     if (abs(idx - vCM.x) < 0.5/255.0) discard;
-    rgb = edgeIndexed(int(idx * 255.0 + 0.5), vWorld);
+    rgb = edgeRGB(edgePal(idx), vWorld);
   }
   float a = (int(vCM.y + 0.5) == 2) ? 0.5 : 1.0;
   frag = vec4(rgb * a, a);
@@ -1482,73 +1480,12 @@ async function main() {
   }
   gl.bindVertexArray(null);
   const EU = uniforms(gl, edgeProg, ["uGame", "uZoom", "uZoomC", "uAtlas", "uRGB", "uPal",
-                                     "uEdgeLUT", "uUndither", "uMapPx", "uEdge", "uDither"]);
-  // The indexed mirror's colours, one row per band, so it stays inside the 256
-  // colours the art is painted in. First the engine's grey: (R+G+B)/3 in
-  // integers, mixed back toward the colour by 1 - grey, then the nearest
-  // palette colour by squared RGB distance (the engine's own search, 0x4BA9D0,
-  // prefilters to a +-0x28 band on R+G+B first; this one searches all 256, so
-  // an index can differ where the two nearests disagree). Then the band's
-  // brightness through the engine's SHADE TABLE, row round(neutral * b), which
-  // is how TA darkens an index: its dark end is the one Cavedog chose for this
-  // palette, where a nearest-colour search of our own lands on olive and brown
-  // (the palette has almost no dark neutral greys). A pack without the table,
-  // or with one that brightens toward row 0, darkens by the search instead.
-  const edgeShd = shdBuf || (scene.palette.shd ? await fetchBin(scene.palette.shd) : null);
-  const EDGE_SHD = edgeShd && scene.palette.neutral && scene.palette.neutral[1] === 1
-                 ? scene.palette.neutral[0] : 0;
-  // the indexed lane's bands: the knob, else one per shade row below neutral
-  const edgeBands = (L) => L.edgeSteps || EDGE_SHD || 32;
-  const nearestIndex = (tr, tg, tb) => {
-    let best = 0, bd = Infinity;
-    for (let k = 0; k < 256; k++) {
-      const dr = palBuf[k * 4] - tr, dg = palBuf[k * 4 + 1] - tg, db = palBuf[k * 4 + 2] - tb;
-      const d = dr * dr + dg * dg + db * db;
-      if (d < bd) { bd = d; best = k; }
-    }
-    return best;
-  };
-  const edgeLUTs = new Map();
-  function edgeLUT(L) {
-    const S = edgeBands(L);
-    const key = `${L.edgeDim},${L.edgeGrey},${S}`;
-    let t = edgeLUTs.get(key);
-    if (t) return t;
-    const lut = new Uint8Array(256 * (S + 1));
-    const grey = new Uint8Array(256);
-    for (let i = 0; i < 256; i++) {
-      const r = palBuf[i * 4], g = palBuf[i * 4 + 1], bl = palBuf[i * 4 + 2];
-      const m = Math.floor((r + g + bl) / 3);
-      grey[i] = nearestIndex(r + (m - r) * L.edgeGrey, g + (m - g) * L.edgeGrey,
-                             bl + (m - bl) * L.edgeGrey);
-    }
-    for (let l = 0; l <= S; l++) {
-      const b = L.edgeDim * (1 - l / S);
-      for (let i = 0; i < 256; i++) {
-        const gi = grey[i];
-        lut[l * 256 + i] = EDGE_SHD
-          ? edgeShd[Math.round(EDGE_SHD * b) * 256 + gi]
-          : nearestIndex(palBuf[gi * 4] * b, palBuf[gi * 4 + 1] * b, palBuf[gi * 4 + 2] * b);
-      }
-    }
-    t = tex2D(gl, 15, gl.R8, 256, S + 1, gl.RED, gl.UNSIGNED_BYTE, lut);
-    gl.activeTexture(gl.TEXTURE0);
-    edgeLUTs.set(key, t);
-    return t;
-  }
+                                     "uUndither", "uMapPx", "uEdge", "uDither"]);
   // EDGE_TONE's uniforms, on whichever mirror program is in use
   function edgeTone(U, L) {
-    // built BEFORE the unit is selected: a first build uploads through tex2D,
-    // which leaves unit 0 selected, and the bind would then land on the atlas
-    const lut = edgeLUT(L);
-    gl.activeTexture(gl.TEXTURE15); gl.bindTexture(gl.TEXTURE_2D, lut);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.uniform1i(U.uEdgeLUT, 15);
     gl.uniform1i(U.uPal, 1);
     gl.uniform2f(U.uMapPx, map.tilemap.w * 32, map.tilemap.h * 32);
-    // the indexed lane has no smooth fade: its bands are LUT rows (edgeBands)
-    gl.uniform4f(U.uEdge, L.edgeDim, L.edgeGrey, L.edgeFade,
-                 L.undither ? L.edgeSteps : edgeBands(L));
+    gl.uniform4f(U.uEdge, L.edgeDim, L.edgeGrey, L.edgeFade, L.edgeSteps);
     gl.uniform1i(U.uDither, L.edgeDither ? 1 : 0);
   }
 
@@ -1646,7 +1583,7 @@ async function main() {
     }
     gl.bindVertexArray(null);
     ESU = uniforms(gl, esProg, ["uGame", "uZoom", "uZoomC", "uDepthScale", "uAtlas", "uRGB",
-                                "uUndither", "uPal", "uEdgeLUT", "uMapPx", "uEdge", "uDither"]);
+                                "uUndither", "uPal", "uMapPx", "uEdge", "uDither"]);
   }
   if (restorer) {
     restorer.dispose();
