@@ -2589,6 +2589,13 @@ because the constraint is stated here and a repealed rule that still reads as li
 no rule. The property it bought — that the phase could be abandoned after any gate without debt —
 goes with it, from the first deletion onward.
 
+**The strip, 2026-09-23: nothing in the build names GL, and no setting does.** After 11-5 D4
+deleted the last GL file, this removed the rest by the owner's ruling (no aliasing): `renderer=`
+knows `auto`, `vulkan` and `gdi` only, the `*_glreset` cascade and every GL field and parameter
+are gone, `tacli glshot` is gone and its callers grab the window, and the release ini and README
+name Vulkan. [gpu-status](gpu-status.html) §2.85 has the list and the measurements. **Not covered:**
+~800 comment mentions of GL in the sources; `tascene ab`'s browser half draws no terrain.
+
 **Landing 2 followed the same day**: the Classic++ restored atlases mirrored for three of the
 four world passes ([gpu-status](gpu-status.html) §2.36) — features **0 px**, effects **0 px**,
 terrain **0 px** indexed and **5 px of 786 432** restored, the latter established as *not* a
