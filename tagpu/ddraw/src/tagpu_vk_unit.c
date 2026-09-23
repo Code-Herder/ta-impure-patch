@@ -3138,7 +3138,11 @@ static void record_stage(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     for (i = 0; i < s_ndraw; i++) {
         const DRAW* q = &s_draw[i];
         VkPipeline want;
-        if (!q->ghost != (stage == RS_GHOST)) continue;  /* this stage's only */
+        /* BOTH SIDES AS 0/1 BEFORE THE COMPARE. `!q->ghost` alone is the
+           negation of the test, and against the stage test it would draw every
+           unit body in the ghost stage -- after the effects, over every
+           particle and projectile, with nothing failing. */
+        if ((q->ghost != 0) != (stage == RS_GHOST)) continue;  /* this stage's only */
         want = q->ghost ? s_pipeGhost : s_pipeBody;
         VkBuffer vbs[2];
         VkDeviceSize offs[2];
