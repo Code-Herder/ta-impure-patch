@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=high reviewers=2 range=main..1479f98 findings=9 acted=8 rejected=1 date=2026-09-23 (rejected: Undo after touching the GPU row writes gpu=auto over a stored name that is absent - pre-existing, not worsened)
