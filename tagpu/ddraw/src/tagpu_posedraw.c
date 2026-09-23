@@ -646,10 +646,10 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
     /* THE TEXELS. The two mirrors are asked for HERE rather than on the arm
        beat, because `tagpu_r3d_atlas_mirror_want` needs the atlas to have its
        dimensions and that is not true of the first frames of a session; it is
-       idempotent, so asking every publish costs one branch once it is there. */
+       idempotent, so asking every publish costs one branch once it is there.
+       The mirror is ASKED for here and READ in `tagpu_posedraw_handover`,
+       beside the restore list -- see there for why the two reads are one. */
     tagpu_r3d_atlas_mirror_want();
-    s_pub.atlas = tagpu_r3d_atlas_mirror(&s_pub.atlasDim, &s_pub.atlasRows,
-                                         &s_pub.atlasSerial);
     /* AND THE RESTORED TWIN, AS THE REQUEST AND NOTHING ELSE (landing 7e-2,
        and 11-5e-2b). A read-back stood beside this and published the twin's
        TEXELS: `tagpu_r3d_atlas_mirror_rgb_want` / `_step` armed and drove a
@@ -1148,6 +1148,21 @@ int tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now)
        reallocs or frees it, so the address is fixed for the atlas's life. Two
        different guarantees for two different hazards, and neither is a
        timing argument. [The vulkan-only plan, 11-5e-2c.] */
+    /* THE INDEXED MIRROR IS READ ON THE SAME BEAT AS THE LIST, AND FOR THE
+       SAME REASON. `atlas_paint` (tagpu_gaf.c) writes a cell's bytes into the
+       mirror, bumps `mirrorSerial` and appends the cell to the list in one
+       call, so a serial and a list read here together agree by construction:
+       every listed frame's texels are in the mirror the serial names, and the
+       consumer uploads that serial before it queues the frame. The serial,
+       rows and pointer used to be read in `pd_view_publish`, BEFORE
+       `ghost_record` -- so a build ghost that atlased a new unit's texture
+       published the frame with the previous serial, the consumer saw nothing
+       to upload, and the restorer painted the cell from the texels the device
+       still held there: palette index 0, opaque black, for the rest of the
+       generation. That was a first ARMMEX placed through the ghost, its plate
+       black on every extractor built after it. */
+    s_pub.atlas = tagpu_r3d_atlas_mirror(&s_pub.atlasDim, &s_pub.atlasRows,
+                                         &s_pub.atlasSerial);
     {
         float aniso = 0.0f;
         const TAGPU_RGLSL_FRAME* fr =

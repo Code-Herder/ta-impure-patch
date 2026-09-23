@@ -1,0 +1,21 @@
+{
+  "format": "ta-scenario/1",
+  "description": "An ARM Commander alone on open Two Continents ground, and no metal extractor anywhere: the first ARMMEX placed through the build ghost is the first time the unit atlas meets its textures. Classic++ undithering black-cell repro.",
+  "seed": 20260923,
+  "on_error": "abort",
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": { "shootall": false, "noshake": true },
+    "players": [
+      { "slot": 0, "controller": "human", "side": "arm", "color": 0 },
+      { "slot": 1, "controller": "ai", "side": "core", "color": 1 }
+    ]
+  },
+  "units": [
+    { "id": "com", "type": "ARMCOM", "owner": 0, "pos": [1600, 1560], "facing": 0 },
+    { "id": "spare", "type": "CORSOLAR", "owner": 1, "pos": [4000, 3500], "facing": 0 }
+  ],
+  "camera": { "center_on": "com" }
+}

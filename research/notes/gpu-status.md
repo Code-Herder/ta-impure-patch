@@ -13877,6 +13877,20 @@ that no longer runs.
 
 **Two hazards, two different guarantees, and neither is a timing argument.**
 
+**The indexed mirror's serial, rows and pointer belong on the same beat, and until
+2026-09-23 they were not.** They stayed in `pd_view_publish` when the list moved, so a
+build ghost that atlased a texture for the first time published the new frame alongside
+the *previous* `mirrorSerial`. `tagpu_vk_unit.c`'s `atlas_upload` saw a serial it already
+held and copied nothing, `covered_prefix` passed the frame (same shelf, rows already
+covered), and the restorer painted the cell from the device's stale texels: palette
+index 0, opaque black, for the rest of the generation. Seen on the first ARMMEX placed
+through the ghost: its plate was black on every extractor built after it, under
+`assets=1` only. Both reads are now in `tagpu_posedraw_handover`. `atlas_paint`
+(`tagpu_gaf.c`) writes the bytes, bumps the serial and appends to the list in one call, so
+a serial and a list read together agree by construction. Repro:
+`scenarios/mex-ghost.json`: select the commander, place an ARMMEX, and wait for it to
+finish.
+
 #### OVERFLOW RESTARTS RATHER THAN DROPS
 
 `rlist_restart`'s own definition already called itself *"both the arm path and the
