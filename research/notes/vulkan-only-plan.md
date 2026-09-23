@@ -2828,9 +2828,13 @@ takes the packet before it syncs the snapshot, so it can draw packet D-1 against
 answer there.
 
 **Two more things the cut does not do, both named by the review and neither its doing.** No
-structure draws its slant shadow on this lane — landing 11-2 deleted the native pass's GL tail
-and the slant and silhouette draws went with it, `tagpu_vk_unit.c` has no slant anything, and
-this is true on `main`. And the UI op PUBLISHER is unreachable: `g_gui_draw` lost its only writer
+structure or unit drew a shadow on this lane — landing 11-2 deleted the native pass's GL tail and
+the slant and silhouette draws went with it, and this was true on `main`. **CLOSED 2026-09-22**:
+`tagpu_vk_unit.c` grew both, stencil-masked, out of the bake's own ranges, and `shadows=` defaults
+to HARD because the soft map it defaulted to has had no producer since landing 11 D2 (see
+[gpu-status](gpu-status.html) §2.83 for the measurement and the gap's history). The SOFT map is
+still unported and is the shadow half's remaining work.
+And the UI op PUBLISHER is unreachable: `g_gui_draw` lost its only writer
 with `tagpu_gui_surf.c`, so the queue and its arena are never used and `tagpu_gui.on` buys the
 17 leaves and the census, nothing more.
 

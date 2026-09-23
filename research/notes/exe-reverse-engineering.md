@@ -2078,6 +2078,21 @@ the native pass, which erased every shadow fragment at model height ≤ 12 as it
 silhouette's, kept the nano arms' tops (515 px), and reads 1094 once the slant is exempt —
 [shadows & cloak](shadows-cloak.html) §"Structure shadows, parity".]
 
+### The option word's own checkbox moves three bits [MEASURED 2026-09-22]
+
+`main+0x37F06` bit2 `Shadow`, bit3 `TShadow` and bit4 `FShadow` are three bits and **one
+control**. Driven through TA's own Options → Visuals on a live game, the `BSHADOWS` toggle takes
+the word from `0x000C003F` to `0x000C0023` and back: all three clear together and all three set
+together. There is no separate checkbox for the feature shadows or for the completed-unit one,
+whatever the three names suggest — so a consumer that gates on bit2 alone and a consumer that
+gates on bit3 alone are, from the player's side, the same switch. (The UNDO path's `0x45CAE0`
+XORs the same word back from the saved copy at `0x512F38`, which is the other half of the same
+story.)
+
+What that settles for a renderer of our own: honouring the player's toggle is honouring bit2.
+Testing bit3 for the silhouette, as `0x459324` does, reproduces the engine's branch and can never
+disagree with the player's intent, because the two bits cannot be set differently through the UI.
+
 **Why the branch flip is safe.** Both `je`s are 2-byte short jumps whose fall-through and
 target both continue with `eax` still holding the option word the target tests (`shr al,3`),
 and the COMPLETED branch is the engine's own path for every non-structure unit; under

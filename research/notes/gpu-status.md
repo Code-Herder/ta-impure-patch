@@ -48,9 +48,9 @@ own sprite, drawn under the pointer at every zoom and left alone by the composit
 
 | What the engine used to draw | Ours since | Owned how |
 |---|---|---|
-| Units, wrecks, shadows, cloak, waterline | G12a–c, G13n | `owndraw` skips the software rasterisers; `tagpu_native.c` draws them. **Under Classic++ (G14i) neither Classic shadow is drawn: `tagpu_shadow.c`'s depth map replaces the silhouette and the slant, and an aircraft under `airshadow=drop` alone keeps its silhouette.** **The silhouette shadow blends once per silhouette PIXEL through a stencil** (G13n) — the engine blits one blackened copy of the composite, so re-using the body's 3-D geometry with depth writes off darkened once per surface the ray crossed: aircraft came out at 0.25 of the ground against the engine's 0.49. Both FBOs are `DEPTH24_STENCIL8` for it — [shadows & cloak](shadows-cloak.html) §"What our GL renderer must do" |
+| Units, wrecks, shadows, cloak, waterline | G12a–c, G13n | `owndraw` skips the software rasterisers; `tagpu_native.c` draws them. **The Classic pair — the silhouette and the structure slant — is what the shipped configuration draws again since 2026-09-22, out of `tagpu_vk_unit.c`, and `shadows=` defaults to HARD (§2.83).** G14i's alternative, `tagpu_shadow.c`'s depth map at `shadows=1`, is unported: that module went with the GL backend and nothing produces a hand-over for the Vulkan map. **The silhouette shadow blends once per silhouette PIXEL through a stencil** (G13n) — the engine blits one blackened copy of the composite, so re-using the body's 3-D geometry with depth writes off darkened once per surface the ray crossed: aircraft came out at 0.25 of the ground against the engine's 0.49. Both FBOs are `DEPTH24_STENCIL8` for it — [shadows & cloak](shadows-cloak.html) §"What our GL renderer must do" |
 | **Units under construction** — the nanoframe scaffold, its fill and its wireframe | G13l | the same pass: ownership no longer stops at `Nanoframe > 0`, the recolour is three per-unit uniforms in the unit shader and the wireframe a line range per unit; a third `owndraw` detour (`0x458DD0`) stops the engine stamping its own copy at the 1× position. A unit under construction casts no shadow, as the engine's does not, and a factory's cargo takes the FACTORY's depth key — the engine z-merges it into the factory's sprite (`0x4B90A0`) rather than sorting it, and on its own tile row it disappeared under the lab. The carry relationship itself — attach/detach `0x48AB70`, and why a *released* unit appears to walk under the plant (stock, measured) — is on [factories](factory-build.html) |
-| Structure shadows (the cached slant projection) | G13k | `owndraw all` flips the blit's two structure-shadow `je`s; the native pass emits the slant projection from the posed prims — see §2.1 and [shadows & cloak](shadows-cloak.html) §"Structure shadows, owned" |
+| Structure shadows (the cached slant projection) | G13k, redrawn 2026-09-22 | `owndraw all` flips the blit's two structure-shadow `je`s behind `g_ssSkip`; the SLANT range of the posed bake is drawn by `tagpu_vk_unit.c`, stencil-masked, before the bodies — see §2.83, §2.1 and [shadows & cloak](shadows-cloak.html) §"Structure shadows, owned" |
 | Weapon fire, explosions, debris | G12e | `fxown`: 2 call-site redirects + 4 leaf detours |
 | Smoke, fire, wakes, nanolathe | G12f | `fxown`: one detour on the layer walker |
 | Features (trees, rocks, splats, wreckage) | G13a | `featown`: one detour on the feature leaf |
@@ -159,7 +159,7 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | `0x459830` | opaque 3DO rasteriser | `owndraw` (`owndraw.on`) | prologue detour, 5 stolen |
 | `0x459C70` | the Gouraud-lit 3DO rasteriser — **selected for STRUCTURES**, not for nanoframes (`0x45873C` tests `unit+0x110 & 0x20000000`, measured to be the structure bit; [build-state](build-state.html) §1) | `owndraw` | prologue detour, 5 stolen |
 | `0x458DD0` | the blit-time **build-state effect** (`thiscall(this, frame, obj)`, `ret 8`): the height-threshold recolour plus the nanoframe wireframe, applied to a scratch copy of the composite every frame. Wiping the composite does not stop it — with the rasterise skipped it recoloured nothing and stamped its wireframe alone, at the 1× position | `owndraw` | prologue detour, **6 stolen** (`53 55 8B 6C 24 0C`; a 5-byte steal splits the `mov`), skip path `xor eax,eax; ret 8` = the callee's own early-out. Taken only for units `tagpu_native_owns_obj` claims |
-| `0x4592BF` (was `0x4592C6`) | the structure test and the `je 0x459324` after it, in the blit `0x459200`, path A — the branch into the cached structure shadow (`Object3do+0x14`, blitted through the ALP blend, which turns the fill key teal) | `owndraw`, target `all` only | **5-byte detour over the `test`+`je` (9 stolen, `nop` fill), verified byte-for-byte first; installed with the next as a pair or not at all.** Was a one-byte `74`→`EB` flip until 2026-09-18 — the flip had no runtime gate, so it suppressed for the life of the process on every lane, `renderer=gdi` included, where nothing of ours draws the shadow it took away (the vulkan-only plan, landing 10b). The stub re-emits the `je` behind `g_ssSkip` |
+| `0x4592BF` (was `0x4592C6`) | the structure test and the `je 0x459324` after it, in the blit `0x459200`, path A — the branch into the cached structure shadow (`Object3do+0x14`, blitted through the ALP blend, which turns the fill key teal) | `owndraw`, target `all` only | **5-byte detour over the `test`+`je` (9 stolen, `nop` fill), verified byte-for-byte first; installed with the next as a pair or not at all.** Was a one-byte `74`→`EB` flip until 2026-09-18 — the flip had no runtime gate, so it suppressed for the life of the process on every lane, `renderer=gdi` included, where nothing of ours draws the shadow it took away (the vulkan-only plan, landing 10b). The stub re-emits the `je` behind `g_ssSkip`. **`g_ssSkip` has a painter again since 2026-09-22** — the Vulkan unit pass reports having drawn a slant and `tagpu_native.c` publishes that; between landings 11-3 and then nothing set it and the engine drew every structure shadow itself (§2.83) |
 | `0x459522` (was `0x45952C`) | the same pair in path B (`test dword [ecx+0x110],0x20000000`; `je 0x459578`) | `owndraw`, target `all` only | the same detour, **12 stolen**, verified first |
 | `0x459338` | `call 0x45A470` in the blit `0x459200`, path A — the completed-unit **silhouette shadow**: `0x45A470(this, composite)` fills the scratch with the unit's own composite blackened (every non-ColorKey texel → index 0, `0x4B96A0`) and the ALP blend `0x4B8500` writes it at `sx+0x85`. Inside `terrown`'s key-filled viewport its destination is palette 254, so a shadow built from a NON-empty composite lands as an OPAQUE TEAL `(0,128,128)` silhouette on the unit. Measured 2026-09-13: at map entry the commander keeps one until it first moves ([exe-reverse-engineering](exe-reverse-engineering.html) §"The completed-unit shadow") | `owndraw` | 5-stolen call-site detour, bytes matched first; the stub replays the call and empties the composite first when the unit is ours AND `tagpu_posedraw_live()` — and a husk is not ours unless `tagpu_native_wrecks_armed()`, the classifier's own first branch (defensive: on the `one-wreck` fixture with `native.on` = `all` and no `wrecks` token, disabling the clause changed nothing — the unit predicate does not answer yes to a husk there) |
 | `0x45958C` `0x4594DB` | the same three instructions in path B (colour+depth) and in its inline digger branch | `owndraw` | installed with the site above as a set of three or not at all |
@@ -1443,7 +1443,7 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `main+0x1421F` | the screen fog grid `{u16* buf; cols; rows; cells}`. Read only, per frame on the render thread. **Its last column and last row are short their outer corners** — the map cell that would supply them is past the builder's loop — so a sampler that clamps a world point into that cell reads *no fog*, not the border cell; `taFog` clamps to `uFogDim − 1.0`, one whole cell short, and the grid's own overshoot of the viewport — at least 1 px on every side for every viewport size the allocation accepts and every eye, 16 px for a negative one — is what makes that a no-op at 1× (terrain-depth §8a). **`cells` is the ALLOCATION**, `(cols*rows + 7) & ~7` — asserting `cells == cols*rows` accepted 1024×768 and refused 1920×1080, where the refusal cleared `fogMode` and there was no fog at all until 2026-09-09 ([terrain & depth](terrain-depth.html) §5.2). **The dimensions are one cell per 32 px of the 1× viewport plus two**, whatever the zoom: MEASURED by `tacli peek` through this descriptor, **118 × 68** for the 3712 × 2096 viewport of a 3840×2160 screen (`cells` 8024, exactly the product) and **78 × 45** for the 2432 × 1376 of a 2560×1440 one (`cells` 3512 against a product of 3510 — the round-up, and the case that refused). The `cols`/`rows` sanity bound in `tagpu_native.c` is 1024, not 256: at that rate 256 is a viewport 8128 px wide, which made the bound a screen limit standing in front of the real test |
 | `main+0x2A43`, `main+0x1B63 + id*0x14B + 0x7C`, `main+0x14273`, `main+0x14233`/`+0x14237` | the LOCAL player id, that player's LOS counter block `{u8* buf; w; h}`, the MAPPED bitmap (u16 per tile, one bit per player, row stride `PLOT_C` **bytes**) and the PLOT dimensions. Read only, **on the GAME THREAD** from `tagpu_fogwide.c` at the fog overlay's own call site — which is the lifetime argument for reading them at all: the engine's builder reads the same two allocations there. Every index is bounded by the dimensions read alongside them |
 | `main+0x37F06` bit0 | `damagebars` registry option |
-| `main+0x37F06` bit2 / bit3 | the graphics options `Shadow` / `TShadow` (the blit tests `al,4` at `0x45928E`, [shadows & cloak](shadows-cloak.html) §2). Read only, per frame. The Classic silhouette needs both, the slant only bit2 — and **since G14i bit2 also gates the Classic++ shadow map** (with `shadows=1` in the cfg), so the player's in-game Shadows toggle keeps its meaning under the switch; bit3 is ignored there |
+| `main+0x37F06` bit2 / bit3 | the graphics options `Shadow` / `TShadow` (the blit tests `al,4` at `0x45928E`, [shadows & cloak](shadows-cloak.html) §2). **Read on the GAME THREAD by the frame packet's publisher and consumed from the packet's copy (`pk->gfx_opt`)** — the render thread does not reach across for it, and `damagebars` (bit0) has come out of the same byte the same way since landing 3. Per frame. The Classic silhouette needs both bits, the slant only bit2, and §2.83 is the pass that reads them today. **One checkbox moves three bits**: TA's own Options → Visuals `Shadows` takes `0x000C003F` to `0x000C0023`, clearing bit2, bit3 and bit4 (FShadow) together — measured live 2026-09-22. G14i's claim that bit2 also gates the Classic++ shadow map is dead with the map: `shadows=1` has no producer (§2.83) |
 | `main+0x37F2F` bit2 | `SelBoxes` |
 | `main+0x142E7..0x142ED` | minimap rect on screen |
 | `main+0x1423B` / `+0x1423F` | view size in map cells (the minimap rect's size comes from here) |
@@ -15205,3 +15205,98 @@ an oracle rather than instrumentation, which is why it stays.
   rules it out is a measurement plus a closed entry set, not a proof over the call graph. Both
   are one compare, and the reason to keep them is exactly that they hold the module correct
   **without** depending on the survey staying true.
+
+### 2.83 The Classic hard shadow, put back on the lane that draws — and the default
+
+**What was wrong.** No unit and no structure cast a shadow on the shipped configuration, in any
+mode. Measured 2026-09-22 at the play defaults (`pose-inventory`, Two Continents, 1024x768):
+`classicpp.cfg=shadows=0`, `=1` and `=2` gave a **pixel-identical viewport** — 0 differing pixels
+of 896x704 between 0 and 1, 13 between those and 2, and those 13 were one animating 4x4 spot.
+The engine's own frame had the shadow at the same camera, and its option word was not the
+problem: `main+0x37F06` read `0x000C003F`, so bit2 Shadow, bit3 TShadow and bit4 FShadow were all
+set. Feature (tree) shadows drew throughout — that is `tagpu_feat.c`'s own path and was never
+involved.
+
+**Why.** Landing 11-2 deleted `tagpu_native.c`'s GL tail and the silhouette and slant draws went
+with it; 11-5d then deleted the eight `tagpu_posedraw_*` entry points they had called, correctly
+noting that they had no caller left. `tagpu_vk_unit.c` drew the BODY range and said so under
+*WHAT IT DOES NOT DO*. So the gap was a consumer gap, not a producer one: the bake has carried a
+SLANT range since G16 step 6 and the posed vertex shader has carried `uRange`, `uOffset` and the
+fragment stage's `uShadow` the whole time. **No shader changed in this landing and no SPIR-V was
+regenerated.**
+
+**What it is now.** Three files, one decision each.
+
+| file | its half |
+|---|---|
+| `tagpu_native.c` | **the policy**. `pk->gfx_opt` (the frame packet's copy of `main+0x37F06`) and the Classic++ `shadows=` key decide, per unit, one of `TAGPU_PDSH_NONE` / `_SIL` / `_SLANT`, plus `shOffY = gy - ay`, the shift onto the ground line under the unit |
+| `tagpu_posedraw.c` | **the range**. `pd_record` turns the kind into a `first`/`count` — the BODY range for a silhouette, the bake's SLANT range for a structure — and hands it over. A ghost casts nothing |
+| `tagpu_vk_unit.c` | **the draw**. A third record stage, before the bodies, two pipelines and two more uniform windows a unit |
+
+**The engine's option word is read from the packet, not across the threads.** `pk->gfx_opt` is
+`RDU8(ta, OFF_GFXOPT)` in the publisher, on the game thread, exactly as the marker pass reads
+`damagebars` (bit0) out of the same byte. Bit2 gates both kinds; bit3 gates the SILHOUETTE alone,
+because the engine tests it only on the completed-unit branch (`0x459324`) and never on the
+structure one. Bit4 is the feature pass's and is untouched.
+
+**Two pipelines, because one 50 % blend per silhouette PIXEL is not one per surface.** This is the
+GL twin's stencil dance restored: mark the silhouette into the stencil with colour writes off,
+then blend where the mark is with the op that ZEROES it, so a second fragment on that pixel fails
+`EQUAL 1`. Both draws see the same depth buffer with depth writes off, so they cover exactly the
+same fragments and no mark outlives the unit that made it — and two DIFFERENT units' shadows still
+stack, as the engine's two separate blits do. Without it a building's slant compounds wherever two
+faces project onto the same ground.
+
+**So the seam's depth attachment carries a stencil plane now.** `tagpu_vk_world.c` already named
+the stencil aspect in its view and cleared it (its own comment: *"a view of them must name it, or
+the framebuffer is refused"*); `tagpu_vk.c` did the opposite, on a comment claiming a view with
+both aspects "cannot be used as a plain depth attachment on every driver". The world module is
+right and the seam now matches it: aspect mask, `stencilLoadOp = CLEAR`, `depthStencil.stencil =
+0` in the clear value. `TAGPU_VKPASS.stencilok` says whether the chosen depth format has the plane
+at all — `D24_UNORM_S8_UINT` does, the `X8_D24_UNORM_PACK32` fallback does not — and a device
+without one gets **no hard shadow** rather than an unmasked one. Same shape as `flipok`,
+`lineok`, `zclipok`.
+
+**`shadows=` now defaults to HARD (2), and that is a consequence rather than a preference.** SOFT
+was the default and has drawn nothing since landing 11 D2 deleted `tagpu_shadow.c`: that module
+was the only producer of `TAGPU_SHADOWHAND`, so `tagpu_vk_shadow_prepare` returns 0 on every frame
+and the consumers' refusals are gated on the same `shadowOn` that goes to 0 with it. Both halves
+went dark together and nothing said so. **The soft map is still unported** — reviving it is
+writing the producer (the light basis, the map extent, the heightfield caster mesh), which is a
+feature landing of its own.
+
+**The render-options row follows.** `Shadows` is `Off|Hard` — two stages, not three. Offering
+`Soft` would be offering `Off` under another name. `shadows=1` in a hand-written cfg is still
+read; it draws nothing and the row then shows `Off`, which is what the player is getting.
+`Shadow quality` (`shadowres=`) sizes that map and nothing else, so it is greyed unconditionally
+instead of being left looking live.
+
+**The structure-shadow gate has a painter again.** `s_ssSuppress` had had no writer since 11-3 and
+is deleted; the gate now reads `tagpu_posedraw_slant_take()`, which `tagpu_vk_unit_record` sets
+after it has recorded a slant. That is the "observed, not predicted" the gate's own comment asks
+for — the report comes from the code that drew, one render-loop iteration before the read, which
+is the one-frame cost in both directions the gate is built for.
+
+**Measured, 2026-09-22, `pose-inventory` at the play defaults, 1024x768, paused.**
+
+| measurement | number |
+|---|---|
+| `shadows=0` vs `=2`, structures camera (`eye 3100 1200`) | **2 571 px** of 630 784 (was 0) |
+| `shadows=0` vs `=1` | 39 px — the soft map still draws nothing |
+| `shadows=0` vs `=2`, ground camera (`eye 1716 806`, 24 units on screen) | **4 261 px** |
+| the darkening, both cameras | median **0.509** of the bare terrain, single-moded (1 619 of 2 571 samples at 0.51) — the mask works; the GL twin's unmasked version was bimodal at 0.25 and 0.50 |
+| against the ENGINE's own frame, one ARM solar collector on grass | our shadow's bounding box is the engine's within **1 px** on all four sides, its centroid within **1.4 px**, IoU 0.72 under one darkness classifier applied to both |
+| against the engine, the eight largest mobile-unit shadows | centroid within **1 px** in x and y on every one |
+| GPU frame time (`ftime.on`, `--maxfps 0`, paused, interleaved 2/0/2/0) | p50 **0.155–0.157 ms** with, **0.150 ms** without — about **6 us** |
+| the whole change with `shadows=0`, against the parent build | **0 / 11 px**, which is the fixture's own cross-run floor (old vs old 0, new vs new 11) |
+
+**The engine's Options → Visuals `Shadows` checkbox clears three bits, not one.** Measured on a
+live game: `main+0x37F06` goes `0x000C003F` → `0x000C0023`, so bit2 Shadow, bit3 TShadow **and**
+bit4 FShadow move together. With it off, `shadows=0` and `shadows=2` differ by **11 px** — we draw
+none either, which is the whole of the requirement that the player's own toggle wins.
+
+**Not covered.** An aircraft's shadow is drawn — visibly on the ground below a hovering airframe,
+which is `shOffY` working — but it was **not** compared against the engine: the air cluster's
+units are airborne on one launch and landed on the next, so the two frames are not the same
+situation and the pair proves nothing. The GL twin's own rule is restored unchanged; nothing about
+it was re-measured here.

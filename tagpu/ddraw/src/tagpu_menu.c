@@ -179,7 +179,7 @@ static const Row s_row[R_COUNT] = {
     { "STYLE",   "Renderer",          "Classic|Classic++|Custom", 3 },
     { "ASSETS",  "Undithered assets", "Off|On",                   2 },
     { "LIGHT",   "Dynamic lighting",  "Off|On",                   2 },
-    { "SHADOWS", "Shadows",           "Off|Hard|Soft",            3 },
+    { "SHADOWS", "Shadows",           "Off|Hard",                 2 },
     { "SHADOWQ", "Shadow quality",    "Low|Med|High|Ultra",       4 },
     { "SS",      "Supersampling",     "Off|2x",                   2 },
     { "FPS",     "FPS counter",       "Off|On",                   2 },
@@ -190,10 +190,22 @@ static const Row s_row[R_COUNT] = {
    Custom (renderers.md 2.10). */
 enum { STYLE_CLASSIC, STYLE_PP, STYLE_CUSTOM };
 
-/* Shadows: the UI order is Off|Hard|Soft and the cfg's is 0 none / 1 SOFT /
-   2 hard, so the two are not the same number and this table is the mapping. */
-static const int SHADOW_VAL[3] = { TAGPU_SHADOWS_OFF, TAGPU_SHADOWS_HARD, TAGPU_SHADOWS_SOFT };
-/* Shadow quality -> shadowres=, whose own range is 256..4096 (tagpu_classicpp.c). */
+/* Shadows: the UI order and the cfg's are not the same number, because the
+   cfg's is 0 none / 1 SOFT / 2 HARD and the row offers them in the order a
+   player reads them in. This table is the mapping.
+
+   THE `Soft` STAGE IS GONE, AND THAT IS AN HONESTY FIX RATHER THAN A CHOICE.
+   `shadows=1` is the map-anchored depth map, whose producer was `tagpu_shadow.c`
+   and went with the GL backend in landing 11 D2; nothing has drawn it since, so
+   the stage was Off wearing another name. It comes back the day a producer
+   does, and `shadows=1` in a hand-written cfg is still read -- it simply draws
+   nothing, and `read_state` below then shows this row as Off, which is what the
+   player is actually getting. [tagpu_classicpp.c's `shadow_defaults`.] */
+static const int SHADOW_VAL[2] = { TAGPU_SHADOWS_OFF, TAGPU_SHADOWS_HARD };
+#define SHADOWS_HARD_STAGE 1
+/* Shadow quality -> shadowres=, whose own range is 256..4096 (tagpu_classicpp.c).
+   IT SIZES THE SOFT MAP AND NOTHING ELSE, so with no soft map it changes no
+   pixel and `row_greyed` greys it. */
 static const int SHADOWQ_VAL[4] = { 512, 1024, 2048, 4096 };
 
 /* ---- the panel's own art -------------------------------------------------
@@ -896,7 +908,7 @@ static int build_gui(char* b, int cap, int rows)
 static int derive_style(void)
 {
     return (s_stage[R_ASSETS] != 1 || s_stage[R_LIGHT] != 1 ||
-            s_stage[R_SHADOWS] != 2 || s_stage[R_SHADOWQ] != 2)
+            s_stage[R_SHADOWS] != SHADOWS_HARD_STAGE || s_stage[R_SHADOWQ] != 2)
            ? STYLE_CUSTOM : STYLE_PP;
 }
 
@@ -910,8 +922,10 @@ static void read_state(void)
     s_stage[R_SS]      = exists(SS_OFF) ? 0 : 1;
     s_stage[R_FPS]     = exists(FPS_ON) ? 1 : 0;
 
+    /* 0 (Off) when the cfg names a value this row does not offer, which is
+       `shadows=1` -- see SHADOW_VAL. Off is what such a cfg draws. */
     s_stage[R_SHADOWS] = 0;
-    for (i = 0; i < 3; i++) if (L && SHADOW_VAL[i] == L->shadows) s_stage[R_SHADOWS] = i;
+    for (i = 0; i < 2; i++) if (L && SHADOW_VAL[i] == L->shadows) s_stage[R_SHADOWS] = i;
 
     s_stage[R_SHADOWQ] = 2;
     for (i = 0; i < 4; i++) if (L && SHADOWQ_VAL[i] == L->shadowres) s_stage[R_SHADOWQ] = i;
@@ -934,7 +948,14 @@ static int row_greyed(int row)
        them with the lane and a player on Classic could not turn either on. */
     if (row == R_STYLE || row == R_SS || row == R_FPS) return 0;
     if (s_stage[R_STYLE] == STYLE_CLASSIC) return 1;
-    if (row == R_SHADOWQ) return s_stage[R_SHADOWS] == 2 ? 0 : 1;  /* Soft only */
+    /* ALWAYS GREY, and it used to be `Soft only`. `shadowres=` is the edge of
+       the soft map's depth texture and reaches nothing else -- the hard pair is
+       drawn from the unit bake at the frame's own resolution -- and there is no
+       soft map on this lane. Left in place rather than removed: it is one line
+       to un-grey the day the map's producer is written, and a row that vanishes
+       and comes back is worse for the player than one that is plainly
+       unavailable. */
+    if (row == R_SHADOWQ) return 1;
     return 0;
 }
 
@@ -1172,7 +1193,7 @@ void __stdcall tagpu_menu_oncommand(void* gi)
                deliberately exempts it from the switch's dependants -- so the
                preset must not silently undo a player who turned it off. */
             s_stage[R_ASSETS] = 1; s_stage[R_LIGHT] = 1;
-            s_stage[R_SHADOWS] = 2; s_stage[R_SHADOWQ] = 2;
+            s_stage[R_SHADOWS] = SHADOWS_HARD_STAGE; s_stage[R_SHADOWQ] = 2;
         }
     } else {
         s_stage[row] = (s_stage[row] + 1) % s_row[row].stages;
@@ -2321,7 +2342,7 @@ static void vis_restore(void)
     s_stage[R_STYLE]   = STYLE_PP;
     s_stage[R_ASSETS]  = 1;
     s_stage[R_LIGHT]   = 1;
-    s_stage[R_SHADOWS] = 2;
+    s_stage[R_SHADOWS] = SHADOWS_HARD_STAGE;
     s_stage[R_SHADOWQ] = 2;
     s_stage[R_SS]      = 1;
     s_vstage[VD_SCALE] = 0;         /* Auto  */

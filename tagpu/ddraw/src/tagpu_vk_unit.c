@@ -87,14 +87,28 @@
       share. The capture takes TAGPU_ABSHOT_TOPDOWN now. VK_KHR_maintenance1 was
       needed only for the negative height, so this pass no longer requires it.
 
+   5. THE CLASSIC HARD SHADOW, AND WHY IT IS TWO PIPELINES [2026-09-22]. The
+      body range is not the only one drawn here any more: a third record stage,
+      before the bodies, draws the Classic SILHOUETTE (the body range again,
+      shifted) and the structure SLANT (the bake's own slant range) out of
+      `TAGPU_PDUREC.shKind`. Both are one 50% blend PER PIXEL rather than per
+      surface, which needs a stencil mask and therefore two pipelines and a
+      stencil plane in the target -- `build_shadow_pipelines` is the whole
+      argument. Nothing about the shadow is DECIDED here: the engine's option
+      word, the unit-type bits and the Classic++ `shadows=` key are engine and
+      lever state, and this file may read neither (see the last paragraph).
+
    ---- WHAT IT DOES NOT DO ----
 
-   THE BODY RANGE ONLY. The nanoframe WIRE (`uRange` 2, GL_LINES), the Classic
-   SILHOUETTE and the structure SLANT are the same program and the same bake
-   and are not ported here; the hand-over counts any of them that drew inside
-   the published window and the pass stands down. On a Classic++ soft-shadow
-   frame -- which is the configuration the shadow work is measured in --
-   tagpu_native.c draws none of them.
+   THE NANOFRAME WIRE IS NOT PORTED. `uRange` 2, GL_LINES, the same program and
+   the same bake; a unit under construction has no wireframe on this lane. The
+   hand-over counts any draw the published window does not carry and the pass
+   stands down on a non-zero count.
+
+   AND NO PASS HERE DRAWS THE SOFT SHADOW. `tagpu_vk_shadow.c`'s map has had no
+   producer since the GL backend went, so `uShadowOn` is 0 on every frame and
+   the cast-shadow half of this file's fragment stage is unreachable; the pair
+   above is what `shadows=` means today.
 
    CLASSIC++'s RESTORED ATLAS IS DRAWN SINCE GATE 3 of the Vulkan-only plan, so
    a frame whose twin reports `uRestored` 1 is DRAWN, through the twin's own
@@ -215,6 +229,11 @@ static int s_saidAniso;                 /* ...and its filter could not be matche
 static VkDescriptorSetLayout s_dslMain, s_dslCast;
 static VkPipelineLayout      s_ploMain, s_ploCast;
 static VkPipeline            s_pipeBody, s_pipeGhost, s_pipeCast;
+/* THE CLASSIC HARD SHADOW'S PAIR, and it is a pair because one blend per
+   silhouette PIXEL is not one blend per surface the model has there. See
+   `build_shadow_pipelines`. */
+static VkPipeline            s_pipeShMark, s_pipeShDraw;
+static int                   s_shOk;       /* the pair built, stencil and all */
 static VkRenderPass          s_castRp;     /* what s_pipeCast was built against */
 static VkDescriptorPool      s_dpool;
 static VkSampler             s_samp, s_sampCmp, s_sampTwin;
@@ -385,6 +404,10 @@ typedef struct {
     uint32_t unit;                         /* its window in the slot buffers   */
     int      casts;
     int      ghost;                        /* depth writes OFF, and drawn last */
+    /* the Classic hard shadow this unit casts, and the range it draws --
+       TAGPU_PDSH_* and the `first`/`count` the hand-over already resolved */
+    int      shKind;
+    uint32_t shFirst, shCount;
 } DRAW;
 static DRAW*    s_draw;
 static unsigned s_drawCap, s_ndraw, s_ncast;
@@ -396,7 +419,10 @@ static int      s_shadowOn;            /* the twin drew these against a map  */
    change inside a frame -- but they are recomputed every `upload` rather than
    once at build, because `build` is where the alignment is read and a pass that
    cached them would have two places to keep in step. */
-static VkDeviceSize s_uStride, s_vglOff2, s_fglOff, s_pStride;
+static VkDeviceSize s_uStride, s_vglOff2, s_vglOff3, s_fglOff, s_fglOff2, s_pStride;
+/* shadow casters recorded this frame, so the pass can REPORT having painted a
+   structure slant rather than let the producer predict it (tagpu_posedraw.h) */
+static unsigned     s_nsil, s_nslant;
 
 static void plog(const TAGPU_VKPASS* d, const char* fmt, ...)
 {
@@ -1037,6 +1063,149 @@ done:
     return ok;
 }
 
+/* ---- THE CLASSIC HARD SHADOW'S TWO PIPELINES ------------------------------
+   ONE 50% BLEND PER SILHOUETTE PIXEL, NOT ONE PER SURFACE THE RAY CROSSES, and
+   that is why there are two of them rather than one. The engine blackens a copy
+   of the unit's COMPOSITE and blits that once (shadows-cloak.md 3), so a pixel
+   the model covers twice is still darkened once. We re-use the body's 3-D
+   geometry, and without a mask the blend compounds -- from above an aircraft is
+   a two-sided shell over its whole area, and a building's slant projection
+   overlaps itself wherever two faces land on the same ground. MEASURED on the
+   GL twin 2026-09-04, engine against ours on one fixture and camera: the
+   engine's shadow is a single sharp mode at 0.44-0.52 of bare ground, ours was
+   BIMODAL at 0.25 (two surfaces) and 0.50 (one) with a 0.125 tail for three,
+   and four airframes read 0.252-0.255 against the engine's 0.487.
+
+   THE FIX IS THE GL TWIN'S OWN AND IS A STENCIL MASK. Draw the silhouette into
+   the stencil with colour writes off, then blend where the mark is with the op
+   that ZEROES it, so a second fragment on that pixel fails EQUAL 1. Both draws
+   see the same depth buffer -- depth writes are off for both -- so they cover
+   exactly the same fragments and no mark survives the unit that made it. The
+   mark is per unit and cleared by that unit's own second draw, so two DIFFERENT
+   units' shadows still stack, exactly as the engine's two separate blits do.
+
+   THE STENCIL PLANE IS THE TARGET'S, AND IT IS NOT A GIVEN. `tagpu_vk_world.c`
+   clears its depth attachment's stencil to 0 every frame and names the stencil
+   aspect in the view; the seam's own attachment does the same since this
+   landing. A device with no stencil-carrying depth format has neither, and
+   `d->stencilok` is 0 there -- the pair is not built and the pass draws no hard
+   shadow at all rather than a compounded one, which is a stated gap and not a
+   different picture.
+
+   EVERYTHING ELSE IS build_body_pipeline's, deliberately: same modules, same
+   vertex layout, same blend, same layout, same render pass. What moves is the
+   depth WRITE (off: a shadow must not occlude the body drawn over it), the
+   colour mask on the marking half, and the stencil state. */
+static int build_shadow_pipelines(const TAGPU_VKPASS* d)
+{
+    VkPipelineShaderStageCreateInfo st[2];
+    VkVertexInputBindingDescription vb[2];
+    VkVertexInputAttributeDescription va[7];
+    VkPipelineVertexInputStateCreateInfo vi;
+    VkPipelineInputAssemblyStateCreateInfo ia = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
+    VkPipelineViewportStateCreateInfo vp = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
+    VkPipelineRasterizationStateCreateInfo rs = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+    VkPipelineMultisampleStateCreateInfo ms = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
+    VkPipelineDepthStencilStateCreateInfo ds;
+    VkStencilOpState so;
+    VkPipelineColorBlendAttachmentState cba;
+    VkPipelineColorBlendStateCreateInfo cb = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
+    VkDynamicState dyn[2] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkPipelineDynamicStateCreateInfo dy = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
+    VkGraphicsPipelineCreateInfo gp = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+    VkShaderModule vs = VK_NULL_HANDLE, fs = VK_NULL_HANDLE;
+    int ok = 0;
+
+    if (!d->stencilok) return 0;
+
+    vs = mk_module(d, tagpu_spv_tagpu_posedraw_VS,
+                   sizeof tagpu_spv_tagpu_posedraw_VS / 4);
+    fs = mk_module(d, tagpu_spv_tagpu_native_FS,
+                   sizeof tagpu_spv_tagpu_native_FS / 4);
+    if (!vs || !fs) goto done;
+
+    memset(st, 0, sizeof st);
+    st[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    st[0].stage = VK_SHADER_STAGE_VERTEX_BIT;   st[0].module = vs; st[0].pName = "main";
+    st[1] = st[0];
+    st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; st[1].module = fs;
+
+    vertex_layout(vb, va, &vi);
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    vp.viewportCount = 1; vp.scissorCount = 1;
+
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode = VK_CULL_MODE_NONE;          /* the GL lane never culls        */
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    memset(&ds, 0, sizeof ds);
+    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    ds.depthTestEnable = VK_TRUE;
+    ds.depthWriteEnable = VK_FALSE;           /* glDepthMask(GL_FALSE)          */
+    ds.depthCompareOp = VK_COMPARE_OP_LESS;
+    ds.maxDepthBounds = 1.0f;
+    ds.stencilTestEnable = VK_TRUE;
+    /* BOTH FACES, because GL's glStencilFunc/glStencilOp set both and this
+       pipeline does not cull. */
+    memset(&so, 0, sizeof so);
+    so.failOp = VK_STENCIL_OP_KEEP;
+    so.depthFailOp = VK_STENCIL_OP_KEEP;
+    so.passOp = VK_STENCIL_OP_REPLACE;        /* glStencilOp(KEEP, KEEP, REPLACE)*/
+    so.compareOp = VK_COMPARE_OP_ALWAYS;      /* glStencilFunc(ALWAYS, 1, 0xFF) */
+    so.compareMask = 0xFF; so.writeMask = 0xFF; so.reference = 1;
+    ds.front = so; ds.back = so;
+
+    memset(&cba, 0, sizeof cba);
+    cba.blendEnable = VK_TRUE;
+    cba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cba.colorBlendOp = VK_BLEND_OP_ADD;
+    cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cba.alphaBlendOp = VK_BLEND_OP_ADD;
+    cba.colorWriteMask = 0;                   /* glColorMask(0,0,0,0)           */
+    cb.attachmentCount = 1; cb.pAttachments = &cba;
+
+    dy.dynamicStateCount = 2; dy.pDynamicStates = dyn;
+
+    gp.stageCount = 2; gp.pStages = st;
+    gp.pVertexInputState = &vi;
+    gp.pInputAssemblyState = &ia;
+    gp.pViewportState = &vp;
+    gp.pRasterizationState = &rs;
+    gp.pMultisampleState = &ms;
+    gp.pDepthStencilState = &ds;
+    gp.pColorBlendState = &cb;
+    gp.pDynamicState = &dy;
+    gp.layout = s_ploMain;
+    gp.renderPass = d->rp;
+    gp.subpass = 0;
+    ok = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL,
+                                   &s_pipeShMark) == VK_SUCCESS;
+    if (ok) {
+        /* the blending half: only where the mark is, and it takes the mark down
+           with it -- glStencilFunc(GL_EQUAL, 1, 0xFF), glStencilOp(KEEP, KEEP,
+           GL_ZERO), colour writes back on */
+        so.passOp = VK_STENCIL_OP_ZERO;
+        so.compareOp = VK_COMPARE_OP_EQUAL;
+        ds.front = so; ds.back = so;
+        cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                             VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        ok = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL,
+                                       &s_pipeShDraw) == VK_SUCCESS;
+        if (!ok) {
+            vkDestroyPipeline(d->dev, s_pipeShMark, NULL);
+            s_pipeShMark = VK_NULL_HANDLE;
+        }
+    }
+done:
+    if (vs) vkDestroyShaderModule(d->dev, vs, NULL);
+    if (fs) vkDestroyShaderModule(d->dev, fs, NULL);
+    return ok;
+}
+
 /* The caster pipeline, built against the SHADOW pass's render pass. Every piece
    of state here is tagpu_vk_shadow.c's own, because the two draw into the same
    attachment in the same render pass and a caster that tested depth differently
@@ -1571,12 +1740,21 @@ static int build(const TAGPU_VKPASS* d)
        later reader needs to check a memory figure against are the device's
        uniform alignment and what it makes the two per-unit strides, and
        neither is knowable from the source alone. */
+    /* NOT A REASON TO REFUSE THE PASS. A device with no stencil plane draws
+       every unit and every ghost and only the Classic hard shadow is missing,
+       which is a stated gap rather than a wrong picture -- and the alternative,
+       drawing it without the mask, is the wrong picture. */
+    s_shOk = build_shadow_pipelines(d);
     plog(d, "unit: up - %u frame slots, uniform offset alignment %u, %u bytes "
-            "of blocks and %d of pose per unit, compare sampler %s",
+            "of blocks and %d of pose per unit, compare sampler %s, hard "
+            "shadows %s",
          (unsigned)d->slots, (unsigned)s_ualign,
-         (unsigned)(align_up(VGL_SZ, s_ualign) * 2 + align_up(FGL_SZ, s_ualign)),
+         (unsigned)(align_up(VGL_SZ, s_ualign) * 3 + align_up(FGL_SZ, s_ualign) * 2),
          (int)align_up(POSE_SZ, s_ualign),
-         s_cmpLinear ? "LINEAR" : "NEAREST (the map cannot be sampled)");
+         s_cmpLinear ? "LINEAR" : "NEAREST (the map cannot be sampled)",
+         s_shOk ? "on (stencil-masked)"
+                : (d->stencilok ? "OFF - the pipelines were refused"
+                                : "OFF - no stencil plane on this device"));
     /* the stand-ins, in the map's own format so that one compare sampler is
        valid against both (tagpu_vk_shadow_format, and tagpu_vk_terr.c's note) */
     dfmt = tagpu_vk_shadow_format(d, NULL);
@@ -1656,7 +1834,8 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
    rule broken at -O2. */
 static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
                         const TAGPU_PDUREC* r, VkDeviceSize vglOff2,
-                        VkDeviceSize fglOff)
+                        VkDeviceSize vglOff3, VkDeviceSize fglOff,
+                        VkDeviceSize fglOff2)
 {
     union { float f[68]; int i[68]; } b;
 
@@ -1683,6 +1862,31 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
     b.i[40] = 0;                                       /* uRange       int @160*/
     b.f[41] = 0.0f;                                    /* uWire      float @164*/
     memcpy(ub, b.f, VGL_SZ);
+
+    /* ---- the vertex stage, the CLASSIC HARD SHADOW ----
+       The body block again with two fields moved, which is exactly what the GL
+       twin's `_shadow_set` and `_slant_set` did to the program the body draw
+       had just used: the SHIFT, and the RANGE.
+
+       THE SHIFT IS 5 PX RIGHT AND ONTO THE GROUND LINE. The engine blits the
+       shadow at `(sx + 0x85, groundY)` against the body's `sx + 0x80`
+       (shadows-cloak.md 3), so x is the constant 5 and y is `gy - ay`, which
+       the producer measured and carries as `shOffY`. It is 0 for anything
+       standing on the ground and non-zero for an aircraft.
+
+       THE RANGE IS WHICH OF THE ENGINE'S TWO BRANCHES THIS UNIT TAKES. A
+       structure's slant is the bake's SLANT range, whose own projection and
+       integer snap the vertex shader applies on `uRange == 1` -- 0x45A610's,
+       not the body's -- and whose per-piece `cached` rule it reads off
+       uPieceVis. Everything else is the BODY range over again, which IS the
+       blackened composite: the same triangles, the same pose, shifted.
+
+       uDepthPass STAYS 0 and uShadowMat is carried for the same reason the
+       body block carries it -- the shader reaches it only on the depth branch,
+       and the two lanes are being compared rather than merely made to agree. */
+    b.f[2] = 5.0f; b.f[3] = r->shOffY;                 /* uOffset     vec2 @8  */
+    b.i[40] = (r->shKind == TAGPU_PDSH_SLANT) ? 1 : 0; /* uRange               */
+    memcpy(ub + vglOff3, b.f, VGL_SZ);
 
     /* ---- the vertex stage, the CASTER draw ----
        What `tagpu_posedraw_depth_begin` set before landing 11-5d deleted it:
@@ -1745,6 +1949,39 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
     b.f[63] = h->penumbra;                             /* uPenumbra float @252 */
     b.f[64] = h->shade;                                /* uShade    float @256 */
     memcpy(ub + fglOff, b.f, FGL_SZ);
+
+    /* ---- the fragment stage, the CLASSIC HARD SHADOW ----
+       The body block with the shadow branch armed. `uShadow == 1` makes the
+       fragment `vec4(0, 0, 0, 0.5)` -- premultiplied black at half alpha,
+       which against `ONE, ONE_MINUS_SRC_ALPHA` is exactly `dst * 0.5` -- and
+       returns before the SHD row, the build-state recolour and the Classic++
+       light, so none of the rest of this block is read on this draw. It is
+       written anyway, unchanged, because the twin's program held it: the
+       fragment reaches the fog discard and the scaffold test BEFORE the shadow
+       return, so a shadow inside fog or under a stamped scaffold row goes with
+       them, and those two do read this block.
+
+       uAlpha IS SET TO THE 0.5 THE TWIN SET AND IS NOT READ. `tagpu_native.c`'s
+       composite wrote `glUniform1f(s_uAlpha, 0.5f)` before its shadow loop and
+       the shader's shadow branch hard-codes the same number; carrying it keeps
+       the two blocks the same bytes rather than the same picture by luck.
+
+       THE WATERLINE PAIR IS THE ONE PLACE THE TWO KINDS DIFFER. A completed
+       unit's silhouette is erased below the water line and by the digger's
+       clip, exactly as its body is, so it takes the unit's own thresholds. A
+       STRUCTURE'S SLANT IS BLITTED AS BUILT: 0x459319 and 0x4595E9 go straight
+       from 0x45A790 to the blit, and the waterline erase 0x4BA1B0 belongs to
+       the completed branch and the digger's inline branch only. Getting this
+       wrong erased the Kbot lab's shadow below the waterline until G14j, so it
+       is pinned here rather than passed in. */
+    b.i[17] = 1;                                       /* uShadow              */
+    b.f[18] = 0.5f;                                    /* uAlpha               */
+    b.i[22] = 0;                                       /* uNanoOn              */
+    if (r->shKind == TAGPU_PDSH_SLANT) {
+        b.f[19] = -1e9f;                               /* uWaterT              */
+        b.f[21] = -1e9f;                               /* uDigT                */
+    }
+    memcpy(ub + fglOff2, b.f, FGL_SZ);
 }
 
 /* One unit's pose block, written exactly where and exactly as far as
@@ -1783,11 +2020,13 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     TAGPU_PDHAND h;
     SLOT* s;
     VkMemoryBarrier mb = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
-    VkDeviceSize ustride, vglOff2, fglOff, pstride, stageOff, stageNeed, atlasNeed;
+    VkDeviceSize ustride, vglOff2, vglOff3, fglOff, fglOff2, pstride;
+    VkDeviceSize stageOff, stageNeed, atlasNeed;
     int feed = 0;
     int fogW = 1, fogH = 1, i, anyUpload = 0, fogWanted = 0;
 
     s_ndraw = 0; s_ncast = 0; s_drawThis = 0;
+    s_nsil = 0; s_nslant = 0;
 
     if (s_state == ST_REFUSED) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
@@ -2142,10 +2381,20 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     if (!slot_fog(d, s, fogW, fogH)) goto refuse;
     if (!atlas_build(d, h.atlasDim)) goto refuse;
 
-    ustride = align_up(VGL_SZ, s_ualign);
-    vglOff2 = ustride;
-    fglOff  = ustride * 2;
-    ustride = ustride * 2 + align_up(FGL_SZ, s_ualign);
+    /* FIVE BLOCKS A UNIT, at device-accepted offsets: three vertex-stage (the
+       body's, the caster's, the hard shadow's) and two fragment-stage (the
+       body's and the hard shadow's). They were three until the hard shadow
+       landed; the two it adds cost 96 bytes a unit more on the reference
+       device's 64-byte alignment, which is 48 KB a slot at 512 units. */
+    {
+        VkDeviceSize vgl = align_up(VGL_SZ, s_ualign);
+        VkDeviceSize fgl = align_up(FGL_SZ, s_ualign);
+        vglOff2 = vgl;
+        vglOff3 = vgl * 2;
+        fglOff  = vgl * 3;
+        fglOff2 = vgl * 3 + fgl;
+        ustride = vgl * 3 + fgl * 2;
+    }
     pstride = align_up(POSE_SZ, s_ualign);
     if (!slot_sized(d, s, ustride * (VkDeviceSize)h.nunit,
                     pstride * (VkDeviceSize)h.nunit)) goto refuse;
@@ -2307,9 +2556,29 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         w->ghost = r->ghost ? 1 : 0;
         w->casts = (h.depthOn && r->casts) ? 1 : 0;
         if (w->casts) s_ncast++;
+        /* THE HARD SHADOW, AND THE ONE PLACE THIS FILE REFUSES IT. `s_shOk` is
+           the pipelines; everything else was decided by the producer and
+           resolved into a range there. A unit whose kind is NONE, or whose
+           range came out empty, simply has no shadow draw -- it is not a reason
+           to refuse the unit or the frame. */
+        w->shKind = s_shOk ? r->shKind : TAGPU_PDSH_NONE;
+        w->shFirst = (uint32_t)r->shFirst;
+        w->shCount = (uint32_t)r->shCount;
+        /* AND THE RANGE IS BOUNDED AGAINST THE BUFFER THIS DRAW READS, which
+           was sized from `r->nvert` a few lines up. The body range is trusted
+           because the bake lays both down together; this one is checked because
+           it is a SECOND range out of the same buffer and the two arrive from
+           different fields, so a mismatch would read past the allocation rather
+           than draw the wrong triangles. Costs two compares a unit. */
+        if (r->shFirst < 0 || r->shCount < 0 ||
+            r->shFirst + r->shCount > r->nvert) w->shKind = TAGPU_PDSH_NONE;
+        if (w->shCount == 0) w->shKind = TAGPU_PDSH_NONE;
+        if (w->shKind == TAGPU_PDSH_SLANT)    s_nslant++;
+        else if (w->shKind == TAGPU_PDSH_SIL) s_nsil++;
         s_ndraw++;
 
-        fill_blocks(s->umap + (VkDeviceSize)i * ustride, &h, r, vglOff2, fglOff);
+        fill_blocks(s->umap + (VkDeviceSize)i * ustride, &h, r,
+                    vglOff2, vglOff3, fglOff, fglOff2);
         fill_pose(s->pmap + (VkDeviceSize)i * pstride, &h, r);
     }
 
@@ -2347,7 +2616,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     "Nothing drawn while that is true",
                  s_ndraw, h.nunit);
         }
-        s_ndraw = 0; s_ncast = 0;
+        s_ndraw = 0; s_ncast = 0; s_nsil = 0; s_nslant = 0;
         return 0;
     }
 
@@ -2439,7 +2708,8 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     s_abFrame = h.ab;
     s_drawThis = 1;
     /* the offsets `cast`, `prepare` and `record` bind with */
-    s_uStride = ustride; s_vglOff2 = vglOff2; s_fglOff = fglOff;
+    s_uStride = ustride; s_vglOff2 = vglOff2; s_vglOff3 = vglOff3;
+    s_fglOff = fglOff;   s_fglOff2 = fglOff2;
     s_pStride = pstride;
     return 1;
 
@@ -2498,6 +2768,7 @@ refuse:
     s_state = ST_REFUSED;
     s_downOwed = 1;
     s_ndraw = 0; s_ncast = 0; s_drawThis = 0;
+    s_nsil = 0; s_nslant = 0;
     return 0;
 }
 
@@ -2742,8 +3013,17 @@ static void unit_scissor(uint32_t w, uint32_t h, VkRect2D* sc)
    seam's own comment states that rule as the reason the body stage sits where
    it does; landing 6 put the ghosts in without re-running it, and the landing's
    review caught it. [2026-09-17.] */
+/* THE THREE STAGES, and the numbers are the order they are recorded in.
+   RS_SHADOW is first inside `tagpu_vk_unit_record` because the engine draws a
+   unit's shadow before its body (0x459200 blits the blackened composite and
+   then the model), and because the shadow does not write depth: recorded after
+   the bodies it would still land under them by the depth TEST, but a shadow
+   belonging to a unit in FRONT would then be tested against that unit's own
+   body depth and vanish where it overlaps. */
+enum { RS_SHADOW = 0, RS_BODY, RS_GHOST };
+
 static void record_stage(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
-                         uint32_t w, uint32_t h, int ghosts)
+                         uint32_t w, uint32_t h, int stage)
 {
     VkViewport vp;
     VkRect2D sc;
@@ -2777,10 +3057,54 @@ static void record_stage(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        compare rather than as two loops so that it stays correct if that order
        ever stops holding. */
     bound = VK_NULL_HANDLE;
+
+    /* ---- the Classic hard shadow ----
+       TWO DRAWS PER CASTER, AND THEY MUST INTERLEAVE PER UNIT. The first marks
+       the stencil with colour writes off, the second blends where the mark is
+       and takes the mark down with it, so a pixel this unit covers twice is
+       darkened once -- `build_shadow_pipelines` has the measurement. The mark
+       has to be cleared by the unit that made it BEFORE the next caster marks,
+       or the second unit's own shadow would find the first's mark already there
+       and refuse the pixel; drawing every mark and then every blend would fuse
+       overlapping units into one shadow, where the engine's two separate blits
+       stack. So this is per unit and the pipeline alternates -- two binds a
+       caster, which is what the state change costs when it is not dynamic.
+
+       THE SILHOUETTES GO BEFORE THE SLANTS, the GL twin's own order (two loops,
+       `_shadow_begin` then `_slant_begin`). Both blend the same constant black
+       at the same alpha, so the order is visible only where a mobile's
+       silhouette and a building's slant overlap -- and premultiplied `over` of
+       two identical colours is not commutative in the alpha channel. */
+    if (stage == RS_SHADOW) {
+        int kind;
+        for (kind = TAGPU_PDSH_SIL; kind <= TAGPU_PDSH_SLANT; kind++) {
+            for (i = 0; i < s_ndraw; i++) {
+                const DRAW* q = &s_draw[i];
+                VkBuffer vbs[2];
+                VkDeviceSize offs[2];
+                uint32_t dyn[3];
+                if (q->shKind != kind) continue;
+                dyn[0] = (uint32_t)((VkDeviceSize)q->unit * s_uStride + s_vglOff3);
+                dyn[1] = (uint32_t)((VkDeviceSize)q->unit * s_pStride);
+                dyn[2] = (uint32_t)((VkDeviceSize)q->unit * s_uStride + s_fglOff2);
+                vbs[0] = q->geom; vbs[1] = q->mat;
+                offs[0] = 0;      offs[1] = 0;
+                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_ploMain,
+                                        0, 1, &s_slot[slot].dsMain, 3, dyn);
+                vkCmdBindVertexBuffers(cb, 0, 2, vbs, offs);
+                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeShMark);
+                vkCmdDraw(cb, q->shCount, 1, q->shFirst, 0);
+                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeShDraw);
+                vkCmdDraw(cb, q->shCount, 1, q->shFirst, 0);
+            }
+        }
+        return;
+    }
+
     for (i = 0; i < s_ndraw; i++) {
         const DRAW* q = &s_draw[i];
         VkPipeline want;
-        if (!q->ghost != !ghosts) continue;        /* this stage's draws only */
+        if (!q->ghost != (stage == RS_GHOST)) continue;  /* this stage's only */
         want = q->ghost ? s_pipeGhost : s_pipeBody;
         VkBuffer vbs[2];
         VkDeviceSize offs[2];
@@ -2804,7 +3128,21 @@ void tagpu_vk_unit_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
                           uint32_t w, uint32_t h)
 {
     if (s_state != ST_READY || !s_drawThis) return;
-    record_stage(d, cb, slot, w, h, 0);
+    if (s_nsil || s_nslant) record_stage(d, cb, slot, w, h, RS_SHADOW);
+    record_stage(d, cb, slot, w, h, RS_BODY);
+    /* THE PRODUCER IS TOLD, AND ONLY FROM HERE. The structure-shadow gate in
+       tagpu_native.c must be raised on a frame something actually painted a
+       slant and not on a frame that merely could have -- its own comment lists
+       the three wrong questions it asked before this one. This is the painter
+       saying so, after the draws are in the command buffer.
+
+       IT IS RECORDED, NOT SUBMITTED, and that is the honest reading of the
+       claim: the seam submits this command buffer at the end of the same
+       iteration, and there is no path that records these draws and then throws
+       the buffer away. A gate raised over a frame that was dropped would cost
+       one frame with no structure shadow, which is the bounded direction the
+       gate is built for. */
+    if (s_nslant) tagpu_posedraw_slant_drew();
 }
 
 /* The build ghosts, AFTER the effects -- the GL twin's own order, and the whole
@@ -2813,7 +3151,7 @@ void tagpu_vk_unit_record_ghosts(const TAGPU_VKPASS* d, VkCommandBuffer cb,
                                  uint32_t slot, uint32_t w, uint32_t h)
 {
     if (s_state != ST_READY || !s_drawThis) return;
-    record_stage(d, cb, slot, w, h, 1);
+    record_stage(d, cb, slot, w, h, RS_GHOST);
     s_drawThis = 0;
 }
 
@@ -2837,6 +3175,7 @@ void tagpu_vk_unit_down(const TAGPU_VKPASS* d)
     int owed = s_downPaying;
     s_downOwed = 0;
     s_drawThis = 0; s_abFrame = 0; s_ndraw = 0; s_ncast = 0;
+    s_nsil = 0; s_nslant = 0;
     s_shadowOn = 0;
 
     /* NOTHING TO FREE, BUT THE VERDICT STILL STANDS. */
@@ -2879,6 +3218,9 @@ void tagpu_vk_unit_down(const TAGPU_VKPASS* d)
     if (s_dpool) { vkDestroyDescriptorPool(d->dev, s_dpool, NULL); s_dpool = VK_NULL_HANDLE; }
     if (s_pipeBody) { vkDestroyPipeline(d->dev, s_pipeBody, NULL); s_pipeBody = VK_NULL_HANDLE; }
     if (s_pipeGhost) { vkDestroyPipeline(d->dev, s_pipeGhost, NULL); s_pipeGhost = VK_NULL_HANDLE; }
+    if (s_pipeShMark) { vkDestroyPipeline(d->dev, s_pipeShMark, NULL); s_pipeShMark = VK_NULL_HANDLE; }
+    if (s_pipeShDraw) { vkDestroyPipeline(d->dev, s_pipeShDraw, NULL); s_pipeShDraw = VK_NULL_HANDLE; }
+    s_shOk = 0;
     if (s_pipeCast) { vkDestroyPipeline(d->dev, s_pipeCast, NULL); s_pipeCast = VK_NULL_HANDLE; }
     s_castRp = VK_NULL_HANDLE;
     if (s_ploMain) { vkDestroyPipelineLayout(d->dev, s_ploMain, NULL); s_ploMain = VK_NULL_HANDLE; }
