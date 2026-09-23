@@ -1064,7 +1064,7 @@ sees only the blits that really draw. Full argument lists, boxes and evidence: t
 | `0x4C67C0` | the cursor draw **inside** the flip (`stdcall(globals, surface)`, `ret 8`), the shell's publish point since landing 6 — **its own observer, in `tagpu_packet_pub.c`**, not this census. The function is UNPATCHED and now unpatchable by us: `tagpu_cursown.c` used to skip the `call` at `0x4C687D` that blits the sprite, and **the whole module was deleted by the clean cut** (§2.81) because the composite that replaced the cursor is gone. The observer, the background save at `0x4C6862` and the `+0x1B6/+0x1BA` writes always ran and still do; the blit now runs as well, which is what keeps the cursor in the reference frame. (A leaf on the whole function was tried on 2026-09-13 and withdrawn — GUI renderer §24.0) | 11 | the drawn cursor: `+0x1B2` the record, `+0x1B6/+0x1BA` the position it just wrote. Publishes a header-only `in_game = 0` packet with `cursor_live = 1` when the three early-out words hold, and `cursor_live = 0` when they do not — gated on **two** tests, `s_retDepth == 0` **and** `!s_levelOpen`. `s_retDepth == 0` alone is NOT the complement of the in-play gate: `0x495E66` calls `DrawGameScreen` and returns to `0x495E6B`, not the in-play `0x4969D2`, so a screenshot draw is in-play with `s_retDepth == 0`; `!s_levelOpen` is what keeps this channel out of a level. This row said "i.e. not inside an in-play draw" until the 2026-09-14 review — the code has always had both tests |
 | `0x4C25E0` | the body of the engine's **mouse thread** (`0x4C2990` is its entry, started by `_beginthread` at `0x4C2A9A` — which is why no `call 0x4C2990` exists); `stdcall(mouseObj)`, `ret 4`. Unpatched as a function, and since the clean cut (§2.81) unpatched entirely: its cursor blit `0x4C2732` was one of the four `tagpu_cursown.c` skips and that module is deleted | 8 | nothing — no observer, it is not a channel site. It writes `+0x196/+0x19A` and `+0x1B6/+0x1BA`, the latter as position **minus the hotspot**, exactly as `0x4C67C0` does [CORRECTED 2026-09-14: this row claimed the opposite and called it a fingerprint] |
 | `0x4B7F90` | `CopyGafToContext(ctx, frame, x, y)` — **chained onto fxown's stub** | 6 | a sprite box at `(x−HotX, y−HotY)`, clipped |
-| `0x4B8500`, `0x4B8310` | the shaded blit and DrawText's alternate blit, same shape | 6 | same |
+| `0x4B8500`, `0x4B8310` | the shaded blit, and DrawText's alternate blit — which is **not** the same shape: five args, gated on `globals+0xF0` bit 7, and a blend that reads the destination ([engine map](exe-reverse-engineering.html) "The leaves"). Recorded as `OP_GAFA`/`OP_GAFB` and published as box bytes, which the drain drops: **neither reaches the screen on the Vulkan lane** | 6 | the sprite box, as for `0x4B7F90` |
 | `0x4C6D20` | descriptor blit `(ctx, desc, src, dst)` — listbox, textfield | 7 | `*dst` |
 | `0x4C7580` | the textured-**quad** stamp `(ctx, src, xy[8], uv[8])`, FOUR vertices — the option screens' wide backdrop | 5 | the vertices' bounding box, over all four |
 | `0x4CCF60` | the glyph blitter, cdecl 9 args | 6 | the string's box from the font's width table, the string's bytes copied into a window scratch, and **since G19f-8 the font itself**: the slot id, `font[0]`/`font[2]`, and a glyph record for every code of this string the font has not sent yet (`text_capture`). `publish` then dereferences no font at all — the read happens one instruction before the engine's own, which is the whole of the lifetime argument |
@@ -5385,12 +5385,29 @@ and writes one image in one draw. Two changes:
 
 Measured on `scenarios/mex-ghost.json` at 1920x1080 by self-destructing the Commander: before,
 the census read `gui=0` on every frame of `ENDMSN.GUI`; after, `gui=1`, and the stats rows, the
-buttons and the cursor composite. **Not closed: the screen's backdrop, title and column labels are
-still black.** The engine loads the backdrop from a PCX and then draws into it through unhooked
-paths (census: `unexplained=304135` of `307054` changed on that surface), so the asset claim is
-revoked before its bytes cross. It is then composed pixels, which the clean cut never carries
-(`op_add`'s revocation comment records the refused alternative). Lifting that is a decision about
-the cut, not a fix.
+buttons and the cursor composite.
+
+**The backdrop, the title and the column labels were still black, and the reason is one sprite.**
+`ENDMSN.GUI` loads `bitmaps\outcome0.PCX` into its own 640x480 surface (the backdrop, the column
+labels, the frame) and draws exactly **one** op onto it: a GAF, the DEFEAT/VICTORY title, 101x29 at
+(272,15). The census reads 304 051 of 306 976 changed pixels unexplained on that surface (the PCX)
+and one op. That op revoked the asset claim before the bytes had crossed, so the surface seeded
+empty; and the engine's repaint copies this surface onto the frame every time, from a source that
+after the restart's reset was neither seeded nor an asset. **Fixed by `snap_take`**
+(`tagpu_gui_hook.c`): when the first op revokes a claim whose bytes never crossed, `op_add`, which
+every leaf calls from its `before_` observer, copies the surface BEFORE the engine writes, so the
+copy is the loader's bytes and not composed pixels. `pub_seed` then sends it as a `PK_ASSET`
+followed by every sprite drawn on it since (each with its own plane, in `ovl`), and a copy whose
+source is such a surface seeds it on demand. Any draw it cannot replay drops the snapshot, which
+is exactly the old behaviour. MEASURED on the same fixture: backdrop, title, labels, frame, the
+stats and the Main Menu button all on screen, the main menu after it correct, the in-game UI
+unchanged. Design in [GUI renderer](gui-renderer.html), under `PK_ASSET`.
+
+**Not closed: the player names on the coloured bars.** They are drawn through `0x4B8310`, a blit
+that blends each glyph pixel with the destination (`dst = table[src·256 + dst]`), recorded as
+`OP_GAFB` and published as box bytes the drain drops, so they reach no screen on the Vulkan lane.
+A pre-existing gap for every draw through that blit. Carrying it needs a blended-sprite op in
+the producer, the drain and the shader, not a change to this one.
 
 **Three `continue`s were doing the same thing quietly, since landing 1.** An op naming a surface
 this store never seeded, and a pixel op outside its own twin, were skipped — the GL lane applies

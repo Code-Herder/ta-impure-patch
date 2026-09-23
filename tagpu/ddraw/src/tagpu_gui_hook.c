@@ -116,6 +116,20 @@ static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x
 
 /* ---- the surfaces we have seen (game thread only) ---------------------- */
 static void ops_forget_base(unsigned base);       /* below, with the ring */
+/* ONE SPRITE DRAWN ONTO A SNAPSHOT SURFACE (see `snap_take`), kept so the
+   surface can be rebuilt after a reset: the published sprite's fields, and its
+   decoded plane COPIED OUT of `s_gafBuf` -- our own bytes, so a replay reads
+   no engine memory and no scratch that has since been reused. */
+#define OVL_MAX 8
+typedef struct OVL {
+    short l, t, r, b, dx, dy;
+    unsigned short fw, fh;
+    unsigned char ck;
+    const void* frame;                /* the atlas key, a VALUE (see OP::frame) */
+    unsigned key;                     /* OP::fkey                                */
+    unsigned char* plane;             /* glen bytes, ours                        */
+    unsigned glen;
+} OVL;
 typedef struct SURF {
     unsigned base;                    /* pixel base — the identity           */
     unsigned owner;                   /* the block MEM_Free 0x4D85A0 will be handed: the
@@ -141,6 +155,13 @@ typedef struct SURF {
     int assetSent;                    /* the consumer ACKED this surface's current token */
     unsigned assetTok;                /* the token of the offer in flight, 0 = none    */
     unsigned assetTries;              /* offers made; bounded by TAGPU_GUI_ASSET_TRIES  */
+    unsigned char* snap;              /* the LOADER's bytes, taken by `snap_take` as
+                                         the first op revoked an unsent asset claim;
+                                         NULL = none. With `ovl` it is what the
+                                         surface holds, built only from bytes the
+                                         cut allows and ops we observed.          */
+    OVL* ovl;                         /* the sprites drawn onto `snap` since, in order */
+    int novl;
 } SURF;
 #define MAX_SURF 24
 static SURF s_surf[MAX_SURF];
@@ -224,6 +245,16 @@ static void pub_commit(void);
 static void ops_forget_base(unsigned base);
 extern volatile int g_gui_draw;
 
+/* the snapshot and its sprites, gone together: `ovl` means nothing without
+   the bytes it was drawn over */
+static void snap_free(SURF* s)
+{
+    int k;
+    for (k = 0; k < s->novl; k++) free(s->ovl[k].plane);
+    free(s->ovl); free(s->snap);
+    s->ovl = NULL; s->novl = 0; s->snap = NULL;
+}
+
 /* forget a surface: its buffers, its recorded boxes, and the twin */
 static void surf_drop(int i)
 {
@@ -232,6 +263,7 @@ static void surf_drop(int i)
         if (o) pub_commit();
     }
     free(s_surf[i].copy); free(s_surf[i].mask); free(s_surf[i].acc);
+    snap_free(&s_surf[i]);
     ops_forget_base(s_surf[i].base);
     s_surf[i] = s_surf[--s_nsurf];
 }
@@ -375,6 +407,7 @@ static SURF* surf_get(unsigned base, int w, int h, int pitch, unsigned owner)
                 s_surf[i].assetSent = 0; s_surf[i].assetTries = 0; s_surf[i].assetTok = 0;
                 free(s_surf[i].copy); free(s_surf[i].mask); free(s_surf[i].acc);
                 s_surf[i].copy = s_surf[i].mask = s_surf[i].acc = NULL;
+                snap_free(&s_surf[i]);
             }
             return &s_surf[i];
         }
@@ -1085,6 +1118,45 @@ static int phase_install(void)
     return ok;
 }
 
+/* THE LOADER'S BYTES, TAKEN AS THE FIRST DRAW REVOKES AN ASSET CLAIM.
+
+   A "bitmaps\\*.PCX" surface is an asset while nothing draws into it, and an
+   asset's bytes may cross because the loader, not the 1997 rasteriser, made
+   them. The post-game screen breaks that the ordinary way: `ENDMSN.GUI` loads
+   `bitmaps\\outcome0.PCX` (the backdrop, the column labels, the frame) and then
+   draws ONE GAF onto it -- the DEFEAT/VICTORY title, 101x29 at (272,15). That
+   single op revoked the claim before the bytes had ever crossed, so the
+   backdrop reached the twin as an empty seed plus the title, and after the
+   reset the render-thread restart forces it came back as nothing at all: the
+   engine's repaint copies this surface onto the frame every time and the copy
+   had no seeded source. MEASURED 2026-09-23: 304 051 of 306 976 changed pixels
+   on that surface unexplained by any op -- the PCX -- and 1 op, the title.
+
+   THIS IS CALLED FROM `op_add`, WHICH EVERY LEAF CALLS FROM ITS `before_`
+   OBSERVER -- before the engine writes. So what is copied is exactly the
+   loader's bytes: not composed pixels, which is the one thing the clean cut
+   forbids (the refused `wasAsset` repair above re-sent what was on the surface
+   AFTER the draws). From here the surface is those bytes plus the sprites
+   `publish` records in `ovl`; `pub_seed` sends both, so a reset rebuilds the
+   surface exactly. Any draw that cannot be recorded as a replayable sprite
+   drops the snapshot and the surface goes back to being unrecoverable, which
+   is what it was before.
+
+   THE RESIDUAL, as for any asset: an engine path that writes this surface
+   without passing a leaf leaves the snapshot older than the surface, and
+   nothing re-offers it. Wrong pixels, never a crash. */
+static void snap_take(SURF* s)
+{
+    const unsigned char* cur = (const unsigned char*)(size_t)s->base;
+    int y;
+    if (s->snap || !ptr_ok(cur) || s->w <= 0 || s->h <= 0 || s->pitch < s->w) return;
+    s->snap = (unsigned char*)malloc((size_t)s->w * s->h);
+    if (!s->snap) return;
+    for (y = 0; y < s->h; y++)
+        memcpy(s->snap + (size_t)y * s->w, cur + (size_t)y * s->pitch, (size_t)s->w);
+    s->novl = 0;
+}
+
 static void op_add(int kind, SURF* s, int l, int t, int r, int b)
 {
     OP* o;
@@ -1146,10 +1218,15 @@ static void op_add(int kind, SURF* s, int l, int t, int r, int b)
             rb[sizeof rb - 1] = 0;
             glog(rb);
         }
+        /* ...UNLESS ITS BYTES CAN STILL CROSS AS THE LOADER LEFT THEM. See
+           `snap_take`: an unsent claim is not given up, it is turned into the
+           loader's bytes plus the ops drawn over them. */
+        if (!s->assetSent && !s->assetTok) snap_take(s);
         s->isAsset = 0; s_assetRevoked++;
     }
     s_kindArea[kind] += (unsigned)(r - l + 1) * (unsigned)(b - t + 1);
-    if (s_nops >= MAX_OPS) { s_opsDropped++; return; }
+    /* a draw we cannot record is one the snapshot cannot be rebuilt past */
+    if (s_nops >= MAX_OPS) { s_opsDropped++; if (s->snap) snap_free(s); return; }
     o = &s_ops[s_nops++];
     memset(o, 0, sizeof *o);
     o->base = s->base; o->l = (short)l; o->t = (short)t; o->r = (short)r; o->b = (short)b;
@@ -1305,9 +1382,65 @@ static int pub_surface_bytes(SURF* s, int l, int t, int r, int b, TAGPU_PUBOP* o
     return 1;
 }
 
+/* THE SNAPSHOT AS THE SEED: the loader's bytes as a `PK_ASSET` -- the one kind
+   whose payload crosses, and these bytes meet its guarantee because they were
+   taken before any draw (see `snap_take`) -- then every sprite drawn onto them
+   since, each carrying its own plane so the consumer's atlas does not have to
+   still hold it. Token 0: nothing waits for an ack, because the ack exists to
+   retire an OFFER that is re-made at every copy, and this is a seed, made
+   again only when a reset clears `seeded`. */
+static int pub_seed_snap(SURF* s)
+{
+    TAGPU_PUBOP* o = pub_op(PK_ASSET, s->base);
+    unsigned char* dst;
+    int k;
+    if (!o) return 0;
+    o->w = s->w; o->h = s->h; o->pitch = s->w;
+    o->l = 0; o->t = 0; o->r = (short)(s->w - 1); o->b = (short)(s->h - 1);
+    dst = pub_bytes(o, (unsigned)s->w * (unsigned)s->h);
+    if (!dst) return 0;
+    memcpy(dst, s->snap, (size_t)s->w * s->h);
+    pub_commit();
+    for (k = 0; k < s->novl; k++) {
+        const OVL* v = &s->ovl[k];
+        o = pub_op(PK_SPRITE, s->base); if (!o) return 0;
+        o->l = v->l; o->t = v->t; o->r = v->r; o->b = v->b;
+        o->sl = v->dx; o->st = v->dy; o->fw = v->fw; o->fh = v->fh; o->ck = v->ck;
+        o->frame = v->frame; o->pix = (const void*)(size_t)v->key;
+        dst = pub_bytes(o, v->glen);
+        if (!dst) return 0;
+        memcpy(dst, v->plane, v->glen);
+        pub_commit();
+        seen_frame(v->frame, (const void*)(size_t)v->key, 1);
+    }
+    s->seeded = 1;
+    return 1;
+}
+
+/* a sprite `publish` just sent onto a snapshot surface, remembered with a copy
+   of its plane; past OVL_MAX the surface is no longer one we can rebuild */
+static void ovl_add(SURF* s, const OP* op)
+{
+    OVL* v;
+    if (!s->snap) return;
+    if (!s->ovl) s->ovl = (OVL*)calloc(OVL_MAX, sizeof(OVL));
+    if (!s->ovl || s->novl >= OVL_MAX || !op->glen) { snap_free(s); return; }
+    v = &s->ovl[s->novl];
+    v->plane = (unsigned char*)malloc(op->glen);
+    if (!v->plane) { snap_free(s); return; }
+    memcpy(v->plane, s_gafBuf + op->goff, op->glen);
+    v->glen = op->glen;
+    v->l = op->l; v->t = op->t; v->r = op->r; v->b = op->b;
+    v->dx = op->dx; v->dy = op->dy; v->fw = op->fw; v->fh = op->fh; v->ck = op->ck;
+    v->frame = op->frame; v->key = op->fkey;
+    s->novl++;
+}
+
 static int pub_seed(SURF* s)
 {
-    TAGPU_PUBOP* o = pub_op(PK_SEED, s->base);
+    TAGPU_PUBOP* o;
+    if (s->snap) return pub_seed_snap(s);
+    o = pub_op(PK_SEED, s->base);
     if (!o) return 0;
     o->w = s->w; o->h = s->h; o->pitch = s->pitch;
     o->l = 0; o->t = 0; o->r = (short)(s->w - 1); o->b = (short)(s->h - 1);
@@ -2176,6 +2309,16 @@ static void publish(unsigned flipSurf)
            the probe above: `gui probe:` answers "what did the engine draw at
            this pixel", which world draws are part of. It IS before `pub_seed`,
            so a surface no UI op ever names is never seeded for one. */
+        /* A SNAPSHOT SURFACE TAKES ONLY WHAT IT CAN REPLAY: a 1:1 sprite whose
+           plane is in hand, which is exactly the set the sprite branch below
+           publishes as `PK_SPRITE` and `ovl_add` records. Anything else --
+           and a world op, which is dropped rather than published -- is a draw
+           the rebuild would not contain, so the snapshot goes first, before
+           `pub_seed` could send it. */
+        if (s->snap && !(op->kind == OP_GAF && !op->world && op->frame && op->fw && op->fh &&
+                         op->fw <= TAGPU_GAF_DECMAX && op->fh <= TAGPU_GAF_DECMAX &&
+                         op->fkey && op->glen))
+            snap_free(s);
         if (op->world) { s_worldDropped++; continue; }
         if (!s->seeded && !pub_seed(s)) return;
         /* a plain keyed blit of a frame the atlas can hold is a sprite; a frame
@@ -2254,6 +2397,7 @@ static void publish(unsigned flipSurf)
                 seen_frame(op->frame, key, 1);
             }
             pub_commit();
+            if (s->snap) ovl_add(s, op);
             continue;
         }
         /* G17d: a text draw whose string we captured is a STRING op — TA's own
@@ -2572,6 +2716,11 @@ static void publish(unsigned flipSurf)
                 src->seeded = 1;          /* the copy below may now name it */
                 s_assetSends++;
             }
+            /* A SNAPSHOT SOURCE IS SEEDED ON DEMAND, which is the whole point of
+               it: after a reset nothing draws into the post-game backdrop again,
+               but the engine's repaint copies it onto the frame every time, and
+               this is the one place that learns it is needed. */
+            if (src && !src->seeded && src->snap && !pub_seed(src)) return;
             if (src && src->seeded) {
                 o = pub_op(PK_COPY, s->base); if (!o) return;
                 o->src = op->src; o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;

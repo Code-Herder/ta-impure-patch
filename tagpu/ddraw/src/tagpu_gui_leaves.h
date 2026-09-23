@@ -143,8 +143,13 @@ static void gaf_box(void* e, int kind)
 }
 static int __cdecl before_gaf(void* e)  { if (on_game_thread()) gaf_box(e, OP_GAF);  return 0; }
 static int __cdecl before_gafa(void* e) { if (on_game_thread()) gaf_box(e, OP_GAFA); return 0; }
-/* 0x4B8310: the blit DrawText 0x4A50E0 takes when globals+0xF0 bit 7 is set,
-   same (ctx, frame, x, y) shape [INFERRED from the call site 0x4A5191] */
+/* 0x4B8310: the blit DrawText 0x4A50E0 takes when globals+0xF0 bit 7 is set.
+   NOT the same shape as 0x4B7F90: stdcall with FIVE args (ret 0x14), it draws
+   nothing unless that bit is set, and it BLENDS -- a raw frame goes to
+   0x4CBF2C, which writes dst = [globals+0xC8][src * 256 + dst] for every src
+   pixel other than arg 5. The first four args are 0x4B7F90's, which is all
+   `gaf_box` reads; publish sends the op as box bytes, which the drain drops.
+   [VERIFIED 2026-09-23 by disassembly; the engine map's leaf table.] */
 static int __cdecl before_gafb(void* e) { if (on_game_thread()) gaf_box(e, OP_GAFB); return 0; }
 
 /* ---- 0x4CCF60 glyph blitter, cdecl 9 args -----------------------------
@@ -766,7 +771,8 @@ static void* __cdecl after_alloc(unsigned int* regs)
        read now -- the surface is blank at this point (see the seed below) and
        the loader has not run -- they cross at the first copy that reads it. */
     if (s) { s->isAsset = tag_is_shell_bg(tag); s->assetSent = 0;
-             s->assetTries = 0; s->assetTok = 0; }   /* all four, as everywhere else */
+             s->assetTries = 0; s->assetTok = 0;     /* all four, as everywhere else */
+             snap_free(s); }   /* a new allocation: the old bytes are not this one's */
     if (s && s_trace) {
         char b[200];
         _snprintf(b, sizeof b, "gui trace: alloc \"%.32s\" %dx%d base %08X (screen %s)",

@@ -287,6 +287,19 @@ only), not a guard — it says whether the hole is real, it does not close it. S
 makes reading the surface at the flip exact, where the identical read for `PK_PIXELS` is a box of
 bytes from a moment *later* than the draw it stands for.
 
+**A claim revoked BEFORE its bytes crossed is not lost (2026-09-23).** The post-game screen
+loads `bitmaps\outcome0.PCX` and draws one GAF, its DEFEAT/VICTORY title, onto it; the revocation
+then left the backdrop with no path to the screen at all. `op_add` runs inside every leaf's
+`before_` observer, so at the revocation the surface still holds exactly what the loader wrote:
+`snap_take` copies it then. From there the surface is **those bytes plus the sprites drawn onto
+them** (`ovl`, each with its own copy of the plane): `pub_seed` sends the bytes as a `PK_ASSET` and
+replays the sprites, and a copy that reads such a surface seeds it on demand, which is what lets it
+survive a reset. This is not the refused `wasAsset` repair, which re-sent the surface as it stood
+after the draws: what crosses here is still only what the loader made. Any op that is not a
+replayable 1:1 sprite (and any draw that could not be recorded) drops the snapshot, and the
+surface is then exactly as unrecoverable as before. The residual is the asset's own: an unhooked
+write after the snapshot leaves it older than the surface.
+
 **The consumer needed no new case.** `PK_ASSET` mirrors as `TAGPU_GUIOP_SEED` *with* its bytes —
 the shape the Vulkan lane's SEED already has (`o->alen` optional, validated as `w * h`), a path
 that existed and had never been exercised because the GL drain always set `alen = 0`. Zero Vulkan
